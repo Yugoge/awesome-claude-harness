@@ -1,0 +1,103 @@
+{
+  "request_id": "dev-20260529-164939",
+  "timestamp": "2026-05-29T17:10:00Z",
+  "inspector": "cleanliness-inspector",
+  "mode": "changed-files",
+  "scope_contract": "In --changed-files mode this inspector emits findings ONLY for the listed files and tags each with introduced_in_diff (Mechanism ii — inspector-side tagging). Absent/false tags are treated by close.md as pre-existing/advisory/non-blocking per AC-2.6(b) default-safe rule. cleanliness scope = violations newly introduced in this diff only; pre-existing historical dirt is out of scope.",
+  "changed_files": [
+    "commands/dev.md",
+    "docs/dev/ticket-20260529-080709.md",
+    "docs/dev/acceptance-criteria-20260529-080709.json",
+    "tests/generated/20260529-080709/test_AC_F5_ac-f5-dispatch-guard-sentinel-existence.py"
+  ],
+  "findings": {
+    "misplaced_docs": [],
+    "naming_violations": [],
+    "archive_candidates": [],
+    "dev_context_files": [],
+    "temp_files": [],
+    "duplicate_scripts": [],
+    "duplicate_tests": [],
+    "non_functional_files": [],
+    "non_functional_folders": [],
+    "orphaned_subagents": [],
+    "unreferenced_scripts": [],
+    "orphaned_tests": [],
+    "historical_docs": [],
+    "docs_categorization": [],
+    "obsolete_functionality": [],
+    "orphan_commands": [],
+    "dead_functions": [],
+    "duplicate_content": [],
+    "gitignore_coverage": []
+  },
+  "per_file_assessment": [
+    {
+      "file": "commands/dev.md",
+      "tracked": true,
+      "change": "Prose-only edit to the 'Graphify enrichment' dispatch block (10 insertions / 4 deletions): adds a sentinel-existence guard around the graphify Agent dispatch and adds 'source venv/bin/activate &&' prefixes to two python3 invocations.",
+      "location_correct": true,
+      "verdict": "clean — command file in correct location, no temp/backup/duplicate patterns, no cleanliness violation introduced",
+      "introduced_in_diff": false
+    },
+    {
+      "file": "docs/dev/ticket-20260529-080709.md",
+      "tracked": false,
+      "change": "Dev-cycle ticket artifact (new/untracked).",
+      "location_correct": true,
+      "verdict": "clean — correctly located in docs/dev/, standard dev-cycle naming, not an archive candidate (active cycle)",
+      "introduced_in_diff": false
+    },
+    {
+      "file": "docs/dev/acceptance-criteria-20260529-080709.json",
+      "tracked": false,
+      "change": "Dev-cycle acceptance-criteria artifact (new/untracked).",
+      "location_correct": true,
+      "verdict": "clean — correctly located in docs/dev/, standard naming",
+      "introduced_in_diff": false
+    },
+    {
+      "file": "tests/generated/20260529-080709/test_AC_F5_ac-f5-dispatch-guard-sentinel-existence.py",
+      "tracked": false,
+      "change": "Auto-generated pytest by test-writer with real regex assertions (graphify.json path + absent-sentinel prose checks against commands/dev.md). NOT an empty/placeholder test.",
+      "location_correct": true,
+      "verdict": "clean — correct location (tests/generated/<task_id>/), real assertions, tests an existing source target (commands/dev.md); not orphaned, not one-time/experimental pattern",
+      "introduced_in_diff": false
+    }
+  ],
+  "gitignore_coverage_reasoning": {
+    "harness_rules": ["tests/generated/", ".claude/dev-registry/dev-*/", "docs/codex/", ".playwright-mcp/"],
+    "assessment": "No gitignore-coverage finding. tests/generated/ is intentionally NOT ignored per .gitignore (the matching .gitignore line is a comment, not an active ignore rule: 'tests/generated/ intentionally tracked — test-writer contract version-controls per-cycle pytest files'). The untracked tests/generated/ paths are therefore pending commit (tracked-by-design), not gitignore leakage. The other three harness paths (.claude/dev-registry/dev-*/, docs/codex/, .playwright-mcp/) are present as active ignore rules. No untracked path matching an ACTIVE harness rule was found. .gitignore was not in the changed-files set, so any hypothetical gap would be introduced_in_diff:false.",
+    "introduced_in_diff": false
+  },
+  "summary": {
+    "total_issues": 0,
+    "critical": 0,
+    "major": 0,
+    "minor": 0,
+    "estimated_space_saved": "0 MB",
+    "verdict": "CLEAN — no new-in-this-diff cleanliness violations across the 4 changed files; nothing forces CLOSE: NO on cleanliness grounds"
+  },
+  "codex_consult": {
+    "invoked": true,
+    "status": "ok",
+    "feedback_summary": "Codex (gpt-5.5, xhigh) independently verified the 4-file scope and the gitignore reasoning. It found no false positives, no missed NEW-in-diff violations, and no severity errors in the all-empty findings. It confirmed treating tests/generated/ as 'not a gitignore gap' is correct because it is an explicit tracked-by-design exception (a .gitignore comment, not an active rule), and recommended the report wording make that distinction explicit rather than implying the line is an active rule.",
+    "findings": [
+      {
+        "issue": "No false positives, missed NEW-in-diff cleanliness violations, or severity errors in the all-empty findings for the 4-file scope.",
+        "proposed_fix": null,
+        "classification": "observation_only",
+        "disposition": "logged",
+        "rationale": "Confirms the all-empty draft; no change required."
+      },
+      {
+        "issue": "Treating tests/generated/ as not-a-gitignore-gap is correct, but the report should not imply the commented .gitignore line is an active ignore rule.",
+        "proposed_fix": "Revise gitignore wording to: 'tests/generated/ is intentionally not ignored per .gitignore; untracked generated pytest files are pending commit, not gitignore leakage. Other harness paths are actively ignored.'",
+        "classification": "observation_only",
+        "disposition": "applied",
+        "rationale": "Incorporated into gitignore_coverage_reasoning.assessment — the report now explicitly states the matching .gitignore line is a comment, not an active rule, and distinguishes the three actively-ignored harness paths."
+      }
+    ],
+    "feedback_incorporated": "Clarified the gitignore_coverage_reasoning.assessment wording per codex's PROPOSED_FIX to explicitly note that the tests/generated/ .gitignore line is a comment (intentional tracked-by-design exception), not an active ignore rule, and that the untracked generated pytest files are pending commit rather than leakage. No finding categories changed — all remain empty."
+  }
+}

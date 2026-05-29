@@ -1,0 +1,132 @@
+{
+  "request_id": "20260529-164939",
+  "task_id": "20260529-164939",
+  "timestamp": "2026-05-29T17:10:00Z",
+  "qa_mode": "ba_validation",
+  "verdict": "FAIL",
+
+  "rank_acknowledged": "Disgraced",
+  "range_acknowledged": "<0",
+  "recent_events_digest_acknowledged": "c4f5b07e",
+  "score_injection_action": "Disgraced rank with close_fail_qa_pass history: prior cycle introduced bash syntax that passed QA but failed /close style-inspector. This run applies strict scope verification and pattern-coverage checks to catch the exact drift type (partial artifact coverage) that previously produced false-pass QA verdicts.",
+
+  "graph_verification": {
+    "graphify_ran": true,
+    "graph_context_status": "unavailable",
+    "focused_subgraph_present": false,
+    "graph_report_present": false,
+    "verification_note": "pre_query.json at .claude/dev-registry/dev-20260529-164939/graphify/pre_query.json has status=unavailable with error_detail='GRAPHIFY_BIN absent'. G1/G2/G3 fail gates are all waived per spec — gates apply only when status=ok or status=degraded."
+  },
+
+  "dimension_checks": [
+    {
+      "dimension": "evidence_quality",
+      "verdict": "PASS",
+      "notes": "BA's root_cause_analysis cites specific file:line evidence for all four affected files. The bash block at commands/dev.md:688-695 is confirmed by direct read. Pattern matches for GRAPHIFY_SENTINEL= in acceptance-criteria JSON and test .py are confirmed by grep. The spec reference (spec-20260527-061433.md:356) is confirmed verbatim. BA labels diagnosis_completeness as 'incomplete (inferred only)' which is honest and appropriate for a static text analysis — no runtime execution is needed here. Evidence is sufficient and accurately characterized."
+    },
+    {
+      "dimension": "scope_alignment",
+      "verdict": "FAIL",
+      "objection": {
+        "dimension": "scope_alignment",
+        "severity": "blocking",
+        "summary": "AC-2 WHEN clause and check.patterns cover only 2 of the 3 AC-F5 artifacts; docs/dev/ticket-20260529-080709.md is listed as an in-scope file but has no AC verification pattern.",
+        "detail": "The ticket (ticket-20260529-164939.md lines 33-39) lists three AC-F5 artifacts that must be updated: (1) docs/dev/ticket-20260529-080709.md, (2) docs/dev/acceptance-criteria-20260529-080709.json, (3) tests/generated/20260529-080709/test_AC_F5_ac-f5-dispatch-guard-sentinel-existence.py. The spec (spec-20260527-061433.md:358-361) also explicitly lists all three. The requirements_decomposition R2 says 'three artifacts reference prose-matching patterns only'. However, AC-2 in acceptance-criteria-20260529-164939.json has a WHEN clause that names only 'acceptance-criteria-20260529-080709.json and the assertions in test_AC_F5...py' — the ticket file is absent. The check.patterns array for AC-2 contains 5 patterns: 2 against acceptance-criteria JSON and 3 against the test .py. Zero patterns target docs/dev/ticket-20260529-080709.md. Dev will correctly modify ticket-20260529-080709.md per the Technical Hints, but QA will have no AC pattern to verify the update. The bash patterns in that file (lines 228 and 233: 'GRAPHIFY_SENTINEL=.*graphify\\.json' and 'if.*-f.*GRAPHIFY_SENTINEL') will remain if dev overlooks it, and no AC will catch it.",
+        "affected_ac": "AC-2",
+        "missing_coverage": "docs/dev/ticket-20260529-080709.md — needs two no_match patterns: GRAPHIFY_SENTINEL= and if.*-f.*GRAPHIFY_SENTINEL",
+        "spec_reference": "spec-20260527-061433.md:358-361 and ticket-20260529-164939.md:33-39 both list three artifacts",
+        "fix_required": "Add two patterns to AC-2 check.patterns targeting docs/dev/ticket-20260529-080709.md: (1) pattern='GRAPHIFY_SENTINEL=', expect='no_match'; (2) pattern='if.*-f.*GRAPHIFY_SENTINEL', expect='no_match'. Update AC-2 WHEN clause to say 'reading the check patterns in acceptance-criteria-20260529-080709.json, the assertions in test_AC_F5_ac-f5-dispatch-guard-sentinel-existence.py, and the VERIFICATION paragraph in ticket-20260529-080709.md'."
+      }
+    },
+    {
+      "dimension": "investigation_completeness",
+      "verdict": "PASS",
+      "notes": "The requirement is a style fix with a verbatim prescribed solution in Section 7/Cycle 2 of the spec. No open investigation question exists. BA correctly identified the root cause (AC-F5 created a bash-syntax mandate that conflicted with style-inspector Standard 1), confirmed the exact bash patterns present in all four files, and located the verbatim prose replacement in the spec. No 'investigate X' or 'audit Y' clause was left unfulfilled."
+    },
+    {
+      "dimension": "affected_file_accuracy",
+      "verdict": "PASS",
+      "notes": "All four affected files verified to exist at the claimed paths: commands/dev.md (EXISTS), docs/dev/ticket-20260529-080709.md (EXISTS), docs/dev/acceptance-criteria-20260529-080709.json (EXISTS), tests/generated/20260529-080709/test_AC_F5_ac-f5-dispatch-guard-sentinel-existence.py (EXISTS). BA's claimed line numbers verified: bash block confirmed at commands/dev.md:684-718 with fenced bash block containing GRAPHIFY_SENTINEL= at line 689. Pattern 'GRAPHIFY_SENTINEL=' confirmed in acceptance-criteria JSON at lines 83 and 91. Pattern 'GRAPHIFY_SENTINEL=' confirmed in test .py at lines 47 and 53. Ticket VERIFICATION clause confirmed at lines 228 and 233. All file path claims accurate."
+    },
+    {
+      "dimension": "spec_text_vs_execution_drift",
+      "verdict": "PASS",
+      "notes": "AC-1 and AC-2 use grep-pattern checks with no embedded bash execution, so there is no risk of an executable recipe differing from the literal AC text. The AC-1 pattern 'skipped.sentinel_absent|sentinel.*absent|absent.*sentinel' uses '.' as a regex wildcard which will match the prescribed prose 'skipped/sentinel_absent' since '.' matches '/'. This is intentional and not a drift — the dot is more permissive than needed but will not produce false negatives. The AC-2 patterns are exact string matches (no execution path). No spec_text_vs_execution_drift condition applies."
+    }
+  ],
+
+  "scope_verification": {
+    "files_count_claimed": 4,
+    "files_count_verified": 4,
+    "files_in_scope": [
+      "commands/dev.md",
+      "docs/dev/ticket-20260529-080709.md",
+      "docs/dev/acceptance-criteria-20260529-080709.json",
+      "tests/generated/20260529-080709/test_AC_F5_ac-f5-dispatch-guard-sentinel-existence.py"
+    ],
+    "scope_exactly_4_files": true,
+    "notes": "Scope is correctly bounded to the 4 files named in prior cycle analysis. No scope expansion or contraction observed."
+  },
+
+  "ac_wording_verification": {
+    "ac1_verifiable": true,
+    "ac1_notes": "AC-1 check.patterns are deterministic grep operations: no_match for '```bash', match for 'graphify\\.json', match for skip instruction. No bash-pattern assertions. Patterns can be executed by QA without ambiguity.",
+    "ac2_verifiable": "partial",
+    "ac2_notes": "AC-2 patterns are deterministic no_match/match grep operations — no bash-pattern assertions in the new ACs themselves. However, coverage is incomplete: ticket-20260529-080709.md is not covered by any pattern (see scope_alignment objection). The 5 patterns that ARE present are verifiable.",
+    "no_bash_pattern_assertions_in_new_acs": true,
+    "no_bash_pattern_assertions_notes": "Confirmed: none of the patterns in acceptance-criteria-20260529-164939.json contain 'if.*-f.*' or 'GRAPHIFY_SENTINEL=' as expect=match patterns. All bash-pattern references are expect=no_match, which is the correct inversion."
+  },
+
+  "prose_replacement_semantics": {
+    "sentinel_path_preserved": true,
+    "sentinel_path_notes": "The prescribed prose in spec-20260527-061433.md:356 and in ticket-20260529-164939.md:124 explicitly references '$CLAUDE_PROJECT_DIR/.claude/dev-registry/$DEV_SESSION_ID/graphify.json'. This is correctly included in AC-1's match patterns ('graphify\\.json').",
+    "skip_when_absent_preserved": true,
+    "skip_when_absent_notes": "AC-1 requires match for 'skipped.sentinel_absent|sentinel.*absent|absent.*sentinel' which captures the prescribed skip behavior. The spec prose says 'If absent for any reason, do not dispatch; record graphify_status=skipped/sentinel_absent'.",
+    "dispatch_when_present_preserved": true,
+    "dispatch_when_present_notes": "The spec prose and ticket both require the present-case dispatch to be described. AC-1 indirectly covers this via absence of bash block (no_match for '```bash') plus presence of sentinel path and skip instruction. The 'if present, dispatch' clause is semantically captured.",
+    "concerns": "AC-1 does not have an explicit match pattern for the 'if present, dispatch' prose clause. This is a minor gap — the spec prescribes 'If present, dispatch graphify, then record the resulting status from graph-summary.json when available.' QA can verify absence of bash block and presence of skip instruction but cannot verify the present-case dispatch prose was included. This is a minor concern, not blocking given that the spec prose is prescribed verbatim and dev is instructed to copy it exactly."
+  },
+
+  "graphify_fail_gates": {
+    "applicable": false,
+    "reason": "graphify/pre_query.json status=unavailable (GRAPHIFY_BIN absent). G1, G2, G3 are all waived per the spec condition 'gates apply ONLY when graphify ran and status=ok or status=degraded'.",
+    "g1_candidate_anchors_ignored": "waived",
+    "g2_missing_reference_resolution": "waived",
+    "g3_no_counter_evidence": "waived"
+  },
+
+  "objections": [
+    {
+      "id": "OBJ-1",
+      "dimension": "scope_alignment",
+      "severity": "blocking",
+      "title": "AC-2 omits verification of docs/dev/ticket-20260529-080709.md despite it being named as one of the three in-scope artifacts",
+      "evidence": "scope_boundary.in_user_path lists all 4 files including ticket-20260529-080709.md. Ticket section 'Scope > All occurrences' lists ticket-20260529-080709.md:228,233 as containing GRAPHIFY_SENTINEL bash patterns. AC-2 check.patterns verified by grep: 0 patterns target ticket-20260529-080709.md. The ticket VERIFICATION clause at lines 228 and 233 contains 'grep for GRAPHIFY_SENTINEL=.*graphify\\.json AND if.*-f.*GRAPHIFY_SENTINEL' — these bash patterns will not be removed unless dev is motivated to update them, but no AC will catch the failure.",
+      "fix_required": "Add to AC-2 check.patterns in acceptance-criteria-20260529-164939.json: {\"file\": \"docs/dev/ticket-20260529-080709.md\", \"pattern\": \"GRAPHIFY_SENTINEL=\", \"expect\": \"no_match\", \"rationale\": \"ticket AC-F5 VERIFICATION paragraph must no longer require bash assignment syntax\"} and {\"file\": \"docs/dev/ticket-20260529-080709.md\", \"pattern\": \"if.*-f.*GRAPHIFY_SENTINEL\", \"expect\": \"no_match\", \"rationale\": \"ticket AC-F5 VERIFICATION paragraph must no longer require bash if-test syntax\"}. Also update AC-2 WHEN clause to include ticket-20260529-080709.md.",
+      "blocks_dispatch": true
+    }
+  ],
+
+  "summary": {
+    "dimensions_passed": 4,
+    "dimensions_failed": 1,
+    "blocking_objections": 1,
+    "non_blocking_concerns": 1,
+    "verdict": "FAIL",
+    "verdict_reason": "One blocking scope_alignment objection: AC-2 verification coverage omits docs/dev/ticket-20260529-080709.md, which contains the bash-pattern VERIFICATION clause (lines 228-233) that must also be updated. Without a no_match check on that file, the update may be silently skipped by dev and never caught by QA."
+  },
+
+  "iteration_needed": true,
+  "refined_context": {
+    "failed_dimension": "scope_alignment",
+    "specific_fix": "Add two no_match patterns targeting docs/dev/ticket-20260529-080709.md to AC-2 in acceptance-criteria-20260529-164939.json. Update AC-2 WHEN clause in ticket-20260529-164939.md to explicitly name all three artifact files. No other changes needed — all other analysis is correct and the spec reference is accurate.",
+    "non_blocking_concern": "AC-1 does not have an explicit match pattern for the 'if present, dispatch' prose clause from the spec prescription. Recommend adding: {\"pattern\": \"If present.*dispatch|dispatch.*graphify\", \"expect\": \"match\"} to AC-1 to fully verify both conditional branches of the prescribed prose."
+  },
+
+  "codex_consult": {
+    "invoked": false,
+    "status": "not_requested",
+    "feedback_summary": null,
+    "feedback_incorporated": null
+  }
+}

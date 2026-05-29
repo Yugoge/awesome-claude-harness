@@ -1,0 +1,102 @@
+[
+  {
+    "id": "AC-1",
+    "type": "data",
+    "given": "commands/dev.md after V1 prose fix applied",
+    "when": "reading the graphify enrichment section (between the 'Graphify enrichment' anchor and '### Step 8' heading)",
+    "then": "no fenced bash block (```bash opening) appears in the section; the words 'graphify.json' and 'sentinel' both appear; the phrase 'skipped/sentinel_absent' or equivalent skip instruction appears for the absent-sentinel case; and prose names the present-case dispatch action",
+    "check": {
+      "type": "grep",
+      "patterns": [
+        {
+          "file": "commands/dev.md",
+          "section_anchor": "Graphify enrichment",
+          "section_end": "### Step 8",
+          "pattern": "```bash",
+          "expect": "no_match",
+          "rationale": "no fenced bash block may appear in the graphify enrichment prose section — style-inspector Standard 1 (no-inline-code)"
+        },
+        {
+          "file": "commands/dev.md",
+          "section_anchor": "Graphify enrichment",
+          "section_end": "### Step 8",
+          "pattern": "graphify\\.json",
+          "expect": "match",
+          "rationale": "sentinel file path containing graphify.json must be named in prose"
+        },
+        {
+          "file": "commands/dev.md",
+          "section_anchor": "Graphify enrichment",
+          "section_end": "### Step 8",
+          "pattern": "skipped.sentinel_absent|sentinel.*absent|absent.*sentinel",
+          "expect": "match",
+          "rationale": "prose must describe what to do when sentinel is absent: skip dispatch and record graphify_status=skipped/sentinel_absent"
+        },
+        {
+          "file": "commands/dev.md",
+          "section_anchor": "Graphify enrichment",
+          "section_end": "### Step 8",
+          "pattern": "If present.*dispatch|present.*dispatch graphify|dispatch graphify",
+          "expect": "match",
+          "rationale": "prose must name the present-case action: dispatch graphify when sentinel file exists (per spec Section 7/Cycle 2 prescribed wording 'If present, dispatch graphify')"
+        }
+      ]
+    },
+    "ac_uid": "ac-1-prose-replaces-bash-sentinel-guard"
+  },
+  {
+    "id": "AC-2",
+    "type": "data",
+    "given": "docs/dev/ticket-20260529-080709.md, docs/dev/acceptance-criteria-20260529-080709.json, and tests/generated/20260529-080709/test_AC_F5_ac-f5-dispatch-guard-sentinel-existence.py after artifact update",
+    "when": "reading the AC-F5 VERIFICATION section in ticket-20260529-080709.md, the check patterns in acceptance-criteria-20260529-080709.json, and the assertion patterns in test_AC_F5_ac-f5-dispatch-guard-sentinel-existence.py",
+    "then": "no pattern references GRAPHIFY_SENTINEL= (bash variable assignment) and no pattern references if.*-f.*GRAPHIFY_SENTINEL (bash if test); patterns reference prose-extractable content (graphify.json literal and sentinel/absent wording)",
+    "check": {
+      "type": "grep",
+      "patterns": [
+        {
+          "file": "docs/dev/ticket-20260529-080709.md",
+          "pattern": "GRAPHIFY_SENTINEL=",
+          "expect": "no_match",
+          "rationale": "ticket spec AC-F5 VERIFICATION section must not reference bash assignment syntax after prose conversion"
+        },
+        {
+          "file": "docs/dev/ticket-20260529-080709.md",
+          "pattern": "if.*-f.*GRAPHIFY_SENTINEL",
+          "expect": "no_match",
+          "rationale": "ticket spec AC-F5 VERIFICATION section must not reference bash if-test syntax after prose conversion"
+        },
+        {
+          "file": "docs/dev/acceptance-criteria-20260529-080709.json",
+          "pattern": "GRAPHIFY_SENTINEL=",
+          "expect": "no_match",
+          "rationale": "acceptance-criteria JSON must not require bash assignment syntax after prose conversion"
+        },
+        {
+          "file": "docs/dev/acceptance-criteria-20260529-080709.json",
+          "pattern": "if.*-f.*GRAPHIFY_SENTINEL",
+          "expect": "no_match",
+          "rationale": "acceptance-criteria JSON must not require bash if-test syntax after prose conversion"
+        },
+        {
+          "file": "tests/generated/20260529-080709/test_AC_F5_ac-f5-dispatch-guard-sentinel-existence.py",
+          "pattern": "GRAPHIFY_SENTINEL=",
+          "expect": "no_match",
+          "rationale": "test assertions must not match bash variable assignment syntax after prose conversion"
+        },
+        {
+          "file": "tests/generated/20260529-080709/test_AC_F5_ac-f5-dispatch-guard-sentinel-existence.py",
+          "pattern": "if.*-f.*GRAPHIFY_SENTINEL",
+          "expect": "no_match",
+          "rationale": "test assertions must not match bash if-test syntax after prose conversion"
+        },
+        {
+          "file": "tests/generated/20260529-080709/test_AC_F5_ac-f5-dispatch-guard-sentinel-existence.py",
+          "pattern": "graphify\\.json",
+          "expect": "match",
+          "rationale": "test must still verify sentinel path reference (graphify.json) appears in the prose section"
+        }
+      ]
+    },
+    "ac_uid": "ac-2-ac-f5-artifacts-updated-to-prose-patterns"
+  }
+]
