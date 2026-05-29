@@ -1,0 +1,114 @@
+{
+  "request_id": "dev-20260529-092512-B",
+  "task_id": "dev-20260529-092512-B",
+  "parent_task_id": "dev-20260529-092512",
+  "timestamp": "2026-05-29T09:25:12Z",
+  "baseline_head_sha": "f551a24cfe49b708cc98ff91cb2abd6334fe3c13",
+  "baseline_dirty_snapshot": " M agents/INDEX.md\n M agents/README.md\n M agents/ba.md\n M agents/dev.md\n M agents/graphify.md\n M agents/qa.md\n M commands/INDEX.md\n M commands/commit.md\n M commands/dev.md\n M commands/pull.md\n M docs/dev/INDEX.md\n M docs/dev/acceptance-criteria-20260527-132200.json\n M docs/dev/ticket-20260527-132200.md\n M docs/reference/INDEX.md\n M hooks/tests/INDEX.md\n M logs/lifecycle.jsonl\n M scripts/INDEX.md\n M scripts/README.md\n M scripts/graphify-enrich.py\n M scripts/graphify-query.py\n M tests/generated/20260527-132200/INDEX.md\n M tests/generated/20260527-132200/manifest.json\n M tests/generated/INDEX.md\n M tests/generated/manifest.json",
+  "dev_report_path": "docs/dev/dev-report-dev-20260529-092512-B.json",
+  "dev": {
+    "status": "completed",
+    "files_modified": [],
+    "files_created": [],
+    "observed_preexisting": [
+      "hooks/pretool-write-guard.sh",
+      "hooks/lib/allowlist.py",
+      "hooks/posttool-allowlist-consume.py",
+      "hooks/tests/INDEX.md"
+    ],
+    "tasks_completed": [
+      {
+        "id": 1,
+        "description": "Verified Item B: Write-guard sentinel three-candidate path exists, is internally consistent, and the CF-1 overwrite-only invariant holds. No functional gap found; no harden required (clean verify no-op).",
+        "type": "verification",
+        "files_modified": [],
+        "files_created": [],
+        "rationale": "BA spec scoped Item B as verify-and-harden. All three paths confirmed present and consistent at the cited line ranges; no divergence to patch."
+      }
+    ],
+    "scripts_created": [],
+    "verification_findings": {
+      "AC-B1_candidate_key_parity": {
+        "verdict": "PASS",
+        "pretool": "hooks/pretool-write-guard.sh:79-85 — writer_key = env_task_id if env_task_id else session_id; enumerate [writer_key, data_task_id, session_id]; de-dup via seen-set preserving priority order.",
+        "posttool": "hooks/posttool-allowlist-consume.py:230-238 — writer_primary = env_task_id if env_task_id else session_id; enumerate [writer_primary, data_task_id, session_id]; de-dup via seen-set preserving priority order.",
+        "conclusion": "Writer-key derivation (CLAUDE_TASK_ID else session_id), enumeration order [writer_key, data.task_id, session_id], and de-dup semantics are IDENTICAL between pretool and posttool. Both invoke match_sentinel_grant_for_write(key, session_id, target_path) (allowlist.py:523-576) with the same argument order. No divergence."
+      },
+      "AC-B2_CF1_overwrite_only": {
+        "verdict": "PASS",
+        "guard_line": "hooks/pretool-write-guard.sh:114 — if [ \"$_WG_SENTINEL_RESULT\" = \"valid_no_match\" ] && [ -f \"$FILE_PATH\" ]; then exit 2",
+        "conclusion": "CF-1 legacy-grant suppression (exit 2) is gated on [ -f \"$FILE_PATH\" ], firing ONLY for overwrite of an existing file. New-file creation does not satisfy the -f test and falls through to line 147 (exit 0), so an unrelated valid sentinel never blocks new-file creation. Invariant confirmed."
+      },
+      "AC-B3_no_regression": {
+        "verdict": "PASS",
+        "tests_run": [
+          {"suite": "tests/generated/20260522-080646-B (AC1 matcher, AC2 write-guard sentinel check, AC3 posttool consume, AC4 scope integrity)", "result": "4 passed"},
+          {"suite": "tests/generated/20260524-125300-B (AC1-AC8 write-scoped grant / wildcard / exploit-shape regression)", "result": "8 passed"}
+        ],
+        "syntax_checks": ["python3 -m py_compile hooks/lib/allowlist.py hooks/posttool-allowlist-consume.py: OK", "bash -n hooks/pretool-write-guard.sh: OK"],
+        "pre_existing_failure_note": "hooks/tests/test_allowlist_consolidation.py::test_regex_match FAILS with TypeError: 'NoneType' object cannot be interpreted as an integer at allowlist.py:59 (signal.alarm(timeout) when timeout is None). This is in the LEGACY regex-grant matching path (_match_loaded_grant / _regex_safe), NOT the Write-sentinel three-candidate chain. It is present on baseline f551a24 with zero edits from this task, hence pre-existing and out of Item B scope. Flagged for awareness only."
+      }
+    },
+    "git_rationale": {
+      "root_cause_commit": "N/A — verification of already-landed Write-sentinel chain (tasks 20260522-080646-B, 20260524-125300-B)",
+      "why_issue_occurred": "Item B was scoped as a parity-audit of an already-implemented three-path sentinel chain; the concern was potential pretool/posttool candidate-key divergence (grant found at write but not consumed = leak, or vice versa).",
+      "how_fix_addresses_root": "No fix needed. Audit confirms candidate-key parity and the CF-1 overwrite-only invariant hold exactly as specified. The chain is internally consistent."
+    },
+    "diff_stats": {
+      "files_changed": 0,
+      "lines_added": 0,
+      "lines_removed": 0,
+      "new_symbols_introduced": [],
+      "minimum_possible_lines_estimate": 0,
+      "justification_for_overage": null
+    },
+    "fix_layer": "L4",
+    "scope_review_requested": false,
+    "qa_ready": true,
+    "qa_notes": "Item B is a clean verify no-op (zero code changes). QA can re-confirm: (1) candidate-key list parity at write-guard.sh:79-85 vs consume.py:230-238 [writer_key, data_task_id, session_id]; (2) CF-1 -f gating at write-guard.sh:114; (3) re-run tests/generated/20260522-080646-B + 20260524-125300-B (expect 4+8 pass). The test_allowlist_consolidation.py::test_regex_match failure is pre-existing and unrelated to Item B.",
+    "permissions_to_add": []
+  },
+  "blast_radius_declarations": [
+    {
+      "file": "hooks/pretool-write-guard.sh",
+      "coverage_gap_severity": "n/a",
+      "addressed_by": "exemption",
+      "reason": "file NOT modified this cycle (verify-only); covered by tests/generated/20260522-080646-B AC2 + 20260524-125300-B behavioral suite which were run and pass"
+    },
+    {
+      "file": "hooks/posttool-allowlist-consume.py",
+      "coverage_gap_severity": "n/a",
+      "addressed_by": "exemption",
+      "reason": "file NOT modified this cycle (verify-only); covered by tests/generated/20260522-080646-B AC3 which was run and passes"
+    },
+    {
+      "file": "hooks/lib/allowlist.py",
+      "coverage_gap_severity": "n/a",
+      "addressed_by": "exemption",
+      "reason": "file NOT modified this cycle (verify-only); match_sentinel_grant_for_write covered by 20260522-080646-B AC1 + 20260524-125300-B AC1-AC8 which were run and pass"
+    }
+  ],
+  "blast_radius": [
+    {"modified": "(none — verify-only task)", "imported_by": []}
+  ],
+  "self_verification": {
+    "build": "pass",
+    "smoke_check": "pass",
+    "notes": "py_compile + bash -n clean on all three target files; 12 Write-sentinel regression tests pass (4 + 8). All three AC-B criteria verified PASS by source inspection. No edits made, so no build/behavior change to introduce regressions."
+  },
+  "implementation_notes": "Item B required NO code change. The three-path Write-sentinel chain (allowlist.py:523-576 matcher, pretool-write-guard.sh:60-116 CF-1 check, posttool-allowlist-consume.py:222-272 consume) is already internally consistent: candidate-key derivation, enumeration order [writer_key, data_task_id, session_id], and de-dup are identical pretool<->posttool; CF-1 suppression is correctly gated on [ -f \"$FILE_PATH\" ] (overwrite-only). DO-NOT list respected: no touch to hooks/pretool-bash-safety.sh or hooks/lib/bash_context_strip.py (Item A). pre_existing_guards (write-guard.sh:114, write-guard.sh:1143-equivalent, bash-safety:1096) were neither removed nor weakened (no edit). Pre-existing unrelated failure noted: test_allowlist_consolidation.py::test_regex_match (signal.alarm(None) in legacy regex path) — present on baseline, out of Item B scope, flagged for orchestrator awareness.",
+  "codex_consult": {
+    "invoked": false,
+    "status": "not_requested",
+    "feedback_summary": null,
+    "feedback_incorporated": null
+  },
+  "rank_acknowledged": null,
+  "range_acknowledged": null,
+  "recent_events_digest_acknowledged": null,
+  "score_injection_action": null,
+  "blocking_issues": [],
+  "recommendations": [
+    "Out of scope for Item B but worth a separate ticket: fix the pre-existing test_allowlist_consolidation.py::test_regex_match failure (pass a numeric default regex_timeout to _regex_safe / _match_loaded_grant instead of None, to avoid signal.alarm(None) TypeError in the legacy regex-grant path)."
+  ]
+}
