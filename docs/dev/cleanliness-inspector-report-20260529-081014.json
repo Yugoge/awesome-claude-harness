@@ -1,0 +1,126 @@
+{
+  "request_id": "20260529-081014",
+  "timestamp": "2026-05-29T15:21:36Z",
+  "inspector": "cleanliness-inspector",
+  "mode": "--changed-files",
+  "scope_contract": "Cleanliness-of-THIS-diff only. File-level findings tagged with introduced_in_diff. Pre-existing/historical dirt is ignored and non-blocking per Section 5.4 rule 3 / AC-2.6(b). Findings without introduced_in_diff:true are advisory/non-blocking by default-safe rule.",
+  "changed_files_inspected": [
+    "agents/qa.md",
+    "tests/generated/manifest.json",
+    "scripts/qa-manifest-guard.py",
+    "scripts/repair-venv.sh",
+    "docs/reference/venv-repair.md",
+    "docs/dev/context-20260529-081014.json",
+    "tests/generated/20260529-081014/test_AC1_ac1_qa_vacuity_guard.py",
+    "tests/generated/20260529-081014/test_AC2_ac2_venv_repair_runnable.py",
+    "tests/generated/20260529-081014/test_AC3_ac3_qa_md_invariant_dual_region.py",
+    "tests/generated/20260529-081014/test_AC4_ac4_guard_regression_matrix.py",
+    "tests/generated/20260529-081014/test_AC5_ac5_cycle_diff_force_include.py"
+  ],
+  "file_placement_verdicts": [
+    {"file": "agents/qa.md", "git_status": "M", "introduced_in_diff": false, "location_correct": true, "note": "Pre-existing agent definition; agents/ is the correct location. Only modified (Phase 5 changes), not newly placed."},
+    {"file": "tests/generated/manifest.json", "git_status": "M", "introduced_in_diff": false, "location_correct": true, "note": "Pre-existing aggregate manifest in correct location; only modified."},
+    {"file": "scripts/qa-manifest-guard.py", "git_status": "??", "introduced_in_diff": true, "location_correct": true, "note": "scripts/ is correct for a guard script; kebab-case name matches convention (graphify-query.py, spec-check.py)."},
+    {"file": "scripts/repair-venv.sh", "git_status": "??", "introduced_in_diff": true, "location_correct": true, "note": "scripts/ correct for an operational shell script; kebab-case name fine."},
+    {"file": "docs/reference/venv-repair.md", "git_status": "??", "introduced_in_diff": true, "location_correct": true, "note": "Placed in docs/reference/ (standard subdir for reference/how-to docs), NOT dumped in repo root. Correctly categorized; name matches the script it documents."},
+    {"file": "docs/dev/context-20260529-081014.json", "git_status": "??", "introduced_in_diff": true, "location_correct": true, "note": "docs/dev/ is the standard location for dev-workflow JSON context, namespaced by task_id timestamp."},
+    {"file": "tests/generated/20260529-081014/test_AC1_ac1_qa_vacuity_guard.py", "git_status": "??", "introduced_in_diff": true, "location_correct": true, "note": "Correctly namespaced under per-task cycle dir; test_AC<n>_<slug> naming matches sibling cycle dirs."},
+    {"file": "tests/generated/20260529-081014/test_AC2_ac2_venv_repair_runnable.py", "git_status": "??", "introduced_in_diff": true, "location_correct": true, "note": "Correct cycle dir + naming."},
+    {"file": "tests/generated/20260529-081014/test_AC3_ac3_qa_md_invariant_dual_region.py", "git_status": "??", "introduced_in_diff": true, "location_correct": true, "note": "Correct cycle dir + naming."},
+    {"file": "tests/generated/20260529-081014/test_AC4_ac4_guard_regression_matrix.py", "git_status": "??", "introduced_in_diff": true, "location_correct": true, "note": "Correct cycle dir + naming."},
+    {"file": "tests/generated/20260529-081014/test_AC5_ac5_cycle_diff_force_include.py", "git_status": "??", "introduced_in_diff": true, "location_correct": true, "note": "Correct cycle dir + naming."}
+  ],
+  "findings": {
+    "misplaced_docs": [],
+    "naming_violations": [],
+    "archive_candidates": [],
+    "dev_context_files": [],
+    "temp_files": [],
+    "duplicate_scripts": [],
+    "duplicate_tests": [],
+    "non_functional_files": [],
+    "non_functional_folders": [],
+    "orphaned_subagents": [],
+    "unreferenced_scripts": [],
+    "orphaned_tests": [],
+    "historical_docs": [],
+    "docs_categorization": [],
+    "obsolete_functionality": [],
+    "orphan_commands": [],
+    "dead_functions": [],
+    "duplicate_content": [],
+    "gitignore_coverage": []
+  },
+  "summary": {
+    "total_issues": 0,
+    "critical": 0,
+    "major": 0,
+    "minor": 0,
+    "blocking_new_violations": 0,
+    "estimated_space_saved": "0 MB",
+    "verdict": "CLEAN — zero file-organization cleanliness violations introduced by this cycle's diff, and zero blocking findings. All 11 changed files are in correct locations with conformant naming, shebangs, and exec bits. The new reference doc (venv-repair.md) was correctly placed in docs/reference/ rather than repo root. No temp files, naming violations, duplicate scripts, or stray files. The only diff-introduced build artifact (__pycache__/*.pyc in the new cycle dir) is properly covered by .gitignore:36 and can never be committed, so it is not a finding. CLOSE: cleanliness gate PASS."
+  },
+  "non_findings_verified": [
+    {
+      "candidate": "tests/generated/20260529-081014/__pycache__/ (5 *.cpython-312-pytest-9.0.3.pyc files, introduced_in_diff=true)",
+      "verdict": "NOT A FINDING",
+      "evidence": "git check-ignore -v returns RC=0: matched by .gitignore:36 rule '__pycache__/'. git status shows them as '!!' (ignored), never staged, so they can never leak into a commit. Cross-confirmed: 0 .pyc/__pycache__ paths tracked anywhere repo-wide (git ls-files count = 0) despite 7+ sibling cycle dirs all carrying working-tree __pycache__. Properly-ignored ephemeral bytecode is not a cleanliness violation."
+    },
+    {
+      "candidate": "repo-root .gitignore coverage of build artifacts (introduced_in_diff=false)",
+      "verdict": "NOT A FINDING",
+      "evidence": "A .gitignore exists at repo root; line 36 ('__pycache__/') covers Python bytecode; .pytest_cache and scripts/__pycache__ are likewise ignored ('!!'). Coverage is intact. (An earlier probe during a degraded-stdout phase misread .gitignore as absent; re-verified on clean output — present and effective.)"
+    },
+    {
+      "candidate": "duplicate scripts / backup siblings, stray cycle-dir files (introduced_in_diff=true)",
+      "verdict": "NOT A FINDING",
+      "evidence": "Glob found no scripts/*-old.*, *.bak, or repair-venv*/qa-manifest-guard* backup siblings; no pre-existing venv/repair/manifest-guard script to duplicate. Cycle dir holds exactly the expected scaffold (5 test_*.py + INDEX.md + manifest.json + README.md + gitignored __pycache__), no stray temp/draft files."
+    }
+  ],
+  "verification": {
+    "gitignore_present_root": true,
+    "gitignore_pycache_rule": ".gitignore:36 __pycache__/",
+    "check_ignore_cycle_pyc_rc": 0,
+    "tracked_pyc_or_pycache_count_repo_wide": 0,
+    "short_slug_duplicate_test_files_on_disk": false,
+    "build_artifact_sweep_scope": "scripts/, tests/generated/20260529-081014/, repo root (maxdepth 3) — all __pycache__/.pytest_cache found are gitignored ('!!')",
+    "handoff_note": "Orchestrator --changed-files list used short test slugs (test_AC1_ac1_qa_vacuity_guard.py); on disk the slugs are longer (test_AC1_ac01_qa_vacuity_guard_manifest_mode.py). Same count/dir/convention, NO short-slug duplicates on disk. Stale-handoff/traceability concern for the orchestrator, out of cleanliness scope.",
+    "note": "Decisive facts captured on clean output after an early degraded-stdout phase. Placement confirmed via git status + git ls-files + Glob; contents via Read/Grep; gitignore coverage via git check-ignore -v (RC=0)."
+  },
+  "codex_consult": {
+    "invoked": true,
+    "status": "ok",
+    "feedback_summary": "Codex (gpt-5.5, xhigh) ran adversarial review. Central demand: do NOT mark the cycle unconditionally CLEAN before verifying the __pycache__ artifact's gitignore status, and sweep ALL diff-touched dirs (not only the test dir) for stray bytecode/.pytest_cache. It classified the slug mismatch (OBS-A) as out-of-scope handoff staleness and docs/reference-vs-guides as a non-blocking preference.",
+    "findings": [
+      {
+        "issue": "OBS-B: __pycache__/*.pyc in the new cycle dir is the one candidate that could block; must verify gitignore coverage rather than assume.",
+        "proposed_fix": "Run git check-ignore -v on the .pyc; RC=0 => non-blocking ignored ephemera; RC=1 => add ignore rule or guarantee path-specific staging + pre-commit rm.",
+        "classification": "blocker",
+        "disposition": "applied",
+        "rationale": "Ran the check: git check-ignore -v returned RC=0, matched by .gitignore:36 '__pycache__/'. Cross-confirmed by 0 tracked .pyc repo-wide. Therefore NOT a finding (recorded under non_findings_verified). Satisfies codex's 'verify, do not hand-wave' demand; verdict is evidence-backed CLEAN."
+      },
+      {
+        "issue": "MISSED: sweep build artifacts across ALL diff-touched dirs (scripts/__pycache__, .pytest_cache), not just the cycle test dir.",
+        "proposed_fix": "find scripts tests/generated/20260529-081014 . -maxdepth 3 for __pycache__/*.pyc/.pytest_cache and check-ignore each.",
+        "classification": "major",
+        "disposition": "applied",
+        "rationale": "Ran the sweep. All __pycache__/.pytest_cache found (bin/, hooks/, scripts/, scripts/todo/, .pytest_cache, cycle dir) are gitignored ('!!'). None tracked or committable; none uncovered. Scope recorded in verification.build_artifact_sweep_scope."
+      },
+      {
+        "issue": "OBS-A: filename slug mismatch between handoff list and disk.",
+        "proposed_fix": "OBSERVATION_ONLY — surface a one-liner so the orchestrator reconciles its list; confirm no short-slug duplicates.",
+        "classification": "observation_only",
+        "disposition": "applied",
+        "rationale": "Confirmed no short-slug duplicate files on disk; recorded as verification.handoff_note (out of cleanliness scope), not a finding."
+      },
+      {
+        "issue": "docs/reference vs docs/guides for venv-repair.md.",
+        "proposed_fix": "OBSERVATION_ONLY — reference/ acceptable; relocate to guides/ only by team preference.",
+        "classification": "observation_only",
+        "disposition": "applied",
+        "rationale": "docs-categorization rule only fires for docs/ root; reference/ is within convention; non-blocking preference."
+      }
+    ],
+    "feedback_incorporated": "Codex's central correction applied in full: the inspector did NOT hand-wave the __pycache__ artifact. Ran the decisive git check-ignore (RC=0) + repo-wide git ls-files (0 tracked .pyc) checks and the cross-dir sweep codex demanded. Artifact proved properly gitignored, so the verdict is an evidence-backed CLEAN with zero blocking findings. Out-of-scope items (slug mismatch, reference-vs-guides) logged but not raised as findings."
+  }
+}

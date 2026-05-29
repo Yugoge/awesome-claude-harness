@@ -1,0 +1,358 @@
+{
+  "request_id": "20260529-081014",
+  "task_id": "20260529-081014",
+  "timestamp": "2026-05-29T08:10:14Z",
+  "spec_path": null,
+  "acceptance_criteria_path": "docs/dev/acceptance-criteria-20260529-081014.json",
+  "ba_spec_path": "docs/dev/ticket-20260529-081014.md",
+  "blast_radius_map_path": null,
+  "_blast_radius_skip_reason": "Phase-1 prediction not run for this cycle: scope is two narrow agent-contract + script edits (agents/qa.md, scripts/qa-manifest-guard.py NEW, scripts/repair-venv.sh NEW). No cross-module Python imports, no hook surfaces touched, no public-API edges. Dev should still run Phase 1 against final files_to_modify if that materially differs.",
+  "complexity_tier": "STANDARD",
+  "risk_level": "medium",
+  "test_writer_expected": true,
+  "_test_writer_expected_formula": "complexity_tier=STANDARD => true (per BA quality checklist: (complexity_tier in {STANDARD, COMPLEX}) OR (risk_level == high))",
+  "rank_acknowledged": null,
+  "range_acknowledged": null,
+  "recent_events_digest_acknowledged": null,
+  "score_injection_action": null,
+  "_score_injection_doc": "No INJECTION_PROOF block was present in this BA dispatch prompt; per the score-injection echo contract fail-safe, all four fields are set to null and no values fabricated.",
+  "requirement": {
+    "original": "/redev 真正影响你需求的（2 项，都跟“harness 别再骗你”直接相关）： 1. QA `manifest_verification` 用空 active 集刷绿 —— 这是你反复警告过的“做了个寂寞”模式的结构性漏洞。没有守卫，下一次 QA 同样能这么干。本次只修了这一次的报告，没修 agent 行为。下一周期加守卫（active_tests_count==0 时禁止 pytest_collected_ok:true，或者强制把 cycle-diff 文件加入 active 集）。 2. venv 全 broken symlink —— 我跑 pytest 时撞到要绕路。很可能就是 QA grep-only 验证的根因：subagent 在 venv 里跑 pytest 会失败，于是它退化成 grep。修这个 = 同时可能消除 #1 的诱因。",
+    "clarified": "Item 1: amend agents/qa.md Phase 5 to forbid pytest_collected_ok:true whenever active_tests_count==0, force-include cycle-diff testable files when active set is empty, and add scripts/qa-manifest-guard.py as the canonical executable invariant. Item 2: add scripts/repair-venv.sh that durably restores /root/.claude/venv/bin/python3 by parsing pyvenv.cfg's executable= line (no hardcoded interpreter path) and verifies success via venv/bin/python -m pytest --version exit 0. Both items must ship together because the broken venv is the operational cause of QA's grep-only fallback that produced the vacuous report.",
+    "what": "(1) Add a vacuity-rejection invariant + force-include rule + executable guard to QA Phase 5 manifest_verification; (2) repair the missing venv/bin/python3 symlink durably via a script that reads pyvenv.cfg.",
+    "why": "QA can currently emit pytest_collected_ok:true with zero active tests — a structurally-allowed greenwash. The prior cycle's hand-correction fixed one report only; the contract that produced it was untouched. Separately, the venv interpreter symlinks are broken, forcing every subagent that invokes pytest to fall back to grep verification, which is the operational driver of the vacuous-report pattern.",
+    "where": [
+      "agents/qa.md (Phase 5 procedural rule around line 1078; manifest_verification schema docblock around lines 1525-1535)",
+      "scripts/qa-manifest-guard.py (NEW — canonical executable guard)",
+      "scripts/repair-venv.sh (NEW — durable venv interpreter-symlink repair)",
+      "docs/reference/venv-repair.md (NEW — discoverability note, S1)"
+    ],
+    "scope": {
+      "included": [
+        "Amend agents/qa.md Phase 5 procedural text to add: (a) vacuity invariant (active_tests_count==0 forbids pytest_collected_ok:true), (b) force-include step using git-diff as authoritative source plus dev-report advisory, (c) executable guard reference scripts/qa-manifest-guard.py",
+        "Amend agents/qa.md manifest_verification schema docblock to list vacuous_due_to_empty_active_set and vacuous_reason fields",
+        "Create scripts/qa-manifest-guard.py implementing evaluate(dict)->(verdict, reason), exit 0 on ok / ok_vacuous_acknowledged, exit 2 on vacuous_rejected, importable as a Python module",
+        "Create scripts/repair-venv.sh that resolves venv via own-script-location + --venv override, parses pyvenv.cfg executable=, creates missing venv/bin/python3 symlink, verifies via pytest --version exit 0, is idempotent (no-op when healthy)",
+        "Create docs/reference/venv-repair.md short discoverability note (S1)"
+      ],
+      "excluded": [
+        "Reinstalling or upgrading any site-package (pytest stays at 9.0.3)",
+        "Recreating the venv as a whole",
+        "Fixing the 5 pre-existing test failures listed in qa-report-20260527-054705.json:198-204 (user explicitly excluded)",
+        "Editing downstream consumers of venv/bin/activate (scripts/score-inject.sh, hooks/pretool-bash-safety.sh, etc.)",
+        "Broader QA agent rewrites or adjacent anti-greenwash rules (codex finding #12)",
+        "Modifying docs/dev/specs/spec-20260520-044700.md (frozen per user directive)"
+      ]
+    },
+    "success_criteria": [
+      "AC1 (manifest mode): scripts/qa-manifest-guard.py with NO CLI flags exits 2 with verdict:vacuous_rejected when fed the prior cycle's smoking-gun fixture {active_tests_count:0, pytest_collected_ok:true, pytest_failures:[]} on stdin",
+      "AC2 (venv plural symlinks + finder + sys.prefix): scripts/repair-venv.sh restores ALL THREE of venv/bin/{python,python3,python3.12} -m pytest --version to exit 0 (regex ^pytest\\s+\\d+\\.\\d+); find venv/bin -maxdepth 1 -name 'python*' -type l -xtype l returns empty; venv/bin/python -c 'import sys; assert sys.prefix.endswith(\"venv\")' exits 0; idempotent on second run (prints 'already healthy', mtime unchanged)",
+      "AC3 (structural anchors + example replacement + enforcement clause): agents/qa.md carries vacuous_due_to_empty_active_set in BOTH the Phase 5 procedural region (structural anchor: ^#### Phase 5 → ^#{1,4}\\s+) AND the manifest_verification JSON object (brace-counted); the JSON object MUST NOT contain {active_tests_count:0} AND {pytest_collected_ok:true} simultaneously; Phase 5 contains an enforcement clause binding exit code 2 → qa.status=fail + primary_cause=qa_oversight + qa.failures[] append",
+      "AC4 (manifest-mode regression matrix): guard rejects every vacuous shape (true+empty failures, true+nonempty failures, true+missing failures, null+undeclared vacuity) — all exit 2",
+      "AC5 (cycle-diff mode + per-file collection + fail-closed): guard --cycle-diff-files (one test file + one non-test module) --collect-only-cmd 'pytest --collect-only' exits 0 with active_tests_count:1; empty/no-.py diff exits 0 with verdict:ok_vacuous_acknowledged + vacuous_reason containing 'no pytest-collectable files in cycle diff'; one flag without the other or pytest unavailable exits 3 with verdict:guard_blocked"
+    ],
+    "constraints": [
+      "No hardcoded /usr/bin/python3.12 path in scripts/repair-venv.sh — MUST parse pyvenv.cfg at runtime (codex iter-1 finding #9)",
+      "No hardcoded pytest version assertion — AC must match ^pytest\\s+\\d+\\.\\d+ (codex iter-1 finding #8)",
+      "Guard MANIFEST MODE MUST be pure stdin/stdout/exit-code; no filesystem reads, no subprocess (codex iter-2 BLOCKER #1)",
+      "Guard CYCLE-DIFF MODE is opt-in via --cycle-diff-files + --collect-only-cmd; MAY read files and invoke pytest --collect-only; MUST NOT write filesystem; MUST fail closed (exit 3, verdict:guard_blocked) when pytest unavailable or flags incomplete; MUST NEVER fall back to file-name heuristics (codex iter-2 BLOCKER #2)",
+      "Cycle-diff mode MUST run collect-only command per file individually (not batched) — pytest exit codes and stdout are per-invocation (codex iter-2 BLOCKER #3)",
+      "Force-include rule MUST use git diff as authoritative source; dev-report files_modified[] is advisory only (codex iter-1 finding #2)",
+      "Only pytest-collectable test files may raise active_tests_count; non-test implementation files cannot (codex iter-1 finding #3)",
+      "Idempotence MUST be based on actual execution health (pytest --version exit 0 for all three symlinks + find -xtype l empty + sys.prefix endswith venv), not symlink presence alone (codex iter-1 finding #10 + QA iter-1 advisory S2)",
+      "Repair script MUST NOT mutate site-packages or reinstall packages (codex iter-1 finding #11)",
+      "Schema docblock worked example MUST be REPLACED (not appended) with the explicit-vacuous shape; same-JSON-object scope check via brace-counting MUST NOT permit {active_tests_count:0} AND {pytest_collected_ok:true} co-existing (codex iter-2 MAJOR #4 + QA iter-1 blocker B4)",
+      "AC3 region locators MUST use structural anchors — Phase 5 region = ^#### Phase 5: → next ^#{1,4}\\s+ (NOT ##### sub-subheadings); manifest_verification schema region = brace-counted from \"manifest_verification\": { → matching } (codex iter-2 MAJOR #5 + QA iter-1 advisory S1)",
+      "Phase 5 enforcement clause MUST bind exit code 2 to qa.status=fail + primary_cause=qa_oversight + qa.failures[] append carrying severity:critical + guard verdict/reason — local rule sufficient, no broader verdict-aggregation rewrite (codex iter-2 MAJOR #6 + QA iter-1 blocker B2)"
+    ]
+  },
+  "scope_boundary": {
+    "in_user_path": [
+      "agents/qa.md",
+      "scripts/qa-manifest-guard.py",
+      "scripts/repair-venv.sh"
+    ],
+    "path_dependent_shared_infra": [
+      "docs/reference/venv-repair.md",
+      "/root/.claude/venv/pyvenv.cfg (read-only — source of truth for executable=)"
+    ],
+    "out_of_path_observed_but_not_touched": [
+      "scripts/score-inject.sh",
+      "scripts/score-update.sh",
+      "scripts/lifecycle-baseline-import.sh",
+      "scripts/canary-verify.sh",
+      "hooks/pretool-bash-safety.sh:10",
+      "agents/ba.md (references venv)",
+      "agents/dev.md (references venv)",
+      "agents/pm.md (references venv)",
+      "agents/style-inspector.md (references venv)",
+      "docs/dev/qa-report-20260527-054705.json (evidence file only; not a contract)"
+    ]
+  },
+  "out_of_scope_observations": [
+    {
+      "ts": "2026-05-29T08:10:14Z",
+      "task_id": "20260529-081014",
+      "file": "docs/dev/qa-report-20260527-054705.json",
+      "line": 198,
+      "observation": "Five pre-existing test failures outside the fix scope (C15b entry-gate widening, AC_02 collection count drift, AC_03 timeline string drift). User explicitly excluded these from this cycle.",
+      "in_user_path": false,
+      "security_relevant": false
+    },
+    {
+      "ts": "2026-05-29T09:30:00Z",
+      "task_id": "20260529-081014",
+      "file": "agents/qa.md",
+      "line": null,
+      "observation": "Codex iter-2 MAJOR #6 confirms M4's local Phase-5 failure-attribution clause (qa.failures[] append + qa.status=fail) is structurally sufficient. No broader verdict-aggregation rewrite is needed in this cycle. Logged so future cycles can revisit if cross-phase enforcement gaps surface.",
+      "in_user_path": false,
+      "security_relevant": false
+    }
+  ],
+  "root_cause_analysis": {
+    "symptom": "QA emitted manifest_verification with active_tests_count=0 AND pytest_collected_ok=true AND pytest_failures=[] — a vacuous green report. Separately, every subagent that invokes ~/.claude/venv/bin/python lands on a broken symlink (exit 127).",
+    "root_cause": "Two coupled defects: (1) agents/qa.md Phase 5 has no invariant gating the report shape when the active set is empty, so a structurally-allowed but semantically-empty 'green' report is permitted; (2) /root/.claude/venv/bin/python3 is missing (the target of both python and python3.12 symlinks), even though pyvenv.cfg's declared executable=/usr/bin/python3.12 exists and pytest is installed in site-packages. The venv defect is the operational reason QA degrades to grep; the QA-contract defect is the reason the degradation passes verification.",
+    "root_cause_commit": "N/A — no single commit can be bisected for the symlink (pre-existed in cycle 20260527-054705); QA contract gap is structural (agents/qa.md never carried the invariant).",
+    "why_introduced": "(1) venv: unknown — predates audit; possible cause is partial venv recreation or a prior cleanup script that removed the python3 binary while leaving symlinks. (2) QA contract: Phase 5 was written assuming active_tests_count would always be derived from a populated manifest; the empty-set edge case was never enumerated as a forbidden report shape.",
+    "why_problematic": "Together they form a 'lying harness' chain: broken venv -> pytest cannot run -> QA fills the report with vacuous truthy fields -> close gate sees pytest_collected_ok:true and approves. The user has explicitly named this the structural greenwash pattern.",
+    "timeline": "Symlink known broken at least as of 2026-05-27 (cycle 20260527-054705); contract gap predates that.",
+    "affected_files": [
+      "agents/qa.md",
+      "scripts/qa-manifest-guard.py (new)",
+      "scripts/repair-venv.sh (new)",
+      "docs/reference/venv-repair.md (new)"
+    ],
+    "evidence_type": "observed",
+    "observations": [
+      "venv/bin/python: broken symbolic link to python3 (observed via `file /root/.claude/venv/bin/python` returning 'broken symbolic link to python3')",
+      "venv/bin/python3 does not exist (observed via `ls /root/.claude/venv/bin/python3` exit non-zero, 'No such file or directory')",
+      "venv/bin/python --version exit code 127 (observed via direct shell invocation)",
+      "/root/.claude/venv/pyvenv.cfg executable=/usr/bin/python3.12 (observed via `cat`)",
+      "/usr/bin/python3.12 exists as real 8020928-byte ELF (observed via `ls -la`)",
+      "pytest 9.0.3 installed in venv/lib/python3.12/site-packages (observed via `ls` of dist-info dir)",
+      "qa-report-20260527-054705.json:184-187 original manifest_verification shape: active=0, ok:true, failures:[] (observed via Read)",
+      "qa-report-20260527-054705.json:188 hand-correction note acknowledging vacuous values (observed via Read)",
+      "agents/qa.md:1073-1081 Phase 5 procedural steps contain no vacuity guard (observed via Grep + Read)",
+      "agents/qa.md:1525-1535 manifest_verification schema docblock contains no vacuous_due_to_empty_active_set field (observed via Read)"
+    ],
+    "diagnosis_completeness": "complete",
+    "complaint_location_keywords": ["manifest_verification", "active", "pytest_collected_ok", "venv", "symlink", "broken"],
+    "localization_evidence": "Symptom 1 reproduced by reading qa-report-20260527-054705.json (the exact prior-cycle artifact the user cited); symptom 2 reproduced by direct shell invocation `/root/.claude/venv/bin/python --version` returning exit 127 with 'No such file or directory'. Both symptoms map back to specific file:line locations in agents/qa.md and to the missing venv/bin/python3 inode.",
+    "located_source": "agents/qa.md:1077-1081 (Phase 5 procedural rule), agents/qa.md:1525-1535 (manifest_verification schema docblock), /root/.claude/venv/bin/python3 (missing file)",
+    "localization_blocked": null,
+    "git_bisect_result": {
+      "triggered": false,
+      "bisect_blocked": "not_applicable: not a regression — venv was broken when first observed; QA contract has never carried the invariant. No 'used to work' signal to bisect against.",
+      "reproducibility_verified": true
+    }
+  },
+  "diagnosis_layer": "L4",
+  "requirements_decomposition": [
+    {"id": "R1", "source_phrase": "QA `manifest_verification` 用空 active 集刷绿 …… 下一周期加守卫（active_tests_count==0 时禁止 pytest_collected_ok:true，或者强制把 cycle-diff 文件加入 active 集）。", "classification": "user-need", "acceptance_criterion": "AC1 + AC3 + AC4 + AC5 (AC1: guard rejects vacuous fixture in manifest mode; AC3: qa.md carries invariant + enforcement clause in both structural regions; AC4: manifest-mode regression matrix across all vacuous shapes; AC5: cycle-diff mode force-include rule + per-file collection + fail-closed environment handling — covers the '强制把 cycle-diff 文件加入 active 集' branch of the user directive)"},
+    {"id": "R2", "source_phrase": "venv 全 broken symlink …… 修这个 = 同时可能消除 #1 的诱因。", "classification": "user-need", "acceptance_criterion": "AC2 (repair-venv.sh restores pytest --version exit 0 + idempotent + no hardcoded interpreter path)"},
+    {"id": "R3", "source_phrase": "本次只修了这一次的报告，没修 agent 行为。", "classification": "background", "acceptance_criterion": "N/A — frames Contract D layer-differentiation; applied via the requirement that the fix lands at L4 (agent contract + executable guard), not L3 (single report)."}
+  ],
+  "component_chain": [
+    {
+      "file": "agents/qa.md",
+      "line_range": "1073-1081",
+      "role": "Phase 5 Manifest Verification procedural text — declares importability + pytest steps + missing-manifest sentinel handling",
+      "imports_from": "scripts/qa-manifest-guard.py (new — referenced after this edit)",
+      "evidence": "Grep 'manifest_verification\\|active_tests_count\\|pytest_collected_ok\\|pytest_failures' agents/qa.md returned lines 1077, 1078, 1525, 1531, 1533, 1534",
+      "verified_via": "both"
+    },
+    {
+      "file": "agents/qa.md",
+      "line_range": "1525-1535",
+      "role": "manifest_verification schema docblock — defines the field shape QA emits",
+      "imports_from": "leaf (consumed by orchestrator/close gate, not by other qa.md sections)",
+      "evidence": "Read agents/qa.md lines 1515-1565 confirmed schema block at 1525-1535",
+      "verified_via": "Read"
+    },
+    {
+      "file": "scripts/qa-manifest-guard.py (new)",
+      "line_range": "N/A (file to be created)",
+      "role": "executable canonical implementation of the vacuity invariant; pure stdin->exit-code; importable as evaluate(dict)->(verdict,reason) for direct test consumption",
+      "imports_from": "leaf",
+      "evidence": "File does not yet exist; M4 specifies creation",
+      "verified_via": "spec-only"
+    },
+    {
+      "file": "scripts/repair-venv.sh (new)",
+      "line_range": "N/A (file to be created)",
+      "role": "durable venv interpreter-symlink repair; resolves repo via own location, parses pyvenv.cfg executable=, creates missing venv/bin/python3 symlink, verifies via pytest --version exit 0, idempotent",
+      "imports_from": "/root/.claude/venv/pyvenv.cfg (read-only source of truth)",
+      "evidence": "File does not yet exist; M5 specifies creation",
+      "verified_via": "spec-only"
+    },
+    {
+      "file": "/root/.claude/venv/pyvenv.cfg",
+      "line_range": "1-5",
+      "role": "venv configuration; declares executable=/usr/bin/python3.12 (the interpreter target the repair script will symlink to)",
+      "imports_from": "leaf (CPython venv runtime reads this)",
+      "evidence": "Bash `cat /root/.claude/venv/pyvenv.cfg` showed executable=/usr/bin/python3.12, version=3.12.3",
+      "verified_via": "both"
+    }
+  ],
+  "pre_existing_guards": [
+    {
+      "file": "agents/qa.md",
+      "line": 1078,
+      "type": "if",
+      "code_snippet": "When `complexity_tier >= STANDARD OR risk_level == high` (same dispatch-gate condition that fired test-writer), run `pytest tests/generated/<task_id>/ -q`",
+      "purpose": "Gates Phase 5 pytest execution behind the same trigger that fires test-writer",
+      "removal_authorized": false
+    },
+    {
+      "file": "agents/qa.md",
+      "line": 1081,
+      "type": "if",
+      "code_snippet": "if the orchestrator passed `test_writer_expected = true` (gated by BA's complexity_tier >= STANDARD OR risk_level == high) AND the per-task manifest is missing OR the global index `tasks[]` carries no entry for the current `task_id`, emit a critical finding",
+      "purpose": "Sentinel for the missing-manifest case (already in place; new vacuity invariant complements it, does not replace it)",
+      "removal_authorized": false
+    }
+  ],
+  "regression_investigation_checklist": {
+    "triggered": false,
+    "_skip_reason": "User complaint contains no regression keywords ('was working' / 'broke' / 'used to'); venv has been broken since first observed in cycle 20260527-054705, and QA contract has never carried the invariant. This is a structural-contract gap + ambient infrastructure breakage, not a regression."
+  },
+  "setup": {
+    "applicability": "N/A",
+    "reason": "non-UI -- agent-prompt edit (agents/qa.md) plus a new repair shell script (scripts/repair-venv.sh) and one new Python guard module (scripts/qa-manifest-guard.py); cycle does not produce (1) rendered UI changes, (2) browser interaction, (3) Playwright invocation, (4) screenshot evidence, or (5) any change to user-triggered code paths (pipeline steps, API endpoints)."
+  },
+  "evidence": {
+    "observed": "Verbatim user requirement at docs/dev/user-requirement-dev-20260529-081014.md: 'QA `manifest_verification` 用空 active 集刷绿 …… venv 全 broken symlink'",
+    "measured": {
+      "value": "qa-report-20260527-054705.json:184-187 original active_tests_count:0 + pytest_collected_ok:true + pytest_failures:[]; agents/qa.md:1073-1081 + 1525-1535 carry no vacuity guard; /root/.claude/venv/bin/python is a broken symlink to python3; venv/bin/python3 does not exist; pyvenv.cfg executable=/usr/bin/python3.12 exists; pytest 9.0.3 installed",
+      "location": "docs/dev/qa-report-20260527-054705.json:179-207, agents/qa.md:1073-1081, agents/qa.md:1525-1535, /root/.claude/venv/bin/, /root/.claude/venv/pyvenv.cfg"
+    },
+    "expected": {
+      "value": "agents/qa.md Phase 5 carries an invariant forbidding pytest_collected_ok:true when active_tests_count==0, force-includes git-diff testable files into the active set, and references scripts/qa-manifest-guard.py as the canonical executable implementation; /root/.claude/venv/bin/python -m pytest --version exits 0",
+      "source": "User verbatim directive (item 1) + PEP 405 venv contract (item 2)"
+    },
+    "gap": "QA contract has zero defense against the vacuous green pattern (gap value: 1 missing invariant + 1 missing guard script + 1 missing schema field); venv has 1 missing python3 symlink target (gap value: 1 missing inode that cascades into 100% of pytest invocations failing with exit 127)"
+  },
+  "scope_expansion": {
+    "search_pattern": "manifest_verification|active_tests_count|pytest_collected_ok|venv/bin/python",
+    "search_scope": "agents/qa.md, docs/dev/, /root/.claude/venv/, scripts/",
+    "user_reported": ["agents/qa.md", "/root/.claude/venv/bin/python*"],
+    "additional_found": ["agents/qa.md:1525-1535 (schema docblock)", "/root/.claude/venv/pyvenv.cfg (source of truth for repair target)"],
+    "all_occurrences": [
+      "agents/qa.md:1077",
+      "agents/qa.md:1078",
+      "agents/qa.md:1525-1535",
+      "docs/dev/qa-report-20260527-054705.json:179-207",
+      "/root/.claude/venv/bin/python",
+      "/root/.claude/venv/bin/python3.12",
+      "/root/.claude/venv/pyvenv.cfg"
+    ]
+  },
+  "reference_source": {
+    "tier": "tier_1_external",
+    "description": "User verbatim binding directive for the QA contract amendment; PEP 405 venv contract + pyvenv.cfg runtime declaration for the venv repair target.",
+    "url_or_location": "docs/dev/user-requirement-dev-20260529-081014.md; /root/.claude/venv/pyvenv.cfg",
+    "role_table": null,
+    "_role_table_note": "No project-level CLAUDE.md role table is relevant — this cycle is infrastructure-only (no UI tokens).",
+    "copy_allowed": true
+  },
+  "prior_attempts": {
+    "triggered": true,
+    "trigger_source": "user_phrasing+qa_iter1_rejection",
+    "attempts": [
+      {
+        "artifact_path": "docs/dev/qa-report-20260527-054705.json:184-207",
+        "proposed_solution": "Hand-correct the offending report fields (set pytest_collected_ok:null) and add a real_test_run sidecar plus a correction_note acknowledging the vacuity.",
+        "actual_change": "Modified one report file's manifest_verification block; appended sidecar fields. agents/qa.md untouched.",
+        "outcome": "That single report became truthful, but agents/qa.md Phase 5 still permits the vacuous shape. The next QA cycle can repeat the pattern.",
+        "failure_category": "symptom_treatment",
+        "target_layer": "L3"
+      },
+      {
+        "artifact_path": "docs/dev/ticket-20260529-081014.md (iter-1 prior version)",
+        "proposed_solution": "M1-M5 (vacuity invariant + force-include + schema fields + guard script + venv repair); AC1-AC4 verifying invariant, repair, token presence, regression matrix.",
+        "actual_change": "Spec text only; artifacts not yet implemented when QA reviewed for spec adequacy.",
+        "outcome": "QA rejected with 4 blockers: B1 — M2 force-include rule had no executable AC (AC1/AC4 only tested the vacuity-rejection guard, not the force-include path); B2 — M4 'QA respects guard exit code' was too weak (descriptive, not enforcing — needed exit-2-binds-to-qa.status=fail + primary_cause=qa_oversight + qa.failures[] append); B3 — AC2 only verified venv/bin/python though user wrote 'venv 全 broken symlink' plural (needed all three symlinks tested + broken-symlink finder); B4 — M3 schema edit was append-not-replace, so the smoking-gun shape in the docblock example would survive verbatim with new fields tacked on. Plus advisories S1 (re-anchor AC3 line ranges structurally) and S2 (sys.prefix check).",
+        "failure_category": "wrong_scope_partial+symptom_treatment_partial",
+        "target_layer": "L4"
+      }
+    ],
+    "novelty_check": {
+      "this_attempt_layer": "L4",
+      "differs_from_all_priors": true,
+      "rationale": "vs Attempt 1 (L3 single-report edit): iter-2 still amends the contract that produces reports, not just a report. vs Attempt 2 (iter-1 L4 contract edit): iter-2 (a) makes the force-include rule EXECUTABLE by adding --cycle-diff-files + --collect-only-cmd CLI flags on the guard plus AC5 with synthetic cycle-diff intersection test (B1); (b) strengthens M4 into an ENFORCING procedural rule with concrete failure-attribution (qa.failures[] append carrying severity:critical + primary_cause:qa_oversight, then qa.status=fail) — not a descriptive 'QA respects exit code' line (B2 + codex iter-2 MAJOR #6); (c) EXPANDS AC2 to cover all three symlinks + broken-symlink finder + sys.prefix-endswith-venv check (B3 + S2); (d) REPLACES the schema docblock's worked example outright AND adds a same-JSON-object scope check via brace-counting (no fragile 5-line proximity) (B4 + codex iter-2 MAJOR #4); (e) RE-ANCHORS AC3 to structural markers (Phase 5 H4 boundary via ^#### Phase 5 → ^#{1,4}\\s+; manifest_verification JSON object via brace-counting) rather than fragile line ranges (S1 + codex iter-2 MAJOR #5). Iter-2 also splits guard into dual-mode (manifest-mode pure stdin + cycle-diff-mode opt-in CLI) to satisfy codex iter-2 BLOCKER #1, and adds fail-closed exit 3 verdict:guard_blocked when pytest unavailable (codex iter-2 BLOCKER #2), and per-file collection semantics (codex iter-2 BLOCKER #3). The layer is the same L4 as iter-1; the granularity is materially different per QA's blocker list."
+    }
+  },
+  "context": {
+    "codebase_state": "git status shows working tree with prior cycle's artifacts; master branch; nested .claude repo at /dev/shm/dev-workspace/dot-claude.",
+    "recent_commits": "fe4c7df, 1e559fc, 4e1a9f7, b5d152a, ecf792b (auto-bulk end-of-cycle commits for prior tasks).",
+    "file_contents": {},
+    "dependencies": {},
+    "environment": {
+      "venv": "/root/.claude/venv (currently broken: bin/python3 missing)",
+      "pyvenv_cfg_executable": "/usr/bin/python3.12",
+      "system_python": "/usr/bin/python3.12 (real, 8020928 bytes)",
+      "pytest_installed": "9.0.3 in venv/lib/python3.12/site-packages"
+    }
+  },
+  "development_approach": {
+    "strategy": "Two coupled L4 edits. (1) For QA contract: amend agents/qa.md Phase 5 procedural text to insert the vacuity invariant + force-include rule + guard enforcement clause (exit code 2 → qa.failures[] append with severity:critical+primary_cause:qa_oversight → qa.status=fail); amend the manifest_verification schema docblock to (a) add four new fields (vacuous_due_to_empty_active_set, vacuous_reason, guard_verdict, guard_reason), (b) REPLACE the worked example with the explicit-vacuous shape so the smoking-gun shape no longer appears as the canonical teaching example; create scripts/qa-manifest-guard.py as a dual-mode tool (manifest mode: pure stdin/stdout/exit-code; cycle-diff mode: opt-in via --cycle-diff-files + --collect-only-cmd, per-file collection, fail-closed exit 3 on environment failure). (2) For venv: write scripts/repair-venv.sh that parses pyvenv.cfg, creates the missing venv/bin/python3 symlink, verifies via THREE pytest --version invocations (one per python/python3/python3.12) + find -xtype l empty + sys.prefix-endswith-venv, idempotent — script-location-relative. Add docs/reference/venv-repair.md as discoverability note.",
+    "files_to_create": [
+      "scripts/qa-manifest-guard.py",
+      "scripts/repair-venv.sh",
+      "docs/reference/venv-repair.md"
+    ],
+    "files_to_modify": [
+      "agents/qa.md"
+    ],
+    "validation_approach": "AC1 (manifest mode): pipe smoking-gun fixture on stdin (no CLI flags) → exit 2 + verdict:vacuous_rejected; valid non-vacuous fixture → exit 0 + verdict:ok; explicit-vacuous fixture → exit 0 + verdict:ok_vacuous_acknowledged. AC2 (venv repair plural): run scripts/repair-venv.sh on the currently-broken venv; assert ALL THREE of /root/.claude/venv/bin/{python,python3,python3.12} -m pytest --version exit 0 + output matches ^pytest\\s+\\d+\\.\\d+; assert `find venv/bin -maxdepth 1 -name 'python*' -type l -xtype l` returns empty; assert `venv/bin/python -c 'import sys; assert sys.prefix.endswith(\"venv\")'` exits 0; assert second run is idempotent (mtime preserved, 'already healthy' printed); assert no hardcoded /usr/bin/python3.NN path outside comments/pyvenv.cfg context. AC3 (structural anchors): static inspection of agents/qa.md confirms vacuous_due_to_empty_active_set appears in BOTH Phase 5 procedural region (^#### Phase 5: → ^#{1,4}\\s+ — NOT ##### subheadings) AND manifest_verification JSON object (brace-counted from \"manifest_verification\": { → matching }); the JSON object MUST NOT contain {active_tests_count:0} + {pytest_collected_ok:true} simultaneously; Phase 5 region contains the forbid phrase (active_tests_count==0 ... MUST NOT/forbid/禁止 ... pytest_collected_ok), the guard script reference (scripts/qa-manifest-guard.py), and the enforcement clause (exit code 2 ... qa.status ... fail + primary_cause within 200 chars of qa_oversight + qa.failures within 600 chars of exit code 2). AC4 (manifest-mode regression matrix): four vacuous shapes each → exit 2 + verdict:vacuous_rejected. AC5 (cycle-diff mode): synthetic diff of one collectable test + one non-test module → exit 0 + active_tests_count:1; empty/no-.py diff → exit 0 + verdict:ok_vacuous_acknowledged + vacuous_reason 'no pytest-collectable files in cycle diff'; one flag missing → exit 3 + verdict:guard_blocked; pytest binary not found → exit 3 + verdict:guard_blocked."
+  },
+  "standards_to_enforce": {
+    "no_hardcoded_values": true,
+    "yaml_frontmatter_description_only": true,
+    "integer_step_numbering": true,
+    "meaningful_naming": true,
+    "git_root_cause_reference": true
+  },
+  "codex_consult": {
+    "invoked": true,
+    "status": "ok",
+    "iterations": [
+      {
+        "iter": 1,
+        "status": "ok",
+        "feedback_summary": "12 findings, all with PROPOSED_FIX. Most impactful: (#1) tighten invariant to forbid pytest_collected_ok:true whenever active_tests_count==0 regardless of failures; (#2) use git diff as authoritative changed-file source; (#3) only pytest-collectable files raise active_tests_count; (#4) AC1 must feed the exact smoking-gun fixture; (#5) extract guard to scripts/qa-manifest-guard.py referenced from qa.md; (#7) AC3 needs presence-in-both-regions; (#8) AC2 must not hardcode pytest version; (#9) venv repair must parse pyvenv.cfg; (#10) idempotence based on execution health; (#11) limit repair to symlink only; (#12) explicit scope-creep guard. All applied to iter-1 spec.",
+        "all_applied": true
+      },
+      {
+        "iter": 2,
+        "status": "ok",
+        "feedback_summary": "8 findings (3 BLOCKER + 3 MAJOR + 2 OBSERVATION_ONLY), all with PROPOSED_FIX or marked OBSERVATION. BLOCKER #1: dual-mode guard contradicts the 'pure stdin/stdout' purity sentence unless reconciled — split into explicit manifest-mode (pure) + cycle-diff-mode (opt-in, read-only, may run pytest). BLOCKER #2: pytest-unavailable must fail closed (exit 3, verdict:guard_blocked) not fall back to heuristic test_*.py. BLOCKER #3: cycle-diff collection semantics underspecified — must run collect-only per file individually (combined-batch parsing is ambiguous because pytest exit codes are per-invocation). MAJOR #4: B4's 'within 5 lines' proximity check is brittle — replace with same-JSON-object scope check via brace-counting. MAJOR #5: Phase 5 region boundary should be next equal-or-higher heading (^#{1,4}\\s+), not just next H4 — future H3/H2 between Phase 5 and Phase 6 would overrun. MAJOR #6: M4's enforcement clause needs a concrete report location — exit 2 must append qa.failures[] entry with severity:critical + primary_cause:qa_oversight, then set qa.status:fail; no broader verdict-aggregation rewrite needed. OBSERVATION #7: three-symlink verification is correctly scoped (verification breadth, not repair complexity). OBSERVATION #8: iter-2 does not add new Must-Haves if framed correctly (AC5 is executable coverage for B1/M2, symlink checks are verification of B3 — keep as AC granularity under existing Must-Haves).",
+        "all_applied": true
+      }
+    ],
+    "feedback_summary": "Iter-1: 12 findings, all applied. Iter-2: 8 findings (3 BLOCKER + 3 MAJOR + 2 OBSERVATION_ONLY), all applied or logged. See iterations[] for detail.",
+    "findings": [
+      {"issue": "Guard too narrow — only forbids true+empty-failures combo", "proposed_fix": "Final invariant: active_tests_count==0 forbids pytest_collected_ok:true under any circumstances; require null + vacuous_due_to_empty_active_set:true + vacuous_reason.", "classification": "blocker", "disposition": "applied", "rationale": "Applied to M1 + AC1 + AC4. The original narrower formulation would have let `true + nonempty failures` slip through."},
+      {"issue": "Skirting path via dev-report files_modified[]", "proposed_fix": "Use git diff as authoritative source; dev-report advisory only.", "classification": "major", "disposition": "applied", "rationale": "Applied to M2."},
+      {"issue": "Python files != pytest-collectable tests; conflating them creates fake coverage", "proposed_fix": "Only pytest-collectable test files raise active_tests_count; non-test implementation files are coverage observations.", "classification": "blocker", "disposition": "applied", "rationale": "Applied to M2."},
+      {"issue": "AC1 must feed the exact smoking-gun fixture, not a paraphrased equivalent", "proposed_fix": "AC1 fixture: {active_tests_count:0, pytest_collected_ok:true, pytest_failures:[]}.", "classification": "blocker", "disposition": "applied", "rationale": "Applied to AC1 first fixture entry."},
+      {"issue": "AC1 risks becoming runtime-shaped grep if guard is test-only", "proposed_fix": "Make scripts/qa-manifest-guard.py canonical and reference it from agents/qa.md; test that script directly.", "classification": "blocker", "disposition": "applied", "rationale": "Applied to M4 + AC1's check.kind=subprocess against the canonical script."},
+      {"issue": "pytest_failures:null may break consumers expecting an array", "proposed_fix": "Keep pytest_failures as array; add pytest_collected_ok:null + vacuous_due_to_empty_active_set + vacuous_reason.", "classification": "major", "disposition": "applied", "rationale": "Applied — schema keeps pytest_failures as array shape; vacuous declaration carried by the new dedicated fields."},
+      {"issue": "AC3 grep count is weak; comments can satisfy it", "proposed_fix": "Require one occurrence in Phase 5 procedural rule AND one in schema docblock — positional, not total-count.", "classification": "major", "disposition": "applied", "rationale": "Applied to AC3.assertions[0,1]: token_in_procedural_region + token_in_schema_docblock with separate line-range constraints."},
+      {"issue": "Hardcoded pytest 9.0.3 in AC2 is brittle", "proposed_fix": "Assert exit 0 + output matching ^pytest\\s+\\d+\\.\\d+; do not pin version.", "classification": "blocker", "disposition": "applied", "rationale": "Applied to AC2.steps.pytest_runs.expected_stdout_regex."},
+      {"issue": "Venv durability needs script-location-based targeting, not cwd-based", "proposed_fix": "Resolve repo root from script's own path; default to <repo>/venv; parse pyvenv.cfg executable=.", "classification": "major", "disposition": "applied", "rationale": "Applied to M5 and AC2's no_hardcoded_target assertion."},
+      {"issue": "Idempotence based on symlink presence is fragile", "proposed_fix": "Run venv/bin/python -m pytest --version; only print 'already healthy' on exit 0.", "classification": "blocker", "disposition": "applied", "rationale": "Applied to M5 condition (f)."},
+      {"issue": "Repair script should not mutate site-packages or recreate venv", "proposed_fix": "Limit to symlink repair only.", "classification": "major", "disposition": "applied", "rationale": "Applied to Won't Have list."},
+      {"issue": "Scope creep risk if broader QA-test discovery is added", "proposed_fix": "Keep QA change to the single invariant + minimal force-include needed to enforce it.", "classification": "major", "disposition": "applied", "rationale": "Applied via Won't Have list and via M1-M5 narrow scope.", "iter": 1},
+      {"issue": "Iter-2 BLOCKER #1 (Q1): dual-mode guard contradicts the existing 'pure stdin/stdout' constraint unless the spec reconciles it. --cycle-diff-files + --collect-only-cmd is the right shape per B1, but running pytest is not 'pure stdin-only' and introduces filesystem reads + subprocess/env dependency.", "proposed_fix": "Amend the guard contract to define two explicit modes: manifest mode (stdin-only, pure, no filesystem/subprocess) and cycle-diff mode (opt-in via the two CLI flags, read-only, may run pytest, no filesystem writes). Do not leave the old purity sentence unqualified.", "classification": "blocker", "disposition": "applied", "rationale": "Applied to M4 and Technical Hints — the guard contract now explicitly splits into manifest mode + cycle-diff mode; manifest mode retains the pure stdin/stdout/exit-code constraint; cycle-diff mode is read-only with explicit pytest-invocation allowance. The old single-sentence purity claim has been replaced with the dual-mode contract.", "iter": 2},
+      {"issue": "Iter-2 BLOCKER #2 (Q6): pytest-unavailable behavior must fail closed, not heuristic-fallback. If --collect-only-cmd cannot execute because pytest/venv is broken, treating test_*.py as collectable would recreate the grep-only degradation the requirement is trying to kill.", "proposed_fix": "Command-not-found, interpreter failure, or unexpected pytest failure emits guard_blocked with nonzero exit (exit 3); manifest_verification.guard_verdict='guard_blocked' and guard_reason explains the failure. Use primary_cause:'environment' unless the failure is a real changed-test collection/import failure.", "classification": "blocker", "disposition": "applied", "rationale": "Applied to M4 fail-closed clause and AC5 final two cases (one-flag-missing → exit 3; command-not-found → exit 3). Won't Have list now explicitly forbids file-name heuristic fallback. Exit 3 + verdict:guard_blocked is documented.", "iter": 2},
+      {"issue": "Iter-2 BLOCKER #3: cycle-diff collectability semantics are underspecified. 'Run collect-only cmd against cycle-diff files and derive subset' is ambiguous for mixed test/non-test files — combined pytest output can miscount which file was collectable. Also .py files with zero collectable tests must be explicitly vacuous, not undefined.", "proposed_fix": "Define per-file collection: for each .py cycle-diff path, run the collect-only command with that one path; count it only if pytest collects >=1 test. Treat pytest exit 5 / no tests as non-collectable. If final count is 0, emit ok_vacuous_acknowledged with reason 'no pytest-collectable files in cycle diff'.", "classification": "blocker", "disposition": "applied", "rationale": "Applied to M4 cycle-diff mode contract and AC5 per-file semantics. Constraint added: 'cycle-diff mode runs collect-only per file individually — combined-batch parsing is forbidden.' Pytest exit 5 is explicitly mapped to non-collectable. The 0-count case emits ok_vacuous_acknowledged with the literal vacuous_reason string.", "iter": 2},
+      {"issue": "Iter-2 MAJOR #4 (Q2): the 'within 5 lines' B4 check is brittle. It can miss the bad example if formatting/comments push keys apart, and it can false-positive across adjacent examples.", "proposed_fix": "Replace proximity check with same-object-scope check: extract the manifest_verification JSON object by brace counting from \"manifest_verification\": { to its matching }, then fail if that object contains both \"active_tests_count\": 0 and \"pytest_collected_ok\": true.", "classification": "major", "disposition": "applied", "rationale": "Applied to AC3 assertion no_smoking_gun_example — now uses brace-counted same-JSON-object scope check rather than a fragile 5-line proximity. M3 also explicitly mandates example REPLACEMENT (not append) with the explicit-vacuous shape as the new worked example.", "iter": 2},
+      {"issue": "Iter-2 MAJOR #5 (Q3): Phase 5 region boundary should be next equal-or-higher heading, not only next H4. Current agents/qa.md happens to have #### Phase 6 next, but a future ### or ## before the next #### would make the verifier overrun.", "proposed_fix": "Start at ^#### Phase 5: and end at the first later heading with level <=4: regex ^#{1,4}\\s+. Do not end on ##### subheadings.", "classification": "major", "disposition": "applied", "rationale": "Applied to AC3 token_in_procedural_region anchor: '^#### Phase 5: Manifest Verification → ^#{1,4}\\s+ (NOT including ##### sub-subheadings)'. Explicitly noted in the Edge Cases & Risks section.", "iter": 2},
+      {"issue": "Iter-2 MAJOR #6 (Q5): primary_cause:qa_oversight needs a concrete report location. Adding guard_verdict/guard_reason alone records the guard result but does not structurally create the required failure attribution.", "proposed_fix": "In Phase 5 text, require that guard exit 2 appends a qa.failures[] entry with severity:'critical' and primary_cause:'qa_oversight', then sets qa.status:'fail' regardless of other outcomes. No broad verdict-aggregation rewrite needed if this local rule is explicit.", "classification": "major", "disposition": "applied", "rationale": "Applied to M4 enforcement contract clause and AC3 assertion guard_enforcement_clause. Phase 5 now contains the literal enforcement rule binding exit code 2 → qa.failures[] append (severity:critical + primary_cause:qa_oversight) → qa.status=fail. Won't Have list excludes broader verdict-aggregation rewrite (local rule is sufficient).", "iter": 2},
+      {"issue": "Iter-2 OBSERVATION_ONLY (Q4): three-symlink verification is correctly scoped. This is verification breadth, not repair scope creep. Root cause may be one missing venv/bin/python3, but the user-relevant surfaces are python, python3, and python3.12.", "proposed_fix": null, "classification": "observation_only", "disposition": "logged", "rationale": "Logged in codex_consult.findings; no spec change needed — AC2 already tests all three symlinks plus the broken-symlink finder. The framing 'verification breadth in scope, repair complexity not' is reflected in the Evidence pair 2 narrative and the M5 step (e) verification list.", "iter": 2},
+      {"issue": "Iter-2 OBSERVATION_ONLY (Q7): iter-2 does not inherently add new Must-Haves if framed correctly. AC5 is executable coverage for B1/M2, not a new product requirement. The symlink checks are verification of B3. Keep these as AC granularity under existing Must-Haves, not new scope.", "proposed_fix": null, "classification": "observation_only", "disposition": "logged", "rationale": "Logged in codex_consult.findings; confirms iter-2 stays within M1-M5 boundaries. Won't Have list remains intact with no Must-Have additions. AC5 is framed as executable coverage of M2's force-include rule.", "iter": 2}
+    ],
+    "feedback_incorporated": "All 12 iter-1 codex findings applied (see iter:1 entries). All 6 actionable iter-2 codex findings (3 BLOCKER + 3 MAJOR) applied: dual-mode guard contract (BLOCKER #1 → M4 + Technical Hints); fail-closed environment handling (BLOCKER #2 → M4 + AC5 + Won't Have); per-file collection semantics (BLOCKER #3 → M4 + AC5); same-JSON-object scope check via brace-counting (MAJOR #4 → AC3 no_smoking_gun_example); structural Phase 5 region boundary using next ^#{1,4}\\s+ heading (MAJOR #5 → AC3 token_in_procedural_region); concrete qa.failures[] append + qa.status=fail enforcement clause (MAJOR #6 → M4 + AC3 guard_enforcement_clause). Two iter-2 OBSERVATION_ONLY findings (Q4 three-symlink scoping, Q7 no new Must-Haves) logged with no spec change required — these confirmed existing iter-2 design."
+  }
+}

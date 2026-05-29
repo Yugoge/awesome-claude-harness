@@ -1,0 +1,67 @@
+{
+  "request_id": "20260529-081014",
+  "timestamp": "2026-05-29T08:10:14Z",
+  "inspector": "style-inspector",
+  "mode": "changed-files",
+  "scope_note": "Cleanliness-of-THIS-diff scoping per spec-20260503-091826 M12/AC-12.1. Standard 6 (CJK) run unconditionally against agents/ + commands/ per the documented exception.",
+  "changed_files_param": [
+    "agents/qa.md",
+    "tests/generated/manifest.json",
+    "scripts/qa-manifest-guard.py",
+    "scripts/repair-venv.sh",
+    "docs/reference/venv-repair.md",
+    "docs/dev/context-20260529-081014.json",
+    "tests/generated/20260529-081014/test_AC1_ac1_qa_vacuity_guard.py",
+    "tests/generated/20260529-081014/test_AC2_ac2_venv_repair_runnable.py",
+    "tests/generated/20260529-081014/test_AC3_ac3_qa_md_invariant_dual_region.py",
+    "tests/generated/20260529-081014/test_AC4_ac4_guard_regression_matrix.py",
+    "tests/generated/20260529-081014/test_AC5_ac5_cycle_diff_force_include.py"
+  ],
+  "changed_files_path_reconciliation": "The 5 generated-test paths named in the dispatch use abbreviated slugs that do not match on-disk filenames. The actual files (Glob-verified) are test_AC1_ac01_qa_vacuity_guard_manifest_mode.py, test_AC2_ac02_venv_repair_plural_symlinks.py, test_AC3_ac03_qa_md_structural_anchors_and_enforcement.py, test_AC4_ac04_guard_regression_matrix.py, test_AC5_ac05_guard_cycle_diff_mode_force_include.py. Treated as aliases; on-disk files audited.",
+  "files_audited": [
+    {"file": "scripts/qa-manifest-guard.py", "introduced_in_diff": true, "read_coverage": "full (393 lines)", "standards_checked": ["no-inline-code","no-hardcoded-values","use-source-venv","meaningful-naming","english-only","merge-similar-scripts","concise-documentation","parameterized-scripts","dangling-references","no-merge-conflicts"], "result": "clean"},
+    {"file": "scripts/repair-venv.sh", "introduced_in_diff": true, "read_coverage": "full (177 lines)", "standards_checked": ["no-inline-code","no-hardcoded-values","use-source-venv","integer-step-numbering","meaningful-naming","english-only","merge-similar-scripts","concise-documentation","parameterized-scripts","dangling-references","no-merge-conflicts"], "result": "clean"},
+    {"file": "agents/qa.md", "introduced_in_diff": true, "read_coverage": "full Phase 5 diff region (1073-1135) + manifest_verification schema docblock (1525-1569) + lines 1-926", "standards_checked": ["no-inline-code","integer-step-numbering","meaningful-naming","english-only","concise-documentation","dangling-references","no-merge-conflicts"], "result": "clean"},
+    {"file": "tests/generated/20260529-081014/test_AC1_ac01_qa_vacuity_guard_manifest_mode.py", "introduced_in_diff": true, "read_coverage": "full", "standards_checked": ["english-only","no-merge-conflicts","no-hardcoded-values (test-fixture allowlist)"], "result": "clean"},
+    {"file": "tests/generated/20260529-081014/test_AC2_ac02_venv_repair_plural_symlinks.py", "introduced_in_diff": true, "read_coverage": "full", "standards_checked": ["english-only","no-merge-conflicts","no-hardcoded-values (test-fixture allowlist)"], "result": "clean"},
+    {"file": "tests/generated/20260529-081014/test_AC3_ac03_qa_md_structural_anchors_and_enforcement.py", "introduced_in_diff": true, "read_coverage": "CJK-grep scanned; single match line 79 classified below", "standards_checked": ["english-only","no-merge-conflicts"], "result": "clean (CJK token is allowlisted test-fixture regex literal)"},
+    {"file": "tests/generated/20260529-081014/test_AC4_ac04_guard_regression_matrix.py", "introduced_in_diff": true, "read_coverage": "CJK + conflict-marker grep (zero hits)", "standards_checked": ["english-only","no-merge-conflicts"], "result": "clean"},
+    {"file": "tests/generated/20260529-081014/test_AC5_ac05_guard_cycle_diff_mode_force_include.py", "introduced_in_diff": true, "read_coverage": "CJK + conflict-marker grep (zero hits)", "standards_checked": ["english-only","no-merge-conflicts"], "result": "clean"},
+    {"file": "tests/generated/manifest.json", "introduced_in_diff": true, "read_coverage": "full (93 lines)", "standards_checked": ["english-only","no-merge-conflicts"], "result": "clean (data index manifest; task 20260529-081014 entry appended; not source code)"},
+    {"file": "docs/reference/venv-repair.md", "introduced_in_diff": true, "read_coverage": "full (51 lines)", "standards_checked": [], "result": "scope-excluded (docs/ never audited)"},
+    {"file": "docs/dev/context-20260529-081014.json", "introduced_in_diff": true, "read_coverage": "full", "standards_checked": [], "result": "scope-excluded (docs/ BA context artifact)"}
+  ],
+  "violations": [],
+  "standards_passed": ["no-inline-code","no-hardcoded-values","use-source-venv","integer-step-numbering","meaningful-naming","english-only","merge-similar-scripts","concise-documentation","parameterized-scripts","dangling-references","no-merge-conflicts"],
+  "standard_by_standard_findings": {
+    "no-inline-code": "PASS. qa.md Phase 5 step 8 references the executable guard scripts/qa-manifest-guard.py instead of inlining vacuity logic (prescribed extract-to-script pattern). Fenced blocks are single-line invocation examples.",
+    "no-hardcoded-values": "PASS. repair-venv.sh parses pyvenv.cfg executable= via awk (77-90); venv resolved from script location (54-61) with --venv override. Only /usr/bin/python3 grep hit (line 7) is in the header comment documenting the rule. qa-manifest-guard.py inputs via stdin/argparse; no /root//home//tmp logic literals. See codex_consult for 3 robustness observations classified out-of-scope.",
+    "use-source-venv": "PASS. repair-venv.sh invokes the venv OWN resolved interpreter symlinks (the repaired/verified artifact), not bare system python3 (codex confirmed (a)). python3 grep hits are comments or the symlink-name loop (line 134). qa.md:1089 uses source-activate-then-python3 (codex confirmed (b)).",
+    "integer-step-numbering": "PASS. New Phase 5 steps numbered 6,7,8,9 (integers); step-8 sub-bullets are unnumbered bullets, not decimal sub-steps.",
+    "meaningful-naming": "PASS. qa-manifest-guard.py, repair-venv.sh use descriptive noun-noun/verb-noun names; no enhance-/fast-/-v2 patterns.",
+    "english-only": "PASS. Scripts English-only (zero CJK in scripts/). Unconditional agents/+commands/ grep found CJK only in agents/style-inspector.md (this file, pre-existing, out of diff) - none in qa.md. Sole diff CJK hit is test_AC3:79, a regex alternation arm matching qa.md forbid-phrasing; allowlisted test-fixture literal; qa.md uses English MUST NOT (codex confirmed).",
+    "merge-similar-scripts": "PASS. Both scripts net-new with no pre-existing sibling/equivalent (verified against scripts/ inventory).",
+    "concise-documentation": "PASS. Script docstrings are functional contracts; qa.md edits are rule/contract text. No marketing/story prose.",
+    "parameterized-scripts": "PASS. repair-venv.sh: --venv + script-location default + runtime pyvenv.cfg parse. qa-manifest-guard.py: stdin + --cycle-diff-files + --collect-only-cmd. No run-variable hardcoded.",
+    "dangling-references": "PASS. qa.md ref scripts/qa-manifest-guard.py exists (Glob). guard imports stdlib only. AC tests ref both scripts which exist.",
+    "no-merge-conflicts": "PASS. Conflict-marker grep across both scripts + AC tests returned zero (count grep = 0)."
+  },
+  "introduced_in_diff_summary": "All audited files are introduced_in_diff:true. No line-level findings emitted, so diff-hunk-overlap + pre-diff-baseline newness test is vacuously satisfied. The one CJK occurrence (test_AC3:79) classified as allowlisted test-fixture regex literal, not a new violation.",
+  "summary": {"standards_checked": 11, "violations_found": 0, "critical": 0, "files_audited": 9, "files_total": 11, "files_scope_excluded": 2, "rounds_completed": 1},
+  "verdict": "PASS - no style violations introduced by this cycle's diff. The two python-invocation patterns are correctly compliant; the sole diff CJK token is an allowlisted test-fixture regex literal. Confidence: high - both new scripts fully read against all 11 standards, qa.md Phase 5 + schema docblock fully read, grep-based standards returned concrete clean results, and codex adversarial review surfaced only out-of-scope code-quality observations.",
+  "codex_consult": {
+    "invoked": true,
+    "status": "ok",
+    "model": "gpt-5.5",
+    "feedback_summary": "Codex (gpt-5.5, xhigh) returned 3 REFUTE + 3 OBSERVATION_ONLY. The 3 OBSERVATION_ONLY confirmed the verdict (use-source-venv classifications (a)/(b) and the CJK test-fixture allowlist). The 3 REFUTE findings are real code-quality/robustness observations outside the 11 style standards; caller-filtered to out_of_scope per codex protocol Rule 3 (finding count is information, not verdict).",
+    "findings": [
+      {"issue": "qa-manifest-guard.py:219 timeout=60 hardcoded subprocess timeout.", "proposed_fix": "Add cycle-diff-only --collect-timeout-seconds argparse option (default 60) passed into _collect_one_file().", "classification": "out_of_scope", "disposition": "logged", "rationale": "Standard 2 allowlist exempts constants that never change and defaults-with-fallback. A 60s defensive timeout is an internal constant, not an env-specific value breaking portability. Optional-configurability enhancement (in_scope_minor, future cycle); not a no-hardcoded-values/parameterized-scripts FAIL."},
+      {"issue": "repair-venv.sh 98/134/161 reference python3.12 literally.", "proposed_fix": "Derive INTERPRETER_NAME=$(basename ${INTERPRETER}); build deduped target list python,python3,${INTERPRETER_NAME}.", "classification": "out_of_scope", "disposition": "logged", "rationale": "python3.12 is a venv-structural symlink NAME (venv literally has bin/python3.12), not a /usr/bin path literal; interpreter TARGET is parsed from pyvenv.cfg. BA AC2 enumerates these exact three names. Portability improvement for non-3.12 venvs (in_scope_minor robustness); not one of the 11 style standards."},
+      {"issue": "repair-venv.sh:115 sys.prefix.endswith(venv) conflicts with --venv override.", "proposed_fix": "Resolve ${VENV} absolute and compare to realpath(sys.prefix) via env/argv.", "classification": "out_of_scope", "disposition": "logged", "rationale": "Runtime-logic correctness (health-probe under --venv override) = QA/dev regression scope, NOT style cleanliness scope per spec-20260503-091826 scope contract. Maps to no style standard."},
+      {"issue": "Classification (a): repair-venv.sh invoking venv-owned symlinks.", "proposed_fix": null, "classification": "observation_only", "disposition": "confirmed", "rationale": "Codex agrees not a use-source-venv violation."},
+      {"issue": "Classification (b): qa.md:1089 source-activate-then-python3.", "proposed_fix": null, "classification": "observation_only", "disposition": "confirmed", "rationale": "Codex agrees compliant pattern."},
+      {"issue": "test_AC3 CJK regex token under english-only.", "proposed_fix": null, "classification": "observation_only", "disposition": "confirmed", "rationale": "Codex agrees generated test-fixture literal; qa.md uses English MUST NOT; not a violation."}
+    ],
+    "feedback_incorporated": "All 3 OBSERVATION_ONLY confirmed the inspector's contested classifications, strengthening the clean verdict. All 3 REFUTE caller-filtered to out_of_scope (legitimate robustness items, none mapping to the 11 style standards) and logged for a possible future cycle per codex protocol Rule 3/Rule 4. PASS style verdict unchanged; zero style violations introduced."
+  }
+}

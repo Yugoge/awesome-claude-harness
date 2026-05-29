@@ -1,0 +1,47 @@
+{
+  "schema_version": "1.1",
+  "task_id": "20260529-081014",
+  "generated_at": "2026-05-29T08:10:14Z",
+  "active_tests": [
+    {
+      "task_id": "20260529-081014",
+      "ac_id": "AC1",
+      "ac_uid": "ac01_qa_vacuity_guard_manifest_mode",
+      "type": "data",
+      "file": "tests/generated/20260529-081014/test_AC1_ac01_qa_vacuity_guard_manifest_mode.py",
+      "status": "active"
+    },
+    {
+      "task_id": "20260529-081014",
+      "ac_id": "AC2",
+      "ac_uid": "ac02_venv_repair_plural_symlinks",
+      "type": "hook",
+      "file": "tests/generated/20260529-081014/test_AC2_ac02_venv_repair_plural_symlinks.py",
+      "status": "active"
+    },
+    {
+      "task_id": "20260529-081014",
+      "ac_id": "AC3",
+      "ac_uid": "ac03_qa_md_structural_anchors_and_enforcement",
+      "type": "data",
+      "file": "tests/generated/20260529-081014/test_AC3_ac03_qa_md_structural_anchors_and_enforcement.py",
+      "status": "active"
+    },
+    {
+      "task_id": "20260529-081014",
+      "ac_id": "AC4",
+      "ac_uid": "ac04_guard_regression_matrix",
+      "type": "data",
+      "file": "tests/generated/20260529-081014/test_AC4_ac04_guard_regression_matrix.py",
+      "status": "active"
+    },
+    {
+      "task_id": "20260529-081014",
+      "ac_id": "AC5",
+      "ac_uid": "ac05_guard_cycle_diff_mode_force_include",
+      "type": "data",
+      "file": "tests/generated/20260529-081014/test_AC5_ac05_guard_cycle_diff_mode_force_include.py",
+      "status": "active"
+    }
+  ]
+}
