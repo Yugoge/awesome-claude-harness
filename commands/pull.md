@@ -107,7 +107,7 @@ it does not gate any future command.
 After displaying the pull-analyst report, run a non-blocking incremental Graphify cache update. This ensures the global knowledge graph reflects the newly pulled commits.
 
 ```bash
-python3 "$CLAUDE_PROJECT_DIR/scripts/graphify-maintain.py" update
+source "${CLAUDE_PROJECT_DIR}/venv/bin/activate" && python3 "$CLAUDE_PROJECT_DIR/scripts/graphify-maintain.py" update
 ```
 
 This call is advisory: if GRAPHIFY_BIN is absent, CLAUDE_GRAPHIFY_ENABLED=0, or the cache is unavailable, it exits 0 immediately with a status=unavailable message. The update MUST NOT block the pull workflow or require user confirmation. Failure is silent (logged to stderr only).

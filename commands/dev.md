@@ -179,7 +179,7 @@ When `SPEC_ID` is non-empty, every Agent launch prompt for an agent that has a c
 Run `scripts/graphify-query.py` as a direct Bash call (NOT a subagent — avoids adding an LLM interpretation layer that could propagate confirmation bias). This is advisory: if the binary is absent or cache is unavailable, the script exits 0 with `status=unavailable` and BA proceeds with its original flow.
 
 ```bash
-python3 "$CLAUDE_PROJECT_DIR/scripts/graphify-query.py" \
+source "${CLAUDE_PROJECT_DIR}/venv/bin/activate" && python3 "$CLAUDE_PROJECT_DIR/scripts/graphify-query.py" \
   --task-id "$DEV_SESSION_ID" \
   --requirement-file "$REQUIREMENT_DOC"
 ```
@@ -683,7 +683,11 @@ Use Agent tool with:
 
 **Graphify enrichment** (between Step 7 and Step 8):
 
-After BA-QA validation passes, dispatch the graphify subagent (mode=enrich) to extract a focused subgraph seeded by the BA's blast-radius-map, then patch the context JSON with `graph_context`. This is advisory — if graphify is unavailable or returns status=skipped, proceed to Step 8 without delay.
+After BA-QA validation passes, check whether the graphify sentinel file exists before dispatching the graphify subagent. This is advisory — if the sentinel is absent (graphify binary not installed) or graphify returns status=skipped, proceed to Step 8 without delay.
+
+Before dispatching graphify, check whether the sentinel file exists at `$CLAUDE_PROJECT_DIR/.claude/dev-registry/$DEV_SESSION_ID/graphify.json`. If absent for any reason, do not dispatch; record `graphify_status=skipped/sentinel_absent`; do not read `graph-summary.json`; proceed to Step 8. If present, dispatch graphify, then record the resulting status from `graph-summary.json` when available.
+
+If the sentinel file is present, dispatch the graphify subagent:
 
 ```
 Use Agent tool with:
@@ -694,13 +698,15 @@ Use Agent tool with:
 
   You are the graphify subagent. Follow agents/graphify.md instructions precisely.
 
-  Run: python3 $CLAUDE_PROJECT_DIR/scripts/graphify-enrich.py --task-id <DEV_SESSION_ID> --context-file <context_json_path>
+  Run: source "${CLAUDE_PROJECT_DIR}/venv/bin/activate" && python3 $CLAUDE_PROJECT_DIR/scripts/graphify-enrich.py --task-id <DEV_SESSION_ID> --context-file <context_json_path>
 
   This is advisory — if the binary is absent or blast-radius-map is missing, exit 0 with status=skipped.
   "
 ```
 
-When graphify completes (or is skipped), check `.claude/dev-registry/<DEV_SESSION_ID>/graphify/graph-summary.json` for the status field and record it in the todo list. Then continue to Step 8.
+If the sentinel is absent, record `graphify_status=skipped/sentinel_absent` in the todo list.
+
+When sentinel existed and graphify completes (or is skipped), check `.claude/dev-registry/<DEV_SESSION_ID>/graphify/graph-summary.json` for the status field and record it in the todo list. Then continue to Step 8.
 
 ### Step 8: Agent dispatch — Delegate to Dev Subagent
 
