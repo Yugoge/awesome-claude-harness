@@ -1,0 +1,24 @@
+{
+  "task_id": "20260529-080709",
+  "timestamp": "2026-05-29T08:07:09Z",
+  "manifest_path": "tests/generated/20260529-080709/manifest.json",
+  "global_index_path": "tests/generated/manifest.json",
+  "global_index_kind": "index",
+  "trigger_gate": {
+    "complexity_tier": "COMPLEX",
+    "risk_level": "high",
+    "fired": true
+  },
+  "tests_created": [
+    "tests/generated/20260529-080709/test_AC_F1_ac-f1-venv-activation-graphify-invocations.py",
+    "tests/generated/20260529-080709/test_AC_F2_ac-f2-no-decimal-prose-steps.py",
+    "tests/generated/20260529-080709/test_AC_F3_ac-f3-no-cjk-literals-agent-script-files.py",
+    "tests/generated/20260529-080709/test_AC_F4_ac-f4-nil-map-context-file-patching.py",
+    "tests/generated/20260529-080709/test_AC_F5_ac-f5-dispatch-guard-sentinel-existence.py",
+    "tests/generated/20260529-080709/test_AC_F6_ac-f6-ac12-automated-test-manifest.py",
+    "tests/generated/20260529-080709/test_AC_F7_ac-f7-ac6-spec-drift-fix-prose-scope.py"
+  ],
+  "tests_archived": [],
+  "tests_skipped_idempotent": [],
+  "status": "completed"
+}

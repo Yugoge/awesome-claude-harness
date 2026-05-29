@@ -1,0 +1,129 @@
+{
+  "request_id": "dev-20260529-080709",
+  "timestamp": "2026-05-29T09:10:00Z",
+  "inspector": "cleanliness-inspector",
+  "mode": "changed-files",
+  "changed_files": [
+    "agents/ba.md",
+    "agents/dev.md",
+    "agents/graphify.md",
+    "agents/qa.md",
+    "commands/dev.md",
+    "commands/pull.md",
+    "docs/dev/acceptance-criteria-20260527-132200.json",
+    "docs/dev/ticket-20260527-132200.md",
+    "scripts/graphify-enrich.py",
+    "scripts/graphify-query.py",
+    "tests/generated/20260527-132200/manifest.json",
+    "tests/generated/20260527-132200/test_AC12_ac12-command-coverage.py",
+    "tests/generated/20260529-080709/test_AC_F1_ac-f1-venv-activation-graphify-invocations.py",
+    "tests/generated/20260529-080709/test_AC_F2_ac-f2-no-decimal-prose-steps.py",
+    "tests/generated/20260529-080709/test_AC_F3_ac-f3-no-cjk-literals-agent-script-files.py",
+    "tests/generated/20260529-080709/test_AC_F4_ac-f4-nil-map-context-file-patching.py",
+    "tests/generated/20260529-080709/test_AC_F5_ac-f5-dispatch-guard-sentinel-existence.py",
+    "tests/generated/20260529-080709/test_AC_F6_ac-f6-ac12-automated-test-manifest.py",
+    "tests/generated/20260529-080709/test_AC_F7_ac-f7-ac6-spec-drift-fix-prose-scope.py"
+  ],
+  "scope_note": "The supplied changed_files list is the authoritative scope for this diff-scoped gate. Out-of-list dirty files (untracked cycle-output docs, other suites) are excluded by design. Each finding is tagged introduced_in_diff per AC-12.1 Mechanism (ii).",
+  "findings": {
+    "misplaced_docs": [],
+    "naming_violations": [],
+    "archive_candidates": [],
+    "dev_context_files": [],
+    "temp_files": [],
+    "duplicate_scripts": [],
+    "duplicate_tests": [],
+    "non_functional_files": [],
+    "non_functional_folders": [],
+    "orphaned_subagents": [],
+    "unreferenced_scripts": [],
+    "orphaned_tests": [],
+    "historical_docs": [],
+    "docs_categorization": [],
+    "obsolete_functionality": [],
+    "orphan_commands": [],
+    "dead_functions": [],
+    "duplicate_content": [],
+    "gitignore_coverage": []
+  },
+  "analysis_notes": {
+    "misplaced_docs": "All changed files are in correct locations: agents/*.md, commands/*.md, docs/dev/*.json, docs/dev/*.md, scripts/*.py, tests/generated/*/*.py. No misplacements detected.",
+    "naming_violations": "tests/generated/20260529-080709/INDEX.md and README.md are auto-generated harness scaffolding. The uppercase INDEX.md/README.md convention is the pre-existing harness/doc-sync convention used across all test suites (tests/generated/20260527-132200/INDEX.md, README.md match). These files are exempt from lowercase/kebab naming checks. introduced_in_diff: false (harness convention, not a new violation). No other naming violations detected in the diff scope.",
+    "non_functional_files": "No changed or untracked __pycache__ / *.pyc artifacts are in the supplied changed-files scope. The tests/generated/20260529-080709/__pycache__ directory is gitignored by the existing __pycache__/ rule in .gitignore (line 36) and is NOT tracked. Diff-scoped __pycache__ cleanliness: clean. Pre-existing tracked cache artifacts elsewhere in the repo are out-of-scope for this diff-scoped review.",
+    "gitignore_coverage": "All four HARNESS_RULES from ~/.claude/hooks/session-gitignore-propagate.sh are present in .gitignore: tests/generated/ (present), .claude/dev-registry/dev-*/ (present), docs/codex/ (present), .playwright-mcp/ (present). No coverage gaps. The tests/generated/ rule is subject to an explicit project-policy exception (.gitignore line 92: 'tests/generated/ intentionally tracked — test-writer contract version-controls per-cycle pytest files'). Untracked tests/generated/20260529-080709/* files are a staging gap (not yet committed), not a gitignore gap. This is a workflow concern, not a cleanliness finding. introduced_in_diff: false.",
+    "untracked_non_harness": ".last-update-result.json and .update.lock are untracked runtime artifacts (npm update result, PID lock). They are not in the --changed-files scope. The .gitignore does not currently cover .last-update-result.json or .update.lock. These are pre-existing, introduced_in_diff: false. Advisory only.",
+    "orphaned_subagents": "detect-orphan-agents.sh reported product-owner.md as orphaned. This is a false positive confirmed by direct grep: product-owner.md is actively referenced in commands/dev.md, commands/dev-overnight.md, commands/dev-command.md, and agents/ba.md as a specialist agent dispatched during the dev workflow. Safe to delete = false. No genuine orphaned subagents found in the diff scope.",
+    "unreferenced_scripts": "detect-orphan-scripts.sh reported scripts/todo/*.py (and scripts/bulk-commit-nested-run.sh, scripts/install/tmp-cleanup-install.sh) as orphaned. These are outside the --changed-files scope and are pre-existing issues. Per the diff-scoped cleanliness gate rule (AC-12.1): pre-existing orphan script findings are advisory-only and non-blocking for this close. The two diff-scope scripts (scripts/graphify-enrich.py and scripts/graphify-query.py) are referenced in agents/graphify.md, commands/dev.md, and commands/pull.md — not orphaned. introduced_in_diff: false for all orphan-script findings.",
+    "orphan_commands": "detect-orphan-commands.sh returned empty findings. No orphaned commands.",
+    "dead_functions": "detect-dead-functions.sh returned no findings. No dead functions in scripts/graphify-enrich.py or scripts/graphify-query.py.",
+    "duplicate_content": "detect-duplicate-content.sh findings are all in worktrees/, projects/, todos/, file-history/ — pre-existing, not in the diff scope. introduced_in_diff: false.",
+    "archive_candidates": "No changed files match archive candidate patterns (*-plan.md, *-analysis.md, *-proposal.md, *-fixes.md, *-temp.md, *-draft.md, etc.). docs/dev/ticket-20260527-132200.md and docs/dev/acceptance-criteria-20260527-132200.json are active dev context files for cycle 20260527-132200. Not archive candidates.",
+    "docs_categorization": "No uncategorized docs in docs/ root were introduced by this diff. All docs/dev/* files follow the established docs/dev/ placement convention.",
+    "obsolete_functionality": "No legacy markers, deprecated comments, or TODO-remove markers found in scripts/graphify-enrich.py or scripts/graphify-query.py. No obsolete functionality detected in any changed file.",
+    "test_files": "7 new test files in tests/generated/20260529-080709/ (test_AC_F1 through test_AC_F7), all with substantive content (50-80 lines each). 1 new test file tests/generated/20260527-132200/test_AC12_ac12-command-coverage.py (77 lines). All are manifest-backed active tests. 0 git commits (untracked/unstaged) is expected for files not yet in a commit — these are new-in-this-diff working tree files, not cleanliness violations."
+  },
+  "summary": {
+    "total_issues": 0,
+    "issues_introduced_in_diff": 0,
+    "critical": 0,
+    "major": 0,
+    "minor": 0,
+    "advisory_pre_existing": 2,
+    "advisory_pre_existing_notes": [
+      "scripts/todo/*.py and scripts/bulk-commit-nested-run.sh flagged as orphaned by detect-orphan-scripts.sh — pre-existing, not in diff scope, safe_to_delete requires per-script verification; advisory only",
+      ".last-update-result.json and .update.lock are untracked runtime artifacts not covered by .gitignore — pre-existing gap, not introduced by this diff; advisory only"
+    ],
+    "estimated_space_saved": "0 MB",
+    "diff_cleanliness_verdict": "CLEAN — 0 issues introduced_in_diff: true found across all 19 changed files"
+  },
+  "codex_consult": {
+    "invoked": true,
+    "status": "ok",
+    "feedback_summary": "Codex raised 6 findings: (1) naming_violations classification imprecise — INDEX.md/README.md are new files but convention is pre-existing/exempt; (2) product-owner.md orphaned_subagents is a false positive with active functional references; (3) scripts/todo/*.py orphan findings are false positives / actionability risk outside diff scope; (4) gitignore_coverage wording should preserve the tests/generated policy exception clearly; (5) non_functional_files overclaimed pycache cleanliness beyond diff scope; (6) changed-files scope should be declared authoritative. All 6 findings addressed.",
+    "findings": [
+      {
+        "issue": "naming_violations classification is imprecise: tests/generated/20260529-080709/INDEX.md and README.md are new working-tree files, so the files themselves are not pre-existing; the uppercase naming convention is the pre-existing harness/doc-sync convention and should be exempt, not reported as a violation.",
+        "proposed_fix": "naming_violations: []; add note: tests/generated/*/INDEX.md and README.md are auto-generated harness docs and exempt from lowercase/kebab naming checks; convention is pre-existing and allowed.",
+        "classification": "major",
+        "disposition": "applied",
+        "rationale": "Wording corrected in analysis_notes.naming_violations and findings.naming_violations emptied. These files are harness-generated scaffolding exempt from naming checks, not violations."
+      },
+      {
+        "issue": "product-owner.md as orphaned_subagents is a false positive. It is referenced by dev/overnight/spec workflows and other agent docs, so labeling it orphaned is incorrect even as pre-existing. Deleting it would violate Safety Rules because it has functional references.",
+        "proposed_fix": "orphaned_subagents: []; if mentioned, say: product-owner.md is referenced; prior detector hit is false positive/out-of-scope.",
+        "classification": "blocker",
+        "disposition": "applied",
+        "rationale": "Verified by grep: product-owner.md referenced in commands/dev.md, commands/dev-overnight.md, commands/dev-command.md, agents/ba.md. Detector false positive. findings.orphaned_subagents emptied. Note in analysis_notes.orphaned_subagents."
+      },
+      {
+        "issue": "scripts/todo/*.py orphan findings are false positives/actionability risk. These scripts are conventionally loaded by command workflows and several are directly referenced. They are also outside the changed-files scope. Deleting them would violate Safety Rules for referenced functional files.",
+        "proposed_fix": "unreferenced_scripts: [] for this changed-files run; if retained as global note: scripts/todo/*.py are advisory-only detector noise unless a specific script has no command/convention reference, is >7 days old, and has explicit cleanup approval; safe_to_delete=false.",
+        "classification": "major",
+        "disposition": "applied",
+        "rationale": "All orphaned script findings are outside the diff scope. Pre-existing advisory notes preserved in analysis_notes.unreferenced_scripts. findings.unreferenced_scripts emptied to reflect correct diff-scoped gate behavior."
+      },
+      {
+        "issue": "gitignore_coverage wording should preserve the tests/generated policy exception. Untracked tests/generated/20260529-080709/* files are not a gitignore gap here; this repo intentionally version-controls generated tests. They are a staging/commit-hygiene concern only if the cycle is being finalized.",
+        "proposed_fix": "Replace with: gitignore_coverage: tests/generated/ is an explicit project-policy exception: generated tests are intended to be tracked. Untracked task test files are staging gap, not gitignore gap; severity=advisory/non-blocking.",
+        "classification": "major",
+        "disposition": "applied",
+        "rationale": "analysis_notes.gitignore_coverage updated to clearly state the policy exception and distinguish staging gap from gitignore gap. findings.gitignore_coverage remains empty (no blocking issues)."
+      },
+      {
+        "issue": "non_functional_files overclaims pycache cleanliness. It is safe to say no changed pycache finding is needed, but not that pycache is universally properly gitignored because pre-existing tracked pycache artifacts exist elsewhere.",
+        "proposed_fix": "non_functional_files: no changed/untracked __pycache__ or *.pyc in the supplied changed-files scope; pre-existing tracked cache artifacts are out-of-scope and not deletion candidates in this diff-scoped review.",
+        "classification": "major",
+        "disposition": "applied",
+        "rationale": "analysis_notes.non_functional_files scoped to diff only. Claim narrowed to the diff scope as instructed."
+      },
+      {
+        "issue": "Changed-files scope may be underreported if based on live git status rather than the supplied list. Untracked task artifacts such as tests/generated/20260529-080709/INDEX.md / README.md and task docs may need inclusion for a true changed-files gate.",
+        "proposed_fix": "Build changed_files from git status --porcelain including untracked files, or explicitly state that the supplied path list is authoritative and out-of-list dirty files are excluded by design.",
+        "classification": "major",
+        "disposition": "applied",
+        "rationale": "scope_note field added to report root declaring the supplied path list is authoritative per task prompt. Out-of-list dirty files are excluded by design."
+      }
+    ],
+    "feedback_incorporated": "Applied all 6 Codex findings: emptied naming_violations (harness exemption), removed product-owner.md false positive from orphaned_subagents, removed out-of-scope scripts from unreferenced_scripts findings, clarified gitignore_coverage policy exception, scoped non_functional_files claim to diff scope, added scope_note declaring supplied path list as authoritative."
+  }
+}

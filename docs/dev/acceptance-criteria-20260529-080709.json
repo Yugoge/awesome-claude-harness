@@ -1,0 +1,145 @@
+[
+  {
+    "id": "AC-F1",
+    "type": "data",
+    "given": "agents/graphify.md, commands/dev.md, commands/pull.md after fix applied",
+    "when": "grepping for python3 invocations added by the graphify integration in the 4 identified locations",
+    "then": "all 4 python3 invocations are prefixed with 'source \"${CLAUDE_PROJECT_DIR}/venv/bin/activate\" &&'; style-inspector use-source-venv standard finds 0 critical violations for these files in the diff; no bare (non-venv-prefixed) python3 invocation of any graphify script exists in any target file",
+    "check": {
+      "type": "grep",
+      "patterns": [
+        {"file": "agents/graphify.md", "pattern": "source.*venv.*activate.*&&.*python3.*graphify-enrich", "expect": "match"},
+        {"file": "commands/dev.md", "pattern": "source.*venv.*activate.*&&.*python3.*graphify-query", "expect": "match"},
+        {"file": "commands/dev.md", "pattern": "source.*venv.*activate.*&&.*python3.*graphify-enrich", "expect": "match"},
+        {"file": "commands/pull.md", "pattern": "source.*venv.*activate.*&&.*python3.*graphify-maintain", "expect": "match"},
+        {"file": "agents/graphify.md", "pattern": "^[[:space:]]*python3[[:space:]].*graphify-enrich", "expect": "no_match"},
+        {"file": "commands/dev.md", "pattern": "^[[:space:]]*python3[[:space:]].*graphify-query", "expect": "no_match"},
+        {"file": "commands/dev.md", "pattern": "^[[:space:]]*Run:[[:space:]]*python3[[:space:]].*graphify-enrich", "expect": "no_match"},
+        {"file": "commands/pull.md", "pattern": "^[[:space:]]*python3[[:space:]].*graphify-maintain", "expect": "no_match"}
+      ]
+    },
+    "ac_uid": "ac-f1-venv-activation-graphify-invocations"
+  },
+  {
+    "id": "AC-F2",
+    "type": "data",
+    "given": "agents/graphify.md, agents/dev.md, agents/qa.md after fix applied",
+    "when": "grepping for 'Step 7.5' or 'Step 1.5' (any form: heading or prose) in these three files",
+    "then": "zero matches in all three files; equivalent prose uses 'between Step 7 and Step 8' or 'between Step 1 and Step 2' phrasing",
+    "check": {
+      "type": "grep",
+      "patterns": [
+        {"files": ["agents/graphify.md", "agents/dev.md", "agents/qa.md"], "pattern": "Step [0-9]+\\.[0-9]+", "expect": "no_match"}
+      ],
+      "positive_check": {
+        "files": ["agents/graphify.md", "agents/dev.md"],
+        "pattern": "between Step 7 and Step 8",
+        "expect": "match"
+      }
+    },
+    "ac_uid": "ac-f2-no-decimal-prose-steps"
+  },
+  {
+    "id": "AC-F3",
+    "type": "data",
+    "given": "agents/ba.md, agents/qa.md, scripts/graphify-query.py after fix applied",
+    "when": "style-inspector english-only scan runs against these files",
+    "then": "zero CJK literal violations reported; scripts/graphify-query.py:~47 uses Unicode escape strings (e.g. '\\u4e4b\\u524d'); agents/ba.md and agents/qa.md reference Chinese equivalents via pointer to docs/dev/ticket-20260527-132200.md; runtime behavior preserved (Python parses '\\u4e4b\\u524d' as the actual CJK char matching user input)",
+    "check": {
+      "type": "grep",
+      "patterns": [
+        {"file": "scripts/graphify-query.py", "pattern": "\\\\u4e4b\\\\u524d", "expect": "match"},
+        {"files": ["agents/ba.md", "agents/qa.md"], "pattern": "[之已现原之之]", "expect": "no_match"}
+      ]
+    },
+    "ac_uid": "ac-f3-no-cjk-literals-agent-script-files"
+  },
+  {
+    "id": "AC-F4",
+    "type": "api",
+    "given": "scripts/graphify-enrich.py after fix applied, a temporary context JSON file with valid JSON content, blast-radius-map.json absent for the test task-id",
+    "when": "running graphify-enrich.py --task-id <test_id> --context-file <temp_context_json_path> where blast-radius-map.json does not exist",
+    "then": "exit code is 0; temp_context_json_path has been updated with a graph_context field containing status=skipped; graph_context conforms to empty_graph_context(STATUS_SKIPPED) output shape with structural_context={} and ambiguity_hypotheses=[]",
+    "check": {
+      "type": "functional",
+      "invoke": "python3 scripts/graphify-enrich.py --task-id test-nil-map-f4-<ts> --context-file <tmpfile>",
+      "expect": "exit_code=0 AND context_json[graph_context][status] == 'skipped'"
+    },
+    "ac_uid": "ac-f4-nil-map-context-file-patching"
+  },
+  {
+    "id": "AC-F5",
+    "type": "data",
+    "given": "commands/dev.md after fix applied",
+    "when": "reading the graphify dispatch block (the section between the 'Graphify enrichment' anchor and the '### Step 8' heading)",
+    "then": "the Graphify enrichment section (1) assigns a sentinel variable whose value contains 'graphify.json' and (2) wraps the Agent dispatch in an if-block that checks whether the sentinel file exists — the Agent is only dispatched when sentinel exists; when absent, dispatch is skipped and graphify is recorded as skipped/sentinel_absent; (3) the graph-summary.json read after dispatch is conditional on sentinel having existed",
+    "check": {
+      "type": "grep",
+      "patterns": [
+        {
+          "file": "commands/dev.md",
+          "section_anchor": "Graphify enrichment",
+          "section_end": "### Step 8",
+          "pattern": "graphify\\.json",
+          "expect": "match",
+          "rationale": "sentinel file path containing graphify.json must be named in prose within the Graphify enrichment block"
+        },
+        {
+          "file": "commands/dev.md",
+          "section_anchor": "Graphify enrichment",
+          "section_end": "### Step 8",
+          "pattern": "sentinel.*absent|absent.*sentinel|skipped.sentinel_absent",
+          "expect": "match",
+          "rationale": "prose must describe the absent-sentinel case: skip dispatch and record graphify_status=skipped/sentinel_absent"
+        }
+      ]
+    },
+    "ac_uid": "ac-f5-dispatch-guard-sentinel-existence"
+  },
+  {
+    "id": "AC-F6",
+    "type": "data",
+    "given": "tests/generated/20260527-132200/ after fix applied",
+    "when": "reading tests/generated/20260527-132200/manifest.json",
+    "then": "manifest.json has 12 entries in active_tests[]; tests/generated/20260527-132200/test_AC12_ac12-command-coverage.py exists; the test verifies semantic graphify integration presence in command files (graphify-query.py/graphify-enrich.py references in commands/dev.md) without asserting 'Step 1.5' or 'Step 7.5' literal strings",
+    "check": {
+      "type": "data",
+      "verify": [
+        {"condition": "len(manifest['active_tests']) == 12"},
+        {"condition": "test_AC12_ac12-command-coverage.py exists"},
+        {"condition": "test file does NOT contain 'Step 1.5' or 'Step 7.5' as assertion target"}
+      ]
+    },
+    "ac_uid": "ac-f6-ac12-automated-test-manifest"
+  },
+  {
+    "id": "AC-F7",
+    "type": "data",
+    "given": "docs/dev/ticket-20260527-132200.md and docs/dev/acceptance-criteria-20260527-132200.json after fix applied",
+    "when": "reading the AC6 entry in each file using jq (for JSON) and section-scoped grep (for Markdown)",
+    "then": "AC6 when field in acceptance-criteria-20260527-132200.json contains 'prose' (verified via jq); AC6 check.pattern in acceptance-criteria-20260527-132200.json no longer equals the old heading-only pattern '##+ Step [0-9]+\\\\.[0-9]' (verified via jq); the AC6 WHEN line in ticket-20260527-132200.md, extracted from the ### AC6 heading block, contains 'prose'",
+    "check": {
+      "type": "jq",
+      "commands": [
+        {
+          "file": "docs/dev/acceptance-criteria-20260527-132200.json",
+          "jq_filter": ".acceptance_criteria[] | select(.id==\"AC6\") | .when | test(\"prose\";\"i\")",
+          "expect": "true",
+          "rationale": "AC6 when field must contain 'prose' after fix — this does NOT match the unfixed file which has no 'prose' in the when field"
+        },
+        {
+          "file": "docs/dev/acceptance-criteria-20260527-132200.json",
+          "jq_filter": ".acceptance_criteria[] | select(.id==\"AC6\") | .check.pattern | test(\"##[+] Step\")",
+          "expect": "false",
+          "rationale": "old heading-only pattern '##+ Step ...' must be gone from check.pattern after fix"
+        },
+        {
+          "file": "docs/dev/ticket-20260527-132200.md",
+          "section_grep": {"from_heading": "### AC6", "to_heading": "### AC7", "pattern": "prose", "expect": "match"},
+          "rationale": "AC6 WHEN line in ticket must contain 'prose' — scoped to AC6 block only to avoid false-pass from other sections"
+        }
+      ]
+    },
+    "ac_uid": "ac-f7-ac6-spec-drift-fix-prose-scope"
+  }
+]

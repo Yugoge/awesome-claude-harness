@@ -1,0 +1,276 @@
+{
+  "request_id": "20260529-080709",
+  "task_id": "20260529-080709",
+  "timestamp": "2026-05-29T08:30:00Z",
+  "type": "ba_validation",
+
+  "rank_acknowledged": "Disgraced",
+  "range_acknowledged": "<0",
+  "recent_events_digest_acknowledged": "616350c4",
+  "score_injection_action": "Rank=Disgraced/<0 with close_fail_qa_pass(-12) and user_rating_1(-20) signals prior work passed QA but failed close. This run applied adversarial rigor: independently verified every BA claim against actual file reads before scoring any dimension, separately re-derived all 5 blocking-finding counts from the close report table (not from BA summary), confirmed line numbers by reading actual file content (found close report had stale line 37 vs actual line 42), invoked Codex for adversarial challenge, and raised 4 blocking objections that would have caused another close_fail if shipped as-is.",
+
+  "qa": {
+    "status": "fail",
+    "overall_assessment": "BA analysis is thorough and its file-level evidence is accurate. However, 4 concrete problems prevent this BA spec from safely driving a dev cycle: (1) F6 and F7 are misclassified as Should Have when the close report explicitly marks them as blocking Fix Required; (2) AC-F5's grep pattern can false-pass today before the dispatch guard is fixed; (3) AC-F7's check pattern already matches the current (unfixed) acceptance-criteria file; (4) AC-F1 has only positive checks and no negative verification that old bare python3 calls are absent. These are verifier-defeating spec defects — they mean dev can ship incomplete fixes and QA would pass them.",
+
+    "verified_against_complaint": true,
+    "passed_user_requirement": false,
+    "ac_alignment": false,
+
+    "verified_location_keywords": ["close-report", "graphify", "style-inspector", "venv", "CJK", "nil-map", "sentinel", "dispatch", "AC12", "AC6"],
+    "location_overlap": ["graphify", "venv", "CJK", "sentinel", "dispatch", "AC12", "AC6"],
+
+    "graph_verification": {
+      "graphify_ran": true,
+      "graph_context_status": "unavailable",
+      "focused_subgraph_present": false,
+      "graph_report_present": true,
+      "verification_note": "pre_query.json found at .claude/dev-registry/dev-20260529-080709/graphify/pre_query.json with status=unavailable (GRAPHIFY_BIN absent). Per agents/qa.md, Graphify BA-Validation fail gates G1, G2, G3 are waived when status=unavailable."
+    },
+
+    "ba_validation_dimensions": [
+      {
+        "dimension": "evidence_quality",
+        "verdict": "pass",
+        "details": "All 14 violation locations independently verified via Read/grep against actual current file contents. Key verified facts: graphify-enrich.py:171-177 nil-map path calls _write_outputs() and returns 0 without patching context.json (context-file patching at line 231 only reachable after successful extraction — BA correct); commands/dev.md:684-703 no sentinel existence check before Agent dispatch (confirmed); manifest.json active_tests count=11 (confirmed, AC12 absent); ticket-20260527-132200.md:174 AC6 WHEN says '## or ###' only (confirmed); graphify_lib.py:209 empty_graph_context definition confirmed; import in graphify-enrich.py:37 confirmed; NOT called in nil-map path confirmed. BA's line number 42 for agents/graphify.md bare python3 is more accurate than close report's line 37 (which is the ## Execution heading).",
+        "evidence_checked": [
+          "agents/graphify.md:42 — bare python3 verified (close report cited :37 which is '## Execution' heading — BA is correct)",
+          "agents/graphify.md:3 — YAML description with 'Step 7.5' verified",
+          "agents/graphify.md:10 — prose 'Step 7.5' verified",
+          "agents/dev.md:116,121 — prose 'Step 7.5'/'Step 1.5' verified",
+          "agents/qa.md:96 — prose 'Step 1.5' verified",
+          "agents/ba.md:640,646 — CJK literals verified",
+          "agents/qa.md:100 — CJK literals verified",
+          "scripts/graphify-query.py:47 — CJK literals in Python list verified",
+          "commands/dev.md:182 — bare python3 graphify-query.py verified",
+          "commands/dev.md:697 — bare python3 in dispatch prompt verified",
+          "commands/pull.md:110 — bare python3 graphify-maintain.py verified",
+          "scripts/graphify-enrich.py:171-177 — nil-map path no context.json patching confirmed",
+          "commands/dev.md:684-703 — no sentinel guard before Agent dispatch confirmed",
+          "tests/generated/20260527-132200/manifest.json — 11 active_tests confirmed",
+          "docs/dev/ticket-20260527-132200.md:174 — AC6 WHEN '## or ###' only confirmed",
+          "hooks/prompt-workflow.py:624 — pre-existing guard confirmed at stated location",
+          "scripts/graphify_lib.py:209 — empty_graph_context definition confirmed"
+        ]
+      },
+      {
+        "dimension": "scope_alignment",
+        "verdict": "fail",
+        "details": "The user requirement '立刻修复全部发现的问题' contains the universalist quantifier '全部' (all). The close report's Section 'Blocking findings requiring fix before CLOSE' EXPLICITLY lists 5 items, including item 4 (AC12 test coverage) and item 5 (spec_text_vs_execution_drift/AC6 drift), both marked 'Fix required' in the Codex findings table. BA classified F6 (AC12 test) and F7 (AC6 drift) as Should Have instead of Must Have. Under the universalist claim and the close report's explicit blocking designation, BA's Should Have classification contradicts the evidence. A dev cycle that implements only F1-F5 and skips F6+F7 would fail /close again for the same reason it failed in Cycle 1 (AC12 missing test, AC6 spec drift). This is a scope_alignment violation: BA narrowed 2 explicitly-required fixes from Must to Should.",
+        "close_report_explicit_blockers": [
+          "1. 10 style-inspector critical violations (venv/decimal/CJK) — BA F1+F2+F3 — Must Have (correct)",
+          "2. AC8 nil-map context-patch gap — BA F4 — Must Have (correct)",
+          "3. AC11/dispatch conflict — BA F5 — Must Have (correct)",
+          "4. AC12 test coverage gap — BA F6 — Should Have (INCORRECT: close report says Fix required)",
+          "5. spec_text_vs_execution_drift AC6 — BA F7 — Should Have (INCORRECT: close report says Fix required)"
+        ],
+        "required_fix": "Promote F6 and F7 from Should Have to Must Have. Update requirements decomposition rationale for R3 and R4 to cite close report's explicit blocking status."
+      },
+      {
+        "dimension": "investigation_completeness",
+        "verdict": "pass",
+        "details": "BA performed Read/grep verification of each claimed violation before writing spec. evidence_type=observed with specific line numbers confirmed by independent verification. Prior attempts documented with commit hashes (fe4c7df, 1e559fc, 4e1a9f7, b5d152a, ecf792b) and failure categorization. Component chain documented (graphify_lib -> graphify-enrich import chain verified). Codex adversarial consultation performed and findings applied."
+      },
+      {
+        "dimension": "affected_file_accuracy",
+        "verdict": "pass",
+        "details": "All 8 Must Have files verified to exist at stated paths. All 4 Should Have files verified to exist at stated paths. Line numbers independently confirmed. Minor note: close report cites agents/graphify.md:37 for bare python3, but BA correctly cites line 42 (line 37 is the '## Execution' heading)."
+      },
+      {
+        "dimension": "spec_text_vs_execution_drift",
+        "verdict": "fail",
+        "details": "Three AC verification recipes have drift or false-pass risks confirmed by independent file verification and Codex adversarial review:\n\n(A) AC-F5 grep pattern: The pattern 'skip.*dispatch' already matches unrelated test-writer text at commands/dev.md:712 ('dispatch MUST be skipped on this cycle'). This means AC-F5's grep check would pass TODAY before any fix is applied, making it unable to detect whether the actual dispatch guard was implemented.\n\n(B) AC-F7 check pattern: The pattern 'Step.*[0-9]+\\.[0-9]+' already matches the CURRENT (unfixed) acceptance-criteria-20260527-132200.json AC6 entry text ('## Step 1.5', '## Step 7.5'). This means AC-F7's grep check would pass TODAY before any fix is applied.\n\n(C) AC-F1 positive-only check: The checks only verify that venv-activated lines exist (source.*venv.*activate.*&&.*python3.*graphify-*), but do NOT verify that old bare python3 lines are absent. A developer could add new venv-activated calls alongside the existing bare python3 calls and AC-F1 would pass while the style violation persists.",
+        "objection_A": {
+          "ac_id": "AC-F5",
+          "literal_recipe": "grep pattern: graphify\\.json.*exist\\|sentinel.*absent\\|skip.*dispatch\\|if.*graphify.*json",
+          "false_pass_evidence": "'skip.*dispatch' matches 'dispatch MUST be skipped on this cycle' at commands/dev.md:712 — pattern fires today before any fix applied",
+          "required_fix": "Replace 'skip.*dispatch' with a pattern that specifically checks the graphify Agent dispatch block is inside a sentinel-exists conditional, OR use a block-scoped check that reads the graphify dispatch block (lines 684-703) and verifies it contains an explicit 'if graphify.json sentinel does not exist' guard."
+        },
+        "objection_B": {
+          "ac_id": "AC-F7",
+          "literal_recipe": "grep pattern: Step.*[0-9]+\\.[0-9]+ on docs/dev/acceptance-criteria-20260527-132200.json",
+          "false_pass_evidence": "Current AC6 'when' field contains '## Step 1.5', '## Step 7.5' which already matches Step.*[0-9]+\\.[0-9]+",
+          "required_fix": "Use a check that: (1) reads the AC6 entry specifically, (2) asserts the 'when' field mentions 'prose references' or 'agent.*command.*md', AND (3) asserts the check.pattern is no longer '##+ Step' prefix-only. A jq-based check: jq '.acceptance_criteria[] | select(.id==\"AC6\") | select(.when | test(\"prose|agent.*command\"))' should return a match, and jq '.acceptance_criteria[] | select(.id==\"AC6\") | .check.pattern | test(\"^##\\\\+\")' should return false."
+        },
+        "objection_C": {
+          "ac_id": "AC-F1",
+          "literal_recipe": "positive grep only: source.*venv.*activate.*&&.*python3.*graphify-(enrich|query|maintain) expects match",
+          "false_pass_evidence": "No negative check for bare python3.*graphify-(enrich|query|maintain) — developer can add new venv lines alongside old bare lines and AC passes",
+          "required_fix": "Add negative check patterns to AC-F1: for each target file, add a check with pattern '^python3.*graphify-(enrich|query|maintain)' (bare python3, line-start, no venv) that expects 'no_match'. This verifies OLD lines are gone, not just that new lines are present."
+        }
+      }
+    ],
+
+    "failures": [
+      {
+        "severity": "major",
+        "dimension": "scope_alignment",
+        "location": "docs/dev/ticket-20260529-080709.md: MoSCoW section",
+        "issue": "F6 (AC12 automated test) and F7 (AC6 WHEN clause update) are classified as Should Have, but both appear in the close report's explicit 'Blocking findings requiring fix before CLOSE' list with status 'Fix required'. Under the universalist user requirement ('全部' = all), BA must treat all close-required items as Must Have.",
+        "recommendation": "Promote F6 and F7 to Must Have. If BA believes these are lower priority, the rationale must cite an explicit user or orchestrator narrowing of scope — not BA's own risk assessment.",
+        "primary_cause": "ba_spec",
+        "blocks_release": true
+      },
+      {
+        "severity": "major",
+        "dimension": "spec_text_vs_execution_drift",
+        "location": "docs/dev/acceptance-criteria-20260529-080709.json: AC-F5 check.pattern",
+        "issue": "AC-F5 grep pattern 'skip.*dispatch' already matches unrelated text at commands/dev.md:712 ('dispatch MUST be skipped on this cycle'). The AC check would return a false pass today before any fix is applied.",
+        "recommendation": "Replace 'skip.*dispatch' alternative in the grep pattern with a block-scoped assertion that verifies the graphify Agent dispatch block (near line 689) is inside an explicit sentinel-existence conditional.",
+        "primary_cause": "ba_spec",
+        "blocks_release": true
+      },
+      {
+        "severity": "major",
+        "dimension": "spec_text_vs_execution_drift",
+        "location": "docs/dev/acceptance-criteria-20260529-080709.json: AC-F7 check.patterns[1].pattern",
+        "issue": "AC-F7's pattern 'Step.*[0-9]+\\.[0-9]+' already matches the current (unfixed) AC6 entry text in acceptance-criteria-20260527-132200.json. The check would pass on the old file, making it unable to detect whether the AC6 entry was actually updated to cover prose references.",
+        "recommendation": "Use a jq-based check that (1) selects the AC6 entry, (2) asserts the 'when' field mentions prose references and agent/command .md files, AND (3) asserts check.pattern no longer starts with '##+ Step'.",
+        "primary_cause": "ba_spec",
+        "blocks_release": true
+      },
+      {
+        "severity": "major",
+        "dimension": "spec_text_vs_execution_drift",
+        "location": "docs/dev/acceptance-criteria-20260529-080709.json: AC-F1 check",
+        "issue": "AC-F1 has only positive checks (verifies venv-activated lines exist) with no negative check (verifies bare python3 lines are absent). A developer could add new venv-activated calls alongside existing bare python3 calls and AC-F1 would pass while the style violation persists.",
+        "recommendation": "Add negative check patterns to AC-F1: for each target file, add entries with pattern matching bare python3 invocations of graphify scripts (no venv prefix) with expect: 'no_match'.",
+        "primary_cause": "ba_spec",
+        "blocks_release": true
+      }
+    ],
+
+    "out_of_scope_observations": [
+      {
+        "ts": "2026-05-29T08:30:00Z",
+        "file": "docs/dev/ticket-20260529-080709.md",
+        "line": "138-139",
+        "observation": "Codex finding 2: BA's 'Could Have' classification for updating the existing test_AC8 to also invoke with --context-file is arguably conservative. The AC8 test remains untested for the context-file patching path after this fix. However, AC-F4 covers the behavioral verification directly and the close report does not explicitly require the AC8 test update. Advisory: BA should consider upgrading this to Should Have so it runs in the same cycle.",
+        "in_user_path": false,
+        "security_relevant": false
+      },
+      {
+        "ts": "2026-05-29T08:30:00Z",
+        "file": "docs/dev/acceptance-criteria-20260529-080709.json",
+        "line": "47-48",
+        "observation": "Codex finding 5: AC-F3's CJK char class pattern '[之已现原之之]' captures the leading characters of all trigger words correctly (redundant '之' is harmless, and '原' matches '原来的'). However a full CJK Unicode range check ([\\u4e00-\\u9fff]) would be more robust against future CJK additions. Not blocking since the current pattern covers all 4 trigger word groups.",
+        "in_user_path": false,
+        "security_relevant": false
+      }
+    ],
+
+    "codex_consult": {
+      "invoked": true,
+      "status": "ok",
+      "feedback_summary": "Codex returned 6 findings with PROPOSED_FIX. (1) F6/F7 Should Have vs Must Have — ACCEPTED as scope_alignment blocking objection. (2) AC8 test update Could Have — ACCEPTED as advisory observation (close report does not require it explicitly; AC-F4 covers the behavioral fix). (3) AC-F5 grep false-pass — ACCEPTED as spec_text_vs_execution_drift blocking objection. (4) AC-F7 check false-pass — ACCEPTED as spec_text_vs_execution_drift blocking objection. (5) AC-F3 CJK incomplete — ACCEPTED as advisory observation (current pattern covers all trigger chars). (6) AC-F1 positive-only — ACCEPTED as spec_text_vs_execution_drift blocking objection.",
+      "feedback_incorporated": "Findings 1, 3, 4, 6 incorporated as blocking failures. Findings 2, 5 incorporated as out_of_scope_observations (advisory)."
+    },
+
+    "success_criteria_results": [
+      {
+        "requirement_id": "R1",
+        "source_phrase": "立刻修复全部发现的问题",
+        "criterion": "All 5 blocking items from close-report resolved",
+        "verification_method": "Count blocking items in BA Must Have vs close report blocking list",
+        "status": "fail",
+        "result": "fail",
+        "details": "BA Must Have captures F1-F5 (style violations + AC8 gap + dispatch guard) but classifies AC12 test (F6) and AC6 drift (F7) as Should Have. The close report's explicit blocking list includes both F6 and F7 as 'Fix required'. Under the universalist '全部' requirement, both must be Must Have.",
+        "evidence": "Close report 'Blocking findings requiring fix before CLOSE' items 4 and 5 explicitly list AC12 test and AC6 spec drift as blocking. BA MoSCoW section demotes these to Should Have."
+      },
+      {
+        "requirement_id": "R2",
+        "source_phrase": "直到彻底实现用户需求",
+        "criterion": "/close passes after fixes applied",
+        "verification_method": "Verify BA spec coverage of all close-blocking items",
+        "status": "fail",
+        "result": "fail",
+        "details": "BA spec has AC verification recipes (AC-F1, AC-F5, AC-F7) with false-pass risks that would allow incomplete fixes to pass QA. A /close cycle with these ACs would likely fail again.",
+        "evidence": "AC-F5 grep matches existing text; AC-F7 check matches unfixed file; AC-F1 lacks negative checks."
+      },
+      {
+        "requirement_id": "R3",
+        "source_phrase": "close-report BLOCKING item 4: AC12 test coverage gap",
+        "criterion": "Automated test for AC12 exists in manifest",
+        "verification_method": "BA MoSCoW classification check",
+        "status": "fail",
+        "result": "fail",
+        "details": "BA classified AC12 test as Should Have, not Must Have. Given close report marks it as blocking, this classification is incorrect.",
+        "evidence": "Close report Section 'Blocking findings requiring fix' item 4: 'AC12 test coverage: AC12 has no automated test in manifest.json (only AC1-AC11 covered).' BA ticket line 133: '- F6: AC12 automated test added... (Should Have)'."
+      },
+      {
+        "requirement_id": "R4",
+        "source_phrase": "close-report BLOCKING item 5: AC6 spec_text_vs_execution_drift",
+        "criterion": "AC6 WHEN clause in ticket and acceptance-criteria covers prose references",
+        "verification_method": "BA MoSCoW classification + AC-F7 verification recipe check",
+        "status": "fail",
+        "result": "fail",
+        "details": "BA classified AC6 drift fix as Should Have (not Must Have) AND the AC-F7 verification recipe has a false-pass risk. Both issues must be resolved.",
+        "evidence": "Close report Section 'Blocking findings requiring fix' item 5: spec_text_vs_execution_drift. BA ticket line 135: '- F7: AC6 WHEN clause... (Should Have)'. AC-F7 check pattern 'Step.*[0-9]+\\.[0-9]+' matches current unfixed file."
+      }
+    ],
+
+    "all_findings": [
+      {
+        "severity": "major",
+        "dimension": "scope_alignment",
+        "location": "docs/dev/ticket-20260529-080709.md: MoSCoW section lines 132-135",
+        "issue": "F6 and F7 classified as Should Have despite close report marking both as explicitly blocking (Fix required). Universalist user requirement '全部' (all) requires all close-required fixes be Must Have.",
+        "recommendation": "Promote F6 and F7 to Must Have.",
+        "blocks_release": true
+      },
+      {
+        "severity": "major",
+        "dimension": "spec_text_vs_execution_drift",
+        "location": "docs/dev/acceptance-criteria-20260529-080709.json: AC-F5 check.pattern",
+        "issue": "Grep alternative 'skip.*dispatch' matches existing text at commands/dev.md:712 — false pass risk before fix applied.",
+        "recommendation": "Remove 'skip.*dispatch' from the AC-F5 grep pattern; use block-scoped check.",
+        "blocks_release": true
+      },
+      {
+        "severity": "major",
+        "dimension": "spec_text_vs_execution_drift",
+        "location": "docs/dev/acceptance-criteria-20260529-080709.json: AC-F7 check.patterns[1]",
+        "issue": "Pattern 'Step.*[0-9]+\\.[0-9]+' already matches the current unfixed acceptance-criteria-20260527-132200.json AC6 text — false pass risk before fix applied.",
+        "recommendation": "Use jq-based check that verifies AC6 'when' mentions prose references AND check.pattern is no longer '##+ Step'.",
+        "blocks_release": true
+      },
+      {
+        "severity": "major",
+        "dimension": "spec_text_vs_execution_drift",
+        "location": "docs/dev/acceptance-criteria-20260529-080709.json: AC-F1 check",
+        "issue": "Positive-only check cannot verify old bare python3 calls are removed — developer can add new venv lines alongside old bare lines and pass.",
+        "recommendation": "Add negative check patterns for each target file asserting no bare python3.*graphify-* calls remain.",
+        "blocks_release": true
+      }
+    ],
+
+    "summary": {
+      "critical_issues": 0,
+      "major_issues": 4,
+      "minor_issues": 0,
+      "total_findings": 4,
+      "blocking_objections": 4,
+      "dimensions_failed": ["scope_alignment", "spec_text_vs_execution_drift"],
+      "dimensions_passed": ["evidence_quality", "investigation_completeness", "affected_file_accuracy"],
+      "release_recommendation": "reject"
+    }
+  },
+
+  "iteration_needed": true,
+  "refined_context": {
+    "failed_criteria": [
+      "R1: F6 and F7 must be Must Have (close report marks both as Fix required)",
+      "R2: AC-F5, AC-F7, AC-F1 verification recipes have false-pass risks that would cause /close to fail again",
+      "R3: F6 must be promoted from Should Have to Must Have",
+      "R4: F7 must be promoted from Should Have to Must Have AND AC-F7 recipe must be fixed"
+    ],
+    "critical_issues": [
+      "AC-F5 grep pattern 'skip.*dispatch' false-passes today — remove from pattern or narrow to block context",
+      "AC-F7 check pattern already matches unfixed file — replace with jq-based AC6-specific check",
+      "AC-F1 positive-only check allows old bare python3 to coexist with new venv lines — add negative checks",
+      "F6 and F7 MoSCoW promotion required per close report's explicit blocking list"
+    ],
+    "recommended_approach": "BA should update ticket-20260529-080709.md MoSCoW to promote F6 and F7 to Must Have. BA should update acceptance-criteria-20260529-080709.json: (1) AC-F1: add negative-match patterns for bare python3 graphify calls; (2) AC-F5: remove 'skip.*dispatch' alternative, replace with block-scoped graphify dispatch guard check; (3) AC-F7: replace pattern with jq check that selects AC6 entry and asserts 'when' contains prose reference language.",
+    "additional_context": "All file-level evidence BA cited is correct — no location or line-number errors to fix. The 4 issues are: 2 MoSCoW classification errors and 3 AC verification recipe false-pass risks (one AC has both a classification and a recipe issue, bringing total to 4 distinct findings)."
+  }
+}

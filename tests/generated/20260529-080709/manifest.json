@@ -1,0 +1,151 @@
+{
+  "schema_version": "1.1",
+  "task_id": "20260529-080709",
+  "generated_at": "2026-05-29T08:07:09Z",
+  "active_tests": [
+    {
+      "task_id": "20260529-080709",
+      "ac_id": "AC-F1",
+      "ac_uid": "ac-f1-venv-activation-graphify-invocations",
+      "type": "data",
+      "file": "tests/generated/20260529-080709/test_AC_F1_ac-f1-venv-activation-graphify-invocations.py",
+      "status": "active",
+      "hook_check": {
+        "type": "grep",
+        "patterns": [
+          {"file": "agents/graphify.md", "pattern": "source.*venv.*activate.*&&.*python3.*graphify-enrich", "expect": "match"},
+          {"file": "commands/dev.md", "pattern": "source.*venv.*activate.*&&.*python3.*graphify-query", "expect": "match"},
+          {"file": "commands/dev.md", "pattern": "source.*venv.*activate.*&&.*python3.*graphify-enrich", "expect": "match"},
+          {"file": "commands/pull.md", "pattern": "source.*venv.*activate.*&&.*python3.*graphify-maintain", "expect": "match"},
+          {"file": "agents/graphify.md", "pattern": "^[[:space:]]*python3[[:space:]].*graphify-enrich", "expect": "no_match"},
+          {"file": "commands/dev.md", "pattern": "^[[:space:]]*python3[[:space:]].*graphify-query", "expect": "no_match"},
+          {"file": "commands/dev.md", "pattern": "^[[:space:]]*Run:[[:space:]]*python3[[:space:]].*graphify-enrich", "expect": "no_match"},
+          {"file": "commands/pull.md", "pattern": "^[[:space:]]*python3[[:space:]].*graphify-maintain", "expect": "no_match"}
+        ]
+      }
+    },
+    {
+      "task_id": "20260529-080709",
+      "ac_id": "AC-F2",
+      "ac_uid": "ac-f2-no-decimal-prose-steps",
+      "type": "data",
+      "file": "tests/generated/20260529-080709/test_AC_F2_ac-f2-no-decimal-prose-steps.py",
+      "status": "active",
+      "hook_check": {
+        "type": "grep",
+        "patterns": [
+          {"files": ["agents/graphify.md", "agents/dev.md", "agents/qa.md"], "pattern": "Step [0-9]+\\.[0-9]+", "expect": "no_match"}
+        ],
+        "positive_check": {
+          "files": ["agents/graphify.md", "agents/dev.md"],
+          "pattern": "between Step 7 and Step 8",
+          "expect": "match"
+        }
+      }
+    },
+    {
+      "task_id": "20260529-080709",
+      "ac_id": "AC-F3",
+      "ac_uid": "ac-f3-no-cjk-literals-agent-script-files",
+      "type": "data",
+      "file": "tests/generated/20260529-080709/test_AC_F3_ac-f3-no-cjk-literals-agent-script-files.py",
+      "status": "active",
+      "hook_check": {
+        "type": "grep",
+        "patterns": [
+          {"file": "scripts/graphify-query.py", "pattern": "\\\\u4e4b\\\\u524d", "expect": "match"},
+          {"files": ["agents/ba.md", "agents/qa.md"], "pattern": "[之已现原之之]", "expect": "no_match"}
+        ]
+      }
+    },
+    {
+      "task_id": "20260529-080709",
+      "ac_id": "AC-F4",
+      "ac_uid": "ac-f4-nil-map-context-file-patching",
+      "type": "api",
+      "file": "tests/generated/20260529-080709/test_AC_F4_ac-f4-nil-map-context-file-patching.py",
+      "status": "active",
+      "hook_check": {
+        "type": "functional",
+        "invoke": "python3 scripts/graphify-enrich.py --task-id test-nil-map-f4-<ts> --context-file <tmpfile>",
+        "expect": "exit_code=0 AND context_json[graph_context][status] == 'skipped'"
+      }
+    },
+    {
+      "task_id": "20260529-080709",
+      "ac_id": "AC-F5",
+      "ac_uid": "ac-f5-dispatch-guard-sentinel-existence",
+      "type": "data",
+      "file": "tests/generated/20260529-080709/test_AC_F5_ac-f5-dispatch-guard-sentinel-existence.py",
+      "status": "active",
+      "hook_check": {
+        "type": "grep",
+        "patterns": [
+          {
+            "file": "commands/dev.md",
+            "section_anchor": "Graphify enrichment",
+            "section_end": "### Step 8",
+            "pattern": "GRAPHIFY_SENTINEL=.*graphify\\.json",
+            "expect": "match",
+            "rationale": "sentinel variable assignment must appear within the Graphify enrichment block, not at line 712 where test-writer skip-sentinel appears"
+          },
+          {
+            "file": "commands/dev.md",
+            "section_anchor": "Graphify enrichment",
+            "section_end": "### Step 8",
+            "pattern": "if.*-f.*GRAPHIFY_SENTINEL\\|if.*GRAPHIFY_SENTINEL.*exists",
+            "expect": "match",
+            "rationale": "if-block guarding Agent dispatch must appear in graphify section"
+          }
+        ]
+      }
+    },
+    {
+      "task_id": "20260529-080709",
+      "ac_id": "AC-F6",
+      "ac_uid": "ac-f6-ac12-automated-test-manifest",
+      "type": "data",
+      "file": "tests/generated/20260529-080709/test_AC_F6_ac-f6-ac12-automated-test-manifest.py",
+      "status": "active",
+      "hook_check": {
+        "type": "data",
+        "verify": [
+          {"condition": "len(manifest['active_tests']) == 12"},
+          {"condition": "test_AC12_ac12-command-coverage.py exists"},
+          {"condition": "test file does NOT contain 'Step 1.5' or 'Step 7.5' as assertion target"}
+        ]
+      }
+    },
+    {
+      "task_id": "20260529-080709",
+      "ac_id": "AC-F7",
+      "ac_uid": "ac-f7-ac6-spec-drift-fix-prose-scope",
+      "type": "data",
+      "file": "tests/generated/20260529-080709/test_AC_F7_ac-f7-ac6-spec-drift-fix-prose-scope.py",
+      "status": "active",
+      "hook_check": {
+        "type": "jq",
+        "commands": [
+          {
+            "file": "docs/dev/acceptance-criteria-20260527-132200.json",
+            "jq_filter": ".acceptance_criteria[] | select(.id==\"AC6\") | .when | test(\"prose\";\"i\")",
+            "expect": "true",
+            "rationale": "AC6 when field must contain 'prose' after fix — this does NOT match the unfixed file which has no 'prose' in the when field"
+          },
+          {
+            "file": "docs/dev/acceptance-criteria-20260527-132200.json",
+            "jq_filter": ".acceptance_criteria[] | select(.id==\"AC6\") | .check.pattern | test(\"##[+] Step\")",
+            "expect": "false",
+            "rationale": "old heading-only pattern '##+ Step ...' must be gone from check.pattern after fix"
+          },
+          {
+            "file": "docs/dev/ticket-20260527-132200.md",
+            "section_grep": {"from_heading": "### AC6", "to_heading": "### AC7", "pattern": "prose", "expect": "match"},
+            "rationale": "AC6 WHEN line in ticket must contain 'prose' — scoped to AC6 block only to avoid false-pass from other sections"
+          }
+        ]
+      }
+    }
+  ],
+  "archived_tests": []
+}

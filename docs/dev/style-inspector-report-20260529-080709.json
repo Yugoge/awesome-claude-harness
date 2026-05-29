@@ -1,0 +1,159 @@
+{
+  "request_id": "20260529-080709",
+  "timestamp": "2026-05-29T15:05:00Z",
+  "inspector": "style-inspector",
+  "changed_files_mode": true,
+  "changed_files": [
+    "agents/ba.md",
+    "agents/dev.md",
+    "agents/graphify.md",
+    "agents/qa.md",
+    "commands/dev.md",
+    "commands/pull.md",
+    "scripts/graphify-enrich.py",
+    "scripts/graphify-query.py"
+  ],
+  "violations": [
+    {
+      "standard": "no-inline-code",
+      "severity": "critical",
+      "location": "commands/dev.md:688-695",
+      "finding": "NEW inline bash block added in this diff: GRAPHIFY_SENTINEL variable assignment + if [[ -f ]] conditional with echo branches. This is functional orchestration logic embedded in a command file, not an example section.",
+      "recommendation": "Extract to a script such as scripts/graphify-sentinel-check.py (or .sh) that accepts --task-id and returns dispatch_graphify:true|false, invoked with source venv/bin/activate && python3. Alternatively, convert to prose-only description with no fenced bash block.",
+      "introduced_in_diff": true
+    },
+    {
+      "standard": "use-source-venv",
+      "severity": "critical",
+      "location": "agents/ba.md:771",
+      "finding": "Bare python3 invocation in Step 9 blast-radius tool code block: `python3 scripts/blast-radius-tool.py \\` without venv activation. This is an operational instruction (not an example) for running the blast-radius tool.",
+      "recommendation": "Change to: source venv/bin/activate && python3 scripts/blast-radius-tool.py \\",
+      "introduced_in_diff": false
+    },
+    {
+      "standard": "use-source-venv",
+      "severity": "critical",
+      "location": "agents/dev.md:992",
+      "finding": "Bare python3 invocation in cp-state lifecycle SOP table: `python3 /root/.claude/scripts/spec-check.py`. This describes the required mutation command, not harmless documentation.",
+      "recommendation": "Change to: source \"${CLAUDE_HOME:-$HOME/.claude}/venv/bin/activate\" && python3 \"${CLAUDE_HOME:-$HOME/.claude}/scripts/spec-check.py\"",
+      "introduced_in_diff": false
+    },
+    {
+      "standard": "integer-step-numbering",
+      "severity": "critical",
+      "location": "agents/qa.md:739,755,887,905,938",
+      "finding": "Decimal step headers used as section labels: `Step 10.1` (E2E Script Discovery), `Step 10.2` (App Understanding Flow), `Step 10.3` (UI Evidence Schema), `Step 10.4` (Output Quality Verification), `Step 10.5` (Focus Criteria Verification). Standard 4 has no sub-step header exception.",
+      "recommendation": "Rename to non-decimal section headers, e.g. `#### E2E Check: Project E2E Script Discovery`, `#### E2E Check: App Understanding Flow`, `### UI Evidence Schema`, etc. Update all cross-references at lines 290, 292, 303, 750, 751 to use the new section names.",
+      "introduced_in_diff": false
+    },
+    {
+      "standard": "no-inline-code",
+      "severity": "critical",
+      "location": "commands/dev.md:480-496",
+      "finding": "Pre-existing inline Python heredoc block: `python3 - <<'PYEOF'` followed by 15 lines of Python file-patching logic (reading/writing context.json, updating spec_path). This is functional Python code embedded in a command file, not an example.",
+      "recommendation": "Extract to scripts/patch-context-spec-path.py accepting --context-json and --spec-path arguments. Invoke with: source \"${CLAUDE_PROJECT_DIR}/venv/bin/activate\" && python3 \"${CLAUDE_PROJECT_DIR}/scripts/patch-context-spec-path.py\" --context-json \"$CONTEXT_JSON\" --spec-path \"$orchestrator_resolved_spec_path\"",
+      "introduced_in_diff": false
+    },
+    {
+      "standard": "use-source-venv",
+      "severity": "critical",
+      "location": "commands/dev.md:480",
+      "finding": "Bare python3 invocation in inline heredoc: `python3 - <<'PYEOF'` without venv activation. This is the same block as the no-inline-code violation above, also violating Standard 3.",
+      "recommendation": "When extracting to a script per the no-inline-code fix above, invoke with venv activation: source \"${CLAUDE_PROJECT_DIR}/venv/bin/activate\" && python3 ...",
+      "introduced_in_diff": false
+    },
+    {
+      "standard": "use-source-venv",
+      "severity": "critical",
+      "location": "agents/qa.md:746",
+      "finding": "Bare python3 invocation presented as the default: `Run each script: python3 <script-path>` with venv activation listed as an optional alternative. Standard 3 requires source venv to be the canonical form, not the fallback.",
+      "recommendation": "Change to: `Run each script: source venv/bin/activate && python <script-path>` (removing the bare python3 option).",
+      "introduced_in_diff": false
+    },
+    {
+      "standard": "use-source-venv",
+      "severity": "critical",
+      "location": "agents/qa.md:1099",
+      "finding": "Bare python3 invocation in Phase 6 blast-radius tool code block: `python3 scripts/blast-radius-tool.py \\` without venv activation. This is an operational instruction for QA to execute the tool.",
+      "recommendation": "Change to: source venv/bin/activate && python3 scripts/blast-radius-tool.py \\",
+      "introduced_in_diff": false
+    }
+  ],
+  "standards_passed": [
+    "no-hardcoded-values (graphify-enrich.py, graphify-query.py — all file paths derived from argparse/env)",
+    "meaningful-naming (no forbidden pattern files in scripts/)",
+    "english-only (no CJK bytes in any in-scope file; agents/graphify.md, agents/ba.md clean; graphify-query.py Unicode escapes are ASCII-clean source bytes, exempted per Standard 6 detection algorithm)",
+    "merge-similar-scripts (graphify-enrich.py and graphify-query.py serve distinct pipeline stages)",
+    "concise-documentation (agents/graphify.md is concise and functional; commands/pull.md change is a single-line venv fix)",
+    "parameterized-scripts (graphify-enrich.py, graphify-query.py use argparse with required params)",
+    "dangling-references (graphify_lib.py, graphify-enrich.py, graphify-query.py, graphify-maintain.py all exist)",
+    "merge-conflicts (no merge conflict markers in any changed file)"
+  ],
+  "summary": {
+    "standards_checked": 11,
+    "violations_found": 8,
+    "critical": 8,
+    "files_audited": 8,
+    "files_total": 8,
+    "rounds_completed": 1,
+    "introduced_in_diff_count": 1,
+    "pre_existing_count": 7
+  },
+  "codex_consult": {
+    "invoked": true,
+    "status": "ok",
+    "feedback_summary": "Codex confirmed all 4 draft violations as true positives. Identified 2 additional missed violations (commands/dev.md:480-496 pre-existing no-inline-code+use-source-venv; agents/qa.md:1099 bare python3) and 1 additional location for qa.md:746 use-source-venv. Codex also expanded the V4 location list (decimal step cross-references at qa.md:290,292,303,750,751). Confirmed graphify-query.py:47 Unicode escapes are NOT a Standard 6 violation (source bytes are ASCII-clean).",
+    "findings": [
+      {
+        "issue": "V1 (no-inline-code, commands/dev.md:688-695) — confirmed true positive",
+        "proposed_fix": "Extract to scripts/graphify-sentinel-check.py returning dispatch_graphify:true|false, invoked with venv activation; or convert to prose-only",
+        "classification": "blocker",
+        "disposition": "applied",
+        "rationale": "Codex confirmed the if [[ -f ]] block is real orchestration logic, not illustrative pseudocode. Finding retained as-is."
+      },
+      {
+        "issue": "V2 (use-source-venv, agents/ba.md:771) — confirmed true positive",
+        "proposed_fix": "source venv/bin/activate && python3 scripts/blast-radius-tool.py",
+        "classification": "blocker",
+        "disposition": "applied",
+        "rationale": "Codex confirmed operational instruction context. Finding retained."
+      },
+      {
+        "issue": "V3 (use-source-venv, agents/dev.md:992) — confirmed true positive",
+        "proposed_fix": "source \"${CLAUDE_HOME:-$HOME/.claude}/venv/bin/activate\" && python3 ... spec-check.py",
+        "classification": "blocker",
+        "disposition": "applied",
+        "rationale": "Codex confirmed describes required command, not documentation."
+      },
+      {
+        "issue": "V4 (integer-step-numbering, agents/qa.md) — confirmed true positive, location list expanded",
+        "proposed_fix": "Rename Step 10.1-10.5 headers to non-decimal labels; update cross-references at lines 290,292,303,750,751",
+        "classification": "blocker",
+        "disposition": "applied",
+        "rationale": "Codex confirmed Standard 4 has no sub-step exception. Added cross-reference locations to recommendation."
+      },
+      {
+        "issue": "MISSED: commands/dev.md:480-496 pre-existing no-inline-code + Standard 3 bare python3",
+        "proposed_fix": "Extract to scripts/patch-context-spec-path.py with --context-json and --spec-path args",
+        "classification": "blocker",
+        "disposition": "applied",
+        "rationale": "Added as V5+V6 in the violations list."
+      },
+      {
+        "issue": "MISSED: agents/qa.md:746 and :1099 bare python3 invocations",
+        "proposed_fix": "source venv/bin/activate && python3 for both locations",
+        "classification": "blocker",
+        "disposition": "applied",
+        "rationale": "Added as V7 and V8 in the violations list."
+      },
+      {
+        "issue": "OBSERVATION_ONLY: graphify-query.py:47 Unicode escape sequences not a Standard 6 violation",
+        "proposed_fix": null,
+        "classification": "observation_only",
+        "disposition": "logged",
+        "rationale": "Standard 6 scans actual source bytes; \\u4e4b\\u524d is ASCII-clean. Codex confirmed no violation. Inspector agrees."
+      }
+    ],
+    "feedback_incorporated": "Added 4 new violations (V5, V6, V7, V8) based on codex-identified missed findings. Expanded V4 location list with cross-reference lines. Confirmed graphify-query.py:47 as non-violation."
+  }
+}
