@@ -185,6 +185,19 @@ class TestWriteBulkCommitSentinelScript(unittest.TestCase):
             self.assertIsNotNone(expires.tzinfo)
             self.assertGreater(expires, datetime.now(timezone.utc))
 
+    def test_succeeds_with_only_claude_code_session_id(self):
+        env = {k: v for k, v in os.environ.items()
+               if k not in ("CLAUDE_SESSION_ID", "CLAUDE_CODE_SESSION_ID")}
+        env["CLAUDE_CODE_SESSION_ID"] = "test-code-session-abc"
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with patch.dict(os.environ, env, clear=True):
+                rc = _writer.main(["--output-dir", tmpdir])
+            self.assertEqual(rc, 0)
+            files = list(Path(tmpdir).glob("claude-bulk-commit-sentinel-*.json"))
+            self.assertEqual(len(files), 1)
+            data = json.loads(files[0].read_text())
+            self.assertEqual(data["sid"], "test-code-session-abc")
+
     def test_fails_without_session_id(self):
         env = {k: v for k, v in os.environ.items()
                if k not in ("CLAUDE_SESSION_ID", "CLAUDE_CODE_SESSION_ID")}

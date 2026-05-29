@@ -1,0 +1,1 @@
+/redev User needs not satisfied: Codex suggested adding a positive regression test for the CLAUDE_CODE_SESSION_ID fallback path — explicitly deferred per BA spec Won't Have.

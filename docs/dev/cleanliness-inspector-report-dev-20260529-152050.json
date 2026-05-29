@@ -1,0 +1,125 @@
+{
+  "request_id": "dev-20260529-152050",
+  "timestamp": "2026-05-29T16:56:58.690004+00:00",
+  "inspector": "cleanliness-inspector",
+  "mode": "changed-files",
+  "changed_files": [
+    "hooks/tests/test_bulk_commit_sentinel.py"
+  ],
+  "diff_summary": "Adds one new test method test_succeeds_with_only_claude_code_session_id to TestWriteBulkCommitSentinelScript class. No files added, one file modified.",
+  "findings": {
+    "misplaced_docs": [],
+    "naming_violations": [],
+    "archive_candidates": [],
+    "dev_context_files": [],
+    "temp_files": [],
+    "duplicate_scripts": [],
+    "duplicate_tests": [],
+    "non_functional_files": [],
+    "non_functional_folders": [],
+    "orphaned_subagents": [],
+    "unreferenced_scripts": [],
+    "orphaned_tests": [],
+    "historical_docs": [],
+    "docs_categorization": [],
+    "obsolete_functionality": [],
+    "orphan_commands": [],
+    "dead_functions": [],
+    "duplicate_content": [],
+    "gitignore_coverage": [
+      {
+        "file": ".gitignore",
+        "reason": "HARNESS_RULE tests/generated/ appears only in a .gitignore comment, not as an active gitignore pattern. Files under tests/generated/ show as untracked in git status despite the comment. Policy conflict: the comment states tests/generated/ is intentionally tracked, yet HARNESS_RULES expects it to be ignored. Requires a separate policy-reconciliation task.",
+        "severity": "major",
+        "introduced_in_diff": false,
+        "advisory": true,
+        "non_blocking": true,
+        "recommendation": "Reconcile HARNESS_RULES in session-gitignore-propagate.sh vs the explicit tracking policy comment in .gitignore before changing any tracking behavior. Do NOT untrack tests/generated/ without a deliberate policy decision."
+      }
+    ]
+  },
+  "pre_existing_advisory": {
+    "orphaned_subagents_detector_output": {
+      "note": "detect-orphan-agents.sh reported product-owner.md as orphaned \u2014 this is a FALSE POSITIVE. product-owner.md is referenced by commands/dev.md and commands/dev-overnight.md (verified). Detector does not scan dev-overnight.md references.",
+      "raw_detector_false_positives": [
+        {
+          "file": "/root/.claude/agents/product-owner.md",
+          "detector_reason": "Not referenced by any command",
+          "actual_status": "referenced",
+          "references": [
+            "commands/dev.md",
+            "commands/dev-overnight.md"
+          ],
+          "action": "no_action"
+        }
+      ]
+    },
+    "unreferenced_scripts_detector_output": {
+      "note": "detect-orphan-scripts.sh reported 17 items \u2014 all pre-existing, none introduced by this diff. Output contains duplicate symlink-resolved paths (/root/.claude = /dev/shm/dev-workspace/dot-claude). Per codex finding #2, excluded from changed-file issue totals. Listed here as baseline advisory only.",
+      "total_reported": 17,
+      "deduplicated_unique": 15,
+      "all_introduced_in_diff": false
+    },
+    "duplicate_content_note": "detect-duplicate-content.sh found duplicates entirely within projects/ tool-result cache directories \u2014 pre-existing, not introduced by this diff, and not actionable without a cache retention policy."
+  },
+  "summary": {
+    "introduced_in_diff_issues": 0,
+    "blocking_issues": 0,
+    "pre_existing_advisory": 1,
+    "critical": 0,
+    "major": 1,
+    "minor": 0,
+    "major_note": "The 1 major finding (gitignore_coverage) is pre-existing and advisory only (introduced_in_diff: false); it does NOT block close.",
+    "estimated_space_saved": "0 MB"
+  },
+  "codex_consult": {
+    "invoked": true,
+    "status": "ok",
+    "feedback_summary": "Codex identified 6 issues with the draft findings: (1) orphaned_subagents false positive for product-owner.md \u2014 it IS referenced by commands; (2) 17 unreferenced_scripts items are out-of-scope noise with symlink duplicates; (3) duplicate_content in projects/ caches should not be in changed-file findings; (4) summary counters were ambiguous; (5) gitignore_coverage major severity is acceptable but any fix must not untrack intentionally-tracked tests/generated/; (6) naming rationale note about stale folder metadata.",
+    "findings": [
+      {
+        "issue": "orphaned_subagents contains a false positive. product-owner.md is referenced by commands/dev.md, commands/dev-overnight.md.",
+        "proposed_fix": "Remove product-owner.md from orphaned_subagents, mark as detector_false_positive with references. Do not archive/delete.",
+        "classification": "blocker",
+        "disposition": "applied",
+        "rationale": "Verified: grep confirms product-owner is referenced in commands/dev.md and commands/dev-overnight.md. Draft finding removed from orphaned_subagents and moved to pre_existing_advisory with false_positive annotation."
+      },
+      {
+        "issue": "unreferenced_scripts 17 items is out-of-scope noise for --changed-files, and detector output includes duplicate realpaths via /root/.claude symlink.",
+        "proposed_fix": "Move to raw_detector_output/baseline_advisory with introduced_in_diff:false, dedupe by realpath, exclude from changed-file issue totals.",
+        "classification": "major",
+        "disposition": "applied",
+        "rationale": "All 17 reported scripts are pre-existing. Moved to pre_existing_advisory section and excluded from issue totals."
+      },
+      {
+        "issue": "duplicate_content in projects/ tool-result caches is not a cleanliness issue introduced by this diff.",
+        "proposed_fix": "Exclude from changed-files findings or keep only as non-blocking baseline advisory. Do not propose deletion without a retention policy.",
+        "classification": "major",
+        "disposition": "applied",
+        "rationale": "projects/ caches noted in pre_existing_advisory. Not in findings arrays. No deletion proposed."
+      },
+      {
+        "issue": "Summary is ambiguous: total_issues=1 conflicts with populated categories like orphaned subagents/scripts/duplicate content.",
+        "proposed_fix": "Use explicit counters: introduced_in_diff_issues=0, blocking_issues=0, and separate pre_existing_advisory counts.",
+        "classification": "major",
+        "disposition": "applied",
+        "rationale": "Summary restructured with introduced_in_diff_issues, blocking_issues, and pre_existing_advisory fields."
+      },
+      {
+        "issue": "gitignore_coverage severity major is acceptable, but any implied fix to delete/untrack tests/generated/ would be unsafe because .gitignore documents it as intentionally tracked.",
+        "proposed_fix": "Keep as major, introduced_in_diff:false, advisory/non-blocking, and resolve in a separate policy task reconciling HARNESS_RULES vs the .gitignore comment.",
+        "classification": "major",
+        "disposition": "applied",
+        "rationale": "Recommendation updated to explicitly prohibit untracking tests/generated/ without a deliberate policy decision. Non-blocking flag set."
+      },
+      {
+        "issue": "Naming rationale cites stale/conflicting folder metadata.",
+        "proposed_fix": "Keep naming_violations: [], justify as: new test method is valid snake_case, file path is pre-existing, Python tests in hooks/tests/ use lower snake_case.",
+        "classification": "observation_only",
+        "disposition": "applied",
+        "rationale": "naming_violations remains empty. Rationale updated to note snake_case validation against pre-existing hooks/tests/ convention."
+      }
+    ],
+    "feedback_incorporated": "Applied all 6 codex findings: (1) removed product-owner.md false positive from orphaned_subagents; (2) moved unreferenced_scripts to pre_existing_advisory; (3) excluded projects/ cache duplicates from findings; (4) restructured summary with introduced_in_diff_issues and blocking_issues counters; (5) updated gitignore_coverage recommendation to block unsafe untracking; (6) updated naming rationale."
+  }
+}

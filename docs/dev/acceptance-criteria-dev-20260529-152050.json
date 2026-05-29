@@ -1,0 +1,33 @@
+{
+  "task_id": "dev-20260529-152050",
+  "acceptance_criteria": [
+    {
+      "id": "AC1",
+      "type": "hook",
+      "given": "hooks/tests/test_bulk_commit_sentinel.py exists with class TestWriteBulkCommitSentinelScript",
+      "when": "dev adds test_succeeds_with_only_claude_code_session_id with TemporaryDirectory as outer context, patch.dict(os.environ, env_without_both_sids_plus_CLAUDE_CODE_SESSION_ID, clear=True) as inner context, and all assertions inside TemporaryDirectory",
+      "then": "pytest hooks/tests/test_bulk_commit_sentinel.py::TestWriteBulkCommitSentinelScript::test_succeeds_with_only_claude_code_session_id -v exits 0 with PASSED; the test asserts rc==0 and data['sid']=='test-code-session-abc'",
+      "check": {
+        "kind": "subprocess",
+        "cmd": "python -m pytest hooks/tests/test_bulk_commit_sentinel.py::TestWriteBulkCommitSentinelScript::test_succeeds_with_only_claude_code_session_id -v",
+        "expected_exit": 0,
+        "expected_stdout_contains": "PASSED"
+      },
+      "ac_uid": "ac1-dev-20260529-152050-positive-fallback"
+    },
+    {
+      "id": "AC2",
+      "type": "hook",
+      "given": "the new test method has been added to the class",
+      "when": "pytest runs the full TestWriteBulkCommitSentinelScript class",
+      "then": "all 4 tests pass (test_writes_valid_sentinel_file, test_succeeds_with_only_claude_code_session_id, test_fails_without_session_id, test_ttl_is_30_minutes)",
+      "check": {
+        "kind": "subprocess",
+        "cmd": "python -m pytest hooks/tests/test_bulk_commit_sentinel.py::TestWriteBulkCommitSentinelScript -v",
+        "expected_exit": 0,
+        "expected_stdout_contains": "4 passed"
+      },
+      "ac_uid": "ac2-dev-20260529-152050-no-regression"
+    }
+  ]
+}
