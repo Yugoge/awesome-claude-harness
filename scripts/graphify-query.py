@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-graphify-query.py — Step 1.5 deterministic pre-BA graph hydrator.
+graphify-query.py — deterministic pre-BA graph hydrator (runs between Step 1 and Step 2).
 
 Extracts file/concept mentions from user requirement text using 3-layer extraction:
   Layer 1 — deterministic rules (file extensions, path separators, known prefixes)
@@ -44,7 +44,7 @@ from graphify_lib import (
 
 # Implicit reference trigger words that signal ambiguity — per spec §5
 IMPLICIT_REFERENCE_WORDS = [
-    "之前", "已有", "现有", "原来的",  # Chinese
+    "\u4e4b\u524d", "\u5df2\u6709", "\u73b0\u6709", "\u539f\u6765\u7684",  # Chinese (Unicode escapes; runtime-equivalent to CJK glyphs)
     "previous", "existing", "original",  # English
 ]
 
@@ -195,7 +195,7 @@ def _truncate_structural_context(context: dict, hard_cap: int) -> tuple[dict, bo
 # ---------------------------------------------------------------------------
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Step 1.5 graphify pre-BA hydrator")
+    parser = argparse.ArgumentParser(description="graphify pre-BA hydrator (between Step 1 and Step 2)")
     parser.add_argument("--task-id", required=True, help="Dev session task ID")
     parser.add_argument("--requirement-file", required=True, help="Path to user requirement .md file")
     parser.add_argument("--no-graphify", action="store_true", help="Explicit per-invocation disable")

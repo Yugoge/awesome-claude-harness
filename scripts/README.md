@@ -5,7 +5,7 @@ Organization and usage documentation for `scripts/`.
 <!-- AUTO:readme-stats -->
 
 ## Overview
-- **Total files**: 64
+- **Total files**: 66
 - **Subdirectories**: 3
 - **Naming convention**: kebab
 
@@ -42,9 +42,9 @@ Organization and usage documentation for `scripts/`.
 - `execute-push.py` - Eliminates the timing window that exists when validate + push are && -chained
 - `generate-folder-index.sh` - Description: Generate INDEX.md for folder (inventory of contents)
 - `generate-folder-readme.sh` - Description: Generate README.md for folder (purpose and organization rules)
-- `graphify-enrich.py` - graphify-enrich.py — Step 7.5 pre-DEV focused subgraph extractor
+- `graphify-enrich.py` - graphify-enrich.py — pre-DEV focused subgraph extractor (runs between Step 7 and Step 8)
 - `graphify-maintain.py` - graphify-maintain.py — Global Graphify cache lifecycle manager
-- `graphify-query.py` - graphify-query.py — Step 1.5 deterministic pre-BA graph hydrator
+- `graphify-query.py` - graphify-query.py — deterministic pre-BA graph hydrator (runs between Step 1 and Step 2)
 - `graphify_lib.py` - graphify_lib.py — shared library for Graphify knowledge-graph integration
 - `install-checkpoint-refspec.sh` - install-checkpoint-refspec.sh — idempotently add refs/checkpoints/* to
 - `iterate-failed-pipelines.py` - Reads pipelines JSON path; outputs iteration plan JSON to stdout. The orchestrator
@@ -54,8 +54,10 @@ Organization and usage documentation for `scripts/`.
 - `orchestrator.sh` - Description: Agent orchestration coordinator for development and cleanup workflows
 - `overnight-status.sh` - overnight-status.sh — Zero-LLM overnight session status query
 - `plan-style-inspection.sh` - Description: Discover auditable files and split into groups for parallel style inspection
+- `qa-manifest-guard.py` - Dual-mode tool per BA spec docs/dev/ticket-20260529-081014.md M4:
 - `quick-excel` - unknown file
 - `refine-context.sh` - refine-context.sh — merge QA-refined context with original context
+- `repair-venv.sh` - repair-venv.sh — durably restore a Python venv when its bin/python3 symlink target is missing.
 - `resolve-close-report.sh` - Resolve the close-report path for a given TASK_ID using subproject path-walk.
 - `resolve-dev-report.py` - Usage:
 - `runcode-watchdog.py` - Watchdog process for browser_run_code timeout enforcement

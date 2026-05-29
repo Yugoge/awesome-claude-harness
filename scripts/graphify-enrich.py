@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-graphify-enrich.py — Step 7.5 pre-DEV focused subgraph extractor.
+graphify-enrich.py — pre-DEV focused subgraph extractor (runs between Step 7 and Step 8).
 
 Runs as graphify subagent (mode=enrich) after BA-QA validation passes, before DEV.
 Operations:
@@ -136,7 +136,7 @@ def _build_graph_context_patch(subgraph: dict, status: str, task_id: str) -> dic
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Step 7.5 graphify enrichment subagent")
+    parser = argparse.ArgumentParser(description="graphify enrichment subagent (between Step 7 and Step 8)")
     parser.add_argument("--task-id", required=True, help="Dev session task ID")
     parser.add_argument("--context-file", help="Path to context-{ts}.json for in-place patching")
     parser.add_argument("--no-graphify", action="store_true", help="Explicit disable")
@@ -174,6 +174,16 @@ def main() -> int:
         run_manifest["subgraph_extraction"]["attempted"] = False
         _write_outputs(output_dir, task_id, run_manifest, {}, STATUS_SKIPPED)
         print(f"graphify-enrich: status=skipped ({br_reason})")
+        if args.context_file:
+            context_path = Path(args.context_file)
+            if context_path.exists():
+                try:
+                    ctx_data = json.loads(context_path.read_text(encoding="utf-8"))
+                    ctx_data["graph_context"] = empty_graph_context(STATUS_SKIPPED, br_reason)
+                    write_json_locked(context_path, ctx_data)
+                    print(f"graphify-enrich: patched graph_context(status=skipped) into {context_path}")
+                except Exception as exc:
+                    print(f"graphify-enrich: context-patch failed (advisory): {exc}", file=sys.stderr)
         return 0  # Zero exception — DEV receives empty graph_context
 
     # Cache availability check

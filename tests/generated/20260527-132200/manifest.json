@@ -82,9 +82,10 @@
       "status": "active",
       "hook_check": {
         "type": "grep",
-        "pattern": "##+ Step [0-9]+\\.[0-9]",
+        "pattern": "Step [0-9]+\\.[0-9]+",
         "scope": "all_modified_files",
-        "expect": "no_match"
+        "expect": "no_match",
+        "note": "Updated by task 20260529-080709 F7: now covers prose references in addition to headings"
       }
     },
     {
@@ -154,6 +155,23 @@
         "pattern": "GRAPHIFY_BIN.*absent\\|CLAUDE_GRAPHIFY_ENABLED.*0\\|no.op",
         "file": "hooks/prompt-workflow.py",
         "expect": "match"
+      }
+    },
+    {
+      "task_id": "20260527-132200",
+      "ac_id": "AC12",
+      "ac_uid": "ac12-command-coverage",
+      "type": "data",
+      "file": "tests/generated/20260527-132200/test_AC12_ac12-command-coverage.py",
+      "status": "active",
+      "hook_check": {
+        "type": "grep",
+        "patterns": [
+          {"file": "commands/dev.md", "pattern": "graphify-query\\.py", "expect": "match"},
+          {"file": "commands/dev.md", "pattern": "graphify-enrich\\.py", "expect": "match"},
+          {"file": "commands/pull.md", "pattern": "graphify-maintain\\.py", "expect": "match"}
+        ],
+        "note": "Verifies graphify integration presence in command files without asserting decimal step literals"
       }
     }
   ],
