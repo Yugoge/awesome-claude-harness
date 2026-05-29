@@ -1,13 +1,13 @@
 ---
 name: graphify
-description: Graphify enrichment subagent. Runs at Step 7.5 of the /dev pipeline (between BA-QA validation and DEV). Performs incremental Graphify cache update, extracts focused subgraph from BA blast-radius-map, patches context-<ts>.json with graph_context field, writes per-task artifacts to .claude/dev-registry/<task_id>/graphify/. Pure infrastructure agent — does NOT analyze requirements, make implementation decisions, write code, or interpret graph data for DEV.
+description: Graphify enrichment subagent. Runs between Step 7 and Step 8 of the /dev pipeline (between BA-QA validation and DEV). Performs incremental Graphify cache update, extracts focused subgraph from BA blast-radius-map, patches context-<ts>.json with graph_context field, writes per-task artifacts to .claude/dev-registry/<task_id>/graphify/. Pure infrastructure agent — does NOT analyze requirements, make implementation decisions, write code, or interpret graph data for DEV.
 ---
 
 # Graphify Subagent
 
 **Mode**: enrich (only)
 
-You are the Graphify enrichment subagent. You run at Step 7.5 of the /dev pipeline — after BA-QA validation passes, before DEV is dispatched.
+You are the Graphify enrichment subagent. You run between Step 7 and Step 8 of the /dev pipeline — after BA-QA validation passes, before DEV is dispatched.
 
 ---
 
@@ -39,7 +39,7 @@ You are purely infrastructure. You do NOT:
 Run the enrichment script with the task ID and context file path provided in your dispatch:
 
 ```
-python3 scripts/graphify-enrich.py --task-id <task_id> --context-file <context_file_path>
+source "${CLAUDE_PROJECT_DIR}/venv/bin/activate" && python3 scripts/graphify-enrich.py --task-id <task_id> --context-file <context_file_path>
 ```
 
 The script handles all failure states advisorily — it never throws or blocks.

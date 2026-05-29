@@ -93,11 +93,11 @@ The orchestrator's dispatch prompt (`commands/dev.md` Step 6 "Verify these 5 dim
 
 ### Graphify BA-Validation Fail Gates (spec-20260527-061433)
 
-When `pre_query.json` or `graph_context` was provided to BA (i.e., graphify ran successfully at Step 1.5 and status=ok or status=degraded), QA MUST verify three additional fail conditions:
+When `pre_query.json` or `graph_context` was provided to BA (i.e., graphify ran successfully at pre-BA graph hydration (between Step 1 and Step 2) and status=ok or status=degraded), QA MUST verify three additional fail conditions:
 
 **Fail Gate G1 — candidate_anchors ignored**: When `structural_context.candidate_anchors` in `pre_query.json` is non-empty AND BA's root cause analysis omits all of the listed anchors without explanation, raise `dimension: evidence_quality` with text "BA ignored structural_context.candidate_anchors from graphify pre-query; at least one anchor must be referenced or explicitly rejected with evidence."
 
-**Fail Gate G2 — missing Reference Resolution**: When the user requirement contains implicit reference trigger words (之前/已有/现有/原来的/previous/existing/original) AND BA's context JSON has no `candidate_anchors_resolved` field AND no BA-Validation pass for Reference Resolution, raise `dimension: investigation_completeness` with text "BA requirement contains implicit reference trigger words but shows no Reference Resolution procedure; candidate_anchors_resolved field is absent."
+**Fail Gate G2 — missing Reference Resolution**: When the user requirement contains implicit reference trigger words (Chinese equivalents: see docs/dev/ticket-20260527-132200.md, or the English equivalents: previous/existing/original) AND BA's context JSON has no `candidate_anchors_resolved` field AND no BA-Validation pass for Reference Resolution, raise `dimension: investigation_completeness` with text "BA requirement contains implicit reference trigger words but shows no Reference Resolution procedure; candidate_anchors_resolved field is absent."
 
 **Fail Gate G3 — no counter-evidence**: When BA's root cause analysis provides only supporting evidence for its initial interpretation and makes no attempt to list candidate alternatives or counter-evidence, raise `dimension: evidence_quality` with text "BA analysis provides only confirmatory evidence for initial interpretation; no counter-evidence considered; confirmation bias risk."
 
@@ -1080,6 +1080,17 @@ Phase 5 runs whenever `test_writer_expected == true` — that is, the BA-compute
 4. A manifest entry whose test file is missing on disk → broken test-writer integration → critical finding with `primary_cause: "ba_spec"` (test-writer was supposed to produce this artifact).
 5. **test_writer_expected vs manifest existence** (sentinel: `tests/generated/manifest.json is missing` — global index absence is the canonical sentinel, NOT the absence of an `active_tests[]` array inside it): if the orchestrator passed `test_writer_expected = true` (gated by BA's complexity_tier >= STANDARD OR risk_level == high) AND the per-task manifest is missing OR the global index `tasks[]` carries no entry for the current `task_id`, emit a critical finding with `primary_cause: "qa_oversight"` if the orchestrator allowed proceed despite missing manifest, or `primary_cause: "dev_implementation"` if Dev was supposed to ensure test-writer ran.
 
+6. **Vacuity invariant (anti-greenwash)** — When the candidate `manifest_verification` object has `active_tests_count == 0`, QA MUST NOT set `pytest_collected_ok: true` under any circumstances. An empty active set cannot evidence a green pytest run; emitting `(active_tests_count == 0, pytest_collected_ok == true)` is forbidden (a structurally-allowed but semantically-empty greenwash). The only legal vacuous shape is the explicit-vacuous form: `pytest_collected_ok: null` AND `vacuous_due_to_empty_active_set: true` AND a non-empty `vacuous_reason` string. Any attempted report violating this invariant is a critical Phase 5 finding with `primary_cause: "qa_oversight"`.
+
+7. **Force-include rule for empty active sets** — Before emitting a vacuous `manifest_verification`, QA MUST compute the cycle's changed-file candidate set from the actual `git diff` against the cycle's baseline SHA (authoritative source). Dev-report `files_modified[]` is advisory cross-check only. Of that candidate set, only entries that are **pytest-collectable test files** (a Python file for which `pytest --collect-only <file>` exits 0 AND collects ≥1 test) may raise `active_tests_count`; non-test implementation files cannot. Pytest exit 5 ("no tests collected") classifies a file as non-collectable. The computation MUST be performed per file individually (combined-batch parsing is forbidden because pytest exit codes and stdout are per-invocation).
+
+8. **Canonical executable guard — `scripts/qa-manifest-guard.py`** — QA MUST invoke the canonical guard script before emitting `manifest_verification`. Two modes:
+
+   - **Manifest mode (always, before emission)**: pipe the candidate `manifest_verification` JSON on stdin to `( source ~/.claude/venv/bin/activate && python3 scripts/qa-manifest-guard.py )` with NO CLI flags. The guard is pure (stdin/stdout/exit-code only). Capture `verdict` and `reason` from the guard's JSON output and copy them into the report's `manifest_verification.guard_verdict` and `manifest_verification.guard_reason` fields.
+   - **Cycle-diff mode (when active_tests_count would otherwise be 0)**: invoke `( source ~/.claude/venv/bin/activate && python3 scripts/qa-manifest-guard.py --cycle-diff-files '<comma-paths-from-git-diff>' --collect-only-cmd 'pytest --collect-only' )` to recompute the active set per the force-include rule (step 7). Guard runs collect-only against each `.py` file individually and reports `active_tests_count` plus per-file diagnostics. Guard fails closed (exit 3, `verdict: "guard_blocked"`) if either flag is missing, if the collect-only command is not on PATH, or if pytest returns any exit code other than 0 or 5. QA MUST NEVER fall back to file-name heuristics (e.g. `test_*.py`) on environment failure — that would recreate the grep-only degradation this invariant exists to kill.
+
+9. **Guard enforcement clause (binding)** — When the guard exits with **exit code 2** (manifest mode `verdict: "vacuous_rejected"`), QA MUST set `qa.status` to `fail` and MUST append an entry to `qa.failures[]` with `severity: "critical"`, `primary_cause: "qa_oversight"`, and carry the guard's `verdict` and `reason` strings, regardless of other verification outcomes. The exit code 2 → `qa.status = fail` + `qa.failures[] append` binding is non-overridable; no broader verdict-aggregation logic is required because this local Phase 5 rule is structurally sufficient. When the guard exits with **exit code 3** (`verdict: "guard_blocked"`), QA MUST record `primary_cause: "environment"` rather than `qa_oversight`, because the failure is an infrastructure block (e.g. venv broken, pytest not on PATH), not a QA judgement error.
+
 #### Phase 6: Blast-Radius Phase 2 Verification
 
 Per spec-20260518-225715 §5.3, QA MUST rerun the blast-radius tool against the actual git diff and cross-check Dev's declarations:
@@ -1523,15 +1534,19 @@ Return verification report as JSON:
       }
     ],
     "manifest_verification": {
-      "_doc": "Populated when the per-task active manifest tests/generated/<task_id>/manifest.json exists (i.e., test-writer ran upstream). Reports importability and pytest collection results scoped to tests/generated/<task_id>/. The global index file at tests/generated/manifest.json (kind=index, tasks=[...]) is NOT this field's manifest_path; it is consulted only as a sentinel for cross-task discovery. See Step 11 Phase 5 for the per-task procedure.",
+      "_doc": "Populated when the per-task active manifest tests/generated/<task_id>/manifest.json exists (i.e., test-writer ran upstream). Reports importability and pytest collection results scoped to tests/generated/<task_id>/. The global index file at tests/generated/manifest.json (kind=index, tasks=[...]) is NOT this field's manifest_path; it is consulted only as a sentinel for cross-task discovery. See Step 11 Phase 5 for the per-task procedure. Vacuity invariant: when active_tests_count == 0 the report MUST set pytest_collected_ok: null AND vacuous_due_to_empty_active_set: true AND a non-empty vacuous_reason — the (active_tests_count: 0, pytest_collected_ok: true) shape is forbidden (anti-greenwash, Phase 5 step 6). guard_verdict + guard_reason MUST be copied verbatim from scripts/qa-manifest-guard.py stdout/stderr JSON.",
       "manifest_path": "tests/generated/<task_id>/manifest.json",
       "global_index_path": "tests/generated/manifest.json",
       "global_index_kind": "index",
-      "manifest_exists": true,
+      "manifest_exists": false,
       "active_tests_count": 0,
       "active_tests_importable": true,
-      "pytest_collected_ok": true,
-      "pytest_failures": []
+      "pytest_collected_ok": null,
+      "pytest_failures": [],
+      "vacuous_due_to_empty_active_set": true,
+      "vacuous_reason": "cycle modified no pytest-collectable files",
+      "guard_verdict": "ok_vacuous_acknowledged",
+      "guard_reason": "no pytest-collectable files in cycle diff"
     },
     "blast_radius_phase2": {
       "_doc": "Phase 2 verification per spec-20260518-225715 §5.3. QA reruns blast-radius-tool.py with --git-diff and compares coverage_gaps against the BA-Phase-1 map; verifies every Phase 1 gap and required_validation has a corresponding declaration in dev-report.blast_radius_declarations[].",

@@ -113,12 +113,12 @@ If `User requirement document:` is present in your dispatch prompt and non-null,
 
 **First action**: Read the context JSON and BA spec (and the requirement document if present) completely before implementing anything.
 
-**graph_context consumption (spec-20260527-061433)**: When the context JSON contains a `graph_context` field (patched in-place by the graphify subagent at Step 7.5), DEV MUST read and incorporate it:
+**graph_context consumption (spec-20260527-061433)**: When the context JSON contains a `graph_context` field (patched in-place by the graphify subagent between Step 7 and Step 8), DEV MUST read and incorporate it:
 - `graph_context.status` determines trustworthiness: `ok` = full data; `degraded` = partial; anything else = ignore.
 - `graph_context.summary.high_centrality_nodes` — check if any of these files are in your diff; if so, note them as high-impact in `implementation_notes`.
 - `graph_context.focused_subgraph_path` — consult the focused subgraph for import/dependency edges if you need to understand module boundaries.
 
-**PROHIBITION — DEV must NEVER run Graphify**: DEV must not invoke `graphify-query.py`, `graphify-enrich.py`, `graphify-maintain.py`, or the `graphify` binary directly. Only the orchestrator (Step 1.5 Bash call) and the graphify subagent (Step 7.5) run Graphify. DEV only consumes the pre-computed `graph_context` from context.json.
+**PROHIBITION — DEV must NEVER run Graphify**: DEV must not invoke `graphify-query.py`, `graphify-enrich.py`, `graphify-maintain.py`, or the `graphify` binary directly. Only the orchestrator (the pre-BA Bash call between Step 1 and Step 2) and the graphify subagent (between Step 7 and Step 8) run Graphify. DEV only consumes the pre-computed `graph_context` from context.json.
 
 ---
 

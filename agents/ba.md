@@ -637,13 +637,13 @@ Extract from requirement text:
 
 ### Reference Resolution (MANDATORY before solution analysis)
 
-When the requirement text contains implicit reference words — 之前, 已有, 现有, 原来的, previous, existing, original — BA MUST complete the following 6-step resolution procedure BEFORE entering solution analysis. Requirement ambiguity is **clarification-blocking**: BA returns `status: needs_clarification` if it cannot resolve unambiguously with evidence.
+When the requirement text contains implicit reference words (Chinese equivalents: see docs/dev/ticket-20260527-132200.md), or the English equivalents: previous, existing, original — BA MUST complete the following 6-step resolution procedure BEFORE entering solution analysis. Requirement ambiguity is **clarification-blocking**: BA returns `status: needs_clarification` if it cannot resolve unambiguously with evidence.
 
 Graphify tool failure (status=degraded/unavailable/skipped in pre_query.json) is **advisory**: BA proceeds without it.
 
 **Procedure**:
 
-1. **Detect** — scan requirement text for implicit reference trigger words: 之前, 已有, 现有, 原来的, previous, existing, original.
+1. **Detect** — scan requirement text for implicit reference trigger words (Chinese equivalents: see docs/dev/ticket-20260527-132200.md), or the English equivalents: previous, existing, original.
 2. **Enumerate candidates** — list every concrete code element the trigger word could refer to (file paths, function names, class names, config keys).
 3. **Check structural context** — if `pre_query.json` was provided in context and `status=ok` or `status=degraded`, consult `structural_context.candidate_anchors`. Each anchor entry is a candidate interpretation.
 4. **Gather evidence** — for each candidate, grep/read to verify it exists and matches the description.
