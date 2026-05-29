@@ -1,0 +1,104 @@
+{
+  "task_id": "dev-20260529-092512",
+  "mode": "ba-revision",
+  "pass": 2,
+  "timestamp": "2026-05-29T09:40:00Z",
+  "responds_to": "docs/dev/ba-qa-report-dev-20260529-092512.json (QA ba-validation pass1, verdict=fail)",
+  "artifacts_revised": [
+    "docs/dev/ticket-dev-20260529-092512.md",
+    "docs/dev/context-dev-20260529-092512.json"
+  ],
+  "scope_of_revision": "Item A ONLY. Items F, C, B and the F->C->B->A ordering rationale are UNCHANGED and approved as-is per QA pass1.",
+  "qa_findings_addressed": [
+    {
+      "qa_finding": "Class-1 classification criterion is wrong for most listed git rules (reset --hard, push --force/--delete, checkout -- ., restore --source, revert <hash> are argument-signal, not verb-signal).",
+      "severity": "critical",
+      "resolution": "FIXED. The class boundary is redrawn on match-key LOCATION against the verified stripper semantics (bash_context_strip.py:305-330): a rule is convertible ONLY if its match result is identical raw-vs-stripped. All five named git rules (and the rest: update-ref/branch -D :1421, cherry-pick/rebase :1441, stash push/save :1350-1361) are moved to the explicit DO-NOT-CONVERT set because their danger token is a quotable ARGUMENT of the non-DANGER command word 'git'."
+    },
+    {
+      "qa_finding": "Concrete false-negative introduced: git reset \"--hard\" executes a real hard reset but strips to 'git reset ', silently disabling the block.",
+      "severity": "critical",
+      "resolution": "FIXED + DOCUMENTED. The quoted-argument false-negative mechanism is now the lead Edge Case in the ticket with a worked before/after stripped-view proof (RAW 'git reset \"--hard\"' matches and blocks; STRIPPED 'git reset ' does not match -> the introduced bug). The reset rule is no longer a conversion target."
+    },
+    {
+      "qa_finding": "Prescribed DANGER_COMMANDS remediation ('add the command word, i.e. git') is self-defeating: it un-strips ALL git args globally, re-introducing the quoted false positives and perturbing the shipped rm/mv interaction.",
+      "severity": "critical",
+      "resolution": "FIXED. The 'add to DANGER_COMMANDS' step is explicitly RETRACTED in both ticket and context. Net DANGER_COMMANDS change this cycle is NONE. The two convertible rules need no entry: dd|mkfs|fdisk|shred is command-word-anchored (nothing to expose), and kill is already a DANGER command. bash_context_strip.py:26 stays {killall,pkill,kill,rm,mv}; the file edit is comment-only (:5)."
+    },
+    {
+      "qa_finding": "Conflation/omission of the second kill rule at :1311 (kill <PID>, argument-signal) from the Class-1/Class-2 sweep.",
+      "severity": "major",
+      "resolution": "FIXED. :1311 is ruled on explicitly and placed IN the convertible set, with the principled reason: it is argument-anchored but kill is already in DANGER_COMMANDS, so the stripper UNQUOTES its args (kill \"1234\" -> kill 1234) and the match is identical raw-vs-stripped. This mirrors the already-stripped kill -sig rule at :1119. It is one of the EXACTLY two converted rules."
+    },
+    {
+      "qa_finding": "Genuinely safe Class-1 candidates are the verb-WORD-anchored subset; the AC could not distinguish a safe conversion from an unsafe one.",
+      "severity": "major",
+      "resolution": "FIXED. AC-A1 now names the EXACTLY two convertible rules and asserts that NO git rule, NO docker/systemctl rule, and NO path/value rule reads COMMAND_CONTEXT_STRIPPED. Additionally, QA pass1's example list of 'genuinely safe' docker/systemctl rules was itself over-inclusive by its own stated criterion: docker compose down|restart|stop, docker ... happy, docker system prune -a, systemctl ... docker all have their verb/subcommand/target in a quotable ARGUMENT position of the non-DANGER command words docker/systemctl (docker compose \"down\" is a real destructive down but strips to 'docker compose '). They are therefore moved to DO-NOT-CONVERT. The only command-word-anchored rule is dd|mkfs|fdisk|shred."
+    },
+    {
+      "qa_finding": "AC-A3 used echo \"git reset --hard\" as the canonical should-not-block example, which is precisely the case that PROVES the false negative for a converted reset rule.",
+      "severity": "minor",
+      "resolution": "FIXED. AC-A2/AC-A3 now use rule-specific payloads for the two actually-converted rules: dd (block: 'dd if=/dev/zero of=/dev/sda'; no-block: 'echo \"dd ...\"') and kill (block: 'kill 1234' AND 'kill \"1234\"'; no-block: 'echo \"kill 1234\"'). A NOTE explicitly states echo \"git reset --hard\" is NOT used because the git reset rule is not converted (it stays raw and correctly continues to match its quoted-string mention as pre-existing behavior)."
+    },
+    {
+      "qa_finding": "AC-A1 was not safely measurable (textual COMMAND_CONTEXT_STRIPPED reference would pass for an unsafe conversion that silently disables a block).",
+      "severity": "from acceptance_criteria_assessment",
+      "resolution": "FIXED. AC-A1 now states it is satisfied ONLY when AC-A2 AND AC-A3 both pass for both converted rules with rule-specific payloads; the textual reference alone is declared insufficient evidence."
+    }
+  ],
+  "corrected_classification": {
+    "convertible_safe_to_strip": [
+      {"rule": "dd|mkfs|fdisk|shred", "line": 1045, "why_safe": "command-word-anchored; the command word token is preserved verbatim in the stripped view, so match is identical raw-vs-stripped; conversion removes false positives like echo \"dd if=...\" with zero false-negative risk", "danger_commands_entry_needed": false},
+      {"rule": "kill <PID>", "line": 1311, "why_safe": "argument-anchored (kill\\s+[0-9]) BUT kill is already in DANGER_COMMANDS so the stripper exposes its args (kill \"1234\" -> kill 1234); match identical raw-vs-stripped; mirrors the already-stripped kill -sig rule at :1119", "danger_commands_entry_needed": false}
+    ],
+    "do_not_convert_argument_anchored_git": [
+      {"rule": "git reset --hard", "line": 1405, "danger_token": "--hard (argument)"},
+      {"rule": "git push --force/-f/--force-with-lease/--delete/-d/--mirror/+ref/:branch", "line": 1414, "danger_token": "flag/refspec (argument)"},
+      {"rule": "git checkout <ref> -- . / -- * / -- dir/", "line": 1372, "danger_token": "wide-path -- . (argument)"},
+      {"rule": "git restore --source ... -- . / -- * / -- dir/", "line": 1389, "danger_token": "--source flag + wide-path (argument)"},
+      {"rule": "git revert <hash>/<ref>^/<ref>~N/<ref>@{N}", "line": 1461, "danger_token": "ref-modifier (argument)"},
+      {"rule": "git update-ref / branch -D/-d/--delete/--force/--move / symbolic-ref ... HEAD refs/", "line": 1421, "danger_token": "subcommand/flag/ref (argument)"},
+      {"rule": "git revert|cherry-pick|rebase (subagent-history block)", "line": 1441, "danger_token": "subcommand word after git (argument)"},
+      {"rule": "git stash push/save/create/store/-u/--all + bare git stash", "line": 1350, "danger_token": "stash + push/save subcommand (argument)"}
+    ],
+    "do_not_convert_argument_anchored_docker_systemctl": [
+      {"rule": "docker compose down|restart|stop", "line": 1076, "danger_token": "compose/down subcommand (argument of non-DANGER 'docker')"},
+      {"rule": "docker stop|restart|rm|kill ... happy", "line": 1066, "danger_token": "subcommand + happy target (argument)"},
+      {"rule": "docker system prune -a", "line": 1083, "danger_token": "system/prune/-a (argument)"},
+      {"rule": "systemctl restart|stop|disable docker", "line": 1052, "danger_token": "verb + docker target (argument of non-DANGER 'systemctl')"},
+      {"rule": "systemctl <verb> non-happy", "line": 1129, "danger_token": "verb + target (argument)"}
+    ],
+    "do_not_convert_path_value_unchanged_from_pass1": [
+      ".env|credentials|secret|password redirect (:1031,1037)",
+      "/etc/docker/daemon.json writers (:1059)",
+      "/root/happy/packages/ source-contamination (:1162-1165)",
+      "Dockerfile.webapp / HAPPY_SERVER_URL= build rules (:1175-1208)",
+      "DB-mutation (:1226,1232)",
+      "session-API curl (:1270,1278)",
+      "sentinel-filename (:669-670)",
+      "session_dirs.txt (:1007)",
+      "daemon-restart-flag (:624-625)",
+      "/usr/bin/happy symlink/exec (:1301,1321,1330)",
+      "happy-daemon systemctl (:564-586)"
+    ]
+  },
+  "net_scope_delta_vs_pass1": "pass1 estimated ~12 convertible 'verb' rules + DANGER_COMMANDS additions. pass2 converts EXACTLY 2 rules (dd|mkfs|fdisk|shred :1045, kill <PID> :1311) and adds ZERO DANGER_COMMANDS entries. The git and docker/systemctl rules move from convertible to forbidden. Item A's blast radius shrinks substantially; the high-risk false-negative surface is eliminated.",
+  "evidence_basis": {
+    "stripper_semantics": "bash_context_strip.py:305-330 (_process_segment) + :265-284 (_strip_double_content) + :26 (DANGER_COMMANDS) — read this session",
+    "rules_enumerated": "pretool-bash-safety.sh:1045,1052,1066,1076,1083,1110,1119,1129,1143,1154,1301,1311,1321,1330,1350-1487 — read this session",
+    "reference_tier": "tier_2_verified (all cited file:line read directly this session)"
+  },
+  "items_unchanged": {
+    "F": "approved as-is (commit.md:221 stale label); no change",
+    "C": "approved as-is (verify-only, 3-site marker parity, patch-on-gap); no change",
+    "B": "approved as-is (verify-only, candidate-key parity + CF-1 overwrite-only invariant, patch-on-gap); no change",
+    "ordering": "F->C->B->A approved as-is; no change"
+  },
+  "ready_for_dev": true,
+  "codex_consult": {
+    "invoked": false,
+    "status": "not_requested",
+    "feedback_summary": null,
+    "feedback_incorporated": null
+  }
+}

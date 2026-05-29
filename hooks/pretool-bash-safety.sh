@@ -1041,12 +1041,9 @@ if echo "$COMMAND" | grep -qE '(\.env|credentials|secret|password)\S*\s*(>|>>)';
   exit 2
 fi
 
-# Block: destructive disk operations
-if echo "$COMMAND" | grep -qE '^\s*(dd |mkfs|fdisk|shred )'; then
-  echo "BLOCKED: Destructive disk operation detected" >&2
-  echo "Command: $COMMAND" >&2
-  exit 2
-fi
+# Block: destructive disk operations — see the context-stripped variant below
+# (moved past the COMMAND_CONTEXT_STRIPPED setup so the dd|mkfs|fdisk|shred verb
+# rule can read the stripped view; Item A, dev-20260529-092512).
 
 # Block: Docker daemon operations
 if echo "$COMMAND" | grep -qE 'systemctl\s+(restart|stop|disable)\s+docker'; then
@@ -1086,7 +1083,7 @@ if echo "$COMMAND" | grep -qE 'docker\s+system\s+prune\s+-a'; then
   exit 2
 fi
 
-# Context-strip: remove string-content false positives for the four generic
+# Context-strip: remove string-content false positives for the generic
 # danger-token rules below.  This is intentionally a bounded classifier, NOT a
 # full shell parser.  It runs from a file path (not `python -`) and is wrapped by
 # timeout + virtual-memory limits; on any failure the raw command is used, so the
@@ -1104,6 +1101,15 @@ if [ -r "$HOOKS_DIR_CTX/lib/bash_context_strip.py" ]; then
     COMMAND_CONTEXT_STRIPPED="$_ctx_out"
   fi
   unset _ctx_out _ctx_status
+fi
+
+# Block: destructive disk operations (command-word-anchored on the stripped view)
+# The verb is preserved verbatim by the stripper, so echo "dd if=..." erases to a
+# no-match while a real dd/mkfs/fdisk/shred command word still fires (Item A).
+if echo "$COMMAND_CONTEXT_STRIPPED" | grep -qE '^\s*(dd |mkfs|fdisk|shred )'; then
+  echo "BLOCKED: Destructive disk operation detected" >&2
+  echo "Command: $COMMAND" >&2
+  exit 2
 fi
 
 # Block: generic process killers targeting services
@@ -1308,7 +1314,10 @@ fi
 
 # Block: kill on PIDs that aren't verified dev processes
 # (prevents accidentally killing production session processes)
-if echo "$COMMAND" | grep -qE '(^|[;&|]\s*)kill\s+[0-9]'; then
+# Uses COMMAND_CONTEXT_STRIPPED: kill is already in DANGER_COMMANDS, so its args are
+# EXPOSED (unquoted) by the stripper — kill "1234" -> kill 1234 still matches, while
+# echo "kill 1234" -> echo "" no longer false-positives (Item A, mirrors the kill -sig rule).
+if echo "$COMMAND_CONTEXT_STRIPPED" | grep -qE '(^|[;&|]\s*)kill\s+[0-9]'; then
   echo "BLOCKED: kill with PIDs is FORBIDDEN — verify target is dev before killing" >&2
   echo "Command: $COMMAND" >&2
   echo "REASON: On 2026-04-04, killing dev session processes cascaded to production." >&2

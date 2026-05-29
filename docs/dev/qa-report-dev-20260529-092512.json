@@ -1,0 +1,203 @@
+{
+  "request_id": "dev-20260529-092512",
+  "task_id": "dev-20260529-092512",
+  "timestamp": "2026-05-29T13:10:00Z",
+  "qa": {
+    "status": "pass",
+    "user_verbatim_complaint": "Backlog batch: (F) commit.md:221 stale 'literal-task-id glob' label; (C) verify step-7 spec-continuation marker parity; (B) verify Write-sentinel three-candidate path + CF-1 overwrite-only invariant; (A) extend executable-context stripping to the remaining convertible danger-verb rules in pretool-bash-safety.sh.",
+    "verified_against_complaint": true,
+    "passed_user_requirement": true,
+    "ac_alignment": true,
+    "overall_assessment": "All four items verified PASS with empirical evidence. F is a clean 1-line label fix; C and B are correctly no-ops (zero files modified, parity independently re-confirmed at the cited file:lines); A converts EXACTLY the two safe rules (dd|mkfs|fdisk|shred command-word-anchored at :1109, kill <PID> at :1320, kill being already in DANGER_COMMANDS) to read COMMAND_CONTEXT_STRIPPED while leaving every git/docker/systemctl rule raw and DANGER_COMMANDS unchanged. The hook was driven independently (not just via the dev-supplied pytest) for all AC-A2/AC-A3 payloads and the full suite re-run (57/57). One pre-existing, out-of-scope, security-relevant observation recorded (git reset with a quoted flag is not blocked by the unchanged raw rule) — it does NOT block this cycle per AC-A3's explicit scope note.",
+    "graph_verification": {
+      "graphify_ran": false,
+      "graph_context_status": "unavailable",
+      "focused_subgraph_present": false,
+      "graph_report_present": false,
+      "verification_note": "No pre_query.json / graph_context provided in dispatch; graphify gates waived (advisory-only)."
+    },
+    "items_verified": [
+      {
+        "item": "F",
+        "file": "commands/commit.md",
+        "verdict": "pass",
+        "evidence": "Line 221 reads '(3) Mtime window + machine-readable marker predicate (final stage).'; grep for 'literal-task-id glob' across the whole file returns zero matches; the body at :222 confirms `grep -lF \"<!-- spec-continuation-of: ${TASK_ID} -->\"` is the ONLY content predicate. git diff vs baseline f551a24 shows a clean 1-line replacement."
+      },
+      {
+        "item": "C",
+        "file": "commands/spec-update.md / commands/commit.md / scripts/step7-spec-update.py",
+        "verdict": "pass",
+        "evidence": "Producer spec-update.md:54-61 instructs writing '<!-- spec-continuation-of: <resolved-task-id> -->' once per (task-id,file). Consumer-prose commit.md:222 greps the marker as the sole content predicate. Consumer-script step7-spec-update.py:134 defines `marker = f\"<!-- spec-continuation-of: {task_id} -->\"`; :148 `if marker in content` is the only content predicate in _stage3_mtime_glob. Independent grep of all `task_id` uses in step7-spec-update.py confirms every other use is filename construction (stages 1-2), CLI arg, or trace string — NO literal-task-id content scan survives. Correct no-op (files_modified empty)."
+      },
+      {
+        "item": "B",
+        "file": "hooks/pretool-write-guard.sh / hooks/posttool-allowlist-consume.py / hooks/lib/allowlist.py",
+        "verdict": "pass",
+        "evidence": "Pretool write-guard.sh:79-85 enumerates candidates `[writer_key=(env_task_id else session_id), data_task_id, session_id]` de-duped preserving priority. Posttool consume.py:230-238 enumerates `[writer_primary=(env_task_id else session_id), data_task_id, session_id]` de-duped identically. Both call match_sentinel_grant_for_write(candidate, session_id, target) (allowlist.py:523) with identical arg order — byte-identical derivation/order/dedup. CF-1 suppression at write-guard.sh:114 is `[ \"$_WG_SENTINEL_RESULT\" = \"valid_no_match\" ] && [ -f \"$FILE_PATH\" ]` — fires ONLY on overwrite of an existing file; new-file creation falls through to exit 0. Correct no-op (files_modified empty)."
+      },
+      {
+        "item": "A",
+        "file": "hooks/pretool-bash-safety.sh / hooks/lib/bash_context_strip.py / hooks/tests/test_bash_safety_context_rules.py",
+        "verdict": "pass",
+        "evidence": "EXACTLY two rules converted to COMMAND_CONTEXT_STRIPPED: dd|mkfs|fdisk|shred at :1109 (relocated past the strip-setup at :1091-1104 because the variable is undefined at the original :1044 — relocation is correct and necessary; placeholder comment left at :1044-1046) and kill <PID> at :1320. The 6 stripped-view rules are :1109,1116,1125,1149,1160,1320 (2 new + 4 original killall/pkill/kill-sig/rm-mv-workflow/rm). All git rules raw $COMMAND (reset :1414, push :1423, checkout :1381, restore :1400, revert :1481, stash :1360/:1370). All docker/systemctl rules raw $COMMAND (systemctl docker :1049, docker happy :1063, docker compose :1073, docker system prune :1080). bash_context_strip.py:26 DANGER_COMMANDS = frozenset({killall,pkill,kill,rm,mv}) — UNCHANGED (not in diff). Fail-closed preserved (:1091 sets STRIPPED=$COMMAND, overwritten only on ctx_status==0). diff to strip.py is comment-only ('four'->'the')."
+      }
+    ],
+    "success_criteria_results": [
+      {
+        "requirement_id": "AC-F1",
+        "source_phrase": "Label at :221 no longer reads 'literal-task-id glob'; describes marker-grep predicate",
+        "criterion": "commit.md:221 stale label corrected to machine-readable marker predicate",
+        "verification_method": "Read commit.md:215-229; grep 'literal-task-id glob' (0 matches); git diff vs baseline",
+        "status": "pass",
+        "result": "pass",
+        "details": "Line 221 = 'Mtime window + machine-readable marker predicate (final stage).'; substring absent file-wide; consistent with body :222.",
+        "evidence": "commit.md:221-222"
+      },
+      {
+        "requirement_id": "AC-C1",
+        "source_phrase": "<!-- spec-continuation-of: <task-id> --> is the sole content predicate at all three sites",
+        "criterion": "marker parity verified end-to-end",
+        "verification_method": "Read all 3 sites; confirmed marker is sole predicate",
+        "status": "pass",
+        "result": "pass",
+        "details": "spec-update.md:54-61 (producer), commit.md:222 (consumer-prose), step7-spec-update.py:134/148 (consumer-script) all use the marker as sole content predicate.",
+        "evidence": "spec-update.md:54-61, commit.md:222, step7-spec-update.py:134-152"
+      },
+      {
+        "requirement_id": "AC-C2",
+        "source_phrase": "no literal-task-id content grep survives anywhere in the step-7 path",
+        "criterion": "no literal-task-id fallback grep",
+        "verification_method": "Independent grep of every task_id occurrence in step7-spec-update.py",
+        "status": "pass",
+        "result": "pass",
+        "details": "All task_id uses are filename construction / CLI arg / trace strings; stage-3 content predicate is exclusively `if marker in content` (:148). No literal-task-id content scan exists.",
+        "evidence": "step7-spec-update.py grep of task_id (lines 82,83,105,106,124,125,134,168,182,200,210,224,228,229,233) — none is a content predicate except :134/:148 marker"
+      },
+      {
+        "requirement_id": "AC-B1",
+        "source_phrase": "both enumerate [writer_key, data.task_id, session_id] de-duped in identical order; CF-1 fires only when [ -f \"$FILE_PATH\" ]",
+        "criterion": "write-sentinel three-candidate parity + CF-1 invariant",
+        "verification_method": "Side-by-side read of write-guard.sh:79-85 and consume.py:230-238; CF-1 gate at :114",
+        "status": "pass",
+        "result": "pass",
+        "details": "Candidate derivation/order/dedup byte-identical pretool<->posttool. CF-1 suppression gated on -f (overwrite-only). matcher allowlist.py:523 present.",
+        "evidence": "write-guard.sh:79-85,114; consume.py:230-238; allowlist.py:523"
+      },
+      {
+        "requirement_id": "AC-A1",
+        "source_phrase": "EXACTLY two previously-raw rules converted; no git/docker/systemctl rule reads stripped; DANGER_COMMANDS unchanged",
+        "criterion": "only the two safe rules converted; everything else untouched; no DANGER_COMMANDS change",
+        "verification_method": "grep COMMAND_CONTEXT_STRIPPED occurrences; git diff vs baseline; read git/docker/systemctl rules; read DANGER_COMMANDS line",
+        "status": "pass",
+        "result": "pass",
+        "details": "dd :1109 + kill-PID :1320 converted; 4 original stripped rules unchanged; all git (reset/push/checkout/restore/revert/stash) and docker/systemctl rules raw; DANGER_COMMANDS frozenset unchanged (not in diff).",
+        "evidence": "bash-safety.sh:1109,1320 (stripped); :1414,1423,1381,1400,1481,1360,1370 (git raw); :1049,1063,1073,1080 (docker/systemctl raw); bash_context_strip.py:26"
+      },
+      {
+        "requirement_id": "AC-A2",
+        "source_phrase": "dd if=/dev/zero of=/dev/sda -> exit 2; kill 1234 and kill \"1234\" -> exit 2",
+        "criterion": "per-rule should-block test (rule-specific payloads)",
+        "verification_method": "Independently drove the real hook via python subprocess (not just dev pytest)",
+        "status": "pass",
+        "result": "pass",
+        "details": "dd/mkfs/fdisk/shred real commands -> exit 2; kill 1234 -> exit 2; kill \"1234\" (quoted arg exposed because kill in DANGER_COMMANDS) -> exit 2. All confirmed by independent drive.",
+        "evidence": "QA independent hook drive: dd=2, mkfs=2, fdisk=2, shred=2, 'kill 1234'=2, 'kill \"1234\"'=2"
+      },
+      {
+        "requirement_id": "AC-A3",
+        "source_phrase": "echo \"dd if=...\" -> exit 0; echo \"kill 1234\" -> exit 0",
+        "criterion": "per-rule should-not-block test (rule-specific payloads)",
+        "verification_method": "Independently drove the real hook via python subprocess",
+        "status": "pass",
+        "result": "pass",
+        "details": "echo \"dd if=...\" -> exit 0; echo \"kill 1234\" -> exit 0; '# dd if=...' comment form -> exit 0. Context-stripping correctly suppresses quoted/echoed/comment mentions.",
+        "evidence": "QA independent hook drive: echo-dd=0, echo-kill=0, comment-dd=0"
+      },
+      {
+        "requirement_id": "AC-A4",
+        "source_phrase": "neither comment hardcodes 'four'; test suite runs",
+        "criterion": "stale count comments updated + test suite",
+        "verification_method": "grep 'four' in both files; ran pytest on new + existing context suites",
+        "status": "pass",
+        "result": "pass",
+        "details": "bash-safety.sh:1089 and strip.py:5 are now count-free ('the generic danger-token rules'); remaining 'four' hits in bash-safety.sh (130,440,480,1395) are unrelated (allow short-circuit / relocation / terminal cases / --source syntaxes). pytest: 57 passed (8 new + 49 existing context tests), 0 failed.",
+        "evidence": "pytest hooks/tests/test_bash_safety_context_rules.py hooks/tests/test_bash_safety_context.py = 57 passed in 2.05s"
+      }
+    ],
+    "test_execution": {
+      "command": "python3 -m pytest hooks/tests/test_bash_safety_context_rules.py hooks/tests/test_bash_safety_context.py -v",
+      "passed": 57,
+      "failed": 0,
+      "errors": 0,
+      "breakdown": "8 new (test_bash_safety_context_rules.py: 4 dd/mkfs + 3 kill + 1 git-reset-raw regression guard) + 49 existing (test_bash_safety_context.py)",
+      "independent_hook_drive": "QA also drove the real hook independently via python subprocess for all AC-A2/AC-A3 payloads (not relying solely on dev-supplied pytest); 10 of 11 QA-authored cases matched expectation; the 1 mismatch (git reset \"--hard\" quoted) is a pre-existing out-of-scope raw-rule property, see out_of_scope_observations."
+    },
+    "provenance_check": {
+      "baseline_head_sha": "f551a24cfe49b708cc98ff91cb2abd6334fe3c13",
+      "result": "clean",
+      "details": "git diff vs baseline shows commands/commit.md (F), hooks/pretool-bash-safety.sh + hooks/lib/bash_context_strip.py (A) as cycle changes; hooks/tests/test_bash_safety_context_rules.py is untracked (matches dev.files_created). All other diffed paths (agents/*, scripts/graphify-*, docs/dev/*, INDEX.md files, logs) were present in baseline_dirty_snapshot. C and B reported zero modified files — confirmed (no C/B target appears as newly-changed beyond baseline-dirty). No provenance or under-reporting violation."
+    },
+    "band_aid_detection": {
+      "scanned": true,
+      "patterns_found": [],
+      "details": "No threshold-lowering, error-swallowing, severity-downgrade, validation-skip, or check-removal. The dd-rule relocation MOVES a check to where its variable is defined (strengthens correctness); converting to the stripped view removes FALSE POSITIVES only and provably introduces no false negative (command-word-anchored / DANGER-command arg exposure). Fail-closed raw fallback intact."
+    },
+    "standards_compliance": {
+      "checked": true,
+      "role_table_source": "absent (infra/hook repo, no UI role table)",
+      "violations": []
+    },
+    "out_of_scope_observations": [
+      {
+        "ts": "2026-05-29T13:10:00Z",
+        "file": "hooks/pretool-bash-safety.sh",
+        "line": 1414,
+        "observation": "The raw git-reset rule regex requires `[[:space:]]+` immediately before `--hard`. A command of the form `git reset \"--hard\" HEAD~1` (flag wrapped in literal quotes in the command text) is NOT blocked (exit 0), because the `\"` before `--hard` is not whitespace. This is a PRE-EXISTING property of the raw rule, UNCHANGED this cycle (git diff vs baseline shows no edit to the reset rule), and explicitly OUT OF SCOPE per AC-A3's NOTE (the git reset rule is not converted and its quoted-string behavior is pre-existing raw behavior). It is recorded here as a security-relevant hardening candidate for a future cycle, NOT a defect of this cycle. NOTE: the spec's Edge-Cases worked example (ticket :122) describes the hypothetical bug IF the reset rule read the STRIPPED view (it does not), which is the rationale for keeping it raw — it does not claim the current raw rule blocks the quoted form.",
+        "in_user_path": false,
+        "security_relevant": true
+      },
+      {
+        "ts": "2026-05-29T13:10:00Z",
+        "file": "hooks/tests/test_allowlist_consolidation.py",
+        "line": 59,
+        "observation": "Pre-existing failure test_allowlist_consolidation.py::test_regex_match (TypeError: signal.alarm(None) in the legacy regex-grant path at allowlist.py:59) — present on baseline f551a24, in the legacy regex matcher NOT the Write-sentinel three-candidate chain (Item B). Reported by dev-B as out-of-scope. Flagged for a separate ticket.",
+        "in_user_path": false,
+        "security_relevant": false
+      },
+      {
+        "ts": "2026-05-29T13:10:00Z",
+        "file": "hooks/tests/test_cp_checkin.py",
+        "line": 0,
+        "observation": "Pre-existing broader-suite errors (test_cp_checkin.py: missing hooks/commit.sh fixture + missing 'subtests' pytest plugin) reported by dev-A as unrelated to Item A. Not part of the context-strip suites; out of scope.",
+        "in_user_path": false,
+        "security_relevant": false
+      }
+    ],
+    "findings": [],
+    "all_findings": [],
+    "failures": [],
+    "summary": {
+      "critical_issues": 0,
+      "major_issues": 0,
+      "minor_issues": 0,
+      "total_findings": 0,
+      "release_recommendation": "approve"
+    }
+  },
+  "self_verification": {
+    "claims_total": 16,
+    "claims_with_evidence": 16,
+    "claims_superficial": 0,
+    "superficial_details": [],
+    "confidence": "high",
+    "notes": "Every AC verdict is backed by either a direct file:line read, a git diff vs baseline, an independent grep, or an independent drive of the real hook (plus a re-run of the 57-test pytest suite). No claim rests on code-reading-only assertion or on trusting the dev report's self-reported counts — the pytest run and the hook-drive were executed by QA."
+  },
+  "codex_consult": {
+    "invoked": false,
+    "status": "not_requested",
+    "feedback_summary": null,
+    "feedback_incorporated": null
+  },
+  "iteration_needed": false,
+  "refined_context": null
+}

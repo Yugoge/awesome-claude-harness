@@ -2,7 +2,7 @@
 """Bounded executable-context view for pretool-bash-safety.sh.
 
 This is deliberately NOT a full shell parser.  It only computes a conservative
-view used by four generic danger-token rules in pretool-bash-safety.sh.
+view used by the generic danger-token rules in pretool-bash-safety.sh.
 
 Safety invariants for live hook use:
 - bounded input size; oversized input returns raw command (fail-closed)
