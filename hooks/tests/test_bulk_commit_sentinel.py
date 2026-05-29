@@ -186,7 +186,8 @@ class TestWriteBulkCommitSentinelScript(unittest.TestCase):
             self.assertGreater(expires, datetime.now(timezone.utc))
 
     def test_fails_without_session_id(self):
-        env = {k: v for k, v in os.environ.items() if k != "CLAUDE_SESSION_ID"}
+        env = {k: v for k, v in os.environ.items()
+               if k not in ("CLAUDE_SESSION_ID", "CLAUDE_CODE_SESSION_ID")}
         with patch.dict(os.environ, env, clear=True):
             with self.assertRaises(SystemExit) as ctx:
                 _writer.main([])
