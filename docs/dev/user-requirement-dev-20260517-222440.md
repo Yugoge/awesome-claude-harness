@@ -1,1 +1,0 @@
-/dev 阅读我最近的allow和do开发的dev文档，告诉我我不是已经彻底允许allow允许任何指令了吗？为什么仍然出现： The /allow bypass cleared the orchestrator gate but pretool-git-privilege-guard.py is a separate hook that independently blocks git commit from any agent/Claude context. It can't be bypassed from inside the session.

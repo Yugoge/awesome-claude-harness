@@ -66,7 +66,6 @@ sessions/
 playwright-storage-state.json
 .todos.json
 docs/*
-!docs/dev/
 # PERMITTED DELIVERY PATH: docs/reference/ holds in-repo documentation deliverables (arch-1/D3, spec-20260520-221059)
 !docs/reference/
 
@@ -100,3 +99,6 @@ docs/codex/
 
 # Graphify knowledge graph transient output (spec-20260527-061433)
 graphify-out/
+
+# dev workflow artifacts — never tracked (global policy)
+docs/dev/

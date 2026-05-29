@@ -1,1 +1,0 @@
-/redev 真正影响你需求的（2 项，都跟"harness 别再骗你"直接相关）： 1. QA `manifest_verification` 用空 active 集刷绿 —— 这是你反复警告过的"做了个寂寞"模式的结构性漏洞。没有守卫，下一次 QA 同样能这么干。本次只修了这一次的报告，没修 agent 行为。下一周期加守卫（active_tests_count==0 时禁止 pytest_collected_ok:true，或者强制把 cycle-diff 文件加入 active 集）。 2. venv 全 broken symlink —— 我跑 pytest 时撞到要绕路。很可能就是 QA grep-only 验证的根因：subagent 在 venv 里跑 pytest 会失败，于是它退化成 grep。修这个 = 同时可能消除 #1 的诱因。

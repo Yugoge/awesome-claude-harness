@@ -1,1 +1,0 @@
-/redev 修复 hooks/pretool-bash-safety.sh 复合命令绕过

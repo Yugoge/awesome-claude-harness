@@ -1,1 +1,0 @@
-/redev —codex 继续开发。此外应该是spec-update而不是spec-continue，修复hardcode部分

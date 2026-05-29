@@ -1,1 +1,0 @@
-/redev 未完成 / 遗留项 项目 状态 说明 arch-2b 永久缺口 未修复（by design） 全动态路径构造在 hook 层无法拦截；唯一防御是 DO NOT item 14 行为约束 Ticket Edge Cases 旧正则 未修复 drift-1：ticket 文档中遗留的旧版不安全正则；实现正确，只是文档脏；需要单独 doc-only 修复周期 `manifest.json` 缺少 AC7/AC7b 未修复 测试通过 pytest collection 运行，非阻塞；test-writer 在 test 写完后才注册，属于已知 minor gap IS_SUBAGENT gate 未实现 Codex Round 1 提出建议；BA spec 只是推荐，非 AC；留作未来强化项
