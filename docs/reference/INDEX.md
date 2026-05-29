@@ -1,7 +1,7 @@
 # reference
 
-*Last updated: 2026-05-28T14:16:59Z*
-**Total entries**: 11
+*Last updated: 2026-05-29T09:01:35Z*
+**Total entries**: 12
 **Convention**: kebab
 
 ## Tree
@@ -17,7 +17,8 @@ reference/
 ├── `lock-file-handling.md` - Git Lock File Handling
 ├── `server-infra.md` - Server Infrastructure — Full Reference Tables
 ├── `slashcommand-quick-reference.md` - Slash Command Quick Reference
-└── `tmp-cleanup-convention.md` - Ad-hoc scratch directory convention
+├── `tmp-cleanup-convention.md` - Ad-hoc scratch directory convention
+└── `venv-repair.md` - venv-repair — restoring `~/.claude/venv` when interpreter symlinks break
 ```
 
 ---

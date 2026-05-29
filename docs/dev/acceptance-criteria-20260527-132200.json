@@ -76,11 +76,11 @@
       "id": "AC6",
       "type": "data",
       "given": "all 32 files modified or created across PR1, PR2, PR3",
-      "when": "grep for decimal step headings ('## Step 1.5', '## Step 7.5', '### Step 1.5', '### Step 7.5')",
-      "then": "zero matches across all modified/created files",
+      "when": "grep for decimal step patterns as headings (## or ###) OR as prose references in agent and command .md files",
+      "then": "zero matches across all modified/created files; prose references use 'between Step N and Step N+1' phrasing only",
       "check": {
         "type": "grep",
-        "pattern": "##+ Step [0-9]+\\.[0-9]",
+        "pattern": "Step [0-9]+\\.[0-9]+",
         "scope": "all_modified_files",
         "expect": "no_match"
       },
@@ -154,6 +154,23 @@
         "expect": "match"
       },
       "ac_uid": "ac11-prompt-workflow-noop-guard"
+    },
+    {
+      "id": "AC12",
+      "type": "data",
+      "given": "commands/dev.md, commands/redev.md, commands/pull.md, commands/clean.md, commands/dev-overnight.md after all PRs",
+      "when": "reading each command file to verify graphify integration coverage",
+      "then": "commands/dev.md references both graphify-query.py and graphify-enrich.py; commands/redev.md references graphify; commands/pull.md references graphify-maintain.py; commands/clean.md explicitly marks graphify as disabled; commands/dev-overnight.md references graphify in sentinel fanout",
+      "check": {
+        "type": "grep",
+        "patterns": [
+          {"file": "commands/dev.md", "pattern": "graphify-query\\.py", "expect": "match"},
+          {"file": "commands/dev.md", "pattern": "graphify-enrich\\.py", "expect": "match"},
+          {"file": "commands/pull.md", "pattern": "graphify-maintain\\.py", "expect": "match"},
+          {"file": "commands/clean.md", "pattern": "disabled", "expect": "match"}
+        ]
+      },
+      "ac_uid": "ac12-command-coverage"
     }
   ]
 }
