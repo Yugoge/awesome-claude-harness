@@ -131,9 +131,9 @@
       "script_discovered": false,
       "script_path": null,
       "health_check_url": null,
-      "health_check_result": "skipped - non-UI change, no deployed service",
-      "status": "skipped_non_ui",
-      "blocking_reason": null
+      "health_check_result": "no deployed service exists for this change; commands/dev.md is an orchestrator prompt-text file, not a running app",
+      "status": "legitimately_skipped",
+      "blocking_reason": "Non-UI change: the cycle modifies commands/dev.md (a /dev slash-command orchestrator instruction file) plus three documentation/test artifacts. There is (1) no rendered UI, (2) no browser interaction, (3) no Playwright-testable surface, (4) no screenshot-able element, and (5) no user-triggered deployed code path. The BA spec explicitly declares applicability: N/A, non-UI, agent-prompt edit. Verification was performed via grep (bash-pattern absence in commands/dev.md and 3 AC-F5 artifacts) and pytest (test_AC_F5 passed; full prior-cycle suite tests/generated/20260529-080709 = 7 passed). E2E browser testing is not applicable to agent-prompt text edits."
     },
     "e2e_script_results": [],
     "ui_test_results": [
