@@ -1,6 +1,6 @@
 # hooks
 
-*Last updated: 2026-05-30T08:44:24Z*
+*Last updated: 2026-05-30T17:28:06Z*
 **Total entries**: 138
 **Convention**: kebab
 
@@ -141,6 +141,7 @@ hooks/
 ├── `subagent-stop-diff-check.sh` - SubagentStop hook: flag large diffs without minimum-diff justification
 ├── `subagent-stop-guard-integrity.sh` - subagent-stop-guard-integrity.sh
 ├── `subagentstop-codex-enforce.py` - Activation logic:
+├── `subagentstop-cp-enforce.py` - SubagentStop hook: spec checkpoint enforcement (W6); ADVISORY by default (always exit 0, logs would-block events), blocks only if CP_ENFORCE_MODE=block
 ├── `subagentstop-e2e-enforce.py` - Activation logic:
 ├── `userprompt-consent-allowlist.sh` - UserPromptSubmit Hook: parse `/allow <pattern>` and write a single-use
 ├── `userprompt-doc-sync-check.py` - UserPromptSubmit Hook: Periodic file deletion detection for doc-sync

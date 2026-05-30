@@ -215,9 +215,9 @@ def emit_block_canonical(cmd, violations):
     sys.exit(2)
 
 
-def validate_against_canonical_if_needed(cmd, new_todos):
+def validate_against_canonical_if_needed(cmd, new_todos, prompt=''):
     """Validate new_todos against canonical script if available."""
-    violations = validate_against_canonical(cmd, new_todos)
+    violations = validate_against_canonical(cmd, new_todos, prompt)
     if violations:
         emit_block_canonical(cmd, violations)
         return False
@@ -252,7 +252,7 @@ def check_subagent_completion_guard(state, last, new_todos, cmd):
     """Gate 4: block completing a subagent step without calling Agent."""
     if not last or not cmd:
         return
-    canonical = run_todo_script(cmd)
+    canonical = run_todo_script(cmd, state.get('arguments', ''))
     if not canonical:
         return
     idx, step_todo, sa_call = _find_completing_subagent_step(
@@ -296,7 +296,7 @@ def main():
     last = state.get('last_todos')
     cmd = state.get('command', '')
     if last is None or len(last) != len(new_todos):
-        validate_against_canonical_if_needed(cmd, new_todos)
+        validate_against_canonical_if_needed(cmd, new_todos, state.get('arguments', '') if state else '')
         sys.exit(0)
     violations = validate(last, new_todos)
     if violations:

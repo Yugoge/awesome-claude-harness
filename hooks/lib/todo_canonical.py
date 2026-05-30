@@ -42,12 +42,15 @@ def _parse_script_output(result):
     return canonical
 
 
-def run_todo_script(cmd_name):
+def run_todo_script(cmd_name, prompt=''):
     """Load canonical todos from todo script via subprocess.
 
     Search order (AF2 fix -- matches posttool-todo-count.py):
       1. {CLAUDE_PROJECT_DIR}/scripts/todo/{cmd_name}.py
       2. ~/.claude/scripts/todo/{cmd_name}.py
+
+    prompt is forwarded as CLAUDE_TODO_PROMPT so argument-aware scripts
+    (e.g. close.py --force path) can vary their step list.
 
     Returns list of todo dicts or None.
     """
@@ -55,9 +58,13 @@ def run_todo_script(cmd_name):
     if script_path is None:
         return None
     try:
+        env = {**os.environ}
+        if prompt:
+            env['CLAUDE_TODO_PROMPT'] = prompt
         result = subprocess.run(
             ['python3', str(script_path)],
             capture_output=True, text=True, cwd=str(project_dir),
+            env=env,
         )
         return _parse_script_output(result)
     except Exception:
@@ -92,12 +99,15 @@ def check_immutability_against_canonical(canonical, new_todos, violations):
         _check_field(canonical, new_todos, 'activeForm', i, violations)
 
 
-def validate_against_canonical(cmd_name, new_todos):
+def validate_against_canonical(cmd_name, new_todos, prompt=''):
     """Validate new_todos against canonical script if available.
+
+    prompt is forwarded to run_todo_script so argument-aware todo scripts
+    (e.g. close.py for --force) can return the correct variant.
 
     Returns list of violations (empty if valid or no canonical exists).
     """
-    canonical = run_todo_script(cmd_name) if cmd_name else None
+    canonical = run_todo_script(cmd_name, prompt) if cmd_name else None
     if not canonical:
         return []
     violations = []

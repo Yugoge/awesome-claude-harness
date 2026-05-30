@@ -20,7 +20,7 @@ from pathlib import Path
 STATUS_SYMBOL = {'completed': '[x]', 'in_progress': '[~]', 'pending': '[ ]'}
 
 
-def run_todo_script(cmd_name: str, project_dir: Path) -> list:
+def run_todo_script(cmd_name: str, project_dir: Path, prompt: str = '') -> list:
     todo_script = project_dir / 'scripts' / 'todo' / f'{cmd_name}.py'
     if not todo_script.exists():
         global_todo = Path.home() / '.claude' / 'scripts' / 'todo' / f'{cmd_name}.py'
@@ -28,9 +28,13 @@ def run_todo_script(cmd_name: str, project_dir: Path) -> list:
             todo_script = global_todo
         else:
             return []
+    env = {**os.environ}
+    if prompt:
+        env['CLAUDE_TODO_PROMPT'] = prompt
     result = subprocess.run(
         ['python3', str(todo_script)],
-        capture_output=True, text=True, cwd=str(project_dir)
+        capture_output=True, text=True, cwd=str(project_dir),
+        env=env,
     )
     if result.returncode != 0 or not result.stdout.strip():
         return []
@@ -67,11 +71,13 @@ def main():
         bookmark_path = project_dir / '.claude' / f'workflow-{session_id}.json'
 
         cmd_name = '?'
+        arguments = ''
         bookmark_state = {}
         if bookmark_path.exists():
             try:
                 bookmark_state = json.loads(bookmark_path.read_text())
                 cmd_name = bookmark_state.get('command', '?')
+                arguments = bookmark_state.get('arguments', '')
             except Exception:
                 pass
 
@@ -92,7 +98,7 @@ def main():
             # Write updated todos back so Phase B reads current state
             # BUT only if count matches canonical — prevents corrupting file with bad data
             # when agent submits wrong number of steps (count hook will handle the error)
-            canonical = run_todo_script(cmd_name, project_dir) if cmd_name != '?' else []
+            canonical = run_todo_script(cmd_name, project_dir, arguments) if cmd_name != '?' else []
             blocking_count = len(canonical) if canonical else 0
             count_ok = blocking_count == 0 or len(todos) >= blocking_count
             if count_ok:
@@ -113,7 +119,7 @@ def main():
                     pass
 
         # Get blocking_count fresh from todo script — never from cache
-        canonical = run_todo_script(cmd_name, project_dir) if cmd_name != '?' else []
+        canonical = run_todo_script(cmd_name, project_dir, arguments) if cmd_name != '?' else []
         blocking_count = len(canonical) if canonical else len(todos)
 
         print(format_checklist('/' + cmd_name, todos, blocking_count))

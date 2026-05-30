@@ -686,6 +686,15 @@ def _init_dev_registry(cmd_name: str, user_input: str, claude_session_id: str, p
     return dev_session_id
 
 
+def _extract_arguments(user_input: str, cmd_name: str) -> str:
+    """Strip the /cmd_name prefix and return the remaining argument string."""
+    text = user_input.strip()
+    prefix = f'/{cmd_name}'
+    if text.lower().startswith(prefix.lower()):
+        return text[len(prefix):].strip()
+    return ''
+
+
 def handle_phase_a(cmd_name: str, user_input: str, sid: str) -> None:
     """Phase A: slash command detected -- setup todos, state, inject spec."""
     if cmd_name in ("commit", "push", "merge", "stop"):
@@ -700,7 +709,7 @@ def handle_phase_a(cmd_name: str, user_input: str, sid: str) -> None:
     tf = official_todos_path(sid)
     tf.parent.mkdir(parents=True, exist_ok=True)
     tf.write_text(json.dumps(todos, ensure_ascii=False))
-    _write_bookmark(cmd_name, sid)
+    _write_bookmark(cmd_name, sid, _extract_arguments(user_input, cmd_name))
     if cmd_name == 'dev-overnight':
         end_time, focus, spec_path, codex_required = parse_overnight_args(user_input)
         create_overnight_state(end_time, focus, spec_path=spec_path, session_id=sid, codex_required=codex_required)
@@ -715,14 +724,15 @@ def handle_phase_a(cmd_name: str, user_input: str, sid: str) -> None:
     emit_checklist_message(cmd_name, todos)
 
 
-def _write_bookmark(cmd_name: str, sid: str) -> None:
+def _write_bookmark(cmd_name: str, sid: str, arguments: str = '') -> None:
     """Write the workflow bookmark file."""
     bm = workflow_bookmark_path(sid)
     try:
         bm.parent.mkdir(parents=True, exist_ok=True)
-        bm.write_text(json.dumps({
-            'command': cmd_name, 'todo_acknowledged': False,
-        }))
+        data = {'command': cmd_name, 'todo_acknowledged': False}
+        if arguments:
+            data['arguments'] = arguments
+        bm.write_text(json.dumps(data))
     except Exception:
         pass
 
