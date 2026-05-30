@@ -249,6 +249,16 @@ Only proceed to Step 6 when a STRONG signal fires.
    echo "Finalize guard OK: /dev will resolve $spec_path -> artifact_id=$ARTIFACT_ID, views_available=true." >&2
    ```
 
+6. **Centralization lint (advisory — surfaces inline spec-id re-derivation regressions)**: run `scripts/lint-spec-id-centralization.py` over the `/dev*`/`/spec` command files that consume the resolver. This is NON-BLOCKING here (a WARNING only) — finalize must not hard-fail on an unrelated command-file edit. The authoritative hard gate for this lint belongs at the `.claude`-repo commit boundary (a pre-commit check on staged `commands/*.md` / `scripts/*.sh`), the only place command-file edits actually land; this advisory is a safety-net that makes a regression visible at every finalize.
+
+   ```bash
+   /root/.claude/scripts/lint-spec-id-centralization.py --paths \
+       /root/.claude/commands/dev.md /root/.claude/commands/dev-command.md \
+       /root/.claude/commands/dev-overnight.md /root/.claude/commands/close.md \
+       /root/.claude/commands/spec.md \
+     || echo "WARNING: centralization lint flagged inline spec-id derivation in a consumer command file — a /dev*/spec command re-derives the spec-id in prose instead of calling resolve-spec-artifacts.py. Fix before the next commit that touches those files." >&2
+   ```
+
 ### Step 7: Display result + workflow update
 
 Before the final stdout response, create a compact temp update using
