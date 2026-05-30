@@ -8,7 +8,7 @@
 # Global Claude Code Configuration
 
 <!-- AUTO:last-updated -->
-> Last updated: 2026-05-29
+> Last updated: 2026-05-30
 <!-- /AUTO:last-updated -->
 
 ---
