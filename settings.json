@@ -772,10 +772,20 @@
             "command": "python3 \"$HOME/.claude/hooks/subagentstop-e2e-enforce.py\""
           }
         ]
+      },
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$HOME/.claude/hooks/subagentstop-cp-enforce.py\""
+          }
+        ]
       }
     ]
   },
   "alwaysThinkingEnabled": true,
   "effortLevel": "high",
-  "theme": "dark"
+  "theme": "dark",
+  "autoCompactEnabled": true
 }
