@@ -128,3 +128,13 @@ class TestBulkSentinelFalsePositive:
         # AC4: compound command containing the invocation must still BLOCK.
         cmd = "echo test && python3 scripts/write-bulk-commit-sentinel.py --output-dir /tmp"
         assert run_hook(cmd) == BLOCK
+
+    def test_ac5_bash_lc_wrapper_still_blocked(self):
+        # AC5: bash -lc wrapping the writer must BLOCK (security regression check).
+        cmd = 'bash -lc "python3 scripts/write-bulk-commit-sentinel.py"'
+        assert run_hook(cmd) == BLOCK
+
+    def test_ac6_bash_c_wrapper_still_blocked(self):
+        # AC6: bash -c wrapping the writer must BLOCK.
+        cmd = 'bash -c "python3 scripts/write-bulk-commit-sentinel.py"'
+        assert run_hook(cmd) == BLOCK

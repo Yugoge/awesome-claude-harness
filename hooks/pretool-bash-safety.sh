@@ -857,12 +857,15 @@ for t in tokens:
         print('DENY')
         sys.exit(0)
 
-# Recursive shell: <interpreter> -c|-e
+# Recursive shell: <interpreter> -c|-e or combined flags like -lc, -ec, -lce
 RECURSIVE_SHELLS = {'bash', 'sh', 'zsh', 'dash', 'python', 'python3', 'node', 'perl', 'ruby'}
+import re as _re_rs
 for i, t in enumerate(tokens):
-    if t in RECURSIVE_SHELLS and i + 1 < len(tokens) and tokens[i+1] in ('-c', '-e'):
-        print('DENY')
-        sys.exit(0)
+    if t in RECURSIVE_SHELLS and i + 1 < len(tokens):
+        _next = tokens[i+1]
+        if _next in ('-c', '-e') or (_next.startswith('-') and _re_rs.match(r'^-[a-zA-Z]*[ce][a-zA-Z]*$', _next)):
+            print('DENY')
+            sys.exit(0)
 
 # eval / source / dot-source as standalone command tokens.
 for i, t in enumerate(tokens):
