@@ -17,10 +17,9 @@
     "GIT_CHECKPOINT_SILENT": "0",
     "PLAYWRIGHT_MCP_SANDBOX": "false",
     "PLAYWRIGHT_RUNCODE_TIMEOUT": "120",
-    "CLAUDE_CODE_DISABLE_1M_CONTEXT": "1",
     "ENABLE_TOOL_SEARCH": "false",
     "CLAUDE_CODE_ENABLE_TASKS": "false",
-    "CLAUDE_GRAPHIFY_ENABLED": "auto",
+    "CLAUDE_GRAPHIFY_ENABLED": "0",
     "_comment_graphify": "Graphify override env vars (leave unset to use defaults): GRAPHIFY_BIN=<path> overrides graphify CLI; CLAUDE_GRAPHIFY_CACHE_ROOT=<dir> overrides /var/tmp/claude-graphify",
     "_comment_anthropic": "以下为可选配置（已禁用）",
     "_disabled_anthropic": "[object Object]"
@@ -166,6 +165,7 @@
       "Bash(source venv/bin/activate && python scripts/add-status-field.py:*)",
       "Bash(python3 /root/.claude/scripts/spec-check.py:*)",
       "Bash(python3 /root/.claude/scripts/spec-verify/spec-verify-views.py:*)",
+      "Bash(source ~/.claude/venv/bin/activate && python3 /root/.claude/scripts/spec-verify/spec-verify.py:*)",
       "Bash(scripts/validate-dev-registry-enforcement.sh:*)",
       "Bash(~/.claude/scripts/write-qa-mode.sh:*)",
       "Bash(/root/scripts/validate-dev-registry-enforcement.sh:*)",
@@ -305,7 +305,7 @@
       "Edit(.claude/CLAUDE.md)"
     ]
   },
-  "model": "sonnet",
+  "model": "claude-sonnet-4-6",
   "hooks": {
     "SessionStart": [
       {
