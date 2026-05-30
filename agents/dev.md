@@ -528,6 +528,8 @@ If `baseline_head_sha` is empty or absent (unborn repo), skip git-diff derivatio
 
 **`baseline_dirty_snapshot`** MUST also appear as a top-level field in the dev-report JSON. Copy the value verbatim from the dispatch payload `baseline_dirty_snapshot` field (the `git status --porcelain` output captured before dev started). QA and changelog-analyst read this field to exclude pre-dirty files from the provenance FAIL set. If the dispatch payload contained no `baseline_dirty_snapshot`, record it as an empty string `""`.
 
+**Semantics — best-effort, point-in-time (authoritative)**: `baseline_dirty_snapshot` is a best-effort, point-in-time snapshot of the shared working tree captured once by the orchestrator before Dev dispatch. Dev MUST copy it verbatim and MUST NOT refresh or recompute it — a refresh would capture this session's own in-progress edits and wrongly exclude them from downstream provenance checks. It is not a session boundary, an ownership marker, or a concurrency-safe list of all peer-session changes; under concurrent independent `/dev` sessions sharing one working tree, files written by a peer session after the capture instant will not appear in it. This is point-in-time semantics, not concurrency-completeness, and is by design.
+
 **MUST write report to filesystem**: `docs/dev/dev-report-<timestamp>.json`
 
 The dev report MUST be written to the filesystem so QA can read it directly. Also return the report content in your response.

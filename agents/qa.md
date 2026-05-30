@@ -465,6 +465,8 @@ When `baseline_head_sha` is present:
    Note: the union check (`dev.files_modified ∪ dev.files_created`) prevents false positives for staged new files, which appear in both the diff output (as added files) and in `dev.files_created`. A path satisfies the check if it appears in either list.
    Note: `dev.observed_preexisting` is NOT an exclusion for this check. By definition (`agents/dev.md` derivation rules), `observed_preexisting` contains only paths absent from `git diff --name-only`; a path cannot logically be both in `diff_files` and in `observed_preexisting`. Using it as an exclusion would create an escape hatch where dev claims a changed file is "preexisting" to suppress a violation.
 
+   Concurrency caveat (explanatory, human-triage only): `baseline_dirty_snapshot` is a point-in-time capture (see `agents/dev.md`), so in a shared working tree with concurrent `/dev` sessions this check can false-positive for peer-session files written after the snapshot was captured. Do not treat `baseline_dirty_snapshot` as a complete concurrency boundary. This is interpretive guidance for triaging a flagged path — it does NOT instruct you to detect, infer, or programmatically remove "suspected peer" paths, and it does NOT relax the FAIL guards above.
+
 Also check `dev.files_created` for provenance:
 
 6. Compute the combined set of new files: UNION of `git ls-files --others --exclude-standard` (untracked files not in git index) and `git diff --cached --name-only --diff-filter=A` (staged new files added to the index but not yet committed). A staged file is NOT returned by `--others`, so both commands are required.
