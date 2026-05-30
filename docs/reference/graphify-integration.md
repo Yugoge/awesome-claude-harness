@@ -93,13 +93,29 @@ Availability is keyed on **`cacheDir/graph.json`** (NOT a legacy manifest path).
 
 ---
 
-## Semantic Extraction (AST-first, proof-gated)
+## Semantic Extraction (user-triggered, edge-signature proof-gated)
 
-`graphify update` is AST-only by design. Semantic edges come from `graphify extract --backend B`, which runs LLM extraction on docs/papers/images. Backend selection: API-key env vars (Gemini/Kimi/Claude/OpenAI/DeepSeek) auto-detect via graphify's `detect_backend()`; with NO key set, the keyless **`claude-cli`** backend works when `/usr/bin/claude` is present (uses the Pro/Max subscription, no API key).
+`graphify update` is AST-only by design. **`init` and `update` are AST-only and fast — they NEVER auto-probe semantic extraction.** (The earlier hidden 30s init auto-probe was unreachable — its 30s budget could not fit `extract`'s ~77s AST prelude — and used the wrong proof axis; both defects are removed.) Semantic edges come from `graphify extract --backend B`, which runs LLM extraction on docs/papers/images. Backend selection: API-key env vars (Gemini/Kimi/Claude/OpenAI/DeepSeek) auto-detect via graphify's `detect_backend()`; with NO key set, the keyless **`claude-cli`** backend works when `/usr/bin/claude` is present (uses the Pro/Max subscription, no API key).
 
-`graphify-maintain.py init` ALWAYS builds the AST graph FIRST, then runs a bounded semantic probe. It only promotes the semantic graph (and reports `semantic_mode=semantic:<backend>`) when the probe **demonstrably changes the graph** (node count differs — proof, not mere backend presence). Otherwise it keeps the AST graph and reports `semantic_mode=ast_only` with a reason. A semantic failure never loses the AST graph.
+### The manual `semantic` command
 
-**AST-only quality caveat**: on prompt/config-heavy repos, AST-only blast-radius signal can be weak (high builtin/noise ratio). Semantic mode materially improves it but is environment-gated.
+```bash
+python3 scripts/graphify-maintain.py semantic [--timeout SECONDS]   # default 3600s
+```
+
+`semantic` is the explicit, user-triggered path that enables semantic mode. It:
+
+1. Runs a fresh AST baseline `update` FIRST (never diffs `extract` output against a stale/garbage baseline). If that baseline fails/times-out or leaves `graph.json` missing/unparseable, it does NOT run `extract` and exits 0 advisory (`no fresh AST baseline`, AST retained).
+2. Resolves the backend across the full 4-case matrix (forced → keyed → keyless-claude → none); it never passes `--backend None` and never labels a mode `semantic:None`. A keyed environment runs `extract` WITHOUT `--backend` (graphify auto-detects) and labels a promotion `semantic:auto`.
+3. **Clears the prior `graphify-out/graph.json` BEFORE running extract** (clear-before-extract is mandatory) so a failed/timed-out current run can never promote a stale prior semantic graph.
+4. Applies the corrected proof-gate: an **edge-signature set-diff** over valid confidences (`{EXTRACTED, INFERRED, AMBIGUOUS}`), NOT a node-count comparison. The signature is the 7-tuple `(source, target, relation, confidence, source_file, source_location, context)`. Because the AST graph already carries `EXTRACTED`/`INFERRED` confidences, confidence presence alone is NOT a discriminator — only NEW edges (by full signature, absent from the AST link set) count. Promotion requires `len(sem_nodes) >= len(ast_nodes)`, `len(sem_links) >= len(ast_links)`, AND at least one added valid-confidence edge.
+5. Promotes the semantic graph (reports `semantic_mode=semantic:<backend>` + the added-link count) only on success; otherwise keeps the AST graph and reports `semantic_mode=ast_only`. A semantic failure never loses the AST graph.
+
+### Source-of-truth reconciliation
+
+Maintain's `run-manifest.json` `semantic_mode` is the authoritative semantic-state record; the on-disk `graph.json` is the authoritative graph — they must not diverge. Any AST overwrite of `graph.json` (maintain's `update` AND `graphify-enrich.py`'s Step-1 update at Step 7.5) resets `semantic_mode` back to `ast_only` via the shared `graphify_lib.reset_semantic_mode_in_manifest(cache_dir)` helper whenever the graph was actually mutated, so `status` can never report a stale `semantic:<backend>` for a graph that is now AST-only.
+
+**AST-only quality caveat**: on prompt/config-heavy repos, AST-only blast-radius signal can be weak (high builtin/noise ratio). Semantic mode materially improves it but is environment-gated and user-triggered.
 
 ---
 
@@ -107,16 +123,19 @@ Availability is keyed on **`cacheDir/graph.json`** (NOT a legacy manifest path).
 
 ```bash
 # One-time initial build (user-triggered only — NEVER auto-triggered inside /dev)
-python3 scripts/graphify-maintain.py init      # real `graphify update <repo>` + semantic probe (≤300s)
+python3 scripts/graphify-maintain.py init               # real `graphify update <repo>` AST-only (≤300s)
 
 # Incremental refresh (runs automatically at Step 7.5 and post-/pull)
-python3 scripts/graphify-maintain.py update    # real `graphify update <repo>` (≤60s)
+python3 scripts/graphify-maintain.py update             # real `graphify update <repo>` AST-only (≤60s)
 
-# Status check (node/link counts + semantic mode)
+# User-triggered semantic extraction (edge-signature proof-gated; promotes only on NEW edges)
+python3 scripts/graphify-maintain.py semantic [--timeout SECONDS]   # real `graphify extract` (default 3600s)
+
+# Status check (node/link counts + semantic mode + added-link counts when promoted)
 python3 scripts/graphify-maintain.py status
 ```
 
-The first full build is NEVER auto-triggered inside /dev. It must be run manually.
+`init` and `update` are AST-only and fast; they do NOT run semantic extraction. The first full build and any semantic enrichment are NEVER auto-triggered inside /dev — they must be run manually.
 
 ---
 

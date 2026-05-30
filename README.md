@@ -5,8 +5,8 @@ Organization and usage documentation for `.claude/`.
 <!-- AUTO:readme-stats -->
 
 ## Overview
-- **Total files**: 62
-- **Subdirectories**: 33
+- **Total files**: 63
+- **Subdirectories**: 34
 - **Naming convention**: lower
 
 ## Files
@@ -51,6 +51,7 @@ Organization and usage documentation for `.claude/`.
 - `docs/`
 - `eval/`
 - `file-history/`
+- `graphify-out/`
 - `hooks/`
 - `logs/`
 - `paste-cache/`
