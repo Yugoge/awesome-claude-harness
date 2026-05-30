@@ -1,0 +1,72 @@
+{
+  "schema_version": "1.1",
+  "task_id": "20260530-165718",
+  "generated_at": "2026-05-30T16:57:18Z",
+  "note": "Workstream B (.claude infra) of Happy rendering cycles 6-8. Single pytest module covers B1 (close-report path misresolution, AC-B1-1/2/3) and B2 (graphify tool-policy role, AC-B2-1/2/3). AC-B2-4 (stale version-test repair) is verified by the repaired tests in tests/generated/20260521-090100/ and tests/generated/20260524-122910/. All assertions are version-agnostic (no exact policy_version == N).",
+  "active_tests": [
+    {
+      "task_id": "20260530-165718",
+      "ac_id": "AC-B1-1",
+      "ac_uid": "b6d8f916ad9d55ca",
+      "type": "api",
+      "file": "tests/generated/20260530-165718/test_workstreamB_20260530-165718.py",
+      "test": "test_AC_B1_1_nested_cwd_resolves_root_report",
+      "status": "active"
+    },
+    {
+      "task_id": "20260530-165718",
+      "ac_id": "AC-B1-2",
+      "ac_uid": "aa2c52c053ba61a1",
+      "type": "api",
+      "file": "tests/generated/20260530-165718/test_workstreamB_20260530-165718.py",
+      "test": "test_AC_B1_2_genuine_nested_report_still_found",
+      "status": "active"
+    },
+    {
+      "task_id": "20260530-165718",
+      "ac_id": "AC-B1-3",
+      "ac_uid": "72f7bd037d790b28",
+      "type": "api",
+      "file": "tests/generated/20260530-165718/test_workstreamB_20260530-165718.py",
+      "test": "test_AC_B1_3_resolver_probe_order_and_graceful_fallback; test_AC_B1_3_python_falls_back_when_resolver_absent",
+      "status": "active"
+    },
+    {
+      "task_id": "20260530-165718",
+      "ac_id": "AC-B2-1",
+      "ac_uid": "61f3d921f83ce54c",
+      "type": "hook",
+      "file": "tests/generated/20260530-165718/test_workstreamB_20260530-165718.py",
+      "test": "test_AC_B2_1_graphify_role_registered_version_agnostic",
+      "status": "active"
+    },
+    {
+      "task_id": "20260530-165718",
+      "ac_id": "AC-B2-2",
+      "ac_uid": "2a424478f80017d3",
+      "type": "hook",
+      "file": "tests/generated/20260530-165718/test_workstreamB_20260530-165718.py",
+      "test": "test_AC_B2_2_graphify_write_grant_is_tight",
+      "status": "active"
+    },
+    {
+      "task_id": "20260530-165718",
+      "ac_id": "AC-B2-3",
+      "ac_uid": "98fec02cd3abe971",
+      "type": "source",
+      "file": "tests/generated/20260530-165718/test_workstreamB_20260530-165718.py",
+      "test": "test_AC_B2_3_no_broad_context_write_grant",
+      "status": "active"
+    },
+    {
+      "task_id": "20260530-165718",
+      "ac_id": "AC-B2-4",
+      "ac_uid": "0f139a4255317a72",
+      "type": "pytest+source",
+      "file": "tests/generated/20260521-090100/test_AC2_ac2-20260521-090100-policy-version-4.py; tests/generated/20260524-122910/test_AC_08_f1b0a0e412786b6a.py",
+      "test": "repaired in place — exact policy_version == N assertions replaced with version-agnostic monotonic >= checks; manifest mirrors repaired",
+      "status": "active"
+    }
+  ],
+  "archived_tests": []
+}

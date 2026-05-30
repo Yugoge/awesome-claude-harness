@@ -14,22 +14,33 @@ TARGET = REPO_ROOT / "policies" / "tool-policy.v1.json"
 
 NEW_PREFIX = "*/.claude/dev-registry/*/blast-radius-map.json"
 PRESERVED_PREFIX = "*/docs/dev/acceptance-criteria-"
-EXPECTED_VERSION = 5
-NOTE_SUBSTRINGS = ["policy_version 5", "blast-radius-map"]
+# Version-agnostic baseline: this AC introduced version 5. The exact-integer
+# assertion was retired by task 20260530-165718 (B2-M3) so future bumps (6, 7, ...)
+# no longer false-fail this test. policy_version is monotonic by contract.
+VERSION_BASELINE = 5
+NOTE_SUBSTRINGS = ["blast-radius-map"]
 
 
 def test_AC_08():
     """
     GIVEN: policies/tool-policy.v1.json is parsed as JSON
-    WHEN:  .roles.ba.allowed_write_path_prefixes and .policy_version are queried via jq
-    THEN:  jq index for '*/.claude/dev-registry/*/blast-radius-map.json' returns non-null integer; jq index for '*/docs/dev/acceptance-criteria-' returns non-null integer (preservation check); policy_version equals 5 (live baseline 4 + 1); _note field is extended with paragraph mentioning policy_version 5 and BA blast-radius prefix
+    WHEN:  .roles.ba.allowed_write_path_prefixes and .policy_version are queried
+    THEN:  the BA blast-radius prefix '*/.claude/dev-registry/*/blast-radius-map.json'
+           is present; '*/docs/dev/acceptance-criteria-' is preserved; policy_version
+           is an integer that has monotonically increased to at least 5 (this AC's
+           baseline — NOT pinned to an exact value); _note mentions the BA
+           blast-radius prefix
     """
     assert TARGET.exists(), f"{TARGET} missing"
     policy = json.loads(TARGET.read_text(encoding="utf-8"))
 
-    # policy_version
-    assert policy.get("policy_version") == EXPECTED_VERSION, (
-        f"policy_version expected {EXPECTED_VERSION}; got {policy.get('policy_version')!r}"
+    # policy_version — version-agnostic monotonic check (no exact-integer pin)
+    assert isinstance(policy.get("policy_version"), int), (
+        f"policy_version must be an integer, got {policy.get('policy_version')!r}"
+    )
+    assert policy.get("policy_version") >= VERSION_BASELINE, (
+        f"policy_version must have monotonically increased to >= {VERSION_BASELINE} "
+        f"(this AC's baseline); got {policy.get('policy_version')!r}"
     )
 
     prefixes = (

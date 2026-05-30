@@ -15,13 +15,20 @@ def test_AC2():
     """
     GIVEN: policies/tool-policy.v1.json has been updated
     WHEN:  data['policy_version'] is read via json.load
-    THEN:  its value is 4 (integer)
+    THEN:  it is an integer that has monotonically increased to at least 4
+           (the version this AC originally introduced). Version-agnostic:
+           the exact-integer assertion was retired by task 20260530-165718
+           (B2-M3) so the bump to 6 — and every future bump — no longer
+           false-fails this test. policy_version is monotonic by contract.
     """
-    # TODO(dev): replace the line below with the real test body. While the
-    # TEST_INCOMPLETE sentinel is present the test will hard-fail, marking
-    # the AC as unimplemented for QA Phase 5.
     import json, os
     policy_file = os.path.join(os.path.dirname(__file__), "..", "..", "..", "policies", "tool-policy.v1.json")
     with open(policy_file) as f:
         data = json.load(f)
-    assert data["policy_version"] == 4, f"Expected policy_version 4 (integer), got {data['policy_version']!r}"
+    assert isinstance(data["policy_version"], int), (
+        f"policy_version must be an integer, got {data['policy_version']!r}"
+    )
+    assert data["policy_version"] >= 4, (
+        f"policy_version must have monotonically increased to >= 4 "
+        f"(this AC's baseline), got {data['policy_version']!r}"
+    )

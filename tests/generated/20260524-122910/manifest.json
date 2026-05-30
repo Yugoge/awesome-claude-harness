@@ -207,10 +207,9 @@
         "jq_assertions": [
           ".roles.ba.allowed_write_path_prefixes | index(\"*/.claude/dev-registry/*/blast-radius-map.json\") | type == \"number\"",
           ".roles.ba.allowed_write_path_prefixes | index(\"*/docs/dev/acceptance-criteria-\") | type == \"number\"",
-          ".policy_version == 5"
+          "(.policy_version | type == \"number\") and (.policy_version >= 5)"
         ],
         "note_field_must_contain_substrings": [
-          "policy_version 5",
           "blast-radius-map"
         ],
         "live_baseline_pin": {

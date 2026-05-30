@@ -1,0 +1,56 @@
+{
+  "schema_version": "1.1",
+  "task_id": "dev-20260530-144032",
+  "generated_at": "2026-05-30T14:40:32Z",
+  "active_tests": [
+    {
+      "task_id": "dev-20260530-144032",
+      "ac_id": "AC1-AC2",
+      "ac_uid": "happy_path_owned_hunk_isolation",
+      "type": "behavioral",
+      "file": "tests/generated/dev-20260530-144032/test_happy_path.py",
+      "status": "active"
+    },
+    {
+      "task_id": "dev-20260530-144032",
+      "ac_id": "AC7",
+      "ac_uid": "scenario_b_peer_nonoverlap_failclosed",
+      "type": "behavioral",
+      "file": "tests/generated/dev-20260530-144032/test_scenario_b.py",
+      "status": "active"
+    },
+    {
+      "task_id": "dev-20260530-144032",
+      "ac_id": "AC3",
+      "ac_uid": "failclosed_ambiguity_apply_failure_modes",
+      "type": "behavioral",
+      "file": "tests/generated/dev-20260530-144032/test_failclosed_ambiguity.py",
+      "status": "active"
+    },
+    {
+      "task_id": "dev-20260530-144032",
+      "ac_id": "AC4",
+      "ac_uid": "never_widens_committed_file_set",
+      "type": "behavioral",
+      "file": "tests/generated/dev-20260530-144032/test_never_widens.py",
+      "status": "active"
+    },
+    {
+      "task_id": "dev-20260530-144032",
+      "ac_id": "AC3-edge",
+      "ac_uid": "edge_cases_binary_crlf_mode_emptydiff",
+      "type": "behavioral",
+      "file": "tests/generated/dev-20260530-144032/test_edge_cases.py",
+      "status": "active"
+    },
+    {
+      "task_id": "dev-20260530-144032",
+      "ac_id": "AC5-AC6-AC8",
+      "ac_uid": "docs_guards_e2e_signal_landing",
+      "type": "behavioral",
+      "file": "tests/generated/dev-20260530-144032/test_docs_and_e2e.py",
+      "status": "active"
+    }
+  ],
+  "archived_tests": []
+}

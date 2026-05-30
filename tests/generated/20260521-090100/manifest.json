@@ -27,7 +27,7 @@
       "hook_check": {
         "tool": "python_semantic",
         "file": "policies/tool-policy.v1.json",
-        "script": "import json; data = json.load(open('policies/tool-policy.v1.json')); assert data['policy_version'] == 4, f'Expected 4, got {data[\"policy_version\"]}'; print('AC2 PASS')",
+        "script": "import json; data = json.load(open('policies/tool-policy.v1.json')); assert isinstance(data['policy_version'], int) and data['policy_version'] >= 4, f'Expected monotonic int >= 4, got {data[\"policy_version\"]!r}'; print('AC2 PASS')",
         "expected_output": "AC2 PASS"
       }
     },

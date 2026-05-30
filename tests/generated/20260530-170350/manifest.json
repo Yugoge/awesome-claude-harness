@@ -1,0 +1,292 @@
+{
+  "schema_version": "1.1",
+  "task_id": "20260530-170350",
+  "generated_at": "2026-05-30T18:22:10Z",
+  "active_tests": [
+    {
+      "task_id": "20260530-170350",
+      "ac_id": "AC1",
+      "ac_uid": "63b0577775284aa9",
+      "type": "data",
+      "file": "tests/generated/20260530-170350/test_AC1_63b0577775284aa9.py",
+      "status": "active",
+      "hook_check": {
+        "kind": "unit_predicate",
+        "module": "scripts/graphify-maintain.py",
+        "invocation": "import the gate helper via importlib SourceFileLoader; call with synthesized ast/sem graphs",
+        "assertions": [
+          "promotable True when >=1 added valid-confidence edge by full-signature set-diff",
+          "promotable False when L_sem == L_ast (no added edge) even if sem_nodes == ast_nodes",
+          "promotable False when sem_links has fewer links than ast_links",
+          "promotable False when an added edge has confidence NOT in {EXTRACTED,INFERRED,AMBIGUOUS}",
+          "added-edge count equals signature-distinct valid-confidence sem edges absent from L_ast",
+          "missing-context handling (codex #5): two links that both OMIT the `context` key and are otherwise identical compare EQUAL (no spurious added edge); two links differing ONLY in `context` compare as DISTINCT; signature builder uses link.get('context') and canonicalizes any non-scalar so the tuple stays hashable",
+          "same-normalization (codex #4): the gate compares AST baseline and semantic graph after IDENTICAL normalization — assert the helper does not diff a scrubbed graph against a raw graph (e.g. feed one graph carrying a sensitive node + a link only present after scrubbing one side, and assert the diff is not corrupted by asymmetric scrubbing)",
+          "grep scripts/graphify-maintain.py shows no `> ast_node_count` predicate remaining"
+        ],
+        "non_gameable_note": "set-diff over the 7-tuple signature with confidence whitelist; cannot be satisfied by confidence-presence alone since live AST graph already carries EXTRACTED/INFERRED confidences; scrub-vs-raw mismatch and missing-context are explicitly closed"
+      }
+    },
+    {
+      "task_id": "20260530-170350",
+      "ac_id": "AC2",
+      "ac_uid": "508f74cde0615e17",
+      "type": "data",
+      "file": "tests/generated/20260530-170350/test_AC2_508f74cde0615e17.py",
+      "status": "active",
+      "hook_check": {
+        "kind": "cli_subprocess_plus_spy",
+        "command": "python3 scripts/graphify-maintain.py init",
+        "assertions": [
+          "exit code 0",
+          "graph.json created with len(nodes) > 0",
+          "no run_graphify_cmd call during init passes an args vector beginning with 'extract'",
+          "run-manifest.json semantic_mode == 'ast_only'",
+          "run-manifest.json semantic_backend_probe contains 'user-triggered' and 'retained'",
+          "init wall-time does not include any semantic LLM phase (no 30s probe block)"
+        ],
+        "non_gameable_note": "spy records the exact args vector of every run_graphify_cmd call; a hidden extract would be caught"
+      }
+    },
+    {
+      "task_id": "20260530-170350",
+      "ac_id": "AC3",
+      "ac_uid": "5aa4e0e833b63244",
+      "type": "data",
+      "file": "tests/generated/20260530-170350/test_AC3_5aa4e0e833b63244.py",
+      "status": "active",
+      "hook_check": {
+        "kind": "cli_dispatch_plus_spy",
+        "command": "python3 scripts/graphify-maintain.py semantic [--timeout N]",
+        "assertions": [
+          "argv with subcmd 'semantic' is dispatched to cmd_semantic (not usage-error exit 2)",
+          "spy records run_graphify_cmd calls including one whose args[0] == 'update' (AST baseline) followed by one whose args[0] == 'extract' (codex #2 — baseline before extract)",
+          "with --timeout 1234, the timeout_seconds passed to the extract call == 1234",
+          "without --timeout, the extract timeout_seconds passed == graphify_lib.TIMEOUT_SEMANTIC == 3600",
+          "CLAUDE_GRAPHIFY_ENABLED=0 -> exit 0 and zero extract calls",
+          "cache_root_inside_repo -> exit 0, 'cache_root_inside_repo' in output, zero extract calls",
+          "keyed-env case (codex #6): with ANTHROPIC_API_KEY set and `claude` absent, the spy still records an 'extract' call (cmd_semantic does not bail on None-from-_detect_semantic_backend)",
+          "the invocation is the maintain CLI binary (NOT a recursive /dev//close//commit slash-command)"
+        ],
+        "non_gameable_note": "spy asserts the update-then-extract ordering, the exact numeric timeout, and the keyed-env non-bail; a stub passing a wrong/None timeout or skipping the baseline fails"
+      }
+    },
+    {
+      "task_id": "20260530-170350",
+      "ac_id": "AC4",
+      "ac_uid": "eedaa3968ee4810e",
+      "type": "data",
+      "file": "tests/generated/20260530-170350/test_AC4_eedaa3968ee4810e.py",
+      "status": "active",
+      "hook_check": {
+        "kind": "real_binary_e2e_small_fixture",
+        "command": "python3 scripts/graphify-maintain.py semantic --timeout <N>",
+        "skip_semantics": "SKIP is NEUTRAL, not PASS (codex #8): QA MUST NOT close this AC as YES on a skip. YES requires EITHER a real extract that ran to completion OR an explicit recorded environmental waiver (e.g. backend unreachable in CI) signed off in the QA report. The runner's outer subprocess timeout MUST be >= the requested semantic --timeout + buffer; do NOT reuse the legacy conftest.run_script 320s helper for this AC.",
+        "assertions": [
+          "exit code 0",
+          "an AST baseline `update` ran before extract (codex #2)",
+          "real `graphify extract` was actually executed (recorded executable resolves to the real binary, not a shim/monkeypatch)",
+          "the gate's promote/retain decision matches the corrected helper applied to the REAL extract output (no hardcoded flag)",
+          "if promoted: run-manifest semantic_mode startswith 'semantic:' and reason reports added-link count",
+          "if not promoted: AST graph retained, semantic_mode == 'ast_only'",
+          "graph.json remains valid node-link with len(nodes) > 0 in both branches",
+          "repo_pollution(fixture_repo) == [] (no graph.json/report/html/.graphify_* leaked into the source repo)",
+          "QA report records either real-completion or an explicit environmental waiver — a bare SKIP does not satisfy the Must-Have"
+        ],
+        "non_gameable_note": "requires a REAL extract completion (or recorded waiver) on a small fixture; SKIP cannot pass; positive promotion proof is delegated to deterministic AC9"
+      }
+    },
+    {
+      "task_id": "20260530-170350",
+      "ac_id": "AC5",
+      "ac_uid": "4f28e4b15714b321",
+      "type": "data",
+      "file": "tests/generated/20260530-170350/test_AC5_4f28e4b15714b321.py",
+      "status": "active",
+      "hook_check": {
+        "kind": "pytest_regression",
+        "command": "pytest tests/generated/20260530-105221/ -q",
+        "assertions": [
+          "0 failures among non-skipped prior AC tests",
+          "test_AC6_2ed22b8be999bdea.py passes: semantic_mode=='ast_only' and 'retained' in reason",
+          "test_AC1_281d23361364833f.py and test_AC1b_ea4e840ab30f19df.py pass (real graph.json, sentinel, no fictional flags)",
+          "test_AC13_a841268c3e10b04f.py passes (numeric timeout enforced; run_graphify_cmd signature unchanged: timeout_seconds has no default; graphify_lib.TIMEOUT_SEMANTIC_PROBE STILL exists == 30 — codex #10, the constant is referenced directly at test_AC13:54 and MUST NOT be removed even though the init probe call is gone)",
+          "no prior AC test file is removed or its assertions weakened"
+        ],
+        "non_gameable_note": "the AC6/AC1b assertions are the regression contract — the chosen 'keep init ast_only with user-triggered reason' design must satisfy them WITHOUT editing the test bodies; TIMEOUT_SEMANTIC_PROBE retained as legacy constant"
+      }
+    },
+    {
+      "task_id": "20260530-170350",
+      "ac_id": "AC6",
+      "ac_uid": "229818c9360eaeb0",
+      "type": "data",
+      "file": "tests/generated/20260530-170350/test_AC6_229818c9360eaeb0.py",
+      "status": "active",
+      "hook_check": {
+        "kind": "cli_status_consistency",
+        "command": "python3 scripts/graphify-maintain.py status",
+        "assertions": [
+          "status semantic_mode line matches run-manifest.json semantic_mode exactly",
+          "when semantic_mode startswith 'semantic:', status surfaces the added-link count field written by cmd_semantic",
+          "status never reports a mode inconsistent with run-manifest.json",
+          "after a successful cmd_update AST overwrite of graph.json, run-manifest semantic_mode is reset to 'ast_only' and semantic added-count fields are cleared, so status does not show a stale 'semantic:<backend>' (codex #7 — cross-check with AC10)"
+        ],
+        "non_gameable_note": "status is asserted to mirror the persisted run-manifest, preventing a cosmetic 'semantic on' claim without a real promotion, and preventing a STALE semantic claim after an AST overwrite"
+      }
+    },
+    {
+      "task_id": "20260530-170350",
+      "ac_id": "AC7",
+      "ac_uid": "40382c631c5b5c03",
+      "type": "data",
+      "file": "tests/generated/20260530-170350/test_AC7_40382c631c5b5c03.py",
+      "status": "active",
+      "hook_check": {
+        "kind": "doc_grep_consistency",
+        "assertions": [
+          "grep docs/reference/graphify-integration.md: contains 'graphify-maintain.py semantic' and '3600'",
+          "grep docs/reference/graphify-integration.md: the prior 'init ... then runs a bounded semantic probe' / 'node count differs' wording is updated to the set-diff + manual-command model",
+          "docs state init/update stay AST-only and fast",
+          "agents/graphify.md unchanged (no diff) and still enrich-only consistent",
+          "CLAUDE_GRAPHIFY_ENABLED=auto gate wording preserved"
+        ],
+        "non_gameable_note": "doc must affirmatively describe the manual command + corrected gate, not merely delete the old text"
+      }
+    },
+    {
+      "task_id": "20260530-170350",
+      "ac_id": "AC8",
+      "ac_uid": "be23c9f243b9da20",
+      "type": "data",
+      "file": "tests/generated/20260530-170350/test_AC8_be23c9f243b9da20.py",
+      "status": "active",
+      "hook_check": {
+        "kind": "honesty_audit",
+        "assertions": [
+          "no 'full-repo semantic promoted/completed' claim without a corresponding completed real run on .claude",
+          "fixture-level claims are scoped to the fixture",
+          "the full-repo run, if not executed, is labeled OPTIONAL/user-triggered (not asserted as done)"
+        ],
+        "non_gameable_note": "directly enforces the round-3 caveat; QA must downgrade any over-claim to a finding"
+      }
+    },
+    {
+      "task_id": "20260530-170350",
+      "ac_id": "AC9",
+      "ac_uid": "ed24d81698c9f76c",
+      "type": "data",
+      "file": "tests/generated/20260530-170350/test_AC9_ed24d81698c9f76c.py",
+      "status": "active",
+      "hook_check": {
+        "kind": "controlled_integration_spy",
+        "module": "scripts/graphify-maintain.py",
+        "invocation": "import cmd_semantic + gate helper via importlib SourceFileLoader; spy run_graphify_cmd to materialize controlled update/extract outputs; do NOT invoke /dev /close /commit",
+        "assertions": [
+          "POSITIVE: when the controlled extract output has >=1 added valid-confidence edge vs the AST baseline, cmd_semantic PROMOTES (canonical cacheDir/graph.json now equals the extract output) and run-manifest semantic_mode startswith 'semantic:' with the correct added-link count",
+          "NEGATIVE identical: when extract output == AST baseline, cmd_semantic RETAINS AST (canonical graph.json unchanged), semantic_mode == 'ast_only'",
+          "NEGATIVE fewer-links: when extract output has fewer links than baseline, RETAIN",
+          "NEGATIVE invalid-confidence: when the only added edges have confidence outside {EXTRACTED,INFERRED,AMBIGUOUS}, RETAIN",
+          "NEGATIVE malformed: when the extract output is missing/unparseable, cmd_semantic exits advisorily (0), RETAINS the AST graph (never lost), and reports a reason",
+          "the extract output is read from cacheDir/graphify-out/graph.json (the real extract path), NOT the canonical graph.json being diffed against itself",
+          "both sides of the diff pass through load_graph (same normalization) before the set-diff (codex #4)"
+        ],
+        "non_gameable_note": "this is the BINDING deterministic promotion proof — it wires the AC1 helper to the real cmd_semantic data flow and forbids self-comparison, wrong-path reads, and scrub-vs-raw mismatch; promotion cannot be faked by a hardcoded mode string"
+      }
+    },
+    {
+      "task_id": "20260530-170350",
+      "ac_id": "AC10",
+      "ac_uid": "fdc4988b928f0b32",
+      "type": "data",
+      "file": "tests/generated/20260530-170350/test_AC10_fdc4988b928f0b32.py",
+      "status": "active",
+      "hook_check": {
+        "kind": "cli_subprocess_state",
+        "command": "python3 scripts/graphify-maintain.py update (after a simulated prior semantic promotion in run-manifest)",
+        "assertions": [
+          "before: run-manifest semantic_mode == 'semantic:<backend>'",
+          "success path — after a successful AST update overwrite: run-manifest semantic_mode == 'ast_only', semantic added-count fields cleared/absent/zero, reset done via the SHARED reset_semantic_mode_in_manifest helper",
+          "ordering (codex iter #2): the manifest reset is written AFTER graph.json is overwritten (graph-then-manifest); reset uses write_json_locked (atomic)",
+          "failure-but-graph-unchanged: when the update exits nonzero/times out AND graph.json hash/mtime equals the pre-update snapshot, run-manifest semantic_mode is UNCHANGED (no spurious reset)",
+          "failure-but-graph-mutated (codex iter #3): when the update exits nonzero/times out BUT graph.json differs from the pre-update snapshot, run-manifest semantic_mode is RESET to 'ast_only', counts cleared, reason mentions semantic state invalidated",
+          "status reports ast_only (not the stale semantic mode) whenever the graph was overwritten/mutated",
+          "graph.json remains valid node-link with nodes>0 on the success path"
+        ],
+        "non_gameable_note": "prevents the honest-but-stale failure mode where status mirrors a manifest that no longer matches the on-disk graph; closes the codex iter #3 partial-write hole (a failed update that still mutated graph.json must invalidate semantic state) and enforces graph-then-manifest ordering via the shared locked helper"
+      }
+    },
+    {
+      "task_id": "20260530-170350",
+      "ac_id": "AC11",
+      "ac_uid": "c5f010cd2a8249e0",
+      "type": "data",
+      "file": "tests/generated/20260530-170350/test_AC11_c5f010cd2a8249e0.py",
+      "status": "active",
+      "hook_check": {
+        "kind": "cli_subprocess_state",
+        "command": "python3 scripts/graphify-enrich.py --task-id <ID> --context-file <ctx> (with run_graphify_cmd spied to materialize update outcomes; maintain run-manifest pre-seeded semantic:<backend>)",
+        "assertions": [
+          "before: maintain run-manifest.json semantic_mode == 'semantic:<backend>'",
+          "success path — after enrich Step-1 update with exit_code == 0 (graph overwritten): maintain run-manifest.json semantic_mode == 'ast_only' and semantic added-count fields cleared/absent/zero",
+          "graphify-maintain.py status then reports 'ast_only' (no stale semantic claim)",
+          "reset is performed via the SHARED helper graphify_lib.reset_semantic_mode_in_manifest (same helper used by maintain.cmd_update for AC10) — single source of reset logic",
+          "ordering (codex iter #2): the manifest reset is written AFTER the graph overwrite, via write_json_locked (atomic)",
+          "failure-but-graph-unchanged: when Step-1 update exit_code != 0 AND graph.json hash/mtime equals the pre-update snapshot, maintain run-manifest semantic_mode is UNCHANGED (no spurious reset)",
+          "failure-but-graph-mutated (codex iter #3): when Step-1 update exit_code != 0 BUT graph.json differs from the pre-update snapshot, semantic_mode is RESET to 'ast_only' (semantic state invalidated) so status does not lie",
+          "enrich.py still returns exit 0 in all branches (advisory); a reset error is swallowed and logged, never raised",
+          "enrich.py's own graphify-run.json and graph_context patch behavior are unchanged (no regression in the enrichment pipeline)"
+        ],
+        "non_gameable_note": "binds the OBJ-1 source-of-truth reconciliation on the REAL Step 7.5 harness path; the on-disk graph (AST after overwrite/mutation) and maintain's semantic_mode record cannot diverge, so status cannot lie; the shared-helper assertion forbids divergent reset implementations; the snapshot-comparison closes the codex iter #3 partial-write hole (failed-but-mutated must invalidate)"
+      }
+    },
+    {
+      "task_id": "20260530-170350",
+      "ac_id": "AC12",
+      "ac_uid": "27c6da476989d071",
+      "type": "data",
+      "file": "tests/generated/20260530-170350/test_AC12_27c6da476989d071.py",
+      "status": "active",
+      "hook_check": {
+        "kind": "controlled_integration_spy",
+        "module": "scripts/graphify-maintain.py",
+        "invocation": "import cmd_semantic via importlib SourceFileLoader; pre-populate a stale cacheDir/graphify-out/graph.json with added valid-confidence edges; spy run_graphify_cmd so the current extract exits nonzero / times out / writes nothing, and separately so the baseline update fails; do NOT invoke /dev /close /commit",
+        "assertions": [
+          "clear-before-extract: cmd_semantic deletes/moves cacheDir/graphify-out/graph.json BEFORE the extract call (verified by observing the file is gone at extract-invocation time, or by a recorded clear step)",
+          "stale-output + current extract exit_code != 0: cmd_semantic RETAINS AST (canonical graph.json unchanged), semantic_mode == 'ast_only', reason cites extract failure; the stale prior graph is NOT promoted",
+          "stale-output + current extract timeout: RETAIN AST, semantic_mode == 'ast_only'",
+          "stale-output + current extract writes nothing (cleared file not recreated): RETAIN AST, no promotion of the stale prior graph",
+          "no-fresh-AST-baseline (codex iter #7): when the initial baseline `update` fails/times out or leaves graph.json missing/unparseable, ZERO extract calls are recorded, exit 0, reason mentions 'no fresh AST baseline', AST not promoted",
+          "the clear never writes to or deletes anything under the source repo (repo_pollution(repo) == [])",
+          "POSITIVE control: when the baseline update succeeds AND the current extract succeeds and writes a fresh parseable output with >=1 added valid-confidence edge, promotion proceeds (cross-checks AC9) — proving the guard does not block legitimate fresh promotions"
+        ],
+        "non_gameable_note": "closes the OBJ-2 hole where a timed-out/failed current extract could promote a stale prior semantic graph left in graphify-out/; clear-before-extract is mandatory so promotion is gated on a file provably created by the current run, not mere existence or mtime; also enforces the no-fresh-AST-baseline guard so extract never diffs against a stale/garbage baseline"
+      }
+    },
+    {
+      "task_id": "20260530-170350",
+      "ac_id": "AC13-OBJ3",
+      "ac_uid": "16798066eca596aa",
+      "type": "data",
+      "file": "tests/generated/20260530-170350/test_AC13_OBJ3_16798066eca596aa.py",
+      "status": "active",
+      "hook_check": {
+        "kind": "cli_dispatch_plus_spy",
+        "command": "python3 scripts/graphify-maintain.py semantic (with backend env shaped per case; run_graphify_cmd spied)",
+        "assertions": [
+          "FORCED (GRAPHIFY_TRIAGE_BACKEND=somebackend): spy records extract argv containing '--backend' followed by 'somebackend'; a successful promotion labels semantic_mode 'semantic:somebackend'",
+          "FORCED-None (GRAPHIFY_TRIAGE_BACKEND='None' or 'null' or ''): treated as no usable backend -> ZERO extract calls, exit 0, 'no semantic backend reachable' message, semantic_mode == 'ast_only'; argv never contains '--backend None'",
+          "KEYED (ANTHROPIC_API_KEY set, claude ABSENT): spy records an 'extract' call AND that extract argv contains NO '--backend' flag; cmd_semantic does not bail; a successful promotion labels semantic_mode 'semantic:auto'",
+          "KEYED (ANTHROPIC_API_KEY set, claude PRESENT): STILL keyed/auto path — extract argv contains NO '--backend' flag (NOT '--backend claude-cli'); promotion labels 'semantic:auto' (key precedence over claude-cli, matching _detect_semantic_backend order)",
+          "KEYLESS-CLAUDE (no key, claude present): extract argv contains '--backend' followed by 'claude-cli'; promotion labels 'semantic:claude-cli'",
+          "NO-BACKEND (no key, claude absent, no forced): ZERO extract calls; clear 'no semantic backend reachable' message; exit 0; semantic_mode == 'ast_only'; AST retained",
+          "in ALL cases the recorded extract argv (when present) contains no element equal to the string 'None'",
+          "run-manifest.json never records semantic_mode == 'semantic:None'",
+          "the invocation is the maintain CLI binary (NOT a recursive /dev//close//commit slash-command)"
+        ],
+        "non_gameable_note": "spy inspects the exact extract argv tokens across the full 4-case matrix, forbidding `--backend None` and `semantic:None` everywhere; the key-present-AND-claude-present row forbids collapsing to claude-cli; the auto-detect promotion is forced to an explicit 'semantic:auto' label so a stub cannot record None; FORCED-None is explicitly routed to clean-fail"
+      }
+    }
+  ],
+  "archived_tests": []
+}
