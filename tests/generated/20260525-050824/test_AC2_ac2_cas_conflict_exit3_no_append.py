@@ -7,6 +7,7 @@
 
 import json
 import os
+import pathlib
 import subprocess
 import tempfile
 import pytest
@@ -17,11 +18,22 @@ AC_TYPE = "data"
 
 def test_AC2():
     """
-    GIVEN: logs/lifecycle.jsonl has one entry for agent dev with new_score=50
-    WHEN:  bash scripts/score-update.sh --agent dev --event close_success_qa_pass --expected-prev-score 99 is invoked (wrong expected score)
-    THEN:  exit code is 3, logs/lifecycle.jsonl has same number of lines as before, no new entry appended
+    GIVEN: logs/lifecycle.jsonl has one entry for agent dev with new_score=50,
+           AND (task 20260529-210616 M3) a fixture close-report with CLOSE: YES
+           so the M3 precondition gate passes (otherwise it would short-circuit
+           with exit 5 before the CAS check can fire).
+    WHEN:  bash scripts/score-update.sh --agent dev --event close_success_qa_pass
+           --note <fix-stem> --expected-prev-score 99 is invoked (wrong expected score)
+    THEN:  exit code is 3 (CAS conflict — must fire AFTER M3 gate),
+           logs/lifecycle.jsonl has same number of lines as before, no new entry appended.
     """
     repo = "/dev/shm/dev-workspace/dot-claude"
+    fix_stem = "ac2-050824-fix-aa"
+    fix_path = pathlib.Path(repo) / "docs" / "dev" / f"close-report-{fix_stem}.md"
+    fix_path.write_text(
+        "# Test fixture for 050824/test_AC2\n\nBody.\n\nCLOSE: YES\n",
+        encoding="utf-8",
+    )
     fd, tmp_lifecycle = tempfile.mkstemp(suffix=".jsonl", prefix="test-ac2-")
     try:
         seed = {
@@ -38,6 +50,7 @@ def test_AC2():
         result = subprocess.run(
             ["bash", "scripts/score-update.sh",
              "--agent", "dev", "--event", "close_success_qa_pass",
+             "--note", fix_stem,
              "--expected-prev-score", "99",
              "--lifecycle-file", tmp_lifecycle],
             capture_output=True, text=True, cwd=repo,
@@ -54,5 +67,10 @@ def test_AC2():
     finally:
         try:
             os.unlink(tmp_lifecycle)
+        except OSError:
+            pass
+        try:
+            if fix_path.exists():
+                fix_path.unlink()
         except OSError:
             pass

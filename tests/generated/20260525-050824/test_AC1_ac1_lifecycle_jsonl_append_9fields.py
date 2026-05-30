@@ -7,6 +7,7 @@
 
 import json
 import os
+import pathlib
 import subprocess
 import tempfile
 import pytest
@@ -17,11 +18,28 @@ AC_TYPE = "data"
 
 def test_AC1():
     """
-    GIVEN: logs/lifecycle.jsonl exists (empty or with existing entries) AND lifecycle-baseline-import.sh has been run
-    WHEN:  bash scripts/score-update.sh --agent dev --event close_success_qa_pass --note test is invoked
-    THEN:  logs/lifecycle.jsonl has exactly one more line than before; new line parses as valid JSON; new entry contains all 9 mandatory fields: agent=dev, event=close_success_qa_pass, delta=2, unclamped_score=prev_score+2, new_score=max(0,min(100,unclamped_score)) clamped, reason=test, prev_score equals prior latest score for dev, ts is valid ISO-8601, actor is non-empty. No field named note or uncapped_delta appears in emitted JSON.
+    GIVEN: logs/lifecycle.jsonl exists (empty or with existing entries),
+           AND lifecycle-baseline-import.sh has been run,
+           AND (task 20260529-210616 M3) a fixture close-report at
+           docs/dev/close-report-<fix-stem>.md exists with CLOSE: YES so the
+           M3 precondition gate permits the close_success_qa_pass append.
+    WHEN:  bash scripts/score-update.sh --agent dev --event close_success_qa_pass
+           --note <fix-stem> is invoked
+    THEN:  logs/lifecycle.jsonl has exactly one more line than before; new line
+           parses as valid JSON; new entry contains all 9 mandatory fields:
+           agent=dev, event=close_success_qa_pass, delta=2, unclamped_score=prev_score+2,
+           new_score=max(0,min(100,unclamped_score)) clamped, reason=<fix-stem>,
+           prev_score equals prior latest score for dev, ts is valid ISO-8601,
+           actor is non-empty. No field named note or uncapped_delta appears
+           in emitted JSON.
     """
     repo = "/dev/shm/dev-workspace/dot-claude"
+    fix_stem = "ac1-050824-fix-aa"
+    fix_path = pathlib.Path(repo) / "docs" / "dev" / f"close-report-{fix_stem}.md"
+    fix_path.write_text(
+        "# Test fixture for 050824/test_AC1\n\nBody.\n\nCLOSE: YES\n",
+        encoding="utf-8",
+    )
     fd, tmp_lifecycle = tempfile.mkstemp(suffix=".jsonl", prefix="test-ac1-")
     try:
         # Seed with dev at score 50
@@ -38,9 +56,11 @@ def test_AC1():
             before_lines = [l for l in f if l.strip()]
         before_count = len(before_lines)
 
+        # Task 20260529-210616 M3: --note is required AND must resolve to an
+        # existing close-report-<stem>.md with CLOSE: YES last line.
         result = subprocess.run(
             ["bash", "scripts/score-update.sh",
-             "--agent", "dev", "--event", "close_success_qa_pass", "--note", "test",
+             "--agent", "dev", "--event", "close_success_qa_pass", "--note", fix_stem,
              "--lifecycle-file", tmp_lifecycle],
             capture_output=True, text=True, cwd=repo,
         )
@@ -64,7 +84,8 @@ def test_AC1():
         assert last["unclamped_score"] == last["prev_score"] + last["delta"]
         expected_new = max(0, min(100, last["unclamped_score"]))
         assert last["new_score"] == expected_new
-        assert last["reason"] == "test"
+        # reason is whatever was passed in --note (the stem)
+        assert last["reason"] == fix_stem
         assert last["actor"]  # non-empty
         # Forbidden fields
         assert "note" not in last, "Forbidden field 'note' present"
@@ -72,5 +93,10 @@ def test_AC1():
     finally:
         try:
             os.unlink(tmp_lifecycle)
+        except OSError:
+            pass
+        try:
+            if fix_path.exists():
+                fix_path.unlink()
         except OSError:
             pass
