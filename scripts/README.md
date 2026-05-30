@@ -5,7 +5,7 @@ Organization and usage documentation for `scripts/`.
 <!-- AUTO:readme-stats -->
 
 ## Overview
-- **Total files**: 66
+- **Total files**: 67
 - **Subdirectories**: 3
 - **Naming convention**: kebab
 
@@ -28,6 +28,7 @@ Organization and usage documentation for `scripts/`.
 - `checkpoint-prune.sh` - checkpoint-prune.sh — trim refs/checkpoints/* to the most recent N commits
 - `cleanup-close-force-sentinel.sh` - Removes the force-close sentinel file for a given dev session.
 - `cleanup-tests-folder.sh` - Description: Remove validators that don't match git edge cases, preserving reports/
+- `close-scoring-decide.py` - Description: Decide which close_success_* event /close should issue based on
 - `create-overnight-state.sh` - create-overnight-state.sh — Create overnight state file (v7 schema)
 - `create-worktree.sh` - Create a git worktree from local HEAD (not origin/main).
 - `derive-default-branch.sh` - Description: Resolve the repository's default branch name dynamically (handles main/master/any other).

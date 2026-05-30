@@ -1,7 +1,7 @@
 # scripts
 
-*Last updated: 2026-05-29T20:53:50Z*
-**Total entries**: 87
+*Last updated: 2026-05-30T08:41:36Z*
+**Total entries**: 88
 **Convention**: kebab
 
 ## Tree
@@ -49,6 +49,7 @@ scripts/
 ├── `checkpoint-prune.sh` - checkpoint-prune.sh — trim refs/checkpoints/* to the most recent N commits
 ├── `cleanup-close-force-sentinel.sh` - Removes the force-close sentinel file for a given dev session.
 ├── `cleanup-tests-folder.sh` - Description: Remove validators that don't match git edge cases, preserving reports/
+├── `close-scoring-decide.py` - Description: Decide which close_success_* event /close should issue based on
 ├── `create-overnight-state.sh` - create-overnight-state.sh — Create overnight state file (v7 schema)
 ├── `create-worktree.sh` - Create a git worktree from local HEAD (not origin/main).
 ├── `derive-default-branch.sh` - Description: Resolve the repository's default branch name dynamically (handles main/master/any other).
