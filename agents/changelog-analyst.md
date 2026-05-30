@@ -634,11 +634,118 @@ Trigger `nothing_to_commit_precommitted` only when ALL THREE conditions hold:
 2. `COMMIT_SUBJECT` matches `/^auto-bulk:/`.
 3. `COMMIT_FILES` (blank lines filtered) intersects `task_cycle_files` (at least one file in common).
 
+### Recovery path when `nothing_to_commit_precommitted` is detected (BULK=false only)
+
+When all three conditions above hold AND `BULK=false`, do NOT return `nothing_to_commit_precommitted`.
+Instead, execute the following recovery path to produce a task-attributed commit and push-gate token.
+
+**Step R1: Range scan for pre-empted auto-bulk commits**
+
+Scan `baseline_head_sha..HEAD` (not just HEAD) to collect all auto-bulk commits that touched
+task cycle files. `baseline_head_sha` is the value of `git rev-parse HEAD` captured at Phase 1
+start before any write operations in this invocation (it comes from the dev-report top-level
+`baseline_head_sha` field; if absent, fall back to `HEAD~1`):
+
+```bash
+precommitted_shas=()
+while IFS=' ' read -r sha subject; do
+    # Check if this auto-bulk commit touched any task_cycle_files
+    commit_files=$(git show --name-only --format= "$sha" | grep -v '^$')
+    for f in $task_cycle_files; do
+        if echo "$commit_files" | grep -qF "$f"; then
+            precommitted_shas+=("$sha")
+            break
+        fi
+    done
+done < <(git log --format="%H %s" "${baseline_head_sha}..HEAD" | grep ' auto-bulk:')
+```
+
+If `precommitted_shas` is empty after the range scan, fall back to the original HEAD SHA collected
+in the THREE-STEP CHECK above.
+
+**Step R2: Derive attributed files**
+
+Compute `attributed_files` = intersection of `task_cycle_files` with all files changed by any
+SHA in `precommitted_shas`. These are the files from this task cycle that were swept up by the
+bulk session(s).
+
+**Step R3: Build and execute recovery commit**
+
+Derive `scope` using the same scope-derivation logic as Phase 6 (infer from `task_cycle_files`
+paths: `hooks` → hooks, `commands` → commands, `agents` → agents, `scripts` → scripts,
+`docs` → docs, mixed → repo).
+
+Build the recovery commit message in a tmpfile (DO NOT rule 12 — no heredoc form):
+
+```bash
+TMPFILE=$(umask 077; mktemp /tmp/recovery-commit-XXXXXX.txt)
+trap "rm -f ${TMPFILE}" EXIT
+{
+    echo "chore(${scope}): recovery commit — task ${TASK_ID} pre-empted by bulk session"
+    echo ""
+    echo "Task-id: ${TASK_ID}"
+    for sha in "${precommitted_shas[@]}"; do
+        echo "Precommitted-by: ${sha}"
+    done
+    echo "Attributed-files:"
+    for f in "${attributed_files[@]}"; do
+        echo "  ${f}"
+    done
+} > "${TMPFILE}"
+```
+
+Verify the subject line does NOT match `\bsync\b.*\buncommitted\b` or `chore\(claude\)\s*:\s*sync`
+(DO NOT rule 10). The proposed subject `chore(<scope>): recovery commit — task <TASK_ID> pre-empted by bulk session`
+does not match either pattern; if scope derivation produces an unexpected value that triggers a
+match, replace the summary with `session recovery for ${scope}`.
+
+Execute the recovery commit using the existing single-use commit grant (not consumed because no
+`git commit` fired against the clean working tree):
+
+```bash
+git -C "${GIT_ROOT}" commit --allow-empty -F "${TMPFILE}"
+```
+
+**Step R4: Capture recovery commit SHA**
+
+```bash
+COMMIT_SHA=$(git -C "${GIT_ROOT}" rev-parse HEAD)
+BRANCH=$(git -C "${GIT_ROOT}" rev-parse --abbrev-ref HEAD)
+```
+
+**Step R5: Write push-gate token**
+
+Execute Phase 10 push-gate write logic unchanged (same `sha256(realpath(GIT_ROOT))[:16]` hash,
+same JSON schema, same DO NOT rule 7 session-collision check). If the existing token's
+`session_id` differs from `PUSH_GATE_SID`, print a WARNING and skip — DO NOT rule 7 applies
+identically here.
+
+**Step R6: Return `commit_status: committed`**
+
+On success, return `commit_status: committed` (NOT `nothing_to_commit_precommitted`).
+Optionally include informational fields `"recovery": true` and `"precommitted_shas": [...]`
+in the structured output — `/commit` ignores unknown fields harmlessly.
+
+**Step R7: Recovery failure handling**
+
+If the `git commit --allow-empty` in Step R3 fails (hook blocked, git error, etc.):
+- Return `commit_status: failed`
+- Set `failure_code: hook_blocked` if a PreToolUse hook blocked the command; otherwise `failure_code: git_error`
+- Set `failure_reason` to a message indicating the failure occurred during precommitted recovery (e.g. `"recovery commit failed after nothing_to_commit_precommitted detection: <error>"`)
+- Do NOT return `nothing_to_commit_precommitted` — the recovery path has exactly two outcomes:
+  `committed` (success) or `failed` (failure). The `nothing_to_commit_precommitted` value is
+  never emitted by the recovery path itself.
+
+**BULK=true guard**: This entire recovery path executes ONLY when `BULK=false`. When `BULK=true`,
+the three conditions above trigger `nothing_to_commit_precommitted` status as before (bulk mode
+has its own loop-continuation semantics and does not use the recovery path).
+
 ### auto_bulk_commits array
 
-When status is `nothing_to_commit_precommitted`, populate `auto_bulk_commits` as an array
-of objects `{repo_root, branch, sha}` — one per repo in which the auto-bulk commit was
-detected. Do not use a singular `sha` field (ambiguous in multi-repo setups).
+When status is `nothing_to_commit_precommitted` (BULK=true only — see recovery path above),
+populate `auto_bulk_commits` as an array of objects `{repo_root, branch, sha}` — one per repo
+in which the auto-bulk commit was detected. Do not use a singular `sha` field (ambiguous in
+multi-repo setups).
 
 ### failure_code values (present only when status=failed)
 
