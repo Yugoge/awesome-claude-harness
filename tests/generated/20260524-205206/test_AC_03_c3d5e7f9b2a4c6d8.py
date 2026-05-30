@@ -14,14 +14,26 @@ REPO_ROOT = pathlib.Path(__file__).resolve().parents[3]
 
 def test_AC_03():
     """
-    GIVEN: commands/close.md is read in the region around lines 421-431 (the Session self-summary block)
+    M5 rewrite (task 20260529-210616): the original timeline assertion was
+    superseded by the 6-bucket Session Summary form introduced in a later
+    cycle (locked at commands/close.md lines 421-433, NG7). Per ticket
+    M5 #5, this test now asserts the CURRENT 6-bucket invariant. Source
+    commands/close.md is NOT rolled back.
+
+    GIVEN: commands/close.md is read in the Session Summary block region
     WHEN:  the Session Summary template is inspected
-    THEN:  heading/label "Session Summary" exists; template mandates chronological timeline with 2-line entries "User need: <text>" / "Design response: <text>"; cites user-requirement-<DEV_SESSION_ID>.md as User-need source; total length <= 15 lines, forbids narrative paragraphs; notes orchestrator-improvisational quality (FORMAT-only constraint); old 5-bucket free-form text (what was accomplished / not accomplished / user needs satisfied / not satisfied / bugs encountered / improvement opportunities) is REMOVED as required content directives.
+    THEN:  heading "Session Summary" exists; template mandates chronological
+           order; all 6 buckets are listed
+           (Accomplished, Not accomplished, User needs satisfied,
+            User needs not satisfied, Bugs encountered, Improvement opportunities);
+           cites user-requirement-<DEV_SESSION_ID>.md as source;
+           specifies "20 lines" cap; mandates exactly 1 sentence per bullet;
+           forbids narrative paragraphs.
     """
     text = (REPO_ROOT / "commands" / "close.md").read_text(encoding="utf-8")
 
-    # Locate the Session Summary template region (it is the block after the
-    # heading "**Session Summary — CLOSE:YES branch only...**" up to the
+    # Locate the Session Summary template region (heading
+    # "**Session Summary — CLOSE:YES branch only...**" up to the
     # rating-prompt block).
     start_marker = "Session Summary"
     end_marker = "User rating prompt"
@@ -31,32 +43,42 @@ def test_AC_03():
     assert end != -1 and end > start, "could not delimit Session Summary block"
     region = text[start:end]
 
-    # (a) Heading/label "Session Summary" exists
+    # (a) Heading "Session Summary" exists
     assert "Session Summary" in region
 
-    # (b) Template mandates timeline format
-    for required in ("chronological", "timeline", "User need:", "Design response:"):
-        assert required in region, f"Session Summary template missing required phrase: {required!r}"
+    # (b) Template mandates chronological order
+    assert "chronological order" in region, (
+        "Session Summary template must mandate 'chronological order' (M5 6-bucket invariant)"
+    )
 
-    # (c) Cites user-requirement-<DEV_SESSION_ID>.md
-    assert "user-requirement-" in region, "Session Summary template must cite user-requirement-<...>.md as primary source"
-
-    # (d) Total length <= 15 lines mentioned
-    assert "<= 15 lines" in region, "Session Summary template must specify '<= 15 lines'"
-    # And forbid narrative paragraphs
-    assert "FORBIDDEN" in region or "forbidden" in region or "Narrative paragraphs are FORBIDDEN" in region
-
-    # (e) Orchestrator-improvisational note
-    assert "orchestrator-improvisational" in region or "improvisational" in region
-
-    # (f) Old 5-bucket free-form text removed as required content directives.
-    # Permit historical references in non-template prose; check the template block specifically.
-    forbidden = [
-        "What was accomplished",
-        "What was NOT accomplished",
+    # (c) All 6 buckets present
+    required_buckets = [
+        "Accomplished",
+        "Not accomplished",
         "User needs satisfied",
+        "User needs not satisfied",
         "Bugs encountered",
         "Improvement opportunities",
     ]
-    for ph in forbidden:
-        assert ph not in region, f"old 5-bucket phrase still present in Session Summary template: {ph!r}"
+    for bucket in required_buckets:
+        assert bucket in region, (
+            f"Session Summary template missing required bucket label: {bucket!r}"
+        )
+
+    # (d) Source binding cites user-requirement-<DEV_SESSION_ID>.md
+    assert "user-requirement-" in region, (
+        "Session Summary template must cite user-requirement-<...>.md as source"
+    )
+
+    # (e) 20-line cap mandated
+    assert "20 lines" in region, "Session Summary template must specify '20 lines' cap"
+
+    # (f) Exactly 1 sentence per bullet
+    assert "exactly 1 sentence" in region, (
+        "Session Summary template must specify 'exactly 1 sentence' per bullet"
+    )
+
+    # (g) Narrative paragraphs forbidden
+    assert "Narrative paragraphs are FORBIDDEN" in region, (
+        "Session Summary template must forbid narrative paragraphs"
+    )
