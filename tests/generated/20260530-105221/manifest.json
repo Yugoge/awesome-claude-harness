@@ -1,0 +1,429 @@
+{
+  "schema_version": "1.1",
+  "task_id": "20260530-105221",
+  "generated_at": "2026-05-30T13:30:50.786676+00:00",
+  "active_tests": [
+    {
+      "task_id": "20260530-105221",
+      "ac_id": "AC1",
+      "ac_uid": "281d23361364833f",
+      "type": "data",
+      "file": "tests/generated/20260530-105221/test_AC1_281d23361364833f.py",
+      "status": "active",
+      "hook_check": {
+        "cmd": "graphify update <repo>",
+        "env": {
+          "GRAPHIFY_OUT": "cacheDir"
+        },
+        "forbidden_flags": [
+          "--init",
+          "--update",
+          "--output-dir",
+          "--project-dir"
+        ],
+        "assert": [
+          "graph.json present in cache",
+          "exit==0"
+        ],
+        "healthy_path_real_binary": true
+      }
+    },
+    {
+      "task_id": "20260530-105221",
+      "ac_id": "AC1b",
+      "ac_uid": "ea4e840ab30f19df",
+      "type": "data",
+      "file": "tests/generated/20260530-105221/test_AC1b_ea4e840ab30f19df.py",
+      "status": "active",
+      "hook_check": {
+        "cmd": "graphify update <repo>",
+        "precondition": [
+          "cache dir empty",
+          "cacheDir/graph.json absent",
+          "check_cache_available() initially unavailable"
+        ],
+        "invocation": {
+          "env_GRAPHIFY_OUT": "cacheDir",
+          "cwd_outside_repo": true,
+          "timeout_max_s": 300
+        },
+        "build_assert": [
+          "cacheDir/graph.json created by invocation (absent before)",
+          "graph.json parses node-link",
+          "len(nodes)>0",
+          "a node/source_file/label matches the unique fixture sentinel"
+        ],
+        "post_read_status": "ok",
+        "not_status": "unavailable",
+        "reject": "prebuilt/copied/synthesized graph.json",
+        "exit": 0,
+        "healthy_path_real_binary": true
+      }
+    },
+    {
+      "task_id": "20260530-105221",
+      "ac_id": "AC2",
+      "ac_uid": "f50385d4cddc0b2b",
+      "type": "data",
+      "file": "tests/generated/20260530-105221/test_AC2_f50385d4cddc0b2b.py",
+      "status": "active",
+      "hook_check": {
+        "reads": "graph.json[links]",
+        "must_invoke": [
+          "graphify",
+          "query",
+          "--graph",
+          "<cacheDir/graph.json>",
+          "--budget"
+        ],
+        "graph_flag_value": "cacheDir/graph.json",
+        "query_string_anchor": "contains >=1 anchor extracted from input-under-test AND present/resolvable in graph.json (not hardcoded/irrelevant)",
+        "consume_stdout": true,
+        "proof_of_call": {
+          "recorded_executable_is_real_binary": true,
+          "recorded_argv_contains": [
+            "graphify",
+            "query"
+          ],
+          "graph_flag_is_real_path": true,
+          "sentinel_stdout_attributable_in": "structural_context"
+        },
+        "token_cap": 2000,
+        "forbidden_flags": [
+          "--file",
+          "--format",
+          "--cache-dir"
+        ],
+        "healthy_path_real_binary": true,
+        "healthy_vs_degraded": "MUST-invoke binds ONLY on healthy path (graph.json exists + real binary available + >=1 anchor(AC2)/resolved id(AC3)); if any precondition absent or call raises FileNotFoundError/TimeoutExpired/non-zero -> degrade advisory/fail-open exit 0, never block /dev (codex#8).",
+        "degraded": {
+          "only_via": "real_attempted_invocation",
+          "status": "query_cli_status=degraded",
+          "exit": 0
+        },
+        "fail_if": [
+          "no real graphify query call on healthy path",
+          "query lacks input-derived anchor"
+        ]
+      }
+    },
+    {
+      "task_id": "20260530-105221",
+      "ac_id": "AC3",
+      "ac_uid": "143a78ee122ff4cb",
+      "type": "data",
+      "file": "tests/generated/20260530-105221/test_AC3_143a78ee122ff4cb.py",
+      "status": "active",
+      "hook_check": {
+        "resolve": "path->node.id (bounded set, incl symbols)",
+        "primary_subgraph_source": "graph.json nodes+links",
+        "must_invoke": [
+          "graphify",
+          "affected",
+          "<resolved-node-id>",
+          "--graph",
+          "<cacheDir/graph.json>",
+          "--depth"
+        ],
+        "affected_seed": "node.id that EQUALS one of resolved_node_ids for the modified path (never any-node, never raw path/label)",
+        "consume_stdout": true,
+        "proof_of_call": {
+          "recorded_executable_is_real_binary": true,
+          "recorded_argv_contains": [
+            "graphify",
+            "affected",
+            "<one-of-resolved_node_ids>"
+          ],
+          "sentinel_stdout_reflected_in": "graph_context"
+        },
+        "degraded": {
+          "only_via": "real_attempted_invocation",
+          "status": "affected_cli_status=degraded",
+          "keeps": "graph.json subgraph",
+          "exit": 0
+        },
+        "zero_resolve": "unresolved_paths[] + no affected call required",
+        "healthy_path_real_binary": true,
+        "healthy_vs_degraded": "MUST-invoke binds ONLY on healthy path (graph.json exists + real binary available + >=1 anchor(AC2)/resolved id(AC3)); if any precondition absent or call raises FileNotFoundError/TimeoutExpired/non-zero -> degrade advisory/fail-open exit 0, never block /dev (codex#8).",
+        "fail_if": [
+          ">=1 id resolved but no real graphify affected call",
+          "affected seeded with non-resolved node id"
+        ]
+      }
+    },
+    {
+      "task_id": "20260530-105221",
+      "ac_id": "AC4",
+      "ac_uid": "3390227e29669341",
+      "type": "data",
+      "file": "tests/generated/20260530-105221/test_AC4_3390227e29669341.py",
+      "status": "active",
+      "hook_check": {
+        "forbidden_in_repo": [
+          "graphify-out/",
+          "graph.json",
+          "GRAPH_REPORT.md",
+          "graph.html",
+          ".graphify_root",
+          ".graphify_labels.json"
+        ],
+        "allowed": [
+          ".claude/dev-registry/<task>/graphify/",
+          "committed graphify scripts/docs/tests"
+        ]
+      }
+    },
+    {
+      "task_id": "20260530-105221",
+      "ac_id": "AC5",
+      "ac_uid": "23cce3cd3aff8a04",
+      "type": "data",
+      "file": "tests/generated/20260530-105221/test_AC5_23cce3cd3aff8a04.py",
+      "status": "active",
+      "hook_check": {
+        "gate_in": [
+          "auto",
+          "1"
+        ],
+        "gate_not": "0",
+        "comment_documents": [
+          "semantic key",
+          "CLAUDE_GRAPHIFY_CACHE_ROOT",
+          "GRAPHIFY_OUT wrapper-internal"
+        ]
+      }
+    },
+    {
+      "task_id": "20260530-105221",
+      "ac_id": "AC6",
+      "ac_uid": "2ed22b8be999bdea",
+      "type": "data",
+      "file": "tests/generated/20260530-105221/test_AC6_2ed22b8be999bdea.py",
+      "status": "active",
+      "hook_check": {
+        "semantic_gate": "proof not presence",
+        "ast_first": true,
+        "fallback_fields": [
+          "semantic_mode=ast_only",
+          "semantic_backend_probe"
+        ],
+        "exit": 0
+      }
+    },
+    {
+      "task_id": "20260530-105221",
+      "ac_id": "AC7",
+      "ac_uid": "0e724a48d68b1e67",
+      "type": "data",
+      "file": "tests/generated/20260530-105221/test_AC7_0e724a48d68b1e67.py",
+      "status": "active",
+      "hook_check": {
+        "exit": 0,
+        "advisory": true
+      }
+    },
+    {
+      "task_id": "20260530-105221",
+      "ac_id": "AC8",
+      "ac_uid": "18c118d3f477fb25",
+      "type": "data",
+      "file": "tests/generated/20260530-105221/test_AC8_18c118d3f477fb25.py",
+      "status": "active",
+      "hook_check": {
+        "fixture": "controlled, >=1 resolving path",
+        "pre_query_status": [
+          "ok",
+          "degraded"
+        ],
+        "graph_context": "non-empty for resolved seeds",
+        "unresolved_handling": "unresolved_paths[]"
+      }
+    },
+    {
+      "task_id": "20260530-105221",
+      "ac_id": "AC14",
+      "ac_uid": "98a1420ab9b1d15c",
+      "type": "data",
+      "file": "tests/generated/20260530-105221/test_AC14_98a1420ab9b1d15c.py",
+      "status": "active",
+      "hook_check": {
+        "fixture_min": ">=2 nodes and >=1 link in focused subgraph",
+        "arrays_nonempty": [
+          "nodes[]",
+          "edges[]/relations[]"
+        ],
+        "node_fields_required": [
+          "id",
+          "label",
+          "source_file"
+        ],
+        "node_fields_match": "exactly == graph.json node",
+        "edge_fields_required": [
+          "source",
+          "target",
+          "relation"
+        ],
+        "edge_fields_match": "exactly == a graph.json link",
+        "at_least_one_node_source_file": "== modified fixture file AND exists on disk",
+        "reject_if": "summary-only/count-only/id-only (even alongside token counts/metadata) OR empty arrays",
+        "token_cap": 2000
+      }
+    },
+    {
+      "task_id": "20260530-105221",
+      "ac_id": "AC9",
+      "ac_uid": "c27090b1db823921",
+      "type": "data",
+      "file": "tests/generated/20260530-105221/test_AC9_c27090b1db823921.py",
+      "status": "active",
+      "hook_check": {
+        "forbidden_verb": "install",
+        "forbidden_patterns": [
+          "graphify .* install",
+          "graphify install",
+          "graphify claude install",
+          "graphify hook install",
+          "graphify gemini install",
+          "graphify codex install",
+          "graphify openai install",
+          "git-hook install",
+          "PreToolUse hook install"
+        ],
+        "no_autoedit": [
+          "CLAUDE.md",
+          "any project config file"
+        ]
+      }
+    },
+    {
+      "task_id": "20260530-105221",
+      "ac_id": "AC10",
+      "ac_uid": "99d003ecdc30951c",
+      "type": "data",
+      "file": "tests/generated/20260530-105221/test_AC10_99d003ecdc30951c.py",
+      "status": "active",
+      "hook_check": {
+        "existing_pass": 25,
+        "new_coverage": [
+          "real_flags",
+          "node_link",
+          "no_pollution",
+          "gate",
+          "semantic_fallback",
+          "query_affected_proof_of_call_real_binary",
+          "cold_start_initial_build_sentinel",
+          "graph_context_content",
+          "concrete_timeouts",
+          "sensitive_path_exclusion_recursive"
+        ]
+      }
+    },
+    {
+      "task_id": "20260530-105221",
+      "ac_id": "AC11",
+      "ac_uid": "1bb1628328d4235c",
+      "type": "data",
+      "file": "tests/generated/20260530-105221/test_AC11_1bb1628328d4235c.py",
+      "status": "active",
+      "hook_check": {
+        "forbidden_flags": [
+          "--init",
+          "--update",
+          "--output-dir",
+          "--project-dir",
+          "--cache-dir",
+          "--file",
+          "--format"
+        ]
+      }
+    },
+    {
+      "task_id": "20260530-105221",
+      "ac_id": "AC12",
+      "ac_uid": "90097ea54d4b02d4",
+      "type": "data",
+      "file": "tests/generated/20260530-105221/test_AC12_90097ea54d4b02d4.py",
+      "status": "active",
+      "hook_check": {
+        "available": true,
+        "probe_key": "cacheDir/graph.json",
+        "not_keyed_on": "<cache_root>/<repo_key>/manifest.json"
+      }
+    },
+    {
+      "task_id": "20260530-105221",
+      "ac_id": "AC13",
+      "ac_uid": "a841268c3e10b04f",
+      "type": "data",
+      "file": "tests/generated/20260530-105221/test_AC13_a841268c3e10b04f.py",
+      "status": "active",
+      "hook_check": {
+        "cache_root_inside_repo": {
+          "refuse": true,
+          "reason": "cache_root_inside_repo",
+          "exit": 0,
+          "no_repo_artifact": true
+        },
+        "timeout_ceilings_seconds": {
+          "step1_5_query": 15,
+          "step7_5_affected_query": 20,
+          "semantic_probe": 30,
+          "incremental_update": 60,
+          "init_update": 300
+        },
+        "timeout_required_numeric": true,
+        "on_timeout": {
+          "status": "degraded/unavailable",
+          "exit": 0,
+          "no_source_repo_artifact": true
+        },
+        "fail_if": "any subprocess call site with timeout=None or missing timeout"
+      }
+    },
+    {
+      "task_id": "20260530-105221",
+      "ac_id": "AC15",
+      "ac_uid": "6f62f4b41623a742",
+      "type": "data",
+      "file": "tests/generated/20260530-105221/test_AC15_6f62f4b41623a742.py",
+      "status": "active",
+      "hook_check": {
+        "inject_sensitive_nodes": [
+          ".env",
+          "secrets/api.key",
+          "deploy/server.pem",
+          "config/.secret"
+        ],
+        "inject_links_referencing_sensitive": true,
+        "seed_cli_stdout_with_sensitive": true,
+        "reapply_on": [
+          "graph.json read",
+          "real graphify query/affected stdout"
+        ],
+        "drop_links_touching_excluded": true,
+        "recursive_serialize_scan": [
+          "pre_query.json",
+          "structural_context",
+          "graph_context",
+          "advisory/error fields",
+          "unresolved_paths[]",
+          "summaries",
+          "raw_output/stdout-derivatives"
+        ],
+        "normalize": [
+          "collapse duplicate slashes",
+          "unify path separators"
+        ],
+        "forbidden_substrings": [
+          ".env",
+          "secrets/",
+          ".pem",
+          ".key",
+          ".secret"
+        ],
+        "fail_if": "any EXCLUDE_FRAGMENTS token leaks from graph.json OR CLI stdout into any emitted field"
+      }
+    }
+  ],
+  "archived_tests": []
+}
