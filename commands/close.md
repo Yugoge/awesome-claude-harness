@@ -20,11 +20,14 @@ The orchestration of rounds, the calls to codex, the evaluation of agreement, an
 ## Invocation
 
 ```
-/close                                       # agent infers task-id from current /dev cycle (typical use)
-/close --force                               # skip debate, audit-logged (escape hatch — see Forced override path below)
+/close                                                         # agent infers task-id from current /dev cycle (typical use)
+/close --force                                                 # skip debate, audit-logged (escape hatch — see Forced override path below)
+/close <task-id> --force --reason "developed with /do"         # /do work: no dev artifacts exist; --force skips all artifact checks
 ```
 
 Power users may also pass an explicit task-id or path: `/close <task-id>` or `/close docs/dev/ticket-<ts>.md` (legacy: `/close docs/dev/ba-spec-<ts>.md`). The orchestrator parses these forms but the typical invocation is bare `/close` and lets the agent resolve the task-id from conversation context. No filesystem scan, no default-to-newest.
+
+`/do`-developed work has no dev cycle artifacts (no context, dev-report, or qa-report). The bare timestamp form (`/close <task-id> --force`) skips all artifact existence checks. Follow with `/commit <task-id>`.
 
 <!-- Cross-reference: BA spec /root/docs/dev/ba-spec-20260426-redev8.md § AC-CLOSE-FORCE-1..6 govern --force / --reason behavior. -->
 
@@ -143,12 +146,13 @@ Every forced override is auditable and traceable. Routine use defeats the purpos
 Resolve the **task-id** for the report filename. The task-id is the SAME identifier used by the source `/dev` cycle (for example, a timestamp-style task id) — NOT a fresh `date +%Y%m%d-%H%M%S` at /close invocation time. Using a fresh timestamp would break /commit's PRIMARY-path lookup, which requires `close-report-<task-id>.md` and `dev-report-<task-id>.json` under the SAME `<task-id>`.
 
 Resolve the spec to evaluate (in priority order):
-- If `$ARGUMENTS` is an explicit path (ends in `.md`/`.json` or contains `/`): use that path. Verify it exists; fail clearly if not. Derive the task-id by stripping the `ticket-` prefix (or legacy `ba-spec-` prefix) and `.md`/`.json` suffix from the basename (e.g. `docs/dev/ticket-X.md` → task-id `X`; `docs/dev/ba-spec-X.md` → task-id `X`).
+- If `$ARGUMENTS` is an explicit path (ends in `.md`/`.json` or contains `/`): use that path. Verify it exists; fail clearly if not. Derive the task-id by stripping the `ticket-` prefix (or legacy `ba-spec-` prefix) and `.md`/`.json` suffix from the basename (e.g. `docs/dev/ticket-X.md` → task-id `X`; `docs/dev/ba-spec-X.md` → task-id `X`). If the basename starts with `do-report-`, also strip that prefix and set `DO_REPORT=$ARGUMENTS` (e.g. `docs/dev/do-report-X.json` → task-id `X`, `DO_REPORT` set, proceeds to do-report lite preflight).
 - Elif `$ARGUMENTS` matches a timestamp pattern (e.g. `20260424-103044`):
   - **Non-force path**: try `docs/dev/ticket-${ARGUMENTS}.md` first; if absent, fall back to legacy `docs/dev/ba-spec-${ARGUMENTS}.md`. Verify that the ticket/ba-spec file exists. Also resolve `docs/dev/qa-report-${ARGUMENTS}.json` and verify it exists. Both the ticket/ba-spec AND the qa-report must exist for normal-path resolution to succeed.
+  - **do-report path**: if the non-force path fails (ticket/ba-spec absent OR qa-report absent) BUT `docs/dev/do-report-${ARGUMENTS}.json` exists with top-level `source == "do"`, use the do-report path. Set `DO_REPORT=docs/dev/do-report-${ARGUMENTS}.json`. Task-id is `$ARGUMENTS` directly. Proceed to the do-report lite preflight below instead of the normal-path artifact preflight.
   - **Forced-override path**: use `$ARGUMENTS` directly as the task-id with NO file existence verification — neither ticket/ba-spec nor qa-report checks apply. The task-id is the argument itself; the close-report becomes the sole audit artifact for this task. This allows `/close <ts> --force` to work even when no ticket, spec, or qa-report file exists (e.g., purely manual `/do` work where no ticket was created).
   The task-id IS `$ARGUMENTS` directly (timestamp form is a valid task-id; this preserves backwards compatibility for `/close <ts>` invocations and works for both ticket- and ba-spec- artifact name conventions).
-- Else (no argument): the orchestrator invoking /close MUST already know this conversation's dev artifacts from context (it just ran /dev in the same session). It embeds those paths directly into Step 5's QA prompt and resolves the task-id from the active dev cycle's artifacts. There is NO filesystem scan and NO default-to-newest. If the orchestrator cannot identify the spec from context, exit with: `No spec identified. Either run /close within a conversation that just completed /dev, or provide an explicit path/timestamp.`
+- Else (no argument): the orchestrator invoking /close MUST already know this conversation's dev artifacts from context (it just ran /dev or /do in the same session). For /dev work: embed the artifact paths directly into the QA prompt and resolve the task-id from the active dev cycle. For /do work: if a do-report was written during this session, infer TASK_ID and DO_REPORT from the do-report path in context. There is NO filesystem scan and NO default-to-newest. If the orchestrator cannot identify the spec or do-report from context, exit with: `No spec identified. Either run /close within a conversation that just completed /dev, or provide an explicit path/timestamp.`
 
 If no task-id can be derived (no argument, no /dev context, no parseable filename), /close MUST exit with the same error message above. /close MUST NOT default to `date +%Y%m%d-%H%M%S` for the close-report filename — that would silently break the task-id chain.
 
@@ -182,6 +186,15 @@ Set `PARALLEL_AGGREGATE_WRITTEN=true` if action is `"aggregated"` or `"validated
 Skip Step 0 entirely. Set `PARALLEL_AGGREGATE_WRITTEN=false`.
 
 The `PARALLEL_AGGREGATE_WRITTEN` flag (and `AGGREGATE_RESULT` JSON) must be held in memory within the same close workflow and passed to Step 1's conditional logic below.
+
+### do-report lite preflight (non-force, /do path)
+
+If `DO_REPORT` was set during task-id resolution, skip the normal-path artifact preflight entirely and run this lite check instead:
+
+- Read `$DO_REPORT`. Verify top-level `task_id == TASK_ID`, `source == "do"`, `do.status == "completed"`, `do.files_modified` is a non-null array.
+- No ticket, context, dev-report, qa-report, or completion existence checks apply.
+- Set `SPEC_ID=""` (no cp-state for /do work). Skip the cp-state resolver entirely.
+- Proceed directly to Step 0 parallel-dev check (using `do.files_modified` as the file list for shard detection scope — typically no shards for /do work, Case 3 applies).
 
 ### Normal-path artifact preflight (non-force)
 
@@ -226,7 +239,8 @@ The orchestrator MUST emit a TodoWrite call updating the Step-N todo item to `in
 **Compute the cycle-diff file list** before dispatch:
 
 - **Closed-task path** (a `dev-report-<TASK_ID>.json` exists): read the `dev.files_modified` array (top-level non-null list per the dev-report contract); use that list verbatim as `<cycle-diff-file-list>`.
-- **Irregular path** (no dev-report-<TASK_ID>.json — e.g., orchestrator-direct edits under `/do`, or hand-edits): run `git diff --name-only` against the relevant repo's cycle commit range to compute the file list. For nested-`.claude` edits the relevant repo is the nested git repo at `/root/.claude` (working-tree root); for parent-repo edits use `/root`.
+- **do-report path** (`DO_REPORT` is set, i.e. `do-report-<TASK_ID>.json` exists): read `do.files_modified` array verbatim as `<cycle-diff-file-list>`. Do NOT fall through to the Irregular path.
+- **Irregular path** (no dev-report-<TASK_ID>.json and no do-report — e.g., hand-edits): run `git diff --name-only` against the relevant repo's cycle commit range to compute the file list. For nested-`.claude` edits the relevant repo is the nested git repo at `/root/.claude` (working-tree root); for parent-repo edits use `/root`.
 - If both paths yield an empty list, record `<cycle-diff-file-list>=` (empty) and proceed with dispatch — inspectors will return findings=[] and Step 5 will treat all cleanliness branches as non-blocking.
 
 **Parallel detection check** — before dispatch, evaluate whether a parallel-dev cycle was detected:
@@ -274,8 +288,8 @@ You are the QA gatekeeper evaluating whether a completed development can be clos
 In both modes, the caller does NOT orchestrate rounds; you own the loop.
 
 Input artifacts (read them first):
-- BA spec:     <BA_SPEC path or "none">
-- QA report:   <QA_REPORT path or "none">
+- BA spec / do-report: <BA_SPEC path, or do-report-<ts>.json for /do work, or "none">
+- QA report:   <QA_REPORT path or "none" — omit for /do work, no prior QA cycle exists>
 - Companions:  <context-<ts>.json / dev-report-<ts>.json if present, else omit>
 
 Debate protocol (all runs INSIDE you):
@@ -287,8 +301,8 @@ Round 1:
       - Regression risks? Scope drift? Missed edge cases?
 
       WORKFLOW INTEGRITY DIMENSION (mandatory — evaluate ALL four bullets explicitly; report a per-bullet PASS / FAIL / N/A-with-reason in the transcript; ANY FAIL forces CLOSE: NO regardless of AC coverage):
-        1. **Downstream consumability** — Can the artifacts under evaluation be consumed by downstream commands (`/commit`, `/push`, `/merge`) without manual patching of timestamps, names, or artifact contracts? Concretely: does `dev-report-<task-id>.json` exist with the SAME `<task-id>` as this close cycle? Does `close-report-<task-id>.md` end with `CLOSE: YES`? If a human would have to rename, copy, or hand-edit any artifact to make `/commit` succeed, this bullet is FAIL.
-        2. **task-id chain consistency** — Are predecessor artifacts (BA spec → context → dev-report → completion → qa-report → close-report) ALL present under the SAME `<task-id>`? Mismatched task-ids across the chain → FAIL.
+        1. **Downstream consumability** — Can the artifacts under evaluation be consumed by downstream commands (`/commit`, `/push`, `/merge`) without manual patching of timestamps, names, or artifact contracts? Concretely: does `dev-report-<task-id>.json` exist with the SAME `<task-id>` as this close cycle? Does `close-report-<task-id>.md` end with `CLOSE: YES`? If a human would have to rename, copy, or hand-edit any artifact to make `/commit` succeed, this bullet is FAIL. **For /do path** (DO_REPORT is set): N/A-with-reason — substitute `do-report-<task-id>.json` for `dev-report-<task-id>.json` in this check; changelog-analyst accepts do-report as a valid staging-whitelist source (see agents/changelog-analyst.md); evaluate consumability against do-report + close-report only.
+        2. **task-id chain consistency** — Are predecessor artifacts (BA spec → context → dev-report → completion → qa-report → close-report) ALL present under the SAME `<task-id>`? Mismatched task-ids across the chain → FAIL. **For /do path** (DO_REPORT is set): N/A-with-reason — chain is `do-report → close-report` under the same `<task-id>`; ticket/context/dev-report/qa-report/completion are intentionally absent for /do work. Evaluate consistency within this reduced chain only.
         3. **Pre-existing-defect rule** (rewritten per spec-20260503-091826 Section 5.4 rule 1+2 — out-of-scope-by-default UNLESS user-need-impact OR security OR cleanliness-of-THIS-diff) — If a Round-1 critique surfaces a "pre-existing architectural defect" or similar, the debate resolves as follows:
              (a) if THIS cycle's BA spec CLAIMS to address the defect AND the claim maps to user-need / path-dependent shared infrastructure / security / cleanliness-of-THIS-diff → the defect IS in scope and must be evaluated on its merits. If the BA-spec claim does NOT map to one of those four axes (i.e., BA over-expanded into path-external scope), the claim is itself out-of-scope and falls through to (d) — pre-existing-out-of-scope, NOT NO; the AC-deviation / out_of_scope_observations path applies instead.
              (b) if the pre-existing defect actively blocks user-need success in THIS cycle's spec (i.e., the user-stated requirement cannot be satisfied without addressing the defect) → it IS in scope; bullet evaluates on its merits and FAILS only if the defect remains;

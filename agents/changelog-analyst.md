@@ -102,6 +102,7 @@ The candidate set is restricted to a **staging whitelist** consisting of:
    - `ticket-<TASK_ID>.md`
    - `context-<TASK_ID>.json`
    - `dev-report-<TASK_ID>.json`
+   - `do-report-<TASK_ID>.json`
    - `qa-report-<TASK_ID>.json`
    - `completion-<TASK_ID>.md`
    - `close-report-<TASK_ID>.md`
@@ -121,11 +122,15 @@ building the candidate set, count the files. If the count exceeds
 `ABORT: scope violation — staged file count (<N>) exceeds whitelist limit (<limit>). Possible cross-session contamination.`
 Exit with `failure_code: scope_violation`.
 
-**When BULK=false AND no dev-report exists**: **ABORT** — do NOT stage any files.
-Print and exit immediately:
-`ABORT: no dev-report found for task <TASK_ID> — cannot enforce whitelist. Refusing to stage-all.`
-Exit with structured status `{"commit_status":"failed","failure_code":"scope_violation","failure_reason":"no dev-report for TASK_ID; cannot determine staging whitelist"}`.
-Stage-all fallback is forbidden; without a dev-report the whitelist cannot be constructed and cross-session contamination is undetectable.
+**When BULK=false AND no dev-report exists**: check for a do-report before aborting.
+
+- If `do-report-<TASK_ID>.json` exists at the resolved path (same subproject walk as dev-report, fallback to `CONTROL_ROOT/docs/dev/do-report-${TASK_ID}.json`) AND top-level `source == "do"`: use `do.files_modified[]` and `do.files_created[]` as the staging whitelist in place of `dev.files_modified[]` / `dev.files_created[]`. Apply the same anchored-pattern and staged-file-count-guard rules. Skip the provenance filter (do-reports have no `baseline_head_sha`). Use `do.summary` for commit message enrichment (M12 fallback text: `session changes [/do — no dev-report]`).
+
+- If neither dev-report NOR do-report exists: **ABORT** — do NOT stage any files.
+  Print and exit immediately:
+  `ABORT: no dev-report found for task <TASK_ID> — cannot enforce whitelist. Refusing to stage-all.`
+  Exit with structured status `{"commit_status":"failed","failure_code":"scope_violation","failure_reason":"no dev-report for TASK_ID; cannot determine staging whitelist"}`.
+  Stage-all fallback is forbidden; without a dev-report the whitelist cannot be constructed and cross-session contamination is undetectable.
 
 **Path normalization** (apply before any comparison or staging):
 - Resolve symlinks: `real_root = os.path.realpath(GIT_ROOT)`
@@ -230,20 +235,101 @@ Log: `Pre-staged verify: unstaged <file> (not in classified set)`
 
 ### Phase 5: Stage classified files
 
-For each file in the candidate set (per repo), use repo-relative paths:
+This phase runs strictly AFTER Phase 2 (whitelist + `foreign_session_candidate`
+exclusion + provenance filter) and Phase 4 (pre-staged verify), and entirely INSIDE
+the Phase 3 fd-9 flock. It operates ONLY on files already in the authorized candidate
+set. It can only NARROW what is staged WITHIN an authorized file — it can never widen
+the file set and never reaches a non-whitelisted/foreign file.
+
+For each file in the candidate set (per repo), use repo-relative paths.
+
+**Entangled-file detection (hunk-filtered staging):** A whitelisted candidate file is
+*entangled* when it is dirty AND the dev-report supplies an `owned_edits` entry for it
+(i.e. this cycle authored only PART of the file's current diff and a concurrent peer
+session may have uncommitted hunks in the same file). For an entangled file, route
+staging through the line-precise helper instead of whole-file `git add`:
+
+```bash
+# Write this file's owned-edits ledger and pre-edit snapshot from the dev-report to
+# temp files, then invoke the helper (inside the same fd-9 flock).
+git_root="${GIT_ROOT}"
+
+# 1. Ledger: write dev-report owned_edits[<repo-rel-path>] (a JSON list of
+#    {"old":...,"new":...}) verbatim to a temp file.
+# 2. Snapshot materialization (REQUIRED — do NOT write the raw value blindly):
+#    pre_edit_snapshots[<repo-rel-path>] may be EITHER a git blob SHA OR the literal
+#    pre-edit content. Resolve it:
+#      if the value matches ^[0-9a-f]{7,40}$ AND `git -C "$git_root" cat-file -e <val>`
+#      succeeds → write `git -C "$git_root" cat-file blob <val>` bytes to the temp
+#      snapshot; otherwise write the literal value bytes. Passing a SHA string as if
+#      it were content makes the helper's replay fail falsely (a spurious EXCLUDE).
+"${CLAUDE_PROJECT_DIR}/.claude/scripts/stage-owned-hunks.py" \
+    --git-root "${git_root}" \
+    --file "<repo-rel-path>" \
+    --ledger "<owned-edits-ledger-tmp.json>" \
+    --snapshot "<pre-edit-snapshot-tmp>"
+rc=$?
+```
+
+Interpret the helper exit code:
+- `0` — owned hunks were staged (or the owned diff was empty → nothing staged, a no-op).
+  The peer's hunks remain unstaged in the working tree.
+- `10` — EXCLUDED (fail-closed): ownership could not be robustly determined, OR a
+  post-capture peer edit was detected outside the owned ranges, OR a peer edited inside
+  an owned range, OR the file is binary/mode-changed/CRLF/overlapping, OR
+  `git apply --cached` rejected. **Warn-and-skip the entangled file — do NOT whole-file
+  stage it.** Print:
+  `WARNING: excluding <repo-rel-path> from staging — hunk-filtered staging fail-closed (peer entanglement or ambiguity); the file's owned change was NOT committed this cycle. See stderr for the specific reason.`
+- any other non-zero — treat as EXCLUDE (warn-and-skip, never whole-file).
+
+On exclusion the file is simply not committed this cycle; this is the correct
+fail-closed behavior and never sweeps in un-QA'd peer work. The helper NEVER uses
+`git add -A` / `git add .` and NEVER falls back to whole-file staging — it pipes a
+single-file owned-only filtered patch to `git apply --cached --recount --unidiff-zero`.
+
+**Non-entangled files** use the existing whole-file path:
 
 ```bash
 git -C "${GIT_ROOT}" add -- "<repo-rel-path>"
 ```
+
+A file is *non-entangled* (safe to whole-file stage) when EITHER:
+- it has an `owned_edits` entry AND the helper above already staged it (the entangled
+  path handled it); OR
+- it is a NEW file created by this cycle (in `dev.files_created`, untracked) — a
+  brand-new file has no peer baseline to entangle with, so whole-file `git add` is
+  correct; OR
+- it is a tracked-modified file for which the dev-report provides NO `owned_edits`
+  entry AND there is no evidence of peer dirtiness (i.e. the file's entire working-tree
+  diff is attributable to this cycle — e.g. a deletion, a rename, or a whole-file
+  rewrite the dev-report accounts for).
+
+**Fail-closed for ambiguous shared dirty files (do NOT fail-open):** if a tracked
+candidate file is dirty AND the dev-report supplies NEITHER an `owned_edits` entry NOR
+a `pre_edit_snapshots` entry for it, you CANNOT prove which hunks this cycle owns.
+**Warn-and-skip — do NOT whole-file `git add`** (whole-file staging here would sweep
+in any peer hunk = the exact incident this feature prevents). Print:
+`WARNING: excluding <repo-rel-path> — dirty tracked file with no owned_edits/pre_edit_snapshots provenance; cannot prove hunk ownership (warn-and-skip, not whole-file staged).`
+The only tracked-modified files that may be whole-file staged WITHOUT an `owned_edits`
+entry are those whose full diff is provably this-cycle-owned (a deletion via `git rm`,
+or a file the dev-report explicitly lists as a whole-file rewrite with no peer overlap).
 
 For deleted files that are tracked:
 ```bash
 git -C "${GIT_ROOT}" rm -- "<repo-rel-path>"
 ```
 
-NEVER use `git add -A` or `git add .`.
+NEVER use `git add -A` or `git add .` — in EITHER path. The hunk-filtered path stages
+exclusively via a single-file `git apply --cached` patch.
 
 If a file no longer exists on disk and is untracked (status `??`): skip with a warning.
+
+**Honest scope (peer-COMMITTED limitation):** this hunk-filtered path solves the
+peer-UNCOMMITTED case end-to-end (the motivating incident), using the timing-independent
+owned-edits ledger + the fail-closed out-of-owned-region cross-check. Separating a
+peer's already-COMMITTED hunks from owned hunks is **unsolvable with current provenance**
+and is explicitly out of scope: a peer commit after `baseline_head_sha` is
+indistinguishable in the baseline diff from this-cycle changes.
 
 ### Phase 6: Build commit message (diff-first — M4)
 
