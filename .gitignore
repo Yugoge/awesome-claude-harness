@@ -45,7 +45,6 @@ Thumbs.db
 
 logs/*
 # PERMITTED DELIVERY PATH: logs/lifecycle.jsonl is the R9 in-repo lifecycle log (spec-20260520-221059 binding constraint)
-!logs/lifecycle.jsonl
 session-env/
 systemd/
 
@@ -102,3 +101,15 @@ graphify-out/
 
 # dev workflow artifacts — never tracked (global policy)
 docs/dev/
+
+# Runtime/transient dirs (global no-track policy)
+archive/
+backups/
+cache/
+eval/
+logs/
+paste-cache/
+plans/
+specs/
+state/
+tasks/
