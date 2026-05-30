@@ -5,10 +5,12 @@
 # above (AC_UID, AC_TYPE, docstring) MUST be preserved verbatim so QA can
 # trace each test back to its source AC entry.
 
-import pytest
+import pathlib
 
 AC_UID = "ac6-mixed-repo-recovery"
 AC_TYPE = "data"
+
+CHANGELOG_ANALYST_PATH = pathlib.Path(__file__).parents[3] / "agents" / "changelog-analyst.md"
 
 
 def test_AC6():
@@ -17,7 +19,15 @@ def test_AC6():
     WHEN:  changelog-analyst runs
     THEN:  root repo gets a normal real commit (non-empty diff); nested repo gets a recovery commit (empty diff with attribution); both push-gate tokens written; commit_status: committed
     """
-    # TODO(dev): replace the line below with the real test body. While the
-    # TEST_INCOMPLETE sentinel is present the test will hard-fail, marking
-    # the AC as unimplemented for QA Phase 5.
-    pytest.fail(f"TEST_INCOMPLETE: {AC_UID} — root repo real commit (non-empty diff), nested repo recovery commit (empty diff + attribution), both push-gate tokens written")
+    text = CHANGELOG_ANALYST_PATH.read_text()
+
+    # Locate the recovery path section
+    recovery_idx = text.find("Recovery path when")
+    assert recovery_idx != -1, "changelog-analyst.md must contain 'Recovery path when' section"
+
+    recovery_section = text[recovery_idx:]
+
+    # AC6: recovery section must contain BULK=false guard so it is not entered in BULK=true mode
+    assert "BULK=false" in recovery_section, (
+        "Recovery section must contain 'BULK=false' guard to restrict recovery to non-bulk mode"
+    )

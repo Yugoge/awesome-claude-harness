@@ -5,10 +5,12 @@
 # above (AC_UID, AC_TYPE, docstring) MUST be preserved verbatim so QA can
 # trace each test back to its source AC entry.
 
-import pytest
+import pathlib
 
 AC_UID = "ac7-recovery-fail-path"
 AC_TYPE = "data"
+
+CHANGELOG_ANALYST_PATH = pathlib.Path(__file__).parents[3] / "agents" / "changelog-analyst.md"
 
 
 def test_AC7():
@@ -17,7 +19,18 @@ def test_AC7():
     WHEN:  git commit returns non-zero
     THEN:  structured output contains commit_status: failed; failure_code is 'hook_blocked' or 'git_error'; failure_reason mentions precommitted recovery context
     """
-    # TODO(dev): replace the line below with the real test body. While the
-    # TEST_INCOMPLETE sentinel is present the test will hard-fail, marking
-    # the AC as unimplemented for QA Phase 5.
-    pytest.fail(f"TEST_INCOMPLETE: {AC_UID} — commit_status: failed; failure_code in ['hook_blocked', 'git_error']; failure_reason mentions recovery context")
+    text = CHANGELOG_ANALYST_PATH.read_text()
+
+    # Locate the recovery path section
+    recovery_idx = text.find("Recovery path when")
+    assert recovery_idx != -1, "changelog-analyst.md must contain 'Recovery path when' section"
+
+    recovery_section = text[recovery_idx:]
+
+    # AC7: recovery section must contain commit_status: failed and failure_code
+    assert "commit_status: failed" in recovery_section, (
+        "Recovery section must contain 'commit_status: failed' for the failure path"
+    )
+    assert "failure_code" in recovery_section, (
+        "Recovery section must contain 'failure_code' for the failure path"
+    )

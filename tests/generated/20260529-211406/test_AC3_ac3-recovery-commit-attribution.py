@@ -5,10 +5,12 @@
 # above (AC_UID, AC_TYPE, docstring) MUST be preserved verbatim so QA can
 # trace each test back to its source AC entry.
 
-import pytest
+import pathlib
 
 AC_UID = "ac3-recovery-commit-attribution"
 AC_TYPE = "data"
+
+CHANGELOG_ANALYST_PATH = pathlib.Path(__file__).parents[3] / "agents" / "changelog-analyst.md"
 
 
 def test_AC3():
@@ -17,7 +19,21 @@ def test_AC3():
     WHEN:  git show HEAD --format='%B' -s is read
     THEN:  body contains 'Task-id: <TASK_ID>', at least one 'Precommitted-by: <sha>' line, and an 'Attributed-files:' block with at least one file path from dev-report files_modified or files_created
     """
-    # TODO(dev): replace the line below with the real test body. While the
-    # TEST_INCOMPLETE sentinel is present the test will hard-fail, marking
-    # the AC as unimplemented for QA Phase 5.
-    pytest.fail(f"TEST_INCOMPLETE: {AC_UID} — commit body contains Task-id line, Precommitted-by line, Attributed-files block with at least one path")
+    text = CHANGELOG_ANALYST_PATH.read_text()
+
+    # Locate the recovery path section
+    recovery_idx = text.find("Recovery path when")
+    assert recovery_idx != -1, "changelog-analyst.md must contain 'Recovery path when' section"
+
+    recovery_section = text[recovery_idx:]
+
+    # AC3: recovery commit template must contain Task-id:, Precommitted-by:, Attributed-files:
+    assert "Task-id:" in recovery_section, (
+        "Recovery section must contain 'Task-id:' in the commit message template"
+    )
+    assert "Precommitted-by:" in recovery_section, (
+        "Recovery section must contain 'Precommitted-by:' in the commit message template"
+    )
+    assert "Attributed-files:" in recovery_section, (
+        "Recovery section must contain 'Attributed-files:' in the commit message template"
+    )

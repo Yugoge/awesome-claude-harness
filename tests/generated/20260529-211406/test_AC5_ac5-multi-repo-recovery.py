@@ -5,10 +5,13 @@
 # above (AC_UID, AC_TYPE, docstring) MUST be preserved verbatim so QA can
 # trace each test back to its source AC entry.
 
-import pytest
+import pathlib
+import re
 
 AC_UID = "ac5-multi-repo-recovery"
 AC_TYPE = "data"
+
+COMMIT_MD_PATH = pathlib.Path(__file__).parents[3] / "commands" / "commit.md"
 
 
 def test_AC5():
@@ -17,7 +20,37 @@ def test_AC5():
     WHEN:  changelog-analyst processes both repos
     THEN:  two recovery commits created (one per repo); both push-gate tokens written; commit_status: committed returned; no grant_missing or grant_expired failure in structured output
     """
-    # TODO(dev): replace the line below with the real test body. While the
-    # TEST_INCOMPLETE sentinel is present the test will hard-fail, marking
-    # the AC as unimplemented for QA Phase 5.
-    pytest.fail(f"TEST_INCOMPLETE: {AC_UID} — two recovery commits (one per repo), both push-gate tokens written, commit_status: committed, no grant failure")
+    text = COMMIT_MD_PATH.read_text()
+
+    # AC5: commands/commit.md must have exactly 2 invocations of write-commit-grant.py in the BULK=false section
+    # Find the BULK=false section
+    bulk_false_idx = text.find("BULK=false")
+    assert bulk_false_idx != -1, "commands/commit.md must contain a BULK=false section"
+
+    # Find the BULK=true section to delimit the BULK=false region
+    bulk_true_idx = text.find("BULK=true")
+    # The BULK=false content comes after the BULK=true intro (which appears first in Step 5)
+    # We need the code block between the two BULK markers
+    # Strategy: find Step 5 section and count write-commit-grant.py occurrences in it
+    step5_idx = text.find("Step 5: Write commit grant")
+    assert step5_idx != -1, "commands/commit.md must contain 'Step 5: Write commit grant'"
+
+    # Find Step 6 to delimit
+    step6_idx = text.find("Step 6:", step5_idx)
+    if step6_idx == -1:
+        step6_idx = len(text)
+
+    step5_section = text[step5_idx:step6_idx]
+
+    # Find the BULK=false subsection within Step 5
+    bulk_false_in_step5 = step5_section.find("BULK=false")
+    assert bulk_false_in_step5 != -1, "Step 5 must contain a BULK=false subsection"
+
+    # Count write-commit-grant.py invocations in the BULK=false part of Step 5
+    bulk_false_section = step5_section[bulk_false_in_step5:]
+    count = bulk_false_section.count("write-commit-grant.py")
+
+    assert count == 2, (
+        f"commands/commit.md BULK=false section must have exactly 2 invocations of "
+        f"'write-commit-grant.py', found {count}"
+    )

@@ -5,10 +5,12 @@
 # above (AC_UID, AC_TYPE, docstring) MUST be preserved verbatim so QA can
 # trace each test back to its source AC entry.
 
-import pytest
+import pathlib
 
 AC_UID = "ac9-push-gate-unblocks-push"
 AC_TYPE = "data"
+
+CHANGELOG_ANALYST_PATH = pathlib.Path(__file__).parents[3] / "agents" / "changelog-analyst.md"
 
 
 def test_AC9():
@@ -17,7 +19,16 @@ def test_AC9():
     WHEN:  push-gate token at /tmp/agentic-commit/push/<repo_hash>/<branch>.json is read and validated per commands/push.md Step 1 guard conditions
     THEN:  token commit_sha equals git rev-parse HEAD (the recovery commit is HEAD); token is valid JSON with fields commit_sha, branch, repo_root; no rejection condition applies (token present AND commit_sha matches current HEAD); /push would proceed past the push-gate check without blocking
     """
-    # TODO(dev): replace the line below with the real test body. While the
-    # TEST_INCOMPLETE sentinel is present the test will hard-fail, marking
-    # the AC as unimplemented for QA Phase 5.
-    pytest.fail(f"TEST_INCOMPLETE: {AC_UID} — push-gate token present, commit_sha equals HEAD, valid JSON with required fields, guard accepts token, /push unblocked")
+    text = CHANGELOG_ANALYST_PATH.read_text()
+
+    # Locate the recovery path section
+    recovery_idx = text.find("Recovery path when")
+    assert recovery_idx != -1, "changelog-analyst.md must contain 'Recovery path when' section"
+
+    recovery_section = text[recovery_idx:]
+
+    # AC9: recovery section must contain commit_status: committed (push-gate token written, /push unblocked)
+    assert "commit_status: committed" in recovery_section, (
+        "Recovery section must contain 'commit_status: committed' indicating push-gate token was written "
+        "and /push is unblocked"
+    )

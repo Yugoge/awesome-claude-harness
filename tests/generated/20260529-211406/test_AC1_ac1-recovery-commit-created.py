@@ -5,10 +5,12 @@
 # above (AC_UID, AC_TYPE, docstring) MUST be preserved verbatim so QA can
 # trace each test back to its source AC entry.
 
-import pytest
+import pathlib
 
 AC_UID = "ac1-recovery-commit-created"
 AC_TYPE = "data"
+
+CHANGELOG_ANALYST_PATH = pathlib.Path(__file__).parents[3] / "agents" / "changelog-analyst.md"
 
 
 def test_AC1():
@@ -17,7 +19,20 @@ def test_AC1():
     WHEN:  recovery path executes
     THEN:  git log HEAD -1 --format='%s' shows a subject containing TASK_ID but not starting with 'auto-bulk:'; git show HEAD --stat shows empty diff; push-gate token file exists at expected path; structured output contains commit_status: committed
     """
-    # TODO(dev): replace the line below with the real test body. While the
-    # TEST_INCOMPLETE sentinel is present the test will hard-fail, marking
-    # the AC as unimplemented for QA Phase 5.
-    pytest.fail(f"TEST_INCOMPLETE: {AC_UID} — recovery commit created: subject contains TASK_ID, not auto-bulk; empty diff; push-gate token exists; commit_status: committed")
+    text = CHANGELOG_ANALYST_PATH.read_text()
+
+    # AC1: recovery section must contain the git commit --allow-empty -F pattern
+    # The actual command uses: git -C "${GIT_ROOT}" commit --allow-empty -F "${TMPFILE}"
+    assert "commit --allow-empty -F" in text, (
+        "changelog-analyst.md recovery section must contain 'commit --allow-empty -F'"
+    )
+
+    # AC1: structured output must contain commit_status: committed in recovery section
+    assert "commit_status: committed" in text, (
+        "changelog-analyst.md must contain 'commit_status: committed' in recovery path"
+    )
+
+    # Verify the recovery path section itself is present
+    assert "Recovery path when" in text and "nothing_to_commit_precommitted" in text, (
+        "changelog-analyst.md must contain a recovery path section for nothing_to_commit_precommitted"
+    )

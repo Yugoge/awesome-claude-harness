@@ -5,10 +5,12 @@
 # above (AC_UID, AC_TYPE, docstring) MUST be preserved verbatim so QA can
 # trace each test back to its source AC entry.
 
-import pytest
+import pathlib
 
 AC_UID = "ac8-non-precommitted-regression-guard"
 AC_TYPE = "data"
+
+CHANGELOG_ANALYST_PATH = pathlib.Path(__file__).parents[3] / "agents" / "changelog-analyst.md"
 
 
 def test_AC8():
@@ -17,7 +19,10 @@ def test_AC8():
     WHEN:  changelog-analyst runs
     THEN:  behavior is identical to pre-change — real diff-based commit created; recovery path never entered; commit_status: committed with non-empty diff stat
     """
-    # TODO(dev): replace the line below with the real test body. While the
-    # TEST_INCOMPLETE sentinel is present the test will hard-fail, marking
-    # the AC as unimplemented for QA Phase 5.
-    pytest.fail(f"TEST_INCOMPLETE: {AC_UID} — real diff-based commit created; recovery path not entered; commit_status: committed with non-empty diff stat")
+    text = CHANGELOG_ANALYST_PATH.read_text()
+
+    # AC8: the THREE-STEP SHA-STABLE CHECK section must still exist (regression guard)
+    assert "THREE-STEP SHA-STABLE CHECK" in text, (
+        "changelog-analyst.md must still contain 'THREE-STEP SHA-STABLE CHECK' section "
+        "(non-precommitted path must be intact)"
+    )

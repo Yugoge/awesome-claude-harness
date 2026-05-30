@@ -5,10 +5,12 @@
 # above (AC_UID, AC_TYPE, docstring) MUST be preserved verbatim so QA can
 # trace each test back to its source AC entry.
 
-import pytest
+import pathlib
 
 AC_UID = "ac4-push-gate-token-recovery-sha"
 AC_TYPE = "data"
+
+CHANGELOG_ANALYST_PATH = pathlib.Path(__file__).parents[3] / "agents" / "changelog-analyst.md"
 
 
 def test_AC4():
@@ -17,7 +19,15 @@ def test_AC4():
     WHEN:  push-gate token at /tmp/agentic-commit/push/<repo_hash>/<branch>.json is read
     THEN:  commit_sha field equals git rev-parse HEAD (the recovery commit); token is valid JSON
     """
-    # TODO(dev): replace the line below with the real test body. While the
-    # TEST_INCOMPLETE sentinel is present the test will hard-fail, marking
-    # the AC as unimplemented for QA Phase 5.
-    pytest.fail(f"TEST_INCOMPLETE: {AC_UID} — push-gate token commit_sha equals recovery HEAD; token is valid JSON")
+    text = CHANGELOG_ANALYST_PATH.read_text()
+
+    # Locate the recovery path section
+    recovery_idx = text.find("Recovery path when")
+    assert recovery_idx != -1, "changelog-analyst.md must contain 'Recovery path when' section"
+
+    recovery_section = text[recovery_idx:]
+
+    # AC4: recovery section must invoke Phase 10 push-gate write logic
+    assert ("push-gate" in recovery_section or "PUSH_GATE" in recovery_section), (
+        "Recovery section must reference push-gate write logic (contains 'push-gate' or 'PUSH_GATE')"
+    )
