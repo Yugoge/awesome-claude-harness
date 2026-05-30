@@ -432,7 +432,7 @@ exiting if coverage < 100%. You cannot skip this -- fix the coverage first.
 After ALL views are written, run the coverage verification script:
 
 ```bash
-source ~/.claude/venv/bin/activate && python3 "${CLAUDE_PROJECT_DIR}/bin/spec-verify.py" --monolith "$MONOLITH_PATH" --views-dir "docs/dev/specs/<spec-id>/views/"
+source ~/.claude/venv/bin/activate && python3 "/root/.claude/scripts/spec-verify/spec-verify.py" --monolith "$MONOLITH_PATH" --views-dir "docs/dev/specs/<spec-id>/views/"
 ```
 
 This checks that every non-blank, non-separator line from the monolith appears in at least one view file. If it exits non-zero (coverage < 100%):
@@ -489,7 +489,7 @@ If after ONE retry the coverage is still < 100%, apply this deterministic rule:
 4. Re-run spec-verify.py with `--strict` flag (enforces coverage = 100%, max pairwise overlap < 70%, per-view uniqueness > 15%):
 
    ```bash
-   source ~/.claude/venv/bin/activate && python3 "${CLAUDE_PROJECT_DIR}/bin/spec-verify.py" --monolith "$MONOLITH_PATH" --views-dir "docs/dev/specs/<spec-id>/views/" --strict
+   source ~/.claude/venv/bin/activate && python3 "/root/.claude/scripts/spec-verify/spec-verify.py" --monolith "$MONOLITH_PATH" --views-dir "docs/dev/specs/<spec-id>/views/" --strict
    ```
 
 5. **Diagnose failures by type**:
@@ -604,7 +604,7 @@ spec-derived checkpoint without replacing it with an equivalent atomic action.
 
 ## Tool usage
 
-You may use: `Read`, `Write`, `Bash` (for `.claude/scripts/spec-check.py`, `bin/spec-verify-views.py`, `bin/spec-verify.py`, Python invocations via venv (`source ~/.claude/venv/bin/activate && python3`), and `mkdir -p`).
+You may use: `Read`, `Write`, `Bash` (for `.claude/scripts/spec-check.py`, `/root/.claude/scripts/spec-verify/spec-verify-views.py`, `/root/.claude/scripts/spec-verify/spec-verify.py`, Python invocations via venv (`source ~/.claude/venv/bin/activate && python3`), and `mkdir -p`).
 
 You must NOT:
 - Modify the monolith spec (read-only)

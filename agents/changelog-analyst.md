@@ -657,7 +657,7 @@ while IFS=' ' read -r sha subject; do
             break
         fi
     done
-done < <(git log --format="%H %s" "${baseline_head_sha}..HEAD" | grep ' auto-bulk:')
+done < <(git log --format="%H %s" "${baseline_head_sha}..HEAD" | awk '{sha=$1; $1=""; sub(/^ /, ""); if (/^auto-bulk:/) print sha}')
 ```
 
 If `precommitted_shas` is empty after the range scan, fall back to the original HEAD SHA collected
@@ -716,15 +716,25 @@ BRANCH=$(git -C "${GIT_ROOT}" rev-parse --abbrev-ref HEAD)
 **Step R5: Write push-gate token**
 
 Execute Phase 10 push-gate write logic unchanged (same `sha256(realpath(GIT_ROOT))[:16]` hash,
-same JSON schema, same DO NOT rule 7 session-collision check). If the existing token's
-`session_id` differs from `PUSH_GATE_SID`, print a WARNING and skip — DO NOT rule 7 applies
-identically here.
+same JSON schema, same DO NOT rule 7 session-collision check). Track whether the write
+actually occurred in a local variable `PUSH_GATE_WRITTEN`:
 
-**Step R6: Return `commit_status: committed`**
+- If the existing token's `session_id` differs from `PUSH_GATE_SID`, print a WARNING and skip
+  the write — DO NOT rule 7 applies identically here. Set `PUSH_GATE_WRITTEN=false`.
+- Otherwise, write the token normally and set `PUSH_GATE_WRITTEN=true`.
 
-On success, return `commit_status: committed` (NOT `nothing_to_commit_precommitted`).
+**Step R6: Return status conditional on push-gate write**
+
+If `PUSH_GATE_WRITTEN=true`, return `commit_status: committed` (NOT `nothing_to_commit_precommitted`).
 Optionally include informational fields `"recovery": true` and `"precommitted_shas": [...]`
 in the structured output — `/commit` ignores unknown fields harmlessly.
+
+If `PUSH_GATE_WRITTEN=false` (R5 skipped the write due to session collision), return
+`commit_status: failed` with `failure_code: push_gate_collision` and `failure_reason`
+indicating that the push-gate token write was skipped because an existing token with a
+different `session_id` was detected (DO NOT rule 7). The recovery commit itself was created
+successfully, but `/push` remains blocked until the token is written. The operator must
+re-run `/commit` or manually clear the token to proceed.
 
 **Step R7: Recovery failure handling**
 
