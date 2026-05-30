@@ -193,7 +193,8 @@
       "Bash(pytest tests/generated:*)",
       "Bash(source ~/.claude/venv/bin/activate && pytest tests/generated:*)",
       "Bash(source ~/.claude/venv/bin/activate && python3 -m pytest tests/test_graphify_scripts.py:*)",
-      "Bash(source ~/.claude/venv/bin/activate && python3 -m pytest tests/test_graphify_workflow_contract.py:*)"
+      "Bash(source ~/.claude/venv/bin/activate && python3 -m pytest tests/test_graphify_workflow_contract.py:*)",
+      "Bash(scripts/precommitted-recovery.sh:*)"
     ],
     "deny": [
       "Read(.env)",

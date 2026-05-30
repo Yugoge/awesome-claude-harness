@@ -170,6 +170,8 @@ When `baseline_head_sha` is present:
 3. Apply a split provenance filter:
    - For every path in `dev.files_modified` that is **absent** from the `git diff --name-only <baseline_head_sha>` output **AND** absent from `baseline_dirty_snapshot`, classify it as `provenance_anomaly`.
    - For every path in `dev.files_created`, check via `git ls-files --others --exclude-standard`. If the path is **absent** from that output **AND** absent from `baseline_dirty_snapshot`, classify it as `provenance_anomaly`. (New untracked files do not appear in `git diff --name-only` output; using ls-files is the correct check for this set.)
+
+   Concurrency caveat (explanatory, human-triage only): `baseline_dirty_snapshot` is a point-in-time capture (see `agents/dev.md`), so under concurrent `/dev` sessions sharing one working tree a `provenance_anomaly` attributable to a peer session's file written after the snapshot was captured is a false positive of the point-in-time semantics. Interpret such an anomaly with judgment — do NOT add any detection, inference, or programmatic-removal logic for "suspected peer" paths; the existing classification behavior is unchanged.
 4. **Exclude** `provenance_anomaly` paths from commit-message type/scope/summary enrichment derivation. Apply BULK-mode-aware staging behavior:
    - **BULK=false**: remove each `provenance_anomaly` path from the staging candidate set (warn-and-skip). Print a WARNING for each excluded path. The commit proceeds for remaining eligible files.
    - **BULK=true**: stage the path if it appears in the candidate set (staging authority is git status, not dev-report); provenance filter is enrichment-only in bulk mode. Do not use anomalous paths for commit type/scope determination.
@@ -639,37 +641,27 @@ Trigger `nothing_to_commit_precommitted` only when ALL THREE conditions hold:
 When all three conditions above hold AND `BULK=false`, do NOT return `nothing_to_commit_precommitted`.
 Instead, execute the following recovery path to produce a task-attributed commit and push-gate token.
 
-**Step R1: Range scan for pre-empted auto-bulk commits**
+**Recovery step 1: Range scan for pre-empted auto-bulk commits**
 
 Scan `baseline_head_sha..HEAD` (not just HEAD) to collect all auto-bulk commits that touched
 task cycle files. `baseline_head_sha` is the value of `git rev-parse HEAD` captured at Phase 1
 start before any write operations in this invocation (it comes from the dev-report top-level
 `baseline_head_sha` field; if absent, fall back to `HEAD~1`):
 
-```bash
-precommitted_shas=()
-while IFS=' ' read -r sha subject; do
-    # Check if this auto-bulk commit touched any task_cycle_files
-    commit_files=$(git show --name-only --format= "$sha" | grep -v '^$')
-    for f in $task_cycle_files; do
-        if echo "$commit_files" | grep -qF "$f"; then
-            precommitted_shas+=("$sha")
-            break
-        fi
-    done
-done < <(git log --format="%H %s" "${baseline_head_sha}..HEAD" | awk '{sha=$1; $1=""; sub(/^ /, ""); if (/^auto-bulk:/) print sha}')
-```
+Run: `scripts/precommitted-recovery.sh scan-shas "${GIT_ROOT}" "${baseline_head_sha}" ${task_cycle_files}`
+
+Capture the output lines as `precommitted_shas`.
 
 If `precommitted_shas` is empty after the range scan, fall back to the original HEAD SHA collected
 in the THREE-STEP CHECK above.
 
-**Step R2: Derive attributed files**
+**Recovery step 2: Derive attributed files**
 
 Compute `attributed_files` = intersection of `task_cycle_files` with all files changed by any
 SHA in `precommitted_shas`. These are the files from this task cycle that were swept up by the
 bulk session(s).
 
-**Step R3: Build and execute recovery commit**
+**Recovery step 3: Build and execute recovery commit**
 
 Derive `scope` using the same scope-derivation logic as Phase 6 (infer from `task_cycle_files`
 paths: `hooks` → hooks, `commands` → commands, `agents` → agents, `scripts` → scripts,
@@ -677,22 +669,12 @@ paths: `hooks` → hooks, `commands` → commands, `agents` → agents, `scripts
 
 Build the recovery commit message in a tmpfile (DO NOT rule 12 — no heredoc form):
 
-```bash
-TMPFILE=$(umask 077; mktemp /tmp/recovery-commit-XXXXXX.txt)
-trap "rm -f ${TMPFILE}" EXIT
-{
-    echo "chore(${scope}): recovery commit — task ${TASK_ID} pre-empted by bulk session"
-    echo ""
-    echo "Task-id: ${TASK_ID}"
-    for sha in "${precommitted_shas[@]}"; do
-        echo "Precommitted-by: ${sha}"
-    done
-    echo "Attributed-files:"
-    for f in "${attributed_files[@]}"; do
-        echo "  ${f}"
-    done
-} > "${TMPFILE}"
-```
+Allocate a tmpfile: `TMPFILE=$(mktemp /tmp/recovery-commit-XXXXXX.txt)`
+
+Run: `scripts/precommitted-recovery.sh build-commit-msg "${GIT_ROOT}" "${scope}" "${TASK_ID}" "${TMPFILE}" ${precommitted_shas[*]} -- ${attributed_files[*]}`
+
+The script writes a commit message with subject `chore(${scope}): recovery commit — task ${TASK_ID} pre-empted by bulk session`,
+then body lines: `Task-id: ${TASK_ID}`, one `Precommitted-by: <sha>` line per SHA, and an `Attributed-files:` block.
 
 Verify the subject line does NOT match `\bsync\b.*\buncommitted\b` or `chore\(claude\)\s*:\s*sync`
 (DO NOT rule 10). The proposed subject `chore(<scope>): recovery commit — task <TASK_ID> pre-empted by bulk session`
@@ -702,18 +684,16 @@ match, replace the summary with `session recovery for ${scope}`.
 Execute the recovery commit using the existing single-use commit grant (not consumed because no
 `git commit` fired against the clean working tree):
 
-```bash
-git -C "${GIT_ROOT}" commit --allow-empty -F "${TMPFILE}"
-```
+Run: `scripts/precommitted-recovery.sh execute-commit "${GIT_ROOT}" "${TMPFILE}"`
+(internally runs `git commit --allow-empty -F "${TMPFILE}"` against `GIT_ROOT`)
 
-**Step R4: Capture recovery commit SHA**
+**Recovery step 4: Capture recovery commit SHA**
 
-```bash
-COMMIT_SHA=$(git -C "${GIT_ROOT}" rev-parse HEAD)
-BRANCH=$(git -C "${GIT_ROOT}" rev-parse --abbrev-ref HEAD)
-```
+Run: `scripts/precommitted-recovery.sh capture-sha "${GIT_ROOT}"`
 
-**Step R5: Write push-gate token**
+Capture the first field as `COMMIT_SHA` and the second as `BRANCH`.
+
+**Recovery step 5: Write push-gate token**
 
 Execute Phase 10 push-gate write logic unchanged (same `sha256(realpath(GIT_ROOT))[:16]` hash,
 same JSON schema, same DO NOT rule 7 session-collision check). Track whether the write
@@ -723,22 +703,22 @@ actually occurred in a local variable `PUSH_GATE_WRITTEN`:
   the write — DO NOT rule 7 applies identically here. Set `PUSH_GATE_WRITTEN=false`.
 - Otherwise, write the token normally and set `PUSH_GATE_WRITTEN=true`.
 
-**Step R6: Return status conditional on push-gate write**
+**Recovery step 6: Return status conditional on push-gate write**
 
 If `PUSH_GATE_WRITTEN=true`, return `commit_status: committed` (NOT `nothing_to_commit_precommitted`).
 Optionally include informational fields `"recovery": true` and `"precommitted_shas": [...]`
 in the structured output — `/commit` ignores unknown fields harmlessly.
 
-If `PUSH_GATE_WRITTEN=false` (R5 skipped the write due to session collision), return
+If `PUSH_GATE_WRITTEN=false` (Recovery step 5 skipped the write due to session collision), return
 `commit_status: failed` with `failure_code: push_gate_collision` and `failure_reason`
 indicating that the push-gate token write was skipped because an existing token with a
 different `session_id` was detected (DO NOT rule 7). The recovery commit itself was created
 successfully, but `/push` remains blocked until the token is written. The operator must
 re-run `/commit` or manually clear the token to proceed.
 
-**Step R7: Recovery failure handling**
+**Recovery step 7: Recovery failure handling**
 
-If the `git commit --allow-empty` in Step R3 fails (hook blocked, git error, etc.):
+If the `git commit --allow-empty` in Recovery step 3 fails (hook blocked, git error, etc.):
 - Return `commit_status: failed`
 - Set `failure_code: hook_blocked` if a PreToolUse hook blocked the command; otherwise `failure_code: git_error`
 - Set `failure_reason` to a message indicating the failure occurred during precommitted recovery (e.g. `"recovery commit failed after nothing_to_commit_precommitted detection: <error>"`)
@@ -768,6 +748,7 @@ multi-repo setups).
 | `staging_error` | `git add` failed for one or more files in the classified set. | No |
 | `hook_blocked` | A non-grant PreToolUse hook (e.g. `pretool-bash-safety.sh`) blocked the commit command. | No |
 | `scope_violation` | The staged file set contained files outside the authorized task cycle scope. | No |
+| `push_gate_collision` | recovery commit succeeded but push-gate token write was skipped due to session collision (DO NOT rule 7) | No |
 
 ### Output schema
 
