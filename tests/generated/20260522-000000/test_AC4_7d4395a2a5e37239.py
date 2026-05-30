@@ -9,6 +9,7 @@
 
 import json
 import os
+import pathlib
 import subprocess
 import tempfile
 import pytest
@@ -21,14 +22,29 @@ def test_AC4():
     """
     GIVEN: a temporary lifecycle JSONL file seeded with a score_baseline_import entry
            for agent ba with new_score=100, AND score-update.sh has been updated (M1)
-           to append JSONL entries with unclamped_score and reason fields
-    WHEN:  score-update.sh --agent ba --event close_success_qa_pass --lifecycle-file <tmp>
-           is invoked (delta for ba/close_success_qa_pass is +1 per current EVENT_DELTAS)
+           to append JSONL entries with unclamped_score and reason fields,
+           AND (task 20260529-210616 M3) a fixture close-report file exists with
+           a legal `CLOSE: YES` last line so the M3 precondition gate permits
+           the close_success_qa_pass score append.
+    WHEN:  score-update.sh --agent ba --event close_success_qa_pass --note <fix-stem>
+           --lifecycle-file <tmp> is invoked (delta for ba/close_success_qa_pass
+           is +1 per current EVENT_DELTAS)
     THEN:  the last JSONL line in the temporary file has delta==1 and unclamped_score==101
            (pre-clamp arithmetic: prev_score=100 + delta=1 = 101; new_score clamped to 100);
            no field named uncapped_delta or note appears in the emitted JSON
     """
     repo = "/dev/shm/dev-workspace/dot-claude"
+
+    # Task 20260529-210616 M3: M3 gate requires --note with a real
+    # close-report-<note>.md whose last line classifies as 'yes' (not FORCED).
+    # Create a stable fixture so this test continues to work after M3 was added.
+    fix_stem = "ac4-22000000-fix-aa"
+    fix_path = pathlib.Path(repo) / "docs" / "dev" / f"close-report-{fix_stem}.md"
+    fix_path.write_text(
+        "# Test fixture for tests/generated/20260522-000000/test_AC4\n\n"
+        "Body content.\n\nCLOSE: YES\n",
+        encoding="utf-8",
+    )
 
     # Create temporary lifecycle JSONL seeded with ba at new_score=100
     fd, tmp_lifecycle = tempfile.mkstemp(suffix=".jsonl", prefix="test-lifecycle-ac4-")
@@ -47,11 +63,13 @@ def test_AC4():
         with os.fdopen(fd, "w") as f:
             f.write(json.dumps(seed_entry) + "\n")
 
-        # Run score-update.sh with ba/close_success_qa_pass (delta=+1) against temp file
+        # Run score-update.sh with ba/close_success_qa_pass (delta=+1) against temp file.
+        # --note required by task 20260529-210616 M3 precondition gate.
         result = subprocess.run(
             ["bash", "scripts/score-update.sh",
              "--agent", "ba",
              "--event", "close_success_qa_pass",
+             "--note", fix_stem,
              "--lifecycle-file", tmp_lifecycle],
             capture_output=True,
             text=True,
@@ -90,5 +108,11 @@ def test_AC4():
     finally:
         try:
             os.unlink(tmp_lifecycle)
+        except OSError:
+            pass
+        # M3 fixture cleanup (task 20260529-210616)
+        try:
+            if fix_path.exists():
+                fix_path.unlink()
         except OSError:
             pass
