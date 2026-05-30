@@ -35,7 +35,7 @@ from pathlib import Path
 from typing import Optional
 
 
-SPEC_VERIFY = "/root/bin/spec-verify.py"
+SPEC_VERIFY = "/root/.claude/scripts/spec-verify/spec-verify.py"
 
 # Matches docs/dev/specs/spec-YYYYMMDD-HHMMSS in monolith or split-dir paths.
 # Captures the bare spec_id (e.g. "spec-20260424-090315") with no trailing
