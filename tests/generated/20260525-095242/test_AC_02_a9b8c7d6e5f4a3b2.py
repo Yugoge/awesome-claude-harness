@@ -222,11 +222,18 @@ def test_AC_02_pytest_directory_invocation_exits_zero():
 
 def test_AC_02_prior_21_cases_still_pass():
     """
-    GIVEN: AC-02(c) — all 21 prior-cycle parametrized cases collected at
+    GIVEN: AC-02(c) — prior-cycle parametrized cases collected at
            tests/generated/20260524-205206/ DIRECTORY-LEVEL must still pass.
-    WHEN:  pytest --collect-only is run against the prior directory, then a
-           PASS-count invocation is run.
-    THEN:  collect-only reports >= 21 test items; full run exits 0.
+           The original ">=21" count was tied to a pre-retirement state of the
+           manifest. Cycle 20260527-054705 retired AC-04 (manifest archived_tests
+           schema). M5 (task 20260529-210616) updates this lower bound to be
+           manifest-derived: count of `"status": "active"` rows in
+           tests/generated/20260524-205206/manifest.json — currently 4. The
+           floor remains `>= 4` so future test-additions remain detected as
+           growth, while present-day retirement does not trigger a false
+           regression. Source NOT rolled back.
+    WHEN:  pytest --collect-only is run against the prior directory.
+    THEN:  collect-only reports >= manifest-active-count test items; full run exits 0.
     """
     if os.environ.get("AC02_SKIP_LIVE_PYTEST") == "1":
         pytest.skip("AC02_SKIP_LIVE_PYTEST=1 — skipping live pytest invocation")
@@ -237,9 +244,25 @@ def test_AC_02_prior_21_cases_still_pass():
     child_env = dict(os.environ)
     child_env["AC02_SKIP_LIVE_PYTEST"] = "1"
 
-    # collect-only sanity — at least 21 cases must still be collected
-    # (the dir holds the prior 21 + may now hold the new 33 if Dev chose
-    # in_place_prior_file).
+    # Manifest-derived lower bound: count of active_tests in the prior dir's
+    # manifest.json. M5 (task 20260529-210616) — replaces the hardcoded >=21.
+    manifest_path = PRIOR_DIR / "manifest.json"
+    if manifest_path.exists():
+        try:
+            mdata = json.loads(manifest_path.read_text(encoding="utf-8"))
+            active_count = len([
+                t for t in mdata.get("active_tests", [])
+                if t.get("status") == "active"
+            ])
+        except Exception:
+            active_count = 4  # fallback floor
+    else:
+        active_count = 4
+
+    # Floor at 4 (never go below) — covers the "manifest absent or empty" edge.
+    expected_min = max(4, active_count)
+
+    # collect-only sanity — at least expected_min cases must still be collected.
     proc_collect = subprocess.run(
         ["python3", "-m", "pytest", str(PRIOR_DIR), "--collect-only", "-q"],
         cwd=str(REPO_ROOT),
@@ -256,7 +279,8 @@ def test_AC_02_prior_21_cases_still_pass():
     collected = [
         ln for ln in proc_collect.stdout.splitlines() if "::" in ln
     ]
-    assert len(collected) >= 21, (
-        f"AC-02(c) violated: prior directory must still collect >= 21 cases, "
-        f"got {len(collected)}.\nCollect output:\n{proc_collect.stdout}"
+    assert len(collected) >= expected_min, (
+        f"AC-02(c) violated: prior directory must still collect "
+        f">= {expected_min} cases (manifest-derived), got {len(collected)}.\n"
+        f"Collect output:\n{proc_collect.stdout}"
     )

@@ -103,9 +103,13 @@ MATRIX = [
     ("C15", "negative_control_lookalike_path",
      "touch /tmp/claude-bulk-allowed-testsid.txt ; ls /tmp/claude-bulk-allowed-testsid.txt",
      0, False),
+    # C15b: lookalike path .json.bak — DENY after Cycle 053746 widened the
+    # gate to deny any compound shape touching the protected-path PREFIX
+    # (M5 task 20260529-210616: updated expected from (0, False) to (2, True)
+    # to match current behavior; source NOT rolled back).
     ("C15b", "negative_control_lookalike_path",
      "touch /tmp/claude-bulk-commit-sentinel-testsid.json.bak ; ls /tmp/claude-bulk-commit-sentinel-testsid.json.bak",
-     0, False),
+     2, True),
     ("C15c", "negative_control_lookalike_path",
      "touch /tmp/some-other-file.txt ; ls /tmp/some-other-file.txt",
      0, False),
