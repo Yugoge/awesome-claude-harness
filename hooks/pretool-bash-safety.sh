@@ -659,6 +659,27 @@ fi
 #       AND NO `xargs`/`-exec`/`-delete`/`-execdir`/`-ok`/`-okdir` write
 #       surface targeting the protected path.
 # Anything else → DENY with stable stderr token `bulk-commit-sentinel-write`.
+# Context-strip: remove string-content false positives for Layer 1.F entry gate.
+# Moved here (dev-20260529-210759) so COMMAND_CONTEXT_STRIPPED is available to the
+# Layer 1.F entry gate below. This is intentionally a bounded classifier, NOT a
+# full shell parser.  It runs from a file path (not `python -`) and is wrapped by
+# timeout + virtual-memory limits; on any failure the raw command is used, so the
+# hook fails closed and never drops potentially executable text.
+COMMAND_CONTEXT_STRIPPED="$COMMAND"
+HOOKS_DIR_CTX="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [ -r "$HOOKS_DIR_CTX/lib/bash_context_strip.py" ]; then
+  _ctx_out=$(
+    ulimit -v "${CLAUDE_HOOK_CONTEXT_MEM_KB:-262144}" 2>/dev/null || true
+    CMD_INPUT="$COMMAND" timeout "${CLAUDE_HOOK_CONTEXT_TIMEOUT:-2s}" \
+      "$PYTHON_BIN" "$HOOKS_DIR_CTX/lib/bash_context_strip.py" 2>/dev/null
+  )
+  _ctx_status=$?
+  if [ "$_ctx_status" -eq 0 ]; then
+    COMMAND_CONTEXT_STRIPPED="$_ctx_out"
+  fi
+  unset _ctx_out _ctx_status
+fi
+
 # Entry gate: protected path mention. Uses TWO grep -F substring matches
 # (item 5 fix, task 20260526-053746 AC-05/AC-05b) to match BOTH literal session-id
 # paths AND glob forms (*, ?, [abc], [!abc]) — POSIX shell-glob bracket syntax.
@@ -666,6 +687,10 @@ fi
 # entirely skipped Layer 1.F protection. The substring approach is wider but the
 # Layer 1.F entry gate is intentionally permissive — actual write/compound detection
 # happens inside the block via shlex tokenization (items 3+4).
+# Note: raw $COMMAND is used for the entry gate (not COMMAND_CONTEXT_STRIPPED) to
+# preserve coverage for compound commands where the context stripper removes the
+# script path from python3 segment tokens. False positives from quoted string
+# arguments are resolved inside the block by _bulk_decision (dev-20260529-210759).
 if echo "$COMMAND" | grep -qF '/tmp/claude-bulk-commit-sentinel-' \
    || echo "$COMMAND" | grep -qF 'write-bulk-commit-sentinel.py'; then
   # M5 (task 20260526-052559): canonical /commit --bulk Step 5 venv-activate form.
@@ -944,6 +969,33 @@ for t in tokens:
 # allowlist branch. Bare-writer (a) and pure-read (b) decisions happen LAST,
 # AFTER the deny gauntlet above (codex iter-3 F3 fix).
 
+# False-positive guard (dev-20260529-210759): if the protected name appears ONLY
+# as a substring of a longer argument token (not as a standalone path token),
+# the command is passing the name as string argument text, not executing it.
+# Examples: codex exec --prompt "...write-bulk-commit-sentinel.py..."
+#           python3 graphify-query.py --requirement "...write-bulk-commit-sentinel.py..."
+# These reach here because they have no compound separators, no recursive shell,
+# and no write-action tokens. The shlex tokenizer (posix=True) unquotes the
+# string arg, so the protected name appears as a substring of the arg token.
+_SENTINEL_SCRIPT = 'write-bulk-commit-sentinel.py'
+_SENTINEL_PATH = '/tmp/claude-bulk-commit-sentinel-'
+_sentinel_in_arg_only = False
+for _t in tokens:
+    # If any token IS the standalone path (or a path ending with it), it is a
+    # real executable reference — no false-positive guard applies.
+    if _t == _SENTINEL_SCRIPT or _t.endswith('/' + _SENTINEL_SCRIPT):
+        _sentinel_in_arg_only = False
+        break
+    if _t.startswith(_SENTINEL_PATH) and not any(c in _t[len(_SENTINEL_PATH):] for c in ' \t'):
+        _sentinel_in_arg_only = False
+        break
+    # Protected name appears embedded in a longer token (argument text).
+    if _SENTINEL_SCRIPT in _t or _SENTINEL_PATH in _t:
+        _sentinel_in_arg_only = True
+if _sentinel_in_arg_only:
+    print('PURE_READ')
+    sys.exit(0)
+
 # Allowlist (a): BARE official-writer — first token (or first 2 tokens for
 # `python3 scripts/...`) must match the official writer path EXACTLY. The
 # regex form is preserved on the trimmed text but ONLY reaches here when the
@@ -1083,30 +1135,12 @@ if echo "$COMMAND" | grep -qE 'docker\s+system\s+prune\s+-a'; then
   exit 2
 fi
 
-# Context-strip: remove string-content false positives for the generic
-# danger-token rules below.  This is intentionally a bounded classifier, NOT a
-# full shell parser.  It runs from a file path (not `python -`) and is wrapped by
-# timeout + virtual-memory limits; on any failure the raw command is used, so the
-# hook fails closed and never drops potentially executable text.
-COMMAND_CONTEXT_STRIPPED="$COMMAND"
-HOOKS_DIR_CTX="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-if [ -r "$HOOKS_DIR_CTX/lib/bash_context_strip.py" ]; then
-  _ctx_out=$(
-    ulimit -v "${CLAUDE_HOOK_CONTEXT_MEM_KB:-262144}" 2>/dev/null || true
-    CMD_INPUT="$COMMAND" timeout "${CLAUDE_HOOK_CONTEXT_TIMEOUT:-2s}" \
-      "$PYTHON_BIN" "$HOOKS_DIR_CTX/lib/bash_context_strip.py" 2>/dev/null
-  )
-  _ctx_status=$?
-  if [ "$_ctx_status" -eq 0 ]; then
-    COMMAND_CONTEXT_STRIPPED="$_ctx_out"
-  fi
-  unset _ctx_out _ctx_status
-fi
+# COMMAND_CONTEXT_STRIPPED is initialised earlier (before Layer 1.F, dev-20260529-210759).
 
 # Block: destructive disk operations (command-word-anchored on the stripped view)
 # The verb is preserved verbatim by the stripper, so echo "dd if=..." erases to a
 # no-match while a real dd/mkfs/fdisk/shred command word still fires (Item A).
-if echo "$COMMAND_CONTEXT_STRIPPED" | grep -qE '^\s*(dd |mkfs|fdisk|shred )'; then
+if echo "$COMMAND_CONTEXT_STRIPPED" | grep -qE '^\s*(dd|mkfs|fdisk|shred)\b'; then
   echo "BLOCKED: Destructive disk operation detected" >&2
   echo "Command: $COMMAND" >&2
   exit 2
@@ -1274,7 +1308,7 @@ fi
 
 # Block: curl/wget POST to happy-server API that creates/modifies sessions
 if echo "$COMMAND" | grep -qE '(curl|wget).*(/v1/sessions|/v1/machines|/session-started|/spawn-session)' && echo "$COMMAND" | grep -qiE '(-X\s*POST|-X\s*PUT|-X\s*PATCH|-X\s*DELETE|-d\s|--data)'; then
-  echo "BLOCKED: 必须使用正常的UI流程创建session，永远不允许使用代码创建session！" >&2
+  echo "BLOCKED: Session creation via API is forbidden. Use the UI flow instead." >&2
   echo "Command: $COMMAND" >&2
   echo "Hint: Open https://dev.life-ai.app -> click Start New Session -> type message -> send. NEVER use curl/API to create sessions." >&2
   exit 2

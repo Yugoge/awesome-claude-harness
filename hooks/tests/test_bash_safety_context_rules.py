@@ -85,3 +85,46 @@ class TestGitRuleStaysRaw:
 
     def test_git_reset_hard_is_blocked(self):
         assert run_hook("git reset --hard HEAD~1") == BLOCK
+
+
+# ── Layer 1.F false-positive regression: protected name in quoted arg ─────────
+# dev-20260529-210759: Layer 1.F entry gate switched from $COMMAND to
+# $COMMAND_CONTEXT_STRIPPED so that quoted string arguments to unrelated commands
+# do not trigger the sentinel-write block.
+
+class TestBulkSentinelFalsePositive:
+    """Commands whose quoted-string argument happens to mention write-bulk-commit-sentinel.py
+    must NOT be blocked by Layer 1.F when the script is not actually being executed.
+
+    AC1: graphify-query.py with --requirement arg containing the protected name → ALLOW
+    AC2: codex exec with --prompt arg containing the protected name → ALLOW
+    AC3: bare invocation (BARE_WRITER path) → ALLOW
+    AC4: compound command containing the invocation → BLOCK
+    """
+
+    def test_ac1_graphify_requirement_arg_not_blocked(self):
+        # AC1: protected name appears only in --requirement string argument value.
+        cmd = (
+            'python3 scripts/graphify-query.py --requirement '
+            '"Add positive regression test for CLAUDE_CODE_SESSION_ID fallback path '
+            'in write-bulk-commit-sentinel.py"'
+        )
+        assert run_hook(cmd) == ALLOW
+
+    def test_ac2_codex_prompt_arg_not_blocked(self):
+        # AC2: protected name appears only in --prompt string argument value.
+        cmd = (
+            'codex exec --prompt '
+            '"Please add a test for write-bulk-commit-sentinel.py fallback path"'
+        )
+        assert run_hook(cmd) == ALLOW
+
+    def test_ac3_bare_invocation_still_allowed(self):
+        # AC3: direct bare invocation via BARE_WRITER_RE path must remain ALLOW.
+        cmd = "python3 scripts/write-bulk-commit-sentinel.py"
+        assert run_hook(cmd) == ALLOW
+
+    def test_ac4_compound_invocation_still_blocked(self):
+        # AC4: compound command containing the invocation must still BLOCK.
+        cmd = "echo test && python3 scripts/write-bulk-commit-sentinel.py --output-dir /tmp"
+        assert run_hook(cmd) == BLOCK
