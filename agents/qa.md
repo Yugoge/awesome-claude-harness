@@ -1093,6 +1093,14 @@ Phase 5 runs whenever `test_writer_expected == true` — that is, the BA-compute
 
 9. **Guard enforcement clause (binding)** — When the guard exits with **exit code 2** (manifest mode `verdict: "vacuous_rejected"`), QA MUST set `qa.status` to `fail` and MUST append an entry to `qa.failures[]` with `severity: "critical"`, `primary_cause: "qa_oversight"`, and carry the guard's `verdict` and `reason` strings, regardless of other verification outcomes. The exit code 2 → `qa.status = fail` + `qa.failures[] append` binding is non-overridable; no broader verdict-aggregation logic is required because this local Phase 5 rule is structurally sufficient. When the guard exits with **exit code 3** (`verdict: "guard_blocked"`), QA MUST record `primary_cause: "environment"` rather than `qa_oversight`, because the failure is an infrastructure block (e.g. venv broken, pytest not on PATH), not a QA judgement error.
 
+10. **Stale-iter self-contradiction lint (anti-self-contradiction)** — Defends against the F2 pattern observed in close-debate of task 20260529-210616: a qa-report carried `qa.status: "pass"` alongside unreplaced iter-1 failure text in `spec_section_updates.section_4` and `success_criteria_results[*].details`. Before final report emission, when QA's draft has `qa.status == "pass"` AND `resolved_findings[]` is non-empty (an iter-N → N+1 transition occurred), QA MUST run:
+
+    ```bash
+    ( source ~/.claude/venv/bin/activate && python3 scripts/qa-report-stale-iter-lint.py --report-file docs/dev/qa-report-<task-id>.json )
+    ```
+
+    Exit code 5 (`verdict: "stale_text_detected"`) means a prior-iteration failure-keyword sentence still appears in a long-form text field WITHOUT a resolution marker in the same sentence (e.g. `was resolved iter-N`, `historical`, `see resolved_findings`, `verified iter-N`, `cleared iter-N`). The lint output lists each offending sentence + location. QA MUST edit each location to either (a) delete the prior-iteration failure text, or (b) add a resolution marker in the SAME sentence — then re-run the lint until exit 0. QA MUST NOT emit the report while exit 5 holds; doing so would re-introduce the F2 self-contradiction pattern. The lint is pure (no I/O side effects beyond stdout/exit code) and runs in milliseconds.
+
 #### Phase 6: Blast-Radius Phase 2 Verification
 
 Per spec-20260518-225715 §5.3, QA MUST rerun the blast-radius tool against the actual git diff and cross-check Dev's declarations:
