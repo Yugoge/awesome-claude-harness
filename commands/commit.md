@@ -86,6 +86,12 @@ Before dispatching changelog-analyst, write the appropriate authorization token:
 **Grant timestamp format (NON-NEGOTIABLE)**: The `expires_at` and `created_at` fields MUST be ISO-8601 strings produced from timezone-aware UTC datetimes (e.g. `(datetime.now(timezone.utc) + timedelta(minutes=30)).isoformat()` yields `"2026-05-19T16:18:56.123456+00:00"`). Epoch integers and epoch floats (e.g. `int(time.time()) + 600`, `time.time() + 600`) are NOT accepted by the privilege guard. The guard at `/root/.claude/hooks/pretool-git-privilege-guard.py:377-384` parses these fields via `datetime.fromisoformat(end_str.replace('Z', '+00:00'))`; on `ValueError`/`TypeError`/`AttributeError` the helper `_end_time_passed` returns `True` (i.e. "already expired"), which silently rejects the grant and blocks the commit. The expiration window is 30 minutes from `created_at` — bake the offset into `expires_at` at write time. Activate the venv and invoke the grant-writer script (resolves `CLAUDE_SESSION_ID` from the environment, generates a fresh nonce, writes timezone-aware ISO-8601 `created_at` and `expires_at` on a 30-minute window, and emits the resulting grant path on stdout):
 
 ```bash
+# First grant: covers the normal commit (root or nested repo, whichever commits first)
+source venv/bin/activate && python3 /root/.claude/scripts/write-commit-grant.py --task-id "$TASK_ID"
+# Second grant: covers nested-repo recovery commit when nothing_to_commit_precommitted is
+# detected in the nested repo — the first grant is consumed by the root-repo commit (or
+# root-repo recovery commit); the second grant is available for the nested-repo recovery.
+# If only one repo needs a recovery commit, the second grant expires unused (30-min TTL).
 source venv/bin/activate && python3 /root/.claude/scripts/write-commit-grant.py --task-id "$TASK_ID"
 ```
 
