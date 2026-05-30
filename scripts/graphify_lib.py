@@ -97,9 +97,11 @@ STATUS_SKIPPED = "skipped"
 
 TIMEOUT_QUERY = 15          # Step 1.5 advisory `graphify query`
 TIMEOUT_AFFECTED = 20       # Step 7.5 advisory `graphify affected`/`query`
-TIMEOUT_SEMANTIC_PROBE = 30  # /usr/bin/claude-routed semantic extract probe
+TIMEOUT_SEMANTIC_PROBE = 30  # LEGACY constant — retained for test_AC13:54 reference (AC13); the
+                             # init auto-probe that used it is removed (semantic is user-triggered).
 TIMEOUT_UPDATE = 60         # incremental Step 7.5 `graphify update`
 TIMEOUT_INIT = 300          # user-triggered full-repo `graphify update`
+TIMEOUT_SEMANTIC = 3600     # user-triggered `graphify-maintain.py semantic` full extract (serial multi-minute)
 
 
 # ---------------------------------------------------------------------------
@@ -188,6 +190,40 @@ def write_json_locked(path: Path, data: Any, indent: int = 2) -> None:
             path.write_text(json.dumps(data, indent=indent, ensure_ascii=False), encoding="utf-8")
         finally:
             fcntl.flock(lock_fh.fileno(), fcntl.LOCK_UN)
+
+
+def reset_semantic_mode_in_manifest(cache_dir: Path) -> bool:
+    """Reset maintain's run-manifest.json semantic_mode -> 'ast_only' (OBJ-1, AC10/AC11).
+
+    Single source of reset logic shared by maintain's cmd_update (AC10) and
+    graphify-enrich.py's Step-1 update reconciliation (AC11). Loads
+    <cache_dir>/run-manifest.json, sets semantic_mode='ast_only', clears the
+    semantic added-count fields, and writes it back atomically via
+    write_json_locked. MUST be called AFTER the canonical graph.json overwrite
+    completes (graph-then-manifest ordering, codex iter #2) so a reader (status)
+    never sees a fresh-AST graph beside a stale semantic:<backend> manifest.
+
+    Returns True if a manifest was found and reset, False if no manifest exists
+    (nothing to reconcile). Both call sites treat this as advisory and swallow
+    any exception themselves.
+    """
+    path = Path(cache_dir) / "run-manifest.json"
+    if not path.exists():
+        return False
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        data = {}
+    if not isinstance(data, dict):
+        data = {}
+    data["semantic_mode"] = "ast_only"
+    data["semantic_backend_probe"] = "AST overwrite reconciled semantic_mode to ast_only"
+    # Clear semantic added-count fields so status cannot surface stale counts.
+    for key in ("semantic_added_links", "semantic_added_inferred_or_ambiguous",
+                "semantic_added_edge_count"):
+        data.pop(key, None)
+    write_json_locked(path, data)
+    return True
 
 
 def read_json_safe(path: Path) -> tuple[Any, str]:

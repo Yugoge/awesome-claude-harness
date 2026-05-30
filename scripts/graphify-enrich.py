@@ -44,7 +44,19 @@ from graphify_lib import (
     get_cache_dir, get_repo_key, graph_json_path, is_cache_root_inside_repo,
     is_graphify_enabled, load_graph, resolve_paths_to_node_ids, run_graphify_cmd,
     scrub_sensitive, should_exclude_path, write_json_locked, read_json_safe,
+    reset_semantic_mode_in_manifest,
 )
+
+
+def _graph_content_hash(path: Path) -> str | None:
+    """Content-hash snapshot of graph.json, or None if absent (AC11 iter #3 guard)."""
+    import hashlib
+    try:
+        return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+    except FileNotFoundError:
+        return None
+    except Exception:
+        return None
 
 
 def _now_iso() -> str:
@@ -253,6 +265,9 @@ def main() -> int:
     # Step 1: incremental real `graphify update` (advisory; cwd+GRAPHIFY_OUT=cacheDir in lib).
     run_manifest["update_run"]["attempted"] = True
     start = time.time()
+    # Pre-update snapshot so we can prove whether the update mutated graph.json
+    # (OBJ-1/AC11 three-branch reconciliation of maintain's stale semantic_mode).
+    pre_snapshot = _graph_content_hash(graph_file)
     if not is_cache_root_inside_repo(_PROJECT_DIR):
         exit_code, stdout, stderr = run_graphify_cmd(
             ["update", str(_PROJECT_DIR)], timeout_seconds=TIMEOUT_UPDATE, cache_dir=cache_dir,
@@ -266,6 +281,19 @@ def main() -> int:
     if exit_code != 0:
         run_manifest["update_run"]["error"] = (stderr or "non-zero exit")[:500]
         # advisory — continue to extraction against the existing cache
+
+    # OBJ-1 (AC11): whenever the Step-1 update actually MUTATED graph.json (success
+    # exit 0, OR failed-but-mutated per iter #3), reconcile maintain's run-manifest
+    # semantic_mode -> ast_only via the SHARED helper so `status` cannot lie. Done
+    # AFTER the graph overwrite (graph-then-manifest). Advisory: errors swallowed.
+    try:
+        post_snapshot = _graph_content_hash(graph_file)
+        if exit_code == 0 or (pre_snapshot != post_snapshot):
+            reconciled = reset_semantic_mode_in_manifest(cache_dir)
+            run_manifest["update_run"]["semantic_mode_reconciled"] = bool(reconciled)
+    except Exception as exc:  # advisory — never break enrich (exit-0-always)
+        run_manifest["update_run"]["semantic_reconcile_error"] = str(exc)
+        print(f"graphify-enrich: semantic_mode reconcile failed (advisory): {exc}", file=sys.stderr)
 
     # Step 2: read real node-link graph (sensitive nodes/links scrubbed on read).
     graph, gstatus = load_graph(graph_file)

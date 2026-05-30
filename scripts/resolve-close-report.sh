@@ -17,8 +17,14 @@ set -u
 TASK_ID="${1:?usage: resolve-close-report.sh <TASK_ID>}"
 CONTROL_ROOT="${CONTROL_ROOT:-/root}"
 
+# git-toplevel-of-cwd candidate: when /close runs with cwd inside a (possibly
+# nested) repo, probe that repo's docs/dev/ before the control-root fallback.
+# Empty/failed git lookup yields an empty candidate, which the -n guard skips.
+GIT_TOPLEVEL="$(git rev-parse --show-toplevel 2>/dev/null || true)"
+
 for candidate in \
     "${CLAUDE_PROJECT_DIR:-}/docs/dev/close-report-${TASK_ID}.md" \
+    "${GIT_TOPLEVEL:+${GIT_TOPLEVEL}/docs/dev/close-report-${TASK_ID}.md}" \
     "/root/.claude/docs/dev/close-report-${TASK_ID}.md" \
     "${CONTROL_ROOT}/docs/dev/close-report-${TASK_ID}.md"; do
     if [ -n "$candidate" ] && [ -f "$candidate" ]; then

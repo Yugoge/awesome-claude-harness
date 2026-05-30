@@ -1,7 +1,7 @@
 # scripts
 
-*Last updated: 2026-05-30T13:44:14Z*
-**Total entries**: 99
+*Last updated: 2026-05-30T19:29:21Z*
+**Total entries**: 100
 **Convention**: kebab
 
 ## Tree
@@ -98,6 +98,7 @@ scripts/
 ├── `score-inject.sh` - Description: Emit a prompt-injection text block describing an agent's current rank/range
 ├── `score-update.sh` - Description: Update agent score by appending an entry to the lifecycle JSONL log.
 ├── `spec-check.py` - Subcommands: check-in, mark, waive, status, check-out, unlock
+├── `stage-owned-hunks.py` - Stages ONLY this cycle's owned hunks within a single already-authorized file,
 ├── `step7-spec-update.py` - Step 7 (Spec-update dispatch) reference harness — task 20260524-205206 iter-2
 ├── `update-gitignore.sh` - update-gitignore.sh - Auto-update .gitignore with project-specific rules
 ├── `update-overnight-state.sh` - update-overnight-state.sh — Atomically update overnight state file
