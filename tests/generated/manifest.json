@@ -89,6 +89,10 @@
     {
       "task_id": "20260529-080709",
       "manifest_path": "tests/generated/20260529-080709/manifest.json"
+    },
+    {
+      "task_id": "20260529-211406",
+      "manifest_path": "tests/generated/20260529-211406/manifest.json"
     }
   ]
 }

@@ -1,0 +1,128 @@
+{
+  "schema_version": "1.1",
+  "task_id": "20260529-211406",
+  "generated_at": "2026-05-29T21:14:06+00:00",
+  "active_tests": [
+    {
+      "task_id": "20260529-211406",
+      "ac_id": "AC1",
+      "ac_uid": "ac1-recovery-commit-created",
+      "type": "data",
+      "file": "tests/generated/20260529-211406/test_AC1_ac1-recovery-commit-created.py",
+      "status": "active",
+      "hook_check": {
+        "git_log_subject_contains_task_id": true,
+        "git_log_subject_not_auto_bulk": true,
+        "git_show_stat_empty": true,
+        "push_gate_token_exists": true,
+        "structured_output_commit_status": "committed"
+      }
+    },
+    {
+      "task_id": "20260529-211406",
+      "ac_id": "AC2",
+      "ac_uid": "ac2-prior-bulk-untouched",
+      "type": "data",
+      "file": "tests/generated/20260529-211406/test_AC2_ac2-prior-bulk-untouched.py",
+      "status": "active",
+      "hook_check": {
+        "head_minus_1_subject_starts_with_auto_bulk": true
+      }
+    },
+    {
+      "task_id": "20260529-211406",
+      "ac_id": "AC3",
+      "ac_uid": "ac3-recovery-commit-attribution",
+      "type": "data",
+      "file": "tests/generated/20260529-211406/test_AC3_ac3-recovery-commit-attribution.py",
+      "status": "active",
+      "hook_check": {
+        "body_contains_task_id_line": true,
+        "body_contains_precommitted_by_line": true,
+        "body_contains_attributed_files_block": true
+      }
+    },
+    {
+      "task_id": "20260529-211406",
+      "ac_id": "AC4",
+      "ac_uid": "ac4-push-gate-token-recovery-sha",
+      "type": "data",
+      "file": "tests/generated/20260529-211406/test_AC4_ac4-push-gate-token-recovery-sha.py",
+      "status": "active",
+      "hook_check": {
+        "push_gate_token_commit_sha_equals_recovery_head": true,
+        "push_gate_token_valid_json": true
+      }
+    },
+    {
+      "task_id": "20260529-211406",
+      "ac_id": "AC5",
+      "ac_uid": "ac5-multi-repo-recovery",
+      "type": "data",
+      "file": "tests/generated/20260529-211406/test_AC5_ac5-multi-repo-recovery.py",
+      "status": "active",
+      "hook_check": {
+        "root_repo_recovery_commit_exists": true,
+        "nested_repo_recovery_commit_exists": true,
+        "root_push_gate_token_exists": true,
+        "nested_push_gate_token_exists": true,
+        "no_grant_failure_in_output": true
+      }
+    },
+    {
+      "task_id": "20260529-211406",
+      "ac_id": "AC6",
+      "ac_uid": "ac6-mixed-repo-recovery",
+      "type": "data",
+      "file": "tests/generated/20260529-211406/test_AC6_ac6-mixed-repo-recovery.py",
+      "status": "active",
+      "hook_check": {
+        "root_repo_real_commit": true,
+        "nested_repo_recovery_commit": true,
+        "both_push_gate_tokens_written": true
+      }
+    },
+    {
+      "task_id": "20260529-211406",
+      "ac_id": "AC7",
+      "ac_uid": "ac7-recovery-fail-path",
+      "type": "data",
+      "file": "tests/generated/20260529-211406/test_AC7_ac7-recovery-fail-path.py",
+      "status": "active",
+      "hook_check": {
+        "structured_output_commit_status": "failed",
+        "failure_code_in": ["hook_blocked", "git_error"],
+        "failure_reason_mentions_recovery": true
+      }
+    },
+    {
+      "task_id": "20260529-211406",
+      "ac_id": "AC8",
+      "ac_uid": "ac8-non-precommitted-regression-guard",
+      "type": "data",
+      "file": "tests/generated/20260529-211406/test_AC8_ac8-non-precommitted-regression-guard.py",
+      "status": "active",
+      "hook_check": {
+        "non_empty_diff_stat": true,
+        "recovery_path_not_entered": true,
+        "commit_status": "committed"
+      }
+    },
+    {
+      "task_id": "20260529-211406",
+      "ac_id": "AC9",
+      "ac_uid": "ac9-push-gate-unblocks-push",
+      "type": "data",
+      "file": "tests/generated/20260529-211406/test_AC9_ac9-push-gate-unblocks-push.py",
+      "status": "active",
+      "hook_check": {
+        "push_gate_token_present": true,
+        "push_gate_token_commit_sha_equals_git_rev_parse_HEAD": true,
+        "push_gate_token_is_valid_json": true,
+        "push_gate_token_has_required_fields": ["commit_sha", "branch", "repo_root"],
+        "push_gate_guard_accepts_token": true
+      }
+    }
+  ],
+  "archived_tests": []
+}
