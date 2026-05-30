@@ -149,7 +149,7 @@ Only proceed to Step 6 when a STRONG signal fires.
      2. AGENT SELECTION: Are the selected agents consistent with the spec's defined
         pipeline? Flag any agent that was included but isn't in the spec's pipeline,
         or any pipeline agent that was excluded.
-     3. COVERAGE: If `${CLAUDE_PROJECT_DIR}/bin/spec-verify.py` exists, run `source ~/.claude/venv/bin/activate && python3 ${CLAUDE_PROJECT_DIR}/bin/spec-verify.py --monolith <spec_path> --views-dir docs/dev/specs/<spec-id>/views/`. If the script is absent, skip and note "spec-verify.py not found — manual coverage check required".
+     3. COVERAGE: If `/root/.claude/scripts/spec-verify/spec-verify.py` exists, run `source ~/.claude/venv/bin/activate && python3 /root/.claude/scripts/spec-verify/spec-verify.py --monolith <spec_path> --views-dir docs/dev/specs/<spec-id>/views/`. If the script is absent, skip and note "spec-verify.py not found — manual coverage check required".
         Report the result.
      4. CONTENT RELEVANCE: Spot-check 3 random content blocks in each view.
         Is the content relevant to that agent's role?

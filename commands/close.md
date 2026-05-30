@@ -408,15 +408,47 @@ Take the final line QA returned (`CLOSE: YES` or `CLOSE: NO - ...`) and echo it 
 - **Close-report FILE** (`docs/dev/close-report-<task-id>.md`): the LAST non-empty line of the FILE must be EXACTLY one of the legal `CLOSE:` forms listed in Step 2's Return value section. This is the runtime-parser contract consumed by `hooks/lib/close-verdict.py` and `/commit`'s admission check. This contract is enforced INSIDE the file QA wrote in Step 2; nothing in Step 3 alters it.
 - **Orchestrator's stdout text message to the user**: the orchestrator's response stream in Step 3 begins with the `CLOSE:` verdict echo, continues with the Session Summary (CLOSE:YES branch only — see below), and ends with the rating `<options>` XML block (CLOSE:YES branch only — see below). On the CLOSE:NO and CLOSE:YES (FORCED) paths there is no Session Summary and no `<options>` block, so the verdict echo is itself the last line of the orchestrator's message. The `<options>` block being the literal final stdout content on CLOSE:YES does NOT violate the close-report FILE contract — they are two different output channels.
 
-**Mascot scoring — close outcome (spec-20260518-225715 §5.1)**:
+**Mascot scoring — close outcome (spec-20260518-225715 §5.1; M4 — task 20260529-210616)**:
 
-After the verdict is determined (but BEFORE the user rating below), apply close-event score updates based on the CLOSE verdict crossed with whether QA ever rejected this cycle (read `qa-report-<task-id>.json` history if present):
+Scoring runs ONLY AFTER the close-report file is written (Step 2 wrote it) AND AFTER the verdict line is echoed. The decision of WHICH `close_success_*` event to issue (if any) is delegated to the executable helper `scripts/close-scoring-decide.py` — NOT inline orchestrator reasoning. This ordering prevents the premature-scoring bug seen in task 20260529-081014, where `close_success_qa_fail_fixed` was issued before QA finalized its verdict.
 
-- `CLOSE: YES*` AND QA never rejected → `bash ~/.claude/scripts/score-update.sh --agent dev --event close_success_qa_pass --note "<task-id>"`; same for `--agent ba`; same for `--agent qa`. (dev +2, ba +1, qa +1 — Path A rebalance task 20260524-205206 M1; cycle-total cross-agent sum = +4.)
-- `CLOSE: YES*` AND QA previously rejected then was fixed → `score-update.sh --event close_success_qa_fail_fixed` for ba/dev/qa. (dev +2, ba +1, qa +1 — Path A rebalance task 20260524-205206 M1; cycle-total cross-agent sum = +4.)
-- `CLOSE: NO` AND QA had passed (PM/inspector or codex caught issue post-QA) → `score-update.sh --event close_fail_qa_pass` for ba/dev/qa. (dev -10, ba -5, qa -12.)
-- `CLOSE: NO` AND QA had failed (rejection upstream) → `score-update.sh --event close_fail_qa_fail` for ba/dev/qa. (dev -10, ba -5, qa 0.)
-- `CLOSE: YES (FORCED)` (the `--force` short-circuit path) → SKIP close-event score updates entirely; --force bypasses scoring just as it bypasses QA debate.
+Procedure:
+
+1. Determine `qa_ever_rejected` from `docs/dev/qa-report-<task-id>.json` history (true if any iteration was rejected).
+2. Invoke the helper to decide which close_success_* event (if any) is permitted:
+
+   ```
+   bash -c 'source ~/.claude/venv/bin/activate && python3 ~/.claude/scripts/close-scoring-decide.py --task-id "<task-id>" --qa-ever-rejected "<true|false>"'
+   ```
+
+   The helper reads the close-report at `docs/dev/close-report-<task-id>.md`, classifies its last non-empty line via `hooks/lib/close-verdict.py`, and emits stdout JSON `{"events": [...], "skip_reason": "<string|null>"}`:
+   - missing close-report → `events=[]`, `skip_reason` contains "missing"
+   - last-line `CLOSE: NO` → `events=[]`, `skip_reason` non-null
+   - last-line `CLOSE: YES (FORCED)` → `events=[]`, `skip_reason` contains "FORCED"
+   - last-line `CLOSE: YES` + qa_ever_rejected=false → `events=["close_success_qa_pass"]`, `skip_reason=null`
+   - last-line `CLOSE: YES` + qa_ever_rejected=true → `events=["close_success_qa_fail_fixed"]`, `skip_reason=null`
+
+3. The orchestrator MUST ONLY issue the events returned by the helper. If `events[]` is empty, log `skip_reason` and SKIP all `close_success_*` score updates. Tests MUST invoke `scripts/close-scoring-decide.py` directly against fixtures; tests MUST NOT reimplement the decision logic in a parallel test harness.
+
+4. For each event name returned by the helper, issue three `score-update.sh` calls (ba, dev, qa). Example for the qa_pass branch:
+
+   ```
+   bash ~/.claude/scripts/score-update.sh --agent dev --event close_success_qa_pass --note "<task-id>"
+   bash ~/.claude/scripts/score-update.sh --agent ba  --event close_success_qa_pass --note "<task-id>"
+   bash ~/.claude/scripts/score-update.sh --agent qa  --event close_success_qa_pass --note "<task-id>"
+   ```
+
+   (dev +2, ba +1, qa +1 — Path A rebalance task 20260524-205206 M1; cycle-total cross-agent sum = +4.)
+
+   For the qa_fail_fixed branch the event name is `close_success_qa_fail_fixed` (same deltas).
+
+5. `close_fail_*` branches are NOT routed through the helper — the orchestrator issues them directly when the verdict is `CLOSE: NO`:
+   - `CLOSE: NO` AND QA had passed (PM/inspector or codex caught issue post-QA) → `score-update.sh --event close_fail_qa_pass` for ba/dev/qa. (dev -10, ba -5, qa -12.)
+   - `CLOSE: NO` AND QA had failed (rejection upstream) → `score-update.sh --event close_fail_qa_fail` for ba/dev/qa. (dev -10, ba -5, qa 0.)
+
+6. `CLOSE: YES (FORCED)` (the `--force` short-circuit path) → SKIP close-event score updates entirely; --force bypasses scoring just as it bypasses QA debate. The helper enforces this by returning `events=[]` for FORCED lines, so even if the orchestrator forgets, the script-side gate (`scripts/score-update.sh` M3 precondition) and the helper-side gate are defense-in-depth.
+
+Defense-in-depth: `scripts/score-update.sh` itself enforces the same precondition (M3 — task 20260529-210616). Any `close_success_*` call without a legal `CLOSE: YES` last-line in `docs/dev/close-report-<note>.md` exits 5 ("precondition unmet"), so even if the orchestrator skips the helper or the helper is bypassed, the lifecycle log cannot be polluted with premature success entries.
 
 **Session Summary — CLOSE:YES branch only (mandatory before rating)**:
 
