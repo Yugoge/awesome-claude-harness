@@ -530,6 +530,55 @@ If `baseline_head_sha` is empty or absent (unborn repo), skip git-diff derivatio
 
 **Semantics — best-effort, point-in-time (authoritative)**: `baseline_dirty_snapshot` is a best-effort, point-in-time snapshot of the shared working tree captured once by the orchestrator before Dev dispatch. Dev MUST copy it verbatim and MUST NOT refresh or recompute it — a refresh would capture this session's own in-progress edits and wrongly exclude them from downstream provenance checks. It is not a session boundary, an ownership marker, or a concurrency-safe list of all peer-session changes; under concurrent independent `/dev` sessions sharing one working tree, files written by a peer session after the capture instant will not appear in it. This is point-in-time semantics, not concurrency-completeness, and is by design.
 
+## Owned-edits ledger + pre-edit snapshot (MANDATORY — timing-independent ownership signal)
+
+This is the sound, timing-independent ownership signal that lets `changelog-analyst`
+stage ONLY this cycle's owned hunks when a working-tree file is entangled with a
+concurrent peer session's uncommitted changes (see `scripts/stage-owned-hunks.py`).
+A file-state snapshot alone is NOT a sound ownership signal — it records file state at
+an instant, not authorship, so a post-capture non-overlapping peer edit would be
+mis-attributed as owned (fail-open). Ownership therefore derives from **dev's own
+authored content**, which is immune to peer timing/interleaving because it records what
+THIS cycle authored, not a snapshot of a shared file.
+
+As you implement, you MUST record two per-file artifacts:
+
+1. **Owned-edits ledger** — for every Edit/Write you apply to a repo file, append an
+   entry `{"old": "<exact old_string>", "new": "<exact new_string>"}` to that file's
+   ledger. For a `Write` (whole-file create/replace), record `old` as the pre-write
+   file content (`""` for a brand-new file) and `new` as the written content. Record
+   the FINAL authored state per region (if you edit the same region twice, the last
+   `new` is what occupies the worktree). Line numbers are NOT recorded — ownership is
+   located by unique content search, so absolute line numbers are irrelevant and would
+   be fail-open under peer line-shift.
+
+2. **Pre-edit snapshot** — BEFORE your FIRST Edit/Write to a file, capture the exact
+   pre-edit bytes of that file (its content as it existed when this cycle started
+   touching it). This is the cross-check trust anchor: `changelog-analyst` reconstructs
+   the worktree with the owned ranges reverted to their `old_string` and asserts the
+   result is byte-identical to this snapshot; any out-of-owned divergence (a
+   post-capture peer edit) → the file is EXCLUDED from staging (fail-closed).
+
+Surface both in the dev-report as two top-level maps keyed by repo-relative path:
+
+```json
+"owned_edits": {
+  "agents/changelog-analyst.md": [
+    {"old": "git -C ... add -- <path>", "new": "...hunk-filtered staging..."}
+  ]
+},
+"pre_edit_snapshots": {
+  "agents/changelog-analyst.md": "<blob-sha OR the exact pre-edit file content>"
+}
+```
+
+`pre_edit_snapshots` values may be either a git blob SHA (resolvable via
+`git cat-file blob <sha>`) or the literal pre-edit content string. Both maps MAY be
+empty `{}` only when this cycle made no file edits. When edits were made, the maps MUST
+be non-empty so the feature works end-to-end (not dormant): `changelog-analyst` reads
+`owned_edits` + `pre_edit_snapshots` and passes them to `scripts/stage-owned-hunks.py`
+for any whitelisted file that is also dirty with potential peer entanglement.
+
 **MUST write report to filesystem**: `docs/dev/dev-report-<timestamp>.json`
 
 The dev report MUST be written to the filesystem so QA can read it directly. Also return the report content in your response.
@@ -542,6 +591,12 @@ The dev report MUST be written to the filesystem so QA can read it directly. Als
   "baseline_head_sha": "<git rev-parse HEAD at dispatch time, or empty string if unborn repo>",
   "baseline_dirty_snapshot": "<git status --porcelain output at dispatch time, or empty string>",
   "dev_report_path": "docs/dev/dev-report-<timestamp>.json",
+  "owned_edits": {
+    "<repo-rel-path>": [{"old": "<exact old_string>", "new": "<exact new_string>"}]
+  },
+  "pre_edit_snapshots": {
+    "<repo-rel-path>": "<blob-sha or exact pre-edit file content>"
+  },
   "dev": {
     "status": "completed|blocked|needs_review",
     "files_modified": [],
