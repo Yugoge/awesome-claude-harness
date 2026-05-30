@@ -191,19 +191,30 @@ The preflight validates these exact same-task files: `docs/dev/ticket-<task-id>.
 
 Any missing, malformed, mismatched, status-only, or non-passing artifact blocks before inspector dispatch / QA debate and reports the exact path and reason. The forced path is unchanged: `/close --force` short-circuits before this normal-path preflight.
 
-Resolve optional cp-state handoff for the QA close gate:
+Resolve optional cp-state handoff for the QA close gate. Do NOT derive `SPEC_ID`
+from the spec filename by hand — route the monolith path through the centralized
+resolver so the close gate uses the SAME `cp_dir` the producer and `/dev` use:
 
-- If the resolved input spec path is `docs/dev/specs/<SPEC_ID>.md` and
-  `.claude/specs/<SPEC_ID>/cp-state-qa.json` exists, bind `SPEC_ID`.
-- Else if `context-<task-id>.json` contains a `spec_path`, `spec_file`, or
-  `user_spec_path` pointing at `docs/dev/specs/<SPEC_ID>.md`, bind that `SPEC_ID`
-  when `.claude/specs/<SPEC_ID>/cp-state-qa.json` exists.
-- Else if `.claude/specs/<TASK_ID>/cp-state-qa.json` exists, bind `SPEC_ID="$TASK_ID"`.
+- Determine the monolith `spec_path` from the resolved input or from
+  `context-<task-id>.json` (`spec_path` / `spec_file` / `user_spec_path`).
+- If a `spec_path` is found, call the resolver and take its `cp_dir`:
+
+  ```bash
+  RESOLVED_JSON=$(/root/.claude/scripts/resolve-spec-artifacts.py \
+      --spec-path "$spec_path" --project-dir "$CLAUDE_PROJECT_DIR") || {
+    echo "spec-artifact resolution FAILED for the close gate (path mismatch / present-but-invalid split)." >&2
+    exit 1; }
+  SPEC_ID=$(jq -r .artifact_id <<<"$RESOLVED_JSON")
+  CP_DIR=$(jq -r '.cp_dir // empty' <<<"$RESOLVED_JSON")
+  [ -f "$CLAUDE_PROJECT_DIR/$CP_DIR/cp-state-qa.json" ] || { SPEC_ID=""; CP_DIR=""; }
+  ```
+- Else if `.claude/specs/<TASK_ID>/cp-state-qa.json` exists, bind `SPEC_ID="$TASK_ID"`,
+  `CP_DIR=".claude/specs/$TASK_ID"`.
 - Else bind `SPEC_ID=""` and skip the QA cp-state `SECOND ACTION`.
 
 When `SPEC_ID` is non-empty, `/close` MUST hand the QA subagent
-`.claude/specs/<SPEC_ID>/cp-state-qa.json`; this is what makes the close gate
-participate in the same check-in/checklist/Stop-block chain as `/dev`.
+`$CP_DIR/cp-state-qa.json`; this is what makes the close gate participate in the
+same check-in/checklist chain as `/dev`.
 
 ### Step 1: Agent dispatch — three inspectors (orchestrator authority — `commands/close.md` itself, NOT QA)
 
@@ -253,7 +264,7 @@ Use the Agent tool with `subagent_type: qa` ONCE. The entire debate happens insi
 
 ```
 FIRST ACTION: if a dev-registry sentinel for this session exists at $CLAUDE_PROJECT_DIR/.claude/dev-registry/<SESSION_ID>/qa.json, read it to register.
-SECOND ACTION (only if SPEC_ID is non-empty): read $CLAUDE_PROJECT_DIR/.claude/specs/<SPEC_ID>/cp-state-qa.json to load your mandatory checklist before the debate. Mark each completed checkpoint with /root/.claude/scripts/spec-check.py mark --spec-id <SPEC_ID> --agent qa --agent-id $CLAUDE_AGENT_ID --cp-id <cp-NN>. Waive only with /root/.claude/scripts/spec-check.py waive --spec-id <SPEC_ID> --agent qa --agent-id $CLAUDE_AGENT_ID --cp-id <cp-NN> (auto-text records actor + ISO timestamp). You MUST leave zero pending checkpoints before Stop; subagentstop-cp-enforce.py blocks exit otherwise. If `$CLAUDE_AGENT_ID` is unavailable, use the `agent_id` value written into the cp-state file by the read.
+SECOND ACTION (only if SPEC_ID is non-empty): read $CLAUDE_PROJECT_DIR/$CP_DIR/cp-state-qa.json to load your mandatory checklist before the debate. Mark each completed checkpoint with /root/.claude/scripts/spec-check.py mark --spec-id <SPEC_ID> --agent qa --agent-id $CLAUDE_AGENT_ID --cp-id <cp-NN>. Waive only with /root/.claude/scripts/spec-check.py waive --spec-id <SPEC_ID> --agent qa --agent-id $CLAUDE_AGENT_ID --cp-id <cp-NN> (auto-text records actor + ISO timestamp). You MUST leave zero pending checkpoints before Stop (a discipline expectation tracked via spec-check.py — no hook blocks exit on pending checkpoints today). If `$CLAUDE_AGENT_ID` is unavailable, use the `agent_id` value written into the cp-state file by the read.
 
 You are the QA gatekeeper evaluating whether a completed development can be closed. The orchestrator passes a `codex_required: <true|false>` flag in this dispatch:
 

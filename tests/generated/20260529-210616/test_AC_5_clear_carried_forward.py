@@ -6,6 +6,7 @@
 # and a static-text guard that commands/close.md still contains the
 # 6-bucket Session Summary labels (no source rollback).
 
+import os
 import pathlib
 import subprocess
 
@@ -31,9 +32,15 @@ SIBLING_DIRS = [
 
 
 def _run_pytest(*paths):
+    # F1 (close 20260529-210616 codex): strip CLAUDE_GRAPHIFY_ENABLED so this
+    # cycle's "carried-forward cleared" claim holds env-stably, not only when
+    # graphify is unset in the caller's shell.
+    env = dict(os.environ)
+    env.pop("CLAUDE_GRAPHIFY_ENABLED", None)
     proc = subprocess.run(
         ["python3", "-m", "pytest", *paths, "-q"],
         capture_output=True, text=True, timeout=300, cwd=str(REPO_ROOT),
+        env=env,
     )
     return proc.returncode, proc.stdout, proc.stderr
 

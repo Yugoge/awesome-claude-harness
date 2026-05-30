@@ -8,9 +8,11 @@
 # Helper under test: scripts/close-scoring-decide.py
 
 import json
+import os
 import pathlib
 import re
 import subprocess
+import uuid
 
 import pytest
 
@@ -24,9 +26,18 @@ DOCS_DEV = REPO_ROOT / "docs" / "dev"
 VENV_PY = REPO_ROOT.parent / "dot-claude" / "venv" / "bin" / "python3"
 # Fall back to ~/.claude/venv/bin/python3 — REPO_ROOT may be the symlinked path
 # already. Try absolute path:
-import os
 HOME_VENV_PY = pathlib.Path(os.path.expanduser("~/.claude/venv/bin/python3"))
 PYTHON_BIN = HOME_VENV_PY if HOME_VENV_PY.exists() else (VENV_PY if VENV_PY.exists() else pathlib.Path("python3"))
+
+# Per-worker / per-process unique suffix for xdist safety (codex review).
+_WORKER = os.environ.get("PYTEST_XDIST_WORKER", "gw-solo").replace("_", "-")
+_RUNID = uuid.uuid4().hex[:8]
+
+
+def _unique_stem(label):
+    """Per-worker unique safe-stem matching ^[A-Za-z0-9][A-Za-z0-9_-]{2,80}$."""
+    stem = f"ac4-{_WORKER}-{_RUNID}-{label}"
+    return stem[:81]
 
 
 @pytest.fixture
@@ -67,23 +78,29 @@ def _run_helper(task_id, qa_ever_rejected):
     return proc.returncode, proc.stdout, proc.stderr
 
 
-# Stems for each fixture state — unique to avoid collision.
-STEM_MISSING = "ac4-fix-missing-aa"
-STEM_NO = "ac4-fix-close-no-aa"
-STEM_FORCED = "ac4-fix-close-forced-aa"
-STEM_YES = "ac4-fix-close-yes-aa"
+# Per-worker / per-run unique stems for xdist safety (codex review). One
+# stem per (state, qa) row prevents one row's fixture lifecycle from
+# stomping on another row's expectations under parallel pytest workers.
+STEM_MISSING_F = _unique_stem("miss-f")
+STEM_MISSING_T = _unique_stem("miss-t")
+STEM_NO_F = _unique_stem("no-f")
+STEM_NO_T = _unique_stem("no-t")
+STEM_FORCED_F = _unique_stem("force-f")
+STEM_FORCED_T = _unique_stem("force-t")
+STEM_YES_F = _unique_stem("yes-f")
+STEM_YES_T = _unique_stem("yes-t")
 
 
 MATRIX = [
     # (label, stem, last_line_or_None, qa_ever_rejected, expected_events, skip_reason_substring_or_None)
-    ("missing/false", STEM_MISSING, None, "false", [], "missing"),
-    ("missing/true", STEM_MISSING, None, "true", [], "missing"),
-    ("NO/false", STEM_NO, "CLOSE: NO - reason", "false", [], None),  # any non-null reason
-    ("NO/true", STEM_NO, "CLOSE: NO - reason", "true", [], None),
-    ("FORCED/false", STEM_FORCED, "CLOSE: YES (FORCED)", "false", [], "FORCED"),
-    ("FORCED/true", STEM_FORCED, "CLOSE: YES (FORCED)", "true", [], "FORCED"),
-    ("YES/false", STEM_YES, "CLOSE: YES", "false", ["close_success_qa_pass"], None),
-    ("YES/true", STEM_YES, "CLOSE: YES", "true", ["close_success_qa_fail_fixed"], None),
+    ("missing/false", STEM_MISSING_F, None, "false", [], "missing"),
+    ("missing/true", STEM_MISSING_T, None, "true", [], "missing"),
+    ("NO/false", STEM_NO_F, "CLOSE: NO - reason", "false", [], None),
+    ("NO/true", STEM_NO_T, "CLOSE: NO - reason", "true", [], None),
+    ("FORCED/false", STEM_FORCED_F, "CLOSE: YES (FORCED)", "false", [], "FORCED"),
+    ("FORCED/true", STEM_FORCED_T, "CLOSE: YES (FORCED)", "true", [], "FORCED"),
+    ("YES/false", STEM_YES_F, "CLOSE: YES", "false", ["close_success_qa_pass"], None),
+    ("YES/true", STEM_YES_T, "CLOSE: YES", "true", ["close_success_qa_fail_fixed"], None),
 ]
 
 
@@ -132,7 +149,7 @@ def test_AC_4_missing_task_id_exits_2():
 
 def test_AC_4_io_error_exits_3(tmp_path, fixture_close_report):
     """Permission-denied on the close-report file -> exit 3 (distinct from missing exit 0)."""
-    stem = "ac4-fix-ioerror-aa"
+    stem = _unique_stem("ioerr")
     p = fixture_close_report(stem, "CLOSE: YES")
     # chmod 000 to make it unreadable
     import os

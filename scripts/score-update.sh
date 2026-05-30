@@ -148,7 +148,7 @@ fi
 
 # --delta must be a valid integer (sign optional)
 if [[ -n "${DELTA}" ]]; then
-  if ! [[ "${DELTA}" =~ ^-?[0-9]+$ ]]; then
+  if ! [[ "${DELTA}" =~ ^[+-]?[0-9]+$ ]]; then
     echo "${SCRIPT_NAME}: --delta must be a signed integer, got '${DELTA}'" >&2
     exit 1
   fi

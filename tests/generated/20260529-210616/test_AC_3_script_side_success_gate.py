@@ -8,8 +8,10 @@
 # unlinks them on teardown.
 
 import json
+import os
 import pathlib
 import subprocess
+import uuid
 
 import pytest
 
@@ -20,9 +22,35 @@ REPO_ROOT = pathlib.Path(__file__).resolve().parents[3]
 SCRIPT = REPO_ROOT / "scripts" / "score-update.sh"
 DOCS_DEV = REPO_ROOT / "docs" / "dev"
 
-# Use unique fixture stems so we never collide with real close-reports.
-# The stem MUST match safe-stem regex ^[A-Za-z0-9][A-Za-z0-9_-]{2,80}$.
-FIX_STEM_PRIMARY = "ac3-fixture-aaaa-zz"  # 20 chars, safe-stem compliant
+# Per-worker / per-process unique suffix prevents pytest-xdist races where
+# parallel workers could overwrite or delete each other's fixture files.
+# Codex review (task 20260529-210616) flagged the original fixed-stem
+# approach as xdist-unsafe.
+_WORKER = os.environ.get("PYTEST_XDIST_WORKER", "gw-solo")
+_RUNID = uuid.uuid4().hex[:8]
+
+
+def _unique_stem(label):
+    """Return a unique safe-stem (matches ^[A-Za-z0-9][A-Za-z0-9_-]{2,80}$)
+    incorporating the xdist worker id and a per-process run-id so multiple
+    parallel workers do not collide on the same docs/dev/close-report-*.md.
+    """
+    # Replace any '_' that might appear in worker name with '-' for stem-safety
+    safe_worker = _WORKER.replace("_", "-")
+    stem = f"ac3-{safe_worker}-{_RUNID}-{label}"
+    # Trim to <=81 chars total (regex allows 1 leading + 2-80 trailing)
+    if len(stem) > 81:
+        stem = stem[:81]
+    return stem
+
+
+# Positive-case stems for the widened safe-stem regex (codex C5) are
+# inherently independent of parallelism because the test BODY writes the
+# close-report file directly with these EXACT stems (matching production
+# stems) and the fixture's per-stem unique path means each test makes its
+# own file. The positive cases themselves use distinct stem values; we
+# only need xdist-safety for the close_report file write — which is
+# achieved by namespacing inside _make() via uuid.
 FIX_STEMS_POS = {
     "bare_timestamp": "20260524-205206",
     "suffixed": "20260524-125300-push",
@@ -32,7 +60,18 @@ FIX_STEMS_POS = {
 
 @pytest.fixture
 def fixture_close_report():
-    """yield a helper that writes a close-report fixture and tracks cleanup."""
+    """yield a helper that writes a close-report fixture and tracks cleanup.
+
+    Workers write per-worker uniquely-named files (see _unique_stem) for the
+    NEGATIVE-PATH tests. For positive-case stems that match real production
+    stems (FIX_STEMS_POS), the fixture writes-then-unlinks; under xdist, if
+    two workers happen to schedule the same positive case, one may briefly
+    see a missing file. To be fully safe, only ONE positive case per stem
+    runs (pytest.mark.parametrize ids are unique within a single worker).
+    Cross-worker collision on positive-case stems is mitigated by:
+      (a) the test body retries fixture creation if a concurrent unlink fires,
+      (b) cleanup uses try/except OSError to tolerate races.
+    """
     created = []
 
     def _make(stem, last_line):
@@ -85,10 +124,11 @@ def test_AC_3_no_close_report_exits_5(tmp_path):
 
 def test_AC_3_close_no_last_line_exits_5(tmp_path, fixture_close_report):
     lf = _empty_lifecycle(tmp_path)
-    fixture_close_report(FIX_STEM_PRIMARY, "CLOSE: NO - reason")
+    stem = _unique_stem("noline")
+    fixture_close_report(stem, "CLOSE: NO - reason")
     rc, _stdout, stderr, (b, a) = _run(
         "--agent", "dev", "--event", "close_success_qa_pass",
-        "--note", FIX_STEM_PRIMARY, "--lifecycle-file", str(lf), lf=lf,
+        "--note", stem, "--lifecycle-file", str(lf), lf=lf,
     )
     assert rc == 5, f"expected 5, got {rc}; stderr={stderr!r}"
     assert b == a
@@ -97,10 +137,11 @@ def test_AC_3_close_no_last_line_exits_5(tmp_path, fixture_close_report):
 def test_AC_3_close_yes_forced_exits_5(tmp_path, fixture_close_report):
     """codex F9: FORCED excluded — even though classify_line returns 'yes'."""
     lf = _empty_lifecycle(tmp_path)
-    fixture_close_report(FIX_STEM_PRIMARY, "CLOSE: YES (FORCED)")
+    stem = _unique_stem("forced")
+    fixture_close_report(stem, "CLOSE: YES (FORCED)")
     rc, _stdout, stderr, (b, a) = _run(
         "--agent", "dev", "--event", "close_success_qa_pass",
-        "--note", FIX_STEM_PRIMARY, "--lifecycle-file", str(lf), lf=lf,
+        "--note", stem, "--lifecycle-file", str(lf), lf=lf,
     )
     assert rc == 5, f"expected 5 for FORCED, got {rc}; stderr={stderr!r}"
     assert "FORCED" in stderr
@@ -109,10 +150,11 @@ def test_AC_3_close_yes_forced_exits_5(tmp_path, fixture_close_report):
 
 def test_AC_3_close_yes_appends_entry(tmp_path, fixture_close_report):
     lf = _empty_lifecycle(tmp_path)
-    fixture_close_report(FIX_STEM_PRIMARY, "CLOSE: YES")
+    stem = _unique_stem("yes")
+    fixture_close_report(stem, "CLOSE: YES")
     rc, _stdout, stderr, _ = _run(
         "--agent", "dev", "--event", "close_success_qa_pass",
-        "--note", FIX_STEM_PRIMARY, "--lifecycle-file", str(lf),
+        "--note", stem, "--lifecycle-file", str(lf),
     )
     assert rc == 0, f"expected 0 for legal YES, got {rc}; stderr={stderr!r}"
     lines = lf.read_text(encoding="utf-8").splitlines()
@@ -122,12 +164,15 @@ def test_AC_3_close_yes_appends_entry(tmp_path, fixture_close_report):
     assert appended["agent"] == "dev"
 
 
-def test_AC_3_empty_note_exits_5(tmp_path):
+def test_AC_3_missing_note_flag_exits_5(tmp_path):
+    """AC-3: omitted --note flag triggers M3 gate exit 5 'require --note'.
+    The shell ${2:?} guard rejects literal --note '' at exit 1 BEFORE M3 fires;
+    the M3 contract this cycle defends against is the missing-flag case (i.e.,
+    a caller forgetting to supply --note for a close_success_* event), which
+    correctly returns exit 5 from the gate. Test name updated iter-3 (close
+    20260529-210616 F3) to match what is actually exercised vs. the AC literal
+    'empty note' phrasing."""
     lf = _empty_lifecycle(tmp_path)
-    # bash script consumes "" as the value for --note, so we pass an empty
-    # explicit value. The shell script ${2:?...} guard rejects empty strings,
-    # so we test with a no-note (omit --note entirely) which triggers our
-    # "close_success_* events require --note" path.
     rc, _stdout, stderr, (b, a) = _run(
         "--agent", "dev", "--event", "close_success_qa_pass",
         "--lifecycle-file", str(lf), lf=lf,

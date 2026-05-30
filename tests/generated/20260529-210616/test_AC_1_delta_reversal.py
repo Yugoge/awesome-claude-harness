@@ -106,7 +106,7 @@ def test_AC_1_delta_on_fresh_file_with_expected_prev_score_50(tmp_path):
     lf = tmp_path / "lifecycle.jsonl"
     lf.write_text("")  # empty file
     rc, _stdout, stderr, _ = _run(
-        "--agent", "dev", "--delta", "3", "--reason", "test",
+        "--agent", "dev", "--delta", "+3", "--reason", "test",
         "--expected-prev-score", "50",
         "--lifecycle-file", str(lf),
     )
