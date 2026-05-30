@@ -28,8 +28,8 @@ Every Agent dispatch from this orchestrator shares the following invariant prelu
    Substitute `<role>` with the dispatched subagent type (`pm`, `ba`, `dev`, `qa`, `architect`, `product-owner`, `user`, `ui-specialist`, …). Without this Read, `pretool-cp-checkin.py` cannot map the subagent UUID to its `agent_type` and `pretool-subagent-code-block.py` falls open. The Step 1 sentinel-fanout loop creates the JSON files for every agent type before any dispatch runs.
 
 2. **CHECKPOINT MARKING (cp-state checklist contract, only when `SPEC_ID` is non-empty AND that role's cp-state file exists)**:
-   `CHECKPOINT MARKING: see agents/<role>.md §Checkpoint Marking Contract. Mark every cp-NN done or waived before Stop or SubagentStop hook will block exit.`
-   The full SECOND ACTION semantics — read `cp-state-<role>.json`, mark checkpoints with `/root/.claude/scripts/spec-check.py mark`, waive with the `waive` subcommand, satisfy `subagentstop-cp-enforce.py` before Stop — are documented once in the Step 1 cp-state handoff section above and inside `agents/<role>.md` itself. The pointer keeps each dispatch one line wide while preserving the contract.
+   `CHECKPOINT MARKING: see agents/<role>.md §Checkpoint Marking Contract. Mark every cp-NN done or waived before Stop (discipline expectation tracked via spec-check.py; no hook blocks exit on pending checkpoints today).`
+   The full SECOND ACTION semantics — read `cp-state-<role>.json`, mark checkpoints with `/root/.claude/scripts/spec-check.py mark`, waive with the `waive` subcommand, leave zero pending before Stop — are documented once in the Step 1 cp-state handoff section above and inside `agents/<role>.md` itself. The pointer keeps each dispatch one line wide while preserving the contract.
 
 3. **Role declaration**:
    `You are the <role> subagent. Follow agents/<role>.md instructions precisely.` (For BA the file is `.claude/agents/ba.md`. For PM with explicit mode the line becomes `You are the PM subagent in <PM_MODE> mode. Follow agents/pm.md <Mode> Protocol.`)
@@ -270,11 +270,26 @@ Every Agent launch prompt in this orchestrator MUST begin with a `FIRST ACTION` 
 
 **Initialize cp-state handoff when a user-provided `/spec` exists** (MANDATORY in `spec_mode == "user-provided"` when cp-state files exist):
 
-If `user_spec_path` points at `docs/dev/specs/<SPEC_ID>.md` and the sibling
-directory `.claude/specs/<SPEC_ID>/` contains cp-state files, bind `SPEC_ID` to
-the basename (without extension) of `user_spec_path`.
+Resolve the spec-id via the centralized resolver — never derive it from the
+`user_spec_path` basename by hand (that prefix drift silently dropped de-prefixed
+specs to monolith mode):
 
-**T1.7 (redev-tier123) — Orchestrator-view + Section 5 read MANDATE**: When `SPEC_ID` is non-empty, BEFORE composing any subagent dispatch prompt, you MUST read `$CLAUDE_PROJECT_DIR/.claude/specs/<SPEC_ID>/views/orchestrator.md` AND the spec's Section 5 (User's Acceptance Criterion) verbatim from `$CLAUDE_PROJECT_DIR/docs/dev/specs/<SPEC_ID>.md`. Quote the user's words from Section 5 directly into every dispatch prompt; do not paraphrase or summarize. The user's verbatim need is the binding contract — every subagent must see the user's literal request, not your reformulation.
+```bash
+if [ -n "$user_spec_path" ]; then
+  RESOLVED_JSON=$(/root/.claude/scripts/resolve-spec-artifacts.py \
+      --spec-path "$user_spec_path" --project-dir "$CLAUDE_PROJECT_DIR") || {
+    echo "spec-artifact resolution FAILED (path mismatch / present-but-invalid split)." >&2
+    exit 1; }
+  SPEC_ID=$(jq -r .artifact_id <<<"$RESOLVED_JSON")
+  CP_DIR=$(jq -r '.cp_dir // empty'   <<<"$RESOLVED_JSON")
+  VIEWS_DIR=$(jq -r '.views_dir // empty' <<<"$RESOLVED_JSON")
+  [ -d "$CLAUDE_PROJECT_DIR/$CP_DIR" ] || { SPEC_ID=""; CP_DIR=""; }
+else
+  SPEC_ID=""; CP_DIR=""; VIEWS_DIR=""
+fi
+```
+
+**T1.7 (redev-tier123) — Orchestrator-view + Section 5 read MANDATE**: When `SPEC_ID` is non-empty, BEFORE composing any subagent dispatch prompt, you MUST read the orchestrator view the resolver located — `$CLAUDE_PROJECT_DIR/$VIEWS_DIR/orchestrator.md` (views live under `docs/dev/specs/<artifact_id>/views/`, NOT under `.claude/specs/`) — AND the spec's Section 5 (User's Acceptance Criterion) verbatim from `$user_spec_path`. Quote the user's words from Section 5 directly into every dispatch prompt; do not paraphrase or summarize. The user's verbatim need is the binding contract — every subagent must see the user's literal request, not your reformulation.
 
 If no spec/cp-state directory exists, set `SPEC_ID=""` and skip the `SECOND ACTION`
 lines below. If a particular agent has no cp-state file under that SPEC_ID, omit that
@@ -282,12 +297,13 @@ agent's `SECOND ACTION` for this launch. When `SPEC_ID` is non-empty, every Agen
 cp-state file MUST include a `SECOND ACTION` line immediately after the dev-registry `FIRST ACTION`:
 
 ```text
-SECOND ACTION: Read $CLAUDE_PROJECT_DIR/.claude/specs/<SPEC_ID>/cp-state-<agent>.json to load your mandatory checklist before doing substantive work. Mark each completed checkpoint with /root/.claude/scripts/spec-check.py mark --spec-id <SPEC_ID> --agent <agent> --agent-id $CLAUDE_AGENT_ID --cp-id <cp-NN>. Waive only with /root/.claude/scripts/spec-check.py waive --spec-id <SPEC_ID> --agent <agent> --agent-id $CLAUDE_AGENT_ID --cp-id <cp-NN> (auto-text records actor + ISO timestamp). You MUST leave zero pending checkpoints before Stop; subagentstop-cp-enforce.py blocks exit otherwise. If `$CLAUDE_AGENT_ID` is unavailable, use the `agent_id` value written into the cp-state file by the read.
+SECOND ACTION: Read $CLAUDE_PROJECT_DIR/$CP_DIR/cp-state-<agent>.json to load your mandatory checklist before doing substantive work. Mark each completed checkpoint with /root/.claude/scripts/spec-check.py mark --spec-id <SPEC_ID> --agent <agent> --agent-id $CLAUDE_AGENT_ID --cp-id <cp-NN>. Waive only with /root/.claude/scripts/spec-check.py waive --spec-id <SPEC_ID> --agent <agent> --agent-id $CLAUDE_AGENT_ID --cp-id <cp-NN> (auto-text records actor + ISO timestamp). You MUST leave zero pending checkpoints before Stop (a discipline expectation tracked via spec-check.py — no hook blocks exit on pending checkpoints today). If `$CLAUDE_AGENT_ID` is unavailable, use the `agent_id` value written into the cp-state file by the read.
 ```
 
-This gives overnight specialists the same checklist-stop semantics as BA/Dev/QA:
-check-in happens on the cp-state read, and Stop is blocked until the checklist is
-fully done or waived.
+This gives overnight specialists the same checklist semantics as BA/Dev/QA:
+check-in happens on the cp-state read, and each specialist is expected to leave
+the checklist fully done or waived before Stop (tracked via spec-check.py; no hook
+blocks exit on pending checkpoints today).
 
 **Write verbatim user requirement document** (MANDATORY — do this once in Step 1, before any Agent dispatch):
 

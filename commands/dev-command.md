@@ -93,17 +93,25 @@ Auto-detected spec: <path>
 
 If no spec found, set `spec_path = null`. All downstream behavior is unchanged when `spec_path` is null.
 
-**Detect views folder (sibling to spec)**:
+**Detect views folder (via the centralized resolver — do NOT re-derive paths inline)**:
 
-If `spec_path` is not null, check `<dirname>/<spec-id>/views/manifest.json`.
-If the manifest exists AND is valid JSON AND `schema_version == 1`, first run the stale-view guard:
-- Compute `split_marker = <dirname(spec_path)>/<spec-id>/.split-complete`.
-- If `split_marker` is missing OR `spec_path` is newer than `split_marker`, treat the views/checkpoints as stale: set `views_available = false`, clear `view_paths`, and announce `Spec is newer than split views/checkpoints; using monolith spec for this /dev-command run. Re-finalize /spec before relying on per-agent views.`
-- Otherwise, set:
-- `views_available = true`
-- `view_paths` = manifest.views (dict of agent → path)
+If `spec_path` is not null, call the single canonical resolver and consume its stdout JSON; never compute `views_dir` / `split_marker` / the spec-id from `spec_path` by hand (that prefix drift silently dropped de-prefixed specs to monolith mode):
 
-Otherwise `views_available = false` — legacy specs without views are supported, the monolith path alone is passed to subagents with no checkpoint enforcement.
+```bash
+if [ -n "$spec_path" ]; then
+  RESOLVED_JSON=$(/root/.claude/scripts/resolve-spec-artifacts.py \
+      --spec-path "$spec_path" --project-dir "$CLAUDE_PROJECT_DIR") || {
+    echo "spec-artifact resolution FAILED (path mismatch / present-but-invalid split). Re-finalize /spec before relying on per-agent views." >&2
+    exit 1; }   # loud-fail guard: a present-but-invalid split never silently degrades to monolith mode
+  ARTIFACT_ID=$(jq -r .artifact_id      <<<"$RESOLVED_JSON")
+  VIEWS_AVAILABLE=$(jq -r .views_available <<<"$RESOLVED_JSON")
+  MANIFEST_PATH=$(jq -r '.manifest_path // empty' <<<"$RESOLVED_JSON")
+  VIEWS_DIR=$(jq -r '.views_dir // empty'        <<<"$RESOLVED_JSON")
+  CP_DIR=$(jq -r '.cp_dir // empty'              <<<"$RESOLVED_JSON")
+fi
+```
+
+When `VIEWS_AVAILABLE` is `true`, read `view_paths` from `$MANIFEST_PATH` (`views` map of agent → path). The resolver returns `views_available=false` with exit 0 for a genuinely legacy spec with no split artifacts — those are fully supported, the monolith path alone is passed to subagents with no checkpoint enforcement.
 
 Pass per-agent view paths alongside (not in place of) `spec_path` to subagents so each receives only its slice of the 8-section monolith.
 
@@ -155,20 +163,24 @@ Store `$DEV_SESSION_ID` for use in every Agent launch prompt below. Every Agent 
 
 **Initialize cp-state handoff when a `/spec` view exists** (MANDATORY when `views_available=true`):
 
-If `spec_path` points at `docs/dev/specs/<SPEC_ID>.md` and the sibling directory
-`.claude/specs/<SPEC_ID>/` contains cp-state files, bind:
+Reuse the resolver output from the views-detection step — do NOT re-derive the
+spec-id from `spec_path`. The cp-state directory is exactly the resolver's `cp_dir`:
 
 ```bash
-SPEC_ID="<SPEC_ID from spec_path basename>"
+if [ -n "$spec_path" ] && [ -d "$CLAUDE_PROJECT_DIR/$CP_DIR" ]; then
+  SPEC_ID="$ARTIFACT_ID"          # resolver's canonical artifact id
+else
+  SPEC_ID=""                       # no cp-state dir -> skip SECOND ACTION below
+fi
 ```
 
-If no spec/cp-state directory exists, set `SPEC_ID=""` and skip the `SECOND ACTION`
+If no cp-state directory exists, set `SPEC_ID=""` and skip the `SECOND ACTION`
 lines below. If a particular agent has no cp-state file under that SPEC_ID, omit that
 agent's `SECOND ACTION` for this launch. When `SPEC_ID` is non-empty, every Agent launch prompt for an agent that has a
 cp-state file MUST include a `SECOND ACTION` line immediately after the dev-registry `FIRST ACTION`:
 
 ```text
-SECOND ACTION: Read $CLAUDE_PROJECT_DIR/.claude/specs/<SPEC_ID>/cp-state-<agent>.json to load your mandatory checklist before doing substantive work. Mark each completed checkpoint with /root/.claude/scripts/spec-check.py mark --spec-id <SPEC_ID> --agent <agent> --agent-id $CLAUDE_AGENT_ID --cp-id <cp-NN>. Waive only with /root/.claude/scripts/spec-check.py waive --spec-id <SPEC_ID> --agent <agent> --agent-id $CLAUDE_AGENT_ID --cp-id <cp-NN> (auto-text records actor + ISO timestamp). You MUST leave zero pending checkpoints before Stop; subagentstop-cp-enforce.py blocks exit otherwise. If `$CLAUDE_AGENT_ID` is unavailable, use the `agent_id` value written into the cp-state file by the read.
+SECOND ACTION: Read $CLAUDE_PROJECT_DIR/$CP_DIR/cp-state-<agent>.json to load your mandatory checklist before doing substantive work. Mark each completed checkpoint with /root/.claude/scripts/spec-check.py mark --spec-id <SPEC_ID> --agent <agent> --agent-id $CLAUDE_AGENT_ID --cp-id <cp-NN>. Waive only with /root/.claude/scripts/spec-check.py waive --spec-id <SPEC_ID> --agent <agent> --agent-id $CLAUDE_AGENT_ID --cp-id <cp-NN> (auto-text records actor + ISO timestamp). You MUST leave zero pending checkpoints before Stop (a discipline expectation tracked via spec-check.py — no hook blocks exit on pending checkpoints today). If `$CLAUDE_AGENT_ID` is unavailable, use the `agent_id` value written into the cp-state file by the read.
 ```
 
 This is the checklist-stop handoff: dev-registry handles role registration for

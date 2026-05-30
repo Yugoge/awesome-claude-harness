@@ -92,22 +92,28 @@ Auto-detected spec: <path>
 
 If no spec found, set `spec_path = null`. All downstream behavior is unchanged when `spec_path` is null.
 
-**Detect views folder (sibling to spec)**:
+**Detect views folder (via the centralized resolver — do NOT re-derive paths inline)**:
 
-If `spec_path` is not null, check for a sibling views folder:
+The producer (`/spec`) and consumers (`/dev*`) historically disagreed on whether the spec-id keeps the `spec-` filename prefix (new split artifacts land DE-prefixed at `docs/dev/specs/<ts>/`; old ones are prefixed). NEVER derive `views_dir` / `split_marker` / `SPEC_ID` from `spec_path` by hand — that drift is exactly what silently dropped de-prefixed specs to monolith mode. Always call the single canonical resolver and consume its stdout JSON:
+
+```bash
+if [ -n "$spec_path" ]; then
+  RESOLVED_JSON=$(/root/.claude/scripts/resolve-spec-artifacts.py \
+      --spec-path "$spec_path" --project-dir "$CLAUDE_PROJECT_DIR") || {
+    echo "spec-artifact resolution FAILED (path mismatch / present-but-invalid split). Re-finalize /spec before relying on per-agent views." >&2
+    exit 1; }   # loud-fail guard: a present-but-invalid split never silently degrades to monolith mode
+  ARTIFACT_ID=$(jq -r .artifact_id      <<<"$RESOLVED_JSON")
+  VIEWS_AVAILABLE=$(jq -r .views_available <<<"$RESOLVED_JSON")
+  MANIFEST_PATH=$(jq -r '.manifest_path // empty' <<<"$RESOLVED_JSON")
+  SPLIT_MARKER=$(jq -r '.split_marker // empty'  <<<"$RESOLVED_JSON")
+  VIEWS_DIR=$(jq -r '.views_dir // empty'        <<<"$RESOLVED_JSON")
+  CP_DIR=$(jq -r '.cp_dir // empty'              <<<"$RESOLVED_JSON")
+fi
 ```
-views_dir = <dirname(spec_path)>/<basename(spec_path, .md)>/views/
-manifest  = <views_dir>/manifest.json
-```
 
-If `manifest.json` exists AND is valid JSON AND `schema_version` matches (currently 1), first run the stale-view guard:
-- Compute `split_marker = <dirname(spec_path)>/<basename(spec_path, .md)>/.split-complete`.
-- If `split_marker` is missing OR `spec_path` is newer than `split_marker`, treat the views/checkpoints as stale: set `views_available = false`, clear `view_paths`, and announce `Spec is newer than split views/checkpoints; using monolith spec for this /dev run. Re-finalize /spec before relying on per-agent views.`
-- Otherwise, set:
-- `views_available = true`
-- `view_paths` = manifest.views (dict of agent → path)
+The resolver returns `views_available=true` only when the split is PRESENT-AND-VALID (manifest valid JSON, `schema_version==1`, `manifest.monolith_path` resolves to THIS monolith, `.split-complete` present and not content-stale, all referenced view files present). It exits **non-zero** on a present-but-invalid / mismatched / ambiguous / stale split (loud fail), and returns `views_available=false` with **exit 0** on a genuinely legacy spec with no split artifacts.
 
-Otherwise `views_available = false`. **Legacy specs without a views folder are fully supported** — all subagents receive the monolith spec_path as before. No error, no checkpoint enforcement.
+When `VIEWS_AVAILABLE` is `true`, read `view_paths` from `$MANIFEST_PATH` (its `views` map of agent → path). **Legacy specs without a views folder are fully supported** — the resolver reports `views_available=false` (exit 0) and all subagents receive the monolith `spec_path` as before. No error, no checkpoint enforcement.
 
 Pass `view_paths.ba`, `view_paths.qa`, `view_paths.dev`, etc. alongside (not in place of) `spec_path` when delegating to subagents. Each subagent gets its own view path so its context window is smaller.
 
@@ -153,26 +159,22 @@ scripts/write-e2e-enforce.sh --source-command dev --session-id $DEV_SESSION_ID
 
 Store `$DEV_SESSION_ID` for use in every Agent launch prompt below. Every Agent launch prompt MUST begin with a `FIRST ACTION` line instructing the subagent to `Read $CLAUDE_PROJECT_DIR/.claude/dev-registry/<DEV_SESSION_ID>/<agent>.json` before any other tool call. Without that Read, the enforcement hook will fail open for that subagent.
 
-**Also derive `<SPEC_ID>` for cp-state checkpoint propagation.** `/spec` writes per-agent `cp-state-<agent>.json` files into `.claude/specs/<SPEC_ID>/`, and `subagentstop-cp-enforce.py` will BLOCK any subagent that exits without marking every checkpoint as `done` or `waived`. The orchestrator must compute `<SPEC_ID>` from the `spec_path` detected in Step 1 and pass it into every Agent launch prompt below alongside `<DEV_SESSION_ID>`.
+**Also reuse the resolver's `<SPEC_ID>` for cp-state checkpoint propagation.** `/spec` writes per-agent `cp-state-<agent>.json` files into the directory the resolver reports as `cp_dir` (`.claude/specs/<artifact_id>/`). Do NOT re-derive the id from `spec_path` — reuse the resolver output computed above so the producer and consumers agree byte-for-byte:
 
 ```bash
+# SPEC_ID / cp-state dir come straight from the resolver JSON (no inline basename derivation).
 if [ -n "$spec_path" ]; then
-  # Common case: spec_path = docs/dev/specs/<SPEC_ID>/<SPEC_ID>.md
-  # → SPEC_ID is the basename of the parent directory.
-  SPEC_ID="$(basename "$(dirname "$spec_path")" 2>/dev/null)"
-  # Edge case: flat-file spec_path = docs/dev/specs/<SPEC_ID>.md
-  # (no per-spec subdirectory); fall back to the file basename.
-  [ -d "$CLAUDE_PROJECT_DIR/.claude/specs/$SPEC_ID" ] || SPEC_ID="$(basename "${spec_path%.md}")"
+  SPEC_ID="$ARTIFACT_ID"          # resolver's canonical artifact id (de-prefixed or prefixed, per disk)
+  CP_STATE_DIR="$CP_DIR"          # .claude/specs/<artifact_id>
 else
   SPEC_ID=""
+  CP_STATE_DIR=""
 fi
 ```
 
-When `SPEC_ID` is non-empty, every Agent launch prompt for an agent that has a cp-state file MUST include a `SECOND ACTION` block (template under each Step's prompt below) instructing the subagent to read `$CLAUDE_PROJECT_DIR/.claude/specs/<SPEC_ID>/cp-state-<agent>.json` and to mark each checkpoint via `/root/.claude/scripts/spec-check.py mark` (or `waive` — auto-text records actor + ISO timestamp) before Stop. When `SPEC_ID` is empty (non-`/spec` invocation), or a particular agent has no cp-state file under that SPEC_ID, the SECOND ACTION block is omitted — there are no checkpoints to mark for that launch.
+When `SPEC_ID` is non-empty, every Agent launch prompt for an agent that has a cp-state file MUST include a `SECOND ACTION` block (template under each Step's prompt below) instructing the subagent to read `$CLAUDE_PROJECT_DIR/$CP_STATE_DIR/cp-state-<agent>.json` and to mark each checkpoint via `/root/.claude/scripts/spec-check.py mark` (or `waive` — auto-text records actor + ISO timestamp) before Stop. Agents SHOULD leave zero pending checkpoints before they Stop. (Note: there is **no** `subagentstop-cp-enforce.py` hook wired in `settings.json` today — checkpoint completeness is a discipline expectation tracked via `spec-check.py`, not a hook-enforced block. Building a real checkpoint-enforcement hook is a separate, deferred feature.) When `SPEC_ID` is empty (non-`/spec` invocation), or a particular agent has no cp-state file under that artifact id, the SECOND ACTION block is omitted — there are no checkpoints to mark for that launch.
 
-**T1.7 (redev-tier123) — Orchestrator-view + Section 5 read MANDATE**: When `SPEC_ID` is non-empty, BEFORE composing any subagent dispatch prompt, you MUST read `$CLAUDE_PROJECT_DIR/.claude/specs/<SPEC_ID>/views/orchestrator.md` AND the spec's Section 5 (User's Acceptance Criterion) verbatim from `$spec_path`. Quote the user's words from Section 5 directly into every dispatch prompt; do not paraphrase or summarize. The user's verbatim need is the binding contract — every subagent must see the user's literal request, not your reformulation.
-
-**Regression guard**: do NOT change the `subagentstop-cp-enforce.py` matcher in `settings.json` back to a custom string like `"cp-enforce"`. Per <https://code.claude.com/docs/en/hooks>, `SubagentStop` matchers match subagent type names, not hook roles; the wildcard `"*"` is the canonical form and is what causes the hook to actually fire.
+**T1.7 (redev-tier123) — Orchestrator-view + Section 5 read MANDATE**: When `VIEWS_AVAILABLE` is `true`, BEFORE composing any subagent dispatch prompt, you MUST read the orchestrator view that the resolver located — `$CLAUDE_PROJECT_DIR/$VIEWS_DIR/orchestrator.md` (the views live under `docs/dev/specs/<artifact_id>/views/`, NOT under `.claude/specs/`) — AND the spec's Section 5 (User's Acceptance Criterion) verbatim from `$spec_path`. Quote the user's words from Section 5 directly into every dispatch prompt; do not paraphrase or summarize. The user's verbatim need is the binding contract — every subagent must see the user's literal request, not your reformulation.
 
 **Graphify pre-BA Bash hydrator** (between Step 1 and Step 2):
 
@@ -754,6 +756,8 @@ Run `bash ~/.claude/scripts/score-inject.sh --agent dev` and capture stdout into
 
 ```bash
 baseline_head_sha=$(git -C "$CLAUDE_PROJECT_DIR" rev-parse HEAD 2>/dev/null || echo "")
+# baseline_dirty_snapshot is intentionally captured once before Dev dispatch;
+# see agents/dev.md for its point-in-time / concurrency semantics.
 baseline_dirty_snapshot=$(git -C "$CLAUDE_PROJECT_DIR" status --porcelain 2>/dev/null || echo "")
 ```
 

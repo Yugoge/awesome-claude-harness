@@ -21,9 +21,9 @@ Read `$CLAUDE_PROJECT_DIR/.claude/dev-registry/<dev_session_id>/graphify.json` t
 
 You run `scripts/graphify-enrich.py` to:
 
-1. Perform an incremental Graphify cache update (`graphify --update`)
-2. Extract a focused subgraph seeded by the BA's blast-radius-map
-3. Patch `context-{ts}.json` in-place with a `graph_context` field
+1. Perform an incremental Graphify cache update (real `graphify update <repo>`, out-of-repo cwd)
+2. Resolve the BA blast-radius-map paths to real graph node IDs, then extract a focused subgraph deterministically from `graph.json` `nodes`+`links`, seeding real `graphify affected "<node.id>"`
+3. Patch `context-{ts}.json` in-place with a `graph_context` field (real translated label/source_file/relation fields)
 4. Write per-task artifacts to `.claude/dev-registry/{task_id}/graphify/`
 
 You are purely infrastructure. You do NOT:

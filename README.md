@@ -5,8 +5,8 @@ Organization and usage documentation for `.claude/`.
 <!-- AUTO:readme-stats -->
 
 ## Overview
-- **Total files**: 65
-- **Subdirectories**: 35
+- **Total files**: 62
+- **Subdirectories**: 33
 - **Naming convention**: lower
 
 ## Files
@@ -30,7 +30,6 @@ Organization and usage documentation for `.claude/`.
 - `workflow-1f9f0472-7a89-4cfa-87f2-c85616fed777.json` - json config
 - `workflow-215eec0e-0e9c-4f81-bd52-b73036e3d33a.json` - json config
 - `workflow-30b4bbbc-a873-4ba8-b8fd-804dc05492bc.json` - json config
-- `workflow-461e02eb-c56a-4329-a084-2b8660d69a24.json` - json config
 - `workflow-483e030c-3ab6-42d0-973e-8a2a4b8b8806.json` - json config
 - `workflow-49d0cdde-0555-4c6a-9354-0076adf7db42.json` - json config
 - `workflow-4e6b0a9e-bdd6-47ca-8ec4-95cae992867d.json` - json config
@@ -45,7 +44,6 @@ Organization and usage documentation for `.claude/`.
 - `agents/`
 - `archive/`
 - `backups/`
-- `bin/`
 - `cache/`
 - `commands/`
 - `debug/`
@@ -53,7 +51,6 @@ Organization and usage documentation for `.claude/`.
 - `docs/`
 - `eval/`
 - `file-history/`
-- `graphify-out/`
 - `hooks/`
 - `logs/`
 - `paste-cache/`

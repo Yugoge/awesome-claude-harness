@@ -1,7 +1,7 @@
 # scripts
 
-*Last updated: 2026-05-30T08:41:36Z*
-**Total entries**: 88
+*Last updated: 2026-05-30T13:44:14Z*
+**Total entries**: 99
 **Convention**: kebab
 
 ## Tree
@@ -9,6 +9,13 @@
 scripts/
 ├── install/
 │   └── `tmp-cleanup-install.sh` - /usr/local/sbin/tmp-cleanup.sh
+├── spec-verify/
+│   ├── `spec-verify-views.py` - Usage:
+│   ├── `spec-verify.py` - Every non-blank, non-separator line from the monolith must appear
+│   ├── `spec_verify_gated.py` - Three sibling checks that share the T5 ``is_strict_guide_mode`` gate and
+│   ├── `spec_verify_mandate.py` - Activated only when the monolith declares ``guide_version: 1`` (or higher)
+│   ├── `spec_verify_parsers.py` - Authoritative grammar: /root/docs/dev/specs/MONOLITH-WRITING-GUIDE.md R6.6
+│   └── `spec_verify_summary.py` - Lives alongside `spec_verify_parsers.py` as a sibling sidecar because
 ├── todo/
 │   ├── `clean.py` - Preloaded TodoList for /clean workflow
 │   ├── `close.py` - Three user-visible TodoSteps (flat-integer per agents/style-inspector.md
@@ -65,23 +72,27 @@ scripts/
 ├── `generate-folder-index.sh` - Description: Generate INDEX.md for folder (inventory of contents)
 ├── `generate-folder-readme.sh` - Description: Generate README.md for folder (purpose and organization rules)
 ├── `graphify-enrich.py` - graphify-enrich.py — pre-DEV focused subgraph extractor (runs between Step 7 and Step 8)
-├── `graphify-maintain.py` - graphify-maintain.py — Global Graphify cache lifecycle manager
+├── `graphify-maintain.py` - graphify-maintain.py — Global Graphify cache lifecycle manager (REAL CLI)
 ├── `graphify-query.py` - graphify-query.py — deterministic pre-BA graph hydrator (runs between Step 1 and Step 2)
 ├── `graphify_lib.py` - graphify_lib.py — shared library for Graphify knowledge-graph integration
 ├── `install-checkpoint-refspec.sh` - install-checkpoint-refspec.sh — idempotently add refs/checkpoints/* to
 ├── `iterate-failed-pipelines.py` - Reads pipelines JSON path; outputs iteration plan JSON to stdout. The orchestrator
 ├── `lifecycle-baseline-import.sh` - Description: One-time idempotent migration — import current agent scores from agent-scores.json
+├── `lint-spec-id-centralization.py` - markdown from re-deriving a spec-id / views_dir / split_marker / cp_dir from a
 ├── `migrate-test-to-tests.sh` - Description: Merge test/ folder into tests/ preserving all content (idempotent)
 ├── `normalize-doc-names.sh` - normalize-doc-names.sh - Detect and report non-compliant documentation file names
 ├── `orchestrator.sh` - Description: Agent orchestration coordinator for development and cleanup workflows
 ├── `overnight-status.sh` - overnight-status.sh — Zero-LLM overnight session status query
 ├── `plan-style-inspection.sh` - Description: Discover auditable files and split into groups for parallel style inspection
+├── `precommitted-recovery.sh` - Description: Recovery path helpers for nothing_to_commit_precommitted detection.
 ├── `qa-manifest-guard.py` - Dual-mode tool per BA spec docs/dev/ticket-20260529-081014.md M4:
+├── `qa-report-stale-iter-lint.py` - lacks an explicit resolution marker
 ├── `quick-excel` - unknown file
 ├── `refine-context.sh` - refine-context.sh — merge QA-refined context with original context
 ├── `repair-venv.sh` - repair-venv.sh — durably restore a Python venv when its bin/python3 symlink target is missing.
 ├── `resolve-close-report.sh` - Resolve the close-report path for a given TASK_ID using subproject path-walk.
 ├── `resolve-dev-report.py` - Usage:
+├── `resolve-spec-artifacts.py` - spec-id resolver shared by /spec finalize and every /dev* consumer)
 ├── `runcode-watchdog.py` - Watchdog process for browser_run_code timeout enforcement
 ├── `scan-project.sh` - Description: Scan project structure and detect project type
 ├── `score-inject.sh` - Description: Emit a prompt-injection text block describing an agent's current rank/range

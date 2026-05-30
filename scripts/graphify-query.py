@@ -2,13 +2,18 @@
 """
 graphify-query.py — deterministic pre-BA graph hydrator (runs between Step 1 and Step 2).
 
-Extracts file/concept mentions from user requirement text using 3-layer extraction:
-  Layer 1 — deterministic rules (file extensions, path separators, known prefixes)
-  Layer 2 — repo alias index (basename -> full path lookup from graph cache)
-  Layer 3 — graph/fuzzy query via graphify CLI
+Drives the REAL `graphify` v0.8.25 CLI. Builds structural_context for BA from:
+  Layer 1 — deterministic file/path mention extraction from the requirement text
+  Layer 2 — node-link graph.json read (the DETERMINISTIC primary signal): edges
+            are under `links` with source/target/relation; sensitive nodes/links
+            are scrubbed ON READ (AC15)
+  Layer 3 — real `graphify query "<anchor>" --graph <cacheDir/graph.json> --budget N`
+            enrichment layered on top; its real stdout is consumed (and scrubbed)
+            into structural_context. A query failure/timeout degrades to the
+            graph.json-only signal (advisory, exit 0) but the call MUST be
+            attempted when an anchor is present (AC2).
 
-Queries the global Graphify cache (read-only) and returns structural_context
-(800-1500 tokens, hard cap 2000). Output is written to:
+Output (≤2000 tokens, advisory, fail-open):
   .claude/dev-registry/{task_id}/graphify/pre_query.json
 
 Usage:
@@ -17,10 +22,10 @@ Usage:
 Feature flags:
   CLAUDE_GRAPHIFY_ENABLED=0  — exits immediately with status=skipped
   GRAPHIFY_BIN               — override CLI path
-  CLAUDE_GRAPHIFY_CACHE_ROOT — override /var/tmp/claude-graphify
+  CLAUDE_GRAPHIFY_CACHE_ROOT — override /var/tmp/claude-graphify (must be outside repo)
 
 Exit codes:
-  0 — success (even if status=unavailable/skipped — advisory)
+  0 — always advisory (even status=unavailable/skipped/degraded)
   1 — hard error (cannot write output file)
 """
 
@@ -32,14 +37,16 @@ import sys
 import time
 from pathlib import Path
 
-_PROJECT_DIR = Path(os.environ.get("CLAUDE_PROJECT_DIR", os.getcwd()))
+_PROJECT_DIR = Path(os.environ.get("CLAUDE_PROJECT_DIR", os.getcwd())).resolve()
 sys.path.insert(0, str(_PROJECT_DIR / "scripts"))
 
 from graphify_lib import (
     STATUS_OK, STATUS_DEGRADED, STATUS_UNAVAILABLE, STATUS_SKIPPED,
-    EXCLUDE_FRAGMENTS,
-    check_cache_available, empty_graph_context, get_cache_root, get_repo_key,
-    is_graphify_enabled, run_graphify_cmd, should_exclude_path, write_json_locked,
+    EXCLUDE_FRAGMENTS, TIMEOUT_QUERY,
+    check_cache_available, contains_sensitive_fragment, empty_graph_context,
+    get_cache_dir, get_repo_key, graph_json_path, is_graphify_enabled,
+    load_graph, run_graphify_cmd, scrub_sensitive, should_exclude_path,
+    write_json_locked,
 )
 
 # Implicit reference trigger words that signal ambiguity — per spec §5
@@ -91,55 +98,82 @@ def _extract_layer1_deterministic(requirement_text: str) -> list[str]:
 
 
 # ---------------------------------------------------------------------------
-# Layer 2: Repo alias index lookup
+# Layer 2: deterministic node-link graph.json read (primary signal)
 # ---------------------------------------------------------------------------
 
-def _extract_layer2_alias_index(mentions: list[str], cache_dir: Path) -> dict[str, str]:
-    """Resolve basenames to full paths via the graphify alias index."""
-    index_path = cache_dir / "index" / "alias_index.json"
-    if not index_path.exists():
-        return {}
-    try:
-        alias_index = json.loads(index_path.read_text(encoding="utf-8"))
-    except Exception:
-        return {}
+def _resolve_anchors_in_graph(mentions: list[str], graph: dict) -> dict[str, str]:
+    """Resolve each mention to a graph node label/id present in graph.json.
 
-    resolved = {}
+    Returns {mention: anchor_label} for mentions that match a real node by
+    basename/label/source_file. Used both to (a) populate resolved_path and
+    (b) pick the input-derived anchor string passed to real `graphify query`.
+    """
+    resolved: dict[str, str] = {}
+    nodes = graph.get("nodes", [])
     for mention in mentions:
-        basename = Path(mention).name
-        if basename in alias_index:
-            full_path = alias_index[basename]
-            if not should_exclude_path(full_path):
-                resolved[mention] = full_path
+        base = mention.replace("\\", "/").rsplit("/", 1)[-1]
+        for n in nodes:
+            label = n.get("label", "") or ""
+            sf = (n.get("source_file", "") or "").replace("\\", "/")
+            if label == base or label == mention or sf.endswith("/" + base) or sf == base or sf == mention:
+                if not should_exclude_path(label) and not should_exclude_path(sf):
+                    resolved[mention] = label or base
+                    break
     return resolved
 
 
+def _build_import_excerpt(graph: dict, anchor_labels: set[str]) -> list[str]:
+    """Build a compact 'src --relation--> tgt' excerpt from node-link `links`.
+
+    Reads edges from `links` (source/target/relation) — the REAL schema. Prefers
+    links touching a resolved anchor node; sensitive links already removed on read.
+    """
+    nodes = graph.get("nodes", [])
+    id_to_label = {n.get("id"): (n.get("label") or n.get("id")) for n in nodes}
+    anchor_ids = {n.get("id") for n in nodes if (n.get("label") or "") in anchor_labels}
+    excerpt: list[str] = []
+    for l in graph.get("links", []):
+        src = l.get("source")
+        tgt = l.get("target")
+        rel = l.get("relation", "rel")
+        line = f"{id_to_label.get(src, src)} --{rel}--> {id_to_label.get(tgt, tgt)}"
+        if should_exclude_path(line):
+            continue
+        # Anchor-touching links first.
+        if anchor_ids and (src in anchor_ids or tgt in anchor_ids):
+            excerpt.insert(0, line)
+        else:
+            excerpt.append(line)
+    return list(dict.fromkeys(excerpt))[:20]
+
+
 # ---------------------------------------------------------------------------
-# Layer 3: Graph/fuzzy query
+# Layer 3: real `graphify query` enrichment (MUST be attempted on healthy path)
 # ---------------------------------------------------------------------------
 
-def _extract_layer3_graph_query(mentions: list[str], cache_dir: Path) -> list[dict]:
-    """Query graphify CLI for structural context around mentioned files."""
-    bin_path = os.environ.get("GRAPHIFY_BIN", "").strip()
-    if not bin_path:
-        import shutil
-        bin_path = shutil.which("graphify") or ""
-    if not bin_path:
-        return []
+def _run_real_query(anchor: str, graph_file: Path, cache_dir: Path) -> dict:
+    """Invoke real `graphify query "<anchor>" --graph <graph_file> --budget N`.
 
-    results = []
-    for mention in mentions[:10]:  # Limit to 10 to avoid token explosion
-        exit_code, stdout, stderr = run_graphify_cmd(
-            ["query", "--file", mention, "--format", "json", "--cache-dir", str(cache_dir)],
-            timeout_seconds=30,
-        )
-        if exit_code == 0 and stdout.strip():
-            try:
-                data = json.loads(stdout)
-                results.append({"mention": mention, "graph_data": data})
-            except json.JSONDecodeError:
-                pass
-    return results
+    Consumes (and scrubs) the real stdout. Returns a record carrying the recorded
+    argv (for proof-of-call), status, and the scrubbed text output. On error/timeout
+    returns query_cli_status=degraded with the reason (advisory; the call WAS
+    attempted — AC2 ADVISORY EXCEPTION).
+    """
+    args = ["query", anchor, "--graph", str(graph_file), "--budget", "2000"]
+    exit_code, stdout, stderr = run_graphify_cmd(args, timeout_seconds=TIMEOUT_QUERY, cache_dir=cache_dir)
+    record = {
+        "anchor": anchor,
+        "argv": ["graphify"] + args,  # recorded vector for proof-of-call
+        "query_cli_status": STATUS_OK,
+    }
+    if exit_code != 0:
+        record["query_cli_status"] = STATUS_DEGRADED
+        record["reason"] = (stderr or f"exit={exit_code}")[:200]
+        return record
+    # Scrub raw stdout line-by-line: never emit a line carrying a sensitive fragment (AC15).
+    safe_lines = [ln for ln in (stdout or "").splitlines() if not contains_sensitive_fragment(ln)]
+    record["output"] = "\n".join(safe_lines)[:4000]
+    return record
 
 
 # ---------------------------------------------------------------------------
@@ -175,9 +209,9 @@ def _truncate_structural_context(context: dict, hard_cap: int) -> tuple[dict, bo
     if _estimate_tokens(serialized) <= hard_cap:
         return context, False
 
-    # Progressive truncation: trim high_centrality_nodes and import_graph_excerpt
+    # Progressive truncation: trim query results, excerpt, centrality nodes.
     context = dict(context)
-    for key in ["import_graph_excerpt", "high_centrality_nodes"]:
+    for key in ["graphify_query_results", "import_graph_excerpt", "high_centrality_nodes"]:
         if key in context and isinstance(context[key], list):
             while context[key] and _estimate_tokens(json.dumps(context, ensure_ascii=False)) > hard_cap:
                 context[key] = context[key][:-1]
@@ -212,15 +246,15 @@ def main() -> int:
         print(f"graphify-query: skipped (status={STATUS_SKIPPED})")
         return 0
 
-    # Cache availability check
+    # Cache availability check (keyed on cacheDir/graph.json, AC12)
     repo_key = get_repo_key(_PROJECT_DIR)
-    cache_root = get_cache_root()
-    cache_dir = cache_root / repo_key
-    available, reason = check_cache_available(repo_key)
+    cache_dir = get_cache_dir(_PROJECT_DIR)
+    graph_file = graph_json_path(_PROJECT_DIR)
+    available, reason = check_cache_available(repo_key, project_dir=_PROJECT_DIR)
     if not available:
         result = empty_graph_context(STATUS_UNAVAILABLE, reason)
         result.update({"task_id": args.task_id, "generated_at": _now_iso()})
-        write_json_locked(output_path, result)
+        write_json_locked(output_path, scrub_sensitive(result))
         print(f"graphify-query: status=unavailable ({reason})")
         return 0
 
@@ -229,70 +263,73 @@ def main() -> int:
     if not req_path.exists():
         result = empty_graph_context(STATUS_UNAVAILABLE, f"requirement file not found: {req_path}")
         result.update({"task_id": args.task_id, "generated_at": _now_iso()})
-        write_json_locked(output_path, result)
+        write_json_locked(output_path, scrub_sensitive(result))
         return 0
 
     requirement_text = req_path.read_text(encoding="utf-8")
-
-    # 3-layer extraction
     layers_used = []
 
-    # Layer 1: deterministic
+    # Layer 1: deterministic mention extraction from the input under test.
     raw_mentions = _extract_layer1_deterministic(requirement_text)
     if raw_mentions:
         layers_used.append("deterministic_rules")
 
-    # Layer 2: alias index
-    resolved_map = _extract_layer2_alias_index(raw_mentions, cache_dir)
-    if resolved_map:
-        layers_used.append("repo_alias_index")
+    # Layer 2: read the REAL node-link graph.json (sensitive nodes/links scrubbed on read).
+    graph, gstatus = load_graph(graph_file)
+    if gstatus == STATUS_OK:
+        layers_used.append("graph_json_node_link")
+    resolved_map = _resolve_anchors_in_graph(raw_mentions, graph)
+    anchor_labels = set(resolved_map.values())
+    import_graph = _build_import_excerpt(graph, anchor_labels)
 
-    # Layer 3: graph query
-    graph_data = _extract_layer3_graph_query(raw_mentions, cache_dir)
-    if graph_data:
-        layers_used.append("graph_fuzzy_query")
+    # Layer 3: real `graphify query` enrichment — MUST be attempted when an
+    # input-derived anchor present/resolvable in graph.json exists (AC2).
+    query_records: list[dict] = []
+    query_cli_status = "not_attempted"
+    # Prefer anchors resolvable in graph.json; fall back to raw mentions present as node labels.
+    anchors_for_query = list(dict.fromkeys(resolved_map.values())) or [
+        m for m in raw_mentions if m in {n.get("label") for n in graph.get("nodes", [])}
+    ]
+    for anchor in anchors_for_query[:5]:
+        rec = _run_real_query(anchor, graph_file, cache_dir)
+        query_records.append(rec)
+        query_cli_status = rec.get("query_cli_status", STATUS_DEGRADED)
+    if query_records:
+        layers_used.append("real_graphify_query")
 
-    # Build candidate_anchors
+    # Build candidate_anchors (resolved_path comes from graph.json node match).
     candidate_anchors = []
     for mention in raw_mentions:
-        anchor = {
+        if should_exclude_path(mention):
+            continue
+        candidate_anchors.append({
             "mention": mention,
             "resolved_path": resolved_map.get(mention, mention),
             "confidence": 0.9 if mention in resolved_map else 0.5,
-        }
-        candidate_anchors.append(anchor)
+        })
 
-    # Build import_graph_excerpt from Layer 3 results
-    import_graph = []
-    for item in graph_data:
-        gd = item.get("graph_data", {})
-        if isinstance(gd, dict):
-            edges = gd.get("edges", [])
-            import_graph.extend([f"{e.get('from','?')} -> {e.get('to','?')}" for e in edges[:5]])
-
-    # Detect ambiguity
     ambiguity_hypotheses = _detect_ambiguity(requirement_text, candidate_anchors)
-
-    # Read cache manifest for metadata
-    try:
-        manifest = json.loads((cache_dir / "manifest.json").read_text(encoding="utf-8"))
-    except Exception:
-        manifest = {}
 
     structural_context = {
         "candidate_anchors": candidate_anchors,
-        "import_graph_excerpt": import_graph[:20],
+        "import_graph_excerpt": import_graph,
         "high_centrality_nodes": [],
+        "graphify_query_results": query_records,  # consumed real stdout (scrubbed)
+        "query_cli_status": query_cli_status,
         "token_count": 0,
         "truncated": False,
     }
 
-    # Truncate to hard cap
+    # Final recursive sensitive scrub before truncation/emit (AC15 — defense in depth).
+    structural_context = scrub_sensitive(structural_context)
     structural_context, was_truncated = _truncate_structural_context(structural_context, HARD_TOKEN_CAP)
     structural_context["truncated"] = was_truncated
     structural_context["token_count"] = _estimate_tokens(json.dumps(structural_context, ensure_ascii=False))
 
-    status = STATUS_OK if candidate_anchors or import_graph else STATUS_DEGRADED
+    if candidate_anchors or import_graph:
+        status = STATUS_DEGRADED if query_cli_status == STATUS_DEGRADED else STATUS_OK
+    else:
+        status = STATUS_DEGRADED
 
     result = {
         "status": status,
@@ -301,17 +338,17 @@ def main() -> int:
         "structural_context": structural_context,
         "ambiguity_hypotheses": ambiguity_hypotheses,
         "extraction_layers_used": layers_used,
+        "query_cli_status": query_cli_status,
         "cache_metadata": {
-            "cache_root": str(cache_root),
+            "cache_dir": str(cache_dir),
             "repo_key": repo_key,
-            "branch": manifest.get("branch", "unknown"),
-            "head_sha": manifest.get("head_sha", "unknown"),
-            "graphify_version": manifest.get("graphify_version", "unknown"),
+            "graph_json": str(graph_file),
         },
     }
-
+    result = scrub_sensitive(result)
     write_json_locked(output_path, result)
-    print(f"graphify-query: status={status}, anchors={len(candidate_anchors)}, output={output_path}")
+    print(f"graphify-query: status={status}, anchors={len(candidate_anchors)}, "
+          f"query_cli={query_cli_status}, output={output_path}")
     return 0
 
 

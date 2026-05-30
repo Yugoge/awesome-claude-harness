@@ -1,20 +1,33 @@
 #!/usr/bin/env python3
 """
-graphify-maintain.py — Global Graphify cache lifecycle manager.
+graphify-maintain.py — Global Graphify cache lifecycle manager (REAL CLI).
+
+Drives the real `graphify` v0.8.25 CLI. The per-repo cache lives OUTSIDE the
+repo (default /var/tmp/claude-graphify/<repo_key>); every invocation runs with
+cwd=cacheDir AND GRAPHIFY_OUT=cacheDir so all byproducts (graph.json, report,
+html, cache/, and the cwd-relative graphify-out/manifest.json) land in the
+cache and the source repo stays clean (AC4).
 
 Usage:
-  python3 scripts/graphify-maintain.py init    # One-time full build (2-15 min, user-triggered only)
-  python3 scripts/graphify-maintain.py update  # Incremental refresh (non-blocking advisory, ~30s)
-  python3 scripts/graphify-maintain.py status  # Show cache state and manifest
+  python3 scripts/graphify-maintain.py init    # cold-start full build (user-triggered, <=300s)
+  python3 scripts/graphify-maintain.py update  # incremental refresh (advisory, <=60s)
+  python3 scripts/graphify-maintain.py status  # show real cache state + semantic mode
+
+init / update both run real `graphify update <repo>` (AST). init additionally
+probes semantic extraction (`graphify extract --backend claude-cli`) when a
+backend is reachable, but AST is produced FIRST and never lost to a semantic
+failure (M6/AC6). NO fictional --init/--update/--output-dir/--project-dir flags.
 
 Feature flags:
-  CLAUDE_GRAPHIFY_ENABLED=0  — skip all operations and exit 0
-  GRAPHIFY_BIN               — override CLI path
-  CLAUDE_GRAPHIFY_CACHE_ROOT — override /var/tmp/claude-graphify
+  CLAUDE_GRAPHIFY_ENABLED=0   — skip all operations and exit 0
+  GRAPHIFY_BIN                — override CLI path
+  CLAUDE_GRAPHIFY_CACHE_ROOT  — override /var/tmp/claude-graphify (MUST be outside repo)
+  GRAPHIFY_TRIAGE_BACKEND     — force semantic backend (else auto-detect / claude-cli)
+  (GRAPHIFY_OUT is wrapper-internal — set to cacheDir by run_graphify_cmd; not a user override.)
 
 Exit codes:
-  0 — success or no-op (binary absent, disabled)
-  1 — error (init/update failed with non-zero exit)
+  0 — success or advisory no-op (binary absent, disabled, cache-root-inside-repo)
+  1 — init failed with non-zero exit (real build error)
   2 — usage error
 """
 
@@ -25,63 +38,128 @@ import time
 from pathlib import Path
 
 # Locate project root from env (set by Claude harness)
-_PROJECT_DIR = Path(os.environ.get("CLAUDE_PROJECT_DIR", os.getcwd()))
+_PROJECT_DIR = Path(os.environ.get("CLAUDE_PROJECT_DIR", os.getcwd())).resolve()
 sys.path.insert(0, str(_PROJECT_DIR / "scripts"))
 
 from graphify_lib import (
     STATUS_OK, STATUS_FAILED, STATUS_UNAVAILABLE, STATUS_SKIPPED,
-    check_cache_available, get_cache_root, get_graphify_bin, get_repo_key,
-    is_graphify_enabled, run_graphify_cmd, write_json_locked,
+    TIMEOUT_UPDATE, TIMEOUT_INIT, TIMEOUT_SEMANTIC_PROBE,
+    check_cache_available, get_cache_dir, get_graphify_bin, get_repo_key,
+    graph_json_path, is_cache_root_inside_repo, is_graphify_enabled,
+    load_graph, run_graphify_cmd, write_json_locked,
 )
 
-INCREMENTAL_TIMEOUT = 300   # 5 min for incremental updates
-INIT_TIMEOUT = 900           # 15 min for first full build
+
+def _detect_semantic_backend() -> str | None:
+    """Return a semantic backend name reachable in THIS environment, or None.
+
+    Auto-detect honours API-key env vars via graphify's own detect_backend;
+    absent any key, the keyless `claude-cli` backend is usable iff /usr/bin/claude
+    (the `claude` CLI) is on PATH. GRAPHIFY_TRIAGE_BACKEND forces a choice.
+    """
+    forced = os.environ.get("GRAPHIFY_TRIAGE_BACKEND", "").strip()
+    if forced:
+        return forced
+    for env_key in ("GEMINI_API_KEY", "GOOGLE_API_KEY", "MOONSHOT_API_KEY",
+                    "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "DEEPSEEK_API_KEY"):
+        if os.environ.get(env_key):
+            return None  # let graphify auto-detect the keyed backend via `extract`
+    import shutil
+    if shutil.which("claude"):
+        return "claude-cli"
+    return None
+
+
+def _probe_semantic(repo: Path, cache_dir: Path, ast_node_count: int) -> tuple[str, str]:
+    """Bounded semantic probe (AC6 — proof not presence).
+
+    Runs `graphify extract --backend <b> --out cacheDir` and only declares
+    semantic mode active if the resulting graph actually changed (node count
+    differs from the AST baseline). AST graph is already on disk and is never
+    lost: on any failure we keep it and report ast_only.
+
+    Returns (semantic_mode, semantic_backend_probe_reason).
+    """
+    backend = _detect_semantic_backend()
+    if not backend:
+        return "ast_only", "no semantic backend reachable (no API key, claude CLI absent)"
+    args = ["extract", str(repo), "--out", str(cache_dir), "--backend", backend]
+    exit_code, stdout, stderr = run_graphify_cmd(
+        args, timeout_seconds=TIMEOUT_SEMANTIC_PROBE, cache_dir=cache_dir,
+    )
+    if exit_code != 0:
+        return "ast_only", f"semantic probe via {backend} failed (exit={exit_code}); AST graph retained"
+    # extract writes to <cacheDir>/graphify-out/graph.json — promote it to cacheDir/graph.json
+    extracted = cache_dir / "graphify-out" / "graph.json"
+    if not extracted.exists():
+        return "ast_only", f"semantic probe via {backend} produced no graph.json; AST retained"
+    sem_graph, st = load_graph(extracted)
+    sem_nodes = len(sem_graph.get("nodes", []))
+    if st == STATUS_OK and sem_nodes > ast_node_count:
+        # Proof: semantic path materially changed the graph. Promote it.
+        try:
+            graph_json_path(_PROJECT_DIR).write_text(
+                extracted.read_text(encoding="utf-8"), encoding="utf-8")
+        except Exception as exc:
+            return "ast_only", f"semantic graph promote failed: {exc}; AST retained"
+        return f"semantic:{backend}", f"semantic path changed graph ({ast_node_count}->{sem_nodes} nodes) via {backend}"
+    return "ast_only", (f"semantic probe via {backend} did not change graph "
+                        f"(ast={ast_node_count}, sem={sem_nodes}); AST retained")
+
+
+def _run_ast_build(repo: Path, cache_dir: Path, timeout: int) -> tuple[int, str, str]:
+    """Run real `graphify update <repo>` (AST). cwd+GRAPHIFY_OUT=cacheDir enforced in lib."""
+    return run_graphify_cmd(["update", str(repo)], timeout_seconds=timeout, cache_dir=cache_dir)
+
+
+def _refuse_if_cache_inside_repo(verb: str) -> bool:
+    """Print + return True when cache resolves inside the repo (advisory refusal, AC13)."""
+    if is_cache_root_inside_repo(_PROJECT_DIR):
+        print(f"graphify-maintain {verb}: cache_root_inside_repo "
+              f"({get_cache_dir(_PROJECT_DIR)}) — refusing to run graphify (advisory)", flush=True)
+        return True
+    return False
 
 
 def cmd_init() -> int:
-    """Full initial build — must be run manually by the user, never auto-triggered."""
+    """Cold-start full build — run manually by the user, never auto-triggered (AC1b)."""
     if not is_graphify_enabled():
         print("graphify-maintain: CLAUDE_GRAPHIFY_ENABLED=0 — skipping init", flush=True)
         return 0
-
     bin_path = get_graphify_bin()
     if not bin_path:
-        print("graphify-maintain: GRAPHIFY_BIN absent — cannot init", flush=True)
-        return 0  # advisory: no-op
+        print("graphify-maintain: GRAPHIFY_BIN absent — cannot init (advisory)", flush=True)
+        return 0
+    if _refuse_if_cache_inside_repo("init"):
+        return 0
 
-    cache_root = get_cache_root()
+    cache_dir = get_cache_dir(_PROJECT_DIR)
     repo_key = get_repo_key(_PROJECT_DIR)
-    repo_cache = cache_root / repo_key
-
     print(f"graphify-maintain init: building graph for repo_key={repo_key}", flush=True)
-    print(f"  cache_dir: {repo_cache}", flush=True)
-    print(f"  timeout: {INIT_TIMEOUT}s", flush=True)
+    print(f"  cache_dir: {cache_dir}", flush=True)
+    print(f"  timeout: {TIMEOUT_INIT}s", flush=True)
 
     start = time.time()
-    exit_code, stdout, stderr = run_graphify_cmd(
-        ["--init", "--output-dir", str(repo_cache), "--project-dir", str(_PROJECT_DIR)],
-        timeout_seconds=INIT_TIMEOUT,
-        cwd=str(_PROJECT_DIR),
-    )
+    exit_code, stdout, stderr = _run_ast_build(_PROJECT_DIR, cache_dir, TIMEOUT_INIT)
     elapsed = time.time() - start
 
-    if exit_code == 0:
-        print(f"graphify-maintain init: ok in {elapsed:.1f}s", flush=True)
-        # Write manifest
-        manifest_data = {
-            "branch": _get_git_branch(),
-            "head_sha": _get_git_head(),
-            "graphify_version": _get_graphify_version(bin_path),
-            "built_at": _now_iso(),
-            "repo_key": repo_key,
-        }
-        write_json_locked(repo_cache / "manifest.json", manifest_data)
-        return 0
-    else:
-        print(f"graphify-maintain init: failed (exit={exit_code}) in {elapsed:.1f}s", file=sys.stderr, flush=True)
+    if exit_code != 0:
+        print(f"graphify-maintain init: AST build failed (exit={exit_code}) in {elapsed:.1f}s",
+              file=sys.stderr, flush=True)
         if stderr:
             print(f"  stderr: {stderr[:500]}", file=sys.stderr, flush=True)
         return 1
+
+    graph, st = load_graph(graph_json_path(_PROJECT_DIR))
+    ast_nodes = len(graph.get("nodes", []))
+    print(f"graphify-maintain init: AST graph ok in {elapsed:.1f}s ({ast_nodes} nodes)", flush=True)
+
+    # Semantic probe is additive best-effort; AST graph already on disk (M6/AC6).
+    semantic_mode, probe_reason = _probe_semantic(_PROJECT_DIR, cache_dir, ast_nodes)
+    print(f"graphify-maintain init: semantic_mode={semantic_mode} ({probe_reason})", flush=True)
+
+    _write_run_manifest(cache_dir, repo_key, bin_path, semantic_mode, probe_reason, verb="init")
+    return 0
 
 
 def cmd_update() -> int:
@@ -89,76 +167,88 @@ def cmd_update() -> int:
     if not is_graphify_enabled():
         print("graphify-maintain: CLAUDE_GRAPHIFY_ENABLED=0 — skipping update", flush=True)
         return 0
-
-    available, reason = check_cache_available()
-    if not available:
-        print(f"graphify-maintain update: {STATUS_UNAVAILABLE} ({reason}) — skipping", flush=True)
-        return 0  # advisory: no-op
-
     bin_path = get_graphify_bin()
-    repo_key = get_repo_key(_PROJECT_DIR)
-    cache_root = get_cache_root()
-    repo_cache = cache_root / repo_key
+    if not bin_path:
+        print("graphify-maintain update: GRAPHIFY_BIN absent — advisory no-op", flush=True)
+        return 0
+    if _refuse_if_cache_inside_repo("update"):
+        return 0
 
+    cache_dir = get_cache_dir(_PROJECT_DIR)
+    repo_key = get_repo_key(_PROJECT_DIR)
     print(f"graphify-maintain update: incremental refresh for repo_key={repo_key}", flush=True)
+
     start = time.time()
-    exit_code, stdout, stderr = run_graphify_cmd(
-        ["--update", "--output-dir", str(repo_cache), "--project-dir", str(_PROJECT_DIR)],
-        timeout_seconds=INCREMENTAL_TIMEOUT,
-        cwd=str(_PROJECT_DIR),
-    )
+    exit_code, stdout, stderr = _run_ast_build(_PROJECT_DIR, cache_dir, TIMEOUT_UPDATE)
     elapsed = time.time() - start
 
     if exit_code == 0:
-        print(f"graphify-maintain update: ok in {elapsed:.1f}s", flush=True)
-        # Refresh manifest HEAD + branch
-        manifest_path = repo_cache / "manifest.json"
-        if manifest_path.exists():
-            try:
-                manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-            except Exception:
-                manifest = {}
-        else:
-            manifest = {}
-        manifest.update({
-            "branch": _get_git_branch(),
-            "head_sha": _get_git_head(),
-            "updated_at": _now_iso(),
-        })
-        write_json_locked(manifest_path, manifest)
+        graph, _ = load_graph(graph_json_path(_PROJECT_DIR))
+        print(f"graphify-maintain update: ok in {elapsed:.1f}s "
+              f"({len(graph.get('nodes', []))} nodes)", flush=True)
+        _write_run_manifest(cache_dir, repo_key, bin_path, None, "incremental update", verb="update")
         return 0
-    else:
-        print(f"graphify-maintain update: failed (exit={exit_code}) in {elapsed:.1f}s — advisory, continuing", file=sys.stderr, flush=True)
-        return 0  # advisory: always exit 0 so callers are not blocked
+    print(f"graphify-maintain update: failed (exit={exit_code}) in {elapsed:.1f}s — advisory, continuing",
+          file=sys.stderr, flush=True)
+    return 0  # advisory: always exit 0 so callers are not blocked
 
 
 def cmd_status() -> int:
-    """Show cache state and manifest."""
-    available, reason = check_cache_available()
+    """Show real cache state, node/edge counts, and semantic mode (S1)."""
+    available, reason = check_cache_available(project_dir=_PROJECT_DIR)
     repo_key = get_repo_key(_PROJECT_DIR)
-    cache_root = get_cache_root()
-    repo_cache = cache_root / repo_key
+    cache_dir = get_cache_dir(_PROJECT_DIR)
+    gpath = graph_json_path(_PROJECT_DIR)
 
-    print(f"graphify-maintain status:")
+    print("graphify-maintain status:")
     print(f"  enabled: {is_graphify_enabled()}")
     print(f"  binary: {get_graphify_bin() or 'absent'}")
-    print(f"  cache_root: {cache_root}")
+    print(f"  cache_dir: {cache_dir}")
     print(f"  repo_key: {repo_key}")
+    print(f"  cache_root_inside_repo: {is_cache_root_inside_repo(_PROJECT_DIR)}")
+    print(f"  graph_json: {gpath} ({'present' if gpath.exists() else 'absent'})")
     print(f"  cache_available: {available}")
     if not available:
         print(f"  unavailable_reason: {reason}")
 
-    manifest_path = repo_cache / "manifest.json"
-    if manifest_path.exists():
-        try:
-            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-            print(f"  manifest: {json.dumps(manifest, indent=4)}")
-        except Exception as exc:
-            print(f"  manifest: parse error — {exc}")
-    else:
-        print(f"  manifest: absent ({manifest_path})")
+    if gpath.exists():
+        graph, st = load_graph(gpath)
+        print(f"  status: {STATUS_OK if available else st}")
+        print(f"  nodes: {len(graph.get('nodes', []))}")
+        print(f"  links: {len(graph.get('links', []))}")
 
+    run_manifest = cache_dir / "run-manifest.json"
+    if run_manifest.exists():
+        try:
+            rm = json.loads(run_manifest.read_text(encoding="utf-8"))
+            print(f"  semantic_mode: {rm.get('semantic_mode', 'unknown')}")
+            print(f"  semantic_backend_probe: {rm.get('semantic_backend_probe', 'n/a')}")
+        except Exception:
+            pass
     return 0
+
+
+def _write_run_manifest(cache_dir: Path, repo_key: str, bin_path: str,
+                        semantic_mode: str | None, probe_reason: str, verb: str) -> None:
+    """Persist a small run-manifest.json inside the cache (NOT in the repo)."""
+    path = cache_dir / "run-manifest.json"
+    data: dict = {}
+    if path.exists():
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            data = {}
+    data.update({
+        "repo_key": repo_key,
+        "branch": _get_git_branch(),
+        "head_sha": _get_git_head(),
+        "graphify_version": _get_graphify_version(bin_path),
+        f"{verb}_at": _now_iso(),
+    })
+    if semantic_mode is not None:
+        data["semantic_mode"] = semantic_mode
+        data["semantic_backend_probe"] = probe_reason
+    write_json_locked(path, data)
 
 
 # ---------------------------------------------------------------------------

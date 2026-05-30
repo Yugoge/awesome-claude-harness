@@ -224,19 +224,28 @@ else
     echo "Warning: worktree creation failed, continuing without worktree" >&2
 fi
 
-# --- Detect view_paths from spec views manifest ---
+# --- Detect view_paths + canonical spec-id via the centralized resolver ---
+# Do NOT derive SPEC_DIR / spec_id from the monolith basename inline: the producer
+# (/spec) emits DE-prefixed split dirs (docs/dev/specs/<ts>/) while the monolith
+# filename keeps the spec- prefix, so "${USER_SPEC_PATH%.md}" misses the manifest.  # spec-id-lint: allow
+# resolve-spec-artifacts.py tolerates both conventions and fails loud on a
+# present-but-invalid split. RESOLVED_SPEC_ID is reused for the contract's spec_id.
 VIEW_PATHS="{}"
+RESOLVED_SPEC_ID=""
+RESOLVER="$(dirname "$0")/resolve-spec-artifacts.py"
 if [[ "$USER_SPEC_PATH" != "null" && -n "$USER_SPEC_PATH" ]]; then
-    SPEC_DIR="${USER_SPEC_PATH%.md}"
-    MANIFEST="$SPEC_DIR/views/manifest.json"
-    if [[ -f "$MANIFEST" ]]; then
-        SCHEMA_VER=$(jq -r '.schema_version // empty' "$MANIFEST" 2>/dev/null)
-        if [[ "$SCHEMA_VER" == "1" ]]; then
-            VIEW_PATHS=$(jq -c '.views // {}' "$MANIFEST" 2>/dev/null || echo '{}')
+    if RESOLVED_JSON=$("$RESOLVER" --spec-path "$USER_SPEC_PATH" --project-dir "$PROJECT_DIR" 2>/dev/null); then
+        RESOLVED_SPEC_ID=$(jq -r '.artifact_id // empty' <<<"$RESOLVED_JSON")
+        VIEWS_AVAILABLE=$(jq -r '.views_available // false' <<<"$RESOLVED_JSON")
+        MANIFEST=$(jq -r '.manifest_path // empty' <<<"$RESOLVED_JSON")
+        if [[ "$VIEWS_AVAILABLE" == "true" && -n "$MANIFEST" && -f "$PROJECT_DIR/$MANIFEST" ]]; then
+            VIEW_PATHS=$(jq -c '.views // {}' "$PROJECT_DIR/$MANIFEST" 2>/dev/null || echo '{}')
             echo "Loaded view_paths from manifest ($MANIFEST)" >&2
-        else
-            echo "Warning: manifest schema_version is '$SCHEMA_VER', expected 1; ignoring" >&2
         fi
+    else
+        # loud-fail guard: a present-but-invalid / mismatched split must not be silently ignored.
+        echo "Error: spec-artifact resolution FAILED for '$USER_SPEC_PATH' (path mismatch / present-but-invalid split). Re-finalize /spec before scheduling overnight." >&2
+        exit 1
     fi
 fi
 
@@ -309,9 +318,14 @@ jq -n \
     --arg created_at "$START_TIME" \
     --arg monolith_sha "$MONOLITH_SHA" \
     --arg trace_log_path "$TRACE_LOG_PATH" \
+    --arg resolved_spec_id "$RESOLVED_SPEC_ID" \
     '{
         schema_version: 1,
-        spec_id: (if $spec_path == "null" then "autonomous-" + $session_id else ($spec_path | split("/")[-1] | sub("\\.md$"; "")) end),
+        # spec_id is the resolver-canonical artifact id (de-prefixed/prefixed per disk),
+        # NOT the raw monolith basename — keeps producer & consumers byte-for-byte in agreement.
+        spec_id: (if $spec_path == "null" then "autonomous-" + $session_id
+                  elif ($resolved_spec_id | length) > 0 then $resolved_spec_id
+                  else ($spec_path | split("/")[-1] | sub("\\.md$"; "")) end),
         session_id: $session_id,
         cycle_id: 1,
         spec_mode: $spec_mode,
