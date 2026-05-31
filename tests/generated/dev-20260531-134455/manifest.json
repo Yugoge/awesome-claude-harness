@@ -1,0 +1,238 @@
+{
+  "schema_version": "1.1",
+  "task_id": "dev-20260531-134455",
+  "generated_at": "2026-05-31T15:32:02Z",
+  "active_tests": [
+    {
+      "task_id": "dev-20260531-134455",
+      "ac_id": "AC-A1",
+      "ac_uid": "3519458d068df918",
+      "type": "data",
+      "file": "tests/generated/dev-20260531-134455/test_AC_A1_3519458d068df918.py",
+      "status": "active",
+      "hook_check": {
+        "kind": "pytest",
+        "module": "scripts/graphify-enrich.py",
+        "function": "_build_deterministic_subgraph",
+        "assert": "impact_files contains the dependent source_file for each incoming coupling edge; non-coupling relations excluded"
+      }
+    },
+    {
+      "task_id": "dev-20260531-134455",
+      "ac_id": "AC-A2",
+      "ac_uid": "ff4ec94537e4ae18",
+      "type": "data",
+      "file": "tests/generated/dev-20260531-134455/test_AC_A2_ff4ec94537e4ae18.py",
+      "status": "active",
+      "hook_check": {
+        "kind": "pytest",
+        "module": "scripts/graphify-enrich.py",
+        "function": "_build_deterministic_subgraph",
+        "assert": "contains never in impact_files; non-anchor contains absent from edges"
+      }
+    },
+    {
+      "task_id": "dev-20260531-134455",
+      "ac_id": "AC-A3",
+      "ac_uid": "47c3811018522853",
+      "type": "data",
+      "file": "tests/generated/dev-20260531-134455/test_AC_A3_47c3811018522853.py",
+      "status": "active",
+      "hook_check": {
+        "kind": "pytest",
+        "module": "scripts/graphify-enrich.py",
+        "function": "_build_deterministic_subgraph",
+        "assert": "forward source==seed targets absent from impact_files; present in edges"
+      }
+    },
+    {
+      "task_id": "dev-20260531-134455",
+      "ac_id": "AC-A4",
+      "ac_uid": "b1933ca87f39ea26",
+      "type": "data",
+      "file": "tests/generated/dev-20260531-134455/test_AC_A4_b1933ca87f39ea26.py",
+      "status": "active",
+      "hook_check": {
+        "kind": "pytest",
+        "module": "scripts/graphify-enrich.py",
+        "function": "_build_deterministic_subgraph",
+        "assert": "seed in nodes; nodes<=100; edges<=200; json.dumps(call1)==json.dumps(call2); expansion_stats.truncated populated"
+      }
+    },
+    {
+      "task_id": "dev-20260531-134455",
+      "ac_id": "AC-A5",
+      "ac_uid": "a4f5288d2e604dbf",
+      "type": "data",
+      "file": "tests/generated/dev-20260531-134455/test_AC_A5_a4f5288d2e604dbf.py",
+      "status": "active",
+      "hook_check": {
+        "kind": "pytest",
+        "schema": "schemas/graphify-focused-subgraph.v1.json",
+        "assert": "jsonschema validate passes for an ok/degraded artifact; required keys still status/task_id/nodes/edges; new fields optional; no $id/version change. Unavailable/skipped artifacts excluded (their status string is outside the v1 enum by design)."
+      }
+    },
+    {
+      "task_id": "dev-20260531-134455",
+      "ac_id": "AC-A6",
+      "ac_uid": "a6411d380f2e722d",
+      "type": "data",
+      "file": "tests/generated/dev-20260531-134455/test_AC_A6_a6411d380f2e722d.py",
+      "status": "active",
+      "hook_check": {
+        "kind": "pytest",
+        "module": "scripts/graphify-enrich.py",
+        "function": "_build_graph_context_patch",
+        "assert": "'impact_files' in patch and 'orientation_mode' in patch and 'expansion_stats' in patch"
+      }
+    },
+    {
+      "task_id": "dev-20260531-134455",
+      "ac_id": "AC-A7",
+      "ac_uid": "9c939cea97faf114",
+      "type": "data",
+      "file": "tests/generated/dev-20260531-134455/test_AC_A7_9c939cea97faf114.py",
+      "status": "active",
+      "hook_check": {
+        "kind": "pytest",
+        "module": "scripts/graphify-enrich.py",
+        "function": "_build_graph_summary",
+        "assert": "summary has impact_file_count, orientation_mode, truncated; 'impact_files' (full list) NOT in summary"
+      }
+    },
+    {
+      "task_id": "dev-20260531-134455",
+      "ac_id": "AC-A8",
+      "ac_uid": "99088d48c256770f",
+      "type": "data",
+      "file": "tests/generated/dev-20260531-134455/test_AC_A8_99088d48c256770f.py",
+      "status": "active",
+      "hook_check": {
+        "kind": "pytest",
+        "module": "scripts/graphify-enrich.py",
+        "function": "main",
+        "assert": "disabled branch: returncode==0 and _patch_context not invoked (no graph_context). nil-map/unavailable/exception WITH existing --context-file: returncode==0 and json.load(context_file)['graph_context']['advisory'] is True. nil-map/unavailable/exception WITHOUT --context-file: returncode==0 (no graph_context assertion)."
+      }
+    },
+    {
+      "task_id": "dev-20260531-134455",
+      "ac_id": "AC-A9",
+      "ac_uid": "d81ad0209df85a15",
+      "type": "data",
+      "file": "tests/generated/dev-20260531-134455/test_AC_A9_d81ad0209df85a15.py",
+      "status": "active",
+      "hook_check": {
+        "kind": "grep",
+        "patterns": [
+          {
+            "file": "docs/reference/graphify-integration.md",
+            "pattern": "Step [0-9]+\\.[0-9]+",
+            "expect": "no_match"
+          }
+        ]
+      }
+    },
+    {
+      "task_id": "dev-20260531-134455",
+      "ac_id": "AC-B1",
+      "ac_uid": "a7837203f68af49f",
+      "type": "data",
+      "file": "tests/generated/dev-20260531-134455/test_AC_B1_a7837203f68af49f.py",
+      "status": "active",
+      "hook_check": {
+        "kind": "pytest",
+        "module": "scripts/todo/dev.py",
+        "function": "get_todos",
+        "assert": "for i,item in enumerate(todos,1): item['content'].startswith(f'Step {i}:') and item['activeForm'].startswith(f'Step {i}:'); len(todos)==17; no 'Step N.N' anywhere; no item content contains the substring 'between Step' (stale parentheticals removed)"
+      }
+    },
+    {
+      "task_id": "dev-20260531-134455",
+      "ac_id": "AC-B2",
+      "ac_uid": "4a81bd5324ac7143",
+      "type": "hook",
+      "file": "tests/generated/dev-20260531-134455/test_AC_B2_4a81bd5324ac7143.py",
+      "status": "active",
+      "hook_check": {
+        "kind": "pytest",
+        "module": "hooks/lib/todo_canonical.py",
+        "function": "validate_against_canonical",
+        "assert": "validate_against_canonical('dev', get_todos())==[]"
+      }
+    },
+    {
+      "task_id": "dev-20260531-134455",
+      "ac_id": "AC-B3",
+      "ac_uid": "81cf2f9136d433c0",
+      "type": "data",
+      "file": "tests/generated/dev-20260531-134455/test_AC_B3_81cf2f9136d433c0.py",
+      "status": "active",
+      "hook_check": {
+        "kind": "pytest",
+        "module": "scripts/todo/dev-command.py",
+        "function": "get_todos",
+        "assert": "for i,item in enumerate(todos,1): item['content'].startswith(f'Step {i}:') and item['activeForm'].startswith(f'Step {i}:'); len(todos)==16; no item content contains 'graphify-preBA' or 'graphify-enrich'; no 'Step N.N' anywhere"
+      }
+    },
+    {
+      "task_id": "dev-20260531-134455",
+      "ac_id": "AC-B4",
+      "ac_uid": "ad5c23febe0c6362",
+      "type": "data",
+      "file": "tests/generated/dev-20260531-134455/test_AC_B4_ad5c23febe0c6362.py",
+      "status": "active",
+      "hook_check": {
+        "kind": "subprocess",
+        "commands": [
+          "python3 tests/scripts/validate-step-numbering.py --project-root ."
+        ],
+        "assert": "exit code 0 (status=pass: zero decimal step labels in commands/*.md)",
+        "additional_grep": [
+          {
+            "file": "scripts/todo/dev.py",
+            "pattern": "Step [0-9]+\\.[0-9]+",
+            "expect": "no_match"
+          },
+          {
+            "file": "scripts/todo/dev-command.py",
+            "pattern": "Step [0-9]+\\.[0-9]+",
+            "expect": "no_match"
+          }
+        ]
+      }
+    },
+    {
+      "task_id": "dev-20260531-134455",
+      "ac_id": "AC-B5",
+      "ac_uid": "2c64bc85cbe5cc64",
+      "type": "data",
+      "file": "tests/generated/dev-20260531-134455/test_AC_B5_2c64bc85cbe5cc64.py",
+      "status": "active",
+      "hook_check": {
+        "kind": "pytest",
+        "files": [
+          "tests/generated/20260529-080709/test_AC_F2_ac-f2-no-decimal-prose-steps.py",
+          "tests/generated/20260527-132200/test_AC6_ac6-integer-step-numbering.py"
+        ],
+        "assert": "both green"
+      }
+    },
+    {
+      "task_id": "dev-20260531-134455",
+      "ac_id": "AC-B6",
+      "ac_uid": "bea109db1bc804b5",
+      "type": "data",
+      "file": "tests/generated/dev-20260531-134455/test_AC_B6_bea109db1bc804b5.py",
+      "status": "active",
+      "hook_check": {
+        "kind": "subprocess",
+        "commands": [
+          "python3 scripts/todo/dev.py",
+          "python3 scripts/todo/redev.py"
+        ],
+        "assert": "valid JSON; identical step sequence; exit 0"
+      }
+    }
+  ],
+  "archived_tests": []
+}

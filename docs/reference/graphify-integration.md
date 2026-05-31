@@ -10,8 +10,8 @@
 
 Graphify is a code-to-knowledge-graph tool that provides structural codebase context (import chains, module topology, function call graphs). The integration adds two phases to the /dev workflow:
 
-- **Step 1.5** — Deterministic pre-BA Bash hydrator (`graphify-query.py`): reads the real node-link `graph.json` and runs real `graphify query` to inject structural context BEFORE BA analysis.
-- **Step 7.5** — Graphify subagent enrichment (`graphify-enrich.py`): resolves the blast-radius-map paths to real graph node IDs, builds a focused subgraph deterministically from `graph.json`, and runs real `graphify affected`, AFTER BA-QA validation and BEFORE DEV dispatch.
+- **Pre-BA hydrator (between Step 1 and Step 2)** — Deterministic pre-BA Bash hydrator (`graphify-query.py`): reads the real node-link `graph.json` and runs real `graphify query` to inject structural context BEFORE BA analysis.
+- **Graphify enrichment (between Step 7 and Step 8)** — Graphify subagent enrichment (`graphify-enrich.py`): resolves the blast-radius-map paths to real graph node IDs, builds a focused subgraph deterministically from `graph.json` as a **reverse-blast-radius (R1) impact view** (see "Focused subgraph: R1 reverse-blast-radius" below), and runs real `graphify affected`, AFTER BA-QA validation and BEFORE DEV dispatch.
 
 Both phases are **advisory** (fail-open): Graphify tool failure never blocks DEV. Only requirement ambiguity (unresolved implicit references) is clarification-blocking.
 
@@ -37,6 +37,18 @@ Edges live under **`links`** (NOT `edges`): `{source, target, relation, confiden
 Nodes: `{id, label, source_file, source_location, community, file_type, norm_label}`.
 Affected/query match by node **id** (e.g. `mod_a_py`), not file path — the wrappers resolve modified paths → node IDs via `source_file`/`label` before seeding `affected`.
 
+### Focused subgraph: R1 reverse-blast-radius (graphify-enrich.py)
+
+`_build_deterministic_subgraph` builds the focused subgraph as a **directional, relation-filtered, file-aggregated reverse-dependent view** (ONE hop). This is the PRIMARY blast-radius signal DEV consumes via `graph_context`.
+
+- **Orientation** (empirically validated; constant `ORIENTATION_MODE = "source_depender_target_dependency"`): graphify edges are `source = depender, target = dependency`. So the IMPACT set — who is affected when a seed changes — is the set of **reverse dependents**: links where `target == seed` AND `relation ∈ {imports, imports_from, calls, inherits, uses, re_exports}`; the dependent is the edge **source**.
+- **`contains` is anchor-only**: a `contains` (file→symbol containment) edge is emitted ONLY when directly incident to a seed, to make the seed interpretable. It NEVER creates a reverse dependent, NEVER appears in `impact_files`, and is NEVER recursed through. Containment is not coupling and is not blast radius.
+- **Forward dependencies are context-only**: `source == seed` coupling edges (what the seed uses) are emitted in `nodes`/`edges` for context but NEVER aggregated into `impact_files`.
+- **Seed-first determinism**: node ids are assembled in the order seeds (in resolved order) → `contains` anchors → reverse-dependent sources → forward-dependency targets, THEN capped to `MAX_NODES` (100). Seeds are emitted before neighbours so the cap can never evict a seed unless the seed count alone exceeds the cap. The builder receives an ORDERED sequence of resolved ids (NOT a set) so seed order survives.
+- **Additive output** (strictly back-compat, no schema version bump): `impact_files[]` (file-aggregated reverse-dependent impact, ≤25), `orientation_mode`, and `expansion_stats` (seed/edge counts + `truncated{nodes,edges,impact_files,seed_nodes}`). The full `impact_files[]` list reaches DEV on BOTH the `focused-subgraph.json` artifact AND the in-place `graph_context` patch; `graph-summary.json` carries ONLY the scalars `impact_file_count`, `orientation_mode`, and the `truncated` flags. Legacy `nodes`/`edges`/`module_boundaries` keys and item shapes are unchanged.
+
+Depth-2 traversal, hub-pruning, per-intermediate caps, and scoring weights are explicitly deferred (not built). A future graphify orientation change is caught by tests / an explicit revalidation task, not by a noisy runtime self-check.
+
 ### Cwd-pollution handling
 
 `graphify update` honours `GRAPHIFY_OUT` (absolute) for `graph.json` but ALWAYS writes `manifest.json` to `<cwd>/graphify-out/manifest.json` (cwd-relative). The wrappers therefore run EVERY graphify subprocess with **cwd = cacheDir AND `GRAPHIFY_OUT` = cacheDir** (both absolute, set in `run_graphify_cmd`) so all byproducts land inside the out-of-repo cache and the source repo stays clean. If the configured cache resolves INSIDE the repo, the wrappers refuse to run (advisory `cache_root_inside_repo`).
@@ -56,8 +68,8 @@ Affected/query match by node **id** (e.g. `mod_a_py`), not file path — the wra
 └── run-manifest.json                     # wrapper-written: semantic_mode, head_sha, timestamps
 
 .claude/dev-registry/{task_id}/graphify/  # Per-task immutable artifacts
-├── pre_query.json                        # Step 1.5 output (structural_context)
-├── graphify-run.json                     # Step 7.5 run manifest
+├── pre_query.json                        # pre-BA hydrator output (between Step 1 and Step 2): structural_context
+├── graphify-run.json                     # graphify enrichment run manifest (between Step 7 and Step 8)
 ├── focused-subgraph.json                 # Task-scoped subgraph (translated node-link)
 ├── graph-summary.json                    # Compact summary
 └── graph-report.md                       # Human-readable report
@@ -113,7 +125,7 @@ python3 scripts/graphify-maintain.py semantic [--timeout SECONDS]   # default 36
 
 ### Source-of-truth reconciliation
 
-Maintain's `run-manifest.json` `semantic_mode` is the authoritative semantic-state record; the on-disk `graph.json` is the authoritative graph — they must not diverge. Any AST overwrite of `graph.json` (maintain's `update` AND `graphify-enrich.py`'s Step-1 update at Step 7.5) resets `semantic_mode` back to `ast_only` via the shared `graphify_lib.reset_semantic_mode_in_manifest(cache_dir)` helper whenever the graph was actually mutated, so `status` can never report a stale `semantic:<backend>` for a graph that is now AST-only.
+Maintain's `run-manifest.json` `semantic_mode` is the authoritative semantic-state record; the on-disk `graph.json` is the authoritative graph — they must not diverge. Any AST overwrite of `graph.json` (maintain's `update` AND `graphify-enrich.py`'s Step-1 update during graphify enrichment, between Step 7 and Step 8) resets `semantic_mode` back to `ast_only` via the shared `graphify_lib.reset_semantic_mode_in_manifest(cache_dir)` helper whenever the graph was actually mutated, so `status` can never report a stale `semantic:<backend>` for a graph that is now AST-only.
 
 **AST-only quality caveat**: on prompt/config-heavy repos, AST-only blast-radius signal can be weak (high builtin/noise ratio). Semantic mode materially improves it but is environment-gated and user-triggered.
 
@@ -125,7 +137,7 @@ Maintain's `run-manifest.json` `semantic_mode` is the authoritative semantic-sta
 # One-time initial build (user-triggered only — NEVER auto-triggered inside /dev)
 python3 scripts/graphify-maintain.py init               # real `graphify update <repo>` AST-only (≤300s)
 
-# Incremental refresh (runs automatically at Step 7.5 and post-/pull)
+# Incremental refresh (runs automatically during graphify enrichment, between Step 7 and Step 8, and post-/pull)
 python3 scripts/graphify-maintain.py update             # real `graphify update <repo>` AST-only (≤60s)
 
 # User-triggered semantic extraction (edge-signature proof-gated; promotes only on NEW edges)
@@ -143,7 +155,7 @@ python3 scripts/graphify-maintain.py status
 
 | Command        | Graphify integration                                     |
 |----------------|----------------------------------------------------------|
-| /dev           | Step 1.5 (pre-BA hydrator) + Step 7.5 (subagent)         |
+| /dev           | pre-BA hydrator (between Step 1 and Step 2) + graphify enrichment subagent (between Step 7 and Step 8) |
 | /dev-command   | Same as /dev (mirrors commands/dev.md)                   |
 | /dev-overnight | Enabled; shares global cache via graphify-maintain.py    |
 | /redev         | Inherits /dev behavior                                   |
