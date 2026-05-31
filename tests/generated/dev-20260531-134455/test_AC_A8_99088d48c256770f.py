@@ -5,6 +5,7 @@
 # above (AC_UID, AC_TYPE, docstring) MUST be preserved verbatim so QA can
 # trace each test back to its source AC entry.
 
+import importlib.util
 import json
 import os
 import subprocess
@@ -29,7 +30,57 @@ def _run(project_dir: Path, args: list[str], env_extra: dict) -> subprocess.Comp
     )
 
 
-def test_AC_A8(tmp_path):
+def _present_graphify_bin(tmp_path: Path) -> str:
+    """Return a path to a PRESENT graphify binary so check_cache_available()'s
+    binary-present precondition holds — proving the UNAVAILABLE sub-case is
+    'binary present but no graph.json', NOT 'GRAPHIFY_BIN absent'. Resolves via the
+    GRAPHIFY_BIN env or PATH (the real binary when available), else a no-op stub;
+    no hardcoded install path. The UNAVAILABLE branch returns before the binary is
+    ever executed, so a stub is equivalent for this presence check."""
+    import shutil
+    env_bin = os.environ.get("GRAPHIFY_BIN", "").strip()
+    if env_bin and Path(env_bin).exists():
+        return env_bin
+    found = shutil.which("graphify")
+    if found:
+        return found
+    stub = tmp_path / "graphify_stub"
+    stub.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    stub.chmod(0o755)
+    return str(stub)
+
+
+_BUILDER_CALLED = {"hit": False}
+
+
+def _boom(*_a, **_k):
+    _BUILDER_CALLED["hit"] = True
+    raise RuntimeError("forced builder failure (AC-A8 exception-branch test)")
+
+
+def _load_enrich_inprocess(project_dir: Path, cache_root: Path, monkeypatch):
+    """Load graphify-enrich.py in-process with _PROJECT_DIR=project_dir.
+
+    enrich captures _PROJECT_DIR from CLAUDE_PROJECT_DIR at import and imports
+    graphify_lib from <_PROJECT_DIR>/scripts. Since project_dir is a tmp dir with
+    no scripts/, we pre-import the REAL graphify_lib so enrich's
+    `from graphify_lib import ...` resolves to the cached module.
+    """
+    scripts_dir = repo_root() / "scripts"
+    if str(scripts_dir) not in sys.path:
+        sys.path.insert(0, str(scripts_dir))
+    importlib.import_module("graphify_lib")
+    monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(project_dir))
+    monkeypatch.setenv("CLAUDE_GRAPHIFY_CACHE_ROOT", str(cache_root))
+    monkeypatch.setenv("CLAUDE_GRAPHIFY_ENABLED", "1")
+    monkeypatch.setenv("GRAPHIFY_BIN", _present_graphify_bin(project_dir))
+    spec = importlib.util.spec_from_file_location("graphify_enrich_uut", str(_ENRICH))
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def test_AC_A8(tmp_path, monkeypatch):
     r"""
     GIVEN: the advisory fail-open paths of graphify-enrich.py (branch-split per codex #3 / #8: the disabled branch :230-235 returns 0 WITHOUT calling _patch_context, so it emits no graph_context; the nil-map :241-248, unavailable :257-263, and builder-exception branches DO call _patch_context; and _patch_conte...
     WHEN:  graphify-enrich.py main() runs on each fail-open branch
@@ -59,3 +110,76 @@ def test_AC_A8(tmp_path):
     # --- (ii) NIL-MAP branch WITHOUT a --context-file: exit-0, never blocks ---
     r3 = _run(project, ["--task-id", "t3"], {"CLAUDE_GRAPHIFY_ENABLED": "1"})
     assert r3.returncode == 0
+
+    # --- (iii) UNAVAILABLE branch (binary PRESENT, cache graph.json MISSING) ---
+    # Get PAST the nil-map guard by writing a parseable blast-radius-map.json, then
+    # point the cache root at a fresh EMPTY dir so cacheDir/graph.json does not exist.
+    # A present GRAPHIFY_BIN makes the failure the 'no graph.json' sub-case (the
+    # branch that the real binary plus a cold/missing cache produces end-to-end),
+    # NOT the binary-absent sub-case the prior cases already implied.
+    brm_dir = project / ".claude" / "dev-registry" / "tU"
+    brm_dir.mkdir(parents=True, exist_ok=True)
+    (brm_dir / "blast-radius-map.json").write_text(
+        json.dumps({"modified_files": ["scripts/x.py"]}), encoding="utf-8")
+    ctx_unavail = project / "context-unavail.json"
+    ctx_unavail.write_text(json.dumps({"task_id": "tU"}), encoding="utf-8")
+    empty_cache_root = tmp_path / "cacheroot_empty"
+    empty_cache_root.mkdir()
+    r4 = _run(project, ["--task-id", "tU", "--context-file", str(ctx_unavail)],
+              {"CLAUDE_GRAPHIFY_ENABLED": "1",
+               "CLAUDE_GRAPHIFY_CACHE_ROOT": str(empty_cache_root),
+               "GRAPHIFY_BIN": _present_graphify_bin(tmp_path)})
+    assert r4.returncode == 0
+    out4 = r4.stdout + r4.stderr
+    assert "status=unavailable" in out4
+    assert "no graph.json" in out4  # binary present -> the cache-missing sub-case
+    gc_u = json.loads(ctx_unavail.read_text(encoding="utf-8"))["graph_context"]
+    assert gc_u["advisory"] is True and gc_u["status"] == "unavailable"
+
+    # --- (iv) BUILDER-EXCEPTION branch (in-process; deterministic, exit-0 advisory) ---
+    # Reach the builder (cache available) then force _build_deterministic_subgraph to
+    # raise; main() must still return 0 with an advisory graph_context, and the
+    # focused-subgraph artifact must keep the additive R1 fields (codex finding 2).
+    proj2 = tmp_path / "proj2"
+    brm2 = proj2 / ".claude" / "dev-registry" / "tX"
+    brm2.mkdir(parents=True)
+    (brm2 / "blast-radius-map.json").write_text(
+        json.dumps({"modified_files": ["a.py"]}), encoding="utf-8")
+    ctx_exc = proj2 / "context-exc.json"
+    ctx_exc.write_text(json.dumps({"task_id": "tX"}), encoding="utf-8")
+    exc_cache_root = tmp_path / "cacheroot_exc"
+    enrich = _load_enrich_inprocess(proj2, exc_cache_root, monkeypatch)
+    # Minimal valid node-link graph.json so check_cache_available() passes.
+    cache_dir = enrich.get_cache_dir(proj2)
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    (cache_dir / "graph.json").write_text(json.dumps({
+        "directed": True, "multigraph": False, "graph": {},
+        "nodes": [{"id": "n1", "label": "n1", "source_file": "a.py"}], "links": []}),
+        encoding="utf-8")
+    _BUILDER_CALLED["hit"] = False
+    monkeypatch.setattr(enrich, "run_graphify_cmd", lambda *a, **k: (0, "", ""))
+    monkeypatch.setattr(enrich, "_build_deterministic_subgraph", _boom)
+    monkeypatch.setattr(
+        sys, "argv",
+        ["graphify-enrich.py", "--task-id", "tX", "--context-file", str(ctx_exc)])
+    assert enrich.main() == 0
+    # The builder MUST actually have been reached and raised (proves the test
+    # exercised the real exception handler, not a short-circuited earlier branch).
+    assert _BUILDER_CALLED["hit"] is True
+    gc_x = json.loads(ctx_exc.read_text(encoding="utf-8"))["graph_context"]
+    assert gc_x["advisory"] is True
+    fs_path = proj2 / ".claude" / "dev-registry" / "tX" / "graphify" / "focused-subgraph.json"
+    fs = json.loads(fs_path.read_text(encoding="utf-8"))
+    for key in ("impact_files", "orientation_mode", "expansion_stats"):
+        assert key in fs, f"additive R1 field {key!r} missing from exception-branch subgraph"
+    # Pin the DEGRADED fail-open semantics (codex round-1 finding): the exception
+    # handler must mark the artifact degraded and surface the builder error, not
+    # silently report ok. Without these, a regression of STATUS_DEGRADED -> STATUS_OK
+    # in the handler would pass undetected.
+    assert fs["status"] == "degraded", f"focused-subgraph status not degraded: {fs.get('status')!r}"
+    run_path = proj2 / ".claude" / "dev-registry" / "tX" / "graphify" / "graphify-run.json"
+    run_manifest = json.loads(run_path.read_text(encoding="utf-8"))
+    assert run_manifest["status"] == "degraded", (
+        f"graphify-run.json status not degraded: {run_manifest.get('status')!r}")
+    assert "forced builder failure" in run_manifest.get("error_detail", ""), (
+        f"builder error not surfaced in error_detail: {run_manifest.get('error_detail')!r}")
