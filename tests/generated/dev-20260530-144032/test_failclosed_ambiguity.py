@@ -197,9 +197,14 @@ def test_clean_index_gate_peer_prestaged(repo):
     rc, err = repo.run_helper("f.txt", ledger, snap)
     assert rc == EXCLUDE
     assert "staged content in the index" in err
-    # Index must still contain ONLY the peer's pre-staged change (we did not touch
-    # the index), and crucially must NOT contain the owned hunk layered on top.
-    assert "4 OWNED" not in repo.cached_diff("f.txt")
+    # Fail-closed contract (AC3/AC7): after EXCLUDE the file must contribute NOTHING
+    # to the commit -- the clean-index gate unstages the pre-staged peer bytes, so
+    # `git diff --cached -- f.txt` is EMPTY (neither the peer hunk nor an owned hunk
+    # remains staged). The peer's change stays in the worktree, just not in the index.
+    assert _stage_empty(repo, "f.txt"), (
+        "clean-index-gate EXCLUDE must leave the index empty for the file "
+        "(no pre-staged peer bytes survive): cached diff = %r"
+        % repo.cached_diff("f.txt"))
 
 
 def test_duplicate_old_swap_excluded(repo):

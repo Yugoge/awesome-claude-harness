@@ -168,9 +168,13 @@ def main(argv):
     rc_idx, _, _ = _git(git_root, ["diff", "--cached", "--quiet", "--", rel])
     # `--quiet` exits 1 when there ARE staged changes, 0 when clean.
     if rc_idx == 1:
+        # Fail-closed MUST leave the file contributing NOTHING to the commit: the
+        # pre-staged (possibly peer) bytes are unstaged here, so `git diff --cached
+        # -- <rel>` is empty after EXCLUDE (AC3/AC7). Worktree content is untouched.
+        _git(git_root, ["restore", "--staged", "--", rel])
         return _excluded(
-            "target file already has staged content in the index (would commit "
-            "unattributed staged bytes) -> EXCLUDE: %s" % rel
+            "target file already had staged content in the index; unstaged it and "
+            "EXCLUDE (will not commit unattributed staged bytes): %s" % rel
         )
 
     # --- Forward sequential replay from the snapshot (authoritative) -------
