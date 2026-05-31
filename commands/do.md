@@ -3,7 +3,23 @@ description: Allow main agent to bypass orchestrator-gate restrictions for this 
 disable-model-invocation: true
 ---
 
-(hook-only command; body is not injected because of `disable-model-invocation: true`. This line exists so the body is never empty — see commands/dev-command.md for the empty-body API-400 lesson.)
+(hook-only: `disable-model-invocation: true` suppresses a standalone AI turn, but the body IS injected into context. This line exists so the body is never empty — see commands/dev-command.md for the empty-body API-400 lesson.)
+
+## --codex flag
+
+If `$ARGUMENTS` contains the literal token `--codex`, strip the flag and treat the remainder as the task prompt:
+
+```
+ORIGINAL_ARGUMENTS = $ARGUMENTS   (preserve verbatim for do-report.request)
+TASK = $ARGUMENTS with "--codex" token removed (trimmed)
+```
+
+If `TASK` is empty after stripping, ask the user for the task prompt before proceeding.
+
+Invoke `Skill(skill="codex", args=TASK)`.
+
+- If codex succeeds: write the do-report (using `ORIGINAL_ARGUMENTS` verbatim as `request`) and `/close` as normal.
+- If codex fails (quota error / timeout / parse failure): record `codex_consult.status` in the do-report and proceed with self-review. Write do-report with `codex_consult: {status: "<failed_quota|failed_timeout|failed_parse>", note: "<verbatim error>"}` and `/close` as normal.
 
 ## Before /close: write do-report
 
