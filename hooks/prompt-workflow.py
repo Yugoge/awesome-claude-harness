@@ -701,7 +701,6 @@ def handle_phase_a(cmd_name: str, user_input: str, sid: str) -> None:
         _write_userintent_sentinel(cmd_name, sid)
     if cmd_name == "do":
         handle_do_consent(sid)
-        return
     todos = run_todo_script(cmd_name, user_input)
     if not todos:
         return
