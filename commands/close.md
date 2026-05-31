@@ -22,12 +22,12 @@ The orchestration of rounds, the calls to codex, the evaluation of agreement, an
 ```
 /close                                                         # agent infers task-id from current /dev cycle (typical use)
 /close --force                                                 # skip debate, audit-logged (escape hatch — see Forced override path below)
-/close <task-id> --force --reason "developed with /do"         # /do work: no dev artifacts exist; --force skips all artifact checks
+/close <task-id>                                               # /do work: reads do-report-<task-id>.json, runs normal QA path
 ```
 
 Power users may also pass an explicit task-id or path: `/close <task-id>` or `/close docs/dev/ticket-<ts>.md` (legacy: `/close docs/dev/ba-spec-<ts>.md`). The orchestrator parses these forms but the typical invocation is bare `/close` and lets the agent resolve the task-id from conversation context. No filesystem scan, no default-to-newest.
 
-`/do`-developed work has no dev cycle artifacts (no context, dev-report, or qa-report). The bare timestamp form (`/close <task-id> --force`) skips all artifact existence checks. Follow with `/commit <task-id>`.
+`/do`-developed work writes a lightweight do-report (`docs/dev/do-report-<task-id>.json`, see `commands/do.md`); `/close <task-id>` reads it and runs the normal QA path — no `--force` needed. `--force` remains a fallback for work with no do-report (hand-edits). Follow with `/commit <task-id>`.
 
 <!-- Cross-reference: BA spec /root/docs/dev/ba-spec-20260426-redev8.md § AC-CLOSE-FORCE-1..6 govern --force / --reason behavior. -->
 
