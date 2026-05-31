@@ -95,7 +95,7 @@ Availability is keyed on **`cacheDir/graph.json`** (NOT a legacy manifest path).
 
 ## Semantic Extraction (user-triggered, edge-signature proof-gated)
 
-`graphify update` is AST-only by design. **`init` and `update` are AST-only and fast — they NEVER auto-probe semantic extraction.** (The earlier hidden 30s init auto-probe was unreachable — its 30s budget could not fit `extract`'s ~77s AST prelude — and used the wrong proof axis; both defects are removed.) Semantic edges come from `graphify extract --backend B`, which runs LLM extraction on docs/papers/images. Backend selection: API-key env vars (Gemini/Kimi/Claude/OpenAI/DeepSeek) auto-detect via graphify's `detect_backend()`; with NO key set, the keyless **`claude-cli`** backend works when `/usr/bin/claude` is present (uses the Pro/Max subscription, no API key).
+`graphify update` is AST-only by design. **`init` and `update` are AST-only and fast — they NEVER auto-probe semantic extraction.** Semantic edges come from `graphify extract --backend B`, which runs LLM extraction on docs/papers/images. Backend selection: API-key env vars (Gemini/Kimi/Claude/OpenAI/DeepSeek) auto-detect via graphify's `detect_backend()`; with NO key set, the keyless **`claude-cli`** backend works when `/usr/bin/claude` is present (uses the Pro/Max subscription, no API key).
 
 ### The manual `semantic` command
 
