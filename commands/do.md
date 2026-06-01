@@ -64,4 +64,6 @@ Before invoking `/close`, the agent MUST write `docs/dev/do-report-<session-id>.
 
 `files_modified` and `files_created` MUST be filled by the agent from its own knowledge of what it changed — NOT derived from `git diff` (git diff is session-unaware and breaks under parallel /do sessions).
 
+**Important**: `/close` uses `files_modified` as the cycle-diff file list for inspector dispatch. Newly created files that need inspector coverage MUST also appear in `files_modified` (in addition to `files_created`). Omitting a new file from `files_modified` means it will not be inspected.
+
 Then: `/close <session-id>` runs the normal QA path using the do-report as the source artifact. `--force` is no longer required.

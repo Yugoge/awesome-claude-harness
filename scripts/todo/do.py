@@ -8,7 +8,7 @@ Step 3 (Codex audit) is always listed; the agent skips it when --codex is absent
 _STEPS = [
     ("1", "Understand requirements", "Understanding requirements", None),
     ("2", "Develop", "Developing", None),
-    ("3", "Codex audit (skip if --codex not in $ARGUMENTS)", "Running codex audit", None),
+    ("3", "Codex audit (skip if --codex not in $ARGUMENTS)", "Running codex audit (--codex only)", None),
     ("4", "Summary", "Writing summary", None),
 ]
 
