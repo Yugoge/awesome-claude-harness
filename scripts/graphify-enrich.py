@@ -21,7 +21,12 @@ Nil-map fallback (arch-1): blast-radius-map absent → status=skipped, valid emp
 graph_context, zero exception.
 
 Usage:
-  python3 scripts/graphify-enrich.py --task-id <ID> --context-file <path> [--no-graphify]
+  python3 scripts/graphify-enrich.py --task-id <ID> --context-file <path> [--blast-radius-map <path>] [--no-graphify]
+
+The blast-radius-map is resolved in priority order: explicit --blast-radius-map, then the
+context's `blast_radius_map_path` field (authoritative — written by BA), then the
+<task-id>-derived default. The context-field step makes /dev-overnight per-pipeline
+enrichment effective (its enrich task-id never matched the per-pipeline BA map dir).
 
 Exit codes:
   0 — always (advisory; DEV is never blocked by Graphify failure)
@@ -83,9 +88,44 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
 
 
-def _load_blast_radius_map(task_id: str) -> tuple[dict | None, str]:
-    """Load blast-radius-map.json. Returns (map_data, status)."""
-    map_path = _PROJECT_DIR / ".claude" / "dev-registry" / task_id / "blast-radius-map.json"
+def _resolve_blast_radius_map_path(task_id: str, context_file: str | None = None,
+                                   explicit_path: str | None = None) -> Path:
+    """Resolve the blast-radius-map path. Priority:
+      1. explicit --blast-radius-map override
+      2. the context JSON's `blast_radius_map_path` field (authoritative — BA writes
+         it per agents/ba.md, and Dev consumes the same context)
+      3. the <task_id>-derived default `.claude/dev-registry/<task_id>/blast-radius-map.json`.
+
+    The context-field resolution is what makes per-pipeline /dev-overnight enrichment
+    FUNCTIONALLY EFFECTIVE: the overnight BA keys its map off `pipeline.timestamp_suffix`,
+    which the `${DEV_SESSION_ID}-pipeline-{index}` enrich task-id never matches — so the
+    task-id-derived default always nil-map-skipped there. The context file Dev consumes
+    always records the authoritative `blast_radius_map_path`, so reading it from there finds
+    the map regardless of the task-id naming scheme. In /dev the two coincide (no change).
+    Relative paths resolve against _PROJECT_DIR.
+    """
+    def _abs(p: str) -> Path:
+        pp = Path(p)
+        return pp if pp.is_absolute() else (_PROJECT_DIR / pp)
+
+    if explicit_path and explicit_path.strip():
+        return _abs(explicit_path.strip())
+    if context_file:
+        cf = Path(context_file)
+        if cf.exists():
+            cdata, _cstatus = read_json_safe(cf)
+            if isinstance(cdata, dict):
+                brp = cdata.get("blast_radius_map_path")
+                if isinstance(brp, str) and brp.strip():
+                    return _abs(brp.strip())
+    return _PROJECT_DIR / ".claude" / "dev-registry" / task_id / "blast-radius-map.json"
+
+
+def _load_blast_radius_map(task_id: str, context_file: str | None = None,
+                           explicit_path: str | None = None) -> tuple[dict | None, str]:
+    """Load blast-radius-map.json. Returns (map_data, status). Path is resolved via
+    _resolve_blast_radius_map_path (context-field-first; see that helper)."""
+    map_path = _resolve_blast_radius_map_path(task_id, context_file, explicit_path)
     if not map_path.exists():
         return None, f"blast-radius-map.json absent at {map_path}"
     data, status = read_json_safe(map_path)
@@ -402,6 +442,9 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="graphify enrichment subagent (between Step 7 and Step 8)")
     parser.add_argument("--task-id", required=True, help="Dev session task ID")
     parser.add_argument("--context-file", help="Path to context-{ts}.json for in-place patching")
+    parser.add_argument("--blast-radius-map", help="Explicit blast-radius-map.json path override "
+                        "(else resolved from the context's blast_radius_map_path, else the "
+                        "<task-id>-derived default)")
     parser.add_argument("--no-graphify", action="store_true", help="Explicit disable")
     args = parser.parse_args()
 
@@ -427,8 +470,12 @@ def main() -> int:
         print(f"graphify-enrich: status=skipped (disabled)")
         return 0
 
-    # Nil-map fallback (arch-1) — status=skipped when blast-radius-map absent
-    blast_radius_map, br_reason = _load_blast_radius_map(task_id)
+    # Nil-map fallback (arch-1) — status=skipped when blast-radius-map absent.
+    # Resolve the map: explicit --blast-radius-map override, then the context's
+    # authoritative blast_radius_map_path (so /dev-overnight per-pipeline enrichment
+    # finds the map BA wrote under its own task-id), then the <task-id>-derived default.
+    blast_radius_map, br_reason = _load_blast_radius_map(
+        task_id, args.context_file, args.blast_radius_map)
     run_manifest["subgraph_extraction"]["blast_radius_map_present"] = blast_radius_map is not None
 
     if blast_radius_map is None:

@@ -1189,6 +1189,8 @@ Use Agent tool with:
   Run: source \"${CLAUDE_PROJECT_DIR}/venv/bin/activate\" && python3 $CLAUDE_PROJECT_DIR/scripts/graphify-enrich.py --task-id ${DEV_SESSION_ID}-pipeline-{pipeline.index} --context-file <the context file Dev will consume for this pipeline/iteration>
 
   This is advisory — if the binary is absent or blast-radius-map is missing, exit 0 with status=skipped.
+
+  Note: graphify-enrich resolves the blast-radius-map in priority order — explicit `--blast-radius-map`, then the passed `--context-file`'s authoritative `blast_radius_map_path` field, then the `<task-id>`-derived default. The context-field step is what makes per-pipeline overnight enrichment functionally effective: the overnight BA writes the map under its own `{pipeline.timestamp_suffix}` task-id (recorded in `context-{pipeline.timestamp_suffix}.json`'s `blast_radius_map_path`), which the `${DEV_SESSION_ID}-pipeline-{pipeline.index}` enrich task-id would otherwise never match. (Overnight does not pass `--blast-radius-map`, so the context field is effectively first here.)
   "
 ```
 
