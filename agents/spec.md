@@ -166,6 +166,42 @@ Read the full monolith and identify content blocks. A **content block** is a con
 
 **Cross-section allocation**: There is NO rule that "Section N maps to agent X". A block from Section 1 can go to the orchestrator view while another block from the same Section 1 goes to the BA view, and a third block from Section 1 goes to both dev and QA views. The INCLUDE/SKIP criteria below determine routing, not the section number.
 
+**Section 9 (Design & Evidence References) routing — MANDATORY verbatim fan-out (M7).**
+Section 9 carries SHORT reference lines pointing at the user's companion design docs and
+archived evidence, each subsection preceded by a `<!-- consumers: [all] -->` annotation.
+Route Section 9 as follows:
+
+- Route the ENTIRE Section 9 block verbatim into EVERY selected view AND the orchestrator
+  view, because its `consumers:` annotation is `[all]` (`[all]` routes to all selected
+  views without an orphan-block HALT — R2.A.5). "Entire block" means EVERY non-blank,
+  non-`---` line in Section 9: the `## Section 9: Design & Evidence References` heading,
+  every explanatory `<!-- WHO WRITES ... -->` / `<!-- WHAT ... -->` comment line, the
+  `### 9.1` / `### 9.2` subsection headings, each `<!-- consumers: [all] -->` annotation
+  line, every reference line, and the `_Not yet populated._` placeholders. Do NOT annotate
+  Section-9 refs with concrete agents like `[dev, qa]` — `[all]` is what the template
+  already carries and avoids a HALT when a named agent's view is unselected.
+- WHY route the whole block and not just the reference lines: `spec-verify.py`'s
+  `is_skippable` skips ONLY blank lines and `---`. It does NOT skip the Section-9 heading,
+  the subsection headings, the explanatory HTML comments, or the `<!-- consumers: [all] -->`
+  annotation — none of those are blank/`---`, and none are whitelisted
+  EXPLICIT/INFERRED/AMBIGUOUS markers. So EVERY one of those lines COUNTS toward the
+  coverage denominator and MUST appear verbatim in ≥1 view or coverage fails. Treat every
+  Section-9 line as a real monolith line that must be covered.
+- Do NOT use the `EXPLICIT` cite-by-range marker for Section-9 refs — it is whitelisted
+  OUT of the coverage count, so it would not satisfy coverage for these reference lines.
+- The Section-9 `<!-- consumers: [all] -->` annotation is ROUTING-ONLY: it directs the
+  whole Section-9 block to all selected views + orchestrator. It is NEVER Role Mandate
+  evidence (R3.2/R3.3) — a view MUST NOT cite a Section-9 reference line or its `[all]`
+  annotation as the `basis:` for its Role Mandate INFERRED marker. Section 9 carries
+  design/evidence pointers, not role-defining content.
+- The companion design BODY files and the evidence BINARIES live OUTSIDE the monolith.
+  They are NOT monolith content and MUST NOT be pulled into any view. Views carry only the
+  short Section-9 reference + scaffold + annotation lines, never the design body or the
+  binaries.
+- When no design/evidence was supplied, Section 9 carries only its scaffold +
+  `_Not yet populated._` placeholders; the same whole-block verbatim routing applies, so
+  the default lines are covered.
+
 ### Step 2: Assign blocks to agents
 
 For each content block identified in Step 1, decide which agent(s) should receive it. Apply the INCLUDE/SKIP criteria below for each relevant agent (from Phase 0). A block may be assigned to zero, one, or multiple agents.
@@ -369,6 +405,23 @@ Write `docs/dev/specs/<spec-id>/views/orchestrator.md` with the sections below i
 ## Hard Rules Relevant to Orchestrator
 
 <Extract Hard Rules from the monolith preamble that constrain orchestrator behavior. Include each rule VERBATIM. These typically cover: role split, worktree-only writes, PM scope, phase gates, shipping cadence, delegation-only orchestration, and any rule that says "orchestrator must/must not...".>
+
+---
+
+## Design & Evidence References
+
+<If the monolith has a Section 9 at all, include here — VERBATIM — the ENTIRE Section 9
+block exactly as defined in the Phase-1 routing rule above: EVERY non-blank, non-`---` line
+of Section 9 — the `## Section 9: Design & Evidence References` heading, every explanatory
+`<!-- WHO/WHAT ... -->` comment line, the `### 9.1` / `### 9.2` subsection headings, each
+`<!-- consumers: [all] -->` annotation line, every design/evidence reference line, and the
+`_Not yet populated._` placeholders — so downstream `/dev*` (which reads orchestrator.md)
+sees the design/evidence pointers (M10) AND every Section-9 line is covered (each counts
+toward `spec-verify.py` coverage because `is_skippable` skips only blank/`---`). This
+applies whether Section 9 is populated OR carries only the `_Not yet populated._`
+placeholders. Companion design body files and evidence binaries are NOT inlined — they are
+not monolith content. OMIT this section's content only if the monolith has no Section 9 at
+all (legacy monolith).>
 
 ---
 

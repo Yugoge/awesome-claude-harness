@@ -60,7 +60,7 @@ present, do not write a second copy. This marker is written exactly once per
 (task-id, spec file) pair and must appear only in this continuation-spec mode,
 never in temp-note mode.
 
-Populate the 8-section template as follows:
+Populate the per-cycle sections (Sections 2-8) as follows:
 
 - Section 2: what was attempted and why it did not finish.
 - Section 3: changed files or artifact references, not raw diffs.
@@ -70,6 +70,10 @@ Populate the 8-section template as follows:
 - Section 6: specific gap between current state and done.
 - Section 7: concrete next plan for the next `/dev` run.
 - Section 8: traps, stale assumptions, and warnings for the next agent.
+
+Section 9 (Design & Evidence References) is owned by the `/spec` orchestrator at
+design/evidence capture time, not by `/spec-update`. Leave any existing Section 9
+reference lines intact; do not populate or rewrite Section 9 here.
 
 For a newly created continuation spec, Section 5 must contain the original
 user-facing goal if known plus the remaining acceptance criteria. For an

@@ -52,9 +52,20 @@ Adapted from `/dev` BA clarification pattern (dev.md Step 4 loop, max 3 rounds, 
    - `<issue_description>` → short summary of the user's requirement
    - `<ISO-8601>` → current timestamp
    - Section 5 → user's requirement verbatim
-   - All other sections → `_Not yet populated._`
+   - All other sections → `_Not yet populated._` (Section 9's two subsections each
+     keep their `<!-- consumers: [all] -->` line + `_Not yet populated._` placeholder
+     until their own first entry — see the Design & Evidence Capture Routine below)
 
 4. Write the spec.
+
+   **Design & Evidence Capture (early capture)** (un-numbered — part of writing the first
+   spec, not a separate Step): Run the **Design & Evidence Capture Routine** (defined below,
+   after Step 4) for the FIRST turn's material immediately after the spec is written, BEFORE
+   acknowledging in sub-step 6. The routine's sub-step 1 self-no-ops if the first turn
+   carries no design/evidence, so this invocation is safe to run unconditionally. Early
+   capture (not finalize) is mandatory: finalize is too late and material would be lost (M2).
+   This is the SOLE first-turn capture point; every LATER turn is captured exactly once by
+   the Step 4 capture precondition (no double-capture).
 
 5. **Background exploration (non-blocking)**: when the user mentions specific files, components, features, or technical terms, immediately dispatch an Explore agent in the background:
    ```
@@ -75,19 +86,174 @@ Adapted from `/dev` BA clarification pattern (dev.md Step 4 loop, max 3 rounds, 
 
 Copied from `ask.md` Step 6 (multi-turn dialogue loop architecture). One `/spec` invocation spans multiple user messages; each message lands in the SAME `spec_path`.
 
-After Step 3, wait for the next user message and branch:
+After Step 3, wait for the next user message. For EVERY user turn, FIRST run the
+capture precondition, THEN branch:
 
-- **Strong natural-conclusion signal** (Step 5 list) → proceed to Step 6 (Finalize).
+**Capture precondition (runs first, every turn — M2)**: BEFORE evaluating any branch
+below, **run the Design & Evidence Capture Routine for THIS turn's material**.
+The routine's sub-step 1 self-no-ops when the turn carries no design/evidence, so it is safe to
+invoke unconditionally at the top of every turn. This single pre-branch invocation is what
+guarantees M2's "capture on every follow-up turn" structurally — no branch outcome below
+(another-requirement, strong-signal/finalize, mid-loop-vague, or a design/evidence-only
+turn) can proceed or finalize without first capturing any material present in the same
+turn. Do NOT also call the routine inside an individual branch — that would double-capture the
+same turn's material.
+
+After the capture precondition has run, branch on the turn's requirement/closure shape:
+
+- **Strong natural-conclusion signal** (Step 5 list) → the capture precondition has already
+  persisted any design/evidence carried by this closing turn (so a turn like "here is the
+  runbook screenshot, thanks" is captured before finalize, never dropped). Now proceed to
+  Step 6 (Finalize).
 - **Another requirement** → append to `spec_path` under Section 5 as a new sub-section:
   ```
   ### 5.N: <brief title extracted from the message>
   <verbatim requirement text>
   ```
-  `N` increments from 2 (the first requirement populates Section 5; subsequent requirements become 5.2, 5.3, …). Then loop back to wait.
+  `N` increments from 2 (the first requirement populates Section 5; subsequent requirements become 5.2, 5.3, …). The capture precondition already ran the Design & Evidence Capture Routine for this turn's design/evidence; do NOT run it again here. Then loop back to wait.
+- **Design/evidence-only follow-up** (the turn supplies design/HOW-content or evidence but
+  carries no new requirement text and is not a conclusion signal) → the capture precondition
+  has already persisted that material via the Design & Evidence Capture Routine. Because this
+  turn carries NO new requirement text, do NOT append a `### 5.N` block and do NOT touch
+  Section 5 at all — the design/evidence is already persisted to Section 9 + companion files,
+  so there is nothing left to record. Simply loop back to wait. This turn shape is now fully
+  captured — it can never fall through uncaptured.
 - **Exploration findings arrive** → integrate into Section 1 (Before) silently. If a finding contradicts the user's description, surface one targeted question — for example, "I looked at X and found Y — does that match?" — then loop back. Never gate the loop on exploration.
-- **Mid-loop vague input** → apply Step 2 logic (max 3 rounds) to that single message before appending, then loop back.
+- **Mid-loop vague input** → apply Step 2 logic (max 3 rounds) to that single message before appending, then loop back. (The capture precondition already handled any design/evidence in the triggering turn.) Each clarification RESPONSE collected by Step 2 is itself a fresh Step 4 user turn: run the capture precondition (the Design & Evidence Capture Routine) on it FIRST, before re-evaluating Step 2 / appending — do NOT process a clarification answer in a bypass path that skips capture, or design/evidence supplied in a clarification reply would be dropped.
 
 Maintain `turn_count` internally (not user-visible), increment after each user response. No hard turn cap — termination is signal-driven.
+
+### Design & Evidence Capture Routine
+
+(This is a named sub-routine, NOT a numbered Step — the integer Step 1→7 sequence runs
+contiguous and un-lettered. It is invoked from Step 3's **Design & Evidence Capture (early
+capture)** paragraph and from the Step 4 capture precondition.)
+
+This routine is invoked UNCONDITIONALLY in Step 3's early-capture paragraph for the first turn,
+and unconditionally as the Step 4 **capture precondition** that fires BEFORE branching on EVERY
+follow-up turn — including the design/evidence-only turn shape and the finalizing turn that
+also carries material (M2). It performs work only if that turn carries design/evidence;
+sub-step 1 self-no-ops otherwise. It is invoked at exactly ONE point per turn (Step 3's
+early-capture paragraph for the first turn, the Step 4 capture precondition for every later
+turn), so each turn's material is captured exactly once — no double-capture. It NEVER touches
+Section 5 — design and evidence land in Section 9 + companion files only (M8). User-provided
+design and evidence are first-class material and MUST NOT be silently dropped (M3-M5, M12).
+
+1. **Detect material in this turn.** Classify what the user supplied this turn into:
+   - **Design/HOW-content**: architecture, directory layout, deployment topology,
+     systemd units, runbook, rollout/landing order — whether pasted inline as text OR
+     supplied as a readable file path the user describes as design/HOW/runbook/systemd/
+     rollout/layout (M14).
+   - **Evidence**: files and photos/screenshots offered as proof/screenshot/log/photo.
+   - **Ambiguous path input** (a file path the user neither clearly frames as design nor
+     as evidence) → default to **evidence/** with visible Section-9 wording noting the
+     ambiguous classification (M14).
+   - If neither is present this turn, do nothing and return control to the caller.
+     When invoked from the Step 4 capture precondition (or Step 3's early-capture paragraph),
+     this is a no-op that hands control straight back so the SAME turn's branch evaluation
+     (append / finalize / clarify) still runs — it does NOT skip to waiting for the next turn.
+
+2. **Resolve the de-prefixed id and bind the per-id folder (first material only).** Obtain
+   the per-id folder id by consuming the resolver's `candidates[0]` (the de-prefixed stem,
+   exactly one leading `spec-` stripped). Do NOT re-derive the id inline by hand from the
+   path — the centralization lint (Step 6 sub-step 6) flags inline derivation:
+
+   ```bash
+   RESOLVED_JSON=$(/root/.claude/scripts/resolve-spec-artifacts.py \
+       --spec-path "$spec_path" --project-dir "$CLAUDE_PROJECT_DIR")
+   SPEC_DIR_ID=$(jq -r '.candidates[0]' <<<"$RESOLVED_JSON")   # de-prefixed id
+   BOUND_ROOT="$CLAUDE_PROJECT_DIR/docs/dev/specs/$SPEC_DIR_ID"
+   ```
+
+   On the FIRST arriving design/evidence material, create the bound artifact root and its
+   two subfolders, and write the binding marker (M2):
+
+   ```bash
+   mkdir -p "$BOUND_ROOT/design" "$BOUND_ROOT/evidence"
+   # .spec-binding.json ties this early folder to THIS spec-id so the splitter's later
+   # views/ creation does not merge into a stale/foreign folder. It is NOT one of the
+   # reserved artifact names (views/ / manifest.json / .split-complete), so the resolver
+   # still classifies the folder ABSENT (legacy-monolith fallback intact) — verified.
+   printf '{"spec_id":"%s","monolith_path":"%s","bound_at":"%s"}\n' \
+       "$SPEC_DIR_ID" "$spec_path" "$(date -Iseconds)" > "$BOUND_ROOT/.spec-binding.json"
+   ```
+
+   Do NOT create `views/`, `manifest.json`, or `.split-complete` here — those remain
+   spec-subagent-owned at finalize (M9).
+
+3. **Safe target naming (M13).** Compute deterministic, safe target names. Reject any name
+   containing `..`, an absolute path, or control characters — never write outside
+   `$BOUND_ROOT/design/` or `$BOUND_ROOT/evidence/`, and never overwrite a prior artifact:
+   - Design: `design/turn-<N>-<slug>.md` where `<N>` is the current turn number and
+     `<slug>` is a sanitized short title.
+   - Evidence: the sanitized basename of the source; on a name collision, append a short
+     content hash (e.g. `photo.png` → `photo-<8hex>.png`) so no prior artifact is
+     overwritten.
+
+4. **Persist design (M3 — additive, never relocating) — two branches like evidence.**
+   - **Design pasted inline as HOW-text** → write the user's HOW-content VERBATIM to
+     `$BOUND_ROOT/design/turn-<N>-<slug>.md`.
+   - **Design supplied as a readable file path** (runbook/systemd/layout document the user
+     framed as design — M14) → read/copy the SOURCE bytes VERBATIM into
+     `$BOUND_ROOT/design/turn-<N>-<slug>.md`. Do NOT summarize or transcode; persist the
+     file content as-is.
+   - **Design path that fails to read** (missing / unreadable / outside accessible paths)
+     → do NOT drop it silently (fail-visible, same contract as evidence M12): append an
+     "unpersisted design" limitation line under Section 9.1 carrying the original path +
+     the error, and tell the user immediately:
+     ```
+     - (unpersisted design) <original-path> — read/copy failed: <error>; not archived
+     ```
+
+   The persisted design file is an ADDITIVE mirror: if the design text arrived as part of
+   the user's requirement it STAYS verbatim in Section 5; the companion design doc + the
+   Section-9 reference are ADDED, never used to strip, rewrite, summarize, or relocate any
+   Section-5 text. On a successful persist, append a short project-root-relative reference
+   line under Section 9.1 (replacing the `_Not yet populated._` placeholder on the FIRST
+   design entry; leaving Section 9.2's placeholder untouched until its own first entry — M1):
+
+   ```
+   - `docs/dev/specs/<de-prefixed-id>/design/turn-<N>-<slug>.md` — <one-line description>
+   ```
+
+   Keep the `<!-- consumers: [all] -->` line as the first line of Section 9.1 so every
+   reference line under it routes to all selected views + orchestrator (S1).
+
+5. **Persist evidence (M4 / M5 — two branches).**
+   - **File/photo WITH a usable readable path** → copy it into
+     `$BOUND_ROOT/evidence/<safe-name>` and append a reference line under Section 9.2:
+     ```
+     - `docs/dev/specs/<de-prefixed-id>/evidence/<safe-name>` — <one-line description>
+     ```
+   - **Photo arriving ONLY as inline/pathless content** → in THIS harness, a pasted image
+     currently arrives as a base64 content block with no filesystem path the orchestrator
+     can `Read` (current-harness observation, not an eternal absolute — if a future client
+     exposes a usable path for the pasted image, take the by-path copy branch above
+     instead). Because nothing can be copied from a non-existent path, record a VISIBLE
+     evidence reference under Section 9.2 noting the item was provided inline and could not
+     be archived to a path, and tell the user durable archival needs a file path. The
+     material is NEVER silently dropped (M5):
+     ```
+     - (inline) <one-line description> — provided inline (no filesystem path in this harness); durable archival needs a file path
+     ```
+
+6. **Fail-visible evidence-copy errors (M12).** If a file-by-path copy fails (path missing,
+   unreadable, or outside accessible paths), do NOT drop it silently. Either the copy
+   succeeds and the copied path is referenced (sub-step 5), OR append an "unpersisted
+   evidence" limitation line under Section 9.2 carrying the original path + the error, and
+   tell the user immediately:
+
+   ```
+   - (unpersisted) <original-path> — copy failed: <error>; not archived
+   ```
+
+7. Each Section-9 reference line is a SHORT verbatim monolith line (it enters the coverage
+   denominator and MUST appear verbatim in ≥1 view — see Step 6 and the splitter). The
+   companion design body and evidence binaries live OUTSIDE the monolith and are NOT in the
+   coverage denominator. Then return control to the caller: when invoked from the Step 4
+   capture precondition, continue branch evaluation for the SAME turn (append `### 5.N` /
+   finalize / clarify / loop back for a design/evidence-only turn); do NOT skip ahead to
+   waiting for the next user turn.
 
 ### Step 5: Natural-conclusion detection
 
@@ -108,6 +274,23 @@ Copied verbatim from `ask.md` Step 8 (lines 495-510).
 Only proceed to Step 6 when a STRONG signal fires.
 
 ### Step 6: Finalize (exactly once)
+
+0. **Section-9 dangling-reference guard (PRE-split, M11)**: Before counting lines or
+   invoking the splitter, parse every `docs/dev/specs/<de-prefixed-id>/design/...` and
+   `docs/dev/specs/<de-prefixed-id>/evidence/...` reference path listed under Section 9
+   and assert each exists on disk under the bound per-id folder. `(inline)`,
+   `(unpersisted)`, and `(unpersisted design)` limitation lines are intentionally NOT real
+   paths — BEFORE any path-regex extraction, skip any Section-9 line matching the sentinel
+   pattern `^\s*-\s*\((inline|unpersisted design|unpersisted)\)\s` (the markdown bullet
+   `- (` plus one of the three sentinel tokens followed by whitespace, exactly as emitted in
+   the Design & Evidence Capture Routine's sub-steps 4/5/6 — note the trailing `\s`, NOT a word boundary `\b`, since a `)`
+   immediately followed by a space is not a word boundary and `\b` would fail to match these
+   lines). These are already visible records, not dangling file references, so they must
+   never be passed to the path extractor. If any real reference path is
+   missing, finalize HALTS with a visible error naming the dangling path, OR the
+   orchestrator converts that reference into a visible `(unpersisted)` limitation line
+   carrying the original path — the dangling reference is NEVER silently accepted. This
+   keeps the deferred manifest-tracking change (a Won't-Have) safe.
 
 1. **Count monolith lines**: `MONOLITH_LINES=$(wc -l < <spec_path>)`
 
@@ -161,6 +344,19 @@ Only proceed to Step 6 when a STRONG signal fires.
         - qa: Has acceptance criteria, verification procedures, test patterns?
         Flag any view that is missing critical content that would force the agent
         to fall back to the monolith (defeating the purpose of the split).
+     6. SECTION 9 (DESIGN & EVIDENCE REFERENCES): If the monolith has a Section 9 at all,
+        verify that EVERY non-blank, non-`---` line of Section 9 — the
+        `## Section 9: Design & Evidence References` heading, every explanatory
+        `<!-- WHO/WHAT ... -->` comment, the `### 9.1` / `### 9.2` subsection headings,
+        each `<!-- consumers: [all] -->` annotation line, every design/evidence reference
+        line, AND the `_Not yet populated._` placeholders — appears verbatim in
+        orchestrator.md and in the selected relevant views (each of those lines counts
+        toward coverage because `spec-verify.py`'s `is_skippable` skips only blank/`---`);
+        that companion design body files and evidence binaries are NOT inlined into any
+        view; and that each referenced design/ or evidence/ artifact path exists under
+        docs/dev/specs/<spec-id>/. Flag any Section-9 line — heading, comment, subheading,
+        annotation, or reference — that was dropped from the views (a coverage break the
+        routing alone would miss).
 
      Return JSON: {verdict: pass|fail, issues: [...], summary: '...'}
      "
@@ -298,12 +494,25 @@ Usage:
 
 - **Read the template at runtime** from `~/.claude/templates/overnight-spec.md`. Never hardcode template content.
 - **Preserve template structure exactly** — only replace designated placeholders and `_Not yet populated._` markers.
-- **Do not modify any existing files** except the spec file being created.
+- **Do not modify any existing files** except the spec file being created — with ONE
+  scoped carve-out for design/evidence capture (M9): at design/evidence capture time
+  (the Design & Evidence Capture Routine) `/spec` MAY create/write ONLY
+  `docs/dev/specs/<de-prefixed-id>/.spec-binding.json`,
+  `docs/dev/specs/<de-prefixed-id>/design/*`, and
+  `docs/dev/specs/<de-prefixed-id>/evidence/*`. It MUST NOT write `views/`,
+  `manifest.json`, or `.split-complete` — those remain spec-subagent-owned, created at
+  finalize. No other existing file may be modified.
 - **Create the output directory** (`docs/dev/specs/`) if it does not exist.
 - **Use absolute paths** in all output messages.
 - **Spec Creation Mode is the only mode.** It acts immediately on whatever the user provides, accumulates multiple requirements into one file per session, and finalizes only on a natural-conclusion strong signal.
 - **Section 5 verbatim — DO NOT invent nested sub-section structure.** Section 5 holds the user's requirement text verbatim. The only structure the /spec orchestrator may ADD beneath Section 5 is the `### 5.N: <title>` accumulation header defined in Step 4 (one per follow-up turn); any other bullets, headings, or sub-headings must come verbatim from the user, not be invented. DO NOT decompose the user's natural-language paragraph into invented `#### A.`, `#### B.`, `#### C.` (or any `5.X.A`, `5.X.B`-style) sub-headings, machine-voice checklist bullets, or parallel "should/should-not" AC ladders below a `§5.N` block. This prohibition governs both Step 3 (first-write of Section 5) and Step 4 (multi-turn append of `### 5.N`). If the user's paragraph contains multiple ideas, leave them as one paragraph; downstream agents (BA, dev, QA) will decompose during their own phases — not the /spec orchestrator.
-- **Output folder is created by the spec subagent** during Phase 0. The subagent decides which agents get views based on spec content. Legacy specs lacking an output folder remain valid — `/dev*` falls back gracefully.
+  - **Scope of this rule (M6 — agent-INVENTED decomposition only).** The prohibition above bans the ORCHESTRATOR from INVENTING or decomposing architecture/structure inside Section 5 — that decomposition is downstream's job. It does NOT, and must NEVER, justify discarding design the USER actually provided. User-provided design (architecture, directory layout, deployment topology, systemd, runbook, rollout/landing order) is first-class material: it MUST be persisted BYTE-FOR-BYTE to the companion design doc under `docs/dev/specs/<de-prefixed-id>/design/` and REFERENCED from Section 9 (per the Design & Evidence Capture Routine / M3) — never dropped, never used to summarize or relocate Section-5 text. "Design is downstream's job" applies ONLY to agent-invented decomposition; it is not grounds to drop user-supplied design.
+- **Output folder is created by the spec subagent** during Phase 0 (the `views/` /
+  `manifest.json` / `.split-complete` finalize artifacts). The subagent decides which
+  agents get views based on spec content. EXCEPTION (M9): the `design/`, `evidence/`,
+  and `.spec-binding.json` early-capture artifacts may be created by `/spec` itself at
+  design/evidence capture time (the Design & Evidence Capture Routine). Legacy specs lacking an output folder remain
+  valid — `/dev*` falls back gracefully.
 - **Todo script**: `/root/.claude/scripts/todo/spec.py` (symlinked to `/dev/shm/dev-workspace/dot-claude/scripts/todo/spec.py` — same inode) exposes the 7-step Spec Creation Mode todo list with `blocking_count = 3` (Steps 1-3 must complete before Claude can stop; Steps 4-7 are session-duration).
 - **Workflow update**: Step 7 emits a temp update for the next phase using
   `/spec-update --temp`. It must be compact, reference existing artifacts by path,

@@ -95,3 +95,24 @@ _Not yet populated._
 <!-- Example: "This file is imported by 12 components -- changes here cascade widely" -->
 
 _Not yet populated._
+
+---
+
+## Section 9: Design & Evidence References
+
+<!-- WHO WRITES: /spec orchestrator (at design/evidence capture time) -->
+<!-- WHAT: Reference lines pointing at user-provided design docs + archived evidence. -->
+<!-- The companion design BODY and evidence binaries live OUTSIDE this monolith -->
+<!-- (under docs/dev/specs/<de-prefixed-id>/design/ and /evidence/); this section -->
+<!-- carries only short verbatim reference lines, never the design body or binaries. -->
+<!-- Section 5 stays verbatim/undecomposed; design + evidence references live ONLY here. -->
+
+### 9.1: Design References
+
+<!-- consumers: [all] -->
+_Not yet populated._
+
+### 9.2: Evidence References
+
+<!-- consumers: [all] -->
+_Not yet populated._
