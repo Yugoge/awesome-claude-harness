@@ -157,7 +157,7 @@ python3 scripts/graphify-maintain.py status
 |----------------|----------------------------------------------------------|
 | /dev           | pre-BA hydrator (between Step 1 and Step 2) + graphify enrichment subagent (between Step 7 and Step 8) |
 | /dev-command   | Same as /dev (mirrors commands/dev.md)                   |
-| /dev-overnight | Enabled; shares global cache via graphify-maintain.py    |
+| /dev-overnight | Full dual-touchpoint (mirrors /dev): per-pipeline pre-BA hydrator (between Step 1 and Step 2 conceptually; runs before each overnight BA dispatch) + graphify enrichment subagent via the shared Step 11g Dev-dispatch precondition (between Step 7 and Step 8 conceptually; runs before EVERY Dev dispatch on every path). Pipeline-scoped task-ids keep fanout artifacts disjoint; shares the global cache via graphify-maintain.py |
 | /redev         | Inherits /dev behavior                                   |
 | /pull          | Post-pull incremental update (non-blocking advisory)     |
 | /refactor      | Optional (not implemented in v1)                         |

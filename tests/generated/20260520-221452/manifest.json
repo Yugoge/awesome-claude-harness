@@ -182,16 +182,16 @@
         "file": "commands/dev.md",
         "scoped_checks": [
           {
-            "_scope_id": "AC-05.step11",
-            "scope_start_regex": "^### Step 11:",
-            "scope_end_regex": "^### Step 12:",
+            "_scope_id": "AC-05.step13",
+            "scope_start_regex": "^### Step 13:",
+            "scope_end_regex": "^### Step 14:",
             "must_contain_regex": [
               "tests/generated/<task_id>/manifest\\.json"
             ],
             "must_not_contain_regex": [
               "tests/generated/manifest\\.json(?!\\s*\\((?:index|global))"
             ],
-            "description": "Inside Step 11 QA dispatch: a per-task manifest-path line MUST appear (REQUIRED — not just unqualified-global FORBIDDEN; ensures the QA dispatch actually carries the per-task path)"
+            "description": "Inside Step 13 QA dispatch: a per-task manifest-path line MUST appear (REQUIRED — not just unqualified-global FORBIDDEN; ensures the QA dispatch actually carries the per-task path)"
           },
           {
             "_scope_id": "AC-05.dev_handoff",
@@ -417,19 +417,19 @@
           {
             "_check_id": "AC-11.no_decimal_labels_file_wide",
             "file": "commands/dev.md",
-            "regex": "Sub-step 12\\.\\d",
+            "regex": "Sub-step \\d+\\.\\d",
             "must_match": false,
-            "description": "FILE-WIDE: no decimal Sub-step 12.N label remains anywhere"
+            "description": "FILE-WIDE: no decimal Sub-step N.N label remains anywhere (generalized guard so a bad Sub-step 14.0 cannot slip through)"
           },
           {
-            "_check_id": "AC-11.step12_xref_scoped",
+            "_check_id": "AC-11.step14_xref_scoped",
             "file": "commands/dev.md",
             "scope": {
-              "start_regex": "^### Step 12:",
-              "end_regex": "^### Step 13:"
+              "start_regex": "^### Step 14:",
+              "end_regex": "^### Step 15:"
             },
             "scoped_must_match_regex": "spec section updates",
-            "description": "WITHIN Step 12 section only: a cross-reference to 'spec section updates' (replacing former 'Sub-step 12.0') MUST exist as integer-step prose"
+            "description": "WITHIN Step 14 section only: a cross-reference to 'spec section updates' (replacing former 'Sub-step 12.0') MUST exist as integer-step prose"
           },
           {
             "_check_id": "AC-11.mascot_xref_scoped",
@@ -438,8 +438,8 @@
               "start_regex": "^## Mascot Score Changes",
               "end_regex": "^## "
             },
-            "scoped_must_match_regex": "score-update events[^\\n]*Step\\s+12",
-            "description": "WITHIN the '## Mascot Score Changes' summary section: the cross-reference MUST anchor the score-update events to 'Step 12' (replacing former 'Sub-step 12.1')"
+            "scoped_must_match_regex": "score-update events[^\\n]*Step\\s+14",
+            "description": "WITHIN the '## Mascot Score Changes' summary section: the cross-reference MUST anchor the score-update events to 'Step 14' (replacing former 'Sub-step 12.1')"
           }
         ]
       }

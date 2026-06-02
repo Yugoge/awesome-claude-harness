@@ -28,19 +28,19 @@ def _slice(text: str, start_re: str, end_re: str) -> str:
 def test_AC_05():
     """
     GIVEN: commands/dev.md is read as text
-    WHEN:  the Step 11 QA-dispatch prompt block AND the Dev-handoff text block (~line 666) are inspected separately (each scope-anchored)
+    WHEN:  the Step 13 QA-dispatch prompt block AND the Dev-handoff text block (~line 666) are inspected separately (each scope-anchored)
     THEN:  BOTH the QA-dispatch block and the Dev-handoff block contain a per-task manifest-path line (tests/generated/<task_id>/manifest.json); unqualified global-path references are forbidden in both scopes (global is allowed only when annotated '(index)' or '(global)')
     """
     assert DEV_MD.is_file(), f"missing: {DEV_MD}"
     src = DEV_MD.read_text(encoding="utf-8")
 
-    step11 = _slice(src, r"^### Step 11:", r"^### Step 12:")
-    assert "tests/generated/<task_id>/manifest.json" in step11, (
-        "commands/dev.md Step 11 missing per-task manifest path"
+    step13 = _slice(src, r"^### Step 13:", r"^### Step 14:")
+    assert "tests/generated/<task_id>/manifest.json" in step13, (
+        "commands/dev.md Step 13 missing per-task manifest path"
     )
-    bad = re.search(r"tests/generated/manifest\.json(?!\s*\((?:index|global))", step11)
+    bad = re.search(r"tests/generated/manifest\.json(?!\s*\((?:index|global))", step13)
     assert bad is None, (
-        f"commands/dev.md Step 11 has unqualified global manifest reference: {bad.group(0)!r}"
+        f"commands/dev.md Step 13 has unqualified global manifest reference: {bad.group(0)!r}"
     )
 
     dev_handoff = _slice(

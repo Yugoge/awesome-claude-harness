@@ -428,7 +428,7 @@ def build_overnight_continuation(state: dict) -> str:
     cmd_spec = read_command_spec('dev-overnight')
     wt_instruction = _build_worktree_instruction(state)
     overnight_todos = _load_overnight_todos()
-    step_count = len(overnight_todos) or 21
+    step_count = len(overnight_todos) or 22
     step_labels = '; '.join(str(item.get('content', '')) for item in overnight_todos)
     return '\n'.join([
         f'OVERNIGHT CONTINUATION - Cycle {cc + 1}', '',
@@ -446,8 +446,13 @@ def build_overnight_continuation(state: dict) -> str:
         f'Canonical steps: {step_labels}',
         'Do NOT create state file.',
         f'Read .claude/overnight-state-{state.get("session_id", "default")}.json and resume from phase="{phase}".',
-        'Phase mapping: initializing/exploring->Step 2, selecting->Step 3,',
-        'analyzing->Step 4, implementing->Step 6, verifying->Step 8, logging->Step 12',
+        # Phase->step map MUST match the markdown Continuation-Mode map in
+        # commands/dev-overnight.md (### Continuation Mode), the single source of
+        # truth. implementing->Step 12 lands on the shared Step 11g Dev-dispatch
+        # precondition, which enriches before Dev on resume.
+        'Phase mapping: initializing/exploring->Step 2, pipeline_creation->Step 6,',
+        'analyzing->Step 8, implementing->Step 12, verifying->Step 14,',
+        'iterating->Step 17, logging->Step 19, retrospective->Step 20',
     ])
 
 

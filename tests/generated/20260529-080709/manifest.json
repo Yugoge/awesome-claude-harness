@@ -84,18 +84,18 @@
           {
             "file": "commands/dev.md",
             "section_anchor": "Graphify enrichment",
-            "section_end": "### Step 8",
-            "pattern": "GRAPHIFY_SENTINEL=.*graphify\\.json",
+            "section_end": "### Step 10",
+            "pattern": "graphify\\.json",
             "expect": "match",
-            "rationale": "sentinel variable assignment must appear within the Graphify enrichment block, not at line 712 where test-writer skip-sentinel appears"
+            "rationale": "sentinel file path containing graphify.json must be named in prose within the Graphify enrichment block"
           },
           {
             "file": "commands/dev.md",
             "section_anchor": "Graphify enrichment",
-            "section_end": "### Step 8",
-            "pattern": "if.*-f.*GRAPHIFY_SENTINEL\\|if.*GRAPHIFY_SENTINEL.*exists",
+            "section_end": "### Step 10",
+            "pattern": "sentinel.*absent|absent.*sentinel|skipped.sentinel_absent",
             "expect": "match",
-            "rationale": "if-block guarding Agent dispatch must appear in graphify section"
+            "rationale": "prose must describe the absent-sentinel case: skip dispatch and record graphify_status=skipped/sentinel_absent"
           }
         ]
       }

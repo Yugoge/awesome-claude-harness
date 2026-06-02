@@ -37,28 +37,28 @@ def _slice(text: str, start_re: str, end_re: str) -> str:
 def test_AC_11():
     """
     GIVEN: commands/dev.md is read as text
-    WHEN:  (a) file-wide check for decimal Sub-step labels; (b) scope-anchored check in the Step 12 region for the spec-section-updates cross-reference; (c) scope-anchored check in the '## Mascot Score Changes' section for the score-update-events cross-reference
-    THEN:  no 'Sub-step 12.\\d' label remains anywhere; within Step 12 (between '^### Step 12:' and '^### Step 13:') a cross-reference to 'spec section updates' exists as integer-step prose; within the '## Mascot Score Changes' summary section a phrase referencing 'Step 12' score-update events exists
+    WHEN:  (a) file-wide check for decimal Sub-step labels; (b) scope-anchored check in the Step 14 region for the spec-section-updates cross-reference; (c) scope-anchored check in the '## Mascot Score Changes' section for the score-update-events cross-reference
+    THEN:  no 'Sub-step N.\\d' label remains anywhere; within Step 14 (between '^### Step 14:' and '^### Step 15:') a cross-reference to 'spec section updates' exists as integer-step prose; within the '## Mascot Score Changes' summary section a phrase referencing 'Step 14' score-update events exists
     """
     assert DEV_MD.is_file(), f"missing commands/dev.md: {DEV_MD}"
     text = DEV_MD.read_text(encoding="utf-8")
 
-    # (a) file-wide no decimal Sub-step 12.\d
-    decimal_hits = re.findall(r"Sub-step 12\.\d", text)
+    # (a) file-wide no decimal Sub-step N.\d (generalized guard so a bad Sub-step 14.0 cannot slip through)
+    decimal_hits = re.findall(r"Sub-step \d+\.\d", text)
     assert not decimal_hits, (
-        f"decimal Sub-step 12.N labels remain (must be integer-renumbered): {decimal_hits}"
+        f"decimal Sub-step N.N labels remain (must be integer-renumbered): {decimal_hits}"
     )
 
-    # (b) within Step 12 scope, look for cross-reference 'spec section updates'
-    step12 = _slice(text, r"^### Step 12:", r"^### Step 13:")
-    assert step12, "Step 12 section not found in commands/dev.md"
-    assert re.search(r"spec section updates", step12), (
-        "Step 12 missing required cross-reference 'spec section updates'"
+    # (b) within Step 14 scope, look for cross-reference 'spec section updates'
+    step14 = _slice(text, r"^### Step 14:", r"^### Step 15:")
+    assert step14, "Step 14 section not found in commands/dev.md"
+    assert re.search(r"spec section updates", step14), (
+        "Step 14 missing required cross-reference 'spec section updates'"
     )
 
-    # (c) within '## Mascot Score Changes' scope, phrase 'score-update events ... Step 12'
+    # (c) within '## Mascot Score Changes' scope, phrase 'score-update events ... Step 14'
     mascot = _slice(text, r"^## Mascot Score Changes", r"^## ")
     assert mascot, "'## Mascot Score Changes' section not found"
-    assert re.search(r"score-update events[^\n]*Step\s+12", mascot), (
-        "Mascot Score Changes section missing 'score-update events ... Step 12' phrasing"
+    assert re.search(r"score-update events[^\n]*Step\s+14", mascot), (
+        "Mascot Score Changes section missing 'score-update events ... Step 14' phrasing"
     )

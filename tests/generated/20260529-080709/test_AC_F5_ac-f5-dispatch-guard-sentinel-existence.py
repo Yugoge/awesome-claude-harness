@@ -16,9 +16,9 @@ PROJECT_DIR = Path(__file__).parents[3]
 
 
 def _extract_graphify_section(text: str) -> str:
-    """Extract the text block between 'Graphify enrichment' anchor and '### Step 8' heading."""
+    """Extract the text block between 'Graphify enrichment' anchor and '### Step 10' heading."""
     start_match = re.search(r"Graphify enrichment", text)
-    end_match = re.search(r"### Step 8", text)
+    end_match = re.search(r"### Step 10", text)
     if not start_match or not end_match:
         return ""
     return text[start_match.start():end_match.start()]
@@ -28,19 +28,18 @@ def test_AC_F5():
     """
     GIVEN: commands/dev.md after fix applied
     WHEN:  reading the graphify dispatch block (the section between the 'Graphify enrichment' anchor
-           and the '### Step 8' heading)
-    THEN:  the Graphify enrichment section (1) assigns a sentinel variable whose value contains
-           'graphify.json' and (2) wraps the Agent dispatch in an if-block that checks whether the
-           sentinel file exists — the Agent is only dispatched when sentinel exists; when absent,
-           dispatch is skipped and graphify is recorded as skipped/sentinel_absent; (3) the
-           graph-summary.json read after dispatch is conditional on sentinel having existed
+           and the '### Step 10' heading)
+    THEN:  the Graphify enrichment section (1) names the sentinel file path 'graphify.json' in prose
+           and (2) describes the absent-sentinel case in prose — when the sentinel file is absent the
+           Agent dispatch is skipped and graphify is recorded as graphify_status=skipped/sentinel_absent;
+           (3) the graph-summary.json read after dispatch is conditional on the sentinel having existed
     """
     dev_md_text = (PROJECT_DIR / "commands/dev.md").read_text(encoding="utf-8")
 
     section = _extract_graphify_section(dev_md_text)
     assert section, (
         "Could not extract graphify enrichment section from commands/dev.md — "
-        "missing 'Graphify enrichment' anchor or '### Step 8' heading"
+        "missing 'Graphify enrichment' anchor or '### Step 10' heading"
     )
 
     # Pattern 1: sentinel file path (graphify.json) named in prose within the graphify section

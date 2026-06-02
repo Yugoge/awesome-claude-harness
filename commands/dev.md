@@ -119,7 +119,7 @@ Pass `view_paths.ba`, `view_paths.qa`, `view_paths.dev`, etc. alongside (not in 
 
 **Edge cases**:
 - Empty `$ARGUMENTS` → Prompt user for requirement
-- Otherwise → Pass raw text (minus --spec flag) to BA subagent in Step 2
+- Otherwise → Pass raw text (minus --spec flag) to BA subagent in Step 4
 
 **Keep this step lightweight** - BA subagent handles all analysis.
 
@@ -176,7 +176,7 @@ When `SPEC_ID` is non-empty, every Agent launch prompt for an agent that has a c
 
 **T1.7 (redev-tier123) — Orchestrator-view + Section 5 read MANDATE**: When `VIEWS_AVAILABLE` is `true`, BEFORE composing any subagent dispatch prompt, you MUST read the orchestrator view that the resolver located — `$CLAUDE_PROJECT_DIR/$VIEWS_DIR/orchestrator.md` (the views live under `docs/dev/specs/<artifact_id>/views/`, NOT under `.claude/specs/`) — AND the spec's Section 5 (User's Acceptance Criterion) verbatim from `$spec_path`. Quote the user's words from Section 5 directly into every dispatch prompt; do not paraphrase or summarize. The user's verbatim need is the binding contract — every subagent must see the user's literal request, not your reformulation.
 
-**Graphify pre-BA Bash hydrator** (between Step 1 and Step 2):
+### Step 2: Graphify pre-BA Bash hydrator
 
 Run `scripts/graphify-query.py` as a direct Bash call (NOT a subagent — avoids adding an LLM interpretation layer that could propagate confirmation bias). This is advisory: if the binary is absent or cache is unavailable, the script exits 0 with `status=unavailable` and BA proceeds with its original flow.
 
@@ -186,9 +186,9 @@ source "${CLAUDE_PROJECT_DIR}/venv/bin/activate" && python3 "$CLAUDE_PROJECT_DIR
   --requirement-file "$REQUIREMENT_DOC"
 ```
 
-Output is written to `.claude/dev-registry/$DEV_SESSION_ID/graphify/pre_query.json`. When this file exists with `status=ok` or `status=degraded`, include it in the BA dispatch prompt (Step 3) as `Pre-query context file: .claude/dev-registry/$DEV_SESSION_ID/graphify/pre_query.json` so BA sees repo structure BEFORE forming its initial interpretation. When `status=unavailable` or `status=skipped`, omit the pre-query context from the BA prompt — BA runs its original flow unchanged.
+Output is written to `.claude/dev-registry/$DEV_SESSION_ID/graphify/pre_query.json`. When this file exists with `status=ok` or `status=degraded`, include it in the BA dispatch prompt (Step 4) as `Pre-query context file: .claude/dev-registry/$DEV_SESSION_ID/graphify/pre_query.json` so BA sees repo structure BEFORE forming its initial interpretation. When `status=unavailable` or `status=skipped`, omit the pre-query context from the BA prompt — BA runs its original flow unchanged.
 
-After the query above (still between Step 1 and Step 2), fire a second advisory, non-blocking Bash call that auto-initializes the graph for the NEXT run when no cached graph exists yet. This call returns immediately and never stalls `/dev`: it launches a detached background full build (when needed) and exits at once, so this run proceeds with whatever the query already returned — the freshly-built graph only becomes available on a subsequent `/dev` run. This preserves the R-7 spirit (the pipeline never blocks on a graph build).
+After the query above (still within Step 2), fire a second advisory, non-blocking Bash call that auto-initializes the graph for the NEXT run when no cached graph exists yet. This call returns immediately and never stalls `/dev`: it launches a detached background full build (when needed) and exits at once, so this run proceeds with whatever the query already returned — the freshly-built graph only becomes available on a subsequent `/dev` run. This preserves the R-7 spirit (the pipeline never blocks on a graph build).
 
 ```bash
 # Auto-init (async, non-blocking): if no cached graph exists, launch a background
@@ -198,7 +198,7 @@ source "${CLAUDE_PROJECT_DIR}/venv/bin/activate" && python3 "$CLAUDE_PROJECT_DIR
 
 If `--no-graphify` was passed in `$ARGUMENTS`, add `--no-graphify` to the `graphify-query.py` Bash call above and skip the `ensure-async` call entirely.
 
-### Step 2: Specialist Consultation (always evaluate, never silently skip)
+### Step 3: Specialist Consultation (always evaluate, never silently skip)
 
 Before touching any specialist, you MUST evaluate each one's relevance to the issue and document the decision. Silently skipping is forbidden — skipping without assessment is itself a workflow violation.
 
@@ -261,7 +261,7 @@ Use Agent tool with:
   "
 ```
 
-Pass all specialist findings (and the full `specialists_assessed` block) to the BA subagent in Step 3 as additional context.
+Pass all specialist findings (and the full `specialists_assessed` block) to the BA subagent in Step 4 as additional context.
 
 ## Four Contracts Awareness (Orchestrator Role)
 
@@ -365,7 +365,7 @@ Layers from shallow to deep:
 When dev reports back, verify implementation layer matches BA's spec layer.
 If dev changed L1 when spec called for L3, treat as failed implementation.
 
-### Step 3: Delegate to BA Subagent
+### Step 4: Delegate to BA Subagent
 
 **Pre-dispatch (Mascot scoring injection, spec-20260518-225715 §5.1)**:
 
@@ -413,7 +413,7 @@ Use Task tool with:
 
 **Wait for BA subagent completion** before proceeding.
 
-### Step 4: BA Clarification Loop
+### Step 5: BA Clarification Loop
 
 **If BA returns `status: "needs_clarification"`**:
 
@@ -447,11 +447,11 @@ Use Task tool with:
 **Loop rules**:
 - Maximum 3 clarification rounds
 - After round 3, BA returns best-effort with explicit assumptions
-- If BA returns `status: "ready"`, proceed to Step 5
+- If BA returns `status: "ready"`, proceed to Step 6
 
-**If BA returns `status: "ready"` on first invocation**: Skip to Step 5.
+**If BA returns `status: "ready"` on first invocation**: Skip to Step 6.
 
-### Step 5: Validate BA Output
+### Step 6: Validate BA Output
 
 **Check BA deliverables exist and are well-formed**:
 
@@ -468,14 +468,14 @@ Read BA output files:
 
 **spec_path patch (mandatory post-BA-validation step — task 20260526-053746 AC-01)**:
 
-After the sanity checks pass and BEFORE proceeding to Step 6, the orchestrator MUST patch the `spec_path` field into `docs/dev/context-<timestamp>.json` so downstream consumers (dev, QA, close) can reference the spec.
+After the sanity checks pass and BEFORE proceeding to Step 7, the orchestrator MUST patch the `spec_path` field into `docs/dev/context-<timestamp>.json` so downstream consumers (dev, QA, close) can reference the spec.
 
 The orchestrator-resolved `spec_path` is the value derived from either the explicit `--spec <path>` flag or the auto-detection fallback (whichever the orchestrator ran in Step 1). Call this resolved value `$orchestrator_resolved_spec_path`. It is either a non-null string OR null (when `--spec` was not passed AND auto-detection returned null).
 
 Apply this patch logic verbatim (AC-01 four-condition matrix + negative case):
 
 ```bash
-# Step 5 spec_path patch — task 20260526-053746 AC-01 (5-row fixture matrix)
+# Step 6 spec_path patch — task 20260526-053746 AC-01 (5-row fixture matrix)
 # Overwrites context.json.spec_path when orchestrator-resolved value is non-null
 # AND the current context.spec_path is absent / null / empty / different.
 # Negative case: when orchestrator-resolved spec_path == null, do NOT invent a value
@@ -522,15 +522,15 @@ The four positive conditions all reduce to the single check `current != new_spec
 | d | `"spec_path": "wrong.md"` (different) | `spec_path == "<orchestrator-resolved>"` |
 | e | (orchestrator-resolved is null) | `spec_path` remains absent or null (no invention) |
 
-The patch MUST run after BA validation passes but BEFORE QA (Step 6) is dispatched — QA reads `context-<timestamp>.json` and must see the patched value.
+The patch MUST run after BA validation passes but BEFORE QA (Step 7) is dispatched — QA reads `context-<timestamp>.json` and must see the patched value.
 
 **If validation fails**:
 - Re-invoke BA with specific feedback about what's missing
 - Maximum 2 re-invocations for validation fixes
 
-**If validation passes**: Apply the spec_path patch above, then proceed to Step 6
+**If validation passes**: Apply the spec_path patch above, then proceed to Step 7
 
-### Step 6: QA Validates BA Conclusions
+### Step 7: QA Validates BA Conclusions
 
 **Purpose**: Verify BA's analysis quality BEFORE Dev starts implementation. Catches unproven claims, scope mismatches, and missing investigation evidence early -- saving a wasted Dev+QA cycle.
 
@@ -620,13 +620,13 @@ Use Agent tool with:
 
 ```
 IF verdict == "pass":
-  -> BA conclusions validated. Proceed to Step 8.
+  -> BA conclusions validated. Proceed to Step 9.
 
 ELIF verdict == "fail":
-  -> Proceed to Step 7 for BA-QA iteration.
+  -> Proceed to Step 8 for BA-QA iteration.
 ```
 
-### Step 7: BA-QA Iteration Loop (if QA rejects BA)
+### Step 8: BA-QA Iteration Loop (if QA rejects BA)
 
 **Iteration guard**: Maximum 3 BA-QA iterations to prevent infinite loops
 
@@ -640,7 +640,7 @@ Unresolved objections:
 {summary of remaining QA objections}
 
 Appending unresolved objections to context JSON under `ba_qa_unresolved_objections`.
-Proceeding to Step 8 with documented assumptions.
+Proceeding to Step 9 with documented assumptions.
 ```
 
 **If BA-QA iteration <= 3**:
@@ -685,17 +685,19 @@ Use Agent tool with:
   "
 ```
 
-**After BA re-delivers**: Return to Step 5 (validate BA output), then Step 6 (QA re-validates).
+**After BA re-delivers**: Return to Step 6 (validate BA output), then Step 7 (QA re-validates).
 
 **Rule**: Every BA invocation MUST be followed by QA validation. No exceptions.
 
 **Iteration tracking**: Update TodoWrite with BA-QA iteration number.
 
-**Graphify enrichment** (between Step 7 and Step 8):
+### Step 9: Graphify enrichment
 
-After BA-QA validation passes, check whether the graphify sentinel file exists before dispatching the graphify subagent. This is advisory — if the sentinel is absent (graphify binary not installed) or graphify returns status=skipped, proceed to Step 8 without delay.
+> **Cross-file label note**: The agent-file and integration-doc interstitial labels (e.g. "between Step 7 and Step 8" in `agents/graphify.md`, `agents/dev.md`, and `docs/reference/graphify-integration.md`) are the **cross-file canonical position-label** for this enrichment touchpoint and are intentionally NOT renumbered to match this command's `### Step 9` heading; the apparent mismatch is expected, so future readers should not "fix" it.
 
-Before dispatching graphify, check whether the sentinel file exists at `$CLAUDE_PROJECT_DIR/.claude/dev-registry/$DEV_SESSION_ID/graphify.json`. If absent for any reason, do not dispatch; record `graphify_status=skipped/sentinel_absent`; do not read `graph-summary.json`; proceed to Step 8. If present, dispatch graphify, then record the resulting status from `graph-summary.json` when available.
+After BA-QA validation passes, check whether the graphify sentinel file exists before dispatching the graphify subagent. This is advisory — if the sentinel is absent (graphify binary not installed) or graphify returns status=skipped, proceed to Step 10 without delay.
+
+Before dispatching graphify, check whether the sentinel file exists at `$CLAUDE_PROJECT_DIR/.claude/dev-registry/$DEV_SESSION_ID/graphify.json`. If absent for any reason, do not dispatch; record `graphify_status=skipped/sentinel_absent`; do not read `graph-summary.json`; proceed to Step 10. If present, dispatch graphify, then record the resulting status from `graph-summary.json` when available.
 
 If the sentinel file is present, dispatch the graphify subagent:
 
@@ -716,16 +718,16 @@ Use Agent tool with:
 
 If the sentinel is absent, record `graphify_status=skipped/sentinel_absent` in the todo list.
 
-When sentinel existed and graphify completes (or is skipped), check `.claude/dev-registry/<DEV_SESSION_ID>/graphify/graph-summary.json` for the status field and record it in the todo list. Then continue to Step 8.
+When sentinel existed and graphify completes (or is skipped), check `.claude/dev-registry/<DEV_SESSION_ID>/graphify/graph-summary.json` for the status field and record it in the todo list. Then continue to Step 10.
 
-### Step 8: Agent dispatch — Delegate to Dev Subagent
+### Step 10: Agent dispatch — Delegate to Dev Subagent
 
 **TodoWrite ordering reminder (task 20260519-211515 R3 / AC3)**: TodoWrite mark-as-in_progress for step N must precede any Agent() call dispatched within step N.
 The orchestrator MUST emit a TodoWrite call updating the Step-N todo item to `in_progress` BEFORE invoking any Agent() (or Task tool) dispatch in Step N. REQUIRED ordering: TodoWrite first, Agent() second. Always update the in_progress marker BEFORE dispatch. Before dispatch of test-writer or Dev (or any subagent in any Step), the matching Todo item MUST already be in_progress; otherwise do not dispatch.
 
 **Pre-dispatch — Test-Writer dispatch (conditional, between BA and Dev per spec-20260518-225715 §5.2 line 167: "Position: BA -> [test-writer] -> Dev -> QA")**:
 
-**Test-writer skip-sentinel honor (task 20260519-211515 R4 / V_TW, CF2-14)**: BEFORE evaluating the gate below, read `_test_writer_skip_reason` from BA's context JSON. If that field is a non-empty string, the test-writer dispatch MUST be skipped on this cycle regardless of complexity_tier / risk_level — the sentinel is an explicit BA-authored skip signal. Record `test_writer_expected = false` and the skip reason in the todo list. Do NOT route a stale-content acceptance-criteria JSON to test-writer; doing so generates wrong-cycle pytest skeletons. This honor-clause is the V_TW enforcement; commands/dev.md Step 8 must reference `_test_writer_skip_reason` or `skip test-writer` language so the sentinel is not decorative.
+**Test-writer skip-sentinel honor (task 20260519-211515 R4 / V_TW, CF2-14)**: BEFORE evaluating the gate below, read `_test_writer_skip_reason` from BA's context JSON. If that field is a non-empty string, the test-writer dispatch MUST be skipped on this cycle regardless of complexity_tier / risk_level — the sentinel is an explicit BA-authored skip signal. Record `test_writer_expected = false` and the skip reason in the todo list. Do NOT route a stale-content acceptance-criteria JSON to test-writer; doing so generates wrong-cycle pytest skeletons. This honor-clause is the V_TW enforcement; commands/dev.md Step 10 must reference `_test_writer_skip_reason` or `skip test-writer` language so the sentinel is not decorative.
 
 Gate evaluation (mandatory): read `complexity_tier` and `risk_level` from BA's context JSON. If `complexity_tier ∈ {STANDARD, COMPLEX}` OR `risk_level == "high"`, then `test_writer_expected = true`; otherwise `test_writer_expected = false`. Pass `test_writer_expected` into the Dev and QA dispatch prompts.
 
@@ -754,7 +756,7 @@ Use Task tool with:
 
 After the test-writer subagent completes, verify on disk that ALL THREE of `tests/generated/<task_id>/manifest.json` (per-task active manifest), `tests/generated/manifest.json` (global index) AND `docs/dev/test-writer-report-<task_id>.json` exist. If any is missing, abort the cycle with an error (the orchestrator MUST NOT proceed to Dev with a silently-skipped test-writer). When `test_writer_expected == false`, SKIP the dispatch (record skip rationale in the todo list).
 
-After test-writer completes (or is skipped), the generated test file paths and manifest path are passed onward to Dev (in the dispatch prompt) and to QA (Step 11). Dev makes the skeleton tests pass; QA verifies the manifest at Step 11 Phase 5 AND that `test_writer_expected == true` implies manifest/report existence (Phase 5 fails with `primary_cause: "dev_implementation"` or `"qa_oversight"` if expected but missing).
+After test-writer completes (or is skipped), the generated test file paths and manifest path are passed onward to Dev (in the dispatch prompt) and to QA (Step 13). Dev makes the skeleton tests pass; QA verifies the manifest at Step 13 Phase 5 AND that `test_writer_expected == true` implies manifest/report existence (Phase 5 fails with `primary_cause: "dev_implementation"` or `"qa_oversight"` if expected but missing).
 
 **Pre-dispatch (Mascot scoring injection, spec-20260518-225715 §5.1)**:
 
@@ -792,7 +794,7 @@ Use Task tool with:
   BA spec file: docs/dev/ticket-<timestamp>.md (legacy: docs/dev/ba-spec-<timestamp>.md)
   Spec file: <spec_path or null>
   View file: <view_paths.dev or null — sibling views/dev.md if present>
-  Generated tests (when test-writer ran): tests/generated/<task_id>/ + per-task active manifest at tests/generated/<task_id>/manifest.json. Global index file tests/generated/manifest.json (index) is a presence sentinel only — see Step 8 test-writer dispatch for full shape.
+  Generated tests (when test-writer ran): tests/generated/<task_id>/ + per-task active manifest at tests/generated/<task_id>/manifest.json. Global index file tests/generated/manifest.json (index) is a presence sentinel only — see Step 10 test-writer dispatch for full shape.
   Write your implementation report to: docs/dev/dev-report-<timestamp>.json
   baseline_head_sha: <baseline_head_sha captured above>
   baseline_dirty_snapshot: <baseline_dirty_snapshot captured above>
@@ -804,11 +806,11 @@ Use Task tool with:
 
 **Wait for dev subagent completion** before proceeding.
 
-### Step 9: Write Canonical Aggregate Dev-Report (Parallel-Dev Only)
+### Step 11: Write Canonical Aggregate Dev-Report (Parallel-Dev Only)
 
-**Applies ONLY when N>1 parallel dev subagents were dispatched in Step 8.** Single-dev cycles SKIP this step entirely (the lone dev subagent writes `dev-report-<task-id>.json` directly).
+**Applies ONLY when N>1 parallel dev subagents were dispatched in Step 10.** Single-dev cycles SKIP this step entirely (the lone dev subagent writes `dev-report-<task-id>.json` directly).
 
-**Procedural enforcement**: This step is gated by `pretool-aggregate-check.py` (PreToolUse Agent matcher). When `docs/dev/` contains 2+ per-worker dev-report files for the same `<task-id>` AND the canonical singular `docs/dev/dev-report-<task-id>.json` is missing, the next Agent dispatch (Step 11 QA) is BLOCKED with exit 2 until the orchestrator writes the aggregate. Shard detection uses BOTH naming patterns: role-first (`dev-report-<role>-<task-id>.json`) and task-first (`dev-report-<task-id>-<worker>.json`).
+**Procedural enforcement**: This step is gated by `pretool-aggregate-check.py` (PreToolUse Agent matcher). When `docs/dev/` contains 2+ per-worker dev-report files for the same `<task-id>` AND the canonical singular `docs/dev/dev-report-<task-id>.json` is missing, the next Agent dispatch (Step 13 QA) is BLOCKED with exit 2 until the orchestrator writes the aggregate. Shard detection uses BOTH naming patterns: role-first (`dev-report-<role>-<task-id>.json`) and task-first (`dev-report-<task-id>-<worker>.json`).
 
 **Authoritative construction rule**: see the "Parallel Dev Aggregate" subsection below (Aggregate construction rule + Example aggregate JSON) for the full schema and union semantics. Summary:
 - `request_id` = `<task-id>`; `dev_report_path` = canonical singular path
@@ -886,7 +888,7 @@ when only one dev was dispatched, that dev writes
 additional aggregate (that would clobber). The aggregate rule applies ONLY
 when N>1 parallel devs were dispatched.
 
-### Step 10: Validate Dev Implementation
+### Step 12: Validate Dev Implementation
 
 **Quick validation before QA**:
 
@@ -905,9 +907,9 @@ Read dev implementation report: `docs/dev/dev-report-<timestamp>.json`
 - Refine context JSON with additional information
 - Re-invoke dev subagent (maximum 3 attempts)
 
-**If dev completed**: Proceed to Step 11
+**If dev completed**: Proceed to Step 13
 
-### Step 11: Delegate to QA Subagent
+### Step 13: Delegate to QA Subagent
 
 **Before dispatching QA, write qa_mode sentinel**:
 
@@ -946,7 +948,7 @@ Use Task tool with:
   Per-task active test manifest: tests/generated/<task_id>/manifest.json (the file QA Phase 5 reads active_tests[] from; the global file tests/generated/manifest.json (index) is only consulted as a presence sentinel — see agents/qa.md Phase 5).
   Write your verification report to: docs/dev/qa-report-<timestamp>.json
 
-  If Spec file is not null: Read the spec file FIRST. After verification, do NOT directly Edit docs/dev/specs/*.md (QA tool-policy denies write access by design — the verifier role must not mutate the spec it verifies). Instead, REPORT proposed Section 4/6/7 content via the qa-report JSON's 'qa.spec_section_updates' field with sub-fields 'section_4' (always populated when a spec is present and Section 4 measurements were taken; null otherwise), 'section_6' (populated only when verdict is fail; null otherwise), and 'section_7' (populated only when verdict is fail; null otherwise). The orchestrator applies these to the spec file in Step 12 with cycle-header create/append insertion semantics preserved. See agents/qa.md '### After Verification' under '## Overnight Spec Integration' for the QA-side prose, and agents/qa.md '## Output Format' for the JSON schema declaration.
+  If Spec file is not null: Read the spec file FIRST. After verification, do NOT directly Edit docs/dev/specs/*.md (QA tool-policy denies write access by design — the verifier role must not mutate the spec it verifies). Instead, REPORT proposed Section 4/6/7 content via the qa-report JSON's 'qa.spec_section_updates' field with sub-fields 'section_4' (always populated when a spec is present and Section 4 measurements were taken; null otherwise), 'section_6' (populated only when verdict is fail; null otherwise), and 'section_7' (populated only when verdict is fail; null otherwise). The orchestrator applies these to the spec file in Step 14 with cycle-header create/append insertion semantics preserved. See agents/qa.md '### After Verification' under '## Overnight Spec Integration' for the QA-side prose, and agents/qa.md '## Output Format' for the JSON schema declaration.
 
   INDEX-edit clarifier: future ACs targeting INDEX file edits MUST target exactly the 3 manually-managed INDEX files: '.claude/templates/INDEX.md', '.claude/scripts/INDEX.md', 'docs/dev/INDEX.md'. Do NOT target 'docs/dev/specs/INDEX.md' — that file is auto-regenerated by '.claude/hooks/posttool-doc-sync.py' (with helper '.claude/hooks/doc_sync/regen_index.py'); manual edits to it will be silently overwritten on the next doc-sync run.
   "
@@ -954,7 +956,7 @@ Use Task tool with:
 
 **Wait for QA subagent completion** before proceeding.
 
-### Step 12: Process QA Results
+### Step 14: Process QA Results
 
 Read QA report: `docs/dev/qa-report-<timestamp>.json`
 
@@ -962,7 +964,7 @@ Read QA report: `docs/dev/qa-report-<timestamp>.json`
 
 This pre-decision-tree pass applies QA's reported spec section updates to the spec file before processing the verdict.
 
-If a `Spec file` was non-null this cycle (i.e., `/dev` was invoked under `--spec` and a global spec path was passed to Step 11), the orchestrator MUST apply QA's reported spec section updates to the spec file before processing the verdict:
+If a `Spec file` was non-null this cycle (i.e., `/dev` was invoked under `--spec` and a global spec path was passed to Step 13), the orchestrator MUST apply QA's reported spec section updates to the spec file before processing the verdict:
 
 (a) Check whether `Spec file` was non-null this cycle. If null, skip to the decision tree below.
 
@@ -988,15 +990,15 @@ After the spec section updates pass completes (or is skipped on non-spec cycles)
 
 ```
 IF qa.status == "pass":
-  → Proceed to Step 13 (Update Permissions)
+  → Proceed to Step 15 (Update Permissions)
 
 ELIF qa.status == "warning":
   → Check if minor issues acceptable
-  → If yes: Proceed to Step 13 (Update Permissions)
-  → If no: Proceed to Step 14 (Iteration)
+  → If yes: Proceed to Step 15 (Update Permissions)
+  → If no: Proceed to Step 16 (Iteration)
 
 ELIF qa.status == "fail":
-  → Proceed to Step 14 (Iteration)
+  → Proceed to Step 16 (Iteration)
 ```
 
 **Apply Mascot score-update events (post-QA, spec-20260518-225715 §5.1)**:
@@ -1012,9 +1014,9 @@ After the verdict is known, apply score-update events based on QA outcome and it
   - Any failure with `primary_cause = "ba_spec"` → `score-update.sh --agent ba --event qa_reject_ba --note "<task_id>"` AND `--agent dev --event qa_reject_ba` (dev -5, ba -8).
   - `primary_cause = "qa_oversight"` or `"environment"` → no auto-score update (manual review).
 
-Each score-update call is independent; failures are non-blocking (a failed score-update writes to stderr but does not abort the dev cycle). Include the score deltas summary in the Step 15 completion report under a `score_updates` array.
+Each score-update call is independent; failures are non-blocking (a failed score-update writes to stderr but does not abort the dev cycle). Include the score deltas summary in the Step 17 completion report under a `score_updates` array.
 
-### Step 13: Update Settings.json Permissions
+### Step 15: Update Settings.json Permissions
 
 **CRITICAL**: Auto-update permissions for new functionality.
 
@@ -1087,7 +1089,7 @@ You can now use these scripts without permission prompts.
 - If permission already exists → Skip, don't duplicate
 - If user denies update → Log to completion report
 
-### Step 14: Iteration Loop (if QA fails)
+### Step 16: Iteration Loop (if QA fails)
 
 #### Layer-escalation gate (mandatory)
 
@@ -1176,11 +1178,11 @@ jq -s '.[0] * {
   > docs/dev/context-iter<N>-<timestamp>.json
 ```
 
-**Return to Step 8** with new context JSON
+**Return to Step 10** with new context JSON
 
 **Iteration tracking**: Update TodoWrite with iteration number
 
-### Step 15: Generate Completion Report + Workflow Update
+### Step 17: Generate Completion Report + Workflow Update
 
 **QA passed! Generate final report.**
 
@@ -1255,7 +1257,7 @@ jq -s '.[0] * {
 
 ## Mascot Score Changes (spec-20260518-225715 §5.1)
 
-Summarise score-update events from Step 12 and any user-rating events from `/close` in a table:
+Summarise score-update events from Step 14 and any user-rating events from `/close` in a table:
 
 | Agent | Event | Delta | Old → New |
 |-------|-------|-------|-----------|
@@ -1509,36 +1511,36 @@ if __name__ == "__main__":
 **Step 1**: Parse requirement
 - Requirement: "Fix timeout in API"
 
-**Step 2**: Consult specialists (optional)
+**Step 3**: Consult specialists (optional)
 - No specialists needed for this requirement → skip
 
-**Step 3**: Delegate to BA subagent
+**Step 4**: Delegate to BA subagent
 - BA returns `needs_clarification` with questions
 
-**Step 4**: BA clarification loop
+**Step 5**: BA clarification loop
 - Round 1: Which API? → POST /api/data, timeout 5s, need 95% completion
 - Round 2: BA has enough clarity → returns `ready`
 - BA creates: `ba-spec-20251226-114500.md` + `context-20251226-114500.json`
 
-**Step 5**: Validate BA output
+**Step 6**: Validate BA output
 - Both files exist with required sections
 
-**Step 8**: Dev subagent
+**Step 10**: Dev subagent
 - Created: `scripts/measure-api-latency.sh`
 - Created: `scripts/validate-api-timeout.sh`
 - Modified: `config/api.json`
 - Saved report: `docs/dev/dev-report-20251226-114500.json`
 
-**Step 11**: QA subagent
+**Step 13**: QA subagent
 - Verified all scripts work
 - Confirmed root cause addressed
 - Status: PASS
 - Saved report: `docs/dev/qa-report-20251226-114500.json`
 
-**Step 12**: Process results
+**Step 14**: Process results
 - QA passed → proceed to completion
 
-**Step 15**: Completion report
+**Step 17**: Completion report
 - Generated: `docs/dev/completion-20251226-114500.md`
 - Presented summary to user
 

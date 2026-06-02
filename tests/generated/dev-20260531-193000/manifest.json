@@ -1,0 +1,209 @@
+{
+  "schema_version": "1.1",
+  "task_id": "dev-20260531-193000",
+  "generated_at": "2026-06-02T09:03:06Z",
+  "active_tests": [
+    {
+      "task_id": "dev-20260531-193000",
+      "ac_id": "AC1",
+      "ac_uid": "8ecf6d5939334137",
+      "type": "data",
+      "file": "tests/generated/dev-20260531-193000/test_AC1_8ecf6d5939334137.py",
+      "status": "active",
+      "hook_check": {
+        "file": "commands/dev.md",
+        "heading_sequence": "1..17",
+        "graphify_pre_ba": "### Step 2",
+        "graphify_enrichment": "### Step 9",
+        "forbid_regex": [
+          "Step [0-9]+\\.[0-9]+",
+          "Sub-step [0-9]+\\.[0-9]+"
+        ]
+      }
+    },
+    {
+      "task_id": "dev-20260531-193000",
+      "ac_id": "AC2",
+      "ac_uid": "987586023925ac91",
+      "type": "data",
+      "file": "tests/generated/dev-20260531-193000/test_AC2_987586023925ac91.py",
+      "status": "active",
+      "hook_check": {
+        "file": "commands/dev.md",
+        "semantic_refs": {
+          "ba_dispatch": "Step 4",
+          "post_ba_qa_pass_proceed": "Step 9",
+          "post_ba_qa_exhausted_proceed": "Step 9",
+          "graphify_block_proceed": "Step 10",
+          "decision_tree_permissions": "Step 15",
+          "decision_tree_iteration": "Step 16"
+        },
+        "clarifier_present": true,
+        "clarifier_anchor_regex": "cross-file canonical position-label",
+        "clarifier_anchor_expect": "match"
+      }
+    },
+    {
+      "task_id": "dev-20260531-193000",
+      "ac_id": "AC3",
+      "ac_uid": "e60956a0d2141780",
+      "type": "data",
+      "file": "tests/generated/dev-20260531-193000/test_AC3_e60956a0d2141780.py",
+      "status": "active",
+      "hook_check": {
+        "test": "tests/generated/20260529-080709/test_AC_F5_ac-f5-dispatch-guard-sentinel-existence.py",
+        "manifest": "tests/generated/20260529-080709/manifest.json",
+        "ac_json": "docs/dev/acceptance-criteria-20260529-080709.json",
+        "section_end": "### Step 10",
+        "manifest_patterns_must_equal": [
+          "graphify\\.json",
+          "sentinel.*absent|absent.*sentinel|skipped.sentinel_absent"
+        ],
+        "manifest_patterns_must_not_match": [
+          "GRAPHIFY_SENTINEL=",
+          "if.*-f.*GRAPHIFY_SENTINEL"
+        ],
+        "narrative_reconciliation_nf4": {
+          "test_py_helper_docstring_line19": "end-anchor reference '### Step 8' -> '### Step 10'",
+          "test_py_test_docstring_lines28_37": "rewrite 'assigns a sentinel variable...wraps the Agent dispatch in an if-block' -> prose framing (names graphify.json in prose; describes absent-sentinel skip recording graphify_status=skipped/sentinel_absent); '### Step 8' -> '### Step 10'",
+          "ac_json_when_line74": "'### Step 8' section_end reference -> '### Step 10'",
+          "ac_json_then_line75": "rewrite shell-var/if-block framing -> prose framing matching the actual prose assertions",
+          "metadata_preserved": "AC_UID + AC_TYPE lines preserved verbatim",
+          "blocking": false
+        }
+      }
+    },
+    {
+      "task_id": "dev-20260531-193000",
+      "ac_id": "AC4",
+      "ac_uid": "0ed521198967373d",
+      "type": "data",
+      "file": "tests/generated/dev-20260531-193000/test_AC4_0ed521198967373d.py",
+      "status": "active",
+      "hook_check": {
+        "tests": [
+          "tests/generated/20260520-221452/test_AC_05_ae1de0c57d012c17.py",
+          "tests/generated/20260520-221452/test_AC_11_5bbe970f97d071a1.py"
+        ],
+        "manifest": "tests/generated/20260520-221452/manifest.json",
+        "ac_json": "docs/dev/acceptance-criteria-20260520-221452.json",
+        "ac05_slice": [
+          "### Step 13:",
+          "### Step 14:"
+        ],
+        "ac11_slice": [
+          "### Step 14:",
+          "### Step 15:"
+        ],
+        "mascot_ref": "Step 14",
+        "decimal_guard": "Sub-step \\d+\\.\\d"
+      }
+    },
+    {
+      "task_id": "dev-20260531-193000",
+      "ac_id": "AC5",
+      "ac_uid": "9155bc31b833cecf",
+      "type": "data",
+      "file": "tests/generated/dev-20260531-193000/test_AC5_9155bc31b833cecf.py",
+      "status": "active",
+      "hook_check": {
+        "locked_tests": [
+          "tests/generated/20260529-080709/test_AC_F2_ac-f2-no-decimal-prose-steps.py",
+          "tests/generated/dev-20260531-134455/test_AC_A9_d81ad0209df85a15.py",
+          "tests/generated/20260527-132200/test_AC1_ac1-graphify-bash-hydrator.py",
+          "tests/generated/20260527-132200/test_AC6_ac6-integer-step-numbering.py"
+        ],
+        "must_remain": "green"
+      }
+    },
+    {
+      "task_id": "dev-20260531-193000",
+      "ac_id": "AC6",
+      "ac_uid": "61f9c15a27aeb327",
+      "type": "data",
+      "file": "tests/generated/dev-20260531-193000/test_AC6_61f9c15a27aeb327.py",
+      "status": "active",
+      "hook_check": {
+        "files": [
+          "commands/dev-overnight.md",
+          "scripts/todo/dev-overnight.py",
+          "schemas/cycle-contract.v1.json",
+          "hooks/prompt-workflow.py"
+        ],
+        "build_pipelines_unchanged": "scripts/build-pipelines-from-triage.py is NOT modified (no pipeline_id field; NF3 retraction)",
+        "pre_ba": "graphify-query.py before Step 8",
+        "enrichment": "graphify enrichment runs before EVERY Agent(subagent_type:dev) dispatch (Step 12 :1157, Step 13 :1204, Step 17 :1372) via the B10 shared precondition; the word 'validated' must NOT gate it",
+        "enrichment_invariant_b2_inv": "graphify enrichment (Step 11g) MUST have run against the context Dev will consume BEFORE EVERY Agent(subagent_type:dev) dispatch in /dev-overnight, enforced at the Dev-DISPATCH boundary (a single shared precondition), NOT scoped to 'Step 12' and NOT by per-branch insertions; the word 'validated' must NOT gate it",
+        "dev_dispatch_sites_covered": [
+          "commands/dev-overnight.md:1157 (Step 12 parallel Dev loop; reached by :1076 PASS, :1096 EXHAUSTED, :344 continuation/resume)",
+          "commands/dev-overnight.md:1204 (Step 13 dev-blocked re-invoke, up to 3 attempts, may follow context refinement)",
+          "commands/dev-overnight.md:1372 (Step 17 iteration-loop Dev dispatch, against fresh context-iter<N> written at :1368)"
+        ],
+        "shared_precondition_b10": "ONE reusable precondition block (e.g. ### Step 11g: Graphify Dev-Dispatch Precondition, level-3) routed through by ALL THREE Dev-dispatch sites immediately before their Agent(subagent_type:dev) call; future Dev-dispatch sites MUST also route through it; advisory/fail-open",
+        "idempotency_context_fingerprint": "SKIP re-enrich ONLY when an existing graphify-run.json for ${DEV_SESSION_ID}-pipeline-<index> has {pipeline_index, iteration, context_path, context_sha256} matching the CURRENT Dev context; absent-or-mismatched fingerprint => RE-ENRICH (so Step 13 refinement / Step 17 new-iteration context is re-enriched). Bare-existence idempotency is FORBIDDEN (codex round-4 #3: would wrongly skip on changed context).",
+        "contract_step_marking_b10": "mark Step 11g in-progress BEFORE the precondition's graphify Agent call; restore the surrounding step (12/13/17) in-progress before the Dev Agent call — else pretool-subagent-enforce.py:76-82 _current_step_label validates graphify against the Dev required_call (role mismatch, spurious exit-2 risk) (codex round-4 #4)",
+        "continuation_prose_b11": "commands/dev-overnight.md:341-348 Continuation-Mode map states a resumed current_phase:implementing pipeline still enriches before Dev via the B10 precondition; AND resume eligibility is derived from on-disk artifacts (BA+BA-QA present, no Dev report yet => eligible) so a per-pipeline phase/artifact mismatch never silently skips enrichment (codex round-4 #5); no new current_phase enum value required (B10 precondition makes 'enriching' phase unnecessary)",
+        "runtime_resume_map_b12": "hooks/prompt-workflow.py build_overnight_continuation:421-451 phase->step map (:450) reconciled so ALL phase->step numbers (not just implementing — codex round-4 #6) match the dev-overnight.md markdown map at :341-348; stale 'implementing->Step 6' MUST NOT survive; this is a string-data fix, NOT a contract-hook control-flow edit",
+        "graphify_authorized_on_continuation_path": "the cycle-contract Step 11g {role:graphify, pipeline_id:null, mode:null} wildcard entry (B4/B4a, QA-verified) authorizes the graphify dispatch on the continuation path exactly as on pass/exhausted paths (pipeline_id:null is a role-only wildcard matching any runtime pipeline_id from any entry path); UNCHANGED",
+        "todo_step": "Step 11g",
+        "todo_subagent_call": "{agent:graphify, subagent_type:graphify}",
+        "md_heading_level": "### Step 11g: (level-3, matched by MD_HEADING_RE ^###\\s+Step\\s+\\d+[a-z]?:)",
+        "steps_12_21": "unchanged",
+        "role_enum_includes": "graphify",
+        "graphify_required_call_shape": "EXACTLY ONE step-level entry {step:11g, role:graphify, pipeline_id:null, mode:null, expected_output_path:<one aggregate path>, schema_name:graphify-run.v1, max_retries}",
+        "pipeline_id_is_null": "required_calls graphify entry pipeline_id MUST be null (role-only wildcard); NOT a concrete pipeline-<index>",
+        "no_per_pipeline_graphify_entry": "do NOT publish one {step:11g} entry per pipeline (matcher collides on same-specificity, _select_matched_entry:295-304; identity ignores expected_output_path, _same_required_call:490-494)",
+        "wildcard_no_exit2": "validate_required_call(role='graphify', pipeline_id=None or 'pipeline-3', step='11g') passes against entry.pipeline_id:null (severity != fail); _check_role_pipeline:315-316 enforces equality only when expected_pipeline is not None",
+        "graphify_outside_mark_pipeline": "graphify is not in {ba,dev,qa}; _mark_pipeline:505-508 ignores it, so no per-pipeline contract status is needed",
+        "aggregate_artifact_always_written": "single expected_output_path is always written (graphify_status ok|skipped|unavailable) so closeout never fails on must_run (B7)",
+        "task_id_scope": "${DEV_SESSION_ID}-pipeline-<index> (derived from existing pipeline.index/timestamp_suffix; sidecar only, not contract-gated)",
+        "sentinel_preserved": [
+          "251",
+          "263"
+        ]
+      }
+    },
+    {
+      "task_id": "dev-20260531-193000",
+      "ac_id": "AC7",
+      "ac_uid": "258d36f1701773e2",
+      "type": "data",
+      "file": "tests/generated/dev-20260531-193000/test_AC7_258d36f1701773e2.py",
+      "status": "active",
+      "hook_check": {
+        "sync_check": "hooks/check-todo-md-sync.py",
+        "sync_check_is_advisory": "main() always returns 0 (prints stderr warnings, never exit-2)",
+        "step_11g_token_in": [
+          "scripts/todo/dev-overnight.py (Step 11g content)",
+          "commands/dev-overnight.md (### Step 11g: level-3 heading matching MD_HEADING_RE ^###\\s+Step\\s+\\d+[a-z]?:)"
+        ],
+        "no_new_drift_attributable_to_step_11g": "running check-todo-md-sync.py introduces no NEW dev-overnight warning naming Step 11g",
+        "pre_existing_drift_baseline": [
+          "clean: stale in .py — Step 7",
+          "clean: stale in .py — Step 8",
+          "clean: stale in .py — Step 9",
+          "clean: stale in .py — Step 10",
+          "dev-command: stale in .py — Step 15",
+          "dev-command: stale in .py — Step 16",
+          "dev-overnight: stale in .py — Step 2",
+          "dev-overnight: stale in .py — Step 3",
+          "dev-overnight: stale in .py — Step 4",
+          "dev: stale in .py — Step 16",
+          "dev: stale in .py — Step 17"
+        ],
+        "pre_existing_drift_root_cause": "dev-overnight Steps 2/3/4 are #### level-4 headings (commands/dev-overnight.md:442,525,694); MD_HEADING_RE (level-3 ### only) does not match; pre-existing, out of scope (NF1)",
+        "forbidden_assertion": "no drift warning at all (unsatisfiable against pre-existing baseline; would force unrelated scope creep)",
+        "coverage_file": "docs/reference/graphify-integration.md",
+        "coverage_row": "/dev-overnight full dual-touchpoint",
+        "preserve_literals": [
+          "between Step 1 and Step 2",
+          "between Step 7 and Step 8"
+        ],
+        "forbid_regex": [
+          "Step [0-9]+\\.[0-9]+"
+        ]
+      }
+    }
+  ],
+  "archived_tests": []
+}

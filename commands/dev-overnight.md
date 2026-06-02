@@ -101,7 +101,7 @@ Step 1: Read state file + enter worktree (first run only)
   |       Time expired? → generate summary, cleanup
   |                |
   |       TODO COMPLETION DETECTION (PostToolUse hook)
-  |       All 21 steps completed?
+  |       All todo steps completed?
   |         YES + time remaining: reset todos, loop to Step 2
   |         YES + time expired: allow natural completion
   |         NO: continue current step
@@ -341,12 +341,14 @@ When you see "OVERNIGHT CONTINUATION" injected by the prompt hook, you are in co
    - `initializing` or `exploring` -> Step 2 (PM Plan)
    - `pipeline_creation` -> Step 6 (Create pipelines)
    - `analyzing` -> Step 8 (Parallel BA)
-   - `implementing` -> Step 12 (Parallel Dev)
+   - `implementing` -> Step 12 (Parallel Dev) — the shared **Step 11g** Dev-dispatch precondition (B10) runs graphify enrichment for any pipeline whose current Dev context has not yet been enriched (fingerprint absent/mismatched) BEFORE dispatching Dev, so a resumed session still enriches before Dev; no new `current_phase` enum value is required because the idempotent precondition fires at the Step 12 dispatch the resume lands on
    - `verifying` -> Step 14 (Prepare QA Environment)
    - `iterating` -> Step 17 (Iteration loops)
    - `logging` -> Step 19 (Log)
    - `retrospective` -> Step 20 (PM Retro)
 4. The hook has already injected the command specification and state summary into this prompt
+
+**Resume eligibility from on-disk artifacts (B11)**: the Step 11g precondition uses the per-pipeline `phase` filter while continuation routes by the session-level `current_phase`; these are separate. On a `current_phase: implementing` resume, the orchestrator MUST inspect the ACTIVE pipelines and derive eligibility from on-disk artifacts: any pipeline with BA + BA-QA artifacts present but no Dev report yet is eligible for the Step 11g precondition (treat it as `ba_complete` for dispatch purposes). If a pipeline's recorded `phase` and its on-disk artifacts disagree, the orchestrator MUST NOT silently skip it — resume to the artifact-derived correct step. This prevents a resumed `implementing` pipeline whose per-pipeline `phase` was never advanced to `ba_complete` from being skipped by BOTH the filter AND enrichment.
 
 ---
 
@@ -788,7 +790,8 @@ Immediately after PM Triage completes (Step 4) and before pipeline creation (Ste
 - `spec_id` (e.g. the spec id when `spec_mode == "user-provided"`, or `autonomous-<sid>` otherwise)
 - `session_id`, `cycle_id` (1-indexed integer), `created_at` (ISO-8601 UTC with terminal `Z`)
 - `monolith_sha256` (sha256 of the monolithic spec file when present, else `null`)
-- `required_calls`: one entry per Agent call the orchestrator commits to making this cycle. Each entry: `{step, role, mode|null, pipeline_id|null, expected_output_path, schema_name, max_retries}`. Step ids align with the canonical todo (`2`, `3-<specialist>`, `4`, `8`, `10`, `12`, `15`, `20`). Step 14 (Prepare QA Environment) is orchestrator-direct and dispatches no subagent, so it is NOT listed here.
+- `required_calls`: one entry per Agent call the orchestrator commits to making this cycle. Each entry: `{step, role, mode|null, pipeline_id|null, expected_output_path, schema_name, max_retries}`. Step ids align with the canonical todo (`2`, `3-<specialist>`, `4`, `8`, `10`, `11g`, `12`, `15`, `20`). Step 14 (Prepare QA Environment) is orchestrator-direct and dispatches no subagent, so it is NOT listed here.
+- **Graphify (`Step 11g`)**: add EXACTLY ONE step-level entry `{step: "11g", role: "graphify", mode: null, pipeline_id: null, expected_output_path: "docs/dev/overnight/<session_id>/cycle-<N>/graphify-run.json", schema_name: "graphify-run.v1", max_retries: 0}`. That aggregate path is ALWAYS written (with at least the schema-required `status` and `task_id` fields) so the existence gate never fails, even when every pipeline's graphify was skipped/unavailable. `pipeline_id` MUST be `null` — a role-only wildcard (`hooks/lib/contract_runtime.py` `_check_role_pipeline` enforces equality only when `entry.pipeline_id is not None`), so the graphify dispatch on ANY Dev-dispatch site (Step 12 / Step 13 / Step 17), with any/empty runtime pipeline_id, is authorized and does NOT exit-2 block — PROVIDED `Step 11g` is the in-progress step at dispatch time (see Step 11g precondition). Do NOT publish a concrete `pipeline-<index>` (the contract is published at Step 4, before the Step-6 pipeline builder that would be its only source) and do NOT publish one entry per pipeline (same-specificity entries collide under the matcher). The per-pipeline `graphify-run.json` / `focused-subgraph.json` files are sidecar artifacts, NOT contract entries. The single entry's `expected_output_path` is one aggregate path that is ALWAYS written (with `graphify_status` `ok|skipped|unavailable`) so closeout never fails. `scripts/build-pipelines-from-triage.py` is UNCHANGED (no `pipeline_id` field needed).
 - `pipelines`: keyed by pipeline id with `{ba_status, dev_status, qa_status, artifact_paths {ba, dev, qa}}` — initialise all statuses to `pending`.
 - `specialist_selection`: object keyed by specialist name with `{decision, reason, scope, budget {max_pages, max_viewports, max_minutes}}`. Specialists not chosen by PM Plan get `decision: "skip"` (or are omitted entirely — both forms are valid per AC12 variable-specialist-count).
 
@@ -905,6 +908,19 @@ The focus string is a qualitative directive from the user (e.g., "high quality o
 The `focus_verification_criteria` array will be passed to each QA subagent in Step 15.
 
 ### Step 8: Run All BA Subagents (Parallel)
+
+**Graphify pre-BA Bash hydrator** (per pipeline, before each BA dispatch; mirrors `commands/dev.md` Step 2 — do NOT duplicate its full prose). Before dispatching BA for pipeline[i], run `scripts/graphify-query.py` as a direct read-only Bash call (NOT a subagent — gate-exempt, no contract impact), advisory and fail-open: if the binary or cache is absent it exits 0 with `status=unavailable` and BA proceeds unchanged. Use a **pipeline-scoped task-id** `${DEV_SESSION_ID}-pipeline-{pipeline.index}` (derived from the existing `pipeline.index`/`pipeline.timestamp_suffix`, NOT a new field) and a **per-pipeline requirement file**, NOT the session-level requirement file, so concurrent fanout writes to disjoint `.claude/dev-registry/${DEV_SESSION_ID}-pipeline-{pipeline.index}/graphify/pre_query.json`. First materialize a per-pipeline requirement file that carries the pipeline's strongest anchors — its `description` AND `location` (file/path hints) AND `spec_path` — because in autonomous mode the spec template alone may omit the file/path `location`; then pass that file:
+
+```bash
+mkdir -p ".claude/dev-registry/${DEV_SESSION_ID}-pipeline-{pipeline.index}/graphify"
+printf '%s\n\nLocation: %s\n\nSpec: %s\n' "{pipeline.description}" "{pipeline.location}" "{pipeline.spec_path}" \
+  > ".claude/dev-registry/${DEV_SESSION_ID}-pipeline-{pipeline.index}/graphify/requirement.txt"
+source "${CLAUDE_PROJECT_DIR}/venv/bin/activate" && python3 "$CLAUDE_PROJECT_DIR/scripts/graphify-query.py" \
+  --task-id "${DEV_SESSION_ID}-pipeline-{pipeline.index}" \
+  --requirement-file ".claude/dev-registry/${DEV_SESSION_ID}-pipeline-{pipeline.index}/graphify/requirement.txt" || true
+```
+
+When that pipeline's `pre_query.json` exists with `status=ok` or `status=degraded`, include `Pre-query context file: .claude/dev-registry/${DEV_SESSION_ID}-pipeline-{pipeline.index}/graphify/pre_query.json` in that pipeline's BA dispatch prompt only. When `status=unavailable`/`status=skipped`, omit it — BA runs its original flow unchanged. See `commands/dev.md` Step 2 graphify hydrator block for the canonical invocation. These are sidecar artifacts (not contract-gated).
 
 **Launch BA subagents in batches of 1-3 per response, sequential between batches** (per pacing rule). For N pipelines, dispatch ceil(N/3) batches; wait for each batch to complete before launching the next. Each pipeline gets its own BA Agent call with unique file naming.
 
@@ -1145,15 +1161,53 @@ Use Agent tool with:
 
 **Iteration tracking**: Update TodoWrite with BA-QA iteration number per pipeline.
 
+### Step 11g: Graphify Dev-Dispatch Precondition (shared, idempotent, advisory/fail-open)
+
+**This is the single shared precondition that enforces the B2-INV invariant: graphify enrichment MUST have run — against the SAME context Dev will consume — for a pipeline BEFORE EVERY `Agent(subagent_type: "dev")` dispatch in `/dev-overnight`.** It is the overnight sibling of `commands/dev.md` Step 9 enrichment (mirror by reference — do NOT duplicate dev.md's full prose). It is keyed on the **Dev-dispatch boundary**, NOT on "Step 12": Dev is dispatched from THREE sites and any future site MUST also route through this precondition immediately before its Dev `Agent` call:
+
+- **Step 12** parallel Dev loop (`### Step 12`, the `For each active pipeline[i]` loop) — reached by the BA-QA PASS branch, the BA-QA iteration-EXHAUSTED best-effort branch, AND the Continuation/Resume path (`current_phase: implementing -> Step 12`).
+- **Step 13** dev-blocked re-invoke (`### Step 13`, "Re-invoke only that pipeline's dev subagent") — may follow a context refinement.
+- **Step 17** per-pipeline iteration-loop Dev dispatch (`### Step 17`, `Agent(subagent_type: "dev")` against its FRESH `docs/dev/context-iter<N>-<timestamp_suffix>.json`).
+
+The word "validated" MUST NOT gate this precondition — it fires for the pipeline about to be dispatched to Dev regardless of whether BA-QA passed or was exhausted (mirrors the resolved `/dev` post-BA-QA → enrichment decision; the exhausted branch is a sibling of the pass branch).
+
+**Per-site action** — for the one pipeline[i] about to be dispatched to Dev:
+
+1. **Mark the `Step 11g` todo `in_progress` BEFORE the graphify `Agent` call** (and restore the surrounding step — Step 12 / Step 13 / Step 17 — `in_progress` after enrichment completes and before the Dev `Agent` call). Otherwise `hooks/pretool-subagent-enforce.py` (`_current_step_label`) would resolve the active step as the Dev step and validate the graphify dispatch against the Dev required_call (role mismatch → spurious exit-2). With Step 11g in-progress, the contract hook matches the graphify dispatch against the `Step 11g` `{role: "graphify", pipeline_id: null}` wildcard entry.
+2. **Idempotency by CONTEXT FINGERPRINT, not bare existence.** `context_sha256` is the SHA-256 of the EXACT context file Dev will consume, computed at the SAME instant the precondition decides (i.e. BEFORE this run's graphify enrichment patches it — graphify-enrich patches `graph_context` in place, so always fingerprint the pre-enrichment bytes of the context Dev reads, and record those same pre-enrichment bytes' SHA so a subsequent unchanged resume matches). Compute `{pipeline_index, iteration, context_path, context_sha256}`. If a `graphify-run.json` for `${DEV_SESSION_ID}-pipeline-{pipeline.index}` already exists AND its recorded fingerprint matches the current context (same `context_path` + `context_sha256` + `iteration`), SKIP re-dispatch. If the artifact is absent, OR ANY fingerprint field is missing, OR its fingerprint does NOT match (Step 13 refinement / Step 17 wrote a new `context-iter<N>`), RE-RUN enrichment and overwrite the manifest. Bare-existence idempotency is FORBIDDEN — it would wrongly skip re-enrichment of changed Dev input; treat a missing fingerprint field as a mismatch (re-enrich).
+3. **Dispatch graphify** (mode=enrich) using a **pipeline-scoped task-id** `${DEV_SESSION_ID}-pipeline-{pipeline.index}` against the context Dev will consume. The precondition ALWAYS dispatches the graphify `Agent` (so the `Step 11g` todo's `subagent_call` is always satisfied) — graphify itself fail-opens internally (exits 0 with `status=skipped`/`status=unavailable` when the sentinel/binary/blast-radius-map is absent), so there is no "skip-without-Agent" path that could leave the todo's subagent completion guard unsatisfied. Then dispatch Dev:
+
+```
+Use Agent tool with:
+- subagent_type: "graphify"
+- description: "Graphify enrichment (mode=enrich) for pipeline {i} before Dev dispatch"
+- prompt: "
+  FIRST ACTION: Read $CLAUDE_PROJECT_DIR/.claude/dev-registry/$DEV_SESSION_ID/graphify.json to register with the enforcement system. Do this BEFORE any other tool call.
+
+  You are the graphify subagent. Follow agents/graphify.md instructions precisely.
+
+  Run: source \"${CLAUDE_PROJECT_DIR}/venv/bin/activate\" && python3 $CLAUDE_PROJECT_DIR/scripts/graphify-enrich.py --task-id ${DEV_SESSION_ID}-pipeline-{pipeline.index} --context-file <the context file Dev will consume for this pipeline/iteration>
+
+  This is advisory — if the binary is absent or blast-radius-map is missing, exit 0 with status=skipped.
+  "
+```
+
+4. **Fail-open + always-written artifacts (B7).** The precondition NEVER hard-blocks Dev. Whether enrichment ran, was skipped (`sentinel_absent`), or graphify was unavailable, the per-pipeline sidecar `.claude/dev-registry/${DEV_SESSION_ID}-pipeline-{pipeline.index}/graphify/graphify-run.json` is written/updated conforming to the `graphify-run.v1` schema — at minimum the required `status` (`ok|skipped|unavailable`) and `task_id` (`${DEV_SESSION_ID}-pipeline-{pipeline.index}`) fields — plus the current fingerprint `{pipeline_index, iteration, context_path, context_sha256}` (additive fields; the schema allows additional properties). Separately, the orchestrator writes/updates the contract's SINGLE aggregate `expected_output_path` — the deterministic per-cycle path `docs/dev/overnight/<session_id>/cycle-<N>/graphify-run.json` — with at least `{status, task_id, generated_at}` so the contract's `must_run` existence gate is always satisfied at close time even when every pipeline's graphify was skipped/unavailable. Then restore the surrounding step in-progress and dispatch Dev.
+
+Per-pipeline `graphify-run.json` / `focused-subgraph.json` files are **sidecar artifacts** (filesystem-isolated by pipeline-scoped task-id), NOT per-pipeline contract entries (see the Cycle Contract Manifest section: the graphify entry is ONE step-level wildcard).
+
 ### Step 12: Run All Dev Subagents (Parallel)
 
 **Filter**: Only launch Dev for pipelines with `phase == "ba_complete"` and `status == "active"`.
+
+**Dev-dispatch precondition (B2-INV)**: for each pipeline that passes the filter above, route through the shared **Step 11g: Graphify Dev-Dispatch Precondition** against the context Dev will consume (`docs/dev/context-{pipeline.timestamp_suffix}.json`) IMMEDIATELY BEFORE that pipeline's `Agent(subagent_type: "dev")` call inside the loop below (not merely once before the loop) — so the precondition runs per-dispatch, even when the loop batches across multiple responses. This covers the BA-QA PASS branch, the BA-QA iteration-EXHAUSTED best-effort branch, AND the Continuation/Resume path that lands here.
 
 **Launch Dev subagents in batches of 1-3, sequential between batches** (per pacing rule):
 
 ```
 For each active pipeline[i]:
 
+# Step 11g precondition for pipeline[i] runs HERE, immediately before the Dev dispatch
 Agent(subagent_type: "dev")
   description: "Dev implementation for pipeline {i}: {pipeline.description}"
   prompt: "
@@ -1201,6 +1255,7 @@ Read dev report: `docs/dev/dev-report-{pipeline.timestamp_suffix}.json`
 - Read blocking issues from report
 - Resolve blockers (e.g., missing information, technical constraints)
 - Refine context JSON with additional information
+- **Dev-dispatch precondition (B2-INV)**: BEFORE re-invoking, route this pipeline through the shared **Step 11g: Graphify Dev-Dispatch Precondition** against the refined context Dev will consume. The context fingerprint changed (refinement), so the precondition RE-ENRICHES rather than skipping.
 - Re-invoke only that pipeline's dev subagent (maximum 3 attempts)
 - If still blocked: mark pipeline status as `"skipped"` with reason `"Dev blocked"`
 
@@ -1369,6 +1424,7 @@ bash ~/.claude/scripts/refine-context.sh \
 ```
 
 The merged context records `iteration=<new-iter>` and appends a `previous_attempts[]` entry with `iteration=<new-iter>-1`. Then dispatch:
+- **Dev-dispatch precondition (B2-INV)**: BEFORE the Dev dispatch below, route this pipeline through the shared **Step 11g: Graphify Dev-Dispatch Precondition** against the FRESH `docs/dev/context-iter<new-iter>-<timestamp_suffix>.json` Dev will consume. The new iteration context has a different fingerprint, so the precondition RE-ENRICHES (it does NOT skip on bare existence).
 - `Agent(subagent_type: "dev")` with iteration context. Include in Dev prompt: `Overnight spec file: <pipeline.spec_path>`. Also include: `User requirement document: <resolved $REQUIREMENT_DOC path>`. Dev reads spec first for cross-cycle context, then updates Sections 2 and 3.
 - Before dispatching QA, write qa_mode sentinel: `bash ~/.claude/scripts/write-qa-mode.sh --session-id "$DEV_SESSION_ID" --mode final_verification || { echo 'ERROR: Failed to set qa_mode=final_verification — aborting' >&2; exit 1; }`
 - `Agent(subagent_type: "qa")` with new dev report. Include in QA prompt: `Overnight spec file: <pipeline.spec_path>`. Also include: `User requirement document: <resolved $REQUIREMENT_DOC path>`. QA reads spec first, then updates Section 4 (and Sections 6-7 if fail).
@@ -1446,7 +1502,7 @@ The aggregator filters QA reports to those whose `timestamp_suffix` matches a `s
 After the time check, land a HEAD commit on the worktree branch covering this cycle's accumulated changes. Call `commit.sh "chore(overnight): end-of-cycle commit for <worktree_branch>"` directly via Bash (single positional arg; `chore` is a valid CC type so M3 lint passes; `(overnight)` scope identifies the automated context). The CAS engine and content-bound ledger still apply. If the invocation exits non-zero (empty ledger for this session, disk content changed, or other CAS refusal), log the failure to the cycle log and continue — per-fix `refs/checkpoints/*` snapshots remain intact and the operator can promote them manually.
 
 If time expired: proceed to Step 20 (PM Retro) then Step 21 for final summary.
-If time remains: proceed to Step 20 (PM Retro), then mark Step 21 as completed via TodoWrite. The posttool-overnight-loop.py hook will detect all 21 steps completed, reset todos to pending, and inject continuation instructions.
+If time remains: proceed to Step 20 (PM Retro), then mark Step 21 as completed via TodoWrite. The posttool-overnight-loop.py hook will detect all todo steps completed (it checks every todo's status, including the letter-suffix Step 11g, not a fixed count), reset todos to pending, and inject continuation instructions.
 
 ### Step 20: PM Retrospective
 
@@ -1528,7 +1584,7 @@ If validation fails, log warning and proceed (retro is informational, not blocki
 
 **If time remains** (normal loop case):
 Simply mark this step as completed via TodoWrite. The PostToolUse:TodoWrite hook (`posttool-overnight-loop.py`) will:
-1. Detect all 21 steps are completed
+1. Detect all todo steps are completed (every todo's status, including Step 11g)
 2. Check overnight-state.json for future end_time
 3. Reset all todos to pending
 4. Print loop continuation instructions
@@ -1767,7 +1823,7 @@ The state file is created by `create-overnight-state.sh` during session initiali
 - **posttool-git-checkpoint.sh** (PostToolUse:Write|Edit): Auto-commits changes
 
 ### Loop Mechanism (v3)
-- When all 21 todo steps are marked completed via TodoWrite, the posttool-overnight-loop.py hook fires
+- When all todo steps are marked completed via TodoWrite (every todo, including the letter-suffix Step 11g), the posttool-overnight-loop.py hook fires
 - It checks overnight-state.json: if end_time is in the future, it resets all todos to pending and injects loop continuation instructions
 - The agent then resumes from Step 2 (exploration) since worktree already exists
 - This provides natural context boundaries at each cycle without requiring external cron triggers

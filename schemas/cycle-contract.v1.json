@@ -81,7 +81,7 @@
           },
           "role": {
             "type": "string",
-            "enum": ["pm", "ba", "dev", "qa", "architect", "ui-specialist", "product-owner", "user"]
+            "enum": ["pm", "ba", "dev", "qa", "graphify", "architect", "ui-specialist", "product-owner", "user"]
           },
           "mode": {
             "type": ["string", "null"],
