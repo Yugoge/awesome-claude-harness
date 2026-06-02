@@ -192,6 +192,30 @@ def main():
     if has_consent(sid):
         sys.exit(0)
 
+    # A Write that pretool-write-guard.sh will reject (overwrite of an EXISTING
+    # file — the guard forces Edit instead) must NOT consume the orchestrator's
+    # one-Write-per-turn budget. This gate runs FIRST, before write-guard, so
+    # without this skip a blocked overwrite-attempt still increments the streak
+    # and wrongly exhausts the budget for a later legitimate new-file Write
+    # (observed: a blocked requirement-doc overwrite blocked a later completion
+    # write). Replicate write-guard's "Write only creates new files" predicate and
+    # skip counting such a call — it cannot succeed via Write anyway, so it is not
+    # a real direct action. Writes blocked by OTHER downstream guards are out of
+    # scope for this targeted fix (fail-strict is preserved; the general
+    # PostToolUse-counting fix is deferred — see do-report).
+    if tool_name == "Write":
+        target = (data.get("tool_input") or {}).get("file_path") or ""
+        try:
+            # Match write-guard's predicate EXACTLY: it blocks only regular files
+            # (`[ -f "$FILE_PATH" ]`, pretool-write-guard.sh:141). Using is_file()
+            # (not exists()) avoids skipping the count for an existing directory /
+            # FIFO / symlink-to-dir, which write-guard would NOT reject — those must
+            # still count so the once-per-turn limit is not silently loosened.
+            if target and Path(target).is_file():
+                sys.exit(0)
+        except OSError:
+            pass
+
     count = update_streak(get_streak_state_file(sid), tool_name)
     enforce_streak_limit(tool_name, count)
     sys.exit(0)

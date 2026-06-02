@@ -154,17 +154,29 @@ def derive_spec_id_from_transcript(transcript_path: str) -> Optional[str]:
 def find_monolith(specs_base: Path, spec_dir: Path) -> Path | None:
     """Locate the monolith .md file for a given spec directory."""
     spec_id = spec_dir.name
-    candidates = [
-        specs_base / f"{spec_id}.md",
-        specs_base / f"{spec_id}.monolith.md",
-        spec_dir / f"{spec_id}.md",
-        spec_dir / f"{spec_id}.monolith.md",
-    ]
+    # The split dir may be DE-prefixed (<ts>) while the monolith is the PREFIXED
+    # flat file (spec-<ts>.md). Try the dir-name id and, when de-prefixed, the
+    # prefixed monolith id too, so a de-prefixed views dir still resolves its
+    # monolith (arch-8 companion fix).
+    ids = [spec_id]
+    if not spec_id.startswith("spec-"):
+        ids.append(f"spec-{spec_id}")
+    candidates = []
+    for sid in ids:
+        candidates += [
+            specs_base / f"{sid}.md",
+            specs_base / f"{sid}.monolith.md",
+            spec_dir / f"{sid}.md",
+            spec_dir / f"{sid}.monolith.md",
+        ]
     for c in candidates:
         if c.is_file():
             return c
-    matches = list(specs_base.glob(f"{spec_id}*.md"))
-    return matches[0] if matches else None
+    for sid in ids:
+        matches = list(specs_base.glob(f"{sid}*.md"))
+        if matches:
+            return matches[0]
+    return None
 
 
 def run_coverage_check(monolith: Path, views_dir: Path) -> subprocess.CompletedProcess:
@@ -204,10 +216,21 @@ def resolve_target_spec_dir(data: dict, project_dir: Path) -> Optional[Path]:
     spec_id = derive_spec_id_from_transcript(transcript_path)
     if spec_id is None:
         return None
-    spec_dir = project_dir / "docs" / "dev" / "specs" / spec_id
-    if not (spec_dir / "views").is_dir():
-        return None
-    return spec_dir
+    specs_base = project_dir / "docs" / "dev" / "specs"
+    # The transcript yields the PREFIXED monolith id (spec-<ts>), but the splitter
+    # finalizes views at the DE-prefixed id (<ts>, exactly one leading "spec-"
+    # stripped — the current convention). Try the prefixed dir first (legacy
+    # specs), then the de-prefixed dir; return whichever actually has a views/.
+    # Without the de-prefixed candidate this hook silently no-ops on every
+    # current-convention spec (arch-8), leaving Stop-time coverage unenforced.
+    candidates = [spec_id]
+    if spec_id.startswith("spec-"):
+        candidates.append(spec_id[len("spec-"):])
+    for cand in candidates:
+        spec_dir = specs_base / cand
+        if (spec_dir / "views").is_dir():
+            return spec_dir
+    return None
 
 
 def main():
