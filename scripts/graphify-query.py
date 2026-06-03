@@ -122,16 +122,32 @@ def _resolve_anchors_in_graph(mentions: list[str], graph: dict) -> dict[str, str
     return resolved
 
 
+# Coupling relations that constitute real structural signal — aligned with
+# scripts/graphify-enrich.py R1 REVERSE_DEPENDENT_RELATIONS. The pre-BA excerpt
+# PRIORITISES these so inert `contains` (file->symbol skeleton, ~80% of links on
+# doc/config-heavy repos) and bare `references` (mostly return-type-annotation noise)
+# do NOT dominate the [:20] cap. Mirrors the Step-7.5/9 focused-subgraph emphasis so both
+# touchpoints surface coupling first; non-coupling edges only fill leftover slots (so the
+# excerpt is never empty on a coupling-poor graph — it just shows skeleton as last resort).
+COUPLING_RELATIONS = frozenset(
+    {"imports", "imports_from", "calls", "inherits", "uses", "re_exports"}
+)
+
+
 def _build_import_excerpt(graph: dict, anchor_labels: set[str]) -> list[str]:
     """Build a compact 'src --relation--> tgt' excerpt from node-link `links`.
 
-    Reads edges from `links` (source/target/relation) — the REAL schema. Prefers
-    links touching a resolved anchor node; sensitive links already removed on read.
+    Reads edges from `links` (source/target/relation) — the REAL schema. Orders by
+    (1) real coupling relations (COUPLING_RELATIONS), (2) everything else — and within
+    each, anchor-touching links first. So a coupling-rich repo fills the [:20] cap with
+    signal and never shows `contains` skeleton, while a coupling-poor graph still yields a
+    populated excerpt from whatever edges exist. Sensitive links already removed on read.
     """
     nodes = graph.get("nodes", [])
     id_to_label = {n.get("id"): (n.get("label") or n.get("id")) for n in nodes}
     anchor_ids = {n.get("id") for n in nodes if (n.get("label") or "") in anchor_labels}
-    excerpt: list[str] = []
+    coupling: list[str] = []
+    other: list[str] = []
     for l in graph.get("links", []):
         src = l.get("source")
         tgt = l.get("target")
@@ -139,12 +155,14 @@ def _build_import_excerpt(graph: dict, anchor_labels: set[str]) -> list[str]:
         line = f"{id_to_label.get(src, src)} --{rel}--> {id_to_label.get(tgt, tgt)}"
         if should_exclude_path(line):
             continue
-        # Anchor-touching links first.
+        bucket = coupling if rel in COUPLING_RELATIONS else other
+        # Anchor-touching links first within their bucket.
         if anchor_ids and (src in anchor_ids or tgt in anchor_ids):
-            excerpt.insert(0, line)
+            bucket.insert(0, line)
         else:
-            excerpt.append(line)
-    return list(dict.fromkeys(excerpt))[:20]
+            bucket.append(line)
+    # Coupling signal before skeleton/noise fallback; dedupe, then cap.
+    return list(dict.fromkeys(coupling + other))[:20]
 
 
 # ---------------------------------------------------------------------------
