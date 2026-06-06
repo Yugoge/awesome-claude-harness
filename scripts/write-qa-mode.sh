@@ -23,10 +23,14 @@ done
 REGISTRY_DIR="${CLAUDE_PROJECT_DIR:?CLAUDE_PROJECT_DIR not set}/.claude/dev-registry/$SESSION_ID"
 QA_PATH="$REGISTRY_DIR/qa.json"
 
-# Activate venv so python3 runs in the project's managed environment.
+# Activate venv so python3 runs in a managed environment. Prefer a per-project
+# venv (.venv/ or venv/), else fall back to the global ~/.claude install (the
+# single tool home). The inline python below is stdlib-only, so activation
+# failure is non-fatal (|| true) and system python3 still works from any repo.
 # shellcheck disable=SC1091
 source "${CLAUDE_PROJECT_DIR}/.venv/bin/activate" 2>/dev/null \
   || source "${CLAUDE_PROJECT_DIR}/venv/bin/activate" 2>/dev/null \
+  || source "$HOME/.claude/venv/bin/activate" 2>/dev/null \
   || true
 
 python3 - "$QA_PATH" "$MODE" <<'PYEOF'
