@@ -45,12 +45,19 @@ State what changed, which files were modified, and (if Step 3 ran) whether codex
 
 ## Before /close: write do-report
 
-Before invoking `/close`, the agent MUST write `docs/dev/do-report-<session-id>.json`. The session-id comes from the consent flag `/tmp/claude-orchestrator-consent-<session-id>.flag`. Use the same timestamp as the task-id so `/close <session-id>` resolves it.
+Before invoking `/close`, the agent MUST write `docs/dev/do-report-<TASK_ID>.json`.
+
+**Resolve `TASK_ID` deterministically for the CURRENT session** — do NOT run `ls -t /tmp/claude-orchestrator-consent-*.flag | head -1` (that returns the globally-newest flag, so two concurrent `/do` sessions alias onto ONE id and silently overwrite each other's do-reports — the cross-task data-loss bug this resolution exists to prevent). Instead:
+1. `SID = $CLAUDE_CODE_SESSION_ID` (fallback `$CLAUDE_SESSION_ID`).
+2. Read the session-keyed sidecar `/tmp/claude-do-task-$SID.json` (minted by the `/do` consent hook in `hooks/prompt-workflow.py`) and use its `task_id` field — a globally-unique, reservation-backed `YYYYMMDD-HHMMSS` timestamp.
+3. Fallback ONLY if the sidecar is missing/unreadable (the hook didn't run): mint atomically using the SAME flat reservation namespace the hook uses — `while :; do TS=$(date -u +%Y%m%d-%H%M%S); if (set -o noclobber; : > "/tmp/claude-do-resv-$TS") 2>/dev/null; then break; fi; sleep 1; done; TASK_ID=$TS`. `set -o noclobber` makes `>` an O_EXCL create, so the reservation is atomic across parallel sessions — do NOT use a non-atomic "does `do-report-$TASK_ID.json` already exist?" check, which two fallbacking sessions can both pass before either writes.
+
+Use this `TASK_ID` for the do-report filename AND every downstream `/close $TASK_ID` / `/commit $TASK_ID`.
 
 ```json
 {
-  "task_id": "<session-id>",
-  "request_id": "<session-id>",
+  "task_id": "<TASK_ID>",
+  "request_id": "<TASK_ID>",
   "source": "do",
   "request": "<original /do args verbatim>",
   "do": {
@@ -66,4 +73,4 @@ Before invoking `/close`, the agent MUST write `docs/dev/do-report-<session-id>.
 
 **Important**: `/close` uses `files_modified` as the cycle-diff file list for inspector dispatch. Newly created files that need inspector coverage MUST also appear in `files_modified` (in addition to `files_created`). Omitting a new file from `files_modified` means it will not be inspected.
 
-Then: `/close <session-id>` runs the normal QA path using the do-report as the source artifact. `--force` is no longer required.
+Then: `/close <TASK_ID>` runs the normal QA path using the do-report as the source artifact. `--force` is no longer required.

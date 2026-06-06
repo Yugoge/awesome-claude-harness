@@ -264,6 +264,8 @@ A parallel cycle is detected if ANY of the following hold:
 
 **Wait** for all three Agent tool calls to return. Each inspector writes its findings JSON to its assigned report path; the orchestrator does not re-interpret or re-aggregate those findings here — Step 2's QA dispatch passes the three concrete report paths as inputs and QA applies the AC-2.6 verdict-plumbing logic against them.
 
+**Transient-failure retry (both dispatch branches).** Inspector dispatch over the API can hit transient infrastructure errors — `529 Overloaded`, `Server is temporarily limiting requests` / rate-limited, or a subagent that returns with 0 tokens and no report written. These are NOT inspection results. When an inspector returns such a transient error, RE-DISPATCH that ONE inspector (same prompt — not the others) up to 3 times with escalating backoff (~5s, ~15s, ~30s) before giving up. Only after the 3 retries still fail transiently do you fall through to the missing-report handling (Step 2 treats that inspector's findings as empty/advisory and records the missing-report condition in the close transcript). A substantive (non-transient) inspector result — including one that reports findings or returns a clean verdict — is NEVER retried. Sequential branch: retry the current inspector before moving to the next. Parallel branch: after the initial batch returns, re-dispatch only the inspector(s) that failed transiently.
+
 The three concrete inspector report paths produced by Step 1 — for verbatim cross-reference by Step 2's QA dispatch prompt — are:
 
 - `docs/dev/style-inspector-report-<TASK_ID>.json`

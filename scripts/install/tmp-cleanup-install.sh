@@ -165,6 +165,8 @@ run_tmp "hook state >7d in /tmp" \
   -mtime +7 -type f \
   \( -name 'claude-tool-streak-*.json' \
      -o -name 'claude-orchestrator-consent-*.flag' \
+     -o -name 'claude-do-task-*.json' \
+     -o -name 'claude-do-resv-*' \
      -o -name 'claude-commit-grant-*.json' \
      -o -name 'claude-push-grant-*.json' \
      -o -name 'contract-bookmark-*.json' \

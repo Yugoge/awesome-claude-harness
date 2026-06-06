@@ -23,7 +23,7 @@ import re
 import subprocess
 import sys
 import importlib.util
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 def _try_git_toplevel() -> Path | None:
@@ -567,14 +567,76 @@ def _check_workflow_conflict(cmd_name: str, sid: str) -> None:
     _warn_workflow_conflict(old_cmd, cmd_name, old_todos)
 
 
+def _mint_unique_do_taskid() -> str:
+    """Mint a globally-unique pure-timestamp task-id (YYYYMMDD-HHMMSS) for a /do
+    invocation, reserved ATOMICALLY across ALL sessions via a flat O_EXCL marker
+    `/tmp/claude-do-resv-<ts>` so two concurrent /do invocations — even in the same
+    wall-clock second — can never mint the same id. Pure-timestamp form keeps
+    /close + /commit task-id resolution compatible (no nonce suffix that /close's
+    timestamp-pattern branch might reject). The flat /tmp marker is reachable by the
+    maxdepth-1 /tmp sweep AND self-pruned here. The ONLY non-reserved return path is
+    an unwritable /tmp (OSError) — but there the sidecar AND do-report writes fail
+    too, so no artifact is produced and a collision on the id is moot."""
+    base = datetime.now()
+    # Opportunistic prune — a marker only matters for the ~1s it guards (mint
+    # always scans forward from `now`), so markers older than 5 min are pure debris.
+    # Pruning markers strictly older than the cutoff cannot race a concurrent mint
+    # (which reserves at-or-after its own `now`). Best-effort.
+    try:
+        cutoff = base.timestamp() - 300
+        for _m in Path("/tmp").glob("claude-do-resv-*"):
+            try:
+                if _m.is_file() and _m.stat().st_mtime < cutoff:
+                    _m.unlink()
+            except OSError:
+                pass
+    except OSError:
+        pass
+    for i in range(300):  # forward-bump on contention; 300 distinct seconds
+        ts = (base + timedelta(seconds=i)).strftime("%Y%m%d-%H%M%S")
+        try:
+            fd = os.open(f"/tmp/claude-do-resv-{ts}", os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+            os.close(fd)
+            return ts
+        except FileExistsError:
+            continue  # this second already reserved by another mint -> bump forward
+        except OSError:
+            # /tmp unwritable: sidecar + do-report writes will also fail, so an
+            # unreserved id here is moot (no artifact is produced). Return it.
+            return ts
+    # 300 consecutive seconds all reserved — unreachable in practice. FAIL CLOSED
+    # rather than return an already-reserved (colliding) id: handle_do_consent's
+    # try/except then skips the sidecar, and the agent's own atomic fallback mints one.
+    raise RuntimeError("unable to reserve a unique /do task-id after 300 probes")
+
+
 def handle_do_consent(sid: str) -> None:
-    """Handle /do command: write consent flag and print confirmation."""
+    """Handle /do command: write the consent flag, mint a unique per-invocation
+    task-id, and write a session-keyed task sidecar so the agent can resolve ITS
+    OWN task-id deterministically. Fixes the silent cross-task collision where the
+    agent guessed its id via `ls -t /tmp/...consent-*.flag | head -1` (globally
+    newest) — which aliased parallel /do sessions onto one id and overwrote each
+    other's do-reports."""
     flag = Path(f"/tmp/claude-orchestrator-consent-{sid}.flag")
     try:
         flag.write_text("true")
         print(f"[/do] Consent granted. Main agent may now perform direct operations this session.")
     except Exception as e:
         sys.stderr.write(f"[/do] Failed to write consent flag: {e}\n")
+    # Mint a unique task-id and expose it via a session-keyed sidecar. Kept
+    # SEPARATE from the consent flag (the orchestrator-gate trust root, whose
+    # content stays "true" so every existence-checking reader is unaffected).
+    try:
+        task_id = _mint_unique_do_taskid()
+        sidecar = Path(f"/tmp/claude-do-task-{sid}.json")
+        sidecar.write_text(json.dumps({
+            "task_id": task_id,
+            "session_id": sid,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }))
+        print(f"[/do] task-id minted: {task_id} — resolve via $CLAUDE_CODE_SESSION_ID → /tmp/claude-do-task-<sid>.json (NOT `ls -t | head -1`).")
+    except Exception as e:
+        sys.stderr.write(f"[/do] Failed to write task sidecar: {e}\n")
 
 
 def _write_userintent_sentinel(cmd_name: str, sid: str) -> None:
