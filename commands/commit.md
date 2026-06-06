@@ -21,7 +21,7 @@ branch commit. Handles nested repo (`/dev/shm/dev-workspace/dot-claude/`) automa
 | `--force` | Bypass close-gate check **AND the pre-commit QA gate** (Step 6). Human-only (enforced by `disable-model-invocation: true`). Audited. |
 | `--bulk` | Smart batch mode — group by task-id then subsystem, commit coherently, flag orphan files separately. Human-only (enforced by `disable-model-invocation: true`). |
 | `--dry-run` | Print what would be staged/committed (and the QA verdict); do not execute the real commit. |
-| `--codex` | In the pre-commit QA gate (Step 6), QA additionally runs an adversarial Codex round on the staged set. Without it, QA does a single-round self-review. |
+| `--codex` | In the pre-commit QA gate (Step 6), QA additionally runs an adversarial Codex round on the planned per-file changes (each PLAN_GROUPS path vs HEAD), not the staged index. Without it, QA does a single-round self-review. |
 
 ## Step-by-step workflow
 
@@ -101,7 +101,7 @@ Also write the dispatch-snapshot manifest (non-bulk mode only): activate venv an
 
 ### Step 6: Pre-commit QA review gate (skip if FORCE=true)
 
-A QA agent reviews **what is actually about to be committed** (the staged set + its diff) and may BLOCK the commit. This is an independent second reviewer on top of `changelog-analyst`'s own staging judgment — it exists because `--bulk` / `--force` skip `/close` entirely, and even a normal commit's *literal staged diff* deserves a fresh adversarial check for junk / secrets / scope contamination. The gate reviews the diff itself, NOT the dev-report.
+A QA agent reviews **what is actually about to be committed** (each planned file's change vs HEAD) and may BLOCK the commit. This is an independent second reviewer on top of `changelog-analyst`'s own staging judgment — it exists because `--bulk` / `--force` skip `/close` entirely, and even a normal commit's *actual file changes* deserve a fresh adversarial check for junk / secrets / scope contamination. The gate reviews the file changes themselves, NOT the dev-report.
 
 **If `FORCE=true`: skip this entire step.** Print `WARNING: --force bypasses the pre-commit QA gate.` and proceed to Step 7 (human override accepts the risk; the bypass is already audited by Step 4).
 
