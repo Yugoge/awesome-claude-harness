@@ -27,8 +27,7 @@ def run_todo_script(cmd_name: str, project_dir: Path, prompt: str = '') -> list:
         else:
             return []
     env = {**os.environ}
-    if prompt:
-        env['CLAUDE_TODO_PROMPT'] = prompt
+    env['CLAUDE_TODO_PROMPT'] = prompt or ''
     result = subprocess.run(
         ['python3', str(todo_script)],
         capture_output=True, text=True, cwd=str(project_dir),

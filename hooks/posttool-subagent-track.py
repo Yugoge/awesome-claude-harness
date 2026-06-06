@@ -432,7 +432,7 @@ def _resolve_base_context(session_id: str):
     last_todos = state.get('last_todos')
     if not cmd_name or not last_todos:
         return None
-    canonical = run_todo_script(cmd_name) or []
+    canonical = run_todo_script(cmd_name, state.get('arguments', '')) or []
     ip_index = _current_in_progress_index(state)
     return state, last_todos, canonical, ip_index, bm_path
 

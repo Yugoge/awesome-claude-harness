@@ -185,7 +185,7 @@ def emit_canonical_error(violations):
 
 def handle_first_call(state, bookmark_path, cmd_name, new_todos):
     """First call: validate canonical + initial status, then save."""
-    canonical_violations = validate_against_canonical(cmd_name, new_todos)
+    canonical_violations = validate_against_canonical(cmd_name, new_todos, state.get('arguments', ''))
     if canonical_violations:
         emit_canonical_error(canonical_violations)
     status_violations = []
@@ -198,7 +198,7 @@ def handle_first_call(state, bookmark_path, cmd_name, new_todos):
 
 def handle_length_mismatch(state, bookmark_path, cmd_name, new_todos):
     """Length mismatch: validate canonical, then save."""
-    canonical_violations = validate_against_canonical(cmd_name, new_todos)
+    canonical_violations = validate_against_canonical(cmd_name, new_todos, state.get('arguments', ''))
     if canonical_violations:
         emit_canonical_error(canonical_violations)
     save_state(bookmark_path, state, new_todos)

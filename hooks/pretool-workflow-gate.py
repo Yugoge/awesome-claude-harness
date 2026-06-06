@@ -35,8 +35,12 @@ def official_todos_path(session_id: str) -> Path:
     return Path.home() / '.claude' / 'todos' / f'{session_id}-agent-{session_id}.json'
 
 
-def run_canonical_todos(cmd_name: str, project_dir: Path) -> list:
-    """Run the canonical todo script and return the full step list."""
+def run_canonical_todos(cmd_name: str, project_dir: Path, prompt: str = '') -> list:
+    """Run the canonical todo script and return the full step list.
+
+    prompt is forwarded as CLAUDE_TODO_PROMPT so argument-aware scripts
+    (e.g. close.py --force path) return the correct step-count variant.
+    """
     todo_script = project_dir / 'scripts' / 'todo' / f'{cmd_name}.py'
     if not todo_script.exists():
         global_todo = Path.home() / '.claude' / 'scripts' / 'todo' / f'{cmd_name}.py'
@@ -44,9 +48,13 @@ def run_canonical_todos(cmd_name: str, project_dir: Path) -> list:
             todo_script = global_todo
         else:
             return []
+    env = {**os.environ}
+    if prompt:
+        env['CLAUDE_TODO_PROMPT'] = prompt
     result = subprocess.run(
         ['python3', str(todo_script)],
-        capture_output=True, text=True, cwd=str(project_dir)
+        capture_output=True, text=True, cwd=str(project_dir),
+        env=env,
     )
     if result.returncode != 0 or not result.stdout.strip():
         return []
@@ -68,8 +76,16 @@ def build_next_todowrite_call(session_id: str, cmd_name: str = '', project_dir: 
             todos = json.loads(todos_file.read_text())
         elif cmd_name and project_dir:
             # File missing (e.g. first TodoWrite had wrong count, tracker skipped write)
-            # Fall back to canonical so agent still gets a usable hint
-            todos = run_canonical_todos(cmd_name, project_dir)
+            # Fall back to canonical so agent still gets a usable hint.
+            # Forward stored --force/etc. arguments so the hint matches the
+            # argument-aware canonical variant (e.g. close.py 2-step forced list).
+            _args = ''
+            try:
+                _bm = project_dir / '.claude' / f'workflow-{session_id}.json'
+                _args = json.loads(_bm.read_text()).get('arguments', '')
+            except Exception:
+                _args = ''
+            todos = run_canonical_todos(cmd_name, project_dir, _args)
             if not todos:
                 return ''
         else:
@@ -365,7 +381,7 @@ def acknowledge_codex_plan(data: dict, session_id: str, bookmark_path: Path, pro
         return False
 
     cmd_name = state.get('command', '')
-    canonical = run_canonical_todos(cmd_name, project_dir)
+    canonical = run_canonical_todos(cmd_name, project_dir, state.get('arguments', ''))
     todos, violations = codex_plan_to_todos(plan, canonical)
     if violations:
         emit_codex_plan_block(cmd_name, violations, state.get('last_todos') or [])
@@ -416,7 +432,7 @@ def acknowledge_codex_canonical_bootstrap(
     if lock_reason and lock_reason != 'not_started':
         return False
     cmd_name = state.get('command', '')
-    canonical = run_canonical_todos(cmd_name, project_dir)
+    canonical = run_canonical_todos(cmd_name, project_dir, state.get('arguments', ''))
     if not canonical:
         return False
     todos = canonical_initial_todos(canonical)

@@ -193,19 +193,19 @@ def emit_block(cmd, violations, last):
     sys.exit(2)
 
 
-def _build_canonical_hint(cmd):
+def _build_canonical_hint(cmd, prompt=''):
     """Build canonical todos hint string for error messages."""
-    canonical = run_todo_script(cmd) if cmd else None
+    canonical = run_todo_script(cmd, prompt) if cmd else None
     if not canonical:
         return ''
     return ('\nCorrect canonical todos:\n'
             + json.dumps(canonical, ensure_ascii=False, indent=2) + '\n')
 
 
-def emit_block_canonical(cmd, violations):
+def emit_block_canonical(cmd, violations, prompt=''):
     """Print block message for canonical validation failures."""
     numbered = '\n'.join(f'  [{j+1}] {v}' for j, v in enumerate(violations))
-    hint = _build_canonical_hint(cmd)
+    hint = _build_canonical_hint(cmd, prompt)
     sys.stderr.write(
         f'\nBLOCKED TodoWrite (canonical validation):\n' + numbered
         + '\n\nContent/activeForm must match the canonical definition '
@@ -219,7 +219,7 @@ def validate_against_canonical_if_needed(cmd, new_todos, prompt=''):
     """Validate new_todos against canonical script if available."""
     violations = validate_against_canonical(cmd, new_todos, prompt)
     if violations:
-        emit_block_canonical(cmd, violations)
+        emit_block_canonical(cmd, violations, prompt)
         return False
     return True
 

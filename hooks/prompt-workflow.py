@@ -483,7 +483,9 @@ def read_bookmark_state(session_id: str) -> dict:
     r['todo_acknowledged'] = st.get('todo_acknowledged', False)
     r['command'] = st.get('command', '')
     if r['lock_reason'] == 'count_mismatch' and r['command']:
-        r['canonical'] = run_todo_script(r['command'])
+        # Forward stored arguments so the count-mismatch recovery hint
+        # reflects the correct (e.g. --force 2-step) canonical list.
+        r['canonical'] = run_todo_script(r['command'], st.get('arguments', ''))
     if r['lock_reason'] == 'sequence_violation':
         r['last_todos'] = st.get('last_todos', [])
     return r
