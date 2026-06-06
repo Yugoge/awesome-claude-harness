@@ -47,6 +47,17 @@ def _parse_args(argv):
         default="/tmp",
         help="Directory to write the sentinel JSON into. Default: /tmp.",
     )
+    parser.add_argument(
+        "--origin",
+        default="cli",
+        help=(
+            "Provenance marker recorded in the sentinel. The trusted "
+            "userpromptsubmit-bulk-commit-capability hook passes "
+            "'userpromptsubmit-hook'; standalone CLI invocation defaults to "
+            "'cli'. A future privilege-guard provenance check (staged "
+            "lockdown) may require origin=='userpromptsubmit-hook'."
+        ),
+    )
     return parser.parse_args(argv)
 
 
@@ -78,6 +89,7 @@ def main(argv=None):
         "kind": "bulk-commit",
         "sid": sid,
         "nonce": nonce,
+        "origin": args.origin,
         "created_at": now.isoformat(),
         "expires_at": (now + timedelta(minutes=SENTINEL_TTL_MINUTES)).isoformat(),
     }

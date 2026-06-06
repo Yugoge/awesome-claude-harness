@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
-Step 7 (Spec-update dispatch) reference harness — task 20260524-205206 iter-2.
+Step 8 (Spec-update dispatch) reference harness — task 20260524-205206 iter-2.
 
-This script implements the Step 7 algorithm specified verbatim in commands/commit.md
-section "### Step 7: Spec-update dispatch (post-commit, deterministic fail-closed)".
+This script implements the Step 8 algorithm specified verbatim in commands/commit.md
+section "### Step 8: Spec-update dispatch (post-commit, deterministic fail-closed)".
 
 It is the executable embodiment of the algorithm that the /commit orchestrator runs
 in stages (1) context.spec_path -> (2) close-report continuation line -> (3) mtime+marker
@@ -23,14 +23,14 @@ ENV:
   COMMIT_STEP7_TRACE=1   Emit STEP7_* deterministic markers to stderr.
 
 EXIT CODES:
-  0   normal — either Step 7 skipped, stage 1/2 dispatched, or stage 4 empty-set
+  0   normal — either Step 8 skipped, stage 1/2 dispatched, or stage 4 empty-set
   2   stage 4 fail-closed (set has 1 or more elements without context linkage)
 
 OUTPUT:
   stdout: human-readable narration of the decision
   stderr: STEP7_* markers when COMMIT_STEP7_TRACE=1; warnings; errors
 
-NOTE: This harness implements ONLY the Step 7 SELECTION + TRACE logic — stages
+NOTE: This harness implements ONLY the Step 8 SELECTION + TRACE logic — stages
 (1)-(4) — and the corresponding STEP7_* stderr markers. It does NOT execute the
 "Dispatch payload" Agent call described in commands/commit.md (an inline
 spec-update Agent invocation requires the orchestrator's Claude Code session).
@@ -38,7 +38,7 @@ The harness emits the STEP7_SPEC_UPDATE_DISPATCHED marker IMMEDIATELY before
 the point at which the orchestrator would perform the real Agent dispatch.
 QA contract: the AC-05 marker assertion verifies the selection contract, not
 the Agent-dispatch contract. The Agent-dispatch contract is implicit in the
-documented behaviour of commands/commit.md Step 7 dispatch payload (which is a
+documented behaviour of commands/commit.md Step 8 dispatch payload (which is a
 Claude Code Agent call, not a shell command).
 """
 
@@ -153,7 +153,7 @@ def _stage3_mtime_glob(task_id: str, dev_docs_root: pathlib.Path):
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description="Step 7 spec-update harness (commit.md)")
+    ap = argparse.ArgumentParser(description="Step 8 spec-update harness (commit.md)")
     ap.add_argument("--task-id", required=True)
     ap.add_argument("--dev-docs-root", required=True)
     ap.add_argument("--bulk", default="false", choices=["true", "false"])
@@ -170,18 +170,18 @@ def main() -> int:
     bulk = args.bulk == "true"
     dryrun = args.dryrun == "true"
 
-    # SKIP branches (commit.md Step 7 SKIP block, in declared order)
+    # SKIP branches (commit.md Step 8 SKIP block, in declared order)
     if bulk:
         _emit("STEP7_SKIPPED: bulk=true")
-        print("Step 7 skipped: BULK=true")
+        print("Step 8 skipped: BULK=true")
         return 0
     if dryrun:
         _emit("STEP7_SKIPPED: dryrun=true")
-        print("Step 7 skipped: DRYRUN=true")
+        print("Step 8 skipped: DRYRUN=true")
         return 0
     if not task_id:
         _emit("STEP7_SKIPPED: task_id_empty")
-        print("Step 7 skipped: TASK_ID is empty")
+        print("Step 8 skipped: TASK_ID is empty")
         return 0
     push_gate_ok = (
         args.push_gate_token_path
@@ -191,7 +191,7 @@ def main() -> int:
     if args.changelog_status != "committed" or not push_gate_ok:
         _emit("STEP7_SKIPPED: changelog_no_real_commit")
         print(
-            f"Step 7 skipped: changelog status={args.changelog_status} "
+            f"Step 8 skipped: changelog status={args.changelog_status} "
             f"push_gate_ok={push_gate_ok}"
         )
         return 0

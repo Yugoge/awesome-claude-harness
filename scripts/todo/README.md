@@ -5,7 +5,7 @@ Organization and usage documentation for `todo/`.
 <!-- AUTO:readme-stats -->
 
 ## Overview
-- **Total files**: 22
+- **Total files**: 23
 - **Subdirectories**: 1
 - **Naming convention**: kebab
 
@@ -17,6 +17,7 @@ Organization and usage documentation for `todo/`.
 - `dev-command.py` - This todo script generates workflow steps for the BA-delegated dev-command workflow
 - `dev-overnight.py` - Preloaded TodoList for /dev-overnight workflow
 - `dev.py` - Preloaded TodoList for /dev workflow
+- `do.py` - Injects the 4-step /do workflow checklist via hook-todo-injection
 - `doc-gen.py` - Python script
 - `explain-code.py` - Python script
 - `file-analyze.py` - Preloaded TodoList for /file-analyze workflow

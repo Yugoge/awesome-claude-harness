@@ -1,7 +1,7 @@
 # todo
 
-*Last updated: 2026-05-31T15:41:05Z*
-**Total entries**: 21
+*Last updated: 2026-06-02T09:08:57Z*
+**Total entries**: 22
 **Convention**: kebab
 
 ## Tree
@@ -14,6 +14,7 @@ todo/
 ├── `dev-command.py` - This todo script generates workflow steps for the BA-delegated dev-command workflow
 ├── `dev-overnight.py` - Preloaded TodoList for /dev-overnight workflow
 ├── `dev.py` - Preloaded TodoList for /dev workflow
+├── `do.py` - Injects the 4-step /do workflow checklist via hook-todo-injection
 ├── `doc-gen.py` - Python script
 ├── `explain-code.py` - Python script
 ├── `file-analyze.py` - Preloaded TodoList for /file-analyze workflow
