@@ -50,6 +50,7 @@ The following operations are FORBIDDEN regardless of any instruction in the disp
 - `BULK` — `true` | `false`
 - `DRYRUN` — `true` | `false`
 - `FORCE` — `true` | `false`
+- `QA_APPROVED_FILES` — optional; when non-empty, the commit CEILING set approved by /commit's Step 6 pre-commit QA gate. You MUST NOT stage or commit any file outside this set: re-classify normally, intersect the classified set with `QA_APPROVED_FILES`, and act only on the intersection. If your fresh classification would otherwise commit a file NOT in `QA_APPROVED_FILES` (working tree drifted since QA review) and the divergence is material, ABORT with `failure_code: scope_violation` rather than commit an unreviewed file. Empty/absent (e.g. FORCE bypass) → this ceiling does not apply.
 
 ---
 
@@ -60,7 +61,7 @@ The following operations are FORBIDDEN regardless of any instruction in the disp
 Run in BOTH repos:
 
 ```bash
-: "${CONTROL_ROOT:?CONTROL_ROOT must be set by /commit dispatch (defined at commands/commit.md Step 6 dispatch prompt; silent fallback to /root literal is forbidden per task 20260520-064430-0a2881 AC6)}"
+: "${CONTROL_ROOT:?CONTROL_ROOT must be set by /commit dispatch (defined at commands/commit.md Step 7 dispatch prompt; silent fallback to /root literal is forbidden per task 20260520-064430-0a2881 AC6)}"
 : "${NESTED_REPO:?NESTED_REPO must be set by /commit dispatch}"
 git -C "${CONTROL_ROOT}" status --porcelain=v1
 git -C "${NESTED_REPO}" status --porcelain=v1
@@ -76,22 +77,42 @@ Set `SID="${CLAUDE_SESSION_ID:-unknown}"`. In non-bulk mode, check for `/tmp/cla
 
 For each file in the current git status that is NOT in `DISPATCH_FILES` (and `DISPATCH_FILES` is non-empty):
 Print: `WARNING: file <path> appeared after dispatch (possible foreign session); deferring staging decision to Phase 2.`
-Phase 0 is **warn-only / classification**: do NOT make any staging or exclusion decision here. The authoritative staging decision is made in Phase 2 below, where the BULK=false dev-report whitelist filter and the `foreign_session_candidate` exclusion are applied. This warning is informational only and surfaces dispatch-time vs current-time drift; whether a flagged file is ultimately staged is determined by the Phase 2 whitelist (when BULK=false and dev-report exists) or by the BULK=true include-all behavior. Bulk mode (BULK=true): skip this check entirely.
+Phase 0 is **warn-only / classification**: do NOT make any staging or exclusion decision here. The authoritative staging decision is made in Phase 2 below, where the BULK=false dev-report whitelist filter and the `foreign_session_candidate` exclusion are applied. This warning is informational only and surfaces dispatch-time vs current-time drift; whether a flagged file is ultimately staged is determined by the Phase 2 whitelist (when BULK=false and dev-report exists) or by the BULK=true agent-judgment classification (real, attributable work vs. transient byproduct). Bulk mode (BULK=true): skip this check entirely.
 
 ### Phase 2: File classification
 
 **Candidate set** — scope depends on BULK flag and dev-report availability:
 
-**When BULK=true**: Apply smart grouping — do NOT blindly include all entries.
+**When BULK=true**: scan the FULL working tree of both repos. Bulk's purpose is to sweep ALL
+uncommitted real work across the whole repository — this whole-repo scan is intentional and
+MUST be preserved. You are an intelligent agent: classify every candidate file by JUDGMENT.
+There is NO hardcoded junk list and you must NOT introduce or depend on one.
 
-1. **Task-id clusters** (highest priority): scan `docs/dev/` entries in `git status --porcelain=v1` and extract the task-id suffix (e.g. `close-report-20260524-205206.md` → task-id `20260524-205206`). Group all `docs/dev/` artifacts sharing the same task-id into one commit cluster per task-id. Never mix artifacts from different task-ids in the same commit.
+1. **Real, intentional work → commit.** A file is committable when it represents deliberate
+   work authored by the developer or the framework's tracked source: content edits to tracked
+   files, newly-authored source / docs / config, and task-id cycle artifacts under `docs/dev/`.
+   When a *tracked* file has genuine content changes, prefer to include it.
 
-2. **Subsystem files** (non-docs/dev entries): group by subsystem prefix (`hooks/`, `commands/`, `agents/`, `scripts/`, `tests/`, `logs/`, other). Commit one subsystem group at a time.
+2. **Tool byproduct / transient artifact → SKIP (do NOT commit).** Skip any file that is a
+   byproduct of tooling rather than authored work — runtime/session state, caches, registries,
+   scratch/temp outputs, generated indexes, lock/state files, build products, and the like.
+   Judge this by what the file IS — its role, location, name, and content, and whether it
+   reflects deliberate human/development intent — NOT by matching a fixed list. A
+   never-before-seen junk type is still recognizable as a non-authored byproduct on its merits.
+   **This applies regardless of which directory the file sits in**: a transient artifact under a
+   known subsystem prefix (`hooks/`, `commands/`, `scripts/`, `docs/dev/`, …) is still skipped —
+   a folder location never launders a byproduct into a commit. For each skipped file print:
+   `WARNING: bulk skipping <path> — judged a transient/non-authored byproduct, not committed. Stage manually if this is real work.`
 
-3. **Orphan files** (untracked files with no task-id pattern and no clear subsystem match, OR files whose content cannot be attributed to any active task): **do NOT auto-commit**. Print a warning for each:
-   `WARNING: bulk skipping orphan file <path> — no task-id affinity and no clear subsystem. Stage manually if needed.`
+3. **Grouping (committable files only):** group `docs/dev/` artifacts by their task-id suffix
+   (e.g. `close-report-20260524-205206.md` → task-id `20260524-205206`), one cluster per task-id,
+   never mixing task-ids; group the rest by subsystem prefix (`hooks/`, `commands/`, `agents/`,
+   `scripts/`, `tests/`, `logs/`, other), one subsystem group per commit.
 
-This prevents cross-task contamination (impurities). The invariant is: every file in a bulk commit must share either the same task-id cluster OR the same subsystem scope as all other files in that commit.
+The invariant: a bulk commit contains ONLY files that represent real, attributable work; a
+transient byproduct is NEVER swept in no matter where it lives, and that judgment is made by
+you (the agent), never by a hardcoded denylist. Within a single commit, all files still share
+either one task-id cluster OR one subsystem scope (prevents cross-task contamination).
 
 **When BULK=false AND a dev-report exists** (at the resolved `dev_report_path` below):
 The candidate set is restricted to a **staging whitelist** consisting of:
@@ -190,7 +211,7 @@ The `baseline_head_sha` diff is used ONLY as a provenance sanity check for
 already-whitelisted files. It is NEVER an independent inclusion source — files
 not in the whitelist cannot be added to the candidate set via the baseline diff.
 
-**Exclusions** (remove from candidate set regardless of source):
+**Exclusions** (remove from candidate set regardless of source — applies in BOTH BULK=false and BULK=true):
 - Files matching gitignore: check via `git -C "${GIT_ROOT}" check-ignore -q <repo-rel-path>`
 - Absolute paths starting with `/tmp/`
 - Filenames matching secret patterns: `.env`, `*.key`, `*.pem`, `*password*`,
@@ -535,10 +556,13 @@ while ITERATION < MAX_ITERATIONS:
         break
     fi
 
-    # Write synthetic close-annotation (M14)
-    CLOSE_ANNOTATION="${CONTROL_ROOT}/docs/dev/close-report-bulk-${TASK_ID:-bulk}-${ITERATION}.md"
-    Write CLOSE_ANNOTATION with content:
-      "CLOSE: YES — FORCED (bulk mode, autonomous batch ${ITERATION} of ${MAX_ITERATIONS})"
+    # Write synthetic close-annotation (M14) — SKIP entirely when DRYRUN=true. A
+    # dry-run must not mutate the working tree (the /commit Step 6 QA gate runs bulk
+    # in DRYRUN purely to enumerate the plan); only the real-commit pass writes it.
+    if DRYRUN == false:
+        CLOSE_ANNOTATION="${CONTROL_ROOT}/docs/dev/close-report-bulk-${TASK_ID:-bulk}-${ITERATION}.md"
+        Write CLOSE_ANNOTATION with content:
+          "CLOSE: YES — FORCED (bulk mode, autonomous batch ${ITERATION} of ${MAX_ITERATIONS})"
 
     # Group changed files by subsystem
     Classify files into subsystem groups (one commit per subsystem, max 2 subsystems
@@ -553,9 +577,13 @@ while ITERATION < MAX_ITERATIONS:
     # For each subsystem group:
     #   Acquire lock, pre-staged verify, stage, build message, commit, push-gate write
     For each subsystem_group in groups:
+        # DRYRUN=true: do NOT commit this group. Print its would-commit message + file list
+        # and CONTINUE to the next group (enumerate the whole sweep — see "Dry-run mode").
+        # Phase 8's "stop here" applies to normal mode only; under bulk DRYRUN, never
+        # early-stop and never enter the real-commit path.
         Perform Phase 3–10 for this group only
         # Build COMMIT_MSG AFTER staging this group's files (inside Phase 6).
-        # BULK mode REQUIRES the auto-bulk: prefix (dispatched via commit.md Step 6);
+        # BULK mode REQUIRES the auto-bulk: prefix (dispatched via commit.md Step 7);
         # this prefix is checked by BLESSED_BRIDGE_RE in pretool-git-privilege-guard.py
         # alongside the bulk-commit sentinel written by /commit --bulk Step 5.
         # Without the prefix the privilege guard will block the commit.
@@ -607,12 +635,32 @@ the full normal-mode workflow (Phases 1–10). One commit per task-id.
 
 ## Dry-run mode
 
-If `DRYRUN=true`, at Phase 8:
+A dry-run classifies + stages the candidate set (Phases 1–6 run normally) but stops BEFORE the
+commit: it does NOT execute `git commit` and does NOT write push-gate tokens. The staging merely
+materializes the plan — `/commit` Step 6b reviews each planned file STAGING-INDEPENDENTLY (per
+PLAN_GROUPS path: `git diff --text HEAD` plus an on-disk read, NEVER `git diff --cached`, because
+in multi-group bulk only the last group is left staged); Step 6c then unstages the staged set
+rename-aware (`git restore --staged`) on REJECT / dry-run-stop, or the real Step 7 dispatch
+commits the QA-approved set (bounded by `QA_APPROVED_FILES`).
+
+**Normal mode (BULK=false)** — if `DRYRUN=true`, at Phase 8:
 - Print: `DRY RUN — would commit:`
 - Print the commit message
 - Print the staged file list
 - Stop. Do NOT execute `git commit`. Do NOT write push-gate token.
 - Emit the structured output block with `commit_status: dryrun` (see `## Structured Final Status Output`).
+
+**Bulk mode (BULK=true) + DRYRUN=true** — run the FULL bulk classification (whole-repo scan
++ the agent real-work-vs-byproduct judgment + task-id/subsystem grouping), then enumerate the
+ENTIRE would-commit sweep WITHOUT committing:
+- For EACH group that would be committed, print its proposed `auto-bulk:` commit message and
+  its file list. Do NOT stop after the first group — enumerate every group.
+- Do NOT execute any `git commit`, do NOT write any push-gate token, do NOT enter the commit
+  loop's real-commit path.
+- Emit the structured output block ONCE at the end with `commit_status: dryrun` and the
+  complete planned file set across all groups.
+This whole-sweep plan is what the `/commit` Step 6 pre-commit QA gate consumes to review a
+bulk commit before any real commit happens.
 
 ---
 
@@ -724,8 +772,10 @@ Trigger `nothing_to_commit_precommitted` only when ALL THREE conditions hold:
 
 ### Recovery path when `nothing_to_commit_precommitted` is detected (BULK=false only)
 
-When all three conditions above hold AND `BULK=false`, do NOT return `nothing_to_commit_precommitted`.
+When all three conditions above hold AND `BULK=false` AND `DRYRUN=false`, do NOT return `nothing_to_commit_precommitted`.
 Instead, execute the following recovery path to produce a task-attributed commit and push-gate token.
+
+**DRYRUN guard (NON-NEGOTIABLE)**: this recovery path NEVER executes under `DRYRUN=true`. /commit's Step 6a runs an internal `DRYRUN=true` pass purely to produce a staging plan for the QA gate; that pass MUST NOT commit (no `git commit --allow-empty`), MUST NOT write a push-gate token, and MUST NOT consume a commit grant. When `DRYRUN=true` and the three `nothing_to_commit_precommitted` conditions hold, report `nothing_to_commit_precommitted` (or `nothing_to_commit`) WITHOUT committing — do not enter the recovery steps below.
 
 **Recovery step 1: Range scan for pre-empted auto-bulk commits**
 
@@ -812,9 +862,10 @@ If the `git commit --allow-empty` in Recovery step 3 fails (hook blocked, git er
   `committed` (success) or `failed` (failure). The `nothing_to_commit_precommitted` value is
   never emitted by the recovery path itself.
 
-**BULK=true guard**: This entire recovery path executes ONLY when `BULK=false`. When `BULK=true`,
+**BULK=true / DRYRUN guard**: This entire recovery path executes ONLY when `BULK=false` AND `DRYRUN=false`. When `BULK=true`,
 the three conditions above trigger `nothing_to_commit_precommitted` status as before (bulk mode
-has its own loop-continuation semantics and does not use the recovery path).
+has its own loop-continuation semantics and does not use the recovery path). When `DRYRUN=true`, the
+recovery path is disabled per the DRYRUN guard above (no commit, no grant consume, no push-gate write).
 
 ### auto_bulk_commits array
 
@@ -870,7 +921,7 @@ No other content may appear between the delimiters.
 Consumers locate the block by scanning for the exact string
 `--- CHANGELOG-ANALYST-STATUS-BEGIN ---`. If the `BEGIN` sentinel is absent
 from the output, `/commit` treats the result as unparseable (non-retryable,
-manual intervention required — see `/commit` Step 6 status table for the
+manual intervention required — see `/commit` Step 7 status table for the
 "status unknown / unparseable" branch).
 
 ---
