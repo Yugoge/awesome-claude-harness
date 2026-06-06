@@ -20,6 +20,7 @@
     "ENABLE_TOOL_SEARCH": "false",
     "CLAUDE_CODE_ENABLE_TASKS": "false",
     "CLAUDE_GRAPHIFY_ENABLED": "auto",
+    "GRAPHIFY_BIN": "/root/.claude/venv/bin/graphify",
     "_comment_graphify": "Graphify (graphifyy v0.8.25) integration drives the REAL CLI (graphify update/query/affected). Gate: CLAUDE_GRAPHIFY_ENABLED=auto|1 enables, 0 disables. Override env vars (leave unset for defaults): GRAPHIFY_BIN=<path> overrides graphify CLI; CLAUDE_GRAPHIFY_CACHE_ROOT=<dir> overrides /var/tmp/claude-graphify (MUST be OUTSIDE the repo — wrappers refuse cache-root-inside-repo); GRAPHIFY_TRIAGE_BACKEND=<gemini|claude-cli|...> forces the semantic-extraction backend (else auto-detect via API-key env vars, falling back to the keyless claude-cli backend when /usr/bin/claude is present); semantic keys like GEMINI_API_KEY/GOOGLE_API_KEY enable Gemini semantic mode. NOTE: GRAPHIFY_OUT is wrapper-internal (set to cacheDir by run_graphify_cmd so byproducts never pollute the repo) and is NOT a user override for the wrappers.",
     "_comment_anthropic": "以下为可选配置（已禁用）",
     "_disabled_anthropic": "[object Object]"
@@ -68,6 +69,9 @@
       "Bash(cat > /tmp/*.md:*)",
       "Bash(source venv/bin/activate:*)",
       "Bash(source venv/bin/activate && python*)",
+      "Bash(source ~/.claude/venv/bin/activate && python3 ~/.claude/scripts/graphify-query.py:*)",
+      "Bash(source ~/.claude/venv/bin/activate && python3 ~/.claude/scripts/graphify-maintain.py:*)",
+      "Bash(source ~/.claude/venv/bin/activate && python3 ~/.claude/scripts/graphify-enrich.py:*)",
       "Bash(/tmp/*-venv/bin/python*)",
       "Bash(grep:*)",
       "Bash(find:*)",
@@ -306,7 +310,7 @@
       "Edit(.claude/CLAUDE.md)"
     ]
   },
-  "model": "sonnet",
+  "model": "opus",
   "hooks": {
     "SessionStart": [
       {
@@ -381,6 +385,14 @@
             "type": "command",
             "command": "bash \"$HOME/.claude/hooks/userprompt-tmpfs-pressure.sh\"",
             "timeout": 15
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$HOME/.claude/hooks/userprompt-bulk-commit-capability.py\""
           }
         ]
       }
@@ -794,7 +806,7 @@
     ]
   },
   "alwaysThinkingEnabled": true,
-  "effortLevel": "high",
+  "effortLevel": "xhigh",
   "theme": "dark",
   "autoCompactEnabled": true
 }
