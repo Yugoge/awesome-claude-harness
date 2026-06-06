@@ -5,7 +5,7 @@ Organization and usage documentation for `.claude/`.
 <!-- AUTO:readme-stats -->
 
 ## Overview
-- **Total files**: 63
+- **Total files**: 65
 - **Subdirectories**: 34
 - **Naming convention**: lower
 
@@ -33,7 +33,9 @@ Organization and usage documentation for `.claude/`.
 - `workflow-483e030c-3ab6-42d0-973e-8a2a4b8b8806.json` - json config
 - `workflow-49d0cdde-0555-4c6a-9354-0076adf7db42.json` - json config
 - `workflow-4e6b0a9e-bdd6-47ca-8ec4-95cae992867d.json` - json config
+- `workflow-77be7954-cf76-4fea-a146-5cb88f32a69f.json` - json config
 - `workflow-78c6f989-5b0e-4d7b-b692-6cabbe0008bf.json` - json config
+- `workflow-c06612f8-ee7f-4790-a376-c8f252c570df.json` - json config
 - `workflow-d5e5ffb8-89bd-409f-a8c0-d00f45ecbce3.json` - json config
 - `workflow-dd3a870c-9440-4274-896f-462dfe972646.json` - json config
 - `workflow-eaa1077b-49ad-4697-8e01-e4a923d2b116.json` - json config
