@@ -43,6 +43,69 @@ if [ "$TOOL_NAME" != "Bash" ]; then
   exit 0
 fi
 
+# ── Protected-runtime guard (generic engine; runs FIRST, before any bypass) ──
+# A self-contained Layer-1 block that protects a long-running local service from
+# being restarted / handed-off / killed by routine agent commands. The engine
+# (hooks/lib/runtime_guard.py) and this glue contain ZERO project identifiers;
+# every project-specific name (command basenames, workspace names, service
+# units, file globs, monorepo roots) lives ONLY in a machine-local data file.
+#
+# Ordering contract (mandatory): this block executes BEFORE the /do bypass,
+# BEFORE the /allow sentinel short-circuit, and BEFORE the legacy block rules,
+# so its decisions are unbypassable. It is also self-contained: it re-parses the
+# stdin payload via the helper and does NOT depend on any later-initialized
+# command-context variable.
+#
+# The helper performs STEP0 (config self-protection, hardcoded generic path),
+# STEP1 (fail-closed indeterminate policy on missing/malformed config), and the
+# P1..P9 generic primitives. It prints exactly one verdict token on stdout:
+#   BLOCK         -> deny (exit 2)
+#   ALLOW         -> proceed
+#   INDETERMINATE -> helper could not parse the payload
+# and writes a BLOCK reason to stderr. It never runs a real command.
+#
+# FAIL-CLOSED CONTRACT: the helper is a mandatory deployment artifact shipped in
+# this same repo. If it is MISSING, errors, or returns anything other than the
+# literal ALLOW, we MUST NOT silently fall open into the bypassable legacy rules.
+# Instead we run a tiny generic danger-family fallback (same verb families the
+# helper's STEP1 uses — no project names) and deny if the command is in a
+# protected family; benign commands (ls/cat/git) still proceed.
+_runtime_guard_fail_closed() {
+  # Returns 0 (deny) if the raw command matches a generic protected verb family.
+  local cmd="$1"
+  printf '%s\n' "$cmd" | grep -qiE '(^|[;&|]|[[:space:]])(systemctl|service)[[:space:]]+(start|stop|restart|try-restart|reload|reload-or-restart|kill|disable|mask|enable)([[:space:]]|$)' && return 0
+  printf '%s\n' "$cmd" | grep -qiE '(^|[;&|]|[[:space:]])(kill|pkill|killall)([[:space:]]|$)' && return 0
+  printf '%s\n' "$cmd" | grep -qiE '(^|[;&|]|[[:space:]])(yarn|npm|pnpm|bun)([[:space:]]|$)' && return 0
+  printf '%s\n' "$cmd" | grep -qiE '(^|[;&|]|[[:space:]])(npx|bunx|tsc|pkgroll|tsup)([[:space:]]|$)' && return 0
+  printf '%s\n' "$cmd" | grep -qiE '(^|[;&|]|[[:space:]])(node|nodejs|tsx|deno)([[:space:]]|$)' && return 0
+  return 1
+}
+_RUNTIME_GUARD_LIB="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/runtime_guard.py"
+_RUNTIME_GUARD_ERR="$(mktemp "${CLAUDE_TMPDIR%/}/runtime-guard-XXXXXX" 2>/dev/null || echo /dev/null)"
+if [ -f "$_RUNTIME_GUARD_LIB" ]; then
+  _RUNTIME_GUARD_VERDICT=$(printf '%s' "$INPUT" | "$PYTHON_BIN" "$_RUNTIME_GUARD_LIB" 2>"$_RUNTIME_GUARD_ERR")
+else
+  _RUNTIME_GUARD_VERDICT="MISSING"
+fi
+if [ "$_RUNTIME_GUARD_VERDICT" = "BLOCK" ]; then
+  [ -s "$_RUNTIME_GUARD_ERR" ] && cat "$_RUNTIME_GUARD_ERR" >&2
+  [ "$_RUNTIME_GUARD_ERR" != "/dev/null" ] && rm -f "$_RUNTIME_GUARD_ERR" 2>/dev/null
+  echo "BLOCKED: protected-runtime-guard — this command could restart, hand off, or kill a protected local service, or rebuild/launch its protected package. This block is generic and unbypassable (it runs before /do and /allow)." >&2
+  echo "If the human operator intends to run it, they must do so from a real terminal — Claude/subagents are never permitted this command." >&2
+  exit 2
+elif [ "$_RUNTIME_GUARD_VERDICT" != "ALLOW" ]; then
+  # MISSING helper / nonzero exit / INDETERMINATE / unrecognized verdict: the
+  # guard could not authoritatively decide. Fail closed for danger families.
+  [ "$_RUNTIME_GUARD_ERR" != "/dev/null" ] && rm -f "$_RUNTIME_GUARD_ERR" 2>/dev/null
+  if _runtime_guard_fail_closed "$COMMAND"; then
+    echo "BLOCKED: protected-runtime-guard FAIL-CLOSED — the guard engine is unavailable or returned no decision (verdict='$_RUNTIME_GUARD_VERDICT'), and this command is in a protected verb family (service/kill/package-manager/build/runtime). Denied conservatively. A human operator must run it from a real terminal, and the guard deployment ($_RUNTIME_GUARD_LIB) should be repaired." >&2
+    exit 2
+  fi
+else
+  [ "$_RUNTIME_GUARD_ERR" != "/dev/null" ] && rm -f "$_RUNTIME_GUARD_ERR" 2>/dev/null
+fi
+# ─────────────────────────────────────────────────────────────────────────────
+
 # ── Dev whitelist (exact names only) ──────────────────────────────
 # These are the ONLY dev resources that can be freely managed.
 DEV_CONTAINERS="happy-web-dev"
@@ -692,7 +755,8 @@ fi
 # script path from python3 segment tokens. False positives from quoted string
 # arguments are resolved inside the block by _bulk_decision (dev-20260529-210759).
 if echo "$COMMAND" | grep -qF '/tmp/claude-bulk-commit-sentinel-' \
-   || echo "$COMMAND" | grep -qF 'write-bulk-commit-sentinel.py'; then
+   || echo "$COMMAND" | grep -qF 'write-bulk-commit-sentinel.py' \
+   || echo "$COMMAND" | grep -qF 'userprompt-bulk-commit-capability.py'; then
   # M5 (task 20260526-052559): canonical /commit --bulk Step 5 venv-activate form.
   # Must be checked in bash BEFORE the Python compound-detection helper because the
   # canonical form contains && (compound) and source (shell keyword) — the Python
@@ -980,32 +1044,37 @@ for t in tokens:
 # These reach here because they have no compound separators, no recursive shell,
 # and no write-action tokens. The shlex tokenizer (posix=True) unquotes the
 # string arg, so the protected name appears as a substring of the arg token.
-_SENTINEL_SCRIPT = 'write-bulk-commit-sentinel.py'
+_PROTECTED_SCRIPTS = ('write-bulk-commit-sentinel.py', 'userprompt-bulk-commit-capability.py')
 _SENTINEL_PATH = '/tmp/claude-bulk-commit-sentinel-'
-_sentinel_in_arg_only = False
+_protected_standalone = False   # a real executable/path reference
+_protected_in_arg = False       # only embedded in a longer argument token
 for _t in tokens:
-    # If any token IS the standalone path (or a path ending with it), it is a
-    # real executable reference — no false-positive guard applies.
-    if _t == _SENTINEL_SCRIPT or _t.endswith('/' + _SENTINEL_SCRIPT):
-        _sentinel_in_arg_only = False
-        break
+    for _ps in _PROTECTED_SCRIPTS:
+        if _t == _ps or _t.endswith('/' + _ps):
+            _protected_standalone = True
+        elif _ps in _t:
+            _protected_in_arg = True
     if _t.startswith(_SENTINEL_PATH) and not any(c in _t[len(_SENTINEL_PATH):] for c in ' \t'):
-        _sentinel_in_arg_only = False
-        break
-    # Protected name appears embedded in a longer token (argument text).
-    if _SENTINEL_SCRIPT in _t or _SENTINEL_PATH in _t:
-        _sentinel_in_arg_only = True
-if _sentinel_in_arg_only:
+        _protected_standalone = True
+    elif _SENTINEL_PATH in _t:
+        _protected_in_arg = True
+# Name appears ONLY as argument text (e.g. a codex prompt discussing it), never as
+# a standalone executable/path token -> benign read, allow.
+if _protected_in_arg and not _protected_standalone:
     print('PURE_READ')
     sys.exit(0)
 
-# Allowlist (a): BARE official-writer — first token (or first 2 tokens for
-# `python3 scripts/...`) must match the official writer path EXACTLY. The
-# regex form is preserved on the trimmed text but ONLY reaches here when the
-# command has no compound/write/dangerous shape.
-BARE_WRITER_RE = re.compile(r'^(python3?\s+)?scripts/write-bulk-commit-sentinel\.py(\s|$)')
-if BARE_WRITER_RE.match(trimmed):
-    print('BARE_WRITER')
+# Stage-2 lockdown: the canonical writer is NO LONGER Bash-executable. The bulk
+# sentinel is minted ONLY by the trusted userprompt-bulk-commit-capability hook
+# (in-process, never via the Bash tool), so no BARE_WRITER allow-path remains.
+# Git operations on the protected source files (add/status/diff/commit/mv/rm/
+# restore/log/show/...) are legitimate version-control actions, NOT execution of
+# the writer/hook to mint a sentinel -- allow them. All dangerous compound /
+# redirect / recursive-shell / cmd-sub shapes were already DENYed by the gauntlet
+# above, so a bare `git ...` reaching here is safe; the separate privilege guard
+# (pretool-git-privilege-guard.py) still independently gates the actual commit/push.
+if tokens and tokens[0] == 'git':
+    print('PURE_READ')
     sys.exit(0)
 
 # Allowlist (b): single pure-read invocation. First token must be a pure-read verb.

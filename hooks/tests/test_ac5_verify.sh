@@ -4,7 +4,7 @@ TMPDIR_SELF=$(mktemp -d -t ac5-verify-XXXXXX)
 trap 'rm -rf "$TMPDIR_SELF" 2>/dev/null' EXIT INT TERM
 STEP7_MD="$TMPDIR_SELF/step7.md"
 awk '
-  /^#{2,3}[[:space:]]+Step 7/ { in_section = 1; print; next }
+  /^#{2,3}[[:space:]]+Step 8/ { in_section = 1; print; next }
   /^#{2,3}[[:space:]]+Step [0-9]/ && in_section { in_section = 0 }
   in_section { print }
 ' commands/commit.md > "$STEP7_MD"

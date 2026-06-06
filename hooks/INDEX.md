@@ -1,7 +1,7 @@
 # hooks
 
-*Last updated: 2026-05-30T17:28:06Z*
-**Total entries**: 138
+*Last updated: 2026-06-02T15:08:44Z*
+**Total entries**: 141
 **Convention**: kebab
 
 ## Tree
@@ -31,6 +31,7 @@ hooks/
 │   ├── `closeout.py` - Public API:
 │   ├── `contract_runtime.py` - This module is the single shared engine consumed by every contract-aware
 │   ├── `policy_registry.py` - Reads /root/.claude/policies/tool-policy.v1.json and provides a single
+│   ├── `runtime_guard.py` - This module contains ZERO project identifiers. Every project-specific name
 │   ├── `schema_registry.py` - Reads schemas/registry.json once and lazily loads referenced schema files
 │   ├── `specialist_yield.py` - Public API:
 │   ├── `subagent.py` - Single source of truth for is_subagent_context() and supporting helpers
@@ -49,7 +50,8 @@ hooks/
 │   ├── `test_commit_strip_dotfile_paths.py` - Bug surfaced cycle 20260511-100000: dev-report listed 6 `.claude/commands/*`
 │   ├── `test_cp_checkin.py` - of ba-spec-20260427-194324.md (P1 view-trigger removal + P2 generation field)
 │   ├── `test_final_sweep.sh` - Final sweep — run inline AC checks and print PASS/FAIL summary.
-│   └── `test_push_sentinel_abort.sh` - Unit test for AC1 V5: hooks/push.sh self-aborts before any real git push
+│   ├── `test_push_sentinel_abort.sh` - Unit test for AC1 V5: hooks/push.sh self-aborts before any real git push
+│   └── `test_runtime_guard.py` - Two layers:
 ├── `audit-slashcommand.sh` - audit-slashcommand.sh
 ├── `auto-commit.sh` - ============================================================================
 ├── `check-todo-md-sync.py` - check-todo-md-sync.py — Session-start drift detector for todo scripts
@@ -141,7 +143,7 @@ hooks/
 ├── `subagent-stop-diff-check.sh` - SubagentStop hook: flag large diffs without minimum-diff justification
 ├── `subagent-stop-guard-integrity.sh` - subagent-stop-guard-integrity.sh
 ├── `subagentstop-codex-enforce.py` - Activation logic:
-├── `subagentstop-cp-enforce.py` - SubagentStop hook: spec checkpoint enforcement (W6); ADVISORY by default (always exit 0, logs would-block events), blocks only if CP_ENFORCE_MODE=block
+├── `subagentstop-cp-enforce.py` - Description: SubagentStop hook for spec checkpoint enforcement (W6).
 ├── `subagentstop-e2e-enforce.py` - Activation logic:
 ├── `userprompt-consent-allowlist.sh` - UserPromptSubmit Hook: parse `/allow <pattern>` and write a single-use
 ├── `userprompt-doc-sync-check.py` - UserPromptSubmit Hook: Periodic file deletion detection for doc-sync

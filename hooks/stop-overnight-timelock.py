@@ -234,7 +234,14 @@ def main():
     """Entry point for the stop-overnight-timelock hook."""
     context = read_stdin_context()
     if context.get('stop_hook_active', False):
-        sys.exit(0)
+        # NEVER-STOP-UNTIL-END_TIME: honor the framework loop-guard only AFTER
+        # end_time; while now < end_time, fall through so the lock re-blocks every stop.
+        _sid = context.get('session_id', '')
+        _pdir = Path(os.environ.get('CLAUDE_PROJECT_DIR', os.getcwd()))
+        _st = load_state(_pdir, _sid)
+        _et = parse_end_time(_st) if _st else None
+        if _et is None or datetime.now() >= _et:
+            sys.exit(0)
 
     session_id = context.get('session_id', '')
     project_dir = Path(os.environ.get('CLAUDE_PROJECT_DIR', os.getcwd()))

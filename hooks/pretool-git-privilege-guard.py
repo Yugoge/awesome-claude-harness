@@ -518,6 +518,8 @@ def _has_bulk_commit_sentinel(data):
                 continue
             if sentinel.get('kind') != 'bulk-commit':
                 continue
+            if sentinel.get('origin') != 'userpromptsubmit-hook':
+                continue
             if not _end_time_passed(sentinel.get('expires_at', '')):
                 return True
     return False

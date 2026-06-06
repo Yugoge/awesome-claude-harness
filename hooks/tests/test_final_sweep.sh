@@ -88,7 +88,7 @@ grep -qF 'GRANT_TTL_MINUTES = 30' scripts/write-commit-grant.py && results+=("AC
 
 # AC5
 awk '
-  /^#{2,3}[[:space:]]+Step 7/ { in_section = 1; print; next }
+  /^#{2,3}[[:space:]]+Step 8/ { in_section = 1; print; next }
   /^#{2,3}[[:space:]]+Step [0-9]/ && in_section { in_section = 0 }
   in_section { print }
 ' commands/commit.md > "$STEP7_MD"
