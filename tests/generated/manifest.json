@@ -113,6 +113,10 @@
     {
       "task_id": "dev-20260531-193000",
       "manifest_path": "tests/generated/dev-20260531-193000/manifest.json"
+    },
+    {
+      "task_id": "20260531-112831-bug1",
+      "manifest_path": "tests/generated/20260531-112831-bug1/manifest.json"
     }
   ]
 }

@@ -1,0 +1,78 @@
+{
+  "schema_version": "1.1",
+  "task_id": "20260531-112831-bug1",
+  "generated_at": "2026-06-03T00:00:00Z",
+  "active_tests": [
+    {
+      "task_id": "20260531-112831-bug1",
+      "ac_id": "AC1",
+      "ac_uid": "ac1-warm-scoped-restore",
+      "type": "data",
+      "file": "tests/generated/20260531-112831-bug1/test_AC1_ac1-warm-scoped-restore.py",
+      "status": "active",
+      "hook_check": {
+        "type": "script_logic",
+        "file": "/root/bin/happy-daemon-post-start.sh",
+        "pattern": "happy-session-recovery.sh restore --home",
+        "condition": "warm_restart_path"
+      }
+    },
+    {
+      "task_id": "20260531-112831-bug1",
+      "ac_id": "AC2",
+      "ac_uid": "ac2-cold-global-restore",
+      "type": "data",
+      "file": "tests/generated/20260531-112831-bug1/test_AC2_ac2-cold-global-restore.py",
+      "status": "active",
+      "hook_check": {
+        "type": "script_logic",
+        "file": "/root/bin/happy-daemon-post-start.sh",
+        "pattern": "happy-session-recovery.sh restore",
+        "negative_pattern": "happy-session-recovery.sh restore --home",
+        "condition": "cold_boot_path"
+      }
+    },
+    {
+      "task_id": "20260531-112831-bug1",
+      "ac_id": "AC3",
+      "ac_uid": "ac3-sentinel-written",
+      "type": "data",
+      "file": "tests/generated/20260531-112831-bug1/test_AC3_ac3-sentinel-written.py",
+      "status": "active",
+      "hook_check": {
+        "type": "script_logic",
+        "file": "/root/bin/happy-daemon-post-start.sh",
+        "pattern": "echo.*>.*happy-ps-",
+        "condition": "sentinel_written_before_nohup"
+      }
+    },
+    {
+      "task_id": "20260531-112831-bug1",
+      "ac_id": "AC4",
+      "ac_uid": "ac4-empty-bootid-fallback",
+      "type": "data",
+      "file": "tests/generated/20260531-112831-bug1/test_AC4_ac4-empty-bootid-fallback.py",
+      "status": "active",
+      "hook_check": {
+        "type": "script_logic",
+        "file": "/root/bin/happy-daemon-post-start.sh",
+        "pattern": "\\[ -n.*current_boot.*\\]",
+        "condition": "empty_boot_id_treated_as_cold"
+      }
+    },
+    {
+      "task_id": "20260531-112831-bug1",
+      "ac_id": "AC5",
+      "ac_uid": "ac5-edge-case-comment",
+      "type": "data",
+      "file": "tests/generated/20260531-112831-bug1/test_AC5_ac5-edge-case-comment.py",
+      "status": "active",
+      "hook_check": {
+        "type": "grep",
+        "file": "/root/bin/happy-daemon-post-start.sh",
+        "pattern": "warm.*multi.*restart|all 4.*simultaneously|3.*scoped.*lose"
+      }
+    }
+  ],
+  "archived_tests": []
+}

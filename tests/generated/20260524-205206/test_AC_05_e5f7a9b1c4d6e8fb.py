@@ -26,11 +26,11 @@ def test_AC_05_phase_a_blocked_bulk_no_step7_marker():
     """
     Phase A: invoke write-bulk-commit-sentinel.py without an auth flag and
     assert (1) non-zero exit, (2) no sentinel file written, (3) no
-    push-gate token created. Step 7 SKIP is documented in commit.md
-    (BULK=true unconditionally skips Step 7), so no spec-update marker
+    push-gate token created. Step 8 SKIP is documented in commit.md
+    (BULK=true unconditionally skips Step 8), so no spec-update marker
     can be emitted for this scenario.
 
-    Iter-2: ALSO exercise the Step 7 harness BULK=true SKIP path to prove
+    Iter-2: ALSO exercise the Step 8 harness BULK=true SKIP path to prove
     no STEP7_SPEC_UPDATE_DISPATCHED marker emits.
     """
     script = REPO_ROOT / "scripts" / "write-bulk-commit-sentinel.py"
@@ -54,10 +54,10 @@ def test_AC_05_phase_a_blocked_bulk_no_step7_marker():
         leftover = list(pathlib.Path(tmp).glob("claude-bulk-commit-sentinel-*.json"))
         assert leftover == [], f"Phase A: sentinel must not be written; found {leftover}"
 
-    # commit.md Step 7 SKIP condition unchanged (BULK=true => skip)
+    # commit.md Step 8 SKIP condition unchanged (BULK=true => skip)
     commit_md = COMMIT_MD.read_text(encoding="utf-8")
     assert "BULK=true" in commit_md
-    assert "Step 7" in commit_md
+    assert "Step 8" in commit_md
 
     # Iter-2: also exercise harness BULK=true SKIP path
     env = os.environ.copy()
@@ -76,18 +76,18 @@ def test_AC_05_phase_a_blocked_bulk_no_step7_marker():
 
 def test_AC_05_phase_b_static_step7_dispatch_present():
     """
-    Phase B (static portion): commit.md Step 7 dispatch logic + COMMIT_STEP7_TRACE
+    Phase B (static portion): commit.md Step 8 dispatch logic + COMMIT_STEP7_TRACE
     markers + BULK=true SKIP condition are all present in the source-of-truth file.
-    Iter-2: also asserts the trace contract is documented in Step 7 region.
+    Iter-2: also asserts the trace contract is documented in Step 8 region.
     """
     commit_md = COMMIT_MD.read_text(encoding="utf-8")
-    assert "### Step 7: Spec-update dispatch" in commit_md
+    assert "### Step 8: Spec-update dispatch" in commit_md
     skip_region = commit_md[
-        commit_md.find("### Step 7"):commit_md.find("### Step 7") + 4000
+        commit_md.find("### Step 8"):commit_md.find("### Step 8") + 4000
     ]
-    assert "BULK=true" in skip_region, "Step 7 SKIP condition must include BULK=true"
-    assert "context.spec_path" in skip_region, "Step 7 dispatch logic missing"
-    # iter-2: trace contract documented in Step 7 region
+    assert "BULK=true" in skip_region, "Step 8 SKIP condition must include BULK=true"
+    assert "context.spec_path" in skip_region, "Step 8 dispatch logic missing"
+    # iter-2: trace contract documented in Step 8 region
     assert "COMMIT_STEP7_TRACE" in skip_region
     assert "STEP7_SPEC_UPDATE_DISPATCHED" in skip_region
     assert "STEP7_SKIPPED" in skip_region
@@ -222,11 +222,11 @@ def test_AC_05_phase_b_e2e_stage1_context_spec_path_dispatch():
     """
     Phase B real end-to-end (stage 1): synthetic dirty git repo + real
     simulated-changelog commit + push-gate token written + context.spec_path
-    pointing at a real spec file => Step 7 stage-1 dispatch fires AND
+    pointing at a real spec file => Step 8 stage-1 dispatch fires AND
     STEP7_SPEC_UPDATE_DISPATCHED marker is observed on stderr.
 
-    Step 7 is executed via scripts/step7-spec-update.py — the executable
-    reference embodiment of commit.md Step 7 (cited from commit.md trace section).
+    Step 8 is executed via scripts/step7-spec-update.py — the executable
+    reference embodiment of commit.md Step 8 (cited from commit.md trace section).
     """
     with tempfile.TemporaryDirectory(prefix="ac05-phaseb-s1-") as tmp:
         tmp_root = pathlib.Path(tmp)
@@ -272,7 +272,7 @@ def test_AC_05_phase_b_e2e_stage1_context_spec_path_dispatch():
         proc = _run_step7(task_id, dev_docs_root, push_gate,
                           changelog_status=cl_status["commit_status"])
         assert proc.returncode == 0, (
-            f"Step 7 must succeed; stdout={proc.stdout!r} stderr={proc.stderr!r}"
+            f"Step 8 must succeed; stdout={proc.stdout!r} stderr={proc.stderr!r}"
         )
         assert "STEP7_SPEC_UPDATE_DISPATCHED" in proc.stderr, (
             f"Phase B stage-1 dispatch marker missing.\n"
@@ -286,7 +286,7 @@ def test_AC_05_phase_b_e2e_stage1_context_spec_path_dispatch():
 def test_AC_05_phase_b_e2e_stage2_close_report_continuation_dispatch():
     """
     Phase B real end-to-end (stage 2): context.spec_path is NULL — close-report
-    has a `Continuation spec` line that matches the regex, and Step 7 stage-2
+    has a `Continuation spec` line that matches the regex, and Step 8 stage-2
     dispatch fires.
     """
     with tempfile.TemporaryDirectory(prefix="ac05-phaseb-s2-") as tmp:
@@ -328,7 +328,7 @@ def test_AC_05_phase_b_e2e_stage2_close_report_continuation_dispatch():
 def test_AC_05_phase_b_e2e_stage4_no_spec_outcome():
     """
     Phase B real end-to-end (stage 4 empty-set): no context.spec_path, no
-    close-report continuation line, no marker spec in specs/ — Step 7 completes
+    close-report continuation line, no marker spec in specs/ — Step 8 completes
     silently with exit 0 and emits STEP7_NO_SPEC marker.
     """
     with tempfile.TemporaryDirectory(prefix="ac05-phaseb-s4-") as tmp:
@@ -360,7 +360,7 @@ def test_AC_05_phase_b_e2e_stage4_no_spec_outcome():
 def test_AC_05_phase_b_e2e_step7_skipped_when_no_push_gate():
     """
     Phase B (skip branch): if changelog-analyst did NOT write a push-gate token,
-    Step 7 SKIPs and emits STEP7_SKIPPED: changelog_no_real_commit.
+    Step 8 SKIPs and emits STEP7_SKIPPED: changelog_no_real_commit.
     """
     with tempfile.TemporaryDirectory(prefix="ac05-phaseb-skip-") as tmp:
         tmp_root = pathlib.Path(tmp)
@@ -385,8 +385,8 @@ def test_AC_05_phase_AB_sequential_same_dirty_repo_primary():
     """
     PRIMARY AC-05 test (codex finding #4): single synthetic dirty repo, run
     Phase A blocked-bulk first, assert tree still dirty + no push-gate token +
-    no Step 7 marker, then run Phase B non-bulk fallback on the SAME repo and
-    assert real commit + canonical push-gate token + Step 7 dispatch marker.
+    no Step 8 marker, then run Phase B non-bulk fallback on the SAME repo and
+    assert real commit + canonical push-gate token + Step 8 dispatch marker.
 
     This is the closest a pytest fixture can come to invoking /commit
     end-to-end. The Claude orchestrator (LLM-driven slash command) is
@@ -396,12 +396,12 @@ def test_AC_05_phase_AB_sequential_same_dirty_repo_primary():
       - Phase B: direct invocation of git plumbing (mirroring changelog-analyst
         Phase 5 commit creation) + push-gate write at canonical path (mirroring
         changelog-analyst Phase 6) + scripts/step7-spec-update.py (the
-        reference embodiment of /commit Step 7 selection + trace).
+        reference embodiment of /commit Step 8 selection + trace).
 
     The LLM-driven changelog-analyst dispatch (Step 6) is simulated via direct
     git-plumbing because (a) changelog-analyst is a Claude Code subagent that
     cannot be invoked from a pytest subprocess and (b) the AC-05 SUCCESS
-    SIGNAL — push-gate token written + Step 7 marker observed — is verified at
+    SIGNAL — push-gate token written + Step 8 marker observed — is verified at
     the same artifact boundary.
     """
     with tempfile.TemporaryDirectory(prefix="ac05-AB-") as tmp:
@@ -455,7 +455,7 @@ def test_AC_05_phase_AB_sequential_same_dirty_repo_primary():
         assert not push_dir.exists(), (
             "Phase A: no push-gate token must exist (no real commit produced)"
         )
-        # No Step 7 markers emitted
+        # No Step 8 markers emitted
         assert "STEP7_" not in proc_a.stderr, (
             f"Phase A: no STEP7_ markers expected; stderr={proc_a.stderr!r}"
         )
@@ -504,11 +504,11 @@ def test_AC_05_phase_AB_sequential_same_dirty_repo_primary():
             close_report_continuation=None,
         )
 
-        # 5. Execute commit.md Step 7 via reference harness
+        # 5. Execute commit.md Step 8 via reference harness
         proc_b = _run_step7(task_id, dev_docs_root, push_gate,
                             changelog_status=cl_status["commit_status"])
         assert proc_b.returncode == 0, (
-            f"Step 7 must succeed; stderr={proc_b.stderr!r}"
+            f"Step 8 must succeed; stderr={proc_b.stderr!r}"
         )
         assert "STEP7_SPEC_UPDATE_DISPATCHED" in proc_b.stderr, (
             f"Phase B: dispatch marker missing from stderr={proc_b.stderr!r}"
@@ -523,7 +523,7 @@ def test_AC_05_phase_AB_sequential_same_dirty_repo_primary():
 def test_AC_05_phase_b_trace_off_parity():
     """
     Codex finding #8: COMMIT_STEP7_TRACE=1 must NOT affect stdout, exit codes,
-    or behavior — only stderr markers. Run the same Step 7 scenario twice, once
+    or behavior — only stderr markers. Run the same Step 8 scenario twice, once
     trace-OFF and once trace-ON, and assert stdout + exit code identical;
     stderr differs only by the STEP7_* marker lines.
     """
