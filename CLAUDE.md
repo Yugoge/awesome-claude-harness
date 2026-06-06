@@ -8,7 +8,7 @@
 # Global Claude Code Configuration
 
 <!-- AUTO:last-updated -->
-> Last updated: 2026-05-31
+> Last updated: 2026-06-06
 <!-- /AUTO:last-updated -->
 
 ---
@@ -64,6 +64,14 @@ Main agent is the orchestrator; delegate real work to subagents. Enforced by `~/
 ## 🚫 Safety Enforcement
 
 Enforced by `~/.claude/hooks/pretool-bash-safety.sh` (PreToolUse). Hook is the authoritative source — see hook for exact patterns and triggers.
+
+---
+
+## 🚳 No branch / PR / worktree creation outside dev-overnight
+
+**NON-NEGOTIABLE (2026-06-04).** Creating any **branch**, **PR**, or **worktree** is forbidden by default in every context — interactive, subagent, automation. A live `/dev-overnight` session is the always-on exception. Two human-authorized escape hatches are preserved: `/do` consent (main agent) and an `/allow` grant for the specific command.
+
+Enforced by two PreToolUse hooks. `~/.claude/hooks/pretool-block-branch-pr-worktree.py` (matcher `Bash`) blocks `git branch <name>` / `checkout -b` / `switch -c` (and `--orphan` / copy forms, path-qualified `git`, attached/clustered short options), `git worktree add`, and `gh pr create`. The `EnterWorktree` tool is blocked by `~/.claude/hooks/pretool-block-enterworktree.sh` (same overnight + `/do` + `/allow` bypass semantics). List / delete / rename / info forms of `git branch`, and `git worktree list/remove/prune`, remain allowed. Bypass: run inside `/dev-overnight` (a live `overnight-state-*.json` under `<project>/.claude/`), use `/do`, or `/allow` the command — or remove the hooks from `settings.json`.
 
 ---
 

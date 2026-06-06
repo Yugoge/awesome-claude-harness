@@ -23,6 +23,26 @@ if [ "$TOOL_NAME" != "EnterWorktree" ]; then
     exit 0
 fi
 
+# dev-overnight exception: a live /dev-overnight session may create worktrees.
+# Mirrors pretool-block-branch-pr-worktree.py — overnight is the always-on
+# exception and applies to subagents too, so it precedes the subagent block.
+_BEW_OV_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+_BEW_OV_CWD=$(echo "$INPUT" | python3 -c \
+  "import json,sys; d=json.load(sys.stdin); print(d.get('cwd','') or '')" \
+  2>/dev/null)
+if HOOKS_DIR="$_BEW_OV_DIR" BEW_OV_CWD="$_BEW_OV_CWD" python3 - <<'OVEOF' 2>/dev/null
+import os, sys
+sys.path.insert(0, os.environ["HOOKS_DIR"])
+try:
+    from lib.overnight import is_overnight_active
+    sys.exit(0 if is_overnight_active(os.environ.get("BEW_OV_CWD") or None) else 1)
+except Exception:
+    sys.exit(1)
+OVEOF
+then
+  exit 0
+fi
+
 # /do + /allow bypass (main-agent only)
 _BEW_IS_SUB=$(echo "$INPUT" | python3 -c \
   "import json,sys; d=json.load(sys.stdin); print('1' if d.get('agent_id') else '0')" \
