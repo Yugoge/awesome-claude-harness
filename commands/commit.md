@@ -12,15 +12,16 @@ branch commit. Handles nested repo (`/dev/shm/dev-workspace/dot-claude/`) automa
 ## Usage
 
 ```
-/commit [<task-id>] [--force] [--bulk] [--dry-run]
+/commit [<task-id>] [--force] [--bulk] [--dry-run] [--codex]
 ```
 
 | Flag | Meaning |
 |------|---------|
 | `<task-id>` | Required unless `--force` or `--bulk`. Task-id from the completed `/dev` cycle (e.g. `20260516-212024`). |
-| `--force` | Bypass close-gate check. Human-only (enforced by `disable-model-invocation: true`). Audited. |
+| `--force` | Bypass close-gate check **AND the pre-commit QA gate** (Step 6). Human-only (enforced by `disable-model-invocation: true`). Audited. |
 | `--bulk` | Smart batch mode — group by task-id then subsystem, commit coherently, flag orphan files separately. Human-only (enforced by `disable-model-invocation: true`). |
-| `--dry-run` | Print what would be staged/committed; do not execute. |
+| `--dry-run` | Print what would be staged/committed (and the QA verdict); do not execute the real commit. |
+| `--codex` | In the pre-commit QA gate (Step 6), QA additionally runs an adversarial Codex round on the staged set. Without it, QA does a single-round self-review. |
 
 ## Step-by-step workflow
 
@@ -30,6 +31,7 @@ Parse `$ARGUMENTS`:
 - Strip `--force` if present → set `FORCE=true`; else `FORCE=false`
 - Strip `--bulk` if present → set `BULK=true`; else `BULK=false`
 - Strip `--dry-run` if present → set `DRYRUN=true`; else `DRYRUN=false`
+- Strip `--codex` if present → set `QA_CODEX=true`; else `QA_CODEX=false`
 - Remaining token (if any) is `TASK_ID`
 
 ### Step 2: Resolve task-id (unless --bulk)
@@ -76,11 +78,9 @@ Print: `WARNING: --force bypasses close-gate. Audit entry written to ~/.claude/l
 ### Step 5: Write commit grant and dispatch-snapshot manifest
 
 Before dispatching changelog-analyst, write the appropriate authorization token:
-- **BULK=true**: write a **multi-use bulk-commit sentinel** (NOT a single-use grant) so that changelog-analyst can make multiple auto-bulk commits within the 30-minute window. Activate venv and run:
-  ```bash
-  source venv/bin/activate && python3 /root/.claude/scripts/write-bulk-commit-sentinel.py
-  ```
-  If neither CLAUDE_CODE_SESSION_ID nor CLAUDE_SESSION_ID is set, abort immediately with: `Cannot write bulk-commit sentinel: CLAUDE_CODE_SESSION_ID (and CLAUDE_SESSION_ID) not set. Invoke /commit --bulk from within a Claude Code session.` Do NOT proceed to dispatch changelog-analyst.
+- **BULK=true**: the multi-use bulk-commit capability is now minted by the TRUSTED `userprompt-bulk-commit-capability.py` hook the moment the human submits `/commit --bulk` (an LLM cannot self-invoke a `disable-model-invocation: true` slash command, so the prompt itself is the trust root). The orchestrator MUST NOT emit a Bash command to write the sentinel — that fragile exact-string path is retired.
+  - PRIMARY: assume the hook already minted `/tmp/claude-bulk-commit-sentinel-<sid>-<nonce>.json` (origin `userpromptsubmit-hook`). Proceed to the **Step 6 pre-commit QA gate** (then Step 7) — `--bulk` is NOT exempt from the QA gate (only `FORCE=true` bypasses it). An optional read-only check is a single bare `ls /tmp/claude-bulk-commit-sentinel-*.json`.
+  - NO FALLBACK: the canonical writer is no longer Bash-executable (Layer 1.F deny-only, stage-2). The hook is the SOLE minter. If the capability is absent, the `userprompt-bulk-commit-capability.py` hook is not yet active in this session — instruct the user to restart the session so settings.json reloads the hook, then re-run `/commit --bulk`. Do NOT attempt to write the sentinel via Bash.
 - **BULK=false**: write **two single-use commit grants** (one for root-repo commit or root-repo recovery, one for nested-repo recovery commit). Activate venv and run Python to write the grants. The script resolves the session ID from `CLAUDE_CODE_SESSION_ID` (primary) or `CLAUDE_SESSION_ID` (fallback). If neither is set, abort immediately with: `Cannot write commit grant: CLAUDE_CODE_SESSION_ID (and CLAUDE_SESSION_ID) not set. Invoke /commit from within a Claude Code session.` Do NOT proceed to dispatch changelog-analyst. If `sid` is set, generate `grant_path = /tmp/claude-commit-grant-{sid}-{nonce}.json` containing `task_id`, `sid`, `nonce`, `expires_at`, and `created_at`. The guard IS registered and active — grant absence WILL block the changelog-analyst commit.
 
 **Grant timestamp format (NON-NEGOTIABLE)**: The `expires_at` and `created_at` fields MUST be ISO-8601 strings produced from timezone-aware UTC datetimes (e.g. `(datetime.now(timezone.utc) + timedelta(minutes=30)).isoformat()` yields `"2026-05-19T16:18:56.123456+00:00"`). Epoch integers and epoch floats (e.g. `int(time.time()) + 600`, `time.time() + 600`) are NOT accepted by the privilege guard. The guard at `/root/.claude/hooks/pretool-git-privilege-guard.py:377-384` parses these fields via `datetime.fromisoformat(end_str.replace('Z', '+00:00'))`; on `ValueError`/`TypeError`/`AttributeError` the helper `_end_time_passed` returns `True` (i.e. "already expired"), which silently rejects the grant and blocks the commit. The expiration window is 30 minutes from `created_at` — bake the offset into `expires_at` at write time. Activate the venv and invoke the grant-writer script (resolves `CLAUDE_SESSION_ID` from the environment, generates a fresh nonce, writes timezone-aware ISO-8601 `created_at` and `expires_at` on a 30-minute window, and emits the resulting grant path on stdout):
@@ -99,7 +99,96 @@ Both `created_at` and `expires_at` MUST match the regex `^20\d{2}-\d{2}-\d{2}T\d
 
 Also write the dispatch-snapshot manifest (non-bulk mode only): activate venv and run Python to capture `git status --porcelain=v1` from both repos, then write `manifest_path = /tmp/claude-commit-manifest-{sid}.json` containing `session_id`, `task_id`, `dispatched_at`, and `files_at_dispatch`. Best-effort; skip entirely in bulk mode.
 
-### Step 6: Dispatch changelog-analyst
+### Step 6: Pre-commit QA review gate (skip if FORCE=true)
+
+A QA agent reviews **what is actually about to be committed** (the staged set + its diff) and may BLOCK the commit. This is an independent second reviewer on top of `changelog-analyst`'s own staging judgment — it exists because `--bulk` / `--force` skip `/close` entirely, and even a normal commit's *literal staged diff* deserves a fresh adversarial check for junk / secrets / scope contamination. The gate reviews the diff itself, NOT the dev-report.
+
+**If `FORCE=true`: skip this entire step.** Print `WARNING: --force bypasses the pre-commit QA gate.` and proceed to Step 7 (human override accepts the risk; the bypass is already audited by Step 4).
+
+Otherwise (applies to BOTH `BULK=false` and `BULK=true`):
+
+**Step 6a — Produce the staging plan (internal dry-run; plan-only).**
+Dispatch `changelog-analyst` (Agent, `subagent_type: changelog-analyst`) with the **same prompt as Step 7 but `DRYRUN=true`** (force dry-run regardless of the user's `--dry-run`). Under `DRYRUN=true` changelog-analyst classifies, stages the candidate set into the index, and STOPS before commit — it does NOT commit, write push-gate tokens, run any recovery commit, or consume the Step 5 grant (guaranteed by the DRYRUN guard in `agents/changelog-analyst.md` — the `nothing_to_commit_precommitted` recovery path is disabled under DRYRUN). Capture from its output:
+- `PLAN_GROUPS` — the per-proposed-commit groups, each `{repo, commit_message, files[]}` (one entry per intended commit; bulk yields several). **Preserve group boundaries — do NOT flatten across groups** (QA needs them to detect cross-task mixing).
+- `PLAN_FILES` — the union of all group files, per repo.
+- If the dry-run reports `nothing_to_commit` / empty plan: print `Nothing to commit — QA gate skipped.`; then **when `BULK=false`, revoke the Step 5 commit grant** (it will never be consumed — same Grant-hygiene rationale as Step 6c) via `source venv/bin/activate && python3 "/root/.claude/scripts/write-commit-grant.py" --task-id "$TASK_ID" --revoke-only` (skip in `BULK=true` — no per-task grant, empty TASK_ID); then proceed to Step 7 (which also no-ops). Do NOT dispatch QA on an empty plan.
+
+QA reviews each planned file's change **directly against HEAD** (staging-independent), NOT via `git diff --cached`. Rationale: in multi-group `--bulk`, changelog-analyst stages per subsystem group and Phase 4 unstages cross-group files each iteration, so after the dry-run only the LAST group remains staged — a `--cached` review would silently skip every earlier group while ALL groups still enter `QA_APPROVED_FILES` and get committed. Reviewing each `PLAN_GROUPS` file vs HEAD (or reading new files) covers ALL groups regardless of staging state.
+
+**Step 6b — QA reviews the planned set (vs HEAD, staging-independent).**
+Dispatch ONE QA subagent (Agent, `subagent_type: qa`). The dispatch prompt MUST include `codex_required: <QA_CODEX>` and `PLAN_GROUPS`, and instruct QA as follows:
+
+```
+You are the pre-commit QA gate. Review ONLY what is about to be committed — the files
+in PLAN_GROUPS — by reading each file's ACTUAL change, NOT the dev-report.
+
+Proposed commit groups (preserve boundaries): <PLAN_GROUPS>
+  (each = {repo, commit_message, files[]} — one intended commit)
+TASK_ID: <TASK_ID or "bulk">   BULK: <true|false>
+
+For EVERY path in EVERY group, review its actual change DIRECTLY (do NOT rely on the
+staging state — in multi-group bulk only the LAST group is left staged, so `git diff
+--cached` would silently skip earlier groups). For each path, gather BOTH sources and
+review every one that is non-empty:
+  - DIFF: `git -C <repo> diff --text HEAD -- <path>` — `--text` forces a content patch even
+    when `.gitattributes` marks the path `-diff`. If git instead reports "Binary files …
+    differ", the path is a real binary blob: do NOT text-review it — judge it under
+    rejection rule 1/4 below (intended asset vs accidental/junk binary).
+  - CONTENTS: if `<path>` currently EXISTS on disk, ALSO read its contents directly.
+  Both sources can be non-empty at once and you MUST review both — e.g. a path deleted at
+  HEAD yet recreated on disk (status `D` + `??`: the diff shows only the old deletion, the
+  file holds the new content), or a rename/copy's new side an earlier bulk group left
+  unstaged (untracked → empty diff, but the file exists).
+  - for a rename/copy, treat the OLD and NEW paths as TWO separate entries under this rule.
+Feed the SAME per-path material to the Codex sub-round below (NOT the staged set).
+Judge by intelligent review — NEVER a hardcoded junk list. REJECT the commit if any of:
+  1. Transient / non-authored byproducts (runtime/session state, caches, registries,
+     scratch/temp outputs, generated indexes, build products) — by what the file IS,
+     regardless of which folder it sits in.
+  2. Secrets / sensitive content (credentials, keys, tokens, .env material).
+  3. Scope contamination — files unrelated to TASK_ID (BULK=false); or, WITHIN ONE
+     proposed group, files belonging to two different task-ids / unrelated subsystems
+     (BULK=true) — use the group boundaries above.
+  4. Obvious correctness/quality defects in the diff (syntax-broken code, committed
+     debug leftovers, accidental large/binary blobs).
+
+codex_required = <QA_CODEX>:
+  - true  → after your own review run ONE adversarial Codex round via Skill(codex) on the
+            SAME per-file PLAN_GROUPS material you reviewed above (the HEAD diffs / new-file
+            contents — NOT the staged set, which in multi-group bulk holds only the last group)
+            + your draft verdict (reply `CODEX: APPROVE` / `CODEX: REJECT` +
+            rationale). A substantive codex REJECT flips you to REJECT. Codex-status
+            handling MIRRORS /close: quota/timeout MAY degrade to your own verdict with a
+            recorded note; a PARSE FAILURE is NOT auto-degrade — record the verbatim raw
+            codex output, manually scan it for dissent signals (`NO`, `bug`, `secret`,
+            `junk`, `must not`, `wrong`, `should not`…), and REJECT (fail-closed) if ANY
+            dissent signal or ambiguity is present.
+  - false → single-round self-review; do NOT invoke codex.
+
+Write a transcript to docs/dev/commit-qa-report-<TASK_ID or "bulk">.md (verdict +
+per-file findings + codex_status when run).
+
+Return, as the LAST line, EXACTLY one of:
+  COMMIT: APPROVE
+  COMMIT: REJECT - <one sentence naming the offending file(s) and why>
+```
+
+**Step 6c — Gate decision.**
+
+**Grant hygiene (`BULK=false` stop paths only — REJECT, `--dry-run` stop, unparseable):** in addition to unstaging, when `BULK=false` REVOKE the Step 5 commit grant so a blocked/stopped gate never leaves live commit authorization lingering (30-min TTL):
+```bash
+source venv/bin/activate && python3 "/root/.claude/scripts/write-commit-grant.py" --task-id "$TASK_ID" --revoke-only
+```
+**Skip this revoke entirely when `BULK=true`**: bulk wrote NO per-task commit grant (Step 5 minted the multi-use bulk-commit sentinel, which self-expires on its own 30-min TTL) and `TASK_ID` is empty, so calling the writer with an empty `--task-id` would error (exit 2). (Only the `COMMIT: APPROVE` + real-commit path keeps the grant — it is consumed by Step 7.)
+
+- `COMMIT: REJECT`: print the verdict + offending files; **unstage the dry-run-staged set so the tree is left clean** — per repo, unstage ONLY currently-staged paths, computed rename-aware. Run `git -C <repo> diff --cached --name-status -z -M` and build the unstage set from its entries: a plain (non-rename) staged path → include it if it is in `PLAN_FILES`; a staged `R`/`C` entry → include BOTH its old and new paths if EITHER endpoint is in `PLAN_FILES` (the analyst may list only the new path, yet `--name-only` / a single-endpoint unstage leaves the other endpoint — e.g. `D old` — staged). Unstage that set via `git -C <repo> restore --staged -- <those>` (unborn repo: `git -C <repo> rm --cached -- <those>`). Do NOT pass planned files that are not currently staged — in multi-group bulk Phase 4 already unstaged the earlier groups, and `restore --staged` / `rm --cached` on an unstaged/untracked pathspec errors out and leaves the last group staged. Then revoke the grant (Grant hygiene above). Do NOT proceed to Step 7; do NOT commit. Tell the user to remove/fix the flagged files, or re-run with `--force` to override. **Stop.**
+- `COMMIT: APPROVE`:
+  - Record `QA_APPROVED_FILES` = `PLAN_FILES` (the exact reviewed set, per repo). This is passed to Step 7 as the commit **ceiling** (TOCTOU guard — Step 7 must not commit anything outside it).
+  - If the user passed `--dry-run` (`DRYRUN=true`): print the plan + `QA: APPROVE`, unstage the dry-run-staged set (clean tree, as in the REJECT branch), and **stop** — no real commit.
+  - Otherwise proceed to Step 7 for the real commit.
+- Unparseable / missing `COMMIT:` final line: treat as REJECT (fail-closed); unstage (as above), print the raw QA output, and stop.
+
+### Step 7: Dispatch changelog-analyst
 
 Use the Agent tool with `subagent_type: changelog-analyst`. Pass a structured prompt:
 
@@ -110,6 +199,7 @@ TASK_ID=<resolved task-id or empty for bulk>
 BULK=<true|false>
 DRYRUN=<true|false>
 FORCE=<true|false>
+QA_APPROVED_FILES=<the Step 6c QA-approved file set, per repo; empty when FORCE=true (gate skipped)>
 
 You are the changelog-analyst subagent. Execute the commit workflow as specified
 in your agent definition (agents/changelog-analyst.md). Use the variables above
@@ -118,6 +208,7 @@ to guide your behavior.
 Constraints:
 - CONTROL_ROOT is the fallback root for dev-report resolution; changelog-analyst MUST apply the subproject path-walk (dirname-of-changed-files → commonpath → walk up to docs/dev/) and check the subproject docs/dev/ first before falling back to ${CONTROL_ROOT}/docs/dev/
 - GIT_ROOT must be computed per repo via `git rev-parse --show-toplevel`; never conflate with CONTROL_ROOT
+- **TOCTOU guard (pre-commit QA gate)**: when `QA_APPROVED_FILES` is non-empty (the Step 6 gate ran and approved this exact set), it is the commit CEILING. Re-classify normally, then intersect the classified set with `QA_APPROVED_FILES`: stage/commit ONLY files in both. If your fresh classification yields any file NOT in `QA_APPROVED_FILES` (working tree changed since QA review), do NOT commit the unreviewed file; if the divergence is material (a QA-approved file vanished, or a new non-approved candidate appeared that you would otherwise commit), ABORT with `failure_code: scope_violation` rather than commit an unreviewed set. When `QA_APPROVED_FILES` is empty (FORCE bypass), this guard does not apply.
 - Stage only files in the classified set; never use `git add -A` or `git add .`
 - Commit message must NOT match: `\bsync\b.*\buncommitted\b` or `chore\(claude\)\s*:\s*sync`
 - Handle nested repo at /dev/shm/dev-workspace/dot-claude/ independently
@@ -136,16 +227,16 @@ Parse changelog-analyst's structured status output (see `agents/changelog-analys
 **Handle each commit_status value:**
 
 #### status = `committed`
-Continue to Step 7 normally.
+Continue to Step 8 normally.
 
 #### status = `nothing_to_commit`
 Print: `WARNING: changelog-analyst found nothing to commit after exclusions. Verify the task cycle produced staged changes.`
-Continue to Step 7 (skip spec-update if no real commit occurred — Step 7 skip conditions apply).
+Continue to Step 8 (skip spec-update if no real commit occurred — Step 8 skip conditions apply).
 
 #### status = `nothing_to_commit_precommitted`
-Record `auto_bulk_commits[]` from the structured output in the Step 7 summary.
+Record `auto_bulk_commits[]` from the structured output in the Step 8 summary.
 Print: `INFO: Changes were already committed in an auto-bulk commit. auto_bulk_commits: <auto_bulk_commits[]>`
-Continue to Step 7.
+Continue to Step 8.
 
 #### status = `failed` — retryable grant codes
 
@@ -154,28 +245,28 @@ Check `failure_code`:
 **Retryable** (`grant_missing`, `grant_expired`, `grant_consumed`):
 
 Retry exactly once (max 1 retry):
-1. Revoke stale grants by running (use `${CONTROL_ROOT}/scripts/write-commit-grant.py` — do NOT hardcode an absolute path):
+1. Revoke stale grants by running (use the literal `/root/.claude/scripts/write-commit-grant.py` — `CONTROL_ROOT` is NOT bound in the orchestrator shell, so match Step 5's working literal path):
    ```bash
-   source venv/bin/activate && python3 "${CONTROL_ROOT}/scripts/write-commit-grant.py" \
+   source venv/bin/activate && python3 "/root/.claude/scripts/write-commit-grant.py" \
        --task-id "$TASK_ID" \
        --revoke-existing-for-task "$TASK_ID"
    ```
    This revokes any stale grant for `$TASK_ID` and writes a fresh one atomically.
-2. Re-dispatch changelog-analyst (same prompt as Step 6).
+2. Re-dispatch changelog-analyst (same prompt as Step 7).
 3. Parse the retry result using the same status table as the initial result:
-   - If `commit_status = committed` or `commit_status = nothing_to_commit_precommitted`: continue to Step 7 (handle as specified above for each status).
-   - If `commit_status = nothing_to_commit`: warn user and continue to Step 7.
-   - If retry `commit_status = failed` or unknown: print `ERROR: changelog-analyst retry failed (failure_code: <code>, reason: <reason>). Manual intervention required.` and stop — do NOT proceed to Step 7.
+   - If `commit_status = committed` or `commit_status = nothing_to_commit_precommitted`: continue to Step 8 (handle as specified above for each status).
+   - If `commit_status = nothing_to_commit`: warn user and continue to Step 8.
+   - If retry `commit_status = failed` or unknown: print `ERROR: changelog-analyst retry failed (failure_code: <code>, reason: <reason>). Manual intervention required.` and stop — do NOT proceed to Step 8.
 
 **Non-retryable** (`git_error`, `staging_error`, `hook_blocked`, `scope_violation`, or any other code):
 
 Print: `ERROR: changelog-analyst failed with non-retryable failure_code: <failure_code>. Reason: <failure_reason>. Manual intervention required.`
-Stop — do NOT retry, do NOT proceed to Step 7.
+Stop — do NOT retry, do NOT proceed to Step 8.
 
 #### status unknown / unparseable
 Treat as non-retryable. Print the raw changelog-analyst output and stop.
 
-### Step 7: Spec-update dispatch (post-commit, deterministic fail-closed)
+### Step 8: Spec-update dispatch (post-commit, deterministic fail-closed)
 
 **This step is dispatched by `/commit` from its own orchestrator context — NOT from within changelog-analyst.** changelog-analyst has already returned before this step executes.
 
@@ -185,7 +276,7 @@ Skip this step entirely if ANY of the following are true:
 - `TASK_ID` is empty
 - changelog-analyst did not report a successful real commit (no push-gate token written, or changelog-analyst reported an error)
 
-**Observable Step 7 trace (AC-05 Phase B contract — task 20260524-205206 iter-2)**: when env var `COMMIT_STEP7_TRACE=1` is set, Step 7 MUST emit a deterministic single-line marker to **stderr** at every decision point. The markers are:
+**Observable Step 8 trace (AC-05 Phase B contract — task 20260524-205206 iter-2)**: when env var `COMMIT_STEP7_TRACE=1` is set, Step 8 MUST emit a deterministic single-line marker to **stderr** at every decision point. The markers are:
 
 - `STEP7_SKIPPED: bulk=true` — at the BULK=true skip branch
 - `STEP7_SKIPPED: dryrun=true` — at the DRYRUN=true skip branch
@@ -195,13 +286,13 @@ Skip this step entirely if ANY of the following are true:
 - `STEP7_NO_SPEC: task-id=<TASK_ID>` — at stage (3) empty-set outcome
 - `STEP7_UNLINKED_SPEC: task-id=<TASK_ID> count=<N> paths=<paths>` — at stage (3) one-or-more-element outcome (fail-closed)
 
-This trace is OFF by default (no env var). When ON, the markers are emitted to stderr only; they MUST NOT affect stdout, exit codes, or dispatch behavior. The trace is consumed by the AC-05 Phase B test harness (tests/generated/20260524-205206/test_AC_05_e5f7a9b1c4d6e8fb.py) which exercises the Step 7 SELECTION + TRACE algorithm via `scripts/step7-spec-update.py` — the executable reference embodiment of the SELECTION portion of this Step 7 specification (stages 1-4 + STEP7_* markers). The script does NOT perform the Agent dispatch described in the "Dispatch payload" subsection below — that step is the orchestrator's responsibility, performed as a Claude Code Agent call after the selection marker emits. The orchestrator MAY either follow the prose directly OR invoke the harness to compute the selection; in both cases the orchestrator must perform the real Agent dispatch when a stage 1 or stage 2 path is selected.
+This trace is OFF by default (no env var). When ON, the markers are emitted to stderr only; they MUST NOT affect stdout, exit codes, or dispatch behavior. The trace is consumed by the AC-05 Phase B test harness (tests/generated/20260524-205206/test_AC_05_e5f7a9b1c4d6e8fb.py) which exercises the Step 8 SELECTION + TRACE algorithm via `scripts/step7-spec-update.py` — the executable reference embodiment of the SELECTION portion of this Step 8 specification (stages 1-4 + STEP7_* markers). The script does NOT perform the Agent dispatch described in the "Dispatch payload" subsection below — that step is the orchestrator's responsibility, performed as a Claude Code Agent call after the selection marker emits. The orchestrator MAY either follow the prose directly OR invoke the harness to compute the selection; in both cases the orchestrator must perform the real Agent dispatch when a stage 1 or stage 2 path is selected.
 
 When `BULK=false` AND `DRYRUN=false` AND `TASK_ID` is set AND changelog-analyst reported success:
 
-Set `DEV_DOCS_ROOT` using the same CONTROL_ROOT logic as Step 6: `DEV_DOCS_ROOT=${CONTROL_ROOT}/docs/dev` (where `CONTROL_ROOT=/root`). Use absolute paths throughout Step 7.
+Set `DEV_DOCS_ROOT` using the same CONTROL_ROOT logic as Step 7: `DEV_DOCS_ROOT=${CONTROL_ROOT}/docs/dev` (where `CONTROL_ROOT=/root`). Use absolute paths throughout Step 8.
 
-**Step 7 algorithm (verbatim contract — total-ordered, deterministic, fail-closed):**
+**Step 8 algorithm (verbatim contract — total-ordered, deterministic, fail-closed):**
 
 The algorithm is total-ordered and mandatory. Implementers MUST NOT introduce wording that admits implementer discretion; every nondeterminism alias is forbidden by AC5-V3. Prior-cycle artifacts MUST NOT be matched: the glob and content predicates are anchored to the CURRENT cycle's `${TASK_ID}`; no cross-cycle drag-in. This operationalizes the user binding directive that prohibits loading any non-current-cycle content (verbatim Chinese phrasing preserved at `docs/dev/ticket-20260519-211515.md`, Standard 6 exemption scope).
 
@@ -262,7 +353,7 @@ Follow the ## Continuation-spec mode instructions from /root/.claude/commands/sp
 - Output the spec path when done.
 ```
 
-If the Agent dispatch fails for any reason (error, timeout, or exception), print `WARNING: spec-update dispatch failed for task-id=${TASK_ID} — spec not updated` and continue. The commit is already recorded; Step 7 failure does NOT roll back or affect the commit.
+If the Agent dispatch fails for any reason (error, timeout, or exception), print `WARNING: spec-update dispatch failed for task-id=${TASK_ID} — spec not updated` and continue. The commit is already recorded; Step 8 failure does NOT roll back or affect the commit.
 
 **Reversal-rationale guidance for changelog-analyst (R9 cross-reference)**: the binding rule that any forward-fix commit which intentionally reverses prior behavior MUST include `Reverses <SHA>: <one-line rationale for why prior reasoning no longer holds>` in the commit-message body lives in `agents/changelog-analyst.md` Phase 6 (the SOLE binding landing). `/commit` orchestrator does NOT enforce the rule directly; changelog-analyst owns commit-message construction and is the contract holder.
 
