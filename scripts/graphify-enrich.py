@@ -59,7 +59,11 @@ MAX_IDS_PER_IMPACT_FILE = 5
 MAX_LABELS_PER_IMPACT_FILE = 3
 
 _PROJECT_DIR = Path(os.environ.get("CLAUDE_PROJECT_DIR", os.getcwd())).resolve()
-sys.path.insert(0, str(_PROJECT_DIR / "scripts"))
+# _PROJECT_DIR is the SUBJECT repo (what gets graphed). The tool's own libs live
+# next to this script, NOT in the subject repo — resolve them relative to __file__
+# so this script runs against any repo from a single global install (~/.claude).
+_SCRIPT_DIR = Path(__file__).resolve().parent
+sys.path.insert(0, str(_SCRIPT_DIR))
 
 from graphify_lib import (
     STATUS_OK, STATUS_DEGRADED, STATUS_FAILED, STATUS_UNAVAILABLE, STATUS_SKIPPED,

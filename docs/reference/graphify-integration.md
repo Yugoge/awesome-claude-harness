@@ -112,7 +112,7 @@ Availability is keyed on **`cacheDir/graph.json`** (NOT a legacy manifest path).
 ### The manual `semantic` command
 
 ```bash
-python3 scripts/graphify-maintain.py semantic [--timeout SECONDS]   # default 3600s
+source ~/.claude/venv/bin/activate && python3 ~/.claude/scripts/graphify-maintain.py semantic [--timeout SECONDS]   # default 3600s
 ```
 
 `semantic` is the explicit, user-triggered path that enables semantic mode. It:
@@ -134,17 +134,20 @@ Maintain's `run-manifest.json` `semantic_mode` is the authoritative semantic-sta
 ## Global Cache Lifecycle
 
 ```bash
+# Invoke from the single global install (~/.claude); the subject repo is auto-detected
+# from CLAUDE_PROJECT_DIR/cwd, so these run from ANY repo / ANY folder.
+#
 # One-time initial build (user-triggered only — NEVER auto-triggered inside /dev)
-python3 scripts/graphify-maintain.py init               # real `graphify update <repo>` AST-only (≤300s)
+source ~/.claude/venv/bin/activate && python3 ~/.claude/scripts/graphify-maintain.py init               # real `graphify update <repo>` AST-only (≤300s)
 
 # Incremental refresh (runs automatically during graphify enrichment, between Step 7 and Step 8, and post-/pull)
-python3 scripts/graphify-maintain.py update             # real `graphify update <repo>` AST-only (≤60s)
+source ~/.claude/venv/bin/activate && python3 ~/.claude/scripts/graphify-maintain.py update             # real `graphify update <repo>` AST-only (≤60s)
 
 # User-triggered semantic extraction (edge-signature proof-gated; promotes only on NEW edges)
-python3 scripts/graphify-maintain.py semantic [--timeout SECONDS]   # real `graphify extract` (default 3600s)
+source ~/.claude/venv/bin/activate && python3 ~/.claude/scripts/graphify-maintain.py semantic [--timeout SECONDS]   # real `graphify extract` (default 3600s)
 
 # Status check (node/link counts + semantic mode + added-link counts when promoted)
-python3 scripts/graphify-maintain.py status
+source ~/.claude/venv/bin/activate && python3 ~/.claude/scripts/graphify-maintain.py status
 ```
 
 `init` and `update` are AST-only and fast; they do NOT run semantic extraction. The first full build and any semantic enrichment are NEVER auto-triggered inside /dev — they must be run manually.

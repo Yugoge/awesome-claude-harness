@@ -622,6 +622,15 @@ def _init_dev_registry(cmd_name: str, user_input: str, claude_session_id: str, p
     _graphify_enabled = os.environ.get('CLAUDE_GRAPHIFY_ENABLED', 'auto').strip().lower() != '0'
     import shutil as _shutil
     _graphify_bin = os.environ.get('GRAPHIFY_BIN', '').strip() or _shutil.which('graphify')
+    # Fallback to the global tool install (~/.claude/venv) so the sentinel is
+    # written whenever graphify is installed on disk — independent of whether the
+    # GRAPHIFY_BIN env var has been injected into this process yet (settings.json
+    # env changes only take effect on session restart). This keeps /dev
+    # graphify-aware in ANY repo from one global install, with no per-repo setup.
+    if not _graphify_bin:
+        _global_gfx = Path.home() / '.claude' / 'venv' / 'bin' / 'graphify'
+        if _global_gfx.exists():
+            _graphify_bin = str(_global_gfx)
     _write_graphify_sentinel = _graphify_enabled and bool(_graphify_bin)
 
     try:

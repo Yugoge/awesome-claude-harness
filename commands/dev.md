@@ -181,7 +181,7 @@ When `SPEC_ID` is non-empty, every Agent launch prompt for an agent that has a c
 Run `scripts/graphify-query.py` as a direct Bash call (NOT a subagent — avoids adding an LLM interpretation layer that could propagate confirmation bias). This is advisory: if the binary is absent or cache is unavailable, the script exits 0 with `status=unavailable` and BA proceeds with its original flow.
 
 ```bash
-source "${CLAUDE_PROJECT_DIR}/venv/bin/activate" && python3 "$CLAUDE_PROJECT_DIR/scripts/graphify-query.py" \
+source ~/.claude/venv/bin/activate && python3 ~/.claude/scripts/graphify-query.py \
   --task-id "$DEV_SESSION_ID" \
   --requirement-file "$REQUIREMENT_DOC"
 ```
@@ -193,7 +193,7 @@ After the query above (still within Step 2), fire a second advisory, non-blockin
 ```bash
 # Auto-init (async, non-blocking): if no cached graph exists, launch a background
 # full build for the NEXT run. Returns immediately — never stalls /dev (R-7).
-source "${CLAUDE_PROJECT_DIR}/venv/bin/activate" && python3 "$CLAUDE_PROJECT_DIR/scripts/graphify-maintain.py" ensure-async || true
+source ~/.claude/venv/bin/activate && python3 ~/.claude/scripts/graphify-maintain.py ensure-async || true
 ```
 
 If `--no-graphify` was passed in `$ARGUMENTS`, add `--no-graphify` to the `graphify-query.py` Bash call above and skip the `ensure-async` call entirely.
@@ -710,7 +710,7 @@ Use Agent tool with:
 
   You are the graphify subagent. Follow agents/graphify.md instructions precisely.
 
-  Run: source "${CLAUDE_PROJECT_DIR}/venv/bin/activate" && python3 $CLAUDE_PROJECT_DIR/scripts/graphify-enrich.py --task-id <DEV_SESSION_ID> --context-file <context_json_path>
+  Run: source ~/.claude/venv/bin/activate && python3 ~/.claude/scripts/graphify-enrich.py --task-id <DEV_SESSION_ID> --context-file <context_json_path>
 
   This is advisory — if the binary is absent or blast-radius-map is missing, exit 0 with status=skipped.
   "

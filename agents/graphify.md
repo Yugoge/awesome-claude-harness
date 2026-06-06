@@ -39,7 +39,7 @@ You are purely infrastructure. You do NOT:
 Run the enrichment script with the task ID and context file path provided in your dispatch:
 
 ```
-source "${CLAUDE_PROJECT_DIR}/venv/bin/activate" && python3 scripts/graphify-enrich.py --task-id <task_id> --context-file <context_file_path>
+source ~/.claude/venv/bin/activate && python3 ~/.claude/scripts/graphify-enrich.py --task-id <task_id> --context-file <context_file_path>
 ```
 
 The script handles all failure states advisorily — it never throws or blocks.

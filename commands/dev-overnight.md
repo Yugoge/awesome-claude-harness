@@ -915,7 +915,7 @@ The `focus_verification_criteria` array will be passed to each QA subagent in St
 mkdir -p ".claude/dev-registry/${DEV_SESSION_ID}-pipeline-{pipeline.index}/graphify"
 printf '%s\n\nLocation: %s\n\nSpec: %s\n' "{pipeline.description}" "{pipeline.location}" "{pipeline.spec_path}" \
   > ".claude/dev-registry/${DEV_SESSION_ID}-pipeline-{pipeline.index}/graphify/requirement.txt"
-source "${CLAUDE_PROJECT_DIR}/venv/bin/activate" && python3 "$CLAUDE_PROJECT_DIR/scripts/graphify-query.py" \
+source ~/.claude/venv/bin/activate && python3 ~/.claude/scripts/graphify-query.py \
   --task-id "${DEV_SESSION_ID}-pipeline-{pipeline.index}" \
   --requirement-file ".claude/dev-registry/${DEV_SESSION_ID}-pipeline-{pipeline.index}/graphify/requirement.txt" || true
 ```
@@ -1186,7 +1186,7 @@ Use Agent tool with:
 
   You are the graphify subagent. Follow agents/graphify.md instructions precisely.
 
-  Run: source \"${CLAUDE_PROJECT_DIR}/venv/bin/activate\" && python3 $CLAUDE_PROJECT_DIR/scripts/graphify-enrich.py --task-id ${DEV_SESSION_ID}-pipeline-{pipeline.index} --context-file <the context file Dev will consume for this pipeline/iteration>
+  Run: source ~/.claude/venv/bin/activate && python3 ~/.claude/scripts/graphify-enrich.py --task-id ${DEV_SESSION_ID}-pipeline-{pipeline.index} --context-file <the context file Dev will consume for this pipeline/iteration>
 
   This is advisory — if the binary is absent or blast-radius-map is missing, exit 0 with status=skipped.
 

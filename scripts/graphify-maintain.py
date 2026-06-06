@@ -41,9 +41,12 @@ import sys
 import time
 from pathlib import Path
 
-# Locate project root from env (set by Claude harness)
+# Locate project root from env (set by Claude harness). _PROJECT_DIR is the
+# SUBJECT repo (what gets graphed); the tool's own libs live next to this script,
+# resolved via __file__ so a single global install (~/.claude) serves any repo.
 _PROJECT_DIR = Path(os.environ.get("CLAUDE_PROJECT_DIR", os.getcwd())).resolve()
-sys.path.insert(0, str(_PROJECT_DIR / "scripts"))
+_SCRIPT_DIR = Path(__file__).resolve().parent
+sys.path.insert(0, str(_SCRIPT_DIR))
 
 from graphify_lib import (
     STATUS_OK, STATUS_FAILED, STATUS_UNAVAILABLE, STATUS_SKIPPED,
@@ -699,7 +702,7 @@ def cmd_ensure_async() -> int:
         except OSError:
             logf = _sp.DEVNULL
         proc = _sp.Popen(
-            [sys.executable, str(_PROJECT_DIR / "scripts" / "graphify-maintain.py"), "init"],
+            [sys.executable, str(_SCRIPT_DIR / "graphify-maintain.py"), "init"],
             stdout=logf, stderr=logf, stdin=_sp.DEVNULL,
             start_new_session=True,  # detach so it survives the /dev turn and never blocks
             cwd=str(_PROJECT_DIR), env=os.environ.copy(),
