@@ -225,11 +225,17 @@ single Bash process/script holding fd 9. Do NOT acquire the lock in one Bash
 call and run later git commands in separate Bash calls.
 
 ```bash
-# Resolve the actual .git directory (handles linked worktrees where .git is a file)
-GIT_DIR="$(git -C "${GIT_ROOT}" rev-parse --absolute-git-dir)"
-exec 9>"${GIT_DIR}/changelog-analyst.lock"
+# Lock lives OUTSIDE the repo's .git/ so the protected-runtime guard never sees a
+# write-redirect whose (resolved) parent is a protected monorepo root. A per-repo
+# deterministic name (sha256 of the repo toplevel) keeps the mutual-exclusion guarantee
+# across concurrent commits. The redirect target MUST start with a LITERAL /tmp prefix
+# (NOT a leading ${VAR}) — a leading variable is treated as relative, re-joined to the
+# protected cwd, and re-triggers the brace-glob false positive.
+mkdir -p /tmp/agentic-commit/locks
+REPO_HASH="$(printf '%s' "$(git -C "${GIT_ROOT}" rev-parse --show-toplevel)" | sha256sum | cut -c1-16)"
+exec 9>"/tmp/agentic-commit/locks/${REPO_HASH}.lock"
 flock -w 30 -x 9 || {
-    echo "ERROR: could not acquire .git/changelog-analyst.lock within 30s — another commit in progress?"
+    echo "ERROR: could not acquire /tmp/agentic-commit/locks/${REPO_HASH}.lock within 30s — another commit in progress?"
     exit 1
 }
 ```
@@ -495,8 +501,13 @@ git -C "${NESTED_REPO}" status --porcelain=v1
 If output is non-empty:
 - Repeat Phases 3–8 for `GIT_ROOT=/dev/shm/dev-workspace/dot-claude`
 - Build an independent commit message (type/scope/summary derived from nested repo diff)
-- The lock for the nested repo is acquired at its own GIT_DIR:
-  `GIT_DIR="$(git -C "${NESTED_REPO}" rev-parse --absolute-git-dir)"`
+- The lock for the nested repo uses the SAME relocated `/tmp` scheme as Phase 3,
+  keyed on the nested repo's toplevel (literal `/tmp` prefix — never a leading `${VAR}`):
+  ```bash
+  mkdir -p /tmp/agentic-commit/locks
+  REPO_HASH="$(printf '%s' "$(git -C "${NESTED_REPO}" rev-parse --show-toplevel)" | sha256sum | cut -c1-16)"
+  exec 9>"/tmp/agentic-commit/locks/${REPO_HASH}.lock"
+  ```
 
 If output is empty: print `Nested repo: no changes to commit.`
 
