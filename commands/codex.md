@@ -108,13 +108,19 @@ fi
 Capture the printed path as `$CODEX_OUT` if needed for the Read step, but do
 NOT pass `$CODEX_OUT` as the tee argument. Steps 3 and 4 branch directly.
 
+**Isolation (host policy — do NOT call bare `codex` here).** Steps 3 and 4 invoke codex through
+`/root/bin/codex-iso`, a fail-closed wrapper that forces an isolated `CODEX_HOME=/root/.codex-cli`
+so codex rollouts never land in the daemon-watched `/root/.codex` (which the default Happy daemon
+would otherwise claim and surface as "gpt" sessions on the root account). The wrapper refuses to run
+if `CODEX_HOME` resolves into `/root/.codex`. This keeps codex audits from polluting the root account.
+
 ### 3. Review mode
 
 ```bash
 if [ "${_CODEX_USE_CANONICAL:-0}" = "1" ]; then
-  codex review -c 'model="gpt-5.5"' -c 'reasoning_effort="xhigh"' < /dev/null 2>&1 | tee "$CLAUDE_PROJECT_DIR/docs/codex/$CODEX_OUT_TASK_ID/$CODEX_OUT_ROLE.txt"
+  /root/bin/codex-iso review -c 'model="gpt-5.5"' -c 'reasoning_effort="xhigh"' < /dev/null 2>&1 | tee "$CLAUDE_PROJECT_DIR/docs/codex/$CODEX_OUT_TASK_ID/$CODEX_OUT_ROLE.txt"
 else
-  codex review -c 'model="gpt-5.5"' -c 'reasoning_effort="xhigh"' < /dev/null 2>&1 | tee "/var/tmp/codex-outputs/codex-output-$$-$(date +%s).txt"
+  /root/bin/codex-iso review -c 'model="gpt-5.5"' -c 'reasoning_effort="xhigh"' < /dev/null 2>&1 | tee "/var/tmp/codex-outputs/codex-output-$$-$(date +%s).txt"
 fi
 ```
 
@@ -125,18 +131,18 @@ Use 10 minute Bash timeout. Then Read the output file with the Read tool.
 **Without --model (default gpt-5.5):**
 ```bash
 if [ "${_CODEX_USE_CANONICAL:-0}" = "1" ]; then
-  codex exec -c 'model="gpt-5.5"' -c 'reasoning_effort="xhigh"' "$PROMPT" < /dev/null 2>&1 | tee "$CLAUDE_PROJECT_DIR/docs/codex/$CODEX_OUT_TASK_ID/$CODEX_OUT_ROLE.txt"
+  /root/bin/codex-iso exec -c 'model="gpt-5.5"' -c 'reasoning_effort="xhigh"' "$PROMPT" < /dev/null 2>&1 | tee "$CLAUDE_PROJECT_DIR/docs/codex/$CODEX_OUT_TASK_ID/$CODEX_OUT_ROLE.txt"
 else
-  codex exec -c 'model="gpt-5.5"' -c 'reasoning_effort="xhigh"' "$PROMPT" < /dev/null 2>&1 | tee "/var/tmp/codex-outputs/codex-output-$$-$(date +%s).txt"
+  /root/bin/codex-iso exec -c 'model="gpt-5.5"' -c 'reasoning_effort="xhigh"' "$PROMPT" < /dev/null 2>&1 | tee "/var/tmp/codex-outputs/codex-output-$$-$(date +%s).txt"
 fi
 ```
 
 **With --model (user-specified model, still xhigh reasoning):**
 ```bash
 if [ "${_CODEX_USE_CANONICAL:-0}" = "1" ]; then
-  codex exec -c 'model="<model>"' -c 'reasoning_effort="xhigh"' "$PROMPT" < /dev/null 2>&1 | tee "$CLAUDE_PROJECT_DIR/docs/codex/$CODEX_OUT_TASK_ID/$CODEX_OUT_ROLE.txt"
+  /root/bin/codex-iso exec -c 'model="<model>"' -c 'reasoning_effort="xhigh"' "$PROMPT" < /dev/null 2>&1 | tee "$CLAUDE_PROJECT_DIR/docs/codex/$CODEX_OUT_TASK_ID/$CODEX_OUT_ROLE.txt"
 else
-  codex exec -c 'model="<model>"' -c 'reasoning_effort="xhigh"' "$PROMPT" < /dev/null 2>&1 | tee "/var/tmp/codex-outputs/codex-output-$$-$(date +%s).txt"
+  /root/bin/codex-iso exec -c 'model="<model>"' -c 'reasoning_effort="xhigh"' "$PROMPT" < /dev/null 2>&1 | tee "/var/tmp/codex-outputs/codex-output-$$-$(date +%s).txt"
 fi
 ```
 
