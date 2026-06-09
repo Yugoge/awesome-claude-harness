@@ -5,12 +5,18 @@ set -uo pipefail
 
 GIT_ROOT=/dev/shm/dev-workspace/dot-claude
 BRANCH=$(git -C "${GIT_ROOT}" rev-parse --abbrev-ref HEAD)
-GIT_DIR="$(git -C "${GIT_ROOT}" rev-parse --absolute-git-dir)"
-
-# Acquire lock — hold across all operations
-exec 9>"${GIT_DIR}/changelog-analyst.lock"
+# Acquire lock — hold across all operations.
+# Lock + temp files live under /tmp (deterministic sha256-of-toplevel name keeps the
+# per-repo mutual-exclusion guarantee), NOT under the repo's protected bundle dir, which
+# the runtime guard correctly blocks as a protected-bundle write. Matches the relocated /tmp scheme
+# the live changelog-analyst flow uses (agents/changelog-analyst.md Phase 3): the
+# redirect target MUST start with a literal /tmp prefix — a leading ${VAR} is re-joined
+# to the protected cwd and re-triggers the brace-glob false positive.
+mkdir -p /tmp/agentic-commit/locks
+REPO_HASH="$(printf '%s' "$(git -C "${GIT_ROOT}" rev-parse --show-toplevel)" | sha256sum | cut -c1-16)"
+exec 9>"/tmp/agentic-commit/locks/${REPO_HASH}.lock"
 flock -w 30 -x 9 || {
-    echo "ERROR: could not acquire .git/changelog-analyst.lock within 30s"
+    echo "ERROR: could not acquire /tmp/agentic-commit/locks/${REPO_HASH}.lock within 30s — another commit in progress?"
     exit 1
 }
 echo "Lock acquired."
@@ -109,7 +115,7 @@ commit_group() {
         DIFFSTAT=$(git -C "${GIT_ROOT}" diff --stat --cached 2>/dev/null || true)
     fi
 
-    MSGFILE=$(mktemp "${GIT_DIR}/commit-msg-XXXXXX.txt")
+    MSGFILE=$(mktemp "/tmp/agentic-commit/commit-msg-XXXXXX.txt")
     # shellcheck disable=SC2064
     trap "rm -f ${MSGFILE}" EXIT
 
