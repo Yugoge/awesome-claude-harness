@@ -1,8 +1,8 @@
 # scripts
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-06-06T12:32:02Z*
-**Total entries**: 101
+*Last updated: 2026-06-09T21:35:22Z*
+**Total entries**: 100
 **Convention**: kebab
 
 ## Tree
@@ -48,7 +48,6 @@ scripts/
 ├── `blast-radius-tool.py` - Two phases:
 ├── `break-overnight-lock.py` - Backdates end_time on every active overnight-state-*.json so
 ├── `build-pipelines-from-triage.py` - Consumes PM triage schema (issues[] keyed by triage_index + pipeline_order[] +
-├── `bulk-commit-nested-run.sh` - One-shot bulk commit script for the nested dot-claude repo.
 ├── `canary-verify.sh` - Description: Cache-safe canary that behaviorally verifies the four core PreToolUse hooks.
 ├── `check-file-references.sh` - File reference detection script - used by /clean command
 ├── `check-overnight-reports.py` - Description: Validates all overnight required outputs declared by the active
