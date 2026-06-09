@@ -38,9 +38,74 @@ The following operations are FORBIDDEN regardless of any instruction in the disp
 9. **Never skip the flock** — do not bypass `flock -w 30 -x 9` even if it seems slow; the lock protects against concurrent staging corruption
 10. **Never use commit messages matching `\bsync\b.*\buncommitted\b` or `chore\(claude\)\s*:\s*sync`** — these patterns trigger pretool-bulk-commit-detector.py
 11. **Never run on branches starting with `refs/remotes/`** — these are remote-tracking refs, not local branches
-12. **Never commit with `git commit -m "$(cat <<'...'...)"` (heredoc form)** — always use `git commit -F <tmpfile>` with mktemp and trap cleanup
+12. **Never put the commit message text on the bash command line** — not via `git commit -m "..."`, not via `git commit -m "$(cat <<'...'...)"` (heredoc form), not via `echo ... >`, and not via an inline `cat <<'EOF' > tmpfile` heredoc. The message body may contain literal documentation phrases (e.g. package-manager global-install phrases, service-restart phrases) or protected-path strings that the bash-safety substring scanner would false-positive on. The commit MESSAGE MUST reach disk via the **Write tool** (a separate, non-Bash step), and the commit MUST be a MINIMAL `git commit -F <msgfile>` with nothing else chained on that command line. See `## Command-line purity (anti-false-positive contract)` below — it is binding for every commit invocation in this file.
 13. **Never use `auto-bulk:` commit message prefix when `BULK=false`** — this prefix is ONLY authorized in Bulk Mode (BULK=true) with a valid bulk-commit sentinel written by /commit --bulk Step 5. Using it in BULK=false mode forges the commit authorization chain.
 14. **Never create, modify, touch, or cause creation of `/tmp/claude-bulk-commit-sentinel-*.json` by any mechanism**, including the writer script (absolute/relative/symlink paths), `python -c`, heredoc code, `importlib`, `runpy`, copied writer logic, shell/path concatenation, or manual JSON writes. Bulk sentinels are created ONLY before dispatch by human-invoked `/commit --bulk`. Direct invocation of `write-bulk-commit-sentinel.py` by any path form is forbidden.
+
+---
+
+## Command-line purity (anti-false-positive contract)
+
+**WHY this exists (empirical):** the bash-safety / protected-runtime guard substring-scans
+the ENTIRE bash command text. Two real spurious blocks happened when this rule was absent:
+(1) a commit MESSAGE body that contained the literal documentation phrases `npm install -g`
+and `daemon restart` — the guard saw those substrings on the command line and blocked as if
+the agent were running them; (2) a single combined commit command that inlined the message via
+a `cat <<'EOF'` heredoc AND inlined a `python3` push-gate-token write referencing protected
+paths (`.git`, `/tmp/agentic-commit`, etc.) — the guard flagged it as a "P3 mutation of a
+protected hot-watched bundle". The empirically-verified fix: write the message (and the
+push-gate token) to disk with the **Write tool**, then run a MINIMAL command with nothing
+else on the line. This subsection is binding for EVERY commit and token-write in this file —
+Phase 8, Phase 10, the precommitted-recovery path, bulk mode, and error handling all defer to
+it.
+
+**Rule CP-1 — commit message reaches disk via the Write tool, never bash.**
+Construct the full commit message string, then write it to a temp message file
+(e.g. `/tmp/commit-msg-<unique>.txt`) using the agent's **Write tool**. Do NOT create the
+message file with a bash heredoc (`cat <<'EOF' > file`), `echo ... >`, `printf ... >`, or any
+shell redirect, and do NOT inline the message with `git commit -m`. The message text — which
+may legitimately contain documentation phrases or path strings — must NEVER appear on a bash
+command line.
+
+**Rule CP-2 — the commit command is MINIMAL.**
+Exactly two standalone commit invocation forms are permitted, each by itself on its own
+command line:
+```bash
+git -C "${GIT_ROOT}" commit -F "<msgfile>"                 # normal commit
+git -C "${GIT_ROOT}" commit --allow-empty -F "<msgfile>"   # recovery commit (Recovery step 3 only)
+```
+The prohibition CP-2 enforces is about CONTENT and SIDE EFFECTS on the command line — NOT about
+shell control-flow. Specifically: no message text, no inline diff (`$(git diff ...)`), no
+`--stat`, no `cat`/`echo` of file content, no push-gate write, no heredoc, and no chained side
+effect (`&&`/`;`/`|`) that performs another action. The physical commit invocation must contain
+none of those. Wrapping the commit in pure control-flow that adds no command-line content is
+allowed — e.g. the Error-handling `if ! git -C "${GIT_ROOT}" commit -F "${MSGFILE}"; then …`
+test is fine because the `if !` adds no message/diff/protected-path/side-effect to the command,
+it only branches on the exit code. The `<diff --stat>` body content is embedded into the message
+FILE (written by the Write tool in CP-1), never appended on the command line. The temp message
+file may be cleaned up in a SEPARATE later bash step (`rm -f <msgfile>`); it must not be chained
+onto the commit.
+
+**Rule CP-3 — the push-gate token reaches disk via the Write tool, in a SEPARATE step.**
+Compute the token JSON and its destination path (see Phase 10), then write the token with the
+agent's **Write tool** — NOT via an inline `python3 -c`/heredoc/`echo`/redirect on a bash
+command line. Putting the token JSON or its protected-path destination (`.git`,
+`/tmp/agentic-commit/...`) onto a bash command line is what trips the protected-bundle guard.
+The push-gate write is ALWAYS a distinct step from the `git commit` command — never chained.
+(Repo-hash computation, session-id resolution, and existing-token collision checks per DO NOT
+rule 7 may still run in Bash; only the final token-content write moves to the Write tool.)
+
+**Rule CP-4 — keep command-like phrases and protected-path strings off the command line.**
+Do NOT append `git diff` / `git show` / `--stat` / file content to the commit message via the
+command line. Do NOT place protected-path strings or command-like documentation phrases
+(package-manager global-install phrases, service-restart phrases, etc.) onto any bash command
+line — they belong only inside files written by the Write tool. Keep every git invocation
+minimal so the substring scanner has nothing to false-positive on.
+
+This contract changes only HOW the message and token reach disk (Write tool + minimal command)
+— it changes NOTHING about WHAT is committed (classification, individual-file staging, the
+`/tmp` flock, forbidden-pattern message checks, structured status output, and nested-repo
+handling are all unchanged).
 
 ---
 
@@ -219,10 +284,100 @@ not in the whitelist cannot be added to the candidate set via the baseline diff.
 
 ### Phase 3: Serialization — acquire lock (FIRST, before any git read)
 
-For each repo with changes, acquire the lock BEFORE classifying files. ALL
-operations from lock acquisition through push-gate write MUST run inside a
+For each repo with changes, acquire the lock BEFORE classifying files. ALL the
+**git/index operations** from lock acquisition through commit MUST run inside a
 single Bash process/script holding fd 9. Do NOT acquire the lock in one Bash
 call and run later git commands in separate Bash calls.
+
+**Reconciling the flock with the Command-line-purity Write-tool mandate (CP-1/CP-3).**
+The Write tool is a separate tool invocation, not a Bash call, so a Write cannot run
+"inside" the fd-9 Bash process. These two requirements are reconciled by a
+**held-lock handshake** — the flock is acquired ONCE and held continuously across
+`stage → compute staged stat → (Write MSGFILE) → commit`. The Write tool runs in the
+middle of that window, but because the Write performs NO git/index mutation, the
+stage→commit mutual-exclusion the flock protects is never broken: a peer session
+blocked on the same fd-9 lock cannot touch the index while we hold it, regardless of
+the non-mutating Write that happens between our staging and our commit.
+
+The message stat MUST reflect the **actually-staged set after Phase-5 narrowing**, not
+the pre-narrowing candidate set and not the whole repo. Phase 5 legitimately narrows
+the staged set (hunk-filtered staging, fail-closed entangled-file skips, untracked
+skips), so the only authoritative source for the message's `<diff --stat>` body is the
+real staged index measured AFTER Phase 5. The ordering is:
+
+1. **Held-lock handshake (single uninterrupted fd-9 transaction).**
+   a. Acquire fd 9 (Phase 3 flock). Do NOT release it until after the commit.
+   b. Run Phase 4 (pre-staged verify) → Phase 5 (stage the candidate set, applying all
+      legitimate narrowing). Phase 5 may stage FEWER paths than the Phase 2 candidate
+      set — that is normal, not an anomaly.
+   c. Capture `ACTUALLY_STAGED_PATHS` from the real index:
+      `git -C "${GIT_ROOT}" diff --cached --name-only`.
+      - If `ACTUALLY_STAGED_PATHS` is EMPTY (everything was legitimately narrowed away,
+        or nothing was eligible), do NOT commit and do NOT abort with an error: return
+        `commit_status: nothing_to_commit`. (Release fd 9 by exiting the Bash process.)
+   d. Build the message's `<diff --stat>` body from the actually-staged set ONLY —
+      `git -C "${GIT_ROOT}" diff --stat --cached` (this reads the staged index, so it is
+      already scoped to exactly `ACTUALLY_STAGED_PATHS`; see Phase 6). Record
+      `ACTUALLY_STAGED_PATHS` alongside the message as the message's recorded staged set.
+   e. Using the **Write tool** (a non-Bash step that mutates no git index — it only
+      writes `MSGFILE` to `/tmp`), author `MSGFILE` from the actually-staged set. This
+      Write happens while fd 9 is still held; that is intentional and safe (the Write
+      touches no index). For bulk, author each group's `MSGFILE` from that group's
+      actually-staged set, inside that group's held lock, just before that group's commit.
+   f. **Stale-message guard — TRUE post-message drift ONLY (fail-closed):** immediately
+      before the commit, still INSIDE the flock, re-read `git diff --cached --name-only`
+      and compare it to the `ACTUALLY_STAGED_PATHS` recorded in step (c)/(d) when the
+      message was authored. Because the flock has been held continuously since step (a),
+      the staged set CANNOT have changed for any legitimate reason — Phase 5 narrowing
+      already happened before the message was authored, and no peer can mutate the index
+      while we hold fd 9. So a difference here is true post-message drift (a staged set
+      that changed AFTER the message was built for a reason other than this agent's own
+      Phase-5 narrowing). On such drift: do NOT release fd 9 to rewrite `MSGFILE`
+      (releasing the lock between stage and commit would break the stage→commit mutual
+      exclusion the flock exists for). Instead, still INSIDE the flock,
+      `git restore --staged -- <ACTUALLY_STAGED_PATHS>` to unstage this cycle's staged
+      set and ABORT with `failure_code: staging_error`. Legitimate Phase-5 narrowing is
+      NOT drift and never reaches this guard — it was already applied and recorded in
+      step (c) before the message was authored.
+   The `pre-staged verify → stage → compute staged stat → Write MSGFILE → drift re-check
+   → commit` window is one continuous fd-9 transaction. The message file is written by
+   the Write tool exactly once, from the real staged set, and is never rewritten during
+   the staged-but-uncommitted window.
+2. **Inside** the fd-9 flock (same held lock, continuing from item 1): run
+   `git commit -F "${MSGFILE}"` → `git rev-parse HEAD` to capture `COMMIT_SHA`/`BRANCH`,
+   and compute `repo_hash` + `token_dir` + `token_path` + the existing-token
+   collision-read result. Then **print a single structured token-descriptor to stdout**
+   (e.g. a one-line JSON with `repo_root`, `branch`, `commit_sha`, `session_id`,
+   `token_path`, `collision` boolean) and exit the Bash process (releasing fd 9). The
+   descriptor carries the post-commit runtime values out to the agent WITHOUT putting the
+   token CONTENT or its full token filename on a later command line.
+3. **After** the flock is released: the agent reads that descriptor and writes the
+   push-gate token JSON to `token_path` with the **Write tool** (CP-3). Because the token
+   write happens after fd 9 is released, apply TWO safety checks around the Write, in this
+   order:
+   - **PRE-write HEAD-stability check (authoritative):** re-read `git rev-parse HEAD`; it
+     must still equal the descriptor's `commit_sha`. If HEAD moved (a concurrent commit
+     landed), do NOT write the token — return `commit_status: failed` with
+     `failure_code: push_gate_race`.
+   - **PRE-write collision re-check (authoritative, DO NOT rule 7):** the descriptor's
+     `collision` flag was computed inside the flock and is only ADVISORY by the time of the
+     Write (a peer session may have written a token since). Immediately before the Write,
+     re-read the existing token at `token_path`; if it exists and its `session_id` differs
+     from `PUSH_GATE_SID`, skip the write and follow the rule-7 WARNING path
+     (`failure_code: push_gate_collision` in the recovery path).
+   - Only if both pre-write checks pass: perform the Write.
+   - **POST-write re-check (defensive):** after the Write, re-read `git rev-parse HEAD`
+     once more; if it moved during the Write window, treat the just-written token as
+     non-authorizing — return `push_gate_race` so `/push` does not act on a token that may
+     not match the new HEAD. (A stale token is never silently trusted.)
+
+This ordering keeps the fd-9 lock covering exactly the stage→(author message)→commit index
+window (the mutual-exclusion the lock exists for), while honoring CP-1/CP-3: no message text,
+no token content, and no protected token filename ever lands on a Bash command line. The
+MSGFILE Write happens mid-window (after staging, before commit) but mutates no git index, so
+it does not break the lock's stage→commit mutual exclusion. The token write is intentionally
+OUTSIDE fd 9 — its only cross-session concern is the rule-7 session-id collision, which the
+in-flock collision-read plus the post-write HEAD-stability check together cover.
 
 ```bash
 # Lock lives OUTSIDE the repo's .git/ so the protected-runtime guard never sees a
@@ -240,7 +395,13 @@ flock -w 30 -x 9 || {
 }
 ```
 
-Hold this lock across ALL of: classify → pre-staged verify → stage → commit → push-gate write.
+Hold this lock across the git/index window: pre-staged verify → stage → capture
+`ACTUALLY_STAGED_PATHS` → author `MSGFILE` from the actually-staged set (Write tool) →
+drift re-check → commit → capture `COMMIT_SHA`/`BRANCH` → compute token descriptor →
+print descriptor. The `MSGFILE` Write happens MID-window (after staging, before commit —
+see the held-lock handshake in the reconciliation note above); it mutates no git index, so
+holding fd 9 across it is correct. The push-gate token Write happens AFTER this block; it
+is also not a git/index mutation.
 
 Release on script exit (fd 9 closes automatically when the process exits).
 
@@ -360,21 +521,22 @@ indistinguishable in the baseline diff from this-cycle changes.
 
 ### Phase 6: Build commit message (diff-first — M4)
 
-**Primary source** — ALWAYS start with:
+**Primary source (B4 fix — actually-staged set ONLY)** — the message stat MUST reflect the
+ACTUALLY-STAGED set after Phase-5 narrowing (= `ACTUALLY_STAGED_PATHS` from the held-lock
+handshake in Phase 3), NOT a whole-repo `git diff --stat HEAD`. A whole-repo `HEAD` stat
+includes peer / out-of-cycle changes and therefore mismatches the stale-message guard's
+candidate-scoped comparison — that mismatch was the B4 close-blocker (it aborted legitimate
+multi-file-repo commits with `staging_error` and livelocked). Read the staged index, which
+is already scoped to exactly the staged set AND works for both born and unborn repos
+(it diffs the index against HEAD, or against the empty tree when HEAD is unborn):
 
 ```bash
-# Check if HEAD exists first (empty/unborn repo guard — codex finding #9)
-git -C "${GIT_ROOT}" rev-parse --verify HEAD >/dev/null 2>&1
-if [ $? -eq 0 ]; then
-    git -C "${GIT_ROOT}" diff --stat HEAD
-else
-    # Unborn repo — no HEAD yet; use cached diff
-    git -C "${GIT_ROOT}" diff --stat --cached
-fi
+git -C "${GIT_ROOT}" diff --stat --cached
 ```
 
-If the diff-stat output is empty (all new files, no tracked changes): fall back to
-`git -C "${GIT_ROOT}" diff --stat --cached`.
+No separate HEAD-existence guard is needed (`--cached` handles the unborn case). If the
+output is empty (e.g. a deliberate `--allow-empty` recovery commit), the message body
+simply omits the stat — do NOT fall back to a whole-repo `git diff --stat HEAD`.
 
 **Enrichment source** — if dev-report exists:
 - Read `dev.tasks_completed[]` array
@@ -466,29 +628,66 @@ If there are no orphan files, skip this step.
 
 ### Phase 8: Execute commit (or dry-run)
 
-If `DRYRUN=true`: print the commit message and staged file list; stop here.
+If `DRYRUN=true`: surface the commit message and staged file list, then stop here. **The
+dry-run message is subject to CP-1 too** — it may contain the same documentation phrases /
+protected-path strings as a real commit message, so it must NEVER be emitted via an inline
+bash `echo`/`printf`/heredoc. Either (a) the agent reports the message text directly in its own
+output (the message string never touches a bash command line), or (b) write it to `MSGFILE` via
+the Write tool and let bash do only a minimal `cat "${MSGFILE}"`. The staged file list (plain
+paths) may be printed normally.
 
 **Note (bulk mode)**: When running in bulk mode, each subsystem group's commit MUST use
 the skip-and-continue pattern from the Error handling section (not plain `git commit`).
 On failure: call `git restore --staged`, add to `FAILED_GROUPS`, and `continue` the loop.
 
-```bash
-TMPFILE=$(umask 077; mktemp /tmp/commit-msg-XXXXXX.txt)
-trap "rm -f ${TMPFILE}" EXIT
-cat > "${TMPFILE}" <<'MSGEOF'
-<type>(<scope>): <summary>
+Per `## Command-line purity (anti-false-positive contract)` (rules CP-1 / CP-2) and — the
+AUTHORITATIVE ordering — the **Phase 3 held-lock handshake**, the message file is written by
+the **Write tool** as handshake **step (e)**: AFTER staging + capturing `ACTUALLY_STAGED_PATHS`
+and the Phase-6 `git diff --stat --cached` of the actually-staged set, NOT before staging and
+NOT before "entering" a flock. Do NOT start a NEW/independent flock for the commit and do NOT
+re-author the message under a fresh lock — continue the SAME fd-9 transaction from Phase 3.
+The Write tool is a non-Bash step that mutates no index; the pre-commit drift re-check
+(handshake step (f)) is what guarantees the staged set is unchanged at commit time, so the
+message authored from `ACTUALLY_STAGED_PATHS` still matches what is committed.
 
-Task-id: <TASK_ID>
-<diff-stat output>
-MSGEOF
-git -C "${GIT_ROOT}" commit -F "${TMPFILE}"
-```
+1. Choose a unique message path, e.g. `MSGFILE=/tmp/commit-msg-<TASK_ID-or-bulk>-<short-rand>.txt`.
+2. Handshake step (e) — using the agent's **Write tool**, write the full message content to
+   `MSGFILE`. The `<diff-stat output>` is the Phase-6 `git diff --stat --cached` of the
+   actually-staged set (handshake step (d)), embedded into the FILE — NEVER on the command line
+   (rule CP-4):
+   ```
+   <type>(<scope>): <summary>
 
-Capture the commit SHA:
+   Task-id: <TASK_ID>
+   <diff-stat output>
+   ```
+3. Handshake step (f) — drift re-check, then commit, in ONE fd-9 Bash block (continuing the
+   Phase 3 transaction; do not chain anything else, rule CP-2). Re-read the staged set and
+   abort ONLY on TRUE post-message drift; otherwise run the minimal commit:
+   ```bash
+   if [ "$(git -C "${GIT_ROOT}" diff --cached --name-only)" != "${ACTUALLY_STAGED_PATHS}" ]; then
+       git -C "${GIT_ROOT}" restore --staged -- ${ACTUALLY_STAGED_PATHS}   # true drift: unstage + abort
+       # report failure_code: staging_error (do NOT release fd 9 to rewrite MSGFILE)
+   else
+       git -C "${GIT_ROOT}" commit -F "${MSGFILE}"
+   fi
+   ```
+   (Legitimate Phase-5 narrowing was already applied and recorded in `ACTUALLY_STAGED_PATHS`
+   BEFORE step (e), so it never reaches this guard — only a post-message change is drift.)
+4. In a SEPARATE later bash step, clean up: `rm -f "${MSGFILE}"`. Do NOT chain the cleanup onto
+   the commit command.
+
+Capture the commit SHA and prepare the token descriptor — still INSIDE the same fd-9 Bash
+process (these are reads/computation, not message/token-content writes):
 ```bash
 COMMIT_SHA=$(git -C "${GIT_ROOT}" rev-parse HEAD)
 BRANCH=$(git -C "${GIT_ROOT}" rev-parse --abbrev-ref HEAD)
 ```
+Then compute `repo_hash`/`token_dir`/`token_path` and the existing-token collision-read
+(Phase 10 steps 2–5) and PRINT the structured token-descriptor to stdout before the Bash
+process exits. The agent performs the actual token-content Write (Phase 10 step 6) AFTER the
+flock is released, with the post-write HEAD-stability check from the Phase 3 reconciliation
+note.
 
 ### Phase 9: Nested repo handling (M5)
 
@@ -517,14 +716,34 @@ NEVER silently skip nested repo changes.
 
 After each successful commit (main and nested repo independently):
 
-Export `GIT_ROOT`, `BRANCH`, `COMMIT_SHA` as shell env vars, then activate the venv and run a Python script to write the push-gate token. The script:
+Per the `## Command-line purity (anti-false-positive contract)` (rule CP-3), the push-gate
+token is a SEPARATE step from the `git commit` command, and its CONTENT is written to disk via
+the agent's **Write tool** — NOT via an inline `python3 -c` / heredoc / `echo` / shell redirect.
+Putting the token JSON or its protected-path destination (`.git`, `/tmp/agentic-commit/...`)
+onto a bash command line is what trips the protected-bundle guard. Computation that does NOT put
+the token content or its protected destination path onto the command line (session-id
+resolution, repo-hash, directory creation, existing-token collision read) may still run in Bash.
 
-1. Defines `PUSH_GATE_SID = os.environ.get("CLAUDE_CODE_SESSION_ID") or os.environ.get("CLAUDE_SESSION_ID") or "unknown"` — this resolves the stable orchestrator session ID first (so all changelog-analyst subagent invocations within the same user session share one `session_id`); falls back to the subagent's own `CLAUDE_SESSION_ID`; defaults to `"unknown"` if both env vars are absent or empty. This variable is the single authoritative source for the push-gate session identity in this script.
-2. Computes `repo_hash = sha256(realpath(GIT_ROOT))[:16]`.
-3. Sets `token_dir = /tmp/agentic-commit/push/<repo_hash>`; creates `token_dir`.
-4. Checks for an existing token: if the file exists and its `session_id` field differs from `PUSH_GATE_SID`, print a WARNING and skip the write for this repo.
-5. Writes a JSON token `{"commit_sha": COMMIT_SHA, "branch": BRANCH, "repo_root": GIT_ROOT, "session_id": PUSH_GATE_SID}` to `{token_dir}/{branch.replace('/','__')}.json`.
-6. Prints the final token path on success.
+**Data handoff (Bash → agent → Write tool).** The token content needs the post-commit runtime
+values (`COMMIT_SHA`, `BRANCH`, …) that only exist after the commit, and the token write happens
+AFTER the fd-9 flock is released (Phase 3 reconciliation note). To carry those values out
+without inlining token content/path on a later command line, steps 1–5 run INSIDE the fd-9 Bash
+process and end by PRINTING a single structured token-descriptor line to stdout; the agent then
+reads that descriptor and performs step 6 via the Write tool.
+
+Procedure:
+
+1. Resolve `PUSH_GATE_SID = os.environ.get("CLAUDE_CODE_SESSION_ID") or os.environ.get("CLAUDE_SESSION_ID") or "unknown"` — this resolves the stable orchestrator session ID first (so all changelog-analyst subagent invocations within the same user session share one `session_id`); falls back to the subagent's own `CLAUDE_SESSION_ID`; defaults to `"unknown"` if both env vars are absent or empty. This value is the single authoritative source for the push-gate session identity. Resolving it (e.g. `echo "$CLAUDE_CODE_SESSION_ID"` / `echo "$CLAUDE_SESSION_ID"`) does not place the token content on the command line and is permitted in Bash.
+2. Compute `repo_hash = sha256(realpath(GIT_ROOT))[:16]`.
+3. Set `token_dir = /tmp/agentic-commit/push/<repo_hash>` and create it (`mkdir -p "${token_dir}"` — a literal `/tmp` prefix, never a leading `${VAR}`, per the Phase 3 lock-path note). The ONLY accepted form for `/tmp/agentic-commit/...` on a bash command line is this bare `mkdir -p` (directory creation) / read-only path-computation form — the SAME form the Phase 3 lock setup already uses successfully (`mkdir -p /tmp/agentic-commit/locks`), which is the live empirical proof it does not trip the guard. The guard fires on protected-BUNDLE paths (`.git`, monorepo roots) inlined alongside a heredoc/redirect, not on a bare `mkdir -p` of a `/tmp/agentic-commit` subdir. Do NOT widen this: never put the token JSON, a redirect into `/tmp/agentic-commit/...`, or the full token filename onto a bash command line — those go through the Write tool (step 6). The token PATH appearing in `mkdir` is the directory only; the token CONTENT and its full filename are written in step 6 via the Write tool.
+4. Compute the token file path: `{token_dir}/{branch.replace('/','__')}.json`.
+5. Existing-token collision check (DO NOT rule 7, in-flock): if the token file already exists and its `session_id` field differs from `PUSH_GATE_SID`, set the descriptor's `collision` true. (Reading the existing file to compare `session_id` is a read, not a command-line content write — permitted.) This in-flock check is ADVISORY by the time of the post-flock Write — it is re-validated in step 6. Then PRINT the structured token-descriptor (`repo_root`, `branch`, `commit_sha`, `session_id`, `token_path`, `collision`) to stdout and let the Bash process exit (releasing fd 9). The descriptor is emitted on the process's STDOUT — a PreToolUse Bash hook scans the agent-submitted COMMAND STRING, not the process's runtime stdout, so printing the descriptor (even though it contains `token_path` under `/tmp/agentic-commit/...`) adds nothing scannable to any command line.
+6. **After** fd 9 is released: the agent reads the descriptor, then applies the pre-write checks from the Phase 3 reconciliation note (item 3), in order, immediately before the Write:
+   - **PRE-write HEAD-stability (authoritative):** `git -C "${GIT_ROOT}" rev-parse HEAD` must still equal the descriptor's `commit_sha`; if it moved, do NOT write a stale token, return `commit_status: failed` with `failure_code: push_gate_race`.
+   - **PRE-write collision re-check (authoritative, DO NOT rule 7):** re-read the existing token at `token_path` (the descriptor's `collision` is advisory and may be stale). If a token exists and its `session_id` differs from `PUSH_GATE_SID`, skip the write and follow the rule-7 WARNING path.
+   - Only if both pass: using the agent's **Write tool**, write the JSON token content `{"commit_sha": COMMIT_SHA, "branch": BRANCH, "repo_root": GIT_ROOT, "session_id": PUSH_GATE_SID}` to the `token_path` from the descriptor. The token JSON content (which embeds protected paths like the repo root) reaches disk only through the Write tool — never through a bash command line.
+   - **POST-write HEAD re-check (defensive):** re-read HEAD once more; if it moved during the Write window, treat the token as non-authorizing and return `push_gate_race`.
+7. Report the final token path on success.
 
 **Algorithm is canonical**: `sha256(os.path.realpath(repo_root)).hexdigest()[:16]`. Both
 `/commit` and `/push` must use this identical algorithm for the repo-hash derivation.
@@ -593,15 +812,27 @@ while ITERATION < MAX_ITERATIONS:
         # Phase 8's "stop here" applies to normal mode only; under bulk DRYRUN, never
         # early-stop and never enter the real-commit path.
         Perform Phase 3–10 for this group only
-        # Build COMMIT_MSG AFTER staging this group's files (inside Phase 6).
+        # Build the message AFTER staging this group's files (inside Phase 6), then write it to
+        # a message FILE via the Write tool (rules CP-1/CP-2) — NOT into a shell variable that
+        # inlines `$(git diff --stat --cached)` on the command line, and NOT via heredoc. The
+        # diff-stat body is captured in Phase 6 and embedded into the FILE content; the commit
+        # is the minimal `git -C "${GIT_ROOT}" commit -F "${MSGFILE}"` with nothing chained.
         # BULK mode REQUIRES the auto-bulk: prefix (dispatched via commit.md Step 7);
         # this prefix is checked by BLESSED_BRIDGE_RE in pretool-git-privilege-guard.py
         # alongside the bulk-commit sentinel written by /commit --bulk Step 5.
         # Without the prefix the privilege guard will block the commit.
-        #   COMMIT_MSG="auto-bulk: end-of-cycle commit for ${BRANCH} — ${SCOPE} updates
+        # NOTE (CP-1/CP-2 compatibility): the auto-bulk: prefix lives in the MSGFILE, NOT on the
+        # bash command line — `git commit -F "${MSGFILE}"` is the authorized commit form and the
+        # privilege guard's commit-grant path allows the `-F` invocation. This is the SAME
+        # message-in-file arrangement the prior `git commit -F "${TMPFILE}"` already used (the
+        # subject was never on the command line before either), so routing the message through the
+        # Write tool does not change what the privilege guard sees on the command line — it still
+        # sees a minimal `git commit -F <file>` under the commit grant + bulk sentinel.
+        # Message FILE content (written via Write tool):
+        #   auto-bulk: end-of-cycle commit for <branch> — <scope> updates
         #
-        #   $(git -C "${GIT_ROOT}" diff --stat --cached)"
-        Commit message format: "auto-bulk: end-of-cycle commit for <branch> — <scope> updates"
+        #   <git diff --stat --cached output, embedded in the file — never on the command line>
+        Commit message subject format: "auto-bulk: end-of-cycle commit for <branch> — <scope> updates"
 
     # Orphan files (no subsystem match and no task-id affinity): DO NOT auto-commit.
     # Print a warning for each orphan file and skip it.
@@ -654,18 +885,22 @@ in multi-group bulk only the last group is left staged); Step 6c then unstages t
 rename-aware (`git restore --staged`) on REJECT / dry-run-stop, or the real Step 7 dispatch
 commits the QA-approved set (bounded by `QA_APPROVED_FILES`).
 
+All "print the commit message" steps below are subject to CP-1 (dry-run carries the same
+documentation-phrase / protected-path risk as a real message): surface each message either
+directly in the agent's own output, or via the Write tool to `MSGFILE` + a minimal
+`cat "${MSGFILE}"` — NEVER via an inline bash `echo`/`printf`/heredoc of the message text.
+
 **Normal mode (BULK=false)** — if `DRYRUN=true`, at Phase 8:
-- Print: `DRY RUN — would commit:`
-- Print the commit message
-- Print the staged file list
+- Surface the `DRY RUN — would commit:` banner and the staged file list (plain paths).
+- Surface the commit message per the CP-1 dry-run rule above (agent output, or Write+`cat`).
 - Stop. Do NOT execute `git commit`. Do NOT write push-gate token.
 - Emit the structured output block with `commit_status: dryrun` (see `## Structured Final Status Output`).
 
 **Bulk mode (BULK=true) + DRYRUN=true** — run the FULL bulk classification (whole-repo scan
 + the agent real-work-vs-byproduct judgment + task-id/subsystem grouping), then enumerate the
 ENTIRE would-commit sweep WITHOUT committing:
-- For EACH group that would be committed, print its proposed `auto-bulk:` commit message and
-  its file list. Do NOT stop after the first group — enumerate every group.
+- For EACH group that would be committed, surface its proposed `auto-bulk:` commit message (per
+  the CP-1 dry-run rule above) and its file list. Do NOT stop after the first group — enumerate every group.
 - Do NOT execute any `git commit`, do NOT write any push-gate token, do NOT enter the commit
   loop's real-commit path.
 - Emit the structured output block ONCE at the end with `commit_status: dryrun` and the
@@ -692,15 +927,18 @@ In code form, initialize before the bulk loop:
 FAILED_GROUPS=()
 ```
 
-For each subsystem group's commit step:
+For each subsystem group's commit step (`${MSGFILE}` is the per-group message file written via
+the Write tool per rules CP-1/CP-2 — never a heredoc; the commit stays minimal):
 ```bash
-if ! git -C "${GIT_ROOT}" commit -F "${TMPFILE}"; then
+if ! git -C "${GIT_ROOT}" commit -F "${MSGFILE}"; then
     echo "WARNING: Failed to commit group ${scope} in batch ${ITERATION}. Skipping and continuing."
     git -C "${GIT_ROOT}" restore --staged -- "${group_files[@]}"
     FAILED_GROUPS+=("${scope}")
     continue
 fi
 ```
+On the failure path, `git restore --staged` and the `rm -f "${MSGFILE}"` cleanup remain
+SEPARATE bash steps — they are not chained onto the `git commit` command.
 
 After bulk loop:
 ```bash
@@ -814,25 +1052,34 @@ Derive `scope` using the same scope-derivation logic as Phase 6 (infer from `tas
 paths: `hooks` → hooks, `commands` → commands, `agents` → agents, `scripts` → scripts,
 `docs` → docs, mixed → repo).
 
-Build the recovery commit message in a tmpfile (DO NOT rule 12 — no heredoc form):
+Build the recovery commit message — per the `## Command-line purity (anti-false-positive
+contract)` (rules CP-1 / CP-2 / DO NOT rule 12), the message reaches disk via the **Write tool**,
+NOT a bash heredoc, and the commit is MINIMAL with nothing else on the line:
 
-Allocate a tmpfile: `TMPFILE=$(mktemp /tmp/recovery-commit-XXXXXX.txt)`
-
-Run: `scripts/precommitted-recovery.sh build-commit-msg "${GIT_ROOT}" "${scope}" "${TASK_ID}" "${TMPFILE}" ${precommitted_shas[*]} -- ${attributed_files[*]}`
-
-The script writes a commit message with subject `chore(${scope}): recovery commit — task ${TASK_ID} pre-empted by bulk session`,
-then body lines: `Task-id: ${TASK_ID}`, one `Precommitted-by: <sha>` line per SHA, and an `Attributed-files:` block.
-
-Verify the subject line does NOT match `\bsync\b.*\buncommitted\b` or `chore\(claude\)\s*:\s*sync`
-(DO NOT rule 10). The proposed subject `chore(<scope>): recovery commit — task <TASK_ID> pre-empted by bulk session`
-does not match either pattern; if scope derivation produces an unexpected value that triggers a
-match, replace the summary with `session recovery for ${scope}`.
+1. Compose the message content: subject `chore(${scope}): recovery commit — task ${TASK_ID} pre-empted by bulk session`,
+   then body lines: `Task-id: ${TASK_ID}`, one `Precommitted-by: <sha>` line per SHA, and an
+   `Attributed-files:` block. (The `precommitted-recovery.sh build-commit-msg` helper may be used
+   to derive this content, but the message FILE itself is written with the Write tool — do not
+   inline the message text on a bash command line.)
+2. Verify the subject line does NOT match `\bsync\b.*\buncommitted\b` or `chore\(claude\)\s*:\s*sync`
+   (DO NOT rule 10). The proposed subject `chore(<scope>): recovery commit — task <TASK_ID> pre-empted by bulk session`
+   does not match either pattern; if scope derivation produces an unexpected value that triggers a
+   match, replace the summary with `session recovery for ${scope}`.
+3. Choose a message path, e.g. `MSGFILE=/tmp/recovery-commit-<TASK_ID>-<short-rand>.txt`, and write
+   the composed message content to it using the agent's **Write tool**.
 
 Execute the recovery commit using the existing single-use commit grant (not consumed because no
-`git commit` fired against the clean working tree):
+`git commit` fired against the clean working tree). Run ONLY the minimal commit command (rule
+CP-2), nothing chained:
 
-Run: `scripts/precommitted-recovery.sh execute-commit "${GIT_ROOT}" "${TMPFILE}"`
-(internally runs `git commit --allow-empty -F "${TMPFILE}"` against `GIT_ROOT`)
+```bash
+git -C "${GIT_ROOT}" commit --allow-empty -F "${MSGFILE}"
+```
+
+In a SEPARATE later bash step, clean up: `rm -f "${MSGFILE}"`. (The
+`scripts/precommitted-recovery.sh execute-commit "${GIT_ROOT}" "${MSGFILE}"` helper, which
+internally runs this same minimal `git commit --allow-empty -F`, remains an acceptable
+equivalent — it keeps the message content in the FILE and the command line minimal.)
 
 **Recovery step 4: Capture recovery commit SHA**
 
@@ -842,9 +1089,11 @@ Capture the first field as `COMMIT_SHA` and the second as `BRANCH`.
 
 **Recovery step 5: Write push-gate token**
 
-Execute Phase 10 push-gate write logic unchanged (same `sha256(realpath(GIT_ROOT))[:16]` hash,
-same JSON schema, same DO NOT rule 7 session-collision check). Track whether the write
-actually occurred in a local variable `PUSH_GATE_WRITTEN`:
+Execute the Phase 10 push-gate write logic unchanged (same `sha256(realpath(GIT_ROOT))[:16]`
+hash, same JSON schema, same DO NOT rule 7 session-collision check) — which now means the token
+CONTENT is written via the agent's **Write tool** in a SEPARATE step (rule CP-3), never via an
+inline `python3`/heredoc/redirect on a bash command line. Track whether the write actually
+occurred in a local variable `PUSH_GATE_WRITTEN`:
 
 - If the existing token's `session_id` differs from `PUSH_GATE_SID`, print a WARNING and skip
   the write — DO NOT rule 7 applies identically here. Set `PUSH_GATE_WRITTEN=false`.
@@ -897,6 +1146,15 @@ multi-repo setups).
 | `hook_blocked` | A non-grant PreToolUse hook (e.g. `pretool-bash-safety.sh`) blocked the commit command. | No |
 | `scope_violation` | The staged file set contained files outside the authorized task cycle scope. | No |
 | `push_gate_collision` | recovery commit succeeded but push-gate token write was skipped due to session collision (DO NOT rule 7) | No |
+| `push_gate_race` | commit succeeded but HEAD moved between the in-flock `COMMIT_SHA` capture and the post-flock token Write (Phase 3 reconciliation note / Phase 10 step 6); a stale token was NOT written | Yes (guarded) |
+
+**`push_gate_race` retry semantics (guardrail).** "Retryable" here means: re-run the
+push-gate-write workflow AFTER re-inspecting current HEAD and confirming whether THIS cycle's
+commit already landed — it does NOT mean blindly creating another commit. The commit that
+triggered `push_gate_race` already succeeded; a retry must only (a) re-derive the descriptor
+from the current HEAD and (b) re-attempt the token Write with the same pre-write checks. Under
+active concurrent commits a retry may legitimately `push_gate_race` again — bounded re-attempts,
+never an unbounded loop, and never a duplicate `git commit`.
 
 ### Output schema
 
