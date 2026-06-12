@@ -115,6 +115,10 @@
       "Bash(source ~/.claude/venv/bin/activate && python3 ~/.claude/scripts/todo/file-analyze.py:*)",
       "Bash(source ~/.claude/venv/bin/activate && python3 ~/.claude/scripts/todo/reflect-search.py:*)",
       "Bash(source ~/.claude/venv/bin/activate && python3 ~/.claude/tests/scripts/validate-*.py:*)",
+      "Bash(~/.claude/scripts/install-git-keystone.sh:*)",
+      "Bash(~/.claude/scripts/overnight-git-env.sh:*)",
+      "Bash(~/.claude/scripts/overnight-git-selftest.sh:*)",
+      "Bash(~/.claude/scripts/mint-git-blessed-token.sh:*)",
       "Bash(~/.claude/scripts/orchestrator.sh clean-inspect:*)",
       "Bash(~/.claude/scripts/orchestrator.sh clean-merge-reports:*)",
       "Bash(~/.claude/scripts/orchestrator.sh clean-execute:*)",
@@ -440,6 +444,10 @@
           {
             "type": "command",
             "command": "python3 \"$HOME/.claude/hooks/pretool-bash-views-guard.py\""
+          },
+          {
+            "type": "command",
+            "command": "python3 \"$HOME/.claude/hooks/pretool-wrapper-userintent.py\""
           }
         ]
       },

@@ -1,0 +1,226 @@
+#!/usr/bin/env bash
+# git-policy-shim — Layer-2 PATH `git` POLICY shim (M13).
+#
+# SEPARATE from the modern-git selector (git-selector) per codex round-2 #7:
+# the selector puts a pinned >=2.46 git first on PATH; THIS shim refuses
+# main-root / master ops for an overnight actor. Relaxing the policy must never
+# drop the selector, hence two files.
+#
+# Installed (named `git`) on the overnight actor's PATH ahead of system git via
+# the selector dir. Catches normal `git ...` and python subprocess(["git",...])
+# whose argv resolves by BASENAME to `git`. It resolves -C / --git-dir /
+# --work-tree / GIT_DIR / GIT_WORK_TREE to an effective target and REFUSES
+# when that target resolves to MAIN_ROOT or the op touches master/branch-switch.
+#
+# Activation: only when CLAUDE_OVERNIGHT_ACTOR=1 AND CLAUDE_OVERNIGHT_MAIN_ROOT
+# is set. Otherwise it is a transparent pass-through to the real git (so it is
+# inert for any non-overnight use and cannot affect normal sessions).
+#
+# Exit: 2 = blocked (policy); else delegates to the real git's exit code.
+
+set -u
+
+# Resolve the REAL git: the next `git` on PATH after this shim's dir, else the
+# system absolute path. CLAUDE_OVERNIGHT_REAL_GIT lets the selector pin it.
+_real_git() {
+  if [ -n "${CLAUDE_OVERNIGHT_REAL_GIT:-}" ] && [ -x "${CLAUDE_OVERNIGHT_REAL_GIT}" ]; then
+    printf '%s' "${CLAUDE_OVERNIGHT_REAL_GIT}"
+    return
+  fi
+  local self_dir cand
+  self_dir="$(cd "$(dirname "$0")" && pwd -P)"
+  local IFS=:
+  for d in $PATH; do
+    [ -n "$d" ] || continue
+    [ "$(cd "$d" 2>/dev/null && pwd -P)" = "$self_dir" ] && continue
+    cand="$d/git"
+    if [ -x "$cand" ]; then printf '%s' "$cand"; return; fi
+  done
+  for cand in /usr/bin/git /usr/local/bin/git /bin/git; do
+    [ -x "$cand" ] && { printf '%s' "$cand"; return; }
+  done
+  printf '%s' git
+}
+REAL_GIT="$(_real_git)"
+
+# Inert unless we are the overnight actor with a known main root.
+if [ "${CLAUDE_OVERNIGHT_ACTOR:-}" != "1" ] || [ -z "${CLAUDE_OVERNIGHT_MAIN_ROOT:-}" ]; then
+  exec "$REAL_GIT" "$@"
+fi
+
+MAIN_ROOT="$(cd "${CLAUDE_OVERNIGHT_MAIN_ROOT}" 2>/dev/null && pwd -P || printf '%s' "${CLAUDE_OVERNIGHT_MAIN_ROOT}")"
+
+_blocked() {
+  echo "OVERNIGHT POLICY SHIM: refused git op targeting the main worktree/master ($1). Overnight actors are confined to the isolated worktree." >&2
+  exit 2
+}
+
+# Parse the leading git global options to find -C / --git-dir / --work-tree and
+# the subcommand. We resolve an effective directory target.
+eff_dir=""
+git_dir=""
+work_tree=""
+subcmd=""
+args=("$@")
+i=0
+n=${#args[@]}
+while [ $i -lt $n ]; do
+  a="${args[$i]}"
+  case "$a" in
+    -C)        i=$((i+1)); eff_dir="${args[$i]:-}" ;;
+    -C*)       eff_dir="${a#-C}" ;;
+    --git-dir) i=$((i+1)); git_dir="${args[$i]:-}" ;;
+    --git-dir=*) git_dir="${a#--git-dir=}" ;;
+    --work-tree) i=$((i+1)); work_tree="${args[$i]:-}" ;;
+    --work-tree=*) work_tree="${a#--work-tree=}" ;;
+    -c)        i=$((i+1)) ;;  # skip -c key=val
+    -c*)       : ;;
+    --exec-path|--exec-path=*|--no-pager|--paginate|-p|-P|--bare|--no-replace-objects|--literal-pathspecs|--glob-pathspecs|--noglob-pathspecs|--icase-pathspecs|--no-optional-locks) : ;;
+    --namespace|--super-prefix) i=$((i+1)) ;;
+    -*)        : ;;
+    *)         subcmd="$a"; break ;;
+  esac
+  i=$((i+1))
+done
+
+# Env-based targets
+[ -n "${GIT_WORK_TREE:-}" ] && work_tree="${GIT_WORK_TREE}"
+[ -n "${GIT_DIR:-}" ] && git_dir="${GIT_DIR}"
+
+# Compute the effective working directory for the op.
+_resolve() { ( cd "${1:-.}" 2>/dev/null && pwd -P ) || printf '%s' "$1"; }
+target_dir="$(_resolve "${eff_dir:-${work_tree:-.}}")"
+# VECTOR-2 (Cycle-3): the --work-tree / GIT_WORK_TREE override is the ACTUAL
+# write target even when -C points inside the isolated worktree (the index/HEAD
+# come from -C's repo but the checkout/restore TARGET is the work-tree). Resolve
+# it independently so a work-tree redirect into main is evaluated for
+# main-targeting regardless of -C. Empty when no override was given.
+worktree_target=""
+[ -n "${work_tree:-}" ] && worktree_target="$(_resolve "${work_tree}")"
+
+# fix-3 (Cycle-2): "under main_root but OUTSIDE every active worktree" is
+# main-targeting. The active worktrees are the overnight worktree(s); we treat
+# CLAUDE_OVERNIGHT_WORKTREE (set by overnight-git-env.sh) plus the conventional
+# .claude/worktrees/* prefix as the allow-set. Replaces the prior exact-root
+# equality (which let `git -C $MAIN/sub …` evade by resolving to a subdir).
+_under() {
+  # _under <path> <prefix> : true iff realpath(path) == prefix or under prefix/
+  case "$1" in
+    "$2") return 0 ;;
+    "$2"/*) return 0 ;;
+  esac
+  return 1
+}
+_is_under_a_worktree() {
+  local d="$1"
+  [ -n "$d" ] || return 1
+  if [ -n "${CLAUDE_OVERNIGHT_WORKTREE:-}" ]; then
+    local wt
+    wt="$(cd "${CLAUDE_OVERNIGHT_WORKTREE}" 2>/dev/null && pwd -P || printf '%s' "${CLAUDE_OVERNIGHT_WORKTREE}")"
+    _under "$d" "$wt" && return 0
+  fi
+  case "$d" in
+    "$MAIN_ROOT"/.claude/worktrees/*) return 0 ;;
+    "$MAIN_ROOT"/.claude/overnight-fresh-clones/*) return 0 ;;
+  esac
+  return 1
+}
+_targets_main() {
+  # main-targeting iff the effective dir is under main_root AND not under any
+  # active worktree (a worktree lives physically under .claude/worktrees but is
+  # an independent checkout; a plain subdir of main is NOT).
+  local d="$1"
+  _under "$d" "$MAIN_ROOT" || return 1
+  _is_under_a_worktree "$d" && return 1
+  return 0
+}
+
+# If git_dir / GIT_DIR / GIT_COMMON_DIR is given and points into MAIN_ROOT/.git,
+# treat as main (codex #6: redirect-into-main).
+_gitdir_into_main() {
+  [ -n "$1" ] || return 1
+  local gd
+  gd="$(_resolve "$1")"
+  case "$gd" in
+    "$MAIN_ROOT"/.git|"$MAIN_ROOT"/.git/*|"$MAIN_ROOT") return 0 ;;
+  esac
+  return 1
+}
+if _gitdir_into_main "$git_dir"; then
+  _blocked "--git-dir/GIT_DIR -> main"
+fi
+if _gitdir_into_main "${GIT_COMMON_DIR:-}"; then
+  _blocked "GIT_COMMON_DIR -> main"
+fi
+
+# Block any op whose effective directory is main-targeting (under main_root but
+# outside any active worktree).
+if _targets_main "$target_dir"; then
+  _blocked "-C/cwd -> main (under main_root, outside worktree)"
+fi
+
+# VECTOR-2 (Cycle-3): a --work-tree / GIT_WORK_TREE override pointing at the main
+# working directory (under main_root, outside every active worktree) writes the
+# main tree in place even when -C is the worktree. Block before execution.
+if [ -n "$worktree_target" ] && _targets_main "$worktree_target"; then
+  _blocked "--work-tree/GIT_WORK_TREE -> main (writes the main working directory)"
+fi
+
+# Block dangerous/mutating ops that touch master or move HEAD, BUT only when they
+# are main-targeting or move the protected `master` ref — a worktree-local
+# checkout/switch/reset is a LEGITIMATE op and is ALLOWED (codex #2/#6: no
+# all-checkout overblocking).
+_op_is_main_targeting="$( _targets_main "$target_dir" && echo 1 || echo 0 )"
+# VECTOR-2: a work-tree override into main also makes the op main-targeting.
+if [ -n "$worktree_target" ] && _targets_main "$worktree_target"; then
+  _op_is_main_targeting=1
+fi
+_in_worktree="$( _is_under_a_worktree "$target_dir" && echo 1 || echo 0 )"
+_mentions_master() {
+  for a in "$@"; do
+    case "$a" in
+      master|refs/heads/master) return 0 ;;
+    esac
+  done
+  return 1
+}
+case "$subcmd" in
+  checkout|switch|reset|restore|clean|rebase|merge|cherry-pick|am|pull|stash)
+    # A branch/tree mutation. Block when main-targeting, or when the effective
+    # dir cannot be proven to be inside an isolated worktree (fail-closed for the
+    # HEAD-moving forms), or when it force-moves master.
+    if [ "$_op_is_main_targeting" = "1" ] || _mentions_master "$@"; then
+      _blocked "$subcmd (main-targeting / master)"
+    fi
+    if [ "$_in_worktree" != "1" ] && { [ "$subcmd" = "checkout" ] || [ "$subcmd" = "switch" ] || [ "$subcmd" = "reset" ]; }; then
+      # cwd/-C is not provably inside a worktree -> a branch/HEAD move could land
+      # on main. Fail closed (the exact 2026-06-03 incident shape).
+      _blocked "$subcmd (effective dir not provably inside an isolated worktree)"
+    fi
+    ;;
+  branch)
+    # Force-move / rename / delete of `master` is a master ref-move -> block.
+    if _mentions_master "$@" || [ "$_op_is_main_targeting" = "1" ]; then
+      for a in "$@"; do
+        case "$a" in
+          -f|-D|-M|--force|--delete|--move) _blocked "branch force/move/delete (master ref-move)" ;;
+        esac
+      done
+    fi
+    ;;
+  update-ref|symbolic-ref)
+    # update-ref refs/heads/master / symbolic-ref HEAD -> protected ref move.
+    if _mentions_master "$@" || [ "$_op_is_main_targeting" = "1" ]; then
+      _blocked "$subcmd (master/HEAD ref move)"
+    fi
+    case "$subcmd" in
+      symbolic-ref)
+        for a in "$@"; do [ "$a" = "HEAD" ] && [ "$_in_worktree" != "1" ] && _blocked "symbolic-ref HEAD (not provably in worktree)"; done ;;
+    esac
+    ;;
+  worktree)
+    _blocked "worktree (overnight actor may not manage worktrees)"
+    ;;
+esac
+
+exec "$REAL_GIT" "$@"

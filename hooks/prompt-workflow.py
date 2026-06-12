@@ -366,14 +366,17 @@ def create_overnight_state(end_time: str, focus: str = '', spec_path: str = '', 
     cmd += ['--session-id', session_id]
     cmd += ['--project-dir', str(PROJECT_DIR)]
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+        # M5/AC4: raise the timeout from 10s to >=60s — worktree creation +
+        # validation + launch self-test legitimately take longer than 10s.
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
         if result.returncode != 0:
             print(result.stderr, file=sys.stderr)
             return False
         if result.stderr:
             print(result.stderr.rstrip(), file=sys.stderr)
         return True
-    except Exception:
+    except Exception as exc:
+        print(f'overnight state creation failed: {exc}', file=sys.stderr)
         return False
 
 
@@ -389,14 +392,41 @@ def load_overnight_state(session_id: str = '') -> dict | None:
 
 
 def _build_worktree_instruction(state: dict) -> str:
-    """Build worktree guard instruction based on state."""
+    """Build worktree guard instruction based on state.
+
+    M5/round-3: a validated worktree is a launch PRECONDITION. The instruction
+    NEVER tells the agent to call EnterWorktree, and a missing/invalid worktree
+    is a HARD ABORT (the launcher refuses to write such a state, so this branch
+    should be unreachable for a properly-launched session).
+    """
     wt = state.get('worktree_path')
     if wt is not None and wt != '':
-        return (
-            f'CRITICAL: Worktree already exists at {wt}. '
-            'DO NOT call EnterWorktree under any circumstances.'
+        # fix-1 (Cycle-2): also mandate sourcing + verifying the actor git-env so
+        # the harness-owned policy shim is the actor's `git` and
+        # CLAUDE_OVERNIGHT_ACTOR=1 is set in the actor runtime (defense in depth;
+        # the PreTool hook-guard is the authoritative live-state-derived block).
+        actor_env = state.get('actor_git_env') or {}
+        env_helper = actor_env.get('env_helper') if isinstance(actor_env, dict) else None
+        shim_git = actor_env.get('shim_git') if isinstance(actor_env, dict) else None
+        main_root = state.get('main_root', '')
+        base = (
+            f'CRITICAL: The validated isolated worktree is {wt}. '
+            'cd into it. DO NOT call EnterWorktree under any circumstances.'
         )
-    return 'Worktree was not created yet. Call EnterWorktree in Step 1.'
+        if env_helper:
+            base += (
+                f' Then source the actor git-env: `source "{env_helper}" '
+                f'--main-root "{main_root}" --worktree "{wt}"` and VERIFY '
+                f'`command -v git` == "{shim_git}" and `git rev-parse '
+                f'--show-toplevel` == "{wt}". Never run git against the main '
+                'working directory; never strip CLAUDE_OVERNIGHT_ACTOR.'
+            )
+        return base
+    return (
+        'HARD ABORT. The overnight state has no validated worktree. '
+        'Do not create state manually. Do not call EnterWorktree. '
+        'Do not continue on the current branch or main project path.'
+    )
 
 
 def _load_overnight_todos() -> list[dict]:
@@ -773,6 +803,17 @@ def _extract_arguments(user_input: str, cmd_name: str) -> str:
     return ''
 
 
+def _cleanup_overnight_partials(sid: str) -> None:
+    """M5/AC4: remove any partial todo/bookmark/state written for a failed
+    /dev-overnight launch so a failed launch leaves no actionable artifacts."""
+    for p in (official_todos_path(sid), workflow_bookmark_path(sid)):
+        try:
+            if p.exists():
+                p.unlink()
+        except Exception:
+            pass
+
+
 def handle_phase_a(cmd_name: str, user_input: str, sid: str) -> None:
     """Phase A: slash command detected -- setup todos, state, inject spec."""
     if cmd_name in ("commit", "push", "merge", "stop"):
@@ -783,13 +824,25 @@ def handle_phase_a(cmd_name: str, user_input: str, sid: str) -> None:
     if not todos:
         return
     _check_workflow_conflict(cmd_name, sid)
+    # M5/AC4: for /dev-overnight, create + validate the isolated overnight state
+    # BEFORE writing todos/bookmark/checklist. On failure: print stderr, clean
+    # any partials, and FAIL CLOSED (no checklist, no command-spec, no
+    # EnterWorktree prompt, no silent exit(0)).
+    if cmd_name == 'dev-overnight':
+        end_time, focus, spec_path, codex_required = parse_overnight_args(user_input)
+        ok = create_overnight_state(
+            end_time, focus, spec_path=spec_path, session_id=sid,
+            codex_required=codex_required)
+        if not ok:
+            print('OVERNIGHT LAUNCH ABORTED: failed to create + validate an '
+                  'isolated worktree. No checklist or command spec injected. '
+                  'Do NOT work in the main directory.', file=sys.stderr)
+            _cleanup_overnight_partials(sid)
+            raise SystemExit(2)
     tf = official_todos_path(sid)
     tf.parent.mkdir(parents=True, exist_ok=True)
     tf.write_text(json.dumps(todos, ensure_ascii=False))
     _write_bookmark(cmd_name, sid, _extract_arguments(user_input, cmd_name))
-    if cmd_name == 'dev-overnight':
-        end_time, focus, spec_path, codex_required = parse_overnight_args(user_input)
-        create_overnight_state(end_time, focus, spec_path=spec_path, session_id=sid, codex_required=codex_required)
     if cmd_name in ('dev', 'dev-command', 'redev'):
         dev_session_id = _init_dev_registry(cmd_name, user_input, sid, PROJECT_DIR)
         codex_active = '--codex' in user_input.split()
@@ -826,6 +879,10 @@ def main():
             handle_phase_b(session_id)
         else:
             handle_phase_a(cmd_name, user_input, session_id)
+    except SystemExit:
+        # M5/AC4: a /dev-overnight launch failure raises SystemExit(2) to fail
+        # CLOSED. Do NOT swallow it into exit(0); propagate the failure code.
+        raise
     except Exception:
         pass
     sys.exit(0)

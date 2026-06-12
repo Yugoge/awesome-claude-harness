@@ -67,6 +67,45 @@ if [[ ${#OPS[@]} -eq 0 ]]; then
     exit 1
 fi
 
+# --- M10/AC8: reject mutation of immutable isolation + Option-A fields --------
+# State integrity is non-negotiable: an actor must not be able to flip
+# best_effort -> structural, repoint the worktree at main, or release isolation
+# via a plain --set. `isolation_released_at` is settable ONLY via the dedicated
+# /stop release path (scripts/break-overnight-lock.py), never via --set here.
+IMMUTABLE_FIELDS=(
+    session_id main_root main_git_dir main_branch_at_start main_head_at_start
+    worktree_path worktree_branch worktree_head_at_start isolation_active_until
+    dev_registry_session_id dev_registry_dir isolation_kind
+    guarantee_level structural_claim_allowed git_effective_path git_version
+    git_exec_path reference_transaction_selftest_result isolation_released_at
+)
+_is_immutable() {
+    local k="$1" f
+    for f in "${IMMUTABLE_FIELDS[@]}"; do
+        [[ "$k" == "$f" ]] && return 0
+    done
+    return 1
+}
+i=0
+while [[ $i -lt ${#OPS[@]} ]]; do
+    case "${OPS[$i]}" in
+        set|set-json)
+            if _is_immutable "${OPS[$((i+1))]}"; then
+                echo "Error: field '${OPS[$((i+1))]}' is immutable (isolation/guarantee integrity); mutation rejected." >&2
+                echo "  Only the /stop release path may set isolation_released_at." >&2
+                exit 1
+            fi
+            i=$((i+3)) ;;
+        inc) i=$((i+2)) ;;
+        append|append-json) i=$((i+3)) ;;
+        update-issue) i=$((i+4)) ;;
+        inc-issue) i=$((i+3)) ;;
+        inc-fail) i=$((i+2)) ;;
+        cycle-reset) i=$((i+1)) ;;
+        *) i=$((i+1)) ;;
+    esac
+done
+
 # --- Locate state file ---
 STATE_DIR="$PROJECT_DIR/.claude"
 

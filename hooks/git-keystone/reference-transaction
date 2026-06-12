@@ -1,0 +1,99 @@
+#!/usr/bin/env bash
+# reference-transaction — git-native keystone (M7, M8 honest-guarantee).
+#
+# Wired via core.hooksPath relocation (see scripts/install-git-keystone.sh).
+# Git invokes this for EVERY ref update in the repo, on ALL launch paths
+# (PATH git, /usr/bin/git, /usr/lib/git-core/git, python subprocess), because
+# the hook runs inside git's own ref-transaction path.
+#
+# Protocol (githooks(5)): argv[1] is the transaction phase
+#   ("prepared" | "committed" | "aborted"). On stdin, one line per ref:
+#     <old-value> SP <new-value> SP <ref-name> LF
+# We only ACT in the "prepared" phase (the only abortable state). A nonzero
+# exit in "prepared" aborts the whole transaction before any ref moves.
+#
+# DENY POLICY (actor-scoped — never a global master lockdown):
+#   * Applies ONLY when the caller is an overnight actor:
+#       env CLAUDE_OVERNIGHT_ACTOR == "1"  AND  blessed token ABSENT.
+#   * A NORMAL session (no CLAUDE_OVERNIGHT_ACTOR) is UNAFFECTED — exit 0.
+#   * A blessed token (CLAUDE_GIT_BLESSED_TOKEN matching the live grant file)
+#     exempts the operation (sanctioned /commit//push//merge).
+#   For an overnight actor without the token, REJECT a transaction that:
+#       * updates refs/heads/master to a different oid, OR
+#       * moves the MAIN worktree's HEAD off refs/heads/master (oid changes to
+#         master ref, HEAD detach). On git >=2.46 it ALSO sees the symref HEAD
+#         branch-switch update and rejects it (Option-A structural coverage).
+#
+# Exit: 0 = allow; 1 = abort the transaction (deny).
+
+set -u
+
+PHASE="${1:-}"
+[ "$PHASE" = "prepared" ] || exit 0   # only the abortable phase
+
+# ---- actor gate: only overnight actors are subject to the keystone deny ----
+[ "${CLAUDE_OVERNIGHT_ACTOR:-}" = "1" ] || exit 0
+
+# ---- blessed-token exemption (sanctioned harness wrappers) ----------------
+# CLAUDE_GIT_BLESSED_TOKEN must match the single-operation grant file that the
+# minting wrapper wrote. Absent/mismatched => not exempt. The overnight launch
+# env never sets this token, so the overnight actor can never be exempt.
+_blessed_ok() {
+  local tok="${CLAUDE_GIT_BLESSED_TOKEN:-}"
+  [ -n "$tok" ] || return 1
+  local grant_dir="${CLAUDE_GIT_BLESSED_GRANT_DIR:-${TMPDIR:-/tmp}/claude-git-blessed}"
+  local grant="$grant_dir/${tok}.grant"
+  [ -f "$grant" ] || return 1
+  # Expiry: grant file first line is an epoch-seconds expiry; reject if passed.
+  local exp
+  exp="$(head -n1 "$grant" 2>/dev/null)"
+  case "$exp" in
+    ''|*[!0-9]*) return 1 ;;
+  esac
+  [ "$(date +%s)" -le "$exp" ] || return 1
+  return 0
+}
+if _blessed_ok; then exit 0; fi
+
+# ---- only protect the MAIN worktree --------------------------------------
+# A registered worktree (incl. the overnight worktree itself) has its own HEAD;
+# git invokes the hook with that worktree's GIT_DIR. We protect the COMMON
+# refs/heads/master (shared) always, but HEAD-move protection applies to the
+# MAIN worktree's HEAD only. GIT_DIR for the main worktree == the common dir.
+_git_common_dir="$(git rev-parse --git-common-dir 2>/dev/null || echo '')"
+_git_dir="$(git rev-parse --absolute-git-dir 2>/dev/null || echo "${GIT_DIR:-}")"
+_is_main_worktree=0
+if [ -n "$_git_common_dir" ] && [ -n "$_git_dir" ]; then
+  if [ "$(cd "$_git_common_dir" 2>/dev/null && pwd -P)" = "$(cd "$_git_dir" 2>/dev/null && pwd -P)" ]; then
+    _is_main_worktree=1
+  fi
+fi
+
+_deny() {
+  echo "OVERNIGHT KEYSTONE: refusing ref update '$1' for overnight actor (refs/heads/master / main HEAD are protected; no blessed token present)." >&2
+  exit 1
+}
+
+# ---- scan the transaction lines ------------------------------------------
+while IFS=' ' read -r old new ref; do
+  [ -n "${ref:-}" ] || continue
+  case "$ref" in
+    refs/heads/master)
+      # oid change to the master branch ref (commit/reset/forced move/push).
+      if [ "$old" != "$new" ]; then
+        _deny "$ref"
+      fi
+      ;;
+    HEAD)
+      # Only the MAIN worktree's HEAD is protected here. On git 2.43 the symref
+      # HEAD branch-switch does NOT surface; the oid-detach form does. On
+      # git >=2.46 the symref update surfaces too (structural branch-switch
+      # coverage). Either way: reject any HEAD move for the main worktree.
+      if [ "$_is_main_worktree" = "1" ] && [ "$old" != "$new" ]; then
+        _deny "$ref (main worktree HEAD)"
+      fi
+      ;;
+  esac
+done
+
+exit 0

@@ -35,7 +35,7 @@ Every Agent dispatch from this orchestrator shares the following invariant prelu
    `You are the <role> subagent. Follow agents/<role>.md instructions precisely.` (For BA the file is `.claude/agents/ba.md`. For PM with explicit mode the line becomes `You are the PM subagent in <PM_MODE> mode. Follow agents/pm.md <Mode> Protocol.`)
 
 4. **Project root**:
-   `Project path: <worktree_path from state file if set, otherwise project_path>` — every subagent's file reads/writes/git ops MUST stay inside this root.
+   `Project path: <validated worktree_path from state file>` — every subagent's file reads/writes/git ops MUST stay inside this root.
 
 5. **Standard Return-JSON contract**:
    The dispatched subagent returns a JSON object whose required keys are `status`, `<role>_report_path` (or equivalent artifact path[s]), and `summary`. Subagents extend this shape per `agents/<role>.md`; this orchestrator does not redeclare per-role schemas inline.
@@ -185,11 +185,18 @@ The state file has already been created by the UserPromptSubmit hook at `.claude
 
 **Read the state file** to get the end_time, session_id, worktree_path, spec_mode, user_spec_path, view_paths, and confirm initialization. If multiple state files exist, use the one matching the current session.
 
-If no state file exists (edge case), create it manually using the v4 schema with a generated session_id.
+If no state file exists, HARD ABORT. Do not fabricate a state file and do not proceed; the launch hook fails closed when it cannot produce a validated isolated worktree, so a missing state means the overnight actor must not run.
 
-**WORKTREE GUARD**: Check the state file's `worktree_path` field.
-- If `worktree_path` is NOT null: `cd` into the worktree path.
-- If `worktree_path` IS null (edge case: worktree creation failed during hook): log a warning and continue on the current branch.
+**WORKTREE GUARD**: Check the state file's `worktree_path` field. The launch hook guarantees a validated isolated worktree before any state is written, so `worktree_path` is always a valid isolated root.
+- `cd` into the validated `worktree_path`.
+- If `worktree_path` is missing or invalid: HARD ABORT. Do not create state manually. Do not call EnterWorktree. Do not continue on the main project path. The session simply does not run.
+
+**ACTOR GIT-ENV GUARD (fix-1, MANDATORY — do this immediately after `cd` into the worktree, before any git op):** The launch hook installs the policy-shim + selector git wrappers and records their location in the state file's `actor_git_env` object. Source the actor env so every subsequent `git` resolves to the harness-owned policy shim and `CLAUDE_OVERNIGHT_ACTOR=1` is set in your runtime, then VERIFY it took effect:
+- Read `actor_git_env.env_helper` from the state file. If non-null, run `source "<env_helper>" --main-root "<main_root>" --worktree "<worktree_path>"` (the helper prepends the shim dir to PATH and exports `CLAUDE_OVERNIGHT_ACTOR=1`, `CLAUDE_OVERNIGHT_MAIN_ROOT`, `CLAUDE_OVERNIGHT_WORKTREE`).
+- VERIFY: `command -v git` MUST equal `actor_git_env.shim_git`, and `git rev-parse --show-toplevel` MUST equal the validated `worktree_path`. The actor-flag + shim-first PATH MUST persist across subsequent tool calls (export them in your shell session; re-source if a new shell does not inherit them).
+- This wiring is defense-in-depth ONLY. The authoritative protection is the PreTool hook-guard, which derives overnight-actor status from the LIVE overnight state (not from this env) and blocks the covered main-targeting git ops and known subprocess forms — including a python-subprocess `git -C <main> checkout` — regardless of whether this env was sourced. (Git-native ref protection additionally depends on the keystone remaining installed; see the accepted shared-.git limitation below.) Never rely on the env alone; never attempt to strip `CLAUDE_OVERNIGHT_ACTOR` or run git against the main working directory.
+
+> **⚠️ KNOWN ACCEPTED LIMITATION (2026-06-12) — shared `.git` common-dir.** The overnight session runs in a *linked* git worktree, which **shares the repository `.git` common-dir** with the main checkout. The current locks (the git 2.54 reference-transaction keystone for HEAD/master-ref moves, and the per-Bash-command bwrap RO-bind boundary for main working-tree writes) are accepted as **sufficient for this cycle**. However, the shared-.git residual remains a **valid accepted deviation, not a QA pass**: an actor mutating shared git config/hooks (e.g. `git config --unset core.hooksPath`) can disable the keystone through the RW-bound common-dir and then move main HEAD off master. **Do NOT claim protection against shared-.git mutation.** The sound closure (fresh-clone / no-shared-git isolation, or RO-binding `<common>/config` + `<common>/hooks` and blocking protected-key git-config mutation) is deferred to future work.
 
 **Spec announcement**: If `spec_mode` is `"user-provided"` and `user_spec_path` is set, announce:
 ```
@@ -207,7 +214,7 @@ If `user_spec_path` was auto-detected (not passed via `--spec`), also announce:
 Overnight development session initialized.
 Start time: <start_time>
 End time: <end_time>
-Worktree: <worktree_path or "none (using current branch)">
+Worktree: <validated worktree_path from state file>
 Loop: todo-completion-driven (automatic reset on cycle complete)
 Time-lock hook is active -- session will not terminate until end-time.
 Beginning autonomous exploration...
@@ -461,7 +468,7 @@ Use Agent tool with:
   User requirement document: <PROJECT_ROOT>/docs/dev/user-requirement-<DEV_SESSION_ID>.md
   (Read this file before interpreting Requirement, Context file, BA spec, Dev report, or state-derived focus.)
 
-  Project path: <worktree_path from state file if set, otherwise project_path>
+  Project path: <validated worktree_path from state file>
   State file path: <path to overnight-state-*.json>
   Session ID: <session_id>
   Output test plan to: docs/dev/overnight/<session_id>/test-plan.json
@@ -612,7 +619,7 @@ Each subagent receives, at the TOP of its prompt before any other content:
 - FIRST ACTION line: "Read $CLAUDE_PROJECT_DIR/.claude/dev-registry/$DEV_SESSION_ID/<specialist.type>.json to register with the enforcement system. Do this BEFORE any other tool call."
 - CHECKPOINT MARKING line: "see agents/<specialist.type>.md §Checkpoint Marking Contract. Mark every cp-NN done or waived before Stop or SubagentStop hook will block exit." (full SECOND ACTION SPEC_ID/cp-state semantics are defined once in the Step 1 cp-state handoff section above and need not be repeated per dispatch.)
 - User requirement document: <PROJECT_ROOT>/docs/dev/user-requirement-<DEV_SESSION_ID>.md (Read this file before interpreting Requirement, Context file, BA spec, Dev report, or state-derived focus.)
-- Project path: <worktree_path from state file if set, otherwise project_path>
+- Project path: <validated worktree_path from state file>
 - Already addressed: <addressed_issues array from state file>
 - Focus: <focus string from state file, or "none">
 - Test plan: docs/dev/overnight/<session_id>/test-plan.json
@@ -719,7 +726,7 @@ Use Agent tool with:
   User requirement document: <PROJECT_ROOT>/docs/dev/user-requirement-<DEV_SESSION_ID>.md
   (Read this file before interpreting Requirement, Context file, BA spec, Dev report, or state-derived focus.)
 
-  Project path: <worktree_path from state file if set, otherwise project_path>
+  Project path: <validated worktree_path from state file>
   Session ID: <session_id>
   Cycle number: <cycle_count + 1>
 
@@ -947,7 +954,7 @@ Agent(subagent_type: "ba")
     Previous answers: null
     Codebase hints: {pipeline.location}
     Timestamp: {pipeline.timestamp_suffix}
-    Project root: <worktree_path from state file if set, otherwise project root>
+    Project root: <validated worktree_path from state file>
 
     Overnight spec file: {pipeline.spec_path}
     View file: {view_paths[this-agent] or null — sibling views/<agent>.md if present}
@@ -1039,7 +1046,7 @@ Agent(subagent_type: "qa")
     Context JSON: docs/dev/context-{pipeline.timestamp_suffix}.json
     Overnight spec file: {pipeline.spec_path}
     View file: {view_paths[this-agent] or null — sibling views/<agent>.md if present}
-    Project root: <worktree_path from state file if set, otherwise project root>
+    Project root: <validated worktree_path from state file>
 
     Verify these 4 dimensions:
 
@@ -1226,7 +1233,7 @@ Agent(subagent_type: "dev")
     Overnight spec file: {pipeline.spec_path}
     View file: {view_paths[this-agent] or null — sibling views/<agent>.md if present}
     Write your implementation report to: docs/dev/dev-report-{pipeline.timestamp_suffix}.json
-    Project root: <worktree_path from state file if set, otherwise project root>
+    Project root: <validated worktree_path from state file>
 
     Read the overnight spec file FIRST for cross-cycle context.
     After implementation, update the spec: Section 2 (What Was Attempted) and Section 3 (What Was Changed).
@@ -1320,7 +1327,7 @@ Agent(subagent_type: "qa")
     Overnight spec file: {pipeline.spec_path}
     View file: {view_paths[this-agent] or null — sibling views/<agent>.md if present}
     Write your verification report to: docs/dev/qa-report-{pipeline.timestamp_suffix}.json
-    Project root: <worktree_path from state file if set, otherwise project root>
+    Project root: <validated worktree_path from state file>
 
     Read the overnight spec file FIRST for cross-cycle context and acceptance criteria.
     After verification, update the spec: Section 4 (Current State) with measured values.
@@ -1530,7 +1537,7 @@ Use Agent tool with:
   User requirement document: <PROJECT_ROOT>/docs/dev/user-requirement-<DEV_SESSION_ID>.md
   (Read this file before interpreting Requirement, Context file, BA spec, Dev report, or state-derived focus.)
 
-  Project path: <worktree_path from state file if set, otherwise project_path>
+  Project path: <validated worktree_path from state file>
   Session ID: <session_id>
   Cycle number: <current cycle_count>
 
@@ -1784,8 +1791,8 @@ The state file is created by `create-overnight-state.sh` during session initiali
     }
   ],
   "consecutive_clean_sweeps": 0,
-  "worktree_path": "/path/to/worktree or null",
-  "worktree_branch": "overnight-YYYYMMDD-<session_id_short> or null",
+  "worktree_path": "/abs/main/.claude/worktrees/overnight-... (always a validated isolated root; never null)",
+  "worktree_branch": "worktree-overnight-YYYYMMDD-<session_id_short> (never master)",
   "pm_triage_reports": [],
   "pm_retro_reports": [],
   "unresolved_issues": [
@@ -1808,7 +1815,7 @@ The state file is created by `create-overnight-state.sh` during session initiali
 - **Unfixable issue (5 failed iterations per pipeline)** — see Step 17 (per-pipeline iteration cap).
 - **Very short time remaining (< 5 minutes)** — see Step 6 (severity-aware time guard).
 - **State file corruption** — create a fresh state file preserving `end_time`, continue.
-- **Worktree creation failure / missing on continuation** — see Step 1 worktree guard (log warning, continue on current branch).
+- **Worktree creation failure / missing on continuation** — HARD ABORT (see Step 1 worktree guard). The launch hook fails closed when no validated isolated worktree can be produced; the session does not run in the main directory.
 
 ---
 

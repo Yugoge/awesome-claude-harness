@@ -117,6 +117,14 @@
     {
       "task_id": "20260531-112831-bug1",
       "manifest_path": "tests/generated/20260531-112831-bug1/manifest.json"
+    },
+    {
+      "task_id": "20260604-204954",
+      "manifest_path": "tests/generated/20260604-204954/manifest.json"
+    },
+    {
+      "task_id": "20260611-100500",
+      "manifest_path": "tests/generated/20260611-100500/manifest.json"
     }
   ]
 }
