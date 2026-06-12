@@ -88,6 +88,9 @@ settings.json.bak-*
 
 # Harness-generated output (transient per-cycle; not for version control)
 # tests/generated/ intentionally tracked — test-writer contract version-controls per-cycle pytest files
+# but _work/ is pytest RUNTIME SCRATCH (ac_harness.py WORKBASE; recreated every run,
+# incl. nested throwaway git repos) and must NEVER be committed for any task
+tests/generated/*/_work/
 docs/codex/
 .playwright-mcp/
 
