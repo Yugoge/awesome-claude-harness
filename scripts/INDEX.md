@@ -1,8 +1,8 @@
 # scripts
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-06-09T21:35:22Z*
-**Total entries**: 100
+*Last updated: 2026-06-11T19:45:51Z*
+**Total entries**: 108
 **Convention**: kebab
 
 ## Tree
@@ -10,6 +10,10 @@
 scripts/
 ├── install/
 │   └── `tmp-cleanup-install.sh` - /usr/local/sbin/tmp-cleanup.sh
+├── modern-git-slot/
+├── overnight-git/
+│   ├── `git-policy-shim` - unknown file
+│   └── `git-selector` - unknown file
 ├── spec-verify/
 │   ├── `spec-verify-views.py` - Usage:
 │   ├── `spec-verify.py` - Every non-blank, non-separator line from the monolith must appear
@@ -77,12 +81,16 @@ scripts/
 ├── `graphify-query.py` - graphify-query.py — deterministic pre-BA graph hydrator (runs between Step 1 and Step 2)
 ├── `graphify_lib.py` - graphify_lib.py — shared library for Graphify knowledge-graph integration
 ├── `install-checkpoint-refspec.sh` - install-checkpoint-refspec.sh — idempotently add refs/checkpoints/* to
+├── `install-git-keystone.sh` - install-git-keystone.sh — wire the git-native reference-transaction keystone
 ├── `iterate-failed-pipelines.py` - Reads pipelines JSON path; outputs iteration plan JSON to stdout. The orchestrator
 ├── `lifecycle-baseline-import.sh` - Description: One-time idempotent migration — import current agent scores from agent-scores.json
 ├── `lint-spec-id-centralization.py` - markdown from re-deriving a spec-id / views_dir / split_marker / cp_dir from a
 ├── `migrate-test-to-tests.sh` - Description: Merge test/ folder into tests/ preserving all content (idempotent)
+├── `mint-git-blessed-token.sh` - mint-git-blessed-token.sh — issuer of the keystone blessed token (M12).
 ├── `normalize-doc-names.sh` - normalize-doc-names.sh - Detect and report non-compliant documentation file names
 ├── `orchestrator.sh` - Description: Agent orchestration coordinator for development and cleanup workflows
+├── `overnight-git-env.sh` - overnight-git-env.sh — prepare the overnight actor's git PATH + env (M11/AC9).
+├── `overnight-git-selftest.sh` - overnight-git-selftest.sh — launch git-version + symref self-test (M8, M16).
 ├── `overnight-status.sh` - overnight-status.sh — Zero-LLM overnight session status query
 ├── `plan-style-inspection.sh` - Description: Discover auditable files and split into groups for parallel style inspection
 ├── `precommitted-recovery.sh` - Description: Recovery path helpers for nothing_to_commit_precommitted detection.
