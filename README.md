@@ -285,7 +285,7 @@ A `PostToolUse` doc-sync hook keeps `INDEX.md` files and the inventory block bel
 - **Naming convention**: lower
 
 ## Files
-- `ARCHITECTURE.md` - 🏗️ Claude Code Global Configuration - Architecture
+- `ARCHITECTURE.md` - Architecture — `.claude` Agent Operating System
 - `CLAUDE.md` - CLAUDE.md
 - `NESTED-REPO.md` - Nested Repo Sentinel
 - `config.yaml` - yaml config
