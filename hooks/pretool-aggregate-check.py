@@ -119,6 +119,12 @@ CANONICAL_RE = re.compile(r"^dev-report-(?P<task_id>\d{8}-\d{6})\.json$")
 TASK_ID_REF_PATTERNS = (
     re.compile(r"context-(?P<task_id>\d{8}-\d{6}(?:-[A-Za-z0-9.\-]+)?)\.json"),
     re.compile(r"dev-report-(?P<task_id>\d{8}-\d{6}(?:-[A-Za-z0-9.\-]+)?)\.json"),
+    # /do path: a QA close dispatch for /do-developed work references its
+    # do-report-<task-id>.json (NOT dev-report-). Without this pattern the /do
+    # QA prompt has ZERO anchored refs -> conservative global scan -> an
+    # unrelated parallel-dev cycle's orphaned shards falsely BLOCK it. Scoping
+    # to the do-report's own task-id (which has no worker shards) clears it.
+    re.compile(r"do-report-(?P<task_id>\d{8}-\d{6}(?:-[A-Za-z0-9.\-]+)?)\.json"),
     re.compile(r"(?:ba-spec|ticket)-(?P<task_id>\d{8}-\d{6}(?:-[A-Za-z0-9.\-]+)?)\.md"),
 )
 
