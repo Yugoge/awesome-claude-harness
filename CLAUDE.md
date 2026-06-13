@@ -15,7 +15,7 @@
 
 ## Production Catastrophe Lessons
 
-**NON-NEGOTIABLE.** Full stories: `docs/incidents-2026-04-04.md`.
+**NON-NEGOTIABLE.** Full stories: `docs/reference/incidents-2026-04-04.md`.
 
 ### 11. Subagent prompts must explicitly list what is FORBIDDEN, not just what is allowed
 Every infrastructure-touching subagent prompt needs an explicit "DO NOT" section; positive instructions alone are insufficient.
