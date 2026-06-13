@@ -451,7 +451,7 @@ This configuration grew out of, and remains grateful to:
 
 ## License
 
-Released under the **MIT License** — free to use, copy, modify, and adapt for your own `~/.claude`. Source: [`Yugoge/claude-code-config`](https://github.com/Yugoge/claude-code-config).
+Released under the **MIT License** — free to use, copy, modify, and adapt for your own `~/.claude`. Source: [`Yugoge/awesome-claude-harness`](https://github.com/Yugoge/awesome-claude-harness).
 
 ---
 
