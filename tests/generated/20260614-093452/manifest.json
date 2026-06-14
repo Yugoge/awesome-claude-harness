@@ -1,0 +1,329 @@
+{
+  "schema_version": "1.1",
+  "task_id": "20260614-093452",
+  "generated_at": "2026-06-14T11:19:06Z",
+  "active_tests": [
+    {
+      "task_id": "20260614-093452",
+      "ac_id": "AC1",
+      "ac_uid": "23b26b475facee13",
+      "type": "hook",
+      "file": "tests/generated/20260614-093452/test_AC1_23b26b475facee13.py",
+      "status": "active",
+      "hook_check": {
+        "refuse": true,
+        "legacy_written": false,
+        "sentinel_written": false,
+        "stderr_contains_usage_error": true,
+        "exit": 0
+      }
+    },
+    {
+      "task_id": "20260614-093452",
+      "ac_id": "AC2",
+      "ac_uid": "5d539db0df39e6ff",
+      "type": "hook",
+      "file": "tests/generated/20260614-093452/test_AC2_5d539db0df39e6ff.py",
+      "status": "active",
+      "hook_check": {
+        "refuse": true,
+        "legacy_written": false,
+        "sentinel_written": false,
+        "stderr_contains_usage_error": true,
+        "exit": 0
+      }
+    },
+    {
+      "task_id": "20260614-093452",
+      "ac_id": "AC3",
+      "ac_uid": "ee6b52af2ae273b3",
+      "type": "hook",
+      "file": "tests/generated/20260614-093452/test_AC3_ee6b52af2ae273b3.py",
+      "status": "active",
+      "hook_check": {
+        "refuse": true,
+        "legacy_written": false,
+        "sentinel_written": false,
+        "stderr_contains_usage_error": true,
+        "exit": 0
+      }
+    },
+    {
+      "task_id": "20260614-093452",
+      "ac_id": "AC4",
+      "ac_uid": "2178bf4266cb0a9a",
+      "type": "hook",
+      "file": "tests/generated/20260614-093452/test_AC4_2178bf4266cb0a9a.py",
+      "status": "active",
+      "hook_check": {
+        "refuse": true,
+        "legacy_written": false,
+        "sentinel_written": false,
+        "stderr_contains_usage_error": true,
+        "exit": 0
+      }
+    },
+    {
+      "task_id": "20260614-093452",
+      "ac_id": "AC5",
+      "ac_uid": "fdd44d25578686b8",
+      "type": "hook",
+      "file": "tests/generated/20260614-093452/test_AC5_fdd44d25578686b8.py",
+      "status": "active",
+      "hook_check": {
+        "refuse": true,
+        "legacy_written": false,
+        "sentinel_written": false,
+        "stderr_contains_usage_error": true,
+        "exit": 0
+      }
+    },
+    {
+      "task_id": "20260614-093452",
+      "ac_id": "AC6",
+      "ac_uid": "0414035dd7b3ab15",
+      "type": "hook",
+      "file": "tests/generated/20260614-093452/test_AC6_0414035dd7b3ab15.py",
+      "status": "active",
+      "hook_check": {
+        "refuse": false,
+        "legacy_written": true,
+        "sentinel_written": true,
+        "is_regex": false
+      }
+    },
+    {
+      "task_id": "20260614-093452",
+      "ac_id": "AC7",
+      "ac_uid": "a69a5fd9273a0348",
+      "type": "hook",
+      "file": "tests/generated/20260614-093452/test_AC7_a69a5fd9273a0348.py",
+      "status": "active",
+      "hook_check": {
+        "refuse": false,
+        "legacy_written": true,
+        "sentinel_written": true,
+        "is_regex": false,
+        "sentinel_scope_allows_intended": "git stash",
+        "sentinel_scope_denies_unrelated": [
+          "echo git",
+          "legit status",
+          "xgit",
+          "grep git file"
+        ],
+        "legacy_substr_residual_documented": true
+      }
+    },
+    {
+      "task_id": "20260614-093452",
+      "ac_id": "AC8",
+      "ac_uid": "9c52646ce2316314",
+      "type": "hook",
+      "file": "tests/generated/20260614-093452/test_AC8_9c52646ce2316314.py",
+      "status": "active",
+      "hook_check": {
+        "refuse": false,
+        "legacy_written": true,
+        "sentinel_written": true,
+        "is_regex": true
+      }
+    },
+    {
+      "task_id": "20260614-093452",
+      "ac_id": "AC9",
+      "ac_uid": "0fbceec254e4015d",
+      "type": "hook",
+      "file": "tests/generated/20260614-093452/test_AC9_0fbceec254e4015d.py",
+      "status": "active",
+      "hook_check": {
+        "refuse": false,
+        "legacy_written": true,
+        "sentinel_written": true,
+        "is_regex": false,
+        "write_sentinel_allows_intended": "/tmp/foo.json",
+        "write_sentinel_denies_siblings": [
+          "/tmp/foo.json.bak",
+          "/tmp/foo.jsonx",
+          "/tmp/foobar.json",
+          "/tmp/foo"
+        ]
+      }
+    },
+    {
+      "task_id": "20260614-093452",
+      "ac_id": "AC10",
+      "ac_uid": "95fee8816c02e81c",
+      "type": "hook",
+      "file": "tests/generated/20260614-093452/test_AC10_95fee8816c02e81c.py",
+      "status": "active",
+      "hook_check": {
+        "refuse": true,
+        "legacy_written": false,
+        "sentinel_written": false,
+        "stderr_contains_usage_error": true,
+        "exit": 0
+      }
+    },
+    {
+      "task_id": "20260614-093452",
+      "ac_id": "AC11",
+      "ac_uid": "13caadaeb1385f5c",
+      "type": "hook",
+      "file": "tests/generated/20260614-093452/test_AC11_13caadaeb1385f5c.py",
+      "status": "active",
+      "hook_check": {
+        "negative_member": "re:^git\\s+stash\\s+--message=(a+)+$",
+        "positive_member": "re:^git\\s+stash\\s+--message=[A-Za-z0-9_-]+$",
+        "negative_expected": {
+          "refuse": true,
+          "legacy_written": false,
+          "sentinel_written": false,
+          "rejection_reason": "nested_quantifier",
+          "stderr_matches": "nested quantifier|catastrophic backtracking",
+          "stderr_not_matches": "name an explicit command|under-specified|universal",
+          "exit": 0
+        },
+        "positive_expected": {
+          "refuse": false,
+          "legacy_written": true,
+          "sentinel_written": true,
+          "exit": 0
+        },
+        "differential_only_distinguisher": "nested_quantifier_detector"
+      }
+    },
+    {
+      "task_id": "20260614-093452",
+      "ac_id": "AC12",
+      "ac_uid": "0f8902e2283ce766",
+      "type": "hook",
+      "file": "tests/generated/20260614-093452/test_AC12_0f8902e2283ce766.py",
+      "status": "active",
+      "hook_check": {
+        "refuse": true,
+        "legacy_written": false,
+        "sentinel_written": false,
+        "subagent_firewall": true,
+        "preexisting_legacy_unchanged": true,
+        "preexisting_sentinel_unchanged": true,
+        "no_create_no_overwrite_no_delete_by_subagent": true
+      }
+    },
+    {
+      "task_id": "20260614-093452",
+      "ac_id": "AC13",
+      "ac_uid": "a80aa5c3ac46fbb1",
+      "type": "hook",
+      "file": "tests/generated/20260614-093452/test_AC13_a80aa5c3ac46fbb1.py",
+      "status": "active",
+      "hook_check": {
+        "refuse_all": true,
+        "must_refuse_inputs_kind_a": [
+          "re:a?",
+          "re:a*",
+          "re:^",
+          "re:$",
+          "re:.*|x",
+          "re:x|.*",
+          "re:(|git)",
+          "re:(git|)",
+          "re:(?s).*",
+          "re:[\\s\\S]*",
+          "re:[\\d\\D]*",
+          "re:[\\w\\W]*",
+          "re:^.{0,}$",
+          "re:(?:.|\\n)*"
+        ],
+        "must_refuse_inputs_kind_b_unanchored": [
+          "re:git",
+          "re:stash",
+          "re:."
+        ],
+        "must_refuse_inputs_kind_c_bare_autoregex": [
+          ".*",
+          "^",
+          "$",
+          "a?",
+          "a*",
+          "[\\s\\S]*",
+          "."
+        ],
+        "must_grant_positive_control": [
+          "re:^git\\s+stash(?:\\s|$)"
+        ],
+        "per_refuse_input_expected": {
+          "legacy_written": false,
+          "sentinel_written": false,
+          "stderr_contains_usage_error": true,
+          "exit": 0
+        },
+        "per_grant_control_expected": {
+          "legacy_written": true,
+          "sentinel_written": true,
+          "exit": 0
+        },
+        "part1_regression_oracle": "for input I, derived_pattern = hook_parse(I); I matches the regression oracle iff exists probe in UNRELATED_PROBES (which MUST include 'echo git','grep git file') s.t. re.search(derived_pattern, probe) is truthy. This is NECESSARY, not sufficient.",
+        "part2_static_grant_rule": "GRANT only if pattern starts with ^ (or \\A), then a finite literal command-head, then a boundary ($ | \\s+ | \\s | (?:\\s|$)) BEFORE any wildcard/char-class/any-char-quantifier/lookaround/empty-alternative; else REFUSE.",
+        "naive_denylist_must_fail": true,
+        "corpus_only_oracle_must_fail": true
+      }
+    },
+    {
+      "task_id": "20260614-093452",
+      "ac_id": "AC14",
+      "ac_uid": "54184514d342dd03",
+      "type": "hook",
+      "file": "tests/generated/20260614-093452/test_AC14_54184514d342dd03.py",
+      "status": "active",
+      "hook_check": {
+        "refuse_all": true,
+        "must_refuse_inputs": [
+          "re:",
+          "re:''",
+          "re:\"\""
+        ],
+        "per_input_expected": {
+          "legacy_written": false,
+          "sentinel_written": false,
+          "stderr_contains_usage_error": true,
+          "exit": 0
+        },
+        "point_c_deleted": true,
+        "empty_post_strip_refuses_before_fallback": true
+      }
+    },
+    {
+      "task_id": "20260614-093452",
+      "ac_id": "AC15",
+      "ac_uid": "c53685918e8ebd62",
+      "type": "hook",
+      "file": "tests/generated/20260614-093452/test_AC15_c53685918e8ebd62.py",
+      "status": "active",
+      "hook_check": {
+        "refuse": true,
+        "preexisting_legacy_removed": true,
+        "preexisting_sentinel_removed": true,
+        "preexisting_suffixed_sentinels_removed": true,
+        "cleanup_covers_task_id_glob": "/tmp/claude-grants/${TASK_ID}.json AND /tmp/claude-grants/${TASK_ID}-*.json",
+        "stderr_contains_usage_error": true,
+        "exit": 0
+      }
+    },
+    {
+      "task_id": "20260614-093452",
+      "ac_id": "AC16",
+      "ac_uid": "6c4393e1679dd6ad",
+      "type": "hook",
+      "file": "tests/generated/20260614-093452/test_AC16_6c4393e1679dd6ad.py",
+      "status": "active",
+      "hook_check": {
+        "refuse": false,
+        "legacy_written": true,
+        "sentinel_written": true,
+        "sentinel_op": "Write",
+        "sentinel_has_target": false
+      }
+    }
+  ],
+  "archived_tests": []
+}
