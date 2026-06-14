@@ -1269,184 +1269,27 @@ if echo "$COMMAND_CONTEXT_STRIPPED" | grep -qE '(^|[ \t;|&(])rm\s' && ! echo "$C
   exit 2
 fi
 
-# Block: source contamination — rsync/cp from external paths into /root/happy/packages/
-# Only git (merge/cherry-pick) should bring code into production source
-if echo "$COMMAND" | grep -qE '(rsync|cp)\s' && echo "$COMMAND" | grep -q '/root/happy/packages/'; then
-  # Allow operations WITHIN /root/happy (e.g. cp within the repo)
-  # Block operations FROM external paths (happy-dev, worktrees, /dev/shm, /tmp)
-  if echo "$COMMAND" | grep -qE '(/root/happy-dev/|/dev/shm/|/tmp/|worktree).*(/root/happy/packages/)'; then
-    echo "BLOCKED: Writing external code into /root/happy/packages/ is forbidden" >&2
-    echo "Command: $COMMAND" >&2
-    echo "Hint: Use git merge/cherry-pick to bring code into production. NEVER rsync/cp from dev branches or worktrees." >&2
-    echo "Bug #59: A dev-overnight agent rsynced worktree code into /root/happy, causing 6 days of broken sidechain rendering." >&2
-    exit 2
-  fi
-fi
-
-# Block: docker build of Dockerfile.webapp without HAPPY_SERVER_URL
-if echo "$COMMAND" | grep -qE 'docker\s+build' && echo "$COMMAND" | grep -q "Dockerfile.webapp"; then
-  if ! echo "$COMMAND" | grep -q "HAPPY_SERVER_URL"; then
-    echo "BLOCKED: docker build for Dockerfile.webapp MUST include --build-arg HAPPY_SERVER_URL=https://api-dev.life-ai.app" >&2
-    echo "Without this, the web app defaults to api.cluster-fluster.com (WRONG)." >&2
-    echo "Command: $COMMAND" >&2
-    exit 2
-  fi
-  if echo "$COMMAND" | grep -qE '\-\-build-arg.*cluster-fluster|HAPPY_SERVER_URL=.*cluster-fluster'; then
-    echo "BLOCKED: HAPPY_SERVER_URL must NOT be api.cluster-fluster.com" >&2
-    echo "Command: $COMMAND" >&2
-    exit 2
-  fi
-  if echo "$COMMAND" | grep -qE 'HAPPY_SERVER_URL=https://api\.life-ai\.app([^-]|$)'; then
-    echo "BLOCKED: HAPPY_SERVER_URL=https://api.life-ai.app is the PRODUCTION URL. Dev builds must use https://api-dev.life-ai.app" >&2
-    echo "Only web-prod builds targeting happy-app:message-fixes may use the production URL." >&2
-    echo "Command: $COMMAND" >&2
-    exit 2
-  fi
-fi
-
-# Block: wrong dev deployment patterns (2026-05-24 incident)
-# Pattern A: docker build targeting happy-app:dev but using the production HAPPY_SERVER_URL.
-#   This bakes api.life-ai.app into the dev image, breaking happy-dev by pointing it at production.
-# Pattern B: /root/happy/scripts/deploy.sh web-dev — that script's web-dev case uses the
-#   production URL and builds from /root/happy, both of which violate CLAUDE.md rules.
-# Neither pattern has a legitimate use. No IS_SUBAGENT bypass.
-_wrong_dev_deploy=0
-# Pattern A: docker build command targeting happy-app:dev with production HAPPY_SERVER_URL.
-#   All three must be true: (1) actual docker build invocation, (2) production URL, (3) dev image tag.
-#   Commands that merely quote or reference the URL in variable text do NOT trigger this.
-if echo "$COMMAND" | grep -q '\bdocker\b' && \
-   echo "$COMMAND" | grep -q '\bbuild\b' && \
-   echo "$COMMAND" | grep -q 'HAPPY_SERVER_URL=https://api\.life-ai\.app' && \
-   echo "$COMMAND" | grep -q 'happy-app:dev'; then
-  _wrong_dev_deploy=1
-fi
-# Pattern B: invokes /root/happy/scripts/deploy.sh with web-dev argument
-if echo "$COMMAND" | sed 's/&&/\n/g; s/||/\n/g; s/;/\n/g' | grep -qE '/root/happy/scripts/deploy\.sh.*\bweb-dev\b'; then
-  _wrong_dev_deploy=1
-fi
-if [ "$_wrong_dev_deploy" = "1" ]; then
-  echo "BLOCKED: Wrong dev deployment method." >&2
-  echo "  Pattern A: HAPPY_SERVER_URL=https://api.life-ai.app must NOT be used for happy-app:dev (that's the production URL)." >&2
-  echo "  Pattern B: /root/happy/scripts/deploy.sh web-dev is a production script with a hardcoded wrong URL." >&2
-  echo "Use instead: bash scripts/deploy-services.sh web-dev   (from /dev/shm/dev-workspace/happy-dev)" >&2
-  echo "         or: bash scripts/dev-overnight-build-deploy.sh <worktree-path> frontend" >&2
-  echo "Command: $COMMAND" >&2
-  exit 2
-fi
-
-# Block: direct SQL writes to production happy DB (INSERT/UPDATE/DELETE on Session, Account, etc.)
-if echo "$COMMAND" | grep -qE 'docker\s+exec\s+happy-postgres\b' && echo "$COMMAND" | grep -qiE '\b(INSERT|UPDATE|DELETE|DROP|TRUNCATE|ALTER)\b'; then
-  echo "BLOCKED: Direct SQL writes to production happy-postgres are forbidden" >&2
-  echo "Command: $COMMAND" >&2
-  echo "Hint: Only SELECT queries allowed. Use the app/API to modify data." >&2
-  exit 2
-fi
-if echo "$COMMAND" | grep -qE 'psql.*happydb' && echo "$COMMAND" | grep -qiE '\b(INSERT|UPDATE|DELETE|DROP|TRUNCATE|ALTER)\b'; then
-  echo "BLOCKED: Direct SQL writes to production happydb are forbidden" >&2
-  echo "Command: $COMMAND" >&2
-  echo "Hint: Only SELECT queries allowed. Use the app/API to modify data." >&2
-  exit 2
-fi
-
-# Block: docker compose up/build (recreates containers, causes downtime)
-# Exception: applio-* and happy-*-dev services are allowed IF no prod services mixed in
-# Whitelist approach: extract ALL service names, every one must be dev/applio
-if echo "$COMPOSE_COMMAND" | grep -qE 'docker.compose\s+(up|build)\s'; then
-  compose_lines=$(echo "$COMPOSE_COMMAND" | grep -E 'docker.compose\s+(up|build)\s')
-  # Extract service names (everything after up/build and flags like -d --no-deps)
-  services=$(echo "$compose_lines" | sed -E 's/.*docker.compose\s+(up|build)\s+//' | tr ' ' '\n' | grep -v '^-' | grep -v '^$')
-  if [ -z "$services" ]; then
-    # No specific services = ALL services = forbidden
-    echo "BLOCKED: docker compose up/build without specific service names is forbidden" >&2
-    echo "Command: $COMMAND" >&2
-    echo "Hint: specify services explicitly: docker compose up -d happy-web-dev happy-server-dev" >&2
-    exit 2
-  fi
-  # Check every service name is in the whitelist
-  blocked_service=""
-  while IFS= read -r svc; do
-    case "$svc" in
-      applio-*|happy-web-dev|happy-server-dev|happy-server-dev:*|postgres-dev|redis-dev) ;; # allowed
-      *) blocked_service="$svc" ; break ;;
-    esac
-  done <<< "$services"
-  if [ -n "$blocked_service" ]; then
-    echo "BLOCKED: service '$blocked_service' is not a dev service — cannot compose up/build production services" >&2
-    echo "Command: $COMMAND" >&2
-    echo "Hint: only these services allowed: applio-*, happy-web-dev, happy-server-dev, postgres-dev, redis-dev" >&2
-    exit 2
-  fi
-fi
-
-# Block: curl/wget POST to happy-server API that creates/modifies sessions
-if echo "$COMMAND" | grep -qE '(curl|wget).*(/v1/sessions|/v1/machines|/session-started|/spawn-session)' && echo "$COMMAND" | grep -qiE '(-X\s*POST|-X\s*PUT|-X\s*PATCH|-X\s*DELETE|-d\s|--data)'; then
-  echo "BLOCKED: Session creation via API is forbidden. Use the UI flow instead." >&2
-  echo "Command: $COMMAND" >&2
-  echo "Hint: Open https://dev.life-ai.app -> click Start New Session -> type message -> send. NEVER use curl/API to create sessions." >&2
-  exit 2
-fi
-
-# Block: curl/wget to production API (localhost:3000 or api.life-ai.app) — all methods
-if echo "$COMMAND" | grep -qE '(curl|wget).*(localhost:3000|127\.0\.0\.1:3000|api\.life-ai\.app)' && \
-   ! echo "$COMMAND" | grep -qE 'api-dev\.life-ai\.app'; then
-  echo "BLOCKED: Accessing production API is FORBIDDEN from dev environment" >&2
-  echo "Command: $COMMAND" >&2
-  echo "Hint: Use localhost:3005 (dev API) or api-dev.life-ai.app instead." >&2
-  exit 2
-fi
-
-# ── ABSOLUTE ISOLATION: happy-dev must NEVER touch production happy ──────────
-
 # Block: npm install -g (strip comments first to avoid false positives)
+# Installing a package globally can replace a shared binary, trigger auto-upgrade,
+# and disrupt other running processes that depend on it. Install locally instead.
 CMD_NO_COMMENTS=$(echo "$COMMAND" | sed 's/#.*$//')
 if echo "$CMD_NO_COMMENTS" | grep -qE 'npm\s+(install|i)\s+.*(-g|--global)' || echo "$CMD_NO_COMMENTS" | grep -qE 'npm\s+(install|i)\s+-g'; then
   echo "BLOCKED: npm install -g is FORBIDDEN from this environment" >&2
   echo "Command: $COMMAND" >&2
-  echo "REASON: On 2026-04-04, npm install -g from a worktree replaced the global happy binary," >&2
-  echo "triggered auto-upgrade, and killed ALL production sessions. NEVER do this again." >&2
-  echo "The global CLI must only be installed from /root/happy by the user manually." >&2
+  echo "REASON: A global install can replace a shared binary and disrupt running processes." >&2
+  echo "Install locally, or ask the user to perform any global install manually." >&2
   exit 2
 fi
 
-# Block: direct invocation of /usr/bin/happy or bare 'happy' CLI command
-# (prevents triggering auto-upgrade version mismatch detection)
-if echo "$COMMAND" | grep -qE '(^|[;&|]\s*)/usr/bin/happy([^-]|$)' || echo "$COMMAND" | grep -qE '(^|[;&|]\s*)happy\s+(daemon|--version|auth)\b'; then
-  echo "BLOCKED: Direct invocation of the global happy CLI is FORBIDDEN" >&2
-  echo "Command: $COMMAND" >&2
-  echo "REASON: The global /usr/bin/happy is shared by ALL daemons. Invoking it can trigger" >&2
-  echo "auto-upgrade and kill production sessions. Use node with full path to dist instead." >&2
-  exit 2
-fi
-
-# Block: kill on PIDs that aren't verified dev processes
-# (prevents accidentally killing production session processes)
+# Block: kill on PIDs that aren't verified safe targets
+# (prevents accidentally killing unrelated/long-running processes)
 # Uses COMMAND_CONTEXT_STRIPPED: kill is already in DANGER_COMMANDS, so its args are
 # EXPOSED (unquoted) by the stripper — kill "1234" -> kill 1234 still matches, while
 # echo "kill 1234" -> echo "" no longer false-positives (Item A, mirrors the kill -sig rule).
 if echo "$COMMAND_CONTEXT_STRIPPED" | grep -qE '(^|[;&|]\s*)kill\s+[0-9]'; then
-  echo "BLOCKED: kill with PIDs is FORBIDDEN — verify target is dev before killing" >&2
+  echo "BLOCKED: kill with PIDs is FORBIDDEN — verify the target is safe before killing" >&2
   echo "Command: $COMMAND" >&2
-  echo "REASON: On 2026-04-04, killing dev session processes cascaded to production." >&2
-  echo "Use systemctl restart happy-daemon-dev or daemon HTTP /stop instead." >&2
-  exit 2
-fi
-
-# Block: WRITING to /usr/lib/node_modules/happy or /usr/bin/happy (reading is OK)
-# Allow /usr/bin/happy-dev (dev binary) but block /usr/bin/happy (production binary)
-if echo "$COMMAND" | grep -qE '(ln|cp|mv|unlink|tee)\s.*(/usr/lib/node_modules/happy|/usr/bin/happy)' && \
-   ! echo "$COMMAND" | grep -qE '/usr/bin/happy-dev'; then
-  echo "BLOCKED: Modifying global happy binary/modules is FORBIDDEN" >&2
-  echo "Command: $COMMAND" >&2
-  exit 2
-fi
-
-# Block: happy-daemon-dev service must NEVER use /usr/bin/happy (production binary)
-# Allow /usr/bin/happy-dev but block /usr/bin/happy
-if echo "$COMMAND" | grep -q 'happy-daemon-dev' && echo "$COMMAND" | grep -qE '/usr/bin/happy([^-]|$)'; then
-  echo "BLOCKED: happy-daemon-dev must NEVER reference /usr/bin/happy (production binary)" >&2
-  echo "Command: $COMMAND" >&2
-  echo "REASON: Dev daemon must use /root/happy-dev/packages/happy-cli/dist/index.mjs directly." >&2
-  echo "Using /usr/bin/happy causes dev daemon to run production code, ignoring all dev fixes." >&2
+  echo "REASON: Killing a PID can cascade to unrelated processes. Use a scoped restart instead." >&2
   exit 2
 fi
 

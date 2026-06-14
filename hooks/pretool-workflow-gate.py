@@ -466,7 +466,7 @@ def main():
     # Note: type errors (todos as string instead of array) are caught by Claude Code's schema
     # validation BEFORE PreToolUse hooks run — no need to duplicate that check here.
     # Tools that should always be allowed regardless of workflow state
-    ALWAYS_ALLOWED = {'TodoWrite', 'TodoRead', 'mcp__happy__change_title'}
+    ALWAYS_ALLOWED = {'TodoWrite', 'TodoRead'}
 
     if tool_name in ALWAYS_ALLOWED and tool_name != 'TodoWrite':
         sys.exit(0)

@@ -32,15 +32,32 @@ WATCHED_DIRS: set[str] = {
 }
 SKIP_FILES: set[str] = {'INDEX.md', 'README.md', '__init__.py', '.DS_Store'}
 
-# Known project roots to scan
-PROJECT_ROOTS: list[Path] = [
-    Path.home(),
-    Path.home() / 'knowledge-system',
-    Path.home() / 'knowledge-system-jade',
-    Path.home() / 'multi-asset-portfolio',
-    Path.home() / 'happy',
-    Path.home() / 'happy-cli',
-]
+# Project roots to scan, derived generically (no hardcoded private projects).
+# Sources, in order:
+#   1. CLAUDE_DOC_SYNC_ROOTS — colon-separated list of absolute paths (override).
+#   2. CLAUDE_PROJECT_DIR — the active project directory, if set.
+#   3. The home directory (covers a top-level ~/.claude install).
+def _discover_project_roots() -> list[Path]:
+    roots: list[Path] = []
+    override = os.environ.get('CLAUDE_DOC_SYNC_ROOTS', '')
+    if override:
+        roots.extend(Path(p).expanduser() for p in override.split(':') if p)
+    project_dir = os.environ.get('CLAUDE_PROJECT_DIR', '')
+    if project_dir:
+        roots.append(Path(project_dir).expanduser())
+    roots.append(Path.home())
+    # De-duplicate while preserving order.
+    seen: set[str] = set()
+    unique: list[Path] = []
+    for r in roots:
+        key = str(r)
+        if key not in seen:
+            seen.add(key)
+            unique.append(r)
+    return unique
+
+
+PROJECT_ROOTS: list[Path] = _discover_project_roots()
 
 
 def get_dir_snapshot(dir_path: Path) -> set[str]:

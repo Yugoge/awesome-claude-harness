@@ -570,7 +570,7 @@ All specialist observations proceed to Step 5 for tier classification. PM's job 
 
 For every issue you are about to triage, ask: **"Does this issue produce a UI surface a user would see?"**
 
-If YES → the pipeline MUST end with live screenshot evidence on dev.life-ai.app desktop (1440x900) AND mobile (390x844). This is non-negotiable per CLAUDE.md "E2E Verification MUST Use Live Browser Content" rule. Implications:
+If YES → the pipeline MUST end with live screenshot evidence on the app-under-test desktop (1440x900) AND mobile (390x844). This is non-negotiable per CLAUDE.md "E2E Verification MUST Use Live Browser Content" rule. Implications:
 
 1. **You may NOT recommend `pipeline_recommendation: "skip"`** for this issue. See Forbidden Skip Patterns above.
 2. **You may NOT inherit BA `fallback_plan: source+bundle+typecheck`** even if BA wrote one. UI pipelines have no acceptable fallback. If BA wrote one, flag the BA spec as defective in `pm_notes`.

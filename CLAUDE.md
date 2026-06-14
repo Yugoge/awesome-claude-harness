@@ -8,14 +8,14 @@
 # Global Claude Code Configuration
 
 <!-- AUTO:last-updated -->
-> Last updated: 2026-06-13
+> Last updated: 2026-06-14
 <!-- /AUTO:last-updated -->
 
 ---
 
 ## Production Catastrophe Lessons
 
-**NON-NEGOTIABLE.** Full stories: `docs/reference/incidents-2026-04-04.md`.
+**NON-NEGOTIABLE.**
 
 ### 11. Subagent prompts must explicitly list what is FORBIDDEN, not just what is allowed
 Every infrastructure-touching subagent prompt needs an explicit "DO NOT" section; positive instructions alone are insufficient.
@@ -43,7 +43,7 @@ Automated snapshots go to `refs/checkpoints/<branch>`; HEADs never advance. `/pu
 
 Main agent is the orchestrator; delegate real work to subagents. Enforced by `~/.claude/hooks/pretool-orchestrator-gate.py`.
 
-- **Whitelist (always allowed)**: `Agent`, `TodoWrite`, `AskUserQuestion`, `Skill`, `CronCreate`, `CronDelete`, `CronList`, `ScheduleWakeup`, `mcp__happy__change_title`, `Bash`, `Read` (≤600 lines, capped by `~/.claude/hooks/pretool-read-size-guard.py`), `Glob`, `Grep`. `Bash` capped at 5 consecutive same-name calls.
+- **Whitelist (always allowed)**: `Agent`, `TodoWrite`, `AskUserQuestion`, `Skill`, `CronCreate`, `CronDelete`, `CronList`, `ScheduleWakeup`, `Bash`, `Read` (≤600 lines, capped by `~/.claude/hooks/pretool-read-size-guard.py`), `Glob`, `Grep`. `Bash` capped at 5 consecutive same-name calls.
 - **Non-whitelist (`Edit`, `Write`, `WebFetch`, `WebSearch`, `NotebookEdit`, `EnterWorktree`, `ExitWorktree`, `mcp__playwright__*`, …)**: allowed once TOTAL per tool name per turn; intervening different tool calls do NOT reset the count; 2nd same-name call blocks regardless.
 - **Permanently blocked**: `EnterPlanMode`, `ExitPlanMode` — even with `/do`.
 - **Bypass**: user invokes `/do` this session → gate exits 0 for everything except permanently-blocked tools.
@@ -104,16 +104,6 @@ A subagent MUST NOT restart a long-running daemon it itself depends on to verify
 
 ---
 
-## 🖥️ Server Infrastructure
-
-***REDACTED-HOST*** (16 vCPU, 32GB RAM, 20GB swap) on Ubuntu. Full topology: `docs/server-infra.md`.
-
-### Key Rules
-- **NEVER** create containers with `docker run` — use `docker compose up -d` from `/root/deploy/`.
-- **NEVER** stop/restart happy containers without explicit user approval (enforced by hook).
-
----
-
 ## 🚦 Orchestrator Prompt Purity
 
 When dispatching a subagent via `Agent`, the prompt describes **WHAT** (problem, constraints, acceptance criteria) — not **HOW** (no tool names, shell commands, or shell syntax). The subagent picks its own toolchain.
@@ -124,4 +114,4 @@ Enforcement: `~/.claude/hooks/pretool-orchestrator-prompt-purity.py` (PreToolUse
 
 ## 🔗 Nested .claude Repo
 
-`/root/.claude` symlinks to `/dev/shm/dev-workspace/dot-claude` (separate git repo). For `.claude/*` commits, work inside that path — never push from `/root`. Full architecture: `docs/ramdisk-architecture.md`.
+`/root/.claude` symlinks to `/dev/shm/dev-workspace/dot-claude` (separate git repo). For `.claude/*` commits, work inside that path — never push from `/root`.

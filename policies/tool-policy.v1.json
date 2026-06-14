@@ -10,7 +10,7 @@
     "/.claude/scripts/",
     "/.claude/settings.json"
   ],
-  "_note": "Path prefixes containing '*' use glob-aware matching (fnmatch-style). Use '*/docs/dev/foo-' to match the prefix 'docs/dev/foo-' anywhere under any worktree. Use '/docs/dev/foo-' to anchor at any path that ends with '/docs/dev/foo-' boundary. Shared protected list is the SOLE catch-all for /.claude/ \u2014 DO NOT add broad '/.claude/' to denied prefixes; use only the explicit subdirs above so legitimate worktree artifact paths remain writable. spec-20260507-142952 AC-1: cp-state-*.json globs are documented here AND propagated into every subagent role's denied_write_path_prefixes; spec-check.py is the only legal writer. policy_version 2 (spec-20260508-221237 cycle 4 manual reorg, 2026-05-09): adds first-class roles timeline and transportation mirroring their .md tools: [Read, Bash, Skill] declaration, with denied_tools=[Write,Edit,MultiEdit,NotebookEdit] as defense-in-depth Feb-13-2026 incident lock. These two role table entries are the ONLY residue of spec-20260508-221237 in the global tool-policy; the ga''ode-maps allowlist enforcement was moved to project-local /root/travel-planner/.claude/policies/gaode_policy.json + hooks/pretool-gaode_policy.py per user directive. policy_version 3 (spec-20260519-211515 R7 reconciliation, 2026-05-20): broadened codex-detection invariant \u2014 added Skill to allowed_tools for 9 roles whose agents/*.md mention codex consultation (architect, cleanliness-inspector, pm, product-owner, prompt-inspector, spec, style-inspector, ui-specialist, user). ba gained docs/dev/acceptance-criteria- and docs/dev/retrospective-classification- write-prefixes; qa gained docs/dev/retrospective-classification-. Reconciliation closes item 7 of qa-output-retrospective-classification-20260519-175339.json. policy_version 4 (20260521-090100, 2026-05-23): adds */docs/codex/ to allowed_write_path_prefixes for 11 codex-consultation roles (ba, qa, pm, architect, product-owner, user, ui-specialist, spec, prompt-inspector, cleanliness-inspector, style-inspector). dev excluded — wildcard * already covers docs/codex/. Establishes docs/codex/<task_id>/<role>.txt as canonical codex output path; demotes /var/tmp/codex-outputs/ to fallback. policy_version 5 (20260524-122910, 2026-05-24, spec-20260518-225715 Cycle 3 Debt 8 / AC-08): adds */.claude/dev-registry/*/blast-radius-map.json to ba.allowed_write_path_prefixes so BA can author its per-task blast-radius-map for the dev pipeline (Phase 1 prediction). The existing */docs/dev/acceptance-criteria- prefix is preserved. dev/qa unaffected because they consume the map but the file is authored by ba. policy_version 6 (20260530-165718, 2026-05-30, Happy cycle 6-8 B2): registers the graphify Step-7.5 enrichment role with allowed_tools [Read, Bash, Write] (no Skill/Edit — graphify.md uses neither). Its Write grant is scoped TIGHT to */.claude/dev-registry/*/graphify/ (the graphify sub-prefix only, NOT the whole dev-registry) plus scratch/tmp, so it cannot author peer artifacts such as blast-radius-map.json; denied_write_path_prefixes mirrors the shared protected list verbatim. No broad */docs/dev/context- write-prefix is granted — graphify-enrich.py patches context-<ts>.json via --context-file under the already-granted Bash (B2-S1 / codex #9). Before this entry an unregistered graphify role hit default-deny on every dispatch.",
+  "_note": "Path prefixes containing '*' use glob-aware matching (fnmatch-style). Use '*/docs/dev/foo-' to match the prefix 'docs/dev/foo-' anywhere under any worktree. Use '/docs/dev/foo-' to anchor at any path that ends with '/docs/dev/foo-' boundary. Shared protected list is the SOLE catch-all for /.claude/ — DO NOT add broad '/.claude/' to denied prefixes; use only the explicit subdirs above so legitimate worktree artifact paths remain writable. spec-20260507-142952 AC-1: cp-state-*.json globs are documented here AND propagated into every subagent role's denied_write_path_prefixes; spec-check.py is the only legal writer. policy_version 2 (2026-05-09): added defense-in-depth denied_tools=[Write,Edit,MultiEdit,NotebookEdit] conventions for read-only roles; project-specific roles introduced in this version were later removed during harness de-privatization. policy_version 3 (spec-20260519-211515 R7 reconciliation, 2026-05-20): broadened codex-detection invariant — added Skill to allowed_tools for 9 roles whose agents/*.md mention codex consultation (architect, cleanliness-inspector, pm, product-owner, prompt-inspector, spec, style-inspector, ui-specialist, user). ba gained docs/dev/acceptance-criteria- and docs/dev/retrospective-classification- write-prefixes; qa gained docs/dev/retrospective-classification-. Reconciliation closes item 7 of qa-output-retrospective-classification-20260519-175339.json. policy_version 4 (20260521-090100, 2026-05-23): adds */docs/codex/ to allowed_write_path_prefixes for 11 codex-consultation roles (ba, qa, pm, architect, product-owner, user, ui-specialist, spec, prompt-inspector, cleanliness-inspector, style-inspector). dev excluded — wildcard * already covers docs/codex/. Establishes docs/codex/<task_id>/<role>.txt as canonical codex output path; demotes /var/tmp/codex-outputs/ to fallback. policy_version 5 (20260524-122910, 2026-05-24, spec-20260518-225715 Cycle 3 Debt 8 / AC-08): adds */.claude/dev-registry/*/blast-radius-map.json to ba.allowed_write_path_prefixes so BA can author its per-task blast-radius-map for the dev pipeline (Phase 1 prediction). The existing */docs/dev/acceptance-criteria- prefix is preserved. dev/qa unaffected because they consume the map but the file is authored by ba. policy_version 6 (20260530-165718, 2026-05-30): registers the graphify Step-7.5 enrichment role with allowed_tools [Read, Bash, Write] (no Skill/Edit — graphify.md uses neither). Its Write grant is scoped TIGHT to */.claude/dev-registry/*/graphify/ (the graphify sub-prefix only, NOT the whole dev-registry) plus scratch/tmp, so it cannot author peer artifacts such as blast-radius-map.json; denied_write_path_prefixes mirrors the shared protected list verbatim. No broad */docs/dev/context- write-prefix is granted — graphify-enrich.py patches context-<ts>.json via --context-file under the already-granted Bash (B2-S1 / codex #9). Before this entry an unregistered graphify role hit default-deny on every dispatch.",
   "roles": {
     "user": {
       "allowed_tools": [
@@ -753,83 +753,6 @@
       ],
       "rationale": "spec: may generate spec views and cp-state files only; no source/protected/test edits."
     },
-    "timeline": {
-      "allowed_tools": [
-        "Read",
-        "Bash",
-        "Skill"
-      ],
-      "denied_tools": [
-        "Write",
-        "Edit",
-        "MultiEdit",
-        "NotebookEdit"
-      ],
-      "allowed_write_path_prefixes": [
-        "*/data/*/modification-log.json",
-        "*/data/*/sync-report.json",
-        "*/data/*/timeline.json",
-        "*/docs/dev/overnight/",
-        "*/docs/dev/specs/*/timeline-",
-        "*/docs/dev/timeline-",
-        "/tmp/*",
-        "/var/tmp/*"
-      ],
-      "denied_write_path_prefixes": [
-        "/src/",
-        "/app/",
-        "/lib/",
-        "/.claude/hooks/",
-        "/.claude/agents/",
-        "/.claude/commands/",
-        "/.claude/policies/",
-        "/.claude/schemas/",
-        "/.claude/scripts/",
-        "/.claude/settings.json",
-        "*/.claude/specs/*/cp-state-*.json",
-        "*/dot-claude/specs/*/cp-state-*.json",
-        "*/docs/dev/specs/*/cp-state-*.json"
-      ],
-      "rationale": "timeline mirrors .claude/agents/timeline.md tools: [Read, Bash, Skill] verbatim. denied_tools makes the Feb-13-2026 prompt-layer prohibition (Write corrupted timeline.json, 20 days lost) into a harness-enforced floor. Persistence flows through Bash -> scripts/save.py per timeline.md:31-34. allowed_write_path_prefixes is defense-in-depth for any Bash-spawned write (e.g. shell redirect, save.py target normalization) \u2014 narrowed to per-file fnmatch globs that mirror the timeline.md owned_files regex. Residual risk per Codex Q1: indirect Python-level writes via Bash-spawned scripts are NOT controlled by denied_tools; the boundary is 'Bash + scripts/save.py with day-guard', and that boundary is enforced by save.py's own --day N validator (not by this policy). spec-20260508-221237 M1 cycle-3 redev: closes the AC6 end-to-end positive-test gap by making timeline a first-class role; closes the QA cycle-3 OBJ-1 Feb-13 regression risk by adding denied_tools."
-    },
-    "transportation": {
-      "allowed_tools": [
-        "Read",
-        "Bash",
-        "Skill"
-      ],
-      "denied_tools": [
-        "Write",
-        "Edit",
-        "MultiEdit",
-        "NotebookEdit"
-      ],
-      "allowed_write_path_prefixes": [
-        "*/data/*/modification-log.json",
-        "*/data/*/transportation.json",
-        "*/docs/dev/overnight/",
-        "*/docs/dev/specs/*/transportation-",
-        "*/docs/dev/transportation-",
-        "/tmp/*",
-        "/var/tmp/*"
-      ],
-      "denied_write_path_prefixes": [
-        "/src/",
-        "/app/",
-        "/lib/",
-        "/.claude/hooks/",
-        "/.claude/agents/",
-        "/.claude/commands/",
-        "/.claude/policies/",
-        "/.claude/schemas/",
-        "/.claude/scripts/",
-        "/.claude/settings.json",
-        "*/.claude/specs/*/cp-state-*.json",
-        "*/dot-claude/specs/*/cp-state-*.json",
-        "*/docs/dev/specs/*/cp-state-*.json"
-      ],
-      "rationale": "transportation mirrors .claude/agents/transportation.md tools: [Read, Bash, Skill] verbatim. denied_tools encodes the Feb-13 prohibition. Write paths narrowed to transportation.md owned_files (data/<trip>/transportation.json + modification-log.json). spec-20260508-221237 M1 cycle-3 redev: same closure as timeline."
-    },
     "general-purpose": {
       "allowed_tools": {
         "Bash": {},
@@ -948,7 +871,7 @@
         "/.claude/scripts/",
         "/.claude/settings.json"
       ],
-      "rationale": "pull-analyst: post-pull advisory analysis only; reads new-commits range and semantic risk indicators (dependency manifests, schema files, API surface, CI/CD); Write tool excluded to enforce advisory-only contract \u2014 pull-analyst writes no grant and blocks nothing; no write access to protected infra"
+      "rationale": "pull-analyst: post-pull advisory analysis only; reads new-commits range and semantic risk indicators (dependency manifests, schema files, API surface, CI/CD); Write tool excluded to enforce advisory-only contract — pull-analyst writes no grant and blocks nothing; no write access to protected infra"
     },
     "graphify": {
       "allowed_tools": [

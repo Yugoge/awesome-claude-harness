@@ -39,7 +39,6 @@ ALWAYS_ALLOWED = {
     "CronDelete",
     "CronList",
     "ScheduleWakeup",
-    "mcp__happy__change_title",
     "Bash",
     "Read",
     "Glob",

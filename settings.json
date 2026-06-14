@@ -142,17 +142,10 @@
       "SlashCommand",
       "Task",
       "TodoWrite",
-      "Write(learning-materials/**)",
-      "Write(knowledge-base/**)",
       "Write(.review/**)",
-      "Write(chats/**)",
       "Write(docs/**)",
       "Write(scripts/**)",
       "Write(/tmp/**)",
-      "Write(data/**)",
-      "Edit(data/**)",
-      "Edit(learning-materials/**)",
-      "Edit(knowledge-base/**)",
       "Edit(.review/**)",
       "Edit(scripts/**)",
       "Edit(docs/**)",
@@ -167,20 +160,13 @@
       "mcp__memory-server__delete_observations",
       "mcp__memory-server__delete_relations",
       "mcp__memory-server__open_nodes",
-      "mcp__happy__change_title",
       "mcp__playwright__*",
-      "Bash(source venv/bin/activate && python scripts/analyze/analyze_spending.py:*)",
       "Bash(source venv/bin/activate && python scripts/add-status-field.py:*)",
       "Bash(python3 /root/.claude/scripts/spec-check.py:*)",
       "Bash(python3 /root/.claude/scripts/spec-verify/spec-verify-views.py:*)",
       "Bash(source ~/.claude/venv/bin/activate && python3 /root/.claude/scripts/spec-verify/spec-verify.py:*)",
       "Bash(scripts/validate-dev-registry-enforcement.sh:*)",
       "Bash(~/.claude/scripts/write-qa-mode.sh:*)",
-      "Bash(/root/scripts/validate-dev-registry-enforcement.sh:*)",
-      "Bash(/root/scripts/validate-ac6-fail-closed.sh:*)",
-      "Bash(/root/scripts/validate-sentinel-lint.sh:*)",
-      "Bash(/root/scripts/validate-dev-registry-cleanup.sh:*)",
-      "Bash(/root/bin/dev-registry-cleanup.sh:*)",
       "Edit(.claude/agents/**)",
       "Edit(.claude/commands/**)",
       "Write(.claude/agents/**)",
@@ -240,8 +226,6 @@
       "Write(**/session_dirs.txt)",
       "Edit(**/session_dirs.txt)",
       "Bash(*session_dirs.txt*)",
-      "Bash(*happy-session-recovery*)",
-      "Bash(*happy-restart*)",
       "Bash(curl:* | sh:*)",
       "Bash(wget:* | sh:*)",
       "Bash(sudo:*)",
@@ -364,14 +348,6 @@
           {
             "type": "command",
             "command": "python3 \"$HOME/.claude/hooks/userprompt-doc-sync-check.py\""
-          }
-        ]
-      },
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "bash \"$HOME/.claude/hooks/prehook-overnight-worktree-check.sh\""
           }
         ]
       },
@@ -506,24 +482,6 @@
         ]
       },
       {
-        "matcher": "Write|Edit",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "bash \"$HOME/.claude/hooks/pretool-block-production-files.sh\""
-          }
-        ]
-      },
-      {
-        "matcher": "mcp__playwright__browser_navigate|mcp__playwright__browser_click|mcp__playwright__browser_run_code|WebFetch",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "bash \"$HOME/.claude/hooks/pretool-block-production.sh\""
-          }
-        ]
-      },
-      {
         "matcher": "TodoWrite",
         "hooks": [
           {
@@ -571,10 +529,6 @@
       {
         "matcher": "Agent",
         "hooks": [
-          {
-            "type": "command",
-            "command": "python3 \"$HOME/.claude/hooks/pretool-daily-trade-agent-concurrency.py\""
-          },
           {
             "type": "command",
             "command": "bash \"$HOME/.claude/hooks/pretool-layer-escalation-check.sh\""

@@ -1487,7 +1487,7 @@ Return verification report as JSON:
     },
     "e2e_script_results": [
       {
-        "script_path": "/root/applio-e2e-test.py",
+        "script_path": "/path/to/e2e-test.py",
         "exit_code": 0,
         "stdout": "...",
         "stderr": ""
@@ -1642,8 +1642,8 @@ If BA wrote a `fallback_plan: source+bundle+typecheck` for a UI-rendering pipeli
 - "All checked sessions are wrong type; live verification skipped"
 
 When the dev environment lacks the test data for a UI verification:
-1. **You MUST attempt to create the test data via the UI**. Open dev.life-ai.app, click + sidebar button, try to create the prerequisite session/content. CLAUDE.md is explicit: "If the UI is broken, REPORT IT AS A BUG. Do NOT bypass it with code."
-2. **If the UI lacks the affordance to create the prerequisite**: that itself is a bug. FAIL the verdict with `failure_reason: "Cannot verify <feature>: UI affordance for creating prerequisite <prereq> is missing from dev.life-ai.app + sidebar. This is a P0 bug to file before this cycle can proceed."`
+1. **You MUST attempt to create the test data via the UI**. Open the app-under-test, use the UI affordance to create the prerequisite session/content. CLAUDE.md is explicit: "If the UI is broken, REPORT IT AS A BUG. Do NOT bypass it with code."
+2. **If the UI lacks the affordance to create the prerequisite**: that itself is a bug. FAIL the verdict with `failure_reason: "Cannot verify <feature>: UI affordance for creating prerequisite <prereq> is missing from the app-under-test. This is a P0 bug to file before this cycle can proceed."`
 3. **Never silently invoke a fallback because test data is missing**. Test data must be created (via UI), or the absence reported as a bug. There is no third option.
 
 ### 3. Screenshot mismatch

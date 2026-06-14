@@ -32,9 +32,9 @@ Check the file extension to determine the analysis approach.
 
 #### Option 1: Quick CLI Analysis (Fastest - Recommended for developers)
 ```bash
-# Use the professional excel-analyzer tool
-# Resolves via $EXCEL_ANALYZER env var, falls back to $HOME/excel-analyzer
-ANALYZER="${EXCEL_ANALYZER:-$HOME/excel-analyzer/analyze-excel.js}"
+# Use an Excel-analyzer CLI tool of your choice.
+# Configure its path via the $EXCEL_ANALYZER env var (no default — set it per project).
+ANALYZER="${EXCEL_ANALYZER:?Set EXCEL_ANALYZER to your analyzer CLI path}"
 
 node "$ANALYZER" "$1"
 

@@ -200,7 +200,7 @@ FOR each .md file in .claude/commands/ and .claude/agents/:
 1. **Hardcoded URLs/domains**: `https://...`, `http://...`, `s3://...`
 2. **Hardcoded file paths**: String literals containing `/`, `data/`, `docs/`, `template/`, etc. that are not derived from parameters or computed from `$PROJECT_ROOT`
 3. **Hardcoded directory names**: `WORK_DIR="data/work"`, `OUTPUT="data/output"` without parameter fallback
-4. **Hardcoded filenames**: `open("plain_text_resume.yaml")`, `TEMPLATE="harvard"` without parameter
+4. **Hardcoded filenames**: `open("input_data.yaml")`, `TEMPLATE="default"` without parameter
 5. **Hardcoded numeric constants**: Timeouts, retries, port numbers that should be configurable
 
 **What is NOT a violation** (use judgment):
@@ -214,12 +214,12 @@ FOR each .md file in .claude/commands/ and .claude/agents/:
 **Violations**:
 ```bash
 # BAD - hardcoded path, no parameter
-RESUME_FILE="data/plain_text_resume.yaml"
-open("template/resume/harvard.html")
+INPUT_FILE="data/input_data.yaml"
+open("template/default.html")
 
 # GOOD - parameterized with defaults
-RESUME_FILE="${1:-data/plain_text_resume.yaml}"
-template_path = sys.argv[1] if len(sys.argv) > 1 else "template/resume/harvard.html"
+INPUT_FILE="${1:-data/input_data.yaml}"
+template_path = sys.argv[1] if len(sys.argv) > 1 else "template/default.html"
 ```
 
 **Report**:
@@ -228,8 +228,8 @@ template_path = sys.argv[1] if len(sys.argv) > 1 else "template/resume/harvard.h
   "standard": "no-hardcoded-values",
   "severity": "critical",
   "location": "scripts/example.py:15",
-  "finding": "Hardcoded file path: open('data/plain_text_resume.yaml')",
-  "recommendation": "Accept path as CLI argument with default: parser.add_argument('--resume', default='data/plain_text_resume.yaml')"
+  "finding": "Hardcoded file path: open('data/input_data.yaml')",
+  "recommendation": "Accept path as CLI argument with default: parser.add_argument('--input', default='data/input_data.yaml')"
 }
 ```
 

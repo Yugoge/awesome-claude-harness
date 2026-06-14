@@ -130,7 +130,7 @@ Step 1: Read state file + enter worktree (first run only)
 
 ## Overnight Incident Lessons (2026-03-28)
 
-**NON-NEGOTIABLE.** Full stories: `docs/incidents-2026-03-28.md`. Rules 1, 2, 4, 5, 6 are general dev hygiene already covered by `~/.claude/CLAUDE.md` (never weaken checks; PM prioritizes only; compare against reference before fixing; output quality > absence of errors; no unsolicited improvements). The overnight-specific rules below are load-bearing:
+**NON-NEGOTIABLE.** Rules 1, 2, 4, 5, 6 are general dev hygiene already covered by `~/.claude/CLAUDE.md` (never weaken checks; PM prioritizes only; compare against reference before fixing; output quality > absence of errors; no unsolicited improvements). The overnight-specific rules below are load-bearing:
 
 ### Rule 3: Specialists report symptoms only — no root cause, no fix suggestions
 Specialists observe and report. Root cause analysis is exclusively BA's job.

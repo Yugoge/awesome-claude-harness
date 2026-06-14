@@ -48,7 +48,7 @@ Five principles run through every file. They are the architecture's load-bearing
 1. **Orchestrator-only.** The main agent *thinks and routes*; it never writes code or runs privileged git. This is enforced by `hooks/pretool-orchestrator-gate.py`, not by prompt etiquette.
 2. **Enforce in code, not in prose.** "Please don't force-push" is a wish; a `PreToolUse` hook returning exit 2 is a guarantee. Wherever a rule *can* be a hook, it *is* a hook.
 3. **Fail closed, leave forensics.** Ambiguous grant → reject. Unparseable QA verdict → treat as failure. On rejection the evidence (grant file, raw output) is left on disk so a human can see exactly what happened.
-4. **Rules, not stories.** Agent/command prompts state what is *required* and what is *forbidden*, tersely. Every infrastructure-touching subagent prompt carries an explicit **DO NOT** section — positive instructions alone proved insufficient (see `docs/reference/incidents-2026-04-04.md`).
+4. **Rules, not stories.** Agent/command prompts state what is *required* and what is *forbidden*, tersely. Every infrastructure-touching subagent prompt carries an explicit **DO NOT** section — positive instructions alone proved insufficient.
 5. **One subagent, one task.** N issues → N parallel subagents, each with a clean context. Multitasking inside one subagent is banned (`CLAUDE.md` lesson #13).
 
 ---
@@ -136,7 +136,7 @@ Hooks are configured in `settings.json` under `hooks.<Event>[].{matcher, hooks[]
 ### Representative wiring
 
 - **`SessionStart`** — environment announce + git init + tmpfs banner + gitignore propagation + a canary self-check (`session-info.sh`, `session-git-init.sh`, `check-todo-md-sync.py`, `session-promote-hook.sh`, `scripts/canary-verify.sh`, `session-tmpfs-banner.sh`, `session-gitignore-propagate.sh`).
-- **`UserPromptSubmit`** — `prompt-workflow.py` (workflow detection + dev-registry pre-creation), `userprompt-doc-sync-check.py`, `prehook-overnight-worktree-check.sh` (overnight launch hook that creates the isolated worktree + state file), `userprompt-consent-allowlist.sh` (`/do`/`/allow` consent capture), tmpfs-pressure and bulk-commit-capability advisories.
+- **`UserPromptSubmit`** — `prompt-workflow.py` (workflow detection + dev-registry pre-creation), `userprompt-doc-sync-check.py`, `userprompt-consent-allowlist.sh` (`/do`/`/allow` consent capture), tmpfs-pressure and bulk-commit-capability advisories.
 - **`PreToolUse`** — the safety + git + worktree + subagent-discipline gates (detailed in §6 and §7). Note: although `pretool-layer-match-gate.sh` is named with a `pretool-` prefix, it is actually wired under `SubagentStop`.
 - **`PostToolUse`** — `posttool-allowlist-consume.py` (single-use grant consumption), the todo trackers, `posttool-git-checkpoint.sh` + `posttool-doc-sync.py` + `posttool-command-frontmatter-validate.py` (on `Write|Edit|…`), and the overnight loop/trace hooks (on `Agent`).
 - **`Stop`** — `stop-overnight-timelock.py` (refuses to end an overnight session before its deadline), `stop-spec-coverage-enforce.py`, `auto-commit.sh`, `stop-cleanup-allowlist.sh` (reap expired sentinels).
@@ -289,7 +289,7 @@ flowchart LR
     TL[[Stop-hook time-lock:<br/>refuses to terminate before end_time]] -.guards.-> RT
 ```
 
-- **Launch** (`hooks/prehook-overnight-worktree-check.sh`, `UserPromptSubmit`): fails closed if it cannot produce a *validated isolated worktree*; on success it writes `.claude/overnight-state-<session_id>.json` with `worktree_path`, `worktree_branch`, `view_paths`, `spec_mode`, `actor_git_env`, etc. A missing/invalid state is a **HARD ABORT** for the actor.
+- **Launch** (the `/dev-overnight` command): fails closed if it cannot produce a *validated isolated worktree*; on success it writes `.claude/overnight-state-<session_id>.json` with `worktree_path`, `worktree_branch`, `view_paths`, `spec_mode`, `actor_git_env`, etc. A missing/invalid state is a **HARD ABORT** for the actor.
 - **Loop continuation** (`hooks/posttool-overnight-loop.py`, `PostToolUse` matcher `TodoWrite`): when all todos are completed, the session matches, and `end_time` is still in the future, it increments `cycle_count` and *prints* continuation instructions (it never edits the todos file directly, avoiding races).
 - **Time-lock** (`hooks/stop-overnight-timelock.py`, `Stop`): scans for `overnight-state-*.json`; if `now < end_time` it exits 2 to **block termination**, so the loop cannot be short-circuited. Cancel explicitly with `/stop`.
 - **Per-cycle commits** are real merge-ready HEAD commits via `commit.sh` bridge mode; mid-cycle `refs/checkpoints/*` snapshots are recovery-only and never advance HEAD (the two are explicitly distinct semantic layers).
@@ -354,7 +354,7 @@ External grounding docs (not in this repo): `/root/docs/git-protection-architect
 
 **Why the verbatim-requirement contract?** The thing that ships is too often a confident-sounding cousin of what was asked. Writing the literal requirement to disk and re-reading it in every downstream prompt makes paraphrase-drift detectable and the user's words the binding spec.
 
-**Why rules-not-stories with explicit DO NOT sections?** Incident analysis (`docs/reference/incidents-2026-04-04.md`) showed that positive instructions alone leak: an agent told only "what's allowed" infers permission for adjacent dangerous actions. Every infrastructure-touching prompt now carries an explicit forbidden list.
+**Why rules-not-stories with explicit DO NOT sections?** Incident analysis showed that positive instructions alone leak: an agent told only "what's allowed" infers permission for adjacent dangerous actions. Every infrastructure-touching prompt now carries an explicit forbidden list.
 
 **Why the ramdisk + nested-repo architecture?** `~/.claude` symlinks to `/dev/shm/dev-workspace/dot-claude` to bypass a Ceph IOPS bottleneck and support many concurrent Claude Code processes (`/root/docs/ramdisk-architecture.md`). Because `.claude/` is its own git repo, config commits happen *inside* that path and never via `/root` — a constraint baked into the git wrappers and the `CLAUDE.md` §Nested .claude Repo rule.
 

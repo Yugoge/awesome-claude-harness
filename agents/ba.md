@@ -1239,7 +1239,7 @@ These patterns in your output will cause the orchestrator's QA-validates-BA gate
 
 ### 1. `fallback_plan: source+bundle+typecheck` for UI-rendering pipelines is FORBIDDEN
 
-If your pipeline produces a UI surface a user would see (any change to `packages/happy-app/sources/components/`, any new view component, any new tool registration, any styling change), you MAY NOT write a `fallback_plan` that allows QA to skip live browser verification.
+If your pipeline produces a UI surface a user would see (any change to the project's UI component directory, any new view component, any new tool registration, any styling change), you MAY NOT write a `fallback_plan` that allows QA to skip live browser verification.
 
 **Specifically forbidden phrases in BA spec or context JSON**:
 - `fallback_plan: source+bundle+typecheck only`
@@ -1252,9 +1252,9 @@ If a precondition is required for live verification (e.g., a Codex session must 
 ```yaml
 # CORRECT
 precondition:
-  - description: "Codex session must exist in dev account cmi5mv9eh00wzpg14ph73jj3n"
-  - how_to_create: "Open https://dev.life-ai.app, click + sidebar button, select Codex agent flavor, send test command"
-  - if_missing: "BLOCK cycle. Report 'UI affordance for Codex flavor missing' as P0 bug. DO NOT proceed with source-only verification."
+  - description: "A test session of the required type must exist in the app-under-test"
+  - how_to_create: "Open the app-under-test URL, use the UI affordance to create the required session type, send a test command"
+  - if_missing: "BLOCK cycle. Report 'UI affordance for required session type missing' as P0 bug. DO NOT proceed with source-only verification."
 
 # FORBIDDEN
 fallback_plan:

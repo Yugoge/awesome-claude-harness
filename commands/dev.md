@@ -1470,13 +1470,13 @@ WHEN TO SCRIPT:
 
 ### Todo Script Integration
 
-**Learn from knowledge-system pattern**:
+**Todo-script pattern**:
 
 When creating commands with multi-step workflows:
 
 1. **Create todo script** in `.claude/scripts/todo/<command>.py`
 2. **Return workflow steps** as JSON
-3. **Force todo refresh** via hook injection (like knowledge-system)
+3. **Force todo refresh** via hook injection
 
 **Example todo script** (`.claude/scripts/todo/mycommand.py`):
 

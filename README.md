@@ -280,7 +280,7 @@ A `PostToolUse` doc-sync hook keeps `INDEX.md` files and the inventory block bel
 <!-- AUTO:readme-stats -->
 
 ## Overview
-- **Total files**: 64
+- **Total files**: 62
 - **Subdirectories**: 34
 - **Naming convention**: lower
 
@@ -288,11 +288,9 @@ A `PostToolUse` doc-sync hook keeps `INDEX.md` files and the inventory block bel
 - `ARCHITECTURE.md` - Architecture — `.claude` Agent Operating System
 - `CLAUDE.md` - CLAUDE.md
 - `NESTED-REPO.md` - Nested Repo Sentinel
-- `config.yaml` - yaml config
 - `history.jsonl` - jsonl file
 - `mcp-needs-auth-cache.json` - json config
 - `playwright-storage-state.json` - json config
-- `push.sh` - 
 - `session.log` - log file
 - `settings.json` - json config
 - `settings.json.bak-20260523-184533` - bak-20260523-184533 file
@@ -362,7 +360,7 @@ A `PostToolUse` doc-sync hook keeps `INDEX.md` files and the inventory block bel
 
 A few principles run through every file here. They are the taste behind the project.
 
-**Rules, not stories.** Agent and command prompts state what is *required* and what is *forbidden* — tersely. Positive instructions alone are insufficient: every infrastructure-touching subagent prompt carries an explicit **DO NOT** section, because catastrophe lessons (documented in `docs/reference/incidents-2026-04-04.md`) proved that "what's allowed" without "what's banned" leaks.
+**Rules, not stories.** Agent and command prompts state what is *required* and what is *forbidden* — tersely. Positive instructions alone are insufficient: every infrastructure-touching subagent prompt carries an explicit **DO NOT** section, because hard-won catastrophe lessons proved that "what's allowed" without "what's banned" leaks.
 
 **Enforce in code, not in prose.** "Please don't force-push" is a wish. A PreToolUse hook returning exit 2 is a guarantee. Wherever a rule *can* be a hook, it *is* a hook — and the human escape hatches (`/do`, `/allow`) are themselves narrow, audited, and single-use.
 
@@ -382,7 +380,7 @@ A few principles run through every file here. They are the taste behind the proj
 
 **Does the orchestrator-only rule make simple edits slow?** For a one-line fix you can `/do` to let the main agent act directly for a turn. The delegation overhead is the price of consistent quality on real tasks — and the autonomous loop pays for itself overnight.
 
-**Can the agent disable its own guardrails?** That's the threat model the kernel is built against. Release commands are `disable-model-invocation: true` (an agent can't self-invoke them), the git privilege guard ignores `/do`, and grants are single-use and time-boxed. One honestly-documented residual (a shared `.git` common-dir during overnight worktrees) is called out, not hidden — see `commands/dev-overnight.md` and the incident docs.
+**Can the agent disable its own guardrails?** That's the threat model the kernel is built against. Release commands are `disable-model-invocation: true` (an agent can't self-invoke them), the git privilege guard ignores `/do`, and grants are single-use and time-boxed. One honestly-documented residual (a shared `.git` common-dir during overnight worktrees) is called out, not hidden — see `commands/dev-overnight.md`.
 
 **Is everything in this README real?** Yes — every capability traces to a file cited inline. A few items mentioned in older internal docs (e.g. a now-removed `orchestrator.md` agent, or a `subagentstop-cp-enforce.py` hook that is intentionally *not* wired) were deliberately left out of the claims above because the current code doesn't back them.
 
@@ -391,7 +389,6 @@ A few principles run through every file here. They are the taste behind the proj
 - System architecture: [`ARCHITECTURE.md`](ARCHITECTURE.md)
 - Git protection kernel (13 scenarios, 7 invariants): `/root/docs/git-protection-architecture.md`
 - Checkpoint mechanism: [`docs/reference/checkpoint-mechanism.md`](docs/reference/checkpoint-mechanism.md)
-- Hard-won lessons: [`docs/reference/incidents-2026-04-04.md`](docs/reference/incidents-2026-04-04.md)
 
 ---
 
