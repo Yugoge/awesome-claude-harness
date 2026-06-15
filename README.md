@@ -368,36 +368,36 @@ A `PostToolUse` doc-sync hook keeps the `INDEX.md` files and the inventory block
 
 ## Design philosophy
 
-A few principles run through every file here. They are the taste behind the project.
+Six principles run through every file here. They are the taste behind the project — and each is a consequence of something that went wrong before it went right.
 
-**Rules, not stories.** Agent and command prompts state what is *required* and what is *forbidden* — tersely. Positive instructions alone are insufficient: every infrastructure-touching subagent prompt carries an explicit **DO NOT** section, because hard-won catastrophe lessons proved that "what's allowed" without "what's banned" leaks.
+**Rules, not stories.** Agent and command prompts state what is *required* and what is *forbidden*, tersely. Positive instructions alone proved insufficient: incident analysis showed an agent told only "what's allowed" will infer permission for adjacent dangerous actions. So every infrastructure-touching subagent prompt carries an explicit **DO NOT** section.
 
-**Enforce in code, not in prose.** "Please don't force-push" is a wish. A PreToolUse hook returning exit 2 is a guarantee. Wherever a rule *can* be a hook, it *is* a hook — and the human escape hatches (`/do`, `/allow`) are themselves narrow, audited, and single-use.
+**Enforce in code, not in prose.** "Please don't force-push" is a wish; a `PreToolUse` hook returning exit 2 is a guarantee. Wherever a rule *can* be a hook, it *is* a hook — and even the human escape hatches (`/do`, `/allow`) are narrow, audited, and single-use.
 
-**The orchestrator describes WHAT; the subagent decides HOW.** Dispatch prompts never name a tool or a shell command — `hooks/pretool-orchestrator-prompt-purity.py` watches for leaked "HOW". This keeps specialists free to choose their own toolchain and keeps the orchestrator honest about staying out of the work.
+**The orchestrator describes WHAT; the subagent decides HOW.** Dispatch prompts never name a tool or a shell command; `hooks/pretool-orchestrator-prompt-purity.py` watches for leaked "HOW". This keeps specialists free to choose their own toolchain and keeps the orchestrator out of the work.
 
-**One subagent, one task.** Never bundle issues. N issues → N parallel subagents, each with a clean context. Multitasking inside one subagent is banned outright — it's how quality silently degrades.
+**One subagent, one task.** Never bundle issues. N issues → N parallel subagents, each with a clean context. Multitasking inside one subagent is banned — it is how a "fix the button" task quietly also "refactors the router," and how quality silently degrades (`CLAUDE.md` lesson #13).
 
-**The user's verbatim words are the contract.** The literal requirement is written to disk and re-read by every downstream agent. Paraphrase is drift; drift is how you ship the wrong thing confidently.
+**The user's verbatim words are the contract.** The literal requirement is written to disk and re-read by every downstream agent. Paraphrase is drift; drift is how you ship a confident-sounding cousin of what was asked.
 
-**Fail closed, leave forensics.** Ambiguous grant? Reject. Unparseable QA verdict? Treat as failure. But on rejection, leave the evidence (the grant file, the raw output) so a human can see exactly what happened.
+**Fail closed, leave forensics.** Ambiguous grant? Reject. Unparseable QA verdict? Treat as failure. But on rejection, leave the evidence — the grant file, the raw output — so a human can see exactly what happened and why.
 
 ---
 
 ## FAQ
 
-**Is this a framework I import?** No. It's a *configuration* for Claude Code. You drop it at `~/.claude`, and its hooks + commands + agents change how the agent behaves. There's nothing to `npm install` into your app.
+**Is this a framework I import?** No. It is a *configuration* for Claude Code. You drop it at `~/.claude`, and its hooks + commands + agents change how the agent behaves. There is nothing to `npm install` into your app.
 
 **Does the orchestrator-only rule make simple edits slow?** For a one-line fix you can `/do` to let the main agent act directly for a turn. The delegation overhead is the price of consistent quality on real tasks — and the autonomous loop pays for itself overnight.
 
-**Can the agent disable its own guardrails?** That's the threat model the kernel is built against. Release commands are `disable-model-invocation: true` (an agent can't self-invoke them), the git privilege guard ignores `/do`, and grants are single-use and time-boxed. One honestly-documented residual (a shared `.git` common-dir during overnight worktrees) is called out, not hidden — see `commands/dev-overnight.md`.
+**Can the agent disable its own guardrails?** That is the threat model the kernel is built against, and the honest answer is: the design makes it *hard*, not metaphysically impossible. Release commands are `disable-model-invocation: true` *and* denied as `Skill(<name>:*)`; the git-privilege-guard is always-on and subagents can never bypass it; grants are single-use and time-boxed; the bash-safety hook blocks the destructive shell forms by shape. The one residual that is called out rather than hidden: during overnight runs the linked worktree shares the `.git` common-dir, so an actor that mutated shared git config/hooks could in principle disable the keystone — `commands/dev-overnight.md` documents this as an accepted deviation, and the sound fix (fresh-clone isolation) is deferred future work.
 
-**Is everything in this README real?** Yes — every capability traces to a file cited inline. A few items mentioned in older internal docs (e.g. a now-removed `orchestrator.md` agent, or a `subagentstop-cp-enforce.py` hook that is intentionally *not* wired) were deliberately left out of the claims above because the current code doesn't back them.
+**Is everything in this README real?** Yes — every capability traces to a file cited inline, and the war-stories carry their incident dates and commit hashes. A couple of things deliberately *omitted* for accuracy: the bulk-commit detector is described as **warn-only** (it is, despite older comments saying "refuses"); a now-removed `orchestrator.md` agent referenced in some internal drafts does not exist and is not claimed; and the cp-state `SubagentStop` enforcement, whose blocking behavior is mode-dependent, is left out of the kernel claims rather than overstated.
 
 **Where do I go deeper?**
 - The constitution: [`CLAUDE.md`](CLAUDE.md)
 - System architecture: [`ARCHITECTURE.md`](ARCHITECTURE.md)
-- Git protection kernel (13 scenarios, 7 invariants) — implementation entry points: [`hooks/pretool-git-privilege-guard.py`](hooks/pretool-git-privilege-guard.py), [`hooks/pretool-bulk-commit-detector.py`](hooks/pretool-bulk-commit-detector.py)
+- Git protection kernel: [`hooks/pretool-git-privilege-guard.py`](hooks/pretool-git-privilege-guard.py), [`hooks/pretool-bash-safety.sh`](hooks/pretool-bash-safety.sh)
 - Checkpoint mechanism: [`docs/reference/checkpoint-mechanism.md`](docs/reference/checkpoint-mechanism.md)
 
 ---
