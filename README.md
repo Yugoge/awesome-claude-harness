@@ -128,10 +128,10 @@ The harness is one lifecycle, not a bag of commands. Each stage hands a verified
 You (the agent) try the obvious shortcut:
 
 ```bash
-CLAUDE_COMMIT_COMMAND_ACTIVE=1 git commit -m "fix stuff"
+CLAUDE_PUSH_COMMAND_ACTIVE=1 git push
 ```
 
-`hooks/pretool-git-privilege-guard.py` runs *before* the tool executes. It recognizes the inline `CLAUDE_*_ACTIVE=` prefix as an env-injection attempt — the sanctioned env var must be set by the `/commit` wrapper in the child's real environment, not pasted onto the command line — and returns exit 2: **BLOCKED**. The only honored path is a grant file written by the `/commit` wrapper, validated by nonce + ISO-8601 UTC expiry + single-use unlink. (`hooks/pretool-git-privilege-guard.py`)
+`hooks/pretool-git-privilege-guard.py` runs *before* the tool executes. For push it scans the raw command text for the literal `CLAUDE_PUSH_COMMAND_ACTIVE=` prefix and recognizes it as an env-injection attempt — the sanctioned env var must be set by the `/push` wrapper in the child's real environment, not pasted onto the command line — and returns exit 2: **BLOCKED**. The only honored path is a grant file written by the `/push` wrapper, validated by nonce + ISO-8601 UTC expiry + single-use unlink, and matched against the current branch, expected head, and remote. (A bare agent `git commit` is likewise refused — there it is the default-deny-without-a-grant rule, not inline-env detection, that blocks it.) (`hooks/pretool-git-privilege-guard.py`)
 
 That is the whole philosophy in miniature: the model is *encouraged* toward the right path and *physically prevented* from the wrong one — and when it is prevented, the evidence is left on disk.
 
