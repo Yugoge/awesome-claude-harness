@@ -97,7 +97,7 @@ The harness is one lifecycle, not a bag of commands. Each stage hands a verified
 | Capability | What it gives you | Grounded in |
 |---|---|---|
 | **Orchestrator-only architecture** | The main agent routes; each real edit goes to a fresh subagent with one job and a clean context, so quality stays high. | `hooks/pretool-orchestrator-gate.py`, `CLAUDE.md` |
-| **Git protection kernel** | `commit / push / merge / reset --hard` from an agent are refused unless a single-use grant authorizes that *exact* action; wide-path checkout, stash-as-buffer, and all hard resets are blocked outright. | `hooks/pretool-git-privilege-guard.py`, `hooks/pretool-bash-safety.sh` |
+| **Git protection kernel** | `commit / push / merge / reset --hard` from an agent are refused unless a single-use, time-boxed, per-operation authorization is present (a nonce grant file for commit/push; the `/merge` env var for merge); wide-path checkout, stash-as-buffer, and all hard resets are blocked outright. | `hooks/pretool-git-privilege-guard.py`, `hooks/pretool-bash-safety.sh` |
 | **Evidence-gated BA → Dev → QA** | The analysis is QA'd *before* coding; every claim needs proof (git blame, grep, import-chain); the user's verbatim words are the binding spec. | `commands/dev.md`, `agents/ba.md`, `agents/qa.md` |
 | **Durable specs** | `/spec` captures the requirement verbatim, persists design + evidence, and splits the monolith into per-agent briefing books with Gawande-style checkpoints. | `commands/spec.md`, `agents/spec.md` |
 | **Autonomous overnight pipeline** | `/dev-overnight 6:00` runs an unattended explore → triage → fix → verify → commit loop in an isolated worktree until a wall-clock end time. | `commands/dev-overnight.md`, `hooks/stop-overnight-timelock.py` |
