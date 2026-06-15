@@ -121,7 +121,7 @@ The harness is one lifecycle, not a bag of commands. Each stage hands a verified
 4. **QA validates the BA *before any code is written*.** It cross-examines every claim: is there git-blame evidence? do these files exist? did the scope quietly narrow? did this contradict a prior cycle's attempt? If the map is weak, BA is sent back — a one-hour analysis correction is far cheaper than six implementation loops on the wrong layer. (`commands/dev.md`, `agents/ba.md`)
 5. **The Dev subagent implements** the vetted plan, with a minimum-diff discipline and a self-verification (build + smoke) step. (`agents/dev.md`)
 6. **QA verifies against the acceptance criteria,** looping back to Dev on failure within bounded retries.
-7. **`/close → /commit → /push`** lands the change through the git kernel — each step requiring its own grant token.
+7. **`/close → /commit → /push`** lands the change. `/close` is the release-readiness gate (a QA verdict, not a git grant); then `/commit` and `/push` each pass the git kernel under their own single-use grant.
 
 ### Walkthrough 2 — a hook firing
 
