@@ -22,7 +22,7 @@ All counts below were established by enumerating the actual repository, not copi
 | **Lifecycle events used** | **7** | keys of `settings.json.hooks` |
 | **Hook files present on disk** (`hooks/*.py` + `*.sh`, excl. `.bak`) | **92** | `find hooks -maxdepth 1 -type f \( -name '*.py' -o -name '*.sh' \)` |
 | **Helper scripts** (`scripts/` top-level files, excl. `INDEX/README`) | **72** | `find scripts -maxdepth 1 -type f` minus docs |
-| **Skills** (`skills/*/` directories) | **12** | `ls -d skills/*/` |
+| **Skills** (`skills/*/` directories) | **8** | `ls -d skills/*/` |
 | `permissions.allow` / `deny` / `ask` entries | 175 / 75 / 30 | keys of `settings.json.permissions` |
 
 > Note on the hook count: more hook *files* exist on disk (92) than are *wired* (68). The unwired files are install scripts, libraries, legacy/`.bak` variants, and intentionally-staged hooks. The number that matters for behavior is **what `settings.json` wires**: 68 distinct files across 69 entries (a few hooks run under more than one matcher). The seven lifecycle events are `SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `Notification`, `Stop`, `SubagentStop`.
