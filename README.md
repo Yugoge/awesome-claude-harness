@@ -1,6 +1,6 @@
 # `awesome-claude-harness` — A Self-Governing Agent Operating System for Claude Code
 
-> **The main agent never writes your code. It hires specialists, gates every dangerous move at a git kernel, and ships verified work while you sleep.**
+> **By default, the main agent does not write your code (the `/do` break-glass is the audited exception). It hires specialists, gates every dangerous move at a git kernel, and ships verified work while you sleep.**
 
 This repository is a complete, battle-tested **Claude Code configuration** that turns a single chat agent into a disciplined software team. A main agent that *orchestrates* and delegates every real change to single-purpose subagents; an evidence-gated `/spec → /dev → /close → /commit → /push` pipeline where the *analysis* is reviewed before a line of code is written; a defense-in-depth wall of lifecycle hooks that make the most expensive mistakes structurally impossible; and an autonomous overnight loop that explores a codebase, finds bugs, fixes them, verifies them, and commits them — unattended, until a wall-clock end time.
 
