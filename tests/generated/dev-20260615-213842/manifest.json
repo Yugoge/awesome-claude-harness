@@ -1,0 +1,172 @@
+{
+  "schema_version": "1.1",
+  "task_id": "dev-20260615-213842",
+  "generated_at": "2026-06-15T21:55:00Z",
+  "active_tests": [
+    {
+      "task_id": "dev-20260615-213842",
+      "ac_id": "AC1",
+      "ac_uid": "c7a125812aaf8ebc",
+      "type": "data",
+      "file": "tests/generated/dev-20260615-213842/test_AC1_c7a125812aaf8ebc.py",
+      "status": "deferred_invalid_schema",
+      "schema_note": "data check lacks required {file, assertions[]}; documentation self-consistency check object copied verbatim",
+      "hook_check": {
+        "grep_any": [
+          "graphify",
+          "graphifyy",
+          "codex"
+        ],
+        "files": [
+          "README.md",
+          "ARCHITECTURE.md"
+        ],
+        "section": "dependency/requirements",
+        "expect": "hit_in_section"
+      }
+    },
+    {
+      "task_id": "dev-20260615-213842",
+      "ac_id": "AC2",
+      "ac_uid": "d4c53216ac44c066",
+      "type": "data",
+      "file": "tests/generated/dev-20260615-213842/test_AC2_d4c53216ac44c066.py",
+      "status": "deferred_invalid_schema",
+      "schema_note": "data check lacks required {file, assertions[]}; documentation self-consistency check object copied verbatim",
+      "hook_check": {
+        "required_terms": [
+          "Claude Code",
+          "Python",
+          "venv",
+          "git",
+          "pytest",
+          "jq",
+          "Playwright",
+          "graphify",
+          "Codex",
+          "fswatch"
+        ],
+        "labels_present": [
+          "REQUIRED",
+          "OPTIONAL"
+        ],
+        "pytest_install": "present"
+      }
+    },
+    {
+      "task_id": "dev-20260615-213842",
+      "ac_id": "AC3",
+      "ac_uid": "499b24cbd8017b00",
+      "type": "data",
+      "file": "tests/generated/dev-20260615-213842/test_AC3_499b24cbd8017b00.py",
+      "status": "deferred_invalid_schema",
+      "schema_note": "data check lacks required {file, assertions[]}; documentation self-consistency check object copied verbatim",
+      "hook_check": {
+        "recompute_from": "settings.json",
+        "architecture_equals_live": true,
+        "architecture_equals_readme_badge": true,
+        "false_parity_claim": "absent"
+      }
+    },
+    {
+      "task_id": "dev-20260615-213842",
+      "ac_id": "AC4",
+      "ac_uid": "018579bbc40d0782",
+      "type": "data",
+      "file": "tests/generated/dev-20260615-213842/test_AC4_018579bbc40d0782.py",
+      "status": "deferred_invalid_schema",
+      "schema_note": "data check lacks required {file, assertions[]}; documentation self-consistency check object copied verbatim",
+      "hook_check": {
+        "file": "commands/dev.md",
+        "not_contains": [
+          "no `subagentstop-cp-enforce.py` hook wired",
+          "is NOT wired"
+        ],
+        "unchanged": [
+          "settings.json:764",
+          "ARCHITECTURE.md:143",
+          "agents/architect.md:404"
+        ]
+      }
+    },
+    {
+      "task_id": "dev-20260615-213842",
+      "ac_id": "AC5",
+      "ac_uid": "a93c7cf3201a9880",
+      "type": "data",
+      "file": "tests/generated/dev-20260615-213842/test_AC5_a93c7cf3201a9880.py",
+      "status": "deferred_invalid_schema",
+      "schema_note": "data check lacks required {file, assertions[]}; documentation self-consistency check object copied verbatim",
+      "hook_check": {
+        "security_md_matches_notice": true,
+        "installers": "removed_or_legacy_bannered",
+        "removed_files": [
+          "hooks/ensure-git-repo.sh",
+          "hooks/smart-checkpoint.sh"
+        ],
+        "dangling_refs": "none"
+      }
+    },
+    {
+      "task_id": "dev-20260615-213842",
+      "ac_id": "AC6",
+      "ac_uid": "f462552b0671bda1",
+      "type": "data",
+      "file": "tests/generated/dev-20260615-213842/test_AC6_f462552b0671bda1.py",
+      "status": "deferred_invalid_schema",
+      "schema_note": "data check lacks required {file, assertions[]}; documentation self-consistency check object copied verbatim",
+      "hook_check": {
+        "readme_caveat": "honest_magnitude",
+        "push_sh_no_literal": "Yugoge",
+        "quickstart": "removed_or_corrected",
+        "settings_json_cjk": "absent"
+      }
+    },
+    {
+      "task_id": "dev-20260615-213842",
+      "ac_id": "AC7",
+      "ac_uid": "94124f173da04773",
+      "type": "data",
+      "file": "tests/generated/dev-20260615-213842/test_AC7_94124f173da04773.py",
+      "status": "deferred_invalid_schema",
+      "schema_note": "data check lacks required {file, assertions[]}; documentation self-consistency check object copied verbatim",
+      "hook_check": {
+        "prose_outside_auto_markers": true,
+        "settings_json_parses": true
+      }
+    },
+    {
+      "task_id": "dev-20260615-213842",
+      "ac_id": "AC8",
+      "ac_uid": "6821791054ffa3f0",
+      "type": "data",
+      "file": "tests/generated/dev-20260615-213842/test_AC8_6821791054ffa3f0.py",
+      "status": "deferred_invalid_schema",
+      "schema_note": "data check lacks required {file, assertions[]}; documentation self-consistency check object copied verbatim",
+      "hook_check": {
+        "dehardcode_files_touched_beyond_push_sh": 0,
+        "graphify_behavior_unchanged": true
+      }
+    },
+    {
+      "task_id": "dev-20260615-213842",
+      "ac_id": "AC9",
+      "ac_uid": "b7f1dd095cf8a0de",
+      "type": "data",
+      "file": "tests/generated/dev-20260615-213842/test_AC9_b7f1dd095cf8a0de.py",
+      "status": "deferred_invalid_schema",
+      "schema_note": "data check lacks required {file, assertions[]}; documentation self-consistency check object copied verbatim",
+      "hook_check": {
+        "commit_message_forbidden_tokens": [
+          "star",
+          "10000",
+          "10,000",
+          "popularity",
+          "vanity"
+        ],
+        "expect": "none_present"
+      }
+    }
+  ],
+  "archived_tests": []
+}
