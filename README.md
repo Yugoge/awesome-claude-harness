@@ -295,7 +295,7 @@ The hooks are wired in `settings.json` and activate on the next session. Try the
 /stop
 ```
 
-> **Portability caveat.** The grant-gated git pipeline (`/close → /commit → /merge → /push`) and several branch/worktree operations are tuned for this author's environment — notably a nested `.claude` git repo symlinked onto a RAM disk (see [`NESTED-REPO.md`](NESTED-REPO.md) and [`CLAUDE.md`](CLAUDE.md)). The development and research commands work portably; read `CLAUDE.md` and adapt paths before relying on the release pipeline in your own setup.
+> **Portability caveat.** Several core commands hardcode this author's paths — `/root/.claude` (in `commands/dev.md`, `commands/spec.md`, `commands/commit.md`) and `/root/bin/codex-iso` (in `commands/codex.md`) — and the whole setup assumes a nested `.claude` git repo symlinked onto a RAM disk (see [`NESTED-REPO.md`](NESTED-REPO.md) and [`CLAUDE.md`](CLAUDE.md)). These paths are tuned to the author's environment, not portable as-is: a new user **must adapt them** before the release (`/close → /commit → /merge → /push`) and `--codex` commands will work. Plan to grep for `/root/` and rewrite those paths for your own machine; the development and research commands are the most portable starting point.
 
 ### Troubleshooting
 
