@@ -1,0 +1,203 @@
+{
+  "schema_version": "1.1",
+  "task_id": "20260614-205834",
+  "generated_at": "2026-06-14T23:02:00Z",
+  "active_tests": [
+    {
+      "task_id": "20260614-205834",
+      "ac_id": "AC1",
+      "ac_uid": "9e672c7db8fa966b",
+      "type": "data",
+      "file": "tests/generated/20260614-205834/test_AC1_9e672c7db8fa966b.py",
+      "status": "active",
+      "hook_check": {
+        "kind": "git_grep_zero",
+        "pattern": "artifact-excel-analyzer",
+        "scope": [
+          "."
+        ],
+        "expect_hits": 0
+      }
+    },
+    {
+      "task_id": "20260614-205834",
+      "ac_id": "AC2",
+      "ac_uid": "b17a5deedfd78877",
+      "type": "data",
+      "file": "tests/generated/20260614-205834/test_AC2_b17a5deedfd78877.py",
+      "status": "active",
+      "hook_check": {
+        "kind": "git_grep_zero",
+        "pattern": "claude-code-config",
+        "scope": [
+          "."
+        ],
+        "expect_hits": 0
+      }
+    },
+    {
+      "task_id": "20260614-205834",
+      "ac_id": "AC3",
+      "ac_uid": "3bd53b35fff0ce6c",
+      "type": "data",
+      "file": "tests/generated/20260614-205834/test_AC3_3bd53b35fff0ce6c.py",
+      "status": "active",
+      "hook_check": {
+        "kind": "git_grep_zero",
+        "pattern": "/root/docs",
+        "scope": [
+          "README.md",
+          "ARCHITECTURE.md",
+          "NESTED-REPO.md"
+        ],
+        "expect_hits": 0
+      }
+    },
+    {
+      "task_id": "20260614-205834",
+      "ac_id": "AC4",
+      "ac_uid": "07b32ad897136b54",
+      "type": "data",
+      "file": "tests/generated/20260614-205834/test_AC4_07b32ad897136b54.py",
+      "status": "active",
+      "hook_check": {
+        "kind": "index_entries_exist_on_disk",
+        "files": [
+          "hooks/INDEX.md",
+          "docs/reference/INDEX.md"
+        ],
+        "forbidden_entries": [
+          "prehook-overnight-worktree-check.sh",
+          "pretool-block-production-files.sh",
+          "pretool-block-production.sh",
+          "pretool-daily-trade-agent-concurrency.py",
+          "configuration-summary.md",
+          "incidents-2026-03-28.md",
+          "incidents-2026-04-04.md",
+          "server-infra.md"
+        ],
+        "marker_required": "<!-- AUTO:index-stats -->",
+        "prose_preserved": true
+      }
+    },
+    {
+      "task_id": "20260614-205834",
+      "ac_id": "AC5",
+      "ac_uid": "c6ec01083dbb409f",
+      "type": "data",
+      "file": "tests/generated/20260614-205834/test_AC5_c6ec01083dbb409f.py",
+      "status": "active",
+      "hook_check": {
+        "kind": "index_entries_exist_on_disk",
+        "files": [
+          "scripts/INDEX.md"
+        ],
+        "total_entries_matches_tree": true
+      }
+    },
+    {
+      "task_id": "20260614-205834",
+      "ac_id": "AC6",
+      "ac_uid": "2e61a30b7b6436a7",
+      "type": "data",
+      "file": "tests/generated/20260614-205834/test_AC6_2e61a30b7b6436a7.py",
+      "status": "active",
+      "hook_check": {
+        "kind": "file_exists_and_grep",
+        "path": "LICENSE",
+        "must_exist": true,
+        "must_not_contain_regex": "(?i)skills/(docx|pdf|pptx|xlsx).*(MIT|granted|redistribut)"
+      }
+    },
+    {
+      "task_id": "20260614-205834",
+      "ac_id": "AC7",
+      "ac_uid": "32edfb1a38f46a21",
+      "type": "data",
+      "file": "tests/generated/20260614-205834/test_AC7_32edfb1a38f46a21.py",
+      "status": "active",
+      "hook_check": {
+        "kind": "file_exists_and_grep",
+        "path": "NOTICE",
+        "must_exist": true,
+        "must_contain_all": [
+          "docx",
+          "pdf",
+          "pptx",
+          "xlsx",
+          "redistribut"
+        ]
+      }
+    },
+    {
+      "task_id": "20260614-205834",
+      "ac_id": "AC8",
+      "ac_uid": "0df95f3bb218fd2b",
+      "type": "data",
+      "file": "tests/generated/20260614-205834/test_AC8_0df95f3bb218fd2b.py",
+      "status": "active",
+      "hook_check": {
+        "kind": "files_exist_nonempty",
+        "any_of_path": [
+          [
+            "CONTRIBUTING.md",
+            ".github/CONTRIBUTING.md"
+          ]
+        ],
+        "all_paths": [
+          ".github/SECURITY.md",
+          ".github/CODE_OF_CONDUCT.md",
+          ".github/PULL_REQUEST_TEMPLATE.md"
+        ],
+        "dir_min_files": {
+          ".github/ISSUE_TEMPLATE": 1
+        },
+        "security_contains": [
+          "secret",
+          "disclos"
+        ]
+      }
+    },
+    {
+      "task_id": "20260614-205834",
+      "ac_id": "AC9",
+      "ac_uid": "d9d84ffbcfdf68a1",
+      "type": "data",
+      "file": "tests/generated/20260614-205834/test_AC9_d9d84ffbcfdf68a1.py",
+      "status": "active",
+      "hook_check": {
+        "kind": "workflow_baseline",
+        "glob": ".github/workflows/*.yml",
+        "must_parse_yaml": true,
+        "must_contain_all": [
+          "baseline",
+          "bash -n"
+        ],
+        "must_not_run": [
+          "tests/generated"
+        ],
+        "excludes_generated": true
+      }
+    },
+    {
+      "task_id": "20260614-205834",
+      "ac_id": "AC10",
+      "ac_uid": "47ac0a52947d1021",
+      "type": "data",
+      "file": "tests/generated/20260614-205834/test_AC10_47ac0a52947d1021.py",
+      "status": "active",
+      "hook_check": {
+        "kind": "files_unmodified",
+        "paths": [
+          "hooks/pretool-bash-safety.sh",
+          "hooks/tests/test_runtime_guard.py"
+        ],
+        "no_history_rewrite": true,
+        "diff_scope_excludes": [
+          "(broader /root refs outside README.md/ARCHITECTURE.md/NESTED-REPO.md)"
+        ]
+      }
+    }
+  ],
+  "archived_tests": []
+}

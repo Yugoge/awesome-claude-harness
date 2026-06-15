@@ -1,0 +1,52 @@
+NOTICE
+======
+
+This repository (awesome-claude-harness) is licensed under the MIT License for
+its own code — see the root LICENSE file. That MIT grant covers ONLY the
+harness's own code and documentation. It does NOT extend to the third-party
+components listed below.
+
+-------------------------------------------------------------------------------
+BUNDLED NON-REDISTRIBUTABLE COMPONENTS (UNRESOLVED REDISTRIBUTION BLOCKER)
+-------------------------------------------------------------------------------
+
+The following bundled skill directories carry their own, more restrictive
+licenses (each retains its own LICENSE.txt, © Anthropic, PBC). Their terms
+PROHIBIT reproduction, derivative works, and redistribution/sublicensing/
+transfer:
+
+  - skills/docx/   (retains skills/docx/LICENSE.txt)
+  - skills/pdf/    (retains skills/pdf/LICENSE.txt)
+  - skills/pptx/   (retains skills/pptx/LICENSE.txt)
+  - skills/xlsx/   (retains skills/xlsx/LICENSE.txt)
+
+Nothing in this NOTICE or in the root LICENSE grants any right to redistribute
+these bundled components. Their own LICENSE.txt governs them.
+
+-------------------------------------------------------------------------------
+OTHER BUNDLED THIRD-PARTY MATERIAL (PERMISSIVELY LICENSED — NOT A BLOCKER)
+-------------------------------------------------------------------------------
+
+The following bundled material carries a permissive license that DOES allow
+redistribution under its own terms (it is NOT part of the redistribution
+blocker above; it is listed here only for attribution):
+
+  - skills/.archive/frontend-design/  (Apache License 2.0; retains its own
+    LICENSE.txt)
+
+-------------------------------------------------------------------------------
+RELEASE BLOCKER — NOT YET SAFE FOR PUBLIC REDISTRIBUTION
+-------------------------------------------------------------------------------
+
+Because the bundled components above are non-redistributable, this repository as
+a whole is NOT yet safe to redistribute publicly. This is an OPEN, UNRESOLVED
+redistribution blocker.
+
+Resolving it is a deferred product decision (a roadmap item), achieved by
+REMOVING the bundled non-redistributable skills (and replacing them with stub
+pointers to their authorized install sources) or by re-licensing them with the
+rights holder's permission. Until that removal/relicense happens, do not
+redistribute this repository publicly.
+
+This NOTICE documents the conflict honestly; it does not, and cannot, grant
+redistribution rights over the bundled components.

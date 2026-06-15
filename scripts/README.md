@@ -63,6 +63,7 @@ Organization and usage documentation for `scripts/`.
 - `qa-manifest-guard.py` - Dual-mode tool per BA spec docs/dev/ticket-20260529-081014.md M4:
 - `qa-report-stale-iter-lint.py` - lacks an explicit resolution marker
 - `refine-context.sh` - refine-context.sh — merge QA-refined context with original context
+- `regen-index-dirs.py` - hand-written prose outside the generated stats+tree block), then regenerate the
 - `repair-venv.sh` - repair-venv.sh — durably restore a Python venv when its bin/python3 symlink target is missing.
 - `resolve-close-report.sh` - Resolve the close-report path for a given TASK_ID using subproject path-walk.
 - `resolve-dev-report.py` - Usage:

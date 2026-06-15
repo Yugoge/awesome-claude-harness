@@ -38,7 +38,6 @@ dot-claude/
 │   │   ├── `code-quality-auditor.md` - Expert code reviewer focused on security, performance, and best practices. Use when user requests code review, security audit, or quality assessment.
 │   │   └── `file-processor.md` - Specialist in processing and analyzing various file formats (Excel formulas, PDF, images, Word, CSV). Use when user needs to extract, transform, or analyze file contents.
 │   └── commands/
-│       ├── `artifact-excel-analyzer.md` - Create a powerful Excel file analyzer with formula extraction and visualization
 │       ├── `artifact-mermaid.md` - Create interactive Mermaid diagrams as standalone HTML files
 │       ├── `artifact-react.md` - Create a standalone React application with full library ecosystem
 │       ├── `debug-help.md` - Debug assistance and troubleshooting guidance

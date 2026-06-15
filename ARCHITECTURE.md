@@ -146,7 +146,7 @@ Hooks are configured in `settings.json` under `hooks.<Event>[].{matcher, hooks[]
 
 ## 6. The git protection kernel
 
-The single most safety-critical subsystem. Authoritative design doc with 13 scenarios and 7 invariants: **`/root/docs/git-protection-architecture.md`**.
+The single most safety-critical subsystem. Implementation entry points (13 scenarios and 7 invariants enforced in code): **`hooks/pretool-git-privilege-guard.py`**, **`hooks/pretool-bulk-commit-detector.py`**, **`hooks/pretool-orchestrator-gate.py`**.
 
 ### 6.1 The layered PreToolUse chain (Bash → git verb)
 
@@ -338,7 +338,7 @@ flowchart LR
 
 Runtime/generated directories present in the live tree but **not** part of the curated config (created at runtime, gitignored or transient): `dev-registry/`, `worktrees/`, `sessions/`, `logs/`, `cache/`, `state/`, `specs/`, `todos/`, `projects/`, `venv/`, `shell-snapshots/`, `statsig/`, `paste-cache/`, `file-history/`, `graphify-out/`.
 
-External grounding docs (not in this repo): `/root/docs/git-protection-architecture.md`, `/root/docs/ramdisk-architecture.md`.
+The git-protection kernel and the ramdisk/nested-repo architecture are described in this document (§6 and §11 respectively) and implemented in the `hooks/` entry points referenced there; there is no separate grounding doc bundled in this repo.
 
 ---
 
@@ -356,7 +356,7 @@ External grounding docs (not in this repo): `/root/docs/git-protection-architect
 
 **Why rules-not-stories with explicit DO NOT sections?** Incident analysis showed that positive instructions alone leak: an agent told only "what's allowed" infers permission for adjacent dangerous actions. Every infrastructure-touching prompt now carries an explicit forbidden list.
 
-**Why the ramdisk + nested-repo architecture?** `~/.claude` symlinks to `/dev/shm/dev-workspace/dot-claude` to bypass a Ceph IOPS bottleneck and support many concurrent Claude Code processes (`/root/docs/ramdisk-architecture.md`). Because `.claude/` is its own git repo, config commits happen *inside* that path and never via `/root` — a constraint baked into the git wrappers and the `CLAUDE.md` §Nested .claude Repo rule.
+**Why the ramdisk + nested-repo architecture?** `~/.claude` symlinks to a tmpfs-backed working directory to bypass a disk-IOPS bottleneck and support many concurrent Claude Code processes. Because `.claude/` is its own git repo, config commits happen *inside* that path and never via the parent — a constraint baked into the git wrappers and the `CLAUDE.md` §Nested .claude Repo rule.
 
 **Why `disable-model-invocation: true` on release commands?** A `Skill`-tool call can invoke a slash command even when SlashCommand invocation is disabled, so every human-only command (`/commit`, `/push`, `/merge`, `/close`, `/do`, `/allow`, …) is *also* denied as `Skill(<name>:*)` in `permissions.deny` — the human is the trust root (`CLAUDE.md` lesson #15).
 
@@ -372,7 +372,7 @@ The config is plain Markdown + small scripts; doc-sync re-inventories the roster
 
 **Add a hook** — write `hooks/<name>.{py,sh}`, make `.sh` files executable (`chmod +x`), then wire it in `settings.json` under the right lifecycle event with the narrowest matcher. **Fail closed** (exit 2 on doubt) and **leave forensics**. Validate the JSON afterward (`python3 -m json.tool settings.json`). Remember the count that matters is what `settings.json` wires, not what sits in `hooks/`.
 
-**Extend the git kernel** — never weaken the always-on invariants in `/root/docs/git-protection-architecture.md` §Critical invariants (b5d447e protection, inline-env rejection, cross-bypass isolation, single-use grants, blessed-bridge regex, `/do` not bypassing the guard, task-id chain consistency). Each is verified by an acceptance criterion; regressing one is a production-catastrophe class change.
+**Extend the git kernel** — never weaken the always-on invariants enforced in `hooks/pretool-git-privilege-guard.py` and its sibling guards (b5d447e protection, inline-env rejection, cross-bypass isolation, single-use grants, blessed-bridge regex, `/do` not bypassing the guard, task-id chain consistency). Each is verified by an acceptance criterion; regressing one is a production-catastrophe class change.
 
 ---
 

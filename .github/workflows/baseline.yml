@@ -1,0 +1,89 @@
+# Baseline CI — NOT a comprehensive test suite.
+#
+# This workflow runs only cheap, deterministic baseline checks: a current-tree
+# secret scan, a shell-syntax pass (bash -n), a Python parse/compile pass over
+# hooks/ and scripts/, and grep assertions for this repo's cleanup invariants.
+# It deliberately EXCLUDES the throwaway scratch tests so they cannot fail CI;
+# a full test matrix is a separate, deferred roadmap item.
+name: baseline
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+
+jobs:
+  baseline:
+    name: baseline checks
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: Secret scan (current tree)
+        run: |
+          set -euo pipefail
+          echo "Scanning tracked files for obvious secret patterns..."
+          patterns='sk-[A-Za-z0-9]{20}|AKIA[0-9A-Z]{16}|-----BEGIN [A-Z ]*PRIVATE KEY-----|xox[baprs]-[A-Za-z0-9-]+'
+          if git grep -nIE "$patterns" -- . ; then
+            echo "::error::Potential secret detected in tracked files"
+            exit 1
+          fi
+          echo "No obvious secrets found."
+
+      - name: Shell syntax check (bash -n)
+        run: |
+          set -euo pipefail
+          echo "Running bash -n on tracked shell scripts..."
+          fail=0
+          while IFS= read -r f; do
+            [ -n "$f" ] || continue
+            if ! bash -n "$f"; then
+              echo "::error file=$f::bash -n failed"
+              fail=1
+            fi
+          done < <(git ls-files '*.sh' '*.bash')
+          exit "$fail"
+
+      - name: Python parse/compile (hooks + scripts)
+        run: |
+          set -euo pipefail
+          echo "Compiling tracked Python under hooks/ and scripts/..."
+          mapfile -t pyfiles < <(git ls-files 'hooks/**/*.py' 'hooks/*.py' 'scripts/**/*.py' 'scripts/*.py')
+          if [ "${#pyfiles[@]}" -eq 0 ]; then
+            echo "No Python files found under hooks/ or scripts/."
+            exit 0
+          fi
+          python3 -m py_compile "${pyfiles[@]}"
+          echo "All hooks/ and scripts/ Python compiled."
+
+      - name: Cleanup invariant assertions (zero-hit grep)
+        run: |
+          set -euo pipefail
+          echo "Asserting cleanup invariants from this repo's public-hygiene prep..."
+          # Patterns and the excluded path are assembled from fragments so this
+          # workflow file does not itself contain the literal residual strings it
+          # forbids, nor the literal scratch-test path it must not execute (both
+          # would self-trip assertions against this version-controlled file). The
+          # per-cycle scratch test directory is excluded from the residual grep
+          # because its acceptance-criteria docstrings/fixtures legitimately name
+          # the very patterns under test — those are not residual references.
+          status=0
+          exclude=":(exclude)tests/""generated/"
+          pat_excel="artifact-excel""-analyzer"
+          pat_oldrepo="claude-code""-config"
+          if git grep -nIE "$pat_excel" -- . "$exclude" ; then
+            echo "::error::residual analyzer reference still present"; status=1
+          fi
+          if git grep -nIE "$pat_oldrepo" -- . "$exclude" ; then
+            echo "::error::stale repo name still present"; status=1
+          fi
+          if git grep -nIE '/root/docs' -- README.md ARCHITECTURE.md NESTED-REPO.md ; then
+            echo "::error::broken grounding-doc links still present in README/ARCHITECTURE/NESTED-REPO"; status=1
+          fi
+          exit "$status"

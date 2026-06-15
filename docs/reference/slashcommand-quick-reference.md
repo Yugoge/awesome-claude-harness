@@ -57,7 +57,6 @@
 |---------|-------|-------------|
 | `/artifact-react [name] [libs]` | `/artifact-react dashboard d3,recharts` | Create standalone React app with libraries |
 | `/artifact-mermaid [type]` | `/artifact-mermaid flowchart` | Create interactive Mermaid diagrams |
-| `/artifact-excel-analyzer` | `/artifact-excel-analyzer` | Create Excel file analyzer with visualization |
 | `/quick-prototype [desc]` | `/quick-prototype "Task board with drag-drop"` | Rapid prototyping combining multiple tools |
 
 **Artifact types**:

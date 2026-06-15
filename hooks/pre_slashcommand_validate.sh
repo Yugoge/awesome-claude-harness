@@ -22,7 +22,6 @@ SAFE_COMMANDS=(
   "/playwright-helper"
   "/file-analyze"
   "/artifact-mermaid"
-  "/artifact-excel-analyzer"
   "/artifact-react"
   "/quick-prototype"
   "/deep-search"

@@ -1,7 +1,7 @@
 # scripts
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-06-11T19:45:51Z*
+*Last updated: 2026-06-14T23:32:43Z*
 **Total entries**: 108
 **Convention**: kebab
 
@@ -96,8 +96,8 @@ scripts/
 ├── `precommitted-recovery.sh` - Description: Recovery path helpers for nothing_to_commit_precommitted detection.
 ├── `qa-manifest-guard.py` - Dual-mode tool per BA spec docs/dev/ticket-20260529-081014.md M4:
 ├── `qa-report-stale-iter-lint.py` - lacks an explicit resolution marker
-├── `quick-excel` - unknown file
 ├── `refine-context.sh` - refine-context.sh — merge QA-refined context with original context
+├── `regen-index-dirs.py` - hand-written prose outside the generated stats+tree block), then regenerate the
 ├── `repair-venv.sh` - repair-venv.sh — durably restore a Python venv when its bin/python3 symlink target is missing.
 ├── `resolve-close-report.sh` - Resolve the close-report path for a given TASK_ID using subproject path-walk.
 ├── `resolve-dev-report.py` - Usage:

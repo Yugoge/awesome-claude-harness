@@ -31,6 +31,16 @@ SKIP_FILES = {
 IGNORE_DIRS = {
     'node_modules', '.git', '__pycache__', '.venv', 'venv',
     'dist', 'build', '.next', '.cache', 'coverage',
+    # Gitignored runtime/archive top-level dirs (task 20260614-205834): these
+    # are never tracked, so listing them in a tracked INDEX leaks deleted/ignored
+    # content on regen (e.g. archive/commands/* reappearing). Excluding them from
+    # the rendered tree mirrors the existing gitignored-leak-suppression intent
+    # above. NOTE: 'specs' is deliberately NOT here — it is handled selectively by
+    # _is_dot_claude_specs so legitimate non-.claude specs/ siblings survive.
+    'archive', 'backups', 'cache', 'debug', 'dev-registry', 'eval',
+    'file-history', 'graphify-out', 'logs', 'paste-cache', 'plans', 'plugins',
+    'projects', 'session-env', 'sessions', 'shell-snapshots', 'state',
+    'statsig', 'tasks', 'todos', 'worktrees',
 }
 # Prefix-aware leak suppression (spec-20260518-225715 Cycle 3 Debt 7 / AC-07):
 # cp-state-*.json runtime telemetry and spec-2026*-* spec views must NOT

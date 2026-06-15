@@ -754,7 +754,7 @@ bash ~/.claude/hooks/fswatch-manager.sh status
 ```
 
 **报告问题**：
-- GitHub Issues: https://github.com/Yugoge/claude-code-config/issues
+- GitHub Issues: https://github.com/Yugoge/awesome-claude-harness/issues
 - 日志文件：`~/.claude/logs/git-fswatch.log`
 
 ---

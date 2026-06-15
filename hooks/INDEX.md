@@ -1,7 +1,8 @@
 # hooks
 
-*Last updated: 2026-06-02T15:08:44Z*
-**Total entries**: 141
+<!-- AUTO:index-stats -->
+*Last updated: 2026-06-14T23:32:43Z*
+**Total entries**: 142
 **Convention**: kebab
 
 ## Tree
@@ -21,6 +22,8 @@ hooks/
 ├── git-hooks/
 │   ├── `post-commit-auto-push` - unknown file
 │   └── `pre-commit` - unknown file
+├── git-keystone/
+│   └── `reference-transaction` - unknown file
 ├── lib/
 │   ├── `agent_resolver.py` - Refactored from pretool-subagent-code-block.py::_find_agent_type so that
 │   ├── `allowlist.py` - Single source of truth for grant-read, grant-match, and grant-consume
@@ -30,6 +33,7 @@ hooks/
 │   ├── `close-verdict.py` - Shared CLOSE verdict classifier for commit/close tooling.
 │   ├── `closeout.py` - Public API:
 │   ├── `contract_runtime.py` - This module is the single shared engine consumed by every contract-aware
+│   ├── `overnight.py` - Single source of truth for "is a /dev-overnight session currently live?". A
 │   ├── `policy_registry.py` - Reads /root/.claude/policies/tool-policy.v1.json and provides a single
 │   ├── `runtime_guard.py` - This module contains ZERO project identifiers. Every project-specific name
 │   ├── `schema_registry.py` - Reads schemas/registry.json once and lazily loads referenced schema files
@@ -46,9 +50,11 @@ hooks/
 │   ├── `test_allowlist_consolidation.py` - Covers AC8 IS_SUBAGENT firewall scenarios and matching semantics invariants
 │   ├── `test_bash_safety_context.py` - Tests strip_non_executable_contexts() in isolation, covering the main
 │   ├── `test_bash_safety_context_rules.py` - converted to COMMAND_CONTEXT_STRIPPED in hooks/pretool-bash-safety.sh
+│   ├── `test_block_branch_pr_worktree.py` - The hook forbids branch / PR / worktree CREATION on the Bash surface, with three
 │   ├── `test_bulk_commit_sentinel.py` - Covers:
 │   ├── `test_commit_strip_dotfile_paths.py` - Bug surfaced cycle 20260511-100000: dev-report listed 6 `.claude/commands/*`
 │   ├── `test_cp_checkin.py` - of ba-spec-20260427-194324.md (P1 view-trigger removal + P2 generation field)
+│   ├── `test_do_taskid_mint.py` - Covers the root-cause fix for the do-report task-id collision (memory
 │   ├── `test_final_sweep.sh` - Final sweep — run inline AC checks and print PASS/FAIL summary.
 │   ├── `test_push_sentinel_abort.sh` - Unit test for AC1 V5: hooks/push.sh self-aborts before any real git push
 │   └── `test_runtime_guard.py` - Two layers:
@@ -86,22 +92,16 @@ hooks/
 ├── `pre-commit-check.sh` - pre-commit-check.sh - Detect untracked files before commit
 ├── `pre_slashcommand_validate.sh` - pre_slashcommand_validate.sh
 ├── `pre_tool_use_safety.sh` - PreToolUse Safety Hook - Warn before dangerous operations
-├── `prehook-overnight-worktree-check.sh` - UserPromptSubmit hook — block /dev-overnight launch if an applio worktree already exists.
 ├── `pretool-aggregate-check.py` - existence before allowing the orchestrator to dispatch the QA subagent in
 ├── `pretool-bash-safety.sh` - PreToolUse Safety Hook - Warn or block before dangerous operations
 ├── `pretool-bash-views-guard.py` - Parallels pretool-bash-safety.sh but focuses on views/cp-state write bypass
 ├── `pretool-bisect-gate.sh` - pretool-bisect-gate.sh
+├── `pretool-block-branch-pr-worktree.py` - Policy (user directive 2026-06-04; the verbatim user directive is preserved in
 ├── `pretool-block-enterworktree.sh` - PreToolUse hook: Block EnterWorktree tool
-├── `pretool-block-production-files.sh` - PreToolUse hook: Block Write/Edit to production paths from dev environment
-├── `pretool-block-production.sh` - PreToolUse hook: Block Playwright navigation to production URLs
 ├── `pretool-bulk-commit-detector.py` - Write to stderr and exit 0 (warn-only per user policy: no text-smell hard-blocks).
 ├── `pretool-claude-config-guard.py` - PreToolUse Hook: Claude config (.claude/hooks + .claude/commands) protection
 ├── `pretool-cp-checkin.py` - cp-state file read
 ├── `pretool-cp-state-write-guard.py` - Cycle-3 slim form (2026-05-14): Bash-extractor removed — 22-form adversarial
-├── `pretool-daily-trade-agent-concurrency.py` - Blocks the pathological failure mode from 2026-05-23: the daily-trade command
-├── `pretool-daily-trade-agent-concurrency.py.bak-exactdesc-20260523-194734` - bak-exactdesc-20260523-194734 file
-├── `pretool-daily-trade-agent-concurrency.py.bak-fix-20260523-194312` - bak-fix-20260523-194312 file
-├── `pretool-daily-trade-agent-concurrency.py.bak-narrow2-20260523-194350` - bak-narrow2-20260523-194350 file
 ├── `pretool-git-privilege-guard.py` - PreToolUse Hook: Agent git-privilege guard
 ├── `pretool-gitignore-preflight.py` - pretool-gitignore-preflight.py — PreToolUse hook (matcher: Agent)
 ├── `pretool-layer-escalation-check.sh` - pretool-layer-escalation-check.sh
@@ -119,6 +119,7 @@ hooks/
 ├── `pretool-tool-policy.py` - Single hook that consumes /root/.claude/policies/tool-policy.v1.json via
 ├── `pretool-workflow-gate.py` - PreToolUse Hook: Require TodoWrite/TodoRead acknowledgment before other tools
 ├── `pretool-worktree-guard.sh` - PreToolUse hook: Detect stale agent worktrees before ANY tool call
+├── `pretool-wrapper-userintent.py` - fix-4 (Cycle-2, spec-20260604-204954 §7.4). The /stop slash command releases
 ├── `pretool-write-guard.sh` - PreToolUse Hook - Block Write tool from overwriting existing files
 ├── `project-settings-template.json` - json config
 ├── `prompt-workflow.py` - UserPromptSubmit Hook: Checklist Injection for Slash Commands
@@ -145,10 +146,12 @@ hooks/
 ├── `subagentstop-codex-enforce.py` - Activation logic:
 ├── `subagentstop-cp-enforce.py` - Description: SubagentStop hook for spec checkpoint enforcement (W6).
 ├── `subagentstop-e2e-enforce.py` - Activation logic:
+├── `userprompt-bulk-commit-capability.py` - human prompt, NOT from an LLM-emitted Bash command
 ├── `userprompt-consent-allowlist.sh` - UserPromptSubmit Hook: parse `/allow <pattern>` and write a single-use
 ├── `userprompt-doc-sync-check.py` - UserPromptSubmit Hook: Periodic file deletion detection for doc-sync
 └── `userprompt-tmpfs-pressure.sh` - userprompt-tmpfs-pressure.sh — UserPromptSubmit hook (4th block, appended).
 ```
+<!-- /AUTO:index-stats -->
 
 ---
 *Auto-generated by doc-sync hook.*
