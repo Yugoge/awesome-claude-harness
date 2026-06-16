@@ -260,7 +260,28 @@ Most release commands carry `disable-model-invocation: true` so an agent can't s
 
 ## Quickstart
 
-> **Requirements:** [Claude Code](https://claude.com/claude-code), Python 3 (a venv at `~/.claude/venv` powers the helper scripts and Python hooks), and `git`. The Playwright MCP and an OpenAI Codex CLI are optional (they power UI audits and `--codex` rounds, respectively).
+### Dependencies (REQUIRED vs OPTIONAL)
+
+A newcomer can run the core development pipeline with just the **REQUIRED** rows; every optional integration degrades gracefully when its dependency is absent.
+
+| Dependency | Tier | What needs it |
+|---|---|---|
+| [Claude Code](https://claude.com/claude-code) | **REQUIRED** | The host. Must be recent enough to fire `UserPromptSubmit` / `Notification` / `SubagentStop` hook events, honor `disable-model-invocation` frontmatter, and enforce `Skill(*)` permission denies — older clients silently skip these and the guardrails won't engage. |
+| Python 3 + a venv at `~/.claude/venv` | **REQUIRED** | Runs every Python hook (the git kernel, gates) and helper script. The venv ships empty — you create it (Quickstart step 3). |
+| `git` | **REQUIRED** | The whole harness is git-native (checkpoints, grants, keystone). Any recent git (2.4x+) works for normal use; the overnight keystone's structural HEAD-switch protection needs **git ≥ 2.46** (verified by `scripts/overnight-git-selftest.sh`). |
+| `jq` | **REQUIRED** | JSON parsing in shell hooks/scripts across the pipeline. |
+| coreutils / util-linux | **REQUIRED** | `realpath`, `flock`, `stat`, `sha256sum`, `date`, `sed` are used pervasively. The GNU forms are assumed — BSD/macOS variants differ in flags and can break hooks; adapt or install GNU coreutils there. |
+| `pytest` | **REQUIRED** for `/test` + generated tests | `/test` and the test-writer's generated AC tests run under pytest. The Quickstart venv is empty, so install it yourself: `~/.claude/venv/bin/pip install pytest`. |
+| OpenAI Codex CLI + the `/root/bin/codex-iso` isolation wrapper | **REQUIRED** for `--codex` / `/codex` | The adversarial second-opinion rounds shell out to the Codex CLI through a fail-closed isolation wrapper. The wrapper path is author-specific — **you must supply your own** Codex CLI and wrapper. Without it, `--codex`/`/codex` are unavailable (the rest of the pipeline is unaffected). |
+| `openssl` | **REQUIRED** for `/merge`, `/push` | Nonce / token generation in the grant-gated git release path. |
+| `bwrap` (bubblewrap) | **REQUIRED** for `/dev-overnight` | The per-Bash bind-mount boundary that isolates overnight main-tree writes. |
+| `graphify` CLI (`graphifyy` v0.8.25 on PyPI; the binary is `graphify`) | OPTIONAL (graceful) | Incremental code-graph enrichment injected into the Dev context. Default-enabled (`CLAUDE_GRAPHIFY_ENABLED=auto`); if the binary is absent the pipeline degrades and proceeds. Install: `~/.claude/venv/bin/pip install graphifyy`, then point `GRAPHIFY_BIN` at the installed `graphify`. |
+| [Playwright MCP](https://github.com/microsoft/playwright-mcp) | OPTIONAL | Powers the UI-audit skill suite and the overnight PM's live-app exploration. Absent → UI/overnight-exploration steps are skipped. |
+| Python pkgs `jsonschema`, `yaml` (PyYAML), `websocket-client` | OPTIONAL (graceful) | Stricter schema validation and a few enrichments; hooks fall back to lenient paths when missing. |
+| `fswatch` | OPTIONAL | Backs `/fswatch` file-watching; not needed by the core pipeline. |
+| `node` + a user-supplied `EXCEL_ANALYZER` | OPTIONAL | `/file-analyze` spreadsheet/document analysis. You provide the analyzer; absent → that file type is skipped. |
+
+> **One-line summary:** install Claude Code + Python 3 + git + jq + GNU coreutils, create the venv, and `pip install pytest` — that covers the core `/dev → /close → /commit → /push` pipeline. Add the Codex CLI + wrapper for `--codex`, graphify for code-graph context, and Playwright MCP for UI/overnight work as you need them.
 
 ```bash
 # 1. Back up any existing config
