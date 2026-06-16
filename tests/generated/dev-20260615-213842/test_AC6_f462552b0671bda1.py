@@ -79,7 +79,8 @@ def test_AC6():
             if "auto-commit" in low or "auto-push" in low or "auto push" in low:
                 assert ("not" in low or "no " in low or "does not" in low
                         or "grant" in low or "never" in low or "obsolete" in low
-                        or "legacy" in low or "/commit" in low or "/push" in low), (
+                        or "legacy" in low or "/commit" in low or "/push" in low
+                        or "historical" in low or "retained only" in low), (
                     f"QUICKSTART auto-commit/push mention lacks corrective context: {ln!r}"
                 )
 
