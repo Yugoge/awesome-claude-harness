@@ -5,10 +5,23 @@
 # above (AC_UID, AC_TYPE, docstring) MUST be preserved verbatim so QA can
 # trace each test back to its source AC entry.
 
-import pytest
+import glob
+import os
+import subprocess
 
 AC_UID = "a93c7cf3201a9880"
 AC_TYPE = "data"
+
+
+def _repo_root():
+    return subprocess.check_output(
+        ["git", "rev-parse", "--show-toplevel"], text=True
+    ).strip()
+
+
+def _read(rel):
+    with open(os.path.join(_repo_root(), rel), encoding="utf-8") as f:
+        return f.read()
 
 
 def test_AC5():
@@ -17,10 +30,36 @@ def test_AC5():
     WHEN:  inspected after the fix
     THEN:  SECURITY.md no longer implies bundled non-redistributable skills ship; each install*.sh removed OR carries an unmissable LEGACY banner; ensure-git-repo.sh + smart-checkpoint.sh removed; no dangling references to removed files
     """
-    # TODO(dev): replace the line below with the real test body. While the
-    # TEST_INCOMPLETE sentinel is present the test will hard-fail, marking
-    # the AC as unimplemented for QA Phase 5.
-    # NOTE: assert SECURITY.md matches NOTICE (no bundled-skill implication);
-    # assert hooks/ensure-git-repo.sh and hooks/smart-checkpoint.sh are gone;
-    # assert install*.sh removed or LEGACY-bannered; assert no dangling refs.
-    pytest.fail(f"TEST_INCOMPLETE: {AC_UID} — SECURITY.md matches NOTICE, dead stub hooks removed, no dangling refs")
+    root = _repo_root()
+
+    # SECURITY.md must match NOTICE: skills were REMOVED, not currently bundled.
+    sec = _read(".github/SECURITY.md")
+    assert "some bundled third-party skills are non-redistributable" not in sec, (
+        "SECURITY.md still implies non-redistributable skills are bundled"
+    )
+    assert "removed" in sec.lower(), "SECURITY.md does not state the skills were removed"
+
+    # Dead stub hooks must be gone from disk.
+    for stub in ("hooks/ensure-git-repo.sh", "hooks/smart-checkpoint.sh"):
+        assert not os.path.exists(os.path.join(root, stub)), f"{stub} still present"
+
+    # Each install*.sh is removed OR carries an unmissable LEGACY banner.
+    for path in glob.glob(os.path.join(root, "hooks", "install*.sh")):
+        head = open(path, encoding="utf-8").read(600)
+        assert "LEGACY" in head, f"{os.path.basename(path)} present without a LEGACY banner"
+
+    # No tracked file may dangle a reference to a removed stub basename
+    # (excluding auto-generated INDEX/README and historical docs/tests).
+    cp = subprocess.run(
+        [
+            "git", "-C", root, "grep", "-l", "-E",
+            r"ensure-git-repo\.sh|smart-checkpoint\.sh",
+            "--",
+            ":!docs/", ":!tests/", ":!*/INDEX.md", ":!INDEX.md",
+            ":!*/README.md", ":!README.md",
+        ],
+        capture_output=True, text=True,
+    )
+    hits = [ln for ln in cp.stdout.splitlines() if ln.strip()]
+    assert not hits, f"dangling references to removed stubs: {hits}"
+
