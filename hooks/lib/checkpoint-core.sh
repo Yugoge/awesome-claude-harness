@@ -63,6 +63,14 @@ CHECKPOINT_PUSH_LOG_FILE="${CHECKPOINT_LOG_DIR}/checkpoint-push.log"
 CHECKPOINT_PUSH_MIN_INTERVAL="${CHECKPOINT_PUSH_MIN_INTERVAL:-30}"  # seconds
 CHECKPOINT_CAS_MAX_RETRIES="${CHECKPOINT_CAS_MAX_RETRIES:-5}"
 
+# Per-file ceiling for the pre-network oversized-ref gate (WI-1 M2/S1).
+# GitHub rejects any single blob over 100 MiB; transferring the whole pack only
+# to be rejected wastes bandwidth every cycle. Overridable.
+CHECKPOINT_REMOTE_MAX_FILE_BYTES="${CHECKPOINT_REMOTE_MAX_FILE_BYTES:-104857600}"  # 100 MiB
+# Short timeout for the remote-ref lookup so the gate (which runs inside the
+# fully-detached worker) cannot reintroduce the latency M1 removed.
+CHECKPOINT_REMOTE_LOOKUP_TIMEOUT="${CHECKPOINT_REMOTE_LOOKUP_TIMEOUT:-10}"  # seconds
+
 # Consecutive-failure alerting (2026-04-16 SaaS-grade ops gap fix).
 # Counter file tracks back-to-back write_checkpoint failures; on the 3rd
 # consecutive failure within one hook invocation we print a single stderr
@@ -135,6 +143,75 @@ _checkpoint_sweep_stale_indexes() {
     fi
 }
 
+# Internal: pre-network gate. Decides, BEFORE any push, whether the LOCAL
+# checkpoint tip carries an object absent from the REMOTE checkpoint ref AND
+# exceeding the per-file ceiling. Returns 0 (BLOCK push) when such an object
+# exists, 1 (ALLOW push) otherwise. Fails OPEN (return 1) on any remote-lookup
+# failure/timeout so a momentary outage never permanently suppresses
+# checkpoints. Sets _checkpoint_push_gate_oversized_name for the diagnostic line.
+#   $1 work_dir   absolute repo working tree (may be empty for cwd)
+#   $2 ref        refs/checkpoints/<branch>
+#   $3 local_sha  exact local checkpoint tip resolved by the caller (no TOCTOU)
+_checkpoint_push_gate_oversized_name=""
+_checkpoint_push_gate_oversized_blob() {
+    local work_dir="$1" ref="$2" local_sha="$3"
+    _checkpoint_push_gate_oversized_name=""
+    local -a git_cmd
+    if [ -n "$work_dir" ]; then git_cmd=(git -C "$work_dir"); else git_cmd=(git); fi
+
+    # GIT_TERMINAL_PROMPT=0 so a credential-needing remote can never hang the
+    # worker on a prompt; timeout bounds the network call.
+    local ls_out="" lookup_rc=0 remote_sha=""
+    if command -v timeout >/dev/null 2>&1; then
+        ls_out=$(GIT_TERMINAL_PROMPT=0 timeout "$CHECKPOINT_REMOTE_LOOKUP_TIMEOUT" \
+            "${git_cmd[@]}" ls-remote --refs origin "$ref" 2>/dev/null)
+        lookup_rc=$?
+    else
+        # No timeout available: fail OPEN rather than risk an unbounded hang.
+        return 1
+    fi
+
+    # Fail OPEN on lookup failure / timeout: never suppress pushes permanently.
+    if [ "$lookup_rc" -ne 0 ]; then
+        return 1
+    fi
+
+    # Lookup succeeded. Select the line whose ref name EXACTLY matches.
+    # Empty => remote ref ABSENT: compare local objects vs an EMPTY remote set.
+    remote_sha=$(printf '%s\n' "$ls_out" | awk -v r="$ref" '$2==r{print $1; exit}')
+
+    local -a not_args=()
+    if [ -n "$remote_sha" ]; then
+        # Verify the remote commit exists locally before rev-list --not.
+        if "${git_cmd[@]}" cat-file -e "${remote_sha}^{commit}" 2>/dev/null; then
+            not_args=(--not "$remote_sha")
+        else
+            return 1  # remote SHA not local -> cannot diff safely -> fail OPEN
+        fi
+    fi
+
+    # batch-check reads object METADATA only (not the blob content).
+    local largest=0
+    largest=$("${git_cmd[@]}" rev-list --objects "$local_sha" "${not_args[@]}" 2>/dev/null \
+        | awk '{print $1}' \
+        | "${git_cmd[@]}" cat-file --batch-check='%(objecttype) %(objectsize) %(objectname)' 2>/dev/null \
+        | awk '$1=="blob" && $2>max {max=$2} END{print max+0}')
+
+    if [ "${largest:-0}" -gt "$CHECKPOINT_REMOTE_MAX_FILE_BYTES" ]; then
+        local oid opath sz
+        while read -r oid opath; do
+            [ -z "$oid" ] && continue
+            sz=$("${git_cmd[@]}" cat-file -s "$oid" 2>/dev/null || echo 0)
+            if [ "${sz:-0}" -gt "$CHECKPOINT_REMOTE_MAX_FILE_BYTES" ]; then
+                _checkpoint_push_gate_oversized_name="${oid} (${sz} bytes, ${opath:-<no-path>})"
+                break
+            fi
+        done < <("${git_cmd[@]}" rev-list --objects "$local_sha" "${not_args[@]}" 2>/dev/null)
+        return 0
+    fi
+    return 1
+}
+
 # Internal: rate-limited background push of the checkpoint ref.
 # Skips if another push was attempted within CHECKPOINT_PUSH_MIN_INTERVAL seconds
 # for this repo. Uses repo-hash stamp file in /tmp/.
@@ -178,13 +255,32 @@ _checkpoint_rate_limited_push() {
     fi
     touch "$stamp_file" 2>/dev/null || true
 
+    # Resolve the exact local checkpoint tip ONCE so the object scanned by the
+    # gate is exactly the object pushed (no TOCTOU if the ref advances).
+    local local_sha
+    local_sha=$($git_cmd rev-parse --verify -q "${ref}^{commit}" 2>/dev/null)
+    if [ -z "$local_sha" ]; then
+        return 0
+    fi
+
+    # M1 (latency): the background command redirects its OWN fd0/fd1/fd2 so the
+    #   Stop hook sees end-of-stream of the inherited descriptors immediately and
+    #   returns <2 s; disown also detaches job control. (`setsid` alone would NOT
+    #   close inherited stdout/stderr — fd redirection is the load-bearing part.)
+    # M2 (waste gate): the gate runs INSIDE the detached worker (so its ls-remote
+    #   / rev-list cost never re-enters the hook's path) and decides, BEFORE any
+    #   network transfer, whether to skip a doomed oversized push. The rate-limit
+    #   above throttles how often this eligible-cycle path runs; when the window
+    #   allows, the GATE — not the rate-limit — decides whether the push happens.
     # Background push WITHOUT -f; CAS chain guarantees fast-forward.
-    # Redirect stdout to /dev/null, capture stderr to push log.
     (
-        if ! $git_cmd push origin "${ref}:${ref}" >/dev/null 2>>"$CHECKPOINT_PUSH_LOG_FILE"; then
+        mkdir -p "$CHECKPOINT_LOG_DIR" 2>/dev/null
+        if _checkpoint_push_gate_oversized_blob "$work_dir" "$ref" "$local_sha"; then
+            _checkpoint_push_log WARN "SKIP push ${ref}: local-minus-remote object exceeds ceiling (${CHECKPOINT_REMOTE_MAX_FILE_BYTES} bytes): ${_checkpoint_push_gate_oversized_name:-?} (repo=${abs_git_dir})"
+        elif ! GIT_TERMINAL_PROMPT=0 $git_cmd push origin "${local_sha}:${ref}" >/dev/null 2>>"$CHECKPOINT_PUSH_LOG_FILE"; then
             _checkpoint_push_log ERROR "push ${ref} failed (repo=${abs_git_dir})"
         fi
-    ) &
+    ) </dev/null >/dev/null 2>>"$CHECKPOINT_PUSH_LOG_FILE" &
     disown 2>/dev/null || true
 }
 
