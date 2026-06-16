@@ -5,7 +5,7 @@
 
 This repository is a **Claude Code global configuration** (`~/.claude` symlinks to it) that turns one chat agent into a disciplined software team. A main *orchestrator* agent is mechanically prevented from touching code and instead dispatches single-purpose **subagents**; a defense-in-depth chain of **PreToolUse / PostToolUse / Stop** hooks makes catastrophic git and filesystem mistakes structurally impossible; and an autonomous overnight loop explores, fixes, verifies, and commits in an isolated worktree until a wall-clock deadline. Everything here is plain Markdown prompts plus small Python/Bash hooks and scripts — the behavior change comes from *enforcement in code*, not from asking the model nicely.
 
-This document is the maintainer-facing companion to [`README.md`](README.md): the README is the value-prop overview, this file goes deeper into mechanisms, data flows, lifecycles, and the *why* behind the design. The two share the same verified component counts and terminology.
+This document is the maintainer-facing companion to [`README.md`](README.md): the README is the value-prop overview, this file goes deeper into mechanisms, data flows, lifecycles, and the *why* behind the design. The component counts in §1 are recomputed from the live `settings.json` and are kept in step with the README badge.
 
 ---
 
