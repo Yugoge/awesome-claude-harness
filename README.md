@@ -290,13 +290,16 @@ mv ~/.claude ~/.claude.bak 2>/dev/null || true
 # 2. Clone this repo to ~/.claude
 git clone https://github.com/Yugoge/awesome-claude-harness.git ~/.claude
 
-# 3. Create the Python venv the scripts/hooks expect
+# 3. Create the Python venv the scripts/hooks expect (it ships empty)
 python3 -m venv ~/.claude/venv
 
-# 4. Make the shell hooks executable
+# 4. Install pytest into the venv (REQUIRED for /test and generated AC tests)
+~/.claude/venv/bin/pip install pytest
+
+# 5. Make the shell hooks executable
 chmod +x ~/.claude/hooks/*.sh
 
-# 5. Start Claude Code — the SessionStart hooks announce the environment.
+# 6. Start Claude Code — the SessionStart hooks announce the environment.
 claude
 ```
 
