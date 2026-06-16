@@ -85,7 +85,7 @@ HOOK_CHECK = {hook_check_repr}
 
 
 def {func_name}():
-    """
+    r"""
     {doc_given}
     {doc_when}
     {doc_then}

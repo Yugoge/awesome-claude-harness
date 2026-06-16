@@ -1,0 +1,463 @@
+{
+  "schema_version": "1.1",
+  "task_id": "dev-20260616-204226",
+  "generated_at": "2026-06-16T23:57:11Z",
+  "active_tests": [
+    {
+      "task_id": "dev-20260616-204226",
+      "ac_id": "AC-WS1-1",
+      "ac_uid": "ws1res-structural01",
+      "type": "hook",
+      "file": "tests/generated/dev-20260616-204226/test_AC_WS1_1_ws1res-structural01.py",
+      "status": "active",
+      "hook_check": {
+        "method": "shell",
+        "probe": "invoke each resolver from a clone whose root basename != '.claude'; assert printed path == clone root and exit 0",
+        "expect_exit": 0
+      }
+    },
+    {
+      "task_id": "dev-20260616-204226",
+      "ac_id": "AC-WS1-2",
+      "ac_uid": "ws1res-envvalidate2",
+      "type": "hook",
+      "file": "tests/generated/dev-20260616-204226/test_AC_WS1_2_ws1res-envvalidate2.py",
+      "status": "active",
+      "hook_check": {
+        "method": "shell",
+        "probe": "set CLAUDE_HOME=/tmp/wrong; assert resolver still returns script-walk root; then set CLAUDE_HOME=<symlink to real root>; assert honored",
+        "expect_exit": 0
+      }
+    },
+    {
+      "task_id": "dev-20260616-204226",
+      "ac_id": "AC-WS1-3",
+      "ac_uid": "ws1req-failclosed002",
+      "type": "hook",
+      "file": "tests/generated/dev-20260616-204226/test_AC_WS1_3_ws1req-failclosed002.py",
+      "status": "active",
+      "hook_check": {
+        "method": "shell",
+        "probe": "call resolve_required on a missing relpath in both helpers; assert exit code == 2 and a block reason is on stderr",
+        "expect_exit": 2
+      }
+    },
+    {
+      "task_id": "dev-20260616-204226",
+      "ac_id": "AC-WS1-4",
+      "ac_uid": "ws1opt-absentdegrade3",
+      "type": "hook",
+      "file": "tests/generated/dev-20260616-204226/test_AC_WS1_4_ws1opt-absentdegrade3.py",
+      "status": "active",
+      "hook_check": {
+        "method": "shell",
+        "probe": "call resolve_optional on a missing relpath; assert it signals absent without exiting the process non-2",
+        "expect_exit": 0
+      }
+    },
+    {
+      "task_id": "dev-20260616-204226",
+      "ac_id": "AC-WS1-5",
+      "ac_uid": "ws1tp-noopenfailimp4",
+      "type": "hook",
+      "file": "tests/generated/dev-20260616-204226/test_AC_WS1_5_ws1tp-noopenfailimp4.py",
+      "status": "active",
+      "hook_check": {
+        "method": "shell",
+        "probe": "(a) simulate import failure of the deny module post-migration -> assert exit == 2 AND NOT 0 AND NOT 1, block marker on stderr; (b) relocate the policy file and request a dev-role Write -> assert deny (exit 2); (c) unparseable policy JSON -> assert exit 2",
+        "expect_exit": 2
+      }
+    },
+    {
+      "task_id": "dev-20260616-204226",
+      "ac_id": "AC-WS1-6",
+      "ac_uid": "ws1sc-stopfailclosed5",
+      "type": "hook",
+      "file": "tests/generated/dev-20260616-204226/test_AC_WS1_6_ws1sc-stopfailclosed5.py",
+      "status": "active",
+      "hook_check": {
+        "method": "shell",
+        "probe": "(a) verifier absent + spec touched -> assert exit 2 (not 0); (b) verifier present + under-covered split -> assert exit 2",
+        "expect_exit": 2
+      }
+    },
+    {
+      "task_id": "dev-20260616-204226",
+      "ac_id": "AC-WS1-7",
+      "ac_uid": "ws1tp-unknownroleblk7",
+      "type": "hook",
+      "file": "tests/generated/dev-20260616-204226/test_AC_WS1_7_ws1tp-unknownroleblk7.py",
+      "status": "active",
+      "hook_check": {
+        "method": "shell",
+        "probe": "feed a payload with agent_id set + an unresolvable role + a protected Write target with no grace sentinel; assert exit == 2 (not 0)",
+        "expect_exit": 2
+      }
+    },
+    {
+      "task_id": "dev-20260616-204226",
+      "ac_id": "AC-WS1-8",
+      "ac_uid": "ws1rg-generictilde08",
+      "type": "hook",
+      "file": "tests/generated/dev-20260616-204226/test_AC_WS1_8_ws1rg-generictilde08.py",
+      "status": "active",
+      "hook_check": {
+        "method": "shell",
+        "probe": "set HOME=/home/alice with a protected path under it; assert the ~/relative variant is generated and the guard protects it; assert no /root-only branch is required",
+        "expect_exit": 0
+      }
+    },
+    {
+      "task_id": "dev-20260616-204226",
+      "ac_id": "AC-WS1-9",
+      "ac_uid": "ws1bare-rootdefault9",
+      "type": "hook",
+      "file": "tests/generated/dev-20260616-204226/test_AC_WS1_9_ws1bare-rootdefault9.py",
+      "status": "active",
+      "hook_check": {
+        "method": "shell",
+        "probe": "unset CLAUDE_PROJECT_DIR and HOME; invoke each site from a non-root clone; assert no resolved path contains the literal '/root' as an author-home default; security-relevant sites fail closed",
+        "expect_exit": 0
+      }
+    },
+    {
+      "task_id": "dev-20260616-204226",
+      "ac_id": "AC-WS3-1",
+      "ac_uid": "ws3gen-nolitsrender01",
+      "type": "data",
+      "file": "tests/generated/dev-20260616-204226/test_AC_WS3_1_ws3gen-nolitsrender01.py",
+      "status": "active",
+      "hook_check": {
+        "method": "shell",
+        "probe": "render against a temp home; grep executable fields for forbidden literals -> zero hits; assert GRAPHIFY_BIN reflects the temp home",
+        "expect_exit": 0
+      }
+    },
+    {
+      "task_id": "dev-20260616-204226",
+      "ac_id": "AC-WS3-2",
+      "ac_uid": "ws3gen-abortnopartial2",
+      "type": "data",
+      "file": "tests/generated/dev-20260616-204226/test_AC_WS3_2_ws3gen-abortnopartial2.py",
+      "status": "active",
+      "hook_check": {
+        "method": "shell",
+        "probe": "feed a template that renders to invalid JSON / drops a required hook -> assert renderer exits nonzero and live settings.json is byte-identical to before",
+        "expect_exit": 1
+      }
+    },
+    {
+      "task_id": "dev-20260616-204226",
+      "ac_id": "AC-WS3-3",
+      "ac_uid": "ws3gen-nobroaden00003",
+      "type": "data",
+      "file": "tests/generated/dev-20260616-204226/test_AC_WS3_3_ws3gen-nobroaden00003.py",
+      "status": "active",
+      "hook_check": {
+        "method": "shell",
+        "probe": "diff rendered permissions vs template (placeholders normalized) -> only placeholder substitutions differ; no new/broadened allow entries",
+        "expect_exit": 0
+      }
+    },
+    {
+      "task_id": "dev-20260616-204226",
+      "ac_id": "AC-WS3-4",
+      "ac_uid": "ws3det-jsoncoverage04",
+      "type": "data",
+      "file": "tests/generated/dev-20260616-204226/test_AC_WS3_4_ws3det-jsoncoverage04.py",
+      "status": "active",
+      "hook_check": {
+        "method": "shell",
+        "probe": "plant /root in a copy of settings.json -> detector flags it; plant a bare /root default in a hook (PROJ=\"${CLAUDE_PROJECT_DIR:-/root}\", os.environ.get(\"HOME\",\"/root\")) -> detector flags each; plant a JSON \"default\": \"/root\" -> detector flags it; plant a Write(file_path=\"/root/...\") AND a Read(file_path=\"/root/...\") tool-operand literal in a command .md -> detector flags both; plant a /root/docs/... plain-prose dispatch-read ('Read /root/docs/foo.md' / 'Follow instructions in /root/...') in a command .md -> detector flags it; plant a CONTROL_ROOT=/root runtime default in an agent .md -> detector flags it; clean rendered file + a per-literal-allowlisted prose mention -> detector passes",
+        "expect_exit": 0
+      }
+    },
+    {
+      "task_id": "dev-20260616-204226",
+      "ac_id": "AC-WS3-5",
+      "ac_uid": "ws3gen-denyparity0005",
+      "type": "data",
+      "file": "tests/generated/dev-20260616-204226/test_AC_WS3_5_ws3gen-denyparity0005.py",
+      "status": "active",
+      "hook_check": {
+        "method": "shell",
+        "probe": "structurally compare permissions.{deny,ask,allow} and hooks.* before/after render: assert deny set is preserved (no drop), ask preserved, allow not broadened, hook arrays identical in entries+order; compute the human-only Skill deny set from the command/skill inventory and assert all present",
+        "expect_exit": 0
+      }
+    },
+    {
+      "task_id": "dev-20260616-204226",
+      "ac_id": "AC-WS3-6",
+      "ac_uid": "ws3ext-helperenvres6",
+      "type": "hook",
+      "file": "tests/generated/dev-20260616-204226/test_AC_WS3_6_ws3ext-helperenvres6.py",
+      "status": "active",
+      "hook_check": {
+        "method": "shell",
+        "probe": "unset the helper env var + remove /root/bin/*; run a --codex flow -> assert it does NOT invoke bare codex and either fails closed or prints 'unavailable'; set CODEX_ISO_BIN to a temp wrapper -> assert it is used",
+        "expect_exit": 0
+      }
+    },
+    {
+      "task_id": "dev-20260616-204226",
+      "ac_id": "AC-WS5-1",
+      "ac_uid": "ws5gen-trackedonly001",
+      "type": "data",
+      "file": "tests/generated/dev-20260616-204226/test_AC_WS5_1_ws5gen-trackedonly001.py",
+      "status": "active",
+      "hook_check": {
+        "method": "shell",
+        "probe": "create a gitignored file in a synced dir, run the generator, assert the gitignored file is absent from the output",
+        "expect_exit": 0
+      }
+    },
+    {
+      "task_id": "dev-20260616-204226",
+      "ac_id": "AC-WS5-2",
+      "ac_uid": "ws5gen-nounknownempt2",
+      "type": "data",
+      "file": "tests/generated/dev-20260616-204226/test_AC_WS5_2_ws5gen-nounknownempt2.py",
+      "status": "active",
+      "hook_check": {
+        "method": "shell",
+        "probe": "run generator on a representative dir; grep output for 'unknown file' and empty-description list items -> zero",
+        "expect_exit": 0
+      }
+    },
+    {
+      "task_id": "dev-20260616-204226",
+      "ac_id": "AC-WS5-3",
+      "ac_uid": "ws5gen-countsagree003",
+      "type": "data",
+      "file": "tests/generated/dev-20260616-204226/test_AC_WS5_3_ws5gen-countsagree003.py",
+      "status": "active",
+      "hook_check": {
+        "method": "shell",
+        "probe": "extract generated count + curated badge count; assert equal",
+        "expect_exit": 0
+      }
+    },
+    {
+      "task_id": "dev-20260616-204226",
+      "ac_id": "AC-WS7-1",
+      "ac_uid": "ws7cmd-portableexec01",
+      "type": "data",
+      "file": "tests/generated/dev-20260616-204226/test_AC_WS7_1_ws7cmd-portableexec01.py",
+      "status": "active",
+      "hook_check": {
+        "method": "shell",
+        "probe": "from a fresh non-root clone with /root absent, run a full-surface scan over commands/*.md + agents/*.md + skills/*/SKILL.md + schemas/*.json for author-absolute path literals in the four load-bearing classes (a/b/c/d) USING the boundary-aware (?<![\\w./])(?:/root(?:/|(?=$|[^\\w./-]))|/dev/shm/dev-workspace(?:/|(?=$|[^\\w./-]))) pattern (catches /root/docs + /root/templates + bare-/root env-default boundary forms); assert ZERO remain (allowlisting only purely-illustrative prose by per-literal entry); assert each evidence anchor is fixed: dev-overnight.md:256-258 uses the Bash-redirect $CLAUDE_PROJECT_DIR form or an orchestrator-inlined resolved absolute path (NOT a literal /root and NOT an unexpanded shell-var token inside the Write operand); commit.md:341/343 dispatch-read resolves via the resolver; qa.md:896/905 uses UI_EVIDENCE_AUDIT_BIN; changelog-analyst.md:17 default is resolver/env-derived not /root; dev-command.md:68 dispatch-read resolves via the resolver/$CLAUDE_PROJECT_DIR; ui-specialist.md:10 + dev-overnight.md:1882 template ref resolves portably; commit.md:50 fallback-default tracks the migrated resolve-close-report.sh; assert per-literal-allowlisted prose lines (dev.md:1566/1570/1592/1598/1612/1618) are unchanged",
+        "expect_exit": 0
+      }
+    },
+    {
+      "task_id": "dev-20260616-204226",
+      "ac_id": "AC-WS7-2",
+      "ac_uid": "ws7spec-failclosed335",
+      "type": "data",
+      "file": "tests/generated/dev-20260616-204226/test_AC_WS7_2_ws7spec-failclosed335.py",
+      "status": "active",
+      "hook_check": {
+        "method": "shell",
+        "probe": "grep commands/spec.md COVERAGE step; assert it no longer contains a 'skip ... manual coverage check' fail-open branch and instead routes a missing required verifier to a block/install-error path resolved via the resolver",
+        "expect_exit": 0
+      }
+    },
+    {
+      "task_id": "dev-20260616-204226",
+      "ac_id": "AC-WS7-3",
+      "ac_uid": "ws7skill-schemadflt3",
+      "type": "data",
+      "file": "tests/generated/dev-20260616-204226/test_AC_WS7_3_ws7skill-schemadflt3.py",
+      "status": "active",
+      "hook_check": {
+        "method": "shell",
+        "probe": "from a fresh non-root clone, exercise a skill read path + a schema-default consumer; assert the data file resolves within the clone (no /root dependency) OR a per-literal non-load-bearing proof is recorded",
+        "expect_exit": 0
+      }
+    },
+    {
+      "task_id": "dev-20260616-204226",
+      "ac_id": "AC-WS4-1",
+      "ac_uid": "ws4opt-noptcrash0001",
+      "type": "hook",
+      "file": "tests/generated/dev-20260616-204226/test_AC_WS4_1_ws4opt-noptcrash0001.py",
+      "status": "active",
+      "hook_check": {
+        "method": "shell",
+        "probe": "run session-start + a /dev-shaped step with all optional capabilities absent; assert no crash/hang, exit 0, and a one-line unavailable message present",
+        "expect_exit": 0
+      }
+    },
+    {
+      "task_id": "dev-20260616-204226",
+      "ac_id": "AC-WS4-2",
+      "ac_uid": "ws4doc-contractword02",
+      "type": "data",
+      "file": "tests/generated/dev-20260616-204226/test_AC_WS4_2_ws4doc-contractword02.py",
+      "status": "active",
+      "hook_check": {
+        "method": "shell",
+        "probe": "grep README for the contract wording: a 'core runs / extras need setup' separation + a reference to the fresh-clone smoke test",
+        "expect_exit": 0
+      }
+    },
+    {
+      "task_id": "dev-20260616-204226",
+      "ac_id": "AC-WS4-3",
+      "ac_uid": "ws4doc-trusttable0003",
+      "type": "data",
+      "file": "tests/generated/dev-20260616-204226/test_AC_WS4_3_ws4doc-trusttable0003.py",
+      "status": "active",
+      "hook_check": {
+        "method": "shell",
+        "probe": "grep for a trust-model statement and a fail-closed-vs-skip table with both 'fail closed' and 'skip' rows",
+        "expect_exit": 0
+      }
+    },
+    {
+      "task_id": "dev-20260616-204226",
+      "ac_id": "AC-FR-1",
+      "ac_uid": "fr1boot-creates00001",
+      "type": "hook",
+      "file": "tests/generated/dev-20260616-204226/test_AC_FR_1_fr1boot-creates00001.py",
+      "status": "active",
+      "hook_check": {
+        "method": "shell",
+        "probe": "run bootstrap against a temp home -> assert venv created, manifest deps installed, resolver self-check passes, exit 0; run against a pre-existing home without opt-in -> assert it refuses to clobber and prints restore guidance",
+        "expect_exit": 0
+      }
+    },
+    {
+      "task_id": "dev-20260616-204226",
+      "ac_id": "AC-FR-2",
+      "ac_uid": "fr2doc-reportsmiss02",
+      "type": "hook",
+      "file": "tests/generated/dev-20260616-204226/test_AC_FR_2_fr2doc-reportsmiss02.py",
+      "status": "active",
+      "hook_check": {
+        "method": "shell",
+        "probe": "uninstall a required dep -> doctor names it + exits nonzero; install all -> doctor exits 0",
+        "expect_exit": 0
+      }
+    },
+    {
+      "task_id": "dev-20260616-204226",
+      "ac_id": "AC-FR-3",
+      "ac_uid": "fr3man-includesdeps3",
+      "type": "data",
+      "file": "tests/generated/dev-20260616-204226/test_AC_FR_3_fr3man-includesdeps3.py",
+      "status": "active",
+      "hook_check": {
+        "method": "shell",
+        "probe": "parse the manifest; assert pytest, jsonschema, pyyaml present",
+        "expect_exit": 0
+      }
+    },
+    {
+      "task_id": "dev-20260616-204226",
+      "ac_id": "AC-FR-4",
+      "ac_uid": "fr4inst-nonclobber04",
+      "type": "hook",
+      "file": "tests/generated/dev-20260616-204226/test_AC_FR_4_fr4inst-nonclobber04.py",
+      "status": "active",
+      "hook_check": {
+        "method": "shell",
+        "probe": "run install over a populated home without opt-in -> refuse + restore doc; with opt-in -> backup created before apply",
+        "expect_exit": 1
+      }
+    },
+    {
+      "task_id": "dev-20260616-204226",
+      "ac_id": "AC-WS2-1",
+      "ac_uid": "ws2smk-negativeblock1",
+      "type": "hook",
+      "file": "tests/generated/dev-20260616-204226/test_AC_WS2_1_ws2smk-negativeblock1.py",
+      "status": "active",
+      "hook_check": {
+        "method": "shell",
+        "probe": "run the smoke test from a temp HOME not under /root or /dev/shm; assert each guard's negative case returns exit 2 with its distinctive marker (distinguishable from an ordinary permission prompt)",
+        "expect_exit": 0
+      }
+    },
+    {
+      "task_id": "dev-20260616-204226",
+      "ac_id": "AC-WS2-2",
+      "ac_uid": "ws2smk-positivecanry2",
+      "type": "hook",
+      "file": "tests/generated/dev-20260616-204226/test_AC_WS2_2_ws2smk-positivecanry2.py",
+      "status": "active",
+      "hook_check": {
+        "method": "shell",
+        "probe": "plant a canary that only the intended guard would act on; run each guard in a fresh env -i subprocess; assert the observed block reason references the canary / intended guard",
+        "expect_exit": 0
+      }
+    },
+    {
+      "task_id": "dev-20260616-204226",
+      "ac_id": "AC-WS2-3",
+      "ac_uid": "ws2smk-cleanexitcode3",
+      "type": "hook",
+      "file": "tests/generated/dev-20260616-204226/test_AC_WS2_3_ws2smk-cleanexitcode3.py",
+      "status": "active",
+      "hook_check": {
+        "method": "shell",
+        "probe": "assert exit-code matrix (allowed=0, blocked=2, none=1/126/127 for required) and clean stderr",
+        "expect_exit": 0
+      }
+    },
+    {
+      "task_id": "dev-20260616-204226",
+      "ac_id": "AC-WS2-4",
+      "ac_uid": "ws2smk-undercovblock4",
+      "type": "hook",
+      "file": "tests/generated/dev-20260616-204226/test_AC_WS2_4_ws2smk-undercovblock4.py",
+      "status": "active",
+      "hook_check": {
+        "method": "shell",
+        "probe": "(a) feed an under-covered spec split -> assert exit 2; (b) hide the required verifier + touch a spec -> assert exit 2 with install-error message (not 0); (c) restore verifier + full coverage -> assert exit 0",
+        "expect_exit": 0
+      }
+    },
+    {
+      "task_id": "dev-20260616-204226",
+      "ac_id": "AC-WS2-5",
+      "ac_uid": "ws2smk-optunavailmsg5",
+      "type": "hook",
+      "file": "tests/generated/dev-20260616-204226/test_AC_WS2_5_ws2smk-optunavailmsg5.py",
+      "status": "active",
+      "hook_check": {
+        "method": "shell",
+        "probe": "run optional-capability + external-helper path with env vars unset; assert one-line unavailable + no crash + no bare-tool fallback; assert test naming/docstring scopes green to core+guards",
+        "expect_exit": 0
+      }
+    },
+    {
+      "task_id": "dev-20260616-204226",
+      "ac_id": "AC-WS2-6",
+      "ac_uid": "ws2smk-zerolitsgate6",
+      "type": "data",
+      "file": "tests/generated/dev-20260616-204226/test_AC_WS2_6_ws2smk-zerolitsgate6.py",
+      "status": "active",
+      "hook_check": {
+        "method": "shell",
+        "probe": "run the AC-WS3-4 detector (boundary-aware (?<![\\w./])(?:/root(?:/|(?=$|[^\\w./-]))|/dev/shm/dev-workspace(?:/|(?=$|[^\\w./-]))) pattern, four-class context classification) across the rendered fresh clone as an integration gate; assert zero load-bearing author literals in the defined surfaces incl. the /root/docs + /root/templates class AND the bare-/root env-default boundary forms; assert per-literal-allowlisted contexts exempt",
+        "expect_exit": 0
+      }
+    },
+    {
+      "task_id": "dev-20260616-204226",
+      "ac_id": "AC-WS6-1",
+      "ac_uid": "ws6dem-blockthengrnt1",
+      "type": "hook",
+      "file": "tests/generated/dev-20260616-204226/test_AC_WS6_1_ws6dem-blockthengrnt1.py",
+      "status": "active",
+      "hook_check": {
+        "method": "shell",
+        "probe": "run the demo script under a non-root home twice; assert deterministic block-then-grant-then-complete; assert the cast is optional",
+        "expect_exit": 0
+      }
+    }
+  ],
+  "archived_tests": []
+}
