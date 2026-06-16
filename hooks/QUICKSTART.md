@@ -1,8 +1,13 @@
-# 🚀 Quick Start Guide
+# Quick Start — the hooks layer
 
-## ✅ Installation Complete!
-
-All configuration files and scripts have been installed to `~/.claude/hooks/`
+> **Important — this harness does NOT auto-commit or auto-push.** An earlier
+> version of this guide described a "commit + push after every response" model.
+> That model is **wrong for this repo**: git mutations here are *never* automatic —
+> they pass through a single-use, human-authorized **grant kernel** (`/commit` and
+> `/push` write the grant; `hooks/pretool-git-privilege-guard.py` validates and
+> consumes it). The sections below about auto-commit/auto-push are retained only as
+> historical context and do **not** reflect current behavior. For the real model
+> see the root [`README.md`](../README.md) and [`ARCHITECTURE.md`](../ARCHITECTURE.md) §6.
 
 ---
 

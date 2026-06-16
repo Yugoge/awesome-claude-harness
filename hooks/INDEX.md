@@ -1,8 +1,8 @@
 # hooks
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-06-15T10:37:17Z*
-**Total entries**: 141
+*Last updated: 2026-06-16T08:34:58Z*
+**Total entries**: 142
 **Convention**: kebab
 
 ## Tree
@@ -125,7 +125,8 @@ hooks/
 ├── `prompt-workflow.py` - UserPromptSubmit Hook: Checklist Injection for Slash Commands
 ├── `protection-status.sh` - protection-status.sh - Display protection status for all git repositories
 ├── `pull.sh` - pull.sh - Executable version of /pull command
-├── `QUICKSTART.md` - 🚀 Quick Start Guide
+├── `push.sh` - push.sh - Executable version of /push command
+├── `QUICKSTART.md` - Quick Start — the hooks layer
 ├── `README-TODO-INJECTION.md` - Global Todo Injection Hook
 ├── `sentinel-lint.sh` - sentinel-lint.sh - Guards the dev-registry sentinel anchor in orchestrator files
 ├── `session-git-init.sh` - ============================================================================
