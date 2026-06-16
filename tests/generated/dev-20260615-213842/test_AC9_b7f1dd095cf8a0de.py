@@ -5,10 +5,20 @@
 # above (AC_UID, AC_TYPE, docstring) MUST be preserved verbatim so QA can
 # trace each test back to its source AC entry.
 
-import pytest
+import os
+import subprocess
 
 AC_UID = "b7f1dd095cf8a0de"
 AC_TYPE = "data"
+
+FORBIDDEN = ["star", "10000", "10,000", "popularity", "vanity"]
+DRAFT = "docs/dev/commit-message-dev-20260615-213842.txt"
+
+
+def _repo_root():
+    return subprocess.check_output(
+        ["git", "rev-parse", "--show-toplevel"], text=True
+    ).strip()
 
 
 def test_AC9():
@@ -17,9 +27,19 @@ def test_AC9():
     WHEN:  inspected
     THEN:  it contains no reference to stars, '10000', popularity, or a vanity-metric goal
     """
-    # TODO(dev): replace the line below with the real test body. While the
-    # TEST_INCOMPLETE sentinel is present the test will hard-fail, marking
-    # the AC as unimplemented for QA Phase 5.
-    # NOTE: assert the commit message contains none of: star, 10000, 10,000,
-    # popularity, vanity.
-    pytest.fail(f"TEST_INCOMPLETE: {AC_UID} — commit message free of star/10000/popularity/vanity tokens")
+    root = _repo_root()
+    # Prefer the commit-message draft this cycle produced; fall back to HEAD's
+    # message once the work is committed.
+    draft_path = os.path.join(root, DRAFT)
+    if os.path.exists(draft_path):
+        msg = open(draft_path, encoding="utf-8").read()
+    else:
+        msg = subprocess.run(
+            ["git", "-C", root, "log", "-1", "--pretty=%B"],
+            capture_output=True, text=True,
+        ).stdout
+
+    low = msg.lower()
+    present = [tok for tok in FORBIDDEN if tok.lower() in low]
+    assert not present, f"commit message contains forbidden vanity tokens: {present}"
+
