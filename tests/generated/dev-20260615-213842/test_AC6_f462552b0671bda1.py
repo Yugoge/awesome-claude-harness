@@ -56,9 +56,32 @@ def test_AC6():
         assert "Auto-commit + push after each response" not in quick, (
             "QUICKSTART still teaches auto-commit+push after each response"
         )
-        assert "Installation Complete!" not in quick or "LEGACY" in quick or "does NOT" in quick, (
-            "QUICKSTART still leads with an uncorrected 'Installation Complete!' auto model"
+        assert "Installation Complete!" not in quick, (
+            "QUICKSTART still leads with the uncorrected 'Installation Complete!' headline"
         )
+        # It must not instruct the reader to EDIT auto-commit.sh, nor present a
+        # Stop-hook auto-commit snippet as the expected wiring. The only
+        # remaining auto-commit mentions must be in the corrective banner /
+        # NOT-auto-push statements.
+        assert "nano ~/.claude/hooks/auto-commit.sh" not in quick, (
+            "QUICKSTART still instructs editing auto-commit.sh"
+        )
+        assert "Disable Auto Push" not in quick, (
+            "QUICKSTART still presents a 'Disable Auto Push' option"
+        )
+        assert 'command": "bash ~/.claude/hooks/auto-commit.sh' not in quick, (
+            "QUICKSTART still shows a Stop-hook auto-commit.sh wiring snippet"
+        )
+        # Every surviving 'auto-commit'/'auto-push' mention must be on a line
+        # that also makes clear it does NOT happen (corrective context).
+        for ln in quick.splitlines():
+            low = ln.lower()
+            if "auto-commit" in low or "auto-push" in low or "auto push" in low:
+                assert ("not" in low or "no " in low or "does not" in low
+                        or "grant" in low or "never" in low or "obsolete" in low
+                        or "legacy" in low or "/commit" in low or "/push" in low), (
+                    f"QUICKSTART auto-commit/push mention lacks corrective context: {ln!r}"
+                )
 
     # settings.json contains no CJK text anywhere.
     settings = _read("settings.json")
