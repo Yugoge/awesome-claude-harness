@@ -179,30 +179,27 @@ grep -o 'pretool-git-privilege-guard.py' ~/.claude/settings.json | head -1
 
 ---
 
-## ❓ FAQ
+## FAQ
 
-**Q: I don't see auto-commits?**
+**Q: Why didn't my work get committed automatically?**
 
-A: Check:
-1. Have you restarted Claude Code
-2. Run `ls -lh ~/.claude/hooks/*.sh` to confirm scripts are executable
-3. Check Claude Code output for error messages
+A: By design — nothing commits or pushes on its own. Run `/commit` then `/push`
+(each is grant-gated), or commit/push from your own shell as a human.
 
-**Q: Push fails?**
+**Q: A commit or push is being blocked.**
 
-A: Check:
-1. `gh auth status` - Confirm logged in
-2. `git remote -v` - Confirm remote repository exists
-3. `git push` - Manually test push
+A: That is the git kernel working as designed. An agent needs a grant from
+`/commit` or `/push`; as a human you can run the git command from your own shell,
+or use `/do` / `/allow`. Confirm `gh auth status` and `git remote -v` if a manual
+push fails.
 
-**Q: How to temporarily disable?**
+**Q: How do I temporarily disable the harness?**
 
-A: Rename configuration file:
+A: Move the settings file aside, then restore it:
 
 ```bash
 mv ~/.claude/settings.json ~/.claude/settings.json.disabled
-# Restore:
-mv ~/.claude/settings.json.disabled ~/.claude/settings.json
+mv ~/.claude/settings.json.disabled ~/.claude/settings.json   # restore
 ```
 
 ---
