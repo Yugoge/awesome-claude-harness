@@ -244,11 +244,12 @@ mv ~/.claude/settings.json.disabled ~/.claude/settings.json
 
 ---
 
-## 🎉 Complete!
+## Complete!
 
-You can now start using Claude Code, it will automatically:
-1. ✅ Check/initialize Git repository
-2. ✅ Commit changes after each response
-3. ✅ Auto-push to GitHub
+You can now start using Claude Code. To be explicit about the git model:
+1. The harness checks/initializes a Git repository at session start.
+2. It does **NOT** commit after each response — you run `/commit` (grant-gated).
+3. It does **NOT** auto-push — you run `/push` (grant-gated). As a human you can
+   also commit/push from your own shell, or use `/do` / `/allow`.
 
-**Enjoy the automated Git workflow!** 🚀
+See [`README.md`](../README.md) and [`ARCHITECTURE.md`](../ARCHITECTURE.md) §6 for the full grant kernel.
