@@ -88,13 +88,11 @@ Should see `-rwxr-xr-x` (x indicates executable)
 ### Test 2: Manually Run Scripts
 
 ```bash
-# Test repository initialization script
-cd /tmp/test-project
-bash ~/.claude/hooks/ensure-git-repo.sh
+# Validate settings.json parses
+python3 -m json.tool ~/.claude/settings.json >/dev/null && echo "settings.json OK"
 
-# Test auto-commit script
-echo "test" > test.txt
-bash ~/.claude/hooks/auto-commit.sh
+# Repository initialization is handled by the wired SessionStart hook
+# (~/.claude/hooks/session-git-init.sh); it runs at session start, not by hand.
 ```
 
 ### Test 3: Verify GitHub CLI
