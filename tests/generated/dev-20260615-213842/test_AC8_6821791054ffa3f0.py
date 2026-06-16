@@ -5,10 +5,21 @@
 # above (AC_UID, AC_TYPE, docstring) MUST be preserved verbatim so QA can
 # trace each test back to its source AC entry.
 
-import pytest
+import json
+import os
+import subprocess
 
 AC_UID = "6821791054ffa3f0"
 AC_TYPE = "data"
+
+# Baseline this cycle branched from (dispatch payload baseline_head_sha).
+BASELINE = "cf1da5bb8e92f842eb671473875cd994f753382f"
+
+
+def _repo_root():
+    return subprocess.check_output(
+        ["git", "rev-parse", "--show-toplevel"], text=True
+    ).strip()
 
 
 def test_AC8():
@@ -17,9 +28,46 @@ def test_AC8():
     WHEN:  reviewed for scope creep
     THEN:  no file in the 57-file /root footprint is de-hardcoded beyond push.sh's single identity literal; graphify default-enabled behavior and GRAPHIFY_BIN resolution unchanged
     """
-    # TODO(dev): replace the line below with the real test body. While the
-    # TEST_INCOMPLETE sentinel is present the test will hard-fail, marking
-    # the AC as unimplemented for QA Phase 5.
-    # NOTE: assert dehardcode-touched files beyond push.sh == 0; assert
-    # graphify default-enabled behavior and GRAPHIFY_BIN resolution are unchanged.
-    pytest.fail(f"TEST_INCOMPLETE: {AC_UID} — no de-hardcode scope creep beyond push.sh; graphify behavior unchanged")
+    root = _repo_root()
+
+    # graphify behavior knobs in settings.json must be unchanged (document-only).
+    with open(os.path.join(root, "settings.json"), encoding="utf-8") as f:
+        s = json.load(f)
+    env = s.get("env", {})
+    assert env.get("CLAUDE_GRAPHIFY_ENABLED") == "auto", (
+        "graphify default-enabled behavior changed (CLAUDE_GRAPHIFY_ENABLED)"
+    )
+    assert env.get("GRAPHIFY_BIN") == "/root/.claude/venv/bin/graphify", (
+        "GRAPHIFY_BIN resolution changed"
+    )
+
+    # No NEW de-hardcoding: the count of /root + /dev/shm literals in tracked
+    # non-doc/non-test files must not DROP versus baseline (push.sh changed one
+    # author literal, not a /root path). We assert the diff did not remove
+    # hardcoded path literals anywhere except (at most) push.sh.
+    changed = subprocess.run(
+        ["git", "-C", root, "diff", "--name-only", BASELINE],
+        capture_output=True, text=True,
+    ).stdout.split()
+    for path in changed:
+        if path == "push.sh":
+            continue
+        if path.startswith(("docs/", "tests/")):
+            continue
+        # For every other changed tracked file, the count of hardcoded path
+        # literals must not have decreased (no silent de-hardcode).
+        try:
+            before = subprocess.run(
+                ["git", "-C", root, "show", f"{BASELINE}:{path}"],
+                capture_output=True, text=True,
+            ).stdout
+        except Exception:
+            before = ""
+        after_p = os.path.join(root, path)
+        after = open(after_p, encoding="utf-8").read() if os.path.exists(after_p) else ""
+        b = before.count("/root/") + before.count("/dev/shm")
+        a = after.count("/root/") + after.count("/dev/shm")
+        assert a >= b, (
+            f"{path}: hardcoded path literals dropped {b}->{a} (unexpected de-hardcode)"
+        )
+
