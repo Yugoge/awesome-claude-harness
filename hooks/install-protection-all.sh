@@ -1,5 +1,16 @@
 #!/bin/bash
-# install-protection-all.sh - Automatically install protection for all git repos
+# ============================================================================
+# LEGACY / DO NOT USE — describes an obsolete auto-push protection model.
+# ============================================================================
+# install-protection-all.sh reflects an OLD post-commit auto-push design the
+# current harness does NOT use. Protection today is the grant-gated git kernel
+# plus the git-native reference-transaction keystone (README.md / ARCHITECTURE.md
+# §6). This script is kept only for historical reference and is disabled below.
+# ============================================================================
+echo "[LEGACY] hooks/install-protection-all.sh is obsolete and disabled. See the root README." >&2
+exit 0
+
+# install-protection-all.sh - Automatically install protection for all git repos (legacy, unreachable)
 # Location: ~/.claude/hooks/install-protection-all.sh
 # Usage: bash ~/.claude/hooks/install-protection-all.sh
 

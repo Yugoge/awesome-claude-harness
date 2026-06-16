@@ -1,7 +1,7 @@
 # hooks
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-06-16T08:37:06Z*
+*Last updated: 2026-06-16T08:37:24Z*
 **Total entries**: 142
 **Convention**: kebab
 
@@ -69,7 +69,7 @@ hooks/
 ├── `hook-todo-injection.py` - Global PreToolUse Hook: Todo Injection for Slash Commands
 ├── `install-auto-sync.sh` - ============================================================================
 ├── `install-git-hooks.sh` - install-git-hooks.sh - Install pre-commit hooks into git repositories
-├── `install-protection-all.sh` - install-protection-all.sh - Automatically install protection for all git repos
+├── `install-protection-all.sh` - ============================================================================
 ├── `install.sh` - ============================================================================
 ├── `merge.sh` - merge.sh - wrapper for /merge slash command
 ├── `notification-idle-overnight.py` - Notification hook: Observe overnight idle events
