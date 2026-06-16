@@ -55,7 +55,10 @@ def test_AC1():
     for rel in ("README.md", "ARCHITECTURE.md"):
         section = _dependency_section(_read(rel))
         assert section, f"{rel}: no dependency/requirements section found"
-        low = section.lower()
+        # Normalize markdown punctuation (backticks, commas) and collapse
+        # whitespace so 'graphifyy` v0.8.25' matches the intended package id.
+        low = re.sub(r"[`,]", "", section.lower())
+        low = re.sub(r"\s+", " ", low)
         assert "graphify" in low, f"{rel}: dependency section does not name graphify"
         assert "graphifyy v0.8.25" in low, (
             f"{rel}: dependency section missing graphify package id 'graphifyy v0.8.25'"
