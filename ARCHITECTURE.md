@@ -39,6 +39,29 @@ All counts below were established by enumerating the actual repository, not copi
 | `Stop` | 1 | 4 |
 | `SubagentStop` | 4 | 6 |
 
+### 1.1 External dependencies (REQUIRED vs OPTIONAL)
+
+The harness is a configuration, not a packaged app — there is no `requirements.txt`/`pyproject.toml`. The complete dependency surface, with each item's tier and the subsystem that needs it:
+
+| Dependency | Tier | Subsystem / why |
+|---|---|---|
+| Claude Code (host) | **REQUIRED** | Must fire `UserPromptSubmit` / `Notification` / `SubagentStop` hook events, honor `disable-model-invocation` frontmatter, and enforce `Skill(*)` permission denies. Older clients that lack these silently skip the guardrails — there is no in-tree version literal, so the baseline is stated as a **capability** requirement, not a number. |
+| Python 3 + `~/.claude/venv` | **REQUIRED** | Every Python hook (git kernel, gates, doc-sync) and helper script. The venv is created empty by the user. |
+| `git` | **REQUIRED** | Git-native checkpoints, grant tokens, and the keystone. Normal use needs a recent git (2.4x+); the overnight reference-transaction keystone's structural HEAD-switch protection needs **git ≥ 2.46** (`scripts/overnight-git-selftest.sh` `_ge_246`; box validated on 2.54). |
+| `jq` | **REQUIRED** | JSON parsing in shell hooks/scripts. |
+| coreutils / util-linux | **REQUIRED** | `realpath`, `flock`, `stat`, `sha256sum`, `date`, `sed`. GNU forms assumed; BSD/macOS flag differences can break hooks. |
+| `pytest` | **REQUIRED** for `/test` + generated AC tests | `tests/generated/<task_id>/` skeletons and `/test` run under pytest. The empty venv must be populated: `~/.claude/venv/bin/pip install pytest`. |
+| OpenAI Codex CLI + `/root/bin/codex-iso` wrapper | **REQUIRED** for `--codex` / `/codex` | Adversarial second-opinion rounds (`commands/codex.md`, `commands/close.md`). The wrapper path is author-specific and must be user-supplied; absent → `--codex`/`/codex` unavailable, rest of pipeline unaffected. |
+| `openssl` | **REQUIRED** for `/merge`, `/push` | Nonce/token material in the grant-gated release path. |
+| `bwrap` (bubblewrap) | **REQUIRED** for `/dev-overnight` | The per-Bash RO-bind boundary isolating overnight main-tree writes (§8). |
+| `graphify` CLI — PyPI `graphifyy` v0.8.25, binary `graphify` | OPTIONAL (graceful) | Code-graph enrichment (§7, `scripts/graphify-query.py`). Default-enabled (`CLAUDE_GRAPHIFY_ENABLED=auto`, `GRAPHIFY_BIN`); absent → degraded, pipeline proceeds. |
+| Playwright MCP | OPTIONAL | UI-audit skill suite + overnight PM live-app exploration; absent → those steps skipped. |
+| Python pkgs `jsonschema`, `yaml` (PyYAML), `websocket-client` | OPTIONAL (graceful) | Stricter schema validation / enrichments; hooks fall back to lenient paths when missing. |
+| `fswatch` | OPTIONAL | Backs `/fswatch`; not used by the core pipeline. |
+| `node` + user-supplied `EXCEL_ANALYZER` | OPTIONAL | `/file-analyze` spreadsheet/document analysis; analyzer is user-provided. |
+
+> Note: this matrix is the maintainer-facing twin of the README's Dependencies table; the two are kept in step. Changing graphify's default-enabled behavior or `GRAPHIFY_BIN` resolution is out of scope here (document-only).
+
 ---
 
 ## 2. Design stance
