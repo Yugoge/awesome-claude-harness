@@ -32,5 +32,7 @@ committed secret.
 ## Scope
 
 Security reports about the harness's own hooks, scripts, agents, and commands
-are in scope. Note that some bundled third-party skills are non-redistributable
-and carry their own terms — see the root [`NOTICE`](../NOTICE).
+are in scope. The previously bundled non-redistributable third-party skills have
+been removed from both the working tree and the git history; the harness no
+longer redistributes any proprietary skill content — see the root
+[`NOTICE`](../NOTICE) for the attribution and removal record.
