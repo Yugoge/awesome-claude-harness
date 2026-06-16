@@ -1,8 +1,8 @@
 # hooks
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-06-15T10:37:17Z*
-**Total entries**: 141
+*Last updated: 2026-06-16T09:50:43Z*
+**Total entries**: 140
 **Convention**: kebab
 
 ## Tree
@@ -62,14 +62,13 @@ hooks/
 ├── `auto-commit.sh` - ============================================================================
 ├── `check-todo-md-sync.py` - check-todo-md-sync.py — Session-start drift detector for todo scripts
 ├── `checkpoint.sh` - checkpoint.sh - Manual /checkpoint command
-├── `ensure-git-repo.sh` - ensure-git-repo.sh - DEPRECATED, scheduled for deletion
 ├── `fswatch-manager.sh` - fswatch-manager.sh - Manage git-fswatch instances
 ├── `git-fswatch.sh` - git-fswatch.sh - Comprehensive Git file watcher using fswatch
 ├── `git-fswatch@.service` - service file
 ├── `hook-todo-injection.py` - Global PreToolUse Hook: Todo Injection for Slash Commands
-├── `install-auto-sync.sh` - install-auto-sync.sh - Quick installer for auto-sync features
-├── `install-git-hooks.sh` - install-git-hooks.sh - Install pre-commit hooks into git repositories
-├── `install-protection-all.sh` - install-protection-all.sh - Automatically install protection for all git repos
+├── `install-auto-sync.sh` - ============================================================================
+├── `install-git-hooks.sh` - ============================================================================
+├── `install-protection-all.sh` - ============================================================================
 ├── `install.sh` - ============================================================================
 ├── `merge.sh` - merge.sh - wrapper for /merge slash command
 ├── `notification-idle-overnight.py` - Notification hook: Observe overnight idle events
@@ -125,7 +124,8 @@ hooks/
 ├── `prompt-workflow.py` - UserPromptSubmit Hook: Checklist Injection for Slash Commands
 ├── `protection-status.sh` - protection-status.sh - Display protection status for all git repositories
 ├── `pull.sh` - pull.sh - Executable version of /pull command
-├── `QUICKSTART.md` - 🚀 Quick Start Guide
+├── `push.sh` - push.sh - Executable version of /push command
+├── `QUICKSTART.md` - Quick Start — the hooks layer
 ├── `README-TODO-INJECTION.md` - Global Todo Injection Hook
 ├── `sentinel-lint.sh` - sentinel-lint.sh - Guards the dev-registry sentinel anchor in orchestrator files
 ├── `session-git-init.sh` - ============================================================================
@@ -134,7 +134,6 @@ hooks/
 ├── `session-promote-hook.sh` - Description: SessionStart hook that promotes a cold session back to ramdisk.
 ├── `session-tmpfs-banner.sh` - session-tmpfs-banner.sh — SessionStart hook (6th in the SessionStart hooks block).
 ├── `session_start.sh` - SessionStart Hook - Display working environment info
-├── `smart-checkpoint.sh` - smart-checkpoint.sh - DEPRECATED, scheduled for deletion
 ├── `start-fswatch-all.sh` - start-fswatch-all.sh - Start fswatch monitoring for all important repositories
 ├── `stop-cleanup-allowlist.sh` - Stop Hook: Wipe any unconsumed /allow grant at turn end.
 ├── `stop-overnight-timelock.py` - Stop Hook: Block conversation termination until overnight end-time

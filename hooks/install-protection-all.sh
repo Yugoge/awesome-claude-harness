@@ -1,5 +1,16 @@
 #!/bin/bash
-# install-protection-all.sh - Automatically install protection for all git repos
+# ============================================================================
+# LEGACY / DO NOT USE — describes an obsolete auto-push protection model.
+# ============================================================================
+# install-protection-all.sh reflects an OLD post-commit auto-push design the
+# current harness does NOT use. Protection today is the grant-gated git kernel
+# plus the git-native reference-transaction keystone (README.md / ARCHITECTURE.md
+# §6). This script is kept only for historical reference and is disabled below.
+# ============================================================================
+echo "[LEGACY] hooks/install-protection-all.sh is obsolete and disabled. See the root README." >&2
+exit 0
+
+# install-protection-all.sh - Automatically install protection for all git repos (legacy, unreachable)
 # Location: ~/.claude/hooks/install-protection-all.sh
 # Usage: bash ~/.claude/hooks/install-protection-all.sh
 
@@ -65,12 +76,12 @@ find ~ -maxdepth 3 -type d -name ".git" 2>/dev/null | sort | while read git_dir;
 
     # Check Layer 1 (Settings)
     if [ -f "$repo_dir/.claude/settings.json" ]; then
-        if grep -q "smart-checkpoint" "$repo_dir/.claude/settings.json" 2>/dev/null; then
-            echo "   ✅ Layer 1: Smart Checkpoint configured"
+        if grep -q "posttool-git-checkpoint" "$repo_dir/.claude/settings.json" 2>/dev/null; then
+            echo "   ✅ Layer 1: Checkpoint hook configured"
         else
             echo "   ⚠️  Layer 1: Has custom settings (needs manual review)"
             echo "       Add this to PostToolUse hooks:"
-            echo "       {\"command\": \"bash ~/.claude/hooks/smart-checkpoint.sh\"}"
+            echo "       {\"command\": \"bash ~/.claude/hooks/posttool-git-checkpoint.sh\"}"
         fi
     else
         echo "   ✅ Layer 1: Using global settings (auto-protected)"

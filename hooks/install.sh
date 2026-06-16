@@ -1,11 +1,24 @@
 #!/bin/bash
 # ============================================================================
-# Claude Code Auto-Commit One-Click Installer
-# Claude Code Auto-Commit One-Click Installer
+# LEGACY / DO NOT USE — describes an obsolete auto-commit model.
 # ============================================================================
+# This installer reflects an OLD "auto-commit + auto-push after every response"
+# design that the current harness does NOT use. Today git mutations are
+# grant-gated (see README.md / ARCHITECTURE.md §6): /commit and /push each
+# require a single-use, human-authorized grant; nothing commits or pushes
+# automatically. This script is kept only for historical reference and is NOT
+# part of the live setup — the canonical install is the root README Quickstart.
+# It is a no-op guard below so a stale invocation does nothing.
+# ============================================================================
+echo "[LEGACY] hooks/install.sh describes the obsolete auto-commit model and is disabled." >&2
+echo "[LEGACY] Use the root README Quickstart; git here is grant-gated, never automatic." >&2
+exit 0
+
+# ----------------------------------------------------------------------------
+# Claude Code Auto-Commit One-Click Installer (legacy body, unreachable)
 # Purpose: Quick installation and configuration of Claude Code auto-commit functionality
 # Usage: bash install.sh
-# ============================================================================
+# ----------------------------------------------------------------------------
 
 set -e
 
@@ -91,7 +104,6 @@ main() {
   # Step 4: Set execution permissions
   print_step "Setting script execution permissions..."
   chmod +x ~/.claude/hooks/auto-commit.sh
-  chmod +x ~/.claude/hooks/ensure-git-repo.sh
   print_success "Permissions set complete"
 
   # Step 5: Backup existing settings.json

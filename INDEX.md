@@ -1,13 +1,13 @@
-# dot-claude
+# 
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-06-15T10:19:47Z*
-**Total entries**: 448
+*Last updated: 2026-06-16T10:23:37Z*
+**Total entries**: 1959
 **Convention**: kebab
 
 ## Tree
 ```
-dot-claude/
+/
 ├── agents/
 │   ├── `architect.md` - Architecture review specialist for overnight exploration. Identifies structural issues, technical debt, optimization opportunities, dependency problems, and pattern inconsistencies. Returns structured JSON report.
 │   ├── `ba.md` - Business analyst subagent for requirements analysis and context building. Receives user requirement text, performs git analysis, identifies affected files, and returns either clarification questions or dual-format output (Markdown spec + JSON context).
@@ -69,15 +69,1494 @@ dot-claude/
 │   ├── `stop.md` - Cancel active overnight time-lock + workflow-enforce so the session can terminate normally. User-invoked only — agents cannot self-stop.
 │   └── `test.md` - Test validation workflow with edge case detection, systematic validation, and quality enforcement
 ├── docs/
-│   └── reference/
-│       ├── `checkpoint-mechanism.md` - Auto-Commit / Checkpoint Mechanism
-│       ├── `fswatch-quickref.md` - FSWatch 快速参考卡片
-│       ├── `git-fswatch.md` - Git File Watcher (fswatch) 使用文档
-│       ├── `graphify-integration.md` - Graphify Knowledge Graph Integration
-│       ├── `lock-file-handling.md` - Git Lock File Handling
-│       ├── `slashcommand-quick-reference.md` - Slash Command Quick Reference
-│       ├── `tmp-cleanup-convention.md` - Ad-hoc scratch directory convention
-│       └── `venv-repair.md` - venv-repair — restoring `~/.claude/venv` when interpreter symlinks break
+│   ├── clean/
+│   │   ├── `cleanliness-report-clean-20260107-101825.json` - json config
+│   │   ├── `cleanliness-report-clean-20260108-130050.json` - json config
+│   │   ├── `cleanliness-report-clean-20260517-102341.json` - json config
+│   │   ├── `cleanup-execution-clean-20260107-101825.json` - json config
+│   │   ├── `cleanup-execution-clean-20260517-102341.json` - json config
+│   │   ├── `combined-report-clean-20260107-101825.json` - json config
+│   │   ├── `combined-report-clean-20260517-102341.json` - json config
+│   │   ├── `completion-20251226-115500.md` - Development Completion Report
+│   │   ├── `completion-clean-20260107-101825.md` - Cleanup Completion Report
+│   │   ├── `completion-clean-20260108-130050.md` - Cleanup Completion Report
+│   │   ├── `completion-clean-20260517-102341.md` - Clean Cycle Completion — clean-20260517-102341
+│   │   ├── `context-clean-20260107-101825.json` - json config
+│   │   ├── `context-clean-20260108-130050.json` - json config
+│   │   ├── `context-clean-20260517-102341.json` - json config
+│   │   ├── `dev-subagent-violations-fix-20251228.md` - Dev Subagent Quality Standard Violations - Fixed
+│   │   ├── `freshness-analysis-20260108-130050.json` - json config
+│   │   ├── `freshness-clean-20260517-102341.json` - json config
+│   │   ├── `readme-generation-20260108-130050.json` - json config
+│   │   ├── `rule-context-clean-20260108-130050.json` - json config
+│   │   ├── `rule-context-clean-20260517-102341.json` - json config
+│   │   ├── `rule-inspector-summary.md` - Rule Inspector Summary
+│   │   ├── `rule-report-clean-20260108-130050.json` - json config
+│   │   ├── `rule-report-clean-20260517-102341.json` - json config
+│   │   ├── `style-partial-clean-20260517-102341-group1.json` - json config
+│   │   ├── `style-partial-clean-20260517-102341-group10.json` - json config
+│   │   ├── `style-partial-clean-20260517-102341-group11.json` - json config
+│   │   ├── `style-partial-clean-20260517-102341-group12.json` - json config
+│   │   ├── `style-partial-clean-20260517-102341-group13.json` - json config
+│   │   ├── `style-partial-clean-20260517-102341-group2.json` - json config
+│   │   ├── `style-partial-clean-20260517-102341-group3.json` - json config
+│   │   ├── `style-partial-clean-20260517-102341-group4.json` - json config
+│   │   ├── `style-partial-clean-20260517-102341-group5.json` - json config
+│   │   ├── `style-partial-clean-20260517-102341-group6.json` - json config
+│   │   ├── `style-partial-clean-20260517-102341-group7.json` - json config
+│   │   ├── `style-partial-clean-20260517-102341-group8.json` - json config
+│   │   ├── `style-partial-clean-20260517-102341-group9.json` - json config
+│   │   ├── `style-partial-clean-20260517-102341-groupA1.json` - json config
+│   │   ├── `style-partial-clean-20260517-102341-groupA2.json` - json config
+│   │   ├── `style-partial-clean-20260517-102341-groupA3.json` - json config
+│   │   ├── `style-partial-clean-20260517-102341-groupA4.json` - json config
+│   │   ├── `style-partial-clean-20260517-102341-groupC1.json` - json config
+│   │   ├── `style-partial-clean-20260517-102341-groupC2.json` - json config
+│   │   ├── `style-partial-clean-20260517-102341-groupC3.json` - json config
+│   │   ├── `style-partial-clean-20260517-102341-groupC4.json` - json config
+│   │   ├── `style-partial-clean-20260517-102341-groupC6.json` - json config
+│   │   ├── `style-partial-clean-20260517-102341-groupC7.json` - json config
+│   │   ├── `style-partial-clean-20260517-102341-groupC8.json` - json config
+│   │   ├── `style-plan-clean-20260517-102341.json` - json config
+│   │   ├── `style-report-clean-20260107-101825.json` - json config
+│   │   ├── `style-report-clean-20260108-130050.json` - json config
+│   │   ├── `style-report-clean-20260517-102341.json` - json config
+│   │   ├── `style-report-extended-clean-20260517-102341.json` - json config
+│   │   ├── `user-approvals-clean-20260107-101825.json` - json config
+│   │   └── `user-approvals-clean-20260517-102341.json` - json config
+│   ├── codex/
+│   │   ├── 20260524-122910/
+│   │   ├── 20260524-122947/
+│   │   ├── 20260524-123039/
+│   │   ├── 20260524-125300/
+│   │   ├── 20260524-125300-A/
+│   │   ├── 20260524-125300-B/
+│   │   ├── 20260524-125300-C/
+│   │   ├── 20260524-125300-C-stubs/
+│   │   ├── 20260524-133650/
+│   │   ├── 20260524-171714/
+│   │   ├── 20260524-172805/
+│   │   ├── 20260524-205206/
+│   │   ├── 20260525-050824/
+│   │   ├── 20260525-095242/
+│   │   ├── 20260525-095245/
+│   │   ├── 20260526-042454/
+│   │   ├── 20260526-052559/
+│   │   ├── 20260526-053746/
+│   │   ├── 20260526-202532/
+│   │   ├── 20260527-054705/
+│   │   ├── 20260529-080709/
+│   │   ├── 20260529-210616/
+│   │   ├── 20260530-081334/
+│   │   ├── 20260530-170350/
+│   │   ├── 20260604-204954/
+│   │   ├── 20260611-100500/
+│   │   ├── 20260614-093452/
+│   │   ├── 20260615-094546/
+│   │   ├── 20260615-125319/
+│   │   ├── 20260615-151335/
+│   │   ├── dev-20260524-205811/
+│   │   ├── dev-20260525-053326/
+│   │   ├── dev-20260525-053326-A/
+│   │   ├── dev-20260525-053326-F/
+│   │   ├── dev-20260526-200855/
+│   │   ├── dev-20260526-203808/
+│   │   ├── dev-20260526-203808-issubagent/
+│   │   ├── dev-20260526-203808-manifest/
+│   │   ├── dev-20260527-063758-T1/
+│   │   ├── dev-20260527-063758-T3/
+│   │   ├── dev-20260527-063758-T4/
+│   │   ├── dev-20260529-081000/
+│   │   ├── dev-20260529-092512/
+│   │   ├── dev-20260529-210759/
+│   │   ├── dev-20260531-193000/
+│   │   ├── dev-20260610-205358/
+│   │   ├── dev-20260615-213842/
+│   │   ├── do-20260602-150727/
+│   │   └── overnight-master-hardening/
+│   ├── dev/
+│   │   ├── specs/
+│   │   ├── `acceptance-criteria-20260519-132417.json` - json config
+│   │   ├── `acceptance-criteria-20260520-085647-d1722b.json` - json config
+│   │   ├── `acceptance-criteria-20260520-221452.json` - json config
+│   │   ├── `acceptance-criteria-20260521-090100.json` - json config
+│   │   ├── `acceptance-criteria-20260521-090200.json` - json config
+│   │   ├── `acceptance-criteria-20260521-090300.json` - json config
+│   │   ├── `acceptance-criteria-20260522-000000.json` - json config
+│   │   ├── `acceptance-criteria-20260522-080646-A.json` - json config
+│   │   ├── `acceptance-criteria-20260522-080646-B.json` - json config
+│   │   ├── `acceptance-criteria-20260522-080646-D.json` - json config
+│   │   ├── `acceptance-criteria-20260524-101700-A.json` - json config
+│   │   ├── `acceptance-criteria-20260524-101700-B.json` - json config
+│   │   ├── `acceptance-criteria-20260524-101700-D.json` - json config
+│   │   ├── `acceptance-criteria-20260524-101700-H.json` - json config
+│   │   ├── `acceptance-criteria-20260524-122910.json` - json config
+│   │   ├── `acceptance-criteria-20260524-122947.json` - json config
+│   │   ├── `acceptance-criteria-20260524-123039.json` - json config
+│   │   ├── `acceptance-criteria-20260524-125300-A.json` - json config
+│   │   ├── `acceptance-criteria-20260524-125300-B.json` - json config
+│   │   ├── `acceptance-criteria-20260524-125300-C.json` - json config
+│   │   ├── `acceptance-criteria-20260524-125300-D.json` - json config
+│   │   ├── `acceptance-criteria-20260524-125300-push.json` - json config
+│   │   ├── `acceptance-criteria-20260524-133650.json` - json config
+│   │   ├── `acceptance-criteria-20260524-171714.json` - json config
+│   │   ├── `acceptance-criteria-20260524-172805.json` - json config
+│   │   ├── `acceptance-criteria-20260524-205206.json` - json config
+│   │   ├── `acceptance-criteria-20260524-205459.json` - json config
+│   │   ├── `acceptance-criteria-20260525-050824.json` - json config
+│   │   ├── `acceptance-criteria-20260525-095242.json` - json config
+│   │   ├── `acceptance-criteria-20260525-095245.json` - json config
+│   │   ├── `acceptance-criteria-20260526-042454.json` - json config
+│   │   ├── `acceptance-criteria-20260526-052559.json` - json config
+│   │   ├── `acceptance-criteria-20260526-053746.json` - json config
+│   │   ├── `acceptance-criteria-20260526-202532.json` - json config
+│   │   ├── `acceptance-criteria-20260527-054705.json` - json config
+│   │   ├── `acceptance-criteria-20260527-132200.json` - json config
+│   │   ├── `acceptance-criteria-20260529-080709.json` - json config
+│   │   ├── `acceptance-criteria-20260529-081014.json` - json config
+│   │   ├── `acceptance-criteria-20260529-164939.json` - json config
+│   │   ├── `acceptance-criteria-20260529-210616.json` - json config
+│   │   ├── `acceptance-criteria-20260529-211406.json` - json config
+│   │   ├── `acceptance-criteria-20260530-081334.json` - json config
+│   │   ├── `acceptance-criteria-20260530-105221.json` - json config
+│   │   ├── `acceptance-criteria-20260530-170350.json` - json config
+│   │   ├── `acceptance-criteria-20260531-112831-bug1.json` - json config
+│   │   ├── `acceptance-criteria-20260531-112831-bug2a.json` - json config
+│   │   ├── `acceptance-criteria-20260531-112831-bug2b.json` - json config
+│   │   ├── `acceptance-criteria-20260531-112831-gap1.json` - json config
+│   │   ├── `acceptance-criteria-20260601-060455.json` - json config
+│   │   ├── `acceptance-criteria-20260604-204954.json` - json config
+│   │   ├── `acceptance-criteria-20260611-100500.json` - json config
+│   │   ├── `acceptance-criteria-20260614-093452.json` - json config
+│   │   ├── `acceptance-criteria-20260614-205834.json` - json config
+│   │   ├── `acceptance-criteria-d1e94e-CYCLE2-iter1.json` - json config
+│   │   ├── `acceptance-criteria-d1e94e-CYCLE2.json` - json config
+│   │   ├── `acceptance-criteria-d1e94e.json` - json config
+│   │   ├── `acceptance-criteria-dev-20260524-170335.json` - json config
+│   │   ├── `acceptance-criteria-dev-20260524-205811.json` - json config
+│   │   ├── `acceptance-criteria-dev-20260525-050935.json` - json config
+│   │   ├── `acceptance-criteria-dev-20260525-053326-A.json` - json config
+│   │   ├── `acceptance-criteria-dev-20260525-053326-B.json` - json config
+│   │   ├── `acceptance-criteria-dev-20260525-053326-F.json` - json config
+│   │   ├── `acceptance-criteria-dev-20260526-203808-issubagent.json` - json config
+│   │   ├── `acceptance-criteria-dev-20260526-203808-manifest.json` - json config
+│   │   ├── `acceptance-criteria-dev-20260526-203808.json` - json config
+│   │   ├── `acceptance-criteria-dev-20260527-063758-T1.json` - json config
+│   │   ├── `acceptance-criteria-dev-20260527-063758-T2.json` - json config
+│   │   ├── `acceptance-criteria-dev-20260527-063758-T3.json` - json config
+│   │   ├── `acceptance-criteria-dev-20260527-063758-T4.json` - json config
+│   │   ├── `acceptance-criteria-dev-20260529-152050.json` - json config
+│   │   ├── `acceptance-criteria-dev-20260529-210759.json` - json config
+│   │   ├── `acceptance-criteria-dev-20260530-084735.json` - json config
+│   │   ├── `acceptance-criteria-dev-20260530-144032.json` - json config
+│   │   ├── `acceptance-criteria-dev-20260531-134455.json` - json config
+│   │   ├── `acceptance-criteria-dev-20260531-193000.json` - json config
+│   │   ├── `acceptance-criteria-dev-20260615-213842.json` - json config
+│   │   ├── `architect-report-20260517-155838.json` - json config
+│   │   ├── `architect-report-20260527-061433.json` - json config
+│   │   ├── `architect-report-dev-20260517-215114.json` - json config
+│   │   ├── `architect-report-dev-20260525-050824.json` - json config
+│   │   ├── `architect-report-spec-20260520-221059.json` - json config
+│   │   ├── `ba-qa-report-20260416-063500.json` - json config
+│   │   ├── `ba-qa-report-20260416-073000.json` - json config
+│   │   ├── `ba-qa-report-20260517-153856.json` - json config
+│   │   ├── `ba-qa-report-20260517-155838.json` - json config
+│   │   ├── `ba-qa-report-20260517-172600.json` - json config
+│   │   ├── `ba-qa-report-20260517-211508.json` - json config
+│   │   ├── `ba-qa-report-20260517-215114.json` - json config
+│   │   ├── `ba-qa-report-20260517-222440.json` - json config
+│   │   ├── `ba-qa-report-20260518-071337.json` - json config
+│   │   ├── `ba-qa-report-20260518-094616.json` - json config
+│   │   ├── `ba-qa-report-20260518-155948.json` - json config
+│   │   ├── `ba-qa-report-20260518-214050.json` - json config
+│   │   ├── `ba-qa-report-20260519-132417.json` - json config
+│   │   ├── `ba-qa-report-20260519-151734-iter2.json` - json config
+│   │   ├── `ba-qa-report-20260519-151734.json` - json config
+│   │   ├── `ba-qa-report-20260519-161035.json` - json config
+│   │   ├── `ba-qa-report-20260519-175339-iter2.json` - json config
+│   │   ├── `ba-qa-report-20260519-175339-iter3.json` - json config
+│   │   ├── `ba-qa-report-20260519-175339.json` - json config
+│   │   ├── `ba-qa-report-20260519-211515-iter2.json` - json config
+│   │   ├── `ba-qa-report-20260519-211515-iter3.json` - json config
+│   │   ├── `ba-qa-report-20260519-211515.json` - json config
+│   │   ├── `ba-qa-report-20260520-085647-d1722b-iter2.json` - json config
+│   │   ├── `ba-qa-report-20260520-085647-d1722b-iter3.json` - json config
+│   │   ├── `ba-qa-report-20260520-085647-d1722b.json` - json config
+│   │   ├── `ba-qa-report-20260520-221452.json` - json config
+│   │   ├── `ba-qa-report-20260521-090100.json` - json config
+│   │   ├── `ba-qa-report-20260521-090200.json` - json config
+│   │   ├── `ba-qa-report-20260521-090300.json` - json config
+│   │   ├── `ba-qa-report-20260522-000000.json` - json config
+│   │   ├── `ba-qa-report-20260522-080646-A-iter2.json` - json config
+│   │   ├── `ba-qa-report-20260522-080646-A.json` - json config
+│   │   ├── `ba-qa-report-20260522-080646-B.json` - json config
+│   │   ├── `ba-qa-report-20260522-080646-C-iter2.json` - json config
+│   │   ├── `ba-qa-report-20260522-080646-C.json` - json config
+│   │   ├── `ba-qa-report-20260522-080646-D-iter2.json` - json config
+│   │   ├── `ba-qa-report-20260522-080646-D-iter3.json` - json config
+│   │   ├── `ba-qa-report-20260522-080646-D.json` - json config
+│   │   ├── `ba-qa-report-20260522-080646-F.json` - json config
+│   │   ├── `ba-qa-report-20260524-101700-A-iter2.json` - json config
+│   │   ├── `ba-qa-report-20260524-101700-A.json` - json config
+│   │   ├── `ba-qa-report-20260524-101700-B-iter2.json` - json config
+│   │   ├── `ba-qa-report-20260524-101700-B.json` - json config
+│   │   ├── `ba-qa-report-20260524-101700-D-iter2.json` - json config
+│   │   ├── `ba-qa-report-20260524-101700-D.json` - json config
+│   │   ├── `ba-qa-report-20260524-101700-H.json` - json config
+│   │   ├── `ba-qa-report-20260524-122910.json` - json config
+│   │   ├── `ba-qa-report-20260524-122947.json` - json config
+│   │   ├── `ba-qa-report-20260524-123039.json` - json config
+│   │   ├── `ba-qa-report-20260524-125300-A.json` - json config
+│   │   ├── `ba-qa-report-20260524-125300-B-iter2.json` - json config
+│   │   ├── `ba-qa-report-20260524-125300-B.json` - json config
+│   │   ├── `ba-qa-report-20260524-125300-C.json` - json config
+│   │   ├── `ba-qa-report-20260524-125300-D-iter2.json` - json config
+│   │   ├── `ba-qa-report-20260524-125300-D-iter3.json` - json config
+│   │   ├── `ba-qa-report-20260524-125300-D.json` - json config
+│   │   ├── `ba-qa-report-20260524-125300-push-iter2.json` - json config
+│   │   ├── `ba-qa-report-20260524-125300-push-iter3.json` - json config
+│   │   ├── `ba-qa-report-20260524-125300-push-iter4.json` - json config
+│   │   ├── `ba-qa-report-20260524-125300-push-iter5.json` - json config
+│   │   ├── `ba-qa-report-20260524-125300-push.json` - json config
+│   │   ├── `ba-qa-report-20260524-133650.json` - json config
+│   │   ├── `ba-qa-report-20260524-171714.json` - json config
+│   │   ├── `ba-qa-report-20260524-172805.json` - json config
+│   │   ├── `ba-qa-report-20260524-205206.json` - json config
+│   │   ├── `ba-qa-report-20260524-205459.json` - json config
+│   │   ├── `ba-qa-report-20260525-050824.json` - json config
+│   │   ├── `ba-qa-report-20260525-095242.json` - json config
+│   │   ├── `ba-qa-report-20260525-095245.json` - json config
+│   │   ├── `ba-qa-report-20260526-042454.json` - json config
+│   │   ├── `ba-qa-report-20260526-052545.json` - json config
+│   │   ├── `ba-qa-report-20260526-052559.json` - json config
+│   │   ├── `ba-qa-report-20260526-053746.json` - json config
+│   │   ├── `ba-qa-report-20260526-202532.json` - json config
+│   │   ├── `ba-qa-report-20260527-054705.json` - json config
+│   │   ├── `ba-qa-report-20260527-132200-pass2.json` - json config
+│   │   ├── `ba-qa-report-20260527-132200-pass3.json` - json config
+│   │   ├── `ba-qa-report-20260527-132200.json` - json config
+│   │   ├── `ba-qa-report-20260529-080709-pass2.json` - json config
+│   │   ├── `ba-qa-report-20260529-080709-pass3.json` - json config
+│   │   ├── `ba-qa-report-20260529-080709.json` - json config
+│   │   ├── `ba-qa-report-20260529-164939-pass2.json` - json config
+│   │   ├── `ba-qa-report-20260529-164939.json` - json config
+│   │   ├── `ba-qa-report-20260529-211406.json` - json config
+│   │   ├── `ba-qa-report-20260530-081334-pass2.json` - json config
+│   │   ├── `ba-qa-report-20260530-081334.json` - json config
+│   │   ├── `ba-qa-report-20260530-091304.json` - json config
+│   │   ├── `ba-qa-report-20260530-105221-pass2.json` - json config
+│   │   ├── `ba-qa-report-20260530-105221.json` - json config
+│   │   ├── `ba-qa-report-20260530-170350-pass2.json` - json config
+│   │   ├── `ba-qa-report-20260530-170350-pass3.json` - json config
+│   │   ├── `ba-qa-report-20260530-170350-pass4.json` - json config
+│   │   ├── `ba-qa-report-20260530-170350.json` - json config
+│   │   ├── `ba-qa-report-20260531-112831-bug1.json` - json config
+│   │   ├── `ba-qa-report-20260531-112831-bug2b.json` - json config
+│   │   ├── `ba-qa-report-20260601-060455.json` - json config
+│   │   ├── `ba-qa-report-20260604-204954.json` - json config
+│   │   ├── `ba-qa-report-20260611-100500.json` - json config
+│   │   ├── `ba-qa-report-20260614-093452.json` - json config
+│   │   ├── `ba-qa-report-20260614-205834.json` - json config
+│   │   ├── `ba-qa-report-d1e94e-CYCLE2-iter1.json` - json config
+│   │   ├── `ba-qa-report-d1e94e.json` - json config
+│   │   ├── `ba-qa-report-dev-20260524-170335.json` - json config
+│   │   ├── `ba-qa-report-dev-20260525-050935.json` - json config
+│   │   ├── `ba-qa-report-dev-20260526-203808-manifest.json` - json config
+│   │   ├── `ba-qa-report-dev-20260526-203808.json` - json config
+│   │   ├── `ba-qa-report-dev-20260527-063758-T1.json` - json config
+│   │   ├── `ba-qa-report-dev-20260527-063758-T2.json` - json config
+│   │   ├── `ba-qa-report-dev-20260527-063758-T3.json` - json config
+│   │   ├── `ba-qa-report-dev-20260527-063758-T4-pass5.json` - json config
+│   │   ├── `ba-qa-report-dev-20260527-063758-T4.json` - json config
+│   │   ├── `ba-qa-report-dev-20260529-081000.json` - json config
+│   │   ├── `ba-qa-report-dev-20260529-092512-pass2.json` - json config
+│   │   ├── `ba-qa-report-dev-20260529-092512.json` - json config
+│   │   ├── `ba-qa-report-dev-20260529-152050.json` - json config
+│   │   ├── `ba-qa-report-dev-20260529-210759.json` - json config
+│   │   ├── `ba-qa-report-dev-20260530-084735.json` - json config
+│   │   ├── `ba-qa-report-dev-20260530-144032.json` - json config
+│   │   ├── `ba-qa-report-dev-20260531-134455.json` - json config
+│   │   ├── `ba-qa-report-dev-20260531-193000.json` - json config
+│   │   ├── `ba-qa-report-dev-20260615-213842.json` - json config
+│   │   ├── `ba-report-spec-20260520-221059.json` - json config
+│   │   ├── `cleanliness-inspector-report-005efeec-bb32-4361-ad8e-21e673e7f61d.json` - json config
+│   │   ├── `cleanliness-inspector-report-20260517-153856.json` - json config
+│   │   ├── `cleanliness-inspector-report-20260517-155838.json` - json config
+│   │   ├── `cleanliness-inspector-report-20260517-172600.json` - json config
+│   │   ├── `cleanliness-inspector-report-20260517-211508.json` - json config
+│   │   ├── `cleanliness-inspector-report-20260517-214922.json` - json config
+│   │   ├── `cleanliness-inspector-report-20260517-215114.json` - json config
+│   │   ├── `cleanliness-inspector-report-20260517-222440.json` - json config
+│   │   ├── `cleanliness-inspector-report-20260518-071337.json` - json config
+│   │   ├── `cleanliness-inspector-report-20260518-094616.json` - json config
+│   │   ├── `cleanliness-inspector-report-20260518-155948.json` - json config
+│   │   ├── `cleanliness-inspector-report-20260518-214050.json` - json config
+│   │   ├── `cleanliness-inspector-report-20260519-132417.json` - json config
+│   │   ├── `cleanliness-inspector-report-20260519-151734.json` - json config
+│   │   ├── `cleanliness-inspector-report-20260519-161035.json` - json config
+│   │   ├── `cleanliness-inspector-report-20260519-175339.json` - json config
+│   │   ├── `cleanliness-inspector-report-20260519-211515-recheck.json` - json config
+│   │   ├── `cleanliness-inspector-report-20260519-211515.json` - json config
+│   │   ├── `cleanliness-inspector-report-20260520-085647-d1722b.json` - json config
+│   │   ├── `cleanliness-inspector-report-20260520-221452.json` - json config
+│   │   ├── `cleanliness-inspector-report-20260521-090100.json` - json config
+│   │   ├── `cleanliness-inspector-report-20260521-090200.json` - json config
+│   │   ├── `cleanliness-inspector-report-20260521-090300.json` - json config
+│   │   ├── `cleanliness-inspector-report-20260522-000000.json` - json config
+│   │   ├── `cleanliness-inspector-report-20260522-080646.json` - json config
+│   │   ├── `cleanliness-inspector-report-20260524-122910.json` - json config
+│   │   ├── `cleanliness-inspector-report-20260524-122947.json` - json config
+│   │   ├── `cleanliness-inspector-report-20260524-123039.json` - json config
+│   │   ├── `cleanliness-inspector-report-20260524-125300.json` - json config
+│   │   ├── `cleanliness-inspector-report-20260524-133650.json` - json config
+│   │   ├── `cleanliness-inspector-report-20260524-171714.json` - json config
+│   │   ├── `cleanliness-inspector-report-20260524-172805.json` - json config
+│   │   ├── `cleanliness-inspector-report-20260524-205206.json` - json config
+│   │   ├── `cleanliness-inspector-report-20260524-205459.json` - json config
+│   │   ├── `cleanliness-inspector-report-20260525-050824.json` - json config
+│   │   ├── `cleanliness-inspector-report-20260525-095242.json` - json config
+│   │   ├── `cleanliness-inspector-report-20260525-095245.json` - json config
+│   │   ├── `cleanliness-inspector-report-20260526-042454.json` - json config
+│   │   ├── `cleanliness-inspector-report-20260526-052559.json` - json config
+│   │   ├── `cleanliness-inspector-report-20260526-053746.json` - json config
+│   │   ├── `cleanliness-inspector-report-20260526-202532.json` - json config
+│   │   ├── `cleanliness-inspector-report-20260527-054705.json` - json config
+│   │   ├── `cleanliness-inspector-report-20260527-132200.json` - json config
+│   │   ├── `cleanliness-inspector-report-20260529-080709.json` - json config
+│   │   ├── `cleanliness-inspector-report-20260529-081014.json` - json config
+│   │   ├── `cleanliness-inspector-report-20260529-164939.json` - json config
+│   │   ├── `cleanliness-inspector-report-20260529-210616.json` - json config
+│   │   ├── `cleanliness-inspector-report-20260529-211406.json` - json config
+│   │   ├── `cleanliness-inspector-report-20260530-081334.json` - json config
+│   │   ├── `cleanliness-inspector-report-20260530-091304.json` - json config
+│   │   ├── `cleanliness-inspector-report-20260530-092123.json` - json config
+│   │   ├── `cleanliness-inspector-report-20260530-105221.json` - json config
+│   │   ├── `cleanliness-inspector-report-20260530-165718.json` - json config
+│   │   ├── `cleanliness-inspector-report-20260530-170350.json` - json config
+│   │   ├── `cleanliness-inspector-report-20260530-212215.json` - json config
+│   │   ├── `cleanliness-inspector-report-20260531-082707.json` - json config
+│   │   ├── `cleanliness-inspector-report-20260601-060455.json` - json config
+│   │   ├── `cleanliness-inspector-report-20260602-210702.json` - json config
+│   │   ├── `cleanliness-inspector-report-20260604-204954.json` - json config
+│   │   ├── `cleanliness-inspector-report-20260606-131137.json` - json config
+│   │   ├── `cleanliness-inspector-report-20260606-201330.json` - json config
+│   │   ├── `cleanliness-inspector-report-20260608-215123.json` - json config
+│   │   ├── `cleanliness-inspector-report-20260611-100500.json` - json config
+│   │   ├── `cleanliness-inspector-report-20260614-093452.json` - json config
+│   │   ├── `cleanliness-inspector-report-20260614-182549.json` - json config
+│   │   ├── `cleanliness-inspector-report-20260614-205834.json` - json config
+│   │   ├── `cleanliness-inspector-report-20260615-125319.json` - json config
+│   │   ├── `cleanliness-inspector-report-20260616-094643.json` - json config
+│   │   ├── `cleanliness-inspector-report-30fbb321-8921-44aa-bd65-de59e4c70730.json` - json config
+│   │   ├── `cleanliness-inspector-report-441b0d47-3cbf-4fa5-9038-76ef39df048a.json` - json config
+│   │   ├── `cleanliness-inspector-report-44e208af-b8b8-4266-a2ba-fcfc77f92d24.json` - json config
+│   │   ├── `cleanliness-inspector-report-77be7954-cf76-4fea-a146-5cb88f32a69f.json` - json config
+│   │   ├── `cleanliness-inspector-report-8cfdc493-794f-4367-941b-2e2a150db230.json` - json config
+│   │   ├── `cleanliness-inspector-report-c2667fea-a84e-4ba8-9dc7-fae4c1abfc24.json` - json config
+│   │   ├── `cleanliness-inspector-report-c7452b2d-d6dd-4fa6-b61a-f0642a46c906.json` - json config
+│   │   ├── `cleanliness-inspector-report-cc7a706f-2662-4274-976d-d2f19e6dd767.json` - json config
+│   │   ├── `cleanliness-inspector-report-d1e94e.json` - json config
+│   │   ├── `cleanliness-inspector-report-dev-20260524-170335.json` - json config
+│   │   ├── `cleanliness-inspector-report-dev-20260524-205811.json` - json config
+│   │   ├── `cleanliness-inspector-report-dev-20260525-050935.json` - json config
+│   │   ├── `cleanliness-inspector-report-dev-20260525-053326.json` - json config
+│   │   ├── `cleanliness-inspector-report-dev-20260526-044731.json` - json config
+│   │   ├── `cleanliness-inspector-report-dev-20260526-200855.json` - json config
+│   │   ├── `cleanliness-inspector-report-dev-20260526-203808-manifest.json` - json config
+│   │   ├── `cleanliness-inspector-report-dev-20260526-203808.json` - json config
+│   │   ├── `cleanliness-inspector-report-dev-20260527-063758.json` - json config
+│   │   ├── `cleanliness-inspector-report-dev-20260529-081000.json` - json config
+│   │   ├── `cleanliness-inspector-report-dev-20260529-092512.json` - json config
+│   │   ├── `cleanliness-inspector-report-dev-20260529-152050.json` - json config
+│   │   ├── `cleanliness-inspector-report-dev-20260529-210759.json` - json config
+│   │   ├── `cleanliness-inspector-report-dev-20260530-084735.json` - json config
+│   │   ├── `cleanliness-inspector-report-dev-20260530-144032.json` - json config
+│   │   ├── `cleanliness-inspector-report-dev-20260531-134455.json` - json config
+│   │   ├── `cleanliness-inspector-report-dev-20260531-193000.json` - json config
+│   │   ├── `cleanliness-inspector-report-do-20260529-210815.json` - json config
+│   │   ├── `cleanliness-inspector-report-do-20260530-165637.json` - json config
+│   │   ├── `cleanliness-inspector-report-do-20260531-111311.json` - json config
+│   │   ├── `cleanliness-inspector-report-do-20260531-171010.json` - json config
+│   │   ├── `cleanliness-inspector-report-do-20260602-150727.json` - json config
+│   │   ├── `cleanliness-inspector-report-do-20260603-084448.json` - json config
+│   │   ├── `cleanliness-inspector-report-eeeabad1-554e-4a04-a040-149797afaed7.json` - json config
+│   │   ├── `close-debate-20260518-214050.json` - json config
+│   │   ├── `close-debate-20260526-052559.md` - Close Debate Transcript -- 20260526-052559
+│   │   ├── `close-debate-20260526-053746.md` - Close Debate Transcript — 20260526-053746
+│   │   ├── `close-report-005efeec-bb32-4361-ad8e-21e673e7f61d.md` - Close Report — 005efeec-bb32-4361-ad8e-21e673e7f61d
+│   │   ├── `close-report-20260510-115954.md` - Close Debate Report (mirror for dot-claude commit.sh admission)
+│   │   ├── `close-report-20260510-191533.md` - Close Debate Report
+│   │   ├── `close-report-20260511-094500.md` - Close Report — 20260511-094500
+│   │   ├── `close-report-20260511-180000.md` - Close Report — 20260511-180000
+│   │   ├── `close-report-20260517-153856.md` - Close Debate Report
+│   │   ├── `close-report-20260517-155838.md` - Close Debate Report
+│   │   ├── `close-report-20260517-172600.md` - Close Debate Report
+│   │   ├── `close-report-20260517-211508.md` - Close Report — 20260517-211508
+│   │   ├── `close-report-20260517-214922.md` - Close Debate Report — 20260517-214922
+│   │   ├── `close-report-20260517-215114.md` - Close Report — 20260517-215114
+│   │   ├── `close-report-20260517-222440.md` - Close Debate — 20260517-222440 (MULTI-ROUND, codex_required: true)
+│   │   ├── `close-report-20260518-071337.md` - Close Report — 20260518-071337
+│   │   ├── `close-report-20260518-094616.md` - Close Debate Report — 20260518-094616
+│   │   ├── `close-report-20260518-155948.md` - Close Report — 20260518-155948
+│   │   ├── `close-report-20260518-214050.md` - Close Debate Report
+│   │   ├── `close-report-20260519-132417.md` - Close Debate Report
+│   │   ├── `close-report-20260519-151734.md` - Close Debate Report
+│   │   ├── `close-report-20260519-161035.md` - Close Debate Report — 20260519-161035
+│   │   ├── `close-report-20260519-175339.md` - Close Report — 20260519-175339
+│   │   ├── `close-report-20260519-211515.md` - Close Report — task-id 20260519-211515
+│   │   ├── `close-report-20260520-085647-d1722b.md` - Close Debate Report
+│   │   ├── `close-report-20260520-221452.md` - Close Debate Report (RE-EVALUATION)
+│   │   ├── `close-report-20260521-090100.md` - Close Debate Report
+│   │   ├── `close-report-20260521-090200.md` - Close Debate Report
+│   │   ├── `close-report-20260521-090300.md` - Close Debate Report
+│   │   ├── `close-report-20260522-000000.md` - Close Debate Report
+│   │   ├── `close-report-20260522-080646.md` - Close Debate Report
+│   │   ├── `close-report-20260524-101700.md` - Close Debate Report — 20260524-101700
+│   │   ├── `close-report-20260524-122910.md` - Close Report — Task 20260524-122910
+│   │   ├── `close-report-20260524-122947.md` - Close Report: task 20260524-122947
+│   │   ├── `close-report-20260524-123039.md` - Close Report: task 20260524-123039
+│   │   ├── `close-report-20260524-125300.md` - Close Debate Report
+│   │   ├── `close-report-20260524-133650.md` - Close Debate Report — Task 20260524-133650
+│   │   ├── `close-report-20260524-171714.md` - Close Report: task 20260524-171714
+│   │   ├── `close-report-20260524-172805.md` - Close Report — Task 20260524-172805
+│   │   ├── `close-report-20260524-205459.md` - Close Report: task 20260524-205459
+│   │   ├── `close-report-20260524-allow-gaps.md` - Close Debate Report (FORCED)
+│   │   ├── `close-report-20260525-050824.md` - Close Report — Task 20260525-050824
+│   │   ├── `close-report-20260525-095242.md` - Close Report: 20260525-095242 (Cycle 6 — Layer 1.F compound-command bypass fix)
+│   │   ├── `close-report-20260525-095245.md` - Close Report — Task 20260525-095245
+│   │   ├── `close-report-20260526-042454.md` - Close Report — Task 20260526-042454
+│   │   ├── `close-report-20260526-052559.md` - Close Debate Report
+│   │   ├── `close-report-20260526-053746.md` - Close Report -- 20260526-053746
+│   │   ├── `close-report-20260526-202532.md` - Close Report: 20260526-202532
+│   │   ├── `close-report-20260527-054705.md` - Close Report: 20260527-054705
+│   │   ├── `close-report-20260527-132200.md` - Close Report — 20260527-132200
+│   │   ├── `close-report-20260527-133200.md` - Close Report — 20260527-133200
+│   │   ├── `close-report-20260529-080709.md` - Close Report — Task 20260529-080709
+│   │   ├── `close-report-20260529-081014.md` - Close Report — dev-20260529-081014
+│   │   ├── `close-report-20260529-164939.md` - Close Report — 20260529-164939
+│   │   ├── `close-report-20260529-210616.md` - Close-debate Transcript — 20260529-210616
+│   │   ├── `close-report-20260529-211406.md` - Close Debate Report
+│   │   ├── `close-report-20260530-081334.md` - Close Report — Task 20260530-081334
+│   │   ├── `close-report-20260530-084303.md` - Close Debate Report — 20260530-084303
+│   │   ├── `close-report-20260530-091304.md` - Close Report — 20260530-091304
+│   │   ├── `close-report-20260530-105221.md` - Close Report — 20260530-105221
+│   │   ├── `close-report-20260530-112914.md` - Close Debate Report (FORCED)
+│   │   ├── `close-report-20260530-170350.md` - Close Debate Report — 20260530-170350
+│   │   ├── `close-report-20260530-170414.md` - Close Debate Report (FORCED)
+│   │   ├── `close-report-20260530-212215.md` - Close Debate Report
+│   │   ├── `close-report-20260531-082707.md` - Close Debate Report
+│   │   ├── `close-report-20260601-060455.md` - Close Report — task 20260601-060455
+│   │   ├── `close-report-20260602-210702.md` - Close Report — Task 20260602-210702
+│   │   ├── `close-report-20260604-204954.md` - Close Report — task-id 20260604-204954
+│   │   ├── `close-report-20260606-131137.md` - Close Report — Task-id 20260606-131137
+│   │   ├── `close-report-20260606-201330.md` - Close Report — 20260606-201330
+│   │   ├── `close-report-20260611-100500.md` - Close Report — task-id 20260611-100500
+│   │   ├── `close-report-20260614-093452.md` - Close Report — 20260614-093452
+│   │   ├── `close-report-20260614-182549.md` - Close Debate Report
+│   │   ├── `close-report-20260614-205834.md` - Close Debate Report
+│   │   ├── `close-report-20260615-125319.md` - Close Debate Report
+│   │   ├── `close-report-30fbb321-8921-44aa-bd65-de59e4c70730.md` - Close Report — /do cycle 30fbb321-8921-44aa-bd65-de59e4c70730
+│   │   ├── `close-report-441b0d47-3cbf-4fa5-9038-76ef39df048a.md` - Close Debate Report
+│   │   ├── `close-report-44e208af-b8b8-4266-a2ba-fcfc77f92d24.md` - Close Report — 44e208af-b8b8-4266-a2ba-fcfc77f92d24
+│   │   ├── `close-report-77be7954-cf76-4fea-a146-5cb88f32a69f.md` - Close Debate Report
+│   │   ├── `close-report-8cfdc493-794f-4367-941b-2e2a150db230.md` - Close Report — 8cfdc493-794f-4367-941b-2e2a150db230
+│   │   ├── `close-report-c2667fea-a84e-4ba8-9dc7-fae4c1abfc24.md` - Close Report — c2667fea-a84e-4ba8-9dc7-fae4c1abfc24
+│   │   ├── `close-report-c7452b2d-d6dd-4fa6-b61a-f0642a46c906.md` - Close Report — Task c7452b2d-d6dd-4fa6-b61a-f0642a46c906
+│   │   ├── `close-report-cc7a706f-2662-4274-976d-d2f19e6dd767.md` - Close Debate Report
+│   │   ├── `close-report-d1e94e-prior.md` - Close Debate Report
+│   │   ├── `close-report-d1e94e.md` - Close Debate Report — d1e94e
+│   │   ├── `close-report-dev-20260524-170335.md` - Close Debate Report
+│   │   ├── `close-report-dev-20260524-205811.md` - Close Debate Report (FORCED)
+│   │   ├── `close-report-dev-20260525-050824.md` - Close Debate Report (FORCED)
+│   │   ├── `close-report-dev-20260525-050935.md` - Close Debate Report
+│   │   ├── `close-report-dev-20260525-053326.md` - Close Debate Report
+│   │   ├── `close-report-dev-20260526-044731.md` - Close Debate — dev-20260526-044731
+│   │   ├── `close-report-dev-20260526-200855.md` - Close Debate Report: dev-20260526-200855
+│   │   ├── `close-report-dev-20260526-203808-manifest.md` - Close Debate Report — dev-20260526-203808-manifest
+│   │   ├── `close-report-dev-20260526-203808.md` - Close Debate Transcript — dev-20260526-203808
+│   │   ├── `close-report-dev-20260529-081000.md` - Close Report — dev-20260529-081000
+│   │   ├── `close-report-dev-20260529-092512.md` - Close Report — dev-20260529-092512
+│   │   ├── `close-report-dev-20260529-152050.md` - Close Debate Report
+│   │   ├── `close-report-dev-20260529-210759.md` - Close Report — dev-20260529-210759 (RE-EVALUATION after security fix)
+│   │   ├── `close-report-dev-20260530-084735.md` - Close Report — dev-20260530-084735
+│   │   ├── `close-report-dev-20260530-144032.md` - Close Debate Report
+│   │   ├── `close-report-dev-20260531-134455.md` - Close Debate Report — dev-20260531-134455
+│   │   ├── `close-report-dev-20260531-193000.md` - Close Debate Report — dev-20260531-193000
+│   │   ├── `close-report-do-20260525-050636.md` - Close Debate Report (FORCED)
+│   │   ├── `close-report-do-20260529-210815.md` - Close Report — do-20260529-210815
+│   │   ├── `close-report-do-20260531-111311.md` - Close Report — Task do-20260531-111311
+│   │   ├── `close-report-do-20260531-171010.md` - Close Report — do-20260531-171010
+│   │   ├── `close-report-do-20260602-150727.md` - Close Report — do-20260602-150727
+│   │   ├── `close-report-do-20260603-084448.md` - Close Report — do-20260603-084448
+│   │   ├── `close-report-eeeabad1-554e-4a04-a040-149797afaed7.md` - Close Report — eeeabad1-554e-4a04-a040-149797afaed7
+│   │   ├── `commit-manifest-20260509-114002-cycle4.json` - json config
+│   │   ├── `commit-message-dev-20260615-213842.txt` - txt file
+│   │   ├── `commit-qa-report-20260606-131137.md` - Pre-commit QA Gate Report — TASK_ID 20260606-131137
+│   │   ├── `commit-qa-report-20260606-201330.md` - Commit QA Report — TASK_ID 20260606-201330
+│   │   ├── `commit-qa-report-20260611-100500.md` - Commit-QA Gate Report — task 20260611-100500
+│   │   ├── `commit-qa-report-20260614-182549.md` - Pre-Commit QA Report — 20260614-182549
+│   │   ├── `commit-qa-report-20260614-205834.md` - Commit-QA Report — TASK_ID 20260614-205834
+│   │   ├── `commit-qa-report-77be7954-cf76-4fea-a146-5cb88f32a69f.md` - Pre-Commit QA Report — TASK 77be7954-cf76-4fea-a146-5cb88f32a69f
+│   │   ├── `completion-20260510-191533.md` - Development Completion Report — 20260510-191533
+│   │   ├── `completion-20260511-094500.md` - Development Completion Report — 20260511-094500
+│   │   ├── `completion-20260511-180000.md` - Development Completion Report — 20260511-180000
+│   │   ├── `completion-20260517-153856.md` - Development Completion Report — 20260517-153856
+│   │   ├── `completion-20260517-155838.md` - Development Completion Report — 20260517-155838
+│   │   ├── `completion-20260517-172600.md` - Development Completion Report — 20260517-172600
+│   │   ├── `completion-20260517-211508.md` - Development Completion Report — 20260517-211508
+│   │   ├── `completion-20260517-215114.md` - Development Completion Report — 20260517-215114
+│   │   ├── `completion-20260517-222440.md` - Development Completion Report — 20260517-222440
+│   │   ├── `completion-20260518-071337.md` - Development Completion Report — 20260518-071337
+│   │   ├── `completion-20260518-094616.md` - Development Completion Report — 20260518-094616
+│   │   ├── `completion-20260518-155948.md` - Development Completion Report — 20260518-155948
+│   │   ├── `completion-20260519-132417.md` - Development Completion Report — 20260519-132417
+│   │   ├── `completion-20260519-151734.md` - Development Completion Report — 20260519-151734
+│   │   ├── `completion-20260519-161035.md` - Development Completion Report — 20260519-161035
+│   │   ├── `completion-20260519-175339.md` - Development Completion Report — 20260519-175339
+│   │   ├── `completion-20260519-211515-redev9items.md` - Development Completion Report — 20260519-211515 (redev 9-item retrospective)
+│   │   ├── `completion-20260519-211515.md` - Development Completion Report — 20260519-211515
+│   │   ├── `completion-20260520-085647-d1722b.md` - Development Completion Report — 20260520-085647-d1722b
+│   │   ├── `completion-20260520-221452.md` - Development Completion Report — 20260520-221452
+│   │   ├── `completion-20260521-090100.md` - Development Completion Report — 20260521-090100
+│   │   ├── `completion-20260521-090200.md` - Development Completion Report — 20260521-090200
+│   │   ├── `completion-20260521-090300.md` - Development Completion Report — 20260521-090300
+│   │   ├── `completion-20260522-000000.md` - Dev Cycle Completion Report
+│   │   ├── `completion-20260522-080646.md` - Dev Cycle Completion — 20260522-080646
+│   │   ├── `completion-20260524-101700.md` - Dev Completion — 20260524-101700
+│   │   ├── `completion-20260524-122910.md` - Development Completion Report -- 20260524-122910
+│   │   ├── `completion-20260524-122947.md` - Development Completion Report — 20260524-122947
+│   │   ├── `completion-20260524-123039.md` - Dev Cycle Completion Report
+│   │   ├── `completion-20260524-125300.md` - Completion Report — Cycle 20260524-125300
+│   │   ├── `completion-20260524-133650.md` - Completion Report
+│   │   ├── `completion-20260524-171714.md` - Dev Cycle Completion Report
+│   │   ├── `completion-20260524-172805.md` - Development Completion Report -- 20260524-172805
+│   │   ├── `completion-20260524-205206.md` - Development Completion Report -- 20260524-205206
+│   │   ├── `completion-20260524-205459.md` - Dev Cycle Completion Report
+│   │   ├── `completion-20260525-050824.md` - Completion Report: task 20260525-050824
+│   │   ├── `completion-20260525-095242.md` - Development Completion Report -- 20260525-095242
+│   │   ├── `completion-20260525-095245.md` - Completion Report: task 20260525-095245
+│   │   ├── `completion-20260526-042454.md` - Completion Report — Task 20260526-042454
+│   │   ├── `completion-20260526-052559.md` - Development Completion Report — 20260526-052559
+│   │   ├── `completion-20260526-053746.md` - Development Completion Report -- 20260526-053746
+│   │   ├── `completion-20260527-054705.md` - Development Completion Report -- 20260527-054705
+│   │   ├── `completion-20260527-132200.md` - Completion Report — 20260527-132200
+│   │   ├── `completion-20260529-080709.md` - Completion Report — 20260529-080709
+│   │   ├── `completion-20260529-081014.md` - Development Completion Report -- 20260529-081014
+│   │   ├── `completion-20260529-164939.md` - Completion Report — 20260529-164939
+│   │   ├── `completion-20260529-210616.md` - Development Completion Report -- 20260529-210616
+│   │   ├── `completion-20260529-211406.md` - Development Completion Report — 20260529-211406
+│   │   ├── `completion-20260530-081334.md` - Completion Report — 20260530-081334
+│   │   ├── `completion-20260530-091304.md` - Development Completion Report — 20260530-091304
+│   │   ├── `completion-20260530-105221.md` - Completion Report — 20260530-105221
+│   │   ├── `completion-20260530-170350.md` - Completion Report — 20260530-170350
+│   │   ├── `completion-20260531-162901.md` - 20260531-162901 — project-name-free daemon-protection guard engine
+│   │   ├── `completion-20260601-060455.md` - Development Completion Report
+│   │   ├── `completion-20260604-204954.md` - Development Completion Report — 20260604-204954
+│   │   ├── `completion-20260611-100500.md` - 20260611-100500 — Harden /dev-overnight so an overnight session can NEVER touch master
+│   │   ├── `completion-20260614-093452.md` - Development Completion Report — 20260614-093452
+│   │   ├── `completion-20260614-205834.md` - Development Completion Report — 20260614-205834
+│   │   ├── `completion-d1e94e.md` - Development Completion Report — d1e94e
+│   │   ├── `completion-dev-20260524-170335.md` - Completion Report: dev-20260524-170335
+│   │   ├── `completion-dev-20260524-205811.md` - Completion Report
+│   │   ├── `completion-dev-20260525-050935.md` - Dev Cycle Completion Report
+│   │   ├── `completion-dev-20260525-053326.md` - Completion Report
+│   │   ├── `completion-dev-20260526-044731.md` - Completion Report
+│   │   ├── `completion-dev-20260526-200855.md` - Completion Report: dev-20260526-200855
+│   │   ├── `completion-dev-20260526-203808-manifest.md` - Development Completion Report — dev-20260526-203808-manifest
+│   │   ├── `completion-dev-20260526-203808.md` - Development Completion Report — dev-20260526-203808
+│   │   ├── `completion-dev-20260527-063758.md` - Completion Report — dev-20260527-063758
+│   │   ├── `completion-dev-20260529-081000.md` - Completion Report — dev-20260529-081000
+│   │   ├── `completion-dev-20260529-092512.md` - Completion Report — dev-20260529-092512
+│   │   ├── `completion-dev-20260529-152050.md` - Completion Report — dev-20260529-152050
+│   │   ├── `completion-dev-20260529-210759.md` - Completion Report — dev-20260529-210759
+│   │   ├── `completion-dev-20260530-084735.md` - Completion Report — dev-20260530-084735
+│   │   ├── `completion-dev-20260530-144032.md` - Completion Report — dev-20260530-144032
+│   │   ├── `completion-dev-20260531-134455.md` - Development Completion Report — dev-20260531-134455
+│   │   ├── `completion-dev-20260531-193000.md` - Development Completion Report — dev-20260531-193000
+│   │   ├── `completion-do-20260529-210815.md` - Completion Report — do-20260529-210815
+│   │   ├── `context-20260416-063500.json` - json config
+│   │   ├── `context-20260416-073000.json` - json config
+│   │   ├── `context-20260510-191533.json` - json config
+│   │   ├── `context-20260511-094500.json` - json config
+│   │   ├── `context-20260511-180000.json` - json config
+│   │   ├── `context-20260517-153856.json` - json config
+│   │   ├── `context-20260517-155838.json` - json config
+│   │   ├── `context-20260517-172600.json` - json config
+│   │   ├── `context-20260517-211508.json` - json config
+│   │   ├── `context-20260517-215114.json` - json config
+│   │   ├── `context-20260517-222440.json` - json config
+│   │   ├── `context-20260518-071337.json` - json config
+│   │   ├── `context-20260518-094616.json` - json config
+│   │   ├── `context-20260518-155948.json` - json config
+│   │   ├── `context-20260518-214050.json` - json config
+│   │   ├── `context-20260519-132417.json` - json config
+│   │   ├── `context-20260519-151734.json` - json config
+│   │   ├── `context-20260519-161035.json` - json config
+│   │   ├── `context-20260519-175339.json` - json config
+│   │   ├── `context-20260519-211515-CYCLE2-round3.json` - json config
+│   │   ├── `context-20260519-211515.json` - json config
+│   │   ├── `context-20260520-085647-d1722b.json` - json config
+│   │   ├── `context-20260520-221452.json` - json config
+│   │   ├── `context-20260521-090100.json` - json config
+│   │   ├── `context-20260521-090200.json` - json config
+│   │   ├── `context-20260521-090300.json` - json config
+│   │   ├── `context-20260522-000000.json` - json config
+│   │   ├── `context-20260522-080646-A.json` - json config
+│   │   ├── `context-20260522-080646-B.json` - json config
+│   │   ├── `context-20260522-080646-C.json` - json config
+│   │   ├── `context-20260522-080646-D.json` - json config
+│   │   ├── `context-20260522-080646-F.json` - json config
+│   │   ├── `context-20260524-101700-A.json` - json config
+│   │   ├── `context-20260524-101700-B.json` - json config
+│   │   ├── `context-20260524-101700-D.json` - json config
+│   │   ├── `context-20260524-101700-H.json` - json config
+│   │   ├── `context-20260524-101700-X.json` - json config
+│   │   ├── `context-20260524-101700.json` - json config
+│   │   ├── `context-20260524-122910.json` - json config
+│   │   ├── `context-20260524-122947.json` - json config
+│   │   ├── `context-20260524-123039.json` - json config
+│   │   ├── `context-20260524-125300-A.json` - json config
+│   │   ├── `context-20260524-125300-B.json` - json config
+│   │   ├── `context-20260524-125300-C.json` - json config
+│   │   ├── `context-20260524-125300-D.json` - json config
+│   │   ├── `context-20260524-125300-push.json` - json config
+│   │   ├── `context-20260524-133650.json` - json config
+│   │   ├── `context-20260524-171714.json` - json config
+│   │   ├── `context-20260524-172805.json` - json config
+│   │   ├── `context-20260524-205206.json` - json config
+│   │   ├── `context-20260524-205459.json` - json config
+│   │   ├── `context-20260525-050824.json` - json config
+│   │   ├── `context-20260525-095242.json` - json config
+│   │   ├── `context-20260525-095245.json` - json config
+│   │   ├── `context-20260526-042454.json` - json config
+│   │   ├── `context-20260526-052545.json` - json config
+│   │   ├── `context-20260526-052559.json` - json config
+│   │   ├── `context-20260526-053746.json` - json config
+│   │   ├── `context-20260526-202532.json` - json config
+│   │   ├── `context-20260527-054705.json` - json config
+│   │   ├── `context-20260527-132200.json` - json config
+│   │   ├── `context-20260527-133200.json` - json config
+│   │   ├── `context-20260529-080709.json` - json config
+│   │   ├── `context-20260529-081014.json` - json config
+│   │   ├── `context-20260529-164939.json` - json config
+│   │   ├── `context-20260529-210616.json` - json config
+│   │   ├── `context-20260529-211406.json` - json config
+│   │   ├── `context-20260529-211406.json.lock` - lock file
+│   │   ├── `context-20260530-081334.json` - json config
+│   │   ├── `context-20260530-091304.json` - json config
+│   │   ├── `context-20260530-105221.json` - json config
+│   │   ├── `context-20260530-170350.json` - json config
+│   │   ├── `context-20260531-112831-bug1.json` - json config
+│   │   ├── `context-20260531-112831-bug2a.json` - json config
+│   │   ├── `context-20260531-112831-bug2b.json` - json config
+│   │   ├── `context-20260531-112831-gap1.json` - json config
+│   │   ├── `context-20260601-060455.json` - json config
+│   │   ├── `context-20260601-060455.json.lock` - lock file
+│   │   ├── `context-20260604-204954.json` - json config
+│   │   ├── `context-20260604-204954.json.lock` - lock file
+│   │   ├── `context-20260611-100500.json` - json config
+│   │   ├── `context-20260611-100500.json.lock` - lock file
+│   │   ├── `context-20260614-093452.json` - json config
+│   │   ├── `context-20260614-093452.json.lock` - lock file
+│   │   ├── `context-20260614-205834.json` - json config
+│   │   ├── `context-20260614-205834.json.lock` - lock file
+│   │   ├── `context-75463e-DH.json` - json config
+│   │   ├── `context-d1e94e-CYCLE2-round2.json` - json config
+│   │   ├── `context-d1e94e-CYCLE2.json` - json config
+│   │   ├── `context-d1e94e.json` - json config
+│   │   ├── `context-dev-20260107-091716.json` - json config
+│   │   ├── `context-dev-20260107-100221.json` - json config
+│   │   ├── `context-dev-20260107-104430.json` - json config
+│   │   ├── `context-dev-20260108-111618.json` - json config
+│   │   ├── `context-dev-20260108-153719.json` - json config
+│   │   ├── `context-dev-20260108-163807.json` - json config
+│   │   ├── `context-dev-20260108-164915.json` - json config
+│   │   ├── `context-dev-20260110-001044.json` - json config
+│   │   ├── `context-dev-20260111-193314.json` - json config
+│   │   ├── `context-dev-20260524-170335.json` - json config
+│   │   ├── `context-dev-20260524-205811.json` - json config
+│   │   ├── `context-dev-20260525-050935.json` - json config
+│   │   ├── `context-dev-20260525-053326-A.json` - json config
+│   │   ├── `context-dev-20260525-053326-B.json` - json config
+│   │   ├── `context-dev-20260525-053326-F.json` - json config
+│   │   ├── `context-dev-20260526-044731.json` - json config
+│   │   ├── `context-dev-20260526-200855.json` - json config
+│   │   ├── `context-dev-20260526-203808-issubagent.json` - json config
+│   │   ├── `context-dev-20260526-203808-manifest.json` - json config
+│   │   ├── `context-dev-20260526-203808.json` - json config
+│   │   ├── `context-dev-20260527-063758-T1.json` - json config
+│   │   ├── `context-dev-20260527-063758-T2.json` - json config
+│   │   ├── `context-dev-20260527-063758-T3.json` - json config
+│   │   ├── `context-dev-20260527-063758-T4.json` - json config
+│   │   ├── `context-dev-20260529-081000.json` - json config
+│   │   ├── `context-dev-20260529-092512.json` - json config
+│   │   ├── `context-dev-20260529-152050.json` - json config
+│   │   ├── `context-dev-20260529-210759.json` - json config
+│   │   ├── `context-dev-20260530-084735.json` - json config
+│   │   ├── `context-dev-20260530-144032.json` - json config
+│   │   ├── `context-dev-20260531-134455.json` - json config
+│   │   ├── `context-dev-20260531-134455.json.lock` - lock file
+│   │   ├── `context-dev-20260531-193000.json` - json config
+│   │   ├── `context-dev-20260531-193000.json.lock` - lock file
+│   │   ├── `context-dev-20260615-213842.json` - json config
+│   │   ├── `context-dev-20260615-213842.json.lock` - lock file
+│   │   ├── `context-do-20260529-210815.json` - json config
+│   │   ├── `context-iter2-dev-20260111-193314.json` - json config
+│   │   ├── `design-input-dev-20260531-134455.md` - Design Input — dev-20260531-134455
+│   │   ├── `design-input-dev-20260531-193000.md` - Design Input — dev-20260531-193000
+│   │   ├── `dev-report-20260110-001044.json` - json config
+│   │   ├── `dev-report-20260416-063500-iter2.json` - json config
+│   │   ├── `dev-report-20260416-063500.json` - json config
+│   │   ├── `dev-report-20260416-073000-iter2.json` - json config
+│   │   ├── `dev-report-20260416-073000.json` - json config
+│   │   ├── `dev-report-20260510-115954.json` - json config
+│   │   ├── `dev-report-20260510-191533.json` - json config
+│   │   ├── `dev-report-20260511-094500.json` - json config
+│   │   ├── `dev-report-20260511-180000.json` - json config
+│   │   ├── `dev-report-20260517-153856.json` - json config
+│   │   ├── `dev-report-20260517-155838.json` - json config
+│   │   ├── `dev-report-20260517-172600.json` - json config
+│   │   ├── `dev-report-20260517-211508.json` - json config
+│   │   ├── `dev-report-20260517-215114.json` - json config
+│   │   ├── `dev-report-20260517-222440.json` - json config
+│   │   ├── `dev-report-20260518-071337.json` - json config
+│   │   ├── `dev-report-20260518-094616.json` - json config
+│   │   ├── `dev-report-20260518-155948.json` - json config
+│   │   ├── `dev-report-20260518-214050-application-assistant.json` - json config
+│   │   ├── `dev-report-20260518-214050-budget-management.json` - json config
+│   │   ├── `dev-report-20260518-214050-dot-claude.json` - json config
+│   │   ├── `dev-report-20260518-214050-excel-analyzer.json` - json config
+│   │   ├── `dev-report-20260518-214050-happy.json` - json config
+│   │   ├── `dev-report-20260518-214050-knowledge-system-jade.json` - json config
+│   │   ├── `dev-report-20260518-214050-knowledge-system-qijie.json` - json config
+│   │   ├── `dev-report-20260518-214050-knowledge-system.json` - json config
+│   │   ├── `dev-report-20260518-214050-multi-asset-portfolio.json` - json config
+│   │   ├── `dev-report-20260518-214050-orchestra.json` - json config
+│   │   ├── `dev-report-20260518-214050-rednote-mcp.json` - json config
+│   │   ├── `dev-report-20260518-214050-travel-planner.json` - json config
+│   │   ├── `dev-report-20260518-214050.json` - json config
+│   │   ├── `dev-report-20260519-132417.json` - json config
+│   │   ├── `dev-report-20260519-151734.json` - json config
+│   │   ├── `dev-report-20260519-161035.json` - json config
+│   │   ├── `dev-report-20260519-175339.json` - json config
+│   │   ├── `dev-report-20260519-211515-iter3.json` - json config
+│   │   ├── `dev-report-20260519-211515.json` - json config
+│   │   ├── `dev-report-20260520-085647-d1722b.json` - json config
+│   │   ├── `dev-report-20260520-221452.json` - json config
+│   │   ├── `dev-report-20260521-085554.json` - json config
+│   │   ├── `dev-report-20260521-090100.json` - json config
+│   │   ├── `dev-report-20260521-090200.json` - json config
+│   │   ├── `dev-report-20260521-090300.json` - json config
+│   │   ├── `dev-report-20260522-000000.json` - json config
+│   │   ├── `dev-report-20260522-080646-A.json` - json config
+│   │   ├── `dev-report-20260522-080646-B.json` - json config
+│   │   ├── `dev-report-20260522-080646-C.json` - json config
+│   │   ├── `dev-report-20260522-080646-D.json` - json config
+│   │   ├── `dev-report-20260522-080646-F.json` - json config
+│   │   ├── `dev-report-20260522-080646.json` - json config
+│   │   ├── `dev-report-20260524-101700-A.json` - json config
+│   │   ├── `dev-report-20260524-101700-B.json` - json config
+│   │   ├── `dev-report-20260524-101700-D.json` - json config
+│   │   ├── `dev-report-20260524-101700-H.json` - json config
+│   │   ├── `dev-report-20260524-101700.json` - json config
+│   │   ├── `dev-report-20260524-122910.json` - json config
+│   │   ├── `dev-report-20260524-122947.json` - json config
+│   │   ├── `dev-report-20260524-123039.json` - json config
+│   │   ├── `dev-report-20260524-125300-A-stubs.json` - json config
+│   │   ├── `dev-report-20260524-125300-A.json` - json config
+│   │   ├── `dev-report-20260524-125300-B.json` - json config
+│   │   ├── `dev-report-20260524-125300-C-stubs.json` - json config
+│   │   ├── `dev-report-20260524-125300-C.json` - json config
+│   │   ├── `dev-report-20260524-125300-D.json` - json config
+│   │   ├── `dev-report-20260524-125300-push.json` - json config
+│   │   ├── `dev-report-20260524-125300.json` - json config
+│   │   ├── `dev-report-20260524-133650.json` - json config
+│   │   ├── `dev-report-20260524-171714.json` - json config
+│   │   ├── `dev-report-20260524-172805.json` - json config
+│   │   ├── `dev-report-20260524-205206.json` - json config
+│   │   ├── `dev-report-20260524-205459.json` - json config
+│   │   ├── `dev-report-20260525-050824.json` - json config
+│   │   ├── `dev-report-20260525-095242.json` - json config
+│   │   ├── `dev-report-20260525-095245.json` - json config
+│   │   ├── `dev-report-20260526-042454.json` - json config
+│   │   ├── `dev-report-20260526-052559.json` - json config
+│   │   ├── `dev-report-20260526-053746.json` - json config
+│   │   ├── `dev-report-20260526-202532.json` - json config
+│   │   ├── `dev-report-20260527-054705.json` - json config
+│   │   ├── `dev-report-20260527-132200.json` - json config
+│   │   ├── `dev-report-20260527-133200.json` - json config
+│   │   ├── `dev-report-20260529-080709.json` - json config
+│   │   ├── `dev-report-20260529-081014.json` - json config
+│   │   ├── `dev-report-20260529-164939.json` - json config
+│   │   ├── `dev-report-20260529-210616.json` - json config
+│   │   ├── `dev-report-20260529-211406.json` - json config
+│   │   ├── `dev-report-20260530-081334.json` - json config
+│   │   ├── `dev-report-20260530-091304.json` - json config
+│   │   ├── `dev-report-20260530-105221.json` - json config
+│   │   ├── `dev-report-20260530-170350.json` - json config
+│   │   ├── `dev-report-20260531-112831-bug1.json` - json config
+│   │   ├── `dev-report-20260531-112831-bug2b.json` - json config
+│   │   ├── `dev-report-20260531-112831.json` - json config
+│   │   ├── `dev-report-20260531-162901.json` - json config
+│   │   ├── `dev-report-20260601-060455.json` - json config
+│   │   ├── `dev-report-20260604-000000.json` - json config
+│   │   ├── `dev-report-20260604-204954.json` - json config
+│   │   ├── `dev-report-20260611-100500.json` - json config
+│   │   ├── `dev-report-20260614-093452.json` - json config
+│   │   ├── `dev-report-20260614-205834.json` - json config
+│   │   ├── `dev-report-d1e94e.json` - json config
+│   │   ├── `dev-report-dev-20260107-091716.json` - json config
+│   │   ├── `dev-report-dev-20260107-100221.json` - json config
+│   │   ├── `dev-report-dev-20260107-104430.json` - json config
+│   │   ├── `dev-report-dev-20260108-111618.json` - json config
+│   │   ├── `dev-report-dev-20260108-153719.json` - json config
+│   │   ├── `dev-report-dev-20260108-163807.json` - json config
+│   │   ├── `dev-report-dev-20260108-164641.json` - json config
+│   │   ├── `dev-report-dev-20260111-193314.json` - json config
+│   │   ├── `dev-report-dev-20260524-170335.json` - json config
+│   │   ├── `dev-report-dev-20260524-205811.json` - json config
+│   │   ├── `dev-report-dev-20260525-050935.json` - json config
+│   │   ├── `dev-report-dev-20260525-053326-A.json` - json config
+│   │   ├── `dev-report-dev-20260525-053326-B.json` - json config
+│   │   ├── `dev-report-dev-20260525-053326-F.json` - json config
+│   │   ├── `dev-report-dev-20260525-053326.json` - json config
+│   │   ├── `dev-report-dev-20260526-044731.json` - json config
+│   │   ├── `dev-report-dev-20260526-200855.json` - json config
+│   │   ├── `dev-report-dev-20260526-203808-manifest.json` - json config
+│   │   ├── `dev-report-dev-20260526-203808.json` - json config
+│   │   ├── `dev-report-dev-20260527-063758-T1.json` - json config
+│   │   ├── `dev-report-dev-20260527-063758-T2.json` - json config
+│   │   ├── `dev-report-dev-20260527-063758-T3.json` - json config
+│   │   ├── `dev-report-dev-20260527-063758-T4.json` - json config
+│   │   ├── `dev-report-dev-20260527-063758.json` - json config
+│   │   ├── `dev-report-dev-20260529-081000.json` - json config
+│   │   ├── `dev-report-dev-20260529-092512-A.json` - json config
+│   │   ├── `dev-report-dev-20260529-092512-B.json` - json config
+│   │   ├── `dev-report-dev-20260529-092512-C.json` - json config
+│   │   ├── `dev-report-dev-20260529-092512-F.json` - json config
+│   │   ├── `dev-report-dev-20260529-092512.json` - json config
+│   │   ├── `dev-report-dev-20260529-152050.json` - json config
+│   │   ├── `dev-report-dev-20260529-210759.json` - json config
+│   │   ├── `dev-report-dev-20260530-082409.json` - json config
+│   │   ├── `dev-report-dev-20260530-084735.json` - json config
+│   │   ├── `dev-report-dev-20260530-144032.json` - json config
+│   │   ├── `dev-report-dev-20260531-134455-taska.json` - json config
+│   │   ├── `dev-report-dev-20260531-134455-taskb.json` - json config
+│   │   ├── `dev-report-dev-20260531-134455.json` - json config
+│   │   ├── `dev-report-dev-20260531-193000-taska.json` - json config
+│   │   ├── `dev-report-dev-20260531-193000-taskb.json` - json config
+│   │   ├── `dev-report-dev-20260531-193000.json` - json config
+│   │   ├── `dev-report-dev-20260615-213842.json` - json config
+│   │   ├── `dev-report-do-20260529-210815.json` - json config
+│   │   ├── `do-deprivatize-report-20260614-182549.json` - json config
+│   │   ├── `do-report-005efeec-bb32-4361-ad8e-21e673e7f61d.json` - json config
+│   │   ├── `do-report-20260530-212215.json` - json config
+│   │   ├── `do-report-20260531-082707.json` - json config
+│   │   ├── `do-report-20260602-210702.json` - json config
+│   │   ├── `do-report-20260606-131137.json` - json config
+│   │   ├── `do-report-20260606-201330.json` - json config
+│   │   ├── `do-report-20260614-182549.json` - json config
+│   │   ├── `do-report-20260615-125319.json` - json config
+│   │   ├── `do-report-20260615-151335.json` - json config
+│   │   ├── `do-report-20260616-094643.json` - json config
+│   │   ├── `do-report-30fbb321-8921-44aa-bd65-de59e4c70730.json` - json config
+│   │   ├── `do-report-441b0d47-3cbf-4fa5-9038-76ef39df048a.json` - json config
+│   │   ├── `do-report-44e208af-b8b8-4266-a2ba-fcfc77f92d24.json` - json config
+│   │   ├── `do-report-77be7954-cf76-4fea-a146-5cb88f32a69f.json` - json config
+│   │   ├── `do-report-8cfdc493-794f-4367-941b-2e2a150db230.json` - json config
+│   │   ├── `do-report-c2667fea-a84e-4ba8-9dc7-fae4c1abfc24.json` - json config
+│   │   ├── `do-report-c7452b2d-d6dd-4fa6-b61a-f0642a46c906.json` - json config
+│   │   ├── `do-report-cc7a706f-2662-4274-976d-d2f19e6dd767.json` - json config
+│   │   ├── `do-report-do-20260531-111311.json` - json config
+│   │   ├── `do-report-do-20260531-171010.json` - json config
+│   │   ├── `do-report-do-20260602-150727.json` - json config
+│   │   ├── `do-report-do-20260603-084448.json` - json config
+│   │   ├── `do-report-eeeabad1-554e-4a04-a040-149797afaed7.json` - json config
+│   │   ├── `graphify-spike-report-20260530-081334.md` - Graphify Validation Spike Report — Task 20260530-081334
+│   │   ├── `meta-assessment-20260519-161035.json` - json config
+│   │   ├── `note-20260524-123039-root-bin-manual-commit.md` - Manual Commit Instructions: /root/bin/happy-session-recovery.sh
+│   │   ├── `observations-ledger.md` - Observations Ledger
+│   │   ├── `product-owner-dev-20260615-213842.json` - json config
+│   │   ├── `prompt-inspector-report-005efeec-bb32-4361-ad8e-21e673e7f61d.json` - json config
+│   │   ├── `prompt-inspector-report-20260517-153856.json` - json config
+│   │   ├── `prompt-inspector-report-20260517-155838.json` - json config
+│   │   ├── `prompt-inspector-report-20260517-172600.json` - json config
+│   │   ├── `prompt-inspector-report-20260517-211508.json` - json config
+│   │   ├── `prompt-inspector-report-20260517-214922.json` - json config
+│   │   ├── `prompt-inspector-report-20260517-215114.json` - json config
+│   │   ├── `prompt-inspector-report-20260517-222440.json` - json config
+│   │   ├── `prompt-inspector-report-20260518-071337.json` - json config
+│   │   ├── `prompt-inspector-report-20260518-094616.json` - json config
+│   │   ├── `prompt-inspector-report-20260518-155948.json` - json config
+│   │   ├── `prompt-inspector-report-20260518-214050.json` - json config
+│   │   ├── `prompt-inspector-report-20260519-132417.json` - json config
+│   │   ├── `prompt-inspector-report-20260519-151734.json` - json config
+│   │   ├── `prompt-inspector-report-20260519-161035.json` - json config
+│   │   ├── `prompt-inspector-report-20260519-175339.json` - json config
+│   │   ├── `prompt-inspector-report-20260519-211515-recheck.json` - json config
+│   │   ├── `prompt-inspector-report-20260519-211515-redev9items.json` - json config
+│   │   ├── `prompt-inspector-report-20260519-211515.json` - json config
+│   │   ├── `prompt-inspector-report-20260520-085647-d1722b.json` - json config
+│   │   ├── `prompt-inspector-report-20260520-221452.json` - json config
+│   │   ├── `prompt-inspector-report-20260521-090100.json` - json config
+│   │   ├── `prompt-inspector-report-20260521-090200.json` - json config
+│   │   ├── `prompt-inspector-report-20260521-090300.json` - json config
+│   │   ├── `prompt-inspector-report-20260522-000000.json` - json config
+│   │   ├── `prompt-inspector-report-20260522-080646.json` - json config
+│   │   ├── `prompt-inspector-report-20260524-122910.json` - json config
+│   │   ├── `prompt-inspector-report-20260524-122947.json` - json config
+│   │   ├── `prompt-inspector-report-20260524-123039.json` - json config
+│   │   ├── `prompt-inspector-report-20260524-125300.json` - json config
+│   │   ├── `prompt-inspector-report-20260524-133650.json` - json config
+│   │   ├── `prompt-inspector-report-20260524-171714.json` - json config
+│   │   ├── `prompt-inspector-report-20260524-172805.json` - json config
+│   │   ├── `prompt-inspector-report-20260524-205459.json` - json config
+│   │   ├── `prompt-inspector-report-20260525-050824.json` - json config
+│   │   ├── `prompt-inspector-report-20260525-095242.json` - json config
+│   │   ├── `prompt-inspector-report-20260525-095245.json` - json config
+│   │   ├── `prompt-inspector-report-20260526-042454.json` - json config
+│   │   ├── `prompt-inspector-report-20260526-052559.json` - json config
+│   │   ├── `prompt-inspector-report-20260526-053746.json` - json config
+│   │   ├── `prompt-inspector-report-20260526-202532.json` - json config
+│   │   ├── `prompt-inspector-report-20260527-054705.json` - json config
+│   │   ├── `prompt-inspector-report-20260527-132200.json` - json config
+│   │   ├── `prompt-inspector-report-20260529-080709.json` - json config
+│   │   ├── `prompt-inspector-report-20260529-081014.json` - json config
+│   │   ├── `prompt-inspector-report-20260529-164939.codex.txt` - txt file
+│   │   ├── `prompt-inspector-report-20260529-164939.json` - json config
+│   │   ├── `prompt-inspector-report-20260529-210616.json` - json config
+│   │   ├── `prompt-inspector-report-20260529-211406.json` - json config
+│   │   ├── `prompt-inspector-report-20260530-081334.json` - json config
+│   │   ├── `prompt-inspector-report-20260530-091304.json` - json config
+│   │   ├── `prompt-inspector-report-20260530-092123.json` - json config
+│   │   ├── `prompt-inspector-report-20260530-105221.json` - json config
+│   │   ├── `prompt-inspector-report-20260530-170350.json` - json config
+│   │   ├── `prompt-inspector-report-20260530-212215.json` - json config
+│   │   ├── `prompt-inspector-report-20260531-082707.json` - json config
+│   │   ├── `prompt-inspector-report-20260531-162901.json` - json config
+│   │   ├── `prompt-inspector-report-20260601-060455.json` - json config
+│   │   ├── `prompt-inspector-report-20260602-210702.json` - json config
+│   │   ├── `prompt-inspector-report-20260604-204954.json` - json config
+│   │   ├── `prompt-inspector-report-20260606-131137.json` - json config
+│   │   ├── `prompt-inspector-report-20260606-201330.json` - json config
+│   │   ├── `prompt-inspector-report-20260611-100500.json` - json config
+│   │   ├── `prompt-inspector-report-20260614-093452.json` - json config
+│   │   ├── `prompt-inspector-report-20260614-182549.json` - json config
+│   │   ├── `prompt-inspector-report-20260614-205834.json` - json config
+│   │   ├── `prompt-inspector-report-20260615-125319.json` - json config
+│   │   ├── `prompt-inspector-report-20260616-094643.json` - json config
+│   │   ├── `prompt-inspector-report-30fbb321-8921-44aa-bd65-de59e4c70730.json` - json config
+│   │   ├── `prompt-inspector-report-441b0d47-3cbf-4fa5-9038-76ef39df048a.json` - json config
+│   │   ├── `prompt-inspector-report-44e208af-b8b8-4266-a2ba-fcfc77f92d24.json` - json config
+│   │   ├── `prompt-inspector-report-77be7954-cf76-4fea-a146-5cb88f32a69f.json` - json config
+│   │   ├── `prompt-inspector-report-8cfdc493-794f-4367-941b-2e2a150db230.json` - json config
+│   │   ├── `prompt-inspector-report-c2667fea-a84e-4ba8-9dc7-fae4c1abfc24.json` - json config
+│   │   ├── `prompt-inspector-report-c7452b2d-d6dd-4fa6-b61a-f0642a46c906.json` - json config
+│   │   ├── `prompt-inspector-report-cc7a706f-2662-4274-976d-d2f19e6dd767.json` - json config
+│   │   ├── `prompt-inspector-report-d1e94e.json` - json config
+│   │   ├── `prompt-inspector-report-dev-20260524-170335.json` - json config
+│   │   ├── `prompt-inspector-report-dev-20260524-205811.json` - json config
+│   │   ├── `prompt-inspector-report-dev-20260525-050935.json` - json config
+│   │   ├── `prompt-inspector-report-dev-20260525-053326.json` - json config
+│   │   ├── `prompt-inspector-report-dev-20260526-044731.json` - json config
+│   │   ├── `prompt-inspector-report-dev-20260526-200855.json` - json config
+│   │   ├── `prompt-inspector-report-dev-20260526-203808-manifest.json` - json config
+│   │   ├── `prompt-inspector-report-dev-20260526-203808.json` - json config
+│   │   ├── `prompt-inspector-report-dev-20260527-063758.json` - json config
+│   │   ├── `prompt-inspector-report-dev-20260529-081000.json` - json config
+│   │   ├── `prompt-inspector-report-dev-20260529-092512.json` - json config
+│   │   ├── `prompt-inspector-report-dev-20260529-152050.json` - json config
+│   │   ├── `prompt-inspector-report-dev-20260529-210759.json` - json config
+│   │   ├── `prompt-inspector-report-dev-20260530-084735.json` - json config
+│   │   ├── `prompt-inspector-report-dev-20260530-144032.json` - json config
+│   │   ├── `prompt-inspector-report-dev-20260531-134455.json` - json config
+│   │   ├── `prompt-inspector-report-dev-20260531-193000.json` - json config
+│   │   ├── `prompt-inspector-report-do-20260529-210815.json` - json config
+│   │   ├── `prompt-inspector-report-do-20260531-111311.json` - json config
+│   │   ├── `prompt-inspector-report-do-20260531-171010.json` - json config
+│   │   ├── `prompt-inspector-report-do-20260602-150727.json` - json config
+│   │   ├── `prompt-inspector-report-do-20260603-084448.json` - json config
+│   │   ├── `prompt-inspector-report-eeeabad1-554e-4a04-a040-149797afaed7.json` - json config
+│   │   ├── `qa-final-blame-audit-20260416-063500.json` - json config
+│   │   ├── `qa-input-20260110-001044.json` - json config
+│   │   ├── `qa-input-dev-20260107-091716.json` - json config
+│   │   ├── `qa-input-dev-20260107-100221.json` - json config
+│   │   ├── `qa-input-dev-20260107-104430.json` - json config
+│   │   ├── `qa-input-dev-20260108-111618.json` - json config
+│   │   ├── `qa-input-dev-20260108-153719.json` - json config
+│   │   ├── `qa-input-dev-20260108-163807.json` - json config
+│   │   ├── `qa-input-dev-20260108-164641.json` - json config
+│   │   ├── `qa-input-dev-20260111-193314.json` - json config
+│   │   ├── `qa-output-20260519-211515-iter3-codex.txt` - txt file
+│   │   ├── `qa-output-ba-validation-20260519-211515-iter2.json` - json config
+│   │   ├── `qa-output-ba-validation-20260519-211515.json` - json config
+│   │   ├── `qa-output-final-verification-20260519-211515.json` - json config
+│   │   ├── `qa-output-retrospective-classification-20260519-175339.json` - json config
+│   │   ├── `qa-report-20260110-001044.json` - json config
+│   │   ├── `qa-report-20260416-063500-iter2.json` - json config
+│   │   ├── `qa-report-20260416-063500.json` - json config
+│   │   ├── `qa-report-20260416-073000-iter2.json` - json config
+│   │   ├── `qa-report-20260416-073000.json` - json config
+│   │   ├── `qa-report-20260510-191533.json` - json config
+│   │   ├── `qa-report-20260511-094500.json` - json config
+│   │   ├── `qa-report-20260511-180000.json` - json config
+│   │   ├── `qa-report-20260517-153856.json` - json config
+│   │   ├── `qa-report-20260517-155838.json` - json config
+│   │   ├── `qa-report-20260517-172600.json` - json config
+│   │   ├── `qa-report-20260517-211508.json` - json config
+│   │   ├── `qa-report-20260517-215114.json` - json config
+│   │   ├── `qa-report-20260517-222440.json` - json config
+│   │   ├── `qa-report-20260518-071337.json` - json config
+│   │   ├── `qa-report-20260518-094616.json` - json config
+│   │   ├── `qa-report-20260518-155948.json` - json config
+│   │   ├── `qa-report-20260518-214050.json` - json config
+│   │   ├── `qa-report-20260519-132417.json` - json config
+│   │   ├── `qa-report-20260519-151734.json` - json config
+│   │   ├── `qa-report-20260519-161035.json` - json config
+│   │   ├── `qa-report-20260519-175339.json` - json config
+│   │   ├── `qa-report-20260519-211515-close-debate.json` - json config
+│   │   ├── `qa-report-20260519-211515-final.json` - json config
+│   │   ├── `qa-report-20260519-211515.json` - json config
+│   │   ├── `qa-report-20260520-085647-d1722b.json` - json config
+│   │   ├── `qa-report-20260520-221452.json` - json config
+│   │   ├── `qa-report-20260521-085554.json` - json config
+│   │   ├── `qa-report-20260521-090100.json` - json config
+│   │   ├── `qa-report-20260521-090200.json` - json config
+│   │   ├── `qa-report-20260521-090300.json` - json config
+│   │   ├── `qa-report-20260522-000000.json` - json config
+│   │   ├── `qa-report-20260522-080646-A-iter2.json` - json config
+│   │   ├── `qa-report-20260522-080646-A-iter3.json` - json config
+│   │   ├── `qa-report-20260522-080646-A.json` - json config
+│   │   ├── `qa-report-20260522-080646-B-iter2.json` - json config
+│   │   ├── `qa-report-20260522-080646-B-iter3.json` - json config
+│   │   ├── `qa-report-20260522-080646-B.json` - json config
+│   │   ├── `qa-report-20260522-080646-C.json` - json config
+│   │   ├── `qa-report-20260522-080646-D-iter2.json` - json config
+│   │   ├── `qa-report-20260522-080646-D.json` - json config
+│   │   ├── `qa-report-20260522-080646-F.json` - json config
+│   │   ├── `qa-report-20260522-080646.json` - json config
+│   │   ├── `qa-report-20260524-101700-A.json` - json config
+│   │   ├── `qa-report-20260524-101700-B.json` - json config
+│   │   ├── `qa-report-20260524-101700-D.json` - json config
+│   │   ├── `qa-report-20260524-101700.json` - json config
+│   │   ├── `qa-report-20260524-122910.json` - json config
+│   │   ├── `qa-report-20260524-122947.json` - json config
+│   │   ├── `qa-report-20260524-123039.json` - json config
+│   │   ├── `qa-report-20260524-125300-A.json` - json config
+│   │   ├── `qa-report-20260524-125300-B.json` - json config
+│   │   ├── `qa-report-20260524-125300-C.json` - json config
+│   │   ├── `qa-report-20260524-125300-D.json` - json config
+│   │   ├── `qa-report-20260524-125300-push.json` - json config
+│   │   ├── `qa-report-20260524-125300.json` - json config
+│   │   ├── `qa-report-20260524-133650.json` - json config
+│   │   ├── `qa-report-20260524-171714.json` - json config
+│   │   ├── `qa-report-20260524-172805.json` - json config
+│   │   ├── `qa-report-20260524-205206.json` - json config
+│   │   ├── `qa-report-20260524-205459.json` - json config
+│   │   ├── `qa-report-20260525-050824.json` - json config
+│   │   ├── `qa-report-20260525-095242.json` - json config
+│   │   ├── `qa-report-20260525-095245.json` - json config
+│   │   ├── `qa-report-20260526-042454.json` - json config
+│   │   ├── `qa-report-20260526-052559.json` - json config
+│   │   ├── `qa-report-20260526-053746.json` - json config
+│   │   ├── `qa-report-20260526-202532.json` - json config
+│   │   ├── `qa-report-20260527-054705.json` - json config
+│   │   ├── `qa-report-20260527-132200.json` - json config
+│   │   ├── `qa-report-20260527-133200.json` - json config
+│   │   ├── `qa-report-20260529-080709.json` - json config
+│   │   ├── `qa-report-20260529-081014.json` - json config
+│   │   ├── `qa-report-20260529-164939.json` - json config
+│   │   ├── `qa-report-20260529-210616.json` - json config
+│   │   ├── `qa-report-20260529-211406.json` - json config
+│   │   ├── `qa-report-20260530-081334.json` - json config
+│   │   ├── `qa-report-20260530-091304.json` - json config
+│   │   ├── `qa-report-20260530-105221.json` - json config
+│   │   ├── `qa-report-20260530-170350.json` - json config
+│   │   ├── `qa-report-20260531-112831-bug1.json` - json config
+│   │   ├── `qa-report-20260601-060455.json` - json config
+│   │   ├── `qa-report-20260604-204954.json` - json config
+│   │   ├── `qa-report-20260611-100500.json` - json config
+│   │   ├── `qa-report-20260614-093452.json` - json config
+│   │   ├── `qa-report-20260614-205834.json` - json config
+│   │   ├── `qa-report-close-20260525-050824.json` - json config
+│   │   ├── `qa-report-close-20260525-095245.json` - json config
+│   │   ├── `qa-report-close-20260526-042454.json` - json config
+│   │   ├── `qa-report-d1e94e.json` - json config
+│   │   ├── `qa-report-dev-20260107-091716.json` - json config
+│   │   ├── `qa-report-dev-20260107-100221.json` - json config
+│   │   ├── `qa-report-dev-20260107-104430.json` - json config
+│   │   ├── `qa-report-dev-20260108-111618.json` - json config
+│   │   ├── `qa-report-dev-20260108-153719.json` - json config
+│   │   ├── `qa-report-dev-20260108-163807.json` - json config
+│   │   ├── `qa-report-dev-20260108-164641.json` - json config
+│   │   ├── `qa-report-dev-20260111-193314.json` - json config
+│   │   ├── `qa-report-dev-20260524-170335.json` - json config
+│   │   ├── `qa-report-dev-20260524-205811.json` - json config
+│   │   ├── `qa-report-dev-20260525-050935.json` - json config
+│   │   ├── `qa-report-dev-20260525-053326-A.json` - json config
+│   │   ├── `qa-report-dev-20260525-053326-B.json` - json config
+│   │   ├── `qa-report-dev-20260525-053326-F.json` - json config
+│   │   ├── `qa-report-dev-20260525-053326.json` - json config
+│   │   ├── `qa-report-dev-20260526-044731.json` - json config
+│   │   ├── `qa-report-dev-20260526-200855.json` - json config
+│   │   ├── `qa-report-dev-20260526-203808-manifest.json` - json config
+│   │   ├── `qa-report-dev-20260526-203808.json` - json config
+│   │   ├── `qa-report-dev-20260527-063758-T1.json` - json config
+│   │   ├── `qa-report-dev-20260527-063758-T2.json` - json config
+│   │   ├── `qa-report-dev-20260527-063758-T3.json` - json config
+│   │   ├── `qa-report-dev-20260527-063758-T4.json` - json config
+│   │   ├── `qa-report-dev-20260529-081000.json` - json config
+│   │   ├── `qa-report-dev-20260529-092512.json` - json config
+│   │   ├── `qa-report-dev-20260529-152050.json` - json config
+│   │   ├── `qa-report-dev-20260529-210759.json` - json config
+│   │   ├── `qa-report-dev-20260530-084735.json` - json config
+│   │   ├── `qa-report-dev-20260530-144032.json` - json config
+│   │   ├── `qa-report-dev-20260531-134455.json` - json config
+│   │   ├── `qa-report-dev-20260531-193000.json` - json config
+│   │   ├── `qa-report-dev-20260610-205358.json` - json config
+│   │   ├── `qa-report-do-20260529-210815.json` - json config
+│   │   ├── `qa-report-iter2-dev-20260107-091716.json` - json config
+│   │   ├── `refined-context-dev-20260111-193314.json` - json config
+│   │   ├── `style-inspector-report-005efeec-bb32-4361-ad8e-21e673e7f61d.json` - json config
+│   │   ├── `style-inspector-report-20260517-153856.json` - json config
+│   │   ├── `style-inspector-report-20260517-155838.json` - json config
+│   │   ├── `style-inspector-report-20260517-172600.json` - json config
+│   │   ├── `style-inspector-report-20260517-211508.json` - json config
+│   │   ├── `style-inspector-report-20260517-214922.json` - json config
+│   │   ├── `style-inspector-report-20260517-215114.json` - json config
+│   │   ├── `style-inspector-report-20260517-222440.json` - json config
+│   │   ├── `style-inspector-report-20260518-071337.json` - json config
+│   │   ├── `style-inspector-report-20260518-094616.json` - json config
+│   │   ├── `style-inspector-report-20260518-155948.json` - json config
+│   │   ├── `style-inspector-report-20260518-214050.json` - json config
+│   │   ├── `style-inspector-report-20260519-132417.json` - json config
+│   │   ├── `style-inspector-report-20260519-151734.json` - json config
+│   │   ├── `style-inspector-report-20260519-161035.json` - json config
+│   │   ├── `style-inspector-report-20260519-175339.json` - json config
+│   │   ├── `style-inspector-report-20260519-211515-recheck.json` - json config
+│   │   ├── `style-inspector-report-20260519-211515.json` - json config
+│   │   ├── `style-inspector-report-20260520-085647-d1722b.json` - json config
+│   │   ├── `style-inspector-report-20260520-221452.json` - json config
+│   │   ├── `style-inspector-report-20260521-090100.json` - json config
+│   │   ├── `style-inspector-report-20260521-090200.json` - json config
+│   │   ├── `style-inspector-report-20260521-090300.json` - json config
+│   │   ├── `style-inspector-report-20260522-000000.json` - json config
+│   │   ├── `style-inspector-report-20260522-080646.json` - json config
+│   │   ├── `style-inspector-report-20260524-101700.json` - json config
+│   │   ├── `style-inspector-report-20260524-122910.json` - json config
+│   │   ├── `style-inspector-report-20260524-122947.json` - json config
+│   │   ├── `style-inspector-report-20260524-123039.json` - json config
+│   │   ├── `style-inspector-report-20260524-125300.json` - json config
+│   │   ├── `style-inspector-report-20260524-133650.json` - json config
+│   │   ├── `style-inspector-report-20260524-171714.json` - json config
+│   │   ├── `style-inspector-report-20260524-172805.json` - json config
+│   │   ├── `style-inspector-report-20260524-205206.json` - json config
+│   │   ├── `style-inspector-report-20260524-205459.json` - json config
+│   │   ├── `style-inspector-report-20260525-050824.json` - json config
+│   │   ├── `style-inspector-report-20260525-095242.json` - json config
+│   │   ├── `style-inspector-report-20260525-095245.json` - json config
+│   │   ├── `style-inspector-report-20260526-042454.json` - json config
+│   │   ├── `style-inspector-report-20260526-052559.json` - json config
+│   │   ├── `style-inspector-report-20260526-053746.json` - json config
+│   │   ├── `style-inspector-report-20260526-202532.json` - json config
+│   │   ├── `style-inspector-report-20260527-054705.json` - json config
+│   │   ├── `style-inspector-report-20260527-132200.json` - json config
+│   │   ├── `style-inspector-report-20260529-080709.json` - json config
+│   │   ├── `style-inspector-report-20260529-081014.json` - json config
+│   │   ├── `style-inspector-report-20260529-164939.json` - json config
+│   │   ├── `style-inspector-report-20260529-210616.json` - json config
+│   │   ├── `style-inspector-report-20260529-211406.json` - json config
+│   │   ├── `style-inspector-report-20260530-081334.json` - json config
+│   │   ├── `style-inspector-report-20260530-091304.json` - json config
+│   │   ├── `style-inspector-report-20260530-105221.json` - json config
+│   │   ├── `style-inspector-report-20260530-170350.json` - json config
+│   │   ├── `style-inspector-report-20260530-212215.json` - json config
+│   │   ├── `style-inspector-report-20260531-082707.json` - json config
+│   │   ├── `style-inspector-report-20260601-060455.json` - json config
+│   │   ├── `style-inspector-report-20260602-210702.json` - json config
+│   │   ├── `style-inspector-report-20260604-204954.json` - json config
+│   │   ├── `style-inspector-report-20260606-131137.json` - json config
+│   │   ├── `style-inspector-report-20260606-201330.json` - json config
+│   │   ├── `style-inspector-report-20260611-100500.json` - json config
+│   │   ├── `style-inspector-report-20260614-093452.json` - json config
+│   │   ├── `style-inspector-report-20260614-182549.json` - json config
+│   │   ├── `style-inspector-report-20260614-205834.json` - json config
+│   │   ├── `style-inspector-report-20260615-125319.json` - json config
+│   │   ├── `style-inspector-report-20260616-094643.json` - json config
+│   │   ├── `style-inspector-report-30fbb321-8921-44aa-bd65-de59e4c70730.json` - json config
+│   │   ├── `style-inspector-report-441b0d47-3cbf-4fa5-9038-76ef39df048a.json` - json config
+│   │   ├── `style-inspector-report-44e208af-b8b8-4266-a2ba-fcfc77f92d24.json` - json config
+│   │   ├── `style-inspector-report-77be7954-cf76-4fea-a146-5cb88f32a69f.json` - json config
+│   │   ├── `style-inspector-report-8cfdc493-794f-4367-941b-2e2a150db230.json` - json config
+│   │   ├── `style-inspector-report-c2667fea-a84e-4ba8-9dc7-fae4c1abfc24.json` - json config
+│   │   ├── `style-inspector-report-c7452b2d-d6dd-4fa6-b61a-f0642a46c906.json` - json config
+│   │   ├── `style-inspector-report-cc7a706f-2662-4274-976d-d2f19e6dd767.json` - json config
+│   │   ├── `style-inspector-report-d1e94e.json` - json config
+│   │   ├── `style-inspector-report-dev-20260524-170335.json` - json config
+│   │   ├── `style-inspector-report-dev-20260524-205811.json` - json config
+│   │   ├── `style-inspector-report-dev-20260525-050935.json` - json config
+│   │   ├── `style-inspector-report-dev-20260525-053326.json` - json config
+│   │   ├── `style-inspector-report-dev-20260526-044731.json` - json config
+│   │   ├── `style-inspector-report-dev-20260526-200855.json` - json config
+│   │   ├── `style-inspector-report-dev-20260526-203808-manifest.json` - json config
+│   │   ├── `style-inspector-report-dev-20260526-203808.json` - json config
+│   │   ├── `style-inspector-report-dev-20260527-063758.json` - json config
+│   │   ├── `style-inspector-report-dev-20260529-081000.json` - json config
+│   │   ├── `style-inspector-report-dev-20260529-092512.json` - json config
+│   │   ├── `style-inspector-report-dev-20260529-152050.json` - json config
+│   │   ├── `style-inspector-report-dev-20260529-210759.json` - json config
+│   │   ├── `style-inspector-report-dev-20260530-084735.json` - json config
+│   │   ├── `style-inspector-report-dev-20260530-144032.json` - json config
+│   │   ├── `style-inspector-report-dev-20260531-134455.json` - json config
+│   │   ├── `style-inspector-report-dev-20260531-193000.json` - json config
+│   │   ├── `style-inspector-report-do-20260529-210815.json` - json config
+│   │   ├── `style-inspector-report-do-20260531-111311.json` - json config
+│   │   ├── `style-inspector-report-do-20260531-171010.json` - json config
+│   │   ├── `style-inspector-report-do-20260602-150727.json` - json config
+│   │   ├── `style-inspector-report-do-20260603-084448.json` - json config
+│   │   ├── `style-inspector-report-eeeabad1-554e-4a04-a040-149797afaed7-v2.json` - json config
+│   │   ├── `style-inspector-report-eeeabad1-554e-4a04-a040-149797afaed7.json` - json config
+│   │   ├── `style-progress-dev-20260530-144032.json` - json config
+│   │   ├── `style-progress-dev-20260531-193000.json` - json config
+│   │   ├── `style-progress-eeeabad1-554e-4a04-a040-149797afaed7-v2.json` - json config
+│   │   ├── `test-writer-report-20260520-221452.json` - json config
+│   │   ├── `test-writer-report-20260521-090100.json` - json config
+│   │   ├── `test-writer-report-20260521-090200.json` - json config
+│   │   ├── `test-writer-report-20260521-090300.json` - json config
+│   │   ├── `test-writer-report-20260522-000000.json` - json config
+│   │   ├── `test-writer-report-20260522-080646-A.json` - json config
+│   │   ├── `test-writer-report-20260522-080646-B.json` - json config
+│   │   ├── `test-writer-report-20260522-080646-D.json` - json config
+│   │   ├── `test-writer-report-20260524-122910.json` - json config
+│   │   ├── `test-writer-report-20260524-122947.json` - json config
+│   │   ├── `test-writer-report-20260524-125300-A.json` - json config
+│   │   ├── `test-writer-report-20260524-125300-B.json` - json config
+│   │   ├── `test-writer-report-20260524-125300-C.json` - json config
+│   │   ├── `test-writer-report-20260524-125300-D.json` - json config
+│   │   ├── `test-writer-report-20260524-125300-push.json` - json config
+│   │   ├── `test-writer-report-20260524-172805.json` - json config
+│   │   ├── `test-writer-report-20260524-205206.json` - json config
+│   │   ├── `test-writer-report-20260525-050824.json` - json config
+│   │   ├── `test-writer-report-20260525-095242.json` - json config
+│   │   ├── `test-writer-report-20260526-052559.json` - json config
+│   │   ├── `test-writer-report-20260526-053746.json` - json config
+│   │   ├── `test-writer-report-20260527-132200.json` - json config
+│   │   ├── `test-writer-report-20260529-080709.json` - json config
+│   │   ├── `test-writer-report-20260529-211406.json` - json config
+│   │   ├── `test-writer-report-20260530-105221.json` - json config
+│   │   ├── `test-writer-report-20260530-170350.json` - json config
+│   │   ├── `test-writer-report-20260531-112831-bug1.json` - json config
+│   │   ├── `test-writer-report-20260604-204954.json` - json config
+│   │   ├── `test-writer-report-20260611-100500.json` - json config
+│   │   ├── `test-writer-report-20260614-093452.json` - json config
+│   │   ├── `test-writer-report-20260614-205834.json` - json config
+│   │   ├── `test-writer-report-dev-20260531-134455.json` - json config
+│   │   ├── `test-writer-report-dev-20260531-193000.json` - json config
+│   │   ├── `test-writer-report-dev-20260615-213842.json` - json config
+│   │   ├── `ticket-20260510-191533.md` - BA Specification: Restore v3 Manifest as OPTIONAL Precision Layer + Eliminate Hardcoded "v3"
+│   │   ├── `ticket-20260511-094500.md` - BA Specification: C2 worktree-recognition rollback (single-item cycle)
+│   │   ├── `ticket-20260511-180000.md` - BA Specification: Enterprise commit hardening — hash chain trailer + message-vs-evidence guard + CC type lint + optional audit-log persistence
+│   │   ├── `ticket-20260517-153856.md` - BA Specification: Establish Bidirectional Handoff Contracts Between Specialist Agents and BA
+│   │   ├── `ticket-20260517-155838.md` - BA Specification: /do direct-development cannot be closed via /close normal path
+│   │   ├── `ticket-20260517-172600.md` - BA Specification: Add close→commit/push Ending Workflow Adaptation to clean.md + Enumerate Other Commands
+│   │   ├── `ticket-20260517-211508.md` - BA Specification: Fix broken ending-workflow in clean.md (Cycle 2)
+│   │   ├── `ticket-20260517-215114.md` - BA Specification: Agentic Analyst Mechanism for /push, /merge, /pull
+│   │   ├── `ticket-20260517-222440.md` - BA Specification: /allow bypass does not extend to git commit in pretool-git-privilege-guard.py
+│   │   ├── `ticket-20260518-071337.md` - BA Specification: /allow Universal Bypass — systemctl and git push
+│   │   ├── `ticket-20260518-094616.md` - BA Specification: /allow Bypass System — 6-Issue Architectural Refactor
+│   │   ├── `ticket-20260518-155948.md` - BA Specification: Consolidate 5 /allow Grant-Read Implementations into lib/allowlist.py
+│   │   ├── `ticket-20260518-214050.md` - BA Specification: Multi-Repo .gitignore Cleanup and Stale File Removal
+│   │   ├── `ticket-20260519-132417.md` - BA Specification: Dev Harness Extension Plan — Scoring, Test-Writer, Blast Radius, Executable AC, Canary
+│   │   ├── `ticket-20260519-151734.md` - BA Specification: Fix /do and /allow Bypass Coverage in PreToolUse Hooks
+│   │   ├── `ticket-20260519-161035.md` - BA Specification: Layered prevention of tmp/ramdisk pressure recurrence
+│   │   ├── `ticket-20260519-175339.md` - BA Specification: Chrome CDP Page-Target Deadlock — Wrapper Lock + Stale-Page Cleanup + Cron Surgical Edit
+│   │   ├── `ticket-20260519-211515-CYCLE2-round3.md` - BA Specification: 3-Cluster Harness Fixes (Shippability Gate / Real-Fixture Verification / Event-Sourced Lifecycle Log)
+│   │   ├── `ticket-20260519-211515.md` - BA Specification: Implement 9 retrospective remediation items from cycle 20260519-175339
+│   │   ├── `ticket-20260520-085647-d1722b.md` - BA Specification: Close /allow grant leakage (D) and PostToolUse:Agent tracker race (H) — TRANSFERRED
+│   │   ├── `ticket-20260520-221452.md` - BA Specification: spec-20260518-225715 Cycle 2 — P1+P2+P3 Close-Gate Remediation
+│   │   ├── `ticket-20260520-allow-dh-7faae4.md` - BA Specification: Close `/allow` grant leakage (D) and PostToolUse:Agent tracker race (H)
+│   │   ├── `ticket-20260521-085827-fa9f07.md` - BA Specification: Batched remediation — codex output relocation + sentinel investigation + /allow vs orchestra tracker-gate
+│   │   ├── `ticket-20260521-090100.md` - BA Specification: Canonical Codex Output Path (docs/codex/)
+│   │   ├── `ticket-20260521-090200.md` - BA Specification: /allow Grant Not Honored — Hook Chain Investigation
+│   │   ├── `ticket-20260521-090300.md` - BA Specification: `.hook-refactor-allow` Sentinel Security Audit
+│   │   ├── `ticket-20260522-000000.md` - BA Specification: Gitignore fixes, spec commitment, tmp-cleanup.sh mirror, and score-update uncapped_delta
+│   │   ├── `ticket-20260522-080646-A.md` - BA Specification: bash-safety hook false positives — substring vs executable-context matching
+│   │   ├── `ticket-20260522-080646-B.md` - BA Specification: Write-Guard Sentinel Integration
+│   │   ├── `ticket-20260522-080646-C.md` - BA Specification: Tighten Step 7 Stage-3 Candidate Predicate to Machine-Readable Marker
+│   │   ├── `ticket-20260522-080646-D.md` - BA Specification: Dev Self-Report Provenance (OOS Item D)
+│   │   ├── `ticket-20260522-080646-F.md` - BA Specification: hooks/tests underscore-prefix rename + cleanup
+│   │   ├── `ticket-20260524-101700-A.md` - BA Specification: bash-safety hook — DANGER_COMMANDS quoted-arg bypass (second attempt)
+│   │   ├── `ticket-20260524-101700-B.md` - BA Specification: Write-Guard Sentinel Integration — Add Missing Wildcard Test
+│   │   ├── `ticket-20260524-101700-D.md` - BA Specification: Spec Text/Test Correction — Task D (test_AC3 provenance gap only)
+│   │   ├── `ticket-20260524-101700-H.md` - BA Specification: Three Structural Gaps in happy-session-recovery.sh
+│   │   ├── `ticket-20260524-101700-X.md` - BA Specification: Infrastructure Audit — daily-trade, swap-drain, post-start, disk-monitor
+│   │   ├── `ticket-20260524-101700.md` - BA Specification Aggregate: dev-20260524-101700
+│   │   ├── `ticket-20260524-122910.md` - BA Specification: spec-20260518-225715 Cycle 3 — 10-Debt Clearance
+│   │   ├── `ticket-20260524-122947.md` - BA Specification: /push execute-push.py Script + Step 5 Delegation Warning
+│   │   ├── `ticket-20260524-123039.md` - BA Specification: Session Wrap-Up — Commit Remaining Artifacts + Document Manual Action
+│   │   ├── `ticket-20260524-125300-A.md` - BA Specification: Three Bypass Paths in bash_context_strip.py
+│   │   ├── `ticket-20260524-125300-B.md` - BA Specification: Fix /allow Write Sentinel — Writer Path Bugs + Schema Mismatch (Privilege Escalation)
+│   │   ├── `ticket-20260524-125300-C.md` - BA spec — missing spec-continuation-of marker in spec-update producer
+│   │   ├── `ticket-20260524-125300-D.md` - BA Specification: Dev Provenance Completeness — Three QA Gate Gaps
+│   │   ├── `ticket-20260524-125300-push.md` - BA Spec: execute-push.py — atomic push eliminating && timing window (iteration 3)
+│   │   ├── `ticket-20260524-133650.md` - BA Specification: /allow sentinel bypass for git ref-mutation guard
+│   │   ├── `ticket-20260524-171714.md` - BA Specification: arch-6 Gitignore Preflight Gate + arch-3 ENOSPC Fallback
+│   │   ├── `ticket-20260524-172805.md` - BA Specification: Scoring Rebalance, Rating UX Fix, Session Summary, and Commit Isolation
+│   │   ├── `ticket-20260524-205206.md` - BA Specification: Cycle-Total Score Cap +5, Verifiable Score Injection, Timeline Session Summary, User-Gated /commit --bulk
+│   │   ├── `ticket-20260524-205459.md` - BA Specification: LOCK_FILE EISDIR stderr leak fix (arch-3 phase 2)
+│   │   ├── `ticket-20260525-050824.md` - BA Specification: Score CAS Architecture (arch-7 phase 2, R9)
+│   │   ├── `ticket-20260525-095242.md` - BA Specification: Fix Layer 1.F compound-command bypass in pretool-bash-safety.sh
+│   │   ├── `ticket-20260525-095245.md` - BA Specification: Wrap bare python3 heredoc calls with venv activation
+│   │   ├── `ticket-20260526-042454.md` - BA Specification: Parameterize flock timeout constants (Standard 2/9 fix)
+│   │   ├── `ticket-20260526-052545.md` - BA Specification: Privilege Guard Security Gap — auto-bulk: Bypass in BULK=false Mode
+│   │   ├── `ticket-20260526-052559.md` - BA Specification: Close Layer 1.F bypass paths for write-bulk-commit-sentinel.py
+│   │   ├── `ticket-20260526-053746.md` - BA Specification: Fix 6 Outstanding Items from Cycle 1-6
+│   │   ├── `ticket-20260526-202532.md` - BA Specification: Remove dead auth-flag code from hooks
+│   │   ├── `ticket-20260527-054705.md` - BA Specification: Fix 3 Codex Assessment Residuals
+│   │   ├── `ticket-20260527-132200.md` - BA Specification: Graphify Knowledge Graph Integration — Dual-Touchpoint Architecture
+│   │   ├── `ticket-20260527-133200.md` - BA Specification: Changelog-analyst warn-and-skip for provenance-anomaly files in BULK=false mode
+│   │   ├── `ticket-20260529-080709.md` - BA Specification: Graphify Close-Blocker Fixes (Cycle 2)
+│   │   ├── `ticket-20260529-081014.md` - BA Specification: QA empty-active vacuity guard + venv broken-symlink repair
+│   │   ├── `ticket-20260529-164939.md` - BA Specification: Replace bash sentinel guard with prose in commands/dev.md
+│   │   ├── `ticket-20260529-210616.md` - BA Specification: score-update reversal + /close premature-score guard + clear 5 carried-forward test failures
+│   │   ├── `ticket-20260529-211406.md` - BA Specification: Recovery commit when task files pre-empted by foreign bulk session
+│   │   ├── `ticket-20260530-081334.md` - BA Specification: Graphify safety gate + real-CLI validation spike
+│   │   ├── `ticket-20260530-091304.md` - BA Specification: changelog-analyst.md Style Fixes — /close Unblock
+│   │   ├── `ticket-20260530-105221.md` - BA Specification: Graphify FULL B-lite Integration — rewrite 3 wrappers to drive REAL graphify CLI
+│   │   ├── `ticket-20260530-170350.md` - BA Specification: Graphify Semantic Path — Fix Proof-Gate + Add Manual `semantic` Command (Verdict P)
+│   │   ├── `ticket-20260531-112831-bug1.md` - BA Specification: Bug 1 — Scoped Restore for Manual Single-Daemon Restarts
+│   │   ├── `ticket-20260531-112831-bug2b.md` - BA Specification: Fix pid_to_happy_home() happy-sessions.slice Recognition
+│   │   ├── `ticket-20260531-112831-gap1.md` - BA Specification: Fix Gap 1 — Restored Codex Session Shows Blank History
+│   │   ├── `ticket-20260531-112831.md` - BA Specification: Bug 2a — Codex Process-Exit Tombstone
+│   │   ├── `ticket-20260601-060455.md` - BA Specification: /spec must persist + reference user-supplied design and evidence
+│   │   ├── `ticket-20260604-204954.md` - BA Specification: Harden /dev-overnight so an overnight session can NEVER touch master (always-create-worktree, no hard-abort) — OPTION A (git ≥2.46 structural keystone)
+│   │   ├── `ticket-20260611-100500.md` - BA Specification: CONJUNCTIVE HARDENING — (a) block "overnight actor moves main HEAD off master" via the git-native reference-transaction keystone (L5, half a, PASSED) **AND** (b) block "overnight actor writes/checks-out in place in the main working tree" via a per-Bash-command bwrap OS execution boundary (L6, half b, this update)
+│   │   ├── `ticket-20260614-093452.md` - BA Specification: Close the blank-check wildcard fallback in /allow consent
+│   │   ├── `ticket-20260614-205834.md` - BA Specification: HEAD Public-Hygiene Prep — Residual Refs + Stale INDEX + Public-Readiness Quick-Wins
+│   │   ├── `ticket-75463e-DH.md` - BA Specification: Close `/allow` grant leakage (D) and PostToolUse:Agent tracker race (H) — iter3
+│   │   ├── `ticket-close-cont-20260524-170335.md` - Continuation: Fix bare python3 invocations introduced in dev-20260524-170335
+│   │   ├── `ticket-d1e94e-CYCLE2-round2.md` - BA Specification: Dev Harness Extension — Cycle 2 Remediation
+│   │   ├── `ticket-d1e94e-CYCLE2.md` - BA Specification: Dev Harness Extension — Cycle 2 Remediation
+│   │   ├── `ticket-d1e94e.md` - BA Specification: Close `/allow` grant leakage (D) and PostToolUse:Agent tracker race (H) — iter3
+│   │   ├── `ticket-dev-20260524-170335.md` - BA Specification: Parallel-Worker Pipeline Conflict Fixes (5-Fix Consensus Plan)
+│   │   ├── `ticket-dev-20260524-205811.md` - BA Specification: Fix Legacy Grant Subagent Leak in /allow Hook Infrastructure
+│   │   ├── `ticket-dev-20260525-050935.md` - BA Specification: Git Hygiene — Multi-Repo Gitignore Gaps + Harness Propagation Hook
+│   │   ├── `ticket-dev-20260525-053326-A.md` - BA Specification: Context-Aware Dangerous Token Stripping for Script Interpreter Argv
+│   │   ├── `ticket-dev-20260525-053326-B.md` - BA Specification: Write-Guard Sentinel Integration (worker B)
+│   │   ├── `ticket-dev-20260525-053326-F.md` - BA Specification: Shell Cleanliness Fixes — Permissions, mktemp+trap, Stale Comments
+│   │   ├── `ticket-dev-20260526-044731.md` - BA Specification: Rename spec-continue → spec-update + Verify Flock Timeout Parameterization
+│   │   ├── `ticket-dev-20260526-200855.md` - BA Specification: Fix execute-push.py CWD dependency via --repo-root
+│   │   ├── `ticket-dev-20260526-203808-issubagent.md` - BA Specification: IS_SUBAGENT Gate on BLESSED_BRIDGE_RE Commit Path
+│   │   ├── `ticket-dev-20260526-203808-manifest.md` - BA Specification: Register AC7 and AC7b in per-task manifest (task 20260526-052559)
+│   │   ├── `ticket-dev-20260526-203808.md` - BA Specification: Fix stale M5 allowlist regex in ticket-20260526-052559 Edge Cases
+│   │   ├── `ticket-dev-20260527-063758-T1.md` - BA Spec: Fix push-gate token session_id mismatch in changelog-analyst
+│   │   ├── `ticket-dev-20260527-063758-T2.md` - BA Specification: Increase Commit Grant TTL from 10 to 30 Minutes
+│   │   ├── `ticket-dev-20260527-063758-T3.md` - BA Specification: Push-analyst grant TTL increase 180s -> 600s
+│   │   ├── `ticket-dev-20260527-063758-T4.md` - BA Specification: Fix `python` → `python3` and `CLAUDE_SESSION_ID` fallback
+│   │   ├── `ticket-dev-20260529-081000.md` - BA Specification: Fix failing test — write-bulk-commit-sentinel.py session-ID fallback
+│   │   ├── `ticket-dev-20260529-092512.md` - BA Specification: Backlog batch — context-strip extension, write-guard hardening, step-7 marker parity, test cleanliness
+│   │   ├── `ticket-dev-20260529-152050.md` - BA Specification: Positive regression test for CLAUDE_CODE_SESSION_ID fallback
+│   │   ├── `ticket-dev-20260529-210759.md` - BA Specification: Fix Layer 1.F False Positive — Protected Name in Quoted String Arg
+│   │   ├── `ticket-dev-20260530-084735.md` - BA Specification: Clarify `baseline_dirty_snapshot` Point-in-Time Semantics Under Concurrency
+│   │   ├── `ticket-dev-20260530-144032.md` - BA Specification: Line-precise (hunk-filtered) staging in changelog-analyst
+│   │   ├── `ticket-dev-20260531-134455.md` - BA Specification: Reverse-blast-radius (RB1) + integer renumbering of the /dev graphify todo items
+│   │   ├── `ticket-dev-20260531-193000.md` - BA Specification: Renumber commands/dev.md to integer Step 1..17 + fully integrate graphify dual-touchpoint into /dev-overnight
+│   │   ├── `ticket-dev-20260615-213842.md` - BA Specification: Dependency documentation + repo self-consistency for open-box public release
+│   │   ├── `ticket-do-20260529-210815.md` - /do Fix: bare dd/shred gap + Chinese diagnostic string
+│   │   ├── `user-requirement-dev-20260517-215114.md` - No description
+│   │   ├── `user-requirement-dev-20260517-222440.md` - No description
+│   │   ├── `user-requirement-dev-20260518-214050.md` - No description
+│   │   ├── `user-requirement-dev-20260519-132417.md` - No description
+│   │   ├── `user-requirement-dev-20260519-151734.md` - No description
+│   │   ├── `user-requirement-dev-20260519-161035.md` - User Requirement — dev-20260519-161035
+│   │   ├── `user-requirement-dev-20260519-175339.md` - No description
+│   │   ├── `user-requirement-dev-20260520-221452.md` - No description
+│   │   ├── `user-requirement-dev-20260521-085554.md` - No description
+│   │   ├── `user-requirement-dev-20260521-085627.md` - No description
+│   │   ├── `user-requirement-dev-20260522-080646.md` - No description
+│   │   ├── `user-requirement-dev-20260524-101700.md` - No description
+│   │   ├── `user-requirement-dev-20260524-122910.md` - No description
+│   │   ├── `user-requirement-dev-20260524-122947.md` - No description
+│   │   ├── `user-requirement-dev-20260524-123039.md` - No description
+│   │   ├── `user-requirement-dev-20260524-125300.md` - No description
+│   │   ├── `user-requirement-dev-20260524-133650.md` - No description
+│   │   ├── `user-requirement-dev-20260524-170335.md` - No description
+│   │   ├── `user-requirement-dev-20260524-171714.md` - No description
+│   │   ├── `user-requirement-dev-20260524-172805.md` - No description
+│   │   ├── `user-requirement-dev-20260524-205206.md` - No description
+│   │   ├── `user-requirement-dev-20260524-205459.md` - No description
+│   │   ├── `user-requirement-dev-20260524-205811.md` - No description
+│   │   ├── `user-requirement-dev-20260525-050824.md` - No description
+│   │   ├── `user-requirement-dev-20260525-050935.md` - No description
+│   │   ├── `user-requirement-dev-20260525-053326.md` - No description
+│   │   ├── `user-requirement-dev-20260525-095242.md` - No description
+│   │   ├── `user-requirement-dev-20260525-095245.md` - No description
+│   │   ├── `user-requirement-dev-20260526-042454.md` - No description
+│   │   ├── `user-requirement-dev-20260526-044731.md` - No description
+│   │   ├── `user-requirement-dev-20260526-052559.md` - No description
+│   │   ├── `user-requirement-dev-20260526-053746.md` - No description
+│   │   ├── `user-requirement-dev-20260526-200855.md` - No description
+│   │   ├── `user-requirement-dev-20260526-202532.md` - No description
+│   │   ├── `user-requirement-dev-20260526-203808.md` - No description
+│   │   ├── `user-requirement-dev-20260527-054705.md` - No description
+│   │   ├── `user-requirement-dev-20260527-063758.md` - No description
+│   │   ├── `user-requirement-dev-20260527-132135.md` - No description
+│   │   ├── `user-requirement-dev-20260527-132200.md` - No description
+│   │   ├── `user-requirement-dev-20260527-132220.md` - No description
+│   │   ├── `user-requirement-dev-20260529-071720.md` - No description
+│   │   ├── `user-requirement-dev-20260529-080709.md` - No description
+│   │   ├── `user-requirement-dev-20260529-081000.md` - No description
+│   │   ├── `user-requirement-dev-20260529-081014.md` - No description
+│   │   ├── `user-requirement-dev-20260529-092512.md` - No description
+│   │   ├── `user-requirement-dev-20260529-152050.md` - No description
+│   │   ├── `user-requirement-dev-20260529-164939.md` - No description
+│   │   ├── `user-requirement-dev-20260529-204939.md` - No description
+│   │   ├── `user-requirement-dev-20260529-210616.md` - No description
+│   │   ├── `user-requirement-dev-20260529-210759.md` - No description
+│   │   ├── `user-requirement-dev-20260529-211406.md` - No description
+│   │   ├── `user-requirement-dev-20260530-081334.md` - No description
+│   │   ├── `user-requirement-dev-20260530-082409.md` - No description
+│   │   ├── `user-requirement-dev-20260530-084735.md` - No description
+│   │   ├── `user-requirement-dev-20260530-091304.md` - No description
+│   │   ├── `user-requirement-dev-20260530-105221.md` - No description
+│   │   ├── `user-requirement-dev-20260530-144032.md` - No description
+│   │   ├── `user-requirement-dev-20260530-170350.md` - No description
+│   │   ├── `user-requirement-dev-20260531-112831.md` - No description
+│   │   ├── `user-requirement-dev-20260531-134455.md` - No description
+│   │   ├── `user-requirement-dev-20260531-193000.md` - No description
+│   │   ├── `user-requirement-dev-20260610-205358.md` - No description
+│   │   ├── `user-requirement-dev-20260611-100500.md` - No description
+│   │   ├── `user-requirement-dev-20260614-093452.md` - No description
+│   │   ├── `user-requirement-dev-20260614-205834.md` - No description
+│   │   ├── `user-requirement-dev-20260615-213842.md` - No description
+│   │   ├── `user-requirement-dev-command-20260601-060455.md` - User Requirement — dev-command-20260601-060455
+│   │   └── `user-requirement-dev-d1e94e.md` - User Requirement — dev-20260519-211515
+│   ├── examples/
+│   │   └── `settings-with-checkpoint.json` - json config
+│   ├── guides/
+│   │   ├── `auto-sync-quickstart.md` - 自动同步快速开始指南
+│   │   ├── `integration-guide.md` - 📊 Excel Analyzer 深度集成指南
+│   │   ├── `project-settings-template.md` - Project Settings Template Guide
+│   │   └── `skills-test-guide.md` - Claude Code Office Skills 测试指南
+│   ├── planning/
+│   ├── reference/
+│   │   ├── `checkpoint-mechanism.md` - Auto-Commit / Checkpoint Mechanism
+│   │   ├── `fswatch-quickref.md` - FSWatch 快速参考卡片
+│   │   ├── `git-fswatch.md` - Git File Watcher (fswatch) 使用文档
+│   │   ├── `graphify-integration.md` - Graphify Knowledge Graph Integration
+│   │   ├── `lock-file-handling.md` - Git Lock File Handling
+│   │   ├── `slashcommand-quick-reference.md` - Slash Command Quick Reference
+│   │   ├── `tmp-cleanup-convention.md` - Ad-hoc scratch directory convention
+│   │   └── `venv-repair.md` - venv-repair — restoring `~/.claude/venv` when interpreter symlinks break
+│   ├── reports/
+│   │   └── `slashcommand-rollout-summary.md` - SlashCommand Permission Rollout Summary
+│   ├── templates/
+│   │   └── `settings.json.template` - template file
+│   └── test/
+│       ├── `edge-case-analysis-qa.json` - json config
+│       ├── `edge-case-analysis-summary.md` - Edge Case Analysis Summary - Git History Deep Dive
+│       ├── `test-design.md` - Test Framework Design
+│       └── `test-implementation-guide.md` - Test Implementation Guide - Quick Reference
 ├── hooks/
 │   ├── doc_sync/
 │   │   ├── `claude.py` - CLAUDE.md auto-creation and patching.
@@ -133,14 +1612,13 @@ dot-claude/
 │   ├── `auto-commit.sh` - ============================================================================
 │   ├── `check-todo-md-sync.py` - check-todo-md-sync.py — Session-start drift detector for todo scripts
 │   ├── `checkpoint.sh` - checkpoint.sh - Manual /checkpoint command
-│   ├── `ensure-git-repo.sh` - ensure-git-repo.sh - DEPRECATED, scheduled for deletion
 │   ├── `fswatch-manager.sh` - fswatch-manager.sh - Manage git-fswatch instances
 │   ├── `git-fswatch.sh` - git-fswatch.sh - Comprehensive Git file watcher using fswatch
 │   ├── `git-fswatch@.service` - service file
 │   ├── `hook-todo-injection.py` - Global PreToolUse Hook: Todo Injection for Slash Commands
-│   ├── `install-auto-sync.sh` - install-auto-sync.sh - Quick installer for auto-sync features
-│   ├── `install-git-hooks.sh` - install-git-hooks.sh - Install pre-commit hooks into git repositories
-│   ├── `install-protection-all.sh` - install-protection-all.sh - Automatically install protection for all git repos
+│   ├── `install-auto-sync.sh` - ============================================================================
+│   ├── `install-git-hooks.sh` - ============================================================================
+│   ├── `install-protection-all.sh` - ============================================================================
 │   ├── `install.sh` - ============================================================================
 │   ├── `merge.sh` - merge.sh - wrapper for /merge slash command
 │   ├── `notification-idle-overnight.py` - Notification hook: Observe overnight idle events
@@ -196,7 +1674,8 @@ dot-claude/
 │   ├── `prompt-workflow.py` - UserPromptSubmit Hook: Checklist Injection for Slash Commands
 │   ├── `protection-status.sh` - protection-status.sh - Display protection status for all git repositories
 │   ├── `pull.sh` - pull.sh - Executable version of /pull command
-│   ├── `QUICKSTART.md` - 🚀 Quick Start Guide
+│   ├── `push.sh` - push.sh - Executable version of /push command
+│   ├── `QUICKSTART.md` - Quick Start — the hooks layer
 │   ├── `README-TODO-INJECTION.md` - Global Todo Injection Hook
 │   ├── `sentinel-lint.sh` - sentinel-lint.sh - Guards the dev-registry sentinel anchor in orchestrator files
 │   ├── `session-git-init.sh` - ============================================================================
@@ -205,7 +1684,6 @@ dot-claude/
 │   ├── `session-promote-hook.sh` - Description: SessionStart hook that promotes a cold session back to ramdisk.
 │   ├── `session-tmpfs-banner.sh` - session-tmpfs-banner.sh — SessionStart hook (6th in the SessionStart hooks block).
 │   ├── `session_start.sh` - SessionStart Hook - Display working environment info
-│   ├── `smart-checkpoint.sh` - smart-checkpoint.sh - DEPRECATED, scheduled for deletion
 │   ├── `start-fswatch-all.sh` - start-fswatch-all.sh - Start fswatch monitoring for all important repositories
 │   ├── `stop-cleanup-allowlist.sh` - Stop Hook: Wipe any unconsumed /allow grant at turn end.
 │   ├── `stop-overnight-timelock.py` - Stop Hook: Block conversation termination until overnight end-time
@@ -363,6 +1841,11 @@ dot-claude/
 │   │   └── `SKILL.md` - Verify presence of 7 interactive states (default / hover / focus / active / disabled / loading / error / success) on key interactive elements. Returns deterministic state.* findings + state_coverage_pct + not_applicable[]. Use during ui-specialist Phase 4 (Interactive Element Visual Testing).
 │   └── ui-token-conformance/
 │       └── `SKILL.md` - Conditional capability — measure design-token conformance (color/spacing/typography) of computed CSS values against a project's declared token source (DTCG / tailwind.config.js / theme.ts). If no token source is detected, emit capability_unavailable to unknowns and DO NOT raise findings on guesses. Use during ui-specialist Phase 5 (Aesthetic).
+├── specs/
+│   ├── 20260514-174852/
+│   ├── qa-c7-test/
+│   └── qa-c7-test-w/
+├── subagents/
 ├── templates/
 │   ├── `overnight-spec.md` - Spec: <issue_description>
 │   └── `spec-template.md` - Spec: <issue_description>
@@ -409,12 +1892,14 @@ dot-claude/
 │   │   ├── 20260530-165718/
 │   │   ├── 20260530-170350/
 │   │   ├── 20260531-112831-bug1/
+│   │   ├── 20260604-204954/
 │   │   ├── 20260611-100500/
 │   │   ├── 20260614-093452/
 │   │   ├── 20260614-205834/
 │   │   ├── dev-20260530-144032/
 │   │   ├── dev-20260531-134455/
 │   │   ├── dev-20260531-193000/
+│   │   ├── dev-20260615-213842/
 │   │   └── `manifest.json` - json config
 │   ├── instructions/
 │   │   ├── `execution-guide.md` - AI Test Execution Guide
@@ -452,12 +1937,41 @@ dot-claude/
 │   └── `verify-stop-spec-session-isolation.sh` - QA verification harness for stop-spec-coverage-enforce.py session isolation fix.
 ├── `ARCHITECTURE.md` - Architecture — `.claude` Agent Operating System
 ├── `CLAUDE.md` - CLAUDE.md
+├── `history.jsonl` - jsonl file
 ├── `LICENSE` - unknown file
+├── `mcp-needs-auth-cache.json` - json config
 ├── `NESTED-REPO.md` - Nested Repo Sentinel
 ├── `NOTICE` - unknown file
-└── `settings.json` - json config
+├── `playwright-storage-state.json` - json config
+├── `push.sh` - 
+├── `session.log` - log file
+├── `settings.json` - json config
+├── `settings.json.bak-20260523-184533` - bak-20260523-184533 file
+├── `settings.local.json` - json config
+├── `workflow-019e0d4c-09bf-77a1-a19a-cd74736ab48e.json` - json config
+├── `workflow-019e0d52-4184-7e83-9695-bce01c179a8d.json` - json config
+├── `workflow-019e1d0c-d666-76e0-a080-10a6c4811cb4.json` - json config
+├── `workflow-019e1d17-3e27-77a0-891b-5d9aef797d53.json` - json config
+├── `workflow-11d0da00-24f0-4e23-bbe0-bc15d31b993b.json` - json config
+├── `workflow-1f9f0472-7a89-4cfa-87f2-c85616fed777.json` - json config
+├── `workflow-215eec0e-0e9c-4f81-bd52-b73036e3d33a.json` - json config
+├── `workflow-30b4bbbc-a873-4ba8-b8fd-804dc05492bc.json` - json config
+├── `workflow-483e030c-3ab6-42d0-973e-8a2a4b8b8806.json` - json config
+├── `workflow-49d0cdde-0555-4c6a-9354-0076adf7db42.json` - json config
+├── `workflow-4e6b0a9e-bdd6-47ca-8ec4-95cae992867d.json` - json config
+├── `workflow-6c3a008d-0515-40b1-abe8-b785518c18d2.json` - json config
+├── `workflow-758ea7a9-12e8-4854-9799-3e03dfb2ec3e.json` - json config
+├── `workflow-78c6f989-5b0e-4d7b-b692-6cabbe0008bf.json` - json config
+├── `workflow-d5e5ffb8-89bd-409f-a8c0-d00f45ecbce3.json` - json config
+├── `workflow-dd3a870c-9440-4274-896f-462dfe972646.json` - json config
+├── `workflow-eaa1077b-49ad-4697-8e01-e4a923d2b116.json` - json config
+├── `workflow-edfda281-beb8-434f-a45b-2a8053975db8.json` - json config
+└── `workflow-fe05ca9a-7892-40ea-a3ba-660db57180b9.json` - json config
 ```
 <!-- /AUTO:index-stats -->
+
+# dot-claude
+
 
 # .claude
 

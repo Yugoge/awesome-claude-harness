@@ -5,7 +5,7 @@
 
 This repository is a **Claude Code global configuration** (`~/.claude` symlinks to it) that turns one chat agent into a disciplined software team. A main *orchestrator* agent is mechanically prevented from touching code and instead dispatches single-purpose **subagents**; a defense-in-depth chain of **PreToolUse / PostToolUse / Stop** hooks makes catastrophic git and filesystem mistakes structurally impossible; and an autonomous overnight loop explores, fixes, verifies, and commits in an isolated worktree until a wall-clock deadline. Everything here is plain Markdown prompts plus small Python/Bash hooks and scripts — the behavior change comes from *enforcement in code*, not from asking the model nicely.
 
-This document is the maintainer-facing companion to [`README.md`](README.md): the README is the value-prop overview, this file goes deeper into mechanisms, data flows, lifecycles, and the *why* behind the design. The two share the same verified component counts and terminology.
+This document is the maintainer-facing companion to [`README.md`](README.md): the README is the value-prop overview, this file goes deeper into mechanisms, data flows, lifecycles, and the *why* behind the design. The component counts in §1 are recomputed from the live `settings.json` and are kept in step with the README badge.
 
 ---
 
@@ -17,27 +17,50 @@ All counts below were established by enumerating the actual repository, not copi
 |---|---|---|
 | **Subagents** (`agents/*.md`, excluding `INDEX.md`/`README.md`) | **23** | `ls agents/*.md \| grep -vE '/(INDEX\|README)\.md$'` |
 | **Slash commands** (`commands/*.md`, excluding `INDEX.md`/`README.md`) | **35** | `ls commands/*.md \| grep -vE '/(INDEX\|README)\.md$'` |
-| **Hook command entries wired** in `settings.json` | **69** | sum of `hooks[*][*].hooks[]` over all lifecycle events |
-| **Distinct hook files referenced** by `settings.json` | **68** | unique `hooks/*.py\|*.sh` paths in those entries |
+| **Hook command entries wired** in `settings.json` | **65** | sum of `hooks[*][*].hooks[]` over all lifecycle events |
+| **Distinct hook files referenced** by `settings.json` | **64** | unique `hooks/*.py\|*.sh` paths in those entries |
 | **Lifecycle events used** | **7** | keys of `settings.json.hooks` |
-| **Hook files present on disk** (`hooks/*.py` + `*.sh`, excl. `.bak`) | **92** | `find hooks -maxdepth 1 -type f \( -name '*.py' -o -name '*.sh' \)` |
+| **Hook files present on disk** (`hooks/*.py` + `*.sh`, excl. `.bak`) | **86** | `find hooks -maxdepth 1 -type f \( -name '*.py' -o -name '*.sh' \)` |
 | **Helper scripts** (`scripts/` top-level files, excl. `INDEX/README`) | **72** | `find scripts -maxdepth 1 -type f` minus docs |
 | **Skills** (`skills/*/` directories) | **8** | `ls -d skills/*/` |
-| `permissions.allow` / `deny` / `ask` entries | 175 / 75 / 30 | keys of `settings.json.permissions` |
+| `permissions.allow` / `deny` / `ask` entries | 161 / 73 / 30 | keys of `settings.json.permissions` |
 
-> Note on the hook count: more hook *files* exist on disk (92) than are *wired* (68). The unwired files are install scripts, libraries, legacy/`.bak` variants, and intentionally-staged hooks. The number that matters for behavior is **what `settings.json` wires**: 68 distinct files across 69 entries (a few hooks run under more than one matcher). The seven lifecycle events are `SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `Notification`, `Stop`, `SubagentStop`.
+> Note on the hook count: more hook *files* exist on disk (86) than are *wired* (64). The unwired files are install scripts, libraries, legacy/`.bak` variants, and intentionally-staged hooks. The number that matters for behavior is **what `settings.json` wires**: 64 distinct files across 65 entries (a few hooks run under more than one matcher). The seven lifecycle events are `SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `Notification`, `Stop`, `SubagentStop`.
 
 ### Per-event wiring (from `settings.json`)
 
 | Event | Matcher blocks | Hook entries |
 |---|---|---|
 | `SessionStart` | 1 | 7 |
-| `UserPromptSubmit` | 5 | 6 |
-| `PreToolUse` | 23 | 31 |
+| `UserPromptSubmit` | 4 | 5 |
+| `PreToolUse` | 21 | 28 |
 | `PostToolUse` | 7 | 14 |
 | `Notification` | 1 | 1 |
 | `Stop` | 1 | 4 |
 | `SubagentStop` | 4 | 6 |
+
+### 1.1 External dependencies (REQUIRED vs OPTIONAL)
+
+The harness is a configuration, not a packaged app — there is no `requirements.txt`/`pyproject.toml`. The complete dependency surface, with each item's tier and the subsystem that needs it:
+
+| Dependency | Tier | Subsystem / why |
+|---|---|---|
+| Claude Code (host) | **REQUIRED** | Must fire `UserPromptSubmit` / `Notification` / `SubagentStop` hook events, honor `disable-model-invocation` frontmatter, and enforce `Skill(*)` permission denies. Older clients that lack these silently skip the guardrails — there is no in-tree version literal, so the baseline is stated as a **capability** requirement, not a number. |
+| Python 3 + `~/.claude/venv` | **REQUIRED** | Every Python hook (git kernel, gates, doc-sync) and helper script. The venv is created empty by the user. |
+| `git` | **REQUIRED** | Git-native checkpoints, grant tokens, and the keystone. Normal use needs a recent git (2.4x+); the overnight reference-transaction keystone's structural HEAD-switch protection needs **git ≥ 2.46** (`scripts/overnight-git-selftest.sh` `_ge_246`; box validated on 2.54). |
+| `jq` | **REQUIRED** | JSON parsing in shell hooks/scripts. |
+| Bash + GNU userland (coreutils, util-linux/`flock`, findutils, `grep`, `sed`, `awk`/gawk) | **REQUIRED** | `realpath`, `flock`, `stat`, `sha256sum`, `date`, `grep`, `sed`, `awk`, `find`. GNU forms assumed; BSD/macOS flag differences can break hooks. |
+| `pytest` | **REQUIRED** for `/test` + generated AC tests | `tests/generated/<task_id>/` skeletons and `/test` run under pytest. The empty venv must be populated: `~/.claude/venv/bin/pip install pytest`. |
+| OpenAI Codex CLI + `/root/bin/codex-iso` wrapper | **REQUIRED** for `--codex` / `/codex` | Adversarial second-opinion rounds (`commands/codex.md`, `commands/close.md`). The wrapper path is author-specific and must be user-supplied; absent → `--codex`/`/codex` unavailable, rest of pipeline unaffected. |
+| `openssl` | **REQUIRED** for `/merge`, `/push` | Nonce/token material in the grant-gated release path. |
+| `bwrap` (bubblewrap) | **REQUIRED** for `/dev-overnight` | The per-Bash RO-bind boundary isolating overnight main-tree writes (§8). |
+| `graphify` CLI — PyPI `graphifyy` v0.8.25, binary `graphify` | OPTIONAL (graceful) | Code-graph enrichment (§7, `scripts/graphify-query.py`). Default-enabled (`CLAUDE_GRAPHIFY_ENABLED=auto`, `GRAPHIFY_BIN`); absent → degraded, pipeline proceeds. |
+| Playwright MCP | OPTIONAL overall; **REQUIRED for user-facing QA/E2E + UI audits** | UI-audit skill suite, overnight PM live-app exploration, and QA's live browser verification of user-facing changes (QA fails closed when a user-facing change cannot be browser-verified). Not needed for doc/config/non-user-facing cycles. |
+| Python pkgs `jsonschema`, `yaml` (PyYAML), `websocket-client` | OPTIONAL (graceful) | Stricter schema validation / enrichments; hooks fall back to lenient paths when missing. |
+| `fswatch` | OPTIONAL | Backs `/fswatch`; not used by the core pipeline. |
+| `node` + user-supplied `EXCEL_ANALYZER` | OPTIONAL | `/file-analyze` spreadsheet/document analysis; analyzer is user-provided. |
+
+> Note: this matrix is the maintainer-facing twin of the README's Dependencies table; the two are kept in step. Changing graphify's default-enabled behavior or `GRAPHIFY_BIN` resolution is out of scope here (document-only).
 
 ---
 
@@ -319,10 +342,10 @@ flowchart LR
 ├── ARCHITECTURE.md          # this document
 ├── README.md                # overview / value-prop (AUTO:readme-stats block)
 ├── INDEX.md                 # top-level index
-├── settings.json            # 68 wired hook files / 69 entries across 7 lifecycle events; permissions; env
+├── settings.json            # 64 wired hook files / 65 entries across 7 lifecycle events; permissions; env
 ├── agents/                  # 23 subagent definitions  (+ INDEX.md, README.md)
 ├── commands/                # 35 slash-command workflows (+ INDEX.md, README.md)
-├── hooks/                   # enforcement layer (92 files on disk; 68 wired)
+├── hooks/                   # enforcement layer (86 files on disk; 64 wired)
 │   ├── lib/                 #   allowlist (sentinel grants), checkpoint-core, contract runtime, resolvers
 │   ├── doc_sync/            #   self-updating INDEX/README/CLAUDE regeneration package
 │   └── git-keystone/        #   git-native ref-transaction protection
