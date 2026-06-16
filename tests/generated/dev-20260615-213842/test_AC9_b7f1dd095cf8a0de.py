@@ -45,6 +45,7 @@ def test_AC9():
         ).stdout
 
     low = msg.lower()
-    present = [tok for tok in FORBIDDEN if tok.lower() in low]
+    present = [w for w in FORBIDDEN_WORDS if re.search(r"\b%s\b" % re.escape(w), low)]
+    present += [s for s in FORBIDDEN_SUBSTR if s.lower() in low]
     assert not present, f"commit message contains forbidden vanity tokens: {present}"
 
