@@ -139,69 +139,34 @@ claude-code
 
 ---
 
-## ⚙️ Custom Options
+## Custom Options
 
-### Option 1: Disable Auto Push
+There is no "disable auto-push" toggle to set, because nothing here auto-pushes.
+Git mutations are grant-gated: you run `/commit` and `/push` explicitly, each
+under its own single-use grant. To customize commit behavior, configure the
+release commands in `commands/` and the kernel in `settings.json`, not an
+auto-commit script.
 
-If you only want auto-commit without auto-push:
+### Project-Level Configuration
 
-Edit `~/.claude/hooks/auto-commit.sh`:
-
-```bash
-nano ~/.claude/hooks/auto-commit.sh
-```
-
-Find these lines and comment them out (add # prefix):
-
-```bash
-# if git remote get-url origin > /dev/null 2>&1; then
-#   echo -e "${YELLOW}📤 Pushing to remote...${NC}"
-#   ...
-# fi
-```
-
-### Option 2: Change Commit Message Format
-
-Edit `~/.claude/hooks/auto-commit.sh`:
-
-```bash
-nano ~/.claude/hooks/auto-commit.sh
-```
-
-Modify the `COMMIT_MSG` variable.
-
-### Option 3: Project-Level Configuration
-
-Create custom configuration for specific project:
+Create custom configuration for a specific project:
 
 ```bash
 cd your-project
 mkdir -p .claude
-cp ~/.claude/hooks/project-settings-template.json .claude/settings.json
 nano .claude/settings.json
 ```
 
 ---
 
-## 🔍 Verify Configuration
-
-Run the following command to check configuration:
+## Verify Configuration
 
 ```bash
-# View global configuration
-cat ~/.claude/settings.json | grep -A 10 '"Stop"'
+# settings.json must parse as valid JSON
+python3 -m json.tool ~/.claude/settings.json >/dev/null && echo "settings.json OK"
 
-# Should see:
-# "Stop": [
-#   {
-#     "hooks": [
-#       {
-#         "type": "command",
-#         "command": "bash ~/.claude/hooks/auto-commit.sh"
-#       }
-#     ]
-#   }
-# ],
+# Inspect the grant-gated git wiring (PreToolUse git guards)
+grep -o 'pretool-git-privilege-guard.py' ~/.claude/settings.json | head -1
 ```
 
 ---
