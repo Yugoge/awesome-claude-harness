@@ -1,7 +1,7 @@
 # hooks
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-06-16T08:36:35Z*
+*Last updated: 2026-06-16T08:37:00Z*
 **Total entries**: 142
 **Convention**: kebab
 
@@ -67,7 +67,7 @@ hooks/
 ├── `git-fswatch.sh` - git-fswatch.sh - Comprehensive Git file watcher using fswatch
 ├── `git-fswatch@.service` - service file
 ├── `hook-todo-injection.py` - Global PreToolUse Hook: Todo Injection for Slash Commands
-├── `install-auto-sync.sh` - install-auto-sync.sh - Quick installer for auto-sync features
+├── `install-auto-sync.sh` - ============================================================================
 ├── `install-git-hooks.sh` - install-git-hooks.sh - Install pre-commit hooks into git repositories
 ├── `install-protection-all.sh` - install-protection-all.sh - Automatically install protection for all git repos
 ├── `install.sh` - ============================================================================

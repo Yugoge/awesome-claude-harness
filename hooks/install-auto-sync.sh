@@ -1,5 +1,17 @@
 #!/bin/bash
-# install-auto-sync.sh - Quick installer for auto-sync features
+# ============================================================================
+# LEGACY / DO NOT USE — describes an obsolete auto-sync model.
+# ============================================================================
+# install-auto-sync.sh reflects an OLD auto-sync/auto-checkpoint design the
+# current harness does NOT use. Checkpoints today are written to
+# refs/checkpoints/<branch> by the wired hooks/posttool-git-checkpoint.sh, and
+# git mutations are grant-gated (README.md / ARCHITECTURE.md §6). This script is
+# kept only for historical reference and is disabled below.
+# ============================================================================
+echo "[LEGACY] hooks/install-auto-sync.sh is obsolete and disabled. See the root README." >&2
+exit 0
+
+# install-auto-sync.sh - Quick installer for auto-sync features (legacy, unreachable)
 # Location: ~/.claude/hooks/install-auto-sync.sh
 # Usage: bash ~/.claude/hooks/install-auto-sync.sh
 
