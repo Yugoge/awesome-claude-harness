@@ -173,9 +173,9 @@ grep -o 'pretool-git-privilege-guard.py' ~/.claude/settings.json | head -1
 
 ## 📚 Next Steps
 
-- 📖 Read full documentation: `~/.claude/hooks/README.md`
-- 🛠️ View script source: `~/.claude/hooks/auto-commit.sh`
-- 🌐 Visit Claude Code docs: https://docs.claude.com/
+- Read the full overview + dependency matrix: [`README.md`](../README.md)
+- Deep architecture (the grant kernel): [`ARCHITECTURE.md`](../ARCHITECTURE.md)
+- Visit Claude Code docs: https://docs.claude.com/
 
 ---
 
