@@ -9,8 +9,8 @@
       "ac_uid": "c7a125812aaf8ebc",
       "type": "data",
       "file": "tests/generated/dev-20260615-213842/test_AC1_c7a125812aaf8ebc.py",
-      "status": "deferred_invalid_schema",
-      "schema_note": "data check lacks required {file, assertions[]}; documentation self-consistency check object copied verbatim",
+      "status": "implemented",
+      "schema_note": "dev replaced the TEST_INCOMPLETE sentinel with a real assertion implementing the AC GIVEN/WHEN/THEN; AC_UID/function-name/docstring preserved",
       "hook_check": {
         "grep_any": [
           "graphify",
@@ -31,8 +31,8 @@
       "ac_uid": "d4c53216ac44c066",
       "type": "data",
       "file": "tests/generated/dev-20260615-213842/test_AC2_d4c53216ac44c066.py",
-      "status": "deferred_invalid_schema",
-      "schema_note": "data check lacks required {file, assertions[]}; documentation self-consistency check object copied verbatim",
+      "status": "implemented",
+      "schema_note": "dev replaced the TEST_INCOMPLETE sentinel with a real assertion implementing the AC GIVEN/WHEN/THEN; AC_UID/function-name/docstring preserved",
       "hook_check": {
         "required_terms": [
           "Claude Code",
@@ -59,8 +59,8 @@
       "ac_uid": "499b24cbd8017b00",
       "type": "data",
       "file": "tests/generated/dev-20260615-213842/test_AC3_499b24cbd8017b00.py",
-      "status": "deferred_invalid_schema",
-      "schema_note": "data check lacks required {file, assertions[]}; documentation self-consistency check object copied verbatim",
+      "status": "implemented",
+      "schema_note": "dev replaced the TEST_INCOMPLETE sentinel with a real assertion implementing the AC GIVEN/WHEN/THEN; AC_UID/function-name/docstring preserved",
       "hook_check": {
         "recompute_from": "settings.json",
         "architecture_equals_live": true,
@@ -74,8 +74,8 @@
       "ac_uid": "018579bbc40d0782",
       "type": "data",
       "file": "tests/generated/dev-20260615-213842/test_AC4_018579bbc40d0782.py",
-      "status": "deferred_invalid_schema",
-      "schema_note": "data check lacks required {file, assertions[]}; documentation self-consistency check object copied verbatim",
+      "status": "implemented",
+      "schema_note": "dev replaced the TEST_INCOMPLETE sentinel with a real assertion implementing the AC GIVEN/WHEN/THEN; AC_UID/function-name/docstring preserved",
       "hook_check": {
         "file": "commands/dev.md",
         "not_contains": [
@@ -95,8 +95,8 @@
       "ac_uid": "a93c7cf3201a9880",
       "type": "data",
       "file": "tests/generated/dev-20260615-213842/test_AC5_a93c7cf3201a9880.py",
-      "status": "deferred_invalid_schema",
-      "schema_note": "data check lacks required {file, assertions[]}; documentation self-consistency check object copied verbatim",
+      "status": "implemented",
+      "schema_note": "dev replaced the TEST_INCOMPLETE sentinel with a real assertion implementing the AC GIVEN/WHEN/THEN; AC_UID/function-name/docstring preserved",
       "hook_check": {
         "security_md_matches_notice": true,
         "installers": "removed_or_legacy_bannered",
@@ -113,8 +113,8 @@
       "ac_uid": "f462552b0671bda1",
       "type": "data",
       "file": "tests/generated/dev-20260615-213842/test_AC6_f462552b0671bda1.py",
-      "status": "deferred_invalid_schema",
-      "schema_note": "data check lacks required {file, assertions[]}; documentation self-consistency check object copied verbatim",
+      "status": "implemented",
+      "schema_note": "dev replaced the TEST_INCOMPLETE sentinel with a real assertion implementing the AC GIVEN/WHEN/THEN; AC_UID/function-name/docstring preserved",
       "hook_check": {
         "readme_caveat": "honest_magnitude",
         "push_sh_no_literal": "Yugoge",
@@ -128,8 +128,8 @@
       "ac_uid": "94124f173da04773",
       "type": "data",
       "file": "tests/generated/dev-20260615-213842/test_AC7_94124f173da04773.py",
-      "status": "deferred_invalid_schema",
-      "schema_note": "data check lacks required {file, assertions[]}; documentation self-consistency check object copied verbatim",
+      "status": "implemented",
+      "schema_note": "dev replaced the TEST_INCOMPLETE sentinel with a real assertion implementing the AC GIVEN/WHEN/THEN; AC_UID/function-name/docstring preserved",
       "hook_check": {
         "prose_outside_auto_markers": true,
         "settings_json_parses": true
@@ -141,8 +141,8 @@
       "ac_uid": "6821791054ffa3f0",
       "type": "data",
       "file": "tests/generated/dev-20260615-213842/test_AC8_6821791054ffa3f0.py",
-      "status": "deferred_invalid_schema",
-      "schema_note": "data check lacks required {file, assertions[]}; documentation self-consistency check object copied verbatim",
+      "status": "implemented",
+      "schema_note": "dev replaced the TEST_INCOMPLETE sentinel with a real assertion implementing the AC GIVEN/WHEN/THEN; AC_UID/function-name/docstring preserved",
       "hook_check": {
         "dehardcode_files_touched_beyond_push_sh": 0,
         "graphify_behavior_unchanged": true
@@ -154,8 +154,8 @@
       "ac_uid": "b7f1dd095cf8a0de",
       "type": "data",
       "file": "tests/generated/dev-20260615-213842/test_AC9_b7f1dd095cf8a0de.py",
-      "status": "deferred_invalid_schema",
-      "schema_note": "data check lacks required {file, assertions[]}; documentation self-consistency check object copied verbatim",
+      "status": "implemented",
+      "schema_note": "dev replaced the TEST_INCOMPLETE sentinel with a real assertion implementing the AC GIVEN/WHEN/THEN; AC_UID/function-name/docstring preserved",
       "hook_check": {
         "commit_message_forbidden_tokens": [
           "star",
