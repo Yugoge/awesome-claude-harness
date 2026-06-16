@@ -5,10 +5,45 @@
 # above (AC_UID, AC_TYPE, docstring) MUST be preserved verbatim so QA can
 # trace each test back to its source AC entry.
 
-import pytest
+import os
+import re
+import subprocess
 
 AC_UID = "c7a125812aaf8ebc"
 AC_TYPE = "data"
+
+
+def _repo_root():
+    return subprocess.check_output(
+        ["git", "rev-parse", "--show-toplevel"], text=True
+    ).strip()
+
+
+def _read(rel):
+    with open(os.path.join(_repo_root(), rel), encoding="utf-8") as f:
+        return f.read()
+
+
+def _dependency_section(text):
+    """Return the dependency/requirements section slice (a real section hit,
+    not an incidental mention): a heading whose title contains 'Dependenc' or
+    'Requirements', through to the next heading of equal-or-higher level."""
+    lines = text.splitlines()
+    start = None
+    for i, ln in enumerate(lines):
+        if re.match(r"^#{1,3}\s", ln) and re.search(r"depend|requirement", ln, re.I):
+            start = i
+            break
+    if start is None:
+        return ""
+    depth = len(re.match(r"^(#{1,3})", lines[start]).group(1))
+    end = len(lines)
+    for j in range(start + 1, len(lines)):
+        m = re.match(r"^(#{1,6})\s", lines[j])
+        if m and len(m.group(1)) <= depth:
+            end = j
+            break
+    return "\n".join(lines[start:end])
 
 
 def test_AC1():
@@ -17,7 +52,13 @@ def test_AC1():
     WHEN:  a reader greps the Requirements/Dependencies section for graphify and codex
     THEN:  both files name graphify (graphifyy v0.8.25, OPTIONAL, with install pointer) and the OpenAI Codex CLI + isolation wrapper (OPTIONAL, --codex only)
     """
-    # TODO(dev): replace the line below with the real test body. While the
-    # TEST_INCOMPLETE sentinel is present the test will hard-fail, marking
-    # the AC as unimplemented for QA Phase 5.
-    pytest.fail(f"TEST_INCOMPLETE: {AC_UID} — README+ARCHITECTURE dependency section names graphify and codex")
+    for rel in ("README.md", "ARCHITECTURE.md"):
+        section = _dependency_section(_read(rel))
+        assert section, f"{rel}: no dependency/requirements section found"
+        low = section.lower()
+        assert "graphify" in low, f"{rel}: dependency section does not name graphify"
+        assert "graphifyy v0.8.25" in low, (
+            f"{rel}: dependency section missing graphify package id 'graphifyy v0.8.25'"
+        )
+        assert "codex" in low, f"{rel}: dependency section does not name Codex"
+        assert "optional" in low, f"{rel}: dependency section lacks an OPTIONAL label"
