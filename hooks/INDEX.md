@@ -1,8 +1,8 @@
 # hooks
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-06-16T08:57:53Z*
-**Total entries**: 142
+*Last updated: 2026-06-16T09:50:43Z*
+**Total entries**: 140
 **Convention**: kebab
 
 ## Tree
@@ -62,7 +62,6 @@ hooks/
 ├── `auto-commit.sh` - ============================================================================
 ├── `check-todo-md-sync.py` - check-todo-md-sync.py — Session-start drift detector for todo scripts
 ├── `checkpoint.sh` - checkpoint.sh - Manual /checkpoint command
-├── `ensure-git-repo.sh` - ensure-git-repo.sh - DEPRECATED, scheduled for deletion
 ├── `fswatch-manager.sh` - fswatch-manager.sh - Manage git-fswatch instances
 ├── `git-fswatch.sh` - git-fswatch.sh - Comprehensive Git file watcher using fswatch
 ├── `git-fswatch@.service` - service file
@@ -135,7 +134,6 @@ hooks/
 ├── `session-promote-hook.sh` - Description: SessionStart hook that promotes a cold session back to ramdisk.
 ├── `session-tmpfs-banner.sh` - session-tmpfs-banner.sh — SessionStart hook (6th in the SessionStart hooks block).
 ├── `session_start.sh` - SessionStart Hook - Display working environment info
-├── `smart-checkpoint.sh` - smart-checkpoint.sh - DEPRECATED, scheduled for deletion
 ├── `start-fswatch-all.sh` - start-fswatch-all.sh - Start fswatch monitoring for all important repositories
 ├── `stop-cleanup-allowlist.sh` - Stop Hook: Wipe any unconsumed /allow grant at turn end.
 ├── `stop-overnight-timelock.py` - Stop Hook: Block conversation termination until overnight end-time
