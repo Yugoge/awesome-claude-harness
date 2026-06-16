@@ -143,9 +143,9 @@ claude-code
 
 There is no "disable auto-push" toggle to set, because nothing here auto-pushes.
 Git mutations are grant-gated: you run `/commit` and `/push` explicitly, each
-under its own single-use grant. To customize commit behavior, configure the
-release commands in `commands/` and the kernel in `settings.json`, not an
-auto-commit script.
+under its own single-use grant. There is no auto-commit script to edit — to
+customize commit behavior, configure the release commands in `commands/` and the
+grant kernel in `settings.json` instead.
 
 ### Project-Level Configuration
 
