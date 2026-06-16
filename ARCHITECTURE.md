@@ -49,7 +49,7 @@ The harness is a configuration, not a packaged app — there is no `requirements
 | Python 3 + `~/.claude/venv` | **REQUIRED** | Every Python hook (git kernel, gates, doc-sync) and helper script. The venv is created empty by the user. |
 | `git` | **REQUIRED** | Git-native checkpoints, grant tokens, and the keystone. Normal use needs a recent git (2.4x+); the overnight reference-transaction keystone's structural HEAD-switch protection needs **git ≥ 2.46** (`scripts/overnight-git-selftest.sh` `_ge_246`; box validated on 2.54). |
 | `jq` | **REQUIRED** | JSON parsing in shell hooks/scripts. |
-| coreutils / util-linux | **REQUIRED** | `realpath`, `flock`, `stat`, `sha256sum`, `date`, `sed`. GNU forms assumed; BSD/macOS flag differences can break hooks. |
+| Bash + GNU userland (coreutils, util-linux/`flock`, findutils, `grep`, `sed`, `awk`/gawk) | **REQUIRED** | `realpath`, `flock`, `stat`, `sha256sum`, `date`, `grep`, `sed`, `awk`, `find`. GNU forms assumed; BSD/macOS flag differences can break hooks. |
 | `pytest` | **REQUIRED** for `/test` + generated AC tests | `tests/generated/<task_id>/` skeletons and `/test` run under pytest. The empty venv must be populated: `~/.claude/venv/bin/pip install pytest`. |
 | OpenAI Codex CLI + `/root/bin/codex-iso` wrapper | **REQUIRED** for `--codex` / `/codex` | Adversarial second-opinion rounds (`commands/codex.md`, `commands/close.md`). The wrapper path is author-specific and must be user-supplied; absent → `--codex`/`/codex` unavailable, rest of pipeline unaffected. |
 | `openssl` | **REQUIRED** for `/merge`, `/push` | Nonce/token material in the grant-gated release path. |
