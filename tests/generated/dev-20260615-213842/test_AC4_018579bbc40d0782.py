@@ -5,10 +5,23 @@
 # above (AC_UID, AC_TYPE, docstring) MUST be preserved verbatim so QA can
 # trace each test back to its source AC entry.
 
-import pytest
+import json
+import os
+import subprocess
 
 AC_UID = "018579bbc40d0782"
 AC_TYPE = "data"
+
+
+def _repo_root():
+    return subprocess.check_output(
+        ["git", "rev-parse", "--show-toplevel"], text=True
+    ).strip()
+
+
+def _read(rel):
+    with open(os.path.join(_repo_root(), rel), encoding="utf-8") as f:
+        return f.read()
 
 
 def test_AC4():
@@ -17,9 +30,31 @@ def test_AC4():
     WHEN:  read after the fix
     THEN:  it no longer asserts subagentstop-cp-enforce.py is unwired (consistent with settings.json:764, ARCHITECTURE.md:143, agents/architect.md:404); the three correct sources unchanged
     """
-    # TODO(dev): replace the line below with the real test body. While the
-    # TEST_INCOMPLETE sentinel is present the test will hard-fail, marking
-    # the AC as unimplemented for QA Phase 5.
-    # NOTE: assert commands/dev.md does NOT contain "no `subagentstop-cp-enforce.py` hook wired"
-    # or "is NOT wired"; assert the three correct sources still reflect WIRED.
-    pytest.fail(f"TEST_INCOMPLETE: {AC_UID} — commands/dev.md no longer claims subagentstop-cp-enforce.py is unwired")
+    dev_md = _read("commands/dev.md")
+    # The wrong-source false claims must be gone.
+    assert "no `subagentstop-cp-enforce.py` hook wired" not in dev_md, (
+        "commands/dev.md still claims the hook is not wired"
+    )
+    assert "is NOT wired" not in dev_md, "commands/dev.md still says 'is NOT wired'"
+    # And it should positively acknowledge the hook IS wired.
+    assert "subagentstop-cp-enforce.py" in dev_md and "wired" in dev_md.lower(), (
+        "commands/dev.md no longer references the hook's wiring status"
+    )
+
+    # The three already-correct sources must still reflect WIRED (ground truth).
+    with open(os.path.join(_repo_root(), "settings.json"), encoding="utf-8") as f:
+        raw = f.read()
+    assert "subagentstop-cp-enforce.py" in raw, "settings.json no longer wires the hook"
+    s = json.loads(raw)
+    sas = json.dumps(s.get("hooks", {}).get("SubagentStop", []))
+    assert "subagentstop-cp-enforce.py" in sas, "hook not under SubagentStop in settings.json"
+
+    arch = _read("ARCHITECTURE.md")
+    assert "subagentstop-cp-enforce.py" in arch and "*is* wired" in arch, (
+        "ARCHITECTURE.md cp-enforce 'is wired' statement changed"
+    )
+    architect = _read("agents/architect.md")
+    assert "subagentstop-cp-enforce.py" in architect and "BLOCKS your exit" in architect, (
+        "agents/architect.md cp-enforce statement changed"
+    )
+
