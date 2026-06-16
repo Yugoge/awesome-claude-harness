@@ -20,12 +20,12 @@ All counts below were established by enumerating the actual repository, not copi
 | **Hook command entries wired** in `settings.json` | **65** | sum of `hooks[*][*].hooks[]` over all lifecycle events |
 | **Distinct hook files referenced** by `settings.json` | **64** | unique `hooks/*.py\|*.sh` paths in those entries |
 | **Lifecycle events used** | **7** | keys of `settings.json.hooks` |
-| **Hook files present on disk** (`hooks/*.py` + `*.sh`, excl. `.bak`) | **88** | `find hooks -maxdepth 1 -type f \( -name '*.py' -o -name '*.sh' \)` |
+| **Hook files present on disk** (`hooks/*.py` + `*.sh`, excl. `.bak`) | **86** | `find hooks -maxdepth 1 -type f \( -name '*.py' -o -name '*.sh' \)` |
 | **Helper scripts** (`scripts/` top-level files, excl. `INDEX/README`) | **72** | `find scripts -maxdepth 1 -type f` minus docs |
 | **Skills** (`skills/*/` directories) | **8** | `ls -d skills/*/` |
 | `permissions.allow` / `deny` / `ask` entries | 161 / 73 / 30 | keys of `settings.json.permissions` |
 
-> Note on the hook count: more hook *files* exist on disk (88) than are *wired* (64). The unwired files are install scripts, libraries, legacy/`.bak` variants, and intentionally-staged hooks. The number that matters for behavior is **what `settings.json` wires**: 64 distinct files across 65 entries (a few hooks run under more than one matcher). The seven lifecycle events are `SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `Notification`, `Stop`, `SubagentStop`.
+> Note on the hook count: more hook *files* exist on disk (86) than are *wired* (64). The unwired files are install scripts, libraries, legacy/`.bak` variants, and intentionally-staged hooks. The number that matters for behavior is **what `settings.json` wires**: 64 distinct files across 65 entries (a few hooks run under more than one matcher). The seven lifecycle events are `SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `Notification`, `Stop`, `SubagentStop`.
 
 ### Per-event wiring (from `settings.json`)
 
@@ -345,7 +345,7 @@ flowchart LR
 ├── settings.json            # 64 wired hook files / 65 entries across 7 lifecycle events; permissions; env
 ├── agents/                  # 23 subagent definitions  (+ INDEX.md, README.md)
 ├── commands/                # 35 slash-command workflows (+ INDEX.md, README.md)
-├── hooks/                   # enforcement layer (88 files on disk; 64 wired)
+├── hooks/                   # enforcement layer (86 files on disk; 64 wired)
 │   ├── lib/                 #   allowlist (sentinel grants), checkpoint-core, contract runtime, resolvers
 │   ├── doc_sync/            #   self-updating INDEX/README/CLAUDE regeneration package
 │   └── git-keystone/        #   git-native ref-transaction protection

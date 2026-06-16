@@ -1,13 +1,13 @@
-# dot-claude
+# 
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-06-16T08:55:26Z*
-**Total entries**: 1956
+*Last updated: 2026-06-16T10:23:37Z*
+**Total entries**: 1959
 **Convention**: kebab
 
 ## Tree
 ```
-dot-claude/
+/
 ├── agents/
 │   ├── `architect.md` - Architecture review specialist for overnight exploration. Identifies structural issues, technical debt, optimization opportunities, dependency problems, and pattern inconsistencies. Returns structured JSON report.
 │   ├── `ba.md` - Business analyst subagent for requirements analysis and context building. Receives user requirement text, performs git analysis, identifies affected files, and returns either clarification questions or dual-format output (Markdown spec + JSON context).
@@ -446,6 +446,7 @@ dot-claude/
 │   │   ├── `cleanliness-inspector-report-20260614-182549.json` - json config
 │   │   ├── `cleanliness-inspector-report-20260614-205834.json` - json config
 │   │   ├── `cleanliness-inspector-report-20260615-125319.json` - json config
+│   │   ├── `cleanliness-inspector-report-20260616-094643.json` - json config
 │   │   ├── `cleanliness-inspector-report-30fbb321-8921-44aa-bd65-de59e4c70730.json` - json config
 │   │   ├── `cleanliness-inspector-report-441b0d47-3cbf-4fa5-9038-76ef39df048a.json` - json config
 │   │   ├── `cleanliness-inspector-report-44e208af-b8b8-4266-a2ba-fcfc77f92d24.json` - json config
@@ -945,6 +946,7 @@ dot-claude/
 │   │   ├── `dev-report-dev-20260531-193000-taska.json` - json config
 │   │   ├── `dev-report-dev-20260531-193000-taskb.json` - json config
 │   │   ├── `dev-report-dev-20260531-193000.json` - json config
+│   │   ├── `dev-report-dev-20260615-213842.json` - json config
 │   │   ├── `dev-report-do-20260529-210815.json` - json config
 │   │   ├── `do-deprivatize-report-20260614-182549.json` - json config
 │   │   ├── `do-report-005efeec-bb32-4361-ad8e-21e673e7f61d.json` - json config
@@ -956,6 +958,7 @@ dot-claude/
 │   │   ├── `do-report-20260614-182549.json` - json config
 │   │   ├── `do-report-20260615-125319.json` - json config
 │   │   ├── `do-report-20260615-151335.json` - json config
+│   │   ├── `do-report-20260616-094643.json` - json config
 │   │   ├── `do-report-30fbb321-8921-44aa-bd65-de59e4c70730.json` - json config
 │   │   ├── `do-report-441b0d47-3cbf-4fa5-9038-76ef39df048a.json` - json config
 │   │   ├── `do-report-44e208af-b8b8-4266-a2ba-fcfc77f92d24.json` - json config
@@ -1041,6 +1044,7 @@ dot-claude/
 │   │   ├── `prompt-inspector-report-20260614-182549.json` - json config
 │   │   ├── `prompt-inspector-report-20260614-205834.json` - json config
 │   │   ├── `prompt-inspector-report-20260615-125319.json` - json config
+│   │   ├── `prompt-inspector-report-20260616-094643.json` - json config
 │   │   ├── `prompt-inspector-report-30fbb321-8921-44aa-bd65-de59e4c70730.json` - json config
 │   │   ├── `prompt-inspector-report-441b0d47-3cbf-4fa5-9038-76ef39df048a.json` - json config
 │   │   ├── `prompt-inspector-report-44e208af-b8b8-4266-a2ba-fcfc77f92d24.json` - json config
@@ -1278,6 +1282,7 @@ dot-claude/
 │   │   ├── `style-inspector-report-20260614-182549.json` - json config
 │   │   ├── `style-inspector-report-20260614-205834.json` - json config
 │   │   ├── `style-inspector-report-20260615-125319.json` - json config
+│   │   ├── `style-inspector-report-20260616-094643.json` - json config
 │   │   ├── `style-inspector-report-30fbb321-8921-44aa-bd65-de59e4c70730.json` - json config
 │   │   ├── `style-inspector-report-441b0d47-3cbf-4fa5-9038-76ef39df048a.json` - json config
 │   │   ├── `style-inspector-report-44e208af-b8b8-4266-a2ba-fcfc77f92d24.json` - json config
@@ -1607,7 +1612,6 @@ dot-claude/
 │   ├── `auto-commit.sh` - ============================================================================
 │   ├── `check-todo-md-sync.py` - check-todo-md-sync.py — Session-start drift detector for todo scripts
 │   ├── `checkpoint.sh` - checkpoint.sh - Manual /checkpoint command
-│   ├── `ensure-git-repo.sh` - ensure-git-repo.sh - DEPRECATED, scheduled for deletion
 │   ├── `fswatch-manager.sh` - fswatch-manager.sh - Manage git-fswatch instances
 │   ├── `git-fswatch.sh` - git-fswatch.sh - Comprehensive Git file watcher using fswatch
 │   ├── `git-fswatch@.service` - service file
@@ -1680,7 +1684,6 @@ dot-claude/
 │   ├── `session-promote-hook.sh` - Description: SessionStart hook that promotes a cold session back to ramdisk.
 │   ├── `session-tmpfs-banner.sh` - session-tmpfs-banner.sh — SessionStart hook (6th in the SessionStart hooks block).
 │   ├── `session_start.sh` - SessionStart Hook - Display working environment info
-│   ├── `smart-checkpoint.sh` - smart-checkpoint.sh - DEPRECATED, scheduled for deletion
 │   ├── `start-fswatch-all.sh` - start-fswatch-all.sh - Start fswatch monitoring for all important repositories
 │   ├── `stop-cleanup-allowlist.sh` - Stop Hook: Wipe any unconsumed /allow grant at turn end.
 │   ├── `stop-overnight-timelock.py` - Stop Hook: Block conversation termination until overnight end-time
@@ -1966,6 +1969,9 @@ dot-claude/
 └── `workflow-fe05ca9a-7892-40ea-a3ba-660db57180b9.json` - json config
 ```
 <!-- /AUTO:index-stats -->
+
+# dot-claude
+
 
 # .claude
 
