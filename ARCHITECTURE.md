@@ -55,7 +55,7 @@ The harness is a configuration, not a packaged app — there is no `requirements
 | `openssl` | **REQUIRED** for `/merge`, `/push` | Nonce/token material in the grant-gated release path. |
 | `bwrap` (bubblewrap) | **REQUIRED** for `/dev-overnight` | The per-Bash RO-bind boundary isolating overnight main-tree writes (§8). |
 | `graphify` CLI — PyPI `graphifyy` v0.8.25, binary `graphify` | OPTIONAL (graceful) | Code-graph enrichment (§7, `scripts/graphify-query.py`). Default-enabled (`CLAUDE_GRAPHIFY_ENABLED=auto`, `GRAPHIFY_BIN`); absent → degraded, pipeline proceeds. |
-| Playwright MCP | OPTIONAL | UI-audit skill suite + overnight PM live-app exploration; absent → those steps skipped. |
+| Playwright MCP | OPTIONAL overall; **REQUIRED for user-facing QA/E2E + UI audits** | UI-audit skill suite, overnight PM live-app exploration, and QA's live browser verification of user-facing changes (QA fails closed when a user-facing change cannot be browser-verified). Not needed for doc/config/non-user-facing cycles. |
 | Python pkgs `jsonschema`, `yaml` (PyYAML), `websocket-client` | OPTIONAL (graceful) | Stricter schema validation / enrichments; hooks fall back to lenient paths when missing. |
 | `fswatch` | OPTIONAL | Backs `/fswatch`; not used by the core pipeline. |
 | `node` + user-supplied `EXCEL_ANALYZER` | OPTIONAL | `/file-analyze` spreadsheet/document analysis; analyzer is user-provided. |

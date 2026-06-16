@@ -1,8 +1,8 @@
 # dot-claude
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-06-16T08:33:10Z*
-**Total entries**: 1955
+*Last updated: 2026-06-16T08:55:19Z*
+**Total entries**: 1956
 **Convention**: kebab
 
 ## Tree
@@ -589,6 +589,7 @@ dot-claude/
 │   │   ├── `close-report-do-20260603-084448.md` - Close Report — do-20260603-084448
 │   │   ├── `close-report-eeeabad1-554e-4a04-a040-149797afaed7.md` - Close Report — eeeabad1-554e-4a04-a040-149797afaed7
 │   │   ├── `commit-manifest-20260509-114002-cycle4.json` - json config
+│   │   ├── `commit-message-dev-20260615-213842.txt` - txt file
 │   │   ├── `commit-qa-report-20260606-131137.md` - Pre-commit QA Gate Report — TASK_ID 20260606-131137
 │   │   ├── `commit-qa-report-20260606-201330.md` - Commit QA Report — TASK_ID 20260606-201330
 │   │   ├── `commit-qa-report-20260611-100500.md` - Commit-QA Gate Report — task 20260611-100500
@@ -1611,9 +1612,9 @@ dot-claude/
 │   ├── `git-fswatch.sh` - git-fswatch.sh - Comprehensive Git file watcher using fswatch
 │   ├── `git-fswatch@.service` - service file
 │   ├── `hook-todo-injection.py` - Global PreToolUse Hook: Todo Injection for Slash Commands
-│   ├── `install-auto-sync.sh` - install-auto-sync.sh - Quick installer for auto-sync features
-│   ├── `install-git-hooks.sh` - install-git-hooks.sh - Install pre-commit hooks into git repositories
-│   ├── `install-protection-all.sh` - install-protection-all.sh - Automatically install protection for all git repos
+│   ├── `install-auto-sync.sh` - ============================================================================
+│   ├── `install-git-hooks.sh` - ============================================================================
+│   ├── `install-protection-all.sh` - ============================================================================
 │   ├── `install.sh` - ============================================================================
 │   ├── `merge.sh` - merge.sh - wrapper for /merge slash command
 │   ├── `notification-idle-overnight.py` - Notification hook: Observe overnight idle events
@@ -1670,7 +1671,7 @@ dot-claude/
 │   ├── `protection-status.sh` - protection-status.sh - Display protection status for all git repositories
 │   ├── `pull.sh` - pull.sh - Executable version of /pull command
 │   ├── `push.sh` - push.sh - Executable version of /push command
-│   ├── `QUICKSTART.md` - 🚀 Quick Start Guide
+│   ├── `QUICKSTART.md` - Quick Start — the hooks layer
 │   ├── `README-TODO-INJECTION.md` - Global Todo Injection Hook
 │   ├── `sentinel-lint.sh` - sentinel-lint.sh - Guards the dev-registry sentinel anchor in orchestrator files
 │   ├── `session-git-init.sh` - ============================================================================
