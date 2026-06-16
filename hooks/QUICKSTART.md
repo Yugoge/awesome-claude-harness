@@ -119,11 +119,11 @@ cd my-new-project
 # 2. Start Claude Code
 claude-code  # or your launch command
 
-# 3. Claude will automatically:
-#    ✅ Initialize Git repository
-#    ✅ Create .gitignore
-#    ✅ Create GitHub repository (if AUTO_CREATE is configured)
-#    ✅ Auto-commit + push after each response
+# 3. Work proceeds through the grant-gated pipeline:
+#    - SessionStart hooks announce the environment
+#    - Edits go to a dev subagent; the git kernel gates every mutation
+#    - There is NO auto-commit and NO auto-push — you run /commit and /push,
+#      each under its own single-use grant
 ```
 
 ### Scenario 2: Existing Project
@@ -135,9 +135,8 @@ cd existing-project
 # 2. Start Claude Code
 claude-code
 
-# 3. Claude will automatically:
-#    ✅ Detect existing Git repository
-#    ✅ Auto-commit + push after each response
+# 3. Same grant-gated model — nothing is committed or pushed automatically;
+#    /commit and /push each require a human-authorized grant token
 ```
 
 ---
