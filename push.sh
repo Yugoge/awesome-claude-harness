@@ -24,7 +24,7 @@ log() {
 }
 
 # Ensure git identity
-EXPECTED_NAME="Yugoge"
+EXPECTED_NAME="${CLAUDE_PUSH_EXPECTED_NAME:-$(git config user.name)}"
 EXPECTED_EMAIL="${CLAUDE_PUSH_EXPECTED_EMAIL:-$(git config user.email)}"
 CURRENT_NAME=$(git config user.name 2>/dev/null || echo "")
 CURRENT_EMAIL=$(git config user.email 2>/dev/null || echo "")
