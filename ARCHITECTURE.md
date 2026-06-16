@@ -32,8 +32,8 @@ All counts below were established by enumerating the actual repository, not copi
 | Event | Matcher blocks | Hook entries |
 |---|---|---|
 | `SessionStart` | 1 | 7 |
-| `UserPromptSubmit` | 5 | 6 |
-| `PreToolUse` | 23 | 31 |
+| `UserPromptSubmit` | 4 | 5 |
+| `PreToolUse` | 21 | 28 |
 | `PostToolUse` | 7 | 14 |
 | `Notification` | 1 | 1 |
 | `Stop` | 1 | 4 |
