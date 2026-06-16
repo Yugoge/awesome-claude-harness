@@ -55,13 +55,26 @@ def test_AC1():
     for rel in ("README.md", "ARCHITECTURE.md"):
         section = _dependency_section(_read(rel))
         assert section, f"{rel}: no dependency/requirements section found"
-        # Normalize markdown punctuation (backticks, commas) and collapse
-        # whitespace so 'graphifyy` v0.8.25' matches the intended package id.
-        low = re.sub(r"[`,]", "", section.lower())
-        low = re.sub(r"\s+", " ", low)
-        assert "graphify" in low, f"{rel}: dependency section does not name graphify"
-        assert "graphifyy v0.8.25" in low, (
+
+        def _norm(s):
+            return re.sub(r"\s+", " ", re.sub(r"[`,]", "", s.lower()))
+
+        flat = _norm(section)
+        assert "graphifyy v0.8.25" in flat, (
             f"{rel}: dependency section missing graphify package id 'graphifyy v0.8.25'"
         )
-        assert "codex" in low, f"{rel}: dependency section does not name Codex"
-        assert "optional" in low, f"{rel}: dependency section lacks an OPTIONAL label"
+
+        # Row-level tier checks: the table row that names graphify, and the row
+        # that names Codex, must each carry an OPTIONAL label on that row (not
+        # 'optional' borrowed from a neighbouring row). Codex is OPTIONAL/--codex.
+        graphify_rows = [ln for ln in section.splitlines() if "graphify" in ln.lower()]
+        assert graphify_rows, f"{rel}: no table row names graphify"
+        assert any("OPTIONAL" in ln for ln in graphify_rows), (
+            f"{rel}: graphify row is not marked OPTIONAL"
+        )
+
+        codex_rows = [ln for ln in section.splitlines() if "codex" in ln.lower()]
+        assert codex_rows, f"{rel}: no table row names Codex"
+        assert any("OPTIONAL" in ln or "--codex" in ln for ln in codex_rows), (
+            f"{rel}: Codex row is not marked OPTIONAL / tied to --codex"
+        )
