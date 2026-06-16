@@ -5,10 +5,34 @@
 # above (AC_UID, AC_TYPE, docstring) MUST be preserved verbatim so QA can
 # trace each test back to its source AC entry.
 
-import pytest
+import json
+import os
+import re
+import subprocess
 
 AC_UID = "94124f173da04773"
 AC_TYPE = "data"
+
+
+def _repo_root():
+    return subprocess.check_output(
+        ["git", "rev-parse", "--show-toplevel"], text=True
+    ).strip()
+
+
+def _read(rel):
+    with open(os.path.join(_repo_root(), rel), encoding="utf-8") as f:
+        return f.read()
+
+
+def _auto_regions(text):
+    """Yield (start, end) char offsets of every <!-- AUTO:x -->..<!-- /AUTO:x --> block."""
+    regions = []
+    for m in re.finditer(
+        r"<!--\s*AUTO:([\w-]+)\s*-->.*?<!--\s*/AUTO:\1\s*-->", text, re.S
+    ):
+        regions.append((m.start(), m.end()))
+    return regions
 
 
 def test_AC7():
@@ -17,9 +41,20 @@ def test_AC7():
     WHEN:  the change is applied
     THEN:  all hand-written prose fixes are OUTSIDE <!-- AUTO:... --> markers; settings.json still parses
     """
-    # TODO(dev): replace the line below with the real test body. While the
-    # TEST_INCOMPLETE sentinel is present the test will hard-fail, marking
-    # the AC as unimplemented for QA Phase 5.
-    # NOTE: assert hand-written prose edits are outside <!-- AUTO:... --> regions;
-    # assert settings.json parses as valid JSON.
-    pytest.fail(f"TEST_INCOMPLETE: {AC_UID} — prose fixes outside AUTO markers and settings.json parses")
+    readme = _read("README.md")
+    regions = _auto_regions(readme)
+
+    # The hand-written dependency matrix + portability caveat must live OUTSIDE
+    # every AUTO region (so doc-sync regeneration cannot clobber them).
+    for marker in ("Dependencies (REQUIRED vs OPTIONAL)", "Portability caveat"):
+        idx = readme.find(marker)
+        assert idx != -1, f"README missing hand-written section: {marker}"
+        for start, end in regions:
+            assert not (start <= idx < end), (
+                f"hand-written '{marker}' landed INSIDE an AUTO marker region"
+            )
+
+    # settings.json still parses as valid JSON.
+    with open(os.path.join(_repo_root(), "settings.json"), encoding="utf-8") as f:
+        json.load(f)
+
