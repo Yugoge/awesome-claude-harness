@@ -281,7 +281,7 @@ A newcomer can run the core development pipeline with just the **REQUIRED** rows
 | `fswatch` | OPTIONAL | Backs `/fswatch` file-watching; not needed by the core pipeline. |
 | `node` + a user-supplied `EXCEL_ANALYZER` | OPTIONAL | `/file-analyze` spreadsheet/document analysis. You provide the analyzer; absent → that file type is skipped. |
 
-> **One-line summary:** install Claude Code + Python 3 + git + jq + GNU coreutils, create the venv, and `pip install pytest` — that covers the core `/dev → /close → /commit → /push` pipeline. Add the Codex CLI + wrapper for `--codex`, graphify for code-graph context, and Playwright MCP for UI/overnight work as you need them.
+> **One-line summary:** install Claude Code + Python 3 + git + jq + the GNU userland + openssl, create the venv, and `pip install pytest` — that covers the core `/dev → /close → /commit → /push` pipeline (`/push` needs `openssl`). Add the Codex CLI + wrapper for `--codex`, graphify for code-graph context, Playwright MCP for UI/overnight (and user-facing QA), and `bwrap` for `/dev-overnight` as you need them.
 
 ```bash
 # 1. Back up any existing config
