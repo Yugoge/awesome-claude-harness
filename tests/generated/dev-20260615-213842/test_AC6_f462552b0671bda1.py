@@ -5,10 +5,29 @@
 # above (AC_UID, AC_TYPE, docstring) MUST be preserved verbatim so QA can
 # trace each test back to its source AC entry.
 
-import pytest
+import os
+import re
+import subprocess
 
 AC_UID = "f462552b0671bda1"
 AC_TYPE = "data"
+
+# CJK Unicode ranges: CJK Unified, Hiragana/Katakana, fullwidth forms.
+_CJK = re.compile(r"[一-鿿぀-ヿ＀-￯]")
+
+
+def _repo_root():
+    return subprocess.check_output(
+        ["git", "rev-parse", "--show-toplevel"], text=True
+    ).strip()
+
+
+def _read(rel):
+    p = os.path.join(_repo_root(), rel)
+    if not os.path.exists(p):
+        return None
+    with open(p, encoding="utf-8") as f:
+        return f.read()
 
 
 def test_AC6():
@@ -17,10 +36,32 @@ def test_AC6():
     WHEN:  inspected after the fix
     THEN:  README caveat states the real footprint magnitude (tens of files, not ~4); push.sh has no hardcoded 'Yugoge' literal; QUICKSTART removed or no longer teaches auto-commit/push-every-response; settings.json:25 contains no CJK text
     """
-    # TODO(dev): replace the line below with the real test body. While the
-    # TEST_INCOMPLETE sentinel is present the test will hard-fail, marking
-    # the AC as unimplemented for QA Phase 5.
-    # NOTE: assert push.sh contains no "Yugoge" literal; assert settings.json
-    # has no CJK codepoints; assert README footprint caveat is honest; assert
-    # QUICKSTART removed or corrected.
-    pytest.fail(f"TEST_INCOMPLETE: {AC_UID} — README honest footprint, push.sh no Yugoge literal, no CJK in settings.json")
+    # README portability caveat states the real magnitude (tens of files).
+    readme = _read("README.md")
+    assert "Portability caveat" in readme, "README has no portability caveat"
+    assert re.search(r"\b57\b|tens of files|dozens", readme), (
+        "README caveat does not state the real footprint magnitude"
+    )
+
+    # push.sh must not hardcode the author name.
+    push = _read("push.sh")
+    assert "Yugoge" not in push, "push.sh still hardcodes the 'Yugoge' literal"
+    assert "CLAUDE_PUSH_EXPECTED_NAME" in push, (
+        "push.sh does not parameterize the git user.name"
+    )
+
+    # QUICKSTART removed OR no longer teaches the auto-commit/push-every-response model.
+    quick = _read("hooks/QUICKSTART.md")
+    if quick is not None:
+        assert "Auto-commit + push after each response" not in quick, (
+            "QUICKSTART still teaches auto-commit+push after each response"
+        )
+        assert "Installation Complete!" not in quick or "LEGACY" in quick or "does NOT" in quick, (
+            "QUICKSTART still leads with an uncorrected 'Installation Complete!' auto model"
+        )
+
+    # settings.json contains no CJK text anywhere.
+    settings = _read("settings.json")
+    m = _CJK.search(settings)
+    assert m is None, f"settings.json still contains CJK text near: {settings[max(0, m.start()-20):m.start()+20]!r}"
+
