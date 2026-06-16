@@ -104,7 +104,6 @@ main() {
   # Step 4: Set execution permissions
   print_step "Setting script execution permissions..."
   chmod +x ~/.claude/hooks/auto-commit.sh
-  chmod +x ~/.claude/hooks/ensure-git-repo.sh
   print_success "Permissions set complete"
 
   # Step 5: Backup existing settings.json
