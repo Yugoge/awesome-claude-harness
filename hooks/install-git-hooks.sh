@@ -1,5 +1,17 @@
 #!/bin/bash
-# install-git-hooks.sh - Install pre-commit hooks into git repositories
+# ============================================================================
+# LEGACY / DO NOT USE — describes an obsolete git-tracking model.
+# ============================================================================
+# install-git-hooks.sh reflects an OLD git-tracking design the current harness
+# does NOT use. Git protection today is the grant-gated kernel plus the
+# git-native reference-transaction keystone, installed via
+# scripts/install-git-keystone.sh (README.md / ARCHITECTURE.md §6). This script
+# is kept only for historical reference and is disabled below.
+# ============================================================================
+echo "[LEGACY] hooks/install-git-hooks.sh is obsolete and disabled. See the root README." >&2
+exit 0
+
+# install-git-hooks.sh - Install pre-commit hooks into git repositories (legacy, unreachable)
 # Part of Claude Code git tracking solution
 # Location: ~/.claude/hooks/install-git-hooks.sh
 #
