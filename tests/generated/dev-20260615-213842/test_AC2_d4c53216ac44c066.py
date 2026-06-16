@@ -43,6 +43,26 @@ def _read(rel):
         return f.read()
 
 
+def _dependency_section(text):
+    """The dependency/requirements section slice (heading -> next equal/higher heading)."""
+    lines = text.splitlines()
+    start = None
+    for i, ln in enumerate(lines):
+        if re.match(r"^#{1,3}\s", ln) and re.search(r"depend|requirement", ln, re.I):
+            start = i
+            break
+    if start is None:
+        return ""
+    depth = len(re.match(r"^(#{1,3})", lines[start]).group(1))
+    end = len(lines)
+    for j in range(start + 1, len(lines)):
+        m = re.match(r"^(#{1,6})\s", lines[j])
+        if m and len(m.group(1)) <= depth:
+            end = j
+            break
+    return "\n".join(lines[start:end])
+
+
 def test_AC2():
     """
     GIVEN: the dependency matrix added to README/ARCHITECTURE
@@ -50,12 +70,19 @@ def test_AC2():
     THEN:  every verified dependency appears with explicit REQUIRED or OPTIONAL label, and pytest is shown as a venv install step
     """
     for rel in ("README.md", "ARCHITECTURE.md"):
-        text = _read(rel)
+        section = _dependency_section(_read(rel))
+        assert section, f"{rel}: no dependency/requirements section found"
+        # Each term must appear inside a TABLE ROW of the dependency matrix
+        # (a markdown row line, leading '|'), not merely somewhere in the file.
+        rows = [ln for ln in section.splitlines() if ln.lstrip().startswith("|")]
+        joined_rows = "\n".join(rows).lower()
         for term in REQUIRED_TERMS:
-            assert term.lower() in text.lower(), f"{rel}: dependency matrix missing '{term}'"
-        # both explicit tier labels must be present
-        assert "REQUIRED" in text, f"{rel}: no REQUIRED label in dependency matrix"
-        assert "OPTIONAL" in text, f"{rel}: no OPTIONAL label in dependency matrix"
+            assert term.lower() in joined_rows, (
+                f"{rel}: dependency matrix has no table row for '{term}'"
+            )
+        # Both explicit tier labels must be present in the matrix rows.
+        assert any("REQUIRED" in r for r in rows), f"{rel}: no REQUIRED label in matrix rows"
+        assert any("OPTIONAL" in r for r in rows), f"{rel}: no OPTIONAL label in matrix rows"
 
     # pytest must be shown as a venv install step (M2) — at least in README.
     readme = _read("README.md")
