@@ -25,7 +25,7 @@ All counts below were established by enumerating the actual repository, not copi
 | **Skills** (`skills/*/` directories) | **8** | `ls -d skills/*/` |
 | `permissions.allow` / `deny` / `ask` entries | 161 / 73 / 30 | keys of `settings.json.permissions` |
 
-> Note on the hook count: more hook *files* exist on disk (92) than are *wired* (68). The unwired files are install scripts, libraries, legacy/`.bak` variants, and intentionally-staged hooks. The number that matters for behavior is **what `settings.json` wires**: 68 distinct files across 69 entries (a few hooks run under more than one matcher). The seven lifecycle events are `SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `Notification`, `Stop`, `SubagentStop`.
+> Note on the hook count: more hook *files* exist on disk (88) than are *wired* (64). The unwired files are install scripts, libraries, legacy/`.bak` variants, and intentionally-staged hooks. The number that matters for behavior is **what `settings.json` wires**: 64 distinct files across 65 entries (a few hooks run under more than one matcher). The seven lifecycle events are `SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `Notification`, `Stop`, `SubagentStop`.
 
 ### Per-event wiring (from `settings.json`)
 
