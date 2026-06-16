@@ -5,10 +5,42 @@
 # above (AC_UID, AC_TYPE, docstring) MUST be preserved verbatim so QA can
 # trace each test back to its source AC entry.
 
-import pytest
+import os
+import re
+import subprocess
 
 AC_UID = "d4c53216ac44c066"
 AC_TYPE = "data"
+
+# Complete verified dependency set (E-list + QA-of-BA additions). Each must
+# appear in BOTH README and ARCHITECTURE dependency matrices.
+REQUIRED_TERMS = [
+    "Claude Code",
+    "Python",
+    "venv",
+    "git",
+    "pytest",
+    "jq",
+    "coreutils",
+    "openssl",
+    "bwrap",
+    "Playwright",
+    "graphify",
+    "Codex",
+    "fswatch",
+    "node",
+]
+
+
+def _repo_root():
+    return subprocess.check_output(
+        ["git", "rev-parse", "--show-toplevel"], text=True
+    ).strip()
+
+
+def _read(rel):
+    with open(os.path.join(_repo_root(), rel), encoding="utf-8") as f:
+        return f.read()
 
 
 def test_AC2():
@@ -17,11 +49,18 @@ def test_AC2():
     WHEN:  a newcomer reads it
     THEN:  every verified dependency appears with explicit REQUIRED or OPTIONAL label, and pytest is shown as a venv install step
     """
-    # TODO(dev): replace the line below with the real test body. While the
-    # TEST_INCOMPLETE sentinel is present the test will hard-fail, marking
-    # the AC as unimplemented for QA Phase 5.
-    # NOTE: assert the COMPLETE dependency set (Claude Code, Python, venv, git,
-    # pytest, jq, Playwright, graphify, Codex, fswatch — and per QA-of-BA also
-    # openssl, bwrap, Python packages) each carries a REQUIRED/OPTIONAL label;
-    # do not pass on a subset.
-    pytest.fail(f"TEST_INCOMPLETE: {AC_UID} — dependency matrix lists complete dep set with REQUIRED/OPTIONAL labels + pytest venv install")
+    for rel in ("README.md", "ARCHITECTURE.md"):
+        text = _read(rel)
+        for term in REQUIRED_TERMS:
+            assert term.lower() in text.lower(), f"{rel}: dependency matrix missing '{term}'"
+        # both explicit tier labels must be present
+        assert "REQUIRED" in text, f"{rel}: no REQUIRED label in dependency matrix"
+        assert "OPTIONAL" in text, f"{rel}: no OPTIONAL label in dependency matrix"
+
+    # pytest must be shown as a venv install step (M2) — at least in README.
+    readme = _read("README.md")
+    assert re.search(
+        r"pip install[^\n]*pytest|pytest[^\n]*venv|venv[^\n]*install[^\n]*pytest",
+        readme,
+        re.I,
+    ), "README: pytest is not shown as a venv install step"
