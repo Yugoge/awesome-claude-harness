@@ -276,7 +276,7 @@ A newcomer can run the core development pipeline with just the **REQUIRED** rows
 | `openssl` | **REQUIRED** for `/merge`, `/push` | Nonce / token generation in the grant-gated git release path. |
 | `bwrap` (bubblewrap) | **REQUIRED** for `/dev-overnight` | The per-Bash bind-mount boundary that isolates overnight main-tree writes. |
 | `graphify` CLI (`graphifyy` v0.8.25 on PyPI; the binary is `graphify`) | OPTIONAL (graceful) | Incremental code-graph enrichment injected into the Dev context. Default-enabled (`CLAUDE_GRAPHIFY_ENABLED=auto`); if the binary is absent the pipeline degrades and proceeds. Install: `~/.claude/venv/bin/pip install graphifyy`, then point `GRAPHIFY_BIN` at the installed `graphify`. |
-| [Playwright MCP](https://github.com/microsoft/playwright-mcp) | OPTIONAL | Powers the UI-audit skill suite and the overnight PM's live-app exploration. Absent → UI/overnight-exploration steps are skipped. |
+| [Playwright MCP](https://github.com/microsoft/playwright-mcp) | OPTIONAL overall; **REQUIRED for user-facing QA/E2E + UI audits** | Powers the UI-audit skill suite, the overnight PM's live-app exploration, and QA's live browser verification of user-facing changes (QA fails closed when a user-facing change cannot be browser-verified). Not needed for doc/config/non-user-facing cycles. |
 | Python pkgs `jsonschema`, `yaml` (PyYAML), `websocket-client` | OPTIONAL (graceful) | Stricter schema validation and a few enrichments; hooks fall back to lenient paths when missing. |
 | `fswatch` | OPTIONAL | Backs `/fswatch` file-watching; not needed by the core pipeline. |
 | `node` + a user-supplied `EXCEL_ANALYZER` | OPTIONAL | `/file-analyze` spreadsheet/document analysis. You provide the analyzer; absent → that file type is skipped. |
