@@ -6,12 +6,17 @@
 # trace each test back to its source AC entry.
 
 import os
+import re
 import subprocess
 
 AC_UID = "b7f1dd095cf8a0de"
 AC_TYPE = "data"
 
-FORBIDDEN = ["star", "10000", "10,000", "popularity", "vanity"]
+# Forbidden vanity references. 'star'/'stars'/'popularity'/'vanity' are matched
+# as WHOLE WORDS (so the filename 'QUICKSTART' is not a false positive); the
+# numeric vanity targets are matched as literal substrings.
+FORBIDDEN_WORDS = ["star", "stars", "popularity", "vanity"]
+FORBIDDEN_SUBSTR = ["10000", "10,000"]
 DRAFT = "docs/dev/commit-message-dev-20260615-213842.txt"
 
 
