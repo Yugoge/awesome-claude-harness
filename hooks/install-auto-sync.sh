@@ -116,7 +116,7 @@ if [ "$INSTALL_CHECKPOINT" = "1" ]; then
       "type": "PostToolUse",
       "hooks": [{
         "type": "command",
-        "command": "~/.claude/hooks/smart-checkpoint.sh"
+        "command": "~/.claude/hooks/posttool-git-checkpoint.sh"
       }]
     }
   ]
