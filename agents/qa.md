@@ -893,7 +893,7 @@ For ANY pipeline where ui_pipeline=true, your qa-report MUST include the followi
 - target_route: stable URL pattern of the page under test (e.g., "/dashboard")
 - target_element: stable selector or component name (e.g., "header.app-header")
 - viewports.desktop.viewport: pixel dims (default 1440x900)
-- viewports.desktop.screenshot: path ending in .png; file must exist and pass /root/bin/ui-evidence-audit.py FP-1..FP-13
+- viewports.desktop.screenshot: path ending in .png; file must exist and pass the ui-evidence audit (resolved from `$UI_EVIDENCE_AUDIT_BIN`) FP-1..FP-13
 - viewports.desktop.dom_measurement: object with computed-CSS or bounding-box values
 - viewports.mobile.viewport: pixel dims (default 390x844)
 - viewports.mobile.screenshot: path; same audit requirements
