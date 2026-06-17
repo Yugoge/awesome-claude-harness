@@ -59,7 +59,37 @@ def test_AC_WS1_4():
     WHEN:  resolve_optional(relpath) is called
     THEN:  it returns an 'absent' sentinel (python None / shell empty string + nonzero status the caller can branch on) so the caller can degrade, NOT a hard failure
     """
-    # TODO(dev): replace the line below with the real test body. While the
-    # TEST_INCOMPLETE sentinel is present the test will hard-fail, marking
-    # the AC as unimplemented for QA Phase 5.
-    pytest.fail(f"TEST_INCOMPLETE: {AC_UID} — GIVEN An OPTIONAL capability file is absent / WHEN resolve_optional(relpath) is called / THEN it returns an 'absent' sentinel (python None / shell empty string + nonzero status the caller can branch on)…")
+    clone = _make_clone()
+    env = _env(clone)
+    missing = "scripts/an-absent-optional-capability.py"
+
+    # Python: the CLI `optional` subcommand prints nothing + exits 1 (the absent
+    # sentinel = None); it must NOT hard-fail (exit 2) on a merely-absent file.
+    py = subprocess.run(
+        ["python3", str(clone / "hooks" / "lib" / "claude_home.py"), "optional", missing],
+        env=env, capture_output=True, text=True,
+    )
+    assert py.returncode == 1, f"python optional should signal absent (exit 1); got {py.returncode}"
+    assert py.returncode != 2, "absent OPTIONAL must NOT be a fail-closed hard block"
+    assert py.stdout.strip() == "", f"python optional should print nothing when absent; got {py.stdout!r}"
+
+    # Also prove the in-process API contract: resolve_optional() -> None.
+    sys.path.insert(0, str(clone / "hooks" / "lib"))
+    try:
+        import importlib
+        ch = importlib.import_module("claude_home")
+        importlib.reload(ch)
+        assert ch.resolve_optional(missing) is None, "resolve_optional must return None when absent"
+    finally:
+        sys.path.remove(str(clone / "hooks" / "lib"))
+        sys.modules.pop("claude_home", None)
+
+    # Shell: resolve_optional_file prints nothing + returns 1 (absent sentinel);
+    # never exits 2.
+    sh = subprocess.run(
+        ["bash", str(clone / "hooks" / "lib" / "claude_home.sh"), "optional", missing],
+        env=env, capture_output=True, text=True,
+    )
+    assert sh.returncode == 1, f"shell optional should signal absent (exit 1); got {sh.returncode}"
+    assert sh.returncode != 2, "absent OPTIONAL must NOT be a fail-closed hard block"
+    assert sh.stdout.strip() == "", f"shell optional should print nothing when absent; got {sh.stdout!r}"
