@@ -33,7 +33,7 @@ import subprocess
 import tempfile
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
+REPO_ROOT = Path(__file__).resolve().parents[3]
 RENDERER = REPO_ROOT / "scripts" / "install" / "render-settings"
 TEMPLATE = REPO_ROOT / "settings.template.json"
 PLACEHOLDER = "{{CLAUDE_HOME}}"
