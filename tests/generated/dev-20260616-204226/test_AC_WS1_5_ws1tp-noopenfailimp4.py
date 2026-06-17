@@ -86,7 +86,35 @@ def test_AC_WS1_5():
     WHEN:  pretool-tool-policy.py runs after the WS1 migration and its deny-logic module (lib.policy_registry) cannot be imported/bootstrapped
     THEN:  the hook FAILS CLOSED: exit 2 (block) with the guard's own block marker on stderr — NOT a dirty exit 1 and NOT a swallowed exit 0. The migration MUST place the resolver-bootstrap + deny-logic import inside a fail-CLOSED guard (exit 2 on failure), NOT inside the existing blanket `except Exception: sys.exit(0)`. AND when the policy file is genuinely missing, ALL roles including 'dev' are denied protected writes (fail closed), removing the policy_registry dev-role fail-open (ALLOWED_TYPES_FALLBACK={'dev'} + _fail_open_or_closed returning allowed=True for dev).
     """
-    # TODO(dev): replace the line below with the real test body. While the
-    # TEST_INCOMPLETE sentinel is present the test will hard-fail, marking
-    # the AC as unimplemented for QA Phase 5.
-    pytest.fail(f"TEST_INCOMPLETE: {AC_UID} — GIVEN The tool-policy enforcement path. BASELINE (current code, verified by Read this session):… / WHEN pretool-tool-policy.py runs after the WS1 migration and its deny-logic module (lib.policy… / THEN the hook FAILS CLOSED: exit 2 (block) with the guard's own block marker on stderr — NOT a dirty exit 1 and NO…")
+    # (a) IMPORT FAILURE of the deny module -> FAIL CLOSED exit 2 (NOT 0, NOT 1),
+    # block marker on stderr. Corrupt policy_registry.py so its import raises.
+    clone_a = _make_policy_clone(with_policy=True)
+    (clone_a / "hooks" / "lib" / "policy_registry.py").write_text(
+        "raise ImportError('simulated deny-logic bootstrap failure')\n")
+    a = _run_hook(clone_a, _dev_write_payload(clone_a))
+    assert a.returncode == 2, f"(a) import failure must exit 2; got {a.returncode} stderr={a.stderr!r}"
+    assert a.returncode not in (0, 1), "(a) must NOT be a swallowed 0 nor a dirty 1"
+    assert "BLOCKED by tool-policy.v1" in a.stderr, (
+        f"(a) missing the guard's own block marker on stderr: {a.stderr!r}")
+
+    # (b) POLICY FILE ABSENT (relocated) + dev-role Write -> deny exit 2. This is
+    # the removed dev-role fail-open: load returns None -> fail-CLOSED for dev.
+    clone_b = _make_policy_clone(with_policy=False)
+    b = _run_hook(clone_b, _dev_write_payload(clone_b))
+    assert b.returncode == 2, f"(b) missing policy + dev Write must DENY (exit 2); got {b.returncode} stderr={b.stderr!r}"
+    assert "BLOCKED by tool-policy.v1" in b.stderr
+    assert "fail-closed" in b.stderr, (
+        f"(b) deny reason should reflect fail-closed-policy-unavailable: {b.stderr!r}")
+
+    # (c) UNPARSEABLE policy JSON -> deny exit 2 (load returns None -> fail closed).
+    clone_c = _make_policy_clone(policy_text="{ this is : not valid json ,,, ")
+    c = _run_hook(clone_c, _dev_write_payload(clone_c))
+    assert c.returncode == 2, f"(c) unparseable policy must exit 2; got {c.returncode} stderr={c.stderr!r}"
+    assert "BLOCKED by tool-policy.v1" in c.stderr
+
+    # SANITY: with a VALID policy present, the dev Write is ALLOWED (exit 0) — the
+    # guard fails closed only on absence/corruption, not unconditionally.
+    clone_ok = _make_policy_clone(with_policy=True)
+    ok = _run_hook(clone_ok, _dev_write_payload(clone_ok))
+    assert ok.returncode == 0, (
+        f"valid policy: dev Write should be allowed (exit 0); got {ok.returncode} stderr={ok.stderr!r}")
