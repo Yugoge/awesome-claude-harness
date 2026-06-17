@@ -43,6 +43,7 @@ def test_AC_WS2_5():
     #       'unavailable' and NEVER invoke a bare unsafe `codex` fallback.
     # The smoke records this as the single 'unavailable' assertion under the
     # 'optional-capability' guard; we assert it is present and passed.
+    import json
     import os
     import sys
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -51,12 +52,27 @@ def test_AC_WS2_5():
     rc, result = run_smoke()
     require_not_setup_error(rc, result)
 
+    # The HOOK_CHECK shell-probe contract is expect_exit==0: the smoke as a whole
+    # must have succeeded. Assert the suite-level contract FIRST so this test can
+    # never report green while the shared smoke reported failure (rc!=0 /
+    # all_pass!=True) — a smoke-wide regression must fail every WS2 slice, not be
+    # masked by one slice happening to be green.
+    suite_failed = [a for a in result.get("assertions", []) if not a.get("pass")]
+    assert rc == HOOK_CHECK["expect_exit"] and result.get("all_pass") is True, (
+        f"fresh-clone smoke did not pass cleanly (rc={rc}, "
+        f"all_pass={result.get('all_pass')}); failing assertions: "
+        + json.dumps(suite_failed, indent=2))
+
+    # Slice assertion: the optional-capability degradation case. Validate EVERY
+    # matching record (not just the first) so a passing duplicate cannot mask a
+    # later failing one.
     opt = [a for a in result["assertions"]
            if a["guard"] == "optional-capability" and a["kind"] == "unavailable"]
     assert opt, (
         "smoke did not emit an optional-capability 'unavailable' assertion; "
         f"saw {[(a['guard'], a['kind']) for a in result['assertions']]}")
-    assert opt[0]["pass"], (
+    opt_failed = [a for a in opt if not a.get("pass")]
+    assert not opt_failed, (
         "optional-capability degradation FAILED — absence must yield a one-line "
         "'unavailable'/'skipping (optional)' message with no crash/hang and NO "
-        f"bare unsafe fallback: {opt[0]['detail']}")
+        "bare unsafe fallback: " + json.dumps(opt_failed, indent=2))
