@@ -74,7 +74,29 @@ def test_AC_WS1_7():
     WHEN:  an agent_id-bearing payload requests a protected Write and no role resolves
     THEN:  the hook BLOCKS with exit 2 (fail closed) — an unresolved subagent role does NOT bypass policy. A narrow, explicit registration-grace sentinel (if any) is the ONLY exception and must be named, not implicit.
     """
-    # TODO(dev): replace the line below with the real test body. While the
-    # TEST_INCOMPLETE sentinel is present the test will hard-fail, marking
-    # the AC as unimplemented for QA Phase 5.
-    pytest.fail(f"TEST_INCOMPLETE: {AC_UID} — GIVEN pretool-tool-policy.py invoked for a payload that carries an agent_id (a subagent) but wh… / WHEN an agent_id-bearing payload requests a protected Write and no role resolves / THEN the hook BLOCKS with exit 2 (fail closed) — an unresolved subagent role does NOT bypass policy. A narrow, exp…")
+    clone = _make_clone()
+
+    # agent_id present, NO subagent_type, no registry/cp-state entry => role
+    # unresolved. A protected Write must FAIL CLOSED (exit 2), not exit 0.
+    blocked = _run_hook(clone, {
+        "agent_id": "subagent-with-no-resolvable-role",
+        "tool_name": "Write",
+        "tool_input": {"file_path": str(clone / "hooks" / "pretool-tool-policy.py")},
+    })
+    assert blocked.returncode == 2, (
+        f"unresolved role + protected Write must BLOCK (exit 2); got "
+        f"{blocked.returncode} stderr={blocked.stderr!r}")
+    assert blocked.returncode != 0, "unresolved subagent role must NOT bypass policy (exit 0)"
+    assert "BLOCKED by tool-policy.v1" in blocked.stderr and "unresolved" in blocked.stderr, (
+        f"missing the unresolved-role block marker: {blocked.stderr!r}")
+
+    # CONTRAST: an agent_id-bearing payload with an unresolved role doing a
+    # NON-write (Read) defers to the advisory backstop shim (exit 0) — only
+    # protected writes fail closed here.
+    allowed = _run_hook(clone, {
+        "agent_id": "subagent-with-no-resolvable-role",
+        "tool_name": "Read",
+        "tool_input": {"file_path": str(clone / "settings.json")},
+    })
+    assert allowed.returncode == 0, (
+        f"unresolved role + Read should defer (exit 0); got {allowed.returncode} stderr={allowed.stderr!r}")
