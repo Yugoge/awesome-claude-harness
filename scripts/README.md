@@ -5,8 +5,8 @@ Organization and usage documentation for `scripts/`.
 <!-- AUTO:readme-stats -->
 
 ## Overview
-- **Total files**: 78
-- **Subdirectories**: 6
+- **Total files**: 77
+- **Subdirectories**: 5
 - **Naming convention**: kebab
 
 ## Files
@@ -33,7 +33,7 @@ Organization and usage documentation for `scripts/`.
 - `derive-default-branch.sh` - Description: Resolve the repository's default branch name dynamically (handles main/master/any other).
 - `detect-dead-functions.sh` - Shell script
 - `detect-duplicate-content.sh` - Shell script
-- `detect-hardcoded-paths.sh` - Shell script
+- `detect-hardcoded-paths.sh` - Description: Detect load-bearing author-absolute path literals across the harness surface.
 - `detect-merge-conflicts.sh` - Shell script
 - `detect-orphan-agents.sh` - Description: Detect agents not referenced by any command
 - `detect-orphan-commands.sh` - Description: Detect orphan commands (one-time patterns, no todo script, unused)

@@ -1,8 +1,8 @@
 # scripts
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-06-14T23:32:43Z*
-**Total entries**: 108
+*Last updated: 2026-06-17T00:07:17Z*
+**Total entries**: 107
 **Convention**: kebab
 
 ## Tree
@@ -12,8 +12,8 @@ scripts/
 │   └── `tmp-cleanup-install.sh` - /usr/local/sbin/tmp-cleanup.sh
 ├── modern-git-slot/
 ├── overnight-git/
-│   ├── `git-policy-shim` - unknown file
-│   └── `git-selector` - unknown file
+│   ├── `git-policy-shim` - git-policy-shim file
+│   └── `git-selector` - git-selector file
 ├── spec-verify/
 │   ├── `spec-verify-views.py` - Usage:
 │   ├── `spec-verify.py` - Every non-blank, non-separator line from the monolith must appear
@@ -60,14 +60,13 @@ scripts/
 ├── `check-security-hook-drift.sh` - Description: Audit always-on security-critical hook files against a cycle baseline SHA
 ├── `checkpoint-prune.sh` - checkpoint-prune.sh — trim refs/checkpoints/* to the most recent N commits
 ├── `cleanup-close-force-sentinel.sh` - Removes the force-close sentinel file for a given dev session.
-├── `cleanup-tests-folder.sh` - Description: Remove validators that don't match git edge cases, preserving reports/
 ├── `close-scoring-decide.py` - Description: Decide which close_success_* event /close should issue based on
 ├── `create-overnight-state.sh` - create-overnight-state.sh — Create overnight state file (v7 schema)
 ├── `create-worktree.sh` - Create a git worktree from local HEAD (not origin/main).
 ├── `derive-default-branch.sh` - Description: Resolve the repository's default branch name dynamically (handles main/master/any other).
 ├── `detect-dead-functions.sh` - Shell script
 ├── `detect-duplicate-content.sh` - Shell script
-├── `detect-hardcoded-paths.sh` - Shell script
+├── `detect-hardcoded-paths.sh` - Description: Detect load-bearing author-absolute path literals across the harness surface.
 ├── `detect-merge-conflicts.sh` - Shell script
 ├── `detect-orphan-agents.sh` - Description: Detect agents not referenced by any command
 ├── `detect-orphan-commands.sh` - Description: Detect orphan commands (one-time patterns, no todo script, unused)
