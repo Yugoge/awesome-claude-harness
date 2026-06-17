@@ -250,16 +250,16 @@ Create sentinel files for every agent type this orchestrator can launch, includi
 
 **Sentinel-write idiom (M10 harness-fixes 20260428)**: the worktree-guard's `_extract_bash_write_paths` static scan treats `$VAR` and `${VAR}` tokens as opaque (it intentionally cannot tell legitimate from adversarial `$VAR` writes — see arch-3). The orchestrator MUST therefore use one of the two acceptable forms below. Forms that interpose a same-line-assigned shell variable into the redirect target (e.g. `REG=$CLAUDE_PROJECT_DIR/...; > "$REG/$agent.json"`) will be blocked by the worktree boundary even though the harness-state exemption is active, because the static scan cannot resolve `$REG` and the realpath check fails.
 
-**Acceptable form A — Write tool with literal absolute `file_path`** (one tool call per sentinel; the Write tool does NOT shell-expand env vars, so use a literal path):
+**Acceptable form A — Write tool with an orchestrator-inlined absolute `file_path`** (one tool call per sentinel; the Write tool does NOT shell-expand env vars or `~`, so the orchestrator must compute the concrete resolved project-dir absolute path and inline it — substitute `<RESOLVED_PROJECT_DIR>` with the literal value of `$CLAUDE_PROJECT_DIR` before invoking Write):
 
 ```text
-Write(file_path="~/.claude/dev-registry/<session_id>/architect.json", content='{"agent_type": "architect", "session_id": "<session_id>"}')
-Write(file_path="~/.claude/dev-registry/<session_id>/ba.json", content='{"agent_type": "ba", "session_id": "<session_id>"}')
-Write(file_path="~/.claude/dev-registry/<session_id>/graphify.json", content='{"agent_type": "graphify", "session_id": "<session_id>"}')
+Write(file_path="<RESOLVED_PROJECT_DIR>/.claude/dev-registry/<session_id>/architect.json", content='{"agent_type": "architect", "session_id": "<session_id>"}')
+Write(file_path="<RESOLVED_PROJECT_DIR>/.claude/dev-registry/<session_id>/ba.json", content='{"agent_type": "ba", "session_id": "<session_id>"}')
+Write(file_path="<RESOLVED_PROJECT_DIR>/.claude/dev-registry/<session_id>/graphify.json", content='{"agent_type": "graphify", "session_id": "<session_id>"}')
 ... (one Write per agent type)
 ```
 
-**NOTE (C6, redev-tier123)**: Write tool does not shell-expand env vars; use the literal `/root/...` path. Form B is allowed to use `$CLAUDE_PROJECT_DIR` because Bash redirect targets ARE expanded by the static scan in `lib/bash_write_targets.py:_resolve_path`.
+**NOTE (C6, redev-tier123)**: the Write tool does not shell-expand env vars or `~`, so the orchestrator must inline the concrete resolved project-dir absolute path (`<RESOLVED_PROJECT_DIR>` = the literal value of `$CLAUDE_PROJECT_DIR`) — NEVER a `$VAR`/`~` token inside the Write operand and NEVER an author-absolute literal. Form B avoids the inlining by using `$CLAUDE_PROJECT_DIR` directly, because Bash redirect targets ARE expanded by the static scan in `lib/bash_write_targets.py:_resolve_path`.
 
 **Acceptable form B — Bash redirect with `$CLAUDE_PROJECT_DIR`-prefixed target** (the static scan resolves `$CLAUDE_PROJECT_DIR` via `lib/bash_write_targets.py:_resolve_path`, lines 156-160). Inline the session_id literally; do NOT introduce intermediate variables in the redirect target:
 
