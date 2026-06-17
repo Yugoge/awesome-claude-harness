@@ -75,7 +75,6 @@ PROSE_ALLOWLIST = [
     {"suffix": "commands/close.md", "contains": "/root/docs/dev/ba-spec"},
     # The detector's OWN match/extract/classify patterns + its prose allowlist
     # entries (AC-WS3-4: "the detector's own patterns are exempt").
-    {"suffix": "scripts/detect-hardcoded-paths.sh", "contains": "/root"},
     {"suffix": "scripts/check-file-references.sh", "contains": "/root/my-project"},
     # agents/qa.md + style-inspector.md: detection-example / instruction prose
     # ("grep -nE ...(/root/...)", '"finding": "Hardcoded path /root/deploy/"',
