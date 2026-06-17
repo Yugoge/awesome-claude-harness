@@ -63,7 +63,30 @@ def test_AC_WS1_2():
     WHEN:  the resolver evaluates the env hint
     THEN:  the env hint is IGNORED and the script-walk root is used; when CLAUDE_HOME realpath-equals the script-walk root it is honored
     """
-    # TODO(dev): replace the line below with the real test body. While the
-    # TEST_INCOMPLETE sentinel is present the test will hard-fail, marking
-    # the AC as unimplemented for QA Phase 5.
-    pytest.fail(f"TEST_INCOMPLETE: {AC_UID} — GIVEN CLAUDE_HOME / HOME env vars are set to a path that does NOT realpath/inode-equal the scri… / WHEN the resolver evaluates the env hint / THEN the env hint is IGNORED and the script-walk root is used; when CLAUDE_HOME realpath-equals the script-walk ro…")
+    clone = _make_clone()
+    walk_root = str(clone.resolve())
+
+    # (1) WRONG CLAUDE_HOME (a path that is NOT the script-walk root) is IGNORED;
+    # the structural walk root wins.
+    wrong = Path(tempfile.mkdtemp(prefix="ws1-wrong-"))
+    for interp in ("python3", "bash"):
+        r = _resolve(clone, interp, CLAUDE_HOME=str(wrong), HOME=str(clone.parent))
+        assert r.returncode == 0, f"{interp} exit {r.returncode}; stderr={r.stderr}"
+        assert r.stdout.strip() == walk_root, (
+            f"{interp} honored a wrong CLAUDE_HOME: got {r.stdout.strip()!r}, "
+            f"expected walk root {walk_root!r}")
+
+    # (2) A CLAUDE_HOME that realpath-equals the walk root (here via a symlink to
+    # it) IS honored — the resolver returns the (symlinked) user-facing form.
+    link_parent = Path(tempfile.mkdtemp(prefix="ws1-link-"))
+    link = link_parent / "claude-link"
+    os.symlink(walk_root, link)
+    for interp in ("python3", "bash"):
+        r = _resolve(clone, interp, CLAUDE_HOME=str(link), HOME=str(clone.parent))
+        assert r.returncode == 0, f"{interp} exit {r.returncode}; stderr={r.stderr}"
+        out = r.stdout.strip()
+        # Honored = it returns the symlink form (or the equal real root); either
+        # way it must realpath-equal the walk root.
+        assert os.path.realpath(out) == walk_root, (
+            f"{interp} did not honor a realpath-equal CLAUDE_HOME symlink: "
+            f"got {out!r} (realpath {os.path.realpath(out)!r}) != {walk_root!r}")
