@@ -513,7 +513,7 @@ Usage:
   and `.spec-binding.json` early-capture artifacts may be created by `/spec` itself at
   design/evidence capture time (the Design & Evidence Capture Routine). Legacy specs lacking an output folder remain
   valid — `/dev*` falls back gracefully.
-- **Todo script**: `~/.claude/scripts/todo/spec.py` (symlinked to `~/.claude/scripts/todo/spec.py` — same inode) exposes the 7-step Spec Creation Mode todo list with `blocking_count = 3` (Steps 1-3 must complete before Claude can stop; Steps 4-7 are session-duration).
+- **Todo script**: `~/.claude/scripts/todo/spec.py` (realpath may differ by install/symlink layout) exposes the 7-step Spec Creation Mode todo list with `blocking_count = 3` (Steps 1-3 must complete before Claude can stop; Steps 4-7 are session-duration).
 - **Workflow update**: Step 7 emits a temp update for the next phase using
   `/spec-update --temp`. It must be compact, reference existing artifacts by path,
   and suggest the exact next command (`/dev` auto-detect or `/dev --spec
