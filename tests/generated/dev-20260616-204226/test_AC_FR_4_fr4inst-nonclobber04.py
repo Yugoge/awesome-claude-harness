@@ -74,7 +74,9 @@ def _make_clone(dst: Path) -> Path:
 
 
 def _run_bootstrap(clone: Path, args, home: Path):
-    env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "HOME": str(home)}
+    base = _roomy_tmpbase()
+    env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "HOME": str(home),
+           "TMPDIR": base}
     return subprocess.run(
         [str(clone / "scripts" / "bootstrap"), *args],
         cwd=str(clone), env=env, capture_output=True, text=True, timeout=300,
