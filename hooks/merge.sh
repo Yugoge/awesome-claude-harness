@@ -16,6 +16,12 @@ set -euo pipefail
 # Sentinel enforcement is handled by pretool-wrapper-userintent.py (PreToolUse hook)
 # before this script runs. The wrapper itself stays pure git work.
 
+# WS1: resolve the harness home from this script's own location (hooks/merge.sh
+# -> harness home) via the shared resolver, so helper paths + the project-dir
+# default work on a fresh non-root clone instead of the author literal /root.
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/claude_home.sh"
+CLAUDE_HOME="$(claude_home_resolve)"
+
 # Args
 BRANCH_NAME="${1:-}"
 if [ -z "$BRANCH_NAME" ]; then
@@ -23,8 +29,8 @@ if [ -z "$BRANCH_NAME" ]; then
   exit 2
 fi
 
-# Resolve default branch via existing helper
-DEFAULT_BRANCH="$(/root/.claude/scripts/derive-default-branch.sh)"
+# Resolve default branch via existing helper (under the resolved harness home)
+DEFAULT_BRANCH="$("${CLAUDE_HOME}/scripts/derive-default-branch.sh")"
 if [ -z "$DEFAULT_BRANCH" ]; then
   echo "merge.sh: could not resolve default branch" >&2
   exit 1
