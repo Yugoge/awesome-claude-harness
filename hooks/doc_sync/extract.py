@@ -11,7 +11,7 @@ def extract_description(file_path: Path) -> str:
         return 'Unreadable'
     suffix = file_path.suffix
     if suffix == '.md':
-        return _extract_md_desc(text)
+        return _extract_md_desc(text, file_path)
     if suffix == '.py':
         return _extract_py_desc(text)
     if suffix in ('.sh', '.bash'):
