@@ -32,7 +32,7 @@ import subprocess
 import tempfile
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
+REPO_ROOT = Path(__file__).resolve().parents[3]
 
 # Self-contained probe mirroring the codex.md external-helper resolution contract:
 # resolve via $CODEX_ISO_BIN (default $HOME/bin/codex-iso), require executable,
