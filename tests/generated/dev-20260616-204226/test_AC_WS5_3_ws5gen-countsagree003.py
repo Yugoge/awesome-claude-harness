@@ -27,13 +27,46 @@ HOOK_CHECK = {
 }
 
 
+import importlib
+import re
+import sys
+from pathlib import Path
+
+_REPO = Path(__file__).resolve().parents[2]
+
+
+def _load(modname):
+    if str(_REPO) not in sys.path:
+        sys.path.insert(0, str(_REPO))
+    return importlib.import_module(modname)
+
+
+def _badge_count(readme: str, alt: str) -> int:
+    """Extract the first integer from a shields.io badge whose alt= matches."""
+    m = re.search(rf'alt="{re.escape(alt)}"\s+src="[^"]*?badge/[^"]*?-(\d+)', readme)
+    assert m, f'badge alt="{alt}" not found in README'
+    return int(m.group(1))
+
+
 def test_AC_WS5_3():
     r"""
     GIVEN: The generated counts and the curated badges (README)
     WHEN:  the generator computes counts
     THEN:  generated counts agree with the curated badges (no contradiction between auto-stats and README/ARCHITECTURE badges)
     """
-    # TODO(dev): replace the line below with the real test body. While the
-    # TEST_INCOMPLETE sentinel is present the test will hard-fail, marking
-    # the AC as unimplemented for QA Phase 5.
-    pytest.fail(f"TEST_INCOMPLETE: {AC_UID} — GIVEN The generated counts and the curated badges (README) / WHEN the generator computes counts / THEN generated counts agree with the curated badges (no contradiction between auto-stats and README/ARCHITECTURE b…")
+    regen_readme = _load('hooks.doc_sync.regen_readme')
+    readme = (_REPO / 'README.md').read_text()
+
+    # Map each curated badge alt-label to its synced directory.
+    cases = [
+        ('subagents', 'agents'),
+        ('commands', 'commands'),
+        ('skills', 'skills'),
+    ]
+    for alt, subdir in cases:
+        badge = _badge_count(readme, alt)
+        gen = regen_readme._build_stats(_REPO / subdir)['total']
+        assert gen == badge, (
+            f'generated count for {subdir}/ ({gen}) disagrees with '
+            f'curated badge {alt!r} ({badge})'
+        )
