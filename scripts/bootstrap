@@ -1,0 +1,139 @@
+#!/usr/bin/env bash
+# bootstrap — first-run setup for the Claude Code harness on a fresh clone.
+#
+# On a fresh non-root clone it:
+#   1. creates the Python venv the hooks/scripts expect (<home>/venv),
+#   2. installs the REQUIRED dependencies from requirements.txt,
+#   3. makes the shell hooks executable,
+#   4. verifies the shared resolver (hooks/lib/claude_home.{sh,py}) resolves
+#      THIS clone as the harness home,
+#   5. runs scripts/doctor as the final preflight.
+#
+# It is NON-DESTRUCTIVE: it refuses to clobber an already-populated home (an
+# existing venv) unless you pass --force, and it documents how to restore. With
+# --force it BACKS UP the existing venv (to <home>/venv.bak-<timestamp>) before
+# recreating it, so the prior state can always be restored.
+#
+# Usage: scripts/bootstrap [--force] [--no-doctor]
+#   --force       Re-bootstrap a populated home: back up the existing venv, then
+#                 recreate it (opt-in to the otherwise-refused clobber).
+#   --no-doctor   Skip the final scripts/doctor preflight.
+# Exit codes: 0 = success; 1 = refused (populated home, no --force) or a step
+#             failed.
+set -uo pipefail
+
+FORCE=0
+RUN_DOCTOR=1
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --force) FORCE=1; shift ;;
+    --no-doctor) RUN_DOCTOR=0; shift ;;
+    -h|--help) sed -n '2,18p' "${BASH_SOURCE[0]}"; exit 0 ;;
+    *) echo "bootstrap: unknown argument '$1'" >&2; exit 1 ;;
+  esac
+done
+
+# Resolve the harness home from THIS script's own location (it lives at
+# <home>/scripts/bootstrap, so the resolver is at ../hooks/lib). Never default
+# to the author literal /root: if the resolver cannot locate a structural home
+# we fall back to this script's own parent dir (the clone), still portable.
+SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+LIB_DIR="$SELF_DIR/../hooks/lib"
+# shellcheck source=/dev/null
+if [ -f "$LIB_DIR/claude_home.sh" ]; then
+  source "$LIB_DIR/claude_home.sh"
+  HOME_DIR="$(claude_home_resolve || true)"
+else
+  HOME_DIR=""
+fi
+[ -n "$HOME_DIR" ] || HOME_DIR="$(cd "$SELF_DIR/.." && pwd -P)"
+
+VENV_DIR="$HOME_DIR/venv"
+MANIFEST="$HOME_DIR/requirements.txt"
+
+echo "Claude Code harness — bootstrap"
+echo "harness home: $HOME_DIR"
+echo
+
+# Base prerequisite: python3 must be on PATH to create a venv at all.
+if ! command -v python3 >/dev/null 2>&1; then
+  echo "bootstrap: python3 not found on PATH — install Python 3 first." >&2
+  exit 1
+fi
+
+# ── Non-destructive install boundary ─────────────────────────────────────────
+# A populated home = an existing venv. Refuse to clobber it without --force.
+if [ -d "$VENV_DIR" ] && [ "$FORCE" -ne 1 ]; then
+  cat >&2 <<EOF
+bootstrap: REFUSING to clobber an existing venv at:
+    $VENV_DIR
+This home is already populated. bootstrap will not overwrite it without an
+explicit opt-in.
+
+To re-bootstrap (backs up the existing venv first), re-run with --force:
+    scripts/bootstrap --force
+
+To restore manually after a --force run, the prior venv is preserved at:
+    $VENV_DIR.bak-<timestamp>
+and can be restored with:
+    rm -rf "$VENV_DIR" && mv "$VENV_DIR.bak-<timestamp>" "$VENV_DIR"
+EOF
+  exit 1
+fi
+
+# With --force on a populated home: back up the existing venv before recreating.
+if [ -d "$VENV_DIR" ] && [ "$FORCE" -eq 1 ]; then
+  BACKUP="$VENV_DIR.bak-$(date +%Y%m%d-%H%M%S)"
+  echo "bootstrap: --force — backing up existing venv to $BACKUP"
+  mv "$VENV_DIR" "$BACKUP" || { echo "bootstrap: backup failed; aborting." >&2; exit 1; }
+  echo "  (restore with: rm -rf \"$VENV_DIR\" && mv \"$BACKUP\" \"$VENV_DIR\")"
+fi
+
+# ── 1. Create the venv ───────────────────────────────────────────────────────
+echo "bootstrap: creating venv at $VENV_DIR"
+python3 -m venv "$VENV_DIR" || { echo "bootstrap: venv creation failed." >&2; exit 1; }
+VENV_PY="$VENV_DIR/bin/python"
+
+# ── 2. Install the required dependencies from the manifest ───────────────────
+if [ -f "$MANIFEST" ]; then
+  echo "bootstrap: installing required dependencies from $MANIFEST"
+  "$VENV_PY" -m pip install --upgrade pip >/dev/null 2>&1 || true
+  if ! "$VENV_PY" -m pip install -r "$MANIFEST"; then
+    echo "bootstrap: dependency install failed (check network / pip)." >&2
+    exit 1
+  fi
+else
+  echo "bootstrap: requirements.txt not found at $MANIFEST — cannot install deps." >&2
+  exit 1
+fi
+
+# ── 3. Make the shell hooks executable ───────────────────────────────────────
+if [ -d "$HOME_DIR/hooks" ]; then
+  chmod +x "$HOME_DIR"/hooks/*.sh 2>/dev/null || true
+fi
+
+# ── 4. Verify the shared resolver works from this clone ──────────────────────
+echo "bootstrap: verifying the shared resolver"
+RESOLVED_SH="$(claude_home_resolve 2>/dev/null || true)"
+if [ -z "$RESOLVED_SH" ]; then
+  echo "bootstrap: claude_home.sh could not resolve the harness home." >&2
+  exit 1
+fi
+if ! "$VENV_PY" "$LIB_DIR/claude_home.py" resolve >/dev/null 2>&1; then
+  echo "bootstrap: claude_home.py could not resolve the harness home." >&2
+  exit 1
+fi
+echo "  resolver -> $RESOLVED_SH"
+
+# ── 5. Final preflight ───────────────────────────────────────────────────────
+if [ "$RUN_DOCTOR" -eq 1 ] && [ -x "$SELF_DIR/doctor" ]; then
+  echo
+  if ! "$SELF_DIR/doctor" --venv "$VENV_DIR"; then
+    echo "bootstrap: doctor reported missing required deps (see above)." >&2
+    exit 1
+  fi
+fi
+
+echo
+echo "bootstrap: SUCCESS — the harness is set up. Start Claude Code with: claude"
+exit 0
