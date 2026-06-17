@@ -1,13 +1,13 @@
-# 
+# dot-claude
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-06-16T10:23:37Z*
-**Total entries**: 1959
+*Last updated: 2026-06-17T00:03:57Z*
+**Total entries**: 1973
 **Convention**: kebab
 
 ## Tree
 ```
-/
+dot-claude/
 ├── agents/
 │   ├── `architect.md` - Architecture review specialist for overnight exploration. Identifies structural issues, technical debt, optimization opportunities, dependency problems, and pattern inconsistencies. Returns structured JSON report.
 │   ├── `ba.md` - Business analyst subagent for requirements analysis and context building. Receives user requirement text, performs git analysis, identifies affected files, and returns either clarification questions or dual-format output (Markdown spec + JSON context).
@@ -155,6 +155,7 @@
 │   │   ├── 20260615-094546/
 │   │   ├── 20260615-125319/
 │   │   ├── 20260615-151335/
+│   │   ├── 20260616-dehardcode/
 │   │   ├── dev-20260524-205811/
 │   │   ├── dev-20260525-053326/
 │   │   ├── dev-20260525-053326-A/
@@ -172,6 +173,7 @@
 │   │   ├── dev-20260531-193000/
 │   │   ├── dev-20260610-205358/
 │   │   ├── dev-20260615-213842/
+│   │   ├── dev-20260616-204226/
 │   │   ├── do-20260602-150727/
 │   │   └── overnight-master-hardening/
 │   ├── dev/
@@ -252,10 +254,12 @@
 │   │   ├── `acceptance-criteria-dev-20260531-134455.json` - json config
 │   │   ├── `acceptance-criteria-dev-20260531-193000.json` - json config
 │   │   ├── `acceptance-criteria-dev-20260615-213842.json` - json config
+│   │   ├── `acceptance-criteria-dev-20260616-204226.json` - json config
 │   │   ├── `architect-report-20260517-155838.json` - json config
 │   │   ├── `architect-report-20260527-061433.json` - json config
 │   │   ├── `architect-report-dev-20260517-215114.json` - json config
 │   │   ├── `architect-report-dev-20260525-050824.json` - json config
+│   │   ├── `architect-report-dev-20260616-204226.json` - json config
 │   │   ├── `architect-report-spec-20260520-221059.json` - json config
 │   │   ├── `ba-qa-report-20260416-063500.json` - json config
 │   │   ├── `ba-qa-report-20260416-073000.json` - json config
@@ -378,6 +382,7 @@
 │   │   ├── `ba-qa-report-dev-20260531-134455.json` - json config
 │   │   ├── `ba-qa-report-dev-20260531-193000.json` - json config
 │   │   ├── `ba-qa-report-dev-20260615-213842.json` - json config
+│   │   ├── `ba-qa-report-dev-20260616-204226.json` - json config
 │   │   ├── `ba-report-spec-20260520-221059.json` - json config
 │   │   ├── `cleanliness-inspector-report-005efeec-bb32-4361-ad8e-21e673e7f61d.json` - json config
 │   │   ├── `cleanliness-inspector-report-20260517-153856.json` - json config
@@ -555,6 +560,7 @@
 │   │   ├── `close-report-20260614-182549.md` - Close Debate Report
 │   │   ├── `close-report-20260614-205834.md` - Close Debate Report
 │   │   ├── `close-report-20260615-125319.md` - Close Debate Report
+│   │   ├── `close-report-20260616-094643.md` - Close Debate Report
 │   │   ├── `close-report-30fbb321-8921-44aa-bd65-de59e4c70730.md` - Close Report — /do cycle 30fbb321-8921-44aa-bd65-de59e4c70730
 │   │   ├── `close-report-441b0d47-3cbf-4fa5-9038-76ef39df048a.md` - Close Debate Report
 │   │   ├── `close-report-44e208af-b8b8-4266-a2ba-fcfc77f92d24.md` - Close Report — 44e208af-b8b8-4266-a2ba-fcfc77f92d24
@@ -596,6 +602,7 @@
 │   │   ├── `commit-qa-report-20260611-100500.md` - Commit-QA Gate Report — task 20260611-100500
 │   │   ├── `commit-qa-report-20260614-182549.md` - Pre-Commit QA Report — 20260614-182549
 │   │   ├── `commit-qa-report-20260614-205834.md` - Commit-QA Report — TASK_ID 20260614-205834
+│   │   ├── `commit-qa-report-20260616-094643.md` - Commit QA Report — TASK_ID 20260616-094643
 │   │   ├── `commit-qa-report-77be7954-cf76-4fea-a146-5cb88f32a69f.md` - Pre-Commit QA Report — TASK 77be7954-cf76-4fea-a146-5cb88f32a69f
 │   │   ├── `completion-20260510-191533.md` - Development Completion Report — 20260510-191533
 │   │   ├── `completion-20260511-094500.md` - Development Completion Report — 20260511-094500
@@ -800,6 +807,8 @@
 │   │   ├── `context-dev-20260531-193000.json.lock` - lock file
 │   │   ├── `context-dev-20260615-213842.json` - json config
 │   │   ├── `context-dev-20260615-213842.json.lock` - lock file
+│   │   ├── `context-dev-20260616-204226.json` - json config
+│   │   ├── `context-dev-20260616-204226.json.lock` - lock file
 │   │   ├── `context-do-20260529-210815.json` - json config
 │   │   ├── `context-iter2-dev-20260111-193314.json` - json config
 │   │   ├── `design-input-dev-20260531-134455.md` - Design Input — dev-20260531-134455
@@ -1178,6 +1187,7 @@
 │   │   ├── `qa-report-20260611-100500.json` - json config
 │   │   ├── `qa-report-20260614-093452.json` - json config
 │   │   ├── `qa-report-20260614-205834.json` - json config
+│   │   ├── `qa-report-20260616-094643.json` - json config
 │   │   ├── `qa-report-close-20260525-050824.json` - json config
 │   │   ├── `qa-report-close-20260525-095245.json` - json config
 │   │   ├── `qa-report-close-20260526-042454.json` - json config
@@ -1214,6 +1224,7 @@
 │   │   ├── `qa-report-dev-20260531-134455.json` - json config
 │   │   ├── `qa-report-dev-20260531-193000.json` - json config
 │   │   ├── `qa-report-dev-20260610-205358.json` - json config
+│   │   ├── `qa-report-dev-20260615-213842.json` - json config
 │   │   ├── `qa-report-do-20260529-210815.json` - json config
 │   │   ├── `qa-report-iter2-dev-20260107-091716.json` - json config
 │   │   ├── `refined-context-dev-20260111-193314.json` - json config
@@ -1353,6 +1364,7 @@
 │   │   ├── `test-writer-report-dev-20260531-134455.json` - json config
 │   │   ├── `test-writer-report-dev-20260531-193000.json` - json config
 │   │   ├── `test-writer-report-dev-20260615-213842.json` - json config
+│   │   ├── `test-writer-report-dev-20260616-204226.json` - json config
 │   │   ├── `ticket-20260510-191533.md` - BA Specification: Restore v3 Manifest as OPTIONAL Precision Layer + Eliminate Hardcoded "v3"
 │   │   ├── `ticket-20260511-094500.md` - BA Specification: C2 worktree-recognition rollback (single-item cycle)
 │   │   ├── `ticket-20260511-180000.md` - BA Specification: Enterprise commit hardening — hash chain trailer + message-vs-evidence guard + CC type lint + optional audit-log persistence
@@ -1462,6 +1474,7 @@
 │   │   ├── `ticket-dev-20260531-134455.md` - BA Specification: Reverse-blast-radius (RB1) + integer renumbering of the /dev graphify todo items
 │   │   ├── `ticket-dev-20260531-193000.md` - BA Specification: Renumber commands/dev.md to integer Step 1..17 + fully integrate graphify dual-touchpoint into /dev-overnight
 │   │   ├── `ticket-dev-20260615-213842.md` - BA Specification: Dependency documentation + repo self-consistency for open-box public release
+│   │   ├── `ticket-dev-20260616-204226.md` - BA Specification: Open-Box-Usable Harness — Shared Resolver, Fail-Closed Security, Fresh-Clone Smoke
 │   │   ├── `ticket-do-20260529-210815.md` - /do Fix: bare dd/shred gap + Chinese diagnostic string
 │   │   ├── `user-requirement-dev-20260517-215114.md` - No description
 │   │   ├── `user-requirement-dev-20260517-222440.md` - No description
@@ -1529,6 +1542,7 @@
 │   │   ├── `user-requirement-dev-20260614-093452.md` - No description
 │   │   ├── `user-requirement-dev-20260614-205834.md` - No description
 │   │   ├── `user-requirement-dev-20260615-213842.md` - No description
+│   │   ├── `user-requirement-dev-20260616-204226.md` - No description
 │   │   ├── `user-requirement-dev-command-20260601-060455.md` - User Requirement — dev-command-20260601-060455
 │   │   └── `user-requirement-dev-d1e94e.md` - User Requirement — dev-20260519-211515
 │   ├── examples/
@@ -1900,6 +1914,7 @@
 │   │   ├── dev-20260531-134455/
 │   │   ├── dev-20260531-193000/
 │   │   ├── dev-20260615-213842/
+│   │   ├── dev-20260616-204226/
 │   │   └── `manifest.json` - json config
 │   ├── instructions/
 │   │   ├── `execution-guide.md` - AI Test Execution Guide
@@ -1959,7 +1974,6 @@
 ├── `workflow-483e030c-3ab6-42d0-973e-8a2a4b8b8806.json` - json config
 ├── `workflow-49d0cdde-0555-4c6a-9354-0076adf7db42.json` - json config
 ├── `workflow-4e6b0a9e-bdd6-47ca-8ec4-95cae992867d.json` - json config
-├── `workflow-6c3a008d-0515-40b1-abe8-b785518c18d2.json` - json config
 ├── `workflow-758ea7a9-12e8-4854-9799-3e03dfb2ec3e.json` - json config
 ├── `workflow-78c6f989-5b0e-4d7b-b692-6cabbe0008bf.json` - json config
 ├── `workflow-d5e5ffb8-89bd-409f-a8c0-d00f45ecbce3.json` - json config
@@ -1969,6 +1983,9 @@
 └── `workflow-fe05ca9a-7892-40ea-a3ba-660db57180b9.json` - json config
 ```
 <!-- /AUTO:index-stats -->
+
+# 
+
 
 # dot-claude
 

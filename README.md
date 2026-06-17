@@ -361,7 +361,7 @@ A `PostToolUse` doc-sync hook keeps the `INDEX.md` files and the inventory block
 <!-- AUTO:readme-stats -->
 
 ## Overview
-- **Total files**: 66
+- **Total files**: 65
 - **Subdirectories**: 34
 - **Naming convention**: lower
 
@@ -390,7 +390,6 @@ A `PostToolUse` doc-sync hook keeps the `INDEX.md` files and the inventory block
 - `workflow-483e030c-3ab6-42d0-973e-8a2a4b8b8806.json` - json config
 - `workflow-49d0cdde-0555-4c6a-9354-0076adf7db42.json` - json config
 - `workflow-4e6b0a9e-bdd6-47ca-8ec4-95cae992867d.json` - json config
-- `workflow-6c3a008d-0515-40b1-abe8-b785518c18d2.json` - json config
 - `workflow-758ea7a9-12e8-4854-9799-3e03dfb2ec3e.json` - json config
 - `workflow-78c6f989-5b0e-4d7b-b692-6cabbe0008bf.json` - json config
 - `workflow-d5e5ffb8-89bd-409f-a8c0-d00f45ecbce3.json` - json config
