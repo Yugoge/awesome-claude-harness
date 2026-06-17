@@ -133,28 +133,43 @@ if [ -d "$HOME_DIR/hooks" ]; then
   chmod +x "$HOME_DIR"/hooks/*.sh 2>/dev/null || true
 fi
 
-# ── 4. Verify the shared resolver works from this clone ──────────────────────
+# ── 4. Verify BOTH resolvers resolve THIS clone ──────────────────────────────
+# Both the shell and python resolvers must resolve to this clone's home, so a
+# fresh clone proves the resolver is engaged (not just non-empty). Compare each
+# resolved path's realpath to the expected HOME_DIR realpath.
 echo "bootstrap: verifying the shared resolver"
+_rp() { realpath "$1" 2>/dev/null || python3 -c 'import os,sys;print(os.path.realpath(sys.argv[1]))' "$1"; }
+EXPECT_REAL="$(_rp "$HOME_DIR")"
 RESOLVED_SH="$(claude_home_resolve 2>/dev/null || true)"
-if [ -z "$RESOLVED_SH" ]; then
-  echo "bootstrap: claude_home.sh could not resolve the harness home." >&2
+if [ -z "$RESOLVED_SH" ] || [ "$(_rp "$RESOLVED_SH")" != "$EXPECT_REAL" ]; then
+  echo "bootstrap: claude_home.sh did not resolve this clone (got '${RESOLVED_SH:-<empty>}', expected '$HOME_DIR')." >&2
   exit 1
 fi
-if ! "$VENV_PY" "$LIB_DIR/claude_home.py" resolve >/dev/null 2>&1; then
-  echo "bootstrap: claude_home.py could not resolve the harness home." >&2
+RESOLVED_PY="$("$VENV_PY" "$LIB_DIR/claude_home.py" resolve 2>/dev/null || true)"
+if [ -z "$RESOLVED_PY" ] || [ "$(_rp "$RESOLVED_PY")" != "$EXPECT_REAL" ]; then
+  echo "bootstrap: claude_home.py did not resolve this clone (got '${RESOLVED_PY:-<empty>}', expected '$HOME_DIR')." >&2
   exit 1
 fi
-echo "  resolver -> $RESOLVED_SH"
+echo "  resolver (sh) -> $RESOLVED_SH"
+echo "  resolver (py) -> $RESOLVED_PY"
 
 # ── 5. Final preflight ───────────────────────────────────────────────────────
-if [ "$RUN_DOCTOR" -eq 1 ] && [ -x "$SELF_DIR/doctor" ]; then
+# Run doctor via `bash` so a missing executable bit (e.g. a zip checkout) is not
+# load-bearing. When RUN_DOCTOR=1, doctor MUST exist — otherwise fail, never
+# silently skip the preflight.
+if [ "$RUN_DOCTOR" -eq 1 ]; then
+  if [ ! -f "$SELF_DIR/doctor" ]; then
+    echo "bootstrap: scripts/doctor is missing — cannot run the final preflight." >&2
+    exit 1
+  fi
   echo
-  if ! "$SELF_DIR/doctor" --venv "$VENV_DIR"; then
+  if ! bash "$SELF_DIR/doctor" --venv "$VENV_DIR"; then
     echo "bootstrap: doctor reported missing required deps (see above)." >&2
     exit 1
   fi
 fi
 
+_BOOTSTRAP_OK=1
 echo
 echo "bootstrap: SUCCESS — the harness is set up. Start Claude Code with: claude"
 exit 0
