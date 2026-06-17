@@ -1,15 +1,25 @@
 #!/usr/bin/env bash
 # Description: SessionStart hook that promotes a cold session back to ramdisk.
 # Reads hook JSON on stdin (fields: session_id, cwd, hook_event_name, ...).
-# Invokes /root/bin/session-promote.sh in the background so the hook does NOT
+# Invokes the session-promote helper in the background so the hook does NOT
 # block session startup. Always exits 0.
 #
+# WS1: this is an OPTIONAL author-environment capability (RAM-disk promotion).
+# The on-ramdisk project root is derived from the resolved harness home, and the
+# external helper is resolved via $SESSION_PROMOTE_BIN — absent => degrade
+# silently (the hook already always exits 0), NEVER the author literal /root.
+#
 # Input example:
-#   {"session_id":"abc-...","cwd":"/root",...}
+#   {"session_id":"abc-...","cwd":"/some/home",...}
 
 # Do NOT use `set -e` here: the hook must never fail Claude Code startup.
 
 LOG="/var/log/claude-tier.log"
+
+# WS1: resolve the harness home from this script's own location (optional — this
+# hook degrades gracefully if unresolved).
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/claude_home.sh" 2>/dev/null || true
+CLAUDE_HOME="$(claude_home_resolve 2>/dev/null || true)"
 
 log_hook() {
   local ts
