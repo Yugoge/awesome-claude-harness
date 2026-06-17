@@ -104,7 +104,25 @@ def test_AC_WS1_6():
     WHEN:  the Stop hook evaluates coverage and cannot locate its verifier
     THEN:  the hook FAILS CLOSED (exit 2, block stop) for a required-but-absent verifier rather than silently exiting 0; when the verifier is present and coverage < 100%, it still exits 2
     """
-    # TODO(dev): replace the line below with the real test body. While the
-    # TEST_INCOMPLETE sentinel is present the test will hard-fail, marking
-    # the AC as unimplemented for QA Phase 5.
-    pytest.fail(f"TEST_INCOMPLETE: {AC_UID} — GIVEN stop-spec-coverage-enforce.py firing for a /spec session whose spec is under-covered, on… / WHEN the Stop hook evaluates coverage and cannot locate its verifier / THEN the hook FAILS CLOSED (exit 2, block stop) for a required-but-absent verifier rather than silently exiting 0;…")
+    # (a) REQUIRED verifier ABSENT + a spec WAS touched (views/ present) ->
+    # FAIL CLOSED exit 2 (the removed historical fail-open exit 0).
+    clone_a, transcript_a = _make_spec_clone(with_verifier=False)
+    a = _run_stop(clone_a, transcript_a)
+    assert a.returncode == 2, (
+        f"(a) verifier absent + spec touched must BLOCK (exit 2); got {a.returncode} stderr={a.stderr!r}")
+    assert a.returncode != 0, "(a) must NOT silently exit 0 (the historical fail-open)"
+    assert "SPEC COVERAGE ENFORCEMENT" in a.stderr and "harness-install error" in a.stderr, (
+        f"(a) missing the install-error block message: {a.stderr!r}")
+
+    # (b) verifier PRESENT but coverage < 100% (stub exits nonzero) -> exit 2.
+    clone_b, transcript_b = _make_spec_clone(with_verifier=True, verifier_exit=1)
+    b = _run_stop(clone_b, transcript_b)
+    assert b.returncode == 2, (
+        f"(b) verifier present + under-covered must BLOCK (exit 2); got {b.returncode} stderr={b.stderr!r}")
+    assert "< 100% coverage" in b.stderr, f"(b) missing the under-covered block message: {b.stderr!r}"
+
+    # SANITY: verifier present + full coverage (stub exits 0) -> allow stop (0).
+    clone_ok, transcript_ok = _make_spec_clone(with_verifier=True, verifier_exit=0)
+    ok = _run_stop(clone_ok, transcript_ok)
+    assert ok.returncode == 0, (
+        f"verifier present + 100% coverage should allow stop (exit 0); got {ok.returncode} stderr={ok.stderr!r}")
