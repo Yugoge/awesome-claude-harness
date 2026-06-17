@@ -40,17 +40,30 @@ def _run_guard_probe():
     blocks a destructive op on the ~/-form. Runs in a clean subprocess so the
     module-level DATA_FILE_PATH binds to the synthetic HOME."""
     code = r"""
-import os, sys, json
+import ast, inspect, os, sys, json
 sys.path.insert(0, os.path.join(os.environ["REPO"], "hooks", "lib"))
 import runtime_guard as rg
 variants = sorted(rg._config_or_ancestor_variants())
 tilde = rg._home_tilde_variant("/home/alice/.config/claude/protected-runtime.json")
-# Behavioral: a destructive rm of the ~/-form must be DENIED (verdict != ALLOW).
-verdict = rg.evaluate_command("rm -f ~/.config/claude/protected-runtime.json")
+# Behavioral: a destructive rm of BOTH the ~/-form and the absolute non-root
+# home form must be BLOCKED.
+verdict_tilde = rg.evaluate("rm -f ~/.config/claude/protected-runtime.json")[0]
+verdict_abs = rg.evaluate("rm -f /home/alice/.config/claude/protected-runtime.json")[0]
+# Source check: no /root-specific LITERAL remains in the EXECUTABLE body of the
+# tilde generator (strip the docstring, which may mention /root in prose).
+src = inspect.getsource(rg._home_tilde_variant)
+tree = ast.parse(src)
+fn = tree.body[0]
+if (fn.body and isinstance(fn.body[0], ast.Expr)
+        and isinstance(getattr(fn.body[0], "value", None), ast.Constant)):
+    fn.body = fn.body[1:]            # drop the docstring node
+exec_src = ast.unparse(fn)
 print(json.dumps({
     "variants": variants,
     "tilde": tilde,
-    "verdict": verdict[0],
+    "verdict_tilde": verdict_tilde,
+    "verdict_abs": verdict_abs,
+    "root_literal_in_exec_body": "/root" in exec_src,
 }))
 """
     env = {
