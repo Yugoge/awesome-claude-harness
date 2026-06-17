@@ -83,7 +83,15 @@ fi
 
 # With --force on a populated home: back up the existing venv before recreating.
 if [ -d "$VENV_DIR" ] && [ "$FORCE" -eq 1 ]; then
-  BACKUP="$VENV_DIR.bak-$(date +%Y%m%d-%H%M%S)"
+  # Collision-proof backup name: never reuse an existing path (two --force runs
+  # in the same second must not nest one backup inside another).
+  _ts="$(date +%Y%m%d-%H%M%S)"
+  BACKUP="$VENV_DIR.bak-$_ts"
+  _n=1
+  while [ -e "$BACKUP" ]; do
+    BACKUP="$VENV_DIR.bak-$_ts-$_n"
+    _n=$((_n + 1))
+  done
   echo "bootstrap: --force — backing up existing venv to $BACKUP"
   mv "$VENV_DIR" "$BACKUP" || { echo "bootstrap: backup failed; aborting." >&2; exit 1; }
   echo "  (restore with: rm -rf \"$VENV_DIR\" && mv \"$BACKUP\" \"$VENV_DIR\")"
