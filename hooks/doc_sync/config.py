@@ -24,13 +24,8 @@ def load_config(project_dir: Path) -> dict:
         return {}
 
 
-def tracked_names(dir_path: Path) -> set[str] | None:
-    """Return the set of basenames published (git-tracked) directly inside dir_path.
-
-    A name is included if it is the first path segment of any tracked entry under
-    dir_path -- i.e. a tracked file's own name, OR a directory that contains at
-    least one tracked file. `git ls-files` lists tracked files only, so gitignored
-    and untracked files are naturally absent.
+def _tracked_relpaths(dir_path: Path) -> set[str] | None:
+    """Forward-slash relative paths of every git-tracked file under dir_path.
 
     Returns None (NOT an empty set) when the tracked set cannot be determined --
     git is unavailable or dir_path is not inside a work-tree -- so callers can
@@ -47,10 +42,26 @@ def tracked_names(dir_path: Path) -> set[str] | None:
     if proc.returncode != 0:
         return None
     out = proc.stdout.decode('utf-8', errors='replace')
-    names: set[str] = set()
-    for entry in out.split('\0'):
-        if not entry:
-            continue
-        # entry is a path relative to dir_path; take its first segment.
-        names.add(entry.replace('\\', '/').split('/', 1)[0])
-    return names
+    return {entry.replace('\\', '/') for entry in out.split('\0') if entry}
+
+
+def tracked_names(dir_path: Path) -> set[str] | None:
+    """Return the set of basenames published (git-tracked) directly inside dir_path.
+
+    A name is included if it is the first path segment of any tracked entry under
+    dir_path -- i.e. a tracked file's own name, OR a directory that contains at
+    least one tracked file. `git ls-files` lists tracked files only, so gitignored
+    and untracked files are naturally absent. Returns None when git was not
+    consulted (see _tracked_relpaths).
+    """
+    relpaths = _tracked_relpaths(dir_path)
+    if relpaths is None:
+        return None
+    return {rel.split('/', 1)[0] for rel in relpaths}
+
+
+def tracked_relpaths(dir_path: Path) -> set[str] | None:
+    """Public alias for the full forward-slash tracked relative-path set under
+    dir_path (a tracked-aware tree filter consumes this to prune nested untracked
+    entries). Returns None when git was not consulted."""
+    return _tracked_relpaths(dir_path)
