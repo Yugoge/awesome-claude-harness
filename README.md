@@ -341,7 +341,7 @@ This section is a **contract**, not a warning: it states what the harness *guara
 
 #### Fail-closed vs. skip semantics
 
-Absence is handled by exactly one of two rules, per the kind of thing that is missing:
+Absence is handled by exactly one of these outcomes, per the kind of thing that is missing:
 
 | Missing thing | Class | Behavior on absence |
 |---|---|---|
