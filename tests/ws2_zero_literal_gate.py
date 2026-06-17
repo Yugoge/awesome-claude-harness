@@ -185,7 +185,32 @@ def md_class(line: str, literal: str) -> str:
     return "plain"
 
 
-def scan(root: str):
+def responsible_surface(root: str, baseline_ref: str, cycle_files):
+    """Return the set of repo-relative paths THIS cycle is responsible for, or
+    None to scan everything (no scoping).
+
+    responsible = files tracked at <baseline_ref>  ∪  cycle_files
+    A path absent at baseline AND not a cycle file = a foreign concurrent
+    addition and is EXCLUDED. Returns None (no narrowing) when baseline_ref is
+    empty, the root is not a git work tree, or the ls-tree query fails — so the
+    rendered-clone (non-git) path keeps scanning the whole portable tree.
+    """
+    if not baseline_ref:
+        return None
+    try:
+        out = subprocess.run(
+            ["git", "-C", root, "ls-tree", "-r", "--name-only", baseline_ref],
+            capture_output=True, text=True, check=True)
+    except (OSError, subprocess.CalledProcessError):
+        return None
+    surface = {p for p in out.stdout.splitlines() if p}
+    if not surface:
+        return None  # unresolvable ref / empty tree => do not narrow
+    surface.update(cycle_files or ())
+    return surface
+
+
+def scan(root: str, responsible=None):
     findings = []
     for dp, dn, fn in os.walk(root):
         dn[:] = [d for d in dn if d not in
