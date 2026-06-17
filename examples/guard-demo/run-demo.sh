@@ -126,6 +126,8 @@ cat > "$DEMO_HOME/policies/tool-policy.v1.json" <<'POLICY'
   }
 }
 POLICY
+[ -s "$DEMO_HOME/policies/tool-policy.v1.json" ] \
+  || { echo "run-demo: cannot write the demo policy" >&2; exit 2; }
 
 # ── Sanity: the shared resolver finds the demo home structurally ─────────────
 # This proves the demo consumes the WS1 resolver (not a hardcoded path) — the
