@@ -104,16 +104,17 @@ def _readme_needs_update(readme_path: Path) -> bool:
 
 
 def _list_files(dir_path: Path) -> list[str]:
+    published = _published_names(dir_path)
     files = sorted(f for f in dir_path.iterdir()
-                   if f.is_file() and not _is_skipped(f.name) and not f.name.startswith('.'))
+                   if f.is_file() and _is_published(f.name, published))
     return [f'- `{f.name}` - {extract_description(f)}' for f in files]
 
 
 def _list_subdirs(dir_path: Path) -> list[str]:
+    published = _published_names(dir_path)
     subdirs = sorted(d for d in dir_path.iterdir()
                      if d.is_dir() and d.name not in SKIP_DIRS
-                     and not _is_skipped(d.name)
-                     and not d.name.startswith('.'))
+                     and _is_published(d.name, published))
     return [f'- `{d.name}/`' for d in subdirs]
 
 
