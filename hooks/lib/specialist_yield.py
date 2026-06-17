@@ -63,7 +63,8 @@ _DEGRADED_ACTION_LABELS = {
 
 
 def _project_dir() -> Path:
-    return Path(os.environ.get("CLAUDE_PROJECT_DIR", "/root"))
+    # WS1: resolve via the shared claude_home resolver, never the literal /root.
+    return claude_home.project_dir()
 
 
 def _policy_path() -> Path:
