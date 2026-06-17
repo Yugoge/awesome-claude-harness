@@ -113,8 +113,12 @@ POLICY
 
 # ── Sanity: the shared resolver finds the demo home structurally ─────────────
 # This proves the demo consumes the WS1 resolver (not a hardcoded path) — the
-# guard below relies on the SAME resolution to find its policy.
-RESOLVED="$(HOME="$DEMO_HOME" CLAUDE_PROJECT_DIR="$DEMO_HOME" bash "$RESOLVER" resolve 2>/dev/null)"
+# guard below relies on the SAME resolution to find its policy. We invoke the
+# DEMO's own copy of the resolver so its PRIMARY script-walk (from the running
+# file's location) lands on the demo home, exactly as the guard's in-clone
+# import of claude_home.py does on a fresh clone.
+DEMO_RESOLVER="$DEMO_HOME/hooks/lib/claude_home.sh"
+RESOLVED="$(HOME="$DEMO_HOME" CLAUDE_PROJECT_DIR="$DEMO_HOME" bash "$DEMO_RESOLVER" resolve 2>/dev/null)"
 if [ "$RESOLVED" != "$DEMO_HOME" ]; then
   say "FAIL: shared resolver did not resolve the demo home structurally"
   say "      (resolved '$RESOLVED', expected '$DEMO_HOME')"
