@@ -95,12 +95,18 @@ def test_AC_FR_4():
         )
 
         # WHEN: bootstrap runs WITH --force -> THEN it BACKS UP the existing venv
-        # before applying (the pre-existing marker survives in the backup).
+        # BEFORE applying. The non-destructive contract is the backup-before-clobber
+        # ordering: the pre-existing marker must survive in the backup (it is moved
+        # out of the way, never deleted). We assert the backup ordering, not the
+        # subsequent pip step (which depends on network and is exercised by AC-FR-1).
         r_force = _run_bootstrap(clone, ["--force", "--no-doctor"], home)
-        assert r_force.returncode == 0, (
-            f"--force must succeed; got {r_force.returncode}\n{r_force.stdout}\n{r_force.stderr}"
+        combined_force = r_force.stdout + r_force.stderr
+        assert "backing up" in combined_force.lower(), (
+            f"--force must back up the existing venv before applying; got:\n{combined_force}"
         )
         backups = list(clone.glob("venv.bak-*"))
         assert backups, "with --force, the existing venv must be backed up before apply"
-        preserved = backups[0] / "bin" / "PRE_EXISTING_MARKER"
-        assert preserved.exists(), "the backup must preserve the prior home contents"
+        preserved = [b / "bin" / "PRE_EXISTING_MARKER" for b in backups]
+        assert any(p.exists() and p.read_text() == "do-not-clobber\n" for p in preserved), (
+            "the backup must preserve the prior home contents (backed up, not clobbered)"
+        )
