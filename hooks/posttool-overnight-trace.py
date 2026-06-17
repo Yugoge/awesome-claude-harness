@@ -41,6 +41,11 @@ try:
 except Exception:  # pragma: no cover
     load_contract = None  # type: ignore[assignment]
 
+try:
+    from lib import claude_home  # noqa: E402  (shared WS1 resolver)
+except Exception:  # pragma: no cover - fail-soft if lib missing
+    claude_home = None  # type: ignore[assignment]
+
 
 _SPECIALIST_TYPES = {"architect", "ui-specialist", "product-owner", "user"}
 
