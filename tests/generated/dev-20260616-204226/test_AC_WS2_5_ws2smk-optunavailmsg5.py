@@ -33,7 +33,30 @@ def test_AC_WS2_5():
     WHEN:  the smoke test runs a path that references an optional capability or an external helper
     THEN:  an observable one-line 'unavailable' message appears rather than a crash, and NO bare unsafe fallback is invoked (e.g. bare codex); the test name/green semantics mean 'core is runnable + guards engaged', NOT 'the full LLM pipeline works'
     """
-    # TODO(dev): replace the line below with the real test body. While the
-    # TEST_INCOMPLETE sentinel is present the test will hard-fail, marking
-    # the AC as unimplemented for QA Phase 5.
-    pytest.fail(f"TEST_INCOMPLETE: {AC_UID} — GIVEN Optional capabilities absent on the fresh clone, including the external helper bins of AC… / WHEN the smoke test runs a path that references an optional capability or an external helper / THEN an observable one-line 'unavailable' message appears rather than a crash, and NO bare unsafe fallback is invo…")
+    # OPTIONAL-CAPABILITY degradation assertion: drive the fresh-clone smoke
+    # (non-root euid, author home absent, temp HOME not under /root or /dev/shm)
+    # and assert its OPTIONAL-CAPABILITY slice passed. The smoke runs, with the
+    # relevant env vars (SESSION_PROMOTE_BIN / CODEX_ISO_BIN) UNSET:
+    #   (a) the session-promote hook -> must NOT crash, exits 0 (degrade), with no
+    #       unresolved author /root path on stderr; and
+    #   (b) the AC-WS3-6 external-helper contract -> must print a one-line
+    #       'unavailable' and NEVER invoke a bare unsafe `codex` fallback.
+    # The smoke records this as the single 'unavailable' assertion under the
+    # 'optional-capability' guard; we assert it is present and passed.
+    import os
+    import sys
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    from _ws2_smoke import run_smoke, require_not_setup_error
+
+    rc, result = run_smoke()
+    require_not_setup_error(rc, result)
+
+    opt = [a for a in result["assertions"]
+           if a["guard"] == "optional-capability" and a["kind"] == "unavailable"]
+    assert opt, (
+        "smoke did not emit an optional-capability 'unavailable' assertion; "
+        f"saw {[(a['guard'], a['kind']) for a in result['assertions']]}")
+    assert opt[0]["pass"], (
+        "optional-capability degradation FAILED — absence must yield a one-line "
+        "'unavailable'/'skipping (optional)' message with no crash/hang and NO "
+        f"bare unsafe fallback: {opt[0]['detail']}")
