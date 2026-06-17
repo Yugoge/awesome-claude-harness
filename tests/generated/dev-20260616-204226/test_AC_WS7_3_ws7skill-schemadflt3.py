@@ -13,10 +13,27 @@
 # test-writer agent spec for smoke/shell-verified ACs. Remove the
 # TEST_INCOMPLETE sentinel below when the real body is in place.
 
+import os
+import re
+import json
+
 import pytest
 
 AC_UID = "ws7skill-schemadflt3"
 AC_TYPE = "data"
+
+REPO_ROOT = os.path.realpath(
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "..")
+)
+
+AUTHOR_PATH_RE = re.compile(
+    r"(?<![\w./])(?:/root(?:/|(?=$|[^\w./-]))|/dev/shm/dev-workspace(?:/|(?=$|[^\w./-])))"
+)
+
+
+def _read(relpath):
+    with open(os.path.join(REPO_ROOT, relpath), encoding="utf-8") as fh:
+        return fh.read()
 
 # HOOK_CHECK is the AC's `check` object copied VERBATIM from the BA acceptance
 # criteria. QA traces each test back to this; Dev MUST NOT hand-edit it.
