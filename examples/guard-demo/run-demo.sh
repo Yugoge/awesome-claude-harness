@@ -204,10 +204,16 @@ FIX_TARGET="$DEMO_HOME/work/fix-applied.txt"
 say "The same agent now performs the authorized, in-scope fix:"
 say "  $FIX_TARGET"
 ask_guard ALLOW_ERR "$FIX_TARGET"; ALLOW_RC=$?
-if [ "$ALLOW_RC" -eq 0 ]; then
+# A real allow exits 0 with NO diagnostics. The guard's last-resort handler also
+# exits 0 on an unexpected exception (printing 'pretool-tool-policy: unexpected')
+# and the policy loader warns on stderr ('policy_registry:') when it cannot read
+# the policy — neither is a genuine authorization, so we reject both.
+if [ "$ALLOW_RC" -eq 0 ] \
+   && ! printf '%s' "$ALLOW_ERR" | grep -q "pretool-tool-policy: unexpected" \
+   && ! printf '%s' "$ALLOW_ERR" | grep -q "policy_registry:"; then
   say "ALLOWED (exit 0) by the guard — the operation is within policy."
 else
-  say "FAIL: authorized fix was NOT allowed (rc=$ALLOW_RC)."
+  say "FAIL: authorized fix was NOT cleanly allowed (rc=$ALLOW_RC)."
   say "  stderr: $(printf '%s' "$ALLOW_ERR" | head -c 240)"
   OVERALL=1
 fi
