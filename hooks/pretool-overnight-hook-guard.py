@@ -302,8 +302,9 @@ def _build_audit_row(state: dict, payload: dict, role: str, target: str, sr: dic
 def _persist_audit_row(row: dict) -> bool:
     """Append a single JSONL row to the audit log; True iff fsync succeeded."""
     try:
-        SELF_REPAIR_AUDIT_LOG.parent.mkdir(parents=True, exist_ok=True)
-        with SELF_REPAIR_AUDIT_LOG.open('a', encoding='utf-8') as fh:
+        audit_log = _self_repair_audit_log()
+        audit_log.parent.mkdir(parents=True, exist_ok=True)
+        with audit_log.open('a', encoding='utf-8') as fh:
             fh.write(json.dumps(row, default=str) + '\n')
             fh.flush()
             os.fsync(fh.fileno())
