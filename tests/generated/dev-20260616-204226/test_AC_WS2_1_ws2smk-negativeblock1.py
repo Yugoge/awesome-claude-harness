@@ -33,7 +33,25 @@ def test_AC_WS2_1():
     WHEN:  the bootstrap smoke test exercises each security guard with a known-dangerous op (NEGATIVE assertion)
     THEN:  each guard BLOCKS the op with exit 2 and emits its OWN specific block marker on stderr (e.g. tool-policy emits 'BLOCKED by tool-policy.v1')
     """
-    # TODO(dev): replace the line below with the real test body. While the
-    # TEST_INCOMPLETE sentinel is present the test will hard-fail, marking
-    # the AC as unimplemented for QA Phase 5.
-    pytest.fail(f"TEST_INCOMPLETE: {AC_UID} — GIVEN A fresh clone under an isolated NON-ROOT temp $HOME whose path is NOT under /root and NOT… / WHEN the bootstrap smoke test exercises each security guard with a known-dangerous op (NEGATIV… / THEN each guard BLOCKS the op with exit 2 and emits its OWN specific block marker on stderr (e.g. tool-policy emit…")
+    # NEGATIVE assertion: drive the fresh-clone smoke (non-root euid, author home
+    # absent, temp HOME not under /root or /dev/shm) and assert EACH security
+    # guard's NEGATIVE case blocked the known-dangerous op with exit 2 and its OWN
+    # distinctive block marker on stderr (recorded as a passing 'negative'
+    # assertion in the smoke result), distinguishable from an ordinary prompt.
+    import os
+    import sys
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    from _ws2_smoke import run_smoke, require_not_setup_error
+
+    rc, result = run_smoke()
+    require_not_setup_error(rc, result)
+
+    negatives = [a for a in result["assertions"] if a["kind"] == "negative"]
+    guards = {a["guard"] for a in negatives}
+    # Every guard with a dangerous-op surface must contribute a NEGATIVE case.
+    assert {"tool-policy", "stop-spec-coverage", "claude-home-resolver"} <= guards, (
+        f"missing a guard's negative case; saw {guards} in {result!r}")
+    failed = [a for a in negatives if not a["pass"]]
+    assert not failed, (
+        "a guard's NEGATIVE case did not block with exit 2 + its own marker: "
+        + "; ".join(f"{a['guard']}: {a['detail']}" for a in failed))
