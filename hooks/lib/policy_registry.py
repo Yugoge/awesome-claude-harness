@@ -41,22 +41,44 @@ import os
 import sys
 from typing import Optional, Tuple
 
-POLICY_PATH = "/root/.claude/policies/tool-policy.v1.json"
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import claude_home  # noqa: E402  (shared WS1 harness-home resolver)
+
+# Relative path of the tool policy under the resolved harness home. The absolute
+# path is resolved at load time via claude_home so a fresh non-root clone (whose
+# home is NOT /root/.claude) still finds its own policy.
+POLICY_RELPATH = "policies/tool-policy.v1.json"
 WRITE_TOOLS = {"Write", "Edit", "NotebookEdit", "MultiEdit"}
-ALLOWED_TYPES_FALLBACK = {"dev"}
+# WS1: the dev-role fail-safe-ALLOW is REMOVED — no role fails open on a missing
+# policy. Kept as an (empty) name so any importer referencing it still works.
+ALLOWED_TYPES_FALLBACK: set[str] = set()
 
 _CACHE: Optional[dict] = None
 _CACHE_LOADED = False
 
 
 def load_policy() -> Optional[dict]:
-    """Read tool-policy.v1.json. Returns dict or None on error."""
+    """Read tool-policy.v1.json. Returns dict or None on error.
+
+    The policy path is resolved via the shared claude_home resolver
+    (resolve_optional) so the loader never depends on the author's literal
+    /root home. A missing home or missing/unparseable file returns None, which
+    is_allowed() maps to a fail-CLOSED DENY for every role.
+    """
     global _CACHE, _CACHE_LOADED
     if _CACHE_LOADED:
         return _CACHE
     _CACHE_LOADED = True
+    policy_path = claude_home.resolve_optional(POLICY_RELPATH)
+    if policy_path is None:
+        sys.stderr.write(
+            f"policy_registry: policy '{POLICY_RELPATH}' not found under the "
+            "resolved harness home (or home unresolved)\n"
+        )
+        _CACHE = None
+        return _CACHE
     try:
-        with open(POLICY_PATH) as f:
+        with open(policy_path) as f:
             _CACHE = json.load(f)
     except (OSError, json.JSONDecodeError) as e:
         sys.stderr.write(f"policy_registry: load failed ({e})\n")
