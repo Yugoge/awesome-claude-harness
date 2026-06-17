@@ -26,6 +26,59 @@ HOOK_CHECK = {
     "expect_exit": 2
 }
 
+import json
+import os
+import shutil
+import subprocess
+import tempfile
+from pathlib import Path
+
+_REPO = Path(__file__).resolve().parents[3]
+_LIB_MODULES = ("claude_home.py", "agent_resolver.py", "bash_write_targets.py",
+                "policy_registry.py")
+
+
+def _make_policy_clone(with_policy: bool = True, policy_text=None) -> Path:
+    """A synthetic harness home with the real tool-policy hook + its lib deps.
+
+    with_policy=False omits policies/tool-policy.v1.json (the load-None /
+    relocated-policy case). policy_text injects raw (e.g. unparseable) JSON.
+    """
+    tmp_home = Path(tempfile.mkdtemp(prefix="ws1-toolpolicy-"))
+    clone = tmp_home / "dot-claude"
+    (clone / "hooks" / "lib").mkdir(parents=True)
+    (clone / "policies").mkdir()
+    (clone / "scripts").mkdir()
+    (clone / "settings.json").write_text("{}\n")
+    shutil.copy2(_REPO / "hooks" / "pretool-tool-policy.py",
+                 clone / "hooks" / "pretool-tool-policy.py")
+    for m in _LIB_MODULES:
+        shutil.copy2(_REPO / "hooks" / "lib" / m, clone / "hooks" / "lib" / m)
+    if policy_text is not None:
+        (clone / "policies" / "tool-policy.v1.json").write_text(policy_text)
+    elif with_policy:
+        shutil.copy2(_REPO / "policies" / "tool-policy.v1.json",
+                     clone / "policies" / "tool-policy.v1.json")
+    return clone
+
+
+def _run_hook(clone: Path, payload: dict):
+    env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "LANG": "C",
+           "HOME": str(clone.parent), "CLAUDE_PROJECT_DIR": str(clone)}
+    return subprocess.run(
+        ["python3", str(clone / "hooks" / "pretool-tool-policy.py")],
+        input=json.dumps(payload), env=env, capture_output=True, text=True,
+    )
+
+
+def _dev_write_payload(clone: Path) -> dict:
+    return {
+        "subagent_type": "dev",
+        "agent_id": "dev-ws1-5-test",
+        "tool_name": "Write",
+        "tool_input": {"file_path": str(clone / "hooks" / "pretool-tool-policy.py")},
+    }
+
 
 def test_AC_WS1_5():
     r"""
