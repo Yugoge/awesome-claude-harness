@@ -253,13 +253,30 @@ def main():
 
     specs_base = project_dir / "docs" / "dev" / "specs"
     monolith = find_monolith(specs_base, spec_dir)
-    if monolith is None or not Path(SPEC_VERIFY).is_file():
+    if monolith is None:
+        # No monolith for a touched spec dir — nothing to verify, allow stop.
         sys.exit(0)
+
+    # WS1 FAIL-CLOSED (AC-WS1-6): a spec WAS touched and HAS a views/ dir, so
+    # coverage IS required. If the REQUIRED spec-verify helper cannot be located
+    # under the resolved harness home, this is a harness-INSTALL error — BLOCK
+    # (exit 2) rather than silently exiting 0 (the historical fail-open). The
+    # resolver returns None when the home is unresolved OR the verifier is absent.
+    spec_verify = claude_home.resolve_optional(SPEC_VERIFY_RELPATH)
+    if spec_verify is None:
+        sys.stderr.write(
+            "\n⛔ SPEC COVERAGE ENFORCEMENT: the REQUIRED spec-verify helper "
+            f"('{SPEC_VERIFY_RELPATH}') could not be located under the resolved "
+            "harness home — this is a harness-install error. Coverage cannot be "
+            "verified, so the stop is BLOCKED (fail-closed). Repair the harness "
+            "install (run scripts/bootstrap), then retry.\n"
+        )
+        sys.exit(2)
 
     # Non-blocking breadcrumb — stderr is only surfaced when the hook blocks.
     sys.stderr.write(f"[stop-spec-coverage-enforce] target spec: {spec_dir.name}\n")
 
-    result = run_coverage_check(monolith, spec_dir / "views")
+    result = run_coverage_check(monolith, spec_dir / "views", spec_verify)
     if result.returncode == 0:
         sys.exit(0)
 
