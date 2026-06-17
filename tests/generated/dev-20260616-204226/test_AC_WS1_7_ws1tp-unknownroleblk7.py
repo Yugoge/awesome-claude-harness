@@ -26,6 +26,47 @@ HOOK_CHECK = {
     "expect_exit": 2
 }
 
+import json
+import os
+import shutil
+import subprocess
+import tempfile
+from pathlib import Path
+
+_REPO = Path(__file__).resolve().parents[3]
+_LIB_MODULES = ("claude_home.py", "agent_resolver.py", "bash_write_targets.py",
+                "policy_registry.py")
+
+
+def _make_clone() -> Path:
+    """Synthetic harness home with the real tool-policy hook + lib deps + a
+    VALID policy (so the bootstrap succeeds — the block under test is the
+    unresolved-role branch, not a bootstrap/policy-absence failure)."""
+    tmp_home = Path(tempfile.mkdtemp(prefix="ws1-unrole-"))
+    clone = tmp_home / "dot-claude"
+    (clone / "hooks" / "lib").mkdir(parents=True)
+    (clone / "policies").mkdir()
+    (clone / "scripts").mkdir()
+    (clone / "settings.json").write_text("{}\n")
+    shutil.copy2(_REPO / "hooks" / "pretool-tool-policy.py",
+                 clone / "hooks" / "pretool-tool-policy.py")
+    for m in _LIB_MODULES:
+        shutil.copy2(_REPO / "hooks" / "lib" / m, clone / "hooks" / "lib" / m)
+    shutil.copy2(_REPO / "policies" / "tool-policy.v1.json",
+                 clone / "policies" / "tool-policy.v1.json")
+    return clone
+
+
+def _run_hook(clone: Path, payload: dict):
+    # CLAUDE_PROJECT_DIR points at the clone, which has NO dev-registry / cp-state
+    # for this agent_id, so resolve_agent_type() returns None (unresolved role).
+    env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "LANG": "C",
+           "HOME": str(clone.parent), "CLAUDE_PROJECT_DIR": str(clone)}
+    return subprocess.run(
+        ["python3", str(clone / "hooks" / "pretool-tool-policy.py")],
+        input=json.dumps(payload), env=env, capture_output=True, text=True,
+    )
+
 
 def test_AC_WS1_7():
     r"""
