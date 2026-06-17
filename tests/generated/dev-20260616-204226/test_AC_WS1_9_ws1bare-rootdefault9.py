@@ -163,15 +163,21 @@ def test_AC_WS1_9():
         f"project_dir() should resolve to the walk root; got {proj.stdout.strip()!r}")
 
     # (3) BEHAVIORAL: invoke the REAL apply-permissions.sh resolve_project_dir()
-    # (not a reimplementation — codex): source the actual fixed script and call
-    # its own function with HOME + CLAUDE_PROJECT_DIR unset, from a cwd OUTSIDE
-    # any git repo, so its git-toplevel fallback fires. It must return the
-    # resolved home, never /root. (`true` after source neutralizes the script's
-    # `${1:?}` arg guard so sourcing reaches the function definition.)
+    # (not a reimplementation — codex). The script's top-level `${1:?}` arg guard
+    # + main body run on source, so extract just its function-definition prologue
+    # (everything up to the first `PERMS=` line) into a sourced shim and call the
+    # actual resolve_project_dir(). HOME + CLAUDE_PROJECT_DIR unset, cwd outside a
+    # git repo => its git-toplevel fallback fires; must be the home, never /root.
+    src_text = (clone / "scripts" / "apply-permissions.sh").read_text()
+    prologue_lines = []
+    for ln in src_text.splitlines():
+        if ln.startswith("PERMS="):
+            break
+        prologue_lines.append(ln)
+    shim = clone / "scripts" / "_ws1_9_aperm_shim.sh"
+    shim.write_text("\n".join(prologue_lines) + "\nresolve_project_dir\n")
     fb = subprocess.run(
-        ["bash", "-c",
-         f'set +u; source "{clone}/scripts/apply-permissions.sh" 2>/dev/null; '
-         'resolve_project_dir'],
+        ["bash", str(shim)],
         env=env, capture_output=True, text=True, cwd=str(clone),
     )
     out_fb = fb.stdout.strip().splitlines()[-1] if fb.stdout.strip() else ""
