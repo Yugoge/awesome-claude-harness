@@ -26,6 +26,14 @@ import importlib.util
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+# WS1: the shared claude_home resolver (this hook lives at <harness home>/hooks).
+sys.path.insert(0, str(Path(__file__).resolve().parent / "lib"))
+try:
+    import claude_home  # noqa: E402
+except Exception:  # pragma: no cover - fail-soft if lib missing
+    claude_home = None  # type: ignore[assignment]
+
+
 def _try_git_toplevel() -> Path | None:
     """Tier 4: git rev-parse --show-toplevel; None on failure."""
     try:
