@@ -279,24 +279,30 @@ def scan(root: str, responsible=None):
 
 
 def main(argv):
-    # Positional: <clone-root> [<out.json>]; flags: --baseline-ref, --cycle-file.
-    pos, baseline_ref, cycle_files = [], "", []
+    # Positional: <clone-root> [<out.json>]; flags below.
+    pos, baseline_ref, baseline_repo, cycle_files = [], "", "", []
     i = 1
     while i < len(argv):
         a = argv[i]
         if a == "--baseline-ref":
             baseline_ref = argv[i + 1]; i += 2; continue
+        if a == "--baseline-repo":
+            baseline_repo = argv[i + 1]; i += 2; continue
         if a == "--cycle-file":
             cycle_files.append(argv[i + 1]); i += 2; continue
         pos.append(a); i += 1
     if not pos:
         sys.stderr.write(
             "usage: ws2_zero_literal_gate.py <clone-root> [<out.json>] "
-            "[--baseline-ref <sha>] [--cycle-file <relpath> ...]\n")
+            "[--baseline-ref <sha>] [--baseline-repo <gitdir>] "
+            "[--cycle-file <relpath> ...]\n")
         return 2
     root = pos[0]
     out = pos[1] if len(pos) > 1 else None
-    responsible = responsible_surface(root, baseline_ref, cycle_files)
+    # Baseline membership is resolved against --baseline-repo when given, else
+    # the scan root itself (the live-repo case where root IS the git work tree).
+    responsible = responsible_surface(
+        baseline_repo or root, baseline_ref, cycle_files)
     findings = scan(root, responsible)
     doc = {
         "gate": "ws2-zero-literal-integration",
