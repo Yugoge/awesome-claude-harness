@@ -30,6 +30,75 @@ HOOK_CHECK = {
     "expect_exit": 0
 }
 
+# Boundary-aware author-path detector (AC-WS3-4 / AC-WS7-1 REV4): matches /root/...
+# AND a bare /root followed by ANY non-path boundary, plus /dev/shm/dev-workspace.
+AUTHOR_PATH_RE = re.compile(
+    r"(?<![\w./])(?:/root(?:/|(?=$|[^\w./-]))|/dev/shm/dev-workspace(?:/|(?=$|[^\w./-])))"
+)
+
+# Repo root = three levels up from this file (tests/generated/<task>/<file>).
+REPO_ROOT = os.path.realpath(
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "..")
+)
+
+# PER-LITERAL prose-only allowlist (the ONLY exemption channel — NEVER prefix
+# omission). Each entry is (repo-relative-path, line-number) of a purely-
+# illustrative author-path mention proven non-load-bearing by the BA spec:
+# post-mortem narrative / origin note / example / detector-own grep pattern /
+# example finding output / HTML-comment cross-reference / self-test-fixture
+# location note. None is executed / a tool operand / a dispatch-read / a runtime
+# default. (BA acceptance-criteria AC-WS7-1 + out_of_scope_observations.)
+PROSE_ALLOWLIST = {
+    # commands/dev.md — Orchestrator Prompt Purity post-mortem narrative + the
+    # two explicitly-labelled WHAT/HOW examples + exempted-boilerplate pattern +
+    # self-test-fixture location note (BA: dev.md:1566/1570/1592/1598/1612/1618).
+    ("commands/dev.md", 1566),
+    ("commands/dev.md", 1570),
+    ("commands/dev.md", 1592),
+    ("commands/dev.md", 1598),  # carries both /root and /dev/shm in one example line
+    ("commands/dev.md", 1612),
+    ("commands/dev.md", 1618),
+    # commands/close.md — HTML-comment cross-reference pointer to a frozen BA spec
+    # (never read/executed by the harness; appears only inside <!-- ... -->).
+    ("commands/close.md", 32),
+    # agents/qa.md — the QA agent's OWN hardcoded-path detector grep pattern, an
+    # example finding-output JSON value, and a prose bullet list of example
+    # hardcoded-path patterns. Detector-own patterns + illustrative examples are
+    # exempt per AC-WS3-4.
+    ("agents/qa.md", 533),
+    ("agents/qa.md", 568),
+    ("agents/qa.md", 1597),
+    # agents/style-inspector.md — prose describing what the pre-scan baselines
+    # (a list of hardcoded /root/, /tmp/, /home/ paths). Illustrative.
+    ("agents/style-inspector.md", 192),
+}
+
+
+def _surface_files():
+    files = []
+    for pat in ("commands/*.md", "agents/*.md", "skills/*/SKILL.md", "schemas/*.json"):
+        files.extend(glob.glob(os.path.join(REPO_ROOT, pat)))
+    return sorted(files)
+
+
+def _scan_surface():
+    """Return list of (relpath, lineno, line) author-path hits NOT in the allowlist."""
+    offenders = []
+    for f in _surface_files():
+        rel = os.path.relpath(f, REPO_ROOT)
+        with open(f, encoding="utf-8") as fh:
+            for i, line in enumerate(fh, 1):
+                if AUTHOR_PATH_RE.search(line):
+                    if (rel, i) in PROSE_ALLOWLIST:
+                        continue
+                    offenders.append((rel, i, line.rstrip()))
+    return offenders
+
+
+def _read(relpath):
+    with open(os.path.join(REPO_ROOT, relpath), encoding="utf-8") as fh:
+        return fh.read()
+
 
 def test_AC_WS7_1():
     r"""
