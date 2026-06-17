@@ -13,10 +13,17 @@
 # test-writer agent spec for smoke/shell-verified ACs. Remove the
 # TEST_INCOMPLETE sentinel below when the real body is in place.
 
+import subprocess
+from pathlib import Path
+
 import pytest
 
 AC_UID = "ws6dem-blockthengrnt1"
 AC_TYPE = "hook"
+
+# tests/generated/dev-20260616-204226/test_AC_WS6_1_*.py -> repo root is parents[3].
+_REPO = Path(__file__).resolve().parents[3]
+_DEMO = _REPO / "examples" / "guard-demo" / "run-demo.sh"
 
 # HOOK_CHECK is the AC's `check` object copied VERBATIM from the BA acceptance
 # criteria. QA traces each test back to this; Dev MUST NOT hand-edit it.
