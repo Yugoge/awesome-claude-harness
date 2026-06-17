@@ -13,6 +13,12 @@
 # test-writer agent spec for smoke/shell-verified ACs. Remove the
 # TEST_INCOMPLETE sentinel below when the real body is in place.
 
+import os
+import shutil
+import subprocess
+import tempfile
+from pathlib import Path
+
 import pytest
 
 AC_UID = "fr1boot-creates00001"
