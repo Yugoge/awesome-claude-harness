@@ -294,7 +294,7 @@ This trace is OFF by default (no env var). When ON, the markers are emitted to s
 
 When `BULK=false` AND `DRYRUN=false` AND `TASK_ID` is set AND changelog-analyst reported success:
 
-Set `DEV_DOCS_ROOT` using the same CONTROL_ROOT logic as Step 7: `DEV_DOCS_ROOT=${CONTROL_ROOT}/docs/dev` (where `CONTROL_ROOT=/root`). Use absolute paths throughout Step 8.
+Set `DEV_DOCS_ROOT` using the same CONTROL_ROOT logic as Step 7: `DEV_DOCS_ROOT=${CONTROL_ROOT}/docs/dev` (where `CONTROL_ROOT` is the resolved control root from the Step 7 dispatch — `$HOME`, not an author-absolute literal). Use absolute paths throughout Step 8.
 
 **Step 8 algorithm (verbatim contract — total-ordered, deterministic, fail-closed):**
 
