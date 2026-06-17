@@ -152,11 +152,14 @@ say "Shared resolver resolved the demo home by structural sentinel (basename 'do
 # Returns the guard exit code; captures stderr (the guard's block marker) into
 # the named variable. Runs in a clean env so no author /root path can leak in.
 ask_guard() {  # <out_stderr_var> <target_path>
-  local __outvar="$1" target="$2" payload err rc
+  local __outvar="$1" target="$2" payload err rc pydir
+  pydir="$(dirname "$PYTHON_BIN")"
   payload="$(printf '{"subagent_type":"dev","agent_id":"guard-demo","tool_name":"Write","tool_input":{"file_path":"%s"}}' "$target")"
+  # env -i clears PATH; we re-add the resolved interpreter's own dir and invoke
+  # it by ABSOLUTE path so the probe works wherever python3 lives.
   err="$(printf '%s' "$payload" \
-          | env -i PATH="/usr/bin:/bin" LANG=C HOME="$DEMO_HOME" CLAUDE_PROJECT_DIR="$DEMO_HOME" \
-                python3 "$DEMO_HOME/hooks/pretool-tool-policy.py" 2>&1 1>/dev/null)"
+          | env -i PATH="$pydir:/usr/bin:/bin" LANG=C HOME="$DEMO_HOME" CLAUDE_PROJECT_DIR="$DEMO_HOME" \
+                "$PYTHON_BIN" "$DEMO_HOME/hooks/pretool-tool-policy.py" 2>&1 1>/dev/null)"
   rc=$?
   printf -v "$__outvar" '%s' "$err"
   return "$rc"
