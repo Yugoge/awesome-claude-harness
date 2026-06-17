@@ -1198,7 +1198,7 @@ manual intervention required — see `/commit` Step 7 status table for the
 
 ## Outputs
 
-- Real branch commit(s) in `/root` and optionally `~/.claude/`
+- Real branch commit(s) in `${CONTROL_ROOT}` and optionally `~/.claude/`
 - Push-gate token at `/tmp/agentic-commit/push/<repo-hash>/<branch-encoded>.json`
 - Synthetic close-annotations at `${CONTROL_ROOT}/docs/dev/close-report-bulk-*.md` (bulk mode only)
 - Human-readable summary of what was committed
