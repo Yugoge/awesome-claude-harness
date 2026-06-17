@@ -49,8 +49,17 @@ def _make_clone(basename: str = "dot-claude") -> Path:
         "hooks/lib/claude_home.py",
         "hooks/lib/claude_home.sh",
         "hooks/notification-idle-overnight.py",
+        "hooks/pretool-overnight-hook-guard.py",
+        "hooks/lib/bash_write_targets.py",
     ):
-        shutil.copy2(_REPO / rel, clone / rel)
+        src = _REPO / rel
+        if src.exists():
+            shutil.copy2(src, clone / rel)
+    init = clone / "hooks" / "lib" / "__init__.py"
+    if (_REPO / "hooks" / "lib" / "__init__.py").exists():
+        shutil.copy2(_REPO / "hooks" / "lib" / "__init__.py", init)
+    elif not init.exists():
+        init.write_text("")
     return clone
 
 
