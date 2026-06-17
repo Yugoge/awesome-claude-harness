@@ -126,7 +126,6 @@ def test_AC_WS3_4():
     WHEN:  it scans the repo
     THEN:  it includes *.json and scans settings.json executable fields (hooks[].command, permissions.allow/ask/deny, env.*) for machine literals; across the four WS7 classes (executed shell/code-context incl. args/redirections/source operands, tool operands, dispatch/dispatch-reads incl. plain-prose Read/Follow, runtime defaults) it flags ANY author-home path matched by the boundary-aware pattern (?<![\w./])(?:/root(?:/|(?=$|[^\w./-]))|/dev/shm/dev-workspace(?:/|(?=$|[^\w./-]))) — /root/.claude, /root/bin, /root/docs, /root/templates, AND a BARE /root author-home default in ANY boundary form (${...:-/root}, 'HOME','/root', "default": "/root", || echo /root) — in the scanned surfaces; a planted /root literal in settings.json is detected (nonzero exit); a planted Write(file_path="/root/...") AND a planted Read(file_path="/root/...") tool operand in a command .md are detected; a planted /root/docs/... DISPATCH-READ ('Read /root/docs/foo.md' / 'Follow instructions in /root/docs/foo.md') in a command .md is detected; a planted CONTROL_ROOT=/root AND a planted PROJ="${CLAUDE_PROJECT_DIR:-/root}" AND a planted os.environ.get("HOME","/root") AND a planted JSON "default": "/root" runtime default are detected; a clean rendered settings.json passes; a /root mention inside a PER-LITERAL-allowlisted prose/test/example context (e.g. commands/dev.md:1618 self-test-fixture location note) does NOT cause a false positive
     """
-    # TODO(dev): replace the line below with the real test body. While the
-    # TEST_INCOMPLETE sentinel is present the test will hard-fail, marking
-    # the AC as unimplemented for QA Phase 5.
-    pytest.fail(f"TEST_INCOMPLETE: {AC_UID} — GIVEN scripts/detect-hardcoded-paths.sh after the fix. The detector's scanned LOAD-BEARING surf… / WHEN it scans the repo / THEN it includes *.json and scans settings.json executable fields (hooks[].command, permissions.allow/ask/deny, en…")
+    # Real assertions live in test_AC_WS3_4_real_impl() (shared helpers above);
+    # this AC-traced entry point delegates to it so QA traces AC_UID here.
+    test_AC_WS3_4_real_impl()
