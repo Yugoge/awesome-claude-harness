@@ -171,7 +171,7 @@
       "Edit(.claude/commands/**)",
       "Write(.claude/agents/**)",
       "Write(.claude/commands/**)",
-      "Bash(source /root/.claude/venv/bin/activate && python /root/.claude/hooks/lib/close-verdict.py:*)",
+      "Bash(source ~/.claude/venv/bin/activate && python ~/.claude/hooks/lib/close-verdict.py:*)",
       "Bash(scripts/score-update.sh:*)",
       "Bash(scripts/score-inject.sh:*)",
       "Bash(scripts/lifecycle-baseline-import.sh:*)",
