@@ -63,6 +63,15 @@ for required in "$RESOLVER" "$GUARD"; do
   fi
 done
 
+# Resolve the Python interpreter ONCE, by absolute path, so the guard probes can
+# invoke it under env -i (which clears PATH) on machines where python3 is not in
+# /usr/bin:/bin. Absent python3 is a setup precondition, not a guard failure.
+PYTHON_BIN="$(command -v python3 || true)"
+if [ -z "$PYTHON_BIN" ] || [ ! -x "$PYTHON_BIN" ]; then
+  echo "run-demo: python3 not found on PATH — cannot run the guard (precondition)" >&2
+  exit 2
+fi
+
 # ── Build an isolated, ephemeral demo home (NOT under /root, NOT /dev/shm) ────
 # mktemp honors TMPDIR; force a /tmp base so the demo home is never under the
 # author RAM disk. The root basename is "dot-claude" on purpose — it exercises
