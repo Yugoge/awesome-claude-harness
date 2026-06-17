@@ -64,9 +64,29 @@ def assertions_for(guard):
 
 def require_not_setup_error(rc, result):
     """Skip the test (not fail) when the smoke could not satisfy its non-root
-    precondition (rc==2). Anything else proceeds to real assertions."""
+    precondition. Anything else proceeds to real assertions.
+
+    Two precondition-unmet signals:
+      * rc==2  — the smoke's own setup guard (setpriv/nobody absent, mktemp
+        failure, etc.) reported it cannot build the non-root clone.
+      * a runtime privilege-drop failure — `setpriv` is PRESENT (so detect_drop
+        passed) but `setresuid()` is denied by a nested sandbox/seccomp, so every
+        probe fails with rc=127 and the smoke exits 3 with that signature in the
+        assertion details / raw stderr. That is the SAME 'cannot run a non-root
+        probe' precondition, not a genuine guard regression, so it must SKIP — a
+        real guard failure on a privilege-capable machine still FAILS.
+    """
     import pytest
     if rc == 2:
         pytest.skip(
             "WS2 smoke precondition unmet (cannot run a non-root probe with the "
             f"author home absent on this machine): {result.get('_raw_stderr','')[:200]}")
+    # Runtime privilege-drop failure (e.g. nested sandbox): look for the setpriv/
+    # setresuid signature in any assertion detail or the captured raw stderr.
+    blob = result.get("_raw_stderr", "") + " ".join(
+        a.get("detail", "") for a in result.get("assertions", []))
+    if "setresuid failed" in blob or "setpriv:" in blob:
+        pytest.skip(
+            "WS2 smoke precondition unmet (this environment cannot drop "
+            "privileges — setpriv/setresuid is denied, so the non-root probe "
+            f"cannot run): {blob[:200]}")
