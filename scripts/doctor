@@ -48,34 +48,50 @@ echo "harness home: $HOME_DIR"
 echo
 
 echo "Base prerequisites:"
+# Required command-line tools the core pipeline shells out to.
+need_cmd() {  # <command> <install-hint>
+  command -v "$1" >/dev/null 2>&1 && ok "$1 ($(command -v "$1"))" \
+    || miss "$1 — $2"
+}
 command -v python3 >/dev/null 2>&1 && ok "python3 ($(python3 --version 2>&1))" \
   || miss "python3 — install Python 3 and re-run scripts/bootstrap"
 command -v git >/dev/null 2>&1 && ok "git ($(git --version 2>&1))" \
   || miss "git — install git and re-run scripts/bootstrap"
+need_cmd jq "install jq (JSON parsing in shell hooks)"
+need_cmd openssl "install openssl (nonce/token generation for /merge, /push)"
 echo
 
 echo "Harness venv:"
 VENV_PY="$VENV_DIR/bin/python"
+VENV_PRESENT=1
 if [ -x "$VENV_PY" ]; then
   ok "venv interpreter at $VENV_PY"
 else
   miss "venv missing at $VENV_DIR — run scripts/bootstrap to create it"
-  VENV_PY="python3"  # degrade to system python so module checks still report
+  VENV_PRESENT=0
 fi
 echo
 
 echo "Required Python packages (from requirements.txt):"
-# import name may differ from the distribution name (PyYAML -> yaml).
-check_mod() {  # <import-name> <pip-name>
-  if "$VENV_PY" -c "import $1" >/dev/null 2>&1; then
-    ok "$2 (import $1)"
-  else
-    miss "$2 — install with: $VENV_DIR/bin/pip install -r $MANIFEST  (or: pip install $2)"
-  fi
-}
-check_mod pytest pytest
-check_mod jsonschema jsonschema
-check_mod yaml pyyaml
+if [ "$VENV_PRESENT" -ne 1 ]; then
+  # Do NOT fall back to system python — a missing harness venv must not be
+  # masked by packages that happen to be importable system-wide.
+  for pkg in pytest jsonschema pyyaml; do
+    miss "$pkg — not checked: the harness venv is missing. Run scripts/bootstrap to create it and install $MANIFEST."
+  done
+else
+  # import name may differ from the distribution name (PyYAML -> yaml).
+  check_mod() {  # <import-name> <pip-name>
+    if "$VENV_PY" -c "import $1" >/dev/null 2>&1; then
+      ok "$2 (import $1)"
+    else
+      miss "$2 — install with: $VENV_DIR/bin/pip install -r $MANIFEST  (or: pip install $2)"
+    fi
+  }
+  check_mod pytest pytest
+  check_mod jsonschema jsonschema
+  check_mod yaml pyyaml
+fi
 echo
 
 echo "Shared resolver:"
