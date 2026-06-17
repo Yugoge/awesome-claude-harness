@@ -194,9 +194,11 @@ source venv/bin/activate && python3 "~/.claude/scripts/write-commit-grant.py" --
 
 Use the Agent tool with `subagent_type: changelog-analyst`. Pass a structured prompt:
 
+(substitute `<CONTROL_ROOT>` with the resolved control root — `$HOME` (the parent-repo working-tree root where the harness home lives), NOT an author-absolute literal — and `<NESTED_REPO>` with the realpath of the harness home `~/.claude` (`realpath ~/.claude`); inline the concrete resolved absolute values before dispatch):
+
 ```
-CONTROL_ROOT=/root
-NESTED_REPO=/dev/shm/dev-workspace/dot-claude
+CONTROL_ROOT=<CONTROL_ROOT>
+NESTED_REPO=<NESTED_REPO>
 TASK_ID=<resolved task-id or empty for bulk>
 BULK=<true|false>
 DRYRUN=<true|false>
