@@ -26,6 +26,89 @@ HOOK_CHECK = {
     "expect_exit": 0
 }
 
+import os
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+
+_REPO = Path(__file__).resolve().parents[3]
+
+# The bare-/root env-default class named in AC-WS1-9 (each verified by Read).
+_BARE_ROOT_SITES = [
+    "hooks/merge.sh", "hooks/posttool-overnight-trace.py",
+    "hooks/lib/bash_write_targets.py", "hooks/lib/closeout.py",
+    "hooks/lib/specialist_yield.py", "scripts/break-overnight-lock.py",
+    "hooks/push.sh", "hooks/prompt-workflow.py",
+    "scripts/apply-permissions.sh", "scripts/resolve-close-report.sh",
+]
+
+# Boundary-aware author-home pattern (AC-WS3-4 REV4): a bare /root at any
+# non-path boundary OR any /root/... prefix, anchored against word chars.
+_AUTHOR_ROOT = re.compile(r"(?<![\w./])/root(?:/|(?=$|[^\w./-]))")
+
+
+def _strip_comment(line: str, ext: str) -> str:
+    """Return the executable portion of a line (best-effort comment stripping)."""
+    if ext in (".sh",):
+        # Drop a leading-hash comment line; trim a trailing ' # ...' comment.
+        if line.lstrip().startswith("#"):
+            return ""
+        return re.split(r"\s#", line, maxsplit=1)[0]
+    if ext == ".py":
+        if line.lstrip().startswith("#"):
+            return ""
+        return re.split(r"\s#", line, maxsplit=1)[0]
+    return line
+
+
+def _scan_bare_root_defaults():
+    """Yield (file, lineno, text) for any EXECUTABLE bare-/root author default
+    left in the named sites. Docstrings/comments are not perfectly excluded for
+    .py, so we additionally require the line to look like an env-DEFAULT use
+    (`:-/root`, `,'/root'`, `,"/root"`, `Path('/root')`, `echo /root`,
+    `echo "/root"`)."""
+    default_use = re.compile(
+        r""":-\s*/root\b"""              # ${VAR:-/root}
+        r"""|,\s*['"]/root['"]"""        # get(KEY, '/root')
+        r"""|Path\(\s*['"]/root['"]"""   # Path('/root')
+        r"""|echo\s+["']?/root\b"""      # || echo /root / echo "/root"
+    )
+    hits = []
+    for rel in _BARE_ROOT_SITES:
+        p = _REPO / rel
+        ext = p.suffix
+        for i, raw in enumerate(p.read_text().splitlines(), start=1):
+            code = _strip_comment(raw, ext)
+            if not code:
+                continue
+            if _AUTHOR_ROOT.search(code) and default_use.search(code):
+                hits.append((rel, i, raw.strip()))
+    return hits
+
+
+def _make_clone() -> Path:
+    """Synthetic harness home (basename dot-claude) with the WS1 resolvers +
+    the two fixed shell scripts, for behavioral default-resolution probes."""
+    tmp_home = Path(tempfile.mkdtemp(prefix="ws1-bareroot-"))
+    clone = tmp_home / "dot-claude"
+    (clone / "hooks" / "lib").mkdir(parents=True)
+    (clone / "policies").mkdir()
+    (clone / "scripts").mkdir()
+    (clone / "settings.json").write_text("{}\n")
+    for rel in ("hooks/lib/claude_home.py", "hooks/lib/claude_home.sh",
+                "scripts/apply-permissions.sh", "scripts/resolve-close-report.sh"):
+        shutil.copy2(_REPO / rel, clone / rel)
+    return clone
+
+
+def _env_no_home(clone: Path) -> dict:
+    # CLAUDE_PROJECT_DIR + HOME UNSET; only PATH/LANG present. The resolver must
+    # fall back to the structural walk root, never the author literal /root.
+    return {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "LANG": "C"}
+
 
 def test_AC_WS1_9():
     r"""
