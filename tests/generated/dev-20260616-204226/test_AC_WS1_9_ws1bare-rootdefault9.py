@@ -116,7 +116,54 @@ def test_AC_WS1_9():
     WHEN:  any of these runs on a fresh non-root clone with CLAUDE_PROJECT_DIR / HOME unset
     THEN:  the default is the resolved harness home / project dir via the WS1 resolver (or $HOME / git-toplevel as appropriate), NOT the author's literal /root; where the value is security-relevant the absence path fails closed
     """
-    # TODO(dev): replace the line below with the real test body. While the
-    # TEST_INCOMPLETE sentinel is present the test will hard-fail, marking
-    # the AC as unimplemented for QA Phase 5.
-    pytest.fail(f"TEST_INCOMPLETE: {AC_UID} — GIVEN The bare-/root env-default class in active runtime code (verified by Read): merge.sh:109… / WHEN any of these runs on a fresh non-root clone with CLAUDE_PROJECT_DIR / HOME unset / THEN the default is the resolved harness home / project dir via the WS1 resolver (or $HOME / git-toplevel as appro…")
+    # (1) STATIC: no EXECUTABLE bare-/root author-home default remains in any of
+    # the named WS1 sites (the whole point of the AC-WS1-9 migration).
+    hits = _scan_bare_root_defaults()
+    assert hits == [], (
+        "bare-/root author-home default(s) still present in WS1 sites:\n"
+        + "\n".join(f"  {f}:{ln}: {txt}" for f, ln, txt in hits))
+
+    clone = _make_clone()
+    walk_root = str(clone.resolve())
+    env = _env_no_home(clone)
+
+    # (2) BEHAVIORAL: claude_home.project_dir() with HOME + CLAUDE_PROJECT_DIR
+    # UNSET resolves to the walk root, NEVER the literal /root.
+    proj = subprocess.run(
+        [sys.executable, "-c",
+         "import sys; sys.path.insert(0, sys.argv[1]); import claude_home; "
+         "print(claude_home.project_dir())",
+         str(clone / "hooks" / "lib")],
+        env=env, capture_output=True, text=True, cwd=str(clone),
+    )
+    assert proj.returncode == 0, f"project_dir probe failed: {proj.stderr!r}"
+    assert _AUTHOR_ROOT.search(proj.stdout.strip()) is None, (
+        f"project_dir() defaulted to an author /root path: {proj.stdout.strip()!r}")
+    assert proj.stdout.strip() == walk_root, (
+        f"project_dir() should resolve to the walk root; got {proj.stdout.strip()!r}")
+
+    # (3) BEHAVIORAL: the shell git-toplevel fallback (git fails because the clone
+    # is not a repo) resolves to the harness home, never /root — the exact pattern
+    # apply-permissions.sh:10 now uses.
+    fb = subprocess.run(
+        ["bash", "-c",
+         f'source "{clone}/hooks/lib/claude_home.sh"; '
+         'echo "$(git rev-parse --show-toplevel 2>/dev/null || claude_home_resolve || echo "$HOME")"'],
+        env=env, capture_output=True, text=True, cwd=str(clone),
+    )
+    assert _AUTHOR_ROOT.search(fb.stdout.strip()) is None, (
+        f"shell git-toplevel fallback defaulted to /root: {fb.stdout.strip()!r}")
+    assert fb.stdout.strip() == walk_root, (
+        f"shell fallback should be the resolved home; got {fb.stdout.strip()!r}")
+
+    # (4) BEHAVIORAL: resolve-close-report.sh fallback path (no candidate exists)
+    # is rooted at the resolved home's CONTROL_ROOT, NEVER /root.
+    rcr = subprocess.run(
+        ["bash", str(clone / "scripts" / "resolve-close-report.sh"), "no-such-task-id"],
+        env=env, capture_output=True, text=True, cwd=str(clone),
+    )
+    assert rcr.returncode == 1, f"expected exit 1 (no candidate); got {rcr.returncode} stderr={rcr.stderr!r}"
+    assert _AUTHOR_ROOT.search(rcr.stdout.strip()) is None, (
+        f"resolve-close-report.sh fallback defaulted to /root: {rcr.stdout.strip()!r}")
+    assert rcr.stdout.strip().startswith(walk_root), (
+        f"resolve-close-report.sh fallback should be under the resolved home; got {rcr.stdout.strip()!r}")
