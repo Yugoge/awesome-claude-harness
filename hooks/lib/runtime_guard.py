@@ -1410,8 +1410,11 @@ def _config_ancestor_dirs() -> set:
     d = os.path.dirname(norm)
     while d and d not in _ANCESTOR_STOP_ROOTS:
         out.add(d)
-        if d.startswith("/root/"):
-            out.add(d.replace("/root/", "~/", 1))
+        # Generic (WS1 codex #4): add the ~/-prefixed variant for ANY ancestor
+        # under the real user home, not only /root/.
+        tilde = _home_tilde_variant(d + "/")
+        if tilde:
+            out.add(tilde.rstrip("/"))
         parent = os.path.dirname(d)
         if parent == d:
             break
