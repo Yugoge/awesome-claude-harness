@@ -1,16 +1,21 @@
 #!/usr/bin/env python3
 """PreToolUse:* hook — enforce tool-policy.v1.json for all subagents.
 
-Single hook that consumes /root/.claude/policies/tool-policy.v1.json via
+Single hook that consumes the harness ``policies/tool-policy.v1.json`` (resolved
+via the shared hooks/lib/claude_home resolver) through
 lib.policy_registry.is_allowed() and lib.agent_resolver.resolve_agent_type().
 
 Behavior:
   - Main agent (no agent_id, no subagent_type) -> exit 0 (orchestrator
     gate handles main agent).
-  - Subagent role unresolvable -> exit 0 (downstream
-    pretool-subagent-code-block.py shim still applies as backstop).
+  - Subagent role unresolvable + protected Write -> exit 2 (FAIL CLOSED, WS1
+    codex #6): an unresolved subagent role does NOT bypass policy. Non-write
+    tools with an unresolved role still defer to the backstop shim (exit 0).
   - Resolved role + denied tool/path -> exit 2 with structured stderr
     JSON: {"role", "tool", "target", "deny_reason"}.
+  - Deny-logic import/bootstrap failure -> exit 2 (FAIL CLOSED, WS1): the
+    security imports live inside a fail-closed bootstrap guard, NOT inside the
+    blanket `except Exception: sys.exit(0)` (which would silently fail open).
 
 Bash policy bypass fix (T2.1):
   - For Bash tool, parse the command with lib.bash_write_targets to

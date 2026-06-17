@@ -226,7 +226,7 @@ Exit with `failure_code: scope_violation`.
   absolute path to a repo-relative path directly.
 - Note: `/root/.claude` is a symlink to `/dev/shm/dev-workspace/dot-claude`.
   When operating on the nested repo, `realpath("/dev/shm/dev-workspace/dot-claude")`
-  is the canonical root; dev-report paths like `/root/.claude/agents/foo.md`
+  is the canonical root; dev-report paths like `~/.claude/agents/foo.md`
   must be realpath-resolved to check repo membership.
 
 **Dev-report resolution** (used by both whitelist and enrichment):
@@ -1197,7 +1197,7 @@ manual intervention required — see `/commit` Step 7 status table for the
 
 ## Outputs
 
-- Real branch commit(s) in `/root` and optionally `/dev/shm/dev-workspace/dot-claude/`
+- Real branch commit(s) in `/root` and optionally `~/.claude/`
 - Push-gate token at `/tmp/agentic-commit/push/<repo-hash>/<branch-encoded>.json`
 - Synthetic close-annotations at `${CONTROL_ROOT}/docs/dev/close-report-bulk-*.md` (bulk mode only)
 - Human-readable summary of what was committed

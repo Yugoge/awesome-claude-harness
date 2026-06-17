@@ -350,7 +350,7 @@ When writing the test plan, assess whether the target environment has sufficient
 
 For each specialist under consideration (`ui-specialist`, `architect`, `user`, `product-owner`), PM MUST:
 
-1. Call the helper `lib.specialist_yield.get_degradation_state(specialist_type, session_id)` (see `/root/.claude/hooks/lib/specialist_yield.py`). It returns a dict with at least:
+1. Call the helper `lib.specialist_yield.get_degradation_state(specialist_type, session_id)` (see `~/.claude/hooks/lib/specialist_yield.py`). It returns a dict with at least:
    - `state`: `"active" | "degraded" | "skipped" | "escalated"`
    - `reason`: human-readable rationale (trailing low_yield/clean_sweep run lengths or escalation chain length)
    - `action`: `"active" | "reduce_budget_50pct" | "skip_next_cycle" | "escalate_to_user"`
@@ -365,7 +365,7 @@ For each specialist under consideration (`ui-specialist`, `architect`, `user`, `
    - If `state == "skipped"` → `decision: "skip"` this cycle. The `reason` MUST reference the degradation policy (clean-sweep streak >= threshold).
    - If `state == "escalated"` → `decision: "skip"` AND emit a top-level `escalation_notes` entry in the test plan describing the escalation chain (PM does NOT call this specialist; the orchestrator surfaces the escalation to the user instead).
 
-The policy file is `/root/.claude/policies/specialist-degradation.v1.json` (Draft-7 JSON). Per-specialist override keys (`low_yield_threshold`, `clean_sweep_threshold`, `history_window`, `degradation_actions`, `escalation_after_actions`) live there — PM MUST NOT hard-code thresholds.
+The policy file is `~/.claude/policies/specialist-degradation.v1.json` (Draft-7 JSON). Per-specialist override keys (`low_yield_threshold`, `clean_sweep_threshold`, `history_window`, `degradation_actions`, `escalation_after_actions`) live there — PM MUST NOT hard-code thresholds.
 
 This is a HARD requirement: omitting `degradation_check` from any `recommended_specialists[]` entry is a defective test plan and will be rejected by the orchestrator's plan-validation gate.
 

@@ -1,8 +1,8 @@
 # hooks
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-06-16T19:14:16Z*
-**Total entries**: 140
+*Last updated: 2026-06-17T00:06:45Z*
+**Total entries**: 142
 **Convention**: kebab
 
 ## Tree
@@ -10,7 +10,7 @@
 hooks/
 ├── doc_sync/
 │   ├── `claude.py` - CLAUDE.md auto-creation and patching.
-│   ├── `config.py` - Load doc-sync project-local config.
+│   ├── `config.py` - The git-tracked helpers (WS5, AC-WS5-1) let the INDEX/README generators list
 │   ├── `docker.py` - Parse docker-compose.yml and generate markdown table.
 │   ├── `extract.py` - Extract description from various file types.
 │   ├── `main.py` - Main entry point for doc-sync hook.
@@ -20,21 +20,23 @@ hooks/
 │   ├── `systemd.py` - Query systemctl for project-configured services and generate a markdown table.
 │   └── `tree.py` - Build directory trees for INDEX.md.
 ├── git-hooks/
-│   ├── `post-commit-auto-push` - unknown file
-│   └── `pre-commit` - unknown file
+│   ├── `post-commit-auto-push` - post-commit-auto-push file
+│   └── `pre-commit` - pre-commit file
 ├── git-keystone/
-│   └── `reference-transaction` - unknown file
+│   └── `reference-transaction` - reference-transaction file
 ├── lib/
 │   ├── `agent_resolver.py` - Refactored from pretool-subagent-code-block.py::_find_agent_type so that
 │   ├── `allowlist.py` - Single source of truth for grant-read, grant-match, and grant-consume
 │   ├── `bash_context_strip.py` - This is deliberately NOT a full shell parser.  It only computes a conservative
 │   ├── `bash_write_targets.py` - Provides two public functions used by tool-policy and overnight-hook-guard:
 │   ├── `checkpoint-core.sh` - ============================================================================
+│   ├── `claude_home.py` - Generalizes the in-repo gold-standard fail-closed self-resolution pattern
+│   ├── `claude_home.sh` - claude_home.sh — shared "harness home" resolver (shell consumable).
 │   ├── `close-verdict.py` - Shared CLOSE verdict classifier for commit/close tooling.
 │   ├── `closeout.py` - Public API:
 │   ├── `contract_runtime.py` - This module is the single shared engine consumed by every contract-aware
 │   ├── `overnight.py` - Single source of truth for "is a /dev-overnight session currently live?". A
-│   ├── `policy_registry.py` - Reads /root/.claude/policies/tool-policy.v1.json and provides a single
+│   ├── `policy_registry.py` - Reads the harness ``policies/tool-policy.v1.json`` (resolved via the shared
 │   ├── `runtime_guard.py` - This module contains ZERO project identifiers. Every project-specific name
 │   ├── `schema_registry.py` - Reads schemas/registry.json once and lazily loads referenced schema files
 │   ├── `specialist_yield.py` - Public API:
@@ -115,7 +117,7 @@ hooks/
 ├── `pretool-subagent-code-block.py` - Canonical enforcement: pretool-tool-policy.py + lib/policy_registry — this
 ├── `pretool-subagent-enforce.py` - PreToolUse:Agent Hook — Contract-driven role/pipeline enforcement
 ├── `pretool-todo-validate.py` - PreToolUse Hook: Validate TodoWrite input BEFORE execution
-├── `pretool-tool-policy.py` - Single hook that consumes /root/.claude/policies/tool-policy.v1.json via
+├── `pretool-tool-policy.py` - Single hook that consumes the harness ``policies/tool-policy.v1.json`` (resolved
 ├── `pretool-workflow-gate.py` - PreToolUse Hook: Require TodoWrite/TodoRead acknowledgment before other tools
 ├── `pretool-worktree-guard.sh` - PreToolUse hook: Detect stale agent worktrees before ANY tool call
 ├── `pretool-wrapper-userintent.py` - fix-4 (Cycle-2, spec-20260604-204954 §7.4). The /stop slash command releases

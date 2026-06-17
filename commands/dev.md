@@ -98,7 +98,7 @@ The producer (`/spec`) and consumers (`/dev*`) historically disagreed on whether
 
 ```bash
 if [ -n "$spec_path" ]; then
-  RESOLVED_JSON=$(/root/.claude/scripts/resolve-spec-artifacts.py \
+  RESOLVED_JSON=$(~/.claude/scripts/resolve-spec-artifacts.py \
       --spec-path "$spec_path" --project-dir "$CLAUDE_PROJECT_DIR") || {
     echo "spec-artifact resolution FAILED (path mismatch / present-but-invalid split). Re-finalize /spec before relying on per-agent views." >&2
     exit 1; }   # loud-fail guard: a present-but-invalid split never silently degrades to monolith mode
@@ -172,7 +172,7 @@ else
 fi
 ```
 
-When `SPEC_ID` is non-empty, every Agent launch prompt for an agent that has a cp-state file MUST include a `SECOND ACTION` block (template under each Step's prompt below) instructing the subagent to read `$CLAUDE_PROJECT_DIR/$CP_STATE_DIR/cp-state-<agent>.json` and to mark each checkpoint via `/root/.claude/scripts/spec-check.py mark` (or `waive` — auto-text records actor + ISO timestamp) before Stop. Agents SHOULD leave zero pending checkpoints before they Stop. (Note: `subagentstop-cp-enforce.py` **is** wired under `SubagentStop` in `settings.json` and fires when an agent stops with a cp-state file — it blocks (exit 2) on any `pending` checkpoint. Marking via `spec-check.py` is therefore both a discipline expectation and a hook-enforced block.) When `SPEC_ID` is empty (non-`/spec` invocation), or a particular agent has no cp-state file under that artifact id, the SECOND ACTION block is omitted — there are no checkpoints to mark for that launch.
+When `SPEC_ID` is non-empty, every Agent launch prompt for an agent that has a cp-state file MUST include a `SECOND ACTION` block (template under each Step's prompt below) instructing the subagent to read `$CLAUDE_PROJECT_DIR/$CP_STATE_DIR/cp-state-<agent>.json` and to mark each checkpoint via `~/.claude/scripts/spec-check.py mark` (or `waive` — auto-text records actor + ISO timestamp) before Stop. Agents SHOULD leave zero pending checkpoints before they Stop. (Note: `subagentstop-cp-enforce.py` **is** wired under `SubagentStop` in `settings.json` and fires when an agent stops with a cp-state file — it blocks (exit 2) on any `pending` checkpoint. Marking via `spec-check.py` is therefore both a discipline expectation and a hook-enforced block.) When `SPEC_ID` is empty (non-`/spec` invocation), or a particular agent has no cp-state file under that artifact id, the SECOND ACTION block is omitted — there are no checkpoints to mark for that launch.
 
 **T1.7 (redev-tier123) — Orchestrator-view + Section 5 read MANDATE**: When `VIEWS_AVAILABLE` is `true`, BEFORE composing any subagent dispatch prompt, you MUST read the orchestrator view that the resolver located — `$CLAUDE_PROJECT_DIR/$VIEWS_DIR/orchestrator.md` (the views live under `docs/dev/specs/<artifact_id>/views/`, NOT under `.claude/specs/`) — AND the spec's Section 5 (User's Acceptance Criterion) verbatim from `$spec_path`. Quote the user's words from Section 5 directly into every dispatch prompt; do not paraphrase or summarize. The user's verbatim need is the binding contract — every subagent must see the user's literal request, not your reformulation.
 
@@ -819,7 +819,7 @@ Use Task tool with:
 - `baseline_head_sha` = equality-verified across all workers (aggregate status = `"blocked"` if any worker disagrees, citing `baseline_head_sha` mismatch); value taken from orchestrator dispatch
 - `baseline_dirty_snapshot` = equality-verified across all workers (aggregate status = `"blocked"` if any worker disagrees, citing `baseline_dirty_snapshot` mismatch); value taken verbatim from orchestrator dispatch
 - `dev.observed_preexisting` = UNION of all per-worker `dev.observed_preexisting` lists
-- The orchestrator invokes `source venv/bin/activate && python3 scripts/aggregate-dev-report.py --task-id $TASK_ID` to write the canonical aggregate. Capture stdout JSON; action field will be `"aggregated"`, `"validated"`, or `"skipped"`. Do NOT modify the `/commit` command implementation (`/root/.claude/commands/commit.md`)
+- The orchestrator invokes `source venv/bin/activate && python3 scripts/aggregate-dev-report.py --task-id $TASK_ID` to write the canonical aggregate. Capture stdout JSON; action field will be `"aggregated"`, `"validated"`, or `"skipped"`. Do NOT modify the `/commit` command implementation (`~/.claude/commands/commit.md`)
 
 **Single-dev cycles**: mark this todo step waived (skip). The aggregate-check hook does not fire for single-dev cycles because only one per-worker file pattern can match.
 
@@ -828,7 +828,7 @@ Use Task tool with:
 When the orchestrator dispatches N parallel `dev` subagents (one per file-disjoint
 work item), EACH dev writes its own report to
 `docs/dev/dev-report-<task-id>-<worker-id>.json`. Downstream `/commit`
-(`/root/.claude/commands/commit.md`) reads ONLY the canonical singular path
+(`~/.claude/commands/commit.md`) reads ONLY the canonical singular path
 `docs/dev/dev-report-<task-id>.json` and fails closed if it is missing
 (redev7 cycle could not self-deploy for this exact reason).
 
@@ -836,7 +836,7 @@ work item), EACH dev writes its own report to
 aggregate `dev-report-<task-id>.json`** that unions the per-worker reports
 into a single artifact consumable by downstream `/commit`. This is an
 orchestrator-side rule; do NOT modify the `/commit` command implementation
-(`/root/.claude/commands/commit.md`), the singular-filename consumer contract
+(`~/.claude/commands/commit.md`), the singular-filename consumer contract
 stays as-is.
 
 **Aggregate construction rule**:

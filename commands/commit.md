@@ -7,7 +7,7 @@ disable-model-invocation: true
 
 Agentic commit command. Validates the close-gate (unless `--force`), then dispatches
 the `changelog-analyst` subagent to classify files, stage them, and create a real
-branch commit. Handles nested repo (`/dev/shm/dev-workspace/dot-claude/`) automatically.
+branch commit. Handles nested repo (`~/.claude/`) automatically.
 
 ## Usage
 
@@ -83,16 +83,16 @@ Before dispatching changelog-analyst, write the appropriate authorization token:
   - NO FALLBACK: the canonical writer is no longer Bash-executable (Layer 1.F deny-only, stage-2). The hook is the SOLE minter. If the capability is absent, the `userprompt-bulk-commit-capability.py` hook is not yet active in this session — instruct the user to restart the session so settings.json reloads the hook, then re-run `/commit --bulk`. Do NOT attempt to write the sentinel via Bash.
 - **BULK=false**: write **two single-use commit grants** (one for root-repo commit or root-repo recovery, one for nested-repo recovery commit). Activate venv and run Python to write the grants. The script resolves the session ID from `CLAUDE_CODE_SESSION_ID` (primary) or `CLAUDE_SESSION_ID` (fallback). If neither is set, abort immediately with: `Cannot write commit grant: CLAUDE_CODE_SESSION_ID (and CLAUDE_SESSION_ID) not set. Invoke /commit from within a Claude Code session.` Do NOT proceed to dispatch changelog-analyst. If `sid` is set, generate `grant_path = /tmp/claude-commit-grant-{sid}-{nonce}.json` containing `task_id`, `sid`, `nonce`, `expires_at`, and `created_at`. The guard IS registered and active — grant absence WILL block the changelog-analyst commit.
 
-**Grant timestamp format (NON-NEGOTIABLE)**: The `expires_at` and `created_at` fields MUST be ISO-8601 strings produced from timezone-aware UTC datetimes (e.g. `(datetime.now(timezone.utc) + timedelta(minutes=30)).isoformat()` yields `"2026-05-19T16:18:56.123456+00:00"`). Epoch integers and epoch floats (e.g. `int(time.time()) + 600`, `time.time() + 600`) are NOT accepted by the privilege guard. The guard at `/root/.claude/hooks/pretool-git-privilege-guard.py:377-384` parses these fields via `datetime.fromisoformat(end_str.replace('Z', '+00:00'))`; on `ValueError`/`TypeError`/`AttributeError` the helper `_end_time_passed` returns `True` (i.e. "already expired"), which silently rejects the grant and blocks the commit. The expiration window is 30 minutes from `created_at` — bake the offset into `expires_at` at write time. Activate the venv and invoke the grant-writer script (resolves `CLAUDE_SESSION_ID` from the environment, generates a fresh nonce, writes timezone-aware ISO-8601 `created_at` and `expires_at` on a 30-minute window, and emits the resulting grant path on stdout):
+**Grant timestamp format (NON-NEGOTIABLE)**: The `expires_at` and `created_at` fields MUST be ISO-8601 strings produced from timezone-aware UTC datetimes (e.g. `(datetime.now(timezone.utc) + timedelta(minutes=30)).isoformat()` yields `"2026-05-19T16:18:56.123456+00:00"`). Epoch integers and epoch floats (e.g. `int(time.time()) + 600`, `time.time() + 600`) are NOT accepted by the privilege guard. The guard at `~/.claude/hooks/pretool-git-privilege-guard.py:377-384` parses these fields via `datetime.fromisoformat(end_str.replace('Z', '+00:00'))`; on `ValueError`/`TypeError`/`AttributeError` the helper `_end_time_passed` returns `True` (i.e. "already expired"), which silently rejects the grant and blocks the commit. The expiration window is 30 minutes from `created_at` — bake the offset into `expires_at` at write time. Activate the venv and invoke the grant-writer script (resolves `CLAUDE_SESSION_ID` from the environment, generates a fresh nonce, writes timezone-aware ISO-8601 `created_at` and `expires_at` on a 30-minute window, and emits the resulting grant path on stdout):
 
 ```bash
 # First grant: covers the normal commit (root or nested repo, whichever commits first)
-source venv/bin/activate && python3 /root/.claude/scripts/write-commit-grant.py --task-id "$TASK_ID"
+source venv/bin/activate && python3 ~/.claude/scripts/write-commit-grant.py --task-id "$TASK_ID"
 # Second grant: covers nested-repo recovery commit when nothing_to_commit_precommitted is
 # detected in the nested repo — the first grant is consumed by the root-repo commit (or
 # root-repo recovery commit); the second grant is available for the nested-repo recovery.
 # If only one repo needs a recovery commit, the second grant expires unused (30-min TTL).
-source venv/bin/activate && python3 /root/.claude/scripts/write-commit-grant.py --task-id "$TASK_ID"
+source venv/bin/activate && python3 ~/.claude/scripts/write-commit-grant.py --task-id "$TASK_ID"
 ```
 
 Both `created_at` and `expires_at` MUST match the regex `^20\d{2}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(\+\d{2}:\d{2}|Z)$`. Do NOT substitute `time.time()`, `int(time.time())`, or `datetime.utcnow()` (the last returns a naive datetime whose `.isoformat()` omits the TZ offset and falls into the naive-comparison branch at line 382).
@@ -111,7 +111,7 @@ Otherwise (applies to BOTH `BULK=false` and `BULK=true`):
 Dispatch `changelog-analyst` (Agent, `subagent_type: changelog-analyst`) with the **same prompt as Step 7 but `DRYRUN=true`** (force dry-run regardless of the user's `--dry-run`). Under `DRYRUN=true` changelog-analyst classifies, stages the candidate set into the index, and STOPS before commit — it does NOT commit, write push-gate tokens, run any recovery commit, or consume the Step 5 grant (guaranteed by the DRYRUN guard in `agents/changelog-analyst.md` — the `nothing_to_commit_precommitted` recovery path is disabled under DRYRUN). Capture from its output:
 - `PLAN_GROUPS` — the per-proposed-commit groups, each `{repo, commit_message, files[]}` (one entry per intended commit; bulk yields several). **Preserve group boundaries — do NOT flatten across groups** (QA needs them to detect cross-task mixing).
 - `PLAN_FILES` — the union of all group files, per repo.
-- If the dry-run reports `nothing_to_commit` / empty plan: print `Nothing to commit — QA gate skipped.`; then **when `BULK=false`, revoke the Step 5 commit grant** (it will never be consumed — same Grant-hygiene rationale as Step 6c) via `source venv/bin/activate && python3 "/root/.claude/scripts/write-commit-grant.py" --task-id "$TASK_ID" --revoke-only` (skip in `BULK=true` — no per-task grant, empty TASK_ID); then proceed to Step 7 (which also no-ops). Do NOT dispatch QA on an empty plan.
+- If the dry-run reports `nothing_to_commit` / empty plan: print `Nothing to commit — QA gate skipped.`; then **when `BULK=false`, revoke the Step 5 commit grant** (it will never be consumed — same Grant-hygiene rationale as Step 6c) via `source venv/bin/activate && python3 "~/.claude/scripts/write-commit-grant.py" --task-id "$TASK_ID" --revoke-only` (skip in `BULK=true` — no per-task grant, empty TASK_ID); then proceed to Step 7 (which also no-ops). Do NOT dispatch QA on an empty plan.
 
 QA reviews each planned file's change **directly against HEAD** (staging-independent), NOT via `git diff --cached`. Rationale: in multi-group `--bulk`, changelog-analyst stages per subsystem group and Phase 4 unstages cross-group files each iteration, so after the dry-run only the LAST group remains staged — a `--cached` review would silently skip every earlier group while ALL groups still enter `QA_APPROVED_FILES` and get committed. Reviewing each `PLAN_GROUPS` file vs HEAD (or reading new files) covers ALL groups regardless of staging state.
 
@@ -177,7 +177,7 @@ Return, as the LAST line, EXACTLY one of:
 
 **Grant hygiene (`BULK=false` stop paths only — REJECT, `--dry-run` stop, unparseable):** in addition to unstaging, when `BULK=false` REVOKE the Step 5 commit grant so a blocked/stopped gate never leaves live commit authorization lingering (30-min TTL):
 ```bash
-source venv/bin/activate && python3 "/root/.claude/scripts/write-commit-grant.py" --task-id "$TASK_ID" --revoke-only
+source venv/bin/activate && python3 "~/.claude/scripts/write-commit-grant.py" --task-id "$TASK_ID" --revoke-only
 ```
 **Skip this revoke entirely when `BULK=true`**: bulk wrote NO per-task commit grant (Step 5 minted the multi-use bulk-commit sentinel, which self-expires on its own 30-min TTL) and `TASK_ID` is empty, so calling the writer with an empty `--task-id` would error (exit 2). (Only the `COMMIT: APPROVE` + real-commit path keeps the grant — it is consumed by Step 7.)
 
@@ -211,7 +211,7 @@ Constraints:
 - **TOCTOU guard (pre-commit QA gate)**: when `QA_APPROVED_FILES` is non-empty (the Step 6 gate ran and approved this exact set), it is the commit CEILING. Re-classify normally, then intersect the classified set with `QA_APPROVED_FILES`: stage/commit ONLY files in both. If your fresh classification yields any file NOT in `QA_APPROVED_FILES` (working tree changed since QA review), do NOT commit the unreviewed file; if the divergence is material (a QA-approved file vanished, or a new non-approved candidate appeared that you would otherwise commit), ABORT with `failure_code: scope_violation` rather than commit an unreviewed set. When `QA_APPROVED_FILES` is empty (FORCE bypass), this guard does not apply.
 - Stage only files in the classified set; never use `git add -A` or `git add .`
 - Commit message must NOT match: `\bsync\b.*\buncommitted\b` or `chore\(claude\)\s*:\s*sync`
-- Handle nested repo at /dev/shm/dev-workspace/dot-claude/ independently
+- Handle nested repo at ~/.claude/ independently
 - Write push-gate token after each successful commit
 - Push-gate token path MUST be: `/tmp/agentic-commit/push/<sha256(os.path.realpath(GIT_ROOT))[:16]>/<BRANCH with / replaced by __>.json`
 - Push-gate validates commit_sha only; expires_at is no longer written or checked
@@ -245,9 +245,9 @@ Check `failure_code`:
 **Retryable** (`grant_missing`, `grant_expired`, `grant_consumed`):
 
 Retry exactly once (max 1 retry):
-1. Revoke stale grants by running (use the literal `/root/.claude/scripts/write-commit-grant.py` — `CONTROL_ROOT` is NOT bound in the orchestrator shell, so match Step 5's working literal path):
+1. Revoke stale grants by running (use the literal `~/.claude/scripts/write-commit-grant.py` — `CONTROL_ROOT` is NOT bound in the orchestrator shell, so match Step 5's working literal path):
    ```bash
-   source venv/bin/activate && python3 "/root/.claude/scripts/write-commit-grant.py" \
+   source venv/bin/activate && python3 "~/.claude/scripts/write-commit-grant.py" \
        --task-id "$TASK_ID" \
        --revoke-existing-for-task "$TASK_ID"
    ```
@@ -338,9 +338,9 @@ DO NOT:
 - Overwrite or delete prior "### Cycle N" sections
 - Modify any git state, commit grants, push tokens, or command files
 - Write any artifacts outside <SPEC_PATH>
-- Read or modify files outside <DEV_DOCS_ROOT>/, <SPEC_PATH>, and /root/.claude/commands/spec-update.md (allowed: read spec-update.md for instructions)
+- Read or modify files outside <DEV_DOCS_ROOT>/, <SPEC_PATH>, and ~/.claude/commands/spec-update.md (allowed: read spec-update.md for instructions)
 
-Follow the ## Continuation-spec mode instructions from /root/.claude/commands/spec-update.md exactly:
+Follow the ## Continuation-spec mode instructions from ~/.claude/commands/spec-update.md exactly:
 
 - The active task-id is <TASK_ID>.
 - The target spec to update is <SPEC_PATH>. Update this spec; do not create a new one.

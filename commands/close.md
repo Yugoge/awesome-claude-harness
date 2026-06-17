@@ -213,7 +213,7 @@ resolver so the close gate uses the SAME `cp_dir` the producer and `/dev` use:
 - If a `spec_path` is found, call the resolver and take its `cp_dir`:
 
   ```bash
-  RESOLVED_JSON=$(/root/.claude/scripts/resolve-spec-artifacts.py \
+  RESOLVED_JSON=$(~/.claude/scripts/resolve-spec-artifacts.py \
       --spec-path "$spec_path" --project-dir "$CLAUDE_PROJECT_DIR") || {
     echo "spec-artifact resolution FAILED for the close gate (path mismatch / present-but-invalid split)." >&2
     exit 1; }
@@ -280,7 +280,7 @@ Use the Agent tool with `subagent_type: qa` ONCE. The entire debate happens insi
 
 ```
 FIRST ACTION: if a dev-registry sentinel for this session exists at $CLAUDE_PROJECT_DIR/.claude/dev-registry/<SESSION_ID>/qa.json, read it to register.
-SECOND ACTION (only if SPEC_ID is non-empty): read $CLAUDE_PROJECT_DIR/$CP_DIR/cp-state-qa.json to load your mandatory checklist before the debate. Mark each completed checkpoint with /root/.claude/scripts/spec-check.py mark --spec-id <SPEC_ID> --agent qa --agent-id $CLAUDE_AGENT_ID --cp-id <cp-NN>. Waive only with /root/.claude/scripts/spec-check.py waive --spec-id <SPEC_ID> --agent qa --agent-id $CLAUDE_AGENT_ID --cp-id <cp-NN> (auto-text records actor + ISO timestamp). You MUST leave zero pending checkpoints before Stop (a discipline expectation tracked via spec-check.py — no hook blocks exit on pending checkpoints today). If `$CLAUDE_AGENT_ID` is unavailable, use the `agent_id` value written into the cp-state file by the read.
+SECOND ACTION (only if SPEC_ID is non-empty): read $CLAUDE_PROJECT_DIR/$CP_DIR/cp-state-qa.json to load your mandatory checklist before the debate. Mark each completed checkpoint with ~/.claude/scripts/spec-check.py mark --spec-id <SPEC_ID> --agent qa --agent-id $CLAUDE_AGENT_ID --cp-id <cp-NN>. Waive only with ~/.claude/scripts/spec-check.py waive --spec-id <SPEC_ID> --agent qa --agent-id $CLAUDE_AGENT_ID --cp-id <cp-NN> (auto-text records actor + ISO timestamp). You MUST leave zero pending checkpoints before Stop (a discipline expectation tracked via spec-check.py — no hook blocks exit on pending checkpoints today). If `$CLAUDE_AGENT_ID` is unavailable, use the `agent_id` value written into the cp-state file by the read.
 
 You are the QA gatekeeper evaluating whether a completed development can be closed. The orchestrator passes a `codex_required: <true|false>` flag in this dispatch:
 

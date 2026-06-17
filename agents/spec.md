@@ -485,7 +485,7 @@ exiting if coverage < 100%. You cannot skip this -- fix the coverage first.
 After ALL views are written, run the coverage verification script:
 
 ```bash
-source ~/.claude/venv/bin/activate && python3 "/root/.claude/scripts/spec-verify/spec-verify.py" --monolith "$MONOLITH_PATH" --views-dir "docs/dev/specs/<spec-id>/views/"
+source ~/.claude/venv/bin/activate && python3 "~/.claude/scripts/spec-verify/spec-verify.py" --monolith "$MONOLITH_PATH" --views-dir "docs/dev/specs/<spec-id>/views/"
 ```
 
 This checks that every non-blank, non-separator line from the monolith appears in at least one view file. If it exits non-zero (coverage < 100%):
@@ -542,7 +542,7 @@ If after ONE retry the coverage is still < 100%, apply this deterministic rule:
 4. Re-run spec-verify.py with `--strict` flag (enforces coverage = 100%, max pairwise overlap < 70%, per-view uniqueness > 15%):
 
    ```bash
-   source ~/.claude/venv/bin/activate && python3 "/root/.claude/scripts/spec-verify/spec-verify.py" --monolith "$MONOLITH_PATH" --views-dir "docs/dev/specs/<spec-id>/views/" --strict
+   source ~/.claude/venv/bin/activate && python3 "~/.claude/scripts/spec-verify/spec-verify.py" --monolith "$MONOLITH_PATH" --views-dir "docs/dev/specs/<spec-id>/views/" --strict
    ```
 
 5. **Diagnose failures by type**:
@@ -601,7 +601,7 @@ Write cp-state files via `.claude/scripts/spec-check.py`. Do not write cp-state 
 #    disambiguates slots, but agent_id disambiguates the LOGICAL caller
 #    when multiple same-type instances run concurrently. Without it,
 #    Phase 2 cannot reliably pin to the correct slot.
-source ~/.claude/venv/bin/activate && python3 /root/.claude/scripts/spec-check.py check-in \
+source ~/.claude/venv/bin/activate && python3 ~/.claude/scripts/spec-check.py check-in \
     --spec-id <spec-id> \
     --agent <agent> \
     --agent-id <agent-id> \
@@ -657,7 +657,7 @@ spec-derived checkpoint without replacing it with an equivalent atomic action.
 
 ## Tool usage
 
-You may use: `Read`, `Write`, `Bash` (for `.claude/scripts/spec-check.py`, `/root/.claude/scripts/spec-verify/spec-verify-views.py`, `/root/.claude/scripts/spec-verify/spec-verify.py`, Python invocations via venv (`source ~/.claude/venv/bin/activate && python3`), and `mkdir -p`).
+You may use: `Read`, `Write`, `Bash` (for `.claude/scripts/spec-check.py`, `~/.claude/scripts/spec-verify/spec-verify-views.py`, `~/.claude/scripts/spec-verify/spec-verify.py`, Python invocations via venv (`source ~/.claude/venv/bin/activate && python3`), and `mkdir -p`).
 
 You must NOT:
 - Modify the monolith spec (read-only)
@@ -723,7 +723,7 @@ After all three phases complete, emit a JSON summary to stdout:
 Before exiting, verify for each agent that received checkpoints:
 
 ```bash
-source ~/.claude/venv/bin/activate && python3 /root/.claude/scripts/spec-check.py status --spec-id <spec-id> --agent <agent>
+source ~/.claude/venv/bin/activate && python3 ~/.claude/scripts/spec-check.py status --spec-id <spec-id> --agent <agent>
 ```
 
 The status should show N checkpoints, all in `pending` state, with a timestamp matching your run.
@@ -806,9 +806,9 @@ This contract is mandatory in that mode:
    `$CLAUDE_AGENT_ID` is available, it must match that value.
 2. Treat each `checkpoints[].id` entry as a required checklist item.
 3. Immediately after completing a checkpoint's atomic action, mark it done with
-   `/root/.claude/scripts/spec-check.py mark --spec-id <SPEC_ID> --agent spec --agent-id $CLAUDE_AGENT_ID --cp-id <cp-NN>`.
+   `~/.claude/scripts/spec-check.py mark --spec-id <SPEC_ID> --agent spec --agent-id $CLAUDE_AGENT_ID --cp-id <cp-NN>`.
 4. If a checkpoint is genuinely not applicable, waive it (auto-text records actor + ISO timestamp):
-   `/root/.claude/scripts/spec-check.py waive --spec-id <SPEC_ID> --agent spec --agent-id $CLAUDE_AGENT_ID --cp-id <cp-NN>`.
+   `~/.claude/scripts/spec-check.py waive --spec-id <SPEC_ID> --agent spec --agent-id $CLAUDE_AGENT_ID --cp-id <cp-NN>`.
 5. Before stopping, confirm every checkpoint is either `done` or
    `waived-with-reason`. Pending checkpoints cause `subagentstop-cp-enforce.py`
    to block exit with code 2.
