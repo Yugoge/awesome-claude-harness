@@ -259,15 +259,23 @@ def scan(root: str, responsible=None):
         for f in fn:
             full = os.path.join(dp, f)
             rel = os.path.relpath(full, root)
-            if not in_scope(rel):
-                continue
+            # Effective extension: the path extension for the normal surfaces,
+            # or a shebang-inferred one for an extensionless executable script
+            # under hooks/ or scripts/ (the blind spot in_scope() can't see).
+            promoted_ext = ""
+            if in_scope(rel):
+                ext = os.path.splitext(f)[1]
+            else:
+                promoted_ext = shebang_ext(rel, full)
+                if not promoted_ext:
+                    continue
+                ext = promoted_ext
             # Shared-workspace scoping: a file on the in-scope surface that is
             # NOT part of THIS cycle's responsible set (foreign concurrent
             # addition) is excluded — this cycle's DoD measures its own
             # portability, not a sibling session's incomplete work.
             if responsible is not None and rel not in responsible:
                 continue
-            ext = os.path.splitext(f)[1]
             try:
                 lines = open(full, errors="replace").read().splitlines()
             except OSError:
