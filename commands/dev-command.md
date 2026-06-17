@@ -65,7 +65,7 @@ IF QA passes → Generate completion report
 
 ## Command Development Best Practices
 
-The full tutorial — Three-Party Architecture, specialist subagent design, todo workflow scripts, the three-hook checklist enforcement chain, YAML frontmatter rules (including the 2026-04-25 `/redev` empty-body incident postmortem), complete automation patterns, script parameterization, the subagent-call enforcement gate, and the command-quality-audit case study — lives in `/root/docs/dev/command-development-patterns.md`. Read that document before authoring or editing slash commands, subagents, or todo scripts. The patterns there are normative for this orchestrator and any new commands it spawns.
+The full tutorial — Three-Party Architecture, specialist subagent design, todo workflow scripts, the three-hook checklist enforcement chain, YAML frontmatter rules (including the 2026-04-25 `/redev` empty-body incident postmortem), complete automation patterns, script parameterization, the subagent-call enforcement gate, and the command-quality-audit case study — lives in `~/.claude/docs/dev/command-development-patterns.md`. Read that document before authoring or editing slash commands, subagents, or todo scripts. The patterns there are normative for this orchestrator and any new commands it spawns.
 
 ---
 
