@@ -13,7 +13,8 @@
 # test-writer agent spec for smoke/shell-verified ACs. Remove the
 # TEST_INCOMPLETE sentinel below when the real body is in place.
 
-import pytest
+import re
+from pathlib import Path
 
 AC_UID = "ws4doc-contractword02"
 AC_TYPE = "data"
@@ -26,6 +27,8 @@ HOOK_CHECK = {
     "expect_exit": 0
 }
 
+_REPO = Path(__file__).resolve().parents[3]
+
 
 def test_AC_WS4_2():
     r"""
@@ -33,7 +36,23 @@ def test_AC_WS4_2():
     WHEN:  a newcomer reads the portability section
     THEN:  the section is a CONTRACT (not merely a warning): it cleanly separates 'core harness runs on a fresh non-root clone (verified by the WS2 smoke test)' from 'these specific extras need external setup', and it cross-references the smoke test as the verification
     """
-    # TODO(dev): replace the line below with the real test body. While the
-    # TEST_INCOMPLETE sentinel is present the test will hard-fail, marking
-    # the AC as unimplemented for QA Phase 5.
-    pytest.fail(f"TEST_INCOMPLETE: {AC_UID} — GIVEN README.md after the WS4 edit / WHEN a newcomer reads the portability section / THEN the section is a CONTRACT (not merely a warning): it cleanly separates 'core harness runs on a fresh non-root…")
+    readme = (_REPO / "README.md").read_text()
+
+    # It is a CONTRACT, not merely a warning.
+    assert "Portability contract" in readme, "README lacks the 'Portability contract' heading"
+
+    # 'core runs on a fresh non-root clone' side of the separation.
+    assert re.search(
+        r"core harness runs on a fresh non-root clone", readme, re.IGNORECASE), (
+        "README contract lacks the 'core harness runs on a fresh non-root clone' claim")
+
+    # 'these specific extras need external setup' side of the separation.
+    assert re.search(
+        r"extras\b.*\b(require|need)\b.*\bexternal setup", readme, re.IGNORECASE), (
+        "README contract lacks the 'extras need external setup' separation")
+
+    # Cross-references the fresh-clone smoke test as the verification.
+    assert re.search(
+        r"verified by the fresh-clone smoke", readme, re.IGNORECASE) and \
+        re.search(r"smoke test", readme, re.IGNORECASE), (
+        "README contract does not cross-reference the fresh-clone smoke test")
