@@ -95,9 +95,16 @@ trap 'cleanup' EXIT INT TERM
 mkdir -p "$DEMO_HOME/hooks/lib" "$DEMO_HOME/policies" "$DEMO_HOME/scripts" \
          "$DEMO_HOME/work" \
   || { echo "run-demo: cannot build demo home tree" >&2; exit 2; }
-cp -a "$HARNESS_HOME/hooks/lib/." "$DEMO_HOME/hooks/lib/" 2>/dev/null
-cp -a "$GUARD" "$DEMO_HOME/hooks/" 2>/dev/null
-echo '{}' > "$DEMO_HOME/settings.json"
+# Fail FAST on any setup error so a copy/write failure can never masquerade as
+# guard behavior (a missing guard would otherwise look like a "block").
+cp -a "$HARNESS_HOME/hooks/lib/." "$DEMO_HOME/hooks/lib/" \
+  || { echo "run-demo: cannot copy hooks/lib into the demo home" >&2; exit 2; }
+cp -a "$GUARD" "$DEMO_HOME/hooks/" \
+  || { echo "run-demo: cannot copy the guard into the demo home" >&2; exit 2; }
+echo '{}' > "$DEMO_HOME/settings.json" \
+  || { echo "run-demo: cannot write the demo settings.json" >&2; exit 2; }
+[ -f "$DEMO_HOME/hooks/pretool-tool-policy.py" ] \
+  || { echo "run-demo: guard not present in the demo home after copy" >&2; exit 2; }
 
 # The demo's own scoped policy. The `dev` role may write anywhere EXCEPT a path
 # bearing the unique DEMO-FORBIDDEN token (a stand-in for any protected target).
