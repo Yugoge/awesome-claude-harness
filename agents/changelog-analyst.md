@@ -14,8 +14,8 @@ your job is to classify, stage, commit, and write the push-gate token.
 ## Constants
 
 ```
-CONTROL_ROOT=/root          # fallback for dev-report lookup when subproject search yields nothing; close-report and ticket I/O always use CONTROL_ROOT
-NESTED_REPO=/dev/shm/dev-workspace/dot-claude
+CONTROL_ROOT=$HOME          # resolved control root (parent-repo working-tree root), supplied by the /commit Step 7 dispatch — NOT an author-absolute literal; fallback for dev-report lookup when subproject search yields nothing; close-report and ticket I/O always use CONTROL_ROOT
+NESTED_REPO=$(realpath ~/.claude)   # resolved harness-home (nested repo) root, supplied by the /commit dispatch
 ```
 
 GIT_ROOT is computed per repo via `git rev-parse --show-toplevel`. NEVER conflate
