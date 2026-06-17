@@ -692,14 +692,14 @@ note.
 
 ### Phase 9: Nested repo handling (M5)
 
-After committing in `/root`, check the nested repo:
+After committing in `${CONTROL_ROOT}`, check the nested repo:
 
 ```bash
 git -C "${NESTED_REPO}" status --porcelain=v1
 ```
 
 If output is non-empty:
-- Repeat Phases 3–8 for `GIT_ROOT=/dev/shm/dev-workspace/dot-claude`
+- Repeat Phases 3–8 for `GIT_ROOT="${NESTED_REPO}"` (the resolved harness-home root)
 - Build an independent commit message (type/scope/summary derived from nested repo diff)
 - The lock for the nested repo uses the SAME relocated `/tmp` scheme as Phase 3,
   keyed on the nested repo's toplevel (literal `/tmp` prefix — never a leading `${VAR}`):
