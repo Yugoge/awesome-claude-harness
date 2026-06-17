@@ -83,7 +83,11 @@ def _make_fresh_clone(dst: Path) -> Path:
 
 
 def _run_bootstrap(clone: Path, args, home: Path):
-    env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "HOME": str(home)}
+    # Point TMPDIR at a roomy base too: ensurepip writes its bundled wheel to a
+    # scratch dir, which must not land on a saturated /tmp tmpfs.
+    base = _roomy_tmpbase()
+    env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "HOME": str(home),
+           "TMPDIR": base}
     return subprocess.run(
         [str(clone / "scripts" / "bootstrap"), *args],
         cwd=str(clone), env=env, capture_output=True, text=True, timeout=300,
