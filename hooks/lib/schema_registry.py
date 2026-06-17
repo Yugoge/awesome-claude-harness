@@ -1,16 +1,35 @@
-"""Schema registry loader for /root/.claude/schemas/.
+"""Schema registry loader for the harness ``schemas/`` directory.
 
 Reads schemas/registry.json once and lazily loads referenced schema files.
 All file reads are UTF-8 via pathlib.Path. Cached in module-level dict.
+
+WS1: the schemas dir is resolved via the shared claude_home resolver (falling
+back to this file's own ../../schemas location) so a fresh non-root clone never
+depends on the author literal /root/.claude.
 """
 
 from __future__ import annotations
 
 import json
+import os
+import sys
 from pathlib import Path
 from typing import Optional
 
-SCHEMAS_DIR = Path('/root/.claude/schemas')
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import claude_home  # noqa: E402  (shared WS1 harness-home resolver)
+
+
+def _schemas_dir() -> Path:
+    """Resolve the harness ``schemas/`` dir via claude_home, else this file's
+    sibling ``../../schemas`` (hooks/lib/ -> harness home -> schemas/)."""
+    home = claude_home.resolve()
+    if home is not None:
+        return home / 'schemas'
+    return Path(__file__).resolve().parent.parent.parent / 'schemas'
+
+
+SCHEMAS_DIR = _schemas_dir()
 REGISTRY_PATH = SCHEMAS_DIR / 'registry.json'
 
 _CACHE: dict[str, dict] = {}
