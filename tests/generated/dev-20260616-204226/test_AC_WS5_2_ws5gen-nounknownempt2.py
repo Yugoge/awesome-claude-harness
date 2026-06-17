@@ -27,13 +27,69 @@ HOOK_CHECK = {
 }
 
 
+import importlib
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+
+_REPO = Path(__file__).resolve().parents[2]
+
+
+def _load(modname):
+    if str(_REPO) not in sys.path:
+        sys.path.insert(0, str(_REPO))
+    return importlib.import_module(modname)
+
+
+def _git(args, cwd):
+    subprocess.run(['git', *args], cwd=cwd, check=True,
+                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+
+def _make_repo() -> Path:
+    d = Path(tempfile.mkdtemp(prefix='ws5-nounknown-'))
+    _git(['init', '-q'], d)
+    _git(['config', 'user.email', 't@t'], d)
+    _git(['config', 'user.name', 't'], d)
+    # Files whose old fallbacks would have been "unknown file" / "No description".
+    (d / 'noext').write_text('plain content\n')                  # no suffix
+    (d / 'data.toml').write_text('[x]\n')                        # uncommon suffix
+    (d / 'nodesc.md').write_text('body text, no heading, no frontmatter\n')
+    (d / 'real.py').write_text('"""Real description."""\n')
+    _git(['add', 'noext', 'data.toml', 'nodesc.md', 'real.py'], d)
+    _git(['commit', '-q', '-m', 'init'], d)
+    return d
+
+
 def test_AC_WS5_2():
     r"""
     GIVEN: The generated INDEX/README auto-blocks
     WHEN:  they are produced
     THEN:  no list item has an empty description and no item is labelled 'unknown file' or 'No description' for a published file
     """
-    # TODO(dev): replace the line below with the real test body. While the
-    # TEST_INCOMPLETE sentinel is present the test will hard-fail, marking
-    # the AC as unimplemented for QA Phase 5.
-    pytest.fail(f"TEST_INCOMPLETE: {AC_UID} — GIVEN The generated INDEX/README auto-blocks / WHEN they are produced / THEN no list item has an empty description and no item is labelled 'unknown file' or 'No description' for a publis…")
+    extract = _load('hooks.doc_sync.extract')
+    regen_readme = _load('hooks.doc_sync.regen_readme')
+    regen_index = _load('hooks.doc_sync.regen_index')
+    d = _make_repo()
+
+    # Direct extractor: never the banned placeholders.
+    for fn in ('noext', 'data.toml', 'nodesc.md', 'real.py'):
+        desc = extract.extract_description(d / fn)
+        assert desc and desc.strip(), f'empty description for {fn}'
+        assert 'unknown file' not in desc, f"'unknown file' placeholder for {fn}"
+        assert desc != 'No description', f"'No description' placeholder for {fn}"
+
+    # README listing: each item has a non-empty description after the ' - '.
+    for line in regen_readme._list_files(d):
+        assert ' - ' in line, f'list item missing description: {line!r}'
+        desc = line.split(' - ', 1)[1].strip()
+        assert desc, f'empty description in README item: {line!r}'
+        assert 'unknown file' not in line, f"'unknown file' in README item: {line!r}"
+        assert 'No description' not in line, f"'No description' in README item: {line!r}"
+
+    # INDEX tree: same guarantee for every file line.
+    regen_index.regen_index(d)
+    idx = (d / 'INDEX.md').read_text()
+    assert 'unknown file' not in idx, "'unknown file' leaked into INDEX"
+    assert 'No description' not in idx, "'No description' leaked into INDEX"
