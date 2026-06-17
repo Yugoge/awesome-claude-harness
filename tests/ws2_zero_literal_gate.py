@@ -272,15 +272,31 @@ def scan(root: str, responsible=None):
 
 
 def main(argv):
-    if len(argv) < 2:
-        sys.stderr.write("usage: ws2_zero_literal_gate.py <clone-root> [<out.json>]\n")
+    # Positional: <clone-root> [<out.json>]; flags: --baseline-ref, --cycle-file.
+    pos, baseline_ref, cycle_files = [], "", []
+    i = 1
+    while i < len(argv):
+        a = argv[i]
+        if a == "--baseline-ref":
+            baseline_ref = argv[i + 1]; i += 2; continue
+        if a == "--cycle-file":
+            cycle_files.append(argv[i + 1]); i += 2; continue
+        pos.append(a); i += 1
+    if not pos:
+        sys.stderr.write(
+            "usage: ws2_zero_literal_gate.py <clone-root> [<out.json>] "
+            "[--baseline-ref <sha>] [--cycle-file <relpath> ...]\n")
         return 2
-    root = argv[1]
-    out = argv[2] if len(argv) > 2 else None
-    findings = scan(root)
+    root = pos[0]
+    out = pos[1] if len(pos) > 1 else None
+    responsible = responsible_surface(root, baseline_ref, cycle_files)
+    findings = scan(root, responsible)
     doc = {
         "gate": "ws2-zero-literal-integration",
         "root": root,
+        "scoped_to_responsible_surface": responsible is not None,
+        "baseline_ref": baseline_ref or None,
+        "cycle_files": cycle_files,
         "count": len(findings),
         "findings": findings,
     }
