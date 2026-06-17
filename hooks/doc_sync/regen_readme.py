@@ -12,6 +12,7 @@ from pathlib import Path
 try:
     from .extract import extract_description
     from .patch import _replace_section
+    from .config import tracked_names
 except ImportError:
     import importlib as _importlib
     import os as _os
@@ -21,8 +22,10 @@ except ImportError:
         _sys.path.insert(0, _pkg_root)
     _extract = _importlib.import_module("hooks.doc_sync.extract")
     _patch = _importlib.import_module("hooks.doc_sync.patch")
+    _config = _importlib.import_module("hooks.doc_sync.config")
     extract_description = _extract.extract_description  # type: ignore[no-redef]
     _replace_section = _patch._replace_section  # type: ignore[no-redef]
+    tracked_names = _config.tracked_names  # type: ignore[no-redef]
 
 SKIP_NAMES = {
     'INDEX.md', 'README.md', '__init__.py', '.DS_Store',
