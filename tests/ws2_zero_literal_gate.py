@@ -91,21 +91,36 @@ PROSE_ALLOWLIST = [
     # /root/bin/claude-allow-restart grant channel (hint text, not an executed
     # path the harness resolves) + comment examples.
     {"suffix": "hooks/pretool-bash-safety.sh", "contains": "/root/bin/claude-allow-restart"},
-    # runtime_guard.py protected-system-roots CONSTANT member "/root" (a system
-    # directory the guard PROTECTS, not an author-home default it resolves to).
-    {"suffix": "hooks/lib/runtime_guard.py", "contains": '"/root"'},
 ]
+
+# Whole-file exemptions (AC-WS3-4: "the detector's own patterns are exempt").
+# The detector source legitimately embeds the author-path regex it searches FOR;
+# treating it as load-bearing would be self-referential. This is the SAME
+# wholesale exemption the shipped detector applies to itself.
+WHOLE_FILE_EXEMPT = ("scripts/detect-hardcoded-paths.sh",)
 
 # Environment-context docs (advisory; resolver makes them so) — not in surface,
 # but guarded here for completeness if a future surface change includes them.
 ENV_CONTEXT_DOCS = ("CLAUDE.md", "NESTED-REPO.md")
 
+# A line that defines a list of SYSTEM roots ("/", "/root", "/home", "/etc",...)
+# is a protected-system-roots CONSTANT, NOT an author-home default. "/root" here
+# is a directory the guard PROTECTS, identical in kind to "/home" or "/etc".
+_SYSTEM_ROOTS_LINE = re.compile(
+    r'["\']/["\']\s*,\s*["\']/root["\']\s*,\s*["\']/home["\']'
+)
 
-def allowlisted(rel: str, literal: str) -> bool:
+
+def allowlisted(rel: str, literal: str, line: str = "") -> bool:
+    if any(rel.endswith(w) for w in WHOLE_FILE_EXEMPT):
+        return True
     for e in PROSE_ALLOWLIST:
         if rel.endswith(e["suffix"]) and e["contains"] in literal:
             return True
     if any(rel.endswith(d) for d in ENV_CONTEXT_DOCS):
+        return True
+    # protected-system-roots constant member: "/root" alongside "/", "/home", ...
+    if literal == "/root" and _SYSTEM_ROOTS_LINE.search(line):
         return True
     return False
 
