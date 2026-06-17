@@ -36,6 +36,7 @@ def _detect_convention(dir_path: Path) -> str:
 
 
 def _build_stats(dir_path: Path) -> dict:
+    published = tracked_names(dir_path)
     total = 0
     dirs = 0
     for item in dir_path.iterdir():
@@ -43,10 +44,47 @@ def _build_stats(dir_path: Path) -> dict:
             continue
         if item.name.startswith('.'):
             continue
+        # AC-WS5-1: when git is consulted, list only published (tracked) entries.
+        if published is not None and item.name not in published:
+            continue
         total += 1
         if item.is_dir():
             dirs += 1
     return {'total': total, 'dirs': dirs}
+
+
+# Top-level tree entries from build_tree look like "├── `name` - desc" (files)
+# or "├── name/" (directories), with NO leading tree-pipe indent. Nested entries
+# carry a leading "│   " / spaces. This matches a TOP-LEVEL entry and captures
+# its basename so untracked/gitignored top-level entries can be pruned without
+# editing tree.py (out of WS5 scope).
+_TOPLEVEL_FILE_RE = re.compile(r'^[├└]── `([^`]+)`')
+_TOPLEVEL_DIR_RE = re.compile(r'^[├└]── ([^`/][^/]*)/$')
+
+
+def _filter_tree_published(tree: list[str], dir_path: Path) -> list[str]:
+    """Drop top-level tree lines (and their nested children) for entries that are
+    not git-published, so the INDEX tree lists only tracked files (AC-WS5-1).
+    Degrades to a no-op when git was not consulted (tracked_names -> None)."""
+    published = tracked_names(dir_path)
+    if published is None:
+        return tree
+    kept: list[str] = []
+    skipping = False
+    for line in tree:
+        m_file = _TOPLEVEL_FILE_RE.match(line)
+        m_dir = _TOPLEVEL_DIR_RE.match(line)
+        if m_file or m_dir:
+            name = m_file.group(1) if m_file else m_dir.group(1)
+            skipping = name not in published
+            if skipping:
+                continue
+            kept.append(line)
+        else:
+            # Nested line: keep it only if its top-level ancestor was kept.
+            if not skipping:
+                kept.append(line)
+    return kept
 
 
 AUTO_START = '<!-- AUTO:index-stats -->'

@@ -1,17 +1,18 @@
 #!/usr/bin/env python3
 """Tool-policy registry loader and authorization decisions.
 
-Reads /root/.claude/policies/tool-policy.v1.json and provides a single
+Reads the harness ``policies/tool-policy.v1.json`` (resolved via the shared
+hooks/lib/claude_home resolver — see WS1) and provides a single
 is_allowed(role, tool_name, target_path) entrypoint shared by:
   - pretool-tool-policy.py (canonical enforcement)
   - pretool-subagent-code-block.py (backstop shim)
 
-Fail-safe contract:
-  - On policy load failure (file missing, parse error), `dev` role gets
-    fail-safe ALLOW (preserves the historical ALLOWED_TYPES = {'dev'}
-    behavior), every other role gets fail-CLOSED DENY.
-  - On any unexpected exception, return (True, "fail-safe-exception")
-    for the dev role, (False, "fail-closed-exception") for others.
+Fail-CLOSED contract (WS1 — the dev-role fail-safe-ALLOW was REMOVED):
+  - On policy load failure (file missing, parse error), EVERY role —
+    including `dev` — gets fail-CLOSED DENY. A missing/unparseable policy
+    on a fresh clone must NOT silently authorize protected writes.
+  - On any unexpected exception, return (False, "fail-closed-exception")
+    for every role.
 
 Path prefix matching (T1.2 fix for B.11):
   - Targets are normalized via os.path.realpath (collapses symlinks
