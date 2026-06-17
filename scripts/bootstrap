@@ -35,7 +35,7 @@ done
 
 # Resolve the harness home from THIS script's own location (it lives at
 # <home>/scripts/bootstrap, so the resolver is at ../hooks/lib). Never default
-# to the author literal /root: if the resolver cannot locate a structural home
+# to an author-absolute home: if the resolver cannot locate a structural home
 # we fall back to this script's own parent dir (the clone), still portable.
 SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 LIB_DIR="$SELF_DIR/../hooks/lib"
