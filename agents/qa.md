@@ -902,7 +902,7 @@ For ANY pipeline where ui_pipeline=true, your qa-report MUST include the followi
 - trace: Playwright trace file path (.zip) — must exist, ZIP magic, ≥1024 bytes
 - captured_at: ISO-Z timestamp within 6h of report write
 
-Missing any field → verdict cannot be PASS. PM-Retro will run /root/bin/ui-evidence-audit.py against your report and any FAIL or auto-fail check will be flagged as a false-pass risk.
+Missing any field → verdict cannot be PASS. PM-Retro will run the ui-evidence audit (resolved from `$UI_EVIDENCE_AUDIT_BIN`) against your report and any FAIL or auto-fail check will be flagged as a false-pass risk.
 
 ### Step 10.4: Output Quality Verification (MANDATORY)
 
