@@ -33,7 +33,33 @@ def test_AC_WS2_2():
     WHEN:  the smoke test asserts each guard loaded ITS OWN helper/data from the clone (POSITIVE assertion)
     THEN:  the block is proven to come from the intended guard reading the clone's own canary — a block-by-the-wrong-guard (intended guard silently failed open while another guard blocked) is DETECTED and fails the test
     """
-    # TODO(dev): replace the line below with the real test body. While the
-    # TEST_INCOMPLETE sentinel is present the test will hard-fail, marking
-    # the AC as unimplemented for QA Phase 5.
-    pytest.fail(f"TEST_INCOMPLETE: {AC_UID} — GIVEN A planted canary policy/value in the temp clone; EACH guard probe runs in a FRESH subproc… / WHEN the smoke test asserts each guard loaded ITS OWN helper/data from the clone (POSITIVE ass… / THEN the block is proven to come from the intended guard reading the clone's own canary — a block-by-the-wrong-gua…")
+    # POSITIVE (canary) assertion: each guard probe runs in a FRESH env -i
+    # subprocess (so the policy_registry in-process _CACHE cannot mask a stale
+    # load), and the smoke plants a canary the INTENDED guard alone would act on
+    # (tool-policy: a deny_reason echoing a per-run token; stop-spec-coverage:
+    # running THIS clone's verifier; resolver: returning THIS clone's own root).
+    # A block-by-the-wrong-guard is detected because the wrong guard's reason
+    # would not reference the canary / own helper.
+    import os
+    import sys
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    from _ws2_smoke import run_smoke, require_not_setup_error
+
+    rc, result = run_smoke()
+    require_not_setup_error(rc, result)
+
+    positives = [a for a in result["assertions"] if a["kind"] == "positive"]
+    guards = {a["guard"] for a in positives}
+    assert {"tool-policy", "stop-spec-coverage", "claude-home-resolver"} <= guards, (
+        f"missing a guard's positive/own-helper case; saw {guards}")
+    failed = [a for a in positives if not a["pass"]]
+    assert not failed, (
+        "a guard's POSITIVE (own-helper canary) case failed — possible "
+        "block-by-the-wrong-guard: "
+        + "; ".join(f"{a['guard']}: {a['detail']}" for a in failed))
+
+    # Specifically assert the tool-policy canary proof (the deny_reason echoed the
+    # per-run token), the strongest evidence the intended guard read its OWN policy.
+    tp = next(a for a in positives if a["guard"] == "tool-policy")
+    assert "canary token echoed" in tp["detail"], (
+        f"tool-policy positive did not prove the canary echo: {tp['detail']}")
