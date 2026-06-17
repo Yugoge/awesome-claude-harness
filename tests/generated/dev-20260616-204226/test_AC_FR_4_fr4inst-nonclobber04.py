@@ -36,6 +36,25 @@ HOOK_CHECK = {
 _HOME = Path(__file__).resolve().parents[3]
 
 
+def _roomy_tmpbase() -> str:
+    """Pick a temp base with enough free space to create a venv (>=200MB).
+
+    The default /tmp is often a small tmpfs that can fill up under concurrent
+    sessions; venv creation (ensurepip) then fails with ENOSPC.
+    """
+    import shutil as _sh
+    for cand in (os.environ.get("FR_TMPDIR"), "/var/tmp",
+                 tempfile.gettempdir(), os.path.expanduser("~")):
+        if not cand or not os.path.isdir(cand):
+            continue
+        try:
+            if _sh.disk_usage(cand).free >= 200 * 1024 * 1024:
+                return cand
+        except OSError:
+            continue
+    return tempfile.gettempdir()
+
+
 def _make_clone(dst: Path) -> Path:
     """Minimal structural-sentinel clone carrying the resolver + bootstrap + doctor + manifest."""
     clone = dst / "dot-claude"
