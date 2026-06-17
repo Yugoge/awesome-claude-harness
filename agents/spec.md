@@ -542,7 +542,7 @@ If after ONE retry the coverage is still < 100%, apply this deterministic rule:
 4. Re-run spec-verify.py with `--strict` flag (enforces coverage = 100%, max pairwise overlap < 70%, per-view uniqueness > 15%):
 
    ```bash
-   source ~/.claude/venv/bin/activate && python3 "~/.claude/scripts/spec-verify/spec-verify.py" --monolith "$MONOLITH_PATH" --views-dir "docs/dev/specs/<spec-id>/views/" --strict
+   source ~/.claude/venv/bin/activate && python3 ~/.claude/scripts/spec-verify/spec-verify.py --monolith "$MONOLITH_PATH" --views-dir "docs/dev/specs/<spec-id>/views/" --strict
    ```
 
 5. **Diagnose failures by type**:
