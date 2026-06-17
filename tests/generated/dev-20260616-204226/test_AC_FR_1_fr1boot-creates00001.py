@@ -128,10 +128,15 @@ def test_AC_FR_1():
             f"manifest deps must be installed into the venv; import failed:\n{check.stderr}"
         )
 
-        # THEN: the resolver self-check passed (reported the clone, not /root).
-        assert "resolver ->" in r.stdout and str(clone) in r.stdout, (
-            f"bootstrap must verify the resolver resolves the clone; got:\n{r.stdout}"
+        # THEN: BOTH resolvers (shell + python) self-check to THIS clone, not /root.
+        assert "resolver (sh) ->" in r.stdout and "resolver (py) ->" in r.stdout, (
+            f"bootstrap must verify both resolvers resolve the clone; got:\n{r.stdout}"
         )
+        for marker in ("resolver (sh) ->", "resolver (py) ->"):
+            line = next(l for l in r.stdout.splitlines() if marker in l)
+            assert str(clone) in line, (
+                f"{marker} must resolve THIS clone; got: {line}"
+            )
         assert "/root" not in r.stdout.replace(str(clone), ""), (
             "bootstrap output must not carry an author /root literal"
         )
