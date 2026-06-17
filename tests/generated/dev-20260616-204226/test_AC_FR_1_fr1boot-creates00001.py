@@ -96,7 +96,7 @@ def test_AC_FR_1():
     WHEN:  the user runs the executable bootstrap
     THEN:  the bootstrap creates the environment (venv), installs the required dependencies from the manifest, and verifies the resolver works; it exits 0 with a clear success message; it is non-destructive — it does NOT clobber an existing home without explicit opt-in and documents how to restore
     """
-    with tempfile.TemporaryDirectory(prefix="fr1-") as td:
+    with tempfile.TemporaryDirectory(prefix="fr1-", dir=_roomy_tmpbase()) as td:
         root = Path(td)
         clone = _make_fresh_clone(root)
         home = root / "fakehome"
