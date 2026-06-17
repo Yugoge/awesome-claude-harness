@@ -35,52 +35,68 @@ HOOK_CHECK = {
 }
 
 
-def test_AC_WS6_1():
+def test_AC_WS6_1(tmp_path):
     r"""
     GIVEN: A working fresh clone under a non-root home (WS2 green)
     WHEN:  the user runs the in-repo guard demo scenario
     THEN:  the demo reproducibly shows a dangerous operation being blocked by the guard, then a grant-gated fix completing; it is re-runnable under a non-root home; the recorded terminal cast (if present) is a thin rendering and is NOT required for the demo to pass
     """
-    # Real body (HOOK_CHECK probe): run the in-repo guard demo TWICE under the
-    # current (non-root) home and assert the deterministic
-    # block-then-grant-then-complete sequence. The demo IS the substantive WS6
-    # deliverable; a recorded terminal cast is NOT required to pass.
+    # Real body (HOOK_CHECK probe): run the in-repo guard demo TWICE under a
+    # SYNTHETIC non-root $HOME with NO .claude present and the harness-home env
+    # hints unset, then assert the deterministic block-then-grant-then-complete
+    # sequence. The demo IS the substantive WS6 deliverable; a recorded terminal
+    # cast is NOT required to pass.
     assert _DEMO.exists(), f"guard demo script missing: {_DEMO}"
+    # The README documents direct execution; the executable bit must survive.
+    assert os.access(_DEMO, os.X_OK), f"guard demo is not executable: {_DEMO}"
 
-    # The demo never depends on root; if pytest is somehow run as root the demo
-    # still resolves its own ephemeral home and behaves identically (it isolates
-    # each guard probe with env -i). Run it twice to prove re-runnability and
-    # determinism (same exit + same narrated milestones each run).
+    # Synthetic home that does NOT contain a .claude and is NOT the author home.
+    # CLAUDE_HOME / CLAUDE_PROJECT_DIR are cleared so the demo cannot lean on an
+    # inherited hint — it must resolve its own ephemeral demo home structurally.
+    fake_home = tmp_path / "fakehome"
+    fake_home.mkdir()
+    env = {k: v for k, v in os.environ.items()
+           if k not in ("CLAUDE_HOME", "CLAUDE_PROJECT_DIR")}
+    env["HOME"] = str(fake_home)
+    env["TMPDIR"] = "/tmp"  # keep the demo home off any author RAM disk
+
+    # Run twice to prove re-runnability + determinism. Execute the script
+    # DIRECTLY (not via `bash`) so a lost executable bit would fail here too.
     runs = []
-    for i in range(2):
+    for _ in range(2):
         proc = subprocess.run(
-            ["bash", str(_DEMO)],
-            capture_output=True, text=True, cwd=str(_REPO),
+            [str(_DEMO)],
+            capture_output=True, text=True, cwd=str(_REPO), env=env,
         )
         runs.append(proc)
 
+    # Exact milestones — block-then-grant-then-complete, not broad success text.
+    required_milestones = [
+        "by structural sentinel",            # the resolver consumed (not hardcoded)
+        "BLOCKED by tool-policy.v1",         # the guard's OWN policy-deny marker
+        "BLOCKED (exit 2) by the guard",     # block half confirmed
+        "ALLOWED (exit 0) by the guard",     # grant half confirmed
+        "Fix write landed on disk",          # complete half confirmed
+        "PASS — dangerous op BLOCKED",       # final verdict
+    ]
     for i, proc in enumerate(runs):
         combined = proc.stdout + proc.stderr
         assert proc.returncode == HOOK_CHECK["expect_exit"], (
             f"run {i+1}: demo exit {proc.returncode} != expected "
             f"{HOOK_CHECK['expect_exit']}\n{combined[-800:]}"
         )
-        # Block half: the guard's OWN fail-closed marker must appear.
-        assert "BLOCKED by tool-policy.v1" in combined, (
-            f"run {i+1}: demo did not show the guard blocking the dangerous op\n"
-            f"{combined[-800:]}"
-        )
-        # Grant + complete half: the authorized fix must land.
-        assert "Fix write landed on disk" in combined, (
-            f"run {i+1}: demo did not complete the grant-gated fix\n"
-            f"{combined[-800:]}"
-        )
-        assert "PASS" in combined, (
-            f"run {i+1}: demo did not report PASS\n{combined[-800:]}"
+        for milestone in required_milestones:
+            assert milestone in combined, (
+                f"run {i+1}: demo missing milestone {milestone!r}\n{combined[-800:]}"
+            )
+        # No step may have failed or been skipped (which would mean a vacuous pass).
+        assert "FAIL" not in combined, f"run {i+1}: demo printed FAIL\n{combined[-800:]}"
+        assert "SKIPPED" not in combined, (
+            f"run {i+1}: demo printed SKIPPED\n{combined[-800:]}"
         )
 
-    # Determinism: both runs reach the same milestone and exit code (a cast is
-    # NOT consulted — the script alone proves the scenario).
+    # Determinism: both runs reach the same exit code (a cast is NOT consulted —
+    # the script alone proves the scenario).
     assert runs[0].returncode == runs[1].returncode == 0, (
         "demo is not deterministically green across re-runs: "
         f"{runs[0].returncode} vs {runs[1].returncode}"
