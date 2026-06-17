@@ -13,11 +13,13 @@
 # test-writer agent spec for smoke/shell-verified ACs. Remove the
 # TEST_INCOMPLETE sentinel below when the real body is in place.
 
+import json
 import os
 import re
 import shutil
 import subprocess
 import tempfile
+from datetime import datetime, timedelta
 from pathlib import Path
 
 AC_UID = "ws4opt-noptcrash0001"
