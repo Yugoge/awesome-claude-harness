@@ -83,7 +83,23 @@ def test_AC_WS1_8():
     WHEN:  the guard normalizes a protected path on a non-root home
     THEN:  the tilde-variant generation is GENERIC: any path under the actual user home (Path.home() / $HOME) gets its ~/relative variant added, and ancestor stop-roots treat the real user home consistently — no /root-specific behavior remains
     """
-    # TODO(dev): replace the line below with the real test body. While the
-    # TEST_INCOMPLETE sentinel is present the test will hard-fail, marking
-    # the AC as unimplemented for QA Phase 5.
-    pytest.fail(f"TEST_INCOMPLETE: {AC_UID} — GIVEN hooks/lib/runtime_guard.py protected-path normalization (codex #4, verify by Read around… / WHEN the guard normalizes a protected path on a non-root home / THEN the tilde-variant generation is GENERIC: any path under the actual user home (Path.home() / $HOME) gets its ~…")
+    import json
+    r = _run_guard_probe()
+    assert r.returncode == 0, f"guard probe crashed: stdout={r.stdout!r} stderr={r.stderr!r}"
+    data = json.loads(r.stdout.strip().splitlines()[-1])
+
+    # The ~/relative variant IS generated for a path under a NON-ROOT $HOME.
+    assert data["tilde"] == "~/.config/claude/protected-runtime.json", (
+        f"generic ~/-variant not generated on a non-root home: {data['tilde']!r}")
+    assert "~/.config/claude/protected-runtime.json" in data["variants"], (
+        f"~/-variant missing from the protected variant set: {data['variants']}")
+
+    # The guard PROTECTS the path written either way (tilde form + absolute form).
+    assert data["verdict_tilde"] == "BLOCK", (
+        f"destructive op on the ~/-form must be BLOCKED; got {data['verdict_tilde']}")
+    assert data["verdict_abs"] == "BLOCK", (
+        f"destructive op on the /home/alice absolute form must be BLOCKED; got {data['verdict_abs']}")
+
+    # No /root-specific behavior remains in the tilde generator's executable body.
+    assert data["root_literal_in_exec_body"] is False, (
+        "a /root-specific literal still exists in _home_tilde_variant's executable body")
