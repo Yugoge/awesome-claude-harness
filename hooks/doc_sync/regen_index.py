@@ -55,37 +55,61 @@ def _build_stats(dir_path: Path) -> dict:
     return {'total': total, 'dirs': dirs}
 
 
-# Top-level tree entries from build_tree look like "├── `name` - desc" (files)
-# or "├── name/" (directories), with NO leading tree-pipe indent. Nested entries
-# carry a leading "│   " / spaces. This matches a TOP-LEVEL entry and captures
-# its basename so untracked/gitignored top-level entries can be pruned without
-# editing tree.py (out of WS5 scope).
-_TOPLEVEL_FILE_RE = re.compile(r'^[├└]── `([^`]+)`')
-_TOPLEVEL_DIR_RE = re.compile(r'^[├└]── ([^`/][^/]*)/$')
+# A build_tree line is "<indent><connector> <body>", where <indent> is N
+# repetitions of a 4-char unit ("│   " or "    "), <connector> is "├── "/"└── ",
+# and <body> is either "`name` - desc" (a file) or "name/" (a directory). Parsing
+# the indent gives the entry's depth; a name stack reconstructs each entry's full
+# relative path so it can be checked against the git-tracked relpath set — pruning
+# nested untracked/gitignored entries WITHOUT editing tree.py (out of WS5 scope).
+_TREE_LINE_RE = re.compile(r'^((?:(?:│   )|(?:    ))*)([├└]── )(.*)$')
+
+
+def _parse_tree_entry(line: str):
+    """Return (depth, name, is_dir) for a build_tree line, or None if unparseable."""
+    m = _TREE_LINE_RE.match(line)
+    if not m:
+        return None
+    depth = len(m.group(1)) // 4
+    body = m.group(3)
+    if body.endswith('/'):
+        return depth, body[:-1], True
+    fm = re.match(r'^`([^`]+)`', body)
+    if fm:
+        return depth, fm.group(1), False
+    return None
 
 
 def _filter_tree_published(tree: list[str], dir_path: Path) -> list[str]:
-    """Drop top-level tree lines (and their nested children) for entries that are
-    not git-published, so the INDEX tree lists only tracked files (AC-WS5-1).
-    Degrades to a no-op when git was not consulted (tracked_names -> None)."""
-    published = tracked_names(dir_path)
-    if published is None:
+    """Drop tree lines (at any depth) for entries that are not git-published, so
+    the INDEX tree lists only tracked files (AC-WS5-1). A directory is kept iff it
+    contains at least one tracked file. Degrades to a no-op when git was not
+    consulted (tracked_relpaths -> None)."""
+    relpaths = tracked_relpaths(dir_path)
+    if relpaths is None:
         return tree
+    tracked_dirs = {rp.rsplit('/', 1)[0] for rp in relpaths if '/' in rp}
     kept: list[str] = []
-    skipping = False
+    stack: list[str] = []      # name stack: stack[d] is the ancestor name at depth d
+    keep_at: list[bool] = []   # keep_at[d] mirrors whether that ancestor was kept
     for line in tree:
-        m_file = _TOPLEVEL_FILE_RE.match(line)
-        m_dir = _TOPLEVEL_DIR_RE.match(line)
-        if m_file or m_dir:
-            name = m_file.group(1) if m_file else m_dir.group(1)
-            skipping = name not in published
-            if skipping:
-                continue
+        parsed = _parse_tree_entry(line)
+        if parsed is None:
             kept.append(line)
+            continue
+        depth, name, is_dir = parsed
+        del stack[depth:]
+        del keep_at[depth:]
+        rel = '/'.join(stack + [name])
+        if is_dir:
+            published = rel in tracked_dirs or any(
+                rp == rel or rp.startswith(rel + '/') for rp in relpaths)
         else:
-            # Nested line: keep it only if its top-level ancestor was kept.
-            if not skipping:
-                kept.append(line)
+            published = rel in relpaths
+        parent_kept = all(keep_at) if keep_at else True
+        stack.append(name)
+        keep_at.append(published)
+        if parent_kept and published:
+            kept.append(line)
     return kept
 
 
