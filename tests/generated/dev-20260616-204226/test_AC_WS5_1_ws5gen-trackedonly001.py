@@ -27,13 +27,64 @@ HOOK_CHECK = {
 }
 
 
+import importlib
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+
+_REPO = Path(__file__).resolve().parents[2]
+
+
+def _load(modname):
+    if str(_REPO) not in sys.path:
+        sys.path.insert(0, str(_REPO))
+    return importlib.import_module(modname)
+
+
+def _git(args, cwd):
+    subprocess.run(['git', *args], cwd=cwd, check=True,
+                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+
+def _make_repo() -> Path:
+    d = Path(tempfile.mkdtemp(prefix='ws5-trackedonly-'))
+    _git(['init', '-q'], d)
+    _git(['config', 'user.email', 't@t'], d)
+    _git(['config', 'user.name', 't'], d)
+    (d / '.gitignore').write_text('ignored.json\n')
+    (d / 'tracked.py').write_text('"""A tracked script."""\n')
+    (d / 'ignored.json').write_text('{}\n')           # gitignored
+    (d / 'untracked.md').write_text('# Untracked\n')   # untracked, not ignored
+    sub = d / 'subdir'
+    sub.mkdir()
+    (sub / 'inner.py').write_text('"""Inner."""\n')
+    (sub / 'untracked_inner.py').write_text('"""Untracked inner."""\n')
+    _git(['add', 'tracked.py', '.gitignore', 'subdir/inner.py'], d)
+    _git(['commit', '-q', '-m', 'init'], d)
+    return d
+
+
 def test_AC_WS5_1():
     r"""
     GIVEN: A directory containing both tracked and gitignored/untracked files
     WHEN:  the doc-sync generator regenerates the INDEX/README auto-blocks
     THEN:  the generated list contains ONLY tracked/published files (respecting .gitignore / git ls-files), never gitignored or untracked files
     """
-    # TODO(dev): replace the line below with the real test body. While the
-    # TEST_INCOMPLETE sentinel is present the test will hard-fail, marking
-    # the AC as unimplemented for QA Phase 5.
-    pytest.fail(f"TEST_INCOMPLETE: {AC_UID} — GIVEN A directory containing both tracked and gitignored/untracked files / WHEN the doc-sync generator regenerates the INDEX/README auto-blocks / THEN the generated list contains ONLY tracked/published files (respecting .gitignore / git ls-files), never gitign…")
+    regen_readme = _load('hooks.doc_sync.regen_readme')
+    regen_index = _load('hooks.doc_sync.regen_index')
+    d = _make_repo()
+
+    # README auto-block: file listing + subdir listing.
+    readme_files = '\n'.join(regen_readme._list_files(d))
+    assert 'tracked.py' in readme_files, 'tracked file must be listed'
+    assert 'ignored.json' not in readme_files, 'gitignored file leaked into README'
+    assert 'untracked.md' not in readme_files, 'untracked file leaked into README'
+
+    # INDEX tree: tracked at any depth only.
+    regen_index.regen_index(d)
+    idx = (d / 'INDEX.md').read_text()
+    assert 'tracked.py' in idx and 'inner.py' in idx, 'tracked entries must appear in INDEX'
+    assert 'ignored.json' not in idx, 'gitignored file leaked into INDEX'
+    assert 'untracked.md' not in idx, 'top-level untracked file leaked into INDEX'
+    assert 'untracked_inner.py' not in idx, 'nested untracked file leaked into INDEX'
