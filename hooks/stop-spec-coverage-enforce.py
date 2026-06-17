@@ -34,8 +34,14 @@ from collections import deque
 from pathlib import Path
 from typing import Optional
 
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib"))
+import claude_home  # noqa: E402  (shared WS1 harness-home resolver)
 
-SPEC_VERIFY = "/root/.claude/scripts/spec-verify/spec-verify.py"
+# Relative path of the spec-verify helper under the resolved harness home. The
+# absolute path is resolved at runtime via claude_home so a fresh non-root clone
+# (whose home is NOT /root/.claude) still finds — or fails CLOSED on — its
+# verifier.
+SPEC_VERIFY_RELPATH = "scripts/spec-verify/spec-verify.py"
 
 # Matches docs/dev/specs/spec-YYYYMMDD-HHMMSS in monolith or split-dir paths.
 # Captures the bare spec_id (e.g. "spec-20260424-090315") with no trailing
