@@ -47,7 +47,9 @@ If `BULK=true`: `TASK_ID` may remain empty; changelog-analyst operates in bulk m
 If `FORCE=false` AND `BULK=false`:
 
 Resolve the close-report path via the helper script (which probes
-subproject docs/dev/ first, then falls back to `/root/docs/dev/` — see
+subproject docs/dev/ first, then falls back to the resolved control-root
+`docs/dev/` — `${CONTROL_ROOT}/docs/dev/`, where `CONTROL_ROOT` resolves to
+the harness/project root, not an author-absolute literal — see
 `scripts/resolve-close-report.sh`). The script exits 1 when no candidate
 file exists; `CLOSE_REPORT` still holds the fallback path for the error
 message in check 1 below.
