@@ -362,7 +362,10 @@ def main(argv):
     # the scan root itself (the live-repo case where root IS the git work tree).
     responsible = responsible_surface(
         baseline_repo or root, baseline_ref, cycle_files)
-    findings = scan(root, responsible)
+    # Extensionless shebang scripts are promoted into scope ONLY for cycle files
+    # (this cycle's own scripts), never for a pre-existing baseline-tracked
+    # extensionless script the cycle did not touch (out-of-cycle residual).
+    findings = scan(root, responsible, promote_extensionless=set(cycle_files))
     doc = {
         "gate": "ws2-zero-literal-integration",
         "root": root,
