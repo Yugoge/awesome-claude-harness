@@ -195,7 +195,7 @@ esac
 trap 'rm -f "$_CHAIN_B_SENTINEL_PATH" 2>/dev/null' EXIT INT TERM
 
 # --- Push-gate: verify a valid session commit token exists ---
-_REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || echo /root)"
+_REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || echo "$_CLAUDE_HOME_FALLBACK")"
 _REPO_HASH="$(python3 -c "import hashlib,os; print(hashlib.sha256(os.path.realpath('${_REPO_ROOT}').encode()).hexdigest()[:16])")"
 _BRANCH_RAW="$(git rev-parse --abbrev-ref HEAD 2>/dev/null)"
 _BRANCH="$(python3 -c "print('${_BRANCH_RAW}'.replace('/', '__'))")"
