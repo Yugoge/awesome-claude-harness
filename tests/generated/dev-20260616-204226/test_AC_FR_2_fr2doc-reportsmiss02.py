@@ -32,6 +32,34 @@ HOOK_CHECK = {
     "expect_exit": 0
 }
 
+# Repo root = <home>; this test file lives at <home>/tests/generated/<task>/.
+_HOME = Path(__file__).resolve().parents[3]
+
+
+def _make_clone(dst: Path) -> Path:
+    """Minimal structural-sentinel clone carrying the resolver + doctor + manifest."""
+    clone = dst / "dot-claude"
+    (clone / "hooks" / "lib").mkdir(parents=True)
+    (clone / "policies").mkdir()
+    (clone / "scripts").mkdir()
+    (clone / "settings.json").write_text("{}\n")
+    for rel in ("hooks/lib/claude_home.sh", "hooks/lib/claude_home.py",
+                "scripts/doctor", "requirements.txt"):
+        src = _HOME / rel
+        assert src.exists(), f"missing source artifact: {rel}"
+        shutil.copy2(src, clone / rel)
+    for rel in ("hooks/lib/claude_home.sh", "hooks/lib/claude_home.py", "scripts/doctor"):
+        (clone / rel).chmod(0o755)
+    return clone
+
+
+def _run_doctor(clone: Path, venv: Path, home: Path):
+    env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "HOME": str(home)}
+    return subprocess.run(
+        [str(clone / "scripts" / "doctor"), "--venv", str(venv)],
+        cwd=str(clone), env=env, capture_output=True, text=True, timeout=120,
+    )
+
 
 def test_AC_FR_2():
     r"""
@@ -39,7 +67,38 @@ def test_AC_FR_2():
     WHEN:  the user runs the doctor/preflight
     THEN:  doctor reports each missing REQUIRED dependency with a clear message BEFORE the first run, and exits nonzero when a required dep is missing / exits 0 when all required deps are present
     """
-    # TODO(dev): replace the line below with the real test body. While the
-    # TEST_INCOMPLETE sentinel is present the test will hard-fail, marking
-    # the AC as unimplemented for QA Phase 5.
-    pytest.fail(f"TEST_INCOMPLETE: {AC_UID} — GIVEN A fresh machine MISSING one or more required dependencies (e.g. pytest, jsonschema, pyyam… / WHEN the user runs the doctor/preflight / THEN doctor reports each missing REQUIRED dependency with a clear message BEFORE the first run, and exits nonzero…")
+    with tempfile.TemporaryDirectory(prefix="fr2-") as td:
+        root = Path(td)
+        clone = _make_clone(root)
+        home = root / "fakehome"
+
+        # GIVEN: an EMPTY venv (required deps missing).
+        empty_venv = root / "emptyvenv"
+        mk = subprocess.run(["python3", "-m", "venv", str(empty_venv)],
+                            capture_output=True, text=True, timeout=120)
+        assert mk.returncode == 0, f"could not create the probe venv:\n{mk.stderr}"
+
+        # WHEN: doctor inspects the empty venv -> THEN it NAMES each missing dep + exits nonzero.
+        r_missing = _run_doctor(clone, empty_venv, home)
+        assert r_missing.returncode != 0, (
+            f"doctor must exit nonzero when required deps are missing; "
+            f"got {r_missing.returncode}\n{r_missing.stdout}\n{r_missing.stderr}"
+        )
+        out = r_missing.stdout + r_missing.stderr
+        for dep in ("pytest", "jsonschema", "pyyaml"):
+            assert dep in out, f"doctor must name the missing dependency '{dep}'; got:\n{out}"
+        assert "MISSING" in out, "doctor must clearly flag missing deps"
+
+        # GIVEN: a populated venv -> WHEN doctor runs -> THEN it exits 0.
+        full_venv = root / "fullvenv"
+        subprocess.run(["python3", "-m", "venv", str(full_venv)], check=True, timeout=120)
+        inst = subprocess.run(
+            [str(full_venv / "bin" / "pip"), "install", "-r", str(clone / "requirements.txt")],
+            capture_output=True, text=True, timeout=300,
+        )
+        assert inst.returncode == 0, f"manifest install failed:\n{inst.stderr}"
+        r_ok = _run_doctor(clone, full_venv, home)
+        assert r_ok.returncode == HOOK_CHECK["expect_exit"], (
+            f"doctor must exit {HOOK_CHECK['expect_exit']} when all required deps present; "
+            f"got {r_ok.returncode}\n{r_ok.stdout}\n{r_ok.stderr}"
+        )
