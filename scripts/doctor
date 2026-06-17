@@ -16,8 +16,8 @@
 set -uo pipefail
 
 # Resolve the harness home from THIS script's own location (it lives at
-# <home>/scripts/doctor, so the resolver is at ../hooks/lib). Never the author
-# literal /root: if the resolver cannot locate the home we say so and fail.
+# <home>/scripts/doctor, so the resolver is at ../hooks/lib). Never an
+# author-absolute home: if the resolver cannot locate the home we say so.
 SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 LIB_DIR="$SELF_DIR/../hooks/lib"
 # shellcheck source=/dev/null
