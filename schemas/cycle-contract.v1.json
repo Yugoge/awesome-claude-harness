@@ -101,7 +101,7 @@
           "schema_name": {
             "type": "string",
             "minLength": 1,
-            "description": "Key into /root/.claude/schemas/registry.json"
+            "description": "Key into ~/.claude/schemas/registry.json"
           },
           "max_retries": {
             "type": "integer",
