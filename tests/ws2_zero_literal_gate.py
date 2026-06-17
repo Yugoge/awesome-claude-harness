@@ -185,21 +185,28 @@ def md_class(line: str, literal: str) -> str:
     return "plain"
 
 
-def responsible_surface(root: str, baseline_ref: str, cycle_files):
+def responsible_surface(baseline_repo: str, baseline_ref: str, cycle_files):
     """Return the set of repo-relative paths THIS cycle is responsible for, or
     None to scan everything (no scoping).
 
-    responsible = files tracked at <baseline_ref>  ∪  cycle_files
+    responsible = files tracked at <baseline_ref> in <baseline_repo>  ∪  cycle_files
     A path absent at baseline AND not a cycle file = a foreign concurrent
     addition and is EXCLUDED. Returns None (no narrowing) when baseline_ref is
-    empty, the root is not a git work tree, or the ls-tree query fails — so the
-    rendered-clone (non-git) path keeps scanning the whole portable tree.
+    empty, <baseline_repo> is not a git work tree, or the ls-tree query fails —
+    so the rendered-clone (non-git) path with no baseline keeps scanning the
+    whole portable tree.
+
+    NOTE: baseline membership is resolved against <baseline_repo> (the real git
+    repo), which may DIFFER from the scan <root> (a rendered, non-git copy whose
+    paths mirror the repo's). Paths from `git ls-tree` are repo-relative and so
+    match the scan's repo-relative `rel`, regardless of where the copy lives.
     """
     if not baseline_ref:
         return None
     try:
         out = subprocess.run(
-            ["git", "-C", root, "ls-tree", "-r", "--name-only", baseline_ref],
+            ["git", "-C", baseline_repo, "ls-tree", "-r", "--name-only",
+             baseline_ref],
             capture_output=True, text=True, check=True)
     except (OSError, subprocess.CalledProcessError):
         return None
