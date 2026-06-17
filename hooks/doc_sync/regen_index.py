@@ -148,7 +148,7 @@ def _extract_preserved(old: str, dir_name: str) -> str:
 
 
 def _build_index_content(dir_path: Path, convention: str, preserved: str = '') -> str:
-    tree = build_tree(dir_path, max_depth=3)
+    tree = _filter_tree_published(build_tree(dir_path, max_depth=3), dir_path)
     ts = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
     lines = [
         f'# {dir_path.name}',
