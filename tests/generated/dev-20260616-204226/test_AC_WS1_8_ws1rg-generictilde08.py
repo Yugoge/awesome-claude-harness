@@ -49,6 +49,12 @@ tilde = rg._home_tilde_variant("/home/alice/.config/claude/protected-runtime.jso
 # home form must be BLOCKED.
 verdict_tilde = rg.evaluate("rm -f ~/.config/claude/protected-runtime.json")[0]
 verdict_abs = rg.evaluate("rm -f /home/alice/.config/claude/protected-runtime.json")[0]
+# Ancestor-dir protection (codex): the proper ancestor DIRECTORIES of the data
+# file must be in the variant set AND a destructive op on the ~/-ancestor and the
+# absolute-ancestor must BLOCK, on a NON-ROOT home (the _config_ancestor_dirs
+# generic-tilde change). Use rm -rf of the ancestor dir.
+verdict_anc_tilde = rg.evaluate("rm -rf ~/.config/claude")[0]
+verdict_anc_abs = rg.evaluate("rm -rf /home/alice/.config/claude")[0]
 # Source check: no /root-specific LITERAL remains in the EXECUTABLE body of the
 # tilde generator (strip the docstring, which may mention /root in prose).
 src = inspect.getsource(rg._home_tilde_variant)
