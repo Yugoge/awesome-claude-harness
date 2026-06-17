@@ -1352,11 +1352,35 @@ def _load_config():
 
 # ── STEP 0: config self-protection (hardcoded, generic path) ─────────────────
 
+def _home_tilde_variant(path: str) -> Optional[str]:
+    """Return the ``~/``-prefixed form of ``path`` iff it lives under the real
+    user home (``$HOME`` / ``Path.home()``), else None.
+
+    Generic (WS1 codex #4 — no ``/root``-specific branch): on a non-root home
+    (``/home/alice/...``) the ``~/relative`` variant is generated exactly as it
+    was for ``/root/...``, so the guard protects the same path written either
+    way regardless of which user runs it.
+    """
+    home = os.environ.get("HOME")
+    if not home:
+        try:
+            home = os.path.expanduser("~")
+        except Exception:
+            return None
+    if not home or home == "~":
+        return None
+    home_prefix = home.rstrip("/") + "/"
+    if path.startswith(home_prefix):
+        return "~/" + path[len(home_prefix):]
+    return None
+
+
 def _config_path_variants() -> set:
     p = DATA_FILE_PATH
     variants = {p, os.path.normpath(p)}
-    if p.startswith("/root/"):
-        variants.add(p.replace("/root/", "~/", 1))
+    tilde = _home_tilde_variant(p)
+    if tilde:
+        variants.add(tilde)
     return variants
 
 
