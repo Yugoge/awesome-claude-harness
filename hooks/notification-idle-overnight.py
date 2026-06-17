@@ -33,7 +33,36 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-LOG_PATH = Path("/root/.claude/logs/overnight-idle.jsonl")
+_HOOKS_DIR = Path(__file__).resolve().parent
+if str(_HOOKS_DIR) not in sys.path:
+    sys.path.insert(0, str(_HOOKS_DIR))
+
+try:  # WS1 shared harness-home resolver (consume resolve_optional semantics).
+    from lib import claude_home  # noqa: E402
+except Exception:  # pragma: no cover - fail-soft when the resolver is absent
+    claude_home = None  # type: ignore[assignment]
+
+# Relative location of the idle log under the harness home. Routed through the
+# WS1 resolver at runtime (see _log_path) instead of the author literal
+# /root/.claude so a fresh non-root clone logs under its OWN home.
+_LOG_RELPATH = "logs/overnight-idle.jsonl"
+
+
+def _log_path() -> Path:
+    """Resolve the idle-log path via the WS1 harness-home resolver.
+
+    Order: resolved harness home -> CLAUDE_PROJECT_DIR/.claude -> cwd/.claude.
+    Never the author literal /root. This is an OPTIONAL observability sink: a
+    Notification hook is exit-0-only and must never crash, so an unresolved
+    home degrades to the project dir rather than failing.
+    """
+    if claude_home is not None:
+        home = claude_home.resolve()
+        if home is not None:
+            return home / _LOG_RELPATH
+        return claude_home.project_dir() / ".claude" / _LOG_RELPATH
+    base = Path(os.environ.get("CLAUDE_PROJECT_DIR", os.getcwd())) / ".claude"
+    return base / _LOG_RELPATH
 
 
 def _read_stdin() -> dict:
