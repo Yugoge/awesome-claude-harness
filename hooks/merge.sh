@@ -112,7 +112,8 @@ if git diff --quiet "$BRANCH_NAME" 2>/dev/null; then
   fi
 
   # Cleanup overnight-state files referencing this branch
-  PROJ="${CLAUDE_PROJECT_DIR:-/root}"
+  # WS1: default to the resolved harness home, never the author literal /root.
+  PROJ="${CLAUDE_PROJECT_DIR:-${CLAUDE_HOME}}"
   for sf in "$PROJ/.claude"/overnight-state-*.json; do
     [ -f "$sf" ] || continue
     STATE_BRANCH=$(python3 -c "
