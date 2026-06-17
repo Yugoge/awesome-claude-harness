@@ -29,6 +29,28 @@ HOOK_CHECK = {
     "expect_exit": 0
 }
 
+# Repo root = <home>; this test file lives at <home>/tests/generated/<task>/.
+_HOME = Path(__file__).resolve().parents[3]
+_MANIFEST = _HOME / "requirements.txt"
+
+
+def _parse_requirements(text: str) -> dict:
+    """Parse a requirements.txt into {normalized-name: spec-line}.
+
+    Skips blank lines and comments; normalizes the distribution name (lowercase,
+    strip the version specifier) so PyYAML/pyyaml compare equal.
+    """
+    out = {}
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        # name is everything up to the first version operator / marker / comment.
+        name = re.split(r"[<>=!~;\[\s]", line, maxsplit=1)[0].strip().lower()
+        if name:
+            out[name] = line
+    return out
+
 
 def test_AC_FR_3():
     r"""
@@ -36,7 +58,12 @@ def test_AC_FR_3():
     WHEN:  it is read
     THEN:  it lists the dependencies the generated tests need beyond the test runner alone — at minimum the test runner (pytest), the schema library (jsonschema), and the yaml library (pyyaml) — each as a parseable manifest entry
     """
-    # TODO(dev): replace the line below with the real test body. While the
-    # TEST_INCOMPLETE sentinel is present the test will hard-fail, marking
-    # the AC as unimplemented for QA Phase 5.
-    pytest.fail(f"TEST_INCOMPLETE: {AC_UID} — GIVEN The machine-readable dependency manifest (requirements.txt) / WHEN it is read / THEN it lists the dependencies the generated tests need beyond the test runner alone — at minimum the test runner…")
+    assert _MANIFEST.is_file(), f"dependency manifest missing at {_MANIFEST}"
+    parsed = _parse_requirements(_MANIFEST.read_text())
+    for dep in ("pytest", "jsonschema", "pyyaml"):
+        assert dep in parsed, (
+            f"requirements.txt must list '{dep}' as a parseable entry; got: {sorted(parsed)}"
+        )
+    # Each required entry must be a parseable, non-empty manifest line.
+    for dep in ("pytest", "jsonschema", "pyyaml"):
+        assert parsed[dep], f"entry for '{dep}' must be a non-empty manifest line"
