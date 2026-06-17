@@ -13,6 +13,9 @@
 # test-writer agent spec for smoke/shell-verified ACs. Remove the
 # TEST_INCOMPLETE sentinel below when the real body is in place.
 
+import re
+from pathlib import Path
+
 import pytest
 
 AC_UID = "fr3man-includesdeps3"
