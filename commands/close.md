@@ -240,7 +240,7 @@ The orchestrator MUST emit a TodoWrite call updating the Step-N todo item to `in
 
 - **Closed-task path** (a `dev-report-<TASK_ID>.json` exists): read the `dev.files_modified` array (top-level non-null list per the dev-report contract); use that list verbatim as `<cycle-diff-file-list>`.
 - **do-report path** (`DO_REPORT` is set, i.e. `do-report-<TASK_ID>.json` exists): read `do.files_modified` array verbatim as `<cycle-diff-file-list>`. Do NOT fall through to the Irregular path.
-- **Irregular path** (no dev-report-<TASK_ID>.json and no do-report — e.g., hand-edits): run `git diff --name-only` against the relevant repo's cycle commit range to compute the file list. For nested-`.claude` edits the relevant repo is the nested git repo at `/root/.claude` (working-tree root); for parent-repo edits use `/root`.
+- **Irregular path** (no dev-report-<TASK_ID>.json and no do-report — e.g., hand-edits): run `git diff --name-only` against the relevant repo's cycle commit range to compute the file list. For nested-`.claude` edits the relevant repo is the nested git repo at `~/.claude` (working-tree root); for parent-repo edits use the parent-repo working-tree root (`$HOME`, resolved — not an author-absolute literal).
 - If both paths yield an empty list, record `<cycle-diff-file-list>=` (empty) and proceed with dispatch — inspectors will return findings=[] and Step 5 will treat all cleanliness branches as non-blocking.
 
 **Parallel detection check** — before dispatch, evaluate whether a parallel-dev cycle was detected:
