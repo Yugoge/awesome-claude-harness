@@ -27,13 +27,54 @@ HOOK_CHECK = {
 }
 
 
+import json
+import os
+import shutil
+import subprocess
+import tempfile
+from pathlib import Path
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+RENDERER = REPO_ROOT / "scripts" / "install" / "render-settings"
+TEMPLATE = REPO_ROOT / "settings.template.json"
+
+
+def _run(template_path, out_path):
+    return subprocess.run(
+        ["python3", str(RENDERER), "/tmp/ws3-2-home/.claude",
+         "--template", str(template_path), "--out", str(out_path)],
+        capture_output=True, text=True,
+    )
+
+
 def test_AC_WS3_2():
     r"""
     GIVEN: The renderer about to apply a rendered settings file
     WHEN:  the rendered output either fails to parse OR is missing required hook wiring
     THEN:  the renderer ABORTS without applying (never partially applies); the live settings.json is left unchanged
     """
-    # TODO(dev): replace the line below with the real test body. While the
-    # TEST_INCOMPLETE sentinel is present the test will hard-fail, marking
-    # the AC as unimplemented for QA Phase 5.
-    pytest.fail(f"TEST_INCOMPLETE: {AC_UID} — GIVEN The renderer about to apply a rendered settings file / WHEN the rendered output either fails to parse OR is missing required hook wiring / THEN the renderer ABORTS without applying (never partially applies); the live settings.json is left unchanged")
+    with tempfile.TemporaryDirectory(prefix="ws3-2.") as td:
+        td = Path(td)
+        live = td / "settings.json"
+        live.write_text('{"LIVE":"unchanged"}\n')
+        before = live.read_bytes()
+
+        # (a) Template that renders to invalid JSON -> abort nonzero, live unchanged.
+        bad = td / "bad-template.json"
+        bad.write_text(TEMPLATE.read_text()[:-3])  # truncate -> invalid JSON
+        proc = _run(bad, live)
+        assert proc.returncode != 0, "renderer must exit nonzero on invalid JSON render"
+        assert live.read_bytes() == before, "live settings.json was modified despite a bad render"
+
+        # (b) Template missing required hook wiring -> abort, live unchanged.
+        tpl = json.loads(TEMPLATE.read_text())
+        for ev in tpl.get("hooks", {}).values():
+            for g in ev:
+                g["hooks"] = [h for h in g.get("hooks", [])
+                              if "pretool-tool-policy.py" not in h.get("command", "")]
+        drop = td / "drop-hook-template.json"
+        drop.write_text(json.dumps(tpl))
+        proc = _run(drop, live)
+        assert proc.returncode != 0, "renderer must exit nonzero when a required hook is dropped"
+        assert "required hook" in proc.stderr.lower(), proc.stderr
+        assert live.read_bytes() == before, "live settings.json was modified despite a dropped-hook render"

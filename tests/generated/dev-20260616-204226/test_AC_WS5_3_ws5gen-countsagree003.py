@@ -32,7 +32,7 @@ import re
 import sys
 from pathlib import Path
 
-_REPO = Path(__file__).resolve().parents[2]
+_REPO = Path(__file__).resolve().parents[3]
 
 
 def _load(modname):
