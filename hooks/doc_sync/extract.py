@@ -44,7 +44,7 @@ def _parse_frontmatter(text: str) -> str | None:
     return None
 
 
-def _extract_md_desc(text: str) -> str:
+def _extract_md_desc(text: str, file_path: Path | None = None) -> str:
     desc = _parse_frontmatter(text)
     if desc:
         return desc
@@ -52,7 +52,11 @@ def _extract_md_desc(text: str) -> str:
         stripped = line.strip()
         if stripped.startswith('# '):
             return stripped[2:].strip()
-    return 'No description'
+    # AC-WS5-2: never emit the placeholder "No description" for a published file.
+    # Fall back to the document's own name so the list item is self-describing.
+    if file_path is not None:
+        return f'{file_path.stem} document'
+    return 'Markdown document'
 
 
 def _check_single_line_docstring(s: str) -> str | None:
