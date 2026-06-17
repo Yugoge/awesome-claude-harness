@@ -279,6 +279,10 @@ def _check_read_path(role_pol: dict, target: Optional[str]) -> Tuple[bool, str]:
 
 
 def _fail_open_or_closed(role: str, reason: str) -> Tuple[bool, str]:
+    # WS1: ALLOWED_TYPES_FALLBACK is now empty, so EVERY role — including dev —
+    # fails CLOSED on a missing/unparseable policy. The branch is retained only
+    # so a future deliberate grace-list (if any) would be explicit, never the
+    # historical implicit dev fail-open.
     if role in ALLOWED_TYPES_FALLBACK:
         return (True, f"fail-safe-{reason}")
     return (False, f"fail-closed-{reason}")
