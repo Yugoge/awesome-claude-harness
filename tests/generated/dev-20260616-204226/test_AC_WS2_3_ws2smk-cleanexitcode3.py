@@ -33,7 +33,24 @@ def test_AC_WS2_3():
     WHEN:  it checks exit codes and stderr across required probes (CLEAN-EXIT assertion)
     THEN:  required security probes never return 1/126/127; allowed probes return 0; blocked probes return 2; stderr contains no unresolved /root/.claude or command-not-found diagnostics for required helpers
     """
-    # TODO(dev): replace the line below with the real test body. While the
-    # TEST_INCOMPLETE sentinel is present the test will hard-fail, marking
-    # the AC as unimplemented for QA Phase 5.
-    pytest.fail(f"TEST_INCOMPLETE: {AC_UID} — GIVEN The smoke test run on the fresh clone / WHEN it checks exit codes and stderr across required probes (CLEAN-EXIT assertion) / THEN required security probes never return 1/126/127; allowed probes return 0; blocked probes return 2; stderr con…")
+    # CLEAN-EXIT assertion: across required probes the smoke asserts allowed=0,
+    # blocked=2, and NEVER 1/126/127, with stderr free of unresolved
+    # /root/.claude or command-not-found diagnostics for required helpers. Each
+    # guard contributes a 'clean_exit' assertion summarizing its exit-code matrix.
+    import os
+    import sys
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    from _ws2_smoke import run_smoke, require_not_setup_error
+
+    rc, result = run_smoke()
+    require_not_setup_error(rc, result)
+
+    clean = [a for a in result["assertions"] if a["kind"] == "clean_exit"]
+    guards = {a["guard"] for a in clean}
+    assert {"tool-policy", "stop-spec-coverage", "claude-home-resolver"} <= guards, (
+        f"missing a guard's clean-exit case; saw {guards}")
+    failed = [a for a in clean if not a["pass"]]
+    assert not failed, (
+        "a guard's CLEAN-EXIT matrix failed (allowed!=0 / blocked!=2 / a "
+        "1|126|127 appeared / dirty stderr): "
+        + "; ".join(f"{a['guard']}: {a['detail']}" for a in failed))
