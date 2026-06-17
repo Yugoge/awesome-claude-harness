@@ -300,7 +300,15 @@ def _build_audit_row(state: dict, payload: dict, role: str, target: str, sr: dic
 
 
 def _persist_audit_row(row: dict) -> bool:
-    """Append a single JSONL row to the audit log; True iff fsync succeeded."""
+    """Append a single JSONL row to the audit log; True iff fsync succeeded.
+
+    The whole path (WS1 resolver -> mkdir -> open -> fsync) is wrapped in a
+    blanket except so a non-OSError resolver failure (e.g. the resolver raising
+    something other than OSError) degrades to a soft False — NOT a propagated
+    exception that would crash this PreToolUse security guard and bypass its
+    fail-closed block path. A False return on audit_required collapses the grant
+    to denied (is_self_repair_allowed), so audit failure stays fail-closed.
+    """
     try:
         audit_log = _self_repair_audit_log()
         audit_log.parent.mkdir(parents=True, exist_ok=True)
@@ -309,7 +317,7 @@ def _persist_audit_row(row: dict) -> bool:
             fh.flush()
             os.fsync(fh.fileno())
         return True
-    except OSError:
+    except Exception:
         return False
 
 
