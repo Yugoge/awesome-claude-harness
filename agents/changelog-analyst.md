@@ -126,7 +126,7 @@ handling are all unchanged).
 Run in BOTH repos:
 
 ```bash
-: "${CONTROL_ROOT:?CONTROL_ROOT must be set by /commit dispatch (defined at commands/commit.md Step 7 dispatch prompt; silent fallback to /root literal is forbidden per task 20260520-064430-0a2881 AC6)}"
+: "${CONTROL_ROOT:?CONTROL_ROOT must be set by /commit dispatch (defined at commands/commit.md Step 7 dispatch prompt; silent fallback to an author-home literal is forbidden per task 20260520-064430-0a2881 AC6)}"
 : "${NESTED_REPO:?NESTED_REPO must be set by /commit dispatch}"
 git -C "${CONTROL_ROOT}" status --porcelain=v1
 git -C "${NESTED_REPO}" status --porcelain=v1
