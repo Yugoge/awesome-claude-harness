@@ -26,6 +26,77 @@ HOOK_CHECK = {
     "expect_exit": 2
 }
 
+import json
+import os
+import shutil
+import subprocess
+import tempfile
+from pathlib import Path
+
+_REPO = Path(__file__).resolve().parents[3]
+_SPEC_TS = "20260616-120000"            # de-prefixed spec id timestamp
+_SPEC_ID = f"spec-{_SPEC_TS}"           # prefixed monolith id
+_SID = "ws1-6-session"
+
+
+def _make_spec_clone(with_verifier: bool, verifier_exit: int = 0) -> Path:
+    """Synthetic harness home with the real stop-spec hook + a /spec session.
+
+    Lays down: workflow bookmark (command=spec), a transcript JSONL with a
+    Write to docs/dev/specs/<SPEC_ID>.md, a de-prefixed views/ dir, and a
+    prefixed monolith. with_verifier controls whether scripts/spec-verify/
+    spec-verify.py exists (verifier_exit = its simulated exit code).
+    """
+    tmp_home = Path(tempfile.mkdtemp(prefix="ws1-stopspec-"))
+    clone = tmp_home / "dot-claude"
+    (clone / "hooks" / "lib").mkdir(parents=True)
+    (clone / "policies").mkdir()
+    (clone / "scripts").mkdir()
+    (clone / "settings.json").write_text("{}\n")
+    shutil.copy2(_REPO / "hooks" / "stop-spec-coverage-enforce.py",
+                 clone / "hooks" / "stop-spec-coverage-enforce.py")
+    shutil.copy2(_REPO / "hooks" / "lib" / "claude_home.py",
+                 clone / "hooks" / "lib" / "claude_home.py")
+
+    # /spec session state: workflow bookmark + views dir + monolith.
+    (clone / ".claude").mkdir()
+    (clone / ".claude" / f"workflow-{_SID}.json").write_text(
+        json.dumps({"command": "spec"}))
+    specs_base = clone / "docs" / "dev" / "specs"
+    (specs_base / _SPEC_TS / "views").mkdir(parents=True)
+    (specs_base / _SPEC_TS / "views" / "dev.md").write_text("# view\n")
+    (specs_base / f"{_SPEC_ID}.md").write_text("# Monolith\n\nSome spec body.\n")
+
+    # Transcript JSONL: a Write tool_use targeting the spec monolith.
+    transcript = tmp_home / "transcript.jsonl"
+    transcript.write_text(json.dumps({
+        "message": {"content": [{
+            "type": "tool_use", "name": "Write",
+            "input": {"file_path": f"docs/dev/specs/{_SPEC_ID}.md"},
+        }]}
+    }) + "\n")
+
+    if with_verifier:
+        vdir = clone / "scripts" / "spec-verify"
+        vdir.mkdir(parents=True)
+        # Stub verifier: exits with verifier_exit (nonzero => simulated <100%).
+        (vdir / "spec-verify.py").write_text(
+            "import sys\n"
+            "print('coverage: simulated')\n"
+            f"sys.exit({verifier_exit})\n")
+    return clone, transcript
+
+
+def _run_stop(clone: Path, transcript: Path):
+    env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "LANG": "C",
+           "HOME": str(clone.parent), "CLAUDE_PROJECT_DIR": str(clone)}
+    payload = {"session_id": _SID, "transcript_path": str(transcript),
+               "stop_hook_active": False}
+    return subprocess.run(
+        ["python3", str(clone / "hooks" / "stop-spec-coverage-enforce.py")],
+        input=json.dumps(payload), env=env, capture_output=True, text=True,
+    )
+
 
 def test_AC_WS1_6():
     r"""
