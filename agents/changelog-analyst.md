@@ -220,14 +220,15 @@ Exit with `failure_code: scope_violation`.
 
 **Path normalization** (apply before any comparison or staging):
 - Resolve symlinks: `real_root = os.path.realpath(GIT_ROOT)`
-- Dev-report paths are often absolute (`/root/...`). To normalize: if a
+- Dev-report paths are often absolute (e.g. under the harness home `~/.claude/...`). To normalize: if a
   dev-report path resolves under `real_root` (after `realpath`), convert it to
   a repo-relative path by stripping `real_root + "/"`. Never compare an
   absolute path to a repo-relative path directly.
-- Note: `/root/.claude` is a symlink to `/dev/shm/dev-workspace/dot-claude`.
-  When operating on the nested repo, `realpath("/dev/shm/dev-workspace/dot-claude")`
-  is the canonical root; dev-report paths like `~/.claude/agents/foo.md`
-  must be realpath-resolved to check repo membership.
+- Note: `~/.claude` may be a symlink to the actual harness-home checkout (on the
+  author machine, the nested repo). When operating on the nested repo,
+  `os.path.realpath(os.path.expanduser("~/.claude"))` is the canonical root;
+  dev-report paths like `~/.claude/agents/foo.md` must be realpath-resolved to
+  check repo membership.
 
 **Dev-report resolution** (used by both whitelist and enrichment):
 If `TASK_ID` is non-empty, resolve the dev-report path using the subproject path-walk:
