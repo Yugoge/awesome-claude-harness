@@ -137,9 +137,10 @@ def _build_record(payload: dict, state: dict, end_time: datetime) -> dict:
 
 
 def _append_record(record: dict) -> None:
-    LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    log_path = _log_path()
+    log_path.parent.mkdir(parents=True, exist_ok=True)
     line = json.dumps(record, ensure_ascii=False)
-    with LOG_PATH.open("a", encoding="utf-8") as fh:
+    with log_path.open("a", encoding="utf-8") as fh:
         fh.write(line + "\n")
         fh.flush()
         try:
