@@ -69,7 +69,30 @@ def test_AC_WS1_1():
     WHEN:  hooks/lib/claude_home.py and hooks/lib/claude_home.sh resolve the harness home from the running file's own location
     THEN:  Both resolvers return the clone root by walking up to the STRUCTURAL sentinel set (settings.json + hooks/ + policies/ + scripts/ present together), NOT to any directory named '.claude'; resolution succeeds even when the root basename is 'dot-claude'
     """
-    # TODO(dev): replace the line below with the real test body. While the
-    # TEST_INCOMPLETE sentinel is present the test will hard-fail, marking
-    # the AC as unimplemented for QA Phase 5.
-    pytest.fail(f"TEST_INCOMPLETE: {AC_UID} — GIVEN A fresh clone of the repo under a synthetic $HOME (e.g. /tmp/fakehome/.claude or any name… / WHEN hooks/lib/claude_home.py and hooks/lib/claude_home.sh resolve the harness home from the r… / THEN Both resolvers return the clone root by walking up to the STRUCTURAL sentinel set (settings.json + hooks/ + p…")
+    clone = _make_fresh_clone(basename="dot-claude")
+    expected = str(clone.resolve())
+    # Clean env: NO CLAUDE_HOME, HOME pointed at the synthetic PARENT (NOT a
+    # sentinel), so the structural script-walk is the only thing that can
+    # resolve — proving the walk, not an env hint, is PRIMARY.
+    env = _clean_env(HOME=str(clone.parent))
+
+    py = subprocess.run(
+        ["python3", str(clone / "hooks" / "lib" / "claude_home.py"), "resolve"],
+        env=env, capture_output=True, text=True,
+    )
+    assert py.returncode == HOOK_CHECK["expect_exit"], (
+        f"python resolver exit {py.returncode} != 0; stderr={py.stderr}")
+    assert py.stdout.strip() == expected, (
+        f"python resolver returned {py.stdout.strip()!r}, expected {expected!r}")
+
+    sh = subprocess.run(
+        ["bash", str(clone / "hooks" / "lib" / "claude_home.sh"), "resolve"],
+        env=env, capture_output=True, text=True,
+    )
+    assert sh.returncode == HOOK_CHECK["expect_exit"], (
+        f"shell resolver exit {sh.returncode} != 0; stderr={sh.stderr}")
+    assert sh.stdout.strip() == expected, (
+        f"shell resolver returned {sh.stdout.strip()!r}, expected {expected!r}")
+
+    # Resolution is NOT keyed on a directory literally named '.claude'.
+    assert Path(expected).name == "dot-claude"
