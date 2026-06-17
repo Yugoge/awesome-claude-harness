@@ -156,8 +156,12 @@ def _glob_match(prefix: str, target_canonical: str) -> bool:
 
 
 def _project_dir() -> str:
-    """Return the logical Claude project dir used for root-anchored policy."""
-    return os.path.abspath(os.environ.get("CLAUDE_PROJECT_DIR", "/root"))
+    """Return the logical Claude project dir used for root-anchored policy.
+
+    WS1: resolves via claude_home.project_dir() (CLAUDE_PROJECT_DIR -> resolved
+    harness home -> cwd) so the author literal /root is never the default.
+    """
+    return os.path.abspath(str(claude_home.project_dir()))
 
 
 def _path_is_prefix(prefix_path: str, target_path: str) -> bool:
