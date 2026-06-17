@@ -32,6 +32,35 @@ HOOK_CHECK = {
     "expect_exit": 1
 }
 
+# Repo root = <home>; this test file lives at <home>/tests/generated/<task>/.
+_HOME = Path(__file__).resolve().parents[3]
+
+
+def _make_clone(dst: Path) -> Path:
+    """Minimal structural-sentinel clone carrying the resolver + bootstrap + doctor + manifest."""
+    clone = dst / "dot-claude"
+    (clone / "hooks" / "lib").mkdir(parents=True)
+    (clone / "policies").mkdir()
+    (clone / "scripts").mkdir()
+    (clone / "settings.json").write_text("{}\n")
+    for rel in ("hooks/lib/claude_home.sh", "hooks/lib/claude_home.py",
+                "scripts/bootstrap", "scripts/doctor", "requirements.txt"):
+        src = _HOME / rel
+        assert src.exists(), f"missing source artifact: {rel}"
+        shutil.copy2(src, clone / rel)
+    for rel in ("hooks/lib/claude_home.sh", "hooks/lib/claude_home.py",
+                "scripts/bootstrap", "scripts/doctor"):
+        (clone / rel).chmod(0o755)
+    return clone
+
+
+def _run_bootstrap(clone: Path, args, home: Path):
+    env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "HOME": str(home)}
+    return subprocess.run(
+        [str(clone / "scripts" / "bootstrap"), *args],
+        cwd=str(clone), env=env, capture_output=True, text=True, timeout=300,
+    )
+
 
 def test_AC_FR_4():
     r"""
@@ -39,7 +68,39 @@ def test_AC_FR_4():
     WHEN:  install/bootstrap is run without an explicit opt-in flag
     THEN:  the existing home is NOT clobbered; the tool refuses and documents the restore path; with explicit opt-in it backs up before applying
     """
-    # TODO(dev): replace the line below with the real test body. While the
-    # TEST_INCOMPLETE sentinel is present the test will hard-fail, marking
-    # the AC as unimplemented for QA Phase 5.
-    pytest.fail(f"TEST_INCOMPLETE: {AC_UID} — GIVEN An existing populated $HOME/.claude and the install boundary / WHEN install/bootstrap is run without an explicit opt-in flag / THEN the existing home is NOT clobbered; the tool refuses and documents the restore path; with explicit opt-in it…")
+    with tempfile.TemporaryDirectory(prefix="fr4-") as td:
+        root = Path(td)
+        clone = _make_clone(root)
+        home = root / "fakehome"
+
+        # GIVEN: a POPULATED home — plant a pre-existing venv with a sentinel file
+        # whose survival proves the home was not clobbered.
+        venv = clone / "venv"
+        (venv / "bin").mkdir(parents=True)
+        sentinel = venv / "PRE_EXISTING_MARKER"
+        sentinel.write_text("do-not-clobber\n")
+
+        # WHEN: bootstrap runs WITHOUT --force -> THEN refuse (exit 1) + restore doc,
+        # and the pre-existing marker is untouched (not clobbered).
+        r_refuse = _run_bootstrap(clone, [], home)
+        assert r_refuse.returncode == HOOK_CHECK["expect_exit"], (
+            f"refuse-without-opt-in must exit {HOOK_CHECK['expect_exit']}; "
+            f"got {r_refuse.returncode}\n{r_refuse.stdout}\n{r_refuse.stderr}"
+        )
+        combined = r_refuse.stdout + r_refuse.stderr
+        assert "REFUSING" in combined, "must refuse to clobber a populated home"
+        assert "restore" in combined.lower(), "must document the restore path"
+        assert sentinel.exists() and sentinel.read_text() == "do-not-clobber\n", (
+            "the existing home must NOT be clobbered when opt-in is absent"
+        )
+
+        # WHEN: bootstrap runs WITH --force -> THEN it BACKS UP the existing venv
+        # before applying (the pre-existing marker survives in the backup).
+        r_force = _run_bootstrap(clone, ["--force", "--no-doctor"], home)
+        assert r_force.returncode == 0, (
+            f"--force must succeed; got {r_force.returncode}\n{r_force.stdout}\n{r_force.stderr}"
+        )
+        backups = list(clone.glob("venv.bak-*"))
+        assert backups, "with --force, the existing venv must be backed up before apply"
+        preserved = backups[0] / "bin" / "PRE_EXISTING_MARKER"
+        assert preserved.exists(), "the backup must preserve the prior home contents"
