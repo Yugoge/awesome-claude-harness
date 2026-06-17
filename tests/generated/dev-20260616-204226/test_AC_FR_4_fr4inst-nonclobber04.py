@@ -89,7 +89,7 @@ def test_AC_FR_4():
     WHEN:  install/bootstrap is run without an explicit opt-in flag
     THEN:  the existing home is NOT clobbered; the tool refuses and documents the restore path; with explicit opt-in it backs up before applying
     """
-    with tempfile.TemporaryDirectory(prefix="fr4-") as td:
+    with tempfile.TemporaryDirectory(prefix="fr4-", dir=_roomy_tmpbase()) as td:
         root = Path(td)
         clone = _make_clone(root)
         home = root / "fakehome"
