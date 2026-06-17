@@ -424,6 +424,10 @@
           {
             "type": "command",
             "command": "python3 \"$HOME/.claude/hooks/pretool-wrapper-userintent.py\""
+          },
+          {
+            "type": "command",
+            "command": "python3 \"$HOME/.claude/hooks/pretool-grep-backtrack-guard.py\""
           }
         ]
       },
