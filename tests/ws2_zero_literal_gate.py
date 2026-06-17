@@ -208,7 +208,7 @@ def scan(root: str):
                     literal = mm.group(0)
                     if not AUTHOR_RE.search(literal):
                         continue
-                    if allowlisted(rel, literal):
+                    if allowlisted(rel, literal, line):
                         continue
                     if ext == ".md":
                         cls = md_class(line, literal)
