@@ -45,7 +45,8 @@ import claude_home  # noqa: E402  (shared WS1 harness-home resolver)
 
 
 def _project_dir() -> Path:
-    return Path(os.environ.get("CLAUDE_PROJECT_DIR", "/root"))
+    # WS1: resolve via the shared claude_home resolver, never the literal /root.
+    return claude_home.project_dir()
 
 
 def _cycle_dir(session_id: str, cycle_id: int) -> Path:
