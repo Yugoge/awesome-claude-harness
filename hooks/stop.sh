@@ -14,7 +14,12 @@
 # Model agents using Bash to invoke stop.sh directly will be blocked.
 set -euo pipefail
 
-HELPER="/root/.claude/scripts/break-overnight-lock.py"
+# WS1: resolve the helper under the harness home (from this script's own
+# location), instead of the author literal /root. The loud-fail guard is
+# PRESERVED (exit 1 when absent) per the pre-existing-guard contract.
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/claude_home.sh"
+CLAUDE_HOME="$(claude_home_resolve)"
+HELPER="${CLAUDE_HOME}/scripts/break-overnight-lock.py"
 if [ ! -f "$HELPER" ]; then
   echo "stop.sh: helper $HELPER missing" >&2
   exit 1
