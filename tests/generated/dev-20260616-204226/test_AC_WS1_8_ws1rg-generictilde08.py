@@ -110,6 +110,19 @@ def test_AC_WS1_8():
     assert data["verdict_abs"] == "BLOCK", (
         f"destructive op on the /home/alice absolute form must be BLOCKED; got {data['verdict_abs']}")
 
+    # ANCESTOR-DIR protection is also generic on a non-root home (codex): the
+    # proper ancestor dirs of the data file get their ~/-variants AND destructive
+    # ops on them block — proving _config_ancestor_dirs() is $HOME-generic, not
+    # /root-only.
+    assert data["has_anc_claude_tilde"] is True, (
+        f"~/.config/claude ancestor missing from variant set: {data['variants']}")
+    assert data["has_anc_config_tilde"] is True, (
+        f"~/.config ancestor missing from variant set: {data['variants']}")
+    assert data["verdict_anc_tilde"] == "BLOCK", (
+        f"destructive op on the ~/-ancestor dir must be BLOCKED; got {data['verdict_anc_tilde']}")
+    assert data["verdict_anc_abs"] == "BLOCK", (
+        f"destructive op on the /home/alice absolute ancestor dir must be BLOCKED; got {data['verdict_anc_abs']}")
+
     # No /root-specific behavior remains in the tilde generator's executable body.
     assert data["root_literal_in_exec_body"] is False, (
         "a /root-specific literal still exists in _home_tilde_variant's executable body")
