@@ -52,7 +52,27 @@ except Exception:  # pragma: no cover - fail-soft when the resolver is absent
 # T2.4: Contract-driven self-repair grant (BUG-B-Q0E-CONTRACT-SELF-REPAIR-GAP)
 # ---------------------------------------------------------------------------
 
-SELF_REPAIR_AUDIT_LOG = Path('/root/.claude/logs/overnight-self-repair.jsonl')
+# Relative location of the self-repair audit log under the harness home. Resolved
+# at runtime via the WS1 resolver (see _self_repair_audit_log) rather than the
+# author literal /root/.claude so a fresh non-root clone audits under its OWN home.
+_SELF_REPAIR_AUDIT_RELPATH = 'logs/overnight-self-repair.jsonl'
+
+
+def _self_repair_audit_log() -> Path:
+    """Resolve the self-repair audit-log path via the WS1 harness-home resolver.
+
+    Order: resolved harness home -> CLAUDE_PROJECT_DIR/.claude -> cwd/.claude.
+    Never the author literal /root. The audit append already degrades softly
+    (_persist_audit_row returns False on OSError), so an unresolved home falls
+    back to the project dir rather than failing.
+    """
+    if _claude_home is not None:
+        home = _claude_home.resolve()
+        if home is not None:
+            return home / _SELF_REPAIR_AUDIT_RELPATH
+        return _claude_home.project_dir() / '.claude' / _SELF_REPAIR_AUDIT_RELPATH
+    base = Path(os.environ.get('CLAUDE_PROJECT_DIR', os.getcwd())) / '.claude'
+    return base / _SELF_REPAIR_AUDIT_RELPATH
 
 
 def _self_repair_block(contract: dict | None) -> dict | None:
