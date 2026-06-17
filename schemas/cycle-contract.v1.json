@@ -53,11 +53,13 @@
     },
     "tool_policy_ref": {
       "type": "string",
-      "default": "/root/.claude/policies/tool-policy.v1.json"
+      "default": "~/.claude/policies/tool-policy.v1.json",
+      "description": "Harness-home-relative default (resolved via the WS1 CLAUDE_HOME resolver / `~` expansion at runtime); install-rendered, never an author-absolute literal."
     },
     "ui_evidence_schema_ref": {
       "type": "string",
-      "default": "/root/.claude/schemas/qa-report.v1.json"
+      "default": "~/.claude/schemas/qa-report.v1.json",
+      "description": "Harness-home-relative default (resolved via the WS1 CLAUDE_HOME resolver / `~` expansion at runtime); install-rendered, never an author-absolute literal."
     },
     "trace_log_path": {
       "type": "string"
