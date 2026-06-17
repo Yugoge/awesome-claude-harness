@@ -32,6 +32,43 @@ HOOK_CHECK = {
     "expect_exit": 0
 }
 
+# Repo root = <home>; this test file lives at <home>/tests/generated/<task>/.
+_HOME = Path(__file__).resolve().parents[3]
+
+
+def _make_fresh_clone(dst: Path) -> Path:
+    """Build a minimal structural-sentinel harness clone under ``dst``.
+
+    Copies only the load-bearing pieces the first-run trio needs: the shared
+    resolver, scripts/bootstrap + scripts/doctor, and requirements.txt — plus
+    the empty sentinel dirs (settings.json + hooks/ + policies/ + scripts/) so
+    claude_home resolves ``dst`` as the harness home. The basename is
+    "dot-claude" (not ".claude") to prove the resolver is structural, not
+    keyed on the directory name.
+    """
+    clone = dst / "dot-claude"
+    (clone / "hooks" / "lib").mkdir(parents=True)
+    (clone / "policies").mkdir()
+    (clone / "scripts").mkdir()
+    (clone / "settings.json").write_text("{}\n")
+    for rel in ("hooks/lib/claude_home.sh", "hooks/lib/claude_home.py",
+                "scripts/bootstrap", "scripts/doctor", "requirements.txt"):
+        src = _HOME / rel
+        assert src.exists(), f"missing source artifact: {rel}"
+        shutil.copy2(src, clone / rel)
+    for rel in ("hooks/lib/claude_home.sh", "hooks/lib/claude_home.py",
+                "scripts/bootstrap", "scripts/doctor"):
+        (clone / rel).chmod(0o755)
+    return clone
+
+
+def _run_bootstrap(clone: Path, args, home: Path):
+    env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "HOME": str(home)}
+    return subprocess.run(
+        [str(clone / "scripts" / "bootstrap"), *args],
+        cwd=str(clone), env=env, capture_output=True, text=True, timeout=300,
+    )
+
 
 def test_AC_FR_1():
     r"""
@@ -39,7 +76,43 @@ def test_AC_FR_1():
     WHEN:  the user runs the executable bootstrap
     THEN:  the bootstrap creates the environment (venv), installs the required dependencies from the manifest, and verifies the resolver works; it exits 0 with a clear success message; it is non-destructive — it does NOT clobber an existing home without explicit opt-in and documents how to restore
     """
-    # TODO(dev): replace the line below with the real test body. While the
-    # TEST_INCOMPLETE sentinel is present the test will hard-fail, marking
-    # the AC as unimplemented for QA Phase 5.
-    pytest.fail(f"TEST_INCOMPLETE: {AC_UID} — GIVEN A fresh non-root machine with the repo cloned to $HOME/.claude and only base prerequisite… / WHEN the user runs the executable bootstrap / THEN the bootstrap creates the environment (venv), installs the required dependencies from the manifest, and verif…")
+    with tempfile.TemporaryDirectory(prefix="fr1-") as td:
+        root = Path(td)
+        clone = _make_fresh_clone(root)
+        home = root / "fakehome"
+
+        # WHEN: run bootstrap against the fresh temp home.
+        r = _run_bootstrap(clone, [], home)
+
+        # THEN: exit 0 with a clear success message.
+        assert r.returncode == HOOK_CHECK["expect_exit"], (
+            f"bootstrap on a fresh clone must exit {HOOK_CHECK['expect_exit']}; "
+            f"got {r.returncode}\nSTDOUT:\n{r.stdout}\nSTDERR:\n{r.stderr}"
+        )
+        assert "SUCCESS" in r.stdout, f"expected a success message; got:\n{r.stdout}"
+
+        # THEN: the venv was created with the manifest deps importable.
+        venv_py = clone / "venv" / "bin" / "python"
+        assert venv_py.exists(), "bootstrap must create the venv interpreter"
+        check = subprocess.run(
+            [str(venv_py), "-c", "import pytest, jsonschema, yaml"],
+            capture_output=True, text=True, timeout=60,
+        )
+        assert check.returncode == 0, (
+            f"manifest deps must be installed into the venv; import failed:\n{check.stderr}"
+        )
+
+        # THEN: the resolver self-check passed (reported the clone, not /root).
+        assert "resolver ->" in r.stdout and str(clone) in r.stdout, (
+            f"bootstrap must verify the resolver resolves the clone; got:\n{r.stdout}"
+        )
+        assert "/root" not in r.stdout.replace(str(clone), ""), (
+            "bootstrap output must not carry an author /root literal"
+        )
+
+        # THEN: non-destructive — a second run without opt-in REFUSES + documents restore.
+        r2 = _run_bootstrap(clone, [], home)
+        assert r2.returncode != 0, "a populated home must NOT be clobbered without --force"
+        combined = r2.stdout + r2.stderr
+        assert "REFUSING" in combined, "must refuse to clobber an existing home"
+        assert "restore" in combined.lower(), "must document how to restore"
