@@ -134,13 +134,24 @@ def test_AC_WS7_1():
     WHEN:  a full-surface scan of commands/*.md + agents/*.md + skills/*/SKILL.md + schemas/*.json runs after the WS7 change on a fresh non-root clone, USING the boundary-aware REV4 author-path pattern (AC-WS3-4: (?<![\w./])(?:/root(?:/|(?=$|[^\w./-]))|/dev/shm/dev-workspace(?:/|(?=$|[^\w./-]))) — covering /root/.claude + /root/bin + /root/docs + /root/templates AND a bare /root at ANY non-path boundary)
     THEN:  the scan finds ZERO load-bearing author-absolute path literals of classes (a) executed / (b) tool operand / (c) dispatch-or-dispatch-read / (d) runtime default — across the FULL /root/... family (NOT just /root/.claude|/root/bin) AND every bare-/root env-default boundary form (${...:-/root}, 'HOME','/root', "default": "/root", || echo /root) AND /dev/shm/dev-workspace — every such literal converted to its correct PORTABLE form BY CLASS: shell-executed paths -> the WS1 CLAUDE_HOME resolver or $CLAUDE_PROJECT_DIR (the shell evaluates these); TOOL OPERANDS -> NEVER a shell-var token inside the operand (the Write tool does not shell-expand — see dev-overnight.md:262); use EITHER the Bash-redirect form with "$CLAUDE_PROJECT_DIR/.claude/dev-registry/..." where the shell expands it (Form B at :266-272), OR have the orchestrator compute/inline the concrete resolved project-dir absolute path before invoking Write (the FIRST-ACTION convention at :27 expresses the project-dir-relative intent); dispatch/dispatch-reads (incl. the /root/docs + /root/templates class) -> the resolved harness-home form embedded in the dispatch; runtime defaults -> a resolver-derived / env-var default; external helpers (class a outside the tree) -> the AC-WS3-6 env vars. Illustrative prose is UNTOUCHED (diff scoped to load-bearing literals only) and exempt by PER-LITERAL allowlist, never prefix omission. The acceptance is the PRINCIPLE measured comprehensively by the broadened pattern (a full scan finds none), NOT a hand-enumerated checklist; the 8 anchors above MUST be among the fixes (or, for dev.md:1618, the per-literal allowlist).
     """
-    # ---- THEN (1): full-surface scan finds ZERO load-bearing author literals ----
+    # ---- THEN (1a): full-surface scan finds ZERO load-bearing author literals ----
     offenders = _scan_surface()
     assert not offenders, (
         "AC-WS7-1: load-bearing author-absolute path literal(s) remain in the "
         "command/agent/skill/schema surface (only PER-LITERAL-allowlisted prose "
         "is exempt):\n"
         + "\n".join(f"  {rel}:{i}: {line}" for rel, i, line in offenders)
+    )
+
+    # ---- THEN (1b): no quoted-tilde executed path remains. A tilde inside double
+    #      quotes is NOT shell-expanded, so `python3 "~/.claude/..."` would fail on
+    #      a fresh clone. The portable form is an UNQUOTED ~/... or a resolver var.
+    tilde = _scan_quoted_tilde_exec()
+    assert not tilde, (
+        "AC-WS7-1: quoted-tilde executed-path(s) remain (the shell does not expand "
+        "a tilde inside double quotes — broken on a fresh clone). Use an unquoted "
+        "~/... operand or a resolver variable:\n"
+        + "\n".join(f"  {rel}:{i}: {line}" for rel, i, line in tilde)
     )
 
     # ---- THEN (2): each NON-EXHAUSTIVE evidence anchor is in its PORTABLE form ----
