@@ -284,8 +284,8 @@ A newcomer can run the core development pipeline with just the **REQUIRED** rows
 > **One-line summary:** install Claude Code + Python 3 + git + jq + the GNU userland + openssl, then run `scripts/bootstrap` — it creates the venv and installs the manifest (`pytest` + `jsonschema` + `pyyaml`), which covers the core `/dev → /close → /commit → /push` pipeline (`/push` needs `openssl`). Run `scripts/doctor` first if you want a preflight of what's missing. Add the Codex CLI + wrapper (`CODEX_ISO_BIN`) for `--codex`, graphify for code-graph context, Playwright MCP for UI/overnight (and user-facing QA), and `bwrap` for `/dev-overnight` as you need them.
 
 ```bash
-# 1. Back up any existing config
-mv ~/.claude ~/.claude.bak 2>/dev/null || true
+# 1. Back up any existing config (timestamped + non-destructive; aborts on failure)
+[ ! -e ~/.claude ] || mv ~/.claude ~/.claude.bak-"$(date +%Y%m%d-%H%M%S)"
 
 # 2. Clone this repo to ~/.claude
 git clone https://github.com/Yugoge/awesome-claude-harness.git ~/.claude
