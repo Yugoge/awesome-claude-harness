@@ -45,7 +45,46 @@ def test_AC_WS7_2():
     WHEN:  the spec subagent reaches the COVERAGE step on a fresh clone where spec-verify.py is absent at the author path
     THEN:  the instruction is REWRITTEN to resolve spec-verify.py via the WS1 resolver and to treat a missing REQUIRED verifier as a HARNESS-INSTALL ERROR that BLOCKS coverage-required spec completion — NOT a manual-skip condition. The instruction is consistent with AC-WS1-6's fail-closed contract: present+covered -> proceed; present+under-covered -> block; required-but-absent -> block (install error), never skip.
     """
-    # TODO(dev): replace the line below with the real test body. While the
-    # TEST_INCOMPLETE sentinel is present the test will hard-fail, marking
-    # the AC as unimplemented for QA Phase 5.
-    pytest.fail(f"TEST_INCOMPLETE: {AC_UID} — GIVEN commands/spec.md:335 (verified by Read): 'COVERAGE: If `/root/.claude/scripts/spec-verify… / WHEN the spec subagent reaches the COVERAGE step on a fresh clone where spec-verify.py is abse… / THEN the instruction is REWRITTEN to resolve spec-verify.py via the WS1 resolver and to treat a missing REQUIRED v…")
+    spec = _read("commands/spec.md")
+
+    # Isolate the COVERAGE step text (the numbered "3. COVERAGE:" item up to the
+    # next numbered step) so the assertions are scoped to the instruction the AC
+    # targets, not coincidental matches elsewhere in the file.
+    m = re.search(
+        r"^\s*3\.\s*COVERAGE.*?(?=^\s*4\.\s)",
+        spec,
+        flags=re.MULTILINE | re.DOTALL,
+    )
+    assert m is not None, "AC-WS7-2: could not locate the '3. COVERAGE:' step in commands/spec.md"
+    coverage = m.group(0)
+
+    # THEN (1): the fail-OPEN manual-skip branch is GONE — no 'skip ... manual
+    # coverage check' escape hatch remains in the COVERAGE step.
+    assert "manual coverage check required" not in coverage, (
+        "AC-WS7-2: commands/spec.md COVERAGE step still contains the fail-OPEN "
+        "'manual coverage check required' skip branch"
+    )
+    assert not re.search(r"skip\b", coverage, flags=re.IGNORECASE), (
+        "AC-WS7-2: commands/spec.md COVERAGE step still instructs a skip on a "
+        "missing verifier (fail-open)"
+    )
+
+    # THEN (2): the verifier is resolved via the WS1 harness-home resolver, not an
+    # author-absolute literal, and a missing REQUIRED verifier routes to a
+    # fail-closed block / install-error path (exit 2), never a manual skip.
+    assert "/root/" not in coverage, (
+        "AC-WS7-2: commands/spec.md COVERAGE step still names an author-absolute "
+        "/root path for spec-verify.py instead of resolving via the resolver"
+    )
+    assert "claude_home.sh" in coverage and "require" in coverage, (
+        "AC-WS7-2: commands/spec.md COVERAGE step must resolve spec-verify.py via "
+        "the harness-home resolver (claude_home.sh require ...)"
+    )
+    assert "exit 2" in coverage, (
+        "AC-WS7-2: commands/spec.md COVERAGE step must route a missing REQUIRED "
+        "verifier to a fail-closed block (exit 2)"
+    )
+    assert re.search(r"BLOCK|install.?error|HARNESS-INSTALL", coverage, flags=re.IGNORECASE), (
+        "AC-WS7-2: commands/spec.md COVERAGE step must treat a missing REQUIRED "
+        "verifier as a harness-install error that BLOCKS, not a manual skip"
+    )
