@@ -39,7 +39,7 @@ project_root = sys.argv[1]
 # Matches /root/... AND a bare /root at any non-path boundary, AND /dev/shm/dev-workspace.
 # The lookbehind drops '-' so "${VAR:-/root}" is still matched (':-' precedes /root).
 AUTHOR_RE = re.compile(
-    r"(?<![\w./-])(?:/root(?:/|(?=$|[^\w./-]))|/dev/shm/dev-workspace(?:/|(?=$|[^\w./-])))"
+    r"(?<![\w./])(?:/root(?:/|(?=$|[^\w./-]))|/dev/shm/dev-workspace(?:/|(?=$|[^\w./-])))"
 )
 
 # Extract the full literal token for reporting (the boundary-aware anchor + its tail).
