@@ -332,7 +332,7 @@ Only proceed to Step 6 when a STRONG signal fires.
      2. AGENT SELECTION: Are the selected agents consistent with the spec's defined
         pipeline? Flag any agent that was included but isn't in the spec's pipeline,
         or any pipeline agent that was excluded.
-     3. COVERAGE: If `~/.claude/scripts/spec-verify/spec-verify.py` exists, run `source ~/.claude/venv/bin/activate && python3 ~/.claude/scripts/spec-verify/spec-verify.py --monolith <spec_path> --views-dir docs/dev/specs/<spec-id>/views/`. If the script is absent, skip and note "spec-verify.py not found — manual coverage check required".
+     3. COVERAGE (FAIL-CLOSED — required verifier): Resolve the verifier via the harness-home resolver — `VERIFIER="$(bash ~/.claude/hooks/lib/claude_home.sh require scripts/spec-verify/spec-verify.py)" || exit 2`. `spec-verify.py` is a REQUIRED security verifier: if `require` exits 2 (the verifier is absent under the resolved harness home, or the harness home cannot be resolved), treat it as a HARNESS-INSTALL ERROR that BLOCKS coverage-required spec completion — print the resolver's block reason and STOP; do NOT skip, do NOT fall back to a manual coverage check. When the verifier resolves, run `source ~/.claude/venv/bin/activate && python3 "$VERIFIER" --monolith <spec_path> --views-dir docs/dev/specs/<spec-id>/views/`. This is consistent with the fail-closed Stop-hook contract (AC-WS1-6): present + covered → proceed; present + under-covered → block; required-but-absent → block (install error), never skip.
         Report the result.
      4. CONTENT RELEVANCE: Spot-check 3 random content blocks in each view.
         Is the content relevant to that agent's role?
