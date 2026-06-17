@@ -319,7 +319,37 @@ The hooks are wired in `settings.json` and activate on the next session. Try the
 /stop
 ```
 
-> **Portability caveat (read before you rely on the git/release path).** This harness is **tuned for the author's Linux environment**, not portable as-is. The author's absolute paths are baked in broadly: roughly **57 non-doc/non-test tracked files** (≈134 counting docs) contain a hardcoded `/root/.claude`, `/dev/shm`, or `/root/bin` literal — this is *not* a handful of files. Concentrations a new user will hit first: `/root/.claude` in core commands (`commands/dev.md`, `commands/spec.md`, `commands/commit.md`, `commands/close.md`, and many hooks/scripts), `/root/bin/codex-iso` in `commands/codex.md`, and a nested `.claude` git repo symlinked onto a RAM disk at `/dev/shm` (see [`NESTED-REPO.md`](NESTED-REPO.md) and [`CLAUDE.md`](CLAUDE.md)). A new user **must adapt these paths** before the release (`/close → /commit → /merge → /push`) and `--codex` commands will work: run `git grep -l '/root/\|/dev/shm'` to find them, then rewrite for your own `$HOME/.claude`. A clean `CLAUDE_HOME` parameterization is planned but not yet done. The development and research commands are the most portable starting point.
+### Portability contract
+
+This section is a **contract**, not a warning: it states what the harness *guarantees* on a fresh non-root clone versus what needs external setup, and it is backed by an executable test.
+
+**The core harness runs on a fresh non-root clone.** Clone to `$HOME/.claude` on any Linux box (non-root user, `$HOME` not under `/root`), run the bootstrap, and the core flows — `/dev`, `/spec`, `/commit`, the always-on security guards — resolve to *your* home with **zero author-path literals load-bearing**. The harness locates its own home structurally (the shared `hooks/lib/claude_home.{sh,py}` resolver walks up to the `settings.json` + `hooks/` + `policies/` + `scripts/` sentinel set), so there is no `/root` to rewrite. This is **verified by the fresh-clone smoke test** (`tests/` WS2), which runs under a synthetic non-root `$HOME` with the author's home absent and asserts both *"core is runnable"* and *"the security guards engage"*.
+
+**These specific extras require external setup** (their absence never breaks the core — it degrades to a one-line "unavailable" message and the flow continues):
+
+| Extra | Needed for | When absent |
+|---|---|---|
+| OpenAI Codex CLI + an isolation wrapper (`CODEX_ISO_BIN`) | `--codex` / `/codex` adversarial rounds | `--codex`/`/codex` unavailable; rest of the pipeline unaffected — **never** falls back to a bare unsafe `codex` |
+| `graphify` CLI (`GRAPHIFY_BIN`) | code-graph enrichment of the Dev context | enrichment skipped; pipeline proceeds degraded |
+| `bwrap` (bubblewrap) + user namespaces | the per-command write boundary in `/dev-overnight` | overnight launch still works; a non-worktree-local write **fails closed** (the write guarantee is security-relevant) |
+| Playwright MCP | live-browser UI audits / user-facing QA | non-user-facing cycles unaffected; QA fails closed only when a user-facing change cannot be browser-verified |
+| `~/.claude` symlink onto a RAM disk; `SESSION_PROMOTE_BIN`, `UI_EVIDENCE_AUDIT_BIN` | the author's RAM-disk + session-promote / ui-evidence conveniences | the structural resolver ignores the symlink convention; optional helpers print "unavailable" |
+
+#### Trust model
+
+**The human is the trust root.** Every release verb (`/commit`, `/push`, `/merge`, `/close`) and every human-only command is denied to agents both via `disable-model-invocation: true` *and* an explicit `Skill(<name>:*)` entry in `permissions.deny` — the only technical barrier against an agent self-invoking a privileged command. The harness assumes the agent itself is the adversary, so guards are enforced in code (a `PreToolUse`/`Stop` hook returning exit 2), never in prose.
+
+#### Fail-closed vs. skip semantics
+
+Absence is handled by exactly one of two rules, per the kind of thing that is missing:
+
+| Missing thing | Class | Behavior on absence |
+|---|---|---|
+| A security guard's helper/policy (e.g. the tool-policy registry, the spec-coverage verifier) | security | **FAIL CLOSED** — the guard blocks with exit 2 and a block marker; it never silently allows |
+| An optional integration (Codex wrapper, `graphify`, Playwright, session-promote) | optional | **SKIP** — one-line "unavailable" message, core flow continues; no unsafe fallback |
+| An invalid generated `settings.json` (bad render / dropped required hook) | config | **ABORT** — the install renderer refuses to apply and leaves the live settings unchanged |
+
+Run `scripts/doctor` to see, per capability, which rule applies on your machine. (The historical hardcoded-path caveat — `git grep -l '/root/\|/dev/shm'` and hand-rewrite — is **superseded** by the resolver above and retained only as background in [`NESTED-REPO.md`](NESTED-REPO.md) / [`CLAUDE.md`](CLAUDE.md).)
 
 ### Troubleshooting
 
