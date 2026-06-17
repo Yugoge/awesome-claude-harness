@@ -476,7 +476,7 @@ fi
 if [ "$gate_rc" -eq 0 ] && [ "$gate_count" = "0" ] && [ "$gate_scoped" = "true" ]; then
   record integration-gate zero_literals 1 "zero genuine load-bearing author literals across the rendered surface (scoped to cycle baseline $GATE_BASELINE_REF)"
 else
-  record integration-gate zero_literals 0 "gate_rc=$gate_rc residuals=$gate_count (see $GATE_JSON)"
+  record integration-gate zero_literals 0 "gate_rc=$gate_rc residuals=$gate_count scoped=$gate_scoped baseline=${GATE_BASELINE_REF:-<none>} (see $GATE_JSON)"
 fi
 
 # ── Emit the machine-readable result document ────────────────────────────────
