@@ -19,9 +19,13 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import claude_home  # noqa: E402  (shared WS1 harness-home resolver)
 
 try:
     import fcntl
