@@ -28,7 +28,7 @@ HOOK_CHECK = {
 
 
 def test_AC_WS1_8():
-    """
+    r"""
     GIVEN: hooks/lib/runtime_guard.py protected-path normalization (codex #4, verify by Read around the tilde-variant handling). BASELINE: it adds ~/ tilde variants only for paths under /root/..., so on a non-root home (/home/alice/...) the ~/relative protected-path variant may stop being generated.
     WHEN:  the guard normalizes a protected path on a non-root home
     THEN:  the tilde-variant generation is GENERIC: any path under the actual user home (Path.home() / $HOME) gets its ~/relative variant added, and ancestor stop-roots treat the real user home consistently — no /root-specific behavior remains

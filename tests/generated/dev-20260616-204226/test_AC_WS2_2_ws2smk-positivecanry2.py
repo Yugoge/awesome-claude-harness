@@ -28,7 +28,7 @@ HOOK_CHECK = {
 
 
 def test_AC_WS2_2():
-    """
+    r"""
     GIVEN: A planted canary policy/value in the temp clone; EACH guard probe runs in a FRESH subprocess with a clean environment (env -i + explicit minimal env) so the in-process policy _CACHE in policy_registry cannot mask a stale/wrong load (codex #6 carried from prior QA)
     WHEN:  the smoke test asserts each guard loaded ITS OWN helper/data from the clone (POSITIVE assertion)
     THEN:  the block is proven to come from the intended guard reading the clone's own canary — a block-by-the-wrong-guard (intended guard silently failed open while another guard blocked) is DETECTED and fails the test

@@ -28,7 +28,7 @@ HOOK_CHECK = {
 
 
 def test_AC_WS4_1():
-    """
+    r"""
     GIVEN: A fresh clone with the optional external capabilities ABSENT (no /root/bin/codex-iso, no graphify binary, no /dev/shm RAM disk, no ~/.claude symlink)
     WHEN:  any automatic hook, session-start path, settings env value, or core-flow step that references an optional capability runs
     THEN:  nothing crashes or hangs; the absence produces an observable one-line 'unavailable'/'skipping (optional)' message, and the core flow proceeds

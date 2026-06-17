@@ -28,7 +28,7 @@ HOOK_CHECK = {
 
 
 def test_AC_WS3_5():
-    """
+    r"""
     GIVEN: The settings renderer and the live settings.json BEFORE rendering (codex #7 + QA objection 6). settings.json currently has 73 permissions.deny entries, of which 34 are human-only Skill(<name>:*) denies — the only technical barrier against agent self-invocation per global CLAUDE.md rule 15.
     WHEN:  the renderer produces a new settings.json from the template
     THEN:  SEMANTIC PARITY holds: the rendered settings PRESERVE every permissions.deny entry (a structural set-compare of deny entries before vs after is empty-diff — no deny silently dropped), PRESERVE permissions.ask, NEVER add/broaden a permissions.allow, and PRESERVE the hooks arrays per event (same entries, same order). The required Skill(<name>:*) deny set is COMPUTED from the human-only command/skill inventory (NOT hardcoded to a literal count) and asserted present in full.

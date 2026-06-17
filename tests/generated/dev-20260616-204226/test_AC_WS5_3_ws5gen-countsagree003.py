@@ -28,7 +28,7 @@ HOOK_CHECK = {
 
 
 def test_AC_WS5_3():
-    """
+    r"""
     GIVEN: The generated counts and the curated badges (README)
     WHEN:  the generator computes counts
     THEN:  generated counts agree with the curated badges (no contradiction between auto-stats and README/ARCHITECTURE badges)

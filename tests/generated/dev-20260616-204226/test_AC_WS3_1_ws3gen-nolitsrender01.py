@@ -28,7 +28,7 @@ HOOK_CHECK = {
 
 
 def test_AC_WS3_1():
-    """
+    r"""
     GIVEN: settings.template.json and the install-time renderer
     WHEN:  the renderer substitutes the resolved install root into the template
     THEN:  the produced settings.json contains absolute permission literals + env values for the installed home and contains ZERO raw /root, /dev/shm/dev-workspace, or /home/<author> literals in any executable field (hooks[].command, permissions.allow/ask/deny, env.*); the stale GRAPHIFY_BIN /root value is rendered from the template, not hardcoded

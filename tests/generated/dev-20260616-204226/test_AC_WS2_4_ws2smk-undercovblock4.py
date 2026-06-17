@@ -28,7 +28,7 @@ HOOK_CHECK = {
 
 
 def test_AC_WS2_4():
-    """
+    r"""
     GIVEN: An intentionally under-covered /spec split on the fresh clone, AND a separately staged case where the REQUIRED spec-verify verifier is hidden/absent (codex #11 behavioral coverage for AC-WS7-2 + AC-WS1-6)
     WHEN:  the smoke test triggers the spec-coverage Stop hook for (a) an under-covered split with the verifier present and (b) a verifier-absent run
     THEN:  (a) the under-covered split is BLOCKED (exit 2); (b) the required-but-absent verifier ALSO BLOCKS (exit 2) with a clear install-error block message — NOT a silent skip/exit 0 — proving the fail-closed contract engages from the clone; restoring the verifier with full coverage exits 0

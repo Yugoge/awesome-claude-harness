@@ -28,7 +28,7 @@ HOOK_CHECK = {
 
 
 def test_AC_WS2_5():
-    """
+    r"""
     GIVEN: Optional capabilities absent on the fresh clone, including the external helper bins of AC-WS3-6 (codex-iso, session-promote, ui-evidence-audit) resolved via env vars that are unset
     WHEN:  the smoke test runs a path that references an optional capability or an external helper
     THEN:  an observable one-line 'unavailable' message appears rather than a crash, and NO bare unsafe fallback is invoked (e.g. bare codex); the test name/green semantics mean 'core is runnable + guards engaged', NOT 'the full LLM pipeline works'

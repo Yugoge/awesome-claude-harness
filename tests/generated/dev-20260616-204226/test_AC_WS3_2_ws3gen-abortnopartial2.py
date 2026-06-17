@@ -28,7 +28,7 @@ HOOK_CHECK = {
 
 
 def test_AC_WS3_2():
-    """
+    r"""
     GIVEN: The renderer about to apply a rendered settings file
     WHEN:  the rendered output either fails to parse OR is missing required hook wiring
     THEN:  the renderer ABORTS without applying (never partially applies); the live settings.json is left unchanged

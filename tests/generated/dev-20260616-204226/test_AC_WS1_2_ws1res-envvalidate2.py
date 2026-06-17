@@ -28,7 +28,7 @@ HOOK_CHECK = {
 
 
 def test_AC_WS1_2():
-    """
+    r"""
     GIVEN: CLAUDE_HOME / HOME env vars are set to a path that does NOT realpath/inode-equal the script-walk root
     WHEN:  the resolver evaluates the env hint
     THEN:  the env hint is IGNORED and the script-walk root is used; when CLAUDE_HOME realpath-equals the script-walk root it is honored

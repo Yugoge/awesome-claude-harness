@@ -28,7 +28,7 @@ HOOK_CHECK = {
 
 
 def test_AC_WS1_3():
-    """
+    r"""
     GIVEN: A REQUIRED security helper/policy file is absent (e.g. the resolver is asked for a relpath that does not exist on the clone)
     WHEN:  resolve_required(relpath) is called (python bootstrap or shell require_security_file)
     THEN:  the caller FAILS CLOSED: python emits the block reason and sys.exit(2); shell returns exit 2 — NEVER exit 0 and NEVER exit 1/127

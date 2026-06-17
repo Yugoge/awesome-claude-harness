@@ -28,7 +28,7 @@ HOOK_CHECK = {
 
 
 def test_AC_WS4_3():
-    """
+    r"""
     GIVEN: README.md (or a linked doc) after the WS4 edit
     WHEN:  a newcomer reads the trust/security section
     THEN:  it contains a trust-model statement AND a single fail-closed-vs-skip semantics table that lists, per capability, whether absence FAILS CLOSED (security guards) or SKIPS (optional capabilities)

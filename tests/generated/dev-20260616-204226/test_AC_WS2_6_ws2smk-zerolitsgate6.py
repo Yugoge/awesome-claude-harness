@@ -28,7 +28,7 @@ HOOK_CHECK = {
 
 
 def test_AC_WS2_6():
-    """
+    r"""
     GIVEN: The whole fresh-clone smoke environment after WS1+WS3+WS7 land (codex #8 + #10: the global 'no remaining load-bearing author literals' assertion runs as a post-Wave-1 INTEGRATION gate, not as a per-worker scan that would be flaky while siblings are mid-edit)
     WHEN:  the smoke test asserts portability of the rendered/resolved tree
     THEN:  scanning the EXPLICITLY-defined load-bearing surfaces (per AC-WS3-4) of the rendered clone with the SAME boundary-aware REV4 pattern (?<![\w./])(?:/root(?:/|(?=$|[^\w./-]))|/dev/shm/dev-workspace(?:/|(?=$|[^\w./-]))) finds ZERO load-bearing author-path literals — /root/.claude, /root/bin, /root/docs, /root/templates, AND every bare-/root env-default boundary form (${...:-/root}, 'HOME','/root', "default": "/root", || echo /root) — across all four WS7 classes, while PER-LITERAL-allowlisted prose/tests/examples are exempt. REV4 (ACTIVE-2): the gate's pattern is exactly AC-WS3-4's (as wide as the AC-WS7-1 principle), so NEITHER a load-bearing /root/docs/... dispatch-read (e.g. commands/dev-command.md:68) or /root/templates/... template ref (agents/ui-specialist.md:10, commands/dev-overnight.md:1882) NOR a bare-/root env-default can escape the gate — the prior narrow /root/.claude|/root/bin|/dev/shm + bare-/root set missed the /root/docs class, and a literal /root(/|$) would have missed the bare-root quote/brace boundary forms.

@@ -28,7 +28,7 @@ HOOK_CHECK = {
 
 
 def test_AC_WS3_6():
-    """
+    r"""
     GIVEN: External author-specific helper binaries OUTSIDE the harness tree (codex #5): /root/bin/codex-iso (codex isolation wrapper, REQUIRED for --codex / /codex), /root/bin/session-promote.sh (optional), /root/bin/ui-evidence-audit.py (optional). These are NOT solved by the in-tree CLAUDE_HOME resolver because they live outside the clone.
     WHEN:  a flow that needs an external helper runs on a fresh clone where the author path is absent
     THEN:  the helper path is resolved from an explicit env/config variable (e.g. CODEX_ISO_BIN, SESSION_PROMOTE_BIN, UI_EVIDENCE_AUDIT_BIN); the resolver verifies it is executable and preserves its security/isolation properties; if absent the flow either FAILS CLOSED (for security-relevant required helpers) or marks the feature UNAVAILABLE with a one-line message (for optional helpers) — it NEVER silently falls back to a bare unsafe tool (e.g. bare codex instead of the isolation wrapper)

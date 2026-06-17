@@ -28,7 +28,7 @@ HOOK_CHECK = {
 
 
 def test_AC_FR_1():
-    """
+    r"""
     GIVEN: A fresh non-root machine with the repo cloned to $HOME/.claude and only base prerequisites (python3, git)
     WHEN:  the user runs the executable bootstrap
     THEN:  the bootstrap creates the environment (venv), installs the required dependencies from the manifest, and verifies the resolver works; it exits 0 with a clear success message; it is non-destructive — it does NOT clobber an existing home without explicit opt-in and documents how to restore

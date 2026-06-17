@@ -28,7 +28,7 @@ HOOK_CHECK = {
 
 
 def test_AC_WS5_1():
-    """
+    r"""
     GIVEN: A directory containing both tracked and gitignored/untracked files
     WHEN:  the doc-sync generator regenerates the INDEX/README auto-blocks
     THEN:  the generated list contains ONLY tracked/published files (respecting .gitignore / git ls-files), never gitignored or untracked files

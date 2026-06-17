@@ -28,7 +28,7 @@ HOOK_CHECK = {
 
 
 def test_AC_FR_2():
-    """
+    r"""
     GIVEN: A fresh machine MISSING one or more required dependencies (e.g. pytest, jsonschema, pyyaml not installed)
     WHEN:  the user runs the doctor/preflight
     THEN:  doctor reports each missing REQUIRED dependency with a clear message BEFORE the first run, and exits nonzero when a required dep is missing / exits 0 when all required deps are present

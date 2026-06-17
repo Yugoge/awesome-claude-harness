@@ -28,7 +28,7 @@ HOOK_CHECK = {
 
 
 def test_AC_WS7_2():
-    """
+    r"""
     GIVEN: commands/spec.md:335 (verified by Read): 'COVERAGE: If `/root/.claude/scripts/spec-verify/spec-verify.py` exists, run ...; If the script is absent, skip and note "spec-verify.py not found — manual coverage check required".' This is a FAIL-OPEN instruction in a runtime command surface that contradicts the fail-closed Stop-hook goal (AC-WS1-6).
     WHEN:  the spec subagent reaches the COVERAGE step on a fresh clone where spec-verify.py is absent at the author path
     THEN:  the instruction is REWRITTEN to resolve spec-verify.py via the WS1 resolver and to treat a missing REQUIRED verifier as a HARNESS-INSTALL ERROR that BLOCKS coverage-required spec completion — NOT a manual-skip condition. The instruction is consistent with AC-WS1-6's fail-closed contract: present+covered -> proceed; present+under-covered -> block; required-but-absent -> block (install error), never skip.

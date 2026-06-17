@@ -28,7 +28,7 @@ HOOK_CHECK = {
 
 
 def test_AC_WS4_2():
-    """
+    r"""
     GIVEN: README.md after the WS4 edit
     WHEN:  a newcomer reads the portability section
     THEN:  the section is a CONTRACT (not merely a warning): it cleanly separates 'core harness runs on a fresh non-root clone (verified by the WS2 smoke test)' from 'these specific extras need external setup', and it cross-references the smoke test as the verification

@@ -28,7 +28,7 @@ HOOK_CHECK = {
 
 
 def test_AC_WS1_7():
-    """
+    r"""
     GIVEN: pretool-tool-policy.py invoked for a payload that carries an agent_id (a subagent) but whose role cannot be resolved (resolve_agent_type returns no role) — e.g. because registry/cp-state discovery resolution broke on a fresh clone. BASELINE (codex #6, verify by Read at pretool-tool-policy.py): an unresolved role currently lets the hook exit 0 (allow), and the documented backstop pretool-subagent-code-block.py is advisory-only (exits 0).
     WHEN:  an agent_id-bearing payload requests a protected Write and no role resolves
     THEN:  the hook BLOCKS with exit 2 (fail closed) — an unresolved subagent role does NOT bypass policy. A narrow, explicit registration-grace sentinel (if any) is the ONLY exception and must be named, not implicit.

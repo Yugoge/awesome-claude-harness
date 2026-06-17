@@ -28,7 +28,7 @@ HOOK_CHECK = {
 
 
 def test_AC_FR_4():
-    """
+    r"""
     GIVEN: An existing populated $HOME/.claude and the install boundary
     WHEN:  install/bootstrap is run without an explicit opt-in flag
     THEN:  the existing home is NOT clobbered; the tool refuses and documents the restore path; with explicit opt-in it backs up before applying

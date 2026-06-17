@@ -28,7 +28,7 @@ HOOK_CHECK = {
 
 
 def test_AC_WS5_2():
-    """
+    r"""
     GIVEN: The generated INDEX/README auto-blocks
     WHEN:  they are produced
     THEN:  no list item has an empty description and no item is labelled 'unknown file' or 'No description' for a published file

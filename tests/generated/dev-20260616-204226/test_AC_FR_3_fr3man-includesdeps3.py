@@ -28,7 +28,7 @@ HOOK_CHECK = {
 
 
 def test_AC_FR_3():
-    """
+    r"""
     GIVEN: The machine-readable dependency manifest (requirements.txt)
     WHEN:  it is read
     THEN:  it lists the dependencies the generated tests need beyond the test runner alone — at minimum the test runner (pytest), the schema library (jsonschema), and the yaml library (pyyaml) — each as a parseable manifest entry

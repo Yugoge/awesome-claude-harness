@@ -28,7 +28,7 @@ HOOK_CHECK = {
 
 
 def test_AC_WS6_1():
-    """
+    r"""
     GIVEN: A working fresh clone under a non-root home (WS2 green)
     WHEN:  the user runs the in-repo guard demo scenario
     THEN:  the demo reproducibly shows a dangerous operation being blocked by the guard, then a grant-gated fix completing; it is re-runnable under a non-root home; the recorded terminal cast (if present) is a thin rendering and is NOT required for the demo to pass

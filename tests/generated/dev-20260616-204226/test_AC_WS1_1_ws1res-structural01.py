@@ -28,7 +28,7 @@ HOOK_CHECK = {
 
 
 def test_AC_WS1_1():
-    """
+    r"""
     GIVEN: A fresh clone of the repo under a synthetic $HOME (e.g. /tmp/fakehome/.claude or any name including dot-claude) with NO /root/.claude present, invoked by a non-root effective user
     WHEN:  hooks/lib/claude_home.py and hooks/lib/claude_home.sh resolve the harness home from the running file's own location
     THEN:  Both resolvers return the clone root by walking up to the STRUCTURAL sentinel set (settings.json + hooks/ + policies/ + scripts/ present together), NOT to any directory named '.claude'; resolution succeeds even when the root basename is 'dot-claude'

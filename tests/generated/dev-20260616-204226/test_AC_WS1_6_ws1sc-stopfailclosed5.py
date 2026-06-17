@@ -28,7 +28,7 @@ HOOK_CHECK = {
 
 
 def test_AC_WS1_6():
-    """
+    r"""
     GIVEN: stop-spec-coverage-enforce.py firing for a /spec session whose spec is under-covered, on a fresh clone where the spec-verify helper is REQUIRED but absent
     WHEN:  the Stop hook evaluates coverage and cannot locate its verifier
     THEN:  the hook FAILS CLOSED (exit 2, block stop) for a required-but-absent verifier rather than silently exiting 0; when the verifier is present and coverage < 100%, it still exits 2

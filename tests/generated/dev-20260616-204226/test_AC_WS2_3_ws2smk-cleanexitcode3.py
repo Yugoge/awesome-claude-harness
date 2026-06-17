@@ -28,7 +28,7 @@ HOOK_CHECK = {
 
 
 def test_AC_WS2_3():
-    """
+    r"""
     GIVEN: The smoke test run on the fresh clone
     WHEN:  it checks exit codes and stderr across required probes (CLEAN-EXIT assertion)
     THEN:  required security probes never return 1/126/127; allowed probes return 0; blocked probes return 2; stderr contains no unresolved /root/.claude or command-not-found diagnostics for required helpers

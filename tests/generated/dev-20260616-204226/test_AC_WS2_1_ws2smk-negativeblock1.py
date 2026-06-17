@@ -28,7 +28,7 @@ HOOK_CHECK = {
 
 
 def test_AC_WS2_1():
-    """
+    r"""
     GIVEN: A fresh clone under an isolated NON-ROOT temp $HOME whose path is NOT under /root and NOT under /dev/shm/dev-workspace, with NO /root/.claude present and a non-root effective user (codex #8: this prevents author literals from accidentally resolving and proving the author machine instead of portability)
     WHEN:  the bootstrap smoke test exercises each security guard with a known-dangerous op (NEGATIVE assertion)
     THEN:  each guard BLOCKS the op with exit 2 and emits its OWN specific block marker on stderr (e.g. tool-policy emits 'BLOCKED by tool-policy.v1')

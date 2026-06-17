@@ -28,7 +28,7 @@ HOOK_CHECK = {
 
 
 def test_AC_WS1_5():
-    """
+    r"""
     GIVEN: The tool-policy enforcement path. BASELINE (current code, verified by Read this session): the deny-logic imports (lib.agent_resolver, lib.bash_write_targets, lib.policy_registry) are at MODULE TOP (pretool-tool-policy.py:35-37), OUTSIDE the try/except that wraps only main() (lines 112-116). So TODAY an import/bootstrap failure raises an uncaught ImportError and the process exits 1 (dirty / ambiguous — NOT a fail-open exit 0). The fail-open-into-ALLOW danger materializes ONLY if the dev naively moves the imports inside the resolver-bootstrap inside the existing blanket `except Exception: sys.exit(0)`.
     WHEN:  pretool-tool-policy.py runs after the WS1 migration and its deny-logic module (lib.policy_registry) cannot be imported/bootstrapped
     THEN:  the hook FAILS CLOSED: exit 2 (block) with the guard's own block marker on stderr — NOT a dirty exit 1 and NOT a swallowed exit 0. The migration MUST place the resolver-bootstrap + deny-logic import inside a fail-CLOSED guard (exit 2 on failure), NOT inside the existing blanket `except Exception: sys.exit(0)`. AND when the policy file is genuinely missing, ALL roles including 'dev' are denied protected writes (fail closed), removing the policy_registry dev-role fail-open (ALLOWED_TYPES_FALLBACK={'dev'} + _fail_open_or_closed returning allowed=True for dev).

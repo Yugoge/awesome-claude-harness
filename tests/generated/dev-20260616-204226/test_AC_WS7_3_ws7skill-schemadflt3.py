@@ -28,7 +28,7 @@ HOOK_CHECK = {
 
 
 def test_AC_WS7_3():
-    """
+    r"""
     GIVEN: Load-bearing model/runtime-executed paths in non-command surfaces codex #2 surfaced: skills/**/SKILL.md runtime reads (e.g. skills/ui-axe-injector/SKILL.md:77 reads /root/.claude/skills/ui-axe-injector/vendor/axe.min.js; skills/ui-anti-pattern-catalog/SKILL.md:10 reads /root/.claude/skills/ui-shared/anti-pattern-catalog.yml) and schema/policy DEFAULTS that resolve at runtime (schemas/cycle-contract.v1.json:56 default '/root/.claude/policies/tool-policy.v1.json', :60 default '/root/.claude/schemas/qa-report.v1.json'). NOTE: CLAUDE.md:117 + NESTED-REPO.md describe THIS repo's symlink boundary and are deliberate author-environment operational context — recorded as out-of-scope observations, NOT churned (the resolver makes them advisory).
     WHEN:  a skill or schema-default-consuming path runs on a fresh non-root clone
     THEN:  skill runtime reads resolve their data files via a portable harness-home form (the skill reads relative to its own location / the resolver), and schema defaults are documented as install-rendered or resolver-derived rather than baked author-absolute; OR each remaining literal is proven non-load-bearing with a per-file note

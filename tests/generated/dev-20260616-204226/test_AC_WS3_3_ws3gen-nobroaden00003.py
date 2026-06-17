@@ -28,7 +28,7 @@ HOOK_CHECK = {
 
 
 def test_AC_WS3_3():
-    """
+    r"""
     GIVEN: The renderer and the template
     WHEN:  a template change would broaden a permission beyond what the template authorizes
     THEN:  the rendered permission set is a substitution of the template ONLY — the renderer never adds, widens, or relaxes a permission relative to the template

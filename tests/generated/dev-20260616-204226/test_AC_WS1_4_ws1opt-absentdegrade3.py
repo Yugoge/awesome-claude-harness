@@ -28,7 +28,7 @@ HOOK_CHECK = {
 
 
 def test_AC_WS1_4():
-    """
+    r"""
     GIVEN: An OPTIONAL capability file is absent
     WHEN:  resolve_optional(relpath) is called
     THEN:  it returns an 'absent' sentinel (python None / shell empty string + nonzero status the caller can branch on) so the caller can degrade, NOT a hard failure

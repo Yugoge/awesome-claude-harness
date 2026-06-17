@@ -28,7 +28,7 @@ HOOK_CHECK = {
 
 
 def test_AC_WS1_9():
-    """
+    r"""
     GIVEN: The bare-/root env-default class in active runtime code (verified by Read): merge.sh:109 PROJ="${CLAUDE_PROJECT_DIR:-/root}"; posttool-overnight-trace.py:63 os.environ.get('CLAUDE_PROJECT_DIR','/root'); hooks/lib/bash_write_targets.py:163 os.environ.get('HOME','/root'); hooks/lib/closeout.py:44; hooks/lib/specialist_yield.py:62; scripts/break-overnight-lock.py:24; AND the bare-/root git-toplevel fallbacks codex #3 surfaced: hooks/push.sh:93/192 (|| echo /root), hooks/prompt-workflow.py:67 (return Path('/root')), scripts/apply-permissions.sh:10 (|| echo /root), scripts/resolve-close-report.sh:18 (CONTROL_ROOT:-/root). The prior grep pattern /root/\.claude|/root/bin|/dev/shm did NOT match a bare /root, so these were absent from the inventory.
     WHEN:  any of these runs on a fresh non-root clone with CLAUDE_PROJECT_DIR / HOME unset
     THEN:  the default is the resolved harness home / project dir via the WS1 resolver (or $HOME / git-toplevel as appropriate), NOT the author's literal /root; where the value is security-relevant the absence path fails closed
