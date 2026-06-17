@@ -47,6 +47,8 @@ def _roomy_tmpbase() -> str:
                  tempfile.gettempdir(), os.path.expanduser("~")):
         if not cand or not os.path.isdir(cand):
             continue
+        if not os.access(cand, os.W_OK | os.X_OK):
+            continue  # must be writable+traversable, not merely present
         try:
             if _sh.disk_usage(cand).free >= 200 * 1024 * 1024:
                 return cand
