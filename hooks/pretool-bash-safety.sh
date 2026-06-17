@@ -763,7 +763,12 @@ if echo "$COMMAND" | grep -qF '/tmp/claude-bulk-commit-sentinel-' \
   # helper correctly DENYs those. [[ =~ ]] is used (NOT echo|grep -qE) to prevent
   # newline-injection bypass: bash [[ =~ ]] matches the WHOLE string; grep -qE is
   # line-oriented and would match a second line after an injected newline.
-  _BULK_CANONICAL_RE='^source[[:space:]]+venv/bin/activate[[:space:]]*&&[[:space:]]*python3?[[:space:]]+/root/\.claude/scripts/write-bulk-commit-sentinel\.py$'
+  # WS1: the sentinel-script path portion is derived from the resolved
+  # CLAUDE_HOME (line 8) — regex-escaped — instead of the author literal
+  # /root/.claude, so the canonical /commit --bulk form is recognized under any
+  # home on a fresh non-root clone.
+  _BULK_HOME_RE="$(printf '%s' "${CLAUDE_HOME%/}" | sed 's/[][\\.^$*+?{}|()/]/\\&/g')"
+  _BULK_CANONICAL_RE="^source[[:space:]]+venv/bin/activate[[:space:]]*&&[[:space:]]*python3?[[:space:]]+${_BULK_HOME_RE}/scripts/write-bulk-commit-sentinel\.py$"
   if [[ $COMMAND =~ $_BULK_CANONICAL_RE ]]; then
     exit 0
   fi
