@@ -18,10 +18,11 @@
 #   * exempts purely-illustrative prose ONLY by a PER-LITERAL allowlist proof,
 #     never by prefix omission or a trailing-slash-only regex.
 #
-# The boundary-aware match pattern (PCRE) is:
-#   (?<![\w./-])(?:/root(?:/|(?=$|[^\w./-]))|/dev/shm/dev-workspace(?:/|(?=$|[^\w./-])))
+# The boundary-aware match pattern is:
+#   (?<![\w./])(?:/root(?:/|(?=$|[^\w./-]))|/dev/shm/dev-workspace(?:/|(?=$|[^\w./-])))
 # Note: the lookbehind deliberately EXCLUDES '-' so the shell default operator
-# ':-' in "${VAR:-/root}" does not suppress the bare-/root match.
+# ':-' in "${VAR:-/root}" does NOT suppress the bare-/root match (the '-' right
+# before /root must be allowed in the lookbehind position).
 set -euo pipefail
 
 PROJECT_ROOT="${1:-.}"
