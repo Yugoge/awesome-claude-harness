@@ -94,17 +94,35 @@ def test_AC_WS2_6():
             prefix="ws2-gate-", suffix=".json", delete=False) as tf:
         out_json = tf.name
     # Scope the live-surface gate run to THIS cycle's RESPONSIBLE surface:
-    # files tracked at the cycle baseline (a46d6d58) plus any file this cycle
+    # files tracked at the cycle baseline (a46d6d58) PLUS files THIS cycle
     # created/modified. On this SHARED workspace a concurrent foreign session
     # may leave an uncommitted in-flight file outside this cycle's scope; that
     # file is not part of our definition-of-done, so the gate excludes it.
     # The gate stays genuinely strict for the responsible surface — a
-    # baseline-tracked file with a load-bearing literal still fails (rc=3).
+    # baseline-tracked file (or a this-cycle-created file passed as a cycle
+    # file) with a load-bearing literal still fails (rc=3).
     BASELINE_REF = "a46d6d58c94e1adf3b8287c1e5646a701e5cdd18"
+    # The "+ files this cycle created/modified" half of the responsible surface
+    # must come from an AUTHORITATIVE this-cycle list — NOT a working-tree diff,
+    # which on a shared workspace would re-include the very foreign concurrent
+    # additions we are excluding. The dev-report is that authoritative source;
+    # any in-scope file it lists is passed as --cycle-file so a load-bearing
+    # literal in a this-cycle-CREATED (baseline-absent) file still fails.
+    cycle_args = []
+    report = os.path.join(
+        repo, "docs", "dev", "dev-report-dev-20260616-204226-ws2.json")
+    try:
+        with open(report) as rf:
+            rdoc = json.load(rf)
+        d = rdoc.get("dev", {})
+        for rel in (d.get("files_created") or []) + (d.get("files_modified") or []):
+            cycle_args += ["--cycle-file", rel]
+    except (OSError, ValueError):
+        pass  # report unreadable => baseline-only scoping (no cycle additions)
     try:
         proc = subprocess.run(
             [sys.executable, gate_script, repo, out_json,
-             "--baseline-ref", BASELINE_REF],
+             "--baseline-ref", BASELINE_REF] + cycle_args,
             capture_output=True, text=True)
         doc = json.loads(open(out_json).read())
     finally:
