@@ -392,42 +392,89 @@ GATE_JSON="$TMP_BASE/gate-residuals.json"
 # those are EXCLUDED because they are absent at the pinned baseline and are not in
 # this cycle's file list. A baseline-tracked OR this-cycle-created file with a
 # load-bearing literal STILL fails (the gate scans content live; scoping is only a
-# membership filter). This mirrors test_AC_WS2_6's pinned --baseline-ref + the
-# dev-report-sourced --cycle-file list, keeping the smoke and that test consistent.
+# membership filter). This mirrors test_AC_WS2_6's pinned --baseline-ref.
 #
-# Resolve the baseline + cycle-file list from THIS CYCLE'S dev-report (authoritative
-# this-cycle source — NOT a working-tree diff, which on a shared tree would
-# re-include the very foreign additions we exclude). Fall back to no scoping only
-# if the report's baseline_head_sha is unreadable.
-GATE_REPORT="$REPO/docs/dev/dev-report-dev-20260616-204226-ws2.json"
-GATE_SCOPE_ARGS="$(python3 - "$GATE_REPORT" <<'PYSCOPE'
-import json, sys, shlex
-try:
-    doc = json.load(open(sys.argv[1]))
-except (OSError, ValueError):
-    sys.exit(0)  # no scope args => caller falls back to unscoped
-ref = doc.get("baseline_head_sha") or ""
+# The cycle file list MUST come from the AGGREGATE cycle dev-report, not just the
+# WS2 shard report: this integration gate is a CYCLE-WIDE measurement (it scans
+# hooks/scripts/commands/agents/skills/schemas), so a this-cycle-CREATED runtime
+# file (e.g. hooks/lib/claude_home.py — baseline-ABSENT) must be in the cycle list
+# or the gate would silently MISS a load-bearing literal inside it. We union every
+# same-cycle report whose baseline_head_sha matches, taking each report's
+# dev.files_created + dev.files_modified, so no shard's cycle file is dropped.
+#
+# Fail-CLOSED (NOT fail-open): if no usable baseline can be resolved from the
+# reports, this slice FAILS rather than silently running an UNSCOPED gate that
+# would re-introduce the foreign-file RED. After the gate runs we ALSO assert the
+# emitted JSON recorded scoped_to_responsible_surface==true, so a baseline that
+# the gate could not resolve (responsible_surface()->None) cannot pass undetected.
+#
+# Emit the cycle args NUL-delimited into a bash array (no `eval`): the array is
+# injection-proof regardless of any path content, unlike word-split string args.
+GATE_BASELINE_REF=""
+GATE_CYCLE_ARGS=()
+while IFS= read -r -d '' _gate_tok; do
+  if [ -z "$GATE_BASELINE_REF" ]; then
+    GATE_BASELINE_REF="$_gate_tok"           # first NUL token = the baseline sha
+  else
+    GATE_CYCLE_ARGS+=(--cycle-file "$_gate_tok")
+  fi
+done < <(python3 - "$REPO" <<'PYSCOPE'
+import glob, json, os, sys
+repo = sys.argv[1]
+# The aggregate cycle report is the canonical scope source; union any sibling
+# shard reports for the same cycle so no shard's cycle file is dropped.
+agg = os.path.join(repo, "docs", "dev", "dev-report-dev-20260616-204226.json")
+candidates = [agg] + sorted(
+    glob.glob(os.path.join(repo, "docs", "dev",
+                           "dev-report-dev-20260616-204226-*.json")))
+ref = ""
+cycle = []
+seen = set()
+for path in candidates:
+    try:
+        doc = json.load(open(path))
+    except (OSError, ValueError):
+        continue
+    r = doc.get("baseline_head_sha") or ""
+    if not r:
+        continue
+    if not ref:
+        ref = r
+    elif r != ref:
+        continue  # a report for a DIFFERENT baseline => not this cycle; skip it
+    dev = doc.get("dev", {}) or {}
+    for rel in (dev.get("files_created") or []) + (dev.get("files_modified") or []):
+        if rel not in seen:
+            seen.add(rel)
+            cycle.append(rel)
 if not ref:
-    sys.exit(0)
-dev = doc.get("dev", {}) or {}
-parts = ["--baseline-ref", ref]
-for rel in (dev.get("files_created") or []) + (dev.get("files_modified") or []):
-    parts += ["--cycle-file", rel]
-print(" ".join(shlex.quote(p) for p in parts))
+    sys.exit(0)  # no usable baseline => emit nothing => caller fails the slice
+out = sys.stdout.buffer
+out.write(ref.encode() + b"\0")
+for rel in cycle:
+    out.write(rel.encode() + b"\0")
 PYSCOPE
-)"
-if [ -n "$GATE_SCOPE_ARGS" ]; then
-  # shellcheck disable=SC2086  # intentional word-splitting of the scope args
-  eval python3 "$(printf %q "$SELF_DIR/ws2_zero_literal_gate.py")" \
-    "$(printf %q "$GATE_TREE")" "$(printf %q "$GATE_JSON")" \
-    $GATE_SCOPE_ARGS --baseline-repo "$(printf %q "$REPO")" >/dev/null 2>&1
+)
+if [ -z "$GATE_BASELINE_REF" ]; then
+  # Fail-CLOSED: no resolvable cycle baseline => DO NOT run an unscoped gate
+  # (that would re-introduce the foreign-file RED). Record the slice as failed.
+  gate_rc=2
+  gate_count=-1
+  gate_scoped="false"
+  echo '{"count": -1, "scoped_to_responsible_surface": false, "error": "no resolvable cycle baseline from dev-reports"}' > "$GATE_JSON"
 else
-  python3 "$SELF_DIR/ws2_zero_literal_gate.py" "$GATE_TREE" "$GATE_JSON" >/dev/null 2>&1
+  python3 "$SELF_DIR/ws2_zero_literal_gate.py" "$GATE_TREE" "$GATE_JSON" \
+    --baseline-ref "$GATE_BASELINE_REF" --baseline-repo "$REPO" \
+    "${GATE_CYCLE_ARGS[@]}" >/dev/null 2>&1
+  gate_rc=$?
+  gate_count="$(python3 -c "import json;print(json.load(open('$GATE_JSON'))['count'])" 2>/dev/null || echo -1)"
+  # Assert the gate actually scoped to the responsible surface; a baseline it
+  # could not resolve degrades responsible_surface() to None (unscoped) — which
+  # must NOT silently pass here.
+  gate_scoped="$(python3 -c "import json;print('true' if json.load(open('$GATE_JSON')).get('scoped_to_responsible_surface') else 'false')" 2>/dev/null || echo false)"
 fi
-gate_rc=$?
-gate_count="$(python3 -c "import json;print(json.load(open('$GATE_JSON'))['count'])" 2>/dev/null || echo -1)"
-if [ "$gate_rc" -eq 0 ] && [ "$gate_count" = "0" ]; then
-  record integration-gate zero_literals 1 "zero genuine load-bearing author literals across the rendered surface"
+if [ "$gate_rc" -eq 0 ] && [ "$gate_count" = "0" ] && [ "$gate_scoped" = "true" ]; then
+  record integration-gate zero_literals 1 "zero genuine load-bearing author literals across the rendered surface (scoped to cycle baseline $GATE_BASELINE_REF)"
 else
   record integration-gate zero_literals 0 "gate_rc=$gate_rc residuals=$gate_count (see $GATE_JSON)"
 fi
