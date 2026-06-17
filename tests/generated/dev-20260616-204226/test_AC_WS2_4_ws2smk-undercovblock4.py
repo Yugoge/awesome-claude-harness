@@ -33,7 +33,40 @@ def test_AC_WS2_4():
     WHEN:  the smoke test triggers the spec-coverage Stop hook for (a) an under-covered split with the verifier present and (b) a verifier-absent run
     THEN:  (a) the under-covered split is BLOCKED (exit 2); (b) the required-but-absent verifier ALSO BLOCKS (exit 2) with a clear install-error block message — NOT a silent skip/exit 0 — proving the fail-closed contract engages from the clone; restoring the verifier with full coverage exits 0
     """
-    # TODO(dev): replace the line below with the real test body. While the
-    # TEST_INCOMPLETE sentinel is present the test will hard-fail, marking
-    # the AC as unimplemented for QA Phase 5.
-    pytest.fail(f"TEST_INCOMPLETE: {AC_UID} — GIVEN An intentionally under-covered /spec split on the fresh clone, AND a separately staged ca… / WHEN the smoke test triggers the spec-coverage Stop hook for (a) an under-covered split with t… / THEN (a) the under-covered split is BLOCKED (exit 2); (b) the required-but-absent verifier ALSO BLOCKS (exit 2) wi…")
+    # Behavioral spec-coverage assertions (codex #11): the smoke triggers the
+    # stop-spec-coverage Stop hook from the fresh clone for:
+    #   (a) verifier present + an under-covered split  -> BLOCK (exit 2)
+    #       [smoke's stop-spec-coverage 'positive' assertion: ran clone verifier,
+    #        under-covered blocked exit 2]
+    #   (b) the REQUIRED verifier hidden/absent + spec touched -> BLOCK (exit 2)
+    #       with a clear install-error message, NOT a silent skip/exit 0
+    #       [smoke's stop-spec-coverage 'negative' assertion]
+    #   (c) verifier restored + full coverage -> ALLOW (exit 0)
+    #       [smoke's stop-spec-coverage 'clean_exit' assertion]
+    import os
+    import sys
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    from _ws2_smoke import run_smoke, require_not_setup_error
+
+    rc, result = run_smoke()
+    require_not_setup_error(rc, result)
+
+    sc = {a["kind"]: a for a in result["assertions"]
+          if a["guard"] == "stop-spec-coverage"}
+    assert {"negative", "positive", "clean_exit"} <= set(sc), (
+        f"stop-spec-coverage missing a case; saw {set(sc)}")
+
+    # (a) under-covered split blocks (exit 2) — the 'positive' (own-verifier) case.
+    assert sc["positive"]["pass"], (
+        f"(a) under-covered split must block exit 2: {sc['positive']['detail']}")
+    # (b) required-but-absent verifier blocks (exit 2) with install-error, not 0.
+    assert sc["negative"]["pass"], (
+        f"(b) verifier-absent must block exit 2 (install-error, not silent 0): "
+        f"{sc['negative']['detail']}")
+    assert "install-error" in sc["negative"]["detail"], (
+        f"(b) the verifier-absent block must carry the install-error marker: "
+        f"{sc['negative']['detail']}")
+    # (c) restored verifier + full coverage allows stop (exit 0).
+    assert sc["clean_exit"]["pass"], (
+        f"(c) full-coverage with verifier present must allow stop exit 0: "
+        f"{sc['clean_exit']['detail']}")
