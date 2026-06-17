@@ -290,18 +290,22 @@ mv ~/.claude ~/.claude.bak 2>/dev/null || true
 # 2. Clone this repo to ~/.claude
 git clone https://github.com/Yugoge/awesome-claude-harness.git ~/.claude
 
-# 3. Create the Python venv the scripts/hooks expect (it ships empty)
-python3 -m venv ~/.claude/venv
+# 3. (optional) Preflight — report any missing required dependencies first
+~/.claude/scripts/doctor
 
-# 4. Install pytest into the venv (REQUIRED for /test and generated AC tests)
-~/.claude/venv/bin/pip install pytest
+# 4. Bootstrap — creates the venv, installs the manifest (pytest + jsonschema +
+#    pyyaml), makes the shell hooks executable, and verifies the resolver.
+#    It is non-destructive: it refuses to clobber an existing populated home
+#    without --force (which backs up the prior venv before applying).
+~/.claude/scripts/bootstrap
 
-# 5. Make the shell hooks executable
-chmod +x ~/.claude/hooks/*.sh
-
-# 6. Start Claude Code — the SessionStart hooks announce the environment.
+# 5. Start Claude Code — the SessionStart hooks announce the environment.
 claude
 ```
+
+> The bootstrap resolves the harness home structurally from its own location
+> (via `hooks/lib/claude_home.{sh,py}`), so there is no `/root` path to rewrite —
+> it works whether your clone lives at `~/.claude` or anywhere else.
 
 The hooks are wired in `settings.json` and activate on the next session. Try them:
 
