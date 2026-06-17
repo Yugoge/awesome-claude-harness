@@ -31,12 +31,17 @@ import shlex
 import sys
 from typing import Optional, Tuple
 
-# ── The single hardcoded constant: the generic data-file path ────────────────
+# ── The single generic data-file path ────────────────────────────────────────
 # Overridable for tests via env so the live machine file is never mutated by a
-# test run. The path is generic; it carries no project identity.
+# test run. The path is generic; it carries no project identity. WS1: the
+# default is now $HOME-relative (~/.config/claude/...) rather than the author
+# literal /root, so a fresh non-root home resolves its own config path.
 DATA_FILE_PATH = os.environ.get(
     "CLAUDE_PROTECTED_RUNTIME_FILE",
-    "/root/.config/claude/protected-runtime.json",
+    os.path.join(
+        os.environ.get("HOME") or os.path.expanduser("~"),
+        ".config", "claude", "protected-runtime.json",
+    ),
 )
 
 MAX_COMMAND_CHARS = int(os.environ.get("CLAUDE_GUARD_MAX_CHARS", "262144"))
