@@ -188,16 +188,26 @@ def test_WS2_6_responsible_surface_soundness():
             "a this-cycle CREATED file with a load-bearing literal must fail "
             f"(rc={rc} cnt={cnt}) — fail-open regression")
 
-        # (3) strictness on the committed surface: plant a literal into a
-        #     baseline-TRACKED file copied into the tree; it must fail.
-        tracked = "hooks/stop.sh"
-        src = subprocess.run(
-            ["git", "-C", repo, "show", f"{BASELINE_REF}:{tracked}"],
-            capture_output=True, text=True)
-        if src.returncode == 0:
+        # (3) strictness on the committed surface: write a literal into a path
+        #     that IS tracked at baseline; it must fail even though it is not a
+        #     --cycle-file (committed surface is always in the responsible set).
+        #     (The baseline content of this path may itself carry pre-migration
+        #     literals, so assert "fails with at least the planted one".)
+        tracked = "hooks/stop.sh"  # confirmed tracked at BASELINE_REF
+        is_tracked = subprocess.run(
+            ["git", "-C", repo, "cat-file", "-e", f"{BASELINE_REF}:{tracked}"],
+            capture_output=True).returncode == 0
+        if is_tracked:
             with open(os.path.join(tree, "hooks", "stop.sh"), "w") as fh:
-                fh.write(src.stdout + "\nEXEC=" + LIT)
-            rc, cnt = run_gate(tree)  # foreign still unlisted, tracked planted
-            assert rc == 3 and cnt == 1, (
+                fh.write("#!/usr/bin/env bash\nEXEC=" + LIT)
+            rc, cnt = run_gate(tree)  # foreign+cyc still unlisted, tracked planted
+            assert rc == 3 and cnt >= 1, (
                 "a baseline-tracked file with a planted literal must fail "
                 f"(rc={rc} cnt={cnt})")
+            findings = json.load(open(os.path.join(tree, "_gate.json")))["findings"]
+            assert any(fd["file"] == tracked for fd in findings), (
+                "the tracked file's planted literal must be among the findings: "
+                + json.dumps(findings, indent=2))
+            assert not any(fd["file"] in (cyc, foreign) for fd in findings), (
+                "baseline-absent unlisted files must NOT appear in findings: "
+                + json.dumps(findings, indent=2))
