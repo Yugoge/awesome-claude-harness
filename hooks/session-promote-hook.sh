@@ -82,12 +82,29 @@ if [[ -z "$PROJECT_NAME" || "$PROJECT_NAME" == "-" ]]; then
   exit 0
 fi
 
+# WS1: the on-ramdisk project root lives under the resolved harness home's
+# realpath (the author's /dev/shm tmpfs root that ~/.claude symlinks to). If the
+# home is unresolved there is nothing to promote — degrade silently.
+if [[ -z "$CLAUDE_HOME" ]]; then
+  exit 0
+fi
+RAM_ROOT="$(_claude_home_realpath "$CLAUDE_HOME" 2>/dev/null || echo "$CLAUDE_HOME")"
+
 # Only act if the on-ramdisk .jsonl is a symlink (archived). Saves a subshell
 # fork on every single session start.
-RAM_JSONL="/dev/shm/dev-workspace/dot-claude/projects/$PROJECT_NAME/$SESSION_ID.jsonl"
+RAM_JSONL="${RAM_ROOT}/projects/$PROJECT_NAME/$SESSION_ID.jsonl"
 if [[ ! -L "$RAM_JSONL" ]]; then
   # Either the session is already hot, or it's brand new (file not yet created).
   # Either way, nothing to promote.
+  exit 0
+fi
+
+# WS1 (AC-WS3-6): resolve the OPTIONAL external promote helper via
+# $SESSION_PROMOTE_BIN. Absent => this author-environment capability is simply
+# unavailable on this machine; log one line and degrade (never a bare fallback).
+PROMOTE_BIN="${SESSION_PROMOTE_BIN:-}"
+if [[ -z "$PROMOTE_BIN" || ! -x "$PROMOTE_BIN" ]]; then
+  log_hook "session-promote: unavailable (set SESSION_PROMOTE_BIN to enable RAM-disk promotion); skipping (optional)"
   exit 0
 fi
 
@@ -95,7 +112,7 @@ log_hook "queue promote $PROJECT_NAME/$SESSION_ID"
 
 # Fire and forget. Disown to fully detach from the hook's process group so
 # Claude Code's hook pipeline doesn't wait on it.
-( /root/bin/session-promote.sh "$SESSION_ID" "$PROJECT_NAME" \
+( "$PROMOTE_BIN" "$SESSION_ID" "$PROJECT_NAME" \
     >> "$LOG" 2>&1 & disown ) 2>/dev/null
 
 exit 0
