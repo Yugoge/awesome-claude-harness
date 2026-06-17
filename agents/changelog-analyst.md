@@ -856,7 +856,7 @@ if [ -z "$ROOT_STATUS" ] && [ -z "$NESTED_STATUS" ]; then
     echo "Bulk complete: zero diff in both repos."
 else
     echo "WARNING: Bulk ended with remaining changes:"
-    echo "  /root: ${ROOT_STATUS}"
+    echo "  control-root: ${ROOT_STATUS}"
     echo "  nested: ${NESTED_STATUS}"
 fi
 ```
