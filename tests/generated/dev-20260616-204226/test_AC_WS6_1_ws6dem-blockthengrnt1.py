@@ -40,7 +40,47 @@ def test_AC_WS6_1():
     WHEN:  the user runs the in-repo guard demo scenario
     THEN:  the demo reproducibly shows a dangerous operation being blocked by the guard, then a grant-gated fix completing; it is re-runnable under a non-root home; the recorded terminal cast (if present) is a thin rendering and is NOT required for the demo to pass
     """
-    # TODO(dev): replace the line below with the real test body. While the
-    # TEST_INCOMPLETE sentinel is present the test will hard-fail, marking
-    # the AC as unimplemented for QA Phase 5.
-    pytest.fail(f"TEST_INCOMPLETE: {AC_UID} — GIVEN A working fresh clone under a non-root home (WS2 green) / WHEN the user runs the in-repo guard demo scenario / THEN the demo reproducibly shows a dangerous operation being blocked by the guard, then a grant-gated fix completi…")
+    # Real body (HOOK_CHECK probe): run the in-repo guard demo TWICE under the
+    # current (non-root) home and assert the deterministic
+    # block-then-grant-then-complete sequence. The demo IS the substantive WS6
+    # deliverable; a recorded terminal cast is NOT required to pass.
+    assert _DEMO.exists(), f"guard demo script missing: {_DEMO}"
+
+    # The demo never depends on root; if pytest is somehow run as root the demo
+    # still resolves its own ephemeral home and behaves identically (it isolates
+    # each guard probe with env -i). Run it twice to prove re-runnability and
+    # determinism (same exit + same narrated milestones each run).
+    runs = []
+    for i in range(2):
+        proc = subprocess.run(
+            ["bash", str(_DEMO)],
+            capture_output=True, text=True, cwd=str(_REPO),
+        )
+        runs.append(proc)
+
+    for i, proc in enumerate(runs):
+        combined = proc.stdout + proc.stderr
+        assert proc.returncode == HOOK_CHECK["expect_exit"], (
+            f"run {i+1}: demo exit {proc.returncode} != expected "
+            f"{HOOK_CHECK['expect_exit']}\n{combined[-800:]}"
+        )
+        # Block half: the guard's OWN fail-closed marker must appear.
+        assert "BLOCKED by tool-policy.v1" in combined, (
+            f"run {i+1}: demo did not show the guard blocking the dangerous op\n"
+            f"{combined[-800:]}"
+        )
+        # Grant + complete half: the authorized fix must land.
+        assert "Fix write landed on disk" in combined, (
+            f"run {i+1}: demo did not complete the grant-gated fix\n"
+            f"{combined[-800:]}"
+        )
+        assert "PASS" in combined, (
+            f"run {i+1}: demo did not report PASS\n{combined[-800:]}"
+        )
+
+    # Determinism: both runs reach the same milestone and exit code (a cast is
+    # NOT consulted — the script alone proves the scenario).
+    assert runs[0].returncode == runs[1].returncode == 0, (
+        "demo is not deterministically green across re-runs: "
+        f"{runs[0].returncode} vs {runs[1].returncode}"
+    )
