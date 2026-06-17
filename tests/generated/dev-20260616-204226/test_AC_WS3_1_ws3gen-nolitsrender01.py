@@ -27,13 +27,64 @@ HOOK_CHECK = {
 }
 
 
+import json
+import os
+import subprocess
+import tempfile
+from pathlib import Path
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+RENDERER = REPO_ROOT / "scripts" / "install" / "render-settings"
+TEMPLATE = REPO_ROOT / "settings.template.json"
+
+# Forbidden author-home literals that must NOT appear in any executable field of a
+# rendered settings file (the install home is a temp dir, NOT under these roots).
+FORBIDDEN = ("/root", "/dev/shm/dev-workspace", "/home/")
+
+
+def _executable_strings(settings: dict):
+    """Yield every executable-field string: hooks[].command, perms.*, env.*."""
+    for ev in (settings.get("hooks") or {}).values():
+        for group in ev:
+            for hook in group.get("hooks", []):
+                yield hook.get("command", "")
+    perms = settings.get("permissions", {})
+    for key in ("allow", "ask", "deny"):
+        for entry in perms.get(key, []):
+            yield entry
+    for val in (settings.get("env") or {}).values():
+        if isinstance(val, str):
+            yield val
+
+
 def test_AC_WS3_1():
     r"""
     GIVEN: settings.template.json and the install-time renderer
     WHEN:  the renderer substitutes the resolved install root into the template
     THEN:  the produced settings.json contains absolute permission literals + env values for the installed home and contains ZERO raw /root, /dev/shm/dev-workspace, or /home/<author> literals in any executable field (hooks[].command, permissions.allow/ask/deny, env.*); the stale GRAPHIFY_BIN /root value is rendered from the template, not hardcoded
     """
-    # TODO(dev): replace the line below with the real test body. While the
-    # TEST_INCOMPLETE sentinel is present the test will hard-fail, marking
-    # the AC as unimplemented for QA Phase 5.
-    pytest.fail(f"TEST_INCOMPLETE: {AC_UID} — GIVEN settings.template.json and the install-time renderer / WHEN the renderer substitutes the resolved install root into the template / THEN the produced settings.json contains absolute permission literals + env values for the installed home and cont…")
+    assert RENDERER.is_file(), f"renderer missing: {RENDERER}"
+    assert TEMPLATE.is_file(), f"template missing: {TEMPLATE}"
+
+    with tempfile.TemporaryDirectory(prefix="ws3-1-home.") as td:
+        install_home = os.path.join(td, ".claude")
+        proc = subprocess.run(
+            ["python3", str(RENDERER), install_home, "--print"],
+            capture_output=True, text=True,
+        )
+        assert proc.returncode == 0, f"renderer failed: {proc.stderr}"
+        rendered = json.loads(proc.stdout)
+
+        # ZERO forbidden author literals in any executable field.
+        for s in _executable_strings(rendered):
+            for bad in FORBIDDEN:
+                assert bad not in s, f"forbidden author literal {bad!r} in executable field: {s!r}"
+
+        # GRAPHIFY_BIN reflects the temp install home (rendered, not hardcoded /root).
+        graphify = rendered["env"]["GRAPHIFY_BIN"]
+        assert graphify.startswith(install_home), f"GRAPHIFY_BIN not rendered to install home: {graphify!r}"
+        assert "/root" not in graphify
+
+        # Absolute permission literals present for the installed home.
+        assert any(install_home in s for s in _executable_strings(rendered)), \
+            "rendered settings carry no absolute literals for the install home"
