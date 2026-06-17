@@ -73,8 +73,7 @@ PROSE_ALLOWLIST = [
     {"suffix": "commands/dev.md", "contains": "/root"},
     # close.md:32 HTML-comment cross-reference to a BA spec doc path.
     {"suffix": "commands/close.md", "contains": "/root/docs/dev/ba-spec"},
-    # The detector's OWN match/extract/classify patterns + its prose allowlist
-    # entries (AC-WS3-4: "the detector's own patterns are exempt").
+    # check-file-references.sh usage-example argument prose ("$0 ... /root/my-project").
     {"suffix": "scripts/check-file-references.sh", "contains": "/root/my-project"},
     # agents/qa.md + style-inspector.md: detection-example / instruction prose
     # ("grep -nE ...(/root/...)", '"finding": "Hardcoded path /root/deploy/"',
