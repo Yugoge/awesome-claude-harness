@@ -13,7 +13,8 @@
 # test-writer agent spec for smoke/shell-verified ACs. Remove the
 # TEST_INCOMPLETE sentinel below when the real body is in place.
 
-import pytest
+import re
+from pathlib import Path
 
 AC_UID = "ws4doc-trusttable0003"
 AC_TYPE = "data"
@@ -26,6 +27,8 @@ HOOK_CHECK = {
     "expect_exit": 0
 }
 
+_REPO = Path(__file__).resolve().parents[3]
+
 
 def test_AC_WS4_3():
     r"""
@@ -33,7 +36,24 @@ def test_AC_WS4_3():
     WHEN:  a newcomer reads the trust/security section
     THEN:  it contains a trust-model statement AND a single fail-closed-vs-skip semantics table that lists, per capability, whether absence FAILS CLOSED (security guards) or SKIPS (optional capabilities)
     """
-    # TODO(dev): replace the line below with the real test body. While the
-    # TEST_INCOMPLETE sentinel is present the test will hard-fail, marking
-    # the AC as unimplemented for QA Phase 5.
-    pytest.fail(f"TEST_INCOMPLETE: {AC_UID} — GIVEN README.md (or a linked doc) after the WS4 edit / WHEN a newcomer reads the trust/security section / THEN it contains a trust-model statement AND a single fail-closed-vs-skip semantics table that lists, per capabili…")
+    readme = (_REPO / "README.md").read_text()
+
+    # A trust-model statement.
+    assert re.search(r"trust model", readme, re.IGNORECASE), (
+        "README lacks a trust-model statement")
+    assert re.search(r"the human is the trust root", readme, re.IGNORECASE), (
+        "README trust-model statement lacks the 'human is the trust root' claim")
+
+    # A fail-closed-vs-skip semantics table with BOTH a 'fail closed' row and a
+    # 'skip' row. Locate the table by its heading then assert both rows present.
+    m = re.search(r"Fail-closed vs\.? skip semantics", readme, re.IGNORECASE)
+    assert m, "README lacks the 'Fail-closed vs. skip semantics' table heading"
+    table = readme[m.start():m.start() + 2000]
+    assert re.search(r"\bFAIL CLOSED\b", table, re.IGNORECASE), (
+        "fail-closed-vs-skip table lacks a 'fail closed' row")
+    assert re.search(r"\bSKIP\b", table, re.IGNORECASE), (
+        "fail-closed-vs-skip table lacks a 'skip' row")
+    # The table is keyed per capability/class (security vs optional vs config).
+    assert re.search(r"security", table, re.IGNORECASE) and \
+        re.search(r"optional", table, re.IGNORECASE), (
+        "fail-closed-vs-skip table does not distinguish security vs optional capabilities")
