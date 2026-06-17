@@ -149,7 +149,7 @@
       "Edit(.review/**)",
       "Edit(scripts/**)",
       "Edit(docs/**)",
-      "Read(/root/**)",
+      "Read(~/**)",
       "Read(/tmp/**)",
       "mcp__memory-server__read_graph",
       "mcp__memory-server__create_entities",
