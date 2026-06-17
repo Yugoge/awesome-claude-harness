@@ -86,15 +86,17 @@ def test_AC_FR_2():
     WHEN:  the user runs the doctor/preflight
     THEN:  doctor reports each missing REQUIRED dependency with a clear message BEFORE the first run, and exits nonzero when a required dep is missing / exits 0 when all required deps are present
     """
-    with tempfile.TemporaryDirectory(prefix="fr2-") as td:
+    base = _roomy_tmpbase()
+    venv_env = dict(os.environ, TMPDIR=base)
+    with tempfile.TemporaryDirectory(prefix="fr2-", dir=base) as td:
         root = Path(td)
         clone = _make_clone(root)
         home = root / "fakehome"
 
         # GIVEN: an EMPTY venv (required deps missing).
         empty_venv = root / "emptyvenv"
-        mk = subprocess.run(["python3", "-m", "venv", str(empty_venv)],
-                            capture_output=True, text=True, timeout=120)
+        mk = subprocess.run(["python3", "-m", "venv", "--without-pip", str(empty_venv)],
+                            capture_output=True, text=True, timeout=120, env=venv_env)
         assert mk.returncode == 0, f"could not create the probe venv:\n{mk.stderr}"
 
         # WHEN: doctor inspects the empty venv -> THEN it NAMES each missing dep + exits nonzero.
@@ -110,10 +112,12 @@ def test_AC_FR_2():
 
         # GIVEN: a populated venv -> WHEN doctor runs -> THEN it exits 0.
         full_venv = root / "fullvenv"
-        subprocess.run(["python3", "-m", "venv", str(full_venv)], check=True, timeout=120)
+        mk2 = subprocess.run(["python3", "-m", "venv", str(full_venv)],
+                             capture_output=True, text=True, timeout=120, env=venv_env)
+        assert mk2.returncode == 0, f"could not create the full probe venv:\n{mk2.stderr}"
         inst = subprocess.run(
             [str(full_venv / "bin" / "pip"), "install", "-r", str(clone / "requirements.txt")],
-            capture_output=True, text=True, timeout=300,
+            capture_output=True, text=True, timeout=300, env=venv_env,
         )
         assert inst.returncode == 0, f"manifest install failed:\n{inst.stderr}"
         r_ok = _run_doctor(clone, full_venv, home)
