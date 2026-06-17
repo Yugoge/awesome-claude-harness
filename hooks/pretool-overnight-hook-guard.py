@@ -42,6 +42,11 @@ except Exception:  # pragma: no cover - fail-soft when modules missing
     _resolve_agent_type = None  # type: ignore[assignment]
     _resolve_dev_registry_entry = None  # type: ignore[assignment]
 
+try:  # WS1 shared harness-home resolver (route the audit-log default off /root).
+    from lib import claude_home as _claude_home  # noqa: E402
+except Exception:  # pragma: no cover - fail-soft when the resolver is absent
+    _claude_home = None  # type: ignore[assignment]
+
 
 # ---------------------------------------------------------------------------
 # T2.4: Contract-driven self-repair grant (BUG-B-Q0E-CONTRACT-SELF-REPAIR-GAP)
