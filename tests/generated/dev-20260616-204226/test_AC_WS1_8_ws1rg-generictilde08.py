@@ -69,6 +69,10 @@ print(json.dumps({
     "tilde": tilde,
     "verdict_tilde": verdict_tilde,
     "verdict_abs": verdict_abs,
+    "verdict_anc_tilde": verdict_anc_tilde,
+    "verdict_anc_abs": verdict_anc_abs,
+    "has_anc_claude_tilde": "~/.config/claude" in variants,
+    "has_anc_config_tilde": "~/.config" in variants,
     "root_literal_in_exec_body": "/root" in exec_src,
 }))
 """
