@@ -56,11 +56,30 @@ def _is_skipped(name: str) -> bool:
     return False
 
 
+def _published_names(dir_path: Path) -> set[str] | None:
+    """Git-tracked basenames directly under dir_path, or None when git was not
+    consulted (not a work-tree / git unavailable) so callers fall back to the
+    hand denylist only (AC-WS5-1)."""
+    return tracked_names(dir_path)
+
+
+def _is_published(name: str, published: set[str] | None) -> bool:
+    """An entry is listable iff it is not denylisted AND (git was not consulted
+    OR the entry is git-tracked). When git IS consulted, untracked/gitignored
+    entries are dropped — the doc-sync output lists only published files."""
+    if _is_skipped(name) or name.startswith('.'):
+        return False
+    if published is not None and name not in published:
+        return False
+    return True
+
+
 def _build_stats(dir_path: Path) -> dict:
+    published = _published_names(dir_path)
     total = 0
     dirs = 0
     for item in dir_path.iterdir():
-        if _is_skipped(item.name) or item.name.startswith('.'):
+        if not _is_published(item.name, published):
             continue
         total += 1
         if item.is_dir():
