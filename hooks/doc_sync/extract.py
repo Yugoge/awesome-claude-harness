@@ -18,7 +18,12 @@ def extract_description(file_path: Path) -> str:
         return _extract_sh_desc(text)
     if suffix in ('.json', '.yaml', '.yml'):
         return f'{suffix.lstrip(".")} config'
-    return f'{suffix.lstrip(".") or "unknown"} file'
+    # AC-WS5-2: never emit the placeholder "unknown file". Derive a meaningful
+    # description from the file: its suffix if it has one (e.g. "toml file"),
+    # otherwise the file's own stem so the entry is self-describing.
+    if suffix:
+        return f'{suffix.lstrip(".")} file'
+    return f'{file_path.stem} file'
 
 
 def _parse_frontmatter(text: str) -> str | None:
