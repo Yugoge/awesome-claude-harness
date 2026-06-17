@@ -52,7 +52,8 @@ def resolve_project_dir(stdin_payload: dict | None = None) -> Path:
     """Resolve project root via 5-tier fallback chain.
 
     Tiers: env CLAUDE_PROJECT_DIR -> stdin payload cwd -> os.getcwd ->
-    git rev-parse --show-toplevel -> /root literal (final safety net).
+    git rev-parse --show-toplevel -> resolved harness home (WS1 final safety
+    net, never the author literal /root).
     Tier 4 returns the worktree path when invoked from inside a worktree;
     this is intentional -- worktrees ARE per-project roots in /dev-overnight.
     """
@@ -72,7 +73,12 @@ def resolve_project_dir(stdin_payload: dict | None = None) -> Path:
     git_top = _try_git_toplevel()
     if git_top is not None:
         return git_top
-    return Path('/root')
+    # WS1: resolved harness home as the final safety net, not the literal /root.
+    if claude_home is not None:
+        home = claude_home.resolve()
+        if home is not None:
+            return home
+    return Path.home()
 
 
 # Module-level binding for backward compat (env+cwd+git+literal tiers;
