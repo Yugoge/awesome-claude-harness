@@ -27,6 +27,99 @@ HOOK_CHECK = {
 }
 
 
+import json
+import os
+import subprocess
+import tempfile
+from pathlib import Path
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+DETECTOR = REPO_ROOT / "scripts" / "detect-hardcoded-paths.sh"
+
+
+def _run_detector(root):
+    proc = subprocess.run(["bash", str(DETECTOR), str(root)], capture_output=True, text=True)
+    try:
+        report = json.loads(proc.stdout)
+    except json.JSONDecodeError:
+        report = {"summary": {"total": -1}, "findings": [], "_stdout": proc.stdout, "_stderr": proc.stderr}
+    return proc.returncode, report
+
+
+def _flagged(report, file_suffix):
+    return [f for f in report.get("findings", []) if f["file"].endswith(file_suffix)]
+
+
+def test_AC_WS3_4_real_impl():
+    """Real implementation of AC-WS3-4 — see test_AC_WS3_4 docstring."""
+    assert DETECTOR.is_file(), f"detector missing: {DETECTOR}"
+
+    with tempfile.TemporaryDirectory(prefix="ws3-4.") as td:
+        td = Path(td)
+        (td / "commands").mkdir()
+        (td / "agents").mkdir()
+        (td / "hooks").mkdir()
+        (td / "schemas").mkdir()
+
+        # 1. planted /root in settings.json executable fields
+        (td / "settings.json").write_text(
+            '{"env":{"GRAPHIFY_BIN":"/root/.claude/venv/bin/graphify"},'
+            '"permissions":{"allow":["Read(/root/**)"]}}\n')
+        # 2. bare /root env-default forms in a hook (.sh brace + || echo, .py quote)
+        (td / "hooks" / "a.sh").write_text(
+            'PROJ="${CLAUDE_PROJECT_DIR:-/root}"\n'
+            'TOP=$(git rev-parse --show-toplevel || echo /root)\n')
+        (td / "hooks" / "b.py").write_text('import os\nhome = os.environ.get("HOME","/root")\n')
+        # 3. JSON "default": "/root"
+        (td / "schemas" / "c.json").write_text(
+            '{"properties":{"policy":{"default":"/root/.claude/policies/tool-policy.v1.json"}}}\n')
+        # 4. Write/Read tool operand in a command .md
+        (td / "commands" / "cmd.md").write_text(
+            'Write(file_path="/root/.claude/dev-registry/foo.json")\n'
+            'Read(file_path="/root/.claude/commands/spec-update.md")\n')
+        # 5. /root/docs plain-prose dispatch-read in a command .md
+        (td / "commands" / "disp.md").write_text(
+            'Read /root/docs/foo.md before proceeding.\n'
+            'Follow instructions in /root/docs/dev/command-development-patterns.md\n')
+        # 6. CONTROL_ROOT=/root runtime default in an agent .md
+        (td / "agents" / "cl.md").write_text('CONTROL_ROOT=/root\n')
+        # 7. ALLOWLISTED prose: dev.md self-test-fixture location note (must NOT flag)
+        (td / "commands" / "dev.md").write_text(
+            'Self-test fixtures live at /root/docs/dev/redev-prompt-purity-20260426-self-test.md\n'
+            'Origin: the harness ran from /root/.claude in a post-mortem narrative.\n')
+
+        rc, report = _run_detector(td)
+        assert rc == 1, f"detector should exit 1 when load-bearing literals are present; got {rc}; {report}"
+
+        # Each planted load-bearing literal is detected.
+        assert _flagged(report, "settings.json"), "settings.json /root literal not flagged"
+        assert _flagged(report, "hooks/a.sh"), "bare-/root brace/echo defaults not flagged"
+        a_sh_lines = {f["line"] for f in _flagged(report, "hooks/a.sh")}
+        assert 1 in a_sh_lines, 'PROJ="${CLAUDE_PROJECT_DIR:-/root}" (brace boundary) not flagged'
+        assert _flagged(report, "hooks/b.py"), 'os.environ.get("HOME","/root") not flagged'
+        assert _flagged(report, "schemas/c.json"), 'JSON "default":"/root" not flagged'
+        cmd = _flagged(report, "commands/cmd.md")
+        assert len(cmd) >= 2, "Write/Read tool-operand /root literals not both flagged"
+        assert _flagged(report, "commands/disp.md"), "/root/docs dispatch-read not flagged"
+        assert _flagged(report, "agents/cl.md"), "CONTROL_ROOT=/root runtime default not flagged"
+
+        # Per-literal-allowlisted prose (dev.md) does NOT cause a false positive.
+        assert not _flagged(report, "commands/dev.md"), \
+            "allowlisted self-test-fixture / narrative prose was wrongly flagged"
+
+    # A clean rendered settings.json passes (exit 0).
+    with tempfile.TemporaryDirectory(prefix="ws3-4-clean.") as td2:
+        td2 = Path(td2)
+        renderer = REPO_ROOT / "scripts" / "install" / "render-settings"
+        rendered = subprocess.run(
+            ["python3", str(renderer), os.path.join(str(td2), ".claude"), "--print"],
+            capture_output=True, text=True)
+        assert rendered.returncode == 0, rendered.stderr
+        (td2 / "settings.json").write_text(rendered.stdout)
+        rc, report = _run_detector(td2)
+        assert rc == 0, f"clean rendered settings.json should pass; findings: {report.get('findings')}"
+
+
 def test_AC_WS3_4():
     r"""
     GIVEN: scripts/detect-hardcoded-paths.sh after the fix. The detector's scanned LOAD-BEARING surfaces are defined EXPLICITLY (codex #9 + REV3 ACTIVE-1): hooks/ + scripts/ executable code (*.py *.sh), settings.json + settings.template.json, the WHOLE commands/*.md + agents/*.md + skills/*/SKILL.md surface, schemas/ + policies/ JSON defaults. REV3: for commands/*.md, agents/*.md, skills/*/SKILL.md, and schemas/*.json, the detector classifies author-absolute literals BY CONTEXT and flags any literal used as ANY of the four WS7 classes — (a) an EXECUTED shell/code-context path (including command args, redirections, and source operands), (b) a TOOL OPERAND (e.g. Write(file_path=...) or Read(file_path=...)), (c) a SUBAGENT DISPATCH or DISPATCH-READ path (incl. plain-prose 'Read <path>' / 'Follow instructions in <path>' the orchestrator/subagent follows), or (d) a runtime DEFAULT value — NOT only 'executed code-fence/dispatch literals' (that narrower wording missed tool operands and runtime defaults, which is how ACTIVE-1 recurred). REV4 (ACTIVE-2 — the DECISIVE widening, BOUNDARY-AWARE per the BA-codex REV4 BLOCKER): the detector's MATCH PATTERN must be as wide as the AC-WS7-1 principle, or the principle is unfalsifiable. Use the BOUNDARY-AWARE author-path detector, NOT the literal /root(/|$) regex: (?<![\w./])(?:/root(?:/|(?=$|[^\w./-]))|/dev/shm/dev-workspace(?:/|(?=$|[^\w./-]))) (and /home/<author> when relevant). It must match /root/... AND a bare /root followed by punctuation, quote, brace, whitespace, comma, parenthesis, colon, or end-of-line — so it covers /root/.claude, /root/bin, /root/docs, /root/templates AND every bare-/root env-default form (${CLAUDE_PROJECT_DIR:-/root} then '}', os.environ.get('HOME','/root') then quote, JSON "default": "/root" then quote/comma, || echo /root then whitespace/EOL). It is NOT a /root/.claude|/root/bin prefix enumeration (that set missed /root/docs + /root/templates) NOR the interim literal /root(/|$) (whose '$' only matches end-of-line/string, so it would MISS the bare-/root env-default forms above — the AC-WS1-9 class the principle claims to cover). NOTE: scripts/detect-hardcoded-paths.sh:9 uses PATTERNS='/root/|/home/[a-z]|...' whose /root/ alternative REQUIRES a trailing slash and so misses a bare /root env-default; the fix REPLACES it with the boundary-aware pattern, ADDS *.json to the --include list (currently *.py *.sh *.md *.yml *.yaml only, so settings.json + schema defaults are invisible), and ADDS the four-class context classification. Detector-self patterns, tests/, examples/, and purely illustrative prose are exempt ONLY by a PER-LITERAL allowlist proof — NEVER by prefix omission, NEVER by broad path omission, NEVER by a trailing-slash-only regex.
