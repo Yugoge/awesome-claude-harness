@@ -358,35 +358,45 @@ fi
 # ════════════════════════════════════════════════════════════════════════════
 # POST-WAVE-1 INTEGRATION GATE (AC-WS2-6) — zero load-bearing author literals.
 # ════════════════════════════════════════════════════════════════════════════
-# Reproducibility contract: this gate measures THIS CYCLE'S RESPONSIBLE surface
-# (files tracked at the recorded cycle baseline UNION the files this cycle
-# created/modified), and that measurement MUST be invariant to any FOREIGN
-# post-cycle commit a concurrent sibling session lands in this shared workspace —
-# whether that commit ADDS a new file or MODIFIES an existing baseline-tracked
-# file. Two independent mechanisms together make it reproducible:
-#   (1) CONTENT source — $GATE_TREE is built from the PINNED BASELINE SNAPSHOT
-#       (git archive <ref>) for baseline-tracked files, then THIS CYCLE'S files
-#       are OVERLAID from the live working tree. So a baseline-tracked file the
-#       cycle did NOT touch is scanned at its baseline content (immune to a
-#       foreign post-cycle modification), while a baseline-tracked file the cycle
-#       DID edit, and every this-cycle-created file, is scanned at its live
-#       content (in-cycle edits stay strict).
-#   (2) MEMBERSHIP filter — ws2_zero_literal_gate.py restricts findings to
-#       baseline-tracked ∪ cycle-files, so a foreign ADDITION (baseline-absent,
-#       not a cycle file) is excluded even though render-settings or an overlay
-#       step might create siblings.
-# A MOVING `git rev-parse HEAD` baseline (the prior bug) was unsound: a sibling
-# COMMIT advances HEAD and pulls its foreign file into "tracked at HEAD", so the
-# gate scanned a foreign post-cycle commit and went RED. Pinning the baseline +
-# sourcing content from the baseline snapshot removes that entire class.
+# This gate measures THIS CYCLE'S RESPONSIBLE surface — files tracked at the
+# recorded cycle baseline UNION the files this cycle created/modified — and asserts
+# zero GENUINE load-bearing author literals across it. CONTENT is read from the
+# LIVE working tree: the cycle's whole deliverable (the WS1/WS3/WS7 de-hardcode
+# MIGRATION) lives in the working tree, NOT at the baseline (the baseline is the
+# DIRTY pre-migration state). The boundary-aware pattern matches
+# scripts/detect-hardcoded-paths.sh, plus a comment/docstring filter + the
+# AC-WS7-1 per-literal prose allowlist + BA error-hint/detector exemptions, so the
+# assertion measures GENUINE literals, not comment/docstring false positives.
+#
+# REPRODUCIBILITY (the prior bug): the gate must be invariant to any FOREIGN
+# post-cycle commit a concurrent sibling lands in this shared workspace. The fix
+# is a PINNED cycle baseline + a MEMBERSHIP filter, NOT a baseline content
+# snapshot:
+#   • baseline pin — the gate restricts findings to {tracked at the recorded
+#     cycle baseline} ∪ {this-cycle files}. A MOVING `git rev-parse HEAD` baseline
+#     was unsound: a sibling COMMIT advances HEAD and pulls its foreign file into
+#     "tracked at HEAD", so the gate scanned a foreign post-cycle commit and went
+#     RED. Pinning to the recorded baseline excludes a foreign ADDITION (baseline-
+#     absent + not a cycle file) regardless of where HEAD has moved.
+#   • live content (NOT a baseline snapshot) — `git archive <baseline>` is
+#     deliberately NOT used as the content source: at the baseline every migrated
+#     file still carries its pre-migration /root literal, so scanning baseline
+#     content would FALSE-fail on this cycle's own (now-fixed) files. The live
+#     working tree is the migrated truth; the membership filter is what provides
+#     foreign-commit immunity. (Known, deliberately-accepted limitation: a foreign
+#     post-cycle MODIFICATION to a baseline-tracked in-scope file would be scanned
+#     at its live polluted content. This does not occur in the actual workspace,
+#     and a content snapshot — codex Finding 3 — is unusable here because the
+#     baseline is dirty and the migration IS the deliverable. Documented in the
+#     dev-report as out_of_scope for this dirty-baseline repo.)
 #
 # The cycle file list comes from the AGGREGATE cycle dev-report (not just the WS2
-# shard): this is a CYCLE-WIDE scan (hooks/scripts/commands/agents/skills/schemas),
-# so a this-cycle-CREATED runtime file (e.g. hooks/lib/claude_home.py — baseline-
-# ABSENT) must be in the cycle list or a load-bearing literal in it would be
-# silently MISSED. Every same-cycle report whose baseline_head_sha matches is
-# unioned so no shard's cycle file is dropped. The args are passed NUL-delimited
-# into a bash array (no `eval`): injection-proof regardless of path content.
+# shard): this is a CYCLE-WIDE scan, so a this-cycle-CREATED runtime file (e.g.
+# hooks/lib/claude_home.py — baseline-ABSENT) must be in the cycle list or a
+# load-bearing literal in it would be silently MISSED. Every same-cycle report
+# whose baseline_head_sha matches is unioned so no shard's cycle file is dropped.
+# The args are passed NUL-delimited into a bash array (no `eval`): injection-proof
+# regardless of path content.
 #
 # Fail-CLOSED (NOT fail-open): if no usable baseline resolves from the reports,
 # this slice FAILS rather than silently running an UNSCOPED gate that would
@@ -394,13 +404,11 @@ fi
 # recorded scoped_to_responsible_surface==true, so a baseline the gate could not
 # resolve (responsible_surface()->None) cannot pass undetected.
 GATE_BASELINE_REF=""
-GATE_CYCLE_FILES=()       # repo-relative cycle paths (used for the overlay)
-GATE_CYCLE_ARGS=()        # the same paths as repeated --cycle-file gate args
+GATE_CYCLE_ARGS=()        # cycle paths as repeated --cycle-file gate args
 while IFS= read -r -d '' _gate_tok; do
   if [ -z "$GATE_BASELINE_REF" ]; then
     GATE_BASELINE_REF="$_gate_tok"           # first NUL token = the baseline sha
   else
-    GATE_CYCLE_FILES+=("$_gate_tok")
     GATE_CYCLE_ARGS+=(--cycle-file "$_gate_tok")
   fi
 done < <(python3 - "$REPO" <<'PYSCOPE'
@@ -444,37 +452,14 @@ PYSCOPE
 GATE_TREE="$TMP_BASE/gate/dot-claude"
 GATE_JSON="$TMP_BASE/gate-residuals.json"
 mkdir -p "$GATE_TREE"
-# ── Build $GATE_TREE content (mechanism 1) ───────────────────────────────────
-# Baseline snapshot for tracked files, then overlay this-cycle files from live.
-GATE_SNAPSHOT_OK=0
-if [ -n "$GATE_BASELINE_REF" ]; then
-  if git -C "$REPO" archive --format=tar "$GATE_BASELINE_REF" 2>/dev/null \
-       | tar -x -C "$GATE_TREE" 2>/dev/null; then
-    GATE_SNAPSHOT_OK=1
-    # Overlay every this-cycle file from the LIVE working tree (so in-cycle edits
-    # to baseline-tracked files AND this-cycle-created files are scanned at their
-    # real current content). A cycle file that does not exist live (e.g. recorded
-    # but since removed) is skipped.
-    for _rel in "${GATE_CYCLE_FILES[@]}"; do
-      if [ -f "$REPO/$_rel" ]; then
-        mkdir -p "$GATE_TREE/$(dirname "$_rel")"
-        cp -a "$REPO/$_rel" "$GATE_TREE/$_rel"
-      fi
-    done
-  fi
-fi
-if [ "$GATE_SNAPSHOT_OK" -ne 1 ]; then
-  # Fallback (baseline unresolvable / archive failed): copy the live surfaces.
-  # The membership filter + the scoped assertion below still gate correctness;
-  # this only affects WHICH content is read, and a failed-snapshot run will fail
-  # the fail-closed baseline check anyway when GATE_BASELINE_REF is empty.
-  for d in hooks scripts commands agents skills schemas policies; do
-    [ -d "$REPO/$d" ] && cp -a "$REPO/$d" "$GATE_TREE/"
-  done
-  [ -f "$REPO/settings.template.json" ] && cp -a "$REPO/settings.template.json" "$GATE_TREE/"
-fi
-# Render settings.json from the (snapshot or live) template so the rendered
-# surface is what a fresh clone would actually install.
+# Build $GATE_TREE from the LIVE working-tree surfaces (the migrated truth). The
+# membership filter (pinned --baseline-ref + --cycle-file) is what excludes
+# foreign post-cycle additions copied in by `cp -a`; settings.json is RENDERED so
+# the surface matches what a fresh clone would install.
+for d in hooks scripts commands agents skills schemas policies; do
+  [ -d "$REPO/$d" ] && cp -a "$REPO/$d" "$GATE_TREE/"
+done
+[ -f "$REPO/settings.template.json" ] && cp -a "$REPO/settings.template.json" "$GATE_TREE/"
 if [ -x "$REPO/scripts/install/render-settings" ] && [ -f "$GATE_TREE/settings.template.json" ]; then
   python3 "$REPO/scripts/install/render-settings" "$GATE_TREE" \
     --template "$GATE_TREE/settings.template.json" --out "$GATE_TREE/settings.json" >/dev/null 2>&1 \
