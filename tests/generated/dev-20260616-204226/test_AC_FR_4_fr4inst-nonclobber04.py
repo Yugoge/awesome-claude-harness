@@ -127,7 +127,7 @@ def test_AC_FR_4():
         )
         backups = list(clone.glob("venv.bak-*"))
         assert backups, "with --force, the existing venv must be backed up before apply"
-        preserved = [b / "bin" / "PRE_EXISTING_MARKER" for b in backups]
+        preserved = [b / "PRE_EXISTING_MARKER" for b in backups]
         assert any(p.exists() and p.read_text() == "do-not-clobber\n" for p in preserved), (
             "the backup must preserve the prior home contents (backed up, not clobbered)"
         )
