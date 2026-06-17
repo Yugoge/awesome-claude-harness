@@ -1,9 +1,24 @@
 #!/usr/bin/env python3
 """Regenerate INDEX.md for a directory."""
 
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 from .tree import build_tree
+
+# Dual-mode import: relative in production, package-context fallback when this
+# module is loaded standalone via importlib spec_from_file_location (mirrors the
+# regen_readme/tree.py pattern so the git-tracked filter resolves either way).
+try:
+    from .config import tracked_names
+except ImportError:
+    import importlib as _importlib
+    import os as _os
+    import sys as _sys
+    _pkg_root = _os.path.dirname(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
+    if _pkg_root not in _sys.path:
+        _sys.path.insert(0, _pkg_root)
+    tracked_names = _importlib.import_module("hooks.doc_sync.config").tracked_names  # type: ignore[no-redef]
 
 
 def _detect_convention(dir_path: Path) -> str:
