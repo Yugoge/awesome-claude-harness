@@ -58,7 +58,30 @@ def test_AC_WS1_3():
     WHEN:  resolve_required(relpath) is called (python bootstrap or shell require_security_file)
     THEN:  the caller FAILS CLOSED: python emits the block reason and sys.exit(2); shell returns exit 2 — NEVER exit 0 and NEVER exit 1/127
     """
-    # TODO(dev): replace the line below with the real test body. While the
-    # TEST_INCOMPLETE sentinel is present the test will hard-fail, marking
-    # the AC as unimplemented for QA Phase 5.
-    pytest.fail(f"TEST_INCOMPLETE: {AC_UID} — GIVEN A REQUIRED security helper/policy file is absent (e.g. the resolver is asked for a relpat… / WHEN resolve_required(relpath) is called (python bootstrap or shell require_security_file) / THEN the caller FAILS CLOSED: python emits the block reason and sys.exit(2); shell returns exit 2 — NEVER exit 0 a…")
+    clone = _make_clone()
+    env = _env(clone)
+    missing = "scripts/does-not-exist-required-helper.py"
+
+    # Python helper: resolve_required on a MISSING relpath must exit 2 with a
+    # block reason on stderr — NEVER 0 and NEVER 1/127.
+    py = subprocess.run(
+        ["python3", str(clone / "hooks" / "lib" / "claude_home.py"), "require", missing],
+        env=env, capture_output=True, text=True,
+    )
+    assert py.returncode == HOOK_CHECK["expect_exit"], (
+        f"python require exit {py.returncode} != 2 (stdout={py.stdout!r} stderr={py.stderr!r})")
+    assert py.returncode not in (0, 1, 127)
+    assert "BLOCKED" in py.stderr and "FAIL-CLOSED" in py.stderr, (
+        f"python require missing block reason on stderr: {py.stderr!r}")
+
+    # Shell helper: require_security_file on a MISSING relpath must exit 2 with a
+    # block reason on stderr.
+    sh = subprocess.run(
+        ["bash", str(clone / "hooks" / "lib" / "claude_home.sh"), "require", missing],
+        env=env, capture_output=True, text=True,
+    )
+    assert sh.returncode == HOOK_CHECK["expect_exit"], (
+        f"shell require exit {sh.returncode} != 2 (stdout={sh.stdout!r} stderr={sh.stderr!r})")
+    assert sh.returncode not in (0, 1, 127)
+    assert "BLOCKED" in sh.stderr and "FAIL-CLOSED" in sh.stderr, (
+        f"shell require missing block reason on stderr: {sh.stderr!r}")
