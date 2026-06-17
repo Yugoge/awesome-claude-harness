@@ -379,16 +379,48 @@ if [ -x "$REPO/scripts/install/render-settings" ] && [ -f "$GATE_TREE/settings.t
 fi
 
 GATE_JSON="$TMP_BASE/gate-residuals.json"
-# Scope the rendered-tree gate to the COMMITTED surface (files tracked at $REPO
-# HEAD), resolved against the real repo. On a SHARED workspace the cp -a above
-# also copies any concurrent foreign session's uncommitted in-flight files into
-# $GATE_TREE; those are not part of the committed portable surface this gate
-# measures, so excluding files absent at HEAD keeps the gate measuring the real
-# clone-able surface. A tracked file with a load-bearing literal still fails.
-GATE_BASELINE="$(git -C "$REPO" rev-parse HEAD 2>/dev/null || true)"
-if [ -n "$GATE_BASELINE" ]; then
-  python3 "$SELF_DIR/ws2_zero_literal_gate.py" "$GATE_TREE" "$GATE_JSON" \
-    --baseline-ref "$GATE_BASELINE" --baseline-repo "$REPO" >/dev/null 2>&1
+# Scope the rendered-tree gate to THIS CYCLE'S RESPONSIBLE surface, reproducibly:
+# files tracked at THIS CYCLE'S RECORDED BASELINE (a fixed sha) UNION the files
+# this cycle created/modified — NOT whatever HEAD currently is. A MOVING `git
+# rev-parse HEAD` baseline is unsound on a SHARED workspace: a concurrent sibling
+# session can COMMIT on top of this cycle's baseline, advancing HEAD and pulling
+# its foreign file into the "tracked at HEAD" surface, so the gate would then scan
+# that foreign post-cycle commit and (correctly, for HEAD, but wrongly for THIS
+# cycle) go RED. Pinning to the recorded cycle baseline makes the gate measure the
+# same responsible surface no matter where HEAD has since moved, while the
+# `cp -a` of the live working tree above still copies foreign in-flight files —
+# those are EXCLUDED because they are absent at the pinned baseline and are not in
+# this cycle's file list. A baseline-tracked OR this-cycle-created file with a
+# load-bearing literal STILL fails (the gate scans content live; scoping is only a
+# membership filter). This mirrors test_AC_WS2_6's pinned --baseline-ref + the
+# dev-report-sourced --cycle-file list, keeping the smoke and that test consistent.
+#
+# Resolve the baseline + cycle-file list from THIS CYCLE'S dev-report (authoritative
+# this-cycle source — NOT a working-tree diff, which on a shared tree would
+# re-include the very foreign additions we exclude). Fall back to no scoping only
+# if the report's baseline_head_sha is unreadable.
+GATE_REPORT="$REPO/docs/dev/dev-report-dev-20260616-204226-ws2.json"
+GATE_SCOPE_ARGS="$(python3 - "$GATE_REPORT" <<'PYSCOPE'
+import json, sys, shlex
+try:
+    doc = json.load(open(sys.argv[1]))
+except (OSError, ValueError):
+    sys.exit(0)  # no scope args => caller falls back to unscoped
+ref = doc.get("baseline_head_sha") or ""
+if not ref:
+    sys.exit(0)
+dev = doc.get("dev", {}) or {}
+parts = ["--baseline-ref", ref]
+for rel in (dev.get("files_created") or []) + (dev.get("files_modified") or []):
+    parts += ["--cycle-file", rel]
+print(" ".join(shlex.quote(p) for p in parts))
+PYSCOPE
+)"
+if [ -n "$GATE_SCOPE_ARGS" ]; then
+  # shellcheck disable=SC2086  # intentional word-splitting of the scope args
+  eval python3 "$(printf %q "$SELF_DIR/ws2_zero_literal_gate.py")" \
+    "$(printf %q "$GATE_TREE")" "$(printf %q "$GATE_JSON")" \
+    $GATE_SCOPE_ARGS --baseline-repo "$(printf %q "$REPO")" >/dev/null 2>&1
 else
   python3 "$SELF_DIR/ws2_zero_literal_gate.py" "$GATE_TREE" "$GATE_JSON" >/dev/null 2>&1
 fi
