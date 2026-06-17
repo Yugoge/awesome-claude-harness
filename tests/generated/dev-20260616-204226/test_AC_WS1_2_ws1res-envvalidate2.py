@@ -66,18 +66,25 @@ def test_AC_WS1_2():
     clone = _make_clone()
     walk_root = str(clone.resolve())
 
-    # (1) WRONG CLAUDE_HOME (a path that is NOT the script-walk root) is IGNORED;
-    # the structural walk root wins.
-    wrong = Path(tempfile.mkdtemp(prefix="ws1-wrong-"))
+    # (1) WRONG CLAUDE_HOME that IS itself a FULL structural sentinel but has a
+    # DIFFERENT realpath than the script-walk root must be IGNORED. This is the
+    # non-tautological form (codex): a resolver that honored ANY structurally-
+    # valid env hint would WRONGLY return `decoy`; the realpath-equality guard is
+    # the only thing that makes the walk root win here.
+    decoy = _make_clone(basename="decoy-claude")   # a real sentinel, wrong realpath
+    assert str(decoy.resolve()) != walk_root
     for interp in ("python3", "bash"):
-        r = _resolve(clone, interp, CLAUDE_HOME=str(wrong), HOME=str(clone.parent))
+        r = _resolve(clone, interp, CLAUDE_HOME=str(decoy), HOME=str(clone.parent))
         assert r.returncode == 0, f"{interp} exit {r.returncode}; stderr={r.stderr}"
         assert r.stdout.strip() == walk_root, (
-            f"{interp} honored a wrong CLAUDE_HOME: got {r.stdout.strip()!r}, "
-            f"expected walk root {walk_root!r}")
+            f"{interp} honored a realpath-MISMATCHED sentinel CLAUDE_HOME (the "
+            f"realpath guard failed): got {r.stdout.strip()!r}, expected walk "
+            f"root {walk_root!r}, decoy was {decoy.resolve()!r}")
 
     # (2) A CLAUDE_HOME that realpath-equals the walk root (here via a symlink to
-    # it) IS honored — the resolver returns the (symlinked) user-facing form.
+    # it) IS honored — the resolver returns the EXACT (symlinked) user-facing
+    # form, not the walk root. Asserting equality to str(link) (not just realpath
+    # equality) proves the env hint is actually honored, not merely tolerated.
     link_parent = Path(tempfile.mkdtemp(prefix="ws1-link-"))
     link = link_parent / "claude-link"
     os.symlink(walk_root, link)
@@ -85,8 +92,8 @@ def test_AC_WS1_2():
         r = _resolve(clone, interp, CLAUDE_HOME=str(link), HOME=str(clone.parent))
         assert r.returncode == 0, f"{interp} exit {r.returncode}; stderr={r.stderr}"
         out = r.stdout.strip()
-        # Honored = it returns the symlink form (or the equal real root); either
-        # way it must realpath-equal the walk root.
-        assert os.path.realpath(out) == walk_root, (
-            f"{interp} did not honor a realpath-equal CLAUDE_HOME symlink: "
-            f"got {out!r} (realpath {os.path.realpath(out)!r}) != {walk_root!r}")
+        assert out == str(link), (
+            f"{interp} did not HONOR the realpath-equal CLAUDE_HOME symlink (it "
+            f"returned the walk root instead of the user-facing form): got "
+            f"{out!r}, expected {str(link)!r}")
+        assert os.path.realpath(out) == walk_root  # and it really points home
