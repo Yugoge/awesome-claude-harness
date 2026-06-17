@@ -185,10 +185,12 @@ def find_monolith(specs_base: Path, spec_dir: Path) -> Path | None:
     return None
 
 
-def run_coverage_check(monolith: Path, views_dir: Path) -> subprocess.CompletedProcess:
+def run_coverage_check(
+    monolith: Path, views_dir: Path, spec_verify: Path
+) -> subprocess.CompletedProcess:
     """Run spec-verify.py and return the result."""
     return subprocess.run(
-        ["python3", SPEC_VERIFY, "--monolith", str(monolith),
+        ["python3", str(spec_verify), "--monolith", str(monolith),
          "--views-dir", str(views_dir), "--strict"],
         capture_output=True,
         text=True,
