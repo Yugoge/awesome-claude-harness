@@ -50,42 +50,62 @@ _BARE_ROOT_SITES = [
 _AUTHOR_ROOT = re.compile(r"(?<![\w./])/root(?:/|(?=$|[^\w./-]))")
 
 
-def _strip_comment(line: str, ext: str) -> str:
-    """Return the executable portion of a line (best-effort comment stripping)."""
-    if ext in (".sh",):
-        # Drop a leading-hash comment line; trim a trailing ' # ...' comment.
+def _executable_lines_py(text: str):
+    """Yield (lineno, code) for EXECUTABLE python lines only.
+
+    Strips full-line + trailing `#` comments AND skips lines inside triple-quoted
+    docstrings/strings (tracked structurally), so the scan flags author-/root in
+    real CODE — not in prose — without relying on a narrow 'default-use' regex
+    (codex: that narrowing let a reintroduced /root/.claude/... candidate evade
+    the scan)."""
+    in_triple = None  # the active triple-quote delim, or None
+    for i, raw in enumerate(text.splitlines(), start=1):
+        line = raw
+        if in_triple:
+            end = line.find(in_triple)
+            if end == -1:
+                continue            # whole line is inside the docstring
+            line = line[end + 3:]   # resume scanning after the close
+            in_triple = None
+        # Drop a full-line comment.
         if line.lstrip().startswith("#"):
-            return ""
-        return re.split(r"\s#", line, maxsplit=1)[0]
-    if ext == ".py":
-        if line.lstrip().startswith("#"):
-            return ""
-        return re.split(r"\s#", line, maxsplit=1)[0]
-    return line
+            continue
+        # Detect an OPENING triple-quote that does not close on the same line.
+        for delim in ('"""', "'''"):
+            first = line.find(delim)
+            if first != -1 and line.find(delim, first + 3) == -1:
+                line = line[:first]
+                in_triple = delim
+                break
+        code = re.split(r"\s#", line, maxsplit=1)[0]
+        if code.strip():
+            yield i, code
+
+
+def _executable_lines_sh(text: str):
+    """Yield (lineno, code) for EXECUTABLE shell lines (comment-stripped)."""
+    for i, raw in enumerate(text.splitlines(), start=1):
+        if raw.lstrip().startswith("#"):
+            continue
+        code = re.split(r"\s#", raw, maxsplit=1)[0]
+        if code.strip():
+            yield i, code
 
 
 def _scan_bare_root_defaults():
-    """Yield (file, lineno, text) for any EXECUTABLE bare-/root author default
-    left in the named sites. Docstrings/comments are not perfectly excluded for
-    .py, so we additionally require the line to look like an env-DEFAULT use
-    (`:-/root`, `,'/root'`, `,"/root"`, `Path('/root')`, `echo /root`,
-    `echo "/root"`)."""
-    default_use = re.compile(
-        r""":-\s*/root\b"""              # ${VAR:-/root}
-        r"""|,\s*['"]/root['"]"""        # get(KEY, '/root')
-        r"""|Path\(\s*['"]/root['"]"""   # Path('/root')
-        r"""|echo\s+["']?/root\b"""      # || echo /root / echo "/root"
-    )
+    """Yield (file, lineno, text) for ANY author-/root literal left in the
+    EXECUTABLE body of the named WS1 sites — bare-/root defaults AND any
+    /root/... path literal (e.g. a reintroduced /root/.claude/... candidate).
+    Comments + python docstrings are excluded structurally, NOT by a default-use
+    regex narrowing (codex)."""
     hits = []
     for rel in _BARE_ROOT_SITES:
         p = _REPO / rel
-        ext = p.suffix
-        for i, raw in enumerate(p.read_text().splitlines(), start=1):
-            code = _strip_comment(raw, ext)
-            if not code:
-                continue
-            if _AUTHOR_ROOT.search(code) and default_use.search(code):
-                hits.append((rel, i, raw.strip()))
+        gen = _executable_lines_py if p.suffix == ".py" else _executable_lines_sh
+        text = p.read_text()
+        for i, code in gen(text):
+            if _AUTHOR_ROOT.search(code):
+                hits.append((rel, i, code.strip()))
     return hits
 
 
