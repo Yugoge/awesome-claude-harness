@@ -27,13 +27,44 @@ HOOK_CHECK = {
 }
 
 
+import json
+import os
+import subprocess
+import tempfile
+from pathlib import Path
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+RENDERER = REPO_ROOT / "scripts" / "install" / "render-settings"
+TEMPLATE = REPO_ROOT / "settings.template.json"
+PLACEHOLDER = "{{CLAUDE_HOME}}"
+
+
 def test_AC_WS3_3():
     r"""
     GIVEN: The renderer and the template
     WHEN:  a template change would broaden a permission beyond what the template authorizes
     THEN:  the rendered permission set is a substitution of the template ONLY — the renderer never adds, widens, or relaxes a permission relative to the template
     """
-    # TODO(dev): replace the line below with the real test body. While the
-    # TEST_INCOMPLETE sentinel is present the test will hard-fail, marking
-    # the AC as unimplemented for QA Phase 5.
-    pytest.fail(f"TEST_INCOMPLETE: {AC_UID} — GIVEN The renderer and the template / WHEN a template change would broaden a permission beyond what the template authorizes / THEN the rendered permission set is a substitution of the template ONLY — the renderer never adds, widens, or rela…")
+    template = json.loads(TEMPLATE.read_text())
+
+    with tempfile.TemporaryDirectory(prefix="ws3-3.") as td:
+        install_home = os.path.join(td, ".claude")
+        proc = subprocess.run(
+            ["python3", str(RENDERER), install_home, "--print"],
+            capture_output=True, text=True,
+        )
+        assert proc.returncode == 0, proc.stderr
+        rendered = json.loads(proc.stdout)
+
+        # Normalize the rendered permissions back to the placeholder, then diff vs template.
+        def normalize(entries):
+            return {e.replace(install_home, PLACEHOLDER) for e in entries}
+
+        for key in ("allow", "ask", "deny"):
+            tpl_set = set(template["permissions"].get(key, []))
+            ren_set = normalize(rendered["permissions"].get(key, []))
+            broadened = ren_set - tpl_set
+            assert not broadened, f"renderer broadened permissions.{key}: {sorted(broadened)}"
+            # Only placeholder substitutions may differ — normalized sets are EQUAL.
+            assert ren_set == tpl_set, \
+                f"permissions.{key} is not a pure substitution of the template: {ren_set ^ tpl_set}"
