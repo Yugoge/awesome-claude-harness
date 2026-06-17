@@ -33,7 +33,7 @@ import subprocess
 import tempfile
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
+REPO_ROOT = Path(__file__).resolve().parents[3]
 DETECTOR = REPO_ROOT / "scripts" / "detect-hardcoded-paths.sh"
 
 
