@@ -251,7 +251,21 @@ def responsible_surface(baseline_repo: str, baseline_ref: str, cycle_files):
     return surface
 
 
-def scan(root: str, responsible=None):
+def scan(root: str, responsible=None, promote_extensionless=None):
+    """Scan `root` for genuine load-bearing author literals.
+
+    `promote_extensionless`, when given, is the set of repo-relative paths for
+    which an EXTENSIONLESS shebang script under hooks/ or scripts/ is promoted
+    into scope (the cycle file list). Promotion is restricted to these paths so
+    the gate catches a literal in a this-cycle-created extensionless script
+    (scripts/bootstrap, scripts/doctor, scripts/install/render-settings) WITHOUT
+    pulling in a PRE-EXISTING baseline-tracked extensionless script the cycle did
+    not touch and cannot fix (e.g. hooks/git-hooks/post-commit-auto-push) — that
+    would be an out-of-cycle residual, the same routing-signal class as a foreign
+    addition, not this cycle's responsibility. When None, no extensionless file
+    is promoted (the original extension-only behaviour is preserved exactly).
+    """
+    promote = promote_extensionless or frozenset()
     findings = []
     for dp, dn, fn in os.walk(root):
         dn[:] = [d for d in dn if d not in
@@ -261,15 +275,18 @@ def scan(root: str, responsible=None):
             rel = os.path.relpath(full, root)
             # Effective extension: the path extension for the normal surfaces,
             # or a shebang-inferred one for an extensionless executable script
-            # under hooks/ or scripts/ (the blind spot in_scope() can't see).
+            # under hooks/ or scripts/ that is a CYCLE file (the blind spot
+            # in_scope() can't see, scoped to this cycle's own scripts).
             promoted_ext = ""
             if in_scope(rel):
                 ext = os.path.splitext(f)[1]
-            else:
+            elif rel in promote:
                 promoted_ext = shebang_ext(rel, full)
                 if not promoted_ext:
                     continue
                 ext = promoted_ext
+            else:
+                continue
             # Shared-workspace scoping: a file on the in-scope surface that is
             # NOT part of THIS cycle's responsible set (foreign concurrent
             # addition) is excluded — this cycle's DoD measures its own
