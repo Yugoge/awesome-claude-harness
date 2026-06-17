@@ -100,7 +100,10 @@ if [ -f "$LIB_DIR/claude_home.sh" ] && [ -n "$(claude_home_resolve 2>/dev/null |
 else
   miss "hooks/lib/claude_home.sh cannot resolve the harness home — repair the install"
 fi
-if [ -x "$LIB_DIR/claude_home.py" ] && "$VENV_PY" "$LIB_DIR/claude_home.py" resolve >/dev/null 2>&1; then
+# The python resolver is pure-stdlib, so the system python3 is fine for this
+# check even when the harness venv is absent (it does not need the manifest deps).
+RESOLVER_PY="$VENV_PY"; [ -x "$RESOLVER_PY" ] || RESOLVER_PY="python3"
+if [ -x "$LIB_DIR/claude_home.py" ] && "$RESOLVER_PY" "$LIB_DIR/claude_home.py" resolve >/dev/null 2>&1; then
   ok "hooks/lib/claude_home.py resolves the harness home"
 else
   miss "hooks/lib/claude_home.py cannot resolve the harness home — repair the install"
