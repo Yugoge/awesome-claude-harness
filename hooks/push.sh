@@ -24,6 +24,12 @@
 # ─── User-intent sentinel ────────────────────────────────────────────────────
 # Enforcement lives in pretool-wrapper-userintent.py (PreToolUse hook).
 
+# WS1: resolve the harness home from this script's own location, so the
+# git-toplevel fallbacks below default to the resolved home (used only to key a
+# repo-hash) instead of the author literal /root on a fresh non-root clone.
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/claude_home.sh"
+_CLAUDE_HOME_FALLBACK="$(claude_home_resolve || echo "$HOME")"
+
 # Colors
 GREEN='\033[0;32m'
 RED='\033[0;31m'
