@@ -1,7 +1,7 @@
 # doc_sync
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-06-14T23:31:34Z*
+*Last updated: 2026-06-17T00:04:48Z*
 **Total entries**: 10
 **Convention**: kebab
 
@@ -9,7 +9,7 @@
 ```
 doc_sync/
 ├── `claude.py` - CLAUDE.md auto-creation and patching.
-├── `config.py` - Load doc-sync project-local config.
+├── `config.py` - The git-tracked helpers (WS5, AC-WS5-1) let the INDEX/README generators list
 ├── `docker.py` - Parse docker-compose.yml and generate markdown table.
 ├── `extract.py` - Extract description from various file types.
 ├── `main.py` - Main entry point for doc-sync hook.
