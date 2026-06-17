@@ -466,13 +466,24 @@ if [ -x "$REPO/scripts/install/render-settings" ] && [ -f "$GATE_TREE/settings.t
     || echo '{}' > "$GATE_TREE/settings.json"
 fi
 
+# Assert the derived baseline equals THIS CYCLE'S RECORDED baseline (the same
+# sha test_AC_WS2_6 pins). A report tampered/regenerated against a different ref
+# could otherwise produce scoped=true for the WRONG baseline; pinning the
+# expected value here makes the gate reproducible against a fixed surface, not
+# whatever ref the report happens to carry. A mismatch routes into the fail-
+# closed branch below (NOT an unscoped run).
+GATE_EXPECTED_BASELINE="a46d6d58c94e1adf3b8287c1e5646a701e5cdd18"
+if [ -n "$GATE_BASELINE_REF" ] && [ "$GATE_BASELINE_REF" != "$GATE_EXPECTED_BASELINE" ]; then
+  echo "smoke: cycle baseline mismatch (report=$GATE_BASELINE_REF expected=$GATE_EXPECTED_BASELINE)" >&2
+  GATE_BASELINE_REF=""    # force fail-closed: never scope to an unexpected ref
+fi
 if [ -z "$GATE_BASELINE_REF" ]; then
-  # Fail-CLOSED: no resolvable cycle baseline => DO NOT run an unscoped gate
-  # (that would re-introduce the foreign-file RED). Record the slice as failed.
+  # Fail-CLOSED: no resolvable / unexpected cycle baseline => DO NOT run an
+  # unscoped gate (that would re-introduce the foreign-file RED). Record FAIL.
   gate_rc=2
   gate_count=-1
   gate_scoped="false"
-  echo '{"count": -1, "scoped_to_responsible_surface": false, "error": "no resolvable cycle baseline from dev-reports"}' > "$GATE_JSON"
+  echo '{"count": -1, "scoped_to_responsible_surface": false, "error": "no resolvable/expected cycle baseline from dev-reports"}' > "$GATE_JSON"
 else
   python3 "$SELF_DIR/ws2_zero_literal_gate.py" "$GATE_TREE" "$GATE_JSON" \
     --baseline-ref "$GATE_BASELINE_REF" --baseline-repo "$REPO" \
