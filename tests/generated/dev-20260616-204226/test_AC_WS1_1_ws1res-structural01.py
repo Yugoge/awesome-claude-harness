@@ -26,6 +26,42 @@ HOOK_CHECK = {
     "expect_exit": 0
 }
 
+import os
+import shutil
+import subprocess
+import tempfile
+from pathlib import Path
+
+_REPO = Path(__file__).resolve().parents[3]
+
+
+def _make_fresh_clone(basename: str = "dot-claude") -> Path:
+    """Build a synthetic fresh harness home whose root basename != '.claude'.
+
+    The clone carries the full STRUCTURAL sentinel set (settings.json + hooks/
+    + policies/ + scripts/) and the WS1 resolvers copied from the real repo,
+    under an isolated temp $HOME so the resolver's structural walk lands on THIS
+    root — never the author's /root/.claude.
+    """
+    tmp_home = Path(tempfile.mkdtemp(prefix="ws1-structural-"))
+    clone = tmp_home / basename
+    (clone / "hooks" / "lib").mkdir(parents=True)
+    (clone / "policies").mkdir()
+    (clone / "scripts").mkdir()
+    (clone / "settings.json").write_text("{}\n")
+    for rel in ("hooks/lib/claude_home.py", "hooks/lib/claude_home.sh"):
+        shutil.copy2(_REPO / rel, clone / rel)
+    return clone
+
+
+def _clean_env(**overrides) -> dict:
+    env = {
+        "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+        "LANG": os.environ.get("LANG", "C"),
+    }
+    env.update(overrides)
+    return env
+
 
 def test_AC_WS1_1():
     r"""
