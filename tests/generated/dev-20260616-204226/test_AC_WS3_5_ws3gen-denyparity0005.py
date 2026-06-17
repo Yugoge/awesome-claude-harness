@@ -27,13 +27,78 @@ HOOK_CHECK = {
 }
 
 
+import json
+import os
+import subprocess
+import tempfile
+from pathlib import Path
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+RENDERER = REPO_ROOT / "scripts" / "install" / "render-settings"
+TEMPLATE = REPO_ROOT / "settings.template.json"
+PLACEHOLDER = "{{CLAUDE_HOME}}"
+
+
+def _hook_event_arrays(settings):
+    out = {}
+    for event, groups in (settings.get("hooks") or {}).items():
+        seq = []
+        for group in groups:
+            for hook in group.get("hooks", []):
+                seq.append([group.get("matcher"), hook.get("command", "")])
+        out[event] = seq
+    return out
+
+
 def test_AC_WS3_5():
     r"""
     GIVEN: The settings renderer and the live settings.json BEFORE rendering (codex #7 + QA objection 6). settings.json currently has 73 permissions.deny entries, of which 34 are human-only Skill(<name>:*) denies — the only technical barrier against agent self-invocation per global CLAUDE.md rule 15.
     WHEN:  the renderer produces a new settings.json from the template
     THEN:  SEMANTIC PARITY holds: the rendered settings PRESERVE every permissions.deny entry (a structural set-compare of deny entries before vs after is empty-diff — no deny silently dropped), PRESERVE permissions.ask, NEVER add/broaden a permissions.allow, and PRESERVE the hooks arrays per event (same entries, same order). The required Skill(<name>:*) deny set is COMPUTED from the human-only command/skill inventory (NOT hardcoded to a literal count) and asserted present in full.
     """
-    # TODO(dev): replace the line below with the real test body. While the
-    # TEST_INCOMPLETE sentinel is present the test will hard-fail, marking
-    # the AC as unimplemented for QA Phase 5.
-    pytest.fail(f"TEST_INCOMPLETE: {AC_UID} — GIVEN The settings renderer and the live settings.json BEFORE rendering (codex #7 + QA objectio… / WHEN the renderer produces a new settings.json from the template / THEN SEMANTIC PARITY holds: the rendered settings PRESERVE every permissions.deny entry (a structural set-compare…")
+    template = json.loads(TEMPLATE.read_text())
+
+    with tempfile.TemporaryDirectory(prefix="ws3-5.") as td:
+        install_home = os.path.join(td, ".claude")
+        proc = subprocess.run(
+            ["python3", str(RENDERER), install_home, "--print"],
+            capture_output=True, text=True)
+        assert proc.returncode == 0, proc.stderr
+        rendered = json.loads(proc.stdout)
+
+        def norm(entries):
+            return {e.replace(install_home, PLACEHOLDER) for e in entries}
+
+        tpl_deny = set(template["permissions"]["deny"])
+        ren_deny = norm(rendered["permissions"]["deny"])
+        assert tpl_deny - ren_deny == set(), f"deny entries dropped: {sorted(tpl_deny - ren_deny)}"
+
+        tpl_ask = set(template["permissions"]["ask"])
+        ren_ask = norm(rendered["permissions"]["ask"])
+        assert tpl_ask - ren_ask == set(), f"ask entries dropped: {sorted(tpl_ask - ren_ask)}"
+
+        tpl_allow = set(template["permissions"]["allow"])
+        ren_allow = norm(rendered["permissions"]["allow"])
+        assert ren_allow - tpl_allow == set(), f"allow broadened: {sorted(ren_allow - tpl_allow)}"
+
+        # Hook arrays identical in entries + order (placeholders normalized back).
+        ren_norm = json.loads(proc.stdout.replace(install_home, PLACEHOLDER))
+        assert _hook_event_arrays(template) == _hook_event_arrays(ren_norm), \
+            "hook arrays differ from template in entries/order"
+
+        # Human-only Skill deny set COMPUTED from the command inventory (not hardcoded).
+        commands_dir = REPO_ROOT / "commands"
+        human_only = set()
+        if commands_dir.is_dir():
+            for md in commands_dir.glob("*.md"):
+                text = md.read_text(errors="replace")
+                # A command is human-only if it declares disable-model-invocation: true.
+                if "disable-model-invocation: true" in text:
+                    human_only.add(md.stem)
+        # Every human-only command must have a Skill(<name>:*) deny present.
+        skill_denies = {d for d in ren_deny if d.startswith("Skill(")}
+        for name in human_only:
+            assert f"Skill({name}:*)" in skill_denies, \
+                f"human-only command {name!r} lacks a Skill deny in rendered settings"
+        # And the deny set carries Skill denies at all (regression guard).
+        assert skill_denies, "no Skill(<name>:*) denies present in rendered settings"
