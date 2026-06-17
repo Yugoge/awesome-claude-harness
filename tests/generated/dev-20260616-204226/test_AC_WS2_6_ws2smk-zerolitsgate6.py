@@ -136,3 +136,68 @@ def test_AC_WS2_6():
         "the AC-WS2-6 zero-literal gate found genuine load-bearing author "
         f"literals on the live surface (rc={proc.returncode}): "
         + json.dumps(doc.get("findings", []), indent=2))
+
+
+def test_WS2_6_responsible_surface_soundness():
+    """Codex-requested regression: prove the responsible-surface scoping is
+    SOUND in both directions on a synthetic tree.
+
+      - a baseline-ABSENT file that IS this cycle's (passed as --cycle-file)
+        with a load-bearing literal STILL fails (rc=3) — no fail-open for our
+        own new files;
+      - a baseline-ABSENT file that is NOT this cycle's (a foreign concurrent
+        addition, not listed) is EXCLUDED (rc=0);
+      - a baseline-TRACKED file with a planted literal STILL fails (rc=3) —
+        strictness preserved for the committed surface.
+    """
+    import json
+    import os
+    import subprocess
+    import sys
+    import tempfile
+    repo = os.path.abspath(os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), "..", "..", ".."))
+    gate_script = os.path.join(repo, "tests", "ws2_zero_literal_gate.py")
+    BASELINE_REF = "a46d6d58c94e1adf3b8287c1e5646a701e5cdd18"
+    LIT = 'X = "/root/.local/bin/claude"\n'
+
+    def run_gate(tree, *extra):
+        out = os.path.join(tree, "_gate.json")
+        proc = subprocess.run(
+            [sys.executable, gate_script, tree, out,
+             "--baseline-ref", BASELINE_REF, "--baseline-repo", repo, *extra],
+            capture_output=True, text=True)
+        return proc.returncode, json.loads(open(out).read())["count"]
+
+    with tempfile.TemporaryDirectory(prefix="ws2-sound-") as tree:
+        os.makedirs(os.path.join(tree, "hooks", "lib"), exist_ok=True)
+        cyc = "hooks/lib/this_cycle_new.py"      # baseline-absent, OUR file
+        foreign = "hooks/lib/foreign_new.py"     # baseline-absent, NOT ours
+        for rel in (cyc, foreign):
+            with open(os.path.join(tree, rel), "w") as fh:
+                fh.write("#!/usr/bin/env python3\n" + LIT)
+
+        # (1) foreign file present but NOT listed as a cycle file => excluded.
+        rc, cnt = run_gate(tree)
+        assert rc == 0 and cnt == 0, (
+            f"foreign baseline-absent file should be excluded (rc={rc} cnt={cnt})")
+
+        # (2) our baseline-absent file listed as --cycle-file => STILL fails.
+        rc, cnt = run_gate(tree, "--cycle-file", cyc)
+        assert rc == 3 and cnt == 1, (
+            "a this-cycle CREATED file with a load-bearing literal must fail "
+            f"(rc={rc} cnt={cnt}) — fail-open regression")
+
+        # (3) strictness on the committed surface: plant a literal into a
+        #     baseline-TRACKED file copied into the tree; it must fail.
+        tracked = "hooks/stop.sh"
+        src = subprocess.run(
+            ["git", "-C", repo, "show", f"{BASELINE_REF}:{tracked}"],
+            capture_output=True, text=True)
+        if src.returncode == 0:
+            with open(os.path.join(tree, "hooks", "stop.sh"), "w") as fh:
+                fh.write(src.stdout + "\nEXEC=" + LIT)
+            rc, cnt = run_gate(tree)  # foreign still unlisted, tracked planted
+            assert rc == 3 and cnt == 1, (
+                "a baseline-tracked file with a planted literal must fail "
+                f"(rc={rc} cnt={cnt})")
