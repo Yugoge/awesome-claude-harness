@@ -57,8 +57,12 @@ except ImportError:  # pragma: no cover - architect confirmed availability
 # Importable from sibling lib module (already on the same hooks/lib/ path).
 try:
     from . import schema_registry
+    from . import claude_home
 except ImportError:  # pragma: no cover - direct spec import in focused tests
+    import sys as _sys
+    _sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
     from lib import schema_registry  # type: ignore
+    import claude_home  # type: ignore
 
 
 def _result(ok: bool, errors: list, severity: str) -> dict:
