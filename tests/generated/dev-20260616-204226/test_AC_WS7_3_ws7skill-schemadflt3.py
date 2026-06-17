@@ -50,7 +50,54 @@ def test_AC_WS7_3():
     WHEN:  a skill or schema-default-consuming path runs on a fresh non-root clone
     THEN:  skill runtime reads resolve their data files via a portable harness-home form (the skill reads relative to its own location / the resolver), and schema defaults are documented as install-rendered or resolver-derived rather than baked author-absolute; OR each remaining literal is proven non-load-bearing with a per-file note
     """
-    # TODO(dev): replace the line below with the real test body. While the
-    # TEST_INCOMPLETE sentinel is present the test will hard-fail, marking
-    # the AC as unimplemented for QA Phase 5.
-    pytest.fail(f"TEST_INCOMPLETE: {AC_UID} — GIVEN Load-bearing model/runtime-executed paths in non-command surfaces codex #2 surfaced: skil… / WHEN a skill or schema-default-consuming path runs on a fresh non-root clone / THEN skill runtime reads resolve their data files via a portable harness-home form (the skill reads relative to it…")
+    # ---- THEN (1): skill runtime reads carry NO author-absolute literal and use
+    #      the portable ~/.claude harness-home form ----
+    axe = _read("skills/ui-axe-injector/SKILL.md")
+    assert not AUTHOR_PATH_RE.search(axe), (
+        "AC-WS7-3: skills/ui-axe-injector/SKILL.md still carries an author-absolute "
+        "path literal in a runtime read"
+    )
+    assert "~/.claude/skills/ui-axe-injector/vendor/axe.min.js" in axe, (
+        "AC-WS7-3: ui-axe-injector SKILL.md runtime read must resolve via the "
+        "portable ~/.claude harness-home form"
+    )
+
+    catalog = _read("skills/ui-anti-pattern-catalog/SKILL.md")
+    assert not AUTHOR_PATH_RE.search(catalog), (
+        "AC-WS7-3: skills/ui-anti-pattern-catalog/SKILL.md still carries an "
+        "author-absolute path literal in a runtime read"
+    )
+    assert "~/.claude/skills/ui-shared/anti-pattern-catalog.yml" in catalog, (
+        "AC-WS7-3: ui-anti-pattern-catalog SKILL.md runtime read must resolve via "
+        "the portable ~/.claude harness-home form"
+    )
+
+    # ---- THEN (2): the referenced data files actually resolve WITHIN the clone
+    #      (proving the portable form points at a real in-tree artifact, no /root
+    #      dependency) ----
+    axe_data = os.path.join(REPO_ROOT, "skills/ui-axe-injector/vendor/axe.min.js")
+    assert os.path.exists(axe_data), (
+        f"AC-WS7-3: ui-axe-injector vendor data file does not resolve within the "
+        f"clone at {axe_data}"
+    )
+    catalog_data = os.path.join(REPO_ROOT, "skills/ui-shared/anti-pattern-catalog.yml")
+    assert os.path.exists(catalog_data), (
+        f"AC-WS7-3: ui-anti-pattern-catalog source data file does not resolve "
+        f"within the clone at {catalog_data}"
+    )
+
+    # ---- THEN (3): schema runtime DEFAULTS carry no author-absolute literal and
+    #      are documented as resolver-derived / install-rendered ----
+    schema_text = _read("schemas/cycle-contract.v1.json")
+    assert not AUTHOR_PATH_RE.search(schema_text), (
+        "AC-WS7-3: schemas/cycle-contract.v1.json still carries an author-absolute "
+        "default literal"
+    )
+    schema = json.loads(schema_text)
+    props = schema.get("properties", {})
+    for key in ("tool_policy_ref", "ui_evidence_schema_ref"):
+        default = props.get(key, {}).get("default", "")
+        assert default.startswith("~/.claude/"), (
+            f"AC-WS7-3: schema default '{key}' must be the portable ~/.claude "
+            f"harness-home form, got {default!r}"
+        )
