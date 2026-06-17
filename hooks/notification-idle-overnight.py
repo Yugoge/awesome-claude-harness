@@ -12,8 +12,9 @@ Behavior:
      preview optional).
   2. If no active overnight-state-*.json with future end_time exists for
      this session, exit 0 silently.
-  3. If active, append a JSONL record to
-     /root/.claude/logs/overnight-idle.jsonl with fields:
+  3. If active, append a JSONL record to <harness-home>/logs/
+     overnight-idle.jsonl (resolved via the WS1 claude_home resolver,
+     not the author literal /root) with fields:
        {ts, session_id, end_time, time_remaining_seconds,
         transcript_path, current_phase, cycle_count,
         last_message_preview}
