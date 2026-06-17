@@ -33,7 +33,64 @@ def test_AC_WS2_6():
     WHEN:  the smoke test asserts portability of the rendered/resolved tree
     THEN:  scanning the EXPLICITLY-defined load-bearing surfaces (per AC-WS3-4) of the rendered clone with the SAME boundary-aware REV4 pattern (?<![\w./])(?:/root(?:/|(?=$|[^\w./-]))|/dev/shm/dev-workspace(?:/|(?=$|[^\w./-]))) finds ZERO load-bearing author-path literals — /root/.claude, /root/bin, /root/docs, /root/templates, AND every bare-/root env-default boundary form (${...:-/root}, 'HOME','/root', "default": "/root", || echo /root) — across all four WS7 classes, while PER-LITERAL-allowlisted prose/tests/examples are exempt. REV4 (ACTIVE-2): the gate's pattern is exactly AC-WS3-4's (as wide as the AC-WS7-1 principle), so NEITHER a load-bearing /root/docs/... dispatch-read (e.g. commands/dev-command.md:68) or /root/templates/... template ref (agents/ui-specialist.md:10, commands/dev-overnight.md:1882) NOR a bare-/root env-default can escape the gate — the prior narrow /root/.claude|/root/bin|/dev/shm + bare-/root set missed the /root/docs class, and a literal /root(/|$) would have missed the bare-root quote/brace boundary forms.
     """
-    # TODO(dev): replace the line below with the real test body. While the
-    # TEST_INCOMPLETE sentinel is present the test will hard-fail, marking
-    # the AC as unimplemented for QA Phase 5.
-    pytest.fail(f"TEST_INCOMPLETE: {AC_UID} — GIVEN The whole fresh-clone smoke environment after WS1+WS3+WS7 land (codex #8 + #10: the globa… / WHEN the smoke test asserts portability of the rendered/resolved tree / THEN scanning the EXPLICITLY-defined load-bearing surfaces (per AC-WS3-4) of the rendered clone with the SAME boun…")
+    # POST-WAVE-1 INTEGRATION GATE assertion (AC-WS2-6). Two layers:
+    #
+    # (1) Drive the fresh-clone smoke and assert its 'integration-gate'
+    #     'zero_literals' slice passed. The smoke renders a portable tree from the
+    #     load-bearing surfaces (settings.json RENDERED) and runs the EXISTING
+    #     tests/ws2_zero_literal_gate.py over it, recording zero genuine residuals.
+    #
+    # (2) Defense-in-depth: invoke the SAME existing gate logic directly against
+    #     the live working-tree surface so that if the gate ever finds a genuine
+    #     residual, this test FAILS with the precise file:line:literal:class list
+    #     (the gate's residual JSON) — giving the orchestrator the exact data to
+    #     route the offending literal to its owning work item.
+    import json
+    import os
+    import subprocess
+    import sys
+    import tempfile
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    from _ws2_smoke import run_smoke, require_not_setup_error
+
+    rc, result = run_smoke()
+    require_not_setup_error(rc, result)
+
+    # ── Layer (1): the smoke's recorded integration-gate slice ───────────────
+    gate = [a for a in result["assertions"]
+            if a["guard"] == "integration-gate" and a["kind"] == "zero_literals"]
+    assert gate, (
+        "smoke did not emit an integration-gate 'zero_literals' assertion; "
+        f"saw {[(a['guard'], a['kind']) for a in result['assertions']]}")
+    assert gate[0]["pass"], (
+        "post-Wave-1 zero-literal integration gate FAILED — load-bearing "
+        f"author-absolute literals remain on the rendered surface: {gate[0]['detail']}")
+    # The smoke also surfaces the residual count at the top of the result doc.
+    residuals = result.get("integration_gate_residuals")
+    assert residuals == 0, (
+        f"integration_gate_residuals must be 0, got {residuals!r}")
+
+    # ── Layer (2): run the existing gate logic directly over the live surface ─
+    repo = os.path.abspath(os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), "..", "..", ".."))
+    gate_script = os.path.join(repo, "tests", "ws2_zero_literal_gate.py")
+    assert os.path.exists(gate_script), f"gate script missing: {gate_script}"
+    with tempfile.NamedTemporaryFile(
+            prefix="ws2-gate-", suffix=".json", delete=False) as tf:
+        out_json = tf.name
+    try:
+        proc = subprocess.run(
+            [sys.executable, gate_script, repo, out_json],
+            capture_output=True, text=True)
+        doc = json.loads(open(out_json).read())
+    finally:
+        try:
+            os.unlink(out_json)
+        except OSError:
+            pass
+    # Exit 0 == zero residuals; exit 3 == one or more genuine load-bearing
+    # literals found (the findings list names each file:line:literal:ws7_class).
+    assert proc.returncode == 0 and doc["count"] == 0, (
+        "the AC-WS2-6 zero-literal gate found genuine load-bearing author "
+        f"literals on the live surface (rc={proc.returncode}): "
+        + json.dumps(doc.get("findings", []), indent=2))
