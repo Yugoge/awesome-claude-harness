@@ -21,7 +21,24 @@ Why this lives in tests/ and not just `detect-hardcoded-paths.sh`:
   comment-blindness is recorded as a WS3 recommendation in the dev report; this
   gate does NOT modify it (WI-WS2 scope fence).
 
-Usage: ws2_zero_literal_gate.py <rendered-clone-root> [<residuals-json-out>]
+Responsible-surface scoping (AC-WS2-6, shared-workspace correctness):
+  On a SHARED working tree, concurrent foreign sessions leave in-flight files
+  (untracked / staged-but-uncommitted) that are NOT part of THIS cycle and that
+  this cycle will never commit. Measuring portability over those foreign files
+  is wrong — the definition-of-done is THIS cycle's surface, not a sibling's
+  incomplete work. When invoked with `--baseline-ref <sha>` over a git work
+  tree, the gate restricts findings to the RESPONSIBLE surface:
+      responsible = files tracked at <sha>  ∪  files this cycle created/modified
+                    (passed via repeatable `--cycle-file <relpath>`)
+  Files absent at the baseline AND not named as a cycle file (foreign concurrent
+  additions) are EXCLUDED. The gate stays genuinely strict for the responsible
+  surface — a baseline-tracked file with a load-bearing literal still fails.
+  When `--baseline-ref` is absent (e.g. scanning a freshly RENDERED clone that
+  is not a git repo), the full tree is scanned exactly as before.
+
+Usage:
+  ws2_zero_literal_gate.py <rendered-clone-root> [<residuals-json-out>]
+      [--baseline-ref <sha>] [--cycle-file <relpath> ...]
 Exit codes: 0 = zero genuine load-bearing residuals; 3 = one or more found.
 """
 from __future__ import annotations
@@ -29,6 +46,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import subprocess
 import sys
 
 # Boundary-aware author-path pattern — IDENTICAL to scripts/detect-hardcoded-paths.sh
