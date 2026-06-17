@@ -34,6 +34,10 @@ try:  # pragma: no cover - convenience for direct CLI use
 except Exception:  # pragma: no cover
     load_contract = None  # type: ignore[assignment]
 
+if str(_LIB_DIR) not in sys.path:
+    sys.path.insert(0, str(_LIB_DIR))
+import claude_home  # noqa: E402  (shared WS1 harness-home resolver)
+
 
 # ---------------------------------------------------------------------------
 # Path helpers
