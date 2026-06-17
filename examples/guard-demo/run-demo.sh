@@ -173,7 +173,18 @@ DANGEROUS_TARGET="$DEMO_HOME/work/DEMO-FORBIDDEN-overwrite-a-guard.txt"
 say "An agent (role: dev) attempts to write to a protected target:"
 say "  $DANGEROUS_TARGET"
 ask_guard BLOCK_ERR "$DANGEROUS_TARGET"; BLOCK_RC=$?
-if [ "$BLOCK_RC" -eq 2 ] && printf '%s' "$BLOCK_ERR" | grep -q "BLOCKED by tool-policy.v1"; then
+# The block must be a GENUINE policy deny, not an incidental exit 2 (a bootstrap
+# / import / unparseable-policy failure also exits 2 with a different marker). We
+# require exit 2 AND the policy-deny marker AND the structured deny_reason that
+# only the denied_write_path_prefixes branch emits — so this can never pass on a
+# harness-install failure masquerading as a deny.
+if [ "$BLOCK_RC" -eq 2 ] \
+   && printf '%s' "$BLOCK_ERR" | grep -q "BLOCKED by tool-policy.v1" \
+   && printf '%s' "$BLOCK_ERR" | grep -q '"role":"dev"' \
+   && printf '%s' "$BLOCK_ERR" | grep -q '"tool":"Write"' \
+   && printf '%s' "$BLOCK_ERR" | grep -q "DEMO-FORBIDDEN" \
+   && printf '%s' "$BLOCK_ERR" | grep -q "matches denied_write_path_prefixes" \
+   && ! printf '%s' "$BLOCK_ERR" | grep -q "bootstrap FAILED"; then
   say "BLOCKED (exit 2) by the guard, fail-closed:"
   say "  $(printf '%s' "$BLOCK_ERR" | head -c 240)"
   # The dangerous write must NOT have landed (the guard runs BEFORE the tool).
@@ -182,7 +193,7 @@ if [ "$BLOCK_RC" -eq 2 ] && printf '%s' "$BLOCK_ERR" | grep -q "BLOCKED by tool-
     OVERALL=1
   fi
 else
-  say "FAIL: dangerous op was NOT blocked as designed (rc=$BLOCK_RC)."
+  say "FAIL: dangerous op was NOT blocked by a genuine policy deny (rc=$BLOCK_RC)."
   say "  stderr: $(printf '%s' "$BLOCK_ERR" | head -c 240)"
   OVERALL=1
 fi
