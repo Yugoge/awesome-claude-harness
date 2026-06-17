@@ -379,7 +379,19 @@ if [ -x "$REPO/scripts/install/render-settings" ] && [ -f "$GATE_TREE/settings.t
 fi
 
 GATE_JSON="$TMP_BASE/gate-residuals.json"
-python3 "$SELF_DIR/ws2_zero_literal_gate.py" "$GATE_TREE" "$GATE_JSON" >/dev/null 2>&1
+# Scope the rendered-tree gate to the COMMITTED surface (files tracked at $REPO
+# HEAD), resolved against the real repo. On a SHARED workspace the cp -a above
+# also copies any concurrent foreign session's uncommitted in-flight files into
+# $GATE_TREE; those are not part of the committed portable surface this gate
+# measures, so excluding files absent at HEAD keeps the gate measuring the real
+# clone-able surface. A tracked file with a load-bearing literal still fails.
+GATE_BASELINE="$(git -C "$REPO" rev-parse HEAD 2>/dev/null || true)"
+if [ -n "$GATE_BASELINE" ]; then
+  python3 "$SELF_DIR/ws2_zero_literal_gate.py" "$GATE_TREE" "$GATE_JSON" \
+    --baseline-ref "$GATE_BASELINE" --baseline-repo "$REPO" >/dev/null 2>&1
+else
+  python3 "$SELF_DIR/ws2_zero_literal_gate.py" "$GATE_TREE" "$GATE_JSON" >/dev/null 2>&1
+fi
 gate_rc=$?
 gate_count="$(python3 -c "import json;print(json.load(open('$GATE_JSON'))['count'])" 2>/dev/null || echo -1)"
 if [ "$gate_rc" -eq 0 ] && [ "$gate_count" = "0" ]; then
