@@ -29,7 +29,6 @@ GIT_TOPLEVEL="$(git rev-parse --show-toplevel 2>/dev/null || true)"
 for candidate in \
     "${CLAUDE_PROJECT_DIR:-}/docs/dev/close-report-${TASK_ID}.md" \
     "${GIT_TOPLEVEL:+${GIT_TOPLEVEL}/docs/dev/close-report-${TASK_ID}.md}" \
-    "/root/.claude/docs/dev/close-report-${TASK_ID}.md" \
     "${CONTROL_ROOT}/docs/dev/close-report-${TASK_ID}.md"; do
     if [ -n "$candidate" ] && [ -f "$candidate" ]; then
         echo "$candidate"
