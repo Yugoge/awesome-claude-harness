@@ -64,9 +64,22 @@ def test_AC_WS7_2():
         "AC-WS7-2: commands/spec.md COVERAGE step still contains the fail-OPEN "
         "'manual coverage check required' skip branch"
     )
-    assert not re.search(r"skip\b", coverage, flags=re.IGNORECASE), (
+    # A POSITIVE skip DIRECTIVE is fail-open; an explicit prohibition ("do NOT
+    # skip" / "never skip" / "don't skip") is the fail-CLOSED contract and is
+    # allowed. Flag only "skip" occurrences NOT immediately negated.
+    skip_directives = [
+        mm.start()
+        for mm in re.finditer(r"\bskip\b", coverage, flags=re.IGNORECASE)
+        if not re.search(
+            r"(?:not|never|n't|do\s+not)\W+(?:\w+\W+){0,2}$",
+            coverage[: mm.start()],
+            flags=re.IGNORECASE,
+        )
+    ]
+    assert not skip_directives, (
         "AC-WS7-2: commands/spec.md COVERAGE step still instructs a skip on a "
-        "missing verifier (fail-open)"
+        "missing verifier (fail-open); only explicit 'do NOT skip' prohibitions "
+        "are allowed"
     )
 
     # THEN (2): the verifier is resolved via the WS1 harness-home resolver, not an
