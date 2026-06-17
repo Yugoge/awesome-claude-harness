@@ -56,15 +56,30 @@ def test_AC_WS2_6():
     rc, result = run_smoke()
     require_not_setup_error(rc, result)
 
+    # The HOOK_CHECK shell-probe contract is expect_exit==0: the smoke as a whole
+    # must have succeeded. Assert the suite-level contract FIRST so this test can
+    # NEVER report green while the shared smoke reported failure (rc!=0 /
+    # all_pass!=True) just because the zero_literals slice happened to be green —
+    # a smoke-wide regression must fail this slice too, not be masked by it.
+    suite_failed = [a for a in result.get("assertions", []) if not a.get("pass")]
+    assert rc == HOOK_CHECK["expect_exit"] and result.get("all_pass") is True, (
+        f"fresh-clone smoke did not pass cleanly (rc={rc}, "
+        f"all_pass={result.get('all_pass')}); failing assertions: "
+        + json.dumps(suite_failed, indent=2))
+
     # ── Layer (1): the smoke's recorded integration-gate slice ───────────────
+    # Validate EVERY matching record (not just the first) so a passing duplicate
+    # cannot mask a later failing one.
     gate = [a for a in result["assertions"]
             if a["guard"] == "integration-gate" and a["kind"] == "zero_literals"]
     assert gate, (
         "smoke did not emit an integration-gate 'zero_literals' assertion; "
         f"saw {[(a['guard'], a['kind']) for a in result['assertions']]}")
-    assert gate[0]["pass"], (
+    gate_failed = [a for a in gate if not a.get("pass")]
+    assert not gate_failed, (
         "post-Wave-1 zero-literal integration gate FAILED — load-bearing "
-        f"author-absolute literals remain on the rendered surface: {gate[0]['detail']}")
+        "author-absolute literals remain on the rendered surface: "
+        + json.dumps(gate_failed, indent=2))
     # The smoke also surfaces the residual count at the top of the result doc.
     residuals = result.get("integration_gate_residuals")
     assert residuals == 0, (
