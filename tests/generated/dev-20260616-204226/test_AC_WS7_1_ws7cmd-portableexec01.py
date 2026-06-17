@@ -106,7 +106,81 @@ def test_AC_WS7_1():
     WHEN:  a full-surface scan of commands/*.md + agents/*.md + skills/*/SKILL.md + schemas/*.json runs after the WS7 change on a fresh non-root clone, USING the boundary-aware REV4 author-path pattern (AC-WS3-4: (?<![\w./])(?:/root(?:/|(?=$|[^\w./-]))|/dev/shm/dev-workspace(?:/|(?=$|[^\w./-]))) — covering /root/.claude + /root/bin + /root/docs + /root/templates AND a bare /root at ANY non-path boundary)
     THEN:  the scan finds ZERO load-bearing author-absolute path literals of classes (a) executed / (b) tool operand / (c) dispatch-or-dispatch-read / (d) runtime default — across the FULL /root/... family (NOT just /root/.claude|/root/bin) AND every bare-/root env-default boundary form (${...:-/root}, 'HOME','/root', "default": "/root", || echo /root) AND /dev/shm/dev-workspace — every such literal converted to its correct PORTABLE form BY CLASS: shell-executed paths -> the WS1 CLAUDE_HOME resolver or $CLAUDE_PROJECT_DIR (the shell evaluates these); TOOL OPERANDS -> NEVER a shell-var token inside the operand (the Write tool does not shell-expand — see dev-overnight.md:262); use EITHER the Bash-redirect form with "$CLAUDE_PROJECT_DIR/.claude/dev-registry/..." where the shell expands it (Form B at :266-272), OR have the orchestrator compute/inline the concrete resolved project-dir absolute path before invoking Write (the FIRST-ACTION convention at :27 expresses the project-dir-relative intent); dispatch/dispatch-reads (incl. the /root/docs + /root/templates class) -> the resolved harness-home form embedded in the dispatch; runtime defaults -> a resolver-derived / env-var default; external helpers (class a outside the tree) -> the AC-WS3-6 env vars. Illustrative prose is UNTOUCHED (diff scoped to load-bearing literals only) and exempt by PER-LITERAL allowlist, never prefix omission. The acceptance is the PRINCIPLE measured comprehensively by the broadened pattern (a full scan finds none), NOT a hand-enumerated checklist; the 8 anchors above MUST be among the fixes (or, for dev.md:1618, the per-literal allowlist).
     """
-    # TODO(dev): replace the line below with the real test body. While the
-    # TEST_INCOMPLETE sentinel is present the test will hard-fail, marking
-    # the AC as unimplemented for QA Phase 5.
-    pytest.fail(f"TEST_INCOMPLETE: {AC_UID} — GIVEN REV3 (ACTIVE-1): WS7 scope is defined by PRINCIPLE, not enumeration. The scope is EVERY l… / WHEN a full-surface scan of commands/*.md + agents/*.md + skills/*/SKILL.md + schemas/*.json r… / THEN the scan finds ZERO load-bearing author-absolute path literals of classes (a) executed / (b) tool operand / (…")
+    # ---- THEN (1): full-surface scan finds ZERO load-bearing author literals ----
+    offenders = _scan_surface()
+    assert not offenders, (
+        "AC-WS7-1: load-bearing author-absolute path literal(s) remain in the "
+        "command/agent/skill/schema surface (only PER-LITERAL-allowlisted prose "
+        "is exempt):\n"
+        + "\n".join(f"  {rel}:{i}: {line}" for rel, i, line in offenders)
+    )
+
+    # ---- THEN (2): each NON-EXHAUSTIVE evidence anchor is in its PORTABLE form ----
+
+    # (1) dev-overnight.md Write-tool operand: no literal /root, uses the
+    #     orchestrator-inlined <RESOLVED_PROJECT_DIR> form (or $CLAUDE_PROJECT_DIR
+    #     Bash-redirect Form B) for the dev-registry sentinel writes.
+    devovn = _read("commands/dev-overnight.md")
+    assert "/root/.claude/dev-registry" not in devovn, \
+        "dev-overnight.md still carries a literal /root/.claude/dev-registry Write operand"
+    assert "<RESOLVED_PROJECT_DIR>/.claude/dev-registry" in devovn, \
+        "dev-overnight.md Write-operand sentinel writes must use the orchestrator-inlined <RESOLVED_PROJECT_DIR> form"
+    assert '"$CLAUDE_PROJECT_DIR/.claude/dev-registry' in devovn, \
+        "dev-overnight.md must keep the Bash-redirect $CLAUDE_PROJECT_DIR Form B for sentinel writes"
+    # (7) dev-overnight.md design-handoff template ref resolves portably.
+    assert "/root/docs/templates/design-handoff.example.json" not in devovn, \
+        "dev-overnight.md:1882 template ref still uses the author /root path"
+    assert "~/.claude/docs/templates/design-handoff.example.json" in devovn, \
+        "dev-overnight.md:1882 template ref must resolve via the portable ~/.claude harness-home form"
+
+    # (2)/(8) commit.md: spec-update dispatch-read + resolve-close-report fallback.
+    commit = _read("commands/commit.md")
+    assert "/root/.claude/commands/spec-update.md" not in commit, \
+        "commit.md spec-update dispatch-read still uses the author /root path"
+    assert "~/.claude/commands/spec-update.md" in commit, \
+        "commit.md spec-update dispatch-read must resolve via the portable ~/.claude form"
+    assert "/root/docs/dev/" not in commit, \
+        "commit.md:50 fallback-default prose still names the author /root/docs/dev/ literal"
+    assert "CONTROL_ROOT" in commit, \
+        "commit.md:50 fallback-default prose must track the migrated resolve-close-report.sh CONTROL_ROOT resolver"
+
+    # (3) qa.md ui-evidence-audit external helper resolved via env var.
+    qa = _read("agents/qa.md")
+    assert "/root/bin/ui-evidence-audit.py" not in qa, \
+        "qa.md:896/905 still names the author /root/bin/ui-evidence-audit.py literal"
+    assert "UI_EVIDENCE_AUDIT_BIN" in qa, \
+        "qa.md ui-evidence audit must resolve via the UI_EVIDENCE_AUDIT_BIN env var"
+
+    # (4) changelog-analyst.md runtime defaults resolver/env-derived.
+    cla = _read("agents/changelog-analyst.md")
+    assert "CONTROL_ROOT=/root" not in cla, \
+        "changelog-analyst.md:17 still defaults CONTROL_ROOT to the author /root literal"
+    assert "NESTED_REPO=/dev/shm/dev-workspace" not in cla, \
+        "changelog-analyst.md:18 still defaults NESTED_REPO to the author /dev/shm literal"
+    assert "CONTROL_ROOT=$HOME" in cla, \
+        "changelog-analyst.md CONTROL_ROOT default must be the resolved $HOME"
+
+    # (5) dev-command.md dispatch-read of the command-development-patterns doc.
+    devcmd = _read("commands/dev-command.md")
+    assert "/root/docs/dev/command-development-patterns.md" not in devcmd, \
+        "dev-command.md:68 dispatch-read still uses the author /root/docs path"
+    assert "~/.claude/docs/dev/command-development-patterns.md" in devcmd, \
+        "dev-command.md:68 dispatch-read must resolve via the portable ~/.claude harness-home form"
+
+    # (6) ui-specialist.md design-handoff template ref resolves portably.
+    uispec = _read("agents/ui-specialist.md")
+    assert "/root/docs/templates/design-handoff.example.json" not in uispec, \
+        "ui-specialist.md:10 template ref still uses the author /root/docs path"
+    assert "~/.claude/docs/templates/design-handoff.example.json" in uispec, \
+        "ui-specialist.md:10 template ref must resolve via the portable ~/.claude harness-home form"
+
+    # ---- THEN (3): PER-LITERAL-allowlisted illustrative prose is UNTOUCHED ----
+    # (the diff is scoped to load-bearing literals only; the prose anchors must
+    # still carry their original author-path mentions, proving they were not churned).
+    devmd_lines = _read("commands/dev.md").splitlines()
+    for ln in (1566, 1570, 1592, 1598, 1612, 1618):
+        assert AUTHOR_PATH_RE.search(devmd_lines[ln - 1]), (
+            f"dev.md:{ln} is a PER-LITERAL-allowlisted illustrative-prose anchor and "
+            f"must remain unchanged (still carry its author-path mention); the diff "
+            f"must be scoped to load-bearing literals only"
+        )
