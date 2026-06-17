@@ -26,6 +26,32 @@ HOOK_CHECK = {
     "expect_exit": 0
 }
 
+import os
+import shutil
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+
+_REPO = Path(__file__).resolve().parents[3]
+
+
+def _make_clone(basename: str = "dot-claude") -> Path:
+    tmp_home = Path(tempfile.mkdtemp(prefix="ws1-optional-"))
+    clone = tmp_home / basename
+    (clone / "hooks" / "lib").mkdir(parents=True)
+    (clone / "policies").mkdir()
+    (clone / "scripts").mkdir()
+    (clone / "settings.json").write_text("{}\n")
+    for rel in ("hooks/lib/claude_home.py", "hooks/lib/claude_home.sh"):
+        shutil.copy2(_REPO / rel, clone / rel)
+    return clone
+
+
+def _env(clone: Path) -> dict:
+    return {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "LANG": "C",
+            "HOME": str(clone.parent)}
+
 
 def test_AC_WS1_4():
     r"""
