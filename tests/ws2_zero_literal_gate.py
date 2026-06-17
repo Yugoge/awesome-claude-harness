@@ -62,7 +62,15 @@ LITERAL_RE = re.compile(
 
 
 def in_scope(rel: str) -> bool:
-    """The EXPLICITLY-defined load-bearing surfaces (AC-WS3-4)."""
+    """The EXPLICITLY-defined load-bearing surfaces (AC-WS3-4).
+
+    Path-only membership for the extension-bearing surfaces. Extensionless
+    executable scripts under hooks/ and scripts/ (e.g. scripts/bootstrap,
+    scripts/doctor, scripts/install/render-settings) are ALSO load-bearing but
+    cannot be recognized from the path alone — scan() promotes them via
+    shebang_ext() so a load-bearing /root literal in an extensionless script is
+    NOT silently skipped.
+    """
     if rel.startswith("hooks/") or rel.startswith("scripts/"):
         if "/tests/" in rel:
             return False  # tests/ are exempt per AC-WS3-4
@@ -80,6 +88,32 @@ def in_scope(rel: str) -> bool:
     if rel.startswith("policies/") and rel.endswith(".json"):
         return True
     return False
+
+
+def shebang_ext(rel: str, full: str) -> str:
+    """For an EXTENSIONLESS file under hooks/ or scripts/ (not under tests/),
+    return the effective comment-style extension inferred from its shebang
+    (".py" for python, ".sh" for sh/bash/dash), else "". Returns "" for any
+    path that is already extension-classified or outside the executable
+    surfaces — so this ONLY promotes the extensionless-script blind spot."""
+    if not (rel.startswith("hooks/") or rel.startswith("scripts/")):
+        return ""
+    if "/tests/" in rel:
+        return ""
+    if os.path.splitext(rel)[1]:
+        return ""  # has an extension already => handled by in_scope()
+    try:
+        with open(full, "rb") as fh:
+            first = fh.readline(256).decode("utf-8", "replace")
+    except OSError:
+        return ""
+    if not first.startswith("#!"):
+        return ""
+    if "python" in first:
+        return ".py"
+    if re.search(r"\b(bash|sh|dash|zsh|ksh)\b", first):
+        return ".sh"
+    return ".sh"  # any other shebang interpreter => shell-style # comments
 
 
 # Per-literal PROSE-ONLY allowlist (AC-WS7-1) + BA out_of_scope_observations.
