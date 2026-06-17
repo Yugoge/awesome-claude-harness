@@ -309,6 +309,7 @@ def main(argv):
         "root": root,
         "scoped_to_responsible_surface": responsible is not None,
         "baseline_ref": baseline_ref or None,
+        "baseline_repo": (baseline_repo or root) if baseline_ref else None,
         "cycle_files": cycle_files,
         "count": len(findings),
         "findings": findings,
