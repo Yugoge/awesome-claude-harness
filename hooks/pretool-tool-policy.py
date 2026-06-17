@@ -37,9 +37,39 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from lib.agent_resolver import resolve_agent_type  # noqa: E402
-from lib.bash_write_targets import extract_bash_write_paths  # noqa: E402
-from lib.policy_registry import WRITE_TOOLS, is_allowed  # noqa: E402
+# WS1 CRITICAL: the deny-logic imports are loaded inside a FAIL-CLOSED bootstrap
+# guard, NOT at module top (where an ImportError would be a dirty uncaught
+# exit 1) and NOT inside the blanket `except Exception: sys.exit(0)` in __main__
+# (which would silently fail OPEN). A missing/broken deny-logic module on a
+# fresh clone must BLOCK (exit 2), never allow.
+WRITE_TOOLS: set
+resolve_agent_type = None  # type: ignore[assignment]
+extract_bash_write_paths = None  # type: ignore[assignment]
+is_allowed = None  # type: ignore[assignment]
+
+
+def _bootstrap_security() -> None:
+    """Import the deny-logic modules; FAIL CLOSED (exit 2) on any failure.
+
+    This MUST be called from main() BEFORE any authorization decision and MUST
+    NOT be wrapped by the blanket fail-open `except` in __main__.
+    """
+    global WRITE_TOOLS, resolve_agent_type, extract_bash_write_paths, is_allowed
+    try:
+        from lib.agent_resolver import resolve_agent_type as _rat
+        from lib.bash_write_targets import extract_bash_write_paths as _ebwp
+        from lib.policy_registry import WRITE_TOOLS as _wt, is_allowed as _ia
+    except Exception as e:  # ImportError, bootstrap failure, resolver failure
+        sys.stderr.write(
+            "BLOCKED by tool-policy.v1: deny-logic bootstrap FAILED — the policy "
+            f"enforcement module could not be imported ({e}). Failing CLOSED "
+            "(exit 2) rather than allowing; repair the harness install.\n"
+        )
+        sys.exit(2)
+    WRITE_TOOLS = _wt
+    resolve_agent_type = _rat
+    extract_bash_write_paths = _ebwp
+    is_allowed = _ia
 
 
 def _read_payload() -> dict:
