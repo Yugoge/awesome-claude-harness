@@ -26,6 +26,43 @@ HOOK_CHECK = {
     "expect_exit": 0
 }
 
+import os
+import subprocess
+import sys
+from pathlib import Path
+
+_REPO = Path(__file__).resolve().parents[3]
+
+
+def _run_guard_probe():
+    r"""Import the REAL runtime_guard under HOME=/home/alice with a protected
+    file under it, and report (1) the ~/-variant set and (2) whether the guard
+    blocks a destructive op on the ~/-form. Runs in a clean subprocess so the
+    module-level DATA_FILE_PATH binds to the synthetic HOME."""
+    code = r"""
+import os, sys, json
+sys.path.insert(0, os.path.join(os.environ["REPO"], "hooks", "lib"))
+import runtime_guard as rg
+variants = sorted(rg._config_or_ancestor_variants())
+tilde = rg._home_tilde_variant("/home/alice/.config/claude/protected-runtime.json")
+# Behavioral: a destructive rm of the ~/-form must be DENIED (verdict != ALLOW).
+verdict = rg.evaluate_command("rm -f ~/.config/claude/protected-runtime.json")
+print(json.dumps({
+    "variants": variants,
+    "tilde": tilde,
+    "verdict": verdict[0],
+}))
+"""
+    env = {
+        "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+        "LANG": "C",
+        "HOME": "/home/alice",
+        "REPO": str(_REPO),
+        "CLAUDE_PROTECTED_RUNTIME_FILE": "/home/alice/.config/claude/protected-runtime.json",
+    }
+    return subprocess.run([sys.executable, "-c", code], env=env,
+                          capture_output=True, text=True)
+
 
 def test_AC_WS1_8():
     r"""
