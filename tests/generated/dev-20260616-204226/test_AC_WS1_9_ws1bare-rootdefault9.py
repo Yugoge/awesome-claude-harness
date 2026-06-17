@@ -162,19 +162,24 @@ def test_AC_WS1_9():
     assert proj.stdout.strip() == walk_root, (
         f"project_dir() should resolve to the walk root; got {proj.stdout.strip()!r}")
 
-    # (3) BEHAVIORAL: the shell git-toplevel fallback (git fails because the clone
-    # is not a repo) resolves to the harness home, never /root — the exact pattern
-    # apply-permissions.sh:10 now uses.
+    # (3) BEHAVIORAL: invoke the REAL apply-permissions.sh resolve_project_dir()
+    # (not a reimplementation — codex): source the actual fixed script and call
+    # its own function with HOME + CLAUDE_PROJECT_DIR unset, from a cwd OUTSIDE
+    # any git repo, so its git-toplevel fallback fires. It must return the
+    # resolved home, never /root. (`true` after source neutralizes the script's
+    # `${1:?}` arg guard so sourcing reaches the function definition.)
     fb = subprocess.run(
         ["bash", "-c",
-         f'source "{clone}/hooks/lib/claude_home.sh"; '
-         'echo "$(git rev-parse --show-toplevel 2>/dev/null || claude_home_resolve || echo "$HOME")"'],
+         f'set +u; source "{clone}/scripts/apply-permissions.sh" 2>/dev/null; '
+         'resolve_project_dir'],
         env=env, capture_output=True, text=True, cwd=str(clone),
     )
-    assert _AUTHOR_ROOT.search(fb.stdout.strip()) is None, (
-        f"shell git-toplevel fallback defaulted to /root: {fb.stdout.strip()!r}")
-    assert fb.stdout.strip() == walk_root, (
-        f"shell fallback should be the resolved home; got {fb.stdout.strip()!r}")
+    out_fb = fb.stdout.strip().splitlines()[-1] if fb.stdout.strip() else ""
+    assert _AUTHOR_ROOT.search(out_fb) is None, (
+        f"apply-permissions.sh resolve_project_dir() defaulted to /root: {out_fb!r}")
+    assert out_fb == walk_root, (
+        f"apply-permissions.sh resolve_project_dir() should be the resolved home; "
+        f"got {out_fb!r} (full stdout={fb.stdout!r} stderr={fb.stderr!r})")
 
     # (4) BEHAVIORAL: resolve-close-report.sh fallback path (no candidate exists)
     # is rooted at the resolved home's CONTROL_ROOT, NEVER /root.
