@@ -107,6 +107,54 @@ def test_AC_WS4_1():
     assert leaked.returncode != 0 or not leaked.stdout.strip(), (
         f"author /root log literal still load-bearing in hook: {leaked.stdout!r}")
 
+    # WHEN: the same hook fires with an ACTIVE overnight session -> _log_path()
+    # is actually exercised and the JSONL record must land UNDER the clone's own
+    # home (proves the resolver routing, not a /root author literal), exit 0.
+    cdir = clone / ".claude"
+    cdir.mkdir(exist_ok=True)
+    end = (datetime.now() + timedelta(hours=2)).isoformat()
+    (cdir / "overnight-state-ws4.json").write_text(json.dumps({
+        "session_id": "ws4", "end_time": end,
+        "current_phase": "dev", "cycle_count": 1}))
+    active = subprocess.run(
+        ["python3", str(hook)],
+        input=json.dumps({"session_id": "ws4", "message": "idle"}),
+        env=env, capture_output=True, text=True, timeout=20,
+    )
+    assert active.returncode == 0, (
+        f"notification hook (active session) exit {active.returncode} != 0 "
+        f"(stderr={active.stderr!r})")
+    log_file = clone / "logs" / "overnight-idle.jsonl"
+    assert log_file.is_file(), "idle log did NOT resolve under the clone home"
+    assert not str(log_file).startswith("/root/"), "log resolved to author /root"
+
+    # WHEN: the WS1 resolver RAISES a non-OSError while the overnight guard tries
+    # to append its self-repair audit row -> _persist_audit_row must degrade to a
+    # soft False (NOT propagate), so the PreToolUse security guard never crashes
+    # and its fail-closed block path stays intact. This is the BLOCKER regression
+    # guard for the resolver-routing change.
+    probe = (
+        "import sys, importlib.util\n"
+        f"sys.path.insert(0, {str(clone / 'hooks')!r})\n"
+        "spec = importlib.util.spec_from_file_location('ohg', "
+        f"{str(clone / 'hooks' / 'pretool-overnight-hook-guard.py')!r})\n"
+        "m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)\n"
+        "class _Boom:\n"
+        "    def resolve(self_):\n"
+        "        raise RuntimeError('resolver exploded')\n"
+        "    def project_dir(self_):\n"
+        "        raise RuntimeError('resolver exploded')\n"
+        "m._claude_home = _Boom()\n"
+        "ok = m._persist_audit_row({'k': 'v'})\n"
+        "assert ok is False, 'expected soft False, got ' + repr(ok)\n"
+        "print('AUDIT_SOFT_FAIL_OK')\n"
+    )
+    crash = subprocess.run(
+        ["python3", "-c", probe], env=env, capture_output=True, text=True, timeout=20)
+    assert crash.returncode == 0 and "AUDIT_SOFT_FAIL_OK" in crash.stdout, (
+        "overnight guard audit path crashed on a non-OSError resolver failure "
+        f"(rc={crash.returncode} stdout={crash.stdout!r} stderr={crash.stderr!r})")
+
     # THEN: an observable one-line 'unavailable'/'skipping (optional)' semantics is
     # documented per optional capability in the WS4 portability contract — the
     # user-facing surface a newcomer sees when an extra is absent.
