@@ -279,7 +279,7 @@ flowchart TD
     GFX --> TW{complexity/risk gate}
     TW -->|high| TWA[test-writer<br/>pytest skeletons w/ TEST_INCOMPLETE]
     TW -->|skip sentinel| DEV
-    TWA --> DEV[Step 10: Dev subagent<br/>ONLY agent allowed to write code]
+    TWA --> DEV[Step 10: Dev subagent<br/>primarily the code writer by policy]
     DEV --> QA[Step 13: QA verify vs acceptance criteria]
     QA -->|fail| DEV
     QA -->|pass| CLOSE[/close → /commit → /push/]
