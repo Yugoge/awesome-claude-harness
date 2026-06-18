@@ -70,7 +70,7 @@ The harness is a configuration, not a packaged app — there is no `requirements
 
 Five principles run through every file. They are the architecture's load-bearing assumptions; the rest of the system is their consequence.
 
-1. **Orchestrator-only.** The main agent *thinks and routes*; it never writes code or runs privileged git. This is enforced by `hooks/pretool-orchestrator-gate.py`, not by prompt etiquette.
+1. **Orchestrator-only.** The main agent is designed to *think and route*; implementation work is intended for subagents. Direct main-agent writes are mechanically constrained by `hooks/pretool-orchestrator-gate.py` and can be explicitly unlocked by `/do`; privileged git is default-denied unless a sanctioned grant or the main-agent `/do` break-glass path applies — enforced in code, not by prompt etiquette.
 2. **Enforce in code, not in prose.** "Please don't force-push" is a wish; a `PreToolUse` hook returning exit 2 is a guarantee. Wherever a rule *can* be a hook, it *is* a hook.
 3. **Fail closed, leave forensics.** Ambiguous grant → reject. Unparseable QA verdict → treat as failure. On rejection the evidence (grant file, raw output) is left on disk so a human can see exactly what happened.
 4. **Rules, not stories.** Agent/command prompts state what is *required* and what is *forbidden*, tersely. Every infrastructure-touching subagent prompt carries an explicit **DO NOT** section — positive instructions alone proved insufficient.
