@@ -236,13 +236,14 @@ run_stop() {  # <home>
     | run_probe "$home" HOME="$home" CLAUDE_PROJECT_DIR="$home" -- python3 "$home/hooks/stop-spec-coverage-enforce.py" 2>&1 1>/dev/null
 }
 
-# NEGATIVE: REQUIRED verifier ABSENT + a spec was touched -> BLOCK (2) with the
-# guard's own install-error marker (the removed historical fail-open exit 0).
+# DEGRADE/SKIP: REQUIRED verifier ABSENT + a spec was touched -> ALLOW the stop
+# (exit 0, baseline advisory skip). The absent-verifier case is advisory, NOT a
+# fail-closed block (reverted from the over-scoped WS1 exit-2 flip in 20260618-
+# 082520). Genuine enforcement is proven by the under-covered POSITIVE below.
 SH_NOVER="$TMP_BASE/specnover/dot-claude"; build_spec_home "$SH_NOVER" 0 0
 serr="$(run_stop "$SH_NOVER")"; src=$?
-if [ "$src" -eq 2 ] && printf '%s' "$serr" | grep -q "SPEC COVERAGE ENFORCEMENT" \
-   && printf '%s' "$serr" | grep -q "harness-install error"; then
-  record stop-spec-coverage negative 1 "verifier-absent blocked exit 2 with install-error marker"
+if [ "$src" -eq 0 ] && stderr_is_clean "$serr"; then
+  record stop-spec-coverage negative 1 "verifier-absent skips (exit 0, advisory baseline) — not a fail-closed block"
 else
   record stop-spec-coverage negative 0 "src=$src err=$(printf '%s' "$serr" | head -c 200)"
 fi
