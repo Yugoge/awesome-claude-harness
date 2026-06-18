@@ -1,17 +1,19 @@
 #!/usr/bin/env python3
 """Tool-policy registry loader and authorization decisions.
 
-Reads /root/.claude/policies/tool-policy.v1.json and provides a single
+Reads the harness ``policies/tool-policy.v1.json`` (resolved via the shared
+hooks/lib/claude_home resolver — see WS1) and provides a single
 is_allowed(role, tool_name, target_path) entrypoint shared by:
   - pretool-tool-policy.py (canonical enforcement)
   - pretool-subagent-code-block.py (backstop shim)
 
-Fail-safe contract:
-  - On policy load failure (file missing, parse error), `dev` role gets
-    fail-safe ALLOW (preserves the historical ALLOWED_TYPES = {'dev'}
-    behavior), every other role gets fail-CLOSED DENY.
-  - On any unexpected exception, return (True, "fail-safe-exception")
-    for the dev role, (False, "fail-closed-exception") for others.
+Fallback contract (baseline behavior; the policy PATH is resolved portably via
+claude_home but the absent-policy DECISION is preserved, not tightened):
+  - On policy load failure (file missing, parse error), the `dev` role gets
+    fail-safe ALLOW (preserves the historical ALLOWED_TYPES = {'dev'} behavior),
+    every other role gets fail-CLOSED DENY.
+  - On any unexpected exception, return (True, "fail-safe-exception") for the
+    dev role, (False, "fail-closed-exception") for others.
 
 Path prefix matching (T1.2 fix for B.11):
   - Targets are normalized via os.path.realpath (collapses symlinks
@@ -40,22 +42,47 @@ import os
 import sys
 from typing import Optional, Tuple
 
-POLICY_PATH = "/root/.claude/policies/tool-policy.v1.json"
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import claude_home  # noqa: E402  (shared WS1 harness-home resolver)
+
+# Relative path of the tool policy under the resolved harness home. The absolute
+# path is resolved at load time via claude_home so a fresh non-root clone (whose
+# home is NOT /root/.claude) still finds its own policy.
+POLICY_RELPATH = "policies/tool-policy.v1.json"
 WRITE_TOOLS = {"Write", "Edit", "NotebookEdit", "MultiEdit"}
-ALLOWED_TYPES_FALLBACK = {"dev"}
+# On policy load failure (missing/unparseable policy) the dev role gets a
+# fail-safe ALLOW (historical baseline behavior); every other role fails CLOSED.
+# The policy PATH is resolved portably via claude_home (the de-hardcode), but the
+# absent-policy DECISION is preserved exactly as baseline — not tightened.
+ALLOWED_TYPES_FALLBACK: set[str] = {"dev"}
 
 _CACHE: Optional[dict] = None
 _CACHE_LOADED = False
 
 
 def load_policy() -> Optional[dict]:
-    """Read tool-policy.v1.json. Returns dict or None on error."""
+    """Read tool-policy.v1.json. Returns dict or None on error.
+
+    The policy path is resolved via the shared claude_home resolver
+    (resolve_optional) so the loader never depends on the author's literal
+    /root home. A missing home or missing/unparseable file returns None, which
+    is_allowed() maps to a fail-safe ALLOW for the dev role and a fail-CLOSED
+    DENY for every other role (baseline behavior).
+    """
     global _CACHE, _CACHE_LOADED
     if _CACHE_LOADED:
         return _CACHE
     _CACHE_LOADED = True
+    policy_path = claude_home.resolve_optional(POLICY_RELPATH)
+    if policy_path is None:
+        sys.stderr.write(
+            f"policy_registry: policy '{POLICY_RELPATH}' not found under the "
+            "resolved harness home (or home unresolved)\n"
+        )
+        _CACHE = None
+        return _CACHE
     try:
-        with open(POLICY_PATH) as f:
+        with open(policy_path) as f:
             _CACHE = json.load(f)
     except (OSError, json.JSONDecodeError) as e:
         sys.stderr.write(f"policy_registry: load failed ({e})\n")
@@ -133,8 +160,12 @@ def _glob_match(prefix: str, target_canonical: str) -> bool:
 
 
 def _project_dir() -> str:
-    """Return the logical Claude project dir used for root-anchored policy."""
-    return os.path.abspath(os.environ.get("CLAUDE_PROJECT_DIR", "/root"))
+    """Return the logical Claude project dir used for root-anchored policy.
+
+    WS1: resolves via claude_home.project_dir() (CLAUDE_PROJECT_DIR -> resolved
+    harness home -> cwd) so the author literal /root is never the default.
+    """
+    return os.path.abspath(str(claude_home.project_dir()))
 
 
 def _path_is_prefix(prefix_path: str, target_path: str) -> bool:
@@ -252,6 +283,8 @@ def _check_read_path(role_pol: dict, target: Optional[str]) -> Tuple[bool, str]:
 
 
 def _fail_open_or_closed(role: str, reason: str) -> Tuple[bool, str]:
+    # dev gets fail-safe ALLOW on a missing/unparseable policy (ALLOWED_TYPES_
+    # FALLBACK = {"dev"}); every other role fails CLOSED. Baseline behavior.
     if role in ALLOWED_TYPES_FALLBACK:
         return (True, f"fail-safe-{reason}")
     return (False, f"fail-closed-{reason}")

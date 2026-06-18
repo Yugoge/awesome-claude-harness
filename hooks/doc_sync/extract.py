@@ -11,14 +11,19 @@ def extract_description(file_path: Path) -> str:
         return 'Unreadable'
     suffix = file_path.suffix
     if suffix == '.md':
-        return _extract_md_desc(text)
+        return _extract_md_desc(text, file_path)
     if suffix == '.py':
         return _extract_py_desc(text)
     if suffix in ('.sh', '.bash'):
         return _extract_sh_desc(text)
     if suffix in ('.json', '.yaml', '.yml'):
         return f'{suffix.lstrip(".")} config'
-    return f'{suffix.lstrip(".") or "unknown"} file'
+    # AC-WS5-2: never emit the placeholder "unknown file". Derive a meaningful
+    # description from the file: its suffix if it has one (e.g. "toml file"),
+    # otherwise the file's own stem so the entry is self-describing.
+    if suffix:
+        return f'{suffix.lstrip(".")} file'
+    return f'{file_path.stem} file'
 
 
 def _parse_frontmatter(text: str) -> str | None:
@@ -39,7 +44,7 @@ def _parse_frontmatter(text: str) -> str | None:
     return None
 
 
-def _extract_md_desc(text: str) -> str:
+def _extract_md_desc(text: str, file_path: Path | None = None) -> str:
     desc = _parse_frontmatter(text)
     if desc:
         return desc
@@ -47,7 +52,11 @@ def _extract_md_desc(text: str) -> str:
         stripped = line.strip()
         if stripped.startswith('# '):
             return stripped[2:].strip()
-    return 'No description'
+    # AC-WS5-2: never emit the placeholder "No description" for a published file.
+    # Fall back to the document's own name so the list item is self-describing.
+    if file_path is not None:
+        return f'{file_path.stem} document'
+    return 'Markdown document'
 
 
 def _check_single_line_docstring(s: str) -> str | None:

@@ -36,8 +36,11 @@ readonly TARGETS=(
   "commands/dev-overnight.md"
 )
 
-# Disk root for standalone mode (follows the symlink to tmpfs if present).
-readonly DISK_ROOT="${SENTINEL_LINT_ROOT:-/root/.claude}"
+# Disk root for standalone mode. WS1: resolve the harness home from this
+# script's own location (hooks/sentinel-lint.sh -> harness home) instead of the
+# author literal /root/.claude; an explicit SENTINEL_LINT_ROOT still overrides.
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/claude_home.sh"
+readonly DISK_ROOT="${SENTINEL_LINT_ROOT:-$(claude_home_resolve)}"
 
 failed=0
 failed_files=()

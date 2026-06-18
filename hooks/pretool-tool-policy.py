@@ -1,16 +1,22 @@
 #!/usr/bin/env python3
 """PreToolUse:* hook — enforce tool-policy.v1.json for all subagents.
 
-Single hook that consumes /root/.claude/policies/tool-policy.v1.json via
+Single hook that consumes the harness ``policies/tool-policy.v1.json`` (resolved
+via the shared hooks/lib/claude_home resolver) through
 lib.policy_registry.is_allowed() and lib.agent_resolver.resolve_agent_type().
 
 Behavior:
   - Main agent (no agent_id, no subagent_type) -> exit 0 (orchestrator
     gate handles main agent).
-  - Subagent role unresolvable -> exit 0 (downstream
-    pretool-subagent-code-block.py shim still applies as backstop).
+  - Subagent role unresolvable -> exit 0 (defer to the backstop shim). An
+    unresolved role is a NORMAL state (a subagent may write before any sentinel-
+    creating tool runs; agent_resolver LOW-10: callers MUST NOT hard-block on
+    None). Role-specific deny is enforced once the role resolves.
   - Resolved role + denied tool/path -> exit 2 with structured stderr
     JSON: {"role", "tool", "target", "deny_reason"}.
+  - Deny-logic import/bootstrap failure -> exit 2 (FAIL CLOSED, WS1): the
+    security imports live inside a fail-closed bootstrap guard, NOT inside the
+    blanket `except Exception: sys.exit(0)` (which would silently fail open).
 
 Bash policy bypass fix (T2.1):
   - For Bash tool, parse the command with lib.bash_write_targets to
@@ -32,9 +38,39 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from lib.agent_resolver import resolve_agent_type  # noqa: E402
-from lib.bash_write_targets import extract_bash_write_paths  # noqa: E402
-from lib.policy_registry import WRITE_TOOLS, is_allowed  # noqa: E402
+# WS1 CRITICAL: the deny-logic imports are loaded inside a FAIL-CLOSED bootstrap
+# guard, NOT at module top (where an ImportError would be a dirty uncaught
+# exit 1) and NOT inside the blanket `except Exception: sys.exit(0)` in __main__
+# (which would silently fail OPEN). A missing/broken deny-logic module on a
+# fresh clone must BLOCK (exit 2), never allow.
+WRITE_TOOLS: set
+resolve_agent_type = None  # type: ignore[assignment]
+extract_bash_write_paths = None  # type: ignore[assignment]
+is_allowed = None  # type: ignore[assignment]
+
+
+def _bootstrap_security() -> None:
+    """Import the deny-logic modules; FAIL CLOSED (exit 2) on any failure.
+
+    This MUST be called from main() BEFORE any authorization decision and MUST
+    NOT be wrapped by the blanket fail-open `except` in __main__.
+    """
+    global WRITE_TOOLS, resolve_agent_type, extract_bash_write_paths, is_allowed
+    try:
+        from lib.agent_resolver import resolve_agent_type as _rat
+        from lib.bash_write_targets import extract_bash_write_paths as _ebwp
+        from lib.policy_registry import WRITE_TOOLS as _wt, is_allowed as _ia
+    except Exception as e:  # ImportError, bootstrap failure, resolver failure
+        sys.stderr.write(
+            "BLOCKED by tool-policy.v1: deny-logic bootstrap FAILED — the policy "
+            f"enforcement module could not be imported ({e}). Failing CLOSED "
+            "(exit 2) rather than allowing; repair the harness install.\n"
+        )
+        sys.exit(2)
+    WRITE_TOOLS = _wt
+    resolve_agent_type = _rat
+    extract_bash_write_paths = _ebwp
+    is_allowed = _ia
 
 
 def _read_payload() -> dict:
@@ -93,16 +129,24 @@ def _check_targets(role: str, tool_name: str, targets: list) -> None:
 
 
 def main() -> None:
+    # WS1: bootstrap the deny-logic FIRST, fail-closed (exit 2) on import error.
+    _bootstrap_security()
     data = _read_payload()
     if not data:
-        sys.exit(0)
-    role = resolve_agent_type(data)
-    if not role:
         sys.exit(0)
     tool_name = data.get("tool_name")
     if not isinstance(tool_name, str):
         sys.exit(0)
     tool_input = data.get("tool_input") or {}
+    role = resolve_agent_type(data)
+    if not role:
+        # An unresolved role is a NORMAL state, not an error: Claude Code may
+        # dispatch a subagent before any sentinel-creating tool runs, so the
+        # agent-index entry can legitimately be missing during a first write.
+        # Per the agent_resolver LOW-10 contract, callers MUST NOT hard-block on
+        # None — defer to the backstop shim (exit 0). (Reverted: the prior
+        # unresolved-role fail-closed broke every subagent lacking a registry.)
+        sys.exit(0)
     targets = _extract_targets(tool_name, tool_input)
     _check_targets(role, tool_name, targets)
     sys.exit(0)

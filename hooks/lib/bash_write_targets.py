@@ -159,8 +159,9 @@ def _resolve_path(token: str) -> str:
     # Tilde expansion
     if token.startswith("~"):
         token = os.path.expanduser(token)
-    # $HOME / ${HOME}
-    home = os.environ.get("HOME", "/root")
+    # $HOME / ${HOME} — WS1: fall back to the real user home, never the literal
+    # /root, when HOME is unset (a fresh non-root clone).
+    home = os.environ.get("HOME") or os.path.expanduser("~")
     token = token.replace("${HOME}", home).replace("$HOME", home)
     # $CLAUDE_PROJECT_DIR / ${CLAUDE_PROJECT_DIR}
     cpd = os.environ.get("CLAUDE_PROJECT_DIR", "")

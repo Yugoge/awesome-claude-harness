@@ -31,12 +31,17 @@ import shlex
 import sys
 from typing import Optional, Tuple
 
-# ── The single hardcoded constant: the generic data-file path ────────────────
+# ── The single generic data-file path ────────────────────────────────────────
 # Overridable for tests via env so the live machine file is never mutated by a
-# test run. The path is generic; it carries no project identity.
+# test run. The path is generic; it carries no project identity. WS1: the
+# default is now $HOME-relative (~/.config/claude/...) rather than the author
+# literal /root, so a fresh non-root home resolves its own config path.
 DATA_FILE_PATH = os.environ.get(
     "CLAUDE_PROTECTED_RUNTIME_FILE",
-    "/root/.config/claude/protected-runtime.json",
+    os.path.join(
+        os.environ.get("HOME") or os.path.expanduser("~"),
+        ".config", "claude", "protected-runtime.json",
+    ),
 )
 
 MAX_COMMAND_CHARS = int(os.environ.get("CLAUDE_GUARD_MAX_CHARS", "262144"))
@@ -1352,11 +1357,35 @@ def _load_config():
 
 # ── STEP 0: config self-protection (hardcoded, generic path) ─────────────────
 
+def _home_tilde_variant(path: str) -> Optional[str]:
+    """Return the ``~/``-prefixed form of ``path`` iff it lives under the real
+    user home (``$HOME`` / ``Path.home()``), else None.
+
+    Generic (WS1 codex #4 — no ``/root``-specific branch): on a non-root home
+    (``/home/alice/...``) the ``~/relative`` variant is generated exactly as it
+    was for ``/root/...``, so the guard protects the same path written either
+    way regardless of which user runs it.
+    """
+    home = os.environ.get("HOME")
+    if not home:
+        try:
+            home = os.path.expanduser("~")
+        except Exception:
+            return None
+    if not home or home == "~":
+        return None
+    home_prefix = home.rstrip("/") + "/"
+    if path.startswith(home_prefix):
+        return "~/" + path[len(home_prefix):]
+    return None
+
+
 def _config_path_variants() -> set:
     p = DATA_FILE_PATH
     variants = {p, os.path.normpath(p)}
-    if p.startswith("/root/"):
-        variants.add(p.replace("/root/", "~/", 1))
+    tilde = _home_tilde_variant(p)
+    if tilde:
+        variants.add(tilde)
     return variants
 
 
@@ -1386,8 +1415,11 @@ def _config_ancestor_dirs() -> set:
     d = os.path.dirname(norm)
     while d and d not in _ANCESTOR_STOP_ROOTS:
         out.add(d)
-        if d.startswith("/root/"):
-            out.add(d.replace("/root/", "~/", 1))
+        # Generic (WS1 codex #4): add the ~/-prefixed variant for ANY ancestor
+        # under the real user home, not only /root/.
+        tilde = _home_tilde_variant(d + "/")
+        if tilde:
+            out.add(tilde.rstrip("/"))
         parent = os.path.dirname(d)
         if parent == d:
             break

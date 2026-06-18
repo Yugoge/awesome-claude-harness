@@ -57,8 +57,12 @@ except ImportError:  # pragma: no cover - architect confirmed availability
 # Importable from sibling lib module (already on the same hooks/lib/ path).
 try:
     from . import schema_registry
+    from . import claude_home
 except ImportError:  # pragma: no cover - direct spec import in focused tests
+    import sys as _sys
+    _sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
     from lib import schema_registry  # type: ignore
+    import claude_home  # type: ignore
 
 
 def _result(ok: bool, errors: list, severity: str) -> dict:
@@ -71,14 +75,25 @@ def _result(ok: bool, errors: list, severity: str) -> dict:
 
 
 def _candidate_contract_paths(session_id: str, cycle_id: int) -> list[Path]:
-    """Return ordered candidate paths for the cycle contract."""
+    """Return ordered candidate paths for the cycle contract.
+
+    WS1: the third (home-level docs) candidate is derived from the resolved
+    harness home's PARENT (``<home>/../docs/dev/overnight``) — matching the
+    author's ``/root/docs`` sibling-of-``/root/.claude`` layout portably —
+    rather than the hardcoded author literal ``/root/docs``.
+    """
     project_dir = Path(os.environ.get('CLAUDE_PROJECT_DIR', os.getcwd()))
     cycle_dirname = f'cycle-{cycle_id}'
-    return [
+    candidates = [
         project_dir / 'docs' / 'dev' / 'overnight' / session_id / cycle_dirname / 'cycle-contract.json',
         project_dir / '.claude' / f'overnight-contract-{session_id}-cycle{cycle_id}.json',
-        Path('/root/docs/dev/overnight') / session_id / cycle_dirname / 'cycle-contract.json',
     ]
+    home = claude_home.resolve()
+    if home is not None:
+        candidates.append(
+            home.parent / 'docs' / 'dev' / 'overnight' / session_id / cycle_dirname / 'cycle-contract.json'
+        )
+    return candidates
 
 
 def _try_read_contract(path: Path) -> Optional[dict]:

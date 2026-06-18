@@ -12,6 +12,7 @@ from pathlib import Path
 try:
     from .extract import extract_description
     from .patch import _replace_section
+    from .config import tracked_names
 except ImportError:
     import importlib as _importlib
     import os as _os
@@ -21,8 +22,10 @@ except ImportError:
         _sys.path.insert(0, _pkg_root)
     _extract = _importlib.import_module("hooks.doc_sync.extract")
     _patch = _importlib.import_module("hooks.doc_sync.patch")
+    _config = _importlib.import_module("hooks.doc_sync.config")
     extract_description = _extract.extract_description  # type: ignore[no-redef]
     _replace_section = _patch._replace_section  # type: ignore[no-redef]
+    tracked_names = _config.tracked_names  # type: ignore[no-redef]
 
 SKIP_NAMES = {
     'INDEX.md', 'README.md', '__init__.py', '.DS_Store',
@@ -53,11 +56,30 @@ def _is_skipped(name: str) -> bool:
     return False
 
 
+def _published_names(dir_path: Path) -> set[str] | None:
+    """Git-tracked basenames directly under dir_path, or None when git was not
+    consulted (not a work-tree / git unavailable) so callers fall back to the
+    hand denylist only (AC-WS5-1)."""
+    return tracked_names(dir_path)
+
+
+def _is_published(name: str, published: set[str] | None) -> bool:
+    """An entry is listable iff it is not denylisted AND (git was not consulted
+    OR the entry is git-tracked). When git IS consulted, untracked/gitignored
+    entries are dropped — the doc-sync output lists only published files."""
+    if _is_skipped(name) or name.startswith('.'):
+        return False
+    if published is not None and name not in published:
+        return False
+    return True
+
+
 def _build_stats(dir_path: Path) -> dict:
+    published = _published_names(dir_path)
     total = 0
     dirs = 0
     for item in dir_path.iterdir():
-        if _is_skipped(item.name) or item.name.startswith('.'):
+        if not _is_published(item.name, published):
             continue
         total += 1
         if item.is_dir():
@@ -82,16 +104,17 @@ def _readme_needs_update(readme_path: Path) -> bool:
 
 
 def _list_files(dir_path: Path) -> list[str]:
+    published = _published_names(dir_path)
     files = sorted(f for f in dir_path.iterdir()
-                   if f.is_file() and not _is_skipped(f.name) and not f.name.startswith('.'))
+                   if f.is_file() and _is_published(f.name, published))
     return [f'- `{f.name}` - {extract_description(f)}' for f in files]
 
 
 def _list_subdirs(dir_path: Path) -> list[str]:
+    published = _published_names(dir_path)
     subdirs = sorted(d for d in dir_path.iterdir()
                      if d.is_dir() and d.name not in SKIP_DIRS
-                     and not _is_skipped(d.name)
-                     and not d.name.startswith('.'))
+                     and _is_published(d.name, published))
     return [f'- `{d.name}/`' for d in subdirs]
 
 

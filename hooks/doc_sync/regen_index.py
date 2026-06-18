@@ -1,9 +1,26 @@
 #!/usr/bin/env python3
 """Regenerate INDEX.md for a directory."""
 
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 from .tree import build_tree
+
+# Dual-mode import: relative in production, package-context fallback when this
+# module is loaded standalone via importlib spec_from_file_location (mirrors the
+# regen_readme/tree.py pattern so the git-tracked filter resolves either way).
+try:
+    from .config import tracked_names, tracked_relpaths
+except ImportError:
+    import importlib as _importlib
+    import os as _os
+    import sys as _sys
+    _pkg_root = _os.path.dirname(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
+    if _pkg_root not in _sys.path:
+        _sys.path.insert(0, _pkg_root)
+    _cfg = _importlib.import_module("hooks.doc_sync.config")
+    tracked_names = _cfg.tracked_names  # type: ignore[no-redef]
+    tracked_relpaths = _cfg.tracked_relpaths  # type: ignore[no-redef]
 
 
 def _detect_convention(dir_path: Path) -> str:
@@ -21,6 +38,7 @@ def _detect_convention(dir_path: Path) -> str:
 
 
 def _build_stats(dir_path: Path) -> dict:
+    published = tracked_names(dir_path)
     total = 0
     dirs = 0
     for item in dir_path.iterdir():
@@ -28,10 +46,71 @@ def _build_stats(dir_path: Path) -> dict:
             continue
         if item.name.startswith('.'):
             continue
+        # AC-WS5-1: when git is consulted, list only published (tracked) entries.
+        if published is not None and item.name not in published:
+            continue
         total += 1
         if item.is_dir():
             dirs += 1
     return {'total': total, 'dirs': dirs}
+
+
+# A build_tree line is "<indent><connector> <body>", where <indent> is N
+# repetitions of a 4-char unit ("│   " or "    "), <connector> is "├── "/"└── ",
+# and <body> is either "`name` - desc" (a file) or "name/" (a directory). Parsing
+# the indent gives the entry's depth; a name stack reconstructs each entry's full
+# relative path so it can be checked against the git-tracked relpath set — pruning
+# nested untracked/gitignored entries WITHOUT editing tree.py (out of WS5 scope).
+_TREE_LINE_RE = re.compile(r'^((?:(?:│   )|(?:    ))*)([├└]── )(.*)$')
+
+
+def _parse_tree_entry(line: str):
+    """Return (depth, name, is_dir) for a build_tree line, or None if unparseable."""
+    m = _TREE_LINE_RE.match(line)
+    if not m:
+        return None
+    depth = len(m.group(1)) // 4
+    body = m.group(3)
+    if body.endswith('/'):
+        return depth, body[:-1], True
+    fm = re.match(r'^`([^`]+)`', body)
+    if fm:
+        return depth, fm.group(1), False
+    return None
+
+
+def _filter_tree_published(tree: list[str], dir_path: Path) -> list[str]:
+    """Drop tree lines (at any depth) for entries that are not git-published, so
+    the INDEX tree lists only tracked files (AC-WS5-1). A directory is kept iff it
+    contains at least one tracked file. Degrades to a no-op when git was not
+    consulted (tracked_relpaths -> None)."""
+    relpaths = tracked_relpaths(dir_path)
+    if relpaths is None:
+        return tree
+    tracked_dirs = {rp.rsplit('/', 1)[0] for rp in relpaths if '/' in rp}
+    kept: list[str] = []
+    stack: list[str] = []      # name stack: stack[d] is the ancestor name at depth d
+    keep_at: list[bool] = []   # keep_at[d] mirrors whether that ancestor was kept
+    for line in tree:
+        parsed = _parse_tree_entry(line)
+        if parsed is None:
+            kept.append(line)
+            continue
+        depth, name, is_dir = parsed
+        del stack[depth:]
+        del keep_at[depth:]
+        rel = '/'.join(stack + [name])
+        if is_dir:
+            published = rel in tracked_dirs or any(
+                rp == rel or rp.startswith(rel + '/') for rp in relpaths)
+        else:
+            published = rel in relpaths
+        parent_kept = all(keep_at) if keep_at else True
+        stack.append(name)
+        keep_at.append(published)
+        if parent_kept and published:
+            kept.append(line)
+    return kept
 
 
 AUTO_START = '<!-- AUTO:index-stats -->'
@@ -95,7 +174,7 @@ def _extract_preserved(old: str, dir_name: str) -> str:
 
 
 def _build_index_content(dir_path: Path, convention: str, preserved: str = '') -> str:
-    tree = build_tree(dir_path, max_depth=3)
+    tree = _filter_tree_published(build_tree(dir_path, max_depth=3), dir_path)
     ts = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
     lines = [
         f'# {dir_path.name}',

@@ -41,6 +41,11 @@ try:
 except Exception:  # pragma: no cover
     load_contract = None  # type: ignore[assignment]
 
+try:
+    from lib import claude_home  # noqa: E402  (shared WS1 resolver)
+except Exception:  # pragma: no cover - fail-soft if lib missing
+    claude_home = None  # type: ignore[assignment]
+
 
 _SPECIALIST_TYPES = {"architect", "ui-specialist", "product-owner", "user"}
 
@@ -60,7 +65,11 @@ def _read_stdin_json() -> dict:
 
 
 def _project_dir() -> Path:
-    return Path(os.environ.get("CLAUDE_PROJECT_DIR", "/root"))
+    # WS1: resolve via the shared claude_home resolver (CLAUDE_PROJECT_DIR ->
+    # harness home -> cwd), never the author literal /root.
+    if claude_home is not None:
+        return claude_home.project_dir()
+    return Path(os.environ.get("CLAUDE_PROJECT_DIR") or os.getcwd())
 
 
 def _now_iso() -> str:

@@ -42,12 +42,37 @@ except Exception:  # pragma: no cover - fail-soft when modules missing
     _resolve_agent_type = None  # type: ignore[assignment]
     _resolve_dev_registry_entry = None  # type: ignore[assignment]
 
+try:  # WS1 shared harness-home resolver (route the audit-log default off /root).
+    from lib import claude_home as _claude_home  # noqa: E402
+except Exception:  # pragma: no cover - fail-soft when the resolver is absent
+    _claude_home = None  # type: ignore[assignment]
+
 
 # ---------------------------------------------------------------------------
 # T2.4: Contract-driven self-repair grant (BUG-B-Q0E-CONTRACT-SELF-REPAIR-GAP)
 # ---------------------------------------------------------------------------
 
-SELF_REPAIR_AUDIT_LOG = Path('/root/.claude/logs/overnight-self-repair.jsonl')
+# Relative location of the self-repair audit log under the harness home. Resolved
+# at runtime via the WS1 resolver (see _self_repair_audit_log) rather than the
+# author literal /root/.claude so a fresh non-root clone audits under its OWN home.
+_SELF_REPAIR_AUDIT_RELPATH = 'logs/overnight-self-repair.jsonl'
+
+
+def _self_repair_audit_log() -> Path:
+    """Resolve the self-repair audit-log path via the WS1 harness-home resolver.
+
+    Order: resolved harness home -> CLAUDE_PROJECT_DIR/.claude -> cwd/.claude.
+    Never the author literal /root. The audit append already degrades softly
+    (_persist_audit_row returns False on OSError), so an unresolved home falls
+    back to the project dir rather than failing.
+    """
+    if _claude_home is not None:
+        home = _claude_home.resolve()
+        if home is not None:
+            return home / _SELF_REPAIR_AUDIT_RELPATH
+        return _claude_home.project_dir() / '.claude' / _SELF_REPAIR_AUDIT_RELPATH
+    base = Path(os.environ.get('CLAUDE_PROJECT_DIR', os.getcwd())) / '.claude'
+    return base / _SELF_REPAIR_AUDIT_RELPATH
 
 
 def _self_repair_block(contract: dict | None) -> dict | None:
@@ -275,15 +300,24 @@ def _build_audit_row(state: dict, payload: dict, role: str, target: str, sr: dic
 
 
 def _persist_audit_row(row: dict) -> bool:
-    """Append a single JSONL row to the audit log; True iff fsync succeeded."""
+    """Append a single JSONL row to the audit log; True iff fsync succeeded.
+
+    The whole path (WS1 resolver -> mkdir -> open -> fsync) is wrapped in a
+    blanket except so a non-OSError resolver failure (e.g. the resolver raising
+    something other than OSError) degrades to a soft False — NOT a propagated
+    exception that would crash this PreToolUse security guard and bypass its
+    fail-closed block path. A False return on audit_required collapses the grant
+    to denied (is_self_repair_allowed), so audit failure stays fail-closed.
+    """
     try:
-        SELF_REPAIR_AUDIT_LOG.parent.mkdir(parents=True, exist_ok=True)
-        with SELF_REPAIR_AUDIT_LOG.open('a', encoding='utf-8') as fh:
+        audit_log = _self_repair_audit_log()
+        audit_log.parent.mkdir(parents=True, exist_ok=True)
+        with audit_log.open('a', encoding='utf-8') as fh:
             fh.write(json.dumps(row, default=str) + '\n')
             fh.flush()
             os.fsync(fh.fileno())
         return True
-    except OSError:
+    except Exception:
         return False
 
 

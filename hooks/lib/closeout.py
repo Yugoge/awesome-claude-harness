@@ -34,6 +34,10 @@ try:  # pragma: no cover - convenience for direct CLI use
 except Exception:  # pragma: no cover
     load_contract = None  # type: ignore[assignment]
 
+if str(_LIB_DIR) not in sys.path:
+    sys.path.insert(0, str(_LIB_DIR))
+import claude_home  # noqa: E402  (shared WS1 harness-home resolver)
+
 
 # ---------------------------------------------------------------------------
 # Path helpers
@@ -41,7 +45,8 @@ except Exception:  # pragma: no cover
 
 
 def _project_dir() -> Path:
-    return Path(os.environ.get("CLAUDE_PROJECT_DIR", "/root"))
+    # WS1: resolve via the shared claude_home resolver, never the literal /root.
+    return claude_home.project_dir()
 
 
 def _cycle_dir(session_id: str, cycle_id: int) -> Path:

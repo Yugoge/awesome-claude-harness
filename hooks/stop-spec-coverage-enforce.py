@@ -34,8 +34,14 @@ from collections import deque
 from pathlib import Path
 from typing import Optional
 
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib"))
+import claude_home  # noqa: E402  (shared WS1 harness-home resolver)
 
-SPEC_VERIFY = "/root/.claude/scripts/spec-verify/spec-verify.py"
+# Relative path of the spec-verify helper under the resolved harness home. The
+# absolute path is resolved at runtime via claude_home so a fresh non-root clone
+# (whose home is NOT /root/.claude) still finds its verifier; when the verifier
+# is absent the stop is ALLOWED (baseline skip — see main()).
+SPEC_VERIFY_RELPATH = "scripts/spec-verify/spec-verify.py"
 
 # Matches docs/dev/specs/spec-YYYYMMDD-HHMMSS in monolith or split-dir paths.
 # Captures the bare spec_id (e.g. "spec-20260424-090315") with no trailing
@@ -179,10 +185,12 @@ def find_monolith(specs_base: Path, spec_dir: Path) -> Path | None:
     return None
 
 
-def run_coverage_check(monolith: Path, views_dir: Path) -> subprocess.CompletedProcess:
+def run_coverage_check(
+    monolith: Path, views_dir: Path, spec_verify: Path
+) -> subprocess.CompletedProcess:
     """Run spec-verify.py and return the result."""
     return subprocess.run(
-        ["python3", SPEC_VERIFY, "--monolith", str(monolith),
+        ["python3", str(spec_verify), "--monolith", str(monolith),
          "--views-dir", str(views_dir), "--strict"],
         capture_output=True,
         text=True,
@@ -245,13 +253,23 @@ def main():
 
     specs_base = project_dir / "docs" / "dev" / "specs"
     monolith = find_monolith(specs_base, spec_dir)
-    if monolith is None or not Path(SPEC_VERIFY).is_file():
+    if monolith is None:
+        # No monolith for a touched spec dir — nothing to verify, allow stop.
+        sys.exit(0)
+
+    # Resolve the spec-verify helper portably via claude_home (the de-hardcode).
+    # When it cannot be located (home unresolved OR verifier absent), ALLOW the
+    # stop — this is the baseline behavior. (Reverted from the WS1 exit-2, which
+    # was a fail-open->fail-closed flip beyond path-cleanup that could wedge a
+    # stop on a partial/fresh install; only the path resolution is kept.)
+    spec_verify = claude_home.resolve_optional(SPEC_VERIFY_RELPATH)
+    if spec_verify is None:
         sys.exit(0)
 
     # Non-blocking breadcrumb — stderr is only surfaced when the hook blocks.
     sys.stderr.write(f"[stop-spec-coverage-enforce] target spec: {spec_dir.name}\n")
 
-    result = run_coverage_check(monolith, spec_dir / "views")
+    result = run_coverage_check(monolith, spec_dir / "views", spec_verify)
     if result.returncode == 0:
         sys.exit(0)
 

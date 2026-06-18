@@ -12,7 +12,6 @@
 - `audit-slashcommand.sh` - audit-slashcommand.sh
 - `auto-commit.sh` - ============================================================================
 - `checkpoint.sh` - checkpoint.sh - Manual checkpoint command
-- `ensure-git-repo.sh` - ============================================================================
 - `fswatch-manager.sh` - fswatch-manager.sh - Manage git-fswatch instances
 - `git-fswatch.sh` - git-fswatch.sh - Comprehensive Git file watcher using fswatch
 - `git-fswatch@.service` - service file
@@ -49,7 +48,6 @@
 - `session-git-init.sh` - ============================================================================
 - `session-info.sh` - s-info.sh — SessionStart: display environment info + tool quick reference
 - `session_start.sh` - SessionStart Hook - Display working environment info
-- `smart-checkpoint.sh` - smart-checkpoint.sh - Intelligent auto-checkpoint system
 - `start-fswatch-all.sh` - start-fswatch-all.sh - Start fswatch monitoring for all important repositories
 - `stop-git-commit.sh` - ============================================================================
 - `stop-overnight-timelock.py` - Stop Hook: Block conversation termination until overnight end-time
