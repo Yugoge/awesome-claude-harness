@@ -1,7 +1,7 @@
 #!/bin/bash
 # Description: Detect load-bearing author-absolute path literals across the harness surface.
 # Usage: detect-hardcoded-paths.sh [project-root]
-# Exit codes: 0=no load-bearing author literals found, 1=one or more found.
+# Exit code: always 0 (advisory-only; findings are reported in the JSON output and never fail a consumer/pipeline).
 #
 # REV4 (AC-WS3-4 / AC-WS2-6 / AC-WS7-1): a BOUNDARY-AWARE author-path detector as
 # wide as the AC-WS7-1 principle. It:
