@@ -185,18 +185,14 @@ def test_AC5():
     # introduced it — i.e. it is not part of the pre-existing baseline-dirty
     # working tree captured at dispatch time.
     forbidden_hits = [
-        p
-        for p in changed
-        if _is_forbidden(p) and p not in _BASELINE_DIRTY_FORBIDDEN
+        p for p in changed if _is_forbidden(p) and not _is_baseline_dirty(p)
     ]
 
     # Every path this cycle changed must fall inside the allowed allowlist,
     # again excluding the pre-existing baseline-dirty entries (which belong to
     # the unrelated concurrent work, not this cycle).
     not_allowed = [
-        p
-        for p in changed
-        if not _is_allowed(p) and p not in _BASELINE_DIRTY_FORBIDDEN
+        p for p in changed if not _is_allowed(p) and not _is_baseline_dirty(p)
     ]
 
     assert not forbidden_hits, (
