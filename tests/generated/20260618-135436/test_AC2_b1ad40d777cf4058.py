@@ -53,11 +53,36 @@ def test_AC2():
     # absence: the unqualified overclaim must be gone
     leftover = [tok for tok in _MUST_NOT_CONTAIN_UNQUALIFIED if tok in combined]
 
-    # TODO(dev): replace the line below with the real test body. While the
-    # TEST_INCOMPLETE sentinel is present the test will hard-fail, marking
-    # the AC as unimplemented for QA Phase 5.
-    pytest.fail(
-        f"TEST_INCOMPLETE: {AC_UID} — assert role-scoped fail-safe ALLOW "
-        f"disclosure present and unqualified 'never silently allows' removed "
-        f"(present={present}, leftover={leftover})"
+    # AC2: the role-scoped fail-safe ALLOW disclosure must be present (the dev
+    # carve-out wording the correction introduced) AND the unqualified
+    # "never silently allows" overclaim must be gone from both files.
+    assert present, (
+        "AC2: no role-scoped fail-safe ALLOW disclosure token found in "
+        f"README.md/ARCHITECTURE.md; expected at least one of {_MUST_CONTAIN_ANY}"
+    )
+    assert not leftover, (
+        "AC2: unqualified overclaim still present in README.md/ARCHITECTURE.md: "
+        f"{leftover}"
+    )
+
+    # Stronger role-scoped-disclosure check: the corrected tool-policy row must
+    # name BOTH the dev fail-safe ALLOW baseline AND the non-dev fail-closed
+    # behavior, so the disclosure is genuinely role-scoped (not just any mention
+    # of "dev role"). At least one file must carry both halves on the same line.
+    role_scoped_line_found = False
+    for rel in _FILES:
+        for line in (root / rel).read_text(encoding="utf-8").splitlines():
+            low = line.lower()
+            has_dev_allow = "fail-safe allow" in low and "dev" in low
+            has_nondev_closed = ("non-`dev`" in line or "non-dev" in low) and (
+                "fail clos" in low or "fail-clos" in low or "fail closed" in low
+            )
+            if has_dev_allow and has_nondev_closed:
+                role_scoped_line_found = True
+                break
+        if role_scoped_line_found:
+            break
+    assert role_scoped_line_found, (
+        "AC2: expected a role-scoped disclosure line stating the default dev "
+        "role gets a fail-safe ALLOW while non-dev roles fail closed"
     )
