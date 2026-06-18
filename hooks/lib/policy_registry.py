@@ -66,7 +66,8 @@ def load_policy() -> Optional[dict]:
     The policy path is resolved via the shared claude_home resolver
     (resolve_optional) so the loader never depends on the author's literal
     /root home. A missing home or missing/unparseable file returns None, which
-    is_allowed() maps to a fail-CLOSED DENY for every role.
+    is_allowed() maps to a fail-safe ALLOW for the dev role and a fail-CLOSED
+    DENY for every other role (baseline behavior).
     """
     global _CACHE, _CACHE_LOADED
     if _CACHE_LOADED:
