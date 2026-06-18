@@ -349,8 +349,9 @@ Absence is handled by exactly one of these outcomes, per the kind of thing that 
 
 | Missing thing | Class | Behavior on absence |
 |---|---|---|
-| A security guard's helper/policy (e.g. the tool-policy registry, the spec-coverage verifier) | security | **FAIL CLOSED** — the guard blocks with exit 2 and a block marker; it never silently allows |
+| A blocking security guard's helper/policy (e.g. the tool-policy registry, the always-on git-privilege / bash-safety guards) | security | **FAIL CLOSED** — the guard blocks with exit 2 and a block marker; it never silently allows |
 | An optional integration (Codex wrapper, `graphify`, Playwright, session-promote) | optional | **SKIP** — one-line "unavailable" message, core flow continues; no unsafe fallback |
+| The spec-coverage verifier (an advisory coverage check, not a blocking guard) | advisory | **SKIP** — an absent verifier allows the stop with a note; when the verifier *is* present, under-coverage still blocks |
 | An invalid generated `settings.json` (bad render / dropped required hook) | config | **ABORT** — the install renderer refuses to apply and leaves the live settings unchanged |
 
 Each row maps to a capability in the Dependencies table above, so you can see at a glance which rule applies to anything you have not installed. (The historical hardcoded-path caveat — `git grep -l '/root/\|/dev/shm'` and hand-rewrite — is **superseded** by the resolver above and retained only as background in [`NESTED-REPO.md`](NESTED-REPO.md) / [`CLAUDE.md`](CLAUDE.md).)
