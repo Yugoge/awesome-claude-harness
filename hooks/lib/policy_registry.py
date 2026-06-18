@@ -49,9 +49,11 @@ import claude_home  # noqa: E402  (shared WS1 harness-home resolver)
 # home is NOT /root/.claude) still finds its own policy.
 POLICY_RELPATH = "policies/tool-policy.v1.json"
 WRITE_TOOLS = {"Write", "Edit", "NotebookEdit", "MultiEdit"}
-# WS1: the dev-role fail-safe-ALLOW is REMOVED — no role fails open on a missing
-# policy. Kept as an (empty) name so any importer referencing it still works.
-ALLOWED_TYPES_FALLBACK: set[str] = set()
+# On policy load failure (missing/unparseable policy) the dev role gets a
+# fail-safe ALLOW (historical baseline behavior); every other role fails CLOSED.
+# The policy PATH is resolved portably via claude_home (the de-hardcode), but the
+# absent-policy DECISION is preserved exactly as baseline — not tightened.
+ALLOWED_TYPES_FALLBACK: set[str] = {"dev"}
 
 _CACHE: Optional[dict] = None
 _CACHE_LOADED = False
