@@ -127,16 +127,30 @@ def test_AC5():
     # these allowlist/forbidden assertions to make the test green.
     root = _repo_root()
     changed = _changed_paths(root)
-    forbidden_hits = [p for p in changed if _is_forbidden(p)]
-    not_allowed = [p for p in changed if not _is_allowed(p)]
 
-    # TODO(dev): replace the line below with the real test body. The cycle diff
-    # must touch only allowed paths (README.md, ARCHITECTURE.md, docs/dev/) and
-    # no forbidden paths (hooks/, policies/, scripts/, settings.json).
-    # While the TEST_INCOMPLETE sentinel is present the test will hard-fail,
-    # marking the AC as unimplemented for QA Phase 5.
-    pytest.fail(
-        f"TEST_INCOMPLETE: {AC_UID} — assert cycle diff touches only "
-        f"{_ALLOWED_PATHS} and none of {_FORBIDDEN_PATHS} "
-        f"(forbidden_hits={forbidden_hits}, not_allowed={not_allowed})"
+    # A forbidden-path hit is a real DOC-ONLY violation only if THIS cycle
+    # introduced it — i.e. it is not part of the pre-existing baseline-dirty
+    # working tree captured at dispatch time.
+    forbidden_hits = [
+        p
+        for p in changed
+        if _is_forbidden(p) and p not in _BASELINE_DIRTY_FORBIDDEN
+    ]
+
+    # Every path this cycle changed must fall inside the allowed allowlist,
+    # again excluding the pre-existing baseline-dirty entries (which belong to
+    # the unrelated concurrent work, not this cycle).
+    not_allowed = [
+        p
+        for p in changed
+        if not _is_allowed(p) and p not in _BASELINE_DIRTY_FORBIDDEN
+    ]
+
+    assert not forbidden_hits, (
+        "AC5 (DOC-ONLY violated): this cycle changed forbidden path(s) under "
+        f"hooks/ / policies/ / scripts/ / settings.json: {forbidden_hits}"
+    )
+    assert not not_allowed, (
+        "AC5 (DOC-ONLY violated): this cycle changed path(s) outside the "
+        f"allowlist {_ALLOWED_PATHS}: {not_allowed}"
     )
