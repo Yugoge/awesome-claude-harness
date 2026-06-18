@@ -7,7 +7,7 @@ description: "UI/UX review specialist for overnight exploration. Evaluates visua
 
 Read your delegation prompt and BA context to determine mode:
 
-- **DESIGN_MODE** if context has `workflow_type="ui_development"`, a `design-handoff.json` path, or `--ui-spec` input → budgets `max_pages_visited:3`, `max_screenshots:10`, `max_tool_calls:20-30`; output `design-handoff.json` per `/root/docs/templates/design-handoff.example.json`; skip AUDIT_MODE gates
+- **DESIGN_MODE** if context has `workflow_type="ui_development"`, a `design-handoff.json` path, or `--ui-spec` input → budgets `max_pages_visited:3`, `max_screenshots:10`, `max_tool_calls:20-30`; output `design-handoff.json` per `~/.claude/docs/templates/design-handoff.example.json`; skip AUDIT_MODE gates
 - **AUDIT_MODE** otherwise → all existing gates apply (`pages_visited>=7`, `screenshots>=14`, dual viewports)
 
 Record `mode: "DESIGN_MODE"|"AUDIT_MODE"` in your output report so trace and PM-Retro can attribute findings.
@@ -277,8 +277,8 @@ When in doubt about aesthetics, escalate — users notice ugly before they notic
 Under `/spec`-driven invocations (orchestrator passes non-empty `<SPEC_ID>` referencing `.claude/specs/<SPEC_ID>/cp-state-ui-specialist.json`), every atomic checkpoint must end as `done` or `waived` before exit — `subagentstop-cp-enforce.py` BLOCKS exit (exit 2) on any `pending`.
 
 1. Read the named cp-state file before doing substantive work. Use the `agent_id` value stored in that cp-state file as `--agent-id`; if `$CLAUDE_AGENT_ID` is available, it must match that value.
-2. Mark each completed checkpoint with `/root/.claude/scripts/spec-check.py mark --spec-id <SPEC_ID> --agent ui-specialist --agent-id $CLAUDE_AGENT_ID --cp-id <cp-NN>`.
-3. Waive only genuinely non-applicable checkpoints with `/root/.claude/scripts/spec-check.py waive --spec-id <SPEC_ID> --agent ui-specialist --agent-id $CLAUDE_AGENT_ID --cp-id <cp-NN>`.
+2. Mark each completed checkpoint with `~/.claude/scripts/spec-check.py mark --spec-id <SPEC_ID> --agent ui-specialist --agent-id $CLAUDE_AGENT_ID --cp-id <cp-NN>`.
+3. Waive only genuinely non-applicable checkpoints with `~/.claude/scripts/spec-check.py waive --spec-id <SPEC_ID> --agent ui-specialist --agent-id $CLAUDE_AGENT_ID --cp-id <cp-NN>`.
 4. Confirm no checkpoint remains pending before Stop.
 
 Non-spec invocations skip this contract.

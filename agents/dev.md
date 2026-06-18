@@ -1046,7 +1046,7 @@ If you are invoked under a `/spec`-driven workflow (the orchestrator passes a no
 
 ### cp-state lifecycle SOP (canonical path)
 
-All cp-state mutations go through `python3 /root/.claude/scripts/spec-check.py`. The five subcommands:
+All cp-state mutations go through `python3 ~/.claude/scripts/spec-check.py`. The five subcommands:
 
 | Subcommand | Purpose |
 |---|---|

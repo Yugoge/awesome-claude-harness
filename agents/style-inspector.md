@@ -662,9 +662,9 @@ This contract is mandatory in that mode:
    `$CLAUDE_AGENT_ID` is available, it must match that value.
 2. Treat each `checkpoints[].id` entry as a required checklist item.
 3. Immediately after completing a checkpoint's atomic action, mark it done with
-   `/root/.claude/scripts/spec-check.py mark --spec-id <SPEC_ID> --agent style-inspector --agent-id $CLAUDE_AGENT_ID --cp-id <cp-NN>`.
+   `~/.claude/scripts/spec-check.py mark --spec-id <SPEC_ID> --agent style-inspector --agent-id $CLAUDE_AGENT_ID --cp-id <cp-NN>`.
 4. If a checkpoint is genuinely not applicable, waive it (auto-text records actor + ISO timestamp):
-   `/root/.claude/scripts/spec-check.py waive --spec-id <SPEC_ID> --agent style-inspector --agent-id $CLAUDE_AGENT_ID --cp-id <cp-NN>`.
+   `~/.claude/scripts/spec-check.py waive --spec-id <SPEC_ID> --agent style-inspector --agent-id $CLAUDE_AGENT_ID --cp-id <cp-NN>`.
 5. Before stopping, confirm every checkpoint is either `done` or
    `waived-with-reason`. Pending checkpoints cause `subagentstop-cp-enforce.py`
    to block exit with code 2.

@@ -14,8 +14,8 @@ your job is to classify, stage, commit, and write the push-gate token.
 ## Constants
 
 ```
-CONTROL_ROOT=/root          # fallback for dev-report lookup when subproject search yields nothing; close-report and ticket I/O always use CONTROL_ROOT
-NESTED_REPO=/dev/shm/dev-workspace/dot-claude
+CONTROL_ROOT=$HOME          # resolved control root (parent-repo working-tree root), supplied by the /commit Step 7 dispatch — NOT an author-absolute literal; fallback for dev-report lookup when subproject search yields nothing; close-report and ticket I/O always use CONTROL_ROOT
+NESTED_REPO=$(realpath ~/.claude)   # resolved harness-home (nested repo) root, supplied by the /commit dispatch
 ```
 
 GIT_ROOT is computed per repo via `git rev-parse --show-toplevel`. NEVER conflate
@@ -126,7 +126,7 @@ handling are all unchanged).
 Run in BOTH repos:
 
 ```bash
-: "${CONTROL_ROOT:?CONTROL_ROOT must be set by /commit dispatch (defined at commands/commit.md Step 7 dispatch prompt; silent fallback to /root literal is forbidden per task 20260520-064430-0a2881 AC6)}"
+: "${CONTROL_ROOT:?CONTROL_ROOT must be set by /commit dispatch (defined at commands/commit.md Step 7 dispatch prompt; silent fallback to an author-home literal is forbidden per task 20260520-064430-0a2881 AC6)}"
 : "${NESTED_REPO:?NESTED_REPO must be set by /commit dispatch}"
 git -C "${CONTROL_ROOT}" status --porcelain=v1
 git -C "${NESTED_REPO}" status --porcelain=v1
@@ -220,14 +220,15 @@ Exit with `failure_code: scope_violation`.
 
 **Path normalization** (apply before any comparison or staging):
 - Resolve symlinks: `real_root = os.path.realpath(GIT_ROOT)`
-- Dev-report paths are often absolute (`/root/...`). To normalize: if a
+- Dev-report paths are often absolute (e.g. under the harness home `~/.claude/...`). To normalize: if a
   dev-report path resolves under `real_root` (after `realpath`), convert it to
   a repo-relative path by stripping `real_root + "/"`. Never compare an
   absolute path to a repo-relative path directly.
-- Note: `/root/.claude` is a symlink to `/dev/shm/dev-workspace/dot-claude`.
-  When operating on the nested repo, `realpath("/dev/shm/dev-workspace/dot-claude")`
-  is the canonical root; dev-report paths like `/root/.claude/agents/foo.md`
-  must be realpath-resolved to check repo membership.
+- Note: `~/.claude` may be a symlink to the actual harness-home checkout (on the
+  author machine, the nested repo). When operating on the nested repo,
+  `os.path.realpath(os.path.expanduser("~/.claude"))` is the canonical root;
+  dev-report paths like `~/.claude/agents/foo.md` must be realpath-resolved to
+  check repo membership.
 
 **Dev-report resolution** (used by both whitelist and enrichment):
 If `TASK_ID` is non-empty, resolve the dev-report path using the subproject path-walk:
@@ -691,14 +692,14 @@ note.
 
 ### Phase 9: Nested repo handling (M5)
 
-After committing in `/root`, check the nested repo:
+After committing in `${CONTROL_ROOT}`, check the nested repo:
 
 ```bash
 git -C "${NESTED_REPO}" status --porcelain=v1
 ```
 
 If output is non-empty:
-- Repeat Phases 3–8 for `GIT_ROOT=/dev/shm/dev-workspace/dot-claude`
+- Repeat Phases 3–8 for `GIT_ROOT="${NESTED_REPO}"` (the resolved harness-home root)
 - Build an independent commit message (type/scope/summary derived from nested repo diff)
 - The lock for the nested repo uses the SAME relocated `/tmp` scheme as Phase 3,
   keyed on the nested repo's toplevel (literal `/tmp` prefix — never a leading `${VAR}`):
@@ -855,7 +856,7 @@ if [ -z "$ROOT_STATUS" ] && [ -z "$NESTED_STATUS" ]; then
     echo "Bulk complete: zero diff in both repos."
 else
     echo "WARNING: Bulk ended with remaining changes:"
-    echo "  /root: ${ROOT_STATUS}"
+    echo "  control-root: ${ROOT_STATUS}"
     echo "  nested: ${NESTED_STATUS}"
 fi
 ```
@@ -1197,7 +1198,7 @@ manual intervention required — see `/commit` Step 7 status table for the
 
 ## Outputs
 
-- Real branch commit(s) in `/root` and optionally `/dev/shm/dev-workspace/dot-claude/`
+- Real branch commit(s) in `${CONTROL_ROOT}` and optionally `~/.claude/`
 - Push-gate token at `/tmp/agentic-commit/push/<repo-hash>/<branch-encoded>.json`
 - Synthetic close-annotations at `${CONTROL_ROOT}/docs/dev/close-report-bulk-*.md` (bulk mode only)
 - Human-readable summary of what was committed
