@@ -148,7 +148,7 @@ This is the part that was paid for in lost work. Two real incidents shaped it:
 ```mermaid
 flowchart TD
     B[Bash: a git verb] --> H1[orchestrator-gate<br/>rate-limit, /do bypass]
-    H1 --> H2[bash-safety<br/>blocks stash-buffer · wide checkout · reset --hard]
+    H1 --> H2[bash-safety<br/>blocks by default: stash-buffer · wide checkout · reset --hard<br/>(/do or matching /allow break-glass)]
     H2 --> H3[bulk-commit-detector<br/>warns on the 93-file 'sync' shape]
     H3 --> H4[git-privilege-guard<br/>ALWAYS-ON · the verb that actually blocks]
 
