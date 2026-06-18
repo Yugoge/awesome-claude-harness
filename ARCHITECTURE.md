@@ -397,7 +397,7 @@ The config is plain Markdown + small scripts; doc-sync re-inventories the roster
 
 **Add a hook** — write `hooks/<name>.{py,sh}`, make `.sh` files executable (`chmod +x`), then wire it in `settings.json` under the right lifecycle event with the narrowest matcher. **Fail closed** (exit 2 on doubt) and **leave forensics**. Validate the JSON afterward (`python3 -m json.tool settings.json`). Remember the count that matters is what `settings.json` wires, not what sits in `hooks/`.
 
-**Extend the git kernel** — never weaken the always-on invariants enforced in `hooks/pretool-git-privilege-guard.py` and its sibling guards (b5d447e protection, inline-env rejection, cross-bypass isolation, single-use grants, blessed-bridge regex, `/do` not bypassing the guard, task-id chain consistency). Each is verified by an acceptance criterion; regressing one is a production-catastrophe class change.
+**Extend the git kernel** — never weaken the always-on invariants enforced in `hooks/pretool-git-privilege-guard.py` and its sibling guards (b5d447e protection, inline-env rejection, cross-bypass isolation, single-use grants, blessed-bridge regex, the git-privilege guard honoring `/do` for the main agent only — subagents never benefit, task-id chain consistency). Each is verified by an acceptance criterion; regressing one is a production-catastrophe class change.
 
 ---
 
