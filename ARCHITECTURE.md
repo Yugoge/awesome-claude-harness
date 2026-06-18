@@ -186,7 +186,7 @@ flowchart TD
     C -->|commit| G1{env=1 + single-use commit grant<br/>nonce + unexpired?}
     C -->|push| G2{env=1 + push grant<br/>branch + expected_head + remote?}
     C -->|merge| G3{CLAUDE_MERGE_COMMAND_ACTIVE=1?}
-    C -->|reset --hard| G4{target == HEAD or omitted?}
+    C -->|reset --hard| G4{matching /allow grant?}
 
     G1 & G2 & G3 & G4 -->|yes| OK[(allow, then unlink grant)]
     G1 & G2 & G3 & G4 -->|no / forged / inline-env| NO[BLOCKED exit 2]
