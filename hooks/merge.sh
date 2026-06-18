@@ -20,7 +20,9 @@ set -euo pipefail
 # -> harness home) via the shared resolver, so helper paths + the project-dir
 # default work on a fresh non-root clone instead of the author literal /root.
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/claude_home.sh"
-CLAUDE_HOME="$(claude_home_resolve)"
+# Degrade to $HOME/.claude on a resolver miss instead of hard-aborting under
+# `set -e` (matches push.sh / apply-permissions.sh / resolve-close-report.sh).
+CLAUDE_HOME="$(claude_home_resolve || echo "${HOME}/.claude")"
 
 # Args
 BRANCH_NAME="${1:-}"
