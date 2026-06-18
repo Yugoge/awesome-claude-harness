@@ -208,7 +208,7 @@ Four hooks form a defense-in-depth chain (top to bottom). Crucially, the **bulk-
 
 ### 6.2 The grant-token lifecycle (write → validate → single-use consume)
 
-A `commit` or `push` is only allowed if a **single-use grant manifest** authorizes that *exact* action:
+A `commit` or `push` is **default-denied unless a single-use grant manifest authorizes it** — the guard validates the grant's expiry + single-use for commit, plus branch/head/remote for push (commit exactness is recorded wrapper-side, not re-checked at the guard); a main-agent `/do` or a matching `/allow` grant is the audited human break-glass:
 
 ```
 /tmp/claude-{commit,push}-grant-<sid>-<nonce>.json
