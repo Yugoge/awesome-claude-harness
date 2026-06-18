@@ -226,7 +226,7 @@ sequenceDiagram
     W->>Git: run git commit/push
     Note over G: guard fires on the Bash call
     G->>FS: glob <sid>-*.json · mtime-newest tiebreak
-    G->>G: validate env + nonce + sha256 + allowed_files set-equality
+    G->>G: validate env + nonce + expiry (single-use); push also branch+head+remote
     alt valid
         G-->>Git: allow (exit 0)
         W->>FS: unlink grant (single-use)
