@@ -8,9 +8,10 @@ lib.policy_registry.is_allowed() and lib.agent_resolver.resolve_agent_type().
 Behavior:
   - Main agent (no agent_id, no subagent_type) -> exit 0 (orchestrator
     gate handles main agent).
-  - Subagent role unresolvable + protected Write -> exit 2 (FAIL CLOSED, WS1
-    codex #6): an unresolved subagent role does NOT bypass policy. Non-write
-    tools with an unresolved role still defer to the backstop shim (exit 0).
+  - Subagent role unresolvable -> exit 0 (defer to the backstop shim). An
+    unresolved role is a NORMAL state (a subagent may write before any sentinel-
+    creating tool runs; agent_resolver LOW-10: callers MUST NOT hard-block on
+    None). Role-specific deny is enforced once the role resolves.
   - Resolved role + denied tool/path -> exit 2 with structured stderr
     JSON: {"role", "tool", "target", "deny_reason"}.
   - Deny-logic import/bootstrap failure -> exit 2 (FAIL CLOSED, WS1): the
