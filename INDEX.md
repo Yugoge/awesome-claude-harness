@@ -1,8 +1,8 @@
 # dot-claude
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-06-17T19:24:32Z*
-**Total entries**: 448
+*Last updated: 2026-06-18T13:11:55Z*
+**Total entries**: 450
 **Convention**: kebab
 
 ## Tree
@@ -104,6 +104,7 @@ dot-claude/
 │   │   ├── `close-verdict.py` - Shared CLOSE verdict classifier for commit/close tooling.
 │   │   ├── `closeout.py` - Public API:
 │   │   ├── `contract_runtime.py` - This module is the single shared engine consumed by every contract-aware
+│   │   ├── `grepguard_context_strip.py` - PURPOSE (narrow, guard-specific)
 │   │   ├── `overnight.py` - Single source of truth for "is a /dev-overnight session currently live?". A
 │   │   ├── `policy_registry.py` - Reads the harness ``policies/tool-policy.v1.json`` (resolved via the shared
 │   │   ├── `runtime_guard.py` - This module contains ZERO project identifiers. Every project-specific name
@@ -174,6 +175,7 @@ dot-claude/
 │   ├── `pretool-cp-state-write-guard.py` - Cycle-3 slim form (2026-05-14): Bash-extractor removed — 22-form adversarial
 │   ├── `pretool-git-privilege-guard.py` - PreToolUse Hook: Agent git-privilege guard
 │   ├── `pretool-gitignore-preflight.py` - pretool-gitignore-preflight.py — PreToolUse hook (matcher: Agent)
+│   ├── `pretool-grep-backtrack-guard.py` - ROOT-CAUSE BACKGROUND (verified ground truth, 2026-06-15 host OOM)
 │   ├── `pretool-layer-escalation-check.sh` - pretool-layer-escalation-check.sh
 │   ├── `pretool-layer-match-gate.sh` - pretool-layer-match-gate.sh
 │   ├── `pretool-orchestrator-gate.py` - PreToolUse Hook: Orchestrator Gate (Unified)
@@ -291,7 +293,7 @@ dot-claude/
 │   ├── `derive-default-branch.sh` - Description: Resolve the repository's default branch name dynamically (handles main/master/any other).
 │   ├── `detect-dead-functions.sh` - Shell script
 │   ├── `detect-duplicate-content.sh` - Shell script
-│   ├── `detect-hardcoded-paths.sh` - Description: Detect load-bearing author-absolute path literals across the harness surface.
+│   ├── `detect-hardcoded-paths.sh` - Shell script
 │   ├── `detect-merge-conflicts.sh` - Shell script
 │   ├── `detect-orphan-agents.sh` - Description: Detect agents not referenced by any command
 │   ├── `detect-orphan-commands.sh` - Description: Detect orphan commands (one-time patterns, no todo script, unused)
@@ -448,7 +450,7 @@ dot-claude/
 │   ├── `test_overnight_loop_tz.py` - Verifies the overnight loop hook compares end_time correctly against the
 │   ├── `test_resolve_spec_artifacts.py` - resolver) + the static centralization lint (AC-B4 cases 1-12, task 20260530-092123)
 │   ├── `test_specialist_yield.py` - Tests use a tmp dir for the yield log and the bundled production policy file
-│   └── `verify-stop-spec-session-isolation.sh` - QA verification harness for stop-spec-coverage-enforce.py session isolation fix.
+│   ├── `verify-stop-spec-session-isolation.sh` - QA verification harness for stop-spec-coverage-enforce.py session isolation fix.
 ├── `ARCHITECTURE.md` - Architecture — `.claude` Agent Operating System
 ├── `CLAUDE.md` - CLAUDE.md
 ├── `LICENSE` - LICENSE file
