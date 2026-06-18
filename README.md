@@ -156,7 +156,7 @@ flowchart TD
     C -->|commit| G1{grant file: nonce + ISO expiry,<br/>single-use unlink?}
     C -->|push| G2{grant file: branch + expected-head<br/>+ remote, single-use?}
     C -->|merge| G3{CLAUDE_MERGE_COMMAND_ACTIVE env<br/>set by /merge?}
-    C -->|reset --hard| G4[always blocked in agent flow]
+    C -->|reset --hard| G4[blocked by default in agent flow]
 
     G1 & G2 -->|yes| OK[(allow, then unlink the grant)]
     G3 -->|yes| OK
