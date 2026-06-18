@@ -180,7 +180,7 @@ flowchart TD
     B[Bash: a git verb] --> H1[pretool-orchestrator-gate.py<br/>rate-limit · /do bypass]
     H1 --> H2[pretool-bash-safety.sh<br/>blocks subagent history rewrites · /do bypass]
     H2 --> H3[pretool-bulk-commit-detector.py<br/>catches 'sync' sweeps · NO /do bypass]
-    H3 --> H4[pretool-git-privilege-guard.py<br/>ALWAYS-ON · 4 verbs · NO /do bypass]
+    H3 --> H4[pretool-git-privilege-guard.py<br/>ALWAYS-ON · 4 verbs · /do: main-agent only]
 
     H4 --> C{which verb?}
     C -->|commit| G1{env=1 + single-use grant<br/>nonce + sha256 + files?}
