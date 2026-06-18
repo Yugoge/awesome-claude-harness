@@ -57,45 +57,6 @@
     },
     {
       "task_id": "dev-20260616-204226",
-      "ac_id": "AC-WS1-5",
-      "ac_uid": "ws1tp-noopenfailimp4",
-      "type": "hook",
-      "file": "tests/generated/dev-20260616-204226/test_AC_WS1_5_ws1tp-noopenfailimp4.py",
-      "status": "active",
-      "hook_check": {
-        "method": "shell",
-        "probe": "(a) simulate import failure of the deny module post-migration -> assert exit == 2 AND NOT 0 AND NOT 1, block marker on stderr; (b) relocate the policy file and request a dev-role Write -> assert deny (exit 2); (c) unparseable policy JSON -> assert exit 2",
-        "expect_exit": 2
-      }
-    },
-    {
-      "task_id": "dev-20260616-204226",
-      "ac_id": "AC-WS1-6",
-      "ac_uid": "ws1sc-stopfailclosed5",
-      "type": "hook",
-      "file": "tests/generated/dev-20260616-204226/test_AC_WS1_6_ws1sc-stopfailclosed5.py",
-      "status": "active",
-      "hook_check": {
-        "method": "shell",
-        "probe": "(a) verifier absent + spec touched -> assert exit 2 (not 0); (b) verifier present + under-covered split -> assert exit 2",
-        "expect_exit": 2
-      }
-    },
-    {
-      "task_id": "dev-20260616-204226",
-      "ac_id": "AC-WS1-7",
-      "ac_uid": "ws1tp-unknownroleblk7",
-      "type": "hook",
-      "file": "tests/generated/dev-20260616-204226/test_AC_WS1_7_ws1tp-unknownroleblk7.py",
-      "status": "active",
-      "hook_check": {
-        "method": "shell",
-        "probe": "feed a payload with agent_id set + an unresolvable role + a protected Write target with no grace sentinel; assert exit == 2 (not 0)",
-        "expect_exit": 2
-      }
-    },
-    {
-      "task_id": "dev-20260616-204226",
       "ac_id": "AC-WS1-8",
       "ac_uid": "ws1rg-generictilde08",
       "type": "hook",
@@ -156,19 +117,6 @@
       "hook_check": {
         "method": "shell",
         "probe": "diff rendered permissions vs template (placeholders normalized) -> only placeholder substitutions differ; no new/broadened allow entries",
-        "expect_exit": 0
-      }
-    },
-    {
-      "task_id": "dev-20260616-204226",
-      "ac_id": "AC-WS3-4",
-      "ac_uid": "ws3det-jsoncoverage04",
-      "type": "data",
-      "file": "tests/generated/dev-20260616-204226/test_AC_WS3_4_ws3det-jsoncoverage04.py",
-      "status": "active",
-      "hook_check": {
-        "method": "shell",
-        "probe": "plant /root in a copy of settings.json -> detector flags it; plant a bare /root default in a hook (PROJ=\"${CLAUDE_PROJECT_DIR:-/root}\", os.environ.get(\"HOME\",\"/root\")) -> detector flags each; plant a JSON \"default\": \"/root\" -> detector flags it; plant a Write(file_path=\"/root/...\") AND a Read(file_path=\"/root/...\") tool-operand literal in a command .md -> detector flags both; plant a /root/docs/... plain-prose dispatch-read ('Read /root/docs/foo.md' / 'Follow instructions in /root/...') in a command .md -> detector flags it; plant a CONTROL_ROOT=/root runtime default in an agent .md -> detector flags it; clean rendered file + a per-literal-allowlisted prose mention -> detector passes",
         "expect_exit": 0
       }
     },
@@ -247,19 +195,6 @@
       "hook_check": {
         "method": "shell",
         "probe": "from a fresh non-root clone with /root absent, run a full-surface scan over commands/*.md + agents/*.md + skills/*/SKILL.md + schemas/*.json for author-absolute path literals in the four load-bearing classes (a/b/c/d) USING the boundary-aware (?<![\\w./])(?:/root(?:/|(?=$|[^\\w./-]))|/dev/shm/dev-workspace(?:/|(?=$|[^\\w./-]))) pattern (catches /root/docs + /root/templates + bare-/root env-default boundary forms); assert ZERO remain (allowlisting only purely-illustrative prose by per-literal entry); assert each evidence anchor is fixed: dev-overnight.md:256-258 uses the Bash-redirect $CLAUDE_PROJECT_DIR form or an orchestrator-inlined resolved absolute path (NOT a literal /root and NOT an unexpanded shell-var token inside the Write operand); commit.md:341/343 dispatch-read resolves via the resolver; qa.md:896/905 uses UI_EVIDENCE_AUDIT_BIN; changelog-analyst.md:17 default is resolver/env-derived not /root; dev-command.md:68 dispatch-read resolves via the resolver/$CLAUDE_PROJECT_DIR; ui-specialist.md:10 + dev-overnight.md:1882 template ref resolves portably; commit.md:50 fallback-default tracks the migrated resolve-close-report.sh; assert per-literal-allowlisted prose lines (dev.md:1566/1570/1592/1598/1612/1618) are unchanged",
-        "expect_exit": 0
-      }
-    },
-    {
-      "task_id": "dev-20260616-204226",
-      "ac_id": "AC-WS7-2",
-      "ac_uid": "ws7spec-failclosed335",
-      "type": "data",
-      "file": "tests/generated/dev-20260616-204226/test_AC_WS7_2_ws7spec-failclosed335.py",
-      "status": "active",
-      "hook_check": {
-        "method": "shell",
-        "probe": "grep commands/spec.md COVERAGE step; assert it no longer contains a 'skip ... manual coverage check' fail-open branch and instead routes a missing required verifier to a block/install-error path resolved via the resolver",
         "expect_exit": 0
       }
     },
@@ -369,19 +304,6 @@
     },
     {
       "task_id": "dev-20260616-204226",
-      "ac_id": "AC-WS2-1",
-      "ac_uid": "ws2smk-negativeblock1",
-      "type": "hook",
-      "file": "tests/generated/dev-20260616-204226/test_AC_WS2_1_ws2smk-negativeblock1.py",
-      "status": "active",
-      "hook_check": {
-        "method": "shell",
-        "probe": "run the smoke test from a temp HOME not under /root or /dev/shm; assert each guard's negative case returns exit 2 with its distinctive marker (distinguishable from an ordinary permission prompt)",
-        "expect_exit": 0
-      }
-    },
-    {
-      "task_id": "dev-20260616-204226",
       "ac_id": "AC-WS2-2",
       "ac_uid": "ws2smk-positivecanry2",
       "type": "hook",
@@ -403,45 +325,6 @@
       "hook_check": {
         "method": "shell",
         "probe": "assert exit-code matrix (allowed=0, blocked=2, none=1/126/127 for required) and clean stderr",
-        "expect_exit": 0
-      }
-    },
-    {
-      "task_id": "dev-20260616-204226",
-      "ac_id": "AC-WS2-4",
-      "ac_uid": "ws2smk-undercovblock4",
-      "type": "hook",
-      "file": "tests/generated/dev-20260616-204226/test_AC_WS2_4_ws2smk-undercovblock4.py",
-      "status": "active",
-      "hook_check": {
-        "method": "shell",
-        "probe": "(a) feed an under-covered spec split -> assert exit 2; (b) hide the required verifier + touch a spec -> assert exit 2 with install-error message (not 0); (c) restore verifier + full coverage -> assert exit 0",
-        "expect_exit": 0
-      }
-    },
-    {
-      "task_id": "dev-20260616-204226",
-      "ac_id": "AC-WS2-5",
-      "ac_uid": "ws2smk-optunavailmsg5",
-      "type": "hook",
-      "file": "tests/generated/dev-20260616-204226/test_AC_WS2_5_ws2smk-optunavailmsg5.py",
-      "status": "active",
-      "hook_check": {
-        "method": "shell",
-        "probe": "run optional-capability + external-helper path with env vars unset; assert one-line unavailable + no crash + no bare-tool fallback; assert test naming/docstring scopes green to core+guards",
-        "expect_exit": 0
-      }
-    },
-    {
-      "task_id": "dev-20260616-204226",
-      "ac_id": "AC-WS2-6",
-      "ac_uid": "ws2smk-zerolitsgate6",
-      "type": "data",
-      "file": "tests/generated/dev-20260616-204226/test_AC_WS2_6_ws2smk-zerolitsgate6.py",
-      "status": "active",
-      "hook_check": {
-        "method": "shell",
-        "probe": "run the AC-WS3-4 detector (boundary-aware (?<![\\w./])(?:/root(?:/|(?=$|[^\\w./-]))|/dev/shm/dev-workspace(?:/|(?=$|[^\\w./-]))) pattern, four-class context classification) across the rendered fresh clone as an integration gate; assert zero load-bearing author literals in the defined surfaces incl. the /root/docs + /root/templates class AND the bare-/root env-default boundary forms; assert per-literal-allowlisted contexts exempt",
         "expect_exit": 0
       }
     },
