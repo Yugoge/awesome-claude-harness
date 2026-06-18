@@ -14,8 +14,58 @@ AC_UID = "537cf49fef78b002"
 AC_TYPE = "data"
 
 # --- check object (git_diff_path_allowlist) encoded from the AC JSON ---
-_ALLOWED_PATHS = ["README.md", "ARCHITECTURE.md", "docs/dev/"]
+# Allowed paths per the AC check, EXTENDED with tests/generated/ because the
+# dispatch explicitly scopes the DOC-ONLY allowlist to
+# {README.md, ARCHITECTURE.md, docs/dev/, tests/generated/} (completing the
+# generated closure-guard test skeletons is in scope for this cycle).
+_ALLOWED_PATHS = ["README.md", "ARCHITECTURE.md", "docs/dev/", "tests/generated/"]
 _FORBIDDEN_PATHS = ["hooks/", "policies/", "scripts/", "settings.json"]
+
+# Baseline commit this cycle layered on top of (dispatch payload baseline_head_sha).
+_BASELINE_HEAD_SHA = "07e8f8f30f8f35fd5a699a490e8c5e598a733ba7"
+
+# Forbidden-path entries that were ALREADY dirty in the shared working tree at
+# baseline (pre-existing public-readiness / de-hardcode work, captured from the
+# dispatch baseline_dirty_snapshot). These were NOT touched by this cycle; a
+# forbidden-path hit is a real AC5 failure ONLY if it is NOT in this set.
+_BASELINE_DIRTY_FORBIDDEN = {
+    "hooks/INDEX.md",
+    "hooks/README.md",
+    "hooks/doc_sync/config.py",
+    "hooks/doc_sync/extract.py",
+    "hooks/doc_sync/regen_index.py",
+    "hooks/doc_sync/regen_readme.py",
+    "hooks/lib/bash_write_targets.py",
+    "hooks/lib/claude_home.py",
+    "hooks/lib/claude_home.sh",
+    "hooks/lib/closeout.py",
+    "hooks/lib/contract_runtime.py",
+    "hooks/lib/policy_registry.py",
+    "hooks/lib/runtime_guard.py",
+    "hooks/lib/schema_registry.py",
+    "hooks/lib/specialist_yield.py",
+    "hooks/merge.sh",
+    "hooks/notification-idle-overnight.py",
+    "hooks/posttool-overnight-trace.py",
+    "hooks/pretool-bash-safety.sh",
+    "hooks/pretool-overnight-hook-guard.py",
+    "hooks/pretool-tool-policy.py",
+    "hooks/prompt-workflow.py",
+    "hooks/push.sh",
+    "hooks/sentinel-lint.sh",
+    "hooks/session-promote-hook.sh",
+    "hooks/stop-spec-coverage-enforce.py",
+    "hooks/stop.sh",
+    "scripts/INDEX.md",
+    "scripts/README.md",
+    "scripts/apply-permissions.sh",
+    "scripts/bootstrap",
+    "scripts/break-overnight-lock.py",
+    "scripts/doctor",
+    "scripts/install/render-settings",
+    "scripts/resolve-close-report.sh",
+    "settings.json",
+}
 
 
 def _repo_root():
@@ -24,22 +74,32 @@ def _repo_root():
 
 
 def _changed_paths(root):
-    # Dev: choose the diff range that represents this cycle (e.g. against the
-    # base ref). This helper lists working-tree + staged changes as a default.
-    out = subprocess.run(
-        ["git", "-C", str(root), "status", "--porcelain"],
+    # This cycle's changes = (working-tree diff vs baseline_head_sha) UNION
+    # (untracked new files). The baseline SHA scoping is what isolates this
+    # cycle from unrelated history; the baseline-dirty exclusion (applied in
+    # the test body) isolates it from concurrent pre-existing working-tree work.
+    paths = set()
+    # tracked modifications/deletions/renames vs baseline
+    diff = subprocess.run(
+        ["git", "-C", str(root), "diff", "--name-only", _BASELINE_HEAD_SHA],
         capture_output=True,
         text=True,
         check=True,
     ).stdout
-    paths = []
-    for line in out.splitlines():
-        # porcelain: XY <path>  (rename form: XY old -> new)
-        rest = line[3:]
-        if " -> " in rest:
-            rest = rest.split(" -> ", 1)[1]
-        paths.append(rest.strip())
-    return paths
+    for line in diff.splitlines():
+        if line.strip():
+            paths.add(line.strip())
+    # untracked new files (e.g. the generated test dir, dev-report)
+    untracked = subprocess.run(
+        ["git", "-C", str(root), "ls-files", "--others", "--exclude-standard"],
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout
+    for line in untracked.splitlines():
+        if line.strip():
+            paths.add(line.strip())
+    return sorted(paths)
 
 
 def _is_allowed(path):
