@@ -154,17 +154,12 @@ def main() -> None:
     tool_input = data.get("tool_input") or {}
     role = resolve_agent_type(data)
     if not role:
-        # WS1 codex #6: an agent_id-bearing payload whose role cannot be resolved
-        # MUST NOT bypass policy for a protected Write. Fail CLOSED (exit 2) for
-        # protected writes; non-write / no-write tools still defer to the
-        # backstop pretool-subagent-code-block.py shim (exit 0).
-        if data.get("agent_id") and _is_protected_write(data, tool_name, tool_input):
-            _emit_block(
-                "unresolved", tool_name, None,
-                "agent_id present but role unresolved — protected write blocked "
-                "(fail-closed; no registration-grace sentinel)",
-            )
-            sys.exit(2)
+        # An unresolved role is a NORMAL state, not an error: Claude Code may
+        # dispatch a subagent before any sentinel-creating tool runs, so the
+        # agent-index entry can legitimately be missing during a first write.
+        # Per the agent_resolver LOW-10 contract, callers MUST NOT hard-block on
+        # None — defer to the backstop shim (exit 0). (Reverted: the prior
+        # unresolved-role fail-closed broke every subagent lacking a registry.)
         sys.exit(0)
     targets = _extract_targets(tool_name, tool_input)
     _check_targets(role, tool_name, targets)

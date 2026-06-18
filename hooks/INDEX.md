@@ -1,8 +1,8 @@
 # hooks
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-06-17T19:23:50Z*
-**Total entries**: 140
+*Last updated: 2026-06-18T08:30:06Z*
+**Total entries**: 142
 **Convention**: kebab
 
 ## Tree
@@ -33,6 +33,7 @@ hooks/
 │   ├── `close-verdict.py` - Shared CLOSE verdict classifier for commit/close tooling.
 │   ├── `closeout.py` - Public API:
 │   ├── `contract_runtime.py` - This module is the single shared engine consumed by every contract-aware
+│   ├── `grepguard_context_strip.py` - PURPOSE (narrow, guard-specific)
 │   ├── `overnight.py` - Single source of truth for "is a /dev-overnight session currently live?". A
 │   ├── `policy_registry.py` - Reads the harness ``policies/tool-policy.v1.json`` (resolved via the shared
 │   ├── `runtime_guard.py` - This module contains ZERO project identifiers. Every project-specific name
@@ -103,6 +104,7 @@ hooks/
 ├── `pretool-cp-state-write-guard.py` - Cycle-3 slim form (2026-05-14): Bash-extractor removed — 22-form adversarial
 ├── `pretool-git-privilege-guard.py` - PreToolUse Hook: Agent git-privilege guard
 ├── `pretool-gitignore-preflight.py` - pretool-gitignore-preflight.py — PreToolUse hook (matcher: Agent)
+├── `pretool-grep-backtrack-guard.py` - ROOT-CAUSE BACKGROUND (verified ground truth, 2026-06-15 host OOM)
 ├── `pretool-layer-escalation-check.sh` - pretool-layer-escalation-check.sh
 ├── `pretool-layer-match-gate.sh` - pretool-layer-match-gate.sh
 ├── `pretool-orchestrator-gate.py` - PreToolUse Hook: Orchestrator Gate (Unified)
