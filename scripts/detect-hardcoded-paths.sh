@@ -175,5 +175,8 @@ print(json.dumps({
     },
 }, indent=2))
 
-sys.exit(1 if total > 0 else 0)
+# Advisory-only: always exit 0 so this detector never fails a consumer/pipeline.
+# (Reverted from `exit 1 if total>0` — that exit-code flip was a behavioral change
+# beyond cleanup. The wider/JSON-aware detection is kept; it is purely advisory.)
+sys.exit(0)
 PYEOF
