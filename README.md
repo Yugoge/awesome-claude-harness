@@ -160,7 +160,7 @@ flowchart TD
 
     G1 & G2 -->|yes| OK[(allow, then unlink the grant)]
     G3 -->|yes| OK
-    G1 & G2 & G3 -->|no| NO[BLOCKED · exit 2]
+    G1 & G2 & G3 -->|no grant/env and no break-glass| NO[BLOCKED · exit 2]
     G4 --> NO
 
     classDef block fill:#ffebee,stroke:#c62828
