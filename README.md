@@ -54,9 +54,9 @@ flowchart TD
     QA -->|fail| DEV
     QA -->|pass| CLOSE[/close: release-readiness gate/]
 
-    CLOSE --> GATE{{Git Protection Kernel<br/>single-use grant token required}}
-    GATE -->|valid grant| GIT[(real commit / push / merge)]
-    GATE -->|no grant / forged| BLOCK[BLOCKED · exit 2]
+    CLOSE --> GATE{{Git Protection Kernel<br/>grant/env or audited break-glass required}}
+    GATE -->|valid grant/env or /do/matching /allow| GIT[(real commit / push / merge)]
+    GATE -->|no grant/env/break-glass or forged| BLOCK[BLOCKED · exit 2]
 
     classDef restricted fill:#ffebee,stroke:#c62828
     classDef gate fill:#fff3e0,stroke:#e67e22
