@@ -221,7 +221,7 @@ sequenceDiagram
     participant G as git-privilege-guard (PreToolUse)
     participant Git as git subprocess
 
-    W->>FS: write grant {nonce, sha256, allowed_files | branch+head+remote, ppid}
+    W->>FS: write grant {nonce, sid, expires_at | branch+head+remote, ppid}
     W->>W: export CLAUDE_{COMMIT,PUSH}_COMMAND_ACTIVE=1
     W->>Git: run git commit/push
     Note over G: guard fires on the Bash call
