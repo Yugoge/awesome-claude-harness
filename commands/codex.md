@@ -111,7 +111,7 @@ NOT pass `$CODEX_OUT` as the tee argument. Steps 3 and 4 branch directly.
 **Isolation (host policy — do NOT call bare `codex` here).** Steps 3 and 4 invoke codex through
 the codex-isolation wrapper resolved from the `$CODEX_ISO_BIN` env var (a fail-closed wrapper that
 forces an isolated `CODEX_HOME` so codex rollouts never land in a daemon-watched default `CODEX_HOME`
-that the Happy daemon would otherwise claim and surface as "gpt" sessions). Resolve and validate it
+that the Happy daemon would otherwise claim and surface as "gpt" sessions). Resolve it
 FIRST (the wrapper is the isolation entry point for `/codex`; do not fall back to bare
 `codex`, which loses the isolation guarantee — if the wrapper is absent the invocation simply
 fails at the call site, the baseline behavior):
