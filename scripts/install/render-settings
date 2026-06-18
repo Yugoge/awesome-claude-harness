@@ -1,0 +1,233 @@
+#!/usr/bin/env python3
+"""Render the concrete settings.json for an installed harness home from the tracked template.
+
+The tracked source of truth is settings.template.json, which carries a single
+{{CLAUDE_HOME}} placeholder wherever an install-home absolute path belongs. This
+renderer substitutes that placeholder with the resolved absolute install-home
+path, emits absolute permission literals + env values for THAT home, and applies
+the result ONLY after it validates:
+
+  1. the rendered text parses as JSON;
+  2. the required hook wiring is present (a fixed set of load-bearing hooks);
+  3. semantic parity holds versus the template (placeholders normalized):
+     - every permissions.deny entry is preserved (no deny silently dropped);
+     - permissions.ask is preserved;
+     - permissions.allow is NEVER broadened (rendered allow set, with the home
+       normalized back to the placeholder, must be a subset of the template's);
+     - the per-event hooks arrays are identical in entries + order.
+
+The renderer NEVER broadens a permission beyond the template and aborts WITHOUT
+partially applying on any bad render — the live settings file is left byte-identical.
+
+Usage:
+  render-settings <install-home> [--template <path>] [--out <path>] [--print]
+  render-settings --home <install-home> [...]            # equivalent
+  render-settings --check <rendered.json> --template <t> # validate-only (no apply)
+
+  <install-home>  absolute path to the installed harness home (e.g. /home/alice/.claude).
+                  Defaults to ${CLAUDE_HOME:-$HOME/.claude} when omitted.
+  --out <path>    file to apply the rendered settings to (default: <template-dir>/settings.json).
+  --print         write the rendered JSON to stdout instead of applying it.
+  --check <f>     validate an already-rendered file against the template, then exit.
+
+Exit codes: 0=success, 1=bad render / validation failure (nothing applied), 2=usage error.
+"""
+import argparse
+import json
+import os
+import sys
+import tempfile
+from pathlib import Path
+
+PLACEHOLDER = "{{CLAUDE_HOME}}"
+
+# Load-bearing hooks that MUST survive any render. A render that drops one of
+# these is a broken settings file regardless of JSON validity.
+REQUIRED_HOOK_SUFFIXES = (
+    "hooks/pretool-tool-policy.py",
+    "hooks/pretool-bash-safety.sh",
+    "hooks/stop-spec-coverage-enforce.py",
+    "hooks/pretool-orchestrator-gate.py",
+)
+
+
+def _err(msg: str) -> None:
+    sys.stderr.write(f"render-settings: {msg}\n")
+
+
+def _load_template(template_path: Path) -> tuple[str, dict]:
+    if not template_path.is_file():
+        _err(f"template not found: {template_path}")
+        sys.exit(1)
+    raw = template_path.read_text()
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        _err(f"template is not valid JSON: {exc}")
+        sys.exit(1)
+    return raw, parsed
+
+
+def render(template_raw: str, install_home: str) -> str:
+    """Substitute the placeholder with the concrete install-home absolute path."""
+    return template_raw.replace(PLACEHOLDER, install_home)
+
+
+def _all_hook_commands(settings: dict) -> list[str]:
+    cmds = []
+    for event in (settings.get("hooks") or {}).values():
+        for group in event:
+            for hook in group.get("hooks", []):
+                if hook.get("type") == "command":
+                    cmds.append(hook.get("command", ""))
+    return cmds
+
+
+def _hook_event_arrays(settings: dict) -> dict:
+    """Ordered list of command strings per event, for entries+order parity compare."""
+    out = {}
+    for event, groups in (settings.get("hooks") or {}).items():
+        seq = []
+        for group in groups:
+            for hook in group.get("hooks", []):
+                seq.append((group.get("matcher"), hook.get("command", "")))
+        out[event] = seq
+    return out
+
+
+def _normalize_home(value, install_home: str):
+    """Recursively map the install-home back to the placeholder for set-compare."""
+    if isinstance(value, str):
+        return value.replace(install_home, PLACEHOLDER)
+    if isinstance(value, list):
+        return [_normalize_home(v, install_home) for v in value]
+    if isinstance(value, dict):
+        return {k: _normalize_home(v, install_home) for k, v in value.items()}
+    return value
+
+
+def validate(rendered_text: str, template: dict, install_home: str) -> list[str]:
+    """Return a list of validation failures. Empty list == valid."""
+    failures = []
+
+    # (1) rendered output must parse as JSON.
+    try:
+        rendered = json.loads(rendered_text)
+    except json.JSONDecodeError as exc:
+        return [f"rendered output is not valid JSON: {exc}"]
+
+    # (2) required hook wiring present.
+    rendered_cmds = _all_hook_commands(rendered)
+    for suffix in REQUIRED_HOOK_SUFFIXES:
+        if not any(suffix in c for c in rendered_cmds):
+            failures.append(f"required hook wiring missing: {suffix}")
+
+    # (3) semantic parity (placeholders normalized back).
+    tpl_perms = template.get("permissions", {})
+    ren_perms = _normalize_home(rendered.get("permissions", {}), install_home)
+
+    tpl_deny = set(tpl_perms.get("deny", []))
+    ren_deny = set(ren_perms.get("deny", []))
+    dropped_deny = tpl_deny - ren_deny
+    if dropped_deny:
+        failures.append(f"deny entries dropped (semantic-parity violation): {sorted(dropped_deny)}")
+
+    tpl_ask = set(tpl_perms.get("ask", []))
+    ren_ask = set(ren_perms.get("ask", []))
+    dropped_ask = tpl_ask - ren_ask
+    if dropped_ask:
+        failures.append(f"ask entries dropped: {sorted(dropped_ask)}")
+
+    tpl_allow = set(tpl_perms.get("allow", []))
+    ren_allow = set(ren_perms.get("allow", []))
+    broadened = ren_allow - tpl_allow
+    if broadened:
+        failures.append(f"allow broadened beyond template: {sorted(broadened)}")
+
+    tpl_hooks = _hook_event_arrays(template)
+    ren_hooks = _hook_event_arrays(_normalize_home(rendered, install_home))
+    if tpl_hooks != ren_hooks:
+        failures.append("hook arrays differ from template (entries/order parity violation)")
+
+    return failures
+
+
+def _apply_atomic(out_path: Path, rendered_text: str) -> None:
+    """Write to a temp sibling then os.replace — never a partial write."""
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=str(out_path.parent), prefix=".settings.render.", suffix=".json")
+    try:
+        with os.fdopen(fd, "w") as f:
+            f.write(rendered_text)
+        os.replace(tmp, out_path)
+    except Exception:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+
+def main(argv=None) -> int:
+    parser = argparse.ArgumentParser(add_help=True)
+    parser.add_argument("install_home", nargs="?", default=None)
+    parser.add_argument("--home", dest="home_flag", default=None)
+    parser.add_argument("--template", default=None)
+    parser.add_argument("--out", default=None)
+    parser.add_argument("--print", dest="to_stdout", action="store_true")
+    parser.add_argument("--check", default=None,
+                        help="validate an already-rendered file against the template and exit")
+    args = parser.parse_args(argv)
+
+    script_dir = Path(__file__).resolve().parent
+    repo_root = script_dir.parent.parent  # scripts/install/ -> scripts/ -> repo root
+    template_path = Path(args.template) if args.template else repo_root / "settings.template.json"
+
+    template_raw, template = _load_template(template_path)
+
+    # --check mode: validate an existing rendered file, no apply.
+    if args.check:
+        check_path = Path(args.check)
+        if not check_path.is_file():
+            _err(f"--check file not found: {check_path}")
+            return 1
+        # install_home for normalization defaults to the env/HOME form.
+        install_home = (args.install_home or args.home_flag
+                        or os.environ.get("CLAUDE_HOME")
+                        or str(Path(os.environ.get("HOME", str(Path.home()))) / ".claude"))
+        failures = validate(check_path.read_text(), template, install_home)
+        if failures:
+            for fail in failures:
+                _err(fail)
+            return 1
+        return 0
+
+    install_home = (args.install_home or args.home_flag
+                    or os.environ.get("CLAUDE_HOME")
+                    or str(Path(os.environ.get("HOME", str(Path.home()))) / ".claude"))
+    install_home = install_home.rstrip("/")
+    if not install_home.startswith("/"):
+        _err(f"install-home must be an absolute path, got: {install_home}")
+        return 2
+
+    rendered_text = render(template_raw, install_home)
+
+    failures = validate(rendered_text, template, install_home)
+    if failures:
+        _err("ABORTING without applying — bad render:")
+        for fail in failures:
+            _err(f"  - {fail}")
+        return 1
+
+    if args.to_stdout:
+        sys.stdout.write(rendered_text)
+        return 0
+
+    out_path = Path(args.out) if args.out else template_path.parent / "settings.json"
+    _apply_atomic(out_path, rendered_text)
+    sys.stderr.write(f"render-settings: applied {out_path} for home {install_home}\n")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

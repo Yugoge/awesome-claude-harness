@@ -20,7 +20,7 @@
     "ENABLE_TOOL_SEARCH": "false",
     "CLAUDE_CODE_ENABLE_TASKS": "false",
     "CLAUDE_GRAPHIFY_ENABLED": "auto",
-    "GRAPHIFY_BIN": "~/.claude/venv/bin/graphify",
+    "GRAPHIFY_BIN": "{{CLAUDE_HOME}}/venv/bin/graphify",
     "_comment_graphify": "Graphify (graphifyy v0.8.25) integration drives the REAL CLI (graphify update/query/affected). Gate: CLAUDE_GRAPHIFY_ENABLED=auto|1 enables, 0 disables. Override env vars (leave unset for defaults): GRAPHIFY_BIN=<path> overrides graphify CLI; CLAUDE_GRAPHIFY_CACHE_ROOT=<dir> overrides /var/tmp/claude-graphify (MUST be OUTSIDE the repo — wrappers refuse cache-root-inside-repo); GRAPHIFY_TRIAGE_BACKEND=<gemini|claude-cli|...> forces the semantic-extraction backend (else auto-detect via API-key env vars, falling back to the keyless claude-cli backend when /usr/bin/claude is present); semantic keys like GEMINI_API_KEY/GOOGLE_API_KEY enable Gemini semantic mode. NOTE: GRAPHIFY_OUT is wrapper-internal (set to cacheDir by run_graphify_cmd so byproducts never pollute the repo) and is NOT a user override for the wrappers.",
     "_comment_anthropic": "Optional configuration below (disabled).",
     "_disabled_anthropic": "[object Object]"
@@ -69,9 +69,9 @@
       "Bash(cat > /tmp/*.md:*)",
       "Bash(source venv/bin/activate:*)",
       "Bash(source venv/bin/activate && python*)",
-      "Bash(source ~/.claude/venv/bin/activate && python3 ~/.claude/scripts/graphify-query.py:*)",
-      "Bash(source ~/.claude/venv/bin/activate && python3 ~/.claude/scripts/graphify-maintain.py:*)",
-      "Bash(source ~/.claude/venv/bin/activate && python3 ~/.claude/scripts/graphify-enrich.py:*)",
+      "Bash(source {{CLAUDE_HOME}}/venv/bin/activate && python3 {{CLAUDE_HOME}}/scripts/graphify-query.py:*)",
+      "Bash(source {{CLAUDE_HOME}}/venv/bin/activate && python3 {{CLAUDE_HOME}}/scripts/graphify-maintain.py:*)",
+      "Bash(source {{CLAUDE_HOME}}/venv/bin/activate && python3 {{CLAUDE_HOME}}/scripts/graphify-enrich.py:*)",
       "Bash(/tmp/*-venv/bin/python*)",
       "Bash(grep:*)",
       "Bash(find:*)",
@@ -108,27 +108,27 @@
       "Bash(rm -f /tmp/*.tmp:*)",
       "Bash(rm -f /tmp/*.json:*)",
       "Bash(rm:*)",
-      "Bash(source ~/.claude/venv/bin/activate && python3 ~/.claude/scripts/todo/clean.py:*)",
-      "Bash(source ~/.claude/venv/bin/activate && python3 ~/.claude/scripts/todo/close.py:*)",
-      "Bash(source ~/.claude/venv/bin/activate && python3 ~/.claude/scripts/todo/test.py:*)",
-      "Bash(source ~/.claude/venv/bin/activate && python3 ~/.claude/scripts/todo/quick-prototype.py:*)",
-      "Bash(source ~/.claude/venv/bin/activate && python3 ~/.claude/scripts/todo/file-analyze.py:*)",
-      "Bash(source ~/.claude/venv/bin/activate && python3 ~/.claude/scripts/todo/reflect-search.py:*)",
-      "Bash(source ~/.claude/venv/bin/activate && python3 ~/.claude/tests/scripts/validate-*.py:*)",
-      "Bash(~/.claude/scripts/install-git-keystone.sh:*)",
-      "Bash(~/.claude/scripts/overnight-git-env.sh:*)",
-      "Bash(~/.claude/scripts/overnight-git-selftest.sh:*)",
-      "Bash(~/.claude/scripts/mint-git-blessed-token.sh:*)",
-      "Bash(~/.claude/scripts/orchestrator.sh clean-inspect:*)",
-      "Bash(~/.claude/scripts/orchestrator.sh clean-merge-reports:*)",
-      "Bash(~/.claude/scripts/orchestrator.sh clean-execute:*)",
-      "Bash(~/.claude/scripts/orchestrator.sh record-checkpoint:*)",
-      "Bash(~/.claude/scripts/orchestrator.sh rule-inspect:*)",
-      "Bash(~/.claude/scripts/scan-project.sh:*)",
-      "Bash(~/.claude/scripts/detect-orphan-scripts.sh:*)",
-      "Bash(~/.claude/scripts/detect-orphan-agents.sh:*)",
-      "Bash(~/.claude/scripts/detect-orphan-commands.sh:*)",
-      "Bash(~/.claude/scripts/check-overnight-reports.sh:*)",
+      "Bash(source {{CLAUDE_HOME}}/venv/bin/activate && python3 {{CLAUDE_HOME}}/scripts/todo/clean.py:*)",
+      "Bash(source {{CLAUDE_HOME}}/venv/bin/activate && python3 {{CLAUDE_HOME}}/scripts/todo/close.py:*)",
+      "Bash(source {{CLAUDE_HOME}}/venv/bin/activate && python3 {{CLAUDE_HOME}}/scripts/todo/test.py:*)",
+      "Bash(source {{CLAUDE_HOME}}/venv/bin/activate && python3 {{CLAUDE_HOME}}/scripts/todo/quick-prototype.py:*)",
+      "Bash(source {{CLAUDE_HOME}}/venv/bin/activate && python3 {{CLAUDE_HOME}}/scripts/todo/file-analyze.py:*)",
+      "Bash(source {{CLAUDE_HOME}}/venv/bin/activate && python3 {{CLAUDE_HOME}}/scripts/todo/reflect-search.py:*)",
+      "Bash(source {{CLAUDE_HOME}}/venv/bin/activate && python3 {{CLAUDE_HOME}}/tests/scripts/validate-*.py:*)",
+      "Bash({{CLAUDE_HOME}}/scripts/install-git-keystone.sh:*)",
+      "Bash({{CLAUDE_HOME}}/scripts/overnight-git-env.sh:*)",
+      "Bash({{CLAUDE_HOME}}/scripts/overnight-git-selftest.sh:*)",
+      "Bash({{CLAUDE_HOME}}/scripts/mint-git-blessed-token.sh:*)",
+      "Bash({{CLAUDE_HOME}}/scripts/orchestrator.sh clean-inspect:*)",
+      "Bash({{CLAUDE_HOME}}/scripts/orchestrator.sh clean-merge-reports:*)",
+      "Bash({{CLAUDE_HOME}}/scripts/orchestrator.sh clean-execute:*)",
+      "Bash({{CLAUDE_HOME}}/scripts/orchestrator.sh record-checkpoint:*)",
+      "Bash({{CLAUDE_HOME}}/scripts/orchestrator.sh rule-inspect:*)",
+      "Bash({{CLAUDE_HOME}}/scripts/scan-project.sh:*)",
+      "Bash({{CLAUDE_HOME}}/scripts/detect-orphan-scripts.sh:*)",
+      "Bash({{CLAUDE_HOME}}/scripts/detect-orphan-agents.sh:*)",
+      "Bash({{CLAUDE_HOME}}/scripts/detect-orphan-commands.sh:*)",
+      "Bash({{CLAUDE_HOME}}/scripts/check-overnight-reports.sh:*)",
       "Bash(scripts/discover-folders.sh:*)",
       "Bash(scripts/analyze-folder-history.sh:*)",
       "Bash(scripts/generate-folder-index.sh:*)",
@@ -162,32 +162,32 @@
       "mcp__memory-server__open_nodes",
       "mcp__playwright__*",
       "Bash(source venv/bin/activate && python scripts/add-status-field.py:*)",
-      "Bash(python3 ~/.claude/scripts/spec-check.py:*)",
-      "Bash(python3 ~/.claude/scripts/spec-verify/spec-verify-views.py:*)",
-      "Bash(source ~/.claude/venv/bin/activate && python3 ~/.claude/scripts/spec-verify/spec-verify.py:*)",
+      "Bash(python3 {{CLAUDE_HOME}}/scripts/spec-check.py:*)",
+      "Bash(python3 {{CLAUDE_HOME}}/scripts/spec-verify/spec-verify-views.py:*)",
+      "Bash(source {{CLAUDE_HOME}}/venv/bin/activate && python3 {{CLAUDE_HOME}}/scripts/spec-verify/spec-verify.py:*)",
       "Bash(scripts/validate-dev-registry-enforcement.sh:*)",
-      "Bash(~/.claude/scripts/write-qa-mode.sh:*)",
+      "Bash({{CLAUDE_HOME}}/scripts/write-qa-mode.sh:*)",
       "Edit(.claude/agents/**)",
       "Edit(.claude/commands/**)",
       "Write(.claude/agents/**)",
       "Write(.claude/commands/**)",
-      "Bash(source ~/.claude/venv/bin/activate && python ~/.claude/hooks/lib/close-verdict.py:*)",
+      "Bash(source {{CLAUDE_HOME}}/venv/bin/activate && python {{CLAUDE_HOME}}/hooks/lib/close-verdict.py:*)",
       "Bash(scripts/score-update.sh:*)",
       "Bash(scripts/score-inject.sh:*)",
       "Bash(scripts/lifecycle-baseline-import.sh:*)",
       "Bash(scripts/canary-verify.sh:*)",
       "Bash(python3 scripts/blast-radius-tool.py:*)",
-      "Bash(~/.claude/scripts/score-update.sh:*)",
-      "Bash(~/.claude/scripts/score-inject.sh:*)",
-      "Bash(~/.claude/scripts/lifecycle-baseline-import.sh:*)",
-      "Bash(~/.claude/scripts/canary-verify.sh:*)",
-      "Bash(python3 ~/.claude/scripts/blast-radius-tool.py:*)",
+      "Bash({{CLAUDE_HOME}}/scripts/score-update.sh:*)",
+      "Bash({{CLAUDE_HOME}}/scripts/score-inject.sh:*)",
+      "Bash({{CLAUDE_HOME}}/scripts/lifecycle-baseline-import.sh:*)",
+      "Bash({{CLAUDE_HOME}}/scripts/canary-verify.sh:*)",
+      "Bash(python3 {{CLAUDE_HOME}}/scripts/blast-radius-tool.py:*)",
       "Write(tests/generated/**)",
       "Edit(tests/generated/**)",
       "Bash(pytest tests/generated:*)",
-      "Bash(source ~/.claude/venv/bin/activate && pytest tests/generated:*)",
-      "Bash(source ~/.claude/venv/bin/activate && python3 -m pytest tests/test_graphify_scripts.py:*)",
-      "Bash(source ~/.claude/venv/bin/activate && python3 -m pytest tests/test_graphify_workflow_contract.py:*)",
+      "Bash(source {{CLAUDE_HOME}}/venv/bin/activate && pytest tests/generated:*)",
+      "Bash(source {{CLAUDE_HOME}}/venv/bin/activate && python3 -m pytest tests/test_graphify_scripts.py:*)",
+      "Bash(source {{CLAUDE_HOME}}/venv/bin/activate && python3 -m pytest tests/test_graphify_workflow_contract.py:*)",
       "Bash(scripts/precommitted-recovery.sh:*)"
     ],
     "deny": [
@@ -298,41 +298,41 @@
       "Edit(.claude/CLAUDE.md)"
     ]
   },
-  "model": "sonnet",
+  "model": "opus",
   "hooks": {
     "SessionStart": [
       {
         "hooks": [
           {
             "type": "command",
-            "command": "bash \"$HOME/.claude/hooks/session-info.sh\""
+            "command": "bash \"{{CLAUDE_HOME}}/hooks/session-info.sh\""
           },
           {
             "type": "command",
-            "command": "bash \"$HOME/.claude/hooks/session-git-init.sh\""
+            "command": "bash \"{{CLAUDE_HOME}}/hooks/session-git-init.sh\""
           },
           {
             "type": "command",
-            "command": "python3 \"$HOME/.claude/hooks/check-todo-md-sync.py\""
+            "command": "python3 \"{{CLAUDE_HOME}}/hooks/check-todo-md-sync.py\""
           },
           {
             "type": "command",
-            "command": "bash \"$HOME/.claude/hooks/session-promote-hook.sh\"",
+            "command": "bash \"{{CLAUDE_HOME}}/hooks/session-promote-hook.sh\"",
             "timeout": 10
           },
           {
             "type": "command",
-            "command": "bash \"$HOME/.claude/scripts/canary-verify.sh\"",
+            "command": "bash \"{{CLAUDE_HOME}}/scripts/canary-verify.sh\"",
             "timeout": 30
           },
           {
             "type": "command",
-            "command": "bash \"$HOME/.claude/hooks/session-tmpfs-banner.sh\"",
+            "command": "bash \"{{CLAUDE_HOME}}/hooks/session-tmpfs-banner.sh\"",
             "timeout": 5
           },
           {
             "type": "command",
-            "command": "bash \"$HOME/.claude/hooks/session-gitignore-propagate.sh\"",
+            "command": "bash \"{{CLAUDE_HOME}}/hooks/session-gitignore-propagate.sh\"",
             "timeout": 10
           }
         ]
@@ -343,11 +343,11 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"$HOME/.claude/hooks/prompt-workflow.py\""
+            "command": "python3 \"{{CLAUDE_HOME}}/hooks/prompt-workflow.py\""
           },
           {
             "type": "command",
-            "command": "python3 \"$HOME/.claude/hooks/userprompt-doc-sync-check.py\""
+            "command": "python3 \"{{CLAUDE_HOME}}/hooks/userprompt-doc-sync-check.py\""
           }
         ]
       },
@@ -355,7 +355,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash \"$HOME/.claude/hooks/userprompt-consent-allowlist.sh\""
+            "command": "bash \"{{CLAUDE_HOME}}/hooks/userprompt-consent-allowlist.sh\""
           }
         ]
       },
@@ -363,7 +363,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash \"$HOME/.claude/hooks/userprompt-tmpfs-pressure.sh\"",
+            "command": "bash \"{{CLAUDE_HOME}}/hooks/userprompt-tmpfs-pressure.sh\"",
             "timeout": 15
           }
         ]
@@ -372,7 +372,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"$HOME/.claude/hooks/userprompt-bulk-commit-capability.py\""
+            "command": "python3 \"{{CLAUDE_HOME}}/hooks/userprompt-bulk-commit-capability.py\""
           }
         ]
       }
@@ -382,7 +382,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"$HOME/.claude/hooks/pretool-orchestrator-gate.py\""
+            "command": "python3 \"{{CLAUDE_HOME}}/hooks/pretool-orchestrator-gate.py\""
           }
         ]
       },
@@ -390,7 +390,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"$HOME/.claude/hooks/pretool-read-size-guard.py\""
+            "command": "python3 \"{{CLAUDE_HOME}}/hooks/pretool-read-size-guard.py\""
           }
         ]
       },
@@ -398,7 +398,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"$HOME/.claude/hooks/pretool-workflow-gate.py\""
+            "command": "python3 \"{{CLAUDE_HOME}}/hooks/pretool-workflow-gate.py\""
           }
         ]
       },
@@ -406,7 +406,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"$HOME/.claude/hooks/pretool-subagent-enforce.py\""
+            "command": "python3 \"{{CLAUDE_HOME}}/hooks/pretool-subagent-enforce.py\""
           }
         ]
       },
@@ -415,19 +415,15 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash \"$HOME/.claude/hooks/pretool-bash-safety.sh\""
+            "command": "bash \"{{CLAUDE_HOME}}/hooks/pretool-bash-safety.sh\""
           },
           {
             "type": "command",
-            "command": "python3 \"$HOME/.claude/hooks/pretool-bash-views-guard.py\""
+            "command": "python3 \"{{CLAUDE_HOME}}/hooks/pretool-bash-views-guard.py\""
           },
           {
             "type": "command",
-            "command": "python3 \"$HOME/.claude/hooks/pretool-wrapper-userintent.py\""
-          },
-          {
-            "type": "command",
-            "command": "python3 \"$HOME/.claude/hooks/pretool-grep-backtrack-guard.py\""
+            "command": "python3 \"{{CLAUDE_HOME}}/hooks/pretool-wrapper-userintent.py\""
           }
         ]
       },
@@ -436,7 +432,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"$HOME/.claude/hooks/pretool-cp-checkin.py\""
+            "command": "python3 \"{{CLAUDE_HOME}}/hooks/pretool-cp-checkin.py\""
           }
         ]
       },
@@ -445,7 +441,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"$HOME/.claude/hooks/pretool-overnight-hook-guard.py\""
+            "command": "python3 \"{{CLAUDE_HOME}}/hooks/pretool-overnight-hook-guard.py\""
           }
         ]
       },
@@ -454,7 +450,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"$HOME/.claude/hooks/pretool-quality-gate.py\""
+            "command": "python3 \"{{CLAUDE_HOME}}/hooks/pretool-quality-gate.py\""
           }
         ]
       },
@@ -463,7 +459,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"$HOME/.claude/hooks/pretool-tool-policy.py\""
+            "command": "python3 \"{{CLAUDE_HOME}}/hooks/pretool-tool-policy.py\""
           }
         ]
       },
@@ -472,7 +468,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"$HOME/.claude/hooks/pretool-cp-state-write-guard.py\""
+            "command": "python3 \"{{CLAUDE_HOME}}/hooks/pretool-cp-state-write-guard.py\""
           }
         ]
       },
@@ -481,7 +477,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"$HOME/.claude/hooks/pretool-subagent-code-block.py\""
+            "command": "python3 \"{{CLAUDE_HOME}}/hooks/pretool-subagent-code-block.py\""
           }
         ]
       },
@@ -490,7 +486,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"$HOME/.claude/hooks/pretool-todo-validate.py\""
+            "command": "python3 \"{{CLAUDE_HOME}}/hooks/pretool-todo-validate.py\""
           }
         ]
       },
@@ -499,7 +495,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash \"$HOME/.claude/hooks/pretool-block-enterworktree.sh\""
+            "command": "bash \"{{CLAUDE_HOME}}/hooks/pretool-block-enterworktree.sh\""
           }
         ]
       },
@@ -508,7 +504,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"$HOME/.claude/hooks/pretool-block-branch-pr-worktree.py\""
+            "command": "python3 \"{{CLAUDE_HOME}}/hooks/pretool-block-branch-pr-worktree.py\""
           }
         ]
       },
@@ -516,7 +512,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash \"$HOME/.claude/hooks/pretool-worktree-guard.sh\""
+            "command": "bash \"{{CLAUDE_HOME}}/hooks/pretool-worktree-guard.sh\""
           }
         ]
       },
@@ -525,7 +521,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash ~/.claude/hooks/pretool-write-guard.sh",
+            "command": "bash {{CLAUDE_HOME}}/hooks/pretool-write-guard.sh",
             "timeout": 5
           }
         ]
@@ -535,27 +531,27 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash \"$HOME/.claude/hooks/pretool-layer-escalation-check.sh\""
+            "command": "bash \"{{CLAUDE_HOME}}/hooks/pretool-layer-escalation-check.sh\""
           },
           {
             "type": "command",
-            "command": "bash \"$HOME/.claude/hooks/pretool-bisect-gate.sh\""
+            "command": "bash \"{{CLAUDE_HOME}}/hooks/pretool-bisect-gate.sh\""
           },
           {
             "type": "command",
-            "command": "python3 \"$HOME/.claude/hooks/pretool-spec-block-foreground-agent.py\""
+            "command": "python3 \"{{CLAUDE_HOME}}/hooks/pretool-spec-block-foreground-agent.py\""
           },
           {
             "type": "command",
-            "command": "python3 \"$HOME/.claude/hooks/pretool-orchestrator-prompt-purity.py\""
+            "command": "python3 \"{{CLAUDE_HOME}}/hooks/pretool-orchestrator-prompt-purity.py\""
           },
           {
             "type": "command",
-            "command": "python3 \"$HOME/.claude/hooks/pretool-aggregate-check.py\""
+            "command": "python3 \"{{CLAUDE_HOME}}/hooks/pretool-aggregate-check.py\""
           },
           {
             "type": "command",
-            "command": "python3 \"$HOME/.claude/hooks/pretool-gitignore-preflight.py\""
+            "command": "python3 \"{{CLAUDE_HOME}}/hooks/pretool-gitignore-preflight.py\""
           }
         ]
       },
@@ -564,7 +560,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"$HOME/.claude/hooks/pretool-runcode-watchdog.py\""
+            "command": "python3 \"{{CLAUDE_HOME}}/hooks/pretool-runcode-watchdog.py\""
           }
         ]
       },
@@ -573,7 +569,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"$HOME/.claude/hooks/pretool-claude-config-guard.py\"",
+            "command": "python3 \"{{CLAUDE_HOME}}/hooks/pretool-claude-config-guard.py\"",
             "timeout": 5
           }
         ]
@@ -583,7 +579,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"$HOME/.claude/hooks/pretool-bulk-commit-detector.py\"",
+            "command": "python3 \"{{CLAUDE_HOME}}/hooks/pretool-bulk-commit-detector.py\"",
             "timeout": 5
           }
         ]
@@ -593,7 +589,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"$HOME/.claude/hooks/pretool-git-privilege-guard.py\""
+            "command": "python3 \"{{CLAUDE_HOME}}/hooks/pretool-git-privilege-guard.py\""
           }
         ]
       }
@@ -604,7 +600,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"$HOME/.claude/hooks/posttool-allowlist-consume.py\""
+            "command": "python3 \"{{CLAUDE_HOME}}/hooks/posttool-allowlist-consume.py\""
           }
         ]
       },
@@ -613,19 +609,19 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"$HOME/.claude/hooks/posttool-todo-tracker.py\""
+            "command": "python3 \"{{CLAUDE_HOME}}/hooks/posttool-todo-tracker.py\""
           },
           {
             "type": "command",
-            "command": "python3 \"$HOME/.claude/hooks/posttool-todo-count.py\""
+            "command": "python3 \"{{CLAUDE_HOME}}/hooks/posttool-todo-count.py\""
           },
           {
             "type": "command",
-            "command": "python3 \"$HOME/.claude/hooks/posttool-todo-sequence.py\""
+            "command": "python3 \"{{CLAUDE_HOME}}/hooks/posttool-todo-sequence.py\""
           },
           {
             "type": "command",
-            "command": "python3 \"$HOME/.claude/hooks/posttool-overnight-loop.py\""
+            "command": "python3 \"{{CLAUDE_HOME}}/hooks/posttool-overnight-loop.py\""
           }
         ]
       },
@@ -634,15 +630,15 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash \"$HOME/.claude/hooks/posttool-git-checkpoint.sh\""
+            "command": "bash \"{{CLAUDE_HOME}}/hooks/posttool-git-checkpoint.sh\""
           },
           {
             "type": "command",
-            "command": "python3 \"$HOME/.claude/hooks/posttool-doc-sync.py\""
+            "command": "python3 \"{{CLAUDE_HOME}}/hooks/posttool-doc-sync.py\""
           },
           {
             "type": "command",
-            "command": "python3 \"$HOME/.claude/hooks/posttool-command-frontmatter-validate.py\""
+            "command": "python3 \"{{CLAUDE_HOME}}/hooks/posttool-command-frontmatter-validate.py\""
           }
         ]
       },
@@ -651,7 +647,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash \"$HOME/.claude/hooks/posttool-git-warn.sh\""
+            "command": "bash \"{{CLAUDE_HOME}}/hooks/posttool-git-warn.sh\""
           }
         ]
       },
@@ -660,15 +656,15 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"$HOME/.claude/hooks/posttool-overnight-file-check.py\""
+            "command": "python3 \"{{CLAUDE_HOME}}/hooks/posttool-overnight-file-check.py\""
           },
           {
             "type": "command",
-            "command": "python3 \"$HOME/.claude/hooks/posttool-subagent-track.py\""
+            "command": "python3 \"{{CLAUDE_HOME}}/hooks/posttool-subagent-track.py\""
           },
           {
             "type": "command",
-            "command": "python3 \"$HOME/.claude/hooks/posttool-overnight-trace.py\""
+            "command": "python3 \"{{CLAUDE_HOME}}/hooks/posttool-overnight-trace.py\""
           }
         ]
       },
@@ -677,7 +673,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"$HOME/.claude/hooks/posttool-runcode-watchdog.py\""
+            "command": "python3 \"{{CLAUDE_HOME}}/hooks/posttool-runcode-watchdog.py\""
           }
         ]
       },
@@ -686,7 +682,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"$HOME/.claude/hooks/posttool-codex-skill-ledger.py\""
+            "command": "python3 \"{{CLAUDE_HOME}}/hooks/posttool-codex-skill-ledger.py\""
           }
         ]
       }
@@ -697,7 +693,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"$HOME/.claude/hooks/notification-idle-overnight.py\""
+            "command": "python3 \"{{CLAUDE_HOME}}/hooks/notification-idle-overnight.py\""
           }
         ]
       }
@@ -707,19 +703,19 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"$HOME/.claude/hooks/stop-overnight-timelock.py\""
+            "command": "python3 \"{{CLAUDE_HOME}}/hooks/stop-overnight-timelock.py\""
           },
           {
             "type": "command",
-            "command": "python3 \"$HOME/.claude/hooks/stop-spec-coverage-enforce.py\""
+            "command": "python3 \"{{CLAUDE_HOME}}/hooks/stop-spec-coverage-enforce.py\""
           },
           {
             "type": "command",
-            "command": "bash \"$HOME/.claude/hooks/auto-commit.sh\""
+            "command": "bash \"{{CLAUDE_HOME}}/hooks/auto-commit.sh\""
           },
           {
             "type": "command",
-            "command": "bash \"$HOME/.claude/hooks/stop-cleanup-allowlist.sh\""
+            "command": "bash \"{{CLAUDE_HOME}}/hooks/stop-cleanup-allowlist.sh\""
           }
         ]
       }
@@ -730,15 +726,15 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash \"$HOME/.claude/hooks/subagent-stop-diff-check.sh\""
+            "command": "bash \"{{CLAUDE_HOME}}/hooks/subagent-stop-diff-check.sh\""
           },
           {
             "type": "command",
-            "command": "bash \"$HOME/.claude/hooks/pretool-layer-match-gate.sh\""
+            "command": "bash \"{{CLAUDE_HOME}}/hooks/pretool-layer-match-gate.sh\""
           },
           {
             "type": "command",
-            "command": "bash \"$HOME/.claude/hooks/subagent-stop-guard-integrity.sh\""
+            "command": "bash \"{{CLAUDE_HOME}}/hooks/subagent-stop-guard-integrity.sh\""
           }
         ]
       },
@@ -747,7 +743,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"$HOME/.claude/hooks/subagentstop-codex-enforce.py\""
+            "command": "python3 \"{{CLAUDE_HOME}}/hooks/subagentstop-codex-enforce.py\""
           }
         ]
       },
@@ -756,7 +752,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"$HOME/.claude/hooks/subagentstop-e2e-enforce.py\""
+            "command": "python3 \"{{CLAUDE_HOME}}/hooks/subagentstop-e2e-enforce.py\""
           }
         ]
       },
@@ -765,7 +761,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"$HOME/.claude/hooks/subagentstop-cp-enforce.py\""
+            "command": "python3 \"{{CLAUDE_HOME}}/hooks/subagentstop-cp-enforce.py\""
           }
         ]
       }

@@ -1,0 +1,118 @@
+#!/usr/bin/env bash
+# doctor — first-run preflight for the Claude Code harness.
+# Reports which REQUIRED dependencies are missing, with a clear actionable
+# message, BEFORE the first pipeline run. Exits nonzero when any required
+# dependency is missing; exits 0 when every required dependency is present.
+#
+# Usage: scripts/doctor [--venv <venv-dir>]
+#   --venv <dir>   Inspect this venv instead of the resolved <home>/venv.
+# Exit codes: 0 = all required deps present; 1 = one or more required missing.
+#
+# Required checks:
+#   - python3 + git           (base prerequisites, on PATH)
+#   - the harness venv         (<home>/venv with a python interpreter)
+#   - the manifest packages    (requirements.txt: pytest, jsonschema, pyyaml)
+#   - the shared resolver       (hooks/lib/claude_home.{sh,py} resolve cleanly)
+set -uo pipefail
+
+# Resolve the harness home from THIS script's own location (it lives at
+# <home>/scripts/doctor, so the resolver is at ../hooks/lib). Never an
+# author-absolute home: if the resolver cannot locate the home we say so.
+SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+LIB_DIR="$SELF_DIR/../hooks/lib"
+# shellcheck source=/dev/null
+if [ -f "$LIB_DIR/claude_home.sh" ]; then
+  source "$LIB_DIR/claude_home.sh"
+  HOME_DIR="$(claude_home_resolve || true)"
+else
+  HOME_DIR=""
+fi
+[ -n "$HOME_DIR" ] || HOME_DIR="$(cd "$SELF_DIR/.." && pwd -P)"
+
+VENV_DIR="$HOME_DIR/venv"
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --venv) VENV_DIR="${2:?--venv needs a directory}"; shift 2 ;;
+    -h|--help) sed -n '2,14p' "${BASH_SOURCE[0]}"; exit 0 ;;
+    *) echo "doctor: unknown argument '$1'" >&2; exit 1 ;;
+  esac
+done
+
+MANIFEST="$HOME_DIR/requirements.txt"
+MISSING=0
+ok()   { printf '  [ ok ] %s\n' "$1"; }
+miss() { printf '  [MISSING] %s\n' "$1" >&2; MISSING=$((MISSING + 1)); }
+
+echo "Claude Code harness — preflight (doctor)"
+echo "harness home: $HOME_DIR"
+echo
+
+echo "Base prerequisites:"
+# Required command-line tools the core pipeline shells out to.
+need_cmd() {  # <command> <install-hint>
+  command -v "$1" >/dev/null 2>&1 && ok "$1 ($(command -v "$1"))" \
+    || miss "$1 — $2"
+}
+command -v python3 >/dev/null 2>&1 && ok "python3 ($(python3 --version 2>&1))" \
+  || miss "python3 — install Python 3 and re-run scripts/bootstrap"
+command -v git >/dev/null 2>&1 && ok "git ($(git --version 2>&1))" \
+  || miss "git — install git and re-run scripts/bootstrap"
+need_cmd jq "install jq (JSON parsing in shell hooks)"
+need_cmd openssl "install openssl (nonce/token generation for /merge, /push)"
+echo
+
+echo "Harness venv:"
+VENV_PY="$VENV_DIR/bin/python"
+VENV_PRESENT=1
+if [ -x "$VENV_PY" ]; then
+  ok "venv interpreter at $VENV_PY"
+else
+  miss "venv missing at $VENV_DIR — run scripts/bootstrap to create it"
+  VENV_PRESENT=0
+fi
+echo
+
+echo "Required Python packages (from requirements.txt):"
+if [ "$VENV_PRESENT" -ne 1 ]; then
+  # Do NOT fall back to system python — a missing harness venv must not be
+  # masked by packages that happen to be importable system-wide.
+  for pkg in pytest jsonschema pyyaml; do
+    miss "$pkg — not checked: the harness venv is missing. Run scripts/bootstrap to create it and install $MANIFEST."
+  done
+else
+  # import name may differ from the distribution name (PyYAML -> yaml).
+  check_mod() {  # <import-name> <pip-name>
+    if "$VENV_PY" -c "import $1" >/dev/null 2>&1; then
+      ok "$2 (import $1)"
+    else
+      miss "$2 — install with: $VENV_DIR/bin/pip install -r $MANIFEST  (or: pip install $2)"
+    fi
+  }
+  check_mod pytest pytest
+  check_mod jsonschema jsonschema
+  check_mod yaml pyyaml
+fi
+echo
+
+echo "Shared resolver:"
+if [ -f "$LIB_DIR/claude_home.sh" ] && [ -n "$(claude_home_resolve 2>/dev/null || true)" ]; then
+  ok "hooks/lib/claude_home.sh resolves the harness home"
+else
+  miss "hooks/lib/claude_home.sh cannot resolve the harness home — repair the install"
+fi
+# The python resolver is pure-stdlib, so the system python3 is fine for this
+# check even when the harness venv is absent (it does not need the manifest deps).
+RESOLVER_PY="$VENV_PY"; [ -x "$RESOLVER_PY" ] || RESOLVER_PY="python3"
+if [ -x "$LIB_DIR/claude_home.py" ] && "$RESOLVER_PY" "$LIB_DIR/claude_home.py" resolve >/dev/null 2>&1; then
+  ok "hooks/lib/claude_home.py resolves the harness home"
+else
+  miss "hooks/lib/claude_home.py cannot resolve the harness home — repair the install"
+fi
+echo
+
+if [ "$MISSING" -gt 0 ]; then
+  echo "doctor: $MISSING required check(s) FAILED — fix the items above before the first run." >&2
+  exit 1
+fi
+echo "doctor: all required checks passed. The harness is ready."
+exit 0
