@@ -123,7 +123,7 @@ flowchart TD
 
 ### The 23 subagents (by role)
 
-- **Development pipeline** — `ba` (requirements analyst, git root-cause → ticket + context), `dev` (the *only* agent permitted to write code files), `qa` (validates BA pre-code and Dev post-code against acceptance criteria), `test-writer` (pytest skeletons with `TEST_INCOMPLETE` hard-stops), `graphify` (incremental code-graph enrichment into the Dev context).
+- **Development pipeline** — `ba` (requirements analyst, git root-cause → ticket + context), `dev` (**by policy** the agent permitted to write code files), `qa` (validates BA pre-code and Dev post-code against acceptance criteria), `test-writer` (pytest skeletons with `TEST_INCOMPLETE` hard-stops), `graphify` (incremental code-graph enrichment into the Dev context).
 - **Exploration specialists** (overnight + on-demand) — `architect` (structural/tech-debt/dependency issues), `product-owner` (feature completeness, business-logic bugs), `user` (end-user simulation, UX friction), `ui-specialist` (visual quality + Playwright audit, 1–10 beauty score), `pm` (test-plan manager with PLAN / TRIAGE / RETRO modes).
 - **Git & release analysts** — `changelog-analyst` (classify/stage/commit + push-gate tokens), `push-analyst`, `merge-analyst`, `pull-analyst` (pre-push / pre-merge / post-pull risk analysis with nonce-keyed grants).
 - **Cleanup, audit & spec** — `cleaner`, `cleanliness-inspector`, `style-inspector`, `rule-inspector` (the `/clean` cohort); `spec` (split a monolithic spec into per-agent views + checkpoints); `prompt-inspector` (prompt verbosity); `git-edge-case-analyst`; `test-executor`, `test-validator` (test infra execution/validation).
