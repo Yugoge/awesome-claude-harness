@@ -257,21 +257,14 @@ def main():
         # No monolith for a touched spec dir — nothing to verify, allow stop.
         sys.exit(0)
 
-    # WS1 FAIL-CLOSED (AC-WS1-6): a spec WAS touched and HAS a views/ dir, so
-    # coverage IS required. If the REQUIRED spec-verify helper cannot be located
-    # under the resolved harness home, this is a harness-INSTALL error — BLOCK
-    # (exit 2) rather than silently exiting 0 (the historical fail-open). The
-    # resolver returns None when the home is unresolved OR the verifier is absent.
+    # Resolve the spec-verify helper portably via claude_home (the de-hardcode).
+    # When it cannot be located (home unresolved OR verifier absent), ALLOW the
+    # stop — this is the baseline behavior. (Reverted from the WS1 exit-2, which
+    # was a fail-open->fail-closed flip beyond path-cleanup that could wedge a
+    # stop on a partial/fresh install; only the path resolution is kept.)
     spec_verify = claude_home.resolve_optional(SPEC_VERIFY_RELPATH)
     if spec_verify is None:
-        sys.stderr.write(
-            "\n⛔ SPEC COVERAGE ENFORCEMENT: the REQUIRED spec-verify helper "
-            f"('{SPEC_VERIFY_RELPATH}') could not be located under the resolved "
-            "harness home — this is a harness-install error. Coverage cannot be "
-            "verified, so the stop is BLOCKED (fail-closed). Repair the harness "
-            "install (run scripts/bootstrap), then retry.\n"
-        )
-        sys.exit(2)
+        sys.exit(0)
 
     # Non-blocking breadcrumb — stderr is only surfaced when the hook blocks.
     sys.stderr.write(f"[stop-spec-coverage-enforce] target spec: {spec_dir.name}\n")
