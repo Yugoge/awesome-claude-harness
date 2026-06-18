@@ -39,8 +39,8 @@ import claude_home  # noqa: E402  (shared WS1 harness-home resolver)
 
 # Relative path of the spec-verify helper under the resolved harness home. The
 # absolute path is resolved at runtime via claude_home so a fresh non-root clone
-# (whose home is NOT /root/.claude) still finds — or fails CLOSED on — its
-# verifier.
+# (whose home is NOT /root/.claude) still finds its verifier; when the verifier
+# is absent the stop is ALLOWED (baseline skip — see main()).
 SPEC_VERIFY_RELPATH = "scripts/spec-verify/spec-verify.py"
 
 # Matches docs/dev/specs/spec-YYYYMMDD-HHMMSS in monolith or split-dir paths.
