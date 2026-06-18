@@ -204,7 +204,7 @@ Four hooks form a defense-in-depth chain (top to bottom). Crucially, the **bulk-
 | `pretool-orchestrator-gate.py` | same-tool consecutive rate-limit | yes |
 | `pretool-bash-safety.sh` | subagent history-mutation block (commit/merge/push/cherry-pick/rebase/revert) | yes |
 | `pretool-bulk-commit-detector.py` | cross-session sweep detector (`chore(claude): sync` + ≥3 subsystem prefixes) | **no** |
-| `pretool-git-privilege-guard.py` | always-on 4-verb gate + grant-manifest validation | **no** |
+| `pretool-git-privilege-guard.py` | always-on 4-verb gate + grant-manifest validation | main-agent `/do` honored; refused for subagents |
 
 ### 6.2 The grant-token lifecycle (write → validate → single-use consume)
 
