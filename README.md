@@ -349,7 +349,8 @@ Absence is handled by exactly one of these outcomes, per the kind of thing that 
 
 | Missing thing | Class | Behavior on absence |
 |---|---|---|
-| A blocking security guard's helper/policy (e.g. the tool-policy registry, the always-on git-privilege / bash-safety guards) | security | **FAIL CLOSED** — the guard blocks with exit 2 and a block marker; it never silently allows |
+| The tool-policy registry (role-scoped deny enforcement) | security | **FAIL CLOSED for every role except the default `dev` role** — a present, valid `tool-policy.v1` enforces its denials normally; if that policy is missing/unparseable or the registry throws, non-`dev` roles fail closed (exit 2) while the default `dev` role gets a sanctioned fail-safe ALLOW. (`pretool-tool-policy.py` fail-closes only on deny-logic bootstrap import failure; an unresolved role or an unexpected top-level hook exception allows.) |
+| The always-on git-privilege / bash-safety guards | security | **Block their covered operations in normal operation** — with documented human break-glass paths (`/do`, `/allow`) and a few selected fail-open exception paths that keep a hook bug from bricking the pipeline |
 | An optional integration (Codex wrapper, `graphify`, Playwright, session-promote) | optional | **SKIP** — one-line "unavailable" message, core flow continues; no unsafe fallback |
 | The spec-coverage verifier (an advisory coverage check, not a blocking guard) | advisory | **SKIP** — an absent verifier allows the stop with a note; when the verifier *is* present, under-coverage still blocks |
 | An invalid generated `settings.json` (bad render / dropped required hook) | config | **ABORT** — the install renderer refuses to apply and leaves the live settings unchanged |
