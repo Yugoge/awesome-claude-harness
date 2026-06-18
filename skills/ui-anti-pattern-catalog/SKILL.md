@@ -7,7 +7,7 @@ description: Apply the 58-rule anti-pattern catalog (10 Color + 5 Motion + 5 Typ
 
 Layer: **Aesthetic (L3)**.
 Output channel: `aesthetic_findings[]` with `rule_id="aesthetic.<rule-id>"`.
-Source data: `/root/.claude/skills/ui-shared/anti-pattern-catalog.yml` (read at runtime; never inlined at build time).
+Source data: `~/.claude/skills/ui-shared/anti-pattern-catalog.yml` (read at runtime; never inlined at build time).
 
 ## Trigger Conditions
 

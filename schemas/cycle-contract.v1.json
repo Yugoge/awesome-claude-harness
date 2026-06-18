@@ -53,11 +53,13 @@
     },
     "tool_policy_ref": {
       "type": "string",
-      "default": "/root/.claude/policies/tool-policy.v1.json"
+      "default": "~/.claude/policies/tool-policy.v1.json",
+      "description": "Harness-home-relative default (resolved via the WS1 CLAUDE_HOME resolver / `~` expansion at runtime); install-rendered, never an author-absolute literal."
     },
     "ui_evidence_schema_ref": {
       "type": "string",
-      "default": "/root/.claude/schemas/qa-report.v1.json"
+      "default": "~/.claude/schemas/qa-report.v1.json",
+      "description": "Harness-home-relative default (resolved via the WS1 CLAUDE_HOME resolver / `~` expansion at runtime); install-rendered, never an author-absolute literal."
     },
     "trace_log_path": {
       "type": "string"
@@ -99,7 +101,7 @@
           "schema_name": {
             "type": "string",
             "minLength": 1,
-            "description": "Key into /root/.claude/schemas/registry.json"
+            "description": "Key into ~/.claude/schemas/registry.json"
           },
           "max_retries": {
             "type": "integer",
@@ -210,7 +212,7 @@
       ]
     },
     "self_repair": {
-      "description": "T2.4 (BUG-B-Q0E-CONTRACT-SELF-REPAIR-GAP): optional contract-driven, audited grant that lets the cycle's dev role write to a narrow set of /root/.claude/* paths during an active overnight cycle. The object's absence (default) means self-repair is DISABLED and all existing hard blocks in pretool-overnight-hook-guard.py remain in force. When present and enabled, pretool-overnight-hook-guard.py allows the write iff (a) the acting role is in allowed_roles, (b) the realpath target startswith one of allowed_path_prefixes, (c) optional pipeline_id matches the active pipeline, (d) now() < expires_at, AND (e) audit_required is satisfied (audit JSONL append succeeded). Audit log lives at /root/.claude/logs/overnight-self-repair.jsonl. Fail-closed semantics: if any check or the audit append fails, the grant is REVOKED and the existing hard block path runs unchanged.",
+      "description": "T2.4 (BUG-B-Q0E-CONTRACT-SELF-REPAIR-GAP): optional contract-driven, audited grant that lets the cycle's dev role write to a narrow set of ~/.claude/* paths during an active overnight cycle. The object's absence (default) means self-repair is DISABLED and all existing hard blocks in pretool-overnight-hook-guard.py remain in force. When present and enabled, pretool-overnight-hook-guard.py allows the write iff (a) the acting role is in allowed_roles, (b) the realpath target startswith one of allowed_path_prefixes, (c) optional pipeline_id matches the active pipeline, (d) now() < expires_at, AND (e) audit_required is satisfied (audit JSONL append succeeded). Audit log lives at ~/.claude/logs/overnight-self-repair.jsonl. Fail-closed semantics: if any check or the audit append fails, the grant is REVOKED and the existing hard block path runs unchanged.",
       "type": "object",
       "additionalProperties": false,
       "properties": {

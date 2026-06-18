@@ -3,7 +3,7 @@
 > Deep technical architecture and design rationale for maintainers.
 > Last updated: 2026-06-13
 
-This repository is a **Claude Code global configuration** (`~/.claude` symlinks to it) that turns one chat agent into a disciplined software team. A main *orchestrator* agent is mechanically prevented from touching code and instead dispatches single-purpose **subagents**; a defense-in-depth chain of **PreToolUse / PostToolUse / Stop** hooks makes catastrophic git and filesystem mistakes structurally impossible; and an autonomous overnight loop explores, fixes, verifies, and commits in an isolated worktree until a wall-clock deadline. Everything here is plain Markdown prompts plus small Python/Bash hooks and scripts — the behavior change comes from *enforcement in code*, not from asking the model nicely.
+This repository is a **Claude Code global configuration** (`~/.claude` symlinks to it) that turns one chat agent into a disciplined software team. A main *orchestrator* agent's direct writes are mechanically constrained by the orchestrator gate (one non-whitelist tool per turn, unlockable by `/do`) so that real work is intended for single-purpose **subagents** it dispatches; a defense-in-depth chain of **PreToolUse / PostToolUse / Stop** hooks makes catastrophic git and filesystem mistakes mechanically hard — gated by hooks that fail closed by default, with narrow audited human break-glass paths (`/do`, `/allow`); and an autonomous overnight loop explores, fixes, verifies, and commits in an isolated worktree until a wall-clock deadline. Everything here is plain Markdown prompts plus small Python/Bash hooks and scripts — the behavior change comes from *enforcement in code*, not from asking the model nicely.
 
 This document is the maintainer-facing companion to [`README.md`](README.md): the README is the value-prop overview, this file goes deeper into mechanisms, data flows, lifecycles, and the *why* behind the design. The component counts in §1 are recomputed from the live `settings.json` and are kept in step with the README badge.
 
@@ -51,7 +51,7 @@ The harness is a configuration, not a packaged app — there is no `requirements
 | `jq` | **REQUIRED** | JSON parsing in shell hooks/scripts. |
 | Bash + GNU userland (coreutils, util-linux/`flock`, findutils, `grep`, `sed`, `awk`/gawk) | **REQUIRED** | `realpath`, `flock`, `stat`, `sha256sum`, `date`, `grep`, `sed`, `awk`, `find`. GNU forms assumed; BSD/macOS flag differences can break hooks. |
 | `pytest` | **REQUIRED** for `/test` + generated AC tests | `tests/generated/<task_id>/` skeletons and `/test` run under pytest. The empty venv must be populated: `~/.claude/venv/bin/pip install pytest`. |
-| OpenAI Codex CLI + `/root/bin/codex-iso` wrapper | **REQUIRED** for `--codex` / `/codex` | Adversarial second-opinion rounds (`commands/codex.md`, `commands/close.md`). The wrapper path is author-specific and must be user-supplied; absent → `--codex`/`/codex` unavailable, rest of pipeline unaffected. |
+| OpenAI Codex CLI + an isolation wrapper resolved via `CODEX_ISO_BIN` | **REQUIRED** for `--codex` / `/codex` | Adversarial second-opinion rounds (`commands/codex.md`, `commands/close.md`). The wrapper is user-supplied and resolved from the `CODEX_ISO_BIN` env var (no author-absolute path); absent → `--codex`/`/codex` fail closed as unavailable and **never** fall back to a bare unsafe `codex`, rest of pipeline unaffected. |
 | `openssl` | **REQUIRED** for `/merge`, `/push` | Nonce/token material in the grant-gated release path. |
 | `bwrap` (bubblewrap) | **REQUIRED** for `/dev-overnight` | The per-Bash RO-bind boundary isolating overnight main-tree writes (§8). |
 | `graphify` CLI — PyPI `graphifyy` v0.8.25, binary `graphify` | OPTIONAL (graceful) | Code-graph enrichment (§7, `scripts/graphify-query.py`). Default-enabled (`CLAUDE_GRAPHIFY_ENABLED=auto`, `GRAPHIFY_BIN`); absent → degraded, pipeline proceeds. |
@@ -62,14 +62,16 @@ The harness is a configuration, not a packaged app — there is no `requirements
 
 > Note: this matrix is the maintainer-facing twin of the README's Dependencies table; the two are kept in step. Changing graphify's default-enabled behavior or `GRAPHIFY_BIN` resolution is out of scope here (document-only).
 
+**Optional-capability degradation.** Every **OPTIONAL** row above is *graceful*: an automatic hook, session-start path, settings env value, or core-flow step that references an absent optional capability emits a one-line "unavailable"/"skipping (optional)" message and the core flow proceeds — it never crashes or hangs. Author-specific paths are resolved structurally (the shared `hooks/lib/claude_home.{sh,py}` resolver, generalizing the `pretool-bash-safety.sh` self-resolve pattern) so a fresh non-root clone finds its own home with no `/root` literal to rewrite; external helpers outside the tree resolve via explicit env vars (`CODEX_ISO_BIN`, `SESSION_PROMOTE_BIN`, `UI_EVIDENCE_AUDIT_BIN`). Absence is governed by a single **fail-closed-vs-skip** rule, keyed on what is missing: a **blocking security** guard's helper/policy → **fail closed** (block, exit 2) for every role except the default `dev` role, which gets a sanctioned fail-safe ALLOW when the tool-policy file is missing/unparseable or the registry throws (non-`dev` roles fail closed; the hook itself fail-closes only on deny-logic bootstrap import failure — an unresolved role or unexpected top-level exception allows) — with the spec-coverage verifier as the documented exception (an advisory coverage check that *skips* if its verifier is absent, not a blocking guard); an **optional** integration → **skip** (one-line unavailable, no unsafe fallback); an **invalid** generated `settings.json` → **abort** (refuse to apply, leave the live file unchanged). The README "Portability contract" is the user-facing twin of this rule.
+
 ---
 
 ## 2. Design stance
 
 Five principles run through every file. They are the architecture's load-bearing assumptions; the rest of the system is their consequence.
 
-1. **Orchestrator-only.** The main agent *thinks and routes*; it never writes code or runs privileged git. This is enforced by `hooks/pretool-orchestrator-gate.py`, not by prompt etiquette.
-2. **Enforce in code, not in prose.** "Please don't force-push" is a wish; a `PreToolUse` hook returning exit 2 is a guarantee. Wherever a rule *can* be a hook, it *is* a hook.
+1. **Orchestrator-only.** The main agent is designed to *think and route*; implementation work is intended for subagents. Direct main-agent writes are mechanically constrained by `hooks/pretool-orchestrator-gate.py` and can be explicitly unlocked by `/do`; privileged git is default-denied unless a sanctioned grant or the main-agent `/do` break-glass path applies — enforced in code, not by prompt etiquette.
+2. **Enforce in code, not in prose.** "Please don't force-push" is a wish; a `PreToolUse` hook returning exit 2 makes the rule **mechanically enforced for the paths that reach that decision** — subject to the documented human break-glass grants (`/do`, `/allow`) and the few intentional fail-open exception paths that keep a hook bug from bricking the pipeline. Wherever a rule *can* be a hook, it *is* a hook.
 3. **Fail closed, leave forensics.** Ambiguous grant → reject. Unparseable QA verdict → treat as failure. On rejection the evidence (grant file, raw output) is left on disk so a human can see exactly what happened.
 4. **Rules, not stories.** Agent/command prompts state what is *required* and what is *forbidden*, tersely. Every infrastructure-touching subagent prompt carries an explicit **DO NOT** section — positive instructions alone proved insufficient.
 5. **One subagent, one task.** N issues → N parallel subagents, each with a clean context. Multitasking inside one subagent is banned (`CLAUDE.md` lesson #13).
@@ -114,14 +116,14 @@ flowchart TD
 ```
 
 - **Orchestrator (main agent).** Owns the conversation, the todo list, and dispatch. Allowed tools are a small whitelist (`Agent`, `TodoWrite`, `AskUserQuestion`, `Skill`, `Read`, `Glob`, `Grep`, `Bash`, cron/title tools); everything else is rate-limited or blocked by the orchestrator gate. (`CLAUDE.md` §Orchestrator-Only Rule.)
-- **Command surface (`commands/*.md`).** 35 slash commands. Each is a prompt that scripts a workflow (parse → dispatch → validate → ship). Release/control commands carry `disable-model-invocation: true` so an agent cannot self-invoke them.
+- **Command surface (`commands/*.md`).** 35 slash commands. Each is a prompt that scripts a workflow (parse → dispatch → validate → ship). Release/control commands carry `disable-model-invocation: true`, which blocks **SlashCommand self-dispatch only**; the `Skill`-tool path is closed separately by an explicit `Skill(<name>:*)` deny in `permissions.deny` (see *Why `disable-model-invocation`?* below).
 - **Subagent fleet (`agents/*.md`).** 23 specialists, each a system prompt with `name`/`description`/`tools` frontmatter. Subagents bypass the orchestrator gate (they are *supposed* to do work) but are still subject to the safety, git, and worktree hooks.
 - **Hook enforcement (`settings.json` + `hooks/`).** The kernel. Every tool call the agent makes is intercepted; hooks return exit 2 to block. Shared logic lives in `hooks/lib/` (allowlist/sentinel grants, checkpoint core, contract runtime, agent resolver).
 - **Support.** `scripts/` (72 helpers: grant writers, graphify code-graph, spec/dev-report resolvers), `skills/` (8: Playwright UI-audit suite), `schemas/` (JSON contracts like `context.v1.json`, `cycle-contract.v1.json`, `dev-report.v1.json`, `qa-report.v1.json`), `templates/` (`spec-template.md`, `overnight-spec.md`).
 
 ### The 23 subagents (by role)
 
-- **Development pipeline** — `ba` (requirements analyst, git root-cause → ticket + context), `dev` (the *only* agent permitted to write code files), `qa` (validates BA pre-code and Dev post-code against acceptance criteria), `test-writer` (pytest skeletons with `TEST_INCOMPLETE` hard-stops), `graphify` (incremental code-graph enrichment into the Dev context).
+- **Development pipeline** — `ba` (requirements analyst, git root-cause → ticket + context), `dev` (**by policy** the agent permitted to write code files), `qa` (validates BA pre-code and Dev post-code against acceptance criteria), `test-writer` (pytest skeletons with `TEST_INCOMPLETE` hard-stops), `graphify` (incremental code-graph enrichment into the Dev context).
 - **Exploration specialists** (overnight + on-demand) — `architect` (structural/tech-debt/dependency issues), `product-owner` (feature completeness, business-logic bugs), `user` (end-user simulation, UX friction), `ui-specialist` (visual quality + Playwright audit, 1–10 beauty score), `pm` (test-plan manager with PLAN / TRIAGE / RETRO modes).
 - **Git & release analysts** — `changelog-analyst` (classify/stage/commit + push-gate tokens), `push-analyst`, `merge-analyst`, `pull-analyst` (pre-push / pre-merge / post-pull risk analysis with nonce-keyed grants).
 - **Cleanup, audit & spec** — `cleaner`, `cleanliness-inspector`, `style-inspector`, `rule-inspector` (the `/clean` cohort); `spec` (split a monolithic spec into per-agent views + checkpoints); `prompt-inspector` (prompt verbosity); `git-edge-case-analyst`; `test-executor`, `test-validator` (test infra execution/validation).
@@ -178,16 +180,16 @@ flowchart TD
     B[Bash: a git verb] --> H1[pretool-orchestrator-gate.py<br/>rate-limit · /do bypass]
     H1 --> H2[pretool-bash-safety.sh<br/>blocks subagent history rewrites · /do bypass]
     H2 --> H3[pretool-bulk-commit-detector.py<br/>catches 'sync' sweeps · NO /do bypass]
-    H3 --> H4[pretool-git-privilege-guard.py<br/>ALWAYS-ON · 4 verbs · NO /do bypass]
+    H3 --> H4[pretool-git-privilege-guard.py<br/>ALWAYS-ON · 4 verbs · /do: main-agent only]
 
     H4 --> C{which verb?}
-    C -->|commit| G1{env=1 + single-use grant<br/>nonce + sha256 + files?}
+    C -->|commit| G1{env=1 + single-use commit grant<br/>nonce + unexpired?}
     C -->|push| G2{env=1 + push grant<br/>branch + expected_head + remote?}
     C -->|merge| G3{CLAUDE_MERGE_COMMAND_ACTIVE=1?}
-    C -->|reset --hard| G4{target == HEAD or omitted?}
+    C -->|reset --hard| G4{matching /allow grant?}
 
     G1 & G2 & G3 & G4 -->|yes| OK[(allow, then unlink grant)]
-    G1 & G2 & G3 & G4 -->|no / forged / inline-env| NO[BLOCKED exit 2]
+    G1 & G2 & G3 & G4 -->|no grant/env, no break-glass / forged / inline-env| NO[BLOCKED exit 2]
 
     classDef block fill:#ffebee,stroke:#c62828
     classDef ok fill:#e3f2fd,stroke:#1565c0
@@ -195,18 +197,18 @@ flowchart TD
     class OK ok
 ```
 
-Four hooks form a defense-in-depth chain (top to bottom). Crucially, the inner two **ignore `/do`**:
+Four hooks form a defense-in-depth chain (top to bottom). Crucially, the **bulk-commit detector** ignores `/do`; the git-privilege guard honors `/do` for the **main agent only** and refuses it for subagents:
 
 | Hook | Purpose | `/do` bypass? |
 |---|---|---|
 | `pretool-orchestrator-gate.py` | same-tool consecutive rate-limit | yes |
 | `pretool-bash-safety.sh` | subagent history-mutation block (commit/merge/push/cherry-pick/rebase/revert) | yes |
 | `pretool-bulk-commit-detector.py` | cross-session sweep detector (`chore(claude): sync` + ≥3 subsystem prefixes) | **no** |
-| `pretool-git-privilege-guard.py` | always-on 4-verb gate + grant-manifest validation | **no** |
+| `pretool-git-privilege-guard.py` | always-on 4-verb gate + grant-manifest validation | main-agent `/do` honored; refused for subagents |
 
 ### 6.2 The grant-token lifecycle (write → validate → single-use consume)
 
-A `commit` or `push` is only allowed if a **single-use grant manifest** authorizes that *exact* action:
+A `commit` or `push` is **default-denied unless a single-use grant manifest authorizes it** — the guard validates the grant's expiry + single-use for commit, plus branch/head/remote for push (commit exactness is recorded wrapper-side, not re-checked at the guard); a main-agent `/do` or a matching `/allow` grant is the audited human break-glass:
 
 ```
 /tmp/claude-{commit,push}-grant-<sid>-<nonce>.json
@@ -219,12 +221,12 @@ sequenceDiagram
     participant G as git-privilege-guard (PreToolUse)
     participant Git as git subprocess
 
-    W->>FS: write grant {nonce, sha256, allowed_files | branch+head+remote, ppid}
+    W->>FS: write grant {nonce, sid, expires_at | branch+head+remote, ppid}
     W->>W: export CLAUDE_{COMMIT,PUSH}_COMMAND_ACTIVE=1
     W->>Git: run git commit/push
     Note over G: guard fires on the Bash call
     G->>FS: glob <sid>-*.json · mtime-newest tiebreak
-    G->>G: validate env + nonce + sha256 + allowed_files set-equality
+    G->>G: validate env + nonce + expiry (single-use); push also branch+head+remote
     alt valid
         G-->>Git: allow (exit 0)
         W->>FS: unlink grant (single-use)
@@ -243,8 +245,8 @@ sequenceDiagram
 
 Two narrow, human-authorized escape hatches:
 
-- **`/do`** sets a session consent flag that makes the orchestrator gate and `bash-safety` exit 0 for one turn. It does **not** bypass the git privilege guard or the bulk-commit detector (invariant #6).
-- **`/allow`** writes a **structured sentinel grant** at `/tmp/claude-grants/<task_id>.json` = `{task_id, session_id, allowed_operations[], created_at, expires_at}`, where `allowed_operations[]` is a list of `{op, target?, args_contain?}` dicts. The hook matches *structurally* on the bash sub-command's first word (`op`), optional second word (`target`), and `args_contain[]` fragments via `hooks/lib/allowlist.py::match_sentinel_grant_for_bash_command()`. **Substring grep against the raw command line is forbidden** — the structured grant is the only declaration channel. The sentinel is consumed (`hooks/posttool-allowlist-consume.py`) on *any* terminal result and reaped at session end (`hooks/stop-cleanup-allowlist.sh`).
+- **`/do`** sets a session consent flag that makes the orchestrator gate, `bash-safety`, **and the git-privilege guard** exit 0 **for the main agent**; subagents never benefit; it does not bypass the bulk-commit detector (invariant #6).
+- **`/allow`** writes a **structured sentinel grant** at `/tmp/claude-grants/<task_id>.json` = `{task_id, session_id, allowed_operations[], created_at, expires_at}`, where `allowed_operations[]` is a list of `{op, target?, args_contain?}` dicts. The hook matches *structurally* on the bash sub-command's first word (`op`), optional second word (`target`), and `args_contain[]` fragments via `hooks/lib/allowlist.py::match_sentinel_grant_for_bash_command()`. `/allow` now **primarily** writes this structured sentinel grant; the sentinel matcher never substring-matches the raw command line. A legacy pattern-string grant path remains as a backward-compatibility fallback **when no sentinel exists**, so this is not yet the only declaration channel. The sentinel is consumed (`hooks/posttool-allowlist-consume.py`) on *any* terminal result and reaped at session end (`hooks/stop-cleanup-allowlist.sh`).
 
 ### 6.4 Branch / PR / worktree firewall
 
@@ -277,7 +279,7 @@ flowchart TD
     GFX --> TW{complexity/risk gate}
     TW -->|high| TWA[test-writer<br/>pytest skeletons w/ TEST_INCOMPLETE]
     TW -->|skip sentinel| DEV
-    TWA --> DEV[Step 10: Dev subagent<br/>ONLY agent allowed to write code]
+    TWA --> DEV[Step 10: Dev subagent<br/>primarily the code writer by policy]
     DEV --> QA[Step 13: QA verify vs acceptance criteria]
     QA -->|fail| DEV
     QA -->|pass| CLOSE[/close → /commit → /push/]
@@ -369,9 +371,9 @@ The git-protection kernel and the ramdisk/nested-repo architecture are described
 
 **Why orchestrator-only?** A single context window that analyzes, implements, tests, *and* commits collapses under load — quality silently degrades. Forcing each unit of work into a fresh single-purpose subagent keeps every context clean and every report structured. The rule is mechanical (`pretool-orchestrator-gate.py`) because a prompt-level rule is one stray tool call away from being ignored.
 
-**Why enforce in code (fail-closed)?** The threat model is the agent itself: a capable model *will* find the shortcut (inline env injection, forged grant, history rewrite). Every such path is a documented attack scenario with a hook that returns exit 2. Where judgement is required (a grant that doesn't parse, a QA verdict that's ambiguous), the system rejects rather than guesses, and leaves the evidence on disk.
+**Why enforce in code (fail-closed)?** The threat model is the agent itself: a capable model *will* find the shortcut (inline env injection, forged grant, history rewrite). Each such path is a documented attack scenario with a hook that returns exit 2 on the decision paths that reach it — guards additionally honor the documented human break-glass grants and intentionally fail open on unexpected hook exceptions rather than brick the pipeline. Where judgement is required (a grant that doesn't parse, a QA verdict that's ambiguous), the system rejects rather than guesses, and leaves the evidence on disk.
 
-**Why grant tokens instead of allow-lists?** A static "git commit is allowed" permission cannot distinguish a sanctioned `/commit <task-id>` from a 93-file `chore(claude): sync` sweep. A single-use, nonce-bound, sha256-checked grant authorizes *one exact action once* — and the bulk-commit detector independently catches the sweep shape even if a grant existed.
+**Why grant tokens instead of allow-lists?** A static "git commit is allowed" permission cannot distinguish a sanctioned `/commit <task-id>` from a 93-file `chore(claude): sync` sweep. A single-use, nonce-bound grant authorizes *one privileged git action* — the **commit** grant is time-boxed (the guard re-checks its expiry + single-use); the **push** grant is bound to branch/head/remote (single-use, no expiry); **merge** is gated by an env var, not a grant. The grants carry only their identity/expiry/binding fields — there is no sha256 or allowed-files check at the guard — and the bulk-commit detector independently catches the sweep shape even if a grant existed.
 
 **Why one-task-per-subagent?** Multitasking inside a subagent is how a "fix the button" task quietly also "refactors the router." N issues become N parallel subagents, each provably scoped to one thing (`CLAUDE.md` lesson #13).
 
@@ -395,7 +397,7 @@ The config is plain Markdown + small scripts; doc-sync re-inventories the roster
 
 **Add a hook** — write `hooks/<name>.{py,sh}`, make `.sh` files executable (`chmod +x`), then wire it in `settings.json` under the right lifecycle event with the narrowest matcher. **Fail closed** (exit 2 on doubt) and **leave forensics**. Validate the JSON afterward (`python3 -m json.tool settings.json`). Remember the count that matters is what `settings.json` wires, not what sits in `hooks/`.
 
-**Extend the git kernel** — never weaken the always-on invariants enforced in `hooks/pretool-git-privilege-guard.py` and its sibling guards (b5d447e protection, inline-env rejection, cross-bypass isolation, single-use grants, blessed-bridge regex, `/do` not bypassing the guard, task-id chain consistency). Each is verified by an acceptance criterion; regressing one is a production-catastrophe class change.
+**Extend the git kernel** — never weaken the always-on invariants enforced in `hooks/pretool-git-privilege-guard.py` and its sibling guards (b5d447e protection, inline-env rejection, cross-bypass isolation, single-use grants, blessed-bridge regex, the git-privilege guard honoring `/do` for the main agent only — subagents never benefit, task-id chain consistency). Each is verified by an acceptance criterion; regressing one is a production-catastrophe class change.
 
 ---
 

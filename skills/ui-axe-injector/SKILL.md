@@ -74,7 +74,7 @@ axe impact → severity mapping:
 ## Fallback Strategy (3-tier per spec 5.17)
 
 **Tier 1 — Vendored (PREFERRED)**:
-1. Read `/root/.claude/skills/ui-axe-injector/vendor/axe.min.js` (axe-core 4.10.0).
+1. Read `~/.claude/skills/ui-axe-injector/vendor/axe.min.js` (axe-core 4.10.0).
 2. Inject into the page via `browser_evaluate` with the file contents wrapped as an IIFE.
 3. Call `axe.run(document, { runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa'] } })`.
 4. Set `injection_status="vendored"`.
@@ -92,7 +92,7 @@ axe impact → severity mapping:
 
 ## Update Cadence
 
-axe-core is bumped **monthly via manual operator** per spec 5.1 binding decision #5. Operator runs the bump script under `/root/.claude/scripts/axe-bump.sh` (future), which downloads the new version, diffs the rule list against `rule-map.json`, and surfaces additions/removals for human review. **No automated CI bump. No auto-update hook.**
+axe-core is bumped **monthly via manual operator** per spec 5.1 binding decision #5. Operator runs the bump script under `~/.claude/scripts/axe-bump.sh` (future), which downloads the new version, diffs the rule list against `rule-map.json`, and surfaces additions/removals for human review. **No automated CI bump. No auto-update hook.**
 
 ## Example Invocation
 
