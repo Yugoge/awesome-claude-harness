@@ -24,11 +24,40 @@ _FORBIDDEN_PATHS = ["hooks/", "policies/", "scripts/", "settings.json"]
 # Baseline commit this cycle layered on top of (dispatch payload baseline_head_sha).
 _BASELINE_HEAD_SHA = "07e8f8f30f8f35fd5a699a490e8c5e598a733ba7"
 
-# Forbidden-path entries that were ALREADY dirty in the shared working tree at
+# Files/dir-prefixes that were ALREADY dirty in the shared working tree at
 # baseline (pre-existing public-readiness / de-hardcode work, captured from the
-# dispatch baseline_dirty_snapshot). These were NOT touched by this cycle; a
-# forbidden-path hit is a real AC5 failure ONLY if it is NOT in this set.
-_BASELINE_DIRTY_FORBIDDEN = {
+# dispatch baseline_dirty_snapshot). These were NOT touched by this cycle.
+# Entries ending in "/" are directory prefixes (git reports whole untracked
+# dirs that way). A path is "baseline-dirty" if it equals an entry or starts
+# with a "/"-terminated entry. A forbidden-path hit is a real AC5 failure ONLY
+# if it is NOT baseline-dirty (i.e. this cycle actually introduced it).
+_BASELINE_DIRTY = {
+    "ARCHITECTURE.md",
+    "CLAUDE.md",
+    "INDEX.md",
+    "README.md",
+    "agents/changelog-analyst.md",
+    "agents/cleaner.md",
+    "agents/cleanliness-inspector.md",
+    "agents/dev.md",
+    "agents/git-edge-case-analyst.md",
+    "agents/pm.md",
+    "agents/prompt-inspector.md",
+    "agents/qa.md",
+    "agents/rule-inspector.md",
+    "agents/spec.md",
+    "agents/style-inspector.md",
+    "agents/test-executor.md",
+    "agents/test-validator.md",
+    "agents/ui-specialist.md",
+    "commands/close.md",
+    "commands/codex.md",
+    "commands/commit.md",
+    "commands/dev-command.md",
+    "commands/dev-overnight.md",
+    "commands/dev.md",
+    "commands/spec.md",
+    "examples/",
     "hooks/INDEX.md",
     "hooks/README.md",
     "hooks/doc_sync/config.py",
@@ -56,6 +85,8 @@ _BASELINE_DIRTY_FORBIDDEN = {
     "hooks/session-promote-hook.sh",
     "hooks/stop-spec-coverage-enforce.py",
     "hooks/stop.sh",
+    "requirements.txt",
+    "schemas/cycle-contract.v1.json",
     "scripts/INDEX.md",
     "scripts/README.md",
     "scripts/apply-permissions.sh",
@@ -65,7 +96,29 @@ _BASELINE_DIRTY_FORBIDDEN = {
     "scripts/install/render-settings",
     "scripts/resolve-close-report.sh",
     "settings.json",
+    "settings.template.json",
+    "skills/ui-anti-pattern-catalog/SKILL.md",
+    "skills/ui-axe-injector/SKILL.md",
+    "tests/fixtures/",
+    "tests/fresh-clone-bootstrap-smoke.sh",
+    "tests/generated/20260604-204954/",
+    "tests/generated/20260611-100500/",
+    "tests/generated/dev-20260615-213842/INDEX.md",
+    "tests/generated/dev-20260615-213842/README.md",
+    "tests/generated/dev-20260616-204226/",
+    "tests/generated/manifest.json",
+    "tests/ws2_zero_literal_gate.py",
 }
+
+
+def _is_baseline_dirty(path):
+    for entry in _BASELINE_DIRTY:
+        if entry.endswith("/"):
+            if path.startswith(entry):
+                return True
+        elif path == entry:
+            return True
+    return False
 
 
 def _repo_root():
