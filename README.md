@@ -88,7 +88,7 @@ The harness is one lifecycle, not a bag of commands. Each stage hands a verified
    /merge · /push                         bridge to the target branch · single-process gated push
 ```
 
-`--codex` rides alongside `/dev`, `/close`, and `/commit` as an opt-in adversarial second opinion. The git protection kernel sits *under* `/commit`, `/merge`, and `/push`, and refuses any agent-authored git mutation that lacks the required per-operation authorization (a single-use grant for commit/push; the `/merge` env var for merge).
+`--codex` rides alongside `/dev`, `/close`, and `/commit` as an opt-in adversarial second opinion. The git protection kernel sits *under* `/commit`, `/merge`, and `/push`, and **default-denies** covered privileged git mutations unless the wrapper authorization is present — a single-use grant for commit/push, the `/merge` env var for merge — or an audited human break-glass path (`/do` for the main agent, or a matching `/allow`) applies.
 
 ---
 
