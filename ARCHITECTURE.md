@@ -197,7 +197,7 @@ flowchart TD
     class OK ok
 ```
 
-Four hooks form a defense-in-depth chain (top to bottom). Crucially, the inner two **ignore `/do`**:
+Four hooks form a defense-in-depth chain (top to bottom). Crucially, the **bulk-commit detector** ignores `/do`; the git-privilege guard honors `/do` for the **main agent only** and refuses it for subagents:
 
 | Hook | Purpose | `/do` bypass? |
 |---|---|---|
