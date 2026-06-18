@@ -213,7 +213,7 @@ resolver so the close gate uses the SAME `cp_dir` the producer and `/dev` use:
 - If a `spec_path` is found, call the resolver and take its `cp_dir`:
 
   ```bash
-  RESOLVED_JSON=$(/root/.claude/scripts/resolve-spec-artifacts.py \
+  RESOLVED_JSON=$(~/.claude/scripts/resolve-spec-artifacts.py \
       --spec-path "$spec_path" --project-dir "$CLAUDE_PROJECT_DIR") || {
     echo "spec-artifact resolution FAILED for the close gate (path mismatch / present-but-invalid split)." >&2
     exit 1; }
@@ -240,7 +240,7 @@ The orchestrator MUST emit a TodoWrite call updating the Step-N todo item to `in
 
 - **Closed-task path** (a `dev-report-<TASK_ID>.json` exists): read the `dev.files_modified` array (top-level non-null list per the dev-report contract); use that list verbatim as `<cycle-diff-file-list>`.
 - **do-report path** (`DO_REPORT` is set, i.e. `do-report-<TASK_ID>.json` exists): read `do.files_modified` array verbatim as `<cycle-diff-file-list>`. Do NOT fall through to the Irregular path.
-- **Irregular path** (no dev-report-<TASK_ID>.json and no do-report — e.g., hand-edits): run `git diff --name-only` against the relevant repo's cycle commit range to compute the file list. For nested-`.claude` edits the relevant repo is the nested git repo at `/root/.claude` (working-tree root); for parent-repo edits use `/root`.
+- **Irregular path** (no dev-report-<TASK_ID>.json and no do-report — e.g., hand-edits): run `git diff --name-only` against the relevant repo's cycle commit range to compute the file list. For nested-`.claude` edits the relevant repo is the nested git repo at `~/.claude` (working-tree root); for parent-repo edits use the parent-repo working-tree root (`$HOME`, resolved — not an author-absolute literal).
 - If both paths yield an empty list, record `<cycle-diff-file-list>=` (empty) and proceed with dispatch — inspectors will return findings=[] and Step 5 will treat all cleanliness branches as non-blocking.
 
 **Parallel detection check** — before dispatch, evaluate whether a parallel-dev cycle was detected:
@@ -280,7 +280,7 @@ Use the Agent tool with `subagent_type: qa` ONCE. The entire debate happens insi
 
 ```
 FIRST ACTION: if a dev-registry sentinel for this session exists at $CLAUDE_PROJECT_DIR/.claude/dev-registry/<SESSION_ID>/qa.json, read it to register.
-SECOND ACTION (only if SPEC_ID is non-empty): read $CLAUDE_PROJECT_DIR/$CP_DIR/cp-state-qa.json to load your mandatory checklist before the debate. Mark each completed checkpoint with /root/.claude/scripts/spec-check.py mark --spec-id <SPEC_ID> --agent qa --agent-id $CLAUDE_AGENT_ID --cp-id <cp-NN>. Waive only with /root/.claude/scripts/spec-check.py waive --spec-id <SPEC_ID> --agent qa --agent-id $CLAUDE_AGENT_ID --cp-id <cp-NN> (auto-text records actor + ISO timestamp). You MUST leave zero pending checkpoints before Stop (a discipline expectation tracked via spec-check.py — no hook blocks exit on pending checkpoints today). If `$CLAUDE_AGENT_ID` is unavailable, use the `agent_id` value written into the cp-state file by the read.
+SECOND ACTION (only if SPEC_ID is non-empty): read $CLAUDE_PROJECT_DIR/$CP_DIR/cp-state-qa.json to load your mandatory checklist before the debate. Mark each completed checkpoint with ~/.claude/scripts/spec-check.py mark --spec-id <SPEC_ID> --agent qa --agent-id $CLAUDE_AGENT_ID --cp-id <cp-NN>. Waive only with ~/.claude/scripts/spec-check.py waive --spec-id <SPEC_ID> --agent qa --agent-id $CLAUDE_AGENT_ID --cp-id <cp-NN> (auto-text records actor + ISO timestamp). You MUST leave zero pending checkpoints before Stop (a discipline expectation tracked via spec-check.py — no hook blocks exit on pending checkpoints today). If `$CLAUDE_AGENT_ID` is unavailable, use the `agent_id` value written into the cp-state file by the read.
 
 You are the QA gatekeeper evaluating whether a completed development can be closed. The orchestrator passes a `codex_required: <true|false>` flag in this dispatch:
 

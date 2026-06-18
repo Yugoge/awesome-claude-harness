@@ -65,7 +65,7 @@ IF QA passes → Generate completion report
 
 ## Command Development Best Practices
 
-The full tutorial — Three-Party Architecture, specialist subagent design, todo workflow scripts, the three-hook checklist enforcement chain, YAML frontmatter rules (including the 2026-04-25 `/redev` empty-body incident postmortem), complete automation patterns, script parameterization, the subagent-call enforcement gate, and the command-quality-audit case study — lives in `/root/docs/dev/command-development-patterns.md`. Read that document before authoring or editing slash commands, subagents, or todo scripts. The patterns there are normative for this orchestrator and any new commands it spawns.
+The full tutorial — Three-Party Architecture, specialist subagent design, todo workflow scripts, the three-hook checklist enforcement chain, YAML frontmatter rules (including the 2026-04-25 `/redev` empty-body incident postmortem), complete automation patterns, script parameterization, the subagent-call enforcement gate, and the command-quality-audit case study — lives in `~/.claude/docs/dev/command-development-patterns.md`. Read that document before authoring or editing slash commands, subagents, or todo scripts. The patterns there are normative for this orchestrator and any new commands it spawns.
 
 ---
 
@@ -99,7 +99,7 @@ If `spec_path` is not null, call the single canonical resolver and consume its s
 
 ```bash
 if [ -n "$spec_path" ]; then
-  RESOLVED_JSON=$(/root/.claude/scripts/resolve-spec-artifacts.py \
+  RESOLVED_JSON=$(~/.claude/scripts/resolve-spec-artifacts.py \
       --spec-path "$spec_path" --project-dir "$CLAUDE_PROJECT_DIR") || {
     echo "spec-artifact resolution FAILED (path mismatch / present-but-invalid split). Re-finalize /spec before relying on per-agent views." >&2
     exit 1; }   # loud-fail guard: a present-but-invalid split never silently degrades to monolith mode
@@ -180,7 +180,7 @@ agent's `SECOND ACTION` for this launch. When `SPEC_ID` is non-empty, every Agen
 cp-state file MUST include a `SECOND ACTION` line immediately after the dev-registry `FIRST ACTION`:
 
 ```text
-SECOND ACTION: Read $CLAUDE_PROJECT_DIR/$CP_DIR/cp-state-<agent>.json to load your mandatory checklist before doing substantive work. Mark each completed checkpoint with /root/.claude/scripts/spec-check.py mark --spec-id <SPEC_ID> --agent <agent> --agent-id $CLAUDE_AGENT_ID --cp-id <cp-NN>. Waive only with /root/.claude/scripts/spec-check.py waive --spec-id <SPEC_ID> --agent <agent> --agent-id $CLAUDE_AGENT_ID --cp-id <cp-NN> (auto-text records actor + ISO timestamp). You MUST leave zero pending checkpoints before Stop (a discipline expectation tracked via spec-check.py — no hook blocks exit on pending checkpoints today). If `$CLAUDE_AGENT_ID` is unavailable, use the `agent_id` value written into the cp-state file by the read.
+SECOND ACTION: Read $CLAUDE_PROJECT_DIR/$CP_DIR/cp-state-<agent>.json to load your mandatory checklist before doing substantive work. Mark each completed checkpoint with ~/.claude/scripts/spec-check.py mark --spec-id <SPEC_ID> --agent <agent> --agent-id $CLAUDE_AGENT_ID --cp-id <cp-NN>. Waive only with ~/.claude/scripts/spec-check.py waive --spec-id <SPEC_ID> --agent <agent> --agent-id $CLAUDE_AGENT_ID --cp-id <cp-NN> (auto-text records actor + ISO timestamp). You MUST leave zero pending checkpoints before Stop (a discipline expectation tracked via spec-check.py — no hook blocks exit on pending checkpoints today). If `$CLAUDE_AGENT_ID` is unavailable, use the `agent_id` value written into the cp-state file by the read.
 ```
 
 This is the checklist-stop handoff: dev-registry handles role registration for

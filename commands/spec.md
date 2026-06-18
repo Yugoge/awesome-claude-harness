@@ -159,7 +159,7 @@ design and evidence are first-class material and MUST NOT be silently dropped (M
    path — the centralization lint (Step 6 sub-step 6) flags inline derivation:
 
    ```bash
-   RESOLVED_JSON=$(/root/.claude/scripts/resolve-spec-artifacts.py \
+   RESOLVED_JSON=$(~/.claude/scripts/resolve-spec-artifacts.py \
        --spec-path "$spec_path" --project-dir "$CLAUDE_PROJECT_DIR")
    SPEC_DIR_ID=$(jq -r '.candidates[0]' <<<"$RESOLVED_JSON")   # de-prefixed id
    BOUND_ROOT="$CLAUDE_PROJECT_DIR/docs/dev/specs/$SPEC_DIR_ID"
@@ -299,7 +299,7 @@ Only proceed to Step 6 when a STRONG signal fires.
    Use Agent tool with:
    - description: "Spec agent: split + checkpoints for <spec-id>"
    - prompt: "
-     You are the spec subagent. Read and follow the instructions in /dev/shm/dev-workspace/dot-claude/agents/spec.md EXACTLY.
+     You are the spec subagent. Read and follow the instructions in ~/.claude/agents/spec.md EXACTLY.
      Spec id: <spec-id>
      Monolith: <spec_path>
      Monolith lines: <MONOLITH_LINES>
@@ -332,7 +332,7 @@ Only proceed to Step 6 when a STRONG signal fires.
      2. AGENT SELECTION: Are the selected agents consistent with the spec's defined
         pipeline? Flag any agent that was included but isn't in the spec's pipeline,
         or any pipeline agent that was excluded.
-     3. COVERAGE: If `/root/.claude/scripts/spec-verify/spec-verify.py` exists, run `source ~/.claude/venv/bin/activate && python3 /root/.claude/scripts/spec-verify/spec-verify.py --monolith <spec_path> --views-dir docs/dev/specs/<spec-id>/views/`. If the script is absent, skip and note "spec-verify.py not found — manual coverage check required".
+     3. COVERAGE: Locate the verifier portably under the harness home — `VERIFIER="$(bash ~/.claude/hooks/lib/claude_home.sh optional scripts/spec-verify/spec-verify.py 2>/dev/null || true)"`. If `$VERIFIER` is non-empty and the file exists, run `source ~/.claude/venv/bin/activate && python3 "$VERIFIER" --monolith <spec_path> --views-dir docs/dev/specs/<spec-id>/views/`. If the verifier is absent, SKIP coverage and note "spec-verify.py not found — manual coverage check required" — do NOT block (baseline behavior; reverted from the WS1 fail-closed flip, which changed a rule beyond pure path-cleanup). The path is resolved portably; only the absent-verifier decision is the baseline skip.
         Report the result.
      4. CONTENT RELEVANCE: Spot-check 3 random content blocks in each view.
         Is the content relevant to that agent's role?
@@ -380,7 +380,7 @@ Only proceed to Step 6 when a STRONG signal fires.
    Use Agent tool with:
    - description: "Spec agent re-split (round <N>) addressing QA feedback for <spec-id>"
    - prompt: "
-     You are the spec subagent. Read and follow the instructions in /dev/shm/dev-workspace/dot-claude/agents/spec.md EXACTLY.
+     You are the spec subagent. Read and follow the instructions in ~/.claude/agents/spec.md EXACTLY.
      Spec id: <spec-id>
      Monolith: <spec_path>
      Monolith lines: <MONOLITH_LINES>
@@ -424,7 +424,7 @@ Only proceed to Step 6 when a STRONG signal fires.
 5. **guard — Finalize-time consumer-path assertion (MANDATORY, blocks on failure)**: After the split marker is written, run the SAME resolver that every `/dev*` consumer uses against the just-written monolith, and assert it resolves to a PRESENT-AND-VALID de-prefixed split at the EXACT path `/dev` will read. This catches a producer that accidentally wrote a prefixed split dir, a manifest whose `monolith_path` does not point back at this monolith, or a missing/stale marker — at creation time, not at `/dev` time:
 
    ```bash
-   RESOLVED_JSON=$(/root/.claude/scripts/resolve-spec-artifacts.py \
+   RESOLVED_JSON=$(~/.claude/scripts/resolve-spec-artifacts.py \
        --spec-path "$spec_path" --project-dir "$CLAUDE_PROJECT_DIR") || {
      echo "FINALIZE BLOCKED: resolver reports the split is present-but-invalid / mismatched for $spec_path." >&2
      echo "The split /dev would consume does not validate. Fix the split before finalizing." >&2
@@ -448,10 +448,10 @@ Only proceed to Step 6 when a STRONG signal fires.
 6. **Centralization lint (advisory — surfaces inline spec-id re-derivation regressions)**: run `scripts/lint-spec-id-centralization.py` over the `/dev*`/`/spec` command files that consume the resolver. This is NON-BLOCKING here (a WARNING only) — finalize must not hard-fail on an unrelated command-file edit. The authoritative hard gate for this lint belongs at the `.claude`-repo commit boundary (a pre-commit check on staged `commands/*.md` / `scripts/*.sh`), the only place command-file edits actually land; this advisory is a safety-net that makes a regression visible at every finalize.
 
    ```bash
-   /root/.claude/scripts/lint-spec-id-centralization.py --paths \
-       /root/.claude/commands/dev.md /root/.claude/commands/dev-command.md \
-       /root/.claude/commands/dev-overnight.md /root/.claude/commands/close.md \
-       /root/.claude/commands/spec.md \
+   ~/.claude/scripts/lint-spec-id-centralization.py --paths \
+       ~/.claude/commands/dev.md ~/.claude/commands/dev-command.md \
+       ~/.claude/commands/dev-overnight.md ~/.claude/commands/close.md \
+       ~/.claude/commands/spec.md \
      || echo "WARNING: centralization lint flagged inline spec-id derivation in a consumer command file — a /dev*/spec command re-derives the spec-id in prose instead of calling resolve-spec-artifacts.py. Fix before the next commit that touches those files." >&2
    ```
 
@@ -513,7 +513,7 @@ Usage:
   and `.spec-binding.json` early-capture artifacts may be created by `/spec` itself at
   design/evidence capture time (the Design & Evidence Capture Routine). Legacy specs lacking an output folder remain
   valid — `/dev*` falls back gracefully.
-- **Todo script**: `/root/.claude/scripts/todo/spec.py` (symlinked to `/dev/shm/dev-workspace/dot-claude/scripts/todo/spec.py` — same inode) exposes the 7-step Spec Creation Mode todo list with `blocking_count = 3` (Steps 1-3 must complete before Claude can stop; Steps 4-7 are session-duration).
+- **Todo script**: `~/.claude/scripts/todo/spec.py` (realpath may differ by install/symlink layout) exposes the 7-step Spec Creation Mode todo list with `blocking_count = 3` (Steps 1-3 must complete before Claude can stop; Steps 4-7 are session-duration).
 - **Workflow update**: Step 7 emits a temp update for the next phase using
   `/spec-update --temp`. It must be compact, reference existing artifacts by path,
   and suggest the exact next command (`/dev` auto-detect or `/dev --spec

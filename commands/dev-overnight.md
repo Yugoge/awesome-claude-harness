@@ -29,7 +29,7 @@ Every Agent dispatch from this orchestrator shares the following invariant prelu
 
 2. **CHECKPOINT MARKING (cp-state checklist contract, only when `SPEC_ID` is non-empty AND that role's cp-state file exists)**:
    `CHECKPOINT MARKING: see agents/<role>.md §Checkpoint Marking Contract. Mark every cp-NN done or waived before Stop (discipline expectation tracked via spec-check.py; no hook blocks exit on pending checkpoints today).`
-   The full SECOND ACTION semantics — read `cp-state-<role>.json`, mark checkpoints with `/root/.claude/scripts/spec-check.py mark`, waive with the `waive` subcommand, leave zero pending before Stop — are documented once in the Step 1 cp-state handoff section above and inside `agents/<role>.md` itself. The pointer keeps each dispatch one line wide while preserving the contract.
+   The full SECOND ACTION semantics — read `cp-state-<role>.json`, mark checkpoints with `~/.claude/scripts/spec-check.py mark`, waive with the `waive` subcommand, leave zero pending before Stop — are documented once in the Step 1 cp-state handoff section above and inside `agents/<role>.md` itself. The pointer keeps each dispatch one line wide while preserving the contract.
 
 3. **Role declaration**:
    `You are the <role> subagent. Follow agents/<role>.md instructions precisely.` (For BA the file is `.claude/agents/ba.md`. For PM with explicit mode the line becomes `You are the PM subagent in <PM_MODE> mode. Follow agents/pm.md <Mode> Protocol.`)
@@ -121,7 +121,7 @@ Step 1: Read state file + enter worktree (first run only)
 5. **Skip unfixable issues**. If a fix fails verification 3 times, mark it as skipped and move on.
 6. **Track everything**. Use TodoWrite for per-cycle progress. Do NOT write to `.claude/overnight-state-<sid>.json` from the main agent — that file is owned by the orchestrator hooks. See `docs/dev/state-file-write-policy.md` for the full per-field write matrix.
 7. **The Stop hook prevents premature exit**. The time-lock hook will block conversation termination until end-time. Do not try to circumvent it.
-8. **Git checkpoint vs HEAD commit are distinct semantic layers**. The existing posttool-git-checkpoint.sh hook writes mid-cycle Write/Edit snapshots to `refs/checkpoints/*` only — these are NOT merge-ready commits and they do NOT advance any branch HEAD. They exist for crash recovery and audit, not for shipping. End-of-cycle Step 19 lands a real HEAD commit on the worktree branch by calling `commit.sh "chore(overnight): end-of-cycle commit for <branch>"` directly via Bash (single positional arg, CC-valid `chore` type, `(overnight)` scope identifies automated context) — that HEAD commit IS merge-ready and is the only artifact `/merge` consumes. See `/root/.claude/CLAUDE.md` (Auto-Commit Mechanism section) for the full checkpoint-ref vs HEAD-commit contract. Do NOT conflate "checkpoint after fix" (refs/checkpoints/*, recovery-only) with "ship upstream" (HEAD commit + `/merge`, distribution).
+8. **Git checkpoint vs HEAD commit are distinct semantic layers**. The existing posttool-git-checkpoint.sh hook writes mid-cycle Write/Edit snapshots to `refs/checkpoints/*` only — these are NOT merge-ready commits and they do NOT advance any branch HEAD. They exist for crash recovery and audit, not for shipping. End-of-cycle Step 19 lands a real HEAD commit on the worktree branch by calling `commit.sh "chore(overnight): end-of-cycle commit for <branch>"` directly via Bash (single positional arg, CC-valid `chore` type, `(overnight)` scope identifies automated context) — that HEAD commit IS merge-ready and is the only artifact `/merge` consumes. See `~/.claude/CLAUDE.md` (Auto-Commit Mechanism section) for the full checkpoint-ref vs HEAD-commit contract. Do NOT conflate "checkpoint after fix" (refs/checkpoints/*, recovery-only) with "ship upstream" (HEAD commit + `/merge`, distribution).
 9. **Cycle-end deploy is autonomous-mode only** (canonical overnight Hard Rule 9). When `spec_mode == "autonomous"`, every cycle MUST end with QA rebuilding and redeploying via `docker compose build` and `docker compose up -d` for the project's own services (identified from `docker-compose.yml`); deploy verification is REQUIRED in this mode. When `spec_mode == "user-provided"`, deploy is NOT mandatory at the engine level — the user spec dictates whether to deploy (the orchestrator view's Pipeline Workflow may instruct deploy, may instruct skip, or may defer to a user gate). Regular `/dev` (single-pass, NOT `/dev-overnight`) MUST NOT auto-deploy regardless of spec_mode — `/dev` is a single-feature implementation pass, not an overnight cycle. Do NOT touch unrelated services or infrastructure.
 10. **Deduplicate**. Check the state file's cycle_log before starting a fix -- do not re-fix issues already addressed.
 11. **One issue per subagent, no exceptions**. Each BA subagent analyzes exactly ONE pipeline issue. Each Dev subagent implements exactly ONE pipeline fix. Each QA subagent verifies exactly ONE pipeline fix. The orchestrator launches N parallel subagents for N pipelines -- but each individual subagent handles only its own single pipeline. NEVER bundle multiple pipeline issues into one subagent prompt.
@@ -250,16 +250,16 @@ Create sentinel files for every agent type this orchestrator can launch, includi
 
 **Sentinel-write idiom (M10 harness-fixes 20260428)**: the worktree-guard's `_extract_bash_write_paths` static scan treats `$VAR` and `${VAR}` tokens as opaque (it intentionally cannot tell legitimate from adversarial `$VAR` writes — see arch-3). The orchestrator MUST therefore use one of the two acceptable forms below. Forms that interpose a same-line-assigned shell variable into the redirect target (e.g. `REG=$CLAUDE_PROJECT_DIR/...; > "$REG/$agent.json"`) will be blocked by the worktree boundary even though the harness-state exemption is active, because the static scan cannot resolve `$REG` and the realpath check fails.
 
-**Acceptable form A — Write tool with literal absolute `file_path`** (one tool call per sentinel; the Write tool does NOT shell-expand env vars, so use a literal path):
+**Acceptable form A — Write tool with an orchestrator-inlined absolute `file_path`** (one tool call per sentinel; the Write tool does NOT shell-expand env vars or `~`, so the orchestrator must compute the concrete resolved project-dir absolute path and inline it — substitute `<RESOLVED_PROJECT_DIR>` with the literal value of `$CLAUDE_PROJECT_DIR` before invoking Write):
 
 ```text
-Write(file_path="/root/.claude/dev-registry/<session_id>/architect.json", content='{"agent_type": "architect", "session_id": "<session_id>"}')
-Write(file_path="/root/.claude/dev-registry/<session_id>/ba.json", content='{"agent_type": "ba", "session_id": "<session_id>"}')
-Write(file_path="/root/.claude/dev-registry/<session_id>/graphify.json", content='{"agent_type": "graphify", "session_id": "<session_id>"}')
+Write(file_path="<RESOLVED_PROJECT_DIR>/.claude/dev-registry/<session_id>/architect.json", content='{"agent_type": "architect", "session_id": "<session_id>"}')
+Write(file_path="<RESOLVED_PROJECT_DIR>/.claude/dev-registry/<session_id>/ba.json", content='{"agent_type": "ba", "session_id": "<session_id>"}')
+Write(file_path="<RESOLVED_PROJECT_DIR>/.claude/dev-registry/<session_id>/graphify.json", content='{"agent_type": "graphify", "session_id": "<session_id>"}')
 ... (one Write per agent type)
 ```
 
-**NOTE (C6, redev-tier123)**: Write tool does not shell-expand env vars; use the literal `/root/...` path. Form B is allowed to use `$CLAUDE_PROJECT_DIR` because Bash redirect targets ARE expanded by the static scan in `lib/bash_write_targets.py:_resolve_path`.
+**NOTE (C6, redev-tier123)**: the Write tool does not shell-expand env vars or `~`, so the orchestrator must inline the concrete resolved project-dir absolute path (`<RESOLVED_PROJECT_DIR>` = the literal value of `$CLAUDE_PROJECT_DIR`) — NEVER a `$VAR`/`~` token inside the Write operand and NEVER an author-absolute literal. Form B avoids the inlining by using `$CLAUDE_PROJECT_DIR` directly, because Bash redirect targets ARE expanded by the static scan in `lib/bash_write_targets.py:_resolve_path`.
 
 **Acceptable form B — Bash redirect with `$CLAUDE_PROJECT_DIR`-prefixed target** (the static scan resolves `$CLAUDE_PROJECT_DIR` via `lib/bash_write_targets.py:_resolve_path`, lines 156-160). Inline the session_id literally; do NOT introduce intermediate variables in the redirect target:
 
@@ -283,7 +283,7 @@ specs to monolith mode):
 
 ```bash
 if [ -n "$user_spec_path" ]; then
-  RESOLVED_JSON=$(/root/.claude/scripts/resolve-spec-artifacts.py \
+  RESOLVED_JSON=$(~/.claude/scripts/resolve-spec-artifacts.py \
       --spec-path "$user_spec_path" --project-dir "$CLAUDE_PROJECT_DIR") || {
     echo "spec-artifact resolution FAILED (path mismatch / present-but-invalid split)." >&2
     exit 1; }
@@ -304,7 +304,7 @@ agent's `SECOND ACTION` for this launch. When `SPEC_ID` is non-empty, every Agen
 cp-state file MUST include a `SECOND ACTION` line immediately after the dev-registry `FIRST ACTION`:
 
 ```text
-SECOND ACTION: Read $CLAUDE_PROJECT_DIR/$CP_DIR/cp-state-<agent>.json to load your mandatory checklist before doing substantive work. Mark each completed checkpoint with /root/.claude/scripts/spec-check.py mark --spec-id <SPEC_ID> --agent <agent> --agent-id $CLAUDE_AGENT_ID --cp-id <cp-NN>. Waive only with /root/.claude/scripts/spec-check.py waive --spec-id <SPEC_ID> --agent <agent> --agent-id $CLAUDE_AGENT_ID --cp-id <cp-NN> (auto-text records actor + ISO timestamp). You MUST leave zero pending checkpoints before Stop (a discipline expectation tracked via spec-check.py — no hook blocks exit on pending checkpoints today). If `$CLAUDE_AGENT_ID` is unavailable, use the `agent_id` value written into the cp-state file by the read.
+SECOND ACTION: Read $CLAUDE_PROJECT_DIR/$CP_DIR/cp-state-<agent>.json to load your mandatory checklist before doing substantive work. Mark each completed checkpoint with ~/.claude/scripts/spec-check.py mark --spec-id <SPEC_ID> --agent <agent> --agent-id $CLAUDE_AGENT_ID --cp-id <cp-NN>. Waive only with ~/.claude/scripts/spec-check.py waive --spec-id <SPEC_ID> --agent <agent> --agent-id $CLAUDE_AGENT_ID --cp-id <cp-NN> (auto-text records actor + ISO timestamp). You MUST leave zero pending checkpoints before Stop (a discipline expectation tracked via spec-check.py — no hook blocks exit on pending checkpoints today). If `$CLAUDE_AGENT_ID` is unavailable, use the `agent_id` value written into the cp-state file by the read.
 ```
 
 This gives overnight specialists the same checklist semantics as BA/Dev/QA:
@@ -791,7 +791,7 @@ Immediately after PM Triage completes (Step 4) and before pipeline creation (Ste
 - Stable symlink for hooks: `docs/dev/overnight/<session_id>/cycle-current.json` → `cycle-<N>/cycle-contract.json`
 - Colocated mirror: `.claude/overnight-contract-<session_id>-cycle<N>.json`
 
-**Schema**: `/root/.claude/schemas/cycle-contract.v1.json` (Draft 7). The full shape is documented there; the orchestrator MUST populate at minimum:
+**Schema**: `~/.claude/schemas/cycle-contract.v1.json` (Draft 7). The full shape is documented there; the orchestrator MUST populate at minimum:
 
 - `schema_version: 1`
 - `spec_id` (e.g. the spec id when `spec_mode == "user-provided"`, or `autonomous-<sid>` otherwise)
@@ -1879,11 +1879,11 @@ Per-agent responsibilities are owned by `agents/<name>.md` (pm, product-owner, a
 
 When `workflow_type="ui_development"` is set in cycle-contract.json, the cycle skips autonomous discovery and runs a focused UI build pipeline:
 
-1. **ui-specialist DESIGN_MODE**: read the ui-spec markdown, gather design inputs (handoff JSON, screenshots, design system tokens), and emit `design-handoff.json` per `/root/docs/templates/design-handoff.example.json`. Bound by Phase 0 DESIGN_MODE budgets in `agents/ui-specialist.md` (max_pages_visited=3, max_screenshots=10, max_tool_calls=20–30).
+1. **ui-specialist DESIGN_MODE**: read the ui-spec markdown, gather design inputs (handoff JSON, screenshots, design system tokens), and emit `design-handoff.json` per `~/.claude/docs/templates/design-handoff.example.json`. Bound by Phase 0 DESIGN_MODE budgets in `agents/ui-specialist.md` (max_pages_visited=3, max_screenshots=10, max_tool_calls=20–30).
 2. **BA**: convert `design-handoff.json` into an implementable component spec — `context.json` with concrete `files_to_modify` referencing real component paths, plus role-table-grounded acceptance criteria per CLAUDE.md role tokens.
 3. **dev**: implement the component(s) listed in BA's `files_to_modify`. Minimum-Diff Rule applies — no scope expansion beyond what BA's spec authorizes.
-4. **qa UI_MODE**: dual-viewport screenshots (desktop 1440x900 + mobile 390x844), Playwright trace, `evidence_map` keyed by AC-NN, and the mandatory `ui_evidence` schema per `agents/qa.md` Section 5c.1. PM-Retro will run `/root/bin/ui-evidence-audit.py` against the qa-report.
-5. **PM Retro UI_AUDIT**: false-pass audit — execute `/root/bin/ui-evidence-audit.py` against the qa-report; any FP-1..FP-13 failure or missing required field flags the cycle as a false-pass risk and feeds back into the spec for the next cycle.
+4. **qa UI_MODE**: dual-viewport screenshots (desktop 1440x900 + mobile 390x844), Playwright trace, `evidence_map` keyed by AC-NN, and the mandatory `ui_evidence` schema per `agents/qa.md` Section 5c.1. PM-Retro will run the ui-evidence audit (resolved from `$UI_EVIDENCE_AUDIT_BIN`) against the qa-report.
+5. **PM Retro UI_AUDIT**: false-pass audit — execute the ui-evidence audit (resolved from `$UI_EVIDENCE_AUDIT_BIN`) against the qa-report; any FP-1..FP-13 failure or missing required field flags the cycle as a false-pass risk and feeds back into the spec for the next cycle.
 
 In UI Development workflow, autonomous specialist discovery (architect / product-owner / user) is skipped — only `ui-specialist` runs, and only in DESIGN_MODE. The BA→dev→qa pipeline is otherwise unchanged from the standard cycle.
 
