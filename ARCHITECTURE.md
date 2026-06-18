@@ -189,7 +189,7 @@ flowchart TD
     C -->|reset --hard| G4{matching /allow grant?}
 
     G1 & G2 & G3 & G4 -->|yes| OK[(allow, then unlink grant)]
-    G1 & G2 & G3 & G4 -->|no / forged / inline-env| NO[BLOCKED exit 2]
+    G1 & G2 & G3 & G4 -->|no grant/env, no break-glass / forged / inline-env| NO[BLOCKED exit 2]
 
     classDef block fill:#ffebee,stroke:#c62828
     classDef ok fill:#e3f2fd,stroke:#1565c0
