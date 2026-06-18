@@ -112,15 +112,12 @@ NOT pass `$CODEX_OUT` as the tee argument. Steps 3 and 4 branch directly.
 the codex-isolation wrapper resolved from the `$CODEX_ISO_BIN` env var (a fail-closed wrapper that
 forces an isolated `CODEX_HOME` so codex rollouts never land in a daemon-watched default `CODEX_HOME`
 that the Happy daemon would otherwise claim and surface as "gpt" sessions). Resolve and validate it
-FIRST — fail closed if it is absent (the wrapper is REQUIRED for `/codex`; never fall back to bare
-`codex`, which loses the isolation guarantee):
+FIRST (the wrapper is the isolation entry point for `/codex`; do not fall back to bare
+`codex`, which loses the isolation guarantee — if the wrapper is absent the invocation simply
+fails at the call site, the baseline behavior):
 
 ```bash
 CODEX_ISO_BIN="${CODEX_ISO_BIN:-$HOME/bin/codex-iso}"
-if [ ! -x "$CODEX_ISO_BIN" ]; then
-  echo "codex-iso wrapper not found at \$CODEX_ISO_BIN ($CODEX_ISO_BIN). Set CODEX_ISO_BIN to the isolation wrapper; refusing to run bare codex (host-policy / isolation requirement)." >&2
-  exit 2   # fail closed: REQUIRED external helper absent
-fi
 ```
 
 ### 3. Review mode
