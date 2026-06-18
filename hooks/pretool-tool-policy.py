@@ -128,21 +128,6 @@ def _check_targets(role: str, tool_name: str, targets: list) -> None:
             sys.exit(2)
 
 
-def _is_protected_write(data: dict, tool_name: str, tool_input: dict) -> bool:
-    """True iff this call would write under policy enforcement.
-
-    A Write-family tool always qualifies; a Bash command qualifies iff it has at
-    least one extracted shell write target. Read / no-write Bash do NOT — those
-    defer to the backstop shim when the role is unresolved.
-    """
-    if tool_name in WRITE_TOOLS:
-        return True
-    if tool_name == "Bash":
-        command = tool_input.get("command") or ""
-        return bool(extract_bash_write_paths(command))
-    return False
-
-
 def main() -> None:
     # WS1: bootstrap the deny-logic FIRST, fail-closed (exit 2) on import error.
     _bootstrap_security()
