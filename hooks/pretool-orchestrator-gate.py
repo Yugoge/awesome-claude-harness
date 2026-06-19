@@ -120,15 +120,25 @@ def update_streak(state_file: Path, tool_name: str) -> int:
             write_streak_state(state_file, state)
             return bash["count"]
         else:
-            # Non-Bash whitelist: reset bash consecutive counter, never blocked
-            state["bash_consecutive"] = {"last_tool": tool_name, "count": 1}
-            write_streak_state(state_file, state)
+            # Non-Bash whitelist (incl. Agent, Read, TodoWrite, Glob, Grep,
+            # Skill, Cron*, ScheduleWakeup, AskUserQuestion): NEVER blocked, and
+            # MUST leave bash_consecutive byte-identical. bash_consecutive is a
+            # Bash-only accumulator cleared ONLY by an Agent dispatch in main()
+            # (before the /allow and /do short-circuits), never here. NB2
+            # no-clobber: perform NO state write at all — re-assigning or
+            # rebuilding bash_consecutive (even to the "same" value) could
+            # clobber last_tool and re-introduce the launder bug where a single
+            # interleaved non-Bash tool resets the consecutive-Bash streak.
+            # Whitelisted non-Bash tools also do NOT increment per_tool_counts.
             return 1
     else:
-        # Non-whitelist: increment total count for this tool; reset bash consecutive
+        # Non-whitelist: increment the per-turn total for this tool (the
+        # NON_WHITELIST_MAX_CONSECUTIVE=1 once-per-turn limit). NB2 no-clobber:
+        # leave bash_consecutive byte-identical (the unchanged value read from
+        # disk) — do NOT reset or rebuild it. Persist ONLY the per_tool_counts
+        # increment.
         counts = state["per_tool_counts"]
         counts[tool_name] = counts.get(tool_name, 0) + 1
-        state["bash_consecutive"] = {"last_tool": tool_name, "count": 1}
         write_streak_state(state_file, state)
         return counts[tool_name]
 
