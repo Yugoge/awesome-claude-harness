@@ -183,7 +183,7 @@ flowchart TD
     H3 --> H4[pretool-git-privilege-guard.py<br/>ALWAYS-ON · 4 verbs · /do: main-agent only]
 
     H4 --> C{which verb?}
-    C -->|commit| G1{env=1 + single-use commit grant<br/>nonce + unexpired?}
+    C -->|commit| G1{single-use commit grant<br/>present + unexpired?}
     C -->|push| G2{env=1 + push grant<br/>branch + expected_head + remote?}
     C -->|merge| G3{CLAUDE_MERGE_COMMAND_ACTIVE=1?}
     C -->|reset --hard| G4{matching /allow grant?}
@@ -221,12 +221,12 @@ sequenceDiagram
     participant G as git-privilege-guard (PreToolUse)
     participant Git as git subprocess
 
-    W->>FS: write grant {nonce, sid, expires_at | branch+head+remote, ppid}
-    W->>W: export CLAUDE_{COMMIT,PUSH}_COMMAND_ACTIVE=1
+    W->>FS: write grant — commit: {task_id, sid, nonce, created_at, expires_at} · push: {branch, expected_head, remote, nonce, sid, ppid, created_at}
+    W->>W: push only: export CLAUDE_PUSH_COMMAND_ACTIVE=1 (commit uses the grant file alone)
     W->>Git: run git commit/push
     Note over G: guard fires on the Bash call
     G->>FS: glob <sid>-*.json · mtime-newest tiebreak
-    G->>G: validate env + nonce + expiry (single-use); push also branch+head+remote
+    G->>G: commit: grant present + single-use + unexpired (expiry); push: env=1 + branch+head+remote + single-use (no expiry)
     alt valid
         G-->>Git: allow (exit 0)
         W->>FS: unlink grant (single-use)

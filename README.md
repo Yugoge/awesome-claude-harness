@@ -153,7 +153,7 @@ flowchart TD
     H3 --> H4[git-privilege-guard<br/>ALWAYS-ON · the verb that actually blocks]
 
     H4 --> C{which verb?}
-    C -->|commit| G1{grant file: nonce + ISO expiry,<br/>single-use unlink?}
+    C -->|commit| G1{grant file present + unexpired (ISO expiry),<br/>single-use unlink?}
     C -->|push| G2{grant file: branch + expected-head<br/>+ remote, single-use?}
     C -->|merge| G3{CLAUDE_MERGE_COMMAND_ACTIVE env<br/>set by /merge?}
     C -->|reset --hard| G4[blocked by default in agent flow]

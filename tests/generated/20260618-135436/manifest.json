@@ -1,0 +1,140 @@
+{
+  "schema_version": "1.1",
+  "task_id": "20260618-135436",
+  "generated_at": "2026-06-18T13:54:36Z",
+  "active_tests": [
+    {
+      "task_id": "20260618-135436",
+      "ac_id": "AC2",
+      "ac_uid": "b1ad40d777cf4058",
+      "type": "data",
+      "file": "tests/generated/20260618-135436/test_AC2_b1ad40d777cf4058.py",
+      "status": "active",
+      "hook_check": {
+        "kind": "grep_absence_and_presence",
+        "files": [
+          "README.md",
+          "ARCHITECTURE.md"
+        ],
+        "must_contain_any": [
+          "fail-safe ALLOW",
+          "fail-safe-allow",
+          "dev role gets",
+          "default `dev` role"
+        ],
+        "must_not_contain_unqualified": [
+          "never silently allows"
+        ]
+      }
+    },
+    {
+      "task_id": "20260618-135436",
+      "ac_id": "AC4",
+      "ac_uid": "22133f8d02366597",
+      "type": "data",
+      "file": "tests/generated/20260618-135436/test_AC4_22133f8d02366597.py",
+      "status": "active",
+      "hook_check": {
+        "kind": "grep_then_cross_check",
+        "files": [
+          "README.md",
+          "ARCHITECTURE.md"
+        ],
+        "case_insensitive": true,
+        "pattern": "never|always|cannot|can'?t|fail.?clos|fail.?open|guarantee|silently|physically|mechanically|structurally impossible|impossible|refuse(s|d)?|outright|only .*(agent|writer|path|channel|bypass)|no .*bypass|not bypassing|/do|bypass|set-equality|sha256|ignore .*/do",
+        "widened_verb_pattern": "blocks?|blocked|prevent|enforce|denies|denied|stops?|hard-stops?|required|no grant|->.*BLOCKED| BLOCKED",
+        "manual_line_inventory_required": true,
+        "closure_proof_artifact": "docs/dev/ticket-20260618-135436.md#full-token-inventory-closure-proof",
+        "rule": "Grep alone CANNOT enumerate the class (iteration-1's literal grep missed A16/A18/A19/A20: 'NO /do bypass', 'always blocked', 'not bypassing', 'structurally impossible'; the objection-driven approach then missed A22-A29 until a WHOLE-FILE inventory was run; and the original token set itself had a BLIND SPOT for block/prevent/required/BLOCKED-phrased claims, surfaced by codex as A30 — so QA MUST run BOTH the pattern AND the widened_verb_pattern). The ticket's 'Full Token Inventory (closure proof)' section (incl. its 'Widened-grep inventory' subsection) now maps EVERY hit line of BOTH patterns in README.md AND ARCHITECTURE.md to either an OVERCLAIM row-id (corrected in-place) or an ACCURATE/NON-CLAIM disposition. After both greps, EVERY remaining hit must appear in the Full Token Inventory with a disposition; a hit absent from that list, or one whose OVERCLAIM correction did not land, fails this AC. QA re-greps against the Full Token Inventory, not the objection list."
+      }
+    },
+    {
+      "task_id": "20260618-135436",
+      "ac_id": "AC5",
+      "ac_uid": "537cf49fef78b002",
+      "type": "data",
+      "file": "tests/generated/20260618-135436/test_AC5_537cf49fef78b002.py",
+      "status": "active",
+      "hook_check": {
+        "kind": "git_diff_path_allowlist",
+        "allowed_paths": [
+          "README.md",
+          "ARCHITECTURE.md",
+          "docs/dev/"
+        ],
+        "forbidden_paths": [
+          "hooks/",
+          "policies/",
+          "scripts/",
+          "settings.json"
+        ]
+      }
+    }
+  ],
+  "manual_review_tests": [
+    {
+      "task_id": "20260618-135436",
+      "ac_id": "AC1",
+      "ac_uid": "eb1fa778c6ab4437",
+      "type": "data",
+      "status": "manual_review_not_generated",
+      "reason": "check.kind == manual_review (Audit Table review, min_rows 30) — not mechanically checkable; no executable skeleton generated",
+      "hook_check": {
+        "kind": "manual_review",
+        "artifact": "docs/dev/ticket-20260618-135436.md",
+        "section": "Audit Table",
+        "min_rows": 30
+      }
+    },
+    {
+      "task_id": "20260618-135436",
+      "ac_id": "AC3",
+      "ac_uid": "2402eb8d2c39c855",
+      "type": "data",
+      "status": "manual_review_not_generated",
+      "reason": "check.kind == manual_review (per-row replacement-wording / unchanged-ACCURATE-row review) — not mechanically checkable; no executable skeleton generated",
+      "hook_check": {
+        "kind": "manual_review",
+        "files": [
+          "README.md",
+          "ARCHITECTURE.md"
+        ],
+        "overclaim_rows": [
+          "A1",
+          "A2",
+          "A3",
+          "A4",
+          "A5",
+          "A6",
+          "A7",
+          "A8",
+          "A9",
+          "A10",
+          "A16",
+          "A17",
+          "A18",
+          "A19",
+          "A20",
+          "A21",
+          "A22",
+          "A23",
+          "A24",
+          "A25",
+          "A26",
+          "A27",
+          "A28",
+          "A29",
+          "A30"
+        ],
+        "accurate_rows_unchanged": [
+          "A11",
+          "A12",
+          "A13",
+          "A14",
+          "A15"
+        ]
+      }
+    }
+  ],
+  "archived_tests": []
+}
