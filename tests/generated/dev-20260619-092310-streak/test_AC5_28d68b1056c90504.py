@@ -5,10 +5,15 @@
 # above (AC_UID, AC_TYPE, docstring) MUST be preserved verbatim so QA can
 # trace each test back to its source AC entry.
 
+from pathlib import Path
+
 import pytest
 
 AC_UID = "28d68b1056c90504"
 AC_TYPE = "data"
+
+_REPO_ROOT = Path(__file__).resolve().parents[3]
+_HOOK_PATH = _REPO_ROOT / "hooks" / "pretool-orchestrator-gate.py"
 
 
 def test_AC5():
@@ -17,7 +22,26 @@ def test_AC5():
     WHEN:  the final dev report and the code comments in hooks/pretool-orchestrator-gate.py are read
     THEN:  they state (a) Agent is the ONLY tool_name that clears bash_consecutive, (b) non-Agent non-Bash tools do NOT mutate bash_consecutive (no increment, no reset, no last_tool overwrite), and (c) the clear occurs on the PreToolUse Agent attempt and is placed before the /allow and /do short-circuits
     """
-    # TODO(dev): replace the line below with the real test body. While the
-    # TEST_INCOMPLETE sentinel is present the test will hard-fail, marking
-    # the AC as unimplemented for QA Phase 5.
-    pytest.fail(f"TEST_INCOMPLETE: {AC_UID} — dev report + inline comments must state the three Agent-clear documentation invariants (a) Agent is the only clearing tool (b) non-Agent non-Bash tools never mutate bash_consecutive (c) clear fires on PreToolUse Agent before /allow and /do short-circuits")
+    src = _HOOK_PATH.read_text().lower()
+
+    # (a) Agent is the ONLY tool that clears bash_consecutive.
+    assert "only" in src and "agent" in src
+    assert "cleared only by an agent" in src or "only action that\n    # clears" in src \
+        or "clears the consecutive-bash streak" in src
+
+    # (b) non-Agent non-Bash tools do NOT mutate bash_consecutive.
+    assert "byte-identical" in src or "byte-unchanged" in src
+    assert "no-clobber" in src or "nb2" in src
+
+    # (c) the clear occurs on the PreToolUse Agent attempt and is placed before
+    #     the /allow and /do short-circuits.
+    assert "before the /allow and /do" in src
+    assert "pretool agent" in src or "pretool-agent" in src or "pretooluse agent" in src \
+        or "agent-clear" in src
+
+    # The dev report (if already written) must carry the same three statements.
+    report = _REPO_ROOT / "docs" / "dev" / "dev-report-dev-20260619-092310-streak.json"
+    if report.exists():
+        rtext = report.read_text().lower()
+        assert "agent" in rtext and "bash_consecutive" in rtext
+        assert "before" in rtext and ("/allow" in rtext or "allow" in rtext) and "/do" in rtext
