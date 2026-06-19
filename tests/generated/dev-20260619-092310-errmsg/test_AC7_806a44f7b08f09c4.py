@@ -16,10 +16,25 @@
 # byte-unchanged (git diff --quiet). Do NOT drive the live harness
 # (no /dev, /close, /commit, no recursive Agent dispatch).
 
+import io
+import re
+import subprocess
+from contextlib import redirect_stderr
+from importlib.machinery import SourceFileLoader
+from pathlib import Path
+
 import pytest
 
 AC_UID = "806a44f7b08f09c4"
 AC_TYPE = "hook"
+
+_REPO_ROOT = Path(__file__).resolve().parents[3]
+_HOOK_PATH = _REPO_ROOT / "hooks" / "pretool-subagent-enforce.py"
+_RUNTIME_PATH = _REPO_ROOT / "hooks" / "lib" / "contract_runtime.py"
+
+
+def _load_hook():
+    return SourceFileLoader("pretool_subagent_enforce_ac7", str(_HOOK_PATH)).load_module()
 
 
 def test_AC7():
