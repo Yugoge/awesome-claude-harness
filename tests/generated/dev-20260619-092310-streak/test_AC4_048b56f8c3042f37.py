@@ -5,19 +5,129 @@
 # above (AC_UID, AC_TYPE, docstring) MUST be preserved verbatim so QA can
 # trace each test back to its source AC entry.
 
+import importlib.util
+import io
+import json
+import uuid
+from pathlib import Path
+
 import pytest
 
 AC_UID = "048b56f8c3042f37"
 AC_TYPE = "hook"
 
+_HOOK_PATH = (
+    Path(__file__).resolve().parents[3] / "hooks" / "pretool-orchestrator-gate.py"
+)
 
-def test_AC4():
+_PRESEED = {
+    "schema_version": 2,
+    "per_tool_counts": {"Edit": 1},
+    "bash_consecutive": {"last_tool": "Bash", "count": 3},
+}
+
+
+def _load_module():
+    spec = importlib.util.spec_from_file_location(
+        f"orchestrator_gate_{uuid.uuid4().hex}", _HOOK_PATH
+    )
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def _drive_main(mod, monkeypatch, payload):
+    monkeypatch.setattr("sys.stdin", io.StringIO(json.dumps(payload)))
+    try:
+        mod.main()
+        return 0
+    except SystemExit as exc:
+        code = exc.code
+        if code is None:
+            return 0
+        return int(code)
+
+
+def _seed(state_file):
+    state_file.write_text(json.dumps(_PRESEED))
+
+
+def test_AC4(tmp_path, monkeypatch):
     """
     GIVEN: a pre-seeded temp state {schema_version:2, per_tool_counts:{'Edit':1}, bash_consecutive:{'last_tool':'Bash','count':3}} resolved to main()'s path
     WHEN:  main() processes the bypass branches in their decided order (Agent-clear placed AFTER subagent check + sid, BEFORE the /allow and /do short-circuits)
     THEN:  the branch-order invariants hold, proving the Agent-clear fires even under /do and /allow while non-Agent tools under those bypasses leave the state untouched, and a subagent never mutates the main streak
     """
-    # TODO(dev): replace the line below with the real test body. While the
-    # TEST_INCOMPLETE sentinel is present the test will hard-fail, marking
-    # the AC as unimplemented for QA Phase 5.
-    pytest.fail(f"TEST_INCOMPLETE: {AC_UID} — branch-order invariants: Agent-clear fires under /do and /allow (clear before short-circuits); non-Agent tools under bypass leave state byte-identical (NB2 no-clobber); subagent Agent call never touches main streak; Write-overwrite skip + schema_version 2 regression floor")
+    mod = _load_module()
+    state_file = tmp_path / "ac4.json"
+    monkeypatch.setattr(mod, "get_streak_state_file", lambda _sid: state_file)
+    sid = f"ac4-{uuid.uuid4().hex}"
+
+    cleared = {"schema_version": 2, "per_tool_counts": {"Edit": 1},
+               "bash_consecutive": {"last_tool": "Agent", "count": 0}}
+
+    # --- Invariant 1: Agent + /do consent -> clear fires BEFORE /do ---
+    _seed(state_file)
+    monkeypatch.setattr(mod, "has_consent", lambda _sid: True)
+    monkeypatch.setattr(mod, "read_grant", lambda _t, _s: False)
+    assert _drive_main(mod, monkeypatch, {"tool_name": "Agent", "session_id": sid}) == 0
+    assert mod.read_streak_state(state_file) == cleared
+
+    # --- Invariant 2: Agent + /allow -> clear fires BEFORE /allow ---
+    _seed(state_file)
+    monkeypatch.setattr(mod, "has_consent", lambda _sid: False)
+    monkeypatch.setattr(mod, "read_grant", lambda _t, _s: True)
+    assert _drive_main(mod, monkeypatch, {"tool_name": "Agent", "session_id": sid}) == 0
+    assert mod.read_streak_state(state_file) == cleared
+
+    # --- Invariant 3: non-Agent + /do -> exit via /do WITHOUT update_streak;
+    #                  on-disk state byte-identical (NB2 no-clobber) ---
+    _seed(state_file)
+    before = state_file.read_text()
+    monkeypatch.setattr(mod, "has_consent", lambda _sid: True)
+    monkeypatch.setattr(mod, "read_grant", lambda _t, _s: False)
+    assert _drive_main(mod, monkeypatch, {"tool_name": "Bash", "session_id": sid}) == 0
+    assert state_file.read_text() == before
+
+    # --- Invariant 4: non-Agent + /allow -> exit via /allow WITHOUT
+    #                  update_streak; on-disk state byte-identical ---
+    _seed(state_file)
+    before = state_file.read_text()
+    monkeypatch.setattr(mod, "has_consent", lambda _sid: False)
+    monkeypatch.setattr(mod, "read_grant", lambda _t, _s: True)
+    assert _drive_main(mod, monkeypatch, {"tool_name": "Edit", "session_id": sid}) == 0
+    assert state_file.read_text() == before
+
+    # --- Invariant 5: Agent WITH agent_id (subagent) -> exit at subagent
+    #                  bypass BEFORE the Agent-clear; state byte-identical ---
+    _seed(state_file)
+    before = state_file.read_text()
+    monkeypatch.setattr(mod, "has_consent", lambda _sid: False)
+    monkeypatch.setattr(mod, "read_grant", lambda _t, _s: False)
+    assert _drive_main(
+        mod, monkeypatch,
+        {"tool_name": "Agent", "session_id": sid, "agent_id": "sub-123"},
+    ) == 0
+    assert state_file.read_text() == before
+
+    # --- Preserved regression floor: Write-overwrite skip does NOT increment
+    #     per_tool_counts['Write'] ---
+    _seed(state_file)
+    existing = tmp_path / "existing-file.txt"
+    existing.write_text("x")
+    monkeypatch.setattr(mod, "has_consent", lambda _sid: False)
+    monkeypatch.setattr(mod, "read_grant", lambda _t, _s: False)
+    assert _drive_main(
+        mod, monkeypatch,
+        {"tool_name": "Write", "session_id": sid,
+         "tool_input": {"file_path": str(existing)}},
+    ) == 0
+    parsed = mod.read_streak_state(state_file)
+    assert "Write" not in parsed["per_tool_counts"]
+
+    # --- Preserved regression floor: schema_version 2 intact after Agent-clear ---
+    state_file.write_text(json.dumps(cleared))
+    reparsed = mod._parse_streak_state(json.loads(state_file.read_text()))
+    assert reparsed["schema_version"] == 2
+    assert reparsed["bash_consecutive"] == {"last_tool": "Agent", "count": 0}
+    assert reparsed["per_tool_counts"] == {"Edit": 1}
