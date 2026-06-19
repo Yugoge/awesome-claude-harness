@@ -10,6 +10,16 @@ Three-tier policy for the main agent:
   3. PERMANENTLY_BLOCKED (EnterPlanMode, ExitPlanMode) are always
      blocked, even with /do consent.
 
+bash_consecutive is a Bash-ONLY accumulator: only a Bash tool call
+increments it, and it is cleared ONLY by an Agent (subagent) dispatch
+(reset to {"last_tool": "Agent", "count": 0}). Every other tool
+(Read, TodoWrite, Glob, Grep, and any non-whitelist tool) leaves
+bash_consecutive byte-unchanged — interleaving a non-Agent tool between
+Bash calls does NOT launder the streak. The Agent-clear lives in main()
+and fires on the PreToolUse Agent attempt BEFORE the /allow and /do
+short-circuits, so a subagent dispatch resets the streak even under
+consent/grant.
+
 Subagents (agent_id present) are fully exempt and do NOT update
 the streak state.
 
