@@ -40,7 +40,40 @@ def test_AC6():
     WHEN:  _enforce runs
     THEN:  sys.exit(2) fires under the identical condition (not result['ok'] and severity=='fail'), same set blocked, and hooks/lib/contract_runtime.py is byte-unchanged
     """
-    # TODO(dev): replace the line below with the real test body. While the
-    # TEST_INCOMPLETE sentinel is present the test will hard-fail, marking
-    # the AC as unimplemented for QA Phase 5.
-    pytest.fail(f"TEST_INCOMPLETE: {AC_UID} — exit(2) iff not ok and severity=='fail'; validate_required_call severity/ok/entry identical pre/post; contract_runtime.py byte-unchanged (git diff --quiet)")
+    cr = _load_runtime()
+    vrc = cr.validate_required_call
+
+    # (i) no entry for resolved step: fail, not ok, no entry.
+    r = vrc({"required_calls": [{"step": "8"}]}, "dev", None, None, "1")
+    assert r["severity"] == "fail" and r["ok"] is False and "entry" not in r
+
+    # (ii) role mismatch: fail, not ok, entry present.
+    r = vrc({"required_calls": [{"step": "8", "role": "qa"}]}, "dev", None, None, "8")
+    assert r["severity"] == "fail" and r["ok"] is False and "entry" in r
+
+    # (iii) mode mismatch: fail, not ok, entry present.
+    r = vrc(
+        {"required_calls": [{"step": "8", "role": "qa", "mode": "PLAN"}]},
+        "qa", None, "TRIAGE", "8",
+    )
+    assert r["severity"] == "fail" and r["ok"] is False and "entry" in r
+
+    # (iv) clean match: pass, ok, entry present.
+    r = vrc({"required_calls": [{"step": "8", "role": "qa"}]}, "qa", None, None, "8")
+    assert r["severity"] == "pass" and r["ok"] is True and "entry" in r
+
+    # (v) non-dict contract: fail, not ok, no entry.
+    r = vrc(["x"], "dev", None, None, "1")
+    assert r["severity"] == "fail" and r["ok"] is False and "entry" not in r
+
+    # contract_runtime.py is byte-unchanged (messaging-only change touched only the hook).
+    diff = subprocess.run(
+        ["git", "diff", "--quiet", "--", str(_RUNTIME_PATH)],
+        cwd=str(_REPO_ROOT),
+    )
+    assert diff.returncode == 0, "hooks/lib/contract_runtime.py must be byte-unchanged"
+
+    # The exit(2) gate in _enforce is preserved verbatim (messaging is additive only).
+    src = _HOOK_PATH.read_text(encoding="utf-8")
+    assert "if not result['ok'] and result['severity'] == 'fail':" in src
+    assert "sys.exit(2)" in src
