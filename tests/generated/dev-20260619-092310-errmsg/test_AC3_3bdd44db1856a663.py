@@ -44,7 +44,36 @@ def test_AC3():
     WHEN:  the banner is written
     THEN:  it lists concrete remediation: advance correct agent-dispatching step in_progress, OR fix role/pipeline_id/mode, OR request orchestrator escalation; AND when no usable valid_contracted_step_ids exist (Case C/M) the banner MUST NOT contain the AFFIRMATIVE stale-bookmark remediation (it MUST NOT contain BOTH 'advance' AND 'in_progress' — the Case A signature) and MUST instead direct do-not-retry-by-rebookmarking / re-publish-or-escalate (the prohibitive 'do not re-bookmark' phrase is explicitly allowed and is NOT treated as a leak)
     """
-    # TODO(dev): replace the line below with the real test body. While the
-    # TEST_INCOMPLETE sentinel is present the test will hard-fail, marking
-    # the AC as unimplemented for QA Phase 5.
-    pytest.fail(f"TEST_INCOMPLETE: {AC_UID} — banner lists 'in_progress' + 'escalation' remediation; Case M/C must NOT co-occur 'advance' AND 'in_progress'; must_contain_any re-publish/malformed/escalat")
+    mod = _load_hook()
+
+    # A representative block (Case A) lists concrete remediation with both the
+    # in_progress advance option and the escalation option.
+    case_a = _banner(
+        mod,
+        step="1",
+        role="dev",
+        pipeline_id="",
+        errors=["no required_calls entry for step '1'"],
+        mode="",
+        entry=None,
+        contract={"required_calls": [{"step": "2a"}, {"step": "8"}]},
+    )
+    assert "in_progress" in case_a
+    assert "escalation" in case_a
+
+    # Case M (non-dict) and Case C (dict with empty required_calls) MUST NOT
+    # emit the AFFIRMATIVE stale-bookmark remediation: they must not co-occur
+    # BOTH 'advance' AND 'in_progress' (the Case A signature). Polarity-aware:
+    # the prohibitive 'do not retry by re-bookmarking' phrase is allowed.
+    case_m = _banner(
+        mod, step="1", role="dev", pipeline_id="", errors=["contract missing or non-dict"],
+        mode="", entry=None, contract=["x"],
+    )
+    case_c = _banner(
+        mod, step="1", role="dev", pipeline_id="", errors=["no required_calls entry for step '1'"],
+        mode="", entry=None, contract={"required_calls": []},
+    )
+    for banner in (case_m, case_c):
+        assert not ("advance" in banner and "in_progress" in banner)
+        assert any(token in banner for token in ("re-publish", "malformed", "escalat"))
+
