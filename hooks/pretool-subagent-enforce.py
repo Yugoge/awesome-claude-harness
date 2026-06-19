@@ -155,7 +155,7 @@ def _valid_contracted_step_ids(contract) -> str:
     """Render the contract's valid step ids, order-preserved + deduped.
 
     Uses the isinstance-guarded accessor contract_runtime._iter_required_calls
-    (NEVER a direct contract['required_calls'] subscript — that raises
+    (NEVER a direct required_calls subscript on the contract — that raises
     TypeError on a non-dict contract). Keeps only dict entries with a
     non-empty str 'step', dedupes via a seen-set in CONTRACT ORDER (no sort),
     and renders '<none>' when none remain.
