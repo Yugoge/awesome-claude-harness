@@ -253,8 +253,10 @@ def _diagnose_block(contract, valid_ids: str, has_step_ids: bool, entry, step: s
 
 def _emit_block(step: str, role: str, pipeline_id: str, errors: list,
                 mode: str = '', entry=None, contract=None) -> None:
-    valid_ids = _valid_contracted_step_ids(contract)
-    diagnosis, action = _diagnose_block(contract, valid_ids, entry, step)
+    step_ids = _contracted_step_id_list(contract)
+    valid_ids = ', '.join(step_ids) if step_ids else '<none>'
+    diagnosis, action = _diagnose_block(
+        contract, valid_ids, bool(step_ids), entry, step)
     sys.stderr.write(
         '\nCONTRACT BLOCK (pretool-subagent-enforce):\n'
         f'  step={step} source=current in-progress Todo bookmark\n'
