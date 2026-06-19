@@ -14,10 +14,24 @@
 # Do NOT drive the live harness (no /dev, /close, /commit, no recursive
 # Agent dispatch).
 
+import subprocess
+from importlib.machinery import SourceFileLoader
+from pathlib import Path
+
 import pytest
 
 AC_UID = "952c2837ff439e69"
 AC_TYPE = "hook"
+
+_REPO_ROOT = Path(__file__).resolve().parents[3]
+_RUNTIME_PATH = _REPO_ROOT / "hooks" / "lib" / "contract_runtime.py"
+_HOOK_PATH = _REPO_ROOT / "hooks" / "pretool-subagent-enforce.py"
+
+
+def _load_runtime():
+    return SourceFileLoader(
+        "contract_runtime_ac6", str(_RUNTIME_PATH)
+    ).load_module()
 
 
 def test_AC6():
