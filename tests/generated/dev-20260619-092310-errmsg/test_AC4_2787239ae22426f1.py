@@ -14,10 +14,19 @@
 # missing required_calls renders EXACTLY '<none>'. Do NOT drive the live
 # harness (no /dev, /close, /commit, no recursive Agent dispatch).
 
+from importlib.machinery import SourceFileLoader
+from pathlib import Path
+
 import pytest
 
 AC_UID = "2787239ae22426f1"
 AC_TYPE = "hook"
+
+_HOOK_PATH = Path(__file__).resolve().parents[3] / "hooks" / "pretool-subagent-enforce.py"
+
+
+def _load_hook():
+    return SourceFileLoader("pretool_subagent_enforce_ac4", str(_HOOK_PATH)).load_module()
 
 
 def test_AC4():
