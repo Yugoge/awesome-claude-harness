@@ -397,8 +397,8 @@ A `PostToolUse` doc-sync hook keeps the `INDEX.md` files and the inventory block
 <!-- AUTO:readme-stats -->
 
 ## Overview
-- **Total files**: 17
-- **Subdirectories**: 10
+- **Total files**: 20
+- **Subdirectories**: 11
 - **Naming convention**: lower
 
 ## Files
@@ -408,12 +408,15 @@ A `PostToolUse` doc-sync hook keeps the `INDEX.md` files and the inventory block
 - `NESTED-REPO.md` - Nested Repo Sentinel
 - `NOTICE` - NOTICE file
 - `push.sh` - 
+- `requirements.txt` - txt file
 - `settings.json` - json config
+- `settings.template.json` - json config
 
 ## Subdirectories
 - `agents/`
 - `commands/`
 - `docs/`
+- `examples/`
 - `hooks/`
 - `policies/`
 - `schemas/`

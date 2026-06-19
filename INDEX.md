@@ -1,8 +1,8 @@
 # dot-claude
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-06-18T20:18:02Z*
-**Total entries**: 450
+*Last updated: 2026-06-19T09:42:41Z*
+**Total entries**: 462
 **Convention**: kebab
 
 ## Tree
@@ -78,6 +78,9 @@ dot-claude/
 │   │   ├── `slashcommand-quick-reference.md` - Slash Command Quick Reference
 │   │   ├── `tmp-cleanup-convention.md` - Ad-hoc scratch directory convention
 │   │   └── `venv-repair.md` - venv-repair — restoring `~/.claude/venv` when interpreter symlinks break
+├── examples/
+│   └── guard-demo/
+│       └── `run-demo.sh` - Description: Reproducible guard demo — a dangerous operation is BLOCKED by the
 ├── hooks/
 │   ├── doc_sync/
 │   │   ├── `claude.py` - CLAUDE.md auto-creation and patching.
@@ -101,6 +104,8 @@ dot-claude/
 │   │   ├── `bash_context_strip.py` - This is deliberately NOT a full shell parser.  It only computes a conservative
 │   │   ├── `bash_write_targets.py` - Provides two public functions used by tool-policy and overnight-hook-guard:
 │   │   ├── `checkpoint-core.sh` - ============================================================================
+│   │   ├── `claude_home.py` - Generalizes the in-repo gold-standard fail-closed self-resolution pattern
+│   │   ├── `claude_home.sh` - claude_home.sh — shared "harness home" resolver (shell consumable).
 │   │   ├── `close-verdict.py` - Shared CLOSE verdict classifier for commit/close tooling.
 │   │   ├── `closeout.py` - Public API:
 │   │   ├── `contract_runtime.py` - This module is the single shared engine consumed by every contract-aware
@@ -236,6 +241,7 @@ dot-claude/
 │   └── `test-plan.v1.json` - json config
 ├── scripts/
 │   ├── install/
+│   │   ├── `render-settings` - render-settings file
 │   │   └── `tmp-cleanup-install.sh` - /usr/local/sbin/tmp-cleanup.sh
 │   ├── modern-git-slot/
 │   ├── overnight-git/
@@ -277,6 +283,7 @@ dot-claude/
 │   ├── `analyze-git-edge-cases.sh` - Description: Analyze git history for edge cases from bug fix commits
 │   ├── `apply-permissions.sh` - apply-permissions.sh — merge aggregated permissions JSON list into settings.json
 │   ├── `blast-radius-tool.py` - Two phases:
+│   ├── `bootstrap` - bootstrap file
 │   ├── `break-overnight-lock.py` - Backdates end_time on every active overnight-state-*.json so
 │   ├── `build-pipelines-from-triage.py` - Consumes PM triage schema (issues[] keyed by triage_index + pipeline_order[] +
 │   ├── `canary-verify.sh` - Description: Cache-safe canary that behaviorally verifies the four core PreToolUse hooks.
@@ -299,6 +306,7 @@ dot-claude/
 │   ├── `detect-orphan-commands.sh` - Description: Detect orphan commands (one-time patterns, no todo script, unused)
 │   ├── `detect-orphan-scripts.sh` - Description: Detect scripts not referenced by any command/agent/other script
 │   ├── `discover-folders.sh` - Description: Dynamically discover project folders excluding system directories
+│   ├── `doctor` - doctor file
 │   ├── `execute-push.py` - Eliminates the timing window that exists when validate + push are && -chained
 │   ├── `generate-folder-index.sh` - Description: Generate INDEX.md for folder (inventory of contents)
 │   ├── `generate-folder-readme.sh` - Description: Generate README.md for folder (purpose and organization rules)
@@ -442,6 +450,7 @@ dot-claude/
 │   │   ├── `validate-todowrite-requirement.py` - Validator: validate-todowrite-requirement
 │   │   ├── `validate-venv-usage.py` - Validator: validate-venv-usage
 │   │   └── `validate-workflow-json-cleanup.py` - Validator: validate-workflow-json-cleanup
+│   ├── `fresh-clone-bootstrap-smoke.sh` - Description: Fresh-clone bootstrap smoke — proves "core is runnable + guards engaged"
 │   ├── `integration-test.sh` - integration-test.sh - Integration tests for git tracking solution
 │   ├── `test-lock-detection.sh` - Test script to verify git lock file detection and handling
 │   ├── `test_aggregate_dev_report.py` - Unit tests for scripts/aggregate-dev-report.py
@@ -451,13 +460,16 @@ dot-claude/
 │   ├── `test_resolve_spec_artifacts.py` - resolver) + the static centralization lint (AC-B4 cases 1-12, task 20260530-092123)
 │   ├── `test_specialist_yield.py` - Tests use a tmp dir for the yield log and the bundled production policy file
 │   ├── `verify-stop-spec-session-isolation.sh` - QA verification harness for stop-spec-coverage-enforce.py session isolation fix.
+│   └── `ws2_zero_literal_gate.py` - Scans the EXPLICITLY-defined load-bearing surfaces of a rendered fresh clone with
 ├── `ARCHITECTURE.md` - Architecture — `.claude` Agent Operating System
 ├── `CLAUDE.md` - CLAUDE.md
 ├── `LICENSE` - LICENSE file
 ├── `NESTED-REPO.md` - Nested Repo Sentinel
 ├── `NOTICE` - NOTICE file
 ├── `push.sh` - 
+├── `requirements.txt` - txt file
 ├── `settings.json` - json config
+├── `settings.template.json` - json config
 ```
 <!-- /AUTO:index-stats -->
 
