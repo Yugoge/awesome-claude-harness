@@ -1,0 +1,108 @@
+{
+  "schema_version": "1.1",
+  "task_id": "dev-20260619-092310-streak",
+  "generated_at": "2026-06-19T09:23:10Z",
+  "active_tests": [
+    {
+      "task_id": "dev-20260619-092310-streak",
+      "ac_id": "AC1",
+      "ac_uid": "8d0477aea3683987",
+      "type": "hook",
+      "file": "tests/generated/dev-20260619-092310-streak/test_AC1_8d0477aea3683987.py",
+      "status": "active",
+      "hook_check": {
+        "leg_a_component": {
+          "functions": ["update_streak", "enforce_streak_limit"],
+          "steps": [
+            "For each tool in [Bash, Read, Bash, TodoWrite, Bash, Glob, Bash, Grep, Bash] call update_streak(temp, tool).",
+            "Assert that after this sequence the parsed bash_consecutive == {'last_tool': 'Bash', 'count': 5} (only the 5 Bash calls touched bash_consecutive; the interleaved Read/TodoWrite/Glob/Grep left it unchanged, so it accumulated to 5, NOT reset to 1).",
+            "Call update_streak(temp, 'Bash') a 6th time and assert it returns 6.",
+            "Call enforce_streak_limit('Bash', 6) and assert it raises SystemExit with code == 2."
+          ],
+          "anchor_rationale": "update_streak produces the count (5 then 6); enforce_streak_limit produces the block. The OLD AC1 wrongly asserted update_streak itself blocks — it never calls enforce_streak_limit. These are the two correctly-anchored functions."
+        },
+        "leg_b_end_to_end": {
+          "function": "main",
+          "steps": [
+            "Using a single unique sid (no /do, no /allow, no agent_id), drive main() once per tool for [Bash, Read, Bash, TodoWrite, Bash, Glob, Bash, Grep, Bash]; assert each invocation exits 0 (not blocked) and that the persisted on-disk bash_consecutive.count == 5 after the sequence.",
+            "Drive main() a final time with tool_name='Bash' and assert it raises/exits SystemExit code == 2 (the 6th consecutive Bash is blocked end-to-end, proving the interleaved non-Bash tools were transparent through the full gate, not just update_streak in isolation)."
+          ],
+          "anchor_rationale": "Proves the user's literal need ('count does not reset before a subagent is used') is transparent end-to-end through main()'s real control flow, not only at the component boundary. (codex finding 1.)"
+        }
+      }
+    },
+    {
+      "task_id": "dev-20260619-092310-streak",
+      "ac_id": "AC2",
+      "ac_uid": "e496339696fe9ba1",
+      "type": "hook",
+      "file": "tests/generated/dev-20260619-092310-streak/test_AC2_e496339696fe9ba1.py",
+      "status": "active",
+      "hook_check": {
+        "function": "main",
+        "steps": [
+          "Drive main() with the Agent payload inside try/except SystemExit; assert the result is NOT a block (no SystemExit, or SystemExit code 0/None). Agent is whitelisted and count after clear is 0, so enforce_streak_limit('Agent',0) is a no-op return and main exits 0.",
+          "Read the persisted on-disk state AFTER main() returns/exits; assert bash_consecutive == {'last_tool':'Agent','count':0} AND per_tool_counts == {'Edit':1} (preserved, NOT wiped — the clear sets the key, never deletes it).",
+          "Then call update_streak(temp, 'Bash') and assert it returns 1 (fresh streak after the Agent clear)."
+        ],
+        "anchor_rationale": "The Agent-clear lives in main() (per Decision D-2), NOT in update_streak — under the fix update_streak's whitelist branch leaves bash_consecutive untouched for Agent. So the clear MUST be proven by driving main(). Harness must catch SystemExit(0) as success. (codex findings 2 + 3.)"
+      }
+    },
+    {
+      "task_id": "dev-20260619-092310-streak",
+      "ac_id": "AC3",
+      "ac_uid": "e2ac1ddf43d21b59",
+      "type": "hook",
+      "file": "tests/generated/dev-20260619-092310-streak/test_AC3_e2ac1ddf43d21b59.py",
+      "status": "active",
+      "hook_check": {
+        "functions": ["update_streak", "enforce_streak_limit"],
+        "whitelisted_non_bash": {
+          "tools": ["Read", "TodoWrite", "Glob", "Grep", "Skill"],
+          "assert": "After update_streak(temp, tool) for each, the parsed bash_consecutive is IDENTICAL to V (count and last_tool) AND per_tool_counts is unchanged (whitelisted tools do NOT increment per_tool_counts)."
+        },
+        "non_whitelist": {
+          "tools": ["Edit", "Write"],
+          "assert": "After update_streak(temp, tool), bash_consecutive is IDENTICAL to V. per_tool_counts[tool] increments: call update_streak(temp,'Edit') twice and assert it returns 1 then 2; then call enforce_streak_limit('Edit', 2) and assert it raises SystemExit code == 2 (the once-per-turn NON_WHITELIST_MAX_CONSECUTIVE=1 limit)."
+        },
+        "anchor_rationale": "Corrects the v1 conflation: only non-whitelist tools touch per_tool_counts (codex finding 4). The 2nd-same-name block is anchored to update_streak's returned count (1 then 2) THEN enforce_streak_limit (codex finding 5) — dual-anchored, no synthetic count. NB2: every whitelisted-non-Bash tool leaves bash_consecutive byte-identical (no write touches it)."
+      }
+    },
+    {
+      "task_id": "dev-20260619-092310-streak",
+      "ac_id": "AC4",
+      "ac_uid": "048b56f8c3042f37",
+      "type": "hook",
+      "file": "tests/generated/dev-20260619-092310-streak/test_AC4_048b56f8c3042f37.py",
+      "status": "active",
+      "hook_check": {
+        "functions": ["main", "_parse_streak_state"],
+        "branch_order_invariants": [
+          "Agent + /do consent (consent flag = 'true'): main() persists bash_consecutive == {'last_tool':'Agent','count':0}, per_tool_counts preserved (clear fires BEFORE the /do short-circuit).",
+          "Agent + /allow (read_grant monkeypatched to True): main() persists bash_consecutive == {'last_tool':'Agent','count':0}, per_tool_counts preserved (clear fires BEFORE the /allow short-circuit).",
+          "non-Agent tool (e.g. 'Bash' or 'Edit') + /do consent: main() exits 0 via the /do short-circuit WITHOUT calling update_streak; the on-disk state is byte-identical to the preseeded state (count stays 3, last_tool stays 'Bash', per_tool_counts stays {'Edit':1}). This is the NB2 no-clobber invariant: no write touches bash_consecutive on the /do path.",
+          "non-Agent tool + /allow (read_grant True): main() exits 0 via the /allow short-circuit WITHOUT calling update_streak; on-disk state byte-identical to preseeded.",
+          "tool_name='Agent' WITH agent_id present (subagent context): main() exits 0 at the subagent bypass (:171) BEFORE the Agent-clear; the on-disk state is byte-identical to preseeded (a subagent's own Agent call must NOT touch the main streak)."
+        ],
+        "preserved_regression_floor": [
+          "Write-overwrite skip (:205-216): drive main() with tool_name='Write' and tool_input.file_path pointing at an EXISTING regular file (no /do, no /allow); assert main() exits 0 WITHOUT incrementing per_tool_counts['Write'] (the blocked-overwrite must not consume the once-per-turn budget). Anchor: main().",
+          "schema_version 2 preserved: assert _parse_streak_state on the post-fix persisted state returns the state intact (schema_version stays 2; the Agent-clear keeps a valid {last_tool:str,count:int} shape so the type-guard at :86-88 does not fall back to _fresh_state)."
+        ],
+        "anchor_rationale": "Every preserved behavior is anchored to the function that implements it: the bypasses + Write-skip live in main(); schema validation lives in _parse_streak_state. /allow is forced via monkeypatched read_grant (NOT real sentinel-grant parsing, which is out of scope — codex finding 8). The branch-order invariants directly prove D-2 (early clear) and NB2 (no clobber on bypass paths) (codex findings 6 + 7)."
+      }
+    },
+    {
+      "task_id": "dev-20260619-092310-streak",
+      "ac_id": "AC5",
+      "ac_uid": "28d68b1056c90504",
+      "type": "data",
+      "file": "tests/generated/dev-20260619-092310-streak/test_AC5_28d68b1056c90504.py",
+      "status": "active",
+      "hook_check": {
+        "doc_assert": "Non-blocking documentation check (report text + code comments). Grep/read the dev report and the updated update_streak/main comments for the three statements above. This AC is documentation-only and does NOT require any production doc beyond the dev report and the inline comments the fix already updates.",
+        "anchor_rationale": "type=data: no function execution, so no spec_text_vs_execution drift possible. Scope-tightened to report+comment text only (codex finding 9)."
+      }
+    }
+  ],
+  "archived_tests": []
+}
