@@ -191,6 +191,11 @@ def main():
     except Exception:
         sys.exit(0)
 
+    # Fail-open on non-dict payloads (e.g. a bare JSON list/scalar): never wedge
+    # the harness on a malformed PreToolUse payload.
+    if not isinstance(data, dict):
+        sys.exit(0)
+
     tool_name = data.get("tool_name", "")
 
     if is_subagent_context(data):
