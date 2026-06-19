@@ -183,6 +183,26 @@ def main():
 
     sid = get_session_id(data)
 
+    # Agent-clear: dispatching a subagent (Agent) is the ONLY action that
+    # clears the consecutive-Bash streak (the user's literal intent — the count
+    # is reset only when a subagent is used). Placed here, after the subagent
+    # check + sid resolution and BEFORE the /allow and /do short-circuits, so an
+    # Agent dispatch resets the streak even during a /do or /allow session
+    # (those exit early below, so an update_streak-based clear would never fire
+    # under them). The clear keeps the key with {last_tool:'Agent',count:0}
+    # (never deletes it — deleting would trip _parse_streak_state's type-guard
+    # and wipe per_tool_counts). It is a pure state write that never blocks, so
+    # placing it ahead of the bypasses changes no allow/deny outcome.
+    if tool_name == "Agent":
+        try:
+            state_file = get_streak_state_file(sid)
+            state = read_streak_state(state_file)
+            state["bash_consecutive"] = {"last_tool": "Agent", "count": 0}
+            write_streak_state(state_file, state)
+        except Exception:
+            pass
+        sys.exit(0)
+
     # /allow bypass: explicit user grant for a specific tool (checked BEFORE
     # PERMANENTLY_BLOCKED — intentional asymmetry: /allow is a true break-glass
     # that the local user explicitly granted; /do bypasses only streak limits
