@@ -35,7 +35,20 @@ def test_AC4():
     WHEN:  valid_contracted_step_ids is derived and rendered
     THEN:  fixture (i) renders EXACTLY '2a, 8'; fixture (ii) renders EXACTLY '8, 2a' (a sorted implementation would wrongly produce '2a, 8' — so a SORTED render FAILS this AC); fixture (iii) renders EXACTLY '11g, 2, 10' (order preserved, deduped — a sorted render would wrongly produce '10, 11g, 2', so a SORTED render FAILS this AC); a contract whose required_calls is empty / non-list / missing renders EXACTLY '<none>'. At least one fixture (ii, iii) is DIVERGENT: contract order != sorted order, so order-preservation is positively verifiable and a sorted, duplicated, or hardcoded render FAILS
     """
-    # TODO(dev): replace the line below with the real test body. While the
-    # TEST_INCOMPLETE sentinel is present the test will hard-fail, marking
-    # the AC as unimplemented for QA Phase 5.
-    pytest.fail(f"TEST_INCOMPLETE: {AC_UID} — exact-render fixtures: (i) '2a, 8' (ii) '8, 2a' DIVERGENT (iii) '11g, 2, 10' DIVERGENT; empty/non-list/None -> '<none>'; sorted render MUST FAIL (ii)/(iii)")
+    mod = _load_hook()
+    derive = mod._valid_contracted_step_ids
+
+    # (i) dedup; sorted order == contract order
+    assert derive({"required_calls": [{"step": "2a"}, {"step": "8"}, {"step": "2a"}]}) == "2a, 8"
+    # (ii) DIVERGENT: sorted-dedup would wrongly produce '2a, 8'
+    assert derive({"required_calls": [{"step": "8"}, {"step": "2a"}]}) == "8, 2a"
+    # (iii) DIVERGENT + dedup: sorted-dedup would wrongly produce '10, 11g, 2'
+    assert derive(
+        {"required_calls": [{"step": "11g"}, {"step": "2"}, {"step": "10"}, {"step": "2"}]}
+    ) == "11g, 2, 10"
+
+    # empty / non-list / missing required_calls render EXACTLY '<none>'
+    assert derive({"required_calls": []}) == "<none>"
+    assert derive({"required_calls": "not-a-list"}) == "<none>"
+    assert derive({"required_calls": None}) == "<none>"
+    assert derive({}) == "<none>"
