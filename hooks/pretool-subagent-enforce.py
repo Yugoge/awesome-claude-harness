@@ -274,7 +274,8 @@ def _enforce(stdin_data: dict, contract: dict, step: str) -> None:
         contract, role, pipeline_id or None, mode or None, step,
     )
     if not result['ok'] and result['severity'] == 'fail':
-        _emit_block(step, role, pipeline_id, result['errors'])
+        _emit_block(step, role, pipeline_id, result['errors'],
+                    mode=mode, entry=result.get('entry'), contract=contract)
         sys.exit(2)
     _write_bookmark(session_id, cycle_id, step, {
         'role': role,
