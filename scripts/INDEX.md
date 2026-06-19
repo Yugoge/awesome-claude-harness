@@ -1,14 +1,15 @@
 # scripts
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-06-18T09:19:04Z*
-**Total entries**: 107
+*Last updated: 2026-06-19T10:36:20Z*
+**Total entries**: 110
 **Convention**: kebab
 
 ## Tree
 ```
 scripts/
 ├── install/
+│   ├── `render-settings` - render-settings file
 │   └── `tmp-cleanup-install.sh` - /usr/local/sbin/tmp-cleanup.sh
 ├── modern-git-slot/
 ├── overnight-git/
@@ -50,6 +51,7 @@ scripts/
 ├── `analyze-git-edge-cases.sh` - Description: Analyze git history for edge cases from bug fix commits
 ├── `apply-permissions.sh` - apply-permissions.sh — merge aggregated permissions JSON list into settings.json
 ├── `blast-radius-tool.py` - Two phases:
+├── `bootstrap` - bootstrap file
 ├── `break-overnight-lock.py` - Backdates end_time on every active overnight-state-*.json so
 ├── `build-pipelines-from-triage.py` - Consumes PM triage schema (issues[] keyed by triage_index + pipeline_order[] +
 ├── `canary-verify.sh` - Description: Cache-safe canary that behaviorally verifies the four core PreToolUse hooks.
@@ -66,12 +68,13 @@ scripts/
 ├── `derive-default-branch.sh` - Description: Resolve the repository's default branch name dynamically (handles main/master/any other).
 ├── `detect-dead-functions.sh` - Shell script
 ├── `detect-duplicate-content.sh` - Shell script
-├── `detect-hardcoded-paths.sh` - Description: Detect load-bearing author-absolute path literals across the harness surface.
+├── `detect-hardcoded-paths.sh` - Shell script
 ├── `detect-merge-conflicts.sh` - Shell script
 ├── `detect-orphan-agents.sh` - Description: Detect agents not referenced by any command
 ├── `detect-orphan-commands.sh` - Description: Detect orphan commands (one-time patterns, no todo script, unused)
 ├── `detect-orphan-scripts.sh` - Description: Detect scripts not referenced by any command/agent/other script
 ├── `discover-folders.sh` - Description: Dynamically discover project folders excluding system directories
+├── `doctor` - doctor file
 ├── `execute-push.py` - Eliminates the timing window that exists when validate + push are && -chained
 ├── `generate-folder-index.sh` - Description: Generate INDEX.md for folder (inventory of contents)
 ├── `generate-folder-readme.sh` - Description: Generate README.md for folder (purpose and organization rules)
