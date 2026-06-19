@@ -45,7 +45,43 @@ def test_AC5():
     WHEN:  the banner is written for each shape
     THEN:  Case M diagnosis names 'contract malformed/non-dict; do NOT retry by re-bookmarking; re-publish the contract or escalate'; Case C diagnosis names 'contract present but no usable contracted steps; re-publish/escalate'; Case A diagnosis names 'no entry for the resolved step; advance the in-progress todo to one of valid_contracted_step_ids'; Case B diagnosis names 'entry exists but the Agent call does not satisfy the required role/mode/pipeline dimensions' and shows the expected signature(s) for the resolved step
     """
-    # TODO(dev): replace the line below with the real test body. While the
-    # TEST_INCOMPLETE sentinel is present the test will hard-fail, marking
-    # the AC as unimplemented for QA Phase 5.
-    pytest.fail(f"TEST_INCOMPLETE: {AC_UID} — case_discrimination M/C/A/B via isinstance->valid-ids-empty->entry-presence; Case M/C must NOT co-occur 'advance'+'in_progress'; Case A contrast MUST co-occur both")
+    mod = _load_hook()
+
+    # Case M: contract is not a dict.
+    case_m = _banner(
+        mod, step="1", role="dev", pipeline_id="", errors=["contract missing or non-dict"],
+        mode="", entry=None, contract=["x"],
+    )
+    assert "Case M" in case_m
+    assert any(t in case_m for t in ("re-publish", "malformed", "escalat"))
+    assert not ("advance" in case_m and "in_progress" in case_m)
+
+    # Case C: dict but empty required_calls => valid ids empty + entry None.
+    case_c = _banner(
+        mod, step="1", role="dev", pipeline_id="", errors=["no required_calls entry for step '1'"],
+        mode="", entry=None, contract={"required_calls": []},
+    )
+    assert "Case C" in case_c
+    assert any(t in case_c for t in ("re-publish", "malformed", "escalat"))
+    assert not ("advance" in case_c and "in_progress" in case_c)
+
+    # Case A: dict with non-empty valid ids but resolved step absent.
+    case_a = _banner(
+        mod, step="1", role="dev", pipeline_id="", errors=["no required_calls entry for step '1'"],
+        mode="", entry=None, contract={"required_calls": [{"step": "2a"}, {"step": "8"}]},
+    )
+    assert "Case A" in case_a
+    assert "advance" in case_a and "in_progress" in case_a
+
+    # Case B: entry present => role/mode/pipeline dimension mismatch; expected sig shown.
+    entry = {"step": "8", "role": "qa", "mode": "PLAN", "pipeline_id": "pipeline-3"}
+    case_b = _banner(
+        mod, step="8", role="dev", pipeline_id="",
+        errors=["role mismatch on step '8': expected 'qa', got 'dev'"],
+        mode="", entry=entry,
+        contract={"required_calls": [entry]},
+    )
+    assert "Case B" in case_b
+    assert "role/mode/pipeline" in case_b
+    # Expected signature(s) for the resolved step are surfaced.
+    assert "role=qa" in case_b and "mode=PLAN" in case_b and "pipeline_id=pipeline-3" in case_b
