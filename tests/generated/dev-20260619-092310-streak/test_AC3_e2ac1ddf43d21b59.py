@@ -5,19 +5,66 @@
 # above (AC_UID, AC_TYPE, docstring) MUST be preserved verbatim so QA can
 # trace each test back to its source AC entry.
 
+import importlib.util
+import json
+import uuid
+from pathlib import Path
+
 import pytest
 
 AC_UID = "e2ac1ddf43d21b59"
 AC_TYPE = "hook"
 
+_HOOK_PATH = (
+    Path(__file__).resolve().parents[3] / "hooks" / "pretool-orchestrator-gate.py"
+)
 
-def test_AC3():
+
+def _load_module():
+    spec = importlib.util.spec_from_file_location(
+        f"orchestrator_gate_{uuid.uuid4().hex}", _HOOK_PATH
+    )
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def test_AC3(tmp_path, monkeypatch):
     """
     GIVEN: a temp state with an arbitrary bash_consecutive value V (e.g. {'last_tool':'Bash','count':4})
     WHEN:  non-Agent, non-Bash tools are processed via update_streak
     THEN:  bash_consecutive (both count and last_tool) is byte-identical before and after for ALL of them; per_tool_counts is unchanged for whitelisted tools but increments for non-whitelist tools; the 2nd same non-whitelist tool is blocked
     """
-    # TODO(dev): replace the line below with the real test body. While the
-    # TEST_INCOMPLETE sentinel is present the test will hard-fail, marking
-    # the AC as unimplemented for QA Phase 5.
-    pytest.fail(f"TEST_INCOMPLETE: {AC_UID} — update_streak leaves bash_consecutive byte-identical for non-Agent non-Bash tools; whitelisted tools don't touch per_tool_counts; 2nd Edit returns 2 then enforce_streak_limit('Edit',2) raises SystemExit 2")
+    mod = _load_module()
+
+    V = {"last_tool": "Bash", "count": 4}
+    state_file = tmp_path / "ac3.json"
+    state_file.write_text(json.dumps({
+        "schema_version": 2,
+        "per_tool_counts": {},
+        "bash_consecutive": dict(V),
+    }))
+
+    # Whitelisted non-Bash tools: bash_consecutive byte-identical AND
+    # per_tool_counts UNCHANGED (they do not touch per_tool_counts).
+    for tool in ["Read", "TodoWrite", "Glob", "Grep", "Skill"]:
+        mod.update_streak(state_file, tool)
+        parsed = mod.read_streak_state(state_file)
+        assert parsed["bash_consecutive"] == V, f"{tool} clobbered bash_consecutive"
+        assert parsed["per_tool_counts"] == {}, f"{tool} touched per_tool_counts"
+
+    # Non-whitelist tool: bash_consecutive still byte-identical, but
+    # per_tool_counts[tool] increments. Two Edit calls -> returns 1 then 2.
+    assert mod.update_streak(state_file, "Edit") == 1
+    parsed = mod.read_streak_state(state_file)
+    assert parsed["bash_consecutive"] == V
+
+    assert mod.update_streak(state_file, "Edit") == 2
+    parsed = mod.read_streak_state(state_file)
+    assert parsed["bash_consecutive"] == V
+
+    # The 2nd-same-name block is produced by enforce_streak_limit at count 2
+    # (NON_WHITELIST_MAX_CONSECUTIVE=1).
+    with pytest.raises(SystemExit) as exc_info:
+        mod.enforce_streak_limit("Edit", 2)
+    assert exc_info.value.code == 2
