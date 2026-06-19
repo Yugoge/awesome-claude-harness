@@ -97,6 +97,11 @@ def _parse_streak_state(data) -> dict:
         return _fresh_state()
     if not isinstance(bash_con.get("last_tool"), str) or not isinstance(bash_con.get("count"), int):
         return _fresh_state()
+    # Validate per_tool_counts VALUES are ints (bool excluded) so a corrupt
+    # on-disk value can never crash the non-whitelist increment downstream
+    # (counts.get(tool, 0) + 1) — fail-open: drop non-int entries rather than
+    # wedge the gate.
+    per_tool = {k: v for k, v in per_tool.items() if isinstance(v, int) and not isinstance(v, bool)}
     return {"schema_version": 2, "per_tool_counts": per_tool, "bash_consecutive": bash_con}
 
 
