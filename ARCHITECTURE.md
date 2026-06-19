@@ -222,7 +222,7 @@ sequenceDiagram
     participant Git as git subprocess
 
     W->>FS: write grant — commit: {task_id, sid, nonce, created_at, expires_at} · push: {branch, expected_head, remote, nonce, sid, ppid, created_at}
-    W->>W: export CLAUDE_{COMMIT,PUSH}_COMMAND_ACTIVE=1
+    W->>W: push only: export CLAUDE_PUSH_COMMAND_ACTIVE=1 (commit uses the grant file alone)
     W->>Git: run git commit/push
     Note over G: guard fires on the Bash call
     G->>FS: glob <sid>-*.json · mtime-newest tiebreak
