@@ -41,7 +41,22 @@ def test_AC2():
     WHEN:  the banner is written
     THEN:  it states the most-likely cause is the in-progress todo not advanced to an agent-dispatching step owning a required_calls entry, and points at the listed valid_contracted_step_ids
     """
-    # TODO(dev): replace the line below with the real test body. While the
-    # TEST_INCOMPLETE sentinel is present the test will hard-fail, marking
-    # the AC as unimplemented for QA Phase 5.
-    pytest.fail(f"TEST_INCOMPLETE: {AC_UID} — Case A (dict + entry None + non-empty valid ids): likely-cause + advance-todo remediation present (stderr_contains 'advance')")
+    mod = _load_hook()
+    # Case A: dict contract, resolved step '1' has no entry, valid ids non-empty.
+    contract = {"required_calls": [{"step": "2a"}, {"step": "8"}]}
+    banner = _banner(
+        mod,
+        step="1",
+        role="dev",
+        pipeline_id="",
+        errors=["no required_calls entry for step '1'"],
+        mode="",
+        entry=None,
+        contract=contract,
+    )
+    # Likely-cause + advance-todo remediation present, pointing at the valid ids.
+    assert "advance" in banner
+    assert "2a, 8" in banner
+    # The most-likely-cause language refers to advancing the in-progress todo.
+    assert "in_progress" in banner
+
