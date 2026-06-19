@@ -41,7 +41,18 @@ def test_AC1():
     WHEN:  _emit_block writes the banner to stderr
     THEN:  the banner states that the resolved 'step' is derived from the CURRENT in-progress todo bookmark
     """
-    # TODO(dev): replace the line below with the real test body. While the
-    # TEST_INCOMPLETE sentinel is present the test will hard-fail, marking
-    # the AC as unimplemented for QA Phase 5.
-    pytest.fail(f"TEST_INCOMPLETE: {AC_UID} — banner must reference the in-progress todo bookmark as the source of 'step' (stderr_contains 'in-progress')")
+    mod = _load_hook()
+    contract = {"required_calls": [{"step": "2a"}, {"step": "8"}]}
+    banner = _banner(
+        mod,
+        step="1",
+        role="dev",
+        pipeline_id="",
+        errors=["no required_calls entry for step '1'"],
+        mode="",
+        entry=None,
+        contract=contract,
+    )
+    # AC1: an agent reading the banner learns 'step' comes from the in-progress todo bookmark.
+    assert "in-progress" in banner
+    assert "bookmark" in banner.lower()
