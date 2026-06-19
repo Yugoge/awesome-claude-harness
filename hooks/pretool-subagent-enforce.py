@@ -207,14 +207,18 @@ def _expected_signatures(contract, step: str) -> str:
     return ' | '.join(sigs) if sigs else '<none>'
 
 
-def _diagnose_block(contract, valid_ids: str, entry, step: str) -> tuple[str, str]:
+def _diagnose_block(contract, valid_ids: str, has_step_ids: bool, entry, step: str) -> tuple[str, str]:
     """Four-way diagnosis (QA OBJ1 + codex). Returns (diagnosis, action).
 
     Discrimination order (structural, NEVER off result['errors'] content):
       1. not isinstance(contract, dict)             -> Case M
-      2. valid_ids == '<none>' and entry is None    -> Case C
+      2. not has_step_ids and entry is None         -> Case C
       3. entry is None                              -> Case A
       4. else (entry present)                       -> Case B
+
+    ``has_step_ids`` is the EMPTINESS of the data step-id list (not the
+    rendered '<none>' string), so a contract whose only step is literally
+    named '<none>' is Case A (stale bookmark), not Case C (incomplete).
     """
     if not isinstance(contract, dict):
         return (
@@ -223,7 +227,7 @@ def _diagnose_block(contract, valid_ids: str, entry, step: str) -> tuple[str, st
             "do not retry by re-bookmarking; re-publish the contract / request "
             "orchestrator escalation.",
         )
-    if valid_ids == '<none>' and entry is None:
+    if not has_step_ids and entry is None:
         return (
             "Case C (incomplete contract): the contract is present but has no "
             "usable contracted steps.",
