@@ -151,17 +151,21 @@ def _write_bookmark(session_id: str, cycle_id: int, step: str, payload: dict) ->
         pass
 
 
-def _valid_contracted_step_ids(contract) -> str:
-    """Render the contract's valid step ids, order-preserved + deduped.
+def _contracted_step_id_list(contract) -> list:
+    """Return the contract's valid step ids as a list, order-preserved + deduped.
 
     Uses the isinstance-guarded accessor contract_runtime._iter_required_calls
     (NEVER a direct required_calls subscript on the contract — that raises
     TypeError on a non-dict contract). Keeps only dict entries with a
-    non-empty str 'step', dedupes via a seen-set in CONTRACT ORDER (no sort),
-    and renders '<none>' when none remain.
+    non-empty str 'step', dedupes via a seen-set in CONTRACT ORDER (no sort).
+
+    This is the DATA helper: case discrimination keys off the EMPTINESS of
+    this list, not off the rendered string, so a contract whose only step is
+    literally named '<none>' is correctly treated as a non-empty contract
+    (Case A) rather than colliding with the empty-render sentinel (Case C).
     """
     seen: set[str] = set()
-    ordered: list[str] = []
+    ordered: list = []
     for entry in contract_runtime._iter_required_calls(contract):
         if not isinstance(entry, dict):
             continue
@@ -171,6 +175,16 @@ def _valid_contracted_step_ids(contract) -> str:
         if step not in seen:
             seen.add(step)
             ordered.append(step)
+    return ordered
+
+
+def _valid_contracted_step_ids(contract) -> str:
+    """Render the contract's valid step ids (display wrapper over the data helper).
+
+    Joins the deduped, order-preserved id list with ', ', rendering '<none>'
+    when none remain. Presentation only — control flow uses the list helper.
+    """
+    ordered = _contracted_step_id_list(contract)
     return ', '.join(ordered) if ordered else '<none>'
 
 
