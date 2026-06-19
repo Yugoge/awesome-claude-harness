@@ -183,7 +183,7 @@ flowchart TD
     H3 --> H4[pretool-git-privilege-guard.py<br/>ALWAYS-ON · 4 verbs · /do: main-agent only]
 
     H4 --> C{which verb?}
-    C -->|commit| G1{env=1 + single-use commit grant<br/>nonce + unexpired?}
+    C -->|commit| G1{single-use commit grant<br/>present + unexpired?}
     C -->|push| G2{env=1 + push grant<br/>branch + expected_head + remote?}
     C -->|merge| G3{CLAUDE_MERGE_COMMAND_ACTIVE=1?}
     C -->|reset --hard| G4{matching /allow grant?}
