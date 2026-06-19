@@ -43,7 +43,35 @@ def test_AC7():
     WHEN:  the banner is composed
     THEN:  banner composition completes WITHOUT raising (no TypeError/KeyError); AND for each of these fixtures valid_contracted_step_ids renders EXACTLY '<none>' (proving GUARDED behavior); AND a source-level check confirms the mandated accessor is used: hooks/pretool-subagent-enforce.py calls/reuses contract_runtime._iter_required_calls and does NOT directly subscript contract['required_calls'], and hooks/lib/contract_runtime.py is byte-unchanged
     """
-    # TODO(dev): replace the line below with the real test body. While the
-    # TEST_INCOMPLETE sentinel is present the test will hard-fail, marking
-    # the AC as unimplemented for QA Phase 5.
-    pytest.fail(f"TEST_INCOMPLETE: {AC_UID} — no-raise on non-dict/malformed contracts AND render EXACTLY '<none>'; source-check: uses _iter_required_calls, no direct contract['required_calls'] subscript, contract_runtime.py byte-unchanged")
+    mod = _load_hook()
+
+    # Behavioral: no raise + valid_contracted_step_ids renders EXACTLY '<none>'.
+    fixtures = [
+        ["x"], "str", 123, True,
+        {}, {"required_calls": "oops"}, {"required_calls": []},
+    ]
+    for contract in fixtures:
+        # The derivation helper must not raise and must render '<none>'.
+        assert mod._valid_contracted_step_ids(contract) == "<none>"
+        # Full banner composition must also not raise for any of these shapes.
+        buf = io.StringIO()
+        with redirect_stderr(buf):
+            mod._emit_block(
+                step="1", role="dev", pipeline_id="",
+                errors=["contract missing or non-dict"],
+                mode="", entry=None, contract=contract,
+            )
+        assert "valid_contracted_step_ids=<none>" in buf.getvalue()
+
+    # Source-level accessor proof.
+    src = _HOOK_PATH.read_text(encoding="utf-8")
+    # (a) the derivation calls/reuses the mandated isinstance-guarded accessor.
+    assert "contract_runtime._iter_required_calls" in src
+    # (b) NO direct subscript contract['required_calls'] (or double-quoted) anywhere.
+    assert re.search(r"contract\[\s*['\"]required_calls['\"]\s*\]", src) is None
+    # (c) contract_runtime.py is byte-unchanged.
+    diff = subprocess.run(
+        ["git", "diff", "--quiet", "--", str(_RUNTIME_PATH)],
+        cwd=str(_REPO_ROOT),
+    )
+    assert diff.returncode == 0, "hooks/lib/contract_runtime.py must be byte-unchanged"
