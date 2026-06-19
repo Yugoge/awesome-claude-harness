@@ -85,3 +85,16 @@ def test_AC5():
     assert "role/mode/pipeline" in case_b
     # Expected signature(s) for the resolved step are surfaced.
     assert "role=qa" in case_b and "mode=PLAN" in case_b and "pipeline_id=pipeline-3" in case_b
+
+    # Regression (codex): a contract whose only step is literally named '<none>'
+    # has a NON-empty valid-id list, so with entry None it must be Case A (stale
+    # bookmark), NOT Case C — discrimination keys off list emptiness, not the
+    # rendered '<none>' string.
+    pathological = _banner(
+        mod, step="1", role="dev", pipeline_id="",
+        errors=["no required_calls entry for step '1'"],
+        mode="", entry=None, contract={"required_calls": [{"step": "<none>"}]},
+    )
+    assert "Case A" in pathological
+    assert "Case C" not in pathological
+    assert "advance" in pathological and "in_progress" in pathological
