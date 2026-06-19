@@ -149,6 +149,10 @@
     {
       "task_id": "dev-20260619-092310-streak",
       "manifest_path": "tests/generated/dev-20260619-092310-streak/manifest.json"
+    },
+    {
+      "task_id": "dev-20260619-092310-errmsg",
+      "manifest_path": "tests/generated/dev-20260619-092310-errmsg/manifest.json"
     }
   ]
 }

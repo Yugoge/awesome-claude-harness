@@ -1,8 +1,8 @@
 # hooks
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-06-18T09:36:00Z*
-**Total entries**: 142
+*Last updated: 2026-06-19T13:55:24Z*
+**Total entries**: 144
 **Convention**: kebab
 
 ## Tree
@@ -30,6 +30,8 @@ hooks/
 │   ├── `bash_context_strip.py` - This is deliberately NOT a full shell parser.  It only computes a conservative
 │   ├── `bash_write_targets.py` - Provides two public functions used by tool-policy and overnight-hook-guard:
 │   ├── `checkpoint-core.sh` - ============================================================================
+│   ├── `claude_home.py` - Generalizes the in-repo gold-standard fail-closed self-resolution pattern
+│   ├── `claude_home.sh` - claude_home.sh — shared "harness home" resolver (shell consumable).
 │   ├── `close-verdict.py` - Shared CLOSE verdict classifier for commit/close tooling.
 │   ├── `closeout.py` - Public API:
 │   ├── `contract_runtime.py` - This module is the single shared engine consumed by every contract-aware
