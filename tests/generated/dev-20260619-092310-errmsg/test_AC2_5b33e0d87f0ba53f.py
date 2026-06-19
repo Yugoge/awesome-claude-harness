@@ -11,10 +11,28 @@
 # stderr and assert on the composed banner text. Do NOT drive the live
 # harness (no /dev, /close, /commit, no recursive Agent dispatch).
 
+import io
+from contextlib import redirect_stderr
+from importlib.machinery import SourceFileLoader
+from pathlib import Path
+
 import pytest
 
 AC_UID = "5b33e0d87f0ba53f"
 AC_TYPE = "hook"
+
+_HOOK_PATH = Path(__file__).resolve().parents[3] / "hooks" / "pretool-subagent-enforce.py"
+
+
+def _load_hook():
+    return SourceFileLoader("pretool_subagent_enforce_ac2", str(_HOOK_PATH)).load_module()
+
+
+def _banner(mod, **kwargs):
+    buf = io.StringIO()
+    with redirect_stderr(buf):
+        mod._emit_block(**kwargs)
+    return buf.getvalue()
 
 
 def test_AC2():
