@@ -10,6 +10,16 @@ Three-tier policy for the main agent:
   3. PERMANENTLY_BLOCKED (EnterPlanMode, ExitPlanMode) are always
      blocked, even with /do consent.
 
+bash_consecutive is a Bash-ONLY accumulator: only a Bash tool call
+increments it, and it is cleared ONLY by an Agent (subagent) dispatch
+(reset to {"last_tool": "Agent", "count": 0}). Every other tool
+(Read, TodoWrite, Glob, Grep, and any non-whitelist tool) leaves
+bash_consecutive byte-unchanged — interleaving a non-Agent tool between
+Bash calls does NOT launder the streak. The Agent-clear lives in main()
+and fires on the PreToolUse Agent attempt BEFORE the /allow and /do
+short-circuits, so a subagent dispatch resets the streak even under
+consent/grant.
+
 Subagents (agent_id present) are fully exempt and do NOT update
 the streak state.
 
@@ -87,6 +97,11 @@ def _parse_streak_state(data) -> dict:
         return _fresh_state()
     if not isinstance(bash_con.get("last_tool"), str) or not isinstance(bash_con.get("count"), int):
         return _fresh_state()
+    # Validate per_tool_counts VALUES are ints (bool excluded) so a corrupt
+    # on-disk value can never crash the non-whitelist increment downstream
+    # (counts.get(tool, 0) + 1) — fail-open: drop non-int entries rather than
+    # wedge the gate.
+    per_tool = {k: v for k, v in per_tool.items() if isinstance(v, int) and not isinstance(v, bool)}
     return {"schema_version": 2, "per_tool_counts": per_tool, "bash_consecutive": bash_con}
 
 
@@ -120,15 +135,25 @@ def update_streak(state_file: Path, tool_name: str) -> int:
             write_streak_state(state_file, state)
             return bash["count"]
         else:
-            # Non-Bash whitelist: reset bash consecutive counter, never blocked
-            state["bash_consecutive"] = {"last_tool": tool_name, "count": 1}
-            write_streak_state(state_file, state)
+            # Non-Bash whitelist (incl. Agent, Read, TodoWrite, Glob, Grep,
+            # Skill, Cron*, ScheduleWakeup, AskUserQuestion): NEVER blocked, and
+            # MUST leave bash_consecutive byte-identical. bash_consecutive is a
+            # Bash-only accumulator cleared ONLY by an Agent dispatch in main()
+            # (before the /allow and /do short-circuits), never here. NB2
+            # no-clobber: perform NO state write at all — re-assigning or
+            # rebuilding bash_consecutive (even to the "same" value) could
+            # clobber last_tool and re-introduce the launder bug where a single
+            # interleaved non-Bash tool resets the consecutive-Bash streak.
+            # Whitelisted non-Bash tools also do NOT increment per_tool_counts.
             return 1
     else:
-        # Non-whitelist: increment total count for this tool; reset bash consecutive
+        # Non-whitelist: increment the per-turn total for this tool (the
+        # NON_WHITELIST_MAX_CONSECUTIVE=1 once-per-turn limit). NB2 no-clobber:
+        # leave bash_consecutive byte-identical (the unchanged value read from
+        # disk) — do NOT reset or rebuild it. Persist ONLY the per_tool_counts
+        # increment.
         counts = state["per_tool_counts"]
         counts[tool_name] = counts.get(tool_name, 0) + 1
-        state["bash_consecutive"] = {"last_tool": tool_name, "count": 1}
         write_streak_state(state_file, state)
         return counts[tool_name]
 
@@ -166,12 +191,37 @@ def main():
     except Exception:
         sys.exit(0)
 
+    # Fail-open on non-dict payloads (e.g. a bare JSON list/scalar): never wedge
+    # the harness on a malformed PreToolUse payload.
+    if not isinstance(data, dict):
+        sys.exit(0)
+
     tool_name = data.get("tool_name", "")
 
     if is_subagent_context(data):
         sys.exit(0)
 
     sid = get_session_id(data)
+
+    # Agent-clear: dispatching a subagent (Agent) is the ONLY action that
+    # clears the consecutive-Bash streak (the user's literal intent — the count
+    # is reset only when a subagent is used). Placed here, after the subagent
+    # check + sid resolution and BEFORE the /allow and /do short-circuits, so an
+    # Agent dispatch resets the streak even during a /do or /allow session
+    # (those exit early below, so an update_streak-based clear would never fire
+    # under them). The clear keeps the key with {last_tool:'Agent',count:0}
+    # (never deletes it — deleting would trip _parse_streak_state's type-guard
+    # and wipe per_tool_counts). It is a pure state write that never blocks, so
+    # placing it ahead of the bypasses changes no allow/deny outcome.
+    if tool_name == "Agent":
+        try:
+            state_file = get_streak_state_file(sid)
+            state = read_streak_state(state_file)
+            state["bash_consecutive"] = {"last_tool": "Agent", "count": 0}
+            write_streak_state(state_file, state)
+        except Exception:
+            pass
+        sys.exit(0)
 
     # /allow bypass: explicit user grant for a specific tool (checked BEFORE
     # PERMANENTLY_BLOCKED — intentional asymmetry: /allow is a true break-glass
