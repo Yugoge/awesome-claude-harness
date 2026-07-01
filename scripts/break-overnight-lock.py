@@ -21,7 +21,13 @@ import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-CLAUDE_DIR = Path(os.environ.get("CLAUDE_PROJECT_DIR", "/root")) / ".claude"
+# WS1: resolve the project dir via the shared claude_home resolver (this script
+# lives at <harness home>/scripts/break-overnight-lock.py, so the resolver is at
+# ../hooks/lib). Never default to the author literal /root.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "hooks" / "lib"))
+import claude_home  # noqa: E402
+
+CLAUDE_DIR = claude_home.project_dir() / ".claude"
 TODOS_DIR = Path.home() / ".claude" / "todos"
 
 # Where the PreTool user-intent guard mints the helper-auth token

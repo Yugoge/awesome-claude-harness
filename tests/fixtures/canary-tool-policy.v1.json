@@ -1,0 +1,15 @@
+{
+  "_fixture": "WS2 fresh-clone smoke — POSITIVE-assertion canary policy (AC-WS2-2).",
+  "_purpose": "Proves the tool-policy guard loaded ITS OWN policy from the planted clone, not the author's /root policy and not a different guard. The dev role denies any write whose path contains the unique token {{CANARY_TOKEN}}. The smoke substitutes {{CANARY_TOKEN}} with a per-run random token, then asks the tool-policy hook to authorize a Write to a path bearing that token. A correct guard blocks (exit 2) and its deny_reason echoes the token, so a block-by-the-WRONG-guard (intended guard silently failed open while a different guard blocked) is detectable: the wrong guard's reason would not reference {{CANARY_TOKEN}}.",
+  "_contract": "denied_write_path_prefixes uses a leading-* glob so the policy_registry _glob_match path (fnmatch against the canonical absolute target) fires for any absolute path containing the token, independent of the clone's install location.",
+  "policy_version": "canary-ws2",
+  "default_action": "deny",
+  "roles": {
+    "dev": {
+      "allowed_tools": ["Read", "Glob", "Grep", "Bash", "Write", "Edit", "MultiEdit", "NotebookEdit", "Skill"],
+      "allowed_write_path_prefixes": ["*"],
+      "denied_write_path_prefixes": ["*{{CANARY_TOKEN}}*"],
+      "rationale": "Canary: writes touching the unique smoke token are denied so the smoke can prove the guard read THIS policy."
+    }
+  }
+}
