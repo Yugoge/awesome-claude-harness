@@ -78,6 +78,8 @@ def _check_one_path(path: Path, schema_name: str) -> tuple[str, list[str]]:
     record = _read_json(path)
     if record is None:
         return 'present_invalid', [f'invalid JSON: {path}']
+    if not schema_name:
+        return 'present_valid', []
     result = contract_runtime.validate(record, schema_name)
     if not result['ok']:
         return 'present_invalid', [f'{path}: {e}' for e in result['errors']]
