@@ -72,9 +72,11 @@ def _resolve_path(relpath: str, project_dir: Path) -> Path:
     return Path(relpath) if relpath.startswith('/') else project_dir / relpath
 
 
-def _check_one_path(path: Path, schema_name: str) -> tuple[str, list[str]]:
+def _check_one_path(path: Path, schema_name: str | None) -> tuple[str, list[str]]:
     if not path.exists():
         return 'missing', [f'file not found: {path}']
+    if not schema_name:
+        return 'present_valid', []
     record = _read_json(path)
     if record is None:
         return 'present_invalid', [f'invalid JSON: {path}']
@@ -90,7 +92,7 @@ def _check_entry(entry: dict, project_dir: Path) -> tuple[str, str, list[str]]:
     paths = _expected_paths(entry)
     if not paths:
         return 'missing', label, ['expected_output_path empty']
-    schema_name = entry.get('schema_name', '')
+    schema_name = entry.get('schema_name') or ''
     for relpath in paths:
         candidate = _resolve_path(relpath, project_dir)
         status, errs = _check_one_path(candidate, schema_name)
