@@ -72,14 +72,14 @@ def _resolve_path(relpath: str, project_dir: Path) -> Path:
     return Path(relpath) if relpath.startswith('/') else project_dir / relpath
 
 
-def _check_one_path(path: Path, schema_name: str) -> tuple[str, list[str]]:
+def _check_one_path(path: Path, schema_name: str | None) -> tuple[str, list[str]]:
     if not path.exists():
         return 'missing', [f'file not found: {path}']
+    if not schema_name:
+        return 'present_valid', []
     record = _read_json(path)
     if record is None:
         return 'present_invalid', [f'invalid JSON: {path}']
-    if not schema_name:
-        return 'present_valid', []
     result = contract_runtime.validate(record, schema_name)
     if not result['ok']:
         return 'present_invalid', [f'{path}: {e}' for e in result['errors']]
