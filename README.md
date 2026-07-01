@@ -131,7 +131,7 @@ You (the agent) try the obvious shortcut:
 CLAUDE_PUSH_COMMAND_ACTIVE=1 git push
 ```
 
-`hooks/pretool-git-privilege-guard.py` runs *before* the tool executes. For push it scans the raw command text for the literal `CLAUDE_PUSH_COMMAND_ACTIVE=` prefix and recognizes it as an env-injection attempt — the sanctioned env var must be set by the `/push` wrapper in the child's real environment, not pasted onto the command line — and returns exit 2: **BLOCKED** before any `/push` grant or `/allow` is consulted — absent main-agent `/do` (under main-agent `/do` the guard exits 0 before inline-env detection runs). The **normal automated** honored path is a `/push` wrapper grant file, validated by nonce + ISO-8601 UTC expiry + single-use unlink, and matched against the current branch, expected head, and remote; separately, a human-created matching `/allow` sentinel can authorize a matching git command, and main-agent `/do` is the audited break-glass. Absent a `/push` grant, a matching `/allow`, or main-agent `/do`, a bare agent `git push` is refused. (A bare agent `git commit` is likewise refused — there it is the default-deny-without-a-grant rule, not inline-env detection, that blocks it.) (`hooks/pretool-git-privilege-guard.py`)
+`hooks/pretool-git-privilege-guard.py` runs *before* the tool executes. For push it scans the raw command text for the literal `CLAUDE_PUSH_COMMAND_ACTIVE=` prefix and recognizes it as an env-injection attempt — the sanctioned env var must be set by the `/push` wrapper in the child's real environment, not pasted onto the command line — and returns exit 2: **BLOCKED** before any `/push` grant or `/allow` is consulted — absent main-agent `/do` (under main-agent `/do` the guard exits 0 before inline-env detection runs). The **normal automated** honored path is a `/push` wrapper grant file (a nonce-keyed file the guard locates by glob), validated by single-use unlink and matched against the current branch, expected head, and remote (the push grant carries no `expires_at` — unlike the commit grant it is branch/head/remote-bound rather than time-boxed); separately, a human-created matching `/allow` sentinel can authorize a matching git command, and main-agent `/do` is the audited break-glass. Absent a `/push` grant, a matching `/allow`, or main-agent `/do`, a bare agent `git push` is refused. (A bare agent `git commit` is likewise refused — there it is the default-deny-without-a-grant rule, not inline-env detection, that blocks it.) (`hooks/pretool-git-privilege-guard.py`)
 
 That is the whole philosophy in miniature: the model is *encouraged* toward the right path and *physically prevented* from the wrong one — and when it is prevented, the evidence is left on disk.
 
@@ -173,7 +173,7 @@ flowchart TD
 
 - **`pretool-bash-safety.sh`** is the blunt instrument: it refuses the destructive shell forms above **by default**, by command shape (a main-agent `/do` or matching `/allow` grant is the audited exception), with the incident dates quoted in the block message.
 - **`pretool-bulk-commit-detector.py`** independently recognizes the 93-file "sync all uncommitted…" fan-out shape (3+ subsystems touched + a `sync…uncommitted` / `chore(claude): sync` subject). Per current user policy it is **warn-only** — it emits a loud stderr warning and exits 0; it does not block. The *blocking* of an agent commit/push is the privilege-guard's job.
-- **`pretool-git-privilege-guard.py`** is the always-on kernel. It default-denies agent `commit` (unless the message is the blessed `auto-bulk: end-of-cycle commit for …` bridge, which itself requires a `/commit --bulk` sentinel), `merge` (unless `/merge` set its env var), `push` (any form), `reset --hard` (every form), and direct ref mutation. The sanctioned escapes for commit and push are single-use grant manifests at `/tmp/claude-{commit,push}-grant-<sid>-<nonce>.json`, each carrying a nonce and an ISO-8601 UTC `expires_at`. The two grants differ in what the guard checks: a **commit** grant is validated only for expiry and single-use consumption (it does *not* re-check allowed files or a message SHA at the guard); a **push** grant is additionally validated against the current branch, expected head, and remote. Grants are consumed (unlinked) on use.
+- **`pretool-git-privilege-guard.py`** is the always-on kernel. It default-denies agent `commit` (unless the message is the blessed `auto-bulk: end-of-cycle commit for …` bridge, which itself requires a `/commit --bulk` sentinel), `merge` (unless `/merge` set its env var), `push` (any form), `reset --hard` (every form), and direct ref mutation. The sanctioned escapes for commit and push are single-use grant manifests at `/tmp/claude-{commit,push}-grant-<sid>-<nonce>.json`, each carrying a nonce; only the **commit** grant additionally carries an ISO-8601 UTC `expires_at` (the **push** grant has no `expires_at`). The two grants differ in what the guard checks: a **commit** grant is validated only for expiry and single-use consumption (it does *not* re-check allowed files or a message SHA at the guard); a **push** grant is validated against the current branch, expected head, and remote, and single-use consumption only — no expiry. Grants are consumed (unlinked) on use.
 - **The privilege-guard default-denies every agent absent a sanctioned path.** A subagent never benefits from `/do` (the guard refuses the consent flag whenever an `agent_id` is present). The human break-glass paths are `/do` (main-agent only, audited) and a matching structured `/allow` sentinel grant (honored even in subagent context); legacy git-allowlist grants remain main-agent only. `/do` also leaves the orchestrator-gate streak state untouched, keeping its semantics clean.
 
 Read-only git (`status`, `log`, `show`, `diff`, `blame`, `ls-files`, `branch` listing, `stash list/show`) stays freely available. A handful of non-read-only verbs are also permitted by policy — `add`, single-file working-tree `restore`, and `stash pop` — they mutate the index or working tree but never history or the remote.
@@ -397,8 +397,8 @@ A `PostToolUse` doc-sync hook keeps the `INDEX.md` files and the inventory block
 <!-- AUTO:readme-stats -->
 
 ## Overview
-- **Total files**: 17
-- **Subdirectories**: 10
+- **Total files**: 20
+- **Subdirectories**: 11
 - **Naming convention**: lower
 
 ## Files
@@ -408,12 +408,15 @@ A `PostToolUse` doc-sync hook keeps the `INDEX.md` files and the inventory block
 - `NESTED-REPO.md` - Nested Repo Sentinel
 - `NOTICE` - NOTICE file
 - `push.sh` - 
+- `requirements.txt` - txt file
 - `settings.json` - json config
+- `settings.template.json` - json config
 
 ## Subdirectories
 - `agents/`
 - `commands/`
 - `docs/`
+- `examples/`
 - `hooks/`
 - `policies/`
 - `schemas/`
