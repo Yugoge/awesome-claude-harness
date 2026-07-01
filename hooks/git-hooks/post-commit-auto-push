@@ -20,7 +20,7 @@ fi
 # Push only a namespaced recovery ref in background. Never publish refs/heads/<branch>.
 SHORT_SHA="${COMMIT_SHA:0:12}"
 BACKUP_REF="refs/backups/claude/${BRANCH}/${SHORT_SHA}"
-LOG_PATH="${CLAUDE_BACKUP_LOG:-/root/.claude/logs/post-commit-auto-push.log}"
+LOG_PATH="${CLAUDE_BACKUP_LOG:-${HOME}/.claude/logs/post-commit-auto-push.log}"
 REMOTE="${CLAUDE_BACKUP_REMOTE:-origin}"
 
 mkdir -p "$(dirname "$LOG_PATH")"
