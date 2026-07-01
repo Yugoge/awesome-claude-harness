@@ -90,7 +90,7 @@ def _check_entry(entry: dict, project_dir: Path) -> tuple[str, str, list[str]]:
     paths = _expected_paths(entry)
     if not paths:
         return 'missing', label, ['expected_output_path empty']
-    schema_name = entry.get('schema_name', '')
+    schema_name = entry.get('schema_name') or ''
     for relpath in paths:
         candidate = _resolve_path(relpath, project_dir)
         status, errs = _check_one_path(candidate, schema_name)
