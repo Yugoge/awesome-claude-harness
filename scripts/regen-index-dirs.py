@@ -21,6 +21,7 @@ if str(REPO_ROOT) not in sys.path:
 from hooks.doc_sync.regen_index import (  # noqa: E402
     regen_index, AUTO_START, AUTO_END,
 )
+from hooks.doc_sync.config import is_github_reserved_subtree  # noqa: E402
 
 
 def _ensure_marker(index_path: Path, dir_name: str) -> None:
