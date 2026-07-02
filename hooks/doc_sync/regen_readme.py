@@ -144,8 +144,10 @@ def _build_readme_content(dir_path: Path, convention: str) -> str:
 def regen_readme(dir_path: Path):
     """Regenerate README.md for a directory."""
     # GitHub renders .github/README.md in place of the repo-root README, so a
-    # doc-sync stub in a GitHub-reserved dir would hijack the landing page.
-    if dir_path.name in README_SKIP_DIRS:
+    # doc-sync stub anywhere under the GitHub-reserved subtree would hijack the
+    # landing page (top-level) or add repo-noise (nested). Skip when the folder
+    # IS .github or lies beneath it, robust to non-canonical '..' inputs.
+    if is_github_reserved_subtree(dir_path):
         return
     readme_path = dir_path / 'README.md'
     if not _readme_needs_update(readme_path):
