@@ -116,3 +116,11 @@ plans/
 specs/
 state/
 tasks/
+
+# Belt-and-suspenders: auto-generated folder-doc stubs must never re-enter
+# version control under the GitHub-reserved .github/ subtree (the generators
+# already skip it; these patterns catch any future regression). '**' matches
+# zero-or-more directories, so .github/**/README.md also covers .github/README.md.
+.github/**/README.md
+.github/**/INDEX.md
+.github/INDEX.md
