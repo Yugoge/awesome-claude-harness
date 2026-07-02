@@ -5,10 +5,28 @@
 # above (AC_UID, AC_TYPE, docstring) MUST be preserved verbatim so QA can
 # trace each test back to its source AC entry.
 
-import pytest
+import subprocess
+from pathlib import Path
 
 AC_UID = "4252117023d2f76d"
 AC_TYPE = "data"
+
+_REPO_ROOT = Path(__file__).resolve().parents[3]
+
+_STUBS = [
+    ".github/INDEX.md",
+    ".github/workflows/README.md",
+    ".github/workflows/INDEX.md",
+]
+_PLUMBING = [
+    ".github/CODE_OF_CONDUCT.md",
+    ".github/CONTRIBUTING.md",
+    ".github/SECURITY.md",
+    ".github/PULL_REQUEST_TEMPLATE.md",
+    ".github/ISSUE_TEMPLATE/bug_report.md",
+    ".github/ISSUE_TEMPLATE/feature_request.md",
+    ".github/workflows/baseline.yml",
+]
 
 
 def test_AC_07():
@@ -17,7 +35,18 @@ def test_AC_07():
     WHEN:  dev untracks and deletes them from disk
     THEN:  git ls-files .github returns ONLY the 6 plumbing files (CODE_OF_CONDUCT.md, CONTRIBUTING.md, SECURITY.md, PULL_REQUEST_TEMPLATE.md, ISSUE_TEMPLATE/*, workflows/baseline.yml); the 3 stub files absent from disk
     """
-    # TODO(dev): replace the line below with the real test body. While the
-    # TEST_INCOMPLETE sentinel is present the test will hard-fail, marking
-    # the AC as unimplemented for QA Phase 5.
-    pytest.fail(f"TEST_INCOMPLETE: {AC_UID} — git ls-files .github excludes the 3 stubs (present + absent-from-disk), keeps plumbing files")
+    proc = subprocess.run(
+        ["git", "-C", str(_REPO_ROOT), "ls-files", ".github"],
+        capture_output=True, text=True,
+    )
+    assert proc.returncode == 0, f"git ls-files failed: {proc.stderr}"
+    tracked = set(proc.stdout.splitlines())
+
+    # The 3 stubs must be untracked AND absent from disk.
+    for stub in _STUBS:
+        assert stub not in tracked, f"stub still tracked: {stub}"
+        assert not (_REPO_ROOT / stub).exists(), f"stub still on disk: {stub}"
+
+    # All plumbing files must remain tracked.
+    for plumbing in _PLUMBING:
+        assert plumbing in tracked, f"plumbing file missing from tracking: {plumbing}"
