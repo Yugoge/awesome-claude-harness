@@ -9,8 +9,9 @@ and callers fall back to their existing hand-denylist behaviour.
 """
 
 import json
+import os
 import subprocess
-from pathlib import Path
+from pathlib import Path, PurePath
 
 # GitHub-reserved directory name. A generated README.md anywhere under .github/
 # can hijack the repo landing page (GitHub precedence: .github/README.md >
@@ -22,15 +23,19 @@ GITHUB_RESERVED_DIR = '.github'
 def is_github_reserved_subtree(dir_path: Path) -> bool:
     """True iff dir_path IS .github or lies anywhere beneath a .github/ ancestor.
 
-    The path is canonicalized with Path.resolve() FIRST, which collapses '..'
-    segments, so a non-canonical input such as '.github/workflows/..' (which
-    resolves back into .github) cannot bypass the check. Membership is then
-    tested against the resolved path components. (A degenerate false-positive
-    would require the whole repo to sit under a directory literally named
-    '.github', which is not a real deployment concern -- see BA canonicalization
-    note.)
+    The path is canonicalized LEXICALLY with os.path.normpath FIRST, which
+    collapses '..' segments, so a non-canonical input such as
+    '.github/workflows/..' (which resolves back into .github) cannot bypass the
+    check. Membership is then tested against the normalized path components.
+
+    Lexical (normpath) canonicalization is used rather than Path.resolve() so the
+    check is decided by the path AS WRITTEN: it does not follow symlinks (a
+    symlink whose own name is not '.github' is treated by its written name, never
+    silently redirected) and it does not prepend the CWD to a relative input
+    (avoiding false-positives from an absolute ancestor literally named
+    '.github'). '..' is still collapsed before the membership test, as required.
     """
-    return GITHUB_RESERVED_DIR in Path(dir_path).resolve().parts
+    return GITHUB_RESERVED_DIR in PurePath(os.path.normpath(os.fspath(dir_path))).parts
 
 
 def load_config(project_dir: Path) -> dict:
