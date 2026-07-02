@@ -45,12 +45,8 @@ SKIP_DIRS = {'__pycache__', '.git', 'node_modules'}
 # dev.json, spec-20260520-221059, spec-20260524-test ...), so we use a
 # prefix-aware `startswith` filter applied in _build_stats and _list_files.
 SKIP_PREFIXES = ('cp-state-', 'spec-2026')
-# GitHub-reserved directories: a generated README.md inside `.github/` overrides
-# the repo-root README on GitHub's home page (GitHub README precedence is
-# .github/README.md > README.md > docs/README.md). doc-sync must NOT generate a
-# README for these dirs, or the directory-listing stub hijacks the project's real
-# README on the repository landing page.
-README_SKIP_DIRS = {'.github'}
+# The GitHub-reserved-subtree skip lives in config.is_github_reserved_subtree
+# (canonicalized whole-subtree membership) and is applied in regen_readme().
 
 
 def _is_skipped(name: str) -> bool:
