@@ -5,10 +5,15 @@
 # above (AC_UID, AC_TYPE, docstring) MUST be preserved verbatim so QA can
 # trace each test back to its source AC entry.
 
-import pytest
+import subprocess
+import tempfile
+from pathlib import Path
 
 AC_UID = "b6eed6acd09a1711"
 AC_TYPE = "data"
+
+_REPO_ROOT = Path(__file__).resolve().parents[3]
+_SCRIPT = _REPO_ROOT / "scripts" / "generate-folder-index.sh"
 
 
 def test_AC_04():
@@ -17,7 +22,21 @@ def test_AC_04():
     WHEN:  dev adds the realpath -m canonicalized whole-subtree skip
     THEN:  generate-folder-index.sh invoked on .github, .github/workflows, .github/workflows/.. exits 0 and writes NO INDEX.md; invoked on a normal temp dir writes INDEX.md and exits 0
     """
-    # TODO(dev): replace the line below with the real test body. While the
-    # TEST_INCOMPLETE sentinel is present the test will hard-fail, marking
-    # the AC as unimplemented for QA Phase 5.
-    pytest.fail(f"TEST_INCOMPLETE: {AC_UID} — generate-folder-index.sh exits 0 + no INDEX on .github subtree, writes INDEX on normal dir")
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        gh = root / ".github"
+        ghw = gh / "workflows"
+        ghw.mkdir(parents=True)
+        # SKIP inputs: .github, nested, and non-canonical '..' — exit 0, no write.
+        for skip_dir in (gh, ghw, ghw / ".."):
+            proc = subprocess.run(["bash", str(_SCRIPT), str(skip_dir)], capture_output=True)
+            assert proc.returncode == 0, f"non-zero exit for {skip_dir}: {proc.stderr.decode()}"
+        assert not (gh / "INDEX.md").exists(), "INDEX written under .github (skip failed)"
+        assert not (ghw / "INDEX.md").exists(), "INDEX written under .github/workflows (skip failed)"
+        # NON-SKIP: a normal folder writes INDEX and exits 0 (no regression).
+        normal = root / "normalfolder"
+        normal.mkdir()
+        (normal / "somefile.txt").write_text("hi\n")
+        proc = subprocess.run(["bash", str(_SCRIPT), str(normal)], capture_output=True)
+        assert proc.returncode == 0, f"non-zero exit for normal dir: {proc.stderr.decode()}"
+        assert (normal / "INDEX.md").exists(), "INDEX NOT written for a normal folder (regression)"
