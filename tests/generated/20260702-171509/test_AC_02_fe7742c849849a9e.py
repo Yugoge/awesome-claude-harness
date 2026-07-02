@@ -5,10 +5,28 @@
 # above (AC_UID, AC_TYPE, docstring) MUST be preserved verbatim so QA can
 # trace each test back to its source AC entry.
 
-import pytest
+import importlib.util
+import sys
+import tempfile
+from pathlib import Path
 
 AC_UID = "fe7742c849849a9e"
 AC_TYPE = "data"
+
+_REPO_ROOT = Path(__file__).resolve().parents[3]
+
+
+def _load_regen_index():
+    """Load hooks/doc_sync/regen_index.py via its package so relative imports resolve."""
+    if str(_REPO_ROOT) not in sys.path:
+        sys.path.insert(0, str(_REPO_ROOT))
+    spec = importlib.util.spec_from_file_location(
+        "hooks.doc_sync.regen_index",
+        _REPO_ROOT / "hooks" / "doc_sync" / "regen_index.py",
+    )
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
 
 
 def test_AC_02():
@@ -17,7 +35,21 @@ def test_AC_02():
     WHEN:  dev adds the canonicalized whole-subtree guard at top of regen_index()
     THEN:  regen_index('.github'), regen_index('.github/workflows'), and regen_index('.github/workflows/..') each write NO INDEX.md; regen_index(<normal temp dir>) DOES write INDEX.md
     """
-    # TODO(dev): replace the line below with the real test body. While the
-    # TEST_INCOMPLETE sentinel is present the test will hard-fail, marking
-    # the AC as unimplemented for QA Phase 5.
-    pytest.fail(f"TEST_INCOMPLETE: {AC_UID} — regen_index.py skips canonicalized .github subtree, writes INDEX on normal dir")
+    regen_index = _load_regen_index().regen_index
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        gh = root / ".github"
+        ghw = gh / "workflows"
+        ghw.mkdir(parents=True)
+        # SKIP inputs: .github, nested .github/workflows, and the non-canonical
+        # .github/workflows/.. (resolves back into .github).
+        for skip_dir in (gh, ghw, ghw / ".."):
+            regen_index(skip_dir)
+        assert not (gh / "INDEX.md").exists(), "INDEX written under .github (skip failed)"
+        assert not (ghw / "INDEX.md").exists(), "INDEX written under .github/workflows (skip failed)"
+        # NON-SKIP: a normal folder still gets its INDEX.md (no regression).
+        normal = root / "normalfolder"
+        normal.mkdir()
+        (normal / "somefile.txt").write_text("hi\n")
+        regen_index(normal)
+        assert (normal / "INDEX.md").exists(), "INDEX NOT written for a normal folder (regression)"
