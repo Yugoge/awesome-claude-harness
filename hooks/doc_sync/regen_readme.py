@@ -12,7 +12,7 @@ from pathlib import Path
 try:
     from .extract import extract_description
     from .patch import _replace_section
-    from .config import tracked_names
+    from .config import tracked_names, is_github_reserved_subtree
 except ImportError:
     import importlib as _importlib
     import os as _os
@@ -26,6 +26,7 @@ except ImportError:
     extract_description = _extract.extract_description  # type: ignore[no-redef]
     _replace_section = _patch._replace_section  # type: ignore[no-redef]
     tracked_names = _config.tracked_names  # type: ignore[no-redef]
+    is_github_reserved_subtree = _config.is_github_reserved_subtree  # type: ignore[no-redef]
 
 SKIP_NAMES = {
     'INDEX.md', 'README.md', '__init__.py', '.DS_Store',
