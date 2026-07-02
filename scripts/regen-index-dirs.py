@@ -76,6 +76,13 @@ def main(argv: list[str]) -> int:
         if not d.is_dir():
             print(f"Error: not a directory: {d}", file=sys.stderr)
             return 1
+        # Never touch an INDEX under the GitHub-reserved subtree: _ensure_marker
+        # writes to an existing INDEX BEFORE the guarded regen_index delegation,
+        # so it needs its own skip to keep a still-present .github INDEX
+        # byte-unchanged. Canonicalized whole-subtree membership (collapses '..').
+        if is_github_reserved_subtree(d):
+            print(f"skipped (GitHub-reserved subtree): {d / 'INDEX.md'}")
+            continue
         _ensure_marker(d / 'INDEX.md', d.name)
         regen_index(d)
         print(f"regenerated: {d / 'INDEX.md'}")
