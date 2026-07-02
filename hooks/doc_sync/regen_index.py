@@ -10,7 +10,7 @@ from .tree import build_tree
 # module is loaded standalone via importlib spec_from_file_location (mirrors the
 # regen_readme/tree.py pattern so the git-tracked filter resolves either way).
 try:
-    from .config import tracked_names, tracked_relpaths
+    from .config import tracked_names, tracked_relpaths, is_github_reserved_subtree
 except ImportError:
     import importlib as _importlib
     import os as _os
@@ -21,6 +21,7 @@ except ImportError:
     _cfg = _importlib.import_module("hooks.doc_sync.config")
     tracked_names = _cfg.tracked_names  # type: ignore[no-redef]
     tracked_relpaths = _cfg.tracked_relpaths  # type: ignore[no-redef]
+    is_github_reserved_subtree = _cfg.is_github_reserved_subtree  # type: ignore[no-redef]
 
 
 def _detect_convention(dir_path: Path) -> str:
