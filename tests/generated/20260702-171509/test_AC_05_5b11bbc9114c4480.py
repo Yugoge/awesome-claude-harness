@@ -5,10 +5,21 @@
 # above (AC_UID, AC_TYPE, docstring) MUST be preserved verbatim so QA can
 # trace each test back to its source AC entry.
 
-import pytest
+import hashlib
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
 
 AC_UID = "5b11bbc9114c4480"
 AC_TYPE = "data"
+
+_REPO_ROOT = Path(__file__).resolve().parents[3]
+_SCRIPT = _REPO_ROOT / "scripts" / "regen-index-dirs.py"
+
+
+def _sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
 def test_AC_05():
@@ -17,7 +28,28 @@ def test_AC_05():
     WHEN:  dev adds a canonical .github guard before _ensure_marker/regen_index for .github targets
     THEN:  regen-index-dirs.py invoked on a .github (or nested) dir containing a pre-existing markerless INDEX.md does NOT rewrite/modify that INDEX.md; invoked on a normal dir still regenerates normally
     """
-    # TODO(dev): replace the line below with the real test body. While the
-    # TEST_INCOMPLETE sentinel is present the test will hard-fail, marking
-    # the AC as unimplemented for QA Phase 5.
-    pytest.fail(f"TEST_INCOMPLETE: {AC_UID} — regen-index-dirs.py leaves .github markerless INDEX byte-unchanged, regenerates normal dir")
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        ghw = root / ".github" / "workflows"
+        ghw.mkdir(parents=True)
+        # Pre-existing MARKERLESS INDEX under the .github subtree.
+        gh_index = ghw / "INDEX.md"
+        gh_index.write_text("# workflows\n\nHand-written prose, no AUTO marker.\n")
+        before = _sha256(gh_index)
+
+        normal = root / "normalfolder"
+        normal.mkdir()
+        (normal / "somefile.txt").write_text("hi\n")
+
+        proc = subprocess.run(
+            [sys.executable, str(_SCRIPT), str(ghw), str(normal)],
+            capture_output=True,
+        )
+        assert proc.returncode == 0, f"non-zero exit: {proc.stderr.decode()}"
+
+        # SKIP: the .github INDEX must be byte-identical (not rewritten).
+        assert _sha256(gh_index) == before, ".github markerless INDEX was modified (guard failed)"
+        # NON-SKIP: the normal dir INDEX was regenerated (AUTO marker present).
+        normal_index = normal / "INDEX.md"
+        assert normal_index.exists(), "normal INDEX not generated"
+        assert "AUTO:index-stats" in normal_index.read_text(), "normal INDEX not regenerated (no AUTO marker)"
