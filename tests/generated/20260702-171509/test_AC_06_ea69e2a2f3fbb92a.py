@@ -5,10 +5,14 @@
 # above (AC_UID, AC_TYPE, docstring) MUST be preserved verbatim so QA can
 # trace each test back to its source AC entry.
 
-import pytest
+import subprocess
+from pathlib import Path
 
 AC_UID = "ea69e2a2f3fbb92a"
 AC_TYPE = "data"
+
+_REPO_ROOT = Path(__file__).resolve().parents[3]
+_SCRIPT = _REPO_ROOT / "scripts" / "discover-folders.sh"
 
 
 def test_AC_06():
@@ -17,7 +21,13 @@ def test_AC_06():
     WHEN:  verify only (no change)
     THEN:  running discover-folders.sh on the repo root emits NO path under .github/
     """
-    # TODO(dev): replace the line below with the real test body. While the
-    # TEST_INCOMPLETE sentinel is present the test will hard-fail, marking
-    # the AC as unimplemented for QA Phase 5.
-    pytest.fail(f"TEST_INCOMPLETE: {AC_UID} — discover-folders.sh output has no line under .github/")
+    proc = subprocess.run(
+        ["bash", str(_SCRIPT), str(_REPO_ROOT)],
+        capture_output=True, text=True,
+    )
+    assert proc.returncode == 0, f"discover-folders.sh failed: {proc.stderr}"
+    offending = [
+        ln for ln in proc.stdout.splitlines()
+        if ln == ".github" or ln.startswith(".github/")
+    ]
+    assert not offending, f"discover-folders.sh emitted .github subtree paths: {offending}"
