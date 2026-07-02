@@ -17,6 +17,18 @@ if [[ ! -d "$FOLDER_PATH" ]]; then
 fi
 
 FOLDER_NAME=$(basename "$FOLDER_PATH")
+
+# GitHub-reserved directories must not get a generated README: GitHub renders
+# .github/README.md in place of the repo-root README on the repository home
+# page (precedence .github/README.md > README.md), so a generated folder stub
+# there hijacks the project's real landing-page README. Skip without writing.
+case "$FOLDER_NAME" in
+  .github)
+    echo "Skipping GitHub-reserved dir (a generated README would hijack the repo landing page): $FOLDER_PATH" >&2
+    exit 0
+    ;;
+esac
+
 README_FILE="${FOLDER_PATH}/README.md"
 TIMESTAMP=$(date -u +"%Y-%m-%d %H:%M:%S UTC")
 
