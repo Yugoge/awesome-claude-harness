@@ -18,13 +18,17 @@ fi
 
 FOLDER_NAME=$(basename "$FOLDER_PATH")
 
-# GitHub-reserved directories must not get a generated README: GitHub renders
-# .github/README.md in place of the repo-root README on the repository home
-# page (precedence .github/README.md > README.md), so a generated folder stub
-# there hijacks the project's real landing-page README. Skip without writing.
-case "$FOLDER_NAME" in
-  .github)
-    echo "Skipping GitHub-reserved dir (a generated README would hijack the repo landing page): $FOLDER_PATH" >&2
+# GitHub-reserved subtree must not get a generated README anywhere beneath it:
+# GitHub renders .github/README.md in place of the repo-root README on the home
+# page (precedence .github/README.md > README.md), so a stub there hijacks the
+# landing page; nested stubs are repo-noise. Canonicalize with `realpath -m`
+# FIRST (collapses '..' without touching disk, so a non-canonical path such as
+# .github/workflows/.. cannot bypass the check), then skip if ANY component of
+# the resolved path is exactly .github.
+CANON_PATH="$(realpath -m "$FOLDER_PATH")"
+case "/${CANON_PATH#/}/" in
+  */.github/*)
+    echo "Skipping GitHub-reserved subtree (a generated README would hijack the repo landing page or add repo-noise): $FOLDER_PATH" >&2
     exit 0
     ;;
 esac
