@@ -201,6 +201,11 @@ def regen_index(dir_path: Path):
     """Regenerate INDEX.md, preserving hand-written annotations. Only files that already
     carry the AUTO marker (or do not exist yet) are managed; a markerless existing INDEX is
     left untouched, mirroring regen_readme so annotation-wiping is structurally impossible."""
+    # Never generate an INDEX under the GitHub-reserved subtree: a stub there is
+    # repo-noise (nested) or a landing-page hijack risk. Skip when the folder IS
+    # .github or lies beneath it, robust to non-canonical '..' inputs.
+    if is_github_reserved_subtree(dir_path):
+        return
     index_path = dir_path / 'INDEX.md'
     if not _index_needs_update(index_path):
         return
