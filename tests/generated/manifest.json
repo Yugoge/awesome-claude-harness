@@ -153,6 +153,10 @@
     {
       "task_id": "dev-20260619-092310-errmsg",
       "manifest_path": "tests/generated/dev-20260619-092310-errmsg/manifest.json"
+    },
+    {
+      "task_id": "20260702-171509",
+      "manifest_path": "tests/generated/20260702-171509/manifest.json"
     }
   ]
 }
