@@ -5,10 +5,16 @@
 # above (AC_UID, AC_TYPE, docstring) MUST be preserved verbatim so QA can
 # trace each test back to its source AC entry.
 
-import pytest
+import os
+import subprocess
+import tempfile
+from pathlib import Path
 
 AC_UID = "9d5a1785b3649255"
 AC_TYPE = "data"
+
+_REPO_ROOT = Path(__file__).resolve().parents[3]
+_SCRIPT = _REPO_ROOT / "scripts" / "generate-folder-readme.sh"
 
 
 def test_AC_03():
@@ -17,7 +23,21 @@ def test_AC_03():
     WHEN:  dev replaces with realpath -m canonicalized whole-subtree skip
     THEN:  generate-folder-readme.sh invoked on .github, .github/workflows, .github/workflows/.. exits 0 and writes NO README.md; invoked on a normal temp dir writes README.md and exits 0
     """
-    # TODO(dev): replace the line below with the real test body. While the
-    # TEST_INCOMPLETE sentinel is present the test will hard-fail, marking
-    # the AC as unimplemented for QA Phase 5.
-    pytest.fail(f"TEST_INCOMPLETE: {AC_UID} — generate-folder-readme.sh exits 0 + no README on .github subtree, writes README on normal dir")
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        gh = root / ".github"
+        ghw = gh / "workflows"
+        ghw.mkdir(parents=True)
+        # SKIP inputs: .github, nested, and non-canonical '..' — exit 0, no write.
+        for skip_dir in (gh, ghw, ghw / ".."):
+            proc = subprocess.run(["bash", str(_SCRIPT), str(skip_dir)], capture_output=True)
+            assert proc.returncode == 0, f"non-zero exit for {skip_dir}: {proc.stderr.decode()}"
+        assert not (gh / "README.md").exists(), "README written under .github (skip failed)"
+        assert not (ghw / "README.md").exists(), "README written under .github/workflows (skip failed)"
+        # NON-SKIP: a normal folder writes README and exits 0 (no regression).
+        normal = root / "normalfolder"
+        normal.mkdir()
+        (normal / "somefile.txt").write_text("hi\n")
+        proc = subprocess.run(["bash", str(_SCRIPT), str(normal)], capture_output=True)
+        assert proc.returncode == 0, f"non-zero exit for normal dir: {proc.stderr.decode()}"
+        assert (normal / "README.md").exists(), "README NOT written for a normal folder (regression)"
