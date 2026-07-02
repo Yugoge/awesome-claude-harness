@@ -5,10 +5,34 @@
 # above (AC_UID, AC_TYPE, docstring) MUST be preserved verbatim so QA can
 # trace each test back to its source AC entry.
 
-import pytest
+from pathlib import Path
 
 AC_UID = "838e694e04a765ca"
 AC_TYPE = "data"
+
+_REPO_ROOT = Path(__file__).resolve().parents[3]
+
+# Each folder-doc README/INDEX writer must carry a canonicalized whole-subtree
+# .github skip. Python generators share config.is_github_reserved_subtree;
+# shell generators canonicalize with `realpath -m` then match a whole .github
+# path component.
+_PY_GUARDED = {
+    "hooks/doc_sync/regen_readme.py": "is_github_reserved_subtree",
+    "hooks/doc_sync/regen_index.py": "is_github_reserved_subtree",
+    "scripts/regen-index-dirs.py": "is_github_reserved_subtree",
+}
+_SH_GUARDED = {
+    "scripts/generate-folder-readme.sh": ("realpath -m", "*/.github/*"),
+    "scripts/generate-folder-index.sh": ("realpath -m", "*/.github/*"),
+}
+
+# The shared predicate itself must canonicalize (collapse '..') before the
+# component-membership test.
+_SHARED_PREDICATE = "hooks/doc_sync/config.py"
+
+# Known non-generator: writes agent-index.json cp-state registry, NOT a folder
+# doc — correctly excluded from the closure requirement.
+_KNOWN_NON_GENERATOR = "hooks/pretool-cp-checkin.py"
 
 
 def test_AC_09():
@@ -17,7 +41,26 @@ def test_AC_09():
     WHEN:  dev completes all generator guards
     THEN:  re-running the closure grep for README.md/INDEX.md writers finds every writer that could target .github now canonicalizes and skips; no unguarded README/INDEX writer under .github remains (hooks/pretool-cp-checkin.py excluded — it writes agent-index.json cp-state, not a folder doc)
     """
-    # TODO(dev): replace the line below with the real test body. While the
-    # TEST_INCOMPLETE sentinel is present the test will hard-fail, marking
-    # the AC as unimplemented for QA Phase 5.
-    pytest.fail(f"TEST_INCOMPLETE: {AC_UID} — closure grep of hooks/ + scripts/ finds no unguarded .github folder-doc writer")
+    # Every Python folder-doc writer references the shared canonical predicate.
+    for rel, token in _PY_GUARDED.items():
+        text = (_REPO_ROOT / rel).read_text()
+        assert token in text, f"{rel} missing canonical .github guard token '{token}'"
+
+    # Every shell folder-doc writer canonicalizes and matches a whole .github component.
+    for rel, tokens in _SH_GUARDED.items():
+        text = (_REPO_ROOT / rel).read_text()
+        for token in tokens:
+            assert token in text, f"{rel} missing guard token '{token}'"
+
+    # The shared predicate collapses '..' (canonicalizes) BEFORE the membership
+    # test — resolve() does this — and tests .github component membership.
+    predicate = (_REPO_ROOT / _SHARED_PREDICATE).read_text()
+    assert "def is_github_reserved_subtree" in predicate, "shared predicate helper absent"
+    assert ".resolve()" in predicate, "predicate does not canonicalize (collapse '..') before membership test"
+
+    # The known non-generator writes agent-index.json (cp-state), not a folder
+    # doc, so its unguarded INDEX write is correctly out of scope.
+    non_gen = (_REPO_ROOT / _KNOWN_NON_GENERATOR).read_text()
+    assert "agent-index.json" in non_gen, (
+        "cp-checkin no longer writes agent-index.json; re-audit whether it became a folder-doc writer"
+    )
