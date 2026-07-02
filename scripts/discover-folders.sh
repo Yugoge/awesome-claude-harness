@@ -19,6 +19,7 @@ cd "$PROJECT_ROOT"
 # Excluded directories (system, build, cache, venv)
 EXCLUDES=(
   ".git"
+  ".github"
   "venv"
   ".venv"
   "env"
