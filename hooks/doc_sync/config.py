@@ -12,6 +12,26 @@ import json
 import subprocess
 from pathlib import Path
 
+# GitHub-reserved directory name. A generated README.md anywhere under .github/
+# can hijack the repo landing page (GitHub precedence: .github/README.md >
+# README.md > docs/README.md); nested INDEX/README stubs are repo-noise. No
+# folder-doc generator may write under this subtree.
+GITHUB_RESERVED_DIR = '.github'
+
+
+def is_github_reserved_subtree(dir_path: Path) -> bool:
+    """True iff dir_path IS .github or lies anywhere beneath a .github/ ancestor.
+
+    The path is canonicalized with Path.resolve() FIRST, which collapses '..'
+    segments, so a non-canonical input such as '.github/workflows/..' (which
+    resolves back into .github) cannot bypass the check. Membership is then
+    tested against the resolved path components. (A degenerate false-positive
+    would require the whole repo to sit under a directory literally named
+    '.github', which is not a real deployment concern -- see BA canonicalization
+    note.)
+    """
+    return GITHUB_RESERVED_DIR in Path(dir_path).resolve().parts
+
 
 def load_config(project_dir: Path) -> dict:
     """Load <project_dir>/.claude/doc-sync.json. Return {} when missing or malformed."""
