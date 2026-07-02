@@ -53,10 +53,10 @@ def test_AC_09():
             assert token in text, f"{rel} missing guard token '{token}'"
 
     # The shared predicate collapses '..' (canonicalizes) BEFORE the membership
-    # test — resolve() does this — and tests .github component membership.
+    # test — os.path.normpath does this lexically — and tests .github membership.
     predicate = (_REPO_ROOT / _SHARED_PREDICATE).read_text()
     assert "def is_github_reserved_subtree" in predicate, "shared predicate helper absent"
-    assert ".resolve()" in predicate, "predicate does not canonicalize (collapse '..') before membership test"
+    assert "normpath" in predicate, "predicate does not canonicalize (collapse '..') before membership test"
 
     # The known non-generator writes agent-index.json (cp-state), not a folder
     # doc, so its unguarded INDEX write is correctly out of scope.
