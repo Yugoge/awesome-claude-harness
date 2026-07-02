@@ -16,11 +16,12 @@ fi
 FOLDER_NAME=$(basename "$FOLDER_PATH")
 
 # GitHub-reserved subtree must not get a generated INDEX anywhere beneath it
-# (repo-noise / landing-page hijack risk). Canonicalize with `realpath -m` FIRST
-# (collapses '..' without touching disk, so a non-canonical path such as
-# .github/workflows/.. cannot bypass the check), then skip if ANY component of
-# the resolved path is exactly .github.
-CANON_PATH="$(realpath -m "$FOLDER_PATH")"
+# (repo-noise / landing-page hijack risk). Canonicalize LEXICALLY with
+# `realpath -m -s` FIRST (-m: works on non-existent paths without touching disk;
+# -s: do NOT expand symlinks, so the decision is by the path as written and a
+# non-canonical .github/workflows/.. still collapses into .github), then skip if
+# ANY component of the canonicalized path is exactly .github.
+CANON_PATH="$(realpath -m -s "$FOLDER_PATH")"
 case "/${CANON_PATH#/}/" in
   */.github/*)
     echo "Skipping GitHub-reserved subtree (a generated INDEX would add repo-noise under .github): $FOLDER_PATH" >&2
