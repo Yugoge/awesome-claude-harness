@@ -5,10 +5,28 @@
 # above (AC_UID, AC_TYPE, docstring) MUST be preserved verbatim so QA can
 # trace each test back to its source AC entry.
 
-import pytest
+import importlib.util
+import sys
+import tempfile
+from pathlib import Path
 
 AC_UID = "63adf09ce02f7cba"
 AC_TYPE = "data"
+
+_REPO_ROOT = Path(__file__).resolve().parents[3]
+
+
+def _load_regen_readme():
+    """Load hooks/doc_sync/regen_readme.py via its package so relative imports resolve."""
+    if str(_REPO_ROOT) not in sys.path:
+        sys.path.insert(0, str(_REPO_ROOT))
+    spec = importlib.util.spec_from_file_location(
+        "hooks.doc_sync.regen_readme",
+        _REPO_ROOT / "hooks" / "doc_sync" / "regen_readme.py",
+    )
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
 
 
 def test_AC_01():
@@ -17,7 +35,21 @@ def test_AC_01():
     WHEN:  dev generalizes the guard to canonicalized whole-subtree membership
     THEN:  regen_readme('.github'), regen_readme('.github/workflows'), and regen_readme('.github/workflows/..') each write NO README.md; regen_readme(<normal temp dir>) DOES write README.md
     """
-    # TODO(dev): replace the line below with the real test body. While the
-    # TEST_INCOMPLETE sentinel is present the test will hard-fail, marking
-    # the AC as unimplemented for QA Phase 5.
-    pytest.fail(f"TEST_INCOMPLETE: {AC_UID} — regen_readme.py skips canonicalized .github subtree, writes README on normal dir")
+    regen_readme = _load_regen_readme().regen_readme
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        gh = root / ".github"
+        ghw = gh / "workflows"
+        ghw.mkdir(parents=True)
+        # SKIP inputs: .github, nested .github/workflows, and the non-canonical
+        # .github/workflows/.. (resolves back into .github).
+        for skip_dir in (gh, ghw, ghw / ".."):
+            regen_readme(skip_dir)
+        assert not (gh / "README.md").exists(), "README written under .github (skip failed)"
+        assert not (ghw / "README.md").exists(), "README written under .github/workflows (skip failed)"
+        # NON-SKIP: a normal folder still gets its README.md (no regression).
+        normal = root / "normalfolder"
+        normal.mkdir()
+        (normal / "somefile.txt").write_text("hi\n")
+        regen_readme(normal)
+        assert (normal / "README.md").exists(), "README NOT written for a normal folder (regression)"
