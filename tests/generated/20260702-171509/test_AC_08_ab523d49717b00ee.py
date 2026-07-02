@@ -5,10 +5,33 @@
 # above (AC_UID, AC_TYPE, docstring) MUST be preserved verbatim so QA can
 # trace each test back to its source AC entry.
 
-import pytest
+import subprocess
+from pathlib import Path
 
 AC_UID = "ab523d49717b00ee"
 AC_TYPE = "data"
+
+_REPO_ROOT = Path(__file__).resolve().parents[3]
+
+_IGNORED = [
+    ".github/README.md",
+    ".github/INDEX.md",
+    ".github/workflows/README.md",
+    ".github/workflows/INDEX.md",
+]
+_NOT_IGNORED = [
+    ".github/CONTRIBUTING.md",
+    ".github/workflows/baseline.yml",
+]
+
+
+def _is_ignored(path: str) -> bool:
+    """git check-ignore -q: exit 0 => ignored, exit 1 => not ignored."""
+    proc = subprocess.run(
+        ["git", "-C", str(_REPO_ROOT), "check-ignore", "-q", path],
+        capture_output=True,
+    )
+    return proc.returncode == 0
 
 
 def test_AC_08():
@@ -17,7 +40,7 @@ def test_AC_08():
     WHEN:  dev appends .github/**/README.md, .github/**/INDEX.md, .github/INDEX.md
     THEN:  git check-ignore reports IGNORED for .github/README.md, .github/INDEX.md, .github/workflows/README.md, .github/workflows/INDEX.md and NOT-IGNORED for .github/CONTRIBUTING.md and .github/workflows/baseline.yml
     """
-    # TODO(dev): replace the line below with the real test body. While the
-    # TEST_INCOMPLETE sentinel is present the test will hard-fail, marking
-    # the AC as unimplemented for QA Phase 5.
-    pytest.fail(f"TEST_INCOMPLETE: {AC_UID} — check-ignore: 4 .github stub docs ignored, CONTRIBUTING.md + baseline.yml not ignored")
+    for path in _IGNORED:
+        assert _is_ignored(path), f"expected IGNORED but is not: {path}"
+    for path in _NOT_IGNORED:
+        assert not _is_ignored(path), f"expected NOT-IGNORED but is ignored (plumbing hit): {path}"
