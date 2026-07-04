@@ -84,8 +84,10 @@ def _maybe_regen_global(parent_dir: Path, rel: str):
         return
     global_dir = Path.home() / wd
     if global_dir.is_dir() and global_dir.resolve() != parent_dir.resolve():
-        regen_index(global_dir)
-        regen_readme(global_dir)
+        # Global dirs live under ~/.claude; anchor the reserved-subtree check to
+        # $HOME so it is framed the same way global rel paths are (.claude/...).
+        regen_index(global_dir, Path.home())
+        regen_readme(global_dir, Path.home())
 
 
 def process_parent_dirs(parent_dir: Path, project_dir: Path):
