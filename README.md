@@ -19,6 +19,28 @@ It is not a prompt pack. It is an operating system for agents — with a schedul
 
 ---
 
+## Quickstart
+
+```bash
+# (optional) back up any existing ~/.claude config first:
+# mv ~/.claude ~/.claude.bak-"$(date +%Y%m%d-%H%M%S)"
+
+# 1. Clone
+git clone https://github.com/Yugoge/awesome-claude-harness.git ~/.claude
+
+# 2. Bootstrap — creates the venv, installs dependencies, makes hooks executable
+~/.claude/scripts/bootstrap
+
+# 3. Start Claude Code — hooks activate on the next session
+claude
+```
+
+> Full setup details, optional doctor preflight, and the dependency matrix are in the [Quickstart](#quickstart) section below.
+
+<!-- TODO: Add terminal GIF demo here — see examples/guard-demo/run-demo.sh -->
+
+---
+
 ## Why this exists
 
 Powerful coding agents fail in three predictable, expensive ways. Two of these are not hypothetical here — they are scars, with dates and commit hashes, in the source of this repo.
