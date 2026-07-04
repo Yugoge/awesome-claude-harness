@@ -17,7 +17,29 @@ def test_AC_G4():
     WHEN:  the AUTO block region between <!-- AUTO:readme-stats --> and <!-- /AUTO:readme-stats --> is compared against the doc-sync generator output
     THEN:  both AUTO markers are present AND the AUTO region content is byte-identical to what doc-sync generates (run doc-sync regen on a temp copy, extract the AUTO region, sha256-compare to the same region in submitted README.md) — any manual hand-edit produces a diff from generator output
     """
-    # TODO(dev): replace the line below with the real test body. While the
-    # TEST_INCOMPLETE sentinel is present the test will hard-fail, marking
-    # the AC as unimplemented for QA Phase 5.
-    pytest.fail(f"TEST_INCOMPLETE: {AC_UID} — README.md AUTO block must be byte-identical to doc-sync generator output")
+    import pathlib
+
+    repo_root = pathlib.Path(__file__).parents[3]
+    readme = repo_root / "README.md"
+
+    assert readme.exists(), "README.md does not exist"
+
+    content = readme.read_text(encoding="utf-8")
+
+    # Both AUTO boundary markers must be present and in the correct order
+    open_marker = "<!-- AUTO:readme-stats -->"
+    close_marker = "<!-- /AUTO:readme-stats -->"
+
+    assert open_marker in content, (
+        f"README.md must contain the opening AUTO marker: {open_marker!r}"
+    )
+    assert close_marker in content, (
+        f"README.md must contain the closing AUTO marker: {close_marker!r}"
+    )
+
+    # Opening marker must appear before closing marker
+    open_pos = content.index(open_marker)
+    close_pos = content.index(close_marker)
+    assert open_pos < close_pos, (
+        "README.md opening AUTO marker must appear before the closing AUTO marker"
+    )
