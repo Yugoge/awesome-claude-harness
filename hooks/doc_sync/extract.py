@@ -98,13 +98,25 @@ def _parse_frontmatter(text: str) -> str | None:
     if end == -1:
         return None
     fm = text[3:end]
-    for line in fm.split('\n'):
+    lines = fm.split('\n')
+    for i, line in enumerate(lines):
         stripped = line.strip()
         if not stripped.startswith('description:'):
             continue
-        desc = line.split(':', 1)[1].strip().strip('"').strip("'")
-        if desc:
-            return desc
+        inline = line.split(':', 1)[1].strip().strip('"').strip("'")
+        # Handle YAML block scalar indicators (>- and >) by collecting indented lines.
+        if inline in ('>', '>-', '|', '|-'):
+            # Collect subsequent indented continuation lines.
+            parts = []
+            for continuation in lines[i + 1:]:
+                if continuation and (continuation[0] == ' ' or continuation[0] == '\t'):
+                    parts.append(continuation.strip())
+                else:
+                    break
+            if parts:
+                return ' '.join(parts)
+        elif inline:
+            return inline
     return None
 
 
