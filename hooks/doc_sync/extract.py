@@ -185,12 +185,22 @@ def _extract_py_desc(text: str) -> str:
 
 
 def _extract_sh_desc(text: str) -> str:
+    import re as _re
+    # Separator pattern: lines like # ====, # ----, # ....  (all non-alphanumeric after #)
+    _sep_re = _re.compile(r'^#+\s*[^a-zA-Z0-9]*$')
     for line in text.split('\n'):
         s = line.strip()
         if s.startswith('#!'):
+            # Shebang line — skip.
             continue
         if s.startswith('#'):
-            return s.lstrip('# ').strip()
-        if s:
+            # Skip bare separator lines (e.g. # ===========, # ---------, bare #).
+            if _sep_re.match(s):
+                continue
+            text_part = s.lstrip('# ').strip()
+            if text_part:
+                return text_part
+        elif s:
+            # Reached non-comment, non-empty code line without finding a description.
             break
     return 'Shell script'
