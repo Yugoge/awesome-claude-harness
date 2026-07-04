@@ -162,13 +162,14 @@ def _extract_py_desc(text: str) -> str:
     # Encoding cookie: # -*- coding: ... -*- or # coding: ...
     _encoding_re = _re.compile(r'^#.*coding[:=]\s*[-\w.]+')
     lines = text.split('\n')
+    first_comment: str | None = None  # fallback if no docstring found
     for i, line in enumerate(lines):
         if i >= 30:
             break
         s = line.strip()
-        # Stop scanning once we hit class/def definitions — those are function
-        # docstrings, not module descriptions.
-        if s.startswith(('class ', 'def ', 'async def ')):
+        # Stop scanning once we hit class/def/import — module-level docstrings
+        # must precede all imports; a string after imports is not a module docstring.
+        if s.startswith(('class ', 'def ', 'async def ', 'import ', 'from ')):
             break
         # Single-line inline docstring: """doc text"""
         doc = _check_single_line_docstring(s)
@@ -180,10 +181,13 @@ def _extract_py_desc(text: str) -> str:
             if content:
                 return content
         # Informative comment: skip shebang, encoding cookies, and bare separators.
+        # Save as fallback only (docstring takes priority when appearing later).
         if s.startswith('#') and not s.startswith('#!') and not _encoding_re.match(s):
             text_part = s.lstrip('# ').strip()
-            if text_part:
-                return text_part
+            if text_part and first_comment is None:
+                first_comment = text_part
+    if first_comment:
+        return first_comment
     return 'Python script'
 
 
