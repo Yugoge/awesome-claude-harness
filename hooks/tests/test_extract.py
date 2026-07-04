@@ -74,12 +74,12 @@ class TestJsonYamlIntrospection:
         assert result == 'json config'
 
     def test_yaml_uses_description_key(self, tmp_path):
-        """YAML file with 'description' key returns that value."""
+        """YAML file with 'description' key returns description (highest priority)."""
         f = tmp_path / 'action.yaml'
         f.write_text('name: My Action\ndescription: Deploy the application\n')
         result = extract_description(f)
-        # description or name key — either is acceptable per spec
-        assert result in ('Deploy the application', 'My Action')
+        # description takes priority over name per description > title > name ordering.
+        assert result == 'Deploy the application'
         assert result != 'yaml config'
 
     def test_requirements_txt_known_file(self, tmp_path):
