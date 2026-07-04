@@ -27,5 +27,8 @@ def test_AC_G2():
     content = readme.read_text(encoding="utf-8")
 
     assert "<details>" in content, (
-        "README.md must contain a <details> HTML element (dependency matrix should be collapsible)"
+        "README.md must contain an opening <details> HTML element (dependency matrix should be collapsible)"
+    )
+    assert "</details>" in content, (
+        "README.md must contain a closing </details> HTML element"
     )
