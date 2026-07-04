@@ -160,14 +160,25 @@ def _find_next_line_content(lines: list[str], start_i: int, max_lines: int) -> s
 def _extract_py_desc(text: str) -> str:
     lines = text.split('\n')
     for i, line in enumerate(lines):
+        if i >= 30:
+            break
         s = line.strip()
+        # Stop scanning once we hit class/def definitions — those are function
+        # docstrings, not module descriptions.
+        if s.startswith(('class ', 'def ', 'async def ')):
+            break
+        # Single-line inline docstring: """doc text"""
         doc = _check_single_line_docstring(s)
         if doc:
             return doc
-        if s.startswith('#') and not s.startswith('#!') and i < 5:
-            return s.lstrip('# ').strip()
-        if (s.startswith('"""') or s.startswith("'''")) and i < 5:
-            content = _find_next_line_content(lines, i + 1, 5)
+        # Informative comment (not shebang, not bare # separator).
+        if s.startswith('#') and not s.startswith('#!'):
+            text_part = s.lstrip('# ').strip()
+            if text_part:
+                return text_part
+        # Multi-line docstring opening — collect first non-empty line.
+        if s.startswith('"""') or s.startswith("'''"):
+            content = _find_next_line_content(lines, i + 1, 10)
             if content:
                 return content
     return 'Python script'
