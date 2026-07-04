@@ -5,19 +5,43 @@
 # above (AC_UID, AC_TYPE, docstring) MUST be preserved verbatim so QA can
 # trace each test back to its source AC entry.
 
+import json
+import sys
+from pathlib import Path
+
 import pytest
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
+from hooks.doc_sync.extract import extract_description
 
 AC_UID = "a1b2c3d4e5f60002"
 AC_TYPE = "data"
 
 
-def test_AC_B1():
+def test_AC_B1(tmp_path):
     """
     GIVEN: hooks/doc_sync/extract.py is edited to fix the JSON/YAML defect including known-file lookup for settings.json and settings.template.json
     WHEN:  extract_description is called on various JSON files
     THEN:  extract_description(Path('settings.json')) returns 'Claude Code harness configuration (permissions, hooks, env, model)' NOT 'json config'; extract_description(Path('settings.template.json')) returns 'Distributable harness settings template (uses CLAUDE_HOME placeholders)' NOT 'json config'; extract_description on a JSON file with top-level 'title' key returns that title value NOT 'json config'
     """
-    # TODO(dev): replace the line below with the real test body. While the
-    # TEST_INCOMPLETE sentinel is present the test will hard-fail, marking
-    # the AC as unimplemented for QA Phase 5.
-    pytest.fail(f"TEST_INCOMPLETE: {AC_UID} — extract_description must return known-file descriptions and title-key values for JSON files")
+    # Case 1: settings.json known-file lookup
+    f = tmp_path / 'settings.json'
+    f.write_text('{}')
+    result = extract_description(f)
+    assert result == 'Claude Code harness configuration (permissions, hooks, env, model)', \
+        f"settings.json returned {result!r}, expected known-file description"
+
+    # Case 2: settings.template.json known-file lookup
+    f2 = tmp_path / 'settings.template.json'
+    f2.write_text('{}')
+    result2 = extract_description(f2)
+    assert result2 == 'Distributable harness settings template (uses CLAUDE_HOME placeholders)', \
+        f"settings.template.json returned {result2!r}, expected known-file description"
+
+    # Case 3: generic JSON with top-level 'title' key returns title value
+    f3 = tmp_path / 'some_other.json'
+    f3.write_text(json.dumps({'title': 'My Tool Config', 'version': '1.0'}))
+    result3 = extract_description(f3)
+    assert result3 == 'My Tool Config', \
+        f"JSON with title key returned {result3!r}, expected 'My Tool Config'"
+    assert result3 != 'json config'
