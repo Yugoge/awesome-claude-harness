@@ -17,7 +17,38 @@ def test_AC_D():
     WHEN:  the file is read
     THEN:  file exists AND contains sections covering at least 5 mitigation entries AND explicit RISK-1, RISK-2, RISK-3 entries AND references to hook files or stable test names
     """
-    # TODO(dev): replace the line below with the real test body. While the
-    # TEST_INCOMPLETE sentinel is present the test will hard-fail, marking
-    # the AC as unimplemented for QA Phase 5.
-    pytest.fail(f"TEST_INCOMPLETE: {AC_UID} — docs/THREAT-MODEL.md must exist with RISK-1/RISK-2/RISK-3 and 5+ mitigations")
+    import pathlib
+    import re
+
+    repo_root = pathlib.Path(__file__).parents[3]
+    threat_model = repo_root / "docs" / "THREAT-MODEL.md"
+
+    # File must exist
+    assert threat_model.exists(), "docs/THREAT-MODEL.md does not exist"
+
+    content = threat_model.read_text(encoding="utf-8")
+
+    # Must contain all three residual risk entries
+    assert "RISK-1" in content, "docs/THREAT-MODEL.md missing RISK-1 entry"
+    assert "RISK-2" in content, "docs/THREAT-MODEL.md missing RISK-2 entry"
+    assert "RISK-3" in content, "docs/THREAT-MODEL.md missing RISK-3 entry"
+
+    # Must contain at least 5 mechanism sections (## 2.x headers)
+    mechanism_headers = re.findall(r"^### 2\.\d+", content, re.MULTILINE)
+    assert len(mechanism_headers) >= 5, (
+        f"docs/THREAT-MODEL.md must have at least 5 mechanism sections (### 2.x), found {len(mechanism_headers)}: {mechanism_headers}"
+    )
+
+    # Must contain file:line citations (e.g. filename.py:123 or filename.sh:456)
+    file_line_citations = re.findall(r"\w[\w./\-]+\.(py|sh|md):\d+", content)
+    assert len(file_line_citations) >= 1, (
+        "docs/THREAT-MODEL.md must contain at least one file:line citation (e.g. hooks/foo.py:42)"
+    )
+
+    # .gitignore must contain the negation rule for this file
+    gitignore = repo_root / ".gitignore"
+    assert gitignore.exists(), ".gitignore does not exist"
+    gitignore_content = gitignore.read_text(encoding="utf-8")
+    assert "!docs/THREAT-MODEL.md" in gitignore_content, (
+        ".gitignore must contain '!docs/THREAT-MODEL.md' to un-exclude the threat model"
+    )
