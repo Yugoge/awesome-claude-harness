@@ -5,19 +5,44 @@
 # above (AC_UID, AC_TYPE, docstring) MUST be preserved verbatim so QA can
 # trace each test back to its source AC entry.
 
+import re
+import pathlib
 import pytest
 
 AC_UID = "a1b2c3d4e5f60007b"
 AC_TYPE = "data"
 
+# CJK Unified Ideographs block U+4E00-U+9FFF
+CJK_PATTERN = re.compile(r"[一-鿿]")
 
-def test_AC_C1b():
+# Repo root relative to this test file (tests/generated/20260704-134650/)
+REPO_ROOT = pathlib.Path(__file__).parent.parent.parent
+
+
+def test_env_example_comments_translated():
     """
     GIVEN: hooks/.env.example is translated (comment lines only) AND Read(**/.env.*) is denied in settings.json so QA cannot use the Read tool directly
     WHEN:  a pytest test opens hooks/.env.example and scans each line
     THEN:  every comment line (where line.lstrip().startswith('#') is true) contains no CJK characters (U+4E00-U+9FFF); non-comment lines (env var assignments and example values) are left verbatim
     """
-    # TODO(dev): replace the line below with the real test body. While the
-    # TEST_INCOMPLETE sentinel is present the test will hard-fail, marking
-    # the AC as unimplemented for QA Phase 5.
-    pytest.fail(f"TEST_INCOMPLETE: {AC_UID} — hooks/.env.example comment lines must contain no CJK characters")
+    env_path = REPO_ROOT / "hooks" / ".env.example"
+    assert env_path.exists(), f"File not found: {env_path}"
+
+    lines = env_path.read_text(encoding="utf-8").splitlines()
+    failing_lines = []
+    for i, line in enumerate(lines, start=1):
+        if line.lstrip().startswith("#"):
+            cjk_chars = CJK_PATTERN.findall(line)
+            if cjk_chars:
+                failing_lines.append(
+                    f"  Line {i}: {line[:80]} (CJK: {cjk_chars[:3]})"
+                )
+
+    assert not failing_lines, (
+        f"CJK characters found in {len(failing_lines)} comment line(s) of hooks/.env.example:\n"
+        + "\n".join(failing_lines)
+    )
+
+
+# Alias for AC-C1b which may call either name
+test_AC_C1b = test_env_example_comments_translated
