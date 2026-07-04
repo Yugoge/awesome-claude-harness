@@ -36,8 +36,10 @@ def is_github_reserved_subtree(dir_path: Path, project_dir: Path | None = None) 
         - It is immune to a repository that itself lives under an unrelated
           ancestor directory literally named '.github' (e.g. ``/srv/.github/app``):
           the ancestor is stripped by the relative-path computation, so only the
-          repo's OWN .github matches. A ``dir_path`` resolving OUTSIDE
-          ``project_dir`` is not this repo's .github and returns False.
+          repo's OWN root-level .github matches (a nested .github deeper in the
+          tree, e.g. src/.github, is a normal folder and is NOT reserved). A
+          ``dir_path`` resolving OUTSIDE ``project_dir`` is not this repo's
+          .github and returns False.
     * When ``project_dir`` is None (no repo anchor available), membership is judged
       LEXICALLY on the path as written: '..' segments are collapsed via
       os.path.normpath, then the components are tested. A bare relative input is
