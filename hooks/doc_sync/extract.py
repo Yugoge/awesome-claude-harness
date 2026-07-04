@@ -100,6 +100,18 @@ def _parse_frontmatter(text: str) -> str | None:
     if end == -1:
         return None
     fm = text[3:end]
+    # Prefer PyYAML when available — handles folded scalars, quoted strings, etc.
+    if _YAML_AVAILABLE:
+        try:
+            data = _yaml.safe_load(fm)
+            if isinstance(data, dict):
+                val = data.get('description')
+                if isinstance(val, str) and val.strip():
+                    # YAML normalizes folded block scalars; collapse remaining newlines.
+                    return ' '.join(val.split())
+        except Exception:
+            pass  # Fall through to manual scanner.
+    # Manual scanner fallback (no PyYAML or YAML parse failed).
     lines = fm.split('\n')
     for i, line in enumerate(lines):
         stripped = line.strip()
