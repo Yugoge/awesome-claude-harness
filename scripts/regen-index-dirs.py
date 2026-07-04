@@ -84,7 +84,7 @@ def main(argv: list[str]) -> int:
             print(f"skipped (GitHub-reserved subtree): {d / 'INDEX.md'}")
             continue
         _ensure_marker(d / 'INDEX.md', d.name)
-        regen_index(d)
+        regen_index(d, REPO_ROOT)
         print(f"regenerated: {d / 'INDEX.md'}")
     return 0
 
