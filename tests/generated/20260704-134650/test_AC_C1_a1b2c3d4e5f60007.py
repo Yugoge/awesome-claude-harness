@@ -12,16 +12,19 @@ import pytest
 AC_UID = "a1b2c3d4e5f60007"
 AC_TYPE = "data"
 
-# CJK Unified Ideographs block U+4E00-U+9FFF
-CJK_PATTERN = re.compile(r"[一-鿿]")
+# Broader CJK pattern covering CJK Unified Ideographs + Extensions,
+# CJK Compatibility Ideographs, Hiragana/Katakana, Hangul
+CJK_PATTERN = re.compile(
+    r"[㐀-䶿一-鿿豈-﫿぀-ヿ가-힯]"
+)
 
-# Repo root relative to this test file (tests/generated/20260704-134650/ → 4 levels up)
+# Repo root relative to this test file (tests/generated/20260704-134650/ to 4 levels up)
 REPO_ROOT = pathlib.Path(__file__).parent.parent.parent.parent
 
 
 def test_AC_C1():
     """
-    GIVEN: the 5 target files are translated to English — 4 files verified by direct read, 1 file (hooks/.env.example) by pytest due to Read(**/.env.*) deny rule
+    GIVEN: the 5 target files are translated to English -- 4 files verified by direct read, 1 file (hooks/.env.example) by pytest due to Read(**/.env.*) deny rule
     WHEN:  each of hooks/README-TODO-INJECTION.md, docs/reference/fswatch-quickref.md, docs/reference/git-fswatch.md, docs/reference/lock-file-handling.md is read
     THEN:  no CJK characters (U+4E00-U+9FFF) appear in the main prose content of these 4 files
     """
@@ -41,5 +44,7 @@ def test_AC_C1():
             failures.append(f"{path.name}: {len(cjk_chars)} CJK characters found (first: U+{ord(cjk_chars[0]):04X})")
 
     assert not failures, (
-        "CJK characters found in translated files:\n" + "\n".join(failures)
+        "CJK characters found in translated files:
+" + "
+".join(failures)
     )

@@ -5,10 +5,27 @@
 # above (AC_UID, AC_TYPE, docstring) MUST be preserved verbatim so QA can
 # trace each test back to its source AC entry.
 
+import re
+import pathlib
 import pytest
 
 AC_UID = "a1b2c3d4e5f60009"
 AC_TYPE = "data"
+
+# Broader CJK pattern covering CJK Unified Ideographs + Extensions,
+# CJK Compatibility Ideographs, Hiragana/Katakana, Hangul
+CJK_PATTERN = re.compile(
+    r"[㐀-䶿一-鿿豈-﫿぀-ヿ가-힯]"
+)
+
+# Repo root relative to this test file (tests/generated/20260704-134650/ to 4 levels up)
+REPO_ROOT = pathlib.Path(__file__).parent.parent.parent.parent
+
+# The two intentional CJK incident-quote strings that must NOT have been removed
+INTENTIONAL_CJK_QUOTES = [
+    "全部commit push",   # full text of the first quote
+    "git checkout 925f5960",      # associated command (ASCII, sanity check)
+]
 
 
 def test_AC_C3():
@@ -17,7 +34,22 @@ def test_AC_C3():
     WHEN:  README.md is read
     THEN:  the two CJK incident-quote strings originally at lines ~28-29 are still present (intentional)
     """
-    # TODO(dev): replace the line below with the real test body. While the
-    # TEST_INCOMPLETE sentinel is present the test will hard-fail, marking
-    # the AC as unimplemented for QA Phase 5.
-    pytest.fail(f"TEST_INCOMPLETE: {AC_UID} — README.md must still contain intentional CJK incident-quote strings")
+    readme = REPO_ROOT / "README.md"
+    assert readme.exists(), f"README.md not found: {readme}"
+    content = readme.read_text(encoding="utf-8")
+
+    # The quote string that must remain verbatim
+    cjk_quote = "全部commit push"
+    assert cjk_quote in content, (
+        f"Intentional CJK quote missing from README.md: {repr(cjk_quote)}. "
+        "Do NOT translate the incident postmortem quotes in README.md."
+    )
+    # Sanity: the associated command should also still be present
+    assert "git checkout 925f5960" in content, (
+        "Incident command string missing from README.md; README.md may have been wrongly edited."
+    )
+    # Also ensure we did not delete CJK from README entirely (should have at least 2 occurrences)
+    cjk_matches = CJK_PATTERN.findall(content)
+    assert len(cjk_matches) >= 2, (
+        f"README.md should contain at least 2 CJK chars (intentional quotes), found {len(cjk_matches)}."
+    )

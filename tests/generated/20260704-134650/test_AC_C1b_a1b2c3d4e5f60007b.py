@@ -12,11 +12,26 @@ import pytest
 AC_UID = "a1b2c3d4e5f60007b"
 AC_TYPE = "data"
 
-# CJK Unified Ideographs block U+4E00-U+9FFF
-CJK_PATTERN = re.compile(r"[一-鿿]")
+# Broader CJK pattern covering CJK Unified Ideographs + Extensions,
+# CJK Compatibility Ideographs, Hiragana/Katakana, Hangul
+CJK_PATTERN = re.compile(
+    r"[㐀-䶿一-鿿豈-﫿぀-ヿ가-힯]"
+)
 
-# Repo root relative to this test file (tests/generated/20260704-134650/ → 4 levels up)
+# Repo root relative to this test file (tests/generated/20260704-134650/ to 4 levels up)
 REPO_ROOT = pathlib.Path(__file__).parent.parent.parent.parent
+
+# Expected verbatim assignment lines in hooks/.env.example (env var names and values)
+# These must be preserved exactly after translating only the comment lines
+EXPECTED_ASSIGNMENTS = [
+    "export CLAUDE_AUTO_CREATE_REPO=true",
+    "export CLAUDE_DEFAULT_REPO_VISIBILITY=private",
+    "export CLAUDE_AUTO_PUSH=true",
+    "export CLAUDE_RUN_TESTS_BEFORE_COMMIT=false",
+    "export CLAUDE_AUTO_FORMAT=true",
+    "export CLAUDE_HOOKS_VERBOSE=false",
+    "export CLAUDE_HOOKS_DRY_RUN=false",
+]
 
 
 def test_env_example_comments_translated():
@@ -39,9 +54,23 @@ def test_env_example_comments_translated():
                 )
 
     assert not failing_lines, (
-        f"CJK characters found in {len(failing_lines)} comment line(s) of hooks/.env.example:\n"
-        + "\n".join(failing_lines)
+        f"CJK characters found in {len(failing_lines)} comment line(s) of hooks/.env.example:
+"
+        + "
+".join(failing_lines)
     )
+
+
+def test_env_example_assignments_preserved():
+    """Verify env var names and values were not modified during translation."""
+    env_path = REPO_ROOT / "hooks" / ".env.example"
+    assert env_path.exists(), f"File not found: {env_path}"
+
+    content = env_path.read_text(encoding="utf-8")
+    for expected_line in EXPECTED_ASSIGNMENTS:
+        assert expected_line in content, (
+            f"Expected env var assignment missing or modified: {repr(expected_line)}"
+        )
 
 
 # Alias for AC-C1b which may call either name

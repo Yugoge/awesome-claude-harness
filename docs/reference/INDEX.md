@@ -1,7 +1,7 @@
 # reference
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-06-14T23:32:43Z*
+*Last updated: 2026-07-04T16:22:49Z*
 **Total entries**: 8
 **Convention**: kebab
 
@@ -9,8 +9,8 @@
 ```
 reference/
 ├── `checkpoint-mechanism.md` - Auto-Commit / Checkpoint Mechanism
-├── `fswatch-quickref.md` - FSWatch 快速参考卡片
-├── `git-fswatch.md` - Git File Watcher (fswatch) 使用文档
+├── `fswatch-quickref.md` - FSWatch Quick Reference Card
+├── `git-fswatch.md` - Git File Watcher (fswatch) Documentation
 ├── `graphify-integration.md` - Graphify Knowledge Graph Integration
 ├── `lock-file-handling.md` - Git Lock File Handling
 ├── `slashcommand-quick-reference.md` - Slash Command Quick Reference

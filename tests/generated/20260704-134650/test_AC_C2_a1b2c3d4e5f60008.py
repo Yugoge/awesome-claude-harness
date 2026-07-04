@@ -5,10 +5,28 @@
 # above (AC_UID, AC_TYPE, docstring) MUST be preserved verbatim so QA can
 # trace each test back to its source AC entry.
 
+import re
+import pathlib
 import pytest
 
 AC_UID = "a1b2c3d4e5f60008"
 AC_TYPE = "data"
+
+# Broader CJK pattern covering CJK Unified Ideographs + CJK Extensions A/B,
+# CJK Compatibility Ideographs, Hiragana/Katakana, Hangul
+CJK_PATTERN = re.compile(
+    r"[㐀-䶿一-鿿豈-﫿぀-ヿ가-힯]"
+)
+
+# Repo root relative to this test file (tests/generated/20260704-134650/ to 4 levels up)
+REPO_ROOT = pathlib.Path(__file__).parent.parent.parent.parent
+
+# INDEX files that must have been regenerated after translation
+INDEX_FILES = [
+    REPO_ROOT / "INDEX.md",
+    REPO_ROOT / "hooks" / "INDEX.md",
+    REPO_ROOT / "docs" / "reference" / "INDEX.md",
+]
 
 
 def test_AC_C2():
@@ -17,7 +35,18 @@ def test_AC_C2():
     WHEN:  INDEX.md (root) entries for the translated files are read
     THEN:  the INDEX entries show English descriptions, not CJK text
     """
-    # TODO(dev): replace the line below with the real test body. While the
-    # TEST_INCOMPLETE sentinel is present the test will hard-fail, marking
-    # the AC as unimplemented for QA Phase 5.
-    pytest.fail(f"TEST_INCOMPLETE: {AC_UID} — INDEX.md must contain no CJK characters after doc-sync regen")
+    failures = []
+    for idx_path in INDEX_FILES:
+        assert idx_path.exists(), f"INDEX file not found: {idx_path}"
+        content = idx_path.read_text(encoding="utf-8")
+        cjk_chars = CJK_PATTERN.findall(content)
+        if cjk_chars:
+            failures.append(
+                f"{idx_path.relative_to(REPO_ROOT)}: {len(cjk_chars)} CJK char(s), "
+                f"first: U+{ord(cjk_chars[0]):04X}"
+            )
+    assert not failures, (
+        "CJK characters found in INDEX files after regen:
+" + "
+".join(failures)
+    )
