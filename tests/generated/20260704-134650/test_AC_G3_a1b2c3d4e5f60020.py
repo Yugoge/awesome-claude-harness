@@ -17,7 +17,25 @@ def test_AC_G3():
     WHEN:  README.md is searched for guard-demo content
     THEN:  a 'Try it in 30 seconds' block exists referencing examples/guard-demo/run-demo.sh AND shows expected terminal output containing the strings 'BLOCKED', 'ALLOWED', and 'PASS'
     """
-    # TODO(dev): replace the line below with the real test body. While the
-    # TEST_INCOMPLETE sentinel is present the test will hard-fail, marking
-    # the AC as unimplemented for QA Phase 5.
-    pytest.fail(f"TEST_INCOMPLETE: {AC_UID} — README.md must contain guard-demo block with run-demo.sh + BLOCKED + ALLOWED + PASS tokens")
+    import pathlib
+
+    repo_root = pathlib.Path(__file__).parents[3]
+    readme = repo_root / "README.md"
+
+    assert readme.exists(), "README.md does not exist"
+
+    content = readme.read_text(encoding="utf-8")
+
+    # Must reference guard-demo or run-demo.sh
+    assert ("guard-demo" in content or "run-demo.sh" in content), (
+        "README.md must contain 'guard-demo' or 'run-demo.sh' in the demo section"
+    )
+    assert "BLOCKED" in content, (
+        "README.md guard-demo section must contain 'BLOCKED'"
+    )
+    assert "ALLOWED" in content, (
+        "README.md guard-demo section must contain 'ALLOWED'"
+    )
+    assert "PASS" in content, (
+        "README.md guard-demo section must contain 'PASS'"
+    )
