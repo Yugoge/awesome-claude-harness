@@ -197,14 +197,18 @@ def _build_index_content(dir_path: Path, convention: str, preserved: str = '') -
     return '\n'.join(lines)
 
 
-def regen_index(dir_path: Path):
+def regen_index(dir_path: Path, project_dir: Path | None = None):
     """Regenerate INDEX.md, preserving hand-written annotations. Only files that already
     carry the AUTO marker (or do not exist yet) are managed; a markerless existing INDEX is
-    left untouched, mirroring regen_readme so annotation-wiping is structurally impossible."""
+    left untouched, mirroring regen_readme so annotation-wiping is structurally impossible.
+
+    project_dir (the repository root) anchors the GitHub-reserved-subtree check to
+    the repo, making it CWD-independent; see config.is_github_reserved_subtree."""
     # Never generate an INDEX under the GitHub-reserved subtree: a stub there is
     # repo-noise (nested) or a landing-page hijack risk. Skip when the folder IS
-    # .github or lies beneath it, robust to non-canonical '..' inputs.
-    if is_github_reserved_subtree(dir_path):
+    # .github or lies beneath it (tested relative to project_dir), robust to
+    # non-canonical '..' inputs.
+    if is_github_reserved_subtree(dir_path, project_dir):
         return
     index_path = dir_path / 'INDEX.md'
     if not _index_needs_update(index_path):
