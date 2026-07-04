@@ -17,7 +17,25 @@ def test_AC_G1():
     WHEN:  the first 80 lines of README.md are read
     THEN:  a Quickstart section header appears at or before line 80 AND all three mandatory install commands appear in those 80 lines: 'git clone', 'scripts/bootstrap', and 'claude'
     """
-    # TODO(dev): replace the line below with the real test body. While the
-    # TEST_INCOMPLETE sentinel is present the test will hard-fail, marking
-    # the AC as unimplemented for QA Phase 5.
-    pytest.fail(f"TEST_INCOMPLETE: {AC_UID} — README.md first 80 lines must contain Quickstart + git clone + scripts/bootstrap + claude")
+    import pathlib
+
+    repo_root = pathlib.Path(__file__).parents[3]
+    readme = repo_root / "README.md"
+
+    assert readme.exists(), "README.md does not exist"
+
+    lines = readme.read_text(encoding="utf-8").splitlines()
+    first_80 = "\n".join(lines[:80])
+
+    assert "Quickstart" in first_80, (
+        "README.md must contain 'Quickstart' within its first 80 lines"
+    )
+    assert "git clone" in first_80, (
+        "README.md must contain 'git clone' within its first 80 lines"
+    )
+    assert "bootstrap" in first_80, (
+        "README.md must contain 'bootstrap' within its first 80 lines"
+    )
+    assert "claude" in first_80, (
+        "README.md must contain 'claude' within its first 80 lines"
+    )
