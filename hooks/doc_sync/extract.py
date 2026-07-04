@@ -47,11 +47,13 @@ def extract_description(file_path: Path) -> str:
 
 def _extract_json_yaml_desc(text: str, suffix: str) -> str:
     """Introspect JSON/YAML content for title/name/description key."""
+    # Priority order: description (most specific) > title > name.
+    _PRIORITY_KEYS = ('description', 'title', 'name')
     try:
         if suffix == '.json':
             data = json.loads(text)
             if isinstance(data, dict):
-                for key in ('title', 'name', 'description'):
+                for key in _PRIORITY_KEYS:
                     val = data.get(key)
                     if isinstance(val, str) and val.strip():
                         return val.strip()
@@ -66,7 +68,7 @@ def _extract_json_yaml_desc(text: str, suffix: str) -> str:
                 # Minimal line-scan fallback when PyYAML not installed.
                 data = _yaml_line_scan(text)
             if isinstance(data, dict):
-                for key in ('title', 'name', 'description'):
+                for key in _PRIORITY_KEYS:
                     val = data.get(key)
                     if isinstance(val, str) and val.strip():
                         return val.strip()
