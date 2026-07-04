@@ -80,7 +80,7 @@ def main(argv: list[str]) -> int:
         # writes to an existing INDEX BEFORE the guarded regen_index delegation,
         # so it needs its own skip to keep a still-present .github INDEX
         # byte-unchanged. Canonicalized whole-subtree membership (collapses '..').
-        if is_github_reserved_subtree(d):
+        if is_github_reserved_subtree(d, REPO_ROOT):
             print(f"skipped (GitHub-reserved subtree): {d / 'INDEX.md'}")
             continue
         _ensure_marker(d / 'INDEX.md', d.name)
