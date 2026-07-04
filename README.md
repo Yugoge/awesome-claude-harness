@@ -280,6 +280,33 @@ Most release commands carry `disable-model-invocation: true` so an agent can't s
 
 ## Quickstart
 
+### Try it in 30 seconds (no Claude Code required)
+
+The project ships a runnable demo that exercises the real guard (`pretool-tool-policy.py`) against an isolated ephemeral home — no Claude Code session needed. Run it from any non-root `$HOME`:
+
+```bash
+examples/guard-demo/run-demo.sh
+```
+
+Expected output:
+
+```
+=== STEP 1 — attempt a DANGEROUS operation (must be BLOCKED) ===
+BLOCKED (exit 2) by the guard, fail-closed:
+  ...
+
+=== STEP 2 — apply a properly-AUTHORIZED fix (must be ALLOWED) ===
+ALLOWED (exit 0) by the guard — the operation is within policy.
+
+=== STEP 3 — the authorized fix COMPLETES ===
+Fix write landed on disk: ...
+
+=== RESULT ===
+PASS — dangerous op BLOCKED (exit 2), then grant-gated fix COMPLETED (exit 0 + write landed).
+```
+
+Exit 0 means the block-then-grant-then-complete sequence worked as designed. See [`examples/guard-demo/run-demo.sh`](examples/guard-demo/run-demo.sh) for details.
+
 ### Dependencies (REQUIRED vs OPTIONAL)
 
 A newcomer can run the core development pipeline with just the **REQUIRED** rows; every optional integration degrades gracefully when its dependency is absent.
