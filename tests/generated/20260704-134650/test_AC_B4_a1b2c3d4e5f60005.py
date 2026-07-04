@@ -5,7 +5,13 @@
 # above (AC_UID, AC_TYPE, docstring) MUST be preserved verbatim so QA can
 # trace each test back to its source AC entry.
 
+import sys
+from pathlib import Path
+
 import pytest
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
+from hooks.doc_sync.extract import _parse_frontmatter
 
 AC_UID = "a1b2c3d4e5f60005"
 AC_TYPE = "data"
@@ -17,7 +23,10 @@ def test_AC_B4():
     WHEN:  _parse_frontmatter is called on text with frontmatter 'description: >-\n  Multi-word description here'
     THEN:  the returned value is 'Multi-word description here', not '>-'
     """
-    # TODO(dev): replace the line below with the real test body. While the
-    # TEST_INCOMPLETE sentinel is present the test will hard-fail, marking
-    # the AC as unimplemented for QA Phase 5.
-    pytest.fail(f"TEST_INCOMPLETE: {AC_UID} — YAML folded scalar must be resolved to its content not the indicator")
+    text = '---\ndescription: >-\n  Multi-word description here\n---\n# content'
+    result = _parse_frontmatter(text)
+    assert result is not None, "Expected non-None result from frontmatter"
+    assert result != '>-', \
+        f"Returned literal '>-' instead of folded scalar content"
+    assert result == 'Multi-word description here', \
+        f"Expected 'Multi-word description here', got {result!r}"
