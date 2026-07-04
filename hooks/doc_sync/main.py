@@ -72,10 +72,10 @@ def _match_watch_dir(rel: str):
     return None
 
 
-def _regen_if_dir(d: Path):
+def _regen_if_dir(d: Path, project_dir: Path):
     if d.is_dir():
-        regen_index(d)
-        regen_readme(d)
+        regen_index(d, project_dir)
+        regen_readme(d, project_dir)
 
 
 def _maybe_regen_global(parent_dir: Path, rel: str):
@@ -84,12 +84,14 @@ def _maybe_regen_global(parent_dir: Path, rel: str):
         return
     global_dir = Path.home() / wd
     if global_dir.is_dir() and global_dir.resolve() != parent_dir.resolve():
-        regen_index(global_dir)
-        regen_readme(global_dir)
+        # Global dirs live under ~/.claude; anchor the reserved-subtree check to
+        # $HOME so it is framed the same way global rel paths are (.claude/...).
+        regen_index(global_dir, Path.home())
+        regen_readme(global_dir, Path.home())
 
 
 def process_parent_dirs(parent_dir: Path, project_dir: Path):
-    _regen_if_dir(parent_dir)
+    _regen_if_dir(parent_dir, project_dir)
     rel = str(parent_dir.relative_to(project_dir))
     _maybe_regen_global(parent_dir, rel)
 

@@ -12,7 +12,7 @@ from pathlib import Path
 try:
     from .extract import extract_description
     from .patch import _replace_section
-    from .config import tracked_names
+    from .config import tracked_names, is_github_reserved_subtree
 except ImportError:
     import importlib as _importlib
     import os as _os
@@ -26,6 +26,7 @@ except ImportError:
     extract_description = _extract.extract_description  # type: ignore[no-redef]
     _replace_section = _patch._replace_section  # type: ignore[no-redef]
     tracked_names = _config.tracked_names  # type: ignore[no-redef]
+    is_github_reserved_subtree = _config.is_github_reserved_subtree  # type: ignore[no-redef]
 
 SKIP_NAMES = {
     'INDEX.md', 'README.md', '__init__.py', '.DS_Store',
@@ -44,6 +45,8 @@ SKIP_DIRS = {'__pycache__', '.git', 'node_modules'}
 # dev.json, spec-20260520-221059, spec-20260524-test ...), so we use a
 # prefix-aware `startswith` filter applied in _build_stats and _list_files.
 SKIP_PREFIXES = ('cp-state-', 'spec-2026')
+# The GitHub-reserved-subtree skip lives in config.is_github_reserved_subtree
+# (canonicalized whole-subtree membership) and is applied in regen_readme().
 
 
 def _is_skipped(name: str) -> bool:
@@ -134,8 +137,19 @@ def _build_readme_content(dir_path: Path, convention: str) -> str:
     return '\n'.join(lines)
 
 
-def regen_readme(dir_path: Path):
-    """Regenerate README.md for a directory."""
+def regen_readme(dir_path: Path, project_dir: Path | None = None):
+    """Regenerate README.md for a directory.
+
+    project_dir (the repository root) anchors the GitHub-reserved-subtree check to
+    the repo, making it CWD-independent; see config.is_github_reserved_subtree.
+    """
+    # GitHub renders .github/README.md in place of the repo-root README, so a
+    # doc-sync stub anywhere under the GitHub-reserved subtree would hijack the
+    # landing page (top-level) or add repo-noise (nested). Skip when the folder
+    # IS .github or lies beneath it (tested relative to project_dir), robust to
+    # non-canonical '..' inputs.
+    if is_github_reserved_subtree(dir_path, project_dir):
+        return
     readme_path = dir_path / 'README.md'
     if not _readme_needs_update(readme_path):
         return

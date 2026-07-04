@@ -1,0 +1,179 @@
+{
+  "schema_version": "1.1",
+  "task_id": "20260702-171509",
+  "generated_at": "2026-07-02T17:43:00Z",
+  "active_tests": [
+    {
+      "task_id": "20260702-171509",
+      "ac_id": "AC-01",
+      "ac_uid": "63adf09ce02f7cba",
+      "type": "data",
+      "file": "tests/generated/20260702-171509/test_AC_01_63adf09ce02f7cba.py",
+      "status": "active",
+      "hook_check": {
+        "generator": "hooks/doc_sync/regen_readme.py",
+        "skip_inputs": [
+          ".github",
+          ".github/workflows",
+          ".github/workflows/.."
+        ],
+        "nonskip_input": "<temp non-.github dir>",
+        "assert_skip": "no README.md written",
+        "assert_nonskip": "README.md written"
+      }
+    },
+    {
+      "task_id": "20260702-171509",
+      "ac_id": "AC-02",
+      "ac_uid": "fe7742c849849a9e",
+      "type": "data",
+      "file": "tests/generated/20260702-171509/test_AC_02_fe7742c849849a9e.py",
+      "status": "active",
+      "hook_check": {
+        "generator": "hooks/doc_sync/regen_index.py",
+        "skip_inputs": [
+          ".github",
+          ".github/workflows",
+          ".github/workflows/.."
+        ],
+        "nonskip_input": "<temp non-.github dir>",
+        "assert_skip": "no INDEX.md written",
+        "assert_nonskip": "INDEX.md written"
+      }
+    },
+    {
+      "task_id": "20260702-171509",
+      "ac_id": "AC-03",
+      "ac_uid": "9d5a1785b3649255",
+      "type": "data",
+      "file": "tests/generated/20260702-171509/test_AC_03_9d5a1785b3649255.py",
+      "status": "active",
+      "hook_check": {
+        "generator": "scripts/generate-folder-readme.sh",
+        "skip_inputs": [
+          ".github",
+          ".github/workflows",
+          ".github/workflows/.."
+        ],
+        "nonskip_input": "<temp non-.github dir>",
+        "assert_skip": "exit 0 AND no README.md written",
+        "assert_nonskip": "exit 0 AND README.md written"
+      }
+    },
+    {
+      "task_id": "20260702-171509",
+      "ac_id": "AC-04",
+      "ac_uid": "b6eed6acd09a1711",
+      "type": "data",
+      "file": "tests/generated/20260702-171509/test_AC_04_b6eed6acd09a1711.py",
+      "status": "active",
+      "hook_check": {
+        "generator": "scripts/generate-folder-index.sh",
+        "skip_inputs": [
+          ".github",
+          ".github/workflows",
+          ".github/workflows/.."
+        ],
+        "nonskip_input": "<temp non-.github dir>",
+        "assert_skip": "exit 0 AND no INDEX.md written",
+        "assert_nonskip": "exit 0 AND INDEX.md written"
+      }
+    },
+    {
+      "task_id": "20260702-171509",
+      "ac_id": "AC-05",
+      "ac_uid": "5b11bbc9114c4480",
+      "type": "data",
+      "file": "tests/generated/20260702-171509/test_AC_05_5b11bbc9114c4480.py",
+      "status": "active",
+      "hook_check": {
+        "generator": "scripts/regen-index-dirs.py",
+        "skip_inputs": [
+          ".github",
+          ".github/workflows"
+        ],
+        "nonskip_input": "<temp non-.github dir with markerless INDEX>",
+        "assert_skip": "existing .github INDEX.md byte-unchanged",
+        "assert_nonskip": "INDEX.md regenerated"
+      }
+    },
+    {
+      "task_id": "20260702-171509",
+      "ac_id": "AC-06",
+      "ac_uid": "ea69e2a2f3fbb92a",
+      "type": "data",
+      "file": "tests/generated/20260702-171509/test_AC_06_ea69e2a2f3fbb92a.py",
+      "status": "active",
+      "hook_check": {
+        "raw": "{'script':'scripts/discover-folders.sh','assert':'no output line begins with .github'}"
+      }
+    },
+    {
+      "task_id": "20260702-171509",
+      "ac_id": "AC-07",
+      "ac_uid": "4252117023d2f76d",
+      "type": "data",
+      "file": "tests/generated/20260702-171509/test_AC_07_4252117023d2f76d.py",
+      "status": "active",
+      "hook_check": {
+        "command": "git ls-files .github",
+        "assert_absent": [
+          ".github/INDEX.md",
+          ".github/workflows/README.md",
+          ".github/workflows/INDEX.md"
+        ],
+        "assert_present": [
+          ".github/CODE_OF_CONDUCT.md",
+          ".github/CONTRIBUTING.md",
+          ".github/SECURITY.md",
+          ".github/PULL_REQUEST_TEMPLATE.md",
+          ".github/ISSUE_TEMPLATE/bug_report.md",
+          ".github/ISSUE_TEMPLATE/feature_request.md",
+          ".github/workflows/baseline.yml"
+        ]
+      }
+    },
+    {
+      "task_id": "20260702-171509",
+      "ac_id": "AC-08",
+      "ac_uid": "ab523d49717b00ee",
+      "type": "data",
+      "file": "tests/generated/20260702-171509/test_AC_08_ab523d49717b00ee.py",
+      "status": "active",
+      "hook_check": {
+        "file": ".gitignore",
+        "patterns_added": [
+          ".github/**/README.md",
+          ".github/**/INDEX.md",
+          ".github/INDEX.md"
+        ],
+        "assert_ignored": [
+          ".github/README.md",
+          ".github/INDEX.md",
+          ".github/workflows/README.md",
+          ".github/workflows/INDEX.md"
+        ],
+        "assert_not_ignored": [
+          ".github/CONTRIBUTING.md",
+          ".github/workflows/baseline.yml"
+        ]
+      }
+    },
+    {
+      "task_id": "20260702-171509",
+      "ac_id": "AC-09",
+      "ac_uid": "838e694e04a765ca",
+      "type": "data",
+      "file": "tests/generated/20260702-171509/test_AC_09_838e694e04a765ca.py",
+      "status": "active",
+      "hook_check": {
+        "search": "README/INDEX write_text + cat>*README/INDEX heredocs across hooks/,scripts/",
+        "assert": "every folder-doc writer targeting .github has a canonicalized whole-subtree skip",
+        "known_non_generators": [
+          "hooks/pretool-cp-checkin.py (agent-index.json cp-state registry)"
+        ]
+      }
+    }
+  ],
+  "archived_tests": []
+}

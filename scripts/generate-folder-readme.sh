@@ -17,6 +17,23 @@ if [[ ! -d "$FOLDER_PATH" ]]; then
 fi
 
 FOLDER_NAME=$(basename "$FOLDER_PATH")
+
+# GitHub-reserved subtree must not get a generated README anywhere beneath it:
+# GitHub renders .github/README.md in place of the repo-root README on the home
+# page (precedence .github/README.md > README.md), so a stub there hijacks the
+# landing page; nested stubs are repo-noise. Canonicalize LEXICALLY with
+# `realpath -m -s` FIRST (-m: works on non-existent paths without touching disk;
+# -s: do NOT expand symlinks, so the decision is by the path as written and a
+# non-canonical .github/workflows/.. still collapses into .github), then skip if
+# ANY component of the canonicalized path is exactly .github.
+CANON_PATH="$(realpath -m -s "$FOLDER_PATH")"
+case "/${CANON_PATH#/}/" in
+  */.github/*)
+    echo "Skipping GitHub-reserved subtree (a generated README would hijack the repo landing page or add repo-noise): $FOLDER_PATH" >&2
+    exit 0
+    ;;
+esac
+
 README_FILE="${FOLDER_PATH}/README.md"
 TIMESTAMP=$(date -u +"%Y-%m-%d %H:%M:%S UTC")
 
