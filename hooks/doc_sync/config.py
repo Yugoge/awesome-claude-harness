@@ -21,8 +21,8 @@ GITHUB_RESERVED_DIR = '.github'
 
 
 def is_github_reserved_subtree(dir_path: Path, project_dir: Path | None = None) -> bool:
-    """True iff dir_path is (or lies beneath) the reserved .github/ directory of
-    its repository.
+    """True iff dir_path is (or lies beneath) the repository's ROOT-level
+    reserved .github/ directory.
 
     Reference frame — anchored to the repository root, NEVER the process CWD:
 
