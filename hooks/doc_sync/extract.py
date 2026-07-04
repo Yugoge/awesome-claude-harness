@@ -1,10 +1,29 @@
 #!/usr/bin/env python3
 """Extract description from various file types."""
 
+import json
 from pathlib import Path
+
+try:
+    import yaml as _yaml
+    _YAML_AVAILABLE = True
+except ImportError:
+    _YAML_AVAILABLE = False
+
+# Known-file descriptions for files whose content cannot be introspected
+# reliably via generic key scanning (e.g. no title/name key at top level).
+_KNOWN_FILE_DESCRIPTIONS: dict[str, str] = {
+    'settings.json': 'Claude Code harness configuration (permissions, hooks, env, model)',
+    'settings.template.json': 'Distributable harness settings template (uses CLAUDE_HOME placeholders)',
+    'requirements.txt': 'Python dependency manifest for the Claude Code harness venv',
+}
 
 
 def extract_description(file_path: Path) -> str:
+    # Known-file lookup takes priority over all suffix-based logic.
+    known = _KNOWN_FILE_DESCRIPTIONS.get(file_path.name)
+    if known:
+        return known
     try:
         text = file_path.read_text(errors='replace')
     except Exception:
@@ -17,13 +36,58 @@ def extract_description(file_path: Path) -> str:
     if suffix in ('.sh', '.bash'):
         return _extract_sh_desc(text)
     if suffix in ('.json', '.yaml', '.yml'):
-        return f'{suffix.lstrip(".")} config'
+        return _extract_json_yaml_desc(text, suffix)
     # AC-WS5-2: never emit the placeholder "unknown file". Derive a meaningful
     # description from the file: its suffix if it has one (e.g. "toml file"),
     # otherwise the file's own stem so the entry is self-describing.
     if suffix:
         return f'{suffix.lstrip(".")} file'
     return f'{file_path.stem} file'
+
+
+def _extract_json_yaml_desc(text: str, suffix: str) -> str:
+    """Introspect JSON/YAML content for title/name/description key."""
+    try:
+        if suffix == '.json':
+            data = json.loads(text)
+            if isinstance(data, dict):
+                for key in ('title', 'name', 'description'):
+                    val = data.get(key)
+                    if isinstance(val, str) and val.strip():
+                        return val.strip()
+                # Fall back to comma-delimited summary of first 5 top-level keys.
+                keys = list(data.keys())[:5]
+                if keys:
+                    return f"JSON config: {', '.join(keys)}"
+        else:
+            if _YAML_AVAILABLE:
+                data = _yaml.safe_load(text)
+            else:
+                # Minimal line-scan fallback when PyYAML not installed.
+                data = _yaml_line_scan(text)
+            if isinstance(data, dict):
+                for key in ('title', 'name', 'description'):
+                    val = data.get(key)
+                    if isinstance(val, str) and val.strip():
+                        return val.strip()
+                keys = list(data.keys())[:5]
+                if keys:
+                    return f"YAML config: {', '.join(str(k) for k in keys)}"
+    except Exception:
+        pass
+    return f'{suffix.lstrip(".")} config'
+
+
+def _yaml_line_scan(text: str) -> dict:
+    """Minimal YAML top-level key scanner (no PyYAML dependency)."""
+    result: dict = {}
+    for line in text.split('\n'):
+        if line.startswith('---') or line.startswith('#') or not line.strip():
+            continue
+        if ':' in line and not line.startswith(' ') and not line.startswith('\t'):
+            key, _, val = line.partition(':')
+            result[key.strip()] = val.strip()
+    return result
 
 
 def _parse_frontmatter(text: str) -> str | None:
