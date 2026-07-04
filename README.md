@@ -19,11 +19,13 @@ It is not a prompt pack. It is an operating system for agents — with a schedul
 
 ---
 
-## Quickstart (3 commands)
+## Quickstart
 
 ```bash
-# 1. Clone to ~/.claude (back up any existing config first)
-[ ! -e ~/.claude ] || mv ~/.claude ~/.claude.bak-"$(date +%Y%m%d-%H%M%S)"
+# (optional) back up any existing ~/.claude config first:
+# mv ~/.claude ~/.claude.bak-"$(date +%Y%m%d-%H%M%S)"
+
+# 1. Clone
 git clone https://github.com/Yugoge/awesome-claude-harness.git ~/.claude
 
 # 2. Bootstrap — creates the venv, installs dependencies, makes hooks executable
