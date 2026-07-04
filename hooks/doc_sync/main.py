@@ -91,7 +91,7 @@ def _maybe_regen_global(parent_dir: Path, rel: str):
 
 
 def process_parent_dirs(parent_dir: Path, project_dir: Path):
-    _regen_if_dir(parent_dir)
+    _regen_if_dir(parent_dir, project_dir)
     rel = str(parent_dir.relative_to(project_dir))
     _maybe_regen_global(parent_dir, rel)
 
