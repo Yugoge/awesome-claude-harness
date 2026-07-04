@@ -158,6 +158,9 @@ def _find_next_line_content(lines: list[str], start_i: int, max_lines: int) -> s
 
 
 def _extract_py_desc(text: str) -> str:
+    import re as _re
+    # Encoding cookie: # -*- coding: ... -*- or # coding: ...
+    _encoding_re = _re.compile(r'^#.*coding[:=]\s*[-\w.]+')
     lines = text.split('\n')
     for i, line in enumerate(lines):
         if i >= 30:
@@ -171,16 +174,16 @@ def _extract_py_desc(text: str) -> str:
         doc = _check_single_line_docstring(s)
         if doc:
             return doc
-        # Informative comment (not shebang, not bare # separator).
-        if s.startswith('#') and not s.startswith('#!'):
-            text_part = s.lstrip('# ').strip()
-            if text_part:
-                return text_part
         # Multi-line docstring opening — collect first non-empty line.
         if s.startswith('"""') or s.startswith("'''"):
             content = _find_next_line_content(lines, i + 1, 10)
             if content:
                 return content
+        # Informative comment: skip shebang, encoding cookies, and bare separators.
+        if s.startswith('#') and not s.startswith('#!') and not _encoding_re.match(s):
+            text_part = s.lstrip('# ').strip()
+            if text_part:
+                return text_part
     return 'Python script'
 
 
