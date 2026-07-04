@@ -19,7 +19,7 @@ It is not a prompt pack. It is an operating system for agents — with a schedul
 
 ---
 
-## Quick Start
+## Quickstart (3 commands)
 
 ```bash
 # 1. Clone to ~/.claude (back up any existing config first)
@@ -33,7 +33,7 @@ git clone https://github.com/Yugoge/awesome-claude-harness.git ~/.claude
 claude
 ```
 
-> Full setup details (optional doctor preflight, dependency matrix) are in the [Quickstart](#quickstart) section below.
+> Full setup details, optional doctor preflight, and the dependency matrix are in the [Quickstart](#quickstart) section below.
 
 <!-- TODO: Add terminal GIF demo here — see examples/guard-demo/run-demo.sh -->
 
