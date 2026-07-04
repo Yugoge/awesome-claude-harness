@@ -64,7 +64,12 @@ def is_github_reserved_subtree(dir_path: Path, project_dir: Path | None = None) 
         return False
     if rel == os.pardir or rel.startswith(os.pardir + os.sep):
         return False  # resolves outside project_dir → not the repo's .github
-    return GITHUB_RESERVED_DIR in PurePath(rel).parts
+    rel_parts = PurePath(rel).parts
+    # Only the repository's ROOT-level .github is GitHub-reserved (the landing-page
+    # hijack + repo-noise concern applies to the root .github). Because rel is
+    # anchored at project_dir, that root .github is exactly rel_parts[0]; a nested
+    # .github deeper in the tree (e.g. src/.github) is a normal folder, not reserved.
+    return bool(rel_parts) and rel_parts[0] == GITHUB_RESERVED_DIR
 
 
 def load_config(project_dir: Path) -> dict:
