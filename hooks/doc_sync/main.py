@@ -72,10 +72,10 @@ def _match_watch_dir(rel: str):
     return None
 
 
-def _regen_if_dir(d: Path):
+def _regen_if_dir(d: Path, project_dir: Path):
     if d.is_dir():
-        regen_index(d)
-        regen_readme(d)
+        regen_index(d, project_dir)
+        regen_readme(d, project_dir)
 
 
 def _maybe_regen_global(parent_dir: Path, rel: str):
