@@ -20,22 +20,51 @@ from pathlib import Path, PurePath
 GITHUB_RESERVED_DIR = '.github'
 
 
-def is_github_reserved_subtree(dir_path: Path) -> bool:
-    """True iff dir_path IS .github or lies anywhere beneath a .github/ ancestor.
+def is_github_reserved_subtree(dir_path: Path, project_dir: Path | None = None) -> bool:
+    """True iff dir_path is (or lies beneath) the reserved .github/ directory of
+    its repository.
 
-    The path is canonicalized LEXICALLY with os.path.normpath FIRST, which
-    collapses '..' segments, so a non-canonical input such as
-    '.github/workflows/..' (which resolves back into .github) cannot bypass the
-    check. Membership is then tested against the normalized path components.
+    Reference frame — anchored to the repository root, NEVER the process CWD:
 
-    Lexical (normpath) canonicalization is used rather than Path.resolve() so the
-    check is decided by the path AS WRITTEN: it does not follow symlinks (a
-    symlink whose own name is not '.github' is treated by its written name, never
-    silently redirected) and it does not prepend the CWD to a relative input
-    (avoiding false-positives from an absolute ancestor literally named
-    '.github'). '..' is still collapsed before the membership test, as required.
+    * When ``project_dir`` is given (all production callers pass it), a relative
+      ``dir_path`` is joined onto ``project_dir`` and membership is tested on the
+      path RELATIVE to that root. Two consequences, both intended:
+        - The answer does not depend on the process CWD, so a bare relative input
+          such as '.' is resolved against the repo root (it means the repo root,
+          which is not .github) rather than being silently judged by whatever
+          directory the process happens to sit in.
+        - It is immune to a repository that itself lives under an unrelated
+          ancestor directory literally named '.github' (e.g. ``/srv/.github/app``):
+          the ancestor is stripped by the relative-path computation, so only the
+          repo's OWN .github matches. A ``dir_path`` resolving OUTSIDE
+          ``project_dir`` is not this repo's .github and returns False.
+    * When ``project_dir`` is None (no repo anchor available), membership is judged
+      LEXICALLY on the path as written: '..' segments are collapsed via
+      os.path.normpath, then the components are tested. A bare relative input is
+      judged by its written components ONLY and is not resolved against the CWD;
+      this fallback therefore does not claim to catch a bare relative directory
+      that is physically inside .github. Pass ``project_dir`` for the robust,
+      CWD-independent answer.
+
+    In both modes the check is purely lexical (os.path.normpath / os.path.relpath)
+    and never follows symlinks: a symlink whose own name is not '.github' is judged
+    by its written name, never silently redirected. '..' is always collapsed before
+    the membership test.
     """
-    return GITHUB_RESERVED_DIR in PurePath(os.path.normpath(os.fspath(dir_path))).parts
+    normalized = os.path.normpath(os.fspath(dir_path))
+    if project_dir is None:
+        return GITHUB_RESERVED_DIR in PurePath(normalized).parts
+    root = os.path.normpath(os.fspath(project_dir))
+    abs_path = normalized if os.path.isabs(normalized) \
+        else os.path.normpath(os.path.join(root, normalized))
+    try:
+        rel = os.path.relpath(abs_path, root)
+    except ValueError:
+        # Different mount/drive (Windows) — cannot be under this repo root.
+        return False
+    if rel == os.pardir or rel.startswith(os.pardir + os.sep):
+        return False  # resolves outside project_dir → not the repo's .github
+    return GITHUB_RESERVED_DIR in PurePath(rel).parts
 
 
 def load_config(project_dir: Path) -> dict:
