@@ -1,7 +1,7 @@
 # hooks
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-06-19T14:05:05Z*
+*Last updated: 2026-07-04T16:11:01Z*
 **Total entries**: 144
 **Convention**: kebab
 
@@ -29,7 +29,7 @@ hooks/
 │   ├── `allowlist.py` - Single source of truth for grant-read, grant-match, and grant-consume
 │   ├── `bash_context_strip.py` - This is deliberately NOT a full shell parser.  It only computes a conservative
 │   ├── `bash_write_targets.py` - Provides two public functions used by tool-policy and overnight-hook-guard:
-│   ├── `checkpoint-core.sh` - ============================================================================
+│   ├── `checkpoint-core.sh` - checkpoint-core.sh - Shared library for automated snapshot commits
 │   ├── `claude_home.py` - Generalizes the in-repo gold-standard fail-closed self-resolution pattern
 │   ├── `claude_home.sh` - claude_home.sh — shared "harness home" resolver (shell consumable).
 │   ├── `close-verdict.py` - Shared CLOSE verdict classifier for commit/close tooling.
@@ -62,17 +62,17 @@ hooks/
 │   ├── `test_push_sentinel_abort.sh` - Unit test for AC1 V5: hooks/push.sh self-aborts before any real git push
 │   └── `test_runtime_guard.py` - Two layers:
 ├── `audit-slashcommand.sh` - audit-slashcommand.sh
-├── `auto-commit.sh` - ============================================================================
+├── `auto-commit.sh` - auto-commit.sh - Stop hook: snapshot on conversation end
 ├── `check-todo-md-sync.py` - check-todo-md-sync.py — Session-start drift detector for todo scripts
 ├── `checkpoint.sh` - checkpoint.sh - Manual /checkpoint command
 ├── `fswatch-manager.sh` - fswatch-manager.sh - Manage git-fswatch instances
 ├── `git-fswatch.sh` - git-fswatch.sh - Comprehensive Git file watcher using fswatch
 ├── `git-fswatch@.service` - service file
 ├── `hook-todo-injection.py` - Global PreToolUse Hook: Todo Injection for Slash Commands
-├── `install-auto-sync.sh` - ============================================================================
-├── `install-git-hooks.sh` - ============================================================================
-├── `install-protection-all.sh` - ============================================================================
-├── `install.sh` - ============================================================================
+├── `install-auto-sync.sh` - LEGACY / DO NOT USE — describes an obsolete auto-sync model.
+├── `install-git-hooks.sh` - LEGACY / DO NOT USE — describes an obsolete git-tracking model.
+├── `install-protection-all.sh` - LEGACY / DO NOT USE — describes an obsolete auto-push protection model.
+├── `install.sh` - LEGACY / DO NOT USE — describes an obsolete auto-commit model.
 ├── `merge.sh` - merge.sh - wrapper for /merge slash command
 ├── `notification-idle-overnight.py` - Notification hook: Observe overnight idle events
 ├── `post-commit-warn.sh` - post-commit-warn.sh - Warn about untracked files after commit
@@ -100,7 +100,7 @@ hooks/
 ├── `pretool-bisect-gate.sh` - pretool-bisect-gate.sh
 ├── `pretool-block-branch-pr-worktree.py` - Policy (user directive 2026-06-04; the verbatim user directive is preserved in
 ├── `pretool-block-enterworktree.sh` - PreToolUse hook: Block EnterWorktree tool
-├── `pretool-bulk-commit-detector.py` - Write to stderr and exit 0 (warn-only per user policy: no text-smell hard-blocks).
+├── `pretool-bulk-commit-detector.py` - import json
 ├── `pretool-claude-config-guard.py` - PreToolUse Hook: Claude config (.claude/hooks + .claude/commands) protection
 ├── `pretool-cp-checkin.py` - cp-state file read
 ├── `pretool-cp-state-write-guard.py` - Cycle-3 slim form (2026-05-14): Bash-extractor removed — 22-form adversarial
@@ -124,7 +124,7 @@ hooks/
 ├── `pretool-worktree-guard.sh` - PreToolUse hook: Detect stale agent worktrees before ANY tool call
 ├── `pretool-wrapper-userintent.py` - fix-4 (Cycle-2, spec-20260604-204954 §7.4). The /stop slash command releases
 ├── `pretool-write-guard.sh` - PreToolUse Hook - Block Write tool from overwriting existing files
-├── `project-settings-template.json` - json config
+├── `project-settings-template.json` - JSON config: $schema, comment, comment_usage, hooks, permissions
 ├── `prompt-workflow.py` - UserPromptSubmit Hook: Checklist Injection for Slash Commands
 ├── `protection-status.sh` - protection-status.sh - Display protection status for all git repositories
 ├── `pull.sh` - pull.sh - Executable version of /pull command
@@ -132,7 +132,7 @@ hooks/
 ├── `QUICKSTART.md` - Quick Start — the hooks layer
 ├── `README-TODO-INJECTION.md` - Global Todo Injection Hook
 ├── `sentinel-lint.sh` - sentinel-lint.sh - Guards the dev-registry sentinel anchor in orchestrator files
-├── `session-git-init.sh` - ============================================================================
+├── `session-git-init.sh` - Ensure Git Repository Hook for Claude Code
 ├── `session-gitignore-propagate.sh` - SessionStart hook: append missing standard harness gitignore rules to project repo
 ├── `session-info.sh` - s-info.sh — SessionStart: display environment info + tool quick reference
 ├── `session-promote-hook.sh` - Description: SessionStart hook that promotes a cold session back to ramdisk.

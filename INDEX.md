@@ -1,8 +1,8 @@
 # dot-claude
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-06-19T10:14:00Z*
-**Total entries**: 462
+*Last updated: 2026-07-04T16:11:01Z*
+**Total entries**: 470
 **Convention**: kebab
 
 ## Tree
@@ -18,7 +18,7 @@ dot-claude/
 │   ├── `git-edge-case-analyst.md` - Git history analysis specialist. Discovers development edge cases by analyzing commits, violations, and patterns. Returns structured edge case report with prevention recommendations.
 │   ├── `graphify.md` - Graphify enrichment subagent. Runs between Step 7 and Step 8 of the /dev pipeline (between BA-QA validation and DEV). Performs incremental Graphify cache update, extracts focused subgraph from BA blast-radius-map, patches context-<ts>.json with graph_context field, writes per-task artifacts to .claude/dev-registry/<task_id>/graphify/. Pure infrastructure agent — does NOT analyze requirements, make implementation decisions, write code, or interpret graph data for DEV.
 │   ├── `merge-analyst.md` - Pre-merge analyst subagent. Inspects branch divergence, diff stat, conflict markers, and overnight-state consistency; writes a nonce-keyed merge-analyst grant (60s expiry) to /tmp/agentic-commit/merge-analyst/. Dispatched exclusively by /merge.
-│   ├── `pm.md` - >-
+│   ├── `pm.md` - Test plan manager for overnight exploration with 3 invocation modes: PLAN (build test plan via browser exploration), TRIAGE (prioritize issues from specialist reports), RETRO (retrospective analysis and cross-cycle continuity). Uses Playwright to navigate the running app in PLAN mode before writing the test plan.
 │   ├── `product-owner.md` - Product-level analysis specialist for overnight exploration. Examines logical consistency, feature completeness, user flows, missing features, and business logic bugs. Returns structured JSON report.
 │   ├── `prompt-inspector.md` - Prompt optimization inspector. Detects verbose non-functional content in command/agent documentation following 'rules not stories' principle. Returns structured JSON report with verbosity violations.
 │   ├── `pull-analyst.md` - Post-pull advisory analyst subagent. Reads the new-commits range after a successful git pull --rebase and produces a structured semantic risk summary. Writes no grant and blocks nothing. Dispatched exclusively by /pull when HEAD actually changed.
@@ -71,8 +71,8 @@ dot-claude/
 ├── docs/
 │   ├── reference/
 │   │   ├── `checkpoint-mechanism.md` - Auto-Commit / Checkpoint Mechanism
-│   │   ├── `fswatch-quickref.md` - FSWatch 快速参考卡片
-│   │   ├── `git-fswatch.md` - Git File Watcher (fswatch) 使用文档
+│   │   ├── `fswatch-quickref.md` - FSWatch Quick Reference Card
+│   │   ├── `git-fswatch.md` - Git File Watcher (fswatch) Documentation
 │   │   ├── `graphify-integration.md` - Graphify Knowledge Graph Integration
 │   │   ├── `lock-file-handling.md` - Git Lock File Handling
 │   │   ├── `slashcommand-quick-reference.md` - Slash Command Quick Reference
@@ -103,7 +103,7 @@ dot-claude/
 │   │   ├── `allowlist.py` - Single source of truth for grant-read, grant-match, and grant-consume
 │   │   ├── `bash_context_strip.py` - This is deliberately NOT a full shell parser.  It only computes a conservative
 │   │   ├── `bash_write_targets.py` - Provides two public functions used by tool-policy and overnight-hook-guard:
-│   │   ├── `checkpoint-core.sh` - ============================================================================
+│   │   ├── `checkpoint-core.sh` - checkpoint-core.sh - Shared library for automated snapshot commits
 │   │   ├── `claude_home.py` - Generalizes the in-repo gold-standard fail-closed self-resolution pattern
 │   │   ├── `claude_home.sh` - claude_home.sh — shared "harness home" resolver (shell consumable).
 │   │   ├── `close-verdict.py` - Shared CLOSE verdict classifier for commit/close tooling.
@@ -136,17 +136,17 @@ dot-claude/
 │   │   ├── `test_push_sentinel_abort.sh` - Unit test for AC1 V5: hooks/push.sh self-aborts before any real git push
 │   │   └── `test_runtime_guard.py` - Two layers:
 │   ├── `audit-slashcommand.sh` - audit-slashcommand.sh
-│   ├── `auto-commit.sh` - ============================================================================
+│   ├── `auto-commit.sh` - auto-commit.sh - Stop hook: snapshot on conversation end
 │   ├── `check-todo-md-sync.py` - check-todo-md-sync.py — Session-start drift detector for todo scripts
 │   ├── `checkpoint.sh` - checkpoint.sh - Manual /checkpoint command
 │   ├── `fswatch-manager.sh` - fswatch-manager.sh - Manage git-fswatch instances
 │   ├── `git-fswatch.sh` - git-fswatch.sh - Comprehensive Git file watcher using fswatch
 │   ├── `git-fswatch@.service` - service file
 │   ├── `hook-todo-injection.py` - Global PreToolUse Hook: Todo Injection for Slash Commands
-│   ├── `install-auto-sync.sh` - ============================================================================
-│   ├── `install-git-hooks.sh` - ============================================================================
-│   ├── `install-protection-all.sh` - ============================================================================
-│   ├── `install.sh` - ============================================================================
+│   ├── `install-auto-sync.sh` - LEGACY / DO NOT USE — describes an obsolete auto-sync model.
+│   ├── `install-git-hooks.sh` - LEGACY / DO NOT USE — describes an obsolete git-tracking model.
+│   ├── `install-protection-all.sh` - LEGACY / DO NOT USE — describes an obsolete auto-push protection model.
+│   ├── `install.sh` - LEGACY / DO NOT USE — describes an obsolete auto-commit model.
 │   ├── `merge.sh` - merge.sh - wrapper for /merge slash command
 │   ├── `notification-idle-overnight.py` - Notification hook: Observe overnight idle events
 │   ├── `post-commit-warn.sh` - post-commit-warn.sh - Warn about untracked files after commit
@@ -174,7 +174,7 @@ dot-claude/
 │   ├── `pretool-bisect-gate.sh` - pretool-bisect-gate.sh
 │   ├── `pretool-block-branch-pr-worktree.py` - Policy (user directive 2026-06-04; the verbatim user directive is preserved in
 │   ├── `pretool-block-enterworktree.sh` - PreToolUse hook: Block EnterWorktree tool
-│   ├── `pretool-bulk-commit-detector.py` - Write to stderr and exit 0 (warn-only per user policy: no text-smell hard-blocks).
+│   ├── `pretool-bulk-commit-detector.py` - import json
 │   ├── `pretool-claude-config-guard.py` - PreToolUse Hook: Claude config (.claude/hooks + .claude/commands) protection
 │   ├── `pretool-cp-checkin.py` - cp-state file read
 │   ├── `pretool-cp-state-write-guard.py` - Cycle-3 slim form (2026-05-14): Bash-extractor removed — 22-form adversarial
@@ -198,7 +198,7 @@ dot-claude/
 │   ├── `pretool-worktree-guard.sh` - PreToolUse hook: Detect stale agent worktrees before ANY tool call
 │   ├── `pretool-wrapper-userintent.py` - fix-4 (Cycle-2, spec-20260604-204954 §7.4). The /stop slash command releases
 │   ├── `pretool-write-guard.sh` - PreToolUse Hook - Block Write tool from overwriting existing files
-│   ├── `project-settings-template.json` - json config
+│   ├── `project-settings-template.json` - JSON config: $schema, comment, comment_usage, hooks, permissions
 │   ├── `prompt-workflow.py` - UserPromptSubmit Hook: Checklist Injection for Slash Commands
 │   ├── `protection-status.sh` - protection-status.sh - Display protection status for all git repositories
 │   ├── `pull.sh` - pull.sh - Executable version of /pull command
@@ -206,7 +206,7 @@ dot-claude/
 │   ├── `QUICKSTART.md` - Quick Start — the hooks layer
 │   ├── `README-TODO-INJECTION.md` - Global Todo Injection Hook
 │   ├── `sentinel-lint.sh` - sentinel-lint.sh - Guards the dev-registry sentinel anchor in orchestrator files
-│   ├── `session-git-init.sh` - ============================================================================
+│   ├── `session-git-init.sh` - Ensure Git Repository Hook for Claude Code
 │   ├── `session-gitignore-propagate.sh` - SessionStart hook: append missing standard harness gitignore rules to project repo
 │   ├── `session-info.sh` - s-info.sh — SessionStart: display environment info + tool quick reference
 │   ├── `session-promote-hook.sh` - Description: SessionStart hook that promotes a cold session back to ramdisk.
@@ -227,18 +227,18 @@ dot-claude/
 │   ├── `userprompt-doc-sync-check.py` - UserPromptSubmit Hook: Periodic file deletion detection for doc-sync
 │   └── `userprompt-tmpfs-pressure.sh` - userprompt-tmpfs-pressure.sh — UserPromptSubmit hook (4th block, appended).
 ├── policies/
-│   ├── `specialist-degradation.v1.json` - json config
-│   └── `tool-policy.v1.json` - json config
+│   ├── `specialist-degradation.v1.json` - JSON config: policy_version, defaults, per_specialist_overrides
+│   └── `tool-policy.v1.json` - JSON config: policy_version, default_action, _shared_protected_path_prefixes, _note, roles
 ├── schemas/
-│   ├── `context.v1.json` - json config
-│   ├── `cycle-contract.v1.json` - json config
-│   ├── `dev-report.v1.json` - json config
-│   ├── `graphify-focused-subgraph.v1.json` - json config
-│   ├── `graphify-prequery.v1.json` - json config
-│   ├── `graphify-run.v1.json` - json config
-│   ├── `qa-report.v1.json` - json config
-│   ├── `registry.json` - json config
-│   └── `test-plan.v1.json` - json config
+│   ├── `context.v1.json` - BA-produced wave/task plan and root cause analysis. Read by dev subagents to understand implementation scope.
+│   ├── `cycle-contract.v1.json` - Single source of truth per overnight cycle. Mirrors architect.contract_manifest_schema.json_shape from architect-spec-20260426-090235.json. Written by the orchestrator at end of Step 2c (PM Triage) and again at end of Step 3 (after pipeline IDs are known). Read by the contract-aware hooks (pretool-subagent-enforce, posttool-subagent-track, posttool-overnight-file-check) and check-overnight-reports.py.
+│   ├── `dev-report.v1.json` - Per-task dev implementation report. Read by QA, PM RETRO, and the closeout aggregator.
+│   ├── `graphify-focused-subgraph.v1.json` - Task-scoped subgraph extracted from the global Graphify knowledge graph, focused on files in the BA blast-radius-map. Written to .claude/dev-registry/{task_id}/graphify/focused-subgraph.json by graphify-enrich.py.
+│   ├── `graphify-prequery.v1.json` - Step 1.5 output from graphify-query.py. Contains structural_context extracted from the global Graphify cache before BA analysis. Status field drives BA behaviour: ok/degraded proceed, unavailable/skipped silently bypass.
+│   ├── `graphify-run.v1.json` - Step 7.5 run manifest. Records the graphify subagent's execution: update run, focused subgraph extraction, and context patching status.
+│   ├── `qa-report.v1.json` - QA verdict + evidence summary for a single pipeline. When ui_pipeline=true, evidence_summary.ui_evidence MUST satisfy the ui-specialist's ui_evidence_schema fragment (target_route, target_element, viewports {desktop, mobile}, evidence_map keyed AC-N, trace, captured_at). Custom keyword 'required_when_ui' is enforced by lib/contract_runtime.validate() as a pre-validation pass before the standard jsonschema Draft7Validator runs.
+│   ├── `registry.json` - JSON config: schemas
+│   └── `test-plan.v1.json` - Unified PM-produced test plan. This schema replaces both legacy 'test-plan.json' and 'test-plan-*.json' shapes (per spec-20260426-090235 Section 7 P2 #3 — single canonical naming). additionalProperties:true preserves the existing rich PM payload (priority_tiers, recommended_specialists, pm_experience, app_context, agent_assignments, core_flow_gate, ...).
 ├── scripts/
 │   ├── install/
 │   │   ├── `render-settings` - render-settings file
@@ -363,10 +363,10 @@ dot-claude/
 │   ├── ui-contextual-heuristics/
 │   │   └── `SKILL.md` - Five LLM-driven contextual accessibility insights that axe cannot detect (heading hierarchy, link text, focus order, color reliance, decorative-as-interactive). MUST receive axe findings as input and dedup against them. Use during ui-specialist Phase 6 (Accessibility) AFTER ui-axe-injector.
 │   ├── ui-shared/
-│   │   ├── `anti-pattern-catalog.yml` - yml config
-│   │   ├── `report-schema.json` - json config
-│   │   ├── `review-phases.yml` - yml config
-│   │   └── `rule-map.json` - json config
+│   │   ├── `anti-pattern-catalog.yml` - YAML config: rules
+│   │   ├── `report-schema.json` - Schema for the ui-specialist subagent's final JSON report. Implements spec-20260426-080555 section 5.5 (6 channels) + 5.11 (hard_defect vs taste_heuristic) + 5.15 (skill outputs) + double-defense severity hard-cap on aesthetic_findings.
+│   │   ├── `review-phases.yml` - YAML config: phase_order, phases
+│   │   └── `rule-map.json` - JSON config: $schema_version, meta, rules
 │   ├── ui-state-matrix/
 │   │   └── `SKILL.md` - Verify presence of 7 interactive states (default / hover / focus / active / disabled / loading / error / success) on key interactive elements. Returns deterministic state.* findings + state_coverage_pct + not_applicable[]. Use during ui-specialist Phase 4 (Interactive Element Visual Testing).
 │   └── ui-token-conformance/
@@ -383,6 +383,8 @@ dot-claude/
 │   │   ├── `run_ac3.py` - AC-3 verification: agent_resolver.py inactive cp-state non-authoritative + collision fail-closed.
 │   │   ├── `setup_fixtures.py` - Create test fixtures via Python (Bash heredoc/echo to cp-state is blocked by hooks).
 │   │   └── `symlink_test.py` - Test codex's symlink/realpath finding for AC-1 guard hook.
+│   ├── fixtures/
+│   │   └── `canary-tool-policy.v1.json` - JSON config: _fixture, _purpose, _contract, policy_version, default_action
 │   ├── generated/
 │   │   ├── 20260520-221452/
 │   │   ├── 20260521-090100/
@@ -420,19 +422,25 @@ dot-claude/
 │   │   ├── 20260611-100500/
 │   │   ├── 20260614-093452/
 │   │   ├── 20260614-205834/
+│   │   ├── 20260618-135436/
+│   │   ├── 20260702-171509/
+│   │   ├── 20260704-073650/
 │   │   ├── dev-20260530-144032/
 │   │   ├── dev-20260531-134455/
 │   │   ├── dev-20260531-193000/
 │   │   ├── dev-20260615-213842/
-│   │   └── `manifest.json` - json config
+│   │   ├── dev-20260616-204226/
+│   │   ├── dev-20260619-092310-errmsg/
+│   │   ├── dev-20260619-092310-streak/
+│   │   └── `manifest.json` - JSON config: schema_version, kind, tasks
 │   ├── instructions/
 │   │   ├── `execution-guide.md` - AI Test Execution Guide
 │   │   └── `validation-guide.md` - AI-Driven Validation Guide
 │   ├── reports/
 │   │   ├── `completion-test-20260107-104018.md` - Test Execution Completion Report
-│   │   ├── `edge-case-analysis.json` - json config
-│   │   ├── `execution-report-test-20260107-095503.json` - json config
-│   │   └── `execution-report-test-20260107-104018.json` - json config
+│   │   ├── `edge-case-analysis.json` - JSON config: analysis_timestamp, repository, total_commits_analyzed, edge_cases_found, analysis_period
+│   │   ├── `execution-report-test-20260107-095503.json` - JSON config: request_id, timestamp, executor
+│   │   └── `execution-report-test-20260107-104018.json` - JSON config: request_id, timestamp, executor
 │   ├── score-inject-contract/
 │   │   ├── `runtime-verify.sh` - Description: Runtime verifier for the 4-field score-injection echo contract.
 │   │   └── `test-inject-branches.sh` - Description: Verify scripts/score-inject.sh emits INJECTION_PROOF block with
@@ -466,10 +474,10 @@ dot-claude/
 ├── `LICENSE` - LICENSE file
 ├── `NESTED-REPO.md` - Nested Repo Sentinel
 ├── `NOTICE` - NOTICE file
-├── `push.sh` - 
-├── `requirements.txt` - txt file
-├── `settings.json` - json config
-├── `settings.template.json` - json config
+├── `push.sh` - push.sh - Global pre-push checks: git identity + fetch/pull/status
+├── `requirements.txt` - Python dependency manifest for the Claude Code harness venv
+├── `settings.json` - Claude Code harness configuration (permissions, hooks, env, model)
+├── `settings.template.json` - Distributable harness settings template (uses CLAUDE_HOME placeholders)
 ```
 <!-- /AUTO:index-stats -->
 

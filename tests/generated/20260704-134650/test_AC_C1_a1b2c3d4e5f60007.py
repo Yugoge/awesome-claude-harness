@@ -5,10 +5,18 @@
 # above (AC_UID, AC_TYPE, docstring) MUST be preserved verbatim so QA can
 # trace each test back to its source AC entry.
 
+import re
+import pathlib
 import pytest
 
 AC_UID = "a1b2c3d4e5f60007"
 AC_TYPE = "data"
+
+# CJK Unified Ideographs block U+4E00-U+9FFF
+CJK_PATTERN = re.compile(r"[一-鿿]")
+
+# Repo root relative to this test file (tests/generated/20260704-134650/)
+REPO_ROOT = pathlib.Path(__file__).parent.parent.parent
 
 
 def test_AC_C1():
@@ -17,7 +25,21 @@ def test_AC_C1():
     WHEN:  each of hooks/README-TODO-INJECTION.md, docs/reference/fswatch-quickref.md, docs/reference/git-fswatch.md, docs/reference/lock-file-handling.md is read
     THEN:  no CJK characters (U+4E00-U+9FFF) appear in the main prose content of these 4 files
     """
-    # TODO(dev): replace the line below with the real test body. While the
-    # TEST_INCOMPLETE sentinel is present the test will hard-fail, marking
-    # the AC as unimplemented for QA Phase 5.
-    pytest.fail(f"TEST_INCOMPLETE: {AC_UID} — 4 translated files must contain no CJK characters in prose content")
+    target_files = [
+        REPO_ROOT / "hooks" / "README-TODO-INJECTION.md",
+        REPO_ROOT / "docs" / "reference" / "fswatch-quickref.md",
+        REPO_ROOT / "docs" / "reference" / "git-fswatch.md",
+        REPO_ROOT / "docs" / "reference" / "lock-file-handling.md",
+    ]
+
+    failures = []
+    for path in target_files:
+        assert path.exists(), f"File not found: {path}"
+        content = path.read_text(encoding="utf-8")
+        cjk_chars = CJK_PATTERN.findall(content)
+        if cjk_chars:
+            failures.append(f"{path.name}: {len(cjk_chars)} CJK characters found (first: U+{ord(cjk_chars[0]):04X})")
+
+    assert not failures, (
+        "CJK characters found in translated files:\n" + "\n".join(failures)
+    )
