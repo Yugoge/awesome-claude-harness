@@ -12,10 +12,10 @@ import pytest
 AC_UID = "a1b2c3d4e5f60008"
 AC_TYPE = "data"
 
-# Broader CJK pattern covering CJK Unified Ideographs + CJK Extensions A/B,
+# Broader CJK pattern covering CJK Unified Ideographs + Extensions,
 # CJK Compatibility Ideographs, Hiragana/Katakana, Hangul
 CJK_PATTERN = re.compile(
-    r"[㐀-䶿一-鿿豈-﫿぀-ヿ가-힯]"
+    r"[㐀-䶿一-鿿豈-﫿぀-ヿ가-힯]"
 )
 
 # Repo root relative to this test file (tests/generated/20260704-134650/ to 4 levels up)
@@ -46,7 +46,5 @@ def test_AC_C2():
                 f"first: U+{ord(cjk_chars[0]):04X}"
             )
     assert not failures, (
-        "CJK characters found in INDEX files after regen:
-" + "
-".join(failures)
+        "CJK characters found in INDEX files after regen:\n" + "\n".join(failures)
     )

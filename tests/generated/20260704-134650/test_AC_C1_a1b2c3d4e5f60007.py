@@ -41,10 +41,11 @@ def test_AC_C1():
         content = path.read_text(encoding="utf-8")
         cjk_chars = CJK_PATTERN.findall(content)
         if cjk_chars:
-            failures.append(f"{path.name}: {len(cjk_chars)} CJK characters found (first: U+{ord(cjk_chars[0]):04X})")
+            failures.append(
+                f"{path.name}: {len(cjk_chars)} CJK characters found "
+                f"(first: U+{ord(cjk_chars[0]):04X})"
+            )
 
     assert not failures, (
-        "CJK characters found in translated files:
-" + "
-".join(failures)
+        "CJK characters found in translated files:\n" + "\n".join(failures)
     )

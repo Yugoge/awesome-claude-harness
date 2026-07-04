@@ -15,17 +15,14 @@ AC_TYPE = "data"
 # Broader CJK pattern covering CJK Unified Ideographs + Extensions,
 # CJK Compatibility Ideographs, Hiragana/Katakana, Hangul
 CJK_PATTERN = re.compile(
-    r"[㐀-䶿一-鿿豈-﫿぀-ヿ가-힯]"
+    r"[㐀-䶿一-鿿豈-﫿぀-ヿ가-힯]"
 )
 
 # Repo root relative to this test file (tests/generated/20260704-134650/ to 4 levels up)
 REPO_ROOT = pathlib.Path(__file__).parent.parent.parent.parent
 
-# The two intentional CJK incident-quote strings that must NOT have been removed
-INTENTIONAL_CJK_QUOTES = [
-    "全部commit push",   # full text of the first quote
-    "git checkout 925f5960",      # associated command (ASCII, sanity check)
-]
+# The intentional CJK incident-quote string that must NOT have been removed
+INTENTIONAL_CJK_QUOTE = "全部commit push"  # "全部commit push"
 
 
 def test_AC_C3():
@@ -39,16 +36,15 @@ def test_AC_C3():
     content = readme.read_text(encoding="utf-8")
 
     # The quote string that must remain verbatim
-    cjk_quote = "全部commit push"
-    assert cjk_quote in content, (
-        f"Intentional CJK quote missing from README.md: {repr(cjk_quote)}. "
+    assert INTENTIONAL_CJK_QUOTE in content, (
+        f"Intentional CJK quote missing from README.md: {repr(INTENTIONAL_CJK_QUOTE)}. "
         "Do NOT translate the incident postmortem quotes in README.md."
     )
-    # Sanity: the associated command should also still be present
+    # Sanity: the associated incident command should also still be present
     assert "git checkout 925f5960" in content, (
         "Incident command string missing from README.md; README.md may have been wrongly edited."
     )
-    # Also ensure we did not delete CJK from README entirely (should have at least 2 occurrences)
+    # Also ensure we did not delete CJK from README entirely
     cjk_matches = CJK_PATTERN.findall(content)
     assert len(cjk_matches) >= 2, (
         f"README.md should contain at least 2 CJK chars (intentional quotes), found {len(cjk_matches)}."

@@ -15,7 +15,7 @@ AC_TYPE = "data"
 # Broader CJK pattern covering CJK Unified Ideographs + Extensions,
 # CJK Compatibility Ideographs, Hiragana/Katakana, Hangul
 CJK_PATTERN = re.compile(
-    r"[㐀-䶿一-鿿豈-﫿぀-ヿ가-힯]"
+    r"[㐀-䶿一-鿿豈-﫿぀-ヿ가-힯]"
 )
 
 # Repo root relative to this test file (tests/generated/20260704-134650/ to 4 levels up)
@@ -54,10 +54,8 @@ def test_env_example_comments_translated():
                 )
 
     assert not failing_lines, (
-        f"CJK characters found in {len(failing_lines)} comment line(s) of hooks/.env.example:
-"
-        + "
-".join(failing_lines)
+        f"CJK characters found in {len(failing_lines)} comment line(s) of hooks/.env.example:\n"
+        + "\n".join(failing_lines)
     )
 
 
