@@ -17,7 +17,15 @@ def test_AC_G2():
     WHEN:  the dependency section is read
     THEN:  the detailed dependency table is inside a <details> HTML element
     """
-    # TODO(dev): replace the line below with the real test body. While the
-    # TEST_INCOMPLETE sentinel is present the test will hard-fail, marking
-    # the AC as unimplemented for QA Phase 5.
-    pytest.fail(f"TEST_INCOMPLETE: {AC_UID} — README.md dependency table must be wrapped in <details></details> HTML element")
+    import pathlib
+
+    repo_root = pathlib.Path(__file__).parents[3]
+    readme = repo_root / "README.md"
+
+    assert readme.exists(), "README.md does not exist"
+
+    content = readme.read_text(encoding="utf-8")
+
+    assert "<details>" in content, (
+        "README.md must contain a <details> HTML element (dependency matrix should be collapsible)"
+    )
