@@ -5,19 +5,40 @@
 # above (AC_UID, AC_TYPE, docstring) MUST be preserved verbatim so QA can
 # trace each test back to its source AC entry.
 
+import sys
+import tempfile
+from pathlib import Path
+
 import pytest
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
+from hooks.doc_sync.extract import extract_description
 
 AC_UID = "a1b2c3d4e5f60004"
 AC_TYPE = "data"
 
 
-def test_AC_B3():
+def test_AC_B3(tmp_path):
     """
     GIVEN: hooks/doc_sync/extract.py is edited to fix the Python docstring scan cap defect
     WHEN:  extract_description is called on a Python file with a module docstring at line 8 (after shebang + blank + header comments)
     THEN:  the docstring content is returned, not 'Python script'
     """
-    # TODO(dev): replace the line below with the real test body. While the
-    # TEST_INCOMPLETE sentinel is present the test will hard-fail, marking
-    # the AC as unimplemented for QA Phase 5.
-    pytest.fail(f"TEST_INCOMPLETE: {AC_UID} — Python docstring at line 8 must be found despite scan cap")
+    # Docstring is at line index 7 (0-based) — after shebang, encoding, 5 blank/# lines.
+    py_content = (
+        '#!/usr/bin/env python3\n'      # line 0: shebang
+        '# -*- coding: utf-8 -*-\n'     # line 1: encoding cookie
+        '#\n'                            # line 2: bare #
+        '\n'                             # line 3: blank
+        '\n'                             # line 4: blank
+        '\n'                             # line 5: blank
+        '\n'                             # line 6: blank
+        '"""Module that handles important work."""\n'  # line 7: docstring
+    )
+    f = tmp_path / 'mymodule.py'
+    f.write_text(py_content)
+    result = extract_description(f)
+    assert result != 'Python script', \
+        f"Expected docstring content, got 'Python script' — scan cap not removed"
+    assert 'important work' in result, \
+        f"Expected 'important work' in result, got {result!r}"
