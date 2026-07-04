@@ -15,8 +15,8 @@ AC_TYPE = "data"
 # CJK Unified Ideographs block U+4E00-U+9FFF
 CJK_PATTERN = re.compile(r"[一-鿿]")
 
-# Repo root relative to this test file (tests/generated/20260704-134650/)
-REPO_ROOT = pathlib.Path(__file__).parent.parent.parent
+# Repo root relative to this test file (tests/generated/20260704-134650/ → 4 levels up)
+REPO_ROOT = pathlib.Path(__file__).parent.parent.parent.parent
 
 
 def test_AC_C1():
