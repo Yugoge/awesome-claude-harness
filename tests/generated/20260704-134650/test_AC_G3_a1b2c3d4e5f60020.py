@@ -26,9 +26,12 @@ def test_AC_G3():
 
     content = readme.read_text(encoding="utf-8")
 
-    # Must reference guard-demo or run-demo.sh
-    assert ("guard-demo" in content or "run-demo.sh" in content), (
-        "README.md must contain 'guard-demo' or 'run-demo.sh' in the demo section"
+    # Must reference both guard-demo and run-demo.sh
+    assert "guard-demo" in content, (
+        "README.md must contain 'guard-demo' in the demo section"
+    )
+    assert "run-demo.sh" in content, (
+        "README.md must contain 'run-demo.sh' in the demo section"
     )
     assert "BLOCKED" in content, (
         "README.md guard-demo section must contain 'BLOCKED'"
