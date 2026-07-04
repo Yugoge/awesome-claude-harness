@@ -83,6 +83,22 @@ def test_path_outside_repo_is_not_reserved(tmp_path):
     assert is_github_reserved_subtree(outside, root) is False
 
 
+def test_nested_non_root_github_is_not_reserved(tmp_path):
+    # Only the repo's ROOT-level .github is GitHub-reserved. A nested .github
+    # deeper in the tree (e.g. src/.github) is a normal folder and must NOT be
+    # suppressed (codex do-audit finding 1: anchored check must be parts[0], not
+    # "any component").
+    root = tmp_path / "repo"
+    (root / "src" / ".github" / "workflows").mkdir(parents=True)
+    assert is_github_reserved_subtree(root / "src" / ".github", root) is False
+    assert is_github_reserved_subtree(root / "src" / ".github" / "workflows", root) is False
+    assert is_github_reserved_subtree("src/.github/workflows", root) is False
+    # The repo's own ROOT-level .github is still reserved.
+    (root / ".github").mkdir()
+    assert is_github_reserved_subtree(root / ".github", root) is True
+    assert is_github_reserved_subtree(".github", root) is True
+
+
 def test_no_project_dir_lexical_fallback_preserves_dotdot_contract():
     # Backward-compat: without a repo anchor the judgment is lexical on the path
     # as written (collapses '..'), preserving the prior single-arg behaviour.

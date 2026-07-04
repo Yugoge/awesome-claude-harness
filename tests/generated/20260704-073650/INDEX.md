@@ -1,9 +1,9 @@
 # 20260704-073650
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-07-04T07:42:10Z*
+*Last updated: 2026-07-04T07:52:04Z*
 **Total entries**: 0
-**Convention**: lower
+**Convention**: kebab
 
 ## Tree
 ```
