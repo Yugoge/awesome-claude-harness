@@ -33,8 +33,8 @@ def test_AC_G1():
     assert "git clone" in first_80, (
         "README.md must contain 'git clone' within its first 80 lines"
     )
-    assert "bootstrap" in first_80, (
-        "README.md must contain 'bootstrap' within its first 80 lines"
+    assert "scripts/bootstrap" in first_80, (
+        "README.md must contain 'scripts/bootstrap' within its first 80 lines"
     )
     assert "claude" in first_80, (
         "README.md must contain 'claude' within its first 80 lines"
