@@ -5,10 +5,16 @@
 # above (AC_UID, AC_TYPE, docstring) MUST be preserved verbatim so QA can
 # trace each test back to its source AC entry.
 
+import subprocess
+import sys
+from pathlib import Path
+
 import pytest
 
 AC_UID = "a1b2c3d4e5f60006"
 AC_TYPE = "data"
+
+REPO_ROOT = Path(__file__).resolve().parents[3]
 
 
 def test_AC_B5():
@@ -17,7 +23,16 @@ def test_AC_B5():
     WHEN:  pytest runs on the extract.py test file
     THEN:  all tests PASS with 0 failures
     """
-    # TODO(dev): replace the line below with the real test body. While the
-    # TEST_INCOMPLETE sentinel is present the test will hard-fail, marking
-    # the AC as unimplemented for QA Phase 5.
-    pytest.fail(f"TEST_INCOMPLETE: {AC_UID} — pytest on hooks/tests/test_extract.py must exit 0 with 0 failures")
+    test_file = REPO_ROOT / 'hooks' / 'tests' / 'test_extract.py'
+    assert test_file.exists(), f"test_extract.py not found at {test_file}"
+    result = subprocess.run(
+        [sys.executable, '-m', 'pytest', str(test_file), '-q'],
+        capture_output=True,
+        text=True,
+        cwd=str(REPO_ROOT),
+    )
+    assert result.returncode == 0, (
+        f"pytest on test_extract.py exited {result.returncode}\n"
+        f"STDOUT:\n{result.stdout}\n"
+        f"STDERR:\n{result.stderr}"
+    )
