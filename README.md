@@ -459,10 +459,10 @@ A `PostToolUse` doc-sync hook keeps the `INDEX.md` files and the inventory block
 - `LICENSE` - LICENSE file
 - `NESTED-REPO.md` - Nested Repo Sentinel
 - `NOTICE` - NOTICE file
-- `push.sh` - 
-- `requirements.txt` - txt file
-- `settings.json` - json config
-- `settings.template.json` - json config
+- `push.sh` - push.sh - Global pre-push checks: git identity + fetch/pull/status
+- `requirements.txt` - Python dependency manifest for the Claude Code harness venv
+- `settings.json` - Claude Code harness configuration (permissions, hooks, env, model)
+- `settings.template.json` - Distributable harness settings template (uses CLAUDE_HOME placeholders)
 
 ## Subdirectories
 - `agents/`

@@ -1,89 +1,89 @@
 # Global Todo Injection Hook
 
-## 概述
+## Overview
 
-`hook-todo-injection.py` 是一个**全局PreToolUse hook**，在执行任何slash command之前**强制注入**workflow checklist。
+`hook-todo-injection.py` is a **global PreToolUse hook** that **forcibly injects** a workflow checklist before any slash command executes.
 
-## 核心特性
+## Key Features
 
-✅ **75-90%遵守率** - 通过`hookSpecificOutput.additionalContext`提高遵守率（比纯prompt指令高15-20%）
-✅ **零token消耗** - 不占用prompt指令限制
-✅ **跨项目通用** - 安装在`~/.claude/hooks/`，所有项目自动生效
-✅ **多路径支持** - 自动在5个路径搜索todo脚本，支持不同项目结构
-✅ **全局fallback** - `~/.claude/scripts/todo/`作为全局默认脚本
+- **75-90% compliance rate** -- improves adherence via `hookSpecificOutput.additionalContext` (15-20% higher than pure prompt instructions)
+- **Zero token cost** -- does not consume prompt instruction budget
+- **Cross-project** -- installed in `~/.claude/hooks/`, activates automatically for all projects
+- **Multi-path lookup** -- searches 5 paths for todo scripts, supporting different project structures
+- **Global fallback** -- `~/.claude/scripts/todo/` serves as the global default script location
 
-## 工作原理
+## How It Works
 
-### 执行流程
+### Execution Flow
 
 ```
-用户执行: /ask 问题
+User runs: /ask question
     ↓
-hook-todo-injection.py 被触发 (PreToolUse)
+hook-todo-injection.py is triggered (PreToolUse)
     ↓
-检测命令名称: "ask"
+Detects command name: "ask"
     ↓
-多路径搜索todo脚本（按优先级）:
-  1. $CLAUDE_PROJECT_DIR/scripts/todo/ask.py       (项目scripts)
-  2. $CLAUDE_PROJECT_DIR/.claude/scripts/todo/ask.py  (项目.claude)
-  3. $(pwd)/scripts/todo/ask.py                    (当前目录scripts)
-  4. $(pwd)/.claude/scripts/todo/ask.py            (当前目录.claude)
-  5. ~/.claude/scripts/todo/ask.py                 (全局fallback)
+Multi-path search for todo script (in priority order):
+  1. $CLAUDE_PROJECT_DIR/scripts/todo/ask.py       (project scripts)
+  2. $CLAUDE_PROJECT_DIR/.claude/scripts/todo/ask.py  (project .claude)
+  3. $(pwd)/scripts/todo/ask.py                    (current dir scripts)
+  4. $(pwd)/.claude/scripts/todo/ask.py            (current dir .claude)
+  5. ~/.claude/scripts/todo/ask.py                 (global fallback)
     ↓
-执行脚本获取JSON: [{"content": "...", "activeForm": "...", "status": "pending"}]
+Runs script and gets JSON: [{"content": "...", "activeForm": "...", "status": "pending"}]
     ↓
-注入到prompt (additionalContext)
+Injects into prompt (additionalContext)
     ↓
-Claude看到清单 → 应该使用TodoWrite创建todos (75-90%遵守率)
+Claude sees checklist -> should use TodoWrite to create todos (75-90% compliance)
     ↓
-执行/ask命令
+Executes /ask command
 ```
 
-### 为什么这个方案更可靠？
+### Why Is This Approach More Reliable?
 
-| 方法 | 遵守率 | 原因 |
-|------|--------|------|
-| **CLAUDE.md指令** | 60-80% | Claude会在"效率优先"时跳过 |
-| **系统提示词** | 70-85% | 指令数量限制（150-200条），优先级竞争 |
-| **hookSpecificOutput** | **75-90%** | 注入到prompt context，更难忽略（但不是100%强制）|
+| Method | Compliance Rate | Reason |
+|--------|----------------|---------|
+| **CLAUDE.md instructions** | 60-80% | Claude skips when in "efficiency-first" mode |
+| **System prompt** | 70-85% | Instruction count limits (150-200), priority competition |
+| **hookSpecificOutput** | **75-90%** | Injected into prompt context, harder to ignore (but not 100% enforced) |
 
-**重要说明:**
-- `additionalContext`是**prompt注入**，不是强制执行
-- Claude仍可能在某些情况下选择跳过（如效率优先模式）
-- 但比纯粹的CLAUDE.md指令可靠性提高~15-20%
+**Important notes:**
+- `additionalContext` is **prompt injection**, not forced execution
+- Claude may still skip in some cases (e.g., efficiency-first mode)
+- But reliability is ~15-20% higher than pure CLAUDE.md instructions
 
-## 安装
+## Installation
 
-### 1. 全局hook（已完成）
+### 1. Global hook (already complete)
 
 ```bash
-# Hook已安装在:
+# Hook is installed at:
 ~/.claude/hooks/hook-todo-injection.py
 
-# 全局配置已更新:
+# Global config already updated:
 ~/.claude/settings.json (line 237-247)
 ```
 
-### 2. 项目配置（每个项目需要）
+### 2. Per-project configuration (needed for each project)
 
-在你的项目中创建todo脚本：
+Create a todo script in your project:
 
 ```bash
-# 项目结构
+# Project structure
 my-project/
 ├── scripts/
 │   └── todo/
-│       ├── ask.py          # /ask命令的todo清单
-│       ├── learn.py        # /learn命令的todo清单
-│       ├── save.py         # /save命令的todo清单
-│       └── maintain.py     # /maintain命令的todo清单
+│       ├── ask.py          # todo checklist for /ask command
+│       ├── learn.py        # todo checklist for /learn command
+│       ├── save.py         # todo checklist for /save command
+│       └── maintain.py     # todo checklist for /maintain command
 └── .claude/
-    └── settings.json       # 项目级配置（可选）
+    └── settings.json       # project-level config (optional)
 ```
 
-### 3. Todo脚本格式
+### 3. Todo Script Format
 
-每个脚本必须输出JSON数组：
+Each script must output a JSON array:
 
 ```python
 #!/usr/bin/env python3
@@ -111,71 +111,71 @@ if __name__ == "__main__":
     print(json.dumps(todos, indent=2, ensure_ascii=False))
 ```
 
-## 使用示例
+## Usage Examples
 
-### 示例1：执行/ask命令
+### Example 1: Running the /ask command
 
 ```bash
-# 用户输入
+# User input
 /ask What is theta decay?
 
-# Hook自动触发:
-# 1. 检测到命令 "ask"
-# 2. 执行 scripts/todo/ask.py
-# 3. 注入10步workflow到Claude的prompt
-# 4. Claude必须先创建todos才能开始回答
+# Hook automatically triggers:
+# 1. Detects command "ask"
+# 2. Runs scripts/todo/ask.py
+# 3. Injects 10-step workflow into Claude's prompt
+# 4. Claude must create todos before starting to answer
 ```
 
-### 示例2：没有todo脚本的命令
+### Example 2: Command with no todo script
 
 ```bash
-# 用户输入
+# User input
 /my-custom-command
 
-# Hook行为:
-# 1. 检测到命令 "my-custom-command"
-# 2. 查找 scripts/todo/my-custom-command.py (不存在)
-# 3. 直接放行，不注入任何内容
+# Hook behavior:
+# 1. Detects command "my-custom-command"
+# 2. Looks for scripts/todo/my-custom-command.py (not found)
+# 3. Passes through -- no content injected
 ```
 
-## 测试
+## Testing
 
-### 本地测试hook
+### Test the hook locally
 
 ```bash
-# 测试/ask命令
+# Test /ask command
 echo '{"command": "/ask test"}' | source ~/.claude/venv/bin/activate && python3 ~/.claude/hooks/hook-todo-injection.py
 
-# 应该看到JSON输出包含:
+# Expected JSON output:
 # {
 #   "status": "allow",
 #   "hookSpecificOutput": {
-#     "additionalContext": "⚠️ CRITICAL WORKFLOW REQUIREMENT..."
+#     "additionalContext": "CRITICAL WORKFLOW REQUIREMENT..."
 #   }
 # }
 ```
 
-### 测试todo脚本
+### Test a todo script
 
 ```bash
-# 直接运行脚本
+# Run the script directly
 cd your-project
-source venv/bin/activate  # 如果使用venv
+source venv/bin/activate  # if using venv
 python scripts/todo/ask.py
 
-# 应该看到JSON数组输出
+# Expected: JSON array output
 ```
 
-## 故障排查
+## Troubleshooting
 
-### Hook没有触发
+### Hook not triggering
 
-**检查全局配置:**
+**Check global configuration:**
 ```bash
 cat ~/.claude/settings.json | grep -A 10 '"PreToolUse"'
 ```
 
-应该看到:
+Expected output:
 ```json
 "PreToolUse": [
   {
@@ -192,59 +192,56 @@ cat ~/.claude/settings.json | grep -A 10 '"PreToolUse"'
 ]
 ```
 
-### Todo脚本未执行
+### Todo script not executing
 
-**检查脚本路径:**
+**Check script paths:**
 ```bash
-# Hook会按优先级顺序查找:
+# Hook searches in priority order:
 # 1. $CLAUDE_PROJECT_DIR/scripts/todo/{command}.py
 # 2. $CLAUDE_PROJECT_DIR/.claude/scripts/todo/{command}.py
 # 3. $(pwd)/scripts/todo/{command}.py
 # 4. $(pwd)/.claude/scripts/todo/{command}.py
-# 5. ~/.claude/scripts/todo/{command}.py (全局fallback)
+# 5. ~/.claude/scripts/todo/{command}.py (global fallback)
 
 # Confirm script exists and is executable
 ls -l scripts/todo/
-ls -l ~/.claude/scripts/todo/  # Check global scripts
-python3 scripts/todo/ask.py  # Test script
+ls -l ~/.claude/scripts/todo/
+python3 scripts/todo/ask.py
 ```
 
-**检查权限:**
+**Check permissions:**
 ```bash
 chmod +x scripts/todo/*.py
 ```
 
-**检查Python环境:**
+**Check Python environment:**
 ```bash
-# Hook会尝试激活venv (如果存在)
 ls -la venv/bin/activate
-
-# 如果没有venv，确保python3可用
 which python3
 ```
 
-### Hook返回错误
+### Hook returns error
 
-Hook设计为**fail-safe** - 即使出错也会放行：
+The hook is designed to be **fail-safe** -- it passes through even on error:
 
 ```python
-# 错误处理示例
+# Error handling example
 try:
     # ... hook logic ...
 except Exception as e:
     return {
         "status": "allow",
-        "message": f"⚠️ Todo injection error: {str(e)}"
+        "message": f"Todo injection error: {str(e)}"
     }
 ```
 
-检查Claude Code的hook输出看是否有错误信息。
+Check Claude Code's hook output for error messages.
 
-## 高级配置
+## Advanced Configuration
 
-### 项目级覆盖（可选）
+### Per-project override (optional)
 
-如果项目有特殊需求，可以在项目的`.claude/settings.json`中覆盖全局hook：
+If a project has special requirements, override the global hook in the project's `.claude/settings.json`:
 
 ```json
 {
@@ -266,15 +263,15 @@ except Exception as e:
 }
 ```
 
-### 自定义注入格式
+### Custom injection format
 
-修改`hook-todo-injection.py`中的`format_todo_injection()`函数：
+Modify the `format_todo_injection()` function in `hook-todo-injection.py`:
 
 ```python
 def format_todo_injection(todos_json: str, cmd_name: str) -> str:
-    """自定义注入消息格式"""
+    """Custom injection message format"""
     return f"""
-⚠️ WORKFLOW CHECKLIST FOR /{cmd_name}
+WORKFLOW CHECKLIST FOR /{cmd_name}
 
 {todos_json}
 
@@ -282,121 +279,121 @@ IMPORTANT: Create these todos before starting!
 """
 ```
 
-### 条件注入
+### Conditional injection
 
-在hook中添加逻辑，只在特定条件下注入：
+Add logic in the hook to inject only under specific conditions:
 
 ```python
-# 例如：只在工作日注入（周末跳过workflow）
+# Example: only inject on weekdays (skip weekends)
 from datetime import datetime
 
 if datetime.now().weekday() >= 5:  # Saturday=5, Sunday=6
-    return {"status": "allow"}  # 周末不注入
+    return {"status": "allow"}  # no injection on weekends
 ```
 
-## 架构说明
+## Architecture Notes
 
 ### hookSpecificOutput vs message
 
-| 字段 | 显示方式 | Claude能否跳过 |
-|------|---------|---------------|
-| `message` | Hook输出消息（用户可见） | ✅ 可以忽略 |
-| `hookSpecificOutput.additionalContext` | **强制注入到prompt** | ❌ 无法跳过 |
+| Field | Display | Can Claude skip? |
+|-------|---------|-----------------|
+| `message` | Hook output message (user-visible) | Yes -- can be ignored |
+| `hookSpecificOutput.additionalContext` | **Forced injection into prompt** | No -- cannot be skipped |
 
-这就是为什么我们使用`additionalContext` - 它直接修改了Claude看到的对话历史。
+This is why we use `additionalContext` -- it directly modifies the conversation history Claude sees.
 
 ### PreToolUse vs UserPromptSubmit
 
-| Hook时机 | 触发时间 | 适用场景 |
-|----------|---------|---------|
-| `UserPromptSubmit` | 用户输入**之后**，工具执行**之前** | 输入验证、安全检查 |
-| `PreToolUse` | **特定工具调用之前** | 工具特定的前置操作 |
+| Hook timing | Triggered | Use case |
+|-------------|---------|---------|
+| `UserPromptSubmit` | After user input, before tool execution | Input validation, security checks |
+| `PreToolUse` | Before a specific tool call | Tool-specific pre-operations |
 
-我们使用`PreToolUse + SlashCommand matcher`确保只在slash command执行前触发。
+We use `PreToolUse + SlashCommand matcher` to ensure triggering only before slash command execution.
 
-## 相关文件
+## Related Files
 
 ```
 ~/.claude/
 ├── hooks/
-│   ├── hook-todo-injection.py         # 主hook脚本（全局）
-│   └── README-TODO-INJECTION.md       # 本文档
-└── settings.json                      # 全局配置（包含hook注册）
+│   ├── hook-todo-injection.py         # main hook script (global)
+│   └── README-TODO-INJECTION.md       # this document
+└── settings.json                      # global config (contains hook registration)
 
 your-project/
 ├── scripts/
 │   └── todo/
-│       ├── ask.py                     # /ask的todo清单
-│       ├── learn.py                   # /learn的todo清单
-│       └── save.py                    # /save的todo清单
+│       ├── ask.py                     # todo checklist for /ask
+│       ├── learn.py                   # todo checklist for /learn
+│       └── save.py                    # todo checklist for /save
 └── .claude/
     ├── commands/
-    │   ├── ask.md                     # 命令定义
+    │   ├── ask.md                     # command definition
     │   └── learn.md
-    └── settings.json                  # 项目配置（可选覆盖）
+    └── settings.json                  # project config (optional override)
 ```
 
-## 维护
+## Maintenance
 
-### 添加新命令的todo支持
+### Adding todo support for a new command
 
-1. 创建todo脚本: `scripts/todo/mycommand.py`
-2. 按格式编写输出JSON的脚本
-3. 测试: `python scripts/todo/mycommand.py`
-4. 使用命令: `/mycommand` - hook自动注入
+1. Create a todo script: `scripts/todo/mycommand.py`
+2. Write the script to output JSON following the format above
+3. Test: `python scripts/todo/mycommand.py`
+4. Use the command: `/mycommand` -- hook injects automatically
 
-### 更新todo清单
+### Updating a todo checklist
 
-直接编辑项目中的`scripts/todo/{command}.py`文件即可。
+Edit `scripts/todo/{command}.py` directly in your project.
 
-### 禁用某个命令的todo注入
+### Disabling todo injection for a command
 
-删除或重命名对应的todo脚本：
+Remove or rename the corresponding todo script:
 
 ```bash
-# 禁用/ask的todo注入
+# Disable /ask todo injection
 mv scripts/todo/ask.py scripts/todo/ask.py.disabled
 ```
 
-## 最佳实践
+## Best Practices
 
-1. **保持todo脚本简单** - 只输出JSON，不要包含复杂逻辑
-2. **快速执行** - Hook有5秒超时限制
-3. **失败优雅** - 脚本出错不应阻止命令执行
-4. **版本控制** - 将`scripts/todo/`纳入Git版本控制
-5. **文档同步** - 更新workflow时同步更新todo脚本
+1. **Keep todo scripts simple** -- only output JSON; avoid complex logic
+2. **Fast execution** -- hook has a 5-second timeout
+3. **Fail gracefully** -- script errors must not block command execution
+4. **Version control** -- include `scripts/todo/` in your git repository
+5. **Keep docs in sync** -- update todo scripts when workflow changes
 
-## 常见问题
+## FAQ
 
-**Q: 为什么不直接在CLAUDE.md中写指令？**
-A: CLAUDE.md指令有数量限制且可被Claude忽略。Hook通过additionalContext注入更难被跳过（虽然不是100%）。
+**Q: Why not just put instructions in CLAUDE.md?**
+A: CLAUDE.md instructions have count limits and can be ignored by Claude. The hook injects via additionalContext, making it harder to skip (though not 100% enforced).
 
-**Q: Hook会影响性能吗？**
-A: 几乎没有影响。脚本执行<100ms，且只在slash command时触发。
+**Q: Does the hook affect performance?**
+A: Negligible impact. Script executes in <100ms and only triggers on slash commands.
 
-**Q: 可以用于非slash命令吗？**
-A: 可以修改hook的matcher，但建议只用于slash command以保持清晰分离。
+**Q: Can it be used for non-slash commands?**
+A: You can change the hook's matcher, but using it only for slash commands is recommended to maintain clear separation.
 
-**Q: 如何在多个项目间共享todo脚本？**
-A: 创建一个模板项目，用符号链接或Git submodule共享`scripts/todo/`目录。
+**Q: How do I share todo scripts across multiple projects?**
+A: Create a template project and share `scripts/todo/` via symlinks or a Git submodule.
 
-**Q: Hook可以修改命令参数吗？**
-A: 不能。PreToolUse hook只能注入context或阻止执行，不能修改参数。
+**Q: Can the hook modify command arguments?**
+A: No. PreToolUse hooks can only inject context or block execution; they cannot modify arguments.
 
-## 更新日志
+## Changelog
 
-- **2025-12-31 v2**: 多路径支持更新
-  - 支持5个搜索路径（项目scripts、项目.claude、当前scripts、当前.claude、全局fallback）
-  - 修正文档：75-90%遵守率（非100%强制）
-  - 增加全局fallback机制
+- **2025-12-31 v2**: Multi-path support update
+  - Supports 5 search paths (project scripts, project .claude, cwd scripts, cwd .claude, global fallback)
+  - Documentation corrected: 75-90% compliance rate (not 100% enforced)
+  - Added global fallback mechanism
 
-- **2025-12-31 v1**: 初始版本发布
-  - 全局todo injection hook
-  - 支持项目特定todo脚本
-  - hookSpecificOutput.additionalContext机制
+- **2025-12-31 v1**: Initial release
+  - Global todo injection hook
+  - Support for project-specific todo scripts
+  - hookSpecificOutput.additionalContext mechanism
 
 ---
 
-**作者:** Happy + Claude Code
+**Author:** Happy + Claude Code
 **License:** MIT
-**维护:** 全局配置在`~/.claude/`，项目配置在各项目的`scripts/todo/`
+**Maintenance:** Global config in `~/.claude/`, project config in each project's `scripts/todo/`
