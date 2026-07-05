@@ -53,6 +53,8 @@ SENTINEL_GRANT_DIR = "/tmp/claude-grants"
 
 def _regex_safe(pattern: str, text: str, timeout: int = 1) -> bool:
     """re.search with SIGALRM timeout. Returns False on re.error or timeout."""
+    if timeout is None:
+        timeout = 1
     def _handler(signum, frame):
         raise TimeoutError("regex timeout")
     old = signal.signal(signal.SIGALRM, _handler)
