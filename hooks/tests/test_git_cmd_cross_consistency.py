@@ -52,12 +52,17 @@ def _extract_bash_git_cmd_re() -> str:
       GIT_GLOBAL_OPT_RE='...'
       GIT_CMD_RE='(^|[[:space:];&|()`])git'"$GIT_GLOBAL_OPT_RE"'[[:space:]]+'
 
-    We extract both variable values and concatenate them just as bash does.
-    Returns a Python-compatible regex string.
+    We extract GIT_GLOBAL_OPT_RE then assemble the full pattern string.
+    POSIX bracket-expression conversion:
+      - Compound anchor [[:space:];&|()`]  ->  [\\s;&|()`]
+      - Negated class [^[:space:];|&]      ->  [^\\s;|&]
+      - Remaining standalone [[:space:]]   ->  \\s  (used as char class in GOR body)
+    Order matters: replace the compound anchor FIRST so that the
+    [:space:] fragment inside it does not get replaced prematurely.
     """
     text = _BASH_SAFETY_SH.read_text()
 
-    # Extract GIT_GLOBAL_OPT_RE assignment (the line inside the git operations section)
+    # Extract GIT_GLOBAL_OPT_RE value
     gor_match = re.search(
         r"^GIT_GLOBAL_OPT_RE='([^']+)'",
         text,
@@ -66,25 +71,21 @@ def _extract_bash_git_cmd_re() -> str:
     assert gor_match, "Could not find GIT_GLOBAL_OPT_RE in pretool-bash-safety.sh"
     git_global_opt_re = gor_match.group(1)
 
-    # Extract GIT_CMD_RE assignment — it references $GIT_GLOBAL_OPT_RE
-    gcr_match = re.search(
-        r"""^GIT_CMD_RE='([^']+)'"\$GIT_GLOBAL_OPT_RE"'([^']+)'""",
-        text,
-        re.MULTILINE,
+    # Assemble the raw bash regex string as bash does:
+    #   '(^|[[:space:];&|()`])git' + $GIT_GLOBAL_OPT_RE + '[[:space:]]+'
+    bash_re_raw = (
+        '(^|[[:space:];&|()`])git'
+        + git_global_opt_re
+        + '[[:space:]]+'
     )
-    assert gcr_match, "Could not find GIT_CMD_RE in pretool-bash-safety.sh"
 
-    bash_re_prefix = gcr_match.group(1)   # '(^|[[:space:];&|()`])git'
-    bash_re_suffix = gcr_match.group(2)   # '[[:space:]]+'
-
-    # Concatenate: prefix + expanded GIT_GLOBAL_OPT_RE + suffix
-    bash_re_raw = bash_re_prefix + git_global_opt_re + bash_re_suffix
-
-    # Convert POSIX bracket expressions to Python equivalents for search
-    # [[:space:]] -> \s   (used in anchor and suffix)
-    py_re = bash_re_raw.replace('[[:space:]]', r'\s')
-    # [^[:space:];|&] -> [^\s;|&]
+    # Convert POSIX bracket expressions to Python equivalents.
+    # 1. Compound anchor (must go first to avoid premature [:space:] replacement)
+    py_re = bash_re_raw.replace('[[:space:];&|()`]', r'[\s;&|()`]')
+    # 2. Negated class inside GIT_GLOBAL_OPT_RE body
     py_re = py_re.replace('[^[:space:];|&]', r'[^\s;|&]')
+    # 3. Remaining standalone [[:space:]] occurrences in the GOR body and suffix
+    py_re = py_re.replace('[[:space:]]', r'\s')
 
     return py_re
 
