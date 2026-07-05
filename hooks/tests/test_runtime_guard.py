@@ -4292,7 +4292,7 @@ class TestCycle16CodexFollowup:
 
     # purity: the codex fix introduces NO project name into the engine.
     def test_engine_still_project_name_free(self):
-        src = open(os.path.join(HOOKS_DIR, "lib", "runtime_guard.py")).read().lower()
+        src = open(os.path.join(HOOKS_DIR, "lib", "runtime_guard", "_core.py")).read().lower()
         for name in ("happy", "jade", "qijie", "life-ai", "slopus", "local-server"):
             assert name not in src, f"engine must stay project-name-free: {name!r}"
 
