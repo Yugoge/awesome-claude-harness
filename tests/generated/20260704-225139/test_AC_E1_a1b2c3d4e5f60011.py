@@ -5,10 +5,30 @@
 # above (AC_UID, AC_TYPE, docstring) MUST be preserved verbatim so QA can
 # trace each test back to its source AC entry.
 
-import pytest
+import os
+import subprocess
+import tempfile
 
 AC_UID = "a1b2c3d4e5f60011"
 AC_TYPE = "hook"
+
+HOOK = "/dev/shm/dev-workspace/dot-claude/hooks/session-git-init.sh"
+DISABLED_VALUES = [None, "", "0", "false", "FALSE", "off"]
+
+
+def _run_hook_e1(env_value, tmpdir):
+    env = os.environ.copy()
+    if env_value is None:
+        env.pop("CLAUDE_SESSION_GIT_INIT", None)
+    else:
+        env["CLAUDE_SESSION_GIT_INIT"] = env_value
+    return subprocess.run(
+        ["bash", HOOK],
+        capture_output=True,
+        text=True,
+        cwd=tmpdir,
+        env=env,
+    )
 
 
 def test_AC_E1():
@@ -17,7 +37,14 @@ def test_AC_E1():
     WHEN:  hooks/session-git-init.sh runs in a non-git temporary directory
     THEN:  script exits 0 AND no git repository is initialized AND no git commit is made AND no files are created in the temp directory by the script
     """
-    # TODO(dev): replace the line below with the real test body. While the
-    # TEST_INCOMPLETE sentinel is present the test will hard-fail, marking
-    # the AC as unimplemented for QA Phase 5.
-    pytest.fail(f"TEST_INCOMPLETE: {AC_UID} — session-git-init disabled states all exit 0 without git ops")
+    for val in DISABLED_VALUES:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            result = _run_hook_e1(val, tmpdir)
+            label = repr(val)
+            assert result.returncode == 0, (
+                f"CLAUDE_SESSION_GIT_INIT={label}: expected exit 0, got {result.returncode}\n"
+                f"stderr: {result.stderr}"
+            )
+            assert not os.path.exists(os.path.join(tmpdir, ".git")), (
+                f"CLAUDE_SESSION_GIT_INIT={label}: .git directory was created but should not be"
+            )
