@@ -33,7 +33,7 @@ def test_AC_F3():
         text=True,
         cwd=REPO,
     )
-    assert result.returncode != 2, (
-        f"pretool-bash-safety.sh should NOT block 'legit reset --hard' (legit != git), "
+    assert result.returncode == 0, (
+        f"pretool-bash-safety.sh should exit 0 for 'legit reset --hard' (legit != git), "
         f"got exit {result.returncode}\nstderr: {result.stderr}"
     )
