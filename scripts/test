@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+# Run all tests, excluding generated test snapshots
+set -e
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
+VENV="$PROJECT_ROOT/venv"
+
+if [[ -f "$VENV/bin/activate" ]]; then
+  source "$VENV/bin/activate"
+fi
+
+exec python3 -m pytest hooks/tests tests -q --ignore=tests/generated "$@"
