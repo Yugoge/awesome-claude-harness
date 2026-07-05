@@ -1510,7 +1510,37 @@ if { echo "$COMMAND" | grep -qE "${GIT_CMD_RE}push\b" && \
   echo "REASON: policy allows normal /push branch publication and backup-only recovery refs; force/delete/ref-rewrite pushes can lose remote work." >&2
   exit 2
 fi
-if echo "$COMMAND" | grep -qE "${GIT_CMD_RE}(update-ref\b|branch[[:space:]]+(-[fDdMm]+|--delete|--force|--move)\b|symbolic-ref([[:space:]]+-m([[:space:]]+[^[:space:];|&]+|[^[:space:];|&]*))*[[:space:]]+HEAD[[:space:]]+refs/)"; then
+# Path-qualified /usr/bin/git update-ref / branch -D / symbolic-ref also blocked (RISK-3)
+_PQ_DIRECT_REF=0
+if [ "$CLASSIFIER_HAS_PATH_QUALIFIED_GIT" = "1" ]; then
+  printf '%s\n' "$CLASSIFIER_JSON" | "$PYTHON_BIN" -c "
+import json,sys,re
+invs=json.load(sys.stdin)
+bad_branch_flags={'--delete','--force','--move'}
+for inv in invs:
+  if not inv.get('path_qualified'):
+    continue
+  sub=inv.get('subcommand','')
+  args=inv.get('args',[])
+  if sub=='update-ref':
+    print('match'); sys.exit(0)
+  if sub=='branch':
+    for tok in args:
+      if tok in bad_branch_flags or (re.match(r'^-[fDdMm]+$',tok)):
+        print('match'); sys.exit(0)
+  if sub=='symbolic-ref':
+    # Look for HEAD refs/... (skip -m <msg> pairs)
+    i=0
+    while i<len(args):
+      if args[i]=='-m':
+        i+=2; continue
+      break
+    if i<len(args) and args[i]=='HEAD' and i+1<len(args) and args[i+1].startswith('refs/'):
+      print('match'); sys.exit(0)
+" 2>/dev/null | grep -q match && _PQ_DIRECT_REF=1
+fi
+if echo "$COMMAND" | grep -qE "${GIT_CMD_RE}(update-ref\b|branch[[:space:]]+(-[fDdMm]+|--delete|--force|--move)\b|symbolic-ref([[:space:]]+-m([[:space:]]+[^[:space:];|&]+|[^[:space:];|&]*))*[[:space:]]+HEAD[[:space:]]+refs/)" || \
+   [ "$_PQ_DIRECT_REF" = "1" ]; then
   echo "BLOCKED: direct git ref mutation is forbidden in agent flow" >&2
   echo "Command: $COMMAND" >&2
   echo "REASON: branch movement must go through the expected-parent CAS wrapper; branch delete/force/update-ref is not agent-accessible." >&2
