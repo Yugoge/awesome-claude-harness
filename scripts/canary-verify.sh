@@ -127,7 +127,7 @@ verify_read_size_guard() {
   # python3 invocation is wrapped in a same-line subshell that sources the
   # venv per spec-20260518-225715 Cycle 2 P3.6 (canonical /dev Standard).
   local safe='{"tool_name":"Read","tool_input":{"file_path":"/dev/null"}}'
-  echo "${safe}" | ( source ~/.claude/venv/bin/activate && python3 "${hook}" >/dev/null 2>&1 )
+  echo "${safe}" | ( source "$VENV_ACTIVATE" && python3 "${hook}" >/dev/null 2>&1 )
   local rc=$?
   if [[ "${rc}" -ge 126 ]]; then
     emit_failure "pretool-read-size-guard.py exec error rc=${rc}"
@@ -142,7 +142,7 @@ verify_read_size_guard() {
   oversized=$(mktemp -t canary-oversized.XXXXXX)
   yes "fill" 2>/dev/null | head -5000 > "${oversized}" || true
   local payload="{\"tool_name\":\"Read\",\"tool_input\":{\"file_path\":\"${oversized}\"}}"
-  echo "${payload}" | ( source ~/.claude/venv/bin/activate && python3 "${hook}" >/dev/null 2>&1 )
+  echo "${payload}" | ( source "$VENV_ACTIVATE" && python3 "${hook}" >/dev/null 2>&1 )
   rc=$?
   rm -f "${oversized}"
   # Note: the guard exits 0/2/other depending on policy. We do NOT hard-fail
@@ -163,7 +163,7 @@ verify_git_privilege_guard() {
   # wrapped in a same-line subshell that sources the venv per
   # spec-20260518-225715 Cycle 2 P3.6.
   local safe='{"tool_name":"Bash","tool_input":{"command":"git status"}}'
-  echo "${safe}" | ( source ~/.claude/venv/bin/activate && python3 "${hook}" >/dev/null 2>&1 )
+  echo "${safe}" | ( source "$VENV_ACTIVATE" && python3 "${hook}" >/dev/null 2>&1 )
   local rc=$?
   if [[ "${rc}" -ge 126 ]]; then
     emit_failure "pretool-git-privilege-guard.py exec error rc=${rc}"
@@ -176,7 +176,7 @@ verify_git_privilege_guard() {
   # canonical destructive write that rewrites history on the remote — the
   # guard MUST exit 2 when it sees this payload.
   local deny='{"tool_name":"Bash","tool_input":{"command":"git push --force origin master"}}'
-  echo "${deny}" | ( source ~/.claude/venv/bin/activate && python3 "${hook}" >/dev/null 2>&1 )
+  echo "${deny}" | ( source "$VENV_ACTIVATE" && python3 "${hook}" >/dev/null 2>&1 )
   rc=$?
   if [[ "${rc}" -ne 2 ]]; then
     emit_failure "pretool-git-privilege-guard.py FAILED to block 'git push --force' (rc=${rc}, expected 2; fail-open guard)"
