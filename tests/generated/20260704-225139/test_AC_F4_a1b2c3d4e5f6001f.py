@@ -50,3 +50,32 @@ def test_AC_F4():
         f"pretool-bash-safety.sh expected exit 2, got {safety_result.returncode}\n"
         f"stderr: {safety_result.stderr}"
     )
+
+    # 'command' is in _WRAPPERS and is skipped; /usr/bin/git is still the command head
+    wrapper_payload = json.dumps({
+        "tool_name": "Bash",
+        "tool_input": {"command": "command /usr/bin/git reset --hard"},
+        "agent_id": "test-subagent",
+    })
+    w_guard = subprocess.run(
+        ["python3", GUARD],
+        input=wrapper_payload,
+        capture_output=True,
+        text=True,
+        cwd=REPO,
+    )
+    assert w_guard.returncode == 2, (
+        f"pretool-git-privilege-guard.py expected exit 2 for 'command /usr/bin/git reset --hard', "
+        f"got {w_guard.returncode}\nstderr: {w_guard.stderr}"
+    )
+    w_safety = subprocess.run(
+        ["bash", SAFETY],
+        input=wrapper_payload,
+        capture_output=True,
+        text=True,
+        cwd=REPO,
+    )
+    assert w_safety.returncode == 2, (
+        f"pretool-bash-safety.sh expected exit 2 for 'command /usr/bin/git reset --hard', "
+        f"got {w_safety.returncode}\nstderr: {w_safety.stderr}"
+    )
