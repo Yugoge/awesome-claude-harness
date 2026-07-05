@@ -18,8 +18,8 @@ PROJECT_DIR="${CLAUDE_PROJECT_DIR:-$PWD}"
 
 GIT_ROOT=$(git -C "$PROJECT_DIR" rev-parse --show-toplevel 2>/dev/null) || exit 0
 
-# Only run for repos with .claude/ directory
-[[ -d "$GIT_ROOT/.claude" ]] || exit 0
+# Only run for harness repos identified by the .awesome-claude-harness marker file
+[[ -f "$GIT_ROOT/.claude/.awesome-claude-harness" ]] || exit 0
 
 GITIGNORE="$GIT_ROOT/.gitignore"
 
