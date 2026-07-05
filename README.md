@@ -615,6 +615,25 @@ chmod +x ~/.claude/hooks/my-hook.sh
 
 > Mirror the conventions of the existing files: command/agent prompts state what is **required** and what is **forbidden**, and a hook that guards anything dangerous should *fail closed* (block on doubt) and leave its evidence behind.
 
+**Test and validate your new hook:**
+
+After writing a hook, verify it with the existing test infrastructure:
+
+```bash
+# Run the full hook test suite (excludes test-artifact dirs):
+scripts/test
+
+# Or run just the hooks/ tests:
+python3 -m pytest hooks/tests -q
+
+# For a new hook `my-hook.sh`, write a test in hooks/tests/test_my_hook.py:
+# - Use repo-relative paths (Path(__file__).parent.parent / "my-hook.sh")
+# - Use pytest's tmp_path fixture for ephemeral state
+# - Assert exit code behavior: exit 0 = allow, exit 2 = block
+```
+
+The guard-demo (`examples/guard-demo/run-demo.sh`) is a standalone behavioral test of the policy layer — run it after any hook changes to verify the block-then-grant-then-complete sequence still works end-to-end.
+
 ---
 
 ## Acknowledgements
