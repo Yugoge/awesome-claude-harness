@@ -13,15 +13,20 @@ AC_UID = "a1b2c3d4e5f60011"
 AC_TYPE = "hook"
 
 HOOK = "/dev/shm/dev-workspace/dot-claude/hooks/session-git-init.sh"
-DISABLED_VALUES = [None, "", "0", "false", "FALSE", "off"]
+# "True" (capital T) is NOT in the truthy set — must be treated as disabled
+DISABLED_VALUES = [None, "", "0", "false", "FALSE", "off", "True"]
+# These values enable the hook (CLAUDE_SESSION_GIT_INIT truthy set)
+ENABLED_VALUES = ["1", "true", "TRUE", "yes", "YES"]
 
 
-def _run_hook_e1(env_value, tmpdir):
+def _run_hook_e1(env_value, tmpdir, extra_env=None):
     env = os.environ.copy()
     if env_value is None:
         env.pop("CLAUDE_SESSION_GIT_INIT", None)
     else:
         env["CLAUDE_SESSION_GIT_INIT"] = env_value
+    if extra_env:
+        env.update(extra_env)
     return subprocess.run(
         ["bash", HOOK],
         capture_output=True,
@@ -33,7 +38,7 @@ def _run_hook_e1(env_value, tmpdir):
 
 def test_AC_E1():
     """
-    GIVEN: CLAUDE_SESSION_GIT_INIT env var is in one of the disabled states: unset, empty, '0', 'false', 'FALSE', 'off'
+    GIVEN: CLAUDE_SESSION_GIT_INIT env var is in one of the disabled states: unset, empty, '0', 'false', 'FALSE', 'off', 'True' (capital T)
     WHEN:  hooks/session-git-init.sh runs in a non-git temporary directory
     THEN:  script exits 0 AND no git repository is initialized AND no git commit is made AND no files are created in the temp directory by the script
     """
@@ -48,3 +53,26 @@ def test_AC_E1():
             assert not os.path.exists(os.path.join(tmpdir, ".git")), (
                 f"CLAUDE_SESSION_GIT_INIT={label}: .git directory was created but should not be"
             )
+
+    # Truthy values: hook should proceed with git init (exit 0 and .git created)
+    for val in ENABLED_VALUES:
+        with tempfile.TemporaryDirectory() as fake_home:
+            git_cfg = os.path.join(fake_home, ".gitconfig")
+            with open(git_cfg, "w") as f:
+                f.write("[user]\n\tname = Test User\n\temail = test@example.com\n")
+            with tempfile.TemporaryDirectory() as tmpdir:
+                extra = {
+                    "HOME": fake_home,
+                    "GIT_CONFIG_NOSYSTEM": "1",
+                    "GIT_CONFIG_GLOBAL": git_cfg,
+                    "CLAUDE_AUTO_CREATE_REPO": "false",
+                }
+                result = _run_hook_e1(val, tmpdir, extra_env=extra)
+                label = repr(val)
+                assert result.returncode == 0, (
+                    f"CLAUDE_SESSION_GIT_INIT={label}: expected exit 0, got {result.returncode}\n"
+                    f"stderr: {result.stderr}"
+                )
+                assert os.path.exists(os.path.join(tmpdir, ".git")), (
+                    f"CLAUDE_SESSION_GIT_INIT={label}: .git directory was NOT created (hook should run)"
+                )
