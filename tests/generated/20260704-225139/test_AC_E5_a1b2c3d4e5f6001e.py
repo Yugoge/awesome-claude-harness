@@ -5,10 +5,14 @@
 # above (AC_UID, AC_TYPE, docstring) MUST be preserved verbatim so QA can
 # trace each test back to its source AC entry.
 
-import pytest
+import os
+import subprocess
+import tempfile
 
 AC_UID = "a1b2c3d4e5f6001e"
 AC_TYPE = "hook"
+
+HOOK = "/dev/shm/dev-workspace/dot-claude/hooks/session-git-init.sh"
 
 
 def test_AC_E5():
@@ -17,7 +21,50 @@ def test_AC_E5():
     WHEN:  hooks/session-git-init.sh runs (it will: gate passes; git init; git add .; git commit fails; cleanup runs)
     THEN:  script exits non-zero AND git diff --cached --name-only is empty (no staged content remains in the index)
     """
-    # TODO(dev): replace the line below with the real test body. While the
-    # TEST_INCOMPLETE sentinel is present the test will hard-fail, marking
-    # the AC as unimplemented for QA Phase 5.
-    pytest.fail(f"TEST_INCOMPLETE: {AC_UID} — commit failure clears staged index via git rm -r --cached or git read-tree --empty")
+    with tempfile.TemporaryDirectory() as tmpdir:
+        with tempfile.TemporaryDirectory() as fake_home:
+            # Create a sentinel file so there is something to stage
+            with open(os.path.join(tmpdir, "sentinel.txt"), "w") as f:
+                f.write("sentinel")
+
+            # Isolated git config: no user.email/user.name → commit fails
+            git_cfg = os.path.join(fake_home, ".gitconfig")
+            with open(git_cfg, "w") as f:
+                f.write("")  # empty config
+
+            env = os.environ.copy()
+            env["CLAUDE_SESSION_GIT_INIT"] = "1"
+            env["HOME"] = fake_home
+            env["GIT_CONFIG_NOSYSTEM"] = "1"
+            env["GIT_CONFIG_GLOBAL"] = git_cfg
+            env.pop("GIT_AUTHOR_NAME", None)
+            env.pop("GIT_AUTHOR_EMAIL", None)
+            env.pop("GIT_COMMITTER_NAME", None)
+            env.pop("GIT_COMMITTER_EMAIL", None)
+            # Prevent CLAUDE_AUTO_CREATE_REPO from hanging on gh
+            env["CLAUDE_AUTO_CREATE_REPO"] = "false"
+
+            result = subprocess.run(
+                ["bash", HOOK],
+                capture_output=True,
+                text=True,
+                cwd=tmpdir,
+                env=env,
+            )
+
+            assert result.returncode != 0, (
+                f"Expected non-zero exit (commit should fail), got {result.returncode}\n"
+                f"stdout: {result.stdout}\nstderr: {result.stderr}"
+            )
+
+            # Check that no staged content remains
+            diff_result = subprocess.run(
+                ["git", "diff", "--cached", "--name-only"],
+                capture_output=True,
+                text=True,
+                cwd=tmpdir,
+                env=env,
+            )
+            assert diff_result.stdout.strip() == "", (
+                f"Expected empty staged index after cleanup, got: {diff_result.stdout!r}"
+            )
