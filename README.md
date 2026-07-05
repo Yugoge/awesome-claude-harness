@@ -16,7 +16,7 @@ It is not a prompt pack. It is an operating system for agents — with a schedul
 <img alt="events" src="https://img.shields.io/badge/lifecycle%20events-7-ad1457">
 <img alt="scripts" src="https://img.shields.io/badge/helper%20scripts-72-2e7d32">
 <img alt="skills" src="https://img.shields.io/badge/skills-8-e67e22">
-<img alt="permissions" src="https://img.shields.io/badge/permissions-161%20allow%20%2F%2073%20deny%20%2F%2030%20ask-455a64">
+<img alt="permissions" src="https://img.shields.io/badge/permissions-162%20allow%20%2F%2073%20deny%20%2F%2030%20ask-455a64">
 <img alt="license" src="https://img.shields.io/badge/license-MIT-000000">
 </p>
 
