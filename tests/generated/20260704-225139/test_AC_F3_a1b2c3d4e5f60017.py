@@ -5,10 +5,19 @@
 # above (AC_UID, AC_TYPE, docstring) MUST be preserved verbatim so QA can
 # trace each test back to its source AC entry.
 
-import pytest
+import json
+import subprocess
 
 AC_UID = "a1b2c3d4e5f60017"
 AC_TYPE = "hook"
+
+REPO = "/dev/shm/dev-workspace/dot-claude"
+SAFETY = f"{REPO}/hooks/pretool-bash-safety.sh"
+PAYLOAD = json.dumps({
+    "tool_name": "Bash",
+    "tool_input": {"command": "legit reset --hard"},
+    "agent_id": "test-subagent",
+})
 
 
 def test_AC_F3():
@@ -17,7 +26,14 @@ def test_AC_F3():
     WHEN:  'legit reset --hard' is evaluated (legit is a different CLI tool — os.path.basename('legit') == 'git' returns False)
     THEN:  exit code is NOT 2
     """
-    # TODO(dev): replace the line below with the real test body. While the
-    # TEST_INCOMPLETE sentinel is present the test will hard-fail, marking
-    # the AC as unimplemented for QA Phase 5.
-    pytest.fail(f"TEST_INCOMPLETE: {AC_UID} — legit command not blocked (basename != git)")
+    result = subprocess.run(
+        ["bash", SAFETY],
+        input=PAYLOAD,
+        capture_output=True,
+        text=True,
+        cwd=REPO,
+    )
+    assert result.returncode != 2, (
+        f"pretool-bash-safety.sh should NOT block 'legit reset --hard' (legit != git), "
+        f"got exit {result.returncode}\nstderr: {result.stderr}"
+    )
