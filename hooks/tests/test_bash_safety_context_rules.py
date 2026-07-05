@@ -98,7 +98,7 @@ class TestBulkSentinelFalsePositive:
 
     AC1: graphify-query.py with --requirement arg containing the protected name → ALLOW
     AC2: codex exec with --prompt arg containing the protected name → ALLOW
-    AC3: bare invocation (BARE_WRITER path) → ALLOW
+    AC3: bare invocation (BARE_WRITER path removed in Stage-2 lockdown) → BLOCK
     AC4: compound command containing the invocation → BLOCK
     """
 
