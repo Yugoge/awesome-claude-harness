@@ -5,10 +5,14 @@
 # above (AC_UID, AC_TYPE, docstring) MUST be preserved verbatim so QA can
 # trace each test back to its source AC entry.
 
-import pytest
+import os
+import subprocess
+import tempfile
 
 AC_UID = "a1b2c3d4e5f6e6c0"
 AC_TYPE = "hook"
+
+HOOK = "/dev/shm/dev-workspace/dot-claude/hooks/session-gitignore-propagate.sh"
 
 
 def test_AC_E6c():
@@ -17,7 +21,38 @@ def test_AC_E6c():
     WHEN:  hooks/session-gitignore-propagate.sh runs twice
     THEN:  .gitignore contains 'tests/generated/' after first run AND running a second time produces no duplicate entries (grep -c 'tests/generated/' .gitignore returns 1)
     """
-    # TODO(dev): replace the line below with the real test body. While the
-    # TEST_INCOMPLETE sentinel is present the test will hard-fail, marking
-    # the AC as unimplemented for QA Phase 5.
-    pytest.fail(f"TEST_INCOMPLETE: {AC_UID} — gitignore-propagate with marker appends idempotently")
+    with tempfile.TemporaryDirectory() as tmpdir:
+        subprocess.run(["git", "init", tmpdir], capture_output=True, check=True)
+        claude_dir = os.path.join(tmpdir, ".claude")
+        os.makedirs(claude_dir)
+        # Create marker file
+        with open(os.path.join(claude_dir, ".awesome-claude-harness"), "w") as f:
+            f.write("marker")
+        # Create .gitignore without harness rules
+        gitignore_path = os.path.join(tmpdir, ".gitignore")
+        with open(gitignore_path, "w") as f:
+            f.write("*.pyc\n")
+
+        env = os.environ.copy()
+        env["CLAUDE_PROJECT_DIR"] = tmpdir
+
+        # First run
+        r1 = subprocess.run(["bash", HOOK], capture_output=True, text=True, cwd=tmpdir, env=env)
+        assert r1.returncode == 0, f"First run failed: {r1.stderr}"
+
+        with open(gitignore_path) as f:
+            content_after_first = f.read()
+        assert "tests/generated/" in content_after_first, (
+            "Expected 'tests/generated/' in .gitignore after first run"
+        )
+
+        # Second run — no duplicates
+        r2 = subprocess.run(["bash", HOOK], capture_output=True, text=True, cwd=tmpdir, env=env)
+        assert r2.returncode == 0, f"Second run failed: {r2.stderr}"
+
+        with open(gitignore_path) as f:
+            content_after_second = f.read()
+        count = content_after_second.count("tests/generated/")
+        assert count == 1, (
+            f"Expected exactly 1 occurrence of 'tests/generated/' after two runs, got {count}"
+        )
