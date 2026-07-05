@@ -67,6 +67,7 @@ playwright-storage-state.json
 docs/*
 # PERMITTED DELIVERY PATH: docs/reference/ holds in-repo documentation deliverables (arch-1/D3, spec-20260520-221059)
 !docs/reference/
+!docs/THREAT-MODEL.md
 
 # Live workflow / dev coordination state
 workflow-*.json

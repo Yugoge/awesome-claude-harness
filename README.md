@@ -19,6 +19,28 @@ It is not a prompt pack. It is an operating system for agents — with a schedul
 
 ---
 
+## Quickstart
+
+```bash
+# (optional) back up any existing ~/.claude config first:
+# mv ~/.claude ~/.claude.bak-"$(date +%Y%m%d-%H%M%S)"
+
+# 1. Clone
+git clone https://github.com/Yugoge/awesome-claude-harness.git ~/.claude
+
+# 2. Bootstrap — creates the venv, installs dependencies, makes hooks executable
+~/.claude/scripts/bootstrap
+
+# 3. Start Claude Code — hooks activate on the next session
+claude
+```
+
+> Full setup details, optional doctor preflight, and the dependency matrix are in the [Quickstart](#quickstart) section below.
+
+<!-- TODO: Add terminal GIF demo here — see examples/guard-demo/run-demo.sh -->
+
+---
+
 ## Why this exists
 
 Powerful coding agents fail in three predictable, expensive ways. Two of these are not hypothetical here — they are scars, with dates and commit hashes, in the source of this repo.
@@ -260,9 +282,39 @@ Most release commands carry `disable-model-invocation: true` so an agent can't s
 
 ## Quickstart
 
+### Try it in 30 seconds (no Claude Code required)
+
+The project ships a runnable demo that exercises the real guard (`pretool-tool-policy.py`) against an isolated ephemeral home — no Claude Code session needed. Run it from any non-root `$HOME`:
+
+```bash
+examples/guard-demo/run-demo.sh
+```
+
+Expected output:
+
+```
+=== STEP 1 — attempt a DANGEROUS operation (must be BLOCKED) ===
+BLOCKED (exit 2) by the guard, fail-closed:
+  ...
+
+=== STEP 2 — apply a properly-AUTHORIZED fix (must be ALLOWED) ===
+ALLOWED (exit 0) by the guard — the operation is within policy.
+
+=== STEP 3 — the authorized fix COMPLETES ===
+Fix write landed on disk: ...
+
+=== RESULT ===
+PASS — dangerous op BLOCKED (exit 2), then grant-gated fix COMPLETED (exit 0 + write landed).
+```
+
+Exit 0 means the block-then-grant-then-complete sequence worked as designed. See [`examples/guard-demo/run-demo.sh`](examples/guard-demo/run-demo.sh) for details.
+
 ### Dependencies (REQUIRED vs OPTIONAL)
 
 A newcomer can run the core development pipeline with just the **REQUIRED** rows; every optional integration degrades gracefully when its dependency is absent.
+
+<details>
+<summary>Dependency requirements</summary>
 
 | Dependency | Tier | What needs it |
 |---|---|---|
@@ -280,6 +332,8 @@ A newcomer can run the core development pipeline with just the **REQUIRED** rows
 | Python pkg `websocket-client` | OPTIONAL (graceful) | A few websocket enrichments; hooks fall back to lenient paths when missing. (`jsonschema` + `pyyaml` are now REQUIRED via the manifest above.) |
 | `fswatch` | OPTIONAL | Backs `/fswatch` file-watching; not needed by the core pipeline. |
 | `node` + a user-supplied `EXCEL_ANALYZER` | OPTIONAL | `/file-analyze` spreadsheet/document analysis. You provide the analyzer; absent → that file type is skipped. |
+
+</details>
 
 > **One-line summary:** install Claude Code + Python 3 + git + jq + the GNU userland + openssl, then run `scripts/bootstrap` — it creates the venv and installs the manifest (`pytest` + `jsonschema` + `pyyaml`), which covers the core `/dev → /close → /commit → /push` pipeline (`/push` needs `openssl`). Run `scripts/doctor` first if you want a preflight of what's missing. Add the Codex CLI + wrapper (`CODEX_ISO_BIN`) for `--codex`, graphify for code-graph context, Playwright MCP for UI/overnight (and user-facing QA), and `bwrap` for `/dev-overnight` as you need them.
 
@@ -407,10 +461,10 @@ A `PostToolUse` doc-sync hook keeps the `INDEX.md` files and the inventory block
 - `LICENSE` - LICENSE file
 - `NESTED-REPO.md` - Nested Repo Sentinel
 - `NOTICE` - NOTICE file
-- `push.sh` - 
-- `requirements.txt` - txt file
-- `settings.json` - json config
-- `settings.template.json` - json config
+- `push.sh` - push.sh - Global pre-push checks: git identity + fetch/pull/status
+- `requirements.txt` - Python dependency manifest for the Claude Code harness venv
+- `settings.json` - Claude Code harness configuration (permissions, hooks, env, model)
+- `settings.template.json` - Distributable harness settings template (uses CLAUDE_HOME placeholders)
 
 ## Subdirectories
 - `agents/`

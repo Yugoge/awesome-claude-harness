@@ -1,75 +1,63 @@
 # Git Lock File Handling
 
-## 概述
+## Overview
 
-`push.sh` 和 `pull.sh` 脚本现在自动检测并处理 git lock 文件冲突。
+The push.sh and pull.sh scripts automatically detect and handle git lock file conflicts.
 
-## 什么是 Git Lock 文件？
+## What Is a Git Lock File?
 
-Git 使用 `.git/index.lock` 文件来防止多个进程同时修改仓库。当 git 操作正在进行时，会创建这个文件；操作完成后自动删除。
+Git uses .git/index.lock to prevent multiple processes from modifying the repository
+simultaneously. This file is created when a git operation starts and deleted when it completes.
 
-## 问题场景
+## Problem Scenarios
 
-Lock 文件可能会在以下情况下残留：
-- Git 进程被强制中断（Ctrl+C）
-- 系统崩溃或重启
-- 进程挂起或卡死
+A lock file may be left behind when:
+- A git process was forcefully interrupted (Ctrl+C)
+- The system crashed or restarted
+- A process hung or became unresponsive
 
-## 错误信息示例
+## Error Message Example
 
 ```
 fatal: Unable to create '/path/to/repo/.git/index.lock': File exists.
 Another git process seems to be running in this repository
 ```
 
-## 自动检测功能
+## Auto-Detection
 
-### Push 脚本 (`hooks/push.sh`)
+### Push script (hooks/push.sh)
 
-在 Step 7（创建 commit 之前）自动检测 lock 文件：
+Detects lock files automatically at Step 7 (before creating a commit):
 
-1. **检测 lock 文件存在**
-   - 如果 `.git/index.lock` 存在，显示警告
+1. **Detect lock file** -- if .git/index.lock exists, display a warning
+2. **Check for active processes** -- inspect running processes; if another git process is active, exit with a prompt to wait
+3. **Handle stale lock** -- if no active process is found, prompt: Remove the lock file and continue? (y/n); on confirmation, delete and continue
 
-2. **检查活跃进程**
-   - 使用 `ps aux | grep git` 检查是否有其他 git 进程运行
-   - 如果有活跃进程，退出并提示用户等待
+### Pull script (hooks/pull.sh)
 
-3. **处理陈旧锁文件**
-   - 如果没有活跃进程，判定为陈旧文件
-   - 询问用户是否删除：`Remove the lock file and continue? (y/n)`
-   - 用户确认后自动删除并继续操作
+Same logic as push, at Step 4 (before executing the pull).
+**Special handling**: if a stash was already created, it is restored before exiting on failure.
 
-### Pull 脚本 (`hooks/pull.sh`)
+## User Experience
 
-在 Step 4（执行 pull 操作之前）自动检测，逻辑与 push 相同。
-
-**特殊处理**：如果已经创建了 stash，在退出前会自动恢复 stashed 内容。
-
-## 用户体验
-
-### 场景 1：陈旧锁文件（最常见）
+### Scenario 1: Stale lock file (most common)
 
 ```
-⚠️  Warning: Git lock file detected
+  Warning: Git lock file detected
 
 A lock file exists at: .git/index.lock
-This usually means:
-  • Another git process is running
-  • A previous git process crashed
-
 No active git processes detected.
 The lock file appears to be stale (from a crashed process).
 
 Remove the lock file and continue? (y/n)
 ```
 
-**用户操作**：输入 `y` 继续，脚本自动清理并继续操作
+**User action**: type `y` to continue; the script cleans up and proceeds automatically.
 
-### 场景 2：活跃的 Git 进程
+### Scenario 2: Active git process
 
 ```
-⚠️  Warning: Git lock file detected
+  Warning: Git lock file detected
 
 Active git processes found:
 user  12345  0.1  0.2  git fetch origin
@@ -77,59 +65,54 @@ user  12345  0.1  0.2  git fetch origin
 Please wait for other git operations to complete.
 ```
 
-**用户操作**：等待其他进程完成，然后重新运行脚本
+**User action**: wait for the other process to finish, then re-run the script.
 
-## 手动清理（如果需要）
+## Manual Cleanup (if needed)
 
-如果自动清理失败，可以手动删除：
+If auto-cleanup fails, manually delete the lock file:
 
 ```bash
 rm .git/index.lock
 ```
 
-**注意**：仅在确认没有其他 git 进程运行时手动删除！
+**Note**: only do this when you are certain no other git process is running.
 
-## 安全性
+## Safety
 
-✅ **安全检查**：
-- 总是先检查活跃进程再删除
-- 需要用户确认才删除
-- 提供清晰的错误信息和建议
+Safe guards in place:
+- Always checks for active processes before deleting
+- Requires user confirmation before deletion
+- Provides clear error messages and recommendations
 
-⚠️ **不会自动删除的情况**：
-- 检测到活跃的 git 进程时
-- 用户拒绝删除确认时
+Will NOT auto-delete when:
+- An active git process is detected
+- The user declines the confirmation
 
-## 测试
-
-运行测试验证功能：
+## Tests
 
 ```bash
 bash ~/.claude/tests/test-lock-detection.sh
 ```
 
-测试覆盖：
-1. ✓ Lock 文件检测
-2. ✓ Git 进程检测
-3. ✓ Lock 文件删除
-4. ✓ Git 操作恢复
+Test coverage:
+1. Lock file detection
+2. Git process detection
+3. Lock file deletion
+4. Git operation recovery
 
-## 技术实现
+## Technical Implementation
 
-### 检测代码
+### Detection code
 
 ```bash
 LOCK_FILE=".git/index.lock"
 if [ -f "$LOCK_FILE" ]; then
-  # 检测逻辑
   GIT_PROCESSES=$(ps aux | grep -i '[g]it' | grep -v grep || true)
 
   if [ -n "$GIT_PROCESSES" ]; then
-    # 有活跃进程，退出
     echo "Please wait for other git operations to complete."
     exit 1
   else
-    # 陈旧文件，询问删除
     read -r RESPONSE
     if [ "$RESPONSE" = "y" ]; then
       rm -f "$LOCK_FILE"
@@ -138,44 +121,44 @@ if [ -f "$LOCK_FILE" ]; then
 fi
 ```
 
-### 集成点
-
+### Integration points
 - **push.sh**: Line 129-172 (Step 7)
 - **pull.sh**: Line 55-117 (Step 4)
 
-## 改进历史
+## Improvement History
 
 **Version 1.1** (2025-10-28)
-- 添加自动 lock 文件检测
-- 智能区分活跃进程和陈旧文件
-- 用户确认机制
-- Pull 脚本中保护 stash 内容
 
-**Version 1.0** (初始版本)
-- 基础 push/pull 功能
-- 未处理 lock 文件冲突
+- Added automatic lock file detection
+- Smart distinction between active processes and stale files
+- User confirmation mechanism
+- Protect stash contents in the pull script
 
-## 常见问题
+**Version 1.0** (initial)
+- Basic push/pull functionality
+- No lock file conflict handling
 
-**Q: 为什么会出现 lock 文件？**
-A: 通常是因为 git 操作被中断（Ctrl+C）或系统崩溃。
+## FAQ
 
-**Q: 删除 lock 文件安全吗？**
-A: 只要确认没有其他 git 进程运行，删除是安全的。脚本会自动检查。
+**Q: Why do lock files appear?**
+A: Usually because a git operation was interrupted (Ctrl+C) or the system crashed.
 
-**Q: 如果我选择 "n" 不删除呢？**
-A: 脚本会退出，你需要手动处理或重新运行。
+**Q: Is it safe to delete the lock file?**
+A: Only when no other git process is running. The script checks automatically.
 
-**Q: 会丢失数据吗？**
-A: 不会。Lock 文件只是一个锁机制，删除它不会影响代码内容。
+**Q: What if I choose "n" to decline deletion?**
+A: The script exits. Handle it manually or re-run the script.
 
-## 相关文件
+**Q: Will data be lost?**
+A: No. The lock file is only a locking mechanism; deleting it does not affect code content.
 
-- `hooks/push.sh` - Push 脚本（含 lock 检测）
-- `hooks/pull.sh` - Pull 脚本（含 lock 检测）
-- `tests/test-lock-detection.sh` - Lock 文件检测测试
-- `docs/git-tracking-solution-plan.md` - 完整实现计划
+## Related Files
 
-## 贡献
+- hooks/push.sh -- push script (with lock detection)
+- hooks/pull.sh -- pull script (with lock detection)
+- tests/test-lock-detection.sh -- lock file detection tests
+- docs/git-tracking-solution-plan.md -- full implementation plan
 
-如果发现 bug 或有改进建议，请在项目中创建 issue。
+## Contributing
+
+If you find a bug or have a suggestion, please open an issue in the project.
