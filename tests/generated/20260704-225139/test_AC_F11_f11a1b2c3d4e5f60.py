@@ -37,7 +37,7 @@ def test_AC_F11():
         text=True,
         cwd=REPO,
     )
-    assert result.returncode != 2, (
-        f"printf with embedded 'git push --force' in quoted body should NOT be blocked "
-        f"(false positive). Got exit {result.returncode}\nstderr: {result.stderr}"
+    assert result.returncode == 0, (
+        f"printf with embedded 'git push --force' in quoted body should exit 0 (not blocked). "
+        f"Got exit {result.returncode}\nstderr: {result.stderr}"
     )
