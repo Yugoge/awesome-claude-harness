@@ -29,6 +29,16 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+# Venv-presence guard (E-M5): placed after arg parsing (--help already handled above)
+# but before emit_advisory function definition (direct echo required here).
+# CLAUDE_HOME portability: respect env var override for non-default venv locations.
+CLAUDE_HOME="${CLAUDE_HOME:-$HOME/.claude}"
+VENV_ACTIVATE="$CLAUDE_HOME/venv/bin/activate"
+if [[ ! -f "$VENV_ACTIVATE" ]]; then
+  echo "canary-verify[ADVISORY]: venv absent: $VENV_ACTIVATE — skipping hook verification" >&2
+  exit 0
+fi
+
 failures=0
 
 emit_failure() {
