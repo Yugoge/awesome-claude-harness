@@ -57,7 +57,10 @@ def test_AC_F7b():
         )
 
     for cmd in ANY_CONTEXT_BLOCKED:
-        result = _run_safety(cmd, subagent=True)
-        assert result.returncode == 2, (
-            f"Expected exit 2 for '{cmd}', got {result.returncode}\nstderr: {result.stderr}"
-        )
+        for subagent in (True, False):
+            result = _run_safety(cmd, subagent=subagent)
+            ctx = "subagent" if subagent else "non-subagent"
+            assert result.returncode == 2, (
+                f"Expected exit 2 for '{cmd}' ({ctx} context), "
+                f"got {result.returncode}\nstderr: {result.stderr}"
+            )
