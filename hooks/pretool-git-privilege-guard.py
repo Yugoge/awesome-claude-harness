@@ -735,10 +735,11 @@ def _evaluate_push(command, invocations, data):
     _unlink_grant(grant_path)
 
 
-def _evaluate_reset_hard(command, data):
+def _evaluate_reset_hard(command, invocations, data):
     if _check_git_allowlist(command, data):
         return
-    target = _extract_reset_target(command)
+    reset_inv = next((inv for inv in invocations if inv.subcommand == 'reset'), None)
+    target = _extract_reset_target(reset_inv) if reset_inv else ''
     _block(
         '\nBLOCKED: agent git reset --hard - hard reset is forbidden '
         'from agent flow.\n'
