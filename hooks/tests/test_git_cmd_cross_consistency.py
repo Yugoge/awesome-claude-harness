@@ -260,42 +260,44 @@ CORPUS = [
     # The classifier correctly detects these via basename comparison.
     # These cases are xfail for the regex checks.
     # ------------------------------------------------------------------
+    # Path-qualified forms: regex anchor [[:space:];&|()`] omits '/', so regex
+    # does NOT match /usr/bin/git or ./git at start of string. Classifier detects
+    # via os.path.basename(token)=='git'. bash-safety.sh compensates at runtime
+    # via CLASSIFIER_HAS_PATH_QUALIFIED_GIT. Expected: regex=False, cls=True.
     (
         "/usr/bin/git commit -m 'msg'",
         False, False, True,
-        "path-qualified git: raw regex anchor class omits '/', so regex misses it; "
-        "classifier detects it via os.path.basename(token)=='git'. "
-        "bash-safety.sh compensates via CLASSIFIER_HAS_PATH_QUALIFIED_GIT augmentation at runtime.",
+        None,
         "path-qualified /usr/bin/git commit",
     ),
     (
         "/usr/bin/git reset --hard",
         False, False, True,
-        "path-qualified git: same anchor-class divergence as above",
+        None,
         "path-qualified /usr/bin/git reset --hard",
     ),
     (
         "/usr/bin/git push --force",
         False, False, True,
-        "path-qualified git: same anchor-class divergence as above",
+        None,
         "path-qualified /usr/bin/git push --force",
     ),
     (
         "/usr/bin/git stash push",
         False, False, True,
-        "path-qualified git: same anchor-class divergence as above",
+        None,
         "path-qualified /usr/bin/git stash push",
     ),
     (
         "/usr/bin/git status",
         False, False, True,
-        "path-qualified git: same anchor-class divergence as above",
+        None,
         "path-qualified /usr/bin/git status",
     ),
     (
         "./git status",
         False, False, True,
-        "relative-path-qualified git: same anchor-class divergence as above",
+        None,
         "relative-path ./git status",
     ),
     # ------------------------------------------------------------------
