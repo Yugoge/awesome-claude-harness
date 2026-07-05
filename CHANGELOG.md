@@ -23,7 +23,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Doc-sync auto-indexing with excluded pattern support
 - World-class readiness improvements: README overhaul, CI, test infrastructure
 - QA-of-BA pre-code review gate (analysis validated before any code is written)
-- Schema-enforced agent contracts with Draft7 JSON schema validation
+- Schema-enforced cycle-contract validation with Draft7 JSON schemas (overnight pipeline)
 - Self-updating documentation via PostToolUse doc-sync hooks
 - UI-audit skill suite (axe-core, APCA contrast, 58-rule anti-pattern catalog, beauty score)
 - Adversarial second opinion via --codex flag integration
