@@ -757,26 +757,25 @@ def _evaluate_direct_ref_mutation(command, data):
     )
 
 
-def _looks_like_git_forbidden_plumbing(command):
+def _looks_like_git_forbidden_plumbing(invocations):
     """R6: Ban agent direct invocation of git plumbing that creates commit objects.
 
     Defense-in-depth: most are already indirectly blocked (they call git commit
     or git update-ref internally). These explicit bans close the gap for R6.
-    Uses GIT_COMMAND_RE anchor so string literals in python -c code are not matched.
+    Uses token-aware classification so string literals in python -c code are
+    not matched (only the command token is classified, not arguments).
     """
-    forbidden_suffixes = [
-        r'commit-tree\b',
-        r'cherry-pick\b',
-        r'rebase\b',
-        r'pull\b',
-        r'filter-branch\b',
-        r'filter-repo\b',
-        r'replace\s+(-e|--edit)\b',
-        r'fast-import\b',
-        r'revert\b',
-        r'am\b',
-    ]
-    return any(re.search(GIT_COMMAND_RE + s, command) for s in forbidden_suffixes)
+    _FORBIDDEN_PLUMBING = {
+        'commit-tree', 'cherry-pick', 'rebase', 'pull',
+        'filter-branch', 'filter-repo', 'fast-import', 'revert', 'am',
+    }
+    for inv in invocations:
+        if inv.subcommand in _FORBIDDEN_PLUMBING:
+            return True
+        if inv.subcommand == 'replace':
+            if '-e' in inv.args or '--edit' in inv.args:
+                return True
+    return False
 
 
 def _evaluate_forbidden_plumbing(command, data):
