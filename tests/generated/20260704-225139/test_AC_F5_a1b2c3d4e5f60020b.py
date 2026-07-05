@@ -47,7 +47,7 @@ def test_AC_F5():
         text=True,
         cwd=REPO,
     )
-    assert safety_result.returncode != 2, (
-        f"pretool-bash-safety.sh should NOT block commit, got exit {safety_result.returncode}\n"
+    assert safety_result.returncode == 0, (
+        f"pretool-bash-safety.sh should exit 0 for commit (not block), got exit {safety_result.returncode}\n"
         f"stderr: {safety_result.stderr}"
     )
