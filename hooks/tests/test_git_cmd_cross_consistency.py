@@ -90,38 +90,31 @@ def _extract_bash_git_cmd_re() -> str:
 
 
 def _extract_python_git_command_re() -> str:
-    """Read pretool-git-privilege-guard.py and extract GIT_COMMAND_RE.
+    """Import pretool-git-privilege-guard module and read GIT_COMMAND_RE.
 
-    The file defines GIT_COMMAND_RE as a module-level string concatenation.
-    Returns the fully assembled regex string.
+    The module defines GIT_COMMAND_RE as a module-level string built from
+    r-string concatenation with GIT_GLOBAL_OPTION_RE.  We import the module
+    directly (adding its parent directory to sys.path) so Python evaluates
+    the concatenation natively and we get the correct assembled regex string.
     """
-    text = _PRIVILEGE_GUARD_PY.read_text()
+    hooks_dir = str(PROJECT_ROOT / 'hooks')
+    if hooks_dir not in sys.path:
+        sys.path.insert(0, hooks_dir)
 
-    # Extract GIT_GLOBAL_OPTION_RE (the multi-line raw string at module level)
-    gor_match = re.search(
-        r'^GIT_GLOBAL_OPTION_RE\s*=\s*\(\s*\n((?:[^\n]*\n)*?)\)',
-        text,
-        re.MULTILINE,
+    # Import the module; its top-level code only assigns constants and imports,
+    # so this is safe and does not run any hook logic.
+    import importlib
+    spec = importlib.util.spec_from_file_location(
+        '_pretool_git_privilege_guard',
+        str(_PRIVILEGE_GUARD_PY),
     )
-    assert gor_match, "Could not find GIT_GLOBAL_OPTION_RE in pretool-git-privilege-guard.py"
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)  # type: ignore[union-attr]
 
-    # The value is a multi-line parenthesized expression of raw strings
-    gor_body = gor_match.group(1)
-    # Evaluate it safely: it is pure string concatenation of r'...' literals
-    gor_value = eval(gor_body, {"__builtins__": {}})  # safe: only string literals  # noqa: S307
-
-    # GIT_COMMAND_RE = r'(?:^|[\s;&|()`])git' + GIT_GLOBAL_OPTION_RE + r'\s+'
-    gcr_match = re.search(
-        r"^GIT_COMMAND_RE\s*=\s*r'([^']+)'\s*\+\s*GIT_GLOBAL_OPTION_RE\s*\+\s*r'([^']+)'",
-        text,
-        re.MULTILINE,
-    )
-    assert gcr_match, "Could not find GIT_COMMAND_RE in pretool-git-privilege-guard.py"
-
-    prefix = gcr_match.group(1)  # '(?:^|[\\s;&|()`])git'
-    suffix = gcr_match.group(2)  # '\\s+'
-
-    return prefix + gor_value + suffix
+    value = getattr(mod, 'GIT_COMMAND_RE', None)
+    assert value is not None, "GIT_COMMAND_RE not found in pretool-git-privilege-guard.py"
+    assert isinstance(value, str), f"GIT_COMMAND_RE is not a str: {type(value)}"
+    return value
 
 
 # Build both regex objects once at module import time so failures are
