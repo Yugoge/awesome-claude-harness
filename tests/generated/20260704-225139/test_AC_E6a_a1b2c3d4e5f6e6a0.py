@@ -5,10 +5,14 @@
 # above (AC_UID, AC_TYPE, docstring) MUST be preserved verbatim so QA can
 # trace each test back to its source AC entry.
 
-import pytest
+import os
+import subprocess
 
 AC_UID = "a1b2c3d4e5f6e6a0"
 AC_TYPE = "data"
+
+REPO_ROOT = "/dev/shm/dev-workspace/dot-claude"
+MARKER_PATH = ".claude/.awesome-claude-harness"
 
 
 def test_AC_E6a():
@@ -17,7 +21,17 @@ def test_AC_E6a():
     WHEN:  git ls-files --error-unmatch .claude/.awesome-claude-harness is run in the repo root
     THEN:  exit code is 0 (file is tracked by git; untracked local file does NOT satisfy this AC)
     """
-    # TODO(dev): replace the line below with the real test body. While the
-    # TEST_INCOMPLETE sentinel is present the test will hard-fail, marking
-    # the AC as unimplemented for QA Phase 5.
-    pytest.fail(f"TEST_INCOMPLETE: {AC_UID} — .claude/.awesome-claude-harness is git-tracked")
+    # File must exist on disk
+    assert os.path.isfile(os.path.join(REPO_ROOT, MARKER_PATH)), (
+        f".claude/.awesome-claude-harness does not exist on disk"
+    )
+    # File must be known to git (staged or committed)
+    result = subprocess.run(
+        ["git", "ls-files", "--error-unmatch", MARKER_PATH],
+        capture_output=True,
+        text=True,
+        cwd=REPO_ROOT,
+    )
+    assert result.returncode == 0, (
+        f"git ls-files --error-unmatch exited {result.returncode}: {result.stderr}"
+    )
