@@ -61,6 +61,7 @@ def _write_sentinel(tmpdir, sid="test-sid-abc123", kind="bulk-commit", expired=F
         "nonce": nonce,
         "created_at": now.isoformat(),
         "expires_at": expires_at,
+        "origin": "userpromptsubmit-hook",
     }
     path = Path(tmpdir) / f"claude-bulk-commit-sentinel-{sid}-{nonce}.json"
     path.write_text(json.dumps(sentinel))
