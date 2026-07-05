@@ -104,6 +104,7 @@ flowchart TD
     O ==>|delegates WHAT, never HOW| BA[BA subagent<br/>git root-cause + evidence]
     BA --> QV[QA validates the BA<br/>challenge every claim]
     QV -->|evidence ok| DEV[Dev subagent<br/>the agent that writes code]
+    QV -->|evidence weak, max 3 iterations| BA
     DEV --> QA[QA subagent<br/>verify vs acceptance criteria]
     QA -->|fail| DEV
     QA -->|pass| CLOSE[/close: release-readiness gate/]
