@@ -57,13 +57,28 @@ def test_AC_E5():
                 f"stdout: {result.stdout}\nstderr: {result.stderr}"
             )
 
-            # Check that no staged content remains
+            # Assert that git was actually initialized (hook ran past the gate)
+            git_check = subprocess.run(
+                ["git", "rev-parse", "--git-dir"],
+                capture_output=True,
+                text=True,
+                cwd=tmpdir,
+                env=env,
+            )
+            assert git_check.returncode == 0, (
+                "Expected git repo to be initialized (git rev-parse --git-dir should succeed)"
+            )
+
+            # Check that no staged content remains (cleanup ran)
             diff_result = subprocess.run(
                 ["git", "diff", "--cached", "--name-only"],
                 capture_output=True,
                 text=True,
                 cwd=tmpdir,
                 env=env,
+            )
+            assert diff_result.returncode == 0, (
+                f"git diff --cached failed: {diff_result.stderr}"
             )
             assert diff_result.stdout.strip() == "", (
                 f"Expected empty staged index after cleanup, got: {diff_result.stdout!r}"
