@@ -9,4 +9,5 @@ if [[ -f "$VENV/bin/activate" ]]; then
   source "$VENV/bin/activate"
 fi
 
+cd "$PROJECT_ROOT"
 exec python3 -m pytest hooks/tests tests -q --ignore=tests/generated "$@"
