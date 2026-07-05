@@ -1342,18 +1342,25 @@ fi
 # Block: git stash (destructive forms only — list/show/pop/apply/drop/clear/branch are safe)
 # V4: extended to also cover -u/--include-untracked/-a/--all variants (which include untracked/ignored files)
 # V5: path-qualified /usr/bin/git stash push also blocked via classifier (RISK-3)
-if echo "$COMMAND" | grep -qE 'git\s+stash\s+(push|save|create|store|-u|--include-untracked|-a|--all)\b' || \
-   echo "$COMMAND" | grep -qE 'git\s+stash\s+-[ua]+\b' || \
-   { [ "$CLASSIFIER_HAS_PATH_QUALIFIED_GIT" = "1" ] && _pq_git_has_subcmd stash && \
-     { printf '%s\n' "$CLASSIFIER_JSON" | python3 -c "
+_PQ_STASH_DESTRUCTIVE=0
+if [ "$CLASSIFIER_HAS_PATH_QUALIFIED_GIT" = "1" ] && _pq_git_has_subcmd stash; then
+  # Check stash args: block push/save/create/store/-u/--include-untracked/-a/--all forms
+  _stash_args=$(printf '%s\n' "$CLASSIFIER_JSON" | "$PYTHON_BIN" -c "
 import json,sys
 invs=json.load(sys.stdin)
 for inv in invs:
   if inv.get('path_qualified') and inv.get('subcommand')=='stash':
     args=inv.get('args',[])
-    if not args or args[0] in ('push','save','create','store','-u','--include-untracked','-a','--all') or any(a.startswith('-') and 'u' in a and a.startswith('-') and not a.startswith('--') for a in args[:1]):
-      print('match'); break
-" 2>/dev/null | grep -q match; }; }; then
+    bad={'push','save','create','store','-u','--include-untracked','-a','--all'}
+    if not args or (args and (args[0] in bad or (args[0].startswith('-') and not args[0].startswith('--') and any(c in args[0][1:] for c in 'ua')))):
+      print('destructive')
+    break
+" 2>/dev/null)
+  [ "$_stash_args" = "destructive" ] && _PQ_STASH_DESTRUCTIVE=1
+fi
+if echo "$COMMAND" | grep -qE 'git\s+stash\s+(push|save|create|store|-u|--include-untracked|-a|--all)\b' || \
+   echo "$COMMAND" | grep -qE 'git\s+stash\s+-[ua]+\b' || \
+   [ "$_PQ_STASH_DESTRUCTIVE" = "1" ]; then
   echo "BLOCKED: 'git stash push/save/create/store/-u/--all' requires explicit user approval" >&2
   echo "Command: $COMMAND" >&2
   echo "REASON: On 2026-04-19, a dev subagent used 'git stash' as a throwaway buffer" >&2
