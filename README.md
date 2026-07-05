@@ -9,6 +9,7 @@ This repository is a complete, battle-tested **Claude Code configuration** that 
 It is not a prompt pack. It is an operating system for agents — with a scheduler, a permission model, a filesystem layout, a self-updating documentation layer, and a git protection kernel paid for in real lost work. Every mechanism below traces to a file in this repo, and several trace to a specific catastrophe that forced it into existence.
 
 <p>
+<img alt="version" src="https://img.shields.io/badge/version-1.0.0-blue">
 <img alt="subagents" src="https://img.shields.io/badge/subagents-23-6f42c1">
 <img alt="commands" src="https://img.shields.io/badge/slash%20commands-35-1565c0">
 <img alt="hooks" src="https://img.shields.io/badge/lifecycle%20hooks-64%20files%20%2F%2065%20wired-c62828">
@@ -18,6 +19,8 @@ It is not a prompt pack. It is an operating system for agents — with a schedul
 <img alt="permissions" src="https://img.shields.io/badge/permissions-161%20allow%20%2F%2073%20deny%20%2F%2030%20ask-455a64">
 <img alt="license" src="https://img.shields.io/badge/license-MIT-000000">
 </p>
+
+**Version**: v1.0.0 · [CHANGELOG](CHANGELOG.md)
 
 ---
 
