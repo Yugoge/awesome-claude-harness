@@ -407,6 +407,24 @@ CORPUS = [
         None,
         "git inside command substitution — _segments() opens a new segment at $(",
     ),
+    # ------------------------------------------------------------------
+    # Documented classifier scope boundaries (arch-F7 in classifier docstring).
+    # Both regexes fire; the classifier does not (env -i skips env-var
+    # assignment parsing, leading redirection prefixes are not stripped).
+    # Marked xfail: known disagreement that is accepted by design.
+    # ------------------------------------------------------------------
+    (
+        "env -i git status",
+        True, True, False,
+        "arch-F7: env -i/-u flags before git token not handled by _command_token_index(); regexes match, classifier does not",
+        "env -i git status -- regex matches, classifier arch-F7 gap",
+    ),
+    (
+        "2>/dev/null git status",
+        True, True, False,
+        "arch-F7: leading shell redirection not stripped before classifier; regexes match, classifier does not",
+        "2>/dev/null git status -- regex matches, classifier arch-F7 gap",
+    ),
 ]
 
 # ---------------------------------------------------------------------------
