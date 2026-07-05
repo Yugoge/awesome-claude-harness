@@ -5,10 +5,20 @@
 # above (AC_UID, AC_TYPE, docstring) MUST be preserved verbatim so QA can
 # trace each test back to its source AC entry.
 
-import pytest
+import json
+import subprocess
 
 AC_UID = "a1b2c3d4e5f60016"
 AC_TYPE = "hook"
+
+REPO = "/dev/shm/dev-workspace/dot-claude"
+GUARD = f"{REPO}/hooks/pretool-git-privilege-guard.py"
+SAFETY = f"{REPO}/hooks/pretool-bash-safety.sh"
+PAYLOAD = json.dumps({
+    "tool_name": "Bash",
+    "tool_input": {"command": "echo '/usr/bin/git reset --hard'"},
+    "agent_id": "test-subagent",
+})
 
 
 def test_AC_F2():
@@ -17,7 +27,26 @@ def test_AC_F2():
     WHEN:  echo '/usr/bin/git reset --hard' (echo is the command head, not git) is evaluated by the hooks
     THEN:  exit code is NOT 2 for both hooks
     """
-    # TODO(dev): replace the line below with the real test body. While the
-    # TEST_INCOMPLETE sentinel is present the test will hard-fail, marking
-    # the AC as unimplemented for QA Phase 5.
-    pytest.fail(f"TEST_INCOMPLETE: {AC_UID} — echo with path-qualified git arg not blocked (echo is command head)")
+    guard_result = subprocess.run(
+        ["python3", GUARD],
+        input=PAYLOAD,
+        capture_output=True,
+        text=True,
+        cwd=REPO,
+    )
+    assert guard_result.returncode != 2, (
+        f"pretool-git-privilege-guard.py should NOT block echo command, got exit {guard_result.returncode}\n"
+        f"stderr: {guard_result.stderr}"
+    )
+
+    safety_result = subprocess.run(
+        ["bash", SAFETY],
+        input=PAYLOAD,
+        capture_output=True,
+        text=True,
+        cwd=REPO,
+    )
+    assert safety_result.returncode != 2, (
+        f"pretool-bash-safety.sh should NOT block echo command, got exit {safety_result.returncode}\n"
+        f"stderr: {safety_result.stderr}"
+    )
