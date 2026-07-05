@@ -1,6 +1,6 @@
 # `awesome-claude-harness` — A Self-Governing Agent Operating System for Claude Code
 
-**In plain English: this turns Claude Code into a disciplined software team that gates every dangerous git operation, reviews its own analysis before writing a line of code, and can fix bugs overnight while you sleep — without ever needing to worry it nuked `main`.**
+**In plain English: this turns Claude Code into a disciplined software team that gates every dangerous git operation, reviews its own analysis before writing a line of code, and can fix bugs overnight while you sleep — reducing the risk of nuking `main` through hook-enforced gates and audited break-glass paths.**
 
 > **By default, the main agent does not write your code (the `/do` break-glass is the audited exception). It hires specialists, gates every dangerous move at a git kernel, and ships verified work while you sleep.**
 
