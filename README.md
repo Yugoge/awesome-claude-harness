@@ -540,7 +540,7 @@ Six principles run through every file here. They are the taste behind the projec
 
 **Rules, not stories.** Agent and command prompts state what is *required* and what is *forbidden*, tersely. Positive instructions alone proved insufficient: incident analysis showed an agent told only "what's allowed" will infer permission for adjacent dangerous actions. So every infrastructure-touching subagent prompt carries an explicit **DO NOT** section.
 
-> *Concrete example:* the dev subagent's prompt says "FORBIDDEN: editing any file other than those listed in `files_to_modify`" — not "please try to stay focused." The pre-commit gate checks the actual diff set-equality against the approved file list. "Please" is a story; a diff check is a rule.
+> *Concrete example:* the dev subagent's prompt says "FORBIDDEN: editing any file other than those listed in `files_to_modify`" — not "please try to stay focused." `/commit` reclassifies the live diff, stages only files inside the QA-approved ceiling, and aborts on material drift. "Please" is a story; a diff check is a rule.
 
 **Enforce in code, not in prose.** "Please don't force-push" is a wish; a `PreToolUse` hook returning exit 2 makes the rule mechanically enforced for the paths that reach that decision — subject to the documented human break-glass grants and the few intentional fail-open exception paths that keep a hook bug from bricking the pipeline. Wherever a rule *can* be a hook, it *is* a hook — and even the human escape hatches (`/do`, `/allow`) are narrow, audited, and single-use.
 
