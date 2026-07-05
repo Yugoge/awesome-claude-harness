@@ -266,29 +266,24 @@ flowchart LR
 
 The orchestrator dispatches specialists by *describing the problem* — never the tooling (`hooks/pretool-orchestrator-prompt-purity.py` watches for leaked "HOW"). Each picks its own approach and returns a structured report.
 
-**Development pipeline**
-- **`ba`** — requirements analyst; git root-cause analysis → Markdown ticket + JSON context.
-- **`dev`** — implementation specialist; receives a vetted plan and writes the change under a minimum-diff discipline.
-- **`qa`** — verifier; validates the *analysis* (pre-code) and the *implementation* (post-code) against acceptance criteria.
-- **`test-writer`** — emits pytest skeletons with `pytest.fail("TEST_INCOMPLETE:…")` hard-stops for risky/complex tasks.
-- **`graphify`** — incremental code-graph enrichment; injects a focused subgraph into the Dev context.
-- **`spec`** — splits a monolithic spec into per-agent views + Gawande-style checkpoints.
-
-**Exploration specialists (overnight + on-demand)**
-- **`architect`** — structural issues, tech debt, dependency and pattern problems.
-- **`product-owner`** — feature completeness, user flows, business-logic bugs.
-- **`user`** — end-user simulation; UX friction and broken flows.
-- **`ui-specialist`** — visual-design quality + Playwright UI audit with a 1–10 beauty score.
-- **`pm`** — test-plan manager with PLAN / TRIAGE / RETRO modes (explores the live app first).
-
-**Git & release analysts**
-- **`changelog-analyst`** — classifies files, stages surgically (own-hunks only), writes conventional commits, emits the push-gate token.
-- **`push-analyst` / `merge-analyst` / `pull-analyst`** — pre-push, pre-merge, and post-pull risk analysis with nonce-keyed grants.
-
-**Cleanup & audit**
-- **`cleaner` / `cleanliness-inspector` / `style-inspector` / `rule-inspector`** — the `/clean` cohort: detect, audit, and execute project hygiene.
-- **`prompt-inspector` / `git-edge-case-analyst`** — documentation-verbosity and git-history edge-case discovery.
-- **`test-executor` / `test-validator`** — execute and validate test infrastructure.
+| Agent | Availability | Dispatch trigger |
+|---|---|---|
+| **`ba`** | always-on | Every `/dev` invocation — requirements analyst; git root-cause analysis → Markdown ticket + JSON context. |
+| **`dev`** | always-on | After QA validates the BA spec — implementation specialist; writes the change under minimum-diff discipline. |
+| **`qa`** | always-on | Twice per `/dev` cycle: once to validate the BA, once to verify the implementation. |
+| **`test-writer`** | always-on (conditional) | When task complexity ≥ STANDARD or risk is high — emits pytest skeletons with `pytest.fail("TEST_INCOMPLETE:…")` hard-stops. |
+| **`graphify`** | always-on (optional dep) | Between BA and Dev — incremental code-graph enrichment; injects a focused subgraph into the Dev context. Skipped gracefully if binary absent. |
+| **`spec`** | on-demand | `/spec` invocation — splits a monolithic spec into per-agent views + Gawande-style checkpoints. |
+| **`architect`** | overnight + on-demand | During overnight specialist scan — structural issues, tech debt, dependency and pattern problems. |
+| **`product-owner`** | overnight + on-demand | During overnight specialist scan — feature completeness, user flows, business-logic bugs. |
+| **`user`** | overnight + on-demand | During overnight specialist scan — end-user simulation; UX friction and broken flows. |
+| **`ui-specialist`** | overnight + on-demand | When a user-facing change is detected or `/test` with UI mode — visual-design quality + Playwright UI audit with a 1–10 beauty score. |
+| **`pm`** | overnight | Orchestrates overnight: PLAN (explores live app), TRIAGE (routes issues), RETRO (hand-off to next cycle). |
+| **`changelog-analyst`** | on-demand | `/commit` invocation — classifies files, stages surgically (own-hunks only), writes conventional commits, emits the push-gate token. |
+| **`push-analyst` / `merge-analyst` / `pull-analyst`** | on-demand | `/push`, `/merge`, `/pull` invocations — pre-push, pre-merge, and post-pull risk analysis with nonce-keyed grants. |
+| **`cleaner` / `cleanliness-inspector` / `style-inspector` / `rule-inspector`** | on-demand | `/clean` invocation — the `/clean` cohort: detect, audit, and execute project hygiene. |
+| **`prompt-inspector` / `git-edge-case-analyst`** | on-demand | On request — documentation-verbosity and git-history edge-case discovery. |
+| **`test-executor` / `test-validator`** | on-demand | `/test` invocation — execute and validate test infrastructure. |
 
 > Full, auto-maintained roster: [`agents/README.md`](agents/README.md).
 
