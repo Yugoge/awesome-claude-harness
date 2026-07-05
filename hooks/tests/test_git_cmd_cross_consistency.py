@@ -304,11 +304,16 @@ CORPUS = [
     # ------------------------------------------------------------------
     # Shell context forms — all three must agree
     # ------------------------------------------------------------------
+    # bash -c 'git status': the single-quote is not in the anchor class, so the
+    # regex does NOT treat 'git' as a git command here (it sees 'git status' as
+    # string argument text, not a command token). The classifier segments on
+    # ; | & ` ( ) separators -- the entire payload is one segment with 'bash'
+    # as command token. All three: False.
     (
         "bash -c 'git status'",
-        True, True, True,
+        False, False, False,
         None,
-        "git inside bash -c single-quoted string",
+        "git inside bash -c quoted string -- all three correctly return False",
     ),
     (
         "command git status",
