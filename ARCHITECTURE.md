@@ -403,17 +403,17 @@ The config is plain Markdown + small scripts; doc-sync re-inventories the roster
 
 ## 13. Enforcement asymmetry (overnight-only vs. interactive)
 
-Schema contract validation — the structured checks that verify BA-produced context JSON and dev/QA reports against the `schemas/cycle-contract.v1.json` and `schemas/dev-report.v1.json` contracts — fires **only during `/dev-overnight` sessions**, not on every interactive `/dev` invocation.
+Contract-aware artifact validation — the checks that verify dev/QA reports against `schemas/dev-report.v1.json` and `schemas/qa-report.v1.json` (keyed by `required_calls[].schema_name` in the per-cycle contract) — fires **only during `/dev-overnight` sessions**, not on every interactive `/dev` invocation.
 
-**Why the asymmetry exists.** Full contract enforcement depends on state that overnight initializes but interactive sessions do not:
+**Why the asymmetry exists.** The contract-aware hooks (`pretool-subagent-enforce.py`, `posttool-subagent-track.py`, `posttool-overnight-file-check.py`) all call `contract_runtime.load_contract()` as their first act. That function resolves the per-cycle `cycle-contract.json` from a small candidate list; when no matching file exists the function returns `None` and every caller short-circuits with exit 0 (the HARD CUTOVER convention). Interactive `/dev` sessions never write a `cycle-contract.json`, so the contract runtime always returns `None` for them. The overnight-only state these hooks require:
 
-- `dev-registry/<session>/` with per-subagent sentinel files and initialized cp-state views (written by `/spec`).
-- `overnight-state-<session_id>.json` — the durable session context the contract runtime reads to locate the active actor and pipeline phase.
-- The SubagentStop hooks that enforce cp-state and layer-match run on every subagent termination but only take effect when their required state files are present.
+- `docs/dev/overnight/<session_id>/cycle-<N>/cycle-contract.json` — the per-cycle contract that switches all contract-aware hooks from pass-through into enforce mode. Its mere presence is the switch; until it exists, hooks behave identically to an interactive session.
+- `.claude/overnight-state-<session_id>.json` — live session context used by `posttool-overnight-file-check.py` to confirm the session is still running before validating artifacts.
+- `.claude/workflow-<session_id>.json` and `/tmp/contract-bookmark-<sid>-<cycle>.json` — step-progression bookmark files that `pretool-subagent-enforce.py` reads to decide which `required_calls` entry to enforce for the current step.
 
-**Implication for interactive users.** Running `/dev` interactively goes through the same BA → QA-of-BA → Dev → QA orchestration pipeline and the same PreToolUse/PostToolUse hook chain, but several enforcement triggers are silently skipped or degrade gracefully when overnight-initialized state is absent. The README's pipeline description applies to both modes; this section is the honest technical caveat that not all enforcement triggers fire outside overnight runs.
+**Implication for interactive users.** Running `/dev` interactively goes through the same BA → QA-of-BA → Dev → QA orchestration pipeline and the same PreToolUse/PostToolUse hook chain, but the contract-aware artifact validators silently pass through because `cycle-contract.json` is absent. The README's pipeline description applies to both modes; this section is the honest technical caveat that schema artifact gating only activates in overnight runs.
 
-**Concrete example — checkpoint enforcement.** `hooks/subagentstop-cp-enforce.py` (wired under `SubagentStop`) enforces that every atomic checkpoint listed in `.claude/specs/<SPEC_ID>/cp-state-<agent>.json` reaches `done` or `waived` before a subagent exits. This file is created only when the orchestrator invokes `/spec` to generate per-agent views. An interactive `/dev` invocation without a prior `/spec` produces no cp-state file, so `subagentstop-cp-enforce.py` exits 0 (no enforcement). Users who want checkpoint-level enforcement must use `/spec` + `/dev` together, or run `/dev-overnight`.
+**Concrete example — artifact schema enforcement.** In an overnight cycle, `posttool-overnight-file-check.py` fires after each subagent exits and validates the subagent's output artifact against the schema declared in `cycle-contract.json`'s `required_calls` list (e.g. `dev-report.v1` for the dev subagent). If the artifact is missing or schema-invalid, the hook exits 2 and blocks the pipeline. In an interactive `/dev` session, `contract_runtime.load_contract()` returns `None`, so the hook exits 0 immediately — no artifact gating occurs regardless of whether a dev-report was written or whether it is schema-valid.
 
 ---
 
