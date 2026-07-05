@@ -5,10 +5,43 @@
 # above (AC_UID, AC_TYPE, docstring) MUST be preserved verbatim so QA can
 # trace each test back to its source AC entry.
 
-import pytest
+import json
+import subprocess
 
 AC_UID = "f7ba1b2c3d4e5f60"
 AC_TYPE = "hook"
+
+REPO = "/dev/shm/dev-workspace/dot-claude"
+SAFETY = f"{REPO}/hooks/pretool-bash-safety.sh"
+
+# Commands that require subagent context (agent_id present)
+SUBAGENT_BLOCKED = [
+    "/usr/bin/git rebase main",
+    "/usr/bin/git cherry-pick abc1234",
+]
+
+# Commands blocked in any context
+ANY_CONTEXT_BLOCKED = [
+    "/usr/bin/git revert HEAD^",
+    "/usr/bin/git push --force-with-lease origin main",
+    "/usr/bin/git update-ref refs/heads/main abc1234",
+    "/usr/bin/git branch -D feature",
+]
+
+
+def _run_safety(command, subagent=True):
+    payload = json.dumps({
+        "tool_name": "Bash",
+        "tool_input": {"command": command},
+        "agent_id": "test-subagent" if subagent else None,
+    })
+    return subprocess.run(
+        ["bash", SAFETY],
+        input=payload,
+        capture_output=True,
+        text=True,
+        cwd=REPO,
+    )
 
 
 def test_AC_F7b():
@@ -17,7 +50,14 @@ def test_AC_F7b():
     WHEN:  path-qualified subagent history mutation and direct ref mutation commands are evaluated
     THEN:  all of the following exit 2: '/usr/bin/git rebase main' (subagent context), '/usr/bin/git cherry-pick abc1234' (subagent context), '/usr/bin/git revert HEAD^' (any context — non-bare revert with modifier), '/usr/bin/git push --force-with-lease origin main', '/usr/bin/git update-ref refs/heads/main abc1234', '/usr/bin/git branch -D feature'
     """
-    # TODO(dev): replace the line below with the real test body. While the
-    # TEST_INCOMPLETE sentinel is present the test will hard-fail, marking
-    # the AC as unimplemented for QA Phase 5.
-    pytest.fail(f"TEST_INCOMPLETE: {AC_UID} — path-qualified rebase/cherry-pick/revert/force-with-lease/update-ref/branch-D all blocked")
+    for cmd in SUBAGENT_BLOCKED:
+        result = _run_safety(cmd, subagent=True)
+        assert result.returncode == 2, (
+            f"Expected exit 2 for subagent '{cmd}', got {result.returncode}\nstderr: {result.stderr}"
+        )
+
+    for cmd in ANY_CONTEXT_BLOCKED:
+        result = _run_safety(cmd, subagent=True)
+        assert result.returncode == 2, (
+            f"Expected exit 2 for '{cmd}', got {result.returncode}\nstderr: {result.stderr}"
+        )
