@@ -24,7 +24,7 @@ It is not a prompt pack. It is an operating system for agents — with a schedul
 
 ---
 
-## Quickstart
+## Install in 30 seconds
 
 **Prerequisites:** Python 3, `git`, and `jq` must be installed before cloning. Run `python3 --version && git --version && jq --version` to verify.
 
