@@ -95,15 +95,18 @@ if git rev-parse --verify -q HEAD >/dev/null 2>&1; then
   exit 0
 fi
 
-git add .
-git commit -m "chore: initialize repository with default .gitignore
+if git add . && git commit -m "chore: initialize repository with default .gitignore
 
 🤖 Generated with [Claude Code](https://claude.ai/code)
-via [Happy](https://happy.engineering)
 
-${CO_AUTHOR}" > /dev/null 2>&1
-
-echo -e "${GREEN}✅ Git repository initialized with initial commit${NC}"
+${CO_AUTHOR}" > /dev/null 2>&1; then
+  echo -e "${GREEN}✅ Git repository initialized with initial commit${NC}"
+else
+  # Cleanup staged content — use git rm -r --cached . (not git reset HEAD, which fails on
+  # unborn HEAD before the first commit)
+  git rm -r --cached . > /dev/null 2>&1 || true
+  exit 1
+fi
 
 # Check if GitHub CLI is installed
 if ! command -v gh &> /dev/null; then
