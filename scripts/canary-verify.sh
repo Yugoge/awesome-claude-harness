@@ -184,20 +184,20 @@ verify_git_privilege_guard() {
 }
 
 # ---------------------------------------------------------------------------
-# Advisory checks (spec §5.5 prerequisite — declared Won't Have for this cycle)
-# session-info.sh and session-git-init.sh are SessionStart hooks that emit
-# stdout. They are not in scope to fix; we log advisory only so existing
-# sessions are not blocked.
+# Advisory checks (spec §5.5 prerequisite)
+# session-git-init.sh stdout was fixed by E-M4 (exec >&2 added after opt-in gate).
+# session-info.sh still emits stdout; log advisory only so existing sessions
+# are not blocked.
 # ---------------------------------------------------------------------------
 check_advisory_prerequisites() {
-  for f in "${HOOKS_DIR}/session-info.sh" "${HOOKS_DIR}/session-git-init.sh"; do
+  for f in "${HOOKS_DIR}/session-info.sh"; do
     if [[ ! -f "${f}" ]]; then
       continue
     fi
     # If the script writes to stdout (echo / printf without >&2), flag advisory.
     if grep -E '^[[:space:]]*(echo|printf)' "${f}" 2>/dev/null \
        | grep -vE '>\s*&2|>&2' >/dev/null 2>&1; then
-      emit_advisory "${f} emits stdout without >&2 (spec §5.5 prerequisite, Won't Have this cycle)"
+      emit_advisory "${f} emits stdout without >&2 (spec §5.5 prerequisite)"
     fi
   done
 }
