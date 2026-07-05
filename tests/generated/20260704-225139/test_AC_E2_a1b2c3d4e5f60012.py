@@ -5,10 +5,10 @@
 # above (AC_UID, AC_TYPE, docstring) MUST be preserved verbatim so QA can
 # trace each test back to its source AC entry.
 
-import pytest
-
 AC_UID = "a1b2c3d4e5f60012"
 AC_TYPE = "data"
+
+HOOK = "/dev/shm/dev-workspace/dot-claude/hooks/session-git-init.sh"
 
 
 def test_AC_E2():
@@ -17,7 +17,11 @@ def test_AC_E2():
     WHEN:  the file is read
     THEN:  the default CO_AUTHOR fallback does NOT contain 'Happy <yesreply@happy.engineering>' AND the commit message template does NOT contain 'via [Happy]'
     """
-    # TODO(dev): replace the line below with the real test body. While the
-    # TEST_INCOMPLETE sentinel is present the test will hard-fail, marking
-    # the AC as unimplemented for QA Phase 5.
-    pytest.fail(f"TEST_INCOMPLETE: {AC_UID} — session-git-init.sh must not contain Happy branding strings")
+    with open(HOOK) as f:
+        content = f.read()
+    assert "Happy" not in content, (
+        "session-git-init.sh still contains 'Happy' branding string"
+    )
+    assert "yesreply@happy.engineering" not in content, (
+        "session-git-init.sh still contains 'yesreply@happy.engineering'"
+    )
