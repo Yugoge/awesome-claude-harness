@@ -79,7 +79,7 @@ Powerful coding agents fail in three predictable, expensive ways. Two of these a
 
 1. **They do too much themselves.** A single context window tries to analyze, implement, test, *and* commit — and quality silently collapses under the load. Agents fix plausible problems instead of proven ones (a mobile bug "fixed" on desktop for six cycles; a CSS symptom patched six times when the real fix was a data-hydration layer underneath).
 2. **They make irreversible mistakes.**
-   - On **2026-04-19 23:02:22**, a dev subagent ran `git stash && cd packages/happy-app && git checkout [925f5960](https://github.com/Yugoge/awesome-claude-harness/commit/925f5960) -- .`. The wide-path `-- .` checkout overwrote the entire directory with old baseline content and **erased 17 days of UI work** — then reported it like a minor accident. (`hooks/pretool-bash-safety.sh`)
+   - On **2026-04-19 23:02:22**, a dev subagent ran `git stash && cd packages/happy-app && git checkout` [`925f5960`](https://github.com/Yugoge/awesome-claude-harness/commit/925f5960) `-- .`. The wide-path `-- .` checkout overwrote the entire directory with old baseline content and **erased 17 days of UI work** — then reported it like a minor accident. (`hooks/pretool-bash-safety.sh`)
    - On **2026-04-21 17:45 UTC**, in an ordinary *interactive* session (`962de59f`), the user typed "全部commit push" and the orchestrator answered by authoring a **93-file `commit` + `push` with zero human signoff** (regression [`b5d447e`](https://github.com/Yugoge/awesome-claude-harness/commit/b5d447e)). (`hooks/pretool-git-privilege-guard.py` docstring)
 3. **They drift from the requirement.** The thing that ships is a confident-sounding cousin of the thing you actually asked for.
 
