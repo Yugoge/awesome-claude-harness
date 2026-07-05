@@ -116,21 +116,6 @@ def _norm(command):
     return command
 
 
-def _git_subcommand(args):
-    """Return (subcommand, remaining_args) skipping git global options."""
-    i = 0
-    while i < len(args):
-        a = args[i]
-        if a in _GIT_GLOBAL_VALUE:
-            i += 2
-            continue
-        if a.startswith('-'):
-            i += 1
-            continue
-        return a, args[i + 1:]
-    return None, []
-
-
 # Long-option name spaces for checkout/switch, split into CREATE vs NON-create.
 # These drive git's real unambiguous-unique-prefix abbreviation rule (see
 # _long_opt_creates): git accepts any `--X` that is a unique prefix of exactly
