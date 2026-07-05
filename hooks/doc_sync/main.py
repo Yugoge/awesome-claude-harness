@@ -31,6 +31,7 @@ EXCLUDED_PATTERNS = (
     '.claude/worktrees/',
     '.claude/specs/',
     '.claude/dev-registry/',
+    'tests/generated/',  # keep test snapshots out of auto-indexing
 )
 
 
