@@ -677,10 +677,10 @@ def _validate_push_grant_head(grant):
         )
 
 
-def _validate_push_grant_remote(grant, command):
+def _validate_push_grant_remote(grant, push_invocation):
     """AC-A6 (remote binding): explicit cmd remote must match grant.remote."""
     grant_remote = grant.get('remote') or ''
-    cmd_remote = _extract_push_remote(command)
+    cmd_remote = _extract_push_remote(push_invocation)
     if cmd_remote and grant_remote and cmd_remote != grant_remote:
         _block(
             '\nBLOCKED: agent git push - remote mismatch.\n'
