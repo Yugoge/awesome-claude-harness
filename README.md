@@ -42,11 +42,11 @@ git clone https://github.com/Yugoge/awesome-claude-harness.git ~/.claude
 claude
 ```
 
-**Live demo (no Claude Code required):**
+**Abridged sample output (paths differ per machine):**
 
 ```text
-Harness home (live):  /dev/shm/dev-workspace/dot-claude
-Demo home (ephemeral): /tmp/guard-demo.musmSu/dot-claude
+Harness home (live):  <repo-root>
+Demo home (ephemeral): <tmp-demo-home>/dot-claude
 Shared resolver resolved the demo home by structural sentinel (basename 'dot-claude', not '.claude').
 
 === STEP 1 — attempt a DANGEROUS operation (must be BLOCKED) ===
