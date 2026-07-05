@@ -1488,8 +1488,23 @@ if echo "$COMMAND" | grep -qE "${GIT_CMD_RE}reset[[:space:]]+([^;|&]*[[:space:]]
 fi
 
 # Block: force/delete branch publication and direct ref mutation surfaces.
-if echo "$COMMAND" | grep -qE "${GIT_CMD_RE}push\b" && \
-   echo "$COMMAND" | grep -qE '(^|[[:space:]])(--force|-f|--force-with-lease(=[^[:space:]]+)?|--delete|-d|--mirror)([[:space:]]|$)|[[:space:]]\+[^[:space:]]|[[:space:]]:[^[:space:]]'; then
+# Path-qualified /usr/bin/git push --force also blocked via classifier (RISK-3)
+_PQ_PUSH_FORCE=0
+if [ "$CLASSIFIER_HAS_PATH_QUALIFIED_GIT" = "1" ] && _pq_git_has_subcmd push; then
+  printf '%s\n' "$CLASSIFIER_JSON" | "$PYTHON_BIN" -c "
+import json,sys
+invs=json.load(sys.stdin)
+bad={'--force','-f','--force-with-lease','--delete','-d','--mirror'}
+for inv in invs:
+  if inv.get('path_qualified') and inv.get('subcommand')=='push':
+    for tok in inv.get('args',[]):
+      if tok in bad or tok.startswith('--force-with-lease=') or tok.startswith('+') or tok.startswith(':'):
+        print('match'); sys.exit(0)
+" 2>/dev/null | grep -q match && _PQ_PUSH_FORCE=1
+fi
+if { echo "$COMMAND" | grep -qE "${GIT_CMD_RE}push\b" && \
+   echo "$COMMAND" | grep -qE '(^|[[:space:]])(--force|-f|--force-with-lease(=[^[:space:]]+)?|--delete|-d|--mirror)([[:space:]]|$)|[[:space:]]\+[^[:space:]]|[[:space:]]:[^[:space:]]'; } || \
+   [ "$_PQ_PUSH_FORCE" = "1" ]; then
   echo "BLOCKED: force/delete/ref-rewrite push is forbidden in agent flow" >&2
   echo "Command: $COMMAND" >&2
   echo "REASON: policy allows normal /push branch publication and backup-only recovery refs; force/delete/ref-rewrite pushes can lose remote work." >&2
