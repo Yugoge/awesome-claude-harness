@@ -339,11 +339,9 @@ def _looks_like_git_commit(invocations):
 
 
 def _looks_like_git_merge(invocations):
-    return any(
-        inv.subcommand == 'merge'
-        and not (inv.args and inv.args[0] in ('-base', 'tool'))
-        for inv in invocations
-    )
+    # merge-base and mergetool are separate subcommand tokens from _git_subcommand;
+    # they will have inv.subcommand == 'merge-base' or 'mergetool', not 'merge'.
+    return any(inv.subcommand == 'merge' for inv in invocations)
 
 
 def _looks_like_git_push(invocations):
