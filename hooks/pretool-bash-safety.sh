@@ -1393,7 +1393,26 @@ fi
 # Block: git checkout <ref> -- . or -- * or -- <dir>/
 # Wide-path checkout from a ref overwrites the entire subtree with historical content.
 # Allowed: 'git checkout <ref> -- path/to/specific-file.ts' (single file), 'git checkout <branch>' (branch switch).
-if echo "$COMMAND" | grep -qE 'git\s+checkout\s+\S+\s+--\s+(\.|\*|[^ ]+/)\s*($|[;&|])'; then
+# Path-qualified form also blocked (RISK-3)
+_PQ_CHECKOUT_WIDE=0
+if [ "$CLASSIFIER_HAS_PATH_QUALIFIED_GIT" = "1" ] && _pq_git_has_subcmd checkout; then
+  _checkout_wide=$(printf '%s\n' "$CLASSIFIER_JSON" | "$PYTHON_BIN" -c "
+import json,sys,re
+invs=json.load(sys.stdin)
+for inv in invs:
+  if inv.get('path_qualified') and inv.get('subcommand')=='checkout':
+    args=inv.get('args',[])
+    try:
+      dd=args.index('--')
+      path=args[dd+1] if dd+1<len(args) else ''
+      if path in ('.','*') or path.endswith('/'):
+        print('wide'); break
+    except ValueError:
+      pass
+" 2>/dev/null)
+  [ "$_checkout_wide" = "wide" ] && _PQ_CHECKOUT_WIDE=1
+fi
+if echo "$COMMAND" | grep -qE 'git\s+checkout\s+\S+\s+--\s+(\.|\*|[^ ]+/)\s*($|[;&|])' || [ "$_PQ_CHECKOUT_WIDE" = "1" ]; then
   echo "BLOCKED: 'git checkout <ref> -- .' / '-- *' / '-- dir/' requires explicit user approval" >&2
   echo "Command: $COMMAND" >&2
   echo "REASON: On 2026-04-19, a dev subagent ran 'git checkout 925f5960 -- .' inside" >&2
