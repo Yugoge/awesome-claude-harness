@@ -1429,9 +1429,31 @@ fi
 # Covers all four syntaxes: --source=X, --source X, -s=X, -s X.
 # Allowed: 'git restore -- myfile.ts' (no --source, no overwrite), 'git restore --staged -- file' (index-only),
 #          'git restore --source=HEAD -- specific-file.ts' (specific file, not wide-path).
-if echo "$COMMAND" | grep -qE 'git\s+restore\b' && \
+# Path-qualified form also blocked (RISK-3)
+_PQ_RESTORE_WIDE=0
+if [ "$CLASSIFIER_HAS_PATH_QUALIFIED_GIT" = "1" ] && _pq_git_has_subcmd restore; then
+  _restore_wide=$(printf '%s\n' "$CLASSIFIER_JSON" | "$PYTHON_BIN" -c "
+import json,sys
+invs=json.load(sys.stdin)
+for inv in invs:
+  if inv.get('path_qualified') and inv.get('subcommand')=='restore':
+    args=inv.get('args',[])
+    has_source=any(a in ('--source','-s') or a.startswith('--source=') or a.startswith('-s=') for a in args)
+    if has_source:
+      try:
+        dd=args.index('--')
+        path=args[dd+1] if dd+1<len(args) else ''
+        if path in ('.','*') or path.endswith('/'):
+          print('wide'); break
+      except ValueError:
+        pass
+" 2>/dev/null)
+  [ "$_restore_wide" = "wide" ] && _PQ_RESTORE_WIDE=1
+fi
+if { echo "$COMMAND" | grep -qE 'git\s+restore\b' && \
    echo "$COMMAND" | grep -qE -- '(--source\b|-s\b)' && \
-   echo "$COMMAND" | grep -qE -- '--\s+(\.|\*|[^ /]+/)\s*($|[;&|])'; then
+   echo "$COMMAND" | grep -qE -- '--\s+(\.|\*|[^ /]+/)\s*($|[;&|])'; } || \
+   [ "$_PQ_RESTORE_WIDE" = "1" ]; then
   echo "BLOCKED: 'git restore --source=<ref> -- .' / '-- *' / '-- dir/' requires explicit user approval" >&2
   echo "Command: $COMMAND" >&2
   echo "REASON: 'git restore --source=<ref> -- .' is the modern equivalent of" >&2
