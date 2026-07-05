@@ -1560,7 +1560,20 @@ if [ "$IS_SUBAGENT" = "1" ]; then
   # Narrowed (2026-05-14): commit|merge|push are fully covered by
   # pretool-git-privilege-guard.py (canonical layer). revert|cherry-pick|rebase
   # are NOT covered there, so they remain in this layer.
-  if echo "$COMMAND" | grep -qE 'git[[:space:]]+(revert|cherry-pick|rebase)([[:space:]]|$)'; then
+  # Path-qualified /usr/bin/git rebase/cherry-pick/revert also blocked (RISK-3)
+  _PQ_SUBAGENT_HISTORY=0
+  if [ "$CLASSIFIER_HAS_PATH_QUALIFIED_GIT" = "1" ]; then
+    printf '%s\n' "$CLASSIFIER_JSON" | "$PYTHON_BIN" -c "
+import json,sys
+invs=json.load(sys.stdin)
+blocked={'revert','cherry-pick','rebase'}
+for inv in invs:
+  if inv.get('path_qualified') and inv.get('subcommand') in blocked:
+    print('match'); break
+" 2>/dev/null | grep -q match && _PQ_SUBAGENT_HISTORY=1
+  fi
+  if echo "$COMMAND" | grep -qE 'git[[:space:]]+(revert|cherry-pick|rebase)([[:space:]]|$)' || \
+     [ "$_PQ_SUBAGENT_HISTORY" = "1" ]; then
     echo "BLOCKED: Subagent-initiated git history mutation is FORBIDDEN (revert|cherry-pick|rebase)" >&2
     echo "Command: $COMMAND" >&2
     echo "Subagents must NEVER mutate git history. Tell the user what you want done" >&2
