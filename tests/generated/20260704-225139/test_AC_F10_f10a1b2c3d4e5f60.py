@@ -5,10 +5,34 @@
 # above (AC_UID, AC_TYPE, docstring) MUST be preserved verbatim so QA can
 # trace each test back to its source AC entry.
 
-import pytest
+import json
+import subprocess
 
 AC_UID = "f10a1b2c3d4e5f60"
 AC_TYPE = "hook"
+
+REPO = "/dev/shm/dev-workspace/dot-claude"
+SAFETY = f"{REPO}/hooks/pretool-bash-safety.sh"
+
+NOT_BLOCKED = [
+    "echo /usr/bin/git push --force",
+    "FOO=bar echo /usr/bin/git push --force",
+]
+
+
+def _run_safety(command):
+    payload = json.dumps({
+        "tool_name": "Bash",
+        "tool_input": {"command": command},
+        "agent_id": "test-subagent",
+    })
+    return subprocess.run(
+        ["bash", SAFETY],
+        input=payload,
+        capture_output=True,
+        text=True,
+        cwd=REPO,
+    )
 
 
 def test_AC_F10():
@@ -17,7 +41,9 @@ def test_AC_F10():
     WHEN:  commands where echo or env-prefixed echo is the command head (not git) are evaluated
     THEN:  exit code is NOT 2 for both hooks
     """
-    # TODO(dev): replace the line below with the real test body. While the
-    # TEST_INCOMPLETE sentinel is present the test will hard-fail, marking
-    # the AC as unimplemented for QA Phase 5.
-    pytest.fail(f"TEST_INCOMPLETE: {AC_UID} — echo/env-prefixed echo with path-qualified git arg not blocked")
+    for cmd in NOT_BLOCKED:
+        result = _run_safety(cmd)
+        assert result.returncode != 2, (
+            f"'{cmd}' should NOT be blocked (echo is command head), "
+            f"got exit {result.returncode}\nstderr: {result.stderr}"
+        )
