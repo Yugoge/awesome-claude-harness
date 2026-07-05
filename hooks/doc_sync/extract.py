@@ -191,7 +191,8 @@ def _extract_py_desc(text: str) -> str:
         if doc:
             return doc
         # Multi-line docstring opening — collect first non-empty line.
-        if s.startswith('"""') or s.startswith("'''"):
+        s_body = s.lstrip('rRbBuUfF')
+        if s_body.startswith('"""') or s_body.startswith("'''"):
             content = _find_next_line_content(lines, i + 1, 10)
             if content:
                 return content
