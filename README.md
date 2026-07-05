@@ -551,7 +551,7 @@ Six principles run through every file here. They are the taste behind the projec
 
 ## FAQ
 
-**Is this a framework I import?** No. It is a *configuration* for Claude Code. You drop it at `~/.claude`, and its hooks + commands + agents change how the agent behaves. There is nothing to `npm install` into your app.
+**Is this a framework I import?** No. It is a *configuration* for Claude Code specifically — not a library, not an npm package, not an LLM SDK. You drop it at `~/.claude`, and its hooks + commands + agents change how Claude Code behaves in every session from that point forward. There is nothing to `npm install` into your app and no API to call: the harness runs entirely inside Claude Code's hook and command system. It is Claude Code-specific — it will not work with other LLM clients or agent frameworks without substantial adaptation. The only "installation" is `git clone ... ~/.claude && scripts/bootstrap`.
 
 **Does the orchestrator-only rule make simple edits slow?** For a one-line fix you can `/do` to let the main agent act directly for a turn. The delegation overhead is the price of consistent quality on real tasks — and the autonomous loop pays for itself overnight.
 
