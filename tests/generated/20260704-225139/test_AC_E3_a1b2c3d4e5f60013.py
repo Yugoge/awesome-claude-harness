@@ -5,10 +5,14 @@
 # above (AC_UID, AC_TYPE, docstring) MUST be preserved verbatim so QA can
 # trace each test back to its source AC entry.
 
-import pytest
+import os
+import subprocess
+import tempfile
 
 AC_UID = "a1b2c3d4e5f60013"
 AC_TYPE = "hook"
+
+SCRIPT = "/dev/shm/dev-workspace/dot-claude/scripts/canary-verify.sh"
 
 
 def test_AC_E3():
@@ -17,7 +21,18 @@ def test_AC_E3():
     WHEN:  scripts/canary-verify.sh runs
     THEN:  exit code is 0 AND stderr contains 'advisory' or 'venv absent'
     """
-    # TODO(dev): replace the line below with the real test body. While the
-    # TEST_INCOMPLETE sentinel is present the test will hard-fail, marking
-    # the AC as unimplemented for QA Phase 5.
-    pytest.fail(f"TEST_INCOMPLETE: {AC_UID} — canary-verify.sh venv absent emits advisory and exits 0")
+    with tempfile.TemporaryDirectory() as tmpdir:
+        env = os.environ.copy()
+        env["CLAUDE_HOME"] = tmpdir
+        result = subprocess.run(
+            ["bash", SCRIPT],
+            capture_output=True,
+            text=True,
+            env=env,
+        )
+    assert result.returncode == 0, (
+        f"canary-verify.sh expected exit 0, got {result.returncode}\nstderr: {result.stderr}"
+    )
+    assert "advisory" in result.stderr.lower() or "venv absent" in result.stderr.lower(), (
+        f"Expected 'advisory' or 'venv absent' in stderr, got: {result.stderr!r}"
+    )
