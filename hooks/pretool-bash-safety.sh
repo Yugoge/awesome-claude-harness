@@ -1590,10 +1590,29 @@ fi
 # Block: git revert <commit-hash> or git revert <ref>^ or git revert <ref>~N or git revert <ref>@{N}
 # V5: broadened from HEAD-only anchor to \S+ so any ref (HEAD, master, main, branch, tag)
 # with a modifier (caret, tilde, reflog, hash) is blocked.
+# V6: path-qualified /usr/bin/git revert HEAD^ also blocked via classifier (RISK-3)
 # Reverting a non-bare-HEAD commit can undo deliberate user work.
 # Safe: 'git revert HEAD' ONLY (bare — no caret, no tilde, no reflog, no branch-ref modifier).
 # All other revert forms are blocked.
-if echo "$COMMAND" | grep -qE 'git\s+revert\s+'; then
+_PQ_REVERT_MODIFIER=0
+if [ "$CLASSIFIER_HAS_PATH_QUALIFIED_GIT" = "1" ] && _pq_git_has_subcmd revert; then
+  printf '%s\n' "$CLASSIFIER_JSON" | "$PYTHON_BIN" -c "
+import json,sys,re
+invs=json.load(sys.stdin)
+for inv in invs:
+  if inv.get('path_qualified') and inv.get('subcommand')=='revert':
+    args=inv.get('args',[])
+    # Find the ref arg (first non-flag arg)
+    for a in args:
+      if a.startswith('-'):
+        continue
+      # Block if hash, caret, tilde, or reflog modifier
+      if re.match(r'^[0-9a-f]{7,40}$',a) or '^' in a or '~' in a or '@{' in a:
+        print('match'); break
+    break
+" 2>/dev/null | grep -q match && _PQ_REVERT_MODIFIER=1
+fi
+if echo "$COMMAND" | grep -qE 'git\s+revert\s+' || [ "$_PQ_REVERT_MODIFIER" = "1" ]; then
   # Block hex hashes (7+ chars)
   # Block caret form: <ref>^ or <ref>^^ (e.g., HEAD^, master^, HEAD^^)
   # Block tilde form: <ref>~ or <ref>~N (e.g., HEAD~, HEAD~1, master~2)
@@ -1604,7 +1623,8 @@ if echo "$COMMAND" | grep -qE 'git\s+revert\s+'; then
   if echo "$COMMAND" | grep -qE 'git\s+revert\s+(\S+\s+)*[0-9a-f]{7,40}\b' || \
      echo "$COMMAND" | grep -qE 'git\s+revert\s+(\S+\s+)*\S+\^+' || \
      echo "$COMMAND" | grep -qE 'git\s+revert\s+(\S+\s+)*\S+~[0-9]*' || \
-     echo "$COMMAND" | grep -qE 'git\s+revert\s+(\S+\s+)*\S+@\{[0-9]+\}'; then
+     echo "$COMMAND" | grep -qE 'git\s+revert\s+(\S+\s+)*\S+@\{[0-9]+\}' || \
+     [ "$_PQ_REVERT_MODIFIER" = "1" ]; then
     echo "BLOCKED: 'git revert' with any ref modifier (caret/tilde/reflog/hash) requires explicit user approval" >&2
     echo "Command: $COMMAND" >&2
     echo "REASON: On 2026-04-23, a dev subagent ran 'git revert 1204d62' which undid a user-approved" >&2
