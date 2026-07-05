@@ -12,10 +12,10 @@ Legitimate divergence (marked xfail):
 - None known after RISK-3 fix. Path-qualified forms are now handled by
   the classifier in both safety.sh and privilege-guard.py. The regex
   patterns (GIT_CMD_RE / GIT_COMMAND_RE) share the same anchor class
-  [[:space:];&|()`] / [\s;&|()`] which does NOT include '/', so
+  [[:space:];&|()`] / [\\s;&|()`] which does NOT include '/', so
   path-qualified forms like /usr/bin/git only match via the classifier.
   When the classifier fires (CLASSIFIER_HAS_PATH_QUALIFIED_GIT=1) bash-
-  safety.sh augments GIT_CMD_RE — the two-layer architecture means both
+  safety.sh augments GIT_CMD_RE -- the two-layer architecture means both
   safety hooks agree in practice even when the regex alone would miss.
   We test the raw regex patterns here (pre-classifier-augmentation) and
   mark known regex-only divergences as xfail.
