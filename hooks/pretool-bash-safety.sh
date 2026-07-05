@@ -1465,9 +1465,21 @@ if { echo "$COMMAND" | grep -qE 'git\s+restore\b' && \
 fi
 
 # Block: every git reset --hard form. Shared-repo policy forbids reset-like cleanup in agent flow.
+# Path-qualified /usr/bin/git reset --hard also blocked via classifier (RISK-3)
 GIT_GLOBAL_OPT_RE='([[:space:]]+(-[Cc][[:space:]]+[^[:space:];|&]+|-[Cc][^[:space:];|&]+|--(git-dir|work-tree|namespace|exec-path|super-prefix|config-env)(=[^[:space:];|&]+|[[:space:]]+[^[:space:];|&]+)|--(bare|no-pager|paginate|no-replace-objects|literal-pathspecs|glob-pathspecs|noglob-pathspecs|icase-pathspecs|no-optional-locks)|-[pP]))*'
 GIT_CMD_RE='(^|[[:space:];&|()`])git'"$GIT_GLOBAL_OPT_RE"'[[:space:]]+'
-if echo "$COMMAND" | grep -qE "${GIT_CMD_RE}reset[[:space:]]+([^;|&]*[[:space:]]+)?--hard\b"; then
+_PQ_RESET_HARD=0
+if [ "$CLASSIFIER_HAS_PATH_QUALIFIED_GIT" = "1" ] && _pq_git_has_subcmd reset; then
+  printf '%s\n' "$CLASSIFIER_JSON" | "$PYTHON_BIN" -c "
+import json,sys
+invs=json.load(sys.stdin)
+for inv in invs:
+  if inv.get('path_qualified') and inv.get('subcommand')=='reset' and '--hard' in inv.get('args',[]):
+    print('match'); break
+" 2>/dev/null | grep -q match && _PQ_RESET_HARD=1
+fi
+if echo "$COMMAND" | grep -qE "${GIT_CMD_RE}reset[[:space:]]+([^;|&]*[[:space:]]+)?--hard\b" || \
+   [ "$_PQ_RESET_HARD" = "1" ]; then
   echo "BLOCKED: 'git reset --hard' is forbidden in agent flow" >&2
   echo "Command: $COMMAND" >&2
   echo "REASON: shared-repo policy requires non-destructive recovery; hard reset can discard another session's work or index state." >&2
