@@ -5,10 +5,12 @@
 # above (AC_UID, AC_TYPE, docstring) MUST be preserved verbatim so QA can
 # trace each test back to its source AC entry.
 
-import pytest
+import subprocess
 
 AC_UID = "a1b2c3d4e5f60014"
 AC_TYPE = "hook"
+
+HOOK = "/dev/shm/dev-workspace/dot-claude/hooks/session-tmpfs-banner.sh"
 
 
 def test_AC_E4():
@@ -17,7 +19,14 @@ def test_AC_E4():
     WHEN:  captured output is examined
     THEN:  stdout is empty (0 bytes) AND stderr contains at least one non-empty line from the df output
     """
-    # TODO(dev): replace the line below with the real test body. While the
-    # TEST_INCOMPLETE sentinel is present the test will hard-fail, marking
-    # the AC as unimplemented for QA Phase 5.
-    pytest.fail(f"TEST_INCOMPLETE: {AC_UID} — tmpfs-banner stdout empty, stderr has df output")
+    result = subprocess.run(
+        ["bash", HOOK],
+        capture_output=True,
+        text=True,
+    )
+    assert result.stdout == "", (
+        f"Expected stdout to be empty, got: {result.stdout!r}"
+    )
+    assert result.stderr.strip() != "", (
+        "Expected stderr to contain df output, but it was empty"
+    )
