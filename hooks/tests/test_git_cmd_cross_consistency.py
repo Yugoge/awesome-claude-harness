@@ -514,6 +514,29 @@ def test_corpus_expected_outcomes_are_explicit():
         )
 
 
+def test_nondivergent_entries_agree():
+    """Core RISK-2 assertion: corpus entries without xfail must agree across all three mechanisms.
+
+    A non-xfail row with inconsistent expected values (e.g. bash=True, python=True,
+    classifier=False) would mean the test silently accepts a known mechanism disagreement
+    without flagging it. This sanity test catches that authoring error.
+    """
+    violations = []
+    for cmd, exp_bash, exp_python, exp_cls, xfail_reason, label in CORPUS:
+        if xfail_reason is not None:
+            # Accepted divergence — the xfail annotation is the explicit acknowledgement.
+            continue
+        if not (exp_bash == exp_python == exp_cls):
+            violations.append(
+                f"  {label!r}: bash={exp_bash}, python={exp_python}, classifier={exp_cls}"
+            )
+    assert not violations, (
+        "Non-xfail corpus entries must have identical expected values for all three "
+        "mechanisms (RISK-2). Disagreeing rows must be marked xfail with a reason:\n"
+        + "\n".join(violations)
+    )
+
+
 def test_regex_patterns_are_extractable():
     """Sanity: both regex patterns could be extracted at module load time."""
     assert BASH_GIT_CMD_RE_STR, "GIT_CMD_RE extraction returned empty string"
