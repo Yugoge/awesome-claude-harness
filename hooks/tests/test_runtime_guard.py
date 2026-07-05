@@ -4109,7 +4109,7 @@ class TestCycle16FlagCollisionMutationTargetClass:
 
     # ── purity: the verb-aware fix introduces NO project name into the engine ───
     def test_engine_still_project_name_free(self):
-        src = open(os.path.join(HOOKS_DIR, "lib", "runtime_guard.py")).read()
+        src = open(os.path.join(HOOKS_DIR, "lib", "runtime_guard", "_core.py")).read()
         for name in ("happy", "jade", "qijie", "life-ai", "slopus", "local-server"):
             assert name not in src.lower(), f"engine must stay project-name-free: {name!r}"
 
