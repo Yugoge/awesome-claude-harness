@@ -5,10 +5,14 @@
 # above (AC_UID, AC_TYPE, docstring) MUST be preserved verbatim so QA can
 # trace each test back to its source AC entry.
 
-import pytest
+import json
+import subprocess
 
 AC_UID = "f11a1b2c3d4e5f60"
 AC_TYPE = "unit_test"
+
+REPO = "/dev/shm/dev-workspace/dot-claude"
+SAFETY = f"{REPO}/hooks/pretool-bash-safety.sh"
 
 
 def test_AC_F11():
@@ -17,7 +21,23 @@ def test_AC_F11():
     WHEN:  a multi-line Bash-tool payload such as "printf 'line1\\ngit push --force'" is processed — COMMAND_CONTEXT_STRIPPED strips the non-executable git reference (the quoted body) before the classifier subprocess is reached
     THEN:  the classifier subprocess either is not invoked (prefilter finds no git token in COMMAND_CONTEXT_STRIPPED) or receives only the stripped, executable-context command — the embedded git push --force does NOT trigger a false positive block
     """
-    # TODO(dev): replace the line below with the real test body. While the
-    # TEST_INCOMPLETE sentinel is present the test will hard-fail, marking
-    # the AC as unimplemented for QA Phase 5.
-    pytest.fail(f"TEST_INCOMPLETE: {AC_UID} — multi-line embedded git push --force no false positive via COMMAND_CONTEXT_STRIPPED")
+    # The command is printf with a quoted body containing git push --force.
+    # After context stripping, the quoted body is removed; the classifier
+    # receives only "printf " (no git token) → no block.
+    command = "printf 'line1\\ngit push --force'"
+    payload = json.dumps({
+        "tool_name": "Bash",
+        "tool_input": {"command": command},
+        "agent_id": "test-subagent",
+    })
+    result = subprocess.run(
+        ["bash", SAFETY],
+        input=payload,
+        capture_output=True,
+        text=True,
+        cwd=REPO,
+    )
+    assert result.returncode != 2, (
+        f"printf with embedded 'git push --force' in quoted body should NOT be blocked "
+        f"(false positive). Got exit {result.returncode}\nstderr: {result.stderr}"
+    )
