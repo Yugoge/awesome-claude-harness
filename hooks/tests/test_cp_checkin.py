@@ -287,7 +287,7 @@ def test_ac10a_malformed_stdin(tmp_path):
 
 
 def test_ac10b_missing_tool_name(tmp_path):
-    rc = _run_hook(tmp_path, {"tool_input": {"file_path": "/tmp/anything"},
+    rc = _run_hook(tmp_path, {"tool_input": {"file_path": str(tmp_path / "anything")},
                                "agent_id": "x"})
     _assert_no_traceback(rc, "AC10b")
 
