@@ -190,6 +190,8 @@ CLAUDE_PUSH_COMMAND_ACTIVE=1 git push
 
 That is the whole philosophy in miniature: the model is *encouraged* toward the right path and *physically prevented* from the wrong one — and when it is prevented, the evidence is left on disk.
 
+**The success path for the same push:** the `/push` command writes a nonce-keyed grant file to `/tmp/claude-push-grant-<sid>-<nonce>.json` carrying the expected branch name, expected HEAD SHA, and target remote. The privilege-guard locates this file by glob, validates those three fields against the current git state, and only then allows the `git push` to execute — consuming (unlinking) the grant immediately so it cannot be reused. A bare `git push` without this grant is blocked the same way as the inline-env injection above.
+
 ---
 
 ## The git protection kernel
