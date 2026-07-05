@@ -488,7 +488,12 @@ Each row maps to a capability in the Dependencies table above, so you can see at
 └── docs/              # architecture, incidents, references, design philosophy, codex research
 ```
 
-**Core vs. optional:** the kernel of the harness — the files that must be present for the security guardrails to engage — is exactly `settings.json` (wires all hooks) + `hooks/` (the gate layer) + `scripts/bootstrap` + `hooks/lib/` (shared resolver, allowlist, checkpoint). Everything else is an advisor or convenience: `agents/` and `commands/` define the orchestration behaviors but are not security-critical; `skills/`, `schemas/`, `policies/`, `templates/`, and `tests/` are optional layers that enrich or verify the pipeline. You can remove any optional directory and the security kernel continues to operate — though the `/dev` pipeline will be degraded without `agents/` and the grant-gated release path needs `scripts/`.
+**Core vs. optional:** There are two levels of "required":
+
+- **Git mutation kernel minimum** (security guardrails engage): `settings.json` (wires all hooks) + `hooks/` (the gate layer) + `scripts/bootstrap` + `hooks/lib/` (shared resolver, allowlist, checkpoint). Without these, hooks fail at import time and the kernel is inactive.
+- **Full subagent + tool-policy security** (all role-based deny rules active): everything above **plus** `policies/` (contains `tool-policy.v1.json`). Without `policies/`, the pretool-tool-policy gate fail-opens for the `dev` role; other roles fail-closed. If you want the full deny-rule matrix to engage, `policies/` is required.
+
+Everything else is an advisor or convenience: `agents/` and `commands/` define the orchestration behaviors but are not security-critical; `skills/`, `schemas/`, `templates/`, and `tests/` are optional layers that enrich or verify the pipeline. You can remove any optional directory and the security kernel continues to operate — though the `/dev` pipeline will be degraded without `agents/` and the grant-gated release path needs `scripts/`.
 
 A `PostToolUse` doc-sync hook keeps the `INDEX.md` files and the inventory block below current automatically; manual prose outside the `<!-- AUTO:… -->` markers is always preserved.
 
