@@ -38,7 +38,7 @@ def test_AC_F6():
     """
     for cmd in ["git status", "/usr/bin/git status"]:
         result = _run_safety(cmd)
-        assert result.returncode != 2, (
-            f"'{cmd}' should NOT be blocked by bash-safety, got exit {result.returncode}\n"
+        assert result.returncode == 0, (
+            f"'{cmd}' should exit 0 (not blocked), got exit {result.returncode}\n"
             f"stderr: {result.stderr}"
         )
