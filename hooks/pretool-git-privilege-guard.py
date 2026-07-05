@@ -792,22 +792,28 @@ def _evaluate_forbidden_plumbing(command, data):
 
 
 def _evaluate_command(command, data):
+    # Classify once: build invocations list for all _looks_like_* and _evaluate_* calls.
+    # iter_git_invocations uses token-aware parsing so path-qualified forms like
+    # /usr/bin/git are detected alongside bare 'git' (closes RISK-3 bypass).
+    invocations = list(iter_git_invocations(command))
+    if not invocations:
+        return
     # Fast path: if /allow grant matches for non-push commands, allow immediately.
     # Push is excluded: its allowlist check must come AFTER _push_has_forbidden_ref_mutation
     # (force-push must stay blocked even with a broad /allow grant).
-    if not _looks_like_git_push(command) and _check_git_allowlist(command, data):
+    if not _looks_like_git_push(invocations) and _check_git_allowlist(command, data):
         return
-    if _looks_like_git_forbidden_plumbing(command):
+    if _looks_like_git_forbidden_plumbing(invocations):
         _evaluate_forbidden_plumbing(command, data)
-    if _looks_like_git_reset_hard(command):
-        _evaluate_reset_hard(command, data)
-    if _looks_like_git_direct_ref_mutation(command):
+    if _looks_like_git_reset_hard(invocations):
+        _evaluate_reset_hard(command, invocations, data)
+    if _looks_like_git_direct_ref_mutation(invocations):
         _evaluate_direct_ref_mutation(command, data)
-    if _looks_like_git_push(command):
-        _evaluate_push(command, data)
-    if _looks_like_git_merge(command):
+    if _looks_like_git_push(invocations):
+        _evaluate_push(command, invocations, data)
+    if _looks_like_git_merge(invocations):
         _evaluate_merge(command, data)
-    if _looks_like_git_commit(command):
+    if _looks_like_git_commit(invocations):
         _evaluate_commit(command, data)
 
 
