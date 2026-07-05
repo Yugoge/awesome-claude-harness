@@ -26,6 +26,8 @@ It is not a prompt pack. It is an operating system for agents — with a schedul
 
 ## Quickstart
 
+**Prerequisites:** Python 3, `git`, and `jq` must be installed before cloning. Run `python3 --version && git --version && jq --version` to verify.
+
 ```bash
 # (optional) back up any existing ~/.claude config first:
 # mv ~/.claude ~/.claude.bak-"$(date +%Y%m%d-%H%M%S)"
@@ -40,9 +42,34 @@ git clone https://github.com/Yugoge/awesome-claude-harness.git ~/.claude
 claude
 ```
 
-> Full setup details, optional doctor preflight, and the dependency matrix are in the [Quickstart](#quickstart) section below.
+**Live demo (no Claude Code required):**
 
-<!-- TODO: Add terminal GIF demo here — see examples/guard-demo/run-demo.sh -->
+```text
+Harness home (live):  /dev/shm/dev-workspace/dot-claude
+Demo home (ephemeral): /tmp/guard-demo.musmSu/dot-claude
+Shared resolver resolved the demo home by structural sentinel (basename 'dot-claude', not '.claude').
+
+=== STEP 1 — attempt a DANGEROUS operation (must be BLOCKED) ===
+An agent (role: dev) attempts to write to a protected target:
+  /tmp/guard-demo.musmSu/dot-claude/work/DEMO-FORBIDDEN-overwrite-a-guard.txt
+BLOCKED (exit 2) by the guard, fail-closed:
+  BLOCKED by tool-policy.v1: {"role":"dev","tool":"Write","target":"...DEMO-FORBIDDEN...","deny_reason":"write target matches deny rule"}
+
+=== STEP 2 — apply a properly-AUTHORIZED fix (must be ALLOWED) ===
+The same agent now performs the authorized, in-scope fix:
+  /tmp/guard-demo.musmSu/dot-claude/work/fix-applied.txt
+ALLOWED (exit 0) by the guard — the operation is within policy.
+
+=== STEP 3 — the authorized fix COMPLETES ===
+Fix write landed on disk:
+  /tmp/guard-demo.musmSu/dot-claude/work/fix-applied.txt -> guard demo: fix applied after grant-gated authorization
+
+=== RESULT ===
+PASS — dangerous op BLOCKED (exit 2), then grant-gated fix COMPLETED (exit 0 + write landed).
+Re-run this script under any non-root $HOME for the same deterministic result.
+```
+
+Run it yourself: `bash examples/guard-demo/run-demo.sh`
 
 ---
 
