@@ -743,6 +743,37 @@ if [ -r "$HOOKS_DIR_CTX/lib/bash_context_strip.py" ]; then
   unset _ctx_out _ctx_status
 fi
 
+# ── Path-qualified git classifier (RISK-3 closure, 2026-07-05) ────────────
+# Detects /usr/bin/git, ./git and other path-qualified git invocations that
+# the bare GIT_CMD_RE anchor class [[:space:];&|()`] misses (missing '/').
+# Run ONCE here; reused by all danger-git blocks below.
+# Uses COMMAND_CONTEXT_STRIPPED (normalized) NOT raw $COMMAND to avoid
+# false positives from quoted git references in echo/printf/heredoc bodies.
+# Prefilter: skip subprocess if no 'git' token in normalized command.
+CLASSIFIER_HAS_PATH_QUALIFIED_GIT=0
+CLASSIFIER_JSON=''
+CLASSIFIER_PY="$(dirname "${BASH_SOURCE[0]}")/lib/git_command_classifier.py"
+if printf '%s\n' "$COMMAND_CONTEXT_STRIPPED" | grep -q 'git' && [ -r "$CLASSIFIER_PY" ]; then
+  CLASSIFIER_JSON=$(printf '%s\n' "$COMMAND_CONTEXT_STRIPPED" | \
+    "$PYTHON_BIN" "$CLASSIFIER_PY" 2>/dev/null)
+  if printf '%s\n' "$CLASSIFIER_JSON" | grep -q '"path_qualified": true'; then
+    CLASSIFIER_HAS_PATH_QUALIFIED_GIT=1
+  fi
+fi
+# Helper: check whether the classifier found a path-qualified invocation with
+# the given subcommand token.  Usage: _pq_git_has_subcmd reset
+_pq_git_has_subcmd() {
+  local sub="$1"
+  printf '%s\n' "$CLASSIFIER_JSON" | grep -q '"path_qualified": true' && \
+  printf '%s\n' "$CLASSIFIER_JSON" | grep -q "\"subcommand\": \"$sub\""
+}
+# Helper: check whether ANY classifier invocation (bare or path-qualified)
+# has the given subcommand.  Usage: _any_git_has_subcmd push
+_any_git_has_subcmd() {
+  local sub="$1"
+  printf '%s\n' "$CLASSIFIER_JSON" | grep -q "\"subcommand\": \"$sub\""
+}
+
 # Entry gate: protected path mention. Uses TWO grep -F substring matches
 # (item 5 fix, task 20260526-053746 AC-05/AC-05b) to match BOTH literal session-id
 # paths AND glob forms (*, ?, [abc], [!abc]) — POSIX shell-glob bracket syntax.
