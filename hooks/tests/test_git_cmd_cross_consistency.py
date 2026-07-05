@@ -510,19 +510,51 @@ def test_regex_patterns_are_extractable():
 def test_bash_and_python_patterns_agree_on_anchor():
     """The two raw regex patterns share equivalent anchor semantics.
 
-    Both start with an anchor that allows start-of-string or a set of
+    Both start with a group anchor that allows start-of-string or a set of
     shell separator/operator characters. Verify the anchor character sets
     are functionally equivalent (both include ; & | ( ` and whitespace).
     """
-    bash_anchor = re.search(r'^\(', BASH_GIT_CMD_RE_STR)
-    python_anchor = re.search(r'^\(', PYTHON_GIT_COMMAND_RE_STR)
-    assert bash_anchor, "BASH GIT_CMD_RE does not start with a '(' group"
-    assert python_anchor, "PYTHON GIT_COMMAND_RE does not start with a '(' group"
+    assert BASH_GIT_CMD_RE_STR.startswith('('), (
+        "BASH GIT_CMD_RE does not start with a '(' group"
+    )
+    assert PYTHON_GIT_COMMAND_RE_STR.startswith('('), (
+        "PYTHON GIT_COMMAND_RE does not start with a '(' group"
+    )
 
     # Both patterns must recognise 'git status' at the start of a string
-    assert _bash_matches("git status"), "Bash pattern must match 'git status' at start of string"
-    assert _python_matches("git status"), "Python pattern must match 'git status' at start of string"
+    assert _bash_matches("git status"), (
+        "Bash GIT_CMD_RE must match 'git status' at start of string"
+    )
+    assert _python_matches("git status"), (
+        "Python GIT_COMMAND_RE must match 'git status' at start of string"
+    )
 
     # Both patterns must recognise 'git' after a semicolon
-    assert _bash_matches("; git status"), "Bash pattern must match after ;"
-    assert _python_matches("; git status"), "Python pattern must match after ;"
+    assert _bash_matches("; git status"), (
+        "Bash GIT_CMD_RE must match 'git' after ';'"
+    )
+    assert _python_matches("; git status"), (
+        "Python GIT_COMMAND_RE must match 'git' after ';'"
+    )
+
+    # Both patterns must recognise 'git' after '&&' (& is in anchor set)
+    assert _bash_matches("foo && git status"), (
+        "Bash GIT_CMD_RE must match 'git' after '&&'"
+    )
+    assert _python_matches("foo && git status"), (
+        "Python GIT_COMMAND_RE must match 'git' after '&&'"
+    )
+
+    # Neither pattern must match path-qualified /usr/bin/git at start (documented limitation)
+    assert not _bash_matches("/usr/bin/git status"), (
+        "Bash GIT_CMD_RE must NOT match /usr/bin/git at start of string "
+        "(anchor omits '/'; classifier compensates at runtime)"
+    )
+    assert not _python_matches("/usr/bin/git status"), (
+        "Python GIT_COMMAND_RE must NOT match /usr/bin/git at start of string "
+        "(anchor omits '/'; classifier compensates at runtime)"
+    )
+
+    # Neither must match 'gitk' (different basename)
+    assert not _bash_matches("gitk"), "Bash GIT_CMD_RE must NOT match 'gitk'"
+    assert not _python_matches("gitk"), "Python GIT_COMMAND_RE must NOT match 'gitk'"
