@@ -236,13 +236,14 @@ CORPUS = [
         None,
         "git add all",
     ),
-    # 'git' alone (no subcommand): regex requires trailing whitespace, misses it.
-    # Classifier yields GitInvocation(subcommand=None). Known divergence -- documented,
-    # no xfail needed (the expected values are accurate and the test passes).
+    # 'git' alone (no subcommand): regex requires trailing whitespace after subcommand,
+    # so bare 'git' with no following token does not match either regex.
+    # Classifier yields GitInvocation(subcommand=None). Marked xfail: the three
+    # mechanisms disagree here by design; the classifier is the only one that fires.
     (
         "git",
         False, False, True,
-        None,
+        "regex requires trailing \\s+ after subcommand; bare 'git' with no subcommand never matches regex but classifier yields GitInvocation(subcommand=None)",
         "bare git no subcommand -- regex misses, classifier detects (documented divergence)",
     ),
     # git -C /some/path status (global option)
