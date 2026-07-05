@@ -5,10 +5,19 @@
 # above (AC_UID, AC_TYPE, docstring) MUST be preserved verbatim so QA can
 # trace each test back to its source AC entry.
 
-import pytest
+import json
+import subprocess
 
 AC_UID = "f8a1b2c3d4e5f601"
 AC_TYPE = "hook"
+
+REPO = "/dev/shm/dev-workspace/dot-claude"
+BLOCK_HOOK = f"{REPO}/hooks/pretool-block-branch-pr-worktree.py"
+PAYLOAD = json.dumps({
+    "tool_name": "Bash",
+    "tool_input": {"command": "git checkout -b new-branch"},
+    "agent_id": "test-subagent",
+})
 
 
 def test_AC_F8():
@@ -17,7 +26,14 @@ def test_AC_F8():
     WHEN:  a branch-creation payload (e.g. 'git checkout -b new-branch') is fed to pretool-block-branch-pr-worktree.py
     THEN:  exit code is 2 (blocked) — behavior preserved after import refactor
     """
-    # TODO(dev): replace the line below with the real test body. While the
-    # TEST_INCOMPLETE sentinel is present the test will hard-fail, marking
-    # the AC as unimplemented for QA Phase 5.
-    pytest.fail(f"TEST_INCOMPLETE: {AC_UID} — block-branch-pr-worktree still blocks after primitive move to shared classifier")
+    result = subprocess.run(
+        ["python3", BLOCK_HOOK],
+        input=PAYLOAD,
+        capture_output=True,
+        text=True,
+        cwd=REPO,
+    )
+    assert result.returncode == 2, (
+        f"pretool-block-branch-pr-worktree.py expected exit 2 for 'git checkout -b', "
+        f"got {result.returncode}\nstderr: {result.stderr}"
+    )
