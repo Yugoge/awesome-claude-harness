@@ -2461,7 +2461,7 @@ class TestCycle9Step0ConfigSelfProtectionHeadAgnostic:
         # anchor, not a wrapper whitelist. (Real tools like busybox/fakeroot are
         # caught by the SAME generic mechanism; they are not asserted-absent
         # because a future engine comment could reference them illustratively.)
-        src = open(os.path.join(HOOKS_DIR, "lib", "runtime_guard.py")).read()
+        src = open(os.path.join(HOOKS_DIR, "lib", "runtime_guard", "_core.py")).read()
         for name in (self._INV, self._INV2):
             assert name not in src, f"engine must not enumerate wrapper {name!r}"
 
