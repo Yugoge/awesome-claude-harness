@@ -264,41 +264,43 @@ CORPUS = [
     # Path-qualified forms: regex anchor [[:space:];&|()`] omits '/', so regex
     # does NOT match /usr/bin/git or ./git at start of string. Classifier detects
     # via os.path.basename(token)=='git'. bash-safety.sh compensates at runtime
-    # via CLASSIFIER_HAS_PATH_QUALIFIED_GIT. Expected: regex=False, cls=True.
+    # via CLASSIFIER_HAS_PATH_QUALIFIED_GIT. Marked xfail: the three mechanisms
+    # disagree here by design (RISK-3 domain); runtime safety is achieved via the
+    # two-layer architecture (classifier augments the regex in bash-safety.sh).
     (
         "/usr/bin/git commit -m 'msg'",
         False, False, True,
-        None,
+        "RISK-3: regex anchor [[:space:];&|()`] omits '/', classifier detects via basename; bash-safety.sh compensates at runtime via CLASSIFIER_HAS_PATH_QUALIFIED_GIT",
         "path-qualified /usr/bin/git commit",
     ),
     (
         "/usr/bin/git reset --hard",
         False, False, True,
-        None,
+        "RISK-3: regex anchor [[:space:];&|()`] omits '/', classifier detects via basename; bash-safety.sh compensates at runtime via CLASSIFIER_HAS_PATH_QUALIFIED_GIT",
         "path-qualified /usr/bin/git reset --hard",
     ),
     (
         "/usr/bin/git push --force",
         False, False, True,
-        None,
+        "RISK-3: regex anchor [[:space:];&|()`] omits '/', classifier detects via basename; bash-safety.sh compensates at runtime via CLASSIFIER_HAS_PATH_QUALIFIED_GIT",
         "path-qualified /usr/bin/git push --force",
     ),
     (
         "/usr/bin/git stash push",
         False, False, True,
-        None,
+        "RISK-3: regex anchor [[:space:];&|()`] omits '/', classifier detects via basename; bash-safety.sh compensates at runtime via CLASSIFIER_HAS_PATH_QUALIFIED_GIT",
         "path-qualified /usr/bin/git stash push",
     ),
     (
         "/usr/bin/git status",
         False, False, True,
-        None,
+        "RISK-3: regex anchor [[:space:];&|()`] omits '/', classifier detects via basename; bash-safety.sh compensates at runtime via CLASSIFIER_HAS_PATH_QUALIFIED_GIT",
         "path-qualified /usr/bin/git status",
     ),
     (
         "./git status",
         False, False, True,
-        None,
+        "RISK-3: regex anchor [[:space:];&|()`] omits '/', classifier detects via basename; bash-safety.sh compensates at runtime via CLASSIFIER_HAS_PATH_QUALIFIED_GIT",
         "relative-path ./git status",
     ),
     # ------------------------------------------------------------------
