@@ -34,8 +34,8 @@ def test_AC_F2():
         text=True,
         cwd=REPO,
     )
-    assert guard_result.returncode != 2, (
-        f"pretool-git-privilege-guard.py should NOT block echo command, got exit {guard_result.returncode}\n"
+    assert guard_result.returncode == 0, (
+        f"pretool-git-privilege-guard.py should exit 0 for echo command, got {guard_result.returncode}\n"
         f"stderr: {guard_result.stderr}"
     )
 
@@ -46,7 +46,7 @@ def test_AC_F2():
         text=True,
         cwd=REPO,
     )
-    assert safety_result.returncode != 2, (
-        f"pretool-bash-safety.sh should NOT block echo command, got exit {safety_result.returncode}\n"
+    assert safety_result.returncode == 0, (
+        f"pretool-bash-safety.sh should exit 0 for echo command, got {safety_result.returncode}\n"
         f"stderr: {safety_result.stderr}"
     )
