@@ -421,12 +421,20 @@ def _extract_commit_message(command):
     return ''
 
 
-def _extract_reset_target(command):
-    m = re.search(
-        GIT_COMMAND_RE + r"reset\s+(?:[^;|&]*?\s+)?--hard\s+([^\s;|&]+)",
-        command,
-    )
-    return m.group(1) if m else ''
+def _extract_reset_target(invocation):
+    """Extract the target ref from a reset --hard GitInvocation.
+
+    Returns the first non-flag positional arg after --hard, or ''.
+    """
+    args = invocation.args
+    try:
+        hard_idx = args.index('--hard')
+        for tok in args[hard_idx + 1:]:
+            if not tok.startswith('-'):
+                return tok
+    except ValueError:
+        pass
+    return ''
 
 
 def _is_head_ref(ref):
