@@ -703,12 +703,14 @@ def _block_missing_push_grant(sid):
     )
 
 
-def _evaluate_push(command, data):
+def _evaluate_push(command, invocations, data):
     sid = _get_session_id(data)
     # AC-A1: literal-substring inline-env injection (precedes env check).
     if _inline_env_present(command, 'CLAUDE_PUSH_COMMAND_ACTIVE'):
         _block_inline_env_push(command)
-    if _push_has_forbidden_ref_mutation(command):
+    # Find the push invocation for ref-mutation and remote checks.
+    push_inv = next((inv for inv in invocations if inv.subcommand == 'push'), None)
+    if push_inv and _push_has_forbidden_ref_mutation(push_inv):
         _block(
             '\nBLOCKED: agent git push - force/delete/ref-rewrite push is forbidden.\n'
             'Command excerpt: %s\n' % command[:200]
@@ -728,7 +730,7 @@ def _evaluate_push(command, data):
     # AC-A7 + AC-A6: branch / head / remote binding.
     _validate_push_grant_branch(grant)
     _validate_push_grant_head(grant)
-    _validate_push_grant_remote(grant, command)
+    _validate_push_grant_remote(grant, push_inv)
     # All validations passed.  Consume grant (single-use), then allow.
     _unlink_grant(grant_path)
 
