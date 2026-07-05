@@ -5,10 +5,14 @@
 # above (AC_UID, AC_TYPE, docstring) MUST be preserved verbatim so QA can
 # trace each test back to its source AC entry.
 
-import pytest
+import os
+import subprocess
+import tempfile
 
 AC_UID = "a1b2c3d4e5f6e6b0"
 AC_TYPE = "hook"
+
+HOOK = "/dev/shm/dev-workspace/dot-claude/hooks/session-gitignore-propagate.sh"
 
 
 def test_AC_E6b():
@@ -17,7 +21,35 @@ def test_AC_E6b():
     WHEN:  hooks/session-gitignore-propagate.sh runs with CLAUDE_PROJECT_DIR set to the temp repo
     THEN:  .gitignore byte content is identical before and after hook run AND hook exits 0
     """
-    # TODO(dev): replace the line below with the real test body. While the
-    # TEST_INCOMPLETE sentinel is present the test will hard-fail, marking
-    # the AC as unimplemented for QA Phase 5.
-    pytest.fail(f"TEST_INCOMPLETE: {AC_UID} — gitignore-propagate no marker: no change, exits 0")
+    with tempfile.TemporaryDirectory() as tmpdir:
+        # Init git repo
+        subprocess.run(["git", "init", tmpdir], capture_output=True, check=True)
+        # Create .claude/ dir (no marker file)
+        os.makedirs(os.path.join(tmpdir, ".claude"))
+        # Create .gitignore
+        gitignore_path = os.path.join(tmpdir, ".gitignore")
+        original_content = "*.pyc\n__pycache__/\n"
+        with open(gitignore_path, "w") as f:
+            f.write(original_content)
+
+        env = os.environ.copy()
+        env["CLAUDE_PROJECT_DIR"] = tmpdir
+        result = subprocess.run(
+            ["bash", HOOK],
+            capture_output=True,
+            text=True,
+            cwd=tmpdir,
+            env=env,
+        )
+
+        assert result.returncode == 0, (
+            f"Expected exit 0, got {result.returncode}\nstderr: {result.stderr}"
+        )
+
+        with open(gitignore_path) as f:
+            after_content = f.read()
+
+        assert after_content == original_content, (
+            f".gitignore was modified when it should not have been.\n"
+            f"Before: {original_content!r}\nAfter: {after_content!r}"
+        )
