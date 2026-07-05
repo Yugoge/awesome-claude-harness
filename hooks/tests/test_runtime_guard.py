@@ -1485,7 +1485,7 @@ class TestCycle5AnchorBasedHeadAgnostic:
     def test_w5_frontends_absent_from_engine(self):
         # PROOF the detection is NOT enumeration-based: these front-end names do
         # NOT appear anywhere in the engine source, yet they all BLOCK above.
-        engine = os.path.join(HOOKS_DIR, "lib", "runtime_guard.py")
+        engine = os.path.join(HOOKS_DIR, "lib", "runtime_guard", "_core.py")
         src = open(engine, encoding="utf-8").read()
         for name in ("numactl", "tini", "dumb-init", "dumb_init", "ssh-agent",
                      "ssh_agent", "catchsegv", "torsocks", "quxwrap",
