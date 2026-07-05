@@ -89,12 +89,16 @@ settings.json.bak-*
 
 # Harness-generated output (transient per-cycle; not for version control)
 # tests/generated/ bulk-untracked; only 20260704-134650 and 20260704-225139 retained
-tests/generated/
+# (ignore children, not parent dir — git negations cannot re-include children of an ignored dir)
+tests/generated/*
 !tests/generated/20260704-134650/
+!tests/generated/20260704-134650/**
 !tests/generated/20260704-225139/
+!tests/generated/20260704-225139/**
 # _work/ is pytest RUNTIME SCRATCH (ac_harness.py WORKBASE; recreated every run,
 # incl. nested throwaway git repos) and must NEVER be committed for any task
 tests/generated/*/_work/
+tests/generated/*/_work/**
 docs/codex/
 .playwright-mcp/
 
