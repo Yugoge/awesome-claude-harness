@@ -12,5 +12,6 @@ import sys
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _core_path = os.path.join(_HERE, "runtime_guard", "_core.py")
 
-# Replace this process with _core.py, passing all args and environment through.
-os.execv(sys.executable, [sys.executable, _core_path] + sys.argv[1:])
+if __name__ == "__main__":
+    # Replace this process with _core.py, passing all args and environment through.
+    os.execv(sys.executable, [sys.executable, _core_path] + sys.argv[1:])
