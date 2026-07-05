@@ -43,7 +43,7 @@ def test_AC_F10():
     """
     for cmd in NOT_BLOCKED:
         result = _run_safety(cmd)
-        assert result.returncode != 2, (
-            f"'{cmd}' should NOT be blocked (echo is command head), "
+        assert result.returncode == 0, (
+            f"'{cmd}' should exit 0 (echo is command head, not blocked), "
             f"got exit {result.returncode}\nstderr: {result.stderr}"
         )
