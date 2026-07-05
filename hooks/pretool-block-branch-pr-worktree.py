@@ -97,6 +97,10 @@ from lib.allowlist import (  # noqa: E402
     match_sentinel_grant_for_bash_command,
 )
 from lib.overnight import is_overnight_active  # noqa: E402
+from lib.git_command_classifier import (  # noqa: E402
+    _segments, _basename, _WRAPPERS, _ENV_ASSIGN_RE,
+    _command_token_index, _GIT_GLOBAL_VALUE, _git_subcommand,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -110,98 +114,6 @@ def _norm(command):
         except Exception:
             return command
     return command
-
-
-def _segments(c):
-    """Split on shell separators ; \n | & && || ` ( ) into command segments.
-
-    Parens open a new command segment in exactly THREE cases, all of which put
-    an embedded command into command position:
-      1. command-substitution / process-substitution introducers `$(`, `<(`, `>(`
-         — the text after the opener is a command (e.g. `echo $(git checkout -b
-         x)` must classify the inner `git checkout -b x`).
-      2. a real subshell `(` in command position (the current buffer is empty or
-         all whitespace), e.g. `(git checkout -b x)`.
-    A matching `)` only closes a boundary we actually opened (depth-tracked).
-    This avoids shredding argument-internal parens such as a git
-    `--format %(refname)` / `--format=%(refname)` spec, whose `%(`/`)` are part of
-    a single argument token (the `(` is preceded by `%`, not `$`/`<`/`>`, and is
-    not in command position) — splitting those would orphan a trailing positional
-    branch name (e.g. `git branch --format %(refname) nb`) into a segment without
-    `git branch`, defeating creation detection (the dangerous under-block
-    direction). Backtick substitution is split via the `` ` `` separator below.
-    """
-    out, buf, i, n = [], [], 0, len(c)
-    subshell_depth = 0
-
-    def _buf_is_cmd_position():
-        return all(ch.isspace() for ch in buf)
-
-    while i < n:
-        two = c[i:i + 2]
-        if two in ('&&', '||'):
-            out.append(''.join(buf)); buf = []; i += 2; continue
-        # Command/process substitution introducers open a command boundary; the
-        # introducer char (`$`/`<`/`>`) is dropped from the outer segment.
-        if two in ('$(', '<(', '>('):
-            subshell_depth += 1
-            out.append(''.join(buf)); buf = []; i += 2; continue
-        ch = c[i]
-        if ch in ';\n|&`':
-            out.append(''.join(buf)); buf = []; i += 1; continue
-        if ch == '(' and _buf_is_cmd_position():
-            subshell_depth += 1
-            out.append(''.join(buf)); buf = []; i += 1; continue
-        if ch == ')' and subshell_depth > 0:
-            subshell_depth -= 1
-            out.append(''.join(buf)); buf = []; i += 1; continue
-        buf.append(ch); i += 1
-    out.append(''.join(buf))
-    return out
-
-
-def _basename(tok):
-    return tok.rsplit('/', 1)[-1]
-
-
-# Command WRAPPERS that prefix the real command token (basename match). The real
-# command token is the first token after skipping leading env-var assignments
-# (NAME=VALUE) and any of these wrappers. Only that one command token is
-# classified — text that merely mentions git/gh later in the segment (e.g.
-# `echo gh pr new`) is therefore NOT a creation.
-_WRAPPERS = {
-    'sudo', 'doas', 'env', 'xargs', 'time', 'nohup', 'setsid', 'stdbuf',
-    'ionice', 'command', 'builtin', 'nice',
-}
-
-_ENV_ASSIGN_RE = re.compile(r'^[A-Za-z_][A-Za-z0-9_]*=')
-
-
-def _command_token_index(toks):
-    """Return the index of the segment's COMMAND token, or None.
-
-    Skips leading env-var assignments (NAME=VALUE) and known command wrappers
-    (basename match). Returns the index of the first real command token.
-    """
-    i = 0
-    n = len(toks)
-    while i < n:
-        t = toks[i]
-        if _ENV_ASSIGN_RE.match(t):
-            i += 1
-            continue
-        if _basename(t) in _WRAPPERS:
-            i += 1
-            continue
-        return i
-    return None
-
-
-# git global options that consume a separate following value token.
-_GIT_GLOBAL_VALUE = {
-    '-C', '-c', '--git-dir', '--work-tree', '--namespace',
-    '--exec-path', '--super-prefix', '--config-env',
-}
 
 
 def _git_subcommand(args):
