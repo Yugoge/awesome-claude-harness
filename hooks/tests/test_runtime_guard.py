@@ -2854,7 +2854,7 @@ class TestCycle11CommandWordLaunchHeadAgnostic:
 
     # ── non-enumeration proof: invented wrappers absent from the engine source ───
     def test_no_wrapper_enumeration(self):
-        src = open(os.path.join(HOOKS_DIR, "lib", "runtime_guard.py")).read()
+        src = open(os.path.join(HOOKS_DIR, "lib", "runtime_guard", "_core.py")).read()
         for name in (self._REAL, self._REAL2, self._REAL3, self._INV, self._INV2):
             assert name not in src, f"engine must not enumerate wrapper {name!r}"
 
