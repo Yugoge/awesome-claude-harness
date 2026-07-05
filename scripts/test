@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+# Run all tests, excluding generated test snapshots
+set -e
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
+VENV="$PROJECT_ROOT/venv"
+
+if [[ -f "$VENV/bin/activate" ]]; then
+  source "$VENV/bin/activate"
+else
+  echo "ERROR: venv not found at $VENV. Run scripts/bootstrap first." >&2
+  exit 1
+fi
+
+cd "$PROJECT_ROOT"
+exec python3 -m pytest hooks/tests tests -q --ignore=tests/generated "$@"

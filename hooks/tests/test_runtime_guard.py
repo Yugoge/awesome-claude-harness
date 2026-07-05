@@ -1485,7 +1485,7 @@ class TestCycle5AnchorBasedHeadAgnostic:
     def test_w5_frontends_absent_from_engine(self):
         # PROOF the detection is NOT enumeration-based: these front-end names do
         # NOT appear anywhere in the engine source, yet they all BLOCK above.
-        engine = os.path.join(HOOKS_DIR, "lib", "runtime_guard.py")
+        engine = os.path.join(HOOKS_DIR, "lib", "runtime_guard", "_core.py")
         src = open(engine, encoding="utf-8").read()
         for name in ("numactl", "tini", "dumb-init", "dumb_init", "ssh-agent",
                      "ssh_agent", "catchsegv", "torsocks", "quxwrap",
@@ -2461,7 +2461,7 @@ class TestCycle9Step0ConfigSelfProtectionHeadAgnostic:
         # anchor, not a wrapper whitelist. (Real tools like busybox/fakeroot are
         # caught by the SAME generic mechanism; they are not asserted-absent
         # because a future engine comment could reference them illustratively.)
-        src = open(os.path.join(HOOKS_DIR, "lib", "runtime_guard.py")).read()
+        src = open(os.path.join(HOOKS_DIR, "lib", "runtime_guard", "_core.py")).read()
         for name in (self._INV, self._INV2):
             assert name not in src, f"engine must not enumerate wrapper {name!r}"
 
@@ -2609,7 +2609,7 @@ class TestCycle10MoveSourceMutationUnified:
 
     # ── non-enumeration proof: invented wrappers absent from the engine source ─
     def test_no_wrapper_enumeration(self):
-        src = open(os.path.join(HOOKS_DIR, "lib", "runtime_guard.py")).read()
+        src = open(os.path.join(HOOKS_DIR, "lib", "runtime_guard", "_core.py")).read()
         for name in (self._INV, self._INV2):
             assert name not in src, f"engine must not enumerate wrapper {name!r}"
 
@@ -2854,7 +2854,7 @@ class TestCycle11CommandWordLaunchHeadAgnostic:
 
     # ── non-enumeration proof: invented wrappers absent from the engine source ───
     def test_no_wrapper_enumeration(self):
-        src = open(os.path.join(HOOKS_DIR, "lib", "runtime_guard.py")).read()
+        src = open(os.path.join(HOOKS_DIR, "lib", "runtime_guard", "_core.py")).read()
         for name in (self._REAL, self._REAL2, self._REAL3, self._INV, self._INV2):
             assert name not in src, f"engine must not enumerate wrapper {name!r}"
 
@@ -4109,7 +4109,7 @@ class TestCycle16FlagCollisionMutationTargetClass:
 
     # ── purity: the verb-aware fix introduces NO project name into the engine ───
     def test_engine_still_project_name_free(self):
-        src = open(os.path.join(HOOKS_DIR, "lib", "runtime_guard.py")).read()
+        src = open(os.path.join(HOOKS_DIR, "lib", "runtime_guard", "_core.py")).read()
         for name in ("happy", "jade", "qijie", "life-ai", "slopus", "local-server"):
             assert name not in src.lower(), f"engine must stay project-name-free: {name!r}"
 
@@ -4292,7 +4292,7 @@ class TestCycle16CodexFollowup:
 
     # purity: the codex fix introduces NO project name into the engine.
     def test_engine_still_project_name_free(self):
-        src = open(os.path.join(HOOKS_DIR, "lib", "runtime_guard.py")).read().lower()
+        src = open(os.path.join(HOOKS_DIR, "lib", "runtime_guard", "_core.py")).read().lower()
         for name in ("happy", "jade", "qijie", "life-ai", "slopus", "local-server"):
             assert name not in src, f"engine must stay project-name-free: {name!r}"
 

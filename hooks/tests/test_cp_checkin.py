@@ -1,10 +1,9 @@
-#!/usr/bin/env python3
-"""Tests for pretool-cp-checkin.py and .claude/scripts/spec-check.py covering ACs 1-10
+"""Tests for pretool-cp-checkin.py and scripts/spec-check.py covering ACs 1-10
 of ba-spec-20260427-194324.md (P1 view-trigger removal + P2 generation field).
 
 Each test runs the hook or spec-check.py as a subprocess with synthesized
-stdin JSON and CLAUDE_PROJECT_DIR pointed at a tempfile.TemporaryDirectory.
-Tests do NOT mutate live /root/.claude/specs/* files. No external framework.
+stdin JSON and CLAUDE_PROJECT_DIR pointed at a tmp_path directory.
+Tests do NOT mutate live specs files. Uses idiomatic pytest fixtures.
 """
 
 from __future__ import annotations
@@ -12,14 +11,12 @@ from __future__ import annotations
 import json
 import os
 import subprocess
-import sys
-import tempfile
 import threading
 from pathlib import Path
 
 
-HOOK = Path("/root/.claude/hooks/pretool-cp-checkin.py")
-SPEC_CHECK = Path("/root/.claude/scripts/spec-check.py")
+HOOK = Path(__file__).parent.parent / "pretool-cp-checkin.py"
+SPEC_CHECK = Path(__file__).parent.parent.parent / "scripts" / "spec-check.py"
 
 
 # -------------------- helpers ---------------------
@@ -80,167 +77,155 @@ def _cp(cp_id, *, state="pending", waived_reason=None):
     }
 
 
-# -------------------- result tracking ---------------------
-
-RESULTS: list[tuple[str, bool, str]] = []
-
-
-def expect(label, ok, detail=""):
-    RESULTS.append((label, ok, detail))
-    print(f"{'PASS' if ok else 'FAIL'}  {label}" + (f": {detail}" if not ok else ""))
-
-
-def assert_no_traceback(label, rc):
-    expect(f"{label}.exit-0", rc.returncode == 0,
-           f"rc={rc.returncode} stderr={rc.stderr!r}")
-    expect(f"{label}.no-traceback", "Traceback" not in (rc.stderr or ""),
-           f"stderr={rc.stderr!r}")
+def _assert_no_traceback(rc, label=""):
+    assert rc.returncode == 0, (
+        f"{label} expected exit 0, got rc={rc.returncode} stderr={rc.stderr!r}"
+    )
+    assert "Traceback" not in (rc.stderr or ""), (
+        f"{label} unexpected traceback in stderr={rc.stderr!r}"
+    )
 
 
 # -------------------- AC1: view-file Read MUST be no-op ---------------------
 
-def _setup_ac1(td):
+def test_ac1_view_read_does_not_mutate(tmp_path):
     spec_id, agent = "spec-test-ac1", "ba"
-    cp_path = _make_cp_state(td, spec_id, agent, _baseline_payload(
+    cp_path = _make_cp_state(tmp_path, spec_id, agent, _baseline_payload(
         spec_id, agent, checkpoints=[_cp("cp-01", state="done")]))
-    view = td / "docs" / "dev" / "specs" / spec_id / "views" / f"{agent}.md"
+    view = tmp_path / "docs" / "dev" / "specs" / spec_id / "views" / f"{agent}.md"
     view.parent.mkdir(parents=True, exist_ok=True)
     view.write_text("# view", encoding="utf-8")
-    return cp_path, view
 
-
-def test_ac1_view_read_does_not_mutate(td):
-    cp_path, view = _setup_ac1(td)
     before = cp_path.read_bytes()
-    rc = _run_hook(td, {"tool_name": "Read",
-                        "tool_input": {"file_path": str(view)},
-                        "agent_id": "explore-aaaa"})
-    expect("AC1.exit-0", rc.returncode == 0, f"rc={rc.returncode}")
-    expect("AC1.cp-byte-identical", before == cp_path.read_bytes(),
-           "cp-state mutated by view-file Read; expected byte-identical")
+    rc = _run_hook(tmp_path, {"tool_name": "Read",
+                               "tool_input": {"file_path": str(view)},
+                               "agent_id": "explore-aaaa"})
+    assert rc.returncode == 0, f"AC1 expected exit 0, got rc={rc.returncode}"
+    assert before == cp_path.read_bytes(), (
+        "AC1: cp-state mutated by view-file Read; expected byte-identical"
+    )
 
 
 # -------------------- AC2: cp-state direct Read registers + preserves ---------------------
 
-def _setup_ac2(td):
+def test_ac2_direct_read_registers_and_preserves(tmp_path):
     spec_id, agent = "spec-test-ac2", "ba"
-    return _make_cp_state(td, spec_id, agent, _baseline_payload(
+    cp_path = _make_cp_state(tmp_path, spec_id, agent, _baseline_payload(
         spec_id, agent, generation=1,
         checkpoints=[_cp("cp-01", state="done"),
                      _cp("cp-02", state="waived-with-reason",
                          waived_reason="qa-asked-for-this")]))
 
-
-def test_ac2_direct_read_registers_and_preserves(td):
-    cp_path = _setup_ac2(td)
-    rc = _run_hook(td, {"tool_name": "Read",
-                        "tool_input": {"file_path": str(cp_path)},
-                        "agent_id": "real-abcd1234"})
-    assert_no_traceback("AC2", rc)
+    rc = _run_hook(tmp_path, {"tool_name": "Read",
+                               "tool_input": {"file_path": str(cp_path)},
+                               "agent_id": "real-abcd1234"})
+    _assert_no_traceback(rc, "AC2")
     after = _read_cp(cp_path)
-    expect("AC2.is_running", after.get("is_running") is True, str(after))
-    expect("AC2.agent_id", after.get("agent_id") == "real-abcd1234",
-           str(after.get("agent_id")))
+    assert after.get("is_running") is True, f"AC2: is_running not set: {after}"
+    assert after.get("agent_id") == "real-abcd1234", (
+        f"AC2: agent_id mismatch: {after.get('agent_id')!r}"
+    )
     cps = after["checkpoints"]
-    expect("AC2.cp-01-done", cps[0].get("state") == "done", str(cps[0]))
-    expect("AC2.cp-02-waived",
-           cps[1].get("state") == "waived-with-reason"
-           and cps[1].get("waived_reason") == "qa-asked-for-this", str(cps[1]))
+    assert cps[0].get("state") == "done", f"AC2: cp-01 not done: {cps[0]}"
+    assert (cps[1].get("state") == "waived-with-reason"
+            and cps[1].get("waived_reason") == "qa-asked-for-this"), (
+        f"AC2: cp-02 state/reason mismatch: {cps[1]}"
+    )
 
 
 # -------------------- AC3: dev-sentinel updates index ---------------------
 
-def test_ac3_dev_sentinel_updates_index(td):
+def test_ac3_dev_sentinel_updates_index(tmp_path):
     sid, agent = "dev-test-sid", "ba"
-    sentinel = td / ".claude" / "dev-registry" / sid / f"{agent}.json"
+    sentinel = tmp_path / ".claude" / "dev-registry" / sid / f"{agent}.json"
     sentinel.parent.mkdir(parents=True, exist_ok=True)
     sentinel.write_text("{}", encoding="utf-8")
-    rc = _run_hook(td, {"tool_name": "Read",
-                        "tool_input": {"file_path": str(sentinel)},
-                        "agent_id": "abc-real"})
-    assert_no_traceback("AC3", rc)
-    idx = td / ".claude" / "dev-registry" / "agent-index.json"
-    expect("AC3.index-exists", idx.exists(), "agent-index.json missing")
-    if idx.exists():
-        m = json.loads(idx.read_text(encoding="utf-8"))
-        entry = m.get("abc-real")
-        expect("AC3.mapping",
-               isinstance(entry, dict) and entry.get("agent_type") == agent and entry.get("dev_session_id") == sid,
-               str(m))
+
+    rc = _run_hook(tmp_path, {"tool_name": "Read",
+                               "tool_input": {"file_path": str(sentinel)},
+                               "agent_id": "abc-real"})
+    _assert_no_traceback(rc, "AC3")
+    idx = tmp_path / ".claude" / "dev-registry" / "agent-index.json"
+    assert idx.exists(), "AC3: agent-index.json missing"
+    m = json.loads(idx.read_text(encoding="utf-8"))
+    entry = m.get("abc-real")
+    assert isinstance(entry, dict), f"AC3: no entry for abc-real in index: {m}"
+    assert entry.get("agent_type") == agent, (
+        f"AC3: agent_type mismatch: {entry.get('agent_type')!r}"
+    )
+    assert entry.get("dev_session_id") == sid, (
+        f"AC3: dev_session_id mismatch: {entry.get('dev_session_id')!r}"
+    )
 
 
 # -------------------- AC4: SECOND ACTION protocol still works ---------------------
 
-def _check_one_agent_ac4(td, spec_id, agent):
-    cp_path = _make_cp_state(td, spec_id, agent, _baseline_payload(
-        spec_id, agent, generation=1, checkpoints=[_cp("cp-01")]))
-    rc = _run_hook(td, {"tool_name": "Read",
-                        "tool_input": {"file_path": str(cp_path)},
-                        "agent_id": f"id-{agent}"})
-    expect(f"AC4.{agent}.exit-0", rc.returncode == 0, f"rc={rc.returncode}")
-    after = _read_cp(cp_path)
-    expect(f"AC4.{agent}.registered",
-           after.get("is_running") is True
-           and after.get("agent_id") == f"id-{agent}", str(after))
-
-
-def test_ac4_second_action_still_registers(td):
+def test_ac4_second_action_still_registers(tmp_path):
     for agent in ("ba", "dev", "qa"):
-        _check_one_agent_ac4(td, "spec-test-ac4", agent)
+        cp_path = _make_cp_state(tmp_path, "spec-test-ac4", agent, _baseline_payload(
+            "spec-test-ac4", agent, generation=1, checkpoints=[_cp("cp-01")]))
+        rc = _run_hook(tmp_path, {"tool_name": "Read",
+                                   "tool_input": {"file_path": str(cp_path)},
+                                   "agent_id": f"id-{agent}"})
+        assert rc.returncode == 0, (
+            f"AC4.{agent}: expected exit 0, got rc={rc.returncode}"
+        )
+        after = _read_cp(cp_path)
+        assert after.get("is_running") is True and after.get("agent_id") == f"id-{agent}", (
+            f"AC4.{agent}: not registered: {after}"
+        )
 
 
 # -------------------- AC5: missing generation -> 1, no implicit reset ---------------------
 
-def _setup_ac5(td):
+def test_ac5_missing_generation_no_reset(tmp_path):
     spec_id, agent = "spec-test-ac5", "ba"
     payload = _baseline_payload(spec_id, agent,
                                 checkpoints=[_cp("cp-01", state="done")])
-    return _make_cp_state(td, spec_id, agent, payload)
+    cp_path = _make_cp_state(tmp_path, spec_id, agent, payload)
 
-
-def test_ac5_missing_generation_no_reset(td):
-    cp_path = _setup_ac5(td)
-    rc = _run_hook(td, {"tool_name": "Read",
-                        "tool_input": {"file_path": str(cp_path)},
-                        "agent_id": "id-ac5"})
-    assert_no_traceback("AC5", rc)
+    rc = _run_hook(tmp_path, {"tool_name": "Read",
+                               "tool_input": {"file_path": str(cp_path)},
+                               "agent_id": "id-ac5"})
+    _assert_no_traceback(rc, "AC5")
     after = _read_cp(cp_path)
-    expect("AC5.cp-01-still-done",
-           after["checkpoints"][0].get("state") == "done", str(after))
+    assert after["checkpoints"][0].get("state") == "done", (
+        f"AC5: cp-01 state changed: {after}"
+    )
     # OBJ-2: hook MUST NOT silently back-fill the generation field on rewrite.
-    expect("AC5.no-implicit-backfill", "generation" not in after,
-           f"generation field silently back-filled: {after!r}")
+    assert "generation" not in after, (
+        f"AC5: generation field silently back-filled: {after!r}"
+    )
 
 
 # -------------------- AC6: takeover inherits done states ---------------------
 
-def _setup_ac6(td):
+def test_ac6_takeover_inherits_done(tmp_path):
     spec_id, agent = "spec-test-ac6", "ba"
-    return _make_cp_state(td, spec_id, agent, _baseline_payload(
+    cp_path = _make_cp_state(tmp_path, spec_id, agent, _baseline_payload(
         spec_id, agent, generation=1, agent_id="prev-zzz", is_running=False,
         checkpoints=[_cp("cp-01", state="done"),
                      _cp("cp-02", state="done"),
                      _cp("cp-03", state="done")]))
 
-
-def test_ac6_takeover_inherits_done(td):
-    cp_path = _setup_ac6(td)
-    rc = _run_hook(td, {"tool_name": "Read",
-                        "tool_input": {"file_path": str(cp_path)},
-                        "agent_id": "next-bbb"})
-    assert_no_traceback("AC6", rc)
+    rc = _run_hook(tmp_path, {"tool_name": "Read",
+                               "tool_input": {"file_path": str(cp_path)},
+                               "agent_id": "next-bbb"})
+    _assert_no_traceback(rc, "AC6")
     after = _read_cp(cp_path)
-    expect("AC6.is_running", after.get("is_running") is True, str(after))
-    expect("AC6.agent_id", after.get("agent_id") == "next-bbb",
-           str(after.get("agent_id")))
+    assert after.get("is_running") is True, f"AC6: is_running not set: {after}"
+    assert after.get("agent_id") == "next-bbb", (
+        f"AC6: agent_id mismatch: {after.get('agent_id')!r}"
+    )
     states = [cp.get("state") for cp in after.get("checkpoints", [])]
-    expect("AC6.all-still-done", states == ["done", "done", "done"],
-           f"states={states!r}")
+    assert states == ["done", "done", "done"], (
+        f"AC6: done states not preserved: {states!r}"
+    )
 
 
 # -------------------- AC7: --bump-generation resets ---------------------
 
-def _setup_ac7(td):
+def test_ac7_bump_generation(tmp_path):
     spec_id, agent = "spec-test-ac7", "ba"
     payload = _baseline_payload(
         spec_id, agent, generation=1, agent_id="prev-zzz",
@@ -249,173 +234,130 @@ def _setup_ac7(td):
                          waived_reason="qa-blocked"),
                      _cp("cp-03", state="pending")])
     payload["updated_at"] = "2026-04-27T10:00:00Z"  # cp-state-level marker
-    return _make_cp_state(td, spec_id, agent, payload), spec_id, agent
+    cp_path = _make_cp_state(tmp_path, spec_id, agent, payload)
 
-
-def _assert_ac7_post(after):
-    expect("AC7.generation-2", after.get("generation") == 2,
-           f"generation={after.get('generation')!r}")
+    rc = _run_spec_check(tmp_path, ["check-in", "--spec-id", spec_id,
+                                     "--agent", agent, "--agent-id", "fresh-aaa",
+                                     "--bump-generation"])
+    _assert_no_traceback(rc, "AC7")
+    after = _read_cp(cp_path)
+    assert after.get("generation") == 2, (
+        f"AC7: expected generation=2, got {after.get('generation')!r}"
+    )
     states = [cp.get("state") for cp in after.get("checkpoints", [])]
-    expect("AC7.all-pending", states == ["pending"] * 3, str(states))
+    assert states == ["pending"] * 3, f"AC7: states not reset to pending: {states}"
     reasons = [cp.get("waived_reason") for cp in after.get("checkpoints", [])]
-    expect("AC7.reasons-cleared", reasons == [None, None, None], str(reasons))
-    expect("AC7.is_running", after.get("is_running") is True, "")
+    assert reasons == [None, None, None], (
+        f"AC7: waived_reasons not cleared: {reasons}"
+    )
+    assert after.get("is_running") is True, "AC7: is_running not set"
     # OBJ-3: cp-state-level updated marker refreshed on bump.
-    expect("AC7.cp-state-updated-refreshed",
-           after.get("updated_at") not in (None, "", "2026-04-27T10:00:00Z"),
-           f"updated_at={after.get('updated_at')!r}")
-
-
-def test_ac7_bump_generation(td):
-    cp_path, spec_id, agent = _setup_ac7(td)
-    rc = _run_spec_check(td, ["check-in", "--spec-id", spec_id,
-                              "--agent", agent, "--agent-id", "fresh-aaa",
-                              "--bump-generation"])
-    assert_no_traceback("AC7", rc)
-    _assert_ac7_post(_read_cp(cp_path))
+    assert after.get("updated_at") not in (None, "", "2026-04-27T10:00:00Z"), (
+        f"AC7: updated_at not refreshed: {after.get('updated_at')!r}"
+    )
 
 
 # -------------------- AC8: waived survives normal takeover ---------------------
 
-def test_ac8_waived_survives_takeover(td):
+def test_ac8_waived_survives_takeover(tmp_path):
     spec_id, agent = "spec-test-ac8", "ba"
-    cp_path = _make_cp_state(td, spec_id, agent, _baseline_payload(
+    cp_path = _make_cp_state(tmp_path, spec_id, agent, _baseline_payload(
         spec_id, agent, generation=1, is_running=False, agent_id="old",
         checkpoints=[_cp("cp-01", state="waived-with-reason",
                          waived_reason="qa-asked-for-this")]))
-    rc = _run_hook(td, {"tool_name": "Read",
-                        "tool_input": {"file_path": str(cp_path)},
-                        "agent_id": "new-takeover"})
-    assert_no_traceback("AC8", rc)
+
+    rc = _run_hook(tmp_path, {"tool_name": "Read",
+                               "tool_input": {"file_path": str(cp_path)},
+                               "agent_id": "new-takeover"})
+    _assert_no_traceback(rc, "AC8")
     cp = _read_cp(cp_path)["checkpoints"][0]
-    expect("AC8.state-waived", cp.get("state") == "waived-with-reason",
-           str(cp))
-    expect("AC8.reason-preserved",
-           cp.get("waived_reason") == "qa-asked-for-this", str(cp))
+    assert cp.get("state") == "waived-with-reason", (
+        f"AC8: state changed: {cp}"
+    )
+    assert cp.get("waived_reason") == "qa-asked-for-this", (
+        f"AC8: waived_reason changed: {cp}"
+    )
 
 
 # -------------------- AC10a-c: negative tests ---------------------
 
-def test_ac10a_malformed_stdin(td):
-    rc = _run_hook(td, None, raw_stdin="not-json{")
-    assert_no_traceback("AC10a", rc)
+def test_ac10a_malformed_stdin(tmp_path):
+    rc = _run_hook(tmp_path, None, raw_stdin="not-json{")
+    _assert_no_traceback(rc, "AC10a")
 
 
-def test_ac10b_missing_tool_name(td):
-    rc = _run_hook(td, {"tool_input": {"file_path": "/tmp/anything"},
-                        "agent_id": "x"})
-    assert_no_traceback("AC10b", rc)
+def test_ac10b_missing_tool_name(tmp_path):
+    rc = _run_hook(tmp_path, {"tool_input": {"file_path": str(tmp_path / "anything")},
+                               "agent_id": "x"})
+    _assert_no_traceback(rc, "AC10b")
 
 
-def test_ac10c_missing_agent_id_for_sentinel(td):
-    sentinel = td / ".claude" / "dev-registry" / "dev-no-id" / "ba.json"
+def test_ac10c_missing_agent_id_for_sentinel(tmp_path):
+    sentinel = tmp_path / ".claude" / "dev-registry" / "dev-no-id" / "ba.json"
     sentinel.parent.mkdir(parents=True, exist_ok=True)
     sentinel.write_text("{}", encoding="utf-8")
-    rc = _run_hook(td, {"tool_name": "Read",
-                        "tool_input": {"file_path": str(sentinel)}})
-    assert_no_traceback("AC10c", rc)
-    idx = td / ".claude" / "dev-registry" / "agent-index.json"
-    expect("AC10c.no-index-update", not idx.exists(),
-           "agent-index.json should not exist when agent_id is missing")
+
+    rc = _run_hook(tmp_path, {"tool_name": "Read",
+                               "tool_input": {"file_path": str(sentinel)}})
+    _assert_no_traceback(rc, "AC10c")
+    idx = tmp_path / ".claude" / "dev-registry" / "agent-index.json"
+    assert not idx.exists(), (
+        "AC10c: agent-index.json should not exist when agent_id is missing"
+    )
 
 
 # -------------------- AC10d: concurrent --bump-generation ---------------------
 
-def _bump_one(td, spec_id, agent, tag, results):
-    results[tag] = _run_spec_check(td, [
+def _bump_one(tmp_dir, spec_id, agent, tag, results):
+    results[tag] = _run_spec_check(tmp_dir, [
         "check-in", "--spec-id", spec_id, "--agent", agent,
         "--agent-id", f"id-{tag}", "--bump-generation"])
 
 
-def test_ac10d_concurrent_bump_generation(td):
+def test_ac10d_concurrent_bump_generation(tmp_path):
     spec_id, agent = "spec-test-ac10d", "ba"
-    cp_path = _make_cp_state(td, spec_id, agent, _baseline_payload(
+    cp_path = _make_cp_state(tmp_path, spec_id, agent, _baseline_payload(
         spec_id, agent, generation=1,
         checkpoints=[_cp("cp-01", state="done")]))
     results = {}
     threads = [threading.Thread(target=_bump_one,
-                                args=(td, spec_id, agent, t, results))
+                                args=(tmp_path, spec_id, agent, t, results))
                for t in ("a", "b")]
     for t in threads:
         t.start()
     for t in threads:
         t.join(timeout=15)
-    expect("AC10d.both-rc-0",
-           all(results[t].returncode == 0 for t in ("a", "b")),
-           f"a.stderr={results['a'].stderr!r} b.stderr={results['b'].stderr!r}")
+    assert all(results[t].returncode == 0 for t in ("a", "b")), (
+        f"AC10d: both processes must exit 0; "
+        f"a.stderr={results['a'].stderr!r} b.stderr={results['b'].stderr!r}"
+    )
     final = _read_cp(cp_path)
-    expect("AC10d.final-generation-3", final.get("generation") == 3,
-           f"final generation={final.get('generation')!r} (expected 3); "
-           f"OBJ-2 invariant: read-modify-write must be under exclusive lock")
+    assert final.get("generation") == 3, (
+        f"AC10d: final generation={final.get('generation')!r} (expected 3); "
+        f"OBJ-2 invariant: read-modify-write must be under exclusive lock"
+    )
 
 
 # -------------------- graphify registration (spec-20260527-061433) ----------
 
-
-def test_graphify_in_cp_agents(td):
+def test_graphify_in_cp_agents():
     """Verify 'graphify' is registered in CP_AGENTS (pretool-cp-checkin.py).
+
     AC5 from spec-20260527-061433: graphify must appear in CP_AGENTS, ALLOWED_AGENTS,
     and agent_types list together (arch-2 precedent: test-writer pattern).
     """
     hook_text = HOOK.read_text(encoding="utf-8")
-    expect(
-        "graphify-reg.cp-agents-contains-graphify",
-        '"graphify"' in hook_text or "'graphify'" in hook_text,
-        "CP_AGENTS in pretool-cp-checkin.py must include 'graphify' (spec-20260527-061433 AC5)",
+    assert ('"graphify"' in hook_text or "'graphify'" in hook_text), (
+        "CP_AGENTS in pretool-cp-checkin.py must include 'graphify' (spec-20260527-061433 AC5)"
     )
 
 
-def test_graphify_in_allowed_agents(td):
+def test_graphify_in_allowed_agents():
     """Verify 'graphify' is registered in ALLOWED_AGENTS (scripts/spec-check.py).
+
     Symmetry with CP_AGENTS per arch-2 precedent.
     """
     spec_check_text = SPEC_CHECK.read_text(encoding="utf-8")
-    expect(
-        "graphify-reg.allowed-agents-contains-graphify",
-        '"graphify"' in spec_check_text or "'graphify'" in spec_check_text,
-        "ALLOWED_AGENTS in scripts/spec-check.py must include 'graphify' (spec-20260527-061433 AC5)",
+    assert ('"graphify"' in spec_check_text or "'graphify'" in spec_check_text), (
+        "ALLOWED_AGENTS in scripts/spec-check.py must include 'graphify' (spec-20260527-061433 AC5)"
     )
-
-
-# -------------------- runner ---------------------
-
-ALL_TESTS = [
-    test_ac1_view_read_does_not_mutate,
-    test_ac2_direct_read_registers_and_preserves,
-    test_ac3_dev_sentinel_updates_index,
-    test_ac4_second_action_still_registers,
-    test_ac5_missing_generation_no_reset,
-    test_ac6_takeover_inherits_done,
-    test_ac7_bump_generation,
-    test_ac8_waived_survives_takeover,
-    test_ac10a_malformed_stdin,
-    test_ac10b_missing_tool_name,
-    test_ac10c_missing_agent_id_for_sentinel,
-    test_ac10d_concurrent_bump_generation,
-    # graphify registration tests (spec-20260527-061433 AC5)
-    test_graphify_in_cp_agents,
-    test_graphify_in_allowed_agents,
-]
-
-
-def _run_one(fn):
-    with tempfile.TemporaryDirectory() as tmp:
-        try:
-            fn(Path(tmp))
-        except Exception as e:
-            expect(f"{fn.__name__}.unhandled", False, repr(e))
-
-
-def main():
-    for fn in ALL_TESTS:
-        _run_one(fn)
-    print()
-    print("=== summary ===")
-    failures = sum(1 for _, ok, _ in RESULTS if not ok)
-    total = len(RESULTS)
-    print(f"{total - failures}/{total} assertions passed")
-    return 1 if failures else 0
-
-
-if __name__ == "__main__":
-    sys.exit(main())

@@ -1,10 +1,10 @@
 # Baseline CI — NOT a comprehensive test suite.
 #
-# This workflow runs only cheap, deterministic baseline checks: a current-tree
-# secret scan, a shell-syntax pass (bash -n), a Python parse/compile pass over
-# hooks/ and scripts/, and grep assertions for this repo's cleanup invariants.
-# It deliberately EXCLUDES the throwaway scratch tests so they cannot fail CI;
-# a full test matrix is a separate, deferred roadmap item.
+# This workflow runs cheap, deterministic baseline checks: Python dependency
+# install, pytest suite (hooks/tests + tests, excluding tests/generated), a
+# current-tree secret scan, a shell-syntax pass (bash -n), a Python
+# parse/compile pass over hooks/ and scripts/, and grep assertions for this
+# repo's cleanup invariants.
 name: baseline
 
 on:
@@ -24,6 +24,12 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.x"
+
+      - name: Install Python dependencies
+        run: python3 -m pip install -r requirements.txt
+
+      - name: Run tests
+        run: python3 -m pytest hooks/tests tests -q --ignore=tests/generated
 
       - name: Secret scan (current tree)
         run: |
