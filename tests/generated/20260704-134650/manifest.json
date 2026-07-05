@@ -201,5 +201,219 @@
       }
     }
   ],
-  "archived_tests": []
+  "archived_tests": [
+    {
+      "task_id": "20260704-134650",
+      "ac_id": "AC-E1",
+      "ac_uid": "a1b2c3d4e5f60011",
+      "type": "hook",
+      "file": "tests/generated/20260704-134650/test_AC_E1_a1b2c3d4e5f60011.py",
+      "status": "archived",
+      "archived": true,
+      "archive_reason": "deferred to session 20260704-225139",
+      "hook_check": {"type": "exit_code", "test_fn": "test_session_git_init_default_off", "expected_exit": 0}
+    },
+    {
+      "task_id": "20260704-134650",
+      "ac_id": "AC-E2",
+      "ac_uid": "a1b2c3d4e5f60012",
+      "type": "data",
+      "file": "tests/generated/20260704-134650/test_AC_E2_a1b2c3d4e5f60012.py",
+      "status": "archived",
+      "archived": true,
+      "archive_reason": "deferred to session 20260704-225139",
+      "hook_check": {"type": "file_content", "file": "hooks/session-git-init.sh", "must_not_contain": ["Happy <yesreply@happy.engineering>"]}
+    },
+    {
+      "task_id": "20260704-134650",
+      "ac_id": "AC-E3",
+      "ac_uid": "a1b2c3d4e5f60013",
+      "type": "hook",
+      "file": "tests/generated/20260704-134650/test_AC_E3_a1b2c3d4e5f60013.py",
+      "status": "archived",
+      "archived": true,
+      "archive_reason": "deferred to session 20260704-225139",
+      "hook_check": {"type": "exit_code", "test_fn": "test_canary_verify_venv_absent_advisory", "expected_exit": 0}
+    },
+    {
+      "task_id": "20260704-134650",
+      "ac_id": "AC-E4",
+      "ac_uid": "a1b2c3d4e5f60014",
+      "type": "hook",
+      "file": "tests/generated/20260704-134650/test_AC_E4_a1b2c3d4e5f60014.py",
+      "status": "archived",
+      "archived": true,
+      "archive_reason": "deferred to session 20260704-225139",
+      "hook_check": {"type": "output_routing", "test_fn": "test_tmpfs_banner_output_on_stderr"}
+    },
+    {
+      "task_id": "20260704-134650",
+      "ac_id": "AC-E5",
+      "ac_uid": "a1b2c3d4e5f6001e",
+      "type": "hook",
+      "file": "tests/generated/20260704-134650/test_AC_E5_a1b2c3d4e5f6001e.py",
+      "status": "archived",
+      "archived": true,
+      "archive_reason": "deferred to session 20260704-225139",
+      "hook_check": {
+        "type": "exit_code",
+        "test_fn": "test_session_git_init_commit_failure_clears_staged",
+        "expected_exit": "non-zero",
+        "additional_assertions": [
+          "git diff --cached --name-only output is empty after script exits",
+          "staging was exercised before commit attempt (plant a sentinel file in the temp dir to confirm git add . ran)",
+          "cleanup mechanism works on unborn HEAD (git rm -r --cached . not git reset HEAD)"
+        ],
+        "note": "OBJ-4 fix. E-M2 Must Have now has a verifiable AC. Codex finding 6 confirmed: git reset HEAD fails on unborn HEAD; fix must use git rm -r --cached . or git read-tree --empty."
+      }
+    },
+    {
+      "task_id": "20260704-134650",
+      "ac_id": "AC-E6a",
+      "ac_uid": "a1b2c3d4e5f6e6a0",
+      "type": "data",
+      "file": "tests/generated/20260704-134650/test_AC_E6a_a1b2c3d4e5f6e6a0.py",
+      "status": "archived",
+      "archived": true,
+      "archive_reason": "deferred to session 20260704-225139",
+      "hook_check": {
+        "type": "exit_code",
+        "command": "git ls-files --error-unmatch .claude/.awesome-claude-harness",
+        "expected_exit": 0,
+        "note": "NEW-OBJ-4 fix (AC-E6a): existence check is not sufficient — the file must be git-tracked so it survives clones and is committed to the repo. AC-E6b and AC-E6c verify behavioral correctness of the guard change."
+      }
+    },
+    {
+      "task_id": "20260704-134650",
+      "ac_id": "AC-E6b",
+      "ac_uid": "a1b2c3d4e5f6e6b0",
+      "type": "hook",
+      "file": "tests/generated/20260704-134650/test_AC_E6b_a1b2c3d4e5f6e6b0.py",
+      "status": "archived",
+      "archived": true,
+      "archive_reason": "deferred to session 20260704-225139",
+      "hook_check": {
+        "type": "exit_code",
+        "test_fn": "test_gitignore_propagate_no_marker_no_change",
+        "expected_exit": 0,
+        "additional_assertions": [
+          ".gitignore byte content is identical before and after hook run",
+          "hook exit code is 0 (graceful early exit, not an error)"
+        ],
+        "note": "NEW-OBJ-4 fix (AC-E6b): verifies the guard change correctly prevents false positives — projects with .claude/ dir but no marker are NOT affected."
+      }
+    },
+    {
+      "task_id": "20260704-134650",
+      "ac_id": "AC-E6c",
+      "ac_uid": "a1b2c3d4e5f6e6c0",
+      "type": "hook",
+      "file": "tests/generated/20260704-134650/test_AC_E6c_a1b2c3d4e5f6e6c0.py",
+      "status": "archived",
+      "archived": true,
+      "archive_reason": "deferred to session 20260704-225139",
+      "hook_check": {
+        "type": "exit_code",
+        "test_fn": "test_gitignore_propagate_with_marker_appends_rules_idempotently",
+        "expected_exit": 0,
+        "additional_assertions": [
+          "After first run: .gitignore contains 'tests/generated/'",
+          "After second run: grep -c 'tests/generated/' .gitignore returns 1 (no duplicate)"
+        ],
+        "note": "NEW-OBJ-4 fix (AC-E6c): verifies the guard change preserves correct behavior for harness repos — propagation still works when the marker is present, and idempotency is maintained."
+      }
+    },
+    {
+      "task_id": "20260704-134650",
+      "ac_id": "AC-F1",
+      "ac_uid": "a1b2c3d4e5f60015",
+      "type": "hook",
+      "file": "tests/generated/20260704-134650/test_AC_F1_a1b2c3d4e5f60015.py",
+      "status": "archived",
+      "archived": true,
+      "archive_reason": "deferred to session 20260704-225139",
+      "hook_check": {"type": "exit_code", "test_fn": "test_path_qualified_git_push_force_blocked", "expected_exit": 2}
+    },
+    {
+      "task_id": "20260704-134650",
+      "ac_id": "AC-F2",
+      "ac_uid": "a1b2c3d4e5f60016",
+      "type": "hook",
+      "file": "tests/generated/20260704-134650/test_AC_F2_a1b2c3d4e5f60016.py",
+      "status": "archived",
+      "archived": true,
+      "archive_reason": "deferred to session 20260704-225139",
+      "hook_check": {
+        "type": "exit_code",
+        "test_fns": [
+          "test_echo_path_qualified_git_reset_not_blocked",
+          "test_echo_path_qualified_git_push_not_blocked"
+        ],
+        "note": "NEW-OBJ-2 fix: two negative test cases required — 'echo /usr/bin/git reset --hard' and 'echo /usr/bin/git push --force' must both return exit code 0. The token-aware classifier correctly identifies echo as the command head, not git.",
+        "expected_exit": 0
+      }
+    },
+    {
+      "task_id": "20260704-134650",
+      "ac_id": "AC-F3",
+      "ac_uid": "a1b2c3d4e5f60017",
+      "type": "hook",
+      "file": "tests/generated/20260704-134650/test_AC_F3_a1b2c3d4e5f60017.py",
+      "status": "archived",
+      "archived": true,
+      "archive_reason": "deferred to session 20260704-225139",
+      "hook_check": {"type": "exit_code", "test_fn": "test_legit_command_not_blocked", "expected_exit": 0}
+    },
+    {
+      "task_id": "20260704-134650",
+      "ac_id": "AC-F4",
+      "ac_uid": "a1b2c3d4e5f6001f",
+      "type": "hook",
+      "file": "tests/generated/20260704-134650/test_AC_F4_a1b2c3d4e5f6001f.py",
+      "status": "archived",
+      "archived": true,
+      "archive_reason": "deferred to session 20260704-225139",
+      "hook_check": {
+        "type": "exit_code",
+        "test_fns": [
+          "test_path_qualified_git_reset_hard_blocked",
+          "test_command_wrapper_path_qualified_git_reset_blocked"
+        ],
+        "expected_exit": 2,
+        "note": "NEW-OBJ-2 fix: two positive test cases — '/usr/bin/git reset --hard HEAD' and 'command /usr/bin/git reset --hard'. The 'command' wrapper is a shell built-in that still executes git in command position; the token-aware classifier must handle this via the existing _command_token_index wrapper-skipping logic."
+      }
+    },
+    {
+      "task_id": "20260704-134650",
+      "ac_id": "AC-F5",
+      "ac_uid": "a1b2c3d4e5f60020b",
+      "type": "hook",
+      "file": "tests/generated/20260704-134650/test_AC_F5_a1b2c3d4e5f60020b.py",
+      "status": "archived",
+      "archived": true,
+      "archive_reason": "deferred to session 20260704-225139",
+      "hook_check": {
+        "type": "exit_code",
+        "test_fn": "test_path_qualified_git_commit_blocked_by_privilege_guard",
+        "expected_exit": 2,
+        "note": "OBJ-5 fix: missing positive test case from F-M2 matrix. Only pretool-git-privilege-guard.py is required to block this — NOT pretool-bash-safety.sh. Requiring bash-safety to block git commit would break authorized /commit flows which go through the privilege guard's blessed-bridge bypass."
+      }
+    },
+    {
+      "task_id": "20260704-134650",
+      "ac_id": "AC-F6",
+      "ac_uid": "a1b2c3d4e5f60020c",
+      "type": "hook",
+      "file": "tests/generated/20260704-134650/test_AC_F6_a1b2c3d4e5f60020c.py",
+      "status": "archived",
+      "archived": true,
+      "archive_reason": "deferred to session 20260704-225139",
+      "hook_check": {
+        "type": "exit_code",
+        "test_fn": "test_git_status_not_blocked_after_path_prefix_fix",
+        "expected_exit": 0,
+        "note": "OBJ-5 fix: missing negative test case. The path-prefix regex must not over-block. Both 'git status' and '/usr/bin/git status' must continue to be allowed."
+      }
+    }
+  ]
 }
