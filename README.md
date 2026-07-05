@@ -318,7 +318,7 @@ Most release commands carry `disable-model-invocation: true` so an agent can't s
 
 ---
 
-## Quickstart
+## Setup details
 
 ### Try it in 30 seconds (no Claude Code required)
 
