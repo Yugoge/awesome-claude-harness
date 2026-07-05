@@ -119,10 +119,12 @@ class TestBulkSentinelFalsePositive:
         )
         assert run_hook(cmd) == ALLOW
 
-    def test_ac3_bare_invocation_still_allowed(self):
-        # AC3: direct bare invocation via BARE_WRITER_RE path must remain ALLOW.
+    def test_ac3_bare_invocation_blocked_by_stage2_lockdown(self):
+        # AC3: after Stage-2 lockdown (commit 14f2ea58), the sentinel writer is NO LONGER
+        # Bash-executable. The userprompt-bulk-commit-capability hook mints sentinels
+        # in-process. Direct Bash invocation MUST be BLOCKED.
         cmd = "python3 scripts/write-bulk-commit-sentinel.py"
-        assert run_hook(cmd) == ALLOW
+        assert run_hook(cmd) == BLOCK
 
     def test_ac4_compound_invocation_still_blocked(self):
         # AC4: compound command containing the invocation must still BLOCK.
