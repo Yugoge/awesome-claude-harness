@@ -1370,7 +1370,19 @@ if echo "$COMMAND" | grep -qE 'git\s+stash\s+(push|save|create|store|-u|--includ
   echo "Tell the user what you want to do and ask them to run it, or use commit/branch." >&2
   exit 2
 fi
-if echo "$COMMAND" | grep -qE 'git\s+stash\s*($|[;&|])'; then
+# Bare stash: path-qualified form also blocked (RISK-3)
+_PQ_STASH_BARE=0
+if [ "$CLASSIFIER_HAS_PATH_QUALIFIED_GIT" = "1" ] && _pq_git_has_subcmd stash; then
+  _stash_bare=$(printf '%s\n' "$CLASSIFIER_JSON" | "$PYTHON_BIN" -c "
+import json,sys
+invs=json.load(sys.stdin)
+for inv in invs:
+  if inv.get('path_qualified') and inv.get('subcommand')=='stash' and not inv.get('args'):
+    print('bare'); break
+" 2>/dev/null)
+  [ "$_stash_bare" = "bare" ] && _PQ_STASH_BARE=1
+fi
+if echo "$COMMAND" | grep -qE 'git\s+stash\s*($|[;&|])' || [ "$_PQ_STASH_BARE" = "1" ]; then
   echo "BLOCKED: bare 'git stash' (implicit push) requires explicit user approval" >&2
   echo "Command: $COMMAND" >&2
   echo "REASON: See 2026-04-19 incident — stash is often paired with destructive checkout." >&2
