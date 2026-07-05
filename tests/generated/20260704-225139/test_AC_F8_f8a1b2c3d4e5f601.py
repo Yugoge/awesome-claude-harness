@@ -37,3 +37,18 @@ def test_AC_F8():
         f"pretool-block-branch-pr-worktree.py expected exit 2 for 'git checkout -b', "
         f"got {result.returncode}\nstderr: {result.stderr}"
     )
+
+    # Assert the import refactor: primitives must come from lib.git_command_classifier
+    with open(BLOCK_HOOK) as f:
+        content = f.read()
+    assert "from lib.git_command_classifier import" in content or \
+           "from hooks.lib.git_command_classifier import" in content or \
+           "lib.git_command_classifier" in content, (
+        "pretool-block-branch-pr-worktree.py must import from lib.git_command_classifier"
+    )
+    # Inline primitives must NOT be defined in the hook file
+    for inline_name in ("def _segments", "def _command_token_index", "def _basename", "def _git_subcommand"):
+        assert inline_name not in content, (
+            f"pretool-block-branch-pr-worktree.py must not define {inline_name!r} inline "
+            f"(should come from lib.git_command_classifier)"
+        )
