@@ -236,14 +236,17 @@ CORPUS = [
         None,
         "git add all",
     ),
-    # git alone (no subcommand) — still a git invocation
+    # git alone (no subcommand) — regex requires trailing whitespace, so misses it;
+    # classifier yields GitInvocation(subcommand=None) from token split.
     (
         "git",
-        False, False, False,
-        None,
-        "bare git with no following space — does not satisfy [[:space:]]+ suffix of GIT_CMD_RE; "
-        "classifier yields one invocation but with subcommand=None, so still a git invocation "
-        "for detection purposes — but regex patterns require trailing whitespace, so False for both",
+        False, False, True,
+        "bare 'git' with no trailing space/subcommand: both GIT_CMD_RE and "
+        "GIT_COMMAND_RE require [[:space:]]+ / \\s+ after the 'git' token, so "
+        "bare 'git' at end-of-string matches neither regex. The classifier "
+        "splits on tokens (not a regex), so it yields GitInvocation(subcommand=None). "
+        "This is a known, benign divergence.",
+        "bare git no subcommand",
     ),
     # git -C /some/path status (global option)
     (
