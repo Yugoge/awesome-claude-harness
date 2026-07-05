@@ -151,14 +151,15 @@ def _extract_md_desc(text: str, file_path: Path | None = None) -> str:
 
 def _check_single_line_docstring(s: str) -> str | None:
     """Check if line has inline docstring on single line."""
-    quote = s[:3]
+    s_body = s.lstrip('rRbBuUfF')
+    quote = s_body[:3]
     if quote not in ('"""', "'''"):
         return None
-    if s.count(quote) < 2 or len(s) <= 6:
+    if s_body.count(quote) < 2 or len(s_body) <= 6:
         return None
-    start = s.index(quote) + 3
-    end = s.index(quote, start)
-    return s[start:end].strip()
+    start = s_body.index(quote) + 3
+    end = s_body.index(quote, start)
+    return s_body[start:end].strip()
 
 
 def _find_next_line_content(lines: list[str], start_i: int, max_lines: int) -> str | None:
