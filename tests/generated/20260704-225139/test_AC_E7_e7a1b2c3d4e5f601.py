@@ -42,25 +42,25 @@ def test_AC_E7():
                 env=env,
             )
 
-        assert result.returncode == 0, (
-            f"Expected exit 0 (hook ran successfully), got {result.returncode}\n"
-            f"stderr: {result.stderr}"
-        )
-        assert result.stdout == "", (
-            f"Expected stdout to be empty (all output on stderr), got: {result.stdout!r}"
-        )
-        assert os.path.exists(os.path.join(tmpdir, ".git")), (
-            "Expected .git to exist after successful hook run"
-        )
-        # Verify HEAD was written (initial commit made)
-        rev_result = subprocess.run(
-            ["git", "rev-parse", "--verify", "HEAD"],
-            capture_output=True, text=True, cwd=tmpdir,
-            env={"HOME": fake_home, "GIT_CONFIG_GLOBAL": git_cfg,
-                 "GIT_CONFIG_NOSYSTEM": "1",
-                 "PATH": os.environ.get("PATH", "/usr/bin:/bin")},
-        )
-        assert rev_result.returncode == 0, (
-            "Expected git rev-parse --verify HEAD to succeed (initial commit made)\n"
-            f"stderr: {rev_result.stderr}"
-        )
+            assert result.returncode == 0, (
+                f"Expected exit 0 (hook ran successfully), got {result.returncode}\n"
+                f"stderr: {result.stderr}"
+            )
+            assert result.stdout == "", (
+                f"Expected stdout to be empty (all output on stderr), got: {result.stdout!r}"
+            )
+            assert os.path.exists(os.path.join(tmpdir, ".git")), (
+                "Expected .git to exist after successful hook run"
+            )
+            # Verify HEAD was written (initial commit made)
+            rev_result = subprocess.run(
+                ["git", "rev-parse", "--verify", "HEAD"],
+                capture_output=True, text=True, cwd=tmpdir,
+                env={"HOME": fake_home, "GIT_CONFIG_GLOBAL": git_cfg,
+                     "GIT_CONFIG_NOSYSTEM": "1",
+                     "PATH": os.environ.get("PATH", "/usr/bin:/bin")},
+            )
+            assert rev_result.returncode == 0, (
+                "Expected git rev-parse --verify HEAD to succeed (initial commit made)\n"
+                f"stderr: {rev_result.stderr}"
+            )
