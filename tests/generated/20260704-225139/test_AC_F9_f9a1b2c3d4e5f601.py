@@ -39,11 +39,15 @@ def test_AC_F9():
     assert invocations[0]["path_qualified"] is True
     assert invocations[0]["subcommand"] == "push"
 
-    # path-qualified with -C option: subcommand=push
+    # path-qualified with -C option: subcommand=push, args contains --force
     invocations = _classify("/usr/bin/git -C repo push --force")
     assert len(invocations) == 1
     assert invocations[0]["subcommand"] == "push"
     assert invocations[0]["path_qualified"] is True
+    assert invocations[0]["args"] == ["--force"], (
+        f"Expected args==['--force'] for '/usr/bin/git -C repo push --force', "
+        f"got {invocations[0].get('args')!r}"
+    )
 
     # echo /usr/bin/git push: echo is command head, no git invocations
     invocations = _classify("echo /usr/bin/git push")
