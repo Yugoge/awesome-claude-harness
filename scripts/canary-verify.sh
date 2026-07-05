@@ -29,6 +29,16 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+# Venv-presence guard (E-M5): placed after arg parsing (--help already handled above)
+# but before emit_advisory function definition (direct echo required here).
+# CLAUDE_HOME portability: respect env var override for non-default venv locations.
+CLAUDE_HOME="${CLAUDE_HOME:-$HOME/.claude}"
+VENV_ACTIVATE="$CLAUDE_HOME/venv/bin/activate"
+if [[ ! -f "$VENV_ACTIVATE" ]]; then
+  echo "canary-verify[ADVISORY]: venv absent: $VENV_ACTIVATE — skipping hook verification" >&2
+  exit 0
+fi
+
 failures=0
 
 emit_failure() {
@@ -117,7 +127,7 @@ verify_read_size_guard() {
   # python3 invocation is wrapped in a same-line subshell that sources the
   # venv per spec-20260518-225715 Cycle 2 P3.6 (canonical /dev Standard).
   local safe='{"tool_name":"Read","tool_input":{"file_path":"/dev/null"}}'
-  echo "${safe}" | ( source ~/.claude/venv/bin/activate && python3 "${hook}" >/dev/null 2>&1 )
+  echo "${safe}" | ( source "$VENV_ACTIVATE" && python3 "${hook}" >/dev/null 2>&1 )
   local rc=$?
   if [[ "${rc}" -ge 126 ]]; then
     emit_failure "pretool-read-size-guard.py exec error rc=${rc}"
@@ -132,7 +142,7 @@ verify_read_size_guard() {
   oversized=$(mktemp -t canary-oversized.XXXXXX)
   yes "fill" 2>/dev/null | head -5000 > "${oversized}" || true
   local payload="{\"tool_name\":\"Read\",\"tool_input\":{\"file_path\":\"${oversized}\"}}"
-  echo "${payload}" | ( source ~/.claude/venv/bin/activate && python3 "${hook}" >/dev/null 2>&1 )
+  echo "${payload}" | ( source "$VENV_ACTIVATE" && python3 "${hook}" >/dev/null 2>&1 )
   rc=$?
   rm -f "${oversized}"
   # Note: the guard exits 0/2/other depending on policy. We do NOT hard-fail
@@ -153,7 +163,7 @@ verify_git_privilege_guard() {
   # wrapped in a same-line subshell that sources the venv per
   # spec-20260518-225715 Cycle 2 P3.6.
   local safe='{"tool_name":"Bash","tool_input":{"command":"git status"}}'
-  echo "${safe}" | ( source ~/.claude/venv/bin/activate && python3 "${hook}" >/dev/null 2>&1 )
+  echo "${safe}" | ( source "$VENV_ACTIVATE" && python3 "${hook}" >/dev/null 2>&1 )
   local rc=$?
   if [[ "${rc}" -ge 126 ]]; then
     emit_failure "pretool-git-privilege-guard.py exec error rc=${rc}"
@@ -166,7 +176,7 @@ verify_git_privilege_guard() {
   # canonical destructive write that rewrites history on the remote — the
   # guard MUST exit 2 when it sees this payload.
   local deny='{"tool_name":"Bash","tool_input":{"command":"git push --force origin master"}}'
-  echo "${deny}" | ( source ~/.claude/venv/bin/activate && python3 "${hook}" >/dev/null 2>&1 )
+  echo "${deny}" | ( source "$VENV_ACTIVATE" && python3 "${hook}" >/dev/null 2>&1 )
   rc=$?
   if [[ "${rc}" -ne 2 ]]; then
     emit_failure "pretool-git-privilege-guard.py FAILED to block 'git push --force' (rc=${rc}, expected 2; fail-open guard)"
@@ -174,20 +184,20 @@ verify_git_privilege_guard() {
 }
 
 # ---------------------------------------------------------------------------
-# Advisory checks (spec §5.5 prerequisite — declared Won't Have for this cycle)
-# session-info.sh and session-git-init.sh are SessionStart hooks that emit
-# stdout. They are not in scope to fix; we log advisory only so existing
-# sessions are not blocked.
+# Advisory checks (spec §5.5 prerequisite)
+# session-git-init.sh stdout was fixed by E-M4 (exec >&2 added after opt-in gate).
+# session-info.sh still emits stdout; log advisory only so existing sessions
+# are not blocked.
 # ---------------------------------------------------------------------------
 check_advisory_prerequisites() {
-  for f in "${HOOKS_DIR}/session-info.sh" "${HOOKS_DIR}/session-git-init.sh"; do
+  for f in "${HOOKS_DIR}/session-info.sh"; do
     if [[ ! -f "${f}" ]]; then
       continue
     fi
     # If the script writes to stdout (echo / printf without >&2), flag advisory.
     if grep -E '^[[:space:]]*(echo|printf)' "${f}" 2>/dev/null \
        | grep -vE '>\s*&2|>&2' >/dev/null 2>&1; then
-      emit_advisory "${f} emits stdout without >&2 (spec §5.5 prerequisite, Won't Have this cycle)"
+      emit_advisory "${f} emits stdout without >&2 (spec §5.5 prerequisite)"
     fi
   done
 }

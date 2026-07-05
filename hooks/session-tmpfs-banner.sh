@@ -27,12 +27,12 @@ timeout 2s df -h /tmp /dev/shm 2>/dev/null | tail -n +2 | while IFS= read -r lin
   # If parsing failed, emit the raw line without WARN prefix (best effort,
   # non-blocking by contract).
   case "$pct" in
-    ''|*[!0-9]*) printf '%s\n' "$line"; continue ;;
+    ''|*[!0-9]*) printf '%s\n' "$line" >&2; continue ;;
   esac
   if [ "$pct" -gt "$THRESHOLD" ]; then
-    printf 'WARN %s\n' "$line"
+    printf 'WARN %s\n' "$line" >&2
   else
-    printf '%s\n' "$line"
+    printf '%s\n' "$line" >&2
   fi
 done
 

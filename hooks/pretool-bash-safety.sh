@@ -743,6 +743,37 @@ if [ -r "$HOOKS_DIR_CTX/lib/bash_context_strip.py" ]; then
   unset _ctx_out _ctx_status
 fi
 
+# ── Path-qualified git classifier (RISK-3 closure, 2026-07-05) ────────────
+# Detects /usr/bin/git, ./git and other path-qualified git invocations that
+# the bare GIT_CMD_RE anchor class [[:space:];&|()`] misses (missing '/').
+# Run ONCE here; reused by all danger-git blocks below.
+# Uses COMMAND_CONTEXT_STRIPPED (normalized) NOT raw $COMMAND to avoid
+# false positives from quoted git references in echo/printf/heredoc bodies.
+# Prefilter: skip subprocess if no 'git' token in normalized command.
+CLASSIFIER_HAS_PATH_QUALIFIED_GIT=0
+CLASSIFIER_JSON=''
+CLASSIFIER_PY="$(dirname "${BASH_SOURCE[0]}")/lib/git_command_classifier.py"
+if printf '%s\n' "$COMMAND_CONTEXT_STRIPPED" | grep -q 'git' && [ -r "$CLASSIFIER_PY" ]; then
+  CLASSIFIER_JSON=$(printf '%s\n' "$COMMAND_CONTEXT_STRIPPED" | \
+    "$PYTHON_BIN" "$CLASSIFIER_PY" 2>/dev/null)
+  if printf '%s\n' "$CLASSIFIER_JSON" | grep -q '"path_qualified": true'; then
+    CLASSIFIER_HAS_PATH_QUALIFIED_GIT=1
+  fi
+fi
+# Helper: check whether the classifier found a path-qualified invocation with
+# the given subcommand token.  Usage: _pq_git_has_subcmd reset
+_pq_git_has_subcmd() {
+  local sub="$1"
+  printf '%s\n' "$CLASSIFIER_JSON" | grep -q '"path_qualified": true' && \
+  printf '%s\n' "$CLASSIFIER_JSON" | grep -q "\"subcommand\": \"$sub\""
+}
+# Helper: check whether ANY classifier invocation (bare or path-qualified)
+# has the given subcommand.  Usage: _any_git_has_subcmd push
+_any_git_has_subcmd() {
+  local sub="$1"
+  printf '%s\n' "$CLASSIFIER_JSON" | grep -q "\"subcommand\": \"$sub\""
+}
+
 # Entry gate: protected path mention. Uses TWO grep -F substring matches
 # (item 5 fix, task 20260526-053746 AC-05/AC-05b) to match BOTH literal session-id
 # paths AND glob forms (*, ?, [abc], [!abc]) — POSIX shell-glob bracket syntax.
@@ -1310,8 +1341,26 @@ fi
 
 # Block: git stash (destructive forms only — list/show/pop/apply/drop/clear/branch are safe)
 # V4: extended to also cover -u/--include-untracked/-a/--all variants (which include untracked/ignored files)
+# V5: path-qualified /usr/bin/git stash push also blocked via classifier (RISK-3)
+_PQ_STASH_DESTRUCTIVE=0
+if [ "$CLASSIFIER_HAS_PATH_QUALIFIED_GIT" = "1" ] && _pq_git_has_subcmd stash; then
+  # Check stash args: block push/save/create/store/-u/--include-untracked/-a/--all forms
+  _stash_args=$(printf '%s\n' "$CLASSIFIER_JSON" | "$PYTHON_BIN" -c "
+import json,sys
+invs=json.load(sys.stdin)
+for inv in invs:
+  if inv.get('path_qualified') and inv.get('subcommand')=='stash':
+    args=inv.get('args',[])
+    bad={'push','save','create','store','-u','--include-untracked','-a','--all'}
+    if not args or (args and (args[0] in bad or (args[0].startswith('-') and not args[0].startswith('--') and any(c in args[0][1:] for c in 'ua')))):
+      print('destructive')
+    break
+" 2>/dev/null)
+  [ "$_stash_args" = "destructive" ] && _PQ_STASH_DESTRUCTIVE=1
+fi
 if echo "$COMMAND" | grep -qE 'git\s+stash\s+(push|save|create|store|-u|--include-untracked|-a|--all)\b' || \
-   echo "$COMMAND" | grep -qE 'git\s+stash\s+-[ua]+\b'; then
+   echo "$COMMAND" | grep -qE 'git\s+stash\s+-[ua]+\b' || \
+   [ "$_PQ_STASH_DESTRUCTIVE" = "1" ]; then
   echo "BLOCKED: 'git stash push/save/create/store/-u/--all' requires explicit user approval" >&2
   echo "Command: $COMMAND" >&2
   echo "REASON: On 2026-04-19, a dev subagent used 'git stash' as a throwaway buffer" >&2
@@ -1321,7 +1370,19 @@ if echo "$COMMAND" | grep -qE 'git\s+stash\s+(push|save|create|store|-u|--includ
   echo "Tell the user what you want to do and ask them to run it, or use commit/branch." >&2
   exit 2
 fi
-if echo "$COMMAND" | grep -qE 'git\s+stash\s*($|[;&|])'; then
+# Bare stash: path-qualified form also blocked (RISK-3)
+_PQ_STASH_BARE=0
+if [ "$CLASSIFIER_HAS_PATH_QUALIFIED_GIT" = "1" ] && _pq_git_has_subcmd stash; then
+  _stash_bare=$(printf '%s\n' "$CLASSIFIER_JSON" | "$PYTHON_BIN" -c "
+import json,sys
+invs=json.load(sys.stdin)
+for inv in invs:
+  if inv.get('path_qualified') and inv.get('subcommand')=='stash' and not inv.get('args'):
+    print('bare'); break
+" 2>/dev/null)
+  [ "$_stash_bare" = "bare" ] && _PQ_STASH_BARE=1
+fi
+if echo "$COMMAND" | grep -qE 'git\s+stash\s*($|[;&|])' || [ "$_PQ_STASH_BARE" = "1" ]; then
   echo "BLOCKED: bare 'git stash' (implicit push) requires explicit user approval" >&2
   echo "Command: $COMMAND" >&2
   echo "REASON: See 2026-04-19 incident — stash is often paired with destructive checkout." >&2
@@ -1332,7 +1393,26 @@ fi
 # Block: git checkout <ref> -- . or -- * or -- <dir>/
 # Wide-path checkout from a ref overwrites the entire subtree with historical content.
 # Allowed: 'git checkout <ref> -- path/to/specific-file.ts' (single file), 'git checkout <branch>' (branch switch).
-if echo "$COMMAND" | grep -qE 'git\s+checkout\s+\S+\s+--\s+(\.|\*|[^ ]+/)\s*($|[;&|])'; then
+# Path-qualified form also blocked (RISK-3)
+_PQ_CHECKOUT_WIDE=0
+if [ "$CLASSIFIER_HAS_PATH_QUALIFIED_GIT" = "1" ] && _pq_git_has_subcmd checkout; then
+  _checkout_wide=$(printf '%s\n' "$CLASSIFIER_JSON" | "$PYTHON_BIN" -c "
+import json,sys,re
+invs=json.load(sys.stdin)
+for inv in invs:
+  if inv.get('path_qualified') and inv.get('subcommand')=='checkout':
+    args=inv.get('args',[])
+    try:
+      dd=args.index('--')
+      path=args[dd+1] if dd+1<len(args) else ''
+      if path in ('.','*') or path.endswith('/'):
+        print('wide'); break
+    except ValueError:
+      pass
+" 2>/dev/null)
+  [ "$_checkout_wide" = "wide" ] && _PQ_CHECKOUT_WIDE=1
+fi
+if echo "$COMMAND" | grep -qE 'git\s+checkout\s+\S+\s+--\s+(\.|\*|[^ ]+/)\s*($|[;&|])' || [ "$_PQ_CHECKOUT_WIDE" = "1" ]; then
   echo "BLOCKED: 'git checkout <ref> -- .' / '-- *' / '-- dir/' requires explicit user approval" >&2
   echo "Command: $COMMAND" >&2
   echo "REASON: On 2026-04-19, a dev subagent ran 'git checkout 925f5960 -- .' inside" >&2
@@ -1349,9 +1429,31 @@ fi
 # Covers all four syntaxes: --source=X, --source X, -s=X, -s X.
 # Allowed: 'git restore -- myfile.ts' (no --source, no overwrite), 'git restore --staged -- file' (index-only),
 #          'git restore --source=HEAD -- specific-file.ts' (specific file, not wide-path).
-if echo "$COMMAND" | grep -qE 'git\s+restore\b' && \
+# Path-qualified form also blocked (RISK-3)
+_PQ_RESTORE_WIDE=0
+if [ "$CLASSIFIER_HAS_PATH_QUALIFIED_GIT" = "1" ] && _pq_git_has_subcmd restore; then
+  _restore_wide=$(printf '%s\n' "$CLASSIFIER_JSON" | "$PYTHON_BIN" -c "
+import json,sys
+invs=json.load(sys.stdin)
+for inv in invs:
+  if inv.get('path_qualified') and inv.get('subcommand')=='restore':
+    args=inv.get('args',[])
+    has_source=any(a in ('--source','-s') or a.startswith('--source=') or a.startswith('-s=') for a in args)
+    if has_source:
+      try:
+        dd=args.index('--')
+        path=args[dd+1] if dd+1<len(args) else ''
+        if path in ('.','*') or path.endswith('/'):
+          print('wide'); break
+      except ValueError:
+        pass
+" 2>/dev/null)
+  [ "$_restore_wide" = "wide" ] && _PQ_RESTORE_WIDE=1
+fi
+if { echo "$COMMAND" | grep -qE 'git\s+restore\b' && \
    echo "$COMMAND" | grep -qE -- '(--source\b|-s\b)' && \
-   echo "$COMMAND" | grep -qE -- '--\s+(\.|\*|[^ /]+/)\s*($|[;&|])'; then
+   echo "$COMMAND" | grep -qE -- '--\s+(\.|\*|[^ /]+/)\s*($|[;&|])'; } || \
+   [ "$_PQ_RESTORE_WIDE" = "1" ]; then
   echo "BLOCKED: 'git restore --source=<ref> -- .' / '-- *' / '-- dir/' requires explicit user approval" >&2
   echo "Command: $COMMAND" >&2
   echo "REASON: 'git restore --source=<ref> -- .' is the modern equivalent of" >&2
@@ -1363,9 +1465,21 @@ if echo "$COMMAND" | grep -qE 'git\s+restore\b' && \
 fi
 
 # Block: every git reset --hard form. Shared-repo policy forbids reset-like cleanup in agent flow.
+# Path-qualified /usr/bin/git reset --hard also blocked via classifier (RISK-3)
 GIT_GLOBAL_OPT_RE='([[:space:]]+(-[Cc][[:space:]]+[^[:space:];|&]+|-[Cc][^[:space:];|&]+|--(git-dir|work-tree|namespace|exec-path|super-prefix|config-env)(=[^[:space:];|&]+|[[:space:]]+[^[:space:];|&]+)|--(bare|no-pager|paginate|no-replace-objects|literal-pathspecs|glob-pathspecs|noglob-pathspecs|icase-pathspecs|no-optional-locks)|-[pP]))*'
 GIT_CMD_RE='(^|[[:space:];&|()`])git'"$GIT_GLOBAL_OPT_RE"'[[:space:]]+'
-if echo "$COMMAND" | grep -qE "${GIT_CMD_RE}reset[[:space:]]+([^;|&]*[[:space:]]+)?--hard\b"; then
+_PQ_RESET_HARD=0
+if [ "$CLASSIFIER_HAS_PATH_QUALIFIED_GIT" = "1" ] && _pq_git_has_subcmd reset; then
+  printf '%s\n' "$CLASSIFIER_JSON" | "$PYTHON_BIN" -c "
+import json,sys
+invs=json.load(sys.stdin)
+for inv in invs:
+  if inv.get('path_qualified') and inv.get('subcommand')=='reset' and '--hard' in inv.get('args',[]):
+    print('match'); break
+" 2>/dev/null | grep -q match && _PQ_RESET_HARD=1
+fi
+if echo "$COMMAND" | grep -qE "${GIT_CMD_RE}reset[[:space:]]+([^;|&]*[[:space:]]+)?--hard\b" || \
+   [ "$_PQ_RESET_HARD" = "1" ]; then
   echo "BLOCKED: 'git reset --hard' is forbidden in agent flow" >&2
   echo "Command: $COMMAND" >&2
   echo "REASON: shared-repo policy requires non-destructive recovery; hard reset can discard another session's work or index state." >&2
@@ -1374,14 +1488,59 @@ if echo "$COMMAND" | grep -qE "${GIT_CMD_RE}reset[[:space:]]+([^;|&]*[[:space:]]
 fi
 
 # Block: force/delete branch publication and direct ref mutation surfaces.
-if echo "$COMMAND" | grep -qE "${GIT_CMD_RE}push\b" && \
-   echo "$COMMAND" | grep -qE '(^|[[:space:]])(--force|-f|--force-with-lease(=[^[:space:]]+)?|--delete|-d|--mirror)([[:space:]]|$)|[[:space:]]\+[^[:space:]]|[[:space:]]:[^[:space:]]'; then
+# Path-qualified /usr/bin/git push --force also blocked via classifier (RISK-3)
+_PQ_PUSH_FORCE=0
+if [ "$CLASSIFIER_HAS_PATH_QUALIFIED_GIT" = "1" ] && _pq_git_has_subcmd push; then
+  printf '%s\n' "$CLASSIFIER_JSON" | "$PYTHON_BIN" -c "
+import json,sys
+invs=json.load(sys.stdin)
+bad={'--force','-f','--force-with-lease','--delete','-d','--mirror'}
+for inv in invs:
+  if inv.get('path_qualified') and inv.get('subcommand')=='push':
+    for tok in inv.get('args',[]):
+      if tok in bad or tok.startswith('--force-with-lease=') or tok.startswith('+') or tok.startswith(':'):
+        print('match'); sys.exit(0)
+" 2>/dev/null | grep -q match && _PQ_PUSH_FORCE=1
+fi
+if { echo "$COMMAND" | grep -qE "${GIT_CMD_RE}push\b" && \
+   echo "$COMMAND" | grep -qE '(^|[[:space:]])(--force|-f|--force-with-lease(=[^[:space:]]+)?|--delete|-d|--mirror)([[:space:]]|$)|[[:space:]]\+[^[:space:]]|[[:space:]]:[^[:space:]]'; } || \
+   [ "$_PQ_PUSH_FORCE" = "1" ]; then
   echo "BLOCKED: force/delete/ref-rewrite push is forbidden in agent flow" >&2
   echo "Command: $COMMAND" >&2
   echo "REASON: policy allows normal /push branch publication and backup-only recovery refs; force/delete/ref-rewrite pushes can lose remote work." >&2
   exit 2
 fi
-if echo "$COMMAND" | grep -qE "${GIT_CMD_RE}(update-ref\b|branch[[:space:]]+(-[fDdMm]+|--delete|--force|--move)\b|symbolic-ref([[:space:]]+-m([[:space:]]+[^[:space:];|&]+|[^[:space:];|&]*))*[[:space:]]+HEAD[[:space:]]+refs/)"; then
+# Path-qualified /usr/bin/git update-ref / branch -D / symbolic-ref also blocked (RISK-3)
+_PQ_DIRECT_REF=0
+if [ "$CLASSIFIER_HAS_PATH_QUALIFIED_GIT" = "1" ]; then
+  printf '%s\n' "$CLASSIFIER_JSON" | "$PYTHON_BIN" -c "
+import json,sys,re
+invs=json.load(sys.stdin)
+bad_branch_flags={'--delete','--force','--move'}
+for inv in invs:
+  if not inv.get('path_qualified'):
+    continue
+  sub=inv.get('subcommand','')
+  args=inv.get('args',[])
+  if sub=='update-ref':
+    print('match'); sys.exit(0)
+  if sub=='branch':
+    for tok in args:
+      if tok in bad_branch_flags or (re.match(r'^-[fDdMm]+$',tok)):
+        print('match'); sys.exit(0)
+  if sub=='symbolic-ref':
+    # Look for HEAD refs/... (skip -m <msg> pairs)
+    i=0
+    while i<len(args):
+      if args[i]=='-m':
+        i+=2; continue
+      break
+    if i<len(args) and args[i]=='HEAD' and i+1<len(args) and args[i+1].startswith('refs/'):
+      print('match'); sys.exit(0)
+" 2>/dev/null | grep -q match && _PQ_DIRECT_REF=1
+fi
+if echo "$COMMAND" | grep -qE "${GIT_CMD_RE}(update-ref\b|branch[[:space:]]+(-[fDdMm]+|--delete|--force|--move)\b|symbolic-ref([[:space:]]+-m([[:space:]]+[^[:space:];|&]+|[^[:space:];|&]*))*[[:space:]]+HEAD[[:space:]]+refs/)" || \
+   [ "$_PQ_DIRECT_REF" = "1" ]; then
   echo "BLOCKED: direct git ref mutation is forbidden in agent flow" >&2
   echo "Command: $COMMAND" >&2
   echo "REASON: branch movement must go through the expected-parent CAS wrapper; branch delete/force/update-ref is not agent-accessible." >&2
@@ -1401,7 +1560,20 @@ if [ "$IS_SUBAGENT" = "1" ]; then
   # Narrowed (2026-05-14): commit|merge|push are fully covered by
   # pretool-git-privilege-guard.py (canonical layer). revert|cherry-pick|rebase
   # are NOT covered there, so they remain in this layer.
-  if echo "$COMMAND" | grep -qE 'git[[:space:]]+(revert|cherry-pick|rebase)([[:space:]]|$)'; then
+  # Path-qualified /usr/bin/git rebase/cherry-pick/revert also blocked (RISK-3)
+  _PQ_SUBAGENT_HISTORY=0
+  if [ "$CLASSIFIER_HAS_PATH_QUALIFIED_GIT" = "1" ]; then
+    printf '%s\n' "$CLASSIFIER_JSON" | "$PYTHON_BIN" -c "
+import json,sys
+invs=json.load(sys.stdin)
+blocked={'revert','cherry-pick','rebase'}
+for inv in invs:
+  if inv.get('path_qualified') and inv.get('subcommand') in blocked:
+    print('match'); break
+" 2>/dev/null | grep -q match && _PQ_SUBAGENT_HISTORY=1
+  fi
+  if echo "$COMMAND" | grep -qE 'git[[:space:]]+(revert|cherry-pick|rebase)([[:space:]]|$)' || \
+     [ "$_PQ_SUBAGENT_HISTORY" = "1" ]; then
     echo "BLOCKED: Subagent-initiated git history mutation is FORBIDDEN (revert|cherry-pick|rebase)" >&2
     echo "Command: $COMMAND" >&2
     echo "Subagents must NEVER mutate git history. Tell the user what you want done" >&2
@@ -1418,10 +1590,29 @@ fi
 # Block: git revert <commit-hash> or git revert <ref>^ or git revert <ref>~N or git revert <ref>@{N}
 # V5: broadened from HEAD-only anchor to \S+ so any ref (HEAD, master, main, branch, tag)
 # with a modifier (caret, tilde, reflog, hash) is blocked.
+# V6: path-qualified /usr/bin/git revert HEAD^ also blocked via classifier (RISK-3)
 # Reverting a non-bare-HEAD commit can undo deliberate user work.
 # Safe: 'git revert HEAD' ONLY (bare — no caret, no tilde, no reflog, no branch-ref modifier).
 # All other revert forms are blocked.
-if echo "$COMMAND" | grep -qE 'git\s+revert\s+'; then
+_PQ_REVERT_MODIFIER=0
+if [ "$CLASSIFIER_HAS_PATH_QUALIFIED_GIT" = "1" ] && _pq_git_has_subcmd revert; then
+  printf '%s\n' "$CLASSIFIER_JSON" | "$PYTHON_BIN" -c "
+import json,sys,re
+invs=json.load(sys.stdin)
+for inv in invs:
+  if inv.get('path_qualified') and inv.get('subcommand')=='revert':
+    args=inv.get('args',[])
+    # Find the ref arg (first non-flag arg)
+    for a in args:
+      if a.startswith('-'):
+        continue
+      # Block if hash, caret, tilde, or reflog modifier
+      if re.match(r'^[0-9a-f]{7,40}$',a) or '^' in a or '~' in a or '@{' in a:
+        print('match'); break
+    break
+" 2>/dev/null | grep -q match && _PQ_REVERT_MODIFIER=1
+fi
+if echo "$COMMAND" | grep -qE 'git\s+revert\s+' || [ "$_PQ_REVERT_MODIFIER" = "1" ]; then
   # Block hex hashes (7+ chars)
   # Block caret form: <ref>^ or <ref>^^ (e.g., HEAD^, master^, HEAD^^)
   # Block tilde form: <ref>~ or <ref>~N (e.g., HEAD~, HEAD~1, master~2)
@@ -1432,7 +1623,8 @@ if echo "$COMMAND" | grep -qE 'git\s+revert\s+'; then
   if echo "$COMMAND" | grep -qE 'git\s+revert\s+(\S+\s+)*[0-9a-f]{7,40}\b' || \
      echo "$COMMAND" | grep -qE 'git\s+revert\s+(\S+\s+)*\S+\^+' || \
      echo "$COMMAND" | grep -qE 'git\s+revert\s+(\S+\s+)*\S+~[0-9]*' || \
-     echo "$COMMAND" | grep -qE 'git\s+revert\s+(\S+\s+)*\S+@\{[0-9]+\}'; then
+     echo "$COMMAND" | grep -qE 'git\s+revert\s+(\S+\s+)*\S+@\{[0-9]+\}' || \
+     [ "$_PQ_REVERT_MODIFIER" = "1" ]; then
     echo "BLOCKED: 'git revert' with any ref modifier (caret/tilde/reflog/hash) requires explicit user approval" >&2
     echo "Command: $COMMAND" >&2
     echo "REASON: On 2026-04-23, a dev subagent ran 'git revert 1204d62' which undid a user-approved" >&2

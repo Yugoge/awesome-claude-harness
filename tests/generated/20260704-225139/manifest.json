@@ -1,0 +1,366 @@
+{
+  "schema_version": "1.1",
+  "task_id": "20260704-225139",
+  "generated_at": "2026-07-05T00:00:00Z",
+  "active_tests": [
+    {
+      "task_id": "20260704-225139",
+      "ac_id": "AC-E1",
+      "ac_uid": "a1b2c3d4e5f60011",
+      "type": "hook",
+      "file": "tests/generated/20260704-225139/test_AC_E1_a1b2c3d4e5f60011.py",
+      "status": "active",
+      "hook_check": {
+        "type": "exit_code",
+        "test_fn": "test_session_git_init_default_off",
+        "expected_exit": 0,
+        "additional_assertions": [
+          "Disabled: unset (default), CLAUDE_SESSION_GIT_INIT=0, =false, =FALSE, =off, ='' (empty) — all must exit 0 without git ops",
+          "Enabled: CLAUDE_SESSION_GIT_INIT=1, =true, =TRUE, =yes, =YES — all must proceed with git init",
+          "Edge case: CLAUDE_SESSION_GIT_INIT=True (capital T, not in truthy set) must be disabled"
+        ]
+      }
+    },
+    {
+      "task_id": "20260704-225139",
+      "ac_id": "AC-E2",
+      "ac_uid": "a1b2c3d4e5f60012",
+      "type": "data",
+      "file": "tests/generated/20260704-225139/test_AC_E2_a1b2c3d4e5f60012.py",
+      "status": "active",
+      "hook_check": {
+        "type": "file_content",
+        "file": "hooks/session-git-init.sh",
+        "must_not_contain": [
+          "Happy <yesreply@happy.engineering>",
+          "via [Happy]"
+        ]
+      }
+    },
+    {
+      "task_id": "20260704-225139",
+      "ac_id": "AC-E3",
+      "ac_uid": "a1b2c3d4e5f60013",
+      "type": "hook",
+      "file": "tests/generated/20260704-225139/test_AC_E3_a1b2c3d4e5f60013.py",
+      "status": "active",
+      "hook_check": {
+        "type": "exit_code",
+        "test_fn": "test_canary_verify_venv_absent_advisory",
+        "expected_exit": 0,
+        "additional_assertions": [
+          "stderr contains the string 'advisory' or 'venv absent'",
+          "CLAUDE_HOME env var is respected (portability check)"
+        ]
+      }
+    },
+    {
+      "task_id": "20260704-225139",
+      "ac_id": "AC-E4",
+      "ac_uid": "a1b2c3d4e5f60014",
+      "type": "hook",
+      "file": "tests/generated/20260704-225139/test_AC_E4_a1b2c3d4e5f60014.py",
+      "status": "active",
+      "hook_check": {
+        "type": "output_routing",
+        "test_fn": "test_tmpfs_banner_output_on_stderr",
+        "additional_assertions": [
+          "printf '%s\\n' lines redirect to stderr",
+          "printf 'WARN %s\\n' lines redirect to stderr"
+        ]
+      }
+    },
+    {
+      "task_id": "20260704-225139",
+      "ac_id": "AC-E5",
+      "ac_uid": "a1b2c3d4e5f6001e",
+      "type": "hook",
+      "file": "tests/generated/20260704-225139/test_AC_E5_a1b2c3d4e5f6001e.py",
+      "status": "active",
+      "hook_check": {
+        "type": "exit_code",
+        "test_fn": "test_session_git_init_commit_failure_clears_staged",
+        "expected_exit": "non-zero",
+        "additional_assertions": [
+          "git diff --cached --name-only output is empty after script exits",
+          "sentinel file was staged before commit attempt (confirms git add . ran)",
+          "cleanup uses git rm -r --cached . OR git read-tree --empty (both acceptable) — NOT git reset HEAD or bare git reset (fails on unborn HEAD)",
+          "if/else or trap wraps the git add + git commit sequence to ensure cleanup runs"
+        ]
+      }
+    },
+    {
+      "task_id": "20260704-225139",
+      "ac_id": "AC-E6a",
+      "ac_uid": "a1b2c3d4e5f6e6a0",
+      "type": "data",
+      "file": "tests/generated/20260704-225139/test_AC_E6a_a1b2c3d4e5f6e6a0.py",
+      "status": "active",
+      "hook_check": {
+        "type": "exit_code",
+        "command": "git ls-files --error-unmatch .claude/.awesome-claude-harness",
+        "expected_exit": 0
+      }
+    },
+    {
+      "task_id": "20260704-225139",
+      "ac_id": "AC-E6b",
+      "ac_uid": "a1b2c3d4e5f6e6b0",
+      "type": "hook",
+      "file": "tests/generated/20260704-225139/test_AC_E6b_a1b2c3d4e5f6e6b0.py",
+      "status": "active",
+      "hook_check": {
+        "type": "exit_code",
+        "test_fn": "test_gitignore_propagate_no_marker_no_change",
+        "expected_exit": 0,
+        "additional_assertions": [
+          ".gitignore byte content is identical before and after hook run",
+          "hook exits at the marker check (not the old .claude-dir check)"
+        ]
+      }
+    },
+    {
+      "task_id": "20260704-225139",
+      "ac_id": "AC-E6c",
+      "ac_uid": "a1b2c3d4e5f6e6c0",
+      "type": "hook",
+      "file": "tests/generated/20260704-225139/test_AC_E6c_a1b2c3d4e5f6e6c0.py",
+      "status": "active",
+      "hook_check": {
+        "type": "exit_code",
+        "test_fn": "test_gitignore_propagate_with_marker_appends_rules_idempotently",
+        "expected_exit": 0,
+        "additional_assertions": [
+          "After first run: .gitignore contains 'tests/generated/'",
+          "After second run: grep -c 'tests/generated/' .gitignore returns 1 (no duplicate)"
+        ]
+      }
+    },
+    {
+      "task_id": "20260704-225139",
+      "ac_id": "AC-E7",
+      "ac_uid": "e7a1b2c3d4e5f601",
+      "type": "hook",
+      "file": "tests/generated/20260704-225139/test_AC_E7_e7a1b2c3d4e5f601.py",
+      "status": "active",
+      "hook_check": {
+        "type": "output_routing",
+        "test_fn": "test_session_git_init_output_on_stderr",
+        "additional_assertions": [
+          "exec >&2 present in the script after the opt-in gate",
+          "No bare echo or printf calls without >&2 redirect in the enabled code path"
+        ]
+      }
+    },
+    {
+      "task_id": "20260704-225139",
+      "ac_id": "AC-F1",
+      "ac_uid": "a1b2c3d4e5f60015",
+      "type": "hook",
+      "file": "tests/generated/20260704-225139/test_AC_F1_a1b2c3d4e5f60015.py",
+      "status": "active",
+      "hook_check": {
+        "type": "exit_code",
+        "test_fn": "test_path_qualified_git_push_force_blocked",
+        "expected_exit": 2
+      }
+    },
+    {
+      "task_id": "20260704-225139",
+      "ac_id": "AC-F2",
+      "ac_uid": "a1b2c3d4e5f60016",
+      "type": "hook",
+      "file": "tests/generated/20260704-225139/test_AC_F2_a1b2c3d4e5f60016.py",
+      "status": "active",
+      "hook_check": {
+        "type": "exit_code",
+        "test_fns": [
+          "test_echo_path_qualified_git_reset_not_blocked",
+          "test_echo_path_qualified_git_push_not_blocked"
+        ],
+        "expected_exit": 0,
+        "note": "echo is the command head after wrapper skipping; _command_token_index returns index 0 pointing to 'echo', not '/usr/bin/git'"
+      }
+    },
+    {
+      "task_id": "20260704-225139",
+      "ac_id": "AC-F3",
+      "ac_uid": "a1b2c3d4e5f60017",
+      "type": "hook",
+      "file": "tests/generated/20260704-225139/test_AC_F3_a1b2c3d4e5f60017.py",
+      "status": "active",
+      "hook_check": {
+        "type": "exit_code",
+        "test_fn": "test_legit_command_not_blocked",
+        "expected_exit": 0
+      }
+    },
+    {
+      "task_id": "20260704-225139",
+      "ac_id": "AC-F4",
+      "ac_uid": "a1b2c3d4e5f6001f",
+      "type": "hook",
+      "file": "tests/generated/20260704-225139/test_AC_F4_a1b2c3d4e5f6001f.py",
+      "status": "active",
+      "hook_check": {
+        "type": "exit_code",
+        "test_fns": [
+          "test_path_qualified_git_reset_hard_blocked",
+          "test_command_wrapper_path_qualified_git_reset_blocked"
+        ],
+        "expected_exit": 2,
+        "note": "'command /usr/bin/git reset --hard' — 'command' is in _WRAPPERS, skipped by _command_token_index; /usr/bin/git is the command head"
+      }
+    },
+    {
+      "task_id": "20260704-225139",
+      "ac_id": "AC-F5",
+      "ac_uid": "a1b2c3d4e5f60020b",
+      "type": "hook",
+      "file": "tests/generated/20260704-225139/test_AC_F5_a1b2c3d4e5f60020b.py",
+      "status": "active",
+      "hook_check": {
+        "type": "exit_code",
+        "test_fn": "test_path_qualified_git_commit_blocked_by_privilege_guard",
+        "expected_exit": 2,
+        "note": "Only pretool-git-privilege-guard.py is required to block this — NOT pretool-bash-safety.sh. Requiring bash-safety to block git commit would break authorized /commit flows."
+      }
+    },
+    {
+      "task_id": "20260704-225139",
+      "ac_id": "AC-F6",
+      "ac_uid": "a1b2c3d4e5f60020c",
+      "type": "hook",
+      "file": "tests/generated/20260704-225139/test_AC_F6_a1b2c3d4e5f60020c.py",
+      "status": "active",
+      "hook_check": {
+        "type": "exit_code",
+        "test_fn": "test_git_status_not_blocked_after_path_prefix_fix",
+        "expected_exit": 0
+      }
+    },
+    {
+      "task_id": "20260704-225139",
+      "ac_id": "AC-F7",
+      "ac_uid": "f7a1b2c3d4e5f601",
+      "type": "hook",
+      "file": "tests/generated/20260704-225139/test_AC_F7_f7a1b2c3d4e5f601.py",
+      "status": "active",
+      "hook_check": {
+        "type": "exit_code",
+        "test_fns": [
+          "test_path_qualified_git_stash_push_blocked",
+          "test_path_qualified_git_stash_push_u_blocked",
+          "test_path_qualified_git_checkout_wide_path_blocked",
+          "test_path_qualified_git_restore_source_wide_path_blocked"
+        ],
+        "expected_exit": 2
+      }
+    },
+    {
+      "task_id": "20260704-225139",
+      "ac_id": "AC-F11",
+      "ac_uid": "f11a1b2c3d4e5f60",
+      "type": "unit_test",
+      "file": "tests/generated/20260704-225139/test_AC_F11_f11a1b2c3d4e5f60.py",
+      "status": "active",
+      "hook_check": {
+        "type": "unit_test",
+        "test_fn": "test_bash_safety_multiline_embedded_git_no_false_positive",
+        "expected_exit": 0,
+        "additional_assertions": [
+          "COMMAND_CONTEXT_STRIPPED for \"printf 'line1\\ngit push --force'\" (the quoted payload) strips the non-executable git reference — bash_context_strip.py strips the quoted body leaving only 'printf ' (git absent)",
+          "printf '%s\\n' \"$COMMAND_CONTEXT_STRIPPED\" | grep -q 'git' evaluates false for the stripped version, so the classifier subprocess is skipped",
+          "This AC guards the COMMAND_CONTEXT_STRIPPED scope boundary: bash-safety MUST feed COMMAND_CONTEXT_STRIPPED (not raw $COMMAND) to both the prefilter and classifier subprocess"
+        ],
+        "note": "Verifies the multi-line false-positive guard: COMMAND_CONTEXT_STRIPPED normalization at pretool-bash-safety.sh:733-743 is the correct protection layer; raw $COMMAND must never be fed to the classifier."
+      }
+    },
+    {
+      "task_id": "20260704-225139",
+      "ac_id": "AC-F8",
+      "ac_uid": "f8a1b2c3d4e5f601",
+      "type": "hook",
+      "file": "tests/generated/20260704-225139/test_AC_F8_f8a1b2c3d4e5f601.py",
+      "status": "active",
+      "hook_check": {
+        "type": "exit_code",
+        "test_fn": "test_block_branch_pr_worktree_still_blocks_after_primitive_move",
+        "expected_exit": 2,
+        "additional_assertions": [
+          "pretool-block-branch-pr-worktree.py no longer defines _segments/_command_token_index/_basename/_git_subcommand inline",
+          "'from lib.git_command_classifier import ...' present in pretool-block-branch-pr-worktree.py"
+        ]
+      }
+    },
+    {
+      "task_id": "20260704-225139",
+      "ac_id": "AC-F9",
+      "ac_uid": "f9a1b2c3d4e5f601",
+      "type": "hook",
+      "file": "tests/generated/20260704-225139/test_AC_F9_f9a1b2c3d4e5f601.py",
+      "status": "active",
+      "hook_check": {
+        "type": "unit_test",
+        "test_fn": "test_classifier_cli_json_output",
+        "expected_exit": 0,
+        "additional_assertions": [
+          "printf '/usr/bin/git push --force\\n' | python3 classifier.py → JSON has entry with subcommand='push', path_qualified=true",
+          "printf '/usr/bin/git -C repo push --force\\n' | python3 classifier.py → JSON has entry with subcommand='push', path_qualified=true (global option -C skipped)",
+          "printf 'echo /usr/bin/git push --force\\n' | python3 classifier.py → JSON is empty list (echo is command head, not git)",
+          "printf 'git status\\n' | python3 classifier.py → JSON has entry with subcommand='status', path_qualified=false"
+        ],
+        "note": "Codex finding 6: removed --check-path-qualified CLI mode; JSON output mode only. Bash callers run JSON mode once and inspect subcommand/path_qualified from the output."
+      }
+    },
+    {
+      "task_id": "20260704-225139",
+      "ac_id": "AC-F7b",
+      "ac_uid": "f7ba1b2c3d4e5f60",
+      "type": "hook",
+      "file": "tests/generated/20260704-225139/test_AC_F7b_f7ba1b2c3d4e5f60.py",
+      "status": "active",
+      "hook_check": {
+        "type": "exit_code",
+        "test_fns": [
+          "test_path_qualified_git_rebase_subagent_blocked",
+          "test_path_qualified_git_cherry_pick_subagent_blocked",
+          "test_path_qualified_git_revert_modifier_blocked",
+          "test_path_qualified_git_push_force_with_lease_blocked",
+          "test_path_qualified_git_update_ref_blocked",
+          "test_path_qualified_git_branch_delete_blocked"
+        ],
+        "expected_exit": 2,
+        "additional_assertions": [
+          "Lines 1376-1383: /usr/bin/git push --force-with-lease origin main → exit 2 (force push block, path-qualified form)",
+          "Lines 1384-1389: /usr/bin/git update-ref refs/heads/main abc1234 → exit 2 (direct ref mutation block, path-qualified form)",
+          "Lines 1384-1389: /usr/bin/git branch -D feature → exit 2 (branch delete block, path-qualified form)",
+          "Lines 1404: /usr/bin/git rebase main in subagent context → exit 2",
+          "Lines 1424-1435: /usr/bin/git revert HEAD^ → exit 2"
+        ]
+      }
+    },
+    {
+      "task_id": "20260704-225139",
+      "ac_id": "AC-F10",
+      "ac_uid": "f10a1b2c3d4e5f60",
+      "type": "hook",
+      "file": "tests/generated/20260704-225139/test_AC_F10_f10a1b2c3d4e5f60.py",
+      "status": "active",
+      "hook_check": {
+        "type": "exit_code",
+        "test_fns": [
+          "test_command_echo_path_qualified_git_not_blocked",
+          "test_env_prefixed_echo_path_qualified_git_not_blocked"
+        ],
+        "expected_exit": 0,
+        "additional_assertions": [
+          "'command echo /usr/bin/git reset --hard' → NOT exit 2 (echo is effective command after 'command' wrapper skip)",
+          "'env FOO=bar echo /usr/bin/git push --force' → NOT exit 2 (echo is command head after env var assignment skip)",
+          "Note: 'command' is in _WRAPPERS; 'FOO=bar' is skipped by _ENV_ASSIGN_RE; 'echo' is the command head in both cases"
+        ]
+      }
+    }
+  ],
+  "archived_tests": []
+}

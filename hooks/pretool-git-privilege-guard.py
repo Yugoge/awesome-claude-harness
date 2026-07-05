@@ -90,6 +90,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 from lib.allowlist import read_grant_for_git_command, match_sentinel_grant_for_bash_command  # noqa: E402
+from lib.git_command_classifier import iter_git_invocations, GitInvocation  # noqa: E402
 
 
 BLESSED_BRIDGE_RE = re.compile(r'auto-bulk:\s*end-of-cycle commit for\b')
@@ -319,62 +320,69 @@ def _git_output(args):
         return ''
 
 
-def _extract_push_remote(command):
-    """Best-effort extraction of the explicit remote argument from a
-    `git push` invocation.  Returns the first positional token after
-    `push` that is not a flag (does not start with `-`), or '' when
-    not found (typical for plain `git push` with upstream tracking).
+def _extract_push_remote(invocation):
+    """Best-effort extraction of the explicit remote argument from a push
+    GitInvocation.  Returns the first positional token in invocation.args
+    that is not a flag (does not start with `-`), or '' when not found.
     """
-    m = re.search(GIT_COMMAND_RE + r'push\b(.*)', command)
-    if not m:
-        return ''
-    tail = m.group(1)
-    # Stop at shell separators so trailing pipelines do not pollute.
-    tail = re.split(r'[;&|`]', tail, maxsplit=1)[0]
-    for tok in tail.strip().split():
+    for tok in invocation.args:
         if tok.startswith('-'):
+            continue
+        if tok.startswith('+') or tok.startswith(':'):
             continue
         return tok
     return ''
 
 
-def _looks_like_git_commit(command):
-    return bool(re.search(GIT_COMMAND_RE + r'commit\b', command))
+def _looks_like_git_commit(invocations):
+    return any(inv.subcommand == 'commit' for inv in invocations)
 
 
-def _looks_like_git_merge(command):
-    return bool(re.search(GIT_COMMAND_RE + r'merge(?!-base|tool)\b', command))
+def _looks_like_git_merge(invocations):
+    # merge-base and mergetool are separate subcommand tokens from _git_subcommand;
+    # they will have inv.subcommand == 'merge-base' or 'mergetool', not 'merge'.
+    return any(inv.subcommand == 'merge' for inv in invocations)
 
 
-def _looks_like_git_push(command):
-    return bool(re.search(GIT_COMMAND_RE + r'push\b', command))
+def _looks_like_git_push(invocations):
+    return any(inv.subcommand == 'push' for inv in invocations)
 
 
-def _looks_like_git_reset_hard(command):
-    return bool(re.search(
-        GIT_COMMAND_RE + r"reset\s+(?:[^;|&]*\s+)?--hard\b",
-        command,
-    ))
+def _looks_like_git_reset_hard(invocations):
+    return any(
+        inv.subcommand == 'reset' and '--hard' in inv.args
+        for inv in invocations
+    )
 
 
-def _looks_like_git_direct_ref_mutation(command):
-    if re.search(GIT_COMMAND_RE + r'update-ref\b', command):
-        return True
-    if re.search(GIT_COMMAND_RE + r'symbolic-ref\s+(?:-m\s+\S+\s+)*HEAD\s+refs/', command):
-        return True
-    return bool(re.search(
-        GIT_COMMAND_RE + r'branch\s+(?:-[fDdMm]+\b|--delete\b|--force\b|--move\b)',
-        command,
-    ))
+def _looks_like_git_direct_ref_mutation(invocations):
+    for inv in invocations:
+        if inv.subcommand == 'update-ref':
+            return True
+        if inv.subcommand == 'symbolic-ref':
+            # Block: symbolic-ref HEAD refs/...
+            args = inv.args
+            # Skip -m <msg> flag pairs
+            i = 0
+            while i < len(args):
+                if args[i] == '-m':
+                    i += 2
+                    continue
+                break
+            if i < len(args) and args[i] == 'HEAD':
+                if i + 1 < len(args) and args[i + 1].startswith('refs/'):
+                    return True
+        if inv.subcommand == 'branch':
+            for tok in inv.args:
+                if tok in ('--delete', '--force', '--move'):
+                    return True
+                if re.match(r'^-[fDdMm]+$', tok):
+                    return True
+    return False
 
 
-def _push_has_forbidden_ref_mutation(command):
-    m = re.search(GIT_COMMAND_RE + r'push\b(.*)', command)
-    if not m:
-        return False
-    tail = re.split(r'[;&|`]', m.group(1), maxsplit=1)[0]
-    tokens = tail.strip().split()
-    for tok in tokens:
+def _push_has_forbidden_ref_mutation(invocation):
+    for tok in invocation.args:
         if tok in ('--force', '-f', '--force-with-lease', '--delete', '-d', '--mirror'):
             return True
         if tok.startswith('--force-with-lease='):
@@ -411,12 +419,20 @@ def _extract_commit_message(command):
     return ''
 
 
-def _extract_reset_target(command):
-    m = re.search(
-        GIT_COMMAND_RE + r"reset\s+(?:[^;|&]*?\s+)?--hard\s+([^\s;|&]+)",
-        command,
-    )
-    return m.group(1) if m else ''
+def _extract_reset_target(invocation):
+    """Extract the target ref from a reset --hard GitInvocation.
+
+    Returns the first non-flag positional arg after --hard, or ''.
+    """
+    args = invocation.args
+    try:
+        hard_idx = args.index('--hard')
+        for tok in args[hard_idx + 1:]:
+            if not tok.startswith('-'):
+                return tok
+    except ValueError:
+        pass
+    return ''
 
 
 def _is_head_ref(ref):
@@ -659,10 +675,10 @@ def _validate_push_grant_head(grant):
         )
 
 
-def _validate_push_grant_remote(grant, command):
+def _validate_push_grant_remote(grant, push_invocation):
     """AC-A6 (remote binding): explicit cmd remote must match grant.remote."""
     grant_remote = grant.get('remote') or ''
-    cmd_remote = _extract_push_remote(command)
+    cmd_remote = _extract_push_remote(push_invocation)
     if cmd_remote and grant_remote and cmd_remote != grant_remote:
         _block(
             '\nBLOCKED: agent git push - remote mismatch.\n'
@@ -685,12 +701,14 @@ def _block_missing_push_grant(sid):
     )
 
 
-def _evaluate_push(command, data):
+def _evaluate_push(command, invocations, data):
     sid = _get_session_id(data)
     # AC-A1: literal-substring inline-env injection (precedes env check).
     if _inline_env_present(command, 'CLAUDE_PUSH_COMMAND_ACTIVE'):
         _block_inline_env_push(command)
-    if _push_has_forbidden_ref_mutation(command):
+    # Find the push invocation for ref-mutation and remote checks.
+    push_inv = next((inv for inv in invocations if inv.subcommand == 'push'), None)
+    if push_inv and _push_has_forbidden_ref_mutation(push_inv):
         _block(
             '\nBLOCKED: agent git push - force/delete/ref-rewrite push is forbidden.\n'
             'Command excerpt: %s\n' % command[:200]
@@ -710,15 +728,16 @@ def _evaluate_push(command, data):
     # AC-A7 + AC-A6: branch / head / remote binding.
     _validate_push_grant_branch(grant)
     _validate_push_grant_head(grant)
-    _validate_push_grant_remote(grant, command)
+    _validate_push_grant_remote(grant, push_inv)
     # All validations passed.  Consume grant (single-use), then allow.
     _unlink_grant(grant_path)
 
 
-def _evaluate_reset_hard(command, data):
+def _evaluate_reset_hard(command, invocations, data):
     if _check_git_allowlist(command, data):
         return
-    target = _extract_reset_target(command)
+    reset_inv = next((inv for inv in invocations if inv.subcommand == 'reset'), None)
+    target = _extract_reset_target(reset_inv) if reset_inv else ''
     _block(
         '\nBLOCKED: agent git reset --hard - hard reset is forbidden '
         'from agent flow.\n'
@@ -739,26 +758,25 @@ def _evaluate_direct_ref_mutation(command, data):
     )
 
 
-def _looks_like_git_forbidden_plumbing(command):
+def _looks_like_git_forbidden_plumbing(invocations):
     """R6: Ban agent direct invocation of git plumbing that creates commit objects.
 
     Defense-in-depth: most are already indirectly blocked (they call git commit
     or git update-ref internally). These explicit bans close the gap for R6.
-    Uses GIT_COMMAND_RE anchor so string literals in python -c code are not matched.
+    Uses token-aware classification so string literals in python -c code are
+    not matched (only the command token is classified, not arguments).
     """
-    forbidden_suffixes = [
-        r'commit-tree\b',
-        r'cherry-pick\b',
-        r'rebase\b',
-        r'pull\b',
-        r'filter-branch\b',
-        r'filter-repo\b',
-        r'replace\s+(-e|--edit)\b',
-        r'fast-import\b',
-        r'revert\b',
-        r'am\b',
-    ]
-    return any(re.search(GIT_COMMAND_RE + s, command) for s in forbidden_suffixes)
+    _FORBIDDEN_PLUMBING = {
+        'commit-tree', 'cherry-pick', 'rebase', 'pull',
+        'filter-branch', 'filter-repo', 'fast-import', 'revert', 'am',
+    }
+    for inv in invocations:
+        if inv.subcommand in _FORBIDDEN_PLUMBING:
+            return True
+        if inv.subcommand == 'replace':
+            if '-e' in inv.args or '--edit' in inv.args:
+                return True
+    return False
 
 
 def _evaluate_forbidden_plumbing(command, data):
@@ -772,22 +790,28 @@ def _evaluate_forbidden_plumbing(command, data):
 
 
 def _evaluate_command(command, data):
+    # Classify once: build invocations list for all _looks_like_* and _evaluate_* calls.
+    # iter_git_invocations uses token-aware parsing so path-qualified forms like
+    # /usr/bin/git are detected alongside bare 'git' (closes RISK-3 bypass).
+    invocations = list(iter_git_invocations(command))
+    if not invocations:
+        return
     # Fast path: if /allow grant matches for non-push commands, allow immediately.
     # Push is excluded: its allowlist check must come AFTER _push_has_forbidden_ref_mutation
     # (force-push must stay blocked even with a broad /allow grant).
-    if not _looks_like_git_push(command) and _check_git_allowlist(command, data):
+    if not _looks_like_git_push(invocations) and _check_git_allowlist(command, data):
         return
-    if _looks_like_git_forbidden_plumbing(command):
+    if _looks_like_git_forbidden_plumbing(invocations):
         _evaluate_forbidden_plumbing(command, data)
-    if _looks_like_git_reset_hard(command):
-        _evaluate_reset_hard(command, data)
-    if _looks_like_git_direct_ref_mutation(command):
+    if _looks_like_git_reset_hard(invocations):
+        _evaluate_reset_hard(command, invocations, data)
+    if _looks_like_git_direct_ref_mutation(invocations):
         _evaluate_direct_ref_mutation(command, data)
-    if _looks_like_git_push(command):
-        _evaluate_push(command, data)
-    if _looks_like_git_merge(command):
+    if _looks_like_git_push(invocations):
+        _evaluate_push(command, invocations, data)
+    if _looks_like_git_merge(invocations):
         _evaluate_merge(command, data)
-    if _looks_like_git_commit(command):
+    if _looks_like_git_commit(invocations):
         _evaluate_commit(command, data)
 
 

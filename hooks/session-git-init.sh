@@ -9,6 +9,15 @@
 
 set -e
 
+# Opt-in gate: truthy-only semantics — {1,true,TRUE,yes,YES} → enabled; everything else → skip
+case "${CLAUDE_SESSION_GIT_INIT:-}" in
+  1|true|TRUE|yes|YES) ;;
+  *) echo "session-git-init: CLAUDE_SESSION_GIT_INIT not set to truthy value — skipping" >&2; exit 0 ;;
+esac
+
+# Redirect all subsequent stdout to stderr (session hooks must not pollute stdout)
+exec >&2
+
 # Color output
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
@@ -16,9 +25,8 @@ BLUE='\033[0;34m'
 RED='\033[0;31m'
 NC='\033[0m' # No Color
 
-# Configurable Co-Authorship
-CO_AUTHOR=${CLAUDE_CO_AUTHOR:-"Co-Authored-By: Claude <noreply@anthropic.com>
-Co-Authored-By: Happy <yesreply@happy.engineering>"}
+# Configurable Co-Authorship (Claude attribution only — no third-party watermark in default)
+CO_AUTHOR=${CLAUDE_CO_AUTHOR:-"Co-Authored-By: Claude <noreply@anthropic.com>"}
 
 # Check if already a git repository
 if git rev-parse --git-dir > /dev/null 2>&1; then
@@ -87,15 +95,18 @@ if git rev-parse --verify -q HEAD >/dev/null 2>&1; then
   exit 0
 fi
 
-git add .
-git commit -m "chore: initialize repository with default .gitignore
+if git add . && git commit -m "chore: initialize repository with default .gitignore
 
 🤖 Generated with [Claude Code](https://claude.ai/code)
-via [Happy](https://happy.engineering)
 
-${CO_AUTHOR}" > /dev/null 2>&1
-
-echo -e "${GREEN}✅ Git repository initialized with initial commit${NC}"
+${CO_AUTHOR}" > /dev/null 2>&1; then
+  echo -e "${GREEN}✅ Git repository initialized with initial commit${NC}"
+else
+  # Cleanup staged content — use git rm -r --cached . (not git reset HEAD, which fails on
+  # unborn HEAD before the first commit)
+  git rm -r --cached . > /dev/null 2>&1 || true
+  exit 1
+fi
 
 # Check if GitHub CLI is installed
 if ! command -v gh &> /dev/null; then
