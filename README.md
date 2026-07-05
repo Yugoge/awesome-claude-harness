@@ -306,6 +306,12 @@ The orchestrator dispatches specialists by *describing the problem* — never th
 - **`/do`** lets the *main* agent do direct work for one task and requires a deterministic `do-report` before `/close`. A human's `/do` consent is recognized by the orchestrator gate, bash-safety, and the always-on git-privilege-guard — so it lets the main agent through all three, which is the entire point of break-glass. It applies to the **main agent only**: a subagent never benefits from the consent flag. It does **not** quiet the bulk-commit detector's warning.
 - **`/allow`** writes a single, **structured** break-glass grant for one specific operation, matched by command **structure** (`op` / `target` / `args_contain`) — the sanctioned path, in preference to the fragile substring matching that a legacy fallback in `hooks/lib/allowlist.py` still retains. Refuse-by-default is the rule (the exact match-all hole was closed in commit `7dbdd307`, "/allow consent is refuse-by-default — close match-all grant hole"). The grant is single-use and consumed on any terminal result.
 
+  Example grant file at `/tmp/claude-grants/<task_id>.json`:
+  ```json
+  {"task_id": "20260705-113208", "session_id": "dev-...", "allowed_operations": [{"op": "git", "target": "checkout", "args_contain": ["hooks/pretool-bash-safety.sh"]}], "created_at": "2026-07-05T11:32:08Z", "expires_at": "2026-07-05T12:32:08Z"}
+  ```
+  The hook matches on `op` (first word of the sub-command), `target` (second word), and whether all `args_contain` fragments appear in the argument list — command-text grep is not the match channel.
+
 Most release commands carry `disable-model-invocation: true` so an agent can't self-invoke them via SlashCommand. Because that flag does **not** block the `Skill` tool, every human-only command is *also* denied as `Skill(<name>:*)` in `permissions.deny` — the human is the trust root.
 
 > Full, auto-maintained list: [`commands/README.md`](commands/README.md).
