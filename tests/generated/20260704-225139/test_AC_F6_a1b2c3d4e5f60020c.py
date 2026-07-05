@@ -5,10 +5,29 @@
 # above (AC_UID, AC_TYPE, docstring) MUST be preserved verbatim so QA can
 # trace each test back to its source AC entry.
 
-import pytest
+import json
+import subprocess
 
 AC_UID = "a1b2c3d4e5f60020c"
 AC_TYPE = "hook"
+
+REPO = "/dev/shm/dev-workspace/dot-claude"
+SAFETY = f"{REPO}/hooks/pretool-bash-safety.sh"
+
+
+def _run_safety(command):
+    payload = json.dumps({
+        "tool_name": "Bash",
+        "tool_input": {"command": command},
+        "agent_id": "test-subagent",
+    })
+    return subprocess.run(
+        ["bash", SAFETY],
+        input=payload,
+        capture_output=True,
+        text=True,
+        cwd=REPO,
+    )
 
 
 def test_AC_F6():
@@ -17,7 +36,9 @@ def test_AC_F6():
     WHEN:  'git status' is evaluated AND '/usr/bin/git status' is evaluated
     THEN:  neither causes exit code 2 (benign git status must not be newly blocked)
     """
-    # TODO(dev): replace the line below with the real test body. While the
-    # TEST_INCOMPLETE sentinel is present the test will hard-fail, marking
-    # the AC as unimplemented for QA Phase 5.
-    pytest.fail(f"TEST_INCOMPLETE: {AC_UID} — git status and path-qualified git status not blocked")
+    for cmd in ["git status", "/usr/bin/git status"]:
+        result = _run_safety(cmd)
+        assert result.returncode != 2, (
+            f"'{cmd}' should NOT be blocked by bash-safety, got exit {result.returncode}\n"
+            f"stderr: {result.stderr}"
+        )
