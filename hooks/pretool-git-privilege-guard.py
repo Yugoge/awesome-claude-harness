@@ -320,62 +320,71 @@ def _git_output(args):
         return ''
 
 
-def _extract_push_remote(command):
-    """Best-effort extraction of the explicit remote argument from a
-    `git push` invocation.  Returns the first positional token after
-    `push` that is not a flag (does not start with `-`), or '' when
-    not found (typical for plain `git push` with upstream tracking).
+def _extract_push_remote(invocation):
+    """Best-effort extraction of the explicit remote argument from a push
+    GitInvocation.  Returns the first positional token in invocation.args
+    that is not a flag (does not start with `-`), or '' when not found.
     """
-    m = re.search(GIT_COMMAND_RE + r'push\b(.*)', command)
-    if not m:
-        return ''
-    tail = m.group(1)
-    # Stop at shell separators so trailing pipelines do not pollute.
-    tail = re.split(r'[;&|`]', tail, maxsplit=1)[0]
-    for tok in tail.strip().split():
+    for tok in invocation.args:
         if tok.startswith('-'):
+            continue
+        if tok.startswith('+') or tok.startswith(':'):
             continue
         return tok
     return ''
 
 
-def _looks_like_git_commit(command):
-    return bool(re.search(GIT_COMMAND_RE + r'commit\b', command))
+def _looks_like_git_commit(invocations):
+    return any(inv.subcommand == 'commit' for inv in invocations)
 
 
-def _looks_like_git_merge(command):
-    return bool(re.search(GIT_COMMAND_RE + r'merge(?!-base|tool)\b', command))
+def _looks_like_git_merge(invocations):
+    return any(
+        inv.subcommand == 'merge'
+        and not (inv.args and inv.args[0] in ('-base', 'tool'))
+        for inv in invocations
+    )
 
 
-def _looks_like_git_push(command):
-    return bool(re.search(GIT_COMMAND_RE + r'push\b', command))
+def _looks_like_git_push(invocations):
+    return any(inv.subcommand == 'push' for inv in invocations)
 
 
-def _looks_like_git_reset_hard(command):
-    return bool(re.search(
-        GIT_COMMAND_RE + r"reset\s+(?:[^;|&]*\s+)?--hard\b",
-        command,
-    ))
+def _looks_like_git_reset_hard(invocations):
+    return any(
+        inv.subcommand == 'reset' and '--hard' in inv.args
+        for inv in invocations
+    )
 
 
-def _looks_like_git_direct_ref_mutation(command):
-    if re.search(GIT_COMMAND_RE + r'update-ref\b', command):
-        return True
-    if re.search(GIT_COMMAND_RE + r'symbolic-ref\s+(?:-m\s+\S+\s+)*HEAD\s+refs/', command):
-        return True
-    return bool(re.search(
-        GIT_COMMAND_RE + r'branch\s+(?:-[fDdMm]+\b|--delete\b|--force\b|--move\b)',
-        command,
-    ))
+def _looks_like_git_direct_ref_mutation(invocations):
+    for inv in invocations:
+        if inv.subcommand == 'update-ref':
+            return True
+        if inv.subcommand == 'symbolic-ref':
+            # Block: symbolic-ref HEAD refs/...
+            args = inv.args
+            # Skip -m <msg> flag pairs
+            i = 0
+            while i < len(args):
+                if args[i] == '-m':
+                    i += 2
+                    continue
+                break
+            if i < len(args) and args[i] == 'HEAD':
+                if i + 1 < len(args) and args[i + 1].startswith('refs/'):
+                    return True
+        if inv.subcommand == 'branch':
+            for tok in inv.args:
+                if tok in ('--delete', '--force', '--move'):
+                    return True
+                if re.match(r'^-[fDdMm]+$', tok):
+                    return True
+    return False
 
 
-def _push_has_forbidden_ref_mutation(command):
-    m = re.search(GIT_COMMAND_RE + r'push\b(.*)', command)
-    if not m:
-        return False
-    tail = re.split(r'[;&|`]', m.group(1), maxsplit=1)[0]
-    tokens = tail.strip().split()
-    for tok in tokens:
+def _push_has_forbidden_ref_mutation(invocation):
+    for tok in invocation.args:
         if tok in ('--force', '-f', '--force-with-lease', '--delete', '-d', '--mirror'):
             return True
         if tok.startswith('--force-with-lease='):
