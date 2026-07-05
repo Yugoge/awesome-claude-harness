@@ -1,8 +1,8 @@
 # dot-claude
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-07-04T16:11:01Z*
-**Total entries**: 470
+*Last updated: 2026-07-05T12:22:12Z*
+**Total entries**: 474
 **Convention**: kebab
 
 ## Tree
@@ -78,6 +78,7 @@ dot-claude/
 │   │   ├── `slashcommand-quick-reference.md` - Slash Command Quick Reference
 │   │   ├── `tmp-cleanup-convention.md` - Ad-hoc scratch directory convention
 │   │   └── `venv-repair.md` - venv-repair — restoring `~/.claude/venv` when interpreter symlinks break
+│   └── `THREAT-MODEL.md` - Threat Model — awesome-claude-harness
 ├── examples/
 │   └── guard-demo/
 │       └── `run-demo.sh` - Description: Reproducible guard demo — a dangerous operation is BLOCKED by the
@@ -109,6 +110,7 @@ dot-claude/
 │   │   ├── `close-verdict.py` - Shared CLOSE verdict classifier for commit/close tooling.
 │   │   ├── `closeout.py` - Public API:
 │   │   ├── `contract_runtime.py` - This module is the single shared engine consumed by every contract-aware
+│   │   ├── `git_command_classifier.py` - Provides iter_git_invocations() — a token-aware parser that detects git
 │   │   ├── `grepguard_context_strip.py` - PURPOSE (narrow, guard-specific)
 │   │   ├── `overnight.py` - Single source of truth for "is a /dev-overnight session currently live?". A
 │   │   ├── `policy_registry.py` - Reads the harness ``policies/tool-policy.v1.json`` (resolved via the shared
@@ -129,9 +131,9 @@ dot-claude/
 │   │   ├── `test_bash_safety_context_rules.py` - converted to COMMAND_CONTEXT_STRIPPED in hooks/pretool-bash-safety.sh
 │   │   ├── `test_block_branch_pr_worktree.py` - The hook forbids branch / PR / worktree CREATION on the Bash surface, with three
 │   │   ├── `test_bulk_commit_sentinel.py` - Covers:
-│   │   ├── `test_commit_strip_dotfile_paths.py` - Bug surfaced cycle 20260511-100000: dev-report listed 6 `.claude/commands/*`
 │   │   ├── `test_cp_checkin.py` - of ba-spec-20260427-194324.md (P1 view-trigger removal + P2 generation field)
 │   │   ├── `test_do_taskid_mint.py` - Covers the root-cause fix for the do-report task-id collision (memory
+│   │   ├── `test_extract.py` - Unit tests for hooks/doc_sync/extract.py — covers all 4 defects + known-file cases.
 │   │   ├── `test_final_sweep.sh` - Final sweep — run inline AC checks and print PASS/FAIL summary.
 │   │   ├── `test_push_sentinel_abort.sh` - Unit test for AC1 V5: hooks/push.sh self-aborts before any real git push
 │   │   └── `test_runtime_guard.py` - Two layers:
@@ -174,7 +176,7 @@ dot-claude/
 │   ├── `pretool-bisect-gate.sh` - pretool-bisect-gate.sh
 │   ├── `pretool-block-branch-pr-worktree.py` - Policy (user directive 2026-06-04; the verbatim user directive is preserved in
 │   ├── `pretool-block-enterworktree.sh` - PreToolUse hook: Block EnterWorktree tool
-│   ├── `pretool-bulk-commit-detector.py` - import json
+│   ├── `pretool-bulk-commit-detector.py` - PreToolUse Hook: Bulk-commit detector
 │   ├── `pretool-claude-config-guard.py` - PreToolUse Hook: Claude config (.claude/hooks + .claude/commands) protection
 │   ├── `pretool-cp-checkin.py` - cp-state file read
 │   ├── `pretool-cp-state-write-guard.py` - Cycle-3 slim form (2026-05-14): Bash-extractor removed — 22-form adversarial
@@ -425,6 +427,8 @@ dot-claude/
 │   │   ├── 20260618-135436/
 │   │   ├── 20260702-171509/
 │   │   ├── 20260704-073650/
+│   │   ├── 20260704-134650/
+│   │   ├── 20260704-225139/
 │   │   ├── dev-20260530-144032/
 │   │   ├── dev-20260531-134455/
 │   │   ├── dev-20260531-193000/
