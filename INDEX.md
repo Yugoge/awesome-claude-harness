@@ -1,7 +1,7 @@
 # dot-claude
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-07-05T12:22:39Z*
+*Last updated: 2026-07-05T12:26:46Z*
 **Total entries**: 474
 **Convention**: kebab
 
@@ -114,7 +114,7 @@ dot-claude/
 │   │   ├── `grepguard_context_strip.py` - PURPOSE (narrow, guard-specific)
 │   │   ├── `overnight.py` - Single source of truth for "is a /dev-overnight session currently live?". A
 │   │   ├── `policy_registry.py` - Reads the harness ``policies/tool-policy.v1.json`` (resolved via the shared
-│   │   ├── `runtime_guard.py` - This module contains ZERO project identifiers. Every project-specific name
+│   │   ├── `runtime_guard.py` - This file exists for backwards-compatibility with callers that invoke
 │   │   ├── `schema_registry.py` - Reads schemas/registry.json once and lazily loads referenced schema files
 │   │   ├── `specialist_yield.py` - Public API:
 │   │   ├── `subagent.py` - Single source of truth for is_subagent_context() and supporting helpers
