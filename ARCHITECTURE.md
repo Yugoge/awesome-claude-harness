@@ -401,4 +401,20 @@ The config is plain Markdown + small scripts; doc-sync re-inventories the roster
 
 ---
 
+## 13. Enforcement asymmetry (overnight-only vs. interactive)
+
+Schema contract validation — the structured checks that verify BA-produced context JSON and dev/QA reports against the `schemas/cycle-contract.v1.json` and `schemas/dev-report.v1.json` contracts — fires **only during `/dev-overnight` sessions**, not on every interactive `/dev` invocation.
+
+**Why the asymmetry exists.** Full contract enforcement depends on state that overnight initializes but interactive sessions do not:
+
+- `dev-registry/<session>/` with per-subagent sentinel files and initialized cp-state views (written by `/spec`).
+- `overnight-state-<session_id>.json` — the durable session context the contract runtime reads to locate the active actor and pipeline phase.
+- The SubagentStop hooks that enforce cp-state and layer-match run on every subagent termination but only take effect when their required state files are present.
+
+**Implication for interactive users.** Running `/dev` interactively goes through the same BA → QA-of-BA → Dev → QA orchestration pipeline and the same PreToolUse/PostToolUse hook chain, but several enforcement triggers are silently skipped or degrade gracefully when overnight-initialized state is absent. The README's pipeline description applies to both modes; this section is the honest technical caveat that not all enforcement triggers fire outside overnight runs.
+
+**Concrete example — checkpoint enforcement.** `hooks/subagentstop-cp-enforce.py` (wired under `SubagentStop`) enforces that every atomic checkpoint listed in `.claude/specs/<SPEC_ID>/cp-state-<agent>.json` reaches `done` or `waived` before a subagent exits. This file is created only when the orchestrator invokes `/spec` to generate per-agent views. An interactive `/dev` invocation without a prior `/spec` produces no cp-state file, so `subagentstop-cp-enforce.py` exits 0 (no enforcement). Users who want checkpoint-level enforcement must use `/spec` + `/dev` together, or run `/dev-overnight`.
+
+---
+
 *Maintained by hand. Re-verify the counts in §1 with the listed commands after structural changes — they are not auto-generated into this file.*
