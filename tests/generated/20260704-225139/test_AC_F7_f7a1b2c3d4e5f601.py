@@ -5,10 +5,36 @@
 # above (AC_UID, AC_TYPE, docstring) MUST be preserved verbatim so QA can
 # trace each test back to its source AC entry.
 
-import pytest
+import json
+import subprocess
 
 AC_UID = "f7a1b2c3d4e5f601"
 AC_TYPE = "hook"
+
+REPO = "/dev/shm/dev-workspace/dot-claude"
+SAFETY = f"{REPO}/hooks/pretool-bash-safety.sh"
+
+BLOCKED_COMMANDS = [
+    "/usr/bin/git stash push",
+    "/usr/bin/git stash push -u",
+    "/usr/bin/git checkout HEAD -- .",
+    "/usr/bin/git restore --source=HEAD -- .",
+]
+
+
+def _run_safety(command):
+    payload = json.dumps({
+        "tool_name": "Bash",
+        "tool_input": {"command": command},
+        "agent_id": "test-subagent",
+    })
+    return subprocess.run(
+        ["bash", SAFETY],
+        input=payload,
+        capture_output=True,
+        text=True,
+        cwd=REPO,
+    )
 
 
 def test_AC_F7():
@@ -17,7 +43,8 @@ def test_AC_F7():
     WHEN:  path-qualified variants of dangerous git subcommands are evaluated by pretool-bash-safety.sh
     THEN:  all of the following exit 2: '/usr/bin/git stash push', '/usr/bin/git stash push -u', '/usr/bin/git checkout HEAD -- .', '/usr/bin/git restore --source=HEAD -- .'
     """
-    # TODO(dev): replace the line below with the real test body. While the
-    # TEST_INCOMPLETE sentinel is present the test will hard-fail, marking
-    # the AC as unimplemented for QA Phase 5.
-    pytest.fail(f"TEST_INCOMPLETE: {AC_UID} — path-qualified stash/checkout/restore wide-path blocked (exit 2)")
+    for cmd in BLOCKED_COMMANDS:
+        result = _run_safety(cmd)
+        assert result.returncode == 2, (
+            f"Expected exit 2 for '{cmd}', got {result.returncode}\nstderr: {result.stderr}"
+        )
