@@ -5,10 +5,14 @@
 # above (AC_UID, AC_TYPE, docstring) MUST be preserved verbatim so QA can
 # trace each test back to its source AC entry.
 
-import pytest
+import os
+import subprocess
+import tempfile
 
 AC_UID = "e7a1b2c3d4e5f601"
 AC_TYPE = "hook"
+
+HOOK = "/dev/shm/dev-workspace/dot-claude/hooks/session-git-init.sh"
 
 
 def test_AC_E7():
@@ -17,7 +21,27 @@ def test_AC_E7():
     WHEN:  hooks/session-git-init.sh runs with stdout and stderr captured separately
     THEN:  stdout is empty (0 bytes) — all output is on stderr
     """
-    # TODO(dev): replace the line below with the real test body. While the
-    # TEST_INCOMPLETE sentinel is present the test will hard-fail, marking
-    # the AC as unimplemented for QA Phase 5.
-    pytest.fail(f"TEST_INCOMPLETE: {AC_UID} — session-git-init.sh stdout empty, all output on stderr")
+    with tempfile.TemporaryDirectory() as tmpdir:
+        with tempfile.TemporaryDirectory() as fake_home:
+            git_cfg = os.path.join(fake_home, ".gitconfig")
+            with open(git_cfg, "w") as f:
+                f.write("[user]\n\tname = Test User\n\temail = test@example.com\n")
+
+            env = os.environ.copy()
+            env["CLAUDE_SESSION_GIT_INIT"] = "1"
+            env["HOME"] = fake_home
+            env["GIT_CONFIG_NOSYSTEM"] = "1"
+            env["GIT_CONFIG_GLOBAL"] = git_cfg
+            env["CLAUDE_AUTO_CREATE_REPO"] = "false"
+
+            result = subprocess.run(
+                ["bash", HOOK],
+                capture_output=True,
+                text=True,
+                cwd=tmpdir,
+                env=env,
+            )
+
+        assert result.stdout == "", (
+            f"Expected stdout to be empty (all output on stderr), got: {result.stdout!r}"
+        )
