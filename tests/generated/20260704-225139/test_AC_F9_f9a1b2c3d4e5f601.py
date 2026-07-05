@@ -5,10 +5,26 @@
 # above (AC_UID, AC_TYPE, docstring) MUST be preserved verbatim so QA can
 # trace each test back to its source AC entry.
 
-import pytest
+import json
+import subprocess
 
 AC_UID = "f9a1b2c3d4e5f601"
 AC_TYPE = "hook"
+
+REPO = "/dev/shm/dev-workspace/dot-claude"
+CLASSIFIER = f"{REPO}/hooks/lib/git_command_classifier.py"
+
+
+def _classify(cmd_text):
+    result = subprocess.run(
+        ["python3", CLASSIFIER],
+        input=cmd_text,
+        capture_output=True,
+        text=True,
+        cwd=REPO,
+    )
+    assert result.returncode == 0, f"Classifier failed: {result.stderr}"
+    return json.loads(result.stdout)
 
 
 def test_AC_F9():
@@ -17,7 +33,24 @@ def test_AC_F9():
     WHEN:  python3 hooks/lib/git_command_classifier.py is called with various inputs via stdin (JSON output mode, no --check-path-qualified flag)
     THEN:  output JSON correctly classifies invocations with subcommand, args, path_qualified fields
     """
-    # TODO(dev): replace the line below with the real test body. While the
-    # TEST_INCOMPLETE sentinel is present the test will hard-fail, marking
-    # the AC as unimplemented for QA Phase 5.
-    pytest.fail(f"TEST_INCOMPLETE: {AC_UID} — classifier CLI JSON output mode classifies subcommand and path_qualified correctly")
+    # path-qualified git push: path_qualified=True, subcommand=push
+    invocations = _classify("/usr/bin/git push")
+    assert len(invocations) == 1
+    assert invocations[0]["path_qualified"] is True
+    assert invocations[0]["subcommand"] == "push"
+
+    # path-qualified with -C option: subcommand=push
+    invocations = _classify("/usr/bin/git -C repo push --force")
+    assert len(invocations) == 1
+    assert invocations[0]["subcommand"] == "push"
+    assert invocations[0]["path_qualified"] is True
+
+    # echo /usr/bin/git push: echo is command head, no git invocations
+    invocations = _classify("echo /usr/bin/git push")
+    assert invocations == []
+
+    # bare git status: path_qualified=False
+    invocations = _classify("git status")
+    assert len(invocations) == 1
+    assert invocations[0]["path_qualified"] is False
+    assert invocations[0]["subcommand"] == "status"
