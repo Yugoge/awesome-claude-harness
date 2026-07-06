@@ -3443,9 +3443,9 @@ class TestCycle13LiveHookAndDoBypass:
         # this engine. The engine-level boundary ALLOW for those forms is asserted
         # in TestCycle13KillFragmentDirectionalOverlap; here we assert only the
         # config/find self-protection boundary the engine owns end-to-end.
-        assert self._run("cat /root/.config/claude/protected-runtime.json") == ALLOW
-        assert self._run("find /root/.config/claude -print") == ALLOW
-        assert self._run("find /root/.config/claude -name '*.json'") == ALLOW
+        assert self._run(f"cat {_LIVE_CFG_PATH}") == ALLOW
+        assert self._run(f"find {_LIVE_CFG_DIR} -print") == ALLOW
+        assert self._run(f"find {_LIVE_CFG_DIR} -name '*.json'") == ALLOW
         assert self._run("mv /tmp/unrelated-xyz /tmp/x") == ALLOW
 
     @pytest.mark.skipif(not _LIVE_CFG_EXISTS, reason=_LIVE_CFG_SKIP_REASON)
