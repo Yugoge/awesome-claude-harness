@@ -3419,6 +3419,7 @@ class TestCycle13LiveHookAndDoBypass:
         assert self._run(f"{_PG} -f happy | {_XK}") == BLOCK
         assert self._run(f"{_PK} -f happy") == BLOCK
 
+    @pytest.mark.skipif(not _LIVE_CFG_EXISTS, reason="live hook: requires /root/.config/claude/protected-runtime.json")
     def test_live_hook_config_ancestor_blocks(self):
         # the LIVE data file is /root/.config/claude/protected-runtime.json; its
         # parent dir mutation + find -delete must BLOCK on the real hook.
