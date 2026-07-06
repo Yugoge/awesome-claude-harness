@@ -832,6 +832,7 @@ class TestLiveHook:
     def test_hook_blocks_workspace_protected_build(self):
         assert run_hook("yarn workspace happy build") == BLOCK
 
+    @pytest.mark.skipif(not _LIVE_CFG_EXISTS, reason="live hook: requires /root/.config/claude/protected-runtime.json")
     def test_hook_allows_nonprotected_build(self):
         assert run_hook("yarn workspace happy-server build") == ALLOW
 
