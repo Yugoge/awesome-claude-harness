@@ -32,7 +32,13 @@ sys.path.insert(0, HOOKS_DIR)
 
 BLOCK = 2
 ALLOW = 0
-_LIVE_CFG_EXISTS = os.path.exists("/root/.config/claude/protected-runtime.json")
+_LIVE_CFG_PATH = os.path.join(
+    os.environ.get("HOME") or os.path.expanduser("~"),
+    ".config", "claude", "protected-runtime.json",
+)
+_LIVE_CFG_DIR = os.path.dirname(_LIVE_CFG_PATH)
+_LIVE_CFG_EXISTS = os.path.exists(_LIVE_CFG_PATH)
+_LIVE_CFG_SKIP_REASON = f"live hook: requires {_LIVE_CFG_PATH}"
 
 
 # ── Test fixture data file (de-drifted values, isolated from the live file) ──
