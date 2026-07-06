@@ -3462,11 +3462,11 @@ class TestCycle13LiveHookAndDoBypass:
                 return subprocess.run(["bash", HOOK], input=payload, text=True,
                                       capture_output=True, env=self._clean_env()).returncode
             assert run(f"{_PG} -f happy | {_XK}") == BLOCK
-            assert run("mv /root/.config/claude /tmp/x") == BLOCK
-            assert run("find /root/.config/claude -delete") == BLOCK
+            assert run(f"mv {_LIVE_CFG_DIR} /tmp/x") == BLOCK
+            assert run(f"find {_LIVE_CFG_DIR} -delete") == BLOCK
             # boundary self-protection read still ALLOWs under /do (kill-pid is a
             # legacy-hook block, orthogonal to the engine — not asserted here).
-            assert run("cat /root/.config/claude/protected-runtime.json") == ALLOW
+            assert run(f"cat {_LIVE_CFG_PATH}") == ALLOW
         finally:
             os.remove(flag)
 
