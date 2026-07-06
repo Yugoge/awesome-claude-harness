@@ -39,6 +39,7 @@ _LIVE_CFG_PATH = os.path.join(
 _LIVE_CFG_DIR = os.path.dirname(_LIVE_CFG_PATH)
 _LIVE_CFG_EXISTS = os.path.exists(_LIVE_CFG_PATH)
 _LIVE_CFG_SKIP_REASON = f"live hook: requires {_LIVE_CFG_PATH}"
+_ORIGINAL_HOME = os.environ.get("HOME") or os.path.expanduser("~")
 
 
 # ── Test fixture data file (de-drifted values, isolated from the live file) ──
