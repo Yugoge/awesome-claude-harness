@@ -204,14 +204,14 @@ class TestBlocks:
         assert ev("npm link happy", datafile, fixture_repo) == "BLOCK"
 
     def test_datafile_mutation(self, datafile, fixture_repo):
-        # mutation of the actual hardcoded data-file path is STEP0 protected
-        os.environ["CLAUDE_PROTECTED_RUNTIME_FILE"] = "/root/.config/claude/protected-runtime.json"
+        # mutation of the actual configured data-file path is STEP0 protected
+        os.environ["CLAUDE_PROTECTED_RUNTIME_FILE"] = _LIVE_CFG_PATH
         import importlib, lib.runtime_guard as rg
         importlib.reload(rg)
-        assert rg.evaluate("echo {} > /root/.config/claude/protected-runtime.json")[0] == "BLOCK"
-        assert rg.evaluate("rm /root/.config/claude/protected-runtime.json")[0] == "BLOCK"
-        assert rg.evaluate("sed -i s/a/b/ /root/.config/claude/protected-runtime.json")[0] == "BLOCK"
-        assert rg.evaluate("chmod 000 /root/.config/claude/protected-runtime.json")[0] == "BLOCK"
+        assert rg.evaluate(f"echo {{}} > {_LIVE_CFG_PATH}")[0] == "BLOCK"
+        assert rg.evaluate(f"rm {_LIVE_CFG_PATH}")[0] == "BLOCK"
+        assert rg.evaluate(f"sed -i s/a/b/ {_LIVE_CFG_PATH}")[0] == "BLOCK"
+        assert rg.evaluate(f"chmod 000 {_LIVE_CFG_PATH}")[0] == "BLOCK"
 
     # ── P9 default-deny block families ──
     def test_pkgscript_bare_run(self, datafile, fixture_repo):
@@ -801,13 +801,13 @@ class TestFailClosed:
             assert self._ev_no_cfg(c, tmp_path) == "ALLOW", c
 
     def test_selfprotect_when_config_absent(self, tmp_path):
-        # STEP0 protects the HARDCODED path regardless of the env override target,
-        # because the engine hardcodes the configured path. Use the live path here.
-        os.environ["CLAUDE_PROTECTED_RUNTIME_FILE"] = "/root/.config/claude/protected-runtime.json"
+        # STEP0 protects the configured path regardless of whether the config
+        # file exists. Use the same HOME-relative default path as the engine.
+        os.environ["CLAUDE_PROTECTED_RUNTIME_FILE"] = _LIVE_CFG_PATH
         import importlib, lib.runtime_guard as rg
         importlib.reload(rg)
         # Even with the file present-or-absent, STEP0 runs before config load.
-        assert rg.evaluate("rm /root/.config/claude/protected-runtime.json")[0] == "BLOCK"
+        assert rg.evaluate(f"rm {_LIVE_CFG_PATH}")[0] == "BLOCK"
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -3406,7 +3406,7 @@ class TestCycle13LiveHookAndDoBypass:
     def _clean_env(self, extra=None):
         # a prior engine-level test may have left CLAUDE_PROTECTED_RUNTIME_FILE
         # pointing at a tmp fixture; the LIVE-hook tests must use the REAL default
-        # data file (/root/.config/claude/...), so drop the override here.
+        # data file (_LIVE_CFG_PATH), so drop the override here.
         e = dict(os.environ, **self._ENV)
         e.pop("CLAUDE_PROTECTED_RUNTIME_FILE", None)
         if extra:
@@ -3789,14 +3789,15 @@ class TestCycle14LiveHook:
                               capture_output=True, env=self._clean_env()).returncode
 
     def test_live_driver_glob_blocks(self):
-        assert self._run("mv /root/.config/claude/* /tmp/x") == BLOCK
-        assert self._run("cp /root/.config/claude/* /tmp/x") == BLOCK
+        assert self._run(f"mv {_LIVE_CFG_DIR}/* /tmp/x") == BLOCK
+        assert self._run(f"cp {_LIVE_CFG_DIR}/* /tmp/x") == BLOCK
 
     def test_live_secondary_blocks(self):
-        assert self._run("find /root -path /root/.config/claude/protected-runtime.json -delete") == BLOCK
-        assert self._run("find /root -name protected-runtime.json -delete") == BLOCK
+        live_home = os.path.dirname(os.path.dirname(_LIVE_CFG_DIR))
+        assert self._run(f"find {live_home} -path {_LIVE_CFG_PATH} -delete") == BLOCK
+        assert self._run(f"find {live_home} -name protected-runtime.json -delete") == BLOCK
         assert self._run(f"lsof -t -c happy | {_XK}") == BLOCK
-        assert self._run("chgrp root /root/.config/claude/protected-runtime.json") == BLOCK
+        assert self._run(f"chgrp root {_LIVE_CFG_PATH}") == BLOCK
 
     def test_live_driver_glob_unbypassable_under_do(self):
         sid = "guardtest14-" + str(os.getpid())
@@ -3804,16 +3805,18 @@ class TestCycle14LiveHook:
         with open(flag, "w") as fh:
             fh.write("true")
         try:
-            assert self._run("mv /root/.config/claude/* /tmp/x", sid) == BLOCK
-            assert self._run("find /root -name protected-runtime.json -delete", sid) == BLOCK
-            assert self._run("cat /root/.config/claude/protected-runtime.json", sid) == ALLOW
+            live_home = os.path.dirname(os.path.dirname(_LIVE_CFG_DIR))
+            assert self._run(f"mv {_LIVE_CFG_DIR}/* /tmp/x", sid) == BLOCK
+            assert self._run(f"find {live_home} -name protected-runtime.json -delete", sid) == BLOCK
+            assert self._run(f"cat {_LIVE_CFG_PATH}", sid) == ALLOW
         finally:
             os.remove(flag)
 
     def test_live_boundary_allows(self):
+        live_home = os.path.dirname(os.path.dirname(_LIVE_CFG_DIR))
         assert self._run("mv /tmp/scratch-xyz/* /tmp/y") == ALLOW
-        assert self._run("cat /root/.config/claude/protected-runtime.json") == ALLOW
-        assert self._run("find /root -path /tmp/unrelated -delete") == ALLOW
+        assert self._run(f"cat {_LIVE_CFG_PATH}") == ALLOW
+        assert self._run(f"find {live_home} -path /tmp/unrelated -delete") == ALLOW
         assert self._run("chgrp root /tmp/unrelated-xyz") == ALLOW
 
 
@@ -4147,15 +4150,15 @@ class TestCycle16LiveHook:
                               capture_output=True, env=self._clean_env()).returncode
 
     def test_live_rsync_t_blocks(self):
-        assert self._run("rsync -t /tmp/evil.json /root/.config/claude/protected-runtime.json") == BLOCK
-        assert self._run("sudo rsync -t /tmp/evil.json /root/.config/claude/protected-runtime.json") == BLOCK
+        assert self._run(f"rsync -t /tmp/evil.json {_LIVE_CFG_PATH}") == BLOCK
+        assert self._run(f"sudo rsync -t /tmp/evil.json {_LIVE_CFG_PATH}") == BLOCK
 
     def test_live_install_d_blocks(self):
-        assert self._run("install -d /root/.config/claude") == BLOCK
-        assert self._run("install -d /tmp/a /root/.config/claude /tmp/b") == BLOCK
+        assert self._run(f"install -d {_LIVE_CFG_DIR}") == BLOCK
+        assert self._run(f"install -d /tmp/a {_LIVE_CFG_DIR} /tmp/b") == BLOCK
 
     def test_live_tar_extract_into_protected_blocks(self):
-        assert self._run("tar -x -C /root/.config/claude -f /tmp/a.tar") == BLOCK
+        assert self._run(f"tar -x -C {_LIVE_CFG_DIR} -f /tmp/a.tar") == BLOCK
 
     def test_live_class_unbypassable_under_do(self):
         sid = "guardtest16-" + str(os.getpid())
@@ -4163,20 +4166,20 @@ class TestCycle16LiveHook:
         with open(flag, "w") as fh:
             fh.write("true")
         try:
-            assert self._run("rsync -t /tmp/evil.json /root/.config/claude/protected-runtime.json", sid) == BLOCK
-            assert self._run("install -d /tmp/a /root/.config/claude", sid) == BLOCK
-            assert self._run("tar -x -C /root/.config/claude -f /tmp/a.tar", sid) == BLOCK
+            assert self._run(f"rsync -t /tmp/evil.json {_LIVE_CFG_PATH}", sid) == BLOCK
+            assert self._run(f"install -d /tmp/a {_LIVE_CFG_DIR}", sid) == BLOCK
+            assert self._run(f"tar -x -C {_LIVE_CFG_DIR} -f /tmp/a.tar", sid) == BLOCK
             # read-allowance still allows under /do
-            assert self._run("rsync /root/.config/claude/protected-runtime.json /tmp/elsewhere", sid) == ALLOW
+            assert self._run(f"rsync {_LIVE_CFG_PATH} /tmp/elsewhere", sid) == ALLOW
         finally:
             os.remove(flag)
 
     def test_live_boundary_allows(self):
-        assert self._run("rsync /root/.config/claude/protected-runtime.json /tmp/elsewhere") == ALLOW
-        assert self._run("rsync -t /root/.config/claude/protected-runtime.json /tmp/elsewhere") == ALLOW
+        assert self._run(f"rsync {_LIVE_CFG_PATH} /tmp/elsewhere") == ALLOW
+        assert self._run(f"rsync -t {_LIVE_CFG_PATH} /tmp/elsewhere") == ALLOW
         assert self._run("install -d /tmp/a-xyz /tmp/b-xyz") == ALLOW
         assert self._run("tar -x -C /tmp/safe-xyz -f /tmp/a.tar") == ALLOW
-        assert self._run("tar -tf /root/.config/claude/protected-runtime.json") == ALLOW
+        assert self._run(f"tar -tf {_LIVE_CFG_PATH}") == ALLOW
 
 
 class TestCycle16CodexFollowup:
