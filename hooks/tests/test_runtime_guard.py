@@ -838,14 +838,14 @@ class TestLiveHook:
     def test_hook_blocks_workspace_protected_build(self):
         assert run_hook("yarn workspace happy build") == BLOCK
 
-    @pytest.mark.skipif(not _LIVE_CFG_EXISTS, reason="live hook: requires /root/.config/claude/protected-runtime.json")
+    @pytest.mark.skipif(not _LIVE_CFG_EXISTS, reason=_LIVE_CFG_SKIP_REASON)
     def test_hook_allows_nonprotected_build(self):
         assert run_hook("yarn workspace happy-server build") == ALLOW
 
     def test_hook_allows_read_statefile(self):
         assert run_hook("cat /root/.happy-dev/daemon.state.json") == ALLOW
 
-    @pytest.mark.skipif(not _LIVE_CFG_EXISTS, reason="live hook: requires /root/.config/claude/protected-runtime.json")
+    @pytest.mark.skipif(not _LIVE_CFG_EXISTS, reason=_LIVE_CFG_SKIP_REASON)
     def test_hook_allows_meta_query(self):
         assert run_hook("yarn --version") == ALLOW
 
@@ -3425,7 +3425,7 @@ class TestCycle13LiveHookAndDoBypass:
         assert self._run(f"{_PG} -f happy | {_XK}") == BLOCK
         assert self._run(f"{_PK} -f happy") == BLOCK
 
-    @pytest.mark.skipif(not _LIVE_CFG_EXISTS, reason="live hook: requires /root/.config/claude/protected-runtime.json")
+    @pytest.mark.skipif(not _LIVE_CFG_EXISTS, reason=_LIVE_CFG_SKIP_REASON)
     def test_live_hook_config_ancestor_blocks(self):
         # the LIVE data file is /root/.config/claude/protected-runtime.json; its
         # parent dir mutation + find -delete must BLOCK on the real hook.
@@ -3433,7 +3433,7 @@ class TestCycle13LiveHookAndDoBypass:
         assert self._run("find /root/.config/claude/protected-runtime.json -delete") == BLOCK
         assert self._run("find /root/.config/claude -delete") == BLOCK
 
-    @pytest.mark.skipif(not _LIVE_CFG_EXISTS, reason="live hook: requires /root/.config/claude/protected-runtime.json")
+    @pytest.mark.skipif(not _LIVE_CFG_EXISTS, reason=_LIVE_CFG_SKIP_REASON)
     def test_live_hook_sweep_blocks(self):
         assert self._run("find /root/.happy-dev/daemon.state.json -delete") == BLOCK
 
@@ -3448,7 +3448,7 @@ class TestCycle13LiveHookAndDoBypass:
         assert self._run("find /root/.config/claude -name '*.json'") == ALLOW
         assert self._run("mv /tmp/unrelated-xyz /tmp/x") == ALLOW
 
-    @pytest.mark.skipif(not _LIVE_CFG_EXISTS, reason="live hook: requires /root/.config/claude/protected-runtime.json")
+    @pytest.mark.skipif(not _LIVE_CFG_EXISTS, reason=_LIVE_CFG_SKIP_REASON)
     def test_live_hook_unbypassable_under_do(self):
         sid = "guardtest13-" + str(os.getpid())
         flag = f"/tmp/claude-orchestrator-consent-{sid}.flag"
