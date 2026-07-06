@@ -3427,11 +3427,11 @@ class TestCycle13LiveHookAndDoBypass:
 
     @pytest.mark.skipif(not _LIVE_CFG_EXISTS, reason=_LIVE_CFG_SKIP_REASON)
     def test_live_hook_config_ancestor_blocks(self):
-        # the LIVE data file is /root/.config/claude/protected-runtime.json; its
-        # parent dir mutation + find -delete must BLOCK on the real hook.
-        assert self._run("mv /root/.config/claude /tmp/x") == BLOCK
-        assert self._run("find /root/.config/claude/protected-runtime.json -delete") == BLOCK
-        assert self._run("find /root/.config/claude -delete") == BLOCK
+        # the LIVE data file is at _LIVE_CFG_PATH (HOME-relative); its parent
+        # dir mutation + find -delete must BLOCK on the real hook.
+        assert self._run(f"mv {_LIVE_CFG_DIR} /tmp/x") == BLOCK
+        assert self._run(f"find {_LIVE_CFG_PATH} -delete") == BLOCK
+        assert self._run(f"find {_LIVE_CFG_DIR} -delete") == BLOCK
 
     @pytest.mark.skipif(not _LIVE_CFG_EXISTS, reason=_LIVE_CFG_SKIP_REASON)
     def test_live_hook_sweep_blocks(self):
