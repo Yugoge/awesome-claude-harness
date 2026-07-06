@@ -32,6 +32,25 @@ sys.path.insert(0, HOOKS_DIR)
 
 BLOCK = 2
 ALLOW = 0
+_ORIGINAL_HOME = os.environ.get("HOME") or os.path.expanduser("~")
+_LIVE_CFG_PATH = os.path.join(
+    _ORIGINAL_HOME,
+    ".config", "claude", "protected-runtime.json",
+)
+_LIVE_CFG_DIR = os.path.dirname(_LIVE_CFG_PATH)
+_LIVE_HOME = os.path.dirname(os.path.dirname(_LIVE_CFG_DIR))
+_LIVE_CFG_EXISTS = os.path.exists(_LIVE_CFG_PATH)
+_LIVE_CFG_SKIP_REASON = f"live hook: requires {_LIVE_CFG_PATH}"
+
+
+def _live_hook_env(env=None):
+    """Build a live-hook subprocess env immune to prior test env mutations."""
+    e = dict(os.environ)
+    if env:
+        e.update(env)
+    e.pop("CLAUDE_PROTECTED_RUNTIME_FILE", None)
+    e["HOME"] = _ORIGINAL_HOME
+    return e
 
 
 # ── Test fixture data file (de-drifted values, isolated from the live file) ──
@@ -197,14 +216,14 @@ class TestBlocks:
         assert ev("npm link happy", datafile, fixture_repo) == "BLOCK"
 
     def test_datafile_mutation(self, datafile, fixture_repo):
-        # mutation of the actual hardcoded data-file path is STEP0 protected
-        os.environ["CLAUDE_PROTECTED_RUNTIME_FILE"] = "/root/.config/claude/protected-runtime.json"
+        # mutation of the actual configured data-file path is STEP0 protected
+        os.environ["CLAUDE_PROTECTED_RUNTIME_FILE"] = _LIVE_CFG_PATH
         import importlib, lib.runtime_guard as rg
         importlib.reload(rg)
-        assert rg.evaluate("echo {} > /root/.config/claude/protected-runtime.json")[0] == "BLOCK"
-        assert rg.evaluate("rm /root/.config/claude/protected-runtime.json")[0] == "BLOCK"
-        assert rg.evaluate("sed -i s/a/b/ /root/.config/claude/protected-runtime.json")[0] == "BLOCK"
-        assert rg.evaluate("chmod 000 /root/.config/claude/protected-runtime.json")[0] == "BLOCK"
+        assert rg.evaluate(f"echo {{}} > {_LIVE_CFG_PATH}")[0] == "BLOCK"
+        assert rg.evaluate(f"rm {_LIVE_CFG_PATH}")[0] == "BLOCK"
+        assert rg.evaluate(f"sed -i s/a/b/ {_LIVE_CFG_PATH}")[0] == "BLOCK"
+        assert rg.evaluate(f"chmod 000 {_LIVE_CFG_PATH}")[0] == "BLOCK"
 
     # ── P9 default-deny block families ──
     def test_pkgscript_bare_run(self, datafile, fixture_repo):
@@ -741,9 +760,10 @@ class TestCodexGlueFailClosed:
         # We exercise the live hook with a guaranteed-broken python bin so the
         # helper cannot run, forcing the non-ALLOW branch.
         payload = json.dumps({"tool_name": "Bash", "tool_input": {"command": command}})
-        e = dict(os.environ)
-        e["CLAUDE_PYTHON_BIN"] = "/nonexistent/python-broken"
-        e["CLAUDE_PYTHON_FALLBACK"] = "/nonexistent/python-broken2"
+        e = _live_hook_env({
+            "CLAUDE_PYTHON_BIN": "/nonexistent/python-broken",
+            "CLAUDE_PYTHON_FALLBACK": "/nonexistent/python-broken2",
+        })
         proc = subprocess.run(["bash", HOOK], input=payload, text=True, capture_output=True, env=e)
         return proc.returncode
 
@@ -794,13 +814,13 @@ class TestFailClosed:
             assert self._ev_no_cfg(c, tmp_path) == "ALLOW", c
 
     def test_selfprotect_when_config_absent(self, tmp_path):
-        # STEP0 protects the HARDCODED path regardless of the env override target,
-        # because the engine hardcodes the configured path. Use the live path here.
-        os.environ["CLAUDE_PROTECTED_RUNTIME_FILE"] = "/root/.config/claude/protected-runtime.json"
+        # STEP0 protects the configured path regardless of whether the config
+        # file exists. Use the same HOME-relative default path as the engine.
+        os.environ["CLAUDE_PROTECTED_RUNTIME_FILE"] = _LIVE_CFG_PATH
         import importlib, lib.runtime_guard as rg
         importlib.reload(rg)
         # Even with the file present-or-absent, STEP0 runs before config load.
-        assert rg.evaluate("rm /root/.config/claude/protected-runtime.json")[0] == "BLOCK"
+        assert rg.evaluate(f"rm {_LIVE_CFG_PATH}")[0] == "BLOCK"
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -809,9 +829,7 @@ class TestFailClosed:
 
 def run_hook(command, env=None):
     payload = json.dumps({"tool_name": "Bash", "tool_input": {"command": command}})
-    e = dict(os.environ)
-    if env:
-        e.update(env)
+    e = _live_hook_env(env)
     proc = subprocess.run(["bash", HOOK], input=payload, text=True, capture_output=True, env=e)
     return proc.returncode
 
@@ -830,17 +848,30 @@ class TestLiveHook:
     def test_hook_blocks_workspace_protected_build(self):
         assert run_hook("yarn workspace happy build") == BLOCK
 
+    @pytest.mark.skipif(not _LIVE_CFG_EXISTS, reason=_LIVE_CFG_SKIP_REASON)
     def test_hook_allows_nonprotected_build(self):
         assert run_hook("yarn workspace happy-server build") == ALLOW
 
     def test_hook_allows_read_statefile(self):
         assert run_hook("cat /root/.happy-dev/daemon.state.json") == ALLOW
 
+    @pytest.mark.skipif(not _LIVE_CFG_EXISTS, reason=_LIVE_CFG_SKIP_REASON)
     def test_hook_allows_meta_query(self):
         assert run_hook("yarn --version") == ALLOW
 
     def test_hook_allows_plain_ls(self):
         assert run_hook("ls -la") == ALLOW
+
+    @pytest.mark.skipif(not _LIVE_CFG_EXISTS, reason=_LIVE_CFG_SKIP_REASON)
+    def test_hook_live_env_pins_home_and_config(self, monkeypatch):
+        monkeypatch.setenv("HOME", "/tmp/pytest-home-leak")
+        assert run_hook(
+            "yarn workspace happy-server build",
+            env={
+                "HOME": "/tmp/caller-home-leak",
+                "CLAUDE_PROTECTED_RUNTIME_FILE": "/tmp/caller-config-leak.json",
+            },
+        ) == ALLOW
 
     def test_hook_unbypassable_under_do(self):
         # Create a /do consent flag for this session; the guard must still block.
@@ -855,7 +886,8 @@ class TestLiveHook:
                 "tool_input": {"command": "yarn workspace happy build"},
                 "session_id": sid,
             })
-            proc = subprocess.run(["bash", HOOK], input=payload, text=True, capture_output=True)
+            proc = subprocess.run(["bash", HOOK], input=payload, text=True,
+                                  capture_output=True, env=_live_hook_env())
             assert proc.returncode == BLOCK
         finally:
             os.remove(flag)
@@ -3396,12 +3428,11 @@ class TestCycle13LiveHookAndDoBypass:
     def _clean_env(self, extra=None):
         # a prior engine-level test may have left CLAUDE_PROTECTED_RUNTIME_FILE
         # pointing at a tmp fixture; the LIVE-hook tests must use the REAL default
-        # data file (/root/.config/claude/...), so drop the override here.
-        e = dict(os.environ, **self._ENV)
-        e.pop("CLAUDE_PROTECTED_RUNTIME_FILE", None)
+        # data file (_LIVE_CFG_PATH), so drop the override here.
+        env = dict(self._ENV)
         if extra:
-            e.update(extra)
-        return e
+            env.update(extra)
+        return _live_hook_env(env)
 
     def _run(self, cmd, extra_env=None):
         # call the hook directly with a COMPLETE env (run_hook re-seeds from
@@ -3416,12 +3447,13 @@ class TestCycle13LiveHookAndDoBypass:
         assert self._run(f"{_PK} -f happy") == BLOCK
 
     def test_live_hook_config_ancestor_blocks(self):
-        # the LIVE data file is /root/.config/claude/protected-runtime.json; its
-        # parent dir mutation + find -delete must BLOCK on the real hook.
-        assert self._run("mv /root/.config/claude /tmp/x") == BLOCK
-        assert self._run("find /root/.config/claude/protected-runtime.json -delete") == BLOCK
-        assert self._run("find /root/.config/claude -delete") == BLOCK
+        # the LIVE data file is at _LIVE_CFG_PATH (HOME-relative); its parent
+        # dir mutation + find -delete must BLOCK on the real hook.
+        assert self._run(f"mv {_LIVE_CFG_DIR} /tmp/x") == BLOCK
+        assert self._run(f"find {_LIVE_CFG_PATH} -delete") == BLOCK
+        assert self._run(f"find {_LIVE_CFG_DIR} -delete") == BLOCK
 
+    @pytest.mark.skipif(not _LIVE_CFG_EXISTS, reason=_LIVE_CFG_SKIP_REASON)
     def test_live_hook_sweep_blocks(self):
         assert self._run("find /root/.happy-dev/daemon.state.json -delete") == BLOCK
 
@@ -3431,9 +3463,9 @@ class TestCycle13LiveHookAndDoBypass:
         # this engine. The engine-level boundary ALLOW for those forms is asserted
         # in TestCycle13KillFragmentDirectionalOverlap; here we assert only the
         # config/find self-protection boundary the engine owns end-to-end.
-        assert self._run("cat /root/.config/claude/protected-runtime.json") == ALLOW
-        assert self._run("find /root/.config/claude -print") == ALLOW
-        assert self._run("find /root/.config/claude -name '*.json'") == ALLOW
+        assert self._run(f"cat {_LIVE_CFG_PATH}") == ALLOW
+        assert self._run(f"find {_LIVE_CFG_DIR} -print") == ALLOW
+        assert self._run(f"find {_LIVE_CFG_DIR} -name '*.json'") == ALLOW
         assert self._run("mv /tmp/unrelated-xyz /tmp/x") == ALLOW
 
     def test_live_hook_unbypassable_under_do(self):
@@ -3449,11 +3481,11 @@ class TestCycle13LiveHookAndDoBypass:
                 return subprocess.run(["bash", HOOK], input=payload, text=True,
                                       capture_output=True, env=self._clean_env()).returncode
             assert run(f"{_PG} -f happy | {_XK}") == BLOCK
-            assert run("mv /root/.config/claude /tmp/x") == BLOCK
-            assert run("find /root/.config/claude -delete") == BLOCK
+            assert run(f"mv {_LIVE_CFG_DIR} /tmp/x") == BLOCK
+            assert run(f"find {_LIVE_CFG_DIR} -delete") == BLOCK
             # boundary self-protection read still ALLOWs under /do (kill-pid is a
             # legacy-hook block, orthogonal to the engine — not asserted here).
-            assert run("cat /root/.config/claude/protected-runtime.json") == ALLOW
+            assert run(f"cat {_LIVE_CFG_PATH}") == ALLOW
         finally:
             os.remove(flag)
 
@@ -3762,11 +3794,10 @@ class TestCycle14LiveHook:
     _ENV = {"CLAUDE_PYTHON_BIN": sys.executable}
 
     def _clean_env(self, extra=None):
-        e = dict(os.environ, **self._ENV)
-        e.pop("CLAUDE_PROTECTED_RUNTIME_FILE", None)
+        env = dict(self._ENV)
         if extra:
-            e.update(extra)
-        return e
+            env.update(extra)
+        return _live_hook_env(env)
 
     def _run(self, cmd, sid=None):
         payload = {"tool_name": "Bash", "tool_input": {"command": cmd}}
@@ -3776,14 +3807,14 @@ class TestCycle14LiveHook:
                               capture_output=True, env=self._clean_env()).returncode
 
     def test_live_driver_glob_blocks(self):
-        assert self._run("mv /root/.config/claude/* /tmp/x") == BLOCK
-        assert self._run("cp /root/.config/claude/* /tmp/x") == BLOCK
+        assert self._run(f"mv {_LIVE_CFG_DIR}/* /tmp/x") == BLOCK
+        assert self._run(f"cp {_LIVE_CFG_DIR}/* /tmp/x") == BLOCK
 
     def test_live_secondary_blocks(self):
-        assert self._run("find /root -path /root/.config/claude/protected-runtime.json -delete") == BLOCK
-        assert self._run("find /root -name protected-runtime.json -delete") == BLOCK
+        assert self._run(f"find {_LIVE_HOME} -path {_LIVE_CFG_PATH} -delete") == BLOCK
+        assert self._run(f"find {_LIVE_HOME} -name protected-runtime.json -delete") == BLOCK
         assert self._run(f"lsof -t -c happy | {_XK}") == BLOCK
-        assert self._run("chgrp root /root/.config/claude/protected-runtime.json") == BLOCK
+        assert self._run(f"chgrp root {_LIVE_CFG_PATH}") == BLOCK
 
     def test_live_driver_glob_unbypassable_under_do(self):
         sid = "guardtest14-" + str(os.getpid())
@@ -3791,16 +3822,16 @@ class TestCycle14LiveHook:
         with open(flag, "w") as fh:
             fh.write("true")
         try:
-            assert self._run("mv /root/.config/claude/* /tmp/x", sid) == BLOCK
-            assert self._run("find /root -name protected-runtime.json -delete", sid) == BLOCK
-            assert self._run("cat /root/.config/claude/protected-runtime.json", sid) == ALLOW
+            assert self._run(f"mv {_LIVE_CFG_DIR}/* /tmp/x", sid) == BLOCK
+            assert self._run(f"find {_LIVE_HOME} -name protected-runtime.json -delete", sid) == BLOCK
+            assert self._run(f"cat {_LIVE_CFG_PATH}", sid) == ALLOW
         finally:
             os.remove(flag)
 
     def test_live_boundary_allows(self):
         assert self._run("mv /tmp/scratch-xyz/* /tmp/y") == ALLOW
-        assert self._run("cat /root/.config/claude/protected-runtime.json") == ALLOW
-        assert self._run("find /root -path /tmp/unrelated -delete") == ALLOW
+        assert self._run(f"cat {_LIVE_CFG_PATH}") == ALLOW
+        assert self._run(f"find {_LIVE_HOME} -path /tmp/unrelated -delete") == ALLOW
         assert self._run("chgrp root /tmp/unrelated-xyz") == ALLOW
 
 
@@ -4122,9 +4153,7 @@ class TestCycle16LiveHook:
     _ENV = {"CLAUDE_PYTHON_BIN": sys.executable}
 
     def _clean_env(self):
-        e = dict(os.environ, **self._ENV)
-        e.pop("CLAUDE_PROTECTED_RUNTIME_FILE", None)
-        return e
+        return _live_hook_env(self._ENV)
 
     def _run(self, cmd, sid=None):
         payload = {"tool_name": "Bash", "tool_input": {"command": cmd}}
@@ -4134,15 +4163,15 @@ class TestCycle16LiveHook:
                               capture_output=True, env=self._clean_env()).returncode
 
     def test_live_rsync_t_blocks(self):
-        assert self._run("rsync -t /tmp/evil.json /root/.config/claude/protected-runtime.json") == BLOCK
-        assert self._run("sudo rsync -t /tmp/evil.json /root/.config/claude/protected-runtime.json") == BLOCK
+        assert self._run(f"rsync -t /tmp/evil.json {_LIVE_CFG_PATH}") == BLOCK
+        assert self._run(f"sudo rsync -t /tmp/evil.json {_LIVE_CFG_PATH}") == BLOCK
 
     def test_live_install_d_blocks(self):
-        assert self._run("install -d /root/.config/claude") == BLOCK
-        assert self._run("install -d /tmp/a /root/.config/claude /tmp/b") == BLOCK
+        assert self._run(f"install -d {_LIVE_CFG_DIR}") == BLOCK
+        assert self._run(f"install -d /tmp/a {_LIVE_CFG_DIR} /tmp/b") == BLOCK
 
     def test_live_tar_extract_into_protected_blocks(self):
-        assert self._run("tar -x -C /root/.config/claude -f /tmp/a.tar") == BLOCK
+        assert self._run(f"tar -x -C {_LIVE_CFG_DIR} -f /tmp/a.tar") == BLOCK
 
     def test_live_class_unbypassable_under_do(self):
         sid = "guardtest16-" + str(os.getpid())
@@ -4150,20 +4179,20 @@ class TestCycle16LiveHook:
         with open(flag, "w") as fh:
             fh.write("true")
         try:
-            assert self._run("rsync -t /tmp/evil.json /root/.config/claude/protected-runtime.json", sid) == BLOCK
-            assert self._run("install -d /tmp/a /root/.config/claude", sid) == BLOCK
-            assert self._run("tar -x -C /root/.config/claude -f /tmp/a.tar", sid) == BLOCK
+            assert self._run(f"rsync -t /tmp/evil.json {_LIVE_CFG_PATH}", sid) == BLOCK
+            assert self._run(f"install -d /tmp/a {_LIVE_CFG_DIR}", sid) == BLOCK
+            assert self._run(f"tar -x -C {_LIVE_CFG_DIR} -f /tmp/a.tar", sid) == BLOCK
             # read-allowance still allows under /do
-            assert self._run("rsync /root/.config/claude/protected-runtime.json /tmp/elsewhere", sid) == ALLOW
+            assert self._run(f"rsync {_LIVE_CFG_PATH} /tmp/elsewhere", sid) == ALLOW
         finally:
             os.remove(flag)
 
     def test_live_boundary_allows(self):
-        assert self._run("rsync /root/.config/claude/protected-runtime.json /tmp/elsewhere") == ALLOW
-        assert self._run("rsync -t /root/.config/claude/protected-runtime.json /tmp/elsewhere") == ALLOW
+        assert self._run(f"rsync {_LIVE_CFG_PATH} /tmp/elsewhere") == ALLOW
+        assert self._run(f"rsync -t {_LIVE_CFG_PATH} /tmp/elsewhere") == ALLOW
         assert self._run("install -d /tmp/a-xyz /tmp/b-xyz") == ALLOW
         assert self._run("tar -x -C /tmp/safe-xyz -f /tmp/a.tar") == ALLOW
-        assert self._run("tar -tf /root/.config/claude/protected-runtime.json") == ALLOW
+        assert self._run(f"tar -tf {_LIVE_CFG_PATH}") == ALLOW
 
 
 class TestCycle16CodexFollowup:
