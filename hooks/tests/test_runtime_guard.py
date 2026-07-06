@@ -839,6 +839,7 @@ class TestLiveHook:
     def test_hook_allows_read_statefile(self):
         assert run_hook("cat /root/.happy-dev/daemon.state.json") == ALLOW
 
+    @pytest.mark.skipif(not _LIVE_CFG_EXISTS, reason="live hook: requires /root/.config/claude/protected-runtime.json")
     def test_hook_allows_meta_query(self):
         assert run_hook("yarn --version") == ALLOW
 
