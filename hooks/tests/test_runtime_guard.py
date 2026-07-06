@@ -811,6 +811,7 @@ class TestFailClosed:
 def run_hook(command, env=None):
     payload = json.dumps({"tool_name": "Bash", "tool_input": {"command": command}})
     e = dict(os.environ)
+    e.pop("CLAUDE_PROTECTED_RUNTIME_FILE", None)
     if env:
         e.update(env)
     proc = subprocess.run(["bash", HOOK], input=payload, text=True, capture_output=True, env=e)
