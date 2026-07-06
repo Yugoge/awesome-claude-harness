@@ -32,14 +32,25 @@ sys.path.insert(0, HOOKS_DIR)
 
 BLOCK = 2
 ALLOW = 0
+_ORIGINAL_HOME = os.environ.get("HOME") or os.path.expanduser("~")
 _LIVE_CFG_PATH = os.path.join(
-    os.environ.get("HOME") or os.path.expanduser("~"),
+    _ORIGINAL_HOME,
     ".config", "claude", "protected-runtime.json",
 )
 _LIVE_CFG_DIR = os.path.dirname(_LIVE_CFG_PATH)
+_LIVE_HOME = os.path.dirname(os.path.dirname(_LIVE_CFG_DIR))
 _LIVE_CFG_EXISTS = os.path.exists(_LIVE_CFG_PATH)
 _LIVE_CFG_SKIP_REASON = f"live hook: requires {_LIVE_CFG_PATH}"
-_ORIGINAL_HOME = os.environ.get("HOME") or os.path.expanduser("~")
+
+
+def _live_hook_env(env=None):
+    """Build a live-hook subprocess env immune to prior test env mutations."""
+    e = dict(os.environ)
+    if env:
+        e.update(env)
+    e.pop("CLAUDE_PROTECTED_RUNTIME_FILE", None)
+    e["HOME"] = _ORIGINAL_HOME
+    return e
 
 
 # ── Test fixture data file (de-drifted values, isolated from the live file) ──
@@ -749,9 +760,10 @@ class TestCodexGlueFailClosed:
         # We exercise the live hook with a guaranteed-broken python bin so the
         # helper cannot run, forcing the non-ALLOW branch.
         payload = json.dumps({"tool_name": "Bash", "tool_input": {"command": command}})
-        e = dict(os.environ)
-        e["CLAUDE_PYTHON_BIN"] = "/nonexistent/python-broken"
-        e["CLAUDE_PYTHON_FALLBACK"] = "/nonexistent/python-broken2"
+        e = _live_hook_env({
+            "CLAUDE_PYTHON_BIN": "/nonexistent/python-broken",
+            "CLAUDE_PYTHON_FALLBACK": "/nonexistent/python-broken2",
+        })
         proc = subprocess.run(["bash", HOOK], input=payload, text=True, capture_output=True, env=e)
         return proc.returncode
 
@@ -817,11 +829,7 @@ class TestFailClosed:
 
 def run_hook(command, env=None):
     payload = json.dumps({"tool_name": "Bash", "tool_input": {"command": command}})
-    e = dict(os.environ)
-    e.pop("CLAUDE_PROTECTED_RUNTIME_FILE", None)
-    e["HOME"] = _ORIGINAL_HOME
-    if env:
-        e.update(env)
+    e = _live_hook_env(env)
     proc = subprocess.run(["bash", HOOK], input=payload, text=True, capture_output=True, env=e)
     return proc.returncode
 
@@ -854,6 +862,17 @@ class TestLiveHook:
     def test_hook_allows_plain_ls(self):
         assert run_hook("ls -la") == ALLOW
 
+    @pytest.mark.skipif(not _LIVE_CFG_EXISTS, reason=_LIVE_CFG_SKIP_REASON)
+    def test_hook_live_env_pins_home_and_config(self, monkeypatch):
+        monkeypatch.setenv("HOME", "/tmp/pytest-home-leak")
+        assert run_hook(
+            "yarn workspace happy-server build",
+            env={
+                "HOME": "/tmp/caller-home-leak",
+                "CLAUDE_PROTECTED_RUNTIME_FILE": "/tmp/caller-config-leak.json",
+            },
+        ) == ALLOW
+
     def test_hook_unbypassable_under_do(self):
         # Create a /do consent flag for this session; the guard must still block.
         import getpass  # noqa
@@ -867,7 +886,8 @@ class TestLiveHook:
                 "tool_input": {"command": "yarn workspace happy build"},
                 "session_id": sid,
             })
-            proc = subprocess.run(["bash", HOOK], input=payload, text=True, capture_output=True)
+            proc = subprocess.run(["bash", HOOK], input=payload, text=True,
+                                  capture_output=True, env=_live_hook_env())
             assert proc.returncode == BLOCK
         finally:
             os.remove(flag)
@@ -3409,11 +3429,10 @@ class TestCycle13LiveHookAndDoBypass:
         # a prior engine-level test may have left CLAUDE_PROTECTED_RUNTIME_FILE
         # pointing at a tmp fixture; the LIVE-hook tests must use the REAL default
         # data file (_LIVE_CFG_PATH), so drop the override here.
-        e = dict(os.environ, **self._ENV)
-        e.pop("CLAUDE_PROTECTED_RUNTIME_FILE", None)
+        env = dict(self._ENV)
         if extra:
-            e.update(extra)
-        return e
+            env.update(extra)
+        return _live_hook_env(env)
 
     def _run(self, cmd, extra_env=None):
         # call the hook directly with a COMPLETE env (run_hook re-seeds from
@@ -3427,7 +3446,6 @@ class TestCycle13LiveHookAndDoBypass:
         assert self._run(f"{_PG} -f happy | {_XK}") == BLOCK
         assert self._run(f"{_PK} -f happy") == BLOCK
 
-    @pytest.mark.skipif(not _LIVE_CFG_EXISTS, reason=_LIVE_CFG_SKIP_REASON)
     def test_live_hook_config_ancestor_blocks(self):
         # the LIVE data file is at _LIVE_CFG_PATH (HOME-relative); its parent
         # dir mutation + find -delete must BLOCK on the real hook.
@@ -3450,7 +3468,6 @@ class TestCycle13LiveHookAndDoBypass:
         assert self._run(f"find {_LIVE_CFG_DIR} -name '*.json'") == ALLOW
         assert self._run("mv /tmp/unrelated-xyz /tmp/x") == ALLOW
 
-    @pytest.mark.skipif(not _LIVE_CFG_EXISTS, reason=_LIVE_CFG_SKIP_REASON)
     def test_live_hook_unbypassable_under_do(self):
         sid = "guardtest13-" + str(os.getpid())
         flag = f"/tmp/claude-orchestrator-consent-{sid}.flag"
@@ -3777,11 +3794,10 @@ class TestCycle14LiveHook:
     _ENV = {"CLAUDE_PYTHON_BIN": sys.executable}
 
     def _clean_env(self, extra=None):
-        e = dict(os.environ, **self._ENV)
-        e.pop("CLAUDE_PROTECTED_RUNTIME_FILE", None)
+        env = dict(self._ENV)
         if extra:
-            e.update(extra)
-        return e
+            env.update(extra)
+        return _live_hook_env(env)
 
     def _run(self, cmd, sid=None):
         payload = {"tool_name": "Bash", "tool_input": {"command": cmd}}
@@ -3795,9 +3811,8 @@ class TestCycle14LiveHook:
         assert self._run(f"cp {_LIVE_CFG_DIR}/* /tmp/x") == BLOCK
 
     def test_live_secondary_blocks(self):
-        live_home = os.path.dirname(os.path.dirname(_LIVE_CFG_DIR))
-        assert self._run(f"find {live_home} -path {_LIVE_CFG_PATH} -delete") == BLOCK
-        assert self._run(f"find {live_home} -name protected-runtime.json -delete") == BLOCK
+        assert self._run(f"find {_LIVE_HOME} -path {_LIVE_CFG_PATH} -delete") == BLOCK
+        assert self._run(f"find {_LIVE_HOME} -name protected-runtime.json -delete") == BLOCK
         assert self._run(f"lsof -t -c happy | {_XK}") == BLOCK
         assert self._run(f"chgrp root {_LIVE_CFG_PATH}") == BLOCK
 
@@ -3807,18 +3822,16 @@ class TestCycle14LiveHook:
         with open(flag, "w") as fh:
             fh.write("true")
         try:
-            live_home = os.path.dirname(os.path.dirname(_LIVE_CFG_DIR))
             assert self._run(f"mv {_LIVE_CFG_DIR}/* /tmp/x", sid) == BLOCK
-            assert self._run(f"find {live_home} -name protected-runtime.json -delete", sid) == BLOCK
+            assert self._run(f"find {_LIVE_HOME} -name protected-runtime.json -delete", sid) == BLOCK
             assert self._run(f"cat {_LIVE_CFG_PATH}", sid) == ALLOW
         finally:
             os.remove(flag)
 
     def test_live_boundary_allows(self):
-        live_home = os.path.dirname(os.path.dirname(_LIVE_CFG_DIR))
         assert self._run("mv /tmp/scratch-xyz/* /tmp/y") == ALLOW
         assert self._run(f"cat {_LIVE_CFG_PATH}") == ALLOW
-        assert self._run(f"find {live_home} -path /tmp/unrelated -delete") == ALLOW
+        assert self._run(f"find {_LIVE_HOME} -path /tmp/unrelated -delete") == ALLOW
         assert self._run("chgrp root /tmp/unrelated-xyz") == ALLOW
 
 
@@ -4140,9 +4153,7 @@ class TestCycle16LiveHook:
     _ENV = {"CLAUDE_PYTHON_BIN": sys.executable}
 
     def _clean_env(self):
-        e = dict(os.environ, **self._ENV)
-        e.pop("CLAUDE_PROTECTED_RUNTIME_FILE", None)
-        return e
+        return _live_hook_env(self._ENV)
 
     def _run(self, cmd, sid=None):
         payload = {"tool_name": "Bash", "tool_input": {"command": cmd}}
