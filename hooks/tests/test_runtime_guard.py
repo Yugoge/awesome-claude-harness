@@ -32,6 +32,7 @@ sys.path.insert(0, HOOKS_DIR)
 
 BLOCK = 2
 ALLOW = 0
+_LIVE_CFG_EXISTS = os.path.exists("/root/.config/claude/protected-runtime.json")
 
 
 # ── Test fixture data file (de-drifted values, isolated from the live file) ──
