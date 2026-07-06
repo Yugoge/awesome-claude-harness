@@ -3427,6 +3427,7 @@ class TestCycle13LiveHookAndDoBypass:
         assert self._run("find /root/.config/claude/protected-runtime.json -delete") == BLOCK
         assert self._run("find /root/.config/claude -delete") == BLOCK
 
+    @pytest.mark.skipif(not _LIVE_CFG_EXISTS, reason="live hook: requires /root/.config/claude/protected-runtime.json")
     def test_live_hook_sweep_blocks(self):
         assert self._run("find /root/.happy-dev/daemon.state.json -delete") == BLOCK
 
