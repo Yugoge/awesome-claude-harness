@@ -3442,6 +3442,7 @@ class TestCycle13LiveHookAndDoBypass:
         assert self._run("find /root/.config/claude -name '*.json'") == ALLOW
         assert self._run("mv /tmp/unrelated-xyz /tmp/x") == ALLOW
 
+    @pytest.mark.skipif(not _LIVE_CFG_EXISTS, reason="live hook: requires /root/.config/claude/protected-runtime.json")
     def test_live_hook_unbypassable_under_do(self):
         sid = "guardtest13-" + str(os.getpid())
         flag = f"/tmp/claude-orchestrator-consent-{sid}.flag"
