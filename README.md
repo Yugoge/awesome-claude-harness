@@ -1,12 +1,6 @@
 # `awesome-claude-harness` — A Self-Governing Agent Operating System for Claude Code
 
-**In plain English: this turns Claude Code into a disciplined software team that gates every dangerous git operation, reviews its own analysis before writing a line of code, and can fix bugs overnight while you sleep — reducing the risk of nuking `main` through hook-enforced gates and audited break-glass paths.**
-
-> **By default, the main agent does not write your code (the `/do` break-glass is the audited exception). It hires specialists, gates every dangerous move at a git kernel, and ships verified work while you sleep.**
-
-This repository is a complete, battle-tested **Claude Code configuration** that turns a single chat agent into a disciplined software team. A main agent that *orchestrates* and delegates every real change to single-purpose subagents; an evidence-gated `/spec → /dev → /close → /commit → /push` pipeline where the *analysis* is reviewed before a line of code is written; a defense-in-depth wall of lifecycle hooks that make the most expensive mistakes mechanically hard — gated by hooks that fail closed by default, with narrow audited human break-glass paths (`/do`, `/allow`); and an autonomous overnight loop that explores a codebase, finds bugs, fixes them, verifies them, and commits them — unattended, until a wall-clock end time.
-
-It is not a prompt pack. It is an operating system for agents — with a scheduler, a permission model, a filesystem layout, a self-updating documentation layer, and a git protection kernel paid for in real lost work. Every mechanism below traces to a file in this repo, and several trace to a specific catastrophe that forced it into existence.
+A complete Claude Code configuration: an orchestrator-only main agent, an evidence-gated `/spec → /dev → /close → /commit → /push` pipeline, a defense-in-depth git protection kernel, and an autonomous overnight loop. Not a prompt pack — an operating system for agents, with a scheduler, a permission model, a filesystem layout, and a git protection kernel paid for in real lost work. Every mechanism below traces to a file in this repo.
 
 <p>
 <img alt="version" src="https://img.shields.io/badge/version-1.0.0-blue">
@@ -20,76 +14,66 @@ It is not a prompt pack. It is an operating system for agents — with a schedul
 <img alt="license" src="https://img.shields.io/badge/license-MIT-000000">
 </p>
 
-**Version**: v1.0.0 · [CHANGELOG](CHANGELOG.md)
+[CHANGELOG](CHANGELOG.md)
 
 ---
 
-## Install in 30 seconds
+## Install
 
-**Prerequisites:** Python 3, `git`, and `jq` must be installed before cloning. Run `python3 --version && git --version && jq --version` to verify.
+**Prerequisites:** `python3`, `git`, `jq` required. Run `scripts/doctor` for a preflight check. Bootstrap is non-destructive — use `--force` to back up and recreate an existing venv.
 
 ```bash
-# (optional) back up any existing ~/.claude config first:
-# mv ~/.claude ~/.claude.bak-"$(date +%Y%m%d-%H%M%S)"
-
-# 1. Clone
 git clone https://github.com/Yugoge/awesome-claude-harness.git ~/.claude
-
-# 2. Bootstrap — creates the venv, installs dependencies, makes hooks executable
 ~/.claude/scripts/bootstrap
-
-# 3. Start Claude Code — hooks activate on the next session
 claude
 ```
 
-**Abridged sample output (paths differ per machine):**
-
-```text
-Harness home (live):  <repo-root>
-Demo home (ephemeral): <tmp-demo-home>/dot-claude
-Shared resolver resolved the demo home by structural sentinel (basename 'dot-claude', not '.claude').
-
-=== STEP 1 — attempt a DANGEROUS operation (must be BLOCKED) ===
-An agent (role: dev) attempts to write to a protected target:
-  <tmp-demo-home>/dot-claude/work/DEMO-FORBIDDEN-overwrite-a-guard.txt
-BLOCKED (exit 2) by the guard, fail-closed:
-  BLOCKED by tool-policy.v1: {"role":"dev","tool":"Write","target":"...DEMO-FORBIDDEN...","deny_reason":"write target matches deny rule"}
-
-=== STEP 2 — apply a properly-AUTHORIZED fix (must be ALLOWED) ===
-The same agent now performs the authorized, in-scope fix:
-  <tmp-demo-home>/dot-claude/work/fix-applied.txt
-ALLOWED (exit 0) by the guard — the operation is within policy.
-
-=== STEP 3 — the authorized fix COMPLETES ===
-Fix write landed on disk:
-  <tmp-demo-home>/dot-claude/work/fix-applied.txt -> guard demo: fix applied after grant-gated authorization
-
-=== RESULT ===
-PASS — dangerous op BLOCKED (exit 2), then grant-gated fix COMPLETED (exit 0 + write landed).
-Re-run this script under any non-root $HOME for the same deterministic result.
-```
-
-Run it yourself: `bash examples/guard-demo/run-demo.sh`
+Run the guard demo: `bash examples/guard-demo/run-demo.sh`
 
 ---
 
-## Why this exists
+## Feature highlights
 
-Powerful coding agents fail in three predictable, expensive ways. Two of these are not hypothetical here — they are scars, with dates and commit hashes, in the source of this repo.
+| Capability | What it gives you | Grounded in |
+|---|---|---|
+| **Orchestrator-only architecture** | The main agent routes; each real edit goes to a fresh subagent with one job and a clean context, so quality stays high. | `hooks/pretool-orchestrator-gate.py`, `CLAUDE.md` |
+| **Durable specs** | `/spec` captures the requirement verbatim, persists design + evidence, and splits the monolith into per-agent briefing books with Gawande-style checkpoints. Feeds `/dev` as the authoritative source of truth. | `commands/spec.md`, `agents/spec.md` |
+| **Evidence-gated BA → Dev → QA pipeline** | The analysis is QA'd *before* coding; every claim needs proof (git blame, grep, import-chain); the user's verbatim words are the binding spec. Pipeline: `/spec → /dev → /close → /commit → /push`. | `commands/dev.md`, `agents/ba.md`, `agents/qa.md` |
+| **Release-readiness gate** | `/close` proves not just "the code works" but "the system can ship it" — four Workflow-Integrity checks, optionally a multi-round QA↔Codex debate. | `commands/close.md` |
+| **Git protection kernel** | `commit / push / merge / reset --hard` refused unless a single-use per-operation authorization is present; wide-path checkout, stash-as-buffer, and hard resets blocked by default. Every guard traces to a real incident with a date and commit hash. | `hooks/pretool-git-privilege-guard.py`, `hooks/pretool-bash-safety.sh` |
+| **Autonomous overnight pipeline** | `/dev-overnight 6:00` runs an unattended explore → triage → fix → verify → commit loop until a wall-clock end time. Stop-hook physically refuses early termination. | `commands/dev-overnight.md`, `hooks/stop-overnight-timelock.py` |
+| **Structured break-glass grants** | `/allow` writes a structured grant (`{op, target, args_contain}`) matched by command structure — consumed on any terminal result. | `hooks/lib/allowlist.py`, `commands/allow.md` |
+| **Branch / PR / worktree firewall** | Creating a branch, PR, or worktree is forbidden by default everywhere, with explicit human escape hatches and a live-overnight exception. | `hooks/pretool-block-branch-pr-worktree.py`, `hooks/pretool-block-enterworktree.sh` |
+| **Crash-proof checkpoints** | Snapshots written to `refs/checkpoints/<branch>` via git plumbing — never move `HEAD`, so `git blame` always points at a real semantic commit. | `hooks/lib/checkpoint-core.sh`, `docs/reference/checkpoint-mechanism.md` |
+| **Self-updating documentation** | Edit a command or agent and the `INDEX.md` files and README/CLAUDE stat blocks regenerate automatically. | `hooks/posttool-doc-sync.py`, `hooks/doc_sync/` |
+| **Adversarial second opinion** | Add `--codex` to `/dev`, `/close`, or `/commit` to run an OpenAI Codex round through a fail-closed isolation wrapper. | `commands/codex.md`, `commands/close.md` |
+| **UI-audit skill suite** | Playwright-driven review: axe-core injection, APCA contrast, a 58-rule anti-pattern catalog, state matrix, token conformance, and a weighted beauty score. | `skills/` |
 
-1. **They do too much themselves.** A single context window tries to analyze, implement, test, *and* commit — and quality silently collapses under the load. Agents fix plausible problems instead of proven ones (a mobile bug "fixed" on desktop for six cycles; a CSS symptom patched six times when the real fix was a data-hydration layer underneath).
-2. **They make irreversible mistakes.**
-   - On **2026-04-19 23:02:22**, a dev subagent ran `git stash && cd packages/happy-app && git checkout` [`925f5960`](https://github.com/Yugoge/awesome-claude-harness/commit/925f5960) `-- .`. The wide-path `-- .` checkout overwrote the entire directory with old baseline content and **erased 17 days of UI work** — then reported it like a minor accident. (`hooks/pretool-bash-safety.sh`)
-   - On **2026-04-21 17:45 UTC**, in an ordinary *interactive* session (`962de59f`), the user typed "全部commit push" and the orchestrator answered by authoring a **93-file `commit` + `push` with zero human signoff** (regression [`b5d447e`](https://github.com/Yugoge/awesome-claude-harness/commit/b5d447e)). (`hooks/pretool-git-privilege-guard.py` docstring)
-3. **They drift from the requirement.** The thing that ships is a confident-sounding cousin of the thing you actually asked for.
+---
 
-This configuration attacks all three with **structure, not vibes** — and crucially, with mechanisms enforced in code rather than requested in prose:
+## System architecture
 
-- **An orchestrator-only main agent.** A `PreToolUse` gate restricts the main agent so the work goes to a fresh, single-purpose specialist. (`hooks/pretool-orchestrator-gate.py`)
-- **A git protection kernel.** Layered hooks refuse `commit / push / merge / reset --hard` from an agent unless a single-use, per-operation authorization is present (a **time-boxed** nonce grant for commit; a branch/head/remote-bound grant for push; a `/merge` env var for merge) — or a human break-glass path (`/do`, `/allow`) authorizes it. (`hooks/pretool-git-privilege-guard.py`, `hooks/pretool-bash-safety.sh`)
-- **An evidence-gated BA → QA-of-BA → Dev → QA pipeline.** The analysis is QA'd *before* coding; every factual claim needs proof; the user's verbatim words are the binding spec. (`commands/dev.md`, `agents/ba.md`, `agents/qa.md`)
+```mermaid
+graph TD
+    U([Human]) --> CMD[Slash commands<br/>35 entry points]
+    CMD --> ORC{{Main Agent / Orchestrator<br/>think + route — no direct writes}}
 
-The result: an agent you can hand a vague bug report to at midnight and find a verified, committed fix for in the morning — without ever worrying it nuked `main`.
+    ORC -.->|PreToolUse gate| HL
+    SUB -.->|PreToolUse gate| HL
+
+    ORC ==>|dispatch WHAT not HOW| SUB[Subagent Pool<br/>23 agents<br/>ba → qa → dev → qa]
+
+    HL[Hook Layer<br/>64 files / 65 wired<br/>7 lifecycle events<br/>PreToolUse · PostToolUse · Stop] -->|allow exit 0| GK[(Git Kernel<br/>git repo<br/>/tmp/ grants<br/>refs/checkpoints/*<br/>reference-transaction keystone)]
+    HL -->|block exit 2| BLK[/BLOCKED/]
+
+    GK --> IDX[INDEX files<br/>doc-sync PostToolUse]
+    TMP[/tmp/ grants<br/>commit · push · /allow] -->|single-use validation| HL
+
+    classDef restricted fill:#ffebee,stroke:#c62828
+    classDef gate fill:#fff3e0,stroke:#e67e22
+    class BLK restricted
+    class ORC,HL gate
+```
 
 ---
 
@@ -119,13 +103,9 @@ flowchart TD
     class O,GATE gate
 ```
 
-The main agent's job is to *think and route*. Code is written by a `dev` subagent in its own clean context. Every git mutation must pass through the kernel. This separation is enforced by hooks — not by asking the model nicely.
-
 ---
 
 ## The full pipeline
-
-The harness is one lifecycle, not a bag of commands. Each stage hands a verified artifact to the next.
 
 ```
    /spec                                  capture the requirement verbatim, split into per-agent briefs
@@ -143,66 +123,29 @@ The harness is one lifecycle, not a bag of commands. Each stage hands a verified
    /merge · /push                         bridge to the target branch · single-process gated push
 ```
 
-`--codex` rides alongside `/dev`, `/close`, and `/commit` as an opt-in adversarial second opinion. The git protection kernel sits *under* `/commit`, `/merge`, and `/push`, and **default-denies** covered privileged git mutations unless the wrapper authorization is present — a single-use grant for commit/push, the `/merge` env var for merge — or an audited human break-glass path (`/do` for the main agent, or a matching `/allow`) applies.
+Each stage hands a verified artifact to the next. `--codex` rides alongside `/dev`, `/close`, and `/commit` as an opt-in adversarial second opinion. The git protection kernel sits *under* `/commit`, `/merge`, and `/push` and default-denies covered git mutations unless the wrapper authorization is present.
 
 ---
 
-## Feature highlights
+## Failure modes this exists to prevent
 
-| Capability | What it gives you | Grounded in |
+| Failure mode | Harness mechanism | Key file |
 |---|---|---|
-| **Orchestrator-only architecture** | The main agent routes; each real edit goes to a fresh subagent with one job and a clean context, so quality stays high. | `hooks/pretool-orchestrator-gate.py`, `CLAUDE.md` |
-| **Durable specs** | `/spec` captures the requirement verbatim, persists design + evidence, and splits the monolith into per-agent briefing books with Gawande-style checkpoints. Feeds the `/dev` pipeline as the authoritative source of truth. | `commands/spec.md`, `agents/spec.md` |
-| **Evidence-gated BA → Dev → QA pipeline** | The analysis is QA'd *before* coding; every claim needs proof (git blame, grep, import-chain); the user's verbatim words are the binding spec. The pipeline runs as `/spec → /dev → /close → /commit → /push` — each stage hands a verified artifact to the next. | `commands/dev.md`, `agents/ba.md`, `agents/qa.md` |
-| **Release-readiness gate** | `/close` proves not just "the code works" but "the system can ship it" — four Workflow-Integrity checks, optionally a multi-round QA↔Codex debate — before `/commit` and `/push` are allowed to proceed. | `commands/close.md` |
-| **Git protection kernel** | `commit / push / merge / reset --hard` from an agent are refused unless a single-use, per-operation authorization is present (a **time-boxed** nonce grant file for commit; a branch/head/remote-bound grant for push; the `/merge` env var for merge); wide-path checkout, stash-as-buffer, and all hard resets are blocked **by default** — `bash-safety` and the privilege-guard refuse these destructive forms unless a human break-glass path (`/do`, or a matching `/allow` grant) authorizes the specific command. Every guard traces to a real incident with a date and commit hash. | `hooks/pretool-git-privilege-guard.py`, `hooks/pretool-bash-safety.sh` |
-| **Autonomous overnight pipeline** | `/dev-overnight 6:00` runs an unattended explore → triage → fix → verify → commit loop in a dedicated linked worktree until a wall-clock end time. The Stop-hook physically refuses to end the session early, so the loop cannot be short-circuited. (See limitation note in that section.) | `commands/dev-overnight.md`, `hooks/stop-overnight-timelock.py` |
-| **Structured break-glass grants** | `/allow` writes a *structured* grant (`{op, target, args_contain}`) matched by command **structure** — the sanctioned path — rather than the fragile substring grep of the legacy fallback that still lingers; it is consumed on any terminal result. | `hooks/lib/allowlist.py`, `commands/allow.md` |
-| **Branch / PR / worktree firewall** | Creating a branch, PR, or worktree is forbidden by default everywhere, with explicit human escape hatches and a live-overnight exception. | `hooks/pretool-block-branch-pr-worktree.py`, `hooks/pretool-block-enterworktree.sh` |
-| **Crash-proof checkpoints** | Automated snapshots are written to `refs/checkpoints/<branch>` via git plumbing — recoverable, audit-friendly, and they **never move `HEAD`**, so `git blame` always points at a real semantic commit. | `hooks/lib/checkpoint-core.sh`, `docs/reference/checkpoint-mechanism.md` |
-| **Self-updating documentation** | Edit a command or agent and the `INDEX.md` files and README/CLAUDE stat blocks regenerate automatically — your hand-written prose outside the `AUTO` markers is preserved. | `hooks/posttool-doc-sync.py`, `hooks/doc_sync/` |
-| **Adversarial second opinion** | Add `--codex` to `/dev`, `/close`, or `/commit` to run an OpenAI Codex round against the draft, through a fail-closed isolation wrapper. Catches over-engineering, missed edge cases, and scope drift before QA inherits the mistake. | `commands/codex.md`, `commands/close.md` |
-| **UI-audit skill suite** | A Playwright-driven UI review suite — axe-core injection, APCA contrast, a 58-rule anti-pattern catalog, a state matrix, token conformance, and a weighted beauty score. | `skills/` |
-
----
-
-## How it actually works
-
-### Walkthrough 1 — `/dev "the login button is misaligned on mobile"`
-
-1. **The orchestrator parses, then delegates — it does not investigate.** A `UserPromptSubmit` hook pre-creates the per-agent sentinel files and writes your verbatim requirement to disk as the source of truth. (`commands/dev.md`)
-2. **Specialists are consulted when relevant.** A misalignment-on-mobile report trips the `ui-specialist` trigger; the orchestrator must justify, per specialist, RELEVANT-or-SKIP — silently skipping is itself a violation.
-3. **The BA subagent builds the spec.** It does git root-cause analysis, finds the *actual* file (not a plausible cousin), and emits a Markdown ticket plus a JSON context, scored on five clarity dimensions (What / Why / Where / Scope / Success). (`agents/ba.md`)
-4. **QA validates the BA *before any code is written*.** It cross-examines every claim: is there git-blame evidence? do these files exist? did the scope quietly narrow? did this contradict a prior cycle's attempt? If the map is weak, BA is sent back — a one-hour analysis correction is far cheaper than six implementation loops on the wrong layer. The QA→BA iteration loop runs for up to 3 rounds; after 3, unresolved objections are appended to the context JSON and the workflow proceeds with documented assumptions rather than blocking indefinitely. (`commands/dev.md`, `agents/ba.md`)
-5. **The Dev subagent implements** the vetted plan, with a minimum-diff discipline and a self-verification (build + smoke) step. (`agents/dev.md`)
-6. **QA verifies against the acceptance criteria.** On failure, QA returns a structured objection (closed-enum categories: wrong_layer, missing_evidence, over_diff, etc.) and Dev is re-invoked with the objection as explicit context — not just "try again." If the QA objects that the fix lands at the wrong abstraction layer (e.g., patching a CSS symptom when the real bug is in data hydration), the BA may be re-invoked to revisit the root-cause analysis before Dev tries again. The Dev→QA loop is bounded at 5 attempts; if attempts 1 and 2 both targeted the same fix layer and failed, attempt 3 must target a different layer. After 5 Dev→QA failures the orchestrator surfaces the impasse to the user.
-7. **`/close → /commit → /push`** lands the change. `/close` is the release-readiness gate (a QA verdict, not a git grant); then `/commit` and `/push` each pass the git kernel under their own single-use grant.
-
-### Walkthrough 2 — a hook firing
-
-You (the agent) try the obvious shortcut:
-
-```bash
-CLAUDE_PUSH_COMMAND_ACTIVE=1 git push
-```
-
-`hooks/pretool-git-privilege-guard.py` runs *before* the tool executes. For push it scans the raw command text for the literal `CLAUDE_PUSH_COMMAND_ACTIVE=` prefix and recognizes it as an env-injection attempt — the sanctioned env var must be set by the `/push` wrapper in the child's real environment, not pasted onto the command line — and returns exit 2: **BLOCKED** before any `/push` grant or `/allow` is consulted — absent main-agent `/do` (under main-agent `/do` the guard exits 0 before inline-env detection runs). The **normal automated** honored path is a `/push` wrapper grant file (a nonce-keyed file the guard locates by glob), validated by single-use unlink and matched against the current branch, expected head, and remote (the push grant carries no `expires_at` — unlike the commit grant it is branch/head/remote-bound rather than time-boxed); separately, a human-created matching `/allow` sentinel can authorize a matching git command, and main-agent `/do` is the audited break-glass. Absent a `/push` grant, a matching `/allow`, or main-agent `/do`, a bare agent `git push` is refused. (A bare agent `git commit` is likewise refused — there it is the default-deny-without-a-grant rule, not inline-env detection, that blocks it.) (`hooks/pretool-git-privilege-guard.py`)
-
-That is the whole philosophy in miniature: the model is *encouraged* toward the right path and *physically prevented* from the wrong one — and when it is prevented, the evidence is left on disk.
-
-**The success path for the same push:** the `/push` command writes a nonce-keyed grant file to `/tmp/claude-push-grant-<sid>-<nonce>.json` carrying the expected branch name, expected HEAD SHA, and target remote. The privilege-guard locates this file by glob, validates those three fields against the current git state, and only then allows the `git push` to execute — consuming (unlinking) the grant immediately so it cannot be reused. A bare `git push` without this grant is blocked the same way as the inline-env injection above.
+| Agent does too much in one context — quality silently degrades | Orchestrator-only gate; every real change goes to a single-purpose subagent with a clean context | `hooks/pretool-orchestrator-gate.py` |
+| Irreversible git mistake (17 days of work erased; 93-file rogue commit) | Git protection kernel: default-deny for commit/push/merge/reset--hard; stash-as-buffer and wide-path checkout blocked by shape | `hooks/pretool-bash-safety.sh`, `hooks/pretool-git-privilege-guard.py` |
+| Implementation drifts from the requirement | BA → QA-of-BA → Dev → QA pipeline; user's verbatim words written to disk as the binding spec before any code is written | `agents/ba.md`, `agents/qa.md`, `commands/dev.md` |
 
 ---
 
 ## The git protection kernel
 
-This is the part that was paid for in lost work. Two real incidents shaped it:
+This is the part paid for in lost work. Two real incidents shaped it:
 
 > **The 17-days-erased disaster.** On 2026-04-19, a dev subagent used `git stash` as a throwaway buffer, then ran `git checkout` [`925f5960`](https://github.com/Yugoge/awesome-claude-harness/commit/925f5960) `-- .` inside `packages/happy-app/`, silently overwriting 17 days of UI work with an old baseline. So `hooks/pretool-bash-safety.sh` now blocks **stash-as-buffer** (`git stash push/save/-u/--all` and bare `git stash`), **wide-path checkout-from-a-ref** (`git checkout <ref> -- .` / `-- *` / `-- dir/`), its modern `git restore --source=… -- .` equivalent, and **every `git reset --hard` form** — each blocked **by default**, absent a main-agent `/do` or a matching `/allow` grant. Single-file checkout (`git checkout <ref> -- path/to/file.ts`) stays allowed.
 >
-> **Concrete example:** if an agent tries `git checkout abc123 -- .`, bash-safety blocks it with exit 2 and logs the incident date. To restore a single file: `git checkout abc123 -- hooks/pretool-bash-safety.sh` — that is allowed. To widen the checkout back to a whole directory, a human must first `/allow git checkout` with the matching `args_contain`.
+> **Concrete example:** if an agent tries `git checkout abc123 -- .`, bash-safety blocks it with exit 2. To restore a single file: `git checkout abc123 -- hooks/pretool-bash-safety.sh` — that is allowed. To widen the checkout back to a whole directory, a human must first `/allow git checkout` with the matching `args_contain`.
 
-> **The 93-file sweep.** On 2026-04-21 17:45 UTC, in an *interactive* (not overnight) session, the prompt "全部commit push" produced regression [`b5d447e`](https://github.com/Yugoge/awesome-claude-harness/commit/b5d447e): a 93-file `commit` + `push` authored by the orchestrator with no human signoff. The lesson was that gating on overnight-context alone would let this exact class through. So `hooks/pretool-git-privilege-guard.py` was made **always-on** — it runs on every Bash call in both subagent and main-agent contexts — and now requires a single-use authorization for each privileged verb (a **time-boxed** nonce grant file for commit; a single-use branch/head/remote-bound grant for push; an env var set by `/merge` for merge).
+> **The 93-file sweep.** On 2026-04-21 17:45 UTC, in an *interactive* (not overnight) session (`962de59f`), the prompt "全部commit push" produced regression [`b5d447e`](https://github.com/Yugoge/awesome-claude-harness/commit/b5d447e): a 93-file `commit` + `push` authored by the orchestrator with no human signoff. The lesson was that gating on overnight-context alone would let this exact class through. So `hooks/pretool-git-privilege-guard.py` was made **always-on** — it runs on every Bash call in both subagent and main-agent contexts — and now requires a single-use authorization for each privileged verb.
 
 ```mermaid
 flowchart TD
@@ -228,14 +171,31 @@ flowchart TD
     class OK ok
 ```
 
-**How the chain divides labor (described accurately):**
+#### Hook chain reference
 
-- **`pretool-bash-safety.sh`** is the blunt instrument: it refuses the destructive shell forms above **by default**, by command shape (a main-agent `/do` or matching `/allow` grant is the audited exception), with the incident dates quoted in the block message.
-- **`pretool-bulk-commit-detector.py`** independently recognizes the 93-file "sync all uncommitted…" fan-out shape (3+ subsystems touched + a `sync…uncommitted` / `chore(claude): sync` subject). Per current user policy it is **warn-only** — it emits a loud stderr warning and exits 0; it does not block. The *blocking* of an agent commit/push is the privilege-guard's job.
-- **`pretool-git-privilege-guard.py`** is the always-on kernel. It default-denies agent `commit` (unless the message is the blessed `auto-bulk: end-of-cycle commit for …` bridge, which itself requires a `/commit --bulk` sentinel), `merge` (unless `/merge` set its env var), `push` (any form), `reset --hard` (every form), and direct ref mutation. The sanctioned escapes for commit and push are single-use grant manifests at `/tmp/claude-{commit,push}-grant-<sid>-<nonce>.json`, each carrying a nonce; only the **commit** grant additionally carries an ISO-8601 UTC `expires_at` (the **push** grant has no `expires_at`). The two grants differ in what the guard checks: a **commit** grant is validated only for expiry and single-use consumption (it does *not* re-check allowed files or a message SHA at the guard); a **push** grant is validated against the current branch, expected head, and remote, and single-use consumption only — no expiry. Grants are consumed (unlinked) on use.
-- **The privilege-guard default-denies every agent absent a sanctioned path.** A subagent never benefits from `/do` (the guard refuses the consent flag whenever an `agent_id` is present). The human break-glass paths are `/do` (main-agent only, audited) and a matching structured `/allow` sentinel grant (honored even in subagent context); legacy git-allowlist grants remain main-agent only. `/do` also leaves the orchestrator-gate streak state untouched, keeping its semantics clean.
+Note: `pretool-bulk-commit-detector.py` is warn-only — it exits 0 and never blocks by itself; the blocking of agent commit/push is the privilege-guard's job.
 
-Read-only git (`status`, `log`, `show`, `diff`, `blame`, `ls-files`, `branch` listing, `stash list/show`) stays freely available. A handful of non-read-only verbs are also permitted by policy — `add`, single-file working-tree `restore`, and `stash pop` — they mutate the index or working tree but never history or the remote.
+| Hook | Event | Covered operations | Default | Break-glass |
+|---|---|---|---|---|
+| `pretool-bash-safety.sh` | PreToolUse Bash | stash-buffer, wide checkout (-- . / -- *), git restore --source -- ., reset --hard | BLOCK (exit 2) | /do or matching /allow |
+| `pretool-bulk-commit-detector.py` | PreToolUse Bash | 93-file 'sync all uncommitted' shape (3+ subsystems + sync subject) | WARN only (exits 0) | N/A — warn-only per current policy |
+| `pretool-git-privilege-guard.py` | PreToolUse Bash | commit, push (any form), merge, reset --hard, direct ref mutation | BLOCK (exit 2) | /commit or /push grant, or /allow (subagents); /do (main agent only) |
+| `pretool-orchestrator-gate.py` | PreToolUse (all tools) | Non-whitelisted tools in main-agent context; streak rate-limit | BLOCK (rate-limited) | /do |
+| `pretool-tool-policy.py` | PreToolUse Write | Role-scoped deny rules from policies/tool-policy.v1.json | FAIL CLOSED (non-dev roles); fail-safe ALLOW (dev role when policy missing) | N/A |
+| `stop-overnight-timelock.py` | Stop | Early session termination before declared end-time | BLOCK (exit 2) | /stop at or after end-time; defaults to 8h if no end-time set |
+| `posttool-doc-sync.py` | PostToolUse | INDEX.md / README / CLAUDE stat block regeneration | UPDATE (idempotent) | N/A |
+
+Read-only git (`status`, `log`, `show`, `diff`, `blame`, `ls-files`, `branch` listing, `stash list/show`) stays freely available. `add`, single-file working-tree `restore`, and `stash pop` are also permitted — they mutate the index or working tree but never history or the remote.
+
+#### Grant lifecycle comparison
+
+| Grant type | Written by | Key fields | Expiry | Consumed on | Honored for |
+|---|---|---|---|---|---|
+| Commit grant `/tmp/claude-commit-grant-<sid>-<nonce>.json` | /commit command | nonce, expires_at (ISO-8601 UTC) | Time-boxed ISO expiry | Any terminal result (unlink) | Main agent + subagents |
+| Push grant `/tmp/claude-push-grant-<sid>-<nonce>.json` | /push command | nonce, branch, expected-head SHA, remote | None — branch/head/remote-bound | Any terminal result (unlink) | Main agent + subagents |
+| /allow sentinel `/tmp/claude-grants/<task_id>.json` | /allow command | task_id, session_id, allowed_operations[] ({op, target?, args_contain?}), expires_at | ISO expiry | Any terminal result (posttool-allowlist-consume.py) | Main agent + subagents |
+
+Match channel for /allow: structural (`op` = first token of sub-command; `args_contain` = leading argument sequence prefix). Command-text substring grep is not the match channel. Legacy git-allowlist grants are main-agent only.
 
 ---
 
@@ -256,9 +216,13 @@ flowchart LR
     TL[[Stop-hook time-lock:<br/>refuses to terminate before end-time]] -.guards.-> RT
 ```
 
-`/dev-overnight` runs a todo-completion-driven loop inside a dedicated worktree. A `Stop` hook (`hooks/stop-overnight-timelock.py`) physically refuses to end the conversation until your wall-clock end time, so the loop cannot be short-circuited — the hook compares the current time against the declared end time and returns exit 2 (blocking the Stop event) until the deadline passes, defaulting to an 8-hour session if no end time is provided. Each issue gets its own one-issue-per-subagent pipeline; cycles deduplicate against state and end with a real, merge-ready commit. Cancel any time with `/stop`.
+`/dev-overnight` runs a todo-completion-driven loop inside a dedicated worktree. A `Stop` hook (`hooks/stop-overnight-timelock.py`) physically refuses to end the conversation until your wall-clock end time, defaulting to an 8-hour session if no end time is provided. Each issue gets its own one-issue-per-subagent pipeline; cycles deduplicate against state and end with a real, merge-ready commit. Cancel any time with `/stop`.
 
-> **Honestly-documented limitation.** The overnight session runs in a *linked* worktree that **shares the repository `.git` common-dir** with the main checkout. The current locks (a git reference-transaction keystone for HEAD/ref moves, plus a per-Bash-command bind-mount boundary for main-tree writes) are treated as sufficient for the cycle, **but the shared-`.git` residual is an accepted deviation, not a clean isolation guarantee** — an actor that mutates shared git config/hooks could in principle disable the keystone. The repo says so plainly rather than hiding it: *"Do NOT claim protection against shared-`.git` mutation."* (`commands/dev-overnight.md`)
+> **Schema-contract validation** (`hooks/lib/contract_runtime.py`, Draft7 JSON Schema validator, `exit(2)` on mismatch) fires **only under `/dev-overnight`** — the validator reads `cycle-contract.json`, which only the overnight loop writes. Interactive `/dev` invocations run in passthrough mode (exits 0). The README's description of "schema-enforced agent contracts" applies to overnight mode only; it is not implied that every `/dev` invocation is schema-validated.
+
+> **cp-state SubagentStop enforcement** blocking behavior is mode-dependent — left out of kernel claims rather than overstated.
+
+> **Honestly-documented limitation.** The overnight session runs in a *linked* worktree that **shares the repository `.git` common-dir** with the main checkout. The current locks are treated as sufficient for the cycle, **but the shared-`.git` residual is an accepted deviation, not a clean isolation guarantee** — an actor that mutates shared git config/hooks could in principle disable the keystone. The repo says so plainly rather than hiding it. (`commands/dev-overnight.md`)
 
 ---
 
@@ -266,24 +230,33 @@ flowchart LR
 
 The orchestrator dispatches specialists by *describing the problem* — never the tooling (`hooks/pretool-orchestrator-prompt-purity.py` watches for leaked "HOW"). Each picks its own approach and returns a structured report.
 
-| Agent | Availability | Dispatch trigger |
-|---|---|---|
-| **`ba`** | always-on | Every `/dev` invocation — requirements analyst; git root-cause analysis → Markdown ticket + JSON context. |
-| **`dev`** | always-on | After QA validates the BA spec — implementation specialist; writes the change under minimum-diff discipline. |
-| **`qa`** | always-on | Twice per `/dev` cycle: once to validate the BA, once to verify the implementation. |
-| **`test-writer`** | always-on (conditional) | When task complexity ≥ STANDARD or risk is high — emits pytest skeletons with `pytest.fail("TEST_INCOMPLETE:…")` hard-stops. |
-| **`graphify`** | always-on (optional dep) | Between BA and Dev — incremental code-graph enrichment; injects a focused subgraph into the Dev context. Skipped gracefully if binary absent. |
-| **`spec`** | on-demand | `/spec` invocation — splits a monolithic spec into per-agent views + Gawande-style checkpoints. |
-| **`architect`** | overnight + on-demand | During overnight specialist scan — structural issues, tech debt, dependency and pattern problems. |
-| **`product-owner`** | overnight + on-demand | During overnight specialist scan — feature completeness, user flows, business-logic bugs. |
-| **`user`** | overnight + on-demand | During overnight specialist scan — end-user simulation; UX friction and broken flows. |
-| **`ui-specialist`** | overnight + on-demand | When a user-facing change is detected or `/test` with UI mode — visual-design quality + Playwright UI audit with a 1–10 beauty score. |
-| **`pm`** | overnight | Orchestrates overnight: PLAN (explores live app), TRIAGE (routes issues), RETRO (hand-off to next cycle). |
-| **`changelog-analyst`** | on-demand | `/commit` invocation — classifies files, stages surgically (own-hunks only), writes conventional commits, emits the push-gate token. |
-| **`push-analyst` / `merge-analyst` / `pull-analyst`** | on-demand | `/push`, `/merge`, `/pull` invocations — pre-push, pre-merge, and post-pull risk analysis with nonce-keyed grants. |
-| **`cleaner` / `cleanliness-inspector` / `style-inspector` / `rule-inspector`** | on-demand | `/clean` invocation — the `/clean` cohort: detect, audit, and execute project hygiene. |
-| **`prompt-inspector` / `git-edge-case-analyst`** | on-demand | On request — documentation-verbosity and git-history edge-case discovery. |
-| **`test-executor` / `test-validator`** | on-demand | `/test` invocation — execute and validate test infrastructure. |
+> Note: no `orchestrator.md` agent exists — a now-removed `orchestrator.md` is referenced in some internal drafts but is not claimed here.
+
+| Agent | Availability | Dispatch trigger | Key input | Key output |
+|---|---|---|---|---|
+| **`ba`** | always-on | Every `/dev` invocation | user requirement + git log | ticket-*.md + context-*.json |
+| **`dev`** | after BA validated by QA | /dev pipeline step 2 dispatch | context-*.json | implementation + dev-report-*.md |
+| **`qa`** | always-on | BA spec or dev report delivered (twice per /dev cycle) | BA spec or dev report | pass/fail + structured objections |
+| **`test-writer`** | complexity ≥ STANDARD or risk_level = high | acceptance-criteria-*.json generated | acceptance-criteria-*.json | pytest skeletons with TEST_INCOMPLETE hard-stops |
+| **`graphify`** | GRAPHIFY_ENABLED=auto and binary present | blast-radius-map.json generated | blast-radius-map.json | graph_context patch injected into context JSON |
+| **`spec`** | /spec invocation | monolithic spec file provided | monolithic spec file | per-agent view files + Gawande-style checkpoints |
+| **`architect`** | overnight + on-demand | /dev-overnight or PM PLAN dispatch | live app URL | structured JSON report per specialist |
+| **`product-owner`** | overnight + on-demand | /dev-overnight or PM PLAN dispatch | live app URL | structured JSON report per specialist |
+| **`user`** | overnight + on-demand | /dev-overnight or PM PLAN dispatch | live app URL | structured JSON report per specialist |
+| **`ui-specialist`** | overnight + on-demand | user-facing change detected or /test UI mode | live app URL | structured JSON report per specialist |
+| **`pm`** | overnight | /dev-overnight invocation | live app URL + test plan | PLAN/TRIAGE/RETRO structured report |
+| **`changelog-analyst`** | /commit invocation | /commit command | git diff + dev report | surgical staged commit + push-gate token |
+| **`push-analyst`** | /push invocation | /push command | commits/branch range | nonce-keyed grant + risk summary |
+| **`merge-analyst`** | /merge invocation | /merge command | commits/branch range | nonce-keyed grant + risk summary |
+| **`pull-analyst`** | /pull invocation | /pull command | commits/branch range | risk summary |
+| **`cleaner`** | /clean invocation | /clean command | project tree | hygiene execution report |
+| **`cleanliness-inspector`** | /clean invocation | /clean command | project tree | hygiene audit report |
+| **`style-inspector`** | /clean invocation | /clean command | project tree | style violations report |
+| **`rule-inspector`** | /clean invocation | /clean command | project tree | discovered folder rules |
+| **`prompt-inspector`** | on-demand | on request | agent/command docs | verbosity violations report |
+| **`git-edge-case-analyst`** | on-demand | on request | git history | edge case report |
+| **`test-executor`** | /test invocation | /test command | test files | execution report |
+| **`test-validator`** | /test invocation | /test command | test files | validation report |
 
 > Full, auto-maintained roster: [`agents/README.md`](agents/README.md).
 
@@ -291,26 +264,51 @@ The orchestrator dispatches specialists by *describing the problem* — never th
 
 ## The command surface: 35 slash commands
 
-| Group | Commands | What they do |
+| Group | Command | What it does |
 |---|---|---|
-| **Spec** | `/spec` · `/spec-update` | Capture the requirement verbatim, persist design + evidence, split into per-agent briefs + checkpoints; append continuation cycles. |
-| **Develop** | `/dev` · `/dev-command` · `/dev-overnight` · `/redev` | Orchestrated single-pass dev, command-authoring dev, autonomous overnight loop, and re-dev of a prior cycle. |
-| **Ship** | `/close` · `/commit` · `/merge` · `/push` · `/pull` · `/checkpoint` | The release-readiness gate and the grant-gated git pipeline. |
-| **Quality** | `/clean` · `/test` · `/code-review` · `/refactor` · `/optimize` · `/security-check` | Cleanup cohort, test workflow, and review passes. |
-| **Understand** | `/explain-code` · `/file-analyze` · `/doc-gen` · `/doc-sync` | Code explanation, file analysis (PDF/Excel/Word/images), documentation. |
-| **Research** | `/deep-search` · `/research-deep` · `/search-tree` · `/reflect-search` · `/site-navigate` | Fan-out, fact-checked, multi-source web research. |
-| **Control** | `/do` · `/allow` · `/stop` · `/codex` · `/quick-commit` · `/quick-prototype` · `/fswatch` · `/playwright-helper` | Break-glass consent, overnight cancel, Codex delegation, and fast paths. |
+| **Spec** | `/spec` | Capture the requirement verbatim, persist design + evidence, split into per-agent briefs + Gawande-style checkpoints. |
+| **Spec** | `/spec-update` | Append continuation cycles to an existing spec. |
+| **Develop** | `/dev` | Orchestrated single-pass development pipeline. |
+| **Develop** | `/dev-command` | Command-authoring dev pipeline. |
+| **Develop** | `/dev-overnight` | Autonomous overnight loop. |
+| **Develop** | `/redev` | Re-dev a prior cycle with a revised context. |
+| **Ship** | `/close` | Release-readiness gate (QA verdict + optional Codex debate). |
+| **Ship** | `/commit` | Surgical staging + conventional commit message + commit grant. |
+| **Ship** | `/merge` | Bridge to target branch with pre-merge analyst grant. |
+| **Ship** | `/push` | Single-process gated push with push analyst grant. |
+| **Ship** | `/pull` | Post-pull advisory risk analysis. |
+| **Ship** | `/checkpoint` | Manual snapshot to `refs/checkpoints/<branch>`. |
+| **Quality** | `/clean` | Cleanup cohort (cleaner + inspectors). |
+| **Quality** | `/test` | Test workflow (execute + validate). |
+| **Quality** | `/code-review` | Code review pass. |
+| **Quality** | `/refactor` | Refactoring pass. |
+| **Quality** | `/optimize` | Optimization pass. |
+| **Quality** | `/security-check` | Security review pass. |
+| **Understand** | `/explain-code` | Code explanation. |
+| **Understand** | `/file-analyze` | File analysis (PDF/Excel/Word/images). |
+| **Understand** | `/doc-gen` | Documentation generation. |
+| **Understand** | `/doc-sync` | Documentation sync. |
+| **Research** | `/deep-search` | Fan-out, fact-checked, multi-source web research. |
+| **Research** | `/research-deep` | Deep research mode. |
+| **Research** | `/search-tree` | Recursive search tree. |
+| **Research** | `/reflect-search` | Reflective web search with self-critique. |
+| **Research** | `/site-navigate` | Structured site navigation research. |
+| **Control** | `/do` | Break-glass consent for the main agent (one turn). |
+| **Control** | `/allow` | Structured single-use break-glass grant for one specific operation. |
+| **Control** | `/stop` | Cancel an overnight session. |
+| **Control** | `/codex` | OpenAI Codex adversarial delegation. |
+| **Control** | `/quick-commit` | Fast commit path without full /close pipeline. |
+| **Control** | `/quick-prototype` | Fast prototyping path. |
+| **Control** | `/fswatch` | File-watching. |
+| **Control** | `/playwright-helper` | Playwright assistance. |
 
-`/do` and `/allow` are the two human escape hatches:
+**`/do`** lets the *main* agent do direct work for one turn. Recognized by the orchestrator gate, bash-safety, and the always-on git-privilege-guard — applies to the **main agent only**; a subagent never benefits from the consent flag. It does not quiet the bulk-commit detector's warning.
 
-- **`/do`** lets the *main* agent do direct work for one task and requires a deterministic `do-report` before `/close`. A human's `/do` consent is recognized by the orchestrator gate, bash-safety, and the always-on git-privilege-guard — so it lets the main agent through all three, which is the entire point of break-glass. It applies to the **main agent only**: a subagent never benefits from the consent flag. It does **not** quiet the bulk-commit detector's warning.
-- **`/allow`** writes a single, **structured** break-glass grant for one specific operation, matched by command **structure** (`op` / `target` / `args_contain`) — the sanctioned path, in preference to the fragile substring matching that a legacy fallback in `hooks/lib/allowlist.py` still retains. Refuse-by-default is the rule (the exact match-all hole was closed in commit `7dbdd307`, "/allow consent is refuse-by-default — close match-all grant hole"). The grant is single-use and consumed on any terminal result.
+**`/allow`** writes a single structured break-glass grant matched by command structure (`op` / `target` / `args_contain`). Single-use; consumed on any terminal result.
 
-  Example grant file at `/tmp/claude-grants/<task_id>.json` (for `git checkout abc123 -- hooks/pretool-bash-safety.sh`):
-  ```json
-  {"task_id": "20260705-113208", "session_id": "dev-...", "allowed_operations": [{"op": "git", "args_contain": ["checkout", "abc123", "--", "hooks/pretool-bash-safety.sh"]}], "created_at": "2026-07-05T11:32:08Z", "expires_at": "2026-07-05T12:32:08Z"}
-  ```
-  The hook matches on `op` (first whitespace-separated token of the sub-command, skipping leading `KEY=VAL` env-var tokens) and optionally on `args_contain` (leading argument sequence from that token onward — prefix match, not arbitrary containment) — command-text substring grep is not the match channel.
+```json
+{"task_id": "20260705-113208", "session_id": "dev-...", "allowed_operations": [{"op": "git", "args_contain": ["checkout", "abc123", "--", "hooks/pretool-bash-safety.sh"]}], "created_at": "2026-07-05T11:32:08Z", "expires_at": "2026-07-05T12:32:08Z"}
+```
 
 Most release commands carry `disable-model-invocation: true` so an agent can't self-invoke them via SlashCommand. Because that flag does **not** block the `Skill` tool, every human-only command is *also* denied as `Skill(<name>:*)` in `permissions.deny` — the human is the trust root.
 
@@ -318,89 +316,70 @@ Most release commands carry `disable-model-invocation: true` so an agent can't s
 
 ---
 
-## Setup details
+## Pipeline in action
 
-### Try it in 30 seconds (no Claude Code required)
+### Walkthrough 1 — `/dev "the login button is misaligned on mobile"`
 
-The project ships a runnable demo that exercises the real guard (`pretool-tool-policy.py`) against an isolated ephemeral home — no Claude Code session needed. Run it from any non-root `$HOME`:
+| Step | Who acts | What happens | Bounds |
+|---|---|---|---|
+| 1 | UserPromptSubmit hook | Pre-creates per-agent sentinel files; writes verbatim requirement to disk as the binding spec | — |
+| 2 | Orchestrator | Evaluates specialist triggers (e.g., `ui-specialist` for layout reports); must justify RELEVANT-or-SKIP per specialist — silently skipping is itself a violation | — |
+| 3 | BA subagent | Git root-cause analysis → finds the *actual* file (not a plausible cousin); emits Markdown ticket + JSON context, scored on 5 clarity dimensions (What/Why/Where/Scope/Success) | — |
+| 4 | QA subagent | Validates the BA *before any code is written*: git-blame evidence? files exist? scope narrowed? prior cycle contradiction? If weak, BA is sent back | QA→BA loop max 3 rounds; unresolved objections appended to context, workflow proceeds with documented assumptions |
+| 5 | Dev subagent | Implements the vetted plan under minimum-diff discipline; runs self-verification (build + smoke) | — |
+| 6 | QA subagent | Verifies against acceptance criteria; returns structured objection (wrong_layer / missing_evidence / over_diff / …) on failure; may re-invoke BA if wrong abstraction layer | Dev→QA loop max 5 attempts; same fix layer twice → attempt 3 must target a different layer |
+| 7 | `/close → /commit → /push` | Release-readiness gate, then grant-gated git pipeline | — |
+
+### Walkthrough 2 — a hook firing
+
+You (the agent) try the obvious shortcut:
+
+```bash
+CLAUDE_PUSH_COMMAND_ACTIVE=1 git push
+```
+
+`hooks/pretool-git-privilege-guard.py` runs *before* the tool executes. It recognizes the `CLAUDE_PUSH_COMMAND_ACTIVE=` prefix as an env-injection attempt — the sanctioned env var must be set by the `/push` wrapper in the child's real environment, not pasted onto the command line — and returns exit 2: **BLOCKED** before any `/push` grant or `/allow` is consulted (absent main-agent `/do`).
+
+| Method | Result |
+|---|---|
+| Inline `CLAUDE_PUSH_COMMAND_ACTIVE=1 git push` | BLOCKED (exit 2) — env-injection detected before grant/allow check |
+| `/push` grant file (nonce-keyed, branch+head+remote-bound, single-use) | ALLOWED — guard validates branch, expected HEAD, remote; unlinks grant |
+
+The model is *encouraged* toward the right path and *physically prevented* from the wrong one — and when it is prevented, the evidence is left on disk. (`hooks/pretool-git-privilege-guard.py`)
+
+---
+
+## Trust model in practice
+
+| Actor | Edit/Write | git commit | git push | git reset --hard | /do bypass | Break-glass path |
+|---|---|---|---|---|---|---|
+| Human (shell) | ✓ | ✓ | ✓ | ✓ | N/A | N/A |
+| Main Agent | via /do | /commit grant (time-boxed ISO expiry) | /push grant (branch+head+remote-bound) | via /do or matching /allow | ✓ | /do — breaks all gates for one turn |
+| Subagent | role-restricted | /commit grant | /push grant | matching /allow only — /do never applies to subagents | ✗ (subagents never get /do) | /allow only |
+
+Commit grant = time-boxed ISO expiry, single-use. Push grant = branch+head+remote-bound, no expiry, single-use. /allow sentinel = structured match (op+target+args_contain), ISO expiry, single-use, honored for subagents. For git reset --hard: subagents can use /allow; they cannot use /do.
+
+---
+
+## Setup
+
+### Try it without Claude Code
+
+The project ships a runnable demo exercising the real guard (`pretool-tool-policy.py`) against an isolated ephemeral home — no Claude Code session needed:
 
 ```bash
 examples/guard-demo/run-demo.sh
 ```
 
-Expected output:
+| Phase | Expected result | Exit code |
+|---|---|---|
+| STEP 1 — dangerous operation | BLOCKED (exit 2) by the guard, fail-closed | 2 |
+| STEP 2 — authorized fix | ALLOWED (exit 0) — operation is within policy | 0 |
+| STEP 3 — fix completes | Fix write landed on disk | — |
 
-```
-=== STEP 1 — attempt a DANGEROUS operation (must be BLOCKED) ===
-BLOCKED (exit 2) by the guard, fail-closed:
-  ...
+Exit 0 = allow, exit 2 = block. See [`examples/guard-demo/run-demo.sh`](examples/guard-demo/run-demo.sh) for details.
 
-=== STEP 2 — apply a properly-AUTHORIZED fix (must be ALLOWED) ===
-ALLOWED (exit 0) by the guard — the operation is within policy.
-
-=== STEP 3 — the authorized fix COMPLETES ===
-Fix write landed on disk: ...
-
-=== RESULT ===
-PASS — dangerous op BLOCKED (exit 2), then grant-gated fix COMPLETED (exit 0 + write landed).
-```
-
-Exit 0 means the block-then-grant-then-complete sequence worked as designed. See [`examples/guard-demo/run-demo.sh`](examples/guard-demo/run-demo.sh) for details.
-
-### Dependencies (REQUIRED vs OPTIONAL)
-
-A newcomer can run the core development pipeline with just the **REQUIRED** rows; every optional integration degrades gracefully when its dependency is absent.
-
-<details>
-<summary>Dependency requirements</summary>
-
-| Dependency | Tier | What needs it | Degrades when missing |
-|---|---|---|---|
-| [Claude Code](https://claude.com/claude-code) | **REQUIRED** | The host. Must be recent enough to fire `UserPromptSubmit` / `Notification` / `SubagentStop` hook events, honor `disable-model-invocation` frontmatter, and enforce `Skill(*)` permission denies — older clients silently skip these and the guardrails won't engage. | All hooks fail silently — the entire guardrail stack disengages. |
-| Python 3 + a venv at `~/.claude/venv` | **REQUIRED** | Runs every Python hook (the git kernel, gates) and helper script. The venv ships empty — `scripts/bootstrap` creates it and installs the manifest (Quickstart step 3). | Python hooks fail at import time; git kernel inactive. |
-| `git` | **REQUIRED** | The whole harness is git-native (checkpoints, grants, keystone). Any recent git (2.4x+) works for normal use; the overnight keystone's structural HEAD-switch protection needs **git ≥ 2.46** (verified by `scripts/overnight-git-selftest.sh`). | No checkpoints, no grant-gated git operations, no overnight loop. |
-| `git reference-transaction` hook (keystone) | **REQUIRED keystone** | The overnight keystone (`hooks/git-keystone/`) installs a `reference-transaction` hook into `<git-common-dir>/keystone-hooks/` and sets `core.hooksPath` to point there; it fires atomically on every HEAD/ref move and structurally prevents unauthorized ref rewrites during overnight sessions. Needs git ≥ 2.46. | Without it, the overnight linked worktree has no structural protection against unauthorized `HEAD` rewrites — the shared-`.git` residual is exposed. Core `/dev` pipeline is unaffected. |
-| `jq` | **REQUIRED** | JSON parsing in shell hooks/scripts across the pipeline. | Shell hooks that parse grant files or settings.json silently fail or misparse JSON. |
-| Bash + GNU userland (coreutils, util-linux/`flock`, findutils, `grep`, `sed`, `awk`/gawk) | **REQUIRED** | `realpath`, `flock`, `stat`, `sha256sum`, `date`, `grep`, `sed`, `awk`, `find` are used pervasively across the `#!/bin/bash` hooks/scripts. The GNU forms are assumed — BSD/macOS variants differ in flags and can break hooks; install the GNU userland there. | Hook failures on BSD/macOS with wrong flag variants; `flock`-based serialization unavailable. |
-| `pytest`, `jsonschema`, `pyyaml` (the test/runtime manifest) | **REQUIRED** for `/test` + generated tests | `/test` and the test-writer's generated AC tests run under pytest and parse schema/YAML. These are pinned in [`requirements.txt`](requirements.txt) and installed automatically by `scripts/bootstrap`; `scripts/doctor` reports any that are missing before your first run. | `/test` fails; test-writer skeletons cannot be executed; schema validation unavailable. |
-| OpenAI Codex CLI + an isolation wrapper (`CODEX_ISO_BIN`) | **REQUIRED** for `--codex` / `/codex` | The adversarial second-opinion rounds shell out to the Codex CLI through a fail-closed isolation wrapper. **You must supply your own** Codex CLI and wrapper and point `CODEX_ISO_BIN` at it (there is no hardcoded author path). Without it, `--codex`/`/codex` are unavailable (the rest of the pipeline is unaffected). | `--codex` / `/codex` unavailable; rest of the pipeline unaffected. |
-| `openssl` | **REQUIRED** for `/merge`, `/push` | Nonce / token generation in the grant-gated git release path. | `/merge` and `/push` cannot generate nonce-keyed grants → those commands fail at grant-write step. |
-| `bwrap` (bubblewrap) | **REQUIRED** for `/dev-overnight` | The per-Bash bind-mount boundary that isolates overnight main-tree writes. | Overnight launch still works; non-worktree-local write fails closed (security-relevant). |
-| `graphify` CLI (`graphifyy` v0.8.25 on PyPI; the binary is `graphify`) | OPTIONAL (graceful) | Incremental code-graph enrichment injected into the Dev context. Default-enabled (`CLAUDE_GRAPHIFY_ENABLED=auto`); if the binary is absent the pipeline degrades and proceeds. Install: `~/.claude/venv/bin/pip install graphifyy`, then point `GRAPHIFY_BIN` at the installed `graphify`. | Code-graph context absent from Dev dispatch; BA blast-radius map skips graph enrichment. Dev still runs without it — quality may be lower on large refactors. |
-| [Playwright MCP](https://github.com/microsoft/playwright-mcp) | OPTIONAL overall; **REQUIRED for user-facing QA/E2E + UI audits** | Powers the UI-audit skill suite, the overnight PM's live-app exploration, and QA's live browser verification of user-facing changes (QA fails closed when a user-facing change cannot be browser-verified). Not needed for doc/config/non-user-facing cycles. | Non-user-facing cycles unaffected; QA fails closed only when a user-facing change cannot be browser-verified. |
-| Python pkg `websocket-client` | OPTIONAL (graceful) | A few websocket enrichments; hooks fall back to lenient paths when missing. (`jsonschema` + `pyyaml` are now REQUIRED via the manifest above.) | Websocket enrichments silently skipped; fallback path active. |
-| `fswatch` | OPTIONAL | Backs `/fswatch` file-watching; not needed by the core pipeline. | `/fswatch` command unavailable; core pipeline unaffected. |
-| `node` + a user-supplied `EXCEL_ANALYZER` | OPTIONAL | `/file-analyze` spreadsheet/document analysis. You provide the analyzer; absent → that file type is skipped. | Spreadsheet/document analysis unavailable; other file types still work. |
-
-</details>
-
-> **One-line summary:** install Claude Code + Python 3 + git + jq + the GNU userland + openssl, then run `scripts/bootstrap` — it creates the venv and installs the manifest (`pytest` + `jsonschema` + `pyyaml`), which covers the core `/dev → /close → /commit → /push` pipeline (`/push` needs `openssl`). Run `scripts/doctor` first if you want a preflight of what's missing. Add the Codex CLI + wrapper (`CODEX_ISO_BIN`) for `--codex`, graphify for code-graph context, Playwright MCP for UI/overnight (and user-facing QA), and `bwrap` for `/dev-overnight` as you need them.
-
-```bash
-# 1. Back up any existing config (timestamped + non-destructive; aborts on failure)
-[ ! -e ~/.claude ] || mv ~/.claude ~/.claude.bak-"$(date +%Y%m%d-%H%M%S)"
-
-# 2. Clone this repo to ~/.claude
-git clone https://github.com/Yugoge/awesome-claude-harness.git ~/.claude
-
-# 3. (optional) Preflight — report any missing required dependencies first
-~/.claude/scripts/doctor
-
-# 4. Bootstrap — creates the venv, installs the manifest (pytest + jsonschema +
-#    pyyaml), makes the shell hooks executable, and verifies the resolver.
-#    It is non-destructive: it refuses to clobber an existing populated home
-#    without --force (which backs up the prior venv before applying).
-~/.claude/scripts/bootstrap
-
-# 5. Start Claude Code — the SessionStart hooks announce the environment.
-claude
-```
-
-> The bootstrap resolves the harness home structurally from its own location
-> (via `hooks/lib/claude_home.{sh,py}`), so there is no `/root` path to rewrite —
-> it works whether your clone lives at `~/.claude` or anywhere else.
-
-The hooks are wired in `settings.json` and activate on the next session. Try them:
+### Usage examples
 
 ```bash
 # Orchestrated development (vague requirements welcome)
@@ -416,41 +395,81 @@ The hooks are wired in `settings.json` and activate on the next session. Try the
 /stop
 ```
 
-### Portability contract
+---
 
-This section is a **contract**, not a warning: it states what the harness *guarantees* on a fresh non-root clone versus what needs external setup, and it is backed by an executable test.
+## Portability guarantee
 
-**The core harness runs on a fresh non-root clone.** Clone to `$HOME/.claude` on any Linux box (non-root user, `$HOME` not under `/root`), populate the venv (Quickstart), and the core flows — `/dev`, `/spec`, `/commit`, the always-on security guards — resolve to *your* home with **zero author-path literals load-bearing**. The harness locates its own home structurally (the shared `hooks/lib/claude_home.{sh,py}` resolver walks up to the `settings.json` + `hooks/` + `policies/` + `scripts/` sentinel set), so there is no `/root` to rewrite. This is **verified by the fresh-clone smoke test** (`tests/` WS2), which runs under a synthetic non-root `$HOME` with the author's home absent and asserts both *"core is runnable"* and *"the security guards engage"*.
+The harness runs on a fresh non-root clone. Clone to `$HOME/.claude` on any Linux box (non-root user, `$HOME` not under `/root`), populate the venv, and the core flows resolve to *your* home with zero author-path literals load-bearing. The structural resolver (`hooks/lib/claude_home.{sh,py}`) locates the harness home by walking up to the `settings.json + hooks/ + policies/ + scripts/` sentinel set — there is no `/root` to rewrite.
 
-**These specific extras require external setup** (their absence never breaks the core — it degrades to a one-line "unavailable" message and the flow continues):
-
-| Extra | Needed for | When absent |
+| Guarantee | Verified by | Caveat / extra |
 |---|---|---|
-| OpenAI Codex CLI + an isolation wrapper (`CODEX_ISO_BIN`) | `--codex` / `/codex` adversarial rounds | `--codex`/`/codex` unavailable; rest of the pipeline unaffected — **never** falls back to a bare unsafe `codex` |
-| `graphify` CLI (`GRAPHIFY_BIN`) | code-graph enrichment of the Dev context | enrichment skipped; pipeline proceeds degraded |
-| `bwrap` (bubblewrap) + user namespaces | the per-command write boundary in `/dev-overnight` | overnight launch still works; a non-worktree-local write **fails closed** (the write guarantee is security-relevant) |
-| Playwright MCP | live-browser UI audits / user-facing QA | non-user-facing cycles unaffected; QA fails closed only when a user-facing change cannot be browser-verified |
-| `~/.claude` symlink onto a RAM disk; `SESSION_PROMOTE_BIN`, `UI_EVIDENCE_AUDIT_BIN` | the author's RAM-disk + session-promote / ui-evidence conveniences | the structural resolver ignores the symlink convention; optional helpers print "unavailable" |
+| **Fresh non-root clone**: core flows resolve to *your* home with zero author-path literals load-bearing | `tests/` WS2 smoke test — runs under a synthetic non-root `$HOME` with the author's home absent; asserts "core is runnable" and "security guards engage" | Non-root user, `$HOME` not under `/root`; venv must be populated via `scripts/bootstrap` |
+| **Structural resolver**: home located by `settings.json + hooks/ + policies/ + scripts/` sentinel set | `hooks/lib/claude_home.{sh,py}` — walks up from script location | Repo may be cloned to any path, not just `~/.claude` |
+| **Smoke-test WS2**: both "core is runnable" and "security guards engage" | `tests/` WS2 fresh-clone smoke test | Requires Python 3 + venv populated |
+| **Zero author-path literals load-bearing** | `git grep -l '/root/\|/dev/shm'` returns only background docs | Historical hardcoded-path caveat superseded by resolver; retained in `NESTED-REPO.md` for background |
+| **External extras degrade gracefully, never fall back unsafely** | D2 dependency table (below) | Codex CLI **never** falls back to a bare unsafe `codex`; bwrap absence → fail closed |
 
-#### Trust model
+---
 
-**The human is the trust root.** Every release verb (`/commit`, `/push`, `/merge`, `/close`) and every human-only command is denied to agents both via `disable-model-invocation: true` *and* an explicit `Skill(<name>:*)` entry in `permissions.deny` — the only technical barrier against an agent self-invoking a privileged command. The harness assumes the agent itself is the adversary, so guards are enforced in code (a `PreToolUse`/`Stop` hook returning exit 2), never in prose.
+## Dependencies
 
-#### Fail-closed vs. skip semantics
+### Quick dependency reference
 
-Absence is handled by exactly one of these outcomes, per the kind of thing that is missing:
+| Tier | Component | Needed for | On absence |
+|---|---|---|---|
+| 0 — core | Claude Code, Python 3 + venv, git ≥ 2.4x, jq, Bash/GNU userland | Everything | Guards fail silently / kernel inactive |
+| 1 — release | openssl | /merge, /push nonce grants | Those commands fail at grant-write step |
+| 1 — release | pytest + jsonschema + pyyaml (via bootstrap) | /test, generated AC tests | /test fails; test skeletons cannot execute |
+| 2 — overnight | bwrap (bubblewrap) | /dev-overnight write boundary | Fail closed — non-worktree-local write blocked (security-relevant) |
+| 2 — overnight | Playwright MCP | User-facing QA, UI audits, overnight PM | QA fails closed for user-facing changes |
+| 3 — optional | Codex CLI + CODEX_ISO_BIN | --codex adversarial rounds | --codex unavailable; pipeline unaffected |
+| 3 — optional | graphify + GRAPHIFY_BIN | Code-graph enrichment in Dev context | Dev skips enrichment; proceeds degraded |
+| 3 — optional | websocket-client, fswatch, node+EXCEL_ANALYZER | Websocket enrichments, /fswatch, spreadsheet analysis | Silently skipped; core pipeline unaffected |
+
+<details>
+<summary>Dependency requirements</summary>
+
+| Dependency | Tier | What needs it | Degrades when missing |
+|---|---|---|---|
+| [Claude Code](https://claude.com/claude-code) | **REQUIRED** | The host. Must be recent enough to fire `UserPromptSubmit` / `Notification` / `SubagentStop` hook events, honor `disable-model-invocation` frontmatter, and enforce `Skill(*)` permission denies — older clients silently skip these and the guardrails won't engage. | All hooks fail silently — the entire guardrail stack disengages. |
+| Python 3 + a venv at `~/.claude/venv` | **REQUIRED** | Runs every Python hook (the git kernel, gates) and helper script. The venv ships empty — `scripts/bootstrap` creates it and installs the manifest. | Python hooks fail at import time; git kernel inactive. |
+| `git` | **REQUIRED** | The whole harness is git-native (checkpoints, grants, keystone). Any recent git (2.4x+) works for normal use; the overnight keystone needs **git ≥ 2.46** (verified by `scripts/overnight-git-selftest.sh`). | No checkpoints, no grant-gated git operations, no overnight loop. |
+| `git reference-transaction` hook (keystone) | **REQUIRED keystone** | The overnight keystone (`hooks/git-keystone/`) installs a `reference-transaction` hook into `<git-common-dir>/keystone-hooks/` and sets `core.hooksPath`; it fires atomically on every HEAD/ref move. Needs git ≥ 2.46. | Without it, the overnight linked worktree has no structural protection against unauthorized `HEAD` rewrites. Core `/dev` pipeline is unaffected. |
+| `jq` | **REQUIRED** | JSON parsing in shell hooks/scripts across the pipeline. | Shell hooks that parse grant files or settings.json silently fail or misparse JSON. |
+| Bash + GNU userland (coreutils, util-linux/`flock`, findutils, `grep`, `sed`, `awk`/gawk) | **REQUIRED** | `realpath`, `flock`, `stat`, `sha256sum`, `date`, `grep`, `sed`, `awk`, `find` are used pervasively. The GNU forms are assumed — BSD/macOS variants differ in flags; install the GNU userland there. | Hook failures on BSD/macOS with wrong flag variants; `flock`-based serialization unavailable. |
+| `pytest`, `jsonschema`, `pyyaml` (the test/runtime manifest) | **REQUIRED** for `/test` + generated tests | Pinned in [`requirements.txt`](requirements.txt) and installed automatically by `scripts/bootstrap`; `scripts/doctor` reports any that are missing. | `/test` fails; test-writer skeletons cannot be executed; schema validation unavailable. |
+| OpenAI Codex CLI + an isolation wrapper (`CODEX_ISO_BIN`) | **REQUIRED** for `--codex` / `/codex` | The adversarial second-opinion rounds shell out to the Codex CLI through a fail-closed isolation wrapper. **You must supply your own** Codex CLI and wrapper and point `CODEX_ISO_BIN` at it. | `--codex` / `/codex` unavailable; rest of the pipeline unaffected. |
+| `openssl` | **REQUIRED** for `/merge`, `/push` | Nonce / token generation in the grant-gated git release path. | `/merge` and `/push` cannot generate nonce-keyed grants → those commands fail at grant-write step. |
+| `bwrap` (bubblewrap) | **REQUIRED** for `/dev-overnight` | The per-Bash bind-mount boundary that isolates overnight main-tree writes. | Overnight launch still works; non-worktree-local write fails closed (security-relevant). |
+| `graphify` CLI (`graphifyy` v0.8.25 on PyPI; the binary is `graphify`) | OPTIONAL (graceful) | Incremental code-graph enrichment injected into the Dev context. Default-enabled (`CLAUDE_GRAPHIFY_ENABLED=auto`). Install: `~/.claude/venv/bin/pip install graphifyy`, then point `GRAPHIFY_BIN` at the installed `graphify`. | Code-graph context absent from Dev dispatch; Dev still runs — quality may be lower on large refactors. |
+| [Playwright MCP](https://github.com/microsoft/playwright-mcp) | OPTIONAL overall; **REQUIRED for user-facing QA/E2E + UI audits** | Powers the UI-audit skill suite, the overnight PM's live-app exploration, and QA's live browser verification of user-facing changes. Not needed for doc/config/non-user-facing cycles. | Non-user-facing cycles unaffected; QA fails closed only when a user-facing change cannot be browser-verified. |
+| Python pkg `websocket-client` | OPTIONAL (graceful) | A few websocket enrichments; hooks fall back to lenient paths when missing. | Websocket enrichments silently skipped; fallback path active. |
+| `fswatch` | OPTIONAL | Backs `/fswatch` file-watching; not needed by the core pipeline. | `/fswatch` command unavailable; core pipeline unaffected. |
+| `node` + a user-supplied `EXCEL_ANALYZER` | OPTIONAL | `/file-analyze` spreadsheet/document analysis. You provide the analyzer; absent → that file type is skipped. | Spreadsheet/document analysis unavailable; other file types still work. |
+
+</details>
+
+---
+
+## Fail-closed vs. skip semantics
 
 | Missing thing | Class | Behavior on absence |
 |---|---|---|
-| The tool-policy registry (role-scoped deny enforcement) | security | **FAIL CLOSED for every role except the default `dev` role** — a present, valid `tool-policy.v1` enforces its denials normally; if that policy is missing/unparseable or the registry throws, non-`dev` roles fail closed (exit 2) while the default `dev` role gets a sanctioned fail-safe ALLOW. (`pretool-tool-policy.py` fail-closes only on deny-logic bootstrap import failure; an unresolved role or an unexpected top-level hook exception allows.) |
+| The tool-policy registry (role-scoped deny enforcement) | security | **FAIL CLOSED for every role except the default `dev` role** — a present, valid `tool-policy.v1` enforces its denials normally; if missing/unparseable or the registry throws, non-`dev` roles fail closed (exit 2) while the default `dev` role gets a sanctioned fail-safe ALLOW. |
 | The always-on git-privilege / bash-safety guards | security | **Block their covered operations in normal operation** — with documented human break-glass paths (`/do`, `/allow`) and a few selected fail-open exception paths that keep a hook bug from bricking the pipeline |
 | An optional integration (Codex wrapper, `graphify`, Playwright, session-promote) | optional | **SKIP** — one-line "unavailable" message, core flow continues; no unsafe fallback |
 | The spec-coverage verifier (an advisory coverage check, not a blocking guard) | advisory | **SKIP** — an absent verifier allows the stop with a note; when the verifier *is* present, under-coverage still blocks |
 | An invalid generated `settings.json` (bad render / dropped required hook) | config | **ABORT** — the install renderer refuses to apply and leaves the live settings unchanged |
 
-Each row maps to a capability in the Dependencies table above, so you can see at a glance which rule applies to anything you have not installed. (The historical hardcoded-path caveat — `git grep -l '/root/\|/dev/shm'` and hand-rewrite — is **superseded** by the resolver above and retained only as background in [`NESTED-REPO.md`](NESTED-REPO.md) / [`CLAUDE.md`](CLAUDE.md).)
+Each row maps to a capability in the dependency table above.
 
-### Troubleshooting
+#### Trust model
+
+**The human is the trust root.** Every release verb (`/commit`, `/push`, `/merge`, `/close`) and every human-only command is denied to agents both via `disable-model-invocation: true` *and* an explicit `Skill(<name>:*)` entry in `permissions.deny` — the only technical barrier against an agent self-invoking a privileged command. The harness assumes the agent itself is the adversary, so guards are enforced in code (a `PreToolUse`/`Stop` hook returning exit 2), never in prose.
+
+---
+
+## Troubleshooting
 
 | Symptom | Fix |
 |---|---|
@@ -459,9 +478,9 @@ Each row maps to a capability in the Dependencies table above, so you can see at
 | **`settings.json` won't load** | Validate it: `python3 -m json.tool ~/.claude/settings.json` — a trailing comma or unquoted key surfaces here. |
 | **Helper scripts fail to import** | They expect the venv at `~/.claude/venv`; recreate it with `python3 -m venv ~/.claude/venv` if it's missing. |
 | **A commit/push is being blocked** | That's the kernel doing its job — an agent needs a grant from `/commit` or `/push`. As a human, run the git command from your own shell, or use `/do` / `/allow`. |
-| **A command is blocked and I don't know why** | The blocking hook writes its reason to stderr (visible in the Claude Code tool output). Look for `BLOCKED by` lines — they name the hook and the rule. Check `/tmp/claude-grants/` for any pending structured grants. If a hook is blocking unexpectedly, inspect the raw hook file referenced in the error: `cat ~/.claude/hooks/<hook-name>`. For grant-related blocks, `ls /tmp/claude-push-grant-*.json /tmp/claude-commit-grant-*.json 2>/dev/null` shows any live grant files and their contents. |
-| **Bootstrap / venv failure** | Verify Python 3 is installed: `python3 --version`. If the venv creation fails, check disk space and that `python3-venv` is installed (`apt install python3-venv` on Debian/Ubuntu). Re-run bootstrap with `--force` to back up and recreate the venv: `~/.claude/scripts/bootstrap --force`. If `pip install` fails, check network connectivity — the bootstrap requires internet access to install the manifest packages. |
-| **Resolver failure / wrong home detected** | The harness resolves its own home structurally via `hooks/lib/claude_home.{sh,py}` — it walks up from the script location looking for the `settings.json + hooks/ + scripts/` sentinel set. If it reports the wrong path, run `scripts/doctor` for a preflight diagnostics report (it checks the resolver, venv, and required deps). Common cause: the repo was cloned to a non-standard location without `settings.json` present at the root. |
+| **A command is blocked and I don't know why** | The blocking hook writes its reason to stderr (visible in the Claude Code tool output). Look for `BLOCKED by` lines — they name the hook and the rule. Check `/tmp/claude-grants/` for any pending structured grants. For grant-related blocks, `ls /tmp/claude-push-grant-*.json /tmp/claude-commit-grant-*.json 2>/dev/null` shows any live grant files. |
+| **Bootstrap / venv failure** | Verify Python 3 is installed: `python3 --version`. If the venv creation fails, check disk space and that `python3-venv` is installed (`apt install python3-venv` on Debian/Ubuntu). Re-run bootstrap with `--force` to back up and recreate the venv: `~/.claude/scripts/bootstrap --force`. |
+| **Resolver failure / wrong home detected** | The harness resolves its own home structurally via `hooks/lib/claude_home.{sh,py}`. If it reports the wrong path, run `scripts/doctor` for a preflight diagnostics report. Common cause: the repo was cloned to a non-standard location without `settings.json` present at the root. |
 
 ---
 
@@ -488,87 +507,62 @@ Each row maps to a capability in the Dependencies table above, so you can see at
 └── docs/              # architecture, incidents, references, design philosophy, codex research
 ```
 
-**Core vs. optional:** There are two levels of "required":
+**Root-level files:**
 
-- **Git mutation kernel minimum** (security guardrails engage): `settings.json` (wires all hooks) + `hooks/` (the gate layer) + `scripts/bootstrap` + `hooks/lib/` (shared resolver, allowlist, checkpoint). Without these, hooks fail at import time and the kernel is inactive.
-- **Full subagent + tool-policy security** (all role-based deny rules active): everything above **plus** `policies/` (contains `tool-policy.v1.json`). Without `policies/`, the pretool-tool-policy gate fail-opens for the `dev` role; other roles fail-closed. If you want the full deny-rule matrix to engage, `policies/` is required.
+| File | Purpose |
+|---|---|
+| `LICENSE` | MIT license text |
+| `NOTICE` | Attribution notices |
+| `push.sh` | Global pre-push checks: git identity + fetch/pull/status |
+| `requirements.txt` | Python dependency manifest for the harness venv |
+| `settings.json` | Claude Code harness configuration (permissions, hooks, env, model) |
+| `settings.template.json` | Distributable harness settings template (uses CLAUDE_HOME placeholders) |
 
-Everything else is an advisor or convenience: `agents/` and `commands/` define the orchestration behaviors but are not security-critical; `skills/`, `schemas/`, `templates/`, and `tests/` are optional layers that enrich or verify the pipeline. You can remove any optional directory and the security kernel continues to operate — though the `/dev` pipeline will be degraded without `agents/` and the grant-gated release path needs `scripts/`.
+**Core vs. optional:**
 
-A `PostToolUse` doc-sync hook keeps the `INDEX.md` files and the inventory block below current automatically; manual prose outside the `<!-- AUTO:… -->` markers is always preserved.
+- **Git mutation kernel minimum** (security guardrails engage): `settings.json` + `hooks/` + `scripts/bootstrap` + `hooks/lib/`. Without these, hooks fail at import time and the kernel is inactive.
+- **Full subagent + tool-policy security** (all role-based deny rules active): everything above **plus** `policies/`. Without `policies/`, the pretool-tool-policy gate fail-opens for the `dev` role; other roles fail-closed.
 
-<!-- AUTO:readme-stats -->
+Everything else (`agents/`, `commands/`, `skills/`, `schemas/`, `templates/`, `tests/`) is an advisor or convenience — the security kernel continues to operate without any of these, though the `/dev` pipeline is degraded without `agents/` and the grant-gated release path needs `scripts/`.
 
-## Overview
-- **Total files**: 20
-- **Subdirectories**: 11
-- **Naming convention**: lower
+#### Hook events
 
-## Files
-- `ARCHITECTURE.md` - Architecture — `.claude` Agent Operating System
-- `CLAUDE.md` - CLAUDE.md
-- `LICENSE` - LICENSE file
-- `NESTED-REPO.md` - Nested Repo Sentinel
-- `NOTICE` - NOTICE file
-- `push.sh` - push.sh - Global pre-push checks: git identity + fetch/pull/status
-- `requirements.txt` - Python dependency manifest for the Claude Code harness venv
-- `settings.json` - Claude Code harness configuration (permissions, hooks, env, model)
-- `settings.template.json` - Distributable harness settings template (uses CLAUDE_HOME placeholders)
-
-## Subdirectories
-- `agents/`
-- `commands/`
-- `docs/`
-- `examples/`
-- `hooks/`
-- `policies/`
-- `schemas/`
-- `scripts/`
-- `skills/`
-- `templates/`
-- `tests/`
-
----
-*Auto-generated by doc-sync hook.*
-<!-- /AUTO:readme-stats -->
+| Event | Hook entries | Primary purpose |
+|---|---|---|
+| SessionStart | 7 | Environment setup, resolver announcement, dependency checks |
+| UserPromptSubmit | 5 | Per-turn sentinel pre-creation, prompt-purity enforcement, dedup check |
+| PreToolUse | 28 | The gate layer: orchestrator rate-limit, bash-safety, git kernel, tool-policy, branch/PR firewall |
+| PostToolUse | 14 | Doc-sync, allowlist grant consumption, checkpoint writes |
+| Notification | 1 | User-facing notification routing |
+| Stop | 4 | Overnight timelock, allowlist reap, cp-state enforcement |
+| SubagentStop | 6 | cp-state enforcement, subagent output capture |
 
 ---
 
 ## Design philosophy
 
-Six principles run through every file here. They are the taste behind the project — and each is a consequence of something that went wrong before it went right.
-
-**Rules, not stories.** Agent and command prompts state what is *required* and what is *forbidden*, tersely. Positive instructions alone proved insufficient: incident analysis showed an agent told only "what's allowed" will infer permission for adjacent dangerous actions. So every infrastructure-touching subagent prompt carries an explicit **DO NOT** section.
-
-> *Concrete example:* the dev subagent's prompt says "FORBIDDEN: editing any file other than those listed in `files_to_modify`" — not "please try to stay focused." `/commit` reclassifies the live diff, stages only files inside the QA-approved ceiling, and aborts on material drift. "Please" is a story; a diff check is a rule.
-
-**Enforce in code, not in prose.** "Please don't force-push" is a wish; a `PreToolUse` hook returning exit 2 makes the rule mechanically enforced for the paths that reach that decision — subject to the documented human break-glass grants and the few intentional fail-open exception paths that keep a hook bug from bricking the pipeline. Wherever a rule *can* be a hook, it *is* a hook — and even the human escape hatches (`/do`, `/allow`) are narrow, audited, and single-use.
-
-**The orchestrator describes WHAT; the subagent decides HOW.** Dispatch prompts never name a tool or a shell command; `hooks/pretool-orchestrator-prompt-purity.py` watches for leaked "HOW". This keeps specialists free to choose their own toolchain and keeps the orchestrator out of the work.
-
-**One subagent, one task.** Never bundle issues. N issues → N parallel subagents, each with a clean context. Multitasking inside one subagent is banned — it is how a "fix the button" task quietly also "refactors the router," and how quality silently degrades (`CLAUDE.md` lesson #13).
-
-**The user's verbatim words are the contract.** The literal requirement is written to disk and re-read by every downstream agent. Paraphrase is drift; drift is how you ship a confident-sounding cousin of what was asked.
-
-**Fail closed, leave forensics.** Ambiguous grant? Reject. Unparseable QA verdict? Treat as failure. But on rejection, leave the evidence — the grant file, the raw output — so a human can see exactly what happened and why.
+| Principle | Binding rule | Enforced by |
+|---|---|---|
+| Rules, not stories | Every infrastructure-touching subagent prompt carries an explicit DO NOT section; positive instructions alone proved insufficient | agents/ba.md, agents/dev.md, CLAUDE.md §11 |
+| Enforce in code, not prose | PreToolUse hooks return exit 2; /do and /allow are narrow, audited, single-use grants | hooks/pretool-git-privilege-guard.py, hooks/pretool-bash-safety.sh |
+| Orchestrator describes WHAT; subagent decides HOW | Dispatch prompts never name a tool or shell command | hooks/pretool-orchestrator-prompt-purity.py |
+| One subagent, one task | N issues → N parallel subagents; bundling inside one subagent is banned | CLAUDE.md §13 |
+| User's verbatim words are the contract | Literal requirement written to disk at UserPromptSubmit; re-read by every downstream agent | UserPromptSubmit hooks, agents/ba.md |
+| Fail closed, leave forensics | Ambiguous grant → reject; unparseable verdict → treat as failure; evidence (grant file, raw output) left on disk | All gate hooks, hooks/pretool-git-privilege-guard.py |
 
 ---
 
 ## FAQ
 
-**Is this a framework I import?** No. It is a *configuration* for Claude Code specifically — not a library, not an npm package, not an LLM SDK. You drop it at `~/.claude`, and its hooks + commands + agents change how Claude Code behaves in every session from that point forward. There is nothing to `npm install` into your app and no API to call: the harness runs entirely inside Claude Code's hook and command system. It is Claude Code-specific — it will not work with other LLM clients or agent frameworks without substantial adaptation. The only "installation" is `git clone ... ~/.claude && scripts/bootstrap`.
+**Is this a framework I import?** No. It is a *configuration* for Claude Code specifically — not a library, not an npm package, not an LLM SDK. Drop it at `~/.claude` and its hooks + commands + agents change how Claude Code behaves in every session. There is nothing to `npm install` into your app and no API to call. It is Claude Code-specific — it will not work with other LLM clients without substantial adaptation. The only "installation" is `git clone ... ~/.claude && scripts/bootstrap`.
 
-**Does the orchestrator-only rule make simple edits slow?** For a one-line fix you can `/do` to let the main agent act directly for a turn. The delegation overhead is the price of consistent quality on real tasks — and the autonomous loop pays for itself overnight.
+**Does the orchestrator-only rule make simple edits slow?** For a one-line fix you can `/do` to let the main agent act directly for one turn. The delegation overhead is the price of consistent quality on real tasks — and the autonomous loop pays for itself overnight.
 
-**Can the agent disable its own guardrails?** That is the threat model the kernel is built against, and the honest answer is: the design makes it *hard*, not metaphysically impossible. Release commands are `disable-model-invocation: true` *and* denied as `Skill(<name>:*)`; the git-privilege-guard is always-on and default-denies every agent — a matching structured `/allow` sentinel is honored even for subagents (only legacy git-allowlist grants are main-agent-only) and subagents never get `/do`; the commit grant is single-use and time-boxed while the push grant is single-use and branch/head/remote-bound (no expiry); the bash-safety hook blocks the destructive shell forms by shape. The one residual that is called out rather than hidden: during overnight runs the linked worktree shares the `.git` common-dir, so an actor that mutated shared git config/hooks could in principle disable the keystone — `commands/dev-overnight.md` documents this as an accepted deviation, and the sound fix (fresh-clone isolation) is deferred future work.
+**Can the agent disable its own guardrails?** The design makes it *hard*, not metaphysically impossible. Release commands are `disable-model-invocation: true` *and* denied as `Skill(<name>:*)`; the git-privilege-guard is always-on and default-denies every agent — a matching structured `/allow` sentinel is honored even for subagents (only legacy git-allowlist grants are main-agent-only) and subagents never get `/do`; the commit grant is single-use and time-boxed while the push grant is single-use and branch/head/remote-bound; the bash-safety hook blocks destructive shell forms by shape. The one residual called out rather than hidden: during overnight runs the linked worktree shares the `.git` common-dir — `commands/dev-overnight.md` documents this as an accepted deviation.
 
-**Is everything in this README real?** Yes — every capability traces to a file cited inline, and the war-stories carry their incident dates and commit hashes. A couple of things deliberately *omitted* for accuracy: the bulk-commit detector is described as **warn-only** (it is, despite older comments saying "refuses"); a now-removed `orchestrator.md` agent referenced in some internal drafts does not exist and is not claimed; and the cp-state `SubagentStop` enforcement, whose blocking behavior is mode-dependent, is left out of the kernel claims rather than overstated.
+**Can I use this with a team or in CI?** The harness is designed for single-developer use. For team use, each developer clones it to their own `~/.claude`; hooks and grants are per-session and use `$HOME`-relative paths. CI use requires the full Claude Code environment — hooks fire only when Claude Code runs. The test suite (`pytest hooks/tests tests`) is CI-safe and runs without Claude Code.
 
-> **Enforcement asymmetry note:** the schema contract validation (`hooks/lib/contract_runtime.py`, Draft7 JSON Schema validator, `exit(2)` on mismatch) fires **only under `/dev-overnight`** — because only the overnight loop writes the `cycle-contract.json` file that the validator reads. Interactive `/dev` invocations do not produce `cycle-contract.json`, so the validator runs in passthrough mode (exits 0) for those cycles. The README's description of "schema-enforced agent contracts" is accurate but applies to overnight mode; it does not imply that every `/dev` invocation is schema-validated.
-
-**Can I use this with a team or in CI?** The harness is designed for single-developer use and works best as a personal `~/.claude` config. For team use, each developer clones it to their own `~/.claude`; the hooks and grants are per-session and use `$HOME`-relative paths, so they do not conflict across users. CI use (e.g., in GitHub Actions) is possible but requires the full Claude Code environment — the hooks fire only when Claude Code runs. The test suite (`pytest hooks/tests tests`) is CI-safe and runs without Claude Code.
-
-**What about parallel Claude Code sessions?** Multiple Claude Code sessions on the same machine share the same `~/.claude` working tree and git repo. The grant files in `/tmp/` are session-keyed by session ID, so grants from one session are not consumed by another. The `flock`-based serialization in checkpoint writes prevents concurrent corruption. The overnight loop runs in a dedicated linked worktree and should not be started alongside an interactive session editing the same files. The doc-sync hook is idempotent; concurrent regenerations may cause minor `INDEX.md` churn but will not corrupt content.
+**What about parallel Claude Code sessions?** Multiple sessions on the same machine share the same `~/.claude` working tree. Grant files in `/tmp/` are session-keyed by session ID. The `flock`-based serialization in checkpoint writes prevents concurrent corruption. The overnight loop runs in a dedicated linked worktree and should not be started alongside an interactive session editing the same files. The doc-sync hook is idempotent.
 
 **Where do I go deeper?**
 - The constitution: [`CLAUDE.md`](CLAUDE.md)
@@ -580,9 +574,17 @@ Six principles run through every file here. They are the taste behind the projec
 
 ## Extending it
 
-Everything here is plain Markdown and small scripts — adding your own piece is intentionally low-ceremony. A `PostToolUse` doc-sync hook re-inventories the roster the moment you save, so new commands and agents show up in the INDEX/README blocks without manual bookkeeping.
+A `PostToolUse` doc-sync hook re-inventories the roster the moment you save — new commands and agents appear in INDEX/README blocks without manual bookkeeping. Mirror existing conventions: prompts state what is **required** and what is **forbidden**, and a hook that guards anything dangerous should *fail closed* (block on doubt) and leave its evidence behind.
 
-**Add a slash command** — drop a file in `commands/`:
+| Extension type | File location | Required fields | Validation |
+|---|---|---|---|
+| Slash command | `commands/<name>.md` | `description:` in YAML frontmatter | Malformed frontmatter hides the command |
+| Subagent | `agents/<name>.md` | `name:`, `description:`, `tools:` in YAML frontmatter | Incorrect `tools:` silently limits toolchain |
+| Hook | `hooks/<name>.{sh,py}` + `settings.json` wiring | Executable bit set; correct lifecycle event in `settings.json` | exit 2 = block; exit 0 = allow |
+| Post-hook verification | Run `examples/guard-demo/run-demo.sh` after any hook changes | Behavioral verification of block-then-grant-then-complete | Standalone; no Claude Code required |
+
+<details>
+<summary>Example: slash command</summary>
 
 ```bash
 cat > ~/.claude/commands/my-command.md << 'EOF'
@@ -590,11 +592,14 @@ cat > ~/.claude/commands/my-command.md << 'EOF'
 description: My custom command
 ---
 
-Your command instructions here…
+Command instructions here.
 EOF
 ```
 
-**Add a subagent** — drop a file in `agents/`:
+</details>
+
+<details>
+<summary>Example: subagent</summary>
 
 ```bash
 cat > ~/.claude/agents/my-agent.md << 'EOF'
@@ -604,40 +609,36 @@ description: When the orchestrator should dispatch this agent
 tools: Read, Write, Bash
 ---
 
-Your agent system prompt here…
+Agent system prompt here.
 EOF
 ```
 
-**Add a hook** — write the script, make it executable, then wire it into `settings.json` under the lifecycle event you want (`PreToolUse`, `PostToolUse`, `Stop`, …):
+</details>
+
+<details>
+<summary>Example: hook + test</summary>
 
 ```bash
 cat > ~/.claude/hooks/my-hook.sh << 'EOF'
 #!/bin/bash
-# Your hook logic here — exit 2 to block the tool call.
+# exit 2 to block the tool call.
 EOF
 chmod +x ~/.claude/hooks/my-hook.sh
 ```
 
-> Mirror the conventions of the existing files: command/agent prompts state what is **required** and what is **forbidden**, and a hook that guards anything dangerous should *fail closed* (block on doubt) and leave its evidence behind.
-
-**Test and validate your new hook:**
-
-After writing a hook, verify it with the existing test infrastructure:
+Wire it in `settings.json` under the lifecycle event (`PreToolUse`, `PostToolUse`, `Stop`, …). Then test:
 
 ```bash
-# Run the full hook test suite (excludes test-artifact dirs):
+# Run the full hook test suite:
 scripts/test
 
 # Or run just the hooks/ tests:
 python3 -m pytest hooks/tests -q
-
-# For a new hook `my-hook.sh`, write a test in hooks/tests/test_my_hook.py:
-# - Use repo-relative paths (Path(__file__).parent.parent / "my-hook.sh")
-# - Use pytest's tmp_path fixture for ephemeral state
-# - Assert exit code behavior: exit 0 = allow, exit 2 = block
 ```
 
-The guard-demo (`examples/guard-demo/run-demo.sh`) is a standalone behavioral test of the policy layer — run it after any hook changes to verify the block-then-grant-then-complete sequence still works end-to-end.
+Write test files in `hooks/tests/test_my_hook.py` — use repo-relative paths and `pytest`'s `tmp_path` fixture; assert exit 0 (allow) and exit 2 (block) behavior explicitly.
+
+</details>
 
 ---
 
@@ -654,7 +655,3 @@ This configuration grew out of, and remains grateful to:
 ## License
 
 Released under the **MIT License** — free to use, copy, modify, and adapt for your own `~/.claude`. Source: [`Yugoge/awesome-claude-harness`](https://github.com/Yugoge/awesome-claude-harness).
-
----
-
-<sub>Built and hardened over 500+ commits of daily use. Hooks, agents, and commands are auto-inventoried by the doc-sync system; the stat block above regenerates itself. Manual edits outside the `<!-- AUTO:… -->` markers are preserved.</sub>
