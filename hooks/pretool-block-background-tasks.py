@@ -1,16 +1,21 @@
 #!/usr/bin/env python3
 """
-PreToolUse hook: block run_in_background=true on Agent and Bash tools.
+PreToolUse hook: block background execution on Agent/Task/Bash for orchestrator.
 
-ENFORCEMENT:
-  - Agent(run_in_background=true) → exit 2
-  - Bash(run_in_background=true) → exit 2
+ENFORCEMENT (default disposition matters):
+  - Agent / Task → background is the DEFAULT, so the field is usually ABSENT.
+    Block unless run_in_background is explicitly False (True or absent → exit 2).
+  - Bash → foreground is the default, so only an explicit True is a background
+    task (exit 2); absent/False is fine.
   - Subagents (agent_id present) → exit 0 (no restriction)
   - /do consent active → exit 0 (bypass)
 
 RATIONALE:
   Orchestrator background tasks bypass harness monitoring and create
   unmanageable execution state. All work must be synchronous and observable.
+  Because Agent/Task run in the background *by default*, guarding only against an
+  explicit run_in_background=true lets every default-dispatch slip through — the
+  orchestrator must be forced to opt into synchronous execution.
 """
 import json
 import os
@@ -45,10 +50,24 @@ def main():
     if do_sentinel.exists():
         sys.exit(0)
 
-    # Check if run_in_background is true - cover Agent, Bash, and Task
-    if tool_name in {"Agent", "Bash", "Task"} and params.get("run_in_background") is True:
+    rib = params.get("run_in_background")
+
+    # Agent and Task default to BACKGROUND when the field is absent, so anything
+    # other than an explicit False (i.e. True or None/absent) is a background
+    # dispatch and is blocked.
+    if tool_name in {"Agent", "Task"} and rib is not False:
         print(
-            f"[BLOCK] {tool_name}(run_in_background=true) is forbidden for orchestrator.\n"
+            f"[BLOCK] {tool_name} runs in the background by default and is forbidden "
+            "for the orchestrator.\n"
+            "Pass run_in_background=false for synchronous execution, or use /do.",
+            file=sys.stderr,
+        )
+        sys.exit(2)
+
+    # Bash defaults to FOREGROUND, so only an explicit True is a background task.
+    if tool_name == "Bash" and rib is True:
+        print(
+            "[BLOCK] Bash(run_in_background=true) is forbidden for orchestrator.\n"
             "All work must run synchronously. Remove run_in_background or use /do.",
             file=sys.stderr,
         )
