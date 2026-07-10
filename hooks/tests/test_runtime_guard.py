@@ -2119,7 +2119,7 @@ class TestCycle8HeadAgnosticRemainingPrimitives:
         # PROOF of non-enumeration: the invented wrapper names used above do NOT
         # appear anywhere in the engine source, yet they all BLOCK. Also asserts
         # the real cpu-affinity front-end is not enumerated for these primitives.
-        engine = os.path.join(HOOKS_DIR, "lib", "runtime_guard.py")
+        engine = os.path.join(HOOKS_DIR, "lib", "runtime_guard", "_core.py")
         src = open(engine, encoding="utf-8").read()
         for name in ("numactl", "zqxwrapper7", "zqxwrapper", "blarfront88"):
             assert name not in src, f"engine must not enumerate wrapper '{name}'"
@@ -3220,15 +3220,19 @@ def nested_datafile(tmp_path_factory):
     return str(p)
 
 
-def ev_nested(command, nested_df, cwd="/root"):
+def ev_nested(command, nested_df, cwd=None):
+    if cwd is None:
+        cwd = _ORIGINAL_HOME
     os.environ["CLAUDE_PROTECTED_RUNTIME_FILE"] = nested_df
     import importlib, lib.runtime_guard as rg
     importlib.reload(rg)
     return rg.evaluate(command, cwd)[0]
 
 
-def ev_absent(command, cwd="/root"):
+def ev_absent(command, cwd=None):
     """evaluate() with a non-existent data file -> config-absent fail-closed path."""
+    if cwd is None:
+        cwd = _ORIGINAL_HOME
     os.environ["CLAUDE_PROTECTED_RUNTIME_FILE"] = "/tmp/does-not-exist-runtime-xyz.json"
     import importlib, lib.runtime_guard as rg
     importlib.reload(rg)
@@ -3726,7 +3730,7 @@ class TestCycle14GitPathspec:
 
     def test_git_pathspec_wrapped_and_C_blocks(self, datafile, fixture_repo):
         assert ev_cwd("sudo git clean -fdx packages/happy-cli/dist", datafile, fixture_repo) == "BLOCK"
-        assert ev_cwd(f"git -C {fixture_repo} clean -fdx packages/happy-cli/dist", datafile, "/root") == "BLOCK"
+        assert ev_cwd(f"git -C {fixture_repo} clean -fdx packages/happy-cli/dist", datafile, _ORIGINAL_HOME) == "BLOCK"
 
     def test_git_pathspec_config_absent_allows(self, fixture_repo):
         # config-absent STEP1 has no git-pathspec family (git is not a danger-family
