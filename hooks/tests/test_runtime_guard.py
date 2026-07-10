@@ -3832,6 +3832,7 @@ class TestCycle14LiveHook:
         finally:
             os.remove(flag)
 
+    @pytest.mark.skipif(not _LIVE_CFG_EXISTS, reason=_LIVE_CFG_SKIP_REASON)
     def test_live_boundary_allows(self):
         assert self._run("mv /tmp/scratch-xyz/* /tmp/y") == ALLOW
         assert self._run(f"cat {_LIVE_CFG_PATH}") == ALLOW
