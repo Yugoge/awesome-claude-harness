@@ -391,6 +391,14 @@
         "hooks": [
           {
             "type": "command",
+            "command": "python3 \"$HOME/.claude/hooks/pretool-block-background-tasks.py\""
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
             "command": "python3 \"$HOME/.claude/hooks/pretool-read-size-guard.py\""
           }
         ]
