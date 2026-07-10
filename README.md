@@ -304,7 +304,7 @@ The orchestrator dispatches specialists by *describing the problem* — never th
 
 **`/do`** lets the *main* agent do direct work for one turn. Recognized by the orchestrator gate, bash-safety, and the always-on git-privilege-guard — applies to the **main agent only**; a subagent never benefits from the consent flag. It does not quiet the bulk-commit detector's warning.
 
-**`/allow`** writes a single structured break-glass grant matched by command structure (`op` / `target` / `args_contain`). Single-use; consumed on any terminal result.
+**`/allow`** writes a single, **structured** break-glass grant matched by command structure (`op` / `target` / `args_contain`) — the sanctioned path, in preference to the fragile substring matching that a legacy fallback in `hooks/lib/allowlist.py` still retains. Refuse-by-default is the rule (the exact match-all hole was closed in commit [`7dbdd307`](https://github.com/Yugoge/awesome-claude-harness/commit/7dbdd307)). The grant is single-use and consumed on any terminal result.
 
 ```json
 {"task_id": "20260705-113208", "session_id": "dev-...", "allowed_operations": [{"op": "git", "args_contain": ["checkout", "abc123", "--", "hooks/pretool-bash-safety.sh"]}], "created_at": "2026-07-05T11:32:08Z", "expires_at": "2026-07-05T12:32:08Z"}
