@@ -17,7 +17,7 @@ import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-HOOK_PATH = Path('/root/.claude/hooks/posttool-overnight-loop.py')
+HOOK_PATH = Path(__file__).parent.parent / 'hooks' / 'posttool-overnight-loop.py'
 
 
 def _make_todo(label: str) -> dict:
