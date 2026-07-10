@@ -3220,7 +3220,9 @@ def nested_datafile(tmp_path_factory):
     return str(p)
 
 
-def ev_nested(command, nested_df, cwd="/root"):
+def ev_nested(command, nested_df, cwd=None):
+    if cwd is None:
+        cwd = _ORIGINAL_HOME
     os.environ["CLAUDE_PROTECTED_RUNTIME_FILE"] = nested_df
     import importlib, lib.runtime_guard as rg
     importlib.reload(rg)
