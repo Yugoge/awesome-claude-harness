@@ -299,7 +299,7 @@
       "Edit(.claude/CLAUDE.md)"
     ]
   },
-  "model": "claude-sonnet-4-5",
+  "model": "sonnet",
   "hooks": {
     "SessionStart": [
       {
@@ -384,6 +384,14 @@
           {
             "type": "command",
             "command": "python3 \"$HOME/.claude/hooks/pretool-orchestrator-gate.py\""
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$HOME/.claude/hooks/pretool-block-background-tasks.py\""
           }
         ]
       },
@@ -774,7 +782,6 @@
   },
   "alwaysThinkingEnabled": true,
   "effortLevel": "xhigh",
-  "skipDangerousModePermissionPrompt": true,
   "theme": "dark",
   "autoCompactEnabled": true
 }
