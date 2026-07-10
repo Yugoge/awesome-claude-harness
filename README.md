@@ -195,7 +195,7 @@ Read-only git (`status`, `log`, `show`, `diff`, `blame`, `ls-files`, `branch` li
 | Push grant `/tmp/claude-push-grant-<sid>-<nonce>.json` | /push command | nonce, branch, expected-head SHA, remote | None — branch/head/remote-bound | Any terminal result (unlink) | Main agent + subagents |
 | /allow sentinel `/tmp/claude-grants/<task_id>.json` | /allow command | task_id, session_id, allowed_operations[] ({op, target?, args_contain?}), expires_at | ISO expiry | Any terminal result (posttool-allowlist-consume.py) | Main agent + subagents |
 
-Match channel for /allow: structural (`op` = first token of sub-command; `args_contain` = leading argument sequence prefix). Command-text substring grep is not the match channel. Legacy git-allowlist grants are main-agent only.
+Match channel for /allow: structural (`op` = first token of sub-command; `args_contain` = leading argument sequence prefix). Command-text substring grep is not the match channel. Refuse-by-default is the rule — the exact match-all hole was closed in commit [`7dbdd307`](https://github.com/Yugoge/awesome-claude-harness/commit/7dbdd307) ("/allow consent is refuse-by-default — close match-all grant hole"); the grant is single-use and consumed on any terminal result. Legacy git-allowlist grants are main-agent only.
 
 ---
 
