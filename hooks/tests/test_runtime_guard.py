@@ -3229,8 +3229,10 @@ def ev_nested(command, nested_df, cwd=None):
     return rg.evaluate(command, cwd)[0]
 
 
-def ev_absent(command, cwd="/root"):
+def ev_absent(command, cwd=None):
     """evaluate() with a non-existent data file -> config-absent fail-closed path."""
+    if cwd is None:
+        cwd = _ORIGINAL_HOME
     os.environ["CLAUDE_PROTECTED_RUNTIME_FILE"] = "/tmp/does-not-exist-runtime-xyz.json"
     import importlib, lib.runtime_guard as rg
     importlib.reload(rg)
