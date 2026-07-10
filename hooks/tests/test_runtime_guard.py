@@ -3730,7 +3730,7 @@ class TestCycle14GitPathspec:
 
     def test_git_pathspec_wrapped_and_C_blocks(self, datafile, fixture_repo):
         assert ev_cwd("sudo git clean -fdx packages/happy-cli/dist", datafile, fixture_repo) == "BLOCK"
-        assert ev_cwd(f"git -C {fixture_repo} clean -fdx packages/happy-cli/dist", datafile, "/root") == "BLOCK"
+        assert ev_cwd(f"git -C {fixture_repo} clean -fdx packages/happy-cli/dist", datafile, _ORIGINAL_HOME) == "BLOCK"
 
     def test_git_pathspec_config_absent_allows(self, fixture_repo):
         # config-absent STEP1 has no git-pathspec family (git is not a danger-family
