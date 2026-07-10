@@ -2119,7 +2119,7 @@ class TestCycle8HeadAgnosticRemainingPrimitives:
         # PROOF of non-enumeration: the invented wrapper names used above do NOT
         # appear anywhere in the engine source, yet they all BLOCK. Also asserts
         # the real cpu-affinity front-end is not enumerated for these primitives.
-        engine = os.path.join(HOOKS_DIR, "lib", "runtime_guard.py")
+        engine = os.path.join(HOOKS_DIR, "lib", "runtime_guard", "_core.py")
         src = open(engine, encoding="utf-8").read()
         for name in ("numactl", "zqxwrapper7", "zqxwrapper", "blarfront88"):
             assert name not in src, f"engine must not enumerate wrapper '{name}'"
