@@ -25,33 +25,31 @@ def main():
     except json.JSONDecodeError:
         sys.exit(0)
 
-    tool_name = payload.get("tool", "")
-    params = payload.get("params", {})
-    agent_id = payload.get("agentId")
-    session_id = payload.get("sessionId", "unknown")
+    # Use correct field names with fallbacks
+    tool_name = payload.get("tool_name") or payload.get("tool") or payload.get("toolName") or ""
+    params = payload.get("tool_input") or payload.get("params") or payload.get("toolInput") or {}
+    agent_id = payload.get("agent_id") or payload.get("agentId")
+    session_id = (
+        payload.get("session_id")
+        or payload.get("sessionId")
+        or os.environ.get("CLAUDE_SESSION_ID")
+        or "default"
+    )
 
     # Subagents exempt
     if agent_id:
         sys.exit(0)
 
-    # /do consent bypass
-    do_sentinel = Path(f"/tmp/claude-do-{session_id}")
+    # /do consent bypass - use correct sentinel path
+    do_sentinel = Path(f"/tmp/claude-orchestrator-consent-{session_id}.flag")
     if do_sentinel.exists():
         sys.exit(0)
 
-    # Check if run_in_background is true
-    if tool_name == "Agent" and params.get("run_in_background") is True:
+    # Check if run_in_background is true - cover Agent, Bash, and Task
+    if tool_name in {"Agent", "Bash", "Task"} and params.get("run_in_background") is True:
         print(
-            "[BLOCK] Agent(run_in_background=true) is forbidden for orchestrator.\n"
-            "All subagents must run synchronously. Remove run_in_background or use /do.",
-            file=sys.stderr,
-        )
-        sys.exit(2)
-
-    if tool_name == "Bash" and params.get("run_in_background") is True:
-        print(
-            "[BLOCK] Bash(run_in_background=true) is forbidden for orchestrator.\n"
-            "All commands must run synchronously. Remove run_in_background or use /do.",
+            f"[BLOCK] {tool_name}(run_in_background=true) is forbidden for orchestrator.\n"
+            "All work must run synchronously. Remove run_in_background or use /do.",
             file=sys.stderr,
         )
         sys.exit(2)
