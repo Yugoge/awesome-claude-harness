@@ -48,6 +48,7 @@ Main agent is the orchestrator; delegate real work to subagents. Enforced by `~/
 - **Permanently blocked**: `EnterPlanMode`, `ExitPlanMode` — even with `/do`.
 - **Bypass**: user invokes `/do` this session → gate exits 0 for everything except permanently-blocked tools.
 - Subagents (`agent_id` present) bypass all checks. Streak state at `/tmp/claude-tool-streak-<sid>.json`. For files >600 lines, delegate and ask for a summary — never request raw contents.
+- **No background dispatch**: `Agent`/`Task` run in the background *by default*, so the orchestrator MUST pass `run_in_background: false` on every dispatch (and on `Bash` when not backgrounding). Enforced by `~/.claude/hooks/pretool-block-background-tasks.py`: Agent/Task are blocked (exit 2) unless `run_in_background` is explicitly `false`; `Bash` is blocked only on explicit `true`; subagents (`agent_id` truthy) and `/do` consent bypass. Background work bypasses harness monitoring — keep it synchronous and observable.
 
 ---
 
