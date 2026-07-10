@@ -53,6 +53,11 @@ def main():
 
     # Use correct field names with fallbacks
     tool_name = payload.get("tool_name") or payload.get("tool") or payload.get("toolName") or ""
+    # A non-string tool_name (e.g. a JSON list) is unhashable; feeding it to the
+    # `in {...}` set test below would raise TypeError → exit 1. Coerce to "" so it
+    # simply fails to match and falls through to the fail-open exit (never-wedge).
+    if not isinstance(tool_name, str):
+        tool_name = ""
     params = first_present(payload, ("tool_input", "params", "toolInput"), {})
     agent_id = payload.get("agent_id") or payload.get("agentId")
     session_id = (
