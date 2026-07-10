@@ -95,6 +95,7 @@ tests/generated/*
 !tests/generated/20260704-134650/**
 !tests/generated/20260704-225139/
 !tests/generated/20260704-225139/**
+tests/generated/*/__pycache__/
 # _work/ is pytest RUNTIME SCRATCH (ac_harness.py WORKBASE; recreated every run,
 # incl. nested throwaway git repos) and must NEVER be committed for any task
 tests/generated/*/_work/
