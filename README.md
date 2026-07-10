@@ -406,7 +406,7 @@ The harness runs on a fresh non-root clone. Clone to `$HOME/.claude` on any Linu
 | **Fresh non-root clone**: core flows resolve to *your* home with zero author-path literals load-bearing | `tests/` WS2 smoke test — runs under a synthetic non-root `$HOME` with the author's home absent; asserts "core is runnable" and "security guards engage" | Non-root user, `$HOME` not under `/root`; venv must be populated via `scripts/bootstrap` |
 | **Structural resolver**: home located by `settings.json + hooks/ + policies/ + scripts/` sentinel set | `hooks/lib/claude_home.{sh,py}` — walks up from script location | Repo may be cloned to any path, not just `~/.claude` |
 | **Smoke-test WS2**: both "core is runnable" and "security guards engage" | `tests/` WS2 fresh-clone smoke test | Requires Python 3 + venv populated |
-| **Zero author-path literals load-bearing** | `git grep -l '/root/\|/dev/shm'` returns only background docs | Historical hardcoded-path caveat superseded by resolver; retained in `NESTED-REPO.md` for background |
+| **Zero author-path literals load-bearing** | `hooks/lib/claude_home.{sh,py}` structural resolver — hook files retain historical `/root/` literals (known residuals per `NESTED-REPO.md`) that are not load-bearing for runtime path lookup | Historical hardcoded-path caveat superseded by resolver; retained in `NESTED-REPO.md` for background |
 | **External extras degrade gracefully, never fall back unsafely** | D2 dependency table (below) | Codex CLI **never** falls back to a bare unsafe `codex`; bwrap absence → fail closed |
 
 ---
