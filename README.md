@@ -417,14 +417,14 @@ The harness runs on a fresh non-root clone. Clone to `$HOME/.claude` on any Linu
 
 | Tier | Component | Needed for | On absence |
 |---|---|---|---|
-| 0 — core | Claude Code, Python 3 + venv, git ≥ 2.4x, jq, Bash/GNU userland | Everything | Guards fail silently / kernel inactive |
-| 1 — release | openssl | /merge, /push nonce grants | Those commands fail at grant-write step |
-| 1 — release | pytest + jsonschema + pyyaml (via bootstrap) | /test, generated AC tests | /test fails; test skeletons cannot execute |
-| 2 — overnight | bwrap (bubblewrap) | /dev-overnight write boundary | Fail closed — non-worktree-local write blocked (security-relevant) |
-| 2 — overnight | Playwright MCP | User-facing QA, UI audits, overnight PM | QA fails closed for user-facing changes |
-| 3 — optional | Codex CLI + CODEX_ISO_BIN | --codex adversarial rounds | --codex unavailable; pipeline unaffected |
-| 3 — optional | graphify + GRAPHIFY_BIN | Code-graph enrichment in Dev context | Dev skips enrichment; proceeds degraded |
-| 3 — optional | websocket-client, fswatch, node+EXCEL_ANALYZER | Websocket enrichments, /fswatch, spreadsheet analysis | Silently skipped; core pipeline unaffected |
+| Tier 0 — core | Claude Code, Python 3 + venv, git ≥ 2.4x, jq, Bash/GNU userland | Everything | Guards fail silently / kernel inactive |
+| Tier 1 — release | openssl | /merge, /push nonce grants | Those commands fail at grant-write step |
+| Tier 1 — release | pytest + jsonschema + pyyaml (via bootstrap) | /test, generated AC tests | /test fails; test skeletons cannot execute |
+| Tier 2 — overnight | bwrap (bubblewrap) | /dev-overnight write boundary | Fail closed — non-worktree-local write blocked (security-relevant) |
+| Tier 2 — overnight | Playwright MCP | User-facing QA, UI audits, overnight PM | QA fails closed for user-facing changes |
+| Tier 3 — optional | Codex CLI + CODEX_ISO_BIN | --codex adversarial rounds | --codex unavailable; pipeline unaffected |
+| Tier 3 — optional | graphify + GRAPHIFY_BIN | Code-graph enrichment in Dev context | Dev skips enrichment; proceeds degraded |
+| Tier 3 — optional | websocket-client, fswatch, node+EXCEL_ANALYZER | Websocket enrichments, /fswatch, spreadsheet analysis | Silently skipped; core pipeline unaffected |
 
 <details>
 <summary>Dependency requirements</summary>
