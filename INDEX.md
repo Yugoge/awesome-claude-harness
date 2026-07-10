@@ -1,8 +1,8 @@
 # dot-claude
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-07-05T13:45:52Z*
-**Total entries**: 427
+*Last updated: 2026-07-10T23:12:40Z*
+**Total entries**: 481
 **Convention**: kebab
 
 ## Tree
@@ -100,6 +100,7 @@ dot-claude/
 │   ├── git-keystone/
 │   │   └── `reference-transaction` - reference-transaction file
 │   ├── lib/
+│   │   ├── runtime_guard/
 │   │   ├── `agent_resolver.py` - Refactored from pretool-subagent-code-block.py::_find_agent_type so that
 │   │   ├── `allowlist.py` - Single source of truth for grant-read, grant-match, and grant-consume
 │   │   ├── `bash_context_strip.py` - This is deliberately NOT a full shell parser.  It only computes a conservative
@@ -135,6 +136,7 @@ dot-claude/
 │   │   ├── `test_do_taskid_mint.py` - Covers the root-cause fix for the do-report task-id collision (memory
 │   │   ├── `test_extract.py` - Unit tests for hooks/doc_sync/extract.py — covers all 4 defects + known-file cases.
 │   │   ├── `test_final_sweep.sh` - Final sweep — run inline AC checks and print PASS/FAIL summary.
+│   │   ├── `test_git_cmd_cross_consistency.py` - Verifies that GIT_CMD_RE (hooks/pretool-bash-safety.sh),
 │   │   ├── `test_push_sentinel_abort.sh` - Unit test for AC1 V5: hooks/push.sh self-aborts before any real git push
 │   │   └── `test_runtime_guard.py` - Two layers:
 │   ├── `audit-slashcommand.sh` - audit-slashcommand.sh
@@ -174,6 +176,7 @@ dot-claude/
 │   ├── `pretool-bash-safety.sh` - PreToolUse Safety Hook - Warn or block before dangerous operations
 │   ├── `pretool-bash-views-guard.py` - Parallels pretool-bash-safety.sh but focuses on views/cp-state write bypass
 │   ├── `pretool-bisect-gate.sh` - pretool-bisect-gate.sh
+│   ├── `pretool-block-background-tasks.py` - PreToolUse hook: block background execution on Agent/Task/Bash for orchestrator
 │   ├── `pretool-block-branch-pr-worktree.py` - Policy (user directive 2026-06-04; the verbatim user directive is preserved in
 │   ├── `pretool-block-enterworktree.sh` - PreToolUse hook: Block EnterWorktree tool
 │   ├── `pretool-bulk-commit-detector.py` - PreToolUse Hook: Bulk-commit detector
@@ -345,6 +348,7 @@ dot-claude/
 │   ├── `spec-check.py` - Subcommands: check-in, mark, waive, status, check-out, unlock
 │   ├── `stage-owned-hunks.py` - Stages ONLY this cycle's owned hunks within a single already-authorized file,
 │   ├── `step7-spec-update.py` - Step 8 (Spec-update dispatch) reference harness — task 20260524-205206 iter-2
+│   ├── `test` - test file
 │   ├── `update-gitignore.sh` - update-gitignore.sh - Auto-update .gitignore with project-specific rules
 │   ├── `update-overnight-state.sh` - update-overnight-state.sh — Atomically update overnight state file
 │   ├── `write-bulk-commit-sentinel.py` - Invoked from commands/commit.md Step 5 (BULK=true) to authorize the
@@ -388,8 +392,55 @@ dot-claude/
 │   ├── fixtures/
 │   │   └── `canary-tool-policy.v1.json` - JSON config: _fixture, _purpose, _contract, policy_version, default_action
 │   ├── generated/
+│   │   ├── 20260520-221452/
+│   │   ├── 20260521-090100/
+│   │   ├── 20260521-090200/
+│   │   ├── 20260521-090300/
+│   │   ├── 20260522-000000/
+│   │   ├── 20260522-080646-A/
+│   │   ├── 20260522-080646-B/
+│   │   ├── 20260522-080646-D/
+│   │   ├── 20260524-122910/
+│   │   ├── 20260524-122947/
+│   │   ├── 20260524-125300-A/
+│   │   ├── 20260524-125300-B/
+│   │   ├── 20260524-125300-C/
+│   │   ├── 20260524-125300-D/
+│   │   ├── 20260524-125300-push/
+│   │   ├── 20260524-133650/
+│   │   ├── 20260524-171714/
+│   │   ├── 20260524-172805/
+│   │   ├── 20260524-205206/
+│   │   ├── 20260524-205459/
+│   │   ├── 20260525-050824/
+│   │   ├── 20260525-095242/
+│   │   ├── 20260526-052559/
+│   │   ├── 20260526-053746/
+│   │   ├── 20260527-132200/
+│   │   ├── 20260529-080709/
+│   │   ├── 20260529-081014/
+│   │   ├── 20260529-210616/
+│   │   ├── 20260529-211406/
+│   │   ├── 20260530-105221/
+│   │   ├── 20260530-165718/
+│   │   ├── 20260530-170350/
+│   │   ├── 20260531-112831-bug1/
+│   │   ├── 20260611-100500/
+│   │   ├── 20260614-093452/
+│   │   ├── 20260614-205834/
+│   │   ├── 20260618-135436/
+│   │   ├── 20260702-171509/
+│   │   ├── 20260704-073650/
 │   │   ├── 20260704-134650/
 │   │   ├── 20260704-225139/
+│   │   ├── dev-20260530-144032/
+│   │   ├── dev-20260531-134455/
+│   │   ├── dev-20260531-193000/
+│   │   ├── dev-20260615-213842/
+│   │   ├── dev-20260616-204226/
+│   │   ├── dev-20260619-092310-errmsg/
+│   │   ├── dev-20260619-092310-streak/
+│   │   └── `manifest.json` - JSON config: schema_version, kind, tasks
 │   ├── instructions/
 │   │   ├── `execution-guide.md` - AI Test Execution Guide
 │   │   └── `validation-guide.md` - AI-Driven Validation Guide
@@ -427,14 +478,17 @@ dot-claude/
 │   ├── `verify-stop-spec-session-isolation.sh` - QA verification harness for stop-spec-coverage-enforce.py session isolation fix.
 │   └── `ws2_zero_literal_gate.py` - Scans the EXPLICITLY-defined load-bearing surfaces of a rendered fresh clone with
 ├── `ARCHITECTURE.md` - Architecture — `.claude` Agent Operating System
+├── `CHANGELOG.md` - Changelog
 ├── `CLAUDE.md` - CLAUDE.md
 ├── `LICENSE` - LICENSE file
 ├── `NESTED-REPO.md` - Nested Repo Sentinel
 ├── `NOTICE` - NOTICE file
 ├── `push.sh` - push.sh - Global pre-push checks: git identity + fetch/pull/status
+├── `pytest.ini` - ini file
 ├── `requirements.txt` - Python dependency manifest for the Claude Code harness venv
 ├── `settings.json` - Claude Code harness configuration (permissions, hooks, env, model)
 ├── `settings.template.json` - Distributable harness settings template (uses CLAUDE_HOME placeholders)
+├── `VERSION` - VERSION file
 ```
 <!-- /AUTO:index-stats -->
 
