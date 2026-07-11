@@ -1,13 +1,13 @@
-# dot-claude
+# .claude
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-07-10T23:12:40Z*
+*Last updated: 2026-07-11T11:56:24Z*
 **Total entries**: 481
 **Convention**: kebab
 
 ## Tree
 ```
-dot-claude/
+.claude/
 ├── agents/
 │   ├── `architect.md` - Architecture review specialist for overnight exploration. Identifies structural issues, technical debt, optimization opportunities, dependency problems, and pattern inconsistencies. Returns structured JSON report.
 │   ├── `ba.md` - Business analyst subagent for requirements analysis and context building. Receives user requirement text, performs git analysis, identifies affected files, and returns either clarification questions or dual-format output (Markdown spec + JSON context).
@@ -491,6 +491,9 @@ dot-claude/
 ├── `VERSION` - VERSION file
 ```
 <!-- /AUTO:index-stats -->
+
+# dot-claude
+
 
 # 
 
