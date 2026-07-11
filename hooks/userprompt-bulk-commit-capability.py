@@ -43,7 +43,7 @@ _WRITER_PATH = _SCRIPTS_DIR / "write-bulk-commit-sentinel.py"
 # Leading-/commit detector and a --bulk word-boundary flag detector. Mirrors the
 # /commit Step 1 parse: first token is the command, --bulk appears as its own token.
 _COMMIT_RE = re.compile(r"^\s*/commit(?:\s|$)")
-_BULK_FLAG_RE = re.compile(r"(?:^|\s)--bulk(?:\s|$)")
+_BULK_FLAG_RE = re.compile(r"(?:^|\s)--bulk(?:\s|$|\W)")
 
 
 def _is_bulk_commit(prompt: str) -> bool:
