@@ -156,11 +156,12 @@ flowchart TD
 
     H4 --> C{which verb?}
     C -->|commit| G1{grant file present + unexpired (ISO expiry),<br/>single-use unlink?}
-    C -->|push| G2{grant file: branch + expected-head<br/>+ remote, single-use?}
+    C -->|push| G2{grant file: branch + expected-head<br/>+ remote bound?}
     C -->|merge| G3{CLAUDE_MERGE_COMMAND_ACTIVE env<br/>set by /merge?}
     C -->|reset --hard| G4[blocked by default in agent flow]
 
-    G1 & G2 -->|yes| OK[(allow, then unlink the grant)]
+    G1 -->|yes| OK[(allow, then unlink commit grant)]
+    G2 -->|yes| OK2[(allow — push.sh manages lifecycle<br/>unlink on success, retain on failure)]
     G3 -->|yes| OK
     G1 & G2 & G3 -->|no grant/env and no break-glass| NO[BLOCKED · exit 2]
     G4 --> NO
