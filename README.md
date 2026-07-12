@@ -358,7 +358,7 @@ The model is *encouraged* toward the right path and *physically prevented* from 
 | Main Agent | via /do | /commit grant (time-boxed ISO expiry) | /push grant (branch+head+remote-bound) | via /do or matching /allow | ✓ | /do — breaks all gates for one turn |
 | Subagent | role-restricted | /commit grant | /push grant | matching /allow only — /do never applies to subagents | ✗ (subagents never get /do) | /allow only |
 
-Commit grant = time-boxed ISO expiry, single-use. Push grant = branch+head+remote-bound, no expiry, single-use. /allow sentinel = structured match (op+target+args_contain), ISO expiry, single-use, honored for subagents. For git reset --hard: subagents can use /allow; they cannot use /do.
+Commit grant = time-boxed ISO expiry, single-use (unlinked by posttool hook on success). Push grant = branch+head+remote-bound, no expiry, wrapper-managed lifecycle (push.sh unlinks on success; left in place on failure for retry). /allow sentinel = structured match (op+target+args_contain), ISO expiry, single-use (consumed on any terminal result), honored for subagents. For git reset --hard: subagents can use /allow; they cannot use /do.
 
 ---
 
