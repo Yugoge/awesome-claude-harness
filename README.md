@@ -191,7 +191,7 @@ Read-only git (`status`, `log`, `show`, `diff`, `blame`, `ls-files`, `branch` li
 
 | Grant type | Written by | Key fields | Expiry | Consumed on | Honored for |
 |---|---|---|---|---|---|
-| Commit grant `/tmp/claude-commit-grant-<sid>-<nonce>.json` | /commit command | nonce, expires_at (ISO-8601 UTC) | Time-boxed ISO expiry | Consumed on success (exit 0) only — renamed to `.lck` at PreToolUse, unlinked by `posttool-git-privilege-guard.py` on exit 0; validation failures do NOT consume the grant | Main agent + subagents |
+| Commit grant `/tmp/claude-commit-grant-<sid>-<nonce>.json` | /commit command | nonce, expires_at (ISO-8601 UTC) | Time-boxed ISO expiry | Consumed on success (exit 0) only — renamed to `.lck` at PreToolUse validation, unlinked by `posttool-allowlist-consume.py` on exit 0; validation failures do NOT consume the grant | Main agent + subagents |
 | Push grant `/tmp/claude-push-grant-<sid>-<nonce>.json` | /push command | nonce, branch, expected-head SHA, remote | None — branch/head/remote-bound | Consumed at successful PreToolUse validation (unlinked before the push command executes) | Main agent + subagents |
 | /allow sentinel `/tmp/claude-grants/<task_id>.json` | /allow command | task_id, session_id, allowed_operations[] ({op, target?, args_contain?}), expires_at | ISO expiry | Any terminal result (posttool-allowlist-consume.py) | Main agent + subagents |
 
