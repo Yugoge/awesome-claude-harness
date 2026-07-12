@@ -145,6 +145,30 @@
     {
       "task_id": "20260618-135436",
       "manifest_path": "tests/generated/20260618-135436/manifest.json"
+    },
+    {
+      "task_id": "dev-20260619-092310-streak",
+      "manifest_path": "tests/generated/dev-20260619-092310-streak/manifest.json"
+    },
+    {
+      "task_id": "dev-20260619-092310-errmsg",
+      "manifest_path": "tests/generated/dev-20260619-092310-errmsg/manifest.json"
+    },
+    {
+      "task_id": "20260702-171509",
+      "manifest_path": "tests/generated/20260702-171509/manifest.json"
+    },
+    {
+      "task_id": "20260704-134650",
+      "manifest_path": "tests/generated/20260704-134650/manifest.json"
+    },
+    {
+      "task_id": "20260704-225139",
+      "manifest_path": "tests/generated/20260704-225139/manifest.json"
+    },
+    {
+      "task_id": "20260705-191503",
+      "manifest_path": "tests/generated/20260705-191503/manifest.json"
     }
   ]
 }

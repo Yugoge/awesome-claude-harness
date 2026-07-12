@@ -1,8 +1,8 @@
 # dot-claude
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-07-04T16:11:01Z*
-**Total entries**: 470
+*Last updated: 2026-07-12T09:19:16Z*
+**Total entries**: 481
 **Convention**: kebab
 
 ## Tree
@@ -78,6 +78,7 @@ dot-claude/
 │   │   ├── `slashcommand-quick-reference.md` - Slash Command Quick Reference
 │   │   ├── `tmp-cleanup-convention.md` - Ad-hoc scratch directory convention
 │   │   └── `venv-repair.md` - venv-repair — restoring `~/.claude/venv` when interpreter symlinks break
+│   └── `THREAT-MODEL.md` - Threat Model — awesome-claude-harness
 ├── examples/
 │   └── guard-demo/
 │       └── `run-demo.sh` - Description: Reproducible guard demo — a dangerous operation is BLOCKED by the
@@ -99,6 +100,7 @@ dot-claude/
 │   ├── git-keystone/
 │   │   └── `reference-transaction` - reference-transaction file
 │   ├── lib/
+│   │   ├── runtime_guard/
 │   │   ├── `agent_resolver.py` - Refactored from pretool-subagent-code-block.py::_find_agent_type so that
 │   │   ├── `allowlist.py` - Single source of truth for grant-read, grant-match, and grant-consume
 │   │   ├── `bash_context_strip.py` - This is deliberately NOT a full shell parser.  It only computes a conservative
@@ -109,10 +111,11 @@ dot-claude/
 │   │   ├── `close-verdict.py` - Shared CLOSE verdict classifier for commit/close tooling.
 │   │   ├── `closeout.py` - Public API:
 │   │   ├── `contract_runtime.py` - This module is the single shared engine consumed by every contract-aware
+│   │   ├── `git_command_classifier.py` - Provides iter_git_invocations() — a token-aware parser that detects git
 │   │   ├── `grepguard_context_strip.py` - PURPOSE (narrow, guard-specific)
 │   │   ├── `overnight.py` - Single source of truth for "is a /dev-overnight session currently live?". A
 │   │   ├── `policy_registry.py` - Reads the harness ``policies/tool-policy.v1.json`` (resolved via the shared
-│   │   ├── `runtime_guard.py` - This module contains ZERO project identifiers. Every project-specific name
+│   │   ├── `runtime_guard.py` - This file exists for backwards-compatibility with callers that invoke
 │   │   ├── `schema_registry.py` - Reads schemas/registry.json once and lazily loads referenced schema files
 │   │   ├── `specialist_yield.py` - Public API:
 │   │   ├── `subagent.py` - Single source of truth for is_subagent_context() and supporting helpers
@@ -129,10 +132,11 @@ dot-claude/
 │   │   ├── `test_bash_safety_context_rules.py` - converted to COMMAND_CONTEXT_STRIPPED in hooks/pretool-bash-safety.sh
 │   │   ├── `test_block_branch_pr_worktree.py` - The hook forbids branch / PR / worktree CREATION on the Bash surface, with three
 │   │   ├── `test_bulk_commit_sentinel.py` - Covers:
-│   │   ├── `test_commit_strip_dotfile_paths.py` - Bug surfaced cycle 20260511-100000: dev-report listed 6 `.claude/commands/*`
 │   │   ├── `test_cp_checkin.py` - of ba-spec-20260427-194324.md (P1 view-trigger removal + P2 generation field)
 │   │   ├── `test_do_taskid_mint.py` - Covers the root-cause fix for the do-report task-id collision (memory
+│   │   ├── `test_extract.py` - Unit tests for hooks/doc_sync/extract.py — covers all 4 defects + known-file cases.
 │   │   ├── `test_final_sweep.sh` - Final sweep — run inline AC checks and print PASS/FAIL summary.
+│   │   ├── `test_git_cmd_cross_consistency.py` - Verifies that GIT_CMD_RE (hooks/pretool-bash-safety.sh),
 │   │   ├── `test_push_sentinel_abort.sh` - Unit test for AC1 V5: hooks/push.sh self-aborts before any real git push
 │   │   └── `test_runtime_guard.py` - Two layers:
 │   ├── `audit-slashcommand.sh` - audit-slashcommand.sh
@@ -172,9 +176,10 @@ dot-claude/
 │   ├── `pretool-bash-safety.sh` - PreToolUse Safety Hook - Warn or block before dangerous operations
 │   ├── `pretool-bash-views-guard.py` - Parallels pretool-bash-safety.sh but focuses on views/cp-state write bypass
 │   ├── `pretool-bisect-gate.sh` - pretool-bisect-gate.sh
+│   ├── `pretool-block-background-tasks.py` - PreToolUse hook: block background execution on Agent/Task/Bash/SendMessage/Workflow
 │   ├── `pretool-block-branch-pr-worktree.py` - Policy (user directive 2026-06-04; the verbatim user directive is preserved in
 │   ├── `pretool-block-enterworktree.sh` - PreToolUse hook: Block EnterWorktree tool
-│   ├── `pretool-bulk-commit-detector.py` - import json
+│   ├── `pretool-bulk-commit-detector.py` - PreToolUse Hook: Bulk-commit detector
 │   ├── `pretool-claude-config-guard.py` - PreToolUse Hook: Claude config (.claude/hooks + .claude/commands) protection
 │   ├── `pretool-cp-checkin.py` - cp-state file read
 │   ├── `pretool-cp-state-write-guard.py` - Cycle-3 slim form (2026-05-14): Bash-extractor removed — 22-form adversarial
@@ -343,6 +348,7 @@ dot-claude/
 │   ├── `spec-check.py` - Subcommands: check-in, mark, waive, status, check-out, unlock
 │   ├── `stage-owned-hunks.py` - Stages ONLY this cycle's owned hunks within a single already-authorized file,
 │   ├── `step7-spec-update.py` - Step 8 (Spec-update dispatch) reference harness — task 20260524-205206 iter-2
+│   ├── `test` - test file
 │   ├── `update-gitignore.sh` - update-gitignore.sh - Auto-update .gitignore with project-specific rules
 │   ├── `update-overnight-state.sh` - update-overnight-state.sh — Atomically update overnight state file
 │   ├── `write-bulk-commit-sentinel.py` - Invoked from commands/commit.md Step 5 (BULK=true) to authorize the
@@ -425,6 +431,8 @@ dot-claude/
 │   │   ├── 20260618-135436/
 │   │   ├── 20260702-171509/
 │   │   ├── 20260704-073650/
+│   │   ├── 20260704-134650/
+│   │   ├── 20260704-225139/
 │   │   ├── dev-20260530-144032/
 │   │   ├── dev-20260531-134455/
 │   │   ├── dev-20260531-193000/
@@ -470,34 +478,19 @@ dot-claude/
 │   ├── `verify-stop-spec-session-isolation.sh` - QA verification harness for stop-spec-coverage-enforce.py session isolation fix.
 │   └── `ws2_zero_literal_gate.py` - Scans the EXPLICITLY-defined load-bearing surfaces of a rendered fresh clone with
 ├── `ARCHITECTURE.md` - Architecture — `.claude` Agent Operating System
+├── `CHANGELOG.md` - Changelog
 ├── `CLAUDE.md` - CLAUDE.md
 ├── `LICENSE` - LICENSE file
 ├── `NESTED-REPO.md` - Nested Repo Sentinel
 ├── `NOTICE` - NOTICE file
 ├── `push.sh` - push.sh - Global pre-push checks: git identity + fetch/pull/status
+├── `pytest.ini` - ini file
 ├── `requirements.txt` - Python dependency manifest for the Claude Code harness venv
 ├── `settings.json` - Claude Code harness configuration (permissions, hooks, env, model)
 ├── `settings.template.json` - Distributable harness settings template (uses CLAUDE_HOME placeholders)
+├── `VERSION` - VERSION file
 ```
 <!-- /AUTO:index-stats -->
-
-# 
-
-
-# dot-claude
-
-
-# .claude
-
-
-# dot-claude
-
-
-# .claude
-
-
-# dot-claude
-
 
 # .claude
 
