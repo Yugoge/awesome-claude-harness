@@ -1,7 +1,7 @@
 # hooks
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-07-11T21:30:27Z*
+*Last updated: 2026-07-12T09:18:23Z*
 **Total entries**: 150
 **Convention**: kebab
 
@@ -103,7 +103,7 @@ hooks/
 ├── `pretool-bash-safety.sh` - PreToolUse Safety Hook - Warn or block before dangerous operations
 ├── `pretool-bash-views-guard.py` - Parallels pretool-bash-safety.sh but focuses on views/cp-state write bypass
 ├── `pretool-bisect-gate.sh` - pretool-bisect-gate.sh
-├── `pretool-block-background-tasks.py` - PreToolUse hook: block background execution on Agent/Task/Bash for orchestrator
+├── `pretool-block-background-tasks.py` - PreToolUse hook: block background execution on Agent/Task/Bash/SendMessage/Workflow
 ├── `pretool-block-branch-pr-worktree.py` - Policy (user directive 2026-06-04; the verbatim user directive is preserved in
 ├── `pretool-block-enterworktree.sh` - PreToolUse hook: Block EnterWorktree tool
 ├── `pretool-bulk-commit-detector.py` - PreToolUse Hook: Bulk-commit detector
