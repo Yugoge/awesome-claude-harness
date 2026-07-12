@@ -343,7 +343,7 @@ CLAUDE_PUSH_COMMAND_ACTIVE=1 git push
 | Method | Result |
 |---|---|
 | Inline `CLAUDE_PUSH_COMMAND_ACTIVE=1 git push` | BLOCKED (exit 2) — env-injection detected before grant/allow check |
-| `/push` grant file (nonce-keyed, branch+head+remote-bound, single-use) | ALLOWED — guard validates branch, expected HEAD, remote; unlinks grant |
+| `/push` grant file (nonce-keyed, branch+head+remote-bound) | ALLOWED — `push.sh` manages grant lifecycle; guard does not fire on `push.sh` subprocesses. Grant unlinked by `push.sh` on success; left in place on failure (for retry) |
 
 The model is *encouraged* toward the right path and *physically prevented* from the wrong one — and when it is prevented, the evidence is left on disk. (`hooks/pretool-git-privilege-guard.py`)
 
