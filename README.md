@@ -163,7 +163,7 @@ flowchart TD
     G1 -->|yes| OK[(allow, then unlink commit grant)]
     G2 -->|yes| OK2[(allow — push.sh manages lifecycle<br/>unlink on success, retain on failure)]
     G3 -->|yes| OK
-    G1 & G2 & G3 -->|no grant/env and no break-glass| NO[BLOCKED · exit 2]
+    G1 & G2 & G3 -->|no grant/env| NO[BLOCKED · exit 2]
     G4 --> NO
 
     classDef block fill:#ffebee,stroke:#c62828
