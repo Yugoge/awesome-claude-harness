@@ -145,7 +145,7 @@ This is the part paid for in lost work. Two real incidents shaped it:
 >
 > **Concrete example:** if an agent tries `git checkout abc123 -- .`, bash-safety blocks it with exit 2. To restore a single file: `git checkout abc123 -- hooks/pretool-bash-safety.sh` — that is allowed. To widen the checkout back to a whole directory, a human must first `/allow git checkout` with the matching `args_contain`.
 
-> **The 93-file sweep.** On 2026-04-21 17:45 UTC, in an *interactive* (not overnight) session (`962de59f`), the prompt "全部commit push" produced regression [`b5d447e`](https://github.com/Yugoge/awesome-claude-harness/commit/b5d447e): a 93-file `commit` + `push` authored by the orchestrator with no human signoff. The lesson was that gating on overnight-context alone would let this exact class through. So `hooks/pretool-git-privilege-guard.py` was made **always-on** — it runs on every Bash call in both subagent and main-agent contexts — and now requires a single-use authorization for each privileged verb.
+> **The 93-file sweep.** On 2026-04-21 17:45 UTC, in an *interactive* (not overnight) session (`962de59f`), the prompt "全部commit push" produced regression [`b5d447e`](https://github.com/Yugoge/awesome-claude-harness/commit/b5d447e): a 93-file `commit` + `push` authored by the orchestrator with no human signoff. The lesson was that gating on overnight-context alone would let this exact class through. So `hooks/pretool-git-privilege-guard.py` was made **always-on** — it runs on every Bash call in both subagent and main-agent contexts — and now requires a per-operation authorization grant for each privileged verb.
 
 ```mermaid
 flowchart TD
