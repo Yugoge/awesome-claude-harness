@@ -529,13 +529,13 @@ Everything else (`agents/`, `commands/`, `skills/`, `schemas/`, `templates/`, `t
 
 | Event | Hook entries | Primary purpose |
 |---|---|---|
-| SessionStart | 7 | Environment setup, resolver announcement, dependency checks |
-| UserPromptSubmit | 5 | Per-turn sentinel pre-creation, prompt-purity enforcement, dedup check |
-| PreToolUse | 28 | The gate layer: orchestrator rate-limit, bash-safety, git kernel, tool-policy, branch/PR firewall |
-| PostToolUse | 14 | Doc-sync, allowlist grant consumption, checkpoint writes |
+| SessionStart | 1 | Environment setup, resolver announcement, dependency checks |
+| UserPromptSubmit | 4 | Per-turn sentinel pre-creation, prompt-purity enforcement, dedup check |
+| PreToolUse | 22 | The gate layer: orchestrator rate-limit, bash-safety, git kernel, tool-policy, branch/PR firewall |
+| PostToolUse | 7 | Doc-sync, allowlist grant consumption, checkpoint writes |
 | Notification | 1 | User-facing notification routing |
-| Stop | 4 | Overnight timelock, allowlist reap, cp-state enforcement |
-| SubagentStop | 6 | cp-state enforcement, subagent output capture |
+| Stop | 1 | Overnight timelock, allowlist reap, cp-state enforcement |
+| SubagentStop | 4 | cp-state enforcement, subagent output capture |
 
 ---
 
