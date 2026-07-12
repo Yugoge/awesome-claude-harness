@@ -82,6 +82,22 @@ def main():
     if do_sentinel.exists():
         sys.exit(0)
 
+    # SendMessage drives/resumes a background teammate (even one that was spawned
+    # synchronously — a send resumes it from its transcript and runs it async);
+    # Workflow spawns a whole background agent fleet and returns immediately. Neither
+    # has a synchronous mode, so for the orchestrator they ARE background-agent
+    # execution — block outright. (Subagent + /do bypasses already applied above.)
+    # No run_in_background field is consulted; these tools have none.
+    if tool_name in {"SendMessage", "Workflow"}:
+        print(
+            f"[BLOCK] {tool_name} runs agents in the background and is forbidden for "
+            "the orchestrator.\n"
+            "There is no synchronous mode; dispatch work with "
+            "Agent(run_in_background=false), or use /do.",
+            file=sys.stderr,
+        )
+        sys.exit(2)
+
     # Non-dict params (malformed) → treat as empty so Agent/Task still block and
     # the hook never crashes into an exit-1 fail-open.
     if not isinstance(params, dict):
