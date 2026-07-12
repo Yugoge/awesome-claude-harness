@@ -6,7 +6,7 @@ A complete Claude Code configuration: an orchestrator-only main agent, an eviden
 <img alt="version" src="https://img.shields.io/badge/version-1.0.0-blue">
 <img alt="subagents" src="https://img.shields.io/badge/subagents-23-6f42c1">
 <img alt="commands" src="https://img.shields.io/badge/slash%20commands-35-1565c0">
-<img alt="hooks" src="https://img.shields.io/badge/lifecycle%20hooks-64%20files%20%2F%2065%20wired-c62828">
+<img alt="hooks" src="https://img.shields.io/badge/lifecycle%20hooks-40%20wired%20%2F%207%20events-c62828">
 <img alt="events" src="https://img.shields.io/badge/lifecycle%20events-7-ad1457">
 <img alt="scripts" src="https://img.shields.io/badge/helper%20scripts-72-2e7d32">
 <img alt="skills" src="https://img.shields.io/badge/skills-8-e67e22">
