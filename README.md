@@ -491,7 +491,7 @@ Each row maps to a capability in the dependency table above.
 ├── CLAUDE.md          # The constitution: non-negotiable rules the agent must obey
 ├── ARCHITECTURE.md    # System architecture, verified against the current code
 ├── NESTED-REPO.md     # Why ~/.claude is its own git repo on a RAM disk
-├── settings.json      # 65 wired hook entries (64 distinct files) across 7 lifecycle events
+├── settings.json      # 40 wired hook entries across 7 lifecycle events
 ├── agents/            # 23 subagent definitions (BA, dev, QA, architect, …)
 ├── commands/          # 35 slash-command workflows (/spec, /dev, /close, /commit, …)
 ├── hooks/             # SessionStart / UserPromptSubmit / PreToolUse / PostToolUse / Notification / Stop / SubagentStop gates
