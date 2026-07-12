@@ -1,12 +1,17 @@
 #!/usr/bin/env python3
 """
-PreToolUse hook: block background execution on Agent/Task/Bash for orchestrator.
+PreToolUse hook: block background execution on Agent/Task/Bash/SendMessage/Workflow
+for the orchestrator.
 
 ENFORCEMENT (default disposition matters):
   - Agent / Task → background is the DEFAULT, so the field is usually ABSENT.
     Block unless run_in_background is explicitly False (True or absent → exit 2).
   - Bash → foreground is the default, so only an explicit True is a background
     task (exit 2); absent/False is fine.
+  - SendMessage / Workflow → inherently background with NO synchronous mode.
+    SendMessage drives/resumes a teammate async (regardless of how it was spawned);
+    Workflow spawns a background agent fleet. Both are blocked outright (exit 2) —
+    for the orchestrator they ARE background-agent execution.
   - Subagents (agent_id truthy) → exit 0 (no restriction)
   - /do consent active → exit 0 (bypass)
 
@@ -76,6 +81,22 @@ def main():
     do_sentinel = Path(f"/tmp/claude-orchestrator-consent-{session_id}.flag")
     if do_sentinel.exists():
         sys.exit(0)
+
+    # SendMessage drives/resumes a background teammate (even one that was spawned
+    # synchronously — a send resumes it from its transcript and runs it async);
+    # Workflow spawns a whole background agent fleet and returns immediately. Neither
+    # has a synchronous mode, so for the orchestrator they ARE background-agent
+    # execution — block outright. (Subagent + /do bypasses already applied above.)
+    # No run_in_background field is consulted; these tools have none.
+    if tool_name in {"SendMessage", "Workflow"}:
+        print(
+            f"[BLOCK] {tool_name} runs agents in the background and is forbidden for "
+            "the orchestrator.\n"
+            "There is no synchronous mode; dispatch work with "
+            "Agent(run_in_background=false), or use /do.",
+            file=sys.stderr,
+        )
+        sys.exit(2)
 
     # Non-dict params (malformed) → treat as empty so Agent/Task still block and
     # the hook never crashes into an exit-1 fail-open.
