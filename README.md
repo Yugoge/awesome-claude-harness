@@ -67,7 +67,7 @@ graph TD
     HL -->|block exit 2| BLK[/BLOCKED/]
 
     GK --> IDX[INDEX files<br/>doc-sync PostToolUse]
-    TMP[/tmp/ grants<br/>commit · push · /allow] -->|single-use validation| HL
+    TMP[/tmp/ grants<br/>commit · push · /allow] -->|grant-keyed validation| HL
 
     classDef restricted fill:#ffebee,stroke:#c62828
     classDef gate fill:#fff3e0,stroke:#e67e22
