@@ -55,7 +55,7 @@ Run the guard demo: `bash examples/guard-demo/run-demo.sh`
 
 ```mermaid
 graph TD
-    U([Human]) --> CMD[Slash commands<br/>35 entry points]
+    U([Human]) --> CMD[Slash commands<br/>18 entry points]
     CMD --> ORC{{Main Agent / Orchestrator<br/>think + route — no direct writes}}
 
     ORC -.->|PreToolUse gate| HL
