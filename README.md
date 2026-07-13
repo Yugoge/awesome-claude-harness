@@ -477,7 +477,7 @@ Each row maps to a capability in the dependency table above.
 ├── NESTED-REPO.md     # Why ~/.claude is its own git repo on a RAM disk
 ├── settings.json      # 40 wired hook entries across 7 lifecycle events
 ├── agents/            # 23 subagent definitions (BA, dev, QA, architect, …)
-├── commands/          # 35 slash-command workflows (/spec, /dev, /close, /commit, …)
+├── commands/          # 18 slash-command workflows (/spec, /dev, /close, /commit, …)
 ├── hooks/             # SessionStart / UserPromptSubmit / PreToolUse / PostToolUse / Notification / Stop / SubagentStop gates
 │   ├── lib/           #   shared libs: allowlist (structured sentinel grants), checkpoint-core
 │   ├── doc_sync/      #   self-updating INDEX/README/CLAUDE regeneration
