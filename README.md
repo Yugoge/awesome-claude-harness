@@ -1,5 +1,9 @@
 # `awesome-claude-harness` — A Self-Governing Agent Operating System for Claude Code
 
+<p align="center">
+  <img src=".github/assets/guard-demo.svg" width="840" alt="Terminal recording of examples/guard-demo/run-demo.sh: a dev-role agent's dangerous write is blocked fail-closed by the tool-policy guard (exit 2), then a properly-authorized, grant-gated fix completes (exit 0) and the write lands on disk.">
+</p>
+
 An operating system for Claude Code agents — orchestrator-only routing, an evidence-gated `/spec → /dev → /close → /commit → /push` pipeline, a defense-in-depth git protection kernel, and an autonomous overnight loop, every mechanism traceable to a file in this repo.
 
 <p>
