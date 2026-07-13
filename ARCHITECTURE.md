@@ -16,7 +16,7 @@ All counts below were established by enumerating the actual repository, not copi
 | Component | Count | How counted |
 |---|---|---|
 | **Subagents** (`agents/*.md`, excluding `INDEX.md`/`README.md`) | **23** | `ls agents/*.md \| grep -vE '/(INDEX\|README)\.md$'` |
-| **Slash commands** (`commands/*.md`, excluding `INDEX.md`/`README.md`) | **35** | `ls commands/*.md \| grep -vE '/(INDEX\|README)\.md$'` |
+| **Slash commands** (`commands/*.md`, excluding `INDEX.md`/`README.md`) | **18** | `ls commands/*.md \| grep -vE '/(INDEX\|README)\.md$'` |
 | **Hook command entries wired** in `settings.json` | **65** | sum of `hooks[*][*].hooks[]` over all lifecycle events |
 | **Distinct hook files referenced** by `settings.json` | **64** | unique `hooks/*.py\|*.sh` paths in those entries |
 | **Lifecycle events used** | **7** | keys of `settings.json.hooks` |
@@ -57,8 +57,6 @@ The harness is a configuration, not a packaged app — there is no `requirements
 | `graphify` CLI — PyPI `graphifyy` v0.8.25, binary `graphify` | OPTIONAL (graceful) | Code-graph enrichment (§7, `scripts/graphify-query.py`). Default-enabled (`CLAUDE_GRAPHIFY_ENABLED=auto`, `GRAPHIFY_BIN`); absent → degraded, pipeline proceeds. |
 | Playwright MCP | OPTIONAL overall; **REQUIRED for user-facing QA/E2E + UI audits** | UI-audit skill suite, overnight PM live-app exploration, and QA's live browser verification of user-facing changes (QA fails closed when a user-facing change cannot be browser-verified). Not needed for doc/config/non-user-facing cycles. |
 | Python pkgs `jsonschema`, `yaml` (PyYAML), `websocket-client` | OPTIONAL (graceful) | Stricter schema validation / enrichments; hooks fall back to lenient paths when missing. |
-| `fswatch` | OPTIONAL | Backs `/fswatch`; not used by the core pipeline. |
-| `node` + user-supplied `EXCEL_ANALYZER` | OPTIONAL | `/file-analyze` spreadsheet/document analysis; analyzer is user-provided. |
 
 > Note: this matrix is the maintainer-facing twin of the README's Dependencies table; the two are kept in step. Changing graphify's default-enabled behavior or `GRAPHIFY_BIN` resolution is out of scope here (document-only).
 
@@ -116,7 +114,7 @@ flowchart TD
 ```
 
 - **Orchestrator (main agent).** Owns the conversation, the todo list, and dispatch. Allowed tools are a small whitelist (`Agent`, `TodoWrite`, `AskUserQuestion`, `Skill`, `Read`, `Glob`, `Grep`, `Bash`, cron/title tools); everything else is rate-limited or blocked by the orchestrator gate. (`CLAUDE.md` §Orchestrator-Only Rule.)
-- **Command surface (`commands/*.md`).** 35 slash commands. Each is a prompt that scripts a workflow (parse → dispatch → validate → ship). Release/control commands carry `disable-model-invocation: true`, which blocks **SlashCommand self-dispatch only**; the `Skill`-tool path is closed separately by an explicit `Skill(<name>:*)` deny in `permissions.deny` (see *Why `disable-model-invocation`?* below).
+- **Command surface (`commands/*.md`).** 18 slash commands. Each is a prompt that scripts a workflow (parse → dispatch → validate → ship). Release/control commands carry `disable-model-invocation: true`, which blocks **SlashCommand self-dispatch only**; the `Skill`-tool path is closed separately by an explicit `Skill(<name>:*)` deny in `permissions.deny` (see *Why `disable-model-invocation`?* below).
 - **Subagent fleet (`agents/*.md`).** 23 specialists, each a system prompt with `name`/`description`/`tools` frontmatter. Subagents bypass the orchestrator gate (they are *supposed* to do work) but are still subject to the safety, git, and worktree hooks.
 - **Hook enforcement (`settings.json` + `hooks/`).** The kernel. Every tool call the agent makes is intercepted; hooks return exit 2 to block. Shared logic lives in `hooks/lib/` (allowlist/sentinel grants, checkpoint core, contract runtime, agent resolver).
 - **Support.** `scripts/` (72 helpers: grant writers, graphify code-graph, spec/dev-report resolvers), `skills/` (8: Playwright UI-audit suite), `schemas/` (JSON contracts like `context.v1.json`, `cycle-contract.v1.json`, `dev-report.v1.json`, `qa-report.v1.json`), `templates/` (`spec-template.md`, `overnight-spec.md`).
@@ -346,7 +344,7 @@ flowchart LR
 ├── INDEX.md                 # top-level index
 ├── settings.json            # 64 wired hook files / 65 entries across 7 lifecycle events; permissions; env
 ├── agents/                  # 23 subagent definitions  (+ INDEX.md, README.md)
-├── commands/                # 35 slash-command workflows (+ INDEX.md, README.md)
+├── commands/                # 18 slash-command workflows (+ INDEX.md, README.md)
 ├── hooks/                   # enforcement layer (86 files on disk; 64 wired)
 │   ├── lib/                 #   allowlist (sentinel grants), checkpoint-core, contract runtime, resolvers
 │   ├── doc_sync/            #   self-updating INDEX/README/CLAUDE regeneration package
