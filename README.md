@@ -67,7 +67,7 @@ graph TD
     HL -->|block exit 2| BLK[/BLOCKED/]
 
     GK --> IDX[INDEX files<br/>doc-sync PostToolUse]
-    TMP[/tmp/ grants<br/>commit / push / /allow] -->|grant-keyed validation| HL
+    TMP["/tmp/ grants<br/>commit / push / /allow"] -->|grant-keyed validation| HL
 
     classDef restricted fill:#ffebee,stroke:#c62828
     classDef gate fill:#fff3e0,stroke:#e67e22
@@ -150,7 +150,7 @@ This is the part paid for in lost work. Two real incidents shaped it:
 ```mermaid
 flowchart TD
     B[Bash: a git verb] --> H1[orchestrator-gate<br/>rate-limit, /do bypass]
-    H1 --> H2[bash-safety<br/>blocks by default: stash-buffer / wide checkout / reset --hard<br/>(/do or matching /allow break-glass)]
+    H1 --> H2[bash-safety<br/>blocks by default: stash-buffer / wide checkout / reset --hard<br/>&#40;/do or matching /allow break-glass&#41;]
     H2 --> H3[bulk-commit-detector<br/>warns on the 93-file 'sync' shape]
     H3 --> H4[git-privilege-guard<br/>ALWAYS-ON / the verb that actually blocks]
 
