@@ -408,7 +408,7 @@ The harness runs on a fresh non-root clone. Clone to `$HOME/.claude` on any Linu
 | Tier 2 — overnight | Playwright MCP | User-facing QA, UI audits, overnight PM | QA fails closed for user-facing changes |
 | Tier 3 — optional | Codex CLI + CODEX_ISO_BIN | --codex adversarial rounds | --codex unavailable; pipeline unaffected |
 | Tier 3 — optional | graphify + GRAPHIFY_BIN | Code-graph enrichment in Dev context | Dev skips enrichment; proceeds degraded |
-| Tier 3 — optional | websocket-client, fswatch, node+EXCEL_ANALYZER | Websocket enrichments, /fswatch, spreadsheet analysis | Silently skipped; core pipeline unaffected |
+| Tier 3 — optional | websocket-client | Websocket enrichments | Silently skipped; core pipeline unaffected |
 
 <details>
 <summary>Dependency requirements</summary>
@@ -428,8 +428,6 @@ The harness runs on a fresh non-root clone. Clone to `$HOME/.claude` on any Linu
 | `graphify` CLI (`graphifyy` v0.8.25 on PyPI; the binary is `graphify`) | OPTIONAL (graceful) | Incremental code-graph enrichment injected into the Dev context. Default-enabled (`CLAUDE_GRAPHIFY_ENABLED=auto`). Install: `~/.claude/venv/bin/pip install graphifyy`, then point `GRAPHIFY_BIN` at the installed `graphify`. | Code-graph context absent from Dev dispatch; Dev still runs — quality may be lower on large refactors. |
 | [Playwright MCP](https://github.com/microsoft/playwright-mcp) | OPTIONAL overall; **REQUIRED for user-facing QA/E2E + UI audits** | Powers the UI-audit skill suite, the overnight PM's live-app exploration, and QA's live browser verification of user-facing changes. Not needed for doc/config/non-user-facing cycles. | Non-user-facing cycles unaffected; QA fails closed only when a user-facing change cannot be browser-verified. |
 | Python pkg `websocket-client` | OPTIONAL (graceful) | A few websocket enrichments; hooks fall back to lenient paths when missing. | Websocket enrichments silently skipped; fallback path active. |
-| `fswatch` | OPTIONAL | Backs `/fswatch` file-watching; not needed by the core pipeline. | `/fswatch` command unavailable; core pipeline unaffected. |
-| `node` + a user-supplied `EXCEL_ANALYZER` | OPTIONAL | `/file-analyze` spreadsheet/document analysis. You provide the analyzer; absent → that file type is skipped. | Spreadsheet/document analysis unavailable; other file types still work. |
 
 </details>
 
