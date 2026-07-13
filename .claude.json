@@ -1,0 +1,74 @@
+{
+  "firstStartTime": "2026-07-13T15:31:26.428Z",
+  "machineID": "84cc647c9803547a7b07925fe00065034410a927063960b65a4a2a290cf6416e",
+  "opusProMigrationComplete": true,
+  "sonnet1m45MigrationComplete": true,
+  "seenNotifications": {},
+  "migrationVersion": 13,
+  "userID": "be57d1c0ad8caa59a9a458f987b9e91818ff188a8bc77811cccdbe56e243991b",
+  "clientDataCacheSlots": {
+    "bi1-b035ef9d780b0289": {
+      "data": {
+        "cedar_lagoon": {
+          "claude-fable": true,
+          "claude-mythos": true
+        },
+        "convolute_arcades": true,
+        "basalt_cove": {
+          "claude-opus-4-8": true
+        },
+        "experimentKey": "claude_code_grove_citadel_experiment",
+        "atis": "grove-citadel-ember",
+        "cedar_basin": "2026-08-31"
+      },
+      "at": 1783956689141
+    },
+    "bi1-0e6bc6bc0ec114e5": {
+      "data": {
+        "cedar_lagoon": {
+          "claude-fable": true,
+          "claude-mythos": true
+        },
+        "cedar_basin": "2026-08-31"
+      },
+      "at": 1783956687396
+    }
+  },
+  "additionalModelOptionsCache": [
+    {
+      "value": "claude-fable-5[1m]",
+      "label": "Fable",
+      "description": "Fable 5 · Most capable for your hardest and longest-running tasks"
+    }
+  ],
+  "additionalModelCostsCache": {},
+  "modelAccessCache": [],
+  "orgModelDefaultCache": null,
+  "autoCompactWindowsCache": null,
+  "oauthAccount": {
+    "accountUuid": "2cde38bb-237d-490e-bbe3-aae3776151a1",
+    "emailAddress": "yugoge@gmail.com",
+    "organizationUuid": "336318a9-373a-498f-a408-f362d9c5a9fa",
+    "hasExtraUsageEnabled": false,
+    "billingType": "stripe_subscription",
+    "accountCreatedAt": "2025-10-25T11:09:48.490455Z",
+    "subscriptionCreatedAt": "2025-11-17T15:56:46.902544Z",
+    "ccOnboardingFlags": {},
+    "claudeCodeTrialEndsAt": null,
+    "claudeCodeTrialDurationDays": null,
+    "seatTier": null,
+    "displayName": "Yugo",
+    "profileFetchedAt": 1783956687786,
+    "organizationType": "claude_max",
+    "organizationRateLimitTier": "default_claude_max_20x",
+    "userRateLimitTier": null,
+    "organizationName": "yugoge@gmail.com's Organization"
+  },
+  "skillUsage": {
+    "push": {
+      "usageCount": 1,
+      "lastUsedAt": 1783956688885
+    }
+  },
+  "cachedExtraUsageDisabledReason": "org_level_disabled"
+}
