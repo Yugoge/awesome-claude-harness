@@ -1,6 +1,6 @@
 # `awesome-claude-harness` — A Self-Governing Agent Operating System for Claude Code
 
-A complete Claude Code configuration: an orchestrator-only main agent, an evidence-gated `/spec → /dev → /close → /commit → /push` pipeline, a defense-in-depth git protection kernel, and an autonomous overnight loop. Not a prompt pack — an operating system for agents, with a scheduler, a permission model, a filesystem layout, and a kernel grounded in real failure classes. Every mechanism below traces to a file in this repo.
+An operating system for Claude Code agents — orchestrator-only routing, an evidence-gated `/spec → /dev → /close → /commit → /push` pipeline, a defense-in-depth git protection kernel, and an autonomous overnight loop, every mechanism traceable to a file in this repo.
 
 <p>
 <img alt="version" src="https://img.shields.io/badge/version-1.0.0-blue">
@@ -20,11 +20,15 @@ A complete Claude Code configuration: an orchestrator-only main agent, an eviden
 
 ## Install
 
-**Prerequisites:** `python3`, `git`, `jq` required. Run `scripts/doctor` for a preflight check. Bootstrap is non-destructive — use `--force` to back up and recreate an existing venv.
+Verify prerequisites — `python3`, `git`, `jq` (or run `scripts/doctor` for a full preflight):
+
+```bash
+python3 --version && git --version && jq --version
+```
 
 ```bash
 git clone https://github.com/Yugoge/awesome-claude-harness.git ~/.claude
-~/.claude/scripts/bootstrap
+~/.claude/scripts/bootstrap        # non-destructive; --force backs up + recreates the venv
 claude
 ```
 
@@ -77,34 +81,6 @@ graph TD
 
 ---
 
-## The big idea, in one diagram
-
-```mermaid
-flowchart TD
-    U([You: a requirement, maybe vague]) --> O{{Main Agent / ORCHESTRATOR ONLY<br/>thinks and routes, does not implement}}
-
-    O -. "Edit / Write / git commit are gated<br/>at the hook layer" .-> X[/restricted/]
-
-    O ==>|delegates WHAT, never HOW| BA[BA subagent<br/>git root-cause + evidence]
-    BA --> QV[QA validates the BA<br/>challenge every claim]
-    QV -->|evidence ok| DEV[Dev subagent<br/>the agent that writes code]
-    QV -->|evidence weak, max 3 iterations| BA
-    DEV --> QA[QA subagent<br/>verify vs acceptance criteria]
-    QA -->|fail| DEV
-    QA -->|pass| CLOSE[/close: release-readiness gate/]
-
-    CLOSE --> GATE{{Git Protection Kernel<br/>grant/env or audited break-glass required}}
-    GATE -->|valid grant/env or /do/matching /allow| GIT[(real commit / push / merge)]
-    GATE -->|no grant/env/break-glass or forged| BLOCK[BLOCKED / exit 2]
-
-    classDef restricted fill:#ffebee,stroke:#c62828
-    classDef gate fill:#fff3e0,stroke:#e67e22
-    class X,BLOCK restricted
-    class O,GATE gate
-```
-
----
-
 ## The full pipeline
 
 ```
@@ -123,7 +99,7 @@ flowchart TD
    /merge · /push                         bridge to the target branch · single-process gated push
 ```
 
-Each stage hands a verified artifact to the next. `--codex` rides alongside `/dev`, `/close`, and `/commit` as an opt-in adversarial second opinion. The git protection kernel sits *under* `/commit`, `/merge`, and `/push` and default-denies covered git mutations unless the wrapper authorization is present.
+Each stage hands a verified artifact to the next; `--codex` adds an opt-in adversarial round on `/dev`, `/close`, and `/commit`.
 
 ---
 
@@ -259,36 +235,26 @@ The orchestrator dispatches specialists by *describing the problem* — never th
 
 ## The command surface: 18 slash commands
 
-| Group | Command | What it does |
-|---|---|---|
-| **Spec** | `/spec` | Capture the requirement verbatim, persist design + evidence, split into per-agent briefs + Gawande-style checkpoints. |
-| **Spec** | `/spec-update` | Append continuation cycles to an existing spec. |
-| **Develop** | `/dev` | Orchestrated single-pass development pipeline. |
-| **Develop** | `/dev-command` | Command-authoring dev pipeline. |
-| **Develop** | `/dev-overnight` | Autonomous overnight loop. |
-| **Develop** | `/redev` | Re-dev a prior cycle with a revised context. |
-| **Ship** | `/close` | Release-readiness gate (QA verdict + optional Codex debate). |
-| **Ship** | `/commit` | Surgical staging + conventional commit message + commit grant. |
-| **Ship** | `/merge` | Bridge to target branch with pre-merge analyst grant. |
-| **Ship** | `/push` | Single-process gated push with push analyst grant. |
-| **Ship** | `/pull` | Post-pull advisory risk analysis. |
-| **Ship** | `/checkpoint` | Manual snapshot to `refs/checkpoints/<branch>`. |
-| **Quality** | `/clean` | Cleanup cohort (cleaner + inspectors). |
-| **Quality** | `/test` | Test workflow (execute + validate). |
-| **Control** | `/do` | Break-glass consent for the main agent (one turn). |
-| **Control** | `/allow` | Structured single-use break-glass grant for one specific operation. |
-| **Control** | `/stop` | Cancel an overnight session. |
-| **Control** | `/codex` | OpenAI Codex adversarial delegation. |
-
-**`/do`** lets the *main* agent do direct work for one turn. Recognized by the orchestrator gate, bash-safety, and the always-on git-privilege-guard — applies to the **main agent only**; a subagent never benefits from the consent flag. It does not quiet the bulk-commit detector's warning.
-
-**`/allow`** writes a single, **structured** break-glass grant matched by command structure (`op` / `target` / `args_contain`) — the sanctioned path, in preference to the fragile substring matching that a legacy fallback in `hooks/lib/allowlist.py` still retains. Refuse-by-default is the rule (the match-all hole was closed). The grant is single-use and consumed on any terminal result.
-
-```json
-{"task_id": "20260705-113208", "session_id": "dev-...", "allowed_operations": [{"op": "git", "args_contain": ["checkout", "abc123", "--", "hooks/pretool-bash-safety.sh"]}], "created_at": "2026-07-05T11:32:08Z", "expires_at": "2026-07-05T12:32:08Z"}
-```
-
-Most release commands carry `disable-model-invocation: true` so an agent can't self-invoke them via SlashCommand. Because that flag does **not** block the `Skill` tool, every human-only command is *also* denied as `Skill(<name>:*)` in `permissions.deny` — the human is the trust root.
+| Group | Command | What it does | When to use |
+|---|---|---|---|
+| **Spec** | `/spec` | Capture the requirement verbatim, persist design + evidence, split into per-agent briefs + Gawande-style checkpoints. | Starting a net-new feature that needs a persisted design contract. |
+| **Spec** | `/spec-update` | Append continuation cycles to an existing spec. | A spec already exists and you're extending it another cycle. |
+| **Develop** | `/dev` | Orchestrated single-pass development pipeline. | You have one clear, single-shot requirement to build. |
+| **Develop** | `/dev-command` | Command-authoring dev pipeline. | The thing you're building is itself a command or agent. |
+| **Develop** | `/dev-overnight` | Autonomous overnight loop. | A backlog to grind through unattended, all night. |
+| **Develop** | `/redev` | Re-dev a prior cycle with a revised context. | Re-running one cycle after feedback or a revised context. |
+| **Ship** | `/close` | Release-readiness gate (QA verdict + optional Codex debate). | After dev finishes, before committing — the go/no-go gate. |
+| **Ship** | `/commit` | Surgical staging + conventional commit message + commit grant. | Once /close passes and you're ready to record the change. |
+| **Ship** | `/merge` | Bridge to target branch with pre-merge analyst grant. | After commit, to carry the change into a target branch. |
+| **Ship** | `/push` | Single-process gated push with push analyst grant. | After commit/merge, to publish the branch to remote. |
+| **Ship** | `/pull` | Post-pull advisory risk analysis. | Just pulled — you want a read on what the incoming commits touch. |
+| **Ship** | `/checkpoint` | Manual snapshot to `refs/checkpoints/<branch>`. | Want a safety snapshot without advancing HEAD or committing. |
+| **Quality** | `/clean` | Cleanup cohort (cleaner + inspectors). | Repo has drifted — stray files or style violations to sweep. |
+| **Quality** | `/test` | Test workflow (execute + validate). | You need the test suite executed and its results validated. |
+| **Control** | `/do` | Break-glass consent for the main agent, one turn (never a subagent); does not silence the bulk-commit warning. | Main agent must break the rules for one entire turn. |
+| **Control** | `/allow` | Structured single-use break-glass grant for one specific operation. | Green-light one specific blocked operation, a single time. |
+| **Control** | `/stop` | Cancel an overnight session. | Mid-overnight, to abort a running session. |
+| **Control** | `/codex` | OpenAI Codex adversarial delegation. | You want an adversarial second opinion from an outside model. |
 
 > Full, auto-maintained list: [`commands/README.md`](commands/README.md).
 
