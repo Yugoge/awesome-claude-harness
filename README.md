@@ -63,11 +63,11 @@ graph TD
 
     ORC ==>|dispatch WHAT not HOW| SUB[Subagent Pool<br/>23 agents<br/>ba → qa → dev → qa]
 
-    HL[Hook Layer<br/>40 wired entries<br/>7 lifecycle events<br/>PreToolUse · PostToolUse · Stop] -->|allow exit 0| GK[(Git Kernel<br/>git repo<br/>/tmp/ grants<br/>refs/checkpoints/*<br/>reference-transaction keystone)]
+    HL[Hook Layer<br/>40 wired entries<br/>7 lifecycle events<br/>PreToolUse / PostToolUse / Stop] -->|allow exit 0| GK[(Git Kernel<br/>git repo<br/>/tmp/ grants<br/>refs/checkpoints/HEAD<br/>reference-transaction keystone)]
     HL -->|block exit 2| BLK[/BLOCKED/]
 
     GK --> IDX[INDEX files<br/>doc-sync PostToolUse]
-    TMP[/tmp/ grants<br/>commit · push · /allow] -->|grant-keyed validation| HL
+    TMP[/tmp/ grants<br/>commit / push / /allow] -->|grant-keyed validation| HL
 
     classDef restricted fill:#ffebee,stroke:#c62828
     classDef gate fill:#fff3e0,stroke:#e67e22
@@ -81,7 +81,7 @@ graph TD
 
 ```mermaid
 flowchart TD
-    U([You: a requirement, maybe vague]) --> O{{Main Agent · ORCHESTRATOR ONLY<br/>thinks &amp; routes, does not implement}}
+    U([You: a requirement, maybe vague]) --> O{{Main Agent / ORCHESTRATOR ONLY<br/>thinks and routes, does not implement}}
 
     O -. "Edit / Write / git commit are gated<br/>at the hook layer" .-> X[/restricted/]
 
@@ -95,7 +95,7 @@ flowchart TD
 
     CLOSE --> GATE{{Git Protection Kernel<br/>grant/env or audited break-glass required}}
     GATE -->|valid grant/env or /do/matching /allow| GIT[(real commit / push / merge)]
-    GATE -->|no grant/env/break-glass or forged| BLOCK[BLOCKED · exit 2]
+    GATE -->|no grant/env/break-glass or forged| BLOCK[BLOCKED / exit 2]
 
     classDef restricted fill:#ffebee,stroke:#c62828
     classDef gate fill:#fff3e0,stroke:#e67e22
@@ -150,9 +150,9 @@ This is the part paid for in lost work. Two real incidents shaped it:
 ```mermaid
 flowchart TD
     B[Bash: a git verb] --> H1[orchestrator-gate<br/>rate-limit, /do bypass]
-    H1 --> H2[bash-safety<br/>blocks by default: stash-buffer · wide checkout · reset --hard<br/>(/do or matching /allow break-glass)]
+    H1 --> H2[bash-safety<br/>blocks by default: stash-buffer / wide checkout / reset --hard<br/>(/do or matching /allow break-glass)]
     H2 --> H3[bulk-commit-detector<br/>warns on the 93-file 'sync' shape]
-    H3 --> H4[git-privilege-guard<br/>ALWAYS-ON · the verb that actually blocks]
+    H3 --> H4[git-privilege-guard<br/>ALWAYS-ON / the verb that actually blocks]
 
     H4 --> C{which verb?}
     C -->|commit| G1{grant file present + unexpired (ISO expiry),<br/>single-use unlink?}
@@ -163,7 +163,7 @@ flowchart TD
     G1 -->|yes| OK[(allow, then unlink commit grant)]
     G2 -->|yes| OK2[(allow — push.sh manages lifecycle<br/>unlink on success, retain on failure)]
     G3 -->|yes| OK
-    G1 & G2 & G3 -->|no grant/env| NO[BLOCKED · exit 2]
+    G1 & G2 & G3 -->|no grant/env| NO[BLOCKED / exit 2]
     G4 --> NO
 
     classDef block fill:#ffebee,stroke:#c62828
@@ -206,7 +206,7 @@ Match channel for /allow: structural (`op` = first token of sub-command; `args_c
 flowchart LR
     S([/dev-overnight 6:00 fix bugs]) --> WT[linked git worktree<br/>created by launch hook]
     WT --> PM[PM: explore app w/ Playwright<br/>build test plan]
-    PM --> SP[specialists scan<br/>architect · product-owner · user · ui]
+    PM --> SP[specialists scan<br/>architect / product-owner / user / ui]
     SP --> TR[PM triage<br/>tier + route to pipelines]
     TR --> PARA[parallel BA→QA-of-BA→Dev→QA<br/>one pipeline per issue]
     PARA --> CM[end-of-cycle commit<br/>blessed bridge grant]
@@ -263,7 +263,7 @@ The orchestrator dispatches specialists by *describing the problem* — never th
 
 ---
 
-## The command surface: 35 slash commands
+## The command surface: 18 slash commands
 
 | Group | Command | What it does |
 |---|---|---|
@@ -281,27 +281,10 @@ The orchestrator dispatches specialists by *describing the problem* — never th
 | **Ship** | `/checkpoint` | Manual snapshot to `refs/checkpoints/<branch>`. |
 | **Quality** | `/clean` | Cleanup cohort (cleaner + inspectors). |
 | **Quality** | `/test` | Test workflow (execute + validate). |
-| **Quality** | `/code-review` | Code review pass. |
-| **Quality** | `/refactor` | Refactoring pass. |
-| **Quality** | `/optimize` | Optimization pass. |
-| **Quality** | `/security-check` | Security review pass. |
-| **Understand** | `/explain-code` | Code explanation. |
-| **Understand** | `/file-analyze` | File analysis (PDF/Excel/Word/images). |
-| **Understand** | `/doc-gen` | Documentation generation. |
-| **Understand** | `/doc-sync` | Documentation sync. |
-| **Research** | `/deep-search` | Fan-out, fact-checked, multi-source web research. |
-| **Research** | `/research-deep` | Deep research mode. |
-| **Research** | `/search-tree` | Recursive search tree. |
-| **Research** | `/reflect-search` | Reflective web search with self-critique. |
-| **Research** | `/site-navigate` | Structured site navigation research. |
 | **Control** | `/do` | Break-glass consent for the main agent (one turn). |
 | **Control** | `/allow` | Structured single-use break-glass grant for one specific operation. |
 | **Control** | `/stop` | Cancel an overnight session. |
 | **Control** | `/codex` | OpenAI Codex adversarial delegation. |
-| **Control** | `/quick-commit` | Fast commit path without full /close pipeline. |
-| **Control** | `/quick-prototype` | Fast prototyping path. |
-| **Control** | `/fswatch` | File-watching. |
-| **Control** | `/playwright-helper` | Playwright assistance. |
 
 **`/do`** lets the *main* agent do direct work for one turn. Recognized by the orchestrator gate, bash-safety, and the always-on git-privilege-guard — applies to the **main agent only**; a subagent never benefits from the consent flag. It does not quiet the bulk-commit detector's warning.
 
