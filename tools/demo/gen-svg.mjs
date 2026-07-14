@@ -175,7 +175,11 @@ beats.forEach((b, i) => {
   if (b.typing) {
     // typed reveal via an animated clip (discrete char-by-char) + transient caret
     const n = b.n;
-    const wVals = Array.from({ length: n + 1 }, (_, k) => k * ADV).join(';');
+    // discrete char-by-char reveal widths; pad ONLY the final step so real glyph-advance
+    // drift (~0.03px/char) can never clip the last character once fully typed.
+    const wArr = Array.from({ length: n + 1 }, (_, k) => k * ADV);
+    wArr[n] = n * ADV + 6 * ADV;
+    const wVals = wArr.join(';');
     const xVals = Array.from({ length: n + 1 }, (_, k) => CONTENT_X + k * ADV).join(';');
     const keyT = Array.from({ length: n + 1 }, (_, k) => kt(k / n)).join(';');
     const clipId = 'clip-' + ln.id;
