@@ -112,6 +112,14 @@ WGEOF
   # Suppress legacy grant — but ONLY for overwrite attempts (existing files).
   # New-file creation (non-existing file) must not be blocked by an unrelated sentinel.
   if [ "$_WG_SENTINEL_RESULT" = "valid_no_match" ] && [ -f "$FILE_PATH" ]; then
+    echo "[Write Guard] BLOCKED: sentinel grant does not cover this target." >&2
+    echo "Target: $FILE_PATH" >&2
+    echo "A valid sentinel grant exists for this task, but it does NOT name this file," >&2
+    echo "so it confers no permission to overwrite it. The grant is scoped on purpose:" >&2
+    echo "an approval for one path is not an approval for every path." >&2
+    echo "Two ways forward:" >&2
+    echo "  1. Re-issue the grant naming this exact path, if overwriting it is genuinely intended." >&2
+    echo "  2. Modify the existing file in place (Edit) instead of replacing it wholesale." >&2
     exit 2
   fi
   # /allow bypass (main-agent only) — delegates to lib/allowlist.read_grant("Write", sid)
@@ -139,8 +147,12 @@ fi
 
 # Check if the file already exists
 if [ -f "$FILE_PATH" ]; then
-  echo "[Write Guard] BLOCKED: File already exists: $FILE_PATH"
-  echo "Use the Edit tool to modify existing files. Write is only for creating NEW files."
+  echo "[Write Guard] BLOCKED: File already exists: $FILE_PATH" >&2
+  echo "Write would replace this file wholesale, so every byte of the new content has to be" >&2
+  echo "reproduced from memory. Any field you forgot to carry over, or mis-remembered, would be" >&2
+  echo "silently lost — there is no diff to reveal what went missing." >&2
+  echo "Modify the existing file IN PLACE instead (Edit), changing only the fields that need to" >&2
+  echo "change. Reserve Write for files that genuinely do not exist yet." >&2
   exit 2
 fi
 
