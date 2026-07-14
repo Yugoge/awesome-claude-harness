@@ -1,8 +1,8 @@
 # dot-claude
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-07-12T21:10:08Z*
-**Total entries**: 481
+*Last updated: 2026-07-13T11:37:20Z*
+**Total entries**: 464
 **Convention**: kebab
 
 ## Tree
@@ -37,33 +37,16 @@ dot-claude/
 │   ├── `checkpoint.md` - Checkpoint Command
 │   ├── `clean.md` - Aggressive project cleanup - normalize docs structure, archive everything, delete one-time scripts/tests. Pass --codex to enable adversarial codex consultation on cleanliness-inspector and style-inspector; default is self-review only.
 │   ├── `close.md` - Close the current dev cycle (agent infers task-id from conversation). QA evaluates Workflow Integrity bullets and returns CLOSE YES/NO. Pass --codex to enable multi-round QA-codex debate; default is QA-only single-round assessment. Append --force to skip the debate entirely.
-│   ├── `code-review.md` - Comprehensive code review with best practices analysis
 │   ├── `codex.md` - Delegate a task to OpenAI Codex CLI (gpt-5.5, xhigh reasoning) for a second opinion or parallel coding
 │   ├── `commit.md` - Commit session changes via changelog-analyst subagent
-│   ├── `deep-search.md` - Deep website exploration with iterative search strategy
 │   ├── `dev-command.md` - Enhanced development workflow with BA subagent delegation, command development best practices, Three-Party Architecture, and comprehensive automation patterns
 │   ├── `dev-overnight.md` - Autonomous overnight development loop - continuously explores codebase, finds issues, fixes them, and repeats until end-time
 │   ├── `dev.md` - Orchestrated development workflow with BA subagent delegation, parallel agent execution, and iterative QA verification. Pass --codex to enable adversarial codex consultation on each subagent's draft; default is self-review only.
 │   ├── `do.md` - Allow main agent to bypass orchestrator-gate restrictions for this turn (subagent-only operations become directly allowed). Auto-clears at stop.
-│   ├── `doc-gen.md` - Generate comprehensive documentation for code
-│   ├── `doc-sync.md` - Regenerate all INDEX.md files and patch CLAUDE.md auto-sections
-│   ├── `explain-code.md` - Deep explanation of code functionality and design
-│   ├── `file-analyze.md` - Analyze PDF, Excel, Word, images and other files with deep insights
-│   ├── `fswatch.md` - FSWatch Command
 │   ├── `merge.md` - Merge the current overnight worktree branch into the default branch (agent infers branch from active overnight state). Bare /merge typical; explicit /merge <branch> overrides. Auto-cleans worktree + branch + overnight-state file when merge succeeds and the diff is clean.
-│   ├── `optimize.md` - Analyze code for performance optimization opportunities
-│   ├── `playwright-helper.md` - Guide for using Playwright MCP with deep search commands
 │   ├── `pull.md` - Pull Command
 │   ├── `push.md` - Push Command
-│   ├── `quick-commit.md` - Create a well-formatted git commit with auto-generated message
-│   ├── `quick-prototype.md` - Rapidly create interactive prototypes and demos combining multiple artifact capabilities
 │   ├── `redev.md` - dev workflow, context-light invocation — same task semantics as /dev, but assumes the /dev workflow instructions are already loaded. Pass --codex to enable adversarial codex consultation on each subagent's draft; default is self-review only.
-│   ├── `refactor.md` - Suggest refactoring improvements for code quality
-│   ├── `reflect-search.md` - Reflection-driven iterative search with goal evaluation
-│   ├── `research-deep.md` - Multi-source deep research with 15-20 iterative searches
-│   ├── `search-tree.md` - Tree search exploration with MCTS-inspired path evaluation
-│   ├── `security-check.md` - Security vulnerability analysis and recommendations
-│   ├── `site-navigate.md` - Intelligent site navigation simulating "click-through" exploration
 │   ├── `spec-update.md` - Continuation spec update or temp session note (was /update then /spec-continue — renamed to avoid collision with MAP's /update portfolio mutation command)
 │   ├── `spec.md` - Create spec files for any dev workflow (/dev, /dev-overnight, or standalone reference). Pass --codex to enable adversarial codex consultation on each spec-subagent / QA dispatch; default is self-review only.
 │   ├── `stop.md` - Cancel active overnight time-lock + workflow-enforce so the session can terminate normally. User-invoked only — agents cannot self-stop.
