@@ -118,6 +118,21 @@ Each stage hands a verified artifact to the next; `--codex` adds an opt-in adver
 
 ---
 
+## Context-engineering guardrails
+
+| Guardrail | What it blocks | Why (context / safety) | Hook |
+|---|---|---|---|
+| Consecutive-Bash cap | 6th back-to-back `Bash` in the main agent (limit 5; only an `Agent` dispatch resets the streak) | Forces delegation before shell output floods the orchestrator's context | `pretool-orchestrator-gate.py` |
+| Non-whitelist once-per-turn | 2nd `Edit`/`Write`/`WebFetch`/… of the same tool per turn in the main agent | Keeps real edits in clean subagent contexts, not the orchestrator's | `pretool-orchestrator-gate.py` |
+| Read-size cap | Main-agent `Read` of a file >600 lines (unless sliced with `limit`≤600) | Stops one large file from swamping the lean context — delegate a summary instead | `pretool-read-size-guard.py` |
+| Write-over-existing | `Write` onto a file that already exists (forces `Edit`) | Prevents silent whole-file loss from memory-reproduced content — no diff to catch it | `pretool-write-guard.sh` |
+| No background dispatch | `Agent`/`Task` unless `run_in_background:false`; `SendMessage`/`Workflow` outright | Background agents escape harness monitoring — work stays synchronous and observable | `pretool-block-background-tasks.py` |
+| Gitignored-deliverable preflight | `Agent` dispatch when a dev-report names a gitignored file | Blocks a cycle that would pass QA yet never ship via git | `pretool-gitignore-preflight.py` |
+| Todo sequence integrity | Illegal `TodoWrite` transitions (skip, multi-complete, reorder, content edit) | Keeps the plan an auditable one-step-at-a-time ledger | `pretool-todo-validate.py` · `posttool-todo-sequence.py` |
+| Privileged-git default-deny | `commit`/`push`/`merge`/`reset --hard` without a per-op grant | See [git protection kernel](#the-git-protection-kernel) | `pretool-git-privilege-guard.py` |
+
+---
+
 ## The git protection kernel
 
 Two failure classes drove its design:
