@@ -202,7 +202,7 @@ beats.forEach((b, i) => {
         `<animate attributeName="opacity" begin="${num(b.begin)}s" dur="${num(b.dur)}s" from="0" to="1" fill="freeze"/>` +
         `<animateTransform attributeName="transform" type="translate" begin="${num(b.begin)}s" dur="${num(b.dur)}s" from="0 6" to="0 0" fill="freeze"/>` +
         `<text data-role="marker" x="${PAD_X}" y="${y}" fill="${mf}">${glyph}</text>` +
-        `<text data-trace-id="${esc(ln.id)}" x="${CONTENT_X}" y="${y}" fill="${cf}">${esc(ln.text)}</text>` +
+        `<text data-trace-id="${esc(ln.id)}" x="${CONTENT_X}" y="${y}" fill="${cf}" xml:space="preserve">${esc(ln.text)}</text>` +
       `</g>`
     );
   }
