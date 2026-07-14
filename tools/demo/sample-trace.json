@@ -1,0 +1,161 @@
+{
+  "meta": {
+    "session_title": "claude — awesome-claude-harness",
+    "footer": "composed from a real /spec→/dev→/close→/commit→/push run · stylized, condensed · not realtime · not a screen recording"
+  },
+  "lines": [
+    {
+      "id": "s01",
+      "ordinal": 1,
+      "stage": "spec",
+      "kind": "input",
+      "text": "/spec  add a paper-substrate hero to the README   (placeholder request)",
+      "source_ref": "docs/spec/hero.md",
+      "source_locator": "hero.md:1",
+      "extract_hash": "0446328d09478addbec8a30455602e2e29f53d14f45581c2cad0edaed11364d4"
+    },
+    {
+      "id": "s02",
+      "ordinal": 2,
+      "stage": "spec",
+      "kind": "artifact",
+      "text": "spec drafted — 6 checkpoints, 3 agent views   (illustrative)",
+      "source_ref": ".claude/specs/PLACEHOLDER/monolith.md",
+      "source_locator": "monolith.md:12",
+      "extract_hash": "171b72fdf422d8965309f9b501712cc7ec2978a5e3500964a1cb6382e8e93f3d"
+    },
+    {
+      "id": "s03",
+      "ordinal": 3,
+      "stage": "spec",
+      "kind": "condensation",
+      "text": "spec fan-out … 3 subagents …",
+      "count": 3,
+      "source_ref": ".claude/specs/PLACEHOLDER/",
+      "source_locator": "cp-state-*.json",
+      "extract_hash": "d8a9333c8069e3564784da516ff50e5aaa4b775b48fd9dab41e6f14a00ad694c"
+    },
+    {
+      "id": "s04",
+      "ordinal": 4,
+      "stage": "dev",
+      "kind": "input",
+      "text": "/dev  20260714-hero-demo   (placeholder task id)",
+      "source_ref": "docs/dev/ticket-PLACEHOLDER.md",
+      "source_locator": "ticket:1",
+      "extract_hash": "f6a97ada9a984ddf0dc206d8c5fe8e67485f512da5c51be501090fab09353ed4"
+    },
+    {
+      "id": "s05",
+      "ordinal": 5,
+      "stage": "dev",
+      "kind": "artifact",
+      "text": "BA context assembled — blast radius 4 files   (illustrative)",
+      "source_ref": "docs/dev/context-PLACEHOLDER.json",
+      "source_locator": "context.json:1",
+      "extract_hash": "3218df8f29b6de07c5ce492e22b8712f41b2e3afd1dcfc48d0882b6fc87effbd"
+    },
+    {
+      "id": "s06",
+      "ordinal": 6,
+      "stage": "dev",
+      "kind": "condensation",
+      "text": "Dev → QA … 4 subagents …",
+      "count": 4,
+      "source_ref": "docs/dev/dev-report-PLACEHOLDER.json",
+      "source_locator": "dev-report.json:1",
+      "extract_hash": "83f497b2af6d873cc95a4ab17d550b9c6ed10104a9f53a0d85be3f3dbd43bbbc"
+    },
+    {
+      "id": "s07",
+      "ordinal": 7,
+      "stage": "dev",
+      "kind": "artifact",
+      "text": "patch applied — 2 files, +58 −12   (illustrative)",
+      "source_ref": "PLACEHOLDER0000",
+      "source_locator": "tools/demo/gen-svg.mjs",
+      "extract_hash": "20699cf9989b6f92902e0803d03a12363e915c39548b880053727904c2d822a6"
+    },
+    {
+      "id": "s08",
+      "ordinal": 8,
+      "stage": "close",
+      "kind": "input",
+      "text": "/close",
+      "source_ref": "docs/dev/qa-report-PLACEHOLDER.json",
+      "source_locator": "qa-report.json:1",
+      "extract_hash": "ad7e3301b204e459f1d1ec1a0cabbab466b7065be740df6b8b0a9095d213164e"
+    },
+    {
+      "id": "s09",
+      "ordinal": 9,
+      "stage": "close",
+      "kind": "condensation",
+      "text": "QA ⇄ Codex debate … 3 rounds …",
+      "count": 3,
+      "source_ref": "docs/dev/close-debate-PLACEHOLDER.md",
+      "source_locator": "close-debate.md:1",
+      "extract_hash": "71e8e5c077b3a705a6a9c26b966bb47d537b237585c36214b362a19d302d69d1"
+    },
+    {
+      "id": "s10",
+      "ordinal": 10,
+      "stage": "close",
+      "kind": "verdict",
+      "text": "acceptance criteria met — placeholder verdict",
+      "source_ref": "docs/dev/qa-report-PLACEHOLDER.json",
+      "source_locator": "qa-report.json:42",
+      "extract_hash": "13c3b29bda3bd21c9adc4802f2d9412f5da47ef48aee50e1226bb6ea7ae6a9b1"
+    },
+    {
+      "id": "s11",
+      "ordinal": 11,
+      "stage": "commit",
+      "kind": "input",
+      "text": "/commit",
+      "source_ref": "docs/dev/dev-report-PLACEHOLDER.json",
+      "source_locator": "dev-report.json:1",
+      "extract_hash": "09bfbdd5077056c1280c7ef3bc054dc373121018643b977e8565a9bcceb2f2ef"
+    },
+    {
+      "id": "s12",
+      "ordinal": 12,
+      "stage": "commit",
+      "kind": "artifact",
+      "text": "conventional message written   (illustrative)",
+      "source_ref": "PLACEHOLDER0000",
+      "source_locator": "COMMIT_EDITMSG:1",
+      "extract_hash": "4b833be34c47ccbb7c38b4e0e02f57f7fa9f5e9e270c3daa9666549ad24e660d"
+    },
+    {
+      "id": "s13",
+      "ordinal": 13,
+      "stage": "commit",
+      "kind": "verdict",
+      "text": "push-gate token issued",
+      "source_ref": "/tmp/agentic-commit/PLACEHOLDER",
+      "source_locator": "push-gate.json:1",
+      "extract_hash": "8e88a83fa06a5188f669d53632fed9ada02d4a57e42b901336f71b6273e7d2f6"
+    },
+    {
+      "id": "s14",
+      "ordinal": 14,
+      "stage": "push",
+      "kind": "input",
+      "text": "/push",
+      "source_ref": "refs/heads/PLACEHOLDER",
+      "source_locator": "HEAD",
+      "extract_hash": "c40ed88da4fd1bc2159f6103736b45c98d85938451bf176d37925d4e9b22d80f"
+    },
+    {
+      "id": "s15",
+      "ordinal": 15,
+      "stage": "push",
+      "kind": "verdict",
+      "text": "pushed  0000abcd  (placeholder SHA)",
+      "source_ref": "0000abcd",
+      "source_locator": "origin/PLACEHOLDER",
+      "extract_hash": "b7a1b3102ee582e351f751fa03ce102fb662a07c3e6b54c0207dfec6591e31cc"
+    }
+  ]
+}
