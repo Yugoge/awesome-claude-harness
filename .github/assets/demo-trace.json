@@ -9,14 +9,24 @@
       "ordinal": 1,
       "stage": "spec",
       "kind": "input",
-      "text": "/spec  Document how the README hero demo is captured and why it is authentic",
-      "source_ref": "docs/dev/ticket-20260714-183239.md",
-      "source_locator": "ticket-20260714-183239.md:11",
-      "extract_hash": "ebc612ad7b888673cf571ac7f206bc938e568d44f77b107c9cc2e5e328efb53c"
+      "text": "/spec",
+      "source_ref": "commands/spec.md",
+      "source_locator": "spec.md:7",
+      "extract_hash": "987236570c52c52973fe33b4be10f7f825c21ebdcea76b87597cecb4de22a12f"
     },
     {
       "id": "s02",
       "ordinal": 2,
+      "stage": "spec",
+      "kind": "artifact",
+      "text": "Document how the README hero demo is captured and why it is authentic",
+      "source_ref": "docs/dev/ticket-20260714-183239.md",
+      "source_locator": "ticket-20260714-183239.md:11",
+      "extract_hash": "4a5fed38ec18db3257eb731dbe265006b852fd3535d4e2400d8d052b72bf1979"
+    },
+    {
+      "id": "s03",
+      "ordinal": 3,
       "stage": "spec",
       "kind": "artifact",
       "text": "every visible line traces to a real /spec→/dev→/close→/commit→/push run artifact",
@@ -25,8 +35,8 @@
       "extract_hash": "f45d744955f91c690668a92e0aef8c9bdafe87dee75d1631f1f1b380cfca4225"
     },
     {
-      "id": "s03",
-      "ordinal": 3,
+      "id": "s04",
+      "ordinal": 4,
       "stage": "spec",
       "kind": "condensation",
       "text": "spec fan-out … 1 analyst …",
@@ -36,18 +46,18 @@
       "extract_hash": "8fb3c42dcbd795f168da313fd70c7c68d6c1a42b63897970654210cc7a1ec081"
     },
     {
-      "id": "s04",
-      "ordinal": 4,
-      "stage": "dev",
-      "kind": "input",
-      "text": "/dev  20260714-183239",
-      "source_ref": "docs/dev/do-report-20260714-183239.json",
-      "source_locator": "do-report-20260714-183239.json:2",
-      "extract_hash": "1e4d72b0c273eb8dc09d00113aa595913a3532487d058f27ef1efc43e9451eab"
-    },
-    {
       "id": "s05",
       "ordinal": 5,
+      "stage": "dev",
+      "kind": "input",
+      "text": "/dev",
+      "source_ref": "commands/dev.md",
+      "source_locator": "dev.md:1509",
+      "extract_hash": "938b99e3330802a9290b64452b1b303a7efa94dd8f5fc86b6c941cf0644ce220"
+    },
+    {
+      "id": "s06",
+      "ordinal": 6,
       "stage": "dev",
       "kind": "artifact",
       "text": "Built a deterministic paper-substrate animated-SVG demo system for the README hero",
@@ -56,8 +66,8 @@
       "extract_hash": "22d7be6838515224a5bbdfbb27a13aa088cfa78fceab8ea2094de7e79fe98eb3"
     },
     {
-      "id": "s06",
-      "ordinal": 6,
+      "id": "s07",
+      "ordinal": 7,
       "stage": "dev",
       "kind": "condensation",
       "text": "Dev → QA … 2 dev subagents …",
@@ -67,18 +77,18 @@
       "extract_hash": "8e1df313e4748cfae9d0e539e33ea3b54625ca81706689bb4aead65965eab2a4"
     },
     {
-      "id": "s07",
-      "ordinal": 7,
-      "stage": "close",
-      "kind": "input",
-      "text": "/close --codex",
-      "source_ref": "docs/dev/close-report-20260714-183239.md",
-      "source_locator": "close-report-20260714-183239.md:7",
-      "extract_hash": "0b20e2f840511e701e300e5ac2c2f04c11d5dfb15f4702076fbdc6377c4e641a"
-    },
-    {
       "id": "s08",
       "ordinal": 8,
+      "stage": "close",
+      "kind": "input",
+      "text": "/close",
+      "source_ref": "commands/close.md",
+      "source_locator": "close.md:7",
+      "extract_hash": "ad7e3301b204e459f1d1ec1a0cabbab466b7065be740df6b8b0a9095d213164e"
+    },
+    {
+      "id": "s09",
+      "ordinal": 9,
       "stage": "close",
       "kind": "condensation",
       "text": "close inspectors … 2 (style, cleanliness) …",
@@ -88,8 +98,8 @@
       "extract_hash": "7a43847f44993207a4562c427cbbce69cfeb8458be0a08dc43e1e655c9625d9c"
     },
     {
-      "id": "s09",
-      "ordinal": 9,
+      "id": "s10",
+      "ordinal": 10,
       "stage": "close",
       "kind": "verdict",
       "text": "CLOSE: YES",
@@ -98,18 +108,18 @@
       "extract_hash": "0e3d7702868b45e6b04541e51f33bb4485df10fdc0e46138b22b7f5c077b865b"
     },
     {
-      "id": "s10",
-      "ordinal": 10,
+      "id": "s11",
+      "ordinal": 11,
       "stage": "commit",
       "kind": "input",
       "text": "/commit",
-      "source_ref": "62957b351d81100a7f5a7050f78f4d78b3c2d9b1",
-      "source_locator": "62957b35",
+      "source_ref": "commands/commit.md",
+      "source_locator": "commit.md:6",
       "extract_hash": "09bfbdd5077056c1280c7ef3bc054dc373121018643b977e8565a9bcceb2f2ef"
     },
     {
-      "id": "s11",
-      "ordinal": 11,
+      "id": "s12",
+      "ordinal": 12,
       "stage": "commit",
       "kind": "artifact",
       "text": "feat(demo): deterministic paper-substrate hero-SVG generator + trace audit",
@@ -118,8 +128,8 @@
       "extract_hash": "c3a7f30fdd021024e26031d91e360ec9a0548e1650f671b6a3dc2d20527433eb"
     },
     {
-      "id": "s12",
-      "ordinal": 12,
+      "id": "s13",
+      "ordinal": 13,
       "stage": "commit",
       "kind": "artifact",
       "text": "62957b35",
@@ -128,18 +138,18 @@
       "extract_hash": "461125f3ecf8212ae77368dcd186a34a8c50dca04407aa504a30c4efae4383a5"
     },
     {
-      "id": "s13",
-      "ordinal": 13,
+      "id": "s14",
+      "ordinal": 14,
       "stage": "push",
       "kind": "input",
       "text": "/push",
-      "source_ref": "62957b351d81100a7f5a7050f78f4d78b3c2d9b1",
-      "source_locator": "refs/heads/master",
+      "source_ref": "commands/push.md",
+      "source_locator": "push.md:25",
       "extract_hash": "c40ed88da4fd1bc2159f6103736b45c98d85938451bf176d37925d4e9b22d80f"
     },
     {
-      "id": "s14",
-      "ordinal": 14,
+      "id": "s15",
+      "ordinal": 15,
       "stage": "push",
       "kind": "artifact",
       "text": "7799073f..62957b35  master -> master",
