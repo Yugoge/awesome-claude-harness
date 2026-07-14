@@ -186,8 +186,8 @@ beats.forEach((b, i) => {
     );
     body.push(
       `<g data-role="line">` +
-        `<text data-role="marker" x="${PAD_X}" y="${y}" fill="${mf}" opacity="0"><set attributeName="opacity" to="1" begin="${num(b.begin)}s" fill="freeze"/></text>` +
-        `<g clip-path="url(#${esc(clipId)})"><text data-trace-id="${esc(ln.id)}" x="${CONTENT_X}" y="${y}" fill="${cf}">${esc(ln.text)}</text></g>` +
+        `<text data-role="marker" x="${PAD_X}" y="${y}" fill="${mf}" opacity="0">${glyph}<set attributeName="opacity" to="1" begin="${num(b.begin)}s" fill="freeze"/></text>` +
+        `<g clip-path="url(#${esc(clipId)})"><text data-trace-id="${esc(ln.id)}" x="${CONTENT_X}" y="${y}" fill="${cf}" xml:space="preserve">${esc(ln.text)}</text></g>` +
         `<rect data-role="caret" x="${CONTENT_X}" y="${y - 13}" width="1.5" height="16" fill="${C.ink}" opacity="0">` +
           `<set attributeName="opacity" to="1" begin="${num(b.begin)}s" fill="freeze"/>` +
           `<animate attributeName="x" begin="${num(b.begin)}s" dur="${num(b.dur)}s" calcMode="discrete" values="${xVals}" keyTimes="${keyT}" fill="freeze"/>` +
