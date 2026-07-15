@@ -20,8 +20,11 @@
 //   - SVG is self-contained: no <script>, no <style> block, no @font-face, no external refs.
 //   - tag balance (svg/g/text/clipPath).
 //
-// Usage:  node audit.mjs <manifest.json> <file.svg>
+// Usage:  node audit.mjs <manifest.json> <file.svg> [--strict]
 // Exit:   0 pass (may include non-fatal warnings), 1 on any violation.
+//         --strict (opt-in): escalate EVERY provenance downgrade (a non-fatal warning —
+//         no source_ref / unreadable / missing / gitignored / unresolvable-commit /
+//         git-unavailable) to a hard violation. Default behavior is unchanged without it.
 
 import { readFileSync, existsSync } from 'node:fs';
 import { createHash } from 'node:crypto';
