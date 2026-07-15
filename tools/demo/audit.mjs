@@ -154,6 +154,13 @@ if (/url\((?!#)/i.test(svg)) V('SVG contains a non-internal url() reference');
 const svgNoNs = svg.replace(/xmlns(:\w+)?="http:\/\/www\.w3\.org\/[^"]*"/g, '');
 if (/https?:\/\//i.test(svgNoNs)) V('SVG contains an external http(s) reference');
 
+// ---------- animation loops (intended state) ----------
+// The hero now LOOPS: the reveal plays, holds the final frame (~2.5s so the end-state stays
+// readable), then restarts forever — this replaced the earlier animate-once-freeze model, so a
+// looping SVG is the valid target. Assert the loop driver is present; this catches a regression
+// back to a one-shot frozen animation while self-containment above still forbids <script>/<style>.
+if (!/\brepeatCount="indefinite"/.test(svg)) V('SVG animation does not loop — expected repeatCount="indefinite" (animate-once-freeze is no longer the intended state)');
+
 // ---------- tag balance ----------
 for (const tag of ['svg', 'g', 'text', 'clipPath']) {
   const open = (svg.match(new RegExp(`<${tag}\\b`, 'g')) || []).length;

@@ -1,13 +1,18 @@
 # demo
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-07-14T18:46:11Z*
-**Total entries**: 0
-**Convention**: lower
+*Last updated: 2026-07-15T11:23:33Z*
+**Total entries**: 5
+**Convention**: kebab
 
 ## Tree
 ```
 demo/
+├── `audit.mjs` - mjs file
+├── `gen-svg.mjs` - mjs file
+├── `manifest.schema.md` - Trace manifest schema
+├── `sample-hook-trace.json` - JSON config: meta, lines
+└── `sample-trace.json` - JSON config: meta, lines
 ```
 <!-- /AUTO:index-stats -->
 

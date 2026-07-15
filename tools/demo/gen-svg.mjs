@@ -51,7 +51,6 @@ const PER_CHAR = 0.05;  // typing cadence
 const INPUT_TAIL = 0.8; // pause after a typed line
 const MACHINE_STEP = 1.6; // cadence between machine lines
 const MACHINE_FADE = 0.5; // fade+rise duration
-const TAIL_HOLD = 1.2;  // trailing hold before the frozen end
 
 // ---------- palette (warm paper; restraint = premium) ----------
 const C = {
@@ -63,7 +62,6 @@ const nfc = (s) => String(s).normalize('NFC');
 const esc = (s) => nfc(s)
   .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 const num = (x) => { const r = Math.round(Number(x) * 1000) / 1000; return Object.is(r, -0) ? '0' : String(r); };
-const kt = (x) => (x <= 0 ? '0' : x >= 1 ? '1' : String(Math.round(x * 10000) / 10000));
 
 function fail(msg) { process.stderr.write('gen-svg: ' + msg + '\n'); process.exit(1); }
 
@@ -128,7 +126,30 @@ for (const ln of lines) {
     t = begin + MACHINE_STEP;
   }
 }
-const TOTAL = t + TAIL_HOLD;
+
+// ---------- loop timing ----------
+// The reveal plays once, then HOLDs the final frame so the true end-state (commit SHA /
+// CLOSE: YES / the final accent line) stays readable, then restarts — forever. CYCLE is the
+// single period both heroes loop on: reveal completion + hold. Derived + deterministic.
+const HOLD = 2.5;                                    // final-frame hold (s) before the loop restarts
+let revealEnd = T_FIRST;
+for (const b of beats) revealEnd = Math.max(revealEnd, b.begin + b.dur);
+const CYCLE = revealEnd + HOLD;
+const CYC = num(CYCLE);
+const EPS = 1e-9;
+const ktL = (x) => { let r = Math.round(x * 1e6) / 1e6; if (r < 0) r = 0; if (r > 1) r = 1; return String(r); };
+// Wrap a one-shot reveal (plays over begin..begin+dur, inner keyTimes in [0,1] across that span)
+// into a full-CYCLE animation: hold the initial value until `begin`, play the reveal, hold the
+// final value through the hold, then repeatCount="indefinite" restarts it. One CYCLE, no
+// cross-element timing dependencies (each element loops independently — robust in an <img> ctx).
+function loopSched(begin, dur, vals, keys) {
+  const kB = begin / CYCLE, kE = (begin + dur) / CYCLE;
+  const V = [], K = [];
+  if (kB > EPS) { V.push(vals[0]); K.push(0); }
+  for (let j = 0; j < vals.length; j++) { V.push(vals[j]); K.push(kB + keys[j] * (kE - kB)); }
+  if (kE < 1 - EPS) { V.push(vals[vals.length - 1]); K.push(1); }
+  return { values: V.join(';'), keyTimes: K.map(ktL).join(';') };
+}
 
 // ---------- geometry ----------
 const nLines = lines.length;
@@ -165,26 +186,31 @@ body.push(`<line x1="0" y1="${CHROME_H}" x2="${W}" y2="${CHROME_H}" stroke="${C.
   if (presentStages.length > 1) {
     const xs = presentStages.map((s) => railBy[s].x).join(';');
     const ws = presentStages.map((s) => railBy[s].w).join(';');
-    const kts = presentStages.map((s, idx) => (idx === 0 ? '0' : kt(stageStart[s] / TOTAL))).join(';');
+    // one CYCLE, discrete: the marker steps to each stage as it starts, holds the final stage
+    // through the hold, then repeatCount restarts it back to the first stage.
+    const kts = presentStages.map((s, idx) => (idx === 0 ? '0' : ktL(stageStart[s] / CYCLE))).join(';');
     anim =
-      `<animate attributeName="x" begin="0s" dur="${num(TOTAL)}s" calcMode="discrete" values="${xs}" keyTimes="${kts}" fill="freeze"/>` +
-      `<animate attributeName="width" begin="0s" dur="${num(TOTAL)}s" calcMode="discrete" values="${ws}" keyTimes="${kts}" fill="freeze"/>`;
+      `<animate attributeName="x" begin="0s" dur="${CYC}s" repeatCount="indefinite" calcMode="discrete" values="${xs}" keyTimes="${kts}"/>` +
+      `<animate attributeName="width" begin="0s" dur="${CYC}s" repeatCount="indefinite" calcMode="discrete" values="${ws}" keyTimes="${kts}"/>`;
   }
   body.push(`<rect data-role="stage-marker" x="${railBy[base].x}" y="${RAIL_UNDER_Y}" width="${railBy[base].w}" height="2" fill="${C.accent}">${anim}</rect>`);
 }
 
-// stage-rail labels (active = accent, others muted; recolor as beats advance)
+// stage-rail labels (active = accent, others muted; recolor as beats advance, looping per CYCLE)
 for (const r of rail) {
   const present = r.s in stageStart;
   const idx = present ? presentStages.indexOf(r.s) : -1;
   const baseFill = idx === 0 ? C.accent : C.muted;
-  let sets = '';
-  if (idx > 0) sets += `<set attributeName="fill" to="${C.accent}" begin="${num(stageStart[r.s])}s" fill="freeze"/>`;
-  if (idx >= 0 && idx < presentStages.length - 1) {
-    const next = presentStages[idx + 1];
-    sets += `<set attributeName="fill" to="${C.muted}" begin="${num(stageStart[next])}s" fill="freeze"/>`;
+  let anim = '';
+  if (idx >= 0) {
+    // discrete fill schedule across one CYCLE: baseFill held from cycle start, accent while this
+    // stage is active, muted again once the next stage takes over — then the loop resets.
+    const vals = [baseFill], keys = [0];
+    if (idx > 0) { vals.push(C.accent); keys.push(stageStart[r.s] / CYCLE); }
+    if (idx < presentStages.length - 1) { vals.push(C.muted); keys.push(stageStart[presentStages[idx + 1]] / CYCLE); }
+    if (vals.length > 1) anim = `<animate attributeName="fill" dur="${CYC}s" repeatCount="indefinite" calcMode="discrete" values="${vals.join(';')}" keyTimes="${keys.map(ktL).join(';')}"/>`;
   }
-  body.push(`<text data-role="stage" x="${r.x}" y="${RAIL_BASE}" fill="${baseFill}" font-size="13">${esc(r.s)}${sets}</text>`);
+  body.push(`<text data-role="stage" x="${r.x}" y="${RAIL_BASE}" fill="${baseFill}" font-size="13">${esc(r.s)}${anim}</text>`);
 }
 
 // transcript lines
@@ -200,38 +226,45 @@ beats.forEach((b, i) => {
   const xContent = CONTENT_X + indent * ADV;
 
   if (b.typing) {
-    // typed reveal via an animated clip (discrete char-by-char) + transient caret
+    // typed reveal via an animated clip (discrete char-by-char) + transient caret — looping per
+    // CYCLE: the clip hides the text until this line's beat, types it out char-by-char, holds it
+    // through the final-frame hold, then the loop resets the clip to width 0 and retypes.
     const n = b.n;
     // discrete char-by-char reveal widths; pad ONLY the final step so real glyph-advance
     // drift (~0.03px/char) can never clip the last character once fully typed.
     const wArr = Array.from({ length: n + 1 }, (_, k) => k * ADV);
     wArr[n] = n * ADV + 6 * ADV;
-    const wVals = wArr.join(';');
-    const xVals = Array.from({ length: n + 1 }, (_, k) => xContent + k * ADV).join(';');
-    const keyT = Array.from({ length: n + 1 }, (_, k) => kt(k / n)).join(';');
+    const xArr = Array.from({ length: n + 1 }, (_, k) => xContent + k * ADV);
+    const innerKeys = Array.from({ length: n + 1 }, (_, k) => k / n);
+    const wSched = loopSched(b.begin, b.dur, wArr, innerKeys);
+    const xSched = loopSched(b.begin, b.dur, xArr, innerKeys);
+    const kB = ktL(b.begin / CYCLE);
+    const kE = ktL((b.begin + b.dur) / CYCLE);
     const clipId = 'clip-' + ln.id;
     defs.push(
       `<clipPath id="${esc(clipId)}"><rect x="${xContent}" y="${y - 13}" width="0" height="18">` +
-      `<animate attributeName="width" begin="${num(b.begin)}s" dur="${num(b.dur)}s" calcMode="discrete" values="${wVals}" keyTimes="${keyT}" fill="freeze"/>` +
+      `<animate attributeName="width" dur="${CYC}s" repeatCount="indefinite" calcMode="discrete" values="${wSched.values}" keyTimes="${wSched.keyTimes}"/>` +
       `</rect></clipPath>`
     );
     body.push(
       `<g data-role="line">` +
-        `<text data-role="marker" x="${xMarker}" y="${y}" fill="${mf}" opacity="0">${glyph}<set attributeName="opacity" to="1" begin="${num(b.begin)}s" fill="freeze"/></text>` +
+        `<text data-role="marker" x="${xMarker}" y="${y}" fill="${mf}" opacity="0">${glyph}<animate attributeName="opacity" dur="${CYC}s" repeatCount="indefinite" calcMode="discrete" values="0;1" keyTimes="0;${kB}"/></text>` +
         `<g clip-path="url(#${esc(clipId)})"><text data-trace-id="${esc(ln.id)}" x="${xContent}" y="${y}" fill="${cf}" xml:space="preserve">${esc(ln.text)}</text></g>` +
         `<rect data-role="caret" x="${xContent}" y="${y - 13}" width="1.5" height="16" fill="${C.ink}" opacity="0">` +
-          `<set attributeName="opacity" to="1" begin="${num(b.begin)}s" fill="freeze"/>` +
-          `<animate attributeName="x" begin="${num(b.begin)}s" dur="${num(b.dur)}s" calcMode="discrete" values="${xVals}" keyTimes="${keyT}" fill="freeze"/>` +
-          `<set attributeName="opacity" to="0" begin="${num(b.begin + b.dur)}s" fill="freeze"/>` +
+          `<animate attributeName="opacity" dur="${CYC}s" repeatCount="indefinite" calcMode="discrete" values="0;1;0" keyTimes="0;${kB};${kE}"/>` +
+          `<animate attributeName="x" dur="${CYC}s" repeatCount="indefinite" calcMode="discrete" values="${xSched.values}" keyTimes="${xSched.keyTimes}"/>` +
         `</rect>` +
       `</g>`
     );
   } else {
-    // machine line: whole-line fade + slight rise, in ordinal order
+    // machine line: whole-line fade + slight rise, in ordinal order — looping per CYCLE (hold at
+    // 0 until this beat, ramp in, hold visible through the final-frame hold, then the loop resets).
+    const opSched = loopSched(b.begin, b.dur, ['0', '1'], [0, 1]);
+    const trSched = loopSched(b.begin, b.dur, ['0 6', '0 0'], [0, 1]);
     body.push(
       `<g data-role="line" opacity="0" transform="translate(0 6)">` +
-        `<animate attributeName="opacity" begin="${num(b.begin)}s" dur="${num(b.dur)}s" from="0" to="1" fill="freeze"/>` +
-        `<animateTransform attributeName="transform" type="translate" begin="${num(b.begin)}s" dur="${num(b.dur)}s" from="0 6" to="0 0" fill="freeze"/>` +
+        `<animate attributeName="opacity" dur="${CYC}s" repeatCount="indefinite" calcMode="linear" values="${opSched.values}" keyTimes="${opSched.keyTimes}"/>` +
+        `<animateTransform attributeName="transform" type="translate" dur="${CYC}s" repeatCount="indefinite" calcMode="linear" values="${trSched.values}" keyTimes="${trSched.keyTimes}"/>` +
         `<text data-role="marker" x="${xMarker}" y="${y}" fill="${mf}">${glyph}</text>` +
         `<text data-trace-id="${esc(ln.id)}" x="${xContent}" y="${y}" fill="${cf}" xml:space="preserve">${esc(ln.text)}</text>` +
       `</g>`
@@ -254,4 +287,4 @@ ${body.join('\n')}
 `;
 const out = nfc(svg);
 writeFileSync(outPath, out, 'utf8');
-process.stdout.write(`gen-svg: wrote ${outPath} (${Buffer.byteLength(out, 'utf8')} bytes, ${nLines} lines, total ~${num(TOTAL)}s)\n`);
+process.stdout.write(`gen-svg: wrote ${outPath} (${Buffer.byteLength(out, 'utf8')} bytes, ${nLines} lines, loops every ~${CYC}s)\n`);

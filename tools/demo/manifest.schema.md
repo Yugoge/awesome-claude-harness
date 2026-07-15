@@ -64,7 +64,7 @@ verdict colors. Ordinary verdicts are emphasized with darker ink, not the accent
 
 - Deterministic: identical manifest → byte-identical SVG. No wall-clock, no randomness.
 - Self-contained: no `<script>`, no `<style>` block, no external refs, no webfonts.
-- Animate once, then freeze (`fill="freeze"`) — no infinite loop.
+- Loops indefinitely (`repeatCount="indefinite"`): plays the reveal, holds the final frame ~2.5s, then restarts.
 
 ## Auditing (`audit.mjs`)
 
