@@ -17,10 +17,10 @@ All counts below were established by enumerating the actual repository, not copi
 |---|---|---|
 | **Subagents** (`agents/*.md`, excluding `INDEX.md`/`README.md`) | **23** | `ls agents/*.md \| grep -vE '/(INDEX\|README)\.md$'` |
 | **Slash commands** (`commands/*.md`, excluding `INDEX.md`/`README.md`) | **18** | `ls commands/*.md \| grep -vE '/(INDEX\|README)\.md$'` |
-| **Hook command entries wired** in `settings.json` | **65** | sum of `hooks[*][*].hooks[]` over all lifecycle events |
-| **Distinct hook files referenced** by `settings.json` | **64** | unique `hooks/*.py\|*.sh` paths in those entries |
+| **Hook command entries wired** in `settings.json` | **67** | sum of `hooks[*][*].hooks[]` over all lifecycle events |
+| **Distinct hook files referenced** by `settings.json` | **66** (+1 = **67** paths) | unique `hooks/*.py\|*.sh` paths in those entries; the 67th wired executable is the non-hooks `scripts/canary-verify.sh` (SessionStart) → 67 distinct wired executable paths |
 | **Lifecycle events used** | **7** | keys of `settings.json.hooks` |
-| **Hook files present on disk** (`hooks/*.py` + `*.sh`, excl. `.bak`) | **86** | `find hooks -maxdepth 1 -type f \( -name '*.py' -o -name '*.sh' \)` |
+| **Hook files present on disk** (`hooks/*.py` + `*.sh`, excl. `.bak`) | **88** | `find hooks -maxdepth 1 -type f \( -name '*.py' -o -name '*.sh' \)` |
 | **Helper scripts** (`scripts/` top-level files, excl. `INDEX/README`) | **72** | `find scripts -maxdepth 1 -type f` minus docs |
 | **Skills** (`skills/*/` directories) | **8** | `ls -d skills/*/` |
 | `permissions.allow` / `deny` / `ask` entries | 162 / 95 / 30 | keys of `settings.json.permissions` |
