@@ -6,7 +6,7 @@
 
 ---
 
-## Production Catastrophe Lessons
+## Production Lessons
 
 **NON-NEGOTIABLE.**
 
