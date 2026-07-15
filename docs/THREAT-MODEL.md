@@ -40,7 +40,7 @@ are documented here so expert reviewers can audit the architecture without readi
 | Attribute | Detail |
 |---|---|
 | **Threat scenario** | An agent receives a grant for `git push origin master` and chains a second destructive command: `git push origin master; git push --force origin master`. A substring-matching allowlist would pass the compound command if the authorized string appears anywhere in it. |
-| **Incident motivation** | CLAUDE.md §"Sentinel-grant mechanism (task 20260519-211515 R2)" documents the R2 redesign that replaced free-text substring grants with structural matching. The old model was a direct bypass surface. |
+| **Incident motivation** | CLAUDE.md §"Sentinel-grant mechanism" documents the R2 redesign that replaced free-text substring grants with structural matching. The old model was a direct bypass surface. |
 | **Primary defense** | `hooks/lib/allowlist.py:435-520` — `match_sentinel_grant_for_bash_command()`. The function first splits the command into sub-commands on `&&`, `||`, `;`, and `|` (line 430-432). A compound command with `len(subcommands) != 1` returns `None` unconditionally (line 468-469). For single sub-commands it compares the **first whitespace-separated token** (after env-var skip) against `entry["op"]` by exact string equality, not substring search. The function's own docstring (line 454) states: "The function NEVER substring-matches the entry['op'] against the raw command line — that was the legacy bash-safety bypass closed by R2." |
 | **Verifying test** | `hooks/tests/test_allowlist_consolidation.py::test_compound_command_match` (compound guard); `::test_exact_or_substr_exact_match`, `::test_exact_or_substr_substring_match` (structural vs substring distinction). |
 
