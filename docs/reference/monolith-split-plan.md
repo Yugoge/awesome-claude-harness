@@ -81,6 +81,19 @@ except ImportError:                    # script context: sys.path[0] == this dir
 
 ---
 
+## Phase 2 — DONE (2026-07-15): data-table constants seam
+
+| Field | Value |
+|---|---|
+| Unit extracted | Generic verb / keyword / exec-front-end lookup tables (dependency **leaf**, literal data only) |
+| New module | `hooks/lib/runtime_guard/constants.py` (305 lines; 289 moved verbatim) |
+| Names moved | `PKG_MANAGERS`, `ENV_WRAPPERS`, `_EXEC_OPTS_WITH_ARG`, `_WRAPPER_OPTS_WITH_ARG`, `_WRAPPER_LEADING_POSITIONAL`, `_WRAPPER_POSITIONAL_OPTIONAL`, `RUNTIMES`, `_RUNTIME_SUBCOMMANDS`, `_RUNTIME_OPTS_WITH_ARG`, `EXEC_RUNNER_TOKENS`, `DEP_BUILTINS`, `MUTATION_VERBS`, `KILL_VERBS`, `SERVICE_VERBS`, `BUILD_TOOL_BASENAMES`, `DEP_SHORTHAND_NPM`, `READ_INSPECT_EDIT_ALLOWLIST`, `_GIT_READONLY_SUBCMDS`, `EXEC_FRONTEND_PROFILES` (19 tables) |
+| Re-import site | `_core.py` in-place (dual-context try/except), `# noqa: F401` |
+| Coupling | Outbound: none (pure literals, zero imports). Inbound: 83 refs, **all inside `_core`** (0 external importers). `_block` + `Verdict`/`ALLOW` anchors kept in `_core` |
+| Result | INV-1 ✓ (755→755, full suite no new fail/skip) · INV-2 ✓ (214 names, 0 missing) · INV-3 ✓ (all 3 contexts; shim script-ctx BLOCKs kill/service/pkg via moved tables) · INV-4 ✓ (byte-identical, 16123 B) · INV-5 ✓ (clean) |
+
+---
+
 ## `_core.py` — phased sequence (ascending risk)
 
 Risk is driven by **outbound** coupling (how much stays-in-`_core` code the cluster calls).
