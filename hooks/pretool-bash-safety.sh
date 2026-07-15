@@ -30,7 +30,8 @@ DAEMON_RESTART_SENTINEL_RE="$(printf '%s' "${DAEMON_RESTART_GRANT_DIR%/}/claude-
 #                                     rule "systemctl production-target guard"
 #      DAEMON_RESTART_GRANT_HELPER  <- CLAUDE_DAEMON_RESTART_GRANT_HELPER
 #                                     (default "/root/bin/claude-allow-restart")
-#                                     cosmetic: only the Layer 1.A stderr hint text; the
+#                                     cosmetic: daemon-restart stderr guidance only —
+#                                     Layer 1.A hint + Layer 1.B/1.E reason lines; the
 #                                     grant sentinel dir is DAEMON_RESTART_GRANT_DIR (above).
 #
 # 2. Local daemon units — documented, intentionally NON-env-overridable in this scope:
