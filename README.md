@@ -502,7 +502,7 @@ Everything else (`agents/`, `commands/`, `skills/`, `schemas/`, `templates/`, `t
 | PreToolUse | 30 | The gate layer: orchestrator rate-limit, bash-safety, git kernel, tool-policy, branch/PR firewall |
 | PostToolUse | 14 | Doc-sync, allowlist grant consumption, checkpoint writes |
 | Notification | 1 | User-facing notification routing |
-| Stop | 1 | Overnight timelock, allowlist reap, cp-state enforcement |
+| Stop | 4 | Overnight timelock, allowlist reap, cp-state enforcement |
 | SubagentStop | 4 | cp-state enforcement, subagent output capture |
 
 ---
