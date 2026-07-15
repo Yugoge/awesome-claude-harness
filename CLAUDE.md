@@ -1,10 +1,3 @@
-# CLAUDE.md
-
-> Project-specific settings for dot-claude
-> Last updated: 2026-07-15
-
----
-
 # Global Claude Code Configuration
 
 <!-- AUTO:last-updated -->
