@@ -11,7 +11,7 @@
 
 | Monolith | Lines | Kind | Runtime-critical | Test safety-net |
 |---|---:|---|---|---|
-| `hooks/lib/runtime_guard/_core.py` | 5136 (was 5839) | Python engine | Yes — powers the bash-safety guard | `test_runtime_guard.py` = **755 passing** |
+| `hooks/lib/runtime_guard/_core.py` | 4850 (was 5136) | Python engine | Yes — powers the bash-safety guard | `test_runtime_guard.py` = **755 passing** |
 | `commands/dev-overnight.md` | 1894 | Prompt (orchestrator) | Yes — autonomous loop | none (prompt) |
 | `agents/qa.md` | 1916 | Prompt (subagent) | Yes — QA gate | none (prompt) |
 | `commands/dev.md` | 1618 | Prompt (orchestrator) | Yes — `/dev` pipeline | none (prompt) |
