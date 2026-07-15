@@ -340,7 +340,7 @@ flowchart LR
 .claude/                     # symlink target: /dev/shm/dev-workspace/dot-claude (own git repo)
 ├── CLAUDE.md                # the constitution: non-negotiable rules (AUTO:last-updated marker)
 ├── ARCHITECTURE.md          # this document
-├── README.md                # overview / value-prop (AUTO:readme-stats block)
+├── README.md                # overview / value-prop (hand-maintained; no AUTO block)
 ├── INDEX.md                 # top-level index
 ├── settings.json            # 64 wired hook files / 65 entries across 7 lifecycle events; permissions; env
 ├── agents/                  # 23 subagent definitions  (+ INDEX.md, README.md)
