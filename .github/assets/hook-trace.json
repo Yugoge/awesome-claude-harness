@@ -1,0 +1,181 @@
+{
+  "meta": {
+    "session_title": "claude — awesome-claude-harness · hook kernel",
+    "rail": [
+      "context",
+      "safe-tools",
+      "provenance"
+    ],
+    "footer": "real hook interceptions · stylized, condensed · not a screen recording"
+  },
+  "lines": [
+    {
+      "id": "h01",
+      "ordinal": 1,
+      "stage": "context",
+      "kind": "verdict",
+      "block": true,
+      "text": "used consecutively beyond limit",
+      "source_ref": "hooks/pretool-orchestrator-gate.py",
+      "source_locator": "hooks/pretool-orchestrator-gate.py:173",
+      "extract_hash": "fc077162026dd3554c3a01d21eb721f36244823ef318ee016c379ca7fa880fe8"
+    },
+    {
+      "id": "h02",
+      "ordinal": 2,
+      "stage": "context",
+      "kind": "adaptation",
+      "text": "Delegate to a subagent (Agent tool)",
+      "source_ref": "hooks/pretool-orchestrator-gate.py",
+      "source_locator": "hooks/pretool-orchestrator-gate.py:174",
+      "extract_hash": "d77e3178a1fea94539c9052772078b9402eee71b4753714770a9c984f9a49f62"
+    },
+    {
+      "id": "h03",
+      "ordinal": 3,
+      "stage": "context",
+      "kind": "verdict",
+      "block": true,
+      "text": "[Read Size Guard] File too large:",
+      "source_ref": "hooks/pretool-read-size-guard.py",
+      "source_locator": "hooks/pretool-read-size-guard.py:84",
+      "extract_hash": "0f0f326f35adfb58123b4d8cfa4609402ad0326cf947974637adf90c0374bf96"
+    },
+    {
+      "id": "h04",
+      "ordinal": 4,
+      "stage": "context",
+      "kind": "adaptation",
+      "text": "Delegate to an Agent subagent asking it to SUMMARIZE the file",
+      "source_ref": "hooks/pretool-read-size-guard.py",
+      "source_locator": "hooks/pretool-read-size-guard.py:88",
+      "extract_hash": "7e862d94ec9af571a7d049e37f542c263470a3656e4f6b1c1c32e475c86f11ed"
+    },
+    {
+      "id": "h05",
+      "ordinal": 5,
+      "stage": "safe-tools",
+      "kind": "verdict",
+      "block": true,
+      "text": "[Write Guard] BLOCKED: File already exists:",
+      "source_ref": "hooks/pretool-write-guard.sh",
+      "source_locator": "hooks/pretool-write-guard.sh:150",
+      "extract_hash": "ea5313ef213e53ebac6f77e23533b1e3980967308917afb468629c260113aa44"
+    },
+    {
+      "id": "h06",
+      "ordinal": 6,
+      "stage": "safe-tools",
+      "kind": "adaptation",
+      "text": "Modify the existing file IN PLACE instead (Edit)",
+      "source_ref": "hooks/pretool-write-guard.sh",
+      "source_locator": "hooks/pretool-write-guard.sh:154",
+      "extract_hash": "f78c8bcb56e7e9c2e0a966352b3d0a63f2511e335cc068db4feabebabffd1d04"
+    },
+    {
+      "id": "h07",
+      "ordinal": 7,
+      "stage": "safe-tools",
+      "kind": "verdict",
+      "block": true,
+      "text": "runs in the background by default and is forbidden",
+      "source_ref": "hooks/pretool-block-background-tasks.py",
+      "source_locator": "hooks/pretool-block-background-tasks.py:113",
+      "extract_hash": "d06e3dcf7681f1b556a19f5f1685aaa97ac777b4d087ba9cd88d7c5cf491de74"
+    },
+    {
+      "id": "h08",
+      "ordinal": 8,
+      "stage": "safe-tools",
+      "kind": "adaptation",
+      "text": "Pass run_in_background=false for synchronous execution",
+      "source_ref": "hooks/pretool-block-background-tasks.py",
+      "source_locator": "hooks/pretool-block-background-tasks.py:115",
+      "extract_hash": "e1642f503ced6801ea7141b810f2ce56a13d1ff6c1fc4816832beaeca2985475"
+    },
+    {
+      "id": "h09",
+      "ordinal": 9,
+      "stage": "provenance",
+      "kind": "verdict",
+      "block": true,
+      "text": "BLOCKED: gitignored deliverables detected:",
+      "source_ref": "hooks/pretool-gitignore-preflight.py",
+      "source_locator": "hooks/pretool-gitignore-preflight.py:106",
+      "extract_hash": "ad0384d8ac809918dc590231e0a5db12a0d6b1f955f9bc3dfce6999cb70ee075"
+    },
+    {
+      "id": "h10",
+      "ordinal": 10,
+      "stage": "provenance",
+      "kind": "verdict",
+      "block": true,
+      "text": "STEP SEQUENCE VIOLATION",
+      "source_ref": "hooks/posttool-todo-sequence.py",
+      "source_locator": "hooks/posttool-todo-sequence.py:157",
+      "extract_hash": "648af0760543d3cef53f6229c3eb3fbc89bf87ad937c25571fa928283369cbe0"
+    },
+    {
+      "id": "h11",
+      "ordinal": 11,
+      "stage": "provenance",
+      "kind": "adaptation",
+      "text": "One in_progress at a time",
+      "source_ref": "hooks/posttool-todo-sequence.py",
+      "source_locator": "hooks/posttool-todo-sequence.py:160",
+      "extract_hash": "f453019d61d71b9a107f9add918754ca1d6e277820b0f13468e21f8f65fff894"
+    },
+    {
+      "id": "h12",
+      "ordinal": 12,
+      "stage": "provenance",
+      "kind": "verdict",
+      "block": true,
+      "text": "agents are not authorized to push",
+      "source_ref": "hooks/pretool-git-privilege-guard.py",
+      "source_locator": "hooks/pretool-git-privilege-guard.py:640",
+      "extract_hash": "435f0200cb2f0b171696277d2ead0b256e5b454ef372c4707c4a018dfcb7ddca"
+    },
+    {
+      "id": "h13",
+      "ordinal": 13,
+      "stage": "provenance",
+      "kind": "adaptation",
+      "text": "For automated push, use the /push slash command",
+      "source_ref": "hooks/pretool-git-privilege-guard.py",
+      "source_locator": "hooks/pretool-git-privilege-guard.py:643",
+      "extract_hash": "5761d5a64b9e8d099a8a172e3802decb43ef00f86123628a6cf43998bd0492a6"
+    },
+    {
+      "id": "h14",
+      "ordinal": 14,
+      "stage": "provenance",
+      "kind": "verdict",
+      "block": true,
+      "text": "BLOCKED: agent git commit",
+      "source_ref": "hooks/pretool-git-privilege-guard.py",
+      "source_locator": "hooks/pretool-git-privilege-guard.py:481",
+      "extract_hash": "fcab801077bf9a07c850f742a2a875d6f6ca5d0a39adc96282acb11be214b4a5"
+    },
+    {
+      "id": "h15",
+      "ordinal": 15,
+      "stage": "provenance",
+      "kind": "adaptation",
+      "text": "For closed dev tasks, use /commit <task-id>.",
+      "source_ref": "hooks/pretool-git-privilege-guard.py",
+      "source_locator": "hooks/pretool-git-privilege-guard.py:488",
+      "extract_hash": "be44b369fa5355582da306ab0e4e92c80c0ab9696eef5ab2a643a96a2cd1577b"
+    },
+    {
+      "id": "h16",
+      "ordinal": 16,
+      "stage": "provenance",
+      "kind": "verdict",
+      "text": "Main agent is the orchestrator; delegate real work to subagents.",
+      "source_ref": "CLAUDE.md",
+      "source_locator": "CLAUDE.md:44",
+      "extract_hash": "583e7c01c04f83def32206b6d57d4ec51234335692a70f89cf6d843638e60e45"
+    }
+  ]
+}
