@@ -466,7 +466,7 @@ Each row maps to a capability in the dependency table above.
 │   ├── lib/           #   shared libs: allowlist (structured sentinel grants), checkpoint-core
 │   ├── doc_sync/      #   self-updating INDEX/README/CLAUDE regeneration
 │   └── git-keystone/  #   git-native reference-transaction protection
-├── scripts/           # 72 helper scripts (graphify, spec resolver, grant writers, execute-push, …)
+├── scripts/           # 76 helper scripts (graphify, spec resolver, grant writers, execute-push, …)
 ├── skills/            # 8 skills: the Playwright UI-audit suite (+ ui-shared support)
 ├── schemas/           # JSON schemas (e.g. cycle-contract.v1.json)
 ├── policies/          # tool-policy and role-restriction definitions
