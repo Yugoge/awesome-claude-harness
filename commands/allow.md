@@ -1,5 +1,5 @@
 ---
-description: Single-use break-glass — bypass safety blocks for the next matching bash command this turn; requires an explicit narrow selector. Forms — /allow <command...> (literal, upgraded to regex only when it contains true regex metacharacters), /allow --tool <literal> (always literal, regex off), or /allow re:<regex> (explicit regex). Bare /allow with no argument is refused. Trailing tokens become an audit-log comment. Auto-expires at stop.
+description: Single-use break-glass — bypass safety blocks for the next matching bash command this turn; requires an explicit narrow selector. Forms — /allow <command...> (literal, upgraded to regex only when it contains true regex metacharacters), /allow --tool <literal> (always literal, regex off), or /allow re:<anchored-regex> (explicit regex, must be anchored). Bare /allow with no argument is refused. Trailing tokens become an audit-log comment. Auto-expires at stop.
 disable-model-invocation: true
 ---
 
