@@ -695,7 +695,7 @@ if echo "$COMMAND" | grep -qE 'happy-daemon' \
   echo "Command: $COMMAND" >&2
   echo "REASON: per c3-20260504-223115, indirect daemon-restart paths (systemd-run/at/crontab/nohup/" >&2
   echo "        timeout/dbus-send/nc/eval/bash -c/python -c) are all forbidden. Use the user-only" >&2
-  echo "        /root/bin/claude-allow-restart grant channel instead." >&2
+  echo "        $DAEMON_RESTART_GRANT_HELPER grant channel instead." >&2
   exit 2
 fi
 
