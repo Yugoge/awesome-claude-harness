@@ -342,7 +342,7 @@ flowchart LR
 ├── ARCHITECTURE.md          # this document
 ├── README.md                # overview / value-prop (hand-maintained; no AUTO block)
 ├── INDEX.md                 # top-level index
-├── settings.json            # 64 wired hook files / 65 entries across 7 lifecycle events; permissions; env
+├── settings.json            # 66 wired hook files / 67 entries across 7 lifecycle events; permissions; env
 ├── agents/                  # 23 subagent definitions  (+ INDEX.md, README.md)
 ├── commands/                # 18 slash-command workflows (+ INDEX.md, README.md)
 ├── hooks/                   # enforcement layer (86 files on disk; 64 wired)
