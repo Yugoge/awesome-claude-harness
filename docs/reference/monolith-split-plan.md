@@ -134,7 +134,7 @@ graph LR
     P1["Phase 1 DONE<br/>shell_lex.py<br/>219 ln · leaf"] --> P2["Phase 2 DONE<br/>constants.py<br/>289 ln · pure data"]
     P2 --> P3["Phase 3 DONE<br/>pathmatch.py<br/>262 ln · path/glob"]
     P3 --> P4["Phase 4 DONE<br/>config.py<br/>138 ln · cfg load"]
-    P4 --> P5["Phase 5<br/>destructive_cmds.py<br/>~950 ln · find/fd/git"]
+    P4 --> P5["Phase 5 DONE<br/>find_cmds.py 193 ln<br/>+ git_cmds.py 176 ln"]
     P5 --> P6["Phase 6<br/>anchor.py<br/>~1130 ln · anchor engine"]
     P6 --> P7["Core stays<br/>P1..P9 + evaluate/main<br/>irreducible engine"]
 ```
