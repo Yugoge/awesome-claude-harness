@@ -13,7 +13,7 @@ An operating system for Claude Code agents — orchestrator-only routing, an evi
 <img alt="commands" src="https://img.shields.io/badge/slash%20commands-18-1565c0">
 <img alt="hooks" src="https://img.shields.io/badge/lifecycle%20hooks-67%20wired%20%2F%207%20events-c62828">
 <img alt="events" src="https://img.shields.io/badge/lifecycle%20events-7-ad1457">
-<img alt="scripts" src="https://img.shields.io/badge/helper%20scripts-72-2e7d32">
+<img alt="scripts" src="https://img.shields.io/badge/helper%20scripts-76-2e7d32">
 <img alt="skills" src="https://img.shields.io/badge/skills-8-e67e22">
 <img alt="permissions" src="https://img.shields.io/badge/permissions-162%20allow%20%2F%2095%20deny%20%2F%2030%20ask-455a64">
 <img alt="license" src="https://img.shields.io/badge/license-MIT-000000">
