@@ -114,7 +114,8 @@ Supporting structural facts (verified):
 
 ### 2.4 `commands/dev-overnight.md` — proposed decomposition
 
-- **Named sections / seams:** 21 numbered `### Step N` blocks + an
+- **Named sections / seams:** 21 logical Step blocks (Step 1..21; a few — e.g. Steps
+  2-4 — render as `#### Step` sub-headings rather than `### Step`) + an
   exploration / specialist-calling sub-protocol + state-file-management + edge-cases
   appendices.
 - **Proposed named units (future):** `dev-overnight/steps-01-21.md`,
