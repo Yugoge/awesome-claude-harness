@@ -206,9 +206,10 @@ so a clean release is gated behind phases P1/P2 below. "Portable" here means
 
 Live runtime state: `sessions/`, `projects/`, `todos/`, `logs/`, `dev-registry/`,
 `worktrees/`, `specs/spec-*/`, `workflow-*.json`, `file-history/`, `statsig/`,
-`history.jsonl`, the personal `settings.json` (personal permissions + absolute `/root`
-paths), and the maintainer's `/root` symlink flows. `.gitignore` already excludes most
-of this state.
+`history.jsonl`, and the maintainer's `/root` symlink flows. `.gitignore` already
+excludes most of this state. **Exception — the personal `settings.json` is personal
+state yet is currently TRACKED** (`git ls-files` lists it), so it is a live
+public/personal boundary violation rather than a gitignored file; see §4.3 and phase P3.
 
 ### 4.3 Blurred-boundary evidence (documented as content, NOT fixed this cycle)
 
