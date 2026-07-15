@@ -131,6 +131,12 @@ Each stage hands a verified artifact to the next; `--codex` adds an opt-in adver
 | Todo sequence integrity | Illegal `TodoWrite` transitions (skip, multi-complete, reorder, content edit) | Keeps the plan an auditable one-step-at-a-time ledger | `pretool-todo-validate.py` · `posttool-todo-sequence.py` |
 | Privileged-git default-deny | `commit`/`push`/`merge`/`reset --hard` without a per-op grant | See [git protection kernel](#the-git-protection-kernel) | `pretool-git-privilege-guard.py` |
 
+<p align="center">
+  <img src=".github/assets/hook-hero.svg" alt="Animated terminal-style hero grouping real hook interceptions into three clusters — context, safe-tools, provenance — each guardrail showing the hook's verbatim block message (⊘) and its remedy (→)." width="960">
+</p>
+
+<p align="center"><sub><em>Composed from real hook interceptions — every line traces to <a href=".github/assets/hook-trace.json">.github/assets/hook-trace.json</a>. Stylized &amp; condensed, not a screen recording.</em></sub></p>
+
 ---
 
 ## The git protection kernel

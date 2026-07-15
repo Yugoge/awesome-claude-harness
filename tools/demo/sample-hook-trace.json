@@ -1,0 +1,127 @@
+{
+  "meta": {
+    "session_title": "claude — hook-aware agent",
+    "rail": [
+      "context",
+      "safe-tools",
+      "provenance"
+    ],
+    "footer": "illustrative sample · hook / context-engineering demo · placeholder content · not realtime"
+  },
+  "lines": [
+    {
+      "id": "h01",
+      "ordinal": 1,
+      "stage": "context",
+      "kind": "attempt",
+      "text": "read the full 4,200-line monolith into context",
+      "source_ref": "tools/demo/sample-hook-trace.json",
+      "source_locator": "sample-hook-trace.json",
+      "extract_hash": "281046ec217856b6ccad796c6d806816d18fe0316496ec7a3b6445ef5359f871"
+    },
+    {
+      "id": "h02",
+      "ordinal": 2,
+      "stage": "context",
+      "kind": "verdict",
+      "block": true,
+      "text": "read-size-guard · max 600 lines per Read",
+      "source_ref": "tools/demo/sample-hook-trace.json",
+      "source_locator": "sample-hook-trace.json",
+      "extract_hash": "4ca419f14ce25db536a2eba0a767373c8df78d4909afa8eebb5e860c850866a8"
+    },
+    {
+      "id": "h03",
+      "ordinal": 3,
+      "stage": "context",
+      "kind": "adaptation",
+      "text": "delegate a scoped summary to a subagent instead",
+      "source_ref": "tools/demo/sample-hook-trace.json",
+      "source_locator": "sample-hook-trace.json",
+      "extract_hash": "3ddceb2a47a54cba6a51ba3db43f69fee055de8578509300b567c05595e5b9f5"
+    },
+    {
+      "id": "h04",
+      "ordinal": 4,
+      "stage": "context",
+      "kind": "condensation",
+      "text": "context budget … 3 oversized files skipped …",
+      "count": 3,
+      "source_ref": "tools/demo/sample-hook-trace.json",
+      "source_locator": "sample-hook-trace.json",
+      "extract_hash": "16249bf23bac9b08be8371f3f2dffa256d72a8888c50703ca1cb5f2b2a102140"
+    },
+    {
+      "id": "h05",
+      "ordinal": 5,
+      "stage": "safe-tools",
+      "kind": "attempt",
+      "text": "git checkout -b hotfix then force-push",
+      "source_ref": "tools/demo/sample-hook-trace.json",
+      "source_locator": "sample-hook-trace.json",
+      "extract_hash": "829bd520101445c89c71c60c14a1aaef5757fba500495a3c7ee72f269a74cf55"
+    },
+    {
+      "id": "h06",
+      "ordinal": 6,
+      "stage": "safe-tools",
+      "kind": "verdict",
+      "block": true,
+      "text": "block-branch-pr-worktree · no branch / PR / worktree",
+      "source_ref": "tools/demo/sample-hook-trace.json",
+      "source_locator": "sample-hook-trace.json",
+      "extract_hash": "b57bd62c87f9ab8b0604815eabd526ec3a1cb25d5c69f1e996fcf010ff108466"
+    },
+    {
+      "id": "h07",
+      "ordinal": 7,
+      "stage": "safe-tools",
+      "kind": "adaptation",
+      "text": "edit in place on the current branch instead",
+      "source_ref": "tools/demo/sample-hook-trace.json",
+      "source_locator": "sample-hook-trace.json",
+      "extract_hash": "34618ae330fa89c60ae92dc1e47cd95377ccdcae603dc39b802a93b6aac42ef9"
+    },
+    {
+      "id": "h08",
+      "ordinal": 8,
+      "stage": "provenance",
+      "kind": "attempt",
+      "text": "commit the fix without a grant",
+      "source_ref": "tools/demo/sample-hook-trace.json",
+      "source_locator": "sample-hook-trace.json",
+      "extract_hash": "a4beca3d4f01b35f4bbb661fd79146e462d9b4a04a160d366712bebb62690758"
+    },
+    {
+      "id": "h09",
+      "ordinal": 9,
+      "stage": "provenance",
+      "kind": "verdict",
+      "block": true,
+      "text": "git-privilege-guard · commit needs a valid grant",
+      "source_ref": "tools/demo/sample-hook-trace.json",
+      "source_locator": "sample-hook-trace.json",
+      "extract_hash": "1eab167608319866020c988cca8d1728c5e8be08a5d4683e10345fc162ccac1e"
+    },
+    {
+      "id": "h10",
+      "ordinal": 10,
+      "stage": "provenance",
+      "kind": "adaptation",
+      "text": "hand the edits to the commit pipeline instead",
+      "source_ref": "tools/demo/sample-hook-trace.json",
+      "source_locator": "sample-hook-trace.json",
+      "extract_hash": "a33816c0f6ed9693222adbe1c212c8222ff51c14a15512c6a3abede968b1c536"
+    },
+    {
+      "id": "h11",
+      "ordinal": 11,
+      "stage": "provenance",
+      "kind": "artifact",
+      "text": "every attempt traced to a hook decision",
+      "source_ref": "tools/demo/sample-hook-trace.json",
+      "source_locator": "sample-hook-trace.json",
+      "extract_hash": "95d74390b2e762dd5522c42c7fe18361efbcfc0c7b5ea131370b1cad247394ed"
+    }
+  ]
+}

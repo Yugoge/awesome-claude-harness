@@ -20,8 +20,8 @@
       "stage": "spec",
       "kind": "artifact",
       "text": "Document how the README hero demo is captured and why it is authentic",
-      "source_ref": "docs/dev/ticket-20260714-183239.md",
-      "source_locator": "ticket-20260714-183239.md:11",
+      "source_ref": ".github/assets/pipeline-hero-sources.json",
+      "source_locator": "s02",
       "extract_hash": "4a5fed38ec18db3257eb731dbe265006b852fd3535d4e2400d8d052b72bf1979"
     },
     {
@@ -30,8 +30,8 @@
       "stage": "spec",
       "kind": "artifact",
       "text": "every visible line traces to a real /spec→/dev→/close→/commit→/push run artifact",
-      "source_ref": "docs/dev/ticket-20260714-183239.md",
-      "source_locator": "ticket-20260714-183239.md:11",
+      "source_ref": ".github/assets/pipeline-hero-sources.json",
+      "source_locator": "s03",
       "extract_hash": "f45d744955f91c690668a92e0aef8c9bdafe87dee75d1631f1f1b380cfca4225"
     },
     {
@@ -41,8 +41,8 @@
       "kind": "condensation",
       "text": "spec fan-out … 1 analyst …",
       "count": 1,
-      "source_ref": "docs/dev/ticket-20260714-183239.md",
-      "source_locator": "ticket-20260714-183239.md:1",
+      "source_ref": ".github/assets/pipeline-hero-sources.json",
+      "source_locator": "s04",
       "extract_hash": "8fb3c42dcbd795f168da313fd70c7c68d6c1a42b63897970654210cc7a1ec081"
     },
     {
@@ -61,8 +61,8 @@
       "stage": "dev",
       "kind": "artifact",
       "text": "Built a deterministic paper-substrate animated-SVG demo system for the README hero",
-      "source_ref": "docs/dev/do-report-20260714-183239.json",
-      "source_locator": "do-report-20260714-183239.json:8",
+      "source_ref": ".github/assets/pipeline-hero-sources.json",
+      "source_locator": "s06",
       "extract_hash": "22d7be6838515224a5bbdfbb27a13aa088cfa78fceab8ea2094de7e79fe98eb3"
     },
     {
@@ -72,8 +72,8 @@
       "kind": "condensation",
       "text": "Dev → QA … 2 dev subagents …",
       "count": 2,
-      "source_ref": "docs/dev/do-report-20260714-183239.json",
-      "source_locator": "do-report-20260714-183239.json:8",
+      "source_ref": ".github/assets/pipeline-hero-sources.json",
+      "source_locator": "s07",
       "extract_hash": "8e1df313e4748cfae9d0e539e33ea3b54625ca81706689bb4aead65965eab2a4"
     },
     {
@@ -93,8 +93,8 @@
       "kind": "condensation",
       "text": "close inspectors … 2 (style, cleanliness) …",
       "count": 2,
-      "source_ref": "docs/dev/close-report-20260714-183239.md",
-      "source_locator": "close-report-20260714-183239.md:53",
+      "source_ref": ".github/assets/pipeline-hero-sources.json",
+      "source_locator": "s09",
       "extract_hash": "7a43847f44993207a4562c427cbbce69cfeb8458be0a08dc43e1e655c9625d9c"
     },
     {
@@ -103,8 +103,8 @@
       "stage": "close",
       "kind": "verdict",
       "text": "CLOSE: YES",
-      "source_ref": "docs/dev/close-report-20260714-183239.md",
-      "source_locator": "close-report-20260714-183239.md:78",
+      "source_ref": "commands/close.md",
+      "source_locator": "close.md:423",
       "extract_hash": "0e3d7702868b45e6b04541e51f33bb4485df10fdc0e46138b22b7f5c077b865b"
     },
     {
