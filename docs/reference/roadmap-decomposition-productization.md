@@ -230,7 +230,7 @@ These are recorded here as boundary evidence; **fixing them is out of scope this
 |---|---|---|---|
 | **P1** | Inventory every personal reference in the tracked core | a leakage register (file:line list of `/root` / maintainer refs) | §4.3 evidence |
 | **P2** | Parameterize `/root` / absolute paths to `$HOME` / `$CLAUDE_HOME` | scripts + prompts read env vars, no hardcoded personal paths | P1 register |
-| **P3** | Make `settings.template.json` the canonical shipped config; generate personal `settings.json` from it | one template → generated personal config | existing `settings.template.json` |
+| **P3** | Make `settings.template.json` the canonical shipped config; generate the personal `settings.json` from it, then **untrack and gitignore** that personal `settings.json` (it is tracked today — a boundary violation) | one template → generated, gitignored personal config | existing `settings.template.json` |
 | **P4** | Publish a clean tree containing only the portable core + templates | a release surface with zero personal state | P1..P3 complete |
 
 ---
