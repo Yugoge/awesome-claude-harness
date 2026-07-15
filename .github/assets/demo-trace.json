@@ -61,8 +61,8 @@
       "stage": "dev",
       "kind": "artifact",
       "text": "Built a deterministic paper-substrate animated-SVG demo system for the README hero",
-      "source_ref": "docs/dev/do-report-20260714-183239.json",
-      "source_locator": "do-report-20260714-183239.json:8",
+      "source_ref": ".github/assets/pipeline-hero-sources.json",
+      "source_locator": "s06",
       "extract_hash": "22d7be6838515224a5bbdfbb27a13aa088cfa78fceab8ea2094de7e79fe98eb3"
     },
     {
