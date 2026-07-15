@@ -72,8 +72,8 @@
       "kind": "condensation",
       "text": "Dev → QA … 2 dev subagents …",
       "count": 2,
-      "source_ref": "docs/dev/do-report-20260714-183239.json",
-      "source_locator": "do-report-20260714-183239.json:8",
+      "source_ref": ".github/assets/pipeline-hero-sources.json",
+      "source_locator": "s07",
       "extract_hash": "8e1df313e4748cfae9d0e539e33ea3b54625ca81706689bb4aead65965eab2a4"
     },
     {
