@@ -255,15 +255,20 @@ monoliths have no zero-behavior-change split available at all (no transclusion
 mechanism, no test net — see §3).
 
 **One bounded FUTURE phase-0 candidate is identified (not authorized, not performed):**
-carve ONLY the stateless path/glob/quote helper cluster out of `_core.py` into
+carve ONLY the path/glob/quote helper cluster out of `_core.py` into
 `runtime_guard/_paths.py` (the `_normalize_path`, `_glob_to_segment_regex`,
 `_glob_literal_prefix`, `_strip_quotes`, `_expand_leading_home`, `_dir_equal_or_under`
-family — see §2.6), gated by (1) a dependency / import-surface **preflight** confirming
-the cluster has no shared mutable state or config coupling, and (2) the full **405-test**
-suite as a **byte-for-byte before/after pass-set identity check**. It is the smallest,
-purest cluster and would be the natural first step of a future multi-cycle effort — but
-it is **a candidate, identified and DEFERRED**, explicitly **not green-lit** and
-**not performed** this cycle.
+family — see §2.6). These helpers do no writes and have no config coupling, but they are
+**environment-dependent** (`_normalize_path` / `_expand_leading_home` read `HOME`) and
+carry an intra-cluster dependency (`_glob_literal_prefix` calls `_has_shell_glob`), so
+they are *pure-ish*, not strictly stateless. The move is gated by (1) a dependency /
+import-surface **preflight** that confirms no shared mutable state or config coupling,
+enumerates every called helper so none is left behind, and pins the `HOME`-reading
+behavior, and (2) the full **405-test** suite as a **before/after pass-set identity
+check** (which regression-verifies covered behavior). It is the smallest, purest cluster
+and would be the natural first step of a future multi-cycle effort — but it is **a
+candidate, identified and DEFERRED**, explicitly **not green-lit** and **not performed**
+this cycle.
 
 **One-line phase-0 verdict:** *no clearly-safe extraction is authorized this cycle;
 exactly one bounded candidate (`_core.py` → `_paths.py` pure utils) is identified and
