@@ -157,7 +157,8 @@ Flat module of ~143 functions in clear name-prefix clusters. Proposed submodules
   parser that decides whether destructive bash is blocked. A regression silently
   *weakens the guard*. This is the highest-cost file to get wrong. It is also the ONLY
   monolith with a strong behavioral safety net (405 tests), so it is the only file
-  where a zero-behavior-change extraction is *verifiable*.
+  where a zero-behavior-change extraction is *regression-verifiable* (for covered
+  behavior — tests regression-check, they do not prove full equivalence).
 - **Safe sequence + per-step verification:**
   1. Extract the **purest** cluster first — the stateless path/glob/quote helpers into
      `runtime_guard/_paths.py`, re-imported by `_core.py`. One small cluster per PR.
