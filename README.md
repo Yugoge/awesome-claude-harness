@@ -503,7 +503,7 @@ Everything else (`agents/`, `commands/`, `skills/`, `schemas/`, `templates/`, `t
 | PostToolUse | 14 | Doc-sync, allowlist grant consumption, checkpoint writes |
 | Notification | 1 | User-facing notification routing |
 | Stop | 4 | Overnight timelock, allowlist reap, cp-state enforcement |
-| SubagentStop | 4 | cp-state enforcement, subagent output capture |
+| SubagentStop | 6 | cp-state enforcement, subagent output capture |
 
 ---
 
