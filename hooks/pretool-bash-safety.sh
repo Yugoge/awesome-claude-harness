@@ -148,7 +148,7 @@ fi
 
 # ── Dev whitelist (exact names only) ──────────────────────────────
 # These are the ONLY dev resources that can be freely managed.
-DEV_CONTAINERS="happy-web-dev"
+DEV_CONTAINERS="${CLAUDE_DEV_CONTAINERS:-happy-web-dev}"
 # Per c3-20260504-223115 R1: happy-daemon-dev is REMOVED from the systemctl whitelist.
 # All happy-daemon-* targets are gated by Layer 1.A (daemon-restart-prohibition) which
 # requires an explicit user grant via /root/bin/claude-allow-restart. The systemctl block
