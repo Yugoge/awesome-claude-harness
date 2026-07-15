@@ -115,31 +115,42 @@ def normalize(text):
 def line_of(text, off):
     return text.count("\n", 0, off) + 1
 
-# NUMBER tightly bound to its metric noun. "N wired hook files" is excluded by the negative
-# lookahead (that is the distinct-files metric, not entries).
+# WIRED (entry-count) patterns as (regex, exclusion_eligible). EXPLICIT "... entries"
+# phrasings ("N wired hook command entries", "N entries", table "entries wired ... **N**")
+# are ALWAYS enforced. Only a BARE "N wired" (ambiguous with the distinct-files count) is
+# subject to the different-metric left-context exclusion. A distinct-files phrasing
+# ("N wired hook files") is never captured — the bare pattern's lookahead rejects it.
 WIRED_PATS = [
-    re.compile(r'(\d+)\s*wired\b(?!\s+(?:hook\s+)?files)', re.I),
-    re.compile(r'(\d+)\s+(?:wired\s+)?(?:hook\s+)?entries\b', re.I),
-    re.compile(r'entries\s+wired\b[^\d\n]{0,40}?(\d+)', re.I),
+    (re.compile(r'(\d+)\s+wired\s+(?:hook\s+)?(?:command\s+)?entries\b', re.I), False),
+    (re.compile(r'(\d+)\s+(?:hook\s+)?(?:command\s+)?entries\b', re.I), False),
+    (re.compile(r'entries\s+wired\b[^\n]*?\*\*(\d+)\*\*', re.I), False),
+    (re.compile(r'(\d+)\s+wired\b(?!\s+(?:hook\s+|command\s+)*(?:entries|files))', re.I), True),
 ]
+# EVENT (lifecycle-event) patterns — every one requires explicit lifecycle/hook context so a
+# bare "N events" in unrelated prose is never matched (no false-fail). Covers "N lifecycle
+# events", the "lifecycle events[-/used] N" table/badge form, and the README badge whose
+# event count trails a "lifecycle hooks-... / N events" run.
 EVENT_PATS = [
-    re.compile(r'(\d+)\s*(?:lifecycle\s+)?events\b', re.I),
-    re.compile(r'(?:lifecycle\s+)?events\b[\s\-|:*]*(?:used[\s\-|:*]*)?(\d+)', re.I),
+    (re.compile(r'(\d+)\s+lifecycle\s+events\b', re.I), False),
+    (re.compile(r'lifecycle\s+events\b[\s\-|:*]*(?:used[\s\-|:*]*)?(\d+)', re.I), False),
+    (re.compile(r'lifecycle\s+hooks-[^"\n]*?/\s*(\d+)\s+events\b', re.I), False),
 ]
 
 def excluded(text, pos):
-    # Skip a number whose immediate left context is an explicit different-metric clause
-    # ("... on disk; 64 wired", "64 distinct ... 65 entries") — those are not the enforced
-    # wired-entry count.
+    # Skip a BARE "N wired" whose immediate left context is an explicit different-metric
+    # clause ("... 88 files on disk; 66 wired") — that is the distinct-files count, not the
+    # wired-entry count. Explicit "... entries" matches never reach this (excl_eligible=False).
     pre = text[max(0, pos - 24):pos].lower()
     return ('on disk' in pre) or ('on-disk' in pre) or ('distinct' in pre)
 
 def collect(text, path, pats, expected, label):
     found, seen = [], set()
-    for pat in pats:
+    for pat, excl_eligible in pats:
         for m in pat.finditer(text):
             pos = m.start(1)
-            if pos in seen or excluded(text, pos):
+            if pos in seen:
+                continue
+            if excl_eligible and excluded(text, pos):
                 continue
             seen.add(pos)
             found.append((int(m.group(1)), line_of(text, pos)))
