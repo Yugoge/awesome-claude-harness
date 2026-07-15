@@ -145,7 +145,7 @@ Flat module of ~143 functions in clear name-prefix clusters. Proposed submodules
 
 | Proposed submodule | Cluster (evidenced function prefixes) | Purity |
 |---|---|---|
-| `runtime_guard/_paths.py` | `_normalize_path`, `_glob_to_segment_regex`, `_glob_literal_prefix`, `_strip_quotes`, `_expand_leading_home`, `_dir_equal_or_under` | **stateless, side-effect-free** (phase-0 candidate — §5) |
+| `runtime_guard/_paths.py` | `_normalize_path`, `_glob_to_segment_regex`, `_glob_literal_prefix`, `_strip_quotes`, `_expand_leading_home`, `_dir_equal_or_under` (+ the intra-cluster helper `_has_shell_glob` that `_glob_literal_prefix` transitively needs) | **no writes / no config coupling, but environment-dependent** (`_normalize_path` / `_expand_leading_home` read `HOME`); phase-0 candidate — §5 |
 | `runtime_guard/_shlex.py` | `_split_pipeline`, `_safe_shlex`, `_command_substitutions`, `_pipeline_groups` | mostly stateless parsing |
 | `runtime_guard/_config.py` | `_load_config`, `_config_*` | **has I/O + global state** — extract last |
 | `runtime_guard/_classify.py` | `_step0`, `_step1`, … classifier pipeline | orchestration core — extract last |
