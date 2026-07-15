@@ -5,7 +5,7 @@ Organization and usage documentation for `scripts/`.
 <!-- AUTO:readme-stats -->
 
 ## Overview
-- **Total files**: 80
+- **Total files**: 82
 - **Subdirectories**: 5
 - **Naming convention**: kebab
 
@@ -23,6 +23,7 @@ Organization and usage documentation for `scripts/`.
 - `check-file-references.sh` - File reference detection script - used by /clean command
 - `check-overnight-reports.py` - Description: Validates all overnight required outputs declared by the active
 - `check-overnight-reports.sh` - DEPRECATED — replaced by check-overnight-reports.py per spec-20260426-090235 P0/M5.
+- `check-public-core.sh` - Description: Public/private boundary gate. Recomputes the top-level tracked-path set from
 - `check-readme-freshness.sh` - Check README.md freshness for all major folders
 - `check-security-hook-drift.sh` - Description: Audit always-on security-critical hook files against a cycle baseline SHA
 - `checkpoint-prune.sh` - checkpoint-prune.sh — trim refs/checkpoints/* to the most recent N commits
@@ -80,6 +81,7 @@ Organization and usage documentation for `scripts/`.
 - `test` - test file
 - `update-gitignore.sh` - update-gitignore.sh - Auto-update .gitignore with project-specific rules
 - `update-overnight-state.sh` - update-overnight-state.sh — Atomically update overnight state file
+- `verify-claims.sh` - Description: Self-verifying headline-claims gate. Recomputes the wired-hook entry count and
 - `write-bulk-commit-sentinel.py` - Invoked from commands/commit.md Step 5 (BULK=true) to authorize the
 - `write-codex-enforce.sh` - Writes codex-enforce.json into the dev-registry for the given session.
 - `write-commit-grant.py` - Invoked from `commands/commit.md` Step 5 (non-bulk mode) to author a

@@ -1,8 +1,8 @@
 # reference
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-07-15T15:08:40Z*
-**Total entries**: 8
+*Last updated: 2026-07-15T18:00:26Z*
+**Total entries**: 11
 **Convention**: kebab
 
 ## Tree
@@ -10,9 +10,12 @@
 reference/
 ├── `checkpoint-mechanism.md` - Auto-Commit / Checkpoint Mechanism
 ├── `fswatch-quickref.md` - FSWatch Quick Reference Card
+├── `generated-tests-policy.md` - `tests/generated/` policy — tracked but ignored, on purpose
 ├── `git-fswatch.md` - Git File Watcher (fswatch) Documentation
 ├── `graphify-integration.md` - Graphify Knowledge Graph Integration
 ├── `lock-file-handling.md` - Git Lock File Handling
+├── `monolith-split-plan.md` - Monolith Split Plan (Plan-of-Record)
+├── `roadmap-decomposition-productization.md` - Roadmap: Monolith Decomposition + Productization
 ├── `slashcommand-quick-reference.md` - Slash Command Quick Reference
 ├── `tmp-cleanup-convention.md` - Ad-hoc scratch directory convention
 └── `venv-repair.md` - venv-repair — restoring `~/.claude/venv` when interpreter symlinks break
