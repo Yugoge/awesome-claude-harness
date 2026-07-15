@@ -11,7 +11,7 @@
 
 | Monolith | Lines | Kind | Runtime-critical | Test safety-net |
 |---|---:|---|---|---|
-| `hooks/lib/runtime_guard/_core.py` | 5217 (was 5839) | Python engine | Yes — powers the bash-safety guard | `test_runtime_guard.py` = **755 passing** |
+| `hooks/lib/runtime_guard/_core.py` | 5136 (was 5839) | Python engine | Yes — powers the bash-safety guard | `test_runtime_guard.py` = **755 passing** |
 | `commands/dev-overnight.md` | 1894 | Prompt (orchestrator) | Yes — autonomous loop | none (prompt) |
 | `agents/qa.md` | 1916 | Prompt (subagent) | Yes — QA gate | none (prompt) |
 | `commands/dev.md` | 1618 | Prompt (orchestrator) | Yes — `/dev` pipeline | none (prompt) |
@@ -108,6 +108,22 @@ except ImportError:                    # script context: sys.path[0] == this dir
 
 ---
 
+## Phase 4 — DONE (2026-07-15): config-loading seam
+
+| Field | Value |
+|---|---|
+| Unit extracted | Config-file loader + STEP0 self-protection cluster (near-leaf: imports only `shell_lex._strip_quotes`/`_has_redirect_to` + `pathmatch._normalize_path` + stdlib) |
+| New module | `hooks/lib/runtime_guard/config.py` (184 lines; 138 moved verbatim) |
+| Names moved | `DATA_FILE_PATH`, `REQUIRED_KEYS`, `_load_config`, `_home_tilde_variant`, `_config_path_variants`, `_ANCESTOR_STOP_ROOTS`, `_config_ancestor_dirs`, `_config_or_ancestor_variants`, `_targets_config_file` (9 names) |
+| Cluster-completion move | `_ANCESTOR_STOP_ROOTS` (a private stop-root frozenset) is called by `_config_ancestor_dirs` (moved) **and** at one later `_core` site. Lifting it WITH the cluster — vs. leaving it in `_core` — avoids a `config`→`_core` back-import cycle (INV-6). It is re-imported into `_core` so the later site still resolves and the public surface is unchanged. It was outside the plan's headline name list but belongs to the cluster |
+| DATA_FILE_PATH import-time semantics | `DATA_FILE_PATH = os.environ.get(...)` is evaluated at config's MODULE-IMPORT time. Tests set the env then `importlib.reload(rg)`; the package `__init__` reloads `_core` (NOT its siblings), so a plain `from .config import DATA_FILE_PATH` on an `_core` reload would re-bind the STALE cached value. `_core` therefore `importlib.reload`s `config` on every `_core` (re)load, re-running config's module-level env read. Still import-time, NOT a lazy/function read. Verified: DATA_FILE_PATH tracks env A→B→unset-default across reloads |
+| Re-import site | `_core.py` in-place (dual-context try/except + `_importlib.reload(_config)`), `# noqa: F401` |
+| Coupling | Outbound: `shell_lex` (`_strip_quotes`, `_has_redirect_to`) + `pathmatch` (`_normalize_path`) + stdlib — **no `constants` dep** (the roadmap listed `constants` as an upper bound; the moved bodies reference none). Inbound: all refs inside `_core` (0 external importers; only `test_runtime_guard.py` imports via the package). `CONFIG_MUTATION_HEADS`, `_STEP0_MUTATION_HEADS`, and the STEP0 decision sites stay in `_core` |
+| Script-context collision check | The new sibling is `config.py`; in script context `sys.path[0]` is the package dir, so `from config import …` must resolve THIS module. Confirmed: `config.__file__` resolves to `runtime_guard/config.py` even with a decoy `config.py` on `PYTHONPATH` (`sys.path[0]` precedes PYTHONPATH/site-packages; no stdlib `config` exists) |
+| Result | INV-1 ✓ (755→755; full `hooks/tests` 1132 passed / 9 xpassed, no new fail/skip) · INV-2 ✓ (0 missing; moved names are object-identity re-exports, `_core.X is rg.X`) · INV-3 ✓ (all 3 contexts; shim script-ctx BLOCKs the protected config file + config-dir `dir/*` glob, benign ALLOWs — the moved STEP0 matchers still ACT; DATA_FILE_PATH env-read preserved at import time) · INV-4 ✓ (byte-identical slices, script-verified) · INV-5 ~ (pre-existing `/root` illustrative comments + the generic `_ANCESTOR_STOP_ROOTS` POSIX roots relocated verbatim — no `happy`/project names; byte-identity gate governs, as in phase 3) |
+
+---
+
 ## `_core.py` — phased sequence (ascending risk)
 
 Risk is driven by **outbound** coupling (how much stays-in-`_core` code the cluster calls).
@@ -117,7 +133,7 @@ Leaves first; the decision engine last.
 graph LR
     P1["Phase 1 DONE<br/>shell_lex.py<br/>219 ln · leaf"] --> P2["Phase 2 DONE<br/>constants.py<br/>289 ln · pure data"]
     P2 --> P3["Phase 3 DONE<br/>pathmatch.py<br/>262 ln · path/glob"]
-    P3 --> P4["Phase 4<br/>config.py<br/>~125 ln · cfg load"]
+    P3 --> P4["Phase 4 DONE<br/>config.py<br/>138 ln · cfg load"]
     P4 --> P5["Phase 5<br/>destructive_cmds.py<br/>~950 ln · find/fd/git"]
     P5 --> P6["Phase 6<br/>anchor.py<br/>~1130 ln · anchor engine"]
     P6 --> P7["Core stays<br/>P1..P9 + evaluate/main<br/>irreducible engine"]
@@ -125,7 +141,6 @@ graph LR
 
 | Phase | Module | Cluster (representative names) | Outbound deps | Risk | Key note |
 |---|---|---|---|---|---|
-| 4 | `config.py` | `_load_config`, `_config_path_variants`, `_config_ancestor_dirs`, `_config_or_ancestor_variants`, `_targets_config_file`, `_home_tilde_variant`, `REQUIRED_KEYS`, `DATA_FILE_PATH` | pathmatch + constants | **Med** | Owns `DATA_FILE_PATH` (env-overridable) — tests set it via env, so the module-level read must stay import-time |
 | 5 | `destructive_cmds.py` | `_fd_*`, `_find_*` (find/fd destructive analysis) + `_git_*` (`_git_destructive_pathspecs`, `_git_is_destructive_invocation`, `_strip_git_pathspec_magic`, …) | pathmatch + config + constants | **Med-High** | Two cohesive command-family parsers; may split into `find_cmds.py` + `git_cmds.py` if the combined diff is unreviewable |
 | 6 | `anchor.py` | `_anchor_*` family + `_p0_anchor` (`_anchor_exec_tokens`, `_anchor_in_command_word_position`, `_anchor_mutation_hits`, `_anchor_build_hits_protected`, …) | all shared helpers + `cfg` | **High** | Extract only after 2–5 stabilize the shared-helper surface; heaviest inbound/outbound coupling |
 | — | stays in `_core.py` | `_p1_launch`…`_p9_pkgscript`, `_step0_*`, `_step1_indeterminate`, `evaluate`, `main` | — | — | The irreducible decision orchestrator. Not a "lift"; at most a final rename to `engine.py` with a re-export shim |

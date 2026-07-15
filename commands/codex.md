@@ -1,5 +1,5 @@
 ---
-description: Delegate a task to OpenAI Codex CLI (gpt-5.5, xhigh reasoning) for a second opinion or parallel coding
+description: Delegate a task to OpenAI Codex CLI (gpt-5.6-sol, xhigh reasoning) for a second opinion or parallel coding
 argument-hint: [prompt or --review or --model <model> <prompt>]
 allowed-tools: [Bash, Read, Glob, Grep]
 ---
@@ -59,7 +59,7 @@ If codex's finding conflicts with the user's stated requirement (e.g. codex dema
 If `$ARGUMENTS` is empty or blank, print this usage guide and stop:
 
 ```
-Usage: /codex <prompt>              — run codex exec with the given prompt (default: gpt-5.5, reasoning: xhigh)
+Usage: /codex <prompt>              — run codex exec with the given prompt (default: gpt-5.6-sol, reasoning: xhigh)
        /codex --review              — run codex review on the current directory
        /codex --model <model> <prompt> — use a specific model (still xhigh reasoning)
 
@@ -75,7 +75,7 @@ Otherwise, proceed:
 
 - If `$ARGUMENTS` starts with `--review`, run **review mode**.
 - If `$ARGUMENTS` starts with `--model`, extract the model name and the rest as the prompt, then run **exec mode** with `--model <model>`.
-- Otherwise, run **exec mode** with the full `$ARGUMENTS` as the prompt (no `--model` flag — uses gpt-5.5 default with xhigh reasoning).
+- Otherwise, run **exec mode** with the full `$ARGUMENTS` as the prompt (no `--model` flag — uses gpt-5.6-sol default with xhigh reasoning).
 
 ### 2. Generate unique output path
 
@@ -124,9 +124,9 @@ CODEX_ISO_BIN="${CODEX_ISO_BIN:-$HOME/bin/codex-iso}"
 
 ```bash
 if [ "${_CODEX_USE_CANONICAL:-0}" = "1" ]; then
-  "$CODEX_ISO_BIN" review -c 'model="gpt-5.5"' -c 'reasoning_effort="xhigh"' < /dev/null 2>&1 | tee "$CLAUDE_PROJECT_DIR/docs/codex/$CODEX_OUT_TASK_ID/$CODEX_OUT_ROLE.txt"
+  "$CODEX_ISO_BIN" review -c 'model="gpt-5.6-sol"' -c 'reasoning_effort="xhigh"' < /dev/null 2>&1 | tee "$CLAUDE_PROJECT_DIR/docs/codex/$CODEX_OUT_TASK_ID/$CODEX_OUT_ROLE.txt"
 else
-  "$CODEX_ISO_BIN" review -c 'model="gpt-5.5"' -c 'reasoning_effort="xhigh"' < /dev/null 2>&1 | tee "/var/tmp/codex-outputs/codex-output-$$-$(date +%s).txt"
+  "$CODEX_ISO_BIN" review -c 'model="gpt-5.6-sol"' -c 'reasoning_effort="xhigh"' < /dev/null 2>&1 | tee "/var/tmp/codex-outputs/codex-output-$$-$(date +%s).txt"
 fi
 ```
 
@@ -134,12 +134,12 @@ Use 10 minute Bash timeout. Then Read the output file with the Read tool.
 
 ### 4. Exec mode
 
-**Without --model (default gpt-5.5):**
+**Without --model (default gpt-5.6-sol):**
 ```bash
 if [ "${_CODEX_USE_CANONICAL:-0}" = "1" ]; then
-  "$CODEX_ISO_BIN" exec -c 'model="gpt-5.5"' -c 'reasoning_effort="xhigh"' "$PROMPT" < /dev/null 2>&1 | tee "$CLAUDE_PROJECT_DIR/docs/codex/$CODEX_OUT_TASK_ID/$CODEX_OUT_ROLE.txt"
+  "$CODEX_ISO_BIN" exec -c 'model="gpt-5.6-sol"' -c 'reasoning_effort="xhigh"' "$PROMPT" < /dev/null 2>&1 | tee "$CLAUDE_PROJECT_DIR/docs/codex/$CODEX_OUT_TASK_ID/$CODEX_OUT_ROLE.txt"
 else
-  "$CODEX_ISO_BIN" exec -c 'model="gpt-5.5"' -c 'reasoning_effort="xhigh"' "$PROMPT" < /dev/null 2>&1 | tee "/var/tmp/codex-outputs/codex-output-$$-$(date +%s).txt"
+  "$CODEX_ISO_BIN" exec -c 'model="gpt-5.6-sol"' -c 'reasoning_effort="xhigh"' "$PROMPT" < /dev/null 2>&1 | tee "/var/tmp/codex-outputs/codex-output-$$-$(date +%s).txt"
 fi
 ```
 

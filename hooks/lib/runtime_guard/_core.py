@@ -68,18 +68,6 @@ except ImportError:  # executed as a top-level script (no package context)
         _write_redirect_targets,
     )
 
-# ── The single generic data-file path ────────────────────────────────────────
-# Overridable for tests via env so the live machine file is never mutated by a
-# test run. The path is generic; it carries no project identity. WS1: the
-# default is now $HOME-relative (~/.config/claude/...) rather than the author
-# literal /root, so a fresh non-root home resolves its own config path.
-DATA_FILE_PATH = os.environ.get(
-    "CLAUDE_PROTECTED_RUNTIME_FILE",
-    os.path.join(
-        os.environ.get("HOME") or os.path.expanduser("~"),
-        ".config", "claude", "protected-runtime.json",
-    ),
-)
 
 MAX_COMMAND_CHARS = int(os.environ.get("CLAUDE_GUARD_MAX_CHARS", "262144"))
 
@@ -201,6 +189,65 @@ except ImportError:  # executed as a top-level script (no package context)
         _normalize_path,
         _path_matches_any,
         _path_under_any,
+    )
+
+
+# ── Config-loading cluster → config.py ────────────────────────────
+# The config-file loader + STEP0 self-protection cluster (DATA_FILE_PATH,
+# REQUIRED_KEYS, _load_config, _home_tilde_variant, _config_path_variants,
+# _ANCESTOR_STOP_ROOTS, _config_ancestor_dirs, _config_or_ancestor_variants,
+# _targets_config_file) was relocated to a sibling module as of the phase-4
+# monolith split (2026-07-15). The cluster depends only on already-extracted
+# leaves (pathmatch._normalize_path, shell_lex._strip_quotes/_has_redirect_to) +
+# stdlib, so re-importing the names here keeps _core's public surface unchanged
+# (every `from ..._core import DATA_FILE_PATH` / `_targets_config_file` and every
+# internal reference — including _ANCESTOR_STOP_ROOTS, used later in _core —
+# still resolves). See docs/reference/monolith-split-plan.md.
+#
+# DATA_FILE_PATH import-time semantics (phase-4 caveat): DATA_FILE_PATH is read
+# from the env at config's MODULE-IMPORT time (os.environ.get). Tests set the env
+# var and require a FRESH read on each guard (re)load. The package __init__
+# refreshes the guard by reloading _core (NOT its siblings), so a plain
+# `from .config import DATA_FILE_PATH` on an _core reload would re-bind the STALE
+# cached config value. Reloading config whenever _core (re)loads re-runs its
+# module-level env read — preserving the exact import-time evaluation the tests
+# depend on. This is still an import-time read, NOT a lazy/function read.
+#
+# Dual-context import (INV-3): _core loads BOTH as the lib.runtime_guard._core
+# submodule (relative) AND executed directly as a script by the runtime_guard.py
+# shim (os.execv), where there is no parent package so the relative form raises
+# ImportError. In script context sys.path[0] is this file's own directory, so the
+# absolute `config` name resolves THIS sibling module (no stdlib `config` exists,
+# and sys.path[0] precedes site-packages so a third-party `config` cannot shadow).
+import importlib as _importlib
+try:
+    from . import config as _config
+except ImportError:  # executed as a top-level script (no package context)
+    import config as _config  # type: ignore[no-redef]
+_importlib.reload(_config)  # re-read DATA_FILE_PATH from the env on each _core load
+try:  # noqa: F401  — names re-exported for backward compatibility
+    from .config import (
+        DATA_FILE_PATH,
+        REQUIRED_KEYS,
+        _ANCESTOR_STOP_ROOTS,
+        _config_ancestor_dirs,
+        _config_or_ancestor_variants,
+        _config_path_variants,
+        _home_tilde_variant,
+        _load_config,
+        _targets_config_file,
+    )
+except ImportError:  # executed as a top-level script (no package context)
+    from config import (  # type: ignore[no-redef]
+        DATA_FILE_PATH,
+        REQUIRED_KEYS,
+        _ANCESTOR_STOP_ROOTS,
+        _config_ancestor_dirs,
+        _config_or_ancestor_variants,
+        _config_path_variants,
+        _home_tilde_variant,
+        _load_config,
+        _targets_config_file,
     )
 
 
@@ -704,134 +751,6 @@ def _effective_cwd_after(simple_cmds: list, upto_index: int, cwd_base: Optional[
                 cwd = os.path.normpath(target)
                 determinate = False
     return cwd, determinate
-
-
-# ── Config loading ───────────────────────────────────────────────────────────
-
-REQUIRED_KEYS = (
-    "protected_cmds", "protected_launch_paths", "protected_services",
-    "protected_hotfiles", "protected_statefiles", "protected_endpoint_paths",
-    "protected_proc_idents", "protected_global_bins",
-    "protected_build_workspaces", "protected_build_paths",
-)
-
-
-def _load_config():
-    """Return (config_dict | None). None means indeterminate (fail-closed)."""
-    try:
-        with open(DATA_FILE_PATH, "r", encoding="utf-8") as fh:
-            cfg = json.load(fh)
-    except (OSError, ValueError):
-        return None
-    if not isinstance(cfg, dict):
-        return None
-    if cfg.get("schema_version") != 1:
-        return None
-    for k in REQUIRED_KEYS:
-        if k not in cfg or not isinstance(cfg[k], list):
-            return None
-    return cfg
-
-
-# ── STEP 0: config self-protection (hardcoded, generic path) ─────────────────
-
-def _home_tilde_variant(path: str) -> Optional[str]:
-    """Return the ``~/``-prefixed form of ``path`` iff it lives under the real
-    user home (``$HOME`` / ``Path.home()``), else None.
-
-    Generic (WS1 codex #4 — no ``/root``-specific branch): on a non-root home
-    (``/home/alice/...``) the ``~/relative`` variant is generated exactly as it
-    was for ``/root/...``, so the guard protects the same path written either
-    way regardless of which user runs it.
-    """
-    home = os.environ.get("HOME")
-    if not home:
-        try:
-            home = os.path.expanduser("~")
-        except Exception:
-            return None
-    if not home or home == "~":
-        return None
-    home_prefix = home.rstrip("/") + "/"
-    if path.startswith(home_prefix):
-        return "~/" + path[len(home_prefix):]
-    return None
-
-
-def _config_path_variants() -> set:
-    p = DATA_FILE_PATH
-    variants = {p, os.path.normpath(p)}
-    tilde = _home_tilde_variant(p)
-    if tilde:
-        variants.add(tilde)
-    return variants
-
-
-# Generic, too-broad ancestor roots whose mutation must NOT be treated as a config
-# self-protection hit — protecting them would over-block routine filesystem ops on
-# the home/system roots (`mv /root /backup`, `rm -rf /tmp`). The data file's OWN
-# parent dir(s) BELOW these roots ARE protected. NO project names — generic POSIX
-# system/home roots derived structurally.
-_ANCESTOR_STOP_ROOTS = frozenset({
-    "/", "/root", "/home", "/etc", "/usr", "/var", "/tmp", "/opt", "/bin",
-    "/lib", "/lib64", "/sbin", "/srv", "/mnt", "/media", "/dev", "/proc",
-    "/sys", "/run", "/boot",
-})
-
-
-def _config_ancestor_dirs() -> set:
-    """Proper ancestor DIRECTORIES of the data file that are protected against
-    mutation/move/delete — moving or removing any of them neuters the guard's
-    config. Yields each ancestor directory up to (but EXCLUDING) the generic
-    too-broad system/home roots in `_ANCESTOR_STOP_ROOTS`, so `/root/.config/claude`
-    and `/root/.config` are protected while `/root` and `/` are not (a routine
-    `mv /root /backup` must still ALLOW). Includes the `~/`-prefixed variant for a
-    `/root/`-rooted path. Generic — no project identity (the path itself is the only
-    hardcoded constant, already generic)."""
-    out = set()
-    norm = os.path.normpath(DATA_FILE_PATH)
-    d = os.path.dirname(norm)
-    while d and d not in _ANCESTOR_STOP_ROOTS:
-        out.add(d)
-        # Generic (WS1 codex #4): add the ~/-prefixed variant for ANY ancestor
-        # under the real user home, not only /root/.
-        tilde = _home_tilde_variant(d + "/")
-        if tilde:
-            out.add(tilde.rstrip("/"))
-        parent = os.path.dirname(d)
-        if parent == d:
-            break
-        d = parent
-    return out
-
-
-def _config_or_ancestor_variants() -> set:
-    """The data-file path variants UNION its protected ancestor directories — the
-    full self-protection target set for a mutation/move/delete."""
-    return _config_path_variants() | _config_ancestor_dirs()
-
-
-def _targets_config_file(simple_cmd: str, tokens: list) -> bool:
-    cfg_variants = {_normalize_path(v) for v in _config_path_variants()}
-    cfg_dir = os.path.dirname(DATA_FILE_PATH)
-    # redirect to the config path
-    rt = _has_redirect_to(simple_cmd)
-    if rt and _normalize_path(rt) in cfg_variants:
-        return True
-    # any bareword token equal to the config path (cp/mv/rm/tee/sed -i/chmod/chown/truncate/ln)
-    for tok in tokens:
-        st = _strip_quotes(tok)
-        if not st:
-            continue
-        norm = _normalize_path(st)
-        if norm in cfg_variants:
-            return True
-        # mutation of the containing directory entry
-        if norm == os.path.normpath(cfg_dir) and tokens and os.path.basename(_strip_quotes(tokens[0])) in (
-            "rm", "rmdir", "mv", "chmod", "chown"
-        ):
-            return True
-    return False
 
 
 CONFIG_MUTATION_HEADS = frozenset({
