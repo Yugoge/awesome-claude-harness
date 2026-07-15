@@ -9,7 +9,7 @@ This document is the maintainer-facing companion to [`README.md`](README.md): th
 
 ---
 
-## 1. Verified inventory (2026-06-13)
+## 1. Verified inventory (2026-07-15)
 
 All counts below were established by enumerating the actual repository, not copied from prose. Reproduction commands are noted so a maintainer can re-verify after changes.
 
