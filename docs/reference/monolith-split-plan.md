@@ -124,6 +124,33 @@ except ImportError:                    # script context: sys.path[0] == this dir
 
 ---
 
+## Phase 5 — DONE (2026-07-15): destructive-command analysis seam (find/fd + git)
+
+**Split into TWO modules** (`find_cmds.py` + `git_cmds.py`) — the roadmap's sanctioned
+option, chosen on coupling grounds. The find/fd and git families share **zero** symbols
+(a find helper never calls a git helper and vice-versa); they are independent
+argv-grammar parsers, so two focused ~180–190-line modules are more cohesive and more
+reviewable than one combined `destructive_cmds.py`, and match the phase-1..4 "one
+cohesive unit per module" size profile (219/289/262/138). Both re-import into `_core`
+so its public surface is unchanged.
+
+| Field | Value |
+|---|---|
+| Unit extracted | The pure argv PARSING leaves of the find/fd + git destructive-command clusters (near-leaf: import only shell_lex + pathmatch + stdlib) |
+| New module A | `hooks/lib/runtime_guard/find_cmds.py` (242 lines; 193 moved verbatim) |
+| Names moved (find) | `_FIND_GLOBAL_NOARG_OPTS`, `_FIND_GLOBAL_ARG_OPTS`, `_FIND_PREPATH_ARG_OPTS`, `_FD_OPTS_WITH_ARG`, `_FIND_PATH_PREDICATES`, `_FIND_NAME_PREDICATES`, `_FIND_CASE_INSENSITIVE_PREDS`, `_fd_positional_roots`, `_find_path_operands`, `_find_predicate_values`, `_glob_basenames`, `_name_value_matches_protected` (12 names) |
+| New module B | `hooks/lib/runtime_guard/git_cmds.py` (225 lines; 176 moved verbatim) |
+| Names moved (git) | `_GIT_GLOBAL_OPTS_WITH_ARG`, `_GIT_DESTRUCTIVE_SUBCMDS`, `_git_subcommand_index`, `_git_effective_cwd`, `_strip_git_pathspec_magic`, `_git_destructive_pathspecs`, `_git_is_destructive_invocation` (7 names) |
+| Stayed in `_core` (orchestrators) | The two forward-referencing hit orchestrators — `_find_destructive_target_hits` + `_git_destructive_pathspec_hits` — plus `_find_filter_exonerates_reverse` and `_step0_find_destructive_hits`. All call `_resolve_rel` (a general path helper resident in _core), and the two `_*_hits` orchestrators also forward-reference `_destructive_root_contains_protected` (defined ~3k lines later in the decision engine); lifting any would invert the dependency into a `find_cmds`/`git_cmds`→`_core` import cycle — **the exact `_mutation_cand_hits` pattern from phase 3**. Their moved callees are re-imported so every reference resolves. |
+| Stayed in `_core` (shared-constant coupling) | `_find_is_destructive` + `_FIND_DELETE_ACTIONS`/`_FIND_EXEC_ACTIONS`/`_FIND_EXEC_MUTATION_VERBS`: `_FIND_EXEC_MUTATION_VERBS` derives from `_STEP0_MUTATION_HEADS`, a constant shared by STEP0-config + the anchor `_DATA_OPERAND_HEADS` and resident in _core — moving it would couple config/anchor code to a find module. `_find_is_destructive`'s only caller (`_find_destructive_target_hits`) also stays, so no moved code references it. |
+| `_find_exec_boundary_at` — STAYS (plan-flagged) | Assessed per the plan's explicit ask: it sits at line ~4000 in the **anchor/inspection** region, is called by the STAYING `_anchor_preceded_by_data_head`, and its `_FIND_EXEC_OPTS`/`_FIND_EXEC_HEADS` tables are shared with STAYING `_is_inspection_command` / `_anchor_in_command_word_position`. It is anchor-scan (phase-6) machinery, not destructive-target (phase-5) machinery, so lifting it now would scatter re-import edges across the phase-6 cluster. Left in `_core` — the conservative choice for a Med-High phase. |
+| Re-import site | `_core.py` in-place (two dual-context try/except blocks, one per new module), `# noqa: F401` |
+| Coupling | Outbound: `find_cmds` → shell_lex (`_strip_quotes`) + pathmatch (`_glob_to_segment_regex`, `_has_shell_glob`) + stdlib; `git_cmds` → shell_lex (`_strip_quotes`) + pathmatch (`_expand_leading_home`) + stdlib — **no `constants`/`config` dep** (the roadmap listed those as an upper bound; the moved bodies reference neither). Inbound: all refs inside `_core` (0 external importers; only `test_runtime_guard.py` imports via the package). |
+| Script-context collision check | New siblings `find_cmds.py` / `git_cmds.py`; in script context `sys.path[0]` is the package dir, so `from find_cmds import …` / `from git_cmds import …` must resolve THESE modules. Confirmed: with a DECOY `find_cmds.py`/`git_cmds.py` on `PYTHONPATH`, the shim-exec'd `_core.py` still emitted real verdicts (no `DECOY` SystemExit) — `sys.path[0]` precedes PYTHONPATH/site-packages and no stdlib `find_cmds`/`git_cmds` exists. |
+| Result | INV-1 ✓ (755→755; full `hooks/tests` 1136 passed / 9 xpassed, no new fail/skip) · INV-2 ✓ (0 missing; moved names are object-identity re-exports, `_core.X is find_cmds.X` / `is git_cmds.X`) · INV-3 ✓ (all 3 contexts; shim script-ctx BLOCKs destructive find (`find <protected> -delete`, relative cwd-resolved, build-path) + destructive git (`git clean -fdx` / `checkout -- <protected>` / `restore`, `:(top)` pathspec-magic), while benign find `-print` / unrelated `git clean` / `git status` / branch-switch ALLOW — the moved parsers still ACT) · INV-4 ✓ (byte-identical slices, script-verified) · INV-5 ~ (pre-existing generic `/root` illustrative comments in the moved `_FIND_*_PREDICATES` docs relocated verbatim — no `happy`/project names; byte-identity gate governs, as in phases 3-4) |
+
+---
+
 ## `_core.py` — phased sequence (ascending risk)
 
 Risk is driven by **outbound** coupling (how much stays-in-`_core` code the cluster calls).
