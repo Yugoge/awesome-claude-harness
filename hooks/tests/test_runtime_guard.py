@@ -3884,9 +3884,10 @@ class TestCycle14CodexFollowup:
         assert rg.evaluate('cd "$HOMEDIR/.config/appz14cf" && rm protected-runtime.json')[0] == "ALLOW"
 
     # CF2: basename predicate scoped to root intersection. Use the isolated_pair
-    # fixture (config+repo under DIFFERENT tmp roots) so an unrelated `/var/tmp/...`
-    # root does NOT reverse-contain the protected repo (which lives under a different
-    # root), mirroring production (/root/.config vs /dev/shm). NOTE: the config
+    # fixture (config and repo under DIFFERENT subtrees, sharing only the /tmp
+    # stop-root) so the config's ancestor self-protection does NOT reverse-contain the
+    # protected repo (which lives under a different root), mirroring production
+    # (/root/.config vs /dev/shm). NOTE: the config
     # FAMILY (STEP0) intentionally keeps its basename predicate root-UNSCOPED — the
     # config file's distinctive basename is protected regardless of root — so this
     # test targets the BUILD/BUNDLE family (a generic `index.mjs` basename), which IS
