@@ -90,7 +90,7 @@ Supporting structural facts (verified):
 | `commands/dev.md` | 1618 | ✗ | **High (behavioral)** | Prompt loaded whole; a split alters the loaded text with no way to prove equivalence. |
 | `commands/dev-overnight.md` | 1894 | ✗ | **High (behavioral)** | Same as above; longest pipeline prompt, most sub-protocols. |
 | `agents/qa.md` | 1916 | ✗ | **High (behavioral)** | Same as above; persona + anti-fraud framing is order-sensitive. |
-| `hooks/lib/runtime_guard/_core.py` | 5839 | ✓ 405 tests | **High-cost but verifiable** | Fail-closed security kernel — highest cost to regress, but the ONLY monolith whose zero-behavior-change can be *proven* by the test suite. |
+| `hooks/lib/runtime_guard/_core.py` | 5839 | ✓ 405 tests | **High-cost but regression-verifiable** | Fail-closed security kernel — highest cost to regress, but the ONLY monolith whose zero-behavior-change can be *strongly regression-verified* by the test suite (covered behavior only — a test suite cannot fully *prove* equivalence for a security parser). |
 
 ### 2.3 `commands/dev.md` — proposed decomposition
 
