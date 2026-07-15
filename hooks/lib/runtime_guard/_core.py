@@ -251,6 +251,97 @@ except ImportError:  # executed as a top-level script (no package context)
     )
 
 
+# ── find/fd destructive-command parsing leaves → find_cmds.py ────────────
+# The pure find/fd argv PARSERS (path-operand / fd search-dir collection, PATH/
+# NAME predicate-value extraction, and the protected-basename matcher
+# `_name_value_matches_protected`) plus their generic option/predicate tables
+# were relocated to a sibling module as of the phase-5 monolith split
+# (2026-07-15). The cluster depends only on already-extracted leaves
+# (shell_lex._strip_quotes, pathmatch._glob_to_segment_regex/_has_shell_glob) +
+# stdlib, so re-importing the names here keeps _core's public surface unchanged
+# (every `from ..._core import _find_path_operands` and every internal reference
+# -- including the STAYING `_find_destructive_target_hits` /
+# `_find_filter_exonerates_reverse`, which forward-reference the decision engine
+# and `_resolve_rel` and so remain in _core -- still resolves). See
+# docs/reference/monolith-split-plan.md.
+#
+# Dual-context import (INV-3): _core loads BOTH as the lib.runtime_guard._core
+# submodule (relative) AND executed directly as a script by the runtime_guard.py
+# shim (os.execv), where there is no parent package so the relative form raises
+# ImportError. In script context sys.path[0] is this file's own directory, so the
+# absolute `find_cmds` name resolves the sibling module.
+try:  # noqa: F401  — names re-exported for backward compatibility
+    from .find_cmds import (
+        _FD_OPTS_WITH_ARG,
+        _FIND_CASE_INSENSITIVE_PREDS,
+        _FIND_GLOBAL_ARG_OPTS,
+        _FIND_GLOBAL_NOARG_OPTS,
+        _FIND_NAME_PREDICATES,
+        _FIND_PATH_PREDICATES,
+        _FIND_PREPATH_ARG_OPTS,
+        _fd_positional_roots,
+        _find_path_operands,
+        _find_predicate_values,
+        _glob_basenames,
+        _name_value_matches_protected,
+    )
+except ImportError:  # executed as a top-level script (no package context)
+    from find_cmds import (  # type: ignore[no-redef]
+        _FD_OPTS_WITH_ARG,
+        _FIND_CASE_INSENSITIVE_PREDS,
+        _FIND_GLOBAL_ARG_OPTS,
+        _FIND_GLOBAL_NOARG_OPTS,
+        _FIND_NAME_PREDICATES,
+        _FIND_PATH_PREDICATES,
+        _FIND_PREPATH_ARG_OPTS,
+        _fd_positional_roots,
+        _find_path_operands,
+        _find_predicate_values,
+        _glob_basenames,
+        _name_value_matches_protected,
+    )
+
+
+# ── git destructive-subcommand parsing leaves → git_cmds.py ─────────────
+# The pure git argv PARSERS (subcommand location, `-C` chdir folding, pathspec-
+# magic stripping, destructive-pathspec collection, destructive-mode predicate)
+# plus their generic verb/option tables were relocated to a sibling module as of
+# the phase-5 monolith split (2026-07-15). The cluster depends only on already-
+# extracted leaves (shell_lex._strip_quotes, pathmatch._expand_leading_home) +
+# stdlib, so re-importing the names here keeps _core's public surface unchanged
+# (every `from ..._core import _git_destructive_pathspecs` and every internal
+# reference -- including the STAYING `_git_inspection_head`, which uses
+# `_GIT_GLOBAL_OPTS_WITH_ARG`, and `_git_destructive_pathspec_hits`, which
+# forward-references the decision engine and `_resolve_rel` and so remains in
+# _core -- still resolves). See docs/reference/monolith-split-plan.md.
+#
+# Dual-context import (INV-3): _core loads BOTH as the lib.runtime_guard._core
+# submodule (relative) AND executed directly as a script by the runtime_guard.py
+# shim (os.execv), where there is no parent package so the relative form raises
+# ImportError. In script context sys.path[0] is this file's own directory, so the
+# absolute `git_cmds` name resolves the sibling module.
+try:  # noqa: F401  — names re-exported for backward compatibility
+    from .git_cmds import (
+        _GIT_DESTRUCTIVE_SUBCMDS,
+        _GIT_GLOBAL_OPTS_WITH_ARG,
+        _git_destructive_pathspecs,
+        _git_effective_cwd,
+        _git_is_destructive_invocation,
+        _git_subcommand_index,
+        _strip_git_pathspec_magic,
+    )
+except ImportError:  # executed as a top-level script (no package context)
+    from git_cmds import (  # type: ignore[no-redef]
+        _GIT_DESTRUCTIVE_SUBCMDS,
+        _GIT_GLOBAL_OPTS_WITH_ARG,
+        _git_destructive_pathspecs,
+        _git_effective_cwd,
+        _git_is_destructive_invocation,
+        _git_subcommand_index,
+        _strip_git_pathspec_magic,
+    )
+
+
 # ── Tokenization primitives → shell_lex.py (re-imported at top of file) ──────
 # ── Path/glob primitives → pathmatch.py (re-imported just above) ─────────────
 
@@ -1301,111 +1392,6 @@ _FIND_EXEC_MUTATION_VERBS = (
 )
 
 
-# find GLOBAL options that PRECEDE the path operands: the no-arg position/symlink
-# options (`-H`/`-L`/`-P`), the `-D <debugopts>` and `-O<level>` forms. These come
-# BEFORE the paths, so the path scan must skip them (not stop at them). Generic
-# find grammar, no project names.
-_FIND_GLOBAL_NOARG_OPTS = frozenset({"-H", "-L", "-P"})
-_FIND_GLOBAL_ARG_OPTS = frozenset({"-D"})
-# pre-path POSITION options that take ONE numeric/string arg and may appear before
-# the path on some `find` builds / fd (`-maxdepth N` / `-mindepth N`). Skipped with
-# their argument so a path AFTER them is still recognized.
-_FIND_PREPATH_ARG_OPTS = frozenset({"-maxdepth", "-mindepth", "--max-depth", "--min-depth"})
-
-
-# fd options that consume ONE following VALUE (so the value is not mistaken for a
-# search-dir positional). fd's search DIRECTORIES are positionals AFTER the pattern,
-# unlike find where roots come first — so the root-intersection scope must collect
-# fd positionals that follow the glob/option args. Generic fd grammar.
-_FD_OPTS_WITH_ARG = frozenset({
-    "-g", "--glob", "-e", "--extension", "-t", "--type", "-d", "--max-depth",
-    "--min-depth", "-E", "--exclude", "-S", "--size", "--changed-within",
-    "--changed-before", "--owner", "-c", "--color", "-j", "--threads",
-    "-x", "--exec", "-X", "--exec-batch", "--max-results", "-p", "--full-path",
-})
-
-
-def _fd_positional_roots(tokens: list, fd_idx: int) -> list:
-    """Collect fd SEARCH-DIRECTORY positionals — the bareword operands that are NOT a
-    value of a value-consuming fd option and NOT the (first) pattern. fd's search dirs
-    come AFTER the pattern (`fd -g <glob> <dir1> <dir2> -X rm`), so they are missed by
-    `_find_path_operands` (which stops at the first option). Used ONLY to scope the
-    basename-predicate root-intersection for fd. Conservative: a bareword that looks
-    PATH-like (absolute, or contains '/', or '.'/'..') is treated as a search dir; a
-    bare pattern stem without a slash is left out (it's the search pattern, already
-    handled as the predicate value). The `-x`/`-X` exec COMMAND and its args are
-    excluded (everything after `-x`/`-X` is the executed command, not a search dir)."""
-    rest = tokens[fd_idx + 1:]
-    out = []
-    i = 0
-    n = len(rest)
-    while i < n:
-        st = _strip_quotes(rest[i])
-        if st in ("-x", "--exec", "-X", "--exec-batch"):
-            break  # everything after is the executed command, not a search dir
-        if st in _FD_OPTS_WITH_ARG:
-            i += 2
-            continue
-        if st.startswith("-") and "=" in st:
-            i += 1
-            continue
-        if st.startswith("-"):
-            i += 1
-            continue
-        # a path-like bareword positional is a search directory.
-        if "/" in st or st in (".", "..") or st.startswith("./") or st.startswith("../") or os.path.isabs(st):
-            out.append(st)
-        i += 1
-    return out
-
-
-def _find_path_operands(tokens: list, find_idx: int) -> list:
-    """Return find/fd PATH operands. The path operands come after the head and any
-    GLOBAL options (`-H`/`-L`/`-P`, `-D arg`, `-O*`) and certain pre-path position
-    options (`-maxdepth N`), and BEFORE the first real predicate/expression. Honors
-    `--` (everything after is a path until a predicate). Returns the explicit path
-    operands; an empty list means the find has NO explicit path (the caller treats
-    that as the implicit `.` = cwd via `_find_implicit_cwd_target`).
-
-    Examples: `find -L <p> -delete` -> [<p>]; `find -maxdepth 1 <p> -delete` ->
-    [<p>]; `find -- <p> -delete` -> [<p>]; `find <p1> <p2> -delete` -> [p1,p2];
-    `find -delete` (path-less) -> []."""
-    rest = tokens[find_idx + 1:]
-    out = []
-    i = 0
-    n = len(rest)
-    saw_dashdash = False
-    while i < n:
-        st = _strip_quotes(rest[i])
-        if st == "--":
-            saw_dashdash = True
-            i += 1
-            continue
-        if not saw_dashdash:
-            # skip leading GLOBAL / pre-path options (with their args) so the path
-            # AFTER them is still seen.
-            if st in _FIND_GLOBAL_NOARG_OPTS or st.startswith("-O"):
-                i += 1
-                continue
-            if st in _FIND_GLOBAL_ARG_OPTS:
-                i += 2  # `-D <debugopts>`
-                continue
-            if st in _FIND_PREPATH_ARG_OPTS:
-                i += 2  # `-maxdepth N`
-                continue
-            if st.startswith("-") or st in ("(", ")", "!"):
-                # a real predicate / expression begins -> path operands done.
-                break
-        else:
-            # after `--`: a predicate still terminates the path list.
-            if st.startswith("-") or st in ("(", ")", "!"):
-                break
-        if st:
-            out.append(st)
-        i += 1
-    return out
-
-
 def _find_is_destructive(tokens: list, find_idx: int) -> bool:
     """True if the find/fd invocation starting at `find_idx` carries a DESTRUCTIVE
     action: `-delete`, OR an `-exec`/`-execdir`/`-ok`/`-okdir` whose executed
@@ -1420,98 +1406,6 @@ def _find_is_destructive(tokens: list, find_idx: int) -> bool:
             execd = os.path.basename(_strip_quotes(rest[j + 1]))
             if execd in _FIND_EXEC_MUTATION_VERBS:
                 return True
-    return False
-
-
-# find/fd PREDICATE options whose VALUE is a full-PATH selector (matched against
-# the whole path): GNU find `-path`/`-wholename`/`-ipath`/`-iwholename`, fd
-# `-p`/`--full-path`. A destructive find selecting a protected path by one of these
-# (`find /root -path <protectedfile> -delete`) must BLOCK even though the positional
-# root is a generic ancestor (`/root`). Generic find/fd grammar, no project names.
-_FIND_PATH_PREDICATES = frozenset({
-    "-path", "-wholename", "-ipath", "-iwholename", "-p", "--full-path",
-})
-# find/fd PREDICATE options whose VALUE is a BASENAME selector (matched against the
-# entry's filename only): `-name`/`-iname`, fd `-g`/`--glob` (fd globs basenames by
-# default). A destructive find selecting a protected file BY NAME
-# (`find /root -name <basename> -delete`) must BLOCK.
-_FIND_NAME_PREDICATES = frozenset({"-name", "-iname", "-g", "--glob"})
-
-
-# case-INSENSITIVE find predicate spellings (`-iname`/`-ipath`/`-iwholename`). A
-# value matched by one of these must compare case-folded, else `find -iname
-# INDEX.MJS -delete` under-blocks. Generic find grammar.
-_FIND_CASE_INSENSITIVE_PREDS = frozenset({"-iname", "-ipath", "-iwholename"})
-
-
-def _find_predicate_values(tokens: list, find_idx: int):
-    """Yield (kind, value, ignore_case) for every find/fd PATH/NAME predicate value
-    after the head: kind is 'path' (`-path`/`-wholename`/`-ipath`/`-iwholename`/fd
-    `-p`) or 'name' (`-name`/`-iname`/fd `-g`). `ignore_case` is True for the `-i*`
-    spellings (case-folded comparison). Honors both the separated (`-path <v>`) and
-    fused (`-path=<v>`) forms. Used so a destructive find that selects its victim by a
-    predicate — not a positional root — is still seen
-    (`find /root -path <protected> -delete`, `find . -iname INDEX.MJS -delete`)."""
-    rest = tokens[find_idx + 1:]
-    i = 0
-    n = len(rest)
-    while i < n:
-        st = _strip_quotes(rest[i])
-        flag = st
-        val = None
-        if "=" in st and st.startswith("-"):
-            flag, val = st.split("=", 1)
-        ic = flag in _FIND_CASE_INSENSITIVE_PREDS
-        if flag in _FIND_PATH_PREDICATES:
-            if val is None and i + 1 < n:
-                val = _strip_quotes(rest[i + 1]); i += 1
-            if val:
-                yield ("path", val, ic)
-        elif flag in _FIND_NAME_PREDICATES:
-            if val is None and i + 1 < n:
-                val = _strip_quotes(rest[i + 1]); i += 1
-            if val:
-                yield ("name", val, ic)
-        i += 1
-
-
-def _glob_basenames(globs: list) -> set:
-    """The set of BASENAME components of protected globs (the last `/`-segment),
-    dropping pure-wildcard basenames. Lets a `-name <basename>` predicate match a
-    protected file selected by filename (`-name protected-runtime.json`,
-    `-name index.mjs`)."""
-    out = set()
-    for g in globs:
-        base = g.rsplit("/", 1)[-1]
-        if base and set(base) - set("*?[]{}"):  # has a literal component
-            out.add(base)
-    return out
-
-
-def _name_value_matches_protected(name_glob: str, globs: list, ignore_case: bool = False) -> bool:
-    """True if a `-name`/`-iname`/fd `-g` BASENAME glob selects a protected file's
-    basename. Matches in EITHER direction (the predicate is a glob; the protected
-    basename is a glob): the predicate's literal stem equals a protected basename, or
-    the predicate glob would expand to a protected basename. `ignore_case` folds both
-    sides (for `-iname`). Conservative — a pure-wildcard predicate (`-name '*'`)
-    matches nothing here (it would over-block every destructive find; the positional-
-    root scan already covers the dir case)."""
-    nv = _strip_quotes(name_glob)
-    if not nv or set(nv) <= set("*?[]{}."):
-        return False
-    flags = re.IGNORECASE if ignore_case else 0
-    rx = re.compile(_glob_to_segment_regex(nv).pattern, flags)
-    nv_cmp = nv.casefold() if ignore_case else nv
-    for base in _glob_basenames(globs):
-        base_cmp = base.casefold() if ignore_case else base
-        # the protected basename matches the predicate glob, OR the predicate glob's
-        # literal stem IS the protected basename.
-        if rx.search(base) or nv_cmp == base_cmp:
-            return True
-        # the protected basename is itself a glob (`<cmd>*`) — does the predicate's
-        # literal value fall under it?
-        if _has_shell_glob(base) and re.compile(_glob_to_segment_regex(base).pattern, flags).search(nv):
-            return True
     return False
 
 
@@ -3830,19 +3724,6 @@ _LAUNCH_SUBCMDS = frozenset({
 })
 
 
-# git GLOBAL options (before the subcommand) that consume the FOLLOWING token as
-# their argument (`git -C <dir> status`, `git -c k=v log`). Their operand must be
-# skipped when locating the subcommand, else the operand (`<dir>`) is mistaken for
-# the subcommand and a read-only `git -C <dir> status` is wrongly treated as a
-# non-inspection command (which then mis-fires the anchor scan on the dir operand
-# when the dir basename equals a protected command). Generic git CLI grammar, NOT
-# project names.
-_GIT_GLOBAL_OPTS_WITH_ARG = frozenset({
-    "-C", "-c", "--git-dir", "--work-tree", "--namespace", "--exec-path",
-    "--super-prefix",
-})
-
-
 def _git_inspection_head(head: str, rest: list) -> bool:
     """True if this is a `git <readonly-subcmd> …` inspection command, honoring
     git GLOBAL options that take an argument (`git -C <dir> status`)."""
@@ -4517,173 +4398,6 @@ def _anchor_mutation_hits(sc: str, tokens: list, exec_toks: list,
             for cand in _resolve_rel(tgt, cwd, cwd_det):
                 if _mutation_cand_hits(cand, globs, cfg, cwd, cwd_det):
                     return True
-    return False
-
-
-# Destructive git subcommands that DELETE / OVERWRITE / REVERT working-tree files
-# under a pathspec (wiping or clobbering a protected bundle / build dir / statefile).
-# `clean` removes untracked files; `restore`/`checkout`/`reset --hard` overwrite
-# tracked files from the index/HEAD. Generic git verbs, NO project names.
-_GIT_DESTRUCTIVE_SUBCMDS = frozenset({"clean", "restore", "checkout", "reset"})
-# git global options (before the subcommand) consuming the next token as an operand
-# (shared shape with `_GIT_GLOBAL_OPTS_WITH_ARG`, reused here).
-
-
-def _git_subcommand_index(tokens: list, git_idx: int):
-    """Return (subcmd, subcmd_token_index) for a git invocation whose head/exec
-    token is at `git_idx`, skipping git GLOBAL options and their operands
-    (`git -C <dir> clean …`). Returns (None, None) when no subcommand follows."""
-    i = git_idx + 1
-    n = len(tokens)
-    skip_next = False
-    while i < n:
-        st = _strip_quotes(tokens[i])
-        if skip_next:
-            skip_next = False
-            i += 1
-            continue
-        if not st:
-            i += 1
-            continue
-        if st in _GIT_GLOBAL_OPTS_WITH_ARG:
-            skip_next = True
-            i += 1
-            continue
-        if st.startswith("-"):
-            i += 1  # bare/fused global flag
-            continue
-        return (st, i)
-    return (None, None)
-
-
-def _git_effective_cwd(tokens: list, git_idx: int, cwd: Optional[str], cwd_det: bool):
-    """Fold a git `-C <dir>` global option into the effective cwd (git runs as if
-    started in <dir>). A dynamic `-C` operand ($/`/glob) yields cwd_det=False."""
-    i = git_idx + 1
-    n = len(tokens)
-    while i < n:
-        st = _strip_quotes(tokens[i])
-        if st == "-C" and i + 1 < n:
-            d = _expand_leading_home(_strip_quotes(tokens[i + 1]))
-            if any(ch in d for ch in ("$", "`", "*", "?")):
-                return (cwd, False)
-            if os.path.isabs(d):
-                return (os.path.normpath(d), True)
-            if cwd:
-                return (os.path.normpath(os.path.join(cwd, d)), cwd_det)
-            return (os.path.normpath(d), cwd_det)
-        if st.startswith("-C"):  # fused `-C<dir>`
-            d = _expand_leading_home(_strip_quotes(st[2:]))
-            if d and not any(ch in d for ch in ("$", "`", "*", "?")):
-                if os.path.isabs(d):
-                    return (os.path.normpath(d), True)
-                if cwd:
-                    return (os.path.normpath(os.path.join(cwd, d)), cwd_det)
-                return (os.path.normpath(d), cwd_det)
-        if st in _GIT_GLOBAL_OPTS_WITH_ARG:
-            i += 2
-            continue
-        if st.startswith("-"):
-            i += 1
-            continue
-        break
-    return (cwd, cwd_det)
-
-
-def _strip_git_pathspec_magic(spec: str):
-    """Strip a leading git PATHSPEC-MAGIC prefix from a pathspec, returning
-    (clean_path, repo_root_relative, ignore_case, is_exclude). Forms:
-      • `:(top)<path>` / `:/<path>` — repo-root-relative (rel=True).
-      • `:(icase)<path>` — case-insensitive match (ignore_case=True).
-      • `:(exclude)<path>` / `:!<path>` / `:^<path>` — EXCLUDE pathspec (is_exclude=
-        True): it REMOVES entries from the set, so it is NOT a positive destructive
-        target.
-      • `:(glob)<path>`, combined `:(top,glob,icase)<path>` — magic stripped, path kept.
-    A pathspec with NO magic prefix is returned unchanged (rel/ic/exclude all False).
-    Generic git pathspec grammar, no project names."""
-    s = _strip_quotes(spec)
-    repo_rel = ignore_case = is_exclude = False
-    if s.startswith(":("):
-        end = s.find(")")
-        if end != -1:
-            magic = s[2:end].split(",")
-            if "top" in magic:
-                repo_rel = True
-            if "icase" in magic:
-                ignore_case = True
-            if "exclude" in magic:
-                is_exclude = True
-            s = s[end + 1:]
-    elif s.startswith(":/"):
-        repo_rel = True
-        s = s[2:] or "."
-    elif s.startswith(":!") or s.startswith(":^"):
-        is_exclude = True
-        s = s[2:]
-    return (s, repo_rel, ignore_case, is_exclude)
-
-
-def _git_destructive_pathspecs(tokens: list, sub_idx: int, subcmd: str) -> list:
-    """Return (pathspec, repo_root_relative, ignore_case, is_exclude) for each
-    PATHSPEC operand of a destructive git subcommand (the bare positional path
-    arguments, honoring a `--` separator and parsing git pathspec-magic prefixes
-    `:(glob)`/`:(top)`/`:(icase)`/`:(exclude)`/`:/`/`:!`). Subcommand options
-    (`-f`/`-d`/`-x` for clean, `--hard`/`--soft` for reset, `--source=…`/`--staged`
-    for restore, `-f`/`--force` for checkout) are skipped. A bare `git clean -fdx` /
-    `git checkout -- .` with no POSITIVE path targets the WHOLE worktree; a single
-    `(., …)` is returned so the cwd is resolved (a worktree-wide wipe at a protected
-    cwd is in scope). An EXCLUDE pathspec (`:!`/`:(exclude)`) is returned with
-    is_exclude=True; the caller must NOT treat it as a positive destructive target."""
-    rest = tokens[sub_idx + 1:]
-    out = []
-    saw_dashdash = False
-    for i, t in enumerate(rest):
-        st = _strip_quotes(t)
-        if st == "--":
-            saw_dashdash = True
-            continue
-        if not saw_dashdash and st.startswith("-"):
-            continue  # an option / option=value (fused) before the pathspec
-        clean, repo_rel, ic, is_exclude = _strip_git_pathspec_magic(st)
-        if not saw_dashdash:
-            # `checkout <branch>` / `restore` without `--`: a bare token MIGHT be a
-            # branch/ref, not a path. For checkout/restore we require a `--`
-            # separator OR a token that looks path-like to treat it as a pathspec —
-            # a plain branch name (`git checkout main`) is NOT a path op. An EXCLUDE
-            # pathspec is always a pathspec (it has the `:!`/`:(exclude)` magic).
-            if (subcmd in ("checkout", "restore") and not repo_rel and not is_exclude
-                    and not ("/" in clean or clean in (".", "..") or clean.startswith("./") or clean.startswith("../"))):
-                continue
-        out.append((clean, repo_rel, ic, is_exclude))
-    # a path-less destructive form (no POSITIVE pathspec — excludes don't count)
-    # targets the worktree root (the effective cwd).
-    if not any(not ex for (_p, _r, _i, ex) in out) and subcmd in ("clean", "checkout", "restore", "reset"):
-        out.append((".", False, False, False))
-    return out
-
-
-def _git_is_destructive_invocation(tokens: list, sub_idx: int, subcmd: str) -> bool:
-    """True if the git subcommand is in its DESTRUCTIVE mode:
-      • clean   — requires `-f`/`--force` (git refuses to clean without it).
-      • restore — always overwrites the worktree file from the index/source.
-      • checkout— a pathspec checkout (`--` or a path operand) reverts the worktree
-        file; a plain branch switch (`git checkout <branch>`) is NOT a path wipe.
-      • reset   — requires `--hard` (only --hard touches the worktree)."""
-    rest = [_strip_quotes(t) for t in tokens[sub_idx + 1:]]
-    if subcmd == "clean":
-        return any(t in ("-f", "--force") or (t.startswith("-") and not t.startswith("--") and "f" in t[1:]) for t in rest)
-    if subcmd == "restore":
-        return True
-    if subcmd == "reset":
-        return any(t == "--hard" for t in rest)
-    if subcmd == "checkout":
-        # destructive (worktree revert) only when a pathspec is present: a `--`
-        # separator OR a path-like operand. A plain `git checkout <branch>` is a
-        # branch switch (no worktree-file wipe) → not destructive here.
-        if "--" in rest:
-            return True
-        return any(("/" in t or t in (".", "..") or t.startswith("./") or t.startswith("../"))
-                   for t in rest if not t.startswith("-"))
     return False
 
 
