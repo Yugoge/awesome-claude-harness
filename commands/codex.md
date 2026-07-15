@@ -124,9 +124,9 @@ CODEX_ISO_BIN="${CODEX_ISO_BIN:-$HOME/bin/codex-iso}"
 
 ```bash
 if [ "${_CODEX_USE_CANONICAL:-0}" = "1" ]; then
-  "$CODEX_ISO_BIN" review -c 'model="gpt-5.5"' -c 'reasoning_effort="xhigh"' < /dev/null 2>&1 | tee "$CLAUDE_PROJECT_DIR/docs/codex/$CODEX_OUT_TASK_ID/$CODEX_OUT_ROLE.txt"
+  "$CODEX_ISO_BIN" review -c 'model="gpt-5.6-sol"' -c 'reasoning_effort="ultra"' < /dev/null 2>&1 | tee "$CLAUDE_PROJECT_DIR/docs/codex/$CODEX_OUT_TASK_ID/$CODEX_OUT_ROLE.txt"
 else
-  "$CODEX_ISO_BIN" review -c 'model="gpt-5.5"' -c 'reasoning_effort="xhigh"' < /dev/null 2>&1 | tee "/var/tmp/codex-outputs/codex-output-$$-$(date +%s).txt"
+  "$CODEX_ISO_BIN" review -c 'model="gpt-5.6-sol"' -c 'reasoning_effort="ultra"' < /dev/null 2>&1 | tee "/var/tmp/codex-outputs/codex-output-$$-$(date +%s).txt"
 fi
 ```
 
@@ -137,9 +137,9 @@ Use 10 minute Bash timeout. Then Read the output file with the Read tool.
 **Without --model (default gpt-5.5):**
 ```bash
 if [ "${_CODEX_USE_CANONICAL:-0}" = "1" ]; then
-  "$CODEX_ISO_BIN" exec -c 'model="gpt-5.5"' -c 'reasoning_effort="xhigh"' "$PROMPT" < /dev/null 2>&1 | tee "$CLAUDE_PROJECT_DIR/docs/codex/$CODEX_OUT_TASK_ID/$CODEX_OUT_ROLE.txt"
+  "$CODEX_ISO_BIN" exec -c 'model="gpt-5.6-sol"' -c 'reasoning_effort="ultra"' "$PROMPT" < /dev/null 2>&1 | tee "$CLAUDE_PROJECT_DIR/docs/codex/$CODEX_OUT_TASK_ID/$CODEX_OUT_ROLE.txt"
 else
-  "$CODEX_ISO_BIN" exec -c 'model="gpt-5.5"' -c 'reasoning_effort="xhigh"' "$PROMPT" < /dev/null 2>&1 | tee "/var/tmp/codex-outputs/codex-output-$$-$(date +%s).txt"
+  "$CODEX_ISO_BIN" exec -c 'model="gpt-5.6-sol"' -c 'reasoning_effort="ultra"' "$PROMPT" < /dev/null 2>&1 | tee "/var/tmp/codex-outputs/codex-output-$$-$(date +%s).txt"
 fi
 ```
 
