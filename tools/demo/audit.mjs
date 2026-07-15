@@ -39,9 +39,16 @@ const ELLIPSIS = '…';
 const nfc = (s) => String(s).normalize('NFC');
 const sha256 = (s) => createHash('sha256').update(nfc(s), 'utf8').digest('hex');
 
-const manifestPath = process.argv[2];
-const svgPath = process.argv[3];
-if (!manifestPath || !svgPath) { console.error('Usage: node audit.mjs <manifest.json> <file.svg>'); process.exit(1); }
+// Parse args: strip the opt-in --strict flag, then require EXACTLY two positionals so the
+// default `node audit.mjs <manifest> <svg>` signature is preserved for existing callers.
+const rawArgs = process.argv.slice(2);
+const STRICT = rawArgs.includes('--strict');
+const positionals = rawArgs.filter((a) => a !== '--strict');
+const [manifestPath, svgPath, ...extra] = positionals;
+if (!manifestPath || !svgPath || extra.length) {
+  console.error('Usage: node audit.mjs <manifest.json> <file.svg> [--strict]');
+  process.exit(1);
+}
 
 const violations = [];
 const warnings = [];
