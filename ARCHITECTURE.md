@@ -33,7 +33,7 @@ All counts below were established by enumerating the actual repository, not copi
 |---|---|---|
 | `SessionStart` | 1 | 7 |
 | `UserPromptSubmit` | 4 | 5 |
-| `PreToolUse` | 21 | 28 |
+| `PreToolUse` | 22 | 30 |
 | `PostToolUse` | 7 | 14 |
 | `Notification` | 1 | 1 |
 | `Stop` | 1 | 4 |
