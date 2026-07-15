@@ -732,7 +732,7 @@ if echo "$COMMAND" | grep -qE "${DAEMON_RESTART_SENTINEL_RE}[A-Za-z0-9_-]+\.flag
    && echo "$COMMAND" | grep -qE '(>|>>|tee|cp|mv|ln|touch|cat\s)'; then
   echo "BLOCKED: daemon-restart-sentinel-write — writing to grant sentinel is FORBIDDEN" >&2
   echo "Command: $COMMAND" >&2
-  echo "REASON: per c3-20260504-223115, only /root/bin/claude-allow-restart (run by user from TTY)" >&2
+  echo "REASON: per c3-20260504-223115, only $DAEMON_RESTART_GRANT_HELPER (run by user from TTY)" >&2
   echo "        may create the grant sentinel." >&2
   exit 2
 fi
