@@ -247,8 +247,10 @@ These are recorded here as boundary evidence; **fixing them is out of scope this
 **Verdict: NO extraction is green-lit as "clearly safe" this cycle.** The requirement
 asks whether a single *clearly-safe*, zero-behavior-change, bounded extraction exists.
 For this repo the honest answer is: none is *clearly* safe right now. The only monolith
-with a test net that could *prove* zero-behavior-change is `_core.py`, and it is a
-fail-closed security kernel — the highest-cost file to regress. The three prompt
+with a test net that could *strongly regression-verify* zero-behavior-change — for
+covered behavior; a test suite cannot fully *prove* equivalence for a fail-closed
+security parser — is `_core.py`, itself a security kernel and the highest-cost file to
+regress. The three prompt
 monoliths have no zero-behavior-change split available at all (no transclusion
 mechanism, no test net — see §3).
 
