@@ -1,0 +1,33 @@
+{
+  "_comment": "Durable in-repo provenance sidecar for pipeline-hero trace lines whose verbatim text lived only in gitignored working docs (docs/dev/*, absent from a clean clone). Each entry records the verbatim rendered text, the original gitignored origin path it was harvested from, and the commit that harvest belongs to. Referenced by .github/assets/demo-trace.json via source_ref=this file and source_locator=<key>. Condensation lines (s04/s07/s09) are stylized single-line condensations derived from their origin doc, not verbatim substrings of it.",
+  "s02": {
+    "text": "Document how the README hero demo is captured and why it is authentic",
+    "origin": "docs/dev/ticket-20260714-183239.md",
+    "harvested_from_commit": "62957b351d81100a7f5a7050f78f4d78b3c2d9b1"
+  },
+  "s03": {
+    "text": "every visible line traces to a real /spec→/dev→/close→/commit→/push run artifact",
+    "origin": "docs/dev/ticket-20260714-183239.md",
+    "harvested_from_commit": "62957b351d81100a7f5a7050f78f4d78b3c2d9b1"
+  },
+  "s04": {
+    "text": "spec fan-out … 1 analyst …",
+    "origin": "docs/dev/ticket-20260714-183239.md",
+    "harvested_from_commit": "62957b351d81100a7f5a7050f78f4d78b3c2d9b1"
+  },
+  "s06": {
+    "text": "Built a deterministic paper-substrate animated-SVG demo system for the README hero",
+    "origin": "docs/dev/do-report-20260714-183239.json",
+    "harvested_from_commit": "62957b351d81100a7f5a7050f78f4d78b3c2d9b1"
+  },
+  "s07": {
+    "text": "Dev → QA … 2 dev subagents …",
+    "origin": "docs/dev/do-report-20260714-183239.json",
+    "harvested_from_commit": "62957b351d81100a7f5a7050f78f4d78b3c2d9b1"
+  },
+  "s09": {
+    "text": "close inspectors … 2 (style, cleanliness) …",
+    "origin": "docs/dev/close-report-20260714-183239.md",
+    "harvested_from_commit": "62957b351d81100a7f5a7050f78f4d78b3c2d9b1"
+  }
+}

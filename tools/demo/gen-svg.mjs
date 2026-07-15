@@ -10,9 +10,26 @@
 
 import { readFileSync, writeFileSync } from 'node:fs';
 
-const STAGES = ['spec', 'dev', 'close', 'commit', 'push'];
-const STAGE_RANK = Object.fromEntries(STAGES.map((s, i) => [s, i]));
-const KINDS = new Set(['input', 'artifact', 'verdict', 'condensation']);
+const KINDS = new Set(['input', 'attempt', 'artifact', 'verdict', 'condensation', 'adaptation']);
+
+// Per-kind render config: single source of truth for prefix glyph, fill keys (into C),
+// reveal mode, and indent (in marker-columns). No scattered per-kind conditionals.
+// `input`/`artifact`/`verdict`/`condensation` reproduce the original renderer byte-for-byte.
+const KIND_CFG = {
+  input:        { glyph: '›', marker: 'ink',       content: 'ink',       typing: true,  indent: 0 },
+  attempt:      { glyph: '›', marker: 'ink',       content: 'ink',       typing: true,  indent: 0 },
+  artifact:     { glyph: '✓', marker: 'muted',     content: 'ink',       typing: false, indent: 0 },
+  verdict:      { glyph: '✓', marker: 'inkStrong', content: 'inkStrong', typing: false, indent: 0 },
+  condensation: { glyph: '·', marker: 'muted',     content: 'muted',     typing: false, indent: 0 },
+  adaptation:   { glyph: '→', marker: 'muted',     content: 'muted',     typing: false, indent: 1 },
+};
+// A `verdict` line with `block:true` renders a hook-BLOCK: a prohibition glyph in the warm
+// accent (never red/green). `⊘` (U+2298) is a monochrome text symbol that honors `fill` —
+// unlike a color-emoji such as ⛔, which browsers paint red/white regardless of fill. Accent
+// is otherwise reserved for the active rail marker and the final line; the block is the one
+// sanctioned extra use.
+const BLOCK_CFG = { glyph: '⊘', marker: 'accent', content: 'inkStrong', typing: false, indent: 0 };
+const cfgFor = (ln) => (ln.kind === 'verdict' && ln.block === true ? BLOCK_CFG : KIND_CFG[ln.kind]);
 
 // ---------- layout (fixed monospace grid; we place by column*advance, never measure) ----------
 const W = 960;          // logical width (px)
@@ -72,8 +89,24 @@ const lines = manifest.lines
 
 for (const ln of lines) {
   if (!KINDS.has(ln.kind)) fail(`line ${ln.id}: invalid kind "${ln.kind}"`);
-  if (!(ln.stage in STAGE_RANK)) fail(`line ${ln.id}: invalid stage "${ln.stage}"`);
   if (typeof ln.text !== 'string' || ln.text.length === 0) fail(`line ${ln.id}: text must be a non-empty string`);
+}
+
+// ---------- data-driven rail ----------
+// Rail labels come from the manifest, never hard-coded: an explicit `meta.rail` list wins;
+// otherwise the distinct `stage` values in first-appearance (render) order. ONE generator
+// thus renders the 5-stage pipeline demo and a 3-stage hook demo from data alone.
+let RAIL;
+if (Array.isArray(meta.rail) && meta.rail.length) {
+  RAIL = meta.rail.map((s) => nfc(s));
+} else {
+  RAIL = [];
+  const seen = new Set();
+  for (const ln of lines) { if (!seen.has(ln.stage)) { seen.add(ln.stage); RAIL.push(ln.stage); } }
+}
+const RANK = Object.fromEntries(RAIL.map((s, i) => [s, i]));
+for (const ln of lines) {
+  if (!(ln.stage in RANK)) fail(`line ${ln.id}: stage "${ln.stage}" not in rail [${RAIL.join(', ')}]`);
 }
 const finalId = lines[lines.length - 1].id; // highest ordinal => the publish/commit-SHA line
 
@@ -84,13 +117,14 @@ let t = T_FIRST;
 for (const ln of lines) {
   if (!(ln.stage in stageStart)) stageStart[ln.stage] = t;
   const begin = t;
-  if (ln.kind === 'input') {
+  const cfg = cfgFor(ln);
+  if (cfg.typing) {
     const n = [...nfc(ln.text)].length;         // code-point count
     const dur = Math.max(0.4, n * PER_CHAR);
-    beats.push({ ln, begin, dur, n, typing: true });
+    beats.push({ ln, cfg, begin, dur, n, typing: true });
     t = begin + dur + INPUT_TAIL;
   } else {
-    beats.push({ ln, begin, dur: MACHINE_FADE, typing: false });
+    beats.push({ ln, cfg, begin, dur: MACHINE_FADE, typing: false });
     t = begin + MACHINE_STEP;
   }
 }
@@ -103,25 +137,14 @@ const footerBL = BL(nLines - 1) + 40;
 const H = footerBL + 20;
 
 const rail = [];
-{ let rx = PAD_X; for (const s of STAGES) { const w = s.length * ADV; rail.push({ s, x: rx, w }); rx += w + 3 * ADV; } }
+{ let rx = PAD_X; for (const s of RAIL) { const w = s.length * ADV; rail.push({ s, x: rx, w }); rx += w + 3 * ADV; } }
 const railBy = Object.fromEntries(rail.map((r) => [r.s, r]));
-const presentStages = STAGES.filter((s) => s in stageStart);
+const presentStages = RAIL.filter((s) => s in stageStart);
 
-// ---------- per-line styling ----------
-const markerGlyph = (k) => (k === 'input' ? '›' : k === 'condensation' ? '·' : '✓');
-function contentFill(ln) {
-  if (ln.id === finalId) return C.accent;
-  if (ln.kind === 'condensation') return C.muted;
-  if (ln.kind === 'verdict') return C.inkStrong;
-  return C.ink;
-}
-function markerFill(ln) {
-  if (ln.id === finalId) return C.accent;
-  if (ln.kind === 'condensation') return C.muted;
-  if (ln.kind === 'verdict') return C.inkStrong;
-  if (ln.kind === 'artifact') return C.muted;
-  return C.ink;
-}
+// ---------- per-line styling (fills resolve through the kind config; the final line and
+// the hook-block are the only accent users besides the rail marker) ----------
+const markerFill = (ln, cfg) => C[ln.id === finalId ? 'accent' : cfg.marker];
+const contentFill = (ln, cfg) => C[ln.id === finalId ? 'accent' : cfg.content];
 
 // ---------- build ----------
 const defs = [];
@@ -167,10 +190,14 @@ for (const r of rail) {
 // transcript lines
 beats.forEach((b, i) => {
   const ln = b.ln;
+  const cfg = b.cfg;
   const y = BL(i);
-  const glyph = esc(markerGlyph(ln.kind));
-  const mf = markerFill(ln);
-  const cf = contentFill(ln);
+  const glyph = esc(cfg.glyph);
+  const mf = markerFill(ln, cfg);
+  const cf = contentFill(ln, cfg);
+  const indent = cfg.indent || 0;              // extra marker-columns (0 for pipeline kinds)
+  const xMarker = PAD_X + indent * ADV;
+  const xContent = CONTENT_X + indent * ADV;
 
   if (b.typing) {
     // typed reveal via an animated clip (discrete char-by-char) + transient caret
@@ -180,19 +207,19 @@ beats.forEach((b, i) => {
     const wArr = Array.from({ length: n + 1 }, (_, k) => k * ADV);
     wArr[n] = n * ADV + 6 * ADV;
     const wVals = wArr.join(';');
-    const xVals = Array.from({ length: n + 1 }, (_, k) => CONTENT_X + k * ADV).join(';');
+    const xVals = Array.from({ length: n + 1 }, (_, k) => xContent + k * ADV).join(';');
     const keyT = Array.from({ length: n + 1 }, (_, k) => kt(k / n)).join(';');
     const clipId = 'clip-' + ln.id;
     defs.push(
-      `<clipPath id="${esc(clipId)}"><rect x="${CONTENT_X}" y="${y - 13}" width="0" height="18">` +
+      `<clipPath id="${esc(clipId)}"><rect x="${xContent}" y="${y - 13}" width="0" height="18">` +
       `<animate attributeName="width" begin="${num(b.begin)}s" dur="${num(b.dur)}s" calcMode="discrete" values="${wVals}" keyTimes="${keyT}" fill="freeze"/>` +
       `</rect></clipPath>`
     );
     body.push(
       `<g data-role="line">` +
-        `<text data-role="marker" x="${PAD_X}" y="${y}" fill="${mf}" opacity="0">${glyph}<set attributeName="opacity" to="1" begin="${num(b.begin)}s" fill="freeze"/></text>` +
-        `<g clip-path="url(#${esc(clipId)})"><text data-trace-id="${esc(ln.id)}" x="${CONTENT_X}" y="${y}" fill="${cf}" xml:space="preserve">${esc(ln.text)}</text></g>` +
-        `<rect data-role="caret" x="${CONTENT_X}" y="${y - 13}" width="1.5" height="16" fill="${C.ink}" opacity="0">` +
+        `<text data-role="marker" x="${xMarker}" y="${y}" fill="${mf}" opacity="0">${glyph}<set attributeName="opacity" to="1" begin="${num(b.begin)}s" fill="freeze"/></text>` +
+        `<g clip-path="url(#${esc(clipId)})"><text data-trace-id="${esc(ln.id)}" x="${xContent}" y="${y}" fill="${cf}" xml:space="preserve">${esc(ln.text)}</text></g>` +
+        `<rect data-role="caret" x="${xContent}" y="${y - 13}" width="1.5" height="16" fill="${C.ink}" opacity="0">` +
           `<set attributeName="opacity" to="1" begin="${num(b.begin)}s" fill="freeze"/>` +
           `<animate attributeName="x" begin="${num(b.begin)}s" dur="${num(b.dur)}s" calcMode="discrete" values="${xVals}" keyTimes="${keyT}" fill="freeze"/>` +
           `<set attributeName="opacity" to="0" begin="${num(b.begin + b.dur)}s" fill="freeze"/>` +
@@ -205,8 +232,8 @@ beats.forEach((b, i) => {
       `<g data-role="line" opacity="0" transform="translate(0 6)">` +
         `<animate attributeName="opacity" begin="${num(b.begin)}s" dur="${num(b.dur)}s" from="0" to="1" fill="freeze"/>` +
         `<animateTransform attributeName="transform" type="translate" begin="${num(b.begin)}s" dur="${num(b.dur)}s" from="0 6" to="0 0" fill="freeze"/>` +
-        `<text data-role="marker" x="${PAD_X}" y="${y}" fill="${mf}">${glyph}</text>` +
-        `<text data-trace-id="${esc(ln.id)}" x="${CONTENT_X}" y="${y}" fill="${cf}" xml:space="preserve">${esc(ln.text)}</text>` +
+        `<text data-role="marker" x="${xMarker}" y="${y}" fill="${mf}">${glyph}</text>` +
+        `<text data-trace-id="${esc(ln.id)}" x="${xContent}" y="${y}" fill="${cf}" xml:space="preserve">${esc(ln.text)}</text>` +
       `</g>`
     );
   }
