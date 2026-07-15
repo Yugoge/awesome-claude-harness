@@ -1,8 +1,8 @@
 # dot-claude
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-07-15T17:16:06Z*
-**Total entries**: 474
+*Last updated: 2026-07-15T18:00:26Z*
+**Total entries**: 477
 **Convention**: kebab
 
 ## Tree
@@ -59,6 +59,7 @@ dot-claude/
 │   │   ├── `git-fswatch.md` - Git File Watcher (fswatch) Documentation
 │   │   ├── `graphify-integration.md` - Graphify Knowledge Graph Integration
 │   │   ├── `lock-file-handling.md` - Git Lock File Handling
+│   │   ├── `monolith-split-plan.md` - Monolith Split Plan (Plan-of-Record)
 │   │   ├── `roadmap-decomposition-productization.md` - Roadmap: Monolith Decomposition + Productization
 │   │   ├── `slashcommand-quick-reference.md` - Slash Command Quick Reference
 │   │   ├── `tmp-cleanup-convention.md` - Ad-hoc scratch directory convention
@@ -280,6 +281,7 @@ dot-claude/
 │   ├── `check-file-references.sh` - File reference detection script - used by /clean command
 │   ├── `check-overnight-reports.py` - Description: Validates all overnight required outputs declared by the active
 │   ├── `check-overnight-reports.sh` - DEPRECATED — replaced by check-overnight-reports.py per spec-20260426-090235 P0/M5.
+│   ├── `check-public-core.sh` - Description: Public/private boundary gate. Recomputes the top-level tracked-path set from
 │   ├── `check-readme-freshness.sh` - Check README.md freshness for all major folders
 │   ├── `check-security-hook-drift.sh` - Description: Audit always-on security-critical hook files against a cycle baseline SHA
 │   ├── `checkpoint-prune.sh` - checkpoint-prune.sh — trim refs/checkpoints/* to the most recent N commits
@@ -476,6 +478,7 @@ dot-claude/
 ├── `LICENSE` - LICENSE file
 ├── `NESTED-REPO.md` - Nested Repo Sentinel
 ├── `NOTICE` - NOTICE file
+├── `PUBLIC-CORE.md` - PUBLIC-CORE.md — public/private boundary manifest
 ├── `push.sh` - push.sh - Global pre-push checks: git identity + fetch/pull/status
 ├── `pytest.ini` - ini file
 ├── `requirements.txt` - Python dependency manifest for the Claude Code harness venv

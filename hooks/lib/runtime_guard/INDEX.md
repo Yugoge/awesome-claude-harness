@@ -1,8 +1,8 @@
 # runtime_guard
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-07-15T17:19:34Z*
-**Total entries**: 2
+*Last updated: 2026-07-15T18:00:26Z*
+**Total entries**: 3
 **Convention**: kebab
 
 ## Tree
@@ -10,6 +10,7 @@
 runtime_guard/
 ├── `__main__.py` - Package entry-point so `python -m lib.runtime_guard` still works.
 ├── `_core.py` - This module contains ZERO project identifiers. Every project-specific name
+└── `shell_lex.py` - Pure text tokenizers split out of _core.py in the phase-1 monolith
 ```
 <!-- /AUTO:index-stats -->
 
