@@ -1,7 +1,7 @@
 # Architecture — `.claude` Agent Operating System
 
 > Deep technical architecture and design rationale for maintainers.
-> Last updated: 2026-06-13
+> Last updated: 2026-07-15
 
 This repository is a **Claude Code global configuration** (`~/.claude` symlinks to it) that turns one chat agent into a disciplined software team. A main *orchestrator* agent's direct writes are mechanically constrained by the orchestrator gate (one non-whitelist tool per turn, unlockable by `/do`) so that real work is intended for single-purpose **subagents** it dispatches; a defense-in-depth chain of **PreToolUse / PostToolUse / Stop** hooks makes catastrophic git and filesystem mistakes mechanically hard — gated by hooks that fail closed by default, with narrow audited human break-glass paths (`/do`, `/allow`); and an autonomous overnight loop explores, fixes, verifies, and commits in an isolated worktree until a wall-clock deadline. Everything here is plain Markdown prompts plus small Python/Bash hooks and scripts — the behavior change comes from *enforcement in code*, not from asking the model nicely.
 
@@ -9,7 +9,7 @@ This document is the maintainer-facing companion to [`README.md`](README.md): th
 
 ---
 
-## 1. Verified inventory (2026-06-13)
+## 1. Verified inventory (2026-07-15)
 
 All counts below were established by enumerating the actual repository, not copied from prose. Reproduction commands are noted so a maintainer can re-verify after changes.
 
@@ -17,15 +17,15 @@ All counts below were established by enumerating the actual repository, not copi
 |---|---|---|
 | **Subagents** (`agents/*.md`, excluding `INDEX.md`/`README.md`) | **23** | `ls agents/*.md \| grep -vE '/(INDEX\|README)\.md$'` |
 | **Slash commands** (`commands/*.md`, excluding `INDEX.md`/`README.md`) | **18** | `ls commands/*.md \| grep -vE '/(INDEX\|README)\.md$'` |
-| **Hook command entries wired** in `settings.json` | **65** | sum of `hooks[*][*].hooks[]` over all lifecycle events |
-| **Distinct hook files referenced** by `settings.json` | **64** | unique `hooks/*.py\|*.sh` paths in those entries |
+| **Hook command entries wired** in `settings.json` | **67** | sum of `hooks[*][*].hooks[]` over all lifecycle events |
+| **Distinct hook files referenced** by `settings.json` | **66** (+1 = **67** paths) | unique `hooks/*.py\|*.sh` paths in those entries; the 67th wired executable is the non-hooks `scripts/canary-verify.sh` (SessionStart) → 67 distinct wired executable paths |
 | **Lifecycle events used** | **7** | keys of `settings.json.hooks` |
-| **Hook files present on disk** (`hooks/*.py` + `*.sh`, excl. `.bak`) | **86** | `find hooks -maxdepth 1 -type f \( -name '*.py' -o -name '*.sh' \)` |
+| **Hook files present on disk** (`hooks/*.py` + `*.sh`, excl. `.bak`) | **88** | `find hooks -maxdepth 1 -type f \( -name '*.py' -o -name '*.sh' \)` |
 | **Helper scripts** (`scripts/` top-level files, excl. `INDEX/README`) | **72** | `find scripts -maxdepth 1 -type f` minus docs |
 | **Skills** (`skills/*/` directories) | **8** | `ls -d skills/*/` |
 | `permissions.allow` / `deny` / `ask` entries | 162 / 95 / 30 | keys of `settings.json.permissions` |
 
-> Note on the hook count: more hook *files* exist on disk (86) than are *wired* (64). The unwired files are install scripts, libraries, legacy/`.bak` variants, and intentionally-staged hooks. The number that matters for behavior is **what `settings.json` wires**: 64 distinct files across 65 entries (a few hooks run under more than one matcher). The seven lifecycle events are `SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `Notification`, `Stop`, `SubagentStop`.
+> Note on the hook count: more hook *files* exist on disk (**88**) than are *wired* (**66** hooks files / 67 executable entries). The unwired files are install scripts, libraries, legacy/`.bak` variants, and intentionally-staged hooks. The number that matters for behavior is **what `settings.json` wires**: 66 distinct `hooks/` files across 67 entries; the 67th entry is `scripts/canary-verify.sh` wired under `SessionStart` — **no referenced executable is duplicated**. The seven lifecycle events are `SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `Notification`, `Stop`, `SubagentStop`.
 
 ### Per-event wiring (from `settings.json`)
 
@@ -33,7 +33,7 @@ All counts below were established by enumerating the actual repository, not copi
 |---|---|---|
 | `SessionStart` | 1 | 7 |
 | `UserPromptSubmit` | 4 | 5 |
-| `PreToolUse` | 21 | 28 |
+| `PreToolUse` | 22 | 30 |
 | `PostToolUse` | 7 | 14 |
 | `Notification` | 1 | 1 |
 | `Stop` | 1 | 4 |
@@ -41,7 +41,7 @@ All counts below were established by enumerating the actual repository, not copi
 
 ### 1.1 External dependencies (REQUIRED vs OPTIONAL)
 
-The harness is a configuration, not a packaged app — there is no `requirements.txt`/`pyproject.toml`. The complete dependency surface, with each item's tier and the subsystem that needs it:
+The harness is a configuration, not a pip-installable package (no `pyproject.toml`/packaging metadata), though it ships a pinned `requirements.txt` that `scripts/bootstrap` and CI (`.github/workflows/baseline.yml`) install into the venv. The complete dependency surface, with each item's tier and the subsystem that needs it:
 
 | Dependency | Tier | Subsystem / why |
 |---|---|---|
@@ -50,7 +50,7 @@ The harness is a configuration, not a packaged app — there is no `requirements
 | `git` | **REQUIRED** | Git-native checkpoints, grant tokens, and the keystone. Normal use needs a recent git (2.4x+); the overnight reference-transaction keystone's structural HEAD-switch protection needs **git ≥ 2.46** (`scripts/overnight-git-selftest.sh` `_ge_246`; box validated on 2.54). |
 | `jq` | **REQUIRED** | JSON parsing in shell hooks/scripts. |
 | Bash + GNU userland (coreutils, util-linux/`flock`, findutils, `grep`, `sed`, `awk`/gawk) | **REQUIRED** | `realpath`, `flock`, `stat`, `sha256sum`, `date`, `grep`, `sed`, `awk`, `find`. GNU forms assumed; BSD/macOS flag differences can break hooks. |
-| `pytest` | **REQUIRED** for `/test` + generated AC tests | `tests/generated/<task_id>/` skeletons and `/test` run under pytest. The empty venv must be populated: `~/.claude/venv/bin/pip install pytest`. |
+| `pytest` | **REQUIRED** for `/test` + generated AC tests | `tests/generated/<task_id>/` skeletons and `/test` run under pytest. `pytest` is pinned in `requirements.txt` and installed into the venv by `scripts/bootstrap` (and CI). |
 | OpenAI Codex CLI + an isolation wrapper resolved via `CODEX_ISO_BIN` | **REQUIRED** for `--codex` / `/codex` | Adversarial second-opinion rounds (`commands/codex.md`, `commands/close.md`). The wrapper is user-supplied and resolved from the `CODEX_ISO_BIN` env var (no author-absolute path); absent → `--codex`/`/codex` fail closed as unavailable and **never** fall back to a bare unsafe `codex`, rest of pipeline unaffected. |
 | `openssl` | **REQUIRED** for `/merge`, `/push` | Nonce/token material in the grant-gated release path. |
 | `bwrap` (bubblewrap) | **REQUIRED** for `/dev-overnight` | The per-Bash RO-bind boundary isolating overnight main-tree writes (§8). |
@@ -330,7 +330,7 @@ flowchart LR
 - **Patches `CLAUDE.md`** dynamic sections between `<!-- AUTO:name -->` / `<!-- /AUTO:name -->` markers (e.g. `AUTO:last-updated`, the component inventory) — manual prose outside the markers is preserved (`hooks/doc_sync/patch.py`).
 - **Skips** `INDEX.md`/`README.md`/`__init__.py`/`.DS_Store` and excludes `commands/scripts/`, `worktrees/`, `specs/`, `dev-registry/` (`EXCLUDED_PATTERNS`).
 
-> **Scope note for this file.** `ARCHITECTURE.md` is **not** in doc-sync's watch/patch set — doc-sync only patches `CLAUDE.md` via `<!-- AUTO: -->` markers and regenerates per-directory `INDEX/README`. This `ARCHITECTURE.md` is therefore a fully hand-authored document; the `<!-- AUTO-GENERATED by rule-inspector -->` blocks present in the pre-2026-06-13 version were a *legacy, no-longer-wired* mechanism and have been removed. The README's `<!-- AUTO:readme-stats -->` block is maintained by a different path and is not mirrored here.
+> **Scope note for this file.** `ARCHITECTURE.md` is **not** in doc-sync's watch/patch set — doc-sync only patches `CLAUDE.md` via `<!-- AUTO: -->` markers and regenerates per-directory `INDEX/README`. This `ARCHITECTURE.md` is therefore a fully hand-authored document; the `<!-- AUTO-GENERATED by rule-inspector -->` blocks present in the pre-2026-06-13 version were a *legacy, no-longer-wired* mechanism and have been removed. The root `README.md` is hand-maintained (it carries **no** `AUTO:readme-stats` marker — only the prose mention at `README.md:57`); doc-sync's `SKIP_FILES` excludes it. Only the per-directory `README.md` files that carry an `AUTO:readme-stats` block are regenerated, and none of that is mirrored here.
 
 ---
 
@@ -340,12 +340,12 @@ flowchart LR
 .claude/                     # symlink target: /dev/shm/dev-workspace/dot-claude (own git repo)
 ├── CLAUDE.md                # the constitution: non-negotiable rules (AUTO:last-updated marker)
 ├── ARCHITECTURE.md          # this document
-├── README.md                # overview / value-prop (AUTO:readme-stats block)
+├── README.md                # overview / value-prop (hand-maintained; no AUTO block)
 ├── INDEX.md                 # top-level index
-├── settings.json            # 64 wired hook files / 65 entries across 7 lifecycle events; permissions; env
+├── settings.json            # 66 wired hook files / 67 entries across 7 lifecycle events; permissions; env
 ├── agents/                  # 23 subagent definitions  (+ INDEX.md, README.md)
 ├── commands/                # 18 slash-command workflows (+ INDEX.md, README.md)
-├── hooks/                   # enforcement layer (86 files on disk; 64 wired)
+├── hooks/                   # enforcement layer (88 files on disk; 66 wired)
 │   ├── lib/                 #   allowlist (sentinel grants), checkpoint-core, contract runtime, resolvers
 │   ├── doc_sync/            #   self-updating INDEX/README/CLAUDE regeneration package
 │   └── git-keystone/        #   git-native ref-transaction protection
