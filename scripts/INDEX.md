@@ -1,8 +1,8 @@
 # scripts
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-07-15T15:15:25Z*
-**Total entries**: 111
+*Last updated: 2026-07-15T17:17:00Z*
+**Total entries**: 112
 **Convention**: kebab
 
 ## Tree
@@ -114,6 +114,7 @@ scripts/
 ├── `test` - test file
 ├── `update-gitignore.sh` - update-gitignore.sh - Auto-update .gitignore with project-specific rules
 ├── `update-overnight-state.sh` - update-overnight-state.sh — Atomically update overnight state file
+├── `verify-claims.sh` - Description: Self-verifying headline-claims gate. Recomputes the wired-hook entry count and
 ├── `write-bulk-commit-sentinel.py` - Invoked from commands/commit.md Step 5 (BULK=true) to authorize the
 ├── `write-codex-enforce.sh` - Writes codex-enforce.json into the dev-registry for the given session.
 ├── `write-commit-grant.py` - Invoked from `commands/commit.md` Step 5 (non-bulk mode) to author a

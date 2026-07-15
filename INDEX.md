@@ -1,8 +1,8 @@
 # dot-claude
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-07-15T16:04:49Z*
-**Total entries**: 471
+*Last updated: 2026-07-15T17:16:06Z*
+**Total entries**: 474
 **Convention**: kebab
 
 ## Tree
@@ -55,9 +55,11 @@ dot-claude/
 │   ├── reference/
 │   │   ├── `checkpoint-mechanism.md` - Auto-Commit / Checkpoint Mechanism
 │   │   ├── `fswatch-quickref.md` - FSWatch Quick Reference Card
+│   │   ├── `generated-tests-policy.md` - `tests/generated/` policy — tracked but ignored, on purpose
 │   │   ├── `git-fswatch.md` - Git File Watcher (fswatch) Documentation
 │   │   ├── `graphify-integration.md` - Graphify Knowledge Graph Integration
 │   │   ├── `lock-file-handling.md` - Git Lock File Handling
+│   │   ├── `roadmap-decomposition-productization.md` - Roadmap: Monolith Decomposition + Productization
 │   │   ├── `slashcommand-quick-reference.md` - Slash Command Quick Reference
 │   │   ├── `tmp-cleanup-convention.md` - Ad-hoc scratch directory convention
 │   │   └── `venv-repair.md` - venv-repair — restoring `~/.claude/venv` when interpreter symlinks break
@@ -334,6 +336,7 @@ dot-claude/
 │   ├── `test` - test file
 │   ├── `update-gitignore.sh` - update-gitignore.sh - Auto-update .gitignore with project-specific rules
 │   ├── `update-overnight-state.sh` - update-overnight-state.sh — Atomically update overnight state file
+│   ├── `verify-claims.sh` - Description: Self-verifying headline-claims gate. Recomputes the wired-hook entry count and
 │   ├── `write-bulk-commit-sentinel.py` - Invoked from commands/commit.md Step 5 (BULK=true) to authorize the
 │   ├── `write-codex-enforce.sh` - Writes codex-enforce.json into the dev-registry for the given session.
 │   ├── `write-commit-grant.py` - Invoked from `commands/commit.md` Step 5 (non-bulk mode) to author a
