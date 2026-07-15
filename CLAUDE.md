@@ -1,7 +1,7 @@
 # CLAUDE.md
 
-> Project-specific settings for .claude
-> Last updated: 2026-04-29
+> Project-specific settings for dot-claude
+> Last updated: 2026-07-15
 
 ---
 
