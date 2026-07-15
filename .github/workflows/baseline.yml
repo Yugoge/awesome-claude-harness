@@ -19,11 +19,21 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          # Full history so the provenance audit can resolve commit-source lines
+          # (e.g. 62957b3); a shallow clone would downgrade them to warnings and
+          # verify-claims.sh runs the audit in --strict (downgrades hard-fail).
+          fetch-depth: 0
 
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.x"
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
 
       - name: Install Python dependencies
         run: python3 -m pip install -r requirements.txt
