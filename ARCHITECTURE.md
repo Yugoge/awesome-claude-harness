@@ -1,7 +1,7 @@
 # Architecture — `.claude` Agent Operating System
 
 > Deep technical architecture and design rationale for maintainers.
-> Last updated: 2026-06-13
+> Last updated: 2026-07-15
 
 This repository is a **Claude Code global configuration** (`~/.claude` symlinks to it) that turns one chat agent into a disciplined software team. A main *orchestrator* agent's direct writes are mechanically constrained by the orchestrator gate (one non-whitelist tool per turn, unlockable by `/do`) so that real work is intended for single-purpose **subagents** it dispatches; a defense-in-depth chain of **PreToolUse / PostToolUse / Stop** hooks makes catastrophic git and filesystem mistakes mechanically hard — gated by hooks that fail closed by default, with narrow audited human break-glass paths (`/do`, `/allow`); and an autonomous overnight loop explores, fixes, verifies, and commits in an isolated worktree until a wall-clock deadline. Everything here is plain Markdown prompts plus small Python/Bash hooks and scripts — the behavior change comes from *enforcement in code*, not from asking the model nicely.
 
