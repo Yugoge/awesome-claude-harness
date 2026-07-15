@@ -280,6 +280,8 @@ require a mechanism decision before any split.*
 - Existing portable-vs-personal seed: `settings.template.json`.
 - Delivery-path constraint (why this doc lives under `docs/reference/`): `.gitignore`
   ignores `docs/*` except `docs/reference/`; `docs/dev/` and `docs/planning/` are
-  ignored, so a roadmap placed there would be silently untracked. Verify with
-  `git check-ignore -v docs/reference/roadmap-decomposition-productization.md` (returns
-  nothing = tracked).
+  ignored, so a roadmap placed there would be silently untracked. Verify eligibility
+  with `git check-ignore -v docs/reference/roadmap-decomposition-productization.md` — an
+  empty result means NOT ignored (eligible to be tracked), NOT that the file is already
+  tracked. A brand-new file stays untracked (`??`) until the commit stage `git add`s it;
+  confirm actual tracking post-commit with `git ls-files --error-unmatch <path>`.
