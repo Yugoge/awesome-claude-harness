@@ -498,7 +498,7 @@ Everything else (`agents/`, `commands/`, `skills/`, `schemas/`, `templates/`, `t
 | Event | Hook entries | Primary purpose |
 |---|---|---|
 | SessionStart | 7 | Environment setup, resolver announcement, dependency checks |
-| UserPromptSubmit | 4 | Per-turn sentinel pre-creation, prompt-purity enforcement, dedup check |
+| UserPromptSubmit | 5 | Per-turn sentinel pre-creation, prompt-purity enforcement, dedup check |
 | PreToolUse | 22 | The gate layer: orchestrator rate-limit, bash-safety, git kernel, tool-policy, branch/PR firewall |
 | PostToolUse | 7 | Doc-sync, allowlist grant consumption, checkpoint writes |
 | Notification | 1 | User-facing notification routing |
