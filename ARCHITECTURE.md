@@ -349,7 +349,7 @@ flowchart LR
 │   ├── lib/                 #   allowlist (sentinel grants), checkpoint-core, contract runtime, resolvers
 │   ├── doc_sync/            #   self-updating INDEX/README/CLAUDE regeneration package
 │   └── git-keystone/        #   git-native ref-transaction protection
-├── scripts/                 # 72 helper scripts (graphify, grant writers, spec/dev-report resolvers, ...)
+├── scripts/                 # 76 helper scripts (graphify, grant writers, spec/dev-report resolvers, ...)
 │   └── install/             #   install helpers
 ├── skills/                  # 8 skills: Playwright UI-audit suite (ui-*)
 ├── schemas/                 # JSON contracts: context.v1, cycle-contract.v1, dev-report.v1, qa-report.v1, ...
