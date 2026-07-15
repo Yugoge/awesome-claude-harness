@@ -155,8 +155,9 @@ DEV_CONTAINERS="${CLAUDE_DEV_CONTAINERS:-happy-web-dev}"
 # requires an explicit user grant via /root/bin/claude-allow-restart. The systemctl block
 # at line ~700 skips happy-daemon commands entirely (Layer 1.A already adjudicated).
 DEV_SYSTEMD="${CLAUDE_DEV_SYSTEMD:-}"
-# Grant-helper path echoed in the Layer 1.A daemon-restart hint (cosmetic stderr only;
-# the grant sentinel dir itself is DAEMON_RESTART_GRANT_DIR, declared near the top).
+# Grant-helper path echoed in the daemon-restart stderr guidance — the Layer 1.A hint plus
+# the Layer 1.B/1.E reason lines (cosmetic stderr only; the grant sentinel dir itself is
+# DAEMON_RESTART_GRANT_DIR, declared near the top).
 # Env-overridable; default = current literal so the unset-override behavior is byte-identical.
 DAEMON_RESTART_GRANT_HELPER="${CLAUDE_DAEMON_RESTART_GRANT_HELPER:-/root/bin/claude-allow-restart}"
 
