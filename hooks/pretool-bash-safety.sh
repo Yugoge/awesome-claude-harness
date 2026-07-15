@@ -680,7 +680,7 @@ if echo "$COMMAND" | grep -qE 'systemctl\s+(stop|restart|disable|enable|reload|k
     echo "BLOCKED: daemon-restart-prohibition — systemctl ${HAPPY_VERB:-<verb>} on ${HAPPY_UNIT:-happy-daemon-*} is FORBIDDEN" >&2
     echo "Command: $COMMAND" >&2
     echo "REASON: per c3-20260504-223115, Claude must NEVER restart any happy-daemon-* by any path." >&2
-    echo "Hint: user must run /root/bin/claude-allow-restart <target> from a real TTY first." >&2
+    echo "Hint: user must run $DAEMON_RESTART_GRANT_HELPER <target> from a real TTY first." >&2
     exit 2
   fi
 fi
