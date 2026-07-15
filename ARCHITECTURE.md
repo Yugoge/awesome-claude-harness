@@ -41,7 +41,7 @@ All counts below were established by enumerating the actual repository, not copi
 
 ### 1.1 External dependencies (REQUIRED vs OPTIONAL)
 
-The harness is a configuration, not a pip-installable package (no `pyproject.toml`/packaging metadata), though it ships a pinned `requirements.txt` that `scripts/bootstrap` and CI (`.github/workflows/baseline.yml`) install into the venv. The complete dependency surface, with each item's tier and the subsystem that needs it:
+The harness is a configuration, not a pip-installable package (no `pyproject.toml`/packaging metadata), though it ships a pinned `requirements.txt` that `scripts/bootstrap` installs into the harness venv and that CI (`.github/workflows/baseline.yml`) installs before running its tests. The complete dependency surface, with each item's tier and the subsystem that needs it:
 
 | Dependency | Tier | Subsystem / why |
 |---|---|---|
