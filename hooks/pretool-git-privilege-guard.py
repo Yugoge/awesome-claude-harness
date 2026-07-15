@@ -376,15 +376,48 @@ def _extract_commit_dash_c_dir(command):
     this extracted directory (instead of blindly using the hook's CWD, as
     `_git_output`'s docstring describes for push) is required so the nested-
     repo commit is validated against ITS OWN repo, not CONTROL_ROOT's.
+
+    Codex adversarial review (2026-07-15) found two sharp edges, both handled
+    here by blocking rather than guessing:
+      - Multiple `-C` options: git applies each in sequence (a later ABSOLUTE
+        `-C` fully overrides an earlier one -- verified empirically), so
+        naively taking the first match would validate one directory while
+        the commit actually lands in another. Since no legitimate caller in
+        this repo ever passes more than one `-C` to a commit invocation,
+        ambiguity is treated as a hard block rather than an attempt to
+        replicate git's full (and, for relative paths, chained) -C semantics.
+      - An unresolved shell variable reference (e.g. `${GIT_ROOT}` never
+        substituted with a concrete path before the command reached the
+        Bash tool): subprocess.run() does not perform shell expansion, so
+        passing this literally to `git -C` would fail and could otherwise
+        surface as a confusing generic "repository mismatch". Blocked here
+        with a distinct, clearer message instead.
     """
     m = GIT_COMMIT_INVOCATION_RE.search(command)
     if not m:
         return ''
     options_span = m.group(1)
-    dm = DASH_CAPITAL_C_RE.search(options_span)
-    if not dm:
+    matches = list(DASH_CAPITAL_C_RE.finditer(options_span))
+    if not matches:
         return ''
-    return dm.group(1) or dm.group(2) or dm.group(3) or ''
+    if len(matches) > 1:
+        _block(
+            '\nBLOCKED: agent git commit - multiple -C directory overrides '
+            'in one commit invocation are not supported.\n'
+            'Command excerpt: %s\n' % command[:200]
+            + 'Re-issue the commit with exactly one -C <dir> (or none).\n'
+        )
+    dm = matches[0]
+    value = dm.group(1) or dm.group(2) or dm.group(3) or ''
+    if '$' in value:
+        _block(
+            '\nBLOCKED: agent git commit - the -C argument %r looks like an '
+            'unresolved shell variable reference, not a concrete path.\n' % value
+            + 'Command excerpt: %s\n' % command[:200]
+            + 'Substitute the concrete resolved absolute directory before '
+            'submitting the commit command.\n'
+        )
+    return value
 
 
 def _commit_target_git_output(target_dir, *args):
