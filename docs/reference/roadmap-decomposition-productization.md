@@ -77,6 +77,12 @@ Supporting structural facts (verified):
   (`git grep -lE '@import|\{\{include\}\}|<!-- include|\{% include'` → 0 matches). See
   §3.
 
+> **Shared-tree note:** these counts were measured against this plan's baseline commit
+> `9e87b0d`. The repository is a live shared working tree (§1, identity 2) under
+> concurrent edits, so a file's current `wc -l` may drift (the test net grew to 4349
+> lines mid-plan). Re-measure at the extraction commit before acting — the counts fix
+> the scale, not a frozen contract.
+
 ### 2.2 Per-file risk rating
 
 | File | Lines | Test net? | Risk if split | Why |
