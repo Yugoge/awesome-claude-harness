@@ -77,7 +77,7 @@ Enforced by two PreToolUse hooks. `~/.claude/hooks/pretool-block-branch-pr-workt
 2. **NOT** circumvent via shell wrappers, intermediary scripts, hook-source recon, or hook-file edits.
 3. If the task genuinely requires the rejected operation, output a **REQUEST** message to the user describing exactly what needs to run and why; the user decides.
 
-### Sentinel-grant mechanism (task 20260519-211515 R2)
+### Sentinel-grant mechanism
 
 `/allow` now writes a **structured sentinel grant** at `/tmp/claude-grants/<task_id>.json` containing `{task_id, session_id, allowed_operations[], created_at, expires_at}`. `allowed_operations[]` is a structured list of `{op, target?, args_contain?}` dicts — **NOT** a free-text pattern that grep matches against the command line. The hook reads this sentinel via `hooks/lib/allowlist.py::match_sentinel_grant_for_bash_command()` and matches structurally on the bash sub-command's first whitespace-separated word (`op`), optional second word (`target`), and optional `args_contain[]` arg-fragments. **Command-text grep is no longer the grant declaration channel** — substring matching against the raw command line is forbidden. The sentinel is unlinked on **any terminal result** (success, non-zero exit, malformed grant JSON, or comment-only attack) by `hooks/posttool-allowlist-consume.py`; `hooks/stop-cleanup-allowlist.sh` reaps expired sentinels at session end.
 
