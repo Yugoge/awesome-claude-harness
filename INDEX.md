@@ -1,8 +1,8 @@
 # dot-claude
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-07-15T14:54:32Z*
-**Total entries**: 471
+*Last updated: 2026-07-13T11:37:20Z*
+**Total entries**: 464
 **Convention**: kebab
 
 ## Tree
@@ -460,13 +460,6 @@ dot-claude/
 │   ├── `test_specialist_yield.py` - Tests use a tmp dir for the yield log and the bundled production policy file
 │   ├── `verify-stop-spec-session-isolation.sh` - QA verification harness for stop-spec-coverage-enforce.py session isolation fix.
 │   └── `ws2_zero_literal_gate.py` - Scans the EXPLICITLY-defined load-bearing surfaces of a rendered fresh clone with
-├── tools/
-│   └── demo/
-│       ├── `audit.mjs` - mjs file
-│       ├── `gen-svg.mjs` - mjs file
-│       ├── `manifest.schema.md` - Trace manifest schema
-│       ├── `sample-hook-trace.json` - JSON config: meta, lines
-│       └── `sample-trace.json` - JSON config: meta, lines
 ├── `ARCHITECTURE.md` - Architecture — `.claude` Agent Operating System
 ├── `CHANGELOG.md` - Changelog
 ├── `CLAUDE.md` - CLAUDE.md
