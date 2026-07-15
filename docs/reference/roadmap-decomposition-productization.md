@@ -222,6 +222,7 @@ These are recorded here as boundary evidence; **fixing them is out of scope this
 |---|---|---|
 | `commands/dev.md`, `agents/qa.md`, `commands/close.md` | personal `/root` / `Yugoge` / maintainer references | P1 |
 | `scripts/detect-hardcoded-paths.sh`, `scripts/spec-verify/spec_verify_parsers.py`, `scripts/close-scoring-decide.py`, `scripts/write-commit-grant.py` | tracked `/root` absolute paths | P2 |
+| `settings.json` (**tracked**) | personal config committed to the repo: personal `permissions` allow/deny/ask entries + absolute `/root` paths; should be generated from `settings.template.json`, not tracked | P3 |
 
 ### 4.4 Phased productization plan
 
