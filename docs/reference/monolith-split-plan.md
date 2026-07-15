@@ -11,7 +11,7 @@
 
 | Monolith | Lines | Kind | Runtime-critical | Test safety-net |
 |---|---:|---|---|---|
-| `hooks/lib/runtime_guard/_core.py` | 5429 (was 5839) | Python engine | Yes — powers the bash-safety guard | `test_runtime_guard.py` = **755 passing** |
+| `hooks/lib/runtime_guard/_core.py` | 5217 (was 5839) | Python engine | Yes — powers the bash-safety guard | `test_runtime_guard.py` = **755 passing** |
 | `commands/dev-overnight.md` | 1894 | Prompt (orchestrator) | Yes — autonomous loop | none (prompt) |
 | `agents/qa.md` | 1916 | Prompt (subagent) | Yes — QA gate | none (prompt) |
 | `commands/dev.md` | 1618 | Prompt (orchestrator) | Yes — `/dev` pipeline | none (prompt) |
@@ -94,6 +94,20 @@ except ImportError:                    # script context: sys.path[0] == this dir
 
 ---
 
+## Phase 3 — DONE (2026-07-15): path/glob matching seam
+
+| Field | Value |
+|---|---|
+| Unit extracted | Path-normalization + segment-boundary glob-matching family (near-leaf: imports only `shell_lex._strip_quotes` + stdlib) |
+| New module | `hooks/lib/runtime_guard/pathmatch.py` (305 lines; 262 moved verbatim) |
+| Names moved | `_expand_leading_home`, `_normalize_path`, `_glob_to_segment_regex`, `_SHELL_GLOB_METACHARS`, `_has_shell_glob`, `_glob_parent`, `_glob_token_selects_protected`, `_glob_literal_prefix`, `_dir_equal_or_under`, `_path_matches_any`, `_any_token_path_matches`, `_path_under_any`, `_any_token_under` (13 names) |
+| Stayed in `_core` | `_mutation_cand_hits` — it forward-references `_destructive_root_contains_protected` (defined ~3.3k lines later in the decision engine); lifting it would invert the dependency into a `pathmatch`→`_core` import cycle. Its callees (`_path_matches_any`, `_has_shell_glob`, `_glob_parent`, `_strip_quotes`) are all re-imported, so it resolves in place. The plan's "pass the callee in" alternative was rejected: it mutates the signature, violating INV-4 (zero-logic move) |
+| Re-import site | `_core.py` in-place (dual-context try/except), `# noqa: F401` |
+| Coupling | Outbound: `shell_lex._strip_quotes` + stdlib `os`/`re` only — **no `constants` dep** (the roadmap listed `constants` as an upper bound; the actual moved bodies reference none). Inbound: all refs inside `_core` (0 external importers; only `test_runtime_guard.py` imports via the package). `_mutation_cand_hits` + `_PATH_VALUED_BUILD_FLAGS` anchors kept in `_core` |
+| Result | INV-1 ✓ (755→755, full suite no new fail/skip) · INV-2 ✓ (0 missing; moved names are object-identity re-exports, `_core.X is pathmatch.X`) · INV-3 ✓ (all 3 contexts; shim script-ctx BLOCKs protected statefile / glob-parent `dir/*` / build-path mutations, ALLOWs benign — the moved matchers still ACT) · INV-4 ✓ (byte-identical slices) · INV-5 ~ (one pre-existing `/root/.config/app` illustrative comment relocated verbatim — byte-identity gate governs; consistent with `_core`'s 21 existing example-path comments) |
+
+---
+
 ## `_core.py` — phased sequence (ascending risk)
 
 Risk is driven by **outbound** coupling (how much stays-in-`_core` code the cluster calls).
@@ -102,7 +116,7 @@ Leaves first; the decision engine last.
 ```mermaid
 graph LR
     P1["Phase 1 DONE<br/>shell_lex.py<br/>219 ln · leaf"] --> P2["Phase 2 DONE<br/>constants.py<br/>289 ln · pure data"]
-    P2 --> P3["Phase 3<br/>pathmatch.py<br/>~400 ln · path/glob"]
+    P2 --> P3["Phase 3 DONE<br/>pathmatch.py<br/>262 ln · path/glob"]
     P3 --> P4["Phase 4<br/>config.py<br/>~125 ln · cfg load"]
     P4 --> P5["Phase 5<br/>destructive_cmds.py<br/>~950 ln · find/fd/git"]
     P5 --> P6["Phase 6<br/>anchor.py<br/>~1130 ln · anchor engine"]
@@ -111,7 +125,6 @@ graph LR
 
 | Phase | Module | Cluster (representative names) | Outbound deps | Risk | Key note |
 |---|---|---|---|---|---|
-| 3 | `pathmatch.py` | `_normalize_path`, `_expand_leading_home`, `_glob_to_segment_regex`, `_has_shell_glob`, `_glob_parent`, `_glob_literal_prefix`, `_dir_equal_or_under`, `_path_matches_any`, `_path_under_any`, `_any_token_*` | shell_lex + constants | **Low-Med** | One forward ref: `_mutation_cand_hits`→`_destructive_root_contains_protected`. Leave `_mutation_cand_hits` in `_core`, or pass the callee in |
 | 4 | `config.py` | `_load_config`, `_config_path_variants`, `_config_ancestor_dirs`, `_config_or_ancestor_variants`, `_targets_config_file`, `_home_tilde_variant`, `REQUIRED_KEYS`, `DATA_FILE_PATH` | pathmatch + constants | **Med** | Owns `DATA_FILE_PATH` (env-overridable) — tests set it via env, so the module-level read must stay import-time |
 | 5 | `destructive_cmds.py` | `_fd_*`, `_find_*` (find/fd destructive analysis) + `_git_*` (`_git_destructive_pathspecs`, `_git_is_destructive_invocation`, `_strip_git_pathspec_magic`, …) | pathmatch + config + constants | **Med-High** | Two cohesive command-family parsers; may split into `find_cmds.py` + `git_cmds.py` if the combined diff is unreviewable |
 | 6 | `anchor.py` | `_anchor_*` family + `_p0_anchor` (`_anchor_exec_tokens`, `_anchor_in_command_word_position`, `_anchor_mutation_hits`, `_anchor_build_hits_protected`, …) | all shared helpers + `cfg` | **High** | Extract only after 2–5 stabilize the shared-helper surface; heaviest inbound/outbound coupling |

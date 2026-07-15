@@ -1,7 +1,7 @@
 # dot-claude
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-07-15T18:00:26Z*
+*Last updated: 2026-07-15T20:33:18Z*
 **Total entries**: 477
 **Convention**: kebab
 
@@ -474,7 +474,7 @@ dot-claude/
 │       └── `sample-trace.json` - JSON config: meta, lines
 ├── `ARCHITECTURE.md` - Architecture — `.claude` Agent Operating System
 ├── `CHANGELOG.md` - Changelog
-├── `CLAUDE.md` - CLAUDE.md
+├── `CLAUDE.md` - Global Claude Code Configuration
 ├── `LICENSE` - LICENSE file
 ├── `NESTED-REPO.md` - Nested Repo Sentinel
 ├── `NOTICE` - NOTICE file

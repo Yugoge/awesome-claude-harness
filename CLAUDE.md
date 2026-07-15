@@ -1,19 +1,12 @@
-# CLAUDE.md
-
-> Project-specific settings for .claude
-> Last updated: 2026-04-29
-
----
-
 # Global Claude Code Configuration
 
 <!-- AUTO:last-updated -->
-> Last updated: 2026-07-14
+> Last updated: 2026-07-15
 <!-- /AUTO:last-updated -->
 
 ---
 
-## Production Catastrophe Lessons
+## Production Lessons
 
 **NON-NEGOTIABLE.**
 
@@ -70,7 +63,7 @@ Enforced by `~/.claude/hooks/pretool-bash-safety.sh` (PreToolUse). Hook is the a
 
 ## 🚳 No branch / PR / worktree creation outside dev-overnight
 
-**NON-NEGOTIABLE (2026-06-04).** Creating any **branch**, **PR**, or **worktree** is forbidden by default in every context — interactive, subagent, automation. A live `/dev-overnight` session is the always-on exception. Two human-authorized escape hatches are preserved: `/do` consent (main agent) and an `/allow` grant for the specific command.
+**NON-NEGOTIABLE.** Creating any **branch**, **PR**, or **worktree** is forbidden by default in every context — interactive, subagent, automation. A live `/dev-overnight` session is the always-on exception. Two human-authorized escape hatches are preserved: `/do` consent (main agent) and an `/allow` grant for the specific command.
 
 Enforced by two PreToolUse hooks. `~/.claude/hooks/pretool-block-branch-pr-worktree.py` (matcher `Bash`) blocks `git branch <name>` / `checkout -b` / `switch -c` (and `--orphan` / copy forms, path-qualified `git`, attached/clustered short options), `git worktree add`, and `gh pr create`. The `EnterWorktree` tool is blocked by `~/.claude/hooks/pretool-block-enterworktree.sh` (same overnight + `/do` + `/allow` bypass semantics). List / delete / rename / info forms of `git branch`, and `git worktree list/remove/prune`, remain allowed. Bypass: run inside `/dev-overnight` (a live `overnight-state-*.json` under `<project>/.claude/`), use `/do`, or `/allow` the command — or remove the hooks from `settings.json`.
 
@@ -84,7 +77,7 @@ Enforced by two PreToolUse hooks. `~/.claude/hooks/pretool-block-branch-pr-workt
 2. **NOT** circumvent via shell wrappers, intermediary scripts, hook-source recon, or hook-file edits.
 3. If the task genuinely requires the rejected operation, output a **REQUEST** message to the user describing exactly what needs to run and why; the user decides.
 
-### Sentinel-grant mechanism (task 20260519-211515 R2)
+### Sentinel-grant mechanism
 
 `/allow` now writes a **structured sentinel grant** at `/tmp/claude-grants/<task_id>.json` containing `{task_id, session_id, allowed_operations[], created_at, expires_at}`. `allowed_operations[]` is a structured list of `{op, target?, args_contain?}` dicts — **NOT** a free-text pattern that grep matches against the command line. The hook reads this sentinel via `hooks/lib/allowlist.py::match_sentinel_grant_for_bash_command()` and matches structurally on the bash sub-command's first whitespace-separated word (`op`), optional second word (`target`), and optional `args_contain[]` arg-fragments. **Command-text grep is no longer the grant declaration channel** — substring matching against the raw command line is forbidden. The sentinel is unlinked on **any terminal result** (success, non-zero exit, malformed grant JSON, or comment-only attack) by `hooks/posttool-allowlist-consume.py`; `hooks/stop-cleanup-allowlist.sh` reaps expired sentinels at session end.
 
@@ -110,9 +103,3 @@ A subagent MUST NOT restart a long-running daemon it itself depends on to verify
 When dispatching a subagent via `Agent`, the prompt describes **WHAT** (problem, constraints, acceptance criteria) — not **HOW** (no tool names, shell commands, or shell syntax). The subagent picks its own toolchain.
 
 Enforcement: `~/.claude/hooks/pretool-orchestrator-prompt-purity.py` (PreToolUse Agent matcher).
-
----
-
-## 🔗 Nested .claude Repo
-
-`/root/.claude` symlinks to `/dev/shm/dev-workspace/dot-claude` (separate git repo). For `.claude/*` commits, work inside that path — never push from `/root`.

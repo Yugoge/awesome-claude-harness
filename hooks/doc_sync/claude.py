@@ -4,7 +4,10 @@
 from datetime import datetime, timezone
 from pathlib import Path
 
-CLAUDE_HEADER_MARKERS = ['---', '# CLAUDE.md', '> Project-specific settings']
+# A CLAUDE.md that already leads with an AUTO-managed block is a doc-sync-managed
+# file whose header is intentional; treat '<!-- AUTO:' as a valid header marker so
+# the legacy '# CLAUDE.md' preamble is not re-prepended above a deduped single H1.
+CLAUDE_HEADER_MARKERS = ['---', '# CLAUDE.md', '> Project-specific settings', '<!-- AUTO:']
 
 
 def has_claude_header(content: str) -> bool:
