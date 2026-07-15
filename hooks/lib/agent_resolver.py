@@ -33,6 +33,21 @@ that window it is treated exactly like an is_running=false match: not
 authoritative, caller falls through to agent-index (AC-3 semantics
 already established below). This does not touch the agent-index fallback
 path itself, only what counts as an authoritative cp-state hit BEFORE it.
+
+STALE-1 residual risk (Codex adversarial review, 2026-07-15): a resolver-
+only staleness bound cannot catch a *freshly* manufactured dangling entry
+(pretool-cp-checkin.py auto-registers ANY Read of a matching cp-state
+path, including incidental/debugging reads, with no way for this module
+to distinguish that from a genuine dispatch). Mitigated, not eliminated,
+by a companion pretool-cp-checkin.py fix (2026-07-15) that stops
+refreshing checked_in_at on repeat reads by an already-registered owner --
+so a bogus entry can no longer be kept perpetually "fresh" by the same
+bystander re-reading it, and will itself go stale within
+_MAX_ACTIVE_AGE_SECONDS of its single registration. A freshly-created
+bogus entry can still cause misattribution for that same bounded window;
+fully closing that gap would require an explicit, ownership-validated
+dispatch-claim protocol (out of scope for this fix -- flagged as a
+follow-up).
 """
 
 from __future__ import annotations
@@ -46,15 +61,24 @@ from typing import Optional
 
 # STALE-1: upper bound on how long an is_running=true cp-state entry is
 # trusted without being re-touched (checked_in_at refreshed by a genuine
-# check-in). 8 hours mirrors the longest single-workflow duration already
-# documented in this harness (/dev-overnight default end-time is 8h) --
-# comfortably longer than any single checkpointed subagent invocation
-# within that loop (each cycle dispatches short-lived subagents, not one
-# subagent process spanning the whole loop), so it will not false-negative
-# a genuinely still-running session. The dangling entries this fix targets
-# were observed ranging from ~1 day to 2+ months stale -- all well past
-# this threshold.
-_MAX_ACTIVE_AGE_SECONDS = 8 * 60 * 60
+# check-in). Originally set to 8h (matching /dev-overnight's documented
+# default end-time), but Codex adversarial review (2026-07-15) found real
+# on-disk evidence of a legitimate, cleanly-completed single `dev` cp-state
+# lifecycle (check-in to auto-checkout-on-all-checkpoints-terminal) lasting
+# 10.86h (.claude/specs/20260604-204954/cp-state-dev.json in this harness's
+# own history) -- 8h would have false-negatived that genuine session. 24h
+# gives >2x margin over the longest such lifecycle observed, while still
+# self-healing an order of magnitude faster than the dangling entries this
+# fix targets (observed ranging from ~1 day to 2+ months stale).
+_MAX_ACTIVE_AGE_SECONDS = 24 * 60 * 60
+
+# STALE-1 Codex (c): a checked_in_at timestamp in the future (clock skew
+# between writer/reader, or a corrupt/adversarial entry) makes `age`
+# negative; without a floor, `age > max_age_seconds` is never true and the
+# entry would be trusted as "fresh" forever (or until far past the future
+# instant). Allow a small tolerance for ordinary clock skew; anything
+# beyond it is untrusted (stale), not "eternally fresh".
+_CLOCK_SKEW_TOLERANCE_SECONDS = 5 * 60
 
 
 def _checked_in_age_seconds(payload: dict) -> Optional[float]:
@@ -72,7 +96,8 @@ def _checked_in_age_seconds(payload: dict) -> Optional[float]:
 
 
 def _is_stale(payload: dict, max_age_seconds: float = _MAX_ACTIVE_AGE_SECONDS) -> bool:
-    """True iff payload is too old to trust as an active resolution hit.
+    """True iff payload is too old (or suspiciously future-dated) to trust
+    as an active resolution hit.
 
     Fail-safe direction: a missing/unparseable checked_in_at is treated as
     stale (excluded from trust) rather than trusted indefinitely -- mirrors
@@ -80,6 +105,8 @@ def _is_stale(payload: dict, max_age_seconds: float = _MAX_ACTIVE_AGE_SECONDS) -
     """
     age = _checked_in_age_seconds(payload)
     if age is None:
+        return True
+    if age < -_CLOCK_SKEW_TOLERANCE_SECONDS:
         return True
     return age > max_age_seconds
 

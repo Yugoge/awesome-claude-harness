@@ -1,8 +1,8 @@
 # runtime_guard
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-07-15T20:37:23Z*
-**Total entries**: 5
+*Last updated: 2026-07-15T21:39:41Z*
+**Total entries**: 6
 **Convention**: kebab
 
 ## Tree
@@ -10,6 +10,7 @@
 runtime_guard/
 ├── `__main__.py` - Package entry-point so `python -m lib.runtime_guard` still works.
 ├── `_core.py` - This module contains ZERO project identifiers. Every project-specific name
+├── `config.py` - The config-file loader + config-self-protection cluster split out of _core.py in
 ├── `constants.py` - Generic verb / keyword / exec-front-end lookup tables split out of _core.py
 ├── `pathmatch.py` - The path/glob matching family split out of _core.py in the phase-3 monolith
 └── `shell_lex.py` - Pure text tokenizers split out of _core.py in the phase-1 monolith

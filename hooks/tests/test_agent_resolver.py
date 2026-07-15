@@ -120,6 +120,27 @@ def test_missing_checked_in_at_treated_as_stale(tmp_path, monkeypatch):
     assert role is None, f"missing checked_in_at should fail safe to None, got {role!r}"
 
 
+def test_far_future_checked_in_at_treated_as_stale(tmp_path, monkeypatch):
+    """Codex finding (c): a checked_in_at in the future (clock skew or a
+    corrupt/adversarial entry) makes age negative; without a floor,
+    age > max_age_seconds is never true and the entry would be trusted as
+    fresh forever. Must be treated as stale/untrusted, not eternally fresh."""
+    _write_cp_state(tmp_path, "future-spec", "architect", agent_id="future-agent",
+                     checked_in_at=_iso_ago(-24))  # 24h in the future
+    role = _resolve(tmp_path, "future-agent", monkeypatch)
+    assert role is None, f"far-future checked_in_at should be treated as stale, got {role!r}"
+
+
+def test_small_clock_skew_still_tolerated(tmp_path, monkeypatch):
+    """A few minutes of clock skew into the future (ordinary NTP drift, or a
+    write landing just after this process's `now` snapshot) must not be
+    treated as stale -- only far-future timestamps are suspicious."""
+    _write_cp_state(tmp_path, "skew-spec", "qa", agent_id="skew-agent",
+                     checked_in_at=_iso_ago(-2 / 60))  # ~2 seconds in the future
+    role = _resolve(tmp_path, "skew-agent", monkeypatch)
+    assert role == "qa", f"small clock skew should still resolve normally, got {role!r}"
+
+
 # -------------------- regression: existing behavior must be preserved ---------------------
 
 def test_cross_role_active_collision_still_fails_closed(tmp_path, monkeypatch):

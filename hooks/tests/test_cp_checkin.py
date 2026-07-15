@@ -338,6 +338,59 @@ def test_ac10d_concurrent_bump_generation(tmp_path):
     )
 
 
+# -------------------- STALE-1: idempotent checked_in_at (Codex finding a) ---------------------
+
+def test_stale1_repeat_read_same_owner_does_not_refresh_checked_in_at(tmp_path):
+    """A repeat Read by the SAME already-registered owner of an already-running
+    slot must NOT restamp checked_in_at -- otherwise a bystander session that
+    incidentally re-reads a cp-state path it auto-registered into could keep
+    that registration perpetually "fresh", defeating agent_resolver.py's
+    staleness bound (hooks/lib/agent_resolver.py _MAX_ACTIVE_AGE_SECONDS)."""
+    spec_id, agent = "spec-test-stale1", "architect"
+    old_ts = "2026-01-01T00:00:00Z"
+    cp_path = _make_cp_state(tmp_path, spec_id, agent, _baseline_payload(
+        spec_id, agent, generation=1, agent_id="bystander-agent", is_running=True,
+        checkpoints=[_cp("cp-01", state="pending")]))
+    payload = _read_cp(cp_path)
+    payload["checked_in_at"] = old_ts
+    cp_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+
+    rc = _run_hook(tmp_path, {"tool_name": "Read",
+                               "tool_input": {"file_path": str(cp_path)},
+                               "agent_id": "bystander-agent"})
+    _assert_no_traceback(rc, "STALE-1")
+    after = _read_cp(cp_path)
+    assert after.get("checked_in_at") == old_ts, (
+        f"STALE-1 regression: repeat same-owner Read refreshed checked_in_at: {after.get('checked_in_at')!r}"
+    )
+    assert after.get("is_running") is True
+
+
+def test_stale1_new_owner_takeover_still_refreshes_checked_in_at(tmp_path):
+    """A genuine takeover (different agent_id claiming an is_running=false
+    slot, or an idle slot's first registration) must still refresh
+    checked_in_at -- only the SAME-owner repeat-read path is idempotent."""
+    spec_id, agent = "spec-test-stale1b", "architect"
+    old_ts = "2026-01-01T00:00:00Z"
+    cp_path = _make_cp_state(tmp_path, spec_id, agent, _baseline_payload(
+        spec_id, agent, generation=1, agent_id="old-owner", is_running=False,
+        checkpoints=[_cp("cp-01", state="pending")]))
+    payload = _read_cp(cp_path)
+    payload["checked_in_at"] = old_ts
+    cp_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+
+    rc = _run_hook(tmp_path, {"tool_name": "Read",
+                               "tool_input": {"file_path": str(cp_path)},
+                               "agent_id": "new-owner"})
+    _assert_no_traceback(rc, "STALE-1b")
+    after = _read_cp(cp_path)
+    assert after.get("checked_in_at") != old_ts, (
+        "STALE-1b regression: genuine new-owner takeover did not refresh checked_in_at"
+    )
+    assert after.get("agent_id") == "new-owner"
+    assert after.get("is_running") is True
+
+
 # -------------------- graphify registration (spec-20260527-061433) ----------
 
 def test_graphify_in_cp_agents():
