@@ -345,7 +345,7 @@ flowchart LR
 ├── settings.json            # 66 wired hook files / 67 entries across 7 lifecycle events; permissions; env
 ├── agents/                  # 23 subagent definitions  (+ INDEX.md, README.md)
 ├── commands/                # 18 slash-command workflows (+ INDEX.md, README.md)
-├── hooks/                   # enforcement layer (86 files on disk; 64 wired)
+├── hooks/                   # enforcement layer (88 files on disk; 66 wired)
 │   ├── lib/                 #   allowlist (sentinel grants), checkpoint-core, contract runtime, resolvers
 │   ├── doc_sync/            #   self-updating INDEX/README/CLAUDE regeneration package
 │   └── git-keystone/        #   git-native ref-transaction protection
