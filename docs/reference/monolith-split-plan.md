@@ -111,7 +111,6 @@ graph LR
 
 | Phase | Module | Cluster (representative names) | Outbound deps | Risk | Key note |
 |---|---|---|---|---|---|
-| 2 | `constants.py` | ~20 `frozenset`/dict tables: `PKG_MANAGERS`, `ENV_WRAPPERS`, `RUNTIMES`, `MUTATION_VERBS`, `KILL_VERBS`, `EXEC_FRONTEND_PROFILES`, … | none (pure data) | **Low** | Move data tables only; **keep `_block` + `Verdict`/`ALLOW` in `_core`** (type alias anchors there). Re-import restores every name |
 | 3 | `pathmatch.py` | `_normalize_path`, `_expand_leading_home`, `_glob_to_segment_regex`, `_has_shell_glob`, `_glob_parent`, `_glob_literal_prefix`, `_dir_equal_or_under`, `_path_matches_any`, `_path_under_any`, `_any_token_*` | shell_lex + constants | **Low-Med** | One forward ref: `_mutation_cand_hits`→`_destructive_root_contains_protected`. Leave `_mutation_cand_hits` in `_core`, or pass the callee in |
 | 4 | `config.py` | `_load_config`, `_config_path_variants`, `_config_ancestor_dirs`, `_config_or_ancestor_variants`, `_targets_config_file`, `_home_tilde_variant`, `REQUIRED_KEYS`, `DATA_FILE_PATH` | pathmatch + constants | **Med** | Owns `DATA_FILE_PATH` (env-overridable) — tests set it via env, so the module-level read must stay import-time |
 | 5 | `destructive_cmds.py` | `_fd_*`, `_find_*` (find/fd destructive analysis) + `_git_*` (`_git_destructive_pathspecs`, `_git_is_destructive_invocation`, `_strip_git_pathspec_magic`, …) | pathmatch + config + constants | **Med-High** | Two cohesive command-family parsers; may split into `find_cmds.py` + `git_cmds.py` if the combined diff is unreviewable |
