@@ -243,6 +243,17 @@ for (let i = 0; i < Math.min(traceSeq.length, expected.length); i++) {
 }
 for (const id of ids) if (!traceSeq.includes(id)) V(`manifest id "${id}" has no <text data-trace-id> in SVG`);
 
+// ---------- strict-mode escalation (opt-in) ----------
+// In --strict, EVERY provenance downgrade (any warning recorded by W(), present OR future)
+// becomes a hard violation. Implemented centrally here at the verdict — the individual W()
+// call sites are never enumerated, so new warning sites inherit strictness automatically.
+// This only ADDS to violations; it never removes or weakens an existing V() check, and the
+// default (no --strict) path is untouched.
+if (STRICT && warnings.length) {
+  for (const w of warnings) violations.push(`[strict] ${w}`);
+  warnings.length = 0;
+}
+
 // ---------- verdict ----------
 const bytes = Buffer.byteLength(svg, 'utf8');
 if (violations.length) {
