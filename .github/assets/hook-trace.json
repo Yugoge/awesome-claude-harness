@@ -164,7 +164,7 @@
       "kind": "adaptation",
       "text": "For closed dev tasks, use /commit <task-id>.",
       "source_ref": "hooks/pretool-git-privilege-guard.py",
-      "source_locator": "hooks/pretool-git-privilege-guard.py:488",
+      "source_locator": "hooks/pretool-git-privilege-guard.py:486",
       "extract_hash": "be44b369fa5355582da306ab0e4e92c80c0ab9696eef5ab2a643a96a2cd1577b"
     },
     {
