@@ -128,9 +128,9 @@ Supporting structural facts (verified):
 
 ### 2.5 `agents/qa.md` — proposed decomposition
 
-- **Named sections / seams:** persona / anti-fraud preamble + 14 numbered `### Step N`
-  verification blocks (with Step 10.x UI sub-blocks) + output-format + forbidden-patterns
-  + checklist appendices.
+- **Named sections / seams:** persona / anti-fraud preamble + 15 integer Step headings
+  (Step 0 through Step 14, with Step 10.x UI sub-blocks) + output-format
+  + forbidden-patterns + checklist appendices.
 - **Proposed named units (future):** `qa/00-persona-anti-fraud.md`,
   `qa/steps-01-14.md`, `qa/10-ui-subblocks.md`, `qa/output-format.md`,
   `qa/forbidden-patterns.md`, `qa/checklist.md`.
