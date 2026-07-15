@@ -41,8 +41,8 @@
       "kind": "condensation",
       "text": "spec fan-out … 1 analyst …",
       "count": 1,
-      "source_ref": "docs/dev/ticket-20260714-183239.md",
-      "source_locator": "ticket-20260714-183239.md:1",
+      "source_ref": ".github/assets/pipeline-hero-sources.json",
+      "source_locator": "s04",
       "extract_hash": "8fb3c42dcbd795f168da313fd70c7c68d6c1a42b63897970654210cc7a1ec081"
     },
     {
