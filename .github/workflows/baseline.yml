@@ -103,3 +103,10 @@ jobs:
             echo "::error::broken grounding-doc links still present in README/ARCHITECTURE/NESTED-REPO"; status=1
           fi
           exit "$status"
+
+      - name: Verify headline claims (hook counts + hero provenance)
+        # Runs as a step of the already-required `baseline` job so it gates merges by
+        # default (no branch-protection change needed). Recomputes the wired-hook /
+        # lifecycle-event counts from settings.json and fails on any drift in
+        # README.md / ARCHITECTURE.md, then runs both hero-provenance audits in --strict.
+        run: bash scripts/verify-claims.sh
