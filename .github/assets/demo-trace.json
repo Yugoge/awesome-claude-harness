@@ -103,8 +103,8 @@
       "stage": "close",
       "kind": "verdict",
       "text": "CLOSE: YES",
-      "source_ref": "docs/dev/close-report-20260714-183239.md",
-      "source_locator": "close-report-20260714-183239.md:78",
+      "source_ref": "commands/close.md",
+      "source_locator": "close.md:423",
       "extract_hash": "0e3d7702868b45e6b04541e51f33bb4485df10fdc0e46138b22b7f5c077b865b"
     },
     {
