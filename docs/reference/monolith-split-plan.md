@@ -137,7 +137,7 @@ include-expander, they cannot be de-duplicated behavior-preservingly today.
 
 ```mermaid
 graph TD
-    A["MD-Phase A<br/>extract runtime-inert<br/>examples / metrics / catalogs → link"] --> B["MD-Phase B-prep<br/>build include-expander<br/>in command loader (infra)"]
+    A["MD-Phase A<br/>extract runtime-inert<br/>examples / metrics / catalogs → link"] --> B["MD-Phase B-prep<br/>build include-expander<br/>in command loader — infra"]
     B --> C["MD-Phase B<br/>collapse duplicated blocks<br/>to one expanded canonical source"]
 ```
 
