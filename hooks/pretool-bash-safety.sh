@@ -14,6 +14,47 @@ fi
 DAEMON_RESTART_GRANT_DIR="${CLAUDE_DAEMON_RESTART_GRANT_DIR:-${CLAUDE_TMPDIR}}"
 DAEMON_RESTART_SENTINEL_RE="$(printf '%s' "${DAEMON_RESTART_GRANT_DIR%/}/claude-allow-daemon-restart-" | sed 's/[][\\.^$*+?{}|()]/\\&/g')"
 
+# ── Local service-integration layer — maintainer environment ─────────────────
+# This hook gates REAL docker / systemd / daemon operations on the maintainer's
+# host, so it necessarily names local services and absolute paths. They are
+# INTENTIONAL integration points, not accidental personal-lab residue. Every
+# ":-default" below preserves historical behavior EXACTLY: with all CLAUDE_*
+# overrides unset, this hook's (exit_code, stdout, stderr) is byte-for-byte
+# identical to the pre-manifest version. Literals are inventoried here by STABLE
+# RULE LABEL — not line number; any line numbers are "as of this edit" and drift.
+#
+# 1. Configurable integration knobs (env-overridable; default = current literal):
+#      DEV_CONTAINERS               <- CLAUDE_DEV_CONTAINERS  (default "happy-web-dev")
+#                                     rule "docker happy-family guard" (docker stop/restart/rm/kill)
+#      DEV_SYSTEMD                  <- CLAUDE_DEV_SYSTEMD      (default "")
+#                                     rule "systemctl production-target guard"
+#      DAEMON_RESTART_GRANT_HELPER  <- CLAUDE_DAEMON_RESTART_GRANT_HELPER
+#                                     (default "/root/bin/claude-allow-restart")
+#                                     cosmetic: daemon-restart stderr guidance only —
+#                                     Layer 1.A hint + Layer 1.B/1.E reason lines; the
+#                                     grant sentinel dir is DAEMON_RESTART_GRANT_DIR (above).
+#
+# 2. Local daemon units — documented, intentionally NON-env-overridable in this scope:
+#      "happy-daemon" + targets dev|jade|qijie. Rules: "daemon-restart-prohibition"
+#      (Layer 1.A), "daemon-restart-wrapper" (1.B/1.C), "daemon-restart-http-stop"
+#      (1.D), "daemon-restart-sentinel-write" (1.E). NOT lifted on purpose: the unit
+#      names are coupled to the external grant helper's sentinel protocol
+#      (claude-allow-daemon-restart-<target>.flag); making them configurable here
+#      without rewriting that helper would desync the grant channel — a
+#      configurable-but-ungrantable gate is worse than a fixed one.
+#
+# 3. Non-configurable catastrophe guards (absolute-ban; deliberately hardcoded):
+#      rules "session-dirs ban", "happy-session-recovery ban", "happy-restart ban".
+#      A guard you can disable via env var is not a guard — these stay literal.
+#
+# 4. Provenance-only comment refs (documentation of past incidents; NO runtime effect):
+#      packages/happy-app (2026-04-19 wide-checkout incident), /root/.claude-cold.backup
+#      (field-shape provenance), /root/<repo>/.claude, /root/deploy (compose example dir).
+#
+# 5. Broad family catch-all guards (intentional historical safety semantics, kept literal):
+#      the bare "happy" family in "docker ... happy" and "killall|pkill ... happy".
+# ─────────────────────────────────────────────────────────────────────────────
+
 # IS_SUBAGENT: set once here at the top of the script (after PYTHON_BIN resolution).
 # $INPUT is assigned once at line 6 and never reassigned, so this read is safe regardless of position.
 # Used by check_and_consume_allowlist (subagent firewall) and the /do bypass block below.
@@ -108,12 +149,17 @@ fi
 
 # ── Dev whitelist (exact names only) ──────────────────────────────
 # These are the ONLY dev resources that can be freely managed.
-DEV_CONTAINERS="happy-web-dev"
+DEV_CONTAINERS="${CLAUDE_DEV_CONTAINERS:-happy-web-dev}"
 # Per c3-20260504-223115 R1: happy-daemon-dev is REMOVED from the systemctl whitelist.
 # All happy-daemon-* targets are gated by Layer 1.A (daemon-restart-prohibition) which
 # requires an explicit user grant via /root/bin/claude-allow-restart. The systemctl block
 # at line ~700 skips happy-daemon commands entirely (Layer 1.A already adjudicated).
-DEV_SYSTEMD=""
+DEV_SYSTEMD="${CLAUDE_DEV_SYSTEMD:-}"
+# Grant-helper path echoed in the daemon-restart stderr guidance — the Layer 1.A hint plus
+# the Layer 1.B/1.E reason lines (cosmetic stderr only; the grant sentinel dir itself is
+# DAEMON_RESTART_GRANT_DIR, declared near the top).
+# Env-overridable; default = current literal so the unset-override behavior is byte-identical.
+DAEMON_RESTART_GRANT_HELPER="${CLAUDE_DAEMON_RESTART_GRANT_HELPER:-/root/bin/claude-allow-restart}"
 
 # ── Helper: split compound command into subcommands ───────────────
 # Splits on && || ; and checks each subcommand independently.
@@ -636,7 +682,7 @@ if echo "$COMMAND" | grep -qE 'systemctl\s+(stop|restart|disable|enable|reload|k
     echo "BLOCKED: daemon-restart-prohibition — systemctl ${HAPPY_VERB:-<verb>} on ${HAPPY_UNIT:-happy-daemon-*} is FORBIDDEN" >&2
     echo "Command: $COMMAND" >&2
     echo "REASON: per c3-20260504-223115, Claude must NEVER restart any happy-daemon-* by any path." >&2
-    echo "Hint: user must run /root/bin/claude-allow-restart <target> from a real TTY first." >&2
+    echo "Hint: user must run $DAEMON_RESTART_GRANT_HELPER <target> from a real TTY first." >&2
     exit 2
   fi
 fi
@@ -651,7 +697,7 @@ if echo "$COMMAND" | grep -qE 'happy-daemon' \
   echo "Command: $COMMAND" >&2
   echo "REASON: per c3-20260504-223115, indirect daemon-restart paths (systemd-run/at/crontab/nohup/" >&2
   echo "        timeout/dbus-send/nc/eval/bash -c/python -c) are all forbidden. Use the user-only" >&2
-  echo "        /root/bin/claude-allow-restart grant channel instead." >&2
+  echo "        $DAEMON_RESTART_GRANT_HELPER grant channel instead." >&2
   exit 2
 fi
 
@@ -688,7 +734,7 @@ if echo "$COMMAND" | grep -qE "${DAEMON_RESTART_SENTINEL_RE}[A-Za-z0-9_-]+\.flag
    && echo "$COMMAND" | grep -qE '(>|>>|tee|cp|mv|ln|touch|cat\s)'; then
   echo "BLOCKED: daemon-restart-sentinel-write — writing to grant sentinel is FORBIDDEN" >&2
   echo "Command: $COMMAND" >&2
-  echo "REASON: per c3-20260504-223115, only /root/bin/claude-allow-restart (run by user from TTY)" >&2
+  echo "REASON: per c3-20260504-223115, only $DAEMON_RESTART_GRANT_HELPER (run by user from TTY)" >&2
   echo "        may create the grant sentinel." >&2
   exit 2
 fi

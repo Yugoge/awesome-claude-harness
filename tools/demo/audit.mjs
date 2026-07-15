@@ -20,8 +20,11 @@
 //   - SVG is self-contained: no <script>, no <style> block, no @font-face, no external refs.
 //   - tag balance (svg/g/text/clipPath).
 //
-// Usage:  node audit.mjs <manifest.json> <file.svg>
+// Usage:  node audit.mjs <manifest.json> <file.svg> [--strict]
 // Exit:   0 pass (may include non-fatal warnings), 1 on any violation.
+//         --strict (opt-in): escalate EVERY provenance downgrade (a non-fatal warning —
+//         no source_ref / unreadable / missing / gitignored / unresolvable-commit /
+//         git-unavailable) to a hard violation. Default behavior is unchanged without it.
 
 import { readFileSync, existsSync } from 'node:fs';
 import { createHash } from 'node:crypto';
@@ -36,9 +39,16 @@ const ELLIPSIS = '…';
 const nfc = (s) => String(s).normalize('NFC');
 const sha256 = (s) => createHash('sha256').update(nfc(s), 'utf8').digest('hex');
 
-const manifestPath = process.argv[2];
-const svgPath = process.argv[3];
-if (!manifestPath || !svgPath) { console.error('Usage: node audit.mjs <manifest.json> <file.svg>'); process.exit(1); }
+// Parse args: strip the opt-in --strict flag, then require EXACTLY two positionals so the
+// default `node audit.mjs <manifest> <svg>` signature is preserved for existing callers.
+const rawArgs = process.argv.slice(2);
+const STRICT = rawArgs.includes('--strict');
+const positionals = rawArgs.filter((a) => a !== '--strict');
+const [manifestPath, svgPath, ...extra] = positionals;
+if (!manifestPath || !svgPath || extra.length) {
+  console.error('Usage: node audit.mjs <manifest.json> <file.svg> [--strict]');
+  process.exit(1);
+}
 
 const violations = [];
 const warnings = [];
@@ -232,6 +242,17 @@ for (let i = 0; i < Math.min(traceSeq.length, expected.length); i++) {
   if (traceSeq[i] !== expected[i]) V(`render order mismatch at index ${i}: SVG "${traceSeq[i]}" vs expected "${expected[i]}"`);
 }
 for (const id of ids) if (!traceSeq.includes(id)) V(`manifest id "${id}" has no <text data-trace-id> in SVG`);
+
+// ---------- strict-mode escalation (opt-in) ----------
+// In --strict, EVERY provenance downgrade (any warning recorded by W(), present OR future)
+// becomes a hard violation. Implemented centrally here at the verdict — the individual W()
+// call sites are never enumerated, so new warning sites inherit strictness automatically.
+// This only ADDS to violations; it never removes or weakens an existing V() check, and the
+// default (no --strict) path is untouched.
+if (STRICT && warnings.length) {
+  for (const w of warnings) violations.push(`[strict] ${w}`);
+  warnings.length = 0;
+}
 
 // ---------- verdict ----------
 const bytes = Buffer.byteLength(svg, 'utf8');

@@ -11,9 +11,9 @@ An operating system for Claude Code agents — orchestrator-only routing, an evi
 <img alt="version" src="https://img.shields.io/badge/version-1.0.0-blue">
 <img alt="subagents" src="https://img.shields.io/badge/subagents-23-6f42c1">
 <img alt="commands" src="https://img.shields.io/badge/slash%20commands-18-1565c0">
-<img alt="hooks" src="https://img.shields.io/badge/lifecycle%20hooks-40%20wired%20%2F%207%20events-c62828">
+<img alt="hooks" src="https://img.shields.io/badge/lifecycle%20hooks-67%20wired%20%2F%207%20events-c62828">
 <img alt="events" src="https://img.shields.io/badge/lifecycle%20events-7-ad1457">
-<img alt="scripts" src="https://img.shields.io/badge/helper%20scripts-72-2e7d32">
+<img alt="scripts" src="https://img.shields.io/badge/helper%20scripts-76-2e7d32">
 <img alt="skills" src="https://img.shields.io/badge/skills-8-e67e22">
 <img alt="permissions" src="https://img.shields.io/badge/permissions-162%20allow%20%2F%2095%20deny%20%2F%2030%20ask-455a64">
 <img alt="license" src="https://img.shields.io/badge/license-MIT-000000">
@@ -72,7 +72,7 @@ graph TD
 
     ORC ==>|dispatch WHAT not HOW| SUB[Subagent Pool<br/>23 agents<br/>ba → qa → dev → qa]
 
-    HL[Hook Layer<br/>40 wired entries<br/>7 lifecycle events<br/>PreToolUse / PostToolUse / Stop] -->|allow exit 0| GK[(Git Kernel<br/>git repo<br/>/tmp/ grants<br/>refs/checkpoints/HEAD<br/>reference-transaction keystone)]
+    HL[Hook Layer<br/>67 wired hook command entries<br/>7 lifecycle events<br/>PreToolUse / PostToolUse / Stop] -->|allow exit 0| GK[(Git Kernel<br/>git repo<br/>/tmp/ grants<br/>refs/checkpoints/HEAD<br/>reference-transaction keystone)]
     HL -->|block exit 2| BLK[/BLOCKED/]
 
     GK --> IDX[INDEX files<br/>doc-sync PostToolUse]
@@ -459,14 +459,14 @@ Each row maps to a capability in the dependency table above.
 ├── CLAUDE.md          # The constitution: non-negotiable rules the agent must obey
 ├── ARCHITECTURE.md    # System architecture, verified against the current code
 ├── NESTED-REPO.md     # Why ~/.claude is its own git repo on a RAM disk
-├── settings.json      # 40 wired hook entries across 7 lifecycle events
+├── settings.json      # 67 wired hook entries across 7 lifecycle events
 ├── agents/            # 23 subagent definitions (BA, dev, QA, architect, …)
 ├── commands/          # 18 slash-command workflows (/spec, /dev, /close, /commit, …)
 ├── hooks/             # SessionStart / UserPromptSubmit / PreToolUse / PostToolUse / Notification / Stop / SubagentStop gates
 │   ├── lib/           #   shared libs: allowlist (structured sentinel grants), checkpoint-core
 │   ├── doc_sync/      #   self-updating INDEX/README/CLAUDE regeneration
 │   └── git-keystone/  #   git-native reference-transaction protection
-├── scripts/           # 72 helper scripts (graphify, spec resolver, grant writers, execute-push, …)
+├── scripts/           # 76 helper scripts (graphify, spec resolver, grant writers, execute-push, …)
 ├── skills/            # 8 skills: the Playwright UI-audit suite (+ ui-shared support)
 ├── schemas/           # JSON schemas (e.g. cycle-contract.v1.json)
 ├── policies/          # tool-policy and role-restriction definitions
@@ -497,13 +497,13 @@ Everything else (`agents/`, `commands/`, `skills/`, `schemas/`, `templates/`, `t
 
 | Event | Hook entries | Primary purpose |
 |---|---|---|
-| SessionStart | 1 | Environment setup, resolver announcement, dependency checks |
-| UserPromptSubmit | 4 | Per-turn sentinel pre-creation, prompt-purity enforcement, dedup check |
-| PreToolUse | 22 | The gate layer: orchestrator rate-limit, bash-safety, git kernel, tool-policy, branch/PR firewall |
-| PostToolUse | 7 | Doc-sync, allowlist grant consumption, checkpoint writes |
+| SessionStart | 7 | Environment setup, resolver announcement, dependency checks |
+| UserPromptSubmit | 5 | Per-turn sentinel pre-creation, prompt-purity enforcement, dedup check |
+| PreToolUse | 30 | The gate layer: orchestrator rate-limit, bash-safety, git kernel, tool-policy, branch/PR firewall |
+| PostToolUse | 14 | Doc-sync, allowlist grant consumption, checkpoint writes |
 | Notification | 1 | User-facing notification routing |
-| Stop | 1 | Overnight timelock, allowlist reap, cp-state enforcement |
-| SubagentStop | 4 | cp-state enforcement, subagent output capture |
+| Stop | 4 | Overnight timelock, allowlist reap, cp-state enforcement |
+| SubagentStop | 6 | cp-state enforcement, subagent output capture |
 
 ---
 

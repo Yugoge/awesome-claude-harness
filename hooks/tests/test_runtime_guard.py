@@ -3555,19 +3555,32 @@ class TestCycle13CodexFollowup:
 # ════════════════════════════════════════════════════════════════════════════
 
 
-# An ISOLATED config+repo pair under DIFFERENT tmp roots (/tmp vs /var/tmp) so the
-# config's ancestor-dir self-protection set does NOT share a pytest-tmp ancestor
-# with the repo — mirroring production (/root/.config/<app> vs /dev/shm/<repo>),
-# where a glob mutation of a NON-protected repo dir must ALLOW. NEVER touches the
-# live machine data file.
+# An ISOLATED config+repo pair whose nearest common ancestor is a POSIX stop-root
+# (see _ANCESTOR_STOP_ROOTS in runtime_guard/_core.py). LOAD-BEARING invariant: the
+# config's ancestor-dir self-protection walks UP the config's parent chain until the
+# first stop-root, protecting every dir in between; if the repo were a DESCENDANT of
+# any of those, it would be reverse-contained and a glob mutation of a NON-protected
+# repo dir would flip ALLOW -> BLOCK. We keep them apart by anchoring the config as a
+# direct child of the /tmp stop-root, so its protected set stays tight (just the
+# config's own parent chain), while the repo is a portable pytest tmp dir under a
+# DIFFERENT subtree. Config and repo therefore share ONLY the /tmp stop-root ancestor.
+# Mirrors production (/root/.config/<app> vs /dev/shm/<repo>). NEVER touches the live
+# machine data file. (The repo previously hardcoded dir="/var/tmp", which fails setup
+# on runners lacking a writable /var/tmp; the /tmp anchor on the CONFIG is deliberate
+# — do NOT relocate it under a nested $TMPDIR, or the ancestor walk escapes to a
+# non-stop base and reverse-contains the repo, flipping boundary-ALLOW tests to BLOCK.)
 @pytest.fixture(scope="module")
 def isolated_pair(tmp_path_factory):
     import tempfile
+    # CONFIG: direct child of the /tmp stop-root so the ancestor self-protection walk
+    # terminates at /tmp, keeping the protected set tight. /tmp is POSIX-guaranteed.
     cfgbase = tempfile.mkdtemp(prefix="c14cfg_", dir="/tmp")
     cfgdir = os.path.join(cfgbase, ".config", "app")
     os.makedirs(cfgdir)
     df = os.path.join(cfgdir, "protected-runtime.json")
-    repo = tempfile.mkdtemp(prefix="c14repo_", dir="/var/tmp")
+    # REPO: portable pytest tmp dir (was hardcoded dir="/var/tmp"). Lives under a
+    # DIFFERENT subtree than the config, sharing only the /tmp stop-root ancestor.
+    repo = str(tmp_path_factory.mktemp("c14repo"))
     os.makedirs(os.path.join(repo, "packages", "happy-cli", "dist"))
     os.makedirs(os.path.join(repo, "packages", "happy-app", "dist"))
     cfg = json.loads(json.dumps(FIXTURE))
@@ -3871,9 +3884,10 @@ class TestCycle14CodexFollowup:
         assert rg.evaluate('cd "$HOMEDIR/.config/appz14cf" && rm protected-runtime.json')[0] == "ALLOW"
 
     # CF2: basename predicate scoped to root intersection. Use the isolated_pair
-    # fixture (config+repo under DIFFERENT tmp roots) so an unrelated `/var/tmp/...`
-    # root does NOT reverse-contain the protected repo (which lives under a different
-    # root), mirroring production (/root/.config vs /dev/shm). NOTE: the config
+    # fixture (config and repo under DIFFERENT subtrees, sharing only the /tmp
+    # stop-root) so the config's ancestor self-protection does NOT reverse-contain the
+    # protected repo (which lives under a different root), mirroring production
+    # (/root/.config vs /dev/shm). NOTE: the config
     # FAMILY (STEP0) intentionally keeps its basename predicate root-UNSCOPED — the
     # config file's distinctive basename is protected regardless of root — so this
     # test targets the BUILD/BUNDLE family (a generic `index.mjs` basename), which IS

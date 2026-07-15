@@ -5,7 +5,7 @@ Organization and usage documentation for `scripts/`.
 <!-- AUTO:readme-stats -->
 
 ## Overview
-- **Total files**: 79
+- **Total files**: 80
 - **Subdirectories**: 5
 - **Naming convention**: kebab
 
@@ -77,6 +77,7 @@ Organization and usage documentation for `scripts/`.
 - `spec-check.py` - Subcommands: check-in, mark, waive, status, check-out, unlock
 - `stage-owned-hunks.py` - Stages ONLY this cycle's owned hunks within a single already-authorized file,
 - `step7-spec-update.py` - Step 8 (Spec-update dispatch) reference harness — task 20260524-205206 iter-2
+- `test` - test file
 - `update-gitignore.sh` - update-gitignore.sh - Auto-update .gitignore with project-specific rules
 - `update-overnight-state.sh` - update-overnight-state.sh — Atomically update overnight state file
 - `write-bulk-commit-sentinel.py` - Invoked from commands/commit.md Step 5 (BULK=true) to authorize the

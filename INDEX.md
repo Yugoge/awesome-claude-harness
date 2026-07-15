@@ -1,8 +1,8 @@
 # dot-claude
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-07-13T11:37:20Z*
-**Total entries**: 464
+*Last updated: 2026-07-15T16:04:49Z*
+**Total entries**: 471
 **Convention**: kebab
 
 ## Tree
@@ -33,7 +33,7 @@ dot-claude/
 │   ├── `ui-specialist.md` - UI/UX review specialist for overnight exploration. Evaluates visual design quality, aesthetic beauty, design system adherence, styling consistency, responsive design, and component quality. Returns structured JSON report with beauty score and design quality assessment. Accessibility checks are advisory.
 │   └── `user.md` - End-user simulation specialist for overnight exploration. Tests actual usage scenarios, checks if things work as expected, identifies UX friction, broken flows, and confusing behavior. Returns structured JSON report.
 ├── commands/
-│   ├── `allow.md` - Single-use break-glass — bypass all safety blocks for the next matching bash command this turn. /allow = anything; /allow --tool <pattern> = explicit pattern (regex auto-detected). Trailing tokens become an audit-log comment. Auto-expires at stop.
+│   ├── `allow.md` - Single-use break-glass — bypass safety blocks for the next matching bash command this turn; requires an explicit narrow selector. Forms — /allow <command...> (literal, upgraded to regex only when it contains true regex metacharacters), /allow --tool <literal> (always literal, regex off), or /allow re:<anchored-regex> (explicit regex, must be anchored). Bare /allow with no argument is refused. Trailing tokens become an audit-log comment. Auto-expires at stop.
 │   ├── `checkpoint.md` - Checkpoint Command
 │   ├── `clean.md` - Aggressive project cleanup - normalize docs structure, archive everything, delete one-time scripts/tests. Pass --codex to enable adversarial codex consultation on cleanliness-inspector and style-inspector; default is self-review only.
 │   ├── `close.md` - Close the current dev cycle (agent infers task-id from conversation). QA evaluates Workflow Integrity bullets and returns CLOSE YES/NO. Pass --codex to enable multi-round QA-codex debate; default is QA-only single-round assessment. Append --force to skip the debate entirely.
@@ -460,6 +460,13 @@ dot-claude/
 │   ├── `test_specialist_yield.py` - Tests use a tmp dir for the yield log and the bundled production policy file
 │   ├── `verify-stop-spec-session-isolation.sh` - QA verification harness for stop-spec-coverage-enforce.py session isolation fix.
 │   └── `ws2_zero_literal_gate.py` - Scans the EXPLICITLY-defined load-bearing surfaces of a rendered fresh clone with
+├── tools/
+│   └── demo/
+│       ├── `audit.mjs` - mjs file
+│       ├── `gen-svg.mjs` - mjs file
+│       ├── `manifest.schema.md` - Trace manifest schema
+│       ├── `sample-hook-trace.json` - JSON config: meta, lines
+│       └── `sample-trace.json` - JSON config: meta, lines
 ├── `ARCHITECTURE.md` - Architecture — `.claude` Agent Operating System
 ├── `CHANGELOG.md` - Changelog
 ├── `CLAUDE.md` - CLAUDE.md
