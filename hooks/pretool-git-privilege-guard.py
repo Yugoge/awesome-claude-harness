@@ -73,6 +73,21 @@ Revision history:
   reference but is no longer consulted by main().
   2026-04-25 (earlier): replaced the dead-code `CLAUDE_OVERNIGHT_ACTIVE`
   env-var path with the canonical state-file probe.
+  2026-07-15 (repo/branch/HEAD parity fix): `_evaluate_commit` previously
+  validated ONLY `expires_at` before honoring a commit grant -- unlike
+  `_evaluate_push`, which additionally binds `branch` (_validate_push_grant_branch),
+  `expected_head` (_validate_push_grant_head), and `remote`
+  (_validate_push_grant_remote) to the grant's issuance-time values. A
+  validly-issued, unexpired commit grant could therefore authorize a commit
+  in a different repository/branch/commit than the one it was written for.
+  Added `_validate_commit_grant_repo` / `_validate_commit_grant_branch` /
+  `_validate_commit_grant_head`, mirroring the push-grant validators, plus
+  `_extract_commit_dash_c_dir` to resolve the actual target directory of the
+  commit invocation (changelog-analyst always commits via
+  `git -C "${GIT_ROOT}" commit ...`, never a bare `git commit` in its own
+  CWD -- validating against the hook's own CWD unconditionally would
+  wrongly reject every nested ~/.claude repo commit). `write-commit-grant.py`
+  now records `repo_root`/`branch`/`expected_head` at issuance time.
 
 Exit codes:
   0: Allow tool use
@@ -104,6 +119,21 @@ GIT_GLOBAL_OPTION_RE = (
     r'-[pP]))*'
 )
 GIT_COMMAND_RE = r'(?:^|[\s;&|()`])git' + GIT_GLOBAL_OPTION_RE + r'\s+'
+
+# Matches a `git <global-options>* commit` invocation and CAPTURES the
+# global-options span (group 1) so `_extract_commit_dash_c_dir` can pull an
+# explicit `-C <dir>` out of it. Reuses the exact GIT_GLOBAL_OPTION_RE grammar
+# above (kept in sync intentionally) so a change to one does not silently
+# desync from the other.
+GIT_COMMIT_INVOCATION_RE = re.compile(
+    r'(?:^|[\s;&|()`])git(' + GIT_GLOBAL_OPTION_RE + r')\s+commit\b'
+)
+
+# `-C` (capital only) is "run as if git was started in <dir>". Lowercase `-c`
+# is an unrelated config override (`-c name=value`) and must never be
+# mistaken for a directory. Matches both `-C dir` and glued `-Cdir` forms,
+# and quoted values (`-C "a b"` / `-C 'a b'`).
+DASH_CAPITAL_C_RE = re.compile(r'-C\s*(?:"([^"]*)"|\'([^\']*)\'|(\S+))')
 
 
 def _block(message):
@@ -332,6 +362,106 @@ def _extract_push_remote(invocation):
             continue
         return tok
     return ''
+
+
+def _extract_commit_dash_c_dir(command):
+    """Best-effort extraction of the `-C <dir>` value from the git commit
+    invocation in `command`, or '' when no explicit `-C` is present.
+
+    changelog-analyst's canonical commit form is `git -C "${GIT_ROOT}" commit
+    -F <msgfile>` (agents/changelog-analyst.md) for BOTH the root repo and
+    the nested ~/.claude repo -- it never `cd`s, only ever passes `-C`. The
+    guard's own CWD is therefore CONTROL_ROOT for the entire session, even
+    while committing the nested repo. Scoping repo/branch/HEAD validation to
+    this extracted directory (instead of blindly using the hook's CWD, as
+    `_git_output`'s docstring describes for push) is required so the nested-
+    repo commit is validated against ITS OWN repo, not CONTROL_ROOT's.
+    """
+    m = GIT_COMMIT_INVOCATION_RE.search(command)
+    if not m:
+        return ''
+    options_span = m.group(1)
+    dm = DASH_CAPITAL_C_RE.search(options_span)
+    if not dm:
+        return ''
+    return dm.group(1) or dm.group(2) or dm.group(3) or ''
+
+
+def _commit_target_git_output(target_dir, *args):
+    """Like _git_output, but scoped to `target_dir` via `-C` when non-empty.
+
+    target_dir is the (possibly empty) result of _extract_commit_dash_c_dir.
+    Empty target_dir falls back to the hook's own CWD, matching the
+    no-override push-grant precedent.
+    """
+    prefix = ['-C', target_dir] if target_dir else []
+    return _git_output(prefix + list(args))
+
+
+def _validate_commit_grant_repo(grant, command):
+    """Grant.repo_root must match the toplevel of the commit's target repo.
+
+    New binding (2026-07-15): closes the gap where a commit grant issued for
+    one repository could authorize a `git commit` in a completely different
+    repository, since only expires_at was previously checked.
+    """
+    grant_repo = grant.get('repo_root') or ''
+    target_dir = _extract_commit_dash_c_dir(command)
+    current_repo = _commit_target_git_output(target_dir, 'rev-parse', '--show-toplevel')
+    if not grant_repo or not current_repo or grant_repo != current_repo:
+        _block(
+            '\nBLOCKED: agent git commit - repository mismatch.\n'
+            'Grant repo_root  : %r\n' % grant_repo
+            + 'Current repo_root: %r\n' % current_repo
+            + 'A commit grant issued for one repository may not authorize a '
+            'commit in another. Re-run /commit from within the target repository.\n'
+            + 'Spec: pretool-git-privilege-guard.py 2026-07-15 repo/branch/HEAD '
+            'parity fix (mirrors _validate_push_grant_branch/_head/_remote).\n'
+        )
+
+
+def _validate_commit_grant_branch(grant, command):
+    """AC-A7-equivalent for commit: grant.branch must match the current branch
+    of the commit's target repo (mirrors _validate_push_grant_branch)."""
+    grant_branch = grant.get('branch') or ''
+    target_dir = _extract_commit_dash_c_dir(command)
+    current_branch = _commit_target_git_output(target_dir, 'branch', '--show-current')
+    if not grant_branch or grant_branch != current_branch:
+        _block(
+            '\nBLOCKED: agent git commit - branch mismatch.\n'
+            'Grant branch  : %r\n' % grant_branch
+            + 'Current branch: %r\n' % current_branch
+            + 'Spec: pretool-git-privilege-guard.py 2026-07-15 repo/branch/HEAD '
+            'parity fix (mirrors _validate_push_grant_branch).\n'
+        )
+
+
+def _validate_commit_grant_head(grant, command):
+    """AC-A6-equivalent for commit: grant.expected_head must match the
+    current HEAD of the commit's target repo (mirrors _validate_push_grant_head).
+
+    No tolerance for HEAD drift: a legitimate single /commit cycle never
+    needs HEAD to move between grant issuance (Step 5) and grant consumption
+    (Step 7) -- staging (`git add`) does not move HEAD, and the one documented
+    multi-commit scenario (changelog-analyst's `nothing_to_commit_precommitted`
+    recovery path, agents/changelog-analyst.md "Recovery step 3") reuses the
+    SAME still-unconsumed grant only because no `git commit` fired earlier in
+    that cycle -- HEAD is unchanged since Step 5 captured it. This is the same
+    strict, no-tolerance behavior _validate_push_grant_head already applies.
+    """
+    grant_head = grant.get('expected_head') or ''
+    target_dir = _extract_commit_dash_c_dir(command)
+    current_head = _commit_target_git_output(target_dir, 'rev-parse', 'HEAD')
+    if not grant_head or grant_head != current_head:
+        _block(
+            '\nBLOCKED: agent git commit - expected_head mismatch.\n'
+            'Grant expected_head: %r\n' % grant_head
+            + 'Current HEAD       : %r\n' % current_head
+            + 'HEAD moved since the grant was issued; re-run /commit to '
+            'obtain a fresh grant.\n'
+            + 'Spec: pretool-git-privilege-guard.py 2026-07-15 repo/branch/HEAD '
+            'parity fix (mirrors _validate_push_grant_head).\n'
+        )
 
 
 def _looks_like_git_commit(invocations):
@@ -594,12 +724,20 @@ def _evaluate_commit(command, data):
         grant_path, grant = _find_grant('commit', sid)
         if grant is not None:
             if not _end_time_passed(grant.get('expires_at', '')):
+                # 2026-07-15: repo/branch/HEAD binding (mirrors _evaluate_push).
+                # Each call _block()s (exit 2) on mismatch; a pass falls through.
+                _validate_commit_grant_repo(grant, command)
+                _validate_commit_grant_branch(grant, command)
+                _validate_commit_grant_head(grant, command)
                 _lock_grant_for_posttool(grant_path, sid)
                 return
     # Fallback: any valid unexpired commit grant (written by /commit close-gate).
     grant_path, grant = _find_grant_any('commit')
     if grant is not None:
         if not _end_time_passed(grant.get('expires_at', '')):
+            _validate_commit_grant_repo(grant, command)
+            _validate_commit_grant_branch(grant, command)
+            _validate_commit_grant_head(grant, command)
             effective_sid = grant.get('sid') or sid or 'any'
             _lock_grant_for_posttool(grant_path, effective_sid)
             return
