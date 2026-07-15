@@ -337,7 +337,7 @@ flowchart LR
 ## 10. Directory layout (curated; runtime dirs excluded)
 
 ```text
-.claude/                     # symlink target: /dev/shm/dev-workspace/dot-claude (own git repo)
+.claude/                     # symlink target: <repo-root> (own git repo)
 ├── CLAUDE.md                # the constitution: non-negotiable rules (AUTO:last-updated marker)
 ├── ARCHITECTURE.md          # this document
 ├── README.md                # overview / value-prop (hand-maintained; no AUTO block)

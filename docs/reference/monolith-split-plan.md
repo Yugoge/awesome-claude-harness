@@ -11,7 +11,7 @@
 
 | Monolith | Lines | Kind | Runtime-critical | Test safety-net |
 |---|---:|---|---|---|
-| `hooks/lib/runtime_guard/_core.py` | 5657 (was 5839) | Python engine | Yes — powers the bash-safety guard | `test_runtime_guard.py` = **755 passing** |
+| `hooks/lib/runtime_guard/_core.py` | 5429 (was 5839) | Python engine | Yes — powers the bash-safety guard | `test_runtime_guard.py` = **755 passing** |
 | `commands/dev-overnight.md` | 1894 | Prompt (orchestrator) | Yes — autonomous loop | none (prompt) |
 | `agents/qa.md` | 1916 | Prompt (subagent) | Yes — QA gate | none (prompt) |
 | `commands/dev.md` | 1618 | Prompt (orchestrator) | Yes — `/dev` pipeline | none (prompt) |
@@ -81,6 +81,19 @@ except ImportError:                    # script context: sys.path[0] == this dir
 
 ---
 
+## Phase 2 — DONE (2026-07-15): data-table constants seam
+
+| Field | Value |
+|---|---|
+| Unit extracted | Generic verb / keyword / exec-front-end lookup tables (dependency **leaf**, literal data only) |
+| New module | `hooks/lib/runtime_guard/constants.py` (305 lines; 289 moved verbatim) |
+| Names moved | `PKG_MANAGERS`, `ENV_WRAPPERS`, `_EXEC_OPTS_WITH_ARG`, `_WRAPPER_OPTS_WITH_ARG`, `_WRAPPER_LEADING_POSITIONAL`, `_WRAPPER_POSITIONAL_OPTIONAL`, `RUNTIMES`, `_RUNTIME_SUBCOMMANDS`, `_RUNTIME_OPTS_WITH_ARG`, `EXEC_RUNNER_TOKENS`, `DEP_BUILTINS`, `MUTATION_VERBS`, `KILL_VERBS`, `SERVICE_VERBS`, `BUILD_TOOL_BASENAMES`, `DEP_SHORTHAND_NPM`, `READ_INSPECT_EDIT_ALLOWLIST`, `_GIT_READONLY_SUBCMDS`, `EXEC_FRONTEND_PROFILES` (19 tables) |
+| Re-import site | `_core.py` in-place (dual-context try/except), `# noqa: F401` |
+| Coupling | Outbound: none (pure literals, zero imports). Inbound: 83 refs, **all inside `_core`** (0 external importers). `_block` + `Verdict`/`ALLOW` anchors kept in `_core` |
+| Result | INV-1 ✓ (755→755, full suite no new fail/skip) · INV-2 ✓ (214 names, 0 missing) · INV-3 ✓ (all 3 contexts; shim script-ctx BLOCKs kill/service/pkg via moved tables) · INV-4 ✓ (byte-identical, 16123 B) · INV-5 ✓ (clean) |
+
+---
+
 ## `_core.py` — phased sequence (ascending risk)
 
 Risk is driven by **outbound** coupling (how much stays-in-`_core` code the cluster calls).
@@ -88,7 +101,7 @@ Leaves first; the decision engine last.
 
 ```mermaid
 graph LR
-    P1["Phase 1 DONE<br/>shell_lex.py<br/>219 ln · leaf"] --> P2["Phase 2<br/>constants.py<br/>~300 ln · pure data"]
+    P1["Phase 1 DONE<br/>shell_lex.py<br/>219 ln · leaf"] --> P2["Phase 2 DONE<br/>constants.py<br/>289 ln · pure data"]
     P2 --> P3["Phase 3<br/>pathmatch.py<br/>~400 ln · path/glob"]
     P3 --> P4["Phase 4<br/>config.py<br/>~125 ln · cfg load"]
     P4 --> P5["Phase 5<br/>destructive_cmds.py<br/>~950 ln · find/fd/git"]
@@ -98,7 +111,6 @@ graph LR
 
 | Phase | Module | Cluster (representative names) | Outbound deps | Risk | Key note |
 |---|---|---|---|---|---|
-| 2 | `constants.py` | ~20 `frozenset`/dict tables: `PKG_MANAGERS`, `ENV_WRAPPERS`, `RUNTIMES`, `MUTATION_VERBS`, `KILL_VERBS`, `EXEC_FRONTEND_PROFILES`, … | none (pure data) | **Low** | Move data tables only; **keep `_block` + `Verdict`/`ALLOW` in `_core`** (type alias anchors there). Re-import restores every name |
 | 3 | `pathmatch.py` | `_normalize_path`, `_expand_leading_home`, `_glob_to_segment_regex`, `_has_shell_glob`, `_glob_parent`, `_glob_literal_prefix`, `_dir_equal_or_under`, `_path_matches_any`, `_path_under_any`, `_any_token_*` | shell_lex + constants | **Low-Med** | One forward ref: `_mutation_cand_hits`→`_destructive_root_contains_protected`. Leave `_mutation_cand_hits` in `_core`, or pass the callee in |
 | 4 | `config.py` | `_load_config`, `_config_path_variants`, `_config_ancestor_dirs`, `_config_or_ancestor_variants`, `_targets_config_file`, `_home_tilde_variant`, `REQUIRED_KEYS`, `DATA_FILE_PATH` | pathmatch + constants | **Med** | Owns `DATA_FILE_PATH` (env-overridable) — tests set it via env, so the module-level read must stay import-time |
 | 5 | `destructive_cmds.py` | `_fd_*`, `_find_*` (find/fd destructive analysis) + `_git_*` (`_git_destructive_pathspecs`, `_git_is_destructive_invocation`, `_strip_git_pathspec_magic`, …) | pathmatch + config + constants | **Med-High** | Two cohesive command-family parsers; may split into `find_cmds.py` + `git_cmds.py` if the combined diff is unreviewable |
