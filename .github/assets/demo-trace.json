@@ -30,8 +30,8 @@
       "stage": "spec",
       "kind": "artifact",
       "text": "every visible line traces to a real /spec→/dev→/close→/commit→/push run artifact",
-      "source_ref": "docs/dev/ticket-20260714-183239.md",
-      "source_locator": "ticket-20260714-183239.md:11",
+      "source_ref": ".github/assets/pipeline-hero-sources.json",
+      "source_locator": "s03",
       "extract_hash": "f45d744955f91c690668a92e0aef8c9bdafe87dee75d1631f1f1b380cfca4225"
     },
     {
