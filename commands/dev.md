@@ -1595,7 +1595,7 @@ This describes the desired end-state, the verification path, and the constraint.
 
 ### Example: HOW-prescription (forbidden)
 
-> "Use the Write tool to overwrite the file with the original content. Run `git -C /dev/shm/dev-workspace/dot-claude show HEAD:agents/ui-specialist.md > /root/.claude/agents/ui-specialist.md`. Then verify with `wc -l`."
+> "Use the Write tool to overwrite the file with the original content. Run `git -C "$CLAUDE_PROJECT_DIR" show HEAD:agents/ui-specialist.md > /root/.claude/agents/ui-specialist.md`. Then verify with `wc -l`."
 
 This prescribes specific tool (`Write`), a specific shell command (`git show > path`), and a specific verification command (`wc -l`). It removes subagent autonomy. If `Write` is blocked by `pretool-write-guard.sh`, the subagent will be pressured to dodge — exactly the failure mode that produced the `sed -i` bypass in the prior cycle.
 

@@ -17,7 +17,7 @@ claude_home but the absent-policy DECISION is preserved, not tightened):
 
 Path prefix matching (T1.2 fix for B.11):
   - Targets are normalized via os.path.realpath (collapses symlinks
-    such as /root/.claude -> /dev/shm/dev-workspace/dot-claude/).
+    such as /root/.claude -> <CLAUDE_PROJECT_DIR>/).
   - Universal allow: prefix '*' always matches.
   - Glob: prefix containing '*' uses fnmatch.fnmatchcase, with a
     trailing '*' auto-appended so '*/docs/dev/foo-' matches any suffix
@@ -226,7 +226,7 @@ def _candidate_targets(target: str) -> list:
 
     Logical path prefixes like '/.claude/specs/' are written against the
     user-facing path, but realpath collapses the
-    /root/.claude -> /dev/shm/dev-workspace/dot-claude/ symlink at runtime.
+    /root/.claude -> <CLAUDE_PROJECT_DIR>/ symlink at runtime.
     Matching against BOTH forms keeps logical anchors working AND still
     catches escapes that go through the canonical form.
     """
