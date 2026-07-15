@@ -103,9 +103,3 @@ A subagent MUST NOT restart a long-running daemon it itself depends on to verify
 When dispatching a subagent via `Agent`, the prompt describes **WHAT** (problem, constraints, acceptance criteria) — not **HOW** (no tool names, shell commands, or shell syntax). The subagent picks its own toolchain.
 
 Enforcement: `~/.claude/hooks/pretool-orchestrator-prompt-purity.py` (PreToolUse Agent matcher).
-
----
-
-## 🔗 Nested .claude Repo
-
-`/root/.claude` symlinks to `/dev/shm/dev-workspace/dot-claude` (separate git repo). For `.claude/*` commits, work inside that path — never push from `/root`.
