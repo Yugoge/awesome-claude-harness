@@ -108,6 +108,22 @@ except ImportError:                    # script context: sys.path[0] == this dir
 
 ---
 
+## Phase 4 — DONE (2026-07-15): config-loading seam
+
+| Field | Value |
+|---|---|
+| Unit extracted | Config-file loader + STEP0 self-protection cluster (near-leaf: imports only `shell_lex._strip_quotes`/`_has_redirect_to` + `pathmatch._normalize_path` + stdlib) |
+| New module | `hooks/lib/runtime_guard/config.py` (184 lines; 138 moved verbatim) |
+| Names moved | `DATA_FILE_PATH`, `REQUIRED_KEYS`, `_load_config`, `_home_tilde_variant`, `_config_path_variants`, `_ANCESTOR_STOP_ROOTS`, `_config_ancestor_dirs`, `_config_or_ancestor_variants`, `_targets_config_file` (9 names) |
+| Cluster-completion move | `_ANCESTOR_STOP_ROOTS` (a private stop-root frozenset) is called by `_config_ancestor_dirs` (moved) **and** at one later `_core` site. Lifting it WITH the cluster — vs. leaving it in `_core` — avoids a `config`→`_core` back-import cycle (INV-6). It is re-imported into `_core` so the later site still resolves and the public surface is unchanged. It was outside the plan's headline name list but belongs to the cluster |
+| DATA_FILE_PATH import-time semantics | `DATA_FILE_PATH = os.environ.get(...)` is evaluated at config's MODULE-IMPORT time. Tests set the env then `importlib.reload(rg)`; the package `__init__` reloads `_core` (NOT its siblings), so a plain `from .config import DATA_FILE_PATH` on an `_core` reload would re-bind the STALE cached value. `_core` therefore `importlib.reload`s `config` on every `_core` (re)load, re-running config's module-level env read. Still import-time, NOT a lazy/function read. Verified: DATA_FILE_PATH tracks env A→B→unset-default across reloads |
+| Re-import site | `_core.py` in-place (dual-context try/except + `_importlib.reload(_config)`), `# noqa: F401` |
+| Coupling | Outbound: `shell_lex` (`_strip_quotes`, `_has_redirect_to`) + `pathmatch` (`_normalize_path`) + stdlib — **no `constants` dep** (the roadmap listed `constants` as an upper bound; the moved bodies reference none). Inbound: all refs inside `_core` (0 external importers; only `test_runtime_guard.py` imports via the package). `CONFIG_MUTATION_HEADS`, `_STEP0_MUTATION_HEADS`, and the STEP0 decision sites stay in `_core` |
+| Script-context collision check | The new sibling is `config.py`; in script context `sys.path[0]` is the package dir, so `from config import …` must resolve THIS module. Confirmed: `config.__file__` resolves to `runtime_guard/config.py` even with a decoy `config.py` on `PYTHONPATH` (`sys.path[0]` precedes PYTHONPATH/site-packages; no stdlib `config` exists) |
+| Result | INV-1 ✓ (755→755; full `hooks/tests` 1132 passed / 9 xpassed, no new fail/skip) · INV-2 ✓ (0 missing; moved names are object-identity re-exports, `_core.X is rg.X`) · INV-3 ✓ (all 3 contexts; shim script-ctx BLOCKs the protected config file + config-dir `dir/*` glob, benign ALLOWs — the moved STEP0 matchers still ACT; DATA_FILE_PATH env-read preserved at import time) · INV-4 ✓ (byte-identical slices, script-verified) · INV-5 ~ (pre-existing `/root` illustrative comments + the generic `_ANCESTOR_STOP_ROOTS` POSIX roots relocated verbatim — no `happy`/project names; byte-identity gate governs, as in phase 3) |
+
+---
+
 ## `_core.py` — phased sequence (ascending risk)
 
 Risk is driven by **outbound** coupling (how much stays-in-`_core` code the cluster calls).
