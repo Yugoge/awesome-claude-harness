@@ -1,13 +1,15 @@
 # runtime_guard
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-07-05T12:33:58Z*
-**Total entries**: 0
-**Convention**: lower
+*Last updated: 2026-07-15T17:19:34Z*
+**Total entries**: 2
+**Convention**: kebab
 
 ## Tree
 ```
 runtime_guard/
+├── `__main__.py` - Package entry-point so `python -m lib.runtime_guard` still works.
+├── `_core.py` - This module contains ZERO project identifiers. Every project-specific name
 ```
 <!-- /AUTO:index-stats -->
 

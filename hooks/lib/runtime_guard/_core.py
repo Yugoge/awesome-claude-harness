@@ -37,16 +37,36 @@ from typing import Optional, Tuple
 # _core's public surface unchanged — every `from ..._core import _strip_quotes`
 # and every internal reference still resolves. See
 # docs/reference/monolith-split-plan.md.
-from .shell_lex import (  # noqa: F401  — re-exported for backward compatibility
-    _WRITE_REDIRECT_RE,
-    _has_redirect_to,
-    _is_redirect_amp,
-    _safe_shlex,
-    _split_pipeline,
-    _strip_compound_delims,
-    _strip_quotes,
-    _write_redirect_targets,
-)
+#
+# Dual-context import: _core is loaded BOTH as the `lib.runtime_guard._core`
+# submodule (relative import) AND executed directly as a script by the
+# runtime_guard.py shim (`os.execv(python, _core.py)`), where there is no parent
+# package so the relative form raises ImportError. In script context sys.path[0]
+# is this file's own directory, so the absolute `shell_lex` name resolves the
+# sibling module. Keeping both forms preserves the engine's standalone-script
+# entrypoint that pretool-bash-safety.sh depends on.
+try:  # noqa: F401  — names re-exported for backward compatibility
+    from .shell_lex import (
+        _WRITE_REDIRECT_RE,
+        _has_redirect_to,
+        _is_redirect_amp,
+        _safe_shlex,
+        _split_pipeline,
+        _strip_compound_delims,
+        _strip_quotes,
+        _write_redirect_targets,
+    )
+except ImportError:  # executed as a top-level script (no package context)
+    from shell_lex import (  # type: ignore[no-redef]
+        _WRITE_REDIRECT_RE,
+        _has_redirect_to,
+        _is_redirect_amp,
+        _safe_shlex,
+        _split_pipeline,
+        _strip_compound_delims,
+        _strip_quotes,
+        _write_redirect_targets,
+    )
 
 # ── The single generic data-file path ────────────────────────────────────────
 # Overridable for tests via env so the live machine file is never mutated by a
