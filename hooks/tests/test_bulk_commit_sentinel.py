@@ -248,11 +248,10 @@ class TestExtractCommitMessageFFlag(unittest.TestCase):
 
     def test_f_flag_nonexistent_file_does_not_crash(self):
         cmd = 'git commit -F /tmp/nonexistent-commit-msg-xyz.txt'
-        with patch.object(guard, "_find_grant", return_value=(None, None)):
-            with patch.object(guard, "_find_grant_any", return_value=(None, None)):
-                with self.assertRaises(SystemExit) as ctx:
-                    guard._evaluate_commit(cmd, _make_data())
-                self.assertEqual(ctx.exception.code, 2)
+        with patch.object(guard, "_collect_commit_grant_candidates", return_value=[]):
+            with self.assertRaises(SystemExit) as ctx:
+                guard._evaluate_commit(cmd, _make_data())
+            self.assertEqual(ctx.exception.code, 2)
 
 
 class TestCommitGrantRedirectBinding(unittest.TestCase):
