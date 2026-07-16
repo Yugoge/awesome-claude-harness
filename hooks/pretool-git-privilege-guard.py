@@ -318,6 +318,41 @@ def _find_grant_any(kind):
     return (None, None)
 
 
+def _collect_commit_grant_candidates():
+    """Return ALL parseable commit-grant candidates as (path, grant) pairs,
+    most-recent (highest mtime) first.
+
+    Unlike _find_grant / _find_grant_any (which return only the single newest
+    grant), this returns every candidate so _evaluate_commit can SELECT the
+    grant whose repo_root/branch/expected_head match the commit's target repo
+    instead of blindly trusting the newest one. /commit (BULK=false) writes TWO
+    repo-bound grants -- one for CONTROL_ROOT and one for the nested ~/.claude
+    repo (written second => newer mtime). The root-repo commit fires first and
+    MUST bind to its OWN (older) grant; selecting by recency alone blocks it on
+    a repository mismatch (docs/dev/peer-review-grant-parity.md CRITICAL).
+
+    The any-SID glob is a superset of the SID-specific glob, so one glob covers
+    both the fast path and the subagent SID-propagation fallback documented in
+    _find_grant_any. Locked (.lck) grants are excluded (single-use in-flight),
+    matching _find_grant / _find_grant_any.
+    """
+    pattern = '/tmp/claude-commit-grant-*-*.json'
+    try:
+        paths = glob.glob(pattern)
+    except Exception:
+        return []
+    try:
+        paths.sort(key=lambda p: os.stat(p).st_mtime, reverse=True)
+    except Exception:
+        paths.sort(reverse=True)
+    candidates = []
+    for path in paths:
+        grant = _load_grant(path)
+        if grant is not None:
+            candidates.append((path, grant))
+    return candidates
+
+
 def _unlink_grant(grant_path):
     """Remove the grant file, swallowing all errors.
 

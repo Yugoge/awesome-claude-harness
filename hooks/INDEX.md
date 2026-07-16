@@ -1,8 +1,8 @@
 # hooks
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-07-15T15:12:07Z*
-**Total entries**: 150
+*Last updated: 2026-07-16T08:49:38Z*
+**Total entries**: 156
 **Convention**: kebab
 
 ## Tree
@@ -27,7 +27,13 @@ hooks/
 ├── lib/
 │   ├── runtime_guard/
 │   │   ├── `__main__.py` - Package entry-point so `python -m lib.runtime_guard` still works.
-│   │   └── `_core.py` - This module contains ZERO project identifiers. Every project-specific name
+│   │   ├── `_core.py` - This module contains ZERO project identifiers. Every project-specific name
+│   │   ├── `config.py` - The config-file loader + config-self-protection cluster split out of _core.py in
+│   │   ├── `constants.py` - Generic verb / keyword / exec-front-end lookup tables split out of _core.py
+│   │   ├── `find_cmds.py` - The find/fd command-family parsing leaves split out of _core.py in the phase-5
+│   │   ├── `git_cmds.py` - The git command-family parsing leaves split out of _core.py in the phase-5
+│   │   ├── `pathmatch.py` - The path/glob matching family split out of _core.py in the phase-3 monolith
+│   │   └── `shell_lex.py` - Pure text tokenizers split out of _core.py in the phase-1 monolith
 │   ├── `agent_resolver.py` - Refactored from pretool-subagent-code-block.py::_find_agent_type so that
 │   ├── `allowlist.py` - Single source of truth for grant-read, grant-match, and grant-consume
 │   ├── `bash_context_strip.py` - This is deliberately NOT a full shell parser.  It only computes a conservative
