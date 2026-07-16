@@ -22,11 +22,9 @@ import json
 import os
 from typing import Optional
 
-# _targets_config_file matches a candidate token / redirect against the protected
-# config-path variants, so it needs the phase-1 quote stripper + redirect scanner
-# and the phase-3 path normalizer. Dual-context import (INV-3): config loads BOTH
-# inside the lib.runtime_guard package (relative) AND as a sibling of the
-# directly-executed _core.py script (absolute, where sys.path[0] is this dir).
+# _targets_config_file needs the phase-1 quote stripper + redirect scanner and
+# the phase-3 path normalizer. Dual-context import (INV-3) --
+# see docs/reference/monolith-split-plan.md.
 try:
     from .shell_lex import _has_redirect_to, _strip_quotes
     from .pathmatch import _normalize_path
