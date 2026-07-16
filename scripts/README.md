@@ -5,11 +5,13 @@ Organization and usage documentation for `scripts/`.
 <!-- AUTO:readme-stats -->
 
 ## Overview
-- **Total files**: 82
+- **Total files**: 84
 - **Subdirectories**: 5
 - **Naming convention**: kebab
 
 ## Files
+- `_qa_neg_a.sh` - QA negative-proof scratch A: a BARE (un-parameterized) protected-prefix use.
+- `_qa_neg_b.sh` - QA control: ONLY an accepted env-default occurrence — should PASS (not over-eager).
 - `aggregate-dev-report.py` - Scans docs/dev/ for per-worker shard dev-reports matching a given task-id,
 - `aggregate-permissions.py` - Usage: aggregate-permissions.py <qa-glob-or-dir> [pipelines.json]
 - `analyze-folder-history.sh` - Description: Analyze Git history for folder to discover file creation patterns
