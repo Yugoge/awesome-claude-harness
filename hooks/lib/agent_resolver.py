@@ -19,6 +19,35 @@ may dispatch subagents before any sentinel-creating tool runs, so the
 agent-index entry can legitimately be missing during the first write.
 The canonical contract is: hard-block on resolved-but-wrong role; for
 None, degrade to warn + allow. See pretool-subagent-code-block.py.
+
+STALE-1 (2026-07-15): cp-state files that never got checked out (crashed
+session, abandoned spec, orphaned instance slot) sit on disk forever with
+is_running=true. Because step 2 of the resolution order scans ALL specs
+globally (not just the current session's own spec), a brand-new session
+whose agent_id happens to match one of these dangling entries -- via
+recycled/reused runtime agent_id values, observed in practice -- was
+getting silently misattributed that stale entry's role. Fix: an
+is_running=true match is only trusted as "active" (authoritative for
+resolution) if checked_in_at is within _MAX_ACTIVE_AGE_SECONDS. Beyond
+that window it is treated exactly like an is_running=false match: not
+authoritative, caller falls through to agent-index (AC-3 semantics
+already established below). This does not touch the agent-index fallback
+path itself, only what counts as an authoritative cp-state hit BEFORE it.
+
+STALE-1 residual risk (Codex adversarial review, 2026-07-15): a resolver-
+only staleness bound cannot catch a *freshly* manufactured dangling entry
+(pretool-cp-checkin.py auto-registers ANY Read of a matching cp-state
+path, including incidental/debugging reads, with no way for this module
+to distinguish that from a genuine dispatch). Mitigated, not eliminated,
+by a companion pretool-cp-checkin.py fix (2026-07-15) that stops
+refreshing checked_in_at on repeat reads by an already-registered owner --
+so a bogus entry can no longer be kept perpetually "fresh" by the same
+bystander re-reading it, and will itself go stale within
+_MAX_ACTIVE_AGE_SECONDS of its single registration. A freshly-created
+bogus entry can still cause misattribution for that same bounded window;
+fully closing that gap would require an explicit, ownership-validated
+dispatch-claim protocol (out of scope for this fix -- flagged as a
+follow-up).
 """
 
 from __future__ import annotations
@@ -26,7 +55,60 @@ from __future__ import annotations
 import glob
 import json
 import os
+from datetime import datetime, timezone
 from typing import Optional
+
+
+# STALE-1: upper bound on how long an is_running=true cp-state entry is
+# trusted without being re-touched (checked_in_at refreshed by a genuine
+# check-in). Originally set to 8h (matching /dev-overnight's documented
+# default end-time), but Codex adversarial review (2026-07-15) found real
+# on-disk evidence of a legitimate, cleanly-completed single `dev` cp-state
+# lifecycle (check-in to auto-checkout-on-all-checkpoints-terminal) lasting
+# 10.86h (.claude/specs/20260604-204954/cp-state-dev.json in this harness's
+# own history) -- 8h would have false-negatived that genuine session. 24h
+# gives >2x margin over the longest such lifecycle observed, while still
+# self-healing an order of magnitude faster than the dangling entries this
+# fix targets (observed ranging from ~1 day to 2+ months stale).
+_MAX_ACTIVE_AGE_SECONDS = 24 * 60 * 60
+
+# STALE-1 Codex (c): a checked_in_at timestamp in the future (clock skew
+# between writer/reader, or a corrupt/adversarial entry) makes `age`
+# negative; without a floor, `age > max_age_seconds` is never true and the
+# entry would be trusted as "fresh" forever (or until far past the future
+# instant). Allow a small tolerance for ordinary clock skew; anything
+# beyond it is untrusted (stale), not "eternally fresh".
+_CLOCK_SKEW_TOLERANCE_SECONDS = 5 * 60
+
+
+def _checked_in_age_seconds(payload: dict) -> Optional[float]:
+    """Seconds since payload['checked_in_at'], or None if missing/unparseable."""
+    ts = payload.get("checked_in_at")
+    if not isinstance(ts, str) or not ts:
+        return None
+    try:
+        dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return (datetime.now(timezone.utc) - dt).total_seconds()
+
+
+def _is_stale(payload: dict, max_age_seconds: float = _MAX_ACTIVE_AGE_SECONDS) -> bool:
+    """True iff payload is too old (or suspiciously future-dated) to trust
+    as an active resolution hit.
+
+    Fail-safe direction: a missing/unparseable checked_in_at is treated as
+    stale (excluded from trust) rather than trusted indefinitely -- mirrors
+    the module's existing "unexpected -> None/non-authoritative" ethos.
+    """
+    age = _checked_in_age_seconds(payload)
+    if age is None:
+        return True
+    if age < -_CLOCK_SKEW_TOLERANCE_SECONDS:
+        return True
+    return age > max_age_seconds
 
 
 def _read_json(path: str) -> Optional[dict]:
@@ -133,14 +215,17 @@ def _scan_cp_state_files(agent_id: str, project_dir: str):
       - str: a single resolved active match (F14 M9)
       - _FAIL_CLOSED: active cross-role collision (F14 M8 fail-closed);
         caller MUST NOT fall through to agent-index.
-      - None: no match or inactive-only (AC-3 non-authoritative); caller
-        MAY fall through to agent-index.
+      - None: no match, inactive-only, or active-but-stale (AC-3 /
+        STALE-1 non-authoritative); caller MAY fall through to agent-index.
     """
     paths = _glob_cp_state(project_dir)
     matches = [d for d in (_read_match(p, agent_id) for p in paths) if d]
     if not matches:
         return None
-    active = [m for m in matches if m.get("is_running")]
+    # STALE-1: is_running=true alone is not enough -- a dangling entry that
+    # was never checked out also has is_running=true forever. Require the
+    # match to also be fresh (recently checked in) before trusting it.
+    active = [m for m in matches if m.get("is_running") and not _is_stale(m)]
     if not active:
         return None
     picked = _pick_active(active)

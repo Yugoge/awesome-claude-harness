@@ -5,6 +5,7 @@ import os
 import subprocess
 import sys
 import tempfile
+from datetime import datetime, timezone
 
 # We'll spawn a subprocess that imports agent_resolver with a controlled CLAUDE_PROJECT_DIR
 RUNNER_SRC = """
@@ -35,6 +36,14 @@ def setup_env(spec_id, role, agent_id, is_running, agent_type, agent_index_value
             "agent_id": agent_id,
             "agent_type": agent_type,
             "is_running": is_running,
+            # STALE-1 (2026-07-15): real production writers always pair
+            # is_running=true with a fresh checked_in_at; a fixture missing
+            # it no longer reflects on-disk reality and would trip the new
+            # staleness fail-safe in hooks/lib/agent_resolver.py. Include a
+            # fresh timestamp so this baseline still verifies the original
+            # AC-3 contract's intent (active-cp-state / collision behavior)
+            # rather than an now-unrealistic malformed-fixture shape.
+            "checked_in_at": datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z"),
             "checkpoints": [],
         }, f)
     if agent_index_value:
@@ -105,10 +114,12 @@ def case_ac3_4():
     os.makedirs(f"{p}/.claude/specs/spec-a", exist_ok=True)
     os.makedirs(f"{p}/.claude/specs/spec-b", exist_ok=True)
     os.makedirs(f"{p}/.claude/dev-registry", exist_ok=True)
+    # STALE-1 (2026-07-15): fresh checked_in_at on both -- see setup_env comment.
+    now = datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
     with open(f"{p}/.claude/specs/spec-a/cp-state-ba.json", "w") as f:
-        json.dump({"agent_id": "aid-collision", "agent_type": "ba", "is_running": True, "checkpoints": []}, f)
+        json.dump({"agent_id": "aid-collision", "agent_type": "ba", "is_running": True, "checked_in_at": now, "checkpoints": []}, f)
     with open(f"{p}/.claude/specs/spec-b/cp-state-qa.json", "w") as f:
-        json.dump({"agent_id": "aid-collision", "agent_type": "qa", "is_running": True, "checkpoints": []}, f)
+        json.dump({"agent_id": "aid-collision", "agent_type": "qa", "is_running": True, "checked_in_at": now, "checkpoints": []}, f)
     with open(f"{p}/.claude/dev-registry/agent-index.json", "w") as f:
         json.dump({"aid-collision": "dev"}, f)
     out = call_resolver(p, {"agent_id": "aid-collision"})

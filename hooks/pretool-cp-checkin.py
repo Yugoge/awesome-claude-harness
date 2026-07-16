@@ -288,11 +288,23 @@ def _update_payload(payload, agent_id):
     NOT silently introduce it here -- that would obscure migration intent.
     Newly-created cp-state files initialize `generation=1` via
     spec-check.py's _default_payload.
+
+    STALE-1 (2026-07-15, Codex adversarial review finding (a)): only
+    refresh checked_in_at on a genuine new claim (transition from idle, or
+    a different agent_id taking over). A repeat Read by the SAME
+    already-registered owner of an already-running slot must NOT restamp
+    checked_in_at -- otherwise a bystander session that incidentally
+    re-reads a cp-state path it auto-registered into (e.g. while debugging)
+    could keep that registration perpetually "fresh", defeating
+    agent_resolver.py's staleness bound (hooks/lib/agent_resolver.py
+    _MAX_ACTIVE_AGE_SECONDS) indefinitely.
     """
+    already_claimed_by_same_owner = bool(payload.get("is_running")) and bool(agent_id) and payload.get("agent_id") == agent_id
     payload["is_running"] = True
     if agent_id:
         payload["agent_id"] = agent_id
-    payload["checked_in_at"] = _now_iso_z()
+    if not already_claimed_by_same_owner:
+        payload["checked_in_at"] = _now_iso_z()
     payload["checked_out_at"] = None
     return payload
 
