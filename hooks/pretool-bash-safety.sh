@@ -175,7 +175,6 @@ DAEMON_RESTART_GRANT_HELPER="${CLAUDE_DAEMON_RESTART_GRANT_HELPER:-/root/bin/cla
 # "happy-daemon" + targets dev|jade|qijie exactly as before (byte-for-byte).
 PROTECTED_DAEMON_PREFIX="${CLAUDE_PROTECTED_DAEMON_PREFIX:-happy-daemon}"
 PROTECTED_DAEMON_TARGETS="${CLAUDE_PROTECTED_DAEMON_TARGETS:-dev|jade|qijie}"
-_NEGTEST_BARE_DAEMON=happy-daemon
 
 # ── Helper: split compound command into subcommands ───────────────
 # Splits on && || ; and checks each subcommand independently.
