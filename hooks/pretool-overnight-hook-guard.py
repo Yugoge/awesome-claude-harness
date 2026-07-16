@@ -1782,6 +1782,12 @@ def _build_bwrap_argv(command: str, main_root: str, worktree_path: str,
       5. --bind <worktree_path>   the ONLY RW path under main (nested over RO)
       6. --bind <git-dir>, <common-dir>   (LINKED worktree only) git-derived RW
                                   exceptions for the supported add/commit surface
+      7. --ro-bind <common>/config, <common>/hooks   (LINKED worktree only) RE-bind
+                                  the shared config file + default-hooks dir READ-
+                                  ONLY, nested OVER step 6's RW common-dir bind, so
+                                  a keystone-disabling `git config --unset
+                                  core.hooksPath` / hook drop hits EROFS while
+                                  objects/refs/logs stay RW for commits
     Because every RW bind is applied AFTER the RO binds, and each RW bind targets
     a path UNDER main that is itself an approved exception, no mount exposes a RW
     source/root covering the protected main tree except the worktree + git paths.
