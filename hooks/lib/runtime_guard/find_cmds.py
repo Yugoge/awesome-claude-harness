@@ -22,9 +22,8 @@ import os
 import re
 
 # find/fd argv parsers key on the phase-1 quote stripper and the phase-3
-# basename-glob matchers. Dual-context import (INV-3): find_cmds loads BOTH
-# inside the lib.runtime_guard package (relative) AND as a sibling of the
-# directly-executed _core.py script (absolute, where sys.path[0] is this dir).
+# basename-glob matchers. Dual-context import (INV-3) --
+# see docs/reference/monolith-split-plan.md.
 try:
     from .shell_lex import _strip_quotes
     from .pathmatch import _glob_to_segment_regex, _has_shell_glob
