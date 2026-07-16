@@ -88,6 +88,18 @@ Revision history:
   CWD -- validating against the hook's own CWD unconditionally would
   wrongly reject every nested ~/.claude repo commit). `write-commit-grant.py`
   now records `repo_root`/`branch`/`expected_head` at issuance time.
+  2026-07-16 (commit-grant redirect-vector closure): the 2026-07-15 binding
+  only inspected `-C <dir>`, so a commit could still land in a DIFFERENT repo
+  via (1) `--git-dir`/`--work-tree`/`--namespace` global flags, (2) inline
+  `GIT_DIR=`/`GIT_WORK_TREE=`/`GIT_COMMON_DIR=` env assignment, (3) ambient
+  GIT_DIR/GIT_WORK_TREE env, or (4) a second chained `git -C <other> commit`
+  (only the first invocation was validated). `_enforce_commit_grant_binding`
+  now: blocks ambient redirect env; enumerates EVERY commit invocation via
+  `_iter_commit_invocations` (segment + token aware); hard-blocks any
+  flag/inline-env redirect (fail closed, mirroring "multiple -C -> block");
+  and validates repo/branch/HEAD per invocation against its own resolved -C
+  target. The parallel PUSH-grant redirect hole is documented as a separate
+  follow-up (see comment atop `_evaluate_push`) and intentionally left unfixed.
 
 Exit codes:
   0: Allow tool use
@@ -106,6 +118,18 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 from lib.allowlist import read_grant_for_git_command, match_sentinel_grant_for_bash_command  # noqa: E402
 from lib.git_command_classifier import iter_git_invocations, GitInvocation  # noqa: E402
+# Segment/tokenization primitives reused (read-only) so the commit-grant binding
+# can enumerate EVERY git-commit invocation in a chained command string and
+# inspect each invocation's leading env-assignments + global-option flags
+# token-aware (precise, no false match on the word "commit" inside a message).
+# These are consumed, NOT modified — the shared classifier stays untouched
+# (scope: this fix is the COMMIT grant path only).
+from lib.git_command_classifier import (  # noqa: E402
+    _segments as _shell_segments,
+    _command_token_index as _cmd_token_index,
+    _ENV_ASSIGN_RE as _ENV_ASSIGN_RE,
+    _GIT_GLOBAL_VALUE as _GIT_GLOBAL_VALUE,
+)
 
 
 BLESSED_BRIDGE_RE = re.compile(r'auto-bulk:\s*end-of-cycle commit for\b')
@@ -134,6 +158,20 @@ GIT_COMMIT_INVOCATION_RE = re.compile(
 # mistaken for a directory. Matches both `-C dir` and glued `-Cdir` forms,
 # and quoted values (`-C "a b"` / `-C 'a b'`).
 DASH_CAPITAL_C_RE = re.compile(r'-C\s*(?:"([^"]*)"|\'([^\']*)\'|(\S+))')
+
+# Repo/work-tree REDIRECT vectors for a `git commit`. Any of these repoints the
+# commit's EFFECTIVE target repository/work-tree away from the invocation's cwd,
+# so the grant's repo/branch/HEAD binding cannot be soundly verified against the
+# live git state the commit will actually mutate. `-C <dir>` is deliberately NOT
+# in this set: `-C` is the ONE legitimate redirect (changelog-analyst commits the
+# nested repo via `git -C <nested> commit`), and it is resolved + validated
+# against the grant rather than blocked. Everything below is FAIL-CLOSED
+# (hard block), mirroring the existing "multiple -C flags -> hard block"
+# philosophy: no legitimate committer in this repo uses --git-dir / --work-tree /
+# --namespace or a GIT_DIR / GIT_WORK_TREE / GIT_COMMON_DIR env redirect, and a
+# commit we cannot unambiguously locate must be rejected, not guessed.
+_GIT_REDIRECT_ENV_VARS = ('GIT_DIR', 'GIT_WORK_TREE', 'GIT_COMMON_DIR')
+_GIT_REDIRECT_FLAGS = ('--git-dir', '--work-tree', '--namespace')
 
 
 def _block(message):
@@ -364,9 +402,9 @@ def _extract_push_remote(invocation):
     return ''
 
 
-def _extract_commit_dash_c_dir(command):
-    """Best-effort extraction of the `-C <dir>` value from the git commit
-    invocation in `command`, or '' when no explicit `-C` is present.
+def _extract_dash_c_from_span(options_span, command_excerpt):
+    """Resolve the single `-C <dir>` value from a commit invocation's
+    global-options span, or '' when no explicit `-C` is present.
 
     changelog-analyst's canonical commit form is `git -C "${GIT_ROOT}" commit
     -F <msgfile>` (agents/changelog-analyst.md) for BOTH the root repo and
@@ -393,10 +431,6 @@ def _extract_commit_dash_c_dir(command):
         surface as a confusing generic "repository mismatch". Blocked here
         with a distinct, clearer message instead.
     """
-    m = GIT_COMMIT_INVOCATION_RE.search(command)
-    if not m:
-        return ''
-    options_span = m.group(1)
     matches = list(DASH_CAPITAL_C_RE.finditer(options_span))
     if not matches:
         return ''
@@ -404,7 +438,7 @@ def _extract_commit_dash_c_dir(command):
         _block(
             '\nBLOCKED: agent git commit - multiple -C directory overrides '
             'in one commit invocation are not supported.\n'
-            'Command excerpt: %s\n' % command[:200]
+            'Command excerpt: %s\n' % command_excerpt[:200]
             + 'Re-issue the commit with exactly one -C <dir> (or none).\n'
         )
     dm = matches[0]
@@ -413,11 +447,157 @@ def _extract_commit_dash_c_dir(command):
         _block(
             '\nBLOCKED: agent git commit - the -C argument %r looks like an '
             'unresolved shell variable reference, not a concrete path.\n' % value
-            + 'Command excerpt: %s\n' % command[:200]
+            + 'Command excerpt: %s\n' % command_excerpt[:200]
             + 'Substitute the concrete resolved absolute directory before '
             'submitting the commit command.\n'
         )
     return value
+
+
+def _extract_commit_dash_c_dir(command):
+    """Back-compat single-invocation `-C <dir>` extractor (whole command).
+
+    Retained for external/test callers; the live binding path now enumerates
+    EVERY commit invocation via `_iter_commit_invocations` and calls
+    `_extract_dash_c_from_span` per invocation.
+    """
+    m = GIT_COMMIT_INVOCATION_RE.search(command)
+    if not m:
+        return ''
+    return _extract_dash_c_from_span(m.group(1), command)
+
+
+def _ambient_git_redirect_present():
+    """True iff the guard's OWN environment carries a GIT_DIR / GIT_WORK_TREE /
+    GIT_COMMON_DIR redirect.
+
+    An ambient redirect repoints the effective target repo/work-tree of a bare
+    `git commit` (and of the guard's own `_git_output` probes) away from the
+    invocation cwd, so the grant's repo/branch/HEAD binding cannot be soundly
+    verified. Fail closed: block rather than validate against an ambiguous
+    target. No legitimate agent commit path sets these in the ambient env.
+    """
+    return any(os.environ.get(v) for v in _GIT_REDIRECT_ENV_VARS)
+
+
+def _iter_commit_invocations(command):
+    """Yield one descriptor dict per `git ... commit` invocation in `command`.
+
+    Segment-aware (reuses the canonical shell segmenter) so EVERY commit in a
+    chained / `&&`-joined / newline-separated / multi-invocation command string
+    is enumerated -- not just the first. This closes the "second chained commit
+    runs unvalidated" hole. Token-aware within each segment (skips leading
+    env-assignments + command wrappers, basename-matches the git token, walks
+    git global options) so the word "commit" appearing inside a -m message is
+    never mistaken for a second invocation.
+
+    Each descriptor:
+      segment              : the raw shell segment (for -C extraction + excerpts)
+      options_span         : global-options text between `git` and `commit`
+      inline_env_redirect  : True iff a GIT_DIR/GIT_WORK_TREE/GIT_COMMON_DIR
+                             assignment is inline-prefixed before the git token
+      flag_redirect        : True iff --git-dir/--work-tree/--namespace appears
+                             as a git global option before the commit subcommand
+    """
+    for seg in _shell_segments(command):
+        toks = seg.split()
+        if not toks:
+            continue
+        idx = _cmd_token_index(toks)
+        if idx is None:
+            continue
+        if os.path.basename(toks[idx]) != 'git':
+            continue
+        after_git = toks[idx + 1:]
+        # Split git global options from the subcommand (mirrors classifier's
+        # _git_subcommand, but retains the global-option token list).
+        i = 0
+        while i < len(after_git):
+            a = after_git[i]
+            if a in _GIT_GLOBAL_VALUE:
+                i += 2
+                continue
+            if a.startswith('-'):
+                i += 1
+                continue
+            break
+        global_opts = after_git[:i]
+        subcommand = after_git[i] if i < len(after_git) else None
+        if subcommand != 'commit':
+            continue
+        inline_env_redirect = any(
+            _ENV_ASSIGN_RE.match(t) and t.split('=', 1)[0] in _GIT_REDIRECT_ENV_VARS
+            for t in toks[:idx]
+        )
+        flag_redirect = any(
+            t.split('=', 1)[0] in _GIT_REDIRECT_FLAGS for t in global_opts
+        )
+        m = GIT_COMMIT_INVOCATION_RE.search(seg)
+        options_span = m.group(1) if m else ''
+        yield {
+            'segment': seg,
+            'options_span': options_span,
+            'inline_env_redirect': inline_env_redirect,
+            'flag_redirect': flag_redirect,
+        }
+
+
+def _block_commit_redirect(segment, vector):
+    _block(
+        '\nBLOCKED: agent git commit - %s redirect detected.\n' % vector
+        + 'A commit grant is bound to a specific repo/branch/HEAD resolved at '
+        'issuance time; --git-dir / --work-tree / --namespace flags and '
+        'GIT_DIR / GIT_WORK_TREE / GIT_COMMON_DIR env assignments repoint the '
+        'commit at a DIFFERENT target the grant never authorized. Only a bare '
+        '`git commit` or `git -C <dir> commit` (validated against the grant) '
+        'is permitted.\n'
+        + 'Command excerpt: %s\n' % segment[:200]
+        + 'Spec: pretool-git-privilege-guard.py 2026-07-16 commit-grant '
+        'redirect-vector closure (fail closed, mirrors "multiple -C -> block").\n'
+    )
+
+
+def _enforce_commit_grant_binding(grant, command):
+    """Validate the grant's repo/branch/HEAD binding against EVERY commit
+    invocation in `command`, failing CLOSED on any unresolvable redirect.
+
+    Order of checks (each _block()s exit 2 on failure; a full pass returns):
+      1. Ambient GIT_DIR/GIT_WORK_TREE/GIT_COMMON_DIR redirect -> block.
+      2. For each enumerated commit invocation:
+         a. inline-env or flag redirect (--git-dir/--work-tree/--namespace,
+            GIT_DIR=/GIT_WORK_TREE=/GIT_COMMON_DIR=) -> block.
+         b. resolve its -C target dir, then validate repo/branch/HEAD.
+      3. If the classifier saw a commit but this enumerator resolved ZERO
+         invocations, the commit's target is unlocatable -> block.
+    """
+    if _ambient_git_redirect_present():
+        _block(
+            '\nBLOCKED: agent git commit - ambient GIT_DIR/GIT_WORK_TREE/'
+            'GIT_COMMON_DIR environment redirect present.\n'
+            'The commit target repo cannot be verified against the grant '
+            'binding while these are set. Unset them and re-run /commit.\n'
+            'Spec: pretool-git-privilege-guard.py 2026-07-16 commit-grant '
+            'redirect-vector closure (fail closed).\n'
+        )
+    invocations = list(_iter_commit_invocations(command))
+    if not invocations:
+        _block(
+            '\nBLOCKED: agent git commit - a commit was detected but its '
+            'effective target repository could not be resolved for grant '
+            'validation.\n'
+            'Command excerpt: %s\n' % command[:200]
+            + 'Fail closed: an unlocatable commit target is rejected, not '
+            'guessed.\n'
+        )
+    for inv in invocations:
+        if inv['inline_env_redirect']:
+            _block_commit_redirect(inv['segment'], 'inline-env GIT_DIR/GIT_WORK_TREE')
+        if inv['flag_redirect']:
+            _block_commit_redirect(inv['segment'], '--git-dir/--work-tree/--namespace flag')
+        target_dir = _extract_dash_c_from_span(inv['options_span'], inv['segment'])
+        _validate_commit_grant_repo(grant, target_dir)
+        _validate_commit_grant_branch(grant, target_dir)
+        _validate_commit_grant_head(grant, target_dir)
 
 
 def _commit_target_git_output(target_dir, *args):
@@ -431,15 +611,16 @@ def _commit_target_git_output(target_dir, *args):
     return _git_output(prefix + list(args))
 
 
-def _validate_commit_grant_repo(grant, command):
+def _validate_commit_grant_repo(grant, target_dir):
     """Grant.repo_root must match the toplevel of the commit's target repo.
 
     New binding (2026-07-15): closes the gap where a commit grant issued for
     one repository could authorize a `git commit` in a completely different
-    repository, since only expires_at was previously checked.
+    repository, since only expires_at was previously checked. `target_dir` is
+    the resolved `-C <dir>` for THIS commit invocation ('' = hook cwd), so a
+    chained second commit is validated against its OWN target (2026-07-16).
     """
     grant_repo = grant.get('repo_root') or ''
-    target_dir = _extract_commit_dash_c_dir(command)
     current_repo = _commit_target_git_output(target_dir, 'rev-parse', '--show-toplevel')
     if not grant_repo or not current_repo or grant_repo != current_repo:
         _block(
@@ -453,11 +634,10 @@ def _validate_commit_grant_repo(grant, command):
         )
 
 
-def _validate_commit_grant_branch(grant, command):
+def _validate_commit_grant_branch(grant, target_dir):
     """AC-A7-equivalent for commit: grant.branch must match the current branch
     of the commit's target repo (mirrors _validate_push_grant_branch)."""
     grant_branch = grant.get('branch') or ''
-    target_dir = _extract_commit_dash_c_dir(command)
     current_branch = _commit_target_git_output(target_dir, 'branch', '--show-current')
     if not grant_branch or grant_branch != current_branch:
         _block(
@@ -469,7 +649,7 @@ def _validate_commit_grant_branch(grant, command):
         )
 
 
-def _validate_commit_grant_head(grant, command):
+def _validate_commit_grant_head(grant, target_dir):
     """AC-A6-equivalent for commit: grant.expected_head must match the
     current HEAD of the commit's target repo (mirrors _validate_push_grant_head).
 
@@ -483,7 +663,6 @@ def _validate_commit_grant_head(grant, command):
     strict, no-tolerance behavior _validate_push_grant_head already applies.
     """
     grant_head = grant.get('expected_head') or ''
-    target_dir = _extract_commit_dash_c_dir(command)
     current_head = _commit_target_git_output(target_dir, 'rev-parse', 'HEAD')
     if not grant_head or grant_head != current_head:
         _block(
@@ -757,20 +936,17 @@ def _evaluate_commit(command, data):
         grant_path, grant = _find_grant('commit', sid)
         if grant is not None:
             if not _end_time_passed(grant.get('expires_at', '')):
-                # 2026-07-15: repo/branch/HEAD binding (mirrors _evaluate_push).
-                # Each call _block()s (exit 2) on mismatch; a pass falls through.
-                _validate_commit_grant_repo(grant, command)
-                _validate_commit_grant_branch(grant, command)
-                _validate_commit_grant_head(grant, command)
+                # 2026-07-15/07-16: repo/branch/HEAD binding (mirrors _evaluate_push),
+                # enforced across EVERY commit invocation and failing closed on any
+                # redirect vector. _block()s (exit 2) on mismatch; a pass falls through.
+                _enforce_commit_grant_binding(grant, command)
                 _lock_grant_for_posttool(grant_path, sid)
                 return
     # Fallback: any valid unexpired commit grant (written by /commit close-gate).
     grant_path, grant = _find_grant_any('commit')
     if grant is not None:
         if not _end_time_passed(grant.get('expires_at', '')):
-            _validate_commit_grant_repo(grant, command)
-            _validate_commit_grant_branch(grant, command)
-            _validate_commit_grant_head(grant, command)
+            _enforce_commit_grant_binding(grant, command)
             effective_sid = grant.get('sid') or sid or 'any'
             _lock_grant_for_posttool(grant_path, effective_sid)
             return
@@ -873,6 +1049,16 @@ def _block_missing_push_grant(sid):
 
 
 def _evaluate_push(command, invocations, data):
+    # FOLLOW-UP (2026-07-16, out of scope for the commit-grant redirect fix):
+    # _validate_push_grant_branch/_head resolve the current branch/HEAD via
+    # _git_output (hook cwd) with NO target-dir resolution, so the SAME class of
+    # redirect hole closed for commit still exists here -- `git --git-dir=B/.git
+    # --work-tree=B push ...`, `GIT_DIR=B/.git git push ...`, ambient GIT_DIR/
+    # GIT_WORK_TREE, and a second chained `git -C B push` all bypass the
+    # branch/HEAD binding. Deliberately NOT fixed in this task (commit-grant
+    # scope only); tracked as a separate follow-up. Mirror _enforce_commit_grant_binding
+    # here (ambient-env block + per-invocation redirect-flag/inline-env block +
+    # -C target resolution) when addressed.
     sid = _get_session_id(data)
     # AC-A1: literal-substring inline-env injection (precedes env check).
     if _inline_env_present(command, 'CLAUDE_PUSH_COMMAND_ACTIVE'):

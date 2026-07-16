@@ -10,6 +10,7 @@ Task: /do bulk-commit sentinel enforcement (2026-05-24).
 
 import json
 import os
+import subprocess
 import sys
 import tempfile
 import time
