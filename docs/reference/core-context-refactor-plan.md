@@ -148,7 +148,7 @@ the full-input orchestrators and the `Policy` cut are last.
 
 ```mermaid
 graph LR
-    P1["Phase 1 DONE<br/>STEP0 self-protection<br/>ctx: simple_cmds + cwd_base<br/>pre-config leaf"] --> P2["Phase 2<br/>cross-segment pair<br/>_p5_endpoint + _p6_prockill<br/>ctx: groups + cfg"]
+    P1["Phase 1 DONE<br/>STEP0 self-protection<br/>ctx: simple_cmds + cwd_base<br/>pre-config leaf"] --> P2["Phase 2 DONE<br/>cross-segment pair<br/>_p5_endpoint + _p6_prockill<br/>ctx: groups + cfg"]
     P2 --> P3["Phase 3<br/>file-family layers<br/>_p3/_p4/_p8*/_p9<br/>ctx: simple_cmds + cfg + cwd_base"]
     P3 --> P4["Phase 4<br/>full-input orchestrators<br/>_p0_anchor + _p1_launch<br/>all 4 fields"]
     P4 --> P5["Phase 5<br/>widen to leaf helpers<br/>cfg + cwd + cwd_det threads"]
