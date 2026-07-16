@@ -4522,7 +4522,7 @@ def evaluate(command: str, cwd_base: Optional[str] = None) -> Verdict:
     # cfg is intentionally None here — STEP0 runs BEFORE the config load and must
     # not depend on the very file it protects. groups is carried for a faithful
     # snapshot though STEP0 does not read it.
-    v = _step0_self_protection(Context(cwd_base=cwd_base, simple_cmds=simple_cmds, groups=groups))
+    v = _step0_self_protection(Context(cwd_base=cwd_base, simple_cmds=simple_cmds, groups=groups, cfg=None))
     if v is not None:
         return v
 
