@@ -20,10 +20,8 @@ import os
 import re
 from typing import Optional
 
-# Shell-command lexing primitives live in the phase-1 sibling module; only the
-# quote stripper is needed here. Dual-context import (INV-3): pathmatch loads
-# BOTH inside the lib.runtime_guard package (relative) AND as a sibling of the
-# directly-executed _core.py script (absolute, where sys.path[0] is this dir).
+# Only the phase-1 quote stripper is needed here. Dual-context import (INV-3) --
+# see docs/reference/monolith-split-plan.md.
 try:
     from .shell_lex import _strip_quotes
 except ImportError:  # executed under the top-level-script shim (no package)
