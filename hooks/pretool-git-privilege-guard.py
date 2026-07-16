@@ -999,28 +999,36 @@ def _evaluate_commit(command, data):
         )
     if _check_git_allowlist(command, data):
         return
-    # Grant-file mechanism: SID-specific search first, then any-SID fallback.
-    # Fallback handles subagent SID propagation gaps where changelog-analyst's
-    # session_id (PreToolUse payload) differs from orchestrator's CLAUDE_SESSION_ID.
+    # Grant-file mechanism. /commit (BULK=false) writes TWO repo-bound grants
+    # (CONTROL_ROOT + nested ~/.claude); the guard MUST bind to the grant whose
+    # repo_root/branch/expected_head match the commit's target repo, NOT merely
+    # the most-recent grant. Selecting by recency blocks the root commit (which
+    # fires first) on a repository mismatch against the newer nested-repo grant
+    # (docs/dev/peer-review-grant-parity.md CRITICAL). Collect every candidate
+    # (the any-SID glob is a superset of the SID-specific one, covering the
+    # subagent SID-propagation fallback) and pick the one bound to this target.
     sid = _get_session_id(data)
-    if sid:
-        grant_path, grant = _find_grant('commit', sid)
-        if grant is not None:
-            if not _end_time_passed(grant.get('expires_at', '')):
-                # 2026-07-15/07-16: repo/branch/HEAD binding (mirrors _evaluate_push),
-                # enforced across EVERY commit invocation and failing closed on any
-                # redirect vector. _block()s (exit 2) on mismatch; a pass falls through.
-                _enforce_commit_grant_binding(grant, command)
-                _lock_grant_for_posttool(grant_path, sid)
-                return
-    # Fallback: any valid unexpired commit grant (written by /commit close-gate).
-    grant_path, grant = _find_grant_any('commit')
-    if grant is not None:
-        if not _end_time_passed(grant.get('expires_at', '')):
+    live = [
+        (path, grant)
+        for (path, grant) in _collect_commit_grant_candidates()
+        if not _end_time_passed(grant.get('expires_at', ''))
+    ]
+    for grant_path, grant in live:
+        if _grant_matches_commit_target(grant, command):
+            # Authoritative binding re-check (redirect vectors + repo/branch/HEAD
+            # across EVERY invocation): a matching grant passes; any redirect
+            # still _block()s (exit 2). Single source of truth for the allow.
             _enforce_commit_grant_binding(grant, command)
-            effective_sid = grant.get('sid') or sid or 'any'
-            _lock_grant_for_posttool(grant_path, effective_sid)
+            _lock_grant_for_posttool(grant_path, grant.get('sid') or sid or 'any')
             return
+    # Fail closed (security preserved): no unexpired grant is bound to this
+    # commit's target repo/branch/HEAD. If a live-but-mismatched grant exists,
+    # surface the precise diagnostic via the authoritative binding check (it
+    # _block()s, exit 2); otherwise default-deny. Selection narrowed the FALSE
+    # block above WITHOUT widening acceptance -- a mismatched-only grant set is
+    # still rejected here.
+    if live:
+        _enforce_commit_grant_binding(live[0][1], command)
     # AC-A13: default-deny all other agent git commit calls.
     _block_default_deny_commit(msg)
 
