@@ -711,6 +711,42 @@ def _validate_commit_grant_head(grant, target_dir):
         )
 
 
+def _grant_matches_commit_target(grant, command):
+    """Non-blocking predicate for grant SELECTION: True iff `grant`'s repo_root /
+    branch / expected_head match EVERY commit invocation's target repo in
+    `command`.
+
+    Mirrors the per-invocation repo/branch/HEAD comparisons that
+    _enforce_commit_grant_binding performs, but returns a bool instead of
+    _block()ing, so _evaluate_commit can PREFER the grant bound to the commit's
+    target repo when /commit has written several repo-bound grants. It does NOT
+    re-implement the redirect fail-closed checks (those are grant-independent);
+    the authoritative _enforce_commit_grant_binding still runs on the selected
+    grant before the commit is allowed, so selection never widens acceptance --
+    a grant missing any binding field, or mismatching on any invocation, is
+    non-matching (fail closed). Note: a malformed invocation (multiple -C or an
+    unresolved ${VAR}) still hard-blocks via _extract_dash_c_from_span, which is
+    the correct fail-closed behavior regardless of grant.
+    """
+    grant_repo = grant.get('repo_root') or ''
+    grant_branch = grant.get('branch') or ''
+    grant_head = grant.get('expected_head') or ''
+    if not grant_repo or not grant_branch or not grant_head:
+        return False
+    invocations = list(_iter_commit_invocations(command))
+    if not invocations:
+        return False
+    for inv in invocations:
+        target_dir = _extract_dash_c_from_span(inv['options_span'], inv['segment'])
+        if _commit_target_git_output(target_dir, 'rev-parse', '--show-toplevel') != grant_repo:
+            return False
+        if _commit_target_git_output(target_dir, 'branch', '--show-current') != grant_branch:
+            return False
+        if _commit_target_git_output(target_dir, 'rev-parse', 'HEAD') != grant_head:
+            return False
+    return True
+
+
 def _looks_like_git_commit(invocations):
     return any(inv.subcommand == 'commit' for inv in invocations)
 
