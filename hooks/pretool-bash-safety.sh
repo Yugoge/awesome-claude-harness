@@ -33,15 +33,23 @@ DAEMON_RESTART_SENTINEL_RE="$(printf '%s' "${DAEMON_RESTART_GRANT_DIR%/}/claude-
 #                                     cosmetic: daemon-restart stderr guidance only —
 #                                     Layer 1.A hint + Layer 1.B/1.E reason lines; the
 #                                     grant sentinel dir is DAEMON_RESTART_GRANT_DIR (above).
+#      PROTECTED_DAEMON_PREFIX      <- CLAUDE_PROTECTED_DAEMON_PREFIX  (default "happy-daemon")
+#      PROTECTED_DAEMON_TARGETS     <- CLAUDE_PROTECTED_DAEMON_TARGETS (default "dev|jade|qijie")
+#                                     rules "daemon-restart-prohibition" (Layer 1.A),
+#                                     "daemon-restart-wrapper" (1.B), and the systemctl
+#                                     production-target guard's protected-daemon exclusion
+#                                     (the non-protected systemctl block below).
 #
-# 2. Local daemon units — documented, intentionally NON-env-overridable in this scope:
-#      "happy-daemon" + targets dev|jade|qijie. Rules: "daemon-restart-prohibition"
-#      (Layer 1.A), "daemon-restart-wrapper" (1.B/1.C), "daemon-restart-http-stop"
-#      (1.D), "daemon-restart-sentinel-write" (1.E). NOT lifted on purpose: the unit
-#      names are coupled to the external grant helper's sentinel protocol
-#      (claude-allow-daemon-restart-<target>.flag); making them configurable here
-#      without rewriting that helper would desync the grant channel — a
-#      configurable-but-ungrantable gate is worse than a fixed one.
+# 2. Protected daemon unit identity — env-overridable, default = current literal:
+#      the protected daemon prefix "happy-daemon" + per-instance targets dev|jade|qijie
+#      are the DEFAULTS of PROTECTED_DAEMON_PREFIX / PROTECTED_DAEMON_TARGETS (section 1).
+#      With both unset, Layer 1.A/1.B and the non-protected systemctl exclusion protect
+#      exactly "happy-daemon(-{dev,jade,qijie})" as before. NOTE (grant-channel coupling):
+#      the target suffix also keys the external grant helper's sentinel protocol
+#      (claude-allow-daemon-restart-<target>.flag). Overriding the prefix/targets RETARGETS
+#      which daemon this hook protects, but a public consumer must configure a matching
+#      grant helper (or rely on DAEMON_RESTART_GRANT_HELPER) so the grant channel stays in
+#      sync — otherwise the gate is protective but un-grantable.
 #
 # 3. Non-configurable catastrophe guards (absolute-ban; deliberately hardcoded):
 #      rules "session-dirs ban", "happy-session-recovery ban", "happy-restart ban".
