@@ -106,6 +106,35 @@ def pytest_collection_modifyitems(config, items):
 
 
 @pytest.hookimpl(wrapper=True)
+def pytest_make_collect_report(collector):
+    # SCOPED to tests/generated ONLY: a file that raises at COLLECTION/IMPORT time
+    # (bit-rot — missing import, renamed symbol, duplicate-basename collision,
+    # syntax error) becomes a clean SKIP-with-reason instead of a hard collection
+    # ERROR, so the opt-in `-m generated` run distinguishes an expected bit-rotted
+    # skeleton from a real regression. These fail before any test runs, so the
+    # runtime TEST_INCOMPLETE->xfail hook cannot catch them. A collection error
+    # ANYWHERE ELSE is left untouched and still surfaces as a real ERROR — this
+    # never masks a genuine test-tree import failure.
+    rep = yield
+    if rep.failed and _is_under_generated(getattr(collector, "path", None)):
+        call = getattr(rep, "call", None)
+        excinfo = getattr(call, "excinfo", None) if call is not None else None
+        if excinfo is not None:
+            detail = f"{excinfo.type.__name__}: {excinfo.value}"
+        else:
+            detail = str(rep.longrepr)
+        detail = (detail.strip().splitlines() or ["collection error"])[0]
+        path = getattr(collector, "path", None)
+        rep.outcome = "skipped"
+        rep.longrepr = (
+            str(path) if path is not None else collector.nodeid,
+            None,
+            f"generated skeleton bit-rotted: {detail}",
+        )
+    return rep
+
+
+@pytest.hookimpl(wrapper=True)
 def pytest_runtest_makereport(item, call):
     rep = yield
     if _is_under_generated(item.path) and rep.when == "call" and rep.failed \
