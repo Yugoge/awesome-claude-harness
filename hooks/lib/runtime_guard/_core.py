@@ -132,19 +132,9 @@ except ImportError:  # executed as a top-level script (no package context)
 # ── Path/glob matching primitives → pathmatch.py ────────────────────────────
 # The path-normalization + segment-boundary glob-matching family
 # (_normalize_path, _glob_to_segment_regex, _glob_parent, _path_matches_any,
-# _path_under_any, the _any_token_* scanners, ...) was relocated to a sibling
-# module as of the phase-3 monolith split (2026-07-15). The cluster depends
-# only on shell_lex (_strip_quotes) + stdlib, so re-importing the names here
-# keeps _core's public surface unchanged (every
-# `from ..._core import _path_matches_any` and every internal reference --
-# including _mutation_cand_hits below, which stays in _core -- still resolves).
-# See docs/reference/monolith-split-plan.md.
-#
-# Dual-context import (INV-3): _core loads BOTH as the lib.runtime_guard._core
-# submodule (relative) AND executed directly as a script by the runtime_guard.py
-# shim (os.execv), where there is no parent package so the relative form raises
-# ImportError. In script context sys.path[0] is this file's own directory, so
-# the absolute `pathmatch` name resolves the sibling module.
+# _path_under_any, the _any_token_* scanners, ...) re-imported here (phase-3);
+# `_mutation_cand_hits` stays in _core (see its def below). Dual-context import
+# (INV-3, see phase-1 block above) -- docs/reference/monolith-split-plan.md.
 try:  # noqa: F401  — names re-exported for backward compatibility
     from .pathmatch import (
         _SHELL_GLOB_METACHARS,
