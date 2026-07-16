@@ -113,10 +113,16 @@ fi
 
 # ---------------------------------------------------------------------------
 # 3. Residue scan over the public-core-classified file set.
-#    Hard markers  : author-environment identifiers that must NEVER appear in public-core.
-#    Param markers : residue that is allowed ONLY as an env `:-` default or in a comment;
-#                    any other (un-parameterized) use is a leak.
-#    (Daemon UNIT names are deliberately literal and are NOT scanned — see PUBLIC-CORE.md §3.)
+#    Hard markers  : author-environment identifiers that must NEVER appear in public-core;
+#                    scanned across the WHOLE public-core set (test trees included).
+#    Param markers : residue allowed ONLY as an env `:-` default or in a comment; any other
+#                    (un-parameterized) use is a leak. Scanned across the public-core set
+#                    MINUS test trees — a fixture string that names a guarded unit is test
+#                    data, not shippable-harness residue (mirrors the ledger already
+#                    classifying top-level `tests/` as shared/infra).
+#    The protected daemon prefix `happy-daemon` is now a PARAM marker (env-overridable via
+#    CLAUDE_PROTECTED_DAEMON_PREFIX; the default reproduces today's behavior) — see
+#    PUBLIC-CORE.md §3. It was previously an un-scanned deliberately-literal exception.
 # ---------------------------------------------------------------------------
 HARD_MARKERS=(
   'git@github.com:Yugoge'      # maintainer git remote
