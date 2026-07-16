@@ -168,6 +168,13 @@ DEV_SYSTEMD="${CLAUDE_DEV_SYSTEMD:-}"
 # DAEMON_RESTART_GRANT_DIR, declared near the top).
 # Env-overridable; default = current literal so the unset-override behavior is byte-identical.
 DAEMON_RESTART_GRANT_HELPER="${CLAUDE_DAEMON_RESTART_GRANT_HELPER:-/root/bin/claude-allow-restart}"
+# Protected daemon identity (env-overridable; default = current literal, same idiom as
+# CLAUDE_DEV_CONTAINERS above). The daemon-restart-prohibition (Layer 1.A) + its wrapper
+# sibling (1.B) + the non-protected systemctl exclusion gate a specific local daemon by
+# unit prefix and per-instance target suffixes. With both env vars unset the guard protects
+# "happy-daemon" + targets dev|jade|qijie exactly as before (byte-for-byte).
+PROTECTED_DAEMON_PREFIX="${CLAUDE_PROTECTED_DAEMON_PREFIX:-happy-daemon}"
+PROTECTED_DAEMON_TARGETS="${CLAUDE_PROTECTED_DAEMON_TARGETS:-dev|jade|qijie}"
 
 # ── Helper: split compound command into subcommands ───────────────
 # Splits on && || ; and checks each subcommand independently.
