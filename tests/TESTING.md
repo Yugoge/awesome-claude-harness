@@ -50,10 +50,11 @@ graph TD
 | **S5** | Score-contract shell | `tests/score-*-contract/*.sh` | 3 | manual `bash` | ❌ not collected | Manual contract checks |
 | aux | AC-verification shell harnesses | `hooks/tests/*.sh` | 8 | manual `bash` | ❌ `.sh` not collected | Manual AC harnesses |
 
-> **Discovery rule:** pytest collects `test_*.py` **only**. A `.sh` file — even one named
-> `test_*.sh` — is never collected. A `.py` file without the `test_` prefix
-> (e.g. `ws2_zero_literal_gate.py`, `validate-*.py`) is never collected. Those live
-> tests must be reached through their own runner, documented below.
+> **Discovery rule:** pytest's default `python_files` collects BOTH `test_*.py` (prefix)
+> **and** `*_test.py` (suffix). A `.sh` file — even one named `test_*.sh` — is never
+> collected. A `.py` file matching **neither** pattern (e.g. `ws2_zero_literal_gate.py`,
+> `validate-*.py`) is never collected. Those live tests must be reached through their own
+> runner, documented below.
 
 ---
 
