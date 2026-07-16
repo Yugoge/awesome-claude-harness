@@ -1,8 +1,8 @@
 # runtime_guard
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-07-16T10:13:08Z*
-**Total entries**: 8
+*Last updated: 2026-07-16T10:19:04Z*
+**Total entries**: 9
 **Convention**: kebab
 
 ## Tree
@@ -10,6 +10,7 @@
 runtime_guard/
 ├── `__main__.py` - Package entry-point so `python -m lib.runtime_guard` still works.
 ├── `_core.py` - This module contains ZERO project identifiers. Every project-specific name
+├── `anchor.py` - The cleanly-extractable leaf subset of the HEAD-AGNOSTIC P0 anchor scan
 ├── `config.py` - Depends on shell_lex (`_strip_quotes`, `_has_redirect_to`) + pathmatch
 ├── `constants.py` - Dependency LEAF: defines only literal frozenset/dict constants, imports nothing,
 ├── `find_cmds.py` - Depends on shell_lex (`_strip_quotes`) + pathmatch (`_glob_to_segment_regex`,
