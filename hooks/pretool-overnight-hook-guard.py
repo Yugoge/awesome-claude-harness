@@ -1738,6 +1738,33 @@ def _linked_worktree_git_paths(worktree_path: str) -> list[str]:
     return paths
 
 
+def _shared_common_dir_ro_rebinds(worktree_path: str) -> list[str]:
+    """Shared-.git residual closure (codex world-class review, ARCHITECTURE §8):
+    the shared git COMMON-DIR is RW-bound (via `_linked_worktree_git_paths`) so the
+    supported add/commit/status/diff surface works — but that ALSO exposes
+    `<common>/config` and `<common>/hooks` READ-WRITE, letting an overnight actor
+    run `git config --unset core.hooksPath` (writes `<common>/config`) to DISABLE
+    the reference-transaction keystone, or drop a malicious default hook, and THEN
+    move main HEAD off master. Return `--ro-bind` args for the shared common-dir's
+    `config` FILE and `hooks/` DIR (only those that exist) so the caller can nest
+    them OVER the RW common-dir bind: those two paths become EROFS while
+    `<common>/objects`, `<common>/refs`, `<common>/logs` (which a commit / ref
+    update actually writes) stay READ-WRITE. Only the SHARED common-dir is treated
+    this way; the per-worktree gitdir is untouched. `git rev-parse --git-common-dir`
+    resolves the shared common-dir from a LINKED worktree (whose `.git` is a FILE
+    pointing at `<common>/worktrees/<name>`) — never the per-worktree gitdir."""
+    gcd = _git_query(['rev-parse', '--path-format=absolute', '--git-common-dir'], worktree_path)
+    if not gcd or not os.path.isdir(gcd):
+        return []
+    common_real = os.path.realpath(gcd)
+    args: list[str] = []
+    for leaf in ('config', 'hooks'):
+        p = os.path.join(common_real, leaf)
+        if os.path.exists(p):
+            args += ['--ro-bind', p, p]
+    return args
+
+
 def _build_bwrap_argv(command: str, main_root: str, worktree_path: str,
                       isolation_kind: str) -> list[str] | None:
     """Build the bwrap argv that re-execs `command` with the PROTECTED MAIN tree
