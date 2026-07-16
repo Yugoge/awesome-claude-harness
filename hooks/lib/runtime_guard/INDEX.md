@@ -1,7 +1,7 @@
 # runtime_guard
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-07-16T10:10:24Z*
+*Last updated: 2026-07-16T10:10:38Z*
 **Total entries**: 8
 **Convention**: kebab
 
@@ -12,7 +12,7 @@ runtime_guard/
 ├── `_core.py` - This module contains ZERO project identifiers. Every project-specific name
 ├── `config.py` - Depends on shell_lex (`_strip_quotes`, `_has_redirect_to`) + pathmatch
 ├── `constants.py` - Dependency LEAF: defines only literal frozenset/dict constants, imports nothing,
-├── `find_cmds.py` - The find/fd command-family parsing leaves split out of _core.py in the phase-5
+├── `find_cmds.py` - Depends on shell_lex (`_strip_quotes`) + pathmatch (`_glob_to_segment_regex`,
 ├── `git_cmds.py` - The git command-family parsing leaves split out of _core.py in the phase-5
 ├── `pathmatch.py` - Depends only on shell_lex (`_strip_quotes`) + stdlib; references nothing from
 └── `shell_lex.py` - Dependency LEAF: imports only the stdlib, references nothing from _core

@@ -1,30 +1,18 @@
 #!/usr/bin/env python3
 """find/fd destructive-command argument parsing for the guard.
 
-The find/fd command-family parsing leaves split out of _core.py in the phase-5
-monolith decomposition (2026-07-15). This module sits above the phase-1/2/3
-leaves: it imports shell_lex (`_strip_quotes`) and pathmatch
-(`_glob_to_segment_regex`, `_has_shell_glob`) plus the stdlib and references
-nothing from _core, so _core imports these names back at load time without a
-circular dependency. Relocating them here leaves _core's public surface
-identical (every `from ..._core import _find_path_operands` and every internal
-call still resolves) -- see docs/reference/monolith-split-plan.md.
+Depends on shell_lex (`_strip_quotes`) + pathmatch (`_glob_to_segment_regex`,
+`_has_shell_glob`) + stdlib; references nothing from _core. See
+docs/reference/monolith-split-plan.md for the decomposition rationale (incl. why
+the forward-referencing orchestrators `_find_destructive_target_hits` /
+`_find_filter_exonerates_reverse` / `_find_is_destructive` stay in _core) and the
+INV-3 dual-context import contract.
 
 Scope: the pure argv PARSERS for a find/fd invocation -- path-operand and fd
 search-dir collection (`_find_path_operands`, `_fd_positional_roots`), PATH/NAME
 predicate-value extraction (`_find_predicate_values`), and the protected-basename
 predicate matcher (`_glob_basenames`, `_name_value_matches_protected`) -- plus the
 generic find/fd option/predicate lookup tables they key on.
-
-The two forward-referencing orchestrators deliberately STAY in _core:
-`_find_destructive_target_hits` and `_find_filter_exonerates_reverse` both call
-`_resolve_rel` (a general path helper resident in _core) and the former also
-forward-references `_destructive_root_contains_protected` (defined later in the
-decision engine), so lifting either would invert the dependency into an import
-cycle -- the same pattern that keeps `_mutation_cand_hits` in _core. Their moved
-callees are re-imported into _core, so every reference still resolves.
-`_find_is_destructive` also stays: its `_FIND_EXEC_MUTATION_VERBS` table derives
-from `_STEP0_MUTATION_HEADS`, a shared STEP0/anchor constant resident in _core.
 ZERO project identifiers.
 """
 
