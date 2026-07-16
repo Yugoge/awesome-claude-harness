@@ -1,17 +1,11 @@
 #!/usr/bin/env python3
 """Pure data-table vocabularies for the protected-runtime guard.
 
-Generic verb / keyword / exec-front-end lookup tables split out of _core.py
-in the phase-2 monolith decomposition (2026-07-15). This module is a
-dependency LEAF: it defines only literal frozenset/dict constants, imports
-nothing, and references nothing from _core — so _core imports these names back
-at load time without a circular dependency. Relocating them here leaves
-_core's public surface identical (every `from ..._core import MUTATION_VERBS`
-and every internal reference still resolves) — see
-docs/reference/monolith-split-plan.md.
-
-The decision anchors `_block`, the `Verdict` type alias, and `ALLOW` stay in
-_core by design; only pure data lives here. ZERO project identifiers.
+Dependency LEAF: defines only literal frozenset/dict constants, imports nothing,
+references nothing from _core. The decision anchors `_block`, the `Verdict` type
+alias, and `ALLOW` stay in _core by design; only pure data lives here. See
+docs/reference/monolith-split-plan.md for the decomposition rationale and the
+INV-3 dual-context import contract. ZERO project identifiers.
 """
 
 # ── Generic verb / keyword vocabularies (no project names) ───────────────────

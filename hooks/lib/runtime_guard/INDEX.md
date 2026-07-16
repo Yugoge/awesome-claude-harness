@@ -1,7 +1,7 @@
 # runtime_guard
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-07-16T10:09:53Z*
+*Last updated: 2026-07-16T10:10:01Z*
 **Total entries**: 8
 **Convention**: kebab
 
@@ -11,7 +11,7 @@ runtime_guard/
 ├── `__main__.py` - Package entry-point so `python -m lib.runtime_guard` still works.
 ├── `_core.py` - This module contains ZERO project identifiers. Every project-specific name
 ├── `config.py` - The config-file loader + config-self-protection cluster split out of _core.py in
-├── `constants.py` - Generic verb / keyword / exec-front-end lookup tables split out of _core.py
+├── `constants.py` - Dependency LEAF: defines only literal frozenset/dict constants, imports nothing,
 ├── `find_cmds.py` - The find/fd command-family parsing leaves split out of _core.py in the phase-5
 ├── `git_cmds.py` - The git command-family parsing leaves split out of _core.py in the phase-5
 ├── `pathmatch.py` - The path/glob matching family split out of _core.py in the phase-3 monolith
