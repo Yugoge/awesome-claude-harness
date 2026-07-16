@@ -150,19 +150,15 @@ class TestEvaluateCommitBlessedBridge(unittest.TestCase):
     def test_regular_commit_bypasses_sentinel_check(self):
         """Regular commits don't go through BLESSED_BRIDGE_RE path."""
         with patch.object(guard, "_has_bulk_commit_sentinel") as mock_sentinel:
-            # Provide a valid grant so the regular path allows
-            mock_grant_path = "/tmp/fake-grant.json"
-            mock_grant = {
-                "task_id": "20260524-000000",
-                "expires_at": (datetime.now(timezone.utc) + timedelta(minutes=5)).isoformat(),
-            }
-            with patch.object(guard, "_find_grant", return_value=(None, None)):
-                with patch.object(guard, "_find_grant_any", return_value=(mock_grant_path, mock_grant)):
-                    with patch.object(guard, "_unlink_grant"):
-                        try:
-                            guard._evaluate_commit(self.REGULAR_CMD, _make_data())
-                        except SystemExit:
-                            pass  # blocked is also acceptable; key check is sentinel not called
+            # No candidate grants => the regular path fails closed (default-deny);
+            # the key assertion is that the sentinel path is never consulted.
+            # (Post grant-selection refactor _evaluate_commit collects candidates
+            # via _collect_commit_grant_candidates, not _find_grant/_find_grant_any.)
+            with patch.object(guard, "_collect_commit_grant_candidates", return_value=[]):
+                try:
+                    guard._evaluate_commit(self.REGULAR_CMD, _make_data())
+                except SystemExit:
+                    pass  # blocked is also acceptable; key check is sentinel not called
             mock_sentinel.assert_not_called()
 
 
