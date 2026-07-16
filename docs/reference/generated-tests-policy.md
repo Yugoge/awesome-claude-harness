@@ -72,14 +72,19 @@ The skeletons are per-cycle **acceptance-criteria provenance**: they record what
 each cycle's ACs were and give the next cycle a concrete starting point to
 complete. Keeping them in VCS ties the AC set to the commit that produced it.
 
-## Honest caveat — legacy tracked residue
+## VCS reconcile — DONE (legacy tracked residue removed from the index)
 
 `.gitignore` (see the `tests/generated/*` block) intends to retain only two
-pinned dirs (`20260704-134650`, `20260704-225139`) and ignore the rest. But git
+pinned dirs (`20260704-134650`, `20260704-225139`) and ignore the rest. git
 negations do **not** retroactively untrack files that were already committed, so
-a legacy residue remains tracked: currently **566 files across ~48 task dirs**,
-with **90 `TEST_INCOMPLETE` sentinels in 58 files**.
+a legacy residue had remained tracked (**566 files across ~48 task dirs**).
 
-Reconciling that (a bulk `git rm --cached` of the un-pinned dirs) is a larger VCS
-operation touching generated content and is deliberately **out of scope** for this
-note. It is documented here as a known state, not fixed.
+That residue has now been **reconciled**: a bulk `git rm --cached` of the 46
+un-pinned dated subtrees (507 files) removed them from the index while leaving
+every file **on disk**. The VCS state now matches the `.gitignore` intent —
+`git ls-files tests/generated` = **59** (the 2 pinned dirs = 56 files, plus the
+doc-sync `INDEX.md`/`README.md` and the `manifest.json` provenance ledger), and
+`git check-ignore` reports the un-pinned generated files as ignored. The files
+stay on disk and remain opt-in-runnable via the `generated` marker
+(`pytest tests/generated -m generated`) — untracking did not remove them from
+collection. Only the pinned dirs and the three management files stay tracked.
