@@ -1,15 +1,12 @@
 #!/usr/bin/env python3
 """P0 anchor helper predicates for the guard.
 
-The cleanly-extractable leaf subset of the HEAD-AGNOSTIC P0 anchor scan, split
-out of _core.py in the phase-6 monolith decomposition (2026-07-15). This module
-sits above the phase-1/2 leaves: it imports shell_lex (`_strip_quotes`) and
-constants (`RUNTIMES`, `EXEC_RUNNER_TOKENS`, `SERVICE_VERBS`) plus the stdlib and
-references nothing from _core, so _core imports these names back at load time
-without a circular dependency. Relocating them here leaves _core's public surface
-identical (every `from ..._core import _anchor_exec_tokens` and every internal
-call -- including the STAYING `_p0_anchor` decision orchestrator -- still
-resolves) -- see docs/reference/monolith-split-plan.md.
+The cleanly-extractable leaf subset of the HEAD-AGNOSTIC P0 anchor scan.
+Depends on shell_lex (`_strip_quotes`) + constants (`RUNTIMES`,
+`EXEC_RUNNER_TOKENS`, `SERVICE_VERBS`) + stdlib; references nothing from _core.
+See docs/reference/monolith-split-plan.md for the decomposition rationale (incl.
+why the irreducible P0 decision ENGINE `_p0_anchor` and every forward-referencing
+anchor helper stay in _core) and the INV-3 dual-context import contract.
 
 Scope: the exec-token scanner (`_anchor_exec_tokens`), the launch-position and
 fused-option-value primitives (`_anchor_in_launch_position`,
@@ -18,21 +15,7 @@ fused-option-value primitives (`_anchor_in_launch_position`,
 exemption predicate (`_anchor_nonprotected_workspace_selector`), plus the generic
 launch-subcommand / service-manager / recursive-workspace lookup tables they key
 on.
-
-The irreducible P0 decision ENGINE stays in _core: `_p0_anchor` (the anchor
-decision orchestrator that `evaluate` calls) and every anchor helper that
-forward-references the decision engine or a _core-resident helper --
-`_anchor_mutation_hits` (calls `_resolve_rel`/`_mutation_cand_hits`/
-`_mutation_targets_for_verb`), `_anchor_family_destructive_hits` (calls
-`_find_destructive_target_hits`), `_anchor_endpoint_hits` (calls
-`_endpoint_path_in`), `_anchor_globalbin_hits` (calls `_anchor_mutation_hits`),
-`_anchor_build_hits_protected` (calls the P8 build helpers), and the
-`_DATA_OPERAND_HEADS` position predicates (`_anchor_preceded_by_data_head`,
-`_anchor_in_command_word_position`, `_anchor_after_dashopt_danger`, which key on
-the _core-resident `_STEP0_MUTATION_HEADS` via `_DATA_OPERAND_HEADS` and call the
-_core-resident `_find_exec_boundary_at`). Lifting any would invert the dependency
-into an import cycle -- the same pattern that keeps `_mutation_cand_hits` in
-_core. ZERO project identifiers.
+ZERO project identifiers.
 """
 
 from __future__ import annotations
