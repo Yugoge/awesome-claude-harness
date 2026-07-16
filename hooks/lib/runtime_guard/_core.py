@@ -4538,7 +4538,7 @@ def evaluate(command: str, cwd_base: Optional[str] = None) -> Verdict:
     if fe_changed:
         # re-derive STEP0 against the peeled forms so a self-protection mutation
         # behind a front-end is also analyzed by STEP0's path-pattern scan.
-        v = _step0_self_protection(Context(cwd_base=cwd_base, simple_cmds=peeled_flat, groups=peeled_groups))
+        v = _step0_self_protection(Context(cwd_base=cwd_base, simple_cmds=peeled_flat, groups=peeled_groups, cfg=None))
         if v is not None:
             return v
         simple_cmds = peeled_flat
