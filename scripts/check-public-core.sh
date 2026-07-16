@@ -143,6 +143,11 @@ while IFS= read -r p; do
 done < <(printf '%s\n' "$PAIRS" | awk -F'\t' '$2=="public-core"{print $1}' | sort -u)
 PC_PATHSPECS+=(":(exclude)$SELF")
 
+# Param markers are productization defaults expected inside shippable code; a test fixture
+# that names a guarded unit (e.g. hooks/tests/*) is test data, not residue. Scan param
+# markers over the public-core set MINUS any test tree. Hard markers keep the full set.
+PARAM_PATHSPECS=("${PC_PATHSPECS[@]}" ":(exclude)*/tests/*")
+
 # A public-core match line is an allowed (parameterized) use of marker M when the line is a
 # comment (trimmed starts with #) OR it uses M as an env default (":-M", ":-\"M", ":-'M").
 param_line_ok() {
