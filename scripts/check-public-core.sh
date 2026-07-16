@@ -178,7 +178,7 @@ for m in "${PARAM_MARKERS[@]}"; do
       fail "un-parameterized residue marker in public-core: '$m'  ->  ${file}:${lineno}: ${content}"
       leaks=$((leaks + 1))
     fi
-  done < <(git grep -nF -- "$m" -- "${PC_PATHSPECS[@]}" 2>/dev/null)
+  done < <(git grep -nF -- "$m" -- "${PARAM_PATHSPECS[@]}" 2>/dev/null)
 done
 
 if [ "$leaks" -eq 0 ]; then
