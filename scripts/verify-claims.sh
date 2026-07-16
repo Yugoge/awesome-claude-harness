@@ -204,6 +204,71 @@ run_audit .github/assets/demo-trace.json .github/assets/pipeline-hero.svg
 run_audit .github/assets/hook-trace.json .github/assets/hook-hero.svg
 
 # ---------------------------------------------------------------------------
+# 4. Recompute the helper-script count from git and verify README + ARCHITECTURE.
+#    Definition: tracked files directly under scripts/ (one level deep, top-level only),
+#    excluding scripts/INDEX.md and scripts/README.md. NEVER hardcoded — recomputed from
+#    git every run, so adding/removing a top-level script (docs updated in step) changes
+#    the enforced value automatically, exactly like the wired/lifecycle counts above.
+# ---------------------------------------------------------------------------
+HELPERS="$(git ls-files scripts/ | grep -E 'scripts/[^/]+$' | grep -vE 'scripts/(INDEX|README)\.md$' | wc -l | tr -d ' ')"
+if ! [ "${HELPERS:-0}" -gt 0 ] 2>/dev/null; then
+  fail "helper-count recompute: git produced a non-positive count (${HELPERS:-empty}) — refusing (schema anomaly)"
+else
+  pass "recomputed from git: helper_scripts=${HELPERS}"
+  python3 - "$HELPERS" "README.md" "ARCHITECTURE.md" <<'PY'
+import re, sys, urllib.parse
+
+EXPECTED = int(sys.argv[1]); docs = sys.argv[2:]
+
+# Helper-count occurrences, each bound to the "helper" keyword or the badge/table label so
+# unrelated numbers are never coerced: the "helper scripts-N" shields badge (URL-decoded),
+# the "N helper(s)" prose / repo-tree comment, and the "**Helper scripts** ... **N**"
+# metrics-table row. Every bound occurrence is compared; a doc with zero occurrences fails
+# (fail-closed), matching the wired/lifecycle check's discipline above.
+PATS = [
+    re.compile(r'helper\s+scripts-(\d+)', re.I),
+    re.compile(r'(\d+)\s+helpers?\b', re.I),
+    re.compile(r'Helper\s+scripts\*\*[^\n|]*\|[^\n|]*?\*\*(\d+)\*\*', re.I),
+]
+
+def line_of(text, off):
+    return text.count("\n", 0, off) + 1
+
+overall = True
+for path in docs:
+    try:
+        # URL-decode so the %20 in the shields badge becomes a space (number<->keyword
+        # binding survives). unquote adds/removes no newlines, so line numbers stay accurate.
+        text = urllib.parse.unquote(open(path, encoding="utf8").read())
+    except Exception as e:
+        print(f"  [{path}] ERROR: cannot read ({e})"); overall = False; continue
+    found, seen = [], set()
+    for pat in PATS:
+        for m in pat.finditer(text):
+            pos = m.start(1)
+            if pos in seen:
+                continue
+            seen.add(pos)
+            found.append((int(m.group(1)), line_of(text, pos)))
+    if not found:
+        print(f"  [{path}] MISSING helper_script_count: no enforced occurrence found (fail-closed)")
+        overall = False
+    for val, ln in sorted(found, key=lambda x: x[1]):
+        if val != EXPECTED:
+            print(f"  [{path}:{ln}] helper_script_count DRIFT: found {val}, expected {EXPECTED}")
+            overall = False
+        else:
+            print(f"  [{path}:{ln}] helper_script_count OK: {val}")
+sys.exit(0 if overall else 1)
+PY
+  if [ $? -ne 0 ]; then
+    fail "helper-count check: a helper-script claim in README.md / ARCHITECTURE.md drifted from the git-recomputed count (${HELPERS}) (see above)"
+  else
+    pass "helper-script counts in README.md + ARCHITECTURE.md match the git-recomputed count (${HELPERS})"
+  fi
+fi
+
+# ---------------------------------------------------------------------------
 # Aggregated verdict.
 # ---------------------------------------------------------------------------
 echo "----------------------------------------------------------------------"
