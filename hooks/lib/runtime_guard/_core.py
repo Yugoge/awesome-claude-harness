@@ -257,21 +257,10 @@ except ImportError:  # executed as a top-level script (no package context)
 # ── git destructive-subcommand parsing leaves → git_cmds.py ─────────────
 # The pure git argv PARSERS (subcommand location, `-C` chdir folding, pathspec-
 # magic stripping, destructive-pathspec collection, destructive-mode predicate)
-# plus their generic verb/option tables were relocated to a sibling module as of
-# the phase-5 monolith split (2026-07-15). The cluster depends only on already-
-# extracted leaves (shell_lex._strip_quotes, pathmatch._expand_leading_home) +
-# stdlib, so re-importing the names here keeps _core's public surface unchanged
-# (every `from ..._core import _git_destructive_pathspecs` and every internal
-# reference -- including the STAYING `_git_inspection_head`, which uses
-# `_GIT_GLOBAL_OPTS_WITH_ARG`, and `_git_destructive_pathspec_hits`, which
-# forward-references the decision engine and `_resolve_rel` and so remains in
-# _core -- still resolves). See docs/reference/monolith-split-plan.md.
-#
-# Dual-context import (INV-3): _core loads BOTH as the lib.runtime_guard._core
-# submodule (relative) AND executed directly as a script by the runtime_guard.py
-# shim (os.execv), where there is no parent package so the relative form raises
-# ImportError. In script context sys.path[0] is this file's own directory, so the
-# absolute `git_cmds` name resolves the sibling module.
+# plus their generic verb/option tables re-imported here (phase-5); the STAYING
+# `_git_inspection_head` and the forward-referencing `_git_destructive_pathspec_hits`
+# remain in _core. Dual-context import (INV-3, see phase-1 block above) --
+# docs/reference/monolith-split-plan.md.
 try:  # noqa: F401  — names re-exported for backward compatibility
     from .git_cmds import (
         _GIT_DESTRUCTIVE_SUBCMDS,
