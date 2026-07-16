@@ -58,6 +58,8 @@ reuse is a leak.
 | dev systemd units (`CLAUDE_DEV_SYSTEMD`) | *(empty)* | export `CLAUDE_DEV_SYSTEMD=…` |
 | daemon-restart grant helper (`CLAUDE_DAEMON_RESTART_GRANT_HELPER`) | `/root/bin/claude-allow-restart` | export `CLAUDE_DAEMON_RESTART_GRANT_HELPER=…` |
 | grant sentinel dir (`CLAUDE_DAEMON_RESTART_GRANT_DIR`) | `$TMPDIR` | export `CLAUDE_DAEMON_RESTART_GRANT_DIR=…` |
+| protected daemon prefix (`CLAUDE_PROTECTED_DAEMON_PREFIX`) | `happy-daemon` | export `CLAUDE_PROTECTED_DAEMON_PREFIX=…` |
+| protected daemon targets (`CLAUDE_PROTECTED_DAEMON_TARGETS`) | `dev\|jade\|qijie` | export `CLAUDE_PROTECTED_DAEMON_TARGETS=…` |
 
 **Deliberately-literal exception (NOT a leak):** the local daemon **unit names**
 (`happy-daemon` + targets `dev|jade|qijie`) are intentionally *non*-env-overridable —
