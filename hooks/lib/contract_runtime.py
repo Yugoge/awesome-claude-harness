@@ -424,6 +424,98 @@ def validate_artifact(record: dict, schema_name: str) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# Interactive-mode report schema gate (spec-20260716 §13 asymmetry closure)
+# ---------------------------------------------------------------------------
+#
+# The contract-aware hooks (pretool-subagent-enforce, posttool-overnight-file-
+# check) only fire when a per-cycle cycle-contract.json exists — i.e. only in
+# /dev-overnight sessions. Interactive /dev + /do never write a contract, so
+# their produced report artifacts were NEVER run through jsonschema. This gate
+# closes that mechanism asymmetry at /close using the SAME validate() engine the
+# overnight path uses (Draft7Validator), without touching the overnight
+# machinery.
+#
+# It is deliberately VERSION-GATED. The v1 report schemas make ``report_version``
+# a required const (dev-report.v1 / qa-report.v1 both require report_version==1),
+# so an artifact that does NOT declare report_version is, by the schema's own
+# contract, not claiming to be a v1 report. Validating such a record against v1
+# would be a category error that mass-rejects every current nested (``dev.*`` /
+# ``do.*``) report. The gate therefore validates ONLY records that opt in via
+# report_version, and is a no-op (skip, NEVER fail-closed) for:
+#   - a missing/optional artifact,
+#   - an artifact kind with no registered schema (e.g. do-report),
+#   - an unparseable artifact (upstream /close preflight already blocks on that),
+#   - an unversioned legacy artifact (still covered by /close's structural
+#     preflight of dev.status / qa.status).
+
+# Map an interactive report-artifact kind (by filename prefix) to its registered
+# schema name. ``do-report`` is intentionally ABSENT: no do-report schema exists,
+# so the gate no-ops for it rather than fail-closing.
+_INTERACTIVE_REPORT_SCHEMAS = {
+    'dev-report': 'dev-report.v1',
+    'qa-report': 'qa-report.v1',
+}
+
+
+def _report_kind_for_path(path: Path) -> Optional[str]:
+    """Return the report-kind key for ``path`` (by ``<kind>-`` basename prefix)."""
+    name = path.name
+    for kind in _INTERACTIVE_REPORT_SCHEMAS:
+        if name.startswith(kind + '-'):
+            return kind
+    return None
+
+
+def _gate_result(status: str, schema, errors, reason: str) -> dict:
+    """Shape a report-gate result. status ∈ {'pass', 'fail', 'skip'}."""
+    return {
+        'status': status,
+        'schema': schema,
+        'errors': list(errors),
+        'reason': reason,
+    }
+
+
+def validate_report_artifact(path) -> dict:
+    """Version-gated schema gate for an interactive dev/qa/do report artifact.
+
+    Returns ``{status, schema, errors, reason}`` where ``status`` is:
+      - ``'pass'`` — record declares report_version AND passes its versioned schema.
+      - ``'fail'`` — record declares report_version but VIOLATES its versioned
+        schema; ``errors`` names the offending field(s). This is the only
+        blocking status.
+      - ``'skip'`` — no-op (never fail-closed): artifact absent, no registered
+        schema for the kind (do-report), unparseable JSON, or unversioned legacy
+        record (no report_version).
+
+    Uses the same :func:`validate` (Draft7Validator) engine as the overnight
+    contract path, so an interactive artifact that CLAIMS a schema version is now
+    validated identically to an overnight one — closing the enforcement asymmetry
+    without re-rejecting the current unversioned nested reports.
+    """
+    p = Path(path)
+    if not p.exists():
+        return _gate_result('skip', None, [], 'artifact absent (optional — not fail-closed)')
+    kind = _report_kind_for_path(p)
+    if kind is None:
+        return _gate_result('skip', None, [], 'no registered schema for this artifact kind')
+    schema_name = _INTERACTIVE_REPORT_SCHEMAS[kind]
+    try:
+        record = json.loads(p.read_text(encoding='utf-8'))
+    except (OSError, json.JSONDecodeError):
+        return _gate_result('skip', schema_name, [], 'unparseable JSON (parse errors handled by /close preflight)')
+    if not isinstance(record, dict) or 'report_version' not in record:
+        return _gate_result(
+            'skip', schema_name, [],
+            'unversioned artifact (no report_version); covered by /close structural preflight',
+        )
+    result = validate(record, schema_name)
+    if result.get('ok'):
+        return _gate_result('pass', schema_name, [], 'valid against versioned schema')
+    return _gate_result('fail', schema_name, result.get('errors', []), 'schema-invalid versioned artifact')
+
+
+# ---------------------------------------------------------------------------
 # Atomic accepted-artifact reconciliation
 # ---------------------------------------------------------------------------
 

@@ -193,6 +193,7 @@ If `DO_REPORT` was set during task-id resolution, skip the normal-path artifact 
 
 - Read `$DO_REPORT`. Verify top-level `task_id == TASK_ID`, `source == "do"`, `do.status == "completed"`, `do.files_modified` is a non-null array.
 - No ticket, context, dev-report, qa-report, or completion existence checks apply.
+- Run the Artifact schema gate (below) over `$DO_REPORT` — do-report has no registered schema, so it always returns `SKIP` and never blocks /do closure. This keeps the gate invocation uniform across paths.
 - Set `SPEC_ID=""` (no cp-state for /do work). Skip the cp-state resolver entirely.
 - Proceed directly to Step 0 parallel-dev check (using `do.files_modified` as the file list for shard detection scope — typically no shards for /do work, Case 3 applies).
 
@@ -203,6 +204,38 @@ After `TASK_ID` is resolved and before Step 1 dispatches inspectors, `/close` MU
 The preflight validates these exact same-task files: `docs/dev/ticket-<task-id>.md`, `context-<task-id>.json`, `dev-report-<task-id>.json`, `qa-report-<task-id>.json`, and `completion-<task-id>.md`. JSON artifacts must have top-level `request_id` and `task_id` equal to `<task-id>`; the dev report must have nested `dev.status == "completed"` plus `dev.files_modified` and `dev.files_created` arrays; the QA report must have nested `qa.status == "pass"`. Top-level-only `status` / `verdict` fields and subagent final messages are rejected.
 
 Any missing, malformed, mismatched, status-only, or non-passing artifact blocks before inspector dispatch / QA debate and reports the exact path and reason. The forced path is unchanged: `/close --force` short-circuits before this normal-path preflight.
+
+### Artifact schema gate (interactive schema validation — closes the §13 asymmetry)
+
+The structural preflight above is a hand-rolled shape check. It does NOT run the JSON-Schema validators (`schemas/dev-report.v1.json` / `schemas/qa-report.v1.json`) that the `/dev-overnight` contract path applies via `hooks/lib/contract_runtime.py`. Historically that made interactive `/dev` artifacts categorically exempt from schema validation (ARCHITECTURE.md §13). This gate removes that exemption using the SAME `contract_runtime` engine (Draft7Validator) — it does NOT touch the overnight contract machinery.
+
+Run the gate over the resolved report artifacts for `<task-id>`. On the normal path pass the dev-report and qa-report; on the do-report path pass `$DO_REPORT`. Paths are relative to `$CLAUDE_PROJECT_DIR` (the /close working directory); the harness code + schemas live under `~/.claude`:
+
+```bash
+source ~/.claude/venv/bin/activate 2>/dev/null || true
+python3 -c '
+import sys, os
+sys.path.insert(0, os.path.expanduser("~/.claude/hooks"))
+from lib import contract_runtime as cr
+rc = 0
+for p in sys.argv[1:]:
+    r = cr.validate_report_artifact(p)
+    if r["status"] == "fail":
+        rc = 2
+        print("SCHEMA-GATE FAIL:", p, "->", r["schema"])
+        for e in r["errors"]:
+            print("   -", e)
+    else:
+        print("SCHEMA-GATE " + r["status"].upper() + ":", p, "(" + (r.get("reason") or r.get("schema") or "") + ")")
+sys.exit(rc)
+' "docs/dev/dev-report-<task-id>.json" "docs/dev/qa-report-<task-id>.json"
+```
+
+Blocking semantics:
+- **Exit 2 (`SCHEMA-GATE FAIL`)**: a report DECLARED a schema version (`report_version`) but VIOLATED its schema. Block before inspector dispatch / QA debate and report the named offending field(s). This is the only blocking outcome.
+- **Exit 0 (`SCHEMA-GATE PASS` / `SKIP`)**: proceed. `validate_report_artifact()` is version-gated and no-ops (never fail-closed) for: an absent/optional artifact, an artifact kind with no registered schema (`do-report` — always `SKIP`), unparseable JSON (already handled by the structural preflight), or an unversioned legacy record (no `report_version` — still covered by the structural preflight). Because current dev/qa reports are nested and carry no `report_version`, they `SKIP` today; the gate fires the moment an artifact opts into `report_version`, catching an invalid v1 report exactly as the overnight path would.
+
+The forced path is unchanged: `/close --force` short-circuits before this gate. On the do-report path, run the same command with `$DO_REPORT` as the sole argument — the do-report has no registered schema and always returns `SKIP`, so `/do` closure is never blocked by this gate.
 
 Resolve optional cp-state handoff for the QA close gate. Do NOT derive `SPEC_ID`
 from the spec filename by hand — route the monolith path through the centralized
