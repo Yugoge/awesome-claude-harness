@@ -2,7 +2,11 @@
 # Description: Self-verifying headline-claims gate. Recomputes the wired-hook entry count and
 #   lifecycle-event count from settings.json (the single source of truth) and fails if
 #   README.md / ARCHITECTURE.md state a different number; then runs BOTH hero-provenance
-#   audits in --strict mode so any source-verification downgrade is a hard failure.
+#   audits in --strict mode so any source-verification downgrade is a hard failure. Finally
+#   asserts settings.template.json (the PUBLIC install seed) is valid JSON and wires every hook
+#   settings.json wires — path-placeholder differences ({{CLAUDE_HOME}} vs $HOME/.claude/~) are
+#   normalized by comparing hook-script basenames — so the public template can never silently
+#   drift from the real hook set (the open-source install-surface invariant).
 # Usage: bash scripts/verify-claims.sh
 # Exit codes: 0 = all checks pass, 1 = one or more checks failed (count drift and/or audit
 #   violation). Runs identically in CI and locally.
@@ -265,6 +269,77 @@ PY
     fail "helper-count check: a helper-script claim in README.md / ARCHITECTURE.md drifted from the git-recomputed count (${HELPERS}) (see above)"
   else
     pass "helper-script counts in README.md + ARCHITECTURE.md match the git-recomputed count (${HELPERS})"
+  fi
+fi
+
+# ---------------------------------------------------------------------------
+# 5. Public template <-> real config hook-set sync + template JSON validity.
+#    settings.template.json is the PUBLIC install seed a clone bootstraps from; it MUST wire
+#    every hook settings.json wires. Path-placeholder differences ({{CLAUDE_HOME}} in the
+#    template vs $HOME/.claude / ~/.claude in the tracked personal config) are normalized away
+#    by comparing hook-script BASENAMES. Both sets are recomputed from the two files every run
+#    (never hardcoded), so a template that silently drops a hook fails here. Extra public-only
+#    hooks in the template are permitted (template is a superset); only MISSING hooks fail.
+# ---------------------------------------------------------------------------
+if [ ! -f "$ROOT/settings.template.json" ]; then
+  fail "template-sync: settings.template.json not found at repo root"
+else
+  python3 - "$ROOT/settings.json" "$ROOT/settings.template.json" <<'PY'
+import json, re, sys
+from collections import Counter
+
+real_path, tmpl_path = sys.argv[1], sys.argv[2]
+
+def load(p):
+    try:
+        return json.load(open(p, encoding="utf8")), None
+    except Exception as e:
+        return None, str(e)
+
+real, err = load(real_path)
+if err:
+    print(f"  [{real_path}] ERROR: invalid JSON ({err})"); sys.exit(2)
+# Template JSON validity is itself a gated invariant of the public install surface.
+tmpl, err = load(tmpl_path)
+if err:
+    print(f"  [{tmpl_path}] ERROR: PUBLIC template is not valid JSON ({err})"); sys.exit(2)
+
+def hook_basenames(cfg, label):
+    hooks = cfg.get("hooks")
+    if not isinstance(hooks, dict) or not hooks:
+        print(f"  [{label}] ERROR: 'hooks' missing or not a non-empty object"); return None
+    names = []
+    for ev, lst in hooks.items():
+        if not isinstance(lst, list):
+            print(f"  [{label}] ERROR: hooks[{ev!r}] is not a list"); return None
+        for entry in lst:
+            for h in (entry.get("hooks") or []):
+                m = re.findall(r'([^\s"\']+\.(?:py|sh))', h.get("command", ""))
+                if m:
+                    names.append(m[-1].split("/")[-1])
+    return Counter(names)
+
+rb = hook_basenames(real, "settings.json")
+tb = hook_basenames(tmpl, "settings.template.json")
+if rb is None or tb is None:
+    sys.exit(2)
+
+missing = rb - tb   # hooks wired by settings.json but absent from the public template
+if missing:
+    print(f"  template-sync DRIFT: settings.template.json is MISSING "
+          f"{sum(missing.values())} hook(s) that settings.json wires:")
+    for n in sorted(missing):
+        print(f"      - {n}")
+    sys.exit(1)
+
+print(f"  settings.template.json valid JSON; hook-set in sync "
+      f"(settings.json wires {sum(rb.values())} entries, all present in the public template)")
+sys.exit(0)
+PY
+  if [ $? -ne 0 ]; then
+    fail "template-sync check: settings.template.json is invalid JSON or is missing a hook that settings.json wires (see above)"
+  else
+    pass "settings.template.json is valid JSON and wires every hook settings.json wires"
   fi
 fi
 
