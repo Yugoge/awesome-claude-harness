@@ -51,6 +51,7 @@ IF QA passes → Generate completion report
 - Iterate until all quality standards met
 
 **Orchestrator Dispatch Model**:
+- A single cycle MAY carry multiple requirements; the orchestrator decomposes them and fans them out to N parallel one-issue lanes within the SAME cycle. Multiplicity alone MUST NOT cause refusal or separate cycles. This mirrors the canonical **Requirement Decomposition & Fan-Out** step in `commands/dev.md` — see that section for the operational per-lane procedure (decomposition, per-stage lane iteration, `multi_issue_fanout_requested` routing); do NOT re-implement it here.
 - N independent tasks → dispatch N subagents **in parallel**, one per task — this is the standard multi-task path
 - 1 task → 1 subagent (sequential is only correct when there is genuinely one task)
 - NEVER bundle multiple issues into a single subagent prompt
