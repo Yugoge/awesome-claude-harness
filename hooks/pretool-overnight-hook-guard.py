@@ -1714,15 +1714,17 @@ def _linked_worktree_git_paths(worktree_path: str) -> list[str]:
 
     The per-worktree gitdir (`git rev-parse --git-dir`) and the shared common-dir
     (`--git-common-dir`) are the two roots git writes during add/commit. They are
-    derived at runtime from git itself. KNOWN LIMITATION (codex finalize-review,
-    task 20260611-100500): because the common-dir is RW-bound, git surfaces that
-    write ONLY to common-dir metadata — notably `git config` (writes
-    common-dir/config = main `.git/config`), and `gc`/`fetch`/`repack` writes that
-    land under common-dir/objects — are NOT blocked by this OS boundary; they are
-    NOT part of the supported add/commit surface but the bwrap layer alone does not
-    refuse them. Closing that requires a pre-rewrite git-subcommand denylist
-    (config/fetch/gc/submodule/sparse) in `_apply_write_boundary` — surfaced to the
-    orchestrator (scope_review_requested) rather than silently asserted as blocked.
+    derived at runtime from git itself. SHARED-.git CLOSURE (ARCHITECTURE §8): the
+    common-dir is RW-bound, but `<common>/config` and `<common>/hooks` are now RE-
+    BOUND READ-ONLY nested over that RW bind (see `_shared_common_dir_ro_rebinds`),
+    so a `git config` write to the shared config (e.g. `--unset core.hooksPath`,
+    which would disable the keystone) and default-hook drops now hit EROFS. RESIDUAL
+    LIMITATION (codex finalize-review, task 20260611-100500): `gc`/`fetch`/`repack`
+    writes that land under common-dir/objects are still NOT blocked by this OS
+    boundary; they are NOT part of the supported add/commit surface but the bwrap
+    layer alone does not refuse them. A fuller pre-rewrite git-subcommand denylist
+    (config/fetch/gc/submodule/sparse) in `_apply_write_boundary` remains surfaced
+    to the orchestrator (scope_review_requested) rather than silently asserted.
     Raw cooperative writes to refs/objects/HEAD/packed-refs through these RW paths
     that bypass git's ref-transaction ARE denied by the retained security/L4 layer
     (`_raw_git_metadata_write_into_main`) that runs BEFORE this boundary
