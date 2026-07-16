@@ -36,6 +36,19 @@ class Context:
     take today — adopting the Context is a pure relocation of how those values
     travel, never a change to what they hold.
 
+    ALL FOUR FIELDS ARE MANDATORY — there are NO defaults. This is the
+    fail-CLOSED completeness guarantee: a construction that OMITS any field
+    raises TypeError at build time (so the guard engine errors out and the
+    surrounding hook denies conservatively), rather than silently producing a
+    guard-DISABLING empty working set. This closes the INV-6 fail-OPEN hazard
+    unique to the Context refactor: unlike a module split (which fails CLOSED on
+    a missing import), a mis-built Context whose `groups` defaulted to `[]` would
+    make the cross-segment guards `_p5_endpoint` (endpoint / raw-socket) and
+    `_p6_prockill` (process-kill) ABSTAIN (return None) and flip a modeled BLOCK
+    to a final ALLOW. Mandatory fields make that incomplete construction
+    impossible. `cfg` keeps its `Optional[dict]` type — it may LEGITIMATELY be
+    None for the pre-config STEP0 stage — but must still be passed EXPLICITLY.
+
       cwd_base    — base cwd seed (payload/process cwd); constant across the whole
                     evaluation. Per-command cwd/cwd_det are derived from it.
       simple_cmds — the pipeline-split simple commands (the current working set;
@@ -43,11 +56,11 @@ class Context:
       groups      — the pipeline GROUPS preserving `|` connectivity for the
                     cross-segment primitives (P5 endpoint, P6 prockill).
       cfg         — the loaded config dict, or None before the STEP1 config load
-                    (STEP0 self-protection runs with cfg=None by design — it must
-                    not depend on the very file it protects).
+                    (STEP0 self-protection passes cfg=None EXPLICITLY by design —
+                    it must not depend on the very file it protects).
     """
 
-    cwd_base: Optional[str] = None
-    simple_cmds: list = field(default_factory=list)
-    groups: list = field(default_factory=list)
-    cfg: Optional[dict] = None
+    cwd_base: Optional[str]
+    simple_cmds: list
+    groups: list
+    cfg: Optional[dict]
