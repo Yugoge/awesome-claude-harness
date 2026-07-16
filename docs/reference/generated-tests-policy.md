@@ -1,10 +1,12 @@
 # `tests/generated/` policy — tracked but ignored, on purpose
 
-> Last updated: 2026-07-15 (dev-20260715-134718-tests)
+> Last updated: 2026-07-16 (Phase 1 of `docs/reference/test-suite-overhaul-plan.md`)
 
 `tests/generated/` is git-tracked yet excluded from the default test run. This
-looks contradictory at a glance, so this note records the intent. It is a policy
-clarification only — nothing here changes the runners or untracks anything.
+looks contradictory at a glance, so this note records the intent **and the
+ratified go-forward decision** (gate-behind-a-marker, see below). Phase 1 changes
+no runner and untracks nothing — it only ratifies the decision and corrects this
+doc's earlier claim (which said every skeleton hard-stops) to the measured reality.
 
 ## What is in `tests/generated/`
 
