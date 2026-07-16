@@ -1,12 +1,9 @@
 #!/usr/bin/env python3
 """Shell-command lexing primitives for the protected-runtime guard.
 
-Pure text tokenizers split out of _core.py in the phase-1 monolith
-decomposition (2026-07-15). This module is a dependency LEAF: it imports only
-the stdlib and references nothing from _core, so _core imports these names back
-at load time without a circular dependency. Relocating them here leaves _core's
-public surface identical (every `from ..._core import _strip_quotes` and every
-internal call still resolves) — see docs/reference/monolith-split-plan.md.
+Dependency LEAF: imports only the stdlib, references nothing from _core.
+See docs/reference/monolith-split-plan.md for the decomposition rationale and
+the INV-3 dual-context import contract.
 
 Scope: quote-aware pipeline / compound-group splitting, fd-redirect detection,
 and write-redirect target extraction — the one layer that must agree

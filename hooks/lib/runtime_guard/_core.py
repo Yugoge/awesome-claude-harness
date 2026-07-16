@@ -342,6 +342,56 @@ except ImportError:  # executed as a top-level script (no package context)
     )
 
 
+# ── P0 anchor helper predicates (leaf subset) → anchor.py ────────────────────
+# The cleanly-extractable P0-anchor helper predicates -- the exec-token scanner,
+# the launch-position and fused-option-value primitives, the head-agnostic
+# service-control hit-detector, and the non-protected-workspace-selector
+# exemption -- were relocated to a sibling module as of the phase-6 monolith
+# split (2026-07-15). The cluster depends only on already-extracted leaves
+# (shell_lex._strip_quotes, constants.RUNTIMES/EXEC_RUNNER_TOKENS/SERVICE_VERBS)
+# + stdlib and references nothing from _core, so re-importing the names here keeps
+# _core's public surface unchanged (every `from ..._core import _anchor_exec_tokens`
+# and every internal reference -- including the STAYING `_p0_anchor` decision
+# orchestrator, which calls all five and uses `_ANCHOR_LAUNCH_FOLLOW`, and the
+# STAYING `_anchor_build_hits_protected`, which calls
+# `_anchor_nonprotected_workspace_selector` -- still resolves). The anchor helpers
+# that forward-reference the decision engine or a _core-resident helper
+# (`_anchor_mutation_hits`/`_anchor_family_destructive_hits`/`_anchor_endpoint_hits`
+# /`_anchor_globalbin_hits`/`_anchor_build_hits_protected` and the
+# `_DATA_OPERAND_HEADS` position predicates, which also call the _core-resident
+# `_find_exec_boundary_at`) STAY in _core -- see docs/reference/monolith-split-plan.md.
+#
+# Dual-context import (INV-3): _core loads BOTH as the lib.runtime_guard._core
+# submodule (relative) AND executed directly as a script by the runtime_guard.py
+# shim (os.execv), where there is no parent package so the relative form raises
+# ImportError. In script context sys.path[0] is this file's own directory, so the
+# absolute `anchor` name resolves the sibling module.
+try:  # noqa: F401  — names re-exported for backward compatibility
+    from .anchor import (
+        _ANCHOR_LAUNCH_FOLLOW,
+        _LAUNCH_SUBCMDS,
+        _RECURSIVE_WS_FLAGS,
+        _SERVICE_MANAGER_PROGRAMS,
+        _anchor_exec_tokens,
+        _anchor_in_launch_position,
+        _anchor_nonprotected_workspace_selector,
+        _anchor_service_hits_protected,
+        _fused_option_values,
+    )
+except ImportError:  # executed as a top-level script (no package context)
+    from anchor import (  # type: ignore[no-redef]
+        _ANCHOR_LAUNCH_FOLLOW,
+        _LAUNCH_SUBCMDS,
+        _RECURSIVE_WS_FLAGS,
+        _SERVICE_MANAGER_PROGRAMS,
+        _anchor_exec_tokens,
+        _anchor_in_launch_position,
+        _anchor_nonprotected_workspace_selector,
+        _anchor_service_hits_protected,
+        _fused_option_values,
+    )
+
+
 # ── Tokenization primitives → shell_lex.py (re-imported at top of file) ──────
 # ── Path/glob primitives → pathmatch.py (re-imported just above) ─────────────
 
@@ -3716,12 +3766,6 @@ def _unwrap_corepack(simple_cmds: list) -> list:
 
 
 # ── P0 ANCHOR scan (HEAD-AGNOSTIC, wrapper-name-independent) ─────────────────
-# Launch subcommand grammar: a protected command/launch-path is a daemon LAUNCH
-# when followed (immediately, after its own flags) by one of these subcommands.
-# These are generic process-lifecycle verbs, NOT project names.
-_LAUNCH_SUBCMDS = frozenset({
-    "daemon", "start", "start-sync", "serve", "run", "up", "spawn", "launch",
-})
 
 
 def _git_inspection_head(head: str, rest: list) -> bool:
@@ -3775,69 +3819,6 @@ def _is_inspection_command(head: str, rest: list) -> bool:
             return False
         return True
     if _git_inspection_head(head, rest):
-        return True
-    return False
-
-
-def _anchor_exec_tokens(tokens: list) -> list:
-    """Return the list of (index, token) bare EXECUTABLE-position candidate tokens
-    for the anchor scan: tokens that are NOT options (no leading '-'), NOT a
-    VAR=val env-prefix, and NOT inside a redirection. These are the words that a
-    front-end / wrapper chain could exec() or pass to a build/launch. Quoted
-    tokens are stripped. This is head-agnostic: it scans the WHOLE argv (the head
-    itself is also a candidate, since a bare `<protected-cmd> <launch-subcmd>` has
-    the protected command as its head).
-    """
-    out = []
-    skip_next = False
-    for i, raw in enumerate(tokens):
-        if skip_next:
-            skip_next = False
-            continue
-        st = _strip_quotes(raw)
-        if not st:
-            continue
-        # redirection operators (> >> < 2> &>) and their target are not exec words
-        if st in (">", ">>", "<", "2>", "&>", "1>", "2>>", "|", "&", ";"):
-            skip_next = st in (">", ">>", "<", "2>", "&>", "1>", "2>>")
-            continue
-        if re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", st):
-            # VAR=val env-prefix
-            continue
-        # keep the `--` end-of-options marker as a position anchor (the token
-        # after it is in executable position), but skip all other options.
-        if st == "--":
-            out.append((i, st))
-            continue
-        if st.startswith("-"):
-            continue
-        out.append((i, st))
-    return out
-
-
-# Launch subcommands a protected command/path takes (`<cmd> daemon start`).
-# Generic process-lifecycle verbs — NOT project names.
-_ANCHOR_LAUNCH_FOLLOW = _LAUNCH_SUBCMDS
-
-
-def _anchor_in_launch_position(exec_vals: list, pos: int) -> bool:
-    """True if the exec token at `pos` is a LAUNCH (vs a data/argument). A
-    protected command/path anchor is a launch when:
-      • it is the FIRST exec token (`<protected> …`, possibly the head), OR
-      • the preceding exec token is `--` (end-of-options before the real cmd), OR
-      • the preceding exec token is a runtime/runner (`node <path>`), OR
-      • it is FOLLOWED by a launch subcommand (`<protected> daemon start`).
-    Otherwise the token is an argument to some other head (`cp <path> dst`,
-    `pytest -k <name>`, `grep <name>`) and is NOT a launch.
-    """
-    if pos == 0:
-        return True
-    prev = exec_vals[pos - 1]
-    if prev == "--":
-        return True
-    if os.path.basename(prev) in RUNTIMES or os.path.basename(prev) in EXEC_RUNNER_TOKENS:
-        return True
-    if pos + 1 < len(exec_vals) and exec_vals[pos + 1] in _ANCHOR_LAUNCH_FOLLOW:
         return True
     return False
 
@@ -4021,21 +4002,6 @@ def _anchor_after_dashopt_danger(exec_toks: list, pos: int, tokens: list) -> boo
     if _anchor_preceded_by_data_head(exec_toks, pos, tokens):
         return False
     return True
-
-
-def _fused_option_values(tokens: list) -> list:
-    """Yield the RHS values of fused `--opt=value` / `-o=value` option tokens, so
-    a wrapper option whose VALUE is a protected launch path / command is still
-    seen (`<wrapper> --exec=<protected-path> …`). The whole `--opt` token is
-    otherwise skipped by _anchor_exec_tokens (it starts with '-')."""
-    out = []
-    for raw in tokens:
-        st = _strip_quotes(raw)
-        if st.startswith("-") and "=" in st:
-            val = st.split("=", 1)[1]
-            if val:
-                out.append(_strip_quotes(val))
-    return out
 
 
 def _p0_anchor(simple_cmds: list, cfg: dict, cwd_base: Optional[str] = None,
@@ -4297,52 +4263,6 @@ def _p0_anchor(simple_cmds: list, cfg: dict, cwd_base: Optional[str] = None,
         if _anchor_globalbin_hits(sc, tokens, exec_toks, global_bins, cwd, cwd_det):
             return _block("P0", "global package install/link behind a front-end")
     return None
-
-
-# Service-manager program basenames the service-control anchor recognizes. These
-# are generic init/service tools — NOT project names. Mirrors the head set P2
-# keys on, so the anchor blocks the same family head-agnostically.
-_SERVICE_MANAGER_PROGRAMS = frozenset({"systemctl", "service", "initctl"})
-
-
-def _anchor_service_hits_protected(tokens: list, exec_toks: list,
-                                   services: list) -> bool:
-    """True if the simple command (head-agnostic) is a service-manager invocation
-    that disrupts a PROTECTED unit: a service-manager program basename
-    (systemctl/service/initctl) appears in EXECUTABLE position (head-agnostic, so
-    it fires behind any wrapper front-end) AND a disruptive lifecycle verb
-    (SERVICE_VERBS — start/stop/restart/try-restart/reload/reload-or-restart/kill/
-    disable/mask/enable + the force/conditional variants force-reload/condrestart/
-    try-reload-or-restart/reload-or-try-restart/condreload) AND a protected unit
-    name appear in the service-manager's OWN argv (the tokens FROM that program
-    onward) — NOT anywhere in the simple command. Matches the bare unit,
-    `unit.service`, and the systemd template-instance form `unit@instance(.service)`
-    — the SAME regex P2 uses on its own `rest`. The wrapper NAME is irrelevant
-    (mirrors how W1/W2/W4 are head-agnostic). Scoping verb+unit to the manager's
-    own argv (exactly like P2 scopes to `rest`) avoids over-blocking a protected
-    name carried as an UNRELATED operand (`UNIT=<unit> systemctl restart other`,
-    `systemd-run --unit <unit> systemctl restart other`) or `service` used as a
-    non-manager noun after a different command (`docker compose restart <unit>
-    service`)."""
-    # locate the service-manager program in executable position (head-agnostic).
-    svc_idx = next((i for i, st in exec_toks
-                    if os.path.basename(_strip_quotes(st)) in _SERVICE_MANAGER_PROGRAMS),
-                   None)
-    if svc_idx is None:
-        return False
-    # the manager's OWN argv: the original tokens FROM the program token onward
-    # (mirrors P2's `rest`, but reached behind any wrapper). The program token
-    # itself is included; verb/unit are matched only within this window.
-    own = tokens[svc_idx:]
-    own_bases = [os.path.basename(_strip_quotes(t)) for t in own]
-    if not any(v in own_bases for v in SERVICE_VERBS):
-        return False
-    joined = " " + " ".join(_strip_quotes(t) for t in own) + " "
-    for s in services:
-        rx = re.compile(r"(^|[\s=])" + re.escape(s) + r"(@[^\s.=/]*)?(\.service)?(\s|$|\.|=)")
-        if rx.search(joined):
-            return True
-    return False
 
 
 # Mutation-verb basenames the bundle/statefile/global-bin anchors recognize in
@@ -4609,63 +4529,6 @@ def _anchor_explicit_nonprotected_input(tokens: list, cfg: dict,
         if not os.path.isabs(_strip_quotes(v)) and not (cwd and cwd_det):
             return False  # unresolvable relative -> cannot prove non-protected
     return True
-
-
-# Recursive / all-workspace flags that fan a build into EVERY workspace (incl.
-# the protected one) — their presence VOIDS any non-protected-selector exemption.
-_RECURSIVE_WS_FLAGS = frozenset({"-r", "--recursive"})
-
-
-def _anchor_nonprotected_workspace_selector(tokens: list, cfg: dict) -> bool:
-    """True if a workspace selector names a workspace in the KNOWN non-protected
-    set and NONE names a protected one AND no recursive/glob/multi selector is
-    present. Used by the build anchor to exempt an explicit non-protected
-    workspace build from the cwd-based fallback. A RECURSIVE (`-r`/`--recursive`),
-    GLOB (`--filter '*'` / `...`), or MULTI selector fans into EVERY workspace
-    (incl. the protected one) and therefore does NOT exempt (codex finding 5).
-    """
-    non_prot = set(cfg.get("non_protected_workspaces", []))
-    prot = set(cfg.get("protected_build_workspaces", []))
-    if not non_prot:
-        return False
-    sel_keywords = ("workspace", "workspaces")
-    sel_flags = ("-w", "--workspace", "--filter", "-F")
-    found_nonprot = False
-    sel_count = 0
-    for i, raw in enumerate(tokens):
-        st = _strip_quotes(raw)
-        # a recursive/all-workspace flag voids the exemption (fans into protected)
-        if st in _RECURSIVE_WS_FLAGS:
-            return False
-        sel = None
-        sel_raw = None
-        if st in sel_keywords and i + 1 < len(tokens):
-            sel_raw = _strip_quotes(tokens[i + 1])
-        elif st in sel_flags and i + 1 < len(tokens):
-            sel_raw = _strip_quotes(tokens[i + 1])
-        else:
-            for f in sel_flags:
-                if st.startswith(f + "="):
-                    sel_raw = _strip_quotes(st.split("=", 1)[1])
-                    break
-        if sel_raw is None:
-            continue
-        sel_count += 1
-        # a glob / wildcard selector fans broadly -> not a determinate single ws
-        if any(ch in sel_raw for ch in ("*", "?", "{", "}", "...")):
-            return False
-        sel = os.path.basename(sel_raw.rstrip("/"))
-        if sel in prot:
-            return False  # an explicit protected selector → not exempt
-        if sel in non_prot:
-            found_nonprot = True
-        elif sel:
-            # an UNKNOWN selector (neither protected nor known-non-protected)
-            # cannot be proven non-protected -> do not exempt (fail closed).
-            return False
-    # exactly one determinate non-protected selector -> exempt; multiple selectors
-    # (potentially fanning into protected) -> do NOT exempt.
-    return found_nonprot and sel_count == 1
 
 
 # ── Top-level evaluate ───────────────────────────────────────────────────────

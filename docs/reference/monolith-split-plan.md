@@ -11,7 +11,7 @@
 
 | Monolith | Lines | Kind | Runtime-critical | Test safety-net |
 |---|---:|---|---|---|
-| `hooks/lib/runtime_guard/_core.py` | 4850 (was 5136) | Python engine | Yes — powers the bash-safety guard | `test_runtime_guard.py` = **755 passing** |
+| `hooks/lib/runtime_guard/_core.py` | 4713 (was 5136) | Python engine | Yes — powers the bash-safety guard | `test_runtime_guard.py` = **755 passing** |
 | `commands/dev-overnight.md` | 1894 | Prompt (orchestrator) | Yes — autonomous loop | none (prompt) |
 | `agents/qa.md` | 1916 | Prompt (subagent) | Yes — QA gate | none (prompt) |
 | `commands/dev.md` | 1618 | Prompt (orchestrator) | Yes — `/dev` pipeline | none (prompt) |
@@ -151,6 +151,51 @@ so its public surface is unchanged.
 
 ---
 
+## Phase 6 — DONE (2026-07-16): P0 anchor helper leaf subset (anchor.py)
+
+The **conservative** slice of the highest-coupling phase. Of the 13 `_anchor_*`
+candidates, only the subset whose ENTIRE dependency closure (functions **and** the
+constants they key on) is leaf/stdlib/other-moved-anchor was lifted; every helper
+that forward-references the decision engine or a `_core`-resident symbol STAYS —
+the same cycle-avoidance rule that kept `_mutation_cand_hits` (phase 3) and the
+find/git `_*_hits` orchestrators (phase 5) in `_core`.
+
+| Field | Value |
+|---|---|
+| Unit extracted | The cleanly-extractable P0-anchor helper predicates (exec-token scan, launch-position + fused-option primitives, head-agnostic service-control hit-detector, non-protected-workspace-selector exemption) + the generic launch-subcommand / service-manager / recursive-workspace tables they key on |
+| New module | `hooks/lib/runtime_guard/anchor.py` (241 lines; 187 moved verbatim) |
+| Names moved (5 fn + 4 const) | `_anchor_exec_tokens`, `_anchor_in_launch_position`, `_fused_option_values`, `_anchor_service_hits_protected`, `_anchor_nonprotected_workspace_selector` + `_LAUNCH_SUBCMDS`, `_ANCHOR_LAUNCH_FOLLOW`, `_SERVICE_MANAGER_PROGRAMS`, `_RECURSIVE_WS_FLAGS` |
+| STAYED — the P0 decision ENGINE | `_p0_anchor` (the anchor decision ORCHESTRATOR `evaluate` calls directly) + `main` / `evaluate` + the `_step0_*` / `_step1_*` / `_p1_…_p9_*` layers — the irreducible engine, never candidates |
+| STAYED — cycle-bound anchor helpers | `_anchor_mutation_hits` (calls `_resolve_rel` / `_mutation_cand_hits` / `_mutation_targets_for_verb`), `_anchor_family_destructive_hits` (calls `_find_destructive_target_hits`, phase-5 resident), `_git_destructive_pathspec_hits` (calls `_resolve_rel` + fwd-refs `_destructive_root_contains_protected`, phase-5 resident), `_anchor_endpoint_hits` (calls `_endpoint_path_in` + P5 `NET_HEADS` / `LOOPBACK_RE`), `_anchor_globalbin_hits` (calls `_anchor_mutation_hits`), `_anchor_build_hits_protected` (calls P8 `_strip_selector_tokens` / `_any_token_under_incl_flagvalue` / `_cwd_*`), `_anchor_explicit_nonprotected_input` (calls `_resolve_rel` / `_path_is_protected_build`) — each would invert a callee edge into an `anchor`→`_core` cycle |
+| STAYED — `_DATA_OPERAND_HEADS` position predicates | `_anchor_preceded_by_data_head`, `_anchor_in_command_word_position`, `_anchor_after_dashopt_danger`: all key on `_DATA_OPERAND_HEADS` = `… \| _STEP0_MUTATION_HEADS \| …`, and `_STEP0_MUTATION_HEADS` (defined in the decision engine, shared with STEP0-config + the phase-5 find `_FIND_EXEC_MUTATION_VERBS`) STAYS in `_core`; lifting the predicates would need an `anchor`→`_core` import of `_STEP0_MUTATION_HEADS` → cycle. They also call the STAYING `_find_exec_boundary_at` |
+| `_find_exec_boundary_at` — STAYS (phase-5-flagged) | Phase 5 deferred it here, but its only consumers (the three `_DATA_OPERAND_HEADS` position predicates) all STAY, and its `_FIND_EXEC_OPTS` table is shared with the STAYING `_is_inspection_command`. With NO moved consumer, lifting it would only scatter `_FIND_EXEC_OPTS` from its `_is_inspection_command` sibling — so it stays; no cycle either way |
+| Re-import site | `_core.py` in-place (dual-context try/except), `# noqa: F401` — all 9 names re-exported |
+| Coupling | Outbound: `shell_lex` (`_strip_quotes`) + `constants` (`RUNTIMES`, `EXEC_RUNNER_TOKENS`, `SERVICE_VERBS`) + stdlib `os` / `re` — **no `_core` import** (AST-verified; no cycle). Inbound: all refs inside `_core` (`_p0_anchor` calls all five; `_anchor_build_hits_protected` calls the workspace-selector) — 0 external importers |
+| Script-context collision check | New sibling `anchor.py`; no stdlib/site `anchor` exists (`find_spec('anchor')` → `None` from a neutral cwd), and in script context `sys.path[0]` is the package dir, so the shim-exec'd `_core.py`'s `from anchor import …` resolves THIS module |
+| Result | INV-1 ✓ (755→755; the 2 `test_bulk_commit_sentinel` failures are a concurrent `/commit`'s `/tmp/claude-commit-grant-*.json` sentinels — stdlib-only test, no `_core` / `anchor` reference, outside this diff) · INV-2 ✓ (0 missing; 9 object-identity re-exports, `_core.X is anchor.X`) · INV-3 ✓ (all 3 contexts; shim script-ctx BLOCKs wrapped cmd-word / launch-path launch, wrapped service-control restart, fused-option launch path, while benign read/echo + `cd <dir-named-as-protected-cmd>` ALLOW — the moved helpers still ACT) · INV-4 ✓ (byte-identical slices, 0 duplicate defs) · INV-5 ✓ (clean) |
+
+---
+
+## Decomposition COMPLETE (2026-07-16)
+
+Phases 1–6 have extracted every cleanly-liftable leaf/helper cluster from the
+`_core.py` monolith into six cohesive sibling modules — `shell_lex.py`,
+`constants.py`, `pathmatch.py`, `config.py`, `find_cmds.py` + `git_cmds.py`, and
+`anchor.py` — carrying `_core.py` from **5136 → 4713 lines**. What remains in
+`_core.py` is the **irreducible decision engine**: `evaluate` / `main`, the
+`_p0_anchor` HEAD-AGNOSTIC anchor orchestrator, the `_step0_*` / `_step1_*` /
+`_p1_…_p9_*` decision layers, and every helper that forward-references a
+later-defined engine symbol or a `_core`-resident path/mutation/build helper
+(`_mutation_cand_hits`, the find/git `_*_hits` orchestrators, `_anchor_mutation_hits`
+and the cycle-bound anchor family, the `_STEP0_MUTATION_HEADS`-keyed position
+predicates). These cannot move without inverting a callee edge into a
+`sibling`→`_core` import cycle — they ARE the engine, not a lift. The public
+surface is unchanged across all six phases (every `from ..._core import <name>`
+still resolves via in-place re-export), and `test_runtime_guard.py` held at
+**755 passing** at every step. No further Python extraction is planned.
+
+---
+
 ## `_core.py` — phased sequence (ascending risk)
 
 Risk is driven by **outbound** coupling (how much stays-in-`_core` code the cluster calls).
@@ -162,14 +207,14 @@ graph LR
     P2 --> P3["Phase 3 DONE<br/>pathmatch.py<br/>262 ln · path/glob"]
     P3 --> P4["Phase 4 DONE<br/>config.py<br/>138 ln · cfg load"]
     P4 --> P5["Phase 5 DONE<br/>find_cmds.py 193 ln<br/>+ git_cmds.py 176 ln"]
-    P5 --> P6["Phase 6<br/>anchor.py<br/>~1130 ln · anchor engine"]
-    P6 --> P7["Core stays<br/>P1..P9 + evaluate/main<br/>irreducible engine"]
+    P5 --> P6["Phase 6 DONE<br/>anchor.py<br/>187 moved · anchor leaf subset"]
+    P6 --> P7["Core stays — DONE<br/>evaluate/main + _p0_anchor<br/>+ _step*/_p1..p9 · irreducible engine"]
 ```
 
 | Phase | Module | Cluster (representative names) | Outbound deps | Risk | Key note |
 |---|---|---|---|---|---|
-| 6 | `anchor.py` | `_anchor_*` family + `_p0_anchor` (`_anchor_exec_tokens`, `_anchor_in_command_word_position`, `_anchor_mutation_hits`, `_anchor_build_hits_protected`, …) | all shared helpers + `cfg` | **High** | Extract only after 2–5 stabilize the shared-helper surface; heaviest inbound/outbound coupling |
-| — | stays in `_core.py` | `_p1_launch`…`_p9_pkgscript`, `_step0_*`, `_step1_indeterminate`, `evaluate`, `main` | — | — | The irreducible decision orchestrator. Not a "lift"; at most a final rename to `engine.py` with a re-export shim |
+| 6 ✅ | `anchor.py` | anchor leaf subset (`_anchor_exec_tokens`, `_anchor_in_launch_position`, `_fused_option_values`, `_anchor_service_hits_protected`, `_anchor_nonprotected_workspace_selector`) | `shell_lex` + `constants` + stdlib | **High** | DONE 2026-07-16 — conservative subset; `_p0_anchor` + the cycle-bound anchor family + `_STEP0_MUTATION_HEADS`-keyed position predicates STAYED (would invert into an `anchor`→`_core` cycle) |
+| — ✅ | stays in `_core.py` | `_p0_anchor`, `_p1_launch`…`_p9_pkgscript`, `_step0_*`, `_step1_indeterminate`, `evaluate`, `main` + cycle-bound anchor helpers | — | — | The irreducible decision engine. Not a "lift"; at most a final rename to `engine.py` with a re-export shim |
 
 **Dependency-safety rule for phases 2–6.** Before lifting cluster *C*, run
 `git grep -nE '\b<name>\b'` for each name in *C* and confirm every **callee** is either

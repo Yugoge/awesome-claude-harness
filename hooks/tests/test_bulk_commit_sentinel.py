@@ -134,12 +134,26 @@ class TestEvaluateCommitBlessedBridge(unittest.TestCase):
     REGULAR_CMD = 'git commit -m "feat(hooks): add new check"'
 
     def test_blessed_bridge_with_sentinel_allowed(self):
-        with patch.object(guard, "_has_bulk_commit_sentinel", return_value=True):
+        # Isolate the "defer auto-bulk if a single-use commit grant is active"
+        # branch: ambient /tmp/claude-commit-grant-*.json files from an unrelated
+        # /commit cycle would otherwise make _has_active_commit_grant() True and
+        # turn this deterministic allow-path test flaky.
+        with patch.object(guard, "_has_bulk_commit_sentinel", return_value=True), \
+             patch.object(guard, "_has_active_commit_grant", return_value=False):
             # Should not raise SystemExit(2)
             try:
                 guard._evaluate_commit(self.BULK_CMD, _make_data())
             except SystemExit as e:
                 self.fail(f"_evaluate_commit blocked with sentinel present: exit {e.code}")
+
+    def test_blessed_bridge_deferred_when_commit_grant_active(self):
+        # Fix E branch: with the bulk-commit sentinel present, an active single-use
+        # commit grant must DEFER (block, exit 2) so an in-progress /commit finishes.
+        with patch.object(guard, "_has_bulk_commit_sentinel", return_value=True), \
+             patch.object(guard, "_has_active_commit_grant", return_value=True):
+            with self.assertRaises(SystemExit) as ctx:
+                guard._evaluate_commit(self.BULK_CMD, _make_data())
+            self.assertEqual(ctx.exception.code, 2)
 
     def test_blessed_bridge_without_sentinel_blocked(self):
         with patch.object(guard, "_has_bulk_commit_sentinel", return_value=False):
@@ -225,7 +239,11 @@ class TestExtractCommitMessageFFlag(unittest.TestCase):
             tmppath = f.name
         try:
             cmd = f'git -C /tmp commit -F {tmppath}'
-            with patch.object(guard, "_has_bulk_commit_sentinel", return_value=True):
+            # Isolate the auto-bulk defer-on-active-grant branch (see
+            # test_blessed_bridge_with_sentinel_allowed) so ambient /tmp commit
+            # grants can't make this allow-path test flaky.
+            with patch.object(guard, "_has_bulk_commit_sentinel", return_value=True), \
+                 patch.object(guard, "_has_active_commit_grant", return_value=False):
                 try:
                     guard._evaluate_commit(cmd, _make_data())
                 except SystemExit as e:

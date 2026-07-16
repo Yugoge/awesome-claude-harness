@@ -1,7 +1,7 @@
 # runtime_guard
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-07-15T23:49:32Z*
+*Last updated: 2026-07-16T10:09:53Z*
 **Total entries**: 8
 **Convention**: kebab
 
@@ -15,7 +15,7 @@ runtime_guard/
 ├── `find_cmds.py` - The find/fd command-family parsing leaves split out of _core.py in the phase-5
 ├── `git_cmds.py` - The git command-family parsing leaves split out of _core.py in the phase-5
 ├── `pathmatch.py` - The path/glob matching family split out of _core.py in the phase-3 monolith
-└── `shell_lex.py` - Pure text tokenizers split out of _core.py in the phase-1 monolith
+└── `shell_lex.py` - Dependency LEAF: imports only the stdlib, references nothing from _core
 ```
 <!-- /AUTO:index-stats -->
 
