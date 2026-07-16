@@ -24,9 +24,8 @@ import os
 import re
 
 # The anchor predicates key on the phase-1 quote stripper and the phase-2 runtime
-# /runner/service-verb lookup tables. Dual-context import (INV-3): anchor loads
-# BOTH inside the lib.runtime_guard package (relative) AND as a sibling of the
-# directly-executed _core.py script (absolute, where sys.path[0] is this dir).
+# /runner/service-verb lookup tables. Dual-context import (INV-3) --
+# see docs/reference/monolith-split-plan.md.
 try:
     from .shell_lex import _strip_quotes
     from .constants import EXEC_RUNNER_TOKENS, RUNTIMES, SERVICE_VERBS
