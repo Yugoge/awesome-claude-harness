@@ -381,15 +381,16 @@ check_and_consume_daemon_restart_grant() {
   local unit="$1"
   local verb="$2"
 
-  # Derive target suffix: strip "happy-daemon-" or "happy-daemon" prefix.
-  # happy-daemon-dev → dev; happy-daemon → default; happy-daemon-jade → jade
+  # Derive target suffix by stripping the configured PROTECTED_DAEMON_PREFIX.
+  # Default prefix "happy-daemon": happy-daemon → default; happy-daemon-dev → dev;
+  # happy-daemon-jade → jade; happy-daemon-qijie → qijie. The caller (Layer 1.A) only ever
+  # passes the bare prefix or "<prefix>-<target>" (its grep restricts the token set), so a
+  # plain prefix-strip reproduces the old explicit case exactly for all reachable inputs.
   local target
   case "$unit" in
-    happy-daemon-dev) target="dev" ;;
-    happy-daemon-jade) target="jade" ;;
-    happy-daemon-qijie) target="qijie" ;;
-    happy-daemon) target="default" ;;
-    *) target="" ;;
+    "$PROTECTED_DAEMON_PREFIX")    target="default" ;;
+    "$PROTECTED_DAEMON_PREFIX"-*)  target="${unit#"${PROTECTED_DAEMON_PREFIX}"-}" ;;
+    *)                             target="" ;;
   esac
   [ -z "$target" ] && return 1
 
