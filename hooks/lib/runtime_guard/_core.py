@@ -2361,6 +2361,11 @@ def _p5_endpoint(ctx: "Context") -> Optional[Verdict]:
     only DOWNSTREAM, never sent) and `grep /stop file | curl …/health` (endpoint
     text in an unrelated upstream filter, HTTP client argv clean) stay ALLOWED.
     """
+    # Read the per-evaluation inputs from the shared Context. Local aliases keep
+    # the body below a byte-for-byte behavior match — the Context adoption is a
+    # pure relocation of how groups / cfg arrive, nothing else.
+    groups = ctx.groups
+    cfg = ctx.cfg
     paths = cfg.get("protected_endpoint_paths", [])
     if not paths:
         return None
