@@ -17,7 +17,7 @@ Every infrastructure-touching subagent prompt needs an explicit "DO NOT" section
 Code review, bundle grep, and curl are NEVER sufficient. Trigger content via UI, then verify the rendered result.
 
 ### 13. NEVER let a single subagent handle multiple tasks (multitask)
-Each subagent invocation handles exactly ONE issue. A single `/dev` cycle MAY carry multiple requirements: the orchestrator decomposes them into per-issue lanes and dispatches a fan-out to N parallel one-issue subagents within the same cycle (one issue per subagent), because multiplicity alone is never grounds to reject the cycle or re-slice it into separate cycles — the one-issue rule binds the SUBAGENT, not the cycle. Launch multiple subagents in parallel for multiple issues — never bundle multiple issues into one subagent.
+Each subagent invocation handles exactly ONE issue. Launch multiple subagents in parallel for multiple issues — never bundle.
 
 ### 14. Subagent rejected by hook MUST PAUSE + report. See Subagent Hook Discipline.
 

@@ -238,10 +238,10 @@ a real `cfg` (not `None` as in STEP0), and after the front-end peel, so `groups`
 |---|---|---|
 | **P5 endpoint (refactored)** | `printf 'POST /stop …' \| nc 127.0.0.1 8080` (raw-socket, upstream path) · `curl -s http://127.0.0.1:8080/stop` (HTTP, own argv) | BLOCK ×2 |
 | **P5 benign (refactored)** | `curl …/health \| grep /stop` (endpoint text only downstream) | ALLOW |
-| **P6 prockill (refactored)** | `kill $(pgrep happy-daemon)` (cmd-subst) · `pkill -f happy-daemon` (name-match verb) · `pgrep -f happy-daemon \| xargs kill` (xargs) | BLOCK ×3 |
+| **P6 prockill (refactored)** | `kill $(pgrep <protected-daemon>)` (cmd-subst) · `pkill -f <protected-daemon>` (name-match verb) · `pgrep -f <protected-daemon> \| xargs kill` (xargs) | BLOCK ×3 |
 | **P6 benign (refactored)** | `kill 1234` (bare PID, no selector mechanism) | ALLOW |
 | Launch (P0/P1) | `happy daemon start` | BLOCK |
-| Service (P2) | `systemctl restart happy-daemon` | BLOCK |
+| Service (P2) | `systemctl restart <protected-daemon>` | BLOCK |
 | STEP0 config | `rm -f <datafile>` · `echo x > <datafile>` | BLOCK ×2 |
 | Destructive find/git | `find <protected>/dist -name '*.mjs' -delete` · `git checkout -- <protected>/dist/index.mjs` | BLOCK ×2 |
 | Build (P8) | `yarn workspace happy build` | BLOCK |
