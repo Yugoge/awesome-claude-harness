@@ -335,6 +335,40 @@ class TestCommitGrantRedirectBinding(unittest.TestCase):
         cmd = f'git --namespace=sneaky -C {self.A["path"]} commit -m "ns"'
         self._assert_blocks(cmd, self._grant_for(self.A))
 
+    # ---- codex adversarial finding 1: path-qualified git hides -C redirect ----
+    def test_path_qualified_git_dash_c_redirect_blocks(self):
+        # /usr/bin/git -C B commit: the leading-anchor regex used to miss the
+        # path-qualified git, leaving -C invisible so the commit validated
+        # against the hook cwd (repo A) while landing in repo B.
+        import shutil
+        gitbin = shutil.which("git")
+        cmd = f'{gitbin} -C {self.B["path"]} commit -m "path-qual sneak"'
+        self._assert_blocks(cmd, self._grant_for(self.A))
+
+    def test_path_qualified_git_dash_c_matching_allows(self):
+        import shutil
+        gitbin = shutil.which("git")
+        cmd = f'{gitbin} -C {self.A["path"]} commit -m "path-qual ok"'
+        self._assert_allows(cmd, self._grant_for(self.A))
+
+    # ---- codex adversarial finding 2: cd cwd-redirect before bare commit ----
+    def test_cd_before_commit_blocks(self):
+        cmd = f'cd {self.B["path"]} && git commit -m "cd sneak"'
+        self._assert_blocks(cmd, self._grant_for(self.A))
+
+    def test_cd_semicolon_before_commit_blocks(self):
+        cmd = f'cd {self.B["path"]} ; git commit -m "cd sneak"'
+        self._assert_blocks(cmd, self._grant_for(self.A))
+
+    def test_pushd_before_commit_blocks(self):
+        cmd = f'pushd {self.B["path"]} && git commit -m "pushd sneak"'
+        self._assert_blocks(cmd, self._grant_for(self.A))
+
+    def test_cd_after_commit_still_allows(self):
+        # A cd that runs AFTER the commit does not taint it.
+        cmd = f'git commit -m "work" ; cd {self.B["path"]}'
+        self._assert_allows(cmd, self._grant_for(self.A))
+
     # ---- HOLE 2: inline + ambient GIT_DIR/GIT_WORK_TREE ----
     def test_hole2_inline_env_redirect_blocks(self):
         cmd = (f'GIT_DIR={self.B["path"]}/.git GIT_WORK_TREE={self.B["path"]} '

@@ -149,8 +149,16 @@ GIT_COMMAND_RE = r'(?:^|[\s;&|()`])git' + GIT_GLOBAL_OPTION_RE + r'\s+'
 # explicit `-C <dir>` out of it. Reuses the exact GIT_GLOBAL_OPTION_RE grammar
 # above (kept in sync intentionally) so a change to one does not silently
 # desync from the other.
+#
+# The optional `(?:\S*/)?` before `git` lets a PATH-QUALIFIED invocation
+# (`/usr/bin/git`, `./git`) expose its `-C <dir>` span too. Without it the
+# leading anchor class `[\s;&|()`]` (which excludes `/`) failed to match a
+# path-qualified git, so `git -C <other-repo> commit` written as
+# `/usr/bin/git -C <other-repo> commit` yielded an EMPTY options span -> the
+# `-C` redirect was invisible and the commit validated against the hook's cwd
+# instead of <other-repo> (codex adversarial finding, 2026-07-16).
 GIT_COMMIT_INVOCATION_RE = re.compile(
-    r'(?:^|[\s;&|()`])git(' + GIT_GLOBAL_OPTION_RE + r')\s+commit\b'
+    r'(?:^|[\s;&|()`])(?:\S*/)?git(' + GIT_GLOBAL_OPTION_RE + r')\s+commit\b'
 )
 
 # `-C` (capital only) is "run as if git was started in <dir>". Lowercase `-c`
@@ -172,6 +180,14 @@ DASH_CAPITAL_C_RE = re.compile(r'-C\s*(?:"([^"]*)"|\'([^\']*)\'|(\S+))')
 # commit we cannot unambiguously locate must be rejected, not guessed.
 _GIT_REDIRECT_ENV_VARS = ('GIT_DIR', 'GIT_WORK_TREE', 'GIT_COMMON_DIR')
 _GIT_REDIRECT_FLAGS = ('--git-dir', '--work-tree', '--namespace')
+
+# Shell builtins that change the effective cwd for a LATER git commit in the
+# same command string. The guard probes repo/branch/HEAD from its OWN cwd (or a
+# `-C <dir>`), so a `cd <other-repo> && git commit` runs the real commit in a
+# cwd the probe never sees -> the grant would validate against the hook's cwd
+# while the commit lands elsewhere (codex adversarial finding, 2026-07-16).
+# Any such builtin preceding a commit -> fail closed (block).
+_CWD_CHANGE_CMDS = ('cd', 'pushd', 'popd')
 
 
 def _block(message):
@@ -533,13 +549,25 @@ def _iter_commit_invocations(command):
                              assignment is inline-prefixed before the git token
       flag_redirect        : True iff --git-dir/--work-tree/--namespace appears
                              as a git global option before the commit subcommand
+      cwd_redirected       : True iff a cd/pushd/popd segment executes BEFORE
+                             this commit in the same command string (the probe
+                             cannot see the post-cd cwd -> fail closed)
+
+    Segments are visited in execution order so `cwd_redirected` reflects only a
+    cwd change that PRECEDES the commit; a `cd` after the commit is harmless and
+    does not taint it.
     """
+    cwd_redirected = False
     for seg in _shell_segments(command):
         toks = seg.split()
         if not toks:
             continue
         idx = _cmd_token_index(toks)
         if idx is None:
+            continue
+        # A cd/pushd/popd segment redirects the cwd for every LATER git commit.
+        if os.path.basename(toks[idx].strip('\'"')) in _CWD_CHANGE_CMDS:
+            cwd_redirected = True
             continue
         if os.path.basename(toks[idx]) != 'git':
             continue
@@ -574,6 +602,7 @@ def _iter_commit_invocations(command):
             'options_span': options_span,
             'inline_env_redirect': inline_env_redirect,
             'flag_redirect': flag_redirect,
+            'cwd_redirected': cwd_redirected,
         }
 
 
@@ -629,6 +658,8 @@ def _enforce_commit_grant_binding(grant, command):
             _block_commit_redirect(inv['segment'], 'inline-env GIT_DIR/GIT_WORK_TREE')
         if inv['flag_redirect']:
             _block_commit_redirect(inv['segment'], '--git-dir/--work-tree/--namespace flag')
+        if inv.get('cwd_redirected'):
+            _block_commit_redirect(inv['segment'], 'cd/pushd cwd-change before commit')
         target_dir = _extract_dash_c_from_span(inv['options_span'], inv['segment'])
         _validate_commit_grant_repo(grant, target_dir)
         _validate_commit_grant_branch(grant, target_dir)
