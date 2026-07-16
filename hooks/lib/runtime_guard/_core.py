@@ -4600,11 +4600,17 @@ def evaluate(command: str, cwd_base: Optional[str] = None) -> Verdict:
     v = _p4_statefile(simple_cmds, cfg, cwd_base)
     if v is not None:
         return v
-    # cross-segment primitives operate on pipeline GROUPS
-    v = _p5_endpoint(groups, cfg)
+    # cross-segment primitives operate on pipeline GROUPS. Build the post-config
+    # Context snapshot carrying the SAME per-evaluation inputs P5/P6 read (the
+    # live `groups` + `cfg` formerly passed positionally, plus `cwd_base` +
+    # `simple_cmds` so the snapshot is complete/consistent) and order P5/P6 over
+    # it. cfg is loaded (non-None) here, groups/simple_cmds reflect any front-end
+    # peel above — a fresh snapshot, never a stale pre-peel one (INV-6/INV-7).
+    p5p6_ctx = Context(cwd_base=cwd_base, simple_cmds=simple_cmds, groups=groups, cfg=cfg)
+    v = _p5_endpoint(p5p6_ctx)
     if v is not None:
         return v
-    v = _p6_prockill(groups, cfg)
+    v = _p6_prockill(p5p6_ctx)
     if v is not None:
         return v
     v = _p7_globalbin(simple_cmds, cfg)
