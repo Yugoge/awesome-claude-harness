@@ -32,19 +32,17 @@ import sys
 from typing import Optional, Tuple
 
 # Shell-command lexing primitives (_split_pipeline / _strip_quotes / _safe_shlex
-# / redirect scanners) live in a sibling module as of the phase-1 monolith split
-# (2026-07-15). They are a pure dependency leaf; re-importing them here keeps
-# _core's public surface unchanged — every `from ..._core import _strip_quotes`
-# and every internal reference still resolves. See
-# docs/reference/monolith-split-plan.md.
+# / redirect scanners) → shell_lex.py (phase-1). Re-imported here to keep _core's
+# public surface unchanged. See docs/reference/monolith-split-plan.md.
 #
-# Dual-context import: _core is loaded BOTH as the `lib.runtime_guard._core`
-# submodule (relative import) AND executed directly as a script by the
-# runtime_guard.py shim (`os.execv(python, _core.py)`), where there is no parent
-# package so the relative form raises ImportError. In script context sys.path[0]
-# is this file's own directory, so the absolute `shell_lex` name resolves the
-# sibling module. Keeping both forms preserves the engine's standalone-script
-# entrypoint that pretool-bash-safety.sh depends on.
+# Dual-context import (INV-3) — REPRESENTATIVE CAUTION for every re-import block
+# below: _core runs BOTH as the `lib.runtime_guard._core` submodule (relative
+# import) AND as a direct script via the runtime_guard.py shim (`os.execv`),
+# which has no parent package so a BARE relative import raises ImportError and
+# the live hook fail-closes. The absolute-fallback form (sys.path[0] is this
+# file's dir) resolves the sibling; keeping both preserves the standalone-script
+# entrypoint pretool-bash-safety.sh depends on. Every block below repeats this
+# same try/except idiom.
 try:  # noqa: F401  — names re-exported for backward compatibility
     from .shell_lex import (
         _WRITE_REDIRECT_RE,
