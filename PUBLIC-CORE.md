@@ -58,12 +58,24 @@ reuse is a leak.
 | dev systemd units (`CLAUDE_DEV_SYSTEMD`) | *(empty)* | export `CLAUDE_DEV_SYSTEMD=…` |
 | daemon-restart grant helper (`CLAUDE_DAEMON_RESTART_GRANT_HELPER`) | `/root/bin/claude-allow-restart` | export `CLAUDE_DAEMON_RESTART_GRANT_HELPER=…` |
 | grant sentinel dir (`CLAUDE_DAEMON_RESTART_GRANT_DIR`) | `$TMPDIR` | export `CLAUDE_DAEMON_RESTART_GRANT_DIR=…` |
+| protected daemon prefix (`CLAUDE_PROTECTED_DAEMON_PREFIX`) | `happy-daemon` | export `CLAUDE_PROTECTED_DAEMON_PREFIX=…` |
+| protected daemon targets (`CLAUDE_PROTECTED_DAEMON_TARGETS`) | `dev\|jade\|qijie` | export `CLAUDE_PROTECTED_DAEMON_TARGETS=…` |
 
-**Deliberately-literal exception (NOT a leak):** the local daemon **unit names**
-(`happy-daemon` + targets `dev|jade|qijie`) are intentionally *non*-env-overridable —
-"a guard you can disable via env var is not a guard" (see the Layer-1 comment in
-`hooks/pretool-bash-safety.sh`). They are documented private-lab coupling retained inside
-a `public-core` file, so `check-public-core.sh` does **not** scan for them.
+**Protected daemon identity — now parameterized (was a deliberately-literal exception):**
+the local daemon **unit prefix** (`happy-daemon`) and its per-instance **targets**
+(`dev|jade|qijie`) used to be hardcoded in the daemon-restart-prohibition (Layer 1.A) and
+its wrapper/http/sentinel siblings, and were exempt from the residue scan. They are now the
+DEFAULTS of `CLAUDE_PROTECTED_DAEMON_PREFIX` / `CLAUDE_PROTECTED_DAEMON_TARGETS` (rows
+above), so a public consumer points the guard at their own daemon without editing the hook;
+with both unset, Layer 1.A behaves byte-for-byte as before. `check-public-core.sh` therefore
+treats `happy-daemon` as a **parameterized** residue marker (allowed only in `:-` default or
+comment position, exactly like `happy-web-dev`; a bare un-parameterized reuse in shippable
+code is flagged) rather than an un-scanned literal. Test fixtures that name the guarded unit
+(e.g. `hooks/tests/*`) are test data, not residue, so the param scan skips test trees.
+**Grant-channel caveat:** the target suffix also keys the external grant helper's sentinel
+protocol (`claude-allow-daemon-restart-<target>.flag`), so a consumer that retargets the
+prefix must also configure a matching grant helper (`CLAUDE_DAEMON_RESTART_GRANT_HELPER`) or
+the gate is protective but un-grantable.
 
 **Hard residue markers (must never appear in `public-core`, in any form):** the
 maintainer's git remote `git@github.com:Yugoge/…`, the rsync mirror `/root/.claude.bak`,

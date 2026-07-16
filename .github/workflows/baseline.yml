@@ -104,9 +104,20 @@ jobs:
           fi
           exit "$status"
 
-      - name: Verify headline claims (hook counts + hero provenance)
+      - name: Public/private boundary gate (check-public-core.sh)
+        # PUBLIC-CORE.md declares this boundary checker gates CI; wire it as a required step
+        # of the `baseline` job so a new top-level tracked path escaping classification, an
+        # invalid class label, or an author-environment residue marker leaking (un-parameterized)
+        # into a public-core file FAILS the build. Recomputes the tracked-path set from git each
+        # run — nothing hardcoded. Exits non-zero on any boundary violation.
+        run: bash scripts/check-public-core.sh
+
+      - name: Verify headline claims (hook counts + hero provenance + public-template sync)
         # Runs as a step of the already-required `baseline` job so it gates merges by
         # default (no branch-protection change needed). Recomputes the wired-hook /
         # lifecycle-event counts from settings.json and fails on any drift in
-        # README.md / ARCHITECTURE.md, then runs both hero-provenance audits in --strict.
+        # README.md / ARCHITECTURE.md, runs both hero-provenance audits in --strict, and
+        # asserts settings.template.json (the PUBLIC install seed) is valid JSON and wires
+        # every hook settings.json wires (basename-normalized) so the public template can
+        # never silently drift from the real hook set. All counts recomputed at check time.
         run: bash scripts/verify-claims.sh

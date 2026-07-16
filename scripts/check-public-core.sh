@@ -113,10 +113,16 @@ fi
 
 # ---------------------------------------------------------------------------
 # 3. Residue scan over the public-core-classified file set.
-#    Hard markers  : author-environment identifiers that must NEVER appear in public-core.
-#    Param markers : residue that is allowed ONLY as an env `:-` default or in a comment;
-#                    any other (un-parameterized) use is a leak.
-#    (Daemon UNIT names are deliberately literal and are NOT scanned — see PUBLIC-CORE.md §3.)
+#    Hard markers  : author-environment identifiers that must NEVER appear in public-core;
+#                    scanned across the WHOLE public-core set (test trees included).
+#    Param markers : residue allowed ONLY as an env `:-` default or in a comment; any other
+#                    (un-parameterized) use is a leak. Scanned across the public-core set
+#                    MINUS test trees — a fixture string that names a guarded unit is test
+#                    data, not shippable-harness residue (mirrors the ledger already
+#                    classifying top-level `tests/` as shared/infra).
+#    The protected daemon prefix `happy-daemon` is now a PARAM marker (env-overridable via
+#    CLAUDE_PROTECTED_DAEMON_PREFIX; the default reproduces today's behavior) — see
+#    PUBLIC-CORE.md §3. It was previously an un-scanned deliberately-literal exception.
 # ---------------------------------------------------------------------------
 HARD_MARKERS=(
   'git@github.com:Yugoge'      # maintainer git remote
@@ -126,6 +132,7 @@ HARD_MARKERS=(
 PARAM_MARKERS=(
   'happy-web-dev'                    # CLAUDE_DEV_CONTAINERS default
   '/root/bin/claude-allow-restart'  # CLAUDE_DAEMON_RESTART_GRANT_HELPER default
+  'happy-daemon'                     # CLAUDE_PROTECTED_DAEMON_PREFIX default
 )
 
 # public-core pathspecs, excluding this script (it names the markers by necessity).
@@ -136,16 +143,29 @@ while IFS= read -r p; do
 done < <(printf '%s\n' "$PAIRS" | awk -F'\t' '$2=="public-core"{print $1}' | sort -u)
 PC_PATHSPECS+=(":(exclude)$SELF")
 
+# Param markers are productization defaults expected inside shippable code; a test fixture
+# that names a guarded unit (e.g. hooks/tests/*) is test data, not residue. Scan param
+# markers over the public-core set MINUS any test tree. Hard markers keep the full set.
+PARAM_PATHSPECS=("${PC_PATHSPECS[@]}" ":(exclude)*/tests/*")
+
 # A public-core match line is an allowed (parameterized) use of marker M when the line is a
-# comment (trimmed starts with #) OR it uses M as an env default (":-M", ":-\"M", ":-'M").
+# comment (trimmed starts with #) OR EVERY occurrence of M on the line is an env default
+# (":-M", ":-\"M", ":-'M"). The check is OCCURRENCE-level, not line-level: a single accepted
+# ":-M" no longer whitelists a SECOND, bare (un-parameterized) M on the same line — every
+# occurrence must sit in an accepted position or the line is reported as a leak.
 param_line_ok() {
-  local content="$1" marker="$2" trimmed
+  local content="$1" marker="$2" trimmed rest before
   trimmed="${content#"${content%%[![:space:]]*}"}"
-  [[ "$trimmed" == \#* ]] && return 0
-  [[ "$content" == *":-$marker"* ]] && return 0
-  [[ "$content" == *":-\"$marker"* ]] && return 0
-  [[ "$content" == *":-'$marker"* ]] && return 0
-  return 1
+  [[ "$trimmed" == \#* ]] && return 0   # whole-line comment → every occurrence is inert
+  rest="$content"
+  while [[ "$rest" == *"$marker"* ]]; do
+    before="${rest%%"$marker"*}"        # text preceding the FIRST remaining occurrence
+    if [[ "$before" != *":-" && "$before" != *":-\"" && "$before" != *":-'" ]]; then
+      return 1                          # a bare (un-parameterized) occurrence → leak
+    fi
+    rest="${rest#*"$marker"}"           # advance past this occurrence, keep scanning
+  done
+  return 0
 }
 
 leaks=0
@@ -166,7 +186,7 @@ for m in "${PARAM_MARKERS[@]}"; do
       fail "un-parameterized residue marker in public-core: '$m'  ->  ${file}:${lineno}: ${content}"
       leaks=$((leaks + 1))
     fi
-  done < <(git grep -nF -- "$m" -- "${PC_PATHSPECS[@]}" 2>/dev/null)
+  done < <(git grep -nF -- "$m" -- "${PARAM_PATHSPECS[@]}" 2>/dev/null)
 done
 
 if [ "$leaks" -eq 0 ]; then

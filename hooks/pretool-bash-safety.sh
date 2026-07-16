@@ -33,15 +33,23 @@ DAEMON_RESTART_SENTINEL_RE="$(printf '%s' "${DAEMON_RESTART_GRANT_DIR%/}/claude-
 #                                     cosmetic: daemon-restart stderr guidance only —
 #                                     Layer 1.A hint + Layer 1.B/1.E reason lines; the
 #                                     grant sentinel dir is DAEMON_RESTART_GRANT_DIR (above).
+#      PROTECTED_DAEMON_PREFIX      <- CLAUDE_PROTECTED_DAEMON_PREFIX  (default "happy-daemon")
+#      PROTECTED_DAEMON_TARGETS     <- CLAUDE_PROTECTED_DAEMON_TARGETS (default "dev|jade|qijie")
+#                                     rules "daemon-restart-prohibition" (Layer 1.A),
+#                                     "daemon-restart-wrapper" (1.B), and the systemctl
+#                                     production-target guard's protected-daemon exclusion
+#                                     (the non-protected systemctl block below).
 #
-# 2. Local daemon units — documented, intentionally NON-env-overridable in this scope:
-#      "happy-daemon" + targets dev|jade|qijie. Rules: "daemon-restart-prohibition"
-#      (Layer 1.A), "daemon-restart-wrapper" (1.B/1.C), "daemon-restart-http-stop"
-#      (1.D), "daemon-restart-sentinel-write" (1.E). NOT lifted on purpose: the unit
-#      names are coupled to the external grant helper's sentinel protocol
-#      (claude-allow-daemon-restart-<target>.flag); making them configurable here
-#      without rewriting that helper would desync the grant channel — a
-#      configurable-but-ungrantable gate is worse than a fixed one.
+# 2. Protected daemon unit identity — env-overridable, default = current literal:
+#      the protected daemon prefix "happy-daemon" + per-instance targets dev|jade|qijie
+#      are the DEFAULTS of PROTECTED_DAEMON_PREFIX / PROTECTED_DAEMON_TARGETS (section 1).
+#      With both unset, Layer 1.A/1.B and the non-protected systemctl exclusion protect
+#      exactly "happy-daemon(-{dev,jade,qijie})" as before. NOTE (grant-channel coupling):
+#      the target suffix also keys the external grant helper's sentinel protocol
+#      (claude-allow-daemon-restart-<target>.flag). Overriding the prefix/targets RETARGETS
+#      which daemon this hook protects, but a public consumer must configure a matching
+#      grant helper (or rely on DAEMON_RESTART_GRANT_HELPER) so the grant channel stays in
+#      sync — otherwise the gate is protective but un-grantable.
 #
 # 3. Non-configurable catastrophe guards (absolute-ban; deliberately hardcoded):
 #      rules "session-dirs ban", "happy-session-recovery ban", "happy-restart ban".
@@ -160,6 +168,28 @@ DEV_SYSTEMD="${CLAUDE_DEV_SYSTEMD:-}"
 # DAEMON_RESTART_GRANT_DIR, declared near the top).
 # Env-overridable; default = current literal so the unset-override behavior is byte-identical.
 DAEMON_RESTART_GRANT_HELPER="${CLAUDE_DAEMON_RESTART_GRANT_HELPER:-/root/bin/claude-allow-restart}"
+# Protected daemon identity (env-overridable; default = current literal, same idiom as
+# CLAUDE_DEV_CONTAINERS above). The daemon-restart-prohibition (Layer 1.A) + its wrapper
+# sibling (1.B) + the non-protected systemctl exclusion gate a specific local daemon by
+# unit prefix and per-instance target suffixes. With both env vars unset the guard protects
+# "happy-daemon" + targets dev|jade|qijie exactly as before (byte-for-byte).
+PROTECTED_DAEMON_PREFIX="${CLAUDE_PROTECTED_DAEMON_PREFIX:-happy-daemon}"
+PROTECTED_DAEMON_TARGETS="${CLAUDE_PROTECTED_DAEMON_TARGETS:-dev|jade|qijie}"
+# ERE-safe variants of the protected-daemon identity. The PREFIX names a LITERAL local daemon
+# unit, so every ERE metacharacter ( ] [ \ . ^ $ * + ? ( ) { } | ) AND a leading '-' is escaped
+# before the value is interpolated into any `grep -E` context below (Layers 1.A/1.B and the
+# non-protected systemctl exclusion). Without this, an operator-configured prefix carrying regex
+# metacharacters (e.g. "my.daemon") would MISS or mis-extract the daemon — a catastrophe-guard
+# weakening for the retargeted case. Contract: PROTECTED_DAEMON_TARGETS is INTENTIONALLY a
+# '|'-separated alternation of literal target words (dev|jade|qijie by default); each word's
+# metacharacters are escaped while the '|' separators are PRESERVED so the alternation still
+# holds. Default values contain no metacharacters, so the escaped forms are byte-identical and
+# env-unset behavior is unchanged. All grep uses also pass `--` so a leading '-' in the value
+# can never be read as an option.
+_ere_escape_literal()  { printf '%s' "$1" | sed -e 's/[][\\.^$*+?(){}|]/\\&/g' -e 's/^-/\\-/'; }
+_ere_escape_keep_alt() { printf '%s' "$1" | sed -e 's/[][\\.^$*+?(){}]/\\&/g'; }
+PROTECTED_DAEMON_PREFIX_RE="$(_ere_escape_literal  "$PROTECTED_DAEMON_PREFIX")"
+PROTECTED_DAEMON_TARGETS_RE="$(_ere_escape_keep_alt "$PROTECTED_DAEMON_TARGETS")"
 
 # ── Helper: split compound command into subcommands ───────────────
 # Splits on && || ; and checks each subcommand independently.
@@ -366,15 +396,16 @@ check_and_consume_daemon_restart_grant() {
   local unit="$1"
   local verb="$2"
 
-  # Derive target suffix: strip "happy-daemon-" or "happy-daemon" prefix.
-  # happy-daemon-dev → dev; happy-daemon → default; happy-daemon-jade → jade
+  # Derive target suffix by stripping the configured PROTECTED_DAEMON_PREFIX.
+  # Default prefix "happy-daemon": happy-daemon → default; happy-daemon-dev → dev;
+  # happy-daemon-jade → jade; happy-daemon-qijie → qijie. The caller (Layer 1.A) only ever
+  # passes the bare prefix or "<prefix>-<target>" (its grep restricts the token set), so a
+  # plain prefix-strip reproduces the old explicit case exactly for all reachable inputs.
   local target
   case "$unit" in
-    happy-daemon-dev) target="dev" ;;
-    happy-daemon-jade) target="jade" ;;
-    happy-daemon-qijie) target="qijie" ;;
-    happy-daemon) target="default" ;;
-    *) target="" ;;
+    "$PROTECTED_DAEMON_PREFIX")    target="default" ;;
+    "$PROTECTED_DAEMON_PREFIX"-*)  target="${unit#"${PROTECTED_DAEMON_PREFIX}"-}" ;;
+    *)                             target="" ;;
   esac
   [ -z "$target" ] && return 1
 
@@ -671,26 +702,26 @@ fi
 # Anchor `(\s+|\b)` so `systemctl kill -s SIGTERM happy-daemon-dev` matches (verb
 # followed by `-s` flag, not whitespace-then-target). Stable label: daemon-restart-prohibition.
 if echo "$COMMAND" | grep -qE 'systemctl\s+(stop|restart|disable|enable|reload|kill|try-restart|reload-or-restart)(\s+|\b)' \
-   && echo "$COMMAND" | grep -qE 'happy-daemon'; then
-  # Identify the bare unit name in the command. We look for happy-daemon[suffix]
+   && echo "$COMMAND" | grep -qE -- "$PROTECTED_DAEMON_PREFIX_RE"; then
+  # Identify the bare unit name in the command. We look for <prefix>[-<target>]
   # tokens; if multiple targets, the consume rejects unless grant covers all.
-  HAPPY_UNIT=$(echo "$COMMAND" | grep -oE 'happy-daemon(-(dev|jade|qijie))?' | head -1 | sed 's/\.service$//')
+  HAPPY_UNIT=$(echo "$COMMAND" | grep -oE -- "${PROTECTED_DAEMON_PREFIX_RE}(-(${PROTECTED_DAEMON_TARGETS_RE}))?" | head -1 | sed 's/\.service$//')
   HAPPY_VERB=$(echo "$COMMAND" | grep -oE 'systemctl\s+(stop|restart|disable|enable|reload|kill|try-restart|reload-or-restart)' | head -1 | awk '{print $2}')
   if [ -n "$HAPPY_UNIT" ] && check_and_consume_daemon_restart_grant "$HAPPY_UNIT" "$HAPPY_VERB"; then
     : # grant consumed — fall through to allow the command
   else
-    echo "BLOCKED: daemon-restart-prohibition — systemctl ${HAPPY_VERB:-<verb>} on ${HAPPY_UNIT:-happy-daemon-*} is FORBIDDEN" >&2
+    echo "BLOCKED: daemon-restart-prohibition — systemctl ${HAPPY_VERB:-<verb>} on ${HAPPY_UNIT:-${PROTECTED_DAEMON_PREFIX}-*} is FORBIDDEN" >&2
     echo "Command: $COMMAND" >&2
-    echo "REASON: per c3-20260504-223115, Claude must NEVER restart any happy-daemon-* by any path." >&2
+    echo "REASON: per c3-20260504-223115, Claude must NEVER restart any ${PROTECTED_DAEMON_PREFIX}-* by any path." >&2
     echo "Hint: user must run $DAEMON_RESTART_GRANT_HELPER <target> from a real TTY first." >&2
     exit 2
   fi
 fi
 
 # Layer 1.B — wrapper-class block: any wrapper invocation co-occurring with
-# happy-daemon vocabulary AND daemon-state-disrupting verb. Stable label:
-# daemon-restart-wrapper.
-if echo "$COMMAND" | grep -qE 'happy-daemon' \
+# protected-daemon vocabulary (PROTECTED_DAEMON_PREFIX) AND a daemon-state-disrupting
+# verb. Stable label: daemon-restart-wrapper.
+if echo "$COMMAND" | grep -qE -- "$PROTECTED_DAEMON_PREFIX_RE" \
    && echo "$COMMAND" | grep -qE '(restart|stop|disable|enable|reload|kill|try-restart|reload-or-restart|kick|cycle|bounce|hup|HUP)' \
    && echo "$COMMAND" | grep -qE '(systemd-run|^|[[:space:]])((at|batch)\s|crontab\s|nohup\s|disown\s|watch\s|timeout\s|dbus-send|busctl|nc\s|ncat\s|eval\s|bash\s+-c|sh\s+-c|zsh\s+-c|python3?\s+-c|node\s+-[ce]|perl\s+-e|ruby\s+-e)'; then
   echo "BLOCKED: daemon-restart-wrapper — wrapper invocation co-occurring with daemon-restart vocabulary is FORBIDDEN" >&2
@@ -1318,14 +1349,15 @@ fi
 
 # Block: systemctl stop/restart/disable/enable/reload/kill/try-restart/reload-or-restart
 # Verb set extended per c3-20260504-223115 R1 (8 verbs covering all daemon-state-disrupting
-# systemctl operations). Targets covering `happy-daemon` are handled by Layer 1.A above
-# (with the dedicated grant channel); this block fires for non-happy systemctl targets.
+# systemctl operations). Targets covering the protected daemon (PROTECTED_DAEMON_PREFIX) are
+# handled by Layer 1.A above (with the dedicated grant channel); this block fires for
+# non-protected systemctl targets.
 if echo "$COMMAND" | grep -qE 'systemctl\s+(stop|restart|disable|enable|reload|kill|try-restart|reload-or-restart)(\s+|\b)' \
-   && ! echo "$COMMAND" | grep -qE 'happy-daemon'; then
+   && ! echo "$COMMAND" | grep -qE -- "$PROTECTED_DAEMON_PREFIX_RE"; then
   if ! check_systemctl_targets_all_dev "$COMMAND" "$DEV_SYSTEMD"; then
     echo "BLOCKED: systemctl stop/restart/disable/enable/reload/kill/try-restart/reload-or-restart is forbidden for production services" >&2
     echo "Command: $COMMAND" >&2
-    echo "Hint: only $DEV_SYSTEMD is allowed (and happy-daemon-* is gated by Layer 1.A)." >&2
+    echo "Hint: only $DEV_SYSTEMD is allowed (and ${PROTECTED_DAEMON_PREFIX}-* is gated by Layer 1.A)." >&2
     exit 2
   fi
 fi

@@ -390,6 +390,14 @@
         "hooks": [
           {
             "type": "command",
+            "command": "python3 \"{{CLAUDE_HOME}}/hooks/pretool-block-background-tasks.py\""
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
             "command": "python3 \"{{CLAUDE_HOME}}/hooks/pretool-read-size-guard.py\""
           }
         ]
@@ -424,6 +432,10 @@
           {
             "type": "command",
             "command": "python3 \"{{CLAUDE_HOME}}/hooks/pretool-wrapper-userintent.py\""
+          },
+          {
+            "type": "command",
+            "command": "python3 \"{{CLAUDE_HOME}}/hooks/pretool-grep-backtrack-guard.py\""
           }
         ]
       },
