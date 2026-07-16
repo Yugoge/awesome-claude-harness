@@ -476,6 +476,41 @@ def _gate_result(status: str, schema, errors, reason: str) -> dict:
     }
 
 
+# Tell-tale substrings that mark a :func:`validate` ok=False result as a
+# schema-INFRASTRUCTURE failure (validator could not run) rather than a genuine
+# schema violation. Sourced verbatim from validate()'s own error strings:
+#   - 'schema_registry error:'  -> registry raised (validate() line ~220)
+#   - 'not registered'          -> schema not registered (validate() line ~223)
+#   - 'validator raised:'       -> Draft7Validator threw (_run_jsonschema line ~211)
+_INFRA_ERROR_TELLS = (
+    'schema_registry error:',
+    'not registered',
+    'validator raised:',
+)
+
+
+def _skip_reason_if_unvalidatable(result: dict) -> Optional[str]:
+    """Return a skip reason iff :func:`validate` could not actually validate.
+
+    Distinguishes a real schema VERDICT (genuine pass / genuine violation) from
+    the two "validator could not run" conditions, so the gate is fail-SAFE:
+      - missing validator: validate() returns ok=True + severity='warn' (the
+        Draft7Validator-is-None / pre-pass-only path) -> skip, NOT pass. This
+        closes the fail-OPEN where an unvalidated versioned report was authorized.
+      - schema-infra error: validate() returns ok=False whose errors are the
+        registry/not-registered/validator-raised tells (not a schema violation)
+        -> skip, NOT fail. This closes the false fail-CLOSE.
+    Returns ``None`` when validate() produced a genuine pass or genuine violation.
+    """
+    if result.get('ok') and result.get('severity') == 'warn':
+        return 'validator unavailable (jsonschema/Draft7Validator missing) — cannot validate'
+    if not result.get('ok'):
+        joined = ' '.join(str(e) for e in (result.get('errors') or []))
+        if any(tell in joined for tell in _INFRA_ERROR_TELLS):
+            return 'schema infra error (registry/schema-load/validator exception) — cannot validate'
+    return None
+
+
 def validate_report_artifact(path) -> dict:
     """Version-gated schema gate for an interactive dev/qa/do report artifact.
 

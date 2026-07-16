@@ -1,14 +1,15 @@
 # reference
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-07-16T17:35:17Z*
-**Total entries**: 12
+*Last updated: 2026-07-16T17:35:55Z*
+**Total entries**: 13
 **Convention**: kebab
 
 ## Tree
 ```
 reference/
 ├── `checkpoint-mechanism.md` - Auto-Commit / Checkpoint Mechanism
+├── `core-context-refactor-plan.md` - Core Context Refactor Plan (Plan-of-Record)
 ├── `fswatch-quickref.md` - FSWatch Quick Reference Card
 ├── `generated-tests-policy.md` - `tests/generated/` policy — tracked but ignored, on purpose
 ├── `git-fswatch.md` - Git File Watcher (fswatch) Documentation
