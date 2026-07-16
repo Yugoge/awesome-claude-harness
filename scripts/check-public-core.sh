@@ -149,15 +149,23 @@ PC_PATHSPECS+=(":(exclude)$SELF")
 PARAM_PATHSPECS=("${PC_PATHSPECS[@]}" ":(exclude)*/tests/*")
 
 # A public-core match line is an allowed (parameterized) use of marker M when the line is a
-# comment (trimmed starts with #) OR it uses M as an env default (":-M", ":-\"M", ":-'M").
+# comment (trimmed starts with #) OR EVERY occurrence of M on the line is an env default
+# (":-M", ":-\"M", ":-'M"). The check is OCCURRENCE-level, not line-level: a single accepted
+# ":-M" no longer whitelists a SECOND, bare (un-parameterized) M on the same line — every
+# occurrence must sit in an accepted position or the line is reported as a leak.
 param_line_ok() {
-  local content="$1" marker="$2" trimmed
+  local content="$1" marker="$2" trimmed rest before
   trimmed="${content#"${content%%[![:space:]]*}"}"
-  [[ "$trimmed" == \#* ]] && return 0
-  [[ "$content" == *":-$marker"* ]] && return 0
-  [[ "$content" == *":-\"$marker"* ]] && return 0
-  [[ "$content" == *":-'$marker"* ]] && return 0
-  return 1
+  [[ "$trimmed" == \#* ]] && return 0   # whole-line comment → every occurrence is inert
+  rest="$content"
+  while [[ "$rest" == *"$marker"* ]]; do
+    before="${rest%%"$marker"*}"        # text preceding the FIRST remaining occurrence
+    if [[ "$before" != *":-" && "$before" != *":-\"" && "$before" != *":-'" ]]; then
+      return 1                          # a bare (un-parameterized) occurrence → leak
+    fi
+    rest="${rest#*"$marker"}"           # advance past this occurrence, keep scanning
+  done
+  return 0
 }
 
 leaks=0
