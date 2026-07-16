@@ -2344,7 +2344,7 @@ def _http_reads_stdin_body(sc: str) -> bool:
     return bool(re.search(r"(--data-binary|--data|-d)\s+@-|--data-binary\s+@/dev/stdin", sc))
 
 
-def _p5_endpoint(groups: list, cfg: dict) -> Optional[Verdict]:
+def _p5_endpoint(ctx: "Context") -> Optional[Verdict]:
     """Pipeline-group + segment-ORDER aware control-endpoint guard.
 
     A loopback control shutdown can be split across pipeline segments — the

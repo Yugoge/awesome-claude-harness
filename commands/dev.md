@@ -33,13 +33,13 @@ Decompose $ARGUMENTS into N coverage-mapped one-issue lanes   (N == 1 ⇒ single
      Step 7   QA validates BA conclusions  — per lane            → stage barrier
      Step 8   BA-QA iteration              — retry affected lanes → stage barrier
      Step 10  Delegate to dev subagent     — dispatch per lane   → stage barrier
-     Step 13  Delegate to QA subagent      — dispatch per lane   → stage barrier
-     Step 16  Iteration                    — retry failed lanes only (lane-local)
-── end fan-out band ──
+── end per-lane dispatch band ──
   ↓
 Step 11  Aggregate lane-suffixed dev-reports → ONE canonical dev-report  (single aggregation join)
   ↓
-IF any lane's QA fails → Refine that lane's context → Iterate (lane-local)
+     Step 12  Validate dev implementation  — per lane
+     Step 13  Delegate to QA subagent      — dispatch per lane   → stage barrier
+     Step 16  Iteration                    — retry failed lanes only (lane-local)
   ↓
 IF all lanes pass → Generate ONE completion report   (one parent cycle / same cycle)
   ↓
@@ -90,11 +90,13 @@ A single `/dev` cycle MAY carry more than one requirement. When it does, the orc
 - **Step 13 (QA)** — dispatch exactly ONE QA per lane.
 - **Step 16 (Iteration)** — retry only the failed lanes (lane-local).
 
+**Lane-execution adapter (this step takes precedence over the singular Step templates).** When N > 1, this fan-out step governs the concrete Steps below: every `<requirement>`, `<timestamp>` / session id, input path, output path, dispatch, wait, validation, and result branch in Steps 4–16 is evaluated PER LANE. Each lane's dispatch prompt MUST carry three explicit fields — `Lane requirement_id`, `Lane requirement text` (the authoritative execution scope), and `Parent requirement document (provenance only)` — and the lane text OVERRIDES the parent document and any "context / BA-spec is absolute truth" clause for scope, so sibling outcomes are NOT issues within that lane's invocation. Dispatch stages (4/7/10/13) batch all applicable lanes; waits are stage barriers; validation stages (6/12) run per lane; retry stages (8/16) act only on affected/failed lanes; and every concrete Step's result branch gains a `multi_issue_fanout_requested` route (handled below). When N == 1, none of this applies and the Steps run exactly as written today.
+
 **Lane-authoritative scope (no bundle re-detection).** Each lane is given its assigned requirement `text` as the authoritative execution scope. The full `user-requirement-<session>.md` document is passed to every lane as parent provenance only — never as the lane's execution scope — so a fanned-out lane never re-reads the whole bundle and re-detects multiplicity.
 
-**Lane-suffixed artifacts under one parent session.** Every lane writes lane-suffixed artifacts (`ticket-<session>-<lane>.md`, `context-<session>-<lane>.json`, `dev-report-<session>-<lane>.json`, and the per-lane QA reports) under ONE parent `DEV_SESSION_ID`. Lane-suffixed reports are aggregated once via Step 11 into the canonical singular `dev-report-<session>.json`, and the cycle emits ONE parent completion report — never a new cycle or session per lane.
+**Lane-suffixed artifacts under one parent session.** Every lane writes lane-suffixed artifacts (`ticket-<session>-<lane>.md`, `context-<session>-<lane>.json`, `dev-report-<session>-<lane>.json`, and the per-lane QA reports) under ONE parent `DEV_SESSION_ID`. Lane-suffixed reports are aggregated once via Step 11 into the canonical singular `dev-report-<session>.json`, and the cycle emits ONE parent completion report — never a new cycle or session per lane. The parent completion report indexes every lane's `ticket` / `context` / `dev-report` / QA report, and parent completion passes ONLY when every lane's QA passes — a single failed lane fails the parent cycle.
 
-**`multi_issue_fanout_requested` routing handler (routing-only, non-terminal).** A BA/Dev subagent returns `status: multi_issue_fanout_requested`, and a QA subagent returns `verdict: multi_issue_fanout_requested`, with payload `{issues: [{requirement_id, text}]}` when it is handed a bundled multi-issue prompt. On receipt the orchestrator treats it as a recognized nonterminal routing enum, not a failure: route `multi_issue_fanout_requested` by re-dispatching each enumerated issue exactly once as its own lane within the same parent cycle (no new session, no user prompt), reusing the decomposition above. This signal is never mapped to `contract_violation_refused`.
+**`multi_issue_fanout_requested` routing handler (routing-only, non-terminal).** A BA/Dev subagent returns `status: multi_issue_fanout_requested`, and a QA subagent returns `verdict: multi_issue_fanout_requested`, with payload `{issues: [{requirement_id, text}]}` when it is handed a bundled multi-issue prompt. On receipt the orchestrator treats it as a recognized nonterminal routing enum, not a failure: route `multi_issue_fanout_requested` by re-dispatching each enumerated issue exactly once as its own lane within the same parent cycle (no new session, no user prompt), reusing the decomposition above. Re-run the coverage map against the ORIGINAL bundled prompt so every re-dispatched lane inherits all applicable shared constraints and exclusions (e.g. no-commit, do-not-touch-hooks, per-file-diffs); the returned issue boundaries are advisory and no shared constraint may be dropped during re-dispatch. This signal is never mapped to `contract_violation_refused`.
 
 **Degenerate single-lane case (N == 1).** When N == 1 the flow degenerates to today's single-lane path with no behavior change: the fan-out wrapper is a no-op for a single requirement, and existing single-requirement cycles are unaffected.
 
