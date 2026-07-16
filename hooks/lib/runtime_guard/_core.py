@@ -2539,6 +2539,11 @@ def _p6_prockill(ctx: "Context") -> Optional[Verdict]:
     protected identifier appears anywhere connected to it — in any segment of
     the same group, or inside a kill's $()/`` command substitution.
     """
+    # Read the per-evaluation inputs from the shared Context. Local aliases keep
+    # the body below a byte-for-byte behavior match — the Context adoption is a
+    # pure relocation of how groups / cfg arrive, nothing else.
+    groups = ctx.groups
+    cfg = ctx.cfg
     idents = cfg.get("protected_proc_idents", [])
     statefiles = cfg.get("protected_statefiles", [])
     cmds = set(cfg.get("protected_cmds", []))
