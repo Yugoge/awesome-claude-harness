@@ -17,6 +17,15 @@
 #     generated` selection can see the marker before the built-in deselection runs).
 #   * pytest_collection_modifyitems — deselects generated-marked items UNLESS the
 #     run explicitly opts in (`-m generated` or --run-generated).
+#   * pytest_make_collect_report — when a file UNDER tests/generated raises at
+#     COLLECTION/IMPORT time (bit-rot: missing import, renamed symbol, duplicate-
+#     basename collision, syntax error), the wrapper rewrites the failed collect
+#     report into a clean SKIP (reason "generated skeleton bit-rotted: <error>")
+#     instead of a hard ERROR — so the opt-in run distinguishes an expected
+#     bit-rotted skeleton from a real regression. Scoped to tests/generated ONLY;
+#     a collection error anywhere else stays a real ERROR (never masks a real
+#     test-tree import failure). The runtime xfail hook below cannot catch these
+#     because they fail before any test runs.
 #   * pytest_runtest_makereport — reports a `TEST_INCOMPLETE:` pytest.fail as an
 #     xfail so `-m generated` distinguishes "incomplete skeleton" (x) from a real
 #     regression / bit-rot (F).
