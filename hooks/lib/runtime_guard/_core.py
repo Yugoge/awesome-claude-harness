@@ -79,21 +79,10 @@ def _block(primitive: str, reason: str) -> Verdict:
 
 # ── Generic verb / keyword / exec-front-end data tables → constants.py ───────
 # The ~19 pure frozenset/dict vocabularies (PKG_MANAGERS, ENV_WRAPPERS,
-# RUNTIMES, MUTATION_VERBS, KILL_VERBS, EXEC_FRONTEND_PROFILES, …) were
-# relocated to a sibling module as of the phase-2 monolith split (2026-07-15).
-# They are a pure data leaf — no logic, no outbound refs — so re-importing them
-# here keeps _core's public surface unchanged (every
-# `from ..._core import MUTATION_VERBS` and every internal reference still
-# resolves). The `_block`/`Verdict`/`ALLOW` decision anchors stay in _core by
-# design. See docs/reference/monolith-split-plan.md.
-#
-# Dual-context import (INV-3): _core is loaded BOTH as the
-# `lib.runtime_guard._core` submodule (relative import) AND executed directly
-# as a script by the runtime_guard.py shim (`os.execv(python, _core.py)`),
-# where there is no parent package so the relative form raises ImportError. In
-# script context sys.path[0] is this file's own directory, so the absolute
-# `constants` name resolves the sibling module. Keeping both forms preserves
-# the engine's standalone-script entrypoint that pretool-bash-safety.sh needs.
+# RUNTIMES, MUTATION_VERBS, KILL_VERBS, EXEC_FRONTEND_PROFILES, …) re-imported
+# here (phase-2). The `_block`/`Verdict`/`ALLOW` decision anchors stay in _core
+# by design. Dual-context import (INV-3, see phase-1 block above) --
+# docs/reference/monolith-split-plan.md.
 try:  # noqa: F401  — names re-exported for backward compatibility
     from .constants import (
         BUILD_TOOL_BASENAMES,
