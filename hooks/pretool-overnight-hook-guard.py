@@ -1817,6 +1817,12 @@ def _build_bwrap_argv(command: str, main_root: str, worktree_path: str,
             # worktree are already RW via the worktree bind).
             if not _path_under_prefix(p, wt_real):
                 argv += ['--bind', p, p]
+        # (7) SHARED-.git RESIDUAL CLOSURE (ARCHITECTURE §8): nest RO binds for
+        # <common>/config + <common>/hooks OVER the RW common-dir bind above, so a
+        # keystone-disabling `git config --unset core.hooksPath` and default-hook
+        # drops hit EROFS, while <common>/objects + <common>/refs + logs stay RW so
+        # the legitimate keystone-guarded commit / ref-update path is unaffected.
+        argv += _shared_common_dir_ro_rebinds(wt_real)
     argv += ['--', '/bin/bash', '-c', command]
     return argv
 
