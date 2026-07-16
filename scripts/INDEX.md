@@ -1,7 +1,7 @@
 # scripts
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-07-16T14:17:59Z*
+*Last updated: 2026-07-16T14:18:33Z*
 **Total entries**: 115
 **Convention**: kebab
 
@@ -45,7 +45,7 @@ scripts/
 │   ├── `site-navigate.py` - Python script
 │   ├── `spec.py` - Mirrors the ask.py structure in the knowledge-system scripts/todo directory
 │   └── `test.py` - Preloaded TodoList for /test workflow
-├── `_qa_neg_a.sh` - QA negative-proof scratch A: a BARE (un-parameterized) protected-prefix use.
+├── `_qa_neg_a.sh` - QA control A: accepted env-default occurrence only — should PASS.
 ├── `_qa_neg_b.sh` - QA control: ONLY an accepted env-default occurrence — should PASS (not over-eager).
 ├── `aggregate-dev-report.py` - Scans docs/dev/ for per-worker shard dev-reports matching a given task-id,
 ├── `aggregate-permissions.py` - Usage: aggregate-permissions.py <qa-glob-or-dir> [pipelines.json]

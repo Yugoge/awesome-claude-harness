@@ -1,4 +1,4 @@
 #!/usr/bin/env bash
-# QA negative-proof scratch A: a BARE (un-parameterized) protected-prefix use.
-PREFIX=happy-daemon
+# QA control A: accepted env-default occurrence only — should PASS.
+PREFIX="${CLAUDE_PROTECTED_DAEMON_PREFIX:-happy-daemon}"
 echo "$PREFIX"

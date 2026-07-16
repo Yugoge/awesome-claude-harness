@@ -10,7 +10,7 @@ Organization and usage documentation for `scripts/`.
 - **Naming convention**: kebab
 
 ## Files
-- `_qa_neg_a.sh` - QA negative-proof scratch A: a BARE (un-parameterized) protected-prefix use.
+- `_qa_neg_a.sh` - QA control A: accepted env-default occurrence only — should PASS.
 - `_qa_neg_b.sh` - QA control: ONLY an accepted env-default occurrence — should PASS (not over-eager).
 - `aggregate-dev-report.py` - Scans docs/dev/ for per-worker shard dev-reports matching a given task-id,
 - `aggregate-permissions.py` - Usage: aggregate-permissions.py <qa-glob-or-dir> [pipelines.json]
