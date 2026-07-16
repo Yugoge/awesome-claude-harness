@@ -8,9 +8,11 @@
 #   - jsonschema  : schema validation used by the schema-aware hooks/tests.
 #   - pyyaml      : YAML parsing used by the skill catalogs and generated tests.
 #
-# Pinned to a lower bound only (>=) so a fresh clone gets a working, recent set
-# without forcing an exact build the author happened to have. Install with:
+# Constrained to a compatible range (lower bound so a fresh clone gets a recent,
+# working set; upper bound at the next major so a future breaking release cannot
+# silently enter a clean install). NOT hard-pinned to a single patch — that would
+# be brittle across the supported Python matrix. Install with:
 #   ~/.claude/venv/bin/pip install -r requirements.txt
-pytest>=7.0
-jsonschema>=4.0
-pyyaml>=6.0
+pytest>=7.0,<9
+jsonschema>=4.0,<5
+pyyaml>=6.0,<7
