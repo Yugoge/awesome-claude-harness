@@ -1714,15 +1714,17 @@ def _linked_worktree_git_paths(worktree_path: str) -> list[str]:
 
     The per-worktree gitdir (`git rev-parse --git-dir`) and the shared common-dir
     (`--git-common-dir`) are the two roots git writes during add/commit. They are
-    derived at runtime from git itself. KNOWN LIMITATION (codex finalize-review,
-    task 20260611-100500): because the common-dir is RW-bound, git surfaces that
-    write ONLY to common-dir metadata — notably `git config` (writes
-    common-dir/config = main `.git/config`), and `gc`/`fetch`/`repack` writes that
-    land under common-dir/objects — are NOT blocked by this OS boundary; they are
-    NOT part of the supported add/commit surface but the bwrap layer alone does not
-    refuse them. Closing that requires a pre-rewrite git-subcommand denylist
-    (config/fetch/gc/submodule/sparse) in `_apply_write_boundary` — surfaced to the
-    orchestrator (scope_review_requested) rather than silently asserted as blocked.
+    derived at runtime from git itself. SHARED-.git CLOSURE (ARCHITECTURE §8): the
+    common-dir is RW-bound, but `<common>/config` and `<common>/hooks` are now RE-
+    BOUND READ-ONLY nested over that RW bind (see `_shared_common_dir_ro_rebinds`),
+    so a `git config` write to the shared config (e.g. `--unset core.hooksPath`,
+    which would disable the keystone) and default-hook drops now hit EROFS. RESIDUAL
+    LIMITATION (codex finalize-review, task 20260611-100500): `gc`/`fetch`/`repack`
+    writes that land under common-dir/objects are still NOT blocked by this OS
+    boundary; they are NOT part of the supported add/commit surface but the bwrap
+    layer alone does not refuse them. A fuller pre-rewrite git-subcommand denylist
+    (config/fetch/gc/submodule/sparse) in `_apply_write_boundary` remains surfaced
+    to the orchestrator (scope_review_requested) rather than silently asserted.
     Raw cooperative writes to refs/objects/HEAD/packed-refs through these RW paths
     that bypass git's ref-transaction ARE denied by the retained security/L4 layer
     (`_raw_git_metadata_write_into_main`) that runs BEFORE this boundary
@@ -1736,6 +1738,33 @@ def _linked_worktree_git_paths(worktree_path: str) -> list[str]:
             if rp not in paths:
                 paths.append(rp)
     return paths
+
+
+def _shared_common_dir_ro_rebinds(worktree_path: str) -> list[str]:
+    """Shared-.git residual closure (codex world-class review, ARCHITECTURE §8):
+    the shared git COMMON-DIR is RW-bound (via `_linked_worktree_git_paths`) so the
+    supported add/commit/status/diff surface works — but that ALSO exposes
+    `<common>/config` and `<common>/hooks` READ-WRITE, letting an overnight actor
+    run `git config --unset core.hooksPath` (writes `<common>/config`) to DISABLE
+    the reference-transaction keystone, or drop a malicious default hook, and THEN
+    move main HEAD off master. Return `--ro-bind` args for the shared common-dir's
+    `config` FILE and `hooks/` DIR (only those that exist) so the caller can nest
+    them OVER the RW common-dir bind: those two paths become EROFS while
+    `<common>/objects`, `<common>/refs`, `<common>/logs` (which a commit / ref
+    update actually writes) stay READ-WRITE. Only the SHARED common-dir is treated
+    this way; the per-worktree gitdir is untouched. `git rev-parse --git-common-dir`
+    resolves the shared common-dir from a LINKED worktree (whose `.git` is a FILE
+    pointing at `<common>/worktrees/<name>`) — never the per-worktree gitdir."""
+    gcd = _git_query(['rev-parse', '--path-format=absolute', '--git-common-dir'], worktree_path)
+    if not gcd or not os.path.isdir(gcd):
+        return []
+    common_real = os.path.realpath(gcd)
+    args: list[str] = []
+    for leaf in ('config', 'hooks'):
+        p = os.path.join(common_real, leaf)
+        if os.path.exists(p):
+            args += ['--ro-bind', p, p]
+    return args
 
 
 def _build_bwrap_argv(command: str, main_root: str, worktree_path: str,
@@ -1755,6 +1784,12 @@ def _build_bwrap_argv(command: str, main_root: str, worktree_path: str,
       5. --bind <worktree_path>   the ONLY RW path under main (nested over RO)
       6. --bind <git-dir>, <common-dir>   (LINKED worktree only) git-derived RW
                                   exceptions for the supported add/commit surface
+      7. --ro-bind <common>/config, <common>/hooks   (LINKED worktree only) RE-bind
+                                  the shared config file + default-hooks dir READ-
+                                  ONLY, nested OVER step 6's RW common-dir bind, so
+                                  a keystone-disabling `git config --unset
+                                  core.hooksPath` / hook drop hits EROFS while
+                                  objects/refs/logs stay RW for commits
     Because every RW bind is applied AFTER the RO binds, and each RW bind targets
     a path UNDER main that is itself an approved exception, no mount exposes a RW
     source/root covering the protected main tree except the worktree + git paths.
@@ -1790,6 +1825,12 @@ def _build_bwrap_argv(command: str, main_root: str, worktree_path: str,
             # worktree are already RW via the worktree bind).
             if not _path_under_prefix(p, wt_real):
                 argv += ['--bind', p, p]
+        # (7) SHARED-.git RESIDUAL CLOSURE (ARCHITECTURE §8): nest RO binds for
+        # <common>/config + <common>/hooks OVER the RW common-dir bind above, so a
+        # keystone-disabling `git config --unset core.hooksPath` and default-hook
+        # drops hit EROFS, while <common>/objects + <common>/refs + logs stay RW so
+        # the legitimate keystone-guarded commit / ref-update path is unaffected.
+        argv += _shared_common_dir_ro_rebinds(wt_real)
     argv += ['--', '/bin/bash', '-c', command]
     return argv
 
