@@ -2527,7 +2527,7 @@ def _is_kill_executor(head: str, rest: list) -> bool:
     return False
 
 
-def _p6_prockill(groups: list, cfg: dict) -> Optional[Verdict]:
+def _p6_prockill(ctx: "Context") -> Optional[Verdict]:
     """Pipeline-group + command-substitution aware process-kill guard.
 
     The canonical daemon-kill idioms split the protected identifier and the kill
