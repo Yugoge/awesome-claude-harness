@@ -287,26 +287,9 @@ except ImportError:  # executed as a top-level script (no package context)
 # The cleanly-extractable P0-anchor helper predicates -- the exec-token scanner,
 # the launch-position and fused-option-value primitives, the head-agnostic
 # service-control hit-detector, and the non-protected-workspace-selector
-# exemption -- were relocated to a sibling module as of the phase-6 monolith
-# split (2026-07-15). The cluster depends only on already-extracted leaves
-# (shell_lex._strip_quotes, constants.RUNTIMES/EXEC_RUNNER_TOKENS/SERVICE_VERBS)
-# + stdlib and references nothing from _core, so re-importing the names here keeps
-# _core's public surface unchanged (every `from ..._core import _anchor_exec_tokens`
-# and every internal reference -- including the STAYING `_p0_anchor` decision
-# orchestrator, which calls all five and uses `_ANCHOR_LAUNCH_FOLLOW`, and the
-# STAYING `_anchor_build_hits_protected`, which calls
-# `_anchor_nonprotected_workspace_selector` -- still resolves). The anchor helpers
-# that forward-reference the decision engine or a _core-resident helper
-# (`_anchor_mutation_hits`/`_anchor_family_destructive_hits`/`_anchor_endpoint_hits`
-# /`_anchor_globalbin_hits`/`_anchor_build_hits_protected` and the
-# `_DATA_OPERAND_HEADS` position predicates, which also call the _core-resident
-# `_find_exec_boundary_at`) STAY in _core -- see docs/reference/monolith-split-plan.md.
-#
-# Dual-context import (INV-3): _core loads BOTH as the lib.runtime_guard._core
-# submodule (relative) AND executed directly as a script by the runtime_guard.py
-# shim (os.execv), where there is no parent package so the relative form raises
-# ImportError. In script context sys.path[0] is this file's own directory, so the
-# absolute `anchor` name resolves the sibling module.
+# exemption -- re-imported here (phase-6). The P0 decision ENGINE `_p0_anchor`
+# and every forward-referencing anchor helper stay in _core. Dual-context import
+# (INV-3, see phase-1 block above) -- docs/reference/monolith-split-plan.md.
 try:  # noqa: F401  — names re-exported for backward compatibility
     from .anchor import (
         _ANCHOR_LAUNCH_FOLLOW,
