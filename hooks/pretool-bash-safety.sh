@@ -1353,7 +1353,7 @@ fi
 # handled by Layer 1.A above (with the dedicated grant channel); this block fires for
 # non-protected systemctl targets.
 if echo "$COMMAND" | grep -qE 'systemctl\s+(stop|restart|disable|enable|reload|kill|try-restart|reload-or-restart)(\s+|\b)' \
-   && ! echo "$COMMAND" | grep -qE "$PROTECTED_DAEMON_PREFIX"; then
+   && ! echo "$COMMAND" | grep -qE -- "$PROTECTED_DAEMON_PREFIX_RE"; then
   if ! check_systemctl_targets_all_dev "$COMMAND" "$DEV_SYSTEMD"; then
     echo "BLOCKED: systemctl stop/restart/disable/enable/reload/kill/try-restart/reload-or-restart is forbidden for production services" >&2
     echo "Command: $COMMAND" >&2
