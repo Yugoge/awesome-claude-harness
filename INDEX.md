@@ -1,8 +1,8 @@
 # dot-claude
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-07-16T14:09:08Z*
-**Total entries**: 467
+*Last updated: 2026-07-16T16:25:36Z*
+**Total entries**: 476
 **Convention**: kebab
 
 ## Tree
@@ -125,7 +125,14 @@ dot-claude/
 │   │   ├── `test_final_sweep.sh` - Final sweep — run inline AC checks and print PASS/FAIL summary.
 │   │   ├── `test_git_cmd_cross_consistency.py` - Verifies that GIT_CMD_RE (hooks/pretool-bash-safety.sh),
 │   │   ├── `test_push_sentinel_abort.sh` - Unit test for AC1 V5: hooks/push.sh self-aborts before any real git push
-│   │   └── `test_runtime_guard.py` - Two layers:
+│   │   ├── `test_runtime_guard.py` - Two layers:
+│   │   ├── `test_unit_anchor.py` - Imports the anchor sibling module DIRECTLY (not via the _core facade) and
+│   │   ├── `test_unit_config.py` - Imports the config sibling module DIRECTLY (not via the _core facade) and
+│   │   ├── `test_unit_constants.py` - Imports the constants sibling module DIRECTLY (not via the _core facade) and
+│   │   ├── `test_unit_find_cmds.py` - Imports the find_cmds sibling module DIRECTLY (not via the _core facade) and
+│   │   ├── `test_unit_git_cmds.py` - Imports the git_cmds sibling module DIRECTLY (not via the _core facade) and
+│   │   ├── `test_unit_pathmatch.py` - Imports the pathmatch sibling module DIRECTLY (not via the _core facade) and
+│   │   └── `test_unit_shell_lex.py` - Imports the shell_lex sibling module DIRECTLY (not via the _core facade's
 │   ├── `audit-slashcommand.sh` - audit-slashcommand.sh
 │   ├── `auto-commit.sh` - auto-commit.sh - Stop hook: snapshot on conversation end
 │   ├── `check-todo-md-sync.py` - check-todo-md-sync.py — Session-start drift detector for todo scripts
@@ -453,6 +460,7 @@ dot-claude/
 │   ├── `test_overnight_loop_tz.py` - Verifies the overnight loop hook compares end_time correctly against the
 │   ├── `test_resolve_spec_artifacts.py` - resolver) + the static centralization lint (AC-B4 cases 1-12, task 20260530-092123)
 │   ├── `test_specialist_yield.py` - Tests use a tmp dir for the yield log and the bundled production policy file
+│   ├── `TESTING.md` - Test Topology & Runner Map (authoritative)
 │   ├── `verify-stop-spec-session-isolation.sh` - QA verification harness for stop-spec-coverage-enforce.py session isolation fix.
 │   └── `ws2_zero_literal_gate.py` - Scans the EXPLICITLY-defined load-bearing surfaces of a rendered fresh clone with
 ├── tools/
@@ -465,6 +473,7 @@ dot-claude/
 ├── `ARCHITECTURE.md` - Architecture — `.claude` Agent Operating System
 ├── `CHANGELOG.md` - Changelog
 ├── `CLAUDE.md` - Global Claude Code Configuration
+├── `conftest.py` - Root conftest — `generated` marker gate for tests/generated/.
 ├── `LICENSE` - LICENSE file
 ├── `NESTED-REPO.md` - Nested Repo Sentinel
 ├── `NOTICE` - NOTICE file

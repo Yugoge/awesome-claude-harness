@@ -122,6 +122,7 @@ set for the residue markers of §3. Path = first back-ticked token; class = seco
 | `.claude/` | `shared/infra` | Repo-identity sentinel (`.awesome-claude-harness`) that flags this repo to session hooks. |
 | `INDEX.md` | `shared/infra` | Auto-generated navigation index (do-not-hand-edit meta). |
 | `pytest.ini` | `shared/infra` | Test-runner configuration — build/CI. |
+| `conftest.py` | `shared/infra` | Pytest collection config — the `generated`-marker gate for tests/generated; build/CI. |
 | `requirements.txt` | `shared/infra` | Python dependency manifest for the harness venv — build/infra. |
 | `VERSION` | `shared/infra` | Release version marker — release meta. |
 | `tests/` | `shared/infra` | Test net (incl. generated AC skeletons + fixture strings) that supports the core; not itself the shippable harness. |

@@ -1,8 +1,8 @@
 # hooks
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-07-16T12:04:27Z*
-**Total entries**: 157
+*Last updated: 2026-07-16T16:00:50Z*
+**Total entries**: 164
 **Convention**: kebab
 
 ## Tree
@@ -72,7 +72,14 @@ hooks/
 │   ├── `test_final_sweep.sh` - Final sweep — run inline AC checks and print PASS/FAIL summary.
 │   ├── `test_git_cmd_cross_consistency.py` - Verifies that GIT_CMD_RE (hooks/pretool-bash-safety.sh),
 │   ├── `test_push_sentinel_abort.sh` - Unit test for AC1 V5: hooks/push.sh self-aborts before any real git push
-│   └── `test_runtime_guard.py` - Two layers:
+│   ├── `test_runtime_guard.py` - Two layers:
+│   ├── `test_unit_anchor.py` - Imports the anchor sibling module DIRECTLY (not via the _core facade) and
+│   ├── `test_unit_config.py` - Imports the config sibling module DIRECTLY (not via the _core facade) and
+│   ├── `test_unit_constants.py` - Imports the constants sibling module DIRECTLY (not via the _core facade) and
+│   ├── `test_unit_find_cmds.py` - Imports the find_cmds sibling module DIRECTLY (not via the _core facade) and
+│   ├── `test_unit_git_cmds.py` - Imports the git_cmds sibling module DIRECTLY (not via the _core facade) and
+│   ├── `test_unit_pathmatch.py` - Imports the pathmatch sibling module DIRECTLY (not via the _core facade) and
+│   └── `test_unit_shell_lex.py` - Imports the shell_lex sibling module DIRECTLY (not via the _core facade's
 ├── `audit-slashcommand.sh` - audit-slashcommand.sh
 ├── `auto-commit.sh` - auto-commit.sh - Stop hook: snapshot on conversation end
 ├── `check-todo-md-sync.py` - check-todo-md-sync.py — Session-start drift detector for todo scripts
