@@ -173,29 +173,15 @@ except ImportError:  # executed as a top-level script (no package context)
 # The config-file loader + STEP0 self-protection cluster (DATA_FILE_PATH,
 # REQUIRED_KEYS, _load_config, _home_tilde_variant, _config_path_variants,
 # _ANCESTOR_STOP_ROOTS, _config_ancestor_dirs, _config_or_ancestor_variants,
-# _targets_config_file) was relocated to a sibling module as of the phase-4
-# monolith split (2026-07-15). The cluster depends only on already-extracted
-# leaves (pathmatch._normalize_path, shell_lex._strip_quotes/_has_redirect_to) +
-# stdlib, so re-importing the names here keeps _core's public surface unchanged
-# (every `from ..._core import DATA_FILE_PATH` / `_targets_config_file` and every
-# internal reference — including _ANCESTOR_STOP_ROOTS, used later in _core —
-# still resolves). See docs/reference/monolith-split-plan.md.
+# _targets_config_file) re-imported here (phase-4). Dual-context import
+# (INV-3, see phase-1 block above) -- docs/reference/monolith-split-plan.md.
 #
-# DATA_FILE_PATH import-time semantics (phase-4 caveat): DATA_FILE_PATH is read
-# from the env at config's MODULE-IMPORT time (os.environ.get). Tests set the env
-# var and require a FRESH read on each guard (re)load. The package __init__
-# refreshes the guard by reloading _core (NOT its siblings), so a plain
-# `from .config import DATA_FILE_PATH` on an _core reload would re-bind the STALE
-# cached config value. Reloading config whenever _core (re)loads re-runs its
-# module-level env read — preserving the exact import-time evaluation the tests
-# depend on. This is still an import-time read, NOT a lazy/function read.
-#
-# Dual-context import (INV-3): _core loads BOTH as the lib.runtime_guard._core
-# submodule (relative) AND executed directly as a script by the runtime_guard.py
-# shim (os.execv), where there is no parent package so the relative form raises
-# ImportError. In script context sys.path[0] is this file's own directory, so the
-# absolute `config` name resolves THIS sibling module (no stdlib `config` exists,
-# and sys.path[0] precedes site-packages so a third-party `config` cannot shadow).
+# DATA_FILE_PATH reload caution (CANONICAL code-site): DATA_FILE_PATH is read
+# from the env at config's MODULE-IMPORT time. The package __init__ reloads _core
+# (NOT its siblings), so a plain `from .config import DATA_FILE_PATH` on an _core
+# reload would re-bind the STALE cached value. The `_importlib.reload(_config)`
+# below re-runs config's module-level env read on every _core (re)load, keeping
+# it an import-time (NOT lazy) read. See docs/reference/monolith-split-plan.md.
 import importlib as _importlib
 try:
     from . import config as _config
