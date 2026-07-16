@@ -175,6 +175,21 @@ DAEMON_RESTART_GRANT_HELPER="${CLAUDE_DAEMON_RESTART_GRANT_HELPER:-/root/bin/cla
 # "happy-daemon" + targets dev|jade|qijie exactly as before (byte-for-byte).
 PROTECTED_DAEMON_PREFIX="${CLAUDE_PROTECTED_DAEMON_PREFIX:-happy-daemon}"
 PROTECTED_DAEMON_TARGETS="${CLAUDE_PROTECTED_DAEMON_TARGETS:-dev|jade|qijie}"
+# ERE-safe variants of the protected-daemon identity. The PREFIX names a LITERAL local daemon
+# unit, so every ERE metacharacter ( ] [ \ . ^ $ * + ? ( ) { } | ) AND a leading '-' is escaped
+# before the value is interpolated into any `grep -E` context below (Layers 1.A/1.B and the
+# non-protected systemctl exclusion). Without this, an operator-configured prefix carrying regex
+# metacharacters (e.g. "my.daemon") would MISS or mis-extract the daemon — a catastrophe-guard
+# weakening for the retargeted case. Contract: PROTECTED_DAEMON_TARGETS is INTENTIONALLY a
+# '|'-separated alternation of literal target words (dev|jade|qijie by default); each word's
+# metacharacters are escaped while the '|' separators are PRESERVED so the alternation still
+# holds. Default values contain no metacharacters, so the escaped forms are byte-identical and
+# env-unset behavior is unchanged. All grep uses also pass `--` so a leading '-' in the value
+# can never be read as an option.
+_ere_escape_literal()  { printf '%s' "$1" | sed -e 's/[][\\.^$*+?(){}|]/\\&/g' -e 's/^-/\\-/'; }
+_ere_escape_keep_alt() { printf '%s' "$1" | sed -e 's/[][\\.^$*+?(){}]/\\&/g'; }
+PROTECTED_DAEMON_PREFIX_RE="$(_ere_escape_literal  "$PROTECTED_DAEMON_PREFIX")"
+PROTECTED_DAEMON_TARGETS_RE="$(_ere_escape_keep_alt "$PROTECTED_DAEMON_TARGETS")"
 
 # ── Helper: split compound command into subcommands ───────────────
 # Splits on && || ; and checks each subcommand independently.

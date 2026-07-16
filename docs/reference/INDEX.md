@@ -1,8 +1,8 @@
 # reference
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-07-16T13:14:26Z*
-**Total entries**: 12
+*Last updated: 2026-07-15T18:00:26Z*
+**Total entries**: 11
 **Convention**: kebab
 
 ## Tree
@@ -17,7 +17,6 @@ reference/
 ├── `monolith-split-plan.md` - Monolith Split Plan (Plan-of-Record)
 ├── `roadmap-decomposition-productization.md` - Roadmap: Monolith Decomposition + Productization
 ├── `slashcommand-quick-reference.md` - Slash Command Quick Reference
-├── `test-suite-overhaul-plan.md` - Test Suite Overhaul Plan (Plan-of-Record)
 ├── `tmp-cleanup-convention.md` - Ad-hoc scratch directory convention
 └── `venv-repair.md` - venv-repair — restoring `~/.claude/venv` when interpreter symlinks break
 ```
