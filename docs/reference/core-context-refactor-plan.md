@@ -83,16 +83,27 @@ touches how EVERY layer reads config, whereas `Context` only touches how inputs 
 ```python
 @dataclass(frozen=True)
 class Context:
-    cwd_base: Optional[str] = None          # base cwd seed; constant per evaluation
-    simple_cmds: list = field(default_factory=list)  # working set (peel yields a NEW ctx)
-    groups: list = field(default_factory=list)       # pipeline groups (P5/P6 connectivity)
-    cfg: Optional[dict] = None              # loaded config; None before STEP1 (STEP0 by design)
+    cwd_base: Optional[str]      # base cwd seed; constant per evaluation
+    simple_cmds: list            # working set (peel yields a NEW ctx)
+    groups: list                 # pipeline groups (P5/P6 connectivity)
+    cfg: Optional[dict]          # loaded config; None before STEP1 (STEP0 passes cfg=None)
 ```
+
+> **Phase-2 hardening (post-audit, 2026-07-16).** All four fields are now
+> **MANDATORY — no defaults**. An adversarial audit showed the former permissive
+> defaults (`cwd_base=None`, `simple_cmds`/`groups` `default_factory=list`,
+> `cfg=None`) let a construction that OMITS a field succeed with an empty working
+> set: a `Context` built without `groups` made `_p5_endpoint` / `_p6_prockill`
+> ABSTAIN and flipped a modeled BLOCK to a final ALLOW (the INV-6 fail-OPEN
+> hazard). Removing every default makes an incomplete construction raise
+> TypeError at build time (**fail-CLOSED**). The three existing sites are
+> behavior-preserving: the two STEP0 sites now pass `cfg=None` EXPLICITLY, and
+> the P5/P6 site already passed all four fields.
 
 | Design choice | Rationale |
 |---|---|
 | **frozen** | a Context is an immutable snapshot of one evaluation stage. The front-end peel and the STEP1 config load each build a NEW Context, never mutate one — so a Context always faithfully describes exactly one stage. |
-| **`cfg` defaults `None`** | STEP0 self-protection runs BEFORE config load and must not depend on the file it protects. A pre-config Context is `cfg=None`; the post-load Context carries the dict. |
+| **fields MANDATORY (fail-CLOSED)** | no field has a default → omitting one raises TypeError at construction, so a mis-built Context can never silently disable a guard (INV-6). `cfg` keeps its `Optional[dict]` type (it may be None for pre-config STEP0) but STEP0 passes `cfg=None` EXPLICITLY — a pre-config Context is still `cfg=None`; the post-load Context carries the dict. |
 | **`cwd_det` NOT a field** | per-command, not per-evaluation (see two-grains table). Layers derive it locally, unchanged. |
 | **pure data, zero engine import** | `context.py` imports only `dataclasses` + `typing`. No import back into `_core` → no cycle. Mirrors the `shell_lex`/`constants`/… sibling contract. |
 | **new module, not inline** | a lib module (like the six phase-1..6 siblings) — does NOT affect the top-level-script helper-count self-check. |
