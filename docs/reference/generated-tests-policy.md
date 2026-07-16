@@ -11,10 +11,20 @@ doc's earlier claim (which said every skeleton hard-stops) to the measured reali
 ## What is in `tests/generated/`
 
 The `test-writer` subagent emits one pytest skeleton per acceptance criterion
-from a cycle's `acceptance-criteria-<task_id>.json`. Each skeleton is a stub: it
-hard-stops immediately via `pytest.fail("TEST_INCOMPLETE: ...")` so a stub can
-never masquerade as a passing test. They are scaffolds a human (or a later cycle)
-fills in — not runnable assertions yet.
+from a cycle's `acceptance-criteria-<task_id>.json`. A fresh skeleton is a stub
+that hard-stops via `pytest.fail("TEST_INCOMPLETE: ...")` so it can never
+masquerade as a passing test — but **most skeletons no longer hard-stop.**
+
+**Measured reality (2026-07-16, per `test-suite-overhaul-plan.md` §1):** of the
+**449** `test_*.py` skeletons, **≈393 have been realized** into real assertions
+(the hard-stop removed as a human/cycle filled them in) and only **≈56 still
+hard-stop** by design. So the tree is a *mix* of realized tests and stubs, not a
+uniform wall of `TEST_INCOMPLETE`. (The residue caveat below counts **58** files
+bearing a `TEST_INCOMPLETE` sentinel; that grep also matches non-`test_` and
+archived files, hence the small delta from 56.) A sampled run of the realized
+files showed ≈10% bit-rot — they assert against paths/behaviors that have since
+drifted — so the realized set is **not green as-is** and cannot simply be
+un-`--ignore`d.
 
 ## Why it is excluded from the default runner
 
