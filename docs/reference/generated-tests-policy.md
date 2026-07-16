@@ -87,4 +87,40 @@ doc-sync `INDEX.md`/`README.md` and the `manifest.json` provenance ledger), and
 `git check-ignore` reports the un-pinned generated files as ignored. The files
 stay on disk and remain opt-in-runnable via the `generated` marker
 (`pytest tests/generated -m generated`) — untracking did not remove them from
-collection. Only the pinned dirs and the three management files stay tracked.
+collection. Only the pinned dirs and the three management files stay tracked. The
+un-pinned generated tree is thus **retired-from-VCS: untracked, on-disk, and
+opt-in-runnable** — it never enters the default run and only collects when the
+invocation explicitly targets `tests/generated` (or passes `--run-generated`).
+
+## Clean-reporting contract for the opt-in run (final behavior)
+
+The opt-in run `pytest tests/generated -m generated` reports **0 hard collection
+ERRORS**. Every skeleton lands in exactly one of four buckets, so the run cleanly
+separates "expected residue" from "a real regression":
+
+| Skeleton state | How it fails | Reported as | Hook in root `conftest.py` |
+|---|---|---|---|
+| Bit-rotted at **collection/import** time (missing import, renamed symbol, duplicate-basename collision, syntax error) | raises during collection, *before* any test body runs | clean **SKIP** with reason `generated skeleton bit-rotted: <error>` | `pytest_make_collect_report` (wrapper) |
+| **Incomplete** stub (`pytest.fail("TEST_INCOMPLETE: …")`) | hard-stops at runtime | **xfail** | `pytest_runtest_makereport` (wrapper) |
+| **Realized + green** | passes | **pass** | — |
+| **Realized but drifted** (asserts against changed behavior) | fails at runtime | **FAIL** — surfaced on purpose as a candidate regression | — |
+
+Why a dedicated collect-report hook: a collection/import error aborts pytest with
+`Interrupted: N errors during collection` *before* the runtime
+`TEST_INCOMPLETE → xfail` hook can ever run, so import-time bit-rot could not be
+caught by the runtime hook. `pytest_make_collect_report` wraps the collector and,
+**only for files under `tests/generated/`**, rewrites a failed collect report into
+a skip-with-reason. It is strictly scoped: a collection error anywhere else in the
+tree (`hooks/tests/`, the non-generated part of `tests/`) is left untouched and
+still surfaces as a real ERROR — the hook never masks a genuine test-tree import
+failure. It is also a no-op on the default run, which never descends into
+`tests/generated` (`pytest_ignore_collect`).
+
+Measured opt-in breakdown (2026-07-16, `pytest tests/generated -m generated -q`):
+**574 passed / 65 failed / 28 skipped / 24 xfailed, 0 collection errors** (the
+14 duplicate-basename import-mismatch collisions between the two pinned dirs
+`20260704-134650` and `20260704-225139` are now clean skips, not a collection
+abort). The 65 failures are realized-but-drifted skeletons — the exact "real
+regression" signal the opt-in run exists to surface, distinct from the expected
+skip/xfail residue. The default run (`pytest hooks/tests tests -q`) is unchanged
+and green with 0 generated items collected.
