@@ -687,17 +687,17 @@ fi
 # Anchor `(\s+|\b)` so `systemctl kill -s SIGTERM happy-daemon-dev` matches (verb
 # followed by `-s` flag, not whitespace-then-target). Stable label: daemon-restart-prohibition.
 if echo "$COMMAND" | grep -qE 'systemctl\s+(stop|restart|disable|enable|reload|kill|try-restart|reload-or-restart)(\s+|\b)' \
-   && echo "$COMMAND" | grep -qE 'happy-daemon'; then
-  # Identify the bare unit name in the command. We look for happy-daemon[suffix]
+   && echo "$COMMAND" | grep -qE "$PROTECTED_DAEMON_PREFIX"; then
+  # Identify the bare unit name in the command. We look for <prefix>[-<target>]
   # tokens; if multiple targets, the consume rejects unless grant covers all.
-  HAPPY_UNIT=$(echo "$COMMAND" | grep -oE 'happy-daemon(-(dev|jade|qijie))?' | head -1 | sed 's/\.service$//')
+  HAPPY_UNIT=$(echo "$COMMAND" | grep -oE "${PROTECTED_DAEMON_PREFIX}(-(${PROTECTED_DAEMON_TARGETS}))?" | head -1 | sed 's/\.service$//')
   HAPPY_VERB=$(echo "$COMMAND" | grep -oE 'systemctl\s+(stop|restart|disable|enable|reload|kill|try-restart|reload-or-restart)' | head -1 | awk '{print $2}')
   if [ -n "$HAPPY_UNIT" ] && check_and_consume_daemon_restart_grant "$HAPPY_UNIT" "$HAPPY_VERB"; then
     : # grant consumed — fall through to allow the command
   else
-    echo "BLOCKED: daemon-restart-prohibition — systemctl ${HAPPY_VERB:-<verb>} on ${HAPPY_UNIT:-happy-daemon-*} is FORBIDDEN" >&2
+    echo "BLOCKED: daemon-restart-prohibition — systemctl ${HAPPY_VERB:-<verb>} on ${HAPPY_UNIT:-${PROTECTED_DAEMON_PREFIX}-*} is FORBIDDEN" >&2
     echo "Command: $COMMAND" >&2
-    echo "REASON: per c3-20260504-223115, Claude must NEVER restart any happy-daemon-* by any path." >&2
+    echo "REASON: per c3-20260504-223115, Claude must NEVER restart any ${PROTECTED_DAEMON_PREFIX}-* by any path." >&2
     echo "Hint: user must run $DAEMON_RESTART_GRANT_HELPER <target> from a real TTY first." >&2
     exit 2
   fi
