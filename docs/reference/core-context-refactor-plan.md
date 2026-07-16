@@ -260,6 +260,20 @@ a real `cfg` (not `None` as in STEP0), and after the front-end peel, so `groups`
 
 `diff <(cut -f1,2 verdicts_before.txt) <(cut -f1,2 verdicts_after.txt)` → empty (verdict+label byte-identical; the only raw-line delta is the battery's random tmpdir name).
 
+### Phase-2 hardening — mandatory Context fields (fail-CLOSED, post-audit 2026-07-16)
+
+A follow-up adversarial audit of the shipped Context found its permissive field
+defaults were an INV-6 fail-OPEN latent: a construction that OMITS `groups`
+(e.g. `Context(cfg=…)`) silently succeeded with `groups=[]`, so the cross-segment
+guards `_p5_endpoint` and `_p6_prockill` (both read `ctx.groups`) ABSTAINED and a
+modeled raw-socket `POST /stop` (P5) and a `pgrep … | xargs kill` (P6) flipped from
+BLOCK to a final ALLOW. Fix: all four fields (`cwd_base`, `simple_cmds`, `groups`,
+`cfg`) are now MANDATORY (no defaults), so an incomplete construction raises
+TypeError at build time (fail-CLOSED) instead of disabling the guard. Strictly
+behavior-preserving: the two STEP0 sites now pass `cfg=None` EXPLICITLY (unchanged
+pre-config semantics) and the P5/P6 site already passed all four fields — full suite
+stays green and STEP0/P5/P6 verdicts are unchanged.
+
 ---
 
 ## Global constraints (all phases)
