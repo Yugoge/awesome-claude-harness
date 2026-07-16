@@ -218,21 +218,10 @@ except ImportError:  # executed as a top-level script (no package context)
 # The pure find/fd argv PARSERS (path-operand / fd search-dir collection, PATH/
 # NAME predicate-value extraction, and the protected-basename matcher
 # `_name_value_matches_protected`) plus their generic option/predicate tables
-# were relocated to a sibling module as of the phase-5 monolith split
-# (2026-07-15). The cluster depends only on already-extracted leaves
-# (shell_lex._strip_quotes, pathmatch._glob_to_segment_regex/_has_shell_glob) +
-# stdlib, so re-importing the names here keeps _core's public surface unchanged
-# (every `from ..._core import _find_path_operands` and every internal reference
-# -- including the STAYING `_find_destructive_target_hits` /
-# `_find_filter_exonerates_reverse`, which forward-reference the decision engine
-# and `_resolve_rel` and so remain in _core -- still resolves). See
+# re-imported here (phase-5); the forward-referencing orchestrators
+# (`_find_destructive_target_hits` / `_find_filter_exonerates_reverse`) stay in
+# _core. Dual-context import (INV-3, see phase-1 block above) --
 # docs/reference/monolith-split-plan.md.
-#
-# Dual-context import (INV-3): _core loads BOTH as the lib.runtime_guard._core
-# submodule (relative) AND executed directly as a script by the runtime_guard.py
-# shim (os.execv), where there is no parent package so the relative form raises
-# ImportError. In script context sys.path[0] is this file's own directory, so the
-# absolute `find_cmds` name resolves the sibling module.
 try:  # noqa: F401  — names re-exported for backward compatibility
     from .find_cmds import (
         _FD_OPTS_WITH_ARG,
