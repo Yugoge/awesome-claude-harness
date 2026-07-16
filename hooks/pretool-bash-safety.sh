@@ -721,7 +721,7 @@ fi
 # Layer 1.B — wrapper-class block: any wrapper invocation co-occurring with
 # protected-daemon vocabulary (PROTECTED_DAEMON_PREFIX) AND a daemon-state-disrupting
 # verb. Stable label: daemon-restart-wrapper.
-if echo "$COMMAND" | grep -qE "$PROTECTED_DAEMON_PREFIX" \
+if echo "$COMMAND" | grep -qE -- "$PROTECTED_DAEMON_PREFIX_RE" \
    && echo "$COMMAND" | grep -qE '(restart|stop|disable|enable|reload|kill|try-restart|reload-or-restart|kick|cycle|bounce|hup|HUP)' \
    && echo "$COMMAND" | grep -qE '(systemd-run|^|[[:space:]])((at|batch)\s|crontab\s|nohup\s|disown\s|watch\s|timeout\s|dbus-send|busctl|nc\s|ncat\s|eval\s|bash\s+-c|sh\s+-c|zsh\s+-c|python3?\s+-c|node\s+-[ce]|perl\s+-e|ruby\s+-e)'; then
   echo "BLOCKED: daemon-restart-wrapper — wrapper invocation co-occurring with daemon-restart vocabulary is FORBIDDEN" >&2
