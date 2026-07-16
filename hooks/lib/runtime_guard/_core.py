@@ -316,6 +316,18 @@ except ImportError:  # executed as a top-level script (no package context)
     )
 
 
+# ── Per-evaluation Context object → context.py ───────────────────────────────
+# The frozen dataclass bundling the per-evaluation inputs (cwd_base / simple_cmds
+# / groups / cfg) the decision layers thread positionally. Re-imported here
+# (dual-context, INV-3, see phase-1 block above) so _core's public surface is a
+# superset — no existing name removed. Internal engine plumbing: `evaluate` /
+# `main` signatures are unchanged. See docs/reference/core-context-refactor-plan.md.
+try:  # noqa: F401  — Context re-exported for engine plumbing
+    from .context import Context
+except ImportError:  # executed as a top-level script (no package context)
+    from context import Context  # type: ignore[no-redef]
+
+
 # ── Tokenization primitives → shell_lex.py (re-imported at top of file) ──────
 # ── Path/glob primitives → pathmatch.py (re-imported just above) ─────────────
 
@@ -1303,10 +1315,14 @@ def _step0_targets_config_redirect(sc: str, cwd: Optional[str], cwd_det: bool) -
     return False
 
 
-def _step0_mutation_anchor_hits(simple_cmds: list, idx: int, sc: str,
-                                tokens: list, cwd_base: Optional[str]) -> bool:
+def _step0_mutation_anchor_hits(ctx: "Context", idx: int, sc: str,
+                                tokens: list) -> bool:
     """HEAD-AGNOSTIC: True if this simple command MUTATES the hardcoded config
     data file, regardless of the leading wrapper/front-end head.
+
+    Reads the per-evaluation inputs (`simple_cmds`, `cwd_base`) from the shared
+    `ctx`; `idx`/`sc`/`tokens` are the per-command coordinates. This is a pure
+    relocation of how those two inputs travel — the values are identical.
 
     This is the config-self-protection mirror of the W6/W7 protected-path anchors
     (`_anchor_mutation_hits`): it scans EVERY mutation-verb basename in EXECUTABLE
@@ -1330,7 +1346,7 @@ def _step0_mutation_anchor_hits(simple_cmds: list, idx: int, sc: str,
     # of the parent config dir neuters the guard exactly like a delete of the file).
     variants = list(_config_or_ancestor_variants())
     exec_toks = _anchor_exec_tokens(tokens)
-    cwd, cwd_det = _effective_cwd_after(simple_cmds, idx, cwd_base)
+    cwd, cwd_det = _effective_cwd_after(ctx.simple_cmds, idx, ctx.cwd_base)
     cwd, cwd_det = _fold_wrapper_cwd(cwd, cwd_det, tokens)
     # find/fd with a destructive action (`-delete` / `-exec <mutation>`) against the
     # data file or an ancestor dir — `find` is in the read/inspect allowlist, so the
@@ -1641,7 +1657,13 @@ def _anchor_family_destructive_hits(sc: str, tokens: list, exec_toks: list,
     return False
 
 
-def _step0_self_protection(simple_cmds: list, cwd_base: Optional[str] = None) -> Optional[Verdict]:
+def _step0_self_protection(ctx: "Context") -> Optional[Verdict]:
+    # Read the per-evaluation inputs from the shared Context. Local aliases keep
+    # the body below a byte-for-byte behavior match (identical values, identical
+    # per-command cwd derivation) — the Context adoption is a pure relocation of
+    # how simple_cmds / cwd_base arrive, nothing else.
+    simple_cmds = ctx.simple_cmds
+    cwd_base = ctx.cwd_base
     for idx, sc in enumerate(simple_cmds):
         tokens = _safe_shlex(sc)
         if not tokens:
@@ -1695,7 +1717,7 @@ def _step0_self_protection(simple_cmds: list, cwd_base: Optional[str] = None) ->
         # is the wrapper, not the mutation verb. (The bare-head form is the
         # position-0 special case of the same scan; the legacy head-keyed
         # CONFIG_MUTATION_HEADS check is subsumed by this and removed.)
-        if _step0_mutation_anchor_hits(simple_cmds, idx, sc, tokens, cwd_base):
+        if _step0_mutation_anchor_hits(ctx, idx, sc, tokens):
             return _block("STEP0", "config self-protection: mutation of data file")
     return None
 
@@ -4487,7 +4509,10 @@ def evaluate(command: str, cwd_base: Optional[str] = None) -> Verdict:
     # ORIGINAL simple commands so a self-protection mutation hidden behind a
     # front-end is still seen by STEP0's own path-pattern scan, and additionally
     # against any front-end-peeled tails below.
-    v = _step0_self_protection(simple_cmds, cwd_base)
+    # cfg is intentionally None here — STEP0 runs BEFORE the config load and must
+    # not depend on the very file it protects. groups is carried for a faithful
+    # snapshot though STEP0 does not read it.
+    v = _step0_self_protection(Context(cwd_base=cwd_base, simple_cmds=simple_cmds, groups=groups))
     if v is not None:
         return v
 
@@ -4503,7 +4528,7 @@ def evaluate(command: str, cwd_base: Optional[str] = None) -> Verdict:
     if fe_changed:
         # re-derive STEP0 against the peeled forms so a self-protection mutation
         # behind a front-end is also analyzed by STEP0's path-pattern scan.
-        v = _step0_self_protection(peeled_flat, cwd_base)
+        v = _step0_self_protection(Context(cwd_base=cwd_base, simple_cmds=peeled_flat, groups=peeled_groups))
         if v is not None:
             return v
         simple_cmds = peeled_flat
