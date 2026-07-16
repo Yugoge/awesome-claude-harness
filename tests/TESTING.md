@@ -145,7 +145,7 @@ strip comments from `hooks/*.sh` and assert AC behavior. Run individually:
 | `tests/ws2_zero_literal_gate.py` | **LIVE — not an orphan** | Invoked by `fresh-clone-bootstrap-smoke.sh:489`; pytest skips it (no `test_` prefix). **Never prune.** |
 | `tests/fixtures/` | Live fixtures | Consumed by agents (`canary-tool-policy.v1.json`, README, INDEX) |
 | `tests/instructions/` | AI-instruction guides | `execution-guide.md`, `validation-guide.md` — consumed by test agents |
-| `tests/cycle1-baseline-20260507-142952/` | **DEAD snapshot** | 0 runner refs; prune candidate (Phase 1 — orchestrator executes) |
+| `tests/cycle1-baseline-20260507-142952/` | **DEAD snapshot** | `symlink_test.py` matches pytest's `*_test.py` suffix, so it **was** import-collected — but it contributed **0 test items** and the dir has 0 inbound runner refs. Prune-safe because it's a dead snapshot losing no assertions, **not** because pytest "never collected" it. Prune candidate (Phase 1 — orchestrator executes). |
 | `tests/reports/` dated artifacts | **Stale output** | `20260107`-dated reports; 0 runner refs; prune candidates |
 | `tests/cp-state-bypass-test-20260507-191743.py` | **True orphan** | 0 refs anywhere; not `test_`-prefixed; prune candidate |
 
