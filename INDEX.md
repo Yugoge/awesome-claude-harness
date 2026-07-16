@@ -1,8 +1,8 @@
 # dot-claude
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-07-15T20:33:18Z*
-**Total entries**: 477
+*Last updated: 2026-07-16T14:09:08Z*
+**Total entries**: 467
 **Convention**: kebab
 
 ## Tree
@@ -37,7 +37,7 @@ dot-claude/
 │   ├── `checkpoint.md` - Checkpoint Command
 │   ├── `clean.md` - Aggressive project cleanup - normalize docs structure, archive everything, delete one-time scripts/tests. Pass --codex to enable adversarial codex consultation on cleanliness-inspector and style-inspector; default is self-review only.
 │   ├── `close.md` - Close the current dev cycle (agent infers task-id from conversation). QA evaluates Workflow Integrity bullets and returns CLOSE YES/NO. Pass --codex to enable multi-round QA-codex debate; default is QA-only single-round assessment. Append --force to skip the debate entirely.
-│   ├── `codex.md` - Delegate a task to OpenAI Codex CLI (gpt-5.5, xhigh reasoning) for a second opinion or parallel coding
+│   ├── `codex.md` - Delegate a task to OpenAI Codex CLI (gpt-5.6-sol, xhigh reasoning) for a second opinion or parallel coding
 │   ├── `commit.md` - Commit session changes via changelog-analyst subagent
 │   ├── `dev-command.md` - Enhanced development workflow with BA subagent delegation, command development best practices, Three-Party Architecture, and comprehensive automation patterns
 │   ├── `dev-overnight.md` - Autonomous overnight development loop - continuously explores codebase, finds issues, fixes them, and repeats until end-time
@@ -62,6 +62,7 @@ dot-claude/
 │   │   ├── `monolith-split-plan.md` - Monolith Split Plan (Plan-of-Record)
 │   │   ├── `roadmap-decomposition-productization.md` - Roadmap: Monolith Decomposition + Productization
 │   │   ├── `slashcommand-quick-reference.md` - Slash Command Quick Reference
+│   │   ├── `test-suite-overhaul-plan.md` - Test Suite Overhaul Plan (Plan-of-Record)
 │   │   ├── `tmp-cleanup-convention.md` - Ad-hoc scratch directory convention
 │   │   └── `venv-repair.md` - venv-repair — restoring `~/.claude/venv` when interpreter symlinks break
 │   └── `THREAT-MODEL.md` - Threat Model — awesome-claude-harness
@@ -369,14 +370,6 @@ dot-claude/
 │   ├── `overnight-spec.md` - Spec: <issue_description>
 │   └── `spec-template.md` - Spec: <issue_description>
 ├── tests/
-│   ├── cycle1-baseline-20260507-142952/
-│   │   ├── `realpath_audit.py` - Audit realpath behavior in the guard for the codex finding.
-│   │   ├── `run_ac1.py` - AC-1 verification: pretool-cp-state-write-guard.py.
-│   │   ├── `run_ac1_v2.py` - AC-1 verification v2: pretool-cp-state-write-guard.py with correct fixture paths.
-│   │   ├── `run_ac2.py` - AC-2 verification: subagentstop-cp-enforce.py orphan finalization.
-│   │   ├── `run_ac3.py` - AC-3 verification: agent_resolver.py inactive cp-state non-authoritative + collision fail-closed.
-│   │   ├── `setup_fixtures.py` - Create test fixtures via Python (Bash heredoc/echo to cp-state is blocked by hooks).
-│   │   └── `symlink_test.py` - Test codex's symlink/realpath finding for AC-1 guard hook.
 │   ├── fixtures/
 │   │   └── `canary-tool-policy.v1.json` - JSON config: _fixture, _purpose, _contract, policy_version, default_action
 │   ├── generated/
@@ -433,10 +426,7 @@ dot-claude/
 │   │   ├── `execution-guide.md` - AI Test Execution Guide
 │   │   └── `validation-guide.md` - AI-Driven Validation Guide
 │   ├── reports/
-│   │   ├── `completion-test-20260107-104018.md` - Test Execution Completion Report
-│   │   ├── `edge-case-analysis.json` - JSON config: analysis_timestamp, repository, total_commits_analyzed, edge_cases_found, analysis_period
-│   │   ├── `execution-report-test-20260107-095503.json` - JSON config: request_id, timestamp, executor
-│   │   └── `execution-report-test-20260107-104018.json` - JSON config: request_id, timestamp, executor
+│   │   └── `edge-case-analysis.json` - JSON config: analysis_timestamp, repository, total_commits_analyzed, edge_cases_found, analysis_period
 │   ├── score-inject-contract/
 │   │   ├── `runtime-verify.sh` - Description: Runtime verifier for the 4-field score-injection echo contract.
 │   │   └── `test-inject-branches.sh` - Description: Verify scripts/score-inject.sh emits INJECTION_PROOF block with
