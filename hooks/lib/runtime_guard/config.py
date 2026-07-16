@@ -1,15 +1,11 @@
 #!/usr/bin/env python3
 """Config-file loading and STEP0 self-protection for the protected-runtime guard.
 
-The config-file loader + config-self-protection cluster split out of _core.py in
-the phase-4 monolith decomposition (2026-07-15). It sits above the phase-1/2/3
-leaves: it imports shell_lex (`_strip_quotes`, `_has_redirect_to`) and pathmatch
-(`_normalize_path`) plus the stdlib and references nothing from _core, so _core
-imports these names back at load time without a circular dependency. Relocating
-them here leaves _core's public surface identical (every
-`from ..._core import _load_config` / `DATA_FILE_PATH` and every internal
-reference — including `_ANCESTOR_STOP_ROOTS`, used later in _core — still
-resolves) — see docs/reference/monolith-split-plan.md.
+Depends on shell_lex (`_strip_quotes`, `_has_redirect_to`) + pathmatch
+(`_normalize_path`) + stdlib; references nothing from _core. See
+docs/reference/monolith-split-plan.md for the decomposition rationale (incl. the
+`_ANCESTOR_STOP_ROOTS` cluster-completion move and the DATA_FILE_PATH import-time
+reload contract) and the INV-3 dual-context import contract.
 
 Scope: the single generic `DATA_FILE_PATH` (env-overridable, read at MODULE-IMPORT
 time so a test that sets the env then reloads the guard sees the fresh path),
@@ -17,10 +13,7 @@ time so a test that sets the env then reloads the guard sees the fresh path),
 self-protection helpers (`_home_tilde_variant`, `_config_path_variants`,
 `_config_ancestor_dirs`, `_config_or_ancestor_variants`, `_targets_config_file`)
 that key on the hardcoded path — NOT on data loaded from the file they protect.
-
-DATA_FILE_PATH is evaluated at import time; _core reloads THIS module on every
-(re)load so the env read stays import-time (see _core's re-import site). ZERO
-project identifiers beyond the generic POSIX system/home roots the matcher needs.
+ZERO project identifiers beyond the generic POSIX system/home roots the matcher needs.
 """
 
 from __future__ import annotations
@@ -29,11 +22,9 @@ import json
 import os
 from typing import Optional
 
-# _targets_config_file matches a candidate token / redirect against the protected
-# config-path variants, so it needs the phase-1 quote stripper + redirect scanner
-# and the phase-3 path normalizer. Dual-context import (INV-3): config loads BOTH
-# inside the lib.runtime_guard package (relative) AND as a sibling of the
-# directly-executed _core.py script (absolute, where sys.path[0] is this dir).
+# _targets_config_file needs the phase-1 quote stripper + redirect scanner and
+# the phase-3 path normalizer. Dual-context import (INV-3) --
+# see docs/reference/monolith-split-plan.md.
 try:
     from .shell_lex import _has_redirect_to, _strip_quotes
     from .pathmatch import _normalize_path

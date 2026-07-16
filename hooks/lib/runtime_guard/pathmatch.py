@@ -1,23 +1,16 @@
 #!/usr/bin/env python3
 """Path-normalization and segment-boundary glob matching for the guard.
 
-The path/glob matching family split out of _core.py in the phase-3 monolith
-decomposition (2026-07-15). This module sits one level above the phase-1/2
-leaves: it imports only shell_lex (`_strip_quotes`) plus the stdlib and
-references nothing from _core, so _core imports these names back at load time
-without a circular dependency. Relocating them here leaves _core's public
-surface identical (every `from ..._core import _path_matches_any` and every
-internal call still resolves) -- see docs/reference/monolith-split-plan.md.
+Depends only on shell_lex (`_strip_quotes`) + stdlib; references nothing from
+_core. See docs/reference/monolith-split-plan.md for the decomposition rationale
+(incl. why `_mutation_cand_hits` stays in _core) and the INV-3 dual-context
+import contract.
 
 Scope: `$HOME`/`~` expansion, logical path normalization, glob->segment-boundary
 regex translation, shell-glob detection / parent extraction, and the
 protected-glob intersection predicates (`_path_matches_any`, `_path_under_any`,
 the `_any_token_*` token scanners) -- the shared matching layer every downstream
 destructive-command analyzer calls.
-
-`_mutation_cand_hits` deliberately STAYS in _core: it forward-references
-`_destructive_root_contains_protected` (defined later in the decision engine),
-so lifting it here would invert the dependency and create an import cycle.
 ZERO project identifiers.
 """
 
@@ -27,10 +20,8 @@ import os
 import re
 from typing import Optional
 
-# Shell-command lexing primitives live in the phase-1 sibling module; only the
-# quote stripper is needed here. Dual-context import (INV-3): pathmatch loads
-# BOTH inside the lib.runtime_guard package (relative) AND as a sibling of the
-# directly-executed _core.py script (absolute, where sys.path[0] is this dir).
+# Only the phase-1 quote stripper is needed here. Dual-context import (INV-3) --
+# see docs/reference/monolith-split-plan.md.
 try:
     from .shell_lex import _strip_quotes
 except ImportError:  # executed under the top-level-script shim (no package)

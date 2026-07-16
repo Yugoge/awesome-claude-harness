@@ -1,8 +1,8 @@
 # runtime_guard
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-07-15T23:49:32Z*
-**Total entries**: 8
+*Last updated: 2026-07-16T10:19:04Z*
+**Total entries**: 9
 **Convention**: kebab
 
 ## Tree
@@ -10,12 +10,13 @@
 runtime_guard/
 ├── `__main__.py` - Package entry-point so `python -m lib.runtime_guard` still works.
 ├── `_core.py` - This module contains ZERO project identifiers. Every project-specific name
-├── `config.py` - The config-file loader + config-self-protection cluster split out of _core.py in
-├── `constants.py` - Generic verb / keyword / exec-front-end lookup tables split out of _core.py
-├── `find_cmds.py` - The find/fd command-family parsing leaves split out of _core.py in the phase-5
-├── `git_cmds.py` - The git command-family parsing leaves split out of _core.py in the phase-5
-├── `pathmatch.py` - The path/glob matching family split out of _core.py in the phase-3 monolith
-└── `shell_lex.py` - Pure text tokenizers split out of _core.py in the phase-1 monolith
+├── `anchor.py` - The cleanly-extractable leaf subset of the HEAD-AGNOSTIC P0 anchor scan
+├── `config.py` - Depends on shell_lex (`_strip_quotes`, `_has_redirect_to`) + pathmatch
+├── `constants.py` - Dependency LEAF: defines only literal frozenset/dict constants, imports nothing,
+├── `find_cmds.py` - Depends on shell_lex (`_strip_quotes`) + pathmatch (`_glob_to_segment_regex`,
+├── `git_cmds.py` - Depends on shell_lex (`_strip_quotes`) + pathmatch (`_expand_leading_home`) +
+├── `pathmatch.py` - Depends only on shell_lex (`_strip_quotes`) + stdlib; references nothing from
+└── `shell_lex.py` - Dependency LEAF: imports only the stdlib, references nothing from _core
 ```
 <!-- /AUTO:index-stats -->
 
