@@ -1314,8 +1314,9 @@ Development completed successfully!
 **Codex-native artifact postcondition (hard check before completion)**:
 
 Before `/dev` or `/redev` may be treated as complete, the Codex harness MUST validate the resolved `<task-id>` against the canonical same-task artifacts on disk:
-- `docs/dev/ticket-<task-id>.md`, `context-<task-id>.json`, `dev-report-<task-id>.json`, `qa-report-<task-id>.json`, and `completion-<task-id>.md` all exist and are non-empty where applicable.
-- JSON artifacts have top-level `request_id` and `task_id` exactly equal to `<task-id>`.
+- **Single-lane cycle (N == 1):** `docs/dev/ticket-<task-id>.md`, `context-<task-id>.json`, `dev-report-<task-id>.json`, `qa-report-<task-id>.json`, and `completion-<task-id>.md` all exist and are non-empty where applicable.
+- **Fan-out cycle (N > 1, per the Requirement Decomposition & Fan-Out step):** completion is satisfied by the per-lane lane-suffixed set — for EACH lane, `ticket-<task-id>-<lane>.md`, `context-<task-id>-<lane>.json`, `dev-report-<task-id>-<lane>.json`, and `qa-report-<task-id>-<lane>.json` exist and are non-empty — PLUS the canonical Step-11 aggregate `dev-report-<task-id>.json` at the parent task-id AND the single parent `completion-<task-id>.md`. A missing canonical (singular) `ticket-<task-id>.md` / `context-<task-id>.json` / `qa-report-<task-id>.json` MUST NOT block a fan-out cycle when the per-lane set is complete and every lane's QA passed; for N > 1 the canonical parent chain IS the aggregate `dev-report-<task-id>.json` + parent `completion-<task-id>.md`, and the parent `completion-<task-id>.md` indexes every lane's ticket/context/dev-report/qa-report.
+- JSON artifacts have top-level `request_id` and `task_id` exactly equal to their own artifact id: the canonical (non-lane-suffixed) artifacts equal `<task-id>`; each lane-suffixed artifact equals `<task-id>-<lane>`.
 - `dev-report-<task-id>.json` contains nested `dev.status == "completed"` plus nested `dev.files_modified` and `dev.files_created` arrays; top-level `status` alone does not count.
 - `qa-report-<task-id>.json` contains nested `qa.status == "pass"`; top-level `status` or `verdict` alone does not count.
 - If `claude_code_required = true`, context/report metadata must record that flag or a structured `claude_code_consult` failure/unavailable status.
