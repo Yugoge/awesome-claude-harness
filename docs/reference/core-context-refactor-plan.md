@@ -211,6 +211,46 @@ two `evaluate()` sites, and has ZERO external importers — the tests exercise i
 
 ---
 
+## Phase 2 — DONE (2026-07-16): cross-segment pair (`_p5_endpoint` + `_p6_prockill`)
+
+The cleanest coarse-Context demo after STEP0: the two cross-segment primitives that
+operate on pipeline GROUPS. Both took EXACTLY `(groups, cfg)` — no per-command
+derivation, no other per-evaluation input — so the whole cluster reads its inputs from a
+single post-config Context. Both run AFTER the STEP1 config load, so the Context carries
+a real `cfg` (not `None` as in STEP0), and after the front-end peel, so `groups` /
+`simple_cmds` are the CURRENT working set (a fresh snapshot, never a stale pre-peel one).
+
+| Field | Value |
+|---|---|
+| Module | `hooks/lib/runtime_guard/context.py` UNCHANGED — the `groups` + `cfg` fields shipped in Phase 1 already carry everything P5/P6 read; no new field needed |
+| Functions adopted | `_p5_endpoint(ctx)` (was `(groups, cfg)`), `_p6_prockill(ctx)` (was `(groups, cfg)`) |
+| Read pattern | each binds local aliases `groups = ctx.groups` / `cfg = ctx.cfg` immediately after the docstring (byte-for-byte body match below — mirrors the Phase-1 STEP0 alias style) |
+| Call-site change | evaluate()'s P5+P6 block builds ONE post-config `Context(cwd_base=…, simple_cmds=…, groups=…, cfg=cfg)` (`p5p6_ctx`) and orders both layers over it. cfg is the loaded config (non-None, guaranteed by the STEP1 fail-closed return above); groups/simple_cmds reflect any front-end peel |
+| Why ONE context for both | P5 and P6 are adjacent in evaluate() with NO intervening mutation of groups/cfg/simple_cmds/cwd_base, so a single snapshot is complete + consistent for both — no need to rebuild between them |
+| STAYED positional | the P5/P6 leaf helpers (`_protected_proc_tokens(cfg)`, `_selector_overlaps_protected`, `_is_kill_executor`, `_endpoint_path_in`, …) keep their existing signatures — they take already-extracted scalars/sub-lists, not per-evaluation inputs, so they are outside the Context grain (same boundary discipline as Phase 1's STEP0 leaves) |
+| Public surface | UNCHANGED — only the two internal `_pN` signatures + their evaluate() call sites changed; no name added or removed (`_p5_endpoint` / `_p6_prockill` still importable; `Context` already present from Phase 1) |
+| Diff | `_core.py`: +18 / −6 (2 signatures + 2×3 alias/comment lines + the call-site Context construction). `context.py`: 0 (no change) |
+| Result | INV-1 ✓ (755→755, no new fail/skip) · INV-2 ✓ (surface unchanged; `_p5_endpoint`/`_p6_prockill`/`evaluate`/`Context` all importable) · INV-3 ✓ (submodule path exercised by the 755 suite; context.py imports stdlib only → no cycle) · INV-4 ✓ (17/17 verdicts byte-identical, incl. P5 ×2 + P6 ×3 BLOCK still BLOCK, benign P5/P6 still ALLOW) · INV-5 ✓ (context.py untouched, clean) · INV-6 ✓ (post-config Context carries the REAL loaded `cfg` — no `None` reaching a post-STEP1 layer; fresh post-peel `groups`) · INV-7 ✓ (pure relocation — `ctx.groups`/`ctx.cfg` hold byte-for-byte what the positional params held; no threshold/branch changed) |
+
+### Phase-2 verdict-invariance battery (INV-4 evidence)
+
+| Family | Command (representative) | Verdict (before == after) |
+|---|---|---|
+| **P5 endpoint (refactored)** | `printf 'POST /stop …' \| nc 127.0.0.1 8080` (raw-socket, upstream path) · `curl -s http://127.0.0.1:8080/stop` (HTTP, own argv) | BLOCK ×2 |
+| **P5 benign (refactored)** | `curl …/health \| grep /stop` (endpoint text only downstream) | ALLOW |
+| **P6 prockill (refactored)** | `kill $(pgrep happy-daemon)` (cmd-subst) · `pkill -f happy-daemon` (name-match verb) · `pgrep -f happy-daemon \| xargs kill` (xargs) | BLOCK ×3 |
+| **P6 benign (refactored)** | `kill 1234` (bare PID, no selector mechanism) | ALLOW |
+| Launch (P0/P1) | `happy daemon start` | BLOCK |
+| Service (P2) | `systemctl restart happy-daemon` | BLOCK |
+| STEP0 config | `rm -f <datafile>` · `echo x > <datafile>` | BLOCK ×2 |
+| Destructive find/git | `find <protected>/dist -name '*.mjs' -delete` · `git checkout -- <protected>/dist/index.mjs` | BLOCK ×2 |
+| Build (P8) | `yarn workspace happy build` | BLOCK |
+| ALLOW | `echo hello world` · `git status` · `ls -la packages` | ALLOW ×3 |
+
+`diff <(cut -f1,2 verdicts_before.txt) <(cut -f1,2 verdicts_after.txt)` → empty (verdict+label byte-identical; the only raw-line delta is the battery's random tmpdir name).
+
+---
+
 ## Global constraints (all phases)
 
 - Edit `_core.py` + the new `context.py` (later: `policy.py`) ONLY. Do **not** hand-edit
