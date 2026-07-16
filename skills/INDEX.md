@@ -1,7 +1,7 @@
 # skills
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-06-15T10:20:32Z*
+*Last updated: 2026-07-16T20:53:54Z*
 **Total entries**: 21
 **Convention**: kebab
 
@@ -21,10 +21,10 @@ skills/
 ├── ui-contextual-heuristics/
 │   └── `SKILL.md` - Five LLM-driven contextual accessibility insights that axe cannot detect (heading hierarchy, link text, focus order, color reliance, decorative-as-interactive). MUST receive axe findings as input and dedup against them. Use during ui-specialist Phase 6 (Accessibility) AFTER ui-axe-injector.
 ├── ui-shared/
-│   ├── `anti-pattern-catalog.yml` - yml config
-│   ├── `report-schema.json` - json config
-│   ├── `review-phases.yml` - yml config
-│   └── `rule-map.json` - json config
+│   ├── `anti-pattern-catalog.yml` - YAML config: rules
+│   ├── `report-schema.json` - Schema for the ui-specialist subagent's final JSON report. Implements spec-20260426-080555 section 5.5 (6 channels) + 5.11 (hard_defect vs taste_heuristic) + 5.15 (skill outputs) + double-defense severity hard-cap on aesthetic_findings.
+│   ├── `review-phases.yml` - YAML config: phase_order, phases
+│   └── `rule-map.json` - JSON config: $schema_version, meta, rules
 ├── ui-state-matrix/
 │   └── `SKILL.md` - Verify presence of 7 interactive states (default / hover / focus / active / disabled / loading / error / success) on key interactive elements. Returns deterministic state.* findings + state_coverage_pct + not_applicable[]. Use during ui-specialist Phase 4 (Interactive Element Visual Testing).
 └── ui-token-conformance/
