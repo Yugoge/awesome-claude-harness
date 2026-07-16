@@ -1,7 +1,7 @@
 # runtime_guard
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-07-16T10:10:01Z*
+*Last updated: 2026-07-16T10:10:11Z*
 **Total entries**: 8
 **Convention**: kebab
 
@@ -14,7 +14,7 @@ runtime_guard/
 ├── `constants.py` - Dependency LEAF: defines only literal frozenset/dict constants, imports nothing,
 ├── `find_cmds.py` - The find/fd command-family parsing leaves split out of _core.py in the phase-5
 ├── `git_cmds.py` - The git command-family parsing leaves split out of _core.py in the phase-5
-├── `pathmatch.py` - The path/glob matching family split out of _core.py in the phase-3 monolith
+├── `pathmatch.py` - Depends only on shell_lex (`_strip_quotes`) + stdlib; references nothing from
 └── `shell_lex.py` - Dependency LEAF: imports only the stdlib, references nothing from _core
 ```
 <!-- /AUTO:index-stats -->
