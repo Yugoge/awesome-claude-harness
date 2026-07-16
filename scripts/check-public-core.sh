@@ -132,6 +132,7 @@ HARD_MARKERS=(
 PARAM_MARKERS=(
   'happy-web-dev'                    # CLAUDE_DEV_CONTAINERS default
   '/root/bin/claude-allow-restart'  # CLAUDE_DAEMON_RESTART_GRANT_HELPER default
+  'happy-daemon'                     # CLAUDE_PROTECTED_DAEMON_PREFIX default
 )
 
 # public-core pathspecs, excluding this script (it names the markers by necessity).
