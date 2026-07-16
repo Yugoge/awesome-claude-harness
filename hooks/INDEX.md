@@ -1,8 +1,8 @@
 # hooks
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-07-15T15:12:07Z*
-**Total entries**: 150
+*Last updated: 2026-07-16T12:04:27Z*
+**Total entries**: 157
 **Convention**: kebab
 
 ## Tree
@@ -27,7 +27,14 @@ hooks/
 ├── lib/
 │   ├── runtime_guard/
 │   │   ├── `__main__.py` - Package entry-point so `python -m lib.runtime_guard` still works.
-│   │   └── `_core.py` - This module contains ZERO project identifiers. Every project-specific name
+│   │   ├── `_core.py` - This module contains ZERO project identifiers. Every project-specific name
+│   │   ├── `anchor.py` - The cleanly-extractable leaf subset of the HEAD-AGNOSTIC P0 anchor scan
+│   │   ├── `config.py` - Depends on shell_lex (`_strip_quotes`, `_has_redirect_to`) + pathmatch
+│   │   ├── `constants.py` - Dependency LEAF: defines only literal frozenset/dict constants, imports nothing,
+│   │   ├── `find_cmds.py` - Depends on shell_lex (`_strip_quotes`) + pathmatch (`_glob_to_segment_regex`,
+│   │   ├── `git_cmds.py` - Depends on shell_lex (`_strip_quotes`) + pathmatch (`_expand_leading_home`) +
+│   │   ├── `pathmatch.py` - Depends only on shell_lex (`_strip_quotes`) + stdlib; references nothing from
+│   │   └── `shell_lex.py` - Dependency LEAF: imports only the stdlib, references nothing from _core
 │   ├── `agent_resolver.py` - Refactored from pretool-subagent-code-block.py::_find_agent_type so that
 │   ├── `allowlist.py` - Single source of truth for grant-read, grant-match, and grant-consume
 │   ├── `bash_context_strip.py` - This is deliberately NOT a full shell parser.  It only computes a conservative
