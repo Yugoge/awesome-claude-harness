@@ -20,25 +20,28 @@ This command uses multi-round inquiry to fully understand requirements, then orc
 
 **BA-Delegated Orchestration Pattern**:
 ```
-User Requirement (may be vague)
+User Requirement (may be vague; MAY carry multiple requirements)
   ↓
 Quick parse of $ARGUMENTS
   ↓
-Delegate to BA subagent (analysis + context building)
+Decompose $ARGUMENTS into N coverage-mapped one-issue lanes   (N == 1 ⇒ single-lane no-op)
   ↓
-BA clarification loop (if BA needs user input, max 3 rounds)
+── per-lane fan-out: N parallel lanes, one issue each, within ONE parent cycle ──
+     Step 4   Delegate to BA subagent      — dispatch per lane   → stage barrier
+     Step 5   BA clarification loop         — lane-local (max 3 rounds)
+     Step 6   Validate BA output           — per lane            → stage barrier
+     Step 7   QA validates BA conclusions  — per lane            → stage barrier
+     Step 8   BA-QA iteration              — retry affected lanes → stage barrier
+     Step 10  Delegate to dev subagent     — dispatch per lane   → stage barrier
+     Step 13  Delegate to QA subagent      — dispatch per lane   → stage barrier
+     Step 16  Iteration                    — retry failed lanes only (lane-local)
+── end fan-out band ──
   ↓
-Validate BA output (ba-spec + context JSON)
+Step 11  Aggregate lane-suffixed dev-reports → ONE canonical dev-report  (single aggregation join)
   ↓
-QA validates BA conclusions (analysis quality check)
+IF any lane's QA fails → Refine that lane's context → Iterate (lane-local)
   ↓
-Delegate to dev subagent (implementation)
-  ↓
-Delegate to QA subagent (verification)
-  ↓
-IF QA fails → Refine context → Iterate
-  ↓
-IF QA passes → Generate completion report
+IF all lanes pass → Generate ONE completion report   (one parent cycle / same cycle)
   ↓
 Emit spec continuation or temp closure update
 ```
@@ -56,6 +59,7 @@ Emit spec continuation or temp closure update
   heading to `/close` uses a compact temp update.
 
 **Orchestrator Dispatch Model**:
+- A single `/dev` cycle MAY carry multiple requirements. The orchestrator decomposes them and fans them out to N parallel one-issue lanes within the SAME cycle — see the **Requirement Decomposition & Fan-Out** section below. Multiplicity alone MUST NOT cause refusal or the creation of separate cycles; genuine per-lane safety/hard-contract violations remain enforceable for the affected lane only.
 - N independent tasks → dispatch N subagents **in parallel**, one per task — this is the standard multi-task path
 - 1 task → 1 subagent (sequential is only correct when there is genuinely one task)
 - NEVER bundle multiple issues into a single subagent prompt
@@ -65,6 +69,34 @@ Emit spec continuation or temp closure update
 - Each individual subagent invocation handles exactly ONE issue/task
 - BA analyzes ONE requirement, Dev implements ONE fix, QA verifies ONE fix
 - Multitasking within a single subagent is forbidden regardless of how many subagents are running
+
+---
+
+## Requirement Decomposition & Fan-Out
+
+A single `/dev` cycle MAY carry more than one requirement. When it does, the orchestrator fans the requirements out to N parallel one-issue lanes within the SAME cycle — it does NOT reject the cycle, re-slice it into separate `/dev` invocations, or bundle multiple issues into one subagent. **Multiplicity alone MUST NOT cause refusal or the creation of separate cycles; multiplicity alone is a routing condition, never a contract violation. Decompose all requirements into per-issue lanes within the same cycle. Genuine safety or hard-contract violations remain enforceable for the affected lane only.**
+
+**Decompose $ARGUMENTS into a coverage-mapped lane set.** First decompose `$ARGUMENTS` into a coverage-mapped requirement set `requirements[] = [{requirement_id, text}]`, where N = the number of separately-requested, independently-verifiable OUTCOMES. Shared constraints, exclusions, and implementation steps attach to the lanes as context — they do NOT become lanes. Build a coverage map that ties every requested outcome to exactly ONE `requirement_id`, with no omissions and no duplicates. Assign each lane a short stable suffix (`-a`/`-b`/`-c`, or `-r01`/`-r02`) consistent with the existing `dev-report-<task-id>-<worker>.json` worker convention.
+
+**Fan out over the pipeline stages.** Steps 4, 6, 7, 8, 10, 13, 16 iterate over the lane set. For each lane in the lane set, dispatch exactly ONE subagent per lane in a single parallel batch; then wait at a stage barrier before advancing to the next stage; and keep clarification and retry outcomes lane-local, so a clarifying or failing lane never blocks or re-runs its siblings. The dispatch / validate / retry ACTION at each stage is governed by this lane iterator (bound to `lane.text` / `requirement_id` and lane-suffixed I/O); there is no unconditional singular whole-cycle dispatch path when N > 1. Per-stage semantics differ:
+
+- **Step 4 (BA)** — dispatch exactly ONE BA per lane, bound to `lane.text` / `requirement_id`, writing lane-suffixed artifacts.
+- **Step 6 (Validate BA output)** — validate every lane's BA artifacts.
+- **Step 7 (QA-validates-BA)** — dispatch exactly ONE QA per lane.
+- **Step 8 (BA-QA iteration loop)** — retry only the affected lanes, then re-converge at the stage barrier.
+- **Test-Writer pre-dispatch** — conditional, dispatched per applicable lane only.
+- **Step 10 (Dev)** — dispatch exactly ONE Dev per lane, bound to `lane.text` / `requirement_id`, writing lane-suffixed artifacts.
+- **Step 11 (Aggregate)** — ONE parent-level aggregate join AFTER the barrier that unions the lane-suffixed dev-reports into the canonical singular `dev-report-<session>.json`; this is NOT a per-lane dispatch.
+- **Step 13 (QA)** — dispatch exactly ONE QA per lane.
+- **Step 16 (Iteration)** — retry only the failed lanes (lane-local).
+
+**Lane-authoritative scope (no bundle re-detection).** Each lane is given its assigned requirement `text` as the authoritative execution scope. The full `user-requirement-<session>.md` document is passed to every lane as parent provenance only — never as the lane's execution scope — so a fanned-out lane never re-reads the whole bundle and re-detects multiplicity.
+
+**Lane-suffixed artifacts under one parent session.** Every lane writes lane-suffixed artifacts (`ticket-<session>-<lane>.md`, `context-<session>-<lane>.json`, `dev-report-<session>-<lane>.json`, and the per-lane QA reports) under ONE parent `DEV_SESSION_ID`. Lane-suffixed reports are aggregated once via Step 11 into the canonical singular `dev-report-<session>.json`, and the cycle emits ONE parent completion report — never a new cycle or session per lane.
+
+**`multi_issue_fanout_requested` routing handler (routing-only, non-terminal).** A BA/Dev subagent returns `status: multi_issue_fanout_requested`, and a QA subagent returns `verdict: multi_issue_fanout_requested`, with payload `{issues: [{requirement_id, text}]}` when it is handed a bundled multi-issue prompt. On receipt the orchestrator treats it as a recognized nonterminal routing enum, not a failure: route `multi_issue_fanout_requested` by re-dispatching each enumerated issue exactly once as its own lane within the same parent cycle (no new session, no user prompt), reusing the decomposition above. This signal is never mapped to `contract_violation_refused`.
+
+**Degenerate single-lane case (N == 1).** When N == 1 the flow degenerates to today's single-lane path with no behavior change: the fan-out wrapper is a no-op for a single requirement, and existing single-requirement cycles are unaffected.
 
 ---
 
