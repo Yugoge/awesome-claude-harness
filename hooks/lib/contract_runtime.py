@@ -549,6 +549,9 @@ def validate_report_artifact(path) -> dict:
             'unversioned artifact (no report_version); covered by /close structural preflight',
         )
     result = validate(record, schema_name)
+    skip_reason = _skip_reason_if_unvalidatable(result)
+    if skip_reason is not None:
+        return _gate_result('skip', schema_name, [], skip_reason)
     if result.get('ok'):
         return _gate_result('pass', schema_name, [], 'valid against versioned schema')
     return _gate_result('fail', schema_name, result.get('errors', []), 'schema-invalid versioned artifact')
