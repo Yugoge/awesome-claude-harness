@@ -1,8 +1,8 @@
 # scripts
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-07-16T14:18:33Z*
-**Total entries**: 115
+*Last updated: 2026-07-15T18:00:26Z*
+**Total entries**: 113
 **Convention**: kebab
 
 ## Tree
@@ -45,8 +45,6 @@ scripts/
 │   ├── `site-navigate.py` - Python script
 │   ├── `spec.py` - Mirrors the ask.py structure in the knowledge-system scripts/todo directory
 │   └── `test.py` - Preloaded TodoList for /test workflow
-├── `_qa_neg_a.sh` - QA control A: accepted env-default occurrence only — should PASS.
-├── `_qa_neg_b.sh` - QA control: ONLY an accepted env-default occurrence — should PASS (not over-eager).
 ├── `aggregate-dev-report.py` - Scans docs/dev/ for per-worker shard dev-reports matching a given task-id,
 ├── `aggregate-permissions.py` - Usage: aggregate-permissions.py <qa-glob-or-dir> [pipelines.json]
 ├── `analyze-folder-history.sh` - Description: Analyze Git history for folder to discover file creation patterns
