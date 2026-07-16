@@ -8,19 +8,34 @@ short-lived authorization token consumed by
 
 The script writes a JSON file at
 `<output-dir>/claude-commit-grant-<sid>-<nonce>.json` containing:
-  - task_id    : --task-id argument (REQUIRED)
-  - sid        : --sid argument OR CLAUDE_SESSION_ID env var
-  - nonce      : 16-char hex (secrets.token_hex(8))
-  - created_at : ISO-8601 timezone-aware UTC at write time
-  - expires_at : created_at + GRANT_TTL_MINUTES (named module constant)
+  - task_id       : --task-id argument (REQUIRED)
+  - sid           : --sid argument OR CLAUDE_SESSION_ID env var
+  - nonce         : 16-char hex (secrets.token_hex(8))
+  - repo_root     : `git rev-parse --show-toplevel` resolved at --repo-root
+                     (or CWD when --repo-root is omitted) -- binds the grant
+                     to ONE repository, mirroring hooks/push.sh's "branch" /
+                     "expected_head" binding fields for push grants (2026-07-15
+                     repo/branch/HEAD parity fix).
+  - branch        : `git branch --show-current` in repo_root at write time
+  - expected_head : `git rev-parse HEAD` in repo_root at write time
+  - created_at    : ISO-8601 timezone-aware UTC at write time
+  - expires_at    : created_at + GRANT_TTL_MINUTES (named module constant)
 
 Both timestamps are produced from `datetime.now(timezone.utc)` and are
 fromisoformat-parseable by the privilege guard. Epoch ints/floats and
 naive datetimes are silently rejected by the guard.
 
+The privilege guard's `_validate_commit_grant_repo` / `_validate_commit_grant_branch`
+/ `_validate_commit_grant_head` reject the commit outright if repo_root,
+branch, or expected_head no longer match the live git state at commit time
+(pretool-git-privilege-guard.py) -- so a grant lacking these fields (e.g.
+written by a stale copy of this script) is treated as invalid, never as
+"binding not enforced".
+
 Exit codes:
   0  success (grant written)
-  2  CLAUDE_SESSION_ID unresolved (neither --sid nor env var supplied)
+  2  CLAUDE_SESSION_ID unresolved (neither --sid nor env var supplied), or
+     repo_root/branch/expected_head could not be resolved via git
   argparse-default 2 when --task-id is omitted (handled by argparse)
 """
 
@@ -28,6 +43,7 @@ import argparse
 import json
 import os
 import secrets
+import subprocess
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -67,6 +83,18 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
         "--output-dir",
         default="/tmp",
         help="Directory to write the grant JSON into. Default: /tmp.",
+    )
+    parser.add_argument(
+        "--repo-root",
+        default=None,
+        help=(
+            "Directory to resolve the repo/branch/HEAD binding fields from "
+            "(passed to git as `-C <dir>`). Defaults to the invoking "
+            "process's CWD when omitted. Use this to write a grant for a "
+            "DIFFERENT repository than CWD (e.g. the nested ~/.claude repo) "
+            "without cd'ing there first -- matches changelog-analyst's own "
+            "`git -C <dir> commit ...` invocation form."
+        ),
     )
     parser.add_argument(
         "--revoke-existing-for-task",
@@ -126,6 +154,33 @@ def _revoke_grants_for_task(output_dir: str, task_id_to_revoke: str, sid: str) -
             )
 
 
+def _git_capture(args: list[str], cwd: str | None = None) -> str:
+    """Run `git <args>` (optionally scoped to `cwd`) and return stripped stdout.
+
+    Raises RuntimeError on any failure (non-zero exit, missing git, bad cwd)
+    so the caller aborts grant-writing rather than silently writing a grant
+    missing the repo/branch/HEAD binding fields.
+    """
+    try:
+        result = subprocess.run(
+            ["git"] + list(args),
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except OSError as exc:
+        raise RuntimeError(
+            f"git {' '.join(args)} failed to execute (cwd={cwd!r}): {exc}"
+        ) from exc
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"git {' '.join(args)} exited {result.returncode} (cwd={cwd!r}): "
+            f"{(result.stderr or '').strip()}"
+        )
+    return (result.stdout or "").strip()
+
+
 def _resolve_sid(cli_sid: str | None) -> str:
     if cli_sid:
         return cli_sid
@@ -162,12 +217,29 @@ def main(argv: list[str] | None = None) -> int:
     # Scoped to current sid to avoid deleting grants for other sessions.
     if args.revoke_existing_for_task:
         _revoke_grants_for_task(args.output_dir, args.revoke_existing_for_task, sid)
+    # Resolve the repo/branch/HEAD binding fields BEFORE writing anything --
+    # a grant that cannot establish its own baseline is unusable and must not
+    # be written (fail closed, mirroring the SID-resolution failure above).
+    try:
+        repo_root = _git_capture(["rev-parse", "--show-toplevel"], cwd=args.repo_root)
+        branch = _git_capture(["branch", "--show-current"], cwd=repo_root)
+        expected_head = _git_capture(["rev-parse", "HEAD"], cwd=repo_root)
+    except RuntimeError as exc:
+        print(
+            f"Cannot write commit grant: unable to resolve repo/branch/HEAD "
+            f"binding: {exc}",
+            file=sys.stderr,
+        )
+        return 2
     nonce = secrets.token_hex(8)
     now = datetime.now(timezone.utc)
     grant = {
         "task_id": args.task_id,
         "sid": sid,
         "nonce": nonce,
+        "repo_root": repo_root,
+        "branch": branch,
+        "expected_head": expected_head,
         "created_at": now.isoformat(),
         "expires_at": (now + timedelta(minutes=GRANT_TTL_MINUTES)).isoformat(),
     }
