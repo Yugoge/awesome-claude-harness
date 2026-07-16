@@ -520,8 +520,12 @@ def validate_report_artifact(path) -> dict:
         schema; ``errors`` names the offending field(s). This is the only
         blocking status.
       - ``'skip'`` — no-op (never fail-closed): artifact absent, no registered
-        schema for the kind (do-report), unparseable JSON, or unversioned legacy
-        record (no report_version).
+        schema for the kind (do-report), unparseable JSON, unversioned legacy
+        record (no report_version), OR the validator could not actually run
+        (jsonschema/Draft7Validator unavailable, or a schema-infra error such as
+        registry failure / unregistered schema / validator exception). The gate
+        never BLOCKS on an infra problem and never PASSES an unvalidated
+        versioned report.
 
     Uses the same :func:`validate` (Draft7Validator) engine as the overnight
     contract path, so an interactive artifact that CLAIMS a schema version is now
