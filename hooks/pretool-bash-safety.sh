@@ -1334,14 +1334,15 @@ fi
 
 # Block: systemctl stop/restart/disable/enable/reload/kill/try-restart/reload-or-restart
 # Verb set extended per c3-20260504-223115 R1 (8 verbs covering all daemon-state-disrupting
-# systemctl operations). Targets covering `happy-daemon` are handled by Layer 1.A above
-# (with the dedicated grant channel); this block fires for non-happy systemctl targets.
+# systemctl operations). Targets covering the protected daemon (PROTECTED_DAEMON_PREFIX) are
+# handled by Layer 1.A above (with the dedicated grant channel); this block fires for
+# non-protected systemctl targets.
 if echo "$COMMAND" | grep -qE 'systemctl\s+(stop|restart|disable|enable|reload|kill|try-restart|reload-or-restart)(\s+|\b)' \
-   && ! echo "$COMMAND" | grep -qE 'happy-daemon'; then
+   && ! echo "$COMMAND" | grep -qE "$PROTECTED_DAEMON_PREFIX"; then
   if ! check_systemctl_targets_all_dev "$COMMAND" "$DEV_SYSTEMD"; then
     echo "BLOCKED: systemctl stop/restart/disable/enable/reload/kill/try-restart/reload-or-restart is forbidden for production services" >&2
     echo "Command: $COMMAND" >&2
-    echo "Hint: only $DEV_SYSTEMD is allowed (and happy-daemon-* is gated by Layer 1.A)." >&2
+    echo "Hint: only $DEV_SYSTEMD is allowed (and ${PROTECTED_DAEMON_PREFIX}-* is gated by Layer 1.A)." >&2
     exit 2
   fi
 fi
