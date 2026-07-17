@@ -1,11 +1,11 @@
 ---
-description: Cancel active overnight time-lock + workflow-enforce so the session can terminate normally. User-invoked only — agents cannot self-stop.
+description: Cancel the current active ordinary Codex /dev or /redev workflow. Human exact-command invocation only.
 disable-model-invocation: true
 ---
 
-# /stop — Overnight Lock Release
+# /stop — Typed Codex Workflow Cancellation
 
-Releases every active overnight session's time-lock and workflow-enforce so the conversation can stop normally. User-invoked emergency exit; agents cannot self-invoke (sentinel guard mirrors `/commit /push /merge`).
+Cancels only the current root thread's active ordinary `/dev` or `/redev` workflow. The registered Codex `UserPromptSubmit` hook authenticates the exact root transcript event and records an audited `user_cancelled` terminal outcome synchronously. The model does not execute a shell helper.
 
 ## Usage
 
@@ -13,38 +13,28 @@ Releases every active overnight session's time-lock and workflow-enforce so the 
 /stop
 ```
 
-No arguments. Operates on every `overnight-state-*.json` under `.claude/`.
+No arguments, comments, prefixes, or suffixes. Only the exact standalone `/stop` command is accepted. Agent, forked, replayed, remapped, malformed, and non-latest prompt events fail closed.
 
 ## What it does
 
-1. Backdates `end_time` on every active overnight-state file so `stop-overnight-timelock.py` releases.
-2. Marks every todo in `~/.claude/todos/<sid>-agent-<sid>.json` as `completed` so the workflow-enforce hook releases.
-3. Sets `current_phase: completed` on each state file.
-
-After this, the next stop attempt succeeds.
+1. Binds the prompt to the current root Codex session transcript and exact workflow state.
+2. Issues and atomically claims a dedicated, single-use `workflow_cancel` grant.
+3. Preserves plan, agent, checkpoint, barrier, unsupported, and prior gate facts.
+4. Persists an audited schema-revision-2 cancellation extension with `status: user_cancelled`.
+5. Allows the next Stop because the workflow is cancelled, never because its plan was fabricated as complete.
 
 ## What it does NOT do
 
-- Does NOT remove the worktree (preserved for review/merge — use `/merge` when ready)
-- Does NOT delete the state file (left in place for cycle log inspection)
-- Does NOT touch in-flight subagents (kill those manually if needed)
+- Does NOT mark todos, plan steps, agents, QA, barriers, or checkpoints complete.
+- Does NOT use or consume `/allow` grants or Claude stop sentinels.
+- Does NOT fall back to the latest workflow or cancel another session.
+- Does NOT modify the inactive `/root/.codex/awesome-codex-harness` migration target.
+- Does NOT claim `/dev-overnight` process cancellation. That path remains `blocked_capability` until a typed external supervisor proves queue and process ownership.
 
 ## Implementation
 
-The orchestrator calls the wrapper exactly once:
-
-```bash
-bash ~/.claude/hooks/stop.sh
-```
-
-The wrapper invokes `~/.claude/scripts/break-overnight-lock.py`. Sentinel enforcement (written at `/tmp/claude-stop-userintent-<sid>.flag` by `prompt-workflow.py` on user-typed `/stop`; consumed by the PreToolUse hook before the wrapper runs) prevents agent self-invocation.
+There is no model-side implementation command. `/root/.codex/hooks/codex_native_harness.py` performs cancellation during the authenticated `UserPromptSubmit` event. The active Claude compatibility wrapper skips only `prompt-workflow.py` after verifying the same native terminal result, so it cannot mint `/tmp/claude-stop-userintent-*.flag` for this path.
 
 ## Why this command exists
 
-The `/dev-overnight` time-lock prevents premature termination by design — but several edge cases trap the user for hours despite no productive work being possible:
-
-- Argparse rejects `+0.5h` and falls back to default 8h (no way to shorten)
-- Step 1 dev-registry sentinel write fails on `.claude` symlink topology, blocking all forward progress
-- Hook-edit guard prevents the orchestrator from fixing the blocking hook itself
-
-In any of these cases, `/stop` is the user's emergency release valve. Manual fallback (edit state file by hand, kill session forcibly) remains available but is no longer required.
+Ordinary Codex workflows need an explicit cancellation outcome distinct from completion. A human must be able to terminate an incomplete `/dev` or `/redev` without corrupting its evidence, while agents and compatibility helpers remain unable to manufacture authority.
