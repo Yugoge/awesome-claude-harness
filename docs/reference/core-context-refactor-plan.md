@@ -307,9 +307,11 @@ with a simulated PreToolUse payload — no real endpoint is ever contacted):
 | AFTER — crashed guard | `INDETERMINATE` | **2 (BLOCK)** |
 
 **Fix, two links.** (1) `_core.main()` now wraps `evaluate()` in a catch-all that
-emits the existing `INDETERMINATE` sentinel + a named-exception stderr diagnostic —
-never an empty verdict, never a bare traceback; deliberate BLOCK/ALLOW returns are
-untouched. (2) `_runtime_guard_fail_closed` gained a sixth family —
+emits the existing `INDETERMINATE` sentinel + a named-exception stderr diagnostic, so
+an exception escaping **the decision-engine call** cannot yield an empty verdict or a
+bare traceback; deliberate BLOCK/ALLOW returns are untouched. That scope is exact, not
+rhetorical — failures *outside* that call (notably non-object JSON, which raises at the
+payload field access before it) still exit with empty stdout; see residual gap 5. (2) `_runtime_guard_fail_closed` gained a sixth family —
 `nc|ncat|netcat|socat|telnet|curl|wget` — matching the five existing families'
 anchoring / word-boundary / case-insensitivity discipline; its denial message now
 names the family list accurately.
