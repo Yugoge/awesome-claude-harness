@@ -321,7 +321,7 @@
       "Edit(.claude/CLAUDE.md)"
     ]
   },
-  "model": "claude-sonnet-4-6",
+  "model": "fable",
   "hooks": {
     "SessionStart": [
       {
