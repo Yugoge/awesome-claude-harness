@@ -314,21 +314,70 @@ untouched. (2) `_runtime_guard_fail_closed` gained a sixth family —
 anchoring / word-boundary / case-insensitivity discipline; its denial message now
 names the family list accurately.
 
-**Residual gap — stated, not fixed (verified, do not read coverage as blanket).**
-The fallback covers six verb families; the filesystem-MUTATION family is NOT among
-them. With the engine crashed, `cp` / `tee` / `truncate` / `sed -i` / `>`-redirect
-targeting a protected statefile, hotfile, or global bin each still yield **ALLOW**
-(8/8 probed forms). So the primitives STEP0 (config self-protection), P3 (hotfile),
-P4 (statefile), and P7 (global bin) remain fail-OPEN on a crash — they depend on the
-engine being healthy, not on the fallback. Only **P5 and P6** — the two cross-segment
-primitives an empty `groups` disables — are genuinely fail-CLOSED. Widening the
-fallback to the mutation family is **follow-up work**, deliberately out of this
-change's scope; it must not be assumed done.
+### Fail-CLOSED chain — completion + drift guard (2026-07-17, round 2)
+
+An adversarial audit of the fix ABOVE found it **incomplete in three ways**, each
+reproduced by fault injection (crash the engine only — the shim passes the hook's own
+JSON-parsing `-c` calls through to a real interpreter, so `COMMAND` still parses and
+the fallback is measured, not blanked):
+
+| # | Reproduced BEFORE state | Now |
+|---|---|---|
+| 1 | The shell fallback did **not** mirror the engine. Measured in isolation against the engine's own token sets: **46 coverage gaps**. `_core.NET_HEADS` contains `http` / `https` / `httpie`, which the shell never knew; `_is_kill_executor` treats `fuser` + kill-flag as a termination front-end, which the shell omitted entirely; and **all 14** P5/P6 tokens slipped through in the path-qualified (`/usr/bin/curl`), quoted (`"curl"`), and path-qualified+quoted forms the engine NORMALIZES and still recognizes | **0 gaps** |
+| 2 | `main()` caught `Exception`, so a direct `BaseException` subclass (notably `SystemExit`) still escaped with an EMPTY verdict; and the diagnostic was rendered BEFORE the sentinel was emitted, so an exception whose `__str__` itself raises escaped before the sentinel was ever written | sentinel emitted + flushed FIRST, `BaseException` caught, diagnostic best-effort |
+| 3 | This document asserted both that the TypeError **was** the fail-CLOSED guarantee and (below) that that exact claim was overbroad | reconciled — see the Phase-2 section's scope note |
+
+**Why it recurred twice: nothing tied the two sides together.** The shell helper is
+maintained by hand in bash while the token sets evolve in Python; every drift was
+invisible because no test compared them. The durable fix is
+`hooks/tests/test_fail_closed_drift.py`, which **imports the engine's own definitions**
+(`_core.NET_HEADS`, `constants.KILL_VERBS`) and asserts the shell helper denies a
+representative command for every token, in each normalized invocation form. It also
+AST-parses `_is_kill_executor` and fails on any new head literal the shell was never
+taught (the `fuser`-class drift), asserts `NET_HEADS` stays the union the tests
+iterate, and asserts the call site stays inside the non-ALLOW branch. Falsified — with
+coverage removed it fails, restored it passes:
+
+| Injected drift | Suite |
+|---|---|
+| engine gains an endpoint client, shell not widened | **fails** |
+| shell loses a token the engine still knows (`httpie`) | **fails** |
+| engine gains a new termination front-end head literal | **fails** |
+| (restored) | 29 passed |
+
+**Residual gaps — stated, not fixed (verified; do NOT read coverage as blanket).**
+
+1. **Families the fallback does not cover at all.** The filesystem-MUTATION family is
+   not among them. With the engine crashed, `cp` / `tee` / `truncate` / `sed -i` /
+   `>`-redirect targeting a protected statefile, hotfile, or global bin each still
+   yield **ALLOW** (8/8 probed forms). So **STEP0** (config self-protection), **P3**
+   (hotfile), **P4** (statefile) and **P7** (global bin) remain fail-OPEN on a crash —
+   they depend on the engine being healthy. Only **P5** and **P6** are genuinely
+   fail-CLOSED. Widening to the mutation family is **follow-up work**; it must not be
+   assumed done.
+2. **Normalization tolerance is P5/P6-only.** The path-qualified/quoted tolerance was
+   added to the P5 and P6 lines only. The service-control, package-manager, build-tool
+   and runtime-launcher families keep their original bare-token anchoring, so
+   `/usr/bin/systemctl restart …` is still not matched by the fallback. Out of scope
+   here; recorded, not fixed.
+3. **The fallback is a best-effort approximation of the engine's lexing, not a
+   re-implementation of it.** It greps raw command TEXT; it does not tokenize, expand,
+   or resolve. Forms only a real lexer resolves — variable/alias indirection, `$(…)`
+   substitution, `eval`/base64-encoded text, `env`/`sudo`-style wrappers — are NOT
+   mirrored and cannot be by a regex. The drift guard asserts **token-set coverage and
+   invocation-form tolerance**, not semantic equivalence. Being coarser than the engine
+   in the DENY direction is intended (a bare `kill <pid>`, or an endpoint client aimed
+   at a benign path, is denied by the fallback though the healthy engine ALLOWs it);
+   this path only ever runs when the engine has already failed to decide.
 
 **Regression posture.** The widened denial fires ONLY on the non-ALLOW fallback path,
-never when the guard is healthy: a healthy-guard `curl …/health | grep /stop` is still
-ALLOW, P5 ×2 + P6 BLOCK still BLOCK, benign still ALLOW, shell stays `bash -n` clean,
-suite green at 1379 passed / 9 xpassed.
+never when the guard is healthy — asserted structurally by the drift guard and
+end-to-end: a healthy-guard benign endpoint client (`curl …/health`) is still ALLOW,
+P5/P6 BLOCK cases still BLOCK, benign still ALLOW. Substring safety holds: `httpx-cli`,
+`nctool`, `curler`, `my-fuser-report`, and a `node_modules/https-proxy-agent/…` path
+are all still ALLOW under a crashed engine (a longer token merely CONTAINING a family
+name never matches). Shell stays `bash -n` clean. Suite green at 1379 passed /
+9 xpassed + 29 new drift-guard tests.
 
 ---
 
