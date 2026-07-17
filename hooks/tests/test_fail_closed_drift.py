@@ -25,24 +25,15 @@ silently re-opening the hole.
 
 WHAT THIS FILE DOES **NOT** CLAIM
 ─────────────────────────────────
-It asserts TOKEN-SET COVERAGE across FOUR INVOCATION FORMS ONLY — bare (`curl …`),
-quoted-whole (`"curl" …`), path-qualified (`/usr/bin/curl …`), and
-path-qualified+quoted. It does NOT assert semantic equivalence with the engine's lexer,
-and passing it does NOT mean any family is fail-CLOSED family-wide.
-
-That last point is not hedging — it is reproduced. The helper is a REGEX; the engine
-recognizes a head by real LEXING (`shlex`). A regex can never be semantically
-equivalent to a lexer, so forms exist where the engine BLOCKs and the fallback ALLOWs,
-and they cannot be closed by widening the regex (verified 2026-07-17): a name split
-across a quote boundary (`"cu"rl …`, `ki"ll" …`), a backslash-escaped name (`\curl …`),
-`$(…)` substitution, and variable/alias indirection. Read the shell helper as
-BEST-EFFORT DEFENSE-IN-DEPTH over the tested forms, never as a guarantee.
-
-The shell helper is deliberately coarser than the engine in both directions (see the
-helper's own header). Only the P5 endpoint-client and P6 process-termination families
-are covered here, because those are the only two families the fallback covers at all;
-STEP0/P3/P4/P7 remain fail-OPEN on a crashed engine by documented decision (see the
-residual-gap note in docs/reference/core-context-refactor-plan.md).
+It asserts TOKEN-SET COVERAGE across FOUR INVOCATION FORMS ONLY (bare / quoted-whole /
+path-qualified / path-qualified+quoted), for the P5 endpoint-client and P6 process-
+termination families — the only two the fallback covers at all. It does NOT assert
+semantic equivalence with the engine's lexer, and passing it does NOT mean any family
+is fail-CLOSED family-wide. The single authoritative account of the fallback's coverage
+and its limits (which lexical forms a regex cannot cover, why it is best-effort
+defense-in-depth) lives at `hooks/pretool-bash-safety.sh::_runtime_guard_fail_closed`;
+the residual gaps (STEP0/P3/P4/P7 fail-OPEN on a crash) live in
+`docs/reference/core-context-refactor-plan.md`. Do not restate them here.
 
 SAFETY: every command below is a STRING fed to the helper. Nothing is executed, and no
 real service, endpoint, or process is ever contacted. Vocabulary is assembled from
