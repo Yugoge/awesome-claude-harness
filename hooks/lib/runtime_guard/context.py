@@ -127,10 +127,21 @@ class Context:
          bare-token anchoring (so `/usr/bin/systemctl restart …` is not matched by the
          fallback). Recorded, not fixed.
       c. THE FALLBACK APPROXIMATES THE ENGINE'S LEXING; IT DOES NOT REIMPLEMENT IT.
-         It greps raw command TEXT — no tokenization, expansion, or resolution. Forms
-         only a real lexer resolves (variable/alias indirection, `$(…)` substitution,
-         `eval`/base64-encoded text, `env`/`sudo`-style wrappers) are NOT mirrored and
-         cannot be by a regex. The drift guard asserts token-set coverage and
+         It greps raw command TEXT — no tokenization, expansion, or resolution. What
+         that means precisely (measured, not assumed — the coarse reading in BOTH
+         directions was wrong):
+           * NOT MATCHED (engine resolves them, regex does not): quote-concatenation
+             (`"cu"rl …`), backslash-escaped names (`\curl …`), `$(…)` command
+             substitution, variable/alias indirection, base64-encoded text.
+           * MATCHED TODAY, BUT NOT PARSED AND NOT GUARANTEED: privileged- and
+             environment-wrapper prefixes (`sudo curl …`, `env FOO=1 curl …`),
+             `xargs`-wrapped verbs, and simple quoted-`eval` forms
+             (`eval 'curl …'`, `eval "curl …"`) all DO match — but only incidentally,
+             because the family name still appears literally at a position the
+             patterns accept. Nothing parses the wrapper or the eval string, so this
+             must NOT be recorded as coverage: a variant that breaks the literal
+             (e.g. eval over a substitution) is not matched.
+         The drift guard asserts token-set coverage and
          invocation-form tolerance, NOT semantic equivalence. The approximation is also
          deliberately coarser than the engine in the DENY direction (a bare
          `kill <pid>`, or an endpoint client aimed at a benign path, is denied by the
