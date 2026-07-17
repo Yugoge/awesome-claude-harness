@@ -1,8 +1,8 @@
 # hooks
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-07-16T16:00:50Z*
-**Total entries**: 164
+*Last updated: 2026-07-17T13:50:22Z*
+**Total entries**: 165
 **Convention**: kebab
 
 ## Tree
@@ -31,6 +31,7 @@ hooks/
 │   │   ├── `anchor.py` - The cleanly-extractable leaf subset of the HEAD-AGNOSTIC P0 anchor scan
 │   │   ├── `config.py` - Depends on shell_lex (`_strip_quotes`, `_has_redirect_to`) + pathmatch
 │   │   ├── `constants.py` - Dependency LEAF: defines only literal frozenset/dict constants, imports nothing,
+│   │   ├── `context.py` - `_core.evaluate` computes a small set of per-EVALUATION inputs ONCE — the
 │   │   ├── `find_cmds.py` - Depends on shell_lex (`_strip_quotes`) + pathmatch (`_glob_to_segment_regex`,
 │   │   ├── `git_cmds.py` - Depends on shell_lex (`_strip_quotes`) + pathmatch (`_expand_leading_home`) +
 │   │   ├── `pathmatch.py` - Depends only on shell_lex (`_strip_quotes`) + stdlib; references nothing from
