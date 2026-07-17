@@ -319,7 +319,7 @@ names the family list accurately.
 
 ### Fail-CLOSED chain — completion + drift guard (2026-07-17, round 2)
 
-An adversarial audit of the fix ABOVE found it **incomplete in three ways**, each
+An adversarial audit of the fix ABOVE found it **incomplete in two ways**, each
 reproduced by fault injection (crash the engine only — the shim passes the hook's own
 JSON-parsing `-c` calls through to a real interpreter, so `COMMAND` still parses and
 the fallback is measured, not blanked):
