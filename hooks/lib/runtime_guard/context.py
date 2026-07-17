@@ -79,9 +79,28 @@ class Context:
          socat/telnet/curl/wget/http/https/httpie). For the P5 and P6 families it
          also tolerates the path-qualified (`/usr/bin/curl`) and quoted (`"curl"`)
          forms the engine normalizes.
-    Therefore the crash resolves to a DENY for exactly the two cross-segment
-    primitives an empty `groups` would disable — P5 (endpoint / raw-socket) and
-    P6 (process-kill). That is the guarantee, and it is verified end-to-end.
+    Therefore, for the two cross-segment primitives an empty `groups` would disable
+    — P5 (endpoint / raw-socket) and P6 (process-kill) — a crash resolves to a DENY
+    ACROSS THE FOUR INVOCATION FORMS THAT ARE TESTED: bare (`curl …`), quoted-whole
+    (`"curl" …`), path-qualified (`/usr/bin/curl …`), and path-qualified+quoted.
+    That is the whole of the claim.
+
+    THIS IS NOT A FAMILY-WIDE GUARANTEE, AND CANNOT BE MADE INTO ONE. Link 3 is a
+    REGEX over raw text; the engine recognizes a head via real LEXING (`shlex`),
+    which normalizes forms a regex does not see. A regex can never be semantically
+    equivalent to a lexer, so engine-BLOCK / fallback-ALLOW forms exist for P5 and
+    P6 and always will. Reproduced against the real engine and the real helper
+    (2026-07-17), each yielding engine=BLOCK but fallback=ALLOW:
+      * quote-concatenation, where a name is split across a quote boundary and the
+        lexer rejoins it — `"cu"rl <loopback-url>`, `cu"rl" …`, `'cu'rl …`,
+        `c"u"rl …`, and the P6 forms `"pk"ill -f <ident>`, `ki"ll" -9 …`;
+      * backslash-escaped names — `\curl <loopback-url>`;
+      * `$(…)` command substitution and variable/alias indirection, where the name
+        never appears at a position the regex accepts.
+    Do NOT attempt to close these by extending the regex — chasing lexical
+    equivalence with a lexer is a treadmill, and the fix direction is explicitly out
+    of scope. The correct reading of link 3 is BEST-EFFORT DEFENSE-IN-DEPTH over
+    specific tested forms, NOT a guarantee for any family.
 
     Link 3 is a hand-maintained bash approximation of token sets that live in Python,
     and it silently fell behind the engine TWICE. `hooks/tests/test_fail_closed_drift.py`
