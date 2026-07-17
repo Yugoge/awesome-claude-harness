@@ -141,8 +141,8 @@ _runtime_guard_fail_closed() {
   # engine already failed to decide. This helper is DEFENSE-IN-DEPTH over specific
   # tested forms, NOT a guarantee for any family. The families it covers are listed
   # per-line below; what is NOT covered is named in the residual-gap note in
-  # docs/reference/core-context-refactor-plan.md (the sole record; the pointer in
-  # lib/runtime_guard/context.py only refers here, it does not hold the record).
+  # docs/reference/core-context-refactor-plan.md (the authoritative, detailed record;
+  # lib/runtime_guard/context.py carries a short summary of it plus a pointer here).
   #
   # Coverage of the P5/P6 front-end TOKEN SETS is asserted mechanically against the
   # engine's own definitions by hooks/tests/test_fail_closed_drift.py — adding a token
