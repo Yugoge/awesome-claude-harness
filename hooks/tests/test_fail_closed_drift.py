@@ -206,6 +206,19 @@ def test_no_unmirrored_kill_frontend_literals():
     fails on any head literal that is neither a known wrapper nor an acknowledged
     front-end — forcing whoever adds one to also widen the shell fallback and extend
     _EXTRA_KILL_FRONTENDS.
+
+    SCOPE — two literal-bearing comparison shapes against `head` are recognized:
+      * direct equality  — `head == "fuser"`
+      * membership test  — `head in {"fuser", ...}` / `[...]` / `(...)` over INLINE
+        string literals
+    Both are covered because recognizing only the first would let the second form
+    introduce a front-end this guard never sees (falsified below in
+    test_membership_form_drift_is_caught). NOT recognized, by design: a comparison
+    against a NAMED set (`head in KILL_VERBS`) — that is not a literal and is already
+    diffed set-wise by the parametrized tests above; and any head reached through
+    indirection (a variable, a call, an attribute) rather than an inline literal. A
+    front-end introduced that way is NOT caught here — state that limit rather than
+    implying total coverage.
     """
     with open(CORE_PY, encoding="utf-8") as fh:
         tree = ast.parse(fh.read())
