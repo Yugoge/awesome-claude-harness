@@ -146,6 +146,9 @@ _runtime_guard_fail_closed() {
   # engine's own definitions by hooks/tests/test_fail_closed_drift.py — adding a token
   # to `_core.NET_HEADS` / `constants.KILL_VERBS` without widening the lines below
   # fails that test. That test is what keeps this approximation from silently drifting.
+  # Scope of that assertion: TOKEN-SET coverage across FOUR invocation forms (bare,
+  # quoted-whole, path-qualified, path-qualified+quoted) — NOT semantic equivalence
+  # with the engine's lexer, and NOT a family-wide guarantee for any family.
   local cmd="$1"
   # Invocation-form tolerance for the P5/P6 front-end families below. The engine
   # NORMALIZES a front-end token before matching it: it strips a leading path
