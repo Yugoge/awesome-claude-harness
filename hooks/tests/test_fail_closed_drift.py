@@ -273,6 +273,35 @@ def test_no_unmirrored_kill_frontend_literals():
     )
 
 
+def test_membership_form_drift_is_caught():
+    """FALSIFIES the widening: the membership form must not be able to hide a head.
+
+    Before the widening, `_head_literals` only understood `head == "x"`, so a front-end
+    introduced as `head in {"x"}` was invisible and the drift guard passed while the
+    shell fallback knew nothing about it. This drives the analysis over BOTH shapes and
+    asserts each surfaces the literal — so deleting the Set/List/Tuple branch fails here
+    rather than silently re-opening the hole.
+    """
+    equality = ast.parse('def f(head, rest):\n    return head == "dr' 'ift_eq"\n').body[0]
+    assert _head_literals(equality) == {"dr" "ift_eq"}
+
+    for src in (
+        'def f(head, rest):\n    return head in {"dr" "ift_set", "other"}\n',
+        'def f(head, rest):\n    return head in ["dr" "ift_set", "other"]\n',
+        'def f(head, rest):\n    return head in ("dr" "ift_set", "other")\n',
+    ):
+        found = _head_literals(ast.parse(src).body[0])
+        assert "dr" "ift_set" in found, (
+            f"the membership-test form evaded _head_literals for source:\n{src}\n"
+            "A new termination front-end could be added as `head in {...}` without the "
+            "shell fallback ever learning it. Restore the Set/List/Tuple branch."
+        )
+
+    # a NAMED set must stay out — it is diffed set-wise elsewhere, not by literal
+    named = ast.parse("def f(head, rest):\n    return head in KILL_VERBS\n").body[0]
+    assert _head_literals(named) == set()
+
+
 # ── the fallback must stay substring-safe (no over-broad denial) ────────────
 @pytest.mark.parametrize("cmd", [
     "httpx-cli --version",                          # contains 'http'
