@@ -4667,7 +4667,7 @@ def main() -> int:
             cwd_base = None
     try:
         decision, primitive, reason = evaluate(command, cwd_base)
-    except Exception as exc:  # noqa: BLE001 — deliberate catch-all (see below)
+    except BaseException as exc:  # noqa: BLE001 — deliberate catch-all (see below)
         # The decision engine raised. Emit the SAME INDETERMINATE sentinel the
         # unparseable-payload path above uses, so the bash glue's conservative-
         # denial fallback decides. Without this the exception escapes, stdout is
@@ -4676,11 +4676,34 @@ def main() -> int:
         # family the fallback does not cover. A crash must never be a silent
         # ALLOW, and must never emit an empty verdict. Deliberate BLOCK/ALLOW
         # returns never enter this handler.
-        sys.stderr.write(
-            f"[protected-runtime-guard] INDETERMINATE — decision engine raised "
-            f"{type(exc).__name__}: {exc}\n"
-        )
-        print("INDETERMINATE")
+        #
+        # `BaseException`, not `Exception`: a direct BaseException subclass (notably
+        # SystemExit — e.g. a library calling sys.exit(), or an argparse-style exit —
+        # and KeyboardInterrupt) is NOT an `Exception` and escaped the old handler,
+        # re-opening the exact empty-verdict fail-open this handler exists to close.
+        # Swallowing an interpreter-exit request here is deliberate: a verdict on
+        # stdout is the ONLY contract the glue can act on, and rc is ignored by it.
+        #
+        # ORDER IS LOAD-BEARING: the sentinel is written and FLUSHED before the
+        # diagnostic is rendered. Rendering runs arbitrary user-defined `__str__`
+        # code, which can itself raise (or exit); doing it first meant such an
+        # exception escaped BEFORE the sentinel was ever emitted — again an empty
+        # verdict. Diagnostics are best-effort; the verdict is not.
+        print("INDETERMINATE", flush=True)
+        try:
+            detail = f"{type(exc).__name__}: {exc}"
+        except BaseException:  # noqa: BLE001 — __str__/__repr__ may itself raise
+            try:
+                detail = f"{type(exc).__name__}: <unrenderable exception>"
+            except BaseException:  # noqa: BLE001 — even type(exc).__name__ failed
+                detail = "<unrenderable exception>"
+        try:
+            sys.stderr.write(
+                f"[protected-runtime-guard] INDETERMINATE — decision engine raised "
+                f"{detail}\n"
+            )
+        except BaseException:  # noqa: BLE001 — stderr unusable; verdict already sent
+            pass
         return 0
     if decision == "BLOCK":
         sys.stderr.write(f"[protected-runtime-guard] BLOCK {primitive}: {reason}\n")
