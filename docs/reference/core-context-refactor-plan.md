@@ -311,7 +311,8 @@ emits the existing `INDETERMINATE` sentinel + a named-exception stderr diagnosti
 an exception escaping **the decision-engine call** cannot yield an empty verdict or a
 bare traceback; deliberate BLOCK/ALLOW returns are untouched. That scope is exact, not
 rhetorical — failures *outside* that call (notably non-object JSON, which raises at the
-payload field access before it) still exit with empty stdout; see residual gap 5. (2) `_runtime_guard_fail_closed` gained a sixth family —
+payload field access before it) still exit with empty stdout; see residual gap 5.
+(2) `_runtime_guard_fail_closed` gained a sixth family —
 `nc|ncat|netcat|socat|telnet|curl|wget` — matching the five existing families'
 anchoring / word-boundary / case-insensitivity discipline; its denial message now
 names the family list accurately.
