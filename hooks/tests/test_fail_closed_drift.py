@@ -1,4 +1,4 @@
-"""DRIFT GUARD — the shell fail-CLOSED fallback vs the engine's front-end tokens.
+r"""DRIFT GUARD — the shell fail-CLOSED fallback vs the engine's front-end tokens.
 
 WHY THIS FILE EXISTS
 ────────────────────
