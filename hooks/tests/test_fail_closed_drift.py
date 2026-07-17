@@ -232,14 +232,9 @@ def test_no_unmirrored_kill_frontend_literals():
         "cannot introspect it; re-point this test rather than deleting it."
     )
 
-    # every string literal compared against the `head` parameter
-    heads = set()
-    for node in ast.walk(fn):
-        if isinstance(node, ast.Compare) and isinstance(node.left, ast.Name) \
-                and node.left.id == "head":
-            for comp in node.comparators:
-                if isinstance(comp, ast.Constant) and isinstance(comp.value, str):
-                    heads.add(comp.value)
+    # every string literal compared against the `head` parameter, in BOTH the direct
+    # equality form (`head == "x"`) and the membership form (`head in {"x", "y"}`).
+    heads = _head_literals(fn)
 
     known = set(KILL_VERBS) | set(_EXTRA_KILL_FRONTENDS) | set(_KILL_WRAPPER_HEADS)
     unknown = heads - known
