@@ -121,17 +121,54 @@ fi
 # protected family; benign commands (ls/cat/git) still proceed.
 _runtime_guard_fail_closed() {
   # Returns 0 (deny) if the raw command matches a generic protected verb family.
+  #
+  # SCOPE OF THE CLAIM (do not overstate it): this helper is a deliberately COARSE,
+  # BEST-EFFORT regex APPROXIMATION of the engine's lexer — not a re-implementation
+  # of it. It reads raw command TEXT; it does not tokenize, expand, or resolve the
+  # way `_core` does. It is therefore intentionally coarser than the engine in both
+  # directions: it denies some commands the healthy engine would ALLOW (e.g. a bare
+  # `kill <pid>`, or an endpoint client aimed at a benign path), and it cannot see
+  # forms that only a real lexer resolves (variable/alias indirection, `$(...)`
+  # substitution, base64/eval-encoded text, `env`/`sudo`-style wrappers). Over-denial
+  # is the intended direction: this path runs ONLY when the engine already failed to
+  # decide. The families it covers are listed per-line below; the families it does NOT
+  # cover are named in the residual-gap note in
+  # docs/reference/core-context-refactor-plan.md and in lib/runtime_guard/context.py.
+  #
+  # Coverage of the P5/P6 front-end TOKEN SETS is asserted mechanically against the
+  # engine's own definitions by hooks/tests/test_fail_closed_drift.py — adding a token
+  # to `_core.NET_HEADS` / `constants.KILL_VERBS` without widening the lines below
+  # fails that test. That test is what keeps this approximation from silently drifting.
   local cmd="$1"
+  # Invocation-form tolerance for the P5/P6 front-end families below. The engine
+  # NORMALIZES a front-end token before matching it: it strips a leading path
+  # (`/usr/bin/curl`) and surrounding quotes (`"curl"`). A bare-token pattern misses
+  # every such form. These fragments admit an optional quote + optional path prefix
+  # while keeping the token itself word-anchored, so a longer token that merely
+  # CONTAINS a family name (httpx-cli, nctool, curler, https-proxy-agent) never matches.
+  # NOTE: the four non-P5/P6 families below deliberately keep their original
+  # bare-token anchoring — widening them is out of this change's scope and is recorded
+  # as residual in the plan doc, NOT silently assumed done.
+  local pre='(^|[;&|]|[[:space:]])["'"'"']?([^[:space:];&|"'"'"']*/)?'
+  local post='["'"'"']?([[:space:]]|$)'
   printf '%s\n' "$cmd" | grep -qiE '(^|[;&|]|[[:space:]])(systemctl|service)[[:space:]]+(start|stop|restart|try-restart|reload|reload-or-restart|kill|disable|mask|enable)([[:space:]]|$)' && return 0
-  printf '%s\n' "$cmd" | grep -qiE '(^|[;&|]|[[:space:]])(kill|pkill|killall)([[:space:]]|$)' && return 0
+  # Process-termination family — the engine's P6 front-ends: `constants.KILL_VERBS`
+  # (kill/pkill/killall) PLUS the file-user front-end `fuser`, which `_is_kill_executor`
+  # treats as a kill executor when its kill-flag is present. The flag is NOT required
+  # here on purpose: this fallback only ever runs on an already-broken engine, and
+  # denying the whole front-end is the conservative direction (the same reason a bare
+  # `kill <pid>` is denied here while the healthy engine ALLOWs it).
+  printf '%s\n' "$cmd" | grep -qiE "${pre}(killall|kill|pkill|fuser)${post}" && return 0
   printf '%s\n' "$cmd" | grep -qiE '(^|[;&|]|[[:space:]])(yarn|npm|pnpm|bun)([[:space:]]|$)' && return 0
   printf '%s\n' "$cmd" | grep -qiE '(^|[;&|]|[[:space:]])(npx|bunx|tsc|pkgroll|tsup)([[:space:]]|$)' && return 0
   printf '%s\n' "$cmd" | grep -qiE '(^|[;&|]|[[:space:]])(node|nodejs|tsx|deno)([[:space:]]|$)' && return 0
-  # Endpoint / raw-socket client family — the front-ends through which a
-  # protected control endpoint is reached (the family P5 guards). Without this
-  # line a P5-family command whose guard evaluation CRASHED matched no family
-  # above and fell through to ALLOW.
-  printf '%s\n' "$cmd" | grep -qiE '(^|[;&|]|[[:space:]])(nc|ncat|netcat|socat|telnet|curl|wget)([[:space:]]|$)' && return 0
+  # Endpoint / raw-socket client family — the front-ends through which a protected
+  # control endpoint is reached (the family P5 guards). Mirrors the engine's
+  # `_core.NET_HEADS` = RAW_SOCKET_HEADS | HTTP_CLIENT_HEADS. Without this line a
+  # P5-family command whose guard evaluation CRASHED matched no family above and fell
+  # through to ALLOW. Longest-first alternation so `ncat`/`netcat`/`httpie`/`https`
+  # win over their `nc`/`http` prefixes.
+  printf '%s\n' "$cmd" | grep -qiE "${pre}(netcat|ncat|nc|socat|telnet|curl|wget|httpie|https|http)${post}" && return 0
   return 1
 }
 _RUNTIME_GUARD_LIB="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/runtime_guard.py"
