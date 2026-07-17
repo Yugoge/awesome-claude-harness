@@ -7,6 +7,7 @@ For each ~/.claude/scripts/todo/<cmd>.py that has a matching
 tokens between the two. Emit stderr warnings for:
   - tokens in .md but missing from .py (silent-dead-step bug)
   - tokens in .py but missing from .md (stale todo)
+  - duplicate tokens present a different number of times on each side
   - tokens present in both but at different positions (order drift)
 
 Non-blocking: always exits 0. Silent when everything is in sync.
@@ -20,6 +21,7 @@ import os
 import re
 import subprocess
 import sys
+from collections import Counter
 from pathlib import Path
 
 HOME = Path(os.path.expanduser("~"))
@@ -100,11 +102,27 @@ def order_drift_message(cmd: str, common_md: list[str], common_py: list[str]) ->
     return None
 
 
+def _common_occurrences_in_order(
+    steps: list[str], common_counts: Counter[str]
+) -> list[str]:
+    """Keep at most the shared number of occurrences, preserving order."""
+    seen: Counter[str] = Counter()
+    common: list[str] = []
+    for token in steps:
+        if seen[token] >= common_counts[token]:
+            continue
+        common.append(token)
+        seen[token] += 1
+    return common
+
+
 def diff_steps(cmd: str, md_steps: list[str], py_steps: list[str]) -> list[str]:
     """Return a list of human-readable drift messages for one command."""
     warnings: list[str] = []
     md_set = set(md_steps)
     py_set = set(py_steps)
+    md_counts = Counter(md_steps)
+    py_counts = Counter(py_steps)
 
     # Missing in .py (today's concrete bug class — most important).
     warnings.extend(f"{cmd}: missing in .py — {tok}" for tok in md_steps if tok not in py_set)
@@ -112,9 +130,22 @@ def diff_steps(cmd: str, md_steps: list[str], py_steps: list[str]) -> list[str]:
     # Stale in .py (no corresponding .md heading).
     warnings.extend(f"{cmd}: stale in .py — {tok}" for tok in py_steps if tok not in md_set)
 
-    # Order drift: compare the intersection, preserving each side's order.
-    common_md = [t for t in md_steps if t in py_set]
-    common_py = [t for t in py_steps if t in md_set]
+    # A set-only comparison hides duplicated labels. Report count drift when a
+    # token exists on both sides but one side repeats it more often.
+    for tok in dict.fromkeys(md_steps + py_steps):
+        md_count = md_counts[tok]
+        py_count = py_counts[tok]
+        if md_count and py_count and md_count != py_count:
+            warnings.append(
+                f"{cmd}: duplicate count drift — {tok} appears "
+                f"{md_count} time(s) in .md, {py_count} time(s) in .py"
+            )
+
+    # Compare only the shared multiplicity of each token so an extra duplicate
+    # produces count drift without a misleading secondary order warning.
+    common_counts = md_counts & py_counts
+    common_md = _common_occurrences_in_order(md_steps, common_counts)
+    common_py = _common_occurrences_in_order(py_steps, common_counts)
     drift_msg = order_drift_message(cmd, common_md, common_py)
     if drift_msg is not None:
         warnings.append(drift_msg)
