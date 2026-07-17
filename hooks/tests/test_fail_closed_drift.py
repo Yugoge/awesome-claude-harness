@@ -198,6 +198,32 @@ def test_engine_still_recognizes_fuser_frontend():
     )
 
 
+def _head_literals(fn):
+    """String literals compared against the `head` parameter inside `fn`.
+
+    Recognizes the two shapes that can introduce a front-end via an inline literal:
+      * `head == "fuser"`        -> ast.Compare(left=Name('head'), comparators=[Constant])
+      * `head in {"fuser", ...}` -> ast.Compare(left=Name('head'), comparators=[Set|List|Tuple])
+    A comparison against a NAMED set (`head in KILL_VERBS`) yields no literals here by
+    design — it is diffed set-wise by the parametrized tests instead.
+    """
+    lits = set()
+
+    def _collect(node):
+        if isinstance(node, ast.Constant) and isinstance(node.value, str):
+            lits.add(node.value)
+        elif isinstance(node, (ast.Set, ast.List, ast.Tuple)):
+            for elt in node.elts:
+                _collect(elt)
+
+    for node in ast.walk(fn):
+        if isinstance(node, ast.Compare) and isinstance(node.left, ast.Name) \
+                and node.left.id == "head":
+            for comp in node.comparators:
+                _collect(comp)
+    return lits
+
+
 def test_no_unmirrored_kill_frontend_literals():
     """Catch a NEW head literal added to `_is_kill_executor` (the fuser-class drift).
 
