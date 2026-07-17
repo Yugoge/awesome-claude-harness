@@ -52,17 +52,30 @@ class Context:
     raised TypeError. The deny is produced by a THREE-link chain, all three of
     which must hold:
       1. construction of an INCOMPLETE Context raises TypeError at build time;
-      2. `_core.main` wraps `evaluate()` and converts ANY escaping exception into
-         an explicit INDETERMINATE verdict on stdout + a named-exception
-         diagnostic on stderr — never an empty verdict, never a bare traceback;
+      2. `_core.main` wraps `evaluate()` in a `BaseException` catch-all and converts
+         ANY escaping exception — including direct BaseException subclasses such as
+         SystemExit — into an explicit INDETERMINATE verdict on stdout + a
+         best-effort diagnostic on stderr; never an empty verdict, never a bare
+         traceback. The sentinel is emitted and FLUSHED before the diagnostic is
+         rendered, so an exception whose own `__str__` raises cannot prevent it;
       3. the surrounding hook (`pretool-bash-safety.sh`) treats any non-ALLOW
          verdict as a signal to run `_runtime_guard_fail_closed`, which denies
          conservatively for the protected verb families it COVERS: service-control,
-         process-kill, package-manager, build-tool, runtime-launcher, and the
-         endpoint / raw-socket client family (nc/ncat/netcat/socat/telnet/curl/wget).
+         process-termination (`constants.KILL_VERBS` + the `fuser` file-user
+         front-end), package-manager, build-tool, runtime-launcher, and the endpoint
+         / raw-socket client family (the full `_core.NET_HEADS`: nc/ncat/netcat/
+         socat/telnet/curl/wget/http/https/httpie). For the P5 and P6 families it
+         also tolerates the path-qualified (`/usr/bin/curl`) and quoted (`"curl"`)
+         forms the engine normalizes.
     Therefore the crash resolves to a DENY for exactly the two cross-segment
     primitives an empty `groups` would disable — P5 (endpoint / raw-socket) and
     P6 (process-kill). That is the guarantee, and it is verified end-to-end.
+
+    Link 3 is a hand-maintained bash approximation of token sets that live in Python,
+    and it silently fell behind the engine TWICE. `hooks/tests/test_fail_closed_drift.py`
+    now imports `_core.NET_HEADS` / `constants.KILL_VERBS` and mechanically asserts the
+    shell helper denies every token in them; adding a front-end to the engine without
+    widening the fallback fails that test instead of quietly re-opening this hole.
 
     COVERAGE IS NOT BLANKET — do NOT read link 3 as "the hook denies conservatively"
     for ALL commands. The filesystem-MUTATION family is NOT in the fallback set, so
