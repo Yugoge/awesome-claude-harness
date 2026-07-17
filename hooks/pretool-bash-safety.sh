@@ -132,7 +132,8 @@ _runtime_guard_fail_closed() {
   # engine resolves and this helper does NOT match. Verified examples: a front-end
   # name split across a quote boundary (`"cu"rl …`, `ki"ll" …`), a backslash-escaped
   # name (`\curl …`), `$(...)` substitution, and variable/alias indirection all
-  # normalize to a recognized head in the engine and are NOT matched here. Wrapper
+  # normalize to a recognized head in the engine and are NOT matched here; encoded
+  # execution (e.g. base64-decoded text) is likewise unmatched. Wrapper
   # (`sudo …`, `env FOO=1 …`) and simple quoted-`eval` forms DO happen to match today
   # — only because the family name still appears literally at a position these
   # patterns accept, NOT because they are parsed — so they are best-effort, not
