@@ -36,18 +36,45 @@ class Context:
     take today — adopting the Context is a pure relocation of how those values
     travel, never a change to what they hold.
 
-    ALL FOUR FIELDS ARE MANDATORY — there are NO defaults. This is the
-    fail-CLOSED completeness guarantee: a construction that OMITS any field
-    raises TypeError at build time (so the guard engine errors out and the
-    surrounding hook denies conservatively), rather than silently producing a
-    guard-DISABLING empty working set. This closes the INV-6 fail-OPEN hazard
-    unique to the Context refactor: unlike a module split (which fails CLOSED on
-    a missing import), a mis-built Context whose `groups` defaulted to `[]` would
-    make the cross-segment guards `_p5_endpoint` (endpoint / raw-socket) and
-    `_p6_prockill` (process-kill) ABSTAIN (return None) and flip a modeled BLOCK
-    to a final ALLOW. Mandatory fields make that incomplete construction
-    impossible. `cfg` keeps its `Optional[dict]` type — it may LEGITIMATELY be
-    None for the pre-config STEP0 stage — but must still be passed EXPLICITLY.
+    ALL FOUR FIELDS ARE MANDATORY — there are NO defaults. This closes the INV-6
+    fail-OPEN hazard unique to the Context refactor: unlike a module split (which
+    fails CLOSED on a missing import), a mis-built Context whose `groups`
+    defaulted to `[]` would make the cross-segment guards `_p5_endpoint`
+    (endpoint / raw-socket) and `_p6_prockill` (process-kill) ABSTAIN (return
+    None) and flip a modeled BLOCK to a final ALLOW. Mandatory fields make that
+    incomplete construction impossible. `cfg` keeps its `Optional[dict]` type —
+    it may LEGITIMATELY be None for the pre-config STEP0 stage — but must still be
+    passed EXPLICITLY.
+
+    WHAT IS AND IS NOT GUARANTEED (audited + reproduced 2026-07-17; every clause
+    below was executed, not assumed). Mandatory fields alone do NOT produce a
+    fail-CLOSED outcome — they only convert a silent empty working set into a
+    raised TypeError. The deny is produced by a THREE-link chain, all three of
+    which must hold:
+      1. construction of an INCOMPLETE Context raises TypeError at build time;
+      2. `_core.main` wraps `evaluate()` and converts ANY escaping exception into
+         an explicit INDETERMINATE verdict on stdout + a named-exception
+         diagnostic on stderr — never an empty verdict, never a bare traceback;
+      3. the surrounding hook (`pretool-bash-safety.sh`) treats any non-ALLOW
+         verdict as a signal to run `_runtime_guard_fail_closed`, which denies
+         conservatively for the protected verb families it COVERS: service-control,
+         process-kill, package-manager, build-tool, runtime-launcher, and the
+         endpoint / raw-socket client family (nc/ncat/netcat/socat/telnet/curl/wget).
+    Therefore the crash resolves to a DENY for exactly the two cross-segment
+    primitives an empty `groups` would disable — P5 (endpoint / raw-socket) and
+    P6 (process-kill). That is the guarantee, and it is verified end-to-end.
+
+    COVERAGE IS NOT BLANKET — do NOT read link 3 as "the hook denies conservatively"
+    for ALL commands. The filesystem-MUTATION family is NOT in the fallback set, so
+    a crashed guard still ALLOWs a mutation of a protected statefile / hotfile /
+    global bin (verified: `cp`/`tee`/`truncate`/`sed -i`/`>`-redirect targeting a
+    protected path each yield ALLOW when the engine raises). The primitives whose
+    families remain UNCOVERED by the fallback are STEP0 (config self-protection),
+    P3 (hotfile), P4 (statefile), and P7 (global bin); they rely on the engine
+    itself being healthy, not on the fallback. A future construction site that
+    forgets a field is therefore fail-CLOSED for P5/P6 and fail-OPEN for those
+    four — widening the fallback to the mutation family is tracked as follow-up in
+    docs/reference/core-context-refactor-plan.md, NOT as a claim made here.
 
       cwd_base    — base cwd seed (payload/process cwd); constant across the whole
                     evaluation. Per-command cwd/cwd_det are derived from it.
