@@ -152,7 +152,7 @@ elif [ "$_RUNTIME_GUARD_VERDICT" != "ALLOW" ]; then
   # guard could not authoritatively decide. Fail closed for danger families.
   [ "$_RUNTIME_GUARD_ERR" != "/dev/null" ] && rm -f "$_RUNTIME_GUARD_ERR" 2>/dev/null
   if _runtime_guard_fail_closed "$COMMAND"; then
-    echo "BLOCKED: protected-runtime-guard FAIL-CLOSED — the guard engine is unavailable or returned no decision (verdict='$_RUNTIME_GUARD_VERDICT'), and this command is in a protected verb family (service/kill/package-manager/build/runtime). Denied conservatively. A human operator must run it from a real terminal, and the guard deployment ($_RUNTIME_GUARD_LIB) should be repaired." >&2
+    echo "BLOCKED: protected-runtime-guard FAIL-CLOSED — the guard engine is unavailable or returned no decision (verdict='$_RUNTIME_GUARD_VERDICT'), and this command is in a protected verb family (service/kill/package-manager/build/runtime/endpoint-client). Denied conservatively. A human operator must run it from a real terminal, and the guard deployment ($_RUNTIME_GUARD_LIB) should be repaired." >&2
     exit 2
   fi
 else
