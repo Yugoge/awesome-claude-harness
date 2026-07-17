@@ -36,15 +36,48 @@ class Context:
     take today — adopting the Context is a pure relocation of how those values
     travel, never a change to what they hold.
 
-    ALL FOUR FIELDS ARE MANDATORY — there are NO defaults. This closes the INV-6
-    fail-OPEN hazard unique to the Context refactor: unlike a module split (which
-    fails CLOSED on a missing import), a mis-built Context whose `groups`
-    defaulted to `[]` would make the cross-segment guards `_p5_endpoint`
-    (endpoint / raw-socket) and `_p6_prockill` (process-kill) ABSTAIN (return
-    None) and flip a modeled BLOCK to a final ALLOW. Mandatory fields make that
-    incomplete construction impossible. `cfg` keeps its `Optional[dict]` type —
-    it may LEGITIMATELY be None for the pre-config STEP0 stage — but must still be
-    passed EXPLICITLY.
+      cwd_base    — base cwd seed (payload/process cwd); constant across the whole
+                    evaluation. Per-command cwd/cwd_det are derived from it.
+      simple_cmds — the pipeline-split simple commands (the current working set;
+                    the front-end peel yields a new Context over the peeled forms).
+      groups      — the pipeline GROUPS preserving `|` connectivity for the
+                    cross-segment primitives (P5 endpoint, P6 prockill).
+      cfg         — the loaded config dict, or None before the STEP1 config load
+                    (STEP0 self-protection passes cfg=None EXPLICITLY by design —
+                    it must not depend on the very file it protects).
+
+    ALL FOUR FIELDS ARE MANDATORY — there are NO defaults, and the dataclass is
+    frozen. Mandatory closes the INV-6 fail-OPEN hazard unique to this refactor:
+    unlike a module split (which fails CLOSED on a missing import), a mis-built
+    Context whose `groups` defaulted to `[]` would make the cross-segment guards
+    `_p5_endpoint` and `_p6_prockill` ABSTAIN and flip a modeled BLOCK to a final
+    ALLOW. Removing every default makes that incomplete construction raise
+    TypeError. Frozen makes each Context an immutable snapshot of one evaluation
+    stage: the front-end peel and the STEP1 config load each build a NEW Context,
+    never mutate one. `cfg` stays `Optional[dict]` (legitimately None pre-config)
+    but must still be passed EXPLICITLY.
+
+    That TypeError is only the FIRST LINK of the fail-CLOSED chain, NOT the
+    guarantee: an incomplete construction raises, but the raise becomes a DENY only
+    where the surrounding hook's shell fallback covers the command's family — for
+    P5/P6 across four tested invocation forms, NEVER family-wide; STEP0/P3/P4/P7
+    stay fail-OPEN on a crashed engine. `_core.main()` wraps only the `evaluate()`
+    call in a BaseException catch-all that converts an escaped exception into an
+    INDETERMINATE verdict — see `_core.py` main() for its exact (non-blanket) scope.
+
+    The single authoritative treatment of the shell fallback's coverage AND its
+    limits — which invocation forms it covers, which lexical forms (quote-
+    concatenation, backslash-escape, command substitution, variable/alias
+    indirection, encoded execution) a regex CANNOT cover, and why it is best-effort
+    defense-in-depth, not semantic equivalence with the engine's shlex lexer — lives
+    in `hooks/pretool-bash-safety.sh::_runtime_guard_fail_closed` (header comment),
+    mechanically asserted by `hooks/tests/test_fail_closed_drift.py`. The residual-
+    gap record lives in `docs/reference/core-context-refactor-plan.md`. Do not
+    restate either here.
+    """
+
+    _RETIRED_LONGFORM_MARKER = None
+    r"""
 
     WHAT IS AND IS NOT GUARANTEED (audited + reproduced 2026-07-17; every clause
     below was executed, not assumed). Mandatory fields alone do NOT produce a
