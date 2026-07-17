@@ -31,7 +31,7 @@ from typing import Optional
 
 @dataclass(frozen=True)
 class Context:
-    """Immutable snapshot of the per-evaluation inputs threaded through the
+    r"""Immutable snapshot of the per-evaluation inputs threaded through the
     decision layers. Each field mirrors EXACTLY a positional parameter the layers
     take today — adopting the Context is a pure relocation of how those values
     travel, never a change to what they hold.
