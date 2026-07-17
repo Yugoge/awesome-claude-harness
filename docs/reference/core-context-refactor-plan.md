@@ -96,7 +96,9 @@ class Context:
 > set: a `Context` built without `groups` made `_p5_endpoint` / `_p6_prockill`
 > ABSTAIN and flipped a modeled BLOCK to a final ALLOW (the INV-6 fail-OPEN
 > hazard). Removing every default makes an incomplete construction raise
-> TypeError at build time (**fail-CLOSED**). The three existing sites are
+> TypeError at build time. That raise is only **link 1** of the fail-CLOSED chain
+> — see the [2026-07-17 audit](#fail-closed-chain-audit--fix-2026-07-17) for what
+> the raise does and does NOT guarantee. The three existing sites are
 > behavior-preserving: the two STEP0 sites now pass `cfg=None` EXPLICITLY, and
 > the P5/P6 site already passed all four fields.
 
