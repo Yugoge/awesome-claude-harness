@@ -362,13 +362,56 @@ coverage removed it fails, restored it passes:
    here; recorded, not fixed.
 3. **The fallback is a best-effort approximation of the engine's lexing, not a
    re-implementation of it.** It greps raw command TEXT; it does not tokenize, expand,
-   or resolve. Forms only a real lexer resolves — variable/alias indirection, `$(…)`
-   substitution, `eval`/base64-encoded text, `env`/`sudo`-style wrappers — are NOT
-   mirrored and cannot be by a regex. The drift guard asserts **token-set coverage and
-   invocation-form tolerance**, not semantic equivalence. Being coarser than the engine
-   in the DENY direction is intended (a bare `kill <pid>`, or an endpoint client aimed
-   at a benign path, is denied by the fallback though the healthy engine ALLOWs it);
-   this path only ever runs when the engine has already failed to decide.
+   or resolve. Measured, because the coarse reading was wrong in BOTH directions:
+
+   | Form | Fallback | Status |
+   |---|---|---|
+   | wrapper prefixes `sudo curl …`, `env FOO=1 curl …` | DENY | matched **incidentally** — the name still appears literally; nothing parses the wrapper |
+   | `xargs`-wrapped verb (`… \| xargs kill`) | DENY | matched via the wrapped token |
+   | simple quoted-`eval` (`eval 'curl …'`, `eval "curl …"`) | DENY | matched **incidentally**, not parsed |
+   | `$(…)` command substitution (`$(echo curl) …`) | ALLOW | genuinely unmatched |
+   | variable/alias indirection (`X=curl; $X …`) | ALLOW | genuinely unmatched |
+   | base64-encoded text | ALLOW | genuinely unmatched |
+
+   So it is **wrong** to say these forms "cannot be mirrored": the wrapper and simple
+   eval forms *do* match today. It is equally wrong to record them as **coverage** —
+   they are **not parsed and not guaranteed**, and a variant that breaks the literal
+   (eval over a substitution) is not matched. The drift guard asserts **token-set
+   coverage and invocation-form tolerance**, not semantic equivalence. Being coarser
+   than the engine in the DENY direction is intended (a bare `kill <pid>`, or an
+   endpoint client aimed at a benign path, is denied by the fallback though the healthy
+   engine ALLOWs it); this path only ever runs when the engine has already failed to
+   decide.
+
+4. **No family is fail-CLOSED *family-wide* — not even P5/P6, and this is not
+   fixable.** Link 3 is a **regex** over raw text; the engine recognizes a head by real
+   **lexing** (`shlex`). A regex can never be semantically equivalent to a lexer, so
+   engine-BLOCK / fallback-ALLOW forms exist and always will. Reproduced against the
+   real engine + the real helper (2026-07-17) — each **engine=BLOCK, fallback=ALLOW**:
+
+   | Form | Example | shlex normalizes to |
+   |---|---|---|
+   | quote-concat (prefix) | `"cu"rl <loopback>/stop` | `curl` |
+   | quote-concat (suffix) | `cu"rl" <loopback>/stop` | `curl` |
+   | quote-concat (single-q) | `'cu'rl <loopback>/stop` | `curl` |
+   | quote-concat (mid) | `c"u"rl <loopback>/stop` | `curl` |
+   | backslash-escape | `\curl <loopback>/stop` | `curl` |
+   | quote-concat (P6) | `"pk"ill -f <ident>` | `pkill` |
+   | quote-concat (P6, suffix) | `ki"ll" -9 …` | `kill` |
+
+   **Do not extend the regex to chase this** — that is a treadmill, and it is
+   explicitly out of scope. The accurate posture: the fallback is **best-effort
+   defense-in-depth over specific tested forms**, *not* a guarantee for any family.
+
+5. **The crash handler is scoped to the decision-engine call, not to the entry point.**
+   `main()` wraps only the `evaluate()` call in its `BaseException` catch-all. Verified:
+   an exception escaping `evaluate()` yields `INDETERMINATE` on stdout (never empty) —
+   that narrow claim holds. But **parseable-but-non-object JSON** (`"hello"`, `[1,2]`,
+   `42`, `null`) raises at the payload field access, which runs *before* the protected
+   region, and exits with **empty stdout and a bare traceback**. Only *unparseable*
+   payloads are handled, by a separate earlier `except (ValueError, OSError)`. A
+   genuine stdout write/flush failure cannot be repaired — the verdict channel is what
+   failed.
 
 **Regression posture.** The widened denial fires ONLY on the non-ALLOW fallback path,
 never when the guard is healthy — asserted structurally by the drift guard and
