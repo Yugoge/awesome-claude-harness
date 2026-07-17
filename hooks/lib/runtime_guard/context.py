@@ -78,16 +78,33 @@ class Context:
     widening the fallback fails that test instead of quietly re-opening this hole.
 
     COVERAGE IS NOT BLANKET — do NOT read link 3 as "the hook denies conservatively"
-    for ALL commands. The filesystem-MUTATION family is NOT in the fallback set, so
-    a crashed guard still ALLOWs a mutation of a protected statefile / hotfile /
-    global bin (verified: `cp`/`tee`/`truncate`/`sed -i`/`>`-redirect targeting a
-    protected path each yield ALLOW when the engine raises). The primitives whose
-    families remain UNCOVERED by the fallback are STEP0 (config self-protection),
-    P3 (hotfile), P4 (statefile), and P7 (global bin); they rely on the engine
-    itself being healthy, not on the fallback. A future construction site that
-    forgets a field is therefore fail-CLOSED for P5/P6 and fail-OPEN for those
-    four — widening the fallback to the mutation family is tracked as follow-up in
-    docs/reference/core-context-refactor-plan.md, NOT as a claim made here.
+    for ALL commands. Three distinct limits, each verified:
+      a. FAMILIES NOT COVERED AT ALL. The filesystem-MUTATION family is NOT in the
+         fallback set, so a crashed guard still ALLOWs a mutation of a protected
+         statefile / hotfile / global bin (verified: `cp`/`tee`/`truncate`/`sed -i`/
+         `>`-redirect targeting a protected path each yield ALLOW when the engine
+         raises). The primitives whose families remain UNCOVERED are STEP0 (config
+         self-protection), P3 (hotfile), P4 (statefile), and P7 (global bin); they
+         rely on the engine itself being healthy, not on the fallback. A future
+         construction site that forgets a field is therefore fail-CLOSED for P5/P6
+         and fail-OPEN for those four — widening the fallback to the mutation family
+         is tracked as follow-up in docs/reference/core-context-refactor-plan.md,
+         NOT as a claim made here.
+      b. NORMALIZATION TOLERANCE IS P5/P6-ONLY. The path-qualified / quoted tolerance
+         noted in link 3 was added to the P5 and P6 lines only; the service-control,
+         package-manager, build-tool and runtime-launcher families keep their original
+         bare-token anchoring (so `/usr/bin/systemctl restart …` is not matched by the
+         fallback). Recorded, not fixed.
+      c. THE FALLBACK APPROXIMATES THE ENGINE'S LEXING; IT DOES NOT REIMPLEMENT IT.
+         It greps raw command TEXT — no tokenization, expansion, or resolution. Forms
+         only a real lexer resolves (variable/alias indirection, `$(…)` substitution,
+         `eval`/base64-encoded text, `env`/`sudo`-style wrappers) are NOT mirrored and
+         cannot be by a regex. The drift guard asserts token-set coverage and
+         invocation-form tolerance, NOT semantic equivalence. The approximation is also
+         deliberately coarser than the engine in the DENY direction (a bare
+         `kill <pid>`, or an endpoint client aimed at a benign path, is denied by the
+         fallback though the healthy engine ALLOWs it) — acceptable because this path
+         runs only when the engine has already failed to decide.
 
       cwd_base    — base cwd seed (payload/process cwd); constant across the whole
                     evaluation. Per-command cwd/cwd_det are derived from it.
