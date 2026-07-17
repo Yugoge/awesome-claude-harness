@@ -57,12 +57,12 @@ def test_nested_step_missing_from_todo_is_still_reported(tmp_path: Path) -> None
     assert warnings == ["nested: missing in .py — Step 2"]
 
 
-def test_repository_nested_workflows_are_in_sync() -> None:
-    """The two workflows that use nested step headings have no token drift."""
+def test_repository_workflows_fixed_by_this_change_are_in_sync() -> None:
+    """Nested headings and the renumbered dev-command retain token parity."""
     original_commands_dir = CHECKER.COMMANDS_DIR
     CHECKER.COMMANDS_DIR = REPO_ROOT / "commands"
     try:
-        for command in ("clean", "dev-overnight"):
+        for command in ("clean", "dev-command", "dev-overnight"):
             todo_script = REPO_ROOT / "scripts" / "todo" / f"{command}.py"
             assert CHECKER.check_one(todo_script) == []
     finally:
