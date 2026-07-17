@@ -127,6 +127,11 @@ _runtime_guard_fail_closed() {
   printf '%s\n' "$cmd" | grep -qiE '(^|[;&|]|[[:space:]])(yarn|npm|pnpm|bun)([[:space:]]|$)' && return 0
   printf '%s\n' "$cmd" | grep -qiE '(^|[;&|]|[[:space:]])(npx|bunx|tsc|pkgroll|tsup)([[:space:]]|$)' && return 0
   printf '%s\n' "$cmd" | grep -qiE '(^|[;&|]|[[:space:]])(node|nodejs|tsx|deno)([[:space:]]|$)' && return 0
+  # Endpoint / raw-socket client family — the front-ends through which a
+  # protected control endpoint is reached (the family P5 guards). Without this
+  # line a P5-family command whose guard evaluation CRASHED matched no family
+  # above and fell through to ALLOW.
+  printf '%s\n' "$cmd" | grep -qiE '(^|[;&|]|[[:space:]])(nc|ncat|netcat|socat|telnet|curl|wget)([[:space:]]|$)' && return 0
   return 1
 }
 _RUNTIME_GUARD_LIB="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/runtime_guard.py"
