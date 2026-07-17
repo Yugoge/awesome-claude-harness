@@ -105,7 +105,7 @@ class Context:
 | Design choice | Rationale |
 |---|---|
 | **frozen** | a Context is an immutable snapshot of one evaluation stage. The front-end peel and the STEP1 config load each build a NEW Context, never mutate one — so a Context always faithfully describes exactly one stage. |
-| **fields MANDATORY (fail-CLOSED)** | no field has a default → omitting one raises TypeError at construction, so a mis-built Context can never silently disable a guard (INV-6). `cfg` keeps its `Optional[dict]` type (it may be None for pre-config STEP0) but STEP0 passes `cfg=None` EXPLICITLY — a pre-config Context is still `cfg=None`; the post-load Context carries the dict. |
+| **fields MANDATORY** | no field has a default → omitting one raises TypeError at construction, so a mis-built Context can never SILENTLY disable a guard (INV-6). The raise is not by itself a deny — it resolves to one only via the [fail-CLOSED chain](#fail-closed-chain-audit--fix-2026-07-17), and only for the verb families the hook's fallback covers. `cfg` keeps its `Optional[dict]` type (it may be None for pre-config STEP0) but STEP0 passes `cfg=None` EXPLICITLY — a pre-config Context is still `cfg=None`; the post-load Context carries the dict. |
 | **`cwd_det` NOT a field** | per-command, not per-evaluation (see two-grains table). Layers derive it locally, unchanged. |
 | **pure data, zero engine import** | `context.py` imports only `dataclasses` + `typing`. No import back into `_core` → no cycle. Mirrors the `shell_lex`/`constants`/… sibling contract. |
 | **new module, not inline** | a lib module (like the six phase-1..6 siblings) — does NOT affect the top-level-script helper-count self-check. |
