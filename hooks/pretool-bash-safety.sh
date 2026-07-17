@@ -127,12 +127,19 @@ _runtime_guard_fail_closed() {
   # of it. It reads raw command TEXT; it does not tokenize, expand, or resolve the
   # way `_core` does. It is therefore intentionally coarser than the engine in both
   # directions: it denies some commands the healthy engine would ALLOW (e.g. a bare
-  # `kill <pid>`, or an endpoint client aimed at a benign path), and it cannot see
-  # forms that only a real lexer resolves (variable/alias indirection, `$(...)`
-  # substitution, base64/eval-encoded text, `env`/`sudo`-style wrappers). Over-denial
-  # is the intended direction: this path runs ONLY when the engine already failed to
-  # decide. The families it covers are listed per-line below; the families it does NOT
-  # cover are named in the residual-gap note in
+  # `kill <pid>`, or an endpoint client aimed at a benign path), and — because a
+  # regex can never be semantically equivalent to a lexer — there are forms the
+  # engine resolves and this helper does NOT match. Verified examples: a front-end
+  # name split across a quote boundary (`"cu"rl …`, `ki"ll" …`), a backslash-escaped
+  # name (`\curl …`), `$(...)` substitution, and variable/alias indirection all
+  # normalize to a recognized head in the engine and are NOT matched here. Wrapper
+  # (`sudo …`, `env FOO=1 …`) and simple quoted-`eval` forms DO happen to match today
+  # — only because the family name still appears literally at a position these
+  # patterns accept, NOT because they are parsed — so they are best-effort, not
+  # guaranteed. Over-denial is the intended direction: this path runs ONLY when the
+  # engine already failed to decide. This helper is DEFENSE-IN-DEPTH over specific
+  # tested forms, NOT a guarantee for any family. The families it covers are listed
+  # per-line below; what is NOT covered is named in the residual-gap note in
   # docs/reference/core-context-refactor-plan.md and in lib/runtime_guard/context.py.
   #
   # Coverage of the P5/P6 front-end TOKEN SETS is asserted mechanically against the
