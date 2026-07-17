@@ -276,6 +276,52 @@ behavior-preserving: the two STEP0 sites now pass `cfg=None` EXPLICITLY (unchang
 pre-config semantics) and the P5/P6 site already passed all four fields — full suite
 stays green and STEP0/P5/P6 verdicts are unchanged.
 
+### Fail-CLOSED chain audit + fix (2026-07-17)
+
+The Phase-2 hardening above shipped with an **overbroad claim**: that the TypeError
+alone made "the guard engine error out and the surrounding hook deny conservatively".
+An adversarial audit **reproduced the opposite** — the hardening had converted a
+*silent-default* fail-OPEN into a *crash* fail-OPEN, and for the P5 family the
+verdict was ALLOW either way:
+
+| Layer | Reproduced BEFORE state |
+|---|---|
+| `_core.main()` | did NOT wrap `evaluate()` (the `try/except (ValueError, OSError)` above it guards only the cwd lookup). The TypeError escaped → rc=1, **stdout empty**, diagnostic lost |
+| `pretool-bash-safety.sh` | `_runtime_guard_fail_closed` covered five verb families (service / kill / package-manager / build / runtime) — **not** the endpoint / raw-socket client family P5 exists to guard → the crashed P5 command matched nothing and fell through |
+
+Reproduction (fault = omit `groups` at the P5/P6 Context site; drive the REAL hook
+with a simulated PreToolUse payload — no real endpoint is ever contacted):
+
+| `printf 'POST /stop …' \| nc 127.0.0.1 54321` | engine stdout | hook exit |
+|---|---|---|
+| healthy guard | `BLOCK` | 2 (BLOCK) |
+| BEFORE — crashed guard | `''` (empty) | **0 (ALLOW), stderr empty** |
+| AFTER — crashed guard | `INDETERMINATE` | **2 (BLOCK)** |
+
+**Fix, two links.** (1) `_core.main()` now wraps `evaluate()` in a catch-all that
+emits the existing `INDETERMINATE` sentinel + a named-exception stderr diagnostic —
+never an empty verdict, never a bare traceback; deliberate BLOCK/ALLOW returns are
+untouched. (2) `_runtime_guard_fail_closed` gained a sixth family —
+`nc|ncat|netcat|socat|telnet|curl|wget` — matching the five existing families'
+anchoring / word-boundary / case-insensitivity discipline; its denial message now
+names the family list accurately.
+
+**Residual gap — stated, not fixed (verified, do not read coverage as blanket).**
+The fallback covers six verb families; the filesystem-MUTATION family is NOT among
+them. With the engine crashed, `cp` / `tee` / `truncate` / `sed -i` / `>`-redirect
+targeting a protected statefile, hotfile, or global bin each still yield **ALLOW**
+(8/8 probed forms). So the primitives STEP0 (config self-protection), P3 (hotfile),
+P4 (statefile), and P7 (global bin) remain fail-OPEN on a crash — they depend on the
+engine being healthy, not on the fallback. Only **P5 and P6** — the two cross-segment
+primitives an empty `groups` disables — are genuinely fail-CLOSED. Widening the
+fallback to the mutation family is **follow-up work**, deliberately out of this
+change's scope; it must not be assumed done.
+
+**Regression posture.** The widened denial fires ONLY on the non-ALLOW fallback path,
+never when the guard is healthy: a healthy-guard `curl …/health | grep /stop` is still
+ALLOW, P5 ×2 + P6 BLOCK still BLOCK, benign still ALLOW, shell stays `bash -n` clean,
+suite green at 1379 passed / 9 xpassed.
+
 ---
 
 ## Global constraints (all phases)
