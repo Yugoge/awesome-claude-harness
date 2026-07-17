@@ -4665,7 +4665,23 @@ def main() -> int:
             cwd_base = os.getcwd()
         except OSError:
             cwd_base = None
-    decision, primitive, reason = evaluate(command, cwd_base)
+    try:
+        decision, primitive, reason = evaluate(command, cwd_base)
+    except Exception as exc:  # noqa: BLE001 — deliberate catch-all (see below)
+        # The decision engine raised. Emit the SAME INDETERMINATE sentinel the
+        # unparseable-payload path above uses, so the bash glue's conservative-
+        # denial fallback decides. Without this the exception escapes, stdout is
+        # left EMPTY, and the glue's `!= "ALLOW"` test sees an unrecognized
+        # verdict with NO diagnostic — which fell through to ALLOW for every verb
+        # family the fallback does not cover. A crash must never be a silent
+        # ALLOW, and must never emit an empty verdict. Deliberate BLOCK/ALLOW
+        # returns never enter this handler.
+        sys.stderr.write(
+            f"[protected-runtime-guard] INDETERMINATE — decision engine raised "
+            f"{type(exc).__name__}: {exc}\n"
+        )
+        print("INDETERMINATE")
+        return 0
     if decision == "BLOCK":
         sys.stderr.write(f"[protected-runtime-guard] BLOCK {primitive}: {reason}\n")
         print("BLOCK")
