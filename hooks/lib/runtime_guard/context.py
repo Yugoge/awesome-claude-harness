@@ -117,10 +117,11 @@ class Context:
          raises). The primitives whose families remain UNCOVERED are STEP0 (config
          self-protection), P3 (hotfile), P4 (statefile), and P7 (global bin); they
          rely on the engine itself being healthy, not on the fallback. A future
-         construction site that forgets a field is therefore fail-CLOSED for P5/P6
-         and fail-OPEN for those four — widening the fallback to the mutation family
-         is tracked as follow-up in docs/reference/core-context-refactor-plan.md,
-         NOT as a claim made here.
+         construction site that forgets a field is therefore fail-OPEN for those four
+         outright, and for P5/P6 is fail-CLOSED only across the four tested invocation
+         forms (never family-wide — see the scope note above) — widening the fallback
+         to the mutation family is tracked as follow-up in
+         docs/reference/core-context-refactor-plan.md, NOT as a claim made here.
       b. NORMALIZATION TOLERANCE IS P5/P6-ONLY. The path-qualified / quoted tolerance
          noted in link 3 was added to the P5 and P6 lines only; the service-control,
          package-manager, build-tool and runtime-launcher families keep their original
