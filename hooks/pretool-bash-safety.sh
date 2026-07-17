@@ -151,8 +151,23 @@ _runtime_guard_fail_closed() {
   # NORMALIZES a front-end token before matching it: it strips a leading path
   # (`/usr/bin/curl`) and surrounding quotes (`"curl"`). A bare-token pattern misses
   # every such form. These fragments admit an optional quote + optional path prefix
-  # while keeping the token itself word-anchored, so a longer token that merely
-  # CONTAINS a family name (httpx-cli, nctool, curler, https-proxy-agent) never matches.
+  # while keeping the token itself word-anchored.
+  #
+  # The substring-safety property this ACTUALLY buys (verified, and no more than this):
+  # a family name that is a strict prefix/suffix/infix of a longer token WITHIN THE
+  # SAME path component does not match — `httpx-cli`, `nctool`, `curler`,
+  # `https-proxy-agent`, `mycurl`, `curl_wrapper`, `curl.sh` are all left alone,
+  # because the token must be preceded by a start/separator/space (+ optional quote,
+  # + optional `/`-TERMINATED path prefix) and followed by an optional quote + space
+  # or end-of-string.
+  # What this does NOT buy — the helper is neither COMMAND-POSITION-aware nor
+  # QUOTE-aware, so a family name that stands as a WHOLE token is denied wherever it
+  # appears, not just in command position. Verified denials: `ls /opt/curl` (final
+  # component of a mere argument PATH — a longer token that does contain the family
+  # name and DOES match), `echo curl` (bare argument), and
+  # `git commit -m "fix curl retry"` (inside a quoted string). Those are false
+  # denials in the ALLOW direction, accepted deliberately: this path runs only on an
+  # already-broken engine, where over-denial is the safe direction.
   # NOTE: the four non-P5/P6 families below deliberately keep their original
   # bare-token anchoring — widening them is out of this change's scope and is recorded
   # as residual in the plan doc, NOT silently assumed done.
