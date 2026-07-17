@@ -328,10 +328,19 @@ def test_membership_form_drift_is_caught():
     "ls -la packages",
 ])
 def test_fallback_does_not_match_longer_unrelated_tokens(helper_path, cmd):
-    """A longer token that merely CONTAINS a family name must NOT be denied.
+    """A family name inside a longer token IN THE SAME PATH COMPONENT must not be denied.
 
     Widening the fallback means a broken engine denies MORE; that pressure must not be
     paid for with false denials on unrelated commands.
+
+    SCOPE — the cases below are all same-component (`httpx-cli`, `nctool`, `curler`).
+    This does NOT assert the broader "a longer token containing a family name never
+    matches": that is FALSE and verified false. The helper is neither quote-aware nor
+    command-position-aware, so a family name standing as a WHOLE token is denied
+    wherever it sits — `ls /opt/curl` (final component of an argument path),
+    `echo curl` (bare argument), `git commit -m "fix curl retry"` (inside a quoted
+    string) are all DENIED. Those over-denials are accepted: this path runs only on an
+    already-broken engine. Do not add such a case here expecting it to pass.
     """
     assert not _denies(helper_path, cmd), (
         f"OVER-BLOCK: the fallback denies {cmd!r}, which merely contains a family name "
