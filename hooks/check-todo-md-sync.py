@@ -26,8 +26,13 @@ HOME = Path(os.path.expanduser("~"))
 TODO_DIR = HOME / ".claude" / "scripts" / "todo"
 COMMANDS_DIR = HOME / ".claude" / "commands"
 
-# Matches e.g. "### Step 5: foo", "### Step 5a: foo", "### Step 12b: bar"
-MD_HEADING_RE = re.compile(r"^###\s+(Step\s+\d+[a-z]?):\s*(.+?)\s*$", re.MULTILINE)
+# Matches workflow headings at Markdown levels 3 through 6, including nested
+# steps such as "#### Step 7: foo".  Level 1/2 headings are section titles in
+# command documents rather than executable checklist entries.
+MD_HEADING_RE = re.compile(
+    r"^#{3,6}\s+(Step\s+\d+[a-z]?):\s*(.+?)\s*$",
+    re.MULTILINE,
+)
 
 # Matches the leading "Step N[x]:" prefix inside a todo item's `content` field.
 PY_CONTENT_RE = re.compile(r"^(Step\s+\d+[a-z]?):")
