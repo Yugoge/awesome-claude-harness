@@ -52,12 +52,24 @@ class Context:
     raised TypeError. The deny is produced by a THREE-link chain, all three of
     which must hold:
       1. construction of an INCOMPLETE Context raises TypeError at build time;
-      2. `_core.main` wraps `evaluate()` in a `BaseException` catch-all and converts
-         ANY escaping exception — including direct BaseException subclasses such as
-         SystemExit — into an explicit INDETERMINATE verdict on stdout + a
-         best-effort diagnostic on stderr; never an empty verdict, never a bare
-         traceback. The sentinel is emitted and FLUSHED before the diagnostic is
-         rendered, so an exception whose own `__str__` raises cannot prevent it;
+      2. `_core.main` wraps THE `evaluate()` CALL — and only that call — in a
+         `BaseException` catch-all, converting any exception that escapes the
+         DECISION ENGINE (including direct BaseException subclasses such as
+         SystemExit) into an explicit INDETERMINATE verdict on stdout + a
+         best-effort diagnostic on stderr. The sentinel is emitted and FLUSHED
+         before the diagnostic is rendered, so an exception whose own `__str__`
+         raises cannot prevent it. SCOPE — this is NOT blanket protection for every
+         failure of the entry point, and must not be read as one:
+           * Payload field access (`payload.get("tool_name")` / `tool_input`) runs
+             BEFORE that protected region. Parseable-but-NON-OBJECT JSON (`"hello"`,
+             `[1,2]`, `42`, `null`) therefore raises at field access and DOES exit
+             with EMPTY stdout and a bare traceback (verified). Only UNPARSEABLE
+             payloads are handled — by a separate earlier `except (ValueError,
+             OSError)` that prints the same sentinel.
+           * A genuine stdout write/flush failure cannot be repaired from inside the
+             handler: the verdict channel is the thing that has failed.
+         The narrow claim that IS true and verified: an exception escaping the
+         `evaluate()` call cannot produce an empty verdict;
       3. the surrounding hook (`pretool-bash-safety.sh`) treats any non-ALLOW
          verdict as a signal to run `_runtime_guard_fail_closed`, which denies
          conservatively for the protected verb families it COVERS: service-control,
