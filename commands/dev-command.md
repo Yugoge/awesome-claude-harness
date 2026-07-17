@@ -187,7 +187,7 @@ SECOND ACTION: Read $CLAUDE_PROJECT_DIR/$CP_DIR/cp-state-<agent>.json to load yo
 This is the checklist-stop handoff: dev-registry handles role registration for
 write-policy, while cp-state handles required atomic actions for Stop enforcement.
 
-### Step 2: Graphify pre-BA Bash hydrator
+### Step 2: Graphify pre-BA Bash hydrator (mirrors commands/dev.md)
 
 Run `scripts/graphify-query.py` as a direct Bash call to inject structural context before BA analysis. Advisory — skips silently when binary absent. Output: `.claude/dev-registry/$DEV_SESSION_ID/graphify/pre_query.json`. When `status=ok` or `status=degraded`, include the pre_query.json reference in the BA dispatch prompt. See `commands/dev.md` graphify hydrator block for the canonical Bash invocation.
 
@@ -563,7 +563,7 @@ Use Agent tool with:
 
 **Iteration tracking**: Update TodoWrite with BA-QA iteration number.
 
-### Step 9: Graphify enrichment
+### Step 9: Graphify enrichment (mirrors commands/dev.md)
 
 After BA-QA validation passes, dispatch the graphify subagent (mode=enrich) to extract a focused subgraph and patch the context JSON with `graph_context`. Advisory — if graphify is unavailable or returns status=skipped, proceed to Step 10 without delay. See `commands/dev.md` graphify enrichment block for the canonical dispatch prompt template.
 
