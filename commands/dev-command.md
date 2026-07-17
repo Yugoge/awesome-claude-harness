@@ -51,6 +51,7 @@ IF QA passes → Generate completion report
 - Iterate until all quality standards met
 
 **Orchestrator Dispatch Model**:
+- A single cycle MAY carry multiple requirements; the orchestrator decomposes them and fans them out to N parallel one-issue lanes within the SAME cycle. Multiplicity alone MUST NOT cause refusal or separate cycles. This mirrors the canonical **Requirement Decomposition & Fan-Out** step in `commands/dev.md` — see that section for the operational per-lane procedure (decomposition, per-stage lane iteration, `multi_issue_fanout_requested` routing); do NOT re-implement it here. When this command is invoked with multiple requirements, apply that decomposition + fan-out FIRST; the detailed dispatch steps below then inherit the per-lane semantics and MUST NOT be run singular over a multi-requirement bundle.
 - N independent tasks → dispatch N subagents **in parallel**, one per task — this is the standard multi-task path
 - 1 task → 1 subagent (sequential is only correct when there is genuinely one task)
 - NEVER bundle multiple issues into a single subagent prompt
@@ -117,7 +118,7 @@ Pass per-agent view paths alongside (not in place of) `spec_path` to subagents s
 
 **Edge cases**:
 - Empty `$ARGUMENTS` → Prompt user for requirement
-- Otherwise → Pass raw text (minus --spec flag) to BA subagent in Step 2
+- Otherwise → Pass raw text (minus --spec flag) to BA subagent in Step 4
 
 **Keep this step lightweight** - BA subagent handles all analysis.
 
@@ -186,11 +187,11 @@ SECOND ACTION: Read $CLAUDE_PROJECT_DIR/$CP_DIR/cp-state-<agent>.json to load yo
 This is the checklist-stop handoff: dev-registry handles role registration for
 write-policy, while cp-state handles required atomic actions for Stop enforcement.
 
-**Graphify pre-BA Bash hydrator** (between Step 1 and Step 2, mirrors commands/dev.md):
+### Step 2: Graphify pre-BA Bash hydrator (mirrors commands/dev.md)
 
 Run `scripts/graphify-query.py` as a direct Bash call to inject structural context before BA analysis. Advisory — skips silently when binary absent. Output: `.claude/dev-registry/$DEV_SESSION_ID/graphify/pre_query.json`. When `status=ok` or `status=degraded`, include the pre_query.json reference in the BA dispatch prompt. See `commands/dev.md` graphify hydrator block for the canonical Bash invocation.
 
-### Step 2: Specialist Consultation (always evaluate, never silently skip)
+### Step 3: Specialist Consultation (always evaluate, never silently skip)
 
 Before touching any specialist, you MUST evaluate each one's relevance to the issue and document the decision. Silently skipping is forbidden — skipping without assessment is itself a workflow violation.
 
@@ -249,7 +250,7 @@ Use Agent tool with:
   "
 ```
 
-Pass all specialist findings (and the full `specialists_assessed` block) to the BA subagent in Step 3 as additional context.
+Pass all specialist findings (and the full `specialists_assessed` block) to the BA subagent in Step 4 as additional context.
 
 ## Four Contracts Awareness (Orchestrator Role)
 
@@ -315,7 +316,7 @@ Layers from shallow to deep:
 When dev reports back, verify implementation layer matches BA's spec layer.
 If dev changed L1 when spec called for L3, treat as failed implementation.
 
-### Step 3: Delegate to BA Subagent
+### Step 4: Delegate to BA Subagent
 
 **Use Task tool to invoke BA subagent for requirements analysis and context building**:
 
@@ -355,7 +356,7 @@ Use Task tool with:
 
 **Wait for BA subagent completion** before proceeding.
 
-### Step 4: BA Clarification Loop
+### Step 5: BA Clarification Loop
 
 **If BA returns `status: "needs_clarification"`**:
 
@@ -388,11 +389,11 @@ Use Task tool with:
 **Loop rules**:
 - Maximum 3 clarification rounds
 - After round 3, BA returns best-effort with explicit assumptions
-- If BA returns `status: "ready"`, proceed to Step 5
+- If BA returns `status: "ready"`, proceed to Step 6
 
-**If BA returns `status: "ready"` on first invocation**: Skip to Step 5.
+**If BA returns `status: "ready"` on first invocation**: Skip to Step 6.
 
-### Step 5: Validate BA Output
+### Step 6: Validate BA Output
 
 **Check BA deliverables exist and are well-formed**:
 
@@ -411,9 +412,9 @@ Read BA output files:
 - Re-invoke BA with specific feedback about what's missing
 - Maximum 2 re-invocations for validation fixes
 
-**If validation passes**: Proceed to Step 6
+**If validation passes**: Proceed to Step 7
 
-### Step 6: QA Validates BA Conclusions
+### Step 7: QA Validates BA Conclusions
 
 **Purpose**: Verify BA's analysis quality BEFORE Dev starts implementation. Catches unproven claims, scope mismatches, and missing investigation evidence early -- saving a wasted Dev+QA cycle.
 
@@ -491,13 +492,13 @@ Use Agent tool with:
 
 ```
 IF verdict == "pass":
-  -> BA conclusions validated. Proceed to Step 8.
+  -> BA conclusions validated. Proceed to Step 9.
 
 ELIF verdict == "fail":
-  -> Proceed to Step 7 for BA-QA iteration.
+  -> Proceed to Step 8 for BA-QA iteration.
 ```
 
-### Step 7: BA-QA Iteration Loop (if QA rejects BA)
+### Step 8: BA-QA Iteration Loop (if QA rejects BA)
 
 **Iteration guard**: Maximum 3 BA-QA iterations to prevent infinite loops
 
@@ -511,7 +512,7 @@ Unresolved objections:
 {summary of remaining QA objections}
 
 Appending unresolved objections to context JSON under `ba_qa_unresolved_objections`.
-Proceeding to Step 8 with documented assumptions.
+Proceeding to Step 9 with documented assumptions.
 ```
 
 **If BA-QA iteration <= 3**:
@@ -556,17 +557,17 @@ Use Agent tool with:
   "
 ```
 
-**After BA re-delivers**: Return to Step 5 (validate BA output), then Step 6 (QA re-validates).
+**After BA re-delivers**: Return to Step 6 (validate BA output), then Step 7 (QA re-validates).
 
 **Rule**: Every BA invocation MUST be followed by QA validation. No exceptions.
 
 **Iteration tracking**: Update TodoWrite with BA-QA iteration number.
 
-**Graphify enrichment** (between Step 7 and Step 8, mirrors commands/dev.md):
+### Step 9: Graphify enrichment (mirrors commands/dev.md)
 
-After BA-QA validation passes, dispatch the graphify subagent (mode=enrich) to extract a focused subgraph and patch the context JSON with `graph_context`. Advisory — if graphify is unavailable or returns status=skipped, proceed to Step 8 without delay. See `commands/dev.md` graphify enrichment block for the canonical dispatch prompt template.
+After BA-QA validation passes, dispatch the graphify subagent (mode=enrich) to extract a focused subgraph and patch the context JSON with `graph_context`. Advisory — if graphify is unavailable or returns status=skipped, proceed to Step 10 without delay. See `commands/dev.md` graphify enrichment block for the canonical dispatch prompt template.
 
-### Step 8: Delegate to Dev Subagent
+### Step 10: Delegate to Dev Subagent
 
 **Use Task tool to invoke dev subagent with file paths only**:
 
@@ -594,7 +595,7 @@ Use Task tool with:
 
 **Wait for dev subagent completion** before proceeding.
 
-### Step 9: Validate Dev Implementation
+### Step 11: Validate Dev Implementation
 
 **Quick validation before QA**:
 
@@ -613,9 +614,9 @@ Read dev implementation report: `docs/dev/dev-report-<timestamp>.json`
 - Refine context JSON with additional information
 - Re-invoke dev subagent (maximum 3 attempts)
 
-**If dev completed**: Proceed to Step 10
+**If dev completed**: Proceed to Step 12
 
-### Step 10: Delegate to QA Subagent
+### Step 12: Delegate to QA Subagent
 
 **Before dispatching QA, write qa_mode sentinel**:
 
@@ -651,7 +652,7 @@ Use Task tool with:
 
 **Wait for QA subagent completion** before proceeding.
 
-### Step 11: Process QA Results
+### Step 13: Process QA Results
 
 Read QA report: `docs/dev/qa-report-<timestamp>.json`
 
@@ -659,18 +660,18 @@ Read QA report: `docs/dev/qa-report-<timestamp>.json`
 
 ```
 IF qa.status == "pass":
-  → Proceed to Step 12 (Update Permissions)
+  → Proceed to Step 14 (Update Permissions)
 
 ELIF qa.status == "warning":
   → Check if minor issues acceptable
-  → If yes: Proceed to Step 12 (Update Permissions)
-  → If no: Proceed to Step 13 (Iteration)
+  → If yes: Proceed to Step 14 (Update Permissions)
+  → If no: Proceed to Step 15 (Iteration)
 
 ELIF qa.status == "fail":
-  → Proceed to Step 13 (Iteration)
+  → Proceed to Step 15 (Iteration)
 ```
 
-### Step 12: Update Settings.json Permissions
+### Step 14: Update Settings.json Permissions
 
 **CRITICAL**: Auto-update permissions for new functionality.
 
@@ -743,7 +744,7 @@ You can now use these scripts without permission prompts.
 - If permission already exists → Skip, don't duplicate
 - If user denies update → Log to completion report
 
-### Step 13: Iteration Loop (if QA fails)
+### Step 15: Iteration Loop (if QA fails)
 
 #### Layer-escalation gate (mandatory)
 
@@ -821,11 +822,11 @@ jq -s '.[0] * {
   > docs/dev/context-iter<N>-<timestamp>.json
 ```
 
-**Return to Step 8** with new context JSON
+**Return to Step 10** with new context JSON
 
 **Iteration tracking**: Update TodoWrite with iteration number
 
-### Step 14: Generate Completion Report
+### Step 16: Generate Completion Report
 
 **QA passed! Generate final report.**
 
@@ -1084,21 +1085,21 @@ WHEN TO SCRIPT:
 **Step 1**: Parse requirement
 - Requirement: "Create /analyze command that uses specialist subagent"
 
-**Step 2**: Consult specialists (optional)
+**Step 3**: Consult specialists (optional)
 - No specialists needed → skip
 
-**Step 3**: Delegate to BA subagent
+**Step 4**: Delegate to BA subagent
 - BA returns `needs_clarification` with questions about metrics and output format
 
-**Step 4**: BA clarification loop
+**Step 5**: BA clarification loop
 - Round 1: What metrics? → Complexity, maintainability, test coverage
 - BA has enough clarity → returns `ready`
 - BA creates: `ba-spec-20260206-120000.md` + `context-20260206-120000.json`
 
-**Step 5**: Validate BA output
+**Step 6**: Validate BA output
 - Both files exist with required sections
 
-**Step 8**: Dev subagent
+**Step 10**: Dev subagent
 - Created: `.claude/commands/analyze.md` (with YAML frontmatter)
 - Created: `.claude/agents/code-analyzer.md` (specialist)
 - Created: `.claude/scripts/todo/analyze.py` (workflow tracker)
@@ -1106,7 +1107,7 @@ WHEN TO SCRIPT:
 - Applied: Complete Automation pattern
 - Saved report: `docs/dev/dev-report-20260206-120000.json`
 
-**Step 9-10**: QA subagent
+**Step 11-12**: QA subagent
 - Verified YAML frontmatter complete
 - Verified specialist returns JSON only
 - Verified todo script works
@@ -1114,14 +1115,14 @@ WHEN TO SCRIPT:
 - Status: PASS
 - Saved report: `docs/dev/qa-report-20260206-120000.json`
 
-**Step 11**: Process results
+**Step 13**: Process results
 - QA passed → proceed to completion
 
-**Step 12**: Update permissions
+**Step 14**: Update permissions
 - Added: `SlashCommand(.claude/commands/analyze.md:*)`
 - Added: `Bash(source ~/.claude/venv/bin/activate && python3 ~/.claude/scripts/todo/analyze.py:*)`
 
-**Step 14**: Completion report
+**Step 16**: Completion report
 - Generated: `docs/dev/completion-20260206-120000.md`
 - Presented summary to user
 
