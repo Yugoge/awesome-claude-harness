@@ -27,7 +27,8 @@ WHAT THIS FILE DOES **NOT** CLAIM
 ─────────────────────────────────
 It asserts TOKEN-SET COVERAGE across FOUR INVOCATION FORMS ONLY (bare / quoted-whole /
 path-qualified / path-qualified+quoted), for the P5 endpoint-client and P6 process-
-termination families — the only two the fallback covers at all. It does NOT assert
+termination families — the only two families this test mechanically checks (they are
+NOT the only families the fallback covers at all). It does NOT assert
 semantic equivalence with the engine's lexer, and passing it does NOT mean any family
 is fail-CLOSED family-wide. The single authoritative account of the fallback's coverage
 and its limits (which lexical forms the regex fallback does not match, and why only full
