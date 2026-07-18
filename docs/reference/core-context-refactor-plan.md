@@ -424,9 +424,13 @@ never when the guard is healthy — asserted structurally by the drift guard and
 end-to-end: a healthy-guard benign endpoint client (`curl …/health`) is still ALLOW,
 P5/P6 BLOCK cases still BLOCK, benign still ALLOW. Substring safety holds: `httpx-cli`,
 `nctool`, `curler`, `my-fuser-report`, and a `node_modules/https-proxy-agent/…` path
-are all still ALLOW under a crashed engine (a longer token merely CONTAINING a family
-name never matches). Shell stays `bash -n` clean. Suite green at 1379 passed /
-9 xpassed + 29 new drift-guard tests.
+are all still ALLOW under a crashed engine (a family name that is a strict
+prefix/suffix/infix WITHIN a single path component is not matched; but the same name as
+its own whole command token — INCLUDING a path-qualified form like `/usr/bin/curl` — IS
+matched by design, as `test_fail_closed_drift.py` documents). Shell stays `bash -n`
+clean. The drift guard adds 30 parametrized tests whose count derives from the live
+`_core.NET_HEADS` / `constants.KILL_VERBS` token sets, and the full default suite stays
+green.
 
 ---
 
