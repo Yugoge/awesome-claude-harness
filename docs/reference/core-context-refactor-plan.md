@@ -345,7 +345,7 @@ coverage removed it fails, restored it passes:
 | engine gains an endpoint client, shell not widened | **fails** |
 | shell loses a token the engine still knows (`httpie`) | **fails** |
 | engine gains a new termination front-end head literal | **fails** |
-| (restored) | 29 passed |
+| (restored) | all pass |
 
 **Residual gaps — stated, not fixed (verified; do NOT read coverage as blanket).**
 
