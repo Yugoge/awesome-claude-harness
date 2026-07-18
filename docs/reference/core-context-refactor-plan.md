@@ -428,9 +428,9 @@ are all still ALLOW under a crashed engine (a family name that is a strict
 prefix/suffix/infix WITHIN a single path component is not matched; but the same name as
 its own whole command token — INCLUDING a path-qualified form like `/usr/bin/curl` — IS
 matched by design, as `test_fail_closed_drift.py` documents). Shell stays `bash -n`
-clean. The drift guard adds 30 parametrized tests whose count derives from the live
-`_core.NET_HEADS` / `constants.KILL_VERBS` token sets, and the full default suite stays
-green.
+clean. The drift guard adds 30 tests — token-coverage cases over the NET_HEADS /
+constants.KILL_VERBS front-end sets across the four invocation forms, plus fixed
+substring and structural checks — and the full default suite stays green.
 
 ---
 
