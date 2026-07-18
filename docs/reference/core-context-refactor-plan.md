@@ -354,9 +354,13 @@ coverage removed it fails, restored it passes:
    `>`-redirect targeting a protected statefile, hotfile, or global bin each still
    yield **ALLOW** (8/8 probed forms). So **STEP0** (config self-protection), **P3**
    (hotfile), **P4** (statefile) and **P7** (global bin) remain fail-OPEN on a crash —
-   they depend on the engine being healthy. **P5** and **P6** are the only families the
-   fallback covers at all — but see gap 4: not even they are fail-CLOSED *family-wide*.
-   Widening to the mutation family is **follow-up work**; it must not be assumed done.
+   they depend on the engine being healthy. The families the fallback DOES cover are
+   **P5** (endpoint client) and **P6** (process termination), alongside the pre-existing
+   service-control, package-manager, build-tool and runtime-launcher families; what it
+   lacks is any filesystem-mutation family — which is exactly why STEP0/P3/P4/P7 stay
+   fail-OPEN on a crash. And see gap 4: not even the P5/P6 families it covers are
+   fail-CLOSED *family-wide*. Widening to the mutation family is **follow-up work**; it
+   must not be assumed done.
 2. **Normalization tolerance is P5/P6-only.** The path-qualified/quoted tolerance was
    added to the P5 and P6 lines only. The service-control, package-manager, build-tool
    and runtime-launcher families keep their original bare-token anchoring, so
