@@ -162,6 +162,14 @@ def main():
 
     rib = params.get("run_in_background")
 
+    # Narrow /spec Explore hole: allow an EXPLICIT background Explore agent while a
+    # /spec interview is active (restores the legitimate non-blocking Step-3 codebase
+    # exploration that pretool-spec-block-foreground-agent.py already exempts). Bounded
+    # to Agent/Task + subagent_type=="Explore" + run_in_background is True + live /spec
+    # FSM window — arbitrary orchestrator background work remains blocked.
+    if _is_spec_explore_exempt(tool_name, params, session_id):
+        sys.exit(0)
+
     # Agent and Task default to BACKGROUND when the field is absent, so anything
     # other than an explicit False (i.e. True or None/absent) is a background
     # dispatch and is blocked.
