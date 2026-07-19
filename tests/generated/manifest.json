@@ -169,6 +169,10 @@
     {
       "task_id": "20260705-191503",
       "manifest_path": "tests/generated/20260705-191503/manifest.json"
+    },
+    {
+      "task_id": "20260719-093224-terminal-validation",
+      "manifest_path": "tests/generated/20260719-093224-terminal-validation/manifest.json"
     }
   ]
 }
