@@ -61,33 +61,45 @@ def first_present(mapping, names, default=None):
 
 
 def _load_json(path):
-    """Read and json-parse a file. Return None on any failure (never wedge)."""
+    """Read and json-parse a file. Return None on ANY failure (never wedge).
+
+    Broad except is deliberate: Path.read_text() can raise UnicodeDecodeError
+    (a ValueError, NOT an OSError) on a binary/corrupt file, and a malformed
+    session id can raise building the path — all must degrade to None, never
+    propagate out of this matcher=None hook (which runs on EVERY tool call)."""
     try:
         return json.loads(Path(path).read_text())
-    except (OSError, json.JSONDecodeError):
+    except Exception:  # noqa: BLE001 — corrupt/binary/unreadable/bad-path -> None
         return None
 
 
 def _spec_interview_active(session_id: str) -> bool:
     """True iff a /spec interview bookmark is active AND has an incomplete step.
 
-    Mirrors pretool-spec-block-foreground-agent.py exactly (same bookmark path,
-    same command check, same todos-incomplete check) so the two hooks share one
-    /spec-active definition. Any failure returns False (fail-safe: the block
-    stands rather than opening the hole on corrupt state)."""
-    project_dir = Path(os.environ.get("CLAUDE_PROJECT_DIR", os.getcwd()))
-    bookmark = _load_json(project_dir / ".claude" / f"workflow-{session_id}.json")
-    if not isinstance(bookmark, dict) or bookmark.get("command") != "spec":
+    Mirrors pretool-spec-block-foreground-agent.py EXACTLY: same bookmark path +
+    command=="spec" check, and the SAME incomplete definition -- done < total,
+    where total = len(todos) and done = count of dict entries with
+    status == "completed" (so non-dict / malformed entries count toward
+    incomplete, keeping the interview ACTIVE, identical to spec-block's
+    _todo_progress). Any exception -> False: fail-safe (the hole stays SHUT) AND
+    never-wedge (the hook must never exit 1 on this matcher=None path)."""
+    try:
+        project_dir = Path(os.environ.get("CLAUDE_PROJECT_DIR", os.getcwd()))
+        bookmark = _load_json(project_dir / ".claude" / f"workflow-{session_id}.json")
+        if not isinstance(bookmark, dict) or bookmark.get("command") != "spec":
+            return False
+        todos = _load_json(
+            Path.home() / ".claude" / "todos" / f"{session_id}-agent-{session_id}.json"
+        )
+        if not isinstance(todos, list) or not todos:
+            return False
+        total = len(todos)
+        done = sum(
+            1 for t in todos if isinstance(t, dict) and t.get("status") == "completed"
+        )
+        return done < total
+    except Exception:  # noqa: BLE001 — never raise: fail-safe (shut) + never-wedge
         return False
-    todos = _load_json(
-        Path.home() / ".claude" / "todos" / f"{session_id}-agent-{session_id}.json"
-    )
-    if not isinstance(todos, list) or not todos:
-        return False
-    incomplete = any(
-        isinstance(t, dict) and t.get("status") != "completed" for t in todos
-    )
-    return incomplete
 
 
 def _is_spec_explore_exempt(tool_name, params, session_id: str) -> bool:
