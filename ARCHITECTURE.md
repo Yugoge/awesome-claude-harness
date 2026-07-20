@@ -1,7 +1,7 @@
 # Architecture — `.claude` Agent Operating System
 
 > Deep technical architecture and design rationale for maintainers.
-> Last updated: 2026-07-15
+> Last updated: 2026-07-20
 
 This repository is a **Claude Code global configuration** (`~/.claude` symlinks to it) that turns one chat agent into a disciplined software team. A main *orchestrator* agent's direct writes are mechanically constrained by the orchestrator gate (one non-whitelist tool per turn, unlockable by `/do`) so that real work is intended for single-purpose **subagents** it dispatches; a defense-in-depth chain of **PreToolUse / PostToolUse / Stop** hooks makes catastrophic git and filesystem mistakes mechanically hard — gated by hooks that fail closed by default, with narrow audited human break-glass paths (`/do`, `/allow`); and an autonomous overnight loop explores, fixes, verifies, and commits in an isolated worktree until a wall-clock deadline. Everything here is plain Markdown prompts plus small Python/Bash hooks and scripts — the behavior change comes from *enforcement in code*, not from asking the model nicely.
 
@@ -9,35 +9,35 @@ This document is the maintainer-facing companion to [`README.md`](README.md): th
 
 ---
 
-## 1. Verified inventory (2026-07-15)
+## 1. Verified inventory (2026-07-20)
 
 All counts below were established by enumerating the actual repository, not copied from prose. Reproduction commands are noted so a maintainer can re-verify after changes.
 
 | Component | Count | How counted |
 |---|---|---|
 | **Subagents** (`agents/*.md`, excluding `INDEX.md`/`README.md`) | **23** | `ls agents/*.md \| grep -vE '/(INDEX\|README)\.md$'` |
-| **Slash commands** (`commands/*.md`, excluding `INDEX.md`/`README.md`) | **18** | `ls commands/*.md \| grep -vE '/(INDEX\|README)\.md$'` |
-| **Hook command entries wired** in `settings.json` | **67** | sum of `hooks[*][*].hooks[]` over all lifecycle events |
-| **Distinct hook files referenced** by `settings.json` | **66** (+1 = **67** paths) | unique `hooks/*.py\|*.sh` paths in those entries; the 67th wired executable is the non-hooks `scripts/canary-verify.sh` (SessionStart) → 67 distinct wired executable paths |
+| **Slash commands** (`commands/*.md`, excluding `INDEX.md`/`README.md`) | **19** | `ls commands/*.md \| grep -vE '/(INDEX\|README)\.md$'` |
+| **Hook command entries wired** in `settings.json` | **71** | sum of `hooks[*][*].hooks[]` over all lifecycle events |
+| **Distinct hook files referenced** by `settings.json` | **70** (+1 = **71** paths) | unique `hooks/*.py\|*.sh` paths in those entries; the remaining wired executable is the non-hooks `scripts/canary-verify.sh` (SessionStart) → 71 distinct wired executable paths |
 | **Lifecycle events used** | **7** | keys of `settings.json.hooks` |
-| **Hook files present on disk** (`hooks/*.py` + `*.sh`, excl. `.bak`) | **88** | `find hooks -maxdepth 1 -type f \( -name '*.py' -o -name '*.sh' \)` |
-| **Helper scripts** (`scripts/` top-level files, excl. `INDEX/README`) | **77** | `find scripts -maxdepth 1 -type f` minus docs |
+| **Hook files present on disk** (`hooks/*.py` + `*.sh`, excl. `.bak`) | **92** | `find hooks -maxdepth 1 -type f \( -name '*.py' -o -name '*.sh' \)` |
+| **Helper scripts** (`scripts/` top-level files, excl. `INDEX/README`) | **78** | `find scripts -maxdepth 1 -type f` minus docs |
 | **Skills** (`skills/*/` directories) | **8** | `ls -d skills/*/` |
-| `permissions.allow` / `deny` / `ask` entries | 162 / 95 / 30 | keys of `settings.json.permissions` |
+| `permissions.allow` / `deny` / `ask` entries | 162 / 96 / 30 | keys of `settings.json.permissions` |
 
-> Note on the hook count: more hook *files* exist on disk (**88**) than are *wired* (**66** hooks files / 67 executable entries). The unwired files are install scripts, libraries, legacy/`.bak` variants, and intentionally-staged hooks. The number that matters for behavior is **what `settings.json` wires**: 66 distinct `hooks/` files across 67 entries; the 67th entry is `scripts/canary-verify.sh` wired under `SessionStart` — **no referenced executable is duplicated**. The seven lifecycle events are `SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `Notification`, `Stop`, `SubagentStop`.
+> Note on the hook count: more hook *files* exist on disk (**92**) than are *wired* (**70** hooks files / 71 executable entries). The unwired files are install scripts, libraries, legacy/`.bak` variants, and intentionally-staged hooks. The number that matters for behavior is **what `settings.json` wires**: 70 distinct `hooks/` files plus `scripts/canary-verify.sh` under `SessionStart` — **no referenced executable is duplicated**. The seven lifecycle events are `SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `Notification`, `Stop`, `SubagentStop`.
 
 ### Per-event wiring (from `settings.json`)
 
 | Event | Matcher blocks | Hook entries |
 |---|---|---|
 | `SessionStart` | 1 | 7 |
-| `UserPromptSubmit` | 4 | 5 |
-| `PreToolUse` | 22 | 30 |
-| `PostToolUse` | 7 | 14 |
+| `UserPromptSubmit` | 4 | 6 |
+| `PreToolUse` | 22 | 31 |
+| `PostToolUse` | 8 | 15 |
 | `Notification` | 1 | 1 |
 | `Stop` | 1 | 4 |
-| `SubagentStop` | 4 | 6 |
+| `SubagentStop` | 4 | 7 |
 
 ### 1.1 External dependencies (REQUIRED vs OPTIONAL)
 
@@ -342,14 +342,14 @@ flowchart LR
 ├── ARCHITECTURE.md          # this document
 ├── README.md                # overview / value-prop (hand-maintained; no AUTO block)
 ├── INDEX.md                 # top-level index
-├── settings.json            # 66 wired hook files / 67 entries across 7 lifecycle events; permissions; env
+├── settings.json            # 70 wired hook files / 71 entries across 7 lifecycle events; permissions; env
 ├── agents/                  # 23 subagent definitions  (+ INDEX.md, README.md)
-├── commands/                # 18 slash-command workflows (+ INDEX.md, README.md)
-├── hooks/                   # enforcement layer (88 files on disk; 66 wired)
+├── commands/                # 19 slash-command workflows (+ INDEX.md, README.md)
+├── hooks/                   # enforcement layer (92 files on disk; 70 wired)
 │   ├── lib/                 #   allowlist (sentinel grants), checkpoint-core, contract runtime, resolvers
 │   ├── doc_sync/            #   self-updating INDEX/README/CLAUDE regeneration package
 │   └── git-keystone/        #   git-native ref-transaction protection
-├── scripts/                 # 77 helper scripts (graphify, grant writers, spec/dev-report resolvers, ...)
+├── scripts/                 # 78 helper scripts (graphify, grant writers, spec/dev-report resolvers, ...)
 │   └── install/             #   install helpers
 ├── skills/                  # 8 skills: Playwright UI-audit suite (ui-*)
 ├── schemas/                 # JSON contracts: context.v1, cycle-contract.v1, dev-report.v1, qa-report.v1, ...
