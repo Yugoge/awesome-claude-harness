@@ -24,6 +24,9 @@ Each subagent invocation handles exactly ONE issue. A single `/dev` cycle MAY ca
 ### 15. `disable-model-invocation: true` blocks SlashCommand only — not `Skill` tool calls
 Add `Skill(name:*)` to `settings.json` deny for every human-only command; that is the only real technical barrier against agent self-invocation.
 
+### 16. Quota-interrupted subagents must be resumed, never replaced
+After a session/usage limit interrupts agents, the human-only `/restart` command must enumerate every recoverable child from the current parent transcript and resume the SAME `agent_id` with `SendMessage`. Never create replacement `Agent` calls, never omit a child because its transcript looks nearly complete, and never claim recovery until response evidence exists for every candidate.
+
 ---
 
 ## 🔄 Auto-Commit Mechanism (refs/checkpoints/*)
@@ -41,7 +44,7 @@ Main agent is the orchestrator; delegate real work to subagents. Enforced by `~/
 - **Permanently blocked**: `EnterPlanMode`, `ExitPlanMode` — even with `/do`.
 - **Bypass**: user invokes `/do` this session → gate exits 0 for everything except permanently-blocked tools.
 - Subagents (`agent_id` present) bypass all checks. Streak state at `/tmp/claude-tool-streak-<sid>.json`. For files >600 lines, delegate and ask for a summary — never request raw contents.
-- **No background dispatch**: `Agent`/`Task` run in the background *by default*, so the orchestrator MUST pass `run_in_background: false` on every dispatch (and on `Bash` when not backgrounding). Enforced by `~/.claude/hooks/pretool-block-background-tasks.py`: Agent/Task are blocked (exit 2) unless `run_in_background` is explicitly `false`; `Bash` is blocked only on explicit `true`; `SendMessage` and `Workflow` are blocked outright (no synchronous mode — `SendMessage` drives/resumes a background teammate even after it was spawned synchronously, `Workflow` spawns a background agent fleet); subagents (`agent_id` truthy) and `/do` consent bypass. Background work bypasses harness monitoring — keep it synchronous and observable.
+- **No background dispatch**: `Agent`/`Task` run in the background *by default*, so the orchestrator MUST pass `run_in_background: false` on every dispatch (and on `Bash` when not backgrounding). Enforced by `~/.claude/hooks/pretool-block-background-tasks.py`: Agent/Task are blocked (exit 2) unless `run_in_background` is explicitly `false`; `Bash` is blocked only on explicit `true`; `Workflow` and ordinary `SendMessage` calls are blocked outright. The sole `SendMessage` exception is a human-authenticated `/restart` recovery to transcript-discovered interrupted agent IDs with the exact fixed recovery message; it is journaled through `SubagentStop`. Subagents (`agent_id` truthy) and `/do` consent bypass. Background work otherwise bypasses harness monitoring — keep it synchronous and observable.
 
 ---
 

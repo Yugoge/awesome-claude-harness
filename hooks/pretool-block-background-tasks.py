@@ -9,9 +9,9 @@ ENFORCEMENT (default disposition matters):
   - Bash → foreground is the default, so only an explicit True is a background
     task (exit 2); absent/False is fine.
   - SendMessage / Workflow → inherently background with NO synchronous mode.
-    SendMessage drives/resumes a teammate async (regardless of how it was spawned);
-    Workflow spawns a background agent fleet. Both are blocked outright (exit 2) —
-    for the orchestrator they ARE background-agent execution.
+    SendMessage is blocked except for the exact, human-authenticated /restart
+    recovery message to a transcript-discovered interrupted agent id. Workflow
+    remains blocked outright.
   - Subagents (agent_id truthy) → exit 0 (no restriction)
   - /do consent active → exit 0 (bypass)
 
@@ -151,18 +151,33 @@ def main():
     if do_sentinel.exists():
         sys.exit(0)
 
-    # SendMessage drives/resumes a background teammate (even one that was spawned
-    # synchronously — a send resumes it from its transcript and runs it async);
-    # Workflow spawns a whole background agent fleet and returns immediately. Neither
-    # has a synchronous mode, so for the orchestrator they ARE background-agent
-    # execution — block outright. (Subagent + /do bypasses already applied above.)
-    # No run_in_background field is consulted; these tools have none.
+    # SendMessage is normally forbidden because it resumes a child asynchronously.
+    # The sole exception is /restart: a UserPromptSubmit capability plus an exact
+    # parent-transcript binding proves that `to` is an interrupted existing agent,
+    # and the message body must byte-match the fixed recovery prompt. Import inside
+    # the branch so a missing helper cannot wedge unrelated tools; SendMessage fails
+    # CLOSED to its prior always-blocked disposition on any helper error.
+    restart_reason = ""
+    if tool_name == "SendMessage":
+        try:
+            from lib.subagent_restart import authorize_send_message
+
+            restart_ok, restart_reason = authorize_send_message(payload)
+        except Exception as exc:  # noqa: BLE001 — prior policy is deny
+            restart_ok = False
+            restart_reason = f"restart authorization unavailable: {exc}"
+        if restart_ok:
+            sys.exit(0)
+
+    # Workflow spawns a whole background fleet. Unauthorized SendMessage resumes a
+    # background child. Neither has a synchronous mode, so both remain blocked.
     if tool_name in {"SendMessage", "Workflow"}:
+        detail = f"\nRestart authorization: {restart_reason}" if restart_reason else ""
         print(
             f"[BLOCK] {tool_name} runs agents in the background and is forbidden for "
             "the orchestrator.\n"
             "There is no synchronous mode; dispatch work with "
-            "Agent(run_in_background=false), or use /do.",
+            f"Agent(run_in_background=false), or use /do.{detail}",
             file=sys.stderr,
         )
         sys.exit(2)

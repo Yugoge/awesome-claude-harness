@@ -51,6 +51,7 @@ Run the guard demo: `bash examples/guard-demo/run-demo.sh`
 | **Release-readiness gate** | `/close` proves not just "the code works" but "the system can ship it" — four Workflow-Integrity checks, optionally a multi-round QA↔Codex debate. | `commands/close.md` |
 | **Git protection kernel** | `commit / push / merge / reset --hard` refused unless a per-operation authorization grant is present (commit grant is single-use; push grant is wrapper-managed and retryable on failure); wide-path checkout, stash-as-buffer, and hard resets blocked by default. Each guard maps to a specific failure class it prevents. | `hooks/pretool-git-privilege-guard.py`, `hooks/pretool-bash-safety.sh` |
 | **Autonomous overnight pipeline** | `/dev-overnight 6:00` runs an unattended explore → triage → fix → verify → commit loop until a wall-clock end time. Stop-hook physically refuses early termination. | `commands/dev-overnight.md`, `hooks/stop-overnight-timelock.py` |
+| **Lossless quota recovery** | `/restart` resumes every interrupted child by its original `agent_id` and persisted transcript; fresh replacement agents are forbidden. | `commands/restart.md`, `hooks/lib/subagent_restart.py` |
 | **Structured break-glass grants** | `/allow` writes a structured grant (`{op, target, args_contain}`) matched by command structure — consumed on any terminal result. | `hooks/lib/allowlist.py`, `commands/allow.md` |
 | **Branch / PR / worktree firewall** | Creating a branch, PR, or worktree is forbidden by default everywhere, with explicit human escape hatches and a live-overnight exception. | `hooks/pretool-block-branch-pr-worktree.py`, `hooks/pretool-block-enterworktree.sh` |
 | **Crash-proof checkpoints** | Snapshots written to `refs/checkpoints/<branch>` via git plumbing — never move `HEAD`, so `git blame` always points at a real semantic commit. | `hooks/lib/checkpoint-core.sh`, `docs/reference/checkpoint-mechanism.md` |
@@ -259,7 +260,7 @@ The orchestrator dispatches specialists by *describing the problem* — never th
 
 ---
 
-## The command surface: 18 slash commands
+## The command surface: 19 slash commands
 
 | Group | Command | What it does | When to use |
 |---|---|---|---|
@@ -279,6 +280,7 @@ The orchestrator dispatches specialists by *describing the problem* — never th
 | **Quality** | `/test` | Test workflow (execute + validate). | You need the test suite executed and its results validated. |
 | **Control** | `/do` | Break-glass consent for the main agent, one turn (never a subagent); does not silence the bulk-commit warning. | Main agent must break the rules for one entire turn. |
 | **Control** | `/allow` | Structured single-use break-glass grant for one specific operation. | Green-light one specific blocked operation, a single time. |
+| **Control** | `/restart` | Resume every quota-interrupted subagent from its original transcript and ID. | A session/usage limit interrupted one or more running subagents. |
 | **Control** | `/stop` | Cancel an overnight session. | Mid-overnight, to abort a running session. |
 | **Control** | `/codex` | OpenAI Codex adversarial delegation. | You want an adversarial second opinion from an outside model. |
 

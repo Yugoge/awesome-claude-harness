@@ -203,6 +203,22 @@ def main():
 
     sid = get_session_id(data)
 
+    # /restart exception: multiple SendMessage calls are required to resume ALL
+    # interrupted children, so the normal once-per-tool-per-turn budget cannot be
+    # used. The shared verifier binds the human UserPromptSubmit grant, parent
+    # transcript, target agent id, prepared state, and exact fixed message. Any
+    # failure falls through to the ordinary non-whitelist budget; the independent
+    # background-task hook then denies the unauthorized send.
+    if tool_name == "SendMessage":
+        try:
+            from lib.subagent_restart import authorize_send_message
+
+            restart_ok, _restart_reason = authorize_send_message(data)
+            if restart_ok:
+                sys.exit(0)
+        except Exception:
+            pass
+
     # Agent-clear: dispatching a subagent (Agent) is the ONLY action that
     # clears the consecutive-Bash streak (the user's literal intent — the count
     # is reset only when a subagent is used). Placed here, after the subagent
