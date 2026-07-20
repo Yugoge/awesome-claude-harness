@@ -323,7 +323,7 @@
       "Edit(.claude/CLAUDE.md)"
     ]
   },
-  "model": "fable",
+  "model": "opus",
   "hooks": {
     "SessionStart": [
       {
