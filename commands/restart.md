@@ -37,9 +37,10 @@ every recoverable interrupted subagent in the current parent session is handled.
 
    The output is the complete transcript-derived candidate set. A zero count is
    a successful no-op; report that no recoverable interrupted child exists.
-3. **Resume every incomplete candidate.** In one parallel tool-call batch where
+3. **Resume every pending candidate.** In one parallel tool-call batch where
    supported, call `SendMessage` exactly once for every candidate whose status is
-   not `response_observed`. Use its exact `agent_id` as `to` and the exact
+   `pending`. A `dispatched` candidate is already running: wait for it and never
+   enqueue a duplicate message. Use its exact `agent_id` as `to` and the exact
    `resume_message` emitted by the prepare command as `message`. Do not edit,
    summarize, prefix, suffix, translate, or otherwise rewrite that message.
 4. **Wait for response evidence.** Successful sends are journaled automatically;
