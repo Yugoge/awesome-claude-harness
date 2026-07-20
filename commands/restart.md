@@ -27,9 +27,11 @@ every recoverable interrupted subagent in the current parent session is handled.
    `claude --resume <session-id>`, and invoke `/restart` again. Do not fall back
    to `Agent`.
 2. **Prepare the recovery set.** Resolve `SID` from
-   `$CLAUDE_CODE_SESSION_ID` with `$CLAUDE_SESSION_ID` as fallback, then run:
+   `$CLAUDE_CODE_SESSION_ID` with `$CLAUDE_SESSION_ID` as fallback in the same
+   Bash call. An empty SID is a fail-closed error:
 
    ```bash
+   SID="${CLAUDE_CODE_SESSION_ID:-${CLAUDE_SESSION_ID:-}}"; test -n "$SID" || { echo 'RESTART_BLOCKED_SESSION_ID_UNAVAILABLE' >&2; exit 2; }
    python3 "$HOME/.claude/scripts/restart-subagents.py" prepare --session-id "$SID"
    ```
 
@@ -45,6 +47,7 @@ every recoverable interrupted subagent in the current parent session is handled.
    Bash timeout of at least 600000 ms:
 
    ```bash
+   SID="${CLAUDE_CODE_SESSION_ID:-${CLAUDE_SESSION_ID:-}}"; test -n "$SID" || exit 2
    python3 "$HOME/.claude/scripts/restart-subagents.py" status --session-id "$SID" --wait-seconds 540
    ```
 
@@ -54,6 +57,7 @@ every recoverable interrupted subagent in the current parent session is handled.
 5. **Finalize only after all responses.** When `complete` is true, run:
 
    ```bash
+   SID="${CLAUDE_CODE_SESSION_ID:-${CLAUDE_SESSION_ID:-}}"; test -n "$SID" || exit 2
    python3 "$HOME/.claude/scripts/restart-subagents.py" finalize --session-id "$SID"
    ```
 

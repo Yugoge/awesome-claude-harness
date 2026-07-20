@@ -43,6 +43,11 @@ QUOTA_RE = re.compile(
     r"resets?\s+(?:at|in|\d)|temporarily limiting requests",
     re.IGNORECASE,
 )
+TASK_NOTIFICATION_RE = re.compile(
+    r"<task-notification>.*?<task-id>([^<]+)</task-id>.*?"
+    r"<status>completed</status>.*?</task-notification>",
+    re.IGNORECASE | re.DOTALL,
+)
 
 
 class RestartError(RuntimeError):
@@ -227,9 +232,12 @@ def _extract_agent_id(value: Any) -> str:
     return ""
 
 
-def _read_parent_calls(transcript: Path) -> tuple[dict[str, dict[str, Any]], dict[str, list[Any]]]:
+def _read_parent_calls(
+    transcript: Path,
+) -> tuple[dict[str, dict[str, Any]], dict[str, list[Any]], set[str]]:
     calls: dict[str, dict[str, Any]] = {}
     results: dict[str, list[Any]] = {}
+    completed_background_ids: set[str] = set()
     try:
         lines = transcript.open("r", encoding="utf-8", errors="replace")
     except OSError as exc:
@@ -242,6 +250,12 @@ def _read_parent_calls(transcript: Path) -> tuple[dict[str, dict[str, Any]], dic
                 continue
             message = record.get("message") if isinstance(record, dict) else None
             content = message.get("content") if isinstance(message, dict) else None
+            if isinstance(content, str):
+                for match in TASK_NOTIFICATION_RE.finditer(content):
+                    agent_id = match.group(1).strip()
+                    if AGENT_RE.fullmatch(agent_id):
+                        completed_background_ids.add(agent_id)
+                continue
             if not isinstance(content, list):
                 continue
             for block in content:
@@ -261,7 +275,7 @@ def _read_parent_calls(transcript: Path) -> tuple[dict[str, dict[str, Any]], dic
                     tool_id = block.get("tool_use_id")
                     if isinstance(tool_id, str) and tool_id:
                         results.setdefault(tool_id, []).append(block)
-    return calls, results
+    return calls, results, completed_background_ids
 
 
 def _metadata_by_tool_use(transcript: Path) -> dict[str, dict[str, Any]]:
@@ -294,12 +308,14 @@ def _metadata_by_tool_use(transcript: Path) -> dict[str, dict[str, Any]]:
 def discover_candidates(transcript_path: str | Path) -> list[dict[str, Any]]:
     """Return every recoverable interrupted/quota Agent call in parent order."""
     transcript = Path(transcript_path).expanduser().resolve()
-    calls, results = _read_parent_calls(transcript)
+    calls, results, completed_background_ids = _read_parent_calls(transcript)
     metadata = _metadata_by_tool_use(transcript)
     candidates: list[dict[str, Any]] = []
     for tool_id, call in sorted(calls.items(), key=lambda item: item[1]["line"]):
         result_blocks = results.get(tool_id, [])
         result_text = _textify(result_blocks)
+        meta = metadata.get(tool_id, {})
+        agent_id = meta.get("agent_id") or _extract_agent_id(result_blocks)
         evidence: list[str] = []
         if not result_blocks:
             evidence.append("missing_parent_tool_result")
@@ -307,15 +323,19 @@ def discover_candidates(transcript_path: str | Path) -> list[dict[str, Any]]:
             evidence.append("quota_or_usage_limit")
         if result_text and INTERRUPT_RE.search(result_text):
             evidence.append("interrupted_tool_result")
+        tool_input = call.get("input") if isinstance(call.get("input"), dict) else {}
+        if (
+            tool_input.get("run_in_background") is True
+            and isinstance(agent_id, str)
+            and agent_id not in completed_background_ids
+        ):
+            evidence.append("background_without_completion_notification")
         if not evidence:
             continue
-        meta = metadata.get(tool_id, {})
-        agent_id = meta.get("agent_id") or _extract_agent_id(result_blocks)
         if not isinstance(agent_id, str) or not AGENT_RE.fullmatch(agent_id):
             # A hook-rejected Agent call has no child identity and must never be
             # replaced with a fresh agent: it is not a resumable invocation.
             continue
-        tool_input = call.get("input") if isinstance(call.get("input"), dict) else {}
         description = meta.get("description") or tool_input.get("description") or ""
         agent_type = meta.get("agent_type") or tool_input.get("subagent_type") or ""
         prompt = tool_input.get("prompt") if isinstance(tool_input.get("prompt"), str) else ""
@@ -529,4 +549,3 @@ def finalize(session_id: str) -> dict[str, Any]:
     except FileNotFoundError:
         pass
     return view
-
