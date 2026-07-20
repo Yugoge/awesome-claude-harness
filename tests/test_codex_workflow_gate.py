@@ -49,6 +49,51 @@ def test_codex_transition_still_rejects_pending_to_completed() -> None:
     assert "Step 1: pending -> completed without in_progress" in violations
 
 
+def test_projected_in_progress_step_initializes_and_preserves_lower_bound(
+    tmp_path: Path, monkeypatch
+) -> None:
+    todos = [
+        _todo("in_progress", delegated=True),
+        _todo("pending"),
+        _todo("completed"),
+    ]
+    state = {
+        # Model the native state owner projecting the new plan before the legacy
+        # compatibility hook observes it.
+        "last_todos": [todo.copy() for todo in todos],
+        "codex_step_started_at_ms": {},
+    }
+    bookmark = tmp_path / "workflow-session.json"
+    monkeypatch.setattr(
+        MODULE,
+        "official_todos_path",
+        lambda _session_id: tmp_path / "todos.json",
+    )
+    monkeypatch.setattr(MODULE.time, "time_ns", lambda: 1784559602500 * 1_000_000)
+
+    assert MODULE.persist_codex_initialization(
+        "session", bookmark, state, todos, implicit=False
+    )
+    assert state["codex_step_started_at_ms"] == {"0": 1784559602500}
+
+    transcript = tmp_path / "rollout-session.jsonl"
+    _write_transcript(transcript)
+    completed = [
+        _todo("completed", delegated=True),
+        _todo("in_progress"),
+        _todo("completed"),
+    ]
+    assert MODULE.native_subagent_evidence_for_transition(
+        {"transcript_path": str(transcript)}, "session", state, todos, completed
+    ) == {}
+
+    monkeypatch.setattr(MODULE.time, "time_ns", lambda: 1784559610000 * 1_000_000)
+    assert MODULE.persist_codex_initialization(
+        "session", bookmark, state, todos, implicit=False
+    )
+    assert state["codex_step_started_at_ms"] == {"0": 1784559602500}
+
+
 def _write_transcript(
     path: Path,
     *,

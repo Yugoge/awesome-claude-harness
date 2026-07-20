@@ -602,7 +602,8 @@ def persist_codex_initialization(
             old_status = None
             if isinstance(previous, list) and idx < len(previous):
                 old_status = previous[idx].get('status')
-            if old_status != 'in_progress':
+            lower_bound = started_at.get(str(idx))
+            if old_status != 'in_progress' or type(lower_bound) is not int:
                 started_at[str(idx)] = now_ms
         state['codex_step_started_at_ms'] = started_at
         todos_file = official_todos_path(session_id)
