@@ -897,12 +897,38 @@ fi
 # false positives from quoted git references in echo/printf/heredoc bodies.
 # Prefilter: skip subprocess if no 'git' token in normalized command.
 CLASSIFIER_HAS_PATH_QUALIFIED_GIT=0
+CLASSIFIER_STATUS='unavailable'
 CLASSIFIER_JSON=''
 CLASSIFIER_PY="$(dirname "${BASH_SOURCE[0]}")/lib/git_command_classifier.py"
 if printf '%s\n' "$COMMAND_CONTEXT_STRIPPED" | grep -q 'git' && [ -r "$CLASSIFIER_PY" ]; then
   CLASSIFIER_JSON=$(printf '%s\n' "$COMMAND_CONTEXT_STRIPPED" | \
     "$PYTHON_BIN" "$CLASSIFIER_PY" 2>/dev/null)
-  if printf '%s\n' "$CLASSIFIER_JSON" | grep -q '"path_qualified": true'; then
+  _classifier_status=$?
+  if [ "$_classifier_status" -eq 0 ] && \
+     printf '%s\n' "$CLASSIFIER_JSON" | "$PYTHON_BIN" -c '
+import json, sys
+value = json.load(sys.stdin)
+if not isinstance(value, list):
+    raise SystemExit(1)
+for item in value:
+    if not isinstance(item, dict):
+        raise SystemExit(1)
+    if set(item) != {"subcommand", "args", "path_qualified"}:
+        raise SystemExit(1)
+    if item["subcommand"] is not None and not isinstance(item["subcommand"], str):
+        raise SystemExit(1)
+    if not isinstance(item["args"], list) or not all(isinstance(arg, str) for arg in item["args"]):
+        raise SystemExit(1)
+    if not isinstance(item["path_qualified"], bool):
+        raise SystemExit(1)
+' 2>/dev/null; then
+    CLASSIFIER_STATUS='ok'
+  else
+    CLASSIFIER_JSON=''
+  fi
+  unset _classifier_status
+  if [ "$CLASSIFIER_STATUS" = "ok" ] && \
+     printf '%s\n' "$CLASSIFIER_JSON" | grep -q '"path_qualified": true'; then
     CLASSIFIER_HAS_PATH_QUALIFIED_GIT=1
   fi
 fi
@@ -1611,22 +1637,29 @@ if { echo "$COMMAND" | grep -qE 'git\s+restore\b' && \
   exit 2
 fi
 
-# Block: every git reset --hard form. Shared-repo policy forbids reset-like cleanup in agent flow.
-# Path-qualified /usr/bin/git reset --hard also blocked via classifier (RISK-3)
+# Block: every destructive-reset form. Shared-repo policy forbids reset-like
+# cleanup in agent flow.  A valid structured classifier result is the ONLY
+# positive detector: quoted documentation/search text is data, not execution.
+# Raw text is consulted only when the classifier is unavailable or malformed,
+# which preserves the fail-closed boundary without running a parallel detector.
 GIT_GLOBAL_OPT_RE='([[:space:]]+(-[Cc][[:space:]]+[^[:space:];|&]+|-[Cc][^[:space:];|&]+|--(git-dir|work-tree|namespace|exec-path|super-prefix|config-env)(=[^[:space:];|&]+|[[:space:]]+[^[:space:];|&]+)|--(bare|no-pager|paginate|no-replace-objects|literal-pathspecs|glob-pathspecs|noglob-pathspecs|icase-pathspecs|no-optional-locks)|-[pP]))*'
 GIT_CMD_RE='(^|[[:space:];&|()`])git'"$GIT_GLOBAL_OPT_RE"'[[:space:]]+'
-_PQ_RESET_HARD=0
-if [ "$CLASSIFIER_HAS_PATH_QUALIFIED_GIT" = "1" ] && _pq_git_has_subcmd reset; then
+_CLASSIFIED_RESET_HARD=0
+if [ "$CLASSIFIER_STATUS" = "ok" ] && _any_git_has_subcmd reset; then
   printf '%s\n' "$CLASSIFIER_JSON" | "$PYTHON_BIN" -c "
 import json,sys
 invs=json.load(sys.stdin)
 for inv in invs:
-  if inv.get('path_qualified') and inv.get('subcommand')=='reset' and '--hard' in inv.get('args',[]):
+  if inv.get('subcommand')=='reset' and '--hard' in inv.get('args',[]):
     print('match'); break
-" 2>/dev/null | grep -q match && _PQ_RESET_HARD=1
+" 2>/dev/null | grep -q match && _CLASSIFIED_RESET_HARD=1
 fi
-if echo "$COMMAND" | grep -qE "${GIT_CMD_RE}reset[[:space:]]+([^;|&]*[[:space:]]+)?--hard\b" || \
-   [ "$_PQ_RESET_HARD" = "1" ]; then
+_FALLBACK_RESET_HARD=0
+if [ "$CLASSIFIER_STATUS" != "ok" ] && \
+   echo "$COMMAND" | grep -qE "${GIT_CMD_RE}reset[[:space:]]+([^;|&]*[[:space:]]+)?--hard\b"; then
+  _FALLBACK_RESET_HARD=1
+fi
+if [ "$_CLASSIFIED_RESET_HARD" = "1" ] || [ "$_FALLBACK_RESET_HARD" = "1" ]; then
   echo "BLOCKED: 'git reset --hard' is forbidden in agent flow" >&2
   echo "Command: $COMMAND" >&2
   echo "REASON: shared-repo policy requires non-destructive recovery; hard reset can discard another session's work or index state." >&2

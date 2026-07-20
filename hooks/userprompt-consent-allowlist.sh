@@ -336,6 +336,83 @@ if [ "$PARSED_STATUS" != "GRANT" ]; then
   exit 0
 fi
 
+# Settings DENY is an absolute, non-grantable policy.  Resolve it before either
+# the legacy or structured one-use grant is written.  This intentionally uses
+# the same generated Bash-pattern projection as the active Codex permission
+# shim: Claude's trailing `:*` delimiter becomes a shell glob suffix.  ASK is
+# not handled here; the runtime's single human confirmation path owns ASK.
+HOOKS_DIR_ALLOW="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SETTINGS_PATH_ALLOW="$(dirname "$HOOKS_DIR_ALLOW")/settings.json"
+ALLOW_POLICY_RESULT=$(ALLOW_PATTERN="$PATTERN" ALLOW_IS_REGEX="$IS_REGEX" SETTINGS_PATH="$SETTINGS_PATH_ALLOW" python3 - <<'PY' 2>/dev/null
+import fnmatch
+import json
+import os
+import re
+
+pattern = os.environ.get("ALLOW_PATTERN", "")
+is_regex = os.environ.get("ALLOW_IS_REGEX") == "true"
+settings_path = os.environ.get("SETTINGS_PATH", "")
+
+# A regex selector cannot be proven disjoint from every absolute glob without
+# creating a second authorization language.  Refuse it before issuance rather
+# than minting a grant whose authority is ambiguous.
+if is_regex:
+    print("INCONCLUSIVE")
+    raise SystemExit(0)
+
+tool = "Bash"
+value = pattern
+parts = pattern.split(None, 1)
+if parts and parts[0] in {"Write", "Edit", "MultiEdit", "NotebookEdit", "Read"}:
+    tool = parts[0]
+    value = parts[1] if len(parts) > 1 else ""
+
+try:
+    settings = json.load(open(settings_path, encoding="utf-8"))
+    deny = settings.get("permissions", {}).get("deny", [])
+except Exception:
+    print("INCONCLUSIVE")
+    raise SystemExit(0)
+
+for source in deny:
+    if not isinstance(source, str):
+        print("INCONCLUSIVE")
+        raise SystemExit(0)
+    match = re.fullmatch(r"([^()]+)(?:\((.*)\))?", source)
+    if not match:
+        print("INCONCLUSIVE")
+        raise SystemExit(0)
+    rule_tool, rule_pattern = match.groups()
+    if rule_tool != tool:
+        continue
+    if rule_pattern is None:
+        print("DENY\t" + source)
+        raise SystemExit(0)
+    normalized = rule_pattern[:-2] if rule_pattern.endswith(":*") else rule_pattern
+    if rule_pattern.endswith(":*") and not normalized.endswith("*"):
+        normalized += "*"
+    if fnmatch.fnmatchcase(value, normalized):
+        print("DENY\t" + source)
+        raise SystemExit(0)
+print("PASS")
+PY
+)
+case "$ALLOW_POLICY_RESULT" in
+  DENY$'\t'*)
+    _remove_stale_grants
+    echo "[allow] REFUSED: selector is covered by an absolute settings DENY and is not grantable." >&2
+    echo "[allow] No grant was issued or claimed. Run a different non-denied operation, or perform the denied action outside the agent policy boundary." >&2
+    exit 0
+    ;;
+  PASS)
+    ;;
+  *)
+    _remove_stale_grants
+    echo "[allow] REFUSED: settings policy could not prove this selector grantable; no grant was issued." >&2
+    exit 0
+    ;;
+esac
+
 # ── V1b: structural rejection of catastrophic-backtracking regex shapes ──
 # Defense-in-depth for V1 (SIGALRM consumer-side timeout). Reject nested-quantifier
 # patterns like (a+)+, (a*)*, (a|b)+ at WRITE time so they never reach the consumer.
