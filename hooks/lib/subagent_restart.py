@@ -570,8 +570,8 @@ def authorize_send_message(payload: dict[str, Any]) -> tuple[bool, str]:
         )
         if not item:
             raise RestartError("target is absent from prepared restart state")
-        if item.get("status") == "response_observed":
-            raise RestartError("target already produced a post-restart response")
+        if item.get("status") != "pending":
+            raise RestartError("target is not pending; duplicate restart dispatch denied")
         return True, "authenticated /restart recovery"
     except RestartError as exc:
         return False, str(exc)
