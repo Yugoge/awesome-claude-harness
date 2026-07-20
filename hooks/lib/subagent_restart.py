@@ -132,14 +132,21 @@ def _atomic_write_json(path: Path, value: dict[str, Any]) -> None:
 @contextlib.contextmanager
 def _state_lock(session_id: str) -> Iterator[None]:
     path = state_path(session_id)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    lock_path = path.with_suffix(path.suffix + ".lock")
-    with lock_path.open("a+", encoding="utf-8") as handle:
-        fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        lock_path = path.with_suffix(path.suffix + ".lock")
+        handle = lock_path.open("a+", encoding="utf-8")
+    except OSError as exc:
+        raise RestartError(f"cannot open restart state lock: {exc}") from exc
+    with handle:
         try:
-            yield
-        finally:
-            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+        except OSError as exc:
+            raise RestartError(f"cannot lock restart state: {exc}") from exc
 
 
 def _parse_time(raw: Any) -> datetime | None:
