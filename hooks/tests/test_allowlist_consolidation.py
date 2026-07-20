@@ -36,6 +36,63 @@ from lib.allowlist import (
 )
 
 
+class TestAllowSettingsPreflight(unittest.TestCase):
+    """Absolute settings DENY is resolved before either grant channel writes."""
+
+    def _invoke(self, prompt, task_id, session_id):
+        hook = os.path.join(HOOKS_DIR, "userprompt-consent-allowlist.sh")
+        payload = json.dumps({"prompt": prompt, "session_id": session_id})
+        env = dict(os.environ)
+        env["CLAUDE_TASK_ID"] = task_id
+        return subprocess.run(
+            ["bash", hook], input=payload, capture_output=True, text=True,
+            env=env, timeout=10,
+        )
+
+    def _paths(self, task_id, session_id):
+        return (
+            os.path.join(SENTINEL_GRANT_DIR, f"{task_id}.json"),
+            f"/tmp/claude-bash-allowlist-{session_id}.json",
+        )
+
+    def test_hard_deny_issues_no_grant_and_offers_no_allow_retry(self):
+        task_id = "test-allow-hard-deny"
+        session_id = "test-allow-hard-deny-session"
+        paths = self._paths(task_id, session_id)
+        for path in paths:
+            if os.path.exists(path):
+                os.unlink(path)
+        try:
+            result = self._invoke(
+                "/allow rm -rf /tmp/non-grantable-target", task_id, session_id
+            )
+            self.assertEqual(result.returncode, 0)
+            self.assertIn("absolute settings DENY", result.stderr)
+            self.assertNotIn("retry /allow", result.stderr)
+            self.assertFalse(any(os.path.exists(path) for path in paths))
+        finally:
+            for path in paths:
+                if os.path.exists(path):
+                    os.unlink(path)
+
+    def test_ask_only_selector_keeps_one_use_grant_route(self):
+        task_id = "test-allow-ask"
+        session_id = "test-allow-ask-session"
+        paths = self._paths(task_id, session_id)
+        for path in paths:
+            if os.path.exists(path):
+                os.unlink(path)
+        try:
+            result = self._invoke("/allow rm -rf relative-target", task_id, session_id)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("Grant recorded", result.stdout)
+            self.assertTrue(all(os.path.exists(path) for path in paths))
+        finally:
+            for path in paths:
+                if os.path.exists(path):
+                    os.unlink(path)
+
+
 class TestMatchLoadedGrant(unittest.TestCase):
     """Unit tests for _match_loaded_grant (pure match, no I/O)."""
 
