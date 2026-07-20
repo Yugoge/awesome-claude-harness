@@ -578,15 +578,6 @@
         ]
       },
       {
-        "matcher": "SendMessage",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "python3 \"{{CLAUDE_HOME}}/hooks/posttool-restart-sendmessage.py\""
-          }
-        ]
-      },
-      {
         "matcher": "mcp__playwright__browser_run_code",
         "hooks": [
           {
@@ -696,6 +687,15 @@
           {
             "type": "command",
             "command": "python3 \"{{CLAUDE_HOME}}/hooks/posttool-overnight-trace.py\""
+          }
+        ]
+      },
+      {
+        "matcher": "SendMessage",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"{{CLAUDE_HOME}}/hooks/posttool-restart-sendmessage.py\""
           }
         ]
       },
