@@ -36,7 +36,8 @@ every recoverable interrupted subagent in the current parent session is handled.
    ```
 
    The output is the complete transcript-derived candidate set. A zero count is
-   a successful no-op; report that no recoverable interrupted child exists.
+   a successful no-op; continue to the finalize command in step 5 to consume the
+   grant, then report that no recoverable interrupted child exists.
 3. **Resume every pending candidate.** In one parallel tool-call batch where
    supported, call `SendMessage` exactly once for every candidate whose status is
    `pending`. A `dispatched` candidate is already running: wait for it and never
