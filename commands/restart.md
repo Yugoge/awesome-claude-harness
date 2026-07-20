@@ -5,10 +5,8 @@ disable-model-invocation: true
 
 # /restart — Recover All Quota-Interrupted Subagents
 
-Human-only emergency recovery for the case where a Claude Code session or usage
-limit interrupts multiple subagents. This command resumes the original subagent
-instances from their persisted transcripts. It never replaces them with fresh
-agents and never selects only a convenient subset.
+Human-only emergency recovery; invoke only after a session or usage limit has
+interrupted subagents.
 
 ## Usage
 
@@ -17,8 +15,8 @@ agents and never selects only a convenient subset.
 ```
 
 Only the exact bare command is valid. There is deliberately no agent selector:
-every recoverable interrupted subagent in the latest affected human request of
-the current parent session is handled as one recovery wave.
+every recoverable interrupted subagent in the current parent transcript is
+handled as one recovery wave.
 
 ## Mandatory procedure
 
@@ -27,13 +25,12 @@ the current parent session is handled as one recovery wave.
    Claude Code with this harness loaded, resume this same parent session using
    `claude --resume <session-id>`, and invoke `/restart` again. Do not fall back
    to `Agent`.
-2. **Prepare the recovery set.** Resolve `SID` from
-   `$CLAUDE_CODE_SESSION_ID` with `$CLAUDE_SESSION_ID` as fallback in the same
-   Bash call. An empty SID is a fail-closed error:
+2. **Prepare the recovery set.** The helper resolves the current session from
+   `$CLAUDE_CODE_SESSION_ID`, then `$CLAUDE_SESSION_ID`, and fails closed with
+   `RESTART_BLOCKED_SESSION_ID_UNAVAILABLE` when neither exists:
 
-   ```bash
-   SID="${CLAUDE_CODE_SESSION_ID:-${CLAUDE_SESSION_ID:-}}"; test -n "$SID" || { echo 'RESTART_BLOCKED_SESSION_ID_UNAVAILABLE' >&2; exit 2; }
-   python3 "$HOME/.claude/scripts/restart-subagents.py" prepare --session-id "$SID"
+   ```text
+   $HOME/.claude/venv/bin/python $HOME/.claude/scripts/restart-subagents.py prepare
    ```
 
    The output is the complete transcript-derived candidate set. A zero count is
@@ -46,22 +43,20 @@ the current parent session is handled as one recovery wave.
    `resume_message` emitted by the prepare command as `message`. Do not edit,
    summarize, prefix, suffix, translate, or otherwise rewrite that message.
 4. **Wait for response evidence.** Successful sends are journaled automatically;
-   `SubagentStop` records response evidence. After all sends return, run with a
-   Bash timeout of at least 600000 ms:
+   `SubagentStop` records response evidence. After all sends return, invoke the
+   helper with a tool timeout of at least 600000 ms:
 
-   ```bash
-   SID="${CLAUDE_CODE_SESSION_ID:-${CLAUDE_SESSION_ID:-}}"; test -n "$SID" || exit 2
-   python3 "$HOME/.claude/scripts/restart-subagents.py" status --session-id "$SID" --wait-seconds 540
+   ```text
+   $HOME/.claude/venv/bin/python $HOME/.claude/scripts/restart-subagents.py status --wait-seconds 540
    ```
 
    If `complete` is false, report `RESTART_INCOMPLETE` with every
    `incomplete_agent_ids` entry. Never claim recovery succeeded merely because
    messages were dispatched. A later `/restart` safely retries those same IDs.
-5. **Finalize only after all responses.** When `complete` is true, run:
+5. **Finalize only after all responses.** When `complete` is true, invoke:
 
-   ```bash
-   SID="${CLAUDE_CODE_SESSION_ID:-${CLAUDE_SESSION_ID:-}}"; test -n "$SID" || exit 2
-   python3 "$HOME/.claude/scripts/restart-subagents.py" finalize --session-id "$SID"
+   ```text
+   $HOME/.claude/venv/bin/python $HOME/.claude/scripts/restart-subagents.py finalize
    ```
 
    Report the recovered agent IDs and point to their existing transcript paths.
@@ -80,11 +75,3 @@ the current parent session is handled as one recovery wave.
   a Claude Code native command. On a Codex runtime without equivalent
   `SendMessage` plus authoritative child lifecycle events, report
   `RESTART_BLOCKED_UNSUPPORTED_RUNTIME`; never fabricate completion evidence.
-
-## Why this preserves content
-
-The parent transcript binds each original Agent tool call to its persisted
-`agent_id` and `agent-<id>.jsonl`. The authenticated `/restart` grant allows
-`SendMessage` only to those discovered IDs and only with the fixed recovery
-message. Claude Code therefore resumes the existing context, including prior
-tool calls and results, instead of reconstructing an incomplete summary.
