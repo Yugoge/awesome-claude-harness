@@ -171,9 +171,12 @@ def codex_payload_is_subagent_context(data: dict) -> bool:
                     event = json.loads(line)
                 except json.JSONDecodeError:
                     continue
+                if not isinstance(event, dict):
+                    continue
                 if event.get('type') != 'session_meta':
                     continue
-                source = event.get('payload', {}).get('source')
+                payload = event.get('payload')
+                source = payload.get('source') if isinstance(payload, dict) else None
                 return isinstance(source, dict) and isinstance(source.get('subagent'), dict)
     except OSError:
         return False
