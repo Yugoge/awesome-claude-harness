@@ -603,6 +603,8 @@ def persist_codex_initialization(
             if isinstance(previous, list) and idx < len(previous):
                 old_status = previous[idx].get('status')
             lower_bound = started_at.get(str(idx))
+            # The native state owner can project this status before this legacy
+            # hook runs, so status alone cannot prove the step already has a bound.
             if old_status != 'in_progress' or type(lower_bound) is not int:
                 started_at[str(idx)] = now_ms
         state['codex_step_started_at_ms'] = started_at
