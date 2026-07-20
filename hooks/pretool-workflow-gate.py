@@ -230,7 +230,15 @@ def validate_initial_codex_todos(new_todos: list) -> list:
 
 
 def validate_codex_transition(state: dict, old_todos: list, new_todos: list) -> list:
-    """Mirror TodoWrite sequence rules for Codex update_plan payloads."""
+    """Mirror TodoWrite ordering rules for Codex update_plan payloads.
+
+    The legacy ``subagent_calls`` bookmark is populated only by Claude Code's
+    PostToolUse ``Agent`` event. Codex collaboration calls do not traverse that
+    matcher, so consulting the legacy field here creates a circular lock after
+    a real Codex subagent finishes. Codex-native Stop reconciliation owns the
+    delegated-call evidence check; this pre-tool path enforces only checklist
+    shape and one-step-at-a-time ordering.
+    """
     violations = []
     if len(old_todos) != len(new_todos):
         violations.append(f'Step count changed from {len(old_todos)} to {len(new_todos)}')
@@ -264,12 +272,6 @@ def validate_codex_transition(state: dict, old_todos: list, new_todos: list) -> 
                 )
                 break
 
-    for idx, (old, new) in enumerate(zip(old_todos, new_todos)):
-        if old.get('status') != 'in_progress' or new.get('status') != 'completed':
-            continue
-        subagent_call = new.get('subagent_call')
-        if subagent_call and not state.get('subagent_calls', {}).get(str(idx), False):
-            violations.append(f'Step {idx}: subagent step completed before required subagent call')
     return violations
 
 
@@ -287,8 +289,8 @@ def emit_codex_plan_block(cmd_name: str, violations: list, last_todos: list) -> 
         + '\n\nRULES: (1) one completion per update '
         '(2) must pass through in_progress '
         '(3) one in_progress at a time '
-        '(4) no step skipping '
-        '(5) required subagent steps need matching subagent evidence.\n'
+        '(4) no step skipping. Delegated-call evidence is reconciled by '
+        'Codex-native Stop validation.\n'
         + hint
     )
     sys.exit(2)
