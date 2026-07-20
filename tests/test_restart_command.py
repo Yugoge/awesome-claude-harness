@@ -342,6 +342,18 @@ def test_background_and_orchestrator_gates_allow_all_authenticated_resumes(recov
     denied = _run_hook(background, bad, recovery["env"])
     assert denied.returncode == 2
     assert "exact restart-v1" in denied.stderr
+    ordinary_background = _run_hook(background, {
+        "tool_name": "Agent",
+        "session_id": recovery["sid"],
+        "tool_input": {"subagent_type": "dev", "run_in_background": True},
+    }, recovery["env"])
+    assert ordinary_background.returncode == 2
+    foreground = _run_hook(background, {
+        "tool_name": "Agent",
+        "session_id": recovery["sid"],
+        "tool_input": {"subagent_type": "dev", "run_in_background": False},
+    }, recovery["env"])
+    assert foreground.returncode == 0
     try:
         Path(f"/tmp/claude-tool-streak-{recovery['sid']}.json").unlink()
     except FileNotFoundError:
