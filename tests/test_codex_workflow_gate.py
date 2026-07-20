@@ -79,6 +79,23 @@ def test_projected_in_progress_step_initializes_and_preserves_lower_bound(
     )
     assert state["codex_step_started_at_ms"] == {"0": 1784559602500}
 
+    transcript = tmp_path / "rollout-session.jsonl"
+    _write_transcript(transcript)
+    completed = [
+        _todo("completed", delegated=True),
+        _todo("in_progress"),
+        _todo("completed"),
+    ]
+    assert MODULE.native_subagent_evidence_for_transition(
+        {"transcript_path": str(transcript)}, "session", state, todos, completed
+    ) == {}
+
+    monkeypatch.setattr(MODULE.time, "time_ns", lambda: 1784559610000 * 1_000_000)
+    assert MODULE.persist_codex_initialization(
+        "session", bookmark, state, todos, implicit=False
+    )
+    assert state["codex_step_started_at_ms"] == {"0": 1784559602500}
+
 
 def test_child_local_plan_does_not_touch_parent_workflow_bookmark(tmp_path: Path) -> None:
     session_id = "parent-session"
@@ -140,23 +157,6 @@ def test_child_local_plan_does_not_touch_parent_workflow_bookmark(tmp_path: Path
 
     assert result.returncode == 0, result.stderr
     assert bookmark.read_bytes() == before
-
-    transcript = tmp_path / "rollout-session.jsonl"
-    _write_transcript(transcript)
-    completed = [
-        _todo("completed", delegated=True),
-        _todo("in_progress"),
-        _todo("completed"),
-    ]
-    assert MODULE.native_subagent_evidence_for_transition(
-        {"transcript_path": str(transcript)}, "session", state, todos, completed
-    ) == {}
-
-    monkeypatch.setattr(MODULE.time, "time_ns", lambda: 1784559610000 * 1_000_000)
-    assert MODULE.persist_codex_initialization(
-        "session", bookmark, state, todos, implicit=False
-    )
-    assert state["codex_step_started_at_ms"] == {"0": 1784559602500}
 
 
 def _write_transcript(
