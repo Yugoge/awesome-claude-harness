@@ -79,7 +79,10 @@ def _safe_agent_id(agent_id: str) -> str:
 
 
 def grant_dir() -> Path:
-    return Path(os.environ.get("CLAUDE_RESTART_GRANT_DIR", "/tmp"))
+    override = os.environ.get("CLAUDE_RESTART_GRANT_DIR")
+    if override:
+        return Path(override)
+    return state_dir() / "grants"
 
 
 def state_dir() -> Path:
