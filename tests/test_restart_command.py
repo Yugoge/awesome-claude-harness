@@ -205,6 +205,10 @@ def test_discovery_scopes_current_request_and_classifies_notifications(tmp_path:
                 "<command-name>/restart</command-name>",
             },
         },
+        {
+            "type": "user",
+            "message": {"role": "user", "content": "/restart"},
+        },
     ]
     _write_jsonl(transcript, records)
     _write_meta(transcript, "agent-old", old_tool, "historical quota")
