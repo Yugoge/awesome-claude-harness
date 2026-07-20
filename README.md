@@ -10,7 +10,7 @@ An operating system for Claude Code agents — orchestrator-only routing, an evi
 <p>
 <img alt="version" src="https://img.shields.io/badge/version-1.0.0-blue">
 <img alt="subagents" src="https://img.shields.io/badge/subagents-23-6f42c1">
-<img alt="commands" src="https://img.shields.io/badge/slash%20commands-18-1565c0">
+<img alt="commands" src="https://img.shields.io/badge/slash%20commands-19-1565c0">
 <img alt="hooks" src="https://img.shields.io/badge/lifecycle%20hooks-67%20wired%20%2F%207%20events-c62828">
 <img alt="events" src="https://img.shields.io/badge/lifecycle%20events-7-ad1457">
 <img alt="scripts" src="https://img.shields.io/badge/helper%20scripts-77-2e7d32">
@@ -463,7 +463,7 @@ Each row maps to a capability in the dependency table above.
 ├── NESTED-REPO.md     # Why ~/.claude is its own git repo on a RAM disk
 ├── settings.json      # 67 wired hook entries across 7 lifecycle events
 ├── agents/            # 23 subagent definitions (BA, dev, QA, architect, …)
-├── commands/          # 18 slash-command workflows (/spec, /dev, /close, /commit, …)
+├── commands/          # 19 slash-command workflows (/spec, /dev, /close, /commit, …)
 ├── hooks/             # SessionStart / UserPromptSubmit / PreToolUse / PostToolUse / Notification / Stop / SubagentStop gates
 │   ├── lib/           #   shared libs: allowlist (structured sentinel grants), checkpoint-core
 │   ├── doc_sync/      #   self-updating INDEX/README/CLAUDE regeneration

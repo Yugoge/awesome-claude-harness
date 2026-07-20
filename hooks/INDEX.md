@@ -1,8 +1,8 @@
 # hooks
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-07-17T18:46:48Z*
-**Total entries**: 165
+*Last updated: 2026-07-20T10:36:42Z*
+**Total entries**: 166
 **Convention**: kebab
 
 ## Tree
@@ -70,6 +70,7 @@ hooks/
 │   ├── `test_cp_checkin.py` - of ba-spec-20260427-194324.md (P1 view-trigger removal + P2 generation field)
 │   ├── `test_do_taskid_mint.py` - Covers the root-cause fix for the do-report task-id collision (memory
 │   ├── `test_extract.py` - Unit tests for hooks/doc_sync/extract.py — covers all 4 defects + known-file cases.
+│   ├── `test_fail_closed_drift.py` - WHY THIS FILE EXISTS
 │   ├── `test_final_sweep.sh` - Final sweep — run inline AC checks and print PASS/FAIL summary.
 │   ├── `test_git_cmd_cross_consistency.py` - Verifies that GIT_CMD_RE (hooks/pretool-bash-safety.sh),
 │   ├── `test_push_sentinel_abort.sh` - Unit test for AC1 V5: hooks/push.sh self-aborts before any real git push
