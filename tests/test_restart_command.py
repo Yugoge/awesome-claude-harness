@@ -201,6 +201,13 @@ def test_discovery_scopes_current_request_and_classifies_notifications(tmp_path:
             "type": "user",
             "message": {
                 "role": "user",
+                "content": "This session was resumed after the quota reset; recover the same work.",
+            },
+        },
+        {
+            "type": "user",
+            "message": {
+                "role": "user",
                 "content": "<command-message>restart</command-message>"
                 "<command-name>/restart</command-name>",
             },
