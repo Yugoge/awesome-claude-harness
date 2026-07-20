@@ -146,18 +146,19 @@ def recovery(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict:
             **os.environ,
             "CLAUDE_RESTART_GRANT_DIR": str(grant_dir),
             "CLAUDE_RESTART_STATE_DIR": str(state_dir),
+            "CLAUDE_CODE_SESSION_ID": sid,
         },
     }
 
 
-def test_discovery_recovers_missing_quota_and_unfinished_background(recovery: dict) -> None:
+def test_discovery_requires_authoritative_interruption_evidence(recovery: dict) -> None:
     candidates = restart.discover_candidates(recovery["transcript"])
     assert [item["agent_id"] for item in candidates] == [
-        "agent-missing", "agent-quota", "agent-background",
+        "agent-missing", "agent-quota",
     ]
     assert candidates[0]["evidence"] == ["missing_parent_tool_result"]
     assert candidates[1]["evidence"] == ["quota_or_usage_limit"]
-    assert candidates[2]["evidence"] == ["background_without_completion_notification"]
+    assert "agent-background" not in {item["agent_id"] for item in candidates}
     assert all("prompt" not in item for item in candidates), "raw prompts must not leak into restart state"
 
 
@@ -225,13 +226,15 @@ def test_discovery_scopes_current_request_and_classifies_notifications(tmp_path:
     )
 
     candidates = restart.discover_candidates(transcript)
-    assert [item["agent_id"] for item in candidates] == ["agent-background-quota"]
-    assert candidates[0]["evidence"] == ["quota_or_usage_limit"]
+    assert [item["agent_id"] for item in candidates] == [
+        "agent-old", "agent-background-quota",
+    ]
+    assert all(item["evidence"] == ["quota_or_usage_limit"] for item in candidates)
 
 
 def test_prepare_authorizes_exact_original_ids_and_message(recovery: dict) -> None:
     view = restart.prepare_state(recovery["sid"])
-    assert view["candidate_count"] == 3
+    assert view["candidate_count"] == 2
     assert view["complete"] is False
     first = view["candidates"][0]
     payload = {
@@ -259,26 +262,25 @@ def test_dispatch_stop_quota_retry_and_finalize(recovery: dict) -> None:
     restart.prepare_state(recovery["sid"])
     restart.mark_dispatched(recovery["sid"], "agent-missing")
     restart.mark_dispatched(recovery["sid"], "agent-quota")
-    restart.mark_dispatched(recovery["sid"], "agent-background")
     prepared_again = restart.prepare_state(recovery["sid"])
-    background = next(
-        item for item in prepared_again["candidates"] if item["agent_id"] == "agent-background"
+    quota = next(
+        item for item in prepared_again["candidates"] if item["agent_id"] == "agent-quota"
     )
-    assert background["status"] == "dispatched", "an active resume must not be queued twice"
+    assert quota["status"] == "dispatched", "an active resume must not be queued twice"
     with recovery["transcript"].open("a", encoding="utf-8") as handle:
         handle.write(json.dumps({
             "type": "queue-operation",
-            "content": "<task-notification><task-id>agent-background</task-id>"
+            "content": "<task-notification><task-id>agent-quota</task-id>"
             "<status>completed</status><result>You've hit your session limit · "
             "resets in 1h</result></task-notification>",
         }) + "\n")
     retry_after_new_quota = restart.prepare_state(recovery["sid"])
-    background = next(
+    quota = next(
         item for item in retry_after_new_quota["candidates"]
-        if item["agent_id"] == "agent-background"
+        if item["agent_id"] == "agent-quota"
     )
-    assert background["status"] == "pending", "new quota evidence must make a send retryable"
-    restart.mark_dispatched(recovery["sid"], "agent-background")
+    assert quota["status"] == "pending", "new quota evidence must make a send retryable"
+    restart.mark_dispatched(recovery["sid"], "agent-quota")
     view = restart.observe_subagent_stop({
         "session_id": recovery["sid"],
         "agent_id": "agent-missing",
@@ -308,12 +310,6 @@ def test_dispatch_stop_quota_retry_and_finalize(recovery: dict) -> None:
     final = restart.observe_subagent_stop({
         "session_id": recovery["sid"],
         "agent_id": "agent-quota",
-        "last_assistant_message": "RECOVERY_STATUS: completed",
-    })
-    assert final is not None and final["complete"] is False
-    final = restart.observe_subagent_stop({
-        "session_id": recovery["sid"],
-        "agent_id": "agent-background",
         "last_assistant_message": "RECOVERY_STATUS: completed",
     })
     assert final is not None and final["complete"] is True
@@ -451,6 +447,10 @@ def test_command_and_settings_keep_restart_human_only_and_lossless() -> None:
     assert "disable-model-invocation: true" in command
     assert "DO NOT call `Agent` or `Task`" in command
     assert "every recoverable interrupted subagent" in command
+    assert "latest affected human request" not in command
+    assert "SID=" not in command
+    assert "$HOME/.claude/venv/bin/python" in command
+    assert "## Why this preserves content" not in command
     settings = json.loads((ROOT / "settings.json").read_text(encoding="utf-8"))
     template = json.loads((ROOT / "settings.template.json").read_text(encoding="utf-8"))
     for config in (settings, template):
@@ -460,3 +460,16 @@ def test_command_and_settings_keep_restart_human_only_and_lossless() -> None:
         posttool_commands = json.dumps(config["hooks"]["PostToolUse"])
         assert "posttool-restart-sendmessage.py" not in pretool_commands
         assert "posttool-restart-sendmessage.py" in posttool_commands
+
+
+def test_cli_resolves_session_id_from_claude_environment(recovery: dict) -> None:
+    result = subprocess.run(
+        [sys.executable, str(ROOT / "scripts" / "restart-subagents.py"), "prepare"],
+        text=True,
+        capture_output=True,
+        env=recovery["env"],
+        cwd=str(ROOT),
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout)["parent_session_id"] == recovery["sid"]
