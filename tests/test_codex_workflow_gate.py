@@ -109,6 +109,11 @@ def _write_transcript(
     path.write_text("".join(json.dumps(event) + "\n" for event in events))
 
 
+def _append_transcript_events(path: Path, *events: dict) -> None:
+    with path.open("a") as handle:
+        handle.write("".join(json.dumps(event) + "\n" for event in events))
+
+
 def test_native_evidence_requires_spawn_start_and_final(tmp_path: Path) -> None:
     transcript = tmp_path / "rollout-session.jsonl"
     _write_transcript(transcript)
@@ -151,6 +156,26 @@ def test_native_evidence_rejects_spawn_before_step_window(tmp_path: Path) -> Non
 def test_native_evidence_rejects_foreign_session_transcript(tmp_path: Path) -> None:
     transcript = tmp_path / "rollout-session.jsonl"
     _write_transcript(transcript, session_id="foreign-session")
+    old = [_todo("in_progress", delegated=True), _todo("pending")]
+    new = [_todo("completed", delegated=True), _todo("in_progress")]
+    state = {"codex_step_started_at_ms": {"0": 1784559600000}}
+
+    assert MODULE.native_subagent_evidence_for_transition(
+        {"transcript_path": str(transcript)}, "session", state, old, new
+    ) == {}
+
+
+def test_native_evidence_rejects_conflicting_later_session_meta(tmp_path: Path) -> None:
+    transcript = tmp_path / "rollout-session.jsonl"
+    _write_transcript(transcript)
+    _append_transcript_events(
+        transcript,
+        {
+            "timestamp": "2026-07-20T15:00:03.000Z",
+            "type": "session_meta",
+            "payload": {"id": "foreign-session", "session_id": "foreign-session"},
+        },
+    )
     old = [_todo("in_progress", delegated=True), _todo("pending")]
     new = [_todo("completed", delegated=True), _todo("in_progress")]
     state = {"codex_step_started_at_ms": {"0": 1784559600000}}
@@ -230,3 +255,101 @@ def test_native_evidence_rejects_reused_child_thread(tmp_path: Path) -> None:
     assert MODULE.native_subagent_evidence_for_transition(
         {"transcript_path": str(transcript)}, "session", state, old, new
     ) == {}
+
+
+def test_native_evidence_rejects_current_window_thread_reuse(tmp_path: Path) -> None:
+    transcript = tmp_path / "rollout-session.jsonl"
+    _write_transcript(transcript)
+    _append_transcript_events(
+        transcript,
+        {
+            "timestamp": "2026-07-20T15:00:03.000Z",
+            "type": "response_item",
+            "payload": {
+                "type": "function_call",
+                "name": "spawn_agent",
+                "namespace": "collaboration",
+                "call_id": "call-other",
+                "arguments": json.dumps(
+                    {"task_name": "qa_other", "message": "opaque"}
+                ),
+            },
+        },
+        {
+            "timestamp": "2026-07-20T15:00:03.100Z",
+            "type": "event_msg",
+            "payload": {
+                "type": "sub_agent_activity",
+                "event_id": "call-other",
+                "kind": "started",
+                "agent_path": "/root/qa_other",
+                "agent_thread_id": "thread-current",
+                "occurred_at_ms": 1784559603100,
+            },
+        },
+    )
+    old = [_todo("in_progress", delegated=True), _todo("pending")]
+    new = [_todo("completed", delegated=True), _todo("in_progress")]
+    state = {"codex_step_started_at_ms": {"0": 1784559600000}}
+
+    assert MODULE.native_subagent_evidence_for_transition(
+        {"transcript_path": str(transcript)}, "session", state, old, new
+    ) == {}
+
+
+def test_native_evidence_rejects_current_window_call_reuse(tmp_path: Path) -> None:
+    transcript = tmp_path / "rollout-session.jsonl"
+    _write_transcript(transcript)
+    _append_transcript_events(
+        transcript,
+        {
+            "timestamp": "2026-07-20T15:00:03.100Z",
+            "type": "event_msg",
+            "payload": {
+                "type": "sub_agent_activity",
+                "event_id": "call-current",
+                "kind": "started",
+                "agent_path": "/root/qa_current",
+                "agent_thread_id": "thread-other",
+                "occurred_at_ms": 1784559603100,
+            },
+        },
+    )
+    old = [_todo("in_progress", delegated=True), _todo("pending")]
+    new = [_todo("completed", delegated=True), _todo("in_progress")]
+    state = {"codex_step_started_at_ms": {"0": 1784559600000}}
+
+    assert MODULE.native_subagent_evidence_for_transition(
+        {"transcript_path": str(transcript)}, "session", state, old, new
+    ) == {}
+
+
+def test_native_evidence_deduplicates_exact_terminal_messages(tmp_path: Path) -> None:
+    transcript = tmp_path / "rollout-session.jsonl"
+    _write_transcript(transcript)
+    _append_transcript_events(
+        transcript,
+        {
+            "timestamp": "2026-07-20T15:00:03.000Z",
+            "type": "response_item",
+            "payload": {
+                "type": "agent_message",
+                "author": "/root/qa_current",
+                "content": [
+                    {
+                        "type": "input_text",
+                        "text": "Message Type: FINAL_ANSWER\nPayload:\nrepeat",
+                    }
+                ],
+            },
+        },
+    )
+
+    completed = MODULE.completed_codex_subagents(
+        {"transcript_path": str(transcript)}, "session", 1784559600000
+    )
+
+    assert len(completed) == 1
+    assert completed[0]["call_id"] == "call-current"
+    assert completed[0]["agent_thread_id"] == "thread-current"
+    assert completed[0]["terminal_at_ms"] == 1784559603000

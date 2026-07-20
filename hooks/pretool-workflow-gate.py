@@ -301,15 +301,21 @@ def _transcript_path(data: dict, session_id: str) -> Path | None:
         if not path.is_file() or not path.name.endswith(f'-{session_id}.jsonl'):
             return False
         try:
+            session_meta = []
             with path.open(encoding='utf-8') as handle:
-                first_line = next((line for line in handle if line.strip()), '')
-            event = json.loads(first_line)
-        except (OSError, StopIteration, json.JSONDecodeError):
+                for line in handle:
+                    if not line.strip():
+                        continue
+                    event = json.loads(line)
+                    if isinstance(event, dict) and event.get('type') == 'session_meta':
+                        session_meta.append(event)
+        except (OSError, json.JSONDecodeError):
             return False
-        payload = event.get('payload') if isinstance(event, dict) else None
+        if len(session_meta) != 1:
+            return False
+        payload = session_meta[0].get('payload')
         return (
-            event.get('type') == 'session_meta'
-            and isinstance(payload, dict)
+            isinstance(payload, dict)
             and payload.get('id') == session_id
             and payload.get('session_id') == session_id
         )
@@ -391,8 +397,10 @@ def completed_codex_subagents(
         return []
 
     spawns: dict[str, dict] = {}
-    started: dict[str, dict] = {}
-    completed: list[dict] = []
+    started_by_path: dict[str, dict] = {}
+    identity_by_call: dict[str, tuple] = {}
+    identity_by_thread: dict[str, tuple] = {}
+    completed_by_identity: dict[tuple, dict] = {}
     for line_no, event in events:
         payload = event.get('payload')
         if not isinstance(payload, dict):
@@ -409,11 +417,16 @@ def completed_codex_subagents(
                     and event_ms is not None
                     and event_ms >= started_after_ms
                 ):
-                    spawns[call_id] = {
+                    spawn = {
                         'spawned_at_ms': event_ms,
                         'task_name': task_name,
                         'spawn_line': line_no,
                     }
+                    existing = spawns.get(call_id)
+                    if existing is not None and existing['task_name'] != task_name:
+                        return []
+                    if existing is None:
+                        spawns[call_id] = spawn
             continue
         if event.get('type') == 'event_msg' and payload.get('type') == 'sub_agent_activity':
             call_id = payload.get('event_id')
@@ -433,7 +446,33 @@ def completed_codex_subagents(
                 and occurred_ms >= started_after_ms
                 and occurred_ms >= spawn['spawned_at_ms']
             ):
-                started[agent_path] = {
+                identity = (
+                    call_id,
+                    agent_thread_id,
+                    agent_path,
+                    spawn['task_name'],
+                )
+                if (
+                    call_id in identity_by_call
+                    and identity_by_call[call_id] != identity
+                ):
+                    return []
+                if (
+                    agent_thread_id in identity_by_thread
+                    and identity_by_thread[agent_thread_id] != identity
+                ):
+                    return []
+                if (
+                    agent_path in started_by_path
+                    and (
+                        started_by_path[agent_path]['call_id'],
+                        started_by_path[agent_path]['agent_thread_id'],
+                        started_by_path[agent_path]['agent_path'],
+                        started_by_path[agent_path]['task_name'],
+                    ) != identity
+                ):
+                    return []
+                record = {
                     'call_id': call_id,
                     'agent_path': agent_path,
                     'agent_thread_id': agent_thread_id,
@@ -443,20 +482,37 @@ def completed_codex_subagents(
                     'spawn_line': spawn['spawn_line'],
                     'started_line': line_no,
                 }
+                identity_by_call[call_id] = identity
+                identity_by_thread[agent_thread_id] = identity
+                started_by_path.setdefault(agent_path, record)
             continue
         if event.get('type') != 'response_item' or payload.get('type') != 'agent_message':
             continue
         author = payload.get('author')
-        if not isinstance(author, str) or author not in started or not _final_agent_message(payload):
+        if (
+            not isinstance(author, str)
+            or author not in started_by_path
+            or not _final_agent_message(payload)
+        ):
             continue
-        if event_ms is None or event_ms < started[author]['started_at_ms']:
+        started = started_by_path[author]
+        if event_ms is None or event_ms < started['started_at_ms']:
             continue
-        completed.append({
-            **started[author],
+        identity = (
+            started['call_id'],
+            started['agent_thread_id'],
+            started['agent_path'],
+            started['task_name'],
+        )
+        terminal = {
+            **started,
             'terminal_at_ms': event_ms,
             'terminal_line': line_no,
-        })
-    return completed
+        }
+        existing = completed_by_identity.get(identity)
+        if existing is None or event_ms >= existing['terminal_at_ms']:
+            completed_by_identity[identity] = terminal
+    return list(completed_by_identity.values())
 
 
 def native_subagent_evidence_for_transition(
