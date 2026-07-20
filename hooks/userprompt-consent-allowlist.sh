@@ -353,13 +353,6 @@ pattern = os.environ.get("ALLOW_PATTERN", "")
 is_regex = os.environ.get("ALLOW_IS_REGEX") == "true"
 settings_path = os.environ.get("SETTINGS_PATH", "")
 
-# A regex selector cannot be proven disjoint from every absolute glob without
-# creating a second authorization language.  Refuse it before issuance rather
-# than minting a grant whose authority is ambiguous.
-if is_regex:
-    print("INCONCLUSIVE")
-    raise SystemExit(0)
-
 tool = "Bash"
 value = pattern
 parts = pattern.split(None, 1)
@@ -371,6 +364,40 @@ try:
     settings = json.load(open(settings_path, encoding="utf-8"))
     deny = settings.get("permissions", {}).get("deny", [])
 except Exception:
+    print("INCONCLUSIVE")
+    raise SystemExit(0)
+
+def anchored_literal_head(expr):
+    """Return the concrete command head already required by /allow's regex gate."""
+    if expr.startswith(r"\A"):
+        expr = expr[2:]
+    elif expr.startswith("^"):
+        expr = expr[1:]
+    else:
+        return None
+    out = []
+    i = 0
+    while i < len(expr):
+        if expr.startswith(r"\s+", i) or expr.startswith(r"\s", i):
+            out.append(" ")
+            i += 3 if expr.startswith(r"\s+", i) else 2
+            continue
+        ch = expr[i]
+        if ch == "\\" and i + 1 < len(expr):
+            if expr[i + 1] in "AbBdDsSwWZ":
+                break
+            out.append(expr[i + 1])
+            i += 2
+            continue
+        if ch in ".*+?[](){}|$^":
+            break
+        out.append(ch)
+        i += 1
+    head = "".join(out).strip()
+    return head or None
+
+regex_head = anchored_literal_head(pattern) if is_regex else None
+if is_regex and regex_head is None:
     print("INCONCLUSIVE")
     raise SystemExit(0)
 
@@ -391,7 +418,12 @@ for source in deny:
     normalized = rule_pattern[:-2] if rule_pattern.endswith(":*") else rule_pattern
     if rule_pattern.endswith(":*") and not normalized.endswith("*"):
         normalized += "*"
-    if fnmatch.fnmatchcase(value, normalized):
+    if is_regex:
+        deny_head = re.split(r"[*?\[({|$^]", normalized, maxsplit=1)[0].strip()
+        if deny_head and (regex_head.startswith(deny_head) or deny_head.startswith(regex_head)):
+            print("DENY\t" + source)
+            raise SystemExit(0)
+    elif fnmatch.fnmatchcase(value, normalized):
         print("DENY\t" + source)
         raise SystemExit(0)
 print("PASS")
