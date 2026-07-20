@@ -432,8 +432,9 @@ def emit_codex_plan_block(cmd_name: str, violations: list, last_todos: list) -> 
         + '\n\nRULES: (1) one completion per update '
         '(2) must pass through in_progress '
         '(3) one in_progress at a time '
-        '(4) no step skipping. Delegated-call evidence is reconciled by '
-        'Codex-native Stop validation.\n'
+        '(4) no step skipping '
+        '(5) delegated steps require a current-window Codex transcript '
+        'spawn/start/final evidence chain.\n'
         + hint
     )
     sys.exit(2)
@@ -447,6 +448,20 @@ def persist_codex_initialization(
     implicit: bool,
 ) -> bool:
     try:
+        previous = state.get('last_todos')
+        started_at = state.get('codex_step_started_at_ms')
+        if not isinstance(started_at, dict):
+            started_at = {}
+        now_ms = time.time_ns() // 1_000_000
+        for idx, todo in enumerate(todos):
+            if todo.get('status') != 'in_progress':
+                continue
+            old_status = None
+            if isinstance(previous, list) and idx < len(previous):
+                old_status = previous[idx].get('status')
+            if old_status != 'in_progress':
+                started_at[str(idx)] = now_ms
+        state['codex_step_started_at_ms'] = started_at
         todos_file = official_todos_path(session_id)
         todos_file.parent.mkdir(parents=True, exist_ok=True)
         todos_file.write_text(json.dumps(todos, ensure_ascii=False))
@@ -534,8 +549,14 @@ def acknowledge_codex_plan(data: dict, session_id: str, bookmark_path: Path, pro
     last_todos = state.get('last_todos')
     if last_todos is None:
         violations = validate_initial_codex_todos(todos)
+        native_evidence = {}
     else:
-        violations = validate_codex_transition(state, last_todos, todos)
+        native_evidence = native_subagent_evidence_for_transition(
+            data, session_id, state, last_todos, todos
+        )
+        violations = validate_codex_transition(
+            state, last_todos, todos, set(native_evidence)
+        )
     if violations:
         try:
             state['todo_acknowledged'] = False
@@ -544,6 +565,19 @@ def acknowledge_codex_plan(data: dict, session_id: str, bookmark_path: Path, pro
         except Exception:
             pass
         emit_codex_plan_block(cmd_name, violations, last_todos or todos)
+
+    if native_evidence:
+        calls = state.get('subagent_calls')
+        if not isinstance(calls, dict):
+            calls = {}
+        records = state.get('codex_subagent_evidence')
+        if not isinstance(records, dict):
+            records = {}
+        for idx, record in native_evidence.items():
+            calls[str(idx)] = True
+            records[str(idx)] = record
+        state['subagent_calls'] = calls
+        state['codex_subagent_evidence'] = records
 
     if not persist_codex_initialization(session_id, bookmark_path, state, todos, implicit=False):
         return False
