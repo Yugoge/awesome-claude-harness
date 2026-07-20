@@ -114,10 +114,10 @@ flowchart TD
 ```
 
 - **Orchestrator (main agent).** Owns the conversation, the todo list, and dispatch. Allowed tools are a small whitelist (`Agent`, `TodoWrite`, `AskUserQuestion`, `Skill`, `Read`, `Glob`, `Grep`, `Bash`, cron/title tools); everything else is rate-limited or blocked by the orchestrator gate. (`CLAUDE.md` §Orchestrator-Only Rule.)
-- **Command surface (`commands/*.md`).** 18 slash commands. Each is a prompt that scripts a workflow (parse → dispatch → validate → ship). Release/control commands carry `disable-model-invocation: true`, which blocks **SlashCommand self-dispatch only**; the `Skill`-tool path is closed separately by an explicit `Skill(<name>:*)` deny in `permissions.deny` (see *Why `disable-model-invocation`?* below).
+- **Command surface (`commands/*.md`).** 19 slash commands. Each is a prompt that scripts a workflow (parse → dispatch → validate → ship). Release/control commands carry `disable-model-invocation: true`, which blocks **SlashCommand self-dispatch only**; the `Skill`-tool path is closed separately by an explicit `Skill(<name>:*)` deny in `permissions.deny` (see *Why `disable-model-invocation`?* below).
 - **Subagent fleet (`agents/*.md`).** 23 specialists, each a system prompt with `name`/`description`/`tools` frontmatter. Subagents bypass the orchestrator gate (they are *supposed* to do work) but are still subject to the safety, git, and worktree hooks.
 - **Hook enforcement (`settings.json` + `hooks/`).** The kernel. Every tool call the agent makes is intercepted; hooks return exit 2 to block. Shared logic lives in `hooks/lib/` (allowlist/sentinel grants, checkpoint core, contract runtime, agent resolver).
-- **Support.** `scripts/` (77 helpers: grant writers, graphify code-graph, spec/dev-report resolvers), `skills/` (8: Playwright UI-audit suite), `schemas/` (JSON contracts like `context.v1.json`, `cycle-contract.v1.json`, `dev-report.v1.json`, `qa-report.v1.json`), `templates/` (`spec-template.md`, `overnight-spec.md`).
+- **Support.** `scripts/` (78 helpers: grant writers, graphify code-graph, spec/dev-report resolvers), `skills/` (8: Playwright UI-audit suite), `schemas/` (JSON contracts like `context.v1.json`, `cycle-contract.v1.json`, `dev-report.v1.json`, `qa-report.v1.json`), `templates/` (`spec-template.md`, `overnight-spec.md`).
 
 ### The 23 subagents (by role)
 
