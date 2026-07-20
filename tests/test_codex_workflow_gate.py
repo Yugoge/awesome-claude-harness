@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
+import subprocess
+import sys
 from pathlib import Path
 
 
@@ -75,6 +78,68 @@ def test_projected_in_progress_step_initializes_and_preserves_lower_bound(
         "session", bookmark, state, todos, implicit=False
     )
     assert state["codex_step_started_at_ms"] == {"0": 1784559602500}
+
+
+def test_child_local_plan_does_not_touch_parent_workflow_bookmark(tmp_path: Path) -> None:
+    session_id = "parent-session"
+    workflow_dir = tmp_path / ".claude"
+    workflow_dir.mkdir()
+    bookmark = workflow_dir / f"workflow-{session_id}.json"
+    parent_state = {
+        "command": "dev",
+        "todo_acknowledged": True,
+        "last_todos": [_todo("in_progress", delegated=True)],
+        "codex_step_started_at_ms": {"0": 1234},
+        "codex_subagent_evidence": {"prior": {"call_id": "parent-call"}},
+    }
+    bookmark.write_text(json.dumps(parent_state))
+    before = bookmark.read_bytes()
+    transcript = tmp_path / "child.jsonl"
+    transcript.write_text(
+        json.dumps(
+            {
+                "type": "session_meta",
+                "payload": {
+                    "session_id": session_id,
+                    "id": "child-thread",
+                    "source": {
+                        "subagent": {
+                            "thread_spawn": {"parent_thread_id": session_id}
+                        }
+                    },
+                },
+            }
+        )
+        + "\n"
+    )
+    payload = {
+        "session_id": session_id,
+        "transcript_path": str(transcript),
+        "tool_name": "functions.update_plan",
+        "tool_input": {
+            "plan": [
+                {"step": f"child step {index}", "status": "pending"}
+                for index in range(4)
+            ]
+        },
+    }
+    env = {
+        **os.environ,
+        "CLAUDE_COMPAT_RUNTIME": "codex",
+        "CLAUDE_PROJECT_DIR": str(tmp_path),
+    }
+
+    result = subprocess.run(
+        [sys.executable, str(HOOK_PATH)],
+        input=json.dumps(payload),
+        text=True,
+        capture_output=True,
+        env=env,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert bookmark.read_bytes() == before
 
     transcript = tmp_path / "rollout-session.jsonl"
     _write_transcript(transcript)

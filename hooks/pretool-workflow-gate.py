@@ -143,6 +143,43 @@ def is_codex_runtime(data: dict) -> bool:
     return runtime == 'codex'
 
 
+def codex_payload_is_subagent_context(data: dict) -> bool:
+    """Identify child-local Codex tool events without borrowing parent state."""
+    for key in (
+        'agent_id',
+        'subagent_id',
+        'agent_path',
+        'parent_agent_id',
+        'parent_thread_id',
+        'parent_session_id',
+    ):
+        if data.get(key):
+            return True
+    for key in ('CLAUDE_AGENT_ID', 'CODEX_AGENT_ID', 'CODEX_AGENT_PATH', 'OPENAI_AGENT_ID'):
+        if os.environ.get(key):
+            return True
+    transcript_path = str(data.get('transcript_path') or '').strip()
+    if not transcript_path:
+        return False
+    try:
+        with Path(transcript_path).open(encoding='utf-8', errors='ignore') as handle:
+            for _ in range(20):
+                line = handle.readline()
+                if not line:
+                    break
+                try:
+                    event = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if event.get('type') != 'session_meta':
+                    continue
+                source = event.get('payload', {}).get('source')
+                return isinstance(source, dict) and isinstance(source.get('subagent'), dict)
+    except OSError:
+        return False
+    return False
+
+
 def normalize_step_text(value: str) -> str:
     value = re.sub(r'\s+', ' ', value or '').strip().lower()
     value = re.sub(r'^(?:[-*]\s*)?(?:\[[ x-]\]\s*)?', '', value)
@@ -780,6 +817,13 @@ def main():
 
     project_dir = Path(os.environ.get('CLAUDE_PROJECT_DIR', os.getcwd()))
     bookmark_path = project_dir / '.claude' / f'workflow-{session_id}.json'
+
+    if (
+        tool_name in CODEX_PLAN_TOOLS
+        and is_codex_runtime(data)
+        and codex_payload_is_subagent_context(data)
+    ):
+        sys.exit(0)
 
     if tool_name in CODEX_PLAN_TOOLS and acknowledge_codex_plan(
         data, session_id, bookmark_path, project_dir
