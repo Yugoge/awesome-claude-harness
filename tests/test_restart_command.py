@@ -250,6 +250,20 @@ def test_dispatch_stop_quota_retry_and_finalize(recovery: dict) -> None:
         item for item in prepared_again["candidates"] if item["agent_id"] == "agent-background"
     )
     assert background["status"] == "dispatched", "an active resume must not be queued twice"
+    with recovery["transcript"].open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps({
+            "type": "queue-operation",
+            "content": "<task-notification><task-id>agent-background</task-id>"
+            "<status>completed</status><result>You've hit your session limit · "
+            "resets in 1h</result></task-notification>",
+        }) + "\n")
+    retry_after_new_quota = restart.prepare_state(recovery["sid"])
+    background = next(
+        item for item in retry_after_new_quota["candidates"]
+        if item["agent_id"] == "agent-background"
+    )
+    assert background["status"] == "pending", "new quota evidence must make a send retryable"
+    restart.mark_dispatched(recovery["sid"], "agent-background")
     view = restart.observe_subagent_stop({
         "session_id": recovery["sid"],
         "agent_id": "agent-missing",
