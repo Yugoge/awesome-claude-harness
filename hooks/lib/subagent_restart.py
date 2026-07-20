@@ -176,7 +176,10 @@ def mint_grant(
     transcript = Path(transcript_path).expanduser().resolve()
     if transcript.name != f"{sid}.jsonl" or not transcript.is_file():
         raise RestartError("transcript_path is not the current parent session transcript")
-    ttl = ttl_seconds or int(os.environ.get("CLAUDE_RESTART_GRANT_TTL_SECONDS", "7200"))
+    try:
+        ttl = ttl_seconds or int(os.environ.get("CLAUDE_RESTART_GRANT_TTL_SECONDS", "7200"))
+    except (TypeError, ValueError) as exc:
+        raise RestartError("restart grant TTL is not an integer") from exc
     if ttl < 60 or ttl > 86400:
         raise RestartError("restart grant TTL must be between 60 and 86400 seconds")
     now = _utcnow()
@@ -639,4 +642,6 @@ def finalize(session_id: str) -> dict[str, Any]:
         grant_path(sid).unlink()
     except FileNotFoundError:
         pass
+    except OSError as exc:
+        raise RestartError(f"cannot consume restart grant: {exc}") from exc
     return view

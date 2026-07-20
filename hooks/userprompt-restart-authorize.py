@@ -18,6 +18,8 @@ def main() -> int:
         return 0
     if not isinstance(payload, dict):
         return 0
+    if payload.get("agent_id"):
+        return 0
     prompt = payload.get("prompt")
     if not isinstance(prompt, str) or prompt.strip() != "/restart":
         return 0
@@ -40,4 +42,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-
