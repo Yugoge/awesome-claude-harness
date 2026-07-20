@@ -162,7 +162,7 @@ def test_discovery_requires_authoritative_interruption_evidence(recovery: dict) 
     assert all("prompt" not in item for item in candidates), "raw prompts must not leak into restart state"
 
 
-def test_discovery_scopes_current_request_and_classifies_notifications(tmp_path: Path) -> None:
+def test_discovery_scans_full_parent_and_classifies_notifications(tmp_path: Path) -> None:
     sid = str(uuid.uuid4())
     transcript = tmp_path / f"{sid}.jsonl"
     old_tool = "toolu_old_quota"
