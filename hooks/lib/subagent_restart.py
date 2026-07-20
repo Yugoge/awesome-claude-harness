@@ -51,7 +51,6 @@ TASK_NOTIFICATION_RE = re.compile(
     r"<status>completed</status>(.*?)</task-notification>",
     re.IGNORECASE | re.DOTALL,
 )
-COMMAND_NAME_RE = re.compile(r"<command-name>\s*/([^<\s]+)\s*</command-name>", re.IGNORECASE)
 
 
 class RestartError(RuntimeError):
@@ -258,12 +257,10 @@ def _read_parent_calls(
     dict[str, dict[str, Any]],
     dict[str, list[Any]],
     dict[str, dict[str, Any]],
-    list[tuple[int, bool]],
 ]:
     calls: dict[str, dict[str, Any]] = {}
     results: dict[str, list[Any]] = {}
     latest_notifications: dict[str, dict[str, Any]] = {}
-    human_prompt_lines: list[tuple[int, bool]] = []
     try:
         lines = transcript.open("r", encoding="utf-8", errors="replace")
     except OSError as exc:
@@ -288,12 +285,6 @@ def _read_parent_calls(
             message = record.get("message") if isinstance(record, dict) else None
             content = message.get("content") if isinstance(message, dict) else None
             if isinstance(content, str):
-                if record.get("type") == "user" and "<task-notification>" not in content:
-                    command = COMMAND_NAME_RE.search(content)
-                    is_restart = content.strip() == "/restart" or bool(
-                        command and command.group(1).lower() == "restart"
-                    )
-                    human_prompt_lines.append((line_no, is_restart))
                 continue
             if not isinstance(content, list):
                 continue
@@ -317,7 +308,7 @@ def _read_parent_calls(
                         result["_parent_line"] = line_no
                         results.setdefault(tool_id, []).append(result)
 
-    return calls, results, latest_notifications, human_prompt_lines
+    return calls, results, latest_notifications
 
 
 def _metadata_by_tool_use(transcript: Path) -> dict[str, dict[str, Any]]:
@@ -350,7 +341,7 @@ def _metadata_by_tool_use(transcript: Path) -> dict[str, dict[str, Any]]:
 def discover_candidates(transcript_path: str | Path) -> list[dict[str, Any]]:
     """Return every recoverable interrupted/quota Agent call in parent order."""
     transcript = Path(transcript_path).expanduser().resolve()
-    calls, results, latest_notifications, human_prompt_lines = _read_parent_calls(transcript)
+    calls, results, latest_notifications = _read_parent_calls(transcript)
     metadata = _metadata_by_tool_use(transcript)
     candidates: list[dict[str, Any]] = []
     for tool_id, call in sorted(calls.items(), key=lambda item: item[1]["line"]):
@@ -371,7 +362,9 @@ def discover_candidates(transcript_path: str | Path) -> list[dict[str, Any]]:
             continue
         evidence: list[str] = []
         interruption_lines: list[int] = []
-        if not result_blocks:
+        tool_input = call.get("input") if isinstance(call.get("input"), dict) else {}
+        is_background = tool_input.get("run_in_background") is True
+        if not result_blocks and not is_background:
             evidence.append("missing_parent_tool_result")
             interruption_lines.append(call["line"])
         if (result_text and QUOTA_RE.search(result_text)) or (
@@ -389,17 +382,6 @@ def discover_candidates(transcript_path: str | Path) -> list[dict[str, Any]]:
             interruption_lines.extend(
                 block["_parent_line"] for block in result_blocks
                 if isinstance(block.get("_parent_line"), int) and INTERRUPT_RE.search(_textify(block))
-            )
-        tool_input = call.get("input") if isinstance(call.get("input"), dict) else {}
-        if (
-            tool_input.get("run_in_background") is True
-            and isinstance(agent_id, str)
-            and not notification_after_call
-        ):
-            evidence.append("background_without_completion_notification")
-            interruption_lines.extend(
-                block["_parent_line"] for block in result_blocks
-                if isinstance(block.get("_parent_line"), int)
             )
         if not evidence:
             continue
@@ -426,19 +408,7 @@ def discover_candidates(transcript_path: str | Path) -> list[dict[str, Any]]:
             "evidence": evidence,
             "fingerprint": fingerprint,
         })
-    if not candidates:
-        return []
-
-    # Scope recovery to the human request that owns the newest still-unrecovered
-    # interruption. This survives `claude --resume`, context-summary prompts, and
-    # repeated /restart attempts while avoiding resurrection of unrelated quota
-    # failures from older requests in a long-lived parent transcript.
-    newest = max(candidates, key=lambda item: item["interruption_line"])
-    owner_line = newest["parent_line"]
-    non_restart_prompts = [line for line, is_restart in human_prompt_lines if not is_restart]
-    lower = max((line for line in non_restart_prompts if line < owner_line), default=0)
-    upper = min((line for line in non_restart_prompts if line > owner_line), default=float("inf"))
-    return [item for item in candidates if lower < item["parent_line"] < upper]
+    return candidates
 
 
 def build_resume_message(session_id: str, agent_id: str) -> str:
