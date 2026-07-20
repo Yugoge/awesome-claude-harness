@@ -409,6 +409,9 @@ def test_userprompt_authorizer_accepts_only_exact_bare_restart(tmp_path: Path) -
     ignored = _run_hook(hook, {**base, "prompt": "/restart agent-one"}, env)
     assert ignored.returncode == 0
     assert not (tmp_path / "grants" / f"claude-restart-grant-{sid}.json").exists()
+    subagent = _run_hook(hook, {**base, "prompt": "/restart", "agent_id": "agent-child"}, env)
+    assert subagent.returncode == 0
+    assert not (tmp_path / "grants" / f"claude-restart-grant-{sid}.json").exists()
     accepted = _run_hook(hook, {**base, "prompt": "/restart"}, env)
     assert accepted.returncode == 0
     grant = json.loads((tmp_path / "grants" / f"claude-restart-grant-{sid}.json").read_text())
