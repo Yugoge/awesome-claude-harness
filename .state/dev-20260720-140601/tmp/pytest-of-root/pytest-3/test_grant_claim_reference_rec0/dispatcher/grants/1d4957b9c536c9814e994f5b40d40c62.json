@@ -1,0 +1,30 @@
+{
+  "allowed_operations": [
+    {
+      "args_contain": [],
+      "op": "git",
+      "target": "commit"
+    }
+  ],
+  "claim": {
+    "claim_id": "d7766c01ad285636e9e049c0e15c3314",
+    "claimant_id": "tool-17cb2f31e1434a98d773db9e4a962a74",
+    "claimed_at": "2026-07-20T15:52:43.017519+00:00",
+    "event_identity": {
+      "session_id": "real",
+      "tool_call_id": "real-call",
+      "tool_name": "exec_command",
+      "turn_id": "turn"
+    },
+    "operation_sha256": "9791152d503821d54e110f728977f3ab6f3d41973f6f27f6c117877bb9f4ba7b"
+  },
+  "consume_result": "exit:3",
+  "consumed": true,
+  "consumed_at": "2026-07-20T15:52:43.025874+00:00",
+  "created_at": "2026-07-20T15:52:43.005717+00:00",
+  "expires_at": "2026-07-20T15:57:43.005454+00:00",
+  "grant_id": "1d4957b9c536c9814e994f5b40d40c62",
+  "session_id": "real",
+  "signature": "9c5ce9571c06fb6194c7898a0fadba94ce679e0ce9662a19281904980cdd1789",
+  "task_id": "human-allow"
+}

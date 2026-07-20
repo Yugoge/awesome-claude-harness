@@ -1,0 +1,25 @@
+{
+  "allowed_operations": [
+    {
+      "args_contain": [],
+      "op": "git",
+      "target": "commit"
+    }
+  ],
+  "claim": {
+    "claim_id": "78d8097970227358cf57de7cf22c0229",
+    "claimant_id": "same-tool-call",
+    "claimed_at": "2026-07-20T15:52:42.993388+00:00",
+    "event_identity": null,
+    "operation_sha256": "9791152d503821d54e110f728977f3ab6f3d41973f6f27f6c117877bb9f4ba7b"
+  },
+  "consume_result": "exit:9",
+  "consumed": true,
+  "consumed_at": "2026-07-20T15:52:42.994160+00:00",
+  "created_at": "2026-07-20T15:52:42.993079+00:00",
+  "expires_at": "2026-07-20T15:57:42.993051+00:00",
+  "grant_id": "4e87b68e51f98b1bac21e40f8e1ef223",
+  "session_id": "s",
+  "signature": "05c536981def2d9ea5252e7773e7c707473e3fba5d9c473b0e18e92c675641a8",
+  "task_id": "t"
+}

@@ -1,0 +1,10 @@
+{
+  "claim_id": "78d8097970227358cf57de7cf22c0229",
+  "claimant_id": "same-tool-call",
+  "finalized": true,
+  "grant_id": "4e87b68e51f98b1bac21e40f8e1ef223",
+  "recovered": true,
+  "signature": "70ff51c6387c964491ae5febefbf199915a63dfb806b161a7f8757d115618a72",
+  "state": "claimed",
+  "terminal_result": "exit:9"
+}
