@@ -258,7 +258,7 @@ def _read_parent_calls(
     dict[str, dict[str, Any]],
     dict[str, list[Any]],
     dict[str, dict[str, Any]],
-    int,
+    list[tuple[int, bool]],
 ]:
     calls: dict[str, dict[str, Any]] = {}
     results: dict[str, list[Any]] = {}
@@ -317,18 +317,7 @@ def _read_parent_calls(
                         result["_parent_line"] = line_no
                         results.setdefault(tool_id, []).append(result)
 
-    # Recovery is scoped to the current human request, not every quota event in
-    # a long-lived parent transcript. During UserPromptSubmit the /restart line
-    # may not be persisted yet; after submission it is the newest human prompt.
-    # Repeated /restart attempts stay attached to the same request boundary.
-    if human_prompt_lines and human_prompt_lines[-1][1]:
-        request_boundary = next(
-            (line for line, is_restart in reversed(human_prompt_lines[:-1]) if not is_restart),
-            0,
-        )
-    else:
-        request_boundary = human_prompt_lines[-1][0] if human_prompt_lines else 0
-    return calls, results, latest_notifications, request_boundary
+    return calls, results, latest_notifications, human_prompt_lines
 
 
 def _metadata_by_tool_use(transcript: Path) -> dict[str, dict[str, Any]]:
@@ -361,12 +350,10 @@ def _metadata_by_tool_use(transcript: Path) -> dict[str, dict[str, Any]]:
 def discover_candidates(transcript_path: str | Path) -> list[dict[str, Any]]:
     """Return every recoverable interrupted/quota Agent call in parent order."""
     transcript = Path(transcript_path).expanduser().resolve()
-    calls, results, latest_notifications, request_boundary = _read_parent_calls(transcript)
+    calls, results, latest_notifications, human_prompt_lines = _read_parent_calls(transcript)
     metadata = _metadata_by_tool_use(transcript)
     candidates: list[dict[str, Any]] = []
     for tool_id, call in sorted(calls.items(), key=lambda item: item[1]["line"]):
-        if call["line"] <= request_boundary:
-            continue
         result_blocks = results.get(tool_id, [])
         result_text = _textify(result_blocks)
         meta = metadata.get(tool_id, {})
@@ -439,7 +426,19 @@ def discover_candidates(transcript_path: str | Path) -> list[dict[str, Any]]:
             "evidence": evidence,
             "fingerprint": fingerprint,
         })
-    return candidates
+    if not candidates:
+        return []
+
+    # Scope recovery to the human request that owns the newest still-unrecovered
+    # interruption. This survives `claude --resume`, context-summary prompts, and
+    # repeated /restart attempts while avoiding resurrection of unrelated quota
+    # failures from older requests in a long-lived parent transcript.
+    newest = max(candidates, key=lambda item: item["interruption_line"])
+    owner_line = newest["parent_line"]
+    non_restart_prompts = [line for line, is_restart in human_prompt_lines if not is_restart]
+    lower = max((line for line in non_restart_prompts if line < owner_line), default=0)
+    upper = min((line for line in non_restart_prompts if line > owner_line), default=float("inf"))
+    return [item for item in candidates if lower < item["parent_line"] < upper]
 
 
 def build_resume_message(session_id: str, agent_id: str) -> str:
