@@ -373,14 +373,26 @@ def discover_candidates(transcript_path: str | Path) -> list[dict[str, Any]]:
         if notification_after_call and not notification.get("quota_interrupted"):
             continue
         evidence: list[str] = []
+        interruption_lines: list[int] = []
         if not result_blocks:
             evidence.append("missing_parent_tool_result")
+            interruption_lines.append(call["line"])
         if (result_text and QUOTA_RE.search(result_text)) or (
             notification_after_call and notification.get("quota_interrupted")
         ):
             evidence.append("quota_or_usage_limit")
+            interruption_lines.extend(
+                block["_parent_line"] for block in result_blocks
+                if isinstance(block.get("_parent_line"), int) and QUOTA_RE.search(_textify(block))
+            )
+            if notification_after_call and notification.get("quota_interrupted"):
+                interruption_lines.append(notification["line"])
         if result_text and INTERRUPT_RE.search(result_text):
             evidence.append("interrupted_tool_result")
+            interruption_lines.extend(
+                block["_parent_line"] for block in result_blocks
+                if isinstance(block.get("_parent_line"), int) and INTERRUPT_RE.search(_textify(block))
+            )
         tool_input = call.get("input") if isinstance(call.get("input"), dict) else {}
         if (
             tool_input.get("run_in_background") is True
@@ -388,6 +400,10 @@ def discover_candidates(transcript_path: str | Path) -> list[dict[str, Any]]:
             and not notification_after_call
         ):
             evidence.append("background_without_completion_notification")
+            interruption_lines.extend(
+                block["_parent_line"] for block in result_blocks
+                if isinstance(block.get("_parent_line"), int)
+            )
         if not evidence:
             continue
         if not isinstance(agent_id, str) or not AGENT_RE.fullmatch(agent_id):
@@ -407,6 +423,7 @@ def discover_candidates(transcript_path: str | Path) -> list[dict[str, Any]]:
             "tool_use_id": tool_id,
             "tool_name": call.get("tool_name", "Agent"),
             "parent_line": call.get("line"),
+            "interruption_line": max(interruption_lines or [call["line"]]),
             "agent_transcript_path": meta.get("agent_transcript_path")
             or str(transcript.with_suffix("") / "subagents" / f"agent-{agent_id}.jsonl"),
             "evidence": evidence,
@@ -446,7 +463,11 @@ def prepare_state(session_id: str) -> dict[str, Any]:
         for candidate in discovered:
             previous = old_items.get(candidate["agent_id"], {})
             status = previous.get("status")
-            if status not in {"response_observed", "dispatched"}:
+            if status == "dispatched":
+                dispatched_line = previous.get("interruption_line_at_dispatch")
+                if not isinstance(dispatched_line, int) or candidate["interruption_line"] > dispatched_line:
+                    status = "pending"
+            elif status != "response_observed":
                 status = "pending"
             item = {
                 **candidate,
@@ -455,7 +476,10 @@ def prepare_state(session_id: str) -> dict[str, Any]:
                 if isinstance(previous.get("attempts", 0), int) else 0,
                 "resume_message": build_resume_message(sid, candidate["agent_id"]),
             }
-            for key in ("last_dispatched_at", "last_stop_at", "last_message_sha256", "stop_hook_active"):
+            for key in (
+                "last_dispatched_at", "last_stop_at", "last_message_sha256",
+                "stop_hook_active", "interruption_line_at_dispatch",
+            ):
                 if key in previous:
                     item[key] = previous[key]
             items.append(item)
@@ -491,7 +515,8 @@ def status_view(state: dict[str, Any]) -> dict[str, Any]:
             continue
         public.append({key: item.get(key) for key in (
             "agent_id", "agent_type", "description", "tool_use_id",
-            "agent_transcript_path", "evidence", "status", "attempts", "resume_message",
+            "agent_transcript_path", "evidence", "interruption_line", "status",
+            "attempts", "resume_message",
         )})
     incomplete = [item["agent_id"] for item in public if item.get("status") != "response_observed"]
     return {
@@ -558,6 +583,7 @@ def mark_dispatched(session_id: str, agent_id: str) -> dict[str, Any]:
                 item["status"] = "dispatched"
                 item["attempts"] = int(item.get("attempts", 0)) + 1
                 item["last_dispatched_at"] = _iso()
+                item["interruption_line_at_dispatch"] = item.get("interruption_line")
                 state["updated_at"] = _iso()
                 _atomic_write_json(state_path(sid), state)
                 return status_view(state)
