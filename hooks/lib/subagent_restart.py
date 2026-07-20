@@ -108,22 +108,25 @@ def _load_json(path: Path) -> dict[str, Any] | None:
 
 
 def _atomic_write_json(path: Path, value: dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=str(path.parent))
-    tmp = Path(tmp_name)
     try:
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            json.dump(value, handle, ensure_ascii=False, sort_keys=True)
-            handle.write("\n")
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.chmod(tmp, 0o600)
-        os.replace(tmp, path)
-    finally:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        fd, tmp_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=str(path.parent))
+        tmp = Path(tmp_name)
         try:
-            tmp.unlink()
-        except OSError:
-            pass
+            with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                json.dump(value, handle, ensure_ascii=False, sort_keys=True)
+                handle.write("\n")
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.chmod(tmp, 0o600)
+            os.replace(tmp, path)
+        finally:
+            try:
+                tmp.unlink()
+            except OSError:
+                pass
+    except OSError as exc:
+        raise RestartError(f"cannot persist restart state at {path}: {exc}") from exc
 
 
 @contextlib.contextmanager
@@ -177,10 +180,7 @@ def mint_grant(
         "issued_at": _iso(now),
         "expires_at": _iso(now + timedelta(seconds=ttl)),
     }
-    try:
-        _atomic_write_json(grant_path(sid), grant)
-    except OSError as exc:
-        raise RestartError(f"cannot persist restart grant: {exc}") from exc
+    _atomic_write_json(grant_path(sid), grant)
     return grant
 
 
