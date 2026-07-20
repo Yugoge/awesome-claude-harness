@@ -177,7 +177,10 @@ def mint_grant(
         "issued_at": _iso(now),
         "expires_at": _iso(now + timedelta(seconds=ttl)),
     }
-    _atomic_write_json(grant_path(sid), grant)
+    try:
+        _atomic_write_json(grant_path(sid), grant)
+    except OSError as exc:
+        raise RestartError(f"cannot persist restart grant: {exc}") from exc
     return grant
 
 
