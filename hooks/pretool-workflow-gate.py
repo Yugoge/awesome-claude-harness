@@ -400,9 +400,26 @@ def _spawn_task_name(payload: dict) -> str | None:
 
 def _task_name_matches_role(task_name: str, role: str) -> bool:
     normalized_role = role.strip().lower().replace('-', '_')
-    if not re.fullmatch(r'[a-z0-9_]+', normalized_role):
+    if (
+        not re.fullmatch(r'[a-z0-9_]+', normalized_role)
+        or not isinstance(task_name, str)
+        or not re.fullmatch(r'[a-z0-9_]+', task_name)
+    ):
         return False
-    return task_name == normalized_role or task_name.startswith(f'{normalized_role}_')
+
+    task_tokens = task_name.split('_')
+    role_tokens = normalized_role.split('_')
+    role_width = len(role_tokens)
+    if any(
+        task_tokens[offset:offset + role_width] == role_tokens
+        for offset in range(len(task_tokens) - role_width + 1)
+    ):
+        return True
+
+    # BA-validation agents are conventionally named ``baqa_<lane>`` but execute
+    # the canonical QA role. Keep this explicit so arbitrary substrings such as
+    # ``quality`` cannot satisfy the delegated-role evidence check.
+    return normalized_role == 'qa' and 'baqa' in task_tokens
 
 
 def _final_agent_message(payload: dict) -> bool:

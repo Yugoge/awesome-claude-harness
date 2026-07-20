@@ -347,6 +347,37 @@ def test_native_evidence_rejects_wrong_canonical_role(tmp_path: Path) -> None:
     ) == {}
 
 
+def test_task_name_role_matching_accepts_real_codex_lane_names() -> None:
+    assert MODULE._task_name_matches_role("qa", "qa")
+    assert MODULE._task_name_matches_role("qa_current", "qa")
+    assert MODULE._task_name_matches_role("close_qa", "qa")
+    assert MODULE._task_name_matches_role("baqa_terminal", "qa")
+    assert MODULE._task_name_matches_role("close_style_inspector", "style-inspector")
+
+
+def test_task_name_role_matching_rejects_substrings_and_wrong_compound_role() -> None:
+    assert not MODULE._task_name_matches_role("quality", "qa")
+    assert not MODULE._task_name_matches_role("equalizer", "qa")
+    assert not MODULE._task_name_matches_role("baqa_terminal", "ba")
+    assert not MODULE._task_name_matches_role("graphify_enrich", "qa")
+
+
+def test_native_evidence_accepts_real_qa_task_names(tmp_path: Path) -> None:
+    old = [_todo("in_progress", delegated=True), _todo("pending")]
+    new = [_todo("completed", delegated=True), _todo("in_progress")]
+    state = {"codex_step_started_at_ms": {"0": 1784559600000}}
+
+    for task_name in ("close_qa", "baqa_terminal"):
+        transcript = tmp_path / f"rollout-session-{task_name}.jsonl"
+        _write_transcript(transcript, task_name=task_name)
+
+        evidence = MODULE.native_subagent_evidence_for_transition(
+            {"transcript_path": str(transcript)}, "session", state, old, new
+        )
+
+        assert evidence[0]["task_name"] == task_name
+
+
 def test_native_evidence_rejects_reused_child_thread(tmp_path: Path) -> None:
     transcript = tmp_path / "rollout-session.jsonl"
     _write_transcript(transcript)
