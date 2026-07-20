@@ -24,7 +24,13 @@ def _record(role: str, content: list[dict]) -> dict:
     return {"type": role, "message": {"role": role, "content": content}}
 
 
-def _tool_use(tool_id: str, description: str, *, agent_type: str = "dev") -> dict:
+def _tool_use(
+    tool_id: str,
+    description: str,
+    *,
+    agent_type: str = "dev",
+    background: bool = False,
+) -> dict:
     return {
         "type": "tool_use",
         "id": tool_id,
@@ -33,7 +39,7 @@ def _tool_use(tool_id: str, description: str, *, agent_type: str = "dev") -> dic
             "description": description,
             "subagent_type": agent_type,
             "prompt": f"Do exactly one issue: {description}",
-            "run_in_background": False,
+            "run_in_background": background,
         },
     }
 
@@ -83,6 +89,8 @@ def recovery(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict:
     quota_tool = "toolu_quota"
     complete_tool = "toolu_complete"
     blocked_tool = "toolu_blocked"
+    background_tool = "toolu_background"
+    background_complete_tool = "toolu_background_complete"
     records = [
         _record("assistant", [_tool_use(missing_tool, "missing parent result")]),
         _record("assistant", [_tool_use(quota_tool, "quota stopped")]),
@@ -98,11 +106,36 @@ def recovery(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict:
         )]),
         _record("assistant", [_tool_use(blocked_tool, "hook rejected")]),
         _record("user", [_tool_result(blocked_tool, "PreToolUse Agent hook blocked", error=True)]),
+        _record("assistant", [_tool_use(background_tool, "background interrupted", background=True)]),
+        _record("user", [_tool_result(
+            background_tool,
+            "Async agent launched successfully.\nagentId: agent-background",
+        )]),
+        _record("assistant", [_tool_use(
+            background_complete_tool, "background already complete", background=True,
+        )]),
+        _record("user", [_tool_result(
+            background_complete_tool,
+            "Async agent launched successfully.\nagentId: agent-background-complete",
+        )]),
+        {
+            "type": "user",
+            "message": {
+                "role": "user",
+                "content": "<task-notification><task-id>agent-background-complete</task-id>"
+                "<status>completed</status></task-notification>",
+            },
+        },
     ]
     _write_jsonl(transcript, records)
     _write_meta(transcript, "agent-missing", missing_tool, "missing parent result")
     _write_meta(transcript, "agent-quota", quota_tool, "quota stopped")
     _write_meta(transcript, "agent-complete", complete_tool, "already complete")
+    _write_meta(transcript, "agent-background", background_tool, "background interrupted")
+    _write_meta(
+        transcript, "agent-background-complete", background_complete_tool,
+        "background already complete",
+    )
     restart.mint_grant(sid, str(transcript), str(tmp_path), ttl_seconds=600)
     return {
         "sid": sid,
@@ -117,17 +150,20 @@ def recovery(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict:
     }
 
 
-def test_discovery_recovers_missing_and_quota_only(recovery: dict) -> None:
+def test_discovery_recovers_missing_quota_and_unfinished_background(recovery: dict) -> None:
     candidates = restart.discover_candidates(recovery["transcript"])
-    assert [item["agent_id"] for item in candidates] == ["agent-missing", "agent-quota"]
+    assert [item["agent_id"] for item in candidates] == [
+        "agent-missing", "agent-quota", "agent-background",
+    ]
     assert candidates[0]["evidence"] == ["missing_parent_tool_result"]
     assert candidates[1]["evidence"] == ["quota_or_usage_limit"]
+    assert candidates[2]["evidence"] == ["background_without_completion_notification"]
     assert all("prompt" not in item for item in candidates), "raw prompts must not leak into restart state"
 
 
 def test_prepare_authorizes_exact_original_ids_and_message(recovery: dict) -> None:
     view = restart.prepare_state(recovery["sid"])
-    assert view["candidate_count"] == 2
+    assert view["candidate_count"] == 3
     assert view["complete"] is False
     first = view["candidates"][0]
     payload = {
@@ -151,6 +187,7 @@ def test_dispatch_stop_quota_retry_and_finalize(recovery: dict) -> None:
     restart.prepare_state(recovery["sid"])
     restart.mark_dispatched(recovery["sid"], "agent-missing")
     restart.mark_dispatched(recovery["sid"], "agent-quota")
+    restart.mark_dispatched(recovery["sid"], "agent-background")
     view = restart.observe_subagent_stop({
         "session_id": recovery["sid"],
         "agent_id": "agent-missing",
@@ -180,6 +217,12 @@ def test_dispatch_stop_quota_retry_and_finalize(recovery: dict) -> None:
     final = restart.observe_subagent_stop({
         "session_id": recovery["sid"],
         "agent_id": "agent-quota",
+        "last_assistant_message": "RECOVERY_STATUS: completed",
+    })
+    assert final is not None and final["complete"] is False
+    final = restart.observe_subagent_stop({
+        "session_id": recovery["sid"],
+        "agent_id": "agent-background",
         "last_assistant_message": "RECOVERY_STATUS: completed",
     })
     assert final is not None and final["complete"] is True
@@ -287,4 +330,3 @@ def test_command_and_settings_keep_restart_human_only_and_lossless() -> None:
     for config in (settings, template):
         assert config["env"]["CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS"] == "1"
         assert "Skill(restart:*)" in config["permissions"]["deny"]
-
