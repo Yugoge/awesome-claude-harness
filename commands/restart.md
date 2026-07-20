@@ -17,7 +17,8 @@ agents and never selects only a convenient subset.
 ```
 
 Only the exact bare command is valid. There is deliberately no agent selector:
-every recoverable interrupted subagent in the current parent session is handled.
+every recoverable interrupted subagent in the latest affected human request of
+the current parent session is handled as one recovery wave.
 
 ## Mandatory procedure
 
