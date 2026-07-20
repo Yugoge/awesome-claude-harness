@@ -368,7 +368,7 @@ def test_native_evidence_accepts_real_qa_task_names(tmp_path: Path) -> None:
     state = {"codex_step_started_at_ms": {"0": 1784559600000}}
 
     for task_name in ("close_qa", "baqa_terminal"):
-        transcript = tmp_path / f"rollout-session-{task_name}.jsonl"
+        transcript = tmp_path / f"rollout-{task_name}-session.jsonl"
         _write_transcript(transcript, task_name=task_name)
 
         evidence = MODULE.native_subagent_evidence_for_transition(
