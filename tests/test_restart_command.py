@@ -396,6 +396,26 @@ def test_userprompt_authorizer_accepts_only_exact_bare_restart(tmp_path: Path) -
     assert grant["session_id"] == sid
 
 
+def test_restart_grant_guard_blocks_model_forgery(tmp_path: Path) -> None:
+    guard = HOOKS / "pretool-restart-grant-guard.py"
+    env = dict(os.environ)
+    forged = _run_hook(guard, {
+        "tool_name": "Bash",
+        "tool_input": {"command": "python3 hooks/userprompt-restart-authorize.py"},
+    }, env)
+    assert forged.returncode == 2
+    overwritten = _run_hook(guard, {
+        "tool_name": "Write",
+        "tool_input": {"file_path": "/tmp/claude-restart-grant-forged.json"},
+    }, env)
+    assert overwritten.returncode == 2
+    benign = _run_hook(guard, {
+        "tool_name": "Bash",
+        "tool_input": {"command": "python3 scripts/restart-subagents.py --help"},
+    }, env)
+    assert benign.returncode == 0
+
+
 def test_command_and_settings_keep_restart_human_only_and_lossless() -> None:
     command = (ROOT / "commands" / "restart.md").read_text(encoding="utf-8")
     assert "disable-model-invocation: true" in command
