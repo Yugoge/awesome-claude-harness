@@ -242,6 +242,10 @@ def test_prepare_authorizes_exact_original_ids_and_message(recovery: dict) -> No
     }
     ok, reason = restart.authorize_send_message(payload)
     assert ok is False and "recoverable interrupted" in reason
+    restart.mark_dispatched(recovery["sid"], first["agent_id"])
+    payload["tool_input"] = {"to": first["agent_id"], "message": first["resume_message"]}
+    ok, reason = restart.authorize_send_message(payload)
+    assert ok is False and "duplicate restart dispatch denied" in reason
 
 
 def test_dispatch_stop_quota_retry_and_finalize(recovery: dict) -> None:
