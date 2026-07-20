@@ -161,6 +161,63 @@ def test_discovery_recovers_missing_quota_and_unfinished_background(recovery: di
     assert all("prompt" not in item for item in candidates), "raw prompts must not leak into restart state"
 
 
+def test_discovery_scopes_current_request_and_classifies_notifications(tmp_path: Path) -> None:
+    sid = str(uuid.uuid4())
+    transcript = tmp_path / f"{sid}.jsonl"
+    old_tool = "toolu_old_quota"
+    resumed_tool = "toolu_resumed_quota"
+    quota_background_tool = "toolu_background_quota"
+    records = [
+        _record("assistant", [_tool_use(old_tool, "historical quota")]),
+        _record("user", [_tool_result(
+            old_tool,
+            "You've hit your session limit · resets at 10am (UTC)\nagentId: agent-old",
+        )]),
+        {"type": "user", "message": {"role": "user", "content": "current request"}},
+        _record("assistant", [_tool_use(resumed_tool, "resumed and completed", background=True)]),
+        _record("user", [_tool_result(
+            resumed_tool,
+            "You've hit your session limit · resets at 11am (UTC)\nagentId: agent-resumed",
+        )]),
+        {
+            "type": "queue-operation",
+            "content": "<task-notification><task-id>agent-resumed</task-id>"
+            "<status>completed</status><result>verified complete</result></task-notification>",
+        },
+        _record("assistant", [_tool_use(
+            quota_background_tool, "background quota", background=True,
+        )]),
+        _record("user", [_tool_result(
+            quota_background_tool,
+            "Async agent launched successfully.\nagentId: agent-background-quota",
+        )]),
+        {
+            "type": "queue-operation",
+            "content": "<task-notification><task-id>agent-background-quota</task-id>"
+            "<status>completed</status><result>You've hit your session limit · "
+            "resets in 2h</result></task-notification>",
+        },
+        {
+            "type": "user",
+            "message": {
+                "role": "user",
+                "content": "<command-message>restart</command-message>"
+                "<command-name>/restart</command-name>",
+            },
+        },
+    ]
+    _write_jsonl(transcript, records)
+    _write_meta(transcript, "agent-old", old_tool, "historical quota")
+    _write_meta(transcript, "agent-resumed", resumed_tool, "resumed and completed")
+    _write_meta(
+        transcript, "agent-background-quota", quota_background_tool, "background quota",
+    )
+
+    candidates = restart.discover_candidates(transcript)
+    assert [item["agent_id"] for item in candidates] == ["agent-background-quota"]
+    assert candidates[0]["evidence"] == ["quota_or_usage_limit"]
+
+
 def test_prepare_authorizes_exact_original_ids_and_message(recovery: dict) -> None:
     view = restart.prepare_state(recovery["sid"])
     assert view["candidate_count"] == 3
@@ -188,6 +245,11 @@ def test_dispatch_stop_quota_retry_and_finalize(recovery: dict) -> None:
     restart.mark_dispatched(recovery["sid"], "agent-missing")
     restart.mark_dispatched(recovery["sid"], "agent-quota")
     restart.mark_dispatched(recovery["sid"], "agent-background")
+    prepared_again = restart.prepare_state(recovery["sid"])
+    background = next(
+        item for item in prepared_again["candidates"] if item["agent_id"] == "agent-background"
+    )
+    assert background["status"] == "dispatched", "an active resume must not be queued twice"
     view = restart.observe_subagent_stop({
         "session_id": recovery["sid"],
         "agent_id": "agent-missing",
