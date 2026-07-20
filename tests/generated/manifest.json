@@ -173,6 +173,10 @@
     {
       "task_id": "20260719-093224-terminal-validation",
       "manifest_path": "tests/generated/20260719-093224-terminal-validation/manifest.json"
+    },
+    {
+      "task_id": "dev-20260720-150632-a",
+      "manifest_path": "tests/generated/dev-20260720-150632-a/manifest.json"
     }
   ]
 }
