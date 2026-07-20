@@ -294,16 +294,69 @@ def _event_epoch_ms(event: dict) -> int | None:
 
 
 def _transcript_path(data: dict, session_id: str) -> Path | None:
+    if not session_id:
+        return None
+
+    def belongs_to_session(path: Path) -> bool:
+        if not path.is_file() or not path.name.endswith(f'-{session_id}.jsonl'):
+            return False
+        try:
+            with path.open(encoding='utf-8') as handle:
+                first_line = next((line for line in handle if line.strip()), '')
+            event = json.loads(first_line)
+        except (OSError, StopIteration, json.JSONDecodeError):
+            return False
+        payload = event.get('payload') if isinstance(event, dict) else None
+        return (
+            event.get('type') == 'session_meta'
+            and isinstance(payload, dict)
+            and payload.get('id') == session_id
+            and payload.get('session_id') == session_id
+        )
+
+    explicit_paths = []
+    explicit_supplied = False
     for key in ('transcript_path', 'transcript', 'conversation_transcript_path'):
         value = data.get(key)
         if isinstance(value, str) and value:
+            explicit_supplied = True
             path = Path(value).expanduser()
-            if path.is_file():
-                return path
-    if not session_id:
+            if belongs_to_session(path):
+                explicit_paths.append(path.resolve())
+    if explicit_supplied:
+        unique_explicit = set(explicit_paths)
+        return unique_explicit.pop() if len(unique_explicit) == 1 else None
+
+    matches = {
+        path.resolve()
+        for path in (Path.home() / '.codex' / 'sessions').glob(
+            f'**/*-{session_id}.jsonl'
+        )
+        if belongs_to_session(path)
+    }
+    return matches.pop() if len(matches) == 1 else None
+
+
+def _spawn_task_name(payload: dict) -> str | None:
+    arguments = payload.get('arguments')
+    if isinstance(arguments, str):
+        try:
+            arguments = json.loads(arguments)
+        except json.JSONDecodeError:
+            return None
+    if not isinstance(arguments, dict):
         return None
-    matches = list((Path.home() / '.codex' / 'sessions').glob(f'**/*{session_id}.jsonl'))
-    return matches[0] if len(matches) == 1 else None
+    task_name = arguments.get('task_name')
+    if not isinstance(task_name, str) or not re.fullmatch(r'[a-z0-9_]+', task_name):
+        return None
+    return task_name
+
+
+def _task_name_matches_role(task_name: str, role: str) -> bool:
+    normalized_role = role.strip().lower().replace('-', '_')
+    if not re.fullmatch(r'[a-z0-9_]+', normalized_role):
+        return False
+    return task_name == normalized_role or task_name.startswith(f'{normalized_role}_')
 
 
 def _final_agent_message(payload: dict) -> bool:
@@ -337,7 +390,7 @@ def completed_codex_subagents(
     except (OSError, json.JSONDecodeError):
         return []
 
-    spawn_times: dict[str, int] = {}
+    spawns: dict[str, dict] = {}
     started: dict[str, dict] = {}
     completed: list[dict] = []
     for line_no, event in events:
@@ -348,27 +401,47 @@ def completed_codex_subagents(
         if event.get('type') == 'response_item' and payload.get('type') == 'function_call':
             if payload.get('namespace') == 'collaboration' and payload.get('name') == 'spawn_agent':
                 call_id = payload.get('call_id')
-                if isinstance(call_id, str) and event_ms is not None and event_ms >= started_after_ms:
-                    spawn_times[call_id] = event_ms
+                task_name = _spawn_task_name(payload)
+                if (
+                    isinstance(call_id, str)
+                    and call_id
+                    and task_name is not None
+                    and event_ms is not None
+                    and event_ms >= started_after_ms
+                ):
+                    spawns[call_id] = {
+                        'spawned_at_ms': event_ms,
+                        'task_name': task_name,
+                        'spawn_line': line_no,
+                    }
             continue
         if event.get('type') == 'event_msg' and payload.get('type') == 'sub_agent_activity':
             call_id = payload.get('event_id')
             agent_path = payload.get('agent_path')
+            agent_thread_id = payload.get('agent_thread_id')
             occurred_ms = payload.get('occurred_at_ms')
+            spawn = spawns.get(call_id)
             if (
                 payload.get('kind') == 'started'
                 and isinstance(call_id, str)
-                and call_id in spawn_times
+                and isinstance(spawn, dict)
                 and isinstance(agent_path, str)
+                and agent_path.rsplit('/', 1)[-1] == spawn['task_name']
+                and isinstance(agent_thread_id, str)
+                and bool(agent_thread_id.strip())
                 and isinstance(occurred_ms, int)
                 and occurred_ms >= started_after_ms
+                and occurred_ms >= spawn['spawned_at_ms']
             ):
                 started[agent_path] = {
                     'call_id': call_id,
                     'agent_path': agent_path,
-                    'agent_thread_id': payload.get('agent_thread_id'),
+                    'agent_thread_id': agent_thread_id,
+                    'task_name': spawn['task_name'],
+                    'spawned_at_ms': spawn['spawned_at_ms'],
                     'started_at_ms': occurred_ms,
-                    'spawn_line': line_no,
+                    'spawn_line': spawn['spawn_line'],
+                    'started_line': line_no,
                 }
             continue
         if event.get('type') != 'response_item' or payload.get('type') != 'agent_message':
@@ -403,16 +476,30 @@ def native_subagent_evidence_for_transition(
         for item in consumed.values()
         if isinstance(item, dict)
     } if isinstance(consumed, dict) else set()
+    consumed_threads = {
+        item.get('agent_thread_id')
+        for item in consumed.values()
+        if isinstance(item, dict)
+    } if isinstance(consumed, dict) else set()
     for idx, (old, new) in enumerate(zip(old_todos, new_todos)):
         if old.get('status') != 'in_progress' or new.get('status') != 'completed':
             continue
-        if not new.get('subagent_call'):
+        required_call = new.get('subagent_call')
+        if not isinstance(required_call, dict):
+            continue
+        expected_role = required_call.get('subagent_type') or required_call.get('agent')
+        if not isinstance(expected_role, str) or not expected_role.strip():
             continue
         lower_bound = started_at.get(str(idx))
         if not isinstance(lower_bound, int):
             continue
         candidates = completed_codex_subagents(data, session_id, lower_bound)
-        candidates = [item for item in candidates if item.get('call_id') not in consumed_ids]
+        candidates = [
+            item for item in candidates
+            if item.get('call_id') not in consumed_ids
+            and item.get('agent_thread_id') not in consumed_threads
+            and _task_name_matches_role(item.get('task_name', ''), expected_role)
+        ]
         if candidates:
             evidence[idx] = max(candidates, key=lambda item: item['terminal_at_ms'])
     return evidence

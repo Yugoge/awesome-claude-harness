@@ -49,8 +49,22 @@ def test_codex_transition_still_rejects_pending_to_completed() -> None:
     assert "Step 1: pending -> completed without in_progress" in violations
 
 
-def _write_transcript(path: Path, *, include_final: bool = True) -> None:
+def _write_transcript(
+    path: Path,
+    *,
+    session_id: str = "session",
+    include_final: bool = True,
+    task_name: str = "qa_current",
+    agent_path: str | None = None,
+    agent_thread_id: str | None = "thread-current",
+) -> None:
+    agent_path = agent_path or f"/root/{task_name}"
     events = [
+        {
+            "timestamp": "2026-07-20T15:00:00.000Z",
+            "type": "session_meta",
+            "payload": {"id": session_id, "session_id": session_id},
+        },
         {
             "timestamp": "2026-07-20T15:00:01.000Z",
             "type": "response_item",
@@ -59,6 +73,7 @@ def _write_transcript(path: Path, *, include_final: bool = True) -> None:
                 "name": "spawn_agent",
                 "namespace": "collaboration",
                 "call_id": "call-current",
+                "arguments": json.dumps({"task_name": task_name, "message": "opaque"}),
             },
         },
         {
@@ -68,8 +83,8 @@ def _write_transcript(path: Path, *, include_final: bool = True) -> None:
                 "type": "sub_agent_activity",
                 "event_id": "call-current",
                 "kind": "started",
-                "agent_path": "/root/qa_current",
-                "agent_thread_id": "thread-current",
+                "agent_path": agent_path,
+                "agent_thread_id": agent_thread_id,
                 "occurred_at_ms": 1784559601100,
             },
         },
@@ -81,7 +96,7 @@ def _write_transcript(path: Path, *, include_final: bool = True) -> None:
                 "type": "response_item",
                 "payload": {
                     "type": "agent_message",
-                    "author": "/root/qa_current",
+                    "author": agent_path,
                     "content": [
                         {
                             "type": "input_text",
@@ -95,7 +110,7 @@ def _write_transcript(path: Path, *, include_final: bool = True) -> None:
 
 
 def test_native_evidence_requires_spawn_start_and_final(tmp_path: Path) -> None:
-    transcript = tmp_path / "transcript.jsonl"
+    transcript = tmp_path / "rollout-session.jsonl"
     _write_transcript(transcript)
     old = [_todo("in_progress", delegated=True), _todo("pending")]
     new = [_todo("completed", delegated=True), _todo("in_progress")]
@@ -110,7 +125,7 @@ def test_native_evidence_requires_spawn_start_and_final(tmp_path: Path) -> None:
 
 
 def test_native_evidence_rejects_missing_final(tmp_path: Path) -> None:
-    transcript = tmp_path / "transcript.jsonl"
+    transcript = tmp_path / "rollout-session.jsonl"
     _write_transcript(transcript, include_final=False)
     old = [_todo("in_progress", delegated=True), _todo("pending")]
     new = [_todo("completed", delegated=True), _todo("in_progress")]
@@ -122,11 +137,95 @@ def test_native_evidence_rejects_missing_final(tmp_path: Path) -> None:
 
 
 def test_native_evidence_rejects_spawn_before_step_window(tmp_path: Path) -> None:
-    transcript = tmp_path / "transcript.jsonl"
+    transcript = tmp_path / "rollout-session.jsonl"
     _write_transcript(transcript)
     old = [_todo("in_progress", delegated=True), _todo("pending")]
     new = [_todo("completed", delegated=True), _todo("in_progress")]
     state = {"codex_step_started_at_ms": {"0": 1784559602001}}
+
+    assert MODULE.native_subagent_evidence_for_transition(
+        {"transcript_path": str(transcript)}, "session", state, old, new
+    ) == {}
+
+
+def test_native_evidence_rejects_foreign_session_transcript(tmp_path: Path) -> None:
+    transcript = tmp_path / "rollout-session.jsonl"
+    _write_transcript(transcript, session_id="foreign-session")
+    old = [_todo("in_progress", delegated=True), _todo("pending")]
+    new = [_todo("completed", delegated=True), _todo("in_progress")]
+    state = {"codex_step_started_at_ms": {"0": 1784559600000}}
+
+    assert MODULE.native_subagent_evidence_for_transition(
+        {"transcript_path": str(transcript)}, "session", state, old, new
+    ) == {}
+
+
+def test_auto_discovery_rejects_ambiguous_current_session_transcripts(
+    tmp_path: Path, monkeypatch
+) -> None:
+    sessions = tmp_path / ".codex" / "sessions"
+    for directory in (sessions / "a", sessions / "b"):
+        directory.mkdir(parents=True)
+        _write_transcript(directory / "rollout-session.jsonl")
+    monkeypatch.setattr(MODULE.Path, "home", lambda: tmp_path)
+
+    assert MODULE._transcript_path({}, "session") is None
+
+
+def test_native_evidence_rejects_missing_child_thread(tmp_path: Path) -> None:
+    transcript = tmp_path / "rollout-session.jsonl"
+    _write_transcript(transcript, agent_thread_id=None)
+    old = [_todo("in_progress", delegated=True), _todo("pending")]
+    new = [_todo("completed", delegated=True), _todo("in_progress")]
+    state = {"codex_step_started_at_ms": {"0": 1784559600000}}
+
+    assert MODULE.native_subagent_evidence_for_transition(
+        {"transcript_path": str(transcript)}, "session", state, old, new
+    ) == {}
+
+
+def test_native_evidence_rejects_spawn_path_disagreement(tmp_path: Path) -> None:
+    transcript = tmp_path / "rollout-session.jsonl"
+    _write_transcript(
+        transcript,
+        task_name="qa_current",
+        agent_path="/root/graphify_enrich",
+    )
+    old = [_todo("in_progress", delegated=True), _todo("pending")]
+    new = [_todo("completed", delegated=True), _todo("in_progress")]
+    state = {"codex_step_started_at_ms": {"0": 1784559600000}}
+
+    assert MODULE.native_subagent_evidence_for_transition(
+        {"transcript_path": str(transcript)}, "session", state, old, new
+    ) == {}
+
+
+def test_native_evidence_rejects_wrong_canonical_role(tmp_path: Path) -> None:
+    transcript = tmp_path / "rollout-session.jsonl"
+    _write_transcript(transcript, task_name="graphify_enrich")
+    old = [_todo("in_progress", delegated=True), _todo("pending")]
+    new = [_todo("completed", delegated=True), _todo("in_progress")]
+    state = {"codex_step_started_at_ms": {"0": 1784559600000}}
+
+    assert MODULE.native_subagent_evidence_for_transition(
+        {"transcript_path": str(transcript)}, "session", state, old, new
+    ) == {}
+
+
+def test_native_evidence_rejects_reused_child_thread(tmp_path: Path) -> None:
+    transcript = tmp_path / "rollout-session.jsonl"
+    _write_transcript(transcript)
+    old = [_todo("in_progress", delegated=True), _todo("pending")]
+    new = [_todo("completed", delegated=True), _todo("in_progress")]
+    state = {
+        "codex_step_started_at_ms": {"0": 1784559600000},
+        "codex_subagent_evidence": {
+            "previous": {
+                "call_id": "different-call",
+                "agent_thread_id": "thread-current",
+            }
+        },
+    }
 
     assert MODULE.native_subagent_evidence_for_transition(
         {"transcript_path": str(transcript)}, "session", state, old, new
