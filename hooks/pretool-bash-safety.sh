@@ -900,12 +900,17 @@ CLASSIFIER_HAS_PATH_QUALIFIED_GIT=0
 CLASSIFIER_STATUS='unavailable'
 CLASSIFIER_JSON=''
 CLASSIFIER_PY="$(dirname "${BASH_SOURCE[0]}")/lib/git_command_classifier.py"
-if printf '%s\n' "$COMMAND_CONTEXT_STRIPPED" | grep -q 'git' && [ -r "$CLASSIFIER_PY" ]; then
-  CLASSIFIER_JSON=$(printf '%s\n' "$COMMAND_CONTEXT_STRIPPED" | \
-    "$PYTHON_BIN" "$CLASSIFIER_PY" 2>/dev/null)
-  _classifier_status=$?
-  if [ "$_classifier_status" -eq 0 ] && \
-     printf '%s\n' "$CLASSIFIER_JSON" | "$PYTHON_BIN" -c '
+if ! printf '%s\n' "$COMMAND_CONTEXT_STRIPPED" | grep -q 'git'; then
+  # The normalized execution view contains no candidate token.  This is a
+  # conclusive empty classification, not classifier unavailability.
+  CLASSIFIER_STATUS='ok'
+  CLASSIFIER_JSON='[]'
+elif [ -r "$CLASSIFIER_PY" ]; then
+    CLASSIFIER_JSON=$(printf '%s\n' "$COMMAND_CONTEXT_STRIPPED" | \
+      "$PYTHON_BIN" "$CLASSIFIER_PY" 2>/dev/null)
+    _classifier_status=$?
+    if [ "$_classifier_status" -eq 0 ] && \
+       printf '%s\n' "$CLASSIFIER_JSON" | "$PYTHON_BIN" -c '
 import json, sys
 value = json.load(sys.stdin)
 if not isinstance(value, list):
@@ -922,15 +927,15 @@ for item in value:
     if not isinstance(item["path_qualified"], bool):
         raise SystemExit(1)
 ' 2>/dev/null; then
-    CLASSIFIER_STATUS='ok'
-  else
-    CLASSIFIER_JSON=''
-  fi
-  unset _classifier_status
-  if [ "$CLASSIFIER_STATUS" = "ok" ] && \
-     printf '%s\n' "$CLASSIFIER_JSON" | grep -q '"path_qualified": true'; then
-    CLASSIFIER_HAS_PATH_QUALIFIED_GIT=1
-  fi
+      CLASSIFIER_STATUS='ok'
+    else
+      CLASSIFIER_JSON=''
+    fi
+    unset _classifier_status
+fi
+if [ "$CLASSIFIER_STATUS" = "ok" ] && \
+   printf '%s\n' "$CLASSIFIER_JSON" | grep -q '"path_qualified": true'; then
+  CLASSIFIER_HAS_PATH_QUALIFIED_GIT=1
 fi
 # Helper: check whether the classifier found a path-qualified invocation with
 # the given subcommand token.  Usage: _pq_git_has_subcmd reset
