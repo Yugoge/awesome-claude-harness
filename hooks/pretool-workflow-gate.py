@@ -312,11 +312,15 @@ def validate_codex_transition(
                 break
 
     native_subagent_steps = native_subagent_steps or set()
+    legacy_calls = state.get('subagent_calls')
     for idx, (old, new) in enumerate(zip(old_todos, new_todos)):
         if old.get('status') != 'in_progress' or new.get('status') != 'completed':
             continue
         subagent_call = new.get('subagent_call')
-        legacy_call = state.get('subagent_calls', {}).get(str(idx), False)
+        legacy_call = (
+            isinstance(legacy_calls, dict)
+            and legacy_calls.get(str(idx)) is True
+        )
         if subagent_call and not legacy_call and idx not in native_subagent_steps:
             violations.append(f'Step {idx}: subagent step completed before required subagent call')
 

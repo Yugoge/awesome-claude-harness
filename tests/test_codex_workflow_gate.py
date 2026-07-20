@@ -34,6 +34,19 @@ def test_codex_transition_requires_delegated_call_evidence() -> None:
     assert MODULE.validate_codex_transition({}, old, new, {0}) == []
 
 
+def test_codex_transition_rejects_truthy_non_boolean_legacy_markers() -> None:
+    old = [_todo("in_progress", delegated=True), _todo("pending")]
+    new = [_todo("completed", delegated=True), _todo("in_progress")]
+
+    for marker in ("false", "true", 1, [True], {"value": True}):
+        assert MODULE.validate_codex_transition(
+            {"subagent_calls": {"0": marker}}, old, new
+        ) == ["Step 0: subagent step completed before required subagent call"]
+    assert MODULE.validate_codex_transition(
+        {"subagent_calls": {"0": True}}, old, new
+    ) == []
+
+
 def test_codex_transition_still_rejects_step_skipping() -> None:
     old = [_todo("in_progress"), _todo("pending"), _todo("pending")]
     new = [_todo("completed"), _todo("pending"), _todo("in_progress")]
