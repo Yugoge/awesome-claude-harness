@@ -39,15 +39,19 @@ INTERRUPT_RE = re.compile(
     re.IGNORECASE,
 )
 QUOTA_RE = re.compile(
-    r"hit your session limit|usage limit|rate[- ]limit(?:ed)?|quota|"
-    r"resets?\s+(?:at|in|\d)|temporarily limiting requests",
+    r"you(?:'|’)?ve hit your session limit|session usage limit|"
+    r"usage limit (?:has been )?(?:reached|exceeded)|"
+    r"(?:anthropic|claude)[^\n]{0,80}rate[-_ ]limit|"
+    r"(?:error|code)[\"' :=_-]{0,12}rate_limit|"
+    r"resets?\s+(?:at|in)\s+\d",
     re.IGNORECASE,
 )
 TASK_NOTIFICATION_RE = re.compile(
     r"<task-notification>.*?<task-id>([^<]+)</task-id>.*?"
-    r"<status>completed</status>.*?</task-notification>",
+    r"<status>completed</status>(.*?)</task-notification>",
     re.IGNORECASE | re.DOTALL,
 )
+COMMAND_NAME_RE = re.compile(r"<command-name>\s*/([^<\s]+)\s*</command-name>", re.IGNORECASE)
 
 
 class RestartError(RuntimeError):
@@ -234,16 +238,33 @@ def _extract_agent_id(value: Any) -> str:
 
 def _read_parent_calls(
     transcript: Path,
-) -> tuple[dict[str, dict[str, Any]], dict[str, list[Any]], set[str]]:
+) -> tuple[
+    dict[str, dict[str, Any]],
+    dict[str, list[Any]],
+    dict[str, dict[str, Any]],
+    int,
+]:
     calls: dict[str, dict[str, Any]] = {}
     results: dict[str, list[Any]] = {}
-    completed_background_ids: set[str] = set()
+    latest_notifications: dict[str, dict[str, Any]] = {}
+    human_prompt_lines: list[tuple[int, bool]] = []
     try:
         lines = transcript.open("r", encoding="utf-8", errors="replace")
     except OSError as exc:
         raise RestartError(f"cannot read parent transcript: {exc}") from exc
     with lines:
         for line_no, line in enumerate(lines, 1):
+            # Notifications can appear as top-level queue-operation content,
+            # message.content, or attachment.prompt. Scan the complete JSONL line
+            # before walking message blocks so all three persisted forms count.
+            for match in TASK_NOTIFICATION_RE.finditer(line):
+                agent_id = match.group(1).strip()
+                if AGENT_RE.fullmatch(agent_id):
+                    tail = match.group(2)
+                    latest_notifications[agent_id] = {
+                        "line": line_no,
+                        "quota_interrupted": bool(QUOTA_RE.search(tail)),
+                    }
             try:
                 record = json.loads(line)
             except ValueError:
@@ -251,10 +272,12 @@ def _read_parent_calls(
             message = record.get("message") if isinstance(record, dict) else None
             content = message.get("content") if isinstance(message, dict) else None
             if isinstance(content, str):
-                for match in TASK_NOTIFICATION_RE.finditer(content):
-                    agent_id = match.group(1).strip()
-                    if AGENT_RE.fullmatch(agent_id):
-                        completed_background_ids.add(agent_id)
+                if record.get("type") == "user" and "<task-notification>" not in content:
+                    command = COMMAND_NAME_RE.search(content)
+                    is_restart = content.strip() == "/restart" or bool(
+                        command and command.group(1).lower() == "restart"
+                    )
+                    human_prompt_lines.append((line_no, is_restart))
                 continue
             if not isinstance(content, list):
                 continue
@@ -274,8 +297,18 @@ def _read_parent_calls(
                 elif block.get("type") == "tool_result":
                     tool_id = block.get("tool_use_id")
                     if isinstance(tool_id, str) and tool_id:
-                        results.setdefault(tool_id, []).append(block)
-    return calls, results, completed_background_ids
+                        result = dict(block)
+                        result["_parent_line"] = line_no
+                        results.setdefault(tool_id, []).append(result)
+
+    # Recovery is scoped to the current human request, not every quota event in
+    # a long-lived parent transcript. During UserPromptSubmit the /restart line
+    # may not be persisted yet; after submission it is the newest human prompt.
+    if human_prompt_lines and human_prompt_lines[-1][1]:
+        request_boundary = human_prompt_lines[-2][0] if len(human_prompt_lines) > 1 else 0
+    else:
+        request_boundary = human_prompt_lines[-1][0] if human_prompt_lines else 0
+    return calls, results, latest_notifications, request_boundary
 
 
 def _metadata_by_tool_use(transcript: Path) -> dict[str, dict[str, Any]]:
@@ -308,18 +341,33 @@ def _metadata_by_tool_use(transcript: Path) -> dict[str, dict[str, Any]]:
 def discover_candidates(transcript_path: str | Path) -> list[dict[str, Any]]:
     """Return every recoverable interrupted/quota Agent call in parent order."""
     transcript = Path(transcript_path).expanduser().resolve()
-    calls, results, completed_background_ids = _read_parent_calls(transcript)
+    calls, results, latest_notifications, request_boundary = _read_parent_calls(transcript)
     metadata = _metadata_by_tool_use(transcript)
     candidates: list[dict[str, Any]] = []
     for tool_id, call in sorted(calls.items(), key=lambda item: item[1]["line"]):
+        if call["line"] <= request_boundary:
+            continue
         result_blocks = results.get(tool_id, [])
         result_text = _textify(result_blocks)
         meta = metadata.get(tool_id, {})
         agent_id = meta.get("agent_id") or _extract_agent_id(result_blocks)
+        notification = latest_notifications.get(agent_id, {}) if isinstance(agent_id, str) else {}
+        notification_after_call = (
+            isinstance(notification.get("line"), int)
+            and notification["line"] > call["line"]
+        )
+        # A normal post-call notification is authoritative evidence that this
+        # exact child already came to rest successfully, including after a prior
+        # SendMessage resume. A notification whose result is the Claude quota
+        # message is an interruption, despite its protocol status="completed".
+        if notification_after_call and not notification.get("quota_interrupted"):
+            continue
         evidence: list[str] = []
         if not result_blocks:
             evidence.append("missing_parent_tool_result")
-        if result_text and QUOTA_RE.search(result_text):
+        if (result_text and QUOTA_RE.search(result_text)) or (
+            notification_after_call and notification.get("quota_interrupted")
+        ):
             evidence.append("quota_or_usage_limit")
         if result_text and INTERRUPT_RE.search(result_text):
             evidence.append("interrupted_tool_result")
@@ -327,7 +375,7 @@ def discover_candidates(transcript_path: str | Path) -> list[dict[str, Any]]:
         if (
             tool_input.get("run_in_background") is True
             and isinstance(agent_id, str)
-            and agent_id not in completed_background_ids
+            and not notification_after_call
         ):
             evidence.append("background_without_completion_notification")
         if not evidence:
@@ -388,7 +436,7 @@ def prepare_state(session_id: str) -> dict[str, Any]:
         for candidate in discovered:
             previous = old_items.get(candidate["agent_id"], {})
             status = previous.get("status")
-            if status != "response_observed":
+            if status not in {"response_observed", "dispatched"}:
                 status = "pending"
             item = {
                 **candidate,
