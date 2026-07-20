@@ -1,8 +1,8 @@
 # hooks
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-07-20T10:36:42Z*
-**Total entries**: 166
+*Last updated: 2026-07-20T10:43:40Z*
+**Total entries**: 171
 **Convention**: kebab
 
 ## Tree
@@ -54,6 +54,7 @@ hooks/
 │   ├── `schema_registry.py` - Reads schemas/registry.json once and lazily loads referenced schema files
 │   ├── `specialist_yield.py` - Public API:
 │   ├── `subagent.py` - Single source of truth for is_subagent_context() and supporting helpers
+│   ├── `subagent_restart.py` - Claude Code persists each subagent transcript under the parent session.  This
 │   └── `todo_canonical.py` - Shared canonical todo validation utilities
 ├── tests/
 │   ├── `test_ac10_verify.sh` - Shell script
@@ -107,6 +108,7 @@ hooks/
 ├── `posttool-overnight-file-check.py` - PostToolUse:Agent Hook — Contract-driven overnight file check
 ├── `posttool-overnight-loop.py` - PostToolUse:TodoWrite Hook: Overnight Loop Detection
 ├── `posttool-overnight-trace.py` - Writes one JSONL trace record per Agent invocation to:
+├── `posttool-restart-sendmessage.py` - PostToolUse: record successful authenticated restart SendMessage calls.
 ├── `posttool-runcode-watchdog.py` - PostToolUse Hook: Cancel timeout watchdog after browser_run_code completes
 ├── `posttool-subagent-track.py` - PostToolUse:Agent Hook: Track subagent invocations in workflow bookmark
 ├── `posttool-todo-count.py` - PostToolUse Hook: Enforce canonical todo count immediately after TodoWrite
@@ -136,6 +138,7 @@ hooks/
 ├── `pretool-overnight-hook-guard.py` - PreToolUse Hook: Overnight session file modification guard
 ├── `pretool-quality-gate.py` - PreToolUse Hook: Quality gate for Write/Edit operations
 ├── `pretool-read-size-guard.py` - PreToolUse Hook: Read Size Guard
+├── `pretool-restart-grant-guard.py` - Block model-side creation or execution of /restart authorization grants.
 ├── `pretool-runcode-watchdog.py` - PreToolUse Hook: Start timeout watchdog for browser_run_code
 ├── `pretool-spec-block-foreground-agent.py` - PreToolUse Hook: Block foreground Agent during an active /spec Interview
 ├── `pretool-subagent-code-block.py` - Canonical enforcement: pretool-tool-policy.py + lib/policy_registry — this
@@ -170,9 +173,11 @@ hooks/
 ├── `subagentstop-codex-enforce.py` - Activation logic:
 ├── `subagentstop-cp-enforce.py` - Description: SubagentStop hook for spec checkpoint enforcement (W6).
 ├── `subagentstop-e2e-enforce.py` - Activation logic:
+├── `subagentstop-restart-track.py` - SubagentStop: persist response evidence for a /restart-resumed agent.
 ├── `userprompt-bulk-commit-capability.py` - human prompt, NOT from an LLM-emitted Bash command
 ├── `userprompt-consent-allowlist.sh` - UserPromptSubmit Hook: parse `/allow <pattern>` and write a single-use
 ├── `userprompt-doc-sync-check.py` - UserPromptSubmit Hook: Periodic file deletion detection for doc-sync
+├── `userprompt-restart-authorize.py` - UserPromptSubmit: mint a session-bound capability for exact bare /restart.
 └── `userprompt-tmpfs-pressure.sh` - userprompt-tmpfs-pressure.sh — UserPromptSubmit hook (4th block, appended).
 ```
 <!-- /AUTO:index-stats -->

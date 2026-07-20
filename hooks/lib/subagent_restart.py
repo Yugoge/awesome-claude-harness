@@ -314,8 +314,12 @@ def _read_parent_calls(
     # Recovery is scoped to the current human request, not every quota event in
     # a long-lived parent transcript. During UserPromptSubmit the /restart line
     # may not be persisted yet; after submission it is the newest human prompt.
+    # Repeated /restart attempts stay attached to the same request boundary.
     if human_prompt_lines and human_prompt_lines[-1][1]:
-        request_boundary = human_prompt_lines[-2][0] if len(human_prompt_lines) > 1 else 0
+        request_boundary = next(
+            (line for line, is_restart in reversed(human_prompt_lines[:-1]) if not is_restart),
+            0,
+        )
     else:
         request_boundary = human_prompt_lines[-1][0] if human_prompt_lines else 0
     return calls, results, latest_notifications, request_boundary
