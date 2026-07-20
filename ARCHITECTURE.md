@@ -159,11 +159,17 @@ Hooks are configured in `settings.json` under `hooks.<Event>[].{matcher, hooks[]
 ### Representative wiring
 
 - **`SessionStart`** — environment announce + git init + tmpfs banner + gitignore propagation + a canary self-check (`session-info.sh`, `session-git-init.sh`, `check-todo-md-sync.py`, `session-promote-hook.sh`, `scripts/canary-verify.sh`, `session-tmpfs-banner.sh`, `session-gitignore-propagate.sh`).
-- **`UserPromptSubmit`** — `prompt-workflow.py` (workflow detection + dev-registry pre-creation), `userprompt-doc-sync-check.py`, `userprompt-consent-allowlist.sh` (`/do`/`/allow` consent capture), tmpfs-pressure and bulk-commit-capability advisories.
+- **`UserPromptSubmit`** — `prompt-workflow.py` (workflow detection + dev-registry pre-creation), `userprompt-doc-sync-check.py`, `userprompt-restart-authorize.py` (exact bare `/restart` capability), `userprompt-consent-allowlist.sh` (`/do`/`/allow` consent capture), tmpfs-pressure and bulk-commit-capability advisories.
 - **`PreToolUse`** — the safety + git + worktree + subagent-discipline gates (detailed in §6 and §7). Note: although `pretool-layer-match-gate.sh` is named with a `pretool-` prefix, it is actually wired under `SubagentStop`.
-- **`PostToolUse`** — `posttool-allowlist-consume.py` (single-use grant consumption), the todo trackers, `posttool-git-checkpoint.sh` + `posttool-doc-sync.py` + `posttool-command-frontmatter-validate.py` (on `Write|Edit|…`), and the overnight loop/trace hooks (on `Agent`).
+- **`PostToolUse`** — `posttool-allowlist-consume.py` (single-use grant consumption), the todo trackers, `posttool-git-checkpoint.sh` + `posttool-doc-sync.py` + `posttool-command-frontmatter-validate.py` (on `Write|Edit|…`), the overnight loop/trace hooks (on `Agent`), and the authenticated restart-dispatch journal (on `SendMessage`).
 - **`Stop`** — `stop-overnight-timelock.py` (refuses to end an overnight session before its deadline), `stop-spec-coverage-enforce.py`, `auto-commit.sh`, `stop-cleanup-allowlist.sh` (reap expired sentinels).
-- **`SubagentStop`** — diff-check, guard-integrity, layer-match-gate, and the codex / e2e / cp enforcement hooks. (`subagentstop-cp-enforce.py` *is* wired here.)
+- **`SubagentStop`** — diff-check, guard-integrity, layer-match-gate, restart response evidence, and the codex / e2e / cp enforcement hooks. (`subagentstop-cp-enforce.py` *is* wired here.)
+
+### 5.1 Lossless quota recovery (`/restart`)
+
+`/restart` is a human-only control path for a parent session whose subagents were stopped by a Claude session/usage limit. `hooks/lib/subagent_restart.py` scopes discovery to the current human request, binds each interrupted `Agent`/`Task` call to its original persisted `agent_id`, and distinguishes a real quota result from a normal background completion notification. The command then resumes every pending ID through native `SendMessage`; it never reconstructs the work in a replacement `Agent` prompt.
+
+The exception is deliberately narrow. `userprompt-restart-authorize.py` mints a session/transcript-bound grant only for exact bare `/restart`; both the background-task and orchestrator gates accept only the fixed recovery message to a discovered candidate. `posttool-restart-sendmessage.py` journals successful dispatch, while `subagentstop-restart-track.py` records response evidence in `~/.claude/restart-state/<session-id>.json`. A dispatched agent is not sent a duplicate message; a later quota event makes that same ID retryable. Finalization is forbidden until every candidate has response evidence. On a runtime without native `SendMessage` and authoritative child lifecycle events, the command reports unsupported rather than claiming parity.
 
 ---
 
