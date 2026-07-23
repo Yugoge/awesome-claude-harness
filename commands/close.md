@@ -237,27 +237,6 @@ Blocking semantics:
 
 The forced path is unchanged: `/close --force` short-circuits before this gate. On the do-report path, run the same command with `$DO_REPORT` as the sole argument — the do-report has no registered schema and always returns `SKIP`, so `/do` closure is never blocked by this gate.
 
-### Lifecycle evidence receipt gate (task-declared, non-force only)
-
-When `docs/dev/acceptance-criteria-<task-id>.json` names
-`scripts/validate-lifecycle-close-evidence.py`, normal `/close` MUST run that
-validator in close-check mode after the artifact schema gate and before inspector
-dispatch. Pass the same-task freeze manifest, finalized receipt, and QA report.
-The check must recompute the receipt digest, require `stage=post_live`, compare the
-QA echoes with the receipt's bound input/reference digests, and reject pre-live,
-stale, cross-task, missing, extra, or mismatched evidence. Any non-zero result is
-`CLOSE: NO`; it must never be converted into a native lifecycle block or used to
-prevent ordinary Stop. The forced and `/do` paths remain unchanged.
-
-```bash
-source ~/.claude/venv/bin/activate
-python3 scripts/validate-lifecycle-close-evidence.py check-close \
-  --task-id "<task-id>" \
-  --manifest "docs/dev/freeze-manifest-<task-id>.json" \
-  --receipt "docs/dev/lifecycle-evidence-validation-<task-id>.json" \
-  --qa-report "docs/dev/qa-report-<task-id>.json"
-```
-
 Resolve optional cp-state handoff for the QA close gate. Do NOT derive `SPEC_ID`
 from the spec filename by hand — route the monolith path through the centralized
 resolver so the close gate uses the SAME `cp_dir` the producer and `/dev` use:
