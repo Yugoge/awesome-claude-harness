@@ -4,7 +4,7 @@
 Claude Code persists each subagent transcript under the parent session.  This
 module treats that persisted transcript as the recovery source of truth: a
 restart is allowed only for an agent id that can be bound back to an Agent tool
-call in the authenticated parent transcript and that call is missing a terminal
+call in the bound parent transcript and that call is missing a terminal
 result, was interrupted, or returned a quota/usage-limit result.
 
 The module deliberately does not invoke Claude tools.  ``SendMessage`` remains
@@ -16,11 +16,9 @@ from __future__ import annotations
 
 import contextlib
 import fcntl
-import hashlib
 import json
 import os
 import re
-import secrets
 import tempfile
 import time
 from datetime import datetime, timedelta, timezone
@@ -166,11 +164,10 @@ def _parse_time(raw: Any) -> datetime | None:
 def mint_grant(
     session_id: str,
     transcript_path: str,
-    project_dir: str,
     *,
     ttl_seconds: int | None = None,
 ) -> dict[str, Any]:
-    """Mint the human-authorized, session-bound recovery capability."""
+    """Issue the intended session-bound recovery capability."""
     sid = _safe_session_id(session_id)
     transcript = Path(transcript_path).expanduser().resolve()
     if transcript.name != f"{sid}.jsonl" or not transcript.is_file():
@@ -187,8 +184,6 @@ def mint_grant(
         "issued_by": GRANT_ISSUER,
         "session_id": sid,
         "transcript_path": str(transcript),
-        "project_dir": str(Path(project_dir).expanduser().resolve()),
-        "nonce": secrets.token_hex(24),
         "issued_at": _iso(now),
         "expires_at": _iso(now + timedelta(seconds=ttl)),
     }
@@ -200,7 +195,7 @@ def load_valid_grant(session_id: str) -> dict[str, Any]:
     sid = _safe_session_id(session_id)
     grant = _load_json(grant_path(sid))
     if not grant:
-        raise RestartError("no authenticated /restart grant for this session")
+        raise RestartError("no valid /restart capability for this session")
     if grant.get("schema_version") != SCHEMA_VERSION:
         raise RestartError("restart grant schema mismatch")
     if grant.get("issued_by") != GRANT_ISSUER or grant.get("session_id") != sid:
@@ -391,10 +386,6 @@ def discover_candidates(transcript_path: str | Path) -> list[dict[str, Any]]:
             continue
         description = meta.get("description") or tool_input.get("description") or ""
         agent_type = meta.get("agent_type") or tool_input.get("subagent_type") or ""
-        prompt = tool_input.get("prompt") if isinstance(tool_input.get("prompt"), str) else ""
-        fingerprint = hashlib.sha256(
-            f"{transcript}|{tool_id}|{agent_id}|{prompt}".encode("utf-8", errors="replace")
-        ).hexdigest()
         candidates.append({
             "agent_id": agent_id,
             "agent_type": agent_type if isinstance(agent_type, str) else "",
@@ -406,7 +397,6 @@ def discover_candidates(transcript_path: str | Path) -> list[dict[str, Any]]:
             "agent_transcript_path": meta.get("agent_transcript_path")
             or str(transcript.with_suffix("") / "subagents" / f"agent-{agent_id}.jsonl"),
             "evidence": evidence,
-            "fingerprint": fingerprint,
         })
     return candidates
 
@@ -456,8 +446,7 @@ def prepare_state(session_id: str) -> dict[str, Any]:
                 "resume_message": build_resume_message(sid, candidate["agent_id"]),
             }
             for key in (
-                "last_dispatched_at", "last_stop_at", "last_message_sha256",
-                "stop_hook_active", "interruption_line_at_dispatch",
+                "last_dispatched_at", "last_stop_at", "interruption_line_at_dispatch",
             ):
                 if key in previous:
                     item[key] = previous[key]
@@ -466,7 +455,6 @@ def prepare_state(session_id: str) -> dict[str, Any]:
             "schema_version": SCHEMA_VERSION,
             "parent_session_id": sid,
             "transcript_path": grant["transcript_path"],
-            "project_dir": grant.get("project_dir", ""),
             "grant_issued_at": grant.get("issued_at"),
             "created_at": old.get("created_at") or _iso(),
             "updated_at": _iso(),
@@ -547,7 +535,7 @@ def authorize_send_message(payload: dict[str, Any]) -> tuple[bool, str]:
             raise RestartError("target is absent from prepared restart state")
         if item.get("status") != "pending":
             raise RestartError("target is not pending; duplicate restart dispatch denied")
-        return True, "authenticated /restart recovery"
+        return True, "validated /restart recovery"
     except RestartError as exc:
         return False, str(exc)
 
@@ -591,8 +579,6 @@ def observe_subagent_stop(payload: dict[str, Any]) -> dict[str, Any] | None:
                 continue
             item["status"] = "quota_interrupted" if QUOTA_RE.search(last_message) else "response_observed"
             item["last_stop_at"] = _iso()
-            item["last_message_sha256"] = hashlib.sha256(last_message.encode("utf-8")).hexdigest()
-            item["stop_hook_active"] = bool(payload.get("stop_hook_active"))
             agent_transcript = payload.get("agent_transcript_path")
             if isinstance(agent_transcript, str) and agent_transcript:
                 item["agent_transcript_path"] = agent_transcript

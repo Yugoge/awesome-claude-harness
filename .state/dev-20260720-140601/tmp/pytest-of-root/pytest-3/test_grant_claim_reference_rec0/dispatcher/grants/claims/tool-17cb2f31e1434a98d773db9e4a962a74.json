@@ -1,9 +1,0 @@
-{
-  "claim_id": "d7766c01ad285636e9e049c0e15c3314",
-  "claimant_id": "tool-17cb2f31e1434a98d773db9e4a962a74",
-  "finalized": true,
-  "grant_id": "1d4957b9c536c9814e994f5b40d40c62",
-  "signature": "7033ce3eac7f2e1d0f96e7d460b7ca27c8746bb63b91d52745e647a885ccce47",
-  "state": "claimed",
-  "terminal_result": "exit:3"
-}

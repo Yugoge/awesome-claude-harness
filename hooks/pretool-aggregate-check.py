@@ -17,7 +17,9 @@ the aggregate must exist BEFORE QA reads it.
 Fail-open contract: parsing failures, missing stdin, missing project dir,
 unexpected exceptions -> exit 0. Never crash the orchestrator on a self-bug.
 
-Filename patterns (BOTH supported as of BUG-AGGCHK-1 fix):
+Filename patterns:
+  Prefixed:   dev-report-dev-<task-id>-<worker>.json
+  Prefixed canonical: dev-report-dev-<task-id>.json
   Role-first:  dev-report-<role>-<task-id>.json
     role     := alphanumeric (no dashes), e.g. R1, ba, qa
     task-id  := \\d{8}-\\d{6} (YYYYMMDD-HHMMSS)
@@ -65,6 +67,18 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 from lib.allowlist import read_grant  # noqa: E402
 
+
+# Active /dev adapter naming: dev-report-dev-<task-id>-<lane>.json.
+# MUST mirror scripts/aggregate-dev-report.py exactly.
+PREFIXED_WORKER_RE = re.compile(
+    r"^dev-report-(?P<task_id>dev-\d{8}-\d{6})-(?P<worker>[A-Za-z0-9][A-Za-z0-9.\-]*)\.json$"
+)
+
+# Active /dev canonical: dev-report-dev-<task-id>.json.
+# MUST mirror scripts/aggregate-dev-report.py exactly.
+PREFIXED_CANONICAL_RE = re.compile(
+    r"^dev-report-(?P<task_id>dev-\d{8}-\d{6})\.json$"
+)
 
 # Per-worker filename — role-first naming: dev-report-<role>-<task-id>.json
 # task-id format: YYYYMMDD-HHMMSS (8 digits, dash, 6 digits)
@@ -117,6 +131,9 @@ CANONICAL_RE = re.compile(r"^dev-report-(?P<task_id>\d{8}-\d{6})\.json$")
 # Accepts BOTH `ba-spec-` (legacy 90 historical artifacts) and `ticket-` (new
 # active-write site, post-rename per spec-20260503-091826.md M10).
 TASK_ID_REF_PATTERNS = (
+    re.compile(r"context-(?P<task_id>dev-\d{8}-\d{6})(?:-[A-Za-z0-9.\-]+)?\.json"),
+    re.compile(r"dev-report-(?P<task_id>dev-\d{8}-\d{6})(?:-[A-Za-z0-9.\-]+)?\.json"),
+    re.compile(r"(?:ba-spec|ticket)-(?P<task_id>dev-\d{8}-\d{6})(?:-[A-Za-z0-9.\-]+)?\.md"),
     re.compile(r"context-(?P<task_id>\d{8}-\d{6}(?:-[A-Za-z0-9.\-]+)?)\.json"),
     re.compile(r"dev-report-(?P<task_id>\d{8}-\d{6}(?:-[A-Za-z0-9.\-]+)?)\.json"),
     # /do path: a QA close dispatch for /do-developed work references its
@@ -126,6 +143,16 @@ TASK_ID_REF_PATTERNS = (
     # to the do-report's own task-id (which has no worker shards) clears it.
     re.compile(r"do-report-(?P<task_id>\d{8}-\d{6}(?:-[A-Za-z0-9.\-]+)?)\.json"),
     re.compile(r"(?:ba-spec|ticket)-(?P<task_id>\d{8}-\d{6}(?:-[A-Za-z0-9.\-]+)?)\.md"),
+)
+
+# Retry contexts (`context-iter<N>-<task-id>-<lane>.json`) are recognized for
+# TASK-SCOPING ONLY: without this pattern a retry QA prompt would fall through
+# to the conservative global docs/dev scan. It carries NO gate of its own — the
+# hook never blocks on iteration/promotion evidence.
+ITERATION_CONTEXT_RE = re.compile(
+    r"context-iter(?P<iteration>[1-9][0-9]*)-"
+    r"(?P<task_id>dev-\d{8}-\d{6})-"
+    r"(?P<lane>[A-Za-z0-9][A-Za-z0-9.\-]*)\.json"
 )
 
 # Path to dev.md construction-rule citation
@@ -165,6 +192,16 @@ def _classify_filename(name):
     (the worker token is "T3.2-iter2", not bare "iter2") and remain
     detected as workers.
     """
+    m_prefixed_canonical = PREFIXED_CANONICAL_RE.match(name)
+    if m_prefixed_canonical is not None:
+        return ("canonical", m_prefixed_canonical.group("task_id"))
+    m_prefixed_worker = PREFIXED_WORKER_RE.match(name)
+    if m_prefixed_worker is not None:
+        worker = m_prefixed_worker.group("worker")
+        worker_lc = worker.lower()
+        if worker_lc in NON_WORKER_LABELS or NON_WORKER_LABEL_RE.match(worker_lc):
+            return None
+        return ("worker", m_prefixed_worker.group("task_id"), worker)
     m_can = CANONICAL_RE.match(name)
     if m_can is not None:
         return ("canonical", m_can.group("task_id"))
@@ -249,6 +286,22 @@ def _collect_anchored_task_ids(prompt):
     return [tid for tid, _ in sorted(seen.items(), key=lambda kv: kv[1])]
 
 
+def _collect_iteration_context_refs(prompt):
+    """Return distinct, explicitly named retry contexts in prompt order."""
+    refs = []
+    seen = set()
+    for match in ITERATION_CONTEXT_RE.finditer(prompt):
+        ref = (
+            match.group("task_id"),
+            match.group("lane"),
+            int(match.group("iteration")),
+        )
+        if ref not in seen:
+            seen.add(ref)
+            refs.append(ref)
+    return refs
+
+
 def _extract_current_task_ids(data):
     """Return list of distinct pattern-anchored task-ids in QA prompt, or None.
 
@@ -265,11 +318,14 @@ def _extract_current_task_ids(data):
     if not prompt:
         return None
     task_ids = _collect_anchored_task_ids(prompt)
+    for task_id, _, _ in _collect_iteration_context_refs(prompt):
+        if task_id not in task_ids:
+            task_ids.append(task_id)
     return task_ids if task_ids else None
 
 
 def _normalize_task_id_prefix(task_id):
-    """Return the YYYYMMDD-HHMMSS prefix of a possibly-suffixed task-id.
+    """Return the scanner key of a possibly-suffixed task-id.
 
     The hook indexes per_worker / canonical_present by the bare timestamp
     (file regexes capture only the YYYYMMDD-HHMMSS group). Prompts may
@@ -278,8 +334,10 @@ def _normalize_task_id_prefix(task_id):
     """
     if not isinstance(task_id, str):
         return None
-    m = re.match(r"^(\d{8}-\d{6})", task_id)
-    return m.group(1) if m else None
+    m = re.match(r"^(?P<prefix>dev-)?(?P<stamp>\d{8}-\d{6})", task_id)
+    if not m:
+        return None
+    return (m.group("prefix") or "") + m.group("stamp")
 
 
 def _find_violations(per_worker, canonical_present, scope_task_id=None):

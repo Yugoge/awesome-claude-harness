@@ -1,8 +1,8 @@
 # dot-claude
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-07-16T16:25:36Z*
-**Total entries**: 476
+*Last updated: 2026-07-21T15:27:04Z*
+**Total entries**: 432
 **Convention**: kebab
 
 ## Tree
@@ -11,7 +11,7 @@ dot-claude/
 ├── agents/
 │   ├── `architect.md` - Architecture review specialist for overnight exploration. Identifies structural issues, technical debt, optimization opportunities, dependency problems, and pattern inconsistencies. Returns structured JSON report.
 │   ├── `ba.md` - Business analyst subagent for requirements analysis and context building. Receives user requirement text, performs git analysis, identifies affected files, and returns either clarification questions or dual-format output (Markdown spec + JSON context).
-│   ├── `changelog-analyst.md` - Agentic commit subagent. Reads git state and dev-report to classify files, stages them, writes conventional commit messages (diff-first), handles nested repo, and writes push-gate token. Dispatched exclusively by /commit.
+│   ├── `changelog-analyst.md` - Agentic commit subagent. Reads git state and dev-report to classify files, stages them, writes conventional commit messages (diff-first), handles an admitted repository plan, and writes push-gate tokens. Dispatched exclusively by /commit.
 │   ├── `cleaner.md` - Cleanup execution specialist. Executes approved cleanup actions from cleanliness-inspector and style-inspector reports. Returns structured JSON execution report with results.
 │   ├── `cleanliness-inspector.md` - File organization inspector for cleanup tasks. Detects misplaced docs, duplicates, temp files, build artifacts. Returns structured JSON report with cleanup recommendations.
 │   ├── `dev.md` - Implementation specialist for development tasks. Receives rich JSON context from orchestrator, creates parameterized scripts, implements changes based on git root cause analysis. Returns structured execution report.
@@ -33,7 +33,7 @@ dot-claude/
 │   ├── `ui-specialist.md` - UI/UX review specialist for overnight exploration. Evaluates visual design quality, aesthetic beauty, design system adherence, styling consistency, responsive design, and component quality. Returns structured JSON report with beauty score and design quality assessment. Accessibility checks are advisory.
 │   └── `user.md` - End-user simulation specialist for overnight exploration. Tests actual usage scenarios, checks if things work as expected, identifies UX friction, broken flows, and confusing behavior. Returns structured JSON report.
 ├── commands/
-│   ├── `allow.md` - Single-use break-glass — bypass safety blocks for the next matching bash command this turn; requires an explicit narrow selector. Forms — /allow <command...> (literal, upgraded to regex only when it contains true regex metacharacters), /allow --tool <literal> (always literal, regex off), or /allow re:<anchored-regex> (explicit regex, must be anchored). Bare /allow with no argument is refused. Trailing tokens become an audit-log comment. Auto-expires at stop.
+│   ├── `allow.md` - Single-use break-glass for a declared grant-aware safety hook; it never overrides a settings DENY. Requires an explicit narrow selector. Forms — /allow <command...> (literal, upgraded to regex only when it contains true regex metacharacters), /allow --tool <literal> (always literal, regex off), or /allow re:<anchored-regex> (explicit regex, must be anchored). Bare /allow with no argument is refused. Trailing tokens become an audit-log comment. Auto-expires at stop.
 │   ├── `checkpoint.md` - Checkpoint Command
 │   ├── `clean.md` - Aggressive project cleanup - normalize docs structure, archive everything, delete one-time scripts/tests. Pass --codex to enable adversarial codex consultation on cleanliness-inspector and style-inspector; default is self-review only.
 │   ├── `close.md` - Close the current dev cycle (agent infers task-id from conversation). QA evaluates Workflow Integrity bullets and returns CLOSE YES/NO. Pass --codex to enable multi-round QA-codex debate; default is QA-only single-round assessment. Append --force to skip the debate entirely.
@@ -54,6 +54,7 @@ dot-claude/
 ├── docs/
 │   ├── reference/
 │   │   ├── `checkpoint-mechanism.md` - Auto-Commit / Checkpoint Mechanism
+│   │   ├── `core-context-refactor-plan.md` - Core Context Refactor Plan (Plan-of-Record)
 │   │   ├── `fswatch-quickref.md` - FSWatch Quick Reference Card
 │   │   ├── `generated-tests-policy.md` - `tests/generated/` policy — tracked but ignored, on purpose
 │   │   ├── `git-fswatch.md` - Git File Watcher (fswatch) Documentation
@@ -122,6 +123,7 @@ dot-claude/
 │   │   ├── `test_cp_checkin.py` - of ba-spec-20260427-194324.md (P1 view-trigger removal + P2 generation field)
 │   │   ├── `test_do_taskid_mint.py` - Covers the root-cause fix for the do-report task-id collision (memory
 │   │   ├── `test_extract.py` - Unit tests for hooks/doc_sync/extract.py — covers all 4 defects + known-file cases.
+│   │   ├── `test_fail_closed_drift.py` - WHY THIS FILE EXISTS
 │   │   ├── `test_final_sweep.sh` - Final sweep — run inline AC checks and print PASS/FAIL summary.
 │   │   ├── `test_git_cmd_cross_consistency.py` - Verifies that GIT_CMD_RE (hooks/pretool-bash-safety.sh),
 │   │   ├── `test_push_sentinel_abort.sh` - Unit test for AC1 V5: hooks/push.sh self-aborts before any real git push
@@ -380,54 +382,8 @@ dot-claude/
 │   ├── fixtures/
 │   │   └── `canary-tool-policy.v1.json` - JSON config: _fixture, _purpose, _contract, policy_version, default_action
 │   ├── generated/
-│   │   ├── 20260520-221452/
-│   │   ├── 20260521-090100/
-│   │   ├── 20260521-090200/
-│   │   ├── 20260521-090300/
-│   │   ├── 20260522-000000/
-│   │   ├── 20260522-080646-A/
-│   │   ├── 20260522-080646-B/
-│   │   ├── 20260522-080646-D/
-│   │   ├── 20260524-122910/
-│   │   ├── 20260524-122947/
-│   │   ├── 20260524-125300-A/
-│   │   ├── 20260524-125300-B/
-│   │   ├── 20260524-125300-C/
-│   │   ├── 20260524-125300-D/
-│   │   ├── 20260524-125300-push/
-│   │   ├── 20260524-133650/
-│   │   ├── 20260524-171714/
-│   │   ├── 20260524-172805/
-│   │   ├── 20260524-205206/
-│   │   ├── 20260524-205459/
-│   │   ├── 20260525-050824/
-│   │   ├── 20260525-095242/
-│   │   ├── 20260526-052559/
-│   │   ├── 20260526-053746/
-│   │   ├── 20260527-132200/
-│   │   ├── 20260529-080709/
-│   │   ├── 20260529-081014/
-│   │   ├── 20260529-210616/
-│   │   ├── 20260529-211406/
-│   │   ├── 20260530-105221/
-│   │   ├── 20260530-165718/
-│   │   ├── 20260530-170350/
-│   │   ├── 20260531-112831-bug1/
-│   │   ├── 20260611-100500/
-│   │   ├── 20260614-093452/
-│   │   ├── 20260614-205834/
-│   │   ├── 20260618-135436/
-│   │   ├── 20260702-171509/
-│   │   ├── 20260704-073650/
 │   │   ├── 20260704-134650/
 │   │   ├── 20260704-225139/
-│   │   ├── dev-20260530-144032/
-│   │   ├── dev-20260531-134455/
-│   │   ├── dev-20260531-193000/
-│   │   ├── dev-20260615-213842/
-│   │   ├── dev-20260616-204226/
-│   │   ├── dev-20260619-092310-errmsg/
-│   │   ├── dev-20260619-092310-streak/
 │   │   └── `manifest.json` - JSON config: schema_version, kind, tasks
 │   ├── instructions/
 │   │   ├── `execution-guide.md` - AI Test Execution Guide

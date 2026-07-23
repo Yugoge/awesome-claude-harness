@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""PostToolUse: record successful authenticated restart SendMessage calls."""
+"""PostToolUse: record successful validated restart SendMessage calls."""
 
 from __future__ import annotations
 
@@ -32,4 +32,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

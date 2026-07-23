@@ -37,13 +37,14 @@ from lib.allowlist import (
 
 
 class TestAllowSettingsPreflight(unittest.TestCase):
-    """Absolute settings DENY is resolved before either grant channel writes."""
+    """Known file-based settings DENYs resolve before either grant channel writes."""
 
-    def _invoke(self, prompt, task_id, session_id):
+    def _invoke(self, prompt, task_id, session_id, env_updates=None):
         hook = os.path.join(HOOKS_DIR, "userprompt-consent-allowlist.sh")
         payload = json.dumps({"prompt": prompt, "session_id": session_id})
         env = dict(os.environ)
         env["CLAUDE_TASK_ID"] = task_id
+        env.update(env_updates or {})
         return subprocess.run(
             ["bash", hook], input=payload, capture_output=True, text=True,
             env=env, timeout=10,
@@ -54,6 +55,30 @@ class TestAllowSettingsPreflight(unittest.TestCase):
             os.path.join(SENTINEL_GRANT_DIR, f"{task_id}.json"),
             f"/tmp/claude-bash-allowlist-{session_id}.json",
         )
+
+    def _assert_hard_deny_record(
+        self, result, *, origin, matched_rule, earlier_pending_grant_cleared
+    ):
+        self.assertIn("decision_class=hard_deny", result.stderr)
+        self.assertIn("decision_actor=file_based_settings", result.stderr)
+        self.assertIn(f"source_origin={origin}", result.stderr)
+        self.assertIn(f"matched_rule={matched_rule}", result.stderr)
+        self.assertIn("grant_written=false", result.stderr)
+        self.assertIn("grant_consumed=false", result.stderr)
+        self.assertIn("retry_with_allow=false", result.stderr)
+        self.assertIn(
+            f"earlier_pending_grant_cleared={str(earlier_pending_grant_cleared).lower()}",
+            result.stderr,
+        )
+        self.assertIn("Repeating /allow cannot override the matched rule", result.stderr)
+        self.assertIn("genuinely semantically safer operation", result.stderr)
+        self.assertIn("human user to execute", result.stderr)
+        self.assertIn("human user to explicitly change the permission policy", result.stderr)
+        self.assertIn("Claude/Codex parity consequences", result.stderr)
+        self.assertIn("abandon the operation", result.stderr)
+        self.assertIn("must not use a syntactic rewrite", result.stderr)
+        self.assertNotIn("Choose a non-denied alternative", result.stderr)
+        self.assertNotIn("retry /allow", result.stderr.lower())
 
     def test_hard_deny_issues_no_grant_and_offers_no_allow_retry(self):
         task_id = "test-allow-hard-deny"
@@ -91,6 +116,263 @@ class TestAllowSettingsPreflight(unittest.TestCase):
             for path in paths:
                 if os.path.exists(path):
                     os.unlink(path)
+
+    def test_trailing_colon_star_preserves_command_word_boundary(self):
+        selectors = (
+            "/allow ddrescue --help",
+            "/allow sudoersctl --help",
+            "/allow sum file",
+            "/allow re:^ddrescue$",
+        )
+        for index, selector in enumerate(selectors):
+            with self.subTest(selector=selector):
+                task_id = f"test-allow-boundary-near-miss-{index}"
+                session_id = f"test-allow-boundary-near-miss-session-{index}"
+                paths = self._paths(task_id, session_id)
+                for path in paths:
+                    if os.path.exists(path):
+                        os.unlink(path)
+                try:
+                    result = self._invoke(selector, task_id, session_id)
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertIn("Grant recorded", result.stdout)
+                    self.assertNotIn("absolute settings DENY", result.stderr)
+                    self.assertTrue(all(os.path.exists(path) for path in paths))
+                finally:
+                    for path in paths:
+                        if os.path.exists(path):
+                            os.unlink(path)
+
+    def test_trailing_colon_star_still_denies_real_command_invocations(self):
+        selectors = (
+            "/allow dd if=/dev/zero of=/tmp/allow-boundary-test",
+            "/allow sudo -n true",
+            "/allow su root",
+            r"/allow re:^dd\s+if=/dev/zero$",
+        )
+        for index, selector in enumerate(selectors):
+            with self.subTest(selector=selector):
+                task_id = f"test-allow-boundary-deny-{index}"
+                session_id = f"test-allow-boundary-deny-session-{index}"
+                paths = self._paths(task_id, session_id)
+                for path in paths:
+                    if os.path.exists(path):
+                        os.unlink(path)
+                try:
+                    result = self._invoke(selector, task_id, session_id)
+                    self.assertEqual(result.returncode, 0)
+                    self.assertIn("absolute settings DENY", result.stderr)
+                    self.assertNotIn("Grant recorded", result.stdout)
+                    self.assertFalse(any(os.path.exists(path) for path in paths))
+                finally:
+                    for path in paths:
+                        if os.path.exists(path):
+                            os.unlink(path)
+
+    def test_missing_configured_python_fails_closed_and_removes_stale_grants(self):
+        task_id = "test-allow-missing-python"
+        session_id = "test-allow-missing-python-session"
+        paths = self._paths(task_id, session_id)
+        for path in paths:
+            Path(path).parent.mkdir(parents=True, exist_ok=True)
+            Path(path).write_text("{}", encoding="utf-8")
+        try:
+            result = self._invoke(
+                "/allow rm -rf relative-target",
+                task_id,
+                session_id,
+                {"CLAUDE_PYTHON_BIN": "/definitely/missing/claude-python"},
+            )
+            self.assertEqual(result.returncode, 0)
+            self.assertIn("configured Python interpreter is unavailable", result.stderr)
+            self.assertFalse(any(os.path.exists(path) for path in paths))
+        finally:
+            for path in paths:
+                if os.path.exists(path):
+                    os.unlink(path)
+
+    def test_each_file_based_settings_source_denies_before_grant_write(self):
+        source_names = ("user", "project_shared", "project_local")
+        for index, denied_source in enumerate(source_names):
+            with self.subTest(source=denied_source), tempfile.TemporaryDirectory() as temp:
+                temp_root = Path(temp)
+                config_dir = temp_root / "config"
+                project_dir = temp_root / "project"
+                project_settings_dir = project_dir / ".claude"
+                config_dir.mkdir()
+                project_settings_dir.mkdir(parents=True)
+                source_paths = {
+                    "user": config_dir / "settings.json",
+                    "project_shared": project_settings_dir / "settings.json",
+                    "project_local": project_settings_dir / "settings.local.json",
+                }
+                for source_name, source_path in source_paths.items():
+                    source_path.write_text(
+                        json.dumps({
+                            "permissions": {
+                                "deny": ["Bash(blockedcmd:*)"]
+                                if source_name == denied_source else []
+                            }
+                        }),
+                        encoding="utf-8",
+                    )
+
+                task_id = f"test-allow-settings-source-{index}"
+                session_id = f"test-allow-settings-source-session-{index}"
+                paths = self._paths(task_id, session_id)
+                for path in paths:
+                    if os.path.exists(path):
+                        os.unlink(path)
+                try:
+                    result = self._invoke(
+                        "/allow blockedcmd argument",
+                        task_id,
+                        session_id,
+                        {
+                            "CLAUDE_CONFIG_DIR": str(config_dir),
+                            "CLAUDE_PROJECT_DIR": str(project_dir),
+                            "CLAUDE_PYTHON_BIN": sys.executable,
+                        },
+                    )
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertIn("known file-based absolute settings DENY", result.stderr)
+                    self._assert_hard_deny_record(
+                        result,
+                        origin=denied_source,
+                        matched_rule="Bash(blockedcmd:*)",
+                        earlier_pending_grant_cleared=False,
+                    )
+                    self.assertNotIn("Grant recorded", result.stdout)
+                    self.assertFalse(any(os.path.exists(path) for path in paths))
+                finally:
+                    for path in paths:
+                        if os.path.exists(path):
+                            os.unlink(path)
+
+    def test_hard_deny_discloses_that_all_stale_grants_were_cleared(self):
+        with tempfile.TemporaryDirectory() as temp:
+            temp_root = Path(temp)
+            config_dir = temp_root / "config"
+            project_dir = temp_root / "project"
+            config_dir.mkdir()
+            project_dir.mkdir()
+            (config_dir / "settings.json").write_text(
+                json.dumps({"permissions": {"deny": ["Bash(blockedcmd:*)"]}}),
+                encoding="utf-8",
+            )
+
+            task_id = "test-allow-hard-deny-stale"
+            session_id = "test-allow-hard-deny-stale-session"
+            paths = self._paths(task_id, session_id) + (
+                os.path.join(SENTINEL_GRANT_DIR, f"{task_id}-older.json"),
+            )
+            for path in paths:
+                Path(path).parent.mkdir(parents=True, exist_ok=True)
+                Path(path).write_text("{}", encoding="utf-8")
+            try:
+                result = self._invoke(
+                    "/allow blockedcmd argument",
+                    task_id,
+                    session_id,
+                    {
+                        "CLAUDE_CONFIG_DIR": str(config_dir),
+                        "CLAUDE_PROJECT_DIR": str(project_dir),
+                        "CLAUDE_PYTHON_BIN": sys.executable,
+                    },
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self._assert_hard_deny_record(
+                    result,
+                    origin="user",
+                    matched_rule="Bash(blockedcmd:*)",
+                    earlier_pending_grant_cleared=True,
+                )
+                self.assertNotIn("Grant recorded", result.stdout)
+                self.assertFalse(any(os.path.exists(path) for path in paths))
+            finally:
+                for path in paths:
+                    if os.path.exists(path):
+                        os.unlink(path)
+
+    def test_absent_optional_project_sources_do_not_invent_a_denial(self):
+        with tempfile.TemporaryDirectory() as temp:
+            temp_root = Path(temp)
+            config_dir = temp_root / "config"
+            project_dir = temp_root / "project"
+            config_dir.mkdir()
+            project_dir.mkdir()
+            (config_dir / "settings.json").write_text(
+                json.dumps({"permissions": {"deny": []}}), encoding="utf-8"
+            )
+
+            task_id = "test-allow-absent-optional-settings"
+            session_id = "test-allow-absent-optional-settings-session"
+            paths = self._paths(task_id, session_id)
+            for path in paths:
+                if os.path.exists(path):
+                    os.unlink(path)
+            try:
+                result = self._invoke(
+                    "/allow unobstructedcmd argument",
+                    task_id,
+                    session_id,
+                    {
+                        "CLAUDE_CONFIG_DIR": str(config_dir),
+                        "CLAUDE_PROJECT_DIR": str(project_dir),
+                        "CLAUDE_PYTHON_BIN": sys.executable,
+                    },
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertIn("Grant recorded", result.stdout)
+                self.assertTrue(all(os.path.exists(path) for path in paths))
+            finally:
+                for path in paths:
+                    if os.path.exists(path):
+                        os.unlink(path)
+
+    def test_malformed_participating_source_fails_closed(self):
+        with tempfile.TemporaryDirectory() as temp:
+            temp_root = Path(temp)
+            config_dir = temp_root / "config"
+            project_dir = temp_root / "project"
+            project_settings_dir = project_dir / ".claude"
+            config_dir.mkdir()
+            project_settings_dir.mkdir(parents=True)
+            (config_dir / "settings.json").write_text(
+                json.dumps({"permissions": {"deny": []}}), encoding="utf-8"
+            )
+            (project_settings_dir / "settings.json").write_text(
+                "{not-valid-json", encoding="utf-8"
+            )
+
+            task_id = "test-allow-malformed-settings"
+            session_id = "test-allow-malformed-settings-session"
+            paths = self._paths(task_id, session_id)
+            for path in paths:
+                Path(path).parent.mkdir(parents=True, exist_ok=True)
+                Path(path).write_text("{}", encoding="utf-8")
+            try:
+                result = self._invoke(
+                    "/allow unobstructedcmd argument",
+                    task_id,
+                    session_id,
+                    {
+                        "CLAUDE_CONFIG_DIR": str(config_dir),
+                        "CLAUDE_PROJECT_DIR": str(project_dir),
+                        "CLAUDE_PYTHON_BIN": sys.executable,
+                    },
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertIn(
+                    "participating file-based settings source could not be evaluated",
+                    result.stderr,
+                )
+                self.assertNotIn("Grant recorded", result.stdout)
+                self.assertFalse(any(os.path.exists(path) for path in paths))
+            finally:
+                for path in paths:
+                    if os.path.exists(path):
+                        os.unlink(path)
 
 
 class TestMatchLoadedGrant(unittest.TestCase):

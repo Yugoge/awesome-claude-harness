@@ -1,8 +1,8 @@
 # scripts
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-07-20T10:43:40Z*
-**Total entries**: 114
+*Last updated: 2026-07-21T13:40:46Z*
+**Total entries**: 113
 **Convention**: kebab
 
 ## Tree
@@ -105,7 +105,6 @@ scripts/
 ├── `resolve-close-report.sh` - Resolve the close-report path for a given TASK_ID using subproject path-walk.
 ├── `resolve-dev-report.py` - Usage:
 ├── `resolve-spec-artifacts.py` - spec-id resolver shared by /spec finalize and every /dev* consumer)
-├── `restart-subagents.py` - CLI bridge for the human-only /restart recovery workflow.
 ├── `runcode-watchdog.py` - Watchdog process for browser_run_code timeout enforcement
 ├── `scan-project.sh` - Description: Scan project structure and detect project type
 ├── `score-inject.sh` - Description: Emit a prompt-injection text block describing an agent's current rank/range

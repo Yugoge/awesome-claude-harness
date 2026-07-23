@@ -906,11 +906,11 @@ if ! printf '%s\n' "$COMMAND_CONTEXT_STRIPPED" | grep -q 'git'; then
   CLASSIFIER_STATUS='ok'
   CLASSIFIER_JSON='[]'
 elif [ -r "$CLASSIFIER_PY" ]; then
-    CLASSIFIER_JSON=$(printf '%s\n' "$COMMAND_CONTEXT_STRIPPED" | \
-      "$PYTHON_BIN" "$CLASSIFIER_PY" 2>/dev/null)
-    _classifier_status=$?
-    if [ "$_classifier_status" -eq 0 ] && \
-       printf '%s\n' "$CLASSIFIER_JSON" | "$PYTHON_BIN" -c '
+  CLASSIFIER_JSON=$(printf '%s\n' "$COMMAND_CONTEXT_STRIPPED" | \
+    "$PYTHON_BIN" "$CLASSIFIER_PY" 2>/dev/null)
+  _classifier_status=$?
+  if [ "$_classifier_status" -eq 0 ] && \
+     printf '%s\n' "$CLASSIFIER_JSON" | "$PYTHON_BIN" -c '
 import json, sys
 value = json.load(sys.stdin)
 if not isinstance(value, list):
@@ -927,11 +927,11 @@ for item in value:
     if not isinstance(item["path_qualified"], bool):
         raise SystemExit(1)
 ' 2>/dev/null; then
-      CLASSIFIER_STATUS='ok'
-    else
-      CLASSIFIER_JSON=''
-    fi
-    unset _classifier_status
+    CLASSIFIER_STATUS='ok'
+  else
+    CLASSIFIER_JSON=''
+  fi
+  unset _classifier_status
 fi
 if [ "$CLASSIFIER_STATUS" = "ok" ] && \
    printf '%s\n' "$CLASSIFIER_JSON" | grep -q '"path_qualified": true'; then
@@ -1643,12 +1643,16 @@ if { echo "$COMMAND" | grep -qE 'git\s+restore\b' && \
 fi
 
 # Block: every destructive-reset form. Shared-repo policy forbids reset-like
-# cleanup in agent flow.  A valid structured classifier result is the ONLY
+# cleanup in agent flow.  A valid structured classifier result is the primary
 # positive detector: quoted documentation/search text is data, not execution.
-# Raw text is consulted only when the classifier is unavailable or malformed,
-# which preserves the fail-closed boundary without running a parallel detector.
+# If that classifier is unavailable or malformed, the fallback reads the
+# existing normalized execution view.  That view removes inert quoted/search
+# arguments when normalization succeeds and remains raw (fail-closed) if its
+# own helper is unavailable.  The fallback token explicitly accepts both bare
+# and path-qualified git executables.
 GIT_GLOBAL_OPT_RE='([[:space:]]+(-[Cc][[:space:]]+[^[:space:];|&]+|-[Cc][^[:space:];|&]+|--(git-dir|work-tree|namespace|exec-path|super-prefix|config-env)(=[^[:space:];|&]+|[[:space:]]+[^[:space:];|&]+)|--(bare|no-pager|paginate|no-replace-objects|literal-pathspecs|glob-pathspecs|noglob-pathspecs|icase-pathspecs|no-optional-locks)|-[pP]))*'
 GIT_CMD_RE='(^|[[:space:];&|()`])git'"$GIT_GLOBAL_OPT_RE"'[[:space:]]+'
+GIT_FALLBACK_CMD_RE='(^|[[:space:];&|()`])([^[:space:];&|()`]*/)?git'"$GIT_GLOBAL_OPT_RE"'[[:space:]]+'
 _CLASSIFIED_RESET_HARD=0
 if [ "$CLASSIFIER_STATUS" = "ok" ] && _any_git_has_subcmd reset; then
   printf '%s\n' "$CLASSIFIER_JSON" | "$PYTHON_BIN" -c "
@@ -1661,7 +1665,8 @@ for inv in invs:
 fi
 _FALLBACK_RESET_HARD=0
 if [ "$CLASSIFIER_STATUS" != "ok" ] && \
-   echo "$COMMAND" | grep -qE "${GIT_CMD_RE}reset[[:space:]]+([^;|&]*[[:space:]]+)?--hard\b"; then
+   printf '%s\n' "$COMMAND_CONTEXT_STRIPPED" | \
+     grep -qE "${GIT_FALLBACK_CMD_RE}reset[[:space:]]+([^;|&]*[[:space:]]+)?--hard\b"; then
   _FALLBACK_RESET_HARD=1
 fi
 if [ "$_CLASSIFIED_RESET_HARD" = "1" ] || [ "$_FALLBACK_RESET_HARD" = "1" ]; then

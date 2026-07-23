@@ -1342,6 +1342,19 @@ When the orchestrator prepends a score-inject block to your dispatch prompt, the
 
 **Why four fields?** rank + range alone are low entropy (~5 buckets each) and could be mechanically copied. The digest forces processing of the dynamic recent-events payload. The free-text action proves act, not just read.
 
+### Lifecycle evidence receipt consumption
+
+When the task acceptance criteria name `scripts/validate-lifecycle-close-evidence.py`,
+QA runs only after the validator has finalized a `post_live` receipt. QA must read
+that receipt, independently recompute its SHA-256, and emit a non-null
+`qa.lifecycle_evidence` object containing `receipt_sha256`, `receipt_stage`,
+`receipt_verdict`, `validated_input_sha256_values`, and
+`human_confirmation_reference_sha256_values`. A `pre_live` receipt, missing live
+probe, task mismatch, or receipt mutation after QA begins is a release-blocking
+failure. QA never treats an agent-authored marker as human trust/reload evidence,
+and an evidence failure gates the release claim only; it must not block ordinary
+Stop or create a native lifecycle state.
+
 ---
 
 ## Output Format
@@ -1557,6 +1570,13 @@ Return verification report as JSON:
       "vacuous_reason": "cycle modified no pytest-collectable files",
       "guard_verdict": "ok_vacuous_acknowledged",
       "guard_reason": "no pytest-collectable files in cycle diff"
+    },
+    "lifecycle_evidence": {
+      "receipt_sha256": "<64 lowercase hex>",
+      "receipt_stage": "post_live",
+      "receipt_verdict": "pass",
+      "validated_input_sha256_values": {},
+      "human_confirmation_reference_sha256_values": {}
     },
     "blast_radius_phase2": {
       "_doc": "Phase 2 verification per spec-20260518-225715 §5.3. QA reruns blast-radius-tool.py with --git-diff and compares coverage_gaps against the BA-Phase-1 map; verifies every Phase 1 gap and required_validation has a corresponding declaration in dev-report.blast_radius_declarations[].",

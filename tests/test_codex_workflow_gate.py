@@ -9,6 +9,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 
 HOOK_PATH = Path(__file__).parents[1] / "hooks" / "pretool-workflow-gate.py"
 SPEC = importlib.util.spec_from_file_location("pretool_workflow_gate", HOOK_PATH)
@@ -63,6 +65,15 @@ def test_codex_transition_still_rejects_pending_to_completed() -> None:
     violations = MODULE.validate_codex_transition({}, old, new)
 
     assert "Step 1: pending -> completed without in_progress" in violations
+
+
+def test_codex_transition_rejects_completed_checklist_regression() -> None:
+    old = [_todo("completed"), _todo("completed"), _todo("completed")]
+    new = [_todo("in_progress"), _todo("pending"), _todo("pending")]
+
+    violations = MODULE.validate_codex_transition({}, old, new)
+
+    assert violations == ["Codex checklist frontier regression from 3 to 0"]
 
 
 def test_projected_in_progress_step_initializes_and_preserves_lower_bound(
@@ -172,14 +183,42 @@ def test_child_local_plan_does_not_touch_parent_workflow_bookmark(tmp_path: Path
     assert bookmark.read_bytes() == before
 
 
+def test_legacy_entrypoint_rejects_path_unsafe_codex_session_identity(
+    tmp_path: Path,
+) -> None:
+    payload = {
+        "session_id": "../../foreign-session",
+        "tool_name": "functions.update_plan",
+        "tool_input": {"plan": []},
+    }
+    result = subprocess.run(
+        [sys.executable, str(HOOK_PATH)],
+        input=json.dumps(payload),
+        text=True,
+        capture_output=True,
+        env={
+            **os.environ,
+            "CLAUDE_COMPAT_RUNTIME": "codex",
+            "CLAUDE_PROJECT_DIR": str(tmp_path),
+        },
+        check=False,
+    )
+
+    assert result.returncode == 2
+    assert "path-unsafe session identity" in result.stderr
+    assert not (tmp_path.parent / "foreign-session.json").exists()
+
+
 def _write_transcript(
     path: Path,
     *,
     session_id: str = "session",
     include_final: bool = True,
+    final_text: str = "Message Type: FINAL_ANSWER\nPayload:\nok",
     task_name: str = "qa_current",
     agent_path: str | None = None,
     agent_thread_id: str | None = "thread-current",
+    include_completion_status: bool = True,
 ) -> None:
     agent_path = agent_path or f"/root/{task_name}"
     events = [
@@ -223,18 +262,83 @@ def _write_transcript(
                     "content": [
                         {
                             "type": "input_text",
-                            "text": "Message Type: FINAL_ANSWER\nPayload:\nok",
+                            "text": final_text,
                         }
                     ],
                 },
             }
         )
+        if include_completion_status:
+            events.extend(
+                [
+                    {
+                        "timestamp": "2026-07-20T15:00:05.000Z",
+                        "type": "response_item",
+                        "payload": {
+                            "type": "function_call",
+                            "namespace": "collaboration",
+                            "name": "list_agents",
+                            "call_id": "call-list-default",
+                            "arguments": "{}",
+                        },
+                    },
+                    {
+                        "timestamp": "2026-07-20T15:00:05.100Z",
+                        "type": "response_item",
+                        "payload": {
+                            "type": "function_call_output",
+                            "call_id": "call-list-default",
+                            "output": json.dumps({"agents": [{
+                                "agent_name": agent_path,
+                                "agent_status": {"completed": "runtime completed"},
+                            }]}),
+                        },
+                    },
+                ]
+            )
     path.write_text("".join(json.dumps(event) + "\n" for event in events))
 
 
 def _append_transcript_events(path: Path, *events: dict) -> None:
     with path.open("a") as handle:
         handle.write("".join(json.dumps(event) + "\n" for event in events))
+
+
+def _append_list_agents_success(
+    path: Path, *, agent_path: str = "/root/qa_current", at: str = "2026-07-20T15:00:03.000Z"
+) -> None:
+    _append_transcript_events(
+        path,
+        {
+            "timestamp": at,
+            "type": "response_item",
+            "payload": {
+                "type": "function_call",
+                "namespace": "collaboration",
+                "name": "list_agents",
+                "call_id": "call-list-agents",
+                "arguments": "{}",
+            },
+        },
+        {
+            "timestamp": at,
+            "type": "response_item",
+            "payload": {
+                "type": "function_call_output",
+                "call_id": "call-list-agents",
+                "output": json.dumps(
+                    {
+                        "agents": [
+                            {
+                                "agent_name": agent_path,
+                                "agent_status": {"completed": "structured success"},
+                            }
+                        ]
+                    }
+                ),
+            },
+        },
+    )
 
 
 def test_native_evidence_requires_spawn_start_and_final(tmp_path: Path) -> None:
@@ -252,9 +356,128 @@ def test_native_evidence_requires_spawn_start_and_final(tmp_path: Path) -> None:
     assert evidence[0]["agent_thread_id"] == "thread-current"
 
 
+def test_native_evidence_rejects_final_without_post_terminal_completed_status(
+    tmp_path: Path,
+) -> None:
+    transcript = tmp_path / "rollout-session.jsonl"
+    _write_transcript(transcript, include_completion_status=False)
+    old = [_todo("in_progress", delegated=True), _todo("pending")]
+    new = [_todo("completed", delegated=True), _todo("in_progress")]
+
+    assert MODULE.native_subagent_evidence_for_transition(
+        {"transcript_path": str(transcript)},
+        "session",
+        {"codex_step_started_at_ms": {"0": 1784559600000}},
+        old,
+        new,
+    ) == {}
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "FAILED: checks did not run",
+        "INTERRUPTED: quota",
+        "TIMEOUT: child unavailable",
+        '{"status":"paused","reason":"hook"}',
+        "NO-WORK: rejected operation",
+    ],
+)
+def test_native_evidence_rejects_closed_operational_outcomes_with_status(
+    tmp_path: Path, body: str,
+) -> None:
+    transcript = tmp_path / "rollout-session.jsonl"
+    _write_transcript(
+        transcript,
+        final_text=f"Message Type: FINAL_ANSWER\nPayload:\n{body}",
+    )
+    old = [_todo("in_progress", delegated=True), _todo("pending")]
+    new = [_todo("completed", delegated=True), _todo("in_progress")]
+    assert MODULE.native_subagent_evidence_for_transition(
+        {"transcript_path": str(transcript)},
+        "session",
+        {"codex_step_started_at_ms": {"0": 1784559600000}},
+        old,
+        new,
+    ) == {}
+
+
+def test_native_evidence_accepts_substantive_qa_fail_with_completed_status(
+    tmp_path: Path,
+) -> None:
+    transcript = tmp_path / "rollout-session.jsonl"
+    _write_transcript(
+        transcript,
+        final_text="Message Type: FINAL_ANSWER\nPayload:\nQA verdict: FAIL; defects documented",
+    )
+    old = [_todo("in_progress", delegated=True), _todo("pending")]
+    new = [_todo("completed", delegated=True), _todo("in_progress")]
+    evidence = MODULE.native_subagent_evidence_for_transition(
+        {"transcript_path": str(transcript)},
+        "session",
+        {"codex_step_started_at_ms": {"0": 1784559600000}},
+        old,
+        new,
+    )
+    assert evidence[0]["completion_status"] == "completed"
+
+
 def test_native_evidence_rejects_missing_final(tmp_path: Path) -> None:
     transcript = tmp_path / "rollout-session.jsonl"
     _write_transcript(transcript, include_final=False)
+    old = [_todo("in_progress", delegated=True), _todo("pending")]
+    new = [_todo("completed", delegated=True), _todo("in_progress")]
+    state = {"codex_step_started_at_ms": {"0": 1784559600000}}
+
+    assert MODULE.native_subagent_evidence_for_transition(
+        {"transcript_path": str(transcript)}, "session", state, old, new
+    ) == {}
+
+
+def test_native_evidence_rejects_pause_or_no_work_final(tmp_path: Path) -> None:
+    transcript = tmp_path / "rollout-session.jsonl"
+    _write_transcript(
+        transcript,
+        final_text="Message Type: FINAL_ANSWER\nPayload:\nPAUSE: hook rejected; no work performed",
+    )
+    old = [_todo("in_progress", delegated=True), _todo("pending")]
+    new = [_todo("completed", delegated=True), _todo("in_progress")]
+    state = {"codex_step_started_at_ms": {"0": 1784559600000}}
+
+    assert MODULE.native_subagent_evidence_for_transition(
+        {"transcript_path": str(transcript)}, "session", state, old, new
+    ) == {}
+
+
+def test_native_evidence_rejects_operational_failure_even_with_completed_status(
+    tmp_path: Path,
+) -> None:
+    transcript = tmp_path / "rollout-session.jsonl"
+    _write_transcript(
+        transcript,
+        final_text="Message Type: FINAL_ANSWER\nPayload:\nBLOCKED: quota exhausted",
+    )
+    _append_list_agents_success(transcript)
+    old = [_todo("in_progress", delegated=True), _todo("pending")]
+    new = [_todo("completed", delegated=True), _todo("in_progress")]
+    state = {"codex_step_started_at_ms": {"0": 1784559600000}}
+
+    evidence = MODULE.native_subagent_evidence_for_transition(
+        {"transcript_path": str(transcript)}, "session", state, old, new
+    )
+
+    assert evidence == {}
+
+
+def test_native_evidence_rejects_structured_success_for_another_agent(
+    tmp_path: Path,
+) -> None:
+    transcript = tmp_path / "rollout-session.jsonl"
+    _write_transcript(
+        transcript,
+        final_text="Message Type: FINAL_ANSWER\nPayload:\nERROR: no work performed",
+    )
+    _append_list_agents_success(transcript, agent_path="/root/qa_other")
     old = [_todo("in_progress", delegated=True), _todo("pending")]
     new = [_todo("completed", delegated=True), _todo("in_progress")]
     state = {"codex_step_started_at_ms": {"0": 1784559600000}}
@@ -270,6 +493,18 @@ def test_native_evidence_rejects_spawn_before_step_window(tmp_path: Path) -> Non
     old = [_todo("in_progress", delegated=True), _todo("pending")]
     new = [_todo("completed", delegated=True), _todo("in_progress")]
     state = {"codex_step_started_at_ms": {"0": 1784559602001}}
+
+    assert MODULE.native_subagent_evidence_for_transition(
+        {"transcript_path": str(transcript)}, "session", state, old, new
+    ) == {}
+
+
+def test_native_evidence_rejects_boolean_step_window(tmp_path: Path) -> None:
+    transcript = tmp_path / "rollout-session.jsonl"
+    _write_transcript(transcript)
+    old = [_todo("in_progress", delegated=True), _todo("pending")]
+    new = [_todo("completed", delegated=True), _todo("in_progress")]
+    state = {"codex_step_started_at_ms": {"0": True}}
 
     assert MODULE.native_subagent_evidence_for_transition(
         {"transcript_path": str(transcript)}, "session", state, old, new
@@ -411,6 +646,30 @@ def test_native_evidence_rejects_reused_child_thread(tmp_path: Path) -> None:
     ) == {}
 
 
+def test_native_evidence_rejects_reused_path_and_task_identity(tmp_path: Path) -> None:
+    transcript = tmp_path / "rollout-session.jsonl"
+    _write_transcript(transcript)
+    old = [_todo("in_progress", delegated=True), _todo("pending")]
+    new = [_todo("completed", delegated=True), _todo("in_progress")]
+    state = {
+        "codex_step_started_at_ms": {"0": 1784559600000},
+        "codex_subagent_evidence": {
+            "previous": {
+                "call_id": "different-call",
+                "agent_thread_id": "different-thread",
+                "agent_path": "/root/qa_current",
+                "task_name": "qa_current",
+            }
+        },
+    }
+
+    assert MODULE.native_subagent_evidence_for_transition(
+        {"transcript_path": str(transcript)}, "session", state, old, new
+    ) == {}
+
+
+
+
 def test_native_evidence_rejects_current_window_thread_reuse(tmp_path: Path) -> None:
     transcript = tmp_path / "rollout-session.jsonl"
     _write_transcript(transcript)
@@ -480,7 +739,7 @@ def test_native_evidence_rejects_current_window_call_reuse(tmp_path: Path) -> No
 
 def test_native_evidence_deduplicates_exact_terminal_messages(tmp_path: Path) -> None:
     transcript = tmp_path / "rollout-session.jsonl"
-    _write_transcript(transcript)
+    _write_transcript(transcript, include_completion_status=False)
     _append_transcript_events(
         transcript,
         {
@@ -498,6 +757,7 @@ def test_native_evidence_deduplicates_exact_terminal_messages(tmp_path: Path) ->
             },
         },
     )
+    _append_list_agents_success(transcript, at="2026-07-20T15:00:04.000Z")
 
     completed = MODULE.completed_codex_subagents(
         {"transcript_path": str(transcript)}, "session", 1784559600000
@@ -507,3 +767,9 @@ def test_native_evidence_deduplicates_exact_terminal_messages(tmp_path: Path) ->
     assert completed[0]["call_id"] == "call-current"
     assert completed[0]["agent_thread_id"] == "thread-current"
     assert completed[0]["terminal_at_ms"] == 1784559603000
+
+
+
+
+
+

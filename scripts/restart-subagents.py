@@ -23,9 +23,6 @@ def _parser() -> argparse.ArgumentParser:
         command.add_argument("--session-id")
         if name == "status":
             command.add_argument("--wait-seconds", type=int, default=0)
-    message = sub.add_parser("message")
-    message.add_argument("--session-id")
-    message.add_argument("--agent-id", required=True)
     return parser
 
 
@@ -46,11 +43,6 @@ def main(argv: list[str] | None = None) -> int:
             result = restart.prepare_state(session_id)
         elif args.command == "status":
             result = restart.get_status(session_id, wait_seconds=max(0, args.wait_seconds))
-        elif args.command == "message":
-            result = {
-                "agent_id": args.agent_id,
-                "message": restart.build_resume_message(session_id, args.agent_id),
-            }
         else:
             result = restart.finalize(session_id)
         print(json.dumps(result, ensure_ascii=False, indent=2))

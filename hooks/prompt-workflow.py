@@ -20,9 +20,15 @@ State: todos/{sid}.json + workflow-{sid}.json + overnight-state-{sid}.json
 import json
 import os
 import re
+import secrets
 import subprocess
 import sys
 import importlib.util
+import time
+import contextlib
+import fcntl
+import hashlib
+import io
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -129,6 +135,55 @@ def official_todos_path(session_id: str) -> Path:
 
 def workflow_bookmark_path(session_id: str) -> Path:
     return PROJECT_DIR / '.claude' / f'workflow-{session_id}.json'
+
+
+def _fsync_directory(directory: Path) -> None:
+    descriptor = os.open(directory, os.O_RDONLY | getattr(os, 'O_DIRECTORY', 0))
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
+def _atomic_write_bytes(path: Path, payload: bytes) -> None:
+    """Publish complete bytes at ``path`` without exposing a partial file."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(
+        f'.{path.name}.tmp-{os.getpid()}-{hashlib.sha256(payload).hexdigest()[:16]}'
+    )
+    descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    try:
+        with os.fdopen(descriptor, 'wb', closefd=True) as handle:
+            handle.write(payload)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+        _fsync_directory(path.parent)
+    finally:
+        try:
+            temporary.unlink()
+        except FileNotFoundError:
+            pass
+
+
+def _atomic_write_json(path: Path, value: object) -> None:
+    _atomic_write_bytes(
+        path,
+        json.dumps(value, ensure_ascii=False, sort_keys=True).encode('utf-8'),
+    )
+
+
+@contextlib.contextmanager
+def _exclusive_lock(path: Path):
+    """Serialize one Claude session only; independent sessions remain parallel."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    descriptor = os.open(path, os.O_RDWR | os.O_CREAT, 0o600)
+    try:
+        fcntl.flock(descriptor, fcntl.LOCK_EX)
+        yield
+    finally:
+        fcntl.flock(descriptor, fcntl.LOCK_UN)
+        os.close(descriptor)
 
 
 def _strip_yaml_frontmatter(content: str) -> str:
@@ -558,8 +613,8 @@ def handle_phase_b(session_id: str) -> None:
     ))
 
 
-def emit_checklist_message(cmd_name: str, todos: list) -> None:
-    """Print the checklist initialization message with command spec."""
+def checklist_message(cmd_name: str, todos: list) -> str:
+    """Build the checklist initialization message with command spec."""
     first_call = build_next_todowrite_call(todos, mark_first=True)
     lines = [
         f'CHECKLIST PRE-INITIALIZED for /{cmd_name.upper()}:',
@@ -574,7 +629,11 @@ def emit_checklist_message(cmd_name: str, todos: list) -> None:
     spec = read_command_spec(cmd_name)
     if spec:
         lines += ['', f'--- /{cmd_name} COMMAND SPECIFICATION ---', '', spec]
-    print('\n'.join(lines))
+    return '\n'.join(lines)
+
+
+def emit_checklist_message(cmd_name: str, todos: list) -> None:
+    print(checklist_message(cmd_name, todos))
 
 
 def _warn_workflow_conflict(old_cmd: str, new_cmd: str, old_todos: list) -> None:
@@ -694,6 +753,56 @@ def _write_userintent_sentinel(cmd_name: str, sid: str) -> None:
         pass
 
 
+def _dev_clock() -> datetime:
+    """Return the allocator clock, optionally fixed by an isolated test fixture."""
+    injected = os.environ.get('CLAUDE_DEV_CLOCK_ISO', '').strip()
+    if injected:
+        parsed = datetime.fromisoformat(injected.replace('Z', '+00:00'))
+        if parsed.tzinfo is not None:
+            parsed = parsed.astimezone(timezone.utc).replace(tzinfo=None)
+        return parsed
+    return datetime.now()
+
+
+def _reserve_dev_registry(cmd_name: str, project_dir: Path) -> tuple[str, Path]:
+    """Atomically reserve a pure-timestamp task family without a global lock."""
+    prefix = 'dev-command' if cmd_name == 'dev-command' else 'dev'
+    parent = project_dir / '.claude' / 'dev-registry'
+    parent.mkdir(parents=True, exist_ok=True)
+    base = _dev_clock().replace(microsecond=0)
+    for offset in range(86400):
+        task_id = f"{prefix}-{(base + timedelta(seconds=offset)).strftime('%Y%m%d-%H%M%S')}"
+        requirement = project_dir / 'docs' / 'dev' / f'user-requirement-{task_id}.md'
+        if requirement.exists():
+            continue
+        directory = parent / task_id
+        try:
+            directory.mkdir()
+        except FileExistsError:
+            continue
+        _fsync_directory(parent)
+        return task_id, directory
+    raise RuntimeError('no collision-safe Dev task id available in allocator window')
+
+
+def _write_new_file(path: Path, payload: bytes) -> None:
+    """Create an immutable task-scoped artifact; never replace prior bytes."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    try:
+        with os.fdopen(descriptor, 'wb', closefd=True) as handle:
+            handle.write(payload)
+            handle.flush()
+            os.fsync(handle.fileno())
+        _fsync_directory(path.parent)
+    except Exception:
+        try:
+            path.unlink()
+        except OSError:
+            pass
+        raise
+
+
 def _init_dev_registry(cmd_name: str, user_input: str, claude_session_id: str, project_dir: Path) -> str:
     """Initialize dev registry directory and sentinel files for a /dev or /dev-command invocation.
 
@@ -702,12 +811,10 @@ def _init_dev_registry(cmd_name: str, user_input: str, claude_session_id: str, p
     and calls write-e2e-enforce.sh (and optionally write-codex-enforce.sh) as subprocesses.
     Returns the generated dev_session_id string.
     """
-    import datetime as _dt
-    prefix = 'dev-command' if cmd_name == 'dev-command' else 'dev'
-    dev_session_id = f"{prefix}-{_dt.datetime.now().strftime('%Y%m%d-%H%M%S')}"
-
-    # Create registry directory and write per-agent sentinel files
-    registry_dir = project_dir / '.claude' / 'dev-registry' / dev_session_id
+    # Reserving the directory with mkdir(exist_ok=False) is the allocation
+    # linearization point shared by concurrent sessions.  No existing family is
+    # opened for replacement, even when the wall clock has only second precision.
+    dev_session_id, registry_dir = _reserve_dev_registry(cmd_name, project_dir)
     agent_types = [
         'architect', 'ba', 'cleaner', 'cleanliness-inspector', 'dev',
         'git-edge-case-analyst', 'pm', 'product-owner', 'prompt-inspector',
@@ -739,18 +846,15 @@ def _init_dev_registry(cmd_name: str, user_input: str, claude_session_id: str, p
             _graphify_bin = str(_global_gfx)
     _write_graphify_sentinel = _graphify_enabled and bool(_graphify_bin)
 
-    try:
-        registry_dir.mkdir(parents=True, exist_ok=True)
-        for agent in agent_types:
-            # No-op guard: skip graphify sentinel when binary absent or disabled
-            if agent == 'graphify' and not _write_graphify_sentinel:
-                continue
-            sentinel = registry_dir / f'{agent}.json'
-            sentinel.write_text(
-                json.dumps({'agent_type': agent, 'session_id': dev_session_id}) + '\n'
-            )
-    except Exception as e:
-        print(f'_init_dev_registry: registry write error: {e}', file=sys.stderr)
+    for agent in agent_types:
+        # No-op guard: skip graphify sentinel when binary absent or disabled
+        if agent == 'graphify' and not _write_graphify_sentinel:
+            continue
+        sentinel = registry_dir / f'{agent}.json'
+        _write_new_file(
+            sentinel,
+            (json.dumps({'agent_type': agent, 'session_id': dev_session_id}) + '\n').encode('utf-8'),
+        )
 
     # Strip --codex and --spec <path> tokens to get clean requirement
     tokens = user_input.split()
@@ -770,12 +874,8 @@ def _init_dev_registry(cmd_name: str, user_input: str, claude_session_id: str, p
     clean_requirement = re.sub(r'(?:--|[–—])spec\s+\S+', '', ' '.join(clean_tokens)).strip()
 
     # Write user requirement document
-    try:
-        req_path = project_dir / 'docs' / 'dev' / f'user-requirement-{dev_session_id}.md'
-        req_path.parent.mkdir(parents=True, exist_ok=True)
-        req_path.write_text(clean_requirement)
-    except Exception as e:
-        print(f'_init_dev_registry: requirement write error: {e}', file=sys.stderr)
+    req_path = project_dir / 'docs' / 'dev' / f'user-requirement-{dev_session_id}.md'
+    _write_new_file(req_path, clean_requirement.encode('utf-8'))
 
     scripts_dir = Path(__file__).parent.parent / 'scripts'
     base_env = {**os.environ, 'CLAUDE_PROJECT_DIR': str(project_dir), 'CLAUDE_SESSION_ID': claude_session_id}
@@ -828,12 +928,135 @@ def _cleanup_overnight_partials(sid: str) -> None:
             pass
 
 
-def handle_phase_a(cmd_name: str, user_input: str, sid: str) -> None:
+def _dev_start_lock_path(sid: str) -> Path:
+    return PROJECT_DIR / '.claude' / 'workflow-locks' / f'{sid}.lock'
+
+
+def _dev_replay_path(sid: str, envelope_digest: str) -> Path:
+    return PROJECT_DIR / '.claude' / 'dev-start-replays' / sid / f'{envelope_digest}.json'
+
+
+def _archive_current_generation(sid: str) -> None:
+    """Copy current pointer/checklist bytes to immutable, addressable history."""
+    bookmark = workflow_bookmark_path(sid)
+    todos = official_todos_path(sid)
+    if not bookmark.exists():
+        return
+    bookmark_bytes = bookmark.read_bytes()
+    try:
+        state = json.loads(bookmark_bytes)
+    except Exception:
+        state = {}
+    identity = str(state.get('task_id') or state.get('workflow_instance_id') or 'unknown')
+    generation = int(state.get('workflow_generation', 1) or 1)
+    history = PROJECT_DIR / '.claude' / 'workflow-history' / sid / f'{generation:06d}-{identity}'
+    try:
+        history.mkdir(parents=True, exist_ok=False)
+        _write_new_file(history / 'bookmark.json', bookmark_bytes)
+        if todos.exists():
+            _write_new_file(history / 'todos.json', todos.read_bytes())
+        _fsync_directory(history.parent)
+    except FileExistsError:
+        # A previously archived generation is immutable.  Its exact bytes must
+        # match before the current pointer can move again.
+        if (history / 'bookmark.json').read_bytes() != bookmark_bytes:
+            raise RuntimeError('prior workflow history collision')
+        if todos.exists() and (history / 'todos.json').read_bytes() != todos.read_bytes():
+            raise RuntimeError('prior checklist history collision')
+
+
+def _ordinary_dev_start(cmd_name: str, user_input: str, sid: str, envelope_digest: str) -> None:
+    """Commit one distinct Dev family or replay an exact envelope verbatim."""
+    if not envelope_digest:
+        envelope_digest = hashlib.sha256(
+            f'{sid}\0{user_input}'.encode('utf-8')
+        ).hexdigest()
+    replay_path = _dev_replay_path(sid, envelope_digest)
+    with _exclusive_lock(_dev_start_lock_path(sid)):
+        if replay_path.exists():
+            replay = json.loads(replay_path.read_text(encoding='utf-8'))
+            output = replay.get('stdout')
+            error_output = replay.get('stderr', '')
+            if not isinstance(output, str) or not isinstance(error_output, str):
+                raise RuntimeError('malformed Dev start replay record')
+            sys.stdout.write(output)
+            sys.stderr.write(error_output)
+            return
+
+        todos = run_todo_script(cmd_name, user_input)
+        if not todos:
+            return
+        current = {}
+        bookmark = workflow_bookmark_path(sid)
+        if bookmark.exists():
+            try:
+                current = json.loads(bookmark.read_text(encoding='utf-8'))
+            except Exception:
+                current = {}
+
+        # Task family publication happens before either mutable current file.
+        # Capture any fail-open enforcement diagnostics so exact replay returns
+        # the byte-identical original handler output.
+        captured_stdout = io.StringIO()
+        captured_stderr = io.StringIO()
+        with contextlib.redirect_stdout(captured_stdout), contextlib.redirect_stderr(captured_stderr):
+            _check_workflow_conflict(cmd_name, sid)
+            task_id = _init_dev_registry(cmd_name, user_input, sid, PROJECT_DIR)
+        diagnostics = captured_stdout.getvalue()
+        error_output = captured_stderr.getvalue()
+
+        generation = int(current.get('workflow_generation', 0) or 0) + 1
+        data = {
+            'command': cmd_name,
+            'todo_acknowledged': False,
+            'workflow_instance_id': secrets.token_hex(32),
+            'workflow_generation': generation,
+            'workflow_started_at_ms': time.time_ns() // 1_000_000,
+            'task_id': task_id,
+            'preservation_policy': 'immutable_prior_family_atomic_current_pointer/v1',
+            'start_envelope_sha256': envelope_digest,
+        }
+        arguments = _extract_arguments(user_input, cmd_name)
+        if arguments:
+            data['arguments'] = arguments
+        _archive_current_generation(sid)
+        # The checklist is fully durable before the bookmark/current-pointer
+        # replace.  The bookmark is the authoritative generation selector.
+        _atomic_write_json(official_todos_path(sid), todos)
+        _atomic_write_json(bookmark, data)
+
+        codex_active = '--codex' in user_input.split()
+        output = ''.join([
+            diagnostics,
+            f'DEV_SESSION_ID pre-initialized by hook: {task_id}\n',
+            f'User requirement document: docs/dev/user-requirement-{task_id}.md\n',
+            'E2E enforcement: ACTIVE\n',
+            f'Codex enforcement: {"ACTIVE (--codex)" if codex_active else "inactive"}\n',
+            checklist_message(cmd_name, todos),
+            '\n',
+        ])
+        _atomic_write_json(replay_path, {
+            'schema': 'claude.ordinary-dev-start-replay/v1',
+            'session_id': sid,
+            'envelope_sha256': envelope_digest,
+            'task_id': task_id,
+            'workflow_generation': generation,
+            'stdout': output,
+            'stderr': error_output,
+        })
+        sys.stdout.write(output)
+        sys.stderr.write(error_output)
+
+
+def handle_phase_a(cmd_name: str, user_input: str, sid: str, envelope_digest: str = '') -> None:
     """Phase A: slash command detected -- setup todos, state, inject spec."""
     if cmd_name in ("commit", "push", "merge", "stop"):
         _write_userintent_sentinel(cmd_name, sid)
     if cmd_name == "do":
         handle_do_consent(sid)
+    if cmd_name in ('dev', 'dev-command', 'redev'):
+        _ordinary_dev_start(cmd_name, user_input, sid, envelope_digest)
+        return
     todos = run_todo_script(cmd_name, user_input)
     if not todos:
         return
@@ -857,14 +1080,6 @@ def handle_phase_a(cmd_name: str, user_input: str, sid: str) -> None:
     tf.parent.mkdir(parents=True, exist_ok=True)
     tf.write_text(json.dumps(todos, ensure_ascii=False))
     _write_bookmark(cmd_name, sid, _extract_arguments(user_input, cmd_name))
-    if cmd_name in ('dev', 'dev-command', 'redev'):
-        dev_session_id = _init_dev_registry(cmd_name, user_input, sid, PROJECT_DIR)
-        codex_active = '--codex' in user_input.split()
-        req_doc = f'docs/dev/user-requirement-{dev_session_id}.md'
-        print(f'DEV_SESSION_ID pre-initialized by hook: {dev_session_id}')
-        print(f'User requirement document: {req_doc}')
-        print(f'E2E enforcement: ACTIVE')
-        print(f'Codex enforcement: {"ACTIVE (--codex)" if codex_active else "inactive"}')
     emit_checklist_message(cmd_name, todos)
 
 
@@ -873,7 +1088,13 @@ def _write_bookmark(cmd_name: str, sid: str, arguments: str = '') -> None:
     bm = workflow_bookmark_path(sid)
     try:
         bm.parent.mkdir(parents=True, exist_ok=True)
-        data = {'command': cmd_name, 'todo_acknowledged': False}
+        data = {
+            'command': cmd_name,
+            'todo_acknowledged': False,
+            'workflow_instance_id': secrets.token_hex(32),
+            'workflow_generation': 1,
+            'workflow_started_at_ms': time.time_ns() // 1_000_000,
+        }
         if arguments:
             data['arguments'] = arguments
         bm.write_text(json.dumps(data))
@@ -882,8 +1103,15 @@ def _write_bookmark(cmd_name: str, sid: str, arguments: str = '') -> None:
 
 
 def main():
+    # In a Codex root the native harness owns task identity, artifacts, workflow
+    # generation, projection, and Stop. This Claude hook remains authoritative
+    # only for Claude roots and must never become a second writer through the
+    # compatibility wrapper.
+    if os.environ.get('CLAUDE_COMPAT_RUNTIME') == 'codex':
+        sys.exit(0)
     try:
-        data = json.load(sys.stdin)
+        raw = sys.stdin.buffer.read()
+        data = json.loads(raw)
         global PROJECT_DIR
         PROJECT_DIR = resolve_project_dir(data)
         user_input = data.get('prompt', '')
@@ -892,7 +1120,7 @@ def main():
         if not cmd_name:
             handle_phase_b(session_id)
         else:
-            handle_phase_a(cmd_name, user_input, session_id)
+            handle_phase_a(cmd_name, user_input, session_id, hashlib.sha256(raw).hexdigest())
     except SystemExit:
         # M5/AC4: a /dev-overnight launch failure raises SystemExit(2) to fail
         # CLOSED. Do NOT swallow it into exit(0); propagate the failure code.

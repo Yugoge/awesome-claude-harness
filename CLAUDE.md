@@ -1,7 +1,7 @@
 # Global Claude Code Configuration
 
 <!-- AUTO:last-updated -->
-> Last updated: 2026-07-20
+> Last updated: 2026-07-21
 <!-- /AUTO:last-updated -->
 
 ---
@@ -44,7 +44,7 @@ Main agent is the orchestrator; delegate real work to subagents. Enforced by `~/
 - **Permanently blocked**: `EnterPlanMode`, `ExitPlanMode` — even with `/do`.
 - **Bypass**: user invokes `/do` this session → gate exits 0 for everything except permanently-blocked tools.
 - Subagents (`agent_id` present) bypass all checks. Streak state at `/tmp/claude-tool-streak-<sid>.json`. For files >600 lines, delegate and ask for a summary — never request raw contents.
-- **No background dispatch**: `Agent`/`Task` run in the background *by default*, so the orchestrator MUST pass `run_in_background: false` on every dispatch (and on `Bash` when not backgrounding). Enforced by `~/.claude/hooks/pretool-block-background-tasks.py`: Agent/Task are blocked (exit 2) unless `run_in_background` is explicitly `false`; `Bash` is blocked only on explicit `true`; `Workflow` and ordinary `SendMessage` calls are blocked outright. The sole `SendMessage` exception is a human-authenticated `/restart` recovery to transcript-discovered interrupted agent IDs with the exact fixed recovery message; it is journaled through `SubagentStop`. Subagents (`agent_id` truthy) and `/do` consent bypass. Background work otherwise bypasses harness monitoring — keep it synchronous and observable.
+- **No background dispatch**: `Agent`/`Task` run in the background *by default*, so the orchestrator MUST pass `run_in_background: false` on every dispatch (and on `Bash` when not backgrounding). Enforced by `~/.claude/hooks/pretool-block-background-tasks.py`: Agent/Task are blocked (exit 2) unless `run_in_background` is explicitly `false`; `Bash` is blocked only on explicit `true`; `Workflow` and ordinary `SendMessage` calls are blocked outright. The sole `SendMessage` exception is the supported human-only `/restart` path sending the exact fixed recovery message to transcript-discovered, pending interrupted agent IDs; it is journaled through `SubagentStop`. Subagents (`agent_id` truthy) and `/do` consent bypass. Background work otherwise bypasses harness monitoring — keep it synchronous and observable.
 
 ---
 
@@ -78,7 +78,9 @@ Enforced by two PreToolUse hooks. `~/.claude/hooks/pretool-block-branch-pr-workt
 
 1. **PAUSE** immediately and report the rejected command + hook output to the user.
 2. **NOT** circumvent via shell wrappers, intermediary scripts, hook-source recon, or hook-file edits.
-3. If the task genuinely requires the rejected operation, output a **REQUEST** message to the user describing exactly what needs to run and why; the user decides.
+3. If the task genuinely requires the rejected operation, output a **REQUEST** message to the user describing exactly what needs to run and why; only the human may authorize retry.
+4. **PAUSE is operation-local, not automatically task-terminal.** If the human declines or abandons the operation, the orchestrator may abandon it and continue the same issue only when every acceptance criterion remains achievable without it. Agents must not retry, disguise, or circumvent an unauthorized operation.
+5. **Ordinary `/dev` recovery has an honest terminal branch.** When acceptance remains achievable, resume the same issue from its existing state; if its prior one-issue subagent has ended, synchronously re-dispatch that same lane and continue through normal validation and QA. When acceptance is no longer achievable, do not loop or fabricate a substitute: record the lane or cycle as blocked/incomplete, name the unmet acceptance criterion, and allow the ordinary `/dev` cycle to terminate honestly.
 
 ### Sentinel-grant mechanism
 

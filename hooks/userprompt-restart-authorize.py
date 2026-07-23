@@ -25,16 +25,13 @@ def main() -> int:
         return 0
     session_id = payload.get("session_id")
     transcript_path = payload.get("transcript_path")
-    project_dir = payload.get("cwd") or ""
     try:
-        grant = restart.mint_grant(
-            str(session_id or ""), str(transcript_path or ""), str(project_dir),
-        )
+        grant = restart.mint_grant(str(session_id or ""), str(transcript_path or ""))
     except restart.RestartError as exc:
-        print(f"[/restart] authorization failed: {exc}", file=sys.stderr)
+        print(f"[/restart] capability issue failed: {exc}", file=sys.stderr)
         return 2
     print(
-        "[/restart] authenticated for parent session "
+        "[/restart] capability issued for parent session "
         f"{grant['session_id']}; only transcript-discovered interrupted agent ids may be resumed."
     )
     return 0

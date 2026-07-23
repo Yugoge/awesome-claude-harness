@@ -65,6 +65,8 @@ Emit spec continuation or temp closure update
 - NEVER bundle multiple issues into a single subagent prompt
 - If QA fails and iteration is needed, re-invoke Dev with the SAME single issue, not a batch
 
+**Hook-rejection continuation (operation-local, cycle outcome conditional):** A rejected subagent operation pauses only that attempted operation and MUST be reported with the exact hook output under the global Subagent Hook Discipline; it does not by itself decide the ordinary `/dev` cycle's outcome. Only the human may authorize retry, and neither the orchestrator nor a subagent may retry, disguise, or circumvent an unauthorized operation. If the human declines or abandons it, the orchestrator may abandon-and-continue only when every acceptance criterion remains achievable without that operation: resume the same lane from its existing artifacts, synchronously re-dispatch exactly that one-issue lane if its prior turn ended, and continue through normal validation and QA. If any acceptance criterion is no longer achievable, do not loop, re-dispatch, or fabricate a substitute; record the lane or cycle as blocked/incomplete, name the unmet acceptance criterion, and allow the ordinary `/dev` cycle to terminate honestly.
+
 **Per-Subagent Single-Task Rule (MANDATORY)**:
 - Each individual subagent invocation handles exactly ONE issue/task
 - BA analyzes ONE requirement, Dev implements ONE fix, QA verifies ONE fix
@@ -853,7 +855,7 @@ Use Task tool with:
 - `baseline_head_sha` = equality-verified across all workers (aggregate status = `"blocked"` if any worker disagrees, citing `baseline_head_sha` mismatch); value taken from orchestrator dispatch
 - `baseline_dirty_snapshot` = equality-verified across all workers (aggregate status = `"blocked"` if any worker disagrees, citing `baseline_dirty_snapshot` mismatch); value taken verbatim from orchestrator dispatch
 - `dev.observed_preexisting` = UNION of all per-worker `dev.observed_preexisting` lists
-- The orchestrator invokes `source venv/bin/activate && python3 scripts/aggregate-dev-report.py --task-id $TASK_ID` to write the canonical aggregate. Capture stdout JSON; action field will be `"aggregated"`, `"validated"`, or `"skipped"`. Do NOT modify the `/commit` command implementation (`~/.claude/commands/commit.md`)
+- The orchestrator invokes `source venv/bin/activate && python3 scripts/aggregate-dev-report.py --task-id "$TASK_ID"` to write the initial canonical aggregate. Capture stdout JSON; action field will be `"aggregated"`, `"validated"`, or `"skipped"`. This initial invocation selects only the filename-declared Step 10 worker shards; iteration reports are never discovered by mtime, directory order, or a `latest` heuristic. Do NOT modify the `/commit` command implementation (`~/.claude/commands/commit.md`).
 
 **Single-dev cycles**: mark this todo step waived (skip). The aggregate-check hook does not fire for single-dev cycles because only one per-worker file pattern can match.
 
@@ -1213,6 +1215,17 @@ jq -s '.[0] * {
 ```
 
 **Return to Step 10** with new context JSON
+
+**Retry report naming (parallel-dev cycles, OPTIONAL convention)**:
+
+A retry lane MAY write its report as
+`docs/dev/dev-report-iter<N>-<TASK_ID>-<lane>.json` so retry evidence is
+distinguishable from the immutable initial shard. This is a naming convention
+only: there is NO promotion barrier, NO lineage declaration, and NO
+re-aggregation requirement before QA. The `iter<N>-` filename prefix matches
+none of the worker-shard patterns in `scripts/aggregate-dev-report.py` /
+`hooks/pretool-aggregate-check.py`, so such a report is never mistaken for an
+initial worker shard.
 
 **Iteration tracking**: Update TodoWrite with iteration number
 

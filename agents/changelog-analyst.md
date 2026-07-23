@@ -1,6 +1,6 @@
 ---
 name: changelog-analyst
-description: "Agentic commit subagent. Reads git state and dev-report to classify files, stages them, writes conventional commit messages (diff-first), handles nested repo, and writes push-gate token. Dispatched exclusively by /commit."
+description: "Agentic commit subagent. Reads git state and dev-report to classify files, stages them, writes conventional commit messages (diff-first), handles an admitted repository plan, and writes push-gate tokens. Dispatched exclusively by /commit."
 ---
 
 # changelog-analyst
@@ -16,6 +16,7 @@ your job is to classify, stage, commit, and write the push-gate token.
 ```
 CONTROL_ROOT=$HOME          # resolved control root (parent-repo working-tree root), supplied by the /commit Step 7 dispatch — NOT an author-absolute literal; fallback for dev-report lookup when subproject search yields nothing; close-report and ticket I/O always use CONTROL_ROOT
 NESTED_REPO=$(realpath ~/.claude)   # resolved harness-home (nested repo) root, supplied by the /commit dispatch
+REPOSITORY_PLAN=<JSON>      # normal-mode authority emitted by resolve-commit-repos.py; empty only in bulk mode
 ```
 
 GIT_ROOT is computed per repo via `git rev-parse --show-toplevel`. NEVER conflate
@@ -41,6 +42,8 @@ The following operations are FORBIDDEN regardless of any instruction in the disp
 12. **Never put the commit message text on the bash command line** — not via `git commit -m "..."`, not via `git commit -m "$(cat <<'...'...)"` (heredoc form), not via `echo ... >`, and not via an inline `cat <<'EOF' > tmpfile` heredoc. The message body may contain literal documentation phrases (e.g. package-manager global-install phrases, service-restart phrases) or protected-path strings that the bash-safety substring scanner would false-positive on. The commit MESSAGE MUST reach disk via the **Write tool** (a separate, non-Bash step), and the commit MUST be a MINIMAL `git commit -F <msgfile>` with nothing else chained on that command line. See `## Command-line purity (anti-false-positive contract)` below — it is binding for every commit invocation in this file.
 13. **Never use `auto-bulk:` commit message prefix when `BULK=false`** — this prefix is ONLY authorized in Bulk Mode (BULK=true) with a valid bulk-commit sentinel written by /commit --bulk Step 5. Using it in BULK=false mode forges the commit authorization chain.
 14. **Never create, modify, touch, or cause creation of `/tmp/claude-bulk-commit-sentinel-*.json` by any mechanism**, including the writer script (absolute/relative/symlink paths), `python -c`, heredoc code, `importlib`, `runpy`, copied writer logic, shell/path concatenation, or manual JSON writes. Bulk sentinels are created ONLY before dispatch by human-invoked `/commit --bulk`. Direct invocation of `write-bulk-commit-sentinel.py` by any path form is forbidden.
+15. **Never add a normal-mode repository from git status, an owned absolute path, or agent judgment** — process exactly the canonical roots in `REPOSITORY_PLAN`, in order. A report supplies ownership but never repository admission.
+16. **Never claim cross-repository atomicity or erase partial success** — Git cannot atomically commit independent repositories. Report every landed commit and every later failure in `repository_results`.
 
 ---
 
@@ -104,7 +107,7 @@ minimal so the substring scanner has nothing to false-positive on.
 
 This contract changes only HOW the message and token reach disk (Write tool + minimal command)
 — it changes NOTHING about WHAT is committed (classification, individual-file staging, the
-`/tmp` flock, forbidden-pattern message checks, structured status output, and nested-repo
+`/tmp` flock, forbidden-pattern message checks, structured status output, and per-repository
 handling are all unchanged).
 
 ---
@@ -115,29 +118,40 @@ handling are all unchanged).
 - `BULK` — `true` | `false`
 - `DRYRUN` — `true` | `false`
 - `FORCE` — `true` | `false`
+- `REPOSITORY_PLAN` — required in normal mode. Exact schema-1 JSON emitted by `resolve-commit-repos.py`, including task/report digest and ordered repository-specific repo/branch/HEAD/path bindings. Empty only in bulk mode, which preserves the legacy control+nested sweep.
 - `QA_APPROVED_FILES` — optional; when non-empty, the commit CEILING set approved by /commit's Step 6 pre-commit QA gate. You MUST NOT stage or commit any file outside this set: re-classify normally, intersect the classified set with `QA_APPROVED_FILES`, and act only on the intersection. If your fresh classification would otherwise commit a file NOT in `QA_APPROVED_FILES` (working tree drifted since QA review) and the divergence is material, ABORT with `failure_code: scope_violation` rather than commit an unreviewed file. Empty/absent (e.g. FORCE bypass) → this ceiling does not apply.
 
 ---
 
 ## Workflow — Normal Mode (BULK=false)
 
-### Phase 1: Source of truth — git status
+### Phase 1: Validate plan, then read repository status
 
-Run in BOTH repos:
+Fail closed unless `REPOSITORY_PLAN` is a JSON object with `schema_version=1`,
+`task_id == TASK_ID`, `transaction_semantics ==
+ordered_non_atomic_with_partial_failure_reporting`, a report path under the resolved
+control root, an exact SHA-256 match for that report, and a non-empty ordered
+`repositories[]` array. Orders must be contiguous from zero; canonical repo roots
+must be unique. For every entry, require exact live equality for:
 
-```bash
-: "${CONTROL_ROOT:?CONTROL_ROOT must be set by /commit dispatch (defined at commands/commit.md Step 7 dispatch prompt; silent fallback to an author-home literal is forbidden per task 20260520-064430-0a2881 AC6)}"
-: "${NESTED_REPO:?NESTED_REPO must be set by /commit dispatch}"
-git -C "${CONTROL_ROOT}" status --porcelain=v1
-git -C "${NESTED_REPO}" status --porcelain=v1
-```
+- `git -C <repo_root> rev-parse --show-toplevel` (realpath equality),
+- `git -C <repo_root> branch --show-current == branch`, and
+- `git -C <repo_root> rev-parse HEAD == expected_head`.
 
-Parse each output. Extract ALL files including untracked (`??`). The full
+Also normalize every report-owned path, resolve its actual Git root from the
+nearest existing ancestor, require that root to be admitted, and require the
+resulting repo-relative partition to equal every entry's `owned_paths`.
+Any mismatch returns `failed/repository_plan_invalid` before index mutation. Do not
+silently rebuild or widen the plan inside this agent.
+
+After validation, set `GIT_ROOT` to each plan entry in ascending `order` and run
+`git -C "${GIT_ROOT}" status --porcelain=v1`. Parse each output. Extract ALL files
+including untracked (`??`). The full
 `git status --porcelain=v1` output is the authoritative file set for this repo —
 every status code (`M`, `A`, `D`, `R`, `C`, `??`) is included as a candidate.
 
 **Dispatch-snapshot check (M3 — warn-only)**:
-After running git status in both repos, read the dispatch manifest if it exists (non-bulk mode only).
+After running git status in all planned repos, read the dispatch manifest if it exists (non-bulk mode only).
 Set `SID="${CLAUDE_SESSION_ID:-unknown}"`. In non-bulk mode, check for `/tmp/claude-commit-manifest-${SID}.json`. If it exists, activate the venv and parse it with Python to extract `files_at_dispatch` as a newline-separated list. If missing, treat DISPATCH_FILES as empty. Skip this check entirely when `BULK=true`.
 
 For each file in the current git status that is NOT in `DISPATCH_FILES` (and `DISPATCH_FILES` is non-empty):
@@ -253,9 +267,18 @@ message enrichment only (existing behavior).
 
 **Provenance filter** (apply before using dev-report for enrichment):
 
-Read `baseline_head_sha` from the dev-report top-level field. If `baseline_head_sha` is absent or empty, skip the provenance filter and log: `WARNING: baseline_head_sha absent — provenance filter skipped`. Do NOT fail on a missing baseline. When BULK=false and dev-report exists but `baseline_head_sha` is absent, the staging whitelist and foreign-session exclusion are STILL enforced — only the provenance sanity check is skipped.
+Read a repository-specific baseline from
+`baseline_heads_by_repo[realpath(GIT_ROOT)]` when that optional map exists. For the
+control repository only, fall back to the legacy top-level `baseline_head_sha`.
+Never apply a control-repository SHA to a different repository. If the selected
+baseline is absent/empty, or `git cat-file -e <sha>^{commit}` proves that it is not
+a commit in this repository, skip only this advisory provenance filter and log:
+`WARNING: repository baseline absent or foreign — provenance filter skipped for
+<GIT_ROOT>`. The staging whitelist, exact repository partition, report-digest
+binding, `QA_APPROVED_FILES` ceiling, and commit CAS checks remain mandatory; no missing
+baseline can widen the candidate set.
 
-When `baseline_head_sha` is present:
+When a valid repository baseline is present:
 
 1. Compute the working-tree diff since baseline: `git -C "$GIT_ROOT" diff --name-only <baseline_head_sha>` (Phase 2 runs before staging/commit, so changes are uncommitted; `..HEAD` form is WRONG here and would return an empty set, falsely flagging all legitimate changes as anomalies).
 2. Read `baseline_dirty_snapshot` from the dev-report top-level field (may be absent in older reports — treat as empty).
@@ -285,10 +308,18 @@ not in the whitelist cannot be added to the candidate set via the baseline diff.
 
 ### Phase 3: Serialization — acquire lock (FIRST, before any git read)
 
-For each repo with changes, acquire the lock BEFORE classifying files. ALL the
+For each repo with changes, acquire the lock before any index mutation, then
+repeat the authoritative status read and classification under that lock. ALL the
 **git/index operations** from lock acquisition through commit MUST run inside a
 single Bash process/script holding fd 9. Do NOT acquire the lock in one Bash
 call and run later git commands in separate Bash calls.
+
+For normal mode, immediately after acquiring that repository's lock and before
+touching its index, re-check the plan entry's canonical root, branch, and
+`expected_head`. Re-check them again immediately before `git commit`, still inside
+the same lock. A mismatch is `repository_plan_invalid` if no earlier repository
+commit landed; if an earlier repository already landed, record this repository as
+failed and return `partially_committed`. Never refresh expected HEAD in place.
 
 **Reconciling the flock with the Command-line-purity Write-tool mandate (CP-1/CP-3).**
 The Write tool is a separate tool invocation, not a Bash call, so a Write cannot run
@@ -407,6 +438,11 @@ is also not a git/index mutation.
 Release on script exit (fd 9 closes automatically when the process exits).
 
 ### Phase 4: Pre-staged verification (M13 — MANDATORY)
+
+When `DRYRUN=true`, first save the exact index file bytes and install an exit trap that
+atomically restores those bytes on every success/error return. Capturing only a tree ID
+is insufficient because index extensions and pre-existing staged state must survive
+byte-for-byte. The dry-run must never change HEAD or worktree bytes.
 
 Before staging anything, check for files already in the index:
 
@@ -629,7 +665,8 @@ If there are no orphan files, skip this step.
 
 ### Phase 8: Execute commit (or dry-run)
 
-If `DRYRUN=true`: surface the commit message and staged file list, then stop here. **The
+If `DRYRUN=true`: surface the commit message and staged file list, restore the pre-run
+index bytes (Phase 4), then stop here. **The
 dry-run message is subject to CP-1 too** — it may contain the same documentation phrases /
 protected-path strings as a real commit message, so it must NEVER be emitted via an inline
 bash `echo`/`printf`/heredoc. Either (a) the agent reports the message text directly in its own
@@ -690,32 +727,51 @@ process exits. The agent performs the actual token-content Write (Phase 10 step 
 flock is released, with the post-write HEAD-stability check from the Phase 3 reconciliation
 note.
 
-### Phase 9: Nested repo handling (M5)
+### Phase 9: Ordered repository transaction (normal mode)
 
-After committing in `${CONTROL_ROOT}`, check the nested repo:
+Run Phases 2–8 and 10 once for every `REPOSITORY_PLAN.repositories[]` entry in
+ascending `order`. Build an independent candidate set, message, lock, commit, and
+push-gate token for each repository. Append exactly one `repository_results` item
+per attempted or skipped entry:
 
-```bash
-git -C "${NESTED_REPO}" status --porcelain=v1
+```json
+{
+  "order": 0,
+  "repo_root": "<canonical root>",
+  "status": "committed | nothing_to_commit | failed | not_attempted",
+  "expected_head": "<plan CAS>",
+  "commit_sha": "<new SHA only when committed>",
+  "push_gate_written": true,
+  "failure_code": "<only when failed>",
+  "failure_reason": "<only when failed>"
+}
 ```
 
-If output is non-empty:
-- Repeat Phases 3–8 for `GIT_ROOT="${NESTED_REPO}"` (the resolved harness-home root)
-- Build an independent commit message (type/scope/summary derived from nested repo diff)
-- The lock for the nested repo uses the SAME relocated `/tmp` scheme as Phase 3,
-  keyed on the nested repo's toplevel (literal `/tmp` prefix — never a leading `${VAR}`):
-  ```bash
-  mkdir -p /tmp/agentic-commit/locks
-  REPO_HASH="$(printf '%s' "$(git -C "${NESTED_REPO}" rev-parse --show-toplevel)" | sha256sum | cut -c1-16)"
-  exec 9>"/tmp/agentic-commit/locks/${REPO_HASH}.lock"
-  ```
+Before the first commit, the dry-run/QA phase must already have reviewed exact
+patches for every repository group. This is a prepare/review barrier, not an
+atomic commit protocol. Independent Git repositories cannot share a ref
+transaction, so cross-repository atomicity is explicitly **not** claimed.
 
-If output is empty: print `Nested repo: no changes to commit.`
+On a failure before any repository commits, stop with `commit_status: failed`.
+On a failure after at least one repository commits, stop immediately with
+`commit_status: partially_committed`; preserve every successful SHA/token result,
+mark the failing entry, append all later entries as `not_attempted`, and return
+`remaining_repos`. Never reset/revert an earlier commit and never continue after a
+failure. This makes partial failure visible without inventing rollback safety.
 
-NEVER silently skip nested repo changes.
+When an entry has no eligible candidates, append `nothing_to_commit` and continue.
+If another repository still has eligible candidates, do **not** run the
+`nothing_to_commit_precommitted` recovery path for the clean entry. That prevents a
+retry after partial success from manufacturing an empty commit in a repository that
+already completed. Recovery is considered only when the entire newly planned
+transaction has no eligible candidates.
+
+Bulk mode retains its existing two-repository `${CONTROL_ROOT}` / `${NESTED_REPO}`
+loop and is not widened to the active Codex profile by this normal-task contract.
 
 ### Phase 10: Push-gate write (M9)
 
-After each successful commit (main and nested repo independently):
+After each successful commit (every admitted repository independently):
 
 Per the `## Command-line purity (anti-false-positive contract)` (rule CP-3), the push-gate
 token is a SEPARATE step from the `git commit` command, and its CONTENT is written to disk via
@@ -840,8 +896,8 @@ while ITERATION < MAX_ITERATIONS:
     # The user must stage and commit orphans manually.
     WARNING: bulk skipping orphan file <path> — no task-id affinity and no clear subsystem.
 
-    # Also handle nested repo in each iteration
-    Run nested repo check and commit (Phase 9) in each bulk iteration
+    # Also handle the legacy nested repo in each iteration
+    Run the legacy nested-repo phases in each bulk iteration
 ```
 
 ### Bulk termination
@@ -880,11 +936,13 @@ the full normal-mode workflow (Phases 1–10). One commit per task-id.
 
 A dry-run classifies + stages the candidate set (Phases 1–6 run normally) but stops BEFORE the
 commit: it does NOT execute `git commit` and does NOT write push-gate tokens. The staging merely
-materializes the plan — `/commit` Step 6b reviews each planned file STAGING-INDEPENDENTLY (per
-PLAN_GROUPS path: `git diff --text HEAD` plus an on-disk read, NEVER `git diff --cached`, because
-in multi-group bulk only the last group is left staged); Step 6c then unstages the staged set
-rename-aware (`git restore --staged`) on REJECT / dry-run-stop, or the real Step 7 dispatch
-commits the QA-approved set (bounded by `QA_APPROVED_FILES`).
+materializes the plan — emit `PLAN_GROUPS` entries as `{repo, commit_message, files[]}`, then
+restore the exact pre-run index bytes (Phase 4). `/commit` Step 6 review phase reviews each
+planned file STAGING-INDEPENDENTLY (per PLAN_GROUPS path: `git diff --text HEAD` plus an
+on-disk read, NEVER `git diff --cached`, because in multi-group bulk only the last group is
+left staged); the Step 6 decision phase then unstages the staged set rename-aware
+(`git restore --staged`) on REJECT / dry-run-stop, or the real Step 7 dispatch commits the
+QA-approved set (bounded by `QA_APPROVED_FILES`).
 
 All "print the commit message" steps below are subject to CP-1 (dry-run carries the same
 documentation-phrase / protected-path risk as a real message): surface each message either
@@ -982,7 +1040,8 @@ parse the result without screen-scraping human-readable text.
 
 | Value | Meaning |
 |-------|---------|
-| `committed` | At least one git commit was successfully created and a push-gate token was written. |
+| `committed` | Every planned repository reached `committed` or `nothing_to_commit`, at least one commit was created, and every created commit has a push-gate token. |
+| `partially_committed` | At least one planned repository commit landed, then a later repository failed; see `repository_results` and `remaining_repos`. No cross-repo rollback is claimed. |
 | `nothing_to_commit` | No files remained after exclusions (candidate set empty). |
 | `nothing_to_commit_precommitted` | Candidate set was empty AND the HEAD commit was an auto-bulk commit that already covered the task cycle files. |
 | `dryrun` | `DRYRUN=true` was set; no commit was attempted; the staged file list was printed. |
@@ -1025,7 +1084,7 @@ Trigger `nothing_to_commit_precommitted` only when ALL THREE conditions hold:
 When all three conditions above hold AND `BULK=false` AND `DRYRUN=false`, do NOT return `nothing_to_commit_precommitted`.
 Instead, execute the following recovery path to produce a task-attributed commit and push-gate token.
 
-**DRYRUN guard (NON-NEGOTIABLE)**: this recovery path NEVER executes under `DRYRUN=true`. /commit's Step 6a runs an internal `DRYRUN=true` pass purely to produce a staging plan for the QA gate; that pass MUST NOT commit (no `git commit --allow-empty`), MUST NOT write a push-gate token, and MUST NOT consume a commit grant. When `DRYRUN=true` and the three `nothing_to_commit_precommitted` conditions hold, report `nothing_to_commit_precommitted` (or `nothing_to_commit`) WITHOUT committing — do not enter the recovery steps below.
+**DRYRUN guard (NON-NEGOTIABLE)**: this recovery path NEVER executes under `DRYRUN=true`. /commit's Step 6 planning phase runs an internal `DRYRUN=true` pass purely to produce a staging plan for the QA gate; that pass MUST NOT commit (no `git commit --allow-empty`), MUST NOT write a push-gate token, and MUST NOT consume a commit grant. When `DRYRUN=true` and the three `nothing_to_commit_precommitted` conditions hold, report `nothing_to_commit_precommitted` (or `nothing_to_commit`) WITHOUT committing — do not enter the recovery steps below.
 
 **Recovery step 1: Range scan for pre-empted auto-bulk commits**
 
@@ -1146,6 +1205,7 @@ multi-repo setups).
 | `staging_error` | `git add` failed for one or more files in the classified set. | No |
 | `hook_blocked` | A non-grant PreToolUse hook (e.g. `pretool-bash-safety.sh`) blocked the commit command. | No |
 | `scope_violation` | The staged file set contained files outside the authorized task cycle scope. | No |
+| `repository_plan_invalid` | Plan schema/task/report digest/repository partition or repo/branch/HEAD CAS validation failed. | No; rebuild through `/commit` before any commit, or treat as partial after a landed commit. |
 | `push_gate_collision` | recovery commit succeeded but push-gate token write was skipped due to session collision (DO NOT rule 7) | No |
 | `push_gate_race` | commit succeeded but HEAD moved between the in-flock `COMMIT_SHA` capture and the post-flock token Write (Phase 3 reconciliation note / Phase 10 step 6); a stale token was NOT written | Yes (guarded) |
 
@@ -1161,17 +1221,35 @@ never an unbounded loop, and never a duplicate `git commit`.
 
 ```json
 {
-  "commit_status": "committed | nothing_to_commit | nothing_to_commit_precommitted | failed | dryrun",
+  "commit_status": "committed | partially_committed | nothing_to_commit | nothing_to_commit_precommitted | failed | dryrun",
+  "repository_results": [
+    {
+      "order": 0,
+      "repo_root": "<canonical path>",
+      "status": "committed | nothing_to_commit | failed | not_attempted",
+      "expected_head": "<plan SHA>",
+      "commit_sha": "<present only when committed>",
+      "push_gate_written": true,
+      "failure_code": "<present only when failed>",
+      "failure_reason": "<present only when failed>"
+    }
+  ],
+  "remaining_repos": ["<canonical paths; non-empty only when partially_committed>"],
   "auto_bulk_commits": [
     {"repo_root": "<path>", "branch": "<branch>", "sha": "<sha>"}
   ],
-  "failure_reason": "<human-readable string, present only when status=failed>",
-  "failure_code": "<code from table above, present only when status=failed>"
+  "failure_reason": "<human-readable string, present for failed or partially_committed>",
+  "failure_code": "<code from table above, present for failed or partially_committed>"
 }
 ```
 
-`auto_bulk_commits` is present (and non-empty) only when `commit_status = nothing_to_commit_precommitted`.
-`failure_reason` and `failure_code` are present only when `commit_status = failed`.
+`repository_results` is mandatory in normal mode, including `dryrun` (where each
+planned repository is represented without a commit SHA); it may be omitted only in
+legacy bulk mode. `remaining_repos` is present only for `partially_committed`.
+`auto_bulk_commits` is present (and non-empty) only when `commit_status =
+nothing_to_commit_precommitted`. Top-level `failure_reason` and `failure_code` are
+present for `failed` and `partially_committed`; the latter duplicates the first
+failed repository result for simple consumers.
 
 ### Structured output sentinel
 
@@ -1198,7 +1276,7 @@ manual intervention required — see `/commit` Step 7 status table for the
 
 ## Outputs
 
-- Real branch commit(s) in `${CONTROL_ROOT}` and optionally `~/.claude/`
+- Real branch commit(s) in the normal-mode `REPOSITORY_PLAN` (or the legacy bulk control+nested pair)
 - Push-gate token at `/tmp/agentic-commit/push/<repo-hash>/<branch-encoded>.json`
 - Synthetic close-annotations at `${CONTROL_ROOT}/docs/dev/close-report-bulk-*.md` (bulk mode only)
 - Human-readable summary of what was committed

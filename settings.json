@@ -420,10 +420,6 @@
           {
             "type": "command",
             "command": "python3 \"$HOME/.claude/hooks/pretool-block-background-tasks.py\""
-          },
-          {
-            "type": "command",
-            "command": "python3 \"$HOME/.claude/hooks/pretool-restart-grant-guard.py\""
           }
         ]
       },

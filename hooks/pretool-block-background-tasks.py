@@ -9,8 +9,8 @@ ENFORCEMENT (default disposition matters):
   - Bash → foreground is the default, so only an explicit True is a background
     task (exit 2); absent/False is fine.
   - SendMessage / Workflow → inherently background with NO synchronous mode.
-    SendMessage is blocked except for the exact, human-authenticated /restart
-    recovery message to a transcript-discovered interrupted agent id. Workflow
+    SendMessage is blocked except for the exact, validated /restart recovery
+    message to a transcript-discovered, pending interrupted agent id. Workflow
     remains blocked outright.
   - Subagents (agent_id truthy) → exit 0 (no restriction)
   - /do consent active → exit 0 (bypass)
@@ -152,8 +152,8 @@ def main():
         sys.exit(0)
 
     # SendMessage is normally forbidden because it resumes a child asynchronously.
-    # The sole exception is /restart: a UserPromptSubmit capability plus an exact
-    # parent-transcript binding proves that `to` is an interrupted existing agent,
+    # The sole exception is /restart: an intended UserPromptSubmit-issued capability
+    # plus runtime checks bind `to` to a pending, interrupted parent-transcript agent,
     # and the message body must byte-match the fixed recovery prompt. Import inside
     # the branch so a missing helper cannot wedge unrelated tools; SendMessage fails
     # CLOSED to its prior always-blocked disposition on any helper error.

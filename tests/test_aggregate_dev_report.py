@@ -21,12 +21,18 @@ main = _mod.main
 _is_worker_for_task = _mod._is_worker_for_task
 _validate_shards = _mod._validate_shards
 
+_HOOK = Path(__file__).parent.parent / "hooks" / "pretool-aggregate-check.py"
+_hook_spec = importlib.util.spec_from_file_location("pretool_aggregate_check", _HOOK)
+_hook_mod = importlib.util.module_from_spec(_hook_spec)
+_hook_spec.loader.exec_module(_hook_mod)
+
 # ---------------------------------------------------------------------------
 # Shared constants
 # ---------------------------------------------------------------------------
 
 BARE_TID = "20260101-120000"
 OTHER_TID = "20260202-090000"
+PREFIXED_TID = f"dev-{BARE_TID}"
 
 
 # ---------------------------------------------------------------------------
@@ -165,6 +171,67 @@ class TestTaskFirstNaming:
         assert out["action"] == "skipped"
 
 
+class TestPrefixedTaskIdNaming:
+    def test_real_dev_lane_shards_aggregate_and_canonical_rerun_validates(
+        self, project_dir: Path, capsys: pytest.CaptureFixture
+    ):
+        dev_dir = project_dir / "docs" / "dev"
+        for worker in ("a", "b", "c"):
+            _write(
+                dev_dir,
+                f"dev-report-{PREFIXED_TID}-{worker}.json",
+                _good_shard(f"{PREFIXED_TID}-{worker}"),
+            )
+
+        assert main(["--task-id", PREFIXED_TID]) == 0
+        first = json.loads(capsys.readouterr().out)
+        assert first["action"] == "aggregated"
+        canonical = dev_dir / f"dev-report-{PREFIXED_TID}.json"
+        assert canonical.exists()
+        assert sorted(json.loads(canonical.read_text())["parallel_workers"]) == ["a", "b", "c"]
+
+        assert main(["--task-id", PREFIXED_TID]) == 0
+        rerun = json.loads(capsys.readouterr().out)
+        assert rerun["action"] == "validated"
+
+    def test_prefixed_shards_do_not_bleed_into_bare_task(
+        self, project_dir: Path, capsys: pytest.CaptureFixture
+    ):
+        dev_dir = project_dir / "docs" / "dev"
+        for worker in ("a", "b", "c"):
+            _write(dev_dir, f"dev-report-{PREFIXED_TID}-{worker}.json", _good_shard(PREFIXED_TID))
+        assert main(["--task-id", BARE_TID]) == 0
+        assert json.loads(capsys.readouterr().out)["action"] == "skipped"
+
+    def test_script_and_hook_prefixed_classifiers_are_identical(self):
+        assert _mod.PREFIXED_WORKER_RE.pattern == _hook_mod.PREFIXED_WORKER_RE.pattern
+        assert _mod.PREFIXED_CANONICAL_RE.pattern == _hook_mod.PREFIXED_CANONICAL_RE.pattern
+        assert _hook_mod._classify_filename(
+            f"dev-report-{PREFIXED_TID}-a.json"
+        ) == ("worker", PREFIXED_TID, "a")
+        assert _hook_mod._classify_filename(
+            f"dev-report-{PREFIXED_TID}.json"
+        ) == ("canonical", PREFIXED_TID)
+
+    def test_hook_scopes_real_lane_artifact_to_prefixed_cycle(self, project_dir: Path):
+        dev_dir = project_dir / "docs" / "dev"
+        for worker in ("a", "b", "c"):
+            _write(dev_dir, f"dev-report-{PREFIXED_TID}-{worker}.json", _good_shard())
+        workers, canonical = _hook_mod._scan_dev_dir(dev_dir)
+        scope = _hook_mod._resolve_scope_task_ids(
+            _hook_mod._collect_anchored_task_ids(
+                f"Read context-{PREFIXED_TID}-a.json before QA"
+            )
+        )
+        assert scope == [PREFIXED_TID]
+        assert sorted(workers[PREFIXED_TID]) == ["a", "b", "c"]
+        assert _hook_mod._collect_violations(workers, canonical, scope)
+
+        _write(dev_dir, f"dev-report-{PREFIXED_TID}.json", _good_shard(PREFIXED_TID))
+        workers, canonical = _hook_mod._scan_dev_dir(dev_dir)
+        assert not _hook_mod._collect_violations(workers, canonical, scope)
+
+
 # ---------------------------------------------------------------------------
 # AC4: canonical present + 2 matching shards → action=validated
 # ---------------------------------------------------------------------------
@@ -176,17 +243,126 @@ class TestCanonicalPresent:
         dev_dir = project_dir / "docs" / "dev"
         _write(dev_dir, f"dev-report-A-{BARE_TID}.json", _good_shard())
         _write(dev_dir, f"dev-report-B-{BARE_TID}.json", _good_shard())
-        canonical_data = {
-            "task_id": BARE_TID,
-            "parallel_workers": ["A", "B"],
-            "baseline_head_sha": "abc123def456",
-        }
-        _write(dev_dir, f"dev-report-{BARE_TID}.json", canonical_data)
+
+        assert main(["--task-id", BARE_TID]) == 0
+        assert json.loads(capsys.readouterr().out)["action"] == "aggregated"
 
         rc = main(["--task-id", BARE_TID])
         assert rc == 0
         out = json.loads(capsys.readouterr().out)
         assert out["action"] == "validated"
+
+    def test_duplicate_worker_labels_are_rejected(self):
+        errors = _validate_shards(
+            [("a", _good_shard()), ("a", _good_shard())], BARE_TID
+        )
+        assert any("duplicate worker labels" in error for error in errors)
+
+
+class TestCanonicalContentFreshness:
+    def test_legacy_canonical_without_content_provenance_is_regenerated(
+        self, project_dir: Path, capsys: pytest.CaptureFixture
+    ):
+        dev_dir = project_dir / "docs" / "dev"
+        _write(dev_dir, f"dev-report-A-{BARE_TID}.json", _good_shard())
+        _write(dev_dir, f"dev-report-B-{BARE_TID}.json", _good_shard())
+        _write(
+            dev_dir,
+            f"dev-report-{BARE_TID}.json",
+            {
+                "task_id": BARE_TID,
+                "parallel_workers": ["A", "B"],
+                "baseline_head_sha": "abc123def456",
+            },
+        )
+
+        assert main(["--task-id", BARE_TID]) == 0
+        result = json.loads(capsys.readouterr().out)
+        assert result["action"] == "aggregated"
+        canonical = json.loads((dev_dir / f"dev-report-{BARE_TID}.json").read_text())
+        assert canonical["shard_provenance"]["algorithm"] == "sha256-canonical-json-v1"
+
+    def test_same_workers_and_baseline_refresh_when_owned_content_changes(
+        self, project_dir: Path, capsys: pytest.CaptureFixture
+    ):
+        dev_dir = project_dir / "docs" / "dev"
+        shard_a = _good_shard()
+        shard_a["owned_files"] = [{"path": "alpha.py", "sha256": "before"}]
+        path_a = _write(dev_dir, f"dev-report-A-{BARE_TID}.json", shard_a)
+        _write(dev_dir, f"dev-report-B-{BARE_TID}.json", _good_shard())
+
+        assert main(["--task-id", BARE_TID]) == 0
+        assert json.loads(capsys.readouterr().out)["action"] == "aggregated"
+        canonical_path = dev_dir / f"dev-report-{BARE_TID}.json"
+        before = json.loads(canonical_path.read_text())
+
+        shard_a["owned_files"] = [{"path": "alpha.py", "sha256": "after"}]
+        path_a.write_text(json.dumps(shard_a))
+        assert main(["--task-id", BARE_TID]) == 0
+        refreshed = json.loads(capsys.readouterr().out)
+        assert refreshed["action"] == "aggregated"
+        assert "Refreshed stale canonical" in refreshed["reason"]
+
+        after = json.loads(canonical_path.read_text())
+        assert after["parallel_workers"] == before["parallel_workers"] == ["A", "B"]
+        assert after["baseline_head_sha"] == before["baseline_head_sha"]
+        assert after["shard_provenance"] != before["shard_provenance"]
+        assert main(["--task-id", BARE_TID]) == 0
+        assert json.loads(capsys.readouterr().out)["action"] == "validated"
+
+    def test_changed_r01_declared_paths_are_unioned_after_regeneration(
+        self, project_dir: Path, capsys: pytest.CaptureFixture
+    ):
+        dev_dir = project_dir / "docs" / "dev"
+        r01 = _good_shard(f"{PREFIXED_TID}-r01")
+        r01["dev"]["files_modified"] = ["hooks/pretool-workflow-gate.py"]
+        r01_path = _write(dev_dir, f"dev-report-{PREFIXED_TID}-r01.json", r01)
+        for worker in ("r02", "r03"):
+            _write(
+                dev_dir,
+                f"dev-report-{PREFIXED_TID}-{worker}.json",
+                _good_shard(f"{PREFIXED_TID}-{worker}"),
+            )
+
+        assert main(["--task-id", PREFIXED_TID]) == 0
+        assert json.loads(capsys.readouterr().out)["action"] == "aggregated"
+
+        current_r01_paths = [
+            "tests/generated/dev-20260722-081544-r01/ac_harness.py",
+            "docs/dev/dev-report-dev-20260722-081544-r01.json",
+            "/root/.codex/claude-compat/isomorphism-report.json",
+        ]
+        r01["dev"]["files_modified"].extend(current_r01_paths)
+        r01["owned_files"] = [{"path": path, "ownership": "current"} for path in current_r01_paths]
+        r01_path.write_text(json.dumps(r01))
+
+        assert main(["--task-id", PREFIXED_TID]) == 0
+        refreshed = json.loads(capsys.readouterr().out)
+        assert refreshed["action"] == "aggregated"
+        canonical = json.loads(
+            (dev_dir / f"dev-report-{PREFIXED_TID}.json").read_text()
+        )
+        assert set(current_r01_paths) <= set(canonical["dev"]["files_modified"])
+
+    def test_dry_run_reports_stale_content_without_rewriting(
+        self, project_dir: Path, capsys: pytest.CaptureFixture
+    ):
+        dev_dir = project_dir / "docs" / "dev"
+        shard_a = _good_shard()
+        path_a = _write(dev_dir, f"dev-report-A-{BARE_TID}.json", shard_a)
+        _write(dev_dir, f"dev-report-B-{BARE_TID}.json", _good_shard())
+        assert main(["--task-id", BARE_TID]) == 0
+        capsys.readouterr()
+        canonical_path = dev_dir / f"dev-report-{BARE_TID}.json"
+        before = canonical_path.read_bytes()
+
+        shard_a["dev"]["files_modified"].append("new-current-path.py")
+        path_a.write_text(json.dumps(shard_a))
+        assert main(["--task-id", BARE_TID, "--dry-run"]) == 0
+        result = json.loads(capsys.readouterr().out)
+        assert result["action"] == "skipped"
+        assert "would be refreshed" in result["reason"]
+        assert canonical_path.read_bytes() == before
 
 
 # ---------------------------------------------------------------------------

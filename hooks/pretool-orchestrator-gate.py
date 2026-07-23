@@ -205,7 +205,7 @@ def main():
 
     # /restart exception: multiple SendMessage calls are required to resume ALL
     # interrupted children, so the normal once-per-tool-per-turn budget cannot be
-    # used. The shared verifier binds the human UserPromptSubmit grant, parent
+    # used. The shared verifier binds the session capability, parent
     # transcript, target agent id, prepared state, and exact fixed message. Any
     # failure falls through to the ordinary non-whitelist budget; the independent
     # background-task hook then denies the unauthorized send.

@@ -82,6 +82,39 @@ class TestKillPidRule:
 class TestGitResetExecutionClassification:
     """The structured view distinguishes executed argv from inert data."""
 
+    @staticmethod
+    def _fallback_hook(tmp_path, malformed_classifier=False):
+        hook_dir = tmp_path / "hooks"
+        (hook_dir / "lib").mkdir(parents=True)
+        shutil.copy2(HOOK, hook_dir / "pretool-bash-safety.sh")
+        shutil.copy2(
+            os.path.join(os.path.dirname(HOOK), "lib", "bash_context_strip.py"),
+            hook_dir / "lib" / "bash_context_strip.py",
+        )
+        if malformed_classifier:
+            classifier = hook_dir / "lib" / "git_command_classifier.py"
+            classifier.write_text("print('not-json')\n")
+        return str(hook_dir / "pretool-bash-safety.sh")
+
+    @staticmethod
+    def _assert_fallback_boundary(hook):
+        dangerous = (
+            "git reset --hard HEAD~1",
+            "/usr/bin/git reset --hard HEAD~1",
+        )
+        inert = (
+            "rg -n 'git reset --hard' docs",
+            "rg -n '/usr/bin/git reset --hard' docs",
+            "python3 checker.py 'git reset --hard'",
+            "python3 checker.py '/usr/bin/git reset --hard'",
+            'echo "never run git reset --hard in shared repositories"',
+            'echo "never run /usr/bin/git reset --hard in shared repositories"',
+        )
+        for command in dangerous:
+            assert run_hook(command, hook) == BLOCK, command
+        for command in inert:
+            assert run_hook(command, hook) == ALLOW, command
+
     def test_git_reset_hard_is_blocked(self):
         assert run_hook("git reset --hard HEAD~1") == BLOCK
 
@@ -98,26 +131,12 @@ class TestGitResetExecutionClassification:
         assert run_hook('echo "never run git reset --hard in shared repositories"') == ALLOW
 
     def test_missing_classifier_falls_back_closed_for_real_execution(self, tmp_path):
-        hook_dir = tmp_path / "hooks"
-        (hook_dir / "lib").mkdir(parents=True)
-        shutil.copy2(HOOK, hook_dir / "pretool-bash-safety.sh")
-        shutil.copy2(
-            os.path.join(os.path.dirname(HOOK), "lib", "bash_context_strip.py"),
-            hook_dir / "lib" / "bash_context_strip.py",
-        )
-        assert run_hook("git reset --hard HEAD~1", str(hook_dir / "pretool-bash-safety.sh")) == BLOCK
+        hook = self._fallback_hook(tmp_path)
+        self._assert_fallback_boundary(hook)
 
     def test_malformed_classifier_falls_back_closed_for_real_execution(self, tmp_path):
-        hook_dir = tmp_path / "hooks"
-        (hook_dir / "lib").mkdir(parents=True)
-        shutil.copy2(HOOK, hook_dir / "pretool-bash-safety.sh")
-        shutil.copy2(
-            os.path.join(os.path.dirname(HOOK), "lib", "bash_context_strip.py"),
-            hook_dir / "lib" / "bash_context_strip.py",
-        )
-        classifier = hook_dir / "lib" / "git_command_classifier.py"
-        classifier.write_text("print('not-json')\n")
-        assert run_hook("git reset --hard HEAD~1", str(hook_dir / "pretool-bash-safety.sh")) == BLOCK
+        hook = self._fallback_hook(tmp_path, malformed_classifier=True)
+        self._assert_fallback_boundary(hook)
 
 
 # ── Layer 1.F false-positive regression: protected name in quoted arg ─────────

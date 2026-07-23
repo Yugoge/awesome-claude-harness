@@ -1,14 +1,14 @@
 # commands
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-07-20T10:43:53Z*
-**Total entries**: 19
+*Last updated: 2026-07-21T13:43:20Z*
+**Total entries**: 18
 **Convention**: kebab
 
 ## Tree
 ```
 commands/
-├── `allow.md` - Single-use break-glass — bypass safety blocks for the next matching bash command this turn; requires an explicit narrow selector. Forms — /allow <command...> (literal, upgraded to regex only when it contains true regex metacharacters), /allow --tool <literal> (always literal, regex off), or /allow re:<anchored-regex> (explicit regex, must be anchored). Bare /allow with no argument is refused. Trailing tokens become an audit-log comment. Auto-expires at stop.
+├── `allow.md` - Single-use break-glass for a declared grant-aware safety hook; it never overrides a settings DENY. Requires an explicit narrow selector. Forms — /allow <command...> (literal, upgraded to regex only when it contains true regex metacharacters), /allow --tool <literal> (always literal, regex off), or /allow re:<anchored-regex> (explicit regex, must be anchored). Bare /allow with no argument is refused. Trailing tokens become an audit-log comment. Auto-expires at stop.
 ├── `checkpoint.md` - Checkpoint Command
 ├── `clean.md` - Aggressive project cleanup - normalize docs structure, archive everything, delete one-time scripts/tests. Pass --codex to enable adversarial codex consultation on cleanliness-inspector and style-inspector; default is self-review only.
 ├── `close.md` - Close the current dev cycle (agent infers task-id from conversation). QA evaluates Workflow Integrity bullets and returns CLOSE YES/NO. Pass --codex to enable multi-round QA-codex debate; default is QA-only single-round assessment. Append --force to skip the debate entirely.
@@ -22,7 +22,6 @@ commands/
 ├── `pull.md` - Pull Command
 ├── `push.md` - Push Command
 ├── `redev.md` - dev workflow, context-light invocation — same task semantics as /dev, but assumes the /dev workflow instructions are already loaded. Pass --codex to enable adversarial codex consultation on each subagent's draft; default is self-review only.
-├── `restart.md` - Resume every quota-interrupted subagent in the current Claude Code parent session from its original transcript and agent ID.
 ├── `spec-update.md` - Continuation spec update or temp session note (was /update then /spec-continue — renamed to avoid collision with MAP's /update portfolio mutation command)
 ├── `spec.md` - Create spec files for any dev workflow (/dev, /dev-overnight, or standalone reference). Pass --codex to enable adversarial codex consultation on each spec-subagent / QA dispatch; default is self-review only.
 ├── `stop.md` - Cancel active overnight time-lock + workflow-enforce so the session can terminate normally. User-invoked only — agents cannot self-stop.

@@ -47,11 +47,29 @@ SID=$(echo "$INPUT" | python3 -c \
 # EVERY refusal path so no stale broad grant can survive an /allow that does
 # not result in a written narrow grant. Defining property: on ANY /allow that
 # does not write a narrow grant, no stale grant may survive.
+STALE_GRANT_CLEARED=false
 _remove_stale_grants() {
   local task_id="${CLAUDE_TASK_ID:-${SID}}"
-  rm -f "/tmp/claude-bash-allowlist-${SID}.json" 2>/dev/null
-  rm -f "/tmp/claude-grants/${task_id}.json" 2>/dev/null
-  rm -f "/tmp/claude-grants/${task_id}"-*.json 2>/dev/null
+  local grant_path
+  local had_stale_grant=false
+  local cleanup_failed=false
+  for grant_path in \
+    "/tmp/claude-bash-allowlist-${SID}.json" \
+    "/tmp/claude-grants/${task_id}.json" \
+    "/tmp/claude-grants/${task_id}"-*.json
+  do
+    if [ -e "$grant_path" ] || [ -L "$grant_path" ]; then
+      had_stale_grant=true
+      if ! rm -f "$grant_path" 2>/dev/null; then
+        cleanup_failed=true
+      fi
+    fi
+  done
+  if [ "$had_stale_grant" = "true" ] && [ "$cleanup_failed" = "false" ]; then
+    STALE_GRANT_CLEARED=true
+  else
+    STALE_GRANT_CLEARED=false
+  fi
 }
 
 # Only fire on `/allow ` prefix (case-sensitive). Trailing space required so
@@ -336,14 +354,32 @@ if [ "$PARSED_STATUS" != "GRANT" ]; then
   exit 0
 fi
 
-# Settings DENY is an absolute, non-grantable policy.  Resolve it before either
-# the legacy or structured one-use grant is written.  This intentionally uses
-# the same generated Bash-pattern projection as the active Codex permission
-# shim: Claude's trailing `:*` delimiter becomes a shell glob suffix.  ASK is
-# not handled here; the runtime's single human confirmation path owns ASK.
-HOOKS_DIR_ALLOW="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-SETTINGS_PATH_ALLOW="$(dirname "$HOOKS_DIR_ALLOW")/settings.json"
-ALLOW_POLICY_RESULT=$(ALLOW_PATTERN="$PATTERN" ALLOW_IS_REGEX="$IS_REGEX" SETTINGS_PATH="$SETTINGS_PATH_ALLOW" python3 - <<'PY' 2>/dev/null
+# Proactively reject known DENYs from every deterministically observable
+# file-based permission source before either one-use grant is written.  This
+# covers user, shared-project, and local-project settings; managed, SDK, and
+# other runtime-only sources are not observable at UserPromptSubmit, so final
+# effective-permission enforcement remains the runtime's responsibility.  ASK
+# is not handled here; the runtime's human confirmation path owns ASK.
+CLAUDE_HOME_ALLOW="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
+PYTHON_BIN_ALLOW="${CLAUDE_PYTHON_BIN:-${CLAUDE_HOME_ALLOW}/venv/bin/python}"
+if [ ! -x "$PYTHON_BIN_ALLOW" ]; then
+  _remove_stale_grants
+  echo "[allow] REFUSED: configured Python interpreter is unavailable; settings policy could not prove this selector grantable." >&2
+  exit 0
+fi
+PROJECT_DIR_ALLOW="${CLAUDE_PROJECT_DIR:-}"
+if [ -z "$PROJECT_DIR_ALLOW" ]; then
+  PROJECT_DIR_ALLOW=$(printf '%s' "$INPUT" | "$PYTHON_BIN_ALLOW" -c \
+    "import json,sys; d=json.load(sys.stdin); print(d.get('cwd','') or '')" \
+    2>/dev/null)
+fi
+[ -z "$PROJECT_DIR_ALLOW" ] && PROJECT_DIR_ALLOW="$PWD"
+
+ALLOW_POLICY_RESULT=$(ALLOW_PATTERN="$PATTERN" ALLOW_IS_REGEX="$IS_REGEX" \
+  USER_SETTINGS_PATH="${CLAUDE_HOME_ALLOW%/}/settings.json" \
+  PROJECT_SHARED_SETTINGS_PATH="${PROJECT_DIR_ALLOW%/}/.claude/settings.json" \
+  PROJECT_LOCAL_SETTINGS_PATH="${PROJECT_DIR_ALLOW%/}/.claude/settings.local.json" \
+  "$PYTHON_BIN_ALLOW" - <<'PY' 2>/dev/null
 import fnmatch
 import json
 import os
@@ -351,7 +387,6 @@ import re
 
 pattern = os.environ.get("ALLOW_PATTERN", "")
 is_regex = os.environ.get("ALLOW_IS_REGEX") == "true"
-settings_path = os.environ.get("SETTINGS_PATH", "")
 
 tool = "Bash"
 value = pattern
@@ -360,12 +395,45 @@ if parts and parts[0] in {"Write", "Edit", "MultiEdit", "NotebookEdit", "Read"}:
     tool = parts[0]
     value = parts[1] if len(parts) > 1 else ""
 
-try:
-    settings = json.load(open(settings_path, encoding="utf-8"))
-    deny = settings.get("permissions", {}).get("deny", [])
-except Exception:
-    print("INCONCLUSIVE")
-    raise SystemExit(0)
+source_specs = (
+    ("user", os.environ.get("USER_SETTINGS_PATH", "")),
+    ("project_shared", os.environ.get("PROJECT_SHARED_SETTINGS_PATH", "")),
+    ("project_local", os.environ.get("PROJECT_LOCAL_SETTINGS_PATH", "")),
+)
+deny = []
+seen_paths = set()
+for origin, settings_path in source_specs:
+    if not settings_path:
+        continue
+    canonical_path = os.path.realpath(settings_path)
+    if canonical_path in seen_paths:
+        continue
+    seen_paths.add(canonical_path)
+    if not os.path.lexists(settings_path):
+        continue
+    if not os.path.isfile(settings_path):
+        print("INCONCLUSIVE")
+        raise SystemExit(0)
+    try:
+        with open(settings_path, encoding="utf-8") as settings_file:
+            settings = json.load(settings_file)
+    except Exception:
+        print("INCONCLUSIVE")
+        raise SystemExit(0)
+    if not isinstance(settings, dict):
+        print("INCONCLUSIVE")
+        raise SystemExit(0)
+    permissions = settings.get("permissions", {})
+    if not isinstance(permissions, dict):
+        print("INCONCLUSIVE")
+        raise SystemExit(0)
+    source_deny = permissions.get("deny", [])
+    if not isinstance(source_deny, list) or not all(
+        isinstance(entry, str) for entry in source_deny
+    ):
+        print("INCONCLUSIVE")
+        raise SystemExit(0)
+    deny.extend((origin, entry) for entry in source_deny)
 
 def anchored_literal_head(expr):
     """Return the concrete command head already required by /allow's regex gate."""
@@ -396,15 +464,28 @@ def anchored_literal_head(expr):
     head = "".join(out).strip()
     return head or None
 
+def claude_permission_matches(command, rule_pattern):
+    """Match one value using Claude's Bash permission wildcard boundary.
+
+    A trailing `:*` is equivalent to a trailing space wildcard: it matches the
+    declared command itself or that command followed by a separate argument.
+    It is not a raw prefix wildcard (`dd:*` must not match `ddrescue`).  Other
+    `*` characters retain Claude's ordinary any-sequence glob behavior.
+    """
+    if rule_pattern.endswith(":*"):
+        command_pattern = rule_pattern[:-2]
+        return (
+            fnmatch.fnmatchcase(command, command_pattern)
+            or fnmatch.fnmatchcase(command, command_pattern + " *")
+        )
+    return fnmatch.fnmatchcase(command, rule_pattern)
+
 regex_head = anchored_literal_head(pattern) if is_regex else None
 if is_regex and regex_head is None:
     print("INCONCLUSIVE")
     raise SystemExit(0)
 
-for source in deny:
-    if not isinstance(source, str):
-        print("INCONCLUSIVE")
-        raise SystemExit(0)
+for origin, source in deny:
     match = re.fullmatch(r"([^()]+)(?:\((.*)\))?", source)
     if not match:
         print("INCONCLUSIVE")
@@ -413,34 +494,50 @@ for source in deny:
     if rule_tool != tool:
         continue
     if rule_pattern is None:
-        print("DENY\t" + source)
+        print("DENY\t" + origin + "\t" + source)
         raise SystemExit(0)
-    normalized = rule_pattern[:-2] if rule_pattern.endswith(":*") else rule_pattern
-    if rule_pattern.endswith(":*") and not normalized.endswith("*"):
-        normalized += "*"
     if is_regex:
-        deny_head = re.split(r"[*?\[({|$^]", normalized, maxsplit=1)[0].strip()
-        if deny_head and (regex_head.startswith(deny_head) or deny_head.startswith(regex_head)):
-            print("DENY\t" + source)
+        # The parser's earlier regex gate requires a concrete command head
+        # followed by a real whitespace/end boundary.  Evaluate that concrete
+        # head with the same permission matcher; mere string-prefix overlap is
+        # never conclusive (`ddrescue` is not `dd`, `sudoersctl` is not `sudo`).
+        if claude_permission_matches(regex_head, rule_pattern):
+            print("DENY\t" + origin + "\t" + source)
             raise SystemExit(0)
-    elif fnmatch.fnmatchcase(value, normalized):
-        print("DENY\t" + source)
+    elif tool == "Bash" and claude_permission_matches(value, rule_pattern):
+        print("DENY\t" + origin + "\t" + source)
+        raise SystemExit(0)
+    elif tool != "Bash" and fnmatch.fnmatchcase(value, rule_pattern):
+        print("DENY\t" + origin + "\t" + source)
         raise SystemExit(0)
 print("PASS")
 PY
 )
 case "$ALLOW_POLICY_RESULT" in
   DENY$'\t'*)
+    DENY_DETAIL="${ALLOW_POLICY_RESULT#*$'\t'}"
+    DENY_SOURCE_ORIGIN="${DENY_DETAIL%%$'\t'*}"
+    DENY_MATCHED_RULE="${DENY_DETAIL#*$'\t'}"
     _remove_stale_grants
-    echo "[allow] REFUSED: selector is covered by an absolute settings DENY and is not grantable." >&2
-    echo "[allow] No grant was issued or claimed. Run a different non-denied operation, or perform the denied action outside the agent policy boundary." >&2
+    echo "[allow] REFUSED: selector is covered by a known file-based absolute settings DENY and is not grantable." >&2
+    echo "[allow] decision_class=hard_deny" >&2
+    echo "[allow] decision_actor=file_based_settings" >&2
+    printf '[allow] source_origin=%s\n' "$DENY_SOURCE_ORIGIN" >&2
+    printf '[allow] matched_rule=%s\n' "$DENY_MATCHED_RULE" >&2
+    echo "[allow] grant_written=false" >&2
+    echo "[allow] grant_consumed=false" >&2
+    echo "[allow] retry_with_allow=false" >&2
+    echo "[allow] earlier_pending_grant_cleared=${STALE_GRANT_CLEARED}" >&2
+    echo "[allow] Repeating /allow cannot override the matched rule." >&2
+    echo "[allow] Recovery options: use only a genuinely semantically safer operation that does not perform the denied action; ask the human user to execute the operation manually outside this agent session; ask the human user to explicitly change the permission policy, including its Claude/Codex parity consequences; or abandon the operation. The agent must not use a syntactic rewrite, wrapper, intermediary, or other bypass." >&2
+    echo "[allow] Runtime effective-permission enforcement remains final for sources not observable during this preflight." >&2
     exit 0
     ;;
   PASS)
     ;;
   *)
     _remove_stale_grants
-    echo "[allow] REFUSED: settings policy could not prove this selector grantable; no grant was issued." >&2
+    echo "[allow] REFUSED: a participating file-based settings source could not be evaluated; no grant was issued. Runtime effective-permission enforcement remains final." >&2
     exit 0
     ;;
 esac

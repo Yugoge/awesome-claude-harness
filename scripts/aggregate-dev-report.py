@@ -5,15 +5,14 @@ Scans docs/dev/ for per-worker shard dev-reports matching a given task-id,
 validates consistency across shards, and writes a canonical aggregate
 docs/dev/dev-report-<task-id>.json.
 
-Classification logic (NON_WORKER_LABELS, NON_WORKER_LABEL_RE, both regex
+Classification logic (NON_WORKER_LABELS, NON_WORKER_LABEL_RE, and all filename
 patterns) mirrors hooks/pretool-aggregate-check.py exactly — do NOT diverge.
 
 Shard scanning uses the bare YYYYMMDD-HHMMSS timestamp as the scan key for
 the standard shard patterns (PER_WORKER_ROLE_FIRST_RE, PER_WORKER_TASK_FIRST_RE).
-If task_id has a non-timestamp prefix or suffix (e.g. "dev-20260524-170335"),
-those extra shards are found via the same pattern match since the bare timestamp
-is used for the pattern's task_id group.  When task_id itself IS exactly a bare
-timestamp (^[0-9]{8}-[0-9]{6}$), the standard patterns cover all cases.
+The active adapter's `dev-<timestamp>` IDs use explicit prefixed-worker patterns;
+the canonical prefixed filename is excluded before legacy role-first matching.
+Bare timestamp role-first/task-first behavior remains unchanged.
 
 Usage:
     python3 scripts/aggregate-dev-report.py --task-id <TASK_ID>
@@ -32,16 +31,28 @@ stderr (on non-zero exit):
 """
 
 import argparse
+import hashlib
 import json
 import os
 import re
 import sys
+import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
 # ---------------------------------------------------------------------------
 # Filename patterns — MUST mirror hooks/pretool-aggregate-check.py exactly.
 # ---------------------------------------------------------------------------
+
+# Active /dev adapter naming: dev-report-dev-<task-id>-<lane>.json.
+PREFIXED_WORKER_RE = re.compile(
+    r"^dev-report-(?P<task_id>dev-\d{8}-\d{6})-(?P<worker>[A-Za-z0-9][A-Za-z0-9.\-]*)\.json$"
+)
+
+# Active /dev canonical: dev-report-dev-<task-id>.json.
+PREFIXED_CANONICAL_RE = re.compile(
+    r"^dev-report-(?P<task_id>dev-\d{8}-\d{6})\.json$"
+)
 
 # Per-worker filename — role-first naming: dev-report-<role>-<task-id>.json
 PER_WORKER_ROLE_FIRST_RE = re.compile(
@@ -109,7 +120,23 @@ def _is_worker_for_task(filename: str, target_bare_tid: str, original_task_id: s
       role-first pattern dev-report-<role>-<bare_tid>.json is still a valid
       shard naming for this task (role acts as prefix), so we allow it.
     """
-    # Canonical must be excluded from worker matches.
+    # Prefixed canonical must be excluded before legacy role-first matching,
+    # where its `dev` prefix would otherwise look like a worker role.
+    m_prefixed_canonical = PREFIXED_CANONICAL_RE.match(filename)
+    if m_prefixed_canonical is not None:
+        return False, None
+
+    m_prefixed_worker = PREFIXED_WORKER_RE.match(filename)
+    if m_prefixed_worker is not None:
+        if m_prefixed_worker.group("task_id") != original_task_id:
+            return False, None
+        worker = m_prefixed_worker.group("worker")
+        worker_lc = worker.lower()
+        if worker_lc in NON_WORKER_LABELS or NON_WORKER_LABEL_RE.match(worker_lc):
+            return False, None
+        return True, worker
+
+    # Bare canonical must be excluded from worker matches.
     if CANONICAL_RE.match(filename):
         return False, None
 
@@ -186,6 +213,10 @@ def _validate_shards(shards: list[tuple[str, dict]], task_id: str) -> list[str]:
     baseline_dirty: str | None = None
     m_target = re.search(r"(\d{8}-\d{6})", task_id)
     normalized_target = m_target.group(1) if m_target else task_id
+    labels = [label for label, _ in shards]
+    duplicate_labels = sorted({label for label in labels if labels.count(label) > 1})
+    if duplicate_labels:
+        errors.append(f"duplicate worker labels are ambiguous: {duplicate_labels}")
 
     for label, data in shards:
         # Require non-empty task_id or request_id.
@@ -264,6 +295,74 @@ def _union_list(shards: list[tuple[str, dict]], key_path: list[str]) -> list:
     return result
 
 
+def _canonical_json_bytes(value: object) -> bytes:
+    """Encode a value deterministically for content provenance."""
+    return json.dumps(
+        value,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+
+
+def _build_shard_provenance(shards: list[tuple[str, dict]]) -> dict:
+    """Return deterministic whole-content provenance for validated shards.
+
+    Worker IDs and the shared baseline are insufficient freshness evidence:
+    completed shards can later gain owned paths or refreshed evidence without
+    changing either value. Hashing normalized parsed JSON also avoids treating
+    inconsequential whitespace or object-key order as a semantic shard change.
+    """
+    records = [
+        {
+            "worker": label,
+            "content_sha256": hashlib.sha256(_canonical_json_bytes(data)).hexdigest(),
+        }
+        for label, data in shards
+    ]
+    return {
+        "algorithm": "sha256-canonical-json-v1",
+        "shards": records,
+        "aggregate_sha256": hashlib.sha256(_canonical_json_bytes(records)).hexdigest(),
+    }
+
+
+def _canonical_projection(document: dict) -> dict:
+    """Select deterministic aggregate fields; timestamp is intentionally excluded."""
+    keys = (
+        "request_id",
+        "task_id",
+        "baseline_head_sha",
+        "baseline_dirty_snapshot",
+        "dev_report_path",
+        "parallel_workers",
+        "dev",
+        "blocking_issues",
+        "recommendations",
+        "shard_provenance",
+    )
+    return {key: document.get(key) for key in keys}
+
+
+def _atomic_write_json(path: Path, document: dict) -> None:
+    """Durably replace path without deleting a stale canonical first."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, temporary_name = tempfile.mkstemp(
+        prefix=f".{path.name}.", suffix=".tmp", dir=path.parent
+    )
+    temporary_path = Path(temporary_name)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            json.dump(document, handle, indent=2, ensure_ascii=False)
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary_path, path)
+    except BaseException:
+        temporary_path.unlink(missing_ok=True)
+        raise
+
+
 def _build_aggregate(shards: list[tuple[str, dict]], task_id: str) -> dict:
     """Construct the canonical aggregate document from validated shards.
 
@@ -285,6 +384,7 @@ def _build_aggregate(shards: list[tuple[str, dict]], task_id: str) -> dict:
         "baseline_dirty_snapshot": dirty,
         "dev_report_path": f"docs/dev/dev-report-{task_id}.json",
         "parallel_workers": worker_ids,
+        "shard_provenance": _build_shard_provenance(shards),
         "dev": {
             "status": "completed",
             "tasks_completed": _union_list(shards, ["dev", "tasks_completed"]),
@@ -383,8 +483,8 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     if canonical_path.exists():
-        # Canonical already present.  Load it and compare deterministic fields
-        # (parallel_workers list and baseline_head_sha) against what the shards imply.
+        # Preserve the legacy fail-closed identity/baseline checks, then use
+        # whole-shard provenance plus the aggregate projection for freshness.
         try:
             existing = json.loads(canonical_path.read_text())
         except (OSError, json.JSONDecodeError) as exc:
@@ -401,6 +501,32 @@ def main(argv: list[str] | None = None) -> int:
                 f"baseline_sha {existing_sha!r} (expected {expected_sha!r})"
             )
             return 1
+        expected = _build_aggregate(loaded, task_id)
+        if _canonical_projection(existing) != _canonical_projection(expected):
+            if args.dry_run:
+                _emit_ok(
+                    action="skipped",
+                    output_path=str(canonical_path),
+                    reason=(
+                        f"Dry-run: existing canonical is stale and would be refreshed "
+                        f"from {len(loaded)} current shards for task-id {task_id!r}."
+                    ),
+                )
+                return 0
+            try:
+                _atomic_write_json(canonical_path, expected)
+            except OSError as exc:
+                _emit_error(f"Cannot refresh canonical aggregate at {canonical_path}: {exc}")
+                return 1
+            _emit_ok(
+                action="aggregated",
+                output_path=str(canonical_path),
+                reason=(
+                    f"Refreshed stale canonical from {len(loaded)} current shards "
+                    f"for task-id {task_id!r}."
+                ),
+            )
+            return 0
         _emit_ok(
             action="validated",
             output_path=str(canonical_path),
@@ -419,7 +545,7 @@ def main(argv: list[str] | None = None) -> int:
     # Build and write canonical aggregate.
     aggregate = _build_aggregate(loaded, task_id)
     try:
-        canonical_path.write_text(json.dumps(aggregate, indent=2))
+        _atomic_write_json(canonical_path, aggregate)
     except OSError as exc:
         _emit_error(f"Cannot write canonical aggregate to {canonical_path}: {exc}")
         return 1

@@ -17,15 +17,15 @@ All counts below were established by enumerating the actual repository, not copi
 |---|---|---|
 | **Subagents** (`agents/*.md`, excluding `INDEX.md`/`README.md`) | **23** | `ls agents/*.md \| grep -vE '/(INDEX\|README)\.md$'` |
 | **Slash commands** (`commands/*.md`, excluding `INDEX.md`/`README.md`) | **19** | `ls commands/*.md \| grep -vE '/(INDEX\|README)\.md$'` |
-| **Hook command entries wired** in `settings.json` | **71** | sum of `hooks[*][*].hooks[]` over all lifecycle events |
-| **Distinct hook files referenced** by `settings.json` | **70** (+1 = **71** paths) | unique `hooks/*.py\|*.sh` paths in those entries; the remaining wired executable is the non-hooks `scripts/canary-verify.sh` (SessionStart) → 71 distinct wired executable paths |
+| **Hook command entries wired** in `settings.json` | **70** | sum of `hooks[*][*].hooks[]` over all lifecycle events |
+| **Distinct hook files referenced** by `settings.json` | **69** (+1 = **70** paths) | unique `hooks/*.py\|*.sh` paths in those entries; the remaining wired executable is the non-hooks `scripts/canary-verify.sh` (SessionStart) → 70 distinct wired executable paths |
 | **Lifecycle events used** | **7** | keys of `settings.json.hooks` |
-| **Hook files present on disk** (`hooks/*.py` + `*.sh`, excl. `.bak`) | **92** | `find hooks -maxdepth 1 -type f \( -name '*.py' -o -name '*.sh' \)` |
+| **Hook files present on disk** (`hooks/*.py` + `*.sh`, excl. `.bak`) | **91** | `find hooks -maxdepth 1 -type f \( -name '*.py' -o -name '*.sh' \)` |
 | **Helper scripts** (`scripts/` top-level files, excl. `INDEX/README`) | **78** | `find scripts -maxdepth 1 -type f` minus docs |
 | **Skills** (`skills/*/` directories) | **8** | `ls -d skills/*/` |
 | `permissions.allow` / `deny` / `ask` entries | 162 / 96 / 30 | keys of `settings.json.permissions` |
 
-> Note on the hook count: more hook *files* exist on disk (**92**) than are *wired* (**70** hooks files / 71 executable entries). The unwired files are install scripts, libraries, legacy/`.bak` variants, and intentionally-staged hooks. The number that matters for behavior is **what `settings.json` wires**: 70 distinct `hooks/` files plus `scripts/canary-verify.sh` under `SessionStart` — **no referenced executable is duplicated**. The seven lifecycle events are `SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `Notification`, `Stop`, `SubagentStop`.
+> Note on the hook count: more hook *files* exist on disk (**91**) than are *wired* (**69** hooks files / 70 executable entries). The unwired files are install scripts, libraries, legacy/`.bak` variants, and intentionally-staged hooks. The number that matters for behavior is **what `settings.json` wires**: 69 distinct `hooks/` files plus `scripts/canary-verify.sh` under `SessionStart` — **no referenced executable is duplicated**. The seven lifecycle events are `SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `Notification`, `Stop`, `SubagentStop`.
 
 ### Per-event wiring (from `settings.json`)
 
@@ -33,7 +33,7 @@ All counts below were established by enumerating the actual repository, not copi
 |---|---|---|
 | `SessionStart` | 1 | 7 |
 | `UserPromptSubmit` | 4 | 6 |
-| `PreToolUse` | 22 | 31 |
+| `PreToolUse` | 22 | 30 |
 | `PostToolUse` | 8 | 15 |
 | `Notification` | 1 | 1 |
 | `Stop` | 1 | 4 |
@@ -161,7 +161,7 @@ Hooks are configured in `settings.json` under `hooks.<Event>[].{matcher, hooks[]
 - **`SessionStart`** — environment announce + git init + tmpfs banner + gitignore propagation + a canary self-check (`session-info.sh`, `session-git-init.sh`, `check-todo-md-sync.py`, `session-promote-hook.sh`, `scripts/canary-verify.sh`, `session-tmpfs-banner.sh`, `session-gitignore-propagate.sh`).
 - **`UserPromptSubmit`** — `prompt-workflow.py` (workflow detection + dev-registry pre-creation), `userprompt-doc-sync-check.py`, `userprompt-restart-authorize.py` (exact bare `/restart` capability), `userprompt-consent-allowlist.sh` (`/do`/`/allow` consent capture), tmpfs-pressure and bulk-commit-capability advisories.
 - **`PreToolUse`** — the safety + git + worktree + subagent-discipline gates (detailed in §6 and §7). Note: although `pretool-layer-match-gate.sh` is named with a `pretool-` prefix, it is actually wired under `SubagentStop`.
-- **`PostToolUse`** — `posttool-allowlist-consume.py` (single-use grant consumption), the todo trackers, `posttool-git-checkpoint.sh` + `posttool-doc-sync.py` + `posttool-command-frontmatter-validate.py` (on `Write|Edit|…`), the overnight loop/trace hooks (on `Agent`), and the authenticated restart-dispatch journal (on `SendMessage`).
+- **`PostToolUse`** — `posttool-allowlist-consume.py` (single-use grant consumption), the todo trackers, `posttool-git-checkpoint.sh` + `posttool-doc-sync.py` + `posttool-command-frontmatter-validate.py` (on `Write|Edit|…`), the overnight loop/trace hooks (on `Agent`), and the validated restart-dispatch journal (on `SendMessage`).
 - **`Stop`** — `stop-overnight-timelock.py` (refuses to end an overnight session before its deadline), `stop-spec-coverage-enforce.py`, `auto-commit.sh`, `stop-cleanup-allowlist.sh` (reap expired sentinels).
 - **`SubagentStop`** — diff-check, guard-integrity, layer-match-gate, restart response evidence, and the codex / e2e / cp enforcement hooks. (`subagentstop-cp-enforce.py` *is* wired here.)
 
@@ -169,7 +169,7 @@ Hooks are configured in `settings.json` under `hooks.<Event>[].{matcher, hooks[]
 
 `/restart` is a human-only control path for a parent session whose subagents were stopped by a Claude session/usage limit. `hooks/lib/subagent_restart.py` scans the full current parent transcript, binds every recoverable interrupted `Agent`/`Task` call to its original persisted `agent_id`, and requires explicit interruption evidence for background children rather than inferring failure from a missing completion notification. The command then resumes every pending ID through native `SendMessage`; it never reconstructs the work in a replacement `Agent` prompt.
 
-The exception is deliberately narrow. `userprompt-restart-authorize.py` mints a session/transcript-bound grant only for exact bare `/restart`; both the background-task and orchestrator gates accept only the fixed recovery message to a discovered candidate. `posttool-restart-sendmessage.py` journals successful dispatch, while `subagentstop-restart-track.py` records response evidence in `~/.claude/restart-state/<session-id>.json`. A dispatched agent is not sent a duplicate message; a later quota event makes that same ID retryable. Finalization is forbidden until every candidate has response evidence. On a runtime without native `SendMessage` and authoritative child lifecycle events, the command reports unsupported rather than claiming parity.
+The exception is deliberately narrow. The supported command surface is human-only (`disable-model-invocation: true` plus the `Skill(restart:*)` deny), and `userprompt-restart-authorize.py` is the intended issuer of a session/transcript-bound capability for an exact bare `/restart`. Literal-substring guarding of that issuer was removed: it blocked ordinary read-only work on files whose names appear throughout the docs while adding no real barrier (the credential mint is reachable by direct import). The threat model is unchanged — see §11. Independently, both runtime gates require the fixed recovery message, a current-transcript candidate, and pending prepared state. `posttool-restart-sendmessage.py` journals successful dispatch, while `subagentstop-restart-track.py` records response evidence in `~/.claude/restart-state/<session-id>.json`. A dispatched agent is not sent a duplicate message; a later quota event makes that same ID retryable. Finalization is forbidden until every candidate has response evidence. On a runtime without native `SendMessage` and authoritative child lifecycle events, the command reports unsupported rather than claiming parity.
 
 ---
 
@@ -348,10 +348,10 @@ flowchart LR
 ├── ARCHITECTURE.md          # this document
 ├── README.md                # overview / value-prop (hand-maintained; no AUTO block)
 ├── INDEX.md                 # top-level index
-├── settings.json            # 70 wired hook files / 71 entries across 7 lifecycle events; permissions; env
+├── settings.json            # 69 wired hook files / 70 entries across 7 lifecycle events; permissions; env
 ├── agents/                  # 23 subagent definitions  (+ INDEX.md, README.md)
 ├── commands/                # 19 slash-command workflows (+ INDEX.md, README.md)
-├── hooks/                   # enforcement layer (92 files on disk; 70 wired)
+├── hooks/                   # enforcement layer (91 files on disk; 69 wired)
 │   ├── lib/                 #   allowlist (sentinel grants), checkpoint-core, contract runtime, resolvers
 │   ├── doc_sync/            #   self-updating INDEX/README/CLAUDE regeneration package
 │   └── git-keystone/        #   git-native ref-transaction protection

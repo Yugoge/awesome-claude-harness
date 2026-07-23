@@ -6,8 +6,10 @@ disable-model-invocation: true
 # /commit
 
 Agentic commit command. Validates the close-gate (unless `--force`), then dispatches
-the `changelog-analyst` subagent to classify files, stage them, and create a real
-branch commit. Handles nested repo (`~/.claude/`) automatically.
+the `changelog-analyst` subagent to classify files, stage them, and create real
+branch commits. Normal task mode admits every task-owned path only after partitioning
+it across an explicit supported-repository set; the control checkout, `~/.claude`,
+and the active Codex profile checkout are supported without a project-root override.
 
 ## Usage
 
@@ -77,36 +79,101 @@ If `FORCE=true`: create `~/.claude/logs/` and append a line with ISO timestamp, 
 
 Print: `WARNING: --force bypasses close-gate. Audit entry written to ~/.claude/logs/commit-overrides.log.`
 
-### Step 5: Write commit grant and dispatch-snapshot manifest
+### Step 5: Write commit grant(s) after resolving the repository plan
 
 Before dispatching changelog-analyst, write the appropriate authorization token:
 - **BULK=true**: the multi-use bulk-commit capability is now minted by the TRUSTED `userprompt-bulk-commit-capability.py` hook the moment the human submits `/commit --bulk` (an LLM cannot self-invoke a `disable-model-invocation: true` slash command, so the prompt itself is the trust root). The orchestrator MUST NOT emit a Bash command to write the sentinel — that fragile exact-string path is retired.
   - PRIMARY: assume the hook already minted `/tmp/claude-bulk-commit-sentinel-<sid>-<nonce>.json` (origin `userpromptsubmit-hook`). Proceed to the **Step 6 pre-commit QA gate** (then Step 7) — `--bulk` is NOT exempt from the QA gate (only `FORCE=true` bypasses it). An optional read-only check is a single bare `ls /tmp/claude-bulk-commit-sentinel-*.json`.
   - NO FALLBACK: the canonical writer is no longer Bash-executable (Layer 1.F deny-only, stage-2). The hook is the SOLE minter. If the capability is absent, the `userprompt-bulk-commit-capability.py` hook is not yet active in this session — instruct the user to restart the session so settings.json reloads the hook, then re-run `/commit --bulk`. Do NOT attempt to write the sentinel via Bash.
-- **BULK=false**: write **two single-use commit grants** (one for root-repo commit or root-repo recovery, one for nested-repo recovery commit). Activate venv and run Python to write the grants. The script resolves the session ID from `CLAUDE_CODE_SESSION_ID` (primary) or `CLAUDE_SESSION_ID` (fallback). If neither is set, abort immediately with: `Cannot write commit grant: CLAUDE_CODE_SESSION_ID (and CLAUDE_SESSION_ID) not set. Invoke /commit from within a Claude Code session.` Do NOT proceed to dispatch changelog-analyst. If `sid` is set, generate `grant_path = /tmp/claude-commit-grant-{sid}-{nonce}.json` containing `task_id`, `sid`, `nonce`, `repo_root`, `branch`, `expected_head`, `expires_at`, and `created_at`. The guard IS registered and active — grant absence WILL block the changelog-analyst commit.
+- **BULK=false**: before writing any grant, build `REPOSITORY_PLAN` with
+  `scripts/resolve-commit-repos.py`. Pass the resolved control checkout and the
+  de-duplicated supported repositories: the real `~/.claude` checkout and, when
+  it is a Git checkout, the real active profile `${CODEX_HOME:-$HOME/.codex}`.
+  These are command-owned admissions, not values read from the dev-report. The
+  helper reads the canonical dev/do report, resolves every `files_modified[]` /
+  `files_created[]` path, assigns each path to its actual Git root (which must be
+  the deepest supported repository rather than an unadmitted nested checkout),
+  and fails closed if any owned path is outside that set. It emits an ordered JSON
+  plan whose per-repository entries bind `repo_root`, `branch`, `expected_head`,
+  task-owned repo-relative paths, and whether the control repo owns cycle artifacts.
+  A malformed report, unattached branch, absent HEAD, unsupported owner, or identity
+  mismatch aborts before grant issuance or staging.
 
-**Repo/branch/HEAD binding (2026-07-15 parity fix)**: `repo_root`, `branch`, and `expected_head` are captured by the grant-writer script at issuance time (via `git rev-parse --show-toplevel` / `git branch --show-current` / `git rev-parse HEAD`, scoped to `--repo-root` when given, else CWD) and are re-checked by the privilege guard against live git state at the moment the `git commit` actually runs — a grant issued for one repo/branch/commit is rejected if any of the three has changed. Because the orchestrator shell's CWD is CONTROL_ROOT for this entire command, the SECOND grant (nested-repo recovery) MUST pass `--repo-root` pointing at the nested repo — otherwise it would be bound to CONTROL_ROOT and the nested-repo recovery commit (which changelog-analyst always runs as `git -C "${NESTED_REPO}" commit ...`) would be rejected as a repository mismatch.
+  Resolve roots from the active environment, de-duplicate them through the helper,
+  and capture stdout without `eval`. Preserve the existing subproject resolution:
+  use the exact `docs/dev` directory that supplied `CLOSE_REPORT`, prefer this
+  task's dev-report there, then its do-report, and fall back to the control-root
+  `docs/dev` only when no close-report directory is available. Pass the selected
+  canonical report explicitly; never scan reports by mtime.
+
+  ```bash
+  CONTROL_ROOT="$(git rev-parse --show-toplevel)"
+  NESTED_REPO="$(git -C "$(realpath ~/.claude)" rev-parse --show-toplevel)"
+  ACTIVE_CODEX="${CODEX_HOME:-$HOME/.codex}"
+  TASK_DOCS_ROOT="${CLOSE_REPORT:+$(dirname "$CLOSE_REPORT")}"
+  TASK_DOCS_ROOT="${TASK_DOCS_ROOT:-$CONTROL_ROOT/docs/dev}"
+  if [ -f "$TASK_DOCS_ROOT/dev-report-$TASK_ID.json" ]; then
+      TASK_REPORT="$TASK_DOCS_ROOT/dev-report-$TASK_ID.json"
+  else
+      TASK_REPORT="$TASK_DOCS_ROOT/do-report-$TASK_ID.json"
+  fi
+  REPOSITORY_PLAN="$(python3 ~/.claude/scripts/resolve-commit-repos.py \
+      --task-id "$TASK_ID" --control-root "$CONTROL_ROOT" \
+      --report "$TASK_REPORT" \
+      --supported-repo "$NESTED_REPO" \
+      --supported-repo "$ACTIVE_CODEX")" || exit 2
+  ```
+
+  If the active profile path is not a Git checkout, omit only that
+  `--supported-repo` argument; an owned path resolving there will then fail
+  admission rather than being skipped. Do not use `CLAUDE_PROJECT_DIR`, a
+  user-supplied root override, or a report field to populate this list.
+
+  Write **one single-use commit grant per `REPOSITORY_PLAN.repositories[]` entry**,
+  always passing that entry's `repo_root` to `write-commit-grant.py`. Verify that
+  the writer's captured repo/branch/HEAD equals the plan entry; any mismatch revokes
+  all grants for this task/session and aborts. The script resolves the session ID
+  from `CLAUDE_CODE_SESSION_ID` (primary) or `CLAUDE_SESSION_ID` (fallback). If
+  neither is set, abort immediately with: `Cannot write commit grant:
+  CLAUDE_CODE_SESSION_ID (and CLAUDE_SESSION_ID) not set. Invoke /commit from
+  within a Claude Code session.` Do NOT dispatch changelog-analyst. Each grant is
+  still a single-repository capability; a report cannot mint admission for a new
+  repository.
+
+**Repo/branch/HEAD binding (2026-07-15 parity fix)**: `repo_root`, `branch`, and
+`expected_head` are captured by both the repository planner and the grant-writer,
+then re-checked by the privilege guard against live Git state when each commit runs.
+A grant issued for one repo/branch/commit is rejected if any of the three changes.
+Never omit `--repo-root`: every grant corresponds to exactly one plan entry.
 
 **Grant timestamp format (NON-NEGOTIABLE)**: The `expires_at` and `created_at` fields MUST be ISO-8601 strings produced from timezone-aware UTC datetimes (e.g. `(datetime.now(timezone.utc) + timedelta(minutes=30)).isoformat()` yields `"2026-05-19T16:18:56.123456+00:00"`). Epoch integers and epoch floats (e.g. `int(time.time()) + 600`, `time.time() + 600`) are NOT accepted by the privilege guard. The guard at `~/.claude/hooks/pretool-git-privilege-guard.py:377-384` parses these fields via `datetime.fromisoformat(end_str.replace('Z', '+00:00'))`; on `ValueError`/`TypeError`/`AttributeError` the helper `_end_time_passed` returns `True` (i.e. "already expired"), which silently rejects the grant and blocks the commit. The expiration window is 30 minutes from `created_at` — bake the offset into `expires_at` at write time. Activate the venv and invoke the grant-writer script (resolves `CLAUDE_SESSION_ID` from the environment, generates a fresh nonce, writes timezone-aware ISO-8601 `created_at` and `expires_at` on a 30-minute window, and emits the resulting grant path on stdout):
 
+For each entry, invoke the existing writer with the concrete admitted root:
+
 ```bash
-# First grant: covers the normal commit (root repo — Phases 3-8 run for CONTROL_ROOT
-# before NESTED_REPO). --repo-root omitted: defaults to CWD, which is already
-# CONTROL_ROOT for this orchestrator shell.
-source venv/bin/activate && python3 ~/.claude/scripts/write-commit-grant.py --task-id "$TASK_ID"
-# Second grant: covers nested-repo recovery commit when nothing_to_commit_precommitted is
-# detected in the nested repo — the first grant is consumed by the root-repo commit (or
-# root-repo recovery commit); the second grant is available for the nested-repo recovery.
-# If only one repo needs a recovery commit, the second grant expires unused (30-min TTL).
-# --repo-root is REQUIRED here (see Repo/branch/HEAD binding note above): this orchestrator
-# shell's CWD is CONTROL_ROOT, not the nested repo, so the grant must be told explicitly
-# which repo it authorizes.
-source venv/bin/activate && python3 ~/.claude/scripts/write-commit-grant.py --task-id "$TASK_ID" --repo-root "$(realpath ~/.claude)"
+source venv/bin/activate && python3 ~/.claude/scripts/write-commit-grant.py \
+    --task-id "$TASK_ID" --repo-root "$PLANNED_REPO_ROOT"
 ```
+
+Do not flatten the plan into one grant and do not infer repositories from current
+dirty status. Unused per-repository grants expire normally or are revoked on a stop path.
 
 Both `created_at` and `expires_at` MUST match the regex `^20\d{2}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(\+\d{2}:\d{2}|Z)$`. Do NOT substitute `time.time()`, `int(time.time())`, or `datetime.utcnow()` (the last returns a naive datetime whose `.isoformat()` omits the TZ offset and falls into the naive-comparison branch at line 382).
 
-Also write the dispatch-snapshot manifest (non-bulk mode only): activate venv and run Python to capture `git status --porcelain=v1` from both repos, then write `manifest_path = /tmp/claude-commit-manifest-{sid}.json` containing `session_id`, `task_id`, `dispatched_at`, and `files_at_dispatch`. Best-effort; skip entirely in bulk mode.
+Also write the dispatch-snapshot manifest (non-bulk mode only): capture
+`git status --porcelain=v1` independently for every admitted plan entry, then write
+`manifest_path = /tmp/claude-commit-manifest-{sid}.json` containing `session_id`,
+`task_id`, `dispatched_at`, the complete `REPOSITORY_PLAN` (including its report
+digest), and `files_at_dispatch` keyed by canonical repository root. Best-effort
+status capture is permitted, but losing or changing `REPOSITORY_PLAN` is not; abort
+instead. Bulk mode retains its existing control+nested behavior.
+
+**Transaction boundary:** Git provides no cross-repository atomic commit. Normal mode
+therefore uses an explicit ordered, non-atomic transaction: all repositories are
+planned and QA-reviewed before the first commit, each repository then receives its
+own lock/grant/CAS/commit/token transaction, and any later failure is surfaced as
+`partially_committed` with per-repository results. Never claim cross-repository atomicity,
+silently roll back an already-created commit, or hide a partially completed transaction.
 
 ### Step 6: Pre-commit QA review gate (skip if FORCE=true)
 
@@ -116,15 +183,15 @@ A QA agent reviews **what is actually about to be committed** (each planned file
 
 Otherwise (applies to BOTH `BULK=false` and `BULK=true`):
 
-**Step 6a — Produce the staging plan (internal dry-run; plan-only).**
+**Step 6 — Planning phase (internal dry-run; plan-only).**
 Dispatch `changelog-analyst` (Agent, `subagent_type: changelog-analyst`) with the **same prompt as Step 7 but `DRYRUN=true`** (force dry-run regardless of the user's `--dry-run`). Under `DRYRUN=true` changelog-analyst classifies, stages the candidate set into the index, and STOPS before commit — it does NOT commit, write push-gate tokens, run any recovery commit, or consume the Step 5 grant (guaranteed by the DRYRUN guard in `agents/changelog-analyst.md` — the `nothing_to_commit_precommitted` recovery path is disabled under DRYRUN). Capture from its output:
 - `PLAN_GROUPS` — the per-proposed-commit groups, each `{repo, commit_message, files[]}` (one entry per intended commit; bulk yields several). **Preserve group boundaries — do NOT flatten across groups** (QA needs them to detect cross-task mixing).
 - `PLAN_FILES` — the union of all group files, per repo.
-- If the dry-run reports `nothing_to_commit` / empty plan: print `Nothing to commit — QA gate skipped.`; then **when `BULK=false`, revoke the Step 5 commit grant** (it will never be consumed — same Grant-hygiene rationale as Step 6c) via `source venv/bin/activate && python3 ~/.claude/scripts/write-commit-grant.py --task-id "$TASK_ID" --revoke-only` (skip in `BULK=true` — no per-task grant, empty TASK_ID); then proceed to Step 7 (which also no-ops). Do NOT dispatch QA on an empty plan.
+- If the dry-run reports `nothing_to_commit` / empty plan: print `Nothing to commit — QA gate skipped.`; then **when `BULK=false`, revoke the Step 5 commit grant** (it will never be consumed — same Grant-hygiene rationale as the Step 6 decision phase) via `source venv/bin/activate && python3 ~/.claude/scripts/write-commit-grant.py --task-id "$TASK_ID" --revoke-only` (skip in `BULK=true` — no per-task grant, empty TASK_ID); then proceed to Step 7 (which also no-ops). Do NOT dispatch QA on an empty plan.
 
 QA reviews each planned file's change **directly against HEAD** (staging-independent), NOT via `git diff --cached`. Rationale: in multi-group `--bulk`, changelog-analyst stages per subsystem group and Phase 4 unstages cross-group files each iteration, so after the dry-run only the LAST group remains staged — a `--cached` review would silently skip every earlier group while ALL groups still enter `QA_APPROVED_FILES` and get committed. Reviewing each `PLAN_GROUPS` file vs HEAD (or reading new files) covers ALL groups regardless of staging state.
 
-**Step 6b — QA reviews the planned set (vs HEAD, staging-independent).**
+**Step 6 — Review phase (vs HEAD, staging-independent).**
 Dispatch ONE QA subagent (Agent, `subagent_type: qa`). The dispatch prompt MUST include `codex_required: <QA_CODEX>` and `PLAN_GROUPS`, and instruct QA as follows:
 
 ```
@@ -182,7 +249,7 @@ Return, as the LAST line, EXACTLY one of:
   COMMIT: REJECT - <one sentence naming the offending file(s) and why>
 ```
 
-**Step 6c — Gate decision.**
+**Step 6 — Decision phase.**
 
 **Grant hygiene (`BULK=false` stop paths only — REJECT, `--dry-run` stop, unparseable):** in addition to unstaging, when `BULK=false` REVOKE the Step 5 commit grant so a blocked/stopped gate never leaves live commit authorization lingering (30-min TTL):
 ```bash
@@ -201,16 +268,20 @@ source venv/bin/activate && python3 ~/.claude/scripts/write-commit-grant.py --ta
 
 Use the Agent tool with `subagent_type: changelog-analyst`. Pass a structured prompt:
 
-(substitute `<CONTROL_ROOT>` with the resolved control root — `$HOME` (the parent-repo working-tree root where the harness home lives), NOT an author-absolute literal — and `<NESTED_REPO>` with the realpath of the harness home `~/.claude` (`realpath ~/.claude`); inline the concrete resolved absolute values before dispatch):
+(substitute `<CONTROL_ROOT>` with the resolved control root and
+`<REPOSITORY_PLAN>` with the exact Step 5 JSON. `NESTED_REPO` remains present
+only for bulk-mode backward compatibility; normal mode's repository authority is
+the plan, not an author-absolute literal and not current dirty status):
 
 ```
 CONTROL_ROOT=<CONTROL_ROOT>
 NESTED_REPO=<NESTED_REPO>
+REPOSITORY_PLAN=<exact Step 5 JSON; empty only in bulk mode>
 TASK_ID=<resolved task-id or empty for bulk>
 BULK=<true|false>
 DRYRUN=<true|false>
 FORCE=<true|false>
-QA_APPROVED_FILES=<the Step 6c QA-approved file set, per repo; empty when FORCE=true (gate skipped)>
+QA_APPROVED_FILES=<the Step 6 decision-phase QA-approved file set, per repo; empty when FORCE=true (gate skipped)>
 
 You are the changelog-analyst subagent. Execute the commit workflow as specified
 in your agent definition (agents/changelog-analyst.md). Use the variables above
@@ -219,10 +290,11 @@ to guide your behavior.
 Constraints:
 - CONTROL_ROOT is the fallback root for dev-report resolution; changelog-analyst MUST apply the subproject path-walk (dirname-of-changed-files → commonpath → walk up to docs/dev/) and check the subproject docs/dev/ first before falling back to ${CONTROL_ROOT}/docs/dev/
 - GIT_ROOT must be computed per repo via `git rev-parse --show-toplevel`; never conflate with CONTROL_ROOT
+- In normal mode, process exactly `REPOSITORY_PLAN.repositories[]` in `order`. Verify the plan schema/task/report digest and each live repo/branch/HEAD before staging; never add a repo from the report or dirty status. Bulk mode alone retains the legacy CONTROL_ROOT + NESTED_REPO sweep.
 - **TOCTOU guard (pre-commit QA gate)**: when `QA_APPROVED_FILES` is non-empty (the Step 6 gate ran and approved this exact set), it is the commit CEILING. Re-classify normally, then intersect the classified set with `QA_APPROVED_FILES`: stage/commit ONLY files in both. If your fresh classification yields any file NOT in `QA_APPROVED_FILES` (working tree changed since QA review), do NOT commit the unreviewed file; if the divergence is material (a QA-approved file vanished, or a new non-approved candidate appeared that you would otherwise commit), ABORT with `failure_code: scope_violation` rather than commit an unreviewed set. When `QA_APPROVED_FILES` is empty (FORCE bypass), this guard does not apply.
 - Stage only files in the classified set; never use `git add -A` or `git add .`
 - Commit message must NOT match: `\bsync\b.*\buncommitted\b` or `chore\(claude\)\s*:\s*sync`
-- Handle nested repo at ~/.claude/ independently
+- Handle every admitted repository independently and return a `repository_results` entry for each one
 - Write push-gate token after each successful commit
 - Push-gate token path MUST be: `/tmp/agentic-commit/push/<sha256(os.path.realpath(GIT_ROOT))[:16]>/<BRANCH with / replaced by __>.json`
 - Push-gate validates commit_sha only; expires_at is no longer written or checked
@@ -233,12 +305,28 @@ Wait for changelog-analyst to complete. Echo its final status to the user.
 
 #### Changelog-analyst result handling and retry protocol
 
-Parse changelog-analyst's structured status output (see `agents/changelog-analyst.md` §Structured Final Status Output). The machine-readable JSON block contains `commit_status` and, when applicable, `failure_code`, `failure_reason`, and `auto_bulk_commits[]`.
+Parse changelog-analyst's structured status output (see `agents/changelog-analyst.md`
+§Structured Final Status Output). The machine-readable JSON block contains
+`commit_status`, `repository_results[]`, and, when applicable, `failure_code`,
+`failure_reason`, and `auto_bulk_commits[]`. In normal mode reject a result whose
+repository roots/order do not exactly equal `REPOSITORY_PLAN`.
 
 **Handle each commit_status value:**
 
 #### status = `committed`
-Continue to Step 8 normally.
+Require every planned repository to have a terminal `repository_results` entry
+(`committed` with commit SHA and push-gate written, or `nothing_to_commit`) and no
+failed/remaining entry. Continue to Step 8 normally.
+
+#### status = `partially_committed`
+
+At least one repository commit already landed and a later repository failed. Print
+the complete ordered `repository_results`, the first failure, and `remaining_repos`.
+Do NOT claim rollback or cross-repository atomicity; do NOT retry automatically and
+do NOT run Step 8. Revoke all still-unused grants for this task/session. The next
+normal `/commit <TASK_ID>` invocation may plan only the still-dirty owned material;
+repositories already clean must return `nothing_to_commit`, not receive a synthetic
+recovery commit merely because another planned repository remains dirty.
 
 #### status = `nothing_to_commit`
 Print: `WARNING: changelog-analyst found nothing to commit after exclusions. Verify the task cycle produced staged changes.`
@@ -253,23 +341,29 @@ Continue to Step 8.
 
 Check `failure_code`:
 
-**Retryable** (`grant_missing`, `grant_expired`, `grant_consumed`):
+**Retryable** (`grant_missing`, `grant_expired`, `grant_consumed`) only when
+`repository_results` proves that zero repository commits landed:
 
 Retry exactly once (max 1 retry):
-1. Revoke stale grants by running (use the literal `~/.claude/scripts/write-commit-grant.py` — `CONTROL_ROOT` is NOT bound in the orchestrator shell, so match Step 5's working literal path):
+1. Revoke stale grants, rebuild `REPOSITORY_PLAN`, and write a fresh bound grant
+   for every newly planned repository. Never refresh only the control-root grant:
    ```bash
    source venv/bin/activate && python3 ~/.claude/scripts/write-commit-grant.py \
-       --task-id "$TASK_ID" \
+       --task-id "$TASK_ID" --repo-root "$PLANNED_REPO_ROOT" \
        --revoke-existing-for-task "$TASK_ID"
    ```
-   This revokes any stale grant for `$TASK_ID` and writes a fresh one atomically.
-2. Re-dispatch changelog-analyst (same prompt as Step 7).
+   Revoke once, then issue the remaining repository grants without repeating the
+   revoke flag. This keeps all repo-bound capabilities available for one retry.
+2. Re-run the internal dry-run and QA because rebuilding the plan changes the CAS
+   snapshot, then re-dispatch changelog-analyst with that freshly approved plan.
 3. Parse the retry result using the same status table as the initial result:
    - If `commit_status = committed` or `commit_status = nothing_to_commit_precommitted`: continue to Step 8 (handle as specified above for each status).
    - If `commit_status = nothing_to_commit`: warn user and continue to Step 8.
    - If retry `commit_status = failed` or unknown: print `ERROR: changelog-analyst retry failed (failure_code: <code>, reason: <reason>). Manual intervention required.` and stop — do NOT proceed to Step 8.
 
-**Non-retryable** (`git_error`, `staging_error`, `hook_blocked`, `scope_violation`, or any other code):
+**Non-retryable** (`git_error`, `staging_error`, `hook_blocked`, `scope_violation`,
+`repository_plan_invalid`, or any other code; also every failure after one or more
+repository commits landed):
 
 Print: `ERROR: changelog-analyst failed with non-retryable failure_code: <failure_code>. Reason: <failure_reason>. Manual intervention required.`
 Stop — do NOT retry, do NOT proceed to Step 8.
