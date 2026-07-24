@@ -31,7 +31,6 @@ stderr (on non-zero exit):
 """
 
 import argparse
-import hashlib
 import json
 import os
 import re
