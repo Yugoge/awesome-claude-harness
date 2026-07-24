@@ -185,18 +185,18 @@ def test_command_and_analyst_contract_expose_partial_results() -> None:
     assert "not_attempted" in analyst
 
 
-def test_real_task_shape_is_consumable_by_control_and_profile_repos(tmp_path: Path) -> None:
+def test_real_task_shape_is_consumable_by_control_and_nested_repos(tmp_path: Path) -> None:
     control = _repo(tmp_path / "control")
-    profile = _repo(tmp_path / "codex-profile")
+    nested = _repo(tmp_path / "nested")
     (control / "hooks").mkdir()
     (control / "tests").mkdir()
-    (profile / "hooks").mkdir()
-    (profile / "tests").mkdir()
+    (nested / "hooks").mkdir()
+    (nested / "tests").mkdir()
     task_paths = [
         "hooks/pretool-workflow-gate.py",
-        "tests/test_codex_workflow_gate.py",
-        str(profile / "hooks" / "codex_native_harness.py"),
-        str(profile / "tests" / "test_codex_native_harness.py"),
+        "tests/test_workflow_gate.py",
+        str(nested / "hooks" / "extra_hook.py"),
+        str(nested / "tests" / "test_extra_hook.py"),
     ]
     for raw in task_paths:
         path = Path(raw) if Path(raw).is_absolute() else control / raw
@@ -207,16 +207,35 @@ def test_real_task_shape_is_consumable_by_control_and_profile_repos(tmp_path: Pa
     plan = MODULE.build_plan(
         task_id=task,
         control_root_arg=str(control),
-        supported_repo_args=[str(control), str(profile)],
+        supported_repo_args=[str(control), str(nested)],
         report_arg=str(report),
     )
 
     assert plan["repository_count"] == 2
     assert plan["repositories"][0]["owned_paths"] == [
         "hooks/pretool-workflow-gate.py",
-        "tests/test_codex_workflow_gate.py",
+        "tests/test_workflow_gate.py",
     ]
     assert plan["repositories"][1]["owned_paths"] == [
-        "hooks/codex_native_harness.py",
-        "tests/test_codex_native_harness.py",
+        "hooks/extra_hook.py",
+        "tests/test_extra_hook.py",
     ]
+
+
+def test_codex_profile_path_fails_closed(tmp_path: Path) -> None:
+    """A report owning a Codex-profile path is fail-closed when only control+nested
+    are admitted — the desired convergence behavior (Codex profile is no longer a
+    supported repository)."""
+    control = _repo(tmp_path / "control")
+    nested = _repo(tmp_path / "nested")
+    codex_profile = _repo(tmp_path / "codex-profile")
+    task = "task-codex-fail-closed"
+    report = _report(control, task, [str(codex_profile / "seed.txt")])
+
+    with pytest.raises(MODULE.PlanError, match="outside the supported repository set"):
+        MODULE.build_plan(
+            task_id=task,
+            control_root_arg=str(control),
+            supported_repo_args=[str(control), str(nested)],
+            report_arg=str(report),
+        )
