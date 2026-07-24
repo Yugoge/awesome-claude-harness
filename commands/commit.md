@@ -138,9 +138,7 @@ Before dispatching changelog-analyst, write the appropriate authorization token:
       --supported-repo "$NESTED_REPO")" || exit 2
   ```
 
-  If the active profile path is not a Git checkout, omit only that
-  `--supported-repo` argument; an owned path resolving there will then fail
-  admission rather than being skipped. Do not use `CLAUDE_PROJECT_DIR`, a
+  Do not use `CLAUDE_PROJECT_DIR`, a
   user-supplied root override, or a report field to populate this list.
 
   Write **one single-use commit grant per `REPOSITORY_PLAN.repositories[]` entry**,
