@@ -185,6 +185,10 @@
     {
       "task_id": "dev-20260722-081544-r01",
       "manifest_path": "tests/generated/dev-20260722-081544-r01/manifest.json"
+    },
+    {
+      "task_id": "dev-20260724-125216-b",
+      "manifest_path": "tests/generated/dev-20260724-125216-b/manifest.json"
     }
   ]
 }
