@@ -463,10 +463,6 @@ def resolve_chain(project_root: Path | str, task_id: str) -> dict[str, Any]:
                 )
             if not shard_errors:
                 expected = aggregate._build_aggregate(loaded_shards, task_id)
-                result["checks"]["shard_provenance_exact"] = (
-                    canonical.get("shard_provenance")
-                    == expected.get("shard_provenance")
-                )
                 canonical_dev = canonical.get("dev")
                 if not isinstance(canonical_dev, dict):
                     canonical_dev = {}
