@@ -306,7 +306,6 @@ def _canonical_projection(document: dict) -> dict:
         "dev",
         "blocking_issues",
         "recommendations",
-        "shard_provenance",
     )
     return {key: document.get(key) for key in keys}
 
