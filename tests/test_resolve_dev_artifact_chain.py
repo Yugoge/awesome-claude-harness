@@ -362,11 +362,28 @@ def test_changed_shard_makes_canonical_stale_without_rewriting_it(
     result = RESOLVER.resolve_chain(tmp_path, TASK_ID)
     assert result["status"] == "fail"
     assert {
-        "STALE_SHARD_PROVENANCE",
         "STALE_FILE_UNION",
         "STALE_CANONICAL",
     }.issubset(_error_codes(result))
     assert parents["dev"].read_bytes() == canonical_before
+
+
+def test_owned_files_only_change_stays_pass_without_provenance(
+    tmp_path: Path,
+) -> None:
+    # Restored post-rollback narrower freshness (consumer side): a shard change
+    # confined to the non-projected owned_files field leaves the canonical fresh
+    # and file unions exact, so the chain stays pass with no STALE_SHARD_PROVENANCE.
+    parents, lanes = _make_fanout(tmp_path)
+    dev_path = lanes[WORKERS[0]]["dev"]
+    shard = json.loads(dev_path.read_text(encoding="utf-8"))
+    shard["owned_files"] = {"alpha.py": "after"}
+    _write(dev_path, shard)
+    result = RESOLVER.resolve_chain(tmp_path, TASK_ID)
+    assert result["status"] == "pass"
+    assert result["checks"]["canonical_fresh"] is True
+    assert result["checks"]["file_unions_exact"] is True
+    assert "STALE_SHARD_PROVENANCE" not in _error_codes(result)
 
 
 def test_extra_shard_is_an_ambiguous_lane_set(tmp_path: Path) -> None:
