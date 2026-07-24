@@ -188,6 +188,7 @@ creates a missing canonical aggregate, validates an identical one, or refreshes
 a stale projection from the current lane reports:
 
 ```bash
+PROJECT_ROOT="${CLAUDE_PROJECT_DIR:-$(pwd)}"
 source ~/.claude/venv/bin/activate 2>/dev/null || true
 AGGREGATE_RESULT="$(cd "$PROJECT_ROOT" && \
   python3 scripts/aggregate-dev-report.py --task-id "$TASK_ID")" || exit 1

@@ -53,6 +53,7 @@ def test_close_resolves_explicit_and_bare_before_singular_assumptions() -> None:
     assert FIXED_ENTRYPOINT in resolution
     assert "both explicit `/close <task-id-or-path>` and bare `/close`" in resolution
     assert "before any parent ticket/context/QA assumption" in resolution
+    assert 'PROJECT_ROOT="${CLAUDE_PROJECT_DIR:-$(pwd)}"' in resolution
     aggregate = resolution.index("scripts/aggregate-dev-report.py")
     resolver = resolution.index("scripts/resolve-dev-artifact-chain.py")
     assert aggregate < resolver
@@ -117,10 +118,11 @@ def test_spec_update_consumes_lane_matrix_without_fake_parent_context() -> None:
         text.index("## Continuation-spec mode") :
         text.index("## Temp-note mode")
     ]
+    flat = _squash(section)
 
     assert FIXED_ENTRYPOINT in section
     assert "`artifact_paths`, `report_paths`, `qa_inputs`, and" in section
     assert "`lanes[]`" in section
-    assert "every lane ticket/context/dev/QA" in section
-    assert "must not create, a parent context" in section
-    assert "fabricate missing parent artifacts" in section
+    assert "every lane ticket/context/dev/QA" in flat
+    assert "must not create, a parent context" in flat
+    assert "fabricate missing parent artifacts" in flat
