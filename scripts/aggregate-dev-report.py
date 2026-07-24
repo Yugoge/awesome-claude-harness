@@ -294,38 +294,6 @@ def _union_list(shards: list[tuple[str, dict]], key_path: list[str]) -> list:
     return result
 
 
-def _canonical_json_bytes(value: object) -> bytes:
-    """Encode a value deterministically for content provenance."""
-    return json.dumps(
-        value,
-        ensure_ascii=False,
-        separators=(",", ":"),
-        sort_keys=True,
-    ).encode("utf-8")
-
-
-def _build_shard_provenance(shards: list[tuple[str, dict]]) -> dict:
-    """Return deterministic whole-content provenance for validated shards.
-
-    Worker IDs and the shared baseline are insufficient freshness evidence:
-    completed shards can later gain owned paths or refreshed evidence without
-    changing either value. Hashing normalized parsed JSON also avoids treating
-    inconsequential whitespace or object-key order as a semantic shard change.
-    """
-    records = [
-        {
-            "worker": label,
-            "content_sha256": hashlib.sha256(_canonical_json_bytes(data)).hexdigest(),
-        }
-        for label, data in shards
-    ]
-    return {
-        "algorithm": "sha256-canonical-json-v1",
-        "shards": records,
-        "aggregate_sha256": hashlib.sha256(_canonical_json_bytes(records)).hexdigest(),
-    }
-
-
 def _canonical_projection(document: dict) -> dict:
     """Select deterministic aggregate fields; timestamp is intentionally excluded."""
     keys = (
