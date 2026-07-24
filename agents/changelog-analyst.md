@@ -789,7 +789,7 @@ already completed. Recovery is considered only when the entire newly planned
 transaction has no eligible candidates.
 
 Bulk mode retains its existing two-repository `${CONTROL_ROOT}` / `${NESTED_REPO}`
-loop and is not widened to the active Codex profile by this normal-task contract.
+loop.
 
 ### Phase 10: Push-gate write (M9)
 
