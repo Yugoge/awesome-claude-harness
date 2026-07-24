@@ -135,8 +135,7 @@ Before dispatching changelog-analyst, write the appropriate authorization token:
   REPOSITORY_PLAN="$(python3 ~/.claude/scripts/resolve-commit-repos.py \
       --task-id "$TASK_ID" --control-root "$CONTROL_ROOT" \
       --report "$TASK_REPORT" \
-      --supported-repo "$NESTED_REPO" \
-      --supported-repo "$ACTIVE_CODEX")" || exit 2
+      --supported-repo "$NESTED_REPO")" || exit 2
   ```
 
   If the active profile path is not a Git checkout, omit only that
