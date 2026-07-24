@@ -121,7 +121,6 @@ Before dispatching changelog-analyst, write the appropriate authorization token:
   ```bash
   CONTROL_ROOT="$(git rev-parse --show-toplevel)"
   NESTED_REPO="$(git -C "$(realpath ~/.claude)" rev-parse --show-toplevel)"
-  ACTIVE_CODEX="${CODEX_HOME:-$HOME/.codex}"
   TASK_DOCS_ROOT="${CLOSE_REPORT:+$(dirname "$CLOSE_REPORT")}"
   TASK_DOCS_ROOT="${TASK_DOCS_ROOT:-$CONTROL_ROOT/docs/dev}"
   TASK_PROJECT_ROOT="$(dirname "$(dirname "$(realpath "$TASK_DOCS_ROOT")")")"
