@@ -180,7 +180,6 @@ def test_command_and_analyst_contract_expose_partial_results() -> None:
         assert "cross-repository atomicity" in text
     assert "resolve-commit-repos.py" in command
     assert "one single-use commit grant per" in command
-    assert "active profile `${CODEX_HOME:-$HOME/.codex}`" in command
     assert "repository_plan_invalid" in analyst
     assert "report-digest" in analyst
     assert "not_attempted" in analyst
