@@ -280,12 +280,13 @@ class TestCanonicalContentFreshness:
         assert main(["--task-id", BARE_TID]) == 0
         result = json.loads(capsys.readouterr().out)
         assert result["action"] == "aggregated"
-        canonical = json.loads((dev_dir / f"dev-report-{BARE_TID}.json").read_text())
-        assert canonical["shard_provenance"]["algorithm"] == "sha256-canonical-json-v1"
 
-    def test_same_workers_and_baseline_refresh_when_owned_content_changes(
+    def test_owned_files_only_change_keeps_canonical_validated(
         self, project_dir: Path, capsys: pytest.CaptureFixture
     ):
+        # Restored post-rollback narrower freshness: owned_files is NOT an
+        # aggregate-output field, so a shard change confined to it must not
+        # force a canonical rewrite (was provenance-driven before removal).
         dev_dir = project_dir / "docs" / "dev"
         shard_a = _good_shard()
         shard_a["owned_files"] = [{"path": "alpha.py", "sha256": "before"}]
@@ -295,21 +296,13 @@ class TestCanonicalContentFreshness:
         assert main(["--task-id", BARE_TID]) == 0
         assert json.loads(capsys.readouterr().out)["action"] == "aggregated"
         canonical_path = dev_dir / f"dev-report-{BARE_TID}.json"
-        before = json.loads(canonical_path.read_text())
+        before = canonical_path.read_bytes()
 
         shard_a["owned_files"] = [{"path": "alpha.py", "sha256": "after"}]
         path_a.write_text(json.dumps(shard_a))
         assert main(["--task-id", BARE_TID]) == 0
-        refreshed = json.loads(capsys.readouterr().out)
-        assert refreshed["action"] == "aggregated"
-        assert "Refreshed stale canonical" in refreshed["reason"]
-
-        after = json.loads(canonical_path.read_text())
-        assert after["parallel_workers"] == before["parallel_workers"] == ["A", "B"]
-        assert after["baseline_head_sha"] == before["baseline_head_sha"]
-        assert after["shard_provenance"] != before["shard_provenance"]
-        assert main(["--task-id", BARE_TID]) == 0
         assert json.loads(capsys.readouterr().out)["action"] == "validated"
+        assert canonical_path.read_bytes() == before
 
     def test_changed_r01_declared_paths_are_unioned_after_regeneration(
         self, project_dir: Path, capsys: pytest.CaptureFixture
