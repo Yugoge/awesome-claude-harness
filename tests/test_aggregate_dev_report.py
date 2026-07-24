@@ -117,6 +117,7 @@ class TestRoleFirstNaming:
         canonical = dev_dir / f"dev-report-{BARE_TID}.json"
         assert canonical.exists()
         data = json.loads(canonical.read_text())
+        assert "shard_provenance" not in data
         assert sorted(data["parallel_workers"]) == ["A", "B"]
         assert data["dev"]["status"] == "completed"
 
