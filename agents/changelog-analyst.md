@@ -17,6 +17,7 @@ your job is to classify, stage, commit, and write the push-gate token.
 CONTROL_ROOT=$HOME          # resolved control root (parent-repo working-tree root), supplied by the /commit Step 7 dispatch — NOT an author-absolute literal; fallback for dev-report lookup when subproject search yields nothing; close-report and ticket I/O always use CONTROL_ROOT
 NESTED_REPO=$(realpath ~/.claude)   # resolved harness-home (nested repo) root, supplied by the /commit dispatch
 REPOSITORY_PLAN=<JSON>      # normal-mode authority emitted by resolve-commit-repos.py; empty only in bulk mode
+ARTIFACT_CHAIN=<JSON>       # normal /dev artifact authority emitted by resolve-dev-artifact-chain.py; empty for bulk/source=do
 ```
 
 GIT_ROOT is computed per repo via `git rev-parse --show-toplevel`. NEVER conflate
@@ -119,6 +120,10 @@ handling are all unchanged).
 - `DRYRUN` — `true` | `false`
 - `FORCE` — `true` | `false`
 - `REPOSITORY_PLAN` — required in normal mode. Exact schema-1 JSON emitted by `resolve-commit-repos.py`, including task/report digest and ordered repository-specific repo/branch/HEAD/path bindings. Empty only in bulk mode, which preserves the legacy control+nested sweep.
+- `ARTIFACT_CHAIN` — required and non-empty for normal `/dev` mode. Exact
+  status=pass JSON emitted by
+  `scripts/resolve-dev-artifact-chain.py --task-id <id> --project-dir <root>`.
+  Empty only in bulk mode or when the normal source is a source=`do` report.
 - `QA_APPROVED_FILES` — optional; when non-empty, the commit CEILING set approved by /commit's Step 6 pre-commit QA gate. You MUST NOT stage or commit any file outside this set: re-classify normally, intersect the classified set with `QA_APPROVED_FILES`, and act only on the intersection. If your fresh classification would otherwise commit a file NOT in `QA_APPROVED_FILES` (working tree drifted since QA review) and the divergence is material, ABORT with `failure_code: scope_violation` rather than commit an unreviewed file. Empty/absent (e.g. FORCE bypass) → this ceiling does not apply.
 
 ---
@@ -143,6 +148,16 @@ nearest existing ancestor, require that root to be admitted, and require the
 resulting repo-relative partition to equal every entry's `owned_paths`.
 Any mismatch returns `failed/repository_plan_invalid` before index mutation. Do not
 silently rebuild or widen the plan inside this agent.
+
+When the plan's report is `dev-report-<TASK_ID>.json`, fail closed unless
+`ARTIFACT_CHAIN` is an object with `status == "pass"`, `task_id == TASK_ID`,
+`mode` in `{singular, fanout}`, and `canonical_dev_report` resolving to the same
+file as `REPOSITORY_PLAN.report_path`. Require arrays for `lanes`,
+`report_paths`, `artifact_paths`, `commit_whitelist_artifacts`, and `qa_inputs`.
+The passed chain result is the only authority for base cycle artifacts; do not
+re-scan lane suffixes or impose a singular parent shape. A source=`do` plan
+instead requires an empty `ARTIFACT_CHAIN` and follows the existing do-report
+path.
 
 After validation, set `GIT_ROOT` to each plan entry in ascending `order` and run
 `git -C "${GIT_ROOT}" status --porcelain=v1`. Parse each output. Extract ALL files
@@ -198,13 +213,15 @@ The candidate set is restricted to a **staging whitelist** consisting of:
 
 1. All files listed in `dev.files_modified[]` from the dev-report.
 2. All files listed in `dev.files_created[]` from the dev-report.
-3. Cycle artifacts matching **anchored patterns** for THIS `TASK_ID` under `docs/dev/`:
-   - `ticket-<TASK_ID>.md`
-   - `context-<TASK_ID>.json`
-   - `dev-report-<TASK_ID>.json`
-   - `do-report-<TASK_ID>.json`
-   - `qa-report-<TASK_ID>.json`
-   - `completion-<TASK_ID>.md`
+3. Every exact path in `ARTIFACT_CHAIN.commit_whitelist_artifacts`. This is
+   equivalent to the existing parent ticket/context/dev/QA/completion set when
+   `mode == "singular"`. When `mode == "fanout"` it instead admits every
+   resolver-validated lane ticket/context/dev/QA artifact plus the parent
+   canonical/completion and only those optional parent artifacts that were
+   actually present and validated. Do not glob lane suffixes, require missing
+   optional parents, or create pseudo-parent artifacts.
+4. Post-chain artifacts matching **anchored patterns** for THIS parent
+   `TASK_ID` under `docs/dev/`:
    - `close-report-<TASK_ID>.md`
    - `acceptance-criteria-<TASK_ID>.json`
    - `*-inspector-report-*<TASK_ID>*` (glob pattern under `docs/dev/` only)
@@ -217,14 +234,16 @@ staging** with a warning:
 
 **Staged-file count guard** (BULK=false only, when dev-report exists): after
 building the candidate set, count the files. If the count exceeds
-`len(dev.files_modified) + len(dev.files_created) + 30` (artifact overhead),
+`len(dev.files_modified) + len(dev.files_created) + 30 +
+max(0, len(ARTIFACT_CHAIN.commit_whitelist_artifacts) - 5)` (the original
+singular overhead plus only the validated fan-out expansion),
 **ABORT** with a scope violation report:
 `ABORT: scope violation — staged file count (<N>) exceeds whitelist limit (<limit>). Possible cross-session contamination.`
 Exit with `failure_code: scope_violation`.
 
 **When BULK=false AND no dev-report exists**: check for a do-report before aborting.
 
-- If `do-report-<TASK_ID>.json` exists at the resolved path (same subproject walk as dev-report, fallback to `CONTROL_ROOT/docs/dev/do-report-${TASK_ID}.json`) AND top-level `source == "do"`: use `do.files_modified[]` and `do.files_created[]` as the staging whitelist in place of `dev.files_modified[]` / `dev.files_created[]`. Apply the same anchored-pattern and staged-file-count-guard rules. Skip the provenance filter (do-reports have no `baseline_head_sha`). Use `do.summary` for commit message enrichment (M12 fallback text: `session changes [/do — no dev-report]`).
+- If `do-report-<TASK_ID>.json` exists at the resolved path (same subproject walk as dev-report, fallback to `CONTROL_ROOT/docs/dev/do-report-${TASK_ID}.json`) AND top-level `source == "do"`: use `do.files_modified[]` and `do.files_created[]` as the staging whitelist in place of `dev.files_modified[]` / `dev.files_created[]`. Preserve the pre-resolver do-path anchored set (`ticket-`, `context-`, `dev-report-`, `do-report-`, `qa-report-`, `completion-`, `close-report-`, `acceptance-criteria-`, and `*-inspector-report-*`, each scoped to the same parent `TASK_ID` under `docs/dev/`) and the original `+30` staged-file-count overhead. `ARTIFACT_CHAIN` must be empty: the resolver contract applies to `/dev`, not `/do`. Skip the provenance filter (do-reports have no `baseline_head_sha`). Use `do.summary` for commit message enrichment (M12 fallback text: `session changes [/do — no dev-report]`).
 
 - If neither dev-report NOR do-report exists: **ABORT** — do NOT stage any files.
   Print and exit immediately:
@@ -262,8 +281,9 @@ prints the resolved path to stdout (empty if not found). Assign the output to
 
 Extract `dev.files_modified[]` and `dev.files_created[]` arrays from the resolved path.
 When BULK=false, these arrays form the **primary staging whitelist** (along with
-anchored task-id cycle artifacts). When BULK=true, they are used for commit
-message enrichment only (existing behavior).
+the resolver-validated `commit_whitelist_artifacts` and anchored post-chain
+artifacts defined above). When BULK=true, they are used for commit message
+enrichment only (existing behavior).
 
 **Provenance filter** (apply before using dev-report for enrichment):
 
@@ -649,8 +669,10 @@ is unchanged.
 
 ### Phase 7: Orphan handling (S2)
 
-Files present in git status tracked-modified but absent from dev-report (if dev-report
-exists) AND not matching task-id anchored artifact patterns are **orphan files**.
+Files present in git status tracked-modified but absent from the dev-report (if
+it exists), absent from exact `ARTIFACT_CHAIN.commit_whitelist_artifacts`, and
+not matching the parent task's anchored post-chain artifact patterns are
+**orphan files**. The do path uses its preserved anchored set.
 
 **When BULK=false**: orphan files MUST NOT be committed. For each orphan file, print:
 `WARNING: skipping orphan file <path> — not in dev-report and not a task-id artifact for <TASK_ID> (possible cross-session contamination)`

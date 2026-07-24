@@ -99,6 +99,19 @@ Before dispatching changelog-analyst, write the appropriate authorization token:
   A malformed report, unattached branch, absent HEAD, unsupported owner, or identity
   mismatch aborts before grant issuance or staging.
 
+  For a normal `/dev` report, resolve its complete artifact chain before
+  repository planning. This is the same read-only authority used by `/dev`
+  completion and `/close`; do not reconstruct a singular whitelist from
+  filename patterns. The single executable invocation appears below only after
+  `TASK_DOCS_ROOT`, `TASK_PROJECT_ROOT`, and `TASK_REPORT` are bound.
+
+  The fixed entrypoint is
+  `scripts/resolve-dev-artifact-chain.py --task-id <id> --project-dir <root>`.
+  Require exit 0 and `status == "pass"` and retain the complete JSON. Exit 2 or
+  `status == "fail"` blocks before grants, dry-run staging, or dispatch. A
+  source=`do` report has no `/dev` chain, so set `ARTIFACT_CHAIN=""` and retain
+  the existing do-report whitelist path.
+
   Resolve roots from the active environment, de-duplicate them through the helper,
   and capture stdout without `eval`. Preserve the existing subproject resolution:
   use the exact `docs/dev` directory that supplied `CLOSE_REPORT`, prefer this
@@ -112,10 +125,14 @@ Before dispatching changelog-analyst, write the appropriate authorization token:
   ACTIVE_CODEX="${CODEX_HOME:-$HOME/.codex}"
   TASK_DOCS_ROOT="${CLOSE_REPORT:+$(dirname "$CLOSE_REPORT")}"
   TASK_DOCS_ROOT="${TASK_DOCS_ROOT:-$CONTROL_ROOT/docs/dev}"
+  TASK_PROJECT_ROOT="$(dirname "$(dirname "$(realpath "$TASK_DOCS_ROOT")")")"
   if [ -f "$TASK_DOCS_ROOT/dev-report-$TASK_ID.json" ]; then
       TASK_REPORT="$TASK_DOCS_ROOT/dev-report-$TASK_ID.json"
+      ARTIFACT_CHAIN="$(python3 scripts/resolve-dev-artifact-chain.py \
+          --task-id "$TASK_ID" --project-dir "$TASK_PROJECT_ROOT")" || exit 2
   else
       TASK_REPORT="$TASK_DOCS_ROOT/do-report-$TASK_ID.json"
+      ARTIFACT_CHAIN=""
   fi
   REPOSITORY_PLAN="$(python3 ~/.claude/scripts/resolve-commit-repos.py \
       --task-id "$TASK_ID" --control-root "$CONTROL_ROOT" \
@@ -164,9 +181,11 @@ Also write the dispatch-snapshot manifest (non-bulk mode only): capture
 `git status --porcelain=v1` independently for every admitted plan entry, then write
 `manifest_path = /tmp/claude-commit-manifest-{sid}.json` containing `session_id`,
 `task_id`, `dispatched_at`, the complete `REPOSITORY_PLAN` (including its report
-digest), and `files_at_dispatch` keyed by canonical repository root. Best-effort
-status capture is permitted, but losing or changing `REPOSITORY_PLAN` is not; abort
-instead. Bulk mode retains its existing control+nested behavior.
+digest), the exact `ARTIFACT_CHAIN` JSON (when non-empty), and
+`files_at_dispatch` keyed by canonical repository root. Best-effort status
+capture is permitted, but losing or changing `REPOSITORY_PLAN` or
+`ARTIFACT_CHAIN` is not; abort instead. Bulk mode retains its existing
+control+nested behavior.
 
 **Transaction boundary:** Git provides no cross-repository atomic commit. Normal mode
 therefore uses an explicit ordered, non-atomic transaction: all repositories are
@@ -269,14 +288,16 @@ source venv/bin/activate && python3 ~/.claude/scripts/write-commit-grant.py --ta
 Use the Agent tool with `subagent_type: changelog-analyst`. Pass a structured prompt:
 
 (substitute `<CONTROL_ROOT>` with the resolved control root and
-`<REPOSITORY_PLAN>` with the exact Step 5 JSON. `NESTED_REPO` remains present
-only for bulk-mode backward compatibility; normal mode's repository authority is
-the plan, not an author-absolute literal and not current dirty status):
+`<REPOSITORY_PLAN>` / `<ARTIFACT_CHAIN>` with the exact Step 5 JSON values.
+`NESTED_REPO` remains present only for bulk-mode backward compatibility; normal
+mode's repository authority is the plan, while its `/dev` cycle-artifact
+authority is the resolver result):
 
 ```
 CONTROL_ROOT=<CONTROL_ROOT>
 NESTED_REPO=<NESTED_REPO>
 REPOSITORY_PLAN=<exact Step 5 JSON; empty only in bulk mode>
+ARTIFACT_CHAIN=<exact resolver JSON; empty only for bulk or source=do>
 TASK_ID=<resolved task-id or empty for bulk>
 BULK=<true|false>
 DRYRUN=<true|false>
@@ -291,6 +312,11 @@ Constraints:
 - CONTROL_ROOT is the fallback root for dev-report resolution; changelog-analyst MUST apply the subproject path-walk (dirname-of-changed-files → commonpath → walk up to docs/dev/) and check the subproject docs/dev/ first before falling back to ${CONTROL_ROOT}/docs/dev/
 - GIT_ROOT must be computed per repo via `git rev-parse --show-toplevel`; never conflate with CONTROL_ROOT
 - In normal mode, process exactly `REPOSITORY_PLAN.repositories[]` in `order`. Verify the plan schema/task/report digest and each live repo/branch/HEAD before staging; never add a repo from the report or dirty status. Bulk mode alone retains the legacy CONTROL_ROOT + NESTED_REPO sweep.
+- In normal `/dev` mode, require `ARTIFACT_CHAIN.status == "pass"`,
+  `ARTIFACT_CHAIN.task_id == TASK_ID`, and its canonical report to equal the
+  plan's report. The base cycle-artifact whitelist is exactly
+  `ARTIFACT_CHAIN.commit_whitelist_artifacts`; this admits validated lane
+  artifacts in fan-out mode and never invents optional parent artifacts.
 - **TOCTOU guard (pre-commit QA gate)**: when `QA_APPROVED_FILES` is non-empty (the Step 6 gate ran and approved this exact set), it is the commit CEILING. Re-classify normally, then intersect the classified set with `QA_APPROVED_FILES`: stage/commit ONLY files in both. If your fresh classification yields any file NOT in `QA_APPROVED_FILES` (working tree changed since QA review), do NOT commit the unreviewed file; if the divergence is material (a QA-approved file vanished, or a new non-approved candidate appeared that you would otherwise commit), ABORT with `failure_code: scope_violation` rather than commit an unreviewed set. When `QA_APPROVED_FILES` is empty (FORCE bypass), this guard does not apply.
 - Stage only files in the classified set; never use `git add -A` or `git add .`
 - Commit message must NOT match: `\bsync\b.*\buncommitted\b` or `chore\(claude\)\s*:\s*sync`

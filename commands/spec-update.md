@@ -33,19 +33,29 @@ our `spec → dev → close → commit → push` workflow.
 Resolve the target spec:
 
 1. If `--spec <path>` is provided, update that spec.
-2. Else if the active `/dev` context has `spec_path` / `spec_file` /
-   `user_spec_path`, update that spec.
+2. Else if the active `/dev` artifact chain is available, inspect the validated
+   singular context or every fan-out `lanes[].context`; use `spec_path` /
+   `spec_file` / `user_spec_path` only when all populated values agree. A
+   fan-out cycle does not need, and this command must not create, a parent
+   context merely to resolve the spec.
 3. Else create a new spec from `~/.claude/templates/overnight-spec.md` at
    `${CLAUDE_PROJECT_DIR:-$(pwd)}/docs/dev/specs/spec-<YYYYMMDD-HHMMSS>.md`.
 
-Gather source artifacts from the active task-id when available:
+Gather source artifacts from the active task-id when available. For `/dev`
+work, invoke the shared read-only
+`scripts/resolve-dev-artifact-chain.py --task-id <id> --project-dir <root>`
+and retain its JSON even when `status == "fail"`: a failed continuation is
+precisely where `errors[]` and the existing lane matrix are useful. Use the
+existing paths named by `artifact_paths`, `report_paths`, `qa_inputs`, and
+`lanes[]`, plus `docs/dev/close-report-<task-id>.md` when present. In singular
+mode this is the existing parent chain; in fan-out mode it is every lane
+ticket/context/dev/QA plus the parent canonical/completion and only optional
+parent artifacts that actually exist. Never replace this with a singular
+parent context/QA assumption or fabricate missing parent artifacts.
 
-- `docs/dev/context-<task-id>.json`
-- `docs/dev/dev-report-<task-id>.json`
-- `docs/dev/qa-report-<task-id>.json`
-- `docs/dev/close-report-<task-id>.md`
-- `docs/dev/completion-<task-id>.md`
-- the user's latest message / explicit focus string
+For legacy or non-`/dev` work where no resolver result is available, retain the
+existing same-task parent context/dev-report/QA/close/completion lookup. Always
+include the user's latest message or explicit focus string.
 
 When updating an existing spec, append; never overwrite prior cycles. Determine
 the next cycle number as `max(existing "### Cycle N" headings across Sections

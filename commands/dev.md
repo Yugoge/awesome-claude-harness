@@ -1331,15 +1331,43 @@ Development completed successfully!
 
 **Codex-native artifact postcondition (hard check before completion)**:
 
-Before `/dev` or `/redev` may be treated as complete, the Codex harness MUST validate the resolved `<task-id>` against the canonical same-task artifacts on disk:
-- **Single-lane cycle (N == 1):** `docs/dev/ticket-<task-id>.md`, `context-<task-id>.json`, `dev-report-<task-id>.json`, `qa-report-<task-id>.json`, and `completion-<task-id>.md` all exist and are non-empty where applicable.
-- **Fan-out cycle (N > 1, per the Requirement Decomposition & Fan-Out step):** completion is satisfied by the per-lane lane-suffixed set — for EACH lane, `ticket-<task-id>-<lane>.md`, `context-<task-id>-<lane>.json`, `dev-report-<task-id>-<lane>.json`, and `qa-report-<task-id>-<lane>.json` exist and are non-empty — PLUS the canonical Step-11 aggregate `dev-report-<task-id>.json` at the parent task-id AND the single parent `completion-<task-id>.md`. A missing canonical (singular) `ticket-<task-id>.md` / `context-<task-id>.json` / `qa-report-<task-id>.json` MUST NOT block a fan-out cycle when the per-lane set is complete and every lane's QA passed; for N > 1 the canonical parent chain IS the aggregate `dev-report-<task-id>.json` + parent `completion-<task-id>.md`, and the parent `completion-<task-id>.md` indexes every lane's ticket/context/dev-report/qa-report.
-- JSON artifacts have top-level `request_id` and `task_id` exactly equal to their OWN artifact id: canonical / aggregate (non-lane-suffixed) artifacts equal the parent `<task-id>`; each lane-suffixed artifact equals `<task-id>-<lane>` — the parent task-id with the lane suffix appended exactly once (per the existing `dev-report-<task-id>-<worker>.json` convention), never doubled. The Step-17 Task-ID Convention's "single literal task-id in every artifact" describes the canonical / aggregate chain (N == 1, or the parent aggregate); fan-out lane artifacts additionally carry that one lane suffix.
-- **Nested-status checks (N == 1):** `dev-report-<task-id>.json` contains nested `dev.status == "completed"` plus nested `dev.files_modified` and `dev.files_created` arrays (top-level `status` alone does not count); `qa-report-<task-id>.json` contains nested `qa.status == "pass"` (top-level `status` or `verdict` alone does not count).
-- **Nested-status checks (N > 1):** EACH lane `dev-report-<task-id>-<lane>.json` contains nested `dev.status == "completed"` plus both file arrays; EACH lane `qa-report-<task-id>-<lane>.json` contains nested `qa.status == "pass"`; AND the canonical aggregate `dev-report-<task-id>.json` also contains nested `dev.status == "completed"` plus both file arrays. No canonical (singular) `qa-report-<task-id>.json` is required or checked for N > 1 — the per-lane QA reports are authoritative, and a single failing lane fails the parent cycle.
-- If `claude_code_required = true`, context/report metadata must record that flag or a structured `claude_code_consult` failure/unavailable status.
+Before `/dev` or `/redev` may be treated as complete, invoke the shared read-only
+resolver from the project root and retain its JSON as `ARTIFACT_CHAIN`:
 
-Subagent final messages, lifecycle records, and JSON-like stdout are not completion artifacts. Missing or malformed artifacts block completion with exact paths and reasons.
+```bash
+ARTIFACT_CHAIN="$(python3 scripts/resolve-dev-artifact-chain.py \
+  --task-id "$TASK_ID" --project-dir "$CLAUDE_PROJECT_DIR")" || exit 2
+```
+
+The fixed entrypoint contract is
+`scripts/resolve-dev-artifact-chain.py --task-id <id> --project-dir <root>`.
+Completion requires process exit 0 and top-level `status == "pass"`; exit 2 or
+`status == "fail"` blocks with the resolver's exact `errors[]`. Do not reproduce
+the validator with ad-hoc file tests. The same result object (`mode`, `lanes`,
+`report_paths`, `artifact_paths`, `commit_whitelist_artifacts`, and `qa_inputs`)
+is the downstream handoff used by `/close` and normal `/commit`.
+
+- **Single-lane cycle (N == 1):** `mode == "singular"` preserves the existing
+  five-artifact contract: parent ticket, context, dev-report, QA-report, and
+  completion are required with the existing identity and nested-status checks.
+- **Fan-out cycle (N > 1):** `mode == "fanout"` requires, for every entry in
+  `lanes`, its lane ticket, context, dev-report, and passing QA-report, plus only
+  the parent canonical aggregate dev-report and parent completion. The parent
+  ticket, context, and QA-report are optional; their absence is valid, while any
+  present optional parent artifact must validate. Never create, copy, or invent
+  a parent ticket/context/QA-report to satisfy a singular-shaped check. The
+  completion must index the canonical report and every lane artifact.
+- Artifact identities, nested `dev.status == "completed"` /
+  `qa.status == "pass"`, exact lane-set/provenance/file-union freshness, and
+  malformed/missing artifact handling are owned by the resolver. A failed lane
+  fails the parent chain.
+- If `claude_code_required = true`, context/report metadata must record that flag
+  or a structured `claude_code_consult` failure/unavailable status in addition
+  to the resolver postcondition.
+
+Subagent final messages, lifecycle records, and JSON-like stdout are not
+completion artifacts. The resolver is read-only: this completion check must not
+repair, refresh, or fabricate any artifact.
 
 **Workflow update**:
 

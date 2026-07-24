@@ -148,44 +148,77 @@ Resolve the **task-id** for the report filename. The task-id is the SAME identif
 Resolve the spec to evaluate (in priority order):
 - If `$ARGUMENTS` is an explicit path (ends in `.md`/`.json` or contains `/`): use that path. Verify it exists; fail clearly if not. Derive the task-id by stripping the `ticket-` prefix (or legacy `ba-spec-` prefix) and `.md`/`.json` suffix from the basename (e.g. `docs/dev/ticket-X.md` → task-id `X`; `docs/dev/ba-spec-X.md` → task-id `X`). If the basename starts with `do-report-`, also strip that prefix and set `DO_REPORT=$ARGUMENTS` (e.g. `docs/dev/do-report-X.json` → task-id `X`, `DO_REPORT` set, proceeds to do-report lite preflight).
 - Elif `$ARGUMENTS` matches a timestamp pattern (e.g. `20260424-103044`):
-  - **Non-force path**: try `docs/dev/ticket-${ARGUMENTS}.md` first; if absent, fall back to legacy `docs/dev/ba-spec-${ARGUMENTS}.md`. Verify that the ticket/ba-spec file exists. Also resolve `docs/dev/qa-report-${ARGUMENTS}.json` and verify it exists. Both the ticket/ba-spec AND the qa-report must exist for normal-path resolution to succeed.
-  - **do-report path**: if the non-force path fails (ticket/ba-spec absent OR qa-report absent) BUT `docs/dev/do-report-${ARGUMENTS}.json` exists with top-level `source == "do"`, use the do-report path. Set `DO_REPORT=docs/dev/do-report-${ARGUMENTS}.json`. Task-id is `$ARGUMENTS` directly. Proceed to the do-report lite preflight below instead of the normal-path artifact preflight.
+  - **Non-force path**: bind `TASK_ID=$ARGUMENTS` without first requiring a
+    parent ticket or parent QA-report. Immediately run Step 0's canonical
+    aggregate + shared artifact-chain resolver sequence. This ordering is
+    mandatory: those parent artifacts are optional for a valid fan-out cycle,
+    so a singular-shaped existence check before aggregation/resolution would
+    reject N > 1.
+  - **do-report path**: when no canonical
+    `docs/dev/dev-report-${ARGUMENTS}.json` exists but
+    `docs/dev/do-report-${ARGUMENTS}.json` exists with top-level
+    `source == "do"`, set `DO_REPORT` to it and use the lite preflight. A
+    canonical dev-report takes precedence and is resolved as a dev chain; do not
+    use a do-report to bypass a failing dev chain.
   - **Forced-override path**: use `$ARGUMENTS` directly as the task-id with NO file existence verification — neither ticket/ba-spec nor qa-report checks apply. The task-id is the argument itself; the close-report becomes the sole audit artifact for this task. This allows `/close <ts> --force` to work even when no ticket, spec, qa-report, or do-report file exists (e.g., hand-edits with no do-report — `/do` work that wrote a do-report uses the do-report path above instead).
   The task-id IS `$ARGUMENTS` directly (timestamp form is a valid task-id; this preserves backwards compatibility for `/close <ts>` invocations and works for both ticket- and ba-spec- artifact name conventions).
-- Else (no argument): the orchestrator invoking /close MUST already know this conversation's dev artifacts from context (it just ran /dev or /do in the same session). For /dev work: embed the artifact paths directly into the QA prompt and resolve the task-id from the active dev cycle. For /do work: if a do-report was written during this session, infer TASK_ID and DO_REPORT from the do-report path in context. There is NO filesystem scan and NO default-to-newest. If the orchestrator cannot identify the spec or do-report from context, exit with: `No spec identified. Either run /close within a conversation that just completed /dev, or provide an explicit path/timestamp.`
+- Else (no argument): the orchestrator invoking /close MUST already know this
+  conversation's parent task-id from the active `/dev` or `/do` cycle. For
+  `/dev`, bind that parent task-id and immediately run Step 0's same aggregate
+  + resolver sequence; do not select a parent ticket/QA-report from context
+  first. The resolver's `mode` identifies singular versus fan-out and its lane
+  matrix supplies the paths. For `/do`, infer `TASK_ID` and `DO_REPORT` from the do-report path in
+  context. There is NO filesystem scan and NO default-to-newest. If the
+  orchestrator cannot identify the active parent task-id or do-report, exit with:
+  `No spec identified. Either run /close within a conversation that just completed /dev, or provide an explicit path/timestamp.`
 
 If no task-id can be derived (no argument, no /dev context, no parseable filename), /close MUST exit with the same error message above. /close MUST NOT default to `date +%Y%m%d-%H%M%S` for the close-report filename — that would silently break the task-id chain.
 
 Bind the resolved value as `TASK_ID` (e.g. `"$ARGUMENTS"` when timestamp form, or derived from path basename).
 
-Also optionally note companion files if they exist at the same task-id: `context-<task-id>.json`, `dev-report-<task-id>.json`.
+### Step 0: Refresh the canonical aggregate, then resolve the artifact chain
+(non-force, normal `/dev` path)
 
-### Step 0 (Parallel-Dev Only): Auto-aggregate missing canonical
+For both explicit `/close <task-id-or-path>` and bare `/close`, fan-out
+recognition MUST happen before any parent ticket/context/QA assumption. Resolve
+the project root that owns the selected `docs/dev/` directory. First invoke the
+existing aggregate writer, whose shared shard classifier is scoped to
+`TASK_ID`. It returns `action == "skipped"` for N == 1; for 2+ valid lanes it
+creates a missing canonical aggregate, validates an identical one, or refreshes
+a stale projection from the current lane reports:
 
-Before the Normal-path artifact preflight, detect and handle parallel-worker shard dev-reports.
+```bash
+source ~/.claude/venv/bin/activate 2>/dev/null || true
+AGGREGATE_RESULT="$(cd "$PROJECT_ROOT" && \
+  python3 scripts/aggregate-dev-report.py --task-id "$TASK_ID")" || exit 1
+ARTIFACT_CHAIN="$(python3 scripts/resolve-dev-artifact-chain.py \
+  --task-id "$TASK_ID" --project-dir "$PROJECT_ROOT")" || exit 2
+```
 
-Shard detection uses BOTH filename patterns (scoped to `$TASK_ID`'s bare timestamp `BARE_TID`):
-- Role-first: `dev-report-<role>-<BARE_TID>.json` (role = alphanumeric, no dashes)
-- Task-first: `dev-report-<BARE_TID>-<worker>.json` (worker = alphanumeric+dot, excluding NON_WORKER_LABELS: draft, final, fix, continuation, wip, iter*, retry*, attempt*)
+This order is mandatory for explicit and bare close alike: bind the parent
+task-id, let the aggregate writer's canonical shard classifier perform the
+recoverable write/refresh, and only then invoke the read-only resolver. Do not
+put a singular parent ticket/QA existence gate before either command. If
+aggregation fails, block before the resolver and report its error.
 
-Count matching shard files in `docs/dev/` scoped to `BARE_TID` only.
+The fixed entrypoint is
+`scripts/resolve-dev-artifact-chain.py --task-id <id> --project-dir <root>`.
+Require exit 0 and top-level `status == "pass"`; exit 2 or `status == "fail"`
+blocks before inspectors or QA and reports the resolver's exact `errors[]`.
+Retain the entire JSON for every later close step. In particular, `mode`,
+`lanes`, `report_paths`, `artifact_paths`, `commit_whitelist_artifacts`, and
+`qa_inputs` MUST come from this one result, not a fresh glob, filename guess, or
+hand-rolled singular check.
 
-**Case 1 — canonical absent, 2+ task-scoped shards found**:
-Invoke `source venv/bin/activate && python3 scripts/aggregate-dev-report.py --task-id $TASK_ID` to build the canonical aggregate.
-Capture stdout JSON into `AGGREGATE_RESULT`. Parse `action` field from JSON.
-If exit non-zero: abort with error — parallel shards exist but aggregate could not be written.
-Set `PARALLEL_AGGREGATE_WRITTEN=true` (in-memory, used in Step 1 below).
-Write `AGGREGATE_RESULT` to a temp file (`mktemp`) for Step 1 to read if needed.
-
-**Case 2 — canonical present, 2+ task-scoped shards found**:
-Invoke `source venv/bin/activate && python3 scripts/aggregate-dev-report.py --task-id $TASK_ID` to validate consistency.
-Capture stdout JSON into `AGGREGATE_RESULT`. Parse `action` field.
-Set `PARALLEL_AGGREGATE_WRITTEN=true` if action is `"aggregated"` or `"validated"`.
-
-**Case 3 — ≤1 task-scoped shard found**:
-Skip Step 0 entirely. Set `PARALLEL_AGGREGATE_WRITTEN=false`.
-
-The `PARALLEL_AGGREGATE_WRITTEN` flag (and `AGGREGATE_RESULT` JSON) must be held in memory within the same close workflow and passed to Step 1's conditional logic below.
+- `mode == "singular"` preserves the existing N == 1 chain.
+- `mode == "fanout"` requires each lane ticket/context/dev-report/passing
+  QA-report plus the parent canonical aggregate and parent completion. Parent
+  ticket/context/QA are optional, not missing prerequisites.
+- The aggregate writer is the sole permitted close-time artifact repair and may
+  write only the canonical aggregate. `/close` MUST NOT copy lane data into, or
+  fabricate, a parent ticket/context/QA-report or completion. A missing
+  completion remains a resolver failure that the originating `/dev` cycle must
+  fix.
 
 ### do-report lite preflight (non-force, /do path)
 
@@ -195,23 +228,37 @@ If `DO_REPORT` was set during task-id resolution, skip the normal-path artifact 
 - No ticket, context, dev-report, qa-report, or completion existence checks apply.
 - Run the Artifact schema gate (below) over `$DO_REPORT` — do-report has no registered schema, so it always returns `SKIP` and never blocks /do closure. This keeps the gate invocation uniform across paths.
 - Set `SPEC_ID=""` (no cp-state for /do work). Skip the cp-state resolver entirely.
-- Proceed directly to Step 0 parallel-dev check (using `do.files_modified` as the file list for shard detection scope — typically no shards for /do work, Case 3 applies).
+- Set `ARTIFACT_CHAIN=""`; a do-report is not a `/dev` artifact chain. Proceed
+  directly to the schema gate and inspector dispatch without shard inference.
 
 ### Normal-path artifact preflight (non-force)
 
 After `TASK_ID` is resolved and before Step 1 dispatches inspectors, `/close` MUST run the same Codex-native artifact contract used by `/dev` completion. This preflight applies to `/close <task-id>`, `/close <task-id> --claude-code`, and bare `/close` only when active workflow state/context already resolved `<task-id>`. Bare `/close` with no active task-id keeps the `No spec identified...` failure and MUST NOT scan/default-to-newest.
 
-The preflight validates these exact same-task files: `docs/dev/ticket-<task-id>.md`, `context-<task-id>.json`, `dev-report-<task-id>.json`, `qa-report-<task-id>.json`, and `completion-<task-id>.md`. JSON artifacts must have top-level `request_id` and `task_id` equal to `<task-id>`; the dev report must have nested `dev.status == "completed"` plus `dev.files_modified` and `dev.files_created` arrays; the QA report must have nested `qa.status == "pass"`. Top-level-only `status` / `verdict` fields and subagent final messages are rejected.
-
-Any missing, malformed, mismatched, status-only, or non-passing artifact blocks before inspector dispatch / QA debate and reports the exact path and reason. The forced path is unchanged: `/close --force` short-circuits before this normal-path preflight.
+Step 0's successful `ARTIFACT_CHAIN` is the structural preflight; do not repeat
+it. For singular mode it validates the same five parent artifacts as before. For
+fan-out mode it validates the lane matrix plus parent canonical/completion and
+does not require optional parent ticket/context/QA artifacts. Any missing,
+malformed, mismatched, stale, status-only, or non-passing required artifact is
+already a resolver error. The forced path remains unchanged and short-circuits
+before this normal-path preflight.
 
 ### Artifact schema gate (interactive schema validation — closes the §13 asymmetry)
 
 The structural preflight above is a hand-rolled shape check. It does NOT run the JSON-Schema validators (`schemas/dev-report.v1.json` / `schemas/qa-report.v1.json`) that the `/dev-overnight` contract path applies via `hooks/lib/contract_runtime.py`. Historically that made interactive `/dev` artifacts categorically exempt from schema validation (ARCHITECTURE.md §13). This gate removes that exemption using the SAME `contract_runtime` engine (Draft7Validator) — it does NOT touch the overnight contract machinery.
 
-Run the gate over the resolved report artifacts for `<task-id>`. On the normal path pass the dev-report and qa-report; on the do-report path pass `$DO_REPORT`. Paths are relative to `$CLAUDE_PROJECT_DIR` (the /close working directory); the harness code + schemas live under `~/.claude`:
+Run the gate over the exact normal-path `ARTIFACT_CHAIN.report_paths[]`; this is
+the canonical dev + QA pair for singular mode and the canonical aggregate plus
+every lane dev/QA report (and a validated optional parent QA if present) for
+fan-out mode. Do not synthesize a parent QA input. On the do-report path pass
+`$DO_REPORT` as before. Paths are relative to the resolver's `--project-dir`;
+the harness code + schemas live under `~/.claude`. Populate
+`REPORT_PATHS` directly from the retained JSON, preserving order:
 
 ```bash
+mapfile -t REPORT_PATHS < <(python3 -c \
+  'import json,sys; print(*json.loads(sys.argv[1])["report_paths"], sep="\n")' \
+  "$ARTIFACT_CHAIN")
 source ~/.claude/venv/bin/activate 2>/dev/null || true
 python3 -c '
 import sys, os
@@ -228,12 +275,18 @@ for p in sys.argv[1:]:
     else:
         print("SCHEMA-GATE " + r["status"].upper() + ":", p, "(" + (r.get("reason") or r.get("schema") or "") + ")")
 sys.exit(rc)
-' "docs/dev/dev-report-<task-id>.json" "docs/dev/qa-report-<task-id>.json"
+' "${REPORT_PATHS[@]}"
 ```
 
 Blocking semantics:
 - **Exit 2 (`SCHEMA-GATE FAIL`)**: a report DECLARED a schema version (`report_version`) but VIOLATED its schema. Block before inspector dispatch / QA debate and report the named offending field(s). This is the only blocking outcome.
-- **Exit 0 (`SCHEMA-GATE PASS` / `SKIP`)**: proceed. `validate_report_artifact()` is version-gated and no-ops (never fail-closed) for: an absent/optional artifact, an artifact kind with no registered schema (`do-report` — always `SKIP`), unparseable JSON (already handled by the structural preflight), or an unversioned legacy record (no `report_version` — still covered by the structural preflight). Because current dev/qa reports are nested and carry no `report_version`, they `SKIP` today; the gate fires the moment an artifact opts into `report_version`, catching an invalid v1 report exactly as the overnight path would.
+- **Exit 0 (`SCHEMA-GATE PASS` / `SKIP`)**: proceed.
+  `validate_report_artifact()` is version-gated and no-ops (never fail-closed)
+  for an artifact kind with no registered schema (`do-report`), unparseable JSON
+  already rejected by the structural resolver, or an unversioned legacy record.
+  Every required dev/QA report in a fan-out chain is nevertheless presented to
+  this gate through `report_paths`; an optional parent report is omitted only
+  when the resolver says it is absent and optional.
 
 The forced path is unchanged: `/close --force` short-circuits before this gate. On the do-report path, run the same command with `$DO_REPORT` as the sole argument — the do-report has no registered schema and always returns `SKIP`, so `/do` closure is never blocked by this gate.
 
@@ -241,8 +294,13 @@ Resolve optional cp-state handoff for the QA close gate. Do NOT derive `SPEC_ID`
 from the spec filename by hand — route the monolith path through the centralized
 resolver so the close gate uses the SAME `cp_dir` the producer and `/dev` use:
 
-- Determine the monolith `spec_path` from the resolved input or from
-  `context-<task-id>.json` (`spec_path` / `spec_file` / `user_spec_path`).
+- Determine the monolith `spec_path` from the resolved input. Otherwise, in
+  singular mode read the resolved parent context from `artifact_paths`; in
+  fan-out mode inspect the contexts named by `lanes[].context` and use a
+  `spec_path` / `spec_file` / `user_spec_path` only when the populated values
+  agree. Parent context is optional in fan-out mode and MUST NOT be created for
+  this handoff. Conflicting lane spec paths disable the optional cp-state
+  handoff with a recorded reason; they never justify inventing a parent context.
 - If a `spec_path` is found, call the resolver and take its `cp_dir`:
 
   ```bash
@@ -271,17 +329,18 @@ The orchestrator MUST emit a TodoWrite call updating the Step-N todo item to `in
 
 **Compute the cycle-diff file list** before dispatch:
 
-- **Closed-task path** (a `dev-report-<TASK_ID>.json` exists): read the `dev.files_modified` array (top-level non-null list per the dev-report contract); use that list verbatim as `<cycle-diff-file-list>`.
+- **Closed-task path** (`ARTIFACT_CHAIN.status == "pass"`): read the
+  `dev.files_modified` array from the canonical report named by
+  `ARTIFACT_CHAIN.canonical_dev_report`; use that aggregate union verbatim as
+  `<cycle-diff-file-list>`. Do not rebuild the union from lane files.
 - **do-report path** (`DO_REPORT` is set, i.e. `do-report-<TASK_ID>.json` exists): read `do.files_modified` array verbatim as `<cycle-diff-file-list>`. Do NOT fall through to the Irregular path.
 - **Irregular path** (no dev-report-<TASK_ID>.json and no do-report — e.g., hand-edits): run `git diff --name-only` against the relevant repo's cycle commit range to compute the file list. For nested-`.claude` edits the relevant repo is the nested git repo at `~/.claude` (working-tree root); for parent-repo edits use the parent-repo working-tree root (`$HOME`, resolved — not an author-absolute literal).
 - If both paths yield an empty list, record `<cycle-diff-file-list>=` (empty) and proceed with dispatch — inspectors will return findings=[] and Step 5 will treat all cleanliness branches as non-blocking.
 
-**Parallel detection check** — before dispatch, evaluate whether a parallel-dev cycle was detected:
-
-A parallel cycle is detected if ANY of the following hold:
-- `PARALLEL_AGGREGATE_WRITTEN=true` (set by Step 0 when 2+ task-scoped shards were found)
-- The canonical `docs/dev/dev-report-<TASK_ID>.json` has a non-empty `parallel_workers` array
-- A fresh shard scan (same two patterns as Step 0, scoped to `TASK_ID`'s bare timestamp) finds 2+ valid worker shards in `docs/dev/`
+**Parallel detection check** — before dispatch, use only the retained resolver
+result: a parallel cycle is detected exactly when
+`ARTIFACT_CHAIN.mode == "fanout"`. Do not re-scan filenames or reinterpret
+`parallel_workers`; that would create a second, divergent fan-out authority.
 
 **If a parallel cycle is detected** — dispatch inspectors SEQUENTIALLY (one Agent call at a time, wait for each to return before the next):
 
@@ -323,9 +382,22 @@ You are the QA gatekeeper evaluating whether a completed development can be clos
 In both modes, the caller does NOT orchestrate rounds; you own the loop.
 
 Input artifacts (read them first):
-- BA spec / do-report: <BA_SPEC path, or do-report-<ts>.json for /do work, or "none">
-- QA report:   <QA_REPORT path or "none" — omit for /do work, no prior QA cycle exists>
-- Companions:  <context-<ts>.json / dev-report-<ts>.json if present, else omit>
+- Artifact-chain result: <the complete retained ARTIFACT_CHAIN JSON, or "none" for /do>
+- Mode: <ARTIFACT_CHAIN.mode, or "do">
+- Lane matrix: <ARTIFACT_CHAIN.lanes JSON array; [] for singular or /do>
+- Report paths: <ARTIFACT_CHAIN.report_paths JSON array; [] for /do>
+- QA inputs: <ARTIFACT_CHAIN.qa_inputs JSON array; [] for /do>
+- Singular inputs: <parent ticket/context/dev-report/QA-report/completion paths
+  from artifact_paths when mode=singular; otherwise omit>
+- Fan-out inputs: <for each lanes[] row, its task_id/ticket/context/dev_report/
+  qa_report, plus canonical_dev_report and completion; never invent a parent
+  ticket/context/QA-report>
+- do-report: <do-report-<ts>.json for /do work, otherwise omit>
+
+Treat the `lanes[]` array as a lane matrix for one parent close decision, not as
+a bundled implementation-verification prompt. In fan-out mode read every row and
+every `qa_inputs[]` entry; one missing/failing/inconsistent lane blocks closure.
+The resolver's passed matrix is authoritative for membership and paths.
 
 Debate protocol (all runs INSIDE you):
 
@@ -336,15 +408,15 @@ Round 1:
       - Regression risks? Scope drift? Missed edge cases?
 
       WORKFLOW INTEGRITY DIMENSION (mandatory — evaluate ALL four bullets explicitly; report a per-bullet PASS / FAIL / N/A-with-reason in the transcript; ANY FAIL forces CLOSE: NO regardless of AC coverage):
-        1. **Downstream consumability** — Can the artifacts under evaluation be consumed by downstream commands (`/commit`, `/push`, `/merge`) without manual patching of timestamps, names, or artifact contracts? Concretely: does `dev-report-<task-id>.json` exist with the SAME `<task-id>` as this close cycle? Does `close-report-<task-id>.md` end with `CLOSE: YES`? If a human would have to rename, copy, or hand-edit any artifact to make `/commit` succeed, this bullet is FAIL. **For /do path** (DO_REPORT is set): N/A-with-reason — substitute `do-report-<task-id>.json` for `dev-report-<task-id>.json` in this check; changelog-analyst accepts do-report as a valid staging-whitelist source (see agents/changelog-analyst.md); evaluate consumability against do-report + close-report only.
-        2. **task-id chain consistency** — Are predecessor artifacts (BA spec → context → dev-report → completion → qa-report → close-report) ALL present under the SAME `<task-id>`? Mismatched task-ids across the chain → FAIL. **For /do path** (DO_REPORT is set): N/A-with-reason — chain is `do-report → close-report` under the same `<task-id>`; ticket/context/dev-report/qa-report/completion are intentionally absent for /do work. Evaluate consistency within this reduced chain only.
+        1. **Downstream consumability** — Can the artifacts under evaluation be consumed by downstream commands (`/commit`, `/push`, `/merge`) without manual patching of timestamps, names, or artifact contracts? Require the supplied resolver result to have `status == "pass"` and verify that normal `/commit` can admit the exact `commit_whitelist_artifacts`. In singular mode this is the existing parent chain. In fan-out mode the lane artifacts in that exact whitelist are consumable without copying/renaming them or fabricating parent ticket/context/QA artifacts. If a human would have to patch an artifact or manufacture a pseudo-parent artifact, this bullet is FAIL. **For /do path** (DO_REPORT is set): N/A-with-reason — changelog-analyst accepts the do-report as its staging-whitelist source; evaluate consumability against do-report + planned close-report only.
+        2. **task-id chain consistency** — Use the supplied resolver matrix rather than imposing one universal filename shape. `mode == "singular"` requires the existing parent ticket → context → dev-report → QA-report → completion chain under one task-id. `mode == "fanout"` requires every `lanes[]` row's ticket/context/dev-report/QA-report to use that row's lane task-id, plus the parent canonical dev-report and completion under the parent task-id; parent ticket/context/QA are optional and absence is PASS. Any required identity mismatch, undeclared/missing lane, stale canonical, or completion index gap would contradict `status == "pass"` and is FAIL. **For /do path** (DO_REPORT is set): N/A-with-reason — chain is `do-report → close-report` under the same `<task-id>`; the `/dev` artifact chain is intentionally absent.
         3. **Pre-existing-defect rule** (rewritten per spec-20260503-091826 Section 5.4 rule 1+2 — out-of-scope-by-default UNLESS user-need-impact OR security OR cleanliness-of-THIS-diff) — If a Round-1 critique surfaces a "pre-existing architectural defect" or similar, the debate resolves as follows:
              (a) if THIS cycle's BA spec CLAIMS to address the defect AND the claim maps to user-need / path-dependent shared infrastructure / security / cleanliness-of-THIS-diff → the defect IS in scope and must be evaluated on its merits. If the BA-spec claim does NOT map to one of those four axes (i.e., BA over-expanded into path-external scope), the claim is itself out-of-scope and falls through to (d) — pre-existing-out-of-scope, NOT NO; the AC-deviation / out_of_scope_observations path applies instead.
              (b) if the pre-existing defect actively blocks user-need success in THIS cycle's spec (i.e., the user-stated requirement cannot be satisfied without addressing the defect) → it IS in scope; bullet evaluates on its merits and FAILS only if the defect remains;
              (c) if the pre-existing defect is a security hole (Section 5.4 rule 2: security holes are exceptions — must be fixed even when outside the user-need path) → it IS in scope and must be fixed; bullet FAILS unless addressed;
              (d) otherwise — the pre-existing defect is OUT of scope by default. Bullet PASSES. Recording in `out_of_scope_observations` is the correct disposition; the "pre-existing / out-of-scope" walkback is the default behavior, not a forbidden one. The user's binding directive: if something does not impede user experience, security, or the cleanliness of the repository as a whole, it is not necessarily a reason for NO — pre-existing defects that do not impact user needs / security / cleanliness-of-THIS-diff are NOT NO triggers.
         4. **Self-deployability** — Can the changes be committed and shipped via the project's own commit/push toolchain (`/commit`, `/push`, `/merge`) without out-of-band patching? Evaluate as the AND of these sub-items:
-             (i) **/commit consumability** (PASS/FAIL) — `/commit` accepts the cycle's artifacts (dev-report, qa-report, completion) without orchestrator-side jq or Edit patches to fix artifact fields. FAIL if any manual artifact patch was required.
+             (i) **/commit consumability** (PASS/FAIL) — `/commit` accepts the resolver's exact `commit_whitelist_artifacts` plus the close/inspector outputs without orchestrator-side jq/Edit patches. For fan-out this explicitly includes each validated lane artifact and does not require optional parent ticket/context/QA artifacts. FAIL if any manual artifact patch or pseudo-parent artifact was required.
              (ii) **Push permission** (PASS/FAIL) — the orchestrator's git identity has write access to the target remote(s). FAIL if push was blocked by remote permissions or required a human to push from a different identity.
              (iii) **No commit-channel bypass** (PASS/FAIL) — no manual `git commit` outside agent context, no `CLAUDE_PROJECT_DIR` override to bypass repo-rooted hook gates, no `auto-bulk:` pattern abuse to smuggle changes past `pretool-git-privilege-guard.py`. FAIL if any of these bypass channels was used.
              (iv) **User-only physical filesystem actions** (N/A-with-reason — NEVER FAIL) — any sub-item that would require the user to perform a physical filesystem action the orchestrator structurally cannot perform itself is evaluated as N/A-with-reason, NOT FAIL. The canonical example is the user touching `.hook-refactor-allow` to authorize a hook-tree edit: human-in-the-loop is intentional anti-fabrication protection per Trap 11; orchestrator-creatable sentinels would defeat the protection's threat model. The N/A reason MUST cite Trap 11 verbatim. This clause covers ONLY user-only physical filesystem actions; it does NOT cover the bypasses listed in sub-item (iii), which remain FAIL.
@@ -444,7 +516,9 @@ The /close --force escape hatch (Step 2) is unchanged. It bypasses Step 5 entire
 
 Transcript file: write the full debate to `docs/dev/close-report-<task-id>.md` (substitute `<task-id>` with the value resolved in Step 3 — e.g. the source `/dev` cycle's task-id; do NOT use a fresh `date +%Y%m%d-%H%M%S` here, that would break /commit's PRIMARY-path lookup) with this structure:
   # Close Debate Report
-  Task-id, Input files, Rounds run, Verdict.
+  Task-id, artifact-chain mode, Input files, Rounds run, Verdict. For fan-out,
+  include the supplied `lanes[]` matrix and `qa_inputs[]` paths so the report
+  records which independently-passed lanes were rolled into the parent decision.
   Workflow Integrity Dimension: explicit per-bullet status (1. Downstream consumability: PASS/FAIL/N/A; 2. task-id chain consistency: PASS/FAIL/N/A; 3. Pre-existing-defect rule: PASS/FAIL/N/A; 4. Self-deployability: PASS/FAIL/N/A) — with one-sentence reason for each FAIL or N/A.
   Codex consultation: explicit `codex_status` value (`ok` | `failed_quota` | `failed_timeout` | `failed_parse`). When the value is one of the failure modes, include a "Degraded codex consultation" section that records: which rounds failed, the verbatim error / timeout / parse-issue from each attempt, and the explicit acknowledgement that the verdict was granted on QA's substantive YES alone (per Verdict rule branch 6). For `failed_parse` specifically (FINDING-4), the section MUST additionally include: (i) the verbatim raw codex output text from EACH failed_parse round, (ii) QA's explicit per-round manual scan note, and (iii) the verbatim attestation `manual parse: NO substantive dissent signal found in failed_parse output`. Without all three, branch 7 is not satisfied and the verdict falls to branch 8 (CLOSE: NO).
   For each round: [QA] position + rationale; [Codex] position + rationale (or "consultation failed: <reason>" when codex_status was failed-* in that round).
@@ -474,7 +548,11 @@ Scoring runs ONLY AFTER the close-report file is written (Step 2 wrote it) AND A
 
 Procedure:
 
-1. Determine `qa_ever_rejected` from `docs/dev/qa-report-<task-id>.json` history (true if any iteration was rejected).
+1. Determine `qa_ever_rejected` from every QA report named by
+   `ARTIFACT_CHAIN.qa_inputs` (the single parent QA in singular mode; all lane
+   QA reports in fan-out mode). It is true if any resolved QA history contains a
+   rejection. On the do path, use false because no prior QA cycle exists. Do not
+   substitute or create a parent QA-report for fan-out scoring.
 2. Invoke the helper to decide which close_success_* event (if any) is permitted:
 
    ```
@@ -522,7 +600,14 @@ Defense-in-depth: `scripts/score-update.sh` itself enforces the same preconditio
     - **Bugs encountered**: bugs surfaced during the session (if none, omit or write "none")
     - **Improvement opportunities**: technical debt, UX gaps, or follow-up items worth noting
   - **Conciseness rule**: each bullet MUST be exactly 1 sentence. Narrative paragraphs are FORBIDDEN. The entire summary MUST fit within 20 lines including the heading. Exception: if the bullet contains a verbatim user quote, reproduce it exactly as stated (no paraphrase, no truncation), then the quote itself counts as the sentence.
-  - **Source binding**: read `docs/dev/dev-report-<task-id>.json`, `docs/dev/qa-report-<task-id>.json`, `docs/dev/user-requirement-<DEV_SESSION_ID>.md`, and `docs/dev/close-report-<task-id>.md`. Do NOT improvise outcomes not present in these artifacts. `docs/dev/user-requirement-<DEV_SESSION_ID>.md` is the primary source for "User needs satisfied" and "User needs not satisfied" bullets.
+  - **Source binding**: read the canonical report and every lane report named by
+    the retained `ARTIFACT_CHAIN.report_paths` / `qa_inputs`, plus
+    `docs/dev/user-requirement-<DEV_SESSION_ID>.md` and
+    `docs/dev/close-report-<task-id>.md`. In singular mode these resolve to the
+    same parent dev/QA sources as before. Do NOT assume a parent QA-report exists
+    in fan-out mode and do not improvise outcomes not present in the resolved
+    artifacts. The user-requirement document remains primary for the user-needs
+    buckets.
   - This summary appears in the orchestrator's text message to the user, AFTER the `CLOSE:` verdict echo and BEFORE the rating `<options>` block below.
 - If the verdict is **`CLOSE: NO`** or **`CLOSE: YES (FORCED)`**: SKIP the session summary.
 
@@ -554,10 +639,11 @@ Then branch the workflow update:
 
 - If the final verdict is `CLOSE: YES*`, create a compact temp update using
   `/spec-update --temp`. The update is for the next `/commit` attempt and MUST
-  reference, not duplicate: `docs/dev/close-report-<task-id>.md`,
-  `docs/dev/dev-report-<task-id>.json`, `docs/dev/qa-report-<task-id>.json`,
-  and the three inspector report paths from Step 1. Next action: `/commit
-  <task-id> -m "<real session summary>"`.
+  reference, not duplicate: `docs/dev/close-report-<task-id>.md`, the exact
+  `ARTIFACT_CHAIN.artifact_paths` / `report_paths` (or `$DO_REPORT`), and the
+  three inspector report paths from Step 1. In fan-out mode do not add a
+  nonexistent parent QA-report merely to make this update singular-shaped.
+  Next action: `/commit <task-id> -m "<real session summary>"`.
 - If the final verdict is `CLOSE: NO`, create or update a continuation spec
   using `/spec-update` default continuation-spec mode. If the dev context has a
   source spec, append the close dissent and unresolved gaps to that spec;
