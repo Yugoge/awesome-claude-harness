@@ -8,8 +8,8 @@ disable-model-invocation: true
 Agentic commit command. Validates the close-gate (unless `--force`), then dispatches
 the `changelog-analyst` subagent to classify files, stage them, and create real
 branch commits. Normal task mode admits every task-owned path only after partitioning
-it across an explicit supported-repository set; the control checkout, `~/.claude`,
-and the active Codex profile checkout are supported without a project-root override.
+it across an explicit supported-repository set; the control checkout and `~/.claude`
+are supported without a project-root override.
 
 ## Usage
 
