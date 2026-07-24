@@ -87,8 +87,7 @@ Before dispatching changelog-analyst, write the appropriate authorization token:
   - NO FALLBACK: the canonical writer is no longer Bash-executable (Layer 1.F deny-only, stage-2). The hook is the SOLE minter. If the capability is absent, the `userprompt-bulk-commit-capability.py` hook is not yet active in this session — instruct the user to restart the session so settings.json reloads the hook, then re-run `/commit --bulk`. Do NOT attempt to write the sentinel via Bash.
 - **BULK=false**: before writing any grant, build `REPOSITORY_PLAN` with
   `scripts/resolve-commit-repos.py`. Pass the resolved control checkout and the
-  de-duplicated supported repositories: the real `~/.claude` checkout and, when
-  it is a Git checkout, the real active profile `${CODEX_HOME:-$HOME/.codex}`.
+  de-duplicated supported repository: the real `~/.claude` checkout.
   These are command-owned admissions, not values read from the dev-report. The
   helper reads the canonical dev/do report, resolves every `files_modified[]` /
   `files_created[]` path, assigns each path to its actual Git root (which must be
