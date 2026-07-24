@@ -296,7 +296,6 @@ def _base_result(task_id: str, canonical: str, completion: str) -> dict[str, Any
         "qa_inputs": [],
         "checks": {
             "canonical_fresh": False,
-            "shard_provenance_exact": False,
             "file_unions_exact": False,
         },
         "errors": [],
