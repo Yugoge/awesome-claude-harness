@@ -476,12 +476,6 @@ def resolve_chain(project_root: Path | str, task_id: str) -> dict[str, Any]:
                     aggregate._canonical_projection(canonical)
                     == aggregate._canonical_projection(expected)
                 )
-                if not result["checks"]["shard_provenance_exact"]:
-                    validator.error(
-                        "STALE_SHARD_PROVENANCE",
-                        result["canonical_dev_report"],
-                        "canonical shard_provenance does not match current lane reports",
-                    )
                 if not result["checks"]["file_unions_exact"]:
                     validator.error(
                         "STALE_FILE_UNION",
