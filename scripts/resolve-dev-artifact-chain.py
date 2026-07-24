@@ -492,7 +492,6 @@ def resolve_chain(project_root: Path | str, task_id: str) -> dict[str, Any]:
         result["mode"] = "singular"
         result["checks"] = {
             "canonical_fresh": True,
-            "shard_provenance_exact": True,
             "file_unions_exact": True,
         }
         if scanned:
