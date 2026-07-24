@@ -448,8 +448,8 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     if canonical_path.exists():
-        # Preserve the legacy fail-closed identity/baseline checks, then use
-        # whole-shard provenance plus the aggregate projection for freshness.
+        # Preserve the legacy fail-closed identity/baseline checks, then
+        # compare the aggregate projection for freshness.
         try:
             existing = json.loads(canonical_path.read_text())
         except (OSError, json.JSONDecodeError) as exc:
