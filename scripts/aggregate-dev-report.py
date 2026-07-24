@@ -350,7 +350,6 @@ def _build_aggregate(shards: list[tuple[str, dict]], task_id: str) -> dict:
         "baseline_dirty_snapshot": dirty,
         "dev_report_path": f"docs/dev/dev-report-{task_id}.json",
         "parallel_workers": worker_ids,
-        "shard_provenance": _build_shard_provenance(shards),
         "dev": {
             "status": "completed",
             "tasks_completed": _union_list(shards, ["dev", "tasks_completed"]),
