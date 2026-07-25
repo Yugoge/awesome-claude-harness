@@ -78,8 +78,12 @@ def _generated_explicitly_targeted(config) -> bool:
 
 def _generated_opted_in(config) -> bool:
     """True when the run explicitly ELECTS to execute generated items:
-    --run-generated, or `-m` expression referencing the `generated` marker."""
+    --run-generated, `-m` expression referencing the `generated` marker, or an
+    explicit path at/under tests/generated. An explicit test target is already
+    an intentional opt-in and must not produce pytest exit 5 via deselection."""
     if config.getoption("--run-generated", default=False):
+        return True
+    if _generated_explicitly_targeted(config):
         return True
     markexpr = config.getoption("markexpr", default="") or ""
     return "generated" in markexpr

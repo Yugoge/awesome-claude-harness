@@ -124,6 +124,7 @@ paste-cache/
 plans/
 specs/
 state/
+restart-state/
 tasks/
 
 # Belt-and-suspenders: auto-generated folder-doc stubs must never re-enter
