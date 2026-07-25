@@ -1,7 +1,7 @@
 # Architecture — `.claude` Agent Operating System
 
 > Deep technical architecture and design rationale for maintainers.
-> Last updated: 2026-07-15
+> Last updated: 2026-07-20
 
 This repository is a **Claude Code global configuration** (`~/.claude` symlinks to it) that turns one chat agent into a disciplined software team. A main *orchestrator* agent's direct writes are mechanically constrained by the orchestrator gate (one non-whitelist tool per turn, unlockable by `/do`) so that real work is intended for single-purpose **subagents** it dispatches; a defense-in-depth chain of **PreToolUse / PostToolUse / Stop** hooks makes catastrophic git and filesystem mistakes mechanically hard — gated by hooks that fail closed by default, with narrow audited human break-glass paths (`/do`, `/allow`); and an autonomous overnight loop explores, fixes, verifies, and commits in an isolated worktree until a wall-clock deadline. Everything here is plain Markdown prompts plus small Python/Bash hooks and scripts — the behavior change comes from *enforcement in code*, not from asking the model nicely.
 
@@ -9,35 +9,35 @@ This document is the maintainer-facing companion to [`README.md`](README.md): th
 
 ---
 
-## 1. Verified inventory (2026-07-15)
+## 1. Verified inventory (2026-07-20)
 
 All counts below were established by enumerating the actual repository, not copied from prose. Reproduction commands are noted so a maintainer can re-verify after changes.
 
 | Component | Count | How counted |
 |---|---|---|
 | **Subagents** (`agents/*.md`, excluding `INDEX.md`/`README.md`) | **23** | `ls agents/*.md \| grep -vE '/(INDEX\|README)\.md$'` |
-| **Slash commands** (`commands/*.md`, excluding `INDEX.md`/`README.md`) | **18** | `ls commands/*.md \| grep -vE '/(INDEX\|README)\.md$'` |
-| **Hook command entries wired** in `settings.json` | **67** | sum of `hooks[*][*].hooks[]` over all lifecycle events |
-| **Distinct hook files referenced** by `settings.json` | **66** (+1 = **67** paths) | unique `hooks/*.py\|*.sh` paths in those entries; the 67th wired executable is the non-hooks `scripts/canary-verify.sh` (SessionStart) → 67 distinct wired executable paths |
+| **Slash commands** (`commands/*.md`, excluding `INDEX.md`/`README.md`) | **19** | `ls commands/*.md \| grep -vE '/(INDEX\|README)\.md$'` |
+| **Hook command entries wired** in `settings.json` | **70** | sum of `hooks[*][*].hooks[]` over all lifecycle events |
+| **Distinct hook files referenced** by `settings.json` | **69** (+1 = **70** paths) | unique `hooks/*.py\|*.sh` paths in those entries; the remaining wired executable is the non-hooks `scripts/canary-verify.sh` (SessionStart) → 70 distinct wired executable paths |
 | **Lifecycle events used** | **7** | keys of `settings.json.hooks` |
-| **Hook files present on disk** (`hooks/*.py` + `*.sh`, excl. `.bak`) | **88** | `find hooks -maxdepth 1 -type f \( -name '*.py' -o -name '*.sh' \)` |
-| **Helper scripts** (`scripts/` top-level files, excl. `INDEX/README`) | **77** | `find scripts -maxdepth 1 -type f` minus docs |
+| **Hook files present on disk** (`hooks/*.py` + `*.sh`, excl. `.bak`) | **91** | `find hooks -maxdepth 1 -type f \( -name '*.py' -o -name '*.sh' \)` |
+| **Helper scripts** (`scripts/` top-level files, excl. `INDEX/README`) | **78** | `find scripts -maxdepth 1 -type f` minus docs |
 | **Skills** (`skills/*/` directories) | **8** | `ls -d skills/*/` |
-| `permissions.allow` / `deny` / `ask` entries | 162 / 95 / 30 | keys of `settings.json.permissions` |
+| `permissions.allow` / `deny` / `ask` entries | 162 / 96 / 30 | keys of `settings.json.permissions` |
 
-> Note on the hook count: more hook *files* exist on disk (**88**) than are *wired* (**66** hooks files / 67 executable entries). The unwired files are install scripts, libraries, legacy/`.bak` variants, and intentionally-staged hooks. The number that matters for behavior is **what `settings.json` wires**: 66 distinct `hooks/` files across 67 entries; the 67th entry is `scripts/canary-verify.sh` wired under `SessionStart` — **no referenced executable is duplicated**. The seven lifecycle events are `SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `Notification`, `Stop`, `SubagentStop`.
+> Note on the hook count: more hook *files* exist on disk (**91**) than are *wired* (**69** hooks files / 70 executable entries). The unwired files are install scripts, libraries, legacy/`.bak` variants, and intentionally-staged hooks. The number that matters for behavior is **what `settings.json` wires**: 69 distinct `hooks/` files plus `scripts/canary-verify.sh` under `SessionStart` — **no referenced executable is duplicated**. The seven lifecycle events are `SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `Notification`, `Stop`, `SubagentStop`.
 
 ### Per-event wiring (from `settings.json`)
 
 | Event | Matcher blocks | Hook entries |
 |---|---|---|
 | `SessionStart` | 1 | 7 |
-| `UserPromptSubmit` | 4 | 5 |
+| `UserPromptSubmit` | 4 | 6 |
 | `PreToolUse` | 22 | 30 |
-| `PostToolUse` | 7 | 14 |
+| `PostToolUse` | 8 | 15 |
 | `Notification` | 1 | 1 |
 | `Stop` | 1 | 4 |
-| `SubagentStop` | 4 | 6 |
+| `SubagentStop` | 4 | 7 |
 
 ### 1.1 External dependencies (REQUIRED vs OPTIONAL)
 
@@ -114,10 +114,10 @@ flowchart TD
 ```
 
 - **Orchestrator (main agent).** Owns the conversation, the todo list, and dispatch. Allowed tools are a small whitelist (`Agent`, `TodoWrite`, `AskUserQuestion`, `Skill`, `Read`, `Glob`, `Grep`, `Bash`, cron/title tools); everything else is rate-limited or blocked by the orchestrator gate. (`CLAUDE.md` §Orchestrator-Only Rule.)
-- **Command surface (`commands/*.md`).** 18 slash commands. Each is a prompt that scripts a workflow (parse → dispatch → validate → ship). Release/control commands carry `disable-model-invocation: true`, which blocks **SlashCommand self-dispatch only**; the `Skill`-tool path is closed separately by an explicit `Skill(<name>:*)` deny in `permissions.deny` (see *Why `disable-model-invocation`?* below).
+- **Command surface (`commands/*.md`).** 19 slash commands. Each is a prompt that scripts a workflow (parse → dispatch → validate → ship). Release/control commands carry `disable-model-invocation: true`, which blocks **SlashCommand self-dispatch only**; the `Skill`-tool path is closed separately by an explicit `Skill(<name>:*)` deny in `permissions.deny` (see *Why `disable-model-invocation`?* below).
 - **Subagent fleet (`agents/*.md`).** 23 specialists, each a system prompt with `name`/`description`/`tools` frontmatter. Subagents bypass the orchestrator gate (they are *supposed* to do work) but are still subject to the safety, git, and worktree hooks.
 - **Hook enforcement (`settings.json` + `hooks/`).** The kernel. Every tool call the agent makes is intercepted; hooks return exit 2 to block. Shared logic lives in `hooks/lib/` (allowlist/sentinel grants, checkpoint core, contract runtime, agent resolver).
-- **Support.** `scripts/` (77 helpers: grant writers, graphify code-graph, spec/dev-report resolvers), `skills/` (8: Playwright UI-audit suite), `schemas/` (JSON contracts like `context.v1.json`, `cycle-contract.v1.json`, `dev-report.v1.json`, `qa-report.v1.json`), `templates/` (`spec-template.md`, `overnight-spec.md`).
+- **Support.** `scripts/` (78 helpers: grant writers, graphify code-graph, spec/dev-report resolvers), `skills/` (8: Playwright UI-audit suite), `schemas/` (JSON contracts like `context.v1.json`, `cycle-contract.v1.json`, `dev-report.v1.json`, `qa-report.v1.json`), `templates/` (`spec-template.md`, `overnight-spec.md`).
 
 ### The 23 subagents (by role)
 
@@ -159,11 +159,17 @@ Hooks are configured in `settings.json` under `hooks.<Event>[].{matcher, hooks[]
 ### Representative wiring
 
 - **`SessionStart`** — environment announce + git init + tmpfs banner + gitignore propagation + a canary self-check (`session-info.sh`, `session-git-init.sh`, `check-todo-md-sync.py`, `session-promote-hook.sh`, `scripts/canary-verify.sh`, `session-tmpfs-banner.sh`, `session-gitignore-propagate.sh`).
-- **`UserPromptSubmit`** — `prompt-workflow.py` (workflow detection + dev-registry pre-creation), `userprompt-doc-sync-check.py`, `userprompt-consent-allowlist.sh` (`/do`/`/allow` consent capture), tmpfs-pressure and bulk-commit-capability advisories.
+- **`UserPromptSubmit`** — `prompt-workflow.py` (workflow detection + dev-registry pre-creation), `userprompt-doc-sync-check.py`, `userprompt-restart-authorize.py` (exact bare `/restart` capability), `userprompt-consent-allowlist.sh` (`/do`/`/allow` consent capture), tmpfs-pressure and bulk-commit-capability advisories.
 - **`PreToolUse`** — the safety + git + worktree + subagent-discipline gates (detailed in §6 and §7). Note: although `pretool-layer-match-gate.sh` is named with a `pretool-` prefix, it is actually wired under `SubagentStop`.
-- **`PostToolUse`** — `posttool-allowlist-consume.py` (single-use grant consumption), the todo trackers, `posttool-git-checkpoint.sh` + `posttool-doc-sync.py` + `posttool-command-frontmatter-validate.py` (on `Write|Edit|…`), and the overnight loop/trace hooks (on `Agent`).
+- **`PostToolUse`** — `posttool-allowlist-consume.py` (single-use grant consumption), the todo trackers, `posttool-git-checkpoint.sh` + `posttool-doc-sync.py` + `posttool-command-frontmatter-validate.py` (on `Write|Edit|…`), the overnight loop/trace hooks (on `Agent`), and the validated restart-dispatch journal (on `SendMessage`).
 - **`Stop`** — `stop-overnight-timelock.py` (refuses to end an overnight session before its deadline), `stop-spec-coverage-enforce.py`, `auto-commit.sh`, `stop-cleanup-allowlist.sh` (reap expired sentinels).
-- **`SubagentStop`** — diff-check, guard-integrity, layer-match-gate, and the codex / e2e / cp enforcement hooks. (`subagentstop-cp-enforce.py` *is* wired here.)
+- **`SubagentStop`** — diff-check, guard-integrity, layer-match-gate, restart response evidence, and the codex / e2e / cp enforcement hooks. (`subagentstop-cp-enforce.py` *is* wired here.)
+
+### 5.1 Lossless quota recovery (`/restart`)
+
+`/restart` is a human-only control path for a parent session whose subagents were stopped by a Claude session/usage limit. `hooks/lib/subagent_restart.py` scans the full current parent transcript, binds every recoverable interrupted `Agent`/`Task` call to its original persisted `agent_id`, and requires explicit interruption evidence for background children rather than inferring failure from a missing completion notification. The command then resumes every pending ID through native `SendMessage`; it never reconstructs the work in a replacement `Agent` prompt.
+
+The exception is deliberately narrow. The supported command surface is human-only (`disable-model-invocation: true` plus the `Skill(restart:*)` deny), and `userprompt-restart-authorize.py` is the intended issuer of a session/transcript-bound capability for an exact bare `/restart`. Literal-substring guarding of that issuer was removed: it blocked ordinary read-only work on files whose names appear throughout the docs while adding no real barrier (the credential mint is reachable by direct import). The threat model is unchanged — see §11. Independently, both runtime gates require the fixed recovery message, a current-transcript candidate, and pending prepared state. `posttool-restart-sendmessage.py` journals successful dispatch, while `subagentstop-restart-track.py` records response evidence in `~/.claude/restart-state/<session-id>.json`. A dispatched agent is not sent a duplicate message; a later quota event makes that same ID retryable. Finalization is forbidden until every candidate has response evidence. On a runtime without native `SendMessage` and authoritative child lifecycle events, the command reports unsupported rather than claiming parity.
 
 ---
 
@@ -342,14 +348,14 @@ flowchart LR
 ├── ARCHITECTURE.md          # this document
 ├── README.md                # overview / value-prop (hand-maintained; no AUTO block)
 ├── INDEX.md                 # top-level index
-├── settings.json            # 66 wired hook files / 67 entries across 7 lifecycle events; permissions; env
+├── settings.json            # 69 wired hook files / 70 entries across 7 lifecycle events; permissions; env
 ├── agents/                  # 23 subagent definitions  (+ INDEX.md, README.md)
-├── commands/                # 18 slash-command workflows (+ INDEX.md, README.md)
-├── hooks/                   # enforcement layer (88 files on disk; 66 wired)
+├── commands/                # 19 slash-command workflows (+ INDEX.md, README.md)
+├── hooks/                   # enforcement layer (91 files on disk; 69 wired)
 │   ├── lib/                 #   allowlist (sentinel grants), checkpoint-core, contract runtime, resolvers
 │   ├── doc_sync/            #   self-updating INDEX/README/CLAUDE regeneration package
 │   └── git-keystone/        #   git-native ref-transaction protection
-├── scripts/                 # 77 helper scripts (graphify, grant writers, spec/dev-report resolvers, ...)
+├── scripts/                 # 78 helper scripts (graphify, grant writers, spec/dev-report resolvers, ...)
 │   └── install/             #   install helpers
 ├── skills/                  # 8 skills: Playwright UI-audit suite (ui-*)
 ├── schemas/                 # JSON contracts: context.v1, cycle-contract.v1, dev-report.v1, qa-report.v1, ...
