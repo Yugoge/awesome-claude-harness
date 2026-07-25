@@ -25,6 +25,8 @@ import os
 import re
 import subprocess
 import sys
+import time
+from datetime import datetime
 from pathlib import Path
 
 CODEX_PLAN_TOOLS = {'update_plan', 'UpdatePlan', 'functions.update_plan'}
@@ -141,6 +143,55 @@ def is_codex_runtime(data: dict) -> bool:
     return runtime == 'codex'
 
 
+def valid_codex_session_id(value) -> bool:
+    """Require the same path-safe session identity accepted by the native owner."""
+    return (
+        isinstance(value, str)
+        and 0 < len(value) <= 120
+        and re.fullmatch(r'[A-Za-z0-9._-]+', value) is not None
+    )
+
+
+def codex_payload_is_subagent_context(data: dict) -> bool:
+    """Identify child-local Codex tool events without borrowing parent state."""
+    for key in (
+        'agent_id',
+        'subagent_id',
+        'agent_path',
+        'parent_agent_id',
+        'parent_thread_id',
+        'parent_session_id',
+    ):
+        if data.get(key):
+            return True
+    for key in ('CLAUDE_AGENT_ID', 'CODEX_AGENT_ID', 'CODEX_AGENT_PATH', 'OPENAI_AGENT_ID'):
+        if os.environ.get(key):
+            return True
+    transcript_path = str(data.get('transcript_path') or '').strip()
+    if not transcript_path:
+        return False
+    try:
+        with Path(transcript_path).open(encoding='utf-8', errors='ignore') as handle:
+            for _ in range(20):
+                line = handle.readline()
+                if not line:
+                    break
+                try:
+                    event = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if not isinstance(event, dict):
+                    continue
+                if event.get('type') != 'session_meta':
+                    continue
+                payload = event.get('payload')
+                source = payload.get('source') if isinstance(payload, dict) else None
+                return isinstance(source, dict) and isinstance(source.get('subagent'), dict)
+    except OSError:
+        return False
+    return False
+
+
 def normalize_step_text(value: str) -> str:
     value = re.sub(r'\s+', ' ', value or '').strip().lower()
     value = re.sub(r'^(?:[-*]\s*)?(?:\[[ x-]\]\s*)?', '', value)
@@ -212,6 +263,21 @@ def _in_progress_indices(todos: list) -> list:
     return [i for i, todo in enumerate(todos) if todo.get('status') == 'in_progress']
 
 
+def _codex_plan_frontier(todos: list) -> int | None:
+    statuses = [todo.get('status') for todo in todos]
+    if statuses and all(status == 'completed' for status in statuses):
+        return len(statuses)
+    active = [index for index, status in enumerate(statuses) if status == 'in_progress']
+    if len(active) != 1:
+        return None
+    frontier = active[0]
+    if any(status != 'completed' for status in statuses[:frontier]):
+        return None
+    if any(status != 'pending' for status in statuses[frontier + 1:]):
+        return None
+    return frontier
+
+
 def validate_initial_codex_todos(new_todos: list) -> list:
     """First Codex plan call must initialize, not skip into later workflow steps."""
     violations = []
@@ -229,12 +295,29 @@ def validate_initial_codex_todos(new_todos: list) -> list:
     return violations
 
 
-def validate_codex_transition(state: dict, old_todos: list, new_todos: list) -> list:
+def validate_codex_transition(
+    state: dict,
+    old_todos: list,
+    new_todos: list,
+    native_subagent_steps: set[int] | None = None,
+) -> list:
     """Mirror TodoWrite sequence rules for Codex update_plan payloads."""
     violations = []
     if len(old_todos) != len(new_todos):
         violations.append(f'Step count changed from {len(old_todos)} to {len(new_todos)}')
         return violations
+
+    old_frontier = _codex_plan_frontier(old_todos)
+    new_frontier = _codex_plan_frontier(new_todos)
+    if old_frontier is not None and new_frontier is not None:
+        if new_frontier < old_frontier:
+            violations.append(
+                f'Codex checklist frontier regression from {old_frontier} to {new_frontier}'
+            )
+        elif new_frontier > old_frontier + 1:
+            violations.append(
+                f'Codex checklist frontier jump from {old_frontier} to {new_frontier}'
+            )
 
     old_completed = _completed_indices(old_todos)
     new_completed = _completed_indices(new_todos)
@@ -264,13 +347,451 @@ def validate_codex_transition(state: dict, old_todos: list, new_todos: list) -> 
                 )
                 break
 
+    native_subagent_steps = native_subagent_steps or set()
+    legacy_calls = state.get('subagent_calls')
     for idx, (old, new) in enumerate(zip(old_todos, new_todos)):
         if old.get('status') != 'in_progress' or new.get('status') != 'completed':
             continue
         subagent_call = new.get('subagent_call')
-        if subagent_call and not state.get('subagent_calls', {}).get(str(idx), False):
+        legacy_call = (
+            isinstance(legacy_calls, dict)
+            and legacy_calls.get(str(idx)) is True
+        )
+        if subagent_call and not legacy_call and idx not in native_subagent_steps:
             violations.append(f'Step {idx}: subagent step completed before required subagent call')
+
     return violations
+
+
+def _event_epoch_ms(event: dict) -> int | None:
+    value = event.get('timestamp')
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        return int(datetime.fromisoformat(value.replace('Z', '+00:00')).timestamp() * 1000)
+    except (TypeError, ValueError):
+        return None
+
+
+def _transcript_path(data: dict, session_id: str) -> Path | None:
+    if not session_id:
+        return None
+
+    def belongs_to_session(path: Path) -> bool:
+        if not path.is_file() or not path.name.endswith(f'-{session_id}.jsonl'):
+            return False
+        try:
+            session_meta = []
+            with path.open(encoding='utf-8') as handle:
+                for line in handle:
+                    if not line.strip():
+                        continue
+                    event = json.loads(line)
+                    if isinstance(event, dict) and event.get('type') == 'session_meta':
+                        session_meta.append(event)
+        except (OSError, json.JSONDecodeError):
+            return False
+        if len(session_meta) != 1:
+            return False
+        payload = session_meta[0].get('payload')
+        return (
+            isinstance(payload, dict)
+            and payload.get('id') == session_id
+            and payload.get('session_id') == session_id
+        )
+
+    explicit_paths = []
+    explicit_supplied = False
+    for key in ('transcript_path', 'transcript', 'conversation_transcript_path'):
+        value = data.get(key)
+        if isinstance(value, str) and value:
+            explicit_supplied = True
+            path = Path(value).expanduser()
+            if belongs_to_session(path):
+                explicit_paths.append(path.resolve())
+    if explicit_supplied:
+        unique_explicit = set(explicit_paths)
+        return unique_explicit.pop() if len(unique_explicit) == 1 else None
+
+    matches = {
+        path.resolve()
+        for path in (Path.home() / '.codex' / 'sessions').glob(
+            f'**/*-{session_id}.jsonl'
+        )
+        if belongs_to_session(path)
+    }
+    return matches.pop() if len(matches) == 1 else None
+
+
+def _spawn_task_name(payload: dict) -> str | None:
+    arguments = payload.get('arguments')
+    if isinstance(arguments, str):
+        try:
+            arguments = json.loads(arguments)
+        except json.JSONDecodeError:
+            return None
+    if not isinstance(arguments, dict):
+        return None
+    task_name = arguments.get('task_name')
+    if not isinstance(task_name, str) or not re.fullmatch(r'[a-z0-9_]+', task_name):
+        return None
+    return task_name
+
+
+def _task_name_matches_role(task_name: str, role: str) -> bool:
+    normalized_role = role.strip().lower().replace('-', '_')
+    if (
+        not re.fullmatch(r'[a-z0-9_]+', normalized_role)
+        or not isinstance(task_name, str)
+        or not re.fullmatch(r'[a-z0-9_]+', task_name)
+    ):
+        return False
+
+    task_tokens = task_name.split('_')
+    role_tokens = normalized_role.split('_')
+    role_width = len(role_tokens)
+    if any(
+        task_tokens[offset:offset + role_width] == role_tokens
+        for offset in range(len(task_tokens) - role_width + 1)
+    ):
+        return True
+
+    # BA-validation agents are conventionally named ``baqa_<lane>`` but execute
+    # the canonical QA role. Keep this explicit so arbitrary substrings such as
+    # ``quality`` cannot satisfy the delegated-role evidence check.
+    return normalized_role == 'qa' and 'baqa' in task_tokens
+
+
+def _final_agent_text(payload: dict) -> str | None:
+    content = payload.get('content')
+    if not isinstance(content, list):
+        return None
+    for item in content:
+        if not isinstance(item, dict) or item.get('type') != 'input_text':
+            continue
+        text = item.get('text')
+        if isinstance(text, str) and text.startswith('Message Type: FINAL_ANSWER\n'):
+            return text
+    return None
+
+
+_OPERATIONAL_TERMINAL_OUTCOMES = {
+    'pause': 'paused',
+    'paused': 'paused',
+    'blocked': 'blocked',
+    'failed': 'failed',
+    'error': 'error',
+    'errored': 'error',
+    'interrupted': 'interrupted',
+    'cancelled': 'cancelled',
+    'canceled': 'cancelled',
+    'timeout': 'timeout',
+    'timed_out': 'timeout',
+    'timedout': 'timeout',
+    'quota': 'quota',
+    'quota_exhausted': 'quota',
+    'usage_limit': 'usage_limit',
+    'usage_limit_reached': 'usage_limit',
+    'no_work': 'no_work',
+    'nowork': 'no_work',
+}
+
+
+def _terminal_operational_outcome(text: str) -> str | None:
+    """Parse only the closed operational-control grammar from a FINAL body.
+
+    Ordinary business text (including a QA verdict of FAIL) intentionally has
+    no operational outcome.  Completion is established independently by an
+    exact ``list_agents`` completed status, never by absence from this enum.
+    """
+    body = text.split('\nPayload:\n', 1)[-1].strip()
+    try:
+        structured = json.loads(body)
+    except (json.JSONDecodeError, TypeError):
+        structured = None
+    if isinstance(structured, dict):
+        raw = structured.get('status', structured.get('outcome'))
+        if isinstance(raw, str):
+            token = re.sub(r'[^a-z0-9]+', '_', raw.strip().lower()).strip('_')
+            return _OPERATIONAL_TERMINAL_OUTCOMES.get(token)
+        return None
+    first = re.split(r'\s*[:\-]\s*|\s+', body, maxsplit=1)[0]
+    token = re.sub(r'[^a-z0-9]+', '_', first.strip().lower()).strip('_')
+    if token in {'usage', 'usage_limit'} and body.lower().startswith('usage limit'):
+        token = 'usage_limit'
+    if token in {'no', 'no_work'} and re.match(r'^no[- ]?work\b', body.lower()):
+        token = 'no_work'
+    if token in {'timed', 'timed_out'} and body.lower().startswith('timed out'):
+        token = 'timed_out'
+    return _OPERATIONAL_TERMINAL_OUTCOMES.get(token)
+
+
+def _structured_completed_paths(output) -> set[str]:
+    if isinstance(output, str):
+        try:
+            output = json.loads(output)
+        except json.JSONDecodeError:
+            return set()
+    if not isinstance(output, dict):
+        return set()
+    agents = output.get('agents')
+    if not isinstance(agents, list):
+        return set()
+    completed = set()
+    for item in agents:
+        if not isinstance(item, dict):
+            continue
+        path = item.get('agent_name')
+        status = item.get('agent_status')
+        if not isinstance(path, str) or not isinstance(status, dict):
+            continue
+        if 'completed' not in status:
+            continue
+        completed.add(path)
+    return completed
+
+
+def completed_codex_subagents(
+    data: dict,
+    session_id: str,
+    started_after_ms: int,
+    *,
+    completed_before_ms: int | None = None,
+    completed_before_line: int | None = None,
+    binding: dict | None = None,
+) -> list[dict]:
+    """Return closed spawn/start/terminal/status records for one step window."""
+    path = _transcript_path(data, session_id)
+    if path is None:
+        return []
+    events = []
+    try:
+        for line_no, line in enumerate(path.read_text(encoding='utf-8').splitlines(), 1):
+            event = json.loads(line)
+            if isinstance(event, dict):
+                events.append((line_no, event))
+    except (OSError, json.JSONDecodeError):
+        return []
+
+    spawns: dict[str, dict] = {}
+    started_by_path: dict[str, dict] = {}
+    identity_by_call: dict[str, tuple] = {}
+    identity_by_thread: dict[str, tuple] = {}
+    completed_by_identity: dict[tuple, dict] = {}
+    list_agent_calls: set[str] = set()
+    structured_success_by_path: dict[str, tuple[int, int]] = {}
+    for line_no, event in events:
+        if completed_before_line is not None and line_no >= completed_before_line:
+            break
+        payload = event.get('payload')
+        if not isinstance(payload, dict):
+            continue
+        event_ms = _event_epoch_ms(event)
+        if event.get('type') == 'response_item' and payload.get('type') == 'function_call':
+            if payload.get('namespace') == 'collaboration' and payload.get('name') == 'list_agents':
+                call_id = payload.get('call_id')
+                if isinstance(call_id, str) and call_id:
+                    list_agent_calls.add(call_id)
+                continue
+            if payload.get('namespace') == 'collaboration' and payload.get('name') == 'spawn_agent':
+                call_id = payload.get('call_id')
+                task_name = _spawn_task_name(payload)
+                if (
+                    isinstance(call_id, str)
+                    and call_id
+                    and task_name is not None
+                    and event_ms is not None
+                    and event_ms >= started_after_ms
+                ):
+                    spawn = {
+                        'spawned_at_ms': event_ms,
+                        'task_name': task_name,
+                        'spawn_line': line_no,
+                    }
+                    existing = spawns.get(call_id)
+                    if existing is not None and existing['task_name'] != task_name:
+                        return []
+                    if existing is None:
+                        spawns[call_id] = spawn
+            continue
+        if event.get('type') == 'response_item' and payload.get('type') == 'function_call_output':
+            call_id = payload.get('call_id')
+            if call_id not in list_agent_calls or event_ms is None:
+                continue
+            if completed_before_ms is not None and event_ms >= completed_before_ms:
+                continue
+            for agent_path in _structured_completed_paths(payload.get('output')):
+                prior = structured_success_by_path.get(agent_path)
+                if prior is None or (event_ms, line_no) >= prior:
+                    structured_success_by_path[agent_path] = (event_ms, line_no)
+            continue
+        if event.get('type') == 'event_msg' and payload.get('type') == 'sub_agent_activity':
+            call_id = payload.get('event_id')
+            agent_path = payload.get('agent_path')
+            agent_thread_id = payload.get('agent_thread_id')
+            occurred_ms = payload.get('occurred_at_ms')
+            spawn = spawns.get(call_id)
+            if (
+                payload.get('kind') == 'started'
+                and isinstance(call_id, str)
+                and isinstance(spawn, dict)
+                and isinstance(agent_path, str)
+                and agent_path.rsplit('/', 1)[-1] == spawn['task_name']
+                and isinstance(agent_thread_id, str)
+                and bool(agent_thread_id.strip())
+                and type(occurred_ms) is int
+                and occurred_ms >= started_after_ms
+                and occurred_ms >= spawn['spawned_at_ms']
+            ):
+                identity = (
+                    call_id,
+                    agent_thread_id,
+                    agent_path,
+                    spawn['task_name'],
+                )
+                if (
+                    call_id in identity_by_call
+                    and identity_by_call[call_id] != identity
+                ):
+                    return []
+                if (
+                    agent_thread_id in identity_by_thread
+                    and identity_by_thread[agent_thread_id] != identity
+                ):
+                    return []
+                if (
+                    agent_path in started_by_path
+                    and (
+                        started_by_path[agent_path]['call_id'],
+                        started_by_path[agent_path]['agent_thread_id'],
+                        started_by_path[agent_path]['agent_path'],
+                        started_by_path[agent_path]['task_name'],
+                    ) != identity
+                ):
+                    return []
+                record = {
+                    'call_id': call_id,
+                    'agent_path': agent_path,
+                    'agent_thread_id': agent_thread_id,
+                    'task_name': spawn['task_name'],
+                    'spawned_at_ms': spawn['spawned_at_ms'],
+                    'started_at_ms': occurred_ms,
+                    'spawn_line': spawn['spawn_line'],
+                    'started_line': line_no,
+                }
+                identity_by_call[call_id] = identity
+                identity_by_thread[agent_thread_id] = identity
+                started_by_path.setdefault(agent_path, record)
+            continue
+        if event.get('type') != 'response_item' or payload.get('type') != 'agent_message':
+            continue
+        author = payload.get('author')
+        final_text = _final_agent_text(payload)
+        if (
+            not isinstance(author, str)
+            or author not in started_by_path
+            or final_text is None
+        ):
+            continue
+        started = started_by_path[author]
+        if event_ms is None or event_ms < started['started_at_ms']:
+            continue
+        identity = (
+            started['call_id'],
+            started['agent_thread_id'],
+            started['agent_path'],
+            started['task_name'],
+        )
+        terminal = {
+            **started,
+            'terminal_at_ms': event_ms,
+            'terminal_line': line_no,
+            '_operational_outcome': _terminal_operational_outcome(final_text),
+        }
+        existing = completed_by_identity.get(identity)
+        if existing is None or event_ms >= existing['terminal_at_ms']:
+            completed_by_identity[identity] = terminal
+    completed = []
+    for record in completed_by_identity.values():
+        if record.pop('_operational_outcome', None) is not None:
+            continue
+        success = structured_success_by_path.get(record['agent_path'])
+        if success is None:
+            continue
+        completion_ms, completion_line = success
+        if completion_ms < record['terminal_at_ms'] or completion_line < record['terminal_line']:
+            continue
+        record['completion_observed_at_ms'] = completion_ms
+        record['completion_observed_line'] = completion_line
+        record['completion_status'] = 'completed'
+        if binding is not None:
+            record.update(binding)
+        completed.append(record)
+    return completed
+
+
+def native_subagent_evidence_for_transition(
+    data: dict,
+    session_id: str,
+    state: dict,
+    old_todos: list,
+    new_todos: list,
+) -> dict[int, dict]:
+    evidence: dict[int, dict] = {}
+    started_at = state.get('codex_step_started_at_ms', {})
+    if not isinstance(started_at, dict):
+        return evidence
+    consumed = state.get('codex_subagent_evidence', {})
+    consumed_records = list(consumed.values()) if isinstance(consumed, dict) else []
+    consumed_ids = {
+        item.get('call_id')
+        for item in consumed_records
+        if isinstance(item, dict)
+    }
+    consumed_threads = {
+        item.get('agent_thread_id')
+        for item in consumed_records
+        if isinstance(item, dict)
+    }
+    consumed_paths = {
+        item.get('agent_path')
+        for item in consumed_records
+        if isinstance(item, dict)
+    }
+    consumed_tasks = {
+        item.get('task_name')
+        for item in consumed_records
+        if isinstance(item, dict)
+    }
+    for idx, (old, new) in enumerate(zip(old_todos, new_todos)):
+        if old.get('status') != 'in_progress' or new.get('status') != 'completed':
+            continue
+        required_call = new.get('subagent_call')
+        if not isinstance(required_call, dict):
+            continue
+        expected_role = required_call.get('subagent_type') or required_call.get('agent')
+        if not isinstance(expected_role, str) or not expected_role.strip():
+            continue
+        lower_bound = started_at.get(str(idx))
+        if type(lower_bound) is not int:
+            continue
+        candidates = completed_codex_subagents(data, session_id, lower_bound)
+        candidates = [
+            item for item in candidates
+            if item.get('call_id') not in consumed_ids
+            and item.get('agent_thread_id') not in consumed_threads
+            and item.get('agent_path') not in consumed_paths
+            and item.get('task_name') not in consumed_tasks
+            and _task_name_matches_role(item.get('task_name', ''), expected_role)
+        ]
+        if candidates:
+            candidates.sort(
+                key=lambda item: (
+                    item['terminal_at_ms'], item['terminal_line'], item['call_id']
+                )
+            )
+            evidence[idx] = candidates[-1]
+    return evidence
 
 
 def emit_codex_plan_block(cmd_name: str, violations: list, last_todos: list) -> None:
@@ -288,7 +809,8 @@ def emit_codex_plan_block(cmd_name: str, violations: list, last_todos: list) -> 
         '(2) must pass through in_progress '
         '(3) one in_progress at a time '
         '(4) no step skipping '
-        '(5) required subagent steps need matching subagent evidence.\n'
+        '(5) delegated steps require a current-window Codex transcript '
+        'spawn/start/final evidence chain.\n'
         + hint
     )
     sys.exit(2)
@@ -302,6 +824,23 @@ def persist_codex_initialization(
     implicit: bool,
 ) -> bool:
     try:
+        previous = state.get('last_todos')
+        started_at = state.get('codex_step_started_at_ms')
+        if not isinstance(started_at, dict):
+            started_at = {}
+        now_ms = time.time_ns() // 1_000_000
+        for idx, todo in enumerate(todos):
+            if todo.get('status') != 'in_progress':
+                continue
+            old_status = None
+            if isinstance(previous, list) and idx < len(previous):
+                old_status = previous[idx].get('status')
+            lower_bound = started_at.get(str(idx))
+            # The native state owner can project this status before this legacy
+            # hook runs, so status alone cannot prove the step already has a bound.
+            if old_status != 'in_progress' or type(lower_bound) is not int:
+                started_at[str(idx)] = now_ms
+        state['codex_step_started_at_ms'] = started_at
         todos_file = official_todos_path(session_id)
         todos_file.parent.mkdir(parents=True, exist_ok=True)
         todos_file.write_text(json.dumps(todos, ensure_ascii=False))
@@ -389,8 +928,14 @@ def acknowledge_codex_plan(data: dict, session_id: str, bookmark_path: Path, pro
     last_todos = state.get('last_todos')
     if last_todos is None:
         violations = validate_initial_codex_todos(todos)
+        native_evidence = {}
     else:
-        violations = validate_codex_transition(state, last_todos, todos)
+        native_evidence = native_subagent_evidence_for_transition(
+            data, session_id, state, last_todos, todos
+        )
+        violations = validate_codex_transition(
+            state, last_todos, todos, set(native_evidence)
+        )
     if violations:
         try:
             state['todo_acknowledged'] = False
@@ -399,6 +944,19 @@ def acknowledge_codex_plan(data: dict, session_id: str, bookmark_path: Path, pro
         except Exception:
             pass
         emit_codex_plan_block(cmd_name, violations, last_todos or todos)
+
+    if native_evidence:
+        calls = state.get('subagent_calls')
+        if not isinstance(calls, dict):
+            calls = {}
+        records = state.get('codex_subagent_evidence')
+        if not isinstance(records, dict):
+            records = {}
+        for idx, record in native_evidence.items():
+            calls[str(idx)] = True
+            records[str(idx)] = dict(record)
+        state['subagent_calls'] = calls
+        state['codex_subagent_evidence'] = records
 
     if not persist_codex_initialization(session_id, bookmark_path, state, todos, implicit=False):
         return False
@@ -454,12 +1012,23 @@ def main():
         sys.exit(0)
 
     project_dir = Path(os.environ.get('CLAUDE_PROJECT_DIR', os.getcwd()))
+    if is_codex_runtime(data) and not valid_codex_session_id(session_id):
+        sys.stderr.write(
+            '\nBLOCKED Codex workflow event: invalid or path-unsafe session identity.\n'
+        )
+        sys.exit(2)
     bookmark_path = project_dir / '.claude' / f'workflow-{session_id}.json'
 
-    if tool_name in CODEX_PLAN_TOOLS and acknowledge_codex_plan(
-        data, session_id, bookmark_path, project_dir
+    if (
+        tool_name in CODEX_PLAN_TOOLS
+        and is_codex_runtime(data)
+        and codex_payload_is_subagent_context(data)
     ):
         sys.exit(0)
+
+    if tool_name in CODEX_PLAN_TOOLS:
+        if acknowledge_codex_plan(data, session_id, bookmark_path, project_dir):
+            sys.exit(0)
 
     # TodoWrite → acknowledge and allow
     # (Stop hook enforces todo count >= blocking_count, so reducing todos is caught at session end)
