@@ -59,6 +59,10 @@ def official_todos_path(session_id: str) -> Path:
 
 
 def main():
+    # Native save_state owns Codex progress and projection retirement. Avoid a
+    # second progress/deletion writer when invoked by a compatibility wrapper.
+    if os.environ.get('CLAUDE_COMPAT_RUNTIME') == 'codex':
+        sys.exit(0)
     try:
         data = json.load(sys.stdin)
         todos = data.get('tool_input', {}).get('todos', [])
