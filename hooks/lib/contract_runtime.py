@@ -803,7 +803,7 @@ def reconcile_accepted_artifact(
     contract_path = load_contract_path(session_id, cycle_id)
     if contract_path is None:
         return {'ok': False, 'reason': 'contract missing'}
-    artifact_ok, artifact_reason = _artifact_valid_for_entry(matched_entry)
+    artifact_ok, artifact_reason = _artifact_valid_for_entry(matched_entry, session_id)
     if not artifact_ok:
         return {'ok': False, 'reason': artifact_reason}
     lock_file = _lock_path(session_id, cycle_id).open('w', encoding='utf-8')
