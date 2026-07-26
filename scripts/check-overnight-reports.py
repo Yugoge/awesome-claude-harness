@@ -69,8 +69,10 @@ def _read_json(path: Path) -> dict | None:
         return None
 
 
-def _resolve_path(relpath: str, project_dir: Path) -> Path:
-    return Path(relpath) if relpath.startswith('/') else project_dir / relpath
+def _resolve_path(relpath: str, session_id: str) -> Path:
+    # Contracted artifacts are written inside the overnight worktree during a
+    # live session; resolve against worktree-first roots, not project dir only.
+    return contract_runtime.resolve_artifact_path(relpath, session_id)
 
 
 def _check_one_path(path: Path, schema_name: str | None) -> tuple[str, list[str]]:
