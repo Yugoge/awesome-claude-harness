@@ -133,17 +133,23 @@ def main() -> int:
 
     cycle_id = _resolve_cycle(args.session_id, args.cycle)
     if cycle_id is None:
-        print(f'ERROR: cannot resolve cycle for session {args.session_id}', file=sys.stderr)
-        return 1
+        # No cycle dir at all: nothing has been produced yet — mirror the
+        # contract hooks' HARD CUTOVER passthrough instead of hard-failing.
+        print(f'NOTICE: no cycle dir for session {args.session_id}; '
+              'nothing to validate (passthrough).')
+        return 0
 
     contract = contract_runtime.load_contract(args.session_id, cycle_id)
     if contract is None:
-        print(f'ERROR: cycle-contract.json not found for {args.session_id} cycle-{cycle_id}',
-              file=sys.stderr)
-        return 1
+        # HARD CUTOVER passthrough: the live contract only exists after the
+        # Step-4 orchestrator publish. Step 3 invokes this checker BEFORE
+        # publication, and legacy (pre-contract) sessions never have one —
+        # both must pass, exactly like the contract-aware hooks exit 0.
+        print(f'NOTICE: cycle-contract.json not published yet for {args.session_id} '
+              f'cycle-{cycle_id}; contract validation skipped (passthrough).')
+        return 0
 
-    project_dir = Path(os.environ.get('CLAUDE_PROJECT_DIR', os.getcwd()))
-    rows = [_check_entry(e, project_dir) for e in contract.get('required_calls', [])]
+    rows = [_check_entry(e, args.session_id) for e in contract.get('required_calls', [])]
     _print_rows(rows)
     expected, present, valid, missing, invalid = _summarize(rows)
     print(f'SUMMARY: expected={expected} present={present} valid={valid} '
