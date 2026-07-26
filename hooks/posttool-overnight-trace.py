@@ -468,8 +468,16 @@ def _build_record(
 
 
 def _trace_path(project_dir: Path, session_id: str, cycle_id: int) -> Path:
+    # Cycle-scoped artifacts live in the overnight worktree when one exists
+    # (main repo is read-only for the overnight actor); fall back to the
+    # main-repo layout for worktree-less sessions.
+    root = project_dir
+    state = _read_overnight_state(project_dir, session_id)
+    wt = (state or {}).get("worktree_path")
+    if isinstance(wt, str) and wt and Path(wt).is_dir():
+        root = Path(wt)
     return (
-        project_dir / "docs" / "dev" / "overnight" / session_id /
+        root / "docs" / "dev" / "overnight" / session_id /
         f"cycle-{cycle_id}" / "trace.jsonl"
     )
 

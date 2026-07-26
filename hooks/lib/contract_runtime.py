@@ -74,20 +74,58 @@ def _result(ok: bool, errors: list, severity: str) -> dict:
 # ---------------------------------------------------------------------------
 
 
+def _overnight_worktree_path(session_id: str) -> Optional[Path]:
+    """Return ``worktree_path`` from the session's overnight-state file, if any.
+
+    The overnight worktree is the only place the orchestrator can WRITE the
+    contract during a live session (the main repo is a read-only mount for the
+    overnight actor and the worktree guard blocks main-repo writes), so
+    worktree-hosted candidates must be resolvable — and take priority over the
+    main-repo paths (hook-deadlock fix, 2026-07-26). The state file itself
+    always lives in the MAIN repo's ``.claude/``.
+    """
+    project_dir = Path(os.environ.get('CLAUDE_PROJECT_DIR', os.getcwd()))
+    state_path = project_dir / '.claude' / f'overnight-state-{session_id}.json'
+    try:
+        state = json.loads(state_path.read_text(encoding='utf-8'))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(state, dict):
+        return None
+    wt = state.get('worktree_path')
+    if isinstance(wt, str) and wt:
+        p = Path(wt)
+        if p.is_dir():
+            return p
+    return None
+
+
 def _candidate_contract_paths(session_id: str, cycle_id: int) -> list[Path]:
     """Return ordered candidate paths for the cycle contract.
 
-    WS1: the third (home-level docs) candidate is derived from the resolved
-    harness home's PARENT (``<home>/../docs/dev/overnight``) — matching the
-    author's ``/root/docs`` sibling-of-``/root/.claude`` layout portably —
-    rather than the hardcoded author literal ``/root/docs``.
+    Worktree-hosted candidates (derived from the overnight state's
+    ``worktree_path``) come FIRST: during a live overnight session that is the
+    only writable location, so a contract published there must shadow any
+    stale main-repo copy.
+
+    WS1: the home-level docs candidate is derived from the resolved harness
+    home's PARENT (``<home>/../docs/dev/overnight``) — matching the author's
+    ``/root/docs`` sibling-of-``/root/.claude`` layout portably — rather than
+    the hardcoded author literal ``/root/docs``.
     """
     project_dir = Path(os.environ.get('CLAUDE_PROJECT_DIR', os.getcwd()))
     cycle_dirname = f'cycle-{cycle_id}'
-    candidates = [
+    candidates = []
+    worktree = _overnight_worktree_path(session_id)
+    if worktree is not None:
+        candidates.extend([
+            worktree / 'docs' / 'dev' / 'overnight' / session_id / cycle_dirname / 'cycle-contract.json',
+            worktree / '.claude' / f'overnight-contract-{session_id}-cycle{cycle_id}.json',
+        ])
+    candidates.extend([
         project_dir / 'docs' / 'dev' / 'overnight' / session_id / cycle_dirname / 'cycle-contract.json',
         project_dir / '.claude' / f'overnight-contract-{session_id}-cycle{cycle_id}.json',
-    ]
+    ])
     home = claude_home.resolve()
     if home is not None:
         candidates.append(

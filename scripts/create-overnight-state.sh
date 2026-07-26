@@ -415,7 +415,16 @@ mkdir -p "$STATE_DIR"
 STATE_FILE="$STATE_DIR/overnight-state-${SESSION_ID}.json"
 TMP_FILE="${STATE_FILE}.tmp"
 CYCLE_ID=1
-CYCLE_DIR="$PROJECT_DIR/$CYCLE_SUBDIR/$SESSION_ID/cycle-$CYCLE_ID"
+# Cycle-scoped artifacts (contract, trace) live in the WORKTREE when one
+# exists: the main repo is read-only for the overnight actor and the worktree
+# guard blocks main-repo writes, so a main-repo cycle_contract_path makes the
+# Step-4 contract publish impossible (hook-deadlock, 2026-07-26).
+if [[ -n "$WORKTREE_PATH" ]]; then
+    CYCLE_ROOT="$WORKTREE_PATH"
+else
+    CYCLE_ROOT="$PROJECT_DIR"
+fi
+CYCLE_DIR="$CYCLE_ROOT/$CYCLE_SUBDIR/$SESSION_ID/cycle-$CYCLE_ID"
 CONTRACT_FILE="$CYCLE_DIR/cycle-contract.json"
 TRACE_LOG_PATH="$CYCLE_DIR/trace.jsonl"
 MONOLITH_SHA="null"
@@ -511,9 +520,16 @@ jq -n \
 # Atomic move
 mv "$TMP_FILE" "$STATE_FILE"
 
-# --- Create minimal cycle contract at session creation ---
+# --- Stage a cycle-contract TEMPLATE at session creation (NEVER the live file) ---
+# cycle-contract.json's mere existence is the HARD CUTOVER switch that flips the
+# contract hooks into enforce mode. Creating it at launch with required_calls: []
+# bricks the pipeline: every Agent dispatch is rejected as "Case C (incomplete
+# contract)" before Step 4 can legally register anything. The launch therefore
+# stages cycle-contract.template.json only; the orchestrator publishes the real
+# cycle-contract.json at Step 4 (after PM Triage) by filling required_calls.
 mkdir -p "$CYCLE_DIR"
-CONTRACT_TMP="${CONTRACT_FILE}.tmp"
+CONTRACT_TEMPLATE="$CYCLE_DIR/cycle-contract.template.json"
+CONTRACT_TMP="${CONTRACT_TEMPLATE}.tmp"
 jq -n \
     --arg session_id "$SESSION_ID" \
     --arg spec_mode "$SPEC_MODE" \
@@ -541,10 +557,10 @@ jq -n \
         specialist_selection: {}
     }' > "$CONTRACT_TMP"
 jq empty "$CONTRACT_TMP" >/dev/null
-mv "$CONTRACT_TMP" "$CONTRACT_FILE"
+mv "$CONTRACT_TMP" "$CONTRACT_TEMPLATE"
 
 echo "Created overnight state v8: $STATE_FILE" >&2
-echo "Created minimal cycle contract: $CONTRACT_FILE" >&2
+echo "Staged cycle contract template (not live; orchestrator publishes at Step 4): $CONTRACT_TEMPLATE" >&2
 echo "  Session: $SESSION_ID" >&2
 echo "  End time: $END_TIME" >&2
 echo "  Spec mode: $SPEC_MODE" >&2
