@@ -179,10 +179,22 @@ if [[ -z "$MAIN_ROOT" ]]; then
 fi
 MAIN_GIT_DIR="$(git -C "$MAIN_ROOT" rev-parse --absolute-git-dir 2>/dev/null || echo "$MAIN_ROOT/.git")"
 MAIN_BRANCH_AT_START="$(git -C "$MAIN_ROOT" branch --show-current 2>/dev/null || echo '')"
-# Fatal unless the main checkout is exactly on master (round-3 §2): we will never
-# move it; launching from a non-master main dir is an unsafe precondition.
-if [[ "$MAIN_BRANCH_AT_START" != "master" ]]; then
-    echo "Error: overnight launch requires the main checkout on 'master' (found: '${MAIN_BRANCH_AT_START:-<detached>}'). Refusing to launch (no state written)." >&2
+# Branch-name agnostic (round-3 §2 revised): the branch the main checkout sits on
+# is recorded but never gated — 'master', 'main', or any other name is fine, and
+# we never move it. The real precondition is that --project-dir resolves to the
+# repository's PRIMARY checkout and not a linked worktree, because the overnight
+# actor creates its own isolated worktree from here and must never nest one
+# worktree inside another. Primary checkout <=> git-dir == git-common-dir.
+MAIN_COMMON_DIR="$(git -C "$MAIN_ROOT" rev-parse --git-common-dir 2>/dev/null || echo '')"
+case "$MAIN_COMMON_DIR" in
+    '')  MAIN_COMMON_DIR="$MAIN_ROOT/.git" ;;
+    /*)  ;;
+    *)   MAIN_COMMON_DIR="$MAIN_ROOT/$MAIN_COMMON_DIR" ;;
+esac
+MAIN_COMMON_DIR="$(realpath "$MAIN_COMMON_DIR" 2>/dev/null || echo "$MAIN_COMMON_DIR")"
+MAIN_GIT_DIR_REAL="$(realpath "$MAIN_GIT_DIR" 2>/dev/null || echo "$MAIN_GIT_DIR")"
+if [[ "$MAIN_GIT_DIR_REAL" != "$MAIN_COMMON_DIR" ]]; then
+    echo "Error: overnight launch requires the repository's primary checkout, but --project-dir resolves to a linked worktree (git-dir='$MAIN_GIT_DIR_REAL', common-dir='$MAIN_COMMON_DIR'). Refusing to launch (no state written)." >&2
     exit 1
 fi
 MAIN_HEAD_AT_START="$(git -C "$MAIN_ROOT" rev-parse HEAD 2>/dev/null || echo '')"
