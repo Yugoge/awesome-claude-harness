@@ -143,10 +143,28 @@ def _try_read_contract(path: Path) -> Optional[dict]:
         return None
 
 
+def _is_launch_stub(data) -> bool:
+    """True iff a parsed contract is a non-activating stub (empty required_calls).
+
+    A file with ``required_calls: []`` can never be a legitimately published
+    contract — publication happens at Step 4 with the full call list (see
+    dev-overnight.md, Cycle Contract Manifest). Such a file is either debris
+    from the pre-fix launcher (which pre-created an empty contract and
+    deadlocked every Agent dispatch as Case C) or an interrupted publish.
+    Treating it as absent keeps HARD CUTOVER off until a real contract lands.
+    """
+    return isinstance(data, dict) and data.get('required_calls') == []
+
+
 def load_contract_path(session_id: str, cycle_id: int) -> Optional[Path]:
-    """Return the active cycle-contract path for ``session_id``/``cycle_id``."""
+    """Return the active cycle-contract path for ``session_id``/``cycle_id``.
+
+    Skips non-activating launch stubs so reconcile writes never target a
+    stale empty contract shadowing the real one.
+    """
     for path in _candidate_contract_paths(session_id, cycle_id):
-        if path.exists():
+        data = _try_read_contract(path)
+        if data is not None and not _is_launch_stub(data):
             return path
     return None
 
@@ -157,9 +175,58 @@ def load_contract(session_id: str, cycle_id: int) -> Optional[dict]:
         return None
     for path in _candidate_contract_paths(session_id, cycle_id):
         data = _try_read_contract(path)
-        if data is not None:
+        if data is not None and not _is_launch_stub(data):
             return data
     return None
+
+
+def artifact_roots(session_id: Optional[str] = None) -> list[Path]:
+    """Ordered roots for resolving relative overnight artifact paths.
+
+    Overnight worktrees precede the main project dir: contracted artifacts
+    are written inside the worktree during a live session (the main repo is
+    read-only for the overnight actor). With a ``session_id`` only that
+    session's worktree is considered; without one, every overnight-state
+    file's worktree is (session-agnostic callers like closeout helpers).
+    """
+    roots: list[Path] = []
+    if session_id:
+        wt = _overnight_worktree_path(session_id)
+        if wt is not None:
+            roots.append(wt)
+    else:
+        project_dir = Path(os.environ.get('CLAUDE_PROJECT_DIR', os.getcwd()))
+        try:
+            for sf in sorted((project_dir / '.claude').glob('overnight-state-*.json')):
+                try:
+                    state = json.loads(sf.read_text(encoding='utf-8'))
+                except (OSError, ValueError):
+                    continue
+                wt = state.get('worktree_path') if isinstance(state, dict) else None
+                if isinstance(wt, str) and wt:
+                    p = Path(wt)
+                    if p.is_dir() and p not in roots:
+                        roots.append(p)
+        except OSError:
+            pass
+    project_dir = Path(os.environ.get('CLAUDE_PROJECT_DIR', os.getcwd()))
+    if project_dir not in roots:
+        roots.append(project_dir)
+    return roots
+
+
+def resolve_artifact_path(path_str: str, session_id: Optional[str] = None) -> Path:
+    """Resolve a (possibly relative) contracted artifact path against the
+    overnight roots, preferring a root where the file actually exists."""
+    path = Path(path_str)
+    if path.is_absolute():
+        return path
+    roots = artifact_roots(session_id)
+    for root in roots:
+        candidate = root / path
+        if candidate.exists():
+            return candidate
+    return roots[0] / path
 
 
 # ---------------------------------------------------------------------------
