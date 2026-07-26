@@ -31,8 +31,12 @@ if str(_HOOKS_DIR) not in sys.path:
 
 try:  # pragma: no cover - convenience for direct CLI use
     from lib.contract_runtime import load_contract
+    from lib.contract_runtime import resolve_artifact_path as _rt_resolve_artifact_path
+    from lib.contract_runtime import _overnight_worktree_path as _rt_worktree_path
 except Exception:  # pragma: no cover
     load_contract = None  # type: ignore[assignment]
+    _rt_resolve_artifact_path = None  # type: ignore[assignment]
+    _rt_worktree_path = None  # type: ignore[assignment]
 
 if str(_LIB_DIR) not in sys.path:
     sys.path.insert(0, str(_LIB_DIR))
