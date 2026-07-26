@@ -54,8 +54,19 @@ def _project_dir() -> Path:
 
 
 def _cycle_dir(session_id: str, cycle_id: int) -> Path:
+    # Cycle-scoped artifacts live in the overnight worktree when the session
+    # has one (main repo is read-only for the overnight actor); harness-report
+    # writes must also land there or they fail on the read-only mount.
+    root = _project_dir()
+    if _rt_worktree_path is not None:
+        try:
+            wt = _rt_worktree_path(session_id)
+        except Exception:
+            wt = None
+        if wt is not None:
+            root = wt
     return (
-        _project_dir() / "docs" / "dev" / "overnight" /
+        root / "docs" / "dev" / "overnight" /
         session_id / f"cycle-{cycle_id}"
     )
 
