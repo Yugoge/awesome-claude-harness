@@ -121,12 +121,81 @@ fi
 # protected family; benign commands (ls/cat/git) still proceed.
 _runtime_guard_fail_closed() {
   # Returns 0 (deny) if the raw command matches a generic protected verb family.
+  #
+  # SCOPE OF THE CLAIM (do not overstate it): this helper is a deliberately COARSE,
+  # BEST-EFFORT regex APPROXIMATION of the engine's lexer — not a re-implementation
+  # of it. It reads raw command TEXT; it does not tokenize, expand, or resolve the
+  # way `_core` does. It is therefore intentionally coarser than the engine in both
+  # directions: it denies some commands the healthy engine would ALLOW (e.g. a bare
+  # `kill <pid>`, or an endpoint client aimed at a benign path), and — because a
+  # regex can never be semantically equivalent to a lexer — there are forms the
+  # engine resolves and this helper does NOT match. Verified examples: a front-end
+  # name split across a quote boundary (`"cu"rl …`, `ki"ll" …`), a backslash-escaped
+  # name (`\curl …`), `$(...)` substitution, and variable/alias indirection all
+  # normalize to a recognized head in the engine and are NOT matched here; encoded
+  # execution (e.g. base64-decoded text) is likewise unmatched. Wrapper
+  # (`sudo …`, `env FOO=1 …`) and simple quoted-`eval` forms DO happen to match today
+  # — only because the family name still appears literally at a position these
+  # patterns accept, NOT because they are parsed — so they are best-effort, not
+  # guaranteed. Over-denial is the intended direction: this path runs ONLY when the
+  # engine already failed to decide. This helper is DEFENSE-IN-DEPTH over specific
+  # tested forms, NOT a guarantee for any family. The families it covers are listed
+  # per-line below; what is NOT covered is named in the residual-gap note in
+  # docs/reference/core-context-refactor-plan.md (the authoritative, detailed record;
+  # lib/runtime_guard/context.py carries a short summary of it plus a pointer here).
+  #
+  # Coverage of the P5/P6 front-end TOKEN SETS is asserted mechanically against the
+  # engine's own definitions by hooks/tests/test_fail_closed_drift.py — adding a token
+  # to `_core.NET_HEADS` / `constants.KILL_VERBS` without widening the lines below
+  # fails that test. That test is what keeps this approximation from silently drifting.
+  # Scope of that assertion: TOKEN-SET coverage across FOUR invocation forms (bare,
+  # quoted-whole, path-qualified, path-qualified+quoted) — NOT semantic equivalence
+  # with the engine's lexer, and NOT a family-wide guarantee for any family.
   local cmd="$1"
+  # Invocation-form tolerance for the P5/P6 front-end families below. The engine
+  # NORMALIZES a front-end token before matching it: it strips a leading path
+  # (`/usr/bin/curl`) and surrounding quotes (`"curl"`). A bare-token pattern misses
+  # every such form. These fragments admit an optional quote + optional path prefix
+  # while keeping the token itself word-anchored.
+  #
+  # The substring-safety property this ACTUALLY buys (verified, and no more than this):
+  # a family name that is a strict prefix/suffix/infix of a longer token WITHIN THE
+  # SAME path component does not match — `httpx-cli`, `nctool`, `curler`,
+  # `https-proxy-agent`, `mycurl`, `curl_wrapper`, `curl.sh` are all left alone,
+  # because the token must be preceded by a start/separator/space (+ optional quote,
+  # + optional `/`-TERMINATED path prefix) and followed by an optional quote + space
+  # or end-of-string.
+  # What this does NOT buy — the helper is neither COMMAND-POSITION-aware nor
+  # QUOTE-aware, so a family name that stands as a WHOLE token is denied wherever it
+  # appears, not just in command position. Verified denials: `ls /opt/curl` (final
+  # component of a mere argument PATH — a longer token that does contain the family
+  # name and DOES match), `echo curl` (bare argument), and
+  # `git commit -m "fix curl retry"` (inside a quoted string). Those are false
+  # denials in the ALLOW direction, accepted deliberately: this path runs only on an
+  # already-broken engine, where over-denial is the safe direction.
+  # NOTE: the four non-P5/P6 families below deliberately keep their original
+  # bare-token anchoring — widening them is out of this change's scope and is recorded
+  # as residual in the plan doc, NOT silently assumed done.
+  local pre='(^|[;&|]|[[:space:]])["'"'"']?([^[:space:];&|"'"'"']*/)?'
+  local post='["'"'"']?([[:space:]]|$)'
   printf '%s\n' "$cmd" | grep -qiE '(^|[;&|]|[[:space:]])(systemctl|service)[[:space:]]+(start|stop|restart|try-restart|reload|reload-or-restart|kill|disable|mask|enable)([[:space:]]|$)' && return 0
-  printf '%s\n' "$cmd" | grep -qiE '(^|[;&|]|[[:space:]])(kill|pkill|killall)([[:space:]]|$)' && return 0
+  # Process-termination family — the engine's P6 front-ends: `constants.KILL_VERBS`
+  # (kill/pkill/killall) PLUS the file-user front-end `fuser`, which `_is_kill_executor`
+  # treats as a kill executor when its kill-flag is present. The flag is NOT required
+  # here on purpose: this fallback only ever runs on an already-broken engine, and
+  # denying the whole front-end is the conservative direction (the same reason a bare
+  # `kill <pid>` is denied here while the healthy engine ALLOWs it).
+  printf '%s\n' "$cmd" | grep -qiE "${pre}(killall|kill|pkill|fuser)${post}" && return 0
   printf '%s\n' "$cmd" | grep -qiE '(^|[;&|]|[[:space:]])(yarn|npm|pnpm|bun)([[:space:]]|$)' && return 0
   printf '%s\n' "$cmd" | grep -qiE '(^|[;&|]|[[:space:]])(npx|bunx|tsc|pkgroll|tsup)([[:space:]]|$)' && return 0
   printf '%s\n' "$cmd" | grep -qiE '(^|[;&|]|[[:space:]])(node|nodejs|tsx|deno)([[:space:]]|$)' && return 0
+  # Endpoint / raw-socket client family — the front-ends through which a protected
+  # control endpoint is reached (the family P5 guards). Mirrors the engine's
+  # `_core.NET_HEADS` = RAW_SOCKET_HEADS | HTTP_CLIENT_HEADS. Without this line a
+  # P5-family command whose guard evaluation CRASHED matched no family above and fell
+  # through to ALLOW. Longest-first alternation so `ncat`/`netcat`/`httpie`/`https`
+  # win over their `nc`/`http` prefixes.
+  printf '%s\n' "$cmd" | grep -qiE "${pre}(netcat|ncat|nc|socat|telnet|curl|wget|httpie|https|http)${post}" && return 0
   return 1
 }
 _RUNTIME_GUARD_LIB="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/runtime_guard.py"
@@ -147,7 +216,7 @@ elif [ "$_RUNTIME_GUARD_VERDICT" != "ALLOW" ]; then
   # guard could not authoritatively decide. Fail closed for danger families.
   [ "$_RUNTIME_GUARD_ERR" != "/dev/null" ] && rm -f "$_RUNTIME_GUARD_ERR" 2>/dev/null
   if _runtime_guard_fail_closed "$COMMAND"; then
-    echo "BLOCKED: protected-runtime-guard FAIL-CLOSED — the guard engine is unavailable or returned no decision (verdict='$_RUNTIME_GUARD_VERDICT'), and this command is in a protected verb family (service/kill/package-manager/build/runtime). Denied conservatively. A human operator must run it from a real terminal, and the guard deployment ($_RUNTIME_GUARD_LIB) should be repaired." >&2
+    echo "BLOCKED: protected-runtime-guard FAIL-CLOSED — the guard engine is unavailable or returned no decision (verdict='$_RUNTIME_GUARD_VERDICT'), and this command is in a protected verb family (service-control/process-termination/package-manager/build/runtime/endpoint-client). Denied conservatively. A human operator must run it from a real terminal, and the guard deployment ($_RUNTIME_GUARD_LIB) should be repaired." >&2
     exit 2
   fi
 else
@@ -828,14 +897,45 @@ fi
 # false positives from quoted git references in echo/printf/heredoc bodies.
 # Prefilter: skip subprocess if no 'git' token in normalized command.
 CLASSIFIER_HAS_PATH_QUALIFIED_GIT=0
+CLASSIFIER_STATUS='unavailable'
 CLASSIFIER_JSON=''
 CLASSIFIER_PY="$(dirname "${BASH_SOURCE[0]}")/lib/git_command_classifier.py"
-if printf '%s\n' "$COMMAND_CONTEXT_STRIPPED" | grep -q 'git' && [ -r "$CLASSIFIER_PY" ]; then
+if ! printf '%s\n' "$COMMAND_CONTEXT_STRIPPED" | grep -q 'git'; then
+  # The normalized execution view contains no candidate token.  This is a
+  # conclusive empty classification, not classifier unavailability.
+  CLASSIFIER_STATUS='ok'
+  CLASSIFIER_JSON='[]'
+elif [ -r "$CLASSIFIER_PY" ]; then
   CLASSIFIER_JSON=$(printf '%s\n' "$COMMAND_CONTEXT_STRIPPED" | \
     "$PYTHON_BIN" "$CLASSIFIER_PY" 2>/dev/null)
-  if printf '%s\n' "$CLASSIFIER_JSON" | grep -q '"path_qualified": true'; then
-    CLASSIFIER_HAS_PATH_QUALIFIED_GIT=1
+  _classifier_status=$?
+  if [ "$_classifier_status" -eq 0 ] && \
+     printf '%s\n' "$CLASSIFIER_JSON" | "$PYTHON_BIN" -c '
+import json, sys
+value = json.load(sys.stdin)
+if not isinstance(value, list):
+    raise SystemExit(1)
+for item in value:
+    if not isinstance(item, dict):
+        raise SystemExit(1)
+    if set(item) != {"subcommand", "args", "path_qualified"}:
+        raise SystemExit(1)
+    if item["subcommand"] is not None and not isinstance(item["subcommand"], str):
+        raise SystemExit(1)
+    if not isinstance(item["args"], list) or not all(isinstance(arg, str) for arg in item["args"]):
+        raise SystemExit(1)
+    if not isinstance(item["path_qualified"], bool):
+        raise SystemExit(1)
+' 2>/dev/null; then
+    CLASSIFIER_STATUS='ok'
+  else
+    CLASSIFIER_JSON=''
   fi
+  unset _classifier_status
+fi
+if [ "$CLASSIFIER_STATUS" = "ok" ] && \
+   printf '%s\n' "$CLASSIFIER_JSON" | grep -q '"path_qualified": true'; then
+  CLASSIFIER_HAS_PATH_QUALIFIED_GIT=1
 fi
 # Helper: check whether the classifier found a path-qualified invocation with
 # the given subcommand token.  Usage: _pq_git_has_subcmd reset
@@ -1542,22 +1642,34 @@ if { echo "$COMMAND" | grep -qE 'git\s+restore\b' && \
   exit 2
 fi
 
-# Block: every git reset --hard form. Shared-repo policy forbids reset-like cleanup in agent flow.
-# Path-qualified /usr/bin/git reset --hard also blocked via classifier (RISK-3)
+# Block: every destructive-reset form. Shared-repo policy forbids reset-like
+# cleanup in agent flow.  A valid structured classifier result is the primary
+# positive detector: quoted documentation/search text is data, not execution.
+# If that classifier is unavailable or malformed, the fallback reads the
+# existing normalized execution view.  That view removes inert quoted/search
+# arguments when normalization succeeds and remains raw (fail-closed) if its
+# own helper is unavailable.  The fallback token explicitly accepts both bare
+# and path-qualified git executables.
 GIT_GLOBAL_OPT_RE='([[:space:]]+(-[Cc][[:space:]]+[^[:space:];|&]+|-[Cc][^[:space:];|&]+|--(git-dir|work-tree|namespace|exec-path|super-prefix|config-env)(=[^[:space:];|&]+|[[:space:]]+[^[:space:];|&]+)|--(bare|no-pager|paginate|no-replace-objects|literal-pathspecs|glob-pathspecs|noglob-pathspecs|icase-pathspecs|no-optional-locks)|-[pP]))*'
 GIT_CMD_RE='(^|[[:space:];&|()`])git'"$GIT_GLOBAL_OPT_RE"'[[:space:]]+'
-_PQ_RESET_HARD=0
-if [ "$CLASSIFIER_HAS_PATH_QUALIFIED_GIT" = "1" ] && _pq_git_has_subcmd reset; then
+GIT_FALLBACK_CMD_RE='(^|[[:space:];&|()`])([^[:space:];&|()`]*/)?git'"$GIT_GLOBAL_OPT_RE"'[[:space:]]+'
+_CLASSIFIED_RESET_HARD=0
+if [ "$CLASSIFIER_STATUS" = "ok" ] && _any_git_has_subcmd reset; then
   printf '%s\n' "$CLASSIFIER_JSON" | "$PYTHON_BIN" -c "
 import json,sys
 invs=json.load(sys.stdin)
 for inv in invs:
-  if inv.get('path_qualified') and inv.get('subcommand')=='reset' and '--hard' in inv.get('args',[]):
+  if inv.get('subcommand')=='reset' and '--hard' in inv.get('args',[]):
     print('match'); break
-" 2>/dev/null | grep -q match && _PQ_RESET_HARD=1
+" 2>/dev/null | grep -q match && _CLASSIFIED_RESET_HARD=1
 fi
-if echo "$COMMAND" | grep -qE "${GIT_CMD_RE}reset[[:space:]]+([^;|&]*[[:space:]]+)?--hard\b" || \
-   [ "$_PQ_RESET_HARD" = "1" ]; then
+_FALLBACK_RESET_HARD=0
+if [ "$CLASSIFIER_STATUS" != "ok" ] && \
+   printf '%s\n' "$COMMAND_CONTEXT_STRIPPED" | \
+     grep -qE "${GIT_FALLBACK_CMD_RE}reset[[:space:]]+([^;|&]*[[:space:]]+)?--hard\b"; then
+  _FALLBACK_RESET_HARD=1
+fi
+if [ "$_CLASSIFIED_RESET_HARD" = "1" ] || [ "$_FALLBACK_RESET_HARD" = "1" ]; then
   echo "BLOCKED: 'git reset --hard' is forbidden in agent flow" >&2
   echo "Command: $COMMAND" >&2
   echo "REASON: shared-repo policy requires non-destructive recovery; hard reset can discard another session's work or index state." >&2

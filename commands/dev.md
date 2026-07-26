@@ -20,25 +20,28 @@ This command uses multi-round inquiry to fully understand requirements, then orc
 
 **BA-Delegated Orchestration Pattern**:
 ```
-User Requirement (may be vague)
+User Requirement (may be vague; MAY carry multiple requirements)
   ↓
 Quick parse of $ARGUMENTS
   ↓
-Delegate to BA subagent (analysis + context building)
+Decompose $ARGUMENTS into N coverage-mapped one-issue lanes   (N == 1 ⇒ single-lane no-op)
   ↓
-BA clarification loop (if BA needs user input, max 3 rounds)
+── per-lane fan-out: N parallel lanes, one issue each, within ONE parent cycle ──
+     Step 4   Delegate to BA subagent      — dispatch per lane   → stage barrier
+     Step 5   BA clarification loop         — lane-local (max 3 rounds)
+     Step 6   Validate BA output           — per lane            → stage barrier
+     Step 7   QA validates BA conclusions  — per lane            → stage barrier
+     Step 8   BA-QA iteration              — retry affected lanes → stage barrier
+     Step 10  Delegate to dev subagent     — dispatch per lane   → stage barrier
+── end per-lane dispatch band ──
   ↓
-Validate BA output (ba-spec + context JSON)
+Step 11  Aggregate lane-suffixed dev-reports → ONE canonical dev-report  (single aggregation join)
   ↓
-QA validates BA conclusions (analysis quality check)
+     Step 12  Validate dev implementation  — per lane
+     Step 13  Delegate to QA subagent      — dispatch per lane   → stage barrier
+     Step 16  Iteration                    — retry failed lanes only (lane-local)
   ↓
-Delegate to dev subagent (implementation)
-  ↓
-Delegate to QA subagent (verification)
-  ↓
-IF QA fails → Refine context → Iterate
-  ↓
-IF QA passes → Generate completion report
+IF all lanes pass → Generate ONE completion report   (one parent cycle / same cycle)
   ↓
 Emit spec continuation or temp closure update
 ```
@@ -56,15 +59,48 @@ Emit spec continuation or temp closure update
   heading to `/close` uses a compact temp update.
 
 **Orchestrator Dispatch Model**:
+- A single `/dev` cycle MAY carry multiple requirements. The orchestrator decomposes them and fans them out to N parallel one-issue lanes within the SAME cycle — see the **Requirement Decomposition & Fan-Out** section below. Multiplicity alone MUST NOT cause refusal or the creation of separate cycles; genuine per-lane safety/hard-contract violations remain enforceable for the affected lane only.
 - N independent tasks → dispatch N subagents **in parallel**, one per task — this is the standard multi-task path
 - 1 task → 1 subagent (sequential is only correct when there is genuinely one task)
 - NEVER bundle multiple issues into a single subagent prompt
 - If QA fails and iteration is needed, re-invoke Dev with the SAME single issue, not a batch
 
+**Hook-rejection continuation (operation-local, cycle outcome conditional):** A rejected subagent operation pauses only that attempted operation and MUST be reported with the exact hook output under the global Subagent Hook Discipline; it does not by itself decide the ordinary `/dev` cycle's outcome. Only the human may authorize retry, and neither the orchestrator nor a subagent may retry, disguise, or circumvent an unauthorized operation. If the human declines or abandons it, the orchestrator may abandon-and-continue only when every acceptance criterion remains achievable without that operation: resume the same lane from its existing artifacts, synchronously re-dispatch exactly that one-issue lane if its prior turn ended, and continue through normal validation and QA. If any acceptance criterion is no longer achievable, do not loop, re-dispatch, or fabricate a substitute; record the lane or cycle as blocked/incomplete, name the unmet acceptance criterion, and allow the ordinary `/dev` cycle to terminate honestly.
+
 **Per-Subagent Single-Task Rule (MANDATORY)**:
 - Each individual subagent invocation handles exactly ONE issue/task
 - BA analyzes ONE requirement, Dev implements ONE fix, QA verifies ONE fix
 - Multitasking within a single subagent is forbidden regardless of how many subagents are running
+
+---
+
+## Requirement Decomposition & Fan-Out
+
+A single `/dev` cycle MAY carry more than one requirement. When it does, the orchestrator fans the requirements out to N parallel one-issue lanes within the SAME cycle — it does NOT reject the cycle, re-slice it into separate `/dev` invocations, or bundle multiple issues into one subagent. **Multiplicity alone MUST NOT cause refusal or the creation of separate cycles; multiplicity alone is a routing condition, never a contract violation. Decompose all requirements into per-issue lanes within the same cycle. Genuine safety or hard-contract violations remain enforceable for the affected lane only.**
+
+**Decompose $ARGUMENTS into a coverage-mapped lane set.** First decompose `$ARGUMENTS` into a coverage-mapped requirement set `requirements[] = [{requirement_id, text}]`, where N = the number of separately-requested, independently-verifiable OUTCOMES. Shared constraints, exclusions, and implementation steps attach to the lanes as context — they do NOT become lanes. Build a coverage map that ties every requested outcome to exactly ONE `requirement_id`, with no omissions and no duplicates. Assign each lane a short stable suffix (`-a`/`-b`/`-c`, or `-r01`/`-r02`) consistent with the existing `dev-report-<task-id>-<worker>.json` worker convention.
+
+**Fan out over the pipeline stages.** Steps 4, 6, 7, 8, 10, 13, 16 iterate over the lane set. For each lane in the lane set, dispatch exactly ONE subagent per lane in a single parallel batch; then wait at a stage barrier before advancing to the next stage; and keep clarification and retry outcomes lane-local, so a clarifying or failing lane never blocks or re-runs its siblings. The dispatch / validate / retry ACTION at each stage is governed by this lane iterator (bound to `lane.text` / `requirement_id` and lane-suffixed I/O); there is no unconditional singular whole-cycle dispatch path when N > 1. Per-stage semantics differ:
+
+- **Step 4 (BA)** — dispatch exactly ONE BA per lane, bound to `lane.text` / `requirement_id`, writing lane-suffixed artifacts.
+- **Step 6 (Validate BA output)** — validate every lane's BA artifacts.
+- **Step 7 (QA-validates-BA)** — dispatch exactly ONE QA per lane.
+- **Step 8 (BA-QA iteration loop)** — retry only the affected lanes, then re-converge at the stage barrier.
+- **Test-Writer pre-dispatch** — conditional, dispatched per applicable lane only.
+- **Step 10 (Dev)** — dispatch exactly ONE Dev per lane, bound to `lane.text` / `requirement_id`, writing lane-suffixed artifacts.
+- **Step 11 (Aggregate)** — ONE parent-level aggregate join AFTER the barrier that unions the lane-suffixed dev-reports into the canonical singular `dev-report-<session>.json`; this is NOT a per-lane dispatch.
+- **Step 13 (QA)** — dispatch exactly ONE QA per lane.
+- **Step 16 (Iteration)** — retry only the failed lanes (lane-local).
+
+**Lane-execution adapter (this step takes precedence over the singular Step templates).** When N > 1, this fan-out step governs the concrete Steps below: every `<requirement>`, `<timestamp>` / session id, input path, output path, dispatch, wait, validation, and result branch in Steps 4–16 is evaluated PER LANE. Each lane's dispatch prompt MUST carry three explicit fields — `Lane requirement_id`, `Lane requirement text` (the authoritative execution scope), and `Parent requirement document (provenance only)` — and the lane text OVERRIDES the parent document and any "context / BA-spec is absolute truth" clause for scope, so sibling outcomes are NOT issues within that lane's invocation. Dispatch stages (4/7/10/13) batch all applicable lanes; waits are stage barriers; validation stages (6/12) run per lane; retry stages (8/16) act only on affected/failed lanes; and every concrete Step's result branch gains a `multi_issue_fanout_requested` route (handled below). When N == 1, none of this applies and the Steps run exactly as written today.
+
+**Lane-authoritative scope (no bundle re-detection).** Each lane is given its assigned requirement `text` as the authoritative execution scope. The full `user-requirement-<session>.md` document is passed to every lane as parent provenance only — never as the lane's execution scope — so a fanned-out lane never re-reads the whole bundle and re-detects multiplicity.
+
+**Lane-suffixed artifacts under one parent session.** Every lane writes lane-suffixed artifacts (`ticket-<session>-<lane>.md`, `context-<session>-<lane>.json`, `dev-report-<session>-<lane>.json`, and the per-lane QA reports) under ONE parent `DEV_SESSION_ID`. Lane-suffixed reports are aggregated once via Step 11 into the canonical singular `dev-report-<session>.json`, and the cycle emits ONE parent completion report — never a new cycle or session per lane. The parent completion report indexes every lane's `ticket` / `context` / `dev-report` / QA report, and parent completion passes ONLY when every lane's QA passes — a single failed lane fails the parent cycle.
+
+**`multi_issue_fanout_requested` routing handler (routing-only, non-terminal).** A BA/Dev subagent returns `status: multi_issue_fanout_requested`, and a QA subagent returns `verdict: multi_issue_fanout_requested`, with payload `{issues: [{requirement_id, text}]}` when it is handed a bundled multi-issue prompt. On receipt the orchestrator treats it as a recognized nonterminal routing enum, not a failure: route `multi_issue_fanout_requested` by re-dispatching each enumerated issue exactly once as its own lane within the same parent cycle (no new session, no user prompt), reusing the decomposition above. Re-run the coverage map against the ORIGINAL bundled prompt so every re-dispatched lane inherits all applicable shared constraints and exclusions (e.g. no-commit, do-not-touch-hooks, per-file-diffs); the returned issue boundaries are advisory and no shared constraint may be dropped during re-dispatch. This signal is never mapped to `contract_violation_refused`.
+
+**Degenerate single-lane case (N == 1).** When N == 1 the flow degenerates to today's single-lane path with no behavior change: the fan-out wrapper is a no-op for a single requirement, and existing single-requirement cycles are unaffected.
 
 ---
 
@@ -819,7 +855,7 @@ Use Task tool with:
 - `baseline_head_sha` = equality-verified across all workers (aggregate status = `"blocked"` if any worker disagrees, citing `baseline_head_sha` mismatch); value taken from orchestrator dispatch
 - `baseline_dirty_snapshot` = equality-verified across all workers (aggregate status = `"blocked"` if any worker disagrees, citing `baseline_dirty_snapshot` mismatch); value taken verbatim from orchestrator dispatch
 - `dev.observed_preexisting` = UNION of all per-worker `dev.observed_preexisting` lists
-- The orchestrator invokes `source venv/bin/activate && python3 scripts/aggregate-dev-report.py --task-id $TASK_ID` to write the canonical aggregate. Capture stdout JSON; action field will be `"aggregated"`, `"validated"`, or `"skipped"`. Do NOT modify the `/commit` command implementation (`~/.claude/commands/commit.md`)
+- The orchestrator invokes `source venv/bin/activate && python3 scripts/aggregate-dev-report.py --task-id "$TASK_ID"` to write the initial canonical aggregate. Capture stdout JSON; action field will be `"aggregated"`, `"validated"`, or `"skipped"`. This initial invocation selects only the filename-declared Step 10 worker shards; iteration reports are never discovered by mtime, directory order, or a `latest` heuristic. Do NOT modify the `/commit` command implementation (`~/.claude/commands/commit.md`).
 
 **Single-dev cycles**: mark this todo step waived (skip). The aggregate-check hook does not fire for single-dev cycles because only one per-worker file pattern can match.
 
@@ -1180,6 +1216,17 @@ jq -s '.[0] * {
 
 **Return to Step 10** with new context JSON
 
+**Retry report naming (parallel-dev cycles, OPTIONAL convention)**:
+
+A retry lane MAY write its report as
+`docs/dev/dev-report-iter<N>-<TASK_ID>-<lane>.json` so retry evidence is
+distinguishable from the immutable initial shard. This is a naming convention
+only: there is NO promotion barrier, NO lineage declaration, and NO
+re-aggregation requirement before QA. The `iter<N>-` filename prefix matches
+none of the worker-shard patterns in `scripts/aggregate-dev-report.py` /
+`hooks/pretool-aggregate-check.py`, so such a report is never mistaken for an
+initial worker shard.
+
 **Iteration tracking**: Update TodoWrite with iteration number
 
 ### Step 17: Generate Completion Report + Workflow Update
@@ -1251,9 +1298,14 @@ jq -s '.[0] * {
 
 ## Files Generated
 
+*(Single-lane cycle, N == 1)*
 - Context: `docs/dev/context-<timestamp>.json`
 - Dev Report: `docs/dev/dev-report-<timestamp>.json`
 - QA Report: `docs/dev/qa-report-<timestamp>.json`
+
+*(Fan-out cycle, N > 1 — index EVERY lane, then the aggregate)*
+- Per lane `<lane>`: `docs/dev/ticket-<timestamp>-<lane>.md`, `context-<timestamp>-<lane>.json`, `dev-report-<timestamp>-<lane>.json`, `qa-report-<timestamp>-<lane>.json`
+- Aggregate Dev Report: `docs/dev/dev-report-<timestamp>.json`
 
 ## Mascot Score Changes (spec-20260518-225715 §5.1)
 
@@ -1279,14 +1331,43 @@ Development completed successfully!
 
 **Codex-native artifact postcondition (hard check before completion)**:
 
-Before `/dev` or `/redev` may be treated as complete, the Codex harness MUST validate the resolved `<task-id>` against the canonical same-task artifacts on disk:
-- `docs/dev/ticket-<task-id>.md`, `context-<task-id>.json`, `dev-report-<task-id>.json`, `qa-report-<task-id>.json`, and `completion-<task-id>.md` all exist and are non-empty where applicable.
-- JSON artifacts have top-level `request_id` and `task_id` exactly equal to `<task-id>`.
-- `dev-report-<task-id>.json` contains nested `dev.status == "completed"` plus nested `dev.files_modified` and `dev.files_created` arrays; top-level `status` alone does not count.
-- `qa-report-<task-id>.json` contains nested `qa.status == "pass"`; top-level `status` or `verdict` alone does not count.
-- If `claude_code_required = true`, context/report metadata must record that flag or a structured `claude_code_consult` failure/unavailable status.
+Before `/dev` or `/redev` may be treated as complete, invoke the shared read-only
+resolver from the project root and retain its JSON as `ARTIFACT_CHAIN`:
 
-Subagent final messages, lifecycle records, and JSON-like stdout are not completion artifacts. Missing or malformed artifacts block completion with exact paths and reasons.
+```bash
+ARTIFACT_CHAIN="$(python3 scripts/resolve-dev-artifact-chain.py \
+  --task-id "$TASK_ID" --project-dir "$CLAUDE_PROJECT_DIR")" || exit 2
+```
+
+The fixed entrypoint contract is
+`scripts/resolve-dev-artifact-chain.py --task-id <id> --project-dir <root>`.
+Completion requires process exit 0 and top-level `status == "pass"`; exit 2 or
+`status == "fail"` blocks with the resolver's exact `errors[]`. Do not reproduce
+the validator with ad-hoc file tests. The same result object (`mode`, `lanes`,
+`report_paths`, `artifact_paths`, `commit_whitelist_artifacts`, and `qa_inputs`)
+is the downstream handoff used by `/close` and normal `/commit`.
+
+- **Single-lane cycle (N == 1):** `mode == "singular"` preserves the existing
+  five-artifact contract: parent ticket, context, dev-report, QA-report, and
+  completion are required with the existing identity and nested-status checks.
+- **Fan-out cycle (N > 1):** `mode == "fanout"` requires, for every entry in
+  `lanes`, its lane ticket, context, dev-report, and passing QA-report, plus only
+  the parent canonical aggregate dev-report and parent completion. The parent
+  ticket, context, and QA-report are optional; their absence is valid, while any
+  present optional parent artifact must validate. Never create, copy, or invent
+  a parent ticket/context/QA-report to satisfy a singular-shaped check. The
+  completion must index the canonical report and every lane artifact.
+- Artifact identities, nested `dev.status == "completed"` /
+  `qa.status == "pass"`, exact lane-set/provenance/file-union freshness, and
+  malformed/missing artifact handling are owned by the resolver. A failed lane
+  fails the parent chain.
+- If `claude_code_required = true`, context/report metadata must record that flag
+  or a structured `claude_code_consult` failure/unavailable status in addition
+  to the resolver postcondition.
+
+Subagent final messages, lifecycle records, and JSON-like stdout are not
+completion artifacts. The resolver is read-only: this completion check must not
+repair, refresh, or fabricate any artifact.
 
 **Workflow update**:
 

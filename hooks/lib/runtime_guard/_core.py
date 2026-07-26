@@ -2344,7 +2344,7 @@ def _http_reads_stdin_body(sc: str) -> bool:
     return bool(re.search(r"(--data-binary|--data|-d)\s+@-|--data-binary\s+@/dev/stdin", sc))
 
 
-def _p5_endpoint(groups: list, cfg: dict) -> Optional[Verdict]:
+def _p5_endpoint(ctx: "Context") -> Optional[Verdict]:
     """Pipeline-group + segment-ORDER aware control-endpoint guard.
 
     A loopback control shutdown can be split across pipeline segments — the
@@ -2361,6 +2361,11 @@ def _p5_endpoint(groups: list, cfg: dict) -> Optional[Verdict]:
     only DOWNSTREAM, never sent) and `grep /stop file | curl …/health` (endpoint
     text in an unrelated upstream filter, HTTP client argv clean) stay ALLOWED.
     """
+    # Read the per-evaluation inputs from the shared Context. Local aliases keep
+    # the body below a byte-for-byte behavior match — the Context adoption is a
+    # pure relocation of how groups / cfg arrive, nothing else.
+    groups = ctx.groups
+    cfg = ctx.cfg
     paths = cfg.get("protected_endpoint_paths", [])
     if not paths:
         return None
@@ -2522,7 +2527,7 @@ def _is_kill_executor(head: str, rest: list) -> bool:
     return False
 
 
-def _p6_prockill(groups: list, cfg: dict) -> Optional[Verdict]:
+def _p6_prockill(ctx: "Context") -> Optional[Verdict]:
     """Pipeline-group + command-substitution aware process-kill guard.
 
     The canonical daemon-kill idioms split the protected identifier and the kill
@@ -2534,6 +2539,11 @@ def _p6_prockill(groups: list, cfg: dict) -> Optional[Verdict]:
     protected identifier appears anywhere connected to it — in any segment of
     the same group, or inside a kill's $()/`` command substitution.
     """
+    # Read the per-evaluation inputs from the shared Context. Local aliases keep
+    # the body below a byte-for-byte behavior match — the Context adoption is a
+    # pure relocation of how groups / cfg arrive, nothing else.
+    groups = ctx.groups
+    cfg = ctx.cfg
     idents = cfg.get("protected_proc_idents", [])
     statefiles = cfg.get("protected_statefiles", [])
     cmds = set(cfg.get("protected_cmds", []))
@@ -4512,7 +4522,7 @@ def evaluate(command: str, cwd_base: Optional[str] = None) -> Verdict:
     # cfg is intentionally None here — STEP0 runs BEFORE the config load and must
     # not depend on the very file it protects. groups is carried for a faithful
     # snapshot though STEP0 does not read it.
-    v = _step0_self_protection(Context(cwd_base=cwd_base, simple_cmds=simple_cmds, groups=groups))
+    v = _step0_self_protection(Context(cwd_base=cwd_base, simple_cmds=simple_cmds, groups=groups, cfg=None))
     if v is not None:
         return v
 
@@ -4528,7 +4538,7 @@ def evaluate(command: str, cwd_base: Optional[str] = None) -> Verdict:
     if fe_changed:
         # re-derive STEP0 against the peeled forms so a self-protection mutation
         # behind a front-end is also analyzed by STEP0's path-pattern scan.
-        v = _step0_self_protection(Context(cwd_base=cwd_base, simple_cmds=peeled_flat, groups=peeled_groups))
+        v = _step0_self_protection(Context(cwd_base=cwd_base, simple_cmds=peeled_flat, groups=peeled_groups, cfg=None))
         if v is not None:
             return v
         simple_cmds = peeled_flat
@@ -4590,11 +4600,17 @@ def evaluate(command: str, cwd_base: Optional[str] = None) -> Verdict:
     v = _p4_statefile(simple_cmds, cfg, cwd_base)
     if v is not None:
         return v
-    # cross-segment primitives operate on pipeline GROUPS
-    v = _p5_endpoint(groups, cfg)
+    # cross-segment primitives operate on pipeline GROUPS. Build the post-config
+    # Context snapshot carrying the SAME per-evaluation inputs P5/P6 read (the
+    # live `groups` + `cfg` formerly passed positionally, plus `cwd_base` +
+    # `simple_cmds` so the snapshot is complete/consistent) and order P5/P6 over
+    # it. cfg is loaded (non-None) here, groups/simple_cmds reflect any front-end
+    # peel above — a fresh snapshot, never a stale pre-peel one (INV-6/INV-7).
+    p5p6_ctx = Context(cwd_base=cwd_base, simple_cmds=simple_cmds, groups=groups, cfg=cfg)
+    v = _p5_endpoint(p5p6_ctx)
     if v is not None:
         return v
-    v = _p6_prockill(groups, cfg)
+    v = _p6_prockill(p5p6_ctx)
     if v is not None:
         return v
     v = _p7_globalbin(simple_cmds, cfg)
@@ -4649,7 +4665,46 @@ def main() -> int:
             cwd_base = os.getcwd()
         except OSError:
             cwd_base = None
-    decision, primitive, reason = evaluate(command, cwd_base)
+    try:
+        decision, primitive, reason = evaluate(command, cwd_base)
+    except BaseException as exc:  # noqa: BLE001 — deliberate catch-all (see below)
+        # The decision engine raised. Emit the SAME INDETERMINATE sentinel the
+        # unparseable-payload path above uses, so the bash glue's conservative-
+        # denial fallback decides. Without this the exception escapes, stdout is
+        # left EMPTY, and the glue's `!= "ALLOW"` test sees an unrecognized
+        # verdict with NO diagnostic — which fell through to ALLOW for every verb
+        # family the fallback does not cover. A crash must never be a silent
+        # ALLOW, and must never emit an empty verdict. Deliberate BLOCK/ALLOW
+        # returns never enter this handler.
+        #
+        # `BaseException`, not `Exception`: a direct BaseException subclass (notably
+        # SystemExit — e.g. a library calling sys.exit(), or an argparse-style exit —
+        # and KeyboardInterrupt) is NOT an `Exception` and escaped the old handler,
+        # re-opening the exact empty-verdict fail-open this handler exists to close.
+        # Swallowing an interpreter-exit request here is deliberate: a verdict on
+        # stdout is the ONLY contract the glue can act on, and rc is ignored by it.
+        #
+        # ORDER IS LOAD-BEARING: the sentinel is written and FLUSHED before the
+        # diagnostic is rendered. Rendering runs arbitrary user-defined `__str__`
+        # code, which can itself raise (or exit); doing it first meant such an
+        # exception escaped BEFORE the sentinel was ever emitted — again an empty
+        # verdict. Diagnostics are best-effort; the verdict is not.
+        print("INDETERMINATE", flush=True)
+        try:
+            detail = f"{type(exc).__name__}: {exc}"
+        except BaseException:  # noqa: BLE001 — __str__/__repr__ may itself raise
+            try:
+                detail = f"{type(exc).__name__}: <unrenderable exception>"
+            except BaseException:  # noqa: BLE001 — even type(exc).__name__ failed
+                detail = "<unrenderable exception>"
+        try:
+            sys.stderr.write(
+                f"[protected-runtime-guard] INDETERMINATE — decision engine raised "
+                f"{detail}\n"
+            )
+        except BaseException:  # noqa: BLE001 — stderr unusable; verdict already sent
+            pass
+        return 0
     if decision == "BLOCK":
         sys.stderr.write(f"[protected-runtime-guard] BLOCK {primitive}: {reason}\n")
         print("BLOCK")

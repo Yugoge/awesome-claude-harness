@@ -25,13 +25,13 @@ constants / pathmatch / config / find_cmds / git_cmds / anchor siblings.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Optional
 
 
 @dataclass(frozen=True)
 class Context:
-    """Immutable snapshot of the per-evaluation inputs threaded through the
+    r"""Immutable snapshot of the per-evaluation inputs threaded through the
     decision layers. Each field mirrors EXACTLY a positional parameter the layers
     take today — adopting the Context is a pure relocation of how those values
     travel, never a change to what they hold.
@@ -43,11 +43,41 @@ class Context:
       groups      — the pipeline GROUPS preserving `|` connectivity for the
                     cross-segment primitives (P5 endpoint, P6 prockill).
       cfg         — the loaded config dict, or None before the STEP1 config load
-                    (STEP0 self-protection runs with cfg=None by design — it must
-                    not depend on the very file it protects).
+                    (STEP0 self-protection passes cfg=None EXPLICITLY by design —
+                    it must not depend on the very file it protects).
+
+    ALL FOUR FIELDS ARE MANDATORY — there are NO defaults, and the dataclass is
+    frozen. Mandatory closes the INV-6 fail-OPEN hazard unique to this refactor:
+    unlike a module split (which fails CLOSED on a missing import), a mis-built
+    Context whose `groups` defaulted to `[]` would make the cross-segment guards
+    `_p5_endpoint` and `_p6_prockill` ABSTAIN and flip a modeled BLOCK to a final
+    ALLOW. Removing every default makes that incomplete construction raise
+    TypeError. Frozen makes each Context an immutable snapshot of one evaluation
+    stage: the front-end peel and the STEP1 config load each build a NEW Context,
+    never mutate one. `cfg` stays `Optional[dict]` (legitimately None pre-config)
+    but must still be passed EXPLICITLY.
+
+    That TypeError is only the FIRST LINK of the fail-CLOSED chain, NOT the
+    guarantee: an incomplete construction raises, but the raise becomes a DENY only
+    where the surrounding hook's shell fallback covers the command's family — for
+    P5/P6 across four tested invocation forms, NEVER family-wide; STEP0/P3/P4/P7
+    stay fail-OPEN on a crashed engine. `_core.main()` wraps only the `evaluate()`
+    call in a BaseException catch-all that converts an escaped exception into an
+    INDETERMINATE verdict — see `_core.py` main() for its exact (non-blanket) scope.
+
+    The single authoritative treatment of the shell fallback's coverage AND its
+    limits — which invocation forms it covers, which lexical forms (quote-
+    concatenation, backslash-escape, command substitution, variable/alias
+    indirection, encoded execution) the regex fallback does NOT match, and why it is
+    best-effort defense-in-depth: only full semantic equivalence with the engine's
+    shlex lexer is impossible, not coverage of any given form — lives
+    in `hooks/pretool-bash-safety.sh::_runtime_guard_fail_closed` (header comment),
+    mechanically asserted by `hooks/tests/test_fail_closed_drift.py`. The residual-
+    gap record lives in `docs/reference/core-context-refactor-plan.md`. Do not
+    restate either here.
     """
 
-    cwd_base: Optional[str] = None
-    simple_cmds: list = field(default_factory=list)
-    groups: list = field(default_factory=list)
-    cfg: Optional[dict] = None
+    cwd_base: Optional[str]
+    simple_cmds: list
+    groups: list
+    cfg: Optional[dict]

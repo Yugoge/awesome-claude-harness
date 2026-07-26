@@ -10,12 +10,12 @@ An operating system for Claude Code agents — orchestrator-only routing, an evi
 <p>
 <img alt="version" src="https://img.shields.io/badge/version-1.0.0-blue">
 <img alt="subagents" src="https://img.shields.io/badge/subagents-23-6f42c1">
-<img alt="commands" src="https://img.shields.io/badge/slash%20commands-18-1565c0">
-<img alt="hooks" src="https://img.shields.io/badge/lifecycle%20hooks-67%20wired%20%2F%207%20events-c62828">
+<img alt="commands" src="https://img.shields.io/badge/slash%20commands-19-1565c0">
+<img alt="hooks" src="https://img.shields.io/badge/lifecycle%20hooks-71%20wired%20%2F%207%20events-c62828">
 <img alt="events" src="https://img.shields.io/badge/lifecycle%20events-7-ad1457">
-<img alt="scripts" src="https://img.shields.io/badge/helper%20scripts-77-2e7d32">
+<img alt="scripts" src="https://img.shields.io/badge/helper%20scripts-78-2e7d32">
 <img alt="skills" src="https://img.shields.io/badge/skills-8-e67e22">
-<img alt="permissions" src="https://img.shields.io/badge/permissions-162%20allow%20%2F%2095%20deny%20%2F%2030%20ask-455a64">
+<img alt="permissions" src="https://img.shields.io/badge/permissions-162%20allow%20%2F%2096%20deny%20%2F%2030%20ask-455a64">
 <img alt="license" src="https://img.shields.io/badge/license-MIT-000000">
 </p>
 
@@ -51,6 +51,7 @@ Run the guard demo: `bash examples/guard-demo/run-demo.sh`
 | **Release-readiness gate** | `/close` proves not just "the code works" but "the system can ship it" — four Workflow-Integrity checks, optionally a multi-round QA↔Codex debate. | `commands/close.md` |
 | **Git protection kernel** | `commit / push / merge / reset --hard` refused unless a per-operation authorization grant is present (commit grant is single-use; push grant is wrapper-managed and retryable on failure); wide-path checkout, stash-as-buffer, and hard resets blocked by default. Each guard maps to a specific failure class it prevents. | `hooks/pretool-git-privilege-guard.py`, `hooks/pretool-bash-safety.sh` |
 | **Autonomous overnight pipeline** | `/dev-overnight 6:00` runs an unattended explore → triage → fix → verify → commit loop until a wall-clock end time. Stop-hook physically refuses early termination. | `commands/dev-overnight.md`, `hooks/stop-overnight-timelock.py` |
+| **Lossless quota recovery** | `/restart` resumes every recoverable interrupted child in the current parent transcript by its original `agent_id`; replacement agents are forbidden, and success requires response evidence from every candidate. | `commands/restart.md`, `hooks/lib/subagent_restart.py` |
 | **Structured break-glass grants** | `/allow` writes a structured grant (`{op, target, args_contain}`) matched by command structure — consumed on any terminal result. | `hooks/lib/allowlist.py`, `commands/allow.md` |
 | **Branch / PR / worktree firewall** | Creating a branch, PR, or worktree is forbidden by default everywhere, with explicit human escape hatches and a live-overnight exception. | `hooks/pretool-block-branch-pr-worktree.py`, `hooks/pretool-block-enterworktree.sh` |
 | **Crash-proof checkpoints** | Snapshots written to `refs/checkpoints/<branch>` via git plumbing — never move `HEAD`, so `git blame` always points at a real semantic commit. | `hooks/lib/checkpoint-core.sh`, `docs/reference/checkpoint-mechanism.md` |
@@ -64,7 +65,7 @@ Run the guard demo: `bash examples/guard-demo/run-demo.sh`
 
 ```mermaid
 graph TD
-    U([Human]) --> CMD[Slash commands<br/>18 entry points]
+    U([Human]) --> CMD[Slash commands<br/>19 entry points]
     CMD --> ORC{{Main Agent / Orchestrator<br/>think + route — no direct writes}}
 
     ORC -.->|PreToolUse gate| HL
@@ -72,7 +73,7 @@ graph TD
 
     ORC ==>|dispatch WHAT not HOW| SUB[Subagent Pool<br/>23 agents<br/>ba → qa → dev → qa]
 
-    HL[Hook Layer<br/>67 wired hook command entries<br/>7 lifecycle events<br/>PreToolUse / PostToolUse / Stop] -->|allow exit 0| GK[(Git Kernel<br/>git repo<br/>/tmp/ grants<br/>refs/checkpoints/HEAD<br/>reference-transaction keystone)]
+    HL[Hook Layer<br/>71 wired hook command entries<br/>7 lifecycle events<br/>PreToolUse / PostToolUse / Stop] -->|allow exit 0| GK[(Git Kernel<br/>git repo<br/>/tmp/ grants<br/>refs/checkpoints/HEAD<br/>reference-transaction keystone)]
     HL -->|block exit 2| BLK[/BLOCKED/]
 
     GK --> IDX[INDEX files<br/>doc-sync PostToolUse]
@@ -126,7 +127,7 @@ Each stage hands a verified artifact to the next; `--codex` adds an opt-in adver
 | Non-whitelist once-per-turn | 2nd `Edit`/`Write`/`WebFetch`/… of the same tool per turn in the main agent | Keeps real edits in clean subagent contexts, not the orchestrator's | `pretool-orchestrator-gate.py` |
 | Read-size cap | Main-agent `Read` of a file >600 lines (unless sliced with `limit`≤600) | Stops one large file from swamping the lean context — delegate a summary instead | `pretool-read-size-guard.py` |
 | Write-over-existing | `Write` onto a file that already exists (forces `Edit`) | Prevents silent whole-file loss from memory-reproduced content — no diff to catch it | `pretool-write-guard.sh` |
-| No background dispatch | `Agent`/`Task` unless `run_in_background:false`; `SendMessage`/`Workflow` outright | Background agents escape harness monitoring — work stays synchronous and observable | `pretool-block-background-tasks.py` |
+| No background dispatch | `Agent`/`Task` unless `run_in_background:false`; ordinary `SendMessage` and all `Workflow` calls | Background agents escape harness monitoring; only the supported human-only `/restart` path may send the fixed recovery message to a transcript-discovered, pending interrupted ID | `pretool-block-background-tasks.py` |
 | Gitignored-deliverable preflight | `Agent` dispatch when a dev-report names a gitignored file | Blocks a cycle that would pass QA yet never ship via git | `pretool-gitignore-preflight.py` |
 | Todo sequence integrity | Illegal `TodoWrite` transitions (skip, multi-complete, reorder, content edit) | Keeps the plan an auditable one-step-at-a-time ledger | `pretool-todo-validate.py` · `posttool-todo-sequence.py` |
 | Privileged-git default-deny | `commit`/`push`/`merge`/`reset --hard` without a per-op grant | See [git protection kernel](#the-git-protection-kernel) | `pretool-git-privilege-guard.py` |
@@ -259,7 +260,7 @@ The orchestrator dispatches specialists by *describing the problem* — never th
 
 ---
 
-## The command surface: 18 slash commands
+## The command surface: 19 slash commands
 
 | Group | Command | What it does | When to use |
 |---|---|---|---|
@@ -279,6 +280,7 @@ The orchestrator dispatches specialists by *describing the problem* — never th
 | **Quality** | `/test` | Test workflow (execute + validate). | You need the test suite executed and its results validated. |
 | **Control** | `/do` | Break-glass consent for the main agent, one turn (never a subagent); does not silence the bulk-commit warning. | Main agent must break the rules for one entire turn. |
 | **Control** | `/allow` | Structured single-use break-glass grant for one specific operation. | Green-light one specific blocked operation, a single time. |
+| **Control** | `/restart` | Resume every quota-interrupted subagent from its original transcript and ID. | A session/usage limit interrupted one or more running subagents. |
 | **Control** | `/stop` | Cancel an overnight session. | Mid-overnight, to abort a running session. |
 | **Control** | `/codex` | OpenAI Codex adversarial delegation. | You want an adversarial second opinion from an outside model. |
 
@@ -459,14 +461,14 @@ Each row maps to a capability in the dependency table above.
 ├── CLAUDE.md          # The constitution: non-negotiable rules the agent must obey
 ├── ARCHITECTURE.md    # System architecture, verified against the current code
 ├── NESTED-REPO.md     # Why ~/.claude is its own git repo on a RAM disk
-├── settings.json      # 67 wired hook entries across 7 lifecycle events
+├── settings.json      # 71 wired hook entries across 7 lifecycle events
 ├── agents/            # 23 subagent definitions (BA, dev, QA, architect, …)
-├── commands/          # 18 slash-command workflows (/spec, /dev, /close, /commit, …)
+├── commands/          # 19 slash-command workflows (/spec, /dev, /close, /commit, …)
 ├── hooks/             # SessionStart / UserPromptSubmit / PreToolUse / PostToolUse / Notification / Stop / SubagentStop gates
 │   ├── lib/           #   shared libs: allowlist (structured sentinel grants), checkpoint-core
 │   ├── doc_sync/      #   self-updating INDEX/README/CLAUDE regeneration
 │   └── git-keystone/  #   git-native reference-transaction protection
-├── scripts/           # 77 helper scripts (graphify, spec resolver, grant writers, execute-push, …)
+├── scripts/           # 78 helper scripts (graphify, spec resolver, grant writers, execute-push, …)
 ├── skills/            # 8 skills: the Playwright UI-audit suite (+ ui-shared support)
 ├── schemas/           # JSON schemas (e.g. cycle-contract.v1.json)
 ├── policies/          # tool-policy and role-restriction definitions
@@ -498,12 +500,12 @@ Everything else (`agents/`, `commands/`, `skills/`, `schemas/`, `templates/`, `t
 | Event | Hook entries | Primary purpose |
 |---|---|---|
 | SessionStart | 7 | Environment setup, resolver announcement, dependency checks |
-| UserPromptSubmit | 5 | Per-turn sentinel pre-creation, prompt-purity enforcement, dedup check |
-| PreToolUse | 30 | The gate layer: orchestrator rate-limit, bash-safety, git kernel, tool-policy, branch/PR firewall |
-| PostToolUse | 14 | Doc-sync, allowlist grant consumption, checkpoint writes |
+| UserPromptSubmit | 6 | Per-turn sentinel pre-creation, prompt-purity enforcement, dedup check |
+| PreToolUse | 31 | The gate layer: orchestrator rate-limit, bash-safety, git kernel, tool-policy, branch/PR firewall |
+| PostToolUse | 15 | Doc-sync, allowlist grant consumption, checkpoint writes |
 | Notification | 1 | User-facing notification routing |
 | Stop | 4 | Overnight timelock, allowlist reap, cp-state enforcement |
-| SubagentStop | 6 | cp-state enforcement, subagent output capture |
+| SubagentStop | 7 | cp-state enforcement, subagent output capture |
 
 ---
 

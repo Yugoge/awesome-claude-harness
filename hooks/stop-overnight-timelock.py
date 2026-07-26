@@ -232,6 +232,10 @@ def _enforce_timelock(session_id: str, state: dict) -> None:
 
 def main():
     """Entry point for the stop-overnight-timelock hook."""
+    # Codex-native Stop owns overnight isolation in Codex roots. A legacy
+    # projection can never time-lock or contradict an ordinary native workflow.
+    if os.environ.get('CLAUDE_COMPAT_RUNTIME') == 'codex':
+        sys.exit(0)
     context = read_stdin_context()
     if context.get('stop_hook_active', False):
         # NEVER-STOP-UNTIL-END_TIME: honor the framework loop-guard only AFTER

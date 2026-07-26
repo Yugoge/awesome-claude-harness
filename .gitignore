@@ -87,6 +87,13 @@ settings.json.bak-*
 /agent-scores.json.lock
 /.claude/specs/spec-*/
 
+# Live per-machine Claude state — credentials + runtime; NEVER commit
+# (.claude.json holds machineID/userID/oauthAccount/email; the dirs are runtime locks/replays)
+/.claude.json
+/.claude/workflow-locks/
+/.claude/dev-start-replays/
+/.claude/.hook-refactor-allow
+
 # Harness-generated output (transient per-cycle; not for version control)
 # tests/generated/ bulk-untracked; only 20260704-134650 and 20260704-225139 retained
 # (ignore children, not parent dir — git negations cannot re-include children of an ignored dir)
@@ -124,6 +131,7 @@ paste-cache/
 plans/
 specs/
 state/
+restart-state/
 tasks/
 
 # Belt-and-suspenders: auto-generated folder-doc stubs must never re-enter

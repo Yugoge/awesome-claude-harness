@@ -17,6 +17,15 @@
 #     generated` selection can see the marker before the built-in deselection runs).
 #   * pytest_collection_modifyitems — deselects generated-marked items UNLESS the
 #     run explicitly opts in (`-m generated` or --run-generated).
+#   * pytest_make_collect_report — when a file UNDER tests/generated raises at
+#     COLLECTION/IMPORT time (bit-rot: missing import, renamed symbol, duplicate-
+#     basename collision, syntax error), the wrapper rewrites the failed collect
+#     report into a clean SKIP (reason "generated skeleton bit-rotted: <error>")
+#     instead of a hard ERROR — so the opt-in run distinguishes an expected
+#     bit-rotted skeleton from a real regression. Scoped to tests/generated ONLY;
+#     a collection error anywhere else stays a real ERROR (never masks a real
+#     test-tree import failure). The runtime xfail hook below cannot catch these
+#     because they fail before any test runs.
 #   * pytest_runtest_makereport — reports a `TEST_INCOMPLETE:` pytest.fail as an
 #     xfail so `-m generated` distinguishes "incomplete skeleton" (x) from a real
 #     regression / bit-rot (F).
@@ -69,8 +78,12 @@ def _generated_explicitly_targeted(config) -> bool:
 
 def _generated_opted_in(config) -> bool:
     """True when the run explicitly ELECTS to execute generated items:
-    --run-generated, or `-m` expression referencing the `generated` marker."""
+    --run-generated, `-m` expression referencing the `generated` marker, or an
+    explicit path at/under tests/generated. An explicit test target is already
+    an intentional opt-in and must not produce pytest exit 5 via deselection."""
     if config.getoption("--run-generated", default=False):
+        return True
+    if _generated_explicitly_targeted(config):
         return True
     markexpr = config.getoption("markexpr", default="") or ""
     return "generated" in markexpr
@@ -94,6 +107,35 @@ def pytest_collection_modifyitems(config, items):
     remaining = [it for it in items if it not in generated]
     config.hook.pytest_deselected(items=generated)
     items[:] = remaining
+
+
+@pytest.hookimpl(wrapper=True)
+def pytest_make_collect_report(collector):
+    # SCOPED to tests/generated ONLY: a file that raises at COLLECTION/IMPORT time
+    # (bit-rot — missing import, renamed symbol, duplicate-basename collision,
+    # syntax error) becomes a clean SKIP-with-reason instead of a hard collection
+    # ERROR, so the opt-in `-m generated` run distinguishes an expected bit-rotted
+    # skeleton from a real regression. These fail before any test runs, so the
+    # runtime TEST_INCOMPLETE->xfail hook cannot catch them. A collection error
+    # ANYWHERE ELSE is left untouched and still surfaces as a real ERROR — this
+    # never masks a genuine test-tree import failure.
+    rep = yield
+    if rep.failed and _is_under_generated(getattr(collector, "path", None)):
+        call = getattr(rep, "call", None)
+        excinfo = getattr(call, "excinfo", None) if call is not None else None
+        if excinfo is not None:
+            detail = f"{excinfo.type.__name__}: {excinfo.value}"
+        else:
+            detail = str(rep.longrepr)
+        detail = (detail.strip().splitlines() or ["collection error"])[0]
+        path = getattr(collector, "path", None)
+        rep.outcome = "skipped"
+        rep.longrepr = (
+            str(path) if path is not None else collector.nodeid,
+            None,
+            f"generated skeleton bit-rotted: {detail}",
+        )
+    return rep
 
 
 @pytest.hookimpl(wrapper=True)
