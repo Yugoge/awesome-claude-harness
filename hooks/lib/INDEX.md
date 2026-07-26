@@ -1,8 +1,8 @@
 # lib
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-07-21T13:39:53Z*
-**Total entries**: 30
+*Last updated: 2026-07-26T16:50:09Z*
+**Total entries**: 31
 **Convention**: kebab
 
 ## Tree
@@ -37,6 +37,7 @@ lib/
 ├── `schema_registry.py` - Reads schemas/registry.json once and lazily loads referenced schema files
 ├── `specialist_yield.py` - Public API:
 ├── `subagent.py` - Single source of truth for is_subagent_context() and supporting helpers
+├── `subagent_restart.py` - Claude Code persists each subagent transcript under the parent session.  This
 └── `todo_canonical.py` - Shared canonical todo validation utilities
 ```
 <!-- /AUTO:index-stats -->

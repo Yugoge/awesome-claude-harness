@@ -9,9 +9,9 @@ ENFORCEMENT (default disposition matters):
   - Bash → foreground is the default, so only an explicit True is a background
     task (exit 2); absent/False is fine.
   - SendMessage / Workflow → inherently background with NO synchronous mode.
-    SendMessage drives/resumes a teammate async (regardless of how it was spawned);
-    Workflow spawns a background agent fleet. Both are blocked outright (exit 2) —
-    for the orchestrator they ARE background-agent execution.
+    SendMessage is blocked except for the exact, validated /restart recovery
+    message to a transcript-discovered, pending interrupted agent id. Workflow
+    remains blocked outright.
   - Subagents (agent_id truthy) → exit 0 (no restriction)
   - /do consent active → exit 0 (bypass)
 
@@ -44,6 +44,75 @@ def first_present(mapping, names, default=None):
         if name in mapping:
             return mapping[name]
     return default
+
+
+# --- Narrow /spec Explore exemption --------------------------------------
+# /spec Step 3 legitimately dispatches a NON-BLOCKING background Explore agent
+# for codebase exploration, and pretool-spec-block-foreground-agent.py exempts
+# exactly that (run_in_background is True). This blanket background block would
+# otherwise kill that one legitimate /spec background use. The exemption below is
+# deliberately narrow — ONLY a background Explore agent, ONLY while a /spec
+# interview is active — so arbitrary orchestrator background work stays blocked
+# and the observability policy holds for everything else.
+#
+# The active-interview detection MIRRORS pretool-spec-block-foreground-agent.py
+# (bookmark command == "spec" AND at least one incomplete todo step) so the two
+# hooks agree on the /spec FSM window.
+
+
+def _load_json(path):
+    """Read and json-parse a file. Return None on ANY failure (never wedge).
+
+    Broad except is deliberate: Path.read_text() can raise UnicodeDecodeError
+    (a ValueError, NOT an OSError) on a binary/corrupt file, and a malformed
+    session id can raise building the path — all must degrade to None, never
+    propagate out of this matcher=None hook (which runs on EVERY tool call)."""
+    try:
+        return json.loads(Path(path).read_text())
+    except Exception:  # noqa: BLE001 — corrupt/binary/unreadable/bad-path -> None
+        return None
+
+
+def _spec_interview_active(session_id: str) -> bool:
+    """True iff a /spec interview bookmark is active AND has an incomplete step.
+
+    Mirrors pretool-spec-block-foreground-agent.py EXACTLY: same bookmark path +
+    command=="spec" check, and the SAME incomplete definition -- done < total,
+    where total = len(todos) and done = count of dict entries with
+    status == "completed" (so non-dict / malformed entries count toward
+    incomplete, keeping the interview ACTIVE, identical to spec-block's
+    _todo_progress). Any exception -> False: fail-safe (the hole stays SHUT) AND
+    never-wedge (the hook must never exit 1 on this matcher=None path)."""
+    try:
+        project_dir = Path(os.environ.get("CLAUDE_PROJECT_DIR", os.getcwd()))
+        bookmark = _load_json(project_dir / ".claude" / f"workflow-{session_id}.json")
+        if not isinstance(bookmark, dict) or bookmark.get("command") != "spec":
+            return False
+        todos = _load_json(
+            Path.home() / ".claude" / "todos" / f"{session_id}-agent-{session_id}.json"
+        )
+        if not isinstance(todos, list) or not todos:
+            return False
+        total = len(todos)
+        done = sum(
+            1 for t in todos if isinstance(t, dict) and t.get("status") == "completed"
+        )
+        return done < total
+    except Exception:  # noqa: BLE001 — never raise: fail-safe (shut) + never-wedge
+        return False
+
+
+def _is_spec_explore_exempt(tool_name, params, session_id: str) -> bool:
+    """Narrow exemption: an EXPLICIT background Explore agent during a live /spec
+    interview. Everything else (other subagent types, other tools, non-/spec
+    sessions, absent run_in_background) is NOT exempt and stays blocked."""
+    if tool_name not in {"Agent", "Task"}:
+        return False
+    if params.get("run_in_background") is not True:
+        return False
+    if params.get("subagent_type") != "Explore":
+        return False
+    return _spec_interview_active(session_id)
 
 
 def main():
@@ -82,18 +151,33 @@ def main():
     if do_sentinel.exists():
         sys.exit(0)
 
-    # SendMessage drives/resumes a background teammate (even one that was spawned
-    # synchronously — a send resumes it from its transcript and runs it async);
-    # Workflow spawns a whole background agent fleet and returns immediately. Neither
-    # has a synchronous mode, so for the orchestrator they ARE background-agent
-    # execution — block outright. (Subagent + /do bypasses already applied above.)
-    # No run_in_background field is consulted; these tools have none.
+    # SendMessage is normally forbidden because it resumes a child asynchronously.
+    # The sole exception is /restart: an intended UserPromptSubmit-issued capability
+    # plus runtime checks bind `to` to a pending, interrupted parent-transcript agent,
+    # and the message body must byte-match the fixed recovery prompt. Import inside
+    # the branch so a missing helper cannot wedge unrelated tools; SendMessage fails
+    # CLOSED to its prior always-blocked disposition on any helper error.
+    restart_reason = ""
+    if tool_name == "SendMessage":
+        try:
+            from lib.subagent_restart import authorize_send_message
+
+            restart_ok, restart_reason = authorize_send_message(payload)
+        except Exception as exc:  # noqa: BLE001 — prior policy is deny
+            restart_ok = False
+            restart_reason = f"restart authorization unavailable: {exc}"
+        if restart_ok:
+            sys.exit(0)
+
+    # Workflow spawns a whole background fleet. Unauthorized SendMessage resumes a
+    # background child. Neither has a synchronous mode, so both remain blocked.
     if tool_name in {"SendMessage", "Workflow"}:
+        detail = f"\nRestart authorization: {restart_reason}" if restart_reason else ""
         print(
             f"[BLOCK] {tool_name} runs agents in the background and is forbidden for "
             "the orchestrator.\n"
             "There is no synchronous mode; dispatch work with "
-            "Agent(run_in_background=false), or use /do.",
+            f"Agent(run_in_background=false), or use /do.{detail}",
             file=sys.stderr,
         )
         sys.exit(2)
@@ -104,6 +188,14 @@ def main():
         params = {}
 
     rib = params.get("run_in_background")
+
+    # Narrow /spec Explore hole: allow an EXPLICIT background Explore agent while a
+    # /spec interview is active (restores the legitimate non-blocking Step-3 codebase
+    # exploration that pretool-spec-block-foreground-agent.py already exempts). Bounded
+    # to Agent/Task + subagent_type=="Explore" + run_in_background is True + live /spec
+    # FSM window — arbitrary orchestrator background work remains blocked.
+    if _is_spec_explore_exempt(tool_name, params, session_id):
+        sys.exit(0)
 
     # Agent and Task default to BACKGROUND when the field is absent, so anything
     # other than an explicit False (i.e. True or None/absent) is a background
