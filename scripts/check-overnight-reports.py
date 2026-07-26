@@ -89,7 +89,7 @@ def _check_one_path(path: Path, schema_name: str | None) -> tuple[str, list[str]
     return 'present_valid', []
 
 
-def _check_entry(entry: dict, project_dir: Path) -> tuple[str, str, list[str]]:
+def _check_entry(entry: dict, session_id: str) -> tuple[str, str, list[str]]:
     """Return (status, label, errors). status in {present_valid, present_invalid, missing}."""
     label = f"step={entry.get('step')} role={entry.get('role')} pipeline={entry.get('pipeline_id')}"
     paths = _expected_paths(entry)
@@ -97,7 +97,7 @@ def _check_entry(entry: dict, project_dir: Path) -> tuple[str, str, list[str]]:
         return 'missing', label, ['expected_output_path empty']
     schema_name = entry.get('schema_name') or ''
     for relpath in paths:
-        candidate = _resolve_path(relpath, project_dir)
+        candidate = _resolve_path(relpath, session_id)
         status, errs = _check_one_path(candidate, schema_name)
         if status != 'present_valid':
             return status, label, errs
