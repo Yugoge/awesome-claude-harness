@@ -715,18 +715,20 @@ def _expected_paths(entry: dict) -> list[str]:
     return []
 
 
-def _resolve_artifact_path(path_str: str) -> Path:
-    path = Path(path_str)
-    return path if path.is_absolute() else _project_dir() / path
+def _resolve_artifact_path(path_str: str, session_id: Optional[str] = None) -> Path:
+    # Contracted artifacts live in the overnight worktree during a live
+    # session; resolving against CLAUDE_PROJECT_DIR alone reports them
+    # missing and leaves the step pending forever (hook-deadlock, 2026-07-26).
+    return resolve_artifact_path(path_str, session_id)
 
 
-def _artifact_valid_for_entry(entry: dict) -> tuple[bool, str]:
+def _artifact_valid_for_entry(entry: dict, session_id: Optional[str] = None) -> tuple[bool, str]:
     paths = _expected_paths(entry)
     if not paths:
         return True, ''
     schema_name = entry.get('schema_name') or entry.get('expected_schema') or ''
     for raw in paths:
-        path = _resolve_artifact_path(raw)
+        path = _resolve_artifact_path(raw, session_id)
         if not path.exists():
             return False, f'expected artifact missing: {raw}'
         if not schema_name:
