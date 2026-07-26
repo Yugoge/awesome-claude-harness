@@ -37,15 +37,16 @@ def _list_cycle_dirs(base: Path) -> list[int]:
 
 
 def _resolve_cycle(session_id: str, requested: int | None) -> int | None:
-    """Return the cycle id to validate. Falls back to highest cycle dir present."""
+    """Return the cycle id to validate. Falls back to highest cycle dir present.
+
+    Cycle dirs live under the overnight worktree during a live session (main
+    repo is read-only for the overnight actor), so worktree roots are scanned
+    first, main-repo root as legacy fallback.
+    """
     if requested is not None:
         return requested
-    project_dir = Path(os.environ.get('CLAUDE_PROJECT_DIR', os.getcwd()))
-    candidates = [
-        project_dir / 'docs' / 'dev' / 'overnight' / session_id,
-    ]
-    for base in candidates:
-        cycles = _list_cycle_dirs(base)
+    for root in contract_runtime.artifact_roots(session_id):
+        cycles = _list_cycle_dirs(root / 'docs' / 'dev' / 'overnight' / session_id)
         if cycles:
             return max(cycles)
     return None
