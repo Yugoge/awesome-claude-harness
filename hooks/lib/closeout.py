@@ -165,6 +165,14 @@ def _resolve_path(maybe_path: str) -> Path:
     p = Path(maybe_path)
     if p.is_absolute():
         return p
+    # Contracted artifacts are written inside the overnight worktree during a
+    # live session; prefer the root where the file actually exists so pending
+    # required_calls can clear (hook-deadlock, 2026-07-26).
+    if _rt_resolve_artifact_path is not None:
+        try:
+            return _rt_resolve_artifact_path(maybe_path)
+        except Exception:
+            pass
     return _project_dir() / p
 
 
