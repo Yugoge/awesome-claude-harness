@@ -1,8 +1,8 @@
 # commands
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-07-24T14:19:53Z*
-**Total entries**: 18
+*Last updated: 2026-07-26T21:29:39Z*
+**Total entries**: 19
 **Convention**: kebab
 
 ## Tree
@@ -22,6 +22,7 @@ commands/
 ├── `pull.md` - Pull Command
 ├── `push.md` - Push Command
 ├── `redev.md` - dev workflow, context-light invocation — same task semantics as /dev, but assumes the /dev workflow instructions are already loaded. Pass --codex to enable adversarial codex consultation on each subagent's draft; default is self-review only.
+├── `restart.md` - Resume every quota-interrupted subagent in the current Claude Code parent session from its original transcript and agent ID.
 ├── `spec-update.md` - Continuation spec update or temp session note (was /update then /spec-continue — renamed to avoid collision with MAP's /update portfolio mutation command)
 ├── `spec.md` - Create spec files for any dev workflow (/dev, /dev-overnight, or standalone reference). Pass --codex to enable adversarial codex consultation on each spec-subagent / QA dispatch; default is self-review only.
 ├── `stop.md` - Cancel active overnight time-lock + workflow-enforce so the session can terminate normally. User-invoked only — agents cannot self-stop.
