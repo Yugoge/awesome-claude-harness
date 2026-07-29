@@ -1,8 +1,8 @@
 # scripts
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-07-24T14:19:39Z*
-**Total entries**: 113
+*Last updated: 2026-07-26T21:29:27Z*
+**Total entries**: 116
 **Convention**: kebab
 
 ## Tree
@@ -103,8 +103,11 @@ scripts/
 ├── `regen-index-dirs.py` - hand-written prose outside the generated stats+tree block), then regenerate the
 ├── `repair-venv.sh` - repair-venv.sh — durably restore a Python venv when its bin/python3 symlink target is missing.
 ├── `resolve-close-report.sh` - Resolve the close-report path for a given TASK_ID using subproject path-walk.
+├── `resolve-commit-repos.py` - The normal ``/commit`` workflow uses this helper before it writes any commit
+├── `resolve-dev-artifact-chain.py` - The resolver never creates, refreshes, or rewrites artifacts.  It validates the
 ├── `resolve-dev-report.py` - Usage:
 ├── `resolve-spec-artifacts.py` - spec-id resolver shared by /spec finalize and every /dev* consumer)
+├── `restart-subagents.py` - CLI bridge for the human-only /restart recovery workflow.
 ├── `runcode-watchdog.py` - Watchdog process for browser_run_code timeout enforcement
 ├── `scan-project.sh` - Description: Scan project structure and detect project type
 ├── `score-inject.sh` - Description: Emit a prompt-injection text block describing an agent's current rank/range

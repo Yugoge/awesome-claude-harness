@@ -37,15 +37,16 @@ def _list_cycle_dirs(base: Path) -> list[int]:
 
 
 def _resolve_cycle(session_id: str, requested: int | None) -> int | None:
-    """Return the cycle id to validate. Falls back to highest cycle dir present."""
+    """Return the cycle id to validate. Falls back to highest cycle dir present.
+
+    Cycle dirs live under the overnight worktree during a live session (main
+    repo is read-only for the overnight actor), so worktree roots are scanned
+    first, main-repo root as legacy fallback.
+    """
     if requested is not None:
         return requested
-    project_dir = Path(os.environ.get('CLAUDE_PROJECT_DIR', os.getcwd()))
-    candidates = [
-        project_dir / 'docs' / 'dev' / 'overnight' / session_id,
-    ]
-    for base in candidates:
-        cycles = _list_cycle_dirs(base)
+    for root in contract_runtime.artifact_roots(session_id):
+        cycles = _list_cycle_dirs(root / 'docs' / 'dev' / 'overnight' / session_id)
         if cycles:
             return max(cycles)
     return None
@@ -68,8 +69,10 @@ def _read_json(path: Path) -> dict | None:
         return None
 
 
-def _resolve_path(relpath: str, project_dir: Path) -> Path:
-    return Path(relpath) if relpath.startswith('/') else project_dir / relpath
+def _resolve_path(relpath: str, session_id: str) -> Path:
+    # Contracted artifacts are written inside the overnight worktree during a
+    # live session; resolve against worktree-first roots, not project dir only.
+    return contract_runtime.resolve_artifact_path(relpath, session_id)
 
 
 def _check_one_path(path: Path, schema_name: str | None) -> tuple[str, list[str]]:
@@ -86,7 +89,7 @@ def _check_one_path(path: Path, schema_name: str | None) -> tuple[str, list[str]
     return 'present_valid', []
 
 
-def _check_entry(entry: dict, project_dir: Path) -> tuple[str, str, list[str]]:
+def _check_entry(entry: dict, session_id: str) -> tuple[str, str, list[str]]:
     """Return (status, label, errors). status in {present_valid, present_invalid, missing}."""
     label = f"step={entry.get('step')} role={entry.get('role')} pipeline={entry.get('pipeline_id')}"
     paths = _expected_paths(entry)
@@ -94,7 +97,7 @@ def _check_entry(entry: dict, project_dir: Path) -> tuple[str, str, list[str]]:
         return 'missing', label, ['expected_output_path empty']
     schema_name = entry.get('schema_name') or ''
     for relpath in paths:
-        candidate = _resolve_path(relpath, project_dir)
+        candidate = _resolve_path(relpath, session_id)
         status, errs = _check_one_path(candidate, schema_name)
         if status != 'present_valid':
             return status, label, errs
@@ -130,17 +133,23 @@ def main() -> int:
 
     cycle_id = _resolve_cycle(args.session_id, args.cycle)
     if cycle_id is None:
-        print(f'ERROR: cannot resolve cycle for session {args.session_id}', file=sys.stderr)
-        return 1
+        # No cycle dir at all: nothing has been produced yet — mirror the
+        # contract hooks' HARD CUTOVER passthrough instead of hard-failing.
+        print(f'NOTICE: no cycle dir for session {args.session_id}; '
+              'nothing to validate (passthrough).')
+        return 0
 
     contract = contract_runtime.load_contract(args.session_id, cycle_id)
     if contract is None:
-        print(f'ERROR: cycle-contract.json not found for {args.session_id} cycle-{cycle_id}',
-              file=sys.stderr)
-        return 1
+        # HARD CUTOVER passthrough: the live contract only exists after the
+        # Step-4 orchestrator publish. Step 3 invokes this checker BEFORE
+        # publication, and legacy (pre-contract) sessions never have one —
+        # both must pass, exactly like the contract-aware hooks exit 0.
+        print(f'NOTICE: cycle-contract.json not published yet for {args.session_id} '
+              f'cycle-{cycle_id}; contract validation skipped (passthrough).')
+        return 0
 
-    project_dir = Path(os.environ.get('CLAUDE_PROJECT_DIR', os.getcwd()))
-    rows = [_check_entry(e, project_dir) for e in contract.get('required_calls', [])]
+    rows = [_check_entry(e, args.session_id) for e in contract.get('required_calls', [])]
     _print_rows(rows)
     expected, present, valid, missing, invalid = _summarize(rows)
     print(f'SUMMARY: expected={expected} present={present} valid={valid} '

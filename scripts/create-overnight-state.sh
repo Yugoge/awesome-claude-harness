@@ -179,10 +179,22 @@ if [[ -z "$MAIN_ROOT" ]]; then
 fi
 MAIN_GIT_DIR="$(git -C "$MAIN_ROOT" rev-parse --absolute-git-dir 2>/dev/null || echo "$MAIN_ROOT/.git")"
 MAIN_BRANCH_AT_START="$(git -C "$MAIN_ROOT" branch --show-current 2>/dev/null || echo '')"
-# Fatal unless the main checkout is exactly on master (round-3 §2): we will never
-# move it; launching from a non-master main dir is an unsafe precondition.
-if [[ "$MAIN_BRANCH_AT_START" != "master" ]]; then
-    echo "Error: overnight launch requires the main checkout on 'master' (found: '${MAIN_BRANCH_AT_START:-<detached>}'). Refusing to launch (no state written)." >&2
+# Branch-name agnostic (round-3 §2 revised): the branch the main checkout sits on
+# is recorded but never gated — 'master', 'main', or any other name is fine, and
+# we never move it. The real precondition is that --project-dir resolves to the
+# repository's PRIMARY checkout and not a linked worktree, because the overnight
+# actor creates its own isolated worktree from here and must never nest one
+# worktree inside another. Primary checkout <=> git-dir == git-common-dir.
+MAIN_COMMON_DIR="$(git -C "$MAIN_ROOT" rev-parse --git-common-dir 2>/dev/null || echo '')"
+case "$MAIN_COMMON_DIR" in
+    '')  MAIN_COMMON_DIR="$MAIN_ROOT/.git" ;;
+    /*)  ;;
+    *)   MAIN_COMMON_DIR="$MAIN_ROOT/$MAIN_COMMON_DIR" ;;
+esac
+MAIN_COMMON_DIR="$(realpath "$MAIN_COMMON_DIR" 2>/dev/null || echo "$MAIN_COMMON_DIR")"
+MAIN_GIT_DIR_REAL="$(realpath "$MAIN_GIT_DIR" 2>/dev/null || echo "$MAIN_GIT_DIR")"
+if [[ "$MAIN_GIT_DIR_REAL" != "$MAIN_COMMON_DIR" ]]; then
+    echo "Error: overnight launch requires the repository's primary checkout, but --project-dir resolves to a linked worktree (git-dir='$MAIN_GIT_DIR_REAL', common-dir='$MAIN_COMMON_DIR'). Refusing to launch (no state written)." >&2
     exit 1
 fi
 MAIN_HEAD_AT_START="$(git -C "$MAIN_ROOT" rev-parse HEAD 2>/dev/null || echo '')"
@@ -403,7 +415,16 @@ mkdir -p "$STATE_DIR"
 STATE_FILE="$STATE_DIR/overnight-state-${SESSION_ID}.json"
 TMP_FILE="${STATE_FILE}.tmp"
 CYCLE_ID=1
-CYCLE_DIR="$PROJECT_DIR/$CYCLE_SUBDIR/$SESSION_ID/cycle-$CYCLE_ID"
+# Cycle-scoped artifacts (contract, trace) live in the WORKTREE when one
+# exists: the main repo is read-only for the overnight actor and the worktree
+# guard blocks main-repo writes, so a main-repo cycle_contract_path makes the
+# Step-4 contract publish impossible (hook-deadlock, 2026-07-26).
+if [[ -n "$WORKTREE_PATH" ]]; then
+    CYCLE_ROOT="$WORKTREE_PATH"
+else
+    CYCLE_ROOT="$PROJECT_DIR"
+fi
+CYCLE_DIR="$CYCLE_ROOT/$CYCLE_SUBDIR/$SESSION_ID/cycle-$CYCLE_ID"
 CONTRACT_FILE="$CYCLE_DIR/cycle-contract.json"
 TRACE_LOG_PATH="$CYCLE_DIR/trace.jsonl"
 MONOLITH_SHA="null"
@@ -499,9 +520,16 @@ jq -n \
 # Atomic move
 mv "$TMP_FILE" "$STATE_FILE"
 
-# --- Create minimal cycle contract at session creation ---
+# --- Stage a cycle-contract TEMPLATE at session creation (NEVER the live file) ---
+# cycle-contract.json's mere existence is the HARD CUTOVER switch that flips the
+# contract hooks into enforce mode. Creating it at launch with required_calls: []
+# bricks the pipeline: every Agent dispatch is rejected as "Case C (incomplete
+# contract)" before Step 4 can legally register anything. The launch therefore
+# stages cycle-contract.template.json only; the orchestrator publishes the real
+# cycle-contract.json at Step 4 (after PM Triage) by filling required_calls.
 mkdir -p "$CYCLE_DIR"
-CONTRACT_TMP="${CONTRACT_FILE}.tmp"
+CONTRACT_TEMPLATE="$CYCLE_DIR/cycle-contract.template.json"
+CONTRACT_TMP="${CONTRACT_TEMPLATE}.tmp"
 jq -n \
     --arg session_id "$SESSION_ID" \
     --arg spec_mode "$SPEC_MODE" \
@@ -529,10 +557,10 @@ jq -n \
         specialist_selection: {}
     }' > "$CONTRACT_TMP"
 jq empty "$CONTRACT_TMP" >/dev/null
-mv "$CONTRACT_TMP" "$CONTRACT_FILE"
+mv "$CONTRACT_TMP" "$CONTRACT_TEMPLATE"
 
 echo "Created overnight state v8: $STATE_FILE" >&2
-echo "Created minimal cycle contract: $CONTRACT_FILE" >&2
+echo "Staged cycle contract template (not live; orchestrator publishes at Step 4): $CONTRACT_TEMPLATE" >&2
 echo "  Session: $SESSION_ID" >&2
 echo "  End time: $END_TIME" >&2
 echo "  Spec mode: $SPEC_MODE" >&2
