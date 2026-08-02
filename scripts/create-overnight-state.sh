@@ -541,10 +541,10 @@ jq -n \
         specialist_selection: {}
     }' > "$CONTRACT_TMP"
 jq empty "$CONTRACT_TMP" >/dev/null
-mv "$CONTRACT_TMP" "$CONTRACT_TEMPLATE"
+mv "$CONTRACT_TMP" "$CONTRACT_FILE"
 
-echo "Created overnight state v8: $STATE_FILE" >&2
-echo "Staged cycle contract template (not live; orchestrator publishes at Step 4): $CONTRACT_TEMPLATE" >&2
+echo "Created overnight state v9: $STATE_FILE" >&2
+echo "Created minimal cycle contract: $CONTRACT_FILE" >&2
 echo "  Session: $SESSION_ID" >&2
 echo "  End time: $END_TIME" >&2
 echo "  Spec mode: $SPEC_MODE" >&2
