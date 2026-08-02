@@ -619,6 +619,9 @@ Submit it under **Safety / Guardrails**, not “Claude configurations.”
    category.
 3. **This lane must not invent a target list.** The set of appropriate `awesome-*` lists is
    UNDETERMINED in-cycle (§9, OA-4).
+4. **RULES-PASS is per target, never transitive.** A PASS recorded for one `awesome-*` list covers
+   that list only. Submitting to a list that has no PASS row of its own is a gate violation, not a
+   covered case — one row per target, always.
 
 ### Hostile-commenter register
 
