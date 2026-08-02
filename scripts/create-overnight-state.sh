@@ -500,8 +500,14 @@ if [[ "$USER_SPEC_PATH" != "null" && -n "$USER_SPEC_PATH" && -f "$USER_SPEC_PATH
     MONOLITH_SHA="$(sha256sum "$USER_SPEC_PATH" | awk '{print $1}')"
 fi
 
-# --- Build JSON with jq (schema v8 + Option-A immutable guarantee fields) -----
+fi   # end of the side-effect-creating region (M1-SEAM skips it wholesale)
+
+# --- Build JSON with jq (schema v9 + Option-A immutable guarantee fields) -----
+# ONE top-level JSON object. In seam mode it goes to stdout; in a real launch it
+# goes to the temp file that is then atomically moved into place. Same lines,
+# same fields, same source for protected_branch — that is the point of the seam.
 jq -n \
+    --arg protected_branch "$PROTECTED_BRANCH" \
     --arg session_id "$SESSION_ID" \
     --arg end_time "$END_TIME" \
     --arg start_time "$START_TIME" \
