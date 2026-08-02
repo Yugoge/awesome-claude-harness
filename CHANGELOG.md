@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **Version claim held below a stable `1.0.0`.** `VERSION` now reads `1.0.0-dev`.
+  The previous unconditioned `1.0.0` marker overclaimed: it was never published as
+  a git tag, and the release-hygiene work it implies was still open. The marker is
+  intentionally held at a pre-release form until this release-hygiene lane's own
+  requirements pass — generated-not-tracked `settings.json`, CI hard-failing (not
+  advisory) on author-path and workspace-path residue in public-core, commit-SHA
+  pinned GitHub Actions, hash-pinned Python dependencies, an enforced non-root
+  clean-install smoke, and a signed release archive published with checksums, an
+  SBOM and provenance and verified against the PUBLISHED artifact. Re-promoting the
+  marker to a stable version is a separate, later decision and is deliberately not
+  gated here.
+
 ## [1.0.0] - 2026-07-05
 
 ### Added
