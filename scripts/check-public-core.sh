@@ -29,6 +29,20 @@ cd "$ROOT" || { echo "ERROR: cannot cd to repo root" >&2; exit 1; }
 MANIFEST="PUBLIC-CORE.md"
 SELF="scripts/check-public-core.sh"   # excluded from the residue scan: it enumerates the
                                        # markers by necessity (as does the manifest).
+# Set-based exemption ledger for the generic author-path residue gate (section 5). Keyed on
+# (path, fingerprint, ordinal) so it can never degrade into a bypassable aggregate count.
+RESIDUE_ALLOWLIST="policies/public-core-residue-allowlist.v1.json"
+
+SCAN_ROOT=""          # non-empty => archive mode (gate extracted bytes, not the checkout)
+RELEASE_MANIFEST=""   # release-membership manifest (explicit; never a class wildcard)
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --scan-root)        SCAN_ROOT="${2:?--scan-root needs a directory}"; shift 2 ;;
+    --release-manifest) RELEASE_MANIFEST="${2:?--release-manifest needs a file}"; shift 2 ;;
+    -h|--help)          sed -n '2,14p' "${BASH_SOURCE[0]}"; exit 0 ;;
+    *) echo "check-public-core: unknown argument '$1'" >&2; exit 1 ;;
+  esac
+done
 
 command -v git  >/dev/null 2>&1 || { echo "ERROR: git is required"  >&2; exit 1; }
 command -v awk  >/dev/null 2>&1 || { echo "ERROR: awk is required"  >&2; exit 1; }
