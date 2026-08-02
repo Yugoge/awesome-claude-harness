@@ -69,7 +69,12 @@ def home(tmp_path: Path) -> Path:
     _write(h / "settings.local.json", {"permissions": {"allow": []}})
     _write(h / ".claude" / "settings.local.json", {"env": {}})
     (h / "VERSION").write_text("9.9.9-test\n", encoding="utf-8")
-    shutil.copy2(MANIFEST_SRC, h / "policies" / MANIFEST_SRC.name)
+    # Every artefact the canonical binding covers must exist in the isolated home,
+    # because a missing enforcement artefact is (correctly) non-passing.
+    for rel in cs.BOUND_ARTIFACTS:
+        dst = h / rel
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(REPO / rel, dst)
     return h
 
 
