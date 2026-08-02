@@ -648,7 +648,7 @@ ledger. Each label appears **exactly once per row**, with a non-empty value.
 The third field label is also written "first-party rules or CONTRIBUTING URL"; the two spellings
 denote the same field.
 
-### 13.2 Executor instructions
+### 8.2 Executor instructions
 
 - **Before executing ⑤**: add **one row per `awesome-*` target**, replacing the placeholder row.
 - **Before executing ③**: add **one row for the selected video host**, replacing the placeholder
