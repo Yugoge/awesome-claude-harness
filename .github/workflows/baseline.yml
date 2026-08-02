@@ -28,7 +28,9 @@ jobs:
         python-version: ["3.10", "3.11", "3.12"]
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        # Pinned to a full 40-char commit SHA, not a mutable tag: a tag can be
+        # repointed at arbitrary code by anyone who can push to the action repo.
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           # Full history so the provenance audit can resolve commit-source lines
           # (e.g. 62957b3); a shallow clone would downgrade them to warnings and
