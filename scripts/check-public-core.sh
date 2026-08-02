@@ -51,6 +51,178 @@ rc=0
 fail() { echo "FAIL: $*"; rc=1; }
 pass() { echo "PASS: $*"; }
 
+WS_MARKER='/dev/shm/dev-workspace/dot-claude'
+
+# ---------------------------------------------------------------------------
+# Shared generic author-path residue audit. ONE engine, used for both the git
+# checkout and an extracted release archive, so the two can never drift apart.
+#
+#   stdin : newline-delimited paths (relative to $1) to scan
+#   $1    : root directory the paths are relative to
+#   $2    : allowlist JSON path (relative to that root)
+#   return: 0 clean, 1 residue/allowlist failure
+#
+# Every occurrence's exemption CLASS is re-derived from the live source structure
+# (comment / docstring / heredoc / test tree / env `:-` default / the detector's
+# own constant tables). A hand-written label the structure does not support is
+# rejected, so the audit is not circular. Any author-path literal that is a live
+# code literal or a unit-file directive value is `operational` and can NEVER be
+# allowlisted — it must be fixed.
+# ---------------------------------------------------------------------------
+residue_audit() {
+  python3 - "$1" "$2" <<'PY'
+import hashlib, io, json, os, re, sys, tokenize
+
+root, allowlist_rel = sys.argv[1], sys.argv[2]
+RESIDUE = re.compile(r"/root/|/home/[a-z][a-z0-9_-]*/|/Users/[A-Za-z][A-Za-z0-9_-]*/")
+DOC_EXTS = {".md", ".txt", ".rst"}
+CODE_EXTS = {".py", ".sh", ".bash", ".mjs", ".js", ".ts"}
+UNIT_EXTS = {".service", ".socket", ".timer", ".path", ".mount"}
+# STRICT comment markers only: "-", "|", ">" and "*" also start YAML sequence
+# nodes / block scalars, so accepting them would let a live config value pose as
+# a comment. Whole-file prose is covered separately by DOC_EXTS.
+COMMENT_STARTS = ("#", "//", "<!--", ";")
+JSON_DOC_KEY = re.compile(
+    r'"([A-Za-z0-9_]*(reference|doc|note|rationale|description|comment)[A-Za-z0-9_]*)"\s*:', re.I)
+HD = re.compile(r"<<-?\s*['\"]?([A-Za-z_][A-Za-z0-9_]*)['\"]?")
+PLACEHOLDER = {"", "tbd", "n/a", "na", "none", "todo", "-"}
+
+try:
+    doc = json.load(open(os.path.join(root, allowlist_rel), encoding="utf8"))
+except Exception as exc:
+    print(f"FAIL: residue-allowlist unreadable ({allowlist_rel}): {exc}")
+    sys.exit(1)
+SCANNER_PATHS = set(doc.get("self_exempt_paths") or [])
+LEGIT = set(doc.get("legitimate_classes") or [])
+entries, dup = {}, False
+for e in doc.get("entries") or []:
+    key = (e.get("path"), e.get("fingerprint"), e.get("ordinal"))
+    if key in entries:
+        print(f"FAIL: residue-allowlist duplicate key {key}"); dup = True
+    entries[key] = e
+
+def lang_of(path, text):
+    ext = os.path.splitext(path)[1]
+    if ext:
+        return ext
+    head = text.split("\n", 1)[0]
+    if head.startswith("#!"):
+        return ".py" if "python" in head else (".sh" if "sh" in head else "")
+    return ""
+
+def py_docstrings(text):
+    spans = set()
+    try:
+        for t in tokenize.generate_tokens(io.StringIO(text).readline):
+            if t.type == tokenize.STRING and t.string.lstrip("rbuRBUfF")[:3] in ('"""', "'''"):
+                spans.update(range(t.start[0], t.end[0] + 1))
+    except Exception:
+        pass
+    return spans
+
+def sh_heredocs(lines):
+    spans, term = set(), None
+    for i, ln in enumerate(lines, 1):
+        if term is None:
+            m = HD.search(ln)
+            if m:
+                term = m.group(1)
+        elif ln.strip() == term:
+            term = None
+        else:
+            spans.add(i)
+    return spans
+
+def classify(path, lineno, content, lang, dspans, hspans):
+    tl = content.lstrip()
+    is_comment = tl.startswith(COMMENT_STARTS)
+    is_doc = lang in DOC_EXTS
+    is_docstring = lineno in dspans or tl.startswith(">>>")
+    is_heredoc = lineno in hspans
+    is_test = "/tests/" in path or os.path.basename(path).startswith("test_")
+    is_env = bool(re.search(r':-\s*["\']?(/root/|/home/|/Users/)', content))
+    is_unit = lang in UNIT_EXTS and bool(re.match(r"^[A-Za-z][A-Za-z0-9]*=", content.strip()))
+    is_scanner = path in SCANNER_PATHS
+    is_jsondoc = lang == ".json" and bool(JSON_DOC_KEY.search(content))
+    derived = set()
+    if is_comment or is_doc or is_jsondoc:
+        derived.add("comment_or_narrative_doc")
+    if is_docstring or is_heredoc:
+        derived.add("doctest_or_docstring_example")
+    if is_test:
+        derived.add("test_fixture")
+    if is_env:
+        derived.add("env_parameterized_default")
+    if is_scanner:
+        derived.add("scanner_pattern_definition")
+    operational = False
+    if not is_scanner:
+        if is_unit:
+            operational = True
+        elif lang in CODE_EXTS and not (is_comment or is_docstring or is_heredoc or is_env or is_test):
+            operational = True
+    return derived, operational
+
+failures = 0 if not dup else 1
+live = set()
+for rel in (p.strip() for p in sys.stdin):
+    if not rel:
+        continue
+    full = os.path.join(root, rel)
+    try:
+        text = open(full, encoding="utf8").read()
+    except (OSError, UnicodeDecodeError):
+        continue          # binary / unreadable: no textual residue to gate
+    lang = lang_of(rel, text)
+    lines = text.splitlines()
+    dspans = py_docstrings(text) if lang == ".py" else set()
+    hspans = sh_heredocs(lines) if lang in (".sh", ".bash") else set()
+    ordinals = {}
+    for lineno, content in enumerate(lines, 1):
+        if not RESIDUE.search(content):
+            continue
+        derived, operational = classify(rel, lineno, content, lang, dspans, hspans)
+        fp = hashlib.sha256(content.encode()).hexdigest()[:16]
+        ordinals[(rel, fp)] = ordinals.get((rel, fp), 0) + 1
+        key = (rel, fp, ordinals[(rel, fp)])
+        live.add(key)
+        if operational:
+            print(f"FAIL: author-path residue (operational, NOT allowlistable) -> {rel}:{lineno}: {content.strip()[:120]}")
+            failures += 1
+            continue
+        entry = entries.get(key)
+        if entry is None:
+            print(f"FAIL: NEW un-allowlisted author-path residue -> {rel}:{lineno}: {content.strip()[:120]}")
+            failures += 1
+            continue
+        cls = entry.get("class")
+        if cls not in LEGIT:
+            print(f"FAIL: residue-allowlist entry declares unknown class {cls!r} -> {rel}:{lineno}")
+            failures += 1
+        elif cls not in derived:
+            print(f"FAIL: residue-allowlist class {cls!r} is NOT supported by the source structure "
+                  f"(structurally derived: {sorted(derived) or 'none'}) -> {rel}:{lineno}")
+            failures += 1
+        rat = (entry.get("rationale") or "").strip()
+        if rat.lower() in PLACEHOLDER:
+            print(f"FAIL: residue-allowlist entry has no per-entry rationale -> {rel}:{lineno}")
+            failures += 1
+
+for key, e in entries.items():
+    if key in live:
+        continue
+    path = key[0]
+    if not os.path.exists(os.path.join(root, path)):
+        print(f"FAIL: residue-allowlist entry references a path that no longer exists -> {path}")
+    else:
+        print(f"FAIL: STALE residue-allowlist entry (fingerprint/ordinal no longer present) -> {path} {key[1]}#{key[2]}")
+    failures += 1
+
+print(f"  residue audit: {len(live)} occurrence(s) scanned, {len(entries)} allowlist entr(ies), {failures} failure(s)")
+sys.exit(1 if failures else 0)
+PY
+}
+
 if [ ! -f "$MANIFEST" ]; then
   echo "FAIL: boundary manifest not found: $MANIFEST" >&2
   exit 1
