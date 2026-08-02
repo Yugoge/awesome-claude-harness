@@ -1304,7 +1304,8 @@ def _command_injects_keystone_config(command: str) -> bool:
 _INTERPRETER_LAUNCHER_RE = re.compile(
     r'(?<![\w./-])(?:/[\w./-]*/)?(python3?|perl|ruby|node|nodejs|sh|bash|zsh|env)\b')
 
-# fix-2: dangerous/mutating git subcommands that can move HEAD off master or
+# fix-2: dangerous/mutating git subcommands that can move HEAD off the
+# protected branch or
 # write the main worktree (codex #2 main-targeting dangerous-op predicate).
 _DANGEROUS_GIT_SUBCMDS = {
     'checkout', 'switch', 'reset', 'restore', 'clean', 'stash',
@@ -1478,7 +1479,7 @@ def _enforce_overnight_git_command(command: str, main_root: str, worktree_path: 
                                    main_git_dir: str = '') -> None:
     """M13/M14a/M15 + fix-2/fix-3 (Cycle-2): for an overnight actor, block
     (a) hook-suppression/config overrides (M14a),
-    (b) branch-switch / worktree / master ops targeting main_root (M13/M15) with
+    (b) branch-switch / worktree / protected-branch ops targeting main_root (M13/M15) with
         a realpath-under-main-but-outside-worktree predicate (fix-3),
     (c) --git-dir/GIT_DIR/GIT_COMMON_DIR redirection into main (fix-3),
     (d) an interpreter/subprocess that hides a main-targeting git op — the
@@ -1521,7 +1522,7 @@ def _enforce_overnight_git_command(command: str, main_root: str, worktree_path: 
     if _interpreter_hides_main_git(command, main_real, main_git_dir):
         _block(
             '\nOVERNIGHT SUBPROCESS GIT BLOCK: an interpreter/subprocess that '
-            'could run a main-targeting git op (checkout/switch/reset/master '
+            'could run a main-targeting git op (checkout/switch/reset/protected-branch '
             'ref-move against the main working directory) is forbidden for '
             'overnight actors. This is the exact 2026-06-03 python-subprocess '
             'incident vector; on git 2.43 the reference-transaction keystone '
@@ -1586,7 +1587,7 @@ def _enforce_overnight_git_command(command: str, main_root: str, worktree_path: 
             wt_targets_main = _path_targets_main(wt_real, main_real)
         if wt_targets_main:
             targets_main = True
-        switches_master = _mentions_protected_branch(positionals)
+        switches_protected = _mentions_protected_branch(positionals)
 
         # M13: any git op whose effective dir is main-targeting -> block.
         if targets_main:
@@ -1618,19 +1619,20 @@ def _enforce_overnight_git_command(command: str, main_root: str, worktree_path: 
 
         # M15: branch-switch / switch -c is the exact incident when it could move
         # the MAIN worktree's HEAD. A checkout/switch whose effective dir is the
-        # overnight worktree and target is NOT master is LEGITIMATE and ALLOWED.
+        # overnight worktree and the target is NOT in the resolved protected
+        # set is LEGITIMATE and ALLOWED.
         if sub in ('checkout', 'switch'):
-            if targets_main or switches_master or not in_worktree:
+            if targets_main or switches_protected or not in_worktree:
                 _block(
                     f'\nOVERNIGHT BRANCH-SWITCH BLOCK: git {sub} that could move '
-                    "the main worktree's HEAD off master is forbidden for "
+                    "the main worktree's HEAD off the protected branch is forbidden for "
                     'overnight actors (the exact 2026-06-03 incident shape). '
-                    'Branch ops INSIDE the isolated worktree (non-master target) '
+                    'Branch ops INSIDE the isolated worktree (non-protected target) '
                     'are allowed.\n'
                 )
         # fix-3: reset/restore that could write the main worktree.
         if sub in ('reset', 'restore', 'clean'):
-            if targets_main or switches_master or not in_worktree:
+            if targets_main or switches_protected or not in_worktree:
                 _block(
                     f'\nOVERNIGHT MAIN-WRITE BLOCK: git {sub} that could write '
                     'the main working directory is forbidden for overnight '
@@ -1645,20 +1647,22 @@ def _enforce_overnight_git_command(command: str, main_root: str, worktree_path: 
                     'the main working directory is forbidden for overnight '
                     'actors.\n'
                 )
-        # fix-3: master ref-move (branch -f master / update-ref refs/heads/master).
+        # fix-3: protected-branch ref-move (branch -f <protected> /
+        # update-ref refs/heads/<protected>). The operand is resolved from the
+        # session-state record, never a literal (M5-NO-ENUMERATION).
         if sub == 'branch':
             forcey = any(p in ('-f', '--force', '-D', '--delete', '-M', '--move')
                          for p in subtoks)
-            if forcey and (switches_master or targets_main):
+            if forcey and (switches_protected or targets_main):
                 _block(
                     '\nOVERNIGHT MASTER REF-MOVE BLOCK: git branch force/move/'
-                    'delete of master is forbidden for overnight actors.\n'
+                    'delete of the protected branch is forbidden for overnight actors.\n'
                 )
         if sub in ('update-ref', 'symbolic-ref'):
-            if switches_master or targets_main:
+            if switches_protected or targets_main:
                 _block(
                     f'\nOVERNIGHT MASTER REF-MOVE BLOCK: git {sub} touching '
-                    'master / HEAD is forbidden for overnight actors.\n'
+                    'the protected branch / HEAD is forbidden for overnight actors.\n'
                 )
         if sub == 'worktree':
             _block(
@@ -1682,14 +1686,14 @@ def _fail_closed_worktree_context(command: str) -> None:
     """VECTOR-3 (Cycle-3): an in-worktree actor with NO resolvable governing
     overnight state cannot have its main_root derived for a targeted block. Any
     git or interpreter command is therefore refused fail-closed (it could move
-    main HEAD off master or write the main worktree); ordinary non-git commands
+    main HEAD off the protected branch or write the main worktree); ordinary non-git commands
     are left to the worktree-boundary enforcement."""
     if _command_has_git_or_interpreter(command):
         _block(
             '\nOVERNIGHT WORKTREE-CONTEXT FAIL-CLOSED: a git/interpreter command '
             'is running inside an overnight worktree but no governing overnight '
             'state could be resolved to scope a targeted main-root block. '
-            'Refusing fail-closed — it could move the main HEAD off master or '
+            'Refusing fail-closed — it could move the main HEAD off the protected branch or '
             'write the main working directory. Run from a session whose '
             'overnight state is resolvable.\n'
         )
@@ -1823,7 +1827,7 @@ def _shared_common_dir_ro_rebinds(worktree_path: str) -> list[str]:
     `<common>/config` and `<common>/hooks` READ-WRITE, letting an overnight actor
     run `git config --unset core.hooksPath` (writes `<common>/config`) to DISABLE
     the reference-transaction keystone, or drop a malicious default hook, and THEN
-    move main HEAD off master. Return `--ro-bind` args for the shared common-dir's
+    move main HEAD off the protected branch. Return `--ro-bind` args for the shared common-dir's
     `config` FILE and `hooks/` DIR (only those that exist) so the caller can nest
     them OVER the RW common-dir bind: those two paths become EROFS while
     `<common>/objects`, `<common>/refs`, `<common>/logs` (which a commit / ref
