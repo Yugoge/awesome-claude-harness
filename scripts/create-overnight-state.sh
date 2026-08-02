@@ -203,8 +203,8 @@ if [[ -z "$MAIN_ROOT" ]]; then
     echo "Error: --project-dir is not inside a git repo: $PROJECT_DIR" >&2
     exit 1
 fi
-MAIN_GIT_DIR="$(git -C "$MAIN_ROOT" rev-parse --absolute-git-dir 2>/dev/null || echo "$MAIN_ROOT/.git")"
-MAIN_BRANCH_AT_START="$(git -C "$MAIN_ROOT" branch --show-current 2>/dev/null || echo '')"
+MAIN_GIT_DIR="$("${GIT_UNMARKED[@]}" -C "$MAIN_ROOT" rev-parse --absolute-git-dir 2>/dev/null || echo "$MAIN_ROOT/.git")"
+MAIN_BRANCH_AT_START="$("${GIT_UNMARKED[@]}" -C "$MAIN_ROOT" branch --show-current 2>/dev/null || echo '')"
 # Branch-name agnostic (round-3 §2 revised): the branch the main checkout sits on
 # is recorded but never gated — 'master', 'main', or any other name is fine, and
 # we never move it. The real precondition is that --project-dir resolves to the
