@@ -34,8 +34,18 @@ WS_MARKER = "/dev/shm/" + "dev-workspace/dot-claude"  # split so this file is no
 
 
 def _tracked_files() -> list[str]:
-    out = subprocess.run(["git", "-C", str(REPO), "ls-files"], capture_output=True, text=True)
-    return out.stdout.split()
+    """Tracked files PLUS untracked-but-not-ignored ones.
+
+    The fixture must mirror the tree as it would be COMMITTED, not merely what is
+    already in the index: a newly added, not-yet-staged file (the residue
+    allowlist itself, on the cycle that introduces it) is part of the state the
+    gate has to run against.
+    """
+    tracked = subprocess.run(["git", "-C", str(REPO), "ls-files"],
+                             capture_output=True, text=True).stdout.split()
+    untracked = subprocess.run(["git", "-C", str(REPO), "ls-files", "--others", "--exclude-standard"],
+                               capture_output=True, text=True).stdout.split()
+    return sorted(set(tracked) | set(untracked))
 
 
 @pytest.fixture(scope="module")
