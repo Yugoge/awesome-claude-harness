@@ -1,9 +1,9 @@
 # lib
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-08-02T06:22:48Z*
+*Last updated: 2026-08-02T06:23:13Z*
 **Total entries**: 0
-**Convention**: lower
+**Convention**: kebab
 
 ## Tree
 ```
