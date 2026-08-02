@@ -695,6 +695,87 @@ def test_status_line_emits_red_marker_when_unprotected(home: Path, statedir: Pat
     assert "\x1b[1;31m" in r.stdout
 
 
+# --------------------------------------------------------------------------- #
+# Fixes driven by the codex adversarial pass (docs/codex/dev-20260719-193823-a/dev.txt)
+# --------------------------------------------------------------------------- #
+def test_canary_liveness_alone_cannot_reach_pass(home: Path):
+    """codex #3 (selective dispatch). Every canary exits 0 by construction, so a
+    host that dispatches all seven canaries while skipping the blocking gate must
+    NOT reach PASS. An unestablished blocking classification is non-passing."""
+    st = _passing_state(home, "c1")
+    for ev in st["events"]:
+        ev["blocking_action"] = "not_established"
+    assert cs.aggregate_verdict(st, home) == ("UNPROTECTED", "blocking_capability_not_established")
+
+
+def test_no_event_proving_a_block_cannot_reach_pass(home: Path):
+    st = _passing_state(home, "c2")
+    for ev in st["events"]:
+        ev["blocking_action"] = "not_applicable"
+    assert cs.aggregate_verdict(st, home) == ("UNPROTECTED", "no_blocking_capability_proven")
+
+
+@pytest.mark.parametrize("artifact", list(cs.BOUND_ARTIFACTS))
+def test_every_enforcement_artifact_is_bound(home: Path, artifact: str):
+    """codex #6. Editing the manifest to move a protected route outside every
+    surface prefix must NOT preserve an existing PASS."""
+    stored = cs.canonical_binding(home)
+    p = home / artifact
+    p.write_bytes(p.read_bytes() + b"\n# tamper\n")
+    assert not cs.binding_matches(stored, cs.canonical_binding(home))
+
+
+def test_missing_enforcement_artifact_is_non_passing(home: Path):
+    (home / "policies" / MANIFEST_SRC.name).unlink()
+    assert cs.binding_failure(cs.canonical_binding(home)) == "binding_artifact_missing"
+
+
+def test_pass_expires_on_wall_clock_age(home: Path):
+    """codex #10. Same-session equality does not survive a host restart."""
+    st = _passing_state(home, "c3")
+    assert cs.aggregate_verdict(st, home)[0] == "PASS"
+    stale = cs._epoch(st["completion_time"]) + cs.PASS_MAX_AGE_SEC + 1
+    assert cs.aggregate_verdict(st, home, now=stale) == ("UNPROTECTED", "pass_expired")
+
+
+def test_malformed_slash_route_lands_inside_the_protected_surface(home: Path, statedir: Path):
+    """codex #9. A malformed/empty slash command must block, not fall outside the
+    surface and be treated as ordinary traffic."""
+    sid = "c4"
+    _publish(statedir, sid, _passing_state(home, sid))
+    r = _gate({"tool_name": "SlashCommand", "tool_input": {"command": ""}, "session_id": sid},
+              home, statedir, sid)
+    assert r.returncode == 2
+    assert "unmanifested_route" in r.stderr
+
+
+def test_transcript_nonce_before_probe_offset_is_rejected(tmp_path: Path):
+    """codex #8. A nonce already present in the transcript must not satisfy
+    cross-check 4; only an appearance past the probe-open offset counts."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("caphs_off", HANDSHAKE)
+    hs = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(hs)
+
+    sid = "11111111-2222-3333-4444-555555555555"
+    nonce = "deadbeef" * 8
+    tr = tmp_path / f"{sid}.jsonl"
+    tr.write_text(json.dumps({"sessionId": sid, "text": nonce}) + "\n", encoding="utf-8")
+    rec = {"event_label": "PreToolUse", "nonce": "n1",
+           "host_receipt": {"session_id": sid, "transcript_path": str(tr), "cwd": "/",
+                            "hook_event_name": "PreToolUse", "permission_mode": cs.ABSENT}}
+    probe = {"nonce": nonce, "event_nonces": {"PreToolUse": "n1"},
+             "transcript_offsets": {str(tr): tr.stat().st_size}}
+    outcome, reason, _ = hs.cross_check_event(rec, "PreToolUse", probe, 0.0, sid)
+    assert (outcome, reason) == ("FAIL", "transcript_missing_run_nonce")
+
+
+def test_event_identity_strength_is_recorded(home: Path):
+    st = _passing_state(home, "c5")
+    assert all(e["event_identity_strength"] in
+               ("host_attested", "registration_bound", "none") for e in st["events"])
+
+
 def test_unobservable_surface_classifies_unsupported_not_pass(home: Path):
     st = _passing_state(home, "sl2")
     st["status_surface"] = {"status": "unsupported", "reason": "no attached pane"}
