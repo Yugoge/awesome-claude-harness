@@ -1443,7 +1443,7 @@ def _interpreter_hides_main_git(command: str, main_real: str, main_git_dir: str)
     # main-targeting signal so worktree-local ops are allowed (codex #2):
     #   * a -C / --git-dir / GIT_DIR / GIT_WORK_TREE / GIT_COMMON_DIR into main
     #   * an explicit main_root path operand
-    #   * a `master` / refs/heads/master ref operand (protected ref move)
+    #   * a RESOLVED protected-branch ref operand (protected ref move)
     #   * checkout/switch/reset with NO -C and NO worktree path == ambiguous HEAD
     #     move -> fail closed (cannot prove it targets the worktree)
     if _gitdir_into_main(command, main_real, main_git_dir):
