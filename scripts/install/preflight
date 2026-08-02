@@ -29,10 +29,21 @@
 #      Delegated verbatim to `scripts/doctor --strict`. Whether the hook lifecycle
 #      is actually live on this host — nonce-bound canaries, exit-2 blocking,
 #      subagent identity, hook ordering — is the capability-gate component's
-#      question, and this preflight only consumes its verdict. It is fail-closed:
-#      a failing handshake aborts the install unless the operator explicitly
-#      passes --allow-unprotected, in which case the install proceeds and is
-#      recorded as running on an UNPROTECTED host.
+#      question, and this preflight only consumes its verdict.
+#
+#      This section is LOUD BUT NOT BLOCKING by default, and the reason is not
+#      convenience. On a host with nothing installed yet the handshake CANNOT pass,
+#      because the components it measures are exactly what is about to be
+#      installed. A fail-closed install gate would therefore be unsatisfiable on
+#      every fresh host — it would block the only action that could fix the
+#      condition it is complaining about. So a failing handshake prints a
+#      persistent UNPROTECTED HOST verdict, is recorded in the install inventory,
+#      and does not silently pass as success. Pass --require-handshake to make it
+#      blocking (for re-installs and CI, where a fresh PASS is a real precondition).
+#
+#      Refusing to ACTIVATE protected workflows on an unprotected host remains the
+#      capability gate's job at runtime. This preflight refuses to CLAIM protection,
+#      which is the part it owns.
 #
 # This preflight never claims that protection is verified. It reports what was
 # measured and, for the handshake, whose measurement it is.
