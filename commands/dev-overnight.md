@@ -785,15 +785,11 @@ to the legacy mechanical sort in Step 6 (read the RELEVANT specialist reports on
 
 Immediately after PM Triage completes (Step 4) and before pipeline creation (Step 6), the orchestrator writes the per-cycle contract manifest. This file is the single source of truth that the contract-aware hooks (`pretool-subagent-enforce.py`, `posttool-subagent-track.py`, `posttool-overnight-file-check.py`) and `check-overnight-reports.py` consume to enforce role/pipeline/artifact compliance for every subsequent Agent invocation in the cycle.
 
-**Output paths** (write both — primary plus colocated mirror so hooks can resolve without scanning). All paths below are resolved against the **overnight worktree root** (`worktree_path` in the state file), NOT the main repo: the main repo is a read-only mount for the overnight actor and the worktree guard blocks main-repo writes, so a main-repo publish target is unreachable by design. The contract hooks resolve worktree-hosted candidates first (`hooks/lib/contract_runtime.py::_candidate_contract_paths`). For worktree-less sessions the same relative paths resolve against the project dir.
+**Output paths** (write both — primary plus colocated mirror so hooks can resolve without scanning):
 
-- Primary: `<worktree>/docs/dev/overnight/<session_id>/cycle-<N>/cycle-contract.json`
-- Stable symlink for hooks: `<worktree>/docs/dev/overnight/<session_id>/cycle-current.json` → `cycle-<N>/cycle-contract.json`
-- Colocated mirror: `<worktree>/.claude/overnight-contract-<session_id>-cycle<N>.json`
-
-**Launch template**: `create-overnight-state.sh` stages `cycle-contract.template.json` in cycle-1's dir at session creation (session/spec identity fields prefilled, `required_calls: []`). The launch script MUST NEVER create the live `cycle-contract.json` itself — its mere existence is the HARD CUTOVER switch, and an empty `required_calls` at launch hard-blocks every Agent dispatch (Case C) before any step can legally be registered.
-
-**Publish procedure (atomic — applies to every cycle)**: build the FULLY-POPULATED contract (identity fields + `required_calls` + `pipelines` + `specialist_selection`) in a scratch file (e.g. `cycle-contract.json.tmp` in the same dir), validate it is well-formed JSON, then atomically rename it to `cycle-contract.json`. NEVER create the live filename first and fill it afterwards — an interruption between create and fill leaves an empty/partial live contract, which re-creates the Case C hard-block (defensively, the contract hooks also ignore any contract whose `required_calls` is `[]`, treating it as an unpublished stub). For cycle 1 the staged template supplies the identity fields; for cycle 2+ there is NO staged template — carry the identity fields (`spec_id`, `session_id`, `spec_mode`, `spec_path`, `monolith_sha256`) forward from the previous cycle's contract, updating `cycle_id`, `created_at`, and `trace_log_path` for the new cycle dir.
+- Primary: `docs/dev/overnight/<session_id>/cycle-<N>/cycle-contract.json`
+- Stable symlink for hooks: `docs/dev/overnight/<session_id>/cycle-current.json` → `cycle-<N>/cycle-contract.json`
+- Colocated mirror: `.claude/overnight-contract-<session_id>-cycle<N>.json`
 
 **Schema**: `~/.claude/schemas/cycle-contract.v1.json` (Draft 7). The full shape is documented there; the orchestrator MUST populate at minimum:
 
