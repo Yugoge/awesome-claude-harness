@@ -376,9 +376,9 @@ D** — it carries no D-PASS row and is held by its own A/B/E/F rows.
 > Show HN: Claude Guard – fail-closed hooks that stop coding agents from killing services or pushing unreviewed code
 
 **Angle — recorded recommendation** attributed to the same source (`:334`), subject to §5 E's
-naming decision and §5 G's wording:
+naming decision and §5 G's wording, reproduced as that source line reads:
 
-> **Angle:** “Prompt instructions are not enforcement.” Lead with the raw blocked-action demo, the threat model and the capability handshake. State limitations prominently. HN will reward mechanics and punish inflated claims.
+**Angle:** “Prompt instructions are not enforcement.” Lead with the raw blocked-action demo, the threat model and the capability handshake. State limitations prominently. HN will reward mechanics and punish inflated claims.
 
 ### Content requirements
 
