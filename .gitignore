@@ -98,6 +98,12 @@ settings.json.bak-*
 # tests/generated/ bulk-untracked; only 20260704-134650 and 20260704-225139 retained
 # (ignore children, not parent dir — git negations cannot re-include children of an ignored dir)
 tests/generated/*
+# The global index (kind:"index", tasks[] -> per-task manifest_path) is TRACKED:
+# test-writer upserts one entry per task, so it must survive version control even
+# though every per-task dir beside it is bulk-ignored. Without this negation the
+# tracked file is a gitignored deliverable and pretool-gitignore-preflight.py
+# blocks the next Agent dispatch on every cycle that runs test-writer.
+!tests/generated/manifest.json
 !tests/generated/20260704-134650/
 !tests/generated/20260704-134650/**
 !tests/generated/20260704-225139/
