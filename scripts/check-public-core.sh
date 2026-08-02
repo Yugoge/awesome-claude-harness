@@ -178,6 +178,7 @@ def classify(path, lineno, content, lang, dspans, hspans):
 
 failures = 0 if not dup else 1
 live = set()
+scanned = set()
 for rel in scan_paths:
     if not rel:
         continue
