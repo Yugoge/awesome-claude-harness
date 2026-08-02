@@ -161,9 +161,15 @@ def ac1(tmp: Path) -> None:
     sentinel = all((n2 / p).exists() for p in ("settings.json", "hooks", "policies", "scripts"))
     check("AC1(c)", "no sentinel-complete harness copy beneath the config home",
           not sentinel, "config home must not itself resolve as a harness home")
-    iso_real = {p for p in actual_files(iso)}
-    dup = {p for p in actual_files(n2) if p in iso_real}
-    check("AC1(c)", "no duplicate payload copy under the config home", not dup, str(sorted(dup)))
+    # Compared by CONTENT, not by name: the config home's settings.json and the
+    # isolated root's settings.json share a basename but are different artifacts
+    # (the user's live registration file vs. the harness's own reference copy).
+    # What must not exist is a config-home file that is a COPY of a payload file.
+    iso_hashes = {e["sha256"] for e in node_snapshot(iso).values() if e["type"] == "file"}
+    dup = {p for p, e in node_snapshot(n2).items()
+           if e["type"] == "file" and e["sha256"] in iso_hashes}
+    check("AC1(c)", "no duplicate payload copy under the config home (compared by content)",
+          not dup, str(sorted(dup)))
     state = json.loads((prefix / "state" / "install-state.json").read_text())
     kinds_recorded = {c["kind"] for c in state["generations"][0]["created"]}
     check("AC1", "install inventory records each footprint entry kind",
