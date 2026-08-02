@@ -120,15 +120,27 @@ _CREATED_VENV=1
 VENV_PY="$VENV_DIR/bin/python"
 
 # ── 2. Install the required dependencies from the manifest ───────────────────
-if [ -f "$MANIFEST" ]; then
-  echo "bootstrap: installing required dependencies from $MANIFEST"
+# Install hash-verified from the lockfile matching THIS interpreter.
+# --require-hashes makes pip reject the entire install if any requirement, direct
+# or transitive, is unpinned or unhashed, so a tampered or substituted artifact
+# cannot enter a fresh clone. requirements.txt stays the human-authored abstract
+# spec; requirements/py3XX.txt is its resolved, pinned form.
+PY_TAG="py$("$VENV_PY" -c 'import sys; print(f"{sys.version_info.major}{sys.version_info.minor}")')"
+LOCKFILE="$HOME_DIR/requirements/$PY_TAG.txt"
+if [ -f "$LOCKFILE" ]; then
+  echo "bootstrap: installing hash-verified dependencies from $LOCKFILE"
   "$VENV_PY" -m pip install --upgrade pip >/dev/null 2>&1 || true
-  if ! "$VENV_PY" -m pip install -r "$MANIFEST"; then
-    echo "bootstrap: dependency install failed (check network / pip)." >&2
+  if ! "$VENV_PY" -m pip install --require-hashes -r "$LOCKFILE"; then
+    echo "bootstrap: dependency install failed (check network / pip / lockfile integrity)." >&2
     exit 1
   fi
+elif [ -f "$MANIFEST" ]; then
+  echo "bootstrap: no lockfile for this interpreter at $LOCKFILE." >&2
+  echo "  Supported interpreters have a lockfile under $HOME_DIR/requirements/." >&2
+  echo "  Refusing to fall back to an unhashed install of $MANIFEST." >&2
+  exit 1
 else
-  echo "bootstrap: requirements.txt not found at $MANIFEST — cannot install deps." >&2
+  echo "bootstrap: neither $LOCKFILE nor $MANIFEST found — cannot install deps." >&2
   exit 1
 fi
 
