@@ -18,6 +18,12 @@ Fail-open on parse errors. Exit 0 = allow, exit 2 = block.
 import json
 import re
 import sys
+from pathlib import Path
+
+# Remediation paths are derived from THIS hook's own on-disk location
+# (<harness-home>/hooks/<name>.py), so the message names the spec-check.py that
+# actually exists for the invoking user instead of an author-absolute literal.
+SPEC_CHECK = Path(__file__).resolve().parent.parent / "scripts" / "spec-check.py"
 
 
 BLOCK_PATTERNS = [
