@@ -99,13 +99,13 @@ def _emit_block(tool_name: str, target: str) -> None:
         f"  tool: {tool_name}\n"
         f"  target: {target}\n"
         "spec-check.py is the only legal writer. Use one of:\n"
-        "  python3 /root/.claude/scripts/spec-check.py mark "
+        f"  python3 {SPEC_CHECK} mark "
         "--spec-id <SPEC_ID> --agent <ROLE> --agent-id <AID> --cp-id <CP>\n"
-        "  python3 /root/.claude/scripts/spec-check.py waive "
+        f"  python3 {SPEC_CHECK} waive "
         "--spec-id <SPEC_ID> --agent <ROLE> --agent-id <AID> --cp-id <CP>\n"
-        "  python3 /root/.claude/scripts/spec-check.py check-in "
+        f"  python3 {SPEC_CHECK} check-in "
         "--spec-id <SPEC_ID> --agent <ROLE> --agent-id <AID>\n"
-        "  python3 /root/.claude/scripts/spec-check.py check-out "
+        f"  python3 {SPEC_CHECK} check-out "
         "--spec-id <SPEC_ID> --agent <ROLE> --agent-id <AID>\n"
     )
 
