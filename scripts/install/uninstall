@@ -33,6 +33,7 @@ while [ $# -gt 0 ]; do
     --profile) PASS+=(--profile "${2:?--profile needs a name}"); shift 2 ;;
     --profile-file) PASS+=(--profile-file "${2:?--profile-file needs a file}"); shift 2 ;;
     --source) SOURCE_DIR="${2:?--source needs a directory}"; shift 2 ;;
+    --keep-payload) PASS+=(--keep-payload); shift ;;
     --json) PASS+=(--json); shift ;;
     -h|--help) sed -n '2,20p' "${BASH_SOURCE[0]}"; exit 0 ;;
     *) echo "uninstall: unknown argument '$1'" >&2; exit 1 ;;
