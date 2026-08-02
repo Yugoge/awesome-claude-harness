@@ -12,17 +12,24 @@
 # We only ACT in the "prepared" phase (the only abortable state). A nonzero
 # exit in "prepared" aborts the whole transaction before any ref moves.
 #
-# DENY POLICY (actor-scoped — never a global master lockdown):
+# DENY POLICY (actor-scoped — never a global lockdown):
 #   * Applies ONLY when the caller is an overnight actor:
 #       env CLAUDE_OVERNIGHT_ACTOR == "1"  AND  blessed token ABSENT.
 #   * A NORMAL session (no CLAUDE_OVERNIGHT_ACTOR) is UNAFFECTED — exit 0.
 #   * A blessed token (CLAUDE_GIT_BLESSED_TOKEN matching the live grant file)
 #     exempts the operation (sanctioned /commit//push//merge).
 #   For an overnight actor without the token, REJECT a transaction that:
-#       * updates refs/heads/master to a different oid, OR
-#       * moves the MAIN worktree's HEAD off refs/heads/master (oid changes to
-#         master ref, HEAD detach). On git >=2.46 it ALSO sees the symref HEAD
-#         branch-switch update and rejects it (Option-A structural coverage).
+#       * updates a branch ref in the RESOLVED PROTECTED SET to a different
+#         oid, OR
+#       * moves the MAIN worktree's HEAD (oid change / detach). On git >=2.46
+#         it ALSO sees the symref HEAD branch-switch update and rejects it
+#         (Option-A structural coverage).
+#
+# The protected branch is NEVER a literal and NEVER a fixed enumeration of
+# names. It is resolved at decision time from the overnight session-state
+# record(s) (M3-RESOLUTION, M5, M5-NO-ENUMERATION). When it cannot be resolved
+# the hook FAILS CLOSED (M4): it refuses the write rather than silently
+# protecting nothing.
 #
 # Exit: 0 = allow; 1 = abort the transaction (deny).
 
