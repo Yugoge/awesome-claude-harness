@@ -80,6 +80,26 @@ def _ambient_session_id(explicit: str | None) -> str:
     return explicit or os.environ.get("CLAUDE_SESSION_ID") or ""
 
 
+def transcript_offsets() -> dict[str, int]:
+    """Byte sizes of every host transcript at probe-open time.
+
+    Cross-check 4 searches only PAST these offsets, so a nonce that was already
+    in the file cannot satisfy it. Without this, "the transcript contains the
+    nonce" would be satisfiable by history rather than by this probe window.
+    """
+    out: dict[str, int] = {}
+    root = Path.home() / ".claude" / "projects"
+    try:
+        for p in root.rglob("*.jsonl"):
+            try:
+                out[str(p)] = p.stat().st_size
+            except OSError:
+                continue
+    except OSError:
+        pass
+    return out
+
+
 def cross_check_event(receipt_rec: dict, label: str, probe: dict, window_start: float,
                       ambient_sid: str) -> tuple[str, str | None, str]:
     """Return (outcome, failure_reason, event_discriminator)."""
