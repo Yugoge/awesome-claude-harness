@@ -223,15 +223,23 @@ for rel in scan_paths:
             print(f"FAIL: residue-allowlist entry has no per-entry rationale -> {rel}:{lineno}")
             failures += 1
 
+# ONE allowlist serves two scan scopes (the public-core checkout set, and the wider
+# release-archive set). An entry is only judged against a scope that actually looked
+# at its path: otherwise every archive-only entry would read as "stale" in checkout
+# mode and vice versa. Entries whose path was scanned must still match exactly;
+# entries naming a path that exists nowhere are dangling in either scope.
 for key, e in entries.items():
     if key in live:
         continue
     path = key[0]
     if not os.path.exists(os.path.join(root, path)):
-        print(f"FAIL: residue-allowlist entry references a path that no longer exists -> {path}")
-    else:
+        if path in scan_set:
+            print(f"FAIL: residue-allowlist entry references a path that no longer exists -> {path}")
+            failures += 1
+        continue
+    if path in scanned:
         print(f"FAIL: STALE residue-allowlist entry (fingerprint/ordinal no longer present) -> {path} {key[1]}#{key[2]}")
-    failures += 1
+        failures += 1
 
 print(f"  residue audit: {len(live)} occurrence(s) scanned, {len(entries)} allowlist entr(ies), {failures} failure(s)")
 sys.exit(1 if failures else 0)
