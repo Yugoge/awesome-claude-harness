@@ -16,8 +16,14 @@ import json
 import os
 import re
 import sys
+from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+# Remediation paths are derived from THIS hook's own on-disk location
+# (<harness-home>/hooks/<name>.py), so the message names the spec-check.py that
+# actually exists for the invoking user instead of an author-absolute literal.
+SPEC_CHECK = Path(__file__).resolve().parent.parent / "scripts" / "spec-check.py"
 
 from lib.bash_write_targets import extract_bash_write_paths  # noqa: E402
 
