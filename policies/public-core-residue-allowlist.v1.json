@@ -1,0 +1,914 @@
+{
+  "version": 1,
+  "description": "Seed exemption set for scripts/check-public-core.sh section 5 (generic author-path residue gate). Set-based, NOT an aggregate-count ratchet: the key is (path, fingerprint, ordinal), so deleting one allowlisted occurrence never creates capacity for an unrelated new one. Every entry's `class` is RE-DERIVED structurally by the gate from the live line; a hand-written label that the source structure does not support is rejected. Entries were seeded from a live full-ledger scan, never from a number quoted in a spec.",
+  "self_exempt_paths": [
+    "policies/public-core-residue-allowlist.v1.json",
+    "scripts/check-public-core.sh",
+    "scripts/detect-hardcoded-paths.sh"
+  ],
+  "legitimate_classes": [
+    "scanner_pattern_definition",
+    "env_parameterized_default",
+    "test_fixture",
+    "doctest_or_docstring_example",
+    "comment_or_narrative_doc"
+  ],
+  "entries": [
+    {
+      "path": "README.md",
+      "fingerprint": "a65fa6655ff7e9c3",
+      "ordinal": 1,
+      "class": "comment_or_narrative_doc",
+      "rationale": "Portability guarantee — prose/comment text; never read as a path at runtime."
+    },
+    {
+      "path": "agents/qa.md",
+      "fingerprint": "3ba600a2ea5583cb",
+      "ordinal": 1,
+      "class": "comment_or_narrative_doc",
+      "rationale": "Hardcoded absolute paths — prose/comment text; never read as a path at runtime."
+    },
+    {
+      "path": "agents/qa.md",
+      "fingerprint": "bf18eb2f5c09b477",
+      "ordinal": 1,
+      "class": "comment_or_narrative_doc",
+      "rationale": "Severity Levels — prose/comment text; never read as a path at runtime."
+    },
+    {
+      "path": "agents/qa.md",
+      "fingerprint": "f59fa5eaba52ab00",
+      "ordinal": 1,
+      "class": "comment_or_narrative_doc",
+      "rationale": "Potential hardcoded secrets/credentials — prose/comment text; never read as a path at runtime."
+    },
+    {
+      "path": "agents/style-inspector.md",
+      "fingerprint": "5dd0ced70e3e6a05",
+      "ordinal": 1,
+      "class": "comment_or_narrative_doc",
+      "rationale": "Standard 2: No Hardcoded Values in Scripts — prose/comment text; never read as a path at runtime."
+    },
+    {
+      "path": "commands/close.md",
+      "fingerprint": "e594067544bf091f",
+      "ordinal": 1,
+      "class": "comment_or_narrative_doc",
+      "rationale": "Invocation — prose/comment text; never read as a path at runtime."
+    },
+    {
+      "path": "commands/dev.md",
+      "fingerprint": "0f1494ee69e11a18",
+      "ordinal": 1,
+      "class": "comment_or_narrative_doc",
+      "rationale": "Example: WHAT-only (correct) — prose/comment text; never read as a path at runtime."
+    },
+    {
+      "path": "commands/dev.md",
+      "fingerprint": "4e16466daa990b0d",
+      "ordinal": 1,
+      "class": "comment_or_narrative_doc",
+      "rationale": "Orchestrator Prompt Purity (MANDATORY) — prose/comment text; never read as a path at runtime."
+    },
+    {
+      "path": "commands/dev.md",
+      "fingerprint": "7d6340d619802e4d",
+      "ordinal": 1,
+      "class": "comment_or_narrative_doc",
+      "rationale": "How the rule is enforced — prose/comment text; never read as a path at runtime."
+    },
+    {
+      "path": "commands/dev.md",
+      "fingerprint": "99bacaf9e98569fd",
+      "ordinal": 1,
+      "class": "comment_or_narrative_doc",
+      "rationale": "Why this rule exists — prose/comment text; never read as a path at runtime."
+    },
+    {
+      "path": "commands/dev.md",
+      "fingerprint": "ad431a4e6955f846",
+      "ordinal": 1,
+      "class": "comment_or_narrative_doc",
+      "rationale": "Example: HOW-prescription (forbidden) — prose/comment text; never read as a path at runtime."
+    },
+    {
+      "path": "commands/dev.md",
+      "fingerprint": "f653a2d8adf5a2f1",
+      "ordinal": 1,
+      "class": "comment_or_narrative_doc",
+      "rationale": "Scope of this rule — prose/comment text; never read as a path at runtime."
+    },
+    {
+      "path": "docs/reference/monolith-split-plan.md",
+      "fingerprint": "d059de199e59510b",
+      "ordinal": 1,
+      "class": "comment_or_narrative_doc",
+      "rationale": "Phase 3 — DONE (2026-07-15): path/glob matching seam — prose/comment text; never read as a path at runtime."
+    },
+    {
+      "path": "examples/guard-demo/README.md",
+      "fingerprint": "8e1863ece5c80dde",
+      "ordinal": 1,
+      "class": "comment_or_narrative_doc",
+      "rationale": "Run it — prose/comment text; never read as a path at runtime."
+    },
+    {
+      "path": "examples/guard-demo/run-demo.sh",
+      "fingerprint": "781a0361c210c1ae",
+      "ordinal": 1,
+      "class": "comment_or_narrative_doc",
+      "rationale": "script preamble — prose/comment text; never read as a path at runtime."
+    },
+    {
+      "path": "hooks/git-hooks/pre-commit",
+      "fingerprint": "150f184fc54cc16c",
+      "ordinal": 1,
+      "class": "comment_or_narrative_doc",
+      "rationale": "script preamble — prose/comment text; never read as a path at runtime."
+    },
+    {
+      "path": "hooks/lib/bash_write_targets.py",
+      "fingerprint": "1da6204af394735a",
+      "ordinal": 1,
+      "class": "doctest_or_docstring_example",
+      "rationale": "module docstring — illustrative literal inside documentation/usage text; not executed as a path."
+    },
+    {
+      "path": "hooks/lib/bash_write_targets.py",
+      "fingerprint": "2c72294eb66b4511",
+      "ordinal": 1,
+      "class": "doctest_or_docstring_example",
+      "rationale": "module docstring — illustrative literal inside documentation/usage text; not executed as a path."
+    },
+    {
+      "path": "hooks/lib/bash_write_targets.py",
+      "fingerprint": "360cbe4a6b951fb3",
+      "ordinal": 1,
+      "class": "doctest_or_docstring_example",
+      "rationale": "module docstring — illustrative literal inside documentation/usage text; not executed as a path."
+    },
+    {
+      "path": "hooks/lib/bash_write_targets.py",
+      "fingerprint": "5224cbbabb5778fe",
+      "ordinal": 1,
+      "class": "doctest_or_docstring_example",
+      "rationale": "module docstring — illustrative literal inside documentation/usage text; not executed as a path."
+    },
+    {
+      "path": "hooks/lib/bash_write_targets.py",
+      "fingerprint": "5aaa4b3239004d0e",
+      "ordinal": 1,
+      "class": "doctest_or_docstring_example",
+      "rationale": "module docstring — illustrative literal inside documentation/usage text; not executed as a path."
+    },
+    {
+      "path": "hooks/lib/bash_write_targets.py",
+      "fingerprint": "759f6204bf4e85b6",
+      "ordinal": 1,
+      "class": "doctest_or_docstring_example",
+      "rationale": "module docstring — illustrative literal inside documentation/usage text; not executed as a path."
+    },
+    {
+      "path": "hooks/lib/bash_write_targets.py",
+      "fingerprint": "802b27347f1840b7",
+      "ordinal": 1,
+      "class": "doctest_or_docstring_example",
+      "rationale": "module docstring — illustrative literal inside documentation/usage text; not executed as a path."
+    },
+    {
+      "path": "hooks/lib/bash_write_targets.py",
+      "fingerprint": "b7c1ec794aeef56a",
+      "ordinal": 1,
+      "class": "doctest_or_docstring_example",
+      "rationale": "module docstring — illustrative literal inside documentation/usage text; not executed as a path."
+    },
+    {
+      "path": "hooks/lib/bash_write_targets.py",
+      "fingerprint": "d64ab1c4407c1aef",
+      "ordinal": 1,
+      "class": "doctest_or_docstring_example",
+      "rationale": "module docstring — illustrative literal inside documentation/usage text; not executed as a path."
+    },
+    {
+      "path": "hooks/lib/bash_write_targets.py",
+      "fingerprint": "f24165754363c4db",
+      "ordinal": 1,
+      "class": "doctest_or_docstring_example",
+      "rationale": "module docstring — illustrative literal inside documentation/usage text; not executed as a path."
+    },
+    {
+      "path": "hooks/lib/bash_write_targets.py",
+      "fingerprint": "fcb2f705a695d557",
+      "ordinal": 1,
+      "class": "doctest_or_docstring_example",
+      "rationale": "module docstring — illustrative literal inside documentation/usage text; not executed as a path."
+    },
+    {
+      "path": "hooks/lib/bash_write_targets.py",
+      "fingerprint": "5aaa4b3239004d0e",
+      "ordinal": 2,
+      "class": "doctest_or_docstring_example",
+      "rationale": "module docstring — illustrative literal inside documentation/usage text; not executed as a path."
+    },
+    {
+      "path": "hooks/lib/contract_runtime.py",
+      "fingerprint": "4f32b24eaf3859e0",
+      "ordinal": 1,
+      "class": "doctest_or_docstring_example",
+      "rationale": "def _candidate_contract_paths() — illustrative literal inside documentation/usage text; not executed as a path."
+    },
+    {
+      "path": "hooks/lib/contract_runtime.py",
+      "fingerprint": "897ba78576f81922",
+      "ordinal": 1,
+      "class": "doctest_or_docstring_example",
+      "rationale": "def _candidate_contract_paths() — illustrative literal inside documentation/usage text; not executed as a path."
+    },
+    {
+      "path": "hooks/lib/policy_registry.py",
+      "fingerprint": "4ad2cf1d12440999",
+      "ordinal": 1,
+      "class": "doctest_or_docstring_example",
+      "rationale": "def _absolute_anchor_candidates() — illustrative literal inside documentation/usage text; not executed as a path."
+    },
+    {
+      "path": "hooks/lib/policy_registry.py",
+      "fingerprint": "4e7cd3ec4fdd27c5",
+      "ordinal": 1,
+      "class": "doctest_or_docstring_example",
+      "rationale": "def _glob_match() — illustrative literal inside documentation/usage text; not executed as a path."
+    },
+    {
+      "path": "hooks/lib/policy_registry.py",
+      "fingerprint": "64464b48b5ec7e80",
+      "ordinal": 1,
+      "class": "doctest_or_docstring_example",
+      "rationale": "def _candidate_targets() — illustrative literal inside documentation/usage text; not executed as a path."
+    },
+    {
+      "path": "hooks/lib/policy_registry.py",
+      "fingerprint": "b5ea296cabbefdcf",
+      "ordinal": 1,
+      "class": "doctest_or_docstring_example",
+      "rationale": "module docstring — illustrative literal inside documentation/usage text; not executed as a path."
+    },
+    {
+      "path": "hooks/lib/policy_registry.py",
+      "fingerprint": "f7e4f6ba0ae76ea7",
+      "ordinal": 1,
+      "class": "comment_or_narrative_doc",
+      "rationale": "module docstring — prose/comment text; never read as a path at runtime."
+    },
+    {
+      "path": "hooks/lib/runtime_guard/config.py",
+      "fingerprint": "1edbe93d0aeeed69",
+      "ordinal": 1,
+      "class": "doctest_or_docstring_example",
+      "rationale": "def _home_tilde_variant() — illustrative literal inside documentation/usage text; not executed as a path."
+    },
+    {
+      "path": "hooks/lib/runtime_guard/config.py",
+      "fingerprint": "4d32c4c61314ebde",
+      "ordinal": 1,
+      "class": "comment_or_narrative_doc",
+      "rationale": "def _config_ancestor_dirs() — prose/comment text; never read as a path at runtime."
+    },
+    {
+      "path": "hooks/lib/runtime_guard/config.py",
+      "fingerprint": "6d4403e0583969b1",
+      "ordinal": 1,
+      "class": "doctest_or_docstring_example",
+      "rationale": "def _config_ancestor_dirs() — illustrative literal inside documentation/usage text; not executed as a path."
+    },
+    {
+      "path": "hooks/lib/runtime_guard/config.py",
+      "fingerprint": "8efae8045d4a288a",
+      "ordinal": 1,
+      "class": "doctest_or_docstring_example",
+      "rationale": "def _config_ancestor_dirs() — illustrative literal inside documentation/usage text; not executed as a path."
+    },
+    {
+      "path": "hooks/lib/runtime_guard/config.py",
+      "fingerprint": "aea8e2c99213b51f",
+      "ordinal": 1,
+      "class": "doctest_or_docstring_example",
+      "rationale": "def _config_ancestor_dirs() — illustrative literal inside documentation/usage text; not executed as a path."
+    },
+    {
+      "path": "hooks/lib/runtime_guard/config.py",
+      "fingerprint": "bc2dc3fcdb80c7a2",
+      "ordinal": 1,
+      "class": "doctest_or_docstring_example",
+      "rationale": "def _home_tilde_variant() — illustrative literal inside documentation/usage text; not executed as a path."
+    },
+    {
+      "path": "hooks/lib/runtime_guard/pathmatch.py",
+      "fingerprint": "60d7726679207ea3",
+      "ordinal": 1,
+      "class": "comment_or_narrative_doc",
+      "rationale": "def _glob_literal_prefix() — prose/comment text; never read as a path at runtime."
+    },
+    {
+      "path": "hooks/lib/schema_registry.py",
+      "fingerprint": "f3fb9f9788ef9c4d",
+      "ordinal": 1,
+      "class": "doctest_or_docstring_example",
+      "rationale": "module docstring — illustrative literal inside documentation/usage text; not executed as a path."
+    },
+    {
+      "path": "hooks/notification-idle-overnight.py",
+      "fingerprint": "ba7a535067a4f9b4",
+      "ordinal": 1,
+      "class": "comment_or_narrative_doc",
+      "rationale": "module docstring — prose/comment text; never read as a path at runtime."
+    },
+    {
+      "path": "hooks/pretool-bash-safety.sh",
+      "fingerprint": "00fab51a765d5c6a",
+      "ordinal": 1,
+      "class": "comment_or_narrative_doc",
+      "rationale": "check_and_consume_daemon_restart_grant() — prose/comment text; never read as a path at runtime."
+    },
+    {
+      "path": "hooks/pretool-bash-safety.sh",
+      "fingerprint": "246b33ce8bbf347e",
+      "ordinal": 1,
+      "class": "env_parameterized_default",
+      "rationale": "_runtime_guard_fail_closed() — env-overridable ':-' default sanctioned by PUBLIC-CORE.md section 3."
+    },
+    {
+      "path": "hooks/pretool-bash-safety.sh",
+      "fingerprint": "31d46a2bd0bb9e29",
+      "ordinal": 1,
+      "class": "comment_or_narrative_doc",
+      "rationale": "script preamble — prose/comment text; never read as a path at runtime."
+    },
+    {
+      "path": "hooks/pretool-bash-safety.sh",
+      "fingerprint": "65aa93dd0c8d2cc8",
+      "ordinal": 1,
+      "class": "comment_or_narrative_doc",
+      "rationale": "script preamble — prose/comment text; never read as a path at runtime."
+    },
+    {
+      "path": "hooks/pretool-bash-safety.sh",
+      "fingerprint": "67956b4e1f5981c3",
+      "ordinal": 1,
+      "class": "comment_or_narrative_doc",
+      "rationale": "check_and_consume_daemon_restart_grant() — prose/comment text; never read as a path at runtime."
+    },
+    {
+      "path": "hooks/pretool-bash-safety.sh",
+      "fingerprint": "6c4a9cefaddd9847",
+      "ordinal": 1,
+      "class": "comment_or_narrative_doc",
+      "rationale": "script preamble — prose/comment text; never read as a path at runtime."
+    },
+    {
+      "path": "hooks/pretool-bash-safety.sh",
+      "fingerprint": "b28150103529ab6c",
+      "ordinal": 1,
+      "class": "comment_or_narrative_doc",
+      "rationale": "check_and_consume_allowlist() — prose/comment text; never read as a path at runtime."
+    },
+    {
+      "path": "hooks/pretool-bash-safety.sh",
+      "fingerprint": "bb333fa84bb2aa92",
+      "ordinal": 1,
+      "class": "comment_or_narrative_doc",
+      "rationale": "check_and_consume_allowlist() — prose/comment text; never read as a path at runtime."
+    },
+    {
+      "path": "hooks/pretool-bash-safety.sh",
+      "fingerprint": "c31356b145e8f0ee",
+      "ordinal": 1,
+      "class": "comment_or_narrative_doc",
+      "rationale": "_any_git_has_subcmd() — prose/comment text; never read as a path at runtime."
+    },
+    {
+      "path": "hooks/pretool-bash-safety.sh",
+      "fingerprint": "d40d50d7f5f4ab44",
+      "ordinal": 1,
+      "class": "comment_or_narrative_doc",
+      "rationale": "script preamble — prose/comment text; never read as a path at runtime."
+    },
+    {
+      "path": "hooks/pretool-bash-safety.sh",
+      "fingerprint": "e5810a5981ea9ba8",
+      "ordinal": 1,
+      "class": "comment_or_narrative_doc",
+      "rationale": "_runtime_guard_fail_closed() — prose/comment text; never read as a path at runtime."
+    },
+    {
+      "path": "hooks/pretool-bash-safety.sh",
+      "fingerprint": "ed649dd11e7cdb37",
+      "ordinal": 1,
+      "class": "comment_or_narrative_doc",
+      "rationale": "check_and_consume_allowlist() — prose/comment text; never read as a path at runtime."
+    },
+    {
+      "path": "hooks/pretool-cp-checkin.py",
+      "fingerprint": "274a66e8ff5d5c66",
+      "ordinal": 1,
+      "class": "comment_or_narrative_doc",
+      "rationale": "module docstring — prose/comment text; never read as a path at runtime."
+    },
+    {
+      "path": "hooks/pretool-cp-checkin.py",
+      "fingerprint": "6c82b4e562b56bd5",
+      "ordinal": 1,
+      "class": "doctest_or_docstring_example",
+      "rationale": "def _handle_cp_state_direct_read() — illustrative literal inside documentation/usage text; not executed as a path."
+    },
+    {
+      "path": "hooks/pretool-cp-checkin.py",
+      "fingerprint": "a51355040ee30cf6",
+      "ordinal": 1,
+      "class": "comment_or_narrative_doc",
+      "rationale": "module docstring — prose/comment text; never read as a path at runtime."
+    },
+    {
+      "path": "hooks/pretool-cp-checkin.py",
+      "fingerprint": "d87cccbb7ec61f4e",
+      "ordinal": 1,
+      "class": "doctest_or_docstring_example",
+      "rationale": "def _all_cp_files() — illustrative literal inside documentation/usage text; not executed as a path."
+    },
+    {
+      "path": "hooks/pretool-cp-checkin.py",
+      "fingerprint": "e31699dbfbb51386",
+      "ordinal": 1,
+      "class": "comment_or_narrative_doc",
+      "rationale": "module docstring — prose/comment text; never read as a path at runtime."
+    },
+    {
+      "path": "hooks/pretool-overnight-hook-guard.py",
+      "fingerprint": "f2a413f784920a31",
+      "ordinal": 1,
+      "class": "comment_or_narrative_doc",
+      "rationale": "module docstring — prose/comment text; never read as a path at runtime."
+    },
+    {
+      "path": "hooks/sentinel-lint.sh",
+      "fingerprint": "d78a80bf96b99193",
+      "ordinal": 1,
+      "class": "comment_or_narrative_doc",
+      "rationale": "script preamble — prose/comment text; never read as a path at runtime."
+    },
+    {
+      "path": "hooks/stop-spec-coverage-enforce.py",
+      "fingerprint": "0e6f98041c058196",
+      "ordinal": 1,
+      "class": "comment_or_narrative_doc",
+      "rationale": "module docstring — prose/comment text; never read as a path at runtime."
+    },
+    {
+      "path": "hooks/tests/test_dual_runtime_lifecycle_e2e.py",
+      "fingerprint": "0c1a6d6025c2759d",
+      "ordinal": 1,
+      "class": "test_fixture",
+      "rationale": "def make_configured_fixture() — fixture input data inside the test tree; not shipped harness behaviour."
+    },
+    {
+      "path": "hooks/tests/test_dual_runtime_lifecycle_e2e.py",
+      "fingerprint": "35d6e497739e9006",
+      "ordinal": 1,
+      "class": "test_fixture",
+      "rationale": "module docstring — fixture input data inside the test tree; not shipped harness behaviour."
+    },
+    {
+      "path": "hooks/tests/test_dual_runtime_lifecycle_e2e.py",
+      "fingerprint": "430c2baa8d402cb1",
+      "ordinal": 1,
+      "class": "test_fixture",
+      "rationale": "def append_completion() — fixture input data inside the test tree; not shipped harness behaviour."
+    },
+    {
+      "path": "hooks/tests/test_dual_runtime_lifecycle_e2e.py",
+      "fingerprint": "5f5a84c3024b2d3b",
+      "ordinal": 1,
+      "class": "test_fixture",
+      "rationale": "module docstring — fixture input data inside the test tree; not shipped harness behaviour."
+    },
+    {
+      "path": "hooks/tests/test_dual_runtime_lifecycle_e2e.py",
+      "fingerprint": "9a95b17a6c16bda1",
+      "ordinal": 1,
+      "class": "test_fixture",
+      "rationale": "module docstring — fixture input data inside the test tree; not shipped harness behaviour."
+    },
+    {
+      "path": "hooks/tests/test_dual_runtime_lifecycle_e2e.py",
+      "fingerprint": "a8a861aa41513f04",
+      "ordinal": 1,
+      "class": "test_fixture",
+      "rationale": "def test_active_codex_hook_plan_has_one_lifecycle_owner() — fixture input data inside the test tree; not shipped harness behaviour."
+    },
+    {
+      "path": "hooks/tests/test_dual_runtime_lifecycle_e2e.py",
+      "fingerprint": "f19d89a9afc5255b",
+      "ordinal": 1,
+      "class": "test_fixture",
+      "rationale": "module docstring — fixture input data inside the test tree; not shipped harness behaviour."
+    },
+    {
+      "path": "hooks/tests/test_runtime_guard.py",
+      "fingerprint": "02837e3d3bba5af6",
+      "ordinal": 1,
+      "class": "test_fixture",
+      "rationale": "def test_kill_fused_redirect() — fixture input data inside the test tree; not shipped harness behaviour."
+    },
+    {
+      "path": "hooks/tests/test_runtime_guard.py",
+      "fingerprint": "0407656883511305",
+      "ordinal": 1,
+      "class": "test_fixture",
+      "rationale": "def test_home_in_cwd_blocks() — fixture input data inside the test tree; not shipped harness behaviour."
+    },
+    {
+      "path": "hooks/tests/test_runtime_guard.py",
+      "fingerprint": "07adc457f910b246",
+      "ordinal": 1,
+      "class": "test_fixture",
+      "rationale": "def test_tilde_user_expansion_blocks() — fixture input data inside the test tree; not shipped harness behaviour."
+    },
+    {
+      "path": "hooks/tests/test_runtime_guard.py",
+      "fingerprint": "0914dc3b56be40ce",
+      "ordinal": 1,
+      "class": "test_fixture",
+      "rationale": "def test_statefile_dir_glob_blocks() — fixture input data inside the test tree; not shipped harness behaviour."
+    },
+    {
+      "path": "hooks/tests/test_runtime_guard.py",
+      "fingerprint": "0d414a09668c645b",
+      "ordinal": 1,
+      "class": "test_fixture",
+      "rationale": "def test_read_statefile() — fixture input data inside the test tree; not shipped harness behaviour."
+    },
+    {
+      "path": "hooks/tests/test_runtime_guard.py",
+      "fingerprint": "10f6d5fda2308084",
+      "ordinal": 1,
+      "class": "test_fixture",
+      "rationale": "def test_live_hook_sweep_blocks() — fixture input data inside the test tree; not shipped harness behaviour."
+    },
+    {
+      "path": "hooks/tests/test_runtime_guard.py",
+      "fingerprint": "14286bc780b53777",
+      "ordinal": 1,
+      "class": "test_fixture",
+      "rationale": "def _live_hook_env() — fixture input data inside the test tree; not shipped harness behaviour."
+    },
+    {
+      "path": "hooks/tests/test_runtime_guard.py",
+      "fingerprint": "2845b9f6cffbd875",
+      "ordinal": 1,
+      "class": "test_fixture",
+      "rationale": "def test_find_implicit_cwd_destructive_blocks() — fixture input data inside the test tree; not shipped harness behaviour."
+    },
+    {
+      "path": "hooks/tests/test_runtime_guard.py",
+      "fingerprint": "2ed7ff4185870350",
+      "ordinal": 1,
+      "class": "test_fixture",
+      "rationale": "def test_container_dir_mutation_statefile() — fixture input data inside the test tree; not shipped harness behaviour."
+    },
+    {
+      "path": "hooks/tests/test_runtime_guard.py",
+      "fingerprint": "2f8b36daf6d56c64",
+      "ordinal": 1,
+      "class": "test_fixture",
+      "rationale": "def test_launch_cmdword() — fixture input data inside the test tree; not shipped harness behaviour."
+    },
+    {
+      "path": "hooks/tests/test_runtime_guard.py",
+      "fingerprint": "42ae83cebc93fcb7",
+      "ordinal": 1,
+      "class": "test_fixture",
+      "rationale": "def test_read_statefile() — fixture input data inside the test tree; not shipped harness behaviour."
+    },
+    {
+      "path": "hooks/tests/test_runtime_guard.py",
+      "fingerprint": "4663979abfeaf60b",
+      "ordinal": 1,
+      "class": "test_fixture",
+      "rationale": "def test_statefile_mutation() — fixture input data inside the test tree; not shipped harness behaviour."
+    },
+    {
+      "path": "hooks/tests/test_runtime_guard.py",
+      "fingerprint": "4a5b30991d216ec2",
+      "ordinal": 1,
+      "class": "test_fixture",
+      "rationale": "def test_statefile_dir_glob_blocks() — fixture input data inside the test tree; not shipped harness behaviour."
+    },
+    {
+      "path": "hooks/tests/test_runtime_guard.py",
+      "fingerprint": "4b823ee680c02aed",
+      "ordinal": 1,
+      "class": "test_fixture",
+      "rationale": "def _statefile() — fixture input data inside the test tree; not shipped harness behaviour."
+    },
+    {
+      "path": "hooks/tests/test_runtime_guard.py",
+      "fingerprint": "57bfb7ad5a57103d",
+      "ordinal": 1,
+      "class": "test_fixture",
+      "rationale": "def test_home_expansion_blocks() — fixture input data inside the test tree; not shipped harness behaviour."
+    },
+    {
+      "path": "hooks/tests/test_runtime_guard.py",
+      "fingerprint": "5ac2dec4c03fb39e",
+      "ordinal": 1,
+      "class": "test_fixture",
+      "rationale": "def test_container_dir_mutation_statefile() — fixture input data inside the test tree; not shipped harness behaviour."
+    },
+    {
+      "path": "hooks/tests/test_runtime_guard.py",
+      "fingerprint": "6e7bede4100d0966",
+      "ordinal": 1,
+      "class": "test_fixture",
+      "rationale": "def test_wrapped_pipeline_statefile_kill_blocks() — fixture input data inside the test tree; not shipped harness behaviour."
+    },
+    {
+      "path": "hooks/tests/test_runtime_guard.py",
+      "fingerprint": "6f65907feedb7fae",
+      "ordinal": 1,
+      "class": "test_fixture",
+      "rationale": "def test_kill_statefile_pid() — fixture input data inside the test tree; not shipped harness behaviour."
+    },
+    {
+      "path": "hooks/tests/test_runtime_guard.py",
+      "fingerprint": "891583a8794924c6",
+      "ordinal": 1,
+      "class": "test_fixture",
+      "rationale": "def test_home_in_cwd_boundary_allows() — fixture input data inside the test tree; not shipped harness behaviour."
+    },
+    {
+      "path": "hooks/tests/test_runtime_guard.py",
+      "fingerprint": "9869ac4e9a29035e",
+      "ordinal": 1,
+      "class": "test_fixture",
+      "rationale": "def test_find_opts_before_path_sibling_family_blocks() — fixture input data inside the test tree; not shipped harness behaviour."
+    },
+    {
+      "path": "hooks/tests/test_runtime_guard.py",
+      "fingerprint": "a00552b7c6f8263d",
+      "ordinal": 1,
+      "class": "test_fixture",
+      "rationale": "def test_w4_kill_anchor() — fixture input data inside the test tree; not shipped harness behaviour."
+    },
+    {
+      "path": "hooks/tests/test_runtime_guard.py",
+      "fingerprint": "badad5a1f0365724",
+      "ordinal": 1,
+      "class": "test_fixture",
+      "rationale": "def test_find_destructive_statefile() — fixture input data inside the test tree; not shipped harness behaviour."
+    },
+    {
+      "path": "hooks/tests/test_runtime_guard.py",
+      "fingerprint": "bf2e14c89ed69d29",
+      "ordinal": 1,
+      "class": "test_fixture",
+      "rationale": "def test_frontend_benign_tail_allows() — fixture input data inside the test tree; not shipped harness behaviour."
+    },
+    {
+      "path": "hooks/tests/test_runtime_guard.py",
+      "fingerprint": "c360724c76e75208",
+      "ordinal": 1,
+      "class": "test_fixture",
+      "rationale": "def test_home_expansion_blocks() — fixture input data inside the test tree; not shipped harness behaviour."
+    },
+    {
+      "path": "hooks/tests/test_runtime_guard.py",
+      "fingerprint": "c63dee14cd095951",
+      "ordinal": 1,
+      "class": "test_fixture",
+      "rationale": "def test_cd_then_truncate_statefile() — fixture input data inside the test tree; not shipped harness behaviour."
+    },
+    {
+      "path": "hooks/tests/test_runtime_guard.py",
+      "fingerprint": "ceb21d6512ece42b",
+      "ordinal": 1,
+      "class": "test_fixture",
+      "rationale": "def test_read_statefile() — fixture input data inside the test tree; not shipped harness behaviour."
+    },
+    {
+      "path": "hooks/tests/test_runtime_guard.py",
+      "fingerprint": "d989e3bc6918eb9a",
+      "ordinal": 1,
+      "class": "test_fixture",
+      "rationale": "def test_statefile_mutation() — fixture input data inside the test tree; not shipped harness behaviour."
+    },
+    {
+      "path": "hooks/tests/test_runtime_guard.py",
+      "fingerprint": "dd4c901548ad7cb2",
+      "ordinal": 1,
+      "class": "test_fixture",
+      "rationale": "def test_statefile_mutation() — fixture input data inside the test tree; not shipped harness behaviour."
+    },
+    {
+      "path": "hooks/tests/test_runtime_guard.py",
+      "fingerprint": "e41c07047c8e873b",
+      "ordinal": 1,
+      "class": "test_fixture",
+      "rationale": "def test_find_destructive_statefile() — fixture input data inside the test tree; not shipped harness behaviour."
+    },
+    {
+      "path": "hooks/tests/test_runtime_guard.py",
+      "fingerprint": "eec5740ef22c2584",
+      "ordinal": 1,
+      "class": "test_fixture",
+      "rationale": "def test_kill_statefile_pid() — fixture input data inside the test tree; not shipped harness behaviour."
+    },
+    {
+      "path": "hooks/tests/test_runtime_guard.py",
+      "fingerprint": "fd9167c37b42150d",
+      "ordinal": 1,
+      "class": "test_fixture",
+      "rationale": "def test_w6_w9_no_overblock_boundary_allows() — fixture input data inside the test tree; not shipped harness behaviour."
+    },
+    {
+      "path": "hooks/tests/test_runtime_guard.py",
+      "fingerprint": "fe214524e3dbab4c",
+      "ordinal": 1,
+      "class": "test_fixture",
+      "rationale": "def test_hook_allows_read_statefile() — fixture input data inside the test tree; not shipped harness behaviour."
+    },
+    {
+      "path": "hooks/tests/test_runtime_guard.py",
+      "fingerprint": "0407656883511305",
+      "ordinal": 2,
+      "class": "test_fixture",
+      "rationale": "def test_home_in_cwd_boundary_allows() — fixture input data inside the test tree; not shipped harness behaviour."
+    },
+    {
+      "path": "hooks/tests/test_runtime_guard.py",
+      "fingerprint": "4b823ee680c02aed",
+      "ordinal": 2,
+      "class": "test_fixture",
+      "rationale": "def _statefile() — fixture input data inside the test tree; not shipped harness behaviour."
+    },
+    {
+      "path": "hooks/tests/test_runtime_guard.py",
+      "fingerprint": "57bfb7ad5a57103d",
+      "ordinal": 2,
+      "class": "test_fixture",
+      "rationale": "def test_chgrp_home_boundary_allows() — fixture input data inside the test tree; not shipped harness behaviour."
+    },
+    {
+      "path": "hooks/tests/test_unit_find_cmds.py",
+      "fingerprint": "6f1dd8205cdda14c",
+      "ordinal": 1,
+      "class": "test_fixture",
+      "rationale": "def test_find_predicate_values_name_and_path() — fixture input data inside the test tree; not shipped harness behaviour."
+    },
+    {
+      "path": "hooks/tests/test_unit_find_cmds.py",
+      "fingerprint": "7cc8b853492ef5bf",
+      "ordinal": 1,
+      "class": "test_fixture",
+      "rationale": "def test_find_predicate_values_name_and_path() — fixture input data inside the test tree; not shipped harness behaviour."
+    },
+    {
+      "path": "hooks/tests/test_unit_pathmatch.py",
+      "fingerprint": "d9711b6864d75ad8",
+      "ordinal": 1,
+      "class": "test_fixture",
+      "rationale": "def test_normalize_path_expands_leading_home() — fixture input data inside the test tree; not shipped harness behaviour."
+    },
+    {
+      "path": "hooks/tests/test_unit_pathmatch.py",
+      "fingerprint": "e6329454bc13a87c",
+      "ordinal": 1,
+      "class": "test_fixture",
+      "rationale": "def test_normalize_path_expands_leading_home() — fixture input data inside the test tree; not shipped harness behaviour."
+    },
+    {
+      "path": "scripts/INDEX.md",
+      "fingerprint": "41ba4204049bec4f",
+      "ordinal": 1,
+      "class": "comment_or_narrative_doc",
+      "rationale": "Tree — prose/comment text; never read as a path at runtime."
+    },
+    {
+      "path": "scripts/check-file-references.sh",
+      "fingerprint": "fdb786069e4db94b",
+      "ordinal": 1,
+      "class": "doctest_or_docstring_example",
+      "rationale": "usage() — illustrative literal inside documentation/usage text; not executed as a path."
+    },
+    {
+      "path": "scripts/check-overnight-reports.sh",
+      "fingerprint": "869abf9b30a81dce",
+      "ordinal": 1,
+      "class": "comment_or_narrative_doc",
+      "rationale": "script preamble — prose/comment text; never read as a path at runtime."
+    },
+    {
+      "path": "scripts/check-public-core.sh",
+      "fingerprint": "61a9a6b2ee9320c4",
+      "ordinal": 1,
+      "class": "scanner_pattern_definition",
+      "rationale": "pass() — the residue detector's own constant table; naming the pattern is its purpose."
+    },
+    {
+      "path": "scripts/check-public-core.sh",
+      "fingerprint": "a4c3f85f684c7bc4",
+      "ordinal": 1,
+      "class": "scanner_pattern_definition",
+      "rationale": "pass() — the residue detector's own constant table; naming the pattern is its purpose."
+    },
+    {
+      "path": "scripts/check-public-core.sh",
+      "fingerprint": "ac08a7694f695afc",
+      "ordinal": 1,
+      "class": "scanner_pattern_definition",
+      "rationale": "pass() — the residue detector's own constant table; naming the pattern is its purpose."
+    },
+    {
+      "path": "scripts/close-scoring-decide.py",
+      "fingerprint": "95ebf3714a61f66c",
+      "ordinal": 1,
+      "class": "comment_or_narrative_doc",
+      "rationale": "def main() — prose/comment text; never read as a path at runtime."
+    },
+    {
+      "path": "scripts/close-scoring-decide.py",
+      "fingerprint": "d08e58a0dd6887e2",
+      "ordinal": 1,
+      "class": "comment_or_narrative_doc",
+      "rationale": "def main() — prose/comment text; never read as a path at runtime."
+    },
+    {
+      "path": "scripts/detect-hardcoded-paths.sh",
+      "fingerprint": "249cf96464ec1cc3",
+      "ordinal": 1,
+      "class": "scanner_pattern_definition",
+      "rationale": "script preamble — the residue detector's own constant table; naming the pattern is its purpose."
+    },
+    {
+      "path": "scripts/detect-hardcoded-paths.sh",
+      "fingerprint": "90e23e9de52b5d4b",
+      "ordinal": 1,
+      "class": "scanner_pattern_definition",
+      "rationale": "script preamble — the residue detector's own constant table; naming the pattern is its purpose."
+    },
+    {
+      "path": "scripts/install/render-settings",
+      "fingerprint": "ac7b1e71a7a6a59a",
+      "ordinal": 1,
+      "class": "doctest_or_docstring_example",
+      "rationale": "module docstring — illustrative literal inside documentation/usage text; not executed as a path."
+    },
+    {
+      "path": "scripts/spec-verify/spec_verify_parsers.py",
+      "fingerprint": "d08b965ca6991816",
+      "ordinal": 1,
+      "class": "doctest_or_docstring_example",
+      "rationale": "module docstring — illustrative literal inside documentation/usage text; not executed as a path."
+    },
+    {
+      "path": "scripts/step7-spec-update.py",
+      "fingerprint": "7b795a0b11a45879",
+      "ordinal": 1,
+      "class": "comment_or_narrative_doc",
+      "rationale": "def _stage1_context_spec_path() — prose/comment text; never read as a path at runtime."
+    },
+    {
+      "path": "scripts/write-commit-grant.py",
+      "fingerprint": "e8f220804b6d10e0",
+      "ordinal": 1,
+      "class": "doctest_or_docstring_example",
+      "rationale": "module docstring — illustrative literal inside documentation/usage text; not executed as a path."
+    },
+    {
+      "path": "skills/ui-beauty-score/README.md",
+      "fingerprint": "1a1d41773dfe89d1",
+      "ordinal": 1,
+      "class": "comment_or_narrative_doc",
+      "rationale": "See also — prose/comment text; never read as a path at runtime."
+    },
+    {
+      "path": "skills/ui-beauty-score/README.md",
+      "fingerprint": "bc3ca585aa965b74",
+      "ordinal": 1,
+      "class": "comment_or_narrative_doc",
+      "rationale": "See also — prose/comment text; never read as a path at runtime."
+    },
+    {
+      "path": "skills/ui-shared/anti-pattern-catalog.yml",
+      "fingerprint": "2463604865cded8d",
+      "ordinal": 1,
+      "class": "comment_or_narrative_doc",
+      "rationale": "file body — prose/comment text; never read as a path at runtime."
+    },
+    {
+      "path": "skills/ui-shared/rule-map.json",
+      "fingerprint": "8352ef53e439abad",
+      "ordinal": 1,
+      "class": "comment_or_narrative_doc",
+      "rationale": "\"spec_reference\" field — prose/comment text; never read as a path at runtime."
+    }
+  ]
+}
