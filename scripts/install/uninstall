@@ -1,0 +1,43 @@
+#!/usr/bin/env bash
+# uninstall — remove exactly what scripts/install/install added, and nothing else.
+#
+# Usage: scripts/install/uninstall [--prefix <dir>] [--config-dir <dir>]
+#                                  [--profile core] [--json]
+#
+# Exit codes: 0 = success; 1 = failure.
+#
+# OWNERSHIP-AWARE, NOT A WHOLE-TREE RESTORE:
+#   - Files and links the installer CREATED are removed by exact path. A link is
+#     unlinked, never followed, so nothing inside the isolated root is deleted
+#     through it.
+#   - A directory the installer created is removed ONLY IF IT IS THEN EMPTY. It is
+#     never deleted recursively — which is what lets a file you created inside an
+#     installer-owned directory survive.
+#   - Files the installer MODIFIED are restored from the EARLIEST backup recorded,
+#     so a repeat install cannot make your true original unrecoverable.
+#   - Anything the installer did not create or modify is not touched at all.
+#
+# Every claim in the report is cross-checked against measured filesystem state
+# before it is printed: "restored" carries the measured sha256, "removed" carries
+# the measured presence of the path.
+set -uo pipefail
+
+SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+SOURCE_DIR="$(cd "$SELF_DIR/../.." && pwd -P)"
+PASS=()
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --prefix) PASS+=(--prefix "${2:?--prefix needs a directory}"); shift 2 ;;
+    --config-dir) PASS+=(--config-dir "${2:?--config-dir needs a directory}"); shift 2 ;;
+    --profile) PASS+=(--profile "${2:?--profile needs a name}"); shift 2 ;;
+    --profile-file) PASS+=(--profile-file "${2:?--profile-file needs a file}"); shift 2 ;;
+    --source) SOURCE_DIR="${2:?--source needs a directory}"; shift 2 ;;
+    --json) PASS+=(--json); shift ;;
+    -h|--help) sed -n '2,20p' "${BASH_SOURCE[0]}"; exit 0 ;;
+    *) echo "uninstall: unknown argument '$1'" >&2; exit 1 ;;
+  esac
+done
+
+PY="${CLAUDE_PYTHON_BIN:-python3}"
+exec "$PY" "$SELF_DIR/installer.py" uninstall "${PASS[@]}" --source "$SOURCE_DIR"
