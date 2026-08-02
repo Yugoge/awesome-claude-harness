@@ -502,6 +502,12 @@ fi
 
 fi   # end of the side-effect-creating region (M1-SEAM skips it wholesale)
 
+if [[ "$EMIT_RECORD_ONLY" == "1" ]]; then
+    OUT_TARGET="/dev/stdout"
+else
+    OUT_TARGET="$TMP_FILE"
+fi
+
 # --- Build JSON with jq (schema v9 + Option-A immutable guarantee fields) -----
 # ONE top-level JSON object. In seam mode it goes to stdout; in a real launch it
 # goes to the temp file that is then atomically moved into place. Same lines,
