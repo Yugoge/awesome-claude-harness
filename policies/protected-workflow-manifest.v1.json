@@ -1,0 +1,118 @@
+{
+  "schema_version": 1,
+  "manifest_version": "v1",
+  "description": "Every protected workflow and activation route the host-capability handshake gates. A route inside protected_surface_prefixes but absent from routes[] is blocked fail-closed until explicitly added; a route outside every prefix is reported not_protected so the gate cannot brick tool use it was never meant to police.",
+  "default_for_unmanifested_route_in_surface": "block",
+  "protected_surface_prefixes": [
+    "slashcommand:/",
+    "skill:",
+    "tool:Agent",
+    "tool:Task"
+  ],
+  "routes": [
+    {
+      "id": "dev-pipeline",
+      "route": "slashcommand:/dev",
+      "route_type": "SlashCommand",
+      "entrypoint": "commands/dev.md",
+      "independent_enforcement": true,
+      "why_protected": "Orchestrates subagents that edit the tree; relies on hook-enforced tool policy and orchestrator gating."
+    },
+    {
+      "id": "dev-command-pipeline",
+      "route": "slashcommand:/dev-command",
+      "route_type": "SlashCommand",
+      "entrypoint": "commands/dev-command.md",
+      "independent_enforcement": true,
+      "why_protected": "Same pipeline as /dev, targeting harness command definitions."
+    },
+    {
+      "id": "dev-overnight-pipeline",
+      "route": "slashcommand:/dev-overnight",
+      "route_type": "SlashCommand",
+      "entrypoint": "commands/dev-overnight.md",
+      "independent_enforcement": true,
+      "why_protected": "Unattended multi-cycle loop and the sole branch/PR/worktree bypass; the highest-value route to gate."
+    },
+    {
+      "id": "close-pipeline",
+      "route": "slashcommand:/close",
+      "route_type": "SlashCommand",
+      "entrypoint": "commands/close.md",
+      "independent_enforcement": true,
+      "why_protected": "Evidence-gated closeout; its verdict is trusted downstream."
+    },
+    {
+      "id": "commit-pipeline",
+      "route": "slashcommand:/commit",
+      "route_type": "SlashCommand",
+      "entrypoint": "commands/commit.md",
+      "independent_enforcement": true,
+      "why_protected": "Stages and commits repository state via an agentic subagent."
+    },
+    {
+      "id": "push-pipeline",
+      "route": "slashcommand:/push",
+      "route_type": "SlashCommand",
+      "entrypoint": "commands/push.md",
+      "independent_enforcement": true,
+      "why_protected": "Publishes commits outside the machine; gated on a nonce-keyed push-analyst grant."
+    },
+    {
+      "id": "merge-pipeline",
+      "route": "slashcommand:/merge",
+      "route_type": "SlashCommand",
+      "entrypoint": "commands/merge.md",
+      "independent_enforcement": true,
+      "why_protected": "Mutates branch topology behind a nonce-keyed merge-analyst grant."
+    },
+    {
+      "id": "restart-recovery",
+      "route": "slashcommand:/restart",
+      "route_type": "SlashCommand",
+      "entrypoint": "commands/restart.md",
+      "independent_enforcement": true,
+      "why_protected": "The only sanctioned SendMessage path; human-only and credential-minting."
+    },
+    {
+      "id": "allow-grant",
+      "route": "slashcommand:/allow",
+      "route_type": "SlashCommand",
+      "entrypoint": "commands/allow.md",
+      "independent_enforcement": true,
+      "why_protected": "Mints structured sentinel grants that relax the Bash safety boundary."
+    },
+    {
+      "id": "do-consent",
+      "route": "slashcommand:/do",
+      "route_type": "SlashCommand",
+      "entrypoint": "commands/do.md",
+      "independent_enforcement": true,
+      "why_protected": "Session-wide orchestrator-gate bypass consent."
+    },
+    {
+      "id": "spec-pipeline",
+      "route": "slashcommand:/spec",
+      "route_type": "SlashCommand",
+      "entrypoint": "commands/spec.md",
+      "independent_enforcement": true,
+      "why_protected": "Generates checkpoint state that later gates subagent exit."
+    },
+    {
+      "id": "codex-delegation",
+      "route": "skill:codex",
+      "route_type": "Skill",
+      "entrypoint": "skills/codex",
+      "independent_enforcement": true,
+      "why_protected": "Delegates work to an external CLI with repository access."
+    },
+    {
+      "id": "subagent-dispatch",
+      "route": "tool:Agent",
+      "route_type": "Tool",
+      "entrypoint": "hooks/pretool-tool-policy.py",
+      "independent_enforcement": false,
+      "why_protected": "Subagent dispatch is mediated exclusively by PreToolUse hooks; there is no in-process entrypoint this harness controls, so on a host without hook dispatch this route has NO independent enforcement point and is classified unsupported and blocked rather than silently treated as protected."
+    }
+  ]
+}
