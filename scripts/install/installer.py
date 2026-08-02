@@ -602,8 +602,10 @@ def uninstall(ctx: Ctx, keep_payload: bool = False) -> dict:
                           "measured_present": target.exists() or target.is_symlink()})
 
     # The installer-owned tree goes last, and only when it carries our state file.
+    # It is removed by its OWN path -- never through the bridge link, which was
+    # already unlinked above without being followed.
     removed_root = False
-    if ctx.state_path.is_file() and ctx.prefix.is_dir():
+    if not keep_payload and ctx.state_path.is_file() and ctx.prefix.is_dir():
         shutil.rmtree(ctx.prefix)
         removed_root = True
     items.append({"action": "remove", "path": str(ctx.prefix), "kind": "dir",
