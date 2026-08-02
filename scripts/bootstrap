@@ -179,7 +179,7 @@ if [ -d "$HOME_DIR/hooks" ]; then
   chmod +x "$HOME_DIR"/hooks/*.sh 2>/dev/null || true
 fi
 
-# ── 4. Verify BOTH resolvers resolve THIS clone ──────────────────────────────
+# ── 5. Verify BOTH resolvers resolve THIS clone ──────────────────────────────
 # Both the shell and python resolvers must resolve to this clone's home, so a
 # fresh clone proves the resolver is engaged (not just non-empty). Compare each
 # resolved path's realpath to the expected HOME_DIR realpath.
