@@ -187,6 +187,7 @@ for rel in scan_paths:
         text = open(full, encoding="utf8").read()
     except (OSError, UnicodeDecodeError):
         continue          # binary / unreadable: no textual residue to gate
+    scanned.add(rel)
     lang = lang_of(rel, text)
     lines = text.splitlines()
     dspans = py_docstrings(text) if lang == ".py" else set()

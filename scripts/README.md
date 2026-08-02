@@ -5,8 +5,8 @@ Organization and usage documentation for `scripts/`.
 <!-- AUTO:readme-stats -->
 
 ## Overview
-- **Total files**: 85
-- **Subdirectories**: 5
+- **Total files**: 87
+- **Subdirectories**: 6
 - **Naming convention**: kebab
 
 ## Files
@@ -85,6 +85,7 @@ Organization and usage documentation for `scripts/`.
 - `update-gitignore.sh` - update-gitignore.sh - Auto-update .gitignore with project-specific rules
 - `update-overnight-state.sh` - update-overnight-state.sh — Atomically update overnight state file
 - `verify-claims.sh` - Description: Self-verifying headline-claims gate. Recomputes the wired-hook entry count and
+- `verify-release-manifest.sh` - Description: Verify a PUBLISHED release artifact end-to-end, WITHOUT rebuilding it.
 - `write-bulk-commit-sentinel.py` - Invoked from commands/commit.md Step 5 (BULK=true) to authorize the
 - `write-codex-enforce.sh` - Writes codex-enforce.json into the dev-registry for the given session.
 - `write-commit-grant.py` - Invoked from `commands/commit.md` Step 5 (non-bulk mode) to author a
@@ -93,6 +94,7 @@ Organization and usage documentation for `scripts/`.
 
 ## Subdirectories
 - `install/`
+- `lib/`
 - `modern-git-slot/`
 - `overnight-git/`
 - `spec-verify/`

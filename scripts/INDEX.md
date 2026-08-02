@@ -1,8 +1,8 @@
 # scripts
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-08-02T06:24:04Z*
-**Total entries**: 116
+*Last updated: 2026-08-02T06:27:59Z*
+**Total entries**: 120
 **Convention**: kebab
 
 ## Tree
@@ -11,6 +11,9 @@ scripts/
 ├── install/
 │   ├── `render-settings` - render-settings file
 │   └── `tmp-cleanup-install.sh` - /usr/local/sbin/tmp-cleanup.sh
+├── lib/
+│   ├── `make_sbom.py` - The SBOM is built from the archive's real contents, not from the source
+│   └── `release_membership.py` - Single source of truth shared by every consumer, so the archive builder, the
 ├── modern-git-slot/
 ├── overnight-git/
 │   ├── `git-policy-shim` - git-policy-shim file
@@ -119,6 +122,7 @@ scripts/
 ├── `update-gitignore.sh` - update-gitignore.sh - Auto-update .gitignore with project-specific rules
 ├── `update-overnight-state.sh` - update-overnight-state.sh — Atomically update overnight state file
 ├── `verify-claims.sh` - Description: Self-verifying headline-claims gate. Recomputes the wired-hook entry count and
+├── `verify-release-manifest.sh` - Description: Verify a PUBLISHED release artifact end-to-end, WITHOUT rebuilding it.
 ├── `write-bulk-commit-sentinel.py` - Invoked from commands/commit.md Step 5 (BULK=true) to authorize the
 ├── `write-codex-enforce.sh` - Writes codex-enforce.json into the dev-registry for the given session.
 ├── `write-commit-grant.py` - Invoked from `commands/commit.md` Step 5 (non-bulk mode) to author a
