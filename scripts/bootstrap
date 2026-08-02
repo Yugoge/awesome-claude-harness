@@ -128,7 +128,53 @@ else
   exit 1
 fi
 
-# ── 3. Make the shell hooks executable ───────────────────────────────────────
+# ── 3. Render settings.json from the tracked template ────────────────────────
+# settings.json is NOT tracked (it carries absolute install-home paths and
+# per-machine permission entries); it is generated here from the public seed
+# settings.template.json. Mirrors this script's own venv convention exactly:
+# non-destructive by default, --force backs the prior file up first using the
+# settings.json.bak-<timestamp> pattern .gitignore already anticipates.
+TEMPLATE="$HOME_DIR/settings.template.json"
+SETTINGS="$HOME_DIR/settings.json"
+RENDERER="$SELF_DIR/install/render-settings"
+if [ ! -f "$TEMPLATE" ]; then
+  echo "bootstrap: settings.template.json not found at $TEMPLATE — cannot render settings." >&2
+  exit 1
+fi
+if [ ! -f "$RENDERER" ]; then
+  echo "bootstrap: scripts/install/render-settings is missing — cannot render settings." >&2
+  exit 1
+fi
+if [ -f "$SETTINGS" ] && [ "$FORCE" -ne 1 ]; then
+  # Non-destructive default: keep the existing file BYTE-IDENTICAL and continue
+  # the install (this is not an error — re-running bootstrap must be safe).
+  echo "bootstrap: settings.json already exists — left untouched (re-run with --force to re-render)."
+else
+  if [ -f "$SETTINGS" ]; then
+    _sts="$(date +%Y%m%d-%H%M%S)"
+    SBACKUP="$SETTINGS.bak-$_sts"
+    _sn=1
+    while [ -e "$SBACKUP" ]; do
+      SBACKUP="$SETTINGS.bak-$_sts-$_sn"
+      _sn=$((_sn + 1))
+    done
+    echo "bootstrap: --force — backing up existing settings.json to $SBACKUP"
+    cp -p "$SETTINGS" "$SBACKUP" || { echo "bootstrap: settings backup failed; aborting." >&2; exit 1; }
+  fi
+  echo "bootstrap: rendering settings.json from settings.template.json"
+  if ! python3 "$RENDERER" "$HOME_DIR" --template "$TEMPLATE" --out "$SETTINGS"; then
+    echo "bootstrap: settings render failed (nothing applied)." >&2
+    exit 1
+  fi
+  # The renderer validates parity internally before applying; re-assert it on the
+  # applied file so a bad write can never survive this step silently.
+  if ! python3 "$RENDERER" --check "$SETTINGS" --template "$TEMPLATE"; then
+    echo "bootstrap: rendered settings.json failed template parity validation." >&2
+    exit 1
+  fi
+fi
+
+# ── 4. Make the shell hooks executable ───────────────────────────────────────
 if [ -d "$HOME_DIR/hooks" ]; then
   chmod +x "$HOME_DIR"/hooks/*.sh 2>/dev/null || true
 fi
