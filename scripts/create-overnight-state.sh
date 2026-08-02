@@ -320,8 +320,8 @@ fi
 # could not be produced. NEVER work in-place; NEVER use tmpfs as a default.
 if [[ -z "$ISOLATION_KIND" ]]; then
     echo "Primary worktree creation failed; attempting recovery ladder (repair -> prune -> fresh-clone)." >&2
-    git -C "$MAIN_ROOT" worktree repair >/dev/null 2>&1 || true
-    git -C "$MAIN_ROOT" worktree prune >/dev/null 2>&1 || true
+    "${GIT_UNMARKED[@]}" -C "$MAIN_ROOT" worktree repair >/dev/null 2>&1 || true
+    "${GIT_UNMARKED[@]}" -C "$MAIN_ROOT" worktree prune >/dev/null 2>&1 || true
     # one more registered-worktree attempt after repair/prune
     if WORKTREE_RESULT=$(bash "$WORKTREE_SCRIPT" --project-dir "$MAIN_ROOT" "$WORKTREE_NAME" 2>/dev/null); then
         WORKTREE_PATH=$(echo "$WORKTREE_RESULT" | grep -oP 'WORKTREE_PATH=\K\S+' || echo '')
