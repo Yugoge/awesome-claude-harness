@@ -1,4 +1,4 @@
-# `awesome-claude-harness` — A Self-Governing Agent Operating System for Claude Code
+# `claude-code-guardrails` — A Safety & Release Harness for Claude Code
 
 <p align="center">
   <img src=".github/assets/pipeline-hero.svg" width="900" alt="Animated demo composed from a real /spec → /dev → /close → /commit → /push run in Claude Code: the requirement is captured, developed, QA-gated (CLOSE: YES), committed (62957b35), and pushed — every line traces to .github/assets/demo-trace.json; stylized and condensed, not a screen recording.">
