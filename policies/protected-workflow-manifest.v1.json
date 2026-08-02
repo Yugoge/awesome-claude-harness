@@ -3,8 +3,9 @@
   "manifest_version": "v1",
   "description": "Every protected workflow and activation route the host-capability handshake gates. A route inside protected_surface_prefixes but absent from routes[] is blocked fail-closed until explicitly added; a route outside every prefix is reported not_protected so the gate cannot brick tool use it was never meant to police.",
   "default_for_unmanifested_route_in_surface": "block",
+  "_surface_note": "The prefixes are intentionally the bare route-class tags, not 'slashcommand:/'. A malformed or empty slash-command route classifies as 'slashcommand:' and must land INSIDE the surface so it blocks fail-closed; a narrower prefix would let it fall outside and be treated as ordinary traffic.",
   "protected_surface_prefixes": [
-    "slashcommand:/",
+    "slashcommand:",
     "skill:",
     "tool:Agent",
     "tool:Task"

@@ -322,6 +322,7 @@ def run_handshake(session_id: str, home: Path, state_file: Path, timeout: int) -
     nonce = cs.new_nonce()
     event_nonces = {label: cs.new_nonce() for label in cs.RELIED_UPON_EVENTS}
     window_start = time.time()
+    offsets = transcript_offsets()
 
     state = {
         "schema_version": cs.SCHEMA_VERSION,
@@ -359,9 +360,11 @@ def run_handshake(session_id: str, home: Path, state_file: Path, timeout: int) -
 
     try:
         fixtures.create({"run_id": run_id, "nonce": nonce, "session_id": session_id,
-                         "event_nonces": event_nonces, "window_start": window_start})
+                         "event_nonces": event_nonces, "window_start": window_start,
+                         "transcript_offsets": offsets})
         receipts = collect_receipts(fixtures, timeout, len(cs.RELIED_UPON_EVENTS))
-        probe = {"run_id": run_id, "nonce": nonce, "event_nonces": event_nonces}
+        probe = {"run_id": run_id, "nonce": nonce, "event_nonces": event_nonces,
+                 "transcript_offsets": offsets}
         state["events"] = build_event_records(receipts, probe, window_start,
                                               _ambient_session_id(session_id))
         got = sum(1 for e in state["events"] if e["outcome"] == "PASS")
@@ -407,8 +410,10 @@ def fixture_diagnostic(session_id: str, home: Path) -> dict:
     fixtures = ProbeFixtures(session_id, run_id)
     window_start = time.time()
     try:
+        offsets = transcript_offsets()
         fixtures.create({"run_id": run_id, "nonce": nonce, "session_id": session_id,
-                         "event_nonces": event_nonces, "window_start": window_start})
+                         "event_nonces": event_nonces, "window_start": window_start,
+                         "transcript_offsets": offsets})
         canary = Path(__file__).resolve().parent.parent / "hooks" / "capability-canary.py"
         for label in cs.RELIED_UPON_EVENTS:
             envelope = json.dumps({
@@ -420,7 +425,8 @@ def fixture_diagnostic(session_id: str, home: Path) -> dict:
             subprocess.run([sys.executable, str(canary), label], input=envelope,
                            capture_output=True, text=True, timeout=30, check=False)
         receipts = collect_receipts(fixtures, 2, len(cs.RELIED_UPON_EVENTS))
-        probe = {"run_id": run_id, "nonce": nonce, "event_nonces": event_nonces}
+        probe = {"run_id": run_id, "nonce": nonce, "event_nonces": event_nonces,
+                 "transcript_offsets": offsets}
         events = build_event_records(receipts, probe, window_start, session_id)
         return {
             "mode": "diagnostic_only",
