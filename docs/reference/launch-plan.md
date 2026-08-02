@@ -684,7 +684,7 @@ video host.
 
 ---
 
-## 15. Authoring constraints this document was written under
+## 10. Authoring constraints this document was written under
 
 - **No launch step was executed while authoring this plan.** No post, submission, upload, pull
   request, issue or outreach of any kind. Per §0.1, that statement is a report of what was done,
