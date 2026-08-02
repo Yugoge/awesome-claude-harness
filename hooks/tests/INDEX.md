@@ -1,8 +1,8 @@
 # tests
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-07-21T13:59:50Z*
-**Total entries**: 26
+*Last updated: 2026-08-02T07:50:00Z*
+**Total entries**: 27
 **Convention**: kebab
 
 ## Tree
@@ -21,6 +21,7 @@ tests/
 ├── `test_bulk_commit_sentinel.py` - Covers:
 ├── `test_cp_checkin.py` - of ba-spec-20260427-194324.md (P1 view-trigger removal + P2 generation field)
 ├── `test_do_taskid_mint.py` - Covers the root-cause fix for the do-report task-id collision (memory
+├── `test_dual_runtime_lifecycle_e2e.py` - Real-entrypoint regressions for single-owner ordinary dev lifecycle.
 ├── `test_extract.py` - Unit tests for hooks/doc_sync/extract.py — covers all 4 defects + known-file cases.
 ├── `test_fail_closed_drift.py` - WHY THIS FILE EXISTS
 ├── `test_final_sweep.sh` - Final sweep — run inline AC checks and print PASS/FAIL summary.
