@@ -541,9 +541,9 @@ records the decision as open and does not assert an answer.
 > Your CLAUDE.md is not a security boundary. I built executable guardrails that intercept Claude Code before dangerous shell and git operations run.
 
 **Thread constraint — recorded recommendation** attributed to the same source (`:358`), subject to
-§5 G's wording:
+§5 G's wording, reproduced as that source line reads:
 
-> Follow with one GIF per failure class, one architecture image, the adversarial review gate and an explicit limitations post. Do not start with inventory counts.
+Follow with one GIF per failure class, one architecture image, the adversarial review gate and an explicit limitations post. Do not start with inventory counts.
 
 ### Content requirements
 
