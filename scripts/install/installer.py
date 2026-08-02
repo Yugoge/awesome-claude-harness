@@ -607,17 +607,26 @@ def uninstall(ctx: Ctx, keep_payload: bool = False) -> dict:
             seen.add(key)
             target = ctx.config_home / c["path"]
             if c["kind"] == "link":
-                if target.is_symlink():
+                if not target.is_symlink():
+                    result = "skipped-not-a-link"
+                elif c.get("target") and os.readlink(target) != c["target"]:
+                    # Someone repointed the bridge after we created it. It is no
+                    # longer ours to remove.
+                    result = "kept-user-modified"
+                else:
                     os.unlink(target)          # never follows the link
                     result = "removed"
-                else:
-                    result = "absent"
             elif c["kind"] == "file":
-                if target.is_file() and not target.is_symlink():
+                if not target.is_file() or target.is_symlink():
+                    result = "skipped-changed-type" if (target.exists() or
+                                                        target.is_symlink()) else "absent"
+                elif c.get("sha256") and sha256_file(target) != c["sha256"]:
+                    # The user rewrote the file we installed. Removing it now would
+                    # delete their content, so it stays and is reported as kept.
+                    result = "kept-user-modified"
+                else:
                     target.unlink()
                     result = "removed"
-                else:
-                    result = "absent"
             else:  # dir -- ONLY if empty; never recursive
                 if target.is_dir() and not target.is_symlink():
                     if any(target.iterdir()):
