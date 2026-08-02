@@ -1,21 +1,26 @@
 # requirements/py312.txt — GENERATED, do not hand-edit.
 #
-# Fully-resolved, hash-pinned lockfile for CPython 3.12, produced from the
+# Fully-resolved, hash-pinned lockfile for CPython 3.12, derived from the
 # human-authored abstract spec in requirements.txt (which keeps its compatible
-# ranges and stays the source of truth for WHAT is required).
+# ranges and remains the source of truth for WHAT is required).
 #
-# One lockfile per supported interpreter because the resolution legitimately
-# differs across the matrix (e.g. the pytest backports that only exist below
-# 3.11). Every install call site uses:
+# One lockfile per supported interpreter, because the resolution genuinely
+# differs across the matrix: environment markers gate real dependencies
+# (pytest needs exceptiongroup and tomli only where python_version < "3.11")
+# and back-compatible releases differ per interpreter.
+#
+# Every install call site uses:
 #     pip install --require-hashes -r requirements/py312.txt
-# --require-hashes makes pip reject the whole install if ANY requirement,
-# direct or transitive, is unpinned or unhashed, so supply-chain coverage is
-# enforced by the installer rather than asserted by this comment.
+# --require-hashes makes pip REJECT the entire install if any requirement,
+# direct or transitive, is unpinned or unhashed — so completeness is enforced
+# by the installer, not asserted by this comment.
 #
-# Every sha256 published for each pinned release is listed (all wheels + sdist),
-# so the lockfile stays valid on any platform pip may select a file for.
+# Every sha256 published for each pinned release is listed (all wheels + the
+# sdist), so the lockfile stays valid whichever file pip selects.
+# Markers are evaluated for linux/CPython: ubuntu-latest is the declared,
+# tested platform, so win32-only deps are excluded rather than pinned.
 #
-# Regenerate after editing requirements.txt.
+# Regenerate whenever requirements.txt changes.
 
 attrs==26.1.0 \
     --hash=sha256:c647aa4a12dfbad9333ca4e71fe62ddc36f4e63b2d260a37a8b83d2f043ac309 \
