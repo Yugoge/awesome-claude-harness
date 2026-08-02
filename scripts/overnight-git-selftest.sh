@@ -677,7 +677,10 @@ OPERAND_FORMS_OK=false;  [[ -z "$OPERAND_FAIL" ]] && OPERAND_FORMS_OK=true
 ATTEST_EQUALITY_OK=false; [[ -z "$ATTEST_FAIL" ]] && ATTEST_EQUALITY_OK=true
 SEAM_OK=false;            [[ -z "$SEAM_FAIL" ]] && SEAM_OK=true
 
-SELFTEST_RESULT="$(_functional_probe "${ATTEST_RESOLVED:-probe-idle}")"
+# No literal default here: when the attestation target could not be built the
+# probe is passed an empty branch and reports hook_not_firing rather than
+# silently substituting a branch name the target may not have.
+SELFTEST_RESULT="$(_functional_probe "${ATTEST_RESOLVED}")"
 
 # Target-repo attestation (non-mutating): core.hooksPath points at a keystone
 # dir whose reference-transaction matches, and the blessed token is absent.

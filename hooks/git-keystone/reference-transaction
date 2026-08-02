@@ -131,8 +131,12 @@ _obp_subdirs() {
 # A record is EXCLUDED only when it declares a NON-NULL isolation_released_at.
 # A record whose field is absent, or explicitly null, is live and is scanned.
 _obp_is_released() {
-  grep -qE '"isolation_released_at"[[:space:]]*:[[:space:]]*null' "$1" 2>/dev/null && return 1
-  grep -qE '"isolation_released_at"[[:space:]]*:' "$1" 2>/dev/null && return 0
+  # Anchored to a TOP-LEVEL key (preceded by line start, '{' or ','), so a
+  # nested string that merely mentions the field name cannot make a live record
+  # look released. That direction matters: it is the only SUBTRACTIVE operator
+  # in the resolution, so a false positive here would silently fail OPEN.
+  grep -qE '(^|[{,])[[:space:]]*"isolation_released_at"[[:space:]]*:[[:space:]]*null' "$1" 2>/dev/null && return 1
+  grep -qE '(^|[{,])[[:space:]]*"isolation_released_at"[[:space:]]*:' "$1" 2>/dev/null && return 0
   return 1
 }
 
@@ -143,7 +147,12 @@ _obp_is_released() {
 # Minimal line-oriented parse: this runs on EVERY reference transaction, so no
 # jq dependency is assumed inside the hook path (Edge Case 3).
 _obp_field() {
-  sed -n 's/.*"protected_branch"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$1" 2>/dev/null | head -n1
+  # The value is a JSON string, so it may carry escapes. A naive [^"]* stops at
+  # the first ESCAPED quote and yields a truncated name — which would leave the
+  # real branch unprotected. Match escaped pairs explicitly, then unescape.
+  # (git permits '"' and '\' in a ref name; control-char escapes cannot occur.)
+  sed -n 's/.*"protected_branch"[[:space:]]*:[[:space:]]*"\(\([^"\\]\|\\.\)*\)".*/\1/p' "$1" 2>/dev/null \
+    | head -n1 | sed 's/\\\(.\)/\1/g'
 }
 
 # Collect from one candidate root. Returns 0 iff at least one record was FOUND

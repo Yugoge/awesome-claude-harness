@@ -225,14 +225,23 @@ _obp_subdirs() {
 # is the only subtractive operator in the resolution; no other filter may be
 # added (each would be a subtraction an actor could influence).
 _obp_is_released() {
-  grep -qE '"isolation_released_at"[[:space:]]*:[[:space:]]*null' "$1" 2>/dev/null && return 1
-  grep -qE '"isolation_released_at"[[:space:]]*:' "$1" 2>/dev/null && return 0
+  # Anchored to a TOP-LEVEL key (preceded by line start, '{' or ','), so a
+  # nested string that merely mentions the field name cannot make a live record
+  # look released. That direction matters: it is the only SUBTRACTIVE operator
+  # in the resolution, so a false positive here would silently fail OPEN.
+  grep -qE '(^|[{,])[[:space:]]*"isolation_released_at"[[:space:]]*:[[:space:]]*null' "$1" 2>/dev/null && return 1
+  grep -qE '(^|[{,])[[:space:]]*"isolation_released_at"[[:space:]]*:' "$1" 2>/dev/null && return 0
   return 1
 }
 # Absent field contributes NOTHING (M6 case (ii)) -> empty set -> same
 # fail-closed path as the no-record case.
 _obp_field() {
-  sed -n 's/.*"protected_branch"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$1" 2>/dev/null | head -n1
+  # The value is a JSON string, so it may carry escapes. A naive [^"]* stops at
+  # the first ESCAPED quote and yields a truncated name — which would leave the
+  # real branch unprotected. Match escaped pairs explicitly, then unescape.
+  # (git permits '"' and '\' in a ref name; control-char escapes cannot occur.)
+  sed -n 's/.*"protected_branch"[[:space:]]*:[[:space:]]*"\(\([^"\\]\|\\.\)*\)".*/\1/p' "$1" 2>/dev/null \
+    | head -n1 | sed 's/\\\(.\)/\1/g'
 }
 _obp_scan_root() {
   local root="$1" sub f val
