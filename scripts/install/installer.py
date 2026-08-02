@@ -360,8 +360,11 @@ def build_plan(ctx: Ctx) -> dict:
                     continue  # already the correct bridge -- idempotent
                 conflicts.append({"tree": "config_home", "path": rel,
                                   "change_kind": "conflict",
-                                  "detail": f"existing symlink -> {os.readlink(target)}; "
-                                            "user's version retained"})
+                                  "detail": f"a different symlink already occupies the bridge "
+                                            f"path (-> {os.readlink(target)}); it is left "
+                                            "untouched. If it is a previous install with a "
+                                            "different --prefix, run scripts/install/uninstall "
+                                            "against that prefix first."})
             elif target.exists():
                 conflicts.append({"tree": "config_home", "path": rel,
                                   "change_kind": "conflict",
