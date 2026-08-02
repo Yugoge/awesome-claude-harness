@@ -47,7 +47,7 @@ resolve_project_dir() {
         return 0
     fi
     local toplevel
-    toplevel="$(git rev-parse --show-toplevel 2>/dev/null)" || toplevel=""
+    toplevel="$("${GIT_UNMARKED[@]}" rev-parse --show-toplevel 2>/dev/null)" || toplevel=""
     if [[ -n "$toplevel" ]]; then
         printf '%s\n' "$toplevel"
         return 0
