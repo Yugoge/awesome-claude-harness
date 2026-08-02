@@ -155,13 +155,11 @@ def test_workspace_marker_hard_fails_per_ledger_prefix(pristine, tmp_path, prefi
      ("/home/authorname/injected/leak", "home"),
      ("/Users/AuthorName/injected/leak", "users")],
 )
-def test_each_author_home_class_hard_fails(pristine, literal, label):
+def test_each_author_home_class_hard_fails(pristine, tmp_path, literal, label):
     """AC6 b1/b2 + e: every DEFINED author-home class has its own control."""
-    root = _copy(pristine)
-    victim = root / "agents" / "dev.md"
+    root = _copy(pristine, tmp_path)
     assert _run(root).returncode == 0
-    with victim.open("a", encoding="utf8") as fh:
-        fh.write(f"\nInjected {label} residue: {literal}\n")
+    _append(root / "agents" / "dev.md", f"\nInjected {label} residue: {literal}\n")
     _stage(root)
     r = _run(root)
     assert r.returncode != 0, f"{label} class not gated"
