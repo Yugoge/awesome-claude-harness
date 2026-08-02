@@ -238,6 +238,16 @@ def binding_failure(binding: dict) -> str | None:
         return "binding_harness_version_missing"
     if not hb or str(hb).strip().lower() == "unknown":
         return "binding_host_build_unknown"
+    arts = binding.get("artifact_records")
+    if not isinstance(arts, list) or len(arts) != len(BOUND_ARTIFACTS):
+        return "binding_artifacts_malformed"
+    for rec, rel in zip(arts, BOUND_ARTIFACTS):
+        if not isinstance(rec, dict) or rec.get("path") != rel:
+            return "binding_artifacts_malformed"
+        if not rec.get("present") or not rec.get("sha256"):
+            # An enforcement artefact that is missing or unreadable cannot be
+            # bound, so no PASS may rest on it.
+            return "binding_artifact_missing"
     return None
 
 
