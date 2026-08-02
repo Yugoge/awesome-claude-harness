@@ -438,13 +438,30 @@ if [ "$leaks" -eq 0 ]; then
 fi
 
 # ---------------------------------------------------------------------------
-# 4. Advisory (non-gating): deferred broad path leaks tracked by roadmap phases P1/P2.
+# 4. Maintainer workspace/tmpfs path — HARD GATE (was advisory until this cycle).
+#    "Make CI FAIL (not advisory) on ... the tmpfs workspace path" — the advisory
+#    branch never set rc=1, so a leak of this class could never turn CI red.
 # ---------------------------------------------------------------------------
-WS_MARKER='/dev/shm/dev-workspace/dot-claude'
-ws_count="$(git grep -lF -- "$WS_MARKER" -- "${PC_PATHSPECS[@]}" 2>/dev/null | wc -l | tr -d ' ')"
-if [ "${ws_count:-0}" -gt 0 ]; then
-  echo "ADVISORY: $ws_count public-core file(s) still reference the maintainer workspace path"
-  echo "          ('$WS_MARKER') — deferred to roadmap §4.3 phases P1/P2; not gated here."
+ws_hits="$(git grep -nF -- "$WS_MARKER" -- "${PC_PATHSPECS[@]}" 2>/dev/null)"
+if [ -n "$ws_hits" ]; then
+  while IFS= read -r hit; do
+    [ -z "$hit" ] && continue
+    fail "maintainer workspace-path residue in public-core: '$WS_MARKER'  ->  $hit"
+  done <<< "$ws_hits"
+else
+  pass "no maintainer workspace-path residue in the public-core set"
+fi
+
+# ---------------------------------------------------------------------------
+# 5. Generic author-home residue (/root/, /home/<user>/, /Users/<User>/) — HARD
+#    GATE, exemptions driven by a checked-in SET (not an aggregate count).
+# ---------------------------------------------------------------------------
+if [ ! -f "$RESIDUE_ALLOWLIST" ]; then
+  fail "residue allowlist not found: $RESIDUE_ALLOWLIST"
+elif printf '%s\n' "${PC_FILES[@]}" | residue_audit "$ROOT" "$RESIDUE_ALLOWLIST"; then
+  pass "no un-allowlisted author-path residue in the public-core set"
+else
+  fail "author-path residue gate failed (new/operational occurrence, unsupported class label, or stale allowlist entry)"
 fi
 
 # ---------------------------------------------------------------------------
