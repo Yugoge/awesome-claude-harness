@@ -68,7 +68,7 @@ validate_worktree() {
     [[ "$(realpath "$top" 2>/dev/null || echo "$top")" == "$rp_wt" ]] || return 1
     # branch matches and is not master
     local cur
-    cur="$(git -C "$wt" branch --show-current 2>/dev/null || echo '')"
+    cur="$("${GIT_UNMARKED[@]}" -C "$wt" branch --show-current 2>/dev/null || echo '')"
     [[ "$cur" == "$branch" && "$cur" != "master" ]] || return 1
     return 0
 }
