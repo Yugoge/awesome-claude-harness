@@ -65,39 +65,251 @@ if _blessed_ok; then exit 0; fi
 # ---- only protect the MAIN worktree --------------------------------------
 # A registered worktree (incl. the overnight worktree itself) has its own HEAD;
 # git invokes the hook with that worktree's GIT_DIR. We protect the COMMON
-# refs/heads/master (shared) always, but HEAD-move protection applies to the
+# protected branch ref (shared) always, but HEAD-move protection applies to the
 # MAIN worktree's HEAD only. GIT_DIR for the main worktree == the common dir.
-_git_common_dir="$(git rev-parse --git-common-dir 2>/dev/null || echo '')"
+#
+# --path-format=absolute (git >=2.31) keeps this independent of the process
+# working directory. A cwd-relative common dir would make the whole resolution
+# below cwd-relative, which is the exact defect AC-1's D3 dimension falsifies.
+_abs_common_dir() {
+  local d
+  d="$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null || echo '')"
+  if [ -z "$d" ]; then
+    d="$(git rev-parse --git-common-dir 2>/dev/null || echo '')"
+    case "$d" in
+      ''|/*) : ;;
+      *) d="$(pwd -P)/$d" ;;
+    esac
+  fi
+  [ -n "$d" ] || return 1
+  ( cd "$d" 2>/dev/null && pwd -P )
+}
+_git_common_dir="$(_abs_common_dir || echo '')"
 _git_dir="$(git rev-parse --absolute-git-dir 2>/dev/null || echo "${GIT_DIR:-}")"
 _is_main_worktree=0
 if [ -n "$_git_common_dir" ] && [ -n "$_git_dir" ]; then
-  if [ "$(cd "$_git_common_dir" 2>/dev/null && pwd -P)" = "$(cd "$_git_dir" 2>/dev/null && pwd -P)" ]; then
+  if [ "$_git_common_dir" = "$(cd "$_git_dir" 2>/dev/null && pwd -P)" ]; then
     _is_main_worktree=1
   fi
 fi
 
+# ==========================================================================
+# PROTECTED-BRANCH RESOLUTION (M3-RESOLUTION)
+# ==========================================================================
+# The protected set is the UNION of `protected_branch` over every non-released
+# overnight session-state record discoverable under any candidate governing
+# root. The union is ADDITIVE ONLY — a candidate root may add a name, never
+# remove one — so a redirected/decoy root can only OVER-protect (monotonic).
+#
+# The ONLY subtractive operator in the whole resolution is the non-released
+# filter, admissible solely because `isolation_released_at` is an immutable
+# field and the record sits inside the actor's read-only bind. No other filter
+# (liveness, freshness, session-id match) may be added: each would be a
+# subtraction an actor could influence.
+#
+# No branch-name literal and no fixed enumeration of branch names appears
+# anywhere on this path. The operand is read from the record, at decision time.
+#
+# Deliberately INLINED rather than sourced from a shared library: the keystone
+# is installed as a SINGLE file copy into <common>/keystone-hooks by
+# install-git-keystone.sh, so a sibling library would not exist at the install
+# location. scripts/overnight-git/git-policy-shim (installed the same way by
+# overnight-git-env.sh) carries the same resolution for the same reason.
+
+_OBP_RESOLVED=0        # memo guard: resolve at most ONCE per hook invocation
+_OBP_SET=""            # newline-delimited protected names
+
+# State subdirectories to scan. `.claude` is the default; an explicit override
+# is scanned IN ADDITION (union), never instead of.
+_obp_subdirs() {
+  printf '%s\n' '.claude'
+  if [ -n "${OVERNIGHT_STATE_SUBDIR:-}" ] && [ "${OVERNIGHT_STATE_SUBDIR}" != ".claude" ]; then
+    printf '%s\n' "${OVERNIGHT_STATE_SUBDIR}"
+  fi
+}
+
+# A record is EXCLUDED only when it declares a NON-NULL isolation_released_at.
+# A record whose field is absent, or explicitly null, is live and is scanned.
+_obp_is_released() {
+  grep -qE '"isolation_released_at"[[:space:]]*:[[:space:]]*null' "$1" 2>/dev/null && return 1
+  grep -qE '"isolation_released_at"[[:space:]]*:' "$1" 2>/dev/null && return 0
+  return 1
+}
+
+# Emit the record's protected_branch value, or NOTHING when the field is absent
+# (a v8 / un-upgraded record — M6 consumer-table case (ii)). Contributing
+# nothing keeps the protected set empty, so the caller reaches the identical
+# fail-closed path as the no-record case; they are not two code paths.
+# Minimal line-oriented parse: this runs on EVERY reference transaction, so no
+# jq dependency is assumed inside the hook path (Edge Case 3).
+_obp_field() {
+  sed -n 's/.*"protected_branch"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$1" 2>/dev/null | head -n1
+}
+
+# Collect from one candidate root. Returns 0 iff at least one record was FOUND
+# (found, not necessarily contributing — that distinction is what makes an
+# un-upgraded record fail closed instead of falling through to another root).
+_obp_scan_root() {
+  local root="$1" sub f val
+  local found=1
+  [ -n "$root" ] && [ -d "$root" ] || return 1
+  while IFS= read -r sub; do
+    [ -n "$sub" ] || continue
+    [ -d "$root/$sub" ] || continue
+    for f in "$root/$sub"/overnight-state-*.json; do
+      [ -f "$f" ] || continue
+      found=0
+      _obp_is_released "$f" && continue
+      val="$(_obp_field "$f")"
+      if [ -n "$val" ]; then
+        _OBP_SET="$_OBP_SET$val
+"
+      fi
+    done
+  done <<EOF
+$(_obp_subdirs)
+EOF
+  return $found
+}
+
+# K2: bounded ancestor walk. Stops at the filesystem root and at a mount
+# boundary, and cannot follow a symlink out of the tree because it walks a
+# PHYSICAL (pwd -P) path by string truncation rather than by chdir.
+_obp_walk_up() {
+  local start="$1" dir dev0 dev
+  [ -n "$start" ] && [ -d "$start" ] || return 0
+  dir="$(cd "$start" 2>/dev/null && pwd -P)" || return 0
+  [ -n "$dir" ] || return 0
+  dev0="$(stat -c %d "$dir" 2>/dev/null || echo '')"
+  while [ -n "$dir" ]; do
+    dev="$(stat -c %d "$dir" 2>/dev/null || echo '')"
+    # mount boundary: stop BEFORE scanning a different device
+    if [ -n "$dev0" ] && [ -n "$dev" ] && [ "$dev" != "$dev0" ]; then break; fi
+    _obp_scan_root "$dir" >/dev/null 2>&1 || true
+    [ "$dir" = "/" ] && break          # filesystem root: stop
+    dir="${dir%/*}"
+    [ -n "$dir" ] || dir="/"
+  done
+}
+
+# K3: parent of the git dir named by remote.origin.url, when it is a LOCAL
+# filesystem path (the fresh-clone-relocated-outside-main-root case).
+_obp_origin_root() {
+  local url gd
+  url="$(git config --get remote.origin.url 2>/dev/null || echo '')"
+  case "$url" in
+    ''|*://*|*@*:*) return 0 ;;        # empty or a network URL: no local root
+  esac
+  [ -d "$url" ] || return 0
+  gd="$(cd "$url" 2>/dev/null && pwd -P)" || return 0
+  printf '%s\n' "${gd%/*}"             # <root>/.git -> <root>
+}
+
+# Resolve the protected set EXACTLY ONCE per hook invocation.
+_obp_resolve() {
+  [ "$_OBP_RESOLVED" = "1" ] && return 0
+  _OBP_RESOLVED=1
+  local k1="" k2_needed=1 k3="" top
+
+  # K1 — parent of the git common dir. Covers the primary checkout and every
+  # registered worktree (which shares the main common dir). NOT actor-
+  # influenceable: it comes from git's own resolution, not from cwd or env.
+  if [ -n "$_git_common_dir" ]; then
+    k1="${_git_common_dir%/*}"
+    if _obp_scan_root "$k1"; then
+      # Permitted cost carve-out (M3-RESOLUTION): K1 already yielded a record,
+      # so skip the K2 walk. Safe precisely because K1 is empty by construction
+      # only in the fresh-clone mode, where the walk is then still paid.
+      k2_needed=0
+    fi
+  fi
+
+  # K2 — bounded ancestor walk from the repository toplevel. Covers the default
+  # fresh clone at <main_root>/.claude/overnight-fresh-clones/<name>.
+  if [ "$k2_needed" = "1" ]; then
+    top="$(git rev-parse --path-format=absolute --show-toplevel 2>/dev/null || echo '')"
+    [ -n "$top" ] || top="$(pwd -P 2>/dev/null || echo '')"
+    _obp_walk_up "$top"
+  fi
+
+  # K3 — the local origin's parent. Covers a fresh clone relocated outside the
+  # main root via OVERNIGHT_FRESH_CLONE_ROOT, where K2 cannot reach it.
+  k3="$(_obp_origin_root)"
+  [ -n "$k3" ] && _obp_scan_root "$k3" >/dev/null 2>&1
+
+  # K4 (CLAUDE_OVERNIGHT_MAIN_ROOT) is admissible for the policy shim ONLY and
+  # is deliberately NOT consulted here: it is actor-settable, and the keystone
+  # is the deepest arm.
+  return 0
+}
+
+# Is $1 in the resolved protected set? Membership is exact string equality
+# against a value READ FROM THE RECORD — never a pattern, prefix or name shape.
+_obp_is_protected() {
+  local want="$1" name
+  [ -n "$want" ] || return 1
+  while IFS= read -r name; do
+    [ -n "$name" ] || continue
+    [ "$name" = "$want" ] && return 0
+  done <<EOF
+$_OBP_SET
+EOF
+  return 1
+}
+
+_obp_set_is_empty() {
+  printf '%s' "$_OBP_SET" | grep -q '[^[:space:]]' && return 1
+  return 0
+}
+
+# ---- denial ---------------------------------------------------------------
+# Every denial emits EXACTLY ONE dedicated machine-readable line carrying
+# exactly one `reason=` field and at most one `ref=` field (M4-REASON-TOKENS).
+# The reason token is a CONSTANT — never interpolated from the ref or branch
+# name — so it cannot be accidentally satisfied by operand echo. The `ref=`
+# value is the transaction's ref VERBATIM and UNDECORATED; human-readable prose
+# goes on a SEPARATE line so the structured line stays unambiguously parseable.
 _deny() {
-  echo "OVERNIGHT KEYSTONE: refusing ref update '$1' for overnight actor (refs/heads/master / main HEAD are protected; no blessed token present)." >&2
+  # $1 = reason token (constant), $2 = ref verbatim (may be empty), $3 = prose
+  if [ -n "${2:-}" ]; then
+    echo "OVERNIGHT-KEYSTONE-DENY reason=$1 ref=$2" >&2
+  else
+    echo "OVERNIGHT-KEYSTONE-DENY reason=$1" >&2
+  fi
+  echo "OVERNIGHT KEYSTONE: ${3:-refusing ref update for overnight actor (no blessed token present).}" >&2
   exit 1
+}
+
+_deny_unresolved() {
+  _deny 'unresolved_protected_branch' "${1:-}" \
+"refusing ref update '${1:-<none>}' — no live overnight session-state record declares a 'protected_branch' (the field is missing, or no record is discoverable under any candidate governing root). Protection cannot be enforced, so the write is refused rather than left silently unprotected. Remedy: release this session with /stop and relaunch; the relaunch writes a schema-v9 record carrying the field."
 }
 
 # ---- scan the transaction lines ------------------------------------------
 while IFS=' ' read -r old new ref; do
   [ -n "${ref:-}" ] || continue
   case "$ref" in
-    refs/heads/master)
-      # oid change to the master branch ref (commit/reset/forced move/push).
-      if [ "$old" != "$new" ]; then
-        _deny "$ref"
-      fi
-      ;;
     HEAD)
       # Only the MAIN worktree's HEAD is protected here. On git 2.43 the symref
       # HEAD branch-switch does NOT surface; the oid-detach form does. On
       # git >=2.46 the symref update surfaces too (structural branch-switch
       # coverage). Either way: reject any HEAD move for the main worktree.
       if [ "$_is_main_worktree" = "1" ] && [ "$old" != "$new" ]; then
-        _deny "$ref (main worktree HEAD)"
+        _deny 'main_head' "$ref" \
+          "refusing to move the MAIN worktree's HEAD for an overnight actor (no blessed token present)."
+      fi
+      ;;
+    refs/heads/*)
+      # A branch-ref oid change (commit / reset / forced move / push).
+      if [ "$old" != "$new" ]; then
+        _obp_resolve
+        if _obp_set_is_empty; then
+          _deny_unresolved "$ref"
+        fi
+        if _obp_is_protected "${ref#refs/heads/}"; then
+          _deny 'branch_protected' "$ref" \
+            "refusing to move the protected branch '${ref#refs/heads/}' for an overnight actor (no blessed token present)."
+        fi
       fi
       ;;
   esac
