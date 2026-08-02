@@ -328,10 +328,14 @@ def aggregate_verdict(state: dict, home: Path | None = None) -> tuple[str, str |
         if ev_nonce in seen_nonces:
             return "UNPROTECTED", "receipt_nonce_not_event_distinct"
         seen_nonces.add(ev_nonce)
+        # The per-event reason is propagated verbatim so failure CLASSES stay
+        # distinguishable (a placeholder record for an event that never fired
+        # must report missing_event_record, not the identity-check reason that
+        # is merely a consequence of having no receipt to identify).
+        if ev.get("outcome") != "PASS":
+            return "UNPROTECTED", ev.get("failure_reason") or "event_probe_failed"
         if ev.get("event_discriminator") == "unsupported_self_check":
             return "UNPROTECTED", "event_identity_unsupported"
-        if ev.get("outcome") != "PASS":
-            return "UNPROTECTED", "event_probe_failed"
         receipt = ev.get("host_receipt") or {}
         for f in RECEIPT_CORE_FIELDS:
             if not receipt.get(f):
