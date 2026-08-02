@@ -343,8 +343,8 @@ if [[ -z "$ISOLATION_KIND" ]]; then
     elif mkdir -p "$FRESH_ROOT" 2>/dev/null && [[ -w "$FRESH_ROOT" ]]; then
         FRESH_WT="$FRESH_ROOT/${WORKTREE_NAME}"
         FRESH_BRANCH="worktree-${WORKTREE_NAME}"
-        if git clone -q --local "$MAIN_GIT_DIR" "$FRESH_WT" 2>/dev/null \
-           && git -C "$FRESH_WT" checkout -q -b "$FRESH_BRANCH" "$MAIN_HEAD_AT_START" 2>/dev/null; then
+        if "${GIT_UNMARKED[@]}" clone -q --local "$MAIN_GIT_DIR" "$FRESH_WT" 2>/dev/null \
+           && "${GIT_UNMARKED[@]}" -C "$FRESH_WT" checkout -q -b "$FRESH_BRANCH" "$MAIN_HEAD_AT_START" 2>/dev/null; then
             WORKTREE_PATH="$FRESH_WT"
             WORKTREE_BRANCH="$FRESH_BRANCH"
             ISOLATION_KIND="fresh_clone_checkout"
