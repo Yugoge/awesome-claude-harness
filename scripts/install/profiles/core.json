@@ -110,6 +110,7 @@
       "<any unrecognized key>"
     ],
     "hook_order": "preserved: existing entries keep their positions; core registrations are appended after them",
+    "reserialization": "A merged settings.json is re-serialized with 2-space indentation and UTF-8 preserved (ensure_ascii=false). Key order and every value are preserved exactly; only whitespace/formatting may differ from the user's original file. JSON carries no comments, so nothing can be lost that way.",
     "why": "Rendering a user's settings.json from a template is the known-destructive path. Measured on the maintainer host this cycle: a template render against the live file silently re-adds 2 deny entries and strips ~38 allow entries. This installer therefore never renders a user's settings.json -- it only appends hook registrations that are not already present."
   },
   "hook_registrations": [
