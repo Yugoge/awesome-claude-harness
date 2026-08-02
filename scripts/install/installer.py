@@ -631,6 +631,17 @@ def print_plan(ctx: Ctx, plan: dict, dry_run: bool) -> None:
             print(f"  [conflict] {ctx.config_home / c['path']}   -- {c['detail']}")
     else:
         print("\nConflicts (0)")
+    excluded = ctx.profile.get("excluded", [])
+    print()
+    print(f"Profile '{ctx.profile.get('profile')}' INCLUDES "
+          f"({len(ctx.profile['payload']['copied']) + len(ctx.profile['payload']['generated'])}):")
+    for item in ctx.profile["payload"]["copied"]:
+        print(f"  + {item['dest']}")
+    for gen in ctx.profile["payload"]["generated"]:
+        print(f"  + {gen}  (generated)")
+    print(f"Profile '{ctx.profile.get('profile')}' EXCLUDES ({len(excluded)}):")
+    for item in excluded:
+        print(f"  - {item}")
 
 
 def main(argv=None) -> int:

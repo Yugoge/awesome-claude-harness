@@ -1,7 +1,7 @@
 # install
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-08-02T10:03:11Z*
+*Last updated: 2026-08-02T10:07:04Z*
 **Total entries**: 2
 **Convention**: kebab
 
@@ -9,7 +9,7 @@
 ```
 install/
 ├── `render-settings` - render-settings file
-└── `tmp-cleanup-install.sh` - /usr/local/sbin/tmp-cleanup.sh
+├── `tmp-cleanup-install.sh` - /usr/local/sbin/tmp-cleanup.sh
 ```
 <!-- /AUTO:index-stats -->
 
