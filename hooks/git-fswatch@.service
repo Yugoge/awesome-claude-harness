@@ -1,6 +1,6 @@
 [Unit]
 Description=Git File Watcher for %I
-Documentation=file:///root/.claude/docs/git-fswatch.md
+Documentation=file://%h/.claude/docs/git-fswatch.md
 After=network-online.target
 Wants=network-online.target
 
