@@ -348,7 +348,7 @@ if [[ -z "$ISOLATION_KIND" ]]; then
             WORKTREE_PATH="$FRESH_WT"
             WORKTREE_BRANCH="$FRESH_BRANCH"
             ISOLATION_KIND="fresh_clone_checkout"
-            WORKTREE_HEAD_AT_START="$(git -C "$FRESH_WT" rev-parse HEAD 2>/dev/null || echo '')"
+            WORKTREE_HEAD_AT_START="$("${GIT_UNMARKED[@]}" -C "$FRESH_WT" rev-parse HEAD 2>/dev/null || echo '')"
             echo "Durable fresh-clone fallback created at $FRESH_WT" >&2
         fi
     fi
