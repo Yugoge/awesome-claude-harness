@@ -526,7 +526,11 @@ def apply_plan(ctx: Ctx, plan: dict) -> dict:
                 else:
                     atomic_write(target, content)
                     journal.append(("unlink", target, None))
-                    created.append({"path": rel, "kind": "file"})
+                    # The as-installed digest is what makes uninstall safe: a file
+                    # the user later rewrote is no longer the file we created, and
+                    # deleting it would destroy their work.
+                    created.append({"path": rel, "kind": "file",
+                                    "sha256": hashlib.sha256(content).hexdigest()})
     except Exception:
         for action, path, payload in reversed(journal):
             try:
