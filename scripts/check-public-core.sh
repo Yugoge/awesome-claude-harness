@@ -405,11 +405,11 @@ PC_PATHSPECS+=(":(exclude)$SELF")
 # markers over the public-core set MINUS any test tree. Hard markers keep the full set.
 PARAM_PATHSPECS=("${PC_PATHSPECS[@]}" ":(exclude)*/tests/*")
 
-# Concrete public-core FILE list for the section-5 residue audit. Unlike the marker
-# scans above, this deliberately does NOT drop $SELF: the audit re-derives every
-# exemption class structurally, and this detector's own constant tables are exempted
-# by class (scanner_pattern_definition), not by being hidden from the scan.
-mapfile -t PC_FILES < <(git ls-files -- "${PC_PATHSPECS[@]:0:${#PC_PATHSPECS[@]}-1}" 2>/dev/null)
+# Pathspecs for the section-5 residue audit. Unlike the marker scans above, this
+# deliberately does NOT drop $SELF: the audit re-derives every exemption class
+# structurally, and this detector's own constant tables are exempted BY CLASS
+# (scanner_pattern_definition), not by being hidden from the scan.
+PC_SCAN_SPECS=("${PC_PATHSPECS[@]:0:$(( ${#PC_PATHSPECS[@]} - 1 ))}")
 
 # A public-core match line is an allowed (parameterized) use of marker M when the line is a
 # comment (trimmed starts with #) OR EVERY occurrence of M on the line is an env default
