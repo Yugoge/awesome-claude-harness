@@ -80,14 +80,12 @@ def main(argv=None) -> int:
     preseeded, _ = cs.load_state(state_file)
     preseeded_status = (preseeded or {}).get("status")
 
-    import importlib
-    hs = importlib.import_module("capability-handshake".replace("-", "_")) \
-        if False else None  # noqa: E501  (module name is hyphenated; loaded below)
-    spec_path = home / "scripts" / "capability-handshake.py"
+    # The orchestrator's filename is hyphenated, so load it by path rather than
+    # by import name.
     import importlib.util
-    spec = importlib.util.spec_from_file_location("capability_handshake", spec_path)
+    spec = importlib.util.spec_from_file_location(
+        "capability_handshake", home / "scripts" / "capability-handshake.py")
     hs = importlib.util.module_from_spec(spec)
-    assert spec.loader is not None
     spec.loader.exec_module(hs)
 
     state = hs.run_handshake(session_id, home, state_file, args.timeout)
