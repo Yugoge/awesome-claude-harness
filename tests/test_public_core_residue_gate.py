@@ -265,14 +265,12 @@ def test_placeholder_rationale_is_rejected(pristine, tmp_path):
 
 
 @pytest.mark.parametrize("marker", ["git@github.com:" + "Yugoge", "/root/.claude" + ".bak", "/root/sync-" + "backup.sh"])
-def test_preexisting_hard_markers_still_gate(pristine, marker):
+def test_preexisting_hard_markers_still_gate(pristine, tmp_path, marker):
     """AC6 e: the three pre-existing HARD_MARKERS must not be regressed by the
     new section — one behavioural control per marker."""
-    root = _copy(pristine)
+    root = _copy(pristine, tmp_path)
     assert _run(root).returncode == 0
-    victim = root / "agents" / "dev.md"
-    with victim.open("a", encoding="utf8") as fh:
-        fh.write(f"\nInjected hard marker {marker}\n")
+    _append(root / "agents" / "dev.md", f"\nInjected hard marker {marker}\n")
     _stage(root)
     r = _run(root)
     assert r.returncode != 0, f"pre-existing hard marker {marker} regressed"
