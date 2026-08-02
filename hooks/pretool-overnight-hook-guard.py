@@ -466,6 +466,82 @@ def _get_active_worktree_paths() -> list[str]:
     return paths
 
 
+def _get_protected_branches() -> list[str]:
+    """Union of `protected_branch` over every NON-RELEASED overnight session
+    record (M3-RESOLUTION / M5-NO-ENUMERATION).
+
+    The protected branch is never a literal and never a fixed enumeration: it
+    is read from the session-state record at decision time. There is NO literal
+    fallback on the failure branch — an unresolvable set simply carries no
+    branch-name signal, and the independent main-targeting / not-in-worktree
+    predicates at this layer (which are already fail-closed on their own terms)
+    continue to govern. M4's deny-on-unresolvable rule is scoped to the two
+    IN-CONFINEMENT consumers (keystone, policy shim); this pre-execution guard
+    is not one of them and must not be turned into a blanket blocker.
+
+    Union is additive only; the sole subtractive operator is the non-released
+    filter, admissible because `isolation_released_at` is immutable.
+    """
+    project_dir = Path(os.environ.get("CLAUDE_PROJECT_DIR", os.getcwd()))
+    names: list[str] = []
+    try:
+        state_files = list((project_dir / ".claude").glob("overnight-state-*.json"))
+    except OSError:
+        return names
+    for sf in state_files:
+        state = _load_state(sf)
+        if state is None:
+            continue
+        if state.get("isolation_released_at") is not None:
+            continue
+        val = state.get("protected_branch")
+        if isinstance(val, str) and val and val not in names:
+            names.append(val)
+    return names
+
+
+def _operand_branch_names(token: str) -> list[str]:
+    """Reduce one argv token to the branch name(s) it can denote.
+
+    Covers bare <N>, refs/heads/<N>, heads/<N>, <N>@{0} and refspec forms.
+    Every transformation is a STRUCTURAL ref-namespace normalisation; none
+    inspects the branch NAME, so none is a name-shape gate under AC-7.
+    """
+    out: list[str] = []
+    for part in token.lstrip('+').split(':'):
+        part = part.split('@{', 1)[0]
+        for pfx in ('refs/heads/', 'heads/'):
+            if part.startswith(pfx):
+                part = part[len(pfx):]
+                break
+        if part:
+            out.append(part)
+    return out
+
+
+def _mentions_protected_branch(tokens) -> bool:
+    """True iff any token denotes a branch in the RESOLVED protected set.
+
+    Membership is exact string equality against a value read from the record.
+    """
+    protected = _get_protected_branches()
+    if not protected:
+        return False
+    for tok in tokens:
+        for name in _operand_branch_names(tok.strip('\'"')):
+            if name in protected:
+                return True
+    return False
+
+
+def _body_mentions_protected_branch(body: str) -> bool:
+    """True iff a script body names a resolved protected branch as a word."""
+    for name in _get_protected_branches():
+        if re.search(r'(?<![\w/-])' + re.escape(name) + r'(?![\w-])', body):
+            return True
+    return False
+
+
 def _is_path_exempt(file_path: str) -> bool:
     """Check if path is exempt from overnight worktree restrictions (/tmp, /dev/null)."""
     abs_path = os.path.realpath(os.path.abspath(file_path))

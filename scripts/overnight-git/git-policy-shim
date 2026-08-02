@@ -15,7 +15,8 @@
 # the selector dir. Catches normal `git ...` and python subprocess(["git",...])
 # whose argv resolves by BASENAME to `git`. It resolves -C / --git-dir /
 # --work-tree / GIT_DIR / GIT_WORK_TREE to an effective target and REFUSES
-# when that target resolves to MAIN_ROOT or the op touches master/branch-switch.
+# when that target resolves to MAIN_ROOT or the op touches the resolved
+# protected branch / a branch-switch.
 #
 # Activation: only when CLAUDE_OVERNIGHT_ACTOR=1 AND CLAUDE_OVERNIGHT_MAIN_ROOT
 # is set. Otherwise it is a transparent pass-through to the real git (so it is
@@ -188,8 +189,8 @@ if [ -n "$worktree_target" ] && _targets_main "$worktree_target"; then
   _blocked "--work-tree/GIT_WORK_TREE -> main (writes the main working directory)"
 fi
 
-# Block dangerous/mutating ops that touch master or move HEAD, BUT only when they
-# are main-targeting or move the protected `master` ref — a worktree-local
+# Block dangerous/mutating ops that touch a protected branch or move HEAD, BUT
+# only when they are main-targeting or move a RESOLVED protected ref — a worktree-local
 # checkout/switch/reset is a LEGITIMATE op and is ALLOWED (codex #2/#6: no
 # all-checkout overblocking).
 _op_is_main_targeting="$( _targets_main "$target_dir" && echo 1 || echo 0 )"
