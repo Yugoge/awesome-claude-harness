@@ -594,7 +594,7 @@ Follow with one GIF per failure class, one architecture image, the adversarial r
 **Category placement — verbatim-required**, reproduced from
 `design/turn-1-codex-capstone-review.md:362`:
 
-> Submit it under **Safety / Guardrails**, not “Claude configurations.”
+Submit it under **Safety / Guardrails**, not “Claude configurations.”
 
 **Listing copy — recorded recommendation** attributed to the same source (`:366`), subject to
 §5 E's naming decision and §5 G's wording:
