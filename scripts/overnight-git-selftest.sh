@@ -523,6 +523,63 @@ _build_attest_target() {
   [[ -n "$ATTEST_RESOLVED" ]]
 }
 
+# ---------------------------------------------------------------------------
+# AC-12 — the LAUNCHER's success path, exercised through M1-SEAM's ONE
+# side-effect-free component mode over the same pre-confinement code path a
+# real launch executes. Every prior probe tests the CONSUMING end; without this
+# one a dev passes them all on synthetic fixtures, never populates the field on
+# a real launch, and every real session then fails closed on every ref write.
+#
+# The external-command boundary is a recording `git` placed FIRST on PATH. A
+# resolver that invoked git by absolute path, through a shell function, or with
+# the tracing environment cleared would defeat a PATH recorder and a trace
+# capture at once — so the recorder is the boundary, and bypassing or unsetting
+# it is itself a failure, observable as an empty invocation log.
+# ---------------------------------------------------------------------------
+SEAM_JSON="null"
+SEAM_FAIL=""
+SEAM_GIT_ARGV=""
+SEAM_SIDE_EFFECTS="unknown"
+_run_launcher_seam_probe() {
+  [[ -n "$ATTEST_TARGET" && -x "$LAUNCHER_SRC" ]] || { SEAM_FAIL="seam_unrunnable"; return; }
+  local recdir="$PROBE_ROOT/recorder" log="$PROBE_ROOT/git-argv.log"
+  mkdir -p "$recdir"; : > "$log"
+  cat > "$recdir/git" <<RECGIT
+#!/usr/bin/env bash
+printf '%s\n' "\$*" >> "$log"
+exec "$GIT_BIN" "\$@"
+RECGIT
+  chmod +x "$recdir/git"
+  local wt_before ref_before wt_after ref_after out
+  wt_before="$("$GIT_BIN" -C "$ATTEST_TARGET" worktree list 2>/dev/null)"
+  ref_before="$("$GIT_BIN" -C "$ATTEST_TARGET" for-each-ref --format='%(refname) %(objectname)' 2>/dev/null)"
+  out="$(cd "$ATTEST_TARGET" && PATH="$recdir:$PATH" bash "$LAUNCHER_SRC" --emit-record-only \
+          --project-dir "$ATTEST_TARGET" --session-id "seam-$STEM" 2>/dev/null || echo '')"
+  wt_after="$("$GIT_BIN" -C "$ATTEST_TARGET" worktree list 2>/dev/null)"
+  ref_after="$("$GIT_BIN" -C "$ATTEST_TARGET" for-each-ref --format='%(refname) %(objectname)' 2>/dev/null)"
+  if [[ "$wt_before" == "$wt_after" && "$ref_before" == "$ref_after" ]]; then
+    SEAM_SIDE_EFFECTS="none"
+  else
+    SEAM_SIDE_EFFECTS="observed"; SEAM_FAIL="${SEAM_FAIL}seam_had_side_effects;"
+  fi
+  # no state file, no temp file, no cycle-contract may have been produced
+  if compgen -G "$ATTEST_TARGET/.claude/overnight-state-seam-*" >/dev/null 2>&1; then
+    SEAM_FAIL="${SEAM_FAIL}seam_wrote_state_file;"
+  fi
+  SEAM_GIT_ARGV="$(cat "$log" 2>/dev/null || echo '')"
+  if [[ -z "$SEAM_GIT_ARGV" ]]; then
+    SEAM_FAIL="${SEAM_FAIL}observer_boundary_bypassed_no_git_recorded;"
+  fi
+  if printf '%s' "$SEAM_GIT_ARGV" | grep -qE '(ls-remote|remote show|fetch |^fetch|clone )'; then
+    SEAM_FAIL="${SEAM_FAIL}network_tier_reached;"
+  fi
+  if printf '%s' "$out" | jq -e . >/dev/null 2>&1; then
+    SEAM_JSON="$(printf '%s' "$out" | jq -c .)"
+  else
+    SEAM_FAIL="${SEAM_FAIL}seam_emitted_no_single_json_object;"
+  fi
+}
+
 # BEHAVIOURAL definition of "will enforce" (AC-13). String equality between
 # record fields — or between a record field and a value the selftest computed —
 # is explicitly NOT sufficient: an implementation could read protected_branch
