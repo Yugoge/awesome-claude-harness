@@ -278,7 +278,7 @@ if [ -n "$SCAN_ROOT" ]; then
   [ "$ws_hits" -eq 0 ] && pass "no un-exempted workspace-path residue in the released archive"
 
   # Residue class 2: generic author-home paths — same engine as the checkout gate.
-  if printf '%s\n' "$ACTUAL" | residue_audit "$SCAN_ROOT" "$RESIDUE_ALLOWLIST"; then
+  if residue_audit "$SCAN_ROOT" "$RESIDUE_ALLOWLIST" tree; then
     pass "no un-allowlisted author-path residue in the released archive"
   else
     fail "author-path residue gate failed over the released archive (see FAIL lines above)"
