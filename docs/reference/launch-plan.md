@@ -671,7 +671,7 @@ video host.
 
 ---
 
-## 14. Open assumptions — external dependencies
+## 9. Open assumptions — external dependencies
 
 | # | Open assumption (external) | Status in-cycle | Who resolves it, and when |
 |---|---|---|---|
