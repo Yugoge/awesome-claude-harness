@@ -63,6 +63,7 @@ def _copy(pristine: Path, tmp_path: Path) -> Path:
     """
     dest = tmp_path / "r"
     shutil.copytree(pristine, dest, symlinks=True, copy_function=os.link)
+    _mutable(dest / ".git" / "index")          # git rewrites this during staging
     return dest
 
 
@@ -73,6 +74,17 @@ def _mutable(path: Path) -> Path:
         path.unlink()
         path.write_bytes(data)
     return path
+
+
+def _append(path: Path, text: str) -> None:
+    _mutable(path)
+    with path.open("a", encoding="utf8") as fh:
+        fh.write(text)
+
+
+def _write(path: Path, text: str) -> None:
+    _mutable(path)
+    path.write_text(text, encoding="utf8")
 
 
 def _run(root: Path, *args: str) -> subprocess.CompletedProcess:
