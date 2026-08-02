@@ -192,21 +192,19 @@ def test_constant_count_replacement_still_fails(pristine, tmp_path):
     assert "un-allowlisted author-path residue" in r.stdout
 
 
-def test_duplicate_of_allowlisted_identical_line_is_detected(pristine):
+def test_duplicate_of_allowlisted_identical_line_is_detected(pristine, tmp_path):
     """AC6 d: the key is a multiset (path, fingerprint, ordinal) — duplicating an
     already-allowlisted identical line must NOT inherit its exemption."""
-    root = _copy(pristine)
+    root = _copy(pristine, tmp_path)
     assert _run(root).returncode == 0
     entries = json.loads((root / ALLOWLIST).read_text(encoding="utf8"))["entries"]
-    import hashlib
     for e in entries:
         if not e["path"].endswith(".md"):
             continue
         victim = root / e["path"]
         for line in victim.read_text(encoding="utf8").splitlines():
             if hashlib.sha256(line.encode()).hexdigest()[:16] == e["fingerprint"]:
-                with victim.open("a", encoding="utf8") as fh:
-                    fh.write("\n" + line + "\n")
+                _append(victim, "\n" + line + "\n")
                 _stage(root)
                 r = _run(root)
                 assert r.returncode != 0, "duplicated allowlisted line silently exempted"
