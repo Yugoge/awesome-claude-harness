@@ -1,0 +1,182 @@
+#!/usr/bin/env bash
+# preflight — strict install preflight for the Claude Code harness installer.
+#
+# Usage: scripts/install/preflight [--source <dir>] [--matrix <file>]
+#                                  [--allow-unprotected] [--skip-deep] [--quiet]
+#
+# Exit codes: 0 = safe to install; 1 = preflight FAILED (the installer must abort
+#             before any mutation).
+#
+# THREE SECTIONS, THREE OWNERS — the report never blurs them:
+#
+#   1. BASELINE DEPENDENCIES  (this installer's own scope)
+#      Delegated to `scripts/doctor`, which is the existing preflight and already
+#      enumerates the required set: python3 / git / jq / openssl, the harness venv
+#      interpreter, the requirements.txt packages (pytest / jsonschema / pyyaml),
+#      and both shared resolvers. Not reimplemented here.
+#
+#   2. STRICT-ONLY HOST REQUIREMENTS  (this installer's own scope)
+#      Checks that plain `scripts/doctor` does NOT make, each bound to a host
+#      requirement documented IN THIS REPOSITORY and cited by file:line. Plain
+#      doctor checks that python3 is PRESENT; it never checks that it is NEW
+#      ENOUGH. `.github/workflows/baseline.yml:24-28` documents the floor as 3.10
+#      ("hooks/ and scripts/ use match/case statements and PEP 604 `X | None`
+#      annotations, both of which require 3.10+"). A 3.9 host therefore passes
+#      plain doctor and fails this preflight — that difference is the whole point
+#      of a strict preflight, and it is a real requirement, not a tripwire.
+#
+#   3. HOST-CAPABILITY HANDSHAKE  (NOT this installer's scope)
+#      Delegated verbatim to `scripts/doctor --strict`. Whether the hook lifecycle
+#      is actually live on this host — nonce-bound canaries, exit-2 blocking,
+#      subagent identity, hook ordering — is the capability-gate component's
+#      question, and this preflight only consumes its verdict. It is fail-closed:
+#      a failing handshake aborts the install unless the operator explicitly
+#      passes --allow-unprotected, in which case the install proceeds and is
+#      recorded as running on an UNPROTECTED host.
+#
+# This preflight never claims that protection is verified. It reports what was
+# measured and, for the handshake, whose measurement it is.
+set -uo pipefail
+
+SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+SOURCE_DIR="$(cd "$SELF_DIR/../.." && pwd -P)"
+MATRIX=""
+ALLOW_UNPROTECTED=0
+SKIP_DEEP=0
+QUIET=0
+PYTHON_FLOOR_MAJOR=3
+PYTHON_FLOOR_MINOR=10
+PYTHON_FLOOR_CITATION=".github/workflows/baseline.yml:24-28"
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --source) SOURCE_DIR="${2:?--source needs a directory}"; shift 2 ;;
+    --matrix) MATRIX="${2:?--matrix needs a file}"; shift 2 ;;
+    --allow-unprotected) ALLOW_UNPROTECTED=1; shift ;;
+    --skip-deep) SKIP_DEEP=1; shift ;;
+    --quiet) QUIET=1; shift ;;
+    -h|--help) sed -n '2,10p' "${BASH_SOURCE[0]}"; exit 0 ;;
+    *) echo "preflight: unknown argument '$1'" >&2; exit 1 ;;
+  esac
+done
+[ -n "$MATRIX" ] || MATRIX="$SOURCE_DIR/docs/reference/install-compatibility-matrix.md"
+
+FAILED=0
+say()  { [ "$QUIET" -eq 1 ] || printf '%s\n' "$1"; }
+ok()   { say "  [ ok ] $1"; }
+bad()  { printf '  [FAIL] %s\n' "$1" >&2; FAILED=$((FAILED + 1)); }
+warn() { printf '  [WARN] %s\n' "$1" >&2; }
+
+say "Harness install preflight"
+say "  source: $SOURCE_DIR"
+say ""
+
+# ── 1. Baseline dependencies (delegated to scripts/doctor) ──────────────────── #
+say "1. Baseline dependencies  (owner: installer; delegated to scripts/doctor)"
+DOCTOR="$SOURCE_DIR/scripts/doctor"
+if [ -x "$DOCTOR" ]; then
+  DOCTOR_OUT="$("$DOCTOR" 2>&1)"; DOCTOR_RC=$?
+  if [ "$DOCTOR_RC" -eq 0 ]; then
+    ok "scripts/doctor: all required dependency checks passed"
+    [ "$QUIET" -eq 1 ] || printf '%s\n' "$DOCTOR_OUT" | sed 's/^/      /'
+  else
+    bad "scripts/doctor exited $DOCTOR_RC — required dependencies are missing"
+    printf '%s\n' "$DOCTOR_OUT" | sed 's/^/      /' >&2
+  fi
+else
+  bad "scripts/doctor not found or not executable at $DOCTOR"
+fi
+say ""
+
+# ── 2. Strict-only host requirements ────────────────────────────────────────── #
+say "2. Strict-only host requirements  (owner: installer; not checked by plain doctor)"
+check_python_floor() {  # <label> <interpreter>
+  local label="$1" py="$2" ver
+  ver="$("$py" -c 'import sys; print("%d.%d" % sys.version_info[:2])' 2>/dev/null)" || ver=""
+  if [ -z "$ver" ]; then
+    bad "$label: could not determine the Python version (interpreter: $py)"
+    return
+  fi
+  local maj="${ver%%.*}" min="${ver##*.}"
+  if [ "$maj" -gt "$PYTHON_FLOOR_MAJOR" ] 2>/dev/null || \
+     { [ "$maj" -eq "$PYTHON_FLOOR_MAJOR" ] && [ "$min" -ge "$PYTHON_FLOOR_MINOR" ]; }; then
+    ok "$label: Python $ver >= ${PYTHON_FLOOR_MAJOR}.${PYTHON_FLOOR_MINOR} floor ($PYTHON_FLOOR_CITATION)"
+  else
+    bad "$label: Python $ver is BELOW the ${PYTHON_FLOOR_MAJOR}.${PYTHON_FLOOR_MINOR} floor documented at $PYTHON_FLOOR_CITATION — hooks/ and scripts/ use match/case and PEP 604 annotations, which this interpreter cannot parse. Plain scripts/doctor only checks that python3 is PRESENT, so it passes on this host."
+  fi
+}
+if command -v python3 >/dev/null 2>&1; then
+  check_python_floor "python3 on PATH" "$(command -v python3)"
+else
+  bad "python3 is not on PATH"
+fi
+VENV_PY="$SOURCE_DIR/venv/bin/python"
+[ -x "$VENV_PY" ] && check_python_floor "harness venv interpreter" "$VENV_PY"
+say ""
+
+# ── 3. Host OS support status, derived from the compatibility matrix ───────── #
+say "3. Host support status  (source of truth: docs/reference/install-compatibility-matrix.md)"
+HOST_OS="$(uname -s 2>/dev/null || echo unknown)"
+if [ ! -f "$MATRIX" ]; then
+  bad "compatibility matrix not found at $MATRIX — refusing to guess the support status"
+else
+  ROW="$(awk -v want="$HOST_OS" '
+    /os-matrix:begin/ {inblk=1; next}
+    /os-matrix:end/   {inblk=0}
+    inblk && /^\|/ {
+      n=split($0, f, "|")
+      if (n < 5) next
+      gsub(/^[ \t]+|[ \t]+$/, "", f[3])
+      if (f[3] == want) {
+        gsub(/^[ \t]+|[ \t]+$/, "", f[2])
+        gsub(/^[ \t]+|[ \t]+$/, "", f[4])
+        gsub(/^[ \t]+|[ \t]+$/, "", f[5])
+        gsub(/^[ \t]+|[ \t]+$/, "", f[6])
+        printf "%s\t%s\t%s\t%s", f[2], f[4], f[5], f[6]
+        exit
+      }
+    }' "$MATRIX")"
+  if [ -z "$ROW" ]; then
+    warn "host OS '$HOST_OS' has NO row in the compatibility matrix — support status is UNKNOWN, not assumed."
+    say "  host: $HOST_OS — status: unknown (no matrix row); CI coverage: none"
+  else
+    M_OS="$(printf '%s' "$ROW" | cut -f1)"
+    M_STATUS="$(printf '%s' "$ROW" | cut -f2)"
+    M_CI="$(printf '%s' "$ROW" | cut -f3)"
+    M_NOTES="$(printf '%s' "$ROW" | cut -f4)"
+    say "  host: $M_OS ($HOST_OS) — status: $M_STATUS; CI coverage: $M_CI"
+    say "        $M_NOTES"
+    if [ "$M_STATUS" != "supported" ]; then
+      warn "this OS is '$M_STATUS'. The installer will run, but nothing here claims it works on $M_OS."
+    fi
+  fi
+fi
+say ""
+
+# ── 4. Host-capability handshake (delegated; fail-closed) ──────────────────── #
+say "4. Host-capability handshake  (owner: capability gate, NOT the installer)"
+if [ "$SKIP_DEEP" -eq 1 ]; then
+  warn "skipped by --skip-deep: this run makes NO claim about whether the hook lifecycle is live."
+elif [ ! -x "$DOCTOR" ]; then
+  warn "scripts/doctor unavailable — handshake not run; no protection claim is made."
+else
+  DEEP_OUT="$("$DOCTOR" --strict 2>&1)"; DEEP_RC=$?
+  if [ "$DEEP_RC" -eq 0 ]; then
+    ok "scripts/doctor --strict: fresh handshake PASSED (reported by the capability gate)"
+  elif [ "$ALLOW_UNPROTECTED" -eq 1 ]; then
+    warn "scripts/doctor --strict exited $DEEP_RC — this host is UNPROTECTED. Proceeding only because --allow-unprotected was given explicitly."
+    printf '%s\n' "$DEEP_OUT" | sed 's/^/      /' >&2
+  else
+    bad "scripts/doctor --strict exited $DEEP_RC — the host-capability handshake did NOT pass, so the harness cannot prove its hooks are enforced here. Aborting before any change. Re-run with --allow-unprotected to install anyway (the install will be recorded as running on an unprotected host)."
+    printf '%s\n' "$DEEP_OUT" | sed 's/^/      /' >&2
+  fi
+fi
+say ""
+
+if [ "$FAILED" -gt 0 ]; then
+  echo "preflight: $FAILED check(s) FAILED — the installer will not modify anything." >&2
+  exit 1
+fi
+say "preflight: passed. Sections 1-3 were measured by the installer; section 4 is the"
+say "capability gate's verdict. Nothing here asserts that full protection is verified."
+exit 0
