@@ -196,12 +196,29 @@ def read_host_build() -> str | None:
     return m.group(0) if m else None
 
 
+def artifact_records(home: Path) -> list[dict]:
+    """Content digests of the manifest and every enforcement/verification file."""
+    out = []
+    for rel in BOUND_ARTIFACTS:
+        p = home / rel
+        rec = {"path": rel, "present": False, "sha256": None}
+        if p.is_file():
+            rec["present"] = True
+            try:
+                rec["sha256"] = sha256_bytes(p.read_bytes())
+            except OSError:
+                rec["sha256"] = None
+        out.append(rec)
+    return out
+
+
 def canonical_binding(home: Path | None = None) -> dict:
     h = harness_home(home)
     return {
         "settings_records": settings_records(h),
         "harness_version": read_harness_version(h),
         "host_build": read_host_build(),
+        "artifact_records": artifact_records(h),
     }
 
 
