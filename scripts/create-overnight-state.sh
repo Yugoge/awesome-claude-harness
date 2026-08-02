@@ -423,9 +423,23 @@ fi
 # Wires the reference-transaction hook via core.hooksPath relocation WITHOUT
 # clobbering pre-commit/post-commit (the installer re-homes/chains them, AC6).
 KEYSTONE_INSTALLER="$(dirname "$0")/install-git-keystone.sh"
+# M3-ORDERING: this is a pre-state child that runs git against MAIN_ROOT
+# (install-git-keystone.sh:35 `rev-parse --git-common-dir`). Under an ambient
+# marker the shim denies any main-targeting op before op-specific logic
+# (git-policy-shim:181), so the installer would exit at :36 BEFORE KEYSTONE_DIR
+# is computed and copy nothing — leaving an existing repo on its OLD keystone.
+# Neutralised at the CALL BOUNDARY, per invocation, exactly as :322/:339.
 if [[ -x "$KEYSTONE_INSTALLER" ]]; then
-    bash "$KEYSTONE_INSTALLER" --project-dir "$MAIN_ROOT" >&2 || \
-        echo "Warning: keystone installation reported a problem (layered defenses still active)." >&2
+    # FAIL CLOSED (was a warning). A launch that cannot install its own
+    # enforcement hook cannot deliver the protection the state record it would
+    # then write attests. Same posture as the M2 unresolvable-branch refusal
+    # above; the installer is idempotent (it exits 0 refreshing an already
+    # installed keystone), so a healthy repo is never refused.
+    if ! "${GIT_UNMARKED_ENV[@]}" bash "$KEYSTONE_INSTALLER" --project-dir "$MAIN_ROOT" >&2; then
+        echo "Error: keystone installation failed for $MAIN_ROOT; refusing the launch (no state written)." >&2
+        echo "Remedy: run scripts/install-git-keystone.sh --project-dir $MAIN_ROOT and fix the reported cause." >&2
+        exit 1
+    fi
 fi
 
 # --- Prepare + CAPTURE the overnight actor's git PATH wrappers (fix-1) ---------
