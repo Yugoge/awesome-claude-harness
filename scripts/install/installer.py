@@ -283,6 +283,24 @@ def _file_change(path: Path, content: bytes) -> str | None:
     return "modify"
 
 
+def foreign_symlink_ancestor(root: Path, rel: str) -> str | None:
+    """The first ancestor of `rel` under `root` that is a symlink, if any.
+
+    Writing a footprint entry through a symlinked ancestor would land the file
+    somewhere the user never named -- on a host whose config home bridges
+    `commands` into a git checkout, "create <config_home>/commands/x.md" silently
+    writes into that repository. A footprint path is only honoured when every one
+    of its ancestors is a real directory.
+    """
+    parts = Path(rel).parts[:-1]
+    cur = root
+    for part in parts:
+        cur = cur / part
+        if cur.is_symlink():
+            return str(Path(*parts[: parts.index(part) + 1]))
+    return None
+
+
 def build_plan(ctx: Ctx) -> dict:
     """Deterministic plan. `changes` are DURABLE NET transitions only.
 
