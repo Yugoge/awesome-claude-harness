@@ -25,12 +25,26 @@ while [[ $# -gt 0 ]]; do
 done
 [[ -n "$NAME" ]] || { echo "Usage: create-worktree.sh [--project-dir <dir>] <name>" >&2; exit 1; }
 
+# --- M3-ORDERING: neutralise the actor marker for this script's own git calls ---
+# This script runs inside the /dev-overnight launcher's PRE-STATE region, before
+# any overnight session-state record exists, so a fail-closed protection consumer
+# cannot resolve a protected branch. `worktree add -b` below creates
+# refs/heads/worktree-<name> (old 0000... != new, so it IS an oid change the
+# keystone evaluates), and the policy shim blocks every main-targeting op
+# unconditionally. Both would refuse the launch its own worktree when
+# /dev-overnight is invoked from a context that already exports
+# CLAUDE_OVERNIGHT_ACTOR=1 (ambient inheritance). Every git call below therefore
+# runs through this array, which clears the marker FOR THAT INVOCATION ONLY; the
+# variable is never unset process-wide and never reassigned, because the overnight
+# actor's own later operations must keep it.
+GIT_UNMARKED=(env -u CLAUDE_OVERNIGHT_ACTOR git)
+
 if [[ -n "$PROJECT_DIR" ]]; then
-    GIT_ROOT="$(git -C "$PROJECT_DIR" rev-parse --show-toplevel)"
+    GIT_ROOT="$("${GIT_UNMARKED[@]}" -C "$PROJECT_DIR" rev-parse --show-toplevel)"
 else
-    GIT_ROOT="$(git rev-parse --show-toplevel)"
+    GIT_ROOT="$("${GIT_UNMARKED[@]}" rev-parse --show-toplevel)"
 fi
-GITC=(git -C "$GIT_ROOT")
+GITC=("${GIT_UNMARKED[@]}" -C "$GIT_ROOT")
 
 WORKTREE_BASE_DIR="${GIT_ROOT}/.claude/worktrees"
 mkdir -p "$WORKTREE_BASE_DIR"
