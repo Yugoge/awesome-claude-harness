@@ -540,8 +540,9 @@ jq -n \
     --argjson view_paths "$VIEW_PATHS" \
     --argjson codex_required "$CODEX_REQUIRED" \
     '{
-        schema_version: 8,
+        schema_version: 9,
         session_id: $session_id,
+        protected_branch: $protected_branch,
         end_time: $end_time,
         start_time: $start_time,
         isolation_active_until: $isolation_active_until,
