@@ -45,6 +45,17 @@ PROJECT_DIR="$(resolve_project_dir)"
 
 # --- Parse arguments ---
 CODEX_REQUIRED=false
+# M1-SEAM: ONE side-effect-free component mode over the SAME pre-confinement
+# code path a real launch executes. It runs the identical protected-branch
+# resolution and the identical session-state record construction, emits the
+# record as exactly one top-level JSON object on stdout, and creates NO
+# worktree, clone, branch, state file, temporary file, cycle-contract file,
+# checklist or bookmark. It exists because the only end-to-end route to M1/M6
+# creates a worktree, which no verifying agent role may do — a requirement
+# whose sole verification route is blocked is a requirement that ships
+# unverified. It is NOT a second implementation: it is the same lines, with
+# the isolation-creating region skipped.
+EMIT_RECORD_ONLY=0
 # Override state and cycle directories via env vars or CLI
 STATE_SUBDIR="${OVERNIGHT_STATE_SUBDIR:-.claude}"
 CYCLE_SUBDIR="${OVERNIGHT_CYCLE_SUBDIR:-docs/dev/overnight}"
