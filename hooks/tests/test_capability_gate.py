@@ -110,7 +110,10 @@ def _passing_state(home: Path, session_id: str) -> dict:
             "outcome": "PASS",
             "failure_reason": None,
             "event_discriminator": "event_key_nonce",
-            "blocking_action": "not_applicable",
+            "event_identity_strength": "registration_bound",
+            # PreToolUse is the blocking-capable event and must carry a PROVEN
+            # block; the rest were observed non-blocking.
+            "blocking_action": "blocked_confirmed" if label == "PreToolUse" else "not_applicable",
             "observation": "synthetic fully-PASS fixture for aggregate-formula tests",
         })
     deep = {n: {"status": "pass", "evidence": "fixture"} for n in cs.DEEP_CHECKS}
