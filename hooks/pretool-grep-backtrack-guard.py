@@ -1043,8 +1043,8 @@ def _embedded_bin():
     for cand in (
         "/usr/lib/node_modules/@anthropic-ai/claude-code/bin/claude.exe",
         # Per-user install location of the INVOKING user (not an author literal):
-        # this is the same path the author's /root/.local/bin/claude resolved to
-        # when running as root, and it resolves correctly for every other user.
+        # expands to the same path the previous hardcoded candidate named when
+        # running as root, and resolves correctly for every other user.
         os.path.join(os.path.expanduser("~"), ".local", "bin", "claude"),
     ):
         if os.path.exists(cand):
