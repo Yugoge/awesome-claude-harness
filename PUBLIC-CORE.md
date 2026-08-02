@@ -133,7 +133,6 @@ set for the residue markers of §3. Path = first back-ticked token; class = seco
 | `VERSION` | `shared/infra` | Release version marker — release meta. |
 | `tests/` | `shared/infra` | Test net (incl. generated AC skeletons + fixture strings) that supports the core; not itself the shippable harness. |
 | `PUBLIC-CORE.md` | `shared/infra` | This boundary manifest — governance/meta (self-classified for forward completeness once tracked). |
-| `settings.json` | `private-lab` | Personal config, tracked: personal permission allow/deny/ask entries + absolute `/root` paths (roadmap §4.3 → P3). |
 | `NESTED-REPO.md` | `private-lab` | Documents the maintainer's exact `/root/.claude`→tmpfs symlink topology, `git@github.com:Yugoge` remote, `/root/.claude.bak` mirror, `/root/sync-backup.sh` cron. |
 | `push.sh` | `private-lab` | Maintainer pre-push wrapper: `/root/.claude/push.sh` invocation, author git-workflow automation (identity now env-parameterized, purpose still maintainer-specific). |
 <!-- END:public-core-manifest -->
