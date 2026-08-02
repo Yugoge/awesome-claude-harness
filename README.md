@@ -5,7 +5,7 @@
 </p>
 <p align="center"><sub><em>Composed from a real run — every visible line traces to <a href=".github/assets/demo-trace.json">.github/assets/demo-trace.json</a>. Stylized &amp; condensed, not a screen recording.</em></sub></p>
 
-An operating system for Claude Code agents — orchestrator-only routing, an evidence-gated `/spec → /dev → /close → /commit → /push` pipeline, a defense-in-depth git protection kernel, and an autonomous overnight loop, every mechanism traceable to a file in this repo.
+A safety & release harness for Claude Code — orchestrator-only routing, an evidence-gated `/spec → /dev → /close → /commit → /push` pipeline, and a defense-in-depth git protection kernel, every mechanism traceable to a file in this repo.
 
 <p>
 <img alt="version" src="https://img.shields.io/badge/version-1.0.0-blue">
