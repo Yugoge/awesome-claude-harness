@@ -343,8 +343,17 @@ def aggregate_verdict(state: dict, home: Path | None = None) -> tuple[str, str |
         for f in RECEIPT_TIER3_FIELDS:
             if f not in receipt:
                 return "UNPROTECTED", "host_receipt_tier3_field_omitted"
-        if ev.get("blocking_action") == "FAIL":
-            return "UNPROTECTED", "blocking_check_failed"
+        # CANARY LIVENESS IS NOT ENFORCEMENT (codex finding #3). Every canary
+        # exits 0 by design, so a host that dispatches all seven canaries while
+        # silently skipping the blocking gate would otherwise reach PASS -- the
+        # exact selective-dispatch threat this lane exists to close. A blocking
+        # classification that was never established is therefore non-passing.
+        if ev.get("blocking_action") not in BLOCKING_OUTCOMES_OK:
+            return "UNPROTECTED", "blocking_capability_not_established"
+
+    if not any(e.get("blocking_action") == "blocked_confirmed" for e in by_label.values()):
+        # At least one event must have PROVEN a block by sentinel absence.
+        return "UNPROTECTED", "no_blocking_capability_proven"
 
     deep = state.get("deep_checks") or {}
     for name in DEEP_CHECKS:
