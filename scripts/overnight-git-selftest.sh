@@ -649,13 +649,66 @@ fi
 JSON="$(GIT_VERSION="$GIT_VERSION" GIT_EFFECTIVE_PATH="$GIT_EFFECTIVE_PATH" \
   GIT_EXEC_PATH="$GIT_EXEC_PATH" SELFTEST_RESULT="$SELFTEST_RESULT" \
   GUARANTEE_LEVEL="$GUARANTEE_LEVEL" STRUCTURAL_ALLOWED="$STRUCTURAL_ALLOWED" \
+  STEM="$STEM" OP_A="$OP_A" OP_B="$OP_B" \
+  KS_OK="$BRANCH_REF_ARM_OK" KS_FAIL="$KS_FAIL" \
+  SHIM_OK="$SHIM_ARM_OK" SHIM_FAIL="$SHIM_FAIL" \
+  OPF_OK="$OPERAND_FORMS_OK" OPF_FAIL="$OPERAND_FAIL" \
+  ATT_OK="$ATTEST_EQUALITY_OK" ATT_FAIL="$ATTEST_FAIL" ATT_N="${ATTEST_RESOLVED:-}" \
+  HDR_HAS_HEAD="$HEADLINE_HAS_HEAD" HDR_CAP="$HEADLINE_CAPTURE" \
+  CELLS="[${CELLS_JSON}]" SHIM_CELLS="[${SHIM_CELLS_JSON}]" OPF="[${OPERAND_FORMS_JSON}]" \
+  ATT_CASES="${ATTEST_CASES_JSON:-null}" \
   jq -n '{
     git_version: env.GIT_VERSION,
     git_effective_path: env.GIT_EFFECTIVE_PATH,
     git_exec_path: env.GIT_EXEC_PATH,
     reference_transaction_selftest_result: env.SELFTEST_RESULT,
     guarantee_level: env.GUARANTEE_LEVEL,
-    structural_claim_allowed: (env.STRUCTURAL_ALLOWED == "true")
+    structural_claim_allowed: (env.STRUCTURAL_ALLOWED == "true"),
+
+    head_arm_probe: {
+      result: env.SELFTEST_RESULT,
+      arm_tested: "HEAD symref branch-switch — reference-transaction HEAD arm",
+      covers_branch_ref_arm: false,
+      note: "This probe carries NO information about the branch-ref arm. On git >= 2.46 its decisive operation is a HEAD symref switch denied by an arm that contains no branch name at all. Its result must never be cited as evidence that the protected branch is enforced by name; see branch_ref_arm_probe. It also does not cover the branch the probe repository is built on — that is attestation_probe1s job."
+    },
+
+    branch_ref_arm_probe: {
+      ok: (env.KS_OK == "true"),
+      failures: env.KS_FAIL,
+      stem: env.STEM,
+      operand_a: env.OP_A,
+      operand_b: env.OP_B,
+      design: "crossed counterfactual D1 x D2 x D3 on ONE runtime-random operand pair, plus an additional D1-unresolved level, plus three fixed regression anchors whose role is anchoring and not falsification",
+      cells: (env.CELLS | fromjson)
+    },
+
+    policy_shim_probe: {
+      ok: (env.SHIM_OK == "true"),
+      failures: env.SHIM_FAIL,
+      note: "the shim is exercised as a SEPARATE consumer with the keystone out of its path, so a corrected keystone cannot mask a still-literal shim",
+      cells: (env.SHIM_CELLS | fromjson)
+    },
+
+    operand_forms_probe: {
+      ok: (env.OPF_OK == "true"),
+      failures: env.OPF_FAIL,
+      forms: (env.OPF | fromjson)
+    },
+
+    attestation_probe: {
+      ok: (env.ATT_OK == "true"),
+      failures: env.ATT_FAIL,
+      target_resolved_branch: env.ATT_N,
+      cases: (if env.ATT_CASES == "null" then null else (env.ATT_CASES | fromjson) end)
+    },
+
+    head_line_capture: {
+      head_present_in_prepared_phase: env.HDR_HAS_HEAD,
+      captured_lines: env.HDR_CAP,
+      note: "diagnostic only (M8c): a transparent capture wrapper confined to one dedicated probe, feeding identical stdin to the real keystone and exiting with its code. The M8a and M8b probes run the UNWRAPPED keystone. Nothing here changes any allow/deny decision."
+    },
+
+    guarantee_scope: "correct enforcement against drift and misconfiguration, plus honest attestation. The shared common-dir remains read-write, so this is NOT a claim about a malicious actor."
   }')"
 
 echo "$JSON"
