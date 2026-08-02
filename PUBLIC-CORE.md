@@ -128,7 +128,8 @@ set for the residue markers of §3. Path = first back-ticked token; class = seco
 | `INDEX.md` | `shared/infra` | Auto-generated navigation index (do-not-hand-edit meta). |
 | `pytest.ini` | `shared/infra` | Test-runner configuration — build/CI. |
 | `conftest.py` | `shared/infra` | Pytest collection config — the `generated`-marker gate for tests/generated; build/CI. |
-| `requirements.txt` | `shared/infra` | Python dependency manifest for the harness venv — build/infra. |
+| `requirements.txt` | `shared/infra` | Python dependency manifest for the harness venv — build/infra. Human-authored ABSTRACT spec (compatible ranges); the concrete resolutions live in `requirements/`. |
+| `requirements/` | `shared/infra` | Per-Python-version hash-pinned lockfiles (`py310/py311/py312.txt`) that every install call site uses with `pip install --require-hashes` — build/infra, and shipped, since the harness cannot install without them. |
 | `VERSION` | `shared/infra` | Release version marker — release meta. |
 | `tests/` | `shared/infra` | Test net (incl. generated AC skeletons + fixture strings) that supports the core; not itself the shippable harness. |
 | `PUBLIC-CORE.md` | `shared/infra` | This boundary manifest — governance/meta (self-classified for forward completeness once tracked). |
