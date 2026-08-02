@@ -217,6 +217,36 @@ else
     MAIN_DIRTY_AT_START=false
 fi
 
+# --- M1/M2: resolve the PROTECTED BRANCH once, here, before confinement -------
+# This is the single authoritative resolution. It runs inside the region this
+# file designates side-effect-free (see the comment above), and therefore
+# strictly BEFORE the worktree/clone block below — which is what lets an
+# unresolvable branch refuse the launch without having created any worktree,
+# branch or clone.
+#
+# STRICT wrapper over the tier-1 rule of scripts/derive-default-branch.sh. That
+# script's ordered tiers are reused; its permissive TAIL deliberately is not:
+#   * its `git remote show origin` network tier is NOT used here — it is
+#     unbounded, and a launch-time hang is a denial of service;
+#   * its literal fallback is NOT used here — silently protecting a branch the
+#     repository does not have is exactly the defect this resolution removes.
+# Local refs only. Unresolvable => refuse the launch, write no state (M2).
+#
+# The value is DISTINCT from MAIN_BRANCH_AT_START, which records whatever branch
+# the primary checkout happened to be sitting on. They are different concepts:
+# one is the repository's protected branch, the other is a transient position.
+resolve_protected_branch() {
+    # tier 1 (local refs only): the remote-tracking default-branch symref.
+    git -C "$MAIN_ROOT" symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null \
+        | sed 's@^origin/@@'
+}
+PROTECTED_BRANCH="$(resolve_protected_branch || true)"
+PROTECTED_BRANCH="${PROTECTED_BRANCH%%$'\n'*}"
+if [[ -z "$PROTECTED_BRANCH" ]]; then
+    echo "Error: cannot resolve the repository's protected branch from local refs (refs/remotes/origin/HEAD is unset or dangling in '$MAIN_ROOT'). The overnight protection chain would be inert, so the launch is refused (no state written). Remedy: set the default-branch symref, e.g. 'git remote set-head origin -a'." >&2
+    exit 1
+fi
+
 # --- Create + validate the isolated worktree FIRST (M1, M2, M3) ---------------
 # Recoverable failures here NEVER fall back to in-place work: a missing/invalid
 # worktree means launch refuses (no state) — distinct from hard-abort-then-work.
