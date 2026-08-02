@@ -474,7 +474,12 @@ GIT_EXEC_PATH_FIELD=""
 SELFTEST_RESULT_FIELD=""
 SELFTEST_SCRIPT="$(dirname "$0")/overnight-git-selftest.sh"
 if [[ -x "$SELFTEST_SCRIPT" ]]; then
-    SELFTEST_JSON_LINE="$(bash "$SELFTEST_SCRIPT" --project-dir "$MAIN_ROOT" 2>/dev/null | grep '^SELFTEST_JSON=' | head -1 || echo '')"
+    # M3-ORDERING: pre-state child with one main-targeting read
+    # (overnight-git-selftest.sh:689 `config --get core.hooksPath`). Denied under
+    # an ambient marker, which would silently DOWNGRADE the recorded guarantee
+    # fields. Safe to clear: the selftest sets the marker explicitly per probe
+    # rather than inheriting it.
+    SELFTEST_JSON_LINE="$("${GIT_UNMARKED_ENV[@]}" bash "$SELFTEST_SCRIPT" --project-dir "$MAIN_ROOT" 2>/dev/null | grep '^SELFTEST_JSON=' | head -1 || echo '')"
     SELFTEST_JSON="${SELFTEST_JSON_LINE#SELFTEST_JSON=}"
     if [[ -n "$SELFTEST_JSON" ]] && echo "$SELFTEST_JSON" | jq empty >/dev/null 2>&1; then
         GUARANTEE_LEVEL="$(echo "$SELFTEST_JSON" | jq -r '.guarantee_level // "best_effort_head_switch"')"
