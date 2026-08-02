@@ -37,9 +37,14 @@ the author's machine), it is `private-lab`. "Release-clean" is a higher bar than
 ## 2. Reference example — `settings.template.json` (public) vs `settings.json` (private)
 
 The cleanest illustration of the carve already exists in the tree: the portable seed
-`settings.template.json` is `public-core`; the tracked personal `settings.json`
-(personal permission allow/deny/ask entries + absolute `/root` paths) is `private-lab`
-and a live boundary violation slated for roadmap phase **P3** (generate-then-untrack).
+`settings.template.json` is `public-core`. Its counterpart, the live per-install
+`settings.json` (permission allow/deny/ask entries + absolute install-home paths), is
+**no longer tracked** — roadmap phase **P3** (generate-then-untrack) is done. It is now
+GENERATED from the template by `scripts/install/render-settings`, which
+`scripts/bootstrap` invokes at install time, and it is git-ignored via the root-anchored
+`/settings.json` rule. It therefore has no ledger row: the ledger classifies *tracked*
+top-level paths, and this one is deliberately not one. CI renders it after checkout so
+`scripts/verify-claims.sh` still has a concrete file to recompute its counts from.
 
 ---
 
