@@ -207,6 +207,16 @@ def build_event_records(receipts: list[dict], probe: dict, window_start: float,
             "outcome": outcome,
             "failure_reason": reason,
             "event_discriminator": disc,
+            # The nonce discriminator evidences EVENT/REGISTRATION BINDING, not
+            # host attestation of the event: the label comes from the argv this
+            # repo wrote into the registration, so a host that dispatched every
+            # registration under the wrong event would still yield correctly
+            # labelled receipts (codex #5). Recording the strength keeps the
+            # weaker evidence visible instead of hiding it behind a bare PASS.
+            "event_identity_strength": (
+                "host_attested" if disc == "host_field"
+                else "registration_bound" if disc == "event_key_nonce" else "none"
+            ),
             # AC-CAPGATE-02: the blocking classification is UNKNOWN until measured,
             # and is always recorded together with the observation that set it.
             "blocking_action": "not_established",
