@@ -380,7 +380,14 @@ def build_plan(ctx: Ctx) -> dict:
                     settings_plan["detail"])
         elif kind == "file":
             content = command_doc_bytes(ctx)
-            if target.exists() or target.is_symlink():
+            foreign = foreign_symlink_ancestor(ch, rel)
+            if foreign is not None:
+                conflicts.append({"tree": "config_home", "path": rel,
+                                  "change_kind": "conflict",
+                                  "detail": f"'{foreign}' is a symlink, so writing here would "
+                                            "put the file outside the config home entirely. "
+                                            "Nothing is written through it."})
+            elif target.exists() or target.is_symlink():
                 if target.is_file() and target.read_bytes() == content:
                     continue  # ours already, unchanged
                 conflicts.append({"tree": "config_home", "path": rel,
