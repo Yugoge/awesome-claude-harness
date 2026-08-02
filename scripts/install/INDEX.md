@@ -1,13 +1,14 @@
 # install
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-06-06T20:06:47Z*
-**Total entries**: 1
+*Last updated: 2026-08-02T10:03:11Z*
+**Total entries**: 2
 **Convention**: kebab
 
 ## Tree
 ```
 install/
+├── `render-settings` - render-settings file
 └── `tmp-cleanup-install.sh` - /usr/local/sbin/tmp-cleanup.sh
 ```
 <!-- /AUTO:index-stats -->
