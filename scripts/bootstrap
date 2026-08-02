@@ -3,20 +3,24 @@
 #
 # On a fresh non-root clone it:
 #   1. creates the Python venv the hooks/scripts expect (<home>/venv),
-#   2. installs the REQUIRED dependencies from requirements.txt,
-#   3. makes the shell hooks executable,
-#   4. verifies the shared resolver (hooks/lib/claude_home.{sh,py}) resolves
+#   2. installs the REQUIRED dependencies with hash verification,
+#   3. renders settings.json from the tracked settings.template.json,
+#   4. makes the shell hooks executable,
+#   5. verifies the shared resolver (hooks/lib/claude_home.{sh,py}) resolves
 #      THIS clone as the harness home,
-#   5. runs scripts/doctor as the final preflight.
+#   6. runs scripts/doctor as the final preflight.
 #
 # It is NON-DESTRUCTIVE: it refuses to clobber an already-populated home (an
 # existing venv) unless you pass --force, and it documents how to restore. With
 # --force it BACKS UP the existing venv (to <home>/venv.bak-<timestamp>) before
-# recreating it, so the prior state can always be restored.
+# recreating it, so the prior state can always be restored. An existing
+# settings.json follows the same convention: left byte-identical by default,
+# backed up to <home>/settings.json.bak-<timestamp> before a --force re-render.
 #
 # Usage: scripts/bootstrap [--force] [--no-doctor]
-#   --force       Re-bootstrap a populated home: back up the existing venv, then
-#                 recreate it (opt-in to the otherwise-refused clobber).
+#   --force       Re-bootstrap a populated home: back up the existing venv and
+#                 settings.json, then recreate both (opt-in to the otherwise-
+#                 refused clobber).
 #   --no-doctor   Skip the final scripts/doctor preflight.
 # Exit codes: 0 = success; 1 = refused (populated home, no --force) or a step
 #             failed.
