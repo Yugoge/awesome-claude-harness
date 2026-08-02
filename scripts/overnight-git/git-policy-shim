@@ -392,10 +392,11 @@ case "$subcmd" in
   checkout|switch|reset|restore|clean|rebase|merge|cherry-pick|am|pull|stash)
     # A branch/tree mutation. Block when main-targeting, or when the effective
     # dir cannot be proven to be inside an isolated worktree (fail-closed for the
-    # HEAD-moving forms), or when it force-moves master.
-    if [ "$_op_is_main_targeting" = "1" ] || _mentions_master "$@"; then
-      _blocked "$subcmd (main-targeting / master)"
+    # HEAD-moving forms), or when it moves a PROTECTED branch.
+    if [ "$_op_is_main_targeting" = "1" ]; then
+      _blocked "$subcmd (main-targeting)"
     fi
+    _branch_protection_gate "$subcmd" "$@"
     if [ "$_in_worktree" != "1" ] && { [ "$subcmd" = "checkout" ] || [ "$subcmd" = "switch" ] || [ "$subcmd" = "reset" ]; }; then
       # cwd/-C is not provably inside a worktree -> a branch/HEAD move could land
       # on main. Fail closed (the exact 2026-06-03 incident shape).
@@ -403,20 +404,26 @@ case "$subcmd" in
     fi
     ;;
   branch)
-    # Force-move / rename / delete of `master` is a master ref-move -> block.
-    if _mentions_master "$@" || [ "$_op_is_main_targeting" = "1" ]; then
-      for a in "$@"; do
-        case "$a" in
-          -f|-D|-M|--force|--delete|--move) _blocked "branch force/move/delete (master ref-move)" ;;
-        esac
-      done
+    # Force-move / rename / delete of a PROTECTED branch is a ref-move -> block.
+    _br_mutating=0
+    for a in "$@"; do
+      case "$a" in
+        -f|-D|-M|--force|--delete|--move) _br_mutating=1 ;;
+      esac
+    done
+    if [ "$_br_mutating" = "1" ]; then
+      if [ "$_op_is_main_targeting" = "1" ]; then
+        _blocked "branch force/move/delete (main-targeting)"
+      fi
+      _branch_protection_gate "branch force/move/delete" "$@"
     fi
     ;;
   update-ref|symbolic-ref)
-    # update-ref refs/heads/master / symbolic-ref HEAD -> protected ref move.
-    if _mentions_master "$@" || [ "$_op_is_main_targeting" = "1" ]; then
-      _blocked "$subcmd (master/HEAD ref move)"
+    # update-ref refs/heads/<protected> / symbolic-ref HEAD -> protected ref move.
+    if [ "$_op_is_main_targeting" = "1" ]; then
+      _blocked "$subcmd (main-targeting ref move)"
     fi
+    _branch_protection_gate "$subcmd (ref move)" "$@"
     case "$subcmd" in
       symbolic-ref)
         for a in "$@"; do [ "$a" = "HEAD" ] && [ "$_in_worktree" != "1" ] && _blocked "symbolic-ref HEAD (not provably in worktree)"; done ;;
