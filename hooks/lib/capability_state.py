@@ -78,6 +78,32 @@ ORDERING_PROPERTIES = (
 PENDING_TIMEOUT_SEC = 900
 NONCE_BITS = 128
 
+# A published PASS is not indefinitely valid. Session equality alone does not
+# survive a host restart or a mid-session dispatch-behaviour change (codex #10),
+# so a PASS also expires on wall-clock age and must be re-earned.
+PASS_MAX_AGE_SEC = 3600
+
+# `blocked_confirmed` = a denied probe's sentinel was confirmed ABSENT while the
+# paired allow-control's sentinel was confirmed PRESENT. `not_applicable` = the
+# event was OBSERVED to be non-blocking. Anything else (notably the initial
+# `not_established`) is non-passing.
+BLOCKING_OUTCOMES_OK = ("blocked_confirmed", "not_applicable")
+
+# Security-critical artefacts whose content is bound alongside the settings
+# layers. Hashing settings + VERSION alone would let an edit to the manifest or
+# to any enforcement/verification file preserve an existing PASS (codex #6) --
+# e.g. moving a protected route outside every surface prefix so it silently
+# reports not_protected while the stored PASS stays valid.
+BOUND_ARTIFACTS = (
+    MANIFEST_RELPATH,
+    "hooks/lib/capability_state.py",
+    "hooks/pretool-capability-gate.py",
+    "hooks/capability-canary.py",
+    "scripts/capability-handshake.py",
+    "scripts/capability-doctor-strict.py",
+    "scripts/capability-status-line.sh",
+)
+
 
 # --------------------------------------------------------------------------- #
 # paths
