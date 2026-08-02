@@ -38,17 +38,43 @@ jobs:
           fetch-depth: 0
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: ${{ matrix.python-version }}
 
       - name: Set up Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: "20"
 
+      - name: Render settings.json from the tracked template
+        # settings.json is NOT tracked (it is per-install and carries absolute
+        # paths). A fresh checkout therefore has no settings.json at all, but
+        # scripts/verify-claims.sh recomputes its hook/lifecycle counts by reading
+        # that file with no existence guard — so it MUST be rendered here, after
+        # Checkout and before "Verify headline claims", or that step fails
+        # immediately on every PR. Rendering (not copying the template) is
+        # required: the template carries an unresolved {{CLAUDE_HOME}} placeholder.
+        run: |
+          set -euo pipefail
+          python3 scripts/install/render-settings "$GITHUB_WORKSPACE" \
+            --template settings.template.json --out settings.json
+          python3 scripts/install/render-settings --check settings.json \
+            --template settings.template.json
+          if grep -q '{{CLAUDE_HOME}}' settings.json; then
+            echo "::error::rendered settings.json still contains an unresolved placeholder"
+            exit 1
+          fi
+
       - name: Install Python dependencies
-        run: python3 -m pip install -r requirements.txt
+        # Hash-verified install from the lockfile matching THIS matrix leg.
+        # --require-hashes makes pip reject the whole install if any requirement,
+        # direct or transitive, is unpinned or unhashed.
+        run: |
+          set -euo pipefail
+          lock="requirements/py$(echo '${{ matrix.python-version }}' | tr -d '.').txt"
+          echo "Installing from $lock"
+          python3 -m pip install --require-hashes -r "$lock"
 
       - name: Clean-install smoke (fresh venv from requirements.txt)
         # Reproducibility guarantee: prove a CLEAN environment can install the
