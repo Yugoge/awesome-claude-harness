@@ -1586,8 +1586,7 @@ def _enforce_overnight_git_command(command: str, main_root: str, worktree_path: 
             wt_targets_main = _path_targets_main(wt_real, main_real)
         if wt_targets_main:
             targets_main = True
-        switches_master = any(p == 'master' or p == 'refs/heads/master'
-                              for p in positionals)
+        switches_master = _mentions_protected_branch(positionals)
 
         # M13: any git op whose effective dir is main-targeting -> block.
         if targets_main:
