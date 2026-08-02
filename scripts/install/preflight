@@ -166,6 +166,7 @@ say ""
 
 # ── 4. Host-capability handshake (delegated; fail-closed) ──────────────────── #
 say "4. Host-capability handshake  (owner: capability gate, NOT the installer)"
+HANDSHAKE="skipped"
 if [ "$SKIP_DEEP" -eq 1 ]; then
   warn "skipped by --skip-deep: this run makes NO claim about whether the hook lifecycle is live."
 elif [ ! -x "$DOCTOR" ]; then
@@ -173,20 +174,37 @@ elif [ ! -x "$DOCTOR" ]; then
 else
   DEEP_OUT="$("$DOCTOR" --strict 2>&1)"; DEEP_RC=$?
   if [ "$DEEP_RC" -eq 0 ]; then
+    HANDSHAKE="pass"
     ok "scripts/doctor --strict: fresh handshake PASSED (reported by the capability gate)"
-  elif [ "$ALLOW_UNPROTECTED" -eq 1 ]; then
-    warn "scripts/doctor --strict exited $DEEP_RC — this host is UNPROTECTED. Proceeding only because --allow-unprotected was given explicitly."
-    printf '%s\n' "$DEEP_OUT" | sed 's/^/      /' >&2
   else
-    bad "scripts/doctor --strict exited $DEEP_RC — the host-capability handshake did NOT pass, so the harness cannot prove its hooks are enforced here. Aborting before any change. Re-run with --allow-unprotected to install anyway (the install will be recorded as running on an unprotected host)."
+    HANDSHAKE="fail"
     printf '%s\n' "$DEEP_OUT" | sed 's/^/      /' >&2
+    if [ "$REQUIRE_HANDSHAKE" -eq 1 ]; then
+      bad "scripts/doctor --strict exited $DEEP_RC and --require-handshake was given — refusing to install on a host that cannot prove its hooks are enforced."
+    else
+      warn "scripts/doctor --strict exited $DEEP_RC."
+    fi
   fi
 fi
+printf 'HARNESS_INSTALL_HANDSHAKE=%s\n' "$HANDSHAKE" > "${HANDSHAKE_RESULT_FILE:-/dev/null}"
 say ""
 
 if [ "$FAILED" -gt 0 ]; then
   echo "preflight: $FAILED check(s) FAILED — the installer will not modify anything." >&2
   exit 1
+fi
+if [ "$HANDSHAKE" != "pass" ]; then
+  cat >&2 <<'BANNER'
+  ############################################################################
+  #  UNPROTECTED HOST                                                        #
+  #  The host-capability handshake did not return a fresh PASS, so NOTHING   #
+  #  here has proven that this machine actually enforces the harness's        #
+  #  hooks. Treat every "blocked" guarantee as UNVERIFIED on this host until  #
+  #  `scripts/doctor --strict` passes. Installation continues because a       #
+  #  fresh host cannot pass a handshake for components it has not installed   #
+  #  yet -- not because the failure is unimportant.                           #
+  ############################################################################
+BANNER
 fi
 say "preflight: passed. Sections 1-3 were measured by the installer; section 4 is the"
 say "capability gate's verdict. Nothing here asserts that full protection is verified."
