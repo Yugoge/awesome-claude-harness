@@ -53,10 +53,26 @@ def pristine(tmp_path_factory) -> Path:
     return dest
 
 
-def _copy(pristine: Path) -> Path:
-    work = Path(tempfile.mkdtemp(prefix="pc-case-"))
-    shutil.copytree(pristine, work / "r", symlinks=True)
-    return work / "r"
+def _copy(pristine: Path, tmp_path: Path) -> Path:
+    """Hardlink-farm copy into a pytest-MANAGED dir.
+
+    Hardlinks keep each case at inode cost rather than a full tree copy, and
+    pytest prunes its own basetemps, so a full parametrized run does not fill the
+    scratch filesystem. `_mutable()` breaks the link before any file is written,
+    so a case can never write through into the shared pristine tree.
+    """
+    dest = tmp_path / "r"
+    shutil.copytree(pristine, dest, symlinks=True, copy_function=os.link)
+    return dest
+
+
+def _mutable(path: Path) -> Path:
+    """Break the hardlink so writing to `path` cannot affect the pristine copy."""
+    if path.is_file() and path.stat().st_nlink > 1:
+        data = path.read_bytes()
+        path.unlink()
+        path.write_bytes(data)
+    return path
 
 
 def _run(root: Path, *args: str) -> subprocess.CompletedProcess:
