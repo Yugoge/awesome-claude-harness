@@ -5,8 +5,14 @@
 #   residue marker leaks into a public-core-classified file un-parameterized. Companion to
 #   PUBLIC-CORE.md (the ledger) and docs/reference/roadmap-decomposition-productization.md §4.
 # Usage: bash scripts/check-public-core.sh
+#        bash scripts/check-public-core.sh --scan-root <dir> --release-manifest <file>
+#   Default (no args): gate the git checkout — ledger completeness + residue over the
+#   ledger-derived public-core set.
+#   --scan-root: gate an EXTRACTED RELEASE ARCHIVE instead. The scanned path set is
+#   asserted EQUAL to the release-membership manifest, then the same residue classes run
+#   over those bytes. Git-derived ledger sections are skipped (an archive is not a clone).
 # Exit codes: 0 = boundary clean + complete, 1 = one or more checks failed (unclassified
-#   path, invalid class, and/or residue leak). Advisory deferred-leak counts never affect rc.
+#   path, invalid class, residue leak, or archive/manifest path-set mismatch).
 # Root cause (design): the public-core surface was described in prose (roadmap §4) with no
 #   machine check, so a new top-level file could escape classification and author-specific
 #   literals could re-enter the shippable core unnoticed. This gate recomputes both from the
