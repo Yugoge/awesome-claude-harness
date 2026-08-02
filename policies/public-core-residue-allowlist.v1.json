@@ -15,6 +15,55 @@
   ],
   "entries": [
     {
+      "path": "PUBLIC-CORE.md",
+      "fingerprint": "3180eb30e4ea1244",
+      "ordinal": 1,
+      "class": "comment_or_narrative_doc",
+      "rationale": "3. Reference examples — private-lab residue already paramete — prose/comment text; never read as a path at runtime."
+    },
+    {
+      "path": "PUBLIC-CORE.md",
+      "fingerprint": "536b8aa01a55a383",
+      "ordinal": 1,
+      "class": "comment_or_narrative_doc",
+      "rationale": "3. Reference examples — private-lab residue already paramete — prose/comment text; never read as a path at runtime."
+    },
+    {
+      "path": "PUBLIC-CORE.md",
+      "fingerprint": "a9bf15c785afac85",
+      "ordinal": 1,
+      "class": "comment_or_narrative_doc",
+      "rationale": "1. Carve principle — prose/comment text; never read as a path at runtime."
+    },
+    {
+      "path": "PUBLIC-CORE.md",
+      "fingerprint": "c0c93436e18bcfd2",
+      "ordinal": 1,
+      "class": "comment_or_narrative_doc",
+      "rationale": "4. Classification ledger — prose/comment text; never read as a path at runtime."
+    },
+    {
+      "path": "PUBLIC-CORE.md",
+      "fingerprint": "c933620940ffe1c4",
+      "ordinal": 1,
+      "class": "comment_or_narrative_doc",
+      "rationale": "3. Reference examples — private-lab residue already paramete — prose/comment text; never read as a path at runtime."
+    },
+    {
+      "path": "PUBLIC-CORE.md",
+      "fingerprint": "caa906bf8f247e11",
+      "ordinal": 1,
+      "class": "comment_or_narrative_doc",
+      "rationale": "3. Reference examples — private-lab residue already paramete — prose/comment text; never read as a path at runtime."
+    },
+    {
+      "path": "PUBLIC-CORE.md",
+      "fingerprint": "d5eb97f86ee18db1",
+      "ordinal": 1,
+      "class": "comment_or_narrative_doc",
+      "rationale": "4. Classification ledger — prose/comment text; never read as a path at runtime."
+    },
+    {
       "path": "README.md",
       "fingerprint": "a65fa6655ff7e9c3",
       "ordinal": 1,
