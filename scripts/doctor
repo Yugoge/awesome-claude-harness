@@ -4,9 +4,15 @@
 # message, BEFORE the first pipeline run. Exits nonzero when any required
 # dependency is missing; exits 0 when every required dependency is present.
 #
-# Usage: scripts/doctor [--venv <venv-dir>]
+# Usage: scripts/doctor [--venv <venv-dir>] [--strict [--verbose]]
 #   --venv <dir>   Inspect this venv instead of the resolved <home>/venv.
-# Exit codes: 0 = all required deps present; 1 = one or more required missing.
+#   --strict       Run a FRESH host-capability handshake (never trusts a cached or
+#                  preseeded PASS) and print a SHORT compatibility report; exits
+#                  non-zero unless that fresh run is a full PASS.
+#   --verbose      With --strict: print the full per-check detail instead of the
+#                  short report. The short report is the default so it stays short.
+# Exit codes: 0 = all required deps present (and, under --strict, the fresh
+#             handshake passed); 1 = one or more required checks failed.
 #
 # Required checks:
 #   - python3 + git           (base prerequisites, on PATH)
