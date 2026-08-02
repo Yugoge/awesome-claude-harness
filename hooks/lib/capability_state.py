@@ -342,7 +342,8 @@ def _epoch(iso: str | None) -> float | None:
 # --------------------------------------------------------------------------- #
 # aggregate PASS formula (AC-CAPGATE-04)
 # --------------------------------------------------------------------------- #
-def aggregate_verdict(state: dict, home: Path | None = None) -> tuple[str, str | None]:
+def aggregate_verdict(state: dict, home: Path | None = None,
+                      now: float | None = None) -> tuple[str, str | None]:
     """Return (overall, failure_reason). overall is 'PASS' or 'UNPROTECTED'.
 
     Every failure class carries a DISTINGUISHABLE reason so a negative test can
