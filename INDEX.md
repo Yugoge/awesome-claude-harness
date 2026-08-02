@@ -1,8 +1,8 @@
 # dot-claude
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-07-21T15:27:04Z*
-**Total entries**: 432
+*Last updated: 2026-08-02T04:19:03Z*
+**Total entries**: 450
 **Convention**: kebab
 
 ## Tree
@@ -47,6 +47,7 @@ dot-claude/
 │   ├── `pull.md` - Pull Command
 │   ├── `push.md` - Push Command
 │   ├── `redev.md` - dev workflow, context-light invocation — same task semantics as /dev, but assumes the /dev workflow instructions are already loaded. Pass --codex to enable adversarial codex consultation on each subagent's draft; default is self-review only.
+│   ├── `restart.md` - Resume every quota-interrupted subagent in the current Claude Code parent session from its original transcript and agent ID.
 │   ├── `spec-update.md` - Continuation spec update or temp session note (was /update then /spec-continue — renamed to avoid collision with MAP's /update portfolio mutation command)
 │   ├── `spec.md` - Create spec files for any dev workflow (/dev, /dev-overnight, or standalone reference). Pass --codex to enable adversarial codex consultation on each spec-subagent / QA dispatch; default is self-review only.
 │   ├── `stop.md` - Cancel active overnight time-lock + workflow-enforce so the session can terminate normally. User-invoked only — agents cannot self-stop.
@@ -59,6 +60,7 @@ dot-claude/
 │   │   ├── `generated-tests-policy.md` - `tests/generated/` policy — tracked but ignored, on purpose
 │   │   ├── `git-fswatch.md` - Git File Watcher (fswatch) Documentation
 │   │   ├── `graphify-integration.md` - Graphify Knowledge Graph Integration
+│   │   ├── `launch-plan.md` - Launch Plan — ROI-ranked channels, gated on recorded evidence
 │   │   ├── `lock-file-handling.md` - Git Lock File Handling
 │   │   ├── `monolith-split-plan.md` - Monolith Split Plan (Plan-of-Record)
 │   │   ├── `roadmap-decomposition-productization.md` - Roadmap: Monolith Decomposition + Productization
@@ -107,6 +109,7 @@ dot-claude/
 │   │   ├── `schema_registry.py` - Reads schemas/registry.json once and lazily loads referenced schema files
 │   │   ├── `specialist_yield.py` - Public API:
 │   │   ├── `subagent.py` - Single source of truth for is_subagent_context() and supporting helpers
+│   │   ├── `subagent_restart.py` - Claude Code persists each subagent transcript under the parent session.  This
 │   │   └── `todo_canonical.py` - Shared canonical todo validation utilities
 │   ├── tests/
 │   │   ├── `test_ac10_verify.sh` - Shell script
@@ -122,6 +125,7 @@ dot-claude/
 │   │   ├── `test_bulk_commit_sentinel.py` - Covers:
 │   │   ├── `test_cp_checkin.py` - of ba-spec-20260427-194324.md (P1 view-trigger removal + P2 generation field)
 │   │   ├── `test_do_taskid_mint.py` - Covers the root-cause fix for the do-report task-id collision (memory
+│   │   ├── `test_dual_runtime_lifecycle_e2e.py` - Real-entrypoint regressions for single-owner ordinary dev lifecycle.
 │   │   ├── `test_extract.py` - Unit tests for hooks/doc_sync/extract.py — covers all 4 defects + known-file cases.
 │   │   ├── `test_fail_closed_drift.py` - WHY THIS FILE EXISTS
 │   │   ├── `test_final_sweep.sh` - Final sweep — run inline AC checks and print PASS/FAIL summary.
@@ -160,6 +164,7 @@ dot-claude/
 │   ├── `posttool-overnight-file-check.py` - PostToolUse:Agent Hook — Contract-driven overnight file check
 │   ├── `posttool-overnight-loop.py` - PostToolUse:TodoWrite Hook: Overnight Loop Detection
 │   ├── `posttool-overnight-trace.py` - Writes one JSONL trace record per Agent invocation to:
+│   ├── `posttool-restart-sendmessage.py` - PostToolUse: record successful validated restart SendMessage calls.
 │   ├── `posttool-runcode-watchdog.py` - PostToolUse Hook: Cancel timeout watchdog after browser_run_code completes
 │   ├── `posttool-subagent-track.py` - PostToolUse:Agent Hook: Track subagent invocations in workflow bookmark
 │   ├── `posttool-todo-count.py` - PostToolUse Hook: Enforce canonical todo count immediately after TodoWrite
@@ -223,9 +228,11 @@ dot-claude/
 │   ├── `subagentstop-codex-enforce.py` - Activation logic:
 │   ├── `subagentstop-cp-enforce.py` - Description: SubagentStop hook for spec checkpoint enforcement (W6).
 │   ├── `subagentstop-e2e-enforce.py` - Activation logic:
+│   ├── `subagentstop-restart-track.py` - SubagentStop: persist response evidence for a /restart-resumed agent.
 │   ├── `userprompt-bulk-commit-capability.py` - human prompt, NOT from an LLM-emitted Bash command
 │   ├── `userprompt-consent-allowlist.sh` - UserPromptSubmit Hook: parse `/allow <pattern>` and write a single-use
 │   ├── `userprompt-doc-sync-check.py` - UserPromptSubmit Hook: Periodic file deletion detection for doc-sync
+│   ├── `userprompt-restart-authorize.py` - UserPromptSubmit: mint a session-bound capability for exact bare /restart.
 │   └── `userprompt-tmpfs-pressure.sh` - userprompt-tmpfs-pressure.sh — UserPromptSubmit hook (4th block, appended).
 ├── policies/
 │   ├── `specialist-degradation.v1.json` - JSON config: policy_version, defaults, per_specialist_overrides
@@ -336,8 +343,11 @@ dot-claude/
 │   ├── `regen-index-dirs.py` - hand-written prose outside the generated stats+tree block), then regenerate the
 │   ├── `repair-venv.sh` - repair-venv.sh — durably restore a Python venv when its bin/python3 symlink target is missing.
 │   ├── `resolve-close-report.sh` - Resolve the close-report path for a given TASK_ID using subproject path-walk.
+│   ├── `resolve-commit-repos.py` - The normal ``/commit`` workflow uses this helper before it writes any commit
+│   ├── `resolve-dev-artifact-chain.py` - The resolver never creates, refreshes, or rewrites artifacts.  It validates the
 │   ├── `resolve-dev-report.py` - Usage:
 │   ├── `resolve-spec-artifacts.py` - spec-id resolver shared by /spec finalize and every /dev* consumer)
+│   ├── `restart-subagents.py` - CLI bridge for the human-only /restart recovery workflow.
 │   ├── `runcode-watchdog.py` - Watchdog process for browser_run_code timeout enforcement
 │   ├── `scan-project.sh` - Description: Scan project structure and detect project type
 │   ├── `score-inject.sh` - Description: Emit a prompt-injection text block describing an agent's current rank/range
@@ -411,11 +421,19 @@ dot-claude/
 │   ├── `integration-test.sh` - integration-test.sh - Integration tests for git tracking solution
 │   ├── `test-lock-detection.sh` - Test script to verify git lock file detection and handling
 │   ├── `test_aggregate_dev_report.py` - Unit tests for scripts/aggregate-dev-report.py
+│   ├── `test_checkpoint_provenance.py` - These modes are DORMANT: no command, agent definition, or hook invokes them by
+│   ├── `test_codex_workflow_gate.py` - Regression tests for Codex-native workflow-plan compatibility.
+│   ├── `test_commit_multi_repo_plan.py` - Python script
+│   ├── `test_dev_artifact_chain_consumer_contracts.py` - Contract tests for shared /dev artifact-chain consumers.
 │   ├── `test_graphify_scripts.py` - tests/test_graphify_scripts.py — smoke tests for scripts/graphify_lib.py
 │   ├── `test_graphify_workflow_contract.py` - tests/test_graphify_workflow_contract.py — contract tests for graphify agent registration
+│   ├── `test_no_artificial_lifecycle_ceremony.py` - Prevent host metadata ceremonies from becoming ordinary lifecycle gates.
 │   ├── `test_overnight_loop_tz.py` - Verifies the overnight loop hook compares end_time correctly against the
+│   ├── `test_resolve_dev_artifact_chain.py` - Focused tests for the read-only /dev artifact-chain resolver.
 │   ├── `test_resolve_spec_artifacts.py` - resolver) + the static centralization lint (AC-B4 cases 1-12, task 20260530-092123)
+│   ├── `test_restart_command.py` - End-to-end unit coverage for the human-only /restart recovery protocol.
 │   ├── `test_specialist_yield.py` - Tests use a tmp dir for the yield log and the bundled production policy file
+│   ├── `test_todo_md_sync.py` - Regression tests for the session-start todo/Markdown drift detector.
 │   ├── `TESTING.md` - Test Topology & Runner Map (authoritative)
 │   ├── `verify-stop-spec-session-isolation.sh` - QA verification harness for stop-spec-coverage-enforce.py session isolation fix.
 │   └── `ws2_zero_literal_gate.py` - Scans the EXPLICITLY-defined load-bearing surfaces of a rendered fresh clone with
