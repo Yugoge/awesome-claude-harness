@@ -55,9 +55,26 @@ fi
 
 MAIN_ROOT="$(cd "${CLAUDE_OVERNIGHT_MAIN_ROOT}" 2>/dev/null && pwd -P || printf '%s' "${CLAUDE_OVERNIGHT_MAIN_ROOT}")"
 
-_blocked() {
-  echo "OVERNIGHT POLICY SHIM: refused git op targeting the main worktree/master ($1). Overnight actors are confined to the isolated worktree." >&2
+# Every block emits EXACTLY ONE dedicated machine-readable line carrying
+# exactly one `reason=` field and at most one `ref=` field (M4-REASON-TOKENS).
+# The reason token is a CONSTANT — never interpolated from the ref or branch
+# name. Human-readable prose goes on a SEPARATE line so the structured line
+# stays unambiguously parseable.
+_blocked_tok() {
+  # $1 = reason token (constant), $2 = ref verbatim (may be empty), $3 = prose
+  if [ -n "${2:-}" ]; then
+    echo "OVERNIGHT-SHIM-DENY reason=$1 ref=$2" >&2
+  else
+    echo "OVERNIGHT-SHIM-DENY reason=$1" >&2
+  fi
+  echo "OVERNIGHT POLICY SHIM: refused git op ($3). Overnight actors are confined to the isolated worktree." >&2
   exit 2
+}
+# Path/dir-based blocks. These are NOT branch-name decisions; `main_targeting`
+# is the OPTIONAL diagnostic token of M4-REASON-TOKENS and no criterion depends
+# on it. It is emitted for consistency of the structured line only.
+_blocked() {
+  _blocked_tok 'main_targeting' '' "$1"
 }
 
 # Parse the leading git global options to find -C / --git-dir / --work-tree and
