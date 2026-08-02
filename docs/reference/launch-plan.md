@@ -629,9 +629,9 @@ Submit it under **Safety / Guardrails**, not “Claude configurations.”
 
 ---
 
-## 13. Platform-rule row template and executor instructions
+## 8. Platform-rule row template and executor instructions
 
-### 13.1 Row template — copy this for every new target
+### 8.1 Row template — copy this for every new target
 
 Each `RULES-PASS` row carries these **five fields**, nested as a labelled sub-list inside that
 row's *required evidence artifact* cell. They are not extra table columns and not a separate
