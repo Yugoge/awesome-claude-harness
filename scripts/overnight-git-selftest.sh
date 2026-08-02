@@ -620,6 +620,14 @@ _attest_target() {
   src_hash="$(sha256sum "$expected_keystone" 2>/dev/null | awk '{print $1}')"
   [[ "$hooks_hash" == "$src_hash" ]] || return 1
   [[ -z "${CLAUDE_GIT_BLESSED_TOKEN:-}" ]] || return 1
+  # M8 / AC-13 — the value the keystone WILL ENFORCE must equal the target
+  # repository's resolved protected branch. "Will enforce" is defined
+  # BEHAVIOURALLY (see _enforces_branch): the exact installed keystone denies
+  # refs/heads/<N> through git's own reference-write path and does not deny a
+  # control ref. This assertion is placed AFTER the hash check on purpose — the
+  # negative fixture mismatches the governing STATE RECORD, not the keystone
+  # file, so the hash check passes and the branch assertion is what decides.
+  [[ "$ATTEST_EQUALITY_OK" == "true" ]] || return 1
   return 0
 }
 
