@@ -659,6 +659,9 @@ def main(argv=None) -> int:
     ap.add_argument("--source", default=str(Path(__file__).resolve().parents[2]))
     ap.add_argument("--json", action="store_true")
     ap.add_argument("--root", default=None, help="snapshot: directory to walk")
+    ap.add_argument("--keep-payload", dest="keep_payload", action="store_true",
+                    help="uninstall: remove the config-home footprint but keep the "
+                         "isolated payload directory on disk")
     args = ap.parse_args(argv)
 
     if args.command == "snapshot":
