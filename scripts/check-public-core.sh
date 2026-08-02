@@ -233,7 +233,10 @@ for key, e in entries.items():
         continue
     path = key[0]
     if not os.path.exists(os.path.join(root, path)):
-        if path in scan_set:
+        # Dangling entries are only meaningful against the full repository (git
+        # mode). In archive mode an absent path is EXPECTED — the membership
+        # manifest deliberately excludes the test net, so its entries do not ship.
+        if mode == "git":
             print(f"FAIL: residue-allowlist entry references a path that no longer exists -> {path}")
             failures += 1
         continue
