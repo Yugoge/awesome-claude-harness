@@ -675,7 +675,7 @@ def main(argv=None) -> int:
     ctx = Ctx(args)
 
     if args.command == "uninstall":
-        report = uninstall(ctx)
+        report = uninstall(ctx, keep_payload=args.keep_payload)
         if args.json:
             print(json.dumps(report, indent=2))
         else:
