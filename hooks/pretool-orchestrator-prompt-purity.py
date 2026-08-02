@@ -150,8 +150,13 @@ USER_VERBATIM_RE = re.compile(
     r"<USER_VERBATIM>.*?</USER_VERBATIM>",
     re.DOTALL,
 )
+# Home-agnostic: the dev-registry heredoc must be redacted whatever home the
+# harness is installed under. The previous author-absolute `/root/.claude/`
+# prefix still matched a literal /root path under any uid, but FAILED to match a
+# dev-registry heredoc rooted at a non-root home, so that block escaped
+# redaction on every non-root install. `\S*` keeps the /root form matching.
 DEV_REGISTRY_HEREDOC_RE = re.compile(
-    r"cat\s*>\s*/root/\.claude/dev-registry/[^\n]*<<\s*['\"]?REGEOF['\"]?"
+    r"cat\s*>\s*\S*/dev-registry/[^\n]*<<\s*['\"]?REGEOF['\"]?"
     r".*?\nREGEOF\b",
     re.DOTALL,
 )
