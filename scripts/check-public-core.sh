@@ -74,10 +74,19 @@ WS_MARKER='/dev/shm/dev-workspace/dot-claude'
 # allowlisted — it must be fixed.
 # ---------------------------------------------------------------------------
 residue_audit() {
-  python3 - "$1" "$2" <<'PY'
-import hashlib, io, json, os, re, sys, tokenize
+  python3 - "$@" <<'PY'
+import hashlib, io, json, os, re, subprocess, sys, tokenize
 
-root, allowlist_rel = sys.argv[1], sys.argv[2]
+root, allowlist_rel, mode = sys.argv[1], sys.argv[2], sys.argv[3]
+if mode == "git":
+    scan_paths = subprocess.run(["git", "-C", root, "ls-files", "--", *sys.argv[4:]],
+                                capture_output=True, text=True).stdout.split()
+else:
+    scan_paths = []
+    for dirpath, _dirs, files in os.walk(root):
+        for f in files:
+            scan_paths.append(os.path.relpath(os.path.join(dirpath, f), root))
+    scan_paths.sort()
 RESIDUE = re.compile(r"/root/|/home/[a-z][a-z0-9_-]*/|/Users/[A-Za-z][A-Za-z0-9_-]*/")
 DOC_EXTS = {".md", ".txt", ".rst"}
 CODE_EXTS = {".py", ".sh", ".bash", ".mjs", ".js", ".ts"}
