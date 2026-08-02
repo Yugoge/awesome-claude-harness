@@ -659,7 +659,7 @@ denote the same field.
   `awesome-*` target list and does not name a video host, because neither is knowable at authoring
   time and a guessed list would rot.
 
-### 13.3 Labelling requirement
+### 8.3 Labelling requirement
 
 **Every statement in this document about any platform's rules is `tier_3_unverified` and was not
 verified in-cycle.** No repository file may be cited as evidence *about* a platform's rules. The
