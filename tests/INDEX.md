@@ -1,8 +1,8 @@
 # tests
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-07-24T14:20:20Z*
-**Total entries**: 92
+*Last updated: 2026-08-02T04:12:54Z*
+**Total entries**: 100
 **Convention**: kebab
 
 ## Tree
@@ -92,11 +92,19 @@ tests/
 ├── `integration-test.sh` - integration-test.sh - Integration tests for git tracking solution
 ├── `test-lock-detection.sh` - Test script to verify git lock file detection and handling
 ├── `test_aggregate_dev_report.py` - Unit tests for scripts/aggregate-dev-report.py
+├── `test_checkpoint_provenance.py` - These modes are DORMANT: no command, agent definition, or hook invokes them by
+├── `test_codex_workflow_gate.py` - Regression tests for Codex-native workflow-plan compatibility.
+├── `test_commit_multi_repo_plan.py` - Python script
+├── `test_dev_artifact_chain_consumer_contracts.py` - Contract tests for shared /dev artifact-chain consumers.
 ├── `test_graphify_scripts.py` - tests/test_graphify_scripts.py — smoke tests for scripts/graphify_lib.py
 ├── `test_graphify_workflow_contract.py` - tests/test_graphify_workflow_contract.py — contract tests for graphify agent registration
+├── `test_no_artificial_lifecycle_ceremony.py` - Prevent host metadata ceremonies from becoming ordinary lifecycle gates.
 ├── `test_overnight_loop_tz.py` - Verifies the overnight loop hook compares end_time correctly against the
+├── `test_resolve_dev_artifact_chain.py` - Focused tests for the read-only /dev artifact-chain resolver.
 ├── `test_resolve_spec_artifacts.py` - resolver) + the static centralization lint (AC-B4 cases 1-12, task 20260530-092123)
+├── `test_restart_command.py` - End-to-end unit coverage for the human-only /restart recovery protocol.
 ├── `test_specialist_yield.py` - Tests use a tmp dir for the yield log and the bundled production policy file
+├── `test_todo_md_sync.py` - Regression tests for the session-start todo/Markdown drift detector.
 ├── `TESTING.md` - Test Topology & Runner Map (authoritative)
 ├── `verify-stop-spec-session-isolation.sh` - QA verification harness for stop-spec-coverage-enforce.py session isolation fix.
 └── `ws2_zero_literal_gate.py` - Scans the EXPLICITLY-defined load-bearing surfaces of a rendered fresh clone with
