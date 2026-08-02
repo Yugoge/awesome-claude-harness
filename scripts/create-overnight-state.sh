@@ -305,8 +305,13 @@ WORKTREE_HEAD_AT_START=""
 ISOLATION_KIND=""
 WORKTREE_SCRIPT="$(dirname "$0")/create-worktree.sh"
 WORKTREE_NAME="overnight-$(date +%Y%m%d)-${SESSION_ID:0:8}"
+# M3-ORDERING: the worktree script's `worktree add -b` is the launcher's most
+# ref-mutating pre-state operation (old 0000... != new, so the keystone evaluates
+# it). It is out of scope for edits, so the marker is cleared AT THE CALL
+# BOUNDARY: the whole child process tree, and therefore every git call inside it,
+# runs unmarked. Per invocation only — the parent's own environment is untouched.
 if [[ -x "$WORKTREE_SCRIPT" ]] && \
-   WORKTREE_RESULT=$(bash "$WORKTREE_SCRIPT" --project-dir "$MAIN_ROOT" "$WORKTREE_NAME" 2>/dev/null); then
+   WORKTREE_RESULT=$("${GIT_UNMARKED_ENV[@]}" bash "$WORKTREE_SCRIPT" --project-dir "$MAIN_ROOT" "$WORKTREE_NAME" 2>/dev/null); then
     WORKTREE_PATH=$(echo "$WORKTREE_RESULT" | grep -oP 'WORKTREE_PATH=\K\S+' || echo '')
     WORKTREE_BRANCH=$(echo "$WORKTREE_RESULT" | grep -oP 'WORKTREE_BRANCH=\K\S+' || echo '')
     if [[ -n "$WORKTREE_PATH" && -d "$WORKTREE_PATH" ]]; then
