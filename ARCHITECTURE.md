@@ -1,4 +1,4 @@
-# Architecture — `.claude` Agent Operating System
+# Architecture — `.claude` Safety & Release Harness
 
 > Deep technical architecture and design rationale for maintainers.
 > Last updated: 2026-07-20
