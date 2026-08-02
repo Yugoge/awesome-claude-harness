@@ -187,6 +187,12 @@ The state file has already been created by the UserPromptSubmit hook at `.claude
 
 If no state file exists, HARD ABORT. Do not fabricate a state file and do not proceed; the launch hook fails closed when it cannot produce a validated isolated worktree, so a missing state means the overnight actor must not run.
 
+**`protected_branch` (schema v9)**: the record carries the repository's protected branch name, resolved once by `create-overnight-state.sh` in the primary checkout, at launch, before the worktree exists. It is resolved from **local refs only** (`refs/remotes/origin/HEAD`); the launch **refuses and writes no state** when it cannot be resolved, because a chain that protects a branch the repository does not have is inert. The value is **immutable** (`update-overnight-state.sh` rejects `--set protected_branch`) and is the operand the keystone (`hooks/git-keystone/reference-transaction`) and the policy shim (`scripts/overnight-git/git-policy-shim`) compare against at decision time — neither holds a branch-name literal or a fixed list of names. Both consumers **fail closed** when no live record declares the field: they refuse the ref write and name `/stop` + relaunch as the remedy. A session launched under schema v8 therefore cannot be upgraded in place — release it with `/stop` and relaunch.
+
+It is a **different concept from `main_branch_at_start`**, which records whichever branch the primary checkout happened to be sitting on at launch and is never used for protection.
+
+Scope of the guarantee: correct enforcement against drift and misconfiguration, plus honest attestation. The shared common-dir remains read-write (see the KNOWN ACCEPTED LIMITATION below), so this is not a claim about a malicious actor.
+
 **WORKTREE GUARD**: Check the state file's `worktree_path` field. The launch hook guarantees a validated isolated worktree before any state is written, so `worktree_path` is always a valid isolated root.
 - `cd` into the validated `worktree_path`.
 - If `worktree_path` is missing or invalid: HARD ABORT. Do not create state manually. Do not call EnterWorktree. Do not continue on the main project path. The session simply does not run.
