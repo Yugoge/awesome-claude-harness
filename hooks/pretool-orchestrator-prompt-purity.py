@@ -49,9 +49,14 @@ from datetime import datetime
 from pathlib import Path
 
 
+# Rule-doc pointers are derived from THIS hook's own on-disk location
+# (<harness-home>/hooks/<name>.py), so the stderr message names the files that
+# actually exist for the invoking user instead of an author-absolute literal.
+_HARNESS_HOME = Path(__file__).resolve().parent.parent
+
 RULE_DOC_POINTER = (
-    'See /root/.claude/commands/dev.md "Orchestrator Prompt Purity" section'
-    ' and /root/.claude/CLAUDE.md "Orchestrator Prompt Purity" section.'
+    f'See {_HARNESS_HOME / "commands" / "dev.md"} "Orchestrator Prompt Purity" section'
+    f' and {_HARNESS_HOME / "CLAUDE.md"} "Orchestrator Prompt Purity" section.'
 )
 
 STDERR_HEADER = (
