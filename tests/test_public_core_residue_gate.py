@@ -212,16 +212,16 @@ def test_duplicate_of_allowlisted_identical_line_is_detected(pristine, tmp_path)
     pytest.skip("no markdown allowlist entry available")
 
 
-def test_stale_and_dangling_allowlist_entries_are_reported(pristine):
+def test_stale_and_dangling_allowlist_entries_are_reported(pristine, tmp_path):
     """AC6 d: a fingerprint that no longer matches, and a path that no longer
     exists, must each be reported rather than silently covering new content."""
-    root = _copy(pristine)
+    root = _copy(pristine, tmp_path)
     doc = json.loads((root / ALLOWLIST).read_text(encoding="utf8"))
     doc["entries"].append({"path": "agents/dev.md", "fingerprint": "0" * 16, "ordinal": 1,
                            "class": "comment_or_narrative_doc", "rationale": "synthetic stale entry"})
     doc["entries"].append({"path": "agents/does-not-exist.md", "fingerprint": "1" * 16, "ordinal": 1,
                            "class": "comment_or_narrative_doc", "rationale": "synthetic dangling entry"})
-    (root / ALLOWLIST).write_text(json.dumps(doc, indent=2), encoding="utf8")
+    _write(root / ALLOWLIST, json.dumps(doc, indent=2))
     _stage(root)
     r = _run(root)
     assert r.returncode != 0
