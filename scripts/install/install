@@ -14,7 +14,12 @@
 #   --config-dir <dir>    Your Claude config home. Overrides detection, which is
 #                         ${CLAUDE_CONFIG_DIR:-$HOME/.claude} — the same expression
 #                         this repo's own permission hook uses.
-#   --allow-unprotected   Install even when the host-capability handshake fails.
+#   --require-handshake   Refuse to install unless the host-capability handshake
+#                         returns a fresh PASS. Off by default: a host that has
+#                         never installed the harness cannot pass a handshake for
+#                         components it does not have yet. A failing handshake is
+#                         always printed as a persistent UNPROTECTED HOST verdict
+#                         and recorded in the install inventory.
 #   --json                Machine-readable output.
 #
 # Exit codes: 0 = success; 1 = install failed; 2 = preflight failed (NOTHING was
