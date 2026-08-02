@@ -512,6 +512,7 @@ def apply_plan(ctx: Ctx, plan: dict) -> dict:
                 journal.append(("symlink", target, None))
                 created.append({"path": rel, "kind": "link",
                                 "target": str(ctx.isolated_root)})
+                created[-1]["sha256"] = None
             elif kind == "file":
                 if rel == "settings.json":
                     content = plan["settings_plan"]["content"]
