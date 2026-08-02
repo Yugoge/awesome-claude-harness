@@ -389,7 +389,7 @@ naming decision and §5 G's wording, reproduced as that source line reads:
    appendix does not satisfy this; placement at the end defeats the requirement to state
    limitations prominently.
 3. The limitations block is re-derived per §6.2 and carries the §7 finding in both directions.
-4. Body copy is **DRAFT — pending §5 G pitch wording** until G lands, so it cannot silently
+4. Body copy is **DRAFT — awaiting §5 G pitch wording** until G lands, so it cannot silently
    contradict G.
 
 ### Hostile-commenter register
@@ -439,7 +439,7 @@ subject to §5 E's naming decision and §5 G's wording (not mandated as final co
    a promise made to the reader, not only a gate: a post that describes the profile without
    offering it does not satisfy the requirement.
 3. The limitations block is re-derived per §6.2.
-4. Body copy is **DRAFT — pending §5 G pitch wording**.
+4. Body copy is **DRAFT — awaiting §5 G pitch wording**.
 
 ### Hostile-commenter register
 
@@ -558,7 +558,7 @@ Follow with one GIF per failure class, one architecture image, the adversarial r
 
 2. **A dedicated limitations post** inside the thread — its own post, not a clause appended to
    another post. It is re-derived per §6.2 and carries the §7 finding in both directions.
-3. Body copy is **DRAFT — pending §5 G pitch wording**.
+3. Body copy is **DRAFT — awaiting §5 G pitch wording**.
 
 ### Hostile-commenter register
 
