@@ -14,6 +14,20 @@
 
 set -euo pipefail
 
+# --- M3-ORDERING: neutralise the actor marker for THIS SCRIPT'S OWN git calls ---
+# Every git invocation this launcher issues runs in the PRE-STATE region: no
+# overnight session-state record exists yet, so a fail-closed protection consumer
+# cannot resolve a protected branch. The keystone then denies the launcher's own
+# ref writes (`worktree add -b`, `clone`, `checkout -b`) and the policy shim
+# blocks every main-targeting op unconditionally, repo-identity reads included.
+# When /dev-overnight is invoked from a context that ALREADY exports
+# CLAUDE_OVERNIGHT_ACTOR=1 (ambient inheritance), that is exactly what happens.
+# Each invocation below therefore runs through this array, which clears the
+# marker FOR THAT INVOCATION ONLY. The variable is never unset process-wide and
+# is never reassigned here: the overnight actor's own later operations must keep
+# it, because that marker is what the whole protection chain keys on.
+GIT_UNMARKED=(env -u CLAUDE_OVERNIGHT_ACTOR git)
+
 # --- Defaults ---
 END_TIME=""
 FOCUS=""
