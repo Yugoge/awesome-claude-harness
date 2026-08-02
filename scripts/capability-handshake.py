@@ -134,8 +134,14 @@ def cross_check_event(receipt_rec: dict, label: str, probe: dict, window_start: 
     if not internal_ok:
         return "FAIL", "transcript_session_mismatch", discriminator
 
-    # (4) the transcript CONTAINS THIS RUN'S NONCE, placed there by the live host.
-    if probe.get("nonce") not in text:
+    # (4) the transcript CONTAINS THIS RUN'S NONCE, placed there by the live host
+    # AFTER the byte offset recorded when the probe opened. Searching the whole
+    # file would accept a nonce that was already present, so the offset is what
+    # ties the appearance to this probe window rather than to history. It still
+    # does not prove the lifecycle dispatch CAUSED the receipt -- see the
+    # honest-limits clause, which names that residual explicitly.
+    offset = int((probe.get("transcript_offsets") or {}).get(str(tpath), 0))
+    if probe.get("nonce") not in text[offset:]:
         return "FAIL", "transcript_missing_run_nonce", discriminator
 
     # (5) transcript mtime advanced inside the probe window.
