@@ -590,7 +590,14 @@ jq -n \
         pm_retro_reports: [],
         unresolved_issues: [],
         codex_required: $codex_required
-    }' > "$TMP_FILE"
+    }' > "$OUT_TARGET"
+
+# M1-SEAM: the component mode stops here. Nothing above it created a worktree,
+# clone, branch, state file, temporary file, cycle-contract file, checklist or
+# bookmark, and nothing below it runs.
+if [[ "$EMIT_RECORD_ONLY" == "1" ]]; then
+    exit 0
+fi
 
 # Atomic move
 mv "$TMP_FILE" "$STATE_FILE"
