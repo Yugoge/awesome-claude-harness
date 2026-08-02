@@ -87,7 +87,7 @@ report green on work that had not been done.
 | **E-PASS** | §5 E | The canonical public name / CLI / framing is consistently present. |
 | **F-PASS** | §5 F | A reproducible demo satisfying its action → block → reason → remedy → single-use-grant sequence and the provenance rules in `docs/demo-capture.md`. Any arbitrary asset is insufficient. |
 | **G-PASS** | §5 G | The approved pitch, audience and limitations contract exist. **E and G are separate gates; do not merge them.** |
-| **RULES-PASS** | Executor (human, at execution time) | Per external target, a recorded row carrying the five fields of §13. Missing, ambiguous or conflicting rules **block that target**. |
+| **RULES-PASS** | Executor (human, at execution time) | Per external target, a recorded row carrying the five fields of §8. Missing, ambiguous or conflicting rules **block that target**. |
 
 ### 3.1 Diagnostics are not gates
 
