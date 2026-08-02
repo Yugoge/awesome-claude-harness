@@ -1041,11 +1041,16 @@ def _embedded_bin():
         return p
     for cand in (
         "/usr/lib/node_modules/@anthropic-ai/claude-code/bin/claude.exe",
-        "/root/.local/bin/claude",
+        # Per-user install location of the INVOKING user (not an author literal):
+        # this is the same path the author's /root/.local/bin/claude resolved to
+        # when running as root, and it resolves correctly for every other user.
+        os.path.join(os.path.expanduser("~"), ".local", "bin", "claude"),
     ):
         if os.path.exists(cand):
             return cand
-    return None
+    # Last resort: ordinary PATH discovery, so a system/user install in any
+    # location still enables the probe instead of silently disabling it.
+    return shutil.which("claude")
 
 
 def _worst_case_input(path):
