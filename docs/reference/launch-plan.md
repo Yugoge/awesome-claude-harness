@@ -106,6 +106,11 @@ requirement itself; they are not the whole test — **a channel may be recorded 
 every one of its required gate rows is PASS**, and any non-PASS required gate holds the channel
 BLOCKED.
 
+**These conditions are necessary and never sufficient.** A fully-PASSing gate table records that
+the recorded preconditions are met; it does not authorize execution and must never be read as
+doing so (§0.1). The decision to publish remains a separate human decision taken outside this
+pipeline, and a complete gate table is an input to that decision, not a substitute for it.
+
 ---
 
 ## 4. Gate table schema and status vocabulary

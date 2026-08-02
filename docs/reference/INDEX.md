@@ -1,8 +1,8 @@
 # reference
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-08-02T04:09:45Z*
-**Total entries**: 13
+*Last updated: 2026-08-02T04:23:51Z*
+**Total entries**: 14
 **Convention**: kebab
 
 ## Tree
@@ -14,6 +14,7 @@ reference/
 ├── `generated-tests-policy.md` - `tests/generated/` policy — tracked but ignored, on purpose
 ├── `git-fswatch.md` - Git File Watcher (fswatch) Documentation
 ├── `graphify-integration.md` - Graphify Knowledge Graph Integration
+├── `launch-plan.md` - Launch Plan — ROI-ranked channels, gated on recorded evidence
 ├── `lock-file-handling.md` - Git Lock File Handling
 ├── `monolith-split-plan.md` - Monolith Split Plan (Plan-of-Record)
 ├── `roadmap-decomposition-productization.md` - Roadmap: Monolith Decomposition + Productization
