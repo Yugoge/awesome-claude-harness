@@ -62,24 +62,30 @@ ENGINE="$SELF_DIR/installer.py"
 PRE="$SELF_DIR/preflight"
 PRE_ARGS=(--source "$SOURCE_DIR")
 [ -n "$MATRIX" ] && PRE_ARGS+=(--matrix "$MATRIX")
-[ "$ALLOW_UNPROTECTED" -eq 1 ] && PRE_ARGS+=(--allow-unprotected)
+[ "$REQUIRE_HANDSHAKE" -eq 1 ] && PRE_ARGS+=(--require-handshake)
 PASS+=(--profile "$PROFILE" --source "$SOURCE_DIR")
 [ "$JSON" -eq 1 ] && PASS+=(--json)
 
+HANDSHAKE_RESULT_FILE="$(mktemp)"
+export HANDSHAKE_RESULT_FILE
+cleanup() { rm -f "$HANDSHAKE_RESULT_FILE"; }
+trap cleanup EXIT
+
 # ── PREFLIGHT — strictly before any mutation ────────────────────────────────── #
 if [ "$DRY_RUN" -eq 1 ]; then
-  # A dry run writes nothing, so a fail-closed abort would protect nothing and
-  # would hide the very plan the user asked to see. The preflight still RUNS and
-  # its verdict is still printed; it just does not block a read-only preview.
+  # A dry run writes nothing, so aborting would protect nothing and would hide the
+  # very plan the user asked to see. The preflight still RUNS and its verdict is
+  # still printed; it just does not block a read-only preview.
   echo "=== preflight (advisory for --dry-run; a real apply aborts on failure) ==="
-  "$PRE" "${PRE_ARGS[@]}" --allow-unprotected
+  "$PRE" "${PRE_ARGS[@]}"
   PRE_RC=$?
   if [ "$PRE_RC" -ne 0 ]; then
     echo "" >&2
     echo "install: preflight reported failures — a REAL apply would ABORT here and write nothing." >&2
   fi
   echo ""
-  exec "$PY" "$ENGINE" plan "${PASS[@]}"
+  "$PY" "$ENGINE" plan "${PASS[@]}"
+  exit $?
 fi
 
 echo "=== preflight ==="
@@ -90,4 +96,11 @@ if ! "$PRE" "${PRE_ARGS[@]}"; then
 fi
 echo ""
 
-exec "$PY" "$ENGINE" apply "${PASS[@]}"
+# Record the handshake verdict in the install inventory: an install performed on an
+# unprotected host must stay auditable after the terminal output has scrolled away.
+# shellcheck source=/dev/null
+[ -s "$HANDSHAKE_RESULT_FILE" ] && . "$HANDSHAKE_RESULT_FILE"
+export HARNESS_INSTALL_HANDSHAKE="${HARNESS_INSTALL_HANDSHAKE:-unknown}"
+
+"$PY" "$ENGINE" apply "${PASS[@]}"
+exit $?
