@@ -64,7 +64,7 @@ validate_worktree() {
         "${GITC[@]}" worktree list --porcelain 2>/dev/null | grep -Fxq "worktree $wt" || return 1
     # toplevel resolves to the worktree
     local top
-    top="$(git -C "$wt" rev-parse --show-toplevel 2>/dev/null || echo '')"
+    top="$("${GIT_UNMARKED[@]}" -C "$wt" rev-parse --show-toplevel 2>/dev/null || echo '')"
     [[ "$(realpath "$top" 2>/dev/null || echo "$top")" == "$rp_wt" ]] || return 1
     # branch matches and is not master
     local cur
