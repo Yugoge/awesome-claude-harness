@@ -52,7 +52,7 @@ set -uo pipefail
 SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 SOURCE_DIR="$(cd "$SELF_DIR/../.." && pwd -P)"
 MATRIX=""
-ALLOW_UNPROTECTED=0
+REQUIRE_HANDSHAKE=0
 SKIP_DEEP=0
 QUIET=0
 PYTHON_FLOOR_MAJOR=3
