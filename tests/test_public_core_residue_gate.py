@@ -229,17 +229,14 @@ def test_stale_and_dangling_allowlist_entries_are_reported(pristine, tmp_path):
     assert "path that no longer exists" in r.stdout
 
 
-def test_operational_literal_cannot_be_relabelled_as_a_comment(pristine):
+def test_operational_literal_cannot_be_relabelled_as_a_comment(pristine, tmp_path):
     """AC12: the class is re-derived from source STRUCTURE. Injecting a live code
     literal and hand-labelling it `comment_or_narrative_doc` must still fail —
     otherwise the classification audit is circular."""
-    root = _copy(pristine)
+    root = _copy(pristine, tmp_path)
     assert _run(root).returncode == 0
-    victim = root / "hooks" / "lib" / "claude_home.py"
     line = 'SNEAKY_OPERATIONAL_PATH = "/root/.claude/secret"'
-    with victim.open("a", encoding="utf8") as fh:
-        fh.write("\n" + line + "\n")
-    import hashlib
+    _append(root / "hooks" / "lib" / "claude_home.py", "\n" + line + "\n")
     doc = json.loads((root / ALLOWLIST).read_text(encoding="utf8"))
     doc["entries"].append({
         "path": "hooks/lib/claude_home.py",
