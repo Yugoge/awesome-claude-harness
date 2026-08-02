@@ -1,8 +1,8 @@
 # dot-claude
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-08-02T06:25:34Z*
-**Total entries**: 450
+*Last updated: 2026-08-02T06:58:17Z*
+**Total entries**: 461
 **Convention**: kebab
 
 ## Tree
@@ -235,8 +235,13 @@ dot-claude/
 │   ├── `userprompt-restart-authorize.py` - UserPromptSubmit: mint a session-bound capability for exact bare /restart.
 │   └── `userprompt-tmpfs-pressure.sh` - userprompt-tmpfs-pressure.sh — UserPromptSubmit hook (4th block, appended).
 ├── policies/
+│   ├── `public-core-residue-allowlist.v1.json` - Seed exemption set for scripts/check-public-core.sh section 5 (generic author-path residue gate). Set-based, NOT an aggregate-count ratchet: the key is (path, fingerprint, ordinal), so deleting one allowlisted occurrence never creates capacity for an unrelated new one. Every entry's `class` is RE-DERIVED structurally by the gate from the live line; a hand-written label that the source structure does not support is rejected. Entries were seeded from a live full-ledger scan, never from a number quoted in a spec.
 │   ├── `specialist-degradation.v1.json` - JSON config: policy_version, defaults, per_specialist_overrides
 │   └── `tool-policy.v1.json` - JSON config: policy_version, default_action, _shared_protected_path_prefixes, _note, roles
+├── requirements/
+│   ├── `py310.txt` - txt file
+│   ├── `py311.txt` - txt file
+│   └── `py312.txt` - txt file
 ├── schemas/
 │   ├── `context.v1.json` - BA-produced wave/task plan and root cause analysis. Read by dev subagents to understand implementation scope.
 │   ├── `cycle-contract.v1.json` - Single source of truth per overnight cycle. Mirrors architect.contract_manifest_schema.json_shape from architect-spec-20260426-090235.json. Written by the orchestrator at end of Step 2c (PM Triage) and again at end of Step 3 (after pipeline IDs are known). Read by the contract-aware hooks (pretool-subagent-enforce, posttool-subagent-track, posttool-overnight-file-check) and check-overnight-reports.py.
@@ -251,6 +256,9 @@ dot-claude/
 │   ├── install/
 │   │   ├── `render-settings` - render-settings file
 │   │   └── `tmp-cleanup-install.sh` - /usr/local/sbin/tmp-cleanup.sh
+│   ├── lib/
+│   │   ├── `make_sbom.py` - The SBOM is built from the archive's real contents, not from the source
+│   │   └── `release_membership.py` - Single source of truth shared by every consumer, so the archive builder, the
 │   ├── modern-git-slot/
 │   ├── overnight-git/
 │   │   ├── `git-policy-shim` - git-policy-shim file
@@ -359,6 +367,7 @@ dot-claude/
 │   ├── `update-gitignore.sh` - update-gitignore.sh - Auto-update .gitignore with project-specific rules
 │   ├── `update-overnight-state.sh` - update-overnight-state.sh — Atomically update overnight state file
 │   ├── `verify-claims.sh` - Description: Self-verifying headline-claims gate. Recomputes the wired-hook entry count and
+│   ├── `verify-release-manifest.sh` - Description: Verify a PUBLISHED release artifact end-to-end, WITHOUT rebuilding it.
 │   ├── `write-bulk-commit-sentinel.py` - Invoked from commands/commit.md Step 5 (BULK=true) to authorize the
 │   ├── `write-codex-enforce.sh` - Writes codex-enforce.json into the dev-registry for the given session.
 │   ├── `write-commit-grant.py` - Invoked from `commands/commit.md` Step 5 (non-bulk mode) to author a
@@ -429,6 +438,7 @@ dot-claude/
 │   ├── `test_graphify_workflow_contract.py` - tests/test_graphify_workflow_contract.py — contract tests for graphify agent registration
 │   ├── `test_no_artificial_lifecycle_ceremony.py` - Prevent host metadata ceremonies from becoming ordinary lifecycle gates.
 │   ├── `test_overnight_loop_tz.py` - Verifies the overnight loop hook compares end_time correctly against the
+│   ├── `test_public_core_residue_gate.py` - These are the discriminating controls for the "Make CI FAIL (not advisory) on
 │   ├── `test_resolve_dev_artifact_chain.py` - Focused tests for the read-only /dev artifact-chain resolver.
 │   ├── `test_resolve_spec_artifacts.py` - resolver) + the static centralization lint (AC-B4 cases 1-12, task 20260530-092123)
 │   ├── `test_restart_command.py` - End-to-end unit coverage for the human-only /restart recovery protocol.
@@ -444,7 +454,7 @@ dot-claude/
 │       ├── `manifest.schema.md` - Trace manifest schema
 │       ├── `sample-hook-trace.json` - JSON config: meta, lines
 │       └── `sample-trace.json` - JSON config: meta, lines
-├── `ARCHITECTURE.md` - Architecture — `.claude` Agent Operating System
+├── `ARCHITECTURE.md` - Architecture — `.claude` Safety & Release Harness
 ├── `CHANGELOG.md` - Changelog
 ├── `CLAUDE.md` - Global Claude Code Configuration
 ├── `conftest.py` - Root conftest — `generated` marker gate for tests/generated/.
@@ -454,6 +464,7 @@ dot-claude/
 ├── `PUBLIC-CORE.md` - PUBLIC-CORE.md — public/private boundary manifest
 ├── `push.sh` - push.sh - Global pre-push checks: git identity + fetch/pull/status
 ├── `pytest.ini` - ini file
+├── `release-membership.v1.json` - EXPLICIT release-membership manifest: the exact set of tracked paths that ship in a release archive. Membership is an edit to this file, never a silent consequence of a class rule. It is deliberately NOT 'public-core + all shared/infra': PUBLIC-CORE.md calls tests/ 'not itself the shippable harness', so a blanket class rule would drag non-shippable fixtures into the distribution. It is also not public-core-only: requirements.txt and requirements/ are shared/infra yet are required to install, so a public-core-only archive would be unusable.
 ├── `requirements.txt` - Python dependency manifest for the Claude Code harness venv
 ├── `settings.json` - Claude Code harness configuration (permissions, hooks, env, model)
 ├── `settings.template.json` - Distributable harness settings template (uses CLAUDE_HOME placeholders)
