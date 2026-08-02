@@ -1,0 +1,158 @@
+# Release pipeline — tag-triggered, build-once, publish signed + checksummed + SBOM'd.
+#
+# Design rules this workflow exists to enforce, each of which was a real gap:
+#   * the archive is built EXACTLY ONCE. The digest, the SBOM, the attestation and
+#     the upload all reference that same file. Nothing is rebuilt between hashing
+#     and publishing, so the digest cannot describe bytes other than the ones
+#     consumers download.
+#   * membership is an EXPLICIT manifest (release-membership.v1.json), not a class
+#     rule. Public-core plus only the shared/infra assets required to install and
+#     run; tests/ is excluded because the ledger itself calls it non-shippable.
+#   * the residue/boundary gate runs against the EXTRACTED ARCHIVE, not the source
+#     checkout — scanning the checkout proves nothing about packaged bytes.
+#   * the release is verified by downloading the PUBLISHED asset back and checking
+#     it end-to-end without rebuilding.
+#   * a pre-release VERSION publishes a GitHub pre-release, so the published
+#     release can never present as stable while the in-tree marker says otherwise.
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write        # create the release and upload assets
+  id-token: write        # keyless signing for build provenance
+  attestations: write    # record the provenance attestation
+
+jobs:
+  release:
+    name: build, attest and publish
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        # Pinned to a full 40-char commit SHA, not a mutable tag.
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.12"
+
+      - name: Assert tag matches VERSION
+        # Prevents publishing an archive whose in-tree version marker disagrees
+        # with the tag it ships under.
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME}"
+          version="$(tr -d '[:space:]' < VERSION)"
+          if [ "${tag#v}" != "$version" ]; then
+            echo "::error::tag $tag does not match VERSION $version"
+            exit 1
+          fi
+          echo "tag $tag matches VERSION $version"
+          if printf '%s' "$version" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+-'; then
+            echo "prerelease=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "prerelease=false" >> "$GITHUB_OUTPUT"
+          fi
+        id: version
+
+      - name: Stage the release-membership path set
+        # Resolved from the explicit manifest via the SAME module the residue gate
+        # and the published-artifact verifier use, so the three cannot disagree.
+        run: |
+          set -euo pipefail
+          stage="$RUNNER_TEMP/stage/claude-harness-${GITHUB_REF_NAME}"
+          mkdir -p "$stage"
+          python3 scripts/lib/release_membership.py --from-git --root . \
+            --manifest release-membership.v1.json > "$RUNNER_TEMP/members.txt"
+          count="$(wc -l < "$RUNNER_TEMP/members.txt")"
+          if [ "$count" -lt 1 ]; then
+            echo "::error::release-membership resolved an empty path set"
+            exit 1
+          fi
+          echo "staging $count path(s)"
+          while IFS= read -r rel; do
+            [ -n "$rel" ] || continue
+            mkdir -p "$stage/$(dirname "$rel")"
+            cp -p "$rel" "$stage/$rel"
+          done < "$RUNNER_TEMP/members.txt"
+          echo "STAGE=$stage" >> "$GITHUB_ENV"
+
+      - name: Gate the staged tree (path set == manifest, zero residue)
+        # Runs BEFORE packaging so a violation fails the release rather than
+        # shipping. The same gate runs again on the extracted archive below.
+        run: bash scripts/check-public-core.sh --scan-root "$STAGE" --release-manifest release-membership.v1.json
+
+      - name: Build the archive (EXACTLY ONCE)
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/claude-harness-${GITHUB_REF_NAME}.tar.gz"
+          # Deterministic: sorted entries, fixed owner/mtime, no gzip timestamp.
+          tar --sort=name --owner=0 --group=0 --numeric-owner \
+              --mtime="@${SOURCE_DATE_EPOCH:-0}" \
+              -C "$(dirname "$STAGE")" -cf - "$(basename "$STAGE")" \
+            | gzip -n > "$out"
+          echo "ARCHIVE=$out" >> "$GITHUB_ENV"
+          echo "ARCHIVE_NAME=$(basename "$out")" >> "$GITHUB_ENV"
+        env:
+          SOURCE_DATE_EPOCH: 0
+
+      - name: Checksum the FINAL archive bytes
+        run: |
+          set -euo pipefail
+          cd "$(dirname "$ARCHIVE")"
+          sha256sum "$ARCHIVE_NAME" > "$ARCHIVE_NAME.sha256"
+          digest="$(awk '{print $1}' "$ARCHIVE_NAME.sha256")"
+          echo "ARCHIVE_SHA256=$digest" >> "$GITHUB_ENV"
+          echo "CHECKSUM=$PWD/$ARCHIVE_NAME.sha256" >> "$GITHUB_ENV"
+          echo "sha256($ARCHIVE_NAME) = $digest"
+
+      - name: Re-gate and SBOM the EXTRACTED archive
+        # Scanning the source checkout proves nothing about bytes that packaging
+        # may add or transform, so the gate and the SBOM both run against what was
+        # actually packaged. No rebuild happens here — this extracts $ARCHIVE.
+        run: |
+          set -euo pipefail
+          ex="$RUNNER_TEMP/extract"
+          mkdir -p "$ex"
+          tar -xzf "$ARCHIVE" -C "$ex"
+          root="$ex/$(ls "$ex")"
+          bash scripts/check-public-core.sh --scan-root "$root" \
+            --release-manifest "$root/release-membership.v1.json"
+          sbom="$(dirname "$ARCHIVE")/${ARCHIVE_NAME%.tar.gz}.sbom.json"
+          python3 scripts/lib/make_sbom.py --root "$root" --out "$sbom" \
+            --name claude-harness --version "${GITHUB_REF_NAME#v}" \
+            --archive-sha256 "$ARCHIVE_SHA256"
+          echo "SBOM=$sbom" >> "$GITHUB_ENV"
+
+      - name: Attest build provenance for THAT digest
+        # Bound to the exact digest published as the checksum, so the attestation
+        # cannot describe a different build than the one consumers download.
+        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
+        with:
+          subject-path: ${{ env.ARCHIVE }}
+
+      - name: Publish archive + checksum + SBOM to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          flags=(--title "$GITHUB_REF_NAME" --notes "Automated release for $GITHUB_REF_NAME. Verify with: bash scripts/verify-release-manifest.sh --tag $GITHUB_REF_NAME")
+          if [ "${{ steps.version.outputs.prerelease }}" = "true" ]; then
+            flags+=(--prerelease)
+          fi
+          gh release create "$GITHUB_REF_NAME" "${flags[@]}" \
+            "$ARCHIVE" "$CHECKSUM" "$SBOM"
+
+      - name: Verify the PUBLISHED asset (download, do not rebuild)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          bash scripts/verify-release-manifest.sh --tag "$GITHUB_REF_NAME" \
+            --repo "$GITHUB_REPOSITORY" --workdir "$RUNNER_TEMP/verify"
