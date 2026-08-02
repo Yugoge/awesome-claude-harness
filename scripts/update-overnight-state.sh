@@ -78,6 +78,7 @@ IMMUTABLE_FIELDS=(
     dev_registry_session_id dev_registry_dir isolation_kind
     guarantee_level structural_claim_allowed git_effective_path git_version
     git_exec_path reference_transaction_selftest_result isolation_released_at
+    protected_branch
 )
 _is_immutable() {
     local k="$1" f
