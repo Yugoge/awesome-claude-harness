@@ -22,10 +22,17 @@ set -euo pipefail
 # blocks every main-targeting op unconditionally, repo-identity reads included.
 # When /dev-overnight is invoked from a context that ALREADY exports
 # CLAUDE_OVERNIGHT_ACTOR=1 (ambient inheritance), that is exactly what happens.
-# Each invocation below therefore runs through this array, which clears the
-# marker FOR THAT INVOCATION ONLY. The variable is never unset process-wide and
-# is never reassigned here: the overnight actor's own later operations must keep
-# it, because that marker is what the whole protection chain keys on.
+# Each invocation below therefore runs through one of these two arrays, which
+# clear the marker FOR THAT INVOCATION ONLY. The variable is never unset
+# process-wide and is never reassigned here: the overnight actor's own later
+# operations must keep it, because that marker is what the whole protection chain
+# keys on (hooks/prompt-workflow.py:491).
+#   _ENV  — for a child PROCESS that runs git itself. scripts/create-worktree.sh
+#           owns the most ref-mutating pre-state op (`worktree add -b`, where
+#           old 0000... != new, so the keystone evaluates it) and is frozen
+#           out-of-scope, so it is neutralised at the CALL BOUNDARY and its git
+#           calls inherit the cleared environment.
+#   plain — for this script's own direct git invocations.
 GIT_UNMARKED_ENV=(env -u CLAUDE_OVERNIGHT_ACTOR)
 GIT_UNMARKED=("${GIT_UNMARKED_ENV[@]}" git)
 
