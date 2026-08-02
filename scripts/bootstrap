@@ -199,7 +199,7 @@ fi
 echo "  resolver (sh) -> $RESOLVED_SH"
 echo "  resolver (py) -> $RESOLVED_PY"
 
-# ── 5. Final preflight ───────────────────────────────────────────────────────
+# ── 6. Final preflight ───────────────────────────────────────────────────────
 # Run doctor via `bash` so a missing executable bit (e.g. a zip checkout) is not
 # load-bearing. When RUN_DOCTOR=1, doctor MUST exist — otherwise fail, never
 # silently skip the preflight.
