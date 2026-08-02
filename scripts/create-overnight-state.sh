@@ -247,6 +247,41 @@ if [[ -z "$PROTECTED_BRANCH" ]]; then
     exit 1
 fi
 
+# =============================================================================
+# EVERYTHING BELOW THIS LINE CREATES SIDE EFFECTS (worktree/clone/branch, spec
+# resolution, directories). M1-SEAM's component mode pre-seeds the record fields
+# these blocks would populate and then SKIPS the whole region, so the seam
+# reaches the record construction over the same code path without creating
+# anything. The pre-seeded values are the same empty/neutral defaults the real
+# launch starts from — they are never a substitute source for PROTECTED_BRANCH,
+# which was resolved above, in the side-effect-free region, for both modes.
+# =============================================================================
+WORKTREE_PATH=""
+WORKTREE_BRANCH=""
+WORKTREE_HEAD_AT_START=""
+ISOLATION_KIND=""
+ISOLATION_ACTIVE_UNTIL=""
+SPEC_MODE="autonomous"
+USER_SPEC_PATH="null"
+VIEW_PATHS="{}"
+RESOLVED_SPEC_ID=""
+DEV_REGISTRY_DIR=""
+GUARANTEE_LEVEL=""
+STRUCTURAL_CLAIM_ALLOWED=false
+GIT_VERSION_FIELD=""
+GIT_EFFECTIVE_PATH_FIELD=""
+GIT_EXEC_PATH_FIELD=""
+SELFTEST_RESULT_FIELD=""
+ACTOR_GIT_SHIM=""
+ACTOR_GIT_BINDIR=""
+ACTOR_GIT_SHIMDIR=""
+ACTOR_ENV_HELPER_PATH=""
+CONTRACT_FILE=""
+TRACE_LOG_PATH=""
+MONOLITH_SHA="null"
+
+if [[ "$EMIT_RECORD_ONLY" != "1" ]]; then
+
 # --- Create + validate the isolated worktree FIRST (M1, M2, M3) ---------------
 # Recoverable failures here NEVER fall back to in-place work: a missing/invalid
 # worktree means launch refuses (no state) — distinct from hard-abort-then-work.
