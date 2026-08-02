@@ -131,24 +131,22 @@ def test_baseline_is_clean(pristine):
 
 
 @pytest.mark.parametrize("prefix", _ledger_public_core(REPO))
-def test_workspace_marker_hard_fails_per_ledger_prefix(pristine, prefix):
+def test_workspace_marker_hard_fails_per_ledger_prefix(pristine, tmp_path, prefix):
     """AC5: the tmpfs marker hard-fails, in EVERY public-core ledger prefix."""
-    root = _copy(pristine)
+    root = _copy(pristine, tmp_path)
     victim = _victim(root, prefix)
     assert _run(root).returncode == 0, "baseline control must be clean"
-    with victim.open("a", encoding="utf8") as fh:
-        fh.write(f"\n# injected marker {WS_MARKER}/x\n")
+    marker_line = f"\n# injected marker {WS_MARKER}/x\n"
+    _append(victim, marker_line)
     _stage(root)
     r = _run(root)
     assert r.returncode != 0, f"tmpfs marker not gated in {prefix}"
     rel = str(victim.relative_to(root))
     assert rel in r.stdout, "failure output must name the injected file"
     assert "workspace-path residue" in r.stdout, "failure must identify the marker class"
-    # removing the injection restores exit 0
-    victim.write_text(victim.read_text(encoding="utf8").replace(f"\n# injected marker {WS_MARKER}/x\n", ""),
-                      encoding="utf8")
+    _write(victim, victim.read_text(encoding="utf8").replace(marker_line, ""))
     _stage(root)
-    assert _run(root).returncode == 0
+    assert _run(root).returncode == 0, "removing the injection must restore exit 0"
 
 
 @pytest.mark.parametrize(
