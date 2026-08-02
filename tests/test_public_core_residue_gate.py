@@ -167,7 +167,7 @@ def test_each_author_home_class_hard_fails(pristine, tmp_path, literal, label):
     assert "un-allowlisted author-path residue" in r.stdout
 
 
-def test_constant_count_replacement_still_fails(pristine):
+def test_constant_count_replacement_still_fails(pristine, tmp_path):
     """AC6 c: THE discriminating test — delete one allowlisted occurrence and add
     one new occurrence elsewhere so the aggregate count is unchanged. A
     count-based ratchet exits 0 here; a set-based gate must exit non-zero."""
