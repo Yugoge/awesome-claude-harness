@@ -521,8 +521,11 @@ def test_consumer_decision_is_invariant_to_gate_registration(home: Path, statedi
 def test_consumer_never_reads_hook_registration(home: Path):
     """Structural guarantee, asserted so a later refactor cannot quietly break it."""
     src = (REPO / "hooks" / "lib" / "capability_state.py").read_text(encoding="utf-8")
-    for forbidden in ('json.loads(p.read_text', '["hooks"]', "get('hooks')", 'get("hooks")'):
+    for forbidden in ('["hooks"]', "['hooks']", 'get("hooks")', "get('hooks')"):
         assert forbidden not in src, f"consumer must not parse hook arrays: {forbidden!r}"
+    # Settings layers are consumed as raw BYTES for hashing only.
+    assert "p.read_bytes()" in src
+    assert "json.load" not in src.split("def settings_records")[1].split("def read_harness")[0]
 
 
 # --------------------------------------------------------------------------- #
