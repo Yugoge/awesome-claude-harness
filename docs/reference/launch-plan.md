@@ -609,7 +609,7 @@ Submit it under **Safety / Guardrails**, not “Claude configurations.”
    that target, resolved by its own RULES-PASS row — not by falling back to a configurations
    category.
 3. **This lane must not invent a target list.** The set of appropriate `awesome-*` lists is
-   UNDETERMINED in-cycle (§14, OA-4).
+   UNDETERMINED in-cycle (§9, OA-4).
 
 ### Hostile-commenter register
 
