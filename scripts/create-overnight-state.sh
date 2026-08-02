@@ -211,7 +211,7 @@ MAIN_BRANCH_AT_START="$("${GIT_UNMARKED[@]}" -C "$MAIN_ROOT" branch --show-curre
 # repository's PRIMARY checkout and not a linked worktree, because the overnight
 # actor creates its own isolated worktree from here and must never nest one
 # worktree inside another. Primary checkout <=> git-dir == git-common-dir.
-MAIN_COMMON_DIR="$(git -C "$MAIN_ROOT" rev-parse --git-common-dir 2>/dev/null || echo '')"
+MAIN_COMMON_DIR="$("${GIT_UNMARKED[@]}" -C "$MAIN_ROOT" rev-parse --git-common-dir 2>/dev/null || echo '')"
 case "$MAIN_COMMON_DIR" in
     '')  MAIN_COMMON_DIR="$MAIN_ROOT/.git" ;;
     /*)  ;;
