@@ -8,6 +8,13 @@
 # Local settings (user-specific)
 settings.local.json
 
+# The live, per-install settings file. It is GENERATED from the tracked
+# settings.template.json by scripts/install/render-settings (wired into
+# scripts/bootstrap) and must never be tracked: it carries absolute paths and
+# permission entries specific to one machine. Root-anchored so it matches ONLY
+# the repo-root file, not a nested */settings.json.
+/settings.json
+
 # Temporary files
 *.tmp
 *.log
