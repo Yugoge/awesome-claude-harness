@@ -254,8 +254,8 @@ if [ -n "$SCAN_ROOT" ]; then
   [ -f "$RELEASE_MANIFEST" ] || { echo "FAIL: release manifest not found: $RELEASE_MANIFEST" >&2; exit 1; }
 
   ACTUAL="$(cd "$SCAN_ROOT" && find . -type f | sed 's#^\./##' | sort)"
-  EXPECTED="$(bash "$ROOT/scripts/release-membership.sh" --list --root "$SCAN_ROOT" \
-                   --manifest "$RELEASE_MANIFEST" | sort)"
+  EXPECTED="$(python3 "$ROOT/scripts/lib/release_membership.py" --from-tree \
+                   --root "$SCAN_ROOT" --manifest "$RELEASE_MANIFEST" | sort)"
   if [ "$ACTUAL" != "$EXPECTED" ]; then
     fail "archive path set != release-membership manifest path set (set equality is required):"
     diff <(printf '%s\n' "$EXPECTED") <(printf '%s\n' "$ACTUAL") \
