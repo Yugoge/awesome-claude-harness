@@ -9,7 +9,7 @@ A manifest is a single JSON object:
 ```jsonc
 {
   "meta": {
-    "session_title": "claude — awesome-claude-harness",   // string, centered in the window chrome
+    "session_title": "claude — claude-code-guardrails",   // string, centered in the window chrome
     "rail": ["context", "safe-tools", "provenance"],       // optional string[]; the ordered rail labels.
                                                             //   Omit to derive the rail from the distinct
                                                             //   `stage` values in first-appearance order.
