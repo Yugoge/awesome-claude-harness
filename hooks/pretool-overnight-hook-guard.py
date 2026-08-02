@@ -1453,7 +1453,7 @@ def _interpreter_hides_main_git(command: str, main_real: str, main_git_dir: str)
     if main_real and main_real in command:
         # mentions the main root path AND a dangerous op.
         return True
-    if re.search(r'\b(master|refs/heads/master)\b', command):
+    if _mentions_protected_branch(command.split()):
         return True
     # No qualifying target proven worktree-local; for HEAD-moving ops that lack a
     # -C/path the destination is the process cwd which the launcher controls and
