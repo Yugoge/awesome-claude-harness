@@ -282,11 +282,18 @@ def test_state_is_0600_and_atomic(home: Path, statedir: Path):
 
 
 def test_handwritten_pass_is_rejected(statedir: Path):
+    """Both hand-written shapes are rejected: the bare one on schema version, and
+    the more careful one (right schema_version, still no receipts) on partiality."""
     p = cs.state_path("s2", statedir)
     p.write_text(json.dumps({"status": "PASS"}), encoding="utf-8")
     os.chmod(p, 0o600)
-    state, err = cs.load_state(p)
-    assert state is None and err == "state_partial"
+    assert cs.load_state(p) == (None, "state_schema_version_mismatch")
+
+    q = cs.state_path("s2b", statedir)
+    q.write_text(json.dumps({"status": "PASS", "schema_version": cs.SCHEMA_VERSION}),
+                 encoding="utf-8")
+    os.chmod(q, 0o600)
+    assert cs.load_state(q) == (None, "state_partial")
 
 
 def test_symlinked_state_rejected(tmp_path: Path, statedir: Path, home: Path):
