@@ -30,7 +30,8 @@
     "requirements.txt": "shared/infra, but the harness cannot install without its dependency spec.",
     "requirements/**": "shared/infra hash-pinned lockfiles; scripts/bootstrap installs from these, so a release without them cannot bootstrap.",
     "VERSION": "shared/infra release marker; consumers and the verifier read it to confirm the archive matches the tag.",
-    "PUBLIC-CORE.md": "shared/infra governance ledger, but scripts/check-public-core.sh ships (scripts/ is public-core) and READS this ledger; omitting it would ship a checker that cannot run."
+    "PUBLIC-CORE.md": "shared/infra governance ledger, but scripts/check-public-core.sh ships (scripts/ is public-core) and READS this ledger; omitting it would ship a checker that cannot run.",
+    "release-membership.v1.json": "this manifest itself: scripts/verify-release-manifest.sh validates the DOWNLOADED archive's contents against it, so it must travel inside the archive rather than being fetched from a source checkout the verifier is forbidden to rebuild from."
   },
   "exclude": [
     "tests/**",
