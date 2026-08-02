@@ -229,6 +229,58 @@ if [ ! -f "$MANIFEST" ]; then
 fi
 
 # ---------------------------------------------------------------------------
+# ARCHIVE MODE — gate the EXTRACTED RELEASE ARCHIVE rather than the checkout.
+# Scanning the source checkout proves nothing about the bytes that are actually
+# published, so the release pipeline runs the gate again over the extracted
+# archive. The scanned path set is asserted EQUAL to the release-membership
+# manifest, so no shipped path can escape the residue classes.
+# ---------------------------------------------------------------------------
+if [ -n "$SCAN_ROOT" ]; then
+  [ -d "$SCAN_ROOT" ] || { echo "FAIL: --scan-root is not a directory: $SCAN_ROOT" >&2; exit 1; }
+  [ -n "$RELEASE_MANIFEST" ] || { echo "FAIL: --scan-root requires --release-manifest" >&2; exit 1; }
+  [ -f "$RELEASE_MANIFEST" ] || { echo "FAIL: release manifest not found: $RELEASE_MANIFEST" >&2; exit 1; }
+
+  ACTUAL="$(cd "$SCAN_ROOT" && find . -type f | sed 's#^\./##' | sort)"
+  EXPECTED="$(bash "$ROOT/scripts/release-membership.sh" --list --root "$SCAN_ROOT" \
+                   --manifest "$RELEASE_MANIFEST" | sort)"
+  if [ "$ACTUAL" != "$EXPECTED" ]; then
+    fail "archive path set != release-membership manifest path set (set equality is required):"
+    diff <(printf '%s\n' "$EXPECTED") <(printf '%s\n' "$ACTUAL") \
+      | sed 's/^</    only-in-manifest: /;s/^>/    only-in-archive:  /' | grep -E 'only-in-' | head -40
+  else
+    pass "extracted archive path set EQUALS the release-membership manifest ($(printf '%s\n' "$ACTUAL" | wc -l | tr -d ' ') paths)"
+  fi
+
+  # Residue class 1: maintainer workspace/tmpfs marker — hard-gating over the archive.
+  WS_EXEMPT="$(python3 -c 'import json,sys;print("\n".join(json.load(open(sys.argv[1])).get("workspace_marker_exempt_paths",[])))' "$RELEASE_MANIFEST")"
+  ws_hits=0
+  while IFS= read -r f; do
+    [ -z "$f" ] && continue
+    printf '%s\n' "$WS_EXEMPT" | grep -qxF "$f" && continue
+    if grep -qF -- "$WS_MARKER" "$SCAN_ROOT/$f" 2>/dev/null; then
+      fail "maintainer workspace-path residue in released archive -> $f"
+      ws_hits=$((ws_hits + 1))
+    fi
+  done <<< "$ACTUAL"
+  [ "$ws_hits" -eq 0 ] && pass "no un-exempted workspace-path residue in the released archive"
+
+  # Residue class 2: generic author-home paths — same engine as the checkout gate.
+  if printf '%s\n' "$ACTUAL" | residue_audit "$SCAN_ROOT" "$RESIDUE_ALLOWLIST"; then
+    pass "no un-allowlisted author-path residue in the released archive"
+  else
+    fail "author-path residue gate failed over the released archive (see FAIL lines above)"
+  fi
+
+  echo "----------------------------------------------------------------------"
+  if [ "$rc" -eq 0 ]; then
+    echo "check-public-core(archive): RELEASE ARCHIVE CLEAN (path set == manifest, no residue leaks)"
+  else
+    echo "check-public-core(archive): FAILURES DETECTED — see FAIL lines above"
+  fi
+  exit "$rc"
+fi
+
+# ---------------------------------------------------------------------------
 # 0. Parse the sentinel-delimited ledger region -> "path<TAB>class" pairs.
 #    Row shape: | `path` | `class` | rationale |  (path = 1st back-ticked token,
 #    class = 2nd). Trailing slash on directory paths is normalized off so the tokens
