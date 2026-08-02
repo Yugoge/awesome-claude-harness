@@ -31,10 +31,41 @@ Verify prerequisites — `python3`, `git`, `jq` (or run `scripts/doctor` for a f
 python3 --version && git --version && jq --version
 ```
 
+Get a checkout, then install the minimal `core` profile from inside it. The installer puts
+the harness in its own isolated directory and adds only a short, enumerable list of paths to
+your Claude config home — it never clones over it, and never rewrites your `settings.json`
+from a template:
+
 ```bash
-git clone https://github.com/Yugoge/awesome-claude-harness.git ~/.claude
-~/.claude/scripts/bootstrap        # non-destructive; --force backs up + recreates the venv
-claude
+scripts/install/install --dry-run --profile core
+scripts/install/install --profile core
+```
+
+`--dry-run` prints every path it would create or modify and writes nothing. A strict preflight
+runs before the first mutation and aborts the install if the host fails it. `--config-dir` and
+`--prefix` override the detected Claude config home and the isolated install location.
+
+Remove everything it added — restoring any file it modified, and leaving files you created
+yourself in place — with:
+
+```bash
+scripts/install/uninstall
+```
+
+**Does it work on macOS?** No — there is no confirmed support and no CI coverage; the CI matrix
+is Linux-only by explicit configuration. The installer parses
+[`docs/reference/install-compatibility-matrix.md`](docs/reference/install-compatibility-matrix.md)
+and prints the status for your host rather than assuming one.
+
+### From source (contributors)
+
+Working on the harness itself rather than installing it — this clones into a directory of your
+choice, never over `~/.claude`:
+
+```bash
+git clone https://github.com/Yugoge/awesome-claude-harness.git claude-harness
+cd claude-harness
+scripts/bootstrap        # non-destructive; --force backs up + recreates the venv
 ```
 
 Run the guard demo: `bash examples/guard-demo/run-demo.sh`
