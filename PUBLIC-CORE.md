@@ -133,6 +133,7 @@ set for the residue markers of §3. Path = first back-ticked token; class = seco
 | `VERSION` | `shared/infra` | Release version marker — release meta. |
 | `tests/` | `shared/infra` | Test net (incl. generated AC skeletons + fixture strings) that supports the core; not itself the shippable harness. |
 | `PUBLIC-CORE.md` | `shared/infra` | This boundary manifest — governance/meta (self-classified for forward completeness once tracked). |
+| `release-membership.v1.json` | `shared/infra` | Shipping ledger: the EXPLICIT path set a release archive contains, plus per-path rationale. Governance/meta, beside this boundary ledger; consumed by the release workflow and by `scripts/verify-release-manifest.sh`. |
 | `NESTED-REPO.md` | `private-lab` | Documents the maintainer's exact `/root/.claude`→tmpfs symlink topology, `git@github.com:Yugoge` remote, `/root/.claude.bak` mirror, `/root/sync-backup.sh` cron. |
 | `push.sh` | `private-lab` | Maintainer pre-push wrapper: `/root/.claude/push.sh` invocation, author git-workflow automation (identity now env-parameterized, purpose still maintainer-specific). |
 <!-- END:public-core-manifest -->
