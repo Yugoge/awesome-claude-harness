@@ -57,10 +57,14 @@ WS_MARKER='/dev/shm/dev-workspace/dot-claude'
 # Shared generic author-path residue audit. ONE engine, used for both the git
 # checkout and an extracted release archive, so the two can never drift apart.
 #
-#   stdin : newline-delimited paths (relative to $1) to scan
-#   $1    : root directory the paths are relative to
+#   $1    : root directory the scanned paths are relative to
 #   $2    : allowlist JSON path (relative to that root)
+#   $3    : "git" (enumerate via git ls-files + pathspecs) | "tree" (walk the root)
+#   $4... : pathspecs, in "git" mode only
 #   return: 0 clean, 1 residue/allowlist failure
+#
+# The file set is enumerated INSIDE this engine rather than piped in: the python
+# program arrives on stdin via the heredoc, so stdin is not available for data.
 #
 # Every occurrence's exemption CLASS is re-derived from the live source structure
 # (comment / docstring / heredoc / test tree / env `:-` default / the detector's

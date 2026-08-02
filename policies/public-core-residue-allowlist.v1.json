@@ -807,24 +807,45 @@
     },
     {
       "path": "scripts/check-public-core.sh",
+      "fingerprint": "0122a0d46a883885",
+      "ordinal": 1,
+      "class": "scanner_pattern_definition",
+      "rationale": "residue_audit() — the residue detector's own constant table; naming the pattern is its purpose."
+    },
+    {
+      "path": "scripts/check-public-core.sh",
+      "fingerprint": "013d6ca828ab4ee5",
+      "ordinal": 1,
+      "class": "scanner_pattern_definition",
+      "rationale": "residue_audit() — the residue detector's own constant table; naming the pattern is its purpose."
+    },
+    {
+      "path": "scripts/check-public-core.sh",
+      "fingerprint": "5eeacfe82bd51dcc",
+      "ordinal": 1,
+      "class": "scanner_pattern_definition",
+      "rationale": "param_line_ok() — the residue detector's own constant table; naming the pattern is its purpose."
+    },
+    {
+      "path": "scripts/check-public-core.sh",
       "fingerprint": "61a9a6b2ee9320c4",
       "ordinal": 1,
       "class": "scanner_pattern_definition",
-      "rationale": "pass() — the residue detector's own constant table; naming the pattern is its purpose."
+      "rationale": "residue_audit() — the residue detector's own constant table; naming the pattern is its purpose."
     },
     {
       "path": "scripts/check-public-core.sh",
       "fingerprint": "a4c3f85f684c7bc4",
       "ordinal": 1,
       "class": "scanner_pattern_definition",
-      "rationale": "pass() — the residue detector's own constant table; naming the pattern is its purpose."
+      "rationale": "residue_audit() — the residue detector's own constant table; naming the pattern is its purpose."
     },
     {
       "path": "scripts/check-public-core.sh",
       "fingerprint": "ac08a7694f695afc",
       "ordinal": 1,
       "class": "scanner_pattern_definition",
-      "rationale": "pass() — the residue detector's own constant table; naming the pattern is its purpose."
+      "rationale": "residue_audit() — the residue detector's own constant table; naming the pattern is its purpose."
     },
     {
       "path": "scripts/close-scoring-decide.py",
