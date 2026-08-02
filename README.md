@@ -8,7 +8,7 @@
 A safety & release harness for Claude Code — orchestrator-only routing, an evidence-gated `/spec → /dev → /close → /commit → /push` pipeline, and a defense-in-depth git protection kernel, every mechanism traceable to a file in this repo.
 
 <p>
-<img alt="version" src="https://img.shields.io/badge/version-1.0.0-blue">
+<img alt="version" src="https://img.shields.io/badge/version-1.0.0--dev-blue">
 <img alt="subagents" src="https://img.shields.io/badge/subagents-23-6f42c1">
 <img alt="commands" src="https://img.shields.io/badge/slash%20commands-19-1565c0">
 <img alt="hooks" src="https://img.shields.io/badge/lifecycle%20hooks-71%20wired%20%2F%207%20events-c62828">
