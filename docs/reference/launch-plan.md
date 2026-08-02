@@ -275,6 +275,10 @@ inaccuracy with another:
   wrapper-with-flag and leading-redirection prefix families across the classifier's wrapper token
   set, it **includes bare (non-path-qualified) forms**, and it covers the **destructive-reset**
   family rather than push. **Path qualification is not a necessary condition for the residual.**
+  Read that breadth **only with the evidence layer §7.4 attaches to it**: it is a *detection-layer*
+  measurement of tokenizer and regex misses, plus a *gate-layer* result read from exit codes
+  against synthetic payloads. It is **not** a count of demonstrated executable bypasses, and this
+  bullet must never be quoted without that qualifier.
 - **Too BROAD.** The tested **direct path-qualified force-push payload returned exit 2**. The
   exact shape the published title names is, on the evidence available, not the open hole.
 
