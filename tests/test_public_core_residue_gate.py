@@ -18,11 +18,11 @@ scenario so a later non-zero exit is causally attributable to the injection.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import shutil
 import subprocess
-import tempfile
 from pathlib import Path
 
 import pytest
