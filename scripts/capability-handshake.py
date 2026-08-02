@@ -336,7 +336,11 @@ def run_handshake(session_id: str, home: Path, state_file: Path, timeout: int) -
         state["status_surface"] = observe_status_surface()
         state["completion_time"] = cs.now_iso()
 
-        overall, reason = cs.aggregate_verdict(state, home)
+        # Evaluate the aggregate over the COMPLETED evidence. The on-disk status is
+        # still PENDING at this point (that is the fail-closed guarantee while the
+        # run is in flight); judging the in-flight status here would short-circuit
+        # on `state_pending` and mask the real failure class.
+        overall, reason = cs.aggregate_verdict(dict(state, status="PASS"), home)
         state["overall"] = overall
         state["failure_reason"] = reason
         state["status"] = "PASS" if overall == "PASS" else "FAIL"
