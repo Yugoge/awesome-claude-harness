@@ -496,6 +496,19 @@ def ac6(tmp: Path) -> None:
     check("AC6(g)", "the per-item report cross-checks measured state",
           "[verified: yes]" in out and "present after: False" in out, out[-300:])
 
+    # (c, extended) a file the installer created but the USER then rewrote is the
+    # user's file now: uninstall must keep it rather than delete their content.
+    n2c, prefixc = tmp / "ac6c" / "n2", tmp / "ac6c" / "prefix"
+    n2c.mkdir(parents=True)
+    run([INSTALL, "--profile", "core", "--prefix", prefixc, "--config-dir", n2c])
+    (n2c / "commands" / "harness-doctor.md").write_text("# I rewrote this myself\n")
+    rc, out_c, _ = run([UNINSTALL, "--prefix", prefixc, "--config-dir", n2c])
+    check("AC6(c)", "a file the installer created but the user later rewrote is KEPT, "
+                    "not deleted", rc == 0
+          and (n2c / "commands" / "harness-doctor.md").is_file()
+          and (n2c / "commands" / "harness-doctor.md").read_text() == "# I rewrote this myself\n"
+          and "kept-user-modified" in out_c, out_c[-300:])
+
     # (f) link removal must not delete isolated-root content through the link
     n2b, prefixb = tmp / "ac6f" / "n2", tmp / "ac6f" / "prefix"
     n2b.mkdir(parents=True)
