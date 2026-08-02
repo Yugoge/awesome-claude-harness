@@ -245,19 +245,19 @@ def test_operational_literal_cannot_be_relabelled_as_a_comment(pristine, tmp_pat
         "class": "comment_or_narrative_doc",
         "rationale": "claimed to be narrative documentation",
     })
-    (root / ALLOWLIST).write_text(json.dumps(doc, indent=2), encoding="utf8")
+    _write(root / ALLOWLIST, json.dumps(doc, indent=2))
     _stage(root)
     r = _run(root)
     assert r.returncode != 0, "an operational literal bought an exemption by relabelling"
     assert "operational, NOT allowlistable" in r.stdout
 
 
-def test_placeholder_rationale_is_rejected(pristine):
+def test_placeholder_rationale_is_rejected(pristine, tmp_path):
     """AC6 d: every entry needs a real per-entry rationale."""
-    root = _copy(pristine)
+    root = _copy(pristine, tmp_path)
     doc = json.loads((root / ALLOWLIST).read_text(encoding="utf8"))
     doc["entries"][0]["rationale"] = "TBD"
-    (root / ALLOWLIST).write_text(json.dumps(doc, indent=2), encoding="utf8")
+    _write(root / ALLOWLIST, json.dumps(doc, indent=2))
     _stage(root)
     r = _run(root)
     assert r.returncode != 0
