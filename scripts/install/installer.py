@@ -523,6 +523,9 @@ def apply_plan(ctx: Ctx, plan: dict) -> dict:
         "profile": ctx.profile.get("profile"),
         "isolated_root": str(ctx.isolated_root),
         "config_home": str(ctx.config_home),
+        # An install performed on a host that could not prove its hooks are
+        # enforced stays auditable here after the terminal output has scrolled.
+        "host_handshake": os.environ.get("HARNESS_INSTALL_HANDSHAKE", "unknown"),
         "created": created,
         "modified": [
             {**m, "pre_install_sha256": sha256_file(Path(m["backup"]))} for m in modified
