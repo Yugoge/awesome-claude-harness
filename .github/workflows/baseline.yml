@@ -76,20 +76,30 @@ jobs:
           echo "Installing from $lock"
           python3 -m pip install --require-hashes -r "$lock"
 
-      - name: Clean-install smoke (fresh venv from requirements.txt)
-        # Reproducibility guarantee: prove a CLEAN environment can install the
-        # declared deps and import the key modules. Builds a THROWAWAY venv under
-        # a mktemp dir (never the repo/user venv), installs from requirements.txt,
-        # then imports pytest / jsonschema / pyyaml. Fails the build if a fresh
-        # install cannot resolve or import the pinned range.
+      - name: Clean-install smoke
+        # Reproducibility guarantee: prove a CLEAN environment, installed by an
+        # UNPRIVILEGED user, can install the declared deps and import the key
+        # modules. Builds a THROWAWAY venv under a mktemp dir (never the repo/user
+        # venv) and installs hash-verified from the lockfile matching the running
+        # interpreter. Both properties are load-bearing and are asserted, not
+        # assumed: the uid guard EXITS NON-ZERO under root rather than merely
+        # printing the uid, and the fresh mktemp+venv provisioning is what makes
+        # this a clean-install test rather than a re-import of the job's venv.
         run: |
           set -euo pipefail
+          if [ "$(id -u)" -eq 0 ]; then
+            echo "::error::clean-install smoke must run as an unprivileged user, but uid is 0"
+            exit 1
+          fi
+          echo "Running as uid $(id -u) ($(id -un)) — non-root, as required."
           smoke_root="$(mktemp -d)"
           smoke_venv="$smoke_root/smoke-venv"
           echo "Creating throwaway venv at $smoke_venv ..."
           python3 -m venv "$smoke_venv"
           "$smoke_venv/bin/python" -m pip install --upgrade pip
-          "$smoke_venv/bin/python" -m pip install -r requirements.txt
+          lock="requirements/py$("$smoke_venv/bin/python" -c 'import sys; print(f"{sys.version_info.major}{sys.version_info.minor}")').txt"
+          echo "Installing hash-verified from $lock ..."
+          "$smoke_venv/bin/python" -m pip install --require-hashes -r "$lock"
           echo "Importing declared modules in the clean venv ..."
           "$smoke_venv/bin/python" -c "import importlib.metadata as m, pytest, jsonschema, yaml; print('clean-install smoke OK — pytest', m.version('pytest'), '/ jsonschema', m.version('jsonschema'), '/ pyyaml', m.version('pyyaml'))"
           rm -rf "$smoke_root"
