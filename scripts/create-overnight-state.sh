@@ -328,7 +328,7 @@ if [[ -z "$ISOLATION_KIND" ]]; then
     "${GIT_UNMARKED[@]}" -C "$MAIN_ROOT" worktree repair >/dev/null 2>&1 || true
     "${GIT_UNMARKED[@]}" -C "$MAIN_ROOT" worktree prune >/dev/null 2>&1 || true
     # one more registered-worktree attempt after repair/prune
-    if WORKTREE_RESULT=$(bash "$WORKTREE_SCRIPT" --project-dir "$MAIN_ROOT" "$WORKTREE_NAME" 2>/dev/null); then
+    if WORKTREE_RESULT=$("${GIT_UNMARKED_ENV[@]}" bash "$WORKTREE_SCRIPT" --project-dir "$MAIN_ROOT" "$WORKTREE_NAME" 2>/dev/null); then
         WORKTREE_PATH=$(echo "$WORKTREE_RESULT" | grep -oP 'WORKTREE_PATH=\K\S+' || echo '')
         WORKTREE_BRANCH=$(echo "$WORKTREE_RESULT" | grep -oP 'WORKTREE_BRANCH=\K\S+' || echo '')
         if [[ -n "$WORKTREE_PATH" && -d "$WORKTREE_PATH" ]]; then
