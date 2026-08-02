@@ -11,8 +11,19 @@
 # Constrained to a compatible range (lower bound so a fresh clone gets a recent,
 # working set; upper bound at the next major so a future breaking release cannot
 # silently enter a clean install). NOT hard-pinned to a single patch — that would
-# be brittle across the supported Python matrix. Install with:
-#   ~/.claude/venv/bin/pip install -r requirements.txt
+# be brittle across the supported Python matrix.
+#
+# THIS FILE IS THE ABSTRACT SPEC — it declares WHAT is required, and nothing
+# installs from it directly. The concrete, fully-resolved, hash-pinned form lives
+# in requirements/py310.txt, py311.txt and py312.txt (one per supported
+# interpreter, because environment markers make the resolution genuinely differ —
+# pytest needs exceptiongroup and tomli only below 3.11). Every install call site
+# (CI dependency install, CI clean-install smoke, scripts/bootstrap) uses:
+#   pip install --require-hashes -r requirements/py3XX.txt
+# so pip itself rejects any unpinned or unhashed direct OR transitive dependency.
+#
+# After editing the ranges below, REGENERATE the lockfiles — an edit here alone
+# changes nothing about what actually gets installed.
 pytest>=7.0,<9
 jsonschema>=4.0,<5
 pyyaml>=6.0,<7
