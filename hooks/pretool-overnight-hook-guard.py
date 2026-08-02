@@ -1413,7 +1413,8 @@ def _scan_script_files_for_main_git(command: str, main_real: str) -> bool:
             except Exception:
                 body = ''
             if _GIT_TOKEN_RE.search(body) and _DANGEROUS_GIT_OP_RE.search(body):
-                if (main_real and main_real in body) or 'master' in body \
+                if (main_real and main_real in body) \
+                   or _body_mentions_protected_branch(body) \
                    or re.search(r'-C\s+\S', body) or 'checkout' in body or 'switch' in body:
                     return True
         else:
