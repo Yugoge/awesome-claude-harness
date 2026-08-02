@@ -196,7 +196,15 @@ and is NOT authoritative**; it is re-derived by locating the text.
 
 Each indicator records: *file · anchor text · expected polarity · baseline line (non-authoritative)
 · evaluated ref · what the anchor identifies*. All eight were re-located at authoring time against
-`4c33f2f5`; each of the anchored files was unmodified in the working tree at read time.
+`4c33f2f5`, where each anchored file was unmodified in the working tree at read time.
+
+**Re-evaluated 2026-08-02, after authoring: BI-B1 no longer resolves.** The owning lane edited
+`PUBLIC-CORE.md` during this cycle, which is the expected signal of that lane progressing rather
+than a defect (§4.5). It is recorded as `BLOCKED — anchor unresolved after concurrent edit` and is
+**not attributed to any lane**, because no tracked completion artifact associates the change with
+this indicator and disappearance alone does not prove who caused it (§4.5 rule 4). Anchor absence
+is never a PASS (§4.5 rule 1); B-PASS remains BLOCKED on its own evidence record, and its second
+indicator BI-B2 still resolves. The other seven indicators still resolve.
 
 | ID | Gate | File | Anchor text (authoritative selector) | Polarity | Baseline line (non-authoritative) | Evaluated ref | What it identifies | Resolved? |
 |---|---|---|---|---|---|---|---|---|
