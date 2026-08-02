@@ -3,8 +3,13 @@
 #
 # SEPARATE from the modern-git selector (git-selector) per codex round-2 #7:
 # the selector puts a pinned >=2.46 git first on PATH; THIS shim refuses
-# main-root / master ops for an overnight actor. Relaxing the policy must never
-# drop the selector, hence two files.
+# main-root / protected-branch ops for an overnight actor. Relaxing the policy
+# must never drop the selector, hence two files.
+#
+# The protected branch is NEVER a literal and NEVER a fixed enumeration of
+# names: it is resolved at decision time from the overnight session-state
+# record(s) (M3-RESOLUTION, M5-NO-ENUMERATION). When it cannot be resolved the
+# shim FAILS CLOSED on branch-protection decisions (M4).
 #
 # Installed (named `git`) on the overnight actor's PATH ahead of system git via
 # the selector dir. Catches normal `git ...` and python subprocess(["git",...])
