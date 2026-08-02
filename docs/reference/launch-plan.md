@@ -10,10 +10,9 @@
 
 ### 0.1 Non-authorization clause (operational prohibition)
 
-**This document authorizes no posting, submission, upload, or outreach; execution is a human
-decision taken outside this pipeline.** Nobody may treat the existence of this plan, or a green
-gate row inside it, as permission to publish anything. Recording a channel *eligible* records
-eligibility and authorizes nothing.
+**This document authorizes no posting, submission, upload, or outreach; execution is a human decision taken outside this pipeline.**
+Nobody may treat the existence of this plan, or a green gate row inside it, as permission to
+publish anything. Recording a channel *eligible* records eligibility and authorizes nothing.
 
 **This clause is a prohibition, not an evidence claim.** No artifact in this repository can prove
 that no outward action occurred — a clean working tree, an unchanged diff and a complete gate
