@@ -198,7 +198,7 @@ fi
 # --- Repo identity + MAIN_HEAD capture (side-effect-free; may precede worktree) ---
 # M1/round-3: only side-effect-free repo-identity discovery and MAIN_HEAD capture
 # may run before worktree creation. Everything fallible (spec/focus/view) runs AFTER.
-MAIN_ROOT="$(git -C "$PROJECT_DIR" rev-parse --show-toplevel 2>/dev/null || echo '')"
+MAIN_ROOT="$("${GIT_UNMARKED[@]}" -C "$PROJECT_DIR" rev-parse --show-toplevel 2>/dev/null || echo '')"
 if [[ -z "$MAIN_ROOT" ]]; then
     echo "Error: --project-dir is not inside a git repo: $PROJECT_DIR" >&2
     exit 1
