@@ -4,14 +4,27 @@
 # Probes the EFFECTIVE git the overnight actor will use and emits a JSON object
 # (last stdout line: SELFTEST_JSON=<json>) with the honest guarantee fields:
 #   git_version, git_effective_path, git_exec_path,
-#   reference_transaction_selftest_result (one of:
+#   reference_transaction_selftest_result — the HEAD-ARM probe's result, one of:
 #       "structural_head_switch"      — >=2.46 AND functional keystone-abort of a
 #                                        plain HEAD branch-switch passed,
-#       "branch_ref_only"             — keystone fires for master-ref/HEAD-detach
-#                                        but NOT for a symref branch-switch (2.43),
-#       "hook_not_firing"             — keystone did not fire at all),
+#       "branch_ref_denied_symref_switch_not_denied"
+#                                     — the branch-ref arm denied the write while
+#                                        the HEAD arm was SIMULTANEOUSLY live (it
+#                                        protects detach on this git); the former
+#                                        "branch_ref_only" label attributed the
+#                                        denial SOLELY to the branch-ref arm,
+#                                        which is not what was observed,
+#       "hook_not_firing"             — keystone did not fire at all.
+#     This field carries NO information about the branch-ref arm; see
+#     branch_ref_arm_probe for that, and attestation_probe for the branch the
+#     probe repository is built on.
 #   guarantee_level ("structural_head_switch" | "best_effort_head_switch"),
-#   structural_claim_allowed (true|false).
+#   structural_claim_allowed (true|false),
+#   branch_ref_arm_probe, policy_shim_probe, operand_forms_probe,
+#   attestation_probe, launcher_seam_probe, head_line_capture, guarantee_scope.
+#
+# The protected branch is resolved from the session-state record at decision
+# time; no probe, comparison or label here carries a branch-name literal.
 #
 # M16 gate: structural_claim_allowed=true ONLY when ALL hold:
 #   (1) effective git --version >= 2.46 AND git --exec-path inside the slot,
@@ -651,6 +664,7 @@ _run_attestation_cases() {
 }
 
 _build_attest_target || true
+_run_launcher_seam_probe
 _run_headline_capture_probe
 _run_branch_ref_arm_probe
 _run_shim_probe
@@ -661,6 +675,7 @@ BRANCH_REF_ARM_OK=false; [[ -z "$KS_FAIL" ]] && BRANCH_REF_ARM_OK=true
 SHIM_ARM_OK=false;       [[ -z "$SHIM_FAIL" ]] && SHIM_ARM_OK=true
 OPERAND_FORMS_OK=false;  [[ -z "$OPERAND_FAIL" ]] && OPERAND_FORMS_OK=true
 ATTEST_EQUALITY_OK=false; [[ -z "$ATTEST_FAIL" ]] && ATTEST_EQUALITY_OK=true
+SEAM_OK=false;            [[ -z "$SEAM_FAIL" ]] && SEAM_OK=true
 
 SELFTEST_RESULT="$(_functional_probe "${ATTEST_RESOLVED:-probe-idle}")"
 
@@ -714,6 +729,8 @@ JSON="$(GIT_VERSION="$GIT_VERSION" GIT_EFFECTIVE_PATH="$GIT_EFFECTIVE_PATH" \
   HDR_HAS_HEAD="$HEADLINE_HAS_HEAD" HDR_CAP="$HEADLINE_CAPTURE" \
   CELLS="[${CELLS_JSON}]" SHIM_CELLS="[${SHIM_CELLS_JSON}]" OPF="[${OPERAND_FORMS_JSON}]" \
   ATT_CASES="${ATTEST_CASES_JSON:-null}" \
+  SEAM_OK="$SEAM_OK" SEAM_FAIL="$SEAM_FAIL" SEAM_JSON="$SEAM_JSON" \
+  SEAM_ARGV="$SEAM_GIT_ARGV" SEAM_SE="$SEAM_SIDE_EFFECTS" \
   jq -n '{
     git_version: env.GIT_VERSION,
     git_effective_path: env.GIT_EFFECTIVE_PATH,
@@ -763,6 +780,15 @@ JSON="$(GIT_VERSION="$GIT_VERSION" GIT_EFFECTIVE_PATH="$GIT_EFFECTIVE_PATH" \
       head_present_in_prepared_phase: env.HDR_HAS_HEAD,
       captured_lines: env.HDR_CAP,
       note: "diagnostic only (M8c): a transparent capture wrapper confined to one dedicated probe, feeding identical stdin to the real keystone and exiting with its code. The M8a and M8b probes run the UNWRAPPED keystone. Nothing here changes any allow/deny decision."
+    },
+
+    launcher_seam_probe: {
+      ok: (env.SEAM_OK == "true"),
+      failures: env.SEAM_FAIL,
+      side_effects: env.SEAM_SE,
+      external_command_log: env.SEAM_ARGV,
+      note: "ONE side-effect-free component mode over the SAME pre-confinement code path a real launch executes. The external-command boundary is a recording git first on PATH; an empty log means the boundary was bypassed and is itself a failure.",
+      record: (if env.SEAM_JSON == "null" then null else (env.SEAM_JSON | fromjson) end)
     },
 
     guarantee_scope: "correct enforcement against drift and misconfiguration, plus honest attestation. The shared common-dir remains read-write, so this is NOT a claim about a malicious actor."
