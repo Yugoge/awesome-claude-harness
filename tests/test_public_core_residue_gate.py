@@ -171,25 +171,21 @@ def test_constant_count_replacement_still_fails(pristine, tmp_path):
     """AC6 c: THE discriminating test — delete one allowlisted occurrence and add
     one new occurrence elsewhere so the aggregate count is unchanged. A
     count-based ratchet exits 0 here; a set-based gate must exit non-zero."""
-    root = _copy(pristine)
+    root = _copy(pristine, tmp_path)
     assert _run(root).returncode == 0
     entries = json.loads((root / ALLOWLIST).read_text(encoding="utf8"))["entries"]
     doomed = next(e for e in entries if e["path"].endswith(".md"))
     victim = root / doomed["path"]
     lines = victim.read_text(encoding="utf8").splitlines(keepends=True)
-    import hashlib
     removed = None
     for i, line in enumerate(lines):
-        fp = hashlib.sha256(line.rstrip("\n").encode()).hexdigest()[:16]
-        if fp == doomed["fingerprint"]:
+        if hashlib.sha256(line.rstrip("\n").encode()).hexdigest()[:16] == doomed["fingerprint"]:
             removed = lines.pop(i)
             break
     assert removed is not None, "could not locate the allowlisted line to delete"
-    victim.write_text("".join(lines), encoding="utf8")
+    _write(victim, "".join(lines))
     # add exactly ONE new, unallowlisted occurrence elsewhere -> net count unchanged
-    other = root / "agents" / "qa.md"
-    with other.open("a", encoding="utf8") as fh:
-        fh.write("\nSwapped-in residue: /root/somewhere/else\n")
+    _append(root / "agents" / "qa.md", "\nSwapped-in residue: /root/somewhere/else\n")
     _stage(root)
     r = _run(root)
     assert r.returncode != 0, "constant-count swap escaped the gate (ratchet, not a set)"
