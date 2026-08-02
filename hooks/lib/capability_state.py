@@ -314,13 +314,20 @@ def aggregate_verdict(state: dict, home: Path | None = None) -> tuple[str, str |
     for label in RELIED_UPON_EVENTS:
         if label not in by_label:
             return "UNPROTECTED", "missing_event_record"
-    run_id, nonce = state.get("run_id"), state.get("nonce")
+    run_id = state.get("run_id")
+    seen_nonces: set[str] = set()
     for label in RELIED_UPON_EVENTS:
         ev = by_label[label]
         if ev.get("run_id") != run_id:
             return "UNPROTECTED", "receipt_run_id_mismatch"
-        if not ev.get("nonce") or ev.get("nonce") == nonce and False:
+        ev_nonce = ev.get("nonce")
+        if not ev_nonce:
             return "UNPROTECTED", "receipt_nonce_missing"
+        # Per-event-DISTINCT, run-bound nonces: a replayed or shared nonce cannot
+        # evidence that this receipt came from THIS event's registration.
+        if ev_nonce in seen_nonces:
+            return "UNPROTECTED", "receipt_nonce_not_event_distinct"
+        seen_nonces.add(ev_nonce)
         if ev.get("event_discriminator") == "unsupported_self_check":
             return "UNPROTECTED", "event_identity_unsupported"
         if ev.get("outcome") != "PASS":
