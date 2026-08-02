@@ -251,7 +251,7 @@ fi
 # one is the repository's protected branch, the other is a transient position.
 resolve_protected_branch() {
     # tier 1 (local refs only): the remote-tracking default-branch symref.
-    git -C "$MAIN_ROOT" symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null \
+    "${GIT_UNMARKED[@]}" -C "$MAIN_ROOT" symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null \
         | sed 's@^origin/@@'
 }
 PROTECTED_BRANCH="$(resolve_protected_branch || true)"
