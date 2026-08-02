@@ -75,7 +75,7 @@ def _emit_block(pattern, command):
         f"Command: {command}\n"
         "Legal writers:\n"
         "  - views/*.md, manifest.json: Write tool (not Bash)\n"
-        "  - cp-state-*.json: python3 /root/.claude/scripts/spec-check.py\n"
+        f"  - cp-state-*.json: python3 {SPEC_CHECK}\n"
         "Never `echo >` or `cat >` these paths.\n"
     )
 
