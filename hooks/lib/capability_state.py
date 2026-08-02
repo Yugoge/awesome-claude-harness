@@ -354,6 +354,14 @@ def aggregate_verdict(state: dict, home: Path | None = None,
     if state.get("status") != "PASS":
         return "UNPROTECTED", f"state_status_{str(state.get('status')).lower()}"
 
+    # A PASS expires on wall-clock age as well as on binding change: same-session
+    # equality alone does not survive a host restart or a mid-session change in
+    # dispatch behaviour (codex #10). Freshness is re-earned, never assumed.
+    completed = _epoch(state.get("completion_time"))
+    ref = time.time() if now is None else now
+    if completed is None or (ref - completed) > PASS_MAX_AGE_SEC:
+        return "UNPROTECTED", "pass_expired"
+
     stored = state.get("binding") or {}
     reason = binding_failure(stored)
     if reason:
