@@ -178,7 +178,7 @@ def classify(path, lineno, content, lang, dspans, hspans):
 
 failures = 0 if not dup else 1
 live = set()
-for rel in (p.strip() for p in sys.stdin):
+for rel in scan_paths:
     if not rel:
         continue
     full = os.path.join(root, rel)
