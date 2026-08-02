@@ -23,7 +23,8 @@
     "requirements.txt",
     "requirements/**",
     "VERSION",
-    "PUBLIC-CORE.md"
+    "PUBLIC-CORE.md",
+    "release-membership.v1.json"
   ],
   "include_rationale": {
     "requirements.txt": "shared/infra, but the harness cannot install without its dependency spec.",
