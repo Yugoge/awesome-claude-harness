@@ -477,7 +477,7 @@ fi
 # ---------------------------------------------------------------------------
 if [ ! -f "$RESIDUE_ALLOWLIST" ]; then
   fail "residue allowlist not found: $RESIDUE_ALLOWLIST"
-elif printf '%s\n' "${PC_FILES[@]}" | residue_audit "$ROOT" "$RESIDUE_ALLOWLIST"; then
+elif residue_audit "$ROOT" "$RESIDUE_ALLOWLIST" git "${PC_SCAN_SPECS[@]}"; then
   pass "no un-allowlisted author-path residue in the public-core set"
 else
   fail "author-path residue gate failed (new/operational occurrence, unsupported class label, or stale allowlist entry)"
