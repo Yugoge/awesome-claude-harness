@@ -541,7 +541,7 @@ def apply_plan(ctx: Ctx, plan: dict) -> dict:
 # --------------------------------------------------------------------------- #
 # Uninstall
 # --------------------------------------------------------------------------- #
-def uninstall(ctx: Ctx) -> dict:
+def uninstall(ctx: Ctx, keep_payload: bool = False) -> dict:
     state = ctx.load_state()
     gens = state.get("generations", [])
     if not gens:
