@@ -223,9 +223,9 @@ if [[ "$MAIN_GIT_DIR_REAL" != "$MAIN_COMMON_DIR" ]]; then
     echo "Error: overnight launch requires the repository's primary checkout, but --project-dir resolves to a linked worktree (git-dir='$MAIN_GIT_DIR_REAL', common-dir='$MAIN_COMMON_DIR'). Refusing to launch (no state written)." >&2
     exit 1
 fi
-MAIN_HEAD_AT_START="$(git -C "$MAIN_ROOT" rev-parse HEAD 2>/dev/null || echo '')"
+MAIN_HEAD_AT_START="$("${GIT_UNMARKED[@]}" -C "$MAIN_ROOT" rev-parse HEAD 2>/dev/null || echo '')"
 # Dirty main tree is ALLOWED; we record it and NEVER stash/copy/commit it.
-if [[ -n "$(git -C "$MAIN_ROOT" status --porcelain 2>/dev/null)" ]]; then
+if [[ -n "$("${GIT_UNMARKED[@]}" -C "$MAIN_ROOT" status --porcelain 2>/dev/null)" ]]; then
     MAIN_DIRTY_AT_START=true
 else
     MAIN_DIRTY_AT_START=false
