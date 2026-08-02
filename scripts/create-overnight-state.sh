@@ -26,7 +26,8 @@ set -euo pipefail
 # marker FOR THAT INVOCATION ONLY. The variable is never unset process-wide and
 # is never reassigned here: the overnight actor's own later operations must keep
 # it, because that marker is what the whole protection chain keys on.
-GIT_UNMARKED=(env -u CLAUDE_OVERNIGHT_ACTOR git)
+GIT_UNMARKED_ENV=(env -u CLAUDE_OVERNIGHT_ACTOR)
+GIT_UNMARKED=("${GIT_UNMARKED_ENV[@]}" git)
 
 # --- Defaults ---
 END_TIME=""
