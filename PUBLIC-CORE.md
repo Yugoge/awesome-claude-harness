@@ -39,12 +39,18 @@ the author's machine), it is `private-lab`. "Release-clean" is a higher bar than
 The cleanest illustration of the carve already exists in the tree: the portable seed
 `settings.template.json` is `public-core`. Its counterpart, the live per-install
 `settings.json` (permission allow/deny/ask entries + absolute install-home paths), is
-**no longer tracked** — roadmap phase **P3** (generate-then-untrack) is done. It is now
-GENERATED from the template by `scripts/install/render-settings`, which
-`scripts/bootstrap` invokes at install time, and it is git-ignored via the root-anchored
-`/settings.json` rule. It therefore has no ledger row: the ledger classifies *tracked*
-top-level paths, and this one is deliberately not one. CI renders it after checkout so
+`private-lab`.
+
+Roadmap phase **P3** (generate-then-untrack) is now wired on the *generate* side: the
+file is GENERATED from the template by `scripts/install/render-settings`, which
+`scripts/bootstrap` invokes at install time; it is git-ignored by the root-anchored
+`/settings.json` rule; and CI renders it right after checkout so
 `scripts/verify-claims.sh` still has a concrete file to recompute its counts from.
+
+**One step remains: `git rm --cached settings.json`.** Until that runs the file is still
+in the index and keeps its ledger row below; afterwards the row must be deleted. Doing it
+in this order is safe in both states — an unclassified *tracked* top-level path is a hard
+gate failure, while a ledger row naming an untracked path is only an advisory `INFO`.
 
 ---
 
