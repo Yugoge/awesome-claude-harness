@@ -311,7 +311,7 @@ if [[ -x "$WORKTREE_SCRIPT" ]] && \
     WORKTREE_BRANCH=$(echo "$WORKTREE_RESULT" | grep -oP 'WORKTREE_BRANCH=\K\S+' || echo '')
     if [[ -n "$WORKTREE_PATH" && -d "$WORKTREE_PATH" ]]; then
         ISOLATION_KIND="registered_worktree"
-        WORKTREE_HEAD_AT_START="$(git -C "$WORKTREE_PATH" rev-parse HEAD 2>/dev/null || echo '')"
+        WORKTREE_HEAD_AT_START="$("${GIT_UNMARKED[@]}" -C "$WORKTREE_PATH" rev-parse HEAD 2>/dev/null || echo '')"
         echo "Created worktree: $WORKTREE_PATH (branch: $WORKTREE_BRANCH)" >&2
     fi
 fi
