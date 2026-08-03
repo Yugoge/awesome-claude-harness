@@ -17,6 +17,19 @@ Three subcommands, one consumer each:
                                      field is populated, and the results are provably the
                                      product of THIS run (executed == emitted == corpus).
 
+RESIDUAL LIMIT OF --coverage, DISCLOSED RATHER THAN PAPERED OVER
+-----------------------------------------------------------------
+This gate proves a manifest is STRUCTURALLY complete, internally consistent, and carries
+provenance fields. It cannot, by itself, prove those fields were not hand-authored: a manifest
+written by hand with plausible `observed_source.captured_from` strings, real-looking exit codes
+and `verdict` consistent with `observed == expected` will pass when the gate is run standalone
+against it. What actually binds the artifact to an execution is the ORDER in CI: the suite
+deletes any pre-existing manifest before running and writes results only from live invocations,
+and only then does this gate read the file. Run outside that order, `--coverage` is a schema and
+consistency check, not an attestation. Closing the gap properly needs a signed or
+externally-witnessed artifact, which is out of scope for this cycle and is named here as an open
+dependency rather than implied to be handled.
+
 WHY THIS FILE IS THE ONLY PLACE THE CLOSED SETS ARE WRITTEN
 -----------------------------------------------------------
 A prior revision of this lane's specification stated the `behavior` closed set five different
