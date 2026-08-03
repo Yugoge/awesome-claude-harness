@@ -340,13 +340,6 @@ and regression-guards it rather than silently changing the guard.
 - **Verifying test**: `hooks/tests/test_blackbox_integration.py:1 @4c33f2f5` (component /
   subprocess boundary) and `scripts/check-enforcement-evidence.py --claims` (drift guard).
 
-#### Superseded description (retained for provenance)
-
-- **Description**: Both `GIT_COMMAND_RE` (Python) and `GIT_CMD_RE` (POSIX ERE) use an anchor character class `[\s;&|()\`]` / `[[:space:];&|()\`]` that does not include `/`. As a result, the command `/usr/bin/git push --force origin master` does not match either regex and passes through both guards without triggering a block. In the overnight scope, the `git-keystone/reference-transaction` backstop intercepts this at the git layer. In interactive sessions where `CLAUDE_OVERNIGHT_ACTOR` is not set, there is no backstop — the bypass is un-backstopped.
-- **Incident context**: RISK-3 is the security seam referenced as "incident `b5d447e`" in `docs/dev/roadmap-world-class-readiness-20260704.md` B3.4. The commit class represents the interactive-session gap where the keystone actor-scope gate leaves a window.
-- **Fix in progress**: Sub-task F of the current work batch (`task_id: 20260704-134650`) will introduce `hooks/lib/git_command_classifier.py`, a shared Python classifier that uses command-position parsing (`os.path.basename(token) == 'git'`) rather than regex anchor class extension. Both `pretool-git-privilege-guard.py` and `pretool-bash-safety.sh` will consume the classifier. The fix is tracked as `R6` in `docs/dev/ticket-20260704-134650.md` and will be acceptance-tested by the pending generated AC-F tests (`test_AC_F1_a1b2c3d4e5f60015.py`, `test_AC_F2_a1b2c3d4e5f60016.py`, `test_AC_F4_a1b2c3d4e5f6001f.py`) once sub-task F is implemented — those tests currently contain `pytest.fail(TEST_INCOMPLETE)` stubs.
-- **Current status**: RISK-3 gap UNMITIGATED in interactive sessions until sub-task F is merged.
-
 ---
 
 ## 5. Threat Boundaries (Out of Scope)
@@ -359,6 +352,21 @@ The following threat classes are explicitly NOT addressed by this threat model o
 - **Claude model-level jailbreaks**: prompt injection that overrides the model's adherence to its system prompt is a model safety problem, not a harness problem. The harness defends against the model's output (tool calls) but not against the model being instructed to produce a particular output.
 - **Exfiltration via read-only Bash**: the harness permits many read-only Bash commands. An agent can `cat`, `curl`, or `grep` files and exfiltrate their content through the conversation context. Read-only exfiltration is out of scope; the harness focuses on write/mutate operations.
 - **Secrets disclosure via `SECURITY.md` disclosure policy**: see `SECURITY.md` for the responsible disclosure process; that document governs how to report security vulnerabilities in the harness itself.
+
+### 5.1 Explicit Non-Goals
+
+The same boundaries again, stated as a table a hostile reader can check against §1.1-1.3 rather
+than as prose to be skimmed. **A non-goal is not a defect report** — it is a deliberate
+exclusion, and each one names what would have to change for it to become in-scope.
+
+| non-goal | why it is excluded | what would move it in-scope |
+|---|---|---|
+| **Read-only exfiltration** | The harness permits many read-only Bash commands; an agent can read a file and carry its content out through the conversation context. Defending this would require gating reads, which would make the harness unusable. Only write/mutate-path exfiltration is defended. | An egress-classifying layer over read results, plus a policy for what counts as sensitive. |
+| **Social engineering of the human operator** | Every guard here has a documented human escape hatch by design. An attacker who persuades the human to open one has not defeated a control, they have used it. | Nothing — this is definitionally outside a harness that must remain human-overridable. |
+| **Hardware compromise / physical filesystem access** | An attacker who can rewrite hook files directly is already inside every Python-level control. No hardware root-of-trust exists. | Signed hooks verified by something outside the filesystem the agent can reach. |
+| **Supply-chain compromise of `python3`, `bash`, `git`, `jsonschema`** | System package versions are not pinned; every guard is downstream of those binaries behaving as documented (§1.3). | Pinned, hash-verified system dependencies and a verified boot path. |
+| **Claude model-level jailbreaks** | The harness defends against the model's *output* (tool calls), not against the model being talked into producing a particular output. | Nothing at this layer; that is a model-safety problem. |
+| **Whether the host honors a non-zero hook exit code** | Untested and untestable here — no real Claude Code dispatcher is driven in this environment. This is why `docs/ENFORCEMENT-LEDGER.md` carries **zero** `enforced` rows. | A CI harness running real Claude Code builds (tracked as R3, **incomplete — not satisfiable in this environment**). |
 
 ---
 
