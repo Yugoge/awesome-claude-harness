@@ -607,8 +607,12 @@ def test_preflight_cli_is_a_real_non_hook_callsite(home: Path, statedir: Path):
     assert rec["component"] == "preflight_consumer"
     rc, rec = _run("slashcommand:/do")
     assert rc == 0 and rec["exemption"] == "human_consent_escape_hatch"
+    # codex #9: NOT_PROTECTED must not share exit 0 with PERMIT, or a mistyped
+    # route reads as approval.
     rc, rec = _run("tool:Agent")
-    assert rc == 0 and rec["decision"] == "NOT_PROTECTED"
+    assert rc == 3 and rec["decision"] == "NOT_PROTECTED"
+    rc, rec = _run("tool:Typoed-Route")
+    assert rc == 3
     # Preflight must never mint state — it reads the handshake, it is not one.
     assert not cs.state_path(sid, statedir).exists()
 
