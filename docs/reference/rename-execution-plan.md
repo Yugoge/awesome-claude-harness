@@ -126,8 +126,15 @@ Every line below is a live `https://github.com/Yugoge/awesome-claude-harness…`
 | `README.md` | `Released under the **MIT License** … Source: [`Yugoge/awesome-claude-harness`](https://github.com/Yugoge/awesome-claude-harness).` | source link (**this single line carries the old name twice**) |
 | `CHANGELOG.md` | `[Unreleased]: https://github.com/Yugoge/awesome-claude-harness/compare/v1.0.0...HEAD` | compare link |
 | `CHANGELOG.md` | `[1.0.0]: https://github.com/Yugoge/awesome-claude-harness/releases/tag/v1.0.0` | release link |
-| `NESTED-REPO.md` | `- **Remote**: `git@github.com:Yugoge/awesome-claude-harness.git`` | remote |
+| `NESTED-REPO.md` | `- **Remote**: `git@github.com:<owner>/awesome-claude-harness.git`` | remote (SSH, not HTTPS — see the note below) |
 | `docs/reference/git-fswatch.md` | `Report issues: https://github.com/Yugoge/awesome-claude-harness/issues` | issues URL |
+
+**Why the `NESTED-REPO.md` row elides the account name.** That row quotes an **SSH** remote, and
+the full `git@github.com:` + account literal is one of the three unconditional `HARD_MARKERS` in
+`scripts/check-public-core.sh` — a maintainer-environment marker with **no allowlist path**, so a
+verbatim quote here would turn the boundary gate red. The account is `Yugoge` throughout this
+document; only the **repository name** is load-bearing for the rename, and it is quoted intact.
+**Do not "restore" the elided account** — doing so re-breaks CI.
 
 **The Tier 2 gate, and why the asymmetry is decisive.** Flipping these in-tree **before** the
 external rename points every one of them at a **404** — the new URL does not exist yet.

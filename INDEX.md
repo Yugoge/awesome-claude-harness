@@ -1,7 +1,7 @@
 # dot-claude
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-08-03T14:37:34Z*
+*Last updated: 2026-08-03T15:08:05Z*
 **Total entries**: 460
 **Convention**: kebab
 
@@ -68,7 +68,7 @@ dot-claude/
 │   │   ├── `test-suite-overhaul-plan.md` - Test Suite Overhaul Plan (Plan-of-Record)
 │   │   ├── `tmp-cleanup-convention.md` - Ad-hoc scratch directory convention
 │   │   └── `venv-repair.md` - venv-repair — restoring `~/.claude/venv` when interpreter symlinks break
-│   └── `THREAT-MODEL.md` - Threat Model — awesome-claude-harness
+│   └── `THREAT-MODEL.md` - Threat Model — claude-code-guardrails
 ├── examples/
 │   └── guard-demo/
 │       ├── `run-demo.sh` - Description: Reproducible guard demo — a dangerous operation is BLOCKED by the
