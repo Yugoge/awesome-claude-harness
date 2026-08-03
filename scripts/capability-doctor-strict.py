@@ -76,12 +76,25 @@ def main(argv=None) -> int:
     ap.add_argument("--verbose", action="store_true",
                     default=os.environ.get("STRICT_VERBOSE") == "1")
     ap.add_argument("--timeout", type=int, default=5)
+    ap.add_argument("--route", default=None,
+                    help="preflight one route through the independent consumer and exit; "
+                         "runs no handshake and writes no state")
     args = ap.parse_args(argv)
 
     home = cs.harness_home(args.home)
     session_id = (args.session_id or os.environ.get("CLAUDE_SESSION_ID")
                   or f"noninteractive-{os.getpid()}")
     state_file = cs.state_path(session_id)
+
+    # PREFLIGHT MODE — the entrypoint-side, non-hook-dispatched callsite. It reads
+    # state rather than producing it, so a protected workflow can consult the
+    # handshake without the 25s cost of a fresh run and without overwriting a PASS
+    # that another consumer is relying on.
+    if args.route:
+        rec = cs.evaluate_activation(args.route, home=home, session_id=session_id,
+                                     state_file=state_file, component="preflight_consumer")
+        print(json.dumps(rec, indent=1, sort_keys=True))
+        return 0 if rec["decision"] in ("PERMIT", "NOT_PROTECTED") else 1
 
     # Assert-not-assume: record whether a preseeded PASS existed, then run fresh
     # anyway. The fresh run's PENDING write is what actually invalidates it.
