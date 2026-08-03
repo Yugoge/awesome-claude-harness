@@ -7,8 +7,16 @@ handshake published a fresh, binding-matched PASS for this session.
 This gate is deliberately NOT the primary enforcement point. It is delivered by
 the very mechanism it polices, so a host that silently no-ops PreToolUse also
 no-ops this file. The primary, non-circular enforcement point is the in-process
-consumer `hooks/lib/capability_state.evaluate_activation()`, invoked from
-protected-workflow entrypoints and from `scripts/doctor --strict`.
+consumer `hooks/lib/capability_state.evaluate_activation()`, invoked by
+`scripts/capability-doctor-strict.py --route <route>` (the per-route preflight)
+and by `scripts/doctor --strict` (the all-routes sweep) — neither of which
+involves hook dispatch. See that module's docstring for the full callsite list
+and for the one claim it does NOT make.
+
+Two routes are permitted by design even with no handshake state: the human
+consent escape hatches (/do, /allow), flagged in the manifest. Blocking them
+would leave a human on an unprotected host with no way to authorise a repair.
+Fail-closed must not mean fail-sealed.
 
 Output contract: silent + exit 0 when the route is unprotected or the handshake
 passes. On refusal, one JSON gate decision record on stderr, exit 2.
