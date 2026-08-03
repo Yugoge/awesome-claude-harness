@@ -82,7 +82,19 @@ echo "[pretool-git-privilege-guard.py exit $RC1 — nothing executed]"
 sleep "$PACE_READ_REFUSAL"
 
 # ===== BEAT 4 — a narrowly-scoped grant permits EXACTLY ONE operation ================
-# The grant is installed by the harness (never by this script) before it is invoked.
+# The grant is installed by the VERIFIER, never by this script, and only now -- after the
+# unaided refusal of beats 1-3 has already been captured. This script cannot write, move
+# or delete a grant; it can only ask the verifier to install one and wait for the ack.
+: > "$FIXTURE/work/.request-grant"
+RDV_WAITED=0
+while [ ! -e "$FIXTURE/work/.grant-installed" ]; do
+  sleep 0.05
+  RDV_WAITED=$((RDV_WAITED + 1))
+  if [ "$RDV_WAITED" -gt 200 ]; then
+    echo "run-hero-demo: verifier never installed the grant" >&2
+    exit 2
+  fi
+done
 echo "\$ $PUSH_CMD   # retried with a single-use grant in place"
 pretool_push
 RC2=$?
