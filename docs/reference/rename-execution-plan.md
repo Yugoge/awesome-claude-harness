@@ -6,12 +6,17 @@
 
 ---
 
-## Callout — the single remaining user-visible inconsistency
+## Callout — the clone URL, the last user-visible inconsistency once Tier 1-B lands
 
 After this change a reader sees the **new** name in the README title and the **old** name in
 the install command. That is honest — the clone line names the repository's *actual current*
-URL — but it is the one place the split is visible to a user, so it must be flipped the moment
-the GitHub repository is renamed.
+URL — but it must be flipped the moment the GitHub repository is renamed.
+
+While Tier 1-B is still outstanding the clone URL is **not** the only visible split: the
+threat-model heading and its derived `INDEX.md` mirror also still carry the old name. Those
+clear as soon as the lane that owns that file lands (see Tier 1-B). Once they do, this clone
+URL is the single remaining user-visible inconsistency — and it is the only one gated on an
+**external** action rather than on in-tree work.
 
 **The line to flip, identified by its exact text (not by a line number — a sibling lane
 restructures the README's first screen):**
