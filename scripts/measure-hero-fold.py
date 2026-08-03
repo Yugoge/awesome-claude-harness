@@ -52,6 +52,12 @@ def md_to_html(md: str) -> str:
         body = markdown.markdown(first_screen, extensions=["fenced_code", "tables"])
     except Exception:
         body = _mini_markdown(first_screen)
+    # The preview lives outside the repo, so repo-relative asset srcs must be rewritten
+    # to absolute file: paths. Without this the hero silently fails to load and the page
+    # is measured with an alt-text box in place of a ~500px-tall image -- which makes an
+    # over-the-fold layout look far closer to fitting than it is.
+    body = re.sub(r'src="(?!https?:|file:|/)([^"]+)"',
+                  lambda m: f'src="{(REPO_ROOT / m.group(1)).as_uri()}"', body)
     return f"<!doctype html><meta charset=utf-8><style>{CSS}</style><main>{body}</main>"
 
 

@@ -116,15 +116,13 @@ def pred_known_limits() -> tuple[str, str, str, str]:
         return (
             "not-yet",
             "**Known limits — this guard does not cover everything.** Wrapper- and "
-            "redirection-prefixed forms of destructive `git` subcommands (for example "
-            "`env -u VAR git …` or `2>/dev/null /usr/bin/git …`) are not matched by the "
-            "Bash pre-execution gate: its classifier reports a *successful-but-empty* "
-            "parse, which is treated as a healthy status and therefore suppresses the "
-            "regex backstop that exists to catch exactly this case. The permission layer "
-            f"does not back it up — **{git_related} of {total} deny rules are "
-            f"git-related** (recomputed from `{source}`). These are detection-layer "
-            "measurements only: no destructive operation was executed, and no executable "
-            "bypass was demonstrated.",
+            "redirection-prefixed `git` forms (`env -u VAR git …`, "
+            "`2>/dev/null /usr/bin/git …`) slip past the Bash pre-execution gate: a "
+            "*successful-but-empty* parse counts as healthy and suppresses the regex "
+            "backstop meant to catch them. The permission layer does not back it up — "
+            f"**{git_related} of {total} deny rules are git-related** (recomputed from "
+            f"`{source}`). Detection-layer measurement only: no destructive operation "
+            "was executed and no executable bypass was demonstrated.",
             source, "spec-item-D",
         )
     # limb (ii) holds -- only now is limb (i) reachable, and it must be a live re-run.
@@ -145,8 +143,8 @@ def pred_supported_builds() -> tuple[str, str, str, str]:
     if is_committed(art):
         return ("passed", "**Supported builds** — declared and committed.", art, "none")
     return ("not-yet",
-            "**Supported builds** — not yet: no supported-builds declaration is "
-            "committed (tracked: spec item A).", "none", "spec-item-A")
+            "**Supported builds** — not yet: none committed (spec item A).",
+            "none", "spec-item-A")
 
 
 def pred_capability_check() -> tuple[str, str, str, str]:
@@ -158,8 +156,8 @@ def pred_capability_check() -> tuple[str, str, str, str]:
         return ("passed", "**Strict capability check** — passes on this host.",
                 handshake, "none")
     return ("not-yet",
-            "**Strict capability check** — not yet: the handshake it depends on is not "
-            "committed (tracked: spec item A).", "none", "spec-item-A")
+            "**Strict capability check** — not yet: handshake not committed "
+            "(spec item A).", "none", "spec-item-A")
 
 
 def pred_blackbox() -> tuple[str, str, str, str]:
@@ -171,8 +169,8 @@ def pred_blackbox() -> tuple[str, str, str, str]:
                 f"**Black-box guard tests** — {len(committed)} committed, passing.",
                 "tests/blackbox", "none")
     return ("not-yet",
-            "**Black-box guard tests** — not yet: `tests/blackbox/` holds no committed "
-            "test (tracked: spec item D).", "none", "spec-item-D")
+            "**Black-box guard tests** — not yet: none committed (spec item D).",
+            "none", "spec-item-D")
 
 
 def pred_release() -> tuple[str, str, str, str]:
