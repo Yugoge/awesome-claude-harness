@@ -82,8 +82,8 @@ USER_SETTINGS = {
         # disturb these groups or their order.
         "PreToolUse": [
             {"matcher": "Bash",
-             "hooks": [{"type": "command", "command": "bash /home/u/my-own-guard.sh"}]},
-            {"hooks": [{"type": "command", "command": "python3 /home/u/second-guard.py"}]},
+             "hooks": [{"type": "command", "command": f"bash {USER_HOOK_DIR / 'my-own-guard.sh'}"}]},
+            {"hooks": [{"type": "command", "command": f"python3 {USER_HOOK_DIR / 'second-guard.py'}"}]},
         ],
         "Stop": [{"hooks": [{"type": "command", "command": "echo user-stop"}]}],
     },
