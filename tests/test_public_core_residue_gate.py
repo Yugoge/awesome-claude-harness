@@ -118,6 +118,27 @@ def _ledger_public_core(root: Path) -> list[str]:
     return sorted(set(out))
 
 
+def _public_core_files(root: Path) -> set[str]:
+    """Tracked files in the ledger-derived public-core set — the CHECKOUT-mode scan scope.
+
+    The allowlist deliberately spans TWO scopes: checkout mode scans public-core,
+    archive mode scans the wider release-membership set. A control that mutates an
+    allowlist entry must therefore pick an entry THIS mode actually looks at —
+    mutating an archive-only entry (PUBLIC-CORE.md is `shared/infra`) exercises
+    nothing and reads as a false gate failure.
+    """
+    prefixes = _ledger_public_core(root)
+    return set(subprocess.run(["git", "-C", str(root), "ls-files", "--", *prefixes],
+                              capture_output=True, text=True).stdout.split())
+
+
+def _in_scope_entries(root: Path) -> list[dict]:
+    """Allowlist entries whose path is inside the checkout-mode scan scope."""
+    scope = _public_core_files(root)
+    doc = json.loads((root / ALLOWLIST).read_text(encoding="utf8"))
+    return [e for e in doc["entries"] if e["path"] in scope]
+
+
 def _victim(root: Path, prefix: str) -> Path:
     """An EXISTING already-classified public-core file under `prefix`.
 
