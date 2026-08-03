@@ -4,9 +4,26 @@ verdict, and the INDEPENDENT (non-hook-dispatched) preactivation consumer.
 
 This module is a plain importable library, never a hook. That is load-bearing:
 the PreToolUse capability gate is delivered by the very mechanism it polices, so a
-host that silently no-ops PreToolUse also no-ops the gate. Every enforcement
-decision here is reachable in-process from a protected workflow's own entrypoint
-and from `scripts/doctor --strict`, with no hook dispatch involved.
+host that silently no-ops PreToolUse also no-ops the gate.
+
+`evaluate_activation()` is the non-circular enforcement point. Its callsites are
+named here rather than implied, because a docstring that named entrypoints which
+never call it is how the "independent" half of this design came to be decorative:
+
+  - `scripts/capability-doctor-strict.py --route <route>`  -- the per-route
+    preflight a protected workflow invokes before it activates. This is the
+    supported entrypoint-side callsite and the value of the manifest's
+    `independent_enforcement_callsite` field.
+  - `scripts/capability-doctor-strict.py` (and therefore `scripts/doctor
+    --strict`) -- sweeps every manifested route in one pass.
+  - `hooks/pretool-capability-gate.py` -- defense-in-depth only, and the one
+    caller that IS hook-dispatched.
+
+None of the first two involve hook dispatch, so they still refuse on a host that
+silently no-ops PreToolUse. What is NOT yet true, and is tracked as an open
+residual rather than asserted here: no `commands/*.md` entrypoint invokes the
+preflight yet, because a blocking preflight cannot be landed until the handshake
+can actually reach PASS on a live host.
 
 Deliberate structural property (do not "optimise" it away): the consumer NEVER
 parses the `hooks` arrays of any settings layer. Settings files are read as raw
