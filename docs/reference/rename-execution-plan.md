@@ -223,7 +223,7 @@ old name.
 |---|---|---|---|
 | 1 | Rename the GitHub repository to `claude-code-guardrails` | **User** | Not performed and not automated here. The configured remote still names the old repository. |
 | 2 | Flip the six Tier 2 URLs | Follow-up, **after** step 1 | Early = 404. Do it promptly (redirect decay). |
-| 3 | Land the Tier 1-B rows | Follow-up | Needs the SVG generator and the INDEX generator; the threat-model H1 needs the sibling lane to land first. |
+| 3 | Land the two remaining Tier 1-B rows | Follow-up | The generator-dependent rows are done. What remains is the `docs/THREAT-MODEL.md` H1, which the sibling lane owning that file must land, followed by one INDEX regeneration to refresh its derived mirror. |
 | 4 | Rename the sentinel + wire marker | **Lane C** | Use the dual-accept recipe above. |
 | 5 | Build the `claude-guard` CLI | **Lane C** | Gated on Lane A. |
 | 6 | Publish / announce / submit anywhere | **User** | Explicitly out of scope; gated on the P1 work landing. |
