@@ -1,13 +1,14 @@
 # guard-demo
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-06-17T20:46:57Z*
-**Total entries**: 0
+*Last updated: 2026-08-03T13:17:44Z*
+**Total entries**: 1
 **Convention**: kebab
 
 ## Tree
 ```
 guard-demo/
+├── `run-demo.sh` - Description: Reproducible guard demo — a dangerous operation is BLOCKED by the
 ```
 <!-- /AUTO:index-stats -->
 
