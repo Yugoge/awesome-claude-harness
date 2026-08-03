@@ -57,6 +57,13 @@ SCHEMA_VERSION = 1
 MANIFEST_RELPATH = "policies/protected-workflow-manifest.v1.json"
 VERSION_RELPATH = "VERSION"
 
+# The human consent escape hatches, duplicated here as a constant so the recovery
+# path survives an unreadable or malformed manifest. Refusing these two routes
+# because the manifest is broken is precisely the self-sealing failure this
+# carve-out exists to prevent. A drift test pins this tuple to the manifest's
+# `human_consent_escape_hatch` flags and to the gate hook's own literal.
+HUMAN_CONSENT_ESCAPE_HATCH_ROUTES = ("slashcommand:/do", "slashcommand:/allow")
+
 # Fixed order is part of the canonical binding definition -- reordering changes
 # the tuple and is therefore a breaking change, not a refactor.
 SETTINGS_LAYERS = ("settings.json", "settings.local.json", ".claude/settings.local.json")
