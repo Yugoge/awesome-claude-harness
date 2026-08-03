@@ -193,9 +193,25 @@ status: MITIGATED
   engines still exist as separate hand-authored patterns. Their current definitions are:
   - Python: `GIT_COMMAND_RE = r'(?:^|[\s;&|()`])git' + GIT_GLOBAL_OPTION_RE + r'\s+'`
   - POSIX ERE: `GIT_CMD_RE='(^|[[:space:];&|()`])git'`
-- **Risk**: Any future edit to one regex without updating the other creates an asymmetric bypass: commands blocked by one guard but not the other can be routed through the unpatched engine. This is the class of drift that RISK-3 already exemplifies — both regexes currently lack the `/` character in the anchor class, meaning `/usr/bin/git push` matches neither.
-- **Planned mitigation**: Add a cross-consistency test that runs a canonical command corpus against both engines and asserts identical outcomes. Long term: consolidate into `hooks/lib/git_command_classifier.py` (sub-task F of the current work batch). Tracked as RISK-2 in `docs/dev/roadmap-world-class-readiness-20260704.md` B3.4.
-- **Acceptance test reference**: No cross-consistency test exists yet. The sub-task F tests (`tests/generated/20260704-134650/test_AC_F1_a1b2c3d4e5f60015.py`, `test_AC_F2_a1b2c3d4e5f60016.py`) will provide partial coverage once sub-task F is implemented.
+- **Risk**: any future edit to one regex without updating the other creates an asymmetric
+  bypass — commands blocked by one guard but not the other can be routed through the unpatched
+  engine. Both anchor classes still lack the `/` character, which is one dimension of RISK-3.
+- **What actually mitigated it — and what did not.** Consolidation into a single engine **did
+  not occur**, and the earlier plan to perform one has been withdrawn from this entry rather
+  than left standing as an aspiration. What closed the drift risk is the originally-planned
+  cross-consistency test: `hooks/tests/test_git_cmd_cross_consistency.py:1 @4c33f2f5` (added
+  `407888c4`) runs a shared corpus against both engines *and* against
+  `hooks/lib/git_command_classifier.py:1 @4c33f2f5`, asserting agreement, with accepted
+  divergences marked `xfail`. Drift between the two engines now fails a test instead of opening
+  a silent hole.
+- **Note on the classifier's role**: `hooks/lib/git_command_classifier.py:1 @4c33f2f5` is a
+  *supplementary augmentation layer* consulted by both guard sites for path-qualified forms. It
+  is not a replacement for either regex, and describing it as one would be the same overclaim
+  this section exists to remove.
+- **Standing guard**: `scripts/check-enforcement-evidence.py --claims` asserts both symbols
+  still exist on every CI run, so a future consolidation invalidates this prose loudly instead
+  of outdating it quietly.
+- **Verifying test**: `hooks/tests/test_git_cmd_cross_consistency.py:1 @4c33f2f5`.
 
 ### RISK-3: Path-Qualified Git (`/usr/bin/git push`) Bypasses Both Regex Engines in Interactive Sessions
 
