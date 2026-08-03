@@ -150,12 +150,37 @@ The overnight `reference-transaction` keystone (§2.1 secondary backstop) acts a
 
 ## 4. Known Residual Risks
 
-### RISK-1: `hooks/lib/runtime_guard.py` is a 5,839-line SPOF
+> **Citation contract for this section**: every file reference is written `path:line @<sha8>`,
+> and every numeric claim is pinned to the revision it was measured at. A citation without a
+> revision is not evidence — it is a snapshot that decays silently. This section proves that on
+> itself: the RISK-2 entry's original citations (`:105`, `:1367`) were exactly correct when
+> written and were both wrong thirteen days later. `scripts/check-enforcement-evidence.py
+> --claims` fails CI if any citation here loses its pin.
 
-- **Description**: `runtime_guard.py` is a single monolithic module (5,839 lines as of HEAD `06e0b0dd`) imported fail-closed by `pretool-bash-safety.sh` via the embedded Python interpreter. It is the single largest file in the codebase and serves as the central routing hub for Bash safety decisions. A bug anywhere in the module can affect the entire Bash guard.
-- **Current risk**: If `runtime_guard.py` raises an unhandled exception, `pretool-bash-safety.sh` falls back to a protected-verb-family deny list at lines 96-103 (covers push, reset --hard, known destructive forms). That fallback is fail-closed for the covered verbs but may lose fine-grained/project-specific coverage for commands outside it. The module's size also makes it difficult to audit and to test comprehensively.
-- **Planned mitigation**: Decompose into a package (`hooks/lib/runtime_guard/`) with domain-scoped sub-modules. Tracked as GAP-1 in `docs/dev/roadmap-world-class-readiness-20260704.md` B4 (P2 backlog, medium effort). Not yet in scope for the current work batch.
-- **Acceptance test reference**: No dedicated RISK-1 unit test exists yet. Coverage comes indirectly through `hooks/tests/test_bash_safety_context.py` and `test_bash_safety_context_rules.py`.
+### RISK-1: The Bash-Guard Core Is Still the Largest File in the Tree
+
+status: PARTIALLY MITIGATED
+
+- **Description**: the Bash guard's decision logic was a single monolithic module. It is now a
+  package, but the mass moved rather than shrank, and the core is still the largest file in the
+  repository, so the single-point-of-failure and auditability concerns are **reduced, not
+  removed**.
+- **What actually changed** (each figure pinned to its own revision):
+  - `407888c4` turned `hooks/lib/runtime_guard.py:1 @407888c4` into a 17-line delegating shim
+    and moved the logic to `hooks/lib/runtime_guard/_core.py:1 @407888c4`, which was itself
+    **5,839 lines @407888c4** — the same figure the original entry attributed to
+    `runtime_guard.py` at `06e0b0dd`, where it was also accurate. The claim went stale by
+    *relocation*, not by being wrong when written.
+  - Decomposition then ran as six phases — `455f5be6` (shell_lex), `9752a8c0` (constants),
+    `72a2525f` (pathmatch), `96cc84a9` (config), `8aeaa718` (find_cmds + git_cmds) and
+    `432c8d70`, *"complete monolith decomposition"* — hardened at `915aa830`.
+  - Current size: `hooks/lib/runtime_guard/_core.py:1 @4c33f2f5` is **4,717** lines, with 8
+    sibling modules alongside it.
+- **Residual**: a defect anywhere in the core still affects the whole Bash guard. If it raises,
+  `hooks/pretool-bash-safety.sh:96 @4c33f2f5` falls back to a protected-verb-family deny list
+  that is fail-closed for the verbs it covers and blind to everything else.
+- **Verifying test**: no dedicated RISK-1 test. Indirect coverage via
+  `hooks/tests/test_bash_safety_context.py:1 @4c33f2f5`.
 
 ### RISK-2: Two Hand-Synced Git Regex Engines with No Cross-Consistency Test
 
