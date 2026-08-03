@@ -78,12 +78,13 @@ positioning failure, and renaming some of it is actively unsafe *right now*.
 | `NOTICE` | name | **DONE** |
 | `tools/demo/sample-trace.json` | `session_title` | **DONE** |
 | `tools/demo/manifest.schema.md` | doc example string | **DONE** |
+| `.github/assets/demo-trace.json` | `session_title` | **DONE** |
+| `.github/assets/hook-trace.json` | `session_title` (` · hook kernel` suffix preserved) | **DONE** |
+| `.github/assets/pipeline-hero.svg` | chrome title | **DONE** — regenerated, never hand-edited |
+| `.github/assets/hook-hero.svg` | chrome title | **DONE** — regenerated, never hand-edited |
+| `INDEX.md` — `ARCHITECTURE.md` framing mirror | derived heading | **DONE** — regenerated |
+| `INDEX.md` — `THREAT-MODEL.md` name mirror | derived heading | **BLOCKED** — see Tier 1-B |
 | `docs/THREAT-MODEL.md` H1 | name | **BLOCKED** — see Tier 1-B |
-| `.github/assets/demo-trace.json` | `session_title` | **BLOCKED** — see Tier 1-B |
-| `.github/assets/hook-trace.json` | `session_title` | **BLOCKED** — see Tier 1-B |
-| `.github/assets/pipeline-hero.svg` | regenerated chrome title | **BLOCKED** — see Tier 1-B |
-| `.github/assets/hook-hero.svg` | regenerated chrome title | **BLOCKED** — see Tier 1-B |
-| `INDEX.md` | regenerated derived mirrors | **BLOCKED** — see Tier 1-B |
 
 The `LICENSE` edit changed **only** the project name inside the parenthetical. The copyright
 holder, the year and the entire licence body are byte-identical.
