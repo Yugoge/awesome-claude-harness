@@ -173,10 +173,14 @@ class GrantWatcher(threading.Thread):
     the equivalent guarantee is the finally: block that installs cleanup before any grant
     is installed."""
 
-    def __init__(self, t0: float):
+    def __init__(self, t0: float, fixture: Path | None = None):
         super().__init__(daemon=True)
         self.t0 = t0
+        self.fixture = fixture
         self.samples: list[dict] = []
+        # Set when this thread -- the VERIFIER -- installs the one grant, mid-run, after
+        # the unaided refusal of beats 1-3 has already been captured (M18 step 2).
+        self.grant_hash_at_install: str | None = None
         # NB: named _halt, not _stop -- threading.Thread._stop is an inherited method.
         self._halt = threading.Event()
 
