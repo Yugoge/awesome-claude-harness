@@ -117,12 +117,14 @@ def pred_known_limits() -> tuple[str, str, str, str]:
             "not-yet",
             "**Known limits — this guard does not cover everything.** Wrapper- and "
             "redirection-prefixed `git` forms (`env -u VAR git …`, "
-            "`2>/dev/null /usr/bin/git …`) slip past the Bash pre-execution gate: a "
-            "*successful-but-empty* parse counts as healthy and suppresses the regex "
-            "backstop meant to catch them. The permission layer does not back it up — "
-            f"**{git_related} of {total} deny rules are git-related** (recomputed from "
-            f"`{source}`). Detection-layer measurement only: no destructive operation "
-            "was executed and no executable bypass was demonstrated.",
+            "`2>/dev/null /usr/bin/git …`) are **not matched** by the Bash "
+            "pre-execution gate's classifier: it returns a *successful-but-empty* "
+            "parse, which counts as a healthy status and therefore suppresses the "
+            "regex backstop meant to catch them. Nothing backs that up at the "
+            f"permission layer either — **no deny rule mentions git** ({git_related} "
+            f"of {total} deny entries contain the string `git`, recomputed from "
+            f"`{source}`). These are **detection-layer measurements**: the forms were "
+            "inspected, never executed, and no bypass was demonstrated end-to-end.",
             source, "spec-item-D",
         )
     # limb (ii) holds -- only now is limb (i) reachable, and it must be a live re-run.
@@ -153,7 +155,11 @@ def pred_capability_check() -> tuple[str, str, str, str]:
         encoding="utf-8", errors="replace")
     handshake = "scripts/capability-handshake.py"
     if has_strict and is_committed(handshake):
-        return ("passed", "**Strict capability check** — passes on this host.",
+        # Structural presence only. Saying "passes on this host" would assert an
+        # execution this predicate never performs.
+        return ("passed",
+                "**Strict capability check** — handshake committed and "
+                "`scripts/doctor --strict` available (not executed here).",
                 handshake, "none")
     return ("not-yet",
             "**Strict capability check** — not yet: handshake not committed "
@@ -165,8 +171,10 @@ def pred_blackbox() -> tuple[str, str, str, str]:
     files = [p for p in d.glob("**/*") if p.is_file()] if d.is_dir() else []
     committed = [p for p in files if is_committed(str(p.relative_to(REPO_ROOT)))]
     if committed:
+        # "passing" would assert a test run this predicate never performs.
         return ("passed",
-                f"**Black-box guard tests** — {len(committed)} committed, passing.",
+                f"**Black-box guard tests** — {len(committed)} committed test file(s) "
+                f"(presence only; not executed here).",
                 "tests/blackbox", "none")
     return ("not-yet",
             "**Black-box guard tests** — not yet: none committed (spec item D).",
@@ -182,7 +190,9 @@ def pred_release() -> tuple[str, str, str, str]:
 
 def pred_os() -> tuple[str, str, str, str]:
     runners: set[str] = set()
-    for wf in sorted((REPO_ROOT / ".github/workflows").glob("*.yml")):
+    wfs = sorted(list((REPO_ROOT / ".github/workflows").glob("*.yml"))
+                 + list((REPO_ROOT / ".github/workflows").glob("*.yaml")))
+    for wf in wfs:
         for m in re.finditer(r"runs-on:\s*(\S+)", wf.read_text(encoding="utf-8",
                                                                errors="replace")):
             runners.add(m.group(1).strip().strip("\"'"))
@@ -332,6 +342,34 @@ def cmd_check(readme: Path) -> int:
             violations.append(f"[byte-compare] row {rid!r}: marker line differs from regenerated")
         if got[1] != exp[1]:
             violations.append(f"[byte-compare] row {rid!r}: visible text differs from regenerated")
+
+    # (e) WHOLE-REGION byte-compare. The per-row compare above only inspects recognized
+    # marker/visible pairs, so free-standing authored prose inserted INSIDE a canonical
+    # region -- an extra fabricated bullet, a second copy of a region -- was invisible to
+    # it and exited 0. That was a genuine fail-open hole (codex review). Comparing the
+    # entire region against render_region() leaves no unreviewed bytes inside the fence.
+    for rid in ("limits", "status"):
+        span = region_span(text, rid)
+        if span is None:
+            continue
+        committed_region = text[span[0]:span[1]]
+        if committed_region != render_region(rid, expected[rid]):
+            violations.append(
+                f"[region-byte-compare] region {rid!r} does not match the regenerated "
+                f"region exactly (content inside the canonical fence was added, removed "
+                f"or reordered)")
+        # Exactly one begin/end pair per region.
+        if text.count(BEGIN.format(rid=rid)) != 1 or text.count(END.format(rid=rid)) != 1:
+            violations.append(
+                f"[region-byte-compare] region {rid!r} does not have exactly one "
+                f"BEGIN/END marker pair")
+    # A claim-row marker outside every canonical region is an unreviewed claim.
+    inside = "".join(text[region_span(text, r)[0]:region_span(text, r)[1]]
+                     for r in ("limits", "status") if region_span(text, r))
+    for ln in text.splitlines():
+        if MARKER_RE.match(ln.strip()) and ln not in inside:
+            violations.append(f"[region-byte-compare] claim-row marker outside any "
+                              f"canonical region: {ln.strip()[:80]}")
 
     for v in violations:
         print(f"generate-hero-status: FAIL: {v}", file=sys.stderr)

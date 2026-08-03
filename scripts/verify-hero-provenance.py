@@ -22,10 +22,13 @@ be edited so long as the ends still land in the window.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
+import re
 import subprocess
 import sys
 import tempfile
+import unicodedata
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "tools/demo"))
@@ -185,6 +188,52 @@ def check_manifest_bijection() -> None:
     for o in omitted:
         if o.get("class") != "non-display":
             fail(f"omitted[] entry {o} is not a declared non-display class")
+
+    # The committed manifest and SVG must be exactly what the committed capture
+    # deterministically produces. Without this a hand-edited SVG passes every other
+    # check, because nothing else here reads the rendered asset (codex review).
+    with tempfile.TemporaryDirectory() as td:
+        m2, s2 = Path(td) / "m.json", Path(td) / "h.svg"
+        r1 = subprocess.run([sys.executable,
+                             str(REPO_ROOT / "tools/demo/build-hero-manifest.py"),
+                             str(CAPTURE), str(m2)], capture_output=True, text=True)
+        r2 = subprocess.run(["node", str(REPO_ROOT / "tools/demo/gen-svg.mjs"),
+                             str(m2), str(s2)], capture_output=True, text=True)
+        if r1.returncode != 0 or r2.returncode != 0:
+            fail("could not regenerate manifest/SVG from the committed capture")
+        else:
+            if m2.read_text(encoding="utf-8") != MANIFEST.read_text(encoding="utf-8"):
+                fail("committed manifest is NOT what the committed capture regenerates")
+            if s2.read_text(encoding="utf-8") != SVG.read_text(encoding="utf-8"):
+                fail("committed SVG is NOT what the committed manifest regenerates")
+
+    # The capture must contain no absolute path other than the reserved grant path, and
+    # no PID -- this is what licenses the normalizer to substitute timestamps ONLY.
+    for i, raw in enumerate(cap_lines, start=1):
+        body = raw.split("] ", 1)[-1]
+        for tok in body.split():
+            if tok.startswith("/") and "/" in tok[1:] and RESERVED_TASK_ID not in tok:
+                fail(f"capture line {i} carries a non-deterministic absolute path {tok!r}; "
+                     f"the timestamps-only normalizer cannot neutralize it")
+    if re.search(r"\bpid[= ]\d+", "\n".join(cap_lines), re.IGNORECASE):
+        fail("capture carries a PID; the timestamps-only normalizer cannot neutralize it")
+
+    # Omission must be the expected empty case, and every hash must verify.
+    if omitted:
+        fail(f"omitted[] is non-empty ({len(omitted)}); this demo is purpose-built for "
+             f"the hero, so every captured line must be carried")
+    for idx, ln in enumerate(lines, start=1):
+        if ln.get("ordinal") != idx:
+            fail(f"{ln['id']}: ordinal {ln.get('ordinal')} is not the sequential {idx}")
+        want = hashlib.sha256(
+            unicodedata.normalize("NFC", ln["text"]).encode("utf-8")).hexdigest()
+        if ln.get("extract_hash") != want:
+            fail(f"{ln['id']}: extract_hash does not equal sha256(NFC(text))")
+        n = int(ln["source_locator"].rsplit(":", 1)[1])
+        if 1 <= n <= len(cap_lines):
+            stripped = cap_lines[n - 1].split("] ", 1)[-1]
+            if ln["text"] != stripped:
+                fail(f"{ln['id']}: text is a substring but not the WHOLE capture line")
 
     # M4b non-disclosure across all three committed artifacts.
     for art in (CAPTURE, MANIFEST, SVG):

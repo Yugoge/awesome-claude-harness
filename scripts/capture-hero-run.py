@@ -113,6 +113,36 @@ def preflight() -> None:
         )
 
 
+# Ambient git routing/config variables can redirect a push away from the fixture even
+# though the fixture itself is hermetic -- GIT_DIR/GIT_WORK_TREE repoint the repository,
+# GIT_CONFIG_COUNT injects arbitrary config including remote.*.pushurl. Inheriting the
+# caller's environment for the ONE operation that really executes was a genuine hole
+# (found by codex review); every one of these is stripped, not merely overridden.
+GIT_ROUTING_VARS = (
+    "GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE",
+    "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+    "GIT_CONFIG", "GIT_CONFIG_COUNT", "GIT_CONFIG_PARAMETERS",
+    "GIT_CEILING_DIRECTORIES", "GIT_NAMESPACE", "GIT_ATTR_NOSYSTEM",
+    "GIT_PROXY_COMMAND", "GIT_SSH", "GIT_SSH_COMMAND",
+    "CLAUDE_PUSH_COMMAND_ACTIVE",
+)
+
+
+def hermetic_git_env(fixture: Path) -> dict:
+    env = {k: v for k, v in os.environ.items() if k not in GIT_ROUTING_VARS}
+    for k in list(env):
+        if k.startswith("GIT_CONFIG_KEY_") or k.startswith("GIT_CONFIG_VALUE_"):
+            del env[k]
+    env.update({
+        "GIT_CONFIG_GLOBAL": "/dev/null",
+        "GIT_CONFIG_SYSTEM": "/dev/null",
+        "GIT_TERMINAL_PROMPT": "0",
+        "GIT_ALLOW_PROTOCOL": "file",
+        "HOME": str(fixture / "home"),
+    })
+    return env
+
+
 def build_fixture(fixture: Path) -> None:
     """Hermetic fixture: a local BARE remote addressed by a RELATIVE path.
 
@@ -124,16 +154,7 @@ def build_fixture(fixture: Path) -> None:
     (fixture / "home").mkdir(parents=True, exist_ok=True)
     work.mkdir(parents=True, exist_ok=True)
 
-    env = os.environ.copy()
-    env.update(
-        {
-            "GIT_CONFIG_GLOBAL": "/dev/null",
-            "GIT_CONFIG_SYSTEM": "/dev/null",
-            "GIT_TERMINAL_PROMPT": "0",
-            "GIT_ALLOW_PROTOCOL": "file",
-            "HOME": str(fixture / "home"),
-        }
-    )
+    env = hermetic_git_env(fixture)
 
     def run(args, cwd):
         subprocess.run(args, cwd=cwd, env=env, check=True,
@@ -163,8 +184,12 @@ def install_grant() -> None:
         "created_at": now,
         "expires_at": now + 300,
     }
-    GRANT_PATH.write_text(json.dumps(grant, indent=2, sort_keys=True) + "\n",
-                          encoding="utf-8")
+    # O_EXCL: preflight is only a snapshot taken seconds earlier, so creation must itself
+    # be the exclusivity check. If a live session's grant appeared in the interim we fail
+    # rather than clobber it. 0o600 so foreign readers cannot see our grant either.
+    fd = os.open(GRANT_PATH, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as fh:
+        fh.write(json.dumps(grant, indent=2, sort_keys=True) + "\n")
 
 
 class GrantWatcher(threading.Thread):
@@ -181,6 +206,9 @@ class GrantWatcher(threading.Thread):
         # Set when this thread -- the VERIFIER -- installs the one grant, mid-run, after
         # the unaided refusal of beats 1-3 has already been captured (M18 step 2).
         self.grant_hash_at_install: str | None = None
+        # Lines the VERIFIER itself contributes to the capture, under an explicit
+        # [verifier] attribution so no reader can mistake them for hook output.
+        self.verifier_events: list[tuple[float, str]] = []
         # NB: named _halt, not _stop -- threading.Thread._stop is an inherited method.
         self._halt = threading.Event()
 
@@ -192,6 +220,10 @@ class GrantWatcher(threading.Thread):
                 if req.exists():
                     install_grant()
                     self.grant_hash_at_install = sha256_file(GRANT_PATH)
+                    self.verifier_events.append((
+                        time.monotonic() - self.t0,
+                        f"[verifier] installed one single-use grant for "
+                        f"task_id={RESERVED_TASK_ID}"))
                     (self.fixture / "work" / ".grant-installed").touch()
             try:
                 present = GRANT_PATH.is_file()
@@ -212,15 +244,7 @@ def capture_run(fixture: Path, capture_path: Path, watcher: GrantWatcher,
                 t0: float) -> tuple[int, list[str]]:
     """Run the demo through a PIPE and timestamp every line as it arrives."""
     runner = REPO_ROOT / "examples/guard-demo/run-hero-demo.sh"
-    env = os.environ.copy()
-    env.update(
-        {
-            "GIT_CONFIG_GLOBAL": "/dev/null",
-            "GIT_CONFIG_SYSTEM": "/dev/null",
-            "GIT_TERMINAL_PROMPT": "0",
-            "GIT_ALLOW_PROTOCOL": "file",
-        }
-    )
+    env = hermetic_git_env(fixture)
     proc = subprocess.Popen(
         ["bash", str(runner), str(fixture), str(GRANT_PATH), RESERVED_TASK_ID],
         stdout=subprocess.PIPE,
@@ -230,14 +254,17 @@ def capture_run(fixture: Path, capture_path: Path, watcher: GrantWatcher,
         text=True,
         bufsize=1,
     )
-    lines: list[str] = []
+    events: list[tuple[float, str]] = []
     assert proc.stdout is not None
     for raw in proc.stdout:
         text = raw.rstrip("\n")
         if text == "":
             continue
-        lines.append(f"[{time.monotonic() - t0:8.3f}] {text}")
+        events.append((time.monotonic() - t0, text))
     rc = proc.wait()
+    events.extend(watcher.verifier_events)
+    events.sort(key=lambda e: e[0])
+    lines = [f"[{t:8.3f}] {txt}" for t, txt in events]
     capture_path.parent.mkdir(parents=True, exist_ok=True)
     capture_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
     return rc, lines
@@ -259,8 +286,14 @@ def main() -> int:
     before = inventory_foreign_grants()
 
     capture_path = Path(args.capture)
+    evidence_path = Path(args.evidence)
     if args.check_only:
-        capture_path = Path(tempfile.mkstemp(suffix=".txt", prefix="hero-fresh-")[1])
+        # Redirect BOTH outputs. Redirecting only the capture still overwrote the
+        # committed evidence JSON in the reader's checkout -- so the quickstart command
+        # was not the harmless read-only operation the README promised.
+        scratch = Path(tempfile.mkdtemp(prefix="hero-checkonly-"))
+        capture_path = scratch / "hero-capture.txt"
+        evidence_path = scratch / "hero-capture-evidence.json"
 
     fixture = Path(tempfile.mkdtemp(prefix="claude-hero-fixture-"))
     failures: list[str] = []
@@ -318,7 +351,20 @@ def main() -> int:
         # Foreign grants byte-identical and mtime-unchanged.
         after = inventory_foreign_grants()
         if after != before:
-            failures.append(f"foreign grant state changed: {before} -> {after}")
+            # Deliberately NOT interpolating the inventories: they carry other sessions'
+            # grant filenames, and this message reaches stderr and the evidence JSON.
+            failures.append(
+                f"foreign grant state changed ({len(before)} before, {len(after)} after) "
+                f"— details withheld to avoid disclosing foreign grant identifiers")
+
+        # AC16: the push must have landed in the fixture's OWN bare remote and nowhere
+        # else. Checked by observing the bare repo actually advanced.
+        bare = fixture / "hero-remote.git"
+        probe = subprocess.run(["git", "--git-dir", str(bare), "rev-parse", "main"],
+                               capture_output=True, text=True,
+                               env=hermetic_git_env(fixture))
+        if probe.returncode != 0 or not probe.stdout.strip():
+            failures.append("the granted push did not land in the fixture's bare remote")
 
         # M4b non-disclosure: no foreign task_id, no foreign grant path in the capture.
         for ln in lines:
@@ -368,8 +414,8 @@ def main() -> int:
 
     # Written AFTER cleanup so cleanup_removed_files reflects what cleanup actually did.
     # On a clean run it is [] -- independent proof the real consumer did the removal.
-    Path(args.evidence).parent.mkdir(parents=True, exist_ok=True)
-    Path(args.evidence).write_text(
+    evidence_path.parent.mkdir(parents=True, exist_ok=True)
+    evidence_path.write_text(
         json.dumps(evidence, indent=2, sort_keys=True) + "\n", encoding="utf-8"
     )
 

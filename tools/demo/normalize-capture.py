@@ -74,9 +74,19 @@ def normalize_line(line: str) -> str:
         re.escape(PRESERVED_GRANT_PREFIX) + r"[A-Za-z0-9._-]*", _stash, out
     )
 
-    out = RE_PID.sub("<PID>", out)
-    out = RE_TMPDIR.sub("<TMPDIR>", out)
-    out = RE_ABSPATH.sub("<ABS>", out)
+    # DELIBERATELY NOT APPLIED. The path/PID/temp-dir rules are declared above as the
+    # upper bound of what this normalizer is permitted to touch, but they are NOT run:
+    # a codex review showed that broad substitutions over hook payload text can collapse
+    # two genuinely different security lines into identical bytes (e.g. ".../allow pid 111"
+    # and ".../deny pid 999" -> the same normalized text), which is precisely the
+    # "a lossy normalizer could make two fabrications match" failure. The capture is
+    # deterministic by construction instead: the fixture addresses its remote by the
+    # RELATIVE path ../hero-remote.git and the task id is fixed, so no absolute path,
+    # temp-dir name or PID ever enters the capture. verify-hero-provenance.py asserts
+    # that emptiness directly, so narrowing here removes risk without losing coverage.
+    #   out = RE_PID.sub("<PID>", out)
+    #   out = RE_TMPDIR.sub("<TMPDIR>", out)
+    #   out = RE_ABSPATH.sub("<ABS>", out)
 
     for original in preserved:
         out = out.replace(sentinel, original, 1)

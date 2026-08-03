@@ -6,11 +6,21 @@
 # Exit codes: 0=all five beats ran, 1=precondition failure, 2=beat sequencing failure
 #
 # CONTRACT (M5b/M8 of ticket dev-20260719-193823-f):
-#   This script NEVER prints refusal text, rule text, reason text, remedy text or the
-#   grant-consumption marker. Every such line in the capture is emitted by a real hook
-#   under hooks/ on its own stderr, which is INHERITED by the capture harness and
-#   therefore recorded unmediated. This script only prints the operator-visible command
-#   lines and the deliberate inter-beat pacing happens here, during capture.
+#   This script prints NOTHING but the operator command lines. It never prints refusal,
+#   rule, reason, remedy or consumption text, and -- since a codex review of the first
+#   draft -- it no longer prints CAUSAL NARRATION either. Lines like
+#   "[... exit 2 - nothing executed]" or "[... permitted by single-use grant]" were
+#   authored conclusions dressed as transcript: a reader would attribute them to the
+#   system, and re-running could never expose them because both the committed capture and
+#   the fresh run receive the same narration. That is the authored-not-captured defect
+#   this hero exists to kill, reappearing one level up. Every remaining non-command line
+#   in the capture is emitted either by a real hook under hooks/, by git, or by the
+#   verifier under an explicit [verifier] attribution.
+#
+# NOTE ON SCOPE: this is a DIRECT-HOOK fixture. It invokes the real hook programs with
+#   synthesized PreToolUse/PostToolUse payloads (the pattern established by run-demo.sh);
+#   it does not drive Claude Code's live tool dispatcher. The hook decisions are real; the
+#   dispatch is simulated. The caption says so rather than implying an agent session.
 #
 # SAFETY: the push executes against a hermetic LOCAL BARE remote addressed by a RELATIVE
 #   path (../hero-remote.git) inside a throwaway fixture. The project repository and its
@@ -31,9 +41,12 @@ fi
 PYDIR="$(dirname "$PYTHON_BIN")"
 
 # --- Named pacing table (M19) --------------------------------------------------------
-# Deliberate operator-reading pauses. They execute INSIDE the recorded run, so their
-# duration is genuinely captured; the renderer replays captured timing unchanged and
-# performs NO post-capture retiming. Changing these changes the real session length.
+# Deliberate operator-reading pauses. They execute INSIDE the recorded run, so the
+# session really did last as long as the capture says, and changing these changes the
+# real session length. NOTE: the SVG renderer (tools/demo/gen-svg.mjs) is content-
+# agnostic and applies its OWN animation cadence -- it does not replay these captured
+# intervals. The measured session duration therefore comes from the raw capture's
+# timestamps, never from the SVG's dur attribute, and the caption says so.
 PACE_BEFORE_ATTEMPT=1.2
 PACE_READ_REFUSAL=3.6
 PACE_AFTER_GRANT=2.6
@@ -78,7 +91,6 @@ echo "\$ $PUSH_CMD"
 # =====             reason and a safe remedy. All of that text is the hook's. =========
 pretool_push
 RC1=$?
-echo "[pretool-git-privilege-guard.py exit $RC1 — nothing executed]"
 sleep "$PACE_READ_REFUSAL"
 
 # ===== BEAT 4 — a narrowly-scoped grant permits EXACTLY ONE operation ================
@@ -95,10 +107,9 @@ while [ ! -e "$FIXTURE/work/.grant-installed" ]; do
     exit 2
   fi
 done
-echo "\$ $PUSH_CMD   # retried with a single-use grant in place"
+echo "\$ $PUSH_CMD"
 pretool_push
 RC2=$?
-echo "[pretool-git-privilege-guard.py exit $RC2 — permitted by single-use grant]"
 if [ "$RC2" -ne 0 ]; then
   echo "run-hero-demo: expected the granted retry to be permitted" >&2
   exit 2
@@ -108,7 +119,6 @@ sleep "$PACE_AFTER_GRANT"
 # The push actually executes — against the hermetic local bare remote, by RELATIVE path.
 git push hero-remote main 2>&1
 PUSH_RC=$?
-echo "[git push exit $PUSH_RC — hermetic local bare remote, no network]"
 sleep "$PACE_AFTER_PUSH"
 
 # ===== BEAT 5a — the REAL posttool consumer consumes that grant =======================
@@ -117,12 +127,10 @@ posttool_consume
 sleep "$PACE_AFTER_CONSUME"
 
 # ===== BEAT 5b — repeating the operation fails because the grant was consumed =========
-echo "\$ $PUSH_CMD   # same command again, grant now consumed"
+echo "\$ $PUSH_CMD"
 pretool_push
 RC3=$?
-echo "[pretool-git-privilege-guard.py exit $RC3 — refused again: the grant was single-use]"
 sleep "$PACE_TAIL"
-echo "[demo complete — one grant authorized exactly one push, and nothing more]"
 
 if [ "$RC1" -ne 2 ] || [ "$RC3" -ne 2 ]; then
   echo "run-hero-demo: expected refusal (exit 2) on beats 1 and 5" >&2
