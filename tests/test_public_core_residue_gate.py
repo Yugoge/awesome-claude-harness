@@ -320,7 +320,16 @@ def test_scan_set_equals_full_ledger_public_core_set(pristine):
                                   capture_output=True, text=True).stdout.split())
     r = _run(pristine)
     scanned = int(r.stdout.split("residue audit:")[1].split("occurrence")[0].strip())
-    # every allowlist entry corresponds to a file inside the ledger-derived set
+    # Every allowlist entry corresponds to a file the gate scans in SOME mode:
+    # checkout mode scans public-core, archive mode scans the release-membership
+    # set. An entry outside BOTH would grant an exemption nothing ever validates.
     doc = json.loads((pristine / ALLOWLIST).read_text(encoding="utf8"))
-    assert {e["path"] for e in doc["entries"]} <= expected
-    assert scanned == len(doc["entries"]), "scanned occurrences must equal the exempted set on a clean tree"
+    membership = set(subprocess.run(
+        ["python3", "scripts/lib/release_membership.py", "--from-git", "--root", ".",
+         "--manifest", "release-membership.v1.json"],
+        cwd=pristine, capture_output=True, text=True).stdout.split())
+    assert {e["path"] for e in doc["entries"]} <= (expected | membership)
+    # In THIS (checkout) mode, every scanned occurrence must be exempted and every
+    # in-scope entry must be live — an exact 1:1, not merely "no failures".
+    in_scope = [e for e in doc["entries"] if e["path"] in expected]
+    assert scanned == len(in_scope), "scanned occurrences must equal the in-scope exempted set on a clean tree"
