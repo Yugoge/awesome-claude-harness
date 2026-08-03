@@ -15,8 +15,16 @@ event (7), one aggregate verdict line, and actionable reasons only for FAILING
 components. Full per-check detail moves behind --verbose; the information is
 relocated, never lost.
 
+`--route <route>` is the third mode and the PREFLIGHT callsite: it evaluates one
+route through the independent consumer and returns its decision, without running
+a handshake. This is the supported way for a protected-workflow entrypoint to
+reach `evaluate_activation()` without hook dispatch, and is the value of the
+manifest's `independent_enforcement_callsite` field.
+
 Usage: capability-doctor-strict.py [--home <dir>] [--session-id <id>] [--verbose]
-Exit codes: 0 = fresh handshake PASS; 1 = UNPROTECTED.
+       capability-doctor-strict.py --route <route> [--home <dir>] [--session-id <id>]
+Exit codes: 0 = fresh handshake PASS (or, under --route, PERMIT/NOT_PROTECTED);
+            1 = UNPROTECTED (or, under --route, REFUSE).
 """
 from __future__ import annotations
 
