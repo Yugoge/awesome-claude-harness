@@ -186,4 +186,39 @@ jobs:
         # asserts settings.template.json (the PUBLIC install seed) is valid JSON and wires
         # every hook settings.json wires (basename-normalized) so the public template can
         # never silently drift from the real hook set. All counts recomputed at check time.
+        # Also runs scripts/check-enforcement-evidence.py --ledger and --claims, which gate
+        # docs/ENFORCEMENT-LEDGER.md against settings.json and against the guard sources.
         run: bash scripts/verify-claims.sh
+
+      # ---------------------------------------------------------------------
+      # Enforcement evidence: run the adversarial corpus at the subprocess
+      # boundary and publish a machine-readable manifest of what was ACTUALLY
+      # exercised. Additive: both steps are new, and neither alters any
+      # pre-existing step's triggering condition or success criterion.
+      # ---------------------------------------------------------------------
+      - name: Adversarial corpus suite (component / subprocess boundary)
+        # The suite deletes any stale manifest before running and writes results
+        # only from live invocations, so the artifact is evidence of EXECUTION
+        # rather than evidence of authorship. This is component-tested proof and
+        # is NOT a substitute for R3 (tests against real Claude Code builds).
+        run: python3 -m pytest hooks/tests/test_blackbox_integration.py -q
+
+      - name: Upload enforcement-evidence manifest
+        # if: always() so the evidence survives a failing suite -- an artifact
+        # published only on green runs cannot show what a red run exercised.
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          # Matrix-unique: a fixed name would have each Python leg silently
+          # overwrite the previous leg's evidence.
+          name: enforcement-evidence-py${{ matrix.python-version }}
+          path: hooks/tests/.enforcement-run-manifest.json
+          if-no-files-found: warn
+
+      - name: Enforcement-evidence coverage gate
+        # Fails the build when the manifest does not map one-to-one onto the
+        # corpus, when any result field is unpopulated, when an observed outcome
+        # is not bound to captured process evidence, or when the executed /
+        # emitted / corpus case-ID sets disagree. A manifest that cannot
+        # distinguish "exercised" from "asserted" does not show what ran.
+        run: python3 scripts/check-enforcement-evidence.py --coverage
