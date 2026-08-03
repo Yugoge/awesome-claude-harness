@@ -298,8 +298,12 @@ rather than silently outdate the published table.
   `builtin`, `nice`.
 - **Leading-redirection operators** covered by the published matrix, 7 tokens:
   `2>/dev/null`, `>`, `>>`, `<`, `2>&1`, `&>`, `1>`.
-- **Gate-architecture census @4c33f2f5**: 1 classifier-exclusive fallback guard, 2 unconditional
-  `GIT_CMD_RE` branches.
+- **Gate-architecture census @4c33f2f5**: **1** classifier-exclusive fallback guard
+  (architecture A — the only shape the empty-parse suppression affects), **2** unconditional
+  `GIT_CMD_RE` branches (architecture B), and **8** classifier-only path-qualified augmentation
+  branches (architecture C, which never carried a regex fallback to lose). All three are
+  counted and regression-guarded. Publishing only A and B would be a cherry-picked census:
+  a reader counting classifier-consuming branches in that guard finds 11, not 3.
 
 ---
 
