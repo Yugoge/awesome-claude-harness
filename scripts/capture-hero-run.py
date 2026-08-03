@@ -339,10 +339,6 @@ def main() -> int:
             "cleanup_removed_files": swept,
             "failures": failures,
         }
-        Path(args.evidence).parent.mkdir(parents=True, exist_ok=True)
-        Path(args.evidence).write_text(
-            json.dumps(evidence, indent=2, sort_keys=True) + "\n", encoding="utf-8"
-        )
     finally:
         # Poisoned-state recovery. Ordering is load-bearing: this runs only AFTER the
         # present-before / absent-after observations above have been recorded, so it can
