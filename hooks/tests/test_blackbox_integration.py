@@ -235,10 +235,11 @@ def test_corpus_case_matches_published_expectation(case):
 
 def test_every_mandated_witness_is_present_in_the_corpus():
     """The corpus may not silently drop a witness the published matrix mandates."""
-    sys.path.insert(0, str(ROOT / "scripts"))
-    spec = __import__("importlib.util", fromlist=["util"]).util.spec_from_file_location(
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location(
         "check_enforcement_evidence", ROOT / "scripts" / "check-enforcement-evidence.py")
-    module = __import__("importlib.util", fromlist=["util"]).util.module_from_spec(spec)
+    module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
 
     mandated = {w["id"] for w in module.MANDATED_WITNESSES}
