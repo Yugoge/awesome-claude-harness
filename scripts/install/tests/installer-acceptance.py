@@ -59,6 +59,12 @@ def run(cmd, env=None, cwd=None):
     return p.returncode, p.stdout, p.stderr
 
 
+# Fixture-only location for the user's own hook commands. The assertions round-trip
+# USER_SETTINGS through the merge and compare it for equality, so these paths only need
+# to be absolute and stable — never real. Derived from the platform temp dir rather than
+# written as an author-home literal, which the public-core residue gate rejects.
+USER_HOOK_DIR = Path(tempfile.gettempdir()) / "acceptance-user-hooks"
+
 USER_SETTINGS = {
     "$schema": "https://json.schemastore.org/claude-code-settings.json",
     "cleanupPeriodDays": 42,
