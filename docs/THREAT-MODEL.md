@@ -316,8 +316,9 @@ dismissed as a self-defeating payload.
 
 #### No permission-layer backstop
 
-Parsed from `settings.json:1 @4c33f2f5`: `permissions.deny` carries 96 rules, of which **0 of
-96** are git-related. `permissions.ask` carries 30 rules, 3 of them git-related (force-push,
+Parsed from `settings.json:1 @4c33f2f5`: `permissions.deny` carries 96 rules,
+of which **0 of 96** are git-related.
+`permissions.ask` carries 30 rules, 3 of them git-related (force-push,
 short-form force-push, and hard-reset prefixes) — and all three are **prefix-anchored**, so they
 match no wrapped or redirected form. Publishing the hook-layer residual while omitting the
 absence of a permission-layer backstop would describe half the boundary.
