@@ -452,6 +452,71 @@ def test_escape_hatches_survive_absent_state(home: Path, statedir: Path, command
     assert r.returncode == 0, r.stderr
 
 
+def test_escape_hatch_definition_cannot_drift_across_its_three_copies(home: Path):
+    """The hatch set is written down three times — the gate hook's pre-import
+    literal, capability_state's manifest-failure fallback, and the manifest flags.
+    Editing one alone would either strand a human or widen the carve-out."""
+    manifest, err = cs.load_manifest(home)
+    assert err is None
+    from_manifest = {e["route"] for e in manifest["routes"] if e.get("human_consent_escape_hatch")}
+    assert set(cs.HUMAN_CONSENT_ESCAPE_HATCH_ROUTES) == from_manifest
+    hook_src = GATE.read_text(encoding="utf-8")
+    literal = hook_src.split("ESCAPE_HATCH_COMMANDS = (", 1)[1].split(")", 1)[0]
+    from_hook = {f"slashcommand:{c.strip().strip(chr(34) + chr(39))}"
+                 for c in literal.split(",") if c.strip()}
+    assert from_hook == from_manifest
+
+
+@pytest.mark.parametrize("broken", ["missing", "malformed"])
+def test_escape_hatches_survive_a_broken_manifest(home: Path, statedir: Path, broken: str):
+    """codex #1: the carve-out originally sat BEHIND the manifest read, so a
+    corrupt manifest re-sealed the host. Recovery must not live inside the
+    failure domain it exists to recover from."""
+    mpath = home / cs.MANIFEST_RELPATH
+    if broken == "missing":
+        mpath.unlink()
+    else:
+        mpath.write_text("{not json", encoding="utf-8")
+    sid = "brk"
+    for route in cs.HUMAN_CONSENT_ESCAPE_HATCH_ROUTES:
+        rec = cs.evaluate_activation(route, home=home, session_id=sid,
+                                     state_file=cs.state_path(sid, statedir))
+        assert rec["decision"] == "PERMIT", route
+    # ...while every other route still fails closed on the same broken manifest.
+    other = cs.evaluate_activation("slashcommand:/dev", home=home, session_id=sid,
+                                   state_file=cs.state_path(sid, statedir))
+    assert other["decision"] == "REFUSE"
+    # And through the hook, with the library itself made unimportable.
+    (home / "hooks" / "lib" / "capability_state.py").write_text("raise ImportError('boom')\n")
+    r = _gate({"tool_name": "SlashCommand", "tool_input": {"command": "/do"},
+               "session_id": sid}, home, statedir, sid)
+    assert r.returncode == 0, r.stderr
+
+
+@pytest.mark.parametrize("command", ["/do\n/dev fix", "/allow x\r/commit", "/do\x00/push"])
+def test_control_characters_cannot_smuggle_a_command_behind_a_hatch(
+        home: Path, statedir: Path, command: str):
+    """codex #3: `.split()` splits on newlines, so a multi-command payload would
+    classify on its exempt first token. Any control character forfeits the fast
+    path and the call is evaluated on state like anything else."""
+    sid = "smug"
+    r = _gate({"tool_name": "SlashCommand", "tool_input": {"command": command},
+               "session_id": sid}, home, statedir, sid)
+    assert r.returncode == 2, r.stdout
+
+
+@pytest.mark.parametrize("name", ["do", "allow"])
+def test_skill_named_like_a_hatch_is_not_exempt(home: Path, statedir: Path, name: str):
+    """codex #2: the exemption is keyed on the exact SlashCommand route, so a
+    Skill call of the same name must not inherit it."""
+    sid = "skl"
+    _publish(statedir, sid, _passing_state(home, sid))
+    rec = cs.evaluate_activation(f"skill:{name}", home=home, session_id=sid,
+                                 state_file=cs.state_path(sid, statedir))
+    assert rec["decision"] == "REFUSE"
+    assert rec["exemption"] is None
+
+
 @pytest.mark.parametrize("tool", ["Agent", "Task"])
 def test_dispatch_routes_are_outside_the_protected_surface(home: Path, statedir: Path, tool: str):
     """Regression for the unrecoverable-lockout defect: subagent dispatch has no
