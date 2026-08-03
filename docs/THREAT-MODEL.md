@@ -24,10 +24,59 @@
 The harness controls every tool call an AI agent makes through a chain of PreToolUse,
 PostToolUse, and Stop hooks wired in `settings.json`. The primary attack surface is
 the `Bash` tool: an agent that can run arbitrary shell commands can commit destructive
-changes, exfiltrate secrets, or mutate the shared git repository state without human
-review. Five independently-designed mechanisms address distinct classes of abuse. They
-are documented here so expert reviewers can audit the architecture without reading all
-~8,000 lines of hook code.
+changes, mutate the shared git repository state, or exfiltrate secrets by writing them
+out — all without human review. **Only write/mutate-path exfiltration is in scope**;
+read-only exfiltration through the conversation context is a stated non-goal (§5.1),
+and the Overview and §5 agree on that boundary deliberately. Five independently-designed
+mechanisms address distinct classes of abuse. They are documented here so expert
+reviewers can audit the architecture without reading all ~8,000 lines of hook code.
+
+### 1.1 Protected Assets
+
+What this harness is trying to keep intact, in rough order of how badly losing it hurts:
+
+| asset | why it is worth protecting | primary mechanism |
+|---|---|---|
+| **Published git history on `master`/`main`** | Force-push, `reset --hard` and direct ref writes destroy work belonging to other sessions and to the human. Unrecoverable in the general case. | `hooks/pretool-bash-safety.sh:1695-1697 @4c33f2f5`; `hooks/git-keystone/reference-transaction` (overnight actors only) |
+| **The uncommitted working tree** | A concurrent session's in-progress edits are not in any commit and have no backup. | `hooks/pretool-bash-safety.sh:757-1038 @4c33f2f5` (bulk-sentinel guard) |
+| **Authorization grants** (`/tmp/claude-grants/*.json`) | A grant is the only artifact standing between an agent and a privileged operation. | `hooks/lib/allowlist.py:435-520 @4c33f2f5` (structural matching) |
+| **The hook chain itself** | Every other protection is downstream of the hooks staying wired and unedited. | `settings.json:1 @4c33f2f5` wiring plus the hook-refactor consent file |
+| **Secrets on disk** (`.env`, keys, tokens) | Disclosure is irreversible. Only the write/mutate path is defended. | Secret scan in `.github/workflows/baseline.yml:110 @4c33f2f5` |
+| **The human's ability to audit what happened** | Silent failure is worse than loud failure; an unauditable harness cannot be trusted. | Schema-enforced agent contracts, `hooks/lib/contract_runtime.py:215 @4c33f2f5` |
+
+### 1.2 Attacker Capabilities
+
+The adversary is **the agent itself**, acting against the human's intent through
+misunderstanding, prompt injection, or hallucination. Concretely, it is assumed able to:
+
+- **Emit any tool call**, including arbitrary `Bash` command strings, in any quoting,
+  escaping or encoding the shell accepts.
+- **Read this repository**, including every hook, every regex, and this document —
+  so no protection here may depend on the attacker not knowing how it works.
+- **Compose and obfuscate**: chain commands, wrap them (`env`, `sudo`, `nice`, …),
+  prefix redirections, use ANSI-C escapes, and path-qualify executables (`/usr/bin/git`).
+- **Retry indefinitely** and observe each rejection, adapting the next attempt.
+- **Run concurrently** with other sessions against the same working tree.
+
+The adversary is assumed **not** able to: edit hook files without tripping the consent
+gate, write outside the filesystem the harness sees, or compromise the Python/git
+binaries themselves (§5.1).
+
+### 1.3 Trusted Components
+
+Everything below is inside the trust boundary. A defect in any of them voids the
+guarantees of this document, and the harness has **no** compensating control for them.
+
+| trusted component | what is trusted about it | controlled by this project? |
+|---|---|---|
+| **The Claude Code dispatcher / runtime** | That it invokes the wired hooks at all, routes each tool call to the right matcher, and **honors a non-zero hook exit code by aborting the call**. | **No.** This is the single largest uncontrolled dependency: every "blocked" claim in this repository is downstream of a host behavior this project neither implements nor tests against. Nothing here can detect a host that silently ignores exit 2. |
+| `python3`, `bash`, `git`, `jsonschema` | That the interpreters and binaries behave as documented and are not compromised. | No — versions are not pinned (§5.1). |
+| `settings.json` wiring | That the hook set on disk is the hook set that runs. | Partly — `scripts/verify-claims.sh` asserts the public template wires every hook, but the live file is untracked and per-install. |
+| The human operator | That instructions to disable a guard are genuinely the human's (§5.1). | No. |
+| The filesystem | That a hook file read at dispatch time is the file this repository committed. | No hardware root of trust. |
+
+Because the dispatcher is **uncontrolled**, this project can never label a mechanism
+`enforced` on its own evidence alone — see `docs/ENFORCEMENT-LEDGER.md` §1.1.
 
 ---
 
