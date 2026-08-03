@@ -187,10 +187,11 @@ status: PARTIALLY MITIGATED
 status: MITIGATED
 
 - **Description**: the harness maintains two independently hand-authored regex engines for
-  detecting git commands — `GIT_COMMAND_RE` at `hooks/pretool-git-privilege-guard.py:145
-  @4c33f2f5` (Python `re`) and `GIT_CMD_RE` at `hooks/pretool-bash-safety.sh:1654 @4c33f2f5`
-  (POSIX ERE for `grep -E`). Editing one without the other creates an asymmetric bypass. Both
-  engines still exist as separate hand-authored patterns. Their current definitions are:
+  detecting git commands.
+  `GIT_COMMAND_RE` at `hooks/pretool-git-privilege-guard.py:145 @4c33f2f5` is the Python `re`
+  pattern; `GIT_CMD_RE` at `hooks/pretool-bash-safety.sh:1654 @4c33f2f5` is the POSIX ERE used
+  by `grep -E`. Editing one without the other creates an asymmetric bypass. Both engines still
+  exist as separate hand-authored patterns. Their current definitions are:
   - Python: `GIT_COMMAND_RE = r'(?:^|[\s;&|()`])git' + GIT_GLOBAL_OPTION_RE + r'\s+'`
   - POSIX ERE: `GIT_CMD_RE='(^|[[:space:];&|()`])git'`
 - **Risk**: any future edit to one regex without updating the other creates an asymmetric
