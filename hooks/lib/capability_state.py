@@ -484,7 +484,17 @@ def classify_route(tool_name: str, tool_input: dict | None) -> str:
     """Map a tool-call envelope onto a manifest route key."""
     ti = tool_input or {}
     if tool_name == "SlashCommand":
-        cmd = str(ti.get("command") or "").strip().split()[0:1]
+        raw = str(ti.get("command") or "").strip()
+        # An EMBEDDED control character can hide a second command behind the
+        # first (`/do\n/dev`), and .split() would then classify the whole payload
+        # on its leading token alone -- which matters most for the exempt hatch
+        # routes. Such a payload is not canonicalisable, so it is mapped to a
+        # route that sits inside the protected surface and matches nothing,
+        # i.e. fail-closed. Surrounding whitespace is stripped first, so an
+        # ordinary trailing newline stays benign.
+        if any(ord(c) < 0x20 or ord(c) == 0x7F for c in raw):
+            return "slashcommand:<uncanonicalisable>"
+        cmd = raw.split()[0:1]
         return f"slashcommand:{cmd[0]}" if cmd else "slashcommand:"
     if tool_name == "Skill":
         return f"skill:{str(ti.get('skill') or ti.get('name') or '').strip()}"
