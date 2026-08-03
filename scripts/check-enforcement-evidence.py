@@ -539,19 +539,20 @@ def check_claims(args, report):
     report.ok("published wrapper + leading-redirection token sets match the recorded sets")
 
     # 6. Gate-architecture census.
-    arch_a = len(re.findall(r'\[\s*"\$CLASSIFIER_STATUS"\s*!=\s*"ok"\s*\]', bash_src))
-    arch_b = len(re.findall(r'grep\s+-qE\s+"\$\{GIT_CMD_RE\}', bash_src))
-    if arch_a == RECORDED_CENSUS["architecture_a"]:
-        report.ok(f"architecture-A gate census unchanged ({arch_a})")
-    else:
-        report.fail(f"architecture-A gate census changed: {arch_a} != "
-                    f"{RECORDED_CENSUS['architecture_a']} -- a gate gaining or losing the "
-                    f"classifier-exclusive fallback shape changes which inputs keep a backstop")
-    if arch_b == RECORDED_CENSUS["architecture_b"]:
-        report.ok(f"architecture-B gate census unchanged ({arch_b})")
-    else:
-        report.fail(f"architecture-B gate census changed: {arch_b} != "
-                    f"{RECORDED_CENSUS['architecture_b']}")
+    census = {
+        "architecture_a": len(re.findall(r'\[\s*"\$CLASSIFIER_STATUS"\s*!=\s*"ok"\s*\]', bash_src)),
+        "architecture_b": len(re.findall(r'grep\s+-qE\s+"\$\{GIT_CMD_RE\}', bash_src)),
+        "architecture_c": len(re.findall(r'\[\s*"\$CLASSIFIER_HAS_PATH_QUALIFIED_GIT"\s*=\s*"1"\s*\]',
+                                         bash_src)),
+    }
+    for key, observed in census.items():
+        expected = RECORDED_CENSUS[key]
+        if observed == expected:
+            report.ok(f"{key.replace('_', '-')} gate census unchanged ({observed})")
+        else:
+            report.fail(f"{key.replace('_', '-')} gate census changed: {observed} != {expected} "
+                        f"-- a gate gaining or losing a classifier-consumption shape changes "
+                        f"which inputs keep a backstop, without any probed form changing")
 
     # 7. Ledger registered-hook rows == settings-derived hook set, both directions.
     reg = ledger_tables(args.ledger_file)["registered"]
