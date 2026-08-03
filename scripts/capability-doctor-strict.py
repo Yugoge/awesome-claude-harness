@@ -94,7 +94,13 @@ def main(argv=None) -> int:
         rec = cs.evaluate_activation(args.route, home=home, session_id=session_id,
                                      state_file=state_file, component="preflight_consumer")
         print(json.dumps(rec, indent=1, sort_keys=True))
-        return 0 if rec["decision"] in ("PERMIT", "NOT_PROTECTED") else 1
+        # NOT_PROTECTED gets its own exit code rather than sharing 0 with PERMIT.
+        # An entrypoint asserting "I am /dev" that fat-fingers its route string
+        # would otherwise read a silent 0 as approval, when what actually happened
+        # is that the gate never recognised the route at all.
+        if rec["decision"] == "PERMIT":
+            return 0
+        return 3 if rec["decision"] == "NOT_PROTECTED" else 1
 
     # Assert-not-assume: record whether a preseeded PASS existed, then run fresh
     # anyway. The fresh run's PENDING write is what actually invalidates it.
