@@ -1,8 +1,8 @@
 # dot-claude
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-08-02T06:58:17Z*
-**Total entries**: 461
+*Last updated: 2026-08-03T12:15:41Z*
+**Total entries**: 460
 **Convention**: kebab
 
 ## Tree
@@ -255,7 +255,7 @@ dot-claude/
 ├── scripts/
 │   ├── install/
 │   │   ├── `render-settings` - render-settings file
-│   │   └── `tmp-cleanup-install.sh` - /usr/local/sbin/tmp-cleanup.sh
+│   │   ├── `tmp-cleanup-install.sh` - /usr/local/sbin/tmp-cleanup.sh
 │   ├── lib/
 │   │   ├── `make_sbom.py` - The SBOM is built from the archive's real contents, not from the source
 │   │   └── `release_membership.py` - Single source of truth shared by every consumer, so the archive builder, the
@@ -466,7 +466,6 @@ dot-claude/
 ├── `pytest.ini` - ini file
 ├── `release-membership.v1.json` - EXPLICIT release-membership manifest: the exact set of tracked paths that ship in a release archive. Membership is an edit to this file, never a silent consequence of a class rule. It is deliberately NOT 'public-core + all shared/infra': PUBLIC-CORE.md calls tests/ 'not itself the shippable harness', so a blanket class rule would drag non-shippable fixtures into the distribution. It is also not public-core-only: requirements.txt and requirements/ are shared/infra yet are required to install, so a public-core-only archive would be unusable.
 ├── `requirements.txt` - Python dependency manifest for the Claude Code harness venv
-├── `settings.json` - Claude Code harness configuration (permissions, hooks, env, model)
 ├── `settings.template.json` - Distributable harness settings template (uses CLAUDE_HOME placeholders)
 ├── `VERSION` - VERSION file
 ```

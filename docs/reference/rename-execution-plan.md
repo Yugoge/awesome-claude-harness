@@ -17,12 +17,17 @@ the GitHub repository is renamed.
 restructures the README's first screen):**
 
 ```
-git clone https://github.com/Yugoge/awesome-claude-harness.git ~/.claude
+git clone https://github.com/Yugoge/awesome-claude-harness.git claude-harness
 ```
 
-**This line is security-relevant.** It clones **into the user's home configuration directory**
-(`~/.claude`). If the GitHub rename happens and the rename redirect later decays (see the
-redirect-decay caveat below), this command would point a clone-into-home operation at a
+*(This command previously cloned over `~/.claude`; a sibling lane has since rewritten the
+install section to clone into a directory of the reader's choice instead. The **URL** — the
+only part this plan gates — is unchanged, so the gate below is unaffected.)*
+
+**This line is security-relevant.** The clone is immediately followed by `cd claude-harness`
+and `scripts/bootstrap`, so the reader executes code from whatever repository that URL
+resolves to. If the GitHub rename happens and the rename redirect later decays (see the
+redirect-decay caveat below), this command would fetch and then run a bootstrap script from a
 repository someone else controls. Flip it **promptly** after the external rename; do not leave
 the pair "renamed on GitHub / old URL in-tree" standing.
 
