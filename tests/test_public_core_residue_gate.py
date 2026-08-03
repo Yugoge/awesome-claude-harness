@@ -287,7 +287,11 @@ def test_placeholder_rationale_is_rejected(pristine, tmp_path):
     """AC6 d: every entry needs a real per-entry rationale."""
     root = _copy(pristine, tmp_path)
     doc = json.loads((root / ALLOWLIST).read_text(encoding="utf8"))
-    doc["entries"][0]["rationale"] = "TBD"
+    # Must be an entry this mode actually scans: the rationale is validated per
+    # LIVE occurrence, so blanking an archive-only entry proves nothing here.
+    scope = _public_core_files(root)
+    victim = next(i for i, e in enumerate(doc["entries"]) if e["path"] in scope)
+    doc["entries"][victim]["rationale"] = "TBD"
     _write(root / ALLOWLIST, json.dumps(doc, indent=2))
     _stage(root)
     r = _run(root)
