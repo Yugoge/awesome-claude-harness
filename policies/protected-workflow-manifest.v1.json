@@ -92,7 +92,9 @@
       "route_type": "SlashCommand",
       "entrypoint": "commands/do.md",
       "independent_enforcement": true,
-      "why_protected": "Session-wide orchestrator-gate bypass consent."
+      "human_consent_escape_hatch": true,
+      "why_protected": "Session-wide orchestrator-gate bypass consent.",
+      "why_exempt": "Human-only consent (disable-model-invocation: true). It relaxes the orchestrator gate only; the permanently-blocked tools, the Bash safety hook and the settings DENY list are all unaffected. Exempting it is what preserves a human repair path on a state-absent host."
     },
     {
       "id": "spec-pipeline",
