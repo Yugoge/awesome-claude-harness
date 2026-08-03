@@ -142,12 +142,33 @@ class Fail(Exception):
 # which is the point: deleting the behavior column must fail, not silently parse as empty.
 # ---------------------------------------------------------------------------
 def _split_row(line):
+    """Split a markdown table row on UNESCAPED pipes, then unescape.
+
+    Several settings.json matchers are alternations (`Edit|Write|MultiEdit`), so a naive
+    split would shred one hook row into five bogus ones and the set-equality check would
+    compare garbage against garbage. Cells are written escaped (`\\|`) and restored here.
+    """
     line = line.strip()
     if line.startswith("|"):
         line = line[1:]
     if line.endswith("|"):
         line = line[:-1]
-    return [c.strip() for c in line.split("|")]
+    cells, buf, i = [], [], 0
+    while i < len(line):
+        ch = line[i]
+        if ch == "\\" and i + 1 < len(line) and line[i + 1] == "|":
+            buf.append("|")
+            i += 2
+            continue
+        if ch == "|":
+            cells.append("".join(buf).strip())
+            buf = []
+            i += 1
+            continue
+        buf.append(ch)
+        i += 1
+    cells.append("".join(buf).strip())
+    return cells
 
 
 def parse_tables(text):
