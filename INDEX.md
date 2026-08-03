@@ -1,8 +1,8 @@
 # dot-claude
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-08-03T15:08:05Z*
-**Total entries**: 460
+*Last updated: 2026-08-03T15:10:14Z*
+**Total entries**: 461
 **Convention**: kebab
 
 ## Tree
@@ -303,6 +303,7 @@ dot-claude/
 │   ├── `break-overnight-lock.py` - Backdates end_time on every active overnight-state-*.json so
 │   ├── `build-pipelines-from-triage.py` - Consumes PM triage schema (issues[] keyed by triage_index + pipeline_order[] +
 │   ├── `canary-verify.sh` - Description: Cache-safe canary that behaviorally verifies the four core PreToolUse hooks.
+│   ├── `check-enforcement-evidence.py` - Three subcommands, one consumer each:
 │   ├── `check-file-references.sh` - File reference detection script - used by /clean command
 │   ├── `check-overnight-reports.py` - Description: Validates all overnight required outputs declared by the active
 │   ├── `check-overnight-reports.sh` - DEPRECATED — replaced by check-overnight-reports.py per spec-20260426-090235 P0/M5.
