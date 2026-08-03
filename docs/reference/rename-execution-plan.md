@@ -132,8 +132,8 @@ rename on GitHub first, flip these second.
 
 **Redirect-decay caveat.** GitHub's rename redirect from the old name is **not permanent**: it
 stops working if anyone later creates a new repository at the old name. A stale in-tree URL is
-therefore not merely untidy — combined with the clone-into-home command in the callout above,
-it is a supply-chain exposure. Flip Tier 2 **promptly** after the external rename rather than
+therefore not merely untidy — combined with the clone-then-`scripts/bootstrap` sequence in the
+callout above, it is a supply-chain exposure. Flip Tier 2 **promptly** after the external rename rather than
 leaving it indefinitely.
 
 *(Both the redirect behaviour and its decay are inferred from GitHub's documented rename
