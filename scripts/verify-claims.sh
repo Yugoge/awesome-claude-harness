@@ -344,6 +344,40 @@ PY
 fi
 
 # ---------------------------------------------------------------------------
+# 6. Enforcement-evidence gates (docs/ENFORCEMENT-LEDGER.md <-> settings.json <-> the code).
+#    ADDITIVE: this step only ever appends to the existing accumulator, so it cannot change the
+#    pass/fail semantics of checks 1-5 for unrelated PRs.
+#
+#    DELEGATION, NOT DUPLICATION. Every closed set (behavior / exercise_status / proof_layer),
+#    every recorded token set, and the gate-architecture census live in exactly ONE place --
+#    DECLARED_SCHEMA and the RECORDED_* constants in scripts/check-enforcement-evidence.py.
+#    This script restates none of them; it invokes that script. A prior revision of the spec
+#    stated the behavior closed set five different ways across four documents, which would have
+#    produced two guards encoding two different sets -- the identical two-hand-synced-copies
+#    drift class that RISK-2 of docs/THREAT-MODEL.md exists to teach. Adding a second
+#    enumerator here would have recreated it inside the mechanism meant to prevent it.
+#
+#      --ledger : evidence integrity  (enforced requires host-observed proof + a linked corpus
+#                 case; closed-set labels; no passing compatibility row without a run link)
+#      --claims : claim-versus-code   (both regex symbols present; arch-F7 block intact; every
+#                 declared matrix witness reproduces its recorded outcome; wrapper/redirection
+#                 token sets and gate-architecture census unchanged; ledger row set equals the
+#                 settings.json-derived set; every threat-model section-4 citation pinned)
+# ---------------------------------------------------------------------------
+EVIDENCE_GATE="$ROOT/scripts/check-enforcement-evidence.py"
+if [ ! -f "$EVIDENCE_GATE" ]; then
+  fail "enforcement-evidence: scripts/check-enforcement-evidence.py not found"
+else
+  for mode in ledger claims; do
+    if python3 "$EVIDENCE_GATE" "--${mode}"; then
+      pass "enforcement-evidence --${mode}"
+    else
+      fail "enforcement-evidence --${mode}: see the FAIL lines above"
+    fi
+  done
+fi
+
+# ---------------------------------------------------------------------------
 # Aggregated verdict.
 # ---------------------------------------------------------------------------
 echo "----------------------------------------------------------------------"
