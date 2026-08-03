@@ -234,7 +234,7 @@ old name.
 
 | Check | Command | Expected |
 |---|---|---|
-| Residual old-name lines, excluding this plan | `git grep -n -I -F 'awesome-claude-harness' -- . ':(exclude)docs/reference/rename-execution-plan.md' \| wc -l` | `31` while Tier 1-B is outstanding; `25` once Tier 1-B lands |
+| Residual old-name lines, excluding this plan | `git grep -n -I -F 'awesome-claude-harness' -- . ':(exclude)docs/reference/rename-execution-plan.md' \| wc -l` | `29` while Tier 1-B is outstanding; `27` once Tier 1-B lands (the original `25` predates the 2 Tier 2-B lines) |
 | Per-file residual | `grep -c -F 'awesome-claude-harness' <path> \|\| true` | bare integer on stdout; **exit 1 means zero matches and is success**, exit 2 means the path is unreadable |
 | A Tier 2 line survives byte-exact | `grep -c -F -- "$EXACT_TEXT" <path>` | `1`. The `--` separator is **required**: the `NESTED-REPO.md` line begins with `- ` and is otherwise parsed as an option bundle, exiting 2. |
 | Hero provenance | `node tools/demo/audit.mjs <trace.json> <hero.svg> --strict` | exit `0` for both pairs |
