@@ -288,6 +288,15 @@ finds **11**, not 3.
   `hooks/pretool-bash-safety.sh:1695 @4c33f2f5` (force/delete push) and
   `hooks/pretool-bash-safety.sh:1732 @4c33f2f5` (`update-ref`, branch deletion,
   `symbolic-ref`). **These two are unaffected by the suppression above.**
+- **Architecture C — classifier-only path-qualified augmentation.** Branches guarded on
+  `CLASSIFIER_HAS_PATH_QUALIFIED_GIT` that have no regex fallback of their own — because they
+  never had one to lose. Each exists to *add* path-qualified coverage alongside a separate
+  bare-form regex gate, so an empty parse suppresses nothing: it simply means this branch
+  contributes nothing and the bare-form gate is unchanged. Census at `4c33f2f5`: **8** branches,
+  at `hooks/pretool-bash-safety.sh:1524 @4c33f2f5` and `:1553`, `:1576`, `:1612`, `:1683`,
+  `:1705`, `:1755`, `:1788` (stash, stash, checkout, restore, push, ref surfaces, revert).
+  **Unaffected by the suppression**, and named here so the census cannot be read as
+  cherry-picked. This shape is the numerically dominant one.
 
 **Consequence**: for the single architecture-A gate a **bare** wrapper-with-flag form defeats
 the gate despite the anchor matching. Path qualification is not required. A sibling lane's
