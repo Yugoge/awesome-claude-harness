@@ -75,8 +75,10 @@ guarantees of this document, and the harness has **no** compensating control for
 | The human operator | That instructions to disable a guard are genuinely the human's (§5.1). | No. |
 | The filesystem | That a hook file read at dispatch time is the file this repository committed. | No hardware root of trust. |
 
-Because the dispatcher is **uncontrolled**, this project can never label a mechanism
-`enforced` on its own evidence alone — see `docs/ENFORCEMENT-LEDGER.md` §1.1.
+The Claude Code dispatcher/runtime is an **uncontrolled** trust dependency — this harness
+relies on it but **does not control** it, does not ship it, and cannot test against it here.
+Because of that, this project can never label a mechanism `enforced` on its own evidence
+alone — see `docs/ENFORCEMENT-LEDGER.md` §1.1.
 
 ---
 
