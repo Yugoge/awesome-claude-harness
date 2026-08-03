@@ -75,6 +75,14 @@ docs/*
 # PERMITTED DELIVERY PATH: docs/reference/ holds in-repo documentation deliverables (arch-1/D3, spec-20260520-221059)
 !docs/reference/
 !docs/THREAT-MODEL.md
+# PERMITTED DELIVERY PATH: the published trust/proof artifacts. These are companions to
+# docs/THREAT-MODEL.md above and are load-bearing in CI, not dev-cycle scratch output:
+# scripts/verify-claims.sh gates the required `baseline` job on them via
+# scripts/check-enforcement-evidence.py --ledger/--claims, and CI runs from a fresh
+# checkout. Left under the blanket docs/* ignore they would be absent there and every
+# enforcement-evidence check would fail on a file it could not read.
+!docs/ENFORCEMENT-LEDGER.md
+!docs/ADVERSARIAL-CORPUS.md
 
 # Live workflow / dev coordination state
 workflow-*.json

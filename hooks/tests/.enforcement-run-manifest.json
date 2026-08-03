@@ -3,7 +3,7 @@
   "run_id": "local",
   "commit_sha": "4c33f2f56e7f7a0b7fe57140d80e60b89b7d7dff",
   "os_runtime": "Linux 6.8.0-117-generic x86_64 / Python 3.12.3",
-  "collected_tests": 22,
+  "collected_tests": 77,
   "executed_case_ids": [
     "ADV-W01-none-bare",
     "ADV-W02-none-pathqualified",
