@@ -265,8 +265,11 @@ repository; the **privilege** family (`sudo`, `doas`) and the **scheduling** fam
 
 #### Third dimension: gate architecture
 
-An anchor MATCH does **not** mean the gate fires. Two gate shapes exist in
-`hooks/pretool-bash-safety.sh:1 @4c33f2f5`:
+An anchor MATCH does **not** mean the gate fires. **Three** shapes consume the classifier in
+`hooks/pretool-bash-safety.sh:1 @4c33f2f5`, and only the first is affected by the suppression
+described below. All three are counted, because publishing only the two that carry the finding
+would be a cherry-picked census: a reader counting classifier-consuming branches in that file
+finds **11**, not 3.
 
 - **Architecture A — classifier-primary with a *mutually exclusive* regex fallback.** The
   classifier branch at `hooks/pretool-bash-safety.sh:1657 @4c33f2f5` requires
