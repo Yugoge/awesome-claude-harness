@@ -1,7 +1,7 @@
 # scripts
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-08-02T08:04:57Z*
+*Last updated: 2026-08-03T12:18:50Z*
 **Total entries**: 120
 **Convention**: kebab
 
@@ -10,7 +10,7 @@
 scripts/
 ├── install/
 │   ├── `render-settings` - render-settings file
-│   └── `tmp-cleanup-install.sh` - /usr/local/sbin/tmp-cleanup.sh
+│   ├── `tmp-cleanup-install.sh` - /usr/local/sbin/tmp-cleanup.sh
 ├── lib/
 │   ├── `make_sbom.py` - The SBOM is built from the archive's real contents, not from the source
 │   └── `release_membership.py` - Single source of truth shared by every consumer, so the archive builder, the
