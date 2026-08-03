@@ -207,20 +207,11 @@ jobs:
         # if: always() so the evidence survives a failing suite -- an artifact
         # published only on green runs cannot show what a red run exercised.
         if: always()
-        # KNOWN DEVIATION — MUST BE PINNED BEFORE MERGE.
-        # Every other action in this repository is pinned to a full 40-char commit
-        # SHA (see the Checkout step above for why: a tag can be repointed at
-        # arbitrary code by anyone who can push to the action repo). This step is
-        # NOT, because the authoring environment had no network egress available
-        # to it — the tool policy for that role denies WebFetch — so the real SHA
-        # for a given upload-artifact release could not be resolved. Writing a
-        # plausible-looking SHA from memory would have shipped an unverifiable
-        # claim into the one workflow whose purpose is publishing verifiable
-        # evidence, which is the exact defect class this lane exists to remove.
-        # The mutable-tag risk is therefore DISCLOSED here rather than disguised.
-        # Action required: resolve the SHA for the desired upload-artifact release
-        # and replace the tag below, matching the pinning convention above.
-        uses: actions/upload-artifact@v4
+        # Pinned to a full 40-char commit SHA, matching every other action in this
+        # repository: a tag can be repointed at arbitrary code by anyone who can
+        # push to the action repo. SHA resolved from the upstream repository at
+        # implementation time, not written from memory.
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           # Matrix-unique: a fixed name would have each Python leg silently
           # overwrite the previous leg's evidence.
