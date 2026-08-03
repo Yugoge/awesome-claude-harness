@@ -273,11 +273,10 @@ def main() -> int:
     swept: list[str] = []
     try:
         build_fixture(fixture)
-        install_grant()
-        grant_hash_at_install = sha256_file(GRANT_PATH)
 
         t0 = time.monotonic()
         watcher.t0 = t0
+        watcher.fixture = fixture
         watcher.start()
         rc, lines = capture_run(fixture, capture_path, watcher, t0)
         watcher.halt()
