@@ -419,7 +419,51 @@ def test_every_manifest_route_is_gated(home: Path, statedir: Path):
     for entry in manifest["routes"]:
         rec = cs.evaluate_activation(entry["route"], home=home, session_id=sid,
                                      state_file=cs.state_path(sid, statedir))
-        assert rec["decision"] == "REFUSE", entry["route"]
+        if entry.get("human_consent_escape_hatch"):
+            # Deliberately exempt — asserted positively so the carve-out can never
+            # widen silently: an escape hatch must PERMIT and must say why.
+            assert rec["decision"] == "PERMIT", entry["route"]
+            assert rec["exemption"] == "human_consent_escape_hatch", entry["route"]
+        else:
+            assert rec["decision"] == "REFUSE", entry["route"]
+
+
+def test_escape_hatch_set_is_exactly_the_two_documented_consent_routes(home: Path):
+    """The carve-out is the one place this gate can be widened by editing data
+    alone, so its membership is pinned by a test rather than by review."""
+    manifest, err = cs.load_manifest(home)
+    assert err is None
+    exempt = {e["route"] for e in manifest["routes"] if e.get("human_consent_escape_hatch")}
+    assert exempt == {"slashcommand:/do", "slashcommand:/allow"}
+    # Every exempt route must justify itself in the manifest.
+    for entry in manifest["routes"]:
+        if entry.get("human_consent_escape_hatch"):
+            assert entry.get("why_exempt"), entry["route"]
+
+
+@pytest.mark.parametrize("command", ["/do", "/allow git push"])
+def test_escape_hatches_survive_absent_state(home: Path, statedir: Path, command: str):
+    """THE decisive anti-self-sealing property: with NO state on disk at all, a
+    human must still be able to authorise a repair through the harness."""
+    sid = "hatch"
+    assert not cs.state_path(sid, statedir).exists()
+    r = _gate({"tool_name": "SlashCommand", "tool_input": {"command": command},
+               "session_id": sid}, home, statedir, sid)
+    assert r.returncode == 0, r.stderr
+
+
+@pytest.mark.parametrize("tool", ["Agent", "Task"])
+def test_dispatch_routes_are_outside_the_protected_surface(home: Path, statedir: Path, tool: str):
+    """Regression for the unrecoverable-lockout defect: subagent dispatch has no
+    non-hook enforcement point, so it is out of the surface entirely rather than
+    refused on grounds no state could ever satisfy."""
+    sid = "disp"
+    r = _gate({"tool_name": tool, "tool_input": {}, "session_id": sid}, home, statedir, sid)
+    assert r.returncode == 0, r.stderr
+    rec = cs.evaluate_activation(f"tool:{tool}", home=home, session_id=sid,
+                                 state_file=cs.state_path(sid, statedir))
+    assert rec["decision"] == "NOT_PROTECTED"
+    assert "route_outside_protected_surface" in rec["failure_reason"]
 
 
 def test_unmanifested_route_in_surface_is_blocked_fail_closed(home: Path, statedir: Path):
