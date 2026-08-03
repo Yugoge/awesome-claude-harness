@@ -523,6 +523,8 @@ def evaluate_activation(
         "failure_reason": None,
         "state_input": {"path": str(sp), "digest": _state_digest(sp), "run_id": None, "nonce": None},
         "manifest_version": None,
+        "enforcement_mode": None,
+        "exemption": None,
         "timestamp": now_iso(),
     }
 
