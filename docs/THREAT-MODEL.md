@@ -1,4 +1,4 @@
-# Threat Model — awesome-claude-harness
+# Threat Model — claude-code-guardrails
 
 > **Scope**: This threat model covers the AI-agent permission boundary enforced by the
 > hook chain in `hooks/`. The adversary model is an autonomous AI agent (Claude Code,
