@@ -177,10 +177,11 @@ class GrantWatcher(threading.Thread):
         super().__init__(daemon=True)
         self.t0 = t0
         self.samples: list[dict] = []
-        self._stop = threading.Event()
+        # NB: named _halt, not _stop -- threading.Thread._stop is an inherited method.
+        self._halt = threading.Event()
 
     def run(self) -> None:
-        while not self._stop.is_set():
+        while not self._halt.is_set():
             try:
                 present = GRANT_PATH.is_file()
                 digest = sha256_file(GRANT_PATH) if present else None
@@ -190,10 +191,10 @@ class GrantWatcher(threading.Thread):
                 {"t": round(time.monotonic() - self.t0, 4),
                  "present": present, "sha256": digest}
             )
-            self._stop.wait(WATCH_INTERVAL_S)
+            self._halt.wait(WATCH_INTERVAL_S)
 
-    def stop(self) -> None:
-        self._stop.set()
+    def halt(self) -> None:
+        self._halt.set()
 
 
 def capture_run(fixture: Path, capture_path: Path, watcher: GrantWatcher,
