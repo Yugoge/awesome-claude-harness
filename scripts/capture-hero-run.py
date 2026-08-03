@@ -301,7 +301,7 @@ def main() -> int:
             post = [s for s in watcher.samples if s["t"] > t_marker]
             if not pre or not pre[-1]["present"]:
                 failures.append("grant was NOT present immediately before consumption")
-            elif pre[-1]["sha256"] != grant_hash_at_install:
+            elif pre[-1]["sha256"] != watcher.grant_hash_at_install:
                 failures.append("grant content changed before consumption")
             if not post or any(s["present"] for s in post):
                 failures.append("grant was NOT absent immediately after consumption")
@@ -337,7 +337,7 @@ def main() -> int:
                 round(parse_ts(lines[i + 1]) - parse_ts(lines[i]), 3)
                 for i in range(len(lines) - 1)
             ],
-            "grant_sha256_at_install": grant_hash_at_install,
+            "grant_sha256_at_install": watcher.grant_hash_at_install,
             "grant_present_before_consumption": bool(
                 marker_line and pre and pre[-1]["present"]
             ),
