@@ -82,7 +82,9 @@
       "route_type": "SlashCommand",
       "entrypoint": "commands/allow.md",
       "independent_enforcement": true,
-      "why_protected": "Mints structured sentinel grants that relax the Bash safety boundary."
+      "human_consent_escape_hatch": true,
+      "why_protected": "Mints structured sentinel grants that relax the Bash safety boundary.",
+      "why_exempt": "Human-only break-glass (disable-model-invocation: true). It never overrides a settings DENY and only narrows one declared hook's refusal, so exempting it cannot widen the boundary beyond what a human explicitly typed -- while blocking it would strand a human on an unprotected host with no way to authorise the repair."
     },
     {
       "id": "do-consent",
