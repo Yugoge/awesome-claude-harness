@@ -23,8 +23,11 @@ manifest's `independent_enforcement_callsite` field.
 
 Usage: capability-doctor-strict.py [--home <dir>] [--session-id <id>] [--verbose]
        capability-doctor-strict.py --route <route> [--home <dir>] [--session-id <id>]
-Exit codes: 0 = fresh handshake PASS (or, under --route, PERMIT/NOT_PROTECTED);
-            1 = UNPROTECTED (or, under --route, REFUSE).
+Exit codes: 0 = fresh handshake PASS (under --route: PERMIT);
+            1 = UNPROTECTED (under --route: REFUSE);
+            3 = --route only: NOT_PROTECTED, i.e. the route is outside the
+                protected surface. Distinct from 0 so a mistyped route cannot be
+                misread as approval.
 """
 from __future__ import annotations
 
