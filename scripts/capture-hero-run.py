@@ -327,8 +327,10 @@ def main() -> int:
 
         evidence = {
             "task_id": RESERVED_TASK_ID,
-            "capture_path": str(capture_path.relative_to(REPO_ROOT))
-            if not args.check_only else str(capture_path),
+            "capture_path": (
+                str(capture_path.relative_to(REPO_ROOT))
+                if capture_path.is_relative_to(REPO_ROOT) else str(capture_path)
+            ),
             "capture_mode": "pipe (never a pseudo-terminal) -- see module docstring",
             "demo_exit": rc,
             "raw_duration_s": round(duration, 3),
