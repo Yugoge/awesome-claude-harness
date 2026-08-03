@@ -122,6 +122,7 @@ pretool_push
 RC3=$?
 echo "[pretool-git-privilege-guard.py exit $RC3 — refused again: the grant was single-use]"
 sleep "$PACE_TAIL"
+echo "[demo complete — one grant authorized exactly one push, and nothing more]"
 
 if [ "$RC1" -ne 2 ] || [ "$RC3" -ne 2 ]; then
   echo "run-hero-demo: expected refusal (exit 2) on beats 1 and 5" >&2
