@@ -354,6 +354,13 @@ def main() -> int:
     if swept:
         failures.append(f"cleanup removed {swept} -- on a clean run it must remove none")
 
+    # Written AFTER cleanup so cleanup_removed_files reflects what cleanup actually did.
+    # On a clean run it is [] -- independent proof the real consumer did the removal.
+    Path(args.evidence).parent.mkdir(parents=True, exist_ok=True)
+    Path(args.evidence).write_text(
+        json.dumps(evidence, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
+
     for f in failures:
         print(f"capture-hero-run: FAIL: {f}", file=sys.stderr)
     if failures:
