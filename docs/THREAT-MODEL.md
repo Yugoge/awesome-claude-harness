@@ -182,9 +182,15 @@ status: PARTIALLY MITIGATED
 - **Verifying test**: no dedicated RISK-1 test. Indirect coverage via
   `hooks/tests/test_bash_safety_context.py:1 @4c33f2f5`.
 
-### RISK-2: Two Hand-Synced Git Regex Engines with No Cross-Consistency Test
+### RISK-2: Two Hand-Synced Git Regex Engines
 
-- **Description**: The harness maintains two independent regex engines for detecting dangerous git commands: (1) `GIT_COMMAND_RE` in `hooks/pretool-git-privilege-guard.py:105` (Python `re` pattern), and (2) `GIT_CMD_RE` in `hooks/pretool-bash-safety.sh:1367` (POSIX ERE for `grep -E`). Both are hand-authored with no shared source. Their current definitions are:
+status: MITIGATED
+
+- **Description**: the harness maintains two independently hand-authored regex engines for
+  detecting git commands — `GIT_COMMAND_RE` at `hooks/pretool-git-privilege-guard.py:145
+  @4c33f2f5` (Python `re`) and `GIT_CMD_RE` at `hooks/pretool-bash-safety.sh:1654 @4c33f2f5`
+  (POSIX ERE for `grep -E`). Editing one without the other creates an asymmetric bypass. Both
+  engines still exist as separate hand-authored patterns. Their current definitions are:
   - Python: `GIT_COMMAND_RE = r'(?:^|[\s;&|()`])git' + GIT_GLOBAL_OPTION_RE + r'\s+'`
   - POSIX ERE: `GIT_CMD_RE='(^|[[:space:];&|()`])git'`
 - **Risk**: Any future edit to one regex without updating the other creates an asymmetric bypass: commands blocked by one guard but not the other can be routed through the unpatched engine. This is the class of drift that RISK-3 already exemplifies — both regexes currently lack the `/` character in the anchor class, meaning `/usr/bin/git push` matches neither.
