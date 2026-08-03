@@ -554,6 +554,13 @@ def evaluate_activation(
 
     manifest, merr = load_manifest(home, manifest_path)
     if merr:
+        # A broken manifest must not strand a human. The escape hatches fall back
+        # to the module constant so the recovery path does not depend on the file
+        # that just failed to load; every other route still refuses.
+        if route in HUMAN_CONSENT_ESCAPE_HATCH_ROUTES:
+            record["decision"] = "PERMIT"
+            record["exemption"] = "human_consent_escape_hatch_manifest_unavailable"
+            return record
         record["failure_reason"] = f"{component}_refused: {merr}"
         return record
     record["manifest_version"] = manifest.get("manifest_version")
