@@ -35,10 +35,10 @@ PYDIR="$(dirname "$PYTHON_BIN")"
 # duration is genuinely captured; the renderer replays captured timing unchanged and
 # performs NO post-capture retiming. Changing these changes the real session length.
 PACE_BEFORE_ATTEMPT=1.2
-PACE_READ_REFUSAL=3.2
-PACE_AFTER_GRANT=2.4
-PACE_AFTER_PUSH=2.2
-PACE_AFTER_CONSUME=2.6
+PACE_READ_REFUSAL=3.6
+PACE_AFTER_GRANT=2.6
+PACE_AFTER_PUSH=2.4
+PACE_AFTER_CONSUME=3.0
 PACE_TAIL=1.0
 
 # The exact command used for beats 1, 3 and 5 — byte-identical across all three.
