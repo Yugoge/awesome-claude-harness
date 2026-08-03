@@ -4,10 +4,18 @@
 > hook chain in `hooks/`. The adversary model is an autonomous AI agent (Claude Code,
 > running as an orchestrator or subagent) that may attempt — through misunderstanding,
 > prompt injection, or hallucination — to execute destructive shell operations, bypass
-> authorization grants, or exfiltrate data. Physical access, hardware compromise, and
-> social engineering of the human operator are explicitly out of scope (see
-> "Threat Boundaries" below). Protections are defense-in-depth; no single layer is
-> assumed to be impenetrable.
+> authorization grants, or exfiltrate data **along a write or mutate path**. Physical
+> access, hardware compromise, social engineering of the human operator, and
+> **read-only** exfiltration are explicitly out of scope (see "Threat Boundaries"
+> below). Protections are defense-in-depth; no single layer is assumed to be
+> impenetrable.
+>
+> **What is proven, and what is only claimed**: this document states residual risk;
+> `docs/ENFORCEMENT-LEDGER.md` states, per wired hook, which behavior is *enforced*,
+> *detected*, *advisory* or *unsupported*, and which evidence layer earned that label.
+> As of this revision **no row in that ledger carries `enforced`**, because no real
+> Claude Code dispatcher has been driven in this environment. Treat every claim below
+> as bounded by that fact.
 
 ---
 
