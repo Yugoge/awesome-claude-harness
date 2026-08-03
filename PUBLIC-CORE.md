@@ -47,10 +47,10 @@ file is GENERATED from the template by `scripts/install/render-settings`, which
 `/settings.json` rule; and CI renders it right after checkout so
 `scripts/verify-claims.sh` still has a concrete file to recompute its counts from.
 
-**One step remains: `git rm --cached settings.json`.** Until that runs the file is still
-in the index and keeps its ledger row below; afterwards the row must be deleted. Doing it
-in this order is safe in both states — an unclassified *tracked* top-level path is a hard
-gate failure, while a ledger row naming an untracked path is only an advisory `INFO`.
+The *untrack* side is now complete too: `settings.json` has been removed from the index
+(`git rm --cached`, not a history rewrite — every prior commit that touched the file
+remains reachable), so it no longer carries a ledger row. A working copy still exists on
+each install; it is per-install state, not tracked content.
 
 ---
 
