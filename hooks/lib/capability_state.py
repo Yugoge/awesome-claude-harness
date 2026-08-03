@@ -543,9 +543,27 @@ def evaluate_activation(
         )
         record["decision"] = "REFUSE" if in_surface else "NOT_PROTECTED"
         return record
-    if not entry.get("independent_enforcement", False):
-        record["decision"] = "REFUSE"
-        record["failure_reason"] = f"{component}_refused: route_unsupported_no_independent_enforcement"
+    # `independent_enforcement` is a COVERAGE annotation -- "does a non-hook
+    # callsite exist for this route?" -- and is RECORDED, never used as a verdict
+    # input. Refusing on it produced a refusal that NO state could ever satisfy:
+    # zero protection on the threat host (where the gate is never dispatched at
+    # all) and a permanent, unrepairable block on a healthy one. A route this
+    # design cannot independently enforce belongs outside the protected surface,
+    # or is enforced by something that can actually be satisfied -- never refused
+    # on unsatisfiable grounds. Fail-closed must not mean fail-sealed.
+    record["enforcement_mode"] = (
+        "independent" if entry.get("independent_enforcement", False) else "gate_only"
+    )
+
+    # HUMAN CONSENT ESCAPE HATCH (see the manifest's _escape_hatch_note). These
+    # routes are permitted even when state is absent, because blocking them
+    # removes the only in-harness path by which a human could authorise a repair
+    # -- turning a fail-closed host into a self-sealed one. The exemption is
+    # recorded on the decision record so a doctor run can always show which
+    # routes were let through and why; it is never silent.
+    if entry.get("human_consent_escape_hatch", False):
+        record["decision"] = "PERMIT"
+        record["exemption"] = "human_consent_escape_hatch"
         return record
 
     state, serr = load_state(sp, expected_session_id=sid or None, now=now)
