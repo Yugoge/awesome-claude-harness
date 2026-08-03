@@ -47,8 +47,16 @@ RE_TIMESTAMP = re.compile(r"^\[\s*\d+\.\d+\]\s")
 RE_PID = re.compile(r"\bpid[= ]\d+\b", re.IGNORECASE)
 # Category 4 -- temp-dir stems.
 RE_TMPDIR = re.compile(r"/(?:tmp|var/folders)/[A-Za-z0-9._-]+")
-# Category 2 -- any remaining absolute path.
-RE_ABSPATH = re.compile(r"(?<![\w.])/(?:[A-Za-z0-9._-]+/)*[A-Za-z0-9._-]+")
+# Category 2 -- any remaining absolute path. At least TWO segments are required.
+#
+# The one-or-more form was wrong and the adversarial mutation test caught it: a bare
+# single-segment token like `/push` is not a path, it is the NAME OF A SLASH COMMAND, and
+# it appears inside a remedy line ("For automated push, use the /push slash command").
+# Scrubbing it to <ABS> silently erased security-relevant text -- exactly the failure the
+# "never touch rule / reason / remedy / marker" rule exists to prevent -- and made two
+# different remedy lines normalize to the same bytes. Requiring an interior separator
+# keeps real paths (/tmp/x, /usr/bin/git, /dev/null) in scope and slash commands out.
+RE_ABSPATH = re.compile(r"(?<![\w.])/(?:[A-Za-z0-9._-]+/)+[A-Za-z0-9._-]+")
 
 
 def normalize_line(line: str) -> str:
