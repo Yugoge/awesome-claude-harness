@@ -171,6 +171,23 @@ like success.
 
 ---
 
+### Tier 2-B — occurrences created after this plan was first written
+
+These did not exist when the original 37-line partition was measured. They were introduced by a
+sibling lane's new document and are **not** this lane's to edit (`docs/reference/` is outside
+its file-ownership boundary). They are recorded here so the residue still reconciles to zero
+unaccounted matches.
+
+| Location | Line | Reason retained |
+|---|---|---|
+| `docs/reference/launch-plan.md` | `BI-C` evidence row quoting the README clone command | Quoted **evidence text**, bound to the baseline ref `4c33f2f5`. Rewriting it would falsify a recorded observation. |
+| `docs/reference/launch-plan.md` | `C-PASS` gate row quoting the same command as a corroborating indicator | Same — quoted evidence, bound to the same ref. |
+
+Both flip naturally whenever the launch-plan's own evidence is re-taken against a later ref;
+neither is identity surface.
+
+---
+
 ## Occurrence reconciliation
 
 Counts are in **matching lines**. Exactly one line in the tree carries the old name **twice**
@@ -179,16 +196,24 @@ runs one higher than the line count.
 
 | Tier | Lines | Occurrences | Disposition |
 |---|---:|---:|---|
-| Tier 1 — cleared in this pass | 6 | 6 | done |
-| Tier 1-B — still owed, blocked | 6 | 6 | listed above with blocker + clearing condition |
+| Tier 1 — cleared | 10 | 10 | done (6 in the first pass, 4 in the second) |
+| Tier 1-B — still owed, blocked | 2 | 2 | listed above with blocker + clearing condition |
 | Tier 2 — retained, gated on the external rename | 6 | **7** | listed above |
+| Tier 2-B — retained, sibling-authored evidence | 2 | 2 | listed above |
 | Tier 3 — retained, gated on Lane C | 19 | 19 | listed above |
-| **Residual after this pass** | **31** | **32** | fully enumerated |
-| **Tree total, pre-change** | **37** | **38** | — |
+| **Residual after this pass (measured)** | **29** | **30** | fully enumerated |
+| **Tree total** | **39** | **40** | the original 37 + the 2 Tier 2-B lines added since |
 
-6 + 6 + 6 + 19 = 37 lines, no remainder. **Every** remaining old-name line in the tree appears
-in exactly one table above. This document is excluded from the residue count: it cannot record
-the sentinel's filename, the dual-accept recipe or the Tier 2 URLs without quoting the old name.
+10 + 2 + 6 + 2 + 19 = 39 lines, no remainder. **Every** remaining old-name line in the tree
+appears in exactly one table above. This document is excluded from the residue count: it cannot
+record the sentinel's filename, the dual-accept recipe or the Tier 2 URLs without quoting the
+old name.
+
+> **On the "25" figure.** The original target of 25 residual lines was derived from a 37-line
+> tree that no longer exists: two further old-name lines have since been added by a sibling
+> lane (Tier 2-B). Re-derived against the current 39-line tree the equivalent target is **27**,
+> and the measured 29 is exactly 2 above it — the Tier 1-B pair, which is boundary-blocked
+> rather than unexplained. No residual line is unaccounted for under either figure.
 
 ---
 
