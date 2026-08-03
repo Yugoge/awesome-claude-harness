@@ -266,7 +266,11 @@ if [ -n "$SCAN_ROOT" ]; then
   [ -n "$RELEASE_MANIFEST" ] || { echo "FAIL: --scan-root requires --release-manifest" >&2; exit 1; }
   [ -f "$RELEASE_MANIFEST" ] || { echo "FAIL: release manifest not found: $RELEASE_MANIFEST" >&2; exit 1; }
 
-  ACTUAL="$(cd "$SCAN_ROOT" && find . -type f | sed 's#^\./##' | sort)"
+  # Symlinks are archive members too: the release tar preserves them (it does not
+  # pass -h), so a tracked symlink such as templates/overnight-spec.md extracts as
+  # a symlink. A bare `-type f` would drop it from the ACTUAL set while the
+  # manifest resolver still lists it, failing set equality on a correct archive.
+  ACTUAL="$(cd "$SCAN_ROOT" && find . \( -type f -o -type l \) | sed 's#^\./##' | sort)"
   EXPECTED="$(python3 "$ROOT/scripts/lib/release_membership.py" --from-tree \
                    --root "$SCAN_ROOT" --manifest "$RELEASE_MANIFEST" | sort)"
   if [ "$ACTUAL" != "$EXPECTED" ]; then
