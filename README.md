@@ -127,7 +127,7 @@ graph TD
 
     ORC ==>|dispatch WHAT not HOW| SUB[Subagent Pool<br/>23 agents<br/>ba → qa → dev → qa]
 
-    HL[Hook Layer<br/>71 wired hook command entries<br/>7 lifecycle events<br/>PreToolUse / PostToolUse / Stop] -->|allow exit 0| GK[(Git Kernel<br/>git repo<br/>/tmp/ grants<br/>refs/checkpoints/HEAD<br/>reference-transaction keystone)]
+    HL[Hook Layer<br/>70 wired hook command entries<br/>7 lifecycle events<br/>PreToolUse / PostToolUse / Stop] -->|allow exit 0| GK[(Git Kernel<br/>git repo<br/>/tmp/ grants<br/>refs/checkpoints/HEAD<br/>reference-transaction keystone)]
     HL -->|block exit 2| BLK[/BLOCKED/]
 
     GK --> IDX[INDEX files<br/>doc-sync PostToolUse]
