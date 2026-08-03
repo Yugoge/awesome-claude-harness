@@ -1,7 +1,7 @@
 # dot-claude
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-08-03T14:13:27Z*
+*Last updated: 2026-08-03T14:24:17Z*
 **Total entries**: 460
 **Convention**: kebab
 

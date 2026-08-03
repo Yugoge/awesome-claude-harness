@@ -3,12 +3,13 @@
   "manifest_version": "v1",
   "description": "Every protected workflow and activation route the host-capability handshake gates. A route inside protected_surface_prefixes but absent from routes[] is blocked fail-closed until explicitly added; a route outside every prefix is reported not_protected so the gate cannot brick tool use it was never meant to police.",
   "default_for_unmanifested_route_in_surface": "block",
+  "independent_enforcement_callsite": "scripts/capability-doctor-strict.py --route <route>",
   "_surface_note": "The prefixes are intentionally the bare route-class tags, not 'slashcommand:/'. A malformed or empty slash-command route classifies as 'slashcommand:' and must land INSIDE the surface so it blocks fail-closed; a narrower prefix would let it fall outside and be treated as ordinary traffic.",
+  "_dispatch_route_note": "tool:Agent and tool:Task were REMOVED from the surface (and the subagent-dispatch route deleted) because subagent dispatch has no non-hook entrypoint this harness controls. Keeping it in the surface bought ZERO protection on the threat host -- one that lists the gate and never dispatches it, where the gate never runs at all -- while inflicting a permanent, unsatisfiable block on a healthy host: the evaluator refused before ever loading state, so not even a fresh valid PASS could permit a dispatch. Subagent dispatch stays gated TRANSITIVELY through the workflows that perform it (/dev, /dev-command, /dev-overnight, /close, /commit), which are manifested below and enforced where the handshake actually has purchase. A route this design cannot independently enforce is never refused on grounds no state could satisfy.",
+  "_escape_hatch_note": "Routes flagged human_consent_escape_hatch are PERMITTED even when handshake state is absent. Fail-closed must not mean fail-sealed: these are the harness's two documented human-authorisation routes, and blocking them on an unprotected host removes the only in-harness path by which a human could authorise a repair. Both carry `disable-model-invocation: true`, so neither is reachable from a model turn, and neither performs a privileged operation itself -- each records consent that OTHER gates consult, and those gates remain fully in force. The exemption is recorded on every decision record so it is auditable, never silent.",
   "protected_surface_prefixes": [
     "slashcommand:",
-    "skill:",
-    "tool:Agent",
-    "tool:Task"
+    "skill:"
   ],
   "routes": [
     {
