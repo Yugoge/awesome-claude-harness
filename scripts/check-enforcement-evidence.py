@@ -90,11 +90,19 @@ RECORDED_REDIRECTION_OPS = ["2>/dev/null", ">", ">>", "<", "2>&1", "&>", "1>"]
 RECORDED_ERE_ANCHOR = "(^|[[:space:];&|()`])git"
 RECORDED_PY_ANCHOR = "(?:^|[\\s;&|()`])git"
 
-# Gate-architecture census. A = classifier-primary with a MUTUALLY EXCLUSIVE regex fallback
-# guarded by [ "$CLASSIFIER_STATUS" != "ok" ]; B = unconditional GIT_CMD_RE branch OR-ed with a
-# classifier flag. If a second gate adopts shape A, more inputs lose their backstop without any
-# probed form changing behavior -- which is precisely why this is counted rather than described.
-RECORDED_CENSUS = {"architecture_a": 1, "architecture_b": 2}
+# Gate-architecture census, counted at RECORDED_AT.
+#   A = classifier-primary with a MUTUALLY EXCLUSIVE regex fallback guarded by
+#       [ "$CLASSIFIER_STATUS" != "ok" ]. This is the shape where a successful-but-empty parse
+#       suppresses the backstop.
+#   B = unconditional GIT_CMD_RE branch OR-ed with a classifier flag. Unaffected.
+#   C = classifier-only path-qualified AUGMENTATION branch guarded by
+#       CLASSIFIER_HAS_PATH_QUALIFIED_GIT. These have no regex fallback of their own because
+#       they never carried one: they exist to ADD path-qualified coverage on top of a separate
+#       bare-form regex gate, so there is nothing for an empty parse to suppress.
+# All three are counted. Counting only A and B would be MISLEADINGLY NARROW -- a reader
+# counting classifier-consuming branches in the guard finds 11, not 3, and would reasonably
+# conclude the published census was cherry-picked to fit the finding.
+RECORDED_CENSUS = {"architecture_a": 1, "architecture_b": 2, "architecture_c": 8}
 
 # Every mandated cell witness, probed INDIVIDUALLY. Probing one representative per cell is not
 # sufficient: teaching the tokenizer to skip an unprobed sibling leaves every representative
