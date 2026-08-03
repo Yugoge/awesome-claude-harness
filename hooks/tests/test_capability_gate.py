@@ -483,13 +483,69 @@ def test_route_outside_protected_surface_is_not_this_gates_business(home: Path, 
     assert r.returncode == 0, r.stderr
 
 
-def test_route_without_independent_enforcement_is_unsupported_and_blocked(home: Path, statedir: Path):
+def test_gate_only_route_is_satisfiable_by_state_not_refused_unconditionally(
+        home: Path, statedir: Path):
+    """`independent_enforcement: false` is a COVERAGE annotation, not a verdict.
+
+    The old contract refused such a route BEFORE loading state, so no state could
+    satisfy it — zero protection on the threat host (where the gate never runs)
+    and a permanent block on a healthy one. The route must now be decided by the
+    handshake: REFUSE while unprotected, PERMIT on a fresh PASS.
+    """
     sid = "m4"
+    manifest, err = cs.load_manifest(home)
+    assert err is None
+    manifest["routes"].append({
+        "id": "synthetic-gate-only", "route": "skill:gate-only-probe",
+        "route_type": "Skill", "entrypoint": "n/a",
+        "independent_enforcement": False, "why_protected": "fixture",
+    })
+    _write(home / cs.MANIFEST_RELPATH, manifest)
+    sp = cs.state_path(sid, statedir)
+
+    def _rec():
+        return cs.evaluate_activation("skill:gate-only-probe", home=home,
+                                      session_id=sid, state_file=sp)
+
+    refused = _rec()
+    assert refused["decision"] == "REFUSE"
+    assert "state=state_absent" in refused["failure_reason"]
+    assert refused["enforcement_mode"] == "gate_only"
+    # ...and the SAME route flips to PERMIT once the handshake passes, which is
+    # what "satisfiable" means and what the old code made impossible.
     _publish(statedir, sid, _passing_state(home, sid))
-    rec = cs.evaluate_activation("tool:Agent", home=home, session_id=sid,
-                                 state_file=cs.state_path(sid, statedir))
-    assert rec["decision"] == "REFUSE"
-    assert "route_unsupported_no_independent_enforcement" in rec["failure_reason"]
+    permitted = _rec()
+    assert permitted["decision"] == "PERMIT", permitted["failure_reason"]
+    assert permitted["enforcement_mode"] == "gate_only"
+
+
+def test_preflight_cli_is_a_real_non_hook_callsite(home: Path, statedir: Path):
+    """The documented non-circular enforcement point must be genuinely reachable
+    from the callsite the manifest names — not merely asserted in a docstring."""
+    manifest, err = cs.load_manifest(home)
+    assert err is None
+    assert manifest["independent_enforcement_callsite"].startswith(
+        "scripts/capability-doctor-strict.py --route")
+    sid = "pf"
+    env = dict(os.environ, CLAUDE_HOME=str(home),
+               CLAUDE_CAPABILITY_STATE_DIR=str(statedir), CLAUDE_SESSION_ID=sid)
+    strict = REPO / "scripts" / "capability-doctor-strict.py"
+
+    def _run(route):
+        r = subprocess.run([sys.executable, str(strict), "--home", str(home),
+                            "--session-id", sid, "--route", route],
+                           capture_output=True, text=True, env=env, timeout=60, check=False)
+        return r.returncode, json.loads(r.stdout)
+
+    rc, rec = _run("slashcommand:/dev")
+    assert rc == 1 and rec["decision"] == "REFUSE"
+    assert rec["component"] == "preflight_consumer"
+    rc, rec = _run("slashcommand:/do")
+    assert rc == 0 and rec["exemption"] == "human_consent_escape_hatch"
+    rc, rec = _run("tool:Agent")
+    assert rc == 0 and rec["decision"] == "NOT_PROTECTED"
+    # Preflight must never mint state — it reads the handshake, it is not one.
+    assert not cs.state_path(sid, statedir).exists()
 
 
 # --------------------------------------------------------------------------- #
