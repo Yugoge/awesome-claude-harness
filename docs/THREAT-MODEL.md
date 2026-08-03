@@ -213,7 +213,134 @@ status: MITIGATED
   of outdating it quietly.
 - **Verifying test**: `hooks/tests/test_git_cmd_cross_consistency.py:1 @4c33f2f5`.
 
-### RISK-3: Path-Qualified Git (`/usr/bin/git push`) Bypasses Both Regex Engines in Interactive Sessions
+### RISK-3: Wrapper-Flag and Leading-Redirection Prefixes Defeat Git-Command Detection
+
+status: PARTIALLY MITIGATED
+
+**This entry previously described the wrong boundary in both directions — too broad and too
+narrow at the same time — and both corrections are published here rather than quietly amended.**
+
+- **Too broad.** The entry's own title named path-qualified `/usr/bin/git push` carrying a force
+  flag as passing through both guards. That is **false** at `4c33f2f5`: the force/delete push
+  gate at `hooks/pretool-bash-safety.sh:1695 @4c33f2f5` fires on the `GIT_CMD_RE` push branch
+  **OR** on the classifier's `_PQ_PUSH_FORCE` flag, and the classifier detects the
+  path-qualified form. A sibling lane's host-shaped probe (synthetic PreToolUse payload on
+  stdin, exit code read) observed **exit 2** for exactly that command. The plain path-qualified
+  force-push form is blocked.
+- **Too narrow.** The real residual is not about path qualification at all. It is
+  **`wrapper-with-flag`** and **`leading-redirection`** prefixes — and for one gate shape a
+  *bare* form with no path qualification is enough.
+
+#### The residual class, by dimension
+
+The classifier's own module docstring accepts these residuals under the heading *"Known scope
+boundaries (arch-F7)"* at `hooks/lib/git_command_classifier.py:17 @4c33f2f5`, adding *"The
+speed-bump design accepts this."* Measured this cycle across 12 wrapper tokens x 4 flag shapes,
+7 redirection operators, x {bare, path-qualified}: **136 forms probed, 110 classifier misses,
+55 forms missing both detection mechanisms**.
+
+| prefix form | qualification | `iter_git_invocations()` | anchor class | forms |
+|---|---|---|---|---|
+| none | bare | detected | MATCH | 1 |
+| none | path-qualified | detected (`path_qualified:true`) | no-match | 1 |
+| wrapper-no-flag (12 tokens) | bare | detected | MATCH | 12 |
+| wrapper-no-flag (12 tokens) | path-qualified | detected (`path_qualified:true`) | no-match | 12 |
+| **wrapper-with-flag** | bare | `[]` | MATCH | 48 |
+| **wrapper-with-flag** | **path-qualified** | `[]` | no-match | **48 — both miss** |
+| **leading-redirection** (7 ops) | bare | `[]` | MATCH | 7 |
+| **leading-redirection** (7 ops) | **path-qualified** | `[]` | no-match | **7 — both miss** |
+
+**Mechanism**: `_command_token_index()` at `hooks/lib/git_command_classifier.py:113 @4c33f2f5`
+skips env-assignments and the 12 `_WRAPPERS` tokens at
+`hooks/lib/git_command_classifier.py:105 @4c33f2f5` (`sudo`, `doas`, `env`, `xargs`, `time`,
+`nohup`, `setsid`, `stdbuf`, `ionice`, `command`, `builtin`, `nice`) — but a wrapper *flag* such
+as `-i` is neither an assignment nor a wrapper, so it is returned as the command token and the
+git token is never reached. Separately, both anchor classes omit `/`, so they miss every
+path-qualified token. Only the `env` family and redirections are named in any docstring in this
+repository; the **privilege** family (`sudo`, `doas`) and the **scheduling** family (`nice`,
+`ionice`, `time`, `nohup`, `setsid`) appear in none.
+
+#### Third dimension: gate architecture
+
+An anchor MATCH does **not** mean the gate fires. Two gate shapes exist in
+`hooks/pretool-bash-safety.sh:1 @4c33f2f5`:
+
+- **Architecture A — classifier-primary with a *mutually exclusive* regex fallback.** The
+  classifier branch at `hooks/pretool-bash-safety.sh:1657 @4c33f2f5` requires
+  `CLASSIFIER_STATUS` to be `ok` **and** a match to be found. Its regex fallback at
+  `hooks/pretool-bash-safety.sh:1667 @4c33f2f5` is guarded on `CLASSIFIER_STATUS` **not** being
+  `ok`. But `CLASSIFIER_STATUS` is set to `ok` for a *successful-but-empty* parse — an empty
+  list trivially passes the schema validator, whose per-item loop runs zero times
+  (`hooks/pretool-bash-safety.sh:906 @4c33f2f5`, `hooks/pretool-bash-safety.sh:930 @4c33f2f5`).
+  **So an input the classifier tokenizes without finding git suppresses its own backstop.**
+  Every wrapper-with-flag and leading-redirection form produces exactly that parse. Census at
+  `4c33f2f5`: **exactly one** gate has this shape — the destructive-reset gate at
+  `hooks/pretool-bash-safety.sh:1657 @4c33f2f5`.
+- **Architecture B — unconditional regex OR classifier.** The `GIT_CMD_RE` branch runs
+  unconditionally and is OR-ed with the classifier result, so the anchor still fires for bare
+  forms. Census at `4c33f2f5`: **2** such branches —
+  `hooks/pretool-bash-safety.sh:1695 @4c33f2f5` (force/delete push) and
+  `hooks/pretool-bash-safety.sh:1732 @4c33f2f5` (`update-ref`, branch deletion,
+  `symbolic-ref`). **These two are unaffected by the suppression above.**
+
+**Consequence**: for the single architecture-A gate a **bare** wrapper-with-flag form defeats
+the gate despite the anchor matching. Path qualification is not required. A sibling lane's
+host-shaped re-probe found 9 of 15 tested destructive-reset forms exit 0 across the Bash
+PreToolUse chain, **including an environment-unset form with no path qualification** — that is
+this mechanism, observed from outside.
+
+#### Cell witnesses
+
+Every witness below is probed individually on every CI run by
+`scripts/check-enforcement-evidence.py --claims`, and each is a corpus entry in
+`hooks/tests/fixtures/adversarial_corpus.json:1 @4c33f2f5`.
+
+| id | form | cell | classifier | anchor |
+|---|---|---|---|---|
+| W1 | `git status` | none/bare | detected | MATCH |
+| W2 | `/usr/bin/git status` | none/path-qualified | detected | no-match |
+| W3 | `env /usr/bin/git status` | wrapper-no-flag/path-qualified | detected | no-match |
+| W4 | `env -i git status` | wrapper-with-flag/bare | miss | MATCH |
+| W5 | `env -u FOO git status` | wrapper-with-flag/bare | miss | MATCH |
+| W6 | `2>/dev/null git status` | leading-redirection/bare | miss | MATCH |
+| W7 | `env -i /usr/bin/git status` | wrapper-with-flag/path-qualified | miss | no-match |
+| W8 | `env -u FOO /usr/bin/git status` | wrapper-with-flag/path-qualified | miss | no-match |
+| W9 | `2>/dev/null /usr/bin/git status` | leading-redirection/path-qualified | miss | no-match |
+| W10 | `sudo -n /usr/bin/git status` | wrapper-with-flag/path-qualified | miss | no-match |
+| W11 | `nice -n 5 /usr/bin/git status` | wrapper-with-flag/path-qualified | miss | no-match |
+
+`env -u FOO` (W5, W8) is the least-disputable witness: unsetting an unset variable perturbs
+nothing — 57 environment variables remain intact, versus 0 under `env -i` — so it cannot be
+dismissed as a self-defeating payload.
+
+#### No permission-layer backstop
+
+Parsed from `settings.json:1 @4c33f2f5`: `permissions.deny` carries 96 rules, of which **0 of
+96** are git-related. `permissions.ask` carries 30 rules, 3 of them git-related (force-push,
+short-form force-push, and hard-reset prefixes) — and all three are **prefix-anchored**, so they
+match no wrapped or redirected form. Publishing the hook-layer residual while omitting the
+absence of a permission-layer backstop would describe half the boundary.
+
+#### Precision, held deliberately
+
+These are **detection-layer measurements** — tokenizer and regex misses — plus a source-level
+reading of gate control flow. They are **not** 55 demonstrated executable bypasses. Every probe
+in this repository used the harmless `status` subcommand, which is valid because both
+`_command_token_index()` and the anchor classes are subcommand-independent. **No push, reset or
+ref mutation was ever executed** to produce any figure in this section.
+
+#### Why this is published
+
+The residual is a *deliberately accepted* design boundary, and the harness makes public
+"fail closed" claims that a reader could not otherwise bound. An undisclosed accepted residual
+is exactly the overclaim this document exists to end. Closing the residual is a separate,
+security-reviewed decision that the classifier's own docstring reserves; this entry publishes
+and regression-guards it rather than silently changing the guard.
+
+- **Verifying test**: `hooks/tests/test_blackbox_integration.py:1 @4c33f2f5` (component /
+  subprocess boundary) and `scripts/check-enforcement-evidence.py --claims` (drift guard).
+
+#### Superseded description (retained for provenance)
 
 - **Description**: Both `GIT_COMMAND_RE` (Python) and `GIT_CMD_RE` (POSIX ERE) use an anchor character class `[\s;&|()\`]` / `[[:space:];&|()\`]` that does not include `/`. As a result, the command `/usr/bin/git push --force origin master` does not match either regex and passes through both guards without triggering a block. In the overnight scope, the `git-keystone/reference-transaction` backstop intercepts this at the git layer. In interactive sessions where `CLAUDE_OVERNIGHT_ACTOR` is not set, there is no backstop — the bypass is un-backstopped.
 - **Incident context**: RISK-3 is the security seam referenced as "incident `b5d447e`" in `docs/dev/roadmap-world-class-readiness-20260704.md` B3.4. The commit class represents the interactive-session gap where the keystone actor-scope gate leaves a window.
