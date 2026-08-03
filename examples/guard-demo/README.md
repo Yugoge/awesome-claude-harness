@@ -6,7 +6,57 @@ properly-authorized, grant-gated fix.
 
 This is the executable WS6 deliverable for **AC-WS6-1**. The substantive
 artifact is the script itself — a recorded terminal cast is optional and is
-**not** required for the scenario to be valid.
+**not** required for the scenario to be valid. *That statement is scoped to
+`run-demo.sh`, and remains true of it.* It does **not** extend to the sibling
+arc below: `run-hero-demo.sh` exists precisely so that its recording is
+load-bearing, because the README hero is generated from it.
+
+## The hero arc — `run-hero-demo.sh`
+
+A second, sibling scenario covering the five beats the README hero shows:
+
+1. an agent attempts `git push`;
+2. `hooks/pretool-git-privilege-guard.py` refuses it **before execution**;
+3. the terminal shows the rule, the reason and two safe remedies — all of it
+   printed by the hook, never by the script;
+4. a narrowly-scoped single-use grant permits **exactly one** push, which
+   really executes against a hermetic **local bare remote** reached by the
+   relative path `../hero-remote.git` inside a throwaway fixture;
+5. the real `hooks/posttool-allowlist-consume.py` consumes that grant and the
+   identical command is refused again.
+
+Run it through its capture harness — the harness, not the demo, invokes the
+hooks and records their own streams, so the demo cannot mediate the evidence:
+
+```sh
+python3 scripts/capture-hero-run.py
+```
+
+That writes `.github/assets/hero-capture.txt` (a timestamped, byte-exact
+capture, captured through a **pipe**, never a pseudo-terminal) plus an evidence
+JSON. To rebuild the manifest and the animated SVG from it:
+
+```sh
+python3 tools/demo/build-hero-manifest.py .github/assets/hero-capture.txt .github/assets/guard-hero.json
+node tools/demo/gen-svg.mjs .github/assets/guard-hero.json .github/assets/guard-hero.svg
+```
+
+To prove the committed capture really is the product of a re-runnable run —
+regenerate-and-diff, raw-timing agreement, per-event delta agreement, an
+adversarial check that the normalizer never rewrites rule / reason / remedy /
+consumption text, and the manifest's order-faithful bijection over the capture:
+
+```sh
+python3 scripts/verify-hero-provenance.py --tamper
+```
+
+**Safety.** The demo reserves the fixed task id `readme-hero-demo-reserved` and
+aborts before doing anything if that token collides with `$CLAUDE_TASK_ID` /
+`$CLAUDE_SESSION_ID`, or if a grant matching it already exists. It never globs
+`/tmp/claude-grants/`, never calls `reap_expired_sentinel_grants()` or
+`hooks/stop-cleanup-allowlist.sh`, and never deletes a grant — only the real
+consumer does that. Grants belonging to other task ids are verified
+byte-identical and mtime-unchanged after the run.
 
 ## Run it
 
