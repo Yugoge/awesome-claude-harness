@@ -228,7 +228,7 @@ def test_duplicate_of_allowlisted_identical_line_is_detected(pristine, tmp_path)
     already-allowlisted identical line must NOT inherit its exemption."""
     root = _copy(pristine, tmp_path)
     assert _run(root).returncode == 0
-    entries = json.loads((root / ALLOWLIST).read_text(encoding="utf8"))["entries"]
+    entries = _in_scope_entries(root)
     for e in entries:
         if not e["path"].endswith(".md"):
             continue

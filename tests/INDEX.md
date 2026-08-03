@@ -1,8 +1,8 @@
 # tests
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-08-02T04:17:44Z*
-**Total entries**: 100
+*Last updated: 2026-08-03T14:35:47Z*
+**Total entries**: 101
 **Convention**: kebab
 
 ## Tree
@@ -100,6 +100,7 @@ tests/
 ├── `test_graphify_workflow_contract.py` - tests/test_graphify_workflow_contract.py — contract tests for graphify agent registration
 ├── `test_no_artificial_lifecycle_ceremony.py` - Prevent host metadata ceremonies from becoming ordinary lifecycle gates.
 ├── `test_overnight_loop_tz.py` - Verifies the overnight loop hook compares end_time correctly against the
+├── `test_public_core_residue_gate.py` - These are the discriminating controls for the "Make CI FAIL (not advisory) on
 ├── `test_resolve_dev_artifact_chain.py` - Focused tests for the read-only /dev artifact-chain resolver.
 ├── `test_resolve_spec_artifacts.py` - resolver) + the static centralization lint (AC-B4 cases 1-12, task 20260530-092123)
 ├── `test_restart_command.py` - End-to-end unit coverage for the human-only /restart recovery protocol.
