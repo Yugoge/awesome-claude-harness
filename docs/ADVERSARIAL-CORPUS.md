@@ -1,4 +1,4 @@
-# Adversarial Bypass Corpus — awesome-claude-harness
+# Adversarial Bypass Corpus — claude-code-guardrails
 
 > **`hooks/tests/fixtures/adversarial_corpus.json` is the sole authoritative source.**
 > This markdown is a static, human-readable index only. It is not generated from the JSON and
