@@ -184,7 +184,12 @@ else
   fi
   # The renderer validates parity internally before applying; re-assert it on the
   # applied file so a bad write can never survive this step silently.
-  if ! python3 "$RENDERER" --check "$SETTINGS" --template "$TEMPLATE"; then
+  # The install-home positional is REQUIRED in --check mode: without it the
+  # renderer normalizes against $HOME/.claude, so any install home other than
+  # the default (an isolated test home, a clone checked out elsewhere) reports
+  # every rendered path as "allow broadened beyond template" on a file it just
+  # wrote correctly. Passing $HOME_DIR keeps the assertion load-bearing.
+  if ! python3 "$RENDERER" "$HOME_DIR" --check "$SETTINGS" --template "$TEMPLATE"; then
     echo "bootstrap: rendered settings.json failed template parity validation." >&2
     exit 1
   fi
