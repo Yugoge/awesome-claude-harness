@@ -111,14 +111,6 @@
       "entrypoint": "skills/codex",
       "independent_enforcement": true,
       "why_protected": "Delegates work to an external CLI with repository access."
-    },
-    {
-      "id": "subagent-dispatch",
-      "route": "tool:Agent",
-      "route_type": "Tool",
-      "entrypoint": "hooks/pretool-tool-policy.py",
-      "independent_enforcement": false,
-      "why_protected": "Subagent dispatch is mediated exclusively by PreToolUse hooks; there is no in-process entrypoint this harness controls, so on a host without hook dispatch this route has NO independent enforcement point and is classified unsupported and blocked rather than silently treated as protected."
     }
   ]
 }
