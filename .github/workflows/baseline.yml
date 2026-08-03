@@ -59,8 +59,15 @@ jobs:
           set -euo pipefail
           python3 scripts/install/render-settings "$GITHUB_WORKSPACE" \
             --template settings.template.json --out settings.json
-          python3 scripts/install/render-settings --check settings.json \
-            --template settings.template.json
+          # The install-home positional is REQUIRED in --check mode: without it
+          # render-settings normalizes against $HOME/.claude, which on a runner is
+          # /home/runner/.claude and never equals $GITHUB_WORKSPACE — so every
+          # rendered path reads as "allow broadened beyond template" and the step
+          # fails on a correctly-rendered file. Passing the same home used to
+          # render keeps the check load-bearing (a genuinely broadened allow
+          # entry still fails) instead of merely silencing it.
+          python3 scripts/install/render-settings "$GITHUB_WORKSPACE" \
+            --check settings.json --template settings.template.json
           if grep -q '{{CLAUDE_HOME}}' settings.json; then
             echo "::error::rendered settings.json still contains an unresolved placeholder"
             exit 1
