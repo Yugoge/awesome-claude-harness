@@ -29,22 +29,37 @@ import os
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent / "lib"))
+# HUMAN CONSENT ESCAPE HATCHES, recognised BEFORE the capability library is
+# imported and before any manifest is read. A recovery path that lives inside the
+# failure domain it exists to recover from is not a recovery path: a corrupt
+# library, an unreadable manifest or any internal error must not be able to take
+# these two routes down with it. Kept in lockstep with the manifest's
+# `human_consent_escape_hatch` flags and with capability_state's constant by a
+# drift test in hooks/tests/test_capability_gate.py — this literal may not be
+# edited alone.
+ESCAPE_HATCH_COMMANDS = ("/do", "/allow")
 
-try:
-    import capability_state as cs
-except Exception as exc:  # library unavailable -> fail closed, never silently open
-    sys.stderr.write(
-        json.dumps(
-            {
-                "component": "capability_gate",
-                "decision": "REFUSE",
-                "failure_reason": f"capability_gate_refused: library_unavailable ({exc})",
-            }
-        )
-        + "\n"
-    )
-    sys.exit(2)
+
+def _is_escape_hatch(payload: dict) -> bool:
+    """True only for an exact, single-command /do or /allow SlashCommand call.
+
+    Control characters are disqualifying: `/do\\n/dev` would otherwise classify on
+    its first token and smuggle a protected command in behind an exempt one. Any
+    such payload falls through to the full state-based evaluation instead.
+    """
+    if str(payload.get("tool_name") or "") != "SlashCommand":
+        return False
+    raw = str((payload.get("tool_input") or {}).get("command") or "")
+    if any(ord(c) < 0x20 or ord(c) == 0x7F for c in raw):
+        return False
+    parts = raw.strip().split()
+    return bool(parts) and parts[0] in ESCAPE_HATCH_COMMANDS
+
+
+def _load_capability_state():
+    sys.path.insert(0, str(Path(__file__).resolve().parent / "lib"))
+    import capability_state as cs  # noqa: PLC0415 — deliberately lazy; see above
+    return cs
 
 
 def main() -> int:
@@ -54,6 +69,25 @@ def main() -> int:
         payload = {}
     if not isinstance(payload, dict):
         payload = {}
+
+    # Checked first, on purpose. Everything below this line can fail; this cannot.
+    if _is_escape_hatch(payload):
+        return 0
+
+    try:
+        cs = _load_capability_state()
+    except Exception as exc:  # library unavailable -> fail closed, never silently open
+        sys.stderr.write(
+            json.dumps(
+                {
+                    "component": "capability_gate",
+                    "decision": "REFUSE",
+                    "failure_reason": f"capability_gate_refused: library_unavailable ({exc})",
+                }
+            )
+            + "\n"
+        )
+        return 2
 
     tool_name = str(payload.get("tool_name") or "")
     session_id = str(payload.get("session_id") or os.environ.get("CLAUDE_SESSION_ID") or "")
