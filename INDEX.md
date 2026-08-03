@@ -1,8 +1,8 @@
 # dot-claude
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-08-03T15:10:16Z*
-**Total entries**: 461
+*Last updated: 2026-08-03T15:15:19Z*
+**Total entries**: 464
 **Convention**: kebab
 
 ## Tree
@@ -68,6 +68,7 @@ dot-claude/
 │   │   ├── `test-suite-overhaul-plan.md` - Test Suite Overhaul Plan (Plan-of-Record)
 │   │   ├── `tmp-cleanup-convention.md` - Ad-hoc scratch directory convention
 │   │   └── `venv-repair.md` - venv-repair — restoring `~/.claude/venv` when interpreter symlinks break
+│   ├── `ENFORCEMENT-LEDGER.md` - Enforcement Ledger — claude-code-guardrails
 │   └── `THREAT-MODEL.md` - Threat Model — claude-code-guardrails
 ├── examples/
 │   └── guard-demo/
@@ -112,6 +113,7 @@ dot-claude/
 │   │   ├── `subagent_restart.py` - Claude Code persists each subagent transcript under the parent session.  This
 │   │   └── `todo_canonical.py` - Shared canonical todo validation utilities
 │   ├── tests/
+│   │   ├── fixtures/
 │   │   ├── `test_ac10_verify.sh` - Shell script
 │   │   ├── `test_ac1_verify.sh` - Shell script
 │   │   ├── `test_ac3_verify.sh` - Shell script
@@ -121,6 +123,7 @@ dot-claude/
 │   │   ├── `test_allowlist_consolidation.py` - Covers AC8 IS_SUBAGENT firewall scenarios and matching semantics invariants
 │   │   ├── `test_bash_safety_context.py` - Tests strip_non_executable_contexts() in isolation, covering the main
 │   │   ├── `test_bash_safety_context_rules.py` - converted to COMMAND_CONTEXT_STRIPPED in hooks/pretool-bash-safety.sh
+│   │   ├── `test_blackbox_integration.py` - WHAT THIS PROVES, AND WHAT IT EXPLICITLY DOES NOT
 │   │   ├── `test_block_branch_pr_worktree.py` - The hook forbids branch / PR / worktree CREATION on the Bash surface, with three
 │   │   ├── `test_bulk_commit_sentinel.py` - Covers:
 │   │   ├── `test_cp_checkin.py` - of ba-spec-20260427-194324.md (P1 view-trigger removal + P2 generation field)
