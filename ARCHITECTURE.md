@@ -21,7 +21,7 @@ All counts below were established by enumerating the actual repository, not copi
 | **Distinct hook files referenced** by `settings.json` | **69** (+1 = **70** paths) | unique `hooks/*.py\|*.sh` paths in those entries; the remaining wired executable is the non-hooks `scripts/canary-verify.sh` (SessionStart) → 70 distinct wired executable paths |
 | **Lifecycle events used** | **7** | keys of `settings.json.hooks` |
 | **Hook files present on disk** (`hooks/*.py` + `*.sh`, excl. `.bak`) | **91** | `find hooks -maxdepth 1 -type f \( -name '*.py' -o -name '*.sh' \)` |
-| **Helper scripts** (`scripts/` top-level files, excl. `INDEX/README`) | **81** | `find scripts -maxdepth 1 -type f` minus docs |
+| **Helper scripts** (`scripts/` top-level *tracked* files, excl. `INDEX/README`) | **81** | `git ls-files scripts/ \| grep -E 'scripts/[^/]+$'` minus `INDEX`/`README` |
 | **Skills** (`skills/*/` directories) | **8** | `ls -d skills/*/` |
 | `permissions.allow` / `deny` / `ask` entries | 162 / 96 / 30 | keys of `settings.json.permissions` |
 
