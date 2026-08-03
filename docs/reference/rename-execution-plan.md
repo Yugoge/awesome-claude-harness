@@ -115,7 +115,7 @@ Every line below is a live `https://github.com/Yugoge/awesome-claude-harness…`
 
 | Location | Line | Reason |
 |---|---|---|
-| `README.md` | `git clone https://github.com/Yugoge/awesome-claude-harness.git ~/.claude` | install command — see the opening callout |
+| `README.md` | `git clone https://github.com/Yugoge/awesome-claude-harness.git claude-harness` | install command — see the opening callout |
 | `README.md` | `Released under the **MIT License** … Source: [`Yugoge/awesome-claude-harness`](https://github.com/Yugoge/awesome-claude-harness).` | source link (**this single line carries the old name twice**) |
 | `CHANGELOG.md` | `[Unreleased]: https://github.com/Yugoge/awesome-claude-harness/compare/v1.0.0...HEAD` | compare link |
 | `CHANGELOG.md` | `[1.0.0]: https://github.com/Yugoge/awesome-claude-harness/releases/tag/v1.0.0` | release link |
