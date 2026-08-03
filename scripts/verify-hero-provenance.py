@@ -65,9 +65,21 @@ def fail(msg: str) -> None:
 
 
 def norm_text(text: str) -> str:
-    r = subprocess.run([sys.executable, str(NORMALIZER), "/dev/stdin"],
-                       input=text, capture_output=True, text=True)
-    return r.stdout
+    """Normalize via a real temp FILE. The normalizer takes a path and rejects a
+    non-file; handing it /dev/stdin made it exit 1 with empty stdout, which silently
+    turned all four mutation tests into vacuous comparisons of "" against ""."""
+    with tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False,
+                                     encoding="utf-8") as fh:
+        fh.write(text)
+        tmp = fh.name
+    try:
+        r = subprocess.run([sys.executable, str(NORMALIZER), tmp],
+                           capture_output=True, text=True)
+        if r.returncode != 0:
+            fail(f"normalizer exited {r.returncode}: {r.stderr.strip()[:200]}")
+        return r.stdout
+    finally:
+        Path(tmp).unlink(missing_ok=True)
 
 
 def timestamps(text: str) -> list[float]:
