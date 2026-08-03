@@ -186,6 +186,13 @@ class GrantWatcher(threading.Thread):
 
     def run(self) -> None:
         while not self._halt.is_set():
+            # Rendezvous: the demo asks; the verifier decides and installs.
+            if self.fixture is not None and self.grant_hash_at_install is None:
+                req = self.fixture / "work" / ".request-grant"
+                if req.exists():
+                    install_grant()
+                    self.grant_hash_at_install = sha256_file(GRANT_PATH)
+                    (self.fixture / "work" / ".grant-installed").touch()
             try:
                 present = GRANT_PATH.is_file()
                 digest = sha256_file(GRANT_PATH) if present else None
