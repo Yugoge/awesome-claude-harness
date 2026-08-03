@@ -303,9 +303,10 @@ def check_ledger(args, report):
             if not value:
                 if field == "behavior":
                     missing_behavior += 1
-                report.fail(f"row {rid}: field '{field}' is blank "
-                            f"(a blank cell is a failure; use the declared sentinel"
-                            f"{' ' + sentinels[field]!r if field in sentinels else ''})")
+                hint = sentinels.get(field)
+                suffix = " (declared sentinel: %r)" % (hint,) if hint else ""
+                report.fail(f"row {rid}: field '{field}' is blank -- a blank cell is a "
+                            f"failure, not a statement that a value is absent" + suffix)
         for field, allowed in (("behavior", DECLARED_SCHEMA["behavior"]),
                                ("exercise_status", DECLARED_SCHEMA["exercise_status"]),
                                ("proof_layer", DECLARED_SCHEMA["proof_layer"])):
