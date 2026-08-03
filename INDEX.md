@@ -1,7 +1,7 @@
 # dot-claude
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-08-03T12:15:41Z*
+*Last updated: 2026-08-03T14:03:11Z*
 **Total entries**: 460
 **Convention**: kebab
 
@@ -71,7 +71,7 @@ dot-claude/
 │   └── `THREAT-MODEL.md` - Threat Model — awesome-claude-harness
 ├── examples/
 │   └── guard-demo/
-│       └── `run-demo.sh` - Description: Reproducible guard demo — a dangerous operation is BLOCKED by the
+│       ├── `run-demo.sh` - Description: Reproducible guard demo — a dangerous operation is BLOCKED by the
 ├── hooks/
 │   ├── doc_sync/
 │   │   ├── `claude.py` - CLAUDE.md auto-creation and patching.
