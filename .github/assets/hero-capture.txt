@@ -1,0 +1,21 @@
+[   1.217] $ git push hero-remote main
+[   1.280] BLOCKED: agent git push - agents are not authorized to push to remote from an agent context.
+[   1.280] Command excerpt: git push hero-remote main
+[   1.280] For automated push, use the /push slash command (which sets CLAUDE_PUSH_COMMAND_ACTIVE=1 and writes a single-use grant).
+[   1.280] For human-driven push, exit the agent context and run git push directly.
+[   1.280] Spec: spec-20260424-233926 section 5.2.4 (R4.3); ba-spec-20260425-redev2.md AC-A5.
+[   1.284] [pretool-git-privilege-guard.py exit 2 — nothing executed]
+[   4.940] $ git push hero-remote main   # retried with a single-use grant in place
+[   5.005] [pretool-git-privilege-guard.py exit 0 — permitted by single-use grant]
+[   7.643] To ../hero-remote.git
+[   7.643]  * [new branch]      main -> main
+[   7.644] [git push exit 0 — hermetic local bare remote, no network]
+[  10.108] [ALLOW-SENTINEL] grant CONSUMED for task_id=readme-hero-demo-reserved terminal_result=success path=/tmp/claude-grants/readme-hero-demo-reserved.json
+[  13.114] $ git push hero-remote main   # same command again, grant now consumed
+[  13.179] BLOCKED: agent git push - agents are not authorized to push to remote from an agent context.
+[  13.179] Command excerpt: git push hero-remote main
+[  13.179] For automated push, use the /push slash command (which sets CLAUDE_PUSH_COMMAND_ACTIVE=1 and writes a single-use grant).
+[  13.179] For human-driven push, exit the agent context and run git push directly.
+[  13.179] Spec: spec-20260424-233926 section 5.2.4 (R4.3); ba-spec-20260425-redev2.md AC-A5.
+[  13.184] [pretool-git-privilege-guard.py exit 2 — refused again: the grant was single-use]
+[  14.187] [demo complete — one grant authorized exactly one push, and nothing more]
