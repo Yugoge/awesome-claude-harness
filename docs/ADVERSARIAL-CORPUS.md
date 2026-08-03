@@ -66,6 +66,12 @@ threat model previously published a claim that was wrong in both directions at o
   finding git in **suppresses its own backstop**. Census at `4c33f2f5`: exactly **one** gate.
 - **Architecture B** — the regex branch runs unconditionally and is OR-ed with the classifier
   result, so a bare token still matches. Census at `4c33f2f5`: **two** branches. Unaffected.
+- **Architecture C** — classifier-only path-qualified augmentation branches with no regex
+  fallback, because they never had one: each *adds* path-qualified coverage beside a separate
+  bare-form regex gate. Census at `4c33f2f5`: **eight** branches. Unaffected, and the
+  numerically dominant shape. It is counted here so the census cannot be read as cherry-picked
+  toward the finding — an adversarial review of an earlier draft of this document flagged
+  exactly that, correctly.
 
 The consequence is visible directly in the corpus: `ADV-W05-envu-bare-archA` and
 `ADV-W05-envu-bare-archB` carry the **same payload** and **opposite expected verdicts**. Nothing
