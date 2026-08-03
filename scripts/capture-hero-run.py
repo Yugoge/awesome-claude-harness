@@ -269,7 +269,7 @@ def main() -> int:
         watcher.t0 = t0
         watcher.start()
         rc, lines = capture_run(fixture, capture_path, watcher, t0)
-        watcher.stop()
+        watcher.halt()
         watcher.join(timeout=2.0)
 
         # ---- assertions (all evaluated; never short-circuited) ----------------------
