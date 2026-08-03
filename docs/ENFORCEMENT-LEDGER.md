@@ -1,4 +1,4 @@
-# Enforcement Ledger — awesome-claude-harness
+# Enforcement Ledger — claude-code-guardrails
 
 > **What this document is for.** The harness makes "fail closed" claims. This ledger turns that
 > adjective into a **state**: every wired hook gets a row, every row carries a behavior label
