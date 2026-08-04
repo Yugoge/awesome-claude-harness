@@ -672,7 +672,7 @@ def test_parallel_dev_without_two_workers_is_not_a_free_pass(tmp_path: Path) -> 
 # ---------------------------------------------------------------------------
 
 
-def _make_parallel_dev_identities(root: Path, identities: dict[str, Any]) -> dict[str, Path]:
+def _make_parallel_dev_identities(root: Path, identities: dict[str, object]) -> dict[str, Path]:
     """A parallel-dev chain whose shards carry chosen request_id/task_id values.
 
     The canonical is built by the REAL producer over those shard documents, so a
