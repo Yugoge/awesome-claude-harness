@@ -193,6 +193,8 @@
       "Read(**/*password*)",
       "Read(**/passwd)",
       "Read(**/shadow)",
+      "Read(//etc/passwd)",
+      "Read(//etc/shadow)",
       "Read(**/*.key)",
       "Read(**/*.pem)",
       "Edit(.env)",
