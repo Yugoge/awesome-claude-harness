@@ -127,6 +127,27 @@ class ChainValidator:
                     f"{key} is {actual!r}; expected {expected!r}",
                 )
 
+    def validate_worker_identity(
+        self, value: dict[str, Any], expected: str, worker: str, path: Path
+    ) -> None:
+        """Identity of a per-worker shard in the parallel-dev shape.
+
+        Exactly two forms are legitimate and nothing else: the bare parent
+        task-id (what a per-worker subagent actually writes) and this shard's
+        own '<task-id>-<worker>' lane id.  Anything wider would certify a
+        foreign or copy-pasted worker report as this cycle's work.
+        """
+        accepted = {expected, f"{expected}-{worker}"}
+        relative = _rel(path, self.root)
+        for key in ("request_id", "task_id"):
+            actual = value.get(key)
+            if actual not in accepted:
+                self.error(
+                    "IDENTITY_MISMATCH",
+                    relative,
+                    f"{key} is {actual!r}; expected one of {sorted(accepted)!r}",
+                )
+
     def validate_markdown_identity(self, text: str, expected: str, path: Path) -> None:
         values: list[str] = []
         for line in text.splitlines():
@@ -557,7 +578,9 @@ def resolve_chain(project_root: Path | str, task_id: str) -> dict[str, Any]:
             result["report_paths"].append(relative)
             shard = validator.read_json(shard_path)
             if shard is not None:
-                # Shard identity is owned by _validate_shards' bare-timestamp rule.
+                # Exact membership in {parent id, this shard's own lane id}; the
+                # bare-timestamp rule in _validate_shards stays as a second gate.
+                validator.validate_worker_identity(shard, task_id, worker, shard_path)
                 validator.validate_dev(
                     shard, task_id, shard_path, check_identity=False
                 )

@@ -664,3 +664,89 @@ def test_parallel_dev_without_two_workers_is_not_a_free_pass(tmp_path: Path) -> 
     assert result["mode"] == RESOLVER.MODE_PARALLEL_DEV
     assert result["status"] == "fail"
     assert "AMBIGUOUS_WORKER_SET" in _error_codes(result)
+
+
+# ---------------------------------------------------------------------------
+# Per-worker shard identity is an exact two-value membership test, never a
+# substring of the parent's timestamp (QA finding F1, task 20260803-150741).
+# ---------------------------------------------------------------------------
+
+
+def _make_parallel_dev_identities(root: Path, identities: dict[str, str]) -> dict[str, Path]:
+    """A parallel-dev chain whose shards carry chosen request_id/task_id values.
+
+    The canonical is built by the REAL producer over those shard documents, so a
+    foreign identity cannot be dismissed as a hand-written canonical artefact.
+    """
+    parents = _parent_paths(root)
+    loaded = []
+    references = [_relative(root, parents["dev"])]
+    for index, worker in enumerate(WORKERS):
+        document = _dev_document(identities[worker], modified=[f"scripts/w-{index}.py"])
+        path = _lane_paths(root, worker)["dev"]
+        _write(path, document)
+        loaded.append((worker, document))
+        references.append(_relative(root, path))
+    declaration = {
+        "version": 1,
+        "shape": RESOLVER.SHAPE_PARALLEL_DEV,
+        "declared_lanes": [],
+    }
+    aggregate = RESOLVER._load_aggregate_module()._build_aggregate(
+        loaded, TASK_ID, declaration
+    )
+    _write(parents["dev"], aggregate)
+    _write(parents["completion"], _completion(TASK_ID, references))
+    return parents
+
+
+def _assert_foreign_shard_identity_is_refused(root: Path, foreign: str) -> None:
+    _make_parallel_dev_identities(root, {"lane-a": TASK_ID, "lane-b": foreign})
+    result = RESOLVER.resolve_chain(root, TASK_ID)
+    assert result["mode"] == RESOLVER.MODE_PARALLEL_DEV
+    assert result["status"] == "fail", result
+    assert "IDENTITY_MISMATCH" in _error_codes(result)
+    offending = {
+        error["path"] for error in result["errors"]
+        if error["code"] == "IDENTITY_MISMATCH"
+    }
+    assert offending == {f"docs/dev/dev-report-{TASK_ID}-lane-b.json"}, offending
+
+
+def test_parallel_dev_refuses_a_shard_copied_under_another_workers_filename(
+    tmp_path: Path,
+) -> None:
+    _assert_foreign_shard_identity_is_refused(tmp_path, f"{TASK_ID}-lane-a")
+
+
+def test_parallel_dev_refuses_a_shard_with_a_foreign_cycle_prefix(
+    tmp_path: Path,
+) -> None:
+    _assert_foreign_shard_identity_is_refused(tmp_path, f"someothercycle-{TASK_ID}-gamma")
+
+
+def test_parallel_dev_refuses_a_shard_naming_a_worker_that_does_not_exist(
+    tmp_path: Path,
+) -> None:
+    _assert_foreign_shard_identity_is_refused(tmp_path, f"{TASK_ID}-nonexistent-worker")
+
+
+def test_parallel_dev_refuses_a_timestamp_wrapped_in_arbitrary_characters(
+    tmp_path: Path,
+) -> None:
+    _assert_foreign_shard_identity_is_refused(tmp_path, f"zzz{TASK_ID}zzz")
+
+
+def test_parallel_dev_accepts_exactly_the_two_legitimate_identity_forms(
+    tmp_path: Path,
+) -> None:
+    bare = tmp_path / "bare"
+    _make_parallel_dev_identities(bare, {worker: TASK_ID for worker in WORKERS})
+    result = RESOLVER.resolve_chain(bare, TASK_ID)
+    assert result["status"] == "pass", result["errors"]
+    lane = tmp_path / "lane"
+    _make_parallel_dev_identities(
+        lane, {worker: f"{TASK_ID}-{worker}" for worker in WORKERS}
+    )
+    result = RESOLVER.resolve_chain(lane, TASK_ID)
+    assert result["status"] == "pass", result["errors"]
