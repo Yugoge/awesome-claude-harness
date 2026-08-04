@@ -1132,7 +1132,8 @@ Phase 5 runs whenever `test_writer_expected == true` — that is, the BA-compute
    first three rows are the only canonical success/semantic/tooling matches;
    every other outcome (including a missing or unexecutable entrypoint,
    malformed/unknown JSON, multiple JSON objects, or an exit/verdict mismatch)
-   uses the final fail-closed row. For every row with `non_passing: true`, QA
+   uses the final fail-closed row and copies a sanitized launch/parse diagnostic
+   into `guard_reason`. For every row with `non_passing: true`, QA
    MUST set `qa.status` to `fail` and append the declared critical entry to
    `qa.failures[]`, regardless of direct pytest success or other verification
    outcomes.
@@ -1203,6 +1204,7 @@ Phase 5 runs whenever `test_writer_expected == true` — that is, the BA-compute
            "severity": "critical",
            "classification": "guard_unavailable_no_json",
            "guard_verdict": "guard_unavailable_no_json",
+           "guard_reason_source": "sanitized_process_launch_or_parse_diagnostic",
            "primary_cause": "environment"
          }
        }
