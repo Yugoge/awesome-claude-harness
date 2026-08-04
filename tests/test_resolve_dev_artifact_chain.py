@@ -462,7 +462,7 @@ def _make_parallel_dev(
     declaration: dict | object = ...,
 ) -> dict[str, Path]:
     """Canonical + completion + per-worker dev-reports; no lane artifacts."""
-    workers = workers or list(WORKERS)
+    workers = list(WORKERS) if workers is None else list(workers)
     parents = _parent_paths(root)
     loaded = []
     references = [_relative(root, parents["dev"])]
@@ -624,3 +624,43 @@ def test_declaration_enters_the_canonical_projection(tmp_path: Path) -> None:
         "version": 1, "shape": "requirement_fanout", "declared_lanes": list(WORKERS)}})
     assert aggregate._canonical_projection(left) != aggregate._canonical_projection(right)
     assert aggregate._canonical_projection(left) == aggregate._canonical_projection(dict(left))
+
+
+def test_fanout_guard_uses_the_declared_roster_not_parallel_workers(
+    tmp_path: Path,
+) -> None:
+    """A declared lane that produced a ticket but no shard is NOT undeclared.
+
+    Discriminating geometry: `parallel_workers` is pinned to the shard scan, so
+    lane `lane-c` is absent from it while being a legitimate declared lane.
+    Invoking the guard with `parallel_workers` would raise a spurious
+    UNDECLARED_LANE_ARTIFACT on lane-c's ticket; invoking it with the declared
+    roster does not.
+    """
+    _make_fanout(tmp_path)
+    parents = _parent_paths(tmp_path)
+    _write(_lane_paths(tmp_path, "lane-c")["ticket"], _ticket(f"{TASK_ID}-lane-c"))
+    canonical = json.loads(parents["dev"].read_text())
+    canonical[DECLARATION_KEY] = {
+        "version": 1,
+        "shape": RESOLVER.SHAPE_REQUIREMENT_FANOUT,
+        "declared_lanes": [*WORKERS, "lane-c"],
+    }
+    _write(parents["dev"], canonical)
+    result = RESOLVER.resolve_chain(tmp_path, TASK_ID)
+    assert canonical["parallel_workers"] == list(WORKERS)
+    assert "UNDECLARED_LANE_ARTIFACT" not in _error_codes(result)
+    # lane-c is still fully enforced: its three absent artifacts are demanded.
+    missing = {
+        error["path"] for error in result["errors"]
+        if error["code"] == "MISSING_ARTIFACT" and "lane-c" in error["path"]
+    }
+    assert len(missing) == 3, missing
+
+
+def test_parallel_dev_without_two_workers_is_not_a_free_pass(tmp_path: Path) -> None:
+    _make_parallel_dev(tmp_path, workers=[])
+    result = RESOLVER.resolve_chain(tmp_path, TASK_ID)
+    assert result["mode"] == RESOLVER.MODE_PARALLEL_DEV
+    assert result["status"] == "fail"
+    assert "AMBIGUOUS_WORKER_SET" in _error_codes(result)

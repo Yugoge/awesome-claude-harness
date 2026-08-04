@@ -526,6 +526,15 @@ def resolve_chain(project_root: Path | str, task_id: str) -> dict[str, Any]:
 
     if shape == SHAPE_PARALLEL_DEV:
         result["mode"] = MODE_PARALLEL_DEV
+        if len(workers) < 2:
+            # A parallel-dev cycle's multiplicity lives in parallel_workers.
+            # Without it there is no worker chain to verify, and the shape would
+            # otherwise pass on the parent canonical and completion alone.
+            validator.error(
+                "AMBIGUOUS_WORKER_SET",
+                result["canonical_dev_report"],
+                "parallel-dev requires at least two workers",
+            )
         scanned_labels = [worker for worker, _ in scanned]
         if scanned_labels != workers:
             validator.error(
