@@ -1,8 +1,8 @@
 # dot-claude
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-08-04T04:54:18Z*
-**Total entries**: 452
+*Last updated: 2026-08-04T11:29:15Z*
+**Total entries**: 489
 **Convention**: kebab
 
 ## Tree
@@ -60,18 +60,24 @@ dot-claude/
 │   │   ├── `generated-tests-policy.md` - `tests/generated/` policy — tracked but ignored, on purpose
 │   │   ├── `git-fswatch.md` - Git File Watcher (fswatch) Documentation
 │   │   ├── `graphify-integration.md` - Graphify Knowledge Graph Integration
+│   │   ├── `install-compatibility-matrix.md` - Install compatibility matrix
+│   │   ├── `launch-plan.md` - Launch Plan — ROI-ranked channels, gated on recorded evidence
 │   │   ├── `lock-file-handling.md` - Git Lock File Handling
 │   │   ├── `monolith-split-plan.md` - Monolith Split Plan (Plan-of-Record)
+│   │   ├── `positioning.md` - Positioning
+│   │   ├── `rename-execution-plan.md` - Rename execution plan — `awesome-claude-harness` → `claude-code-guardrails`
 │   │   ├── `roadmap-decomposition-productization.md` - Roadmap: Monolith Decomposition + Productization
 │   │   ├── `slashcommand-quick-reference.md` - Slash Command Quick Reference
 │   │   ├── `test-suite-overhaul-plan.md` - Test Suite Overhaul Plan (Plan-of-Record)
 │   │   ├── `tmp-cleanup-convention.md` - Ad-hoc scratch directory convention
 │   │   └── `venv-repair.md` - venv-repair — restoring `~/.claude/venv` when interpreter symlinks break
+│   ├── `ADVERSARIAL-CORPUS.md` - Adversarial Bypass Corpus — claude-code-guardrails
 │   ├── `ENFORCEMENT-LEDGER.md` - Enforcement Ledger — claude-code-guardrails
 │   └── `THREAT-MODEL.md` - Threat Model — claude-code-guardrails
 ├── examples/
 │   └── guard-demo/
 │       ├── `run-demo.sh` - Description: Reproducible guard demo — a dangerous operation is BLOCKED by the
+│       └── `run-hero-demo.sh` - Description: Five-beat guard demo — a real agent git push is refused pre-execution, a
 ├── hooks/
 │   ├── doc_sync/
 │   │   ├── `claude.py` - CLAUDE.md auto-creation and patching.
@@ -95,6 +101,7 @@ dot-claude/
 │   │   ├── `allowlist.py` - Single source of truth for grant-read, grant-match, and grant-consume
 │   │   ├── `bash_context_strip.py` - This is deliberately NOT a full shell parser.  It only computes a conservative
 │   │   ├── `bash_write_targets.py` - Provides two public functions used by tool-policy and overnight-hook-guard:
+│   │   ├── `capability_state.py` - verdict, and the INDEPENDENT (non-hook-dispatched) preactivation consumer
 │   │   ├── `checkpoint-core.sh` - checkpoint-core.sh - Shared library for automated snapshot commits
 │   │   ├── `claude_home.py` - Generalizes the in-repo gold-standard fail-closed self-resolution pattern
 │   │   ├── `claude_home.sh` - claude_home.sh — shared "harness home" resolver (shell consumable).
@@ -125,6 +132,7 @@ dot-claude/
 │   │   ├── `test_blackbox_integration.py` - WHAT THIS PROVES, AND WHAT IT EXPLICITLY DOES NOT
 │   │   ├── `test_block_branch_pr_worktree.py` - The hook forbids branch / PR / worktree CREATION on the Bash surface, with three
 │   │   ├── `test_bulk_commit_sentinel.py` - Covers:
+│   │   ├── `test_capability_gate.py` - Every test drives the real artefacts: the library, the PreToolUse gate hook as a
 │   │   ├── `test_cp_checkin.py` - of ba-spec-20260427-194324.md (P1 view-trigger removal + P2 generation field)
 │   │   ├── `test_do_taskid_mint.py` - Covers the root-cause fix for the do-report task-id collision (memory
 │   │   ├── `test_dual_runtime_lifecycle_e2e.py` - Real-entrypoint regressions for single-owner ordinary dev lifecycle.
@@ -143,6 +151,7 @@ dot-claude/
 │   │   └── `test_unit_shell_lex.py` - Imports the shell_lex sibling module DIRECTLY (not via the _core facade's
 │   ├── `audit-slashcommand.sh` - audit-slashcommand.sh
 │   ├── `auto-commit.sh` - auto-commit.sh - Stop hook: snapshot on conversation end
+│   ├── `capability-canary.py` - Registered once per relied-upon lifecycle event, each registration carrying its
 │   ├── `check-todo-md-sync.py` - check-todo-md-sync.py — Session-start drift detector for todo scripts
 │   ├── `checkpoint.sh` - checkpoint.sh - Manual /checkpoint command
 │   ├── `fswatch-manager.sh` - fswatch-manager.sh - Manage git-fswatch instances
@@ -183,6 +192,7 @@ dot-claude/
 │   ├── `pretool-block-branch-pr-worktree.py` - Policy (user directive 2026-06-04; the verbatim user directive is preserved in
 │   ├── `pretool-block-enterworktree.sh` - PreToolUse hook: Block EnterWorktree tool
 │   ├── `pretool-bulk-commit-detector.py` - PreToolUse Hook: Bulk-commit detector
+│   ├── `pretool-capability-gate.py` - Blocks (exit 2) any protected-workflow activation route unless the host-capability
 │   ├── `pretool-claude-config-guard.py` - PreToolUse Hook: Claude config (.claude/hooks + .claude/commands) protection
 │   ├── `pretool-cp-checkin.py` - cp-state file read
 │   ├── `pretool-cp-state-write-guard.py` - Cycle-3 slim form (2026-05-14): Bash-extractor removed — 22-form adversarial
@@ -237,8 +247,14 @@ dot-claude/
 │   ├── `userprompt-restart-authorize.py` - UserPromptSubmit: mint a session-bound capability for exact bare /restart.
 │   └── `userprompt-tmpfs-pressure.sh` - userprompt-tmpfs-pressure.sh — UserPromptSubmit hook (4th block, appended).
 ├── policies/
+│   ├── `protected-workflow-manifest.v1.json` - Every protected workflow and activation route the host-capability handshake gates. A route inside protected_surface_prefixes but absent from routes[] is blocked fail-closed until explicitly added; a route outside every prefix is reported not_protected so the gate cannot brick tool use it was never meant to police.
+│   ├── `public-core-residue-allowlist.v1.json` - Seed exemption set for scripts/check-public-core.sh section 5 (generic author-path residue gate). Set-based, NOT an aggregate-count ratchet: the key is (path, fingerprint, ordinal), so deleting one allowlisted occurrence never creates capacity for an unrelated new one. Every entry's `class` is RE-DERIVED structurally by the gate from the live line; a hand-written label that the source structure does not support is rejected. Entries were seeded from a live full-ledger scan, never from a number quoted in a spec.
 │   ├── `specialist-degradation.v1.json` - JSON config: policy_version, defaults, per_specialist_overrides
 │   └── `tool-policy.v1.json` - JSON config: policy_version, default_action, _shared_protected_path_prefixes, _note, roles
+├── requirements/
+│   ├── `py310.txt` - txt file
+│   ├── `py311.txt` - txt file
+│   └── `py312.txt` - txt file
 ├── schemas/
 │   ├── `context.v1.json` - BA-produced wave/task plan and root cause analysis. Read by dev subagents to understand implementation scope.
 │   ├── `cycle-contract.v1.json` - Single source of truth per overnight cycle. Mirrors architect.contract_manifest_schema.json_shape from architect-spec-20260426-090235.json. Written by the orchestrator at end of Step 2c (PM Triage) and again at end of Step 3 (after pipeline IDs are known). Read by the contract-aware hooks (pretool-subagent-enforce, posttool-subagent-track, posttool-overnight-file-check) and check-overnight-reports.py.
@@ -251,8 +267,17 @@ dot-claude/
 │   └── `test-plan.v1.json` - Unified PM-produced test plan. This schema replaces both legacy 'test-plan.json' and 'test-plan-*.json' shapes (per spec-20260426-090235 Section 7 P2 #3 — single canonical naming). additionalProperties:true preserves the existing rich PM payload (priority_tiers, recommended_specialists, pm_experience, app_context, agent_assignments, core_flow_gate, ...).
 ├── scripts/
 │   ├── install/
+│   │   ├── profiles/
+│   │   ├── tests/
+│   │   ├── `install` - install file
+│   │   ├── `installer.py` - Subcommands: plan | apply | uninstall | snapshot
+│   │   ├── `preflight` - preflight file
 │   │   ├── `render-settings` - render-settings file
 │   │   ├── `tmp-cleanup-install.sh` - /usr/local/sbin/tmp-cleanup.sh
+│   │   └── `uninstall` - uninstall file
+│   ├── lib/
+│   │   ├── `make_sbom.py` - The SBOM is built from the archive's real contents, not from the source
+│   │   └── `release_membership.py` - Single source of truth shared by every consumer, so the archive builder, the
 │   ├── modern-git-slot/
 │   ├── overnight-git/
 │   │   ├── `git-policy-shim` - git-policy-shim file
@@ -297,6 +322,10 @@ dot-claude/
 │   ├── `break-overnight-lock.py` - Backdates end_time on every active overnight-state-*.json so
 │   ├── `build-pipelines-from-triage.py` - Consumes PM triage schema (issues[] keyed by triage_index + pipeline_order[] +
 │   ├── `canary-verify.sh` - Description: Cache-safe canary that behaviorally verifies the four core PreToolUse hooks.
+│   ├── `capability-doctor-strict.py` - Two properties this file exists to guarantee:
+│   ├── `capability-handshake.py` - Proves (or refuses to claim) that this harness's hook-based security boundary is
+│   ├── `capability-status-line.sh` - Description: statusLine command that renders the persistent host-capability marker.
+│   ├── `capture-hero-run.py` - Description: Builds a hermetic fixture, installs one narrowly-scoped single-use grant,
 │   ├── `check-enforcement-evidence.py` - Three subcommands, one consumer each:
 │   ├── `check-file-references.sh` - File reference detection script - used by /clean command
 │   ├── `check-overnight-reports.py` - Description: Validates all overnight required outputs declared by the active
@@ -322,6 +351,7 @@ dot-claude/
 │   ├── `execute-push.py` - Eliminates the timing window that exists when validate + push are && -chained
 │   ├── `generate-folder-index.sh` - Description: Generate INDEX.md for folder (inventory of contents)
 │   ├── `generate-folder-readme.sh` - Description: Generate README.md for folder (purpose and organization rules)
+│   ├── `generate-hero-status.py` - Description: One source of truth emits TWO marker-delimited canonical regions -- the
 │   ├── `graphify-enrich.py` - graphify-enrich.py — pre-DEV focused subgraph extractor (runs between Step 7 and Step 8)
 │   ├── `graphify-maintain.py` - graphify-maintain.py — Global Graphify cache lifecycle manager (REAL CLI)
 │   ├── `graphify-query.py` - graphify-query.py — deterministic pre-BA graph hydrator (runs between Step 1 and Step 2)
@@ -331,6 +361,7 @@ dot-claude/
 │   ├── `iterate-failed-pipelines.py` - Reads pipelines JSON path; outputs iteration plan JSON to stdout. The orchestrator
 │   ├── `lifecycle-baseline-import.sh` - Description: One-time idempotent migration — import current agent scores from agent-scores.json
 │   ├── `lint-spec-id-centralization.py` - markdown from re-deriving a spec-id / views_dir / split_marker / cp_dir from a
+│   ├── `measure-hero-fold.py` - Description: Renders README.md LOCALLY from the working tree in headless Chromium at the
 │   ├── `migrate-test-to-tests.sh` - Description: Merge test/ folder into tests/ preserving all content (idempotent)
 │   ├── `mint-git-blessed-token.sh` - mint-git-blessed-token.sh — issuer of the keystone blessed token (M12).
 │   ├── `normalize-doc-names.sh` - normalize-doc-names.sh - Detect and report non-compliant documentation file names
@@ -362,6 +393,8 @@ dot-claude/
 │   ├── `update-gitignore.sh` - update-gitignore.sh - Auto-update .gitignore with project-specific rules
 │   ├── `update-overnight-state.sh` - update-overnight-state.sh — Atomically update overnight state file
 │   ├── `verify-claims.sh` - Description: Self-verifying headline-claims gate. Recomputes the wired-hook entry count and
+│   ├── `verify-hero-provenance.py` - Description: Re-runs the demo, normalizes both outputs and byte-diffs them; verifies raw
+│   ├── `verify-release-manifest.sh` - Description: Verify a PUBLISHED release artifact end-to-end, WITHOUT rebuilding it.
 │   ├── `write-bulk-commit-sentinel.py` - Invoked from commands/commit.md Step 5 (BULK=true) to authorize the
 │   ├── `write-codex-enforce.sh` - Writes codex-enforce.json into the dev-registry for the given session.
 │   ├── `write-commit-grant.py` - Invoked from `commands/commit.md` Step 5 (non-bulk mode) to author a
@@ -432,6 +465,7 @@ dot-claude/
 │   ├── `test_graphify_workflow_contract.py` - tests/test_graphify_workflow_contract.py — contract tests for graphify agent registration
 │   ├── `test_no_artificial_lifecycle_ceremony.py` - Prevent host metadata ceremonies from becoming ordinary lifecycle gates.
 │   ├── `test_overnight_loop_tz.py` - Verifies the overnight loop hook compares end_time correctly against the
+│   ├── `test_public_core_residue_gate.py` - These are the discriminating controls for the "Make CI FAIL (not advisory) on
 │   ├── `test_resolve_dev_artifact_chain.py` - Focused tests for the read-only /dev artifact-chain resolver.
 │   ├── `test_resolve_spec_artifacts.py` - resolver) + the static centralization lint (AC-B4 cases 1-12, task 20260530-092123)
 │   ├── `test_restart_command.py` - End-to-end unit coverage for the human-only /restart recovery protocol.
@@ -443,8 +477,10 @@ dot-claude/
 ├── tools/
 │   └── demo/
 │       ├── `audit.mjs` - mjs file
+│       ├── `build-hero-manifest.py` - Description: Emits a trace manifest (tools/demo/manifest.schema.md) in which every
 │       ├── `gen-svg.mjs` - mjs file
 │       ├── `manifest.schema.md` - Trace manifest schema
+│       ├── `normalize-capture.py` - Description: Produces a COMPARISON COPY of a capture with the four non-deterministic
 │       ├── `sample-hook-trace.json` - JSON config: meta, lines
 │       └── `sample-trace.json` - JSON config: meta, lines
 ├── `ARCHITECTURE.md` - Architecture — `.claude` Safety & Release Harness
@@ -457,6 +493,7 @@ dot-claude/
 ├── `PUBLIC-CORE.md` - PUBLIC-CORE.md — public/private boundary manifest
 ├── `push.sh` - push.sh - Global pre-push checks: git identity + fetch/pull/status
 ├── `pytest.ini` - ini file
+├── `release-membership.v1.json` - EXPLICIT release-membership manifest: the exact set of tracked paths that ship in a release archive. Membership is an edit to this file, never a silent consequence of a class rule. It is deliberately NOT 'public-core + all shared/infra': PUBLIC-CORE.md calls tests/ 'not itself the shippable harness', so a blanket class rule would drag non-shippable fixtures into the distribution. It is also not public-core-only: requirements.txt and requirements/ are shared/infra yet are required to install, so a public-core-only archive would be unusable.
 ├── `requirements.txt` - Python dependency manifest for the Claude Code harness venv
 ├── `settings.template.json` - Distributable harness settings template (uses CLAUDE_HOME placeholders)
 ├── `VERSION` - VERSION file
