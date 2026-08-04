@@ -446,3 +446,181 @@ def test_invalid_task_id_is_json_and_exit_two(tmp_path: Path) -> None:
     assert process.returncode == 2
     assert process.stderr == ""
     assert "INVALID_TASK_ID" in _error_codes(json.loads(process.stdout))
+
+
+# ---------------------------------------------------------------------------
+# Explicit artifact-chain shape declaration (task 20260803-150741).
+# ---------------------------------------------------------------------------
+
+DECLARATION_KEY = RESOLVER.DECLARATION_KEY
+
+
+def _make_parallel_dev(
+    root: Path,
+    *,
+    workers: list[str] | None = None,
+    declaration: dict | object = ...,
+) -> dict[str, Path]:
+    """Canonical + completion + per-worker dev-reports; no lane artifacts."""
+    workers = workers or list(WORKERS)
+    parents = _parent_paths(root)
+    loaded = []
+    references = [_relative(root, parents["dev"])]
+    for index, worker in enumerate(workers):
+        # Per-worker shards legitimately carry the PARENT task-id.
+        document = _dev_document(TASK_ID, modified=[f"scripts/w-{index}.py"])
+        path = _lane_paths(root, worker)["dev"]
+        _write(path, document)
+        loaded.append((worker, document))
+        references.append(_relative(root, path))
+    if declaration is ...:
+        declaration = {
+            "version": 1,
+            "shape": RESOLVER.SHAPE_PARALLEL_DEV,
+            "declared_lanes": [],
+        }
+    aggregate = RESOLVER._load_aggregate_module()._build_aggregate(
+        loaded, TASK_ID, declaration
+    )
+    _write(parents["dev"], aggregate)
+    _write(parents["completion"], _completion(TASK_ID, references))
+    return parents
+
+
+def test_parallel_dev_shape_needs_no_lane_artifacts(tmp_path: Path) -> None:
+    _make_parallel_dev(tmp_path)
+    before = _snapshot(tmp_path)
+    result = RESOLVER.resolve_chain(tmp_path, TASK_ID)
+    assert result["mode"] == RESOLVER.MODE_PARALLEL_DEV
+    assert result["status"] == "pass", result["errors"]
+    assert result["errors"] == []
+    assert result["lanes"] == []
+    assert result["qa_inputs"] == []
+    assert _snapshot(tmp_path) == before
+
+
+def test_parallel_dev_whitelist_keeps_every_worker_report(tmp_path: Path) -> None:
+    parents = _make_parallel_dev(tmp_path)
+    result = RESOLVER.resolve_chain(tmp_path, TASK_ID)
+    expected = {
+        _relative(tmp_path, parents["dev"]),
+        _relative(tmp_path, parents["completion"]),
+        *(_relative(tmp_path, _lane_paths(tmp_path, worker)["dev"]) for worker in WORKERS),
+    }
+    assert set(result["commit_whitelist_artifacts"]) == expected
+    for relative in result["commit_whitelist_artifacts"]:
+        assert (tmp_path / relative).is_file()
+
+
+def test_parallel_dev_mode_is_independent_of_parallel_workers(tmp_path: Path) -> None:
+    parents = _make_parallel_dev(tmp_path)
+    canonical = json.loads(parents["dev"].read_text())
+    canonical["parallel_workers"] = ["other-x", "other-y"]
+    _write(parents["dev"], canonical)
+    result = RESOLVER.resolve_chain(tmp_path, TASK_ID)
+    assert result["mode"] == RESOLVER.MODE_PARALLEL_DEV
+    assert "LANE_SET_MISMATCH" in _error_codes(result)
+
+
+def test_absent_declaration_is_never_lax(tmp_path: Path) -> None:
+    _make_fanout(tmp_path)
+    parents = _parent_paths(tmp_path)
+    canonical = json.loads(parents["dev"].read_text())
+    assert DECLARATION_KEY not in canonical
+    result = RESOLVER.resolve_chain(tmp_path, TASK_ID)
+    assert result["mode"] == "fanout"
+
+
+def test_malformed_declaration_fails_closed(tmp_path: Path) -> None:
+    parents = _parent_paths(tmp_path)
+    cases = [
+        ({"version": 1, "shape": "", "declared_lanes": []}, "INVALID_DECLARATION_SHAPE"),
+        ({"version": 1, "shape": None, "declared_lanes": []}, "INVALID_DECLARATION_SHAPE"),
+        ({"version": 1, "shape": "lax", "declared_lanes": []}, "INVALID_DECLARATION_SHAPE"),
+        ({"shape": "parallel_dev", "declared_lanes": []}, "INVALID_DECLARATION_VERSION"),
+        ({"version": 99, "shape": "parallel_dev", "declared_lanes": []},
+         "INVALID_DECLARATION_VERSION"),
+        ("parallel_dev", "INVALID_CHAIN_DECLARATION"),
+        ({"version": 1, "shape": "requirement_fanout"}, "INVALID_DECLARED_LANES"),
+        ({"version": 1, "shape": "requirement_fanout", "declared_lanes": None},
+         "INVALID_DECLARED_LANES"),
+        ({"version": 1, "shape": "requirement_fanout", "declared_lanes": []},
+         "INVALID_DECLARED_LANES"),
+        ({"version": 1, "shape": "requirement_fanout", "declared_lanes": ["a"]},
+         "INVALID_DECLARED_LANES"),
+        ({"version": 1, "shape": "requirement_fanout", "declared_lanes": ["a", "a"]},
+         "INVALID_DECLARED_LANES"),
+        ({"version": 1, "shape": "requirement_fanout", "declared_lanes": ["a", "-bad"]},
+         "INVALID_DECLARED_LANES"),
+        ({"version": 1, "shape": "parallel_dev", "declared_lanes": ["a"]},
+         "INVALID_DECLARED_LANES"),
+    ]
+    for declaration, expected in cases:
+        _make_parallel_dev(tmp_path, declaration=declaration)
+        canonical = json.loads(parents["dev"].read_text())
+        canonical[DECLARATION_KEY] = declaration
+        _write(parents["dev"], canonical)
+        result = RESOLVER.resolve_chain(tmp_path, TASK_ID)
+        assert expected in _error_codes(result), (declaration, result["errors"])
+        assert result["status"] == "fail"
+        assert result["mode"] != RESOLVER.MODE_PARALLEL_DEV
+        assert result["lanes"] == []
+
+
+def test_declared_fanout_keeps_an_unrun_lane_visible(tmp_path: Path) -> None:
+    _make_fanout(tmp_path)
+    parents = _parent_paths(tmp_path)
+    canonical = json.loads(parents["dev"].read_text())
+    canonical[DECLARATION_KEY] = {
+        "version": 1,
+        "shape": RESOLVER.SHAPE_REQUIREMENT_FANOUT,
+        "declared_lanes": [*WORKERS, "lane-c"],
+    }
+    _write(parents["dev"], canonical)
+    result = RESOLVER.resolve_chain(tmp_path, TASK_ID)
+    assert result["status"] == "fail"
+    assert "lane-c" in {lane["worker"] for lane in result["lanes"]}
+    missing = {
+        error["path"] for error in result["errors"]
+        if error["code"] == "MISSING_ARTIFACT" and "lane-c" in error["path"]
+    }
+    assert len(missing) == 4, missing
+
+
+def test_declared_fanout_reports_an_orphan_lane_shard(tmp_path: Path) -> None:
+    _make_fanout(tmp_path)
+    parents = _parent_paths(tmp_path)
+    orphan = _lane_paths(tmp_path, "lane-c")["dev"]
+    _write(orphan, _dev_document(f"{TASK_ID}-lane-c"))
+    canonical = json.loads(parents["dev"].read_text())
+    canonical["parallel_workers"] = [*WORKERS, "lane-c"]
+    canonical[DECLARATION_KEY] = {
+        "version": 1,
+        "shape": RESOLVER.SHAPE_REQUIREMENT_FANOUT,
+        "declared_lanes": list(WORKERS),
+    }
+    _write(parents["dev"], canonical)
+    result = RESOLVER.resolve_chain(tmp_path, TASK_ID)
+    orphans = [e for e in result["errors"] if e["code"] == "ORPHAN_LANE_SHARD"]
+    assert len(orphans) == 1, result["errors"]
+    assert "'lane-c'" in orphans[0]["detail"]
+
+
+def test_lane_artifacts_contradict_a_parallel_dev_declaration(tmp_path: Path) -> None:
+    _make_parallel_dev(tmp_path)
+    _write(_lane_paths(tmp_path, WORKERS[0])["ticket"], _ticket(f"{TASK_ID}-{WORKERS[0]}"))
+    result = RESOLVER.resolve_chain(tmp_path, TASK_ID)
+    assert result["mode"] == RESOLVER.MODE_PARALLEL_DEV
+    assert "UNDECLARED_LANE_ARTIFACT" in _error_codes(result)
+    assert "LANE_SET_MISMATCH" not in _error_codes(result)
+
+
+def test_declaration_enters_the_canonical_projection(tmp_path: Path) -> None:
+    aggregate = RESOLVER._load_aggregate_module()
+    base = {"request_id": TASK_ID, "task_id": TASK_ID, "parallel_workers": list(WORKERS)}
+    left = dict(base, **{DECLARATION_KEY: {
+        "version": 1, "shape": "parallel_dev", "declared_lanes": []}})
+    right = dict(base, **{DECLARATION_KEY: {
+        "version": 1, "shape": "requirement_fanout", "declared_lanes": list(WORKERS)}})
+    assert aggregate._canonical_projection(left) != aggregate._canonical_projection(right)
+    assert aggregate._canonical_projection(left) == aggregate._canonical_projection(dict(left))
