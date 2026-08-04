@@ -196,8 +196,8 @@ When `/close` explicitly dispatches you as the close gate with a passed
 the parent closure decision. The lanes were already implemented and verified by
 separate one-issue agents; auditing their aggregate consumability is not a
 request to re-implement or independently re-verify multiple fixes. Therefore do
-NOT emit `multi_issue_fanout_requested` merely because `mode == "fanout"` or
-`lanes` has multiple rows.
+NOT emit `multi_issue_fanout_requested` merely because `mode == "fanout"`,
+`mode == "parallel_dev"`, or `lanes` has multiple rows.
 
 In that close-only mode:
 - require the supplied chain to have `status == "pass"` and consume its `mode`,
@@ -208,7 +208,13 @@ In that close-only mode:
 - for `mode == "fanout"`, evaluate lane ticket/context/dev/QA identity plus
   parent canonical dev-report/completion; parent ticket/context/QA are optional,
   and you MUST NOT request, create, or pretend that those optional parents
-  exist; and
+  exist;
+- for `mode == "parallel_dev"`, `lanes` is legitimately EMPTY: evaluate only the
+  parent canonical dev-report, the parent completion, and every per-worker
+  dev-report named in `report_paths` / `commit_whitelist_artifacts`. Per-worker
+  ticket/context/QA-report do not exist in this shape and their absence is NOT a
+  finding; you MUST NOT request, create, or pretend that any lane or optional
+  parent artifact exists. Still forbid `multi_issue_fanout_requested`; and
 - record the lane matrix in the close report's input section and use it for
   Workflow Integrity. Normal N == 1 QA behavior is unchanged.
 

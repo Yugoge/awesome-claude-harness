@@ -80,6 +80,20 @@ A single `/dev` cycle MAY carry more than one requirement. When it does, the orc
 
 **Decompose $ARGUMENTS into a coverage-mapped lane set.** First decompose `$ARGUMENTS` into a coverage-mapped requirement set `requirements[] = [{requirement_id, text}]`, where N = the number of separately-requested, independently-verifiable OUTCOMES. Shared constraints, exclusions, and implementation steps attach to the lanes as context — they do NOT become lanes. Build a coverage map that ties every requested outcome to exactly ONE `requirement_id`, with no omissions and no duplicates. Assign each lane a short stable suffix (`-a`/`-b`/`-c`, or `-r01`/`-r02`) consistent with the existing `dev-report-<task-id>-<worker>.json` worker convention.
 
+**Artifact-chain shape and lane roster are DERIVED here, at decomposition time.** The shape is not a free choice and is never inferred from what happens to be on disk. Derive it normatively from the decomposition just computed:
+
+| Decomposition outcome | Declared shape |
+|---|---|
+| `len(requirements[]) > 1` | `requirement_fanout` — always; never downgradable |
+| `len(requirements[]) == 1` **and** N > 1 implementation workers dispatched at Step 10 | `parallel_dev` |
+| `len(requirements[]) == 1` **and** one worker | singular — no declaration is written |
+
+The roster is bound one-to-one to the requirement set computed above: `set(declared_lanes) == {lane suffix of r for r in requirements[]}` and `len(declared_lanes) == len(requirements)` — the same "no omissions and no duplicates" coverage rule stated above, so the roster is never independently reconstructed from a directory scan. For the `parallel_dev` shape the roster is EMPTY: that shape has no lanes, and its multiplicity lives in `parallel_workers`. The orchestrator carries the derived shape and roster forward and supplies them to the **Step 11 aggregate invocation**, which is the ONLY sanctioned write path for the declaration.
+
+**The shape and the roster are chosen at decomposition time and may be neither inferred nor downgraded at aggregation time.** Artifact presence or absence on disk may raise a contradiction error, but must never be used to infer a shape.
+
+**Honest residual — what this does NOT catch.** A decomposition-time roster truncation escapes the resolver **only when the omitted lane produced literally nothing.** If the lane ran at all — any shard on disk — the resolver's orphan-lane rule catches it; if it produced any ticket, context or QA-report, the undeclared-lane guard catches it. What remains is one narrow act: an orchestrator that omits a lane from the roster **and** never dispatches it, which is indistinguishable on disk from a decomposition that never contained that lane. The resolver cannot observe `requirements[]`, so it CANNOT detect a decomposition-time roster truncation; this is an orchestrator obligation, enforced here and by QA's workflow-integrity dimension, not by the validator.
+
 **Fan out over the pipeline stages.** Steps 4, 6, 7, 8, 10, 13, 16 iterate over the lane set. For each lane in the lane set, dispatch exactly ONE subagent per lane in a single parallel batch; then wait at a stage barrier before advancing to the next stage; and keep clarification and retry outcomes lane-local, so a clarifying or failing lane never blocks or re-runs its siblings. The dispatch / validate / retry ACTION at each stage is governed by this lane iterator (bound to `lane.text` / `requirement_id` and lane-suffixed I/O); there is no unconditional singular whole-cycle dispatch path when N > 1. Per-stage semantics differ:
 
 - **Step 4 (BA)** — dispatch exactly ONE BA per lane, bound to `lane.text` / `requirement_id`, writing lane-suffixed artifacts.
@@ -857,6 +871,34 @@ Use Task tool with:
 - `dev.observed_preexisting` = UNION of all per-worker `dev.observed_preexisting` lists
 - The orchestrator invokes `source venv/bin/activate && python3 scripts/aggregate-dev-report.py --task-id "$TASK_ID"` to write the initial canonical aggregate. Capture stdout JSON; action field will be `"aggregated"`, `"validated"`, or `"skipped"`. This initial invocation selects only the filename-declared Step 10 worker shards; iteration reports are never discovered by mtime, directory order, or a `latest` heuristic. Do NOT modify the `/commit` command implementation (`~/.claude/commands/commit.md`).
 
+**Artifact-chain shape declaration (write it HERE, or the cycle cannot complete).** The canonical aggregate carries one versioned structure under the top-level key `artifact_chain_declaration`:
+
+```json
+"artifact_chain_declaration": {
+  "version": 1,
+  "shape": "parallel_dev",
+  "declared_lanes": []
+}
+```
+
+- `version` — currently the integer `1`. An absent, unparseable or unsupported version is a declaration error.
+- `shape` — a CLOSED enum: exactly `"parallel_dev"` or `"requirement_fanout"`. Any other value, including an empty string, `null` or a misspelling, is a declaration error; it never falls back to a permissive shape.
+- `declared_lanes` — the lane roster derived at decomposition time (see "Requirement Decomposition & Fan-Out"). For `requirement_fanout` it is an array of at least two unique labels matching `^[A-Za-z0-9][A-Za-z0-9.-]*$`, one-to-one with `requirements[]`. For `parallel_dev` it is the EMPTY array.
+
+The orchestrator supplies both to the same Step 11 invocation — no hand editing of the canonical, and no undocumented second command:
+
+```bash
+# parallel-dev cycle (one requirement, N>1 implementation workers)
+source venv/bin/activate && python3 scripts/aggregate-dev-report.py \
+  --task-id "$TASK_ID" --shape parallel_dev
+
+# requirement fan-out cycle (N>1 requirements decomposed into lanes a, b, c)
+source venv/bin/activate && python3 scripts/aggregate-dev-report.py \
+  --task-id "$TASK_ID" --shape requirement_fanout --declared-lanes a,b,c
+```
+
+`--declared-lanes` names the DECOMPOSED lanes, not the shards found on disk: a lane that was dispatched but produced nothing MUST still appear, which is exactly how it stays visible to the resolver. `parallel_workers` keeps its existing meaning — the traceability list of shards actually found — and can never double as the roster. A declaration-less invocation stays supported for legacy compatibility only and keeps the strict pre-declaration behaviour; absence NEVER grants the lax shape.
+
 **Single-dev cycles**: mark this todo step waived (skip). The aggregate-check hook does not fire for single-dev cycles because only one per-worker file pattern can match.
 
 #### Parallel Dev Aggregate (when dispatching N parallel dev subagents, N>1)
@@ -1357,6 +1399,18 @@ is the downstream handoff used by `/close` and normal `/commit`.
   present optional parent artifact must validate. Never create, copy, or invent
   a parent ticket/context/QA-report to satisfy a singular-shaped check. The
   completion must index the canonical report and every lane artifact.
+- **Parallel-dev cycle (one requirement, N > 1 implementation workers):**
+  `mode == "parallel_dev"` requires only the parent canonical aggregate
+  dev-report, the parent completion, and every per-worker dev-report with
+  `dev.status == "completed"` and empty `blocking_issues`. Per-worker ticket,
+  context, and QA-report are NOT required and their absence produces no error —
+  a parallel-dev cycle never creates them, and they MUST NOT be fabricated,
+  retro-declared, or copied to satisfy a fan-out-shaped check. Per-worker shard
+  identity is the bare-timestamp-normalized rule already applied by
+  `scripts/aggregate-dev-report.py::_validate_shards`, so shards correctly
+  carrying the PARENT task-id are valid. This shape is selected ONLY by the
+  explicit `artifact_chain_declaration` written at Step 11; a missing, empty or
+  unrecognized declaration reproduces the strict fan-out behaviour instead.
 - Artifact identities, nested `dev.status == "completed"` /
   `qa.status == "pass"`, exact lane-set/provenance/file-union freshness, and
   malformed/missing artifact handling are owned by the resolver. A failed lane

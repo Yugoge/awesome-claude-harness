@@ -151,11 +151,14 @@ silently rebuild or widen the plan inside this agent.
 
 When the plan's report is `dev-report-<TASK_ID>.json`, fail closed unless
 `ARTIFACT_CHAIN` is an object with `status == "pass"`, `task_id == TASK_ID`,
-`mode` in `{singular, fanout}`, and `canonical_dev_report` resolving to the same
+`mode` in `{singular, fanout, parallel_dev}`, and `canonical_dev_report` resolving to the same
 file as `REPOSITORY_PLAN.report_path`. Require arrays for `lanes`,
 `report_paths`, `artifact_paths`, `commit_whitelist_artifacts`, and `qa_inputs`.
 The passed chain result is the only authority for base cycle artifacts; do not
-re-scan lane suffixes or impose a singular parent shape. A source=`do` plan
+re-scan lane suffixes or impose a singular parent shape. In `parallel_dev` mode
+`lanes` is legitimately empty and `commit_whitelist_artifacts` carries the parent
+canonical, the parent completion, and every per-worker dev-report; treat those
+per-worker reports as base cycle artifacts, never as `foreign_session_candidate`. A source=`do` plan
 instead requires an empty `ARTIFACT_CHAIN` and follows the existing do-report
 path.
 

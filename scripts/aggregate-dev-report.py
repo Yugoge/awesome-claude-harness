@@ -79,6 +79,15 @@ NON_WORKER_LABEL_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Explicit orchestrator-written shape declaration — MUST mirror
+# scripts/resolve-dev-artifact-chain.py exactly.
+DECLARATION_KEY = "artifact_chain_declaration"
+DECLARATION_VERSION = 1
+SHAPE_PARALLEL_DEV = "parallel_dev"
+SHAPE_REQUIREMENT_FANOUT = "requirement_fanout"
+DECLARED_SHAPES = (SHAPE_PARALLEL_DEV, SHAPE_REQUIREMENT_FANOUT)
+WORKER_LABEL_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9.\-]*$")
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -303,11 +312,47 @@ def _canonical_projection(document: dict) -> dict:
         "baseline_dirty_snapshot",
         "dev_report_path",
         "parallel_workers",
+        DECLARATION_KEY,
         "dev",
         "blocking_issues",
         "recommendations",
     )
     return {key: document.get(key) for key in keys}
+
+
+def _declaration_from_arguments(shape: str | None, lanes_argument: str | None) -> tuple[dict | None, str | None]:
+    """Build the shape declaration from CLI arguments.
+
+    Returns ``(declaration, error)``; exactly one of the two is None.  A missing
+    ``--shape`` with a supplied roster is rejected rather than silently ignored.
+    """
+    if shape is None:
+        if lanes_argument is not None:
+            return None, "--declared-lanes requires --shape"
+        return None, None
+    lanes = [item.strip() for item in (lanes_argument or "").split(",") if item.strip()]
+    if shape == SHAPE_PARALLEL_DEV:
+        if lanes:
+            return None, (
+                f"--declared-lanes must be empty for --shape {SHAPE_PARALLEL_DEV}; "
+                f"the parallel-dev shape has no lanes (got {lanes})"
+            )
+    else:
+        if len(lanes) < 2:
+            return None, (
+                f"--shape {SHAPE_REQUIREMENT_FANOUT} requires --declared-lanes "
+                f"naming at least two lanes (got {lanes})"
+            )
+        if len(set(lanes)) != len(lanes):
+            return None, f"--declared-lanes contains duplicate lane labels: {lanes}"
+        invalid = [item for item in lanes if not WORKER_LABEL_RE.match(item)]
+        if invalid:
+            return None, f"--declared-lanes contains invalid worker labels: {invalid}"
+    return {
+        "version": DECLARATION_VERSION,
+        "shape": shape,
+        "declared_lanes": lanes,
+    }, None
 
 
 def _atomic_write_json(path: Path, document: dict) -> None:
@@ -329,11 +374,16 @@ def _atomic_write_json(path: Path, document: dict) -> None:
         raise
 
 
-def _build_aggregate(shards: list[tuple[str, dict]], task_id: str) -> dict:
+def _build_aggregate(
+    shards: list[tuple[str, dict]], task_id: str, declaration: dict | None = None
+) -> dict:
     """Construct the canonical aggregate document from validated shards.
 
     Called ONLY after _validate_shards passes (all shards completed, consistent
     baseline). Therefore aggregate dev.status is always 'completed' here.
+
+    ``declaration`` is the orchestrator-written shape declaration; it is carried
+    forward verbatim so a rebuild cannot silently drop it.
     """
     worker_ids = [label for label, _ in shards]
     now_iso = datetime.now(timezone.utc).isoformat()
@@ -362,6 +412,8 @@ def _build_aggregate(shards: list[tuple[str, dict]], task_id: str) -> dict:
         "blocking_issues": _union_list(shards, ["blocking_issues"]),
         "recommendations": _union_list(shards, ["recommendations"]),
     }
+    if declaration is not None:
+        aggregate[DECLARATION_KEY] = declaration
     return aggregate
 
 
@@ -404,11 +456,36 @@ def main(argv: list[str] | None = None) -> int:
         default=False,
         help="Validate shards without writing the canonical aggregate.",
     )
+    parser.add_argument(
+        "--shape",
+        choices=DECLARED_SHAPES,
+        default=None,
+        help=(
+            "Artifact-chain shape declared by the orchestrator at decomposition "
+            "time. Omit for legacy declaration-less behaviour."
+        ),
+    )
+    parser.add_argument(
+        "--declared-lanes",
+        default=None,
+        help=(
+            "Comma-separated lane suffixes for --shape requirement_fanout "
+            "(one-to-one with the decomposition-time requirements[]). Must be "
+            "omitted or empty for --shape parallel_dev."
+        ),
+    )
     args = parser.parse_args(sys.argv[1:] if argv is None else argv)
 
     task_id = args.task_id.strip()
     if not task_id:
         _emit_error("--task-id must be non-empty")
+        return 2
+
+    declaration, declaration_error = _declaration_from_arguments(
+        args.shape, args.declared_lanes
+    )
+    if declaration_error is not None:
+        _emit_error(declaration_error)
         return 2
 
     # Bare timestamp needed for shard filename matching (patterns use YYYYMMDD-HHMMSS).
@@ -466,7 +543,23 @@ def main(argv: list[str] | None = None) -> int:
                 f"baseline_sha {existing_sha!r} (expected {expected_sha!r})"
             )
             return 1
-        expected = _build_aggregate(loaded, task_id)
+        existing_declaration = existing.get(DECLARATION_KEY)
+        if (
+            declaration is not None
+            and existing_declaration is not None
+            and existing_declaration != declaration
+        ):
+            _emit_error(
+                f"Declaration disagreement for {canonical_path}: canonical carries "
+                f"{json.dumps(existing_declaration, sort_keys=True)} but this invocation "
+                f"supplied {json.dumps(declaration, sort_keys=True)}; "
+                f"refusing to silently overwrite the declaration."
+            )
+            return 1
+        effective_declaration = (
+            declaration if declaration is not None else existing_declaration
+        )
+        expected = _build_aggregate(loaded, task_id, effective_declaration)
         if _canonical_projection(existing) != _canonical_projection(expected):
             if args.dry_run:
                 _emit_ok(
@@ -508,7 +601,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     # Build and write canonical aggregate.
-    aggregate = _build_aggregate(loaded, task_id)
+    aggregate = _build_aggregate(loaded, task_id, declaration)
     try:
         _atomic_write_json(canonical_path, aggregate)
     except OSError as exc:
