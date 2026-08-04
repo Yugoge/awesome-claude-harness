@@ -1124,7 +1124,91 @@ Phase 5 runs whenever `test_writer_expected == true` — that is, the BA-compute
    - **Manifest mode (always, before emission)**: pipe the candidate `manifest_verification` JSON on stdin to `( source ~/.claude/venv/bin/activate && python3 scripts/qa-manifest-guard.py )` with NO CLI flags. The guard is pure (stdin/stdout/exit-code only). Capture `verdict` and `reason` from the guard's JSON output and copy them into the report's `manifest_verification.guard_verdict` and `manifest_verification.guard_reason` fields.
    - **Cycle-diff mode (when active_tests_count would otherwise be 0)**: invoke `( source ~/.claude/venv/bin/activate && python3 scripts/qa-manifest-guard.py --cycle-diff-files '<comma-paths-from-git-diff>' --collect-only-cmd 'pytest --collect-only' )` to recompute the active set per the force-include rule (step 7). Guard runs collect-only against each `.py` file individually and reports `active_tests_count` plus per-file diagnostics. Guard fails closed (exit 3, `verdict: "guard_blocked"`) if either flag is missing, if the collect-only command is not on PATH, or if pytest returns any exit code other than 0 or 5. QA MUST NEVER fall back to file-name heuristics (e.g. `test_*.py`) on environment failure — that would recreate the grep-only degradation this invariant exists to kill.
 
-9. **Guard enforcement clause (binding)** — When the guard exits with **exit code 2** (manifest mode `verdict: "vacuous_rejected"`), QA MUST set `qa.status` to `fail` and MUST append an entry to `qa.failures[]` with `severity: "critical"`, `primary_cause: "qa_oversight"`, and carry the guard's `verdict` and `reason` strings, regardless of other verification outcomes. The exit code 2 → `qa.status = fail` + `qa.failures[] append` binding is non-overridable; no broader verdict-aggregation logic is required because this local Phase 5 rule is structurally sufficient. When the guard exits with **exit code 3** (`verdict: "guard_blocked"`), QA MUST record `primary_cause: "environment"` rather than `qa_oversight`, because the failure is an infrastructure block (e.g. venv broken, pytest not on PATH), not a QA judgement error.
+9. **Guard enforcement clause (binding and fail-closed)** — Evaluate the captured
+   process outcome against `QA_MANIFEST_GUARD_OUTCOME_MATRIX_V1` in listed order.
+   A semantic verdict exists only when the process launched and emitted exactly
+   one parseable JSON object whose exit code, canonical verdict, and non-empty
+   reason field match a row. A numeric exit code alone is never semantic. The
+   first three rows are the only canonical success/semantic/tooling matches;
+   every other outcome (including a missing or unexecutable entrypoint,
+   malformed/unknown JSON, multiple JSON objects, or an exit/verdict mismatch)
+   uses the final fail-closed row. For every row with `non_passing: true`, QA
+   MUST set `qa.status` to `fail` and append the declared critical entry to
+   `qa.failures[]`, regardless of direct pytest success or other verification
+   outcomes.
+
+   `QA_MANIFEST_GUARD_OUTCOME_MATRIX_V1`:
+
+   ```json
+   {
+     "schema_version": 1,
+     "matrix_id": "qa_manifest_guard_outcome_matrix_v1",
+     "ordered_outcomes": [
+       {
+         "name": "accepted_guard_result",
+         "match": {
+           "process_launched": true,
+           "exit_code": 0,
+           "exactly_one_json_object": true,
+           "verdict_in": ["ok", "ok_vacuous_acknowledged"],
+           "non_empty_reason_field_in": ["reason", "vacuous_reason"]
+         },
+         "result": {"non_passing": false}
+       },
+       {
+         "name": "semantic_manifest_rejection",
+         "match": {
+           "process_launched": true,
+           "exit_code": 2,
+           "exactly_one_json_object": true,
+           "verdict": "vacuous_rejected",
+           "non_empty_reason_field": "reason"
+         },
+         "result": {
+           "non_passing": true,
+           "qa_status": "fail",
+           "append_failure": true,
+           "severity": "critical",
+           "classification": "semantic_manifest_rejection",
+           "guard_verdict": "vacuous_rejected",
+           "primary_cause": "qa_oversight"
+         }
+       },
+       {
+         "name": "tooling_unavailable",
+         "match": {
+           "process_launched": true,
+           "exit_code": 3,
+           "exactly_one_json_object": true,
+           "verdict": "guard_blocked",
+           "non_empty_reason_field": "guard_reason"
+         },
+         "result": {
+           "non_passing": true,
+           "qa_status": "fail",
+           "append_failure": true,
+           "severity": "critical",
+           "classification": "tooling_unavailable",
+           "guard_verdict": "guard_blocked",
+           "primary_cause": "environment"
+         }
+       },
+       {
+         "name": "guard_unavailable_no_json",
+         "match": {"fallback": true},
+         "result": {
+           "non_passing": true,
+           "qa_status": "fail",
+           "append_failure": true,
+           "severity": "critical",
+           "classification": "guard_unavailable_no_json",
+           "guard_verdict": "guard_unavailable_no_json",
+           "primary_cause": "environment"
+         }
+       }
+     ]
+   }
+   ```
 
 10. **Stale-iter self-contradiction lint (anti-self-contradiction)** — Defends against the F2 pattern observed in close-debate of task 20260529-210616: a qa-report carried `qa.status: "pass"` alongside unreplaced iter-1 failure text in `spec_section_updates.section_4` and `success_criteria_results[*].details`. Before final report emission, when QA's draft has `qa.status == "pass"` AND `resolved_findings[]` is non-empty (an iter-N → N+1 transition occurred), QA MUST run:
 
