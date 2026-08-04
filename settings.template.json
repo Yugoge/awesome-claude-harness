@@ -221,7 +221,6 @@
       "Bash(systemctl reload-or-restart:*)",
       "Bash(systemctl enable:*)",
       "Read(**/session_dirs.txt)",
-      "Write(**/session_dirs.txt)",
       "Edit(**/session_dirs.txt)",
       "Bash(*session_dirs.txt*)",
       "Bash(curl:* | sh:*)",
