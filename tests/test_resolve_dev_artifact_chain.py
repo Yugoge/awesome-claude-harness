@@ -791,6 +791,44 @@ def test_parallel_dev_names_a_non_string_identity_instead_of_crashing(
         }, result
 
 
+def test_parallel_dev_identity_still_fires_when_the_canonical_is_also_stale(
+    tmp_path: Path,
+) -> None:
+    """Identity validation is not short-circuited when staleness also fires.
+
+    Identity fields alone are outside the canonical's staleness projection, so
+    corrupting only them never produces STALE_CANONICAL -- measured, and the
+    reason the two tests above can assert a sole error code.  To cover the real
+    interaction the shard is corrupted in BOTH dimensions at once: a foreign
+    identity AND a file-list edit the canonical predates.  All three errors must
+    then be reported together, with the identity error still attributed to the
+    offending shard rather than swallowed by the freshness gate.
+    """
+    for index, (request_id, task_id) in enumerate(
+        [
+            (TASK_ID, f"{TASK_ID}-lane-b"),
+            (f"{TASK_ID}-lane-b", TASK_ID),
+            (TASK_ID, None),
+            (f"zzz{TASK_ID}zzz", f"zzz{TASK_ID}zzz"),
+        ]
+    ):
+        root = tmp_path / f"stale{index}"
+        _make_parallel_dev_identities(root, {"lane-a": TASK_ID, "lane-b": TASK_ID})
+        shard_path = _lane_paths(root, "lane-b")["dev"]
+        shard = json.loads(shard_path.read_text())
+        shard["request_id"], shard["task_id"] = request_id, task_id
+        shard["dev"]["files_modified"] = ["scripts/changed-after-the-canonical.py"]
+        _write(shard_path, shard)
+        result = RESOLVER.resolve_chain(root, TASK_ID)
+        codes = _error_codes(result)
+        assert result["status"] == "fail", (request_id, task_id, result)
+        assert "IDENTITY_MISMATCH" in codes, result
+        assert {"STALE_CANONICAL", "STALE_FILE_UNION"} <= codes, result
+        assert _identity_mismatch_paths(result) == {
+            f"docs/dev/dev-report-{TASK_ID}-lane-b.json"
+        }, result
+
+
 def test_parallel_dev_accepts_exactly_the_two_legitimate_identity_forms(
     tmp_path: Path,
 ) -> None:

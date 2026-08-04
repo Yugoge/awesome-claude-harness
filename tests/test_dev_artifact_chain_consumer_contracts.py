@@ -198,7 +198,9 @@ def test_dev_states_the_exact_two_value_worker_identity_rule() -> None:
     assert "`(<task-id>-<worker>, <task-id>-<worker>)` and nothing else" in flat
     assert "a mixed pair or any other value is refused" in flat
     assert "independent weaker second gate, intersected with" in flat
-    # The refuted claim must not come back.
+    # Verbatim-regression guard only: it catches the exact refuted sentence
+    # coming back, not a paraphrase of it. The positive assertions above are
+    # what pin the rule's substance.
     assert "identity is the bare-timestamp-normalized rule already applied by" not in flat
 
 
