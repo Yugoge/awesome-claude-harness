@@ -737,6 +737,39 @@ def test_parallel_dev_refuses_a_timestamp_wrapped_in_arbitrary_characters(
     _assert_foreign_shard_identity_is_refused(tmp_path, f"zzz{TASK_ID}zzz")
 
 
+def test_parallel_dev_refuses_a_mixed_identity_pair(tmp_path: Path) -> None:
+    """request_id and task_id must carry the SAME one of the two legitimate forms."""
+    for index, (request_id, task_id) in enumerate(
+        [(TASK_ID, f"{TASK_ID}-lane-b"), (f"{TASK_ID}-lane-b", TASK_ID)]
+    ):
+        root = tmp_path / f"mixed{index}"
+        _make_parallel_dev_identities(root, {"lane-a": TASK_ID, "lane-b": TASK_ID})
+        shard_path = _lane_paths(root, "lane-b")["dev"]
+        shard = json.loads(shard_path.read_text())
+        shard["request_id"] = request_id
+        shard["task_id"] = task_id
+        _write(shard_path, shard)
+        result = RESOLVER.resolve_chain(root, TASK_ID)
+        assert result["status"] == "fail", (request_id, task_id, result)
+        assert "IDENTITY_MISMATCH" in _error_codes(result)
+
+
+def test_parallel_dev_names_a_non_string_identity_instead_of_crashing(
+    tmp_path: Path,
+) -> None:
+    """A list/object/null identity must produce a named error, never a traceback."""
+    for index, foreign in enumerate([[], {}, None]):
+        root = tmp_path / f"nonstring{index}"
+        _make_parallel_dev_identities(root, {"lane-a": TASK_ID, "lane-b": TASK_ID})
+        shard_path = _lane_paths(root, "lane-b")["dev"]
+        shard = json.loads(shard_path.read_text())
+        shard["task_id"] = foreign
+        _write(shard_path, shard)
+        result = RESOLVER.resolve_chain(root, TASK_ID)
+        assert result["status"] == "fail", (foreign, result)
+        assert "IDENTITY_MISMATCH" in _error_codes(result)
+
+
 def test_parallel_dev_accepts_exactly_the_two_legitimate_identity_forms(
     tmp_path: Path,
 ) -> None:

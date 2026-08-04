@@ -132,21 +132,25 @@ class ChainValidator:
     ) -> None:
         """Identity of a per-worker shard in the parallel-dev shape.
 
-        Exactly two forms are legitimate and nothing else: the bare parent
-        task-id (what a per-worker subagent actually writes) and this shard's
-        own '<task-id>-<worker>' lane id.  Anything wider would certify a
-        foreign or copy-pasted worker report as this cycle's work.
+        Exactly two whole-shard forms are legitimate and nothing else: the bare
+        parent task-id (what a per-worker subagent actually writes) and this
+        shard's own '<task-id>-<worker>' lane id.  Both keys must carry the SAME
+        one of those two forms -- a mixed pair is neither.  Anything wider would
+        certify a foreign or copy-pasted worker report as this cycle's work.
+
+        Membership is tested against a tuple, so a non-string identity (list,
+        object, null, number) yields a named IDENTITY_MISMATCH rather than an
+        unhashable-type crash.
         """
-        accepted = {expected, f"{expected}-{worker}"}
-        relative = _rel(path, self.root)
-        for key in ("request_id", "task_id"):
-            actual = value.get(key)
-            if actual not in accepted:
-                self.error(
-                    "IDENTITY_MISMATCH",
-                    relative,
-                    f"{key} is {actual!r}; expected one of {sorted(accepted)!r}",
-                )
+        lane_id = f"{expected}-{worker}"
+        actual = tuple(value.get(key) for key in ("request_id", "task_id"))
+        if actual not in ((expected, expected), (lane_id, lane_id)):
+            self.error(
+                "IDENTITY_MISMATCH",
+                _rel(path, self.root),
+                f"(request_id, task_id) is {actual!r}; expected "
+                f"{(expected, expected)!r} or {(lane_id, lane_id)!r}",
+            )
 
     def validate_markdown_identity(self, text: str, expected: str, path: Path) -> None:
         values: list[str] = []
