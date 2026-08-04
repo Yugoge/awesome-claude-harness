@@ -1,8 +1,8 @@
 # reference
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-08-03T15:08:42Z*
-**Total entries**: 14
+*Last updated: 2026-08-04T11:33:13Z*
+**Total entries**: 17
 **Convention**: kebab
 
 ## Tree
@@ -14,9 +14,12 @@ reference/
 ├── `generated-tests-policy.md` - `tests/generated/` policy — tracked but ignored, on purpose
 ├── `git-fswatch.md` - Git File Watcher (fswatch) Documentation
 ├── `graphify-integration.md` - Graphify Knowledge Graph Integration
+├── `install-compatibility-matrix.md` - Install compatibility matrix
 ├── `launch-plan.md` - Launch Plan — ROI-ranked channels, gated on recorded evidence
 ├── `lock-file-handling.md` - Git Lock File Handling
 ├── `monolith-split-plan.md` - Monolith Split Plan (Plan-of-Record)
+├── `positioning.md` - Positioning
+├── `rename-execution-plan.md` - Rename execution plan — `awesome-claude-harness` → `claude-code-guardrails`
 ├── `roadmap-decomposition-productization.md` - Roadmap: Monolith Decomposition + Productization
 ├── `slashcommand-quick-reference.md` - Slash Command Quick Reference
 ├── `test-suite-overhaul-plan.md` - Test Suite Overhaul Plan (Plan-of-Record)
