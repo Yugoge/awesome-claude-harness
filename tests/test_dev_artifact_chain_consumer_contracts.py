@@ -183,6 +183,25 @@ def test_dev_completion_postcondition_admits_the_parallel_dev_shape() -> None:
     assert "MUST NOT be fabricated, retro-declared, or copied" in flat
 
 
+def test_dev_states_the_exact_two_value_worker_identity_rule() -> None:
+    """The written contract must name the rule the resolver actually enforces.
+
+    QA finding F1 (task 20260803-150741): this paragraph described the weaker
+    substring rule that the exact-identity fix had already removed, so the
+    documentation stood as a written authorisation to restore the fail-open.
+    """
+    flat = _squash(_read("commands/dev.md"))
+
+    assert "Per-worker shard identity is an EXACT two-value test owned by" in flat
+    assert "`scripts/resolve-dev-artifact-chain.py::validate_worker_identity`" in flat
+    assert "`(request_id, task_id)` pair must equal either `(<task-id>, <task-id>)`" in flat
+    assert "`(<task-id>-<worker>, <task-id>-<worker>)` and nothing else" in flat
+    assert "a mixed pair or any other value is refused" in flat
+    assert "independent weaker second gate, intersected with" in flat
+    # The refuted claim must not come back.
+    assert "identity is the bare-timestamp-normalized rule already applied by" not in flat
+
+
 def test_mode_sensitive_consumers_admit_the_parallel_dev_shape() -> None:
     analyst = _read("agents/changelog-analyst.md")
     assert "{singular, fanout, parallel_dev}" in analyst
