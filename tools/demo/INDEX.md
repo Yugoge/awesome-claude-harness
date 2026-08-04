@@ -1,16 +1,18 @@
 # demo
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-08-03T13:29:44Z*
-**Total entries**: 5
+*Last updated: 2026-08-04T12:00:26Z*
+**Total entries**: 7
 **Convention**: kebab
 
 ## Tree
 ```
 demo/
 ├── `audit.mjs` - mjs file
+├── `build-hero-manifest.py` - Description: Emits a trace manifest (tools/demo/manifest.schema.md) in which every
 ├── `gen-svg.mjs` - mjs file
 ├── `manifest.schema.md` - Trace manifest schema
+├── `normalize-capture.py` - Description: Produces a COMPARISON COPY of a capture with the four non-deterministic
 ├── `sample-hook-trace.json` - JSON config: meta, lines
 └── `sample-trace.json` - JSON config: meta, lines
 ```

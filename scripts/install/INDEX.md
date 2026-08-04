@@ -1,15 +1,23 @@
 # install
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-08-02T10:31:01Z*
-**Total entries**: 2
+*Last updated: 2026-08-04T12:00:26Z*
+**Total entries**: 10
 **Convention**: kebab
 
 ## Tree
 ```
 install/
+├── profiles/
+│   └── `core.json` - Minimal core profile: blocking safety hooks + the capability gate + the shared harness-home resolver. Nothing that edits, commits, pushes or orchestrates.
+├── tests/
+│   └── `installer-acceptance.py` - Runs every acceptance criterion (AC1-AC8) of the installer lane against real
+├── `install` - install file
+├── `installer.py` - Subcommands: plan | apply | uninstall | snapshot
+├── `preflight` - preflight file
 ├── `render-settings` - render-settings file
 ├── `tmp-cleanup-install.sh` - /usr/local/sbin/tmp-cleanup.sh
+└── `uninstall` - uninstall file
 ```
 <!-- /AUTO:index-stats -->
 
