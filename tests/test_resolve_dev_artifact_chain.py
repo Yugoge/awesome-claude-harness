@@ -672,17 +672,25 @@ def test_parallel_dev_without_two_workers_is_not_a_free_pass(tmp_path: Path) -> 
 # ---------------------------------------------------------------------------
 
 
-def _make_parallel_dev_identities(root: Path, identities: dict[str, str]) -> dict[str, Path]:
+def _make_parallel_dev_identities(root: Path, identities: dict[str, Any]) -> dict[str, Path]:
     """A parallel-dev chain whose shards carry chosen request_id/task_id values.
 
     The canonical is built by the REAL producer over those shard documents, so a
-    foreign identity cannot be dismissed as a hand-written canonical artefact.
+    foreign identity cannot be dismissed as a hand-written canonical artefact,
+    and no shard has to be mutated after the fact -- which would leave the
+    canonical stale and let STALE_CANONICAL stand in for the identity error.
+
+    A worker's value is normally one identity used for BOTH keys.  A 2-tuple
+    supplies them separately, which is the only way to build a mixed pair; JSON
+    can never produce a tuple, so the two cases cannot be confused.
     """
     parents = _parent_paths(root)
     loaded = []
     references = [_relative(root, parents["dev"])]
     for index, worker in enumerate(WORKERS):
         document = _dev_document(identities[worker], modified=[f"scripts/w-{index}.py"])
+        if isinstance(identities[worker], tuple):
+            document["request_id"], document["task_id"] = identities[worker]
         path = _lane_paths(root, worker)["dev"]
         _write(path, document)
         loaded.append((worker, document))
