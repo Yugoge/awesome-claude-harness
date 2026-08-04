@@ -177,7 +177,6 @@
       "Bash({{CLAUDE_HOME}}/scripts/lifecycle-baseline-import.sh:*)",
       "Bash({{CLAUDE_HOME}}/scripts/canary-verify.sh:*)",
       "Bash(python3 {{CLAUDE_HOME}}/scripts/blast-radius-tool.py:*)",
-      "Write(tests/generated/**)",
       "Edit(tests/generated/**)",
       "Bash(pytest tests/generated:*)",
       "Bash(source {{CLAUDE_HOME}}/venv/bin/activate && pytest tests/generated:*)",
