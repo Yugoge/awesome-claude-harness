@@ -1406,9 +1406,16 @@ is the downstream handoff used by `/close` and normal `/commit`.
   context, and QA-report are NOT required and their absence produces no error —
   a parallel-dev cycle never creates them, and they MUST NOT be fabricated,
   retro-declared, or copied to satisfy a fan-out-shaped check. Per-worker shard
-  identity is the bare-timestamp-normalized rule already applied by
-  `scripts/aggregate-dev-report.py::_validate_shards`, so shards correctly
-  carrying the PARENT task-id are valid. This shape is selected ONLY by the
+  identity is an EXACT two-value test owned by
+  `scripts/resolve-dev-artifact-chain.py::validate_worker_identity`: the
+  `(request_id, task_id)` pair must equal either `(<task-id>, <task-id>)` or
+  `(<task-id>-<worker>, <task-id>-<worker>)` and nothing else — so a shard
+  correctly carrying the PARENT task-id is valid, and so is a shard carrying its
+  own worker lane id, while a mixed pair or any other value is refused. The
+  bare-timestamp-normalized rule in
+  `scripts/aggregate-dev-report.py::_validate_shards` survives only as an
+  independent weaker second gate, intersected with — never substituted for —
+  this exact test. This shape is selected ONLY by the
   explicit `artifact_chain_declaration` written at Step 11; a missing, empty or
   unrecognized declaration reproduces the strict fan-out behaviour instead.
 - Artifact identities, nested `dev.status == "completed"` /
