@@ -23,7 +23,7 @@ All counts below were established by enumerating the actual repository, not copi
 | **Hook files present on disk** (`hooks/*.py` + `*.sh`, excl. `.bak`) | **93** | `find hooks -maxdepth 1 -type f \( -name '*.py' -o -name '*.sh' \)` |
 | **Helper scripts** (`scripts/` top-level *tracked* files, excl. `INDEX/README`) | **89** | `git ls-files scripts/ \| grep -E 'scripts/[^/]+$'` minus `INDEX`/`README` |
 | **Skills** (`skills/*/` directories) | **8** | `ls -d skills/*/` |
-| `permissions.allow` / `deny` / `ask` entries | 162 / 96 / 30 | keys of `settings.json.permissions` |
+| `permissions.allow` / `deny` / `ask` entries | 155 / 81 / 23 | keys of `settings.json.permissions` |
 
 > Note on the hook count: more hook *files* exist on disk (**91**) than are *wired* (**69** hooks files / 70 executable entries). The unwired files are install scripts, libraries, legacy/`.bak` variants, and intentionally-staged hooks. The number that matters for behavior is **what `settings.json` wires**: 69 distinct `hooks/` files plus `scripts/canary-verify.sh` under `SessionStart` — **no referenced executable is duplicated**. The seven lifecycle events are `SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `Notification`, `Stop`, `SubagentStop`.
 
