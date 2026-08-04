@@ -1258,16 +1258,27 @@ jq -s '.[0] * {
 
 **Return to Step 10** with new context JSON
 
-**Retry report naming (parallel-dev cycles, OPTIONAL convention)**:
+**Retry report naming (MANDATORY — a retry report must never END with the TASK_ID)**:
 
-A retry lane MAY write its report as
-`docs/dev/dev-report-iter<N>-<TASK_ID>-<lane>.json` so retry evidence is
-distinguishable from the immutable initial shard. This is a naming convention
-only: there is NO promotion barrier, NO lineage declaration, and NO
-re-aggregation requirement before QA. The `iter<N>-` filename prefix matches
-none of the worker-shard patterns in `scripts/aggregate-dev-report.py` /
-`hooks/pretool-aggregate-check.py`, so such a report is never mistaken for an
-initial worker shard.
+A retry report is distinguishable from the immutable initial shard by placement,
+not by promotion: there is NO promotion barrier, NO lineage declaration, and NO
+re-aggregation requirement before QA. Two forms only:
+
+- parallel-dev cycle (a lane exists): `docs/dev/dev-report-iter<N>-<TASK_ID>-<lane>.json`
+- singular cycle (no lane exists): `docs/dev/iterations/dev-report-iter<N>-<TASK_ID>.json`
+
+What keeps those two out of the worker-shard set is NOT the `iter<N>-` prefix.
+`PER_WORKER_ROLE_FIRST_RE` in `scripts/aggregate-dev-report.py` /
+`hooks/pretool-aggregate-check.py` matches `dev-report-<role>-<bare-timestamp>.json`,
+and that branch applies NEITHER `NON_WORKER_LABELS` NOR `NON_WORKER_LABEL_RE` —
+so the flat lane-less form `dev-report-iter<N>-<TASK_ID>.json` IS classified as a
+worker shard labelled `iter<N>` and raises `AMBIGUOUS_SINGULAR_CHAIN`. The
+exclusion comes from the trailing `-<lane>` segment or from a `dev-`prefixed
+TASK_ID (each defeats that pattern), or from the `iterations/` subdirectory (both
+scanners are non-recursive). A bare-timestamp TASK_ID with no lane has none of
+the three. Do NOT relax the classifier to accommodate the flat form: legacy
+singular cycles currently fail on exactly this rule, and relaxing it would flip
+them to pass. Pinned by `tests/test_dev_artifact_chain_consumer_contracts.py`.
 
 **Iteration tracking**: Update TodoWrite with iteration number
 
