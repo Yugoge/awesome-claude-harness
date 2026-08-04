@@ -535,9 +535,13 @@ class TestRetryReportNaming:
     from a trailing `-<lane>`, a `dev-`prefixed task-id, or the non-recursive
     `iterations/` subdirectory.
 
-    These assertions are deliberately TIGHTENING pins. Relaxing the role-first
-    branch to honour the exclusion set would flip 6 legacy project cycles from
-    fail to pass, which is the project's defined signal of a weakened check.
+    These are CHANGE-DETECTORS pinning current behaviour, NOT an endorsement of
+    it. The role-first branch contradicts its own sibling branches and the hook
+    docstring, and that asymmetry is a recorded OPEN defect, not a settled
+    design. It is pinned rather than fixed because relaxing it would flip 6
+    legacy project cycles from fail to pass, which is this project's defined
+    signal of a weakened check; closing it properly needs a separate cycle that
+    first establishes those 6 cycles' actual provenance.
     """
 
     def test_flat_lane_less_retry_is_a_worker_shard_in_both_copies(self):

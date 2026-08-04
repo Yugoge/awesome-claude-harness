@@ -252,3 +252,10 @@ def test_retry_report_naming_states_the_measured_exclusion_mechanism() -> None:
     assert "Do NOT relax the classifier to accommodate the flat form" in flat
     # Verbatim-regression guard for the refuted sentence.
     assert "The `iter<N>-` filename prefix matches none of the worker-shard patterns" not in flat
+
+    # The archive the singular form introduces is invisible to shard discovery,
+    # so its misuse hazard must be stated, not left implicit (codex finding 2).
+    assert "ARCHIVE CONTRACT" in flat
+    assert "would therefore be verified ZERO times" in flat
+    assert "is FORBIDDEN" in flat
+    assert "not currently audited by any check" in flat

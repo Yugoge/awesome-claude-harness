@@ -1280,6 +1280,17 @@ the three. Do NOT relax the classifier to accommodate the flat form: legacy
 singular cycles currently fail on exactly this rule, and relaxing it would flip
 them to pass. Pinned by `tests/test_dev_artifact_chain_consumer_contracts.py`.
 
+`docs/dev/iterations/` ARCHIVE CONTRACT — it holds superseded retry reports of a
+singular cycle -- current and superseded alike -- and NOTHING ELSE. Because both
+scanners are non-recursive, the
+directory is invisible to shard discovery, orphan-lane detection and aggregation.
+A per-worker shard placed there would therefore be verified ZERO times, so
+moving, writing or copying a `dev-report-<TASK_ID>-<lane>.json` into it is
+FORBIDDEN. The directory is not currently audited by any check; that audit is a
+recommended follow-up, and until it exists this contract is enforced by review,
+not by the validator. Record every archived file's sha256 in the cycle's report
+so the archive stays manifest-backed rather than orphaned.
+
 **Iteration tracking**: Update TodoWrite with iteration number
 
 ### Step 17: Generate Completion Report + Workflow Update
