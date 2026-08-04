@@ -511,6 +511,33 @@ When the orchestrator prepends a score-inject block to your dispatch prompt, the
 
 **Top-level non-null lists** (CRITICAL): `dev.files_modified` and `dev.files_created` MUST be non-null lists at the `dev` root level (in addition to any per-task `tasks_completed[].files_*` fields). Empty list `[]` is the documented acceptable value for no-edit cycles. `commit.sh` closure detection treats `null` as a missing field and refuses the report.
 
+**Frozen baseline authority (MANDATORY, first-write contract)**: every newly
+published aggregation-eligible active root — singular, requirement-fanout
+active-lane, or parallel-dev active-worker — MUST carry these four non-null
+top-level values in its first published bytes:
+
+- `baseline_contract`: the exact structured cycle-authority object supplied by
+  the orchestrator;
+- `baseline_head_sha`: the exact `baseline_contract.head_sha` projection;
+- `baseline_dirty_snapshot`: the exact UTF-8 decoding of the authority's frozen
+  raw snapshot bytes; and
+- `baseline_dirty_snapshot_sha256`: the SHA-256 of those exact raw bytes, equal
+  to `baseline_contract.dirty_snapshot.sha256`.
+
+Copy all four values verbatim from the task-derived dispatch authority. Never
+reconstruct them from live `git status`, a report, the first shard, or shard
+consensus, and never rewrite descriptor provenance such as
+`descriptor_created_by_task`. Missing, `null`, internally mismatched, or
+projection-mismatched authority is a blocking producer-contract failure and
+MUST NOT yield an aggregation-eligible `dev.status="completed"` root. Do not
+publish a legacy root and repair it later. Historical audit-only iteration
+reports are not retroactively promoted or migrated by this rule.
+
+An empty `baseline_dirty_snapshot` is valid only when the supplied authority
+explicitly identifies a clean zero-byte regular snapshot with `size_bytes=0`,
+`state="clean"`, and the SHA-256 of empty bytes. Empty never means "not
+captured"; there is no missing-to-empty fallback.
+
 **Git-diff derivation (MANDATORY)**: `dev.files_modified` and `dev.files_created` MUST be derived from git commands run at the end of your implementation, before writing the report — NOT from work-tree inspection of expected state.
 
 - `dev.files_modified`: paths from `git diff --name-only <baseline_head_sha>` (working-tree diff against the baseline SHA received in the dispatch payload — lists modified tracked files).
@@ -520,15 +547,15 @@ When the orchestrator prepends a score-inject block to your dispatch prompt, the
 
   Note: `dev.files_modified` (from `git diff --name-only`) and `dev.files_created` (from the combined derivation above) are not required to be disjoint. A staged new file appears in the working-tree diff (listed in `dev.files_modified`) AND in `git diff --cached --diff-filter=A` (listed in `dev.files_created`). Both lists are non-exclusive by design.
 
-If `baseline_head_sha` is empty or absent (unborn repo), skip git-diff derivation and use `git status --porcelain` to list changed files; note the fallback in `implementation_notes`.
-
 **`observed_preexisting[]`**: A separate informational list of file paths that dev confirmed are in the expected state but do NOT appear in `git diff --name-only <baseline_head_sha>` (i.e., already correct before this cycle ran). Files that were in `baseline_dirty_snapshot` at dispatch time and match expected state without appearing in the diff belong here. This field is informational only — it does NOT block QA or changelog-analyst.
 
-**`baseline_head_sha`** MUST appear as a top-level field in the dev-report JSON so downstream consumers (QA, changelog-analyst) can independently re-derive the diff without reading the context JSON.
-
-**`baseline_dirty_snapshot`** MUST also appear as a top-level field in the dev-report JSON. Copy the value verbatim from the dispatch payload `baseline_dirty_snapshot` field (the `git status --porcelain` output captured before dev started). QA and changelog-analyst read this field to exclude pre-dirty files from the provenance FAIL set. If the dispatch payload contained no `baseline_dirty_snapshot`, record it as an empty string `""`.
-
-**Semantics — best-effort, point-in-time (authoritative)**: `baseline_dirty_snapshot` is a best-effort, point-in-time snapshot of the shared working tree captured once by the orchestrator before Dev dispatch. Dev MUST copy it verbatim and MUST NOT refresh or recompute it — a refresh would capture this session's own in-progress edits and wrongly exclude them from downstream provenance checks. It is not a session boundary, an ownership marker, or a concurrency-safe list of all peer-session changes; under concurrent independent `/dev` sessions sharing one working tree, files written by a peer session after the capture instant will not appear in it. This is point-in-time semantics, not concurrency-completeness, and is by design.
+**Semantics — frozen, point-in-time authority**: the structured authority is a
+cycle-owned, point-in-time baseline captured by the orchestrator before Dev
+fan-out. It is not a session boundary, an ownership marker, or a
+concurrency-complete list of peer-session changes. Dev MUST NOT refresh or
+recompute it: a refresh would absorb in-progress edits and corrupt downstream
+provenance. Later working-tree observations must use separately named evidence
+and never influence these four baseline fields.
 
 ## Owned-edits ledger + pre-edit snapshot (MANDATORY — timing-independent ownership signal)
 
@@ -588,8 +615,10 @@ The dev report MUST be written to the filesystem so QA can read it directly. Als
   "request_id": "<task-id>",
   "task_id": "<task-id>",
   "timestamp": "ISO-8601",
-  "baseline_head_sha": "<git rev-parse HEAD at dispatch time, or empty string if unborn repo>",
-  "baseline_dirty_snapshot": "<git status --porcelain output at dispatch time, or empty string>",
+  "baseline_contract": "<exact task-derived structured authority object>",
+  "baseline_head_sha": "<exact baseline_contract.head_sha projection>",
+  "baseline_dirty_snapshot": "<exact UTF-8 decoding of frozen raw snapshot bytes>",
+  "baseline_dirty_snapshot_sha256": "<SHA-256 of those exact raw bytes>",
   "dev_report_path": "docs/dev/dev-report-<timestamp>.json",
   "owned_edits": {
     "<repo-rel-path>": [{"old": "<exact old_string>", "new": "<exact new_string>"}]

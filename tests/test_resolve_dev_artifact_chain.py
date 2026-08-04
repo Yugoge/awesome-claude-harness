@@ -15,6 +15,8 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 RESOLVER_PATH = REPO_ROOT / "scripts" / "resolve-dev-artifact-chain.py"
 TASK_ID = "dev-20260724-120000"
 WORKERS = ["lane-a", "lane-b"]
+BASELINE_HEAD = "0123456789abcdef"
+BASELINE_SNAPSHOT = " M resolver-authority-test.txt\n"
 
 
 def _load_resolver():
@@ -36,16 +38,18 @@ def _write(path: Path, value: str | dict) -> None:
 
 
 def _dev_document(
+    root: Path,
     identity: str,
     *,
     modified: list[str] | None = None,
     created: list[str] | None = None,
 ) -> dict:
+    aggregate = RESOLVER._load_aggregate_module()
+    authority = _install_authority(root, aggregate)
     return {
         "request_id": identity,
         "task_id": identity,
-        "baseline_head_sha": "0123456789abcdef",
-        "baseline_dirty_snapshot": "",
+        **aggregate._baseline_projections(authority),
         "dev": {
             "status": "completed",
             "tasks_completed": [f"completed {identity}"],
@@ -110,11 +114,52 @@ def _relative(root: Path, path: Path) -> str:
     return path.relative_to(root).as_posix()
 
 
+def _install_authority(root: Path, aggregate=None) -> dict:
+    aggregate = aggregate or RESOLVER._load_aggregate_module()
+    cycle_id, descriptor_path, snapshot_path, relative_snapshot = (
+        aggregate._authority_locations(root, TASK_ID)
+    )
+    raw = BASELINE_SNAPSHOT.encode("utf-8")
+    contract = {
+        "version": 1,
+        "cycle_id": cycle_id,
+        "capture_phase": "pre_dev_fanout",
+        "descriptor_origin": "pre_dispatch_native",
+        "descriptor_created_by_task": TASK_ID,
+        "head_sha": BASELINE_HEAD,
+        "dirty_snapshot": {
+            "path": relative_snapshot,
+            "sha256": hashlib.sha256(raw).hexdigest(),
+            "size_bytes": len(raw),
+            "line_count": len(raw.splitlines()),
+            "encoding": "utf-8",
+            "trailing_lf": True,
+            "state": "dirty",
+            "serialization": "git_status_porcelain_v1_raw_text",
+        },
+    }
+    if not descriptor_path.exists() and not snapshot_path.exists():
+        snapshot_path.parent.mkdir(parents=True, exist_ok=True)
+        snapshot_path.write_bytes(raw)
+        _write(descriptor_path, contract)
+    authority, errors = aggregate._load_baseline_authority(root, TASK_ID)
+    assert errors == [] and authority is not None
+    assert authority["contract"] == contract
+    return authority
+
+
+def _build_aggregate(root: Path, loaded: list, declaration: dict | None = None) -> dict:
+    aggregate = RESOLVER._load_aggregate_module()
+    authority = _install_authority(root, aggregate)
+    assert aggregate._validate_shards(loaded, TASK_ID, authority) == []
+    return aggregate._build_aggregate(loaded, TASK_ID, authority, declaration)
+
+
 def _make_singular(root: Path) -> dict[str, Path]:
     paths = _parent_paths(root)
     _write(paths["ticket"], _ticket(TASK_ID))
     _write(paths["context"], {"request_id": TASK_ID, "task_id": TASK_ID})
-    _write(paths["dev"], _dev_document(TASK_ID, modified=["scripts/one.py"]))
+    _write(paths["dev"], _dev_document(root, TASK_ID, modified=["scripts/one.py"]))
     _write(paths["qa"], _qa_document(TASK_ID))
     references = [_relative(root, paths[key]) for key in ("ticket", "context", "dev", "qa")]
     _write(paths["completion"], _completion(TASK_ID, references))
@@ -137,6 +182,7 @@ def _make_fanout(
         paths = _lane_paths(root, worker)
         lanes[worker] = paths
         dev = _dev_document(
+            root,
             identity,
             modified=[f"scripts/lane-{index}.py"],
             created=[f"tests/lane-{index}.py"],
@@ -149,7 +195,7 @@ def _make_fanout(
         references.extend(
             _relative(root, paths[key]) for key in ("ticket", "context", "dev", "qa")
         )
-    aggregate = RESOLVER._load_aggregate_module()._build_aggregate(loaded, TASK_ID)
+    aggregate = _build_aggregate(root, loaded)
     _write(parents["dev"], aggregate)
     _write(parents["completion"], _completion(TASK_ID, references))
     if optional_parent:
@@ -169,6 +215,14 @@ def _snapshot(root: Path) -> dict[str, str]:
 
 def _error_codes(result: dict) -> set[str]:
     return {error["code"] for error in result["errors"]}
+
+
+def _fanout_declaration(workers: list[str]) -> dict:
+    return {
+        "version": 1,
+        "shape": "requirement_fanout",
+        "declared_lanes": list(workers),
+    }
 
 
 def _run_cli(root: Path) -> subprocess.CompletedProcess[str]:
@@ -254,7 +308,7 @@ def test_missing_canonical_is_aggregated_before_read_only_resolution(
         _write(paths["context"], {"request_id": identity, "task_id": identity})
         _write(
             paths["dev"],
-            _dev_document(identity, modified=[f"scripts/lane-{index}.py"]),
+            _dev_document(tmp_path, identity, modified=[f"scripts/lane-{index}.py"]),
         )
         _write(paths["qa"], _qa_document(identity))
         references.extend(
@@ -357,7 +411,7 @@ def test_changed_shard_makes_canonical_stale_without_rewriting_it(
     parents, lanes = _make_fanout(tmp_path)
     canonical_before = parents["dev"].read_bytes()
     identity = f"{TASK_ID}-{WORKERS[0]}"
-    changed = _dev_document(identity, modified=["scripts/changed.py"])
+    changed = _dev_document(tmp_path, identity, modified=["scripts/changed.py"])
     _write(lanes[WORKERS[0]]["dev"], changed)
     result = RESOLVER.resolve_chain(tmp_path, TASK_ID)
     assert result["status"] == "fail"
@@ -389,7 +443,7 @@ def test_owned_files_only_change_stays_pass_without_provenance(
 def test_extra_shard_is_an_ambiguous_lane_set(tmp_path: Path) -> None:
     _make_fanout(tmp_path)
     extra = _lane_paths(tmp_path, "lane-c")["dev"]
-    _write(extra, _dev_document(f"{TASK_ID}-lane-c"))
+    _write(extra, _dev_document(tmp_path, f"{TASK_ID}-lane-c"))
     result = RESOLVER.resolve_chain(tmp_path, TASK_ID)
     assert "LANE_SET_MISMATCH" in _error_codes(result)
 
@@ -406,7 +460,7 @@ def test_malformed_json_fails_with_stable_error(tmp_path: Path) -> None:
 def test_singular_with_worker_shard_is_ambiguous(tmp_path: Path) -> None:
     _make_singular(tmp_path)
     lane = _lane_paths(tmp_path, "lane-a")["dev"]
-    _write(lane, _dev_document(f"{TASK_ID}-lane-a"))
+    _write(lane, _dev_document(tmp_path, f"{TASK_ID}-lane-a"))
     result = RESOLVER.resolve_chain(tmp_path, TASK_ID)
     assert "AMBIGUOUS_SINGULAR_CHAIN" in _error_codes(result)
 
@@ -468,7 +522,7 @@ def _make_parallel_dev(
     references = [_relative(root, parents["dev"])]
     for index, worker in enumerate(workers):
         # Per-worker shards legitimately carry the PARENT task-id.
-        document = _dev_document(TASK_ID, modified=[f"scripts/w-{index}.py"])
+        document = _dev_document(root, TASK_ID, modified=[f"scripts/w-{index}.py"])
         path = _lane_paths(root, worker)["dev"]
         _write(path, document)
         loaded.append((worker, document))
@@ -479,9 +533,7 @@ def _make_parallel_dev(
             "shape": RESOLVER.SHAPE_PARALLEL_DEV,
             "declared_lanes": [],
         }
-    aggregate = RESOLVER._load_aggregate_module()._build_aggregate(
-        loaded, TASK_ID, declaration
-    )
+    aggregate = _build_aggregate(root, loaded, declaration)
     _write(parents["dev"], aggregate)
     _write(parents["completion"], _completion(TASK_ID, references))
     return parents
@@ -591,7 +643,7 @@ def test_declared_fanout_reports_an_orphan_lane_shard(tmp_path: Path) -> None:
     _make_fanout(tmp_path)
     parents = _parent_paths(tmp_path)
     orphan = _lane_paths(tmp_path, "lane-c")["dev"]
-    _write(orphan, _dev_document(f"{TASK_ID}-lane-c"))
+    _write(orphan, _dev_document(tmp_path, f"{TASK_ID}-lane-c"))
     canonical = json.loads(parents["dev"].read_text())
     canonical["parallel_workers"] = [*WORKERS, "lane-c"]
     canonical[DECLARATION_KEY] = {
@@ -688,7 +740,9 @@ def _make_parallel_dev_identities(root: Path, identities: dict[str, object]) -> 
     loaded = []
     references = [_relative(root, parents["dev"])]
     for index, worker in enumerate(WORKERS):
-        document = _dev_document(identities[worker], modified=[f"scripts/w-{index}.py"])
+        document = _dev_document(
+            root, identities[worker], modified=[f"scripts/w-{index}.py"]
+        )
         if isinstance(identities[worker], tuple):
             document["request_id"], document["task_id"] = identities[worker]
         path = _lane_paths(root, worker)["dev"]
@@ -700,9 +754,7 @@ def _make_parallel_dev_identities(root: Path, identities: dict[str, object]) -> 
         "shape": RESOLVER.SHAPE_PARALLEL_DEV,
         "declared_lanes": [],
     }
-    aggregate = RESOLVER._load_aggregate_module()._build_aggregate(
-        loaded, TASK_ID, declaration
-    )
+    aggregate = _build_aggregate(root, loaded, declaration)
     _write(parents["dev"], aggregate)
     _write(parents["completion"], _completion(TASK_ID, references))
     return parents
@@ -737,6 +789,89 @@ def test_parallel_dev_refuses_a_shard_naming_a_worker_that_does_not_exist(
     tmp_path: Path,
 ) -> None:
     _assert_foreign_shard_identity_is_refused(tmp_path, f"{TASK_ID}-nonexistent-worker")
+
+
+def test_iteration_history_role_contract_resolver_is_audit_only(
+    tmp_path: Path,
+) -> None:
+    parents, lanes = _make_fanout(tmp_path)
+    aggregate_module = RESOLVER._load_aggregate_module()
+    history_name = f"dev-report-iter2-{TASK_ID}-{WORKERS[0]}.json"
+    history_relative = f"docs/dev/{history_name}"
+
+    loaded = []
+    for worker in WORKERS:
+        document = json.loads(lanes[worker]["dev"].read_text(encoding="utf-8"))
+        if worker == WORKERS[0]:
+            document["iteration_reports"] = [history_relative]
+            _write(lanes[worker]["dev"], document)
+        loaded.append((worker, document))
+    authority = _install_authority(tmp_path, aggregate_module)
+    canonical = aggregate_module._build_aggregate(
+        loaded, TASK_ID, authority, _fanout_declaration(WORKERS)
+    )
+    _write(parents["dev"], canonical)
+
+    identity = f"{TASK_ID}-{WORKERS[0]}"
+    history = _dev_document(tmp_path, identity)
+    history.update(
+        {
+            "parent_task_id": TASK_ID,
+            "lane": WORKERS[0],
+            "requirement_id": WORKERS[0],
+            "dev_report_path": history_relative,
+            "dev_report_role": aggregate_module._expected_role(
+                kind=aggregate_module.ROLE_ITERATION_HISTORY,
+                parent_task_id=TASK_ID,
+                lane=WORKERS[0],
+                iteration=2,
+            ),
+        }
+    )
+    history_path = _dev_dir(tmp_path) / history_name
+    _write(history_path, history)
+
+    result = RESOLVER.resolve_chain(tmp_path, TASK_ID)
+    assert result["status"] == "pass", result["errors"]
+    assert result["parallel_workers"] == WORKERS
+    assert [item["path"] for item in result["history_reports"]] == [history_relative]
+    assert history_relative not in result["report_paths"]
+    assert history_relative not in {item["qa_report"] for item in result["qa_inputs"]}
+    assert history_relative in result["artifact_paths"]
+    assert history_relative in result["commit_whitelist_artifacts"]
+
+    history["dev_report_role"]["iteration"] = "2"
+    _write(history_path, history)
+    broken = RESOLVER.resolve_chain(tmp_path, TASK_ID)
+    assert broken["status"] == "fail"
+    assert "INVALID_HISTORY_METADATA" in _error_codes(broken)
+
+
+def test_history_fail_closed_matrix_resolver_rejects_undeclared_hidden_root(
+    tmp_path: Path,
+) -> None:
+    parents, lanes = _make_fanout(tmp_path)
+    aggregate_module = RESOLVER._load_aggregate_module()
+    loaded = [
+        (worker, json.loads(lanes[worker]["dev"].read_text(encoding="utf-8")))
+        for worker in WORKERS
+    ]
+    _write(
+        parents["dev"],
+        aggregate_module._build_aggregate(
+            loaded,
+            TASK_ID,
+            _install_authority(tmp_path, aggregate_module),
+            _fanout_declaration(WORKERS),
+        ),
+    )
+    hidden = _dev_document(tmp_path, f"{TASK_ID}-z")
+    hidden["aggregation_eligible"] = False
+    _write(_dev_dir(tmp_path) / f"dev-report-{TASK_ID}-z.json", hidden)
+
+    result = RESOLVER.resolve_chain(tmp_path, TASK_ID)
+    assert result["status"] == "fail"
+    assert "UNDECLARED_SHARD" in _error_codes(result)
 
 
 def test_parallel_dev_refuses_a_timestamp_wrapped_in_arbitrary_characters(

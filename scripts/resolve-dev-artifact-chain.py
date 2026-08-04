@@ -399,13 +399,28 @@ def _validate_shard_set(
     task_id: str,
 ) -> None:
     """Delegate shard identity/baseline consistency and canonical freshness."""
-    shard_errors = aggregate._validate_shards(loaded_shards, task_id)
+    # The task-derived registry authority is the only baseline selector.  Load
+    # it once, then pass that exact verified object to both consumers below;
+    # neither shard agreement nor the canonical payload can replace it.
+    authority, authority_errors = aggregate._load_baseline_authority(
+        validator.root, task_id
+    )
+    for detail in authority_errors:
+        validator.error("INVALID_SHARD_SET", result["canonical_dev_report"], detail)
+
+    # Schema validation still runs when the independent authority is invalid so
+    # legacy shards remain fully diagnosed.  With authority=None the aggregate
+    # validator deliberately checks shape only and never infers a baseline.
+    shard_errors = aggregate._validate_shards(loaded_shards, task_id, authority)
     for detail in shard_errors:
         validator.error("INVALID_SHARD_SET", result["canonical_dev_report"], detail)
-    if shard_errors:
+    if authority_errors or authority is None or shard_errors:
         return
     expected = aggregate._build_aggregate(
-        loaded_shards, task_id, canonical.get(DECLARATION_KEY)
+        loaded_shards,
+        task_id,
+        authority,
+        canonical.get(DECLARATION_KEY),
     )
     canonical_dev = canonical.get("dev")
     if not isinstance(canonical_dev, dict):
@@ -442,6 +457,7 @@ def _base_result(task_id: str, canonical: str, completion: str) -> dict[str, Any
         "canonical_dev_report": canonical,
         "completion": completion,
         "parallel_workers": [],
+        "history_reports": [],
         "lanes": [],
         "optional_parent_artifacts": {},
         "report_paths": [],
@@ -522,24 +538,14 @@ def resolve_chain(project_root: Path | str, task_id: str) -> dict[str, Any]:
 
     try:
         aggregate = _load_aggregate_module()
-        bare_task_id = aggregate._bare_task_id(task_id)
-        scanned = []
-        try:
-            children = sorted(dev_dir.iterdir(), key=lambda path: path.name)
-        except OSError as exc:
-            validator.error(
-                "UNREADABLE_DEV_DIRECTORY", _rel(dev_dir, root), str(exc)
-            )
-            children = []
-        for child in children:
-            if not child.is_file():
-                continue
-            is_worker, label = aggregate._is_worker_for_task(
-                child.name, bare_task_id, task_id
-            )
-            if is_worker and label is not None:
-                scanned.append((label, child))
-        scanned.sort(key=lambda item: item[0])
+        discovery_declaration = canonical.get(DECLARATION_KEY) if declared else None
+        discovery = aggregate._discover_dev_reports(
+            dev_dir, task_id, discovery_declaration
+        )
+        scanned = list(discovery["active"])
+        result["history_reports"] = list(discovery["history"])
+        for issue in discovery["errors"]:
+            validator.error(issue["code"], issue["path"], issue["detail"])
     except Exception as exc:
         validator.error(
             "AGGREGATE_IMPLEMENTATION_ERROR",
@@ -737,6 +743,19 @@ def resolve_chain(project_root: Path | str, task_id: str) -> dict[str, Any]:
             {"task_id": task_id, "qa_report": _rel(parents["qa_report"], root)}
         ]
 
+    history_paths = [
+        item["path"]
+        for item in result["history_reports"]
+        if isinstance(item, dict) and isinstance(item.get("path"), str)
+    ]
+    # History stays audit-only: it is available to downstream integrity and
+    # commit whitelists, but never enters report_paths, qa_inputs, lanes,
+    # parallel_workers, unions, status, or baseline validation.
+    for path in history_paths:
+        if path not in result["artifact_paths"]:
+            result["artifact_paths"].append(path)
+        if path not in result["commit_whitelist_artifacts"]:
+            result["commit_whitelist_artifacts"].append(path)
     result["parallel_workers"] = workers
     result["errors"] = validator.errors
     result["status"] = "pass" if not validator.errors else "fail"

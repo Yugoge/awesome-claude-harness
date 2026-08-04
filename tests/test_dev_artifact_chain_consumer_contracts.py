@@ -259,3 +259,98 @@ def test_retry_report_naming_states_the_measured_exclusion_mechanism() -> None:
     assert "would therefore be verified ZERO times" in flat
     assert "is FORBIDDEN" in flat
     assert "not currently audited by any check" in flat
+
+
+def test_iteration_history_role_contract_is_shared_by_all_consumers() -> None:
+    dev = _read("commands/dev.md")
+    flat = _squash(dev)
+    for literal in (
+        "dev-report-iter<N>-<TASK_ID>-<lane>.json",
+        "dev_report_role",
+        'kind="active_lane_shard"',
+        'kind="iteration_history"',
+        "aggregation_eligible=false",
+        "canonical_shard_path",
+        "history_reports",
+        "metadata never overrides a contradictory path",
+        "Selection by mtime, ctime, directory order",
+    ):
+        assert literal in flat
+
+    aggregate = _read("scripts/aggregate-dev-report.py")
+    resolver = _read("scripts/resolve-dev-artifact-chain.py")
+    hook = _read("hooks/pretool-aggregate-check.py")
+    for code in (
+        "MISSING_DECLARED_SHARD",
+        "UNDECLARED_SHARD",
+        "INVALID_HISTORY_METADATA",
+        "AMBIGUOUS_DEV_REPORT_ROLE",
+        "HISTORY_WITHOUT_ACTIVE_SHARD",
+        "DUPLICATE_OR_UNSAFE_DEV_REPORT",
+    ):
+        assert code in aggregate
+    assert "_discover_dev_reports" in resolver
+    assert "_discover_dev_reports" in hook
+
+    project = Path("/root/.codex")
+    assert (ROOT / "scripts/aggregate-dev-report.py").read_bytes() == (
+        project / "scripts/aggregate-dev-report.py"
+    ).read_bytes()
+    assert (ROOT / "scripts/resolve-dev-artifact-chain.py").read_bytes() == (
+        project / "scripts/resolve-dev-artifact-chain.py"
+    ).read_bytes()
+    skill = Path("/root/.agents/skills/dev/SKILL.md").read_text(encoding="utf-8")
+    assert "versioned lineage object" in skill
+    assert "history_reports" in skill
+
+
+def test_dev_writer_requires_structured_baseline_on_first_write() -> None:
+    text = _read("agents/dev.md")
+    flat = _squash(text)
+
+    for field in (
+        "baseline_contract",
+        "baseline_head_sha",
+        "baseline_dirty_snapshot",
+        "baseline_dirty_snapshot_sha256",
+    ):
+        assert field in text
+    for root_class in (
+        "singular",
+        "requirement-fanout active-lane",
+        "parallel-dev active-worker",
+    ):
+        assert root_class in flat
+    assert "in its first published bytes" in flat
+    assert "Copy all four values verbatim from the task-derived dispatch authority" in flat
+    assert "MUST NOT yield an aggregation-eligible `dev.status=\"completed\"` root" in flat
+    assert "there is no missing-to-empty fallback" in flat
+    assert "Never reconstruct them from live `git status`" in flat
+    assert "If the dispatch payload contained no `baseline_dirty_snapshot`" not in text
+    assert "If `baseline_head_sha` is empty or absent" not in text
+
+
+def test_dev_writer_projection_and_dispatch_share_frozen_authority_contract() -> None:
+    canonical = _read("agents/dev.md")
+    generated = Path("/root/.codex/agents/dev.toml").read_text(encoding="utf-8")
+    command = _read("commands/dev.md")
+    skill = Path("/root/.agents/skills/dev/SKILL.md").read_text(encoding="utf-8")
+    command_flat = _squash(command)
+    skill_flat = _squash(skill)
+
+    for literal in (
+        "baseline_contract",
+        "baseline_head_sha",
+        "baseline_dirty_snapshot",
+        "baseline_dirty_snapshot_sha256",
+    ):
+        assert literal in canonical
+        assert literal in generated
+        assert literal in command
+        assert literal in skill
+    assert "there is no missing-to-empty fallback" in generated
+    assert "Copy all four values verbatim from the task-derived dispatch authority" in generated
+    assert "Missing or `null` projections are invalid" in command_flat
+    assert "Missing or `null` projections are invalid" in skill_flat
+    assert "A truly clean baseline is exactly a zero-byte regular snapshot" in command_flat
+    assert "A truly clean baseline is exactly a zero-byte regular snapshot" in skill_flat

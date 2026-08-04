@@ -812,16 +812,45 @@ After test-writer completes (or is skipped), the generated test file paths and m
 
 Run `bash ~/.claude/scripts/score-inject.sh --agent dev` and capture stdout into a variable `DEV_SCORE_HEADER`. Per spec 5.1 line 113, this injection text is inserted AFTER the role declaration and BEFORE the task instructions for the Dev dispatch.
 
-**Pre-dispatch baseline capture** (run BEFORE invoking the dev subagent):
+**Pre-dispatch frozen baseline authority** (create BEFORE invoking any Dev subagent):
 
-```bash
-baseline_head_sha=$(git -C "$CLAUDE_PROJECT_DIR" rev-parse HEAD 2>/dev/null || echo "")
-# baseline_dirty_snapshot is intentionally captured once before Dev dispatch;
-# see agents/dev.md for its point-in-time / concurrency semantics.
-baseline_dirty_snapshot=$(git -C "$CLAUDE_PROJECT_DIR" status --porcelain 2>/dev/null || echo "")
+Capture the HEAD and raw `git status --porcelain=v1` bytes exactly once into
+`.claude/dev-registry/<normalized-cycle-id>/baseline-dirty.txt`. Do not use shell
+command substitution for the snapshot: it strips trailing newlines and makes a
+true zero-byte clean capture indistinguishable from an uncaptured value. Write a
+sibling `baseline-authority.json` before fan-out with this versioned schema:
+
+```json
+{
+  "version": 1,
+  "cycle_id": "<normalized-cycle-id>",
+  "capture_phase": "pre_dev_fanout",
+  "descriptor_origin": "pre_dispatch_native",
+  "descriptor_created_by_task": "<task-id>",
+  "head_sha": "<captured HEAD>",
+  "dirty_snapshot": {
+    "path": ".claude/dev-registry/<normalized-cycle-id>/baseline-dirty.txt",
+    "sha256": "<SHA-256 of raw bytes>",
+    "size_bytes": "<raw byte count as integer>",
+    "line_count": "<raw splitlines count as integer>",
+    "encoding": "utf-8",
+    "trailing_lf": "<boolean derived from raw bytes>",
+    "state": "<clean only for zero bytes, otherwise dirty>",
+    "serialization": "git_status_porcelain_v1_raw_text"
+  }
+}
 ```
 
-Both values MUST be passed into the dev dispatch payload body (see below). If the repo has no commits yet, `baseline_head_sha` will be empty — pass it as empty string, not omitted.
+The authority descriptor and snapshot are cycle-owned inputs, not shard claims.
+Every Dev dispatch receives the identical structured `baseline_contract` plus
+three deterministic compatibility projections: `baseline_head_sha` equals the
+authority HEAD, `baseline_dirty_snapshot` is the exact UTF-8 decoding of the raw
+snapshot bytes, and `baseline_dirty_snapshot_sha256` is their SHA-256. Missing or
+`null` projections are invalid. An empty snapshot projection is valid only for
+a zero-byte authority whose digest is the empty-byte digest and whose state is
+`clean`; empty never means "not captured". The capture is immutable after
+fan-out. A later dirty-tree observation must use a separately named field and
+must never repair, replace, or influence this baseline.
 
 **Use Task tool to invoke dev subagent with file paths only**:
 
@@ -846,8 +875,10 @@ Use Task tool with:
   View file: <view_paths.dev or null — sibling views/dev.md if present>
   Generated tests (when test-writer ran): tests/generated/<task_id>/ + per-task active manifest at tests/generated/<task_id>/manifest.json. Global index file tests/generated/manifest.json (index) is a presence sentinel only — see Step 10 test-writer dispatch for full shape.
   Write your implementation report to: docs/dev/dev-report-<timestamp>.json
-  baseline_head_sha: <baseline_head_sha captured above>
-  baseline_dirty_snapshot: <baseline_dirty_snapshot captured above>
+  baseline_contract: <exact cycle-owned baseline-authority.json object>
+  baseline_head_sha: <exact authority head_sha projection>
+  baseline_dirty_snapshot: <exact UTF-8 decoding of frozen raw snapshot bytes>
+  baseline_dirty_snapshot_sha256: <SHA-256 of frozen raw snapshot bytes>
 
   If Spec file is not null: Read the spec file FIRST for context. After implementation, update the spec: Section 2 (What Was Attempted) with your approach and rationale. Section 3 (What Was Changed) with exact file:line edits.
   If View file is not null: you may read the view instead of the full monolith — it contains only the sections relevant to dev (S1, S2, S3, S7, S8) and is a byte-slice of the monolith.
@@ -866,8 +897,8 @@ Use Task tool with:
 - `request_id` = `<task-id>`; `dev_report_path` = canonical singular path
 - `parallel_workers` = list of per-worker ids
 - `dev.status`, `dev.tasks_completed`, `dev.scripts_created`, `dev.permissions_to_add`, `dev.files_modified`, `dev.files_created`, `blocking_issues`, `recommendations` = unions of per-worker reports
-- `baseline_head_sha` = equality-verified across all workers (aggregate status = `"blocked"` if any worker disagrees, citing `baseline_head_sha` mismatch); value taken from orchestrator dispatch
-- `baseline_dirty_snapshot` = equality-verified across all workers (aggregate status = `"blocked"` if any worker disagrees, citing `baseline_dirty_snapshot` mismatch); value taken verbatim from orchestrator dispatch
+- The aggregator derives `.claude/dev-registry/<normalized-cycle-id>/baseline-authority.json` from the requested task ID, stably reads and recomputes the frozen regular snapshot, and compares every shard's `baseline_contract` and compatibility projections to that authority. No shard, first non-empty value, shard consensus, arbitrary path, or live dirty tree can select the expected baseline.
+- Baseline errors use stable `BASELINE_*` causes and remain distinct from `SHARD_STATUS_NOT_COMPLETED`. Any baseline or status failure returns non-zero without creating or changing canonical bytes. A valid aggregate sources all baseline fields only from the verified cycle authority and writes atomically.
 - `dev.observed_preexisting` = UNION of all per-worker `dev.observed_preexisting` lists
 - The orchestrator invokes `source venv/bin/activate && python3 scripts/aggregate-dev-report.py --task-id "$TASK_ID"` to write the initial canonical aggregate. Capture stdout JSON; action field will be `"aggregated"`, `"validated"`, or `"skipped"`. This initial invocation selects only the filename-declared Step 10 worker shards; iteration reports are never discovered by mtime, directory order, or a `latest` heuristic. Do NOT modify the `/commit` command implementation (`~/.claude/commands/commit.md`).
 
@@ -897,7 +928,7 @@ source venv/bin/activate && python3 scripts/aggregate-dev-report.py \
   --task-id "$TASK_ID" --shape requirement_fanout --declared-lanes a,b,c
 ```
 
-`--declared-lanes` names the DECOMPOSED lanes, not the shards found on disk: a lane that was dispatched but produced nothing MUST still appear, which is exactly how it stays visible to the resolver. `parallel_workers` keeps its existing meaning — the traceability list of shards actually found — and can never double as the roster. A declaration-less invocation stays supported for legacy compatibility only and keeps the strict pre-declaration behaviour; absence NEVER grants the lax shape.
+`--declared-lanes` names the DECOMPOSED lanes, not the shards found on disk: a lane that was dispatched but produced nothing MUST still appear, which is exactly how it stays visible to the resolver. For `requirement_fanout`, the only active candidate for lane `L` is the exact root `docs/dev/dev-report-<TASK_ID>-<L>.json`; `parallel_workers`, unions, status, and baseline checks use those roots in declaration order. Every other task-correlated top-level dev-report is audited as valid history, undeclared, malformed, ambiguous, orphaned, duplicated/aliased, unsafe, or unrelated. History can never substitute for a missing root, and `aggregation_eligible=false` can never hide an undeclared root. `parallel_workers` keeps its existing meaning — active roots only — and can never double as the roster. A declaration-less invocation stays supported for legacy compatibility only and keeps the strict pre-declaration behaviour; absence NEVER grants the lax shape.
 
 **Single-dev cycles**: mark this todo step waived (skip). The aggregate-check hook does not fire for single-dev cycles because only one per-worker file pattern can match.
 
@@ -923,9 +954,9 @@ stays as-is.
 - `dev_report_path` = `docs/dev/dev-report-<task-id>.json` (the canonical path)
 - `parallel_workers` = list of per-worker ids `["<worker-id>", ...]`
   (top-level field for traceability; sources the per-worker reports)
-- `baseline_head_sha` = equality-verified across all workers: assert every worker's `baseline_head_sha` equals the orchestrator's dispatch value; if any worker differs, set aggregate `dev.status = "blocked"` and append a `blocking_issues` entry citing `baseline_head_sha` mismatch. Value in the aggregate is taken from the orchestrator dispatch (not unioned from workers).
-- `baseline_dirty_snapshot` = equality-verified across all workers: assert every worker's `baseline_dirty_snapshot` equals the orchestrator's dispatch value (the `git status --porcelain` string captured pre-dispatch); if any worker differs, set aggregate `dev.status = "blocked"` and append a `blocking_issues` entry citing `baseline_dirty_snapshot` mismatch. Value in the aggregate is taken verbatim from the orchestrator dispatch.
-- `dev.status` = `"completed"` iff ALL workers reported `"completed"` **and** no `baseline_head_sha` / `baseline_dirty_snapshot` mismatch was found during equality verification above; otherwise `"blocked"` with rationale in `blocking_issues`
+- `baseline_contract`, `baseline_head_sha`, `baseline_dirty_snapshot`, and `baseline_dirty_snapshot_sha256` are independently reconstructed from the task-derived cycle authority, never selected from a shard. Every worker must carry exact matching values. Missing/null/legacy ambiguous forms, path-as-content, dirty-empty, wrong cycle/path, symlink/non-regular authority, digest/metadata mismatch, or changed-during-read authority is a blocking `BASELINE_*` validation error.
+- A truly clean baseline is exactly a zero-byte regular snapshot, the empty-byte SHA-256, `size_bytes=0`, `state="clean"`, and an empty compatibility projection. No other empty form is accepted. Current post-development dirty state is non-authoritative and excluded from baseline selection and equality.
+- `dev.status` = `"completed"` only when ALL workers reported `"completed"` and authority/shard validation is clean. Any validation failure returns non-zero and writes no canonical bytes; an existing canonical remains byte-identical. Status failures remain machine-distinct as `SHARD_STATUS_NOT_COMPLETED` and are never suppressed by baseline normalization.
 - `dev.tasks_completed` = UNION of all per-worker `dev.tasks_completed`
 - `dev.scripts_created` = UNION of all per-worker `dev.scripts_created`
 - `dev.permissions_to_add` = UNION of all per-worker `dev.permissions_to_add`
@@ -942,8 +973,10 @@ stays as-is.
   "request_id": "<task-id>",
   "task_id": "<task-id>",
   "timestamp": "<ISO-8601>",
-  "baseline_head_sha": "<orchestrator dispatch value — equality-verified across all workers>",
-  "baseline_dirty_snapshot": "<orchestrator dispatch value — equality-verified across all workers>",
+  "baseline_contract": "<exact verified cycle-authority object>",
+  "baseline_head_sha": "<verified authority head_sha>",
+  "baseline_dirty_snapshot": "<exact UTF-8 decoding of frozen raw bytes>",
+  "baseline_dirty_snapshot_sha256": "<SHA-256 of frozen raw bytes>",
   "dev_report_path": "docs/dev/dev-report-<task-id>.json",
   "parallel_workers": ["pcwd", "ppush"],
   "dev": {
@@ -1260,12 +1293,36 @@ jq -s '.[0] * {
 
 **Retry report naming (MANDATORY — a retry report must never END with the TASK_ID)**:
 
-A retry report is distinguishable from the immutable initial shard by placement,
-not by promotion: there is NO promotion barrier, NO lineage declaration, and NO
-re-aggregation requirement before QA. Two forms only:
+A new lane retry is distinguishable from the immutable active root by BOTH an
+exact path and a closed versioned lineage object. It is append-only audit
+history, never a promoted shard and never an aggregate voter:
 
-- parallel-dev cycle (a lane exists): `docs/dev/dev-report-iter<N>-<TASK_ID>-<lane>.json`
-- singular cycle (no lane exists): `docs/dev/iterations/dev-report-iter<N>-<TASK_ID>.json`
+- declared lane: `docs/dev/dev-report-iter<N>-<TASK_ID>-<lane>.json`, where
+  `N` matches `[1-9][0-9]*`;
+- singular cycle (no lane exists):
+  `docs/dev/iterations/dev-report-iter<N>-<TASK_ID>.json` under the unchanged
+  singular archive contract below.
+
+Every new declared-lane active root carries `dev_report_role` version 1 with
+`kind="active_lane_shard"`, `aggregation_eligible=true`, `parent_task_id` equal
+to `<TASK_ID>`, `lane` equal to the declared lane, integer `iteration=0`, and
+`canonical_shard_path` equal to its own exact root path. Every new lane history
+carries the same seven keys but uses `kind="iteration_history"`,
+`aggregation_eligible=false`, and integer `iteration=N`. Its top-level
+`request_id` and `task_id` remain `<TASK_ID>-<lane>` and `dev_report_path` is the
+history file itself. Filename, declaration, identities, self path, numeric
+iteration, and canonical-root lineage must agree exactly; metadata never
+overrides a contradictory path. The active root must exist and explicitly
+reference the exact history path. Selection by mtime, ctime, directory order,
+`latest`, or highest iteration is forbidden.
+
+Existing active roots without `dev_report_role` retain exact-path legacy
+compatibility. Existing suffix histories are not rewritten and are admitted
+only by the closed D-style suffix-identity or E-style lane-identity-plus-
+iteration profiles implemented by the shared classifier. A one-field mismatch,
+missing/foreign root, missing exact lineage reference, symlink/alias, or role
+collision blocks with a dedicated artifact-classification error. Status and
+baseline messages may name only real active lanes.
 
 What keeps those two out of the worker-shard set is NOT the `iter<N>-` prefix.
 `PER_WORKER_ROLE_FIRST_RE` in `scripts/aggregate-dev-report.py` /
@@ -1408,8 +1465,11 @@ The fixed entrypoint contract is
 Completion requires process exit 0 and top-level `status == "pass"`; exit 2 or
 `status == "fail"` blocks with the resolver's exact `errors[]`. Do not reproduce
 the validator with ad-hoc file tests. The same result object (`mode`, `lanes`,
-`report_paths`, `artifact_paths`, `commit_whitelist_artifacts`, and `qa_inputs`)
-is the downstream handoff used by `/close` and normal `/commit`.
+`history_reports`, `report_paths`, `artifact_paths`,
+`commit_whitelist_artifacts`, and `qa_inputs`) is the downstream handoff used by
+`/close` and normal `/commit`. `history_reports` is audit-only: its paths may
+join artifact integrity/commit whitelists but never `report_paths`, `qa_inputs`,
+`lanes`, `parallel_workers`, unions, status, or baseline validation.
 
 - **Single-lane cycle (N == 1):** `mode == "singular"` preserves the existing
   five-artifact contract: parent ticket, context, dev-report, QA-report, and
