@@ -232,3 +232,23 @@ def test_mode_sensitive_consumers_admit_the_parallel_dev_shape() -> None:
     assert "`parallel_dev` mode" in flat
     assert "every per-worker dev-report named in `report_paths`" in flat
     assert "do not invent lane contexts or a parent context" in flat
+
+
+def test_retry_report_naming_states_the_measured_exclusion_mechanism() -> None:
+    """dev.md must not re-assert that the `iter<N>-` prefix does the excluding.
+
+    Task 20260803-150741: that claim is false for a bare-timestamp TASK_ID with
+    no lane, and believing it is what produced this cycle's flat lane-less retry
+    reports and its AMBIGUOUS_SINGULAR_CHAIN. The executable truth table lives in
+    tests/test_aggregate_dev_report.py::TestRetryReportNaming.
+    """
+    flat = _squash(_read("commands/dev.md"))
+
+    assert "a retry report must never END with the TASK_ID" in flat
+    assert "docs/dev/iterations/dev-report-iter<N>-<TASK_ID>.json" in flat
+    assert "What keeps those two out of the worker-shard set is NOT the `iter<N>-` prefix" in flat
+    assert "applies NEITHER `NON_WORKER_LABELS` NOR `NON_WORKER_LABEL_RE`" in flat
+    assert "IS classified as a worker shard labelled `iter<N>`" in flat
+    assert "Do NOT relax the classifier to accommodate the flat form" in flat
+    # Verbatim-regression guard for the refuted sentence.
+    assert "The `iter<N>-` filename prefix matches none of the worker-shard patterns" not in flat

@@ -520,3 +520,54 @@ class TestDryRun:
         out = json.loads(capsys.readouterr().out)
         assert out["action"] == "skipped"
         assert not (dev_dir / f"dev-report-{BARE_TID}.json").exists()
+
+
+# ---------------------------------------------------------------------------
+# Retry-report naming: pin the MEASURED classifier truth table
+# ---------------------------------------------------------------------------
+
+class TestRetryReportNaming:
+    """commands/dev.md once claimed the `iter<N>-` PREFIX excluded a retry
+    report from the worker-shard set. Measured (task 20260803-150741): it does
+    not. `PER_WORKER_ROLE_FIRST_RE` matches `dev-report-<role>-<bare-tid>.json`
+    and its branch applies neither NON_WORKER_LABELS nor NON_WORKER_LABEL_RE,
+    so the flat lane-less form IS a worker shard. The exclusion actually comes
+    from a trailing `-<lane>`, a `dev-`prefixed task-id, or the non-recursive
+    `iterations/` subdirectory.
+
+    These assertions are deliberately TIGHTENING pins. Relaxing the role-first
+    branch to honour the exclusion set would flip 6 legacy project cycles from
+    fail to pass, which is the project's defined signal of a weakened check.
+    """
+
+    def test_flat_lane_less_retry_is_a_worker_shard_in_both_copies(self):
+        name = f"dev-report-iter3-{BARE_TID}.json"
+        assert _is_worker_for_task(name, BARE_TID, BARE_TID) == (True, "iter3")
+        assert _hook_mod._classify_filename(name) == ("worker", BARE_TID, "iter3")
+
+    def test_documented_safe_forms_are_excluded_in_both_copies(self):
+        for name in (
+            f"dev-report-iter3-{BARE_TID}-lane.json",  # trailing lane segment
+            f"dev-report-iter3-{PREFIXED_TID}.json",   # dev-prefixed task-id
+        ):
+            assert _is_worker_for_task(name, BARE_TID, PREFIXED_TID) == (False, None)
+            assert _hook_mod._classify_filename(name) is None
+
+    def test_role_first_branch_ignores_the_exclusion_set_in_both_copies(self):
+        """Every documented non-worker label is promoted in role-first position."""
+        for label in sorted(_mod.NON_WORKER_LABELS) + ["iter", "iter9", "retry", "attempt2"]:
+            name = f"dev-report-{label}-{BARE_TID}.json"
+            assert _is_worker_for_task(name, BARE_TID, BARE_TID) == (True, label)
+            assert _hook_mod._classify_filename(name) == ("worker", BARE_TID, label)
+
+    def test_iterations_subdirectory_is_outside_both_non_recursive_scans(
+        self, project_dir: Path
+    ):
+        dev_dir = project_dir / "docs" / "dev"
+        _write(dev_dir, f"dev-report-{BARE_TID}.json", _good_shard())
+        (dev_dir / "iterations").mkdir(parents=True, exist_ok=True)
+        _write(dev_dir / "iterations", f"dev-report-iter3-{BARE_TID}.json", _good_shard())
+
+        assert _mod._scan_shards(dev_dir, BARE_TID, BARE_TID) == []
+        workers, _canonical = _hook_mod._scan_dev_dir(dev_dir)
+        assert BARE_TID not in workers
