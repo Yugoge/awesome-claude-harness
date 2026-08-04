@@ -205,6 +205,8 @@
       "Edit(**/*password*)",
       "Edit(**/passwd)",
       "Edit(**/shadow)",
+      "Edit(//etc/passwd)",
+      "Edit(//etc/shadow)",
       "Bash(rm -rf /:*)",
       "Bash(rm -rf /*:*)",
       "Bash(dd:*)",
