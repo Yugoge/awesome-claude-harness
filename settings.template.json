@@ -166,8 +166,6 @@
       "Bash({{CLAUDE_HOME}}/scripts/write-qa-mode.sh:*)",
       "Edit(.claude/agents/**)",
       "Edit(.claude/commands/**)",
-      "Write(.claude/agents/**)",
-      "Write(.claude/commands/**)",
       "Bash(source {{CLAUDE_HOME}}/venv/bin/activate && python {{CLAUDE_HOME}}/hooks/lib/close-verdict.py:*)",
       "Bash(scripts/score-update.sh:*)",
       "Bash(scripts/score-inject.sh:*)",
