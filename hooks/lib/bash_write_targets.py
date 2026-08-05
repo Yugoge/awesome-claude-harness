@@ -450,6 +450,7 @@ def extract_bash_write_paths(command: str) -> List[str]:
         return []
     stripped = command_without_heredoc_bodies(command)
     stripped = _strip_reason_payload(stripped)
+    stripped = _neutralize_command_word_prefixes(stripped)
     targets: List[str] = []
     targets.extend(_extract_redirect_targets(stripped))
     targets.extend(_extract_tee_targets(stripped))
