@@ -86,7 +86,17 @@ A blanket prohibition with no escape blocks legitimate work, so the escape is a
   `{"op": "Write", "target": "/absolute/path"}`.
 - Matched by the existing `hooks/lib/allowlist.py::match_sentinel_grant_for_write`.
   **No new operation name, no new issuance channel, and no modification to the
-  shared matcher.** An agent cannot mint its own grant.
+  shared matcher.**
+- **Correction, measured rather than assumed**: the specification for this work
+  asserted that "an agent cannot mint its own grant". That is **false as
+  shipped**, and pretending otherwise would be the exact species of unverified
+  claim this document exists to avoid. The sentinel grant is an ordinary JSON
+  file under `/tmp/claude-grants/`; creating it is *creation of a path that does
+  not exist*, which is never denied — by binding requirement. An agent can
+  therefore mint a grant naming any target and then replace that target. See
+  `grant-self-minting` in section 6, where it is demonstrated by execution.
+  This guard adds **no** new issuance channel; it inherits an escape hatch whose
+  file-level integrity was never enforced.
 - Consumed on any terminal result by the existing
   `hooks/posttool-allowlist-consume.py`.
 - The grant must carry an explicit **absolute** target. Both the grant target
