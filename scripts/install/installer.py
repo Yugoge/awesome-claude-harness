@@ -818,6 +818,23 @@ def build_plan(ctx: Ctx) -> dict:
     if change:
         add("prefix", iso_settings_rel, "file", change, "generated isolated-root settings")
 
+    # ---- self-management bundle (R9) ----------------------------------------
+    # Explicit, non-recursive, versioned. A recursive copy of scripts/install/
+    # would re-import the acceptance harness and every future sibling file.
+    unbundled = verify_bundle_self_contained(engine_source_bytes())
+    if unbundled:
+        raise Refusal(
+            "the engine imports modules that the self-management bundle would not "
+            f"carry: {', '.join(unbundled)}. Shipping it would leave an unremovable "
+            "payload once the source checkout moves. Nothing was written.")
+    need_dir(f"{sub}/{SELF_MANAGE_REL}", "self-management bundle directory")
+    for artifact in SELF_MANAGE_FILES:
+        rel_sm = f"{sub}/{SELF_MANAGE_REL}/{artifact}"
+        change = _file_change(ctx.prefix / rel_sm, self_manage_bytes(ctx, artifact))
+        if change:
+            add("prefix", rel_sm, "file", change,
+                "self-management bundle: uninstall without the source checkout")
+
     # ---- config home tree (the user's) --------------------------------------
     ch = ctx.config_home
     if not ch.exists():
