@@ -961,8 +961,10 @@ def check_claims(args, report):
             report.ok(f"ledger registered-hook rows are set-equal to the {len(derived)} "
                       f"settings-derived hooks (both symmetric differences empty)")
 
-    # 8. Every file:line citation in threat-model section 4 is revision-pinned.
+    # 8. Every file:line citation in threat-model section 4 is revision-pinned, and every
+    #    residual-risk entry states its status exactly once, in its own normalized field.
     tm = read_text(args.threat_model)
+    check_risk_status(tm, report)
     section = re.search(r"(?ims)^##\s+4\.\s+Known Residual Risks.*?(?=^##\s+\d|\Z)", tm)
     if not section:
         report.fail("threat model section 4 not found")
