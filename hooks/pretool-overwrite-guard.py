@@ -427,6 +427,9 @@ def main() -> int:
             grants.append(off)
 
     decision = "refused" if ungranted else "permitted_by_grant"
+    consumed = _consume_grants(grants) if decision == "permitted_by_grant" else []
+    if decision == "permitted_by_grant" and not consumed:
+        decision = "refused_grant_not_consumed"
     sink = str(audit_log_path())
     audit_ok = persist_audit_row({
         "timestamp": _now(),
@@ -435,6 +438,7 @@ def main() -> int:
         "mechanism": [off["mechanism"] for off in offenders],
         "write_mode": [off["write_mode"] for off in offenders],
         "grant_identity": [off.get("grant_identity") for off in offenders],
+        "grant_consumed": consumed,
         "session_id": session_id,
         "task_id": task_id,
         "guard": GUARD_RELPATH,
