@@ -611,6 +611,47 @@ def check_ledger(args, report):
     text = read_text(args.ledger_file)
     tabs = ledger_tables(args.ledger_file)
 
+    # 0a. No published claim may exceed what the checks below establish.
+    normalized_doc = normalize_prose(text)
+    overclaims = [why for pattern, why in FORBIDDEN_CLAIM_PATTERNS
+                  if re.search(pattern, normalized_doc)]
+    if overclaims:
+        for why in sorted(set(overclaims)):
+            report.fail(f"published-claim scope: the ledger carries {why} -- the gate "
+                        f"establishes less than that")
+    else:
+        report.ok("no published claim in the ledger exceeds this gate's demonstrated scope")
+
+    # 0b. The header must enumerate which columns are derived and which are authored, so the
+    #     reader can see the boundary rather than infer it from an unqualified sentence.
+    header = normalize_prose(ledger_header_block(text))
+    missing_derived = [f for f in DERIVED_ROW_FIELDS if f not in header]
+    missing_authored = [f for f in AUTHORED_ROW_FIELDS if f not in header]
+    if missing_derived or missing_authored:
+        if missing_derived:
+            report.fail(f"ledger header does not name the derived column(s) {missing_derived}")
+        if missing_authored:
+            report.fail(f"ledger header does not name the authored column(s) {missing_authored}")
+    else:
+        report.ok(f"ledger header names all {len(DERIVED_ROW_FIELDS)} derived and "
+                  f"{len(AUTHORED_ROW_FIELDS)} authored registered-hook columns")
+
+    # 0c. Every companion document the header cites must exist. A citation to a document that
+    #     is not there is a broken evidence chain, not a formatting problem.
+    companions = companion_paths(ledger_header_block(text))
+    if companions is None:
+        report.fail("ledger header cites no companion documents -- the 'Companion documents:' "
+                    "block is missing or unparseable")
+    else:
+        root = Path(args.root)
+        absent = [rel for rel in companions if not (root / rel).exists()]
+        if absent:
+            for rel in absent:
+                report.fail(f"companion document cited by the ledger header does not exist: "
+                            f"{rel} (resolved against {root})")
+        else:
+            report.ok(f"all {len(companions)} companion documents cited by the header exist")
+
     published = declared_schema_block(text)
     if published != DECLARED_SCHEMA:
         report.fail(
