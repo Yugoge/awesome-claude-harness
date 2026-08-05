@@ -344,6 +344,267 @@ def declared_schema_block(ledger_text):
 
 
 # ---------------------------------------------------------------------------
+# Prose normalization and anchored-region extraction.
+# ---------------------------------------------------------------------------
+def normalize_prose(text):
+    """Strip per-line blockquote markers, then collapse all whitespace to single spaces.
+
+    Published prose wraps at ~95 columns and blockquoted paragraphs carry an interposed '>'
+    on every continuation line, so a single-line literal never matches the raw bytes. An
+    absence assertion written against the raw text therefore passes vacuously -- the exact
+    newline-intolerance defect this gate exists to catch elsewhere.
+    """
+    stripped = [re.sub(r"^\s*>\s?", "", line) for line in text.split("\n")]
+    return re.sub(r"\s+", " ", " ".join(stripped)).strip()
+
+
+def ledger_header_block(ledger_text):
+    """Everything before the '## 1. Vocabulary' heading -- the claim-bearing header."""
+    match = re.search(r"(?ms)^##\s+1\.\s+Vocabulary", ledger_text)
+    return ledger_text[: match.start()] if match else ledger_text
+
+
+def companion_paths(header_text):
+    """Repo-relative companion paths PARSED from the header, never hardcoded here.
+
+    A hardcoded list would let the header cite a document that does not exist while the gate
+    happily checked three unrelated paths it was born knowing.
+    """
+    match = re.search(r"(?is)Companion documents:(.*?)(?:\n\s*\n|\Z)", header_text)
+    if not match:
+        return None
+    return sorted({p for p in re.findall(r"`([^`]+)`", match.group(1))
+                   if "/" in p and re.search(r"\.[A-Za-z0-9]+$", p)})
+
+
+def published_token_region(ledger_text, label):
+    """Return the anchored publication region for one token set, or None if absent.
+
+    Token validation MUST be scoped to this region. Matching a token anywhere in the document
+    is vacuous: '>' occurs on every blockquote line and '<' inside HTML comment delimiters, so
+    two of the seven redirection operators were satisfied by unrelated prose.
+    """
+    match = re.search(
+        r"<!--\s*published-tokens:%s:begin\s*-->(.*?)<!--\s*published-tokens:%s:end\s*-->"
+        % (re.escape(label), re.escape(label)),
+        ledger_text,
+        re.S,
+    )
+    return match.group(1) if match else None
+
+
+# ---------------------------------------------------------------------------
+# Semantic extraction of the wrapper token set.
+# ---------------------------------------------------------------------------
+def extract_wrappers(classifier_src):
+    """Return sorted _WRAPPERS via ast.parse + literal_eval, or None if not found.
+
+    The previous lexical scrape re.findall(r"'([^']+)'") saw only SINGLE-quoted tokens, so a
+    double-quoted widening of the set left the count unchanged and the gate passed while the
+    residual class named in the published matrix had actually grown.
+    """
+    try:
+        tree = ast.parse(classifier_src)
+    except SyntaxError:
+        return None
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Assign):
+            continue
+        for target in node.targets:
+            if isinstance(target, ast.Name) and target.id == "_WRAPPERS":
+                try:
+                    return sorted(ast.literal_eval(node.value))
+                except Exception:  # noqa: BLE001
+                    return None
+    return None
+
+
+# ---------------------------------------------------------------------------
+# Shell-aware structural gate census.
+#
+# A Python parser cannot parse shell, so the wrapper set's ast treatment does not extend here.
+# What DOES extend is the principle: count the STRUCTURE, not one spelling of it. Every guard
+# condition is canonicalized -- quotes stripped, `${X}` and `$X` unified, and the operands of
+# the symmetric comparison operators sorted -- so `[ "ok" != "${CLASSIFIER_STATUS}" ]` and
+# `[ "$CLASSIFIER_STATUS" != "ok" ]` produce the same key and a respelled guard can no longer
+# hide. No marker comment, sentinel or other implementer-authored label is read from the shell
+# source: this repository's doctrine rejects trusting an implementer's self-applied label.
+# ---------------------------------------------------------------------------
+_SHELL_VAR_RE = re.compile(r"^\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?$")
+_SHELL_WORD_RE = re.compile(r"\"[^\"]*\"|'[^']*'|\S+")
+_SHELL_TEST_RE = re.compile(r"(?<![\w$])\[\[?[ \t]+(.+?)[ \t]+\]\]?(?!\w)")
+_SYMMETRIC_OPS = {"=": "=", "==": "=", "!=": "!="}
+
+
+def _canon_word(word):
+    """Canonicalize one shell word: strip quoting, unify `${X}` / `$X` / `"$X"`."""
+    text = word.strip()
+    while len(text) >= 2 and text[0] == text[-1] and text[0] in "\"'":
+        text = text[1:-1]
+    match = _SHELL_VAR_RE.match(text)
+    return "$" + match.group(1) if match else text
+
+
+def _canon_predicates(condition):
+    """Canonical comparison keys for every bracket test inside one condition."""
+    keys = set()
+    for test in _SHELL_TEST_RE.findall(condition):
+        words = _SHELL_WORD_RE.findall(test)
+        for i, word in enumerate(words):
+            op = _SYMMETRIC_OPS.get(word)
+            if not op or i == 0 or i + 1 >= len(words):
+                continue
+            operands = sorted((_canon_word(words[i - 1]), _canon_word(words[i + 1])))
+            keys.add(f"{op}:{operands[0]}|{operands[1]}")
+    return keys
+
+
+def _var_refs(text):
+    return set(re.findall(r"\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?", text))
+
+
+def _shell_if_statements(src):
+    """[(order, condition, body)] for every if/elif, with line continuations joined.
+
+    `fi` closes only `if`, so tracking that one keyword pair is enough to delimit bodies
+    without a full shell grammar.
+    """
+    joined = re.sub(r"\\\n[ \t]*", " ", src)
+    lines = joined.split("\n")
+    statements, stack = [], []
+    for index, line in enumerate(lines):
+        head = line.strip()
+        if head.startswith("if ") or head.startswith("elif "):
+            condition = re.sub(r";?\s*then\s*$", "", head.split(" ", 1)[1])
+            statements.append({"order": index, "condition": condition, "body_lines": []})
+            if head.startswith("if "):
+                stack.append(len(statements) - 1)
+        elif head == "fi" and stack:
+            stack.pop()
+            continue
+        for open_index in stack:
+            statements[open_index]["body_lines"].append(line)
+    return [(s["order"], s["condition"], "\n".join(s["body_lines"])) for s in statements]
+
+
+def _grep_matches_symbol(src, symbol):
+    """Count `grep` invocations carrying BOTH -E and -q whose pattern names `symbol`.
+
+    Flag clustering and order are normalized (`-qE`, `-Eq`, `-q -E` are one shape), and the
+    symbol is matched by exact name so a DIFFERENT variable with a common prefix is not
+    miscounted as this one.
+    """
+    joined = re.sub(r"\\\n[ \t]*", " ", src)
+    ref = re.compile(r"\$\{%s\}|\$%s\b" % (re.escape(symbol), re.escape(symbol)))
+    count = 0
+    for match in re.finditer(r"(?<![\w./-])grep\b", joined):
+        tail = joined[match.end(): match.end() + 400].split("\n")[0]
+        words, flags, rest = _SHELL_WORD_RE.findall(tail), set(), []
+        for word in words:
+            if word.startswith("-") and not rest:
+                flags |= set(word[1:])
+            else:
+                rest.append(word)
+        if {"E", "q"} <= flags and any(ref.search(word) for word in rest):
+            count += 1
+    return count
+
+
+def shell_gate_census(bash_src):
+    """Structurally derive the A/B/C gate counts from the shell source.
+
+    A = a COMPLETE gate: a classifier-primary arm and a status-not-ok fallback arm whose
+        results converge on one later decision. A bare dangling comparison is not a gate and
+        is deliberately NOT counted -- counting one would be a substring check wearing a
+        structural label.
+    B = an unconditional GIT_CMD_RE grep branch.
+    C = a branch guarded on the path-qualified classifier flag.
+    """
+    statements = _shell_if_statements(bash_src)
+    primary_key = '=:$CLASSIFIER_STATUS|ok'
+    fallback_key = '!=:$CLASSIFIER_STATUS|ok'
+    pq_key = '=:$CLASSIFIER_HAS_PATH_QUALIFIED_GIT|1'
+
+    primaries, fallbacks, architecture_c = [], [], 0
+    for order, condition, body in statements:
+        keys = _canon_predicates(condition)
+        assigned = set(re.findall(r"([A-Za-z_][A-Za-z0-9_]*)=1\b", body))
+        if primary_key in keys and assigned:
+            primaries.append((order, assigned))
+        if fallback_key in keys and assigned:
+            fallbacks.append((order, assigned))
+        if pq_key in keys:
+            architecture_c += 1
+
+    # A unit exists only where one later condition reads BOTH arms' decision variables.
+    pairs = set()
+    for order, condition, _ in statements:
+        referenced = _var_refs(condition)
+        for p_order, p_vars in primaries:
+            for f_order, f_vars in fallbacks:
+                if order > max(p_order, f_order) and (p_vars & referenced) and \
+                        (f_vars & referenced):
+                    pairs.add((p_order, f_order))
+    return {
+        "architecture_a": len(pairs),
+        "architecture_b": _grep_matches_symbol(bash_src, "GIT_CMD_RE"),
+        "architecture_c": architecture_c,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Threat-model residual-risk status field.
+# ---------------------------------------------------------------------------
+STATUS_LINE_RE = re.compile(r"^status:[ \t]*([A-Z][A-Z ]*[A-Z])[ \t]*$", re.M)
+BARE_STATUS_TOKEN_RE = re.compile(r"\b(?:UN)?MITIGATED\b")
+
+
+def risk_blocks(threat_model_text):
+    """{risk_id: block_text} for every '### RISK-N:' entry."""
+    blocks, matches = {}, list(re.finditer(r"(?m)^###\s+(RISK-\d+)\s*:", threat_model_text))
+    for index, match in enumerate(matches):
+        end = matches[index + 1].start() if index + 1 < len(matches) else len(threat_model_text)
+        next_section = re.search(r"(?m)^##\s+\d", threat_model_text[match.end(): end])
+        if next_section:
+            end = match.end() + next_section.start()
+        blocks[match.group(1)] = threat_model_text[match.start(): end]
+    return blocks
+
+
+def check_risk_status(threat_model_text, report):
+    """Exactly one normalized status line per entry, valued in that entry's accepted set,
+    with no bare MITIGATED/UNMITIGATED token anywhere else in the block."""
+    blocks = risk_blocks(threat_model_text)
+    accepted_map = DECLARED_SCHEMA["risk_status"]
+    clean = True
+    for risk_id, accepted in accepted_map.items():
+        block = blocks.get(risk_id)
+        if block is None:
+            report.fail(f"{risk_id}: no '### {risk_id}:' entry found in the threat model")
+            clean = False
+            continue
+        status_lines = STATUS_LINE_RE.findall(block)
+        if len(status_lines) != 1:
+            report.fail(f"{risk_id}: found {len(status_lines)} normalized status line(s); "
+                        f"exactly 1 is required")
+            clean = False
+            continue
+        if status_lines[0] not in accepted:
+            report.fail(f"{risk_id}: status={status_lines[0]!r} is outside this entry's "
+                        f"accepted set {accepted}")
+            clean = False
+        residue = STATUS_LINE_RE.sub("", block)
+        stray = BARE_STATUS_TOKEN_RE.findall(residue)
+        if stray:
+            report.fail(f"{risk_id}: {len(stray)} bare {sorted(set(stray))} token(s) outside "
+                        f"the status line -- a status must be stated once, in its own field")
+            clean = False
+    if clean:
+        report.ok(f"every declared residual risk {sorted(accepted_map)} carries exactly one "
+                  f"status line valued in its accepted set")
+
+
+# ---------------------------------------------------------------------------
 # --ledger
 # ---------------------------------------------------------------------------
 def check_ledger(args, report):
