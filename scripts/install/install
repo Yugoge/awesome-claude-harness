@@ -23,7 +23,7 @@
 #   --json                Machine-readable output.
 #
 # Exit codes: 0 = success
-#             1 = install failed (crash, I/O error)
+#             1 = failure (install crashed, I/O error)
 #             2 = preflight / refusal — NOTHING was written. The preflight runs
 #                 strictly before the first mutation, and so does the engine's
 #                 refusal when a MANDATORY footprint entry cannot be honoured.
