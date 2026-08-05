@@ -467,16 +467,145 @@ def test_escape_hatch_definition_cannot_drift_across_its_three_copies(home: Path
     assert from_hook == from_manifest
 
 
-@pytest.mark.parametrize("broken", ["missing", "malformed"])
-def test_escape_hatches_survive_a_broken_manifest(home: Path, statedir: Path, broken: str):
-    """codex #1: the carve-out originally sat BEHIND the manifest read, so a
-    corrupt manifest re-sealed the host. Recovery must not live inside the
-    failure domain it exists to recover from."""
+# --------------------------------------------------------------------------- #
+# The REPAIR FLOOR — the closed set that keeps a degraded host repairable
+# --------------------------------------------------------------------------- #
+# The canonical floor, written out here as a literal so the test does NOT import
+# its own oracle from the code under test. Changing the production constant
+# alone must fail; changing both together is a deliberate act that has to edit
+# this line too.
+CANONICAL_REPAIR_FLOOR = {
+    "tool:Read", "tool:Edit", "tool:Write", "tool:Bash", "tool:Glob", "tool:Grep",
+}
+
+# A GREEDY floor: the canonical six plus five routes a dev under repair pressure
+# might reach for. It is the negative control for the equality guard, and it is
+# also fully DISJOINT from the shipped protected surface — which is precisely why
+# disjointness cannot be the guard.
+GREEDY_REPAIR_FLOOR = CANONICAL_REPAIR_FLOOR | {
+    "tool:Agent", "tool:Task", "tool:WebFetch", "tool:NotebookEdit", "tool:WebSearch",
+}
+
+# The three broken-manifest states. `missing` and `malformed_json` deliberately
+# BOTH resolve to manifest_unreadable; `not_a_list` is the only fixture that
+# reaches manifest_malformed. Each state asserts the reason the loader actually
+# returned, so two fixtures can never silently exercise one branch.
+BROKEN_MANIFEST_STATES = [
+    ("missing", None, "manifest_unreadable"),
+    ("malformed_json", "{not json", "manifest_unreadable"),
+    ("not_a_list", '{"routes": {}}', "manifest_malformed"),
+]
+
+
+def _break_manifest(home: Path, content: str | None) -> None:
     mpath = home / cs.MANIFEST_RELPATH
-    if broken == "missing":
+    if content is None:
         mpath.unlink()
     else:
-        mpath.write_text("{not json", encoding="utf-8")
+        mpath.write_text(content, encoding="utf-8")
+
+
+def _floor_collisions(manifest: dict, floor) -> set[str]:
+    """Floor routes that land INSIDE the effective protected surface.
+
+    Derived, never hardcoded: it asks the production resolver `route_lookup()`
+    about every floor route, so it inherits the real exact-routes-before-prefixes
+    resolution order. A floor route collides if it is exact-listed in routes[] OR
+    matched by a protected_surface_prefix — the union that forms the effective
+    protected set. Empty result == disjoint.
+    """
+    return {route for route in floor if cs.route_lookup(manifest, route)[1]}
+
+
+def _is_canonical_floor(candidate) -> bool:
+    """The bounding predicate: set EQUALITY, not membership."""
+    return set(candidate) == CANONICAL_REPAIR_FLOOR
+
+
+def _floor_from_gate_source() -> set[str]:
+    literal = GATE.read_text(encoding="utf-8").split("REPAIR_FLOOR_TOOLS = (", 1)[1].split(")", 1)[0]
+    return {f"tool:{t.strip().strip(chr(34) + chr(39))}" for t in literal.split(",") if t.strip()}
+
+
+def test_repair_floor_is_exactly_the_canonical_closed_set():
+    """AC-CAP-02: the floor is CLOSED. Every member is permanently outside the
+    protected surface, so the set is pinned by equality rather than by review."""
+    assert _is_canonical_floor(cs.REPAIR_FLOOR_ROUTES)
+    assert len(cs.REPAIR_FLOOR_ROUTES) == len(set(cs.REPAIR_FLOOR_ROUTES)), "duplicate member"
+    # No member may be admitted without a recorded reason for being permanently open.
+    assert set(cs.REPAIR_FLOOR_RATIONALE) == CANONICAL_REPAIR_FLOOR
+    for route, why in cs.REPAIR_FLOOR_RATIONALE.items():
+        assert why and len(why) > 40, route
+
+
+def test_repair_floor_cannot_drift_between_its_two_copies():
+    """The floor is written down twice — the gate hook's pre-import literal and
+    capability_state's constant. Two copies exist because the library is itself a
+    bound artifact and cannot be the sole home of its own recovery path; editing
+    either alone would either re-brick the degraded host or widen the carve-out."""
+    assert _floor_from_gate_source() == set(cs.REPAIR_FLOOR_ROUTES)
+    assert _is_canonical_floor(_floor_from_gate_source())
+
+
+def test_a_greedy_floor_fails_the_equality_guard_though_it_passes_disjointness():
+    """The guard has teeth, and disjointness is NOT that guard.
+
+    A greedy floor that swallows Agent, Task, WebFetch, NotebookEdit and
+    WebSearch is a namespace-wide fail-open on the degraded path. It is fully
+    disjoint from the shipped protected surface — because that surface is
+    entirely slashcommand:/skill: while every floor member is tool: — so a
+    disjointness test waves it straight through. Only set equality rejects it.
+    """
+    manifest, err = cs.load_manifest(REPO)
+    assert err is None
+    assert _floor_collisions(manifest, GREEDY_REPAIR_FLOOR) == set(), \
+        "disjointness alone cannot bound the floor — that is why equality is the guard"
+    assert not _is_canonical_floor(GREEDY_REPAIR_FLOOR), \
+        "the equality guard must REJECT a widened floor"
+    assert _is_canonical_floor(cs.REPAIR_FLOOR_ROUTES)
+
+
+def test_effective_protected_set_is_disjoint_from_the_repair_floor():
+    """AC-CAP-03 limb (a): no shipped protected route is on the floor."""
+    manifest, err = cs.load_manifest(REPO)
+    assert err is None
+    assert _floor_collisions(manifest, cs.REPAIR_FLOOR_ROUTES) == set()
+
+
+def test_disjointness_helper_detects_an_exact_listed_floor_route():
+    """AC-CAP-03 limb (b), as a PASSING assertion that the helper caught it.
+
+    Mirroring `protected_surface_prefixes` as a constant would NOT be sufficient:
+    route_lookup matches the exact routes[] list FIRST and only then tests
+    prefixes, so a manifest that exact-lists tool:Read re-seals the host without
+    ever declaring a tool: prefix. This is that manifest.
+    """
+    manifest, err = cs.load_manifest(REPO)
+    assert err is None
+    assert "tool:" not in manifest["protected_surface_prefixes"]
+    manifest["routes"].append({
+        "id": "adversarial-floor-collision", "route": "tool:Read",
+        "route_type": "Tool", "entrypoint": "n/a", "why_protected": "fixture",
+    })
+    collisions = _floor_collisions(manifest, cs.REPAIR_FLOOR_ROUTES)
+    assert collisions == {"tool:Read"}, collisions
+
+
+@pytest.mark.parametrize("label,content,expect_reason", BROKEN_MANIFEST_STATES)
+def test_escape_hatches_survive_a_broken_manifest(
+        home: Path, statedir: Path, label: str, content: str | None, expect_reason: str):
+    """codex #1: the carve-out originally sat BEHIND the manifest read, so a
+    corrupt manifest re-sealed the host. Recovery must not live inside the
+    failure domain it exists to recover from.
+
+    The hatches were only ever half of that. They record human consent; they do
+    not perform the Edit that repairs the manifest. So this also asserts the
+    repair floor is open and — decisively — that a NON-floor route is still shut,
+    which is what distinguishes a bounded floor from a blanket fail-open.
+    """
+    _break_manifest(home, content)
+    # The states are distinct fixtures; assert the branch each actually reaches.
+    assert cs.load_manifest(home)[1] == expect_reason, label
     sid = "brk"
     for route in cs.HUMAN_CONSENT_ESCAPE_HATCH_ROUTES:
         rec = cs.evaluate_activation(route, home=home, session_id=sid,
@@ -486,11 +615,71 @@ def test_escape_hatches_survive_a_broken_manifest(home: Path, statedir: Path, br
     other = cs.evaluate_activation("slashcommand:/dev", home=home, session_id=sid,
                                    state_file=cs.state_path(sid, statedir))
     assert other["decision"] == "REFUSE"
-    # And through the hook, with the library itself made unimportable.
-    (home / "hooks" / "lib" / "capability_state.py").write_text("raise ImportError('boom')\n")
-    r = _gate({"tool_name": "SlashCommand", "tool_input": {"command": "/do"},
-               "session_id": sid}, home, statedir, sid)
-    assert r.returncode == 0, r.stderr
+    # THE REPAIR FLOOR, end to end through the hook: exit 0 for all six.
+    for route in sorted(CANONICAL_REPAIR_FLOOR):
+        tool = route.split(":", 1)[1]
+        r = _gate({"tool_name": tool, "tool_input": {}, "session_id": sid}, home, statedir, sid)
+        assert r.returncode == 0, f"{label}/{tool}: {r.stderr}"
+    # THE NON-FLOOR NEGATIVE CONTROL. tool:Agent exits 0 under a HEALTHY manifest
+    # and must exit 2 here. The asymmetry is deliberate: with no readable manifest
+    # the gate cannot know what is protected, so everything off the floor fails
+    # closed. Admitting Agent to the floor to "smooth" this would reintroduce the
+    # unbounded-floor defect and must fail the equality guard above.
+    r = _gate({"tool_name": "Agent", "tool_input": {}, "session_id": sid}, home, statedir, sid)
+    assert r.returncode == 2, f"{label}/Agent must stay refused: {r.stdout}"
+
+
+@pytest.mark.parametrize("mode", ["raises_on_import", "absent"])
+def test_repair_floor_survives_an_unresolvable_library(tmp_path: Path, home: Path,
+                                                       statedir: Path, mode: str):
+    """The library is itself a BOUND_ARTIFACTS member, so "capability_state.py is
+    broken" is a reachable state — and the state in which a floor declared only
+    inside that module would be unreachable. Hence the gate's pre-import literal.
+
+    The gate resolves its library from `Path(__file__).parent/'lib'` — its OWN
+    parent, never CLAUDE_HOME — so gate and library must be co-located in one
+    isolated root or the mutation is never imported. Probing /do here would prove
+    nothing either: the hatch returns 0 before any import is attempted.
+    """
+    root = tmp_path / f"isolated-{mode}"
+    (root / "lib").mkdir(parents=True)
+    gate = root / GATE.name
+    shutil.copy2(GATE, gate)
+    lib = root / "lib" / "capability_state.py"
+    if mode == "raises_on_import":
+        lib.write_text("raise ImportError('boom')\n", encoding="utf-8")
+    # 'absent' leaves lib/ empty, so the import fails with ModuleNotFoundError.
+    sid = "libgone"
+
+    def _run(tool: str):
+        env = dict(os.environ, CLAUDE_HOME=str(home),
+                   CLAUDE_CAPABILITY_STATE_DIR=str(statedir), CLAUDE_SESSION_ID=sid)
+        return subprocess.run(
+            [sys.executable, str(gate)],
+            input=json.dumps({"tool_name": tool, "tool_input": {}, "session_id": sid}),
+            capture_output=True, text=True, env=env, timeout=60, check=False)
+
+    assert not lib.exists() or "ImportError" in lib.read_text(encoding="utf-8")
+    for route in sorted(CANONICAL_REPAIR_FLOOR):
+        r = _run(route.split(":", 1)[1])
+        assert r.returncode == 0, f"{mode}/{route}: {r.stderr}"
+    agent = _run("Agent")
+    assert agent.returncode == 2, f"{mode}/Agent must stay refused: {agent.stdout}"
+    assert "library_unavailable" in agent.stderr, agent.stderr
+
+
+@pytest.mark.parametrize("name", ["Read", "Bash"])
+def test_skill_named_like_a_floor_tool_is_not_on_the_floor(home: Path, statedir: Path, name: str):
+    """The floor is keyed on the exact tool route, so a Skill of the same name
+    must not inherit it — the same property the hatches are pinned to."""
+    sid = "skf"
+    r = _gate({"tool_name": "Skill", "tool_input": {"skill": name}, "session_id": sid},
+              home, statedir, sid)
+    assert r.returncode == 2, r.stdout
+    rec = cs.evaluate_activation(f"skill:{name}", home=home, session_id=sid,
+                                 state_file=cs.state_path(sid, statedir))
+    assert rec["decision"] == "REFUSE"
+    assert rec["exemption"] is None
 
 
 @pytest.mark.parametrize("command", ["/do\n/dev fix", "/allow x\r/commit", "/do\x00/push"])
