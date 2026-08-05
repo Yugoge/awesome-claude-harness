@@ -340,6 +340,16 @@ if (STRICT && warnings.length) {
 
 // ---------- verdict ----------
 const bytes = Buffer.byteLength(svg, 'utf8');
+// Clipping is ALWAYS itemised, on pass and on fail alike — a counted-but-unnamed defect is
+// how this went unnoticed before. Each line names the exact substring the reader never sees.
+if (clipped.length) {
+  const say = violations.length ? console.error : console.log;
+  say(`  clipped (${clipped.length} of ${traceGeom.length} lines exceed the ${LOGICAL_W}px logical width):`);
+  for (const c of clipped) {
+    const led = ledgerIds.has(c.id) ? 'ledgered' : 'NOT ledgered';
+    say(`    ! ${c.id} [${c.kind}] loses ${c.lost.length} chars (${led}): "${c.lost}"`);
+  }
+}
 if (violations.length) {
   console.error(`AUDIT FAIL (${violations.length} violation${violations.length === 1 ? '' : 's'}):`);
   for (const v of violations) console.error('  - ' + v);
