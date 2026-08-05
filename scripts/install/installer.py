@@ -42,7 +42,32 @@ DESIGN CONTRACT (the parts that are load-bearing for safety):
    deletion, which is what lets a user file created inside an installer-owned
    directory survive uninstall.
 
-Exit codes: 0 = success, 1 = failure, 2 = preflight/refusal (caller-supplied).
+6. OWNERSHIP OF settings.json IS RECORDED PER CONTRIBUTION, NOT PER FILE.
+   A whole-file restore is NOT the inverse of an additive merge: it reverts every
+   change the user made after the install too. Apply therefore records every
+   registration identity it decided about -- `contributions` (appended by this
+   generation) and `observations` (found already present, so either `claimed` from
+   this lineage's own prior committed record, or `unowned` and never removable).
+   Uninstall computes the true inverse from that record against the CURRENT
+   document. The pre-install backup is retained as a manual-recovery artifact and
+   is written back only on the provable-safe fast path, where the live bytes still
+   equal the recorded as-installed digest.
+
+7. LOCATE AND VERIFY ARE DIFFERENT OPERATIONS WITH DIFFERENT KEYS.
+   A registration is LOCATED by its full identity tuple
+   (event, normalized matcher read from the ENCLOSING GROUP, hook type, command).
+   The entry digest is a post-location integrity check ONLY -- never a locator.
+   It is matcher-blind by construction (`matcher` is a group-level key and the
+   digested entry object does not contain it), so the installer's universal
+   registration and a user's copy of the same command under a narrower matcher
+   digest identically while their identities differ.
+
+Exit codes: 0 = success
+            1 = failure (crash, I/O error)
+            2 = preflight / refusal -- NOTHING was mutated
+            3 = partial -- a mutation occurred and something was deliberately
+                retained (partial un-merge, opted-in partial install, retained
+                self-management bundle)
 """
 
 from __future__ import annotations
