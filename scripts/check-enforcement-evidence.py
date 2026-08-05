@@ -447,10 +447,24 @@ def extract_wrappers(classifier_src):
 # hide. No marker comment, sentinel or other implementer-authored label is read from the shell
 # source: this repository's doctrine rejects trusting an implementer's self-applied label.
 # ---------------------------------------------------------------------------
-_SHELL_VAR_RE = re.compile(r"^\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?$")
+_SHELL_VAR_RE = re.compile(r"^\$\{?([A-Za-z_][A-Za-z0-9_]*)(?::[-=?+][^}]*)?\}?$")
 _SHELL_WORD_RE = re.compile(r"\"[^\"]*\"|'[^']*'|\S+")
-_SHELL_TEST_RE = re.compile(r"(?<![\w$])\[\[?[ \t]+(.+?)[ \t]+\]\]?(?!\w)")
+# `[ ... ]`, `[[ ... ]]` and the `test` builtin are the same predicate written three ways.
+_SHELL_TEST_RE = re.compile(
+    r"(?<![\w$])\[\[?[ \t]+(.+?)[ \t]+\]\]?(?!\w)"
+    r"|(?<![\w$/-])test[ \t]+([^;&|)]+)")
 _SYMMETRIC_OPS = {"=": "=", "==": "=", "!=": "!="}
+
+
+def _strip_full_line_comments(src):
+    """Drop whole-line shell comments before any structural counting.
+
+    A commented-out guard is not a gate. Counting one lets a real gate be DELETED while a
+    comment holds the census at its recorded value -- a false pass of exactly the kind this
+    census exists to end. Only full-line comments are removed: a `#` mid-line may be inside a
+    regex or a quoted string in this guard, and removing those would corrupt real conditions.
+    """
+    return "\n".join("" if re.match(r"^[ \t]*#", line) else line for line in src.split("\n"))
 
 
 def _canon_word(word):
