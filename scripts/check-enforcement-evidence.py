@@ -490,7 +490,7 @@ def _canon_predicates(condition):
     keys = set()
     for match in _SHELL_TEST_RE.finditer(condition):
         outer_negated = bool(re.search(r"!\s*$", condition[: match.start()]))
-        words = _SHELL_WORD_RE.findall(match.group(1))
+        words = _SHELL_WORD_RE.findall(match.group(1) or match.group(2) or "")
         if words and words[0] == "!":
             words, outer_negated = words[1:], not outer_negated
         for i, word in enumerate(words):
