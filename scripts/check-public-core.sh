@@ -98,7 +98,7 @@ else:
 #                             residue. It deliberately does NOT exclude a preceding
 #                             "/", so `//home/<user>` is still caught — and it must
 #                             NOT exclude "-" or "_" either: the shell default idiom
-#                             `${VAR:-/root/bin/x}` places a "-" immediately before
+#                             `${VAR:-<author-path>}` places a "-" immediately before
 #                             the path, so suppressing on "-" blinded the gate to the
 #                             very form PUBLIC-CORE.md section 3 sanctions. The prose
 #                             cases stay suppressed regardless, being preceded by
