@@ -614,11 +614,25 @@ def cmd_check(readme: Path) -> int:
             violations.append(f"[region-byte-compare] claim-row marker outside any "
                               f"canonical region: {ln.strip()[:80]}")
 
+    # (f) POSITION, not just bytes: region order and headline adjacency.
+    violations += assert_region_positions(text)
+
+    # (g) the limits statement is actually visible where the fold is measured.
+    notes: list[str] = []
+    if check_fold:
+        fold_violations, fold_notes = assert_limits_above_fold(readme)
+        violations += fold_violations
+        notes += fold_notes
+
+    for n in notes:
+        print(f"generate-hero-status: NOTE: {n}")
     for v in violations:
         print(f"generate-hero-status: FAIL: {v}", file=sys.stderr)
     if violations:
         return 2
-    print(f"generate-hero-status: OK  {len(ROW_IDS)} rows verified across 2 canonical regions")
+    print(f"generate-hero-status: OK  {len(ROW_IDS)} rows verified across "
+          f"{len(REGION_IDS)} canonical regions (order, headline adjacency"
+          f"{' and fold position' if check_fold else ''} asserted)")
     return 0
 
 
