@@ -39,6 +39,28 @@ from pathlib import Path
 # edited alone.
 ESCAPE_HATCH_COMMANDS = ("/do", "/allow")
 
+# THE REPAIR FLOOR, as a pre-import literal for exactly the same reason as the
+# hatches above: `hooks/lib/capability_state.py` is itself a bound artifact, so a
+# floor declared only there cannot help in the one state where THAT file is what
+# failed to load. Without this copy an unresolvable library refuses every route
+# but the two hatches — and the hatches record consent, they do not perform the
+# Edit that would repair the library. Kept in lockstep with capability_state's
+# REPAIR_FLOOR_ROUTES by a drift test; this literal may not be edited alone, and
+# it is CLOSED — asserted by set equality, never widened to admit whatever tool
+# a repair happened to reach for.
+REPAIR_FLOOR_TOOLS = ("Read", "Edit", "Write", "Bash", "Glob", "Grep")
+
+
+def _is_repair_floor(payload: dict) -> bool:
+    """True only for the six declared repair-floor tool routes.
+
+    `classify_route()` maps every non-SlashCommand, non-Skill envelope to
+    `tool:<tool_name>`, so exact `tool_name` membership here is exactly route
+    membership there. A Skill or SlashCommand named like a floor tool carries
+    tool_name "Skill"/"SlashCommand" and so cannot reach this branch.
+    """
+    return str(payload.get("tool_name") or "") in REPAIR_FLOOR_TOOLS
+
 
 def _is_escape_hatch(payload: dict) -> bool:
     """True only for an exact, single-command /do or /allow SlashCommand call.

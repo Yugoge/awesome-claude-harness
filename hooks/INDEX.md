@@ -1,7 +1,7 @@
 # hooks
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-08-05T02:26:36Z*
+*Last updated: 2026-08-05T03:18:42Z*
 **Total entries**: 178
 **Convention**: kebab
 
@@ -59,7 +59,7 @@ hooks/
 │   └── `todo_canonical.py` - Shared canonical todo validation utilities
 ├── tests/
 │   ├── fixtures/
-│   │   └── `adversarial_corpus.json` - json config
+│   │   ├── `adversarial_corpus.json` - json config
 │   ├── `test_ac10_verify.sh` - Shell script
 │   ├── `test_ac1_verify.sh` - Shell script
 │   ├── `test_ac3_verify.sh` - Shell script
