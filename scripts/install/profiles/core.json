@@ -47,6 +47,7 @@
       { "src": "hooks/pretool-block-enterworktree.sh", "dest": "hooks/pretool-block-enterworktree.sh", "mode": "0755" },
       { "src": "hooks/pretool-capability-gate.py", "dest": "hooks/pretool-capability-gate.py", "mode": "0755" },
       { "src": "policies/tool-policy.v1.json", "dest": "policies/tool-policy.v1.json", "mode": "0644" },
+      { "src": "policies/protected-workflow-manifest.v1.json", "dest": "policies/protected-workflow-manifest.v1.json", "mode": "0644" },
       { "src": "scripts/doctor", "dest": "scripts/doctor", "mode": "0755" }
     ],
     "generated": ["settings.json"],
