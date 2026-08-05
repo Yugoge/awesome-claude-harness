@@ -87,7 +87,25 @@ else:
         for f in files:
             scan_paths.append(os.path.relpath(os.path.join(dirpath, f), root))
     scan_paths.sort()
-RESIDUE = re.compile(r"/root/|/home/[a-z][a-z0-9_-]*/|/Users/[A-Za-z][A-Za-z0-9_-]*/")
+# Boundary-aware on BOTH sides. The previous form anchored every alternative on a
+# TRAILING "/", so it matched a home directory's descendants but never the directory
+# ROOT itself: `p = "/root/.claude"` was caught while `EXACT_ROOT="/root"`,
+# `EXACT_HOME="/home/yugoge"` and `MAC="/Users/Yugoge"` walked straight through.
+#   right (?![A-Za-z0-9_-]) : the root form matches as well as the descendant form,
+#                             while /homework and /rootkit still do not.
+#   left  (?<![A-Za-z0-9_-]): an author path must START a path component. Without it
+#                             ordinary prose ("a protected workspace/root") reads as
+#                             residue. It deliberately does NOT exclude a preceding
+#                             "/", so `//home/<user>` is still caught.
+RESIDUE = re.compile(
+    r"(?<![A-Za-z0-9_-])"
+    r"(?:/root|/home/[a-z][a-z0-9_-]*|/Users/[A-Za-z][A-Za-z0-9_-]*)"
+    r"(?![A-Za-z0-9_-])")
+# A BARE top-level directory literal: "/" or "/name" with no second path component.
+# "/home/yugoge" can never satisfy it, which is what keeps a genuine author-home
+# literal `operational` (and therefore non-allowlistable) under SYS_DIR classification.
+SYS_DIR_LITERAL = re.compile(r"^/[A-Za-z0-9_.-]*$")
+SYS_DIR_MIN_ELEMENTS = 3   # a table, not an incidental pair
 DOC_EXTS = {".md", ".txt", ".rst"}
 CODE_EXTS = {".py", ".sh", ".bash", ".mjs", ".js", ".ts"}
 UNIT_EXTS = {".service", ".socket", ".timer", ".path", ".mount"}
