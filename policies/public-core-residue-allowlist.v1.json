@@ -11,9 +11,17 @@
     "env_parameterized_default",
     "test_fixture",
     "doctest_or_docstring_example",
-    "comment_or_narrative_doc"
+    "comment_or_narrative_doc",
+    "system_path_constant_enumeration"
   ],
   "entries": [
+    {
+      "path": "ARCHITECTURE.md",
+      "fingerprint": "d9661fb17073d129",
+      "ordinal": 1,
+      "class": "comment_or_narrative_doc",
+      "rationale": "Prose/comment text documenting the residue policy; never read as a path at runtime. Line: \"**Optional-capability degradation.** Every **OPTIONAL** row above is *graceful*: an automa\""
+    },
     {
       "path": "PUBLIC-CORE.md",
       "fingerprint": "3180eb30e4ea1244",
@@ -62,6 +70,20 @@
       "ordinal": 1,
       "class": "comment_or_narrative_doc",
       "rationale": "4. Classification ledger — prose/comment text; never read as a path at runtime."
+    },
+    {
+      "path": "README.md",
+      "fingerprint": "74ef04cdcaf08ecf",
+      "ordinal": 1,
+      "class": "comment_or_narrative_doc",
+      "rationale": "Prose/comment text documenting the residue policy; never read as a path at runtime. Line: \"The harness runs on a fresh non-root clone. Clone to `$HOME/.claude` on any Linux box (non\""
+    },
+    {
+      "path": "README.md",
+      "fingerprint": "a3996fa6614a87e3",
+      "ordinal": 1,
+      "class": "comment_or_narrative_doc",
+      "rationale": "Prose/comment text documenting the residue policy; never read as a path at runtime. Line: \"| **Fresh non-root clone**: core flows resolve to *your* home with zero author-path litera\""
     },
     {
       "path": "README.md",
@@ -148,11 +170,95 @@
       "rationale": "Scope of this rule — prose/comment text; never read as a path at runtime."
     },
     {
+      "path": "docs/reference/core-context-refactor-plan.md",
+      "fingerprint": "040351515157df67",
+      "ordinal": 1,
+      "class": "comment_or_narrative_doc",
+      "rationale": "Prose/comment text documenting the residue policy; never read as a path at runtime. Line: \"| INV-5 | No project identifiers | new module `grep -Ei 'happy\\|/root\\|slopus'` → clean |\""
+    },
+    {
+      "path": "docs/reference/monolith-split-plan.md",
+      "fingerprint": "367e182696ac526b",
+      "ordinal": 1,
+      "class": "comment_or_narrative_doc",
+      "rationale": "Prose/comment text documenting the residue policy; never read as a path at runtime. Line: \"| Result | INV-1 ✓ (755→755; full `hooks/tests` 1132 passed / 9 xpassed, no new fail/skip)\""
+    },
+    {
+      "path": "docs/reference/monolith-split-plan.md",
+      "fingerprint": "ad5fb79b27dda6e4",
+      "ordinal": 1,
+      "class": "comment_or_narrative_doc",
+      "rationale": "Prose/comment text documenting the residue policy; never read as a path at runtime. Line: \"| INV-5 | No project identifiers | New module `grep -Ei 'happy\\|/root\\|<projname>'` → clea\""
+    },
+    {
       "path": "docs/reference/monolith-split-plan.md",
       "fingerprint": "d059de199e59510b",
       "ordinal": 1,
       "class": "comment_or_narrative_doc",
       "rationale": "Phase 3 — DONE (2026-07-15): path/glob matching seam — prose/comment text; never read as a path at runtime."
+    },
+    {
+      "path": "docs/reference/monolith-split-plan.md",
+      "fingerprint": "eb64f8bafeaf0354",
+      "ordinal": 1,
+      "class": "comment_or_narrative_doc",
+      "rationale": "Prose/comment text documenting the residue policy; never read as a path at runtime. Line: \"| Result | INV-1 ✓ (755→755; full `hooks/tests` 1136 passed / 9 xpassed, no new fail/skip)\""
+    },
+    {
+      "path": "docs/reference/roadmap-decomposition-productization.md",
+      "fingerprint": "10b0f05e3268340d",
+      "ordinal": 1,
+      "class": "comment_or_narrative_doc",
+      "rationale": "Prose/comment text documenting the residue policy; never read as a path at runtime. Line: \"`history.jsonl`, and the maintainer's `/root` symlink flows. `.gitignore` already\""
+    },
+    {
+      "path": "docs/reference/roadmap-decomposition-productization.md",
+      "fingerprint": "18154048571d90c6",
+      "ordinal": 1,
+      "class": "comment_or_narrative_doc",
+      "rationale": "Prose/comment text documenting the residue policy; never read as a path at runtime. Line: \"`/root` and maintainer references still leak into a handful of tracked \"portable\" files.\""
+    },
+    {
+      "path": "docs/reference/roadmap-decomposition-productization.md",
+      "fingerprint": "1c9ea6e704e74d39",
+      "ordinal": 1,
+      "class": "comment_or_narrative_doc",
+      "rationale": "Prose/comment text documenting the residue policy; never read as a path at runtime. Line: \"| `settings.json` (**tracked**) | personal config committed to the repo: personal `permiss\""
+    },
+    {
+      "path": "docs/reference/roadmap-decomposition-productization.md",
+      "fingerprint": "1e90be961267ca18",
+      "ordinal": 1,
+      "class": "comment_or_narrative_doc",
+      "rationale": "Prose/comment text documenting the residue policy; never read as a path at runtime. Line: \"| **P1** | Inventory every personal reference in the tracked core | a leakage register (fi\""
+    },
+    {
+      "path": "docs/reference/roadmap-decomposition-productization.md",
+      "fingerprint": "362f02f60e13d06e",
+      "ordinal": 1,
+      "class": "comment_or_narrative_doc",
+      "rationale": "Prose/comment text documenting the residue policy; never read as a path at runtime. Line: \"as-is**: they still contain tracked personal `/root` / maintainer references (see §4.3),\""
+    },
+    {
+      "path": "docs/reference/roadmap-decomposition-productization.md",
+      "fingerprint": "6624a8f4ad64986d",
+      "ordinal": 1,
+      "class": "comment_or_narrative_doc",
+      "rationale": "Prose/comment text documenting the residue policy; never read as a path at runtime. Line: \"| **P2** | Parameterize `/root` / absolute paths to `$HOME` / `$CLAUDE_HOME` | scripts + p\""
+    },
+    {
+      "path": "docs/reference/roadmap-decomposition-productization.md",
+      "fingerprint": "cd7704d6075510c9",
+      "ordinal": 1,
+      "class": "comment_or_narrative_doc",
+      "rationale": "Prose/comment text documenting the residue policy; never read as a path at runtime. Line: \"| `commands/dev.md`, `agents/qa.md`, `commands/close.md` | personal `/root` / `Yugoge` / m\""
+    },
+    {
+      "path": "docs/reference/roadmap-decomposition-productization.md",
+      "fingerprint": "d657b5de21013dd1",
+      "ordinal": 1,
+      "class": "comment_or_narrative_doc",
+      "rationale": "Prose/comment text documenting the residue policy; never read as a path at runtime. Line: \"| `scripts/detect-hardcoded-paths.sh`, `scripts/spec-verify/spec_verify_parsers.py`, `scri\""
     },
     {
       "path": "examples/guard-demo/README.md",
@@ -163,10 +269,31 @@
     },
     {
       "path": "examples/guard-demo/run-demo.sh",
+      "fingerprint": "0d5373477a2945a9",
+      "ordinal": 1,
+      "class": "comment_or_narrative_doc",
+      "rationale": "Prose/comment text documenting the residue policy; never read as a path at runtime. Line: \"# the named variable. Runs in a clean env so no author /root path can leak in.\""
+    },
+    {
+      "path": "examples/guard-demo/run-demo.sh",
+      "fingerprint": "3b772dc70e73feb5",
+      "ordinal": 1,
+      "class": "comment_or_narrative_doc",
+      "rationale": "Prose/comment text documenting the residue policy; never read as a path at runtime. Line: \"# harness home is two directories up. We do NOT hardcode /root; we resolve from\""
+    },
+    {
+      "path": "examples/guard-demo/run-demo.sh",
       "fingerprint": "781a0361c210c1ae",
       "ordinal": 1,
       "class": "comment_or_narrative_doc",
       "rationale": "script preamble — prose/comment text; never read as a path at runtime."
+    },
+    {
+      "path": "examples/guard-demo/run-demo.sh",
+      "fingerprint": "a6baf6f723333e68",
+      "ordinal": 1,
+      "class": "comment_or_narrative_doc",
+      "rationale": "Prose/comment text documenting the residue policy; never read as a path at runtime. Line: \"# ── Build an isolated, ephemeral demo home (NOT under /root, NOT /dev/shm) ────\""
     },
     {
       "path": "hooks/git-hooks/pre-commit",
@@ -198,6 +325,13 @@
     },
     {
       "path": "hooks/lib/bash_write_targets.py",
+      "fingerprint": "3823a164fbb97698",
+      "ordinal": 1,
+      "class": "comment_or_narrative_doc",
+      "rationale": "Prose/comment text documenting the residue policy; never read as a path at runtime. Line: \"# /root, when HOME is unset (a fresh non-root clone).\""
+    },
+    {
+      "path": "hooks/lib/bash_write_targets.py",
       "fingerprint": "5224cbbabb5778fe",
       "ordinal": 1,
       "class": "doctest_or_docstring_example",
@@ -207,6 +341,13 @@
       "path": "hooks/lib/bash_write_targets.py",
       "fingerprint": "5aaa4b3239004d0e",
       "ordinal": 1,
+      "class": "doctest_or_docstring_example",
+      "rationale": "module docstring — illustrative literal inside documentation/usage text; not executed as a path."
+    },
+    {
+      "path": "hooks/lib/bash_write_targets.py",
+      "fingerprint": "5aaa4b3239004d0e",
+      "ordinal": 2,
       "class": "doctest_or_docstring_example",
       "rationale": "module docstring — illustrative literal inside documentation/usage text; not executed as a path."
     },
@@ -253,11 +394,53 @@
       "rationale": "module docstring — illustrative literal inside documentation/usage text; not executed as a path."
     },
     {
-      "path": "hooks/lib/bash_write_targets.py",
-      "fingerprint": "5aaa4b3239004d0e",
-      "ordinal": 2,
+      "path": "hooks/lib/claude_home.py",
+      "fingerprint": "05b4e69cea3a0264",
+      "ordinal": 1,
+      "class": "comment_or_narrative_doc",
+      "rationale": "Prose/comment text documenting the residue policy; never read as a path at runtime. Line: \"# if it is itself a structural sentinel. Never fabricate a /root default.\""
+    },
+    {
+      "path": "hooks/lib/claude_home.py",
+      "fingerprint": "4d21a967b15c8dfb",
+      "ordinal": 1,
       "class": "doctest_or_docstring_example",
-      "rationale": "module docstring — illustrative literal inside documentation/usage text; not executed as a path."
+      "rationale": "Docstring/heredoc example illustrating path handling; never evaluated as a path. Line: \"``os.environ.get(\"CLAUDE_PROJECT_DIR\", \"/root\")`` author-home default.\""
+    },
+    {
+      "path": "hooks/lib/claude_home.py",
+      "fingerprint": "52623666a9d8268d",
+      "ordinal": 1,
+      "class": "doctest_or_docstring_example",
+      "rationale": "Docstring/heredoc example illustrating path handling; never evaluated as a path. Line: \"\"\"\"Resolve the logical project dir (state), never the author literal /root.\""
+    },
+    {
+      "path": "hooks/lib/claude_home.py",
+      "fingerprint": "595ee6ff9898aa38",
+      "ordinal": 1,
+      "class": "doctest_or_docstring_example",
+      "rationale": "Docstring/heredoc example illustrating path handling; never evaluated as a path. Line: \"never the literal /root)\""
+    },
+    {
+      "path": "hooks/lib/claude_home.py",
+      "fingerprint": "5f802760b0fc017d",
+      "ordinal": 1,
+      "class": "doctest_or_docstring_example",
+      "rationale": "Docstring/heredoc example illustrating path handling; never evaluated as a path. Line: \"security-relevant hook can import instead of hardcoding ``/root`` or inventing\""
+    },
+    {
+      "path": "hooks/lib/claude_home.sh",
+      "fingerprint": "8b8bb44a89dd358e",
+      "ordinal": 1,
+      "class": "comment_or_narrative_doc",
+      "rationale": "Prose/comment text documenting the residue policy; never read as a path at runtime. Line: \"# only if it is itself a structural sentinel. Never fabricate a /root default.\""
+    },
+    {
+      "path": "hooks/lib/closeout.py",
+      "fingerprint": "be6e14f3b6aaba80",
+      "ordinal": 1,
+      "class": "comment_or_narrative_doc",
+      "rationale": "Prose/comment text documenting the residue policy; never read as a path at runtime. Line: \"# WS1: resolve via the shared claude_home resolver, never the literal /root.\""
     },
     {
       "path": "hooks/lib/contract_runtime.py",
@@ -296,6 +479,20 @@
     },
     {
       "path": "hooks/lib/policy_registry.py",
+      "fingerprint": "91de894d377ad9c0",
+      "ordinal": 1,
+      "class": "doctest_or_docstring_example",
+      "rationale": "Docstring/heredoc example illustrating path handling; never evaluated as a path. Line: \"/root home. A missing home or missing/unparseable file returns None, which\""
+    },
+    {
+      "path": "hooks/lib/policy_registry.py",
+      "fingerprint": "a0caf2d968f12bcf",
+      "ordinal": 1,
+      "class": "doctest_or_docstring_example",
+      "rationale": "Docstring/heredoc example illustrating path handling; never evaluated as a path. Line: \"harness home -> cwd) so the author literal /root is never the default.\""
+    },
+    {
+      "path": "hooks/lib/policy_registry.py",
       "fingerprint": "b5ea296cabbefdcf",
       "ordinal": 1,
       "class": "doctest_or_docstring_example",
@@ -307,6 +504,41 @@
       "ordinal": 1,
       "class": "comment_or_narrative_doc",
       "rationale": "module docstring — prose/comment text; never read as a path at runtime."
+    },
+    {
+      "path": "hooks/lib/runtime_guard/_core.py",
+      "fingerprint": "1e00498fc0e63f91",
+      "ordinal": 1,
+      "class": "doctest_or_docstring_example",
+      "rationale": "Docstring/heredoc example illustrating path handling; never evaluated as a path. Line: \"to one of the generic too-broad system/home roots (`/root`, `/usr`, …). A glob\""
+    },
+    {
+      "path": "hooks/lib/runtime_guard/_core.py",
+      "fingerprint": "569311aa9c64b20d",
+      "ordinal": 1,
+      "class": "doctest_or_docstring_example",
+      "rationale": "Docstring/heredoc example illustrating path handling; never evaluated as a path. Line: \"`find /root -path <protected> -delete`, `find <repo> -name <basename> -delete`,\""
+    },
+    {
+      "path": "hooks/lib/runtime_guard/_core.py",
+      "fingerprint": "dada3409b63fedf7",
+      "ordinal": 1,
+      "class": "comment_or_narrative_doc",
+      "rationale": "Prose/comment text documenting the residue policy; never read as a path at runtime. Line: \"# the root (`find /root -path /tmp/unrelated -delete`). A broad `-name '*'`, a\""
+    },
+    {
+      "path": "hooks/lib/runtime_guard/_core.py",
+      "fingerprint": "fcbf3ce1c29a2571",
+      "ordinal": 1,
+      "class": "doctest_or_docstring_example",
+      "rationale": "Docstring/heredoc example illustrating path handling; never evaluated as a path. Line: \"may be safely suppressed (`find /root -path /tmp/unrelated -delete`). Returns\""
+    },
+    {
+      "path": "hooks/lib/runtime_guard/config.py",
+      "fingerprint": "011a7a24d90bc55c",
+      "ordinal": 1,
+      "class": "system_path_constant_enumeration",
+      "rationale": "Element of an enumeration of bare absolute system directories (a protected-root table). Carries no author identity -- a path with a user component cannot qualify. Line: \"\"/\", \"/root\", \"/home\", \"/etc\", \"/usr\", \"/var\", \"/tmp\", \"/opt\", \"/bin\",\""
     },
     {
       "path": "hooks/lib/runtime_guard/config.py",
@@ -331,6 +563,20 @@
     },
     {
       "path": "hooks/lib/runtime_guard/config.py",
+      "fingerprint": "7ef21dc1e2edd890",
+      "ordinal": 1,
+      "class": "comment_or_narrative_doc",
+      "rationale": "Prose/comment text documenting the residue policy; never read as a path at runtime. Line: \"# literal /root, so a fresh non-root home resolves its own config path.\""
+    },
+    {
+      "path": "hooks/lib/runtime_guard/config.py",
+      "fingerprint": "8d3cac90d32f6a28",
+      "ordinal": 1,
+      "class": "doctest_or_docstring_example",
+      "rationale": "Docstring/heredoc example illustrating path handling; never evaluated as a path. Line: \"`mv /root /backup` must still ALLOW). Includes the `~/`-prefixed variant for a\""
+    },
+    {
+      "path": "hooks/lib/runtime_guard/config.py",
       "fingerprint": "8efae8045d4a288a",
       "ordinal": 1,
       "class": "doctest_or_docstring_example",
@@ -351,6 +597,48 @@
       "rationale": "def _home_tilde_variant() — illustrative literal inside documentation/usage text; not executed as a path."
     },
     {
+      "path": "hooks/lib/runtime_guard/config.py",
+      "fingerprint": "dbbb031132a3b17e",
+      "ordinal": 1,
+      "class": "doctest_or_docstring_example",
+      "rationale": "Docstring/heredoc example illustrating path handling; never evaluated as a path. Line: \"Generic (WS1 codex #4 — no ``/root``-specific branch): on a non-root home\""
+    },
+    {
+      "path": "hooks/lib/runtime_guard/config.py",
+      "fingerprint": "e2182646012adb02",
+      "ordinal": 1,
+      "class": "comment_or_narrative_doc",
+      "rationale": "Prose/comment text documenting the residue policy; never read as a path at runtime. Line: \"# the home/system roots (`mv /root /backup`, `rm -rf /tmp`). The data file's OWN\""
+    },
+    {
+      "path": "hooks/lib/runtime_guard/find_cmds.py",
+      "fingerprint": "2a35eb751ecbdb8b",
+      "ordinal": 1,
+      "class": "comment_or_narrative_doc",
+      "rationale": "Prose/comment text documenting the residue policy; never read as a path at runtime. Line: \"# root is a generic ancestor (`/root`). Generic find/fd grammar, no project names.\""
+    },
+    {
+      "path": "hooks/lib/runtime_guard/find_cmds.py",
+      "fingerprint": "531c554d51e893fb",
+      "ordinal": 1,
+      "class": "comment_or_narrative_doc",
+      "rationale": "Prose/comment text documenting the residue policy; never read as a path at runtime. Line: \"# (`find /root -path <protectedfile> -delete`) must BLOCK even though the positional\""
+    },
+    {
+      "path": "hooks/lib/runtime_guard/find_cmds.py",
+      "fingerprint": "c5b10f9edb682b81",
+      "ordinal": 1,
+      "class": "doctest_or_docstring_example",
+      "rationale": "Docstring/heredoc example illustrating path handling; never evaluated as a path. Line: \"(`find /root -path <protected> -delete`, `find . -iname INDEX.MJS -delete`).\"\"\"\""
+    },
+    {
+      "path": "hooks/lib/runtime_guard/find_cmds.py",
+      "fingerprint": "e23285411a66afcd",
+      "ordinal": 1,
+      "class": "comment_or_narrative_doc",
+      "rationale": "Prose/comment text documenting the residue policy; never read as a path at runtime. Line: \"# (`find /root -name <basename> -delete`) must BLOCK.\""
+    },
+    {
       "path": "hooks/lib/runtime_guard/pathmatch.py",
       "fingerprint": "60d7726679207ea3",
       "ordinal": 1,
@@ -365,6 +653,41 @@
       "rationale": "module docstring — illustrative literal inside documentation/usage text; not executed as a path."
     },
     {
+      "path": "hooks/lib/specialist_yield.py",
+      "fingerprint": "be6e14f3b6aaba80",
+      "ordinal": 1,
+      "class": "comment_or_narrative_doc",
+      "rationale": "Prose/comment text documenting the residue policy; never read as a path at runtime. Line: \"# WS1: resolve via the shared claude_home resolver, never the literal /root.\""
+    },
+    {
+      "path": "hooks/merge.sh",
+      "fingerprint": "37472692022179ab",
+      "ordinal": 1,
+      "class": "comment_or_narrative_doc",
+      "rationale": "Prose/comment text documenting the residue policy; never read as a path at runtime. Line: \"# default work on a fresh non-root clone instead of the author literal /root.\""
+    },
+    {
+      "path": "hooks/merge.sh",
+      "fingerprint": "564da5eae5422624",
+      "ordinal": 1,
+      "class": "comment_or_narrative_doc",
+      "rationale": "Prose/comment text documenting the residue policy; never read as a path at runtime. Line: \"# WS1: default to the resolved harness home, never the author literal /root.\""
+    },
+    {
+      "path": "hooks/notification-idle-overnight.py",
+      "fingerprint": "3ff5a92ba4c641e6",
+      "ordinal": 1,
+      "class": "doctest_or_docstring_example",
+      "rationale": "Docstring/heredoc example illustrating path handling; never evaluated as a path. Line: \"not the author literal /root) with fields:\""
+    },
+    {
+      "path": "hooks/notification-idle-overnight.py",
+      "fingerprint": "5d8e624111a4898a",
+      "ordinal": 1,
+      "class": "doctest_or_docstring_example",
+      "rationale": "Docstring/heredoc example illustrating path handling; never evaluated as a path. Line: \"Never the author literal /root. This is an OPTIONAL observability sink: a\""
+    },
+    {
       "path": "hooks/notification-idle-overnight.py",
       "fingerprint": "ba7a535067a4f9b4",
       "ordinal": 1,
@@ -372,18 +695,18 @@
       "rationale": "module docstring — prose/comment text; never read as a path at runtime."
     },
     {
+      "path": "hooks/posttool-overnight-trace.py",
+      "fingerprint": "9149e513f150b805",
+      "ordinal": 1,
+      "class": "comment_or_narrative_doc",
+      "rationale": "Prose/comment text documenting the residue policy; never read as a path at runtime. Line: \"# harness home -> cwd), never the author literal /root.\""
+    },
+    {
       "path": "hooks/pretool-bash-safety.sh",
       "fingerprint": "00fab51a765d5c6a",
       "ordinal": 1,
       "class": "comment_or_narrative_doc",
       "rationale": "check_and_consume_daemon_restart_grant() — prose/comment text; never read as a path at runtime."
-    },
-    {
-      "path": "hooks/pretool-bash-safety.sh",
-      "fingerprint": "246b33ce8bbf347e",
-      "ordinal": 1,
-      "class": "env_parameterized_default",
-      "rationale": "_runtime_guard_fail_closed() — env-overridable ':-' default sanctioned by PUBLIC-CORE.md section 3."
     },
     {
       "path": "hooks/pretool-bash-safety.sh",
@@ -492,10 +815,59 @@
     },
     {
       "path": "hooks/pretool-overnight-hook-guard.py",
+      "fingerprint": "1bb34ec10b97b39a",
+      "ordinal": 1,
+      "class": "comment_or_narrative_doc",
+      "rationale": "Prose/comment text documenting the residue policy; never read as a path at runtime. Line: \"'--proc', '/proc', # (4) private /proc (blocks /proc/<pid>/root re-entry)\""
+    },
+    {
+      "path": "hooks/pretool-overnight-hook-guard.py",
+      "fingerprint": "7578584fe0b3285c",
+      "ordinal": 1,
+      "class": "doctest_or_docstring_example",
+      "rationale": "Docstring/heredoc example illustrating path handling; never evaluated as a path. Line: \"Never the author literal /root. The audit append already degrades softly\""
+    },
+    {
+      "path": "hooks/pretool-overnight-hook-guard.py",
+      "fingerprint": "9a967e3138b57187",
+      "ordinal": 1,
+      "class": "doctest_or_docstring_example",
+      "rationale": "Docstring/heredoc example illustrating path handling; never evaluated as a path. Line: \"/proc/<pid>/root re-entry cannot reach a RW alias of main.\"\"\"\""
+    },
+    {
+      "path": "hooks/pretool-overnight-hook-guard.py",
+      "fingerprint": "d029d660336b4e8c",
+      "ordinal": 1,
+      "class": "comment_or_narrative_doc",
+      "rationale": "Prose/comment text documenting the residue policy; never read as a path at runtime. Line: \"try: # WS1 shared harness-home resolver (route the audit-log default off /root).\""
+    },
+    {
+      "path": "hooks/pretool-overnight-hook-guard.py",
       "fingerprint": "f2a413f784920a31",
       "ordinal": 1,
       "class": "comment_or_narrative_doc",
       "rationale": "module docstring — prose/comment text; never read as a path at runtime."
+    },
+    {
+      "path": "hooks/prompt-workflow.py",
+      "fingerprint": "7fef0be17783bd0b",
+      "ordinal": 1,
+      "class": "doctest_or_docstring_example",
+      "rationale": "Docstring/heredoc example illustrating path handling; never evaluated as a path. Line: \"net, never the author literal /root).\""
+    },
+    {
+      "path": "hooks/prompt-workflow.py",
+      "fingerprint": "953df21135b78940",
+      "ordinal": 1,
+      "class": "comment_or_narrative_doc",
+      "rationale": "Prose/comment text documenting the residue policy; never read as a path at runtime. Line: \"# WS1: resolved harness home as the final safety net, not the literal /root.\""
+    },
+    {
+      "path": "hooks/push.sh",
+      "fingerprint": "055bbf5b13348c03",
+      "ordinal": 1,
+      "class": "comment_or_narrative_doc",
+      "rationale": "Prose/comment text documenting the residue policy; never read as a path at runtime. Line: \"# repo-hash) instead of the author literal /root on a fresh non-root clone.\""
     },
     {
       "path": "hooks/sentinel-lint.sh",
@@ -505,11 +877,32 @@
       "rationale": "script preamble — prose/comment text; never read as a path at runtime."
     },
     {
+      "path": "hooks/session-promote-hook.sh",
+      "fingerprint": "4a0bc37fb6071600",
+      "ordinal": 1,
+      "class": "comment_or_narrative_doc",
+      "rationale": "Prose/comment text documenting the residue policy; never read as a path at runtime. Line: \"# e.g. /root -> -root; /dev/shm/dev-workspace/applio -> -dev-shm-dev-workspace-applio\""
+    },
+    {
+      "path": "hooks/session-promote-hook.sh",
+      "fingerprint": "8148fca1a08a7134",
+      "ordinal": 1,
+      "class": "comment_or_narrative_doc",
+      "rationale": "Prose/comment text documenting the residue policy; never read as a path at runtime. Line: \"# silently (the hook already always exits 0), NEVER the author literal /root.\""
+    },
+    {
       "path": "hooks/stop-spec-coverage-enforce.py",
       "fingerprint": "0e6f98041c058196",
       "ordinal": 1,
       "class": "comment_or_narrative_doc",
       "rationale": "module docstring — prose/comment text; never read as a path at runtime."
+    },
+    {
+      "path": "hooks/stop.sh",
+      "fingerprint": "b1dc23ab42f945ea",
+      "ordinal": 1,
+      "class": "comment_or_narrative_doc",
+      "rationale": "Prose/comment text documenting the residue policy; never read as a path at runtime. Line: \"# location), instead of the author literal /root. The loud-fail guard is\""
     },
     {
       "path": "hooks/tests/test_dual_runtime_lifecycle_e2e.py",
@@ -576,6 +969,20 @@
     },
     {
       "path": "hooks/tests/test_runtime_guard.py",
+      "fingerprint": "0407656883511305",
+      "ordinal": 2,
+      "class": "test_fixture",
+      "rationale": "def test_home_in_cwd_boundary_allows() — fixture input data inside the test tree; not shipped harness behaviour."
+    },
+    {
+      "path": "hooks/tests/test_runtime_guard.py",
+      "fingerprint": "0509d23702d9f961",
+      "ordinal": 1,
+      "class": "test_fixture",
+      "rationale": "Test-net fixture exercising the guard. tests/ is excluded from the release archive. Line: \"assert ev_iso(\"find /root -path /tmp/unrelated -delete\", df) == \"ALLOW\"\""
+    },
+    {
+      "path": "hooks/tests/test_runtime_guard.py",
       "fingerprint": "07adc457f910b246",
       "ordinal": 1,
       "class": "test_fixture",
@@ -611,10 +1018,24 @@
     },
     {
       "path": "hooks/tests/test_runtime_guard.py",
+      "fingerprint": "27bb7cad4ae7584b",
+      "ordinal": 1,
+      "class": "test_fixture",
+      "rationale": "Test-net fixture exercising the guard. tests/ is excluded from the release archive. Line: \"assert ev_nested(f\"find /root -name {base}\", nested_datafile) == \"ALLOW\" # read-only\""
+    },
+    {
+      "path": "hooks/tests/test_runtime_guard.py",
       "fingerprint": "2845b9f6cffbd875",
       "ordinal": 1,
       "class": "test_fixture",
       "rationale": "def test_find_implicit_cwd_destructive_blocks() — fixture input data inside the test tree; not shipped harness behaviour."
+    },
+    {
+      "path": "hooks/tests/test_runtime_guard.py",
+      "fingerprint": "29e7f7f845279f2d",
+      "ordinal": 1,
+      "class": "test_fixture",
+      "rationale": "Test-net fixture exercising the guard. tests/ is excluded from the release archive. Line: \"assert ev_nested(\"find /root -name unrelated.txt -delete\", nested_datafile) == \"ALLOW\"\""
     },
     {
       "path": "hooks/tests/test_runtime_guard.py",
@@ -632,6 +1053,20 @@
     },
     {
       "path": "hooks/tests/test_runtime_guard.py",
+      "fingerprint": "3278ab79877ca923",
+      "ordinal": 1,
+      "class": "test_fixture",
+      "rationale": "Test-net fixture exercising the guard. tests/ is excluded from the release archive. Line: \"# CF1: $HOME / ~ in cwd resolution (use absent-config hardcoded /root path)\""
+    },
+    {
+      "path": "hooks/tests/test_runtime_guard.py",
+      "fingerprint": "3eed97c155d77ebb",
+      "ordinal": 1,
+      "class": "test_fixture",
+      "rationale": "Test-net fixture exercising the guard. tests/ is excluded from the release archive. Line: \"assert ev_nested(f\"weirdwrapX find /root -name {os.path.basename(df)} -delete\", nested_dat\""
+    },
+    {
+      "path": "hooks/tests/test_runtime_guard.py",
       "fingerprint": "42ae83cebc93fcb7",
       "ordinal": 1,
       "class": "test_fixture",
@@ -646,6 +1081,13 @@
     },
     {
       "path": "hooks/tests/test_runtime_guard.py",
+      "fingerprint": "48af833555ea423a",
+      "ordinal": 1,
+      "class": "test_fixture",
+      "rationale": "Test-net fixture exercising the guard. tests/ is excluded from the release archive. Line: \"assert ev_nested(f\"find /root -name {base} -delete\", nested_datafile) == \"BLOCK\"\""
+    },
+    {
+      "path": "hooks/tests/test_runtime_guard.py",
       "fingerprint": "4a5b30991d216ec2",
       "ordinal": 1,
       "class": "test_fixture",
@@ -653,8 +1095,22 @@
     },
     {
       "path": "hooks/tests/test_runtime_guard.py",
+      "fingerprint": "4b65c4ddc42ac14e",
+      "ordinal": 1,
+      "class": "test_fixture",
+      "rationale": "Test-net fixture exercising the guard. tests/ is excluded from the release archive. Line: \"assert ev_cwd(\"find /root -path /tmp/unrelated -delete\", datafile, fixture_repo) == \"ALLOW\""
+    },
+    {
+      "path": "hooks/tests/test_runtime_guard.py",
       "fingerprint": "4b823ee680c02aed",
       "ordinal": 1,
+      "class": "test_fixture",
+      "rationale": "def _statefile() — fixture input data inside the test tree; not shipped harness behaviour."
+    },
+    {
+      "path": "hooks/tests/test_runtime_guard.py",
+      "fingerprint": "4b823ee680c02aed",
+      "ordinal": 2,
       "class": "test_fixture",
       "rationale": "def _statefile() — fixture input data inside the test tree; not shipped harness behaviour."
     },
@@ -667,10 +1123,24 @@
     },
     {
       "path": "hooks/tests/test_runtime_guard.py",
+      "fingerprint": "57bfb7ad5a57103d",
+      "ordinal": 2,
+      "class": "test_fixture",
+      "rationale": "def test_chgrp_home_boundary_allows() — fixture input data inside the test tree; not shipped harness behaviour."
+    },
+    {
+      "path": "hooks/tests/test_runtime_guard.py",
       "fingerprint": "5ac2dec4c03fb39e",
       "ordinal": 1,
       "class": "test_fixture",
       "rationale": "def test_container_dir_mutation_statefile() — fixture input data inside the test tree; not shipped harness behaviour."
+    },
+    {
+      "path": "hooks/tests/test_runtime_guard.py",
+      "fingerprint": "6ab9a3db1b55274a",
+      "ordinal": 1,
+      "class": "test_fixture",
+      "rationale": "Test-net fixture exercising the guard. tests/ is excluded from the release archive. Line: \"assert ev_nested(f\"find /root -wholename {df} -delete\", nested_datafile) == \"BLOCK\"\""
     },
     {
       "path": "hooks/tests/test_runtime_guard.py",
@@ -695,6 +1165,13 @@
     },
     {
       "path": "hooks/tests/test_runtime_guard.py",
+      "fingerprint": "8f3bbd7c40722093",
+      "ordinal": 1,
+      "class": "test_fixture",
+      "rationale": "Test-net fixture exercising the guard. tests/ is excluded from the release archive. Line: \"assert ev_nested(\"mv /root /backup\", nested_datafile) == \"ALLOW\"\""
+    },
+    {
+      "path": "hooks/tests/test_runtime_guard.py",
       "fingerprint": "9869ac4e9a29035e",
       "ordinal": 1,
       "class": "test_fixture",
@@ -702,10 +1179,45 @@
     },
     {
       "path": "hooks/tests/test_runtime_guard.py",
+      "fingerprint": "9e4ca418553d5ec4",
+      "ordinal": 1,
+      "class": "test_fixture",
+      "rationale": "Test-net fixture exercising the guard. tests/ is excluded from the release archive. Line: \"assert ev_nested(\"find /root -path /tmp/unrelated -delete\", nested_datafile) == \"ALLOW\"\""
+    },
+    {
+      "path": "hooks/tests/test_runtime_guard.py",
+      "fingerprint": "9f6aaf58358e136e",
+      "ordinal": 1,
+      "class": "test_fixture",
+      "rationale": "Test-net fixture exercising the guard. tests/ is excluded from the release archive. Line: \"assert rg.evaluate(\"find /root -path /tmp/abs14b/.config/app/protected-runtime.json -delet\""
+    },
+    {
+      "path": "hooks/tests/test_runtime_guard.py",
       "fingerprint": "a00552b7c6f8263d",
       "ordinal": 1,
       "class": "test_fixture",
       "rationale": "def test_w4_kill_anchor() — fixture input data inside the test tree; not shipped harness behaviour."
+    },
+    {
+      "path": "hooks/tests/test_runtime_guard.py",
+      "fingerprint": "a19b298cac67fa41",
+      "ordinal": 1,
+      "class": "test_fixture",
+      "rationale": "Test-net fixture exercising the guard. tests/ is excluded from the release archive. Line: \"assert ev_nested(f\"find /root -path {df} -print\", nested_datafile) == \"ALLOW\" # read-only\""
+    },
+    {
+      "path": "hooks/tests/test_runtime_guard.py",
+      "fingerprint": "a4d225c4807bc5ff",
+      "ordinal": 1,
+      "class": "test_fixture",
+      "rationale": "Test-net fixture exercising the guard. tests/ is excluded from the release archive. Line: \"assert ev_nested(f\"find /root -path {df} -delete\", nested_datafile) == \"BLOCK\"\""
+    },
+    {
+      "path": "hooks/tests/test_runtime_guard.py",
+      "fingerprint": "b1e276cbc2c5d901",
+      "ordinal": 1,
+      "class": "test_fixture",
+      "rationale": "Test-net fixture exercising the guard. tests/ is excluded from the release archive. Line: \"assert ev_nested(\"rm -rf /root\", nested_datafile) == \"ALLOW\"\""
     },
     {
       "path": "hooks/tests/test_runtime_guard.py",
@@ -765,10 +1277,52 @@
     },
     {
       "path": "hooks/tests/test_runtime_guard.py",
+      "fingerprint": "e4375ba1793f4075",
+      "ordinal": 1,
+      "class": "test_fixture",
+      "rationale": "Test-net fixture exercising the guard. tests/ is excluded from the release archive. Line: \"os.environ[\"HOME\"] = \"/root\"\""
+    },
+    {
+      "path": "hooks/tests/test_runtime_guard.py",
+      "fingerprint": "e4375ba1793f4075",
+      "ordinal": 2,
+      "class": "test_fixture",
+      "rationale": "Test-net fixture exercising the guard. tests/ is excluded from the release archive. Line: \"os.environ[\"HOME\"] = \"/root\"\""
+    },
+    {
+      "path": "hooks/tests/test_runtime_guard.py",
+      "fingerprint": "e4375ba1793f4075",
+      "ordinal": 3,
+      "class": "test_fixture",
+      "rationale": "Test-net fixture exercising the guard. tests/ is excluded from the release archive. Line: \"os.environ[\"HOME\"] = \"/root\"\""
+    },
+    {
+      "path": "hooks/tests/test_runtime_guard.py",
+      "fingerprint": "e4375ba1793f4075",
+      "ordinal": 4,
+      "class": "test_fixture",
+      "rationale": "Test-net fixture exercising the guard. tests/ is excluded from the release archive. Line: \"os.environ[\"HOME\"] = \"/root\"\""
+    },
+    {
+      "path": "hooks/tests/test_runtime_guard.py",
+      "fingerprint": "e4375ba1793f4075",
+      "ordinal": 5,
+      "class": "test_fixture",
+      "rationale": "Test-net fixture exercising the guard. tests/ is excluded from the release archive. Line: \"os.environ[\"HOME\"] = \"/root\"\""
+    },
+    {
+      "path": "hooks/tests/test_runtime_guard.py",
       "fingerprint": "eec5740ef22c2584",
       "ordinal": 1,
       "class": "test_fixture",
       "rationale": "def test_kill_statefile_pid() — fixture input data inside the test tree; not shipped harness behaviour."
+    },
+    {
+      "path": "hooks/tests/test_runtime_guard.py",
+      "fingerprint": "f275794947d1d7d5",
+      "ordinal": 1,
+      "class": "test_fixture",
+      "rationale": "Test-net fixture exercising the guard. tests/ is excluded from the release archive. Line: \"assert ev_nested(f\"sudo find /root -path {df} -delete\", nested_datafile) == \"BLOCK\"\""
     },
     {
       "path": "hooks/tests/test_runtime_guard.py",
@@ -785,25 +1339,18 @@
       "rationale": "def test_hook_allows_read_statefile() — fixture input data inside the test tree; not shipped harness behaviour."
     },
     {
-      "path": "hooks/tests/test_runtime_guard.py",
-      "fingerprint": "0407656883511305",
-      "ordinal": 2,
+      "path": "hooks/tests/test_unit_find_cmds.py",
+      "fingerprint": "35e6c657e9d05bd3",
+      "ordinal": 1,
       "class": "test_fixture",
-      "rationale": "def test_home_in_cwd_boundary_allows() — fixture input data inside the test tree; not shipped harness behaviour."
+      "rationale": "Test-net fixture exercising the guard. tests/ is excluded from the release archive. Line: \"[\"find\", \"-maxdepth\", \"1\", \"/root\", \"-delete\"], 0) == [\"/root\"]\""
     },
     {
-      "path": "hooks/tests/test_runtime_guard.py",
-      "fingerprint": "4b823ee680c02aed",
-      "ordinal": 2,
+      "path": "hooks/tests/test_unit_find_cmds.py",
+      "fingerprint": "6eb5df456936d64f",
+      "ordinal": 1,
       "class": "test_fixture",
-      "rationale": "def _statefile() — fixture input data inside the test tree; not shipped harness behaviour."
-    },
-    {
-      "path": "hooks/tests/test_runtime_guard.py",
-      "fingerprint": "57bfb7ad5a57103d",
-      "ordinal": 2,
-      "class": "test_fixture",
-      "rationale": "def test_chgrp_home_boundary_allows() — fixture input data inside the test tree; not shipped harness behaviour."
+      "rationale": "Test-net fixture exercising the guard. tests/ is excluded from the release archive. Line: \"assert find_cmds._find_path_operands([\"find\", \"-L\", \"/root\", \"-delete\"], 0) == [\"/root\"]\""
     },
     {
       "path": "hooks/tests/test_unit_find_cmds.py",
@@ -820,6 +1367,62 @@
       "rationale": "def test_find_predicate_values_name_and_path() — fixture input data inside the test tree; not shipped harness behaviour."
     },
     {
+      "path": "hooks/tests/test_unit_find_cmds.py",
+      "fingerprint": "803ebcb4de4ecd3f",
+      "ordinal": 1,
+      "class": "test_fixture",
+      "rationale": "Test-net fixture exercising the guard. tests/ is excluded from the release archive. Line: \"[\"find\", \"/root\", \"-name\", \"index.mjs\", \"-delete\"], 0))\""
+    },
+    {
+      "path": "hooks/tests/test_unit_find_cmds.py",
+      "fingerprint": "933a6bef980ceb99",
+      "ordinal": 1,
+      "class": "test_fixture",
+      "rationale": "Test-net fixture exercising the guard. tests/ is excluded from the release archive. Line: \"assert list(find_cmds._find_predicate_values([\"find\", \"/root\", \"-delete\"], 0)) == []\""
+    },
+    {
+      "path": "hooks/tests/test_unit_find_cmds.py",
+      "fingerprint": "a0c20f5ce53bf518",
+      "ordinal": 1,
+      "class": "test_fixture",
+      "rationale": "Test-net fixture exercising the guard. tests/ is excluded from the release archive. Line: \"assert find_cmds._find_path_operands([\"find\", \"--\", \"/root\", \"-delete\"], 0) == [\"/root\"]\""
+    },
+    {
+      "path": "hooks/tests/test_unit_find_cmds.py",
+      "fingerprint": "a5c29ae645a779d5",
+      "ordinal": 1,
+      "class": "test_fixture",
+      "rationale": "Test-net fixture exercising the guard. tests/ is excluded from the release archive. Line: \"assert find_cmds._fd_positional_roots(toks, 0) == [\"/root\", \"./sub\"]\""
+    },
+    {
+      "path": "hooks/tests/test_unit_find_cmds.py",
+      "fingerprint": "a5e5d223afb510c2",
+      "ordinal": 1,
+      "class": "test_fixture",
+      "rationale": "Test-net fixture exercising the guard. tests/ is excluded from the release archive. Line: \"assert find_cmds._find_path_operands([\"find\", \"/root\", \"-delete\"], 0) == [\"/root\"]\""
+    },
+    {
+      "path": "hooks/tests/test_unit_find_cmds.py",
+      "fingerprint": "f90b94cddcc0070d",
+      "ordinal": 1,
+      "class": "test_fixture",
+      "rationale": "Test-net fixture exercising the guard. tests/ is excluded from the release archive. Line: \"# `fd -g <glob> /root ./sub -X rm` → search dirs are the path-like positionals.\""
+    },
+    {
+      "path": "hooks/tests/test_unit_find_cmds.py",
+      "fingerprint": "f9428aefb4b2dd3c",
+      "ordinal": 1,
+      "class": "test_fixture",
+      "rationale": "Test-net fixture exercising the guard. tests/ is excluded from the release archive. Line: \"toks = [\"fd\", \"-g\", \"*.mjs\", \"/root\", \"./sub\", \"-X\", \"rm\"]\""
+    },
+    {
+      "path": "hooks/tests/test_unit_pathmatch.py",
+      "fingerprint": "338b9b6fed8b340b",
+      "ordinal": 1,
+      "class": "test_fixture",
+      "rationale": "Test-net fixture exercising the guard. tests/ is excluded from the release archive. Line: \"os.environ[\"HOME\"] = \"/home/testuser\"\""
+    },
+    {
       "path": "hooks/tests/test_unit_pathmatch.py",
       "fingerprint": "d9711b6864d75ad8",
       "ordinal": 1,
@@ -834,11 +1437,32 @@
       "rationale": "def test_normalize_path_expands_leading_home() — fixture input data inside the test tree; not shipped harness behaviour."
     },
     {
+      "path": "hooks/tests/test_unit_pathmatch.py",
+      "fingerprint": "fee175425a6bb804",
+      "ordinal": 1,
+      "class": "test_fixture",
+      "rationale": "Test-net fixture exercising the guard. tests/ is excluded from the release archive. Line: \"assert pathmatch._normalize_path(\"~\") == \"/home/testuser\"\""
+    },
+    {
       "path": "scripts/INDEX.md",
       "fingerprint": "41ba4204049bec4f",
       "ordinal": 1,
       "class": "comment_or_narrative_doc",
       "rationale": "Tree — prose/comment text; never read as a path at runtime."
+    },
+    {
+      "path": "scripts/apply-permissions.sh",
+      "fingerprint": "05cede2500119e31",
+      "ordinal": 1,
+      "class": "comment_or_narrative_doc",
+      "rationale": "Prose/comment text documenting the residue policy; never read as a path at runtime. Line: \"# fallback is the resolved home (then $HOME), NEVER the author literal /root.\""
+    },
+    {
+      "path": "scripts/break-overnight-lock.py",
+      "fingerprint": "20f2e73e2af22979",
+      "ordinal": 1,
+      "class": "comment_or_narrative_doc",
+      "rationale": "Prose/comment text documenting the residue policy; never read as a path at runtime. Line: \"# ../hooks/lib). Never default to the author literal /root.\""
     },
     {
       "path": "scripts/check-file-references.sh",
@@ -856,17 +1480,24 @@
     },
     {
       "path": "scripts/check-public-core.sh",
-      "fingerprint": "0122a0d46a883885",
+      "fingerprint": "21571b45ff999f8d",
       "ordinal": 1,
       "class": "scanner_pattern_definition",
-      "rationale": "residue_audit() — the residue detector's own constant table; naming the pattern is its purpose."
+      "rationale": "The detector's own constant table: the literal IS the pattern being gated on. Line: \"# \"/home/yugoge\" can never satisfy it, which is what keeps a genuine author-home\""
     },
     {
       "path": "scripts/check-public-core.sh",
-      "fingerprint": "013d6ca828ab4ee5",
+      "fingerprint": "4f1f7fbffe9acb3f",
       "ordinal": 1,
       "class": "scanner_pattern_definition",
-      "rationale": "residue_audit() — the residue detector's own constant table; naming the pattern is its purpose."
+      "rationale": "The detector's own constant table: the literal IS the pattern being gated on. Line: \"absolute bare directories, e.g. `(\"/\", \"/root\", \"/home\", \"/etc\", \"/usr\", ...)`.\""
+    },
+    {
+      "path": "scripts/check-public-core.sh",
+      "fingerprint": "56d9b4f04bffdf75",
+      "ordinal": 1,
+      "class": "scanner_pattern_definition",
+      "rationale": "The detector's own constant table: the literal IS the pattern being gated on. Line: \"# ROOT itself: `p = \"/root/.claude\"` was caught while `EXACT_ROOT=\"/root\"`,\""
     },
     {
       "path": "scripts/check-public-core.sh",
@@ -877,10 +1508,24 @@
     },
     {
       "path": "scripts/check-public-core.sh",
+      "fingerprint": "5f4e88a9d98a3186",
+      "ordinal": 1,
+      "class": "scanner_pattern_definition",
+      "rationale": "The detector's own constant table: the literal IS the pattern being gated on. Line: \"(`try: # ... route the audit-log default off /root`), so such an occurrence was\""
+    },
+    {
+      "path": "scripts/check-public-core.sh",
       "fingerprint": "61a9a6b2ee9320c4",
       "ordinal": 1,
       "class": "scanner_pattern_definition",
       "rationale": "residue_audit() — the residue detector's own constant table; naming the pattern is its purpose."
+    },
+    {
+      "path": "scripts/check-public-core.sh",
+      "fingerprint": "8b146080b55453ce",
+      "ordinal": 1,
+      "class": "scanner_pattern_definition",
+      "rationale": "The detector's own constant table: the literal IS the pattern being gated on. Line: \"r\"(?:/root|/home/[a-z][a-z0-9_-]*|/Users/[A-Za-z][A-Za-z0-9_-]*)\"\""
     },
     {
       "path": "scripts/check-public-core.sh",
@@ -897,6 +1542,34 @@
       "rationale": "residue_audit() — the residue detector's own constant table; naming the pattern is its purpose."
     },
     {
+      "path": "scripts/check-public-core.sh",
+      "fingerprint": "c03c87d5a9d036b8",
+      "ordinal": 1,
+      "class": "scanner_pattern_definition",
+      "rationale": "The detector's own constant table: the literal IS the pattern being gated on. Line: \"is_env = bool(re.search(r':-\\s*[\"\\']?(/root|/home/|/Users/)', content))\""
+    },
+    {
+      "path": "scripts/check-public-core.sh",
+      "fingerprint": "e5332625ebc5adcb",
+      "ordinal": 1,
+      "class": "scanner_pattern_definition",
+      "rationale": "The detector's own constant table: the literal IS the pattern being gated on. Line: \"# `EXACT_HOME=\"/home/yugoge\"` and `MAC=\"/Users/Yugoge\"` walked straight through.\""
+    },
+    {
+      "path": "scripts/check-public-core.sh",
+      "fingerprint": "ea9acdfa6ae60c22",
+      "ordinal": 1,
+      "class": "scanner_pattern_definition",
+      "rationale": "The detector's own constant table: the literal IS the pattern being gated on. Line: \"second component (an actual author home such as \"/home/yugoge\") can never\""
+    },
+    {
+      "path": "scripts/close-scoring-decide.py",
+      "fingerprint": "924a6cf6f5aeb156",
+      "ordinal": 1,
+      "class": "comment_or_narrative_doc",
+      "rationale": "Prose/comment text documenting the residue policy; never read as a path at runtime. Line: \"# narrower 2-candidate resolution missed /root). The resolver prints a path on\""
+    },
+    {
       "path": "scripts/close-scoring-decide.py",
       "fingerprint": "95ebf3714a61f66c",
       "ordinal": 1,
@@ -909,6 +1582,13 @@
       "ordinal": 1,
       "class": "comment_or_narrative_doc",
       "rationale": "def main() — prose/comment text; never read as a path at runtime."
+    },
+    {
+      "path": "scripts/create-overnight-state.sh",
+      "fingerprint": "500e9c4a69ea6ecb",
+      "ordinal": 1,
+      "class": "comment_or_narrative_doc",
+      "rationale": "Prose/comment text documenting the residue policy; never read as a path at runtime. Line: \"# 4-tier fallback: env -> pwd -> git toplevel -> /root literal.\""
     },
     {
       "path": "scripts/detect-hardcoded-paths.sh",
@@ -925,11 +1605,25 @@
       "rationale": "script preamble — the residue detector's own constant table; naming the pattern is its purpose."
     },
     {
+      "path": "scripts/execute-push.py",
+      "fingerprint": "9c3bf211cc6bcf1e",
+      "ordinal": 1,
+      "class": "comment_or_narrative_doc",
+      "rationale": "Prose/comment text documenting the residue policy; never read as a path at runtime. Line: \"# Push.sh location — tilde-expanded at runtime; never hardcoded to /root\""
+    },
+    {
       "path": "scripts/install/render-settings",
       "fingerprint": "ac7b1e71a7a6a59a",
       "ordinal": 1,
       "class": "doctest_or_docstring_example",
       "rationale": "module docstring — illustrative literal inside documentation/usage text; not executed as a path."
+    },
+    {
+      "path": "scripts/resolve-close-report.sh",
+      "fingerprint": "f4385ea41ec5e8c2",
+      "ordinal": 1,
+      "class": "comment_or_narrative_doc",
+      "rationale": "Prose/comment text documenting the residue policy; never read as a path at runtime. Line: \"# resolver is at ../hooks/lib), NEVER the author literal /root.\""
     },
     {
       "path": "scripts/spec-verify/spec_verify_parsers.py",
