@@ -54,6 +54,7 @@ from lib import bash_write_targets as bwt  # noqa: E402
 from lib.allowlist import (  # noqa: E402
     SENTINEL_GRANT_DIR,
     consume_sentinel_grant_on_terminal_result,
+    match_sentinel_grant_for_bash_command,
     match_sentinel_grant_for_write,
 )
 
