@@ -43,6 +43,26 @@ img { max-width:100%; }
 COMBOS = [(1280, 800, "light"), (1280, 800, "dark"),
           (390, 844, "light"), (390, 844, "dark")]
 
+# ACCEPTANCE TRADEOFF, not a layout fix (orchestrator ruling, Option B).
+#
+# The original criterion required all SIX first-screen elements above the fold at once.
+# That conjunction has an EMPTY feasible set, and provably so rather than by experiment:
+# the renderer lays text on a fixed monospace grid, so rendered width is exactly linear in
+# character count. Zero clipping needs a logical width of at least 1390px, while an 11px
+# glyph at the 390px viewport (where the image renders 358px wide) permits at most
+# 15 x 358 / 11 = 488.2px. The interval is empty by a factor of 2.85. Widening does not
+# rescue the desktop either: at 1390px the desktop glyph is 7.77px, and even at the full
+# 1012px preview column only 10.9px -- still under the floor.
+#
+# The ruling narrows the REQUIREMENT, never the page: nothing is deleted, shrunk, cropped
+# or moved, and every demoted element keeps its place in document order. Relaxing the 11px
+# glyph floor was considered and REJECTED -- it would turn a criterion green while changing
+# nothing a reader experiences -- so the floor below remains a hard failure.
+REQUIRED_ABOVE_FOLD = ("headline", "limits")
+DEMOTED_ELEMENTS = ("hero", "whynow", "statusLast", "quickstart")
+ALL_ELEMENTS = REQUIRED_ABOVE_FOLD + DEMOTED_ELEMENTS
+GLYPH_FLOOR_PX = 11.0
+
 
 def md_to_html(md: str) -> str:
     """First screen only: everything above the first horizontal rule."""
