@@ -675,10 +675,38 @@ def ac6(tmp: Path) -> None:
              and (p not in post or (post[p]["dev"], post[p]["ino"]) != (e["dev"], e["ino"]))]
     check("AC6(e)", "non-mutable pre-existing artifacts kept inode identity across the cycle",
           not ident, str(ident[:4]))
-    for item in json.loads(json.dumps([i for i in out.splitlines()])):
-        pass
-    check("AC6(g)", "the per-item report cross-checks measured state",
-          "[verified: yes]" in out and "present after: False" in out, out[-300:])
+    # The cross-check consumes the MACHINE-READABLE report and validates EVERY
+    # reported item. It used to be two substring tests over stdout -- and both of
+    # those substrings were present during a run that destroyed an unrelated
+    # config home, so they certified nothing. (The dead JSON round-trip loop that
+    # preceded this check round-tripped the output lines through JSON and threw
+    # them away; it is gone.)
+    report = json.loads(out)
+    items = report["items"]
+    validated, unsound = 0, []
+    for it in items:
+        result = it["result"]
+        if it["action"] == "settings":
+            ok = it["measured_sha256"] == it["expected_sha256"]
+        elif result == "removed":
+            ok = it["measured_present"] is False
+        elif result.startswith("kept-"):
+            ok = it["measured_present"] is True
+        elif result in ("absent", "absent-clean"):
+            ok = it["measured_present"] is False
+        elif result.startswith("skipped"):
+            ok = True                      # asserts no presence either way
+        else:
+            ok = False                     # an unclassified result is not validated
+        validated += 1
+        if not ok:
+            unsound.append(it)
+    check("AC6(g)", "the report is machine-readable and carries at least one item",
+          isinstance(items, list) and len(items) > 0, f"K={len(items)}")
+    check("AC6(g)", "EVERY reported item is validated against measured state "
+                    "(removals absent, kept items present, digests equal)",
+          not unsound and validated == len(items),
+          f"validated={validated}/{len(items)} unsound={unsound[:3]}")
 
     # (c, extended) a file the installer created but the USER then rewrote is the
     # user's file now: uninstall must keep it rather than delete their content.
