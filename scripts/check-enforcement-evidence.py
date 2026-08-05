@@ -601,27 +601,51 @@ BARE_STATUS_TOKEN_RE = re.compile(r"\b(?:UN)?MITIGATED\b")
 
 
 def risk_blocks(threat_model_text):
-    """{risk_id: block_text} for every '### RISK-N:' entry."""
-    blocks, matches = {}, list(re.finditer(r"(?m)^###\s+(RISK-\d+)\s*:", threat_model_text))
+    """[(risk_id, block_text)] for every '### RISK-N:' heading INSIDE section 4, or None.
+
+    A LIST, not a dict, and scoped to the residual-risk section. A dict silently overwrites a
+    duplicate id, so a document that drops the real RISK-1 status and adds a later duplicate
+    RISK-1 carrying an accepted one would validate the surrogate and pass. Scoping keeps a
+    heading elsewhere in the document from standing in for the published entry.
+    """
+    section = re.search(r"(?ms)^##\s+4\.\s+Known Residual Risks.*?(?=^##\s+\d|\Z)",
+                        threat_model_text)
+    if not section:
+        return None
+    body = section.group(0)
+    matches = list(re.finditer(r"(?m)^###\s+(RISK-\d+)\s*:", body))
+    blocks = []
     for index, match in enumerate(matches):
-        end = matches[index + 1].start() if index + 1 < len(matches) else len(threat_model_text)
-        next_section = re.search(r"(?m)^##\s+\d", threat_model_text[match.end(): end])
-        if next_section:
-            end = match.end() + next_section.start()
-        blocks[match.group(1)] = threat_model_text[match.start(): end]
+        end = matches[index + 1].start() if index + 1 < len(matches) else len(body)
+        blocks.append((match.group(1), body[match.start(): end]))
     return blocks
 
 
 def check_risk_status(threat_model_text, report):
     """Exactly one normalized status line per entry, valued in that entry's accepted set,
     with no bare MITIGATED/UNMITIGATED token anywhere else in the block."""
-    blocks = risk_blocks(threat_model_text)
+    found = risk_blocks(threat_model_text)
     accepted_map = DECLARED_SCHEMA["risk_status"]
+    if found is None:
+        report.fail("threat model section 4 not found -- no residual-risk entry can be "
+                    "validated")
+        return
     clean = True
+    # The published entry set must be EXACTLY the declared one, each appearing once. Without
+    # this, an undeclared RISK-N is unvalidated and a duplicated id can shadow the real entry.
+    seen = [rid for rid, _ in found]
+    unknown = sorted({rid for rid in seen if rid not in accepted_map})
+    duplicated = sorted({rid for rid in seen if seen.count(rid) > 1})
+    absent = sorted(rid for rid in accepted_map if rid not in seen)
+    for label, ids in (("undeclared", unknown), ("duplicated", duplicated), ("missing", absent)):
+        if ids:
+            report.fail(f"threat model section 4 carries {label} residual-risk heading(s) "
+                        f"{ids}; the declared set is {sorted(accepted_map)}, each exactly once")
+            clean = False
+    blocks = dict(found)
     for risk_id, accepted in accepted_map.items():
         block = blocks.get(risk_id)
         if block is None:
-            report.fail(f"{risk_id}: no '### {risk_id}:' entry found in the threat model")
             clean = False
             continue
         status_lines = STATUS_LINE_RE.findall(block)
