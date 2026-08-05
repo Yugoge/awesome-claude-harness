@@ -98,7 +98,7 @@ def main() -> int:
                             "reason": "harness instrumentation, not terminal session"})
             continue
 
-        stage, kind, block = classify(text, seen_push, seen_marker)
+        stage, kind, block = classify(text, seen_grant, seen_marker)
         entry = {
             "id": f"hero-{idx:03d}",
             "ordinal": len(lines) + 1,
