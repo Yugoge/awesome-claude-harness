@@ -83,7 +83,7 @@ def main() -> int:
 
     lines: list[dict] = []
     omitted: list[dict] = []
-    seen_push = False
+    seen_grant = False
     seen_marker = False
 
     for idx, raw in enumerate(raw_lines, start=1):
