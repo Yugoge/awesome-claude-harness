@@ -972,19 +972,29 @@ def _verb_of(row) -> str | None:
     return None if candidate == "redirect" else candidate
 
 
-VERB_ROWS = [r for r in COVERED_VERB_ROUTES if _verb_of(r)]
-OPERATOR_ROWS = [r for r in COVERED_VERB_ROUTES if not _verb_of(r)]
+#: Rows written in PLAIN form. The `hidden-command-word` rows ARE the escaped
+#: and grouped forms, so applying the transformation to them again would
+#: produce `\\cp`, which is not a command at all.
+PLAIN_COVERED = [r for r in COVERED_VERB_ROUTES if r["route_class"] != "hidden-command-word"]
+VERB_ROWS = [r for r in PLAIN_COVERED if _verb_of(r)]
+OPERATOR_ROWS = [r for r in PLAIN_COVERED if not _verb_of(r)]
 
 
 def test_f1_only_the_redirect_operators_are_exempt_from_the_word_syntaxes():
     """Pins WHICH rows the two derived tests below are allowed to skip.
 
     A backslash escapes a command WORD, so `>` and `>|` have nothing to escape.
-    Every other covered row names a word and must survive both syntaxes. If a
-    future mechanism is renamed such that its verb stops being derivable, the
-    row silently leaves VERB_ROWS — so the exempt set is asserted exactly.
+    Every other covered row names a word and must survive both syntaxes. Two
+    ways of quietly shrinking this coverage are closed: renaming a mechanism so
+    its verb stops being derivable (the regex assertion below), and moving a
+    verb's only plain row into the exempt `hidden-command-word` class (the
+    mechanism-set assertion, which requires every mandated mechanism to still
+    have a plain row to derive from).
     """
     assert {r["mechanism"] for r in OPERATOR_ROWS} == {"redirect-truncate", "redirect-clobber"}
+    assert {r["mechanism"] for r in PLAIN_COVERED} == \
+        {r["mechanism"] for r in COVERED_VERB_ROUTES}, (
+            "a mandated mechanism lost its plain-form row and is no longer derived against")
     for row in VERB_ROWS:
         verb = _verb_of(row)
         assert re.search(rf"(?:^|[\s;|&]){re.escape(verb)}\b", row["command_template"]), (
