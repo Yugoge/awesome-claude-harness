@@ -115,7 +115,19 @@
     ],
     "hook_order": "preserved: existing entries keep their positions; core registrations are appended after them",
     "reserialization": "A merged settings.json is re-serialized with 2-space indentation and UTF-8 preserved (ensure_ascii=false). Key order and every value are preserved exactly; only whitespace/formatting may differ from the user's original file. JSON carries no comments, so nothing can be lost that way.",
-    "why": "Rendering a user's settings.json from a template is the known-destructive path. Measured on the maintainer host this cycle: a template render against the live file silently re-adds 2 deny entries and strips ~38 allow entries. This installer therefore never renders a user's settings.json -- it only appends hook registrations that are not already present."
+    "why": "Rendering a user's settings.json from a template is the known-destructive path. This installer therefore never renders a user's settings.json -- it only appends hook registrations that are not already present.",
+    "why_measured": {
+      "_note": "RE-MEASURED at implementation time, not transcribed. The figure this field carried before ('re-adds 2 deny entries and strips ~38 allow entries') was wrong in both directions, and so is the backlog's '38 allow and 24 deny lost, 2 deny re-added'. Both are superseded. Re-measure rather than copy these numbers too: settings.template.json is edited by ordinary maintenance, so the delta MOVES. The input digests below are recorded precisely so a divergent recount is attributable to a changed input rather than to a wrong claim.",
+      "derivation": "Expand every {{CLAUDE_HOME}} placeholder in settings.template.json to the live home, parse both files as JSON, and take the set difference of each permissions list against the same list in the live settings.json. 'lost' = present live, absent from the render. 're-added' = present in the render, absent live. No other normalization -- entries are compared verbatim after placeholder expansion.",
+      "measured_at": "2026-08-05, repo HEAD 4c33f2f5, CLAUDE_HOME=/root/.claude",
+      "inputs": {
+        "settings.json": "sha256:1b5f036a6183...",
+        "settings.template.json": "sha256:a5ade0ed937e..."
+      },
+      "result": "allow: 159 live vs 149 rendered -- 10 lost, 0 re-added. deny: 95 live vs 81 rendered -- 14 lost, 0 re-added. ask: 0 live vs 23 rendered -- 0 lost, 23 ADDED.",
+      "what_a_render_would_destroy": "10 allow entries (including Bash(curl:*), Bash(docker run:*), Bash(wget:*) and five Edit(**/<manifest-file>) entries) and -- the serious half -- 14 DENY entries, among them Bash(rm -rf:*), Bash(git push --force:*), Bash(git reset --hard:*), Bash(kubectl delete:*) and Edit(.claude/settings.json). A render does not merely inconvenience the user: it silently removes standing prohibitions and injects 23 unrequested ask entries. That is the whole argument for additive-only merge.",
+      "placeholder_expansion_is_load_bearing": "Without expanding {{CLAUDE_HOME}} the naive diff reports 47 allow lost and 37 re-added; 37 of those are the SAME entries respelled as placeholders. Any recount that omits the expansion step will disagree with the figures above and be wrong."
+    }
   },
   "hook_registrations": [
     {
