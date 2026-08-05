@@ -11,7 +11,10 @@ WHAT IT DELIVERS, stated without inflation
 ------------------------------------------
 For each Bash tool call, if the command names a REPLACING verb whose target
 resolves to an EXISTING REGULAR FILE, that call is refused unless a matching
-single-use grant names that exact file — and either outcome is recorded.
+single-use grant names that exact file — and either outcome is recorded. The
+grant is SPENT by this guard at the moment it authorizes (see
+``_consume_grants``), because the registered PostToolUse consumer cannot match
+a ``Write`` grant against a shell command and so never spent it at all.
 
 That is a syntactic filter over one tool's visible input. It does not cover
 multi-step compositions, indirection, or anything that happens inside a
