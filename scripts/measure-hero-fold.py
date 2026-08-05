@@ -165,16 +165,27 @@ def main() -> int:
             rendered_w = (m.get("heroNatural") or {}).get("w") or 0
             glyph_px = round(FONT_PX * rendered_w / logical_w, 2) if rendered_w else 0.0
             above = {}
-            for key in ("headline", "limits", "hero", "whynow", "statusLast", "quickstart"):
+            for key in ALL_ELEMENTS:
                 box = m.get(key)
                 above[key] = bool(box and box["top"] >= 0 and box["bottom"] <= m["viewportH"])
-            missing = [k for k, ok in above.items() if not ok]
+            missing = [k for k in REQUIRED_ABOVE_FOLD if not above[k]]
             if missing:
                 failures.append(f"{w}x{h}/{scheme}: not above the fold: {', '.join(missing)}")
-            if glyph_px < 11.0:
-                failures.append(f"{w}x{h}/{scheme}: hero glyph height {glyph_px}px < 11px")
+            # Demoted by the ruling: measured and reported every run so the tradeoff stays
+            # visible, but no longer a failure. Reporting is what keeps it a tradeoff
+            # rather than an omission.
+            demoted_below = [k for k in DEMOTED_ELEMENTS if not above[k]]
+            if demoted_below:
+                tradeoffs.append(f"{w}x{h}/{scheme}: below the fold by accepted tradeoff: "
+                                 f"{', '.join(demoted_below)}")
+            # NOT relaxed by the ruling — see REQUIRED_ABOVE_FOLD.
+            if glyph_px < GLYPH_FLOOR_PX:
+                failures.append(f"{w}x{h}/{scheme}: hero glyph height {glyph_px}px "
+                                f"< {GLYPH_FLOOR_PX}px")
             results.append({"viewport": f"{w}x{h}", "scheme": scheme,
                             "glyph_px": glyph_px, "above_fold": above,
+                            "required_above_fold": list(REQUIRED_ABOVE_FOLD),
+                            "demoted_below_fold": demoted_below,
                             "content_bottom": m.get("quickstart", {}).get("bottom")
                             if m.get("quickstart") else None,
                             "viewport_h": m["viewportH"]})
