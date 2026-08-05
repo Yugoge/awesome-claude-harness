@@ -64,6 +64,51 @@ VERSION_RELPATH = "VERSION"
 # `human_consent_escape_hatch` flags and to the gate hook's own literal.
 HUMAN_CONSENT_ESCAPE_HATCH_ROUTES = ("slashcommand:/do", "slashcommand:/allow")
 
+# THE REPAIR FLOOR. A CLOSED, exactly-enumerated set of routes that stay usable
+# in every degraded state, so a human (or an agent acting for one) can always
+# read, modify and execute the artifacts whose corruption produced that state.
+#
+# It is manifest-INDEPENDENT on purpose: the manifest is one of the artifacts a
+# degraded state implies is unreadable, so a floor derived from it would live
+# inside its own failure domain. The gate hook carries a second copy as a
+# pre-import literal for the same reason -- this module is itself a
+# BOUND_ARTIFACTS member, so a floor declared only here cannot help when THIS
+# file is what failed to load. A drift test pins the two copies equal.
+#
+# CLOSED means closed: the set is asserted by EQUALITY, not membership, so
+# adding or removing a route fails a test. Disjointness from the protected
+# surface does NOT bound this set -- the surface is entirely `slashcommand:` and
+# `skill:` while every member here is `tool:`, so disjointness holds for ANY
+# subset of the tool namespace and would wave through a namespace-wide
+# fail-open. Equality is the only guard. Widening this set because some other
+# tool refused during a repair is the defect, not the fix.
+REPAIR_FLOOR_ROUTES = (
+    "tool:Read",
+    "tool:Edit",
+    "tool:Write",
+    "tool:Bash",
+    "tool:Glob",
+    "tool:Grep",
+)
+
+# Per-member security rationale, recorded as data so a test can assert that no
+# member was admitted without one. Every member is PERMANENTLY outside the
+# protected surface, which is why each has to earn its place.
+REPAIR_FLOOR_RATIONALE = {
+    "tool:Read": "Inspect the corrupt artifact. Read-only; cannot mutate the protected surface.",
+    "tool:Edit": "Surgically repair a partially-corrupt artifact. Mutating, and the accepted "
+                 "minimum: a repair path that cannot write is not a repair path.",
+    "tool:Write": "Replace an artifact too corrupt to patch. Strictly necessary for the "
+                  "malformed-manifest state, where Edit has no anchor to match.",
+    "tool:Bash": "Execute the validator that confirms the repair, or restore from version "
+                 "control. The highest-value route to an attacker and the uncomfortable "
+                 "member -- accepted because in a degraded state the gate holds no manifest "
+                 "and is enforcing nothing at all, so refusing Bash prevents repair without "
+                 "protecting anything.",
+    "tool:Glob": "Locate the artifact when its path is not known. Read-only, returns paths.",
+    "tool:Grep": "Locate the offending content inside a large artifact. Read-only.",
+}
+
 # Fixed order is part of the canonical binding definition -- reordering changes
 # the tuple and is therefore a breaking change, not a refactor.
 SETTINGS_LAYERS = ("settings.json", "settings.local.json", ".claude/settings.local.json")
