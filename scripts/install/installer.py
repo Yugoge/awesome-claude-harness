@@ -1510,7 +1510,18 @@ def uninstall(ctx: Ctx, keep_payload: bool = False) -> dict:
             else:
                 atomic_write(settings_target, new_bytes)
                 action_result = "un-merged"
-        elif untouched and removable and backup_path and backup_path.is_file():
+        elif untouched and removable and not unaccounted and backup_path \
+                and backup_path.is_file() and _backup_equals(backup_path, merged_out):
+            # Two proofs, both required. (1) The live bytes still equal the recorded
+            # as-installed digest, so the user has not touched the file since
+            # install and no post-install work can be lost. (2) The backup document
+            # is EQUAL to what the un-merge computed. Without (2) this path is
+            # unsound across generations: a gen-002 backup is the post-gen-001
+            # document, so restoring it would leave gen-001's registrations wired
+            # to a payload this same run then deletes -- dangling wiring under a
+            # success report, which is the exact failure mode this lane exists to
+            # eliminate. With both proofs, restoring is byte-preserving for the
+            # user's original formatting AND semantically identical to the un-merge.
             new_bytes = backup_path.read_bytes()
             atomic_write(settings_target, new_bytes)
             action_result = "restored-provably-safe"
