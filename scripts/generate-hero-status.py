@@ -658,6 +658,8 @@ def assert_limits_above_fold(readme: Path) -> tuple[list[str], list[str]]:
 
 
 def cmd_write(readme: Path) -> int:
+    global README_PATH
+    README_PATH = readme
     text = readme.read_text(encoding="utf-8")
     rows = render_rows()
     for rid in REGION_IDS:
