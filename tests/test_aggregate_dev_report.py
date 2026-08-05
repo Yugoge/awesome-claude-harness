@@ -26,6 +26,7 @@ _is_worker_for_task = _mod._is_worker_for_task
 _validate_shards = _mod._validate_shards
 _load_baseline_authority = _mod._load_baseline_authority
 _migrate_baseline_reports = _mod._migrate_baseline_reports
+_migrate_iteration_history = _mod._migrate_iteration_history
 
 _HOOK = Path(__file__).parent.parent / "hooks" / "pretool-aggregate-check.py"
 _hook_spec = importlib.util.spec_from_file_location("pretool_aggregate_check", _HOOK)
@@ -751,8 +752,9 @@ def test_current_cycle_declared_lanes_exclude_legacy_iteration_history(
     assert rc == 1
     for compound in ("d-iteration-1", "d-iteration-2", "e-iteration-2"):
         assert f"shard '{compound}'" not in captured.err
-    for lane in ("b", "c", "f"):
+    for lane in ("b", "c"):
         assert f"shard '{lane}': dev.status is 'completed_with_runtime_blockers'" in captured.err
+    assert "shard 'f': dev.status is 'blocked'" in captured.err
     assert "BASELINE_" not in captured.err
     assert not (dev_dir / f"dev-report-{LIVE_TASK}.json").exists()
 
@@ -995,9 +997,14 @@ def test_no_gate_downgrade_or_runtime_credit(
     dev_dir = root / "docs" / "dev"
     parent = dev_dir / f"dev-report-{LIVE_TASK}.json"
     before = parent.read_bytes() if parent.exists() else None
-    for lane in ("b", "c", "f"):
+    expected_statuses = {
+        "b": "completed_with_runtime_blockers",
+        "c": "completed_with_runtime_blockers",
+        "f": "blocked",
+    }
+    for lane, expected in expected_statuses.items():
         report = json.loads((dev_dir / f"dev-report-{LIVE_TASK}-{lane}.json").read_text())
-        assert report["dev"]["status"] == "completed_with_runtime_blockers"
+        assert report["dev"]["status"] == expected
     native = json.loads((root / "claude-compat/native-harness-status.json").read_text())
     release = native["release_gate"]
     assert release["lifecycle_blocker_count"] == 13
@@ -1459,3 +1466,495 @@ def test_single_target_migration_rolls_back_every_publication_failure(
     assert path.read_bytes() == raw
     assert path.stat().st_mode & 0o777 == 0o644
     assert not ledger.exists()
+
+
+# ---------------------------------------------------------------------------
+# Exact lane-f history migration to versioned non-voting audit history (lane l)
+# ---------------------------------------------------------------------------
+
+LANE_F_MIGRATION_TASK = f"{LIVE_TASK}-l"
+LANE_F_OLD_RELATIVE = f"docs/dev/dev-report-{LIVE_TASK}-f-iteration-1.json"
+LANE_F_NEW_RELATIVE = f"docs/dev/dev-report-iter1-{LIVE_TASK}-f.json"
+LANE_F_ACTIVE_RELATIVE = f"docs/dev/dev-report-{LIVE_TASK}-f.json"
+LANE_F_HISTORY_PREIMAGE_SHA256 = (
+    "e2c0e78c196e3f5a07c0b588dacc7516449c056419d7e495639986a7404500dc"
+)
+LANE_F_ACTIVE_PREIMAGE_SHA256 = (
+    "23bb9ef9ded5323fc41b6c497970c87eb4ecb8167e70994b032c66ec5bc3c9b9"
+)
+LANE_F_HISTORY_POSTIMAGE_SHA256 = (
+    "137d22955b50131d24dff2038a930dd70af5c74b8e8704bf5b7f443530d44a3a"
+)
+LANE_F_ACTIVE_POSTIMAGE_SHA256 = (
+    "d70553314977de0f50cee8590d80177780b61578f50c6a5d8cca9ecddafcd7f4"
+)
+LANE_F_EXPECTED_ERRORS = [
+    "[SHARD_STATUS_NOT_COMPLETED] shard 'b': dev.status is "
+    "'completed_with_runtime_blockers', expected 'completed'",
+    "[SHARD_STATUS_NOT_COMPLETED] shard 'c': dev.status is "
+    "'completed_with_runtime_blockers', expected 'completed'",
+    "[SHARD_STATUS_NOT_COMPLETED] shard 'f': dev.status is 'blocked', expected 'completed'",
+]
+
+
+def _lane_f_history_plan() -> dict[str, object]:
+    return {
+        "lane": "f",
+        "iteration": 1,
+        "history_sha256": LANE_F_HISTORY_PREIMAGE_SHA256,
+        "history_size_bytes": 13539,
+        "history_mode_octal": "0644",
+        "history_trailing_lf": True,
+        "history_nlink": 1,
+        "active_sha256": LANE_F_ACTIVE_PREIMAGE_SHA256,
+        "active_size_bytes": 51183,
+        "active_mode_octal": "0644",
+        "active_trailing_lf": True,
+        "active_nlink": 1,
+        "source_request_id": f"{LIVE_TASK}-f-refresh-iteration-1",
+        "iteration_type": "post_lanes_g_h_i_diagnostic_refresh",
+        "history_status": "blocked",
+        "history_dev_status": "blocked",
+        "active_dev_status": "blocked",
+        "history_post_sha256": LANE_F_HISTORY_POSTIMAGE_SHA256,
+        "history_post_size_bytes": 13857,
+        "active_post_sha256": LANE_F_ACTIVE_POSTIMAGE_SHA256,
+        "active_post_size_bytes": 51177,
+        "expected_aggregate_errors": list(LANE_F_EXPECTED_ERRORS),
+    }
+
+
+def _lane_f_archive_path(role: str) -> Path:
+    root = (
+        _live_project()
+        / ".claude"
+        / "dev-registry"
+        / LIVE_TASK
+        / "history-migrations"
+        / LANE_F_MIGRATION_TASK
+        / "preimages"
+    )
+    name = (
+        f"source__dev-report-{LIVE_TASK}-f-iteration-1.json"
+        if role == "history"
+        else f"active__dev-report-{LIVE_TASK}-f.json"
+    )
+    return root / name
+
+
+def _frozen_lane_f_source(role: str) -> Path:
+    relative = LANE_F_OLD_RELATIVE if role == "history" else LANE_F_ACTIVE_RELATIVE
+    expected = (
+        LANE_F_HISTORY_PREIMAGE_SHA256
+        if role == "history"
+        else LANE_F_ACTIVE_PREIMAGE_SHA256
+    )
+    live = _live_project() / relative
+    candidates = (live, _lane_f_archive_path(role))
+    for candidate in candidates:
+        if candidate.is_file() and not candidate.is_symlink():
+            if hashlib.sha256(candidate.read_bytes()).hexdigest() == expected:
+                return candidate
+    raise AssertionError(f"frozen lane-f {role} preimage is unavailable")
+
+
+def _install_lane_f_history_preimages(root: Path) -> tuple[Path, Path]:
+    old = root / LANE_F_OLD_RELATIVE
+    active = root / LANE_F_ACTIVE_RELATIVE
+    old.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(_frozen_lane_f_source("history"), old)
+    shutil.copyfile(_frozen_lane_f_source("active"), active)
+    old.chmod(0o644)
+    active.chmod(0o644)
+    return old, active
+
+
+def _run_lane_f_history_migration(root: Path) -> dict[str, object]:
+    return _migrate_iteration_history(
+        root, LIVE_TASK, LANE_F_MIGRATION_TASK, _lane_f_history_plan()
+    )
+
+
+def _rebind_preimage(plan: dict[str, object], prefix: str, path: Path) -> None:
+    raw = path.read_bytes()
+    plan[f"{prefix}_sha256"] = hashlib.sha256(raw).hexdigest()
+    plan[f"{prefix}_size_bytes"] = len(raw)
+
+
+def test_lane_f_history_migration_preconditions(tmp_path: Path) -> None:
+    scenarios = (
+        "history_byte",
+        "history_mode",
+        "history_symlink",
+        "history_hardlink",
+        "history_identity",
+        "active_lineage_zero",
+        "active_lineage_multiple",
+        "destination_exists",
+        "ledger_exists",
+    )
+    for scenario in scenarios:
+        root = tmp_path / scenario
+        old, active = _install_lane_f_history_preimages(root)
+        plan = _lane_f_history_plan()
+        destination = root / LANE_F_NEW_RELATIVE
+        ledger = (
+            root / ".claude/dev-registry" / LIVE_TASK / "history-migrations"
+            / LANE_F_MIGRATION_TASK / "migration-ledger.jsonl"
+        )
+        if scenario == "history_byte":
+            old.write_bytes(old.read_bytes() + b" ")
+        elif scenario == "history_mode":
+            old.chmod(0o600)
+        elif scenario == "history_symlink":
+            target = old.with_name("unrelated-source.json")
+            target.write_bytes(old.read_bytes())
+            old.unlink()
+            old.symlink_to(target)
+        elif scenario == "history_hardlink":
+            os.link(old, old.with_name("unrelated-hardlink.json"))
+        elif scenario == "history_identity":
+            document = json.loads(old.read_text())
+            document["request_id"] = f"{LIVE_TASK}-f-forged"
+            old.write_text(json.dumps(document, indent=2) + "\n")
+            _rebind_preimage(plan, "history", old)
+        elif scenario in {"active_lineage_zero", "active_lineage_multiple"}:
+            document = json.loads(active.read_text())
+            if scenario.endswith("zero"):
+                document["dev"]["files_created"][1] = "docs/dev/not-the-history.json"
+            else:
+                document["dev"]["files_created"].append(LANE_F_OLD_RELATIVE)
+            active.write_text(json.dumps(document, indent=2) + "\n")
+            _rebind_preimage(plan, "active", active)
+        elif scenario == "destination_exists":
+            destination.write_text("occupied\n")
+        else:
+            ledger.parent.mkdir(parents=True)
+            ledger.write_text("occupied\n")
+
+        old_lstat = old.lstat()
+        old_bytes = old.read_bytes()
+        active_bytes = active.read_bytes()
+        destination_before = destination.read_bytes() if destination.exists() else None
+        ledger_before = ledger.read_bytes() if ledger.exists() else None
+        with pytest.raises(ValueError):
+            _migrate_iteration_history(
+                root, LIVE_TASK, LANE_F_MIGRATION_TASK, plan
+            )
+        assert old.lstat().st_mode == old_lstat.st_mode
+        assert old.read_bytes() == old_bytes
+        assert active.read_bytes() == active_bytes
+        assert (destination.read_bytes() if destination.exists() else None) == destination_before
+        assert (ledger.read_bytes() if ledger.exists() else None) == ledger_before
+
+
+def test_lane_f_history_versioned_postimage(tmp_path: Path) -> None:
+    old, _active = _install_lane_f_history_preimages(tmp_path)
+    original = json.loads(old.read_text())
+    result = _run_lane_f_history_migration(tmp_path)
+    destination = tmp_path / result["destination_path"]
+    raw = destination.read_bytes()
+    migrated = json.loads(raw)
+    normalized = json.loads(json.dumps(migrated))
+    normalized["request_id"] = original["request_id"]
+    normalized.pop("dev_report_path")
+    normalized.pop("dev_report_role")
+    assert normalized == original
+    assert migrated["request_id"] == f"{LIVE_TASK}-f"
+    assert migrated["dev_report_path"] == LANE_F_NEW_RELATIVE
+    assert migrated["dev_report_role"] == _mod._expected_role(
+        kind=_mod.ROLE_ITERATION_HISTORY,
+        parent_task_id=LIVE_TASK,
+        lane="f",
+        iteration=1,
+    )
+    assert migrated["status"] == migrated["dev"]["status"] == "blocked"
+    assert hashlib.sha256(raw).hexdigest() == LANE_F_HISTORY_POSTIMAGE_SHA256
+    assert len(raw) == 13857 and raw.endswith(b"\n")
+    assert destination.stat().st_mode & 0o777 == 0o644
+
+
+def test_lane_f_history_lineage_and_old_path_removal(tmp_path: Path) -> None:
+    old, active = _install_lane_f_history_preimages(tmp_path)
+    active_original = json.loads(active.read_text())
+    other = tmp_path / "docs/dev/unrelated.json"
+    other.write_text("untouched\n")
+    other_before = other.read_bytes()
+    _run_lane_f_history_migration(tmp_path)
+    assert not os.path.lexists(old)
+    assert other.read_bytes() == other_before
+    migrated_raw = active.read_bytes()
+    migrated = json.loads(migrated_raw)
+    restored = json.loads(json.dumps(migrated))
+    restored["dev"]["files_created"][1] = LANE_F_OLD_RELATIVE
+    assert restored == active_original
+    assert _mod._count_exact_string(migrated, LANE_F_OLD_RELATIVE) == 0
+    assert _mod._count_exact_string(migrated, LANE_F_NEW_RELATIVE) == 1
+    assert migrated["dev"]["status"] == "blocked"
+    assert hashlib.sha256(migrated_raw).hexdigest() == LANE_F_ACTIVE_POSTIMAGE_SHA256
+    assert len(migrated_raw) == 51177 and migrated_raw.endswith(b"\n")
+
+
+def test_lane_f_history_migration_hash_chain(tmp_path: Path) -> None:
+    old, active = _install_lane_f_history_preimages(tmp_path)
+    old_raw, active_raw = old.read_bytes(), active.read_bytes()
+    result = _run_lane_f_history_migration(tmp_path)
+    preimage_root = tmp_path / result["preimage_root"]
+    archives = {
+        preimage_root / f"source__{Path(LANE_F_OLD_RELATIVE).name}": old_raw,
+        preimage_root / f"active__{Path(LANE_F_ACTIVE_RELATIVE).name}": active_raw,
+    }
+    for path, expected in archives.items():
+        assert path.read_bytes() == expected
+        assert path.stat().st_mode & 0o777 == 0o644
+    ledger = tmp_path / result["ledger_path"]
+    assert ledger.stat().st_mode & 0o777 == 0o444
+    rows = [json.loads(line) for line in ledger.read_text().splitlines()]
+    assert [row["event"] for row in rows] == [
+        "preimages_bound", "postimages_bound", "committed"
+    ]
+    assert [row["sequence"] for row in rows] == [1, 2, 3]
+    previous = "0" * 64
+    for row in rows:
+        assert row["previous_entry_sha256"] == previous
+        claimed = row.pop("entry_sha256")
+        canonical = json.dumps(
+            row, sort_keys=True, ensure_ascii=False, separators=(",", ":")
+        ).encode()
+        assert hashlib.sha256(canonical).hexdigest() == claimed
+        previous = claimed
+    assert rows[1]["old_path_final_state"] == "absent"
+    assert rows[1]["versioned_role"]["aggregation_eligible"] is False
+    assert rows[2]["no_active_promotion"] is True
+    assert rows[2]["external_authenticity_claimed"] is False
+    assert rows[2]["expected_aggregate_errors"] == LANE_F_EXPECTED_ERRORS
+
+
+class _HistoryMigrationAbort(BaseException):
+    pass
+
+
+@pytest.mark.parametrize(
+    "failure_point,exception_type",
+    [
+        ("preimage_history_write", OSError),
+        ("preimage_history_fsync", OSError),
+        ("preimage_history_publish", OSError),
+        ("preimage_active_write", OSError),
+        ("preimage_active_fsync", OSError),
+        ("preimage_directory_fsync", OSError),
+        ("history_stage_write", OSError),
+        ("history_stage_fsync", OSError),
+        ("active_stage_write", OSError),
+        ("active_stage_fsync", OSError),
+        ("history_publish_post", KeyboardInterrupt),
+        ("active_replace_post", _HistoryMigrationAbort),
+        ("old_unlink_post", OSError),
+        ("postverify", OSError),
+        ("postverify_post", OSError),
+        ("ledger_write", OSError),
+        ("ledger_fsync", OSError),
+        ("ledger_replace", OSError),
+        ("ledger_replace_post", _HistoryMigrationAbort),
+    ],
+)
+def test_lane_f_history_migration_rollback(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    failure_point: str,
+    exception_type: type[BaseException],
+) -> None:
+    old, active = _install_lane_f_history_preimages(tmp_path)
+    old_raw, active_raw = old.read_bytes(), active.read_bytes()
+    partial_error_sets: list[set[str]] = []
+
+    def fail_at(name: str) -> None:
+        if name != failure_point:
+            return
+        if name in {"history_publish_post", "active_replace_post"}:
+            discovery = _mod._discover_dev_reports(
+                tmp_path / "docs/dev", LIVE_TASK, _fanout_declaration(["f"])
+            )
+            partial_error_sets.append(_error_codes(discovery))
+        raise exception_type(f"injected {name}")
+
+    monkeypatch.setattr(_mod, "_history_migration_checkpoint", fail_at)
+    with pytest.raises(exception_type, match="injected"):
+        _run_lane_f_history_migration(tmp_path)
+    assert old.read_bytes() == old_raw
+    assert active.read_bytes() == active_raw
+    assert old.stat().st_mode & 0o777 == active.stat().st_mode & 0o777 == 0o644
+    assert not os.path.lexists(tmp_path / LANE_F_NEW_RELATIVE)
+    migration_root = (
+        tmp_path / ".claude/dev-registry" / LIVE_TASK / "history-migrations"
+        / LANE_F_MIGRATION_TASK
+    )
+    assert not os.path.lexists(migration_root)
+    assert not list((tmp_path / "docs/dev").glob(f".*{LIVE_TASK}*tmp"))
+    if partial_error_sets:
+        assert partial_error_sets[0] & {
+            "INVALID_HISTORY_METADATA", "HISTORY_WITHOUT_ACTIVE_SHARD"
+        }
+
+
+def test_lane_f_history_uses_versioned_role_without_legacy_expansion(
+    tmp_path: Path,
+) -> None:
+    _install_lane_f_history_preimages(tmp_path)
+    _run_lane_f_history_migration(tmp_path)
+    dev_dir = tmp_path / "docs/dev"
+    destination = tmp_path / LANE_F_NEW_RELATIVE
+    active = tmp_path / LANE_F_ACTIVE_RELATIVE
+    declaration = _fanout_declaration(["f"])
+    discovery = _mod._discover_dev_reports(dev_dir, LIVE_TASK, declaration)
+    assert discovery["errors"] == []
+    assert discovery["history"] == [{
+        "path": LANE_F_NEW_RELATIVE,
+        "lane": "f",
+        "iteration": 1,
+        "profile": "versioned_iteration_history",
+    }]
+    original_history = destination.read_bytes()
+    original_active = active.read_bytes()
+    mutations = [
+        ("request_id", lambda d, _r: d.__setitem__("request_id", "forged")),
+        ("task_id", lambda d, _r: d.__setitem__("task_id", "forged")),
+        ("role_version", lambda d, _r: d["dev_report_role"].__setitem__("version", 2)),
+        ("role_kind", lambda d, _r: d["dev_report_role"].__setitem__("kind", "active_lane_shard")),
+        ("eligibility", lambda d, _r: d["dev_report_role"].__setitem__("aggregation_eligible", True)),
+        ("parent", lambda d, _r: d["dev_report_role"].__setitem__("parent_task_id", OTHER_TID)),
+        ("lane", lambda d, _r: d["dev_report_role"].__setitem__("lane", "z")),
+        ("iteration", lambda d, _r: d["dev_report_role"].__setitem__("iteration", 2)),
+        ("canonical", lambda d, _r: d["dev_report_role"].__setitem__("canonical_shard_path", "docs/dev/foreign.json")),
+        ("self_path", lambda d, _r: d.__setitem__("dev_report_path", "docs/dev/foreign.json")),
+        ("lineage", lambda _d, r: r["dev"]["files_created"].__setitem__(1, "docs/dev/foreign.json")),
+    ]
+    for _name, mutation in mutations:
+        document = json.loads(original_history)
+        root = json.loads(original_active)
+        mutation(document, root)
+        destination.write_text(json.dumps(document))
+        active.write_text(json.dumps(root))
+        codes = _error_codes(_mod._discover_dev_reports(dev_dir, LIVE_TASK, declaration))
+        assert codes & {"INVALID_HISTORY_METADATA", "HISTORY_WITHOUT_ACTIVE_SHARD"}
+        destination.write_bytes(original_history)
+        active.write_bytes(original_active)
+
+    legacy_root = tmp_path / "legacy"
+    legacy_dev = _copy_frozen_cycle(legacy_root)
+    legacy = _mod._discover_dev_reports(
+        legacy_dev, LIVE_TASK, _fanout_declaration(LIVE_LANES)
+    )
+    profiles = {item["profile"] for item in legacy["history"]}
+    assert profiles == {
+        "legacy_suffix_identity_profile",
+        "legacy_lane_identity_with_iteration_field_profile",
+    }
+    assert legacy["errors"] == []
+
+
+def test_lane_f_history_migration_current_cycle_and_union_exclusion(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture,
+) -> None:
+    root = _live_project()
+    parent = root / "docs/dev" / f"dev-report-{LIVE_TASK}.json"
+    parent_before = parent.read_bytes() if parent.exists() else None
+    live_declaration = _fanout_declaration(list("abcdefghijkl"))
+    live_discovery = _mod._discover_dev_reports(
+        root / "docs/dev", LIVE_TASK, live_declaration
+    )
+    assert live_discovery["errors"] == []
+
+    # Preserve the ticket's exact a-k observation as an isolated copy now that
+    # lane l itself is a real active root.  The live repository is separately
+    # checked below with the durable a-l roster.
+    a_k_root = tmp_path / "current-a-k"
+    a_k_dev = a_k_root / "docs/dev"
+    a_k_dev.mkdir(parents=True)
+    for lane, source in live_discovery["active"]:
+        if lane in list("abcdefghijk"):
+            shutil.copyfile(source, a_k_dev / source.name)
+    for history in live_discovery["history"]:
+        if history["lane"] in list("abcdefghijk"):
+            source = root / history["path"]
+            shutil.copyfile(source, a_k_dev / source.name)
+    registry_source = root / ".claude/dev-registry" / LIVE_TASK
+    registry_target = a_k_root / ".claude/dev-registry" / LIVE_TASK
+    registry_target.mkdir(parents=True)
+    for name in ("baseline-authority.json", "baseline-dirty.txt"):
+        shutil.copyfile(registry_source / name, registry_target / name)
+
+    monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(a_k_root))
+    argv = [
+        "--task-id", LIVE_TASK, "--dry-run", "--shape", "requirement_fanout",
+        "--declared-lanes", "a,b,c,d,e,f,g,h,i,j,k",
+    ]
+    assert main(argv) == 1
+    captured = capsys.readouterr()
+    observed = [line.strip() for line in captured.err.splitlines() if line.startswith("  [")]
+    assert observed == LANE_F_EXPECTED_ERRORS
+    assert "INVALID_HISTORY_METADATA" not in captured.err
+    assert "BASELINE_" not in captured.err
+    assert not (a_k_dev / f"dev-report-{LIVE_TASK}.json").exists()
+
+    monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(root))
+    assert main([
+        "--task-id", LIVE_TASK, "--dry-run", "--shape", "requirement_fanout",
+        "--declared-lanes", "a,b,c,d,e,f,g,h,i,j,k,l",
+    ]) == 1
+    live_captured = capsys.readouterr()
+    live_observed = [
+        line.strip() for line in live_captured.err.splitlines() if line.startswith("  [")
+    ]
+    assert live_observed == LANE_F_EXPECTED_ERRORS
+    assert (parent.read_bytes() if parent.exists() else None) == parent_before
+    assert [label for label, _path in live_discovery["active"]] == list("abcdefghijkl")
+    assert any(item["path"] == LANE_F_NEW_RELATIVE for item in live_discovery["history"])
+
+    isolated = tmp_path / "union"
+    _install_authority(isolated)
+    dev_dir = isolated / "docs/dev"
+    dev_dir.mkdir(parents=True)
+    history_relative = f"docs/dev/dev-report-iter1-{BARE_TID}-a.json"
+    for lane in ("a", "b"):
+        lane_report = _good_lane(
+            BARE_TID, lane, history_paths=[history_relative] if lane == "a" else None
+        )
+        lane_report["dev_report_role"] = _mod._expected_role(
+            kind=_mod.ROLE_ACTIVE_LANE_SHARD,
+            parent_task_id=BARE_TID,
+            lane=lane,
+            iteration=0,
+        )
+        _write(dev_dir, f"dev-report-{BARE_TID}-{lane}.json", lane_report)
+    history = _good_lane(BARE_TID, "a")
+    history["dev_report_path"] = history_relative
+    history["dev_report_role"] = _mod._expected_role(
+        kind=_mod.ROLE_ITERATION_HISTORY,
+        parent_task_id=BARE_TID,
+        lane="a",
+        iteration=1,
+    )
+    history["dev"] = {
+        "status": "blocked",
+        "tasks_completed": ["HISTORY_MUST_NOT_VOTE"],
+        "scripts_created": ["HISTORY_MUST_NOT_VOTE"],
+        "permissions_to_add": ["HISTORY_MUST_NOT_VOTE"],
+        "files_modified": ["HISTORY_MUST_NOT_VOTE"],
+        "files_created": ["HISTORY_MUST_NOT_VOTE"],
+        "observed_preexisting": ["HISTORY_MUST_NOT_VOTE"],
+    }
+    history["blocking_issues"] = ["HISTORY_MUST_NOT_VOTE"]
+    history["recommendations"] = ["HISTORY_MUST_NOT_VOTE"]
+    _write(dev_dir, Path(history_relative).name, history)
+    monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(isolated))
+    assert main([
+        "--task-id", BARE_TID, "--shape", "requirement_fanout",
+        "--declared-lanes", "a,b",
+    ]) == 0
+    capsys.readouterr()
+    aggregate = json.loads((dev_dir / f"dev-report-{BARE_TID}.json").read_text())
+    assert aggregate["parallel_workers"] == ["a", "b"]
+    assert "HISTORY_MUST_NOT_VOTE" not in json.dumps(aggregate)

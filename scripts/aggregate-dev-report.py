@@ -37,6 +37,7 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import stat
 import sys
 import tempfile
@@ -1275,6 +1276,527 @@ def _write_migration_ledger(handle, payload: bytes) -> None:
 def _fsync_migration_ledger(handle) -> None:
     """Indirection used to exercise ledger-fsync rollback deterministically."""
     os.fsync(handle.fileno())
+
+
+def _history_migration_checkpoint(_name: str) -> None:
+    """Injectable no-op around each history-migration persistence boundary."""
+
+
+def _path_lexists(path: Path) -> bool:
+    """Return true for every directory entry, including a broken symlink."""
+    return os.path.lexists(path)
+
+
+def _fsync_directory(path: Path) -> None:
+    """Durably publish directory-entry changes."""
+    flags = os.O_RDONLY
+    if hasattr(os, "O_DIRECTORY"):
+        flags |= os.O_DIRECTORY
+    descriptor = os.open(path, flags)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
+def _stage_history_migration_bytes(
+    path: Path, payload: bytes, mode: int, label: str
+) -> Path:
+    """Create one fsynced sibling candidate with deterministic fault points."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, temporary_name = tempfile.mkstemp(
+        prefix=f".{path.name}.", suffix=".tmp", dir=path.parent
+    )
+    temporary_path = Path(temporary_name)
+    try:
+        with os.fdopen(descriptor, "wb") as handle:
+            _history_migration_checkpoint(f"{label}_write")
+            handle.write(payload)
+            handle.flush()
+            _history_migration_checkpoint(f"{label}_fsync")
+            os.fsync(handle.fileno())
+        os.chmod(temporary_path, mode)
+    except BaseException:
+        temporary_path.unlink(missing_ok=True)
+        raise
+    return temporary_path
+
+
+def _history_without_migrated_identity(document: dict) -> dict:
+    """Normalize only the three versioned-history pointers for deep comparison."""
+    normalized = copy.deepcopy(document)
+    normalized.pop("dev_report_path", None)
+    normalized.pop(DEV_REPORT_ROLE_KEY, None)
+    return normalized
+
+
+def _count_exact_string(value: object, expected: str) -> int:
+    if isinstance(value, str):
+        return int(value == expected)
+    if isinstance(value, list):
+        return sum(_count_exact_string(item, expected) for item in value)
+    if isinstance(value, dict):
+        return sum(_count_exact_string(item, expected) for item in value.values())
+    return 0
+
+
+def _history_ledger_rows(
+    *,
+    cycle_id: str,
+    migration_task_id: str,
+    preimages: list[dict[str, object]],
+    postimages: list[dict[str, object]],
+    versioned_role: dict[str, object],
+    old_path: str,
+    rollback_sources: list[dict[str, object]],
+    expected_aggregate_errors: list[str],
+) -> list[dict[str, object]]:
+    """Build the exact three-row internally linked migration ledger."""
+    payloads: list[tuple[str, dict[str, object]]] = [
+        (
+            "preimages_bound",
+            {
+                "preimages": preimages,
+                "destination_prestate": "absent",
+                "ledger_prestate": "absent",
+            },
+        ),
+        (
+            "postimages_bound",
+            {
+                "postimages": postimages,
+                "old_path": old_path,
+                "old_path_final_state": "absent",
+                "versioned_role": versioned_role,
+            },
+        ),
+        (
+            "committed",
+            {
+                "observed_final": postimages,
+                "rollback_sources": rollback_sources,
+                "no_active_promotion": True,
+                "history_aggregation_eligible": False,
+                "expected_aggregate_errors": expected_aggregate_errors,
+                "external_authenticity_claimed": False,
+            },
+        ),
+    ]
+    previous = "0" * 64
+    rows: list[dict[str, object]] = []
+    for sequence, (event, payload) in enumerate(payloads, start=1):
+        row = {
+            "schema_version": 1,
+            "sequence": sequence,
+            "event": event,
+            "cycle_id": cycle_id,
+            "migration_task_id": migration_task_id,
+            "previous_entry_sha256": previous,
+            **copy.deepcopy(payload),
+        }
+        canonical = json.dumps(
+            row, sort_keys=True, ensure_ascii=False, separators=(",", ":")
+        ).encode("utf-8")
+        entry_hash = hashlib.sha256(canonical).hexdigest()
+        row["entry_sha256"] = entry_hash
+        rows.append(row)
+        previous = entry_hash
+    return rows
+
+
+def _migrate_iteration_history(
+    project_root: Path,
+    task_id: str,
+    migration_task_id: str,
+    plan: dict[str, object],
+) -> dict[str, object]:
+    """Migrate one exact legacy history artifact to the versioned audit role.
+
+    The caller supplies frozen hashes and deterministic postimage hashes.  The
+    routine derives every path from the cycle/lane/iteration identity, refuses
+    unknown preimages, preserves both rollback sources outside discovery, and
+    publishes a three-row success ledger only after complete post-verification.
+    It never changes history-classifier acceptance.
+    """
+    if not re.fullmatch(r"(?:dev-)?\d{8}-\d{6}", task_id):
+        raise ValueError(f"invalid parent task id: {task_id!r}")
+    if not re.fullmatch(r"(?:dev-)?\d{8}-\d{6}-[A-Za-z0-9][A-Za-z0-9.\-]*", migration_task_id):
+        raise ValueError(f"invalid migration task id: {migration_task_id!r}")
+    lane = plan.get("lane")
+    iteration = plan.get("iteration")
+    if not isinstance(lane, str) or WORKER_LABEL_RE.fullmatch(lane) is None:
+        raise ValueError(f"invalid migration lane: {lane!r}")
+    if type(iteration) is not int or iteration < 1:
+        raise ValueError(f"invalid migration iteration: {iteration!r}")
+
+    cycle_id = _bare_task_id(task_id)
+    lane_identity = f"{task_id}-{lane}"
+    old_relative = f"docs/dev/dev-report-{task_id}-{lane}-iteration-{iteration}.json"
+    new_relative = f"docs/dev/dev-report-iter{iteration}-{task_id}-{lane}.json"
+    active_relative = f"docs/dev/dev-report-{task_id}-{lane}.json"
+    dev_dir = _resolve_dev_dir(project_root)
+    old_path = project_root / old_relative
+    destination = project_root / new_relative
+    active_path = project_root / active_relative
+    migration_root = (
+        project_root
+        / ".claude"
+        / "dev-registry"
+        / cycle_id
+        / "history-migrations"
+        / migration_task_id
+    )
+    preimage_root = migration_root / "preimages"
+    ledger_path = migration_root / "migration-ledger.jsonl"
+    archive_history = preimage_root / f"source__{old_path.name}"
+    archive_active = preimage_root / f"active__{active_path.name}"
+
+    # Every target and registry precondition is checked before creating even a
+    # preimage directory, so a rejected plan cannot leave migration residue.
+    if _path_lexists(destination):
+        raise ValueError(f"versioned history destination already exists: {destination}")
+    if _path_lexists(ledger_path) or _path_lexists(migration_root):
+        raise ValueError(f"history migration registry state already exists: {migration_root}")
+
+    def load_preimage(path: Path, prefix: str) -> tuple[bytes, os.stat_result, dict]:
+        raw, problem = _stable_regular_read(path)
+        if problem is not None or raw is None:
+            raise ValueError(f"{prefix} preimage is unavailable or unsafe: {problem}")
+        metadata = os.lstat(path)
+        expected_sha = plan.get(f"{prefix}_sha256")
+        actual_sha = hashlib.sha256(raw).hexdigest()
+        if actual_sha != expected_sha:
+            raise ValueError(
+                f"{prefix} preimage sha256 {actual_sha} != planned {expected_sha}"
+            )
+        expected_size = plan.get(f"{prefix}_size_bytes")
+        if len(raw) != expected_size:
+            raise ValueError(
+                f"{prefix} preimage size {len(raw)} != planned {expected_size}"
+            )
+        expected_mode = plan.get(f"{prefix}_mode_octal")
+        try:
+            planned_mode = int(str(expected_mode), 8)
+        except ValueError as exc:
+            raise ValueError(f"{prefix} planned mode is not octal: {expected_mode!r}") from exc
+        actual_mode = stat.S_IMODE(metadata.st_mode)
+        if actual_mode != planned_mode:
+            raise ValueError(
+                f"{prefix} preimage mode {actual_mode:04o} != planned {planned_mode:04o}"
+            )
+        if raw.endswith(b"\n") is not plan.get(f"{prefix}_trailing_lf"):
+            raise ValueError(f"{prefix} preimage trailing-LF state drifted")
+        if metadata.st_nlink != plan.get(f"{prefix}_nlink"):
+            raise ValueError(
+                f"{prefix} preimage link count {metadata.st_nlink} "
+                f"!= planned {plan.get(f'{prefix}_nlink')}"
+            )
+        try:
+            document = json.loads(raw.decode("utf-8", errors="strict"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise ValueError(f"{prefix} preimage is not UTF-8 JSON: {exc}") from exc
+        if not isinstance(document, dict):
+            raise ValueError(f"{prefix} preimage root must be an object")
+        return raw, metadata, document
+
+    history_raw, history_stat, history = load_preimage(old_path, "history")
+    active_raw, active_stat, active = load_preimage(active_path, "active")
+    expected_history_identity = {
+        "request_id": plan.get("source_request_id"),
+        "task_id": lane_identity,
+        "parent_task_id": task_id,
+        "requirement_id": lane,
+        "lane": lane,
+        "iteration": iteration,
+        "iteration_type": plan.get("iteration_type"),
+        "status": plan.get("history_status"),
+    }
+    if any(history.get(key) != value for key, value in expected_history_identity.items()):
+        raise ValueError("history preimage identity/status drifted")
+    history_dev = history.get("dev")
+    if not isinstance(history_dev, dict) or history_dev.get("status") != plan.get("history_dev_status"):
+        raise ValueError("history preimage dev.status drifted")
+    if "dev_report_path" in history or DEV_REPORT_ROLE_KEY in history:
+        raise ValueError("history preimage already carries versioned metadata")
+
+    expected_active_identity = {
+        "request_id": lane_identity,
+        "task_id": lane_identity,
+        "parent_task_id": task_id,
+        "requirement_id": lane,
+        "lane": lane,
+    }
+    if any(active.get(key) != value for key, value in expected_active_identity.items()):
+        raise ValueError("active-root identity drifted")
+    active_dev = active.get("dev")
+    files_created = active_dev.get("files_created") if isinstance(active_dev, dict) else None
+    if (
+        not isinstance(active_dev, dict)
+        or active_dev.get("status") != plan.get("active_dev_status")
+        or not isinstance(files_created, list)
+        or len(files_created) <= 1
+        or files_created[1] != old_relative
+        or _count_exact_string(active, old_relative) != 1
+        or _count_exact_string(active, new_relative) != 0
+    ):
+        raise ValueError("active-root lineage/status drifted")
+
+    role = _expected_role(
+        kind=ROLE_ITERATION_HISTORY,
+        parent_task_id=task_id,
+        lane=lane,
+        iteration=iteration,
+    )
+    migrated_history = copy.deepcopy(history)
+    migrated_history["request_id"] = lane_identity
+    migrated_history["dev_report_path"] = new_relative
+    migrated_history[DEV_REPORT_ROLE_KEY] = role
+    history_normalized = _history_without_migrated_identity(migrated_history)
+    history_normalized["request_id"] = history.get("request_id")
+    if history_normalized != history:
+        raise AssertionError("history migration changed non-contract decoded JSON")
+    history_post = (
+        json.dumps(migrated_history, indent=2, ensure_ascii=False).encode("utf-8") + b"\n"
+    )
+
+    migrated_active = copy.deepcopy(active)
+    migrated_active["dev"]["files_created"][1] = new_relative
+    active_comparison = copy.deepcopy(migrated_active)
+    active_comparison["dev"]["files_created"][1] = old_relative
+    if active_comparison != active:
+        raise AssertionError("active-root migration changed more than /dev/files_created/1")
+    active_post = (
+        json.dumps(migrated_active, indent=2, ensure_ascii=False).encode("utf-8") + b"\n"
+    )
+
+    for label, payload in (("history", history_post), ("active", active_post)):
+        expected_sha = plan.get(f"{label}_post_sha256")
+        actual_sha = hashlib.sha256(payload).hexdigest()
+        if actual_sha != expected_sha:
+            raise ValueError(
+                f"{label} postimage sha256 {actual_sha} != planned {expected_sha}"
+            )
+        if len(payload) != plan.get(f"{label}_post_size_bytes"):
+            raise ValueError(f"{label} postimage size does not match the plan")
+
+    expected_errors = plan.get("expected_aggregate_errors")
+    if not isinstance(expected_errors, list) or not all(
+        isinstance(item, str) for item in expected_errors
+    ):
+        raise ValueError("expected_aggregate_errors must be a string list")
+    history_mode = stat.S_IMODE(history_stat.st_mode)
+    active_mode = stat.S_IMODE(active_stat.st_mode)
+    preimages = [
+        {
+            "role": "history_source",
+            "source_path": old_relative,
+            "archive_path": str(archive_history.relative_to(project_root)),
+            "size_bytes": len(history_raw),
+            "mode_octal": f"{history_mode:04o}",
+            "trailing_lf": history_raw.endswith(b"\n"),
+            "nlink": history_stat.st_nlink,
+            "sha256": hashlib.sha256(history_raw).hexdigest(),
+        },
+        {
+            "role": "active_root",
+            "source_path": active_relative,
+            "archive_path": str(archive_active.relative_to(project_root)),
+            "size_bytes": len(active_raw),
+            "mode_octal": f"{active_mode:04o}",
+            "trailing_lf": active_raw.endswith(b"\n"),
+            "nlink": active_stat.st_nlink,
+            "sha256": hashlib.sha256(active_raw).hexdigest(),
+        },
+    ]
+    postimages = [
+        {
+            "role": "versioned_iteration_history",
+            "path": new_relative,
+            "sha256": hashlib.sha256(history_post).hexdigest(),
+            "size_bytes": len(history_post),
+            "mode_octal": f"{history_mode:04o}",
+            "changed_json_pointers": [
+                "/dev_report_path", "/dev_report_role", "/request_id"
+            ],
+        },
+        {
+            "role": "active_root_lineage",
+            "path": active_relative,
+            "sha256": hashlib.sha256(active_post).hexdigest(),
+            "size_bytes": len(active_post),
+            "mode_octal": f"{active_mode:04o}",
+            "changed_json_pointers": ["/dev/files_created/1"],
+        },
+    ]
+    rollback_sources = [
+        {
+            "target_path": old_relative,
+            "archive_path": str(archive_history.relative_to(project_root)),
+            "sha256": hashlib.sha256(history_raw).hexdigest(),
+        },
+        {
+            "target_path": active_relative,
+            "archive_path": str(archive_active.relative_to(project_root)),
+            "sha256": hashlib.sha256(active_raw).hexdigest(),
+        },
+    ]
+    ledger_rows = _history_ledger_rows(
+        cycle_id=cycle_id,
+        migration_task_id=migration_task_id,
+        preimages=preimages,
+        postimages=postimages,
+        versioned_role=role,
+        old_path=old_relative,
+        rollback_sources=rollback_sources,
+        expected_aggregate_errors=expected_errors,
+    )
+    ledger_payload = b"".join(
+        json.dumps(row, sort_keys=True, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+        + b"\n"
+        for row in ledger_rows
+    )
+
+    staged: list[Path] = []
+    history_published = False
+    active_replaced = False
+    old_removed = False
+    ledger_published = False
+    try:
+        preimage_root.mkdir(parents=True, exist_ok=False)
+        _fsync_directory(preimage_root.parent)
+        for archive, payload, mode, label in (
+            (archive_history, history_raw, history_mode, "preimage_history"),
+            (archive_active, active_raw, active_mode, "preimage_active"),
+        ):
+            candidate = _stage_history_migration_bytes(archive, payload, mode, label)
+            staged.append(candidate)
+            _history_migration_checkpoint(f"{label}_publish")
+            _replace_path(candidate, archive)
+            staged.remove(candidate)
+        _history_migration_checkpoint("preimage_directory_fsync")
+        _fsync_directory(preimage_root)
+
+        history_candidate = _stage_history_migration_bytes(
+            destination, history_post, history_mode, "history_stage"
+        )
+        staged.append(history_candidate)
+        active_candidate = _stage_history_migration_bytes(
+            active_path, active_post, active_mode, "active_stage"
+        )
+        staged.append(active_candidate)
+
+        _history_migration_checkpoint("history_publish")
+        _replace_path(history_candidate, destination)
+        staged.remove(history_candidate)
+        history_published = True
+        _history_migration_checkpoint("history_publish_post")
+
+        _history_migration_checkpoint("active_replace")
+        _replace_path(active_candidate, active_path)
+        staged.remove(active_candidate)
+        active_replaced = True
+        _history_migration_checkpoint("active_replace_post")
+
+        _history_migration_checkpoint("old_unlink")
+        old_path.unlink()
+        old_removed = True
+        _history_migration_checkpoint("old_unlink_post")
+        _fsync_directory(dev_dir)
+
+        _history_migration_checkpoint("postverify")
+        published_history, history_problem = _stable_regular_read(destination)
+        published_active, active_problem = _stable_regular_read(active_path)
+        if (
+            history_problem is not None
+            or published_history != history_post
+            or active_problem is not None
+            or published_active != active_post
+            or _path_lexists(old_path)
+            or stat.S_IMODE(os.lstat(destination).st_mode) != history_mode
+            or stat.S_IMODE(os.lstat(active_path).st_mode) != active_mode
+        ):
+            raise RuntimeError("history migration post-state verification failed")
+        _history_migration_checkpoint("postverify_post")
+
+        ledger_candidate = _stage_history_migration_bytes(
+            ledger_path, ledger_payload, 0o444, "ledger"
+        )
+        staged.append(ledger_candidate)
+        _history_migration_checkpoint("ledger_replace")
+        _replace_path(ledger_candidate, ledger_path)
+        staged.remove(ledger_candidate)
+        ledger_published = True
+        _history_migration_checkpoint("ledger_replace_post")
+        _fsync_directory(migration_root)
+        ledger_observed, ledger_problem = _stable_regular_read(ledger_path)
+        if ledger_problem is not None or ledger_observed != ledger_payload:
+            raise RuntimeError("history migration ledger verification failed")
+    except BaseException as original_error:
+        rollback_errors: list[str] = []
+        for candidate in staged:
+            try:
+                candidate.unlink(missing_ok=True)
+            except BaseException as exc:
+                rollback_errors.append(f"temporary {candidate}: {exc}")
+        if ledger_published or _path_lexists(ledger_path):
+            try:
+                ledger_path.unlink(missing_ok=True)
+            except BaseException as exc:
+                rollback_errors.append(f"ledger {ledger_path}: {exc}")
+        if history_published or _path_lexists(destination):
+            try:
+                destination.unlink(missing_ok=True)
+            except BaseException as exc:
+                rollback_errors.append(f"destination {destination}: {exc}")
+
+        # Direct, non-injected rollback writes are intentionally independent of
+        # the failed publication primitive.
+        for path, payload, mode, needed in (
+            (active_path, active_raw, active_mode, active_replaced),
+            (old_path, history_raw, history_mode, old_removed),
+        ):
+            if not needed:
+                continue
+            try:
+                restore = _write_temp_bytes(path, payload)
+                os.chmod(restore, mode)
+                os.replace(restore, path)
+            except BaseException as exc:
+                rollback_errors.append(f"restore {path}: {exc}")
+        try:
+            _fsync_directory(dev_dir)
+        except BaseException as exc:
+            rollback_errors.append(f"fsync {dev_dir}: {exc}")
+        try:
+            if _path_lexists(migration_root):
+                shutil.rmtree(migration_root)
+        except BaseException as exc:
+            rollback_errors.append(f"registry cleanup {migration_root}: {exc}")
+        if rollback_errors:
+            raise RuntimeError(
+                f"history migration failed and rollback was incomplete: {rollback_errors}"
+            ) from original_error
+        raise
+
+    return {
+        "status": "completed",
+        "cycle_id": cycle_id,
+        "migration_task_id": migration_task_id,
+        "lane": lane,
+        "iteration": iteration,
+        "source_path": old_relative,
+        "destination_path": new_relative,
+        "active_root_path": active_relative,
+        "preimage_root": str(preimage_root.relative_to(project_root)),
+        "ledger_path": str(ledger_path.relative_to(project_root)),
+        "history_postimage_sha256": hashlib.sha256(history_post).hexdigest(),
+        "active_postimage_sha256": hashlib.sha256(active_post).hexdigest(),
+        "ledger_last_entry_sha256": ledger_rows[-1]["entry_sha256"],
+        "old_path_absent": not _path_lexists(old_path),
+        "history_aggregation_eligible": False,
+        "active_promoted": False,
+        "rollback_preimages_preserved": True,
+    }
 
 
 def _without_baseline_fields(document: dict) -> dict:
