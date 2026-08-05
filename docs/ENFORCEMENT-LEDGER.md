@@ -165,7 +165,8 @@ be reconciled rather than argued.
 All **seven** lifecycle event classes are represented. `settings.json @4c33f2f5` wires 7 event
 classes / 41 matchers / **70 hook commands**, and there are exactly 70 rows below.
 
-**How `behavior` is derived** (structurally, not by hand): events that can deny a pending action
+**The authoring rule `behavior` follows** — applied by hand, and checked only for closed-set
+membership, not recomputed from the event class: events that can deny a pending action
 — `PreToolUse`, `UserPromptSubmit`, `Stop`, `SubagentStop` — are `advisory`, because they are
 deny-*capable* but their prevention has not been observed on a host. Events that fire after the
 fact or carry no veto — `PostToolUse`, `SessionStart`, `Notification` — are `detected`.
