@@ -73,6 +73,7 @@ Exit codes: 0 = success
 from __future__ import annotations
 
 import argparse
+import ast
 import copy
 import hashlib
 import json
