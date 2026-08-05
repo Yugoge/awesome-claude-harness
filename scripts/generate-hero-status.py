@@ -422,10 +422,89 @@ def parse_committed_rows(region_text: str) -> list[tuple[str, str, dict]]:
     return out
 
 
+def _blocks_before(text: str, upto: int) -> list[str]:
+    return [b for b in re.split(r"\n\s*\n", text[:upto]) if b.strip()]
+
+
+def _is_heading(block: str) -> bool:
+    first = block.strip().splitlines()[0] if block.strip() else ""
+    return bool(re.match(r"#{1,6}\s", first.strip()))
+
+
+def assert_region_positions(text: str) -> list[str]:
+    """The limits region's POSITION, not merely its bytes.
+
+    The byte-compare already refuses any edit to the region's CONTENT, but it was blind to
+    the region being MOVED. That gap matters because an orchestrator ruling on the first
+    screen rests entirely on the limits statement sitting next to the headline: relocate it
+    below the status strip and every byte-level assertion still passes while the ruling's
+    premise silently evaporates.
+    """
+    out: list[str] = []
+    spans = {rid: region_span(text, rid) for rid in REGION_IDS}
+    limits = spans.get("limits")
+    if limits is None:
+        return ["[region-position] the limits region is absent, so its position cannot be enforced"]
+
+    for rid in REGION_IDS:
+        span = spans.get(rid)
+        if rid != "limits" and span and span[0] < limits[0]:
+            out.append(f"[region-position] region {rid!r} precedes the limits region; the "
+                       f"limits statement must come before every other canonical region")
+
+    blocks = _blocks_before(text, limits[0])
+    headline = next((i for i, b in enumerate(blocks)
+                     if re.match(r"##\s", b.strip().splitlines()[0].strip())), None)
+    if headline is None:
+        return out + ["[region-position] no headline block precedes the limits region, so "
+                      "headline adjacency cannot be established"]
+
+    between = blocks[headline + 1:]
+    if any(_is_heading(b) for b in between):
+        out.append("[region-position] a heading intervenes between the headline block and "
+                   "the limits region; the limits statement must qualify the headline")
+    if len(between) > 1:
+        out.append(f"[region-position] {len(between)} block elements separate the headline "
+                   f"block from the limits region; at most one is allowed")
+    return out
+
+
+def assert_limits_above_fold(readme: Path) -> tuple[list[str], list[str]]:
+    """-> (violations, notes). The limits statement must survive where it is measured.
+
+    Scoped deliberately to the combinations the fold measurement itself covers; broadening
+    to arbitrary widths would make the positive control unsatisfiable, which is the failure
+    mode the previous cycle shipped.
+    """
+    script = REPO_ROOT / "scripts/measure-hero-fold.py"
+    if not script.is_file():
+        return ([], [f"[fold] {script.name} is absent; the fold assertion did NOT run"])
+    try:
+        r = subprocess.run([sys.executable, str(script), "--readme", str(readme)],
+                           cwd=REPO_ROOT, capture_output=True, text=True, timeout=600)
+        data = json.loads(r.stdout)
+    except Exception as exc:
+        return ([], [f"[fold] the fold measurement could not be executed "
+                     f"({type(exc).__name__}); the limits region's fold position is "
+                     f"UNVERIFIED in this environment"])
+    results = data.get("results") or []
+    if not results:
+        return (["[fold] the fold measurement produced no combinations to assert over"], [])
+    out = []
+    for res in results:
+        where = f"{res.get('viewport')}/{res.get('scheme')}"
+        above = res.get("above_fold") or {}
+        for element in ("headline", "limits"):
+            if not above.get(element):
+                out.append(f"[fold] the {element} is not fully above the fold at {where}")
+    return (out, [f"[fold] asserted over {len(results)} combinations (local preview; the "
+                  f"real page adds platform chrome above the README, so it can only sit lower)"])
+
+
 def cmd_write(readme: Path) -> int:
     text = readme.read_text(encoding="utf-8")
     rows = render_rows()
-    for rid in ("limits", "status"):
+    for rid in REGION_IDS:
         span = region_span(text, rid)
         if span is None:
             print(f"generate-hero-status: region {rid!r} markers not found in {readme}",
@@ -446,7 +525,7 @@ def cmd_check(readme: Path) -> int:
     violations: list[str] = []
 
     committed_rows: list[tuple[str, str, dict]] = []
-    for rid in ("limits", "status"):
+    for rid in REGION_IDS:
         span = region_span(text, rid)
         if span is None:
             violations.append(f"[region:{rid}] canonical region markers are missing")
@@ -512,7 +591,7 @@ def cmd_check(readme: Path) -> int:
     # region -- an extra fabricated bullet, a second copy of a region -- was invisible to
     # it and exited 0. That was a genuine fail-open hole (codex review). Comparing the
     # entire region against render_region() leaves no unreviewed bytes inside the fence.
-    for rid in ("limits", "status"):
+    for rid in REGION_IDS:
         span = region_span(text, rid)
         if span is None:
             continue
@@ -529,7 +608,7 @@ def cmd_check(readme: Path) -> int:
                 f"BEGIN/END marker pair")
     # A claim-row marker outside every canonical region is an unreviewed claim.
     inside = "".join(text[region_span(text, r)[0]:region_span(text, r)[1]]
-                     for r in ("limits", "status") if region_span(text, r))
+                     for r in REGION_IDS if region_span(text, r))
     for ln in text.splitlines():
         if MARKER_RE.match(ln.strip()) and ln not in inside:
             violations.append(f"[region-byte-compare] claim-row marker outside any "
