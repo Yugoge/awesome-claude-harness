@@ -413,6 +413,29 @@ if [ -n "$SCAN_ROOT" ]; then
     fail "author-path residue gate failed over the released archive (see FAIL lines above)"
   fi
 
+  # Residue class 3: HARD markers over every archive member. This loop is the whole
+  # point of gating the artifact rather than the checkout — a maintainer git remote
+  # or backup path inside a published tarball is not recoverable after the fact.
+  # It uses the same fail() accumulator as the checkout path, so a hard-marker leak
+  # is reported alongside every other archive violation in ONE run.
+  # The exemption is read from a HARD-MARKER-SCOPED key: the workspace-marker key
+  # names the same two paths but its written rationale describes a different class,
+  # and an exemption whose justification does not describe what it exempts is not
+  # an exemption. An absent or empty key therefore fails closed.
+  HM_EXEMPT="$(python3 -c 'import json,sys;print("\n".join(json.load(open(sys.argv[1])).get("hard_marker_exempt_paths",[])))' "$RELEASE_MANIFEST")"
+  hm_hits=0
+  for m in "${HARD_MARKERS[@]}"; do
+    while IFS= read -r f; do
+      [ -z "$f" ] && continue
+      printf '%s\n' "$HM_EXEMPT" | grep -qxF "$f" && continue
+      if grep -qF -- "$m" "$SCAN_ROOT/$f" 2>/dev/null; then
+        fail "hard residue marker in released archive: '$m'  ->  $f"
+        hm_hits=$((hm_hits + 1))
+      fi
+    done <<< "$ACTUAL"
+  done
+  [ "$hm_hits" -eq 0 ] && pass "no un-exempted hard residue markers in the released archive"
+
   echo "----------------------------------------------------------------------"
   if [ "$rc" -eq 0 ]; then
     echo "check-public-core(archive): RELEASE ARCHIVE CLEAN (path set == manifest, no residue leaks)"
