@@ -463,27 +463,40 @@ def _var_refs(text):
     return set(re.findall(r"\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?", text))
 
 
-def _shell_if_statements(src):
-    """[(order, condition, body)] for every if/elif, with line continuations joined.
+_SHELL_ARM_RE = re.compile(r"^(if|elif)\b[ \t]+(.*?)[ \t]*;?[ \t]*then[ \t]*$")
 
-    `fi` closes only `if`, so tracking that one keyword pair is enough to delimit bodies
-    without a full shell grammar.
+
+def _shell_if_statements(src):
+    """[(order, condition, body)] for every if/elif arm, with line continuations joined.
+
+    An arm is recognized only when it TERMINATES in `then`. That requirement is load-bearing,
+    not cosmetic: this guard embeds Python programs inside double-quoted `python -c` blocks,
+    and a line such as `if inv.get('subcommand')=='reset':` inside one of them is not a shell
+    arm. Treating it as one desynchronizes the `fi` pairing, after which a real arm's body runs
+    away to end-of-file and absorbs every later assignment -- which manufactures gate pairings
+    that do not exist. Each line is attributed to the INNERMOST open arm only, so an arm's body
+    is what that arm itself guards.
     """
     joined = re.sub(r"\\\n[ \t]*", " ", src)
-    lines = joined.split("\n")
     statements, stack = [], []
-    for index, line in enumerate(lines):
+    for index, line in enumerate(joined.split("\n")):
         head = line.strip()
-        if head.startswith("if ") or head.startswith("elif "):
-            condition = re.sub(r";?\s*then\s*$", "", head.split(" ", 1)[1])
-            statements.append({"order": index, "condition": condition, "body_lines": []})
-            if head.startswith("if "):
-                stack.append(len(statements) - 1)
-        elif head == "fi" and stack:
+        arm = _SHELL_ARM_RE.match(head)
+        if arm:
+            if arm.group(1) == "if":
+                stack.append(None)
+            statements.append({"order": index, "condition": arm.group(2), "body_lines": []})
+            if stack:
+                stack[-1] = len(statements) - 1
+            continue
+        if head == "else" and stack:
+            stack[-1] = None
+            continue
+        if head == "fi" and stack:
             stack.pop()
             continue
-        for open_index in stack:
-            statements[open_index]["body_lines"].append(line)
+        if stack and stack[-1] is not None:
+            statements[stack[-1]]["body_lines"].append(line)
     return [(s["order"], s["condition"], "\n".join(s["body_lines"])) for s in statements]
 
 
