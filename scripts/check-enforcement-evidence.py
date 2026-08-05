@@ -87,7 +87,63 @@ DECLARED_SCHEMA = {
         "source-level",
         "none",
     ],
+    # Accepted `status:` value per residual-risk entry of docs/THREAT-MODEL.md. Declared HERE
+    # with the other closed sets rather than inline in the gate, for the same reason: a status
+    # vocabulary restated at the assertion site is a second copy that drifts from the document
+    # it describes. The ledger publishes this block and --ledger asserts byte-equality, so the
+    # accepted values cannot move in one place only.
+    "risk_status": {
+        "RISK-1": ["PARTIALLY MITIGATED"],
+        "RISK-2": ["MITIGATED"],
+        "RISK-3": ["PARTIALLY MITIGATED"],
+    },
 }
+
+# ---------------------------------------------------------------------------
+# Published-claim scope guards.
+#
+# The ledger's premise is that a hostile reader can trust its rows. A claim in it that exceeds
+# what the checks below establish is therefore not a documentation defect -- it is the specific
+# failure mode the document exists to prevent. These patterns are matched against the
+# WHITESPACE-NORMALIZED document (published prose wraps at ~95 columns and blockquoted
+# paragraphs carry an interposed '>' on continuation lines, so an unnormalized literal silently
+# matches nothing and an absence assertion built on one passes vacuously).
+#
+# Each pattern matches a POSITIVE promise shape only, so the honest replacement -- which states
+# what the gate does NOT establish -- does not trip its own guard.
+# ---------------------------------------------------------------------------
+FORBIDDEN_CLAIM_PATTERNS = [
+    (r"(?i)\b(?:nothing|none|no\s+(?:part|column|field|cell|row))\b[^.]{0,120}"
+     r"\bregistered-hook\b[^.]{0,120}\bhand-(?:authored|edited|written)\b",
+     "a claim that no part of the registered-hook table is hand-authored"),
+    (r"(?i)\bregistered-hook\b[^.]{0,120}\b(?:is|are)\s+(?:not|never)\s+"
+     r"hand-(?:authored|edited|written)\b",
+     "a claim that the registered-hook rows are not hand-authored"),
+    (r"(?i)\b(?:every|all|each)\s+(?:field|column|cell)\b[^.]{0,120}\bregistered-hook\b"
+     r"[^.]{0,120}\b(?:derived|regenerated|recomputed|generated)\b",
+     "a claim that every registered-hook field is derived"),
+    (r"(?i)\bregistered-hook\s+(?:table|rows?|row\s+set)\s+(?:is|are)\s+"
+     r"(?:wholly|entirely|fully|completely)?\s*(?:derived|regenerated|generated)\b",
+     "a whole-table derivation claim"),
+    (r"(?i)\bregenerate\s+the\s+registered-hook\s+rows\b",
+     "an unqualified instruction to regenerate the registered-hook rows"),
+    (r"(?i)\bdo\s+not\s+hand-edit\s+(?:them|the\s+(?:registered-hook\s+)?rows)\b",
+     "an unqualified instruction not to hand-edit the rows"),
+    (r"(?i)\bhostile\s+reader\b[^.]{0,120}\bfalsify\b[^.]{0,60}\b(?:any|every|each)\s+rows?\b",
+     "a universally-quantified falsifiability promise over rows"),
+    (r"(?i)\bshould\s+be\s+able\s+to\s+falsify\b[^.]{0,60}\b(?:any|every|each)\s+rows?\b",
+     "a universally-quantified falsifiability promise over rows"),
+    (r"(?i)\bfalsif\w+\s+(?:any|every|each)\s+rows?\s+(?:here\s+)?with\s+"
+     r"(?:one|a\s+single)\s+command\b",
+     "a one-command falsifiability promise over rows"),
+    (r"(?i)\b(?:any|every|each)\s+rows?\b[^.]{0,60}\b(?:can|may|could)\s+be\s+falsified\b",
+     "a universally-quantified falsifiability promise over rows"),
+]
+
+# The three columns `--claims` step 7 actually recomputes, and the seven it does not.
+DERIVED_ROW_FIELDS = ["event_class", "matcher", "hook"]
+AUTHORED_ROW_FIELDS = ["row_id", "mode/precondition", "behavior", "exercise_status",
+                       "proof_layer", "citation", "verifying_test"]
 
 # Values recorded at the revision named below. Any drift from them is a FAILURE, not an update:
 # the published claim must break loudly rather than silently describe a boundary that moved.
