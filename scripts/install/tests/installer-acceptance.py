@@ -818,8 +818,8 @@ def ac8(tmp: Path) -> None:
     check("AC8(d)", "the README's promoted command, run verbatim, exits 0",
           rc == 0, f"cmd={cmd!r} rc={rc} err={err[-400:]}")
     check("AC8(d)", "it produces the AC1 isolated-root invariant",
-          actual_files(iso) == payload_expected(),
-          f"diff={sorted(actual_files(iso) ^ payload_expected())}")
+          actual_files(iso) == installed_expected(prefix / "claude-harness"),
+          f"diff={sorted(actual_files(iso) ^ installed_expected(prefix / 'claude-harness'))}")
     created = {p for p in node_snapshot(n2) if p != "."}
     check("AC8(d)", "it produces the AC1 bounded-footprint invariant",
           created == {e["path"] for e in PROFILE["live_footprint"]}, str(sorted(created)))
