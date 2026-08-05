@@ -1212,6 +1212,20 @@ def recorded_identities(gens: list) -> dict:
         for record in list(gen.get("contributions") or []) + list(gen.get("observations") or []):
             key = identity_key(record)
             previous = latest.get(key) or {}
+            # INTEGRITY BASELINE, kept separate from the most-recent record.
+            # A repeat apply OBSERVES an identity it finds already present and
+            # records the digest of whatever is there NOW -- including a user's
+            # edit. Letting that overwrite the baseline would launder the edit
+            # into an owned digest: apply, add a `timeout` key, apply again,
+            # uninstall, and the edited entry verifies clean and is DELETED. The
+            # baseline is therefore taken only from a record that actually
+            # INSERTED the entry, which is the only record describing bytes the
+            # installer itself wrote.
+            ownership_digest = previous.get("ownership_digest")
+            if record.get("ownership_disposition") == "inserted":
+                ownership_digest = record.get("entry_digest")
+            elif ownership_digest is None:
+                ownership_digest = record.get("entry_digest")
             # OWNERSHIP is governed by the most recent record. STRUCTURAL
             # PROVENANCE is not: it accumulates. A group this lineage created in
             # generation 1 is still this lineage's to drop when generation 2
