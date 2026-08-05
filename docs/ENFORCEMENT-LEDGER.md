@@ -41,7 +41,8 @@ run by any check in this repository.
 
 ## 1. Vocabulary (the closed sets)
 
-The three axes below are **declared exactly once**, in `DECLARED_SCHEMA` in
+The three label axes below — and the accepted `status:` value of each residual-risk entry of
+`docs/THREAT-MODEL.md` — are **declared exactly once**, in `DECLARED_SCHEMA` in
 `scripts/check-enforcement-evidence.py`. The block that follows is asserted byte-equal to that
 declaration on every run, so this document cannot drift from the code that enforces it.
 
