@@ -135,7 +135,11 @@ def main() -> int:
     a = ap.parse_args()
 
     html = md_to_html(Path(a.readme).read_text(encoding="utf-8"))
-    page_path = Path("/tmp/hero-fold-preview.html")
+    # UNIQUE per run. A fixed filename is a silent cross-lane hazard: under concurrent
+    # mutation two measurements running at once overwrite each other's preview and each
+    # then measures the other's page, reporting confident numbers about the wrong document.
+    preview_dir = Path(tempfile.mkdtemp(prefix=f"hero-fold-{os.getpid()}-"))
+    page_path = preview_dir / "preview.html"
     page_path.write_text(html, encoding="utf-8")
 
     from playwright.sync_api import sync_playwright  # type: ignore
