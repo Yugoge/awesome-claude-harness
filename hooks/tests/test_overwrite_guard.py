@@ -1182,9 +1182,52 @@ def test_ac10_frozen_extractor_signature_and_return_shape():
     ("echo 'need >=10/3 items'", []),
     ("echo 'foo > bar'", []),
     ("echo X", []),
+    # Iteration 1 pinned the shapes the OTHER consumers depend on, because the
+    # token-termination fix lives in the shared reader rather than in this
+    # guard's own extractor: the same absorbed ')' fails OPEN here and fails
+    # CLOSED in pretool-tool-policy.py, which refused a read-only
+    # '(… 2>/dev/null) | head' by inventing a write target named '/dev/null)'.
+    ("ls /nope 2>&1", []),
+    ("cmd --reason 'scope reduction' > /tmp/o", ["/tmp/o"]),
+    ('cmd <<<"hello world" > /tmp/out', ["/tmp/out"]),
+    ("cp x /tmp/my\\ file.txt", ["/tmp/my\\"]),
+    ("diff <(sort a) <(sort b) > /tmp/d", ["/tmp/d"]),
+    ("echo x > >(cat)", []),
+    ("f() { echo x > /tmp/a.txt; }", ["/tmp/a.txt"]),
+    ("case $x in a) echo hi;; esac", []),
+    ("git status --porcelain | head -20", []),
 ])
 def test_ac10_frozen_extractor_behaviour_unchanged(command, expected):
     assert bwt.extract_bash_write_paths(command) == expected
+
+
+@pytest.mark.parametrize("command, expected", [
+    ("(cd /d && echo x > /tmp/a.txt)", ["/tmp/a.txt"]),
+    ("(ss -ltnp 2>/dev/null || netstat -ltnp 2>/dev/null) | head", ["/dev/null"]),
+    ("(cp s /tmp/a.txt)", ["/tmp/a.txt"]),
+    ("(sed -i s/a/b/ /tmp/file)", ["/tmp/file"]),
+    ("\\cp src /tmp/a.txt", ["/tmp/a.txt"]),
+    ("echo x | \\tee /tmp/a.txt", ["/tmp/a.txt"]),
+    ("(diff <(sort a) <(sort b) > /tmp/d)", ["/tmp/d"]),
+])
+def test_ac10_frozen_extractor_names_the_true_path_in_grouped_and_escaped_forms(command, expected):
+    """The four consumers share this reader, so the correction reaches them all.
+
+    Each of these previously returned either nothing (the write escaped the
+    policy consumers entirely) or a path with a parenthesis glued to it (which
+    resolves to nothing, and which tool-policy reported as a bogus deny target).
+    Naming the true path is the same answer both consumers already give for the
+    ungrouped form.
+    """
+    assert bwt.extract_bash_write_paths(command) == expected
+
+
+def test_ac10_quoted_paths_are_untouched_by_the_token_terminator():
+    """The quoted branch of the token reader is deliberately not changed."""
+    assert bwt.extract_bash_write_paths('echo x > "/tmp/report (1).txt"') == \
+        ["/tmp/report (1).txt"]
+    assert [t.path for t in bwt.extract_bash_write_targets_with_modes(
+        "echo x > '/tmp/a (copy).txt'")] == ["/tmp/a (copy).txt"]
 
 
 @pytest.mark.parametrize("consumer", CONSUMERS)
