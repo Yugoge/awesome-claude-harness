@@ -240,7 +240,7 @@ def classify(path, lineno, content, lang, dspans, hspans, cspans, sspans, matche
     is_docstring = lineno in dspans or tl.startswith(">>>")
     is_heredoc = lineno in hspans
     is_test = "/tests/" in path or os.path.basename(path).startswith("test_")
-    is_env = bool(re.search(r':-\s*["\']?(/root/|/home/|/Users/)', content))
+    is_env = bool(re.search(r':-\s*["\']?(/root|/home/|/Users/)', content))
     is_unit = lang in UNIT_EXTS and bool(re.match(r"^[A-Za-z][A-Za-z0-9]*=", content.strip()))
     is_scanner = path in SCANNER_PATHS
     is_jsondoc = lang == ".json" and bool(JSON_DOC_KEY.search(content))
