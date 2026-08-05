@@ -958,6 +958,195 @@ def test_ac09_semantic_lexer_corruption(tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# Iteration 1 — the two syntaxes that hid a command word from every verb
+#
+# Both are DERIVED from the covered set rather than listed, so a verb added
+# later cannot quietly acquire the gap: the derivation reads each covered row's
+# own template, and the exemption set is asserted rather than assumed.
+# ---------------------------------------------------------------------------
+
+def _verb_of(row) -> str | None:
+    """The command WORD a covered row invokes, or None for a redirect operator."""
+    candidate = row["mechanism"].split("-")[0]
+    return None if candidate == "redirect" else candidate
+
+
+VERB_ROWS = [r for r in COVERED_VERB_ROUTES if _verb_of(r)]
+OPERATOR_ROWS = [r for r in COVERED_VERB_ROUTES if not _verb_of(r)]
+
+
+def test_f1_only_the_redirect_operators_are_exempt_from_the_word_syntaxes():
+    """Pins WHICH rows the two derived tests below are allowed to skip.
+
+    A backslash escapes a command WORD, so `>` and `>|` have nothing to escape.
+    Every other covered row names a word and must survive both syntaxes. If a
+    future mechanism is renamed such that its verb stops being derivable, the
+    row silently leaves VERB_ROWS — so the exempt set is asserted exactly.
+    """
+    assert {r["mechanism"] for r in OPERATOR_ROWS} == {"redirect-truncate", "redirect-clobber"}
+    for row in VERB_ROWS:
+        verb = _verb_of(row)
+        assert re.search(rf"(?:^|[\s;|&]){re.escape(verb)}\b", row["command_template"]), (
+            f"{row['route_id']}: mechanism {row['mechanism']} names verb {verb!r}, "
+            f"which does not appear as a word in {row['command_template']!r}")
+
+
+@pytest.mark.parametrize("row", VERB_ROWS, ids=[r["route_id"] for r in VERB_ROWS])
+def test_f1_backslash_prefix_defeats_no_covered_verb(row, tmp_path, http_url):
+    r"""`\cp` is the routine alias-bypass idiom, and it defeated 9 of 11 verbs.
+
+    The verb regexes required a `[\s;|&]` boundary before the command word and
+    a backslash is not in that class, so one byte turned every one of these
+    into an unnamed target — while the path stayed fully visible in the command
+    text. That is the guard failing on its own stated model, not an opacity
+    class, and it was declared nowhere.
+    """
+    verb = _verb_of(row)
+    work = tmp_path / f"backslash-{row['route_id']}"
+    work.mkdir(parents=True)
+    target = work / (row.get("victim_name") or "victim.txt")
+    original = original_bytes()
+    target.write_text(original, encoding="utf-8")
+    source = work / "source.txt"
+    source.write_text(NEW, encoding="utf-8")
+
+    escaped = row["command_template"].replace(verb, "\\" + verb, 1)
+    assert "\\" + verb in escaped
+    command = fill(escaped, {"{SRC}": str(source), "{DIR}": str(work),
+                             "{URL}": http_url, "{TARGET}": str(target)})
+    result = run_guard(command, cwd=work)
+    assert result.returncode == 2, (
+        f"\\{verb} must be refused exactly as {verb} is\n{result.stderr}")
+    assert rp(target) in result.stderr
+    assert target.read_text(encoding="utf-8") == original
+
+    # And creation through the same syntax is still never denied.
+    created = work / "created.txt"
+    allow = fill(escaped, {"{SRC}": str(source), "{DIR}": str(work),
+                           "{URL}": http_url, "{TARGET}": str(created)})
+    assert run_guard(allow, cwd=work).returncode == 0
+
+
+@pytest.mark.parametrize("row", COVERED_VERB_ROUTES,
+                         ids=[r["route_id"] for r in COVERED_VERB_ROUTES])
+def test_f2_subshell_grouping_defeats_no_covered_route(row, tmp_path, http_url):
+    """A grouping paren was worse than a miss: it produced an affirmative ALLOW.
+
+    `)` was absorbed into the path token, so the guard resolved a path that
+    does not exist, judged the call CREATION, and permitted a real replacement.
+    `(cd dir && cmd > file)` is a very common agent idiom.
+    """
+    work = tmp_path / f"subshell-{row['route_id']}"
+    work.mkdir(parents=True)
+    target = work / (row.get("victim_name") or "victim.txt")
+    original = original_bytes()
+    target.write_text(original, encoding="utf-8")
+    source = work / "source.txt"
+    source.write_text(NEW, encoding="utf-8")
+
+    inner = fill(row["command_template"], {"{SRC}": str(source), "{DIR}": str(work),
+                                           "{URL}": http_url, "{TARGET}": str(target)})
+    for command in (f"({inner})", f"(cd {work} && {inner})"):
+        result = run_guard(command, cwd=work)
+        assert result.returncode == 2, (
+            f"{command!r} must be refused exactly as the bare form is\n{result.stderr}")
+        assert rp(target) in result.stderr
+        assert target.read_text(encoding="utf-8") == original
+
+
+def test_f2_token_termination_does_not_over_reach(tmp_path):
+    """The fix must not start naming things that are not targets.
+
+    Making `)` terminate a token could regress three shapes, so each is pinned:
+    a quoted filename that really contains parentheses (still judged), process
+    substitution (still never a named target), and a read-only command whose
+    redirect merely goes to a device inside a subshell (still ungated).
+    """
+    work = tmp_path / "no-over-reach"
+    work.mkdir()
+    parens = work / "report (1).txt"
+    original = original_bytes()
+    parens.write_text(original, encoding="utf-8")
+
+    denied = run_guard(f'echo {NEW} > "{parens}"', cwd=work)
+    assert denied.returncode == 2, "a quoted path containing ')' must still be judged"
+    assert parens.read_text(encoding="utf-8") == original
+
+    for allowed in (
+        f"echo {NEW} > >(cat)",                                    # process substitution
+        f"diff <(sort {parens}) <(sort {parens}) > {work}/d.txt",  # both, plus creation
+        "(ls /nonexistent 2>/dev/null || true) | head",            # QA's own live probe
+        f"(cd {work} && cat 'report (1).txt' | wc -l)",            # read-only in a group
+    ):
+        assert run_guard(allowed, cwd=work).returncode == 0, f"{allowed!r} must be ungated"
+
+    # Creation inside a group is still creation.
+    assert run_guard(f"(cd {work} && echo {NEW} > brand-new.txt)", cwd=work).returncode == 0
+
+
+@pytest.mark.parametrize("template, mech", [
+    ("curl -sS -o{TARGET} {URL}", "curl-output"),
+    ("curl -sSo{TARGET} {URL}", "curl-output"),
+    ("wget -q -O{TARGET} {URL}", "wget-output"),
+    ("wget -qO{TARGET} {URL}", "wget-output"),
+])
+def test_f1_attached_output_flag_is_read(template, mech, tmp_path, http_url):
+    """getopt accepts -o/path exactly as -o /path; only the spaced form was read."""
+    work = tmp_path / f"attached-{uuid.uuid4().hex[:8]}"
+    work.mkdir(parents=True)
+    target = work / "victim.txt"
+    original = original_bytes()
+    target.write_text(original, encoding="utf-8")
+
+    command = fill(template, {"{TARGET}": str(target), "{URL}": http_url})
+    result = run_guard(command, cwd=work)
+    assert result.returncode == 2, f"{command!r} must be refused\n{result.stderr}"
+    assert mech in result.stderr
+    assert target.read_text(encoding="utf-8") == original
+
+    created = work / "created.txt"
+    allow = fill(template, {"{TARGET}": str(created), "{URL}": http_url})
+    assert run_guard(allow, cwd=work).returncode == 0
+    assert sh(allow, cwd=work).returncode == 0
+    assert created.read_text(encoding="utf-8") == NEW
+
+
+def test_f1_f2_do_not_gate_ordinary_developer_work(tmp_path):
+    """The binding narrowing, re-asserted against BOTH new syntaxes.
+
+    A guard that fires on routine work gets switched off, and then nothing is
+    protected. Neither token normalization may reach an edit tool, an append,
+    an in-place edit, or a creation — in plain, grouped or escaped form.
+    """
+    work = tmp_path / "ordinary"
+    work.mkdir()
+    target = work / "victim.txt"
+    original = original_bytes()
+    target.write_text(original, encoding="utf-8")
+    source = work / "source.txt"
+    source.write_text(NEW, encoding="utf-8")
+
+    ungated = [
+        f"echo {NEW} >> {target}",
+        f"(cd {work} && echo {NEW} >> {target})",
+        f"echo {NEW} | \\tee -a {target}",
+        f"(sed -i s/{original}/REPLACED/ {target})",
+        f"\\cp {source} {work}/fresh-copy.txt",
+        f"(cp {source} {work}/fresh-copy-2.txt)",
+        f"\\mv {source} {work}/renamed.txt",
+        "ls -la | wc -l",
+        f"grep -c . {target}",
+        f"(cd {work} && git status --porcelain 2>/dev/null | head)",
+    ]
+    for command in ungated:
+        result = run_guard(command, cwd=work)
+        assert result.returncode == 0, f"{command!r} must be ungated\n{result.stderr}"
+
+    for command in ungated[:7]:
+        assert sh(command, cwd=work).returncode == 0, f"{command!r} must also RUN"
+
+
+# ---------------------------------------------------------------------------
 # AC-10 — the shared lexer stays backward compatible for all THREE consumers
 # ---------------------------------------------------------------------------
 
