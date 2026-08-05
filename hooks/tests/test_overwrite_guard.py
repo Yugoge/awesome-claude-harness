@@ -765,6 +765,47 @@ def test_ac09_concurrent_grant_reuse(tmp_path):
         drop_grants(task_id)
 
 
+def test_ac09_grant_self_minting(tmp_path):
+    """CORRECTION: the spec claimed an agent cannot mint its own grant. It can.
+
+    The sentinel grant is an ordinary JSON file. Creating it is creation of a
+    path that does not exist, which this guard never denies — by binding
+    requirement. So the escape hatch is forgeable from the very surface it
+    guards. Demonstrated here rather than claimed closed.
+    """
+    work = tmp_path / "grant-self-minting"
+    work.mkdir()
+    target = work / "victim.txt"
+    original = original_bytes()
+    target.write_text(original, encoding="utf-8")
+    task_id = f"ovwtest-{uuid.uuid4().hex}"
+    session_id = f"sid-{uuid.uuid4().hex}"
+    command = f"echo {NEW} > {target}"
+    grant_path = Path(SENTINEL_GRANT_DIR) / f"{task_id}.json"
+    try:
+        assert run_guard(command, cwd=work, session_id=session_id,
+                         task_id=task_id).returncode == 2
+
+        forged = json.dumps({
+            "task_id": task_id, "session_id": session_id,
+            "allowed_operations": [{"op": "Write", "target": str(target)}],
+            "created_at": 0, "expires_at": 9999999999,
+        })
+        Path(SENTINEL_GRANT_DIR).mkdir(parents=True, exist_ok=True)
+        mint_command = f"echo '{forged}' > {grant_path}"
+        assert run_guard(mint_command, cwd=work, session_id=session_id,
+                         task_id=task_id).returncode == 0, "minting is creation, never denied"
+        assert sh(mint_command, cwd=work).returncode == 0
+        assert grant_path.is_file()
+
+        assert run_guard(command, cwd=work, session_id=session_id,
+                         task_id=task_id).returncode == 0, "the forged grant authorizes"
+        assert sh(command, cwd=work).returncode == 0
+        assert target.read_text(encoding="utf-8") != original
+    finally:
+        drop_grants(task_id)
+
+
 def test_ac09_semantic_lexer_corruption(tmp_path):
     """A lexer that IMPORTS cleanly but returns nothing degrades the guard silently.
 
