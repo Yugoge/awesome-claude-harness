@@ -18,6 +18,11 @@ consent escape hatches (/do, /allow), flagged in the manifest. Blocking them
 would leave a human on an unprotected host with no way to authorise a repair.
 Fail-closed must not mean fail-sealed.
 
+Alongside them sits the REPAIR FLOOR (`REPAIR_FLOOR_TOOLS`): a closed six-route
+set that is never this gate's business, so a degraded host can still be read,
+edited and validated back into a working one. Consent is not repair — the
+hatches record authorisation, the floor performs the fix.
+
 Output contract: silent + exit 0 when the route is unprotected or the handshake
 passes. On refusal, one JSON gate decision record on stderr, exit 2.
 Exit codes: 0 = allow / not this gate's business; 2 = block.
