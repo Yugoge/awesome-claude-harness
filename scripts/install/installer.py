@@ -214,14 +214,34 @@ def resolve_prefix(explicit: str | None) -> Path:
 # --------------------------------------------------------------------------- #
 # Context
 # --------------------------------------------------------------------------- #
+def norm_path(path) -> str:
+    """Lexical normalization ONLY -- never resolves symlinks.
+
+    R1 records and compares the config home in BOTH forms. Resolving only at
+    uninstall time is unsound: a config home reached through a symlink the user
+    has since repointed would resolve to a home the installer never touched.
+    """
+    return os.path.normpath(str(path))
+
+
 class Ctx:
     def __init__(self, args):
         self.source = Path(args.source).resolve()
         self.profile_path = Path(args.profile_file) if args.profile_file else (
             self.source / "scripts" / "install" / "profiles" / f"{args.profile}.json"
         )
-        with open(self.profile_path, encoding="utf-8") as fh:
-            self.profile = json.load(fh)
+        try:
+            with open(self.profile_path, encoding="utf-8") as fh:
+                self.profile = json.load(fh)
+        except FileNotFoundError as exc:
+            # A missing checkout is a REFUSAL, not a crash: the caller must be able
+            # to tell "nothing was written" from "something went wrong mid-write".
+            raise Refusal(
+                f"profile not found: {self.profile_path}\n"
+                f"  The source checkout appears to be unavailable. Uninstall an install "
+                f"made by this engine using the entrypoint shipped beneath the isolated "
+                f"root ({SELF_MANAGE_REL}/uninstall), which carries its own profile "
+                f"snapshot. Nothing was written.") from exc
         self.prefix = resolve_prefix(args.prefix)
         self.isolated_root = self.prefix / self.profile.get("isolated_root_subdir", "harness")
         self.config_home = resolve_config_home(args.config_dir)
@@ -230,12 +250,78 @@ class Ctx:
         )
         self.bridge = self.config_home / self.bridge_rel
         self.state_path = self.prefix / STATE_REL
+        # The engine mutates exactly ONE settings document, and which one is
+        # declared by the profile rather than spelled as a literal here.
+        mutable = list(self.profile.get("mutable_paths") or [])
+        if len(mutable) != 1:
+            raise Refusal(
+                f"profile declares {len(mutable)} mutable path(s); this engine merges "
+                "exactly one settings document and refuses to guess which. Nothing "
+                "was written.")
+        self.settings_rel = mutable[0]
+
+    @property
+    def settings_target(self) -> Path:
+        return self.config_home / self.settings_rel
+
+    @property
+    def markers(self) -> tuple:
+        """Path strings whose appearance in a hook command means "wired to us".
+
+        Both forms are checked: registrations are written through the bridge, but
+        a user may reference the isolated root directly.
+        """
+        return (str(self.bridge), str(self.isolated_root))
+
+    def adopt_state_parameters(self, state: dict) -> None:
+        """R9 -- take the isolated-root and bridge parameters from the STATE record.
+
+        The uninstall path must not depend on the source checkout still describing
+        the install that is being removed. The profile snapshot supplies defaults;
+        the recorded generation is authoritative for what was actually installed.
+        """
+        gens = state.get("generations") or []
+        if not gens:
+            return
+        latest = gens[-1]
+        recorded_root = latest.get("isolated_root")
+        if recorded_root:
+            self.isolated_root = Path(recorded_root)
+        recorded_bridge_rel = latest.get("bridge_rel")
+        if recorded_bridge_rel:
+            self.bridge_rel = recorded_bridge_rel
+        self.bridge = self.config_home / self.bridge_rel
+        recorded_settings_rel = latest.get("settings_rel")
+        if recorded_settings_rel:
+            self.settings_rel = recorded_settings_rel
 
     def load_state(self) -> dict:
         if self.state_path.is_file():
             with open(self.state_path, encoding="utf-8") as fh:
                 return json.load(fh)
         return {"schema": STATE_SCHEMA, "generations": []}
+
+    def write_state(self, state: dict) -> None:
+        self.state_path.parent.mkdir(parents=True, exist_ok=True)
+        atomic_write(self.state_path, (json.dumps(state, indent=2) + "\n").encode("utf-8"))
+
+
+def home_mismatches(record: dict, ctx: Ctx) -> list[str]:
+    """R1 -- compare BOTH recorded forms of the config home. Either one differing
+    is a refusal: the lexical form catches a different path, the install-time
+    resolved form catches the same path pointing somewhere else."""
+    problems = []
+    lexical = record.get("config_home_lexical", record.get("config_home"))
+    if lexical is not None and norm_path(lexical) != norm_path(ctx.config_home):
+        problems.append(f"lexical config home: recorded {lexical!r} != requested "
+                        f"{str(ctx.config_home)!r}")
+    resolved = record.get("config_home_resolved")
+    if resolved is not None:
+        live = os.path.realpath(ctx.config_home)
+        if norm_path(resolved) != norm_path(live):
+            problems.append(f"install-time resolved config home: recorded {resolved!r} != "
+                            f"requested {live!r}")
+    return problems
 
 
 # --------------------------------------------------------------------------- #
