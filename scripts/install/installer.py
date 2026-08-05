@@ -669,6 +669,111 @@ def foreign_symlink_ancestor(root: Path, rel: str) -> str | None:
     return None
 
 
+def engine_source_bytes() -> bytes:
+    return Path(__file__).resolve().read_bytes()
+
+
+def bundle_uninstall_entrypoint(ctx: Ctx) -> bytes:
+    """The payload-resident uninstall entrypoint (R9).
+
+    It resolves the prefix from its OWN location rather than from a baked-in
+    literal, so moving the payload does not strand it, and it points the engine at
+    the profile SNAPSHOT beside it rather than at a source checkout.
+    """
+    body = f"""#!/usr/bin/env bash
+# uninstall (payload-resident) -- remove exactly what the installer added.
+#
+# Shipped INTO the installed payload so uninstall works with no source checkout
+# present. Takes its profile parameters from the snapshot beside it and from
+# state/install-state.json, never from --source.
+#
+# Usage: {SELF_MANAGE_REL}/uninstall [--config-dir <dir>] [--keep-payload] [--json]
+#
+# Exit codes: 0 = success
+#             1 = failure (crash, I/O error)
+#             2 = preflight / refusal -- NOTHING was mutated
+#             3 = partial -- a mutation occurred and something was deliberately
+#                 retained (partial un-merge, retained self-management bundle)
+set -uo pipefail
+
+SELF_DIR="$(cd "$(dirname "${{BASH_SOURCE[0]}}")" && pwd -P)"
+PREFIX="$(cd "$SELF_DIR/../.." && pwd -P)"
+PY="${{CLAUDE_PYTHON_BIN:-python3}}"
+
+exec "$PY" "$SELF_DIR/installer.py" uninstall \\
+  --prefix "$PREFIX" \\
+  --profile-file "$SELF_DIR/profile.json" \\
+  "$@"
+"""
+    return body.encode("utf-8")
+
+
+def self_manage_bytes(ctx: Ctx, name: str) -> bytes:
+    if name == "installer.py":
+        return engine_source_bytes()
+    if name == "profile.json":
+        return (json.dumps(ctx.profile, indent=2, ensure_ascii=False) + "\n").encode("utf-8")
+    if name == "uninstall":
+        return bundle_uninstall_entrypoint(ctx)
+    raise ValueError(f"unknown self-management artifact: {name}")
+
+
+def verify_bundle_self_contained(source: bytes) -> list[str]:
+    """R9 -- every module the engine imports at runtime must be in the bundle.
+
+    Measured rather than assumed: the engine is parsed and every top-level import
+    is checked against the interpreter's own stdlib list. A non-stdlib import
+    means the bundle would be incomplete and the payload unremovable once the
+    checkout moves, so the install refuses instead of shipping a broken bundle.
+    """
+    stdlib = getattr(sys, "stdlib_module_names", None)
+    if stdlib is None:
+        return []  # interpreter cannot answer; do not fabricate a verdict
+    modules: set[str] = set()
+    for node in ast.walk(ast.parse(source)):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                modules.add(alias.name.split(".")[0])
+        elif isinstance(node, ast.ImportFrom):
+            if node.level:
+                return [f"relative import (level {node.level}) -- not self-contained"]
+            if node.module:
+                modules.add(node.module.split(".")[0])
+    return sorted(m for m in modules if m not in stdlib)
+
+
+def mandatory_footprint_paths(ctx: Ctx) -> set[str]:
+    """R8 -- which live_footprint entries are MANDATORY, derived STRUCTURALLY.
+
+    An explicit per-entry "mandatory" boolean wins if the profile carries one
+    (forward-compatible with a profile that adds it). Otherwise mandatory-ness is
+    a structural match on the engine's OWN contracts: the entry that IS the bridge
+    it resolves, and the entry that IS the settings document it merges. The `why`
+    field is prose and MUST NOT be parsed -- inferring semantics from the word
+    "MANDATORY" appearing in documentation is not machine-defined.
+    """
+    footprint = ctx.profile["live_footprint"]
+    if any("mandatory" in entry for entry in footprint):
+        return {e["path"] for e in footprint if e.get("mandatory") is True}
+
+    bridge_hits = [e["path"] for e in footprint
+                   if e["kind"] == "link" and ctx.config_home / e["path"] == ctx.bridge]
+    settings_hits = [e["path"] for e in footprint
+                     if e["kind"] == "file" and e.get("mutable") is True
+                     and ctx.config_home / e["path"] == ctx.settings_target]
+    if len(bridge_hits) != 1:
+        raise Refusal(
+            f"cannot derive the mandatory bridge entry structurally: {len(bridge_hits)} "
+            "live_footprint entr(ies) match the engine's resolved bridge path. Refusing "
+            "to guess. Nothing was written.")
+    if len(settings_hits) != 1:
+        raise Refusal(
+            f"cannot derive the mandatory settings entry structurally: {len(settings_hits)} "
+            "live_footprint entr(ies) match the engine's settings target. Refusing to "
+            "guess. Nothing was written.")
+    return {bridge_hits[0], settings_hits[0]}
+
+
 def build_plan(ctx: Ctx) -> dict:
     """Deterministic plan. `changes` are DURABLE NET transitions only.
 
