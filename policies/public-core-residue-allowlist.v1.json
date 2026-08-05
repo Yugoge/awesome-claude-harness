@@ -1602,7 +1602,7 @@
       "fingerprint": "b9a6765cfdc74e03",
       "ordinal": 1,
       "class": "comment_or_narrative_doc",
-      "rationale": "def main() — whole-line comment describing the nested-repo mis-resolution against ${CONTROL_ROOT:-/root}; never read as a path at runtime. Re-surfaced when the left boundary was narrowed to (?<![A-Za-z0-9])."
+      "rationale": "def main() — whole-line comment describing the nested-repo mis-resolution against ${CONTROL_ROOT:-...}; never read as a path at runtime. Re-surfaced when the left boundary was narrowed to (?<![A-Za-z0-9])."
     },
     {
       "path": "scripts/close-scoring-decide.py",
