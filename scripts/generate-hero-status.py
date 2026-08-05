@@ -518,8 +518,8 @@ PREDICATES = {
 }
 
 # Which canonical region each row renders into.
-REGION_OF = {"known-limits": "limits",
-             "hero-recording": "disclosure", "hero-legibility": "disclosure"}
+REGION_OF = {"known-limits": "limits", "hero-recording": "disclosure",
+             "hero-legibility": "disclosure", "hero-glyph": "disclosure"}
 for _r in ROW_IDS:
     REGION_OF.setdefault(_r, "status")
 
