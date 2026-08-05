@@ -22,8 +22,14 @@
 #                         and recorded in the install inventory.
 #   --json                Machine-readable output.
 #
-# Exit codes: 0 = success; 1 = install failed; 2 = preflight failed (NOTHING was
-#             written — the preflight runs strictly before the first mutation).
+# Exit codes: 0 = success
+#             1 = install failed (crash, I/O error)
+#             2 = preflight / refusal — NOTHING was written. The preflight runs
+#                 strictly before the first mutation, and so does the engine's
+#                 refusal when a MANDATORY footprint entry cannot be honoured.
+#             3 = partial — a mutation occurred and something was deliberately
+#                 retained (an opted-in partial install via --allow-partial-install).
+#             The engine's exit code is propagated unchanged.
 #
 # WHAT THIS DOES NOT DO: it does not clone anything over your Claude home, it does
 # not render your settings.json from a template, and it does not take ownership of
