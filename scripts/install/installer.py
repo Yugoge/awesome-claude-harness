@@ -1311,9 +1311,16 @@ def unmerge_settings(doc: dict, recorded: dict, markers: tuple,
         if not group_owned[(event, group_index)]:
             continue
         bucket = (doc.get("hooks") or {}).get(event)
-        if isinstance(bucket, list) and group_index < len(bucket) \
-                and isinstance(bucket[group_index], dict) \
-                and not (bucket[group_index].get("hooks") or []):
+        if not (isinstance(bucket, list) and group_index < len(bucket)
+                and isinstance(bucket[group_index], dict)):
+            continue
+        group = bucket[group_index]
+        # Empty of entries is not sufficient. The installer creates a group
+        # carrying only `matcher` and `hooks`; a user who added their own key to
+        # that group (metadata, a comment field, an unrecognized extension) owns
+        # that key, and dropping the group would delete it. Retain the emptied
+        # group whenever it carries anything the installer did not put there.
+        if not (group.get("hooks") or []) and set(group) <= {"matcher", "hooks"}:
             del bucket[group_index]
     for event, owned in event_owned.items():
         bucket = (doc.get("hooks") or {}).get(event)
