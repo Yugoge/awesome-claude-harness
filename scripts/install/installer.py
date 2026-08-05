@@ -1078,6 +1078,26 @@ def apply_plan(ctx: Ctx, plan: dict) -> dict:
     # record, which the legacy-record rule then declares unrecoverable -- the user
     # left with harness registrations the tool refuses to remove.
     settings_plan = plan.get("settings_plan") or {}
+    planned_created: list[dict] = []
+    planned_modified: list[dict] = []
+    for c in plan["changes"]:
+        if c["tree"] != "config_home" or c["path"] == ".":
+            continue
+        if c["change_kind"] == "modify":
+            backup = backups.get(c["path"])
+            planned_modified.append({
+                "path": c["path"], "kind": c["kind"], "backup": backup,
+                "pre_install_sha256": sha256_file(Path(backup)) if backup else None})
+        elif c["change_kind"] == "create":
+            entry = {"path": c["path"], "kind": c["kind"]}
+            if c["kind"] == "link":
+                entry["target"] = str(ctx.isolated_root)
+                entry["sha256"] = None
+            elif c["kind"] == "file":
+                content = (settings_plan.get("content") if c["path"] == ctx.settings_rel
+                           else command_doc_bytes(ctx))
+                entry["sha256"] = hashlib.sha256(content).hexdigest() if content else None
+            planned_created.append(entry)
     state = ctx.load_state()
     record = {
         "generation": gen,
