@@ -445,15 +445,29 @@ def _canon_word(word):
     return "$" + match.group(1) if match else text
 
 
+_NEGATED_OP = {"=": "!=", "!=": "="}
+
+
 def _canon_predicates(condition):
-    """Canonical comparison keys for every bracket test inside one condition."""
+    """Canonical comparison keys for every bracket test inside one condition.
+
+    Negation is folded into the operator, so `! [ "$X" = "ok" ]` and `[ ! "$X" = "ok" ]`
+    canonicalize identically to `[ "$X" != "ok" ]`. Without this, respelling a fallback arm
+    as a negated equality would move it out of the fallback key and silently drop a gate from
+    the census -- the same false pass this census exists to end.
+    """
     keys = set()
-    for test in _SHELL_TEST_RE.findall(condition):
-        words = _SHELL_WORD_RE.findall(test)
+    for match in _SHELL_TEST_RE.finditer(condition):
+        outer_negated = bool(re.search(r"!\s*$", condition[: match.start()]))
+        words = _SHELL_WORD_RE.findall(match.group(1))
+        if words and words[0] == "!":
+            words, outer_negated = words[1:], not outer_negated
         for i, word in enumerate(words):
             op = _SYMMETRIC_OPS.get(word)
             if not op or i == 0 or i + 1 >= len(words):
                 continue
+            if outer_negated:
+                op = _NEGATED_OP[op]
             operands = sorted((_canon_word(words[i - 1]), _canon_word(words[i + 1])))
             keys.add(f"{op}:{operands[0]}|{operands[1]}")
     return keys
