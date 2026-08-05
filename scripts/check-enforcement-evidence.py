@@ -1133,6 +1133,9 @@ def main(argv=None):
                                        check=True).stdout.strip())
         except Exception:  # noqa: BLE001
             root = Path.cwd()
+    # Resolved once and written back, so companion-document existence resolves against the
+    # SAME root a negative fixture was built in.
+    args.root = str(root)
     defaults = {
         "ledger_file": "docs/ENFORCEMENT-LEDGER.md",
         "corpus": "hooks/tests/fixtures/adversarial_corpus.json",
