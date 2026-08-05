@@ -392,7 +392,7 @@ def render_rows() -> dict[str, list[tuple[str, str]]]:
             raise SystemExit(f"generator emitted an out-of-enum state for {rid}: {state}")
         marker = (f"<!-- claim-row id={rid} state={state} "
                   f"evidence={evidence} tracked={tracked} -->")
-        visible = text if REGION_OF[rid] == "limits" else f"- {text}"
+        visible = text if REGION_OF[rid] in PROSE_REGIONS else f"- {text}"
         out[REGION_OF[rid]].append((marker, visible))
     return out
 
