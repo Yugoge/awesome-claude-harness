@@ -587,11 +587,34 @@ def ac4_ac5(tmp: Path) -> dict:
     relocated = [p for p in dirs_before if s2["config_home"].get(p, {}).get("type") == "symlink"]
     check("AC5(i)", "no path that was a populated real directory before apply is a symlink after",
           not relocated, str(relocated))
-    resolvable = {p: e for p, e in pre_install["config_home"].items() if (n2 / p).exists()}
-    rp_fail = [p for p in resolvable if os.path.realpath(n2 / p) !=
-               os.path.realpath(os.path.join(str(n2), p))]
+    # The pre-install snapshot RECORDS a realpath per entry; the assertion compares
+    # that recorded value against the post-apply realpath. The assertion this
+    # replaces read both operands from the same path expression, so its inequality
+    # was False for every input by construction and it could not fail against ANY
+    # fixture -- including one designed to break it.
+    rp_fail = realpath_regressions(n2, pre_realpaths)
     check("AC5(i)", "realpath unchanged for every path that resolved before the install",
           not rp_fail, str(rp_fail[:3]))
+
+    # NEGATIVE CONTROL -- falsifiability proof for the assertion directly above.
+    # A purely syntactic predicate ("the two operands are not the same expression")
+    # is NOT sufficient: two textually different but semantically identical
+    # expressions would satisfy it while remaining just as unfalsifiable. So the
+    # same predicate is run against a deliberately-relocating mutation, which is
+    # the thing it is supposed to catch. The unfixed installer relocates nothing,
+    # so a correctly repaired assertion also passes against it -- which is why
+    # falsifiability can only be shown against this control.
+    nc = tmp / "ac5nc" / "n2"
+    make_populated(nc)
+    nc_recorded = realpath_map(nc)
+    relocated_tree = tmp / "ac5nc" / "elsewhere"
+    relocated_tree.mkdir(parents=True)
+    shutil.move(str(nc / "CLAUDE.md"), str(relocated_tree / "CLAUDE.md"))
+    os.symlink(str(relocated_tree / "CLAUDE.md"), nc / "CLAUDE.md")
+    nc_fail = realpath_regressions(nc, nc_recorded)
+    check("AC5(i)", "NEGATIVE CONTROL: the realpath assertion FAILS against a "
+                    "relocating mutation (proves it is falsifiable at all)",
+          bool(nc_fail), f"regressions_detected={nc_fail[:2]}")
     return {"n2": n2, "prefix": prefix, "pre_install": pre_install}
 
 
