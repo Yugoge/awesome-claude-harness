@@ -1261,11 +1261,12 @@ def unmerge_settings(doc: dict, recorded: dict, markers: tuple,
     event_owned: dict[str, bool] = {}
 
     for key, record in recorded.items():
+        baseline_digest = record.get("ownership_digest") or record.get("entry_digest")
         base = {"action": "un-merge", "event": key[0], "matcher": key[1],
                 "hook_type": key[2], "command": key[3],
                 "generation": record.get("_generation"),
                 "ownership_disposition": record.get("ownership_disposition"),
-                "expected_entry_digest": record.get("entry_digest")}
+                "expected_entry_digest": baseline_digest}
         matches = locate(doc, key)
         if record.get("ownership_disposition") == "unowned":
             # Never was ours. Never removable, however many generations observe it.
