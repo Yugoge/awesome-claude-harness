@@ -273,6 +273,66 @@ const deriveAdvance = () => {
 };
 const ADV = deriveAdvance();
 
+// ---------- advance cross-check: the asset must not supply the ruler that measures it ----------
+// The clipping assertion below measures with a unit READ FROM THE ASSET UNDER TEST, so an asset
+// that declares a too-small advance reports itself un-clipped. That is fail-OPEN, and it was
+// proven end-to-end: a 16-line asset cutting 9 lines, 4 of them kind "verdict", declaring an
+// advance of 1 instead of 9, audited clean — exit 0, zero clipping diagnostics. A detector an
+// asset can blind is not a detector.
+//
+// The declared advance is therefore corroborated against sources the asset cannot restate
+// without visibly destroying itself, none of which is the declaration:
+//   (a) the root font-size — a monospace advance is a fixed fraction of the em, so shrinking
+//       the advance means shrinking the type to match, to a size no one can read;
+//   (b) the stage-rail pitch — consecutive rail label x positions divided by the label's own
+//       character count, where the label TEXT is already pinned to the manifest above. Present
+//       in every asset, including those with no typed line, which is exactly the case the
+//       proven attack used;
+//   (c) the first typing-reveal clip step, when the asset has a typed line.
+// Disagreement with any corroborator is a HARD violation: it is an attack signature, not a
+// degradation. Having NO corroborator is a provenance downgrade, so --strict escalates it.
+// This validates the assertion's INPUT; the assertion itself is untouched.
+const MONO_RATIO_MIN = 0.45, MONO_RATIO_MAX = 0.80; // ui-monospace/Menlo/Consolas sit at ~0.6
+const RAIL_GUTTER_COLS = 3;                         // gen-svg: rx += label.length*ADV + 3*ADV
+const firstStep = (csv) => {
+  const vals = String(csv).split(';').map(Number).filter((v) => Number.isFinite(v));
+  for (let i = 1; i < vals.length; i++) if (vals[i] - vals[i - 1] > 0) return vals[i] - vals[i - 1];
+  return null;
+};
+const advanceCorroborators = () => {
+  const out = [];
+  const fsM = svg.match(/<svg\b[^>]*\bfont-size="([\d.]+)"/);
+  const fs = fsM ? parseFloat(fsM[1]) : null;
+  if (fs > 0) out.push({ src: `the root font-size of ${fs}px`, lo: fs * MONO_RATIO_MIN,
+                         hi: fs * MONO_RATIO_MAX,
+                         implies: `${(fs * MONO_RATIO_MIN).toFixed(2)}–${(fs * MONO_RATIO_MAX).toFixed(2)}px` });
+  const xs = [...svg.matchAll(/<text data-role="stage" x="([\d.]+)"/g)].map((r) => parseFloat(r[1]));
+  if (xs.length >= 2 && RAIL.length >= 2 && xs[1] > xs[0]) {
+    const pitch = (xs[1] - xs[0]) / (RAIL[0].length + RAIL_GUTTER_COLS);
+    if (pitch > 0) out.push({ src: `the stage-rail pitch (labels "${RAIL[0]}" at x=${xs[0]}, "${RAIL[1]}" at x=${xs[1]})`,
+                              lo: pitch - 1e-6, hi: pitch + 1e-6, implies: `${pitch}px` });
+  }
+  const clipM = svg.match(/<clipPath\b[^>]*>[\s\S]*?<animate attributeName="width"[^>]*values="([^"]+)"/);
+  const clipStep = clipM ? firstStep(clipM[1]) : null;
+  if (clipStep > 0) out.push({ src: 'the first typing-reveal clip step',
+                               lo: clipStep - 1e-6, hi: clipStep + 1e-6, implies: `${clipStep}px` });
+  return out;
+};
+if (ADV) {
+  const corroborators = advanceCorroborators();
+  if (!corroborators.length) {
+    W(`the declared character advance (${ADV}px) could not be corroborated by any independent ` +
+      `source in this asset, so clipping below is measured with an un-cross-checked ruler`);
+  }
+  for (const c of corroborators) {
+    if (ADV < c.lo || ADV > c.hi) {
+      V(`declared character advance ${ADV}px disagrees with ${c.src}, which implies ` +
+        `${c.implies}. The clipping check measures with the advance the asset declares, so a ` +
+        `false advance hides real clipping — a disagreeing declaration is refused, not used`);
+    }
+  }
+}
+
 const ledgerPath = join(dirname(fileURLToPath(import.meta.url)), 'known-clipped-ledger.json');
 let ledgerEntries = [];
 if (existsSync(ledgerPath)) {
