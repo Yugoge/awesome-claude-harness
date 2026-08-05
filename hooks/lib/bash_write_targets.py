@@ -698,7 +698,13 @@ def _extract_dd_mode_targets(command: str) -> List[WriteTarget]:
 
 
 def _flag_value_targets(tokens: List[str], short: str, long_opt: str) -> List[str]:
-    """Values of `-x VALUE`, `--long VALUE`, `--long=VALUE` and `-abx VALUE`."""
+    """Values of `-x VALUE`, `--long VALUE`, `--long=VALUE`, `-abx VALUE`, `-xVALUE`.
+
+    The ATTACHED short form (`curl -o/tmp/f`, `wget -O/tmp/f`) is a write to a
+    named path exactly like the spaced form, and getopt accepts both; reading
+    only the spaced form left the attached one entirely unnamed.
+    """
+    letter = short[1:]
     out: List[str] = []
     take_next = False
     for t in tokens:
@@ -713,8 +719,12 @@ def _flag_value_targets(tokens: List[str], short: str, long_opt: str) -> List[st
             value = t[len(long_opt) + 1:]
             if value:
                 out.append(value)
-        elif t.startswith("-") and not t.startswith("--") and t.endswith(short[1:]) and len(t) > 1:
-            take_next = True
+        elif t.startswith("-") and not t.startswith("--") and letter in t[1:]:
+            attached = t[t.index(letter, 1) + 1:]
+            if attached:
+                out.append(attached)   # -o/tmp/f, -sSo/tmp/f
+            else:
+                take_next = True       # -o /tmp/f, -sSo /tmp/f
     return out
 
 
