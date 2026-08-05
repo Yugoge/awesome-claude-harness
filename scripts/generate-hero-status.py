@@ -374,14 +374,18 @@ PREDICATES = {
 }
 
 # Which canonical region each row renders into.
-REGION_OF = {"known-limits": "limits"}
+REGION_OF = {"known-limits": "limits",
+             "hero-recording": "disclosure", "hero-legibility": "disclosure"}
 for _r in ROW_IDS:
     REGION_OF.setdefault(_r, "status")
+
+# Regions whose rows render as prose rather than list items.
+PROSE_REGIONS = {"limits", "disclosure"}
 
 
 def render_rows() -> dict[str, list[tuple[str, str]]]:
     """-> {region_id: [(marker_line, visible_line), ...]} in ROW_IDS order."""
-    out: dict[str, list[tuple[str, str]]] = {"limits": [], "status": []}
+    out: dict[str, list[tuple[str, str]]] = {rid: [] for rid in REGION_IDS}
     for rid in ROW_IDS:
         state, text, evidence, tracked = PREDICATES[rid]()
         if state not in STATES:
