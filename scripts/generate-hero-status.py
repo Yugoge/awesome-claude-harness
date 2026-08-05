@@ -517,7 +517,7 @@ def cmd_write(readme: Path) -> int:
     return 0
 
 
-def cmd_check(readme: Path) -> int:
+def cmd_check(readme: Path, check_fold: bool = True) -> int:
     """All four assertions, evaluated on EVERY run. Never short-circuits; every
     violation names the offending row id."""
     text = readme.read_text(encoding="utf-8")
