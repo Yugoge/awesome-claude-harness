@@ -1,13 +1,14 @@
 # tests
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-08-03T15:09:18Z*
-**Total entries**: 0
+*Last updated: 2026-08-05T03:57:23Z*
+**Total entries**: 1
 **Convention**: kebab
 
 ## Tree
 ```
 tests/
+└── `installer-acceptance.py` - Runs every acceptance criterion (AC1-AC8) of the installer lane against real
 ```
 <!-- /AUTO:index-stats -->
 

@@ -6,11 +6,21 @@ fixtures in a temporary directory. Nothing outside the temporary directory is
 read for state or written to.
 
 Usage: python3 scripts/install/tests/installer-acceptance.py [--verbose]
+                                                            [--engine <path>]
 Exit codes: 0 = every assertion passed; 1 = at least one assertion failed.
 
 The measurement instrument is the NODE SNAPSHOT from installer.py: a recursive,
 symlink-NOT-following walk recording node type, raw readlink text, content
 sha256 and (st_dev, st_ino) inode identity per node.
+
+--engine points the destructive-path fixtures (AC9-AC14) at an ALTERNATIVE engine
+so this harness can be run against an older engine and demonstrated to fail for
+the diagnosed reason. A failure arising from surface the alternative engine does
+not have -- an unrecognized flag, a missing state field, a missing payload file --
+is classified `inapplicable-on-alternative-engine` and does NOT count as evidence
+of a defect: without that split, argparse and KeyError failures would register in
+every defect family while demonstrating nothing. That is the same false-evidence
+class as an assertion that cannot fail, relocated one level up.
 """
 
 from __future__ import annotations
