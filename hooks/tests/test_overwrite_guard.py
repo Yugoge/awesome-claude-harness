@@ -465,15 +465,12 @@ def test_ac06_non_authorizing_grant_shapes(operations, label, tmp_path):
     work = tmp_path / f"grant-{uuid.uuid4().hex[:8]}"
     work.mkdir(parents=True)
     target = work / "victim.txt"
-    original = target.write_text(original_bytes(), encoding="utf-8") or target.read_text()
+    original = original_bytes()
+    target.write_text(original, encoding="utf-8")
     task_id = f"ovwtest-{uuid.uuid4().hex}"
     session_id = f"sid-{uuid.uuid4().hex}"
-    filled = [
-        {**op, "target": str(target)} if op.get("target") == "ABSOLUTE" else op
-        for op in operations
-    ]
     try:
-        write_grant(task_id, session_id, filled)
+        write_grant(task_id, session_id, operations)
         result = run_guard(f"echo {NEW} > {target}", cwd=work,
                            session_id=session_id, task_id=task_id)
         assert result.returncode == 2, f"{label} must not authorize shell replacement"
