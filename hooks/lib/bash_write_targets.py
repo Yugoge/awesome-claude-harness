@@ -579,10 +579,32 @@ def _extract_cp_mv_mode_targets(command: str) -> List[WriteTarget]:
     return out
 
 
+#: `install` as a package-manager SUBCOMMAND names packages, not paths. Naming a
+#: package as a write target is the cries-wolf failure the requirement forbids:
+#: `pip install requests` in a directory holding a file called `requests` would
+#: otherwise be refused as a replacement.
+_PKG_MANAGERS = frozenset({
+    "pip", "pip3", "npm", "pnpm", "yarn", "apt", "apt-get", "aptitude", "yum",
+    "dnf", "apk", "zypper", "pacman", "brew", "cargo", "gem", "go", "poetry",
+    "uv", "conda", "bundle", "composer", "nix-env", "opkg", "stack", "mix",
+})
+
+
+def _preceding_word(masked: str, end_of_word: int, word: str) -> str:
+    """The bare word immediately preceding `word`, which ends at `end_of_word`."""
+    head = masked[:end_of_word].rstrip()
+    if head.endswith(word):
+        head = head[: -len(word)]
+    parts = head.rstrip().split()
+    return parts[-1] if parts else ""
+
+
 def _extract_install_mode_targets(command: str) -> List[WriteTarget]:
     masked = _strip_quoted_regions(command)
     out: List[WriteTarget] = []
     for m in _INSTALL_WORD_RE.finditer(masked):
+        if _preceding_word(masked, m.end(), "install") in _PKG_MANAGERS:
+            continue
         tokens = _segment_tokens(command, masked, m.end())
         if any(t in _INSTALL_UNDECIDABLE for t in tokens):
             continue
