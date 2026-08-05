@@ -43,8 +43,11 @@ run by any check in this repository.
 
 The three label axes below — and the accepted `status:` value of each residual-risk entry of
 `docs/THREAT-MODEL.md` — are **declared exactly once**, in `DECLARED_SCHEMA` in
-`scripts/check-enforcement-evidence.py`. The block that follows is asserted byte-equal to that
-declaration on every run, so this document cannot drift from the code that enforces it.
+`scripts/check-enforcement-evidence.py`. The block that follows is parsed on every run and
+asserted **equal as JSON** to that declaration — the decoded value is compared, not the bytes,
+so key order and formatting may differ — and its `begin`/`end` markers must both be present.
+The document therefore cannot drift from the code that enforces it in any way that changes a
+declared value.
 
 <!-- enforcement-schema:begin -->
 ```json
