@@ -1148,12 +1148,14 @@ def ac12(tmp: Path) -> None:
           and gen["config_home_resolved"] == os.path.realpath(home3)
           and gen["settings_sha256_as_installed"] == sha256_file(home3 / "settings.json"),
           str({k: gen.get(k) for k in ("config_home_lexical", "config_home_resolved")})[:200])
+    sibling_edited = hashlib.sha256(json.dumps(
+        {"type": "command", "command": gen["contributions"][0]["command"], "timeout": 60},
+        sort_keys=True, separators=(",", ":")).encode()).hexdigest()
     check("AC12(c)", "the entry digest covers the WHOLE entry object, so a sibling-key "
-                     "edit that preserves the identity tuple still changes it",
-          gen["contributions"][0]["entry_digest"]
-          != __import__("hashlib").sha256(json.dumps(
-              {"type": "command", "command": gen["contributions"][0]["command"],
-               "timeout": 60}, sort_keys=True, separators=(",", ":")).encode()).hexdigest())
+                     "edit that preserves the identity tuple still changes it "
+                     "(a {type, command} digest could never mismatch, because both "
+                     "fields are already inside the tuple that located the entry)",
+          gen["contributions"][0]["entry_digest"] != sibling_edited)
     check("AC12(c)", "the record is COMMITTED, and the prepared/committed field exists "
                      "so a crash window is recoverable",
           gen.get("record_status") == "committed", str(gen.get("record_status")))
