@@ -42,6 +42,15 @@ RAIL = ["blocked", "granted", "consumed"]
 
 CONSUMPTION_MARKER = "[ALLOW-SENTINEL] grant CONSUMED for task_id="
 
+# The `granted` transition. This MUST be a string the capture actually emits: the arc
+# enters the granted stage the moment the verifier installs the single-use grant, and
+# every line after it -- including the two reporting the SUCCESSFUL push -- belongs to
+# that stage. A trigger that never fires leaves a declared stage empty and silently
+# demotes those success lines into `blocked`, which renders the demo's central beat
+# backwards: the hero would label a permitted push a refusal. The zero-line check below
+# is what makes such a trigger impossible to reintroduce unnoticed.
+GRANT_INSTALL_MARKER = "[verifier] installed one single-use grant"
+
 
 def extract_hash(text: str) -> str:
     return hashlib.sha256(unicodedata.normalize("NFC", text).encode("utf-8")).hexdigest()
