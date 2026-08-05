@@ -25,7 +25,10 @@
     {
       "id": "policy",
       "role": "policy",
-      "files": ["policies/tool-policy.v1.json"]
+      "files": [
+        "policies/tool-policy.v1.json",
+        "policies/protected-workflow-manifest.v1.json"
+      ]
     },
     {
       "id": "preflight",
