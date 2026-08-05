@@ -427,21 +427,82 @@ def pred_hero_recording() -> tuple[str, str, str, str]:
 
 
 def pred_hero_legibility() -> tuple[str, str, str, str]:
-    """What a reader of the rendered hero cannot see, stated with measured numbers."""
-    f = hero_facts()
+    """Whether a reader of the rendered hero can actually READ it, with measured numbers.
+
+    Legibility is a CONJUNCTION and this row asserts both limbs: no line may be cut off at
+    the panel's right edge, AND the panel must render at or above the readability floor.
+
+    It previously asserted only the first limb. Widening the panel until nothing was
+    truncated therefore turned the row green while the published text shrank and became
+    LESS readable -- a row reporting one limb under the name of both. Reporting a criterion
+    green while changing nothing a reader experiences is the outcome the glyph floor exists
+    to refuse; reaching it by narrowing what the row measures reaches it anyway. So
+    `passed` now requires both limbs, and the floor itself is untouched.
+    """
+    f, g = hero_facts(), glyph_facts()
     if not f or "duration_conflict" in f:
         return ("not-yet",
                 "**Hero legibility** — the hero artifacts could not be measured at build "
                 "time, so truncation is not reported.", "none", "hero-disclosure")
-    if not f["clipped_n"]:
-        return ("passed",
+    if f["clipped_n"]:
+        return ("partial",
+                f"**Hero legibility** — **{f['clipped_n']} of {f['total_n']}** replayed "
+                f"lines run past the {f['logical_w']} px panel and are cut off at its right "
+                f"edge; the worst loses **{f['worst_lost']}** characters. The full, "
+                f"untruncated text of every line is in the linked capture.",
+                HERO_ASSET, "hero-clipping")
+    if not g:
+        return ("not-yet",
                 f"**Hero legibility** — every replayed line fits inside the "
-                f"{f['logical_w']} px panel; nothing is cut off.", HERO_ASSET, "none")
+                f"{f['logical_w']} px panel, but the rendered glyph height could not be "
+                f"derived at build time, so legibility is reported as unverified rather "
+                f"than as passing.", HERO_ASSET, "hero-disclosure")
+    if g["below_floor"]:
+        return ("partial",
+                f"**Hero legibility** — nothing is cut off: every replayed line fits inside "
+                f"the {f['logical_w']} px panel. But fitting them took a panel that wide, "
+                f"and the page scales it down to fit the column, so the inline text lands "
+                f"below the {g['floor_px']} px readability floor at every measured "
+                f"viewport. Un-truncated is not the same as readable, so this is reported "
+                f"as partial, with the measured sizes below.",
+                HERO_ASSET, "hero-glyph-floor")
+    return ("passed",
+            f"**Hero legibility** — every replayed line fits inside the {f['logical_w']} px "
+            f"panel, nothing is cut off, and the inline text clears the {g['floor_px']} px "
+            f"readability floor at every measured viewport.", HERO_ASSET, "none")
+
+
+def pred_hero_glyph() -> tuple[str, str, str, str]:
+    """The measured size the hero actually renders at — what a phone reader cannot see.
+
+    The first screen must state with MEASURED NUMBERS what a phone reader cannot make out.
+    While the hero was truncated, the truncation count carried that obligation; once the
+    panel was widened the count went to zero and the obligation was left with nothing
+    discharging it. This row discharges it, inside the same byte-compared canonical fence,
+    derived at build time exactly as the recorded duration is.
+    """
+    g = glyph_facts()
+    if not g:
+        return ("not-yet",
+                "**Hero inline size** — the replay's rendered glyph height could not be "
+                "derived at build time, so no figure is published.",
+                "none", "hero-disclosure")
+    sizes = " and ".join(f"**{px:g} px** at a {w} px viewport"
+                         for w, px in g["per_viewport"])
+    if not g["below_floor"]:
+        return ("passed",
+                f"**Hero inline size** — the replay's text renders at {sizes}, clearing the "
+                f"{g['floor_px']} px readability floor at every measured viewport.",
+                MEASURE_SCRIPT, "none")
+    n, total = len(g["below_floor"]), g["n_covered"]
+    where = "every" if n == total else f"{n} of {total}"
     return ("partial",
-            f"**Hero legibility** — **{f['clipped_n']} of {f['total_n']}** replayed lines "
-            f"run past the {f['logical_w']} px panel and are cut off at its right edge; the "
-            f"worst loses **{f['worst_lost']}** characters. The full, untruncated text of "
-            f"every line is in the linked capture.", HERO_ASSET, "hero-clipping")
+            f"**Hero inline size** — the replay's text renders at {sizes}, against a "
+            f"**{g['floor_px']} px** readability floor it misses at {where} measured "
+            f"viewport. Below that floor the transcript is on the page but too small to "
+            f"read there — on a phone it is roughly a third of readable size. Nothing is "
+            f"cut off; it is scaled down. Read it at full size in the linked capture.",
+            MEASURE_SCRIPT, "hero-glyph-floor")
 
 
 PREDICATES = {
