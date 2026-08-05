@@ -75,6 +75,18 @@ True
 
 >>> extract_bash_write_paths("echo 'foo > bar'")
 []
+
+A closing parenthesis terminates an unquoted token, so a read-only command in
+a subshell no longer reports a write target that was never named:
+
+>>> extract_bash_write_paths('(ss -ltnp 2>/dev/null || netstat -ltnp) | head')
+['/dev/null']
+
+>>> extract_bash_write_paths('(cd /d && echo x > /root/a.txt)')
+['/root/a.txt']
+
+>>> extract_bash_write_paths('\\\\cp src /root/a.txt')
+['/root/a.txt']
 """
 
 from __future__ import annotations
