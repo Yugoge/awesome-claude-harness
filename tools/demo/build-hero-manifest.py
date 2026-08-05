@@ -130,6 +130,19 @@ def main() -> int:
     ranks = [RAIL.index(ln["stage"]) for ln in lines]
     if any(b < a for a, b in zip(ranks, ranks[1:])):
         problems.append("stage rank is not nondecreasing across the manifest")
+    # A DECLARED stage that draws no lines is refused, never emitted. An empty stage means
+    # its transition trigger did not fire, so every line that belonged to it fell through
+    # into the preceding stage -- the failure that labelled a successful push `blocked`.
+    # The rail is a claim about what the run demonstrated; a stage with no evidence behind
+    # it is an unbacked claim, so the manifest is refused rather than shipped.
+    histogram = {stage: sum(1 for ln in lines if ln["stage"] == stage) for stage in RAIL}
+    for stage, count in histogram.items():
+        if count == 0:
+            problems.append(
+                f"declared rail stage {stage!r} has zero lines "
+                f"(histogram {histogram}); its transition trigger never fired against "
+                f"this capture, so the lines belonging to it were mislabelled as an "
+                f"earlier stage")
     for ln in lines:
         if ln["kind"] in ("condensation", "adaptation"):
             problems.append(f"{ln['id']}: forbidden kind {ln['kind']}")
