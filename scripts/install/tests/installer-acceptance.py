@@ -282,10 +282,11 @@ def ac1(tmp: Path) -> None:
     rc, out, err = run([INSTALL, "--profile", "core", "--prefix", prefix, "--config-dir", n2])
     check("AC1(d)", "exit code is 0", rc == 0, f"rc={rc} err={err[-400:]}")
     iso = prefix / "harness"
-    check("AC1(a)", "isolated root file set == manifest payload (both directions)",
-          actual_files(iso) == payload_expected(),
-          f"only-on-disk={sorted(actual_files(iso) - payload_expected())} "
-          f"only-in-manifest={sorted(payload_expected() - actual_files(iso))}")
+    check("AC1(a)", "isolated root file set == manifest payload + recorded "
+                    "self-management bundle (both directions)",
+          actual_files(iso) == installed_expected(prefix),
+          f"only-on-disk={sorted(actual_files(iso) - installed_expected(prefix))} "
+          f"only-in-manifest={sorted(installed_expected(prefix) - actual_files(iso))}")
     created = {p for p in node_snapshot(n2) if p != "." and p not in before}
     declared = {e["path"] for e in PROFILE["live_footprint"]}
     check("AC1(b)", "config-home created set == live_footprint (both directions)",
