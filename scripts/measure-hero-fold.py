@@ -216,8 +216,18 @@ def main() -> int:
             if glyph_px < GLYPH_FLOOR_PX:
                 failures.append(f"{w}x{h}/{scheme}: hero glyph height {glyph_px}px "
                                 f"< {GLYPH_FLOOR_PX}px")
+            # The README publishes this figure from predict_glyph_px(), which needs no
+            # browser and so can be regenerated anywhere. Binding the two together here is
+            # what makes the published number a MEASURED number rather than a modelled one.
+            predicted = predict_glyph_px(w, img_w, logical_w)
+            if abs(predicted - glyph_px) > 0.02:
+                failures.append(f"{w}x{h}/{scheme}: the browser renders the hero glyph at "
+                                f"{glyph_px}px but the published model predicts "
+                                f"{predicted}px — the disclosed figure has drifted from the "
+                                f"measurement that gates it")
             results.append({"viewport": f"{w}x{h}", "scheme": scheme,
-                            "glyph_px": glyph_px, "above_fold": above,
+                            "glyph_px": glyph_px, "predicted_glyph_px": predicted,
+                            "above_fold": above,
                             "required_above_fold": list(REQUIRED_ABOVE_FOLD),
                             "demoted_below_fold": demoted_below,
                             "content_bottom": m.get("quickstart", {}).get("bottom")
