@@ -2,17 +2,40 @@
 
 > **What this document is for.** The harness makes "fail closed" claims. This ledger turns that
 > adjective into a **state**: every wired hook gets a row, every row carries a behavior label
-> drawn from a closed set, and every label carries the *proof layer* that earned it. A hostile
-> reader should be able to falsify any row here with one command.
+> drawn from a closed set, and every label carries the *proof layer* that earned it.
 >
 > Companion documents: `docs/THREAT-MODEL.md` (what is defended and against whom),
 > `docs/ADVERSARIAL-CORPUS.md` (the payloads), `hooks/tests/fixtures/adversarial_corpus.json`
 > (the machine-readable source of truth for those payloads).
 
-**Generated from** `settings.json` at `@4c33f2f5`. Nothing in the registered-hook table is
-hand-authored: `scripts/check-enforcement-evidence.py --claims` recomputes the hook set from
-`settings.json` and fails on **either** symmetric difference, and it runs inside the already
-required `baseline` CI job via `scripts/verify-claims.sh`.
+## What the gate behind this ledger does and does not establish
+
+The registered-hook table has **ten** columns. Stating which of them a check recomputes — rather
+than leaving the reader to assume all of them — is the whole point of publishing it.
+
+**Three columns are derived.** `event_class`, `matcher` and `hook` are recomputed from
+`settings.json` at `@4c33f2f5` by `scripts/check-enforcement-evidence.py --claims`, which
+compares the derived triple set against the published rows and fails on **either** symmetric
+difference. That check runs inside the already required `baseline` CI job via
+`scripts/verify-claims.sh`.
+
+**The other seven columns are authored in this document.** They are `row_id`,
+`mode/precondition`, `behavior`, `exercise_status`, `proof_layer`, `citation` and
+`verifying_test`. They are not derived from anything; they receive the following validation and
+no more:
+
+- all seven are checked **non-blank** — a blank cell is a failure, not a statement that a value
+  is absent;
+- `behavior`, `exercise_status` and `proof_layer` are additionally validated against the closed
+  sets declared in `DECLARED_SCHEMA`;
+- `citation` is validated for the presence of an `@<sha8>` revision pin.
+
+**On falsifiability.** 68 of the 70 rows carry `proof_layer: source-level`, which as section 1.3
+defines it means those rows rest on **reading the code rather than running it**; the remaining 2
+carry `component-tested` and none carry `host-observed` or `host-shaped`. The gate validates
+proof-layer membership and a non-blank `verifying_test`, and it does **not** execute the
+verifying test or establish one-command falsifiability for any row. No row's falsifier has been
+run by any check in this repository.
 
 ---
 
