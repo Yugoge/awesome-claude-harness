@@ -66,5 +66,14 @@
   "workspace_marker_exempt_rationale": {
     "PUBLIC-CORE.md": "The ledger DEFINES the workspace marker as the residue pattern to gate on; naming it is the file's purpose. Per-path exemption, not a wildcard.",
     "scripts/check-public-core.sh": "The detector's own constant table. It is self-excluded from the SCAN but is still IN the archive, so it needs an explicit per-path exemption here rather than being silently invisible."
+  },
+  "hard_marker_exempt_paths": [
+    "PUBLIC-CORE.md",
+    "scripts/check-public-core.sh"
+  ],
+  "hard_marker_exempt_rationale": {
+    "_key_scope": "Distinct from workspace_marker_exempt_* on purpose. That key exempts ONE marker -- the maintainer tmpfs workspace path. This key exempts the THREE hard markers (the maintainer git remote, the rsync mirror path and the sync-cron path) that the archive-mode hard-marker loop gates on. The two keys happen to name the same two paths today; reusing one for the other would grant an exemption whose written justification describes a class other than the one being exempted, which is how an exemption stops being evidence of anything. Emptying this key must turn the archive gate red -- that is its negative control.",
+    "PUBLIC-CORE.md": "The published boundary ledger enumerates the three hard markers as the forbidden-identifier list a reader must be able to audit. Quoting the identifiers is what makes the ledger checkable; a ledger that redacted them would name no rule. Prose only -- no line here is read as a remote, a path or a command.",
+    "scripts/check-public-core.sh": "The detector's own HARD_MARKERS constant table: this file cannot gate on identifiers it is forbidden to contain. Parameterizing the three literals out was considered and rejected -- it relocates them into another file that also ships in the archive, reproducing the problem one level down. The file is excluded from its own residue SCAN but is genuinely IN the archive, so it needs this explicit per-path exemption rather than being invisible to the loop."
   }
 }
