@@ -386,9 +386,19 @@ def _neutralize_command_word_prefixes(s: str) -> str:
         return s
     masked = _strip_quoted_regions(s)
     out = list(s)
+    depth = 0
     for i, ch in enumerate(masked):
         if ch == "(" and (i == 0 or masked[i - 1] in _GROUP_OPEN_LEADIN):
             out[i] = " "
+            depth += 1
+        elif ch == ")" and depth:
+            # Close only a group this pass actually opened, so the `)` of a
+            # process substitution is left for the redirect pattern to see and
+            # a `case` label's bare `)` is not touched. The extractors that
+            # split on whitespace rather than reading tokens (cp/mv, sed -i,
+            # install) have no other way to stop at a group close.
+            out[i] = " "
+            depth -= 1
     for m in _ESCAPED_COMMAND_WORD_RE.finditer(masked):
         i = m.start()
         if i == 0 or masked[i - 1] in _GROUP_OPEN_LEADIN:
