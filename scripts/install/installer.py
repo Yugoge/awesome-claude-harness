@@ -1427,7 +1427,15 @@ def migrate_legacy_generation(ctx: Ctx, gens: list, legacy: list) -> dict | None
 
     if earliest_backup is not None:
         backup = Path(earliest_backup.get("backup") or "")
-        if not backup.is_file():
+        # The proof is only as good as its input. A backup that is a symlink, or
+        # whose bytes no longer match the digest recorded when it was taken, is
+        # not evidence of anything: substituting the live post-image for it makes
+        # the replay derive ZERO contributions, classify the installer's own
+        # hooks as unowned, and delete the payload with those hooks still live.
+        if not backup.is_file() or backup.is_symlink():
+            return None
+        recorded_digest = earliest_backup.get("pre_install_sha256")
+        if not recorded_digest or sha256_file(backup) != recorded_digest:
             return None
         try:
             base = load_json_strict(backup.read_text(encoding="utf-8"))
