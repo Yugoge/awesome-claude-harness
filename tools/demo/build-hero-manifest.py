@@ -56,11 +56,11 @@ def extract_hash(text: str) -> str:
     return hashlib.sha256(unicodedata.normalize("NFC", text).encode("utf-8")).hexdigest()
 
 
-def classify(text: str, seen_push: bool, seen_marker: bool) -> tuple[str, str, bool]:
+def classify(text: str, seen_grant: bool, seen_marker: bool) -> tuple[str, str, bool]:
     """-> (stage, kind, block).  Pure function of the captured text and arc position."""
     if seen_marker:
         stage = "consumed"
-    elif seen_push:
+    elif seen_grant:
         stage = "granted"
     else:
         stage = "blocked"
