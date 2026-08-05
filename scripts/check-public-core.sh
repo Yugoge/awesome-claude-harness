@@ -164,9 +164,78 @@ def sh_heredocs(lines):
             spans.add(i)
     return spans
 
-def classify(path, lineno, content, lang, dspans, hspans):
+def py_comment_spans(text):
+    """lineno -> [(startcol, endcol)] for every COMMENT token, TRAILING ones included.
+
+    Whole-line comment detection alone cannot see residue that sits after live code
+    (`try:  # ... route the audit-log default off /root`), so such an occurrence was
+    misread as an operational code literal."""
+    spans = {}
+    try:
+        for t in tokenize.generate_tokens(io.StringIO(text).readline):
+            if t.type == tokenize.COMMENT:
+                spans.setdefault(t.start[0], []).append((t.start[1], t.start[1] + len(t.string)))
+    except Exception:
+        pass
+    return spans
+
+
+def sh_comment_spans(lines):
+    """Same idea for shell: an UNQUOTED '#' starting a word runs to end of line."""
+    spans, quote = {}, None
+    for i, ln in enumerate(lines, 1):
+        quote = None
+        for col, ch in enumerate(ln):
+            if quote:
+                if ch == quote:
+                    quote = None
+            elif ch in ("'", '"'):
+                quote = ch
+            elif ch == "#" and (col == 0 or ln[col - 1] in " \t;&|()"):
+                spans.setdefault(i, []).append((col, len(ln)))
+                break
+    return spans
+
+
+def py_system_path_enum(text):
+    """lineno -> {bare system-dir literals} that are elements of an ENUMERATION of
+    absolute bare directories, e.g. `("/", "/root", "/home", "/etc", "/usr", ...)`.
+
+    Structurally derived from the AST, never from a hand-written label: the literal
+    must sit in a list/tuple/set whose every element is a bare top-level directory
+    string and which has at least SYS_DIR_MIN_ELEMENTS of them. A path carrying a
+    second component (an actual author home such as "/home/yugoge") can never
+    qualify, so this class cannot launder a genuine residue literal."""
+    out = {}
+    try:
+        tree = ast.parse(text)
+    except Exception:
+        return out
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.List, ast.Tuple, ast.Set)):
+            continue
+        elts = node.elts
+        if len(elts) < SYS_DIR_MIN_ELEMENTS:
+            continue
+        if not all(isinstance(e, ast.Constant) and isinstance(e.value, str)
+                   and SYS_DIR_LITERAL.match(e.value) for e in elts):
+            continue
+        for e in elts:
+            out.setdefault(e.lineno, set()).add(e.value)
+    return out
+
+
+def classify(path, lineno, content, lang, dspans, hspans, cspans, sspans, matches):
     tl = content.lstrip()
-    is_comment = tl.startswith(COMMENT_STARTS)
+    # Occurrence-level, mirroring param_line_ok()'s discipline: EVERY residue
+    # occurrence on the line must sit inside a comment span, so one commented
+    # occurrence can never whitelist a second, live one on the same line.
+    line_cspans = cspans.get(lineno) or ()
+    trailing_comment = bool(line_cspans) and all(
+        any(s <= m.start() < e for s, e in line_cspans) for m in matches)
+    is_comment = tl.startswith(COMMENT_STARTS) or trailing_comment
+    sys_literals = sspans.get(lineno) or ()
+    is_sysdir = bool(sys_literals) and all(m.group(0) in sys_literals for m in matches)
     is_doc = lang in DOC_EXTS
     is_docstring = lineno in dspans or tl.startswith(">>>")
     is_heredoc = lineno in hspans
