@@ -301,7 +301,10 @@ def grant_for(resolved: str, session_id: str, task_id: str) -> dict | None:
 
 
 def _consume_grants(grants: list[dict]) -> list[str]:
-    """Spend every grant that authorized this call. [] means NOTHING was spent.
+    """Spend every grant that authorized this call. [] means NOT authorized.
+
+    A partial result is reported as [] and the caller denies: a grant that was
+    spent stays spent, because re-offering it would be the reuse this closes.
 
     SINGLE USE IS ENFORCED HERE, at the authorization point, and not by the
     registered PostToolUse consumer. That consumer gates its unlink on
