@@ -350,6 +350,20 @@ if [ ! -f "$MANIFEST" ]; then
 fi
 
 # ---------------------------------------------------------------------------
+# Hard markers — author-environment identifiers that must NEVER ship, in EITHER
+# scan mode. Defined HERE, above the archive branch, precisely because they used
+# to be defined below it: archive mode reached `exit "$rc"` before the array
+# existed, so the hard-marker loop was unreachable over a release artifact and a
+# maintainer remote could travel inside a published tarball undetected. ONE
+# definition consumed by both modes, so the two can never drift apart again.
+# ---------------------------------------------------------------------------
+HARD_MARKERS=(
+  'git@github.com:Yugoge'      # maintainer git remote
+  '/root/.claude.bak'          # maintainer rsync mirror
+  '/root/sync-backup.sh'       # maintainer sync cron
+)
+
+# ---------------------------------------------------------------------------
 # ARCHIVE MODE — gate the EXTRACTED RELEASE ARCHIVE rather than the checkout.
 # Scanning the source checkout proves nothing about the bytes that are actually
 # published, so the release pipeline runs the gate again over the extracted
