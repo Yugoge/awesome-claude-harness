@@ -201,6 +201,8 @@ while ((m = textRe.exec(svg))) {
     if (!ln) { V(`SVG text data-trace-id="${id}" not present in manifest`); continue; }
     const txt = nfc(unesc(m[2]));
     const want = nfc(ln.text);
+    const xAttr = parseFloat(a['x']);
+    traceGeom.push({ id, x: Number.isFinite(xAttr) ? xAttr : null, text: want, kind: nfc(ln.kind) });
     if (TYPING_KINDS.has(ln.kind)) {
       // typing reveal: full text, or an exact prefix captured mid-type
       if (txt !== want && !want.startsWith(txt)) V(`${id}: rendered text is not an exact prefix of manifest text`);
