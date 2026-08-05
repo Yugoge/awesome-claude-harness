@@ -556,7 +556,7 @@ def _grep_matches_symbol(src, symbol):
     symbol is matched by exact name so a DIFFERENT variable with a common prefix is not
     miscounted as this one.
     """
-    joined = re.sub(r"\\\n[ \t]*", " ", src)
+    joined = re.sub(r"\\\n[ \t]*", " ", _strip_full_line_comments(src))
     ref = re.compile(r"\$\{%s\}|\$%s\b" % (re.escape(symbol), re.escape(symbol)))
     count = 0
     for match in re.finditer(r"(?<![\w./-])grep\b", joined):
