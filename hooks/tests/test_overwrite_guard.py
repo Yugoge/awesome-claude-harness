@@ -209,7 +209,7 @@ def drop_grants(task_id):
 
 def test_ac01_mandated_verbs_all_have_a_covered_row():
     """The covered floor cannot be narrowed by quietly dropping a verb."""
-    assert {r["mechanism"] for r in COVERED} == {
+    assert {r["mechanism"] for r in COVERED_VERB_ROUTES} == {
         "redirect-truncate", "redirect-clobber", "tee-truncate", "truncate-cmd",
         "dd-of", "cp-dest", "install-dest", "mv-dest", "curl-output",
         "wget-output", "unlink-cmd",
