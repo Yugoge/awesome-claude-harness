@@ -373,8 +373,11 @@ def companion_paths(header_text):
     match = re.search(r"(?is)Companion documents:(.*?)(?:\n\s*\n|\Z)", header_text)
     if not match:
         return None
-    return sorted({p for p in re.findall(r"`([^`]+)`", match.group(1))
-                   if "/" in p and re.search(r"\.[A-Za-z0-9]+$", p)})
+    paths = sorted({p for p in re.findall(r"`([^`]+)`", match.group(1))
+                    if "/" in p and re.search(r"\.[A-Za-z0-9]+$", p)})
+    # An empty result is a PARSE FAILURE, not a document that cites nothing: returning [] here
+    # would report "all 0 companion documents exist" and pass vacuously.
+    return paths or None
 
 
 def published_token_set(ledger_text, label):
