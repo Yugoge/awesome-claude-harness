@@ -377,12 +377,16 @@ def companion_paths(header_text):
                    if "/" in p and re.search(r"\.[A-Za-z0-9]+$", p)})
 
 
-def published_token_region(ledger_text, label):
-    """Return the anchored publication region for one token set, or None if absent.
+def published_token_set(ledger_text, label):
+    """Return the token LIST published in one anchored region, or None if absent.
 
-    Token validation MUST be scoped to this region. Matching a token anywhere in the document
-    is vacuous: '>' occurs on every blockquote line and '<' inside HTML comment delimiters, so
-    two of the seven redirection operators were satisfied by unrelated prose.
+    Scoping alone is not enough, and neither is substring inclusion. Three separate ways a
+    substring test lets an unpublished set pass: `nice` is satisfied by `ionice`; `>` is
+    satisfied by `2>/dev/null`; and an inclusion test can never reject an EXTRA token that was
+    never recorded. So the region is PARSED -- the backtick-delimited items following its
+    `N tokens:` marker are the published set, compared for exact set equality. Parsing the
+    published list rather than restating it also keeps the token set declared exactly once in
+    code (RECORDED_*) and exactly once in the document.
     """
     match = re.search(
         r"<!--\s*published-tokens:%s:begin\s*-->(.*?)<!--\s*published-tokens:%s:end\s*-->"
@@ -390,7 +394,13 @@ def published_token_region(ledger_text, label):
         ledger_text,
         re.S,
     )
-    return match.group(1) if match else None
+    if not match:
+        return None
+    region = match.group(1)
+    marker = list(re.finditer(r"\d+\s+tokens:", region))
+    if not marker:
+        return None
+    return re.findall(r"`([^`]+)`", region[marker[-1].end():])
 
 
 # ---------------------------------------------------------------------------
