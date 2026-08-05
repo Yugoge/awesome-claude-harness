@@ -1691,6 +1691,8 @@ def main(argv=None) -> int:
     ctx = Ctx(args)
 
     if args.command == "uninstall":
+        state = ctx.load_state()
+        ctx.adopt_state_parameters(state)          # R9: parameters from state, not --source
         report = uninstall(ctx, keep_payload=args.keep_payload)
         if args.json:
             print(json.dumps(report, indent=2))
@@ -1698,14 +1700,45 @@ def main(argv=None) -> int:
             print(f"UNINSTALL ({report['status']})")
             print(f"  config home : {ctx.config_home}")
             for it in report["items"]:
-                extra = ""
-                if it["action"] == "restore":
+                if it["action"] == "settings":
                     ok = it["measured_sha256"] == it["expected_sha256"]
-                    extra = f"  [verified: {'yes' if ok else 'NO'}]"
+                    extra = f"  [digest matches what was written: {'yes' if ok else 'NO'}]"
+                    if it.get("backup_retained"):
+                        extra += f"  [backup retained: {it['backup_retained']}]"
+                    print(f"  {it['action']:8} {it['result']:24} {it['path']}{extra}")
+                elif it["action"] in ("un-merge", "residual"):
+                    print(f"  {it['action']:8} {it['result']:24} "
+                          f"{it['event']} matcher={it['matcher']!r} "
+                          f"[present after: {it['measured_present']}]")
+                    if it["result"] in RETAINED_RESULTS:
+                        print(f"           retained command: {it['command']}")
                 else:
-                    extra = f"  [present after: {it['measured_present']}]"
-                print(f"  {it['action']:7} {it['result']:14} {it['path']}{extra}")
-        return 0
+                    print(f"  {it['action']:8} {it['result']:24} {it['path']}"
+                          f"  [present after: {it['measured_present']}]")
+            if report["status"] == "partial":
+                print()
+                print("PARTIAL UNINSTALL -- the payload, the state file and every backup "
+                      "are retained.")
+                print(f"  payload : {ctx.prefix}")
+                print(f"  state   : {ctx.state_path}")
+                print("  Reconcile the retained registrations above by hand, then re-run.")
+        return report.get("exit_code", EXIT_OK)
+
+    # R4 -- a v2 apply MUST NOT layer a new generation on top of a record it
+    # cannot invert. Stacking makes a stranded host strictly harder to recover.
+    if args.command == "apply":
+        existing_state = ctx.load_state()
+        unresolved = [g.get("generation") for g in existing_state.get("generations", [])
+                      if "contributions" not in g]
+        if unresolved:
+            raise Refusal(
+                "this prefix carries generation record(s) written under a schema that "
+                f"predates the contribution record: {', '.join(str(u) for u in unresolved)}.\n"
+                "  Refusing to stack a new generation on a state this engine cannot "
+                "invert -- doing so makes the install strictly harder to remove.\n"
+                f"  Resolve it first: {SELF_MANAGE_REL}/uninstall (or scripts/install/"
+                f"uninstall) --prefix {ctx.prefix}\n"
+                "  Nothing was written.")
 
     plan = build_plan(ctx)
     if args.command == "plan":
@@ -1715,7 +1748,20 @@ def main(argv=None) -> int:
                              default=str))
         else:
             print_plan(ctx, plan, dry_run=True)
-        return 0
+        return EXIT_OK
+
+    # R8 -- a skipped MANDATORY footprint entry aborts before all mutation.
+    skipped = plan.get("skipped_mandatory") or []
+    if skipped and not args.allow_partial:
+        raise Refusal(
+            "a MANDATORY footprint entry cannot be honoured, so this install would "
+            "activate nothing while looking like a success.\n"
+            + "".join(f"  skipped (mandatory) : {ctx.config_home / p}\n" for p in skipped)
+            + "".join(f"      {c['detail']}\n" for c in plan["conflicts"]
+                      if c["path"] in skipped)
+            + "  Resolve the conflict, or re-run with --allow-partial-install to accept "
+              "a partial install (which still exits 3).\n"
+            "  Nothing was written.")
 
     record = apply_plan(ctx, plan)
     if args.json:
@@ -1724,14 +1770,24 @@ def main(argv=None) -> int:
     else:
         print_plan(ctx, plan, dry_run=False)
         print()
-        print("APPLIED")
+        print("APPLIED (PARTIAL)" if skipped else "APPLIED")
         print(f"  isolated root : {ctx.isolated_root}")
         print(f"  config home   : {ctx.config_home}")
         print(f"  created       : {len(record['created'])} path(s) under the config home")
         print(f"  modified      : {len(record['modified'])} path(s) (pre-touch backup taken)")
         print(f"  inventory     : {ctx.state_path}")
-    return 0
+        if skipped:
+            print()
+            for path in skipped:
+                print(f"  SKIPPED MANDATORY ENTRY: {ctx.config_home / path}")
+            print(f"  settings disposition: {record['settings_disposition']}")
+            print("  This install does NOT provide what the profile declares mandatory.")
+    return EXIT_PARTIAL if skipped else EXIT_OK
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    try:
+        sys.exit(main())
+    except Refusal as refusal:
+        print(f"installer: REFUSED\n  {refusal}", file=sys.stderr)
+        sys.exit(refusal.code)
