@@ -203,6 +203,68 @@ def hero_facts() -> dict:
     }
 
 
+MEASURE_SCRIPT = "scripts/measure-hero-fold.py"
+
+
+def _fold_module():
+    """Load the fold measurement as a module (its filename is not a Python identifier).
+
+    Importing it rather than restating its constants is the point: the glyph figure this
+    README publishes and the floor the fold gate measures against must be incapable of
+    drifting apart. Returns None when it cannot be loaded, which fails the row closed.
+    """
+    import importlib.util
+    p = REPO_ROOT / MEASURE_SCRIPT
+    if not p.is_file():
+        return None
+    try:
+        spec = importlib.util.spec_from_file_location("measure_hero_fold", p)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        return mod
+    except Exception:
+        return None
+
+
+def glyph_facts() -> dict:
+    """The hero's rendered inline glyph height at each covered viewport, and its floor.
+
+    Truncation used to be the whole of what a phone reader could not see, and it is gone --
+    the panel was widened until every line fits. But the page then scales that wider panel
+    DOWN to fit the column, so the limit moved from "cut off" to "too small to read", and a
+    disclosure that still reported only truncation had become vacuous. This derives the
+    replacement figure.
+
+    Derived at build time from committed artifacts and NEVER transcribed: the asset's own
+    viewBox, the README's own width attribute, and the model + floor imported from the fold
+    measurement, which asserts that model against a real browser on every run.
+
+    Returns {} when any input is missing, unreadable or uncommitted -- fail-closed, so the
+    consuming rows disclose that they could not measure instead of publishing a pass.
+    """
+    mod = _fold_module()
+    svg = _read(HERO_ASSET)
+    if mod is None or svg is None or not is_committed(MEASURE_SCRIPT):
+        return {}
+    try:
+        readme_text = README_PATH.read_text(encoding="utf-8")
+    except OSError:
+        return {}
+    vb = re.search(r'viewBox="0 0 (\d+(?:\.\d+)?) ', svg)
+    img_w = mod.hero_img_width(readme_text)
+    if not vb or not img_w:
+        return {}
+    logical_w = float(vb.group(1))
+    widths = sorted({w for w, _h, _s in mod.COMBOS}, reverse=True)
+    per_viewport = [(w, mod.predict_glyph_px(w, img_w, logical_w)) for w in widths]
+    if not per_viewport or any(g <= 0 for _w, g in per_viewport):
+        return {}
+    return {"floor_px": f"{mod.GLYPH_FLOOR_PX:g}",
+            "per_viewport": per_viewport,
+            "below_floor": [(w, g) for w, g in per_viewport if g < mod.GLYPH_FLOOR_PX],
+            "n_covered": len(per_viewport)}
+
+
 # --------------------------------------------------------------------------------------
 # Named predicates. Each returns (state, visible_text, evidence, tracked).
 # --------------------------------------------------------------------------------------
