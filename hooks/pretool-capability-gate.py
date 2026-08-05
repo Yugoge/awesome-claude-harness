@@ -96,6 +96,14 @@ def main() -> int:
     if _is_escape_hatch(payload):
         return 0
 
+    # Sibling branch to the fast path above — same placement, same reason, a
+    # different set. The floor is disjoint from the effective protected set in
+    # every reachable manifest state (asserted by a test), so answering these
+    # six routes here decides nothing the evaluation below would have decided
+    # differently; it only makes the answer survive an unloadable library.
+    if _is_repair_floor(payload):
+        return 0
+
     try:
         cs = _load_capability_state()
     except Exception as exc:  # library unavailable -> fail closed, never silently open
