@@ -353,6 +353,14 @@ missing.
   branches (architecture C, which never carried a regex fallback to lose). All three are
   counted and regression-guarded. Publishing only A and B would be a cherry-picked census:
   a reader counting classifier-consuming branches in that guard finds 11, not 3.
+  **The reach of that regression guard, stated rather than implied**: the census is derived by
+  a shell-aware structural pass that canonicalizes `[`, `[[` and `test` predicates — quoting,
+  `$X` versus `${X}`, `${X:-default}`, operand order and negation are all normalized, so a
+  respelled guard is still counted — and it ignores whole-line comments so a commented-out
+  guard cannot hold the count up. It recognizes gates written as `if`/`elif` arms. A gate
+  expressed through a construct the pass does not model — a `case` arm, or a decision reached
+  inside a function it does not inline — would not be counted. That is a bounded, disclosed
+  limit of this census, not a claim of exhaustiveness over all shell.
 
 ---
 
