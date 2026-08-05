@@ -509,6 +509,7 @@ PREDICATES = {
     "known-limits": pred_known_limits,
     "hero-recording": pred_hero_recording,
     "hero-legibility": pred_hero_legibility,
+    "hero-glyph": pred_hero_glyph,
     "supported-builds": pred_supported_builds,
     "capability-check": pred_capability_check,
     "blackbox-tests": pred_blackbox,
