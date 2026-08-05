@@ -202,7 +202,20 @@ def _next_token_from_original(original: str, start: int) -> Tuple[str, int]:
     Skips leading whitespace. If the next char is `'` or `"`, consumes to
     the matching close-quote and strips the surrounding quotes (so a
     quoted PATH like `"/tmp/y"` yields `/tmp/y`). Otherwise reads to the
-    next whitespace or shell separator (`;|&<>`).
+    next whitespace or shell separator (`;|&<>()`).
+
+    `(` and `)` terminate an UNQUOTED token because they are shell syntax,
+    never part of a bare word: without this, `(cmd > /tmp/f)` yields the
+    token `/tmp/f)`, which names a path that does not exist. That single
+    absorbed byte is load-bearing in opposite directions for two consumers —
+    it made pretool-overwrite-guard.py resolve a non-existent path and
+    therefore ALLOW a replacement as if it were creation, and it made
+    pretool-tool-policy.py refuse a read-only `(… 2>/dev/null) | head` by
+    inventing a write target named `/dev/null)`.
+
+    The QUOTED branch above is deliberately untouched, so a filename that
+    really does contain a parenthesis (`> "/tmp/report (1).txt"`) still
+    reads whole and is still judged.
     """
     i, n = start, len(original)
     while i < n and original[i].isspace():
@@ -216,7 +229,7 @@ def _next_token_from_original(original: str, start: int) -> Tuple[str, int]:
             j += 1
         return (original[i + 1:j], min(j + 1, n))
     j = i
-    while j < n and original[j] not in " \t\n;|&<>":
+    while j < n and original[j] not in " \t\n;|&<>()":
         j += 1
     return (original[i:j], j)
 
