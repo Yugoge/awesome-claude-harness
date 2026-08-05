@@ -152,7 +152,7 @@ def main() -> int:
     logical_w = int(vb.group(1)) if vb else 960
     FONT_PX = 15  # gen-svg.mjs body font-size
 
-    results, failures = [], []
+    results, failures, tradeoffs = [], [], []
     with sync_playwright() as p:
         browser = p.chromium.launch()
         for w, h, scheme in COMBOS:
