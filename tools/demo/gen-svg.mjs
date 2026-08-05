@@ -178,7 +178,18 @@ const markerFill = (ln, cfg) => C[ln.id === finalId ? 'accent' : cfg.marker];
 const contentFill = (ln, cfg) => C[ln.id === finalId ? 'accent' : cfg.content];
 
 // ---------- build ----------
-const defs = [];
+// Character-advance declaration, first in document order (<defs> precedes the body).
+// A reader of this asset does not assume the monospace advance — it reads the advance back
+// off the asset, from the first width animation. On an asset with no typed line there is no
+// reveal clip to read, so that lands on whichever width animation comes first (the
+// stage-marker rail, which steps by whole rail labels) and every width derived from the asset
+// is silently mis-scaled. Declaring the real advance here makes any asset self-describing,
+// typed or not. Inert: <defs> content is never rendered.
+const defs = [
+  `<rect data-role="grid-advance" x="0" y="0" width="0" height="0" fill="none">` +
+    `<animate attributeName="width" dur="${CYC}s" repeatCount="indefinite" ` +
+    `calcMode="discrete" values="0;${ADV}" keyTimes="0;0.5"/></rect>`,
+];
 const body = [];
 
 // background + window chrome
