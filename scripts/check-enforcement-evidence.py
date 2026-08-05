@@ -126,6 +126,12 @@ FORBIDDEN_CLAIM_PATTERNS = [
     (r"(?i)\bregistered-hook\s+(?:table|rows?|row\s+set)\s+(?:is|are)\s+"
      r"(?:wholly|entirely|fully|completely)?\s*(?:derived|regenerated|generated)\b",
      "a whole-table derivation claim"),
+    (r"(?i)\b(?:every|all|each)\s+registered-hook\s+(?:datum|data|value|cell|entry|entries)\b"
+     r"[^.]{0,80}\b(?:comes?|derived|generated|recomputed)\b",
+     "a claim that every registered-hook datum is derived"),
+    (r"(?i)\b(?:constructs?|builds?|generates?)\s+the\s+(?:complete|entire|whole|full)\s+"
+     r"registered-hook\s+table\b",
+     "a claim that the complete registered-hook table is constructed by the checker"),
     (r"(?i)\bregenerate\s+the\s+registered-hook\s+rows\b",
      "an unqualified instruction to regenerate the registered-hook rows"),
     (r"(?i)\bdo\s+not\s+hand-edit\s+(?:them|the\s+(?:registered-hook\s+)?rows)\b",
