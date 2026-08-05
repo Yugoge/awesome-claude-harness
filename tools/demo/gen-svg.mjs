@@ -32,7 +32,7 @@ const BLOCK_CFG = { glyph: '⊘', marker: 'accent', content: 'inkStrong', typing
 const cfgFor = (ln) => (ln.kind === 'verdict' && ln.block === true ? BLOCK_CFG : KIND_CFG[ln.kind]);
 
 // ---------- layout (fixed monospace grid; we place by column*advance, never measure) ----------
-const W = 960;          // logical width (px)
+const W_MIN = 960;      // logical width FLOOR (px); the frame widens past this to fit content
 const PAD_X = 40;
 const FS = 15;          // body font-size
 const ADV = 9;          // monospace advance (~0.6 * FS)
