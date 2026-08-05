@@ -219,12 +219,16 @@ def main() -> int:
             # The README publishes this figure from predict_glyph_px(), which needs no
             # browser and so can be regenerated anywhere. Binding the two together here is
             # what makes the published number a MEASURED number rather than a modelled one.
+            # Reported in its OWN list as well as in failures: drift is the one result here
+            # that the status ratchet consumes, and it must be separable from the glyph floor
+            # so consuming it cannot silently import the floor's verdict too.
             predicted = predict_glyph_px(w, img_w, logical_w)
             if abs(predicted - glyph_px) > 0.02:
-                failures.append(f"{w}x{h}/{scheme}: the browser renders the hero glyph at "
-                                f"{glyph_px}px but the published model predicts "
-                                f"{predicted}px — the disclosed figure has drifted from the "
-                                f"measurement that gates it")
+                drift = (f"{w}x{h}/{scheme}: the browser renders the hero glyph at "
+                         f"{glyph_px}px but the published model predicts {predicted}px — "
+                         f"the disclosed figure has drifted from the measurement that gates it")
+                failures.append(drift)
+                model_drift.append(drift)
             results.append({"viewport": f"{w}x{h}", "scheme": scheme,
                             "glyph_px": glyph_px, "predicted_glyph_px": predicted,
                             "above_fold": above,
