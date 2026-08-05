@@ -186,7 +186,7 @@ def main() -> int:
     logical_w = int(vb.group(1)) if vb else 960
     img_w = hero_img_width(readme_text)
 
-    results, failures, tradeoffs = [], [], []
+    results, failures, tradeoffs, model_drift = [], [], [], []
     with sync_playwright() as p:
         browser = p.chromium.launch()
         for w, h, scheme in COMBOS:
