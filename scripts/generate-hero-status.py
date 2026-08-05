@@ -641,6 +641,18 @@ def assert_limits_above_fold(readme: Path) -> tuple[list[str], list[str]]:
         for element in ("headline", "limits"):
             if not above.get(element):
                 out.append(f"[fold] the {element} is not fully above the fold at {where}")
+    # The disclosure region publishes a glyph height derived from the fold script's model
+    # rather than from a browser, because a status row must regenerate anywhere while that
+    # measurement needs Chromium. `model_drift` is the fold script's own report that its
+    # model and its live measurement disagree, and consuming it here is what makes the
+    # published figure MEASURED rather than merely modelled.
+    #
+    # Deliberately NOT the whole returncode or the whole failures list: those also carry the
+    # glyph-floor verdict, and importing that here would make the floor block this ratchet --
+    # a scope change no ruling has made, arrived at as a side effect. The floor stays
+    # disclosed and un-gated; only the honesty of the published number is enforced.
+    for drift in data.get("model_drift") or []:
+        out.append(f"[fold] {drift}")
     return (out, [f"[fold] asserted over {len(results)} combinations (local preview; the "
                   f"real page adds platform chrome above the README, so it can only sit lower)"])
 
