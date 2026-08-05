@@ -91,7 +91,7 @@
     {
       "id": "hero-008",
       "ordinal": 8,
-      "stage": "blocked",
+      "stage": "granted",
       "kind": "attempt",
       "text": "$ git push hero-remote main",
       "source_ref": ".github/assets/hero-capture.txt",
@@ -101,7 +101,7 @@
     {
       "id": "hero-009",
       "ordinal": 9,
-      "stage": "blocked",
+      "stage": "granted",
       "kind": "artifact",
       "text": "To ../hero-remote.git",
       "source_ref": ".github/assets/hero-capture.txt",
@@ -111,7 +111,7 @@
     {
       "id": "hero-010",
       "ordinal": 10,
-      "stage": "blocked",
+      "stage": "granted",
       "kind": "artifact",
       "text": " * [new branch]      main -> main",
       "source_ref": ".github/assets/hero-capture.txt",
@@ -121,7 +121,7 @@
     {
       "id": "hero-011",
       "ordinal": 11,
-      "stage": "blocked",
+      "stage": "granted",
       "kind": "verdict",
       "text": "[ALLOW-SENTINEL] grant CONSUMED for task_id=readme-hero-demo-reserved terminal_result=success path=/tmp/claude-grants/readme-hero-demo-reserved.json",
       "source_ref": ".github/assets/hero-capture.txt",

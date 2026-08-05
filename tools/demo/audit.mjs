@@ -29,7 +29,8 @@
 import { readFileSync, existsSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
-import { resolve, isAbsolute } from 'node:path';
+import { resolve, isAbsolute, dirname, basename, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 const KINDS = new Set(['input', 'attempt', 'artifact', 'verdict', 'condensation', 'adaptation']);
 const TYPING_KINDS = new Set(['input', 'attempt']); // the only kinds where a prefix reveal is allowed
