@@ -1071,6 +1071,44 @@ def apply_plan(ctx: Ctx, plan: dict) -> dict:
         shutil.copyfile(live, bpath)          # BEFORE any write to `live`
         backups[c["path"]] = str(bpath)
 
+    # ---- phase 2b: PREPARED intent record, written BEFORE the mutation -------
+    # R2 durability ordering. The record that makes the mutation invertible must
+    # not be written strictly after the mutation it describes: a process kill in
+    # that window would otherwise leave a mutated settings.json with no ownership
+    # record, which the legacy-record rule then declares unrecoverable -- the user
+    # left with harness registrations the tool refuses to remove.
+    settings_plan = plan.get("settings_plan") or {}
+    state = ctx.load_state()
+    record = {
+        "generation": gen,
+        "record_status": "prepared",
+        "profile": ctx.profile.get("profile"),
+        "isolated_root": str(ctx.isolated_root),
+        "bridge_rel": ctx.bridge_rel,
+        "settings_rel": ctx.settings_rel,
+        # Recorded in BOTH forms (R1). Resolving only at uninstall time is unsound.
+        "config_home": str(ctx.config_home),
+        "config_home_lexical": str(ctx.config_home),
+        "config_home_resolved": os.path.realpath(ctx.config_home),
+        # An install performed on a host that could not prove its hooks are
+        # enforced stays auditable here after the terminal output has scrolled.
+        "host_handshake": os.environ.get("HARNESS_INSTALL_HANDSHAKE", "unknown"),
+        "self_management": bundle_record,
+        "contributions": list(settings_plan.get("contributions") or []),
+        "observations": list(settings_plan.get("observations") or []),
+        "container_created": bool(settings_plan.get("container_created")),
+        "settings_disposition": settings_plan.get("disposition", "refused"),
+        "settings_pre_image_sha256": settings_plan.get("pre_image_sha256"),
+        "settings_sha256_as_installed": settings_plan.get("as_installed_sha256"),
+        "skipped_mandatory": list(plan.get("skipped_mandatory") or []),
+        "created": [],
+        "modified": [],
+        "conflicts": plan["conflicts"],
+    }
+    state.setdefault("generations", []).append(record)
+    state["schema"] = STATE_SCHEMA
+    ctx.write_state(state)
+
     # ---- phase 3: config home, atomic per file, rollback on any failure ------
     try:
         for c in plan["changes"]:
