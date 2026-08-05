@@ -282,11 +282,16 @@ for rel in scan_paths:
     lines = text.splitlines()
     dspans = py_docstrings(text) if lang == ".py" else set()
     hspans = sh_heredocs(lines) if lang in (".sh", ".bash") else set()
+    cspans = py_comment_spans(text) if lang == ".py" else (
+        sh_comment_spans(lines) if lang in (".sh", ".bash") else {})
+    sspans = py_system_path_enum(text) if lang == ".py" else {}
     ordinals = {}
     for lineno, content in enumerate(lines, 1):
-        if not RESIDUE.search(content):
+        matches = list(RESIDUE.finditer(content))
+        if not matches:
             continue
-        derived, operational = classify(rel, lineno, content, lang, dspans, hspans)
+        derived, operational = classify(rel, lineno, content, lang, dspans, hspans,
+                                        cspans, sspans, matches)
         fp = hashlib.sha256(content.encode()).hexdigest()[:16]
         ordinals[(rel, fp)] = ordinals.get((rel, fp), 0) + 1
         key = (rel, fp, ordinals[(rel, fp)])
