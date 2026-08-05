@@ -1287,7 +1287,7 @@ def unmerge_settings(doc: dict, recorded: dict, markers: tuple,
             continue
         event, group_index, entry_index, _group, entry = matches[0]
         measured = entry_digest(entry)
-        if record.get("entry_digest") and measured != record["entry_digest"]:
+        if baseline_digest and measured != baseline_digest:
             results.append({**base, "result": "kept-user-modified",
                             "measured_entry_digest": measured})
             continue
