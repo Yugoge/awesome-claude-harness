@@ -492,6 +492,10 @@ def _shell_if_statements(src):
     is what that arm itself guards.
     """
     joined = re.sub(r"\\\n[ \t]*", " ", src)
+    # `then` written on its own line is the same arm as the condition above it. Leaving the two
+    # unjoined would make such an arm unrecognizable, so a gate respelled that way would drop
+    # out of the census and the comparison would pass with a real gate hidden.
+    joined = re.sub(r"\n[ \t]*then[ \t]*(?=\n)", " ; then", joined)
     statements, stack = [], []
     for index, line in enumerate(joined.split("\n")):
         head = line.strip()
