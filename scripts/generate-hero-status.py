@@ -71,6 +71,113 @@ def is_committed(rel: str) -> bool:
 
 
 # --------------------------------------------------------------------------------------
+# Derived hero facts. Every number the disclosure region publishes is COMPUTED here from a
+# committed artifact, never transcribed. The caption previously carried a hand-typed
+# session length that disagreed with every artifact by ~1 s and sat outside the canonical
+# fence, so nothing regenerated it and nothing compared it. Deriving it here puts it under
+# the same whole-region byte-compare as every other published claim.
+# --------------------------------------------------------------------------------------
+
+HERO_CAPTURE = ".github/assets/hero-capture.txt"
+HERO_EVIDENCE = ".github/assets/hero-capture-evidence.json"
+HERO_MANIFEST = ".github/assets/guard-hero.json"
+HERO_ASSET = ".github/assets/guard-hero.svg"
+
+CAPTURE_TS_RE = re.compile(r"^\[\s*(\d+\.\d+)\]\s")
+CONSUMPTION_MARKER = "[ALLOW-SENTINEL] grant CONSUMED for task_id="
+
+
+def _read(rel: str) -> str | None:
+    p = REPO_ROOT / rel
+    try:
+        return p.read_text(encoding="utf-8") if p.is_file() else None
+    except OSError:
+        return None
+
+
+def hero_facts() -> dict:
+    """Derive every published hero number from committed artifacts.
+
+    Returns {} when an input is missing or unparseable, and {'duration_conflict': ...}
+    when the recorded duration disagrees with the capture's own timestamps. Both make the
+    consuming row disclose the failure instead of publishing a number -- the fail-closed
+    direction. The cross-validation is the point: a coordinated edit of the README region
+    AND the evidence file still cannot agree with the capture's first and last timestamps.
+    """
+    cap, ev_raw, man_raw, svg = (_read(HERO_CAPTURE), _read(HERO_EVIDENCE),
+                                 _read(HERO_MANIFEST), _read(HERO_ASSET))
+    if not all((cap, ev_raw, man_raw, svg)):
+        return {}
+    try:
+        evidence, manifest = json.loads(ev_raw), json.loads(man_raw)
+    except Exception:
+        return {}
+
+    stamps = [float(m.group(1)) for m in
+              (CAPTURE_TS_RE.match(ln) for ln in cap.splitlines()) if m]
+    if len(stamps) < 2:
+        return {}
+    recomputed = round(stamps[-1] - stamps[0], 3)
+    declared = evidence.get("raw_duration_s")
+    if not isinstance(declared, (int, float)) or abs(float(declared) - recomputed) > 1e-6:
+        return {"duration_conflict": (declared, recomputed)}
+
+    durations = {float(d) for d in re.findall(r'\bdur="([\d.]+)s"', svg)}
+    loop_s = max(durations) if durations else None
+
+    lines = manifest.get("lines", [])
+    by_id = {str(ln.get("id")): ln for ln in lines}
+    marker_id = next((str(ln["id"]) for ln in lines
+                      if str(ln.get("text", "")).startswith(CONSUMPTION_MARKER)), None)
+
+    # When the proof line's reveal begins, read from the asset's own animation schedule.
+    proof_s = None
+    if marker_id and loop_s:
+        for chunk in svg.split('<g data-role="line"')[1:]:
+            if f'data-trace-id="{marker_id}"' not in chunk:
+                continue
+            km = re.search(r'attributeName="opacity"[^>]*keyTimes="([^"]+)"', chunk)
+            if km:
+                kt = [float(x) for x in km.group(1).split(";") if x.strip()]
+                if len(kt) >= 2:
+                    proof_s = round(kt[1] * loop_s, 2)
+            break
+
+    # Clipping, on the renderer's own fixed monospace grid -- both constants read from the
+    # asset rather than assumed, so this stays correct if the renderer's geometry changes.
+    vb = re.search(r'viewBox="0 0 (\d+(?:\.\d+)?) ', svg)
+    logical_w = float(vb.group(1)) if vb else None
+    adv = None
+    am = re.search(r'<animate attributeName="width"[^>]*values="([^"]+)"', svg)
+    if am:
+        vals = [float(v) for v in am.group(1).split(";") if v.strip()]
+        adv = next((b - a for a, b in zip(vals, vals[1:]) if b - a > 0), None)
+    clipped: list[tuple[str, int]] = []
+    if logical_w and adv:
+        for t in re.finditer(r'<text data-trace-id="([^"]+)" x="([\d.]+)"', svg):
+            ln = by_id.get(t.group(1))
+            if not ln:
+                continue
+            x, n = float(t.group(2)), len(str(ln.get("text", "")))
+            if x + n * adv > logical_w:
+                clipped.append((t.group(1), n - max(0, int((logical_w - x) // adv))))
+
+    if loop_s is None or proof_s is None or logical_w is None:
+        return {}
+    return {
+        "duration_s": f"{recomputed:g}",
+        "loop_s": f"{loop_s:g}",
+        "ratio": f"{loop_s / recomputed:.2f}",
+        "proof_s": f"{proof_s:g}",
+        "proof_pct": f"{100.0 * proof_s / loop_s:.1f}",
+        "logical_w": f"{logical_w:g}",
+        "clipped_n": len(clipped),
+        "total_n": len(lines),
+        "worst_lost": max((c for _, c in clipped), default=0),
+    }
+
+
+# --------------------------------------------------------------------------------------
 # Named predicates. Each returns (state, visible_text, evidence, tracked).
 # --------------------------------------------------------------------------------------
 
