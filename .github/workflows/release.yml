@@ -152,26 +152,69 @@ jobs:
       - name: Attest build provenance for THAT digest
         # Bound to the exact digest published as the checksum, so the attestation
         # cannot describe a different build than the one consumers download.
+        # `id:` is what makes the bundle addressable — without it the attestation
+        # was produced and then stranded, referenced by nothing and shipped nowhere.
+        id: attest
         uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
         with:
           subject-path: ${{ env.ARCHIVE }}
 
-      - name: Publish archive + checksum + SBOM to the release
+      - name: Resolve the attestation bundle as a releasable asset
+        # The attestation is the FOURTH published asset. Until it ships, provenance
+        # is verifiable only online (verify-release-manifest.sh reaches "gh CLI
+        # unavailable — cannot verify the attestation" with no network client), so
+        # an offline consumer has no provenance artifact at all.
+        # The bundle-path output name cannot be confirmed offline for this pinned
+        # action version, so it is asserted rather than assumed: an empty or missing
+        # bundle fails the release loudly here instead of silently publishing three
+        # assets and reporting four.
+        env:
+          BUNDLE: ${{ steps.attest.outputs.bundle-path }}
+        run: |
+          set -euo pipefail
+          if [ -z "${BUNDLE:-}" ] || [ ! -f "$BUNDLE" ]; then
+            echo "::error::attestation bundle path did not resolve from the attest step outputs"
+            echo "::error::(got '${BUNDLE:-<empty>}') — the pinned action's output name may differ;"
+            echo "::error::resolve the correct output name rather than publishing without provenance"
+            exit 1
+          fi
+          att="$(dirname "$ARCHIVE")/${ARCHIVE_NAME%.tar.gz}.attestation.jsonl"
+          cp -p "$BUNDLE" "$att"
+          echo "ATTESTATION=$att" >> "$GITHUB_ENV"
+
+      - name: Create the release as a DRAFT (not publicly consumable yet)
+        # --draft is the whole point: the release used to be created public and
+        # verified afterwards, so a failing verification could not un-publish an
+        # already-public artifact. A draft is invisible to consumers until the
+        # promotion step below, which only runs if verification passed.
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          flags=(--title "$GITHUB_REF_NAME" --notes "Automated release for $GITHUB_REF_NAME. Verify with: bash scripts/verify-release-manifest.sh --tag $GITHUB_REF_NAME")
+          flags=(--draft --title "$GITHUB_REF_NAME" --notes "Automated release for $GITHUB_REF_NAME. Verify with: bash scripts/verify-release-manifest.sh --tag $GITHUB_REF_NAME")
           if [ "${{ steps.version.outputs.prerelease }}" = "true" ]; then
             flags+=(--prerelease)
           fi
           gh release create "$GITHUB_REF_NAME" "${flags[@]}" \
-            "$ARCHIVE" "$CHECKSUM" "$SBOM"
+            "$ARCHIVE" "$CHECKSUM" "$SBOM" "$ATTESTATION"
 
-      - name: Verify the PUBLISHED asset (download, do not rebuild)
+      - name: Verify the PUBLISHED asset (download the draft, do not rebuild)
+        # Runs against the draft's own uploaded assets, so what is verified is what
+        # promotion would expose. Deliberately NOT continue-on-error: a failure here
+        # must leave the release unpromoted.
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           bash scripts/verify-release-manifest.sh --tag "$GITHUB_REF_NAME" \
             --repo "$GITHUB_REPOSITORY" --workdir "$RUNNER_TEMP/verify"
+
+      - name: Promote the verified draft to a published release
+        # Reached only when every preceding step succeeded, so publication is a
+        # consequence of verification rather than a precondition for it.
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh release edit "$GITHUB_REF_NAME" --draft=false
+          echo "promoted $GITHUB_REF_NAME to a published release after verification"
