@@ -311,8 +311,55 @@ def pred_os() -> tuple[str, str, str, str]:
             ".github/workflows", "none")
 
 
+def pred_hero_recording() -> tuple[str, str, str, str]:
+    """The recorded session length and the replay's divergence from it (QF-8 disclosure).
+
+    The replay's cadence is the RENDERER's, not the recording's, and the proof beat lands
+    well into the loop rather than at landing. That divergence is disclosed with measured
+    numbers instead of being closed by a renderer rewrite -- the recorded QF-8 tradeoff.
+    """
+    f = hero_facts()
+    if "duration_conflict" in f:
+        declared, recomputed = f["duration_conflict"]
+        return ("not-yet",
+                f"**Hero recording** — no session length is published: the capture evidence "
+                f"records `{declared}` s but the capture's own first and last timestamps "
+                f"give `{recomputed}` s, so the figure is withheld until they agree.",
+                HERO_EVIDENCE, "hero-disclosure")
+    if not f:
+        return ("not-yet",
+                "**Hero recording** — the hero artifacts could not be read or re-derived at "
+                "build time, so no figure is published.", "none", "hero-disclosure")
+    return ("passed",
+            f"**Hero recording** — the recorded session ran **{f['duration_s']} s**; the "
+            f"replay loops every **{f['loop_s']} s** ({f['ratio']}x the recording), and the "
+            f"grant-consumed proof line first appears **{f['proof_s']} s** in — "
+            f"{f['proof_pct']} % through the loop, not at landing.",
+            HERO_EVIDENCE, "none")
+
+
+def pred_hero_legibility() -> tuple[str, str, str, str]:
+    """What a reader of the rendered hero cannot see, stated with measured numbers."""
+    f = hero_facts()
+    if not f or "duration_conflict" in f:
+        return ("not-yet",
+                "**Hero legibility** — the hero artifacts could not be measured at build "
+                "time, so truncation is not reported.", "none", "hero-disclosure")
+    if not f["clipped_n"]:
+        return ("passed",
+                f"**Hero legibility** — every replayed line fits inside the "
+                f"{f['logical_w']} px panel; nothing is cut off.", HERO_ASSET, "none")
+    return ("partial",
+            f"**Hero legibility** — **{f['clipped_n']} of {f['total_n']}** replayed lines "
+            f"run past the {f['logical_w']} px panel and are cut off at its right edge; the "
+            f"worst loses **{f['worst_lost']}** characters. The full, untruncated text of "
+            f"every line is in the linked capture.", HERO_ASSET, "hero-clipping")
+
+
 PREDICATES = {
     "known-limits": pred_known_limits,
+    "hero-recording": pred_hero_recording,
+    "hero-legibility": pred_hero_legibility,
     "supported-builds": pred_supported_builds,
     "capability-check": pred_capability_check,
     "blackbox-tests": pred_blackbox,
