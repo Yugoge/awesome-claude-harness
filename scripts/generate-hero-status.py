@@ -50,8 +50,13 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
-ROW_IDS = ["known-limits", "hero-recording", "hero-legibility", "supported-builds",
-           "capability-check", "blackbox-tests", "release", "os"]
+ROW_IDS = ["known-limits", "hero-recording", "hero-legibility", "hero-glyph",
+           "supported-builds", "capability-check", "blackbox-tests", "release", "os"]
+
+# The README under evaluation. Rebound by main() so a --readme copy is measured against its
+# OWN hero width rather than the repository's; a predicate that silently read the checked-in
+# README while checking a copy would report confident numbers about the wrong document.
+README_PATH = REPO_ROOT / "README.md"
 
 # Canonical regions, in the order they MUST appear in the document. `limits` first is not
 # cosmetic: an orchestrator ruling on the first screen rests on the limits statement
