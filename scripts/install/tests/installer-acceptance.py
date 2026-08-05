@@ -651,7 +651,7 @@ def ac6(tmp: Path) -> None:
                     "leaving the first intact", rc == 0 and len(state["generations"]) == 2,
           f"generations={len(state['generations'])}")
 
-    rc, out, err = run([UNINSTALL, "--prefix", prefix, "--config-dir", n2])
+    rc, out, err = run([UNINSTALL, "--prefix", prefix, "--config-dir", n2, "--json"])
     check("AC6", "uninstall exits 0", rc == 0, f"rc={rc} err={err[-300:]}")
     check("AC6(a)", "the installer-created link entry is removed",
           not (n2 / "harness").is_symlink() and not (n2 / "harness").exists())
