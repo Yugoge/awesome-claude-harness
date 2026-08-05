@@ -283,6 +283,45 @@
       "why_uncovered": "The lexer yields the literal token '$T'. Denying an unresolvable target would deny CREATION — 'echo hi > $OUT' is far more often a new file than a replacement — so affirmative denial allows it and declares it here instead."
     },
     {
+      "route_id": "quoted-command-word",
+      "route_class": "opaque-command-word",
+      "mechanism": "the verb is quoted, so the quote-masking pass blanks it before any verb pattern sees it",
+      "command_template": "'cp' {SRC} {TARGET}",
+      "write_mode": "truncating",
+      "expect_on_existing": 0,
+      "expect_on_new": 0,
+      "coverage": "uncovered",
+      "demonstration": "generic",
+      "added_in": "iteration 1",
+      "why_uncovered": "FOUND WHILE VERIFYING THE BACKSLASH FIX, and declared rather than left silent — it is the same family as \\cp, which is exactly the family an unstated gap does the most damage in. 'cp', \"cp\" and c'p' all run cp and all replace. The masking pass that blanks quoted spans is what makes `echo 'foo > bar'` safe, and that pass is load-bearing against FALSE POSITIVES on ordinary work. Distinguishing a quoted COMMAND WORD from quoted CONTENT would require position-aware parsing that the same pass currently exists to avoid, and getting it wrong fires the guard on ordinary work — the disqualifying condition. Declared here rather than closed by a change that risks the narrowing."
+    },
+    {
+      "route_id": "absolute-path-verb",
+      "route_class": "opaque-command-word",
+      "mechanism": "the verb is invoked by path, so the [\\s;|&] word boundary never precedes the bare verb name",
+      "command_template": "/bin/cp {SRC} {TARGET}",
+      "write_mode": "truncating",
+      "expect_on_existing": 0,
+      "expect_on_new": 0,
+      "coverage": "uncovered",
+      "demonstration": "generic",
+      "added_in": "iteration 1",
+      "why_uncovered": "FOUND WHILE VERIFYING THE BACKSLASH FIX. `/bin/cp` and `/usr/bin/cp` name the same program as `cp` but the character before the verb is '/', not a word boundary. Admitting a leading path component would mean accepting any token ENDING in the verb name, which then matches a path such as ./tools/backup-cp — naming a target from a command that is not the verb at all. That is the cries-wolf direction the requirement forbids, so this is declared rather than closed by a looser pattern. NOTE: `command cp` and `env cp` ARE covered, because the verb follows a space there."
+    },
+    {
+      "route_id": "command-substituted-verb",
+      "route_class": "opaque-command-word",
+      "mechanism": "the verb is produced by a command substitution and does not appear as a word in the text",
+      "command_template": "$(which cp) {SRC} {TARGET}",
+      "write_mode": "truncating",
+      "expect_on_existing": 0,
+      "expect_on_new": 0,
+      "coverage": "uncovered",
+      "demonstration": "generic",
+      "added_in": "iteration 1",
+      "why_uncovered": "FOUND WHILE VERIFYING THE BACKSLASH FIX. The verb literally is not in the command text — resolving it would mean executing the substitution at hook time, which a PreToolUse hook must never do. Same undecidability as variable-indirection, applied to the VERB rather than the target."
+    },
+    {
       "route_id": "check-use-race",
       "route_class": "check-use-race",
       "mechanism": "the target is created between the hook's check and the shell's open",
