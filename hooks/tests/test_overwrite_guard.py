@@ -459,14 +459,96 @@ def test_ac06_grant_is_single_use_and_target_bound(tmp_path):
                                  session_id=session_id, task_id=task_id)
         assert denied_other.returncode == 2
 
-        # Terminal result consumes the grant (existing PostToolUse mechanism).
-        assert grant_file.exists()
-        consume_sentinel_grant_on_terminal_result(task_id, "success")
-        assert not grant_file.exists()
+        # SINGLE USE, ASSERTED THROUGH THE GUARD ITSELF — never by calling the
+        # consumption helper by hand. Driving the helper is what concealed the
+        # defect: the helper always worked, and the registered PostToolUse
+        # consumer never reached it for a Write-op grant, so a green suite sat
+        # on top of a grant that authorized replacements without limit.
+        assert not grant_file.exists(), (
+            "authorizing must SPEND the grant; if this file survives, the escape "
+            "hatch is a mode and not a one-shot")
         assert not list(Path(SENTINEL_GRANT_DIR).glob(f"{task_id}*.json"))
+        assert "grant CONSUMED" in first.stderr
 
         second = run_guard(command, cwd=work, session_id=session_id, task_id=task_id)
         assert second.returncode == 2, "a consumed grant must not authorize a second replacement"
+        third = run_guard(command, cwd=work, session_id=session_id, task_id=task_id)
+        assert third.returncode == 2
+        assert target.read_text(encoding="utf-8") == original, "no attempt ever ran"
+    finally:
+        drop_grants(task_id)
+
+
+def test_ac06_single_use_holds_under_concurrency(tmp_path):
+    """Two guards, one grant, no terminal result between them: ONE permit.
+
+    The corpus previously declared this an uncovered route on the reasoning
+    that consumption was POST-tool. Consumption is now the unlink performed by
+    the guard that authorizes, and unlink is atomic, so the file itself is the
+    mutual exclusion: whichever process gets it wins and the loser is refused.
+    Both interleavings satisfy the same assertion, so this is not a flaky race
+    probe — if the two calls are serialized the second simply finds no grant.
+    """
+    work = tmp_path / "concurrent"
+    work.mkdir()
+    target = work / "victim.txt"
+    original = original_bytes()
+    target.write_text(original, encoding="utf-8")
+    task_id = f"ovwtest-{uuid.uuid4().hex}"
+    session_id = f"sid-{uuid.uuid4().hex}"
+    command = f"echo {NEW} > {target}"
+    try:
+        for _ in range(4):
+            write_grant(task_id, session_id, [{"op": "Write", "target": str(target)}])
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                codes = [f.result().returncode for f in [
+                    pool.submit(run_guard, command, work, session_id=session_id, task_id=task_id)
+                    for _ in range(2)]]
+            assert codes.count(0) == 1, f"exactly one permit expected, got {codes}"
+            assert codes.count(2) == 1, f"exactly one refusal expected, got {codes}"
+            assert not list(Path(SENTINEL_GRANT_DIR).glob(f"{task_id}*.json"))
+            assert target.read_text(encoding="utf-8") == original
+    finally:
+        drop_grants(task_id)
+
+
+def test_ac06_grant_is_spent_only_by_the_call_it_authorizes(tmp_path):
+    """Single-use must not become collateral damage to ordinary work.
+
+    The guard reaches consumption only after it has established a replacing
+    verb, an existing regular target, AND a grant naming that exact file. An
+    ungated call, an append, a creation, or a refused attempt on a different
+    file must all leave the grant untouched — otherwise the narrowing is
+    reintroduced from the other side, with the human's grant silently eaten by
+    an unrelated command.
+    """
+    work = tmp_path / "no-collateral"
+    work.mkdir()
+    target = work / "victim.txt"
+    original = original_bytes()
+    target.write_text(original, encoding="utf-8")
+    other = work / "other.txt"
+    other.write_text(original_bytes(), encoding="utf-8")
+    task_id = f"ovwtest-{uuid.uuid4().hex}"
+    session_id = f"sid-{uuid.uuid4().hex}"
+    try:
+        grant_file = write_grant(task_id, session_id,
+                                 [{"op": "Write", "target": str(target)}])
+        untouched = [
+            "ls -la /tmp",                       # no write target at all
+            f"echo {NEW} >> {target}",           # append to the granted file
+            f"sed -i s/a/b/ {target}",           # in-place edit of it
+            f"echo {NEW} > {work / 'fresh.txt'}",  # creation
+            f"echo {NEW} > {other}",             # refused: a DIFFERENT file
+        ]
+        for command in untouched:
+            run_guard(command, cwd=work, session_id=session_id, task_id=task_id)
+            assert grant_file.exists(), f"{command!r} must not spend the grant"
+
+        spent = run_guard(f"echo {NEW} > {target}", cwd=work,
+                          session_id=session_id, task_id=task_id)
+        assert spent.returncode == 0
+        assert not grant_file.exists()
     finally:
         drop_grants(task_id)
 
