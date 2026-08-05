@@ -61,6 +61,12 @@ ROUTES = CORPUS["routes"]
 COVERED = [r for r in ROUTES if r["coverage"] == "covered"]
 UNCOVERED = [r for r in ROUTES if r["coverage"] == "uncovered"]
 
+#: Covered rows the verb harness can drive: one command, one target, one
+#: verdict. A row marked `demonstration: bespoke` is covered by a property the
+#: harness cannot express as a single command (the grant lifecycle), and brings
+#: its own named test instead.
+COVERED_VERB_ROUTES = [r for r in COVERED if r.get("demonstration") != "bespoke"]
+
 NEW = "NEWCONTENT"
 EDIT_SURFACE = ("Edit", "MultiEdit", "NotebookEdit", "Write")
 
