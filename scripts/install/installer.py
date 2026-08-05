@@ -904,8 +904,15 @@ def build_plan(ctx: Ctx) -> dict:
     st_change = "modify" if ctx.state_path.is_file() else "create"
     add("prefix", STATE_REL, "file", st_change, "install inventory (ownership record)")
 
+    # R8 -- which SKIPPED entries are mandatory. Recorded on the plan so the
+    # decision to abort is taken by the caller, strictly before apply_plan runs
+    # and therefore strictly before the first mutation.
+    mandatory = mandatory_footprint_paths(ctx)
+    skipped_mandatory = sorted({c["path"] for c in conflicts} & mandatory)
+
     return {"generation": gen, "changes": changes, "conflicts": conflicts,
-            "settings_plan": settings_plan}
+            "settings_plan": settings_plan, "mandatory": sorted(mandatory),
+            "skipped_mandatory": skipped_mandatory}
 
 
 def resolve_ownership(observations: list, state: dict, ctx: Ctx) -> list:
