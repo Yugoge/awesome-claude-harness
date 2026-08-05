@@ -119,7 +119,7 @@
     "why_measured": {
       "_note": "RE-MEASURED at implementation time, not transcribed. The figure this field carried before ('re-adds 2 deny entries and strips ~38 allow entries') was wrong in both directions, and so is the backlog's '38 allow and 24 deny lost, 2 deny re-added'. Both are superseded. Re-measure rather than copy these numbers too: settings.template.json is edited by ordinary maintenance, so the delta MOVES. The input digests below are recorded precisely so a divergent recount is attributable to a changed input rather than to a wrong claim.",
       "derivation": "Expand every {{CLAUDE_HOME}} placeholder in settings.template.json to the live home, parse both files as JSON, and take the set difference of each permissions list against the same list in the live settings.json. 'lost' = present live, absent from the render. 're-added' = present in the render, absent live. No other normalization -- entries are compared verbatim after placeholder expansion.",
-      "measured_at": "2026-08-05, repo HEAD 4c33f2f5, CLAUDE_HOME=/root/.claude",
+      "measured_at": "2026-08-05, repo HEAD 4c33f2f5, with {{CLAUDE_HOME}} expanded to the invoking user's live harness home -- the same value the installer itself would substitute. The figures below are independent of what that home is: every entry in the delta is a bare command or glob pattern carrying no home path, which is exactly why the expansion step matters (it cancels the entries that DO carry one).",
       "inputs": {
         "settings.json": "sha256:1b5f036a6183...",
         "settings.template.json": "sha256:a5ade0ed937e..."
