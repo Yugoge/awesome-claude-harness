@@ -66,6 +66,7 @@ runs in CI does not.
 from __future__ import annotations
 
 import argparse
+import ast
 import json
 import os
 import re
