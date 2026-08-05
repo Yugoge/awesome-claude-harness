@@ -717,6 +717,13 @@
     },
     {
       "path": "hooks/pretool-bash-safety.sh",
+      "fingerprint": "246b33ce8bbf347e",
+      "ordinal": 1,
+      "class": "env_parameterized_default",
+      "rationale": "DAEMON_RESTART_GRANT_HELPER — the author path is the DEFAULT of an env parameter (${CLAUDE_DAEMON_RESTART_GRANT_HELPER:-...}), the parameterized form PUBLIC-CORE.md section 3 sanctions: a deployer overrides the variable and the literal is never read. Re-audited after the left boundary was narrowed to (?<![A-Za-z0-9]); it was audited before this cycle and had been invisible only while the boundary excluded a preceding \"-\"."
+    },
+    {
+      "path": "hooks/pretool-bash-safety.sh",
       "fingerprint": "31d46a2bd0bb9e29",
       "ordinal": 1,
       "class": "comment_or_narrative_doc",
