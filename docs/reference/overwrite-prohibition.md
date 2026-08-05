@@ -169,6 +169,31 @@ work exists to end.
 | `archive-extract` | Member enumeration needs the archive read at preflight — impossible for `curl … \| tar -x`. |
 | `gzip-force` | The write target is derived from the operand rather than named by it. |
 | `symlink-force` | `ln -sf`'s one-argument form targets `./<basename>`, so target derivation is ambiguous across the verb's forms. |
+| `grant-self-minting` | The escape hatch's own file is creatable by an ordinary allowed write. Closing it would require gating creation of a path, which the binding narrowing forbids. See the correction in section 4. |
+| `multi-source-copy` | `cp a b dir/` re-resolves only the LAST source, so `dir/basename(a)` is replaced undetected. |
+
+### Known false-positive profile — read this before registering
+
+The guard refuses `cmd > logfile` when `logfile` already exists, because that
+*is* wholesale replacement. Concretely, these ordinary commands are refused on
+their **second** run:
+
+```
+npm run build > build.log
+pytest -q > results.txt
+git diff > /tmp/patch.txt
+jq . conf.json > conf.tmp && mv conf.tmp conf.json     # the mv is refused
+cp config.example.json config.json                      # once config.json exists
+```
+
+Each has an ungated remedy the deny message names (`>>`, a fresh path, `Edit`,
+or `/allow Write <abs path>`), and none of them is editing, appending or
+creating — the four things the requirement fixes as ungated. But this is the
+single most likely reason the guard gets switched off, and switching it off
+protects nothing. **Whoever registers this hook is choosing that trade
+deliberately**, and should read section 1 first: what is bought is refusal and
+attribution of single-command literal-path replacement, which is the shape both
+attributable incidents took.
 
 ### The self-disable switch is OPEN and unmitigated
 
