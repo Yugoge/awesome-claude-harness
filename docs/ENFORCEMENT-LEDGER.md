@@ -65,7 +65,18 @@ declaration on every run, so this document cannot drift from the code that enfor
     "component-tested",
     "source-level",
     "none"
-  ]
+  ],
+  "risk_status": {
+    "RISK-1": [
+      "PARTIALLY MITIGATED"
+    ],
+    "RISK-2": [
+      "MITIGATED"
+    ],
+    "RISK-3": [
+      "PARTIALLY MITIGATED"
+    ]
+  }
 }
 ```
 <!-- enforcement-schema:end -->
