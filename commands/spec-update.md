@@ -50,12 +50,8 @@ existing paths named by `artifact_paths`, `report_paths`, `qa_inputs`, and
 `lanes[]`, plus `docs/dev/close-report-<task-id>.md` when present. In singular
 mode this is the existing parent chain; in fan-out mode it is every lane
 ticket/context/dev/QA plus the parent canonical/completion and only optional
-parent artifacts that actually exist; in `parallel_dev` mode `lanes[]` is
-legitimately empty and the sources are the parent canonical aggregate, the
-parent completion, and every per-worker dev-report named in `report_paths` —
-gather those and do not invent lane contexts or a parent context. Never replace
-this with a singular parent context/QA assumption or fabricate missing parent
-artifacts.
+parent artifacts that actually exist. Never replace this with a singular
+parent context/QA assumption or fabricate missing parent artifacts.
 
 For legacy or non-`/dev` work where no resolver result is available, retain the
 existing same-task parent context/dev-report/QA/close/completion lookup. Always

@@ -29,15 +29,6 @@ IDENTITY_RE = re.compile(
 TASK_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 WORKER_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9.-]*$")
 
-# Explicit orchestrator-written shape declaration.  `parallel_workers` is a
-# traceability list of the shards found on disk and is NOT a shape signal.
-DECLARATION_KEY = "artifact_chain_declaration"
-SUPPORTED_DECLARATION_VERSIONS = (1,)
-SHAPE_PARALLEL_DEV = "parallel_dev"
-SHAPE_REQUIREMENT_FANOUT = "requirement_fanout"
-DECLARED_SHAPES = (SHAPE_PARALLEL_DEV, SHAPE_REQUIREMENT_FANOUT)
-MODE_PARALLEL_DEV = "parallel_dev"
-
 
 class StableArgumentParser(argparse.ArgumentParser):
     def error(self, message: str) -> None:
@@ -127,31 +118,6 @@ class ChainValidator:
                     f"{key} is {actual!r}; expected {expected!r}",
                 )
 
-    def validate_worker_identity(
-        self, value: dict[str, Any], expected: str, worker: str, path: Path
-    ) -> None:
-        """Identity of a per-worker shard in the parallel-dev shape.
-
-        Exactly two whole-shard forms are legitimate and nothing else: the bare
-        parent task-id (what a per-worker subagent actually writes) and this
-        shard's own '<task-id>-<worker>' lane id.  Both keys must carry the SAME
-        one of those two forms -- a mixed pair is neither.  Anything wider would
-        certify a foreign or copy-pasted worker report as this cycle's work.
-
-        Membership is tested against a tuple, so a non-string identity (list,
-        object, null, number) yields a named IDENTITY_MISMATCH rather than an
-        unhashable-type crash.
-        """
-        lane_id = f"{expected}-{worker}"
-        actual = tuple(value.get(key) for key in ("request_id", "task_id"))
-        if actual not in ((expected, expected), (lane_id, lane_id)):
-            self.error(
-                "IDENTITY_MISMATCH",
-                _rel(path, self.root),
-                f"(request_id, task_id) is {actual!r}; expected "
-                f"{(expected, expected)!r} or {(lane_id, lane_id)!r}",
-            )
-
     def validate_markdown_identity(self, text: str, expected: str, path: Path) -> None:
         values: list[str] = []
         for line in text.splitlines():
@@ -175,16 +141,8 @@ class ChainValidator:
                     f"metadata identity is {actual!r}; expected {expected!r}",
                 )
 
-    def validate_dev(
-        self,
-        value: dict[str, Any],
-        expected: str,
-        path: Path,
-        *,
-        check_identity: bool = True,
-    ) -> None:
-        if check_identity:
-            self.validate_json_identity(value, expected, path)
+    def validate_dev(self, value: dict[str, Any], expected: str, path: Path) -> None:
+        self.validate_json_identity(value, expected, path)
         relative = _rel(path, self.root)
         dev = value.get("dev")
         if not isinstance(dev, dict):
@@ -321,133 +279,6 @@ def _find_undeclared_lane_artifacts(
                 )
 
 
-def _declared_lanes_error(shape: str, lanes: Any) -> str | None:
-    """Return a failure detail for an invalid roster, or None when it is valid."""
-    if not isinstance(lanes, list) or any(not isinstance(item, str) for item in lanes):
-        return f"declared_lanes must be an array of worker labels; got {lanes!r}"
-    if shape == SHAPE_PARALLEL_DEV:
-        if lanes:
-            return (
-                "declared_lanes must be empty for the "
-                f"{SHAPE_PARALLEL_DEV!r} shape; got {lanes!r}"
-            )
-        return None
-    if len(lanes) < 2:
-        return (
-            f"declared_lanes must name at least two lanes for the "
-            f"{SHAPE_REQUIREMENT_FANOUT!r} shape; got {lanes!r}"
-        )
-    if len(set(lanes)) != len(lanes):
-        return f"declared_lanes contains duplicate lane labels: {lanes!r}"
-    invalid = [item for item in lanes if not WORKER_RE.fullmatch(item)]
-    if invalid:
-        return f"declared_lanes contains invalid worker labels: {invalid!r}"
-    return None
-
-
-def _parse_declaration(
-    canonical: dict[str, Any], validator: ChainValidator, canonical_rel: str
-) -> tuple[bool, bool, str | None, list[str]]:
-    """Return ``(present, valid, shape, declared_lanes)`` for the shape declaration.
-
-    Absence is never lax: a canonical without the declaration key keeps the
-    pre-declaration behaviour exactly.  Every malformed declaration is a named,
-    fail-closed error that selects neither a lax branch nor a zero-iteration
-    fan-out branch.
-    """
-    if DECLARATION_KEY not in canonical:
-        return False, True, None, []
-    declaration = canonical.get(DECLARATION_KEY)
-    if not isinstance(declaration, dict):
-        validator.error(
-            "INVALID_CHAIN_DECLARATION",
-            canonical_rel,
-            f"{DECLARATION_KEY} must be an object; got {declaration!r}",
-        )
-        return True, False, None, []
-    version = declaration.get("version")
-    if isinstance(version, bool) or version not in SUPPORTED_DECLARATION_VERSIONS:
-        validator.error(
-            "INVALID_DECLARATION_VERSION",
-            canonical_rel,
-            f"declaration version is {version!r}; "
-            f"supported versions are {list(SUPPORTED_DECLARATION_VERSIONS)!r}",
-        )
-        return True, False, None, []
-    shape = declaration.get("shape")
-    if not isinstance(shape, str) or shape not in DECLARED_SHAPES:
-        validator.error(
-            "INVALID_DECLARATION_SHAPE",
-            canonical_rel,
-            f"declaration shape is {shape!r}; expected one of {list(DECLARED_SHAPES)!r}",
-        )
-        return True, False, None, []
-    lanes = declaration.get("declared_lanes")
-    detail = _declared_lanes_error(shape, lanes)
-    if detail is not None:
-        validator.error("INVALID_DECLARED_LANES", canonical_rel, detail)
-        return True, False, shape, []
-    return True, True, shape, list(lanes)
-
-
-def _validate_shard_set(
-    validator: ChainValidator,
-    result: dict[str, Any],
-    aggregate: ModuleType,
-    loaded_shards: list[tuple[str, dict[str, Any]]],
-    canonical: dict[str, Any],
-    task_id: str,
-) -> None:
-    """Delegate shard identity/baseline consistency and canonical freshness."""
-    # The task-derived registry authority is the only baseline selector.  Load
-    # it once, then pass that exact verified object to both consumers below;
-    # neither shard agreement nor the canonical payload can replace it.
-    authority, authority_errors = aggregate._load_baseline_authority(
-        validator.root, task_id
-    )
-    for detail in authority_errors:
-        validator.error("INVALID_SHARD_SET", result["canonical_dev_report"], detail)
-
-    # Schema validation still runs when the independent authority is invalid so
-    # legacy shards remain fully diagnosed.  With authority=None the aggregate
-    # validator deliberately checks shape only and never infers a baseline.
-    shard_errors = aggregate._validate_shards(loaded_shards, task_id, authority)
-    for detail in shard_errors:
-        validator.error("INVALID_SHARD_SET", result["canonical_dev_report"], detail)
-    if authority_errors or authority is None or shard_errors:
-        return
-    expected = aggregate._build_aggregate(
-        loaded_shards,
-        task_id,
-        authority,
-        canonical.get(DECLARATION_KEY),
-    )
-    canonical_dev = canonical.get("dev")
-    if not isinstance(canonical_dev, dict):
-        canonical_dev = {}
-    result["checks"]["file_unions_exact"] = (
-        canonical_dev.get("files_modified")
-        == expected.get("dev", {}).get("files_modified")
-        and canonical_dev.get("files_created")
-        == expected.get("dev", {}).get("files_created")
-    )
-    result["checks"]["canonical_fresh"] = aggregate._canonical_projection(
-        canonical
-    ) == aggregate._canonical_projection(expected)
-    if not result["checks"]["file_unions_exact"]:
-        validator.error(
-            "STALE_FILE_UNION",
-            result["canonical_dev_report"],
-            "canonical file unions do not match current lane reports",
-        )
-    if not result["checks"]["canonical_fresh"]:
-        validator.error(
-            "STALE_CANONICAL",
-            result["canonical_dev_report"],
-            "canonical aggregate projection does not match current lane reports",
-        )
-
-
 def _base_result(task_id: str, canonical: str, completion: str) -> dict[str, Any]:
     return {
         "schema_version": SCHEMA_VERSION,
@@ -457,7 +288,6 @@ def _base_result(task_id: str, canonical: str, completion: str) -> dict[str, Any
         "canonical_dev_report": canonical,
         "completion": completion,
         "parallel_workers": [],
-        "history_reports": [],
         "lanes": [],
         "optional_parent_artifacts": {},
         "report_paths": [],
@@ -508,13 +338,6 @@ def resolve_chain(project_root: Path | str, task_id: str) -> dict[str, Any]:
         result["errors"] = validator.errors
         return result
 
-    declared, declaration_valid, shape, declared_lanes = _parse_declaration(
-        canonical, validator, result["canonical_dev_report"]
-    )
-    if declared and not declaration_valid:
-        result["errors"] = validator.errors
-        return result
-
     validator.validate_dev(canonical, task_id, parents["dev_report"])
     workers_value = canonical.get("parallel_workers", [])
     workers: list[str] = []
@@ -538,14 +361,24 @@ def resolve_chain(project_root: Path | str, task_id: str) -> dict[str, Any]:
 
     try:
         aggregate = _load_aggregate_module()
-        discovery_declaration = canonical.get(DECLARATION_KEY) if declared else None
-        discovery = aggregate._discover_dev_reports(
-            dev_dir, task_id, discovery_declaration
-        )
-        scanned = list(discovery["active"])
-        result["history_reports"] = list(discovery["history"])
-        for issue in discovery["errors"]:
-            validator.error(issue["code"], issue["path"], issue["detail"])
+        bare_task_id = aggregate._bare_task_id(task_id)
+        scanned = []
+        try:
+            children = sorted(dev_dir.iterdir(), key=lambda path: path.name)
+        except OSError as exc:
+            validator.error(
+                "UNREADABLE_DEV_DIRECTORY", _rel(dev_dir, root), str(exc)
+            )
+            children = []
+        for child in children:
+            if not child.is_file():
+                continue
+            is_worker, label = aggregate._is_worker_for_task(
+                child.name, bare_task_id, task_id
+            )
+            if is_worker and label is not None:
+                scanned.append((label, child))
+        scanned.sort(key=lambda item: item[0])
     except Exception as exc:
         validator.error(
             "AGGREGATE_IMPLEMENTATION_ERROR",
@@ -555,71 +388,8 @@ def resolve_chain(project_root: Path | str, task_id: str) -> dict[str, Any]:
         scanned = []
         aggregate = None
 
-    if shape == SHAPE_PARALLEL_DEV:
-        result["mode"] = MODE_PARALLEL_DEV
-        if len(workers) < 2:
-            # A parallel-dev cycle's multiplicity lives in parallel_workers.
-            # Without it there is no worker chain to verify, and the shape would
-            # otherwise pass on the parent canonical and completion alone.
-            validator.error(
-                "AMBIGUOUS_WORKER_SET",
-                result["canonical_dev_report"],
-                "parallel-dev requires at least two workers",
-            )
-        scanned_labels = [worker for worker, _ in scanned]
-        if scanned_labels != workers:
-            validator.error(
-                "LANE_SET_MISMATCH",
-                result["canonical_dev_report"],
-                f"parallel_workers {workers!r} do not exactly match shards {scanned_labels!r}",
-            )
-        # Lane tickets/contexts/QA-reports contradict a parallel-dev declaration.
-        # The roster is empty in this shape, so every one of them is undeclared.
-        _find_undeclared_lane_artifacts(validator, declared_lanes)
-
-        loaded_shards = []
-        completion_refs = [result["canonical_dev_report"]]
-        artifact_paths = [result["canonical_dev_report"], result["completion"]]
-        result["report_paths"] = [result["canonical_dev_report"]]
-        for worker, shard_path in scanned:
-            relative = _rel(shard_path, root)
-            completion_refs.append(relative)
-            artifact_paths.append(relative)
-            result["report_paths"].append(relative)
-            shard = validator.read_json(shard_path)
-            if shard is not None:
-                # Exact membership in {parent id, this shard's own lane id}; the
-                # bare-timestamp rule in _validate_shards stays as a second gate.
-                validator.validate_worker_identity(shard, task_id, worker, shard_path)
-                validator.validate_dev(
-                    shard, task_id, shard_path, check_identity=False
-                )
-                loaded_shards.append((worker, shard))
-
-        if completion is not None:
-            validator.validate_completion(
-                completion, task_id, parents["completion"], completion_refs
-            )
-        optional = _optional_parent_result(validator, parents)
-        result["optional_parent_artifacts"] = optional
-        artifact_paths.extend(
-            value["path"] for value in optional.values() if value["present"]
-        )
-        if optional["qa_report"]["present"]:
-            result["report_paths"].append(optional["qa_report"]["path"])
-            result["qa_inputs"] = [
-                {"task_id": task_id, "qa_report": optional["qa_report"]["path"]}
-            ]
-        result["artifact_paths"] = artifact_paths
-        result["commit_whitelist_artifacts"] = artifact_paths
-
-        if aggregate is not None and scanned and len(loaded_shards) == len(scanned):
-            _validate_shard_set(
-                validator, result, aggregate, loaded_shards, canonical, task_id
-            )
-    elif shape == SHAPE_REQUIREMENT_FANOUT or workers:
+    if workers:
         result["mode"] = "fanout"
-        lane_labels = declared_lanes if shape == SHAPE_REQUIREMENT_FANOUT else workers
         if len(workers) < 2:
             validator.error(
                 "AMBIGUOUS_WORKER_SET",
@@ -633,28 +403,13 @@ def resolve_chain(project_root: Path | str, task_id: str) -> dict[str, Any]:
                 result["canonical_dev_report"],
                 f"parallel_workers {workers!r} do not exactly match shards {scanned_labels!r}",
             )
-        _find_undeclared_lane_artifacts(validator, lane_labels)
-        if shape == SHAPE_REQUIREMENT_FANOUT:
-            # R12(b): the roster may be larger than what ran, never smaller.  A
-            # lane shard outside the roster would otherwise be verified zero times.
-            roster = set(lane_labels)
-            orphans = sorted(
-                {worker for worker in workers if worker not in roster}
-                | {worker for worker, _ in scanned if worker not in roster}
-            )
-            for worker in orphans:
-                validator.error(
-                    "ORPHAN_LANE_SHARD",
-                    result["canonical_dev_report"],
-                    f"worker {worker!r} produced a dev-report shard but is absent "
-                    f"from declared_lanes {lane_labels!r}",
-                )
+        _find_undeclared_lane_artifacts(validator, workers)
 
         loaded_shards: list[tuple[str, dict[str, Any]]] = []
         completion_refs = [result["canonical_dev_report"]]
         artifact_paths = [result["canonical_dev_report"], result["completion"]]
         result["report_paths"] = [result["canonical_dev_report"]]
-        for worker in lane_labels:
+        for worker in workers:
             lane_id = f"{task_id}-{worker}"
             paths = _lane_paths(dev_dir, task_id, worker)
             lane = {
@@ -701,9 +456,38 @@ def resolve_chain(project_root: Path | str, task_id: str) -> dict[str, Any]:
         ]
 
         if aggregate is not None and len(loaded_shards) == len(workers):
-            _validate_shard_set(
-                validator, result, aggregate, loaded_shards, canonical, task_id
-            )
+            shard_errors = aggregate._validate_shards(loaded_shards, task_id)
+            for detail in shard_errors:
+                validator.error(
+                    "INVALID_SHARD_SET", result["canonical_dev_report"], detail
+                )
+            if not shard_errors:
+                expected = aggregate._build_aggregate(loaded_shards, task_id)
+                canonical_dev = canonical.get("dev")
+                if not isinstance(canonical_dev, dict):
+                    canonical_dev = {}
+                result["checks"]["file_unions_exact"] = (
+                    canonical_dev.get("files_modified")
+                    == expected.get("dev", {}).get("files_modified")
+                    and canonical_dev.get("files_created")
+                    == expected.get("dev", {}).get("files_created")
+                )
+                result["checks"]["canonical_fresh"] = (
+                    aggregate._canonical_projection(canonical)
+                    == aggregate._canonical_projection(expected)
+                )
+                if not result["checks"]["file_unions_exact"]:
+                    validator.error(
+                        "STALE_FILE_UNION",
+                        result["canonical_dev_report"],
+                        "canonical file unions do not match current lane reports",
+                    )
+                if not result["checks"]["canonical_fresh"]:
+                    validator.error(
+                        "STALE_CANONICAL",
+                        result["canonical_dev_report"],
+                        "canonical aggregate projection does not match current lane reports",
+                    )
     else:
         result["mode"] = "singular"
         result["checks"] = {
@@ -743,19 +527,6 @@ def resolve_chain(project_root: Path | str, task_id: str) -> dict[str, Any]:
             {"task_id": task_id, "qa_report": _rel(parents["qa_report"], root)}
         ]
 
-    history_paths = [
-        item["path"]
-        for item in result["history_reports"]
-        if isinstance(item, dict) and isinstance(item.get("path"), str)
-    ]
-    # History stays audit-only: it is available to downstream integrity and
-    # commit whitelists, but never enters report_paths, qa_inputs, lanes,
-    # parallel_workers, unions, status, or baseline validation.
-    for path in history_paths:
-        if path not in result["artifact_paths"]:
-            result["artifact_paths"].append(path)
-        if path not in result["commit_whitelist_artifacts"]:
-            result["commit_whitelist_artifacts"].append(path)
     result["parallel_workers"] = workers
     result["errors"] = validator.errors
     result["status"] = "pass" if not validator.errors else "fail"

@@ -63,7 +63,6 @@ import re
 import sys
 from collections import defaultdict
 from pathlib import Path
-from types import ModuleType
 
 sys.path.insert(0, str(Path(__file__).parent))
 from lib.allowlist import read_grant  # noqa: E402
@@ -228,68 +227,25 @@ def _scan_dev_dir(dev_dir):
     are equivalent evidence of a per-worker shard). Canonical singletons
     are excluded from worker counts via _classify_filename ordering.
     """
-    per_worker, canonical_present, _classification_errors = _scan_dev_dir_audit(dev_dir)
-    return per_worker, canonical_present
-
-
-def _load_aggregate_module():
-    """Load the canonical classifier without importing a hyphenated module."""
-    path = Path(__file__).resolve().parent.parent / "scripts" / "aggregate-dev-report.py"
-    module = ModuleType("_aggregate_dev_report_for_hook")
-    module.__file__ = str(path)
-    source = path.read_bytes()
-    exec(compile(source, str(path), "exec"), module.__dict__)
-    return module
-
-
-def _scan_dev_dir_audit(dev_dir):
-    """Return worker/canonical maps plus path-bearing role errors.
-
-    The producer owns classification.  Reusing it here prevents the pre-QA
-    gate from resurrecting a valid iteration report as a synthetic worker while
-    still failing closed on malformed, orphaned, aliased, or undeclared reports.
-    """
     per_worker = defaultdict(list)
     canonical_present = {}
-    classification_errors = defaultdict(list)
     if not dev_dir.exists() or not dev_dir.is_dir():
-        return per_worker, canonical_present, classification_errors
+        return per_worker, canonical_present
     try:
-        children = sorted(dev_dir.iterdir(), key=lambda item: item.name)
+        children = list(dev_dir.iterdir())
     except OSError:
-        return per_worker, canonical_present, classification_errors
-    aggregate = _load_aggregate_module()
-    task_ids = set()
+        return per_worker, canonical_present
     for child in children:
+        if not child.is_file():
+            continue
         result = _classify_filename(child.name)
         if result is None:
-            # New versioned history has a trailing lane and intentionally
-            # matches neither legacy worker regex.
-            new = aggregate.NEW_HISTORY_RE.fullmatch(child.name)
-            if new is not None:
-                task_ids.add(new.group("parent"))
             continue
-        task_ids.add(result[1])
-        if result[0] == "canonical" and child.is_file() and not child.is_symlink():
+        if result[0] == "canonical":
             canonical_present[result[1]] = True
-
-    for task_id in sorted(task_ids):
-        declaration = None
-        canonical = dev_dir / f"dev-report-{task_id}.json"
-        if canonical.is_file() and not canonical.is_symlink():
-            try:
-                document = json.loads(canonical.read_text(encoding="utf-8"))
-                candidate = document.get(aggregate.DECLARATION_KEY)
-                if isinstance(candidate, dict):
-                    declaration = candidate
-            except Exception:
-                declaration = None
-        audit = aggregate._discover_dev_reports(dev_dir, task_id, declaration)
-        active_labels = [label for label, _path in audit["active"]]
-        if active_labels:
-            per_worker[task_id] = active_labels
-        classification_errors[task_id] = list(audit["errors"])
-    return per_worker, canonical_present, classification_errors
+        else:
+            per_worker[result[1]].append(result[2])
+    return per_worker, canonical_present
 
 
 def _qa_prompt_body(data):
@@ -402,7 +358,7 @@ def _find_violations(per_worker, canonical_present, scope_task_id=None):
     return violations
 
 
-def _emit_block(violations, dev_dir, classification_errors=None):
+def _emit_block(violations, dev_dir):
     """Print BLOCK message to stderr and exit 2."""
     lines = ["", "BLOCKED Agent dispatch (qa): canonical aggregate dev-report missing."]
     for task_id, roles in violations:
@@ -411,13 +367,6 @@ def _emit_block(violations, dev_dir, classification_errors=None):
         lines.append(f"  task-id: {task_id}")
         lines.append(f"  per-worker reports present: {', '.join(roles)}")
         lines.append(f"  missing canonical aggregate: {canonical}")
-    for task_id, issues in sorted((classification_errors or {}).items()):
-        for issue in issues:
-            lines.append("")
-            lines.append(f"  task-id: {task_id}")
-            lines.append(
-                f"  [{issue['code']}] {issue['path']}: {issue['detail']}"
-            )
     lines.append("")
     lines.append(
         f"REQUIRED: orchestrator must write the canonical aggregate before "
@@ -507,7 +456,7 @@ def main():
         pass
 
     dev_dir = _resolve_dev_dir()
-    per_worker, canonical_present, classification_errors = _scan_dev_dir_audit(dev_dir)
+    per_worker, canonical_present = _scan_dev_dir(dev_dir)
     # FINDING-1: extract the LIST of pattern-anchored task-ids. None = no
     # anchored refs -> conservative global scan. List = scope detection
     # to the union of the listed task-ids (each scanned once, results
@@ -515,21 +464,8 @@ def main():
     raw_task_ids = _extract_current_task_ids(data)
     scope_task_ids = _resolve_scope_task_ids(raw_task_ids)
     violations = _collect_violations(per_worker, canonical_present, scope_task_ids)
-    scoped_errors = {}
-    if scope_task_ids is None:
-        scoped_errors = {
-            task_id: issues
-            for task_id, issues in classification_errors.items()
-            if issues
-        }
-    else:
-        scoped_errors = {
-            task_id: classification_errors.get(task_id, [])
-            for task_id in scope_task_ids
-            if classification_errors.get(task_id)
-        }
-    if violations or scoped_errors:
-        _emit_block(violations, dev_dir, scoped_errors)
+    if violations:
+        _emit_block(violations, dev_dir)
     sys.exit(0)
 
 

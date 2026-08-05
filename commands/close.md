@@ -340,8 +340,7 @@ The orchestrator MUST emit a TodoWrite call updating the Step-N todo item to `in
 
 **Parallel detection check** — before dispatch, use only the retained resolver
 result: a parallel cycle is detected exactly when
-`ARTIFACT_CHAIN.mode == "fanout"` or `ARTIFACT_CHAIN.mode == "parallel_dev"`.
-Do not re-scan filenames or reinterpret
+`ARTIFACT_CHAIN.mode == "fanout"`. Do not re-scan filenames or reinterpret
 `parallel_workers`; that would create a second, divergent fan-out authority.
 
 **If a parallel cycle is detected** — dispatch inspectors SEQUENTIALLY (one Agent call at a time, wait for each to return before the next):
