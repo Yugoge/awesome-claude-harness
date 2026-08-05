@@ -340,9 +340,13 @@ def test_ac03_decision_is_anchored_on_file_type_not_path_strings(tmp_path):
     assert run_guard(f"echo hi > {fifo}", cwd=tmp_path).returncode == 0
     assert run_guard(f"echo hi > {regular}", cwd=tmp_path).returncode == 2
 
+    # A character device the guard has never heard of behaves like /dev/null,
+    # so the allow decision cannot be coming from a list of blessed names.
     source = GUARD.read_text(encoding="utf-8")
-    assert "/dev/null" not in source, "no path-string allowlist may decide this"
+    assert "/dev/zero" not in source and "/dev/urandom" not in source
     assert fifo.name not in source and regular.name not in source
+    assert run_guard("echo hi > /dev/zero", cwd=tmp_path).returncode == 0
+    assert run_guard("echo hi > /dev/urandom", cwd=tmp_path).returncode == 0
 
 
 # ---------------------------------------------------------------------------
