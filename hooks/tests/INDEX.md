@@ -1,13 +1,15 @@
 # tests
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-08-03T14:50:19Z*
-**Total entries**: 27
+*Last updated: 2026-08-05T02:32:47Z*
+**Total entries**: 31
 **Convention**: kebab
 
 ## Tree
 ```
 tests/
+├── fixtures/
+│   ├── `adversarial_corpus.json` - json config
 ├── `test_ac10_verify.sh` - Shell script
 ├── `test_ac1_verify.sh` - Shell script
 ├── `test_ac3_verify.sh` - Shell script
@@ -17,8 +19,10 @@ tests/
 ├── `test_allowlist_consolidation.py` - Covers AC8 IS_SUBAGENT firewall scenarios and matching semantics invariants
 ├── `test_bash_safety_context.py` - Tests strip_non_executable_contexts() in isolation, covering the main
 ├── `test_bash_safety_context_rules.py` - converted to COMMAND_CONTEXT_STRIPPED in hooks/pretool-bash-safety.sh
+├── `test_blackbox_integration.py` - WHAT THIS PROVES, AND WHAT IT EXPLICITLY DOES NOT
 ├── `test_block_branch_pr_worktree.py` - The hook forbids branch / PR / worktree CREATION on the Bash surface, with three
 ├── `test_bulk_commit_sentinel.py` - Covers:
+├── `test_capability_gate.py` - Every test drives the real artefacts: the library, the PreToolUse gate hook as a
 ├── `test_cp_checkin.py` - of ba-spec-20260427-194324.md (P1 view-trigger removal + P2 generation field)
 ├── `test_do_taskid_mint.py` - Covers the root-cause fix for the do-report task-id collision (memory
 ├── `test_dual_runtime_lifecycle_e2e.py` - Real-entrypoint regressions for single-owner ordinary dev lifecycle.
