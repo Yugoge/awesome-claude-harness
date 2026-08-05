@@ -247,6 +247,86 @@ for (let i = 0; i < Math.min(traceSeq.length, expected.length); i++) {
 }
 for (const id of ids) if (!traceSeq.includes(id)) V(`manifest id "${id}" has no <text data-trace-id> in SVG`);
 
+// ---------- rendered-width / clipping detection ----------
+// The renderer lays every transcript line on a FIXED MONOSPACE GRID, so a line's rendered
+// right edge is exactly linear in its character count and is computable here without a
+// browser. Anything past the asset's own viewBox width is cut off by the SVG viewport.
+// Nothing else in this file could see that: the manifest text and the SVG text still match
+// byte-for-byte, so a load-bearing proof line was published cut mid-path while this auditor
+// reported "17 source-verified, 0 warned". Provenance was intact; the RENDERING was not.
+//
+// The ledger below records clipping that is known, itemised and accepted for now — never
+// clipping that is hidden. A line the manifest classifies as `verdict` carries the
+// demonstration's proof and may NEVER be ledgered: that is the difference between
+// disclosing a defect and blessing one.
+const vbMatch = svg.match(/viewBox="0 0 (\d+(?:\.\d+)?) (\d+(?:\.\d+)?)"/);
+const LOGICAL_W = vbMatch ? parseFloat(vbMatch[1]) : null;
+
+// Character advance is DERIVED from the asset, not assumed: a typing clip reveals its line
+// in whole-character steps, so the first positive step is exactly one character advance.
+const deriveAdvance = () => {
+  const m2 = svg.match(/<animate attributeName="width"[^>]*values="([^"]+)"/);
+  if (!m2) return null;
+  const vals = m2[1].split(';').map(Number).filter((v) => Number.isFinite(v));
+  for (let i = 1; i < vals.length; i++) if (vals[i] - vals[i - 1] > 0) return vals[i] - vals[i - 1];
+  return null;
+};
+const ADV = deriveAdvance();
+
+const ledgerPath = join(dirname(fileURLToPath(import.meta.url)), 'known-clipped-ledger.json');
+let ledgerEntries = [];
+if (existsSync(ledgerPath)) {
+  try {
+    const all = JSON.parse(readFileSync(ledgerPath, 'utf8'));
+    ledgerEntries = ((all.assets || {})[basename(svgPath)]) || [];
+    if (!Array.isArray(ledgerEntries)) { V('known-clipped ledger: asset entry is not an array'); ledgerEntries = []; }
+  } catch (e) { V(`known-clipped ledger is unreadable or invalid JSON: ${e.message}`); }
+}
+
+const clipped = [];
+if (LOGICAL_W === null) W("asset logical width (viewBox) could not be parsed — clipping NOT checked");
+else if (!ADV) W('character advance could not be derived from the asset — clipping NOT checked');
+else {
+  for (const g of traceGeom) {
+    if (g.x === null) { W(`${g.id}: text node has no numeric x — clipping NOT checked for this line`); continue; }
+    const right = g.x + g.text.length * ADV;
+    if (right <= LOGICAL_W) continue;
+    const visible = Math.max(0, Math.floor((LOGICAL_W - g.x) / ADV));
+    clipped.push({ id: g.id, kind: g.kind, chars: g.text.length, right,
+                   lost: g.text.slice(visible), visibleEndsAt: g.text.slice(0, visible).slice(-6) });
+  }
+}
+
+// (1) Every ledger entry must itself be legitimate.
+const clippedById = new Map(clipped.map((c) => [c.id, c]));
+for (const e of ledgerEntries) {
+  const id = e && e.trace_id;
+  const ln = byId.get(id);
+  if (!ln) { V(`known-clipped ledger names "${id}", which is absent from the manifest`); continue; }
+  if (nfc(ln.kind) === 'verdict') {
+    V(`known-clipped ledger contains "${id}", which the manifest classifies as kind "verdict" — ` +
+      `a verdict line carries the demonstration's proof and may never be ledgered as acceptably clipped`);
+  }
+  if (typeof e.lost_text !== 'string') V(`known-clipped ledger entry "${id}" has no lost_text`);
+  if (!e.restoration_condition || !String(e.restoration_condition).trim())
+    V(`known-clipped ledger entry "${id}" has no restoration_condition`);
+  const c = clippedById.get(id);
+  if (!c) V(`known-clipped ledger entry "${id}" is stale: that line no longer overflows the logical width`);
+  else if (typeof e.lost_text === 'string' && nfc(e.lost_text) !== nfc(c.lost))
+    V(`known-clipped ledger entry "${id}": lost_text does not match what is actually cut off ` +
+      `(ledger "${e.lost_text.slice(0, 48)}", measured "${c.lost.slice(0, 48)}")`);
+}
+
+// (2) Every clipped line is itemised with the exact substring it loses. Unledgered ones are
+//     provenance downgrades, so --strict escalates them into hard violations centrally below.
+const ledgerIds = new Set(ledgerEntries.map((e) => e && e.trace_id));
+for (const c of clipped) {
+  const detail = `${c.id}: rendered text overflows the asset's logical width ` +
+    `(${c.chars} chars, right edge ${Math.round(c.right)}px > ${LOGICAL_W}px); ` +
+    `${c.lost.length} characters are cut off after "…${c.visibleEndsAt}": "${c.lost}"`;
+  if (!ledgerIds.has(c.id)) W(`${detail} — and it is ABSENT from the known-clipped ledger`);
+}
+
 // ---------- strict-mode escalation (opt-in) ----------
 // In --strict, EVERY provenance downgrade (any warning recorded by W(), present OR future)
 // becomes a hard violation. Implemented centrally here at the verdict — the individual W()
