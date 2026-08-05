@@ -192,8 +192,12 @@ _SED_I_RE = re.compile(r"(?:^|[\s;|&])sed\b([^;|&\n]*?-i[^\s;|&\n]*)([^;|&\n]+)"
 _INSTALL_RE = re.compile(r"(?:^|[\s;|&])install\b([^;|&\n]+)")
 
 
-def _read_path_token_from_original(original: str, start: int) -> str:
-    """Read the next path token from `original` starting at offset `start`.
+def _next_token_from_original(original: str, start: int) -> Tuple[str, int]:
+    """Read the next token from `original` and return (token, next_offset).
+
+    Sole implementation of the quoted-PATH-vs-quoted-CONTENT rule; both
+    `_read_path_token_from_original` (frozen public behaviour) and the
+    write-mode segment tokenizer delegate here so the rule exists once.
 
     Skips leading whitespace. If the next char is `'` or `"`, consumes to
     the matching close-quote and strips the surrounding quotes (so a
@@ -204,17 +208,25 @@ def _read_path_token_from_original(original: str, start: int) -> str:
     while i < n and original[i].isspace():
         i += 1
     if i >= n:
-        return ""
+        return ("", n)
     if original[i] in ("'", '"'):
         quote = original[i]
         j = i + 1
         while j < n and original[j] != quote:
             j += 1
-        return original[i + 1:j]
+        return (original[i + 1:j], min(j + 1, n))
     j = i
     while j < n and original[j] not in " \t\n;|&<>":
         j += 1
-    return original[i:j]
+    return (original[i:j], j)
+
+
+def _read_path_token_from_original(original: str, start: int) -> str:
+    """Read the next path token from `original` starting at offset `start`.
+
+    Thin projection of `_next_token_from_original`; behaviour unchanged.
+    """
+    return _next_token_from_original(original, start)[0]
 
 
 # Operator-only patterns for masked-text scanning (no path capture; path
