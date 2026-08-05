@@ -790,6 +790,9 @@ def main() -> int:
     g.add_argument("--check", action="store_true")
     a = ap.parse_args()
     readme = Path(a.readme)
+    # Measure the document actually under evaluation, not the one in the repository.
+    global README_PATH
+    README_PATH = readme
     return cmd_write(readme) if a.write else cmd_check(readme, check_fold=not a.no_fold)
 
 
