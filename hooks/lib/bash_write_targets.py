@@ -412,6 +412,341 @@ def extract_bash_write_paths(command: str) -> List[str]:
     return deduped
 
 
+# ---------------------------------------------------------------------------
+# Write-MODE classification (ADDITIVE — task dev-20260804-010515-overwrite, M3)
+#
+# Everything above this banner is FROZEN. `extract_bash_write_paths()` keeps its
+# name, signature and return shape because THREE hooks consume it
+# (pretool-tool-policy.py, pretool-overnight-hook-guard.py and
+# pretool-cp-state-write-guard.py — the last is itself a security guard).
+#
+# The functions below answer a question the frozen extractor never asked: not
+# "which paths does this command write?" but "in what MODE does it write them?"
+# — because replacing an existing file and appending to one are the same path
+# and opposite acts.
+# ---------------------------------------------------------------------------
+
+MODE_TRUNCATING = "truncating"
+MODE_APPENDING = "appending"
+MODE_RENAME_INTO_PLACE = "rename_into_place"
+MODE_DESTROYING = "destroying"
+MODE_IN_PLACE_EDIT = "in_place_edit"
+
+#: Modes that destroy the previous contents of an EXISTING target wholesale.
+#: Appending and in-place editing derive their output from the original, so
+#: neither is a replacement and neither is ever gated.
+REPLACING_MODES = frozenset({MODE_TRUNCATING, MODE_RENAME_INTO_PLACE, MODE_DESTROYING})
+
+
+class WriteTarget(NamedTuple):
+    """One write target with its mode.
+
+    Fields 0 and 1 are exactly the ``(path, write_mode)`` pair the requirement
+    asks for; ``source`` is carried because the move-into-a-directory rule has
+    to re-resolve a directory destination to ``<dir>/<basename(source)>`` and
+    cannot do so from the destination alone.
+    """
+
+    path: str
+    mode: str
+    mechanism: str
+    source: str = ""
+
+
+def _segment_end(masked: str, start: int) -> int:
+    """Offset of the first shell separator at/after `start` in masked text."""
+    for k in range(start, len(masked)):
+        if masked[k] in ";|&\n":
+            return k
+    return len(masked)
+
+
+def _segment_tokens(original: str, masked: str, start: int) -> List[str]:
+    """Tokenize one command segment, reading tokens from the ORIGINAL text.
+
+    `masked` (quoted spans blanked, byte offsets preserved) supplies the
+    segment boundary so a separator inside a quoted argument does not cut the
+    segment short; `original` supplies the token bytes so a quoted PATH
+    survives intact. Stops at a redirect operator, mirroring _split_at_redirect.
+    """
+    end = _segment_end(masked, start)
+    tokens: List[str] = []
+    i = start
+    while i < end:
+        tok, nxt = _next_token_from_original(original, i)
+        if nxt <= i:
+            break
+        if tok:
+            tokens.append(tok)
+        i = nxt
+    return tokens
+
+
+# Redirect operators, mode-aware. Adds the clobber form '>|' that the frozen
+# extractor cannot name (its path reader stops on the '|'). '>&' (fd
+# duplication, e.g. 2>&1) and '>(' (process substitution) stay excluded, and
+# '&>' stays OUT — it is a declared uncovered route, not a silent omission.
+_REDIRECT_MODE_OP_RE = re.compile(r"(?<![<>&\'\"])(>>|>\||>)(?![&\(])")
+_REDIRECT_MECHANISM = {">>": "redirect-append", ">|": "redirect-clobber", ">": "redirect-truncate"}
+
+_TEE_WORD_RE = re.compile(r"(?:^|[\s;|&])tee\b")
+_CP_MV_WORD_RE = re.compile(r"(?:^|[\s;|&])(cp|mv)\b")
+_INSTALL_WORD_RE = re.compile(r"(?:^|[\s;|&])install\b")
+_TRUNCATE_WORD_RE = re.compile(r"(?:^|[\s;|&])truncate\b")
+_DD_WORD_RE = re.compile(r"(?:^|[\s;|&])dd\b")
+_CURL_WORD_RE = re.compile(r"(?:^|[\s;|&])curl\b")
+_WGET_WORD_RE = re.compile(r"(?:^|[\s;|&])wget\b")
+_UNLINK_WORD_RE = re.compile(r"(?:^|[\s;|&])unlink\b")
+
+# Occurrences carrying any of these are NOT attributed a target: the write
+# destination is not decidable from command text, so naming one would be a
+# guess. Each is a declared uncovered route rather than a silent miss.
+_CP_UNDECIDABLE = {"-r", "-R", "--recursive", "-a", "--archive", "-t", "--target-directory"}
+_MV_UNDECIDABLE = {"-t", "--target-directory"}
+_INSTALL_UNDECIDABLE = {"-d", "--directory", "-t", "--target-directory"}
+# Flags whose VALUE is a separate following token (skip that token).
+_TRUNCATE_VALUE_FLAGS = {"-s", "--size", "-r", "--reference"}
+
+
+def _positionals(tokens: List[str], value_flags: frozenset | set = frozenset()) -> List[str]:
+    """Non-flag tokens, dropping flags and the values they consume."""
+    out: List[str] = []
+    skip = False
+    for t in tokens:
+        if skip:
+            skip = False
+            continue
+        if t in value_flags:
+            skip = True
+            continue
+        if t.startswith("-") and t != "-":
+            continue
+        out.append(t)
+    return out
+
+
+def _extract_redirect_mode_targets(command: str) -> List[WriteTarget]:
+    masked = _strip_quoted_regions(command)
+    out: List[WriteTarget] = []
+    for m in _REDIRECT_MODE_OP_RE.finditer(masked):
+        op = m.group(1)
+        token = _read_path_token_from_original(command, m.end()).strip()
+        if not token or token.isdigit():
+            continue
+        mode = MODE_APPENDING if op == ">>" else MODE_TRUNCATING
+        out.append(WriteTarget(_resolve_path(token), mode, _REDIRECT_MECHANISM[op]))
+    return out
+
+
+def _extract_tee_mode_targets(command: str) -> List[WriteTarget]:
+    masked = _strip_quoted_regions(command)
+    out: List[WriteTarget] = []
+    for m in _TEE_WORD_RE.finditer(masked):
+        tokens = _segment_tokens(command, masked, m.end())
+        append = any(
+            t == "--append" or (t.startswith("-") and not t.startswith("--") and "a" in t[1:])
+            for t in tokens
+        )
+        mode = MODE_APPENDING if append else MODE_TRUNCATING
+        mech = "tee-append" if append else "tee-truncate"
+        for path in _positionals(tokens):
+            out.append(WriteTarget(_resolve_path(path), mode, mech))
+    return out
+
+
+def _extract_cp_mv_mode_targets(command: str) -> List[WriteTarget]:
+    masked = _strip_quoted_regions(command)
+    out: List[WriteTarget] = []
+    for m in _CP_MV_WORD_RE.finditer(masked):
+        verb = m.group(1)
+        tokens = _segment_tokens(command, masked, m.end())
+        undecidable = _CP_UNDECIDABLE if verb == "cp" else _MV_UNDECIDABLE
+        if any(t in undecidable for t in tokens):
+            continue
+        if verb == "cp" and any(
+            t.startswith("-") and not t.startswith("--") and ("r" in t[1:] or "R" in t[1:] or "a" in t[1:])
+            for t in tokens
+        ):
+            continue
+        positionals = _positionals(tokens)
+        if not positionals:
+            continue
+        dest = positionals[-1]
+        source = positionals[-2] if len(positionals) >= 2 else ""
+        mode = MODE_RENAME_INTO_PLACE if verb == "mv" else MODE_TRUNCATING
+        out.append(WriteTarget(_resolve_path(dest), mode, f"{verb}-dest",
+                               _resolve_path(source) if source else ""))
+    return out
+
+
+def _extract_install_mode_targets(command: str) -> List[WriteTarget]:
+    masked = _strip_quoted_regions(command)
+    out: List[WriteTarget] = []
+    for m in _INSTALL_WORD_RE.finditer(masked):
+        tokens = _segment_tokens(command, masked, m.end())
+        if any(t in _INSTALL_UNDECIDABLE for t in tokens):
+            continue
+        positionals = _filter_install_positionals(tokens)
+        if not positionals:
+            continue
+        source = positionals[-2] if len(positionals) >= 2 else ""
+        out.append(WriteTarget(_resolve_path(positionals[-1]), MODE_TRUNCATING, "install-dest",
+                               _resolve_path(source) if source else ""))
+    return out
+
+
+def _extract_truncate_mode_targets(command: str) -> List[WriteTarget]:
+    masked = _strip_quoted_regions(command)
+    out: List[WriteTarget] = []
+    for m in _TRUNCATE_WORD_RE.finditer(masked):
+        tokens = _segment_tokens(command, masked, m.end())
+        for path in _positionals(tokens, _TRUNCATE_VALUE_FLAGS):
+            out.append(WriteTarget(_resolve_path(path), MODE_TRUNCATING, "truncate-cmd"))
+    return out
+
+
+def _extract_dd_mode_targets(command: str) -> List[WriteTarget]:
+    masked = _strip_quoted_regions(command)
+    out: List[WriteTarget] = []
+    for m in _DD_WORD_RE.finditer(masked):
+        tokens = _segment_tokens(command, masked, m.end())
+        source = ""
+        for t in tokens:
+            if t.startswith("if="):
+                source = _resolve_path(t[3:])
+        for t in tokens:
+            if t.startswith("of=") and t[3:]:
+                out.append(WriteTarget(_resolve_path(t[3:]), MODE_TRUNCATING, "dd-of", source))
+    return out
+
+
+def _flag_value_targets(tokens: List[str], short: str, long_opt: str) -> List[str]:
+    """Values of `-x VALUE`, `--long VALUE`, `--long=VALUE` and `-abx VALUE`."""
+    out: List[str] = []
+    take_next = False
+    for t in tokens:
+        if take_next:
+            take_next = False
+            if t and not t.startswith("-"):
+                out.append(t)
+            continue
+        if t == short or t == long_opt:
+            take_next = True
+        elif t.startswith(long_opt + "="):
+            value = t[len(long_opt) + 1:]
+            if value:
+                out.append(value)
+        elif t.startswith("-") and not t.startswith("--") and t.endswith(short[1:]) and len(t) > 1:
+            take_next = True
+    return out
+
+
+def _extract_curl_wget_mode_targets(command: str) -> List[WriteTarget]:
+    masked = _strip_quoted_regions(command)
+    out: List[WriteTarget] = []
+    for word_re, short, long_opt, mech in (
+        (_CURL_WORD_RE, "-o", "--output", "curl-output"),
+        (_WGET_WORD_RE, "-O", "--output-document", "wget-output"),
+    ):
+        for m in word_re.finditer(masked):
+            tokens = _segment_tokens(command, masked, m.end())
+            for path in _flag_value_targets(tokens, short, long_opt):
+                out.append(WriteTarget(_resolve_path(path), MODE_TRUNCATING, mech))
+    return out
+
+
+def _extract_unlink_mode_targets(command: str) -> List[WriteTarget]:
+    masked = _strip_quoted_regions(command)
+    out: List[WriteTarget] = []
+    for m in _UNLINK_WORD_RE.finditer(masked):
+        positionals = _positionals(_segment_tokens(command, masked, m.end()))
+        if positionals:
+            out.append(WriteTarget(_resolve_path(positionals[0]), MODE_DESTROYING, "unlink-cmd"))
+    return out
+
+
+def extract_bash_write_targets_with_modes(command: str) -> List[WriteTarget]:
+    """Extract (path, write_mode, mechanism, source) for every named write target.
+
+    ADDITIVE sibling of `extract_bash_write_paths`, which is unchanged. A target
+    this function cannot name is NOT an implicit denial — the caller's contract
+    is affirmative-denial, so an unnamed target is allowed and its syntax is
+    declared uncovered.
+
+    >>> [(t.path, t.mode) for t in extract_bash_write_targets_with_modes('echo x > /tmp/a')]
+    [('/tmp/a', 'truncating')]
+
+    >>> [(t.path, t.mode) for t in extract_bash_write_targets_with_modes('echo x >> /tmp/a')]
+    [('/tmp/a', 'appending')]
+
+    >>> [(t.path, t.mode) for t in extract_bash_write_targets_with_modes('echo x >| /tmp/a')]
+    [('/tmp/a', 'truncating')]
+
+    >>> [(t.path, t.mode) for t in extract_bash_write_targets_with_modes('echo x | tee -a /tmp/a')]
+    [('/tmp/a', 'appending')]
+
+    >>> [(t.path, t.mode) for t in extract_bash_write_targets_with_modes('truncate -s 0 /tmp/a')]
+    [('/tmp/a', 'truncating')]
+
+    >>> [(t.path, t.mode) for t in extract_bash_write_targets_with_modes('dd if=/tmp/s of=/tmp/a')]
+    [('/tmp/a', 'truncating')]
+
+    >>> [(t.path, t.mode) for t in extract_bash_write_targets_with_modes('curl -sS -o /tmp/a http://h/f')]
+    [('/tmp/a', 'truncating')]
+
+    >>> [(t.path, t.mode) for t in extract_bash_write_targets_with_modes('wget -q -O /tmp/a http://h/f')]
+    [('/tmp/a', 'truncating')]
+
+    >>> [(t.path, t.mode) for t in extract_bash_write_targets_with_modes('unlink /tmp/a')]
+    [('/tmp/a', 'destroying')]
+
+    >>> [(t.path, t.mode, t.source) for t in extract_bash_write_targets_with_modes('mv /tmp/s /tmp/a')]
+    [('/tmp/a', 'rename_into_place', '/tmp/s')]
+
+    >>> [(t.path, t.mode) for t in extract_bash_write_targets_with_modes('sed -i s/a/b/ /tmp/a')]
+    [('/tmp/a', 'in_place_edit')]
+
+    Recursive copy carries no decidable single destination, so nothing is named:
+
+    >>> extract_bash_write_targets_with_modes('cp -r /tmp/s /tmp/d')
+    []
+
+    Quoted CONTENT is never mistaken for a target, and '&>' is deliberately
+    not named (declared uncovered):
+
+    >>> extract_bash_write_targets_with_modes("echo 'foo > bar'")
+    []
+    >>> extract_bash_write_targets_with_modes('echo x &> /tmp/a')
+    []
+    """
+    if not isinstance(command, str) or not command.strip():
+        return []
+    stripped = command_without_heredoc_bodies(command)
+    stripped = _strip_reason_payload(stripped)
+    found: List[WriteTarget] = []
+    found.extend(_extract_redirect_mode_targets(stripped))
+    found.extend(_extract_tee_mode_targets(stripped))
+    found.extend(_extract_cp_mv_mode_targets(stripped))
+    found.extend(_extract_install_mode_targets(stripped))
+    found.extend(_extract_truncate_mode_targets(stripped))
+    found.extend(_extract_dd_mode_targets(stripped))
+    found.extend(_extract_curl_wget_mode_targets(stripped))
+    found.extend(_extract_unlink_mode_targets(stripped))
+    for path in _extract_sed_i_targets(stripped):
+        found.append(WriteTarget(path, MODE_IN_PLACE_EDIT, "sed-in-place"))
+    seen = set()
+    deduped: List[WriteTarget] = []
+    for t in found:
+        if not t.path:
+            continue
+        key = (t.path, t.mode, t.mechanism)
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(t)
+    return deduped
+
+
 if __name__ == "__main__":
     # Self-test entrypoint: run doctests when invoked directly.
     import doctest
