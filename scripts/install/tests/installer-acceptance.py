@@ -455,6 +455,7 @@ def ac4_ac5(tmp: Path) -> dict:
     n2, prefix = tmp / "ac45" / "n2", tmp / "ac45" / "prefix"
     make_populated(n2, conflict=True)
     pre_install = snap_pair(prefix, n2)
+    pre_realpaths = realpath_map(n2)
     s0 = snap_pair(prefix, n2)
 
     rc, out, err = run([INSTALL, "--dry-run", "--profile", "core",
