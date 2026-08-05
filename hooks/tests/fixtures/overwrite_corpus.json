@@ -333,6 +333,7 @@
       "expect_on_existing": 0,
       "expect_on_new": 0,
       "coverage": "uncovered",
+      "victim_name": "payload.gz",
       "demonstration": "generic",
       "why_uncovered": "The write target is derived from the operand rather than named by it."
     },
