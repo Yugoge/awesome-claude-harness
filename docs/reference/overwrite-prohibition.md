@@ -240,6 +240,15 @@ jq . conf.json > conf.tmp && mv conf.tmp conf.json     # the mv is refused
 cp config.example.json config.json                      # once config.json exists
 ```
 
+Since iteration 1 that profile also covers the **grouped and escaped spellings**
+of the same commands — `(cd build && npm run build > build.log)` and
+`\cp config.example.json config.json` are refused exactly as their plain forms
+are. This widens the false-positive surface, and deliberately so: a boundary
+that a one-character prefix walks around is not a boundary. It changes nothing
+about what is ungated — editing, appending, in-place editing and creation stay
+completely ungated in grouped and escaped form too, and that is pinned by
+`test_f1_f2_do_not_gate_ordinary_developer_work`.
+
 Each has an ungated remedy the deny message names (`>>`, a fresh path, `Edit`,
 or `/allow Write <abs path>`), and none of them is editing, appending or
 creating — the four things the requirement fixes as ungated. But this is the
