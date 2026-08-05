@@ -192,7 +192,13 @@ def main() -> int:
             ctx.close()
         browser.close()
 
-    print(json.dumps({"results": results, "failures": failures}, indent=2))
+    print(json.dumps({"results": results, "failures": failures,
+                      "accepted_tradeoffs": tradeoffs,
+                      "required_above_fold": list(REQUIRED_ABOVE_FOLD),
+                      "demoted_elements": list(DEMOTED_ELEMENTS),
+                      "glyph_floor_px": GLYPH_FLOOR_PX}, indent=2))
+    for t in tradeoffs:
+        print(f"measure-hero-fold: TRADEOFF: {t}", file=sys.stderr)
     for f in failures:
         print(f"measure-hero-fold: FAIL: {f}", file=sys.stderr)
     return 2 if failures else 0
