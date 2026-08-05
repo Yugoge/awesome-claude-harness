@@ -1197,30 +1197,353 @@ def apply_plan(ctx: Ctx, plan: dict) -> dict:
 # --------------------------------------------------------------------------- #
 # Uninstall
 # --------------------------------------------------------------------------- #
+def recorded_identities(gens: list) -> dict:
+    """Every identity any generation decided about, MOST RECENT record governing.
+
+    Not first-sighting: a first-sighting rule deadlocks. If the installer inserted
+    an identity, the user deleted it, and a later generation genuinely re-appended
+    it, first-sighting could refuse forever to remove something the installer
+    actually installed -- a permanently unremovable payload. Most-recent is both
+    safe and live, because a repeat install over a user's still-present
+    registration records `unowned` again.
+    """
+    latest: dict[tuple, dict] = {}
+    for gen in gens:
+        for record in list(gen.get("contributions") or []) + list(gen.get("observations") or []):
+            latest[identity_key(record)] = dict(record, _generation=gen.get("generation"))
+    return latest
+
+
+def unmerge_settings(doc: dict, recorded: dict, markers: tuple,
+                     container_created: bool) -> tuple[dict, list, list]:
+    """Compute the true inverse of the additive merge. Returns (doc, results, unaccounted).
+
+    LOCATE by the full identity tuple; VERIFY with the whole-entry digest. The
+    digest is never a locator -- it is matcher-blind, so a digest-located removal
+    finds the installer's universal entry and a user's narrower copy of the same
+    command as two matches and removes neither.
+    """
+    doc = copy.deepcopy(doc)
+    results: list[dict] = []
+    removals: list[tuple[str, int, int]] = []
+    group_owned: dict[tuple[str, int], bool] = {}
+    event_owned: dict[str, bool] = {}
+
+    for key, record in recorded.items():
+        base = {"action": "un-merge", "event": key[0], "matcher": key[1],
+                "hook_type": key[2], "command": key[3],
+                "generation": record.get("_generation"),
+                "ownership_disposition": record.get("ownership_disposition"),
+                "expected_entry_digest": record.get("entry_digest")}
+        matches = locate(doc, key)
+        if record.get("ownership_disposition") == "unowned":
+            # Never was ours. Never removable, however many generations observe it.
+            results.append({**base,
+                            "result": "kept-unowned" if matches else "absent-clean",
+                            "measured_entry_digest": entry_digest(matches[0][4]) if matches else None})
+            continue
+        if not matches:
+            # Provisional. `absent` alone is NOT terminal: a user who edited the
+            # command text produces an entry the tuple cannot locate, and calling
+            # that terminal would delete a payload the edited command still names.
+            results.append({**base, "result": "absent", "measured_entry_digest": None})
+            continue
+        if len(matches) > 1:
+            results.append({**base, "result": "ambiguous-kept",
+                            "match_count": len(matches),
+                            "measured_entry_digest": entry_digest(matches[0][4])})
+            continue
+        event, group_index, entry_index, _group, entry = matches[0]
+        measured = entry_digest(entry)
+        if record.get("entry_digest") and measured != record["entry_digest"]:
+            results.append({**base, "result": "kept-user-modified",
+                            "measured_entry_digest": measured})
+            continue
+        removals.append((event, group_index, entry_index))
+        group_owned[(event, group_index)] = bool(record.get("group_created"))
+        event_owned[event] = event_owned.get(event, False) or bool(record.get("event_created"))
+        results.append({**base, "result": "removed", "measured_entry_digest": measured})
+
+    # Entry-level removal, highest index first so earlier indices stay valid.
+    # Group-level removal would delete a hook the user added INTO our group.
+    for event, group_index, entry_index in sorted(removals, reverse=True):
+        bucket = (doc.get("hooks") or {}).get(event)
+        if isinstance(bucket, list) and group_index < len(bucket):
+            entries = bucket[group_index].get("hooks")
+            if isinstance(entries, list) and entry_index < len(entries):
+                del entries[entry_index]
+
+    # A group or container the installer merely POPULATED is not its to delete
+    # once emptied, so every drop is conditioned on recorded provenance.
+    for (event, group_index) in sorted(group_owned, key=lambda t: -t[1]):
+        if not group_owned[(event, group_index)]:
+            continue
+        bucket = (doc.get("hooks") or {}).get(event)
+        if isinstance(bucket, list) and group_index < len(bucket) \
+                and isinstance(bucket[group_index], dict) \
+                and not (bucket[group_index].get("hooks") or []):
+            del bucket[group_index]
+    for event, owned in event_owned.items():
+        bucket = (doc.get("hooks") or {}).get(event)
+        if owned and isinstance(bucket, list) and not bucket:
+            del doc["hooks"][event]
+    if container_created and isinstance(doc.get("hooks"), dict) and not doc["hooks"]:
+        del doc["hooks"]
+
+    # Residual scan -- this is what enforces the no-dangling-wiring post-condition
+    # BY CONSTRUCTION rather than by assertion. The post-condition is NOT "zero
+    # references": a user's own registration legitimately survives and necessarily
+    # contains the bridge path. It is "every reference is ACCOUNTED".
+    accounted = {key for key, record in recorded.items()
+                 if record.get("ownership_disposition") == "unowned"}
+    accounted |= {(r["event"], r["matcher"], r["hook_type"], r["command"])
+                  for r in results if r["result"] in
+                  ("kept-user-modified", "ambiguous-kept", "kept-unowned")}
+    unaccounted = []
+    for event, _gi, _ei, group, entry in iter_entries(doc):
+        command = entry.get("command")
+        if not references_payload(command, markers):
+            continue
+        key = (event, norm_matcher(group.get("matcher")), entry.get("type"), command)
+        if key in accounted:
+            continue
+        unaccounted.append({"action": "residual", "event": event,
+                            "matcher": norm_matcher(group.get("matcher")),
+                            "hook_type": entry.get("type"), "command": command,
+                            "result": "kept-unrecognized-residual",
+                            "measured_present": True})
+
+    # A not-found contribution is terminal ONLY when the residual scan is clean.
+    for result in results:
+        if result["result"] == "absent":
+            result["result"] = "absent-clean" if not unaccounted else "kept-unrecognized-residual"
+    return doc, results, unaccounted
+
+
+def migrate_legacy_generation(ctx: Ctx, gens: list, legacy: list) -> dict | None:
+    """R4 -- derive a pre-R2 generation's contribution set, or return None.
+
+    Proof obligation: the live document must be reconstructible as the unmodified
+    post-image of the legacy install, by replaying the FROZEN legacy merge against
+    the recorded backup. If the reconstruction is not byte-equal to what is on
+    disk, the user has edited the document since install and the contribution set
+    cannot be derived -- the engine refuses rather than guessing. Proceeding on a
+    proof is REQUIRED, not optional: always refusing would strand every host
+    already installed under v1 with a payload it cannot remove.
+    """
+    groups = hook_groups(ctx.profile, ctx.bridge)
+    live = ctx.settings_target
+    if not live.is_file() or live.is_symlink():
+        return None
+    try:
+        live_bytes = live.read_bytes()
+    except OSError:
+        return None
+
+    earliest_backup = None
+    created_digest = None
+    for gen in gens:
+        for entry in gen.get("modified") or []:
+            if entry.get("path") == ctx.settings_rel and earliest_backup is None:
+                earliest_backup = entry
+        for entry in gen.get("created") or []:
+            if entry.get("path") == ctx.settings_rel and created_digest is None:
+                created_digest = entry.get("sha256")
+
+    if earliest_backup is not None:
+        backup = Path(earliest_backup.get("backup") or "")
+        if not backup.is_file():
+            return None
+        try:
+            base = load_json_strict(backup.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return None
+        if not isinstance(base, dict):
+            return None
+    elif created_digest is not None:
+        if hashlib.sha256(live_bytes).hexdigest() != created_digest:
+            return None
+        base = {}
+    else:
+        return None
+
+    try:
+        reconstructed, added, container_created = legacy_v1_merge(base, groups)
+    except ValueError:
+        return None
+    if settings_bytes(reconstructed) != live_bytes:
+        return None  # not the unmodified legacy post-image -- refuse, never guess
+
+    observations = resolve_ownership(
+        merge_settings(base, groups, ctx.markers)[2], {"generations": []}, ctx)
+    return {"contributions": added, "observations": observations,
+            "container_created": container_created,
+            "settings_disposition": "created" if earliest_backup is None else "modified",
+            "settings_sha256_as_installed": hashlib.sha256(live_bytes).hexdigest(),
+            "migrated_from": [g.get("generation") for g in legacy]}
+
+
+def removal_plan_preview(ctx: Ctx) -> list[dict]:
+    """The registrations the engine believes it would remove, for operator review."""
+    preview = []
+    live = ctx.settings_target
+    if not live.is_file() or live.is_symlink():
+        return preview
+    try:
+        doc = load_json_strict(live.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return preview
+    if not isinstance(doc, dict):
+        return preview
+    for event, _gi, _ei, group, entry in iter_entries(doc):
+        if references_payload(entry.get("command"), ctx.markers):
+            preview.append({"event": event, "matcher": norm_matcher(group.get("matcher")),
+                            "hook_type": entry.get("type"), "command": entry.get("command")})
+    return preview
+
+
 def uninstall(ctx: Ctx, keep_payload: bool = False) -> dict:
     state = ctx.load_state()
     gens = state.get("generations", [])
     if not gens:
-        return {"status": "nothing-to-do", "items": []}
+        return {"status": "nothing-to-do", "items": [], "exit_code": EXIT_OK}
+
+    # ---- R1: home binding, BEFORE the first mutation ------------------------
+    mismatches = []
+    for gen in gens:
+        for problem in home_mismatches(gen, ctx):
+            mismatches.append(f"  {gen.get('generation', '?')}: {problem}")
+    if mismatches:
+        recorded_home = gens[-1].get("config_home_lexical", gens[-1].get("config_home"))
+        raise Refusal(
+            "this prefix was installed against a DIFFERENT config home; refusing to "
+            "touch the requested one.\n"
+            f"  recorded config home  : {recorded_home}\n"
+            f"  requested config home : {ctx.config_home}\n"
+            + "\n".join(mismatches) + "\n"
+            f"  The state file, the payload and every backup are retained.\n"
+            f"  Remedy: re-run with --config-dir {recorded_home}\n"
+            "  Nothing was written.")
+
+    # A symlinked settings path would put the write outside the declared
+    # footprint. The forward path refuses it; so must the inverse.
+    if ctx.settings_target.is_symlink():
+        raise Refusal(
+            f"{ctx.settings_target} is a symlink; un-merging through it would modify a "
+            "file outside the declared footprint. Nothing was written.")
+
+    # ---- R4: pre-R2 records are refused, or provably migrated ---------------
+    legacy = [g for g in gens if "contributions" not in g]
+    migration = None
+    if legacy:
+        migration = migrate_legacy_generation(ctx, gens, legacy)
+        if migration is None:
+            backups = [m.get("backup") for g in gens for m in (g.get("modified") or [])]
+            preview = removal_plan_preview(ctx)
+            raise Refusal(
+                "this install was recorded under a schema that predates the "
+                "contribution record, and the live settings document cannot be proven "
+                "to be its unmodified post-image.\n"
+                "  Refusing to fall back to a whole-file restore: that would delete "
+                "every change made since the install.\n"
+                f"  state file : {ctx.state_path}  (retained)\n"
+                f"  payload    : {ctx.prefix}  (retained)\n"
+                + "".join(f"  backup     : {b}  (retained -- manual-recovery artifact)\n"
+                          for b in backups if b)
+                + "  Reviewable removal plan -- the registrations the engine believes it "
+                  "would remove:\n"
+                + ("".join(f"    - {p['event']} matcher={p['matcher']!r} {p['command']}\n"
+                           for p in preview) or "    (none located)\n")
+                + "  Recovery: inspect the backup above, reconcile it with the live "
+                  "document by hand, then remove the payload directory.\n"
+                "  Nothing was written.",
+                plan=preview)
+        gens = [dict(g, **migration) if "contributions" not in g else g for g in gens]
 
     items: list[dict] = []
+    recorded = recorded_identities(gens)
+    container_created = any(g.get("container_created") for g in gens)
 
-    # Restore from the EARLIEST backup recorded for each path: a repeat install
-    # must not make the user's true original unrecoverable.
-    original: dict[str, dict] = {}
-    for g in gens:
-        for m in g.get("modified", []):
-            original.setdefault(m["path"], m)
-    for rel, m in original.items():
-        target = ctx.config_home / rel
-        backup = Path(m["backup"])
-        result = "missing-backup"
-        if backup.is_file():
-            atomic_write(target, backup.read_bytes())
-            result = "restored"
-        items.append({"action": "restore", "path": str(target), "result": result,
-                      "expected_sha256": m.get("pre_install_sha256"),
-                      "measured_sha256": sha256_file(target) if target.is_file() else None})
+    # ---- R3/R6: contribution-aware un-merge of the CURRENT document ---------
+    settings_target = ctx.settings_target
+    was_created = any(c.get("path") == ctx.settings_rel
+                      for g in gens for c in (g.get("created") or []))
+    original_backup = next(
+        (m for g in gens for m in (g.get("modified") or [])
+         if m.get("path") == ctx.settings_rel), None)
+    as_installed = next((g.get("settings_sha256_as_installed") for g in reversed(gens)
+                         if g.get("settings_sha256_as_installed")), None)
+
+    unaccounted: list[dict] = []
+    if settings_target.is_file():
+        try:
+            live_bytes = settings_target.read_bytes()
+            doc = load_json_strict(settings_target.read_text(encoding="utf-8"))
+        except DuplicateKeyError as exc:
+            raise Refusal(f"{settings_target}: {exc}\n  Nothing was written.")
+        except (OSError, ValueError) as exc:
+            raise Refusal(f"{settings_target}: unreadable/unparseable ({exc}); "
+                          "refusing to rewrite it. Nothing was written.")
+        if not isinstance(doc, dict):
+            raise Refusal(f"{settings_target}: top level is not an object; refusing to "
+                          "rewrite it. Nothing was written.")
+        merged_out, results, unaccounted = unmerge_settings(
+            doc, recorded, ctx.markers, container_created)
+        items.extend(results)
+        items.extend(unaccounted)
+
+        removable = all(r["result"] not in RETAINED_RESULTS for r in results)
+        backup_path = Path(original_backup["backup"]) if original_backup and \
+            original_backup.get("backup") else None
+        # Provable-safe fast path: the live bytes still equal the recorded
+        # as-installed digest, so the user has not touched the file since install
+        # and restoring the backup byte-for-byte is provably lossless. This is the
+        # ONLY circumstance in which a whole-file restore is permitted, and it is
+        # gated on the home binding above having passed.
+        untouched = bool(as_installed) and hashlib.sha256(live_bytes).hexdigest() == as_installed
+        if was_created and not original_backup:
+            new_bytes = settings_bytes(merged_out)
+            if merged_out == {} and removable and not unaccounted:
+                settings_target.unlink()
+                action_result = "deleted"
+                new_bytes = None
+            else:
+                atomic_write(settings_target, new_bytes)
+                action_result = "un-merged"
+        elif untouched and removable and backup_path and backup_path.is_file():
+            new_bytes = backup_path.read_bytes()
+            atomic_write(settings_target, new_bytes)
+            action_result = "restored-provably-safe"
+        else:
+            new_bytes = settings_bytes(merged_out)
+            atomic_write(settings_target, new_bytes)
+            action_result = "un-merged"
+        items.append({
+            "action": "settings", "path": str(settings_target), "result": action_result,
+            "expected_sha256": hashlib.sha256(new_bytes).hexdigest() if new_bytes else None,
+            "measured_sha256": sha256_file(settings_target)
+            if settings_target.is_file() else None,
+            "measured_present": settings_target.exists(),
+            "backup_retained": str(backup_path) if backup_path and backup_path.is_file()
+            else None})
+        # Presence is re-measured from what is now on disk, never from intent.
+        if settings_target.is_file():
+            final_doc = json.loads(settings_target.read_text(encoding="utf-8"))
+        else:
+            final_doc = {}
+        for item in items:
+            if item["action"] in ("un-merge", "residual"):
+                item["measured_present"] = bool(locate(
+                    final_doc, (item["event"], item["matcher"],
+                                item["hook_type"], item["command"])))
+    else:
+        for key, record in recorded.items():
+            items.append({"action": "un-merge", "event": key[0], "matcher": key[1],
+                          "hook_type": key[2], "command": key[3],
+                          "ownership_disposition": record.get("ownership_disposition"),
+                          "expected_entry_digest": record.get("entry_digest"),
+                          "measured_entry_digest": None,
+                          "result": "absent-clean", "measured_present": False})
 
     # Remove created entries newest-first: files and links by exact path (never
     # followed), directories only when they are then EMPTY.
@@ -1231,6 +1554,8 @@ def uninstall(ctx: Ctx, keep_payload: bool = False) -> dict:
             if key in seen:
                 continue
             seen.add(key)
+            if c["kind"] == "file" and c["path"] == ctx.settings_rel:
+                continue  # handled by the un-merge above -- never deleted wholesale
             target = ctx.config_home / c["path"]
             if c["kind"] == "link":
                 if not target.is_symlink():
