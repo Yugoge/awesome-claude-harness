@@ -221,9 +221,46 @@ for name, comp in declared.items():
         bad += 1
 if bad:
     print(f"FAIL: {bad} SBOM file component(s) have a missing or mismatched sha256"); problems += 1
-meta_hashes = [h.get("content") for h in (bom.get("metadata", {}).get("component", {}).get("hashes") or [])]
-if meta_hashes and archive_sha not in meta_hashes:
+# --- the archive-digest binding is MANDATORY --------------------------------
+# It used to read `if meta_hashes and archive_sha not in meta_hashes:`. When
+# metadata.component.hashes was absent the list was empty, the conjunction
+# short-circuited, and the binding was skipped in silence — a digest-free SBOM
+# verified clean. Absence is not evidence of correctness: an SBOM that does not
+# bind itself to the archive it describes cannot attest to those bytes at all.
+meta_hashes = [h.get("content") for h
+               in ((bom.get("metadata") or {}).get("component") or {}).get("hashes") or []
+               if h.get("alg") == "SHA-256"]
+if not meta_hashes:
+    print("FAIL: SBOM declares no metadata.component SHA-256 hash — the archive-digest "
+          "binding is mandatory, and an absent digest cannot bind the SBOM to these bytes")
+    problems += 1
+elif archive_sha not in meta_hashes:
     print("FAIL: SBOM metadata digest does not match the downloaded archive digest"); problems += 1
+
+# --- library components are bound to the lockfiles INSIDE the archive --------
+# Without this, a removed or version-altered library component is invisible: only
+# `file` components were ever compared against anything.
+LOCK_RE = re.compile(r"^([A-Za-z0-9._-]+)==([^\s\\]+)")
+expected_libs, lockdir = set(), os.path.join(root, "requirements")
+if os.path.isdir(lockdir):
+    for name in sorted(os.listdir(lockdir)):
+        if not name.endswith(".txt"):
+            continue
+        with open(os.path.join(lockdir, name), encoding="utf8") as fh:
+            for line in fh:
+                m = LOCK_RE.match(line.strip())
+                if m:
+                    expected_libs.add((m.group(1).lower(), m.group(2)))
+declared_libs = {(c.get("name"), c.get("version")) for c in components
+                 if c.get("type") == "library"}
+missing_libs = expected_libs - declared_libs
+extra_libs = declared_libs - expected_libs
+if missing_libs:
+    print(f"FAIL: SBOM omits {len(missing_libs)} pinned librar(ies) present in the archive's "
+          f"lockfiles, e.g. {sorted(missing_libs)[:5]}"); problems += 1
+if extra_libs:
+    print(f"FAIL: SBOM declares {len(extra_libs)} librar(ies) at a version the archive's "
+          f"lockfiles do not pin, e.g. {sorted(extra_libs)[:5]}"); problems += 1
 if not problems:
     print(f"  SBOM describes {len(declared)} archive file(s) + "
           f"{sum(1 for c in components if c.get('type') == 'library')} pinned librar(ies), all digests match")
