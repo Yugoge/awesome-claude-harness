@@ -1324,6 +1324,64 @@ def ac13(tmp: Path) -> None:
               and any(i.get("result") == "kept-unrecognized-residual"
                       for i in json.loads(out4)["items"]), f"rc={rc4}")
 
+    # A repeat apply must not LAUNDER a user's edit into an owned digest. The
+    # second apply OBSERVES the identity already present and records the digest of
+    # what is there NOW -- the edited entry. If that overwrote the integrity
+    # baseline, uninstall would verify the edit clean and DELETE it.
+    home7, prefix7, _rc, _err = fresh("laundered")
+    if require_installed(home7, prefix7, "AC13(f)"):
+        doc7 = json.loads((home7 / "settings.json").read_text())
+        universal7 = installer_commands(home7)[0]
+        for group in doc7["hooks"]["PreToolUse"]:
+            for entry in group["hooks"]:
+                if entry["command"] == universal7:
+                    entry["timeout"] = 60
+        (home7 / "settings.json").write_text(json.dumps(doc7, indent=2) + "\n")
+        engine_run("apply", "--prefix", prefix7, "--config-dir", home7)   # repeat apply
+        rc7, out7, _e = engine_run("uninstall", "--prefix", prefix7, "--config-dir", home7,
+                                   "--json")
+        after7 = json.loads((home7 / "settings.json").read_text())
+        survived = [c for c in hook_commands(after7) if c[3] == universal7]
+        check("AC13(f)", "a user edit made BEFORE a repeat apply is not laundered into "
+                         "an owned digest: the edited entry survives uninstall",
+              bool(survived) and (home7 / "settings.json").is_file(),
+              json.dumps(after7.get("hooks"))[:250])
+        check("AC13(f)", "it is reported kept-user-modified and the run exits 3",
+              rc7 == 3 and any(i.get("result") == "kept-user-modified"
+                               for i in json.loads(out7)["items"]), f"rc={rc7}")
+        check("AC13(f)", "and the whole settings document was NOT deleted",
+              after7.get("userNote") == NON_ASCII_KEY_VALUE, json.dumps(after7)[:200])
+
+    # A partial run must retain the BRIDGE too. Retaining the payload while
+    # unlinking the bridge breaks exactly the wiring the operator is being asked
+    # to reconcile by hand.
+    check("AC13(f)", "a partial un-merge retains the config-home bridge as well as the "
+                     "payload, leaving a coherent state a re-run can finish",
+          (home7 / "harness").is_symlink() if (prefix7 / "harness").is_dir() else True,
+          f"bridge={(home7 / 'harness').is_symlink()} payload={(prefix7 / 'harness').is_dir()}")
+
+    # A user's own key added to the installer's GROUP is group-level data the
+    # installer did not put there, so the emptied group must be retained.
+    home8, prefix8, _rc, _err = fresh("groupkey")
+    if require_installed(home8, prefix8, "AC13(g)"):
+        doc8 = json.loads((home8 / "settings.json").read_text())
+        universal8 = installer_commands(home8)[0]
+        for group in doc8["hooks"]["PreToolUse"]:
+            if any(h["command"] == universal8 for h in group["hooks"]):
+                group["userMetadata"] = {"note": "mine"}
+        (home8 / "settings.json").write_text(json.dumps(doc8, indent=2) + "\n")
+        rc8, _o, _e = engine_run("uninstall", "--prefix", prefix8, "--config-dir", home8,
+                                 "--json")
+        after8 = json.loads((home8 / "settings.json").read_text())
+        kept_groups = [g for g in (after8.get("hooks") or {}).get("PreToolUse", [])
+                       if isinstance(g, dict) and "userMetadata" in g]
+        check("AC13(g)", "a user key added to the installer's own group survives the "
+                         "group drop", len(kept_groups) == 1
+              and kept_groups[0]["userMetadata"] == {"note": "mine"},
+              json.dumps(after8.get("hooks"))[:250])
+        check("AC13(g)", "and the installer's entry is still removed from it",
+              not [c for c in hook_commands(after8) if c[3] == universal8], f"rc={rc8}")
+
     # AC-INST-22 -- duplicate-key document
     home5, prefix5 = base / "dupkey" / "cfg", base / "dupkey" / "prefix"
     home5.mkdir(parents=True)
