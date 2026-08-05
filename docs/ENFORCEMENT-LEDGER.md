@@ -316,11 +316,21 @@ widening or narrowing changes the size of the residual class described in `docs/
 RISK-3 even when every probed form still behaves exactly as recorded, so drift must fail loudly
 rather than silently outdate the published table.
 
+Each token set below is published inside an **anchored region**, and `--claims` matches the
+recorded tokens against that region only. Matching them anywhere in the document would be
+vacuous: `>` opens every blockquote line and `<` opens every HTML comment, so two of the seven
+redirection operators were previously satisfied by unrelated prose and could never be reported
+missing.
+
+<!-- published-tokens:wrapper:begin -->
 - **`_WRAPPERS` @4c33f2f5** (`hooks/lib/git_command_classifier.py:105-108 @4c33f2f5`), 12 tokens:
   `sudo`, `doas`, `env`, `xargs`, `time`, `nohup`, `setsid`, `stdbuf`, `ionice`, `command`,
   `builtin`, `nice`.
+<!-- published-tokens:wrapper:end -->
+<!-- published-tokens:leading-redirection:begin -->
 - **Leading-redirection operators** covered by the published matrix, 7 tokens:
   `2>/dev/null`, `>`, `>>`, `<`, `2>&1`, `&>`, `1>`.
+<!-- published-tokens:leading-redirection:end -->
 - **Gate-architecture census @4c33f2f5**: **1** classifier-exclusive fallback guard
   (architecture A — the only shape the empty-parse suppression affects), **2** unconditional
   `GIT_CMD_RE` branches (architecture B), and **8** classifier-only path-qualified augmentation
