@@ -457,9 +457,19 @@ def main() -> int:
     if decision == "permitted_by_grant":
         sys.stderr.write(
             f"[overwrite-guard] permitted_by_grant: "
-            f"{', '.join(off['resolved_target'] for off in grants)} — recorded in {sink}\n"
+            f"{', '.join(off['resolved_target'] for off in grants)} — grant CONSUMED "
+            f"({', '.join(consumed)}), recorded in {sink}\n"
         )
         return 0
+
+    if decision == "refused_grant_not_consumed":
+        sys.stderr.write(
+            f"BLOCKED: {GUARD_RELPATH} matched a grant it could not consume, so the "
+            "replacement could not be made single-use and is DENIED.\n"
+            "  Either another call consumed the same grant first, or the grant file "
+            "could not be removed. Re-issue the grant to retry.\n"
+        )
+        return 2
 
     sys.stderr.write(_deny_message(ungranted, sink))
     return 2

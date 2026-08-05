@@ -1,7 +1,7 @@
 # hooks
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-08-05T15:13:08Z*
+*Last updated: 2026-08-05T15:13:16Z*
 **Total entries**: 178
 **Convention**: kebab
 
