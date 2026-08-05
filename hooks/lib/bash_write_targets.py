@@ -82,11 +82,11 @@ a subshell no longer reports a write target that was never named:
 >>> extract_bash_write_paths('(ss -ltnp 2>/dev/null || netstat -ltnp) | head')
 ['/dev/null']
 
->>> extract_bash_write_paths('(cd /d && echo x > /root/a.txt)')
-['/root/a.txt']
+>>> extract_bash_write_paths('(cd /d && echo x > /tmp/a.txt)')
+['/tmp/a.txt']
 
->>> extract_bash_write_paths('\\\\cp src /root/a.txt')
-['/root/a.txt']
+>>> extract_bash_write_paths('\\\\cp src /tmp/a.txt')
+['/tmp/a.txt']
 """
 
 from __future__ import annotations
