@@ -213,11 +213,12 @@ def test_ac01_mandated_verbs_all_have_a_covered_row():
     }
 
 
-@pytest.mark.parametrize("row", COVERED, ids=[r["route_id"] for r in COVERED])
+@pytest.mark.parametrize("row", COVERED_VERB_ROUTES,
+                         ids=[r["route_id"] for r in COVERED_VERB_ROUTES])
 def test_ac01_covered_route_denied_on_existing_and_allowed_on_new(row, tmp_path, http_url):
     work = tmp_path / row["route_id"]
     work.mkdir(parents=True)
-    target = work / "victim.txt"
+    target = work / (row.get("victim_name") or "victim.txt")
     original = original_bytes()
     target.write_text(original, encoding="utf-8")
     source = work / "source.txt"
