@@ -786,42 +786,104 @@ def build_plan(ctx: Ctx) -> dict:
             "settings_plan": settings_plan}
 
 
-def plan_settings(ctx: Ctx, target: Path, conflicts: list) -> dict | None:
+def resolve_ownership(observations: list, state: dict, ctx: Ctx) -> list:
+    """Assign `claimed` or `unowned` to every observation.
+
+    `claimed` may ONLY be derived from a prior COMMITTED generation of THIS install
+    lineage that recorded the identity in its own `contributions[]`. It must never
+    be inferred from equality against the profile's declared registrations: a user
+    who had already registered the byte-identical command under the profile's own
+    matcher would otherwise be recorded as installer-owned and DELETED on
+    uninstall -- a new destructive path this design exists to prevent.
+    """
+    owned: set[tuple] = set()
+    for gen in state.get("generations", []):
+        if gen.get("record_status") != "committed":
+            continue
+        if home_mismatches(gen, ctx):
+            continue
+        for contribution in gen.get("contributions") or []:
+            owned.add(identity_key(contribution))
+    for observation in observations:
+        observation["ownership_disposition"] = (
+            "claimed" if identity_key(observation) in owned else "unowned")
+    return observations
+
+
+def read_settings_document(target: Path) -> dict:
+    """Parse a live settings document, refusing what cannot survive a round-trip."""
+    return load_json_strict(target.read_text(encoding="utf-8"))
+
+
+def plan_settings(ctx: Ctx, target: Path, conflicts: list, state: dict) -> dict | None:
     groups = hook_groups(ctx.profile, ctx.bridge)
+    rel = ctx.settings_rel
     if target.is_symlink():
-        conflicts.append({"tree": "config_home", "path": "settings.json",
+        conflicts.append({"tree": "config_home", "path": rel,
                           "change_kind": "conflict",
                           "detail": "settings.json is a symlink; writing through it would "
                                     "modify a file outside the declared footprint. The "
                                     "user's version is retained and left untouched."})
         return None
     if not target.exists():
-        doc, added = merge_settings({}, groups)
-        return {"change_kind": "create", "content": settings_bytes(doc),
-                "added": added, "detail": f"create with {len(added)} hook registration(s)"}
+        doc, contributions, observations, container_created = merge_settings(
+            {}, groups, ctx.markers)
+        content = settings_bytes(doc)
+        return {"change_kind": "create", "content": content,
+                "contributions": contributions,
+                "observations": resolve_ownership(observations, state, ctx),
+                "container_created": container_created,
+                "pre_image_sha256": None,
+                "as_installed_sha256": hashlib.sha256(content).hexdigest(),
+                "disposition": "created",
+                "detail": f"create with {len(contributions)} hook registration(s)"}
     try:
-        existing = json.loads(target.read_text(encoding="utf-8"))
+        raw = target.read_bytes()
+        existing = read_settings_document(target)
+    except DuplicateKeyError as exc:
+        # R15 -- a refusal, not a conflict: proceeding would silently drop the
+        # user's earlier occurrence of the key.
+        raise Refusal(
+            f"{target}: {exc}\n"
+            "  Resolve the duplicate key by hand, then re-run. Nothing was written.")
     except (OSError, json.JSONDecodeError) as exc:
-        conflicts.append({"tree": "config_home", "path": "settings.json",
+        conflicts.append({"tree": "config_home", "path": rel,
                           "change_kind": "conflict",
                           "detail": f"unreadable/unparseable ({exc}); left untouched"})
         return None
     if not isinstance(existing, dict):
-        conflicts.append({"tree": "config_home", "path": "settings.json",
+        conflicts.append({"tree": "config_home", "path": rel,
                           "change_kind": "conflict",
                           "detail": "top level is not an object; left untouched"})
         return None
     try:
-        merged, added = merge_settings(existing, groups)
+        merged, contributions, observations, container_created = merge_settings(
+            existing, groups, ctx.markers)
     except ValueError as exc:
-        conflicts.append({"tree": "config_home", "path": "settings.json",
+        conflicts.append({"tree": "config_home", "path": rel,
                           "change_kind": "conflict", "detail": f"{exc}; left untouched"})
         return None
-    if not added:
-        return {"change_kind": None, "content": None, "added": [],
+    observations = resolve_ownership(observations, state, ctx)
+    pre_image = hashlib.sha256(raw).hexdigest()
+    if not contributions:
+        # Nothing to append -- but the observations still matter: they are what
+        # lets the un-merge ACCOUNT a user's own payload-referencing entry
+        # instead of reporting it as an unrecognized residual.
+        return {"change_kind": None, "content": None,
+                "contributions": [], "observations": observations,
+                "container_created": False,
+                "pre_image_sha256": pre_image,
+                "as_installed_sha256": pre_image,
+                "disposition": "unchanged",
                 "detail": "already registered; no change"}
-    return {"change_kind": "modify", "content": settings_bytes(merged), "added": added,
-            "detail": f"append {len(added)} hook registration(s); "
+    content = settings_bytes(merged)
+    return {"change_kind": "modify", "content": content,
+            "contributions": contributions, "observations": observations,
+            "container_created": container_created,
+            "pre_image_sha256": pre_image,
+            "as_installed_sha256": hashlib.sha256(content).hexdigest(),
+            "disposition": "modified",
+            "detail": f"append {len(contributions)} hook registration(s); "
                       f"{len(existing)} pre-existing top-level key(s) preserved"}
 
 
