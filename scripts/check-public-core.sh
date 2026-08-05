@@ -255,11 +255,14 @@ def classify(path, lineno, content, lang, dspans, hspans, cspans, sspans, matche
         derived.add("env_parameterized_default")
     if is_scanner:
         derived.add("scanner_pattern_definition")
+    if is_sysdir:
+        derived.add("system_path_constant_enumeration")
     operational = False
     if not is_scanner:
         if is_unit:
             operational = True
-        elif lang in CODE_EXTS and not (is_comment or is_docstring or is_heredoc or is_env or is_test):
+        elif lang in CODE_EXTS and not (is_comment or is_docstring or is_heredoc
+                                        or is_env or is_test or is_sysdir):
             operational = True
     return derived, operational
 
