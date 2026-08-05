@@ -193,6 +193,39 @@ work exists to end.
 | `grant-self-minting` | The escape hatch's own file is creatable by an ordinary allowed write. Closing it would require gating creation of a path, which the binding narrowing forbids. See the correction in section 4. |
 | `multi-source-copy` | `cp a b dir/` re-resolves only the LAST source, so `dir/basename(a)` is replaced undetected. |
 
+### Routes reclassified OUT of this list
+
+A route leaves this list only by being closed and demonstrated closed. It is
+recorded here rather than deleted, because an uncovered set that can shrink
+without trace is prose again.
+
+| route_id | Was declared | What changed |
+|---|---|---|
+| `concurrent-grant-reuse` | "Consumption is PostToolUse, so two calls issued before the first terminal result both observe one grant. Single-use holds for **serial** use only." | Both halves were wrong: the grant was never consumed at all, so single-use did not hold even serially. Consumption now happens in this guard at authorization time and the atomic `unlink` is the mutual exclusion, so the concurrent case closed with the serial one. Now `coverage: "covered"` in the corpus, carrying `reclassified_from`, its reasoning, and its residual. |
+
+### Syntaxes that were silently uncovered, and are now covered
+
+These were in neither this list nor the corpus. They are recorded because an
+*unstated* gap is the exact defect this document exists to end — a gap that is
+declared can be traded against, and a gap that is not cannot.
+
+| Syntax | What it did | Status |
+|---|---|---|
+| `\cp SRC DEST` (leading backslash) | Every verb pattern required a `[\s;\|&]` boundary before the command word, and a backslash is not in that class. One byte defeated **nine of the eleven** covered verbs, with the path fully visible in the command text. `\cp` is the routine alias-bypass idiom. | Closed. Derived against **every** covered verb by `test_f1_backslash_prefix_defeats_no_covered_verb`, so a verb added later cannot reacquire it. |
+| `(cmd > victim)` (grouping subshell) | Worse than a miss: `)` was absorbed into the path token, so the guard resolved a path that does not exist, classified a real replacement as **creation**, and returned an affirmative *allow*. `(cd dir && cmd > file)` is a common agent idiom. | Closed. `(` now opens a command word and `)` terminates an unquoted token. Derived against every covered route. |
+| `curl -o<PATH>`, `wget -O<PATH>` (attached flag) | `getopt` accepts the attached form exactly as the spaced form; only the spaced form was read. Same shape as Incident 1. | Closed. |
+
+The token-termination fix lives in the **shared** lexer, so it also corrects a
+false **positive** in `hooks/pretool-tool-policy.py`, which refused a read-only
+`(… 2>/dev/null) | head` by inventing a write target named `/dev/null)`. One
+absorbed byte failed *open* here and *closed* there. All four consumers of that
+module were re-verified: 26 command shapes byte-identical, and the only changes
+are the grouped and escaped forms now naming their true path.
+
+A quoted filename that genuinely contains a parenthesis (`> "report (1).txt"`)
+is read whole and still judged — the quoted branch of the token reader is
+deliberately untouched, and the corpus row `quoted-paren-filename` pins it.
+
 ### Known false-positive profile — read this before registering
 
 The guard refuses `cmd > logfile` when `logfile` already exists, because that
