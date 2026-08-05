@@ -224,7 +224,7 @@ def test_ac01_covered_route_denied_on_existing_and_allowed_on_new(row, tmp_path,
     assert result.returncode == row["expect_on_existing"], (
         f"{row['route_id']}: expected refusal, got {result.returncode}\n{result.stderr}")
     assert target.read_text(encoding="utf-8") == original, "denied route must not have run"
-    assert str(target) in result.stderr
+    assert rp(target) in result.stderr
 
     # Same verb, a path that does not exist: creation is never denied.
     created = work / "created.txt"
@@ -382,7 +382,7 @@ def test_ac04_move_into_directory(template, tmp_path):
     source.write_text(NEW, encoding="utf-8")
     result = run_guard(command, cwd=work)
     assert result.returncode == 2
-    assert str(destination / "report.txt") in result.stderr
+    assert rp(destination / "report.txt") in result.stderr
     assert (destination / "report.txt").read_text(encoding="utf-8") == original
 
 
@@ -405,7 +405,7 @@ def test_ac05_symlink_and_relative_and_variable_identity(tmp_path):
     # Symlink to an existing regular file: refused on the RESOLVED identity.
     result = run_guard(f"echo {NEW} > {live_link}", cwd=work)
     assert result.returncode == 2
-    assert str(real) in result.stderr, "verdict must name the resolved identity"
+    assert rp(real) in result.stderr, "verdict must name the resolved identity"
     assert real.read_text(encoding="utf-8") == original
 
     # Dangling symlink: nothing exists, so this is creation.
@@ -547,7 +547,7 @@ def test_ac07_both_verdicts_are_recorded_and_audit_failure_denies(tmp_path):
         for field in REQUIRED_AUDIT_FIELDS:
             assert field in row, f"audit row missing {field}"
         assert row["decision"] == "refused"
-        assert str(target) in row["resolved_target"]
+        assert rp(target) in row["resolved_target"]
         assert "redirect-truncate" in row["mechanism"]
         assert row["session_id"] == session_id and row["task_id"] == task_id
 
@@ -645,9 +645,10 @@ def test_ac09_required_uncovered_classes_are_all_present():
 
 def test_ac09_documentation_lists_the_same_uncovered_route_ids():
     text = DOCS.read_text(encoding="utf-8")
-    marker = "## Uncovered Routes"
-    assert marker in text
-    section = text.split(marker, 1)[1]
+    headings = [line for line in text.splitlines()
+                if line.startswith("## ") and line.rstrip().endswith("Uncovered Routes")]
+    assert len(headings) == 1, f"expected exactly one Uncovered Routes section, got {headings}"
+    section = text.split(headings[0], 1)[1]
     for row in UNCOVERED:
         assert f"`{row['route_id']}`" in section, f"{row['route_id']} missing from documentation"
 
