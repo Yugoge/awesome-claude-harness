@@ -182,6 +182,9 @@ work exists to end.
 | `wrapper-script` | The hook sees `bash script.sh` and cannot see the redirect inside. |
 | `compiled-binary` | Command-text analysis cannot reach inside a process. Unbounded class. |
 | `variable-indirection` | The lexer yields the literal `$T`. Denying it would deny creation. |
+| `quoted-command-word` | `'cp' src dest` — the pass that blanks quoted spans (which is what makes `echo 'foo > bar'` safe) blanks the verb too. Telling a quoted *command word* from quoted *content* needs the position-aware parsing that pass exists to avoid, and getting it wrong fires on ordinary work. |
+| `absolute-path-verb` | `/bin/cp src dest` — `/` is not a word boundary. Accepting any token *ending* in the verb name would name a target from `./tools/backup-cp`, which is the cries-wolf direction. `command cp` and `env cp` **are** covered. |
+| `command-substituted-verb` | `$(which cp) src dest` — the verb is not in the command text at all. Resolving it means executing the substitution at hook time, which a PreToolUse hook must never do. |
 | `check-use-race` | The decision is pre-execution; a path absent at check time can exist by open time. No pre-execution check closes this. |
 | `semantic-lexer-corruption` | A lexer that imports cleanly but returns incomplete targets degrades this guard **silently**, without tripping tool-policy's fail-closed bootstrap. |
 | `redirect-ampersand` | `&>` shares its prefix with fd duplication (`2>&1`), which must never be treated as a write. The verb set was fixed by requirement, so this is declared rather than silently absent. |
