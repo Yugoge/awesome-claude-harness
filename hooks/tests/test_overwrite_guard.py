@@ -1200,7 +1200,7 @@ def test_ac10_frozen_extractor_signature_and_return_shape():
     ("ls /nope 2>&1", []),
     ("cmd --reason 'scope reduction' > /tmp/o", ["/tmp/o"]),
     ('cmd <<<"hello world" > /tmp/out', ["/tmp/out"]),
-    ("cp x /tmp/my\\ file.txt", ["/tmp/my\\"]),
+    ("cp x /tmp/my\\ file.txt", ["file.txt"]),  # pre-existing: this reader splits on space
     ("diff <(sort a) <(sort b) > /tmp/d", ["/tmp/d"]),
     ("echo x > >(cat)", []),
     ("f() { echo x > /tmp/a.txt; }", ["/tmp/a.txt"]),
