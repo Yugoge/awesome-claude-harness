@@ -342,6 +342,7 @@ rather than papered over.
 
 ---
 
-*Regenerate the registered-hook rows from `settings.json`; do not hand-edit them. Verified by
+*Only `event_class`, `matcher` and `hook` are derived from `settings.json`; the other seven
+registered-hook columns are authored in this ledger. Verified by
 `scripts/check-enforcement-evidence.py --ledger` and `--claims`, both wired into
 `scripts/verify-claims.sh` and thus into the required `baseline` CI job.*
