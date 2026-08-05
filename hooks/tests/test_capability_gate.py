@@ -706,11 +706,65 @@ def test_skill_named_like_a_hatch_is_not_exempt(home: Path, statedir: Path, name
     assert rec["exemption"] is None
 
 
+def _entrypoint_text(entrypoint: str) -> str:
+    """An entrypoint is a file or a directory of files; return all of its text."""
+    p = REPO / entrypoint
+    if p.is_file():
+        return p.read_text(encoding="utf-8", errors="replace")
+    if p.is_dir():
+        return "\n".join(f.read_text(encoding="utf-8", errors="replace")
+                         for f in sorted(p.rglob("*")) if f.is_file())
+    return ""
+
+
+def test_independent_enforcement_claims_match_reality(home: Path):
+    """AC-CAP-07: `independent_enforcement` is a COVERAGE annotation, and an
+    untrue one is worse than an absent one — it is the field a reader consults to
+    ask "is this route enforced anywhere the hook cannot be silently no-opped?".
+
+    Every route claimed true while ZERO entrypoints invoked the per-route
+    preflight. This asserts the claim against reality in whichever direction the
+    tree moves: flipping a route to true without wiring its entrypoint fails
+    here, and so does wiring an entrypoint while leaving the claim false.
+    """
+    manifest, err = cs.load_manifest(home)
+    assert err is None
+    preflight = Path(manifest["independent_enforcement_callsite"].split()[0]).name
+    assert preflight, "the manifest must name its independent callsite"
+    for entry in manifest["routes"]:
+        invokes = preflight in _entrypoint_text(entry["entrypoint"])
+        assert bool(entry.get("independent_enforcement", False)) == invokes, (
+            f"{entry['route']}: claims independent_enforcement="
+            f"{entry.get('independent_enforcement')} but entrypoint "
+            f"{entry['entrypoint']!r} {'does' if invokes else 'does not'} invoke {preflight}"
+        )
+
+
 @pytest.mark.parametrize("tool", ["Agent", "Task"])
 def test_dispatch_routes_are_outside_the_protected_surface(home: Path, statedir: Path, tool: str):
-    """Regression for the unrecoverable-lockout defect: subagent dispatch has no
-    non-hook enforcement point, so it is out of the surface entirely rather than
-    refused on grounds no state could ever satisfy."""
+    """Regression for the unrecoverable-lockout defect, recorded as an OPEN
+    coverage reduction rather than as a resolved one.
+
+    VERIFIED FACT: no non-hook enforcement point for direct subagent dispatch
+    exists in this harness today, so refusing the route refused it on grounds no
+    state could ever satisfy — zero protection on the threat host, a permanent
+    block on a healthy one.
+
+    POLICY INFERENCE, stated separately because clause (E) denies it: that this
+    licenses REMOVING the routes from the surface rather than reporting them
+    unsupported. This test pins the current behaviour; it does not endorse the
+    inference. Direct dispatch is therefore UNGATED on every host — it is not
+    gated transitively through the manifested workflows, because a direct Agent
+    or Task call never presents a SlashCommand envelope. Restoration condition:
+    a reachable live PASS plus an entrypoint consumer that invokes the per-route
+    preflight; until both exist, restoring the routes would only re-create the
+    unsatisfiable refusal.
+
+    tool:Agent is additionally the NON-FLOOR NEGATIVE CONTROL for the repair
+    floor (see test_escape_hatches_survive_a_broken_manifest): admitting it to
+    the floor would make this already-open reduction permanent in the degraded
+    state too.
+    """
     sid = "disp"
     r = _gate({"tool_name": tool, "tool_input": {}, "session_id": sid}, home, statedir, sid)
     assert r.returncode == 0, r.stderr
