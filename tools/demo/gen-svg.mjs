@@ -90,6 +90,16 @@ for (const ln of lines) {
   if (typeof ln.text !== 'string' || ln.text.length === 0) fail(`line ${ln.id}: text must be a non-empty string`);
 }
 
+// ---------- logical width (auto-fit) ----------
+// The frame widens to whatever the widest line needs, so no transcript line can be cut off by
+// the viewport. This was a fixed 960px, and a longer line was simply clipped mid-text while
+// every provenance check still passed — a verdict line lost its tail with nothing to report it.
+// Fitting the width to the content makes that failure structurally impossible instead of a
+// number someone must remember to raise. Measured on the same grid the rendering uses:
+// content origin + indent + characters, plus the right pad.
+const W = Math.max(W_MIN, ...lines.map(
+  (ln) => CONTENT_X + cfgFor(ln).indent * ADV + nfc(ln.text).length * ADV + PAD_X));
+
 // ---------- data-driven rail ----------
 // Rail labels come from the manifest, never hard-coded: an explicit `meta.rail` list wins;
 // otherwise the distinct `stage` values in first-appearance (render) order. ONE generator
