@@ -315,9 +315,12 @@ These are recorded here because they bound what any compatibility claim above ca
    the same as absent, and it is not the same as working; the ledger records the third state.
 2. **The live settings file has already diverged from its template.** Running the settings
    renderer against `settings.json` today silently re-adds 2 `deny` entries and strips roughly
-   38 `allow` entries. The hook *set* is currently identical between the two files — verified
-   this cycle, 70 of 70 `(event, matcher, hook)` triples match — so the registered-hook rows
-   above hold under either file. The **permission** surface does not, which is why S-002's
+   38 `allow` entries. The hook *set* was measured identical between the two files this cycle,
+   70 of 70 `(event, matcher, hook)` triples — a one-time measurement, not a standing guarantee.
+   What `scripts/verify-claims.sh` re-checks on every run is weaker: every hook script *basename*
+   wired by `settings.json` also appears in the template, with template-only extras permitted;
+   the lifecycle event and matcher are not compared. So a hook moved to a different event or
+   matcher in one file would not fail that check. The **permission** surface does not, which is why S-002's
    permission-layer measurement is pinned to `settings.json @4c33f2f5` specifically.
 
 ---
