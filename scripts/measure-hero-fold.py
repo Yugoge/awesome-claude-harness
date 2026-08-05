@@ -169,7 +169,8 @@ def main() -> int:
     ap.add_argument("--readme", default=str(REPO_ROOT / "README.md"))
     a = ap.parse_args()
 
-    html = md_to_html(Path(a.readme).read_text(encoding="utf-8"))
+    readme_text = Path(a.readme).read_text(encoding="utf-8")
+    html = md_to_html(readme_text)
     # UNIQUE per run. A fixed filename is a silent cross-lane hazard: under concurrent
     # mutation two measurements running at once overwrite each other's preview and each
     # then measures the other's page, reporting confident numbers about the wrong document.
