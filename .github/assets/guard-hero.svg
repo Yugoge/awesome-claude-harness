@@ -1,16 +1,17 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<svg xmlns="http://www.w3.org/2000/svg" width="960" height="564" viewBox="0 0 960 564" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="15">
+<svg xmlns="http://www.w3.org/2000/svg" width="1430" height="564" viewBox="0 0 1430 564" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="15">
 <defs>
+<rect data-role="grid-advance" x="0" y="0" width="0" height="0" fill="none"><animate attributeName="width" dur="31.25s" repeatCount="indefinite" calcMode="discrete" values="0;9" keyTimes="0;0.5"/></rect>
 <clipPath id="clip-hero-001"><rect x="58" y="107" width="0" height="18"><animate attributeName="width" dur="31.25s" repeatCount="indefinite" calcMode="discrete" values="0;0;9;18;27;36;45;54;63;72;81;90;99;108;117;126;135;144;153;162;171;180;189;198;207;216;225;234;297;297" keyTimes="0;0.032;0.0336;0.0352;0.0368;0.0384;0.04;0.0416;0.0432;0.0448;0.0464;0.048;0.0496;0.0512;0.0528;0.0544;0.056;0.0576;0.0592;0.0608;0.0624;0.064;0.0656;0.0672;0.0688;0.0704;0.072;0.0736;0.0752;1"/></rect></clipPath>
 <clipPath id="clip-hero-008"><rect x="58" y="275" width="0" height="18"><animate attributeName="width" dur="31.25s" repeatCount="indefinite" calcMode="discrete" values="0;0;9;18;27;36;45;54;63;72;81;90;99;108;117;126;135;144;153;162;171;180;189;198;207;216;225;234;297;297" keyTimes="0;0.408;0.4096;0.4112;0.4128;0.4144;0.416;0.4176;0.4192;0.4208;0.4224;0.424;0.4256;0.4272;0.4288;0.4304;0.432;0.4336;0.4352;0.4368;0.4384;0.44;0.4416;0.4432;0.4448;0.4464;0.448;0.4496;0.4512;1"/></rect></clipPath>
 <clipPath id="clip-hero-012"><rect x="58" y="371" width="0" height="18"><animate attributeName="width" dur="31.25s" repeatCount="indefinite" calcMode="discrete" values="0;0;9;18;27;36;45;54;63;72;81;90;99;108;117;126;135;144;153;162;171;180;189;198;207;216;225;234;297;297" keyTimes="0;0.6304;0.632;0.6336;0.6352;0.6368;0.6384;0.64;0.6416;0.6432;0.6448;0.6464;0.648;0.6496;0.6512;0.6528;0.6544;0.656;0.6576;0.6592;0.6608;0.6624;0.664;0.6656;0.6672;0.6688;0.6704;0.672;0.6736;1"/></rect></clipPath>
 </defs>
-<rect x="0" y="0" width="960" height="564" fill="#F7F4EC"/>
+<rect x="0" y="0" width="1430" height="564" fill="#F7F4EC"/>
 <circle cx="24" cy="24" r="5" fill="#D8D2C4"/>
 <circle cx="42" cy="24" r="5" fill="#D8D2C4"/>
 <circle cx="60" cy="24" r="5" fill="#D8D2C4"/>
-<text data-role="chrome-title" x="480" y="28" text-anchor="middle" fill="#A9A295" font-size="13">claude — guard demo (captured run)</text>
-<line x1="0" y1="48" x2="960" y2="48" stroke="#ECE7DB" stroke-width="1"/>
+<text data-role="chrome-title" x="715" y="28" text-anchor="middle" fill="#A9A295" font-size="13">claude — guard demo (captured run)</text>
+<line x1="0" y1="48" x2="1430" y2="48" stroke="#ECE7DB" stroke-width="1"/>
 <rect data-role="stage-marker" x="40" y="82" width="63" height="2" fill="#B07C2C"><animate attributeName="x" begin="0s" dur="31.25s" repeatCount="indefinite" calcMode="discrete" values="40;130;220" keyTimes="0;0.408;0.6304"/><animate attributeName="width" begin="0s" dur="31.25s" repeatCount="indefinite" calcMode="discrete" values="63;63;72" keyTimes="0;0.408;0.6304"/></rect>
 <text data-role="stage" x="40" y="74" fill="#B07C2C" font-size="13">blocked<animate attributeName="fill" dur="31.25s" repeatCount="indefinite" calcMode="discrete" values="#B07C2C;#A9A295" keyTimes="0;0.408"/></text>
 <text data-role="stage" x="130" y="74" fill="#A9A295" font-size="13">granted<animate attributeName="fill" dur="31.25s" repeatCount="indefinite" calcMode="discrete" values="#A9A295;#B07C2C;#A9A295" keyTimes="0;0.408;0.6304"/></text>

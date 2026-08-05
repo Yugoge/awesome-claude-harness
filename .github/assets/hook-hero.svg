@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg" width="960" height="540" viewBox="0 0 960 540" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="15">
 <defs>
-
+<rect data-role="grid-advance" x="0" y="0" width="0" height="0" fill="none"><animate attributeName="width" dur="28s" repeatCount="indefinite" calcMode="discrete" values="0;9" keyTimes="0;0.5"/></rect>
 </defs>
 <rect x="0" y="0" width="960" height="540" fill="#F7F4EC"/>
 <circle cx="24" cy="24" r="5" fill="#D8D2C4"/>

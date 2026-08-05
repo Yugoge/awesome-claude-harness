@@ -2,20 +2,6 @@
   "_doc": "Known, itemised, ACCEPTED clipping for generated hero assets. An entry records that a line's rendered right edge exceeds its asset's logical width, names the exact substring the reader never sees, and states the condition under which the clipping would be restored to full visibility. Read by tools/demo/audit.mjs.",
   "_not_a_blessing": "This ledger exists so clipping can never again be SILENT. It is not a place to retire a defect. A line the manifest classifies as kind 'verdict' carries the demonstration's proof and is REJECTED from this ledger outright by the auditor; such a line must have its clipping actually removed. Any clipped line absent from this ledger fails --strict, so omission is not a way to pass either.",
   "_measurement": "Right edge is computed on the renderer's fixed monospace grid (content origin x + character count x advance, both read from the asset itself), so it is deterministic and font-independent.",
-  "assets": {
-    "guard-hero.svg": [
-      {
-        "trace_id": "hero-004",
-        "kind": "artifact",
-        "lost_text": "a single-use grant).",
-        "restoration_condition": "The clipped text is hook-emitted remediation guidance, not authored here, and the capture is byte-frozen, so neither this repository's hero tooling nor its capture may shorten it. Restored when EITHER the emitting hook's remediation sentence is shortened to at most 100 characters, OR the renderer is given a logical width of at least 1138px for this asset. The second option is currently excluded because zero clipping across this asset needs 1390px while an 11px phone glyph permits at most 488px, an empty interval."
-      },
-      {
-        "trace_id": "hero-015",
-        "kind": "artifact",
-        "lost_text": "a single-use grant).",
-        "restoration_condition": "Identical text and identical cause to hero-004: this is the same hook-emitted remediation line, replayed after the grant is consumed. Restored under the same two conditions, and by the same change."
-      }
-    ]
-  }
+  "_currently_empty": "No asset clips. The renderer fits each asset's logical width to its widest line (tools/demo/gen-svg.mjs), so a line cannot be cut off by the viewport, and the two guard-hero entries that lived here were retired as stale rather than carried. Their stated blocker — that zero clipping needed 1390px while an 11px phone glyph permitted at most 488px — only bound while both constraints held at once; the full-size asset anchor, not the inline rendering, is the reader's path to legible proof, so the phone-glyph floor no longer binds and the interval is not empty.",
+  "assets": {}
 }
