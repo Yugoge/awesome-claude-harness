@@ -1894,6 +1894,32 @@ def main(argv=None) -> int:
                 f"  Resolve it first: {SELF_MANAGE_REL}/uninstall (or scripts/install/"
                 f"uninstall) --prefix {ctx.prefix}\n"
                 "  Nothing was written.")
+        # A prefix is bound to ONE config home. Appending a generation for a
+        # second home makes uninstall refuse against BOTH -- each run sees a
+        # mismatching record -- which is a payload no invocation can remove: the
+        # exact stranding this engine exists to avoid creating.
+        for existing in existing_state.get("generations", []):
+            if existing.get("record_status") == "prepared":
+                raise Refusal(
+                    "this prefix carries an uncommitted generation record "
+                    f"({existing.get('generation')}), so a previous apply was "
+                    "interrupted after mutating the config home.\n"
+                    "  Refusing to layer another generation on a state whose extent is "
+                    "not yet settled.\n"
+                    f"  Resolve it first: uninstall --prefix {ctx.prefix}\n"
+                    "  Nothing was written.")
+            problems = home_mismatches(existing, ctx)
+            if problems:
+                recorded = existing.get("config_home_lexical", existing.get("config_home"))
+                raise Refusal(
+                    "this prefix is already bound to a DIFFERENT config home.\n"
+                    f"  recorded  : {recorded}\n"
+                    f"  requested : {ctx.config_home}\n"
+                    + "".join(f"  {p}\n" for p in problems)
+                    + "  Installing both into one prefix would leave a payload that "
+                      "uninstall refuses to remove for EITHER home. Use a separate "
+                      "--prefix per config home.\n"
+                    "  Nothing was written.")
 
     plan = build_plan(ctx)
     if args.command == "plan":
