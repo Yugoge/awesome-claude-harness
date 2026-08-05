@@ -253,6 +253,15 @@ speed-bump design accepts this."* Measured this cycle across 12 wrapper tokens x
 | **leading-redirection** (7 ops) | bare | `[]` | MATCH | 7 |
 | **leading-redirection** (7 ops) | **path-qualified** | `[]` | no-match | **7 — both miss** |
 
+**Scope of the leading-redirection dimension.** The 7 operators enumerated above are the ones
+that were probed; **the enumerated leading-redirection operator set is not exhaustive**. Shell
+admits further redirection forms — among them numeric descriptor duplications, here-documents
+and here-strings, and `{name}>` descriptor-variable forms. **Forms outside the enumerated set
+were not probed and are not counted in the published figures** above, so the 136 / 110 / 55
+totals bound the measured set, not the whole grammar. This limit is stated rather than closed:
+generalizing the enumeration to a full redirection grammar would move published figures, row
+labels and the recorded token set together, which is a separate, separately-reviewed change.
+
 **Mechanism**: `_command_token_index()` at `hooks/lib/git_command_classifier.py:113 @4c33f2f5`
 skips env-assignments and the 12 `_WRAPPERS` tokens at
 `hooks/lib/git_command_classifier.py:105 @4c33f2f5` (`sudo`, `doas`, `env`, `xargs`, `time`,
