@@ -49,13 +49,140 @@ README = SOURCE / "README.md"
 
 RESULTS: list[tuple[str, str, bool, str]] = []
 VERBOSE = False
+INAPPLICABLE: list[tuple[str, str, str]] = []
+# Rebound by --engine. The destructive-path fixtures drive this directly rather
+# than through the shell entrypoints, so an alternative engine can be substituted.
+ACTIVE_ENGINE = ENGINE
+FAMILY: dict[str, str] = {}
 
 
-def check(ac: str, name: str, cond: bool, detail: str = "") -> bool:
+def check(ac: str, name: str, cond: bool, detail: str = "", family: str = "") -> bool:
     RESULTS.append((ac, name, bool(cond), detail))
+    if family:
+        FAMILY[f"{ac} {name}"] = family
     if VERBOSE or not cond:
         print(f"  [{'PASS' if cond else 'FAIL'}] {ac} {name}" + (f"  -- {detail}" if detail else ""))
     return bool(cond)
+
+
+def inapplicable(ac: str, name: str, why: str) -> None:
+    """Surface the engine under test does not have. NOT evidence of a defect."""
+    INAPPLICABLE.append((ac, name, why))
+    print(f"  [SKIP] {ac} {name}  -- inapplicable-on-alternative-engine: {why}")
+
+
+def engine_run(command: str, *extra, expect_surface: bool = True):
+    """Drive the engine directly. Returns (rc, stdout, stderr)."""
+    return run([sys.executable, ACTIVE_ENGINE, command,
+                "--profile-file", SOURCE / "scripts" / "install" / "profiles" / "core.json",
+                "--source", SOURCE, *extra])
+
+
+def missing_surface(rc: int, err: str) -> str | None:
+    """Classify a failure that is the engine LACKING surface, not misbehaving."""
+    for token, why in (("unrecognized arguments", "engine does not accept this flag"),
+                       ("FileNotFoundError", "engine does not produce this artifact"),
+                       ("KeyError", "engine does not record this state field"),
+                       ("AttributeError", "engine does not expose this symbol")):
+        if token in err:
+            return why
+    return None
+
+
+def selfmanage_expected(prefix: Path) -> set:
+    """The self-management bundle, read from the RECORDED manifest, not a literal.
+
+    Reading it from state makes the comparison validate the record too: a bundle
+    that shipped files the record does not declare (or vice versa) fails here.
+    """
+    state = json.loads((prefix / "state" / "install-state.json").read_text())
+    bundle = state["generations"][-1]["self_management"]
+    rel = bundle["root_relative"].split("/", 1)[1]
+    return {f"{rel}/{name}" for name in bundle["files"]}
+
+
+def installed_expected(prefix: Path) -> set:
+    """Everything the isolated root is supposed to carry, in both directions."""
+    return payload_expected() | selfmanage_expected(prefix)
+
+
+def write_unconventional(path: Path, doc: dict) -> None:
+    """Write a settings document deliberately OUTSIDE the installer's convention.
+
+    Differs in four ways at once: 4-space indent, CRLF line endings,
+    \\uXXXX-escaped non-ASCII, and sorted key order. Without this, every
+    preservation assertion is satisfied by construction -- a fixture already in
+    the installer's convention survives a loads/dumps round-trip byte-for-byte
+    whether or not the implementation preserves anything.
+    """
+    text = json.dumps(doc, indent=4, ensure_ascii=True, sort_keys=True)
+    path.write_bytes((text.replace("\n", "\r\n") + "\r\n").encode("utf-8"))
+
+
+def realpath_map(root: Path) -> dict:
+    """Realpath per node, RECORDED at a point in time.
+
+    Recorded on one side and recomputed on the other. An assertion that resolves
+    the SAME path expression on both sides is true by construction and cannot fail
+    for any input -- which is exactly what the assertion this replaces did.
+    """
+    return {p: os.path.realpath(root / p) for p in node_snapshot(root)
+            if (root / p).exists()}
+
+
+def realpath_regressions(root: Path, recorded: dict) -> list:
+    return [(p, recorded[p], os.path.realpath(root / p)) for p in recorded
+            if (root / p).exists() and os.path.realpath(root / p) != recorded[p]]
+
+
+def hook_commands(doc: dict) -> list[tuple]:
+    out = []
+    for event, bucket in (doc.get("hooks") or {}).items():
+        for group in bucket if isinstance(bucket, list) else []:
+            if not isinstance(group, dict):
+                continue
+            for entry in group.get("hooks") or []:
+                if isinstance(entry, dict):
+                    out.append((event, group.get("matcher") or None,
+                                entry.get("type"), entry.get("command")))
+    return out
+
+
+def installer_commands(home: Path) -> list[str]:
+    bridge_rel = next(e["path"] for e in PROFILE["live_footprint"] if e["kind"] == "link")
+    return [r["command"].replace("<bridge>", str(home / bridge_rel))
+            for r in PROFILE["hook_registrations"]]
+
+
+def payload_refs(doc: dict, home: Path) -> list[tuple]:
+    bridge_rel = next(e["path"] for e in PROFILE["live_footprint"] if e["kind"] == "link")
+    marker = str(home / bridge_rel)
+    return [c for c in hook_commands(doc) if c[3] and marker in c[3]]
+
+
+def read_state(prefix: Path) -> dict:
+    return json.loads((prefix / "state" / "install-state.json").read_text())
+
+
+def require_installed(home: Path, prefix: Path, label: str) -> bool:
+    """NON-VACUITY PRECONDITION -- binds every refusal criterion below.
+
+    A criterion whose only assertions are "exit non-zero" and "nothing changed" is
+    satisfied by an installer that does nothing at all. Every refusal fixture must
+    first prove a prior apply ACTUALLY installed each expected registration
+    identity, read back out of the live document, with the payload and state file
+    present.
+    """
+    doc = json.loads((home / "settings.json").read_text())
+    present = {c[3] for c in hook_commands(doc)}
+    expected = set(installer_commands(home))
+    ok = (expected <= present and (prefix / "state" / "install-state.json").is_file()
+          and (prefix / "harness").is_dir())
+    return check(label, "PRECONDITION: the prior apply installed every registration "
+                        "identity, payload and state file", ok,
+                 f"missing={sorted(expected - present)} "
+                 f"state={(prefix / 'state' / 'install-state.json').is_file()} "
+                 f"payload={(prefix / 'harness').is_dir()}")
 
 
 def run(cmd, env=None, cwd=None):
