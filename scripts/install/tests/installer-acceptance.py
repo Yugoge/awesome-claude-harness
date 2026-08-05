@@ -1127,8 +1127,16 @@ def ac12(tmp: Path) -> None:
     write_unconventional(elsewhere / "real-settings.json", user_doc())
     os.symlink(str(elsewhere / "real-settings.json"), home / "settings.json")
     before = node_snapshot(home)
+    # The config-home snapshot deliberately does NOT follow settings.json, so it
+    # cannot see a write that lands on the referent. The referent tree is
+    # snapshotted separately, or the whole point of this criterion -- that a
+    # symlinked settings path is not written THROUGH -- goes unmeasured.
+    before_referent = node_snapshot(elsewhere)
 
     rc, out, err = engine_run("apply", "--prefix", prefix, "--config-dir", home)
+    check("AC12(a)", "the symlink REFERENT outside the config home is untouched",
+          node_snapshot(elsewhere) == before_referent,
+          str(sorted(set(node_snapshot(elsewhere)) ^ set(before_referent))))
     check("AC12(a)", "apply onto a symlinked settings.json exits non-zero", rc != 0,
           f"rc={rc}", family="mandatory-entry refusal")
     check("AC12(a)", "MEASURED PREDICATE: neither the bridge link nor the command "
