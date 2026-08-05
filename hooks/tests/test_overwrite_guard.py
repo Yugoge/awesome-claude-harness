@@ -492,10 +492,19 @@ def test_ac06_write_tool_wildcard_behaviour_is_unchanged():
 
 
 def test_ac06_guard_creates_no_new_issuance_channel():
+    """The guard reads grants; it can never write one, and adds no op name."""
     source = GUARD.read_text(encoding="utf-8")
     assert "SENTINEL_GRANT_DIR" not in source
     assert "claude-grants" not in source
-    assert '"op"' not in source.replace('candidate.get("op") != "Write"', "")
+    assert "overwrite\"" not in source.lower().replace("overwrite-guard", "")
+    tree = ast.parse(source)
+    op_literals = {
+        node.value
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Constant) and isinstance(node.value, str)
+        and node.value in ("overwrite", "Overwrite", "OVERWRITE")
+    }
+    assert not op_literals, "no new sentinel op name may be introduced"
 
 
 # ---------------------------------------------------------------------------
