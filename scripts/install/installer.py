@@ -1704,18 +1704,13 @@ def uninstall(ctx: Ctx, keep_payload: bool = False) -> dict:
     # conditions the payload removal. A created FILE the user rewrote is retained
     # by the separate as-installed-digest guard and has never implied a partial
     # un-merge: it carries no registration wiring, so the payload can still go.
-    retained = [i for i in items
-                if i.get("action") in ("un-merge", "residual")
-                and i.get("result") in RETAINED_RESULTS]
-    partial = bool(retained)
     removed_root = False
     if partial:
         payload_result = "kept-partial-unmerge"
     elif keep_payload:
         payload_result = "kept-by-request"
     elif ctx.state_path.is_file() and ctx.prefix.is_dir():
-        shutil.rmtree(ctx.prefix, ignore_errors=True)
-        removed_root = not ctx.prefix.exists()
+        removed_root = remove_installer_tree(ctx)
         # R9: the final removal deletes the very engine that is executing. POSIX
         # normally tolerates this once Python has loaded the source, but it is not
         # portable, and a bundle that survives is a RETAINED PARTIAL uninstall --
