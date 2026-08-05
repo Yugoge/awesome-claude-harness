@@ -343,6 +343,47 @@ def _strip_reason_payload(s: str) -> str:
     return ''.join(out)
 
 
+#: A `(` opens a GROUPING subshell only at these positions. After `>` or `<`
+#: it is process substitution and after `$` it is command substitution —
+#: neither introduces a command word, and the redirect pattern's `(?![&\(])`
+#: exclusion still has to be able to see them.
+_GROUP_OPEN_LEADIN = " \t\n;|&("
+
+#: `\cp` is bash's routine alias-bypass idiom. The backslash escapes the
+#: COMMAND WORD; it is not part of any path.
+_ESCAPED_COMMAND_WORD_RE = re.compile(r"\\[A-Za-z_]")
+
+
+def _neutralize_command_word_prefixes(s: str) -> str:
+    """Blank a command-word escape (`\\cp`) and a grouping `(`. Length-preserving.
+
+    Every verb pattern below requires a `[\\s;|&]` boundary before the word, so
+    two ordinary syntaxes hid the verb completely: `\\cp SRC DEST` (nine of the
+    eleven replacing verbs were defeated by that one byte) and `(cp SRC DEST)`.
+
+    Each such character is replaced by a SPACE rather than removed, so every
+    byte offset stays aligned with the ORIGINAL text that path tokens are read
+    from — the masked/original alignment is load-bearing here.
+
+    Quoted spans are skipped, and a backslash is only neutralized where a
+    command word can actually start, so an escaped character INSIDE a path
+    (``cp x /tmp/my\\ file``) is left exactly as it was and cannot be turned
+    into a shorter path that happens to exist.
+    """
+    if "\\" not in s and "(" not in s:
+        return s
+    masked = _strip_quoted_regions(s)
+    out = list(s)
+    for i, ch in enumerate(masked):
+        if ch == "(" and (i == 0 or masked[i - 1] in _GROUP_OPEN_LEADIN):
+            out[i] = " "
+    for m in _ESCAPED_COMMAND_WORD_RE.finditer(masked):
+        i = m.start()
+        if i == 0 or masked[i - 1] in _GROUP_OPEN_LEADIN:
+            out[i] = " "
+    return "".join(out)
+
+
 def _extract_cp_mv_targets(command: str) -> List[str]:
     targets: List[str] = []
     scan = _strip_quoted_regions(command)
