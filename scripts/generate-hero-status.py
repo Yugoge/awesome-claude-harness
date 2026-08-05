@@ -497,7 +497,7 @@ def pred_hero_glyph() -> tuple[str, str, str, str]:
     n, total = len(g["below_floor"]), g["n_covered"]
     where = "every" if n == total else f"{n} of {total}"
     return ("partial",
-            f"**Hero inline size** — the replay's text renders at {sizes}, against a "
+            f"**Hero inline size** — the replay's text renders at {sizes}, against the "
             f"**{g['floor_px']} px** readability floor it misses at {where} measured "
             f"viewport. Below that floor the transcript is on the page but too small to "
             f"read there — on a phone it is roughly a third of readable size. Nothing is "
