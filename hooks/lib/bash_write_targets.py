@@ -81,7 +81,7 @@ from __future__ import annotations
 
 import os
 import re
-from typing import List, Tuple
+from typing import List, NamedTuple, Tuple
 
 # Heredoc opener pattern. Captures three groups:
 #   1: dash flag (- means tab-stripped form)
