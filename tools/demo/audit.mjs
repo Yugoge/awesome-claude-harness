@@ -188,6 +188,7 @@ const stripChildren = (s) => s.replace(/<[^>]*>/g, ''); // drop nested <set>/<an
 const byId = new Map(lines.map((l) => [l.id, l]));
 
 const traceSeq = [];
+const traceGeom = []; // {id, x, text, kind} — feeds the rendered-width/clipping assertion
 const stageLabels = [];
 let footerText = null, titleText = null;
 let m;
