@@ -725,12 +725,30 @@ def test_ac08_bootstrap_failure_fails_open_loudly(tmp_path):
 # ---------------------------------------------------------------------------
 
 def test_ac09_required_uncovered_classes_are_all_present():
+    """AC-09's mandated disclosure floor, minus one class that was CLOSED.
+
+    `concurrent-grant-reuse` was on this list because the criterion was written
+    while consumption was believed to be POST-tool. It was not consumed at all
+    (see test_ac06_grant_is_single_use_and_target_bound), and closing that made
+    the concurrent case fall out with it, because the unlink IS the mutual
+    exclusion. A class that no longer describes a real gap cannot stay on a
+    disclosure list: the list's whole value is that every entry is DEMONSTRATED,
+    and this one now fails its own demonstration. Recorded as a measured
+    correction to AC-09, not dropped silently — the closure is asserted by
+    test_ac06_single_use_holds_under_concurrency and the corpus row carries
+    `reclassified_from: uncovered` with its reasoning.
+    """
     required = {
         "displace-then-create", "interpreter-script", "interpreter-stdin",
         "wrapper-script", "compiled-binary", "variable-indirection",
-        "check-use-race", "concurrent-grant-reuse", "semantic-lexer-corruption",
+        "check-use-race", "semantic-lexer-corruption",
     }
     assert required <= {r["route_class"] for r in UNCOVERED}
+    closed = [r for r in ROUTES if r["route_class"] == "concurrent-grant-reuse"]
+    assert len(closed) == 1 and closed[0]["coverage"] == "covered", (
+        "the reclassified route must still be in the corpus, as covered")
+    assert closed[0].get("reclassified_from") == "uncovered"
+    assert closed[0].get("reclassification_reason") and closed[0].get("residual")
 
 
 def test_ac09_documentation_lists_the_same_uncovered_route_ids():
