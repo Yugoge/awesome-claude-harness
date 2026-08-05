@@ -21,15 +21,34 @@ on:
     tags:
       - "v*"
 
+# Workflow-level default is READ-ONLY. The publishing job widens its own grant
+# below; the called hygiene workflow keeps only what its steps need. A reusable
+# workflow does NOT implicitly inherit the caller's permissions, so granting
+# write here would hand the hygiene job rights it has no use for.
 permissions:
-  contents: write        # create the release and upload assets
-  id-token: write        # keyless signing for build provenance
-  attestations: write    # record the provenance attestation
+  contents: read
 
 jobs:
+  # A tag push does not trigger baseline.yml (it fires on push-to-branch and
+  # pull_request), and `needs:` cannot cross workflow files — so before this job
+  # existed there was no way for the hygiene gates to be a precondition of
+  # publishing. Calling the workflow runs it against the TAGGED commit, and the
+  # publishing job `needs:` it, so a failed clean-install or boundary gate stops
+  # the release instead of being discovered after the fact.
+  hygiene:
+    name: hygiene gates (clean install + boundary) on the tagged commit
+    uses: ./.github/workflows/baseline.yml
+    permissions:
+      contents: read
+
   release:
     name: build, attest and publish
+    needs: hygiene
     runs-on: ubuntu-latest
+    permissions:
+      contents: write        # create the release and upload assets
+      id-token: write        # keyless signing for build provenance
+      attestations: write    # record the provenance attestation
     steps:
       - name: Checkout
         # Pinned to a full 40-char commit SHA, not a mutable tag.
