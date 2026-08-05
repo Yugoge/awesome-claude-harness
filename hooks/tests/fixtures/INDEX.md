@@ -1,13 +1,14 @@
 # fixtures
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-08-03T12:34:15Z*
-**Total entries**: 0
-**Convention**: lower
+*Last updated: 2026-08-05T02:28:58Z*
+**Total entries**: 1
+**Convention**: kebab
 
 ## Tree
 ```
 fixtures/
+├── `adversarial_corpus.json` - json config
 ```
 <!-- /AUTO:index-stats -->
 
