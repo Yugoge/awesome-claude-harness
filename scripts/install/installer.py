@@ -1422,6 +1422,31 @@ def migrate_legacy_generation(ctx: Ctx, gens: list, legacy: list) -> dict | None
             "migrated_from": [g.get("generation") for g in legacy]}
 
 
+def remove_installer_tree(ctx: Ctx) -> bool:
+    """Remove the installer's OWN artifacts by exact path. Returns True if all went.
+
+    The prefix is chosen by the caller and may be a directory the user also keeps
+    their own files in -- `--prefix ~/.local/share` is a plausible mistake, and a
+    recursive removal of it would delete everything there while reporting success.
+    Only the isolated root, the backup root and the state directory are the
+    installer's to delete; the prefix itself goes only when it is THEN EMPTY,
+    which is the same rule the config-home footprint already follows.
+    """
+    removed_all = True
+    for owned in (ctx.isolated_root, ctx.prefix / BACKUPS_REL, ctx.state_path.parent):
+        if owned.is_symlink() or not owned.exists():
+            continue
+        shutil.rmtree(owned, ignore_errors=True)
+        if owned.exists():
+            removed_all = False
+    try:
+        if ctx.prefix.is_dir() and not ctx.prefix.is_symlink() and not any(ctx.prefix.iterdir()):
+            ctx.prefix.rmdir()
+    except OSError:
+        pass
+    return removed_all
+
+
 def _backup_equals(backup_path: Path, computed: dict) -> bool:
     """Is the recorded backup the SAME DOCUMENT the un-merge computed?
 
