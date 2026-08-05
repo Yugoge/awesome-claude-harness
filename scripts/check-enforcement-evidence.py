@@ -582,6 +582,7 @@ def shell_gate_census(bash_src):
     B = an unconditional GIT_CMD_RE grep branch.
     C = a branch guarded on the path-qualified classifier flag.
     """
+    bash_src = _strip_full_line_comments(bash_src)
     statements = _shell_if_statements(bash_src)
     primary_key = '=:$CLASSIFIER_STATUS|ok'
     fallback_key = '!=:$CLASSIFIER_STATUS|ok'
