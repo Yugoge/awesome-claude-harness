@@ -184,7 +184,7 @@ def main() -> int:
     svg = (REPO_ROOT / ".github/assets/guard-hero.svg").read_text(encoding="utf-8")
     vb = re.search(r'viewBox="0 0 (\d+) (\d+)"', svg)
     logical_w = int(vb.group(1)) if vb else 960
-    FONT_PX = 15  # gen-svg.mjs body font-size
+    img_w = hero_img_width(readme_text)
 
     results, failures, tradeoffs = [], [], []
     with sync_playwright() as p:
