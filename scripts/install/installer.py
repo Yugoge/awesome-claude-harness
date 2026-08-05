@@ -1383,6 +1383,19 @@ def migrate_legacy_generation(ctx: Ctx, gens: list, legacy: list) -> dict | None
             "migrated_from": [g.get("generation") for g in legacy]}
 
 
+def _backup_equals(backup_path: Path, computed: dict) -> bool:
+    """Is the recorded backup the SAME DOCUMENT the un-merge computed?
+
+    A digest match alone proves only that the user did not edit the live file. It
+    does not prove the backup is the true pre-install original -- across
+    generations it is not. Restoring is permitted only when both hold.
+    """
+    try:
+        return load_json_strict(backup_path.read_text(encoding="utf-8")) == computed
+    except (OSError, ValueError):
+        return False
+
+
 def removal_plan_preview(ctx: Ctx) -> list[dict]:
     """The registrations the engine believes it would remove, for operator review."""
     preview = []
