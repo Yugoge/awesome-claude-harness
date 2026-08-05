@@ -1048,6 +1048,18 @@ def apply_plan(ctx: Ctx, plan: dict) -> dict:
         os.chmod(dest, int(item.get("mode", "0644"), 8))
     atomic_write(ctx.prefix / sub / "settings.json", isolated_settings_bytes(ctx))
 
+    # ---- phase 1b: the self-management bundle (R9) ---------------------------
+    bundle_dir = ctx.prefix / sub / SELF_MANAGE_REL
+    bundle_dir.mkdir(parents=True, exist_ok=True)
+    bundle_record = {"version": SELF_MANAGE_VERSION,
+                     "root_relative": f"{sub}/{SELF_MANAGE_REL}",
+                     "files": list(SELF_MANAGE_FILES), "digests": {}}
+    for artifact in SELF_MANAGE_FILES:
+        payload = self_manage_bytes(ctx, artifact)
+        atomic_write(bundle_dir / artifact, payload,
+                     0o755 if artifact in ("installer.py", "uninstall") else 0o644)
+        bundle_record["digests"][artifact] = hashlib.sha256(payload).hexdigest()
+
     # ---- phase 2: pre-touch backups, captured from the LIVE bytes ------------
     backups: dict[str, str] = {}
     for c in plan["changes"]:
