@@ -293,32 +293,238 @@ Remove it with `scripts/install/uninstall`.
     return body.encode("utf-8")
 
 
-def merge_settings(existing: dict, groups: list[tuple[str, dict]]) -> tuple[dict, list[str]]:
-    """ADDITIVE-ONLY merge. Returns (merged, added_command_list).
+# --------------------------------------------------------------------------- #
+# REGISTRATION IDENTITY -- the single source of identity for BOTH the merge and
+# its inverse. R5 and R3 must share this function: an un-merge written against a
+# different key removes the user's copy instead of the installer's.
+# --------------------------------------------------------------------------- #
+def norm_matcher(matcher):
+    """OA-2: absent, null and "" all denote the same universal matcher.
+
+    hook_groups() omits the key entirely when falsy, so the installer's own output
+    cannot distinguish them and neither may the identity function.
+    """
+    return matcher if matcher else None
+
+
+def canonical_digest(obj) -> str:
+    """sha256 over a canonical (sorted-key, tight-separator) serialization."""
+    return hashlib.sha256(
+        json.dumps(obj, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+        .encode("utf-8")
+    ).hexdigest()
+
+
+def entry_digest(entry: dict) -> str:
+    """Digest of the WHOLE entry object as written -- not just {type, command}.
+
+    Both `type` and `command` are already inside the identity tuple, so a digest
+    over only those two is recomputed identically by anything the tuple locates
+    and can never mismatch. Digesting the whole object makes the digest sensitive
+    to what the tuple cannot see -- a key the user added or changed alongside
+    them -- which is what makes `kept-user-modified` reachable at all.
+    """
+    return canonical_digest(entry)
+
+
+def group_metadata(group: dict) -> dict:
+    """As-installed group-instance metadata: WHICH group the entry went into.
+
+    Diagnostics only. It is explicitly NOT a removal gate and NOT a locator: an
+    unrelated user addition elsewhere in the same group changes the group digest,
+    which would wrongly retain an untouched installer entry.
+    """
+    return {"matcher": norm_matcher(group.get("matcher")),
+            "entry_count": len(group.get("hooks") or []),
+            "group_digest": canonical_digest(group)}
+
+
+def identity_of(event: str, matcher, entry: dict) -> dict:
+    return {"event": event, "matcher": norm_matcher(matcher),
+            "hook_type": entry.get("type"), "command": entry.get("command")}
+
+
+def identity_key(record: dict) -> tuple:
+    return (record.get("event"), norm_matcher(record.get("matcher")),
+            record.get("hook_type"), record.get("command"))
+
+
+def iter_entries(doc: dict):
+    """Yield (event, group_index, entry_index, group, entry) over hooks.
+
+    The matcher is read from the ENCLOSING GROUP, which is where the schema puts
+    it. Malformed sub-structures are skipped rather than raising: this walks a
+    user's document, which the installer does not own.
+    """
+    hooks = doc.get("hooks")
+    if not isinstance(hooks, dict):
+        return
+    for event, bucket in hooks.items():
+        if not isinstance(bucket, list):
+            continue
+        for gi, group in enumerate(bucket):
+            if not isinstance(group, dict):
+                continue
+            entries = group.get("hooks")
+            if not isinstance(entries, list):
+                continue
+            for ei, entry in enumerate(entries):
+                if isinstance(entry, dict):
+                    yield event, gi, ei, group, entry
+
+
+def locate(doc: dict, key: tuple) -> list[tuple]:
+    """Every entry whose FULL identity tuple equals `key`. Never digest-keyed."""
+    return [(e, gi, ei, g, h) for e, gi, ei, g, h in iter_entries(doc)
+            if (e, norm_matcher(g.get("matcher")), h.get("type"), h.get("command")) == key]
+
+
+def references_payload(command, markers) -> bool:
+    return isinstance(command, str) and any(m and m in command for m in markers)
+
+
+def load_json_strict(text: str):
+    """json.loads that REFUSES duplicate keys at any level (R15)."""
+    def object_pairs(pairs):
+        seen = set()
+        for key, _value in pairs:
+            if key in seen:
+                raise DuplicateKeyError(
+                    f"duplicate key {key!r}; a load/dump round-trip would discard "
+                    "the earlier occurrence, so the document is left untouched")
+            seen.add(key)
+        return dict(pairs)
+    return json.loads(text, object_pairs_hook=object_pairs)
+
+
+def merge_settings(existing: dict, groups: list[tuple[str, dict]],
+                   markers: tuple = ()) -> tuple[dict, list, list, bool]:
+    """ADDITIVE-ONLY merge. Returns (merged, contributions, observations, container_created).
 
     Nothing is ever removed, reordered, replaced or broadened. Registration groups
     are APPENDED to the end of their event list, so every pre-existing group keeps
-    its position and its internal hook order. A command already registered
-    anywhere in that event is not added again (idempotent re-install).
+    its position and its internal hook order. A registration whose FULL IDENTITY
+    is already present in that event is not added again (idempotent re-install).
+
+    `contributions` are the identities this call APPENDED. `observations` are the
+    identities it DECIDED ABOUT and did not append, in two classes -- both are
+    needed, or the un-merge's residual scan produces false partials:
+      1. an exact profile identity already present, and
+      2. a pre-existing FOREIGN entry referencing this install's payload. Under
+         full-tuple identity a differently-matched user copy of our own command is
+         a DIFFERENT identity, so the merge appends alongside it and class 1 never
+         sees it -- yet its surviving command still names the payload path.
+
+    Ownership (`claimed` vs `unowned`) is NOT decided here: it may only be derived
+    from a prior COMMITTED generation of this lineage, never from the fact that an
+    identity merely looks like something this profile would install.
     """
     merged = copy.deepcopy(existing)
     hooks = merged.get("hooks")
+    container_created = False
     if hooks is None:
         hooks = {}
         merged["hooks"] = hooks
+        container_created = True
     if not isinstance(hooks, dict):
         raise ValueError("settings.json 'hooks' is not an object; refusing to merge")
 
-    added: list[str] = []
+    # Captured BEFORE any append, so class-2 can never catch this run's own work.
+    pre_existing = list(iter_entries(merged))
+
+    contributions: list[dict] = []
+    observations: list[dict] = []
+    profile_keys: set[tuple] = set()
+
     for event, group in groups:
         bucket = hooks.get(event)
+        event_created = False
         if bucket is None:
             bucket = []
             hooks[event] = bucket
+            event_created = True
+        if not isinstance(bucket, list):
+            raise ValueError(f"settings.json hooks.{event} is not a list; refusing to merge")
+        entry = group["hooks"][0]
+        ident = identity_of(event, group.get("matcher"), entry)
+        key = identity_key(ident)
+        profile_keys.add(key)
+        found = locate(merged, key)
+        if found:
+            _e, _gi, _ei, found_group, found_entry = found[0]
+            observations.append({
+                **ident,
+                "entry_digest": entry_digest(found_entry),
+                "group_instance_metadata": group_metadata(found_group),
+                "group_created": False,
+                "event_created": event_created,
+                "append_ordinal": None,
+                "ownership_disposition": None,
+                "observation_class": "profile-identity-present",
+            })
+            continue
+        new_group = copy.deepcopy(group)
+        bucket.append(new_group)
+        contributions.append({
+            **ident,
+            "entry_digest": entry_digest(new_group["hooks"][0]),
+            "group_instance_metadata": group_metadata(new_group),
+            "group_created": True,
+            "event_created": event_created,
+            "append_ordinal": len(bucket) - 1,
+            "ownership_disposition": "inserted",
+        })
+
+    for event, _gi, _ei, group, entry in pre_existing:
+        if not references_payload(entry.get("command"), markers):
+            continue
+        ident = identity_of(event, group.get("matcher"), entry)
+        if identity_key(ident) in profile_keys:
+            continue  # class 1 already recorded this identity
+        observations.append({
+            **ident,
+            "entry_digest": entry_digest(entry),
+            "group_instance_metadata": group_metadata(group),
+            "group_created": False,
+            "event_created": False,
+            "append_ordinal": None,
+            "ownership_disposition": None,
+            "observation_class": "foreign-payload-reference",
+        })
+    return merged, contributions, observations, container_created
+
+
+def legacy_v1_merge(existing: dict, groups: list[tuple[str, dict]]) -> tuple[dict, list, bool]:
+    """FROZEN reproduction of the pre-R2 command-keyed merge. Never 'improve' it.
+
+    Its only purpose is R4's migration proof: replaying it against a v1 record's
+    recorded backup reconstructs what the legacy engine would have written. If the
+    reconstruction is byte-equal to the live document, the live document is
+    provably the unmodified legacy post-image and its contribution set is derived
+    rather than guessed. Changing this function silently invalidates that proof.
+    """
+    merged = copy.deepcopy(existing)
+    hooks = merged.get("hooks")
+    container_created = False
+    if hooks is None:
+        hooks = {}
+        merged["hooks"] = hooks
+        container_created = True
+    if not isinstance(hooks, dict):
+        raise ValueError("settings.json 'hooks' is not an object; refusing to merge")
+
+    added: list[dict] = []
+    for event, group in groups:
+        bucket = hooks.get(event)
+        event_created = False
+        if bucket is None:
+            bucket = []
+            hooks[event] = bucket
+            event_created = True
         if not isinstance(bucket, list):
             raise ValueError(f"settings.json hooks.{event} is not a list; refusing to merge")
         command = group["hooks"][0]["command"]
-        present = any(
+        present = any(                                    # command-keyed: matcher-blind
             isinstance(g, dict)
             and any(
                 isinstance(h, dict) and h.get("command") == command
@@ -329,9 +535,18 @@ def merge_settings(existing: dict, groups: list[tuple[str, dict]]) -> tuple[dict
         )
         if present:
             continue
-        bucket.append(copy.deepcopy(group))
-        added.append(f"{event}:{command}")
-    return merged, added
+        new_group = copy.deepcopy(group)
+        bucket.append(new_group)
+        added.append({
+            **identity_of(event, group.get("matcher"), new_group["hooks"][0]),
+            "entry_digest": entry_digest(new_group["hooks"][0]),
+            "group_instance_metadata": group_metadata(new_group),
+            "group_created": True,
+            "event_created": event_created,
+            "append_ordinal": len(bucket) - 1,
+            "ownership_disposition": "inserted",
+        })
+    return merged, added, container_created
 
 
 def settings_bytes(doc: dict) -> bytes:
