@@ -1236,6 +1236,7 @@ def recorded_identities(gens: list) -> dict:
             latest[key] = dict(
                 record,
                 _generation=gen.get("generation"),
+                ownership_digest=ownership_digest,
                 group_created=bool(previous.get("group_created"))
                 or bool(record.get("group_created")),
                 event_created=bool(previous.get("event_created"))
