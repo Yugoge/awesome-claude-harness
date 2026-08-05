@@ -1522,10 +1522,29 @@ def main() -> int:
               f"{'' if all(oks) else '   <-- FAILURES'}")
     print("=" * 74)
     print(f"TOTAL: {len(RESULTS) - len(failed)}/{len(RESULTS)} assertions passed")
+    if INAPPLICABLE:
+        print(f"\nINAPPLICABLE-ON-ALTERNATIVE-ENGINE ({len(INAPPLICABLE)}) "
+              "-- surface the engine lacks; NOT evidence of a defect:")
+        for ac, name, why in INAPPLICABLE:
+            print(f"  {ac} {name}  -- {why}")
     if failed:
         print("\nFAILED:")
         for ac, name, _ok, detail in failed:
             print(f"  {ac} {name}  -- {detail}")
+        # Per-family attribution. A family counts as demonstrated only when a
+        # DEFECT-SPECIFIC measured predicate failed -- never a tooling error.
+        families: dict[str, list[str]] = {}
+        for ac, name, _ok, detail in failed:
+            fam = FAMILY.get(f"{ac} {name}")
+            if fam:
+                families.setdefault(fam, []).append(f"{ac} {name}  -- {detail[:120]}")
+        if families:
+            print("\nDEFECT FAMILIES DEMONSTRATED "
+                  f"({len(families)}/6) -- each by a measured destructive predicate:")
+            for fam in sorted(families):
+                print(f"  [{fam}]")
+                for line in families[fam]:
+                    print(f"      {line}")
     return 1 if failed else 0
 
 
