@@ -616,6 +616,20 @@ def evaluate_activation(
             record["decision"] = "PERMIT"
             record["exemption"] = "human_consent_escape_hatch_manifest_unavailable"
             return record
+        # THE REPAIR FLOOR, classified BEFORE returning. Route classification
+        # otherwise happens only after this branch, so with no readable manifest
+        # every ordinary tool route fell through to REFUSE -- the whole tool
+        # namespace, not just the protected surface. That bricks the host: the
+        # consent hatches record consent, they do not unlock the Edit that would
+        # repair the manifest. Keyed on membership rather than on `merr`, so
+        # BOTH loader failures (unreadable and malformed) are covered.
+        # Everything outside the floor still fails closed, which is what keeps
+        # the degraded state strictly MORE restrictive than the healthy one.
+        if route in REPAIR_FLOOR_ROUTES:
+            record["decision"] = "NOT_PROTECTED"
+            record["exemption"] = "repair_floor"
+            record["failure_reason"] = f"{component}_not_applicable: repair_floor ({merr})"
+            return record
         record["failure_reason"] = f"{component}_refused: {merr}"
         return record
     record["manifest_version"] = manifest.get("manifest_version")
