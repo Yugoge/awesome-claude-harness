@@ -982,6 +982,37 @@ def ac10(tmp: Path) -> None:
           "locate-by-tuple, verify-by-entry-digest -- never gate on the group")
 
 
+    # A MULTI-GENERATION fixture, because the provable-safe fast path is unsound
+    # across generations if it is gated on the as-installed digest alone: a
+    # gen-002 backup is the POST-gen-001 document, so restoring it would leave
+    # gen-001's registrations wired to a payload the same run deletes -- dangling
+    # wiring under a success report.
+    home6, prefix6 = base / "h6" / "cfg", base / "h6" / "prefix"
+    home6.mkdir(parents=True)
+    write_unconventional(home6 / "settings.json", user_doc())
+    engine_run("apply", "--prefix", prefix6, "--config-dir", home6)
+    if require_installed(home6, prefix6, "AC10(c)"):
+        doc6 = json.loads((home6 / "settings.json").read_text())
+        doc6["hooks"]["PreToolUse"].pop()          # user removes ONE registration
+        (home6 / "settings.json").write_text(json.dumps(doc6, indent=2) + "\n")
+        engine_run("apply", "--prefix", prefix6, "--config-dir", home6)
+        gens6 = read_state(prefix6)["generations"]
+        check("AC10(c)", "the repeat install recorded a SECOND generation",
+              len(gens6) == 2, f"generations={len(gens6)}")
+        rc6, _o, _e = engine_run("uninstall", "--prefix", prefix6, "--config-dir", home6,
+                                 "--json")
+        after6 = json.loads((home6 / "settings.json").read_text())
+        check("AC10(c)", "after a two-generation cycle the un-merge leaves ZERO "
+                         "references to the isolated root -- no generation's "
+                         "registrations are resurrected by a backup restore",
+              rc6 == 0 and not payload_refs(after6, home6),
+              f"rc={rc6} refs={payload_refs(after6, home6)}")
+        check("AC10(c)", "and the user's own document is intact",
+              after6.get("userNote") == NON_ASCII_KEY_VALUE
+              and after6.get("mcpServers") == {"userServer": {"command": "npx"}},
+              json.dumps(after6)[:200])
+
+
 def ac11(tmp: Path) -> None:
     print("AC11 registration identity is the FULL tuple, and coexistence holds")
     base = tmp / "ac11"
