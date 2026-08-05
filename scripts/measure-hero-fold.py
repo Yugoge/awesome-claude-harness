@@ -65,6 +65,39 @@ DEMOTED_ELEMENTS = ("hero", "whynow", "statusLast", "quickstart")
 ALL_ELEMENTS = REQUIRED_ABOVE_FOLD + DEMOTED_ELEMENTS
 GLYPH_FLOOR_PX = 11.0
 
+FONT_PX = 15          # gen-svg.mjs body font-size
+COLUMN_MAX_PX = 1012  # prose-column cap; mirrors `main { max-width }` in CSS above
+COLUMN_PAD_PX = 16    # mirrors `main { padding }` in CSS above
+
+
+def hero_img_width(readme_text: str) -> int | None:
+    """The width the README asks the browser to render the hero at."""
+    for m in re.finditer(r"<img\b[^>]*>", readme_text):
+        if "guard-hero" in m.group(0):
+            w = re.search(r'\bwidth="(\d+)"', m.group(0))
+            return int(w.group(1)) if w else None
+    return None
+
+
+def predict_glyph_px(viewport_w: int, img_width: int | None, logical_w: float) -> float:
+    """The hero's inline glyph height at `viewport_w`, computed without a browser.
+
+    The renderer lays text on a fixed monospace grid, so the asset scales uniformly and the
+    on-page glyph is FONT_PX x (rendered width / logical width). Rendered width follows from
+    the CSS above: the prose column caps at COLUMN_MAX_PX, loses COLUMN_PAD_PX on each side,
+    and `img { max-width:100% }` shrinks the hero to whatever is left.
+
+    This is the model the README's published glyph figure is derived from, because a status
+    row must be regenerable in any environment while this measurement needs a browser. So
+    main() asserts the model against the live browser measurement on EVERY run and FAILS on
+    disagreement: a published number able to drift away from the measurement that gates it
+    is the exact defect this hero exists to refuse.
+    """
+    if not logical_w or not img_width:
+        return 0.0
+    content = min(COLUMN_MAX_PX, viewport_w) - 2 * COLUMN_PAD_PX
+    return round(FONT_PX * max(0, min(img_width, content)) / logical_w, 2)
+
 
 def md_to_html(md: str) -> str:
     """First screen only: everything above the first horizontal rule."""
