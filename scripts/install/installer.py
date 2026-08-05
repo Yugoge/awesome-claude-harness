@@ -1652,11 +1652,17 @@ def print_plan(ctx: Ctx, plan: dict, dry_run: bool) -> None:
     excluded = ctx.profile.get("excluded", [])
     print()
     print(f"Profile '{ctx.profile.get('profile')}' INCLUDES "
-          f"({len(ctx.profile['payload']['copied']) + len(ctx.profile['payload']['generated'])}):")
+          f"({len(ctx.profile['payload']['copied']) + len(ctx.profile['payload']['generated'])
+             + len(SELF_MANAGE_FILES)}):")
     for item in ctx.profile["payload"]["copied"]:
         print(f"  + {item['dest']}")
     for gen in ctx.profile["payload"]["generated"]:
         print(f"  + {gen}  (generated)")
+    # The self-management bundle is installed but is NOT part of the profile's
+    # payload, so it is listed explicitly rather than left as an unannounced
+    # difference between what the plan prints and what lands on disk.
+    for artifact in SELF_MANAGE_FILES:
+        print(f"  + {SELF_MANAGE_REL}/{artifact}  (self-management)")
     print(f"Profile '{ctx.profile.get('profile')}' EXCLUDES ({len(excluded)}):")
     for item in excluded:
         print(f"  - {item}")
