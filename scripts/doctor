@@ -106,7 +106,11 @@ else
     if "$VENV_PY" -c "import $1" >/dev/null 2>&1; then
       ok "$2 (import $1)"
     else
-      miss "$2 — install with: $VENV_DIR/bin/pip install -r $MANIFEST  (or: pip install $2)"
+      # Remediation points at the HASH-ENFORCED per-interpreter lockfile, which is
+      # the form CI installs with. An unpinned `pip install -r requirements.txt`
+      # resolves whatever the index serves today, so a remediation naming it would
+      # tell the user to reproduce something other than the tested dependency set.
+      miss "$2 — install with: $VENV_DIR/bin/pip install --require-hashes -r $HOME_DIR/requirements/py\$($VENV_PY -c 'import sys;print(f\"{sys.version_info.major}{sys.version_info.minor}\")').txt"
     fi
   }
   check_mod pytest pytest
