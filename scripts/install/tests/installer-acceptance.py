@@ -80,7 +80,15 @@ def engine_run(command: str, *extra, expect_surface: bool = True):
 
 
 def missing_surface(rc: int, err: str) -> str | None:
-    """Classify a failure that is the engine LACKING surface, not misbehaving."""
+    """Classify a failure that is the engine LACKING surface, not misbehaving.
+
+    Only ever consulted for an ALTERNATIVE engine. Applying it to the engine
+    under test would let a genuine regression that happens to print
+    FileNotFoundError or KeyError be silently reclassified as "not a defect" --
+    which is the same false-evidence class this harness exists to remove.
+    """
+    if ACTIVE_ENGINE == ENGINE:
+        return None
     for token, why in (("unrecognized arguments", "engine does not accept this flag"),
                        ("FileNotFoundError", "engine does not produce this artifact"),
                        ("KeyError", "engine does not record this state field"),
