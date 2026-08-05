@@ -800,6 +800,7 @@ def extract_bash_write_targets_with_modes(command: str) -> List[WriteTarget]:
         return []
     stripped = command_without_heredoc_bodies(command)
     stripped = _strip_reason_payload(stripped)
+    stripped = _neutralize_command_word_prefixes(stripped)
     found: List[WriteTarget] = []
     found.extend(_extract_redirect_mode_targets(stripped))
     found.extend(_extract_tee_mode_targets(stripped))
