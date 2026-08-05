@@ -817,6 +817,30 @@ def extract_bash_write_targets_with_modes(command: str) -> List[WriteTarget]:
     []
     >>> extract_bash_write_targets_with_modes('echo x &> /tmp/a')
     []
+
+    A grouping subshell and the alias-bypass backslash no longer hide the verb,
+    and the attached output flag names its path:
+
+    >>> [(t.path, t.mode) for t in extract_bash_write_targets_with_modes('(cd /d && echo x > /tmp/a)')]
+    [('/tmp/a', 'truncating')]
+
+    >>> [(t.path, t.mode) for t in extract_bash_write_targets_with_modes('(cp /tmp/s /tmp/a)')]
+    [('/tmp/a', 'truncating')]
+
+    >>> [(t.path, t.mode) for t in extract_bash_write_targets_with_modes('\\\\cp /tmp/s /tmp/a')]
+    [('/tmp/a', 'truncating')]
+
+    >>> [(t.path, t.mode) for t in extract_bash_write_targets_with_modes('curl -sS -o/tmp/a http://h/f')]
+    [('/tmp/a', 'truncating')]
+
+    Process substitution is still never a named target, and a quoted filename
+    that really contains a parenthesis is still read whole:
+
+    >>> extract_bash_write_targets_with_modes('echo x > >(cat)')
+    []
+
+    >>> [t.path for t in extract_bash_write_targets_with_modes('echo x > "/tmp/report (1).txt"')]
+    ['/tmp/report (1).txt']
     """
     if not isinstance(command, str) or not command.strip():
         return []
