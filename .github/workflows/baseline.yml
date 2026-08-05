@@ -11,6 +11,12 @@ on:
   push:
     branches: [master, main]
   pull_request:
+  # Callable so the release pipeline can make these gates a REAL job-graph
+  # dependency of publishing. A `needs:` cannot reference a job in another
+  # workflow file, and a tag push matches neither trigger above, so without
+  # workflow_call a tag could publish without these gates ever running on that
+  # commit. Purely additive: the push/pull_request triggers are unchanged.
+  workflow_call:
 
 jobs:
   baseline:
