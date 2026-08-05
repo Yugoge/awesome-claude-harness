@@ -953,17 +953,27 @@ def check_claims(args, report):
     token_check_failed = False
     for label, expected in (("wrapper", RECORDED_WRAPPERS),
                             ("leading-redirection", RECORDED_REDIRECTION_OPS)):
-        region = published_token_region(ledger_text, label)
-        if region is None:
+        published = published_token_set(ledger_text, label)
+        if published is None:
             token_check_failed = True
             report.fail(f"published {label} token set is incomplete in the ledger: missing "
-                        f"{sorted(expected)} (the published-tokens:{label} region is absent)")
+                        f"{sorted(expected)} (the published-tokens:{label} region is absent "
+                        f"or carries no 'N tokens:' list)")
             continue
-        absent = sorted(t for t in expected if t not in region)
+        absent = sorted(set(expected) - set(published))
+        extra = sorted(set(published) - set(expected))
+        duplicated = sorted({t for t in published if published.count(t) > 1})
         if absent:
             token_check_failed = True
             report.fail(f"published {label} token set is incomplete in the ledger: missing "
                         f"{absent}")
+        if extra:
+            token_check_failed = True
+            report.fail(f"published {label} token set publishes {extra}, which is not in the "
+                        f"recorded set -- the document claims coverage it has no record of")
+        if duplicated:
+            token_check_failed = True
+            report.fail(f"published {label} token set lists {duplicated} more than once")
     # Reported ONLY when the loop above found nothing. Calling this unconditionally made one
     # run emit a FAIL and a PASS for the same assertion -- a reporting-integrity defect in the
     # one document whose premise is that its rows can be trusted.
