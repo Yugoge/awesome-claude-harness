@@ -507,11 +507,7 @@ fi
 #    CLAUDE_PROTECTED_DAEMON_PREFIX; the default reproduces today's behavior) — see
 #    PUBLIC-CORE.md §3. It was previously an un-scanned deliberately-literal exception.
 # ---------------------------------------------------------------------------
-HARD_MARKERS=(
-  'git@github.com:Yugoge'      # maintainer git remote
-  '/root/.claude.bak'          # maintainer rsync mirror
-  '/root/sync-backup.sh'       # maintainer sync cron
-)
+#    HARD_MARKERS is defined ABOVE the archive branch so both scan modes consume it.
 PARAM_MARKERS=(
   'happy-web-dev'                    # CLAUDE_DEV_CONTAINERS default
   '/root/bin/claude-allow-restart'  # CLAUDE_DAEMON_RESTART_GRANT_HELPER default
