@@ -330,8 +330,11 @@ def ledger_tables(ledger_path):
 
 def declared_schema_block(ledger_text):
     """Extract the ledger's published machine-readable schema block."""
+    # The closing marker is REQUIRED. Matching only to the first fence let the block be
+    # unterminated, so the region the document advertises as delimited was not.
     match = re.search(
-        r"<!--\s*enforcement-schema:begin\s*-->\s*```json\s*(.*?)```",
+        r"<!--\s*enforcement-schema:begin\s*-->\s*```json\s*(.*?)```"
+        r"\s*<!--\s*enforcement-schema:end\s*-->",
         ledger_text,
         re.S,
     )
