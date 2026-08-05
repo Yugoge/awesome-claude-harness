@@ -101,16 +101,19 @@ if [ "$VENV_PRESENT" -ne 1 ]; then
     miss "$pkg — not checked: the harness venv is missing. Run scripts/bootstrap to create it and install $MANIFEST."
   done
 else
+  # Remediation names the HASH-ENFORCED per-interpreter lockfile — the form CI
+  # actually installs with (baseline.yml: pip install --require-hashes -r
+  # requirements/py3XX.txt). An unpinned `-r requirements.txt` resolves whatever
+  # the index serves today, so pointing there would tell the user to reproduce
+  # something other than the tested, hash-verified dependency set.
+  PYTAG="$("$VENV_PY" -c 'import sys; print(f"{sys.version_info.major}{sys.version_info.minor}")' 2>/dev/null || echo "3XX")"
+  LOCKFILE="$HOME_DIR/requirements/py${PYTAG}.txt"
   # import name may differ from the distribution name (PyYAML -> yaml).
   check_mod() {  # <import-name> <pip-name>
     if "$VENV_PY" -c "import $1" >/dev/null 2>&1; then
       ok "$2 (import $1)"
     else
-      # Remediation points at the HASH-ENFORCED per-interpreter lockfile, which is
-      # the form CI installs with. An unpinned `pip install -r requirements.txt`
-      # resolves whatever the index serves today, so a remediation naming it would
-      # tell the user to reproduce something other than the tested dependency set.
-      miss "$2 — install with: $VENV_DIR/bin/pip install --require-hashes -r $HOME_DIR/requirements/py\$($VENV_PY -c 'import sys;print(f\"{sys.version_info.major}{sys.version_info.minor}\")').txt"
+      miss "$2 — install with: $VENV_DIR/bin/pip install --require-hashes -r $LOCKFILE"
     fi
   }
   check_mod pytest pytest
