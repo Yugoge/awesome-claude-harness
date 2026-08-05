@@ -1210,7 +1210,23 @@ def recorded_identities(gens: list) -> dict:
     latest: dict[tuple, dict] = {}
     for gen in gens:
         for record in list(gen.get("contributions") or []) + list(gen.get("observations") or []):
-            latest[identity_key(record)] = dict(record, _generation=gen.get("generation"))
+            key = identity_key(record)
+            previous = latest.get(key) or {}
+            # OWNERSHIP is governed by the most recent record. STRUCTURAL
+            # PROVENANCE is not: it accumulates. A group this lineage created in
+            # generation 1 is still this lineage's to drop when generation 2
+            # merely OBSERVES the identity already present -- and generation 2's
+            # observation necessarily records group_created=False, because it
+            # created nothing. Taking the latest flag would leave an empty group
+            # the installer itself introduced behind in the user's document.
+            latest[key] = dict(
+                record,
+                _generation=gen.get("generation"),
+                group_created=bool(previous.get("group_created"))
+                or bool(record.get("group_created")),
+                event_created=bool(previous.get("event_created"))
+                or bool(record.get("event_created")),
+            )
     return latest
 
 
