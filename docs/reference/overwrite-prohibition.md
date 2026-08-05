@@ -287,9 +287,13 @@ the suite. They are listed separately so that "declared" is never mistaken for
 
 ## 7. Registration requirement
 
-**This artifact is not registered by the lane that built it.** Adding a hook
-entry moves counts that two documents publish and that a gate asserts, so all
-new registrations land together as one atomic integration step.
+**This artifact is not registered by the lane that built it, and iteration 1
+does not register it either.** Adding a hook entry moves counts that two
+documents publish and that a gate asserts, so all new registrations land
+together as one atomic integration step. The substantive reason to keep
+deferring is that section 6 is what a registrar relies on when accepting the
+false-positive trade, and iteration 1 has just rewritten section 6 — three of
+its entries were wrong or missing.
 
 - **What**: `hooks/pretool-overwrite-guard.py`
 - **Where**: `settings.json` **and** `settings.template.json`, under
