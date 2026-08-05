@@ -50,7 +50,7 @@ Organization and usage documentation for `scripts/`.
 - `execute-push.py` - Eliminates the timing window that exists when validate + push are && -chained
 - `generate-folder-index.sh` - Description: Generate INDEX.md for folder (inventory of contents)
 - `generate-folder-readme.sh` - Description: Generate README.md for folder (purpose and organization rules)
-- `generate-hero-status.py` - Description: One source of truth emits TWO marker-delimited canonical regions -- the
+- `generate-hero-status.py` - Description: One source of truth emits THREE marker-delimited canonical regions -- the
 - `graphify-enrich.py` - graphify-enrich.py — pre-DEV focused subgraph extractor (runs between Step 7 and Step 8)
 - `graphify-maintain.py` - graphify-maintain.py — Global Graphify cache lifecycle manager (REAL CLI)
 - `graphify-query.py` - graphify-query.py — deterministic pre-BA graph hydrator (runs between Step 1 and Step 2)

@@ -1,17 +1,30 @@
 #!/usr/bin/env python3
 """Generate and ratchet the README's canonical status regions from repository state.
 
-Description: One source of truth emits TWO marker-delimited canonical regions -- the
-  headline-adjacent limits line, and the five-row status strip -- and re-derives them on
-  demand to byte-compare against what is committed. No row's visible text is ever
-  hand-written; every row is computed from a named predicate.
+Description: One source of truth emits THREE marker-delimited canonical regions -- the
+  headline-adjacent limits line, the hero disclosure region, and the status strip -- and
+  re-derives them on demand to byte-compare against what is committed. No row's visible
+  text is ever hand-written; every row is computed from a named predicate.
 
 Usage: generate-hero-status.py --write [--readme <path>]   # regenerate the regions
        generate-hero-status.py --check [--readme <path>]   # the CI ratchet
+       generate-hero-status.py --check --no-fold           # skip the browser assertion
 
 Exit codes: 0 = ok, 1 = usage/IO error, 2 = one or more ratchet assertions failed
 
-WHY TWO REGIONS FROM ONE GENERATOR. The limits statement must sit ADJACENT to the
+WHAT IS ASSERTED. Content (per-row and whole-region byte-compare, closed state enum,
+predicate agreement in both directions) AND position (region order, headline adjacency,
+above-the-fold visibility). Content-only assertions were a real gap: they refused every
+edit to the limits statement while allowing it to be MOVED anywhere in the document,
+which would have silently voided the adjacency an orchestrator ruling depends on.
+
+NUMBERS ARE DERIVED, NEVER TRANSCRIBED. The disclosure region publishes the hero's
+recorded duration, loop period, first-proof offset and truncation count, each computed
+from a committed artifact at build time. The recorded duration is additionally
+cross-validated against the capture's own first and last timestamps, so a coordinated
+edit of this README and the evidence file together still cannot agree.
+
+WHY THREE REGIONS FROM ONE GENERATOR. The limits statement must sit ADJACENT to the
 headline, and it must also sit INSIDE the byte-compared canonical content. With a single
 contiguous block those are mutually exclusive: a limits row buried in the strip is not
 adjacent to the headline, and a limits line written next to the headline escapes the
