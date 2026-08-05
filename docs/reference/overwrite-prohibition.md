@@ -183,7 +183,6 @@ work exists to end.
 | `compiled-binary` | Command-text analysis cannot reach inside a process. Unbounded class. |
 | `variable-indirection` | The lexer yields the literal `$T`. Denying it would deny creation. |
 | `check-use-race` | The decision is pre-execution; a path absent at check time can exist by open time. No pre-execution check closes this. |
-| `concurrent-grant-reuse` | Consumption is PostToolUse, so two calls issued before the first terminal result both observe one grant. Single-use holds for **serial** use only. |
 | `semantic-lexer-corruption` | A lexer that imports cleanly but returns incomplete targets degrades this guard **silently**, without tripping tool-policy's fail-closed bootstrap. |
 | `redirect-ampersand` | `&>` shares its prefix with fd duplication (`2>&1`), which must never be treated as a write. The verb set was fixed by requirement, so this is declared rather than silently absent. |
 | `recursive-copy` | `cp -r` replaces children beneath a destination directory, invisibly to a command-text lexer. |
