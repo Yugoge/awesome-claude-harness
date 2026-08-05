@@ -347,9 +347,25 @@ def ac2(tmp: Path) -> None:
     declared = set()
     for comp in PROFILE["components"]:
         declared |= set(comp["files"])
-    check("AC2(a)", "installed component set == manifest core set (both directions)",
-          actual_files(iso) == declared,
-          f"disk-only={sorted(actual_files(iso) - declared)} manifest-only={sorted(declared - actual_files(iso))}")
+    declared_plus = declared | selfmanage_expected(prefix)
+    check("AC2(a)", "installed component set == manifest core set + recorded "
+                    "self-management bundle (both directions)",
+          actual_files(iso) == declared_plus,
+          f"disk-only={sorted(actual_files(iso) - declared_plus)} "
+          f"manifest-only={sorted(declared_plus - actual_files(iso))}")
+    # The bundle is the payload-resident uninstall path (R9). It must be an
+    # explicit versioned list whose recorded digests match what is on disk --
+    # never a recursive copy of scripts/install/, which would re-import this very
+    # harness and every future sibling file.
+    bundle = read_state(prefix)["generations"][-1]["self_management"]
+    bundle_dir = iso / bundle["root_relative"].split("/", 1)[1]
+    check("AC2(f)", "the self-management bundle matches its recorded digests exactly",
+          all(sha256_file(bundle_dir / name) == bundle["digests"][name]
+              for name in bundle["files"]),
+          f"files={bundle['files']}")
+    check("AC2(f)", "the bundle carries no file it does not declare (non-recursive)",
+          {p.name for p in bundle_dir.iterdir()} == set(bundle["files"]),
+          str(sorted(p.name for p in bundle_dir.iterdir())))
     present = actual_files(iso) | {p for p in node_snapshot(iso)}
     bad = [x for x in PROFILE["excluded"] if any(p == x or p.startswith(x + "/") for p in present)]
     check("AC2(b)", "every excluded component is absent from the isolated root", not bad, str(bad))
