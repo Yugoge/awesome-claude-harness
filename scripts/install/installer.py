@@ -1591,17 +1591,40 @@ def uninstall(ctx: Ctx, keep_payload: bool = False) -> dict:
                           "result": result,
                           "measured_present": target.exists() or target.is_symlink()})
 
-    # The installer-owned tree goes last, and only when it carries our state file.
-    # It is removed by its OWN path -- never through the bridge link, which was
-    # already unlinked above without being followed.
+    # ---- R3b: payload removal is CONDITIONAL on a complete un-merge ----------
+    # The unconditional rmtree is what produced the measured end-state of a config
+    # home still wired to a payload that no longer exists, with the recovery state
+    # deleted. If anything was deliberately retained, the payload, the state file
+    # and every backup stay so the operator can finish by hand.
+    retained = [i for i in items if i.get("result") in RETAINED_RESULTS]
+    partial = bool(retained)
     removed_root = False
-    if not keep_payload and ctx.state_path.is_file() and ctx.prefix.is_dir():
-        shutil.rmtree(ctx.prefix)
-        removed_root = True
+    if partial:
+        payload_result = "kept-partial-unmerge"
+    elif keep_payload:
+        payload_result = "kept-by-request"
+    elif ctx.state_path.is_file() and ctx.prefix.is_dir():
+        shutil.rmtree(ctx.prefix, ignore_errors=True)
+        removed_root = not ctx.prefix.exists()
+        # R9: the final removal deletes the very engine that is executing. POSIX
+        # normally tolerates this once Python has loaded the source, but it is not
+        # portable, and a bundle that survives is a RETAINED PARTIAL uninstall --
+        # never a success.
+        payload_result = "removed" if removed_root else "kept-self-delete-failed"
+        if not removed_root:
+            partial = True
+    else:
+        payload_result = "skipped"
     items.append({"action": "remove", "path": str(ctx.prefix), "kind": "dir",
-                  "result": "removed" if removed_root else "skipped",
+                  "result": payload_result,
                   "measured_present": ctx.prefix.exists()})
-    return {"status": "ok", "items": items}
+
+    return {"status": "partial" if partial else "ok",
+            "items": items,
+            "retained": [{k: v for k, v in i.items() if not k.startswith("_")}
+                         for i in retained],
+            "migrated_legacy": bool(migration),
+            "exit_code": EXIT_PARTIAL if partial else EXIT_OK}
 
 
 # --------------------------------------------------------------------------- #
