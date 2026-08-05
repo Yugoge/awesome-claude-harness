@@ -1596,7 +1596,13 @@ def uninstall(ctx: Ctx, keep_payload: bool = False) -> dict:
     # home still wired to a payload that no longer exists, with the recovery state
     # deleted. If anything was deliberately retained, the payload, the state file
     # and every backup stay so the operator can finish by hand.
-    retained = [i for i in items if i.get("result") in RETAINED_RESULTS]
+    # Scoped to RECORDED IDENTITIES and the residual scan, which is exactly what
+    # conditions the payload removal. A created FILE the user rewrote is retained
+    # by the separate as-installed-digest guard and has never implied a partial
+    # un-merge: it carries no registration wiring, so the payload can still go.
+    retained = [i for i in items
+                if i.get("action") in ("un-merge", "residual")
+                and i.get("result") in RETAINED_RESULTS]
     partial = bool(retained)
     removed_root = False
     if partial:
