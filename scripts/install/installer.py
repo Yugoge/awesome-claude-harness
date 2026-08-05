@@ -866,8 +866,8 @@ def build_plan(ctx: Ctx) -> dict:
         elif kind == "dir":
             if not target.exists():
                 add("config_home", rel, "dir", "create", "created only because it was absent")
-        elif kind == "file" and rel == "settings.json":
-            settings_plan = plan_settings(ctx, target, conflicts)
+        elif kind == "file" and rel == ctx.settings_rel:
+            settings_plan = plan_settings(ctx, target, conflicts, state)
             if settings_plan and settings_plan["change_kind"]:
                 add("config_home", rel, "file", settings_plan["change_kind"],
                     settings_plan["detail"])
