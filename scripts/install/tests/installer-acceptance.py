@@ -825,16 +825,689 @@ def ac8(tmp: Path) -> None:
           created == {e["path"] for e in PROFILE["live_footprint"]}, str(sorted(created)))
 
 
+# --------------------------------------------------------------------------- #
+# AC9-AC14 -- the destructive paths the original harness never exercised.
+# It reported 91/91 while four data-destroying defects were live, because it
+# never uninstalled against a different home, never edited settings after
+# install, and never installed onto a symlinked settings.json.
+# --------------------------------------------------------------------------- #
+NON_ASCII_KEY_VALUE = "café — naïve ünicode"
+
+
+def user_doc(extra: dict | None = None) -> dict:
+    doc = {
+        "model": "opus",
+        "mcpServers": {"userServer": {"command": "npx"}},
+        "permissions": {"allow": ["Bash(ls:*)"], "deny": ["Read(./.env)"]},
+        "userNote": NON_ASCII_KEY_VALUE,
+    }
+    if extra:
+        doc.update(extra)
+    return doc
+
+
+def ac9(tmp: Path) -> None:
+    print("AC9  uninstall is BOUND to the config home it installed into")
+    base = tmp / "ac9"
+    ha, hb, pa = base / "homeA", base / "homeB", base / "prefixA"
+    ha.mkdir(parents=True); hb.mkdir(parents=True)
+    write_unconventional(ha / "settings.json", user_doc())
+    write_unconventional(hb / "settings.json", user_doc(
+        {"mcpServers": {"serverB_IRREPLACEABLE": {"command": "b"}}, "model": "sonnet",
+         "permissions": {"allow": [], "deny": ["Bash(wget:*)"]}}))
+
+    rc, _out, err = engine_run("apply", "--prefix", pa, "--config-dir", ha)
+    if rc != 0 and missing_surface(rc, err):
+        inapplicable("AC9", "cross-home refusal", missing_surface(rc, err))
+        return
+    if not require_installed(ha, pa, "AC9"):
+        return
+
+    b_before = (hb / "settings.json").read_bytes()
+    b_snap_before = node_snapshot(hb)
+    a_snap_before = node_snapshot(ha)
+    rc, _out, err = engine_run("uninstall", "--prefix", pa, "--config-dir", hb)
+
+    # AC-INST-1 -- the refusal itself
+    check("AC9(a)", "uninstall against a config home it did not install into exits "
+                    "non-zero", rc != 0, f"rc={rc} err={err[-200:]}",
+          family="cross-home uninstall")
+    check("AC9(a)", "MEASURED PREDICATE: home B's settings digest is UNCHANGED "
+                    "across the run", (hb / "settings.json").read_bytes() == b_before,
+          "the defect this catches rewrote B with A's pre-install bytes",
+          family="cross-home uninstall")
+    # AC-INST-2 -- the refusal precedes the first mutation
+    check("AC9(b)", "home B node snapshot identical on every path, node type, "
+                    "(st_dev, st_ino) and readlink target", node_snapshot(hb) == b_snap_before,
+          str(sorted(set(node_snapshot(hb)) ^ set(b_snap_before)))[:200],
+          family="cross-home uninstall")
+    check("AC9(b)", "home A is untouched by the refused run",
+          node_snapshot(ha) == a_snap_before, "", family="cross-home uninstall")
+    check("AC9(c)", "the state file and the isolated payload are both retained",
+          (pa / "state" / "install-state.json").is_file() and (pa / "harness").is_dir(),
+          family="cross-home uninstall")
+    check("AC9(c)", "stdout/stderr names BOTH the recorded and the requested home",
+          str(ha) in err and str(hb) in err, err[-200:])
+
+    # AC-INST-9 -- no dangling wiring, scored against the cross-home fixture where
+    # a bare reference count is genuinely falsifiable.
+    rc2, _o2, _e2 = engine_run("uninstall", "--prefix", pa, "--config-dir", ha)
+    doc_a = json.loads((ha / "settings.json").read_text())
+    check("AC9(d)", "after the SUCCESSFUL uninstall against the recorded home, zero "
+                    "hook commands reference the isolated root",
+          rc2 == 0 and len(payload_refs(doc_a, ha)) == 0,
+          f"rc={rc2} refs={payload_refs(doc_a, ha)}")
+    check("AC9(d)", "and the user's own pre-existing keys survive it",
+          doc_a.get("userNote") == NON_ASCII_KEY_VALUE
+          and doc_a.get("mcpServers") == {"userServer": {"command": "npx"}},
+          json.dumps(doc_a)[:200])
+
+
+def ac10(tmp: Path) -> None:
+    print("AC10 the un-merge preserves post-install user work")
+    base = tmp / "ac10"
+
+    # AC-INST-4 -- four post-install additions
+    home, prefix = base / "h4" / "cfg", base / "h4" / "prefix"
+    home.mkdir(parents=True)
+    write_unconventional(home / "settings.json", user_doc())
+    rc, _o, err = engine_run("apply", "--prefix", prefix, "--config-dir", home)
+    if rc != 0 and missing_surface(rc, err):
+        inapplicable("AC10", "post-install edit survival", missing_surface(rc, err))
+        return
+    if not require_installed(home, prefix, "AC10"):
+        return
+    live = json.loads((home / "settings.json").read_text())
+    live["mcpServers"]["added_after_install"] = {"command": "x"}
+    live["permissions"]["allow"].append("Bash(docker:*)")
+    live["permissions"]["deny"].append("Bash(shutdown:*)")
+    live["hooks"]["PostToolUse"] = [
+        {"hooks": [{"type": "command", "command": "echo my-own-post-hook"}]}]
+    (home / "settings.json").write_text(json.dumps(live, indent=2) + "\n")
+
+    rc, out, _e = engine_run("uninstall", "--prefix", prefix, "--config-dir", home, "--json")
+    after = json.loads((home / "settings.json").read_text())
+    survivors = {
+        "mcpServers.added_after_install": "added_after_install" in after.get("mcpServers", {}),
+        "permissions.allow Bash(docker:*)":
+            "Bash(docker:*)" in after.get("permissions", {}).get("allow", []),
+        "permissions.deny Bash(shutdown:*)":
+            "Bash(shutdown:*)" in after.get("permissions", {}).get("deny", []),
+        "user PostToolUse group": bool((after.get("hooks") or {}).get("PostToolUse")),
+    }
+    lost = [k for k, v in survivors.items() if not v]
+    check("AC10(a)", "MEASURED PREDICATE: every named post-install user key is PRESENT "
+                     "after the uninstall", not lost, f"lost={lost}",
+          family="post-install-edit survival")
+    check("AC10(a)", "and the run reports success", rc == 0, f"rc={rc}",
+          family="post-install-edit survival")
+    check("AC10(a)", "no hook command still references the isolated root",
+          not payload_refs(after, home), str(payload_refs(after, home)))
+    check("AC10(a)", "the user's non-ASCII value survives the re-serialization "
+                     "(semantic preservation, not byte-identity)",
+          after.get("userNote") == NON_ASCII_KEY_VALUE, repr(after.get("userNote")))
+
+    # AC-INST-5 -- removal is ENTRY-level, not group-level
+    home5, prefix5 = base / "h5" / "cfg", base / "h5" / "prefix"
+    home5.mkdir(parents=True)
+    write_unconventional(home5 / "settings.json", user_doc())
+    engine_run("apply", "--prefix", prefix5, "--config-dir", home5)
+    if not require_installed(home5, prefix5, "AC10(b)"):
+        return
+    doc5 = json.loads((home5 / "settings.json").read_text())
+    universal = installer_commands(home5)[0]
+    target_group = next(g for g in doc5["hooks"]["PreToolUse"]
+                        if any(h["command"] == universal for h in g["hooks"]))
+    user_entry = {"type": "command", "command": "echo mine-inside-their-group"}
+    target_group["hooks"].append(user_entry)
+    (home5 / "settings.json").write_text(json.dumps(doc5, indent=2) + "\n")
+    group_digest_before = json.dumps(target_group, sort_keys=True)
+
+    rc, _o, _e = engine_run("uninstall", "--prefix", prefix5, "--config-dir", home5, "--json")
+    after5 = json.loads((home5 / "settings.json").read_text())
+    remaining = [g for g in (after5.get("hooks") or {}).get("PreToolUse", [])
+                 if user_entry in (g.get("hooks") or [])]
+    check("AC10(b)", "the user's entry appended INTO the installer's own group "
+                     "survives, canonical-value-equal", len(remaining) == 1,
+          json.dumps((after5.get("hooks") or {}).get("PreToolUse"))[:250])
+    check("AC10(b)", "the installer's entry is gone from that same group",
+          not any(h["command"] == universal for g in remaining
+                  for h in (g.get("hooks") or [])))
+    check("AC10(b)", "the group itself is RETAINED because it still has an entry",
+          bool(remaining) and rc == 0, f"rc={rc}")
+    check("AC10(b)", "the enclosing GROUP digest changed before the run, proving a "
+                     "group-digest gate would have wrongly retained the entry",
+          group_digest_before != json.dumps(remaining[0], sort_keys=True) if remaining else False,
+          "locate-by-tuple, verify-by-entry-digest -- never gate on the group")
+
+
+def ac11(tmp: Path) -> None:
+    print("AC11 registration identity is the FULL tuple, and coexistence holds")
+    base = tmp / "ac11"
+
+    # AC-INST-6 / AC-INST-12 -- user's copy under a DIFFERENT matcher
+    home, prefix = base / "diff" / "cfg", base / "diff" / "prefix"
+    home.mkdir(parents=True)
+    universal = installer_commands(home)[0]
+    write_unconventional(home / "settings.json", user_doc({"hooks": {"PreToolUse": [
+        {"matcher": "Bash", "hooks": [{"type": "command", "command": universal}]}]}}))
+    user_group_before = json.loads((home / "settings.json").read_text())["hooks"]["PreToolUse"][0]
+
+    rc, _o, err = engine_run("apply", "--prefix", prefix, "--config-dir", home)
+    if rc != 0 and missing_surface(rc, err):
+        inapplicable("AC11", "registration identity", missing_surface(rc, err))
+        return
+    doc = json.loads((home / "settings.json").read_text())
+    same_command = [c for c in hook_commands(doc) if c[3] == universal]
+    universal_present = [c for c in same_command if c[1] is None]
+    check("AC11(a)", "MEASURED PREDICATE: the universal (matcher-less) registration "
+                     "IS PRESENT after apply", bool(universal_present),
+          f"matchers={[c[1] for c in same_command]}", family="registration identity")
+    check("AC11(a)", "both the user's matcher-scoped group and the installer's "
+                     "registration are present", len(same_command) == 2,
+          str(same_command), family="registration identity")
+    bucket = doc["hooks"]["PreToolUse"]
+    check("AC11(a)", "the installer's registration is APPENDED after the user's",
+          bucket[0] == user_group_before and len(bucket) > 1,
+          json.dumps(bucket)[:250])
+    state = read_state(prefix)["generations"][-1]
+    obs_keys = {(o["event"], o["matcher"], o["command"]) for o in state["observations"]}
+    check("AC11(a)", "the user's foreign payload reference is RECORDED as an "
+                     "observation, so the un-merge can account it",
+          ("PreToolUse", "Bash", universal) in obs_keys, str(sorted(obs_keys))[:250])
+
+    rc, _o, _e = engine_run("uninstall", "--prefix", prefix, "--config-dir", home, "--json")
+    after = json.loads((home / "settings.json").read_text())
+    check("AC11(b)", "the user's differently-matched registration survives, "
+                     "canonical-value-equal", user_group_before in
+          (after.get("hooks") or {}).get("PreToolUse", []),
+          json.dumps(after.get("hooks"))[:250])
+    check("AC11(b)", "the installer's own registration is absent",
+          not [c for c in hook_commands(after) if c[3] == universal and c[1] is None])
+    check("AC11(b)", "the run reports SUCCESS (exit 0): the surviving reference is "
+                     "ACCOUNTED by the recorded unowned observation, so it is not a "
+                     "partial uninstall", rc == 0, f"rc={rc}")
+
+    # AC-INST-23 -- user's copy under the SAME matcher. The case that stops this
+    # fix from creating a NEW clobber.
+    home2, prefix2 = base / "same" / "cfg", base / "same" / "prefix"
+    home2.mkdir(parents=True)
+    universal2 = installer_commands(home2)[0]
+    write_unconventional(home2 / "settings.json", user_doc({"hooks": {"PreToolUse": [
+        {"hooks": [{"type": "command", "command": universal2}]}]}}))
+    pre_parsed = json.loads((home2 / "settings.json").read_text())["hooks"]["PreToolUse"][0]
+
+    engine_run("apply", "--prefix", prefix2, "--config-dir", home2)
+    gen = read_state(prefix2)["generations"][-1]
+    contrib_keys = {(c["event"], c["matcher"], c["command"]) for c in gen["contributions"]}
+    obs = [o for o in gen["observations"]
+           if (o["event"], o["matcher"], o["command"]) == ("PreToolUse", None, universal2)]
+    check("AC11(c)", "the user's SAME-matcher identity is recorded in observations[] "
+                     "with disposition 'unowned'",
+          len(obs) == 1 and obs[0]["ownership_disposition"] == "unowned",
+          str(obs)[:250])
+    check("AC11(c)", "and it does NOT appear in contributions[]",
+          ("PreToolUse", None, universal2) not in contrib_keys, str(sorted(contrib_keys))[:250])
+    check("AC11(c)", "contributions[] length equals the merge's `added` set, NOT the "
+                     "profile's declared registration count",
+          len(gen["contributions"]) == len(PROFILE["hook_registrations"]) - 1,
+          f"contributions={len(gen['contributions'])} "
+          f"profile_declares={len(PROFILE['hook_registrations'])}")
+
+    # A repeat apply must NEVER reclassify it as claimed or inserted.
+    engine_run("apply", "--prefix", prefix2, "--config-dir", home2)
+    for generation in read_state(prefix2)["generations"]:
+        still_unowned = [o for o in generation.get("observations") or []
+                         if (o["event"], o["matcher"], o["command"])
+                         == ("PreToolUse", None, universal2)]
+        if still_unowned:
+            check("AC11(c)", f"{generation['generation']}: never reclassified as "
+                             "claimed/inserted across repeat installs",
+                  all(o["ownership_disposition"] == "unowned" for o in still_unowned),
+                  str(still_unowned)[:200])
+
+    rc, _o, _e = engine_run("uninstall", "--prefix", prefix2, "--config-dir", home2, "--json")
+    after2 = json.loads((home2 / "settings.json").read_text())
+    check("AC11(d)", "the user's pre-existing SAME-matcher registration survives "
+                     "uninstall, canonical-value-equal to its pre-install form",
+          pre_parsed in (after2.get("hooks") or {}).get("PreToolUse", []),
+          json.dumps(after2.get("hooks"))[:250])
+    check("AC11(d)", "the run exits 0: its bridge reference is accounted as unowned",
+          rc == 0, f"rc={rc}")
+
+
+def ac12(tmp: Path) -> None:
+    print("AC12 mandatory footprint entries, and the record that makes it invertible")
+    base = tmp / "ac12"
+
+    # AC-INST-10 / AC-INST-11 -- symlinked settings.json
+    home, prefix = base / "sym" / "cfg", base / "sym" / "prefix"
+    elsewhere = base / "sym" / "elsewhere"
+    home.mkdir(parents=True); elsewhere.mkdir(parents=True)
+    write_unconventional(elsewhere / "real-settings.json", user_doc())
+    os.symlink(str(elsewhere / "real-settings.json"), home / "settings.json")
+    before = node_snapshot(home)
+
+    rc, out, err = engine_run("apply", "--prefix", prefix, "--config-dir", home)
+    check("AC12(a)", "apply onto a symlinked settings.json exits non-zero", rc != 0,
+          f"rc={rc}", family="mandatory-entry refusal")
+    check("AC12(a)", "MEASURED PREDICATE: neither the bridge link nor the command "
+                     "document EXISTS after the aborted run",
+          not (home / "harness").exists() and not (home / "harness").is_symlink()
+          and not (home / "commands" / "harness-doctor.md").exists(),
+          family="mandatory-entry refusal")
+    check("AC12(a)", "the config-home snapshot is unchanged (abort precedes all mutation)",
+          node_snapshot(home) == before, str(sorted(set(node_snapshot(home)) ^ set(before))))
+    check("AC12(a)", "no install-state generation was appended",
+          not (prefix / "state" / "install-state.json").exists())
+    check("AC12(a)", "stdout carries no success token", "APPLIED" not in out)
+
+    rc2, out2, err2 = engine_run("apply", "--prefix", prefix, "--config-dir", home,
+                                 "--allow-partial-install")
+    if missing_surface(rc2, err2):
+        inapplicable("AC12(b)", "opted-in partial install", missing_surface(rc2, err2))
+    else:
+        check("AC12(b)", "the opted-in partial install exits non-zero and DISTINCT "
+                         "from the abort code", rc2 != 0 and rc2 != rc, f"abort={rc} partial={rc2}")
+        check("AC12(b)", "the report names settings.json as the skipped mandatory entry",
+              "settings.json" in out2 and "SKIPPED MANDATORY ENTRY" in out2, out2[-200:])
+        gen = read_state(prefix)["generations"][-1]
+        check("AC12(b)", "the generation record's settings disposition records the refusal",
+              gen["settings_disposition"] == "refused"
+              and "settings.json" in gen["skipped_mandatory"], str(gen.get("settings_disposition")))
+
+    # AC-INST-3 -- the contribution record is written
+    home3, prefix3 = base / "rec" / "cfg", base / "rec" / "prefix"
+    home3.mkdir(parents=True)
+    write_unconventional(home3 / "settings.json", user_doc())
+    engine_run("apply", "--prefix", prefix3, "--config-dir", home3)
+    state = read_state(prefix3)
+    gen = state["generations"][-1]
+    check("AC12(c)", "the state schema string is no longer the v1 literal",
+          state["schema"] != "claude-harness/install-state/v1", state.get("schema"),
+          family="v1-record handling")
+    check("AC12(c)", "contributions[] has exactly the profile's registration count on a "
+                     "fixture where every registration is genuinely new",
+          len(gen["contributions"]) == len(PROFILE["hook_registrations"]),
+          f"n={len(gen['contributions'])}")
+    check("AC12(c)", "observations[] is empty on that fixture", gen["observations"] == [],
+          str(gen["observations"])[:200])
+    required = {"event", "matcher", "hook_type", "command", "entry_digest",
+                "group_instance_metadata", "group_created", "event_created",
+                "append_ordinal", "ownership_disposition"}
+    check("AC12(c)", "every contribution carries the full per-identity field set",
+          all(required <= set(c) for c in gen["contributions"]),
+          str(sorted(required - set(gen["contributions"][0]))) if gen["contributions"] else "empty")
+    check("AC12(c)", "every contribution's disposition is 'inserted' with a non-null "
+                     "append ordinal",
+          all(c["ownership_disposition"] == "inserted" and c["append_ordinal"] is not None
+              for c in gen["contributions"]))
+    check("AC12(c)", "the record carries container_created, BOTH config-home forms and "
+                     "the whole-file as-installed digest",
+          "container_created" in gen and gen["config_home_lexical"] == str(home3)
+          and gen["config_home_resolved"] == os.path.realpath(home3)
+          and gen["settings_sha256_as_installed"] == sha256_file(home3 / "settings.json"),
+          str({k: gen.get(k) for k in ("config_home_lexical", "config_home_resolved")})[:200])
+    check("AC12(c)", "the entry digest covers the WHOLE entry object, so a sibling-key "
+                     "edit that preserves the identity tuple still changes it",
+          gen["contributions"][0]["entry_digest"]
+          != __import__("hashlib").sha256(json.dumps(
+              {"type": "command", "command": gen["contributions"][0]["command"],
+               "timeout": 60}, sort_keys=True, separators=(",", ":")).encode()).hexdigest())
+    check("AC12(c)", "the record is COMMITTED, and the prepared/committed field exists "
+                     "so a crash window is recoverable",
+          gen.get("record_status") == "committed", str(gen.get("record_status")))
+
+
+def ac13(tmp: Path) -> None:
+    print("AC13 partial un-merges retain the payload; false successes are closed")
+    base = tmp / "ac13"
+
+    def fresh(name: str):
+        home, prefix = base / name / "cfg", base / name / "prefix"
+        home.mkdir(parents=True)
+        write_unconventional(home / "settings.json", user_doc())
+        rc, _o, err = engine_run("apply", "--prefix", prefix, "--config-dir", home)
+        return home, prefix, rc, err
+
+    # AC-INST-18 -- sibling-key edit: located by tuple, digest mismatch
+    home, prefix, rc, err = fresh("modified")
+    if rc != 0 and missing_surface(rc, err):
+        inapplicable("AC13", "partial un-merge", missing_surface(rc, err))
+        return
+    if not require_installed(home, prefix, "AC13"):
+        return
+    doc = json.loads((home / "settings.json").read_text())
+    universal = installer_commands(home)[0]
+    for group in doc["hooks"]["PreToolUse"]:
+        for entry in group["hooks"]:
+            if entry["command"] == universal:
+                entry["timeout"] = 60
+    (home / "settings.json").write_text(json.dumps(doc, indent=2) + "\n")
+
+    rc, out, _e = engine_run("uninstall", "--prefix", prefix, "--config-dir", home, "--json")
+    report = json.loads(out)
+    kept = [i for i in report["items"] if i.get("result") == "kept-user-modified"]
+    removed = [i for i in report["items"] if i.get("result") == "removed"]
+    check("AC13(a)", "the sibling-key-edited entry is located by tuple and reported "
+                     "kept-user-modified on a digest mismatch", len(kept) == 1, str(kept)[:250])
+    check("AC13(a)", "the untouched contribution is still removed", len(removed) >= 1)
+    check("AC13(a)", "MEASURED PREDICATE: the isolated payload directory STILL EXISTS "
+                     "after the partial un-merge", (prefix / "harness").is_dir(),
+          family="unconditional payload removal")
+    check("AC13(a)", "the state file and every backup are retained",
+          (prefix / "state" / "install-state.json").is_file()
+          and (prefix / "backups").is_dir(), family="unconditional payload removal")
+    check("AC13(a)", "the exit code is 3 (partial), distinct from success and refusal",
+          rc == 3, f"rc={rc}", family="unconditional payload removal")
+
+    # AC-INST-19 -- duplicated entry: ambiguous
+    home2, prefix2, _rc, _err = fresh("ambiguous")
+    if require_installed(home2, prefix2, "AC13(b)"):
+        doc2 = json.loads((home2 / "settings.json").read_text())
+        universal2 = installer_commands(home2)[0]
+        dupe = next(copy_g for copy_g in doc2["hooks"]["PreToolUse"]
+                    if any(h["command"] == universal2 for h in copy_g["hooks"]))
+        doc2["hooks"]["PreToolUse"].append(json.loads(json.dumps(dupe)))
+        (home2 / "settings.json").write_text(json.dumps(doc2, indent=2) + "\n")
+        rc2, out2, _e = engine_run("uninstall", "--prefix", prefix2, "--config-dir", home2,
+                                   "--json")
+        rep2 = json.loads(out2)
+        amb = [i for i in rep2["items"] if i.get("result") == "ambiguous-kept"]
+        after2 = json.loads((home2 / "settings.json").read_text())
+        check("AC13(b)", "a duplicated identity is reported ambiguous-kept and NEITHER "
+                         "copy is removed", len(amb) == 1
+              and len([c for c in hook_commands(after2) if c[3] == universal2]) == 2,
+              str(amb)[:200])
+        check("AC13(b)", "the payload is retained and the exit code is non-zero",
+              (prefix2 / "harness").is_dir() and rc2 != 0, f"rc={rc2}")
+
+    # AC-INST-26 -- command-text edit: NOT locatable, must not become a false success
+    home3, prefix3, _rc, _err = fresh("residual")
+    if require_installed(home3, prefix3, "AC13(c)"):
+        doc3 = json.loads((home3 / "settings.json").read_text())
+        universal3 = installer_commands(home3)[0]
+        for group in doc3["hooks"]["PreToolUse"]:
+            for entry in group["hooks"]:
+                if entry["command"] == universal3:
+                    entry["command"] = universal3 + " --my-own-flag"
+        (home3 / "settings.json").write_text(json.dumps(doc3, indent=2) + "\n")
+        rc3, out3, _e = engine_run("uninstall", "--prefix", prefix3, "--config-dir", home3,
+                                   "--json")
+        rep3 = json.loads(out3)
+        residual = [i for i in rep3["items"]
+                    if i.get("result") == "kept-unrecognized-residual"]
+        check("AC13(c)", "a command-text edit is reported kept-unrecognized-residual by "
+                         "the residual scan, naming its event, matcher and command",
+              bool(residual) and all({"event", "matcher", "command"} <= set(i)
+                                     for i in residual), str(residual)[:250])
+        check("AC13(c)", "payload removal is SUPPRESSED and the exit code is 3 -- NOT a "
+                         "false success that deletes a payload the live command names",
+              (prefix3 / "harness").is_dir() and rc3 == 3, f"rc={rc3}")
+
+    # the same must hold for a changed enclosing matcher
+    home4, prefix4, _rc, _err = fresh("matcher-edit")
+    if require_installed(home4, prefix4, "AC13(d)"):
+        doc4 = json.loads((home4 / "settings.json").read_text())
+        universal4 = installer_commands(home4)[0]
+        for group in doc4["hooks"]["PreToolUse"]:
+            if any(h["command"] == universal4 for h in group["hooks"]):
+                group["matcher"] = "Bash"
+        (home4 / "settings.json").write_text(json.dumps(doc4, indent=2) + "\n")
+        rc4, out4, _e = engine_run("uninstall", "--prefix", prefix4, "--config-dir", home4,
+                                   "--json")
+        check("AC13(d)", "a changed enclosing matcher is likewise an unrecognized "
+                         "residual, retaining the payload at exit 3",
+              rc4 == 3 and (prefix4 / "harness").is_dir()
+              and any(i.get("result") == "kept-unrecognized-residual"
+                      for i in json.loads(out4)["items"]), f"rc={rc4}")
+
+    # AC-INST-22 -- duplicate-key document
+    home5, prefix5 = base / "dupkey" / "cfg", base / "dupkey" / "prefix"
+    home5.mkdir(parents=True)
+    (home5 / "settings.json").write_text(
+        '{\n  "model": "opus",\n  "model": "sonnet"\n}\n')
+    before5 = node_snapshot(home5)
+    rc5, _o, err5 = engine_run("apply", "--prefix", prefix5, "--config-dir", home5)
+    check("AC13(e)", "a duplicate-key settings document is REFUSED, not silently "
+                     "normalized", rc5 != 0 and node_snapshot(home5) == before5,
+          f"rc={rc5} err={err5[-160:]}")
+
+
+def ac14(tmp: Path) -> None:
+    print("AC14 legacy records, source-independent uninstall, crash-window recovery")
+    base = tmp / "ac14"
+
+    # AC-INST-13 -- uninstall from the payload with NO source checkout
+    home, prefix = base / "nosrc" / "cfg", base / "nosrc" / "prefix"
+    home.mkdir(parents=True)
+    write_unconventional(home / "settings.json", user_doc())
+    rc, _o, err = engine_run("apply", "--prefix", prefix, "--config-dir", home)
+    if rc != 0 and missing_surface(rc, err):
+        inapplicable("AC14", "payload-resident uninstall", missing_surface(rc, err))
+        return
+    if not require_installed(home, prefix, "AC14"):
+        return
+    bundle = read_state(prefix)["generations"][-1].get("self_management")
+    entrypoint = prefix / bundle["root_relative"] / "uninstall" if bundle else None
+    if not entrypoint or not entrypoint.is_file():
+        inapplicable("AC14(a)", "payload-resident uninstall entrypoint",
+                     "engine does not ship a self-management bundle")
+    else:
+        rc, out, err = run([entrypoint, "--config-dir", home,
+                            "--source", base / "THIS-PATH-DOES-NOT-EXIST", "--json"])
+        after = json.loads((home / "settings.json").read_text())
+        check("AC14(a)", "uninstall runs from the isolated payload with --source "
+                         "pointing at a path that does not exist",
+              rc in (0, 3), f"rc={rc} err={err[-250:]}")
+        check("AC14(a)", "the config-home footprint is removed",
+              not (home / "harness").exists() and not payload_refs(after, home),
+              f"refs={payload_refs(after, home)}")
+        check("AC14(a)", "exit 0 iff the self-management bundle deleted itself, else 3 "
+                         "naming the retained bundle",
+              (rc == 0 and not prefix.exists()) or (rc == 3 and prefix.exists()),
+              f"rc={rc} payload_present={prefix.exists()}")
+
+    # AC-INST-7 / AC-INST-20 / AC-INST-24 -- v1 records
+    def make_v1(name: str, mutate=None):
+        h, p = base / name / "cfg", base / name / "prefix"
+        h.mkdir(parents=True)
+        write_unconventional(h / "settings.json", user_doc())
+        engine_run("apply", "--prefix", p, "--config-dir", h)
+        state = json.loads((p / "state" / "install-state.json").read_text())
+        # Downgrade to the pre-R2 shape: drop every field the contribution record
+        # introduced, leaving exactly what the unfixed engine wrote.
+        state["schema"] = "claude-harness/install-state/v1"
+        for g in state["generations"]:
+            for field in ("contributions", "observations", "container_created",
+                          "record_status", "settings_disposition",
+                          "settings_pre_image_sha256", "settings_sha256_as_installed",
+                          "config_home_lexical", "config_home_resolved",
+                          "self_management", "bridge_rel", "settings_rel",
+                          "skipped_mandatory"):
+                g.pop(field, None)
+        (p / "state" / "install-state.json").write_text(json.dumps(state, indent=2) + "\n")
+        if mutate:
+            mutate(h)
+        return h, p
+
+    # state (a): unchanged since install -> MUST complete, or no host is removable
+    h_a, p_a = make_v1("v1-clean")
+    rc_a, _o, err_a = engine_run("uninstall", "--prefix", p_a, "--config-dir", h_a, "--json")
+    doc_a = json.loads((h_a / "settings.json").read_text())
+    check("AC14(b)", "a v1 install whose live document is a PROVABLE post-image is "
+                     "actually removable: exits 0 with the payload gone",
+          rc_a == 0 and not p_a.exists(), f"rc={rc_a} err={err_a[-200:]}")
+    check("AC14(b)", "and everything not attributable to the legacy install is intact",
+          doc_a.get("userNote") == NON_ASCII_KEY_VALUE and not payload_refs(doc_a, h_a),
+          json.dumps(doc_a)[:200])
+
+    # state (b): user edited the document after install -> MUST refuse
+    def user_edit(home_path: Path):
+        doc = json.loads((home_path / "settings.json").read_text())
+        doc["addedAfterInstall"] = "must-survive"
+        (home_path / "settings.json").write_text(json.dumps(doc, indent=2) + "\n")
+
+    h_b, p_b = make_v1("v1-edited", mutate=user_edit)
+    before_b = node_snapshot(h_b)
+    rc_b, _o, err_b = engine_run("uninstall", "--prefix", p_b, "--config-dir", h_b)
+    after_b = json.loads((h_b / "settings.json").read_text())
+    check("AC14(c)", "a v1 record whose post-image is NOT provable is refused, not "
+                     "whole-file restored", rc_b != 0, f"rc={rc_b}",
+          family="v1-record handling")
+    check("AC14(c)", "MEASURED PREDICATE: the v1 fixture's user edit is STILL PRESENT "
+                     "after the refused run", after_b.get("addedAfterInstall") == "must-survive",
+          family="v1-record handling")
+    check("AC14(c)", "the config home is unchanged on every path, node type and inode",
+          node_snapshot(h_b) == before_b, family="v1-record handling")
+    check("AC14(c)", "the state file, the payload and every backup are retained",
+          (p_b / "state" / "install-state.json").is_file() and (p_b / "harness").is_dir()
+          and (p_b / "backups").is_dir())
+    check("AC14(c)", "stdout names the backup path as the manual-recovery artifact",
+          "backup" in err_b and str(p_b / "backups") in err_b, err_b[-250:])
+    check("AC14(c)", "and prints a reviewable removal plan naming what it would remove",
+          "Reviewable removal plan" in err_b
+          and installer_commands(h_b)[0] in err_b, err_b[-250:])
+
+    # AC-INST-21 -- a v2 apply refuses to stack on an unresolved v1 record
+    gens_before = len(json.loads((p_b / "state" / "install-state.json").read_text())
+                      ["generations"])
+    rc_s, _o, err_s = engine_run("apply", "--prefix", p_b, "--config-dir", h_b)
+    gens_after = len(json.loads((p_b / "state" / "install-state.json").read_text())
+                     ["generations"])
+    check("AC14(d)", "a v2 apply refuses to stack a generation on an unresolved v1 "
+                     "record, appending nothing",
+          rc_s != 0 and gens_after == gens_before, f"rc={rc_s} {gens_before}->{gens_after}",
+          family="v1-record handling")
+
+    # AC-INST-25 -- the crash window between the mutation and the state write
+    h_c, p_c = base / "crash" / "cfg", base / "crash" / "prefix"
+    h_c.mkdir(parents=True)
+    write_unconventional(h_c / "settings.json", user_doc())
+    engine_run("apply", "--prefix", p_c, "--config-dir", h_c)
+    state_c = json.loads((p_c / "state" / "install-state.json").read_text())
+    # Reconstruct the EXACT on-disk state of the crash window: the config home is
+    # mutated and the generation record is still `prepared`. This is the state an
+    # uncatchable signal leaves behind; what it proves is that the contributions
+    # remain identifiable from the prepared intent record, which is the whole point
+    # of writing that record BEFORE the mutation it describes.
+    state_c["generations"][-1]["record_status"] = "prepared"
+    state_c["generations"][-1]["created"] = []
+    state_c["generations"][-1]["modified"] = []
+    (p_c / "state" / "install-state.json").write_text(json.dumps(state_c, indent=2) + "\n")
+    check("AC14(e)", "the prepared intent record carries the planned contributions, so "
+                     "a crash between the mutation and the commit is recoverable",
+          bool(state_c["generations"][-1]["contributions"]),
+          "reconstructed crash-window state: config home mutated, record still `prepared`")
+    rc_c, out_c, err_c = engine_run("uninstall", "--prefix", p_c, "--config-dir", h_c, "--json")
+    after_c = json.loads((h_c / "settings.json").read_text())
+    check("AC14(e)", "uninstall identifies the contributions from the prepared record "
+                     "rather than reporting the state as having none",
+          rc_c in (0, 3) and not payload_refs(after_c, h_c),
+          f"rc={rc_c} refs={payload_refs(after_c, h_c)} err={err_c[-200:]}")
+    check("AC14(e)", "and the user's own content is preserved through it",
+          after_c.get("userNote") == NON_ASCII_KEY_VALUE, json.dumps(after_c)[:200])
+
+
+def ac15(tmp: Path) -> None:
+    print("AC15 the INSTALLED capability gate -- dependency set closed by the profile")
+    n2, prefix = tmp / "ac15" / "cfg", tmp / "ac15" / "prefix"
+    n2.mkdir(parents=True)
+    rc, _o, err = run([INSTALL, "--profile", "core", "--prefix", prefix, "--config-dir", n2])
+    check("AC15", "install succeeded", rc == 0, f"rc={rc} err={err[-250:]}")
+    iso = prefix / "harness"
+    gate = next((f for comp in PROFILE["components"] if comp["role"] == "capability_gate"
+                 for f in comp["files"] if f.endswith("capability-gate.py")), None)
+    check("AC15(a)", "the profile declares a capability gate component", bool(gate), str(gate))
+    if not gate or not (iso / gate).is_file():
+        inapplicable("AC15", "installed gate invocation", "gate absent from the payload")
+        return
+
+    # Every artifact the INSTALLED gate binds must be present under the isolated
+    # root. This is the assertion that was blocked until the profile shipped the
+    # manifest alongside the gate.
+    policy_files = [f for comp in PROFILE["components"] if comp["role"] == "policy"
+                    for f in comp["files"]]
+    missing = [f for f in policy_files if not (iso / f).is_file()]
+    check("AC15(a)", "every policy artifact the gate binds is present under the "
+                     "isolated root", not missing, str(missing))
+
+    def invoke(payload: dict):
+        p = subprocess.run([sys.executable, str(iso / gate)], input=json.dumps(payload),
+                           capture_output=True, text=True,
+                           env={**os.environ, "CLAUDE_HOME": str(iso)})
+        return p.returncode, p.stderr
+
+    rc_hatch, _err = invoke({"tool_name": "SlashCommand", "tool_input": {"command": "/do"},
+                             "session_id": "ac15-hatch"})
+    check("AC15(b)", "the INSTALLED gate permits a consent escape hatch (exit 0)",
+          rc_hatch == 0, f"rc={rc_hatch}")
+
+    rc_prot, err_prot = invoke({"tool_name": "SlashCommand",
+                                "tool_input": {"command": "/close"},
+                                "session_id": "ac15-protected"})
+    check("AC15(b)", "the INSTALLED gate reaches a real decision on a protected route "
+                     "rather than failing to load its own dependencies",
+          "library_unavailable" not in err_prot and "manifest_unreadable" not in err_prot,
+          err_prot[-250:])
+    check("AC15(b)", "and it fails CLOSED on that route with no live PASS (exit 2)",
+          rc_prot == 2, f"rc={rc_prot} stderr={err_prot[-200:]}")
+
+
+def ac16(tmp: Path) -> None:
+    print("AC16 the documented entrypoints propagate the engine's exit code")
+    base = tmp / "ac16"
+    home, prefix = base / "cfg", base / "prefix"
+    other = base / "other-home"
+    home.mkdir(parents=True); other.mkdir(parents=True)
+    write_unconventional(home / "settings.json", user_doc())
+    write_unconventional(other / "settings.json", user_doc({"model": "sonnet"}))
+    rc, _o, err = run([INSTALL, "--profile", "core", "--prefix", prefix, "--config-dir", home])
+    check("AC16", "install exits 0", rc == 0, f"rc={rc} err={err[-250:]}")
+    if not require_installed(home, prefix, "AC16"):
+        return
+    # R1's refusal, observed through the DOCUMENTED entrypoint rather than the engine.
+    rc_refuse, _o, _e = run([UNINSTALL, "--prefix", prefix, "--config-dir", other])
+    check("AC16(a)", "scripts/install/uninstall propagates the engine's refusal code (2)",
+          rc_refuse == 2, f"rc={rc_refuse}")
+    # R3b's partial, likewise.
+    doc = json.loads((home / "settings.json").read_text())
+    universal = installer_commands(home)[0]
+    for group in doc["hooks"]["PreToolUse"]:
+        for entry in group["hooks"]:
+            if entry["command"] == universal:
+                entry["timeout"] = 60
+    (home / "settings.json").write_text(json.dumps(doc, indent=2) + "\n")
+    rc_partial, _o, _e = run([UNINSTALL, "--prefix", prefix, "--config-dir", home])
+    check("AC16(a)", "and propagates the engine's partial code (3)", rc_partial == 3,
+          f"rc={rc_partial}")
+    for entrypoint, name in ((INSTALL, "install"), (UNINSTALL, "uninstall")):
+        header = entrypoint.read_text()
+        check("AC16(b)", f"scripts/install/{name} documents the four-code exit contract",
+              all(token in header for token in ("0 = success", "1 = failure",
+                                                "2 = preflight", "3 = partial")),
+              header[:60])
+
+
 def main() -> int:
-    global VERBOSE
+    global VERBOSE, ACTIVE_ENGINE
     ap = argparse.ArgumentParser()
     ap.add_argument("--verbose", action="store_true")
+    ap.add_argument("--engine", default=None,
+                    help="drive AC9-AC14 against an ALTERNATIVE engine, to demonstrate "
+                         "the destructive-path fixtures failing on it")
     args = ap.parse_args()
     VERBOSE = args.verbose
+    if args.engine:
+        ACTIVE_ENGINE = Path(args.engine).resolve()
+        print(f"NOTE: AC9-AC14 driven against alternative engine {ACTIVE_ENGINE}")
 
     tmp = Path(tempfile.mkdtemp(prefix="installer-acceptance-"))
     try:
-        ac1(tmp); ac2(tmp); ac3(tmp); ac4_ac5(tmp); ac6(tmp); ac7(tmp); ac8(tmp)
+        if not args.engine:
+            ac1(tmp); ac2(tmp); ac3(tmp); ac4_ac5(tmp); ac6(tmp); ac7(tmp); ac8(tmp)
+            ac15(tmp); ac16(tmp)
+        ac9(tmp); ac10(tmp); ac11(tmp); ac12(tmp); ac13(tmp); ac14(tmp)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
