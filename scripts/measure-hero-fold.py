@@ -241,6 +241,7 @@ def main() -> int:
         browser.close()
 
     print(json.dumps({"results": results, "failures": failures,
+                      "model_drift": model_drift,
                       "accepted_tradeoffs": tradeoffs,
                       "required_above_fold": list(REQUIRED_ABOVE_FOLD),
                       "demoted_elements": list(DEMOTED_ELEMENTS),
