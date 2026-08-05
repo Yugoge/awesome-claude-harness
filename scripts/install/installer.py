@@ -1173,6 +1173,7 @@ def apply_plan(ctx: Ctx, plan: dict) -> dict:
                     created.append({"path": rel, "kind": "file",
                                     "sha256": hashlib.sha256(content).hexdigest()})
     except Exception:
+        rollback_failures = []
         for action, path, payload in reversed(journal):
             try:
                 if action == "restore" and payload is not None:
@@ -1183,20 +1184,27 @@ def apply_plan(ctx: Ctx, plan: dict) -> dict:
                     os.unlink(path)
                 elif action == "mkdir":
                     path.rmdir()
-            except OSError:
+            except OSError as exc:
+                rollback_failures.append(f"{action} {path}: {exc}")
+        # Retract the prepared intent ONLY when every reversion is measured to
+        # have succeeded. If any failed, part of the mutation survives -- and the
+        # prepared record is the only inventory describing it, so discarding it
+        # would leave a hook or bridge that no uninstall can find.
+        if not rollback_failures:
+            try:
+                rolled_back = ctx.load_state()
+                gens = rolled_back.get("generations") or []
+                if gens and gens[-1].get("generation") == gen and \
+                        gens[-1].get("record_status") == "prepared":
+                    gens.pop()
+                    ctx.write_state(rolled_back)
+            except (OSError, ValueError):
                 pass
-        # The config home is back where it started, so the prepared intent
-        # describes a mutation that no longer exists. Retract it rather than
-        # leaving a record uninstall would try to invert.
-        try:
-            rolled_back = ctx.load_state()
-            gens = rolled_back.get("generations") or []
-            if gens and gens[-1].get("generation") == gen and \
-                    gens[-1].get("record_status") == "prepared":
-                gens.pop()
-                ctx.write_state(rolled_back)
-        except (OSError, ValueError):
-            pass
+        else:
+            print(f"installer: rollback INCOMPLETE ({len(rollback_failures)} reversion(s) "
+                  f"failed); the prepared ownership record, the payload and every backup "
+                  f"are retained so the residue stays removable:\n  "
+                  + "\n  ".join(rollback_failures), file=sys.stderr)
         raise
 
     # ---- phase 4: PROMOTE the prepared record to committed -------------------
