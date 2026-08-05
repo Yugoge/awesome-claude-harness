@@ -74,6 +74,11 @@ def original_bytes() -> str:
     return f"ORIGINAL-{uuid.uuid4().hex}"
 
 
+def rp(path) -> str:
+    """The identity the guard decides on: the realpath of the target."""
+    return os.path.realpath(str(path))
+
+
 def run_guard(command, cwd, *, guard=GUARD, session_id="sid-test", task_id=None,
               env=None, run_from=None):
     payload = {
