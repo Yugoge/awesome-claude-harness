@@ -113,8 +113,8 @@ def main() -> int:
             entry["block"] = True
         lines.append(entry)
 
-        if text.startswith("[git push exit"):
-            seen_push = True
+        if text.startswith(GRANT_INSTALL_MARKER):
+            seen_grant = True
         if text.startswith(CONSUMPTION_MARKER):
             seen_marker = True
 
