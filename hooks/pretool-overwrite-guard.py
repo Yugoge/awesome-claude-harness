@@ -300,6 +300,34 @@ def grant_for(resolved: str, session_id: str, task_id: str) -> dict | None:
     return None
 
 
+def _consume_grants(grants: list[dict]) -> list[str]:
+    """Spend every grant that authorized this call. [] means NOTHING was spent.
+
+    SINGLE USE IS ENFORCED HERE, at the authorization point, and not by the
+    registered PostToolUse consumer. That consumer gates its unlink on
+    ``match_sentinel_grant_for_bash_command``, which reads the shell command's
+    first WORD as the op name; the only grant shape this guard accepts is
+    ``{"op":"Write","target":...}``, which no shell command can ever spell. The
+    unlink therefore never fired, and one grant authorized replacements of its
+    target without limit until it expired — a mode, not a one-shot.
+
+    Consuming here also makes the unlink itself the mutual-exclusion primitive.
+    Two guards racing on one grant both call unlink; exactly one gets the file
+    and returns True, and the loser returns False and is refused by the caller.
+    So the property holds under concurrency, not merely serially.
+
+    The cost is honest and stated: the grant is spent when the replacement is
+    AUTHORIZED, not when it succeeds. A command that is then blocked by another
+    hook, or that fails, has still spent the grant and the human re-issues it.
+    That direction is deliberate — the opposite error would restore exactly the
+    unlimited-reuse defect this closes.
+    """
+    keys = sorted({off["grant_identity"]["task_key"] for off in grants})
+    spent = [key for key in keys
+             if consume_sentinel_grant_on_terminal_result(key, "overwrite_guard_authorized")]
+    return spent if len(spent) == len(keys) else []
+
+
 # ---------------------------------------------------------------------------
 # Messages
 # ---------------------------------------------------------------------------
