@@ -639,12 +639,14 @@ def cmd_check(readme: Path, check_fold: bool = True) -> int:
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--readme", default=str(REPO_ROOT / "README.md"))
+    ap.add_argument("--no-fold", action="store_true",
+                    help="skip the above-the-fold assertion (it needs a headless browser)")
     g = ap.add_mutually_exclusive_group(required=True)
     g.add_argument("--write", action="store_true")
     g.add_argument("--check", action="store_true")
     a = ap.parse_args()
     readme = Path(a.readme)
-    return cmd_write(readme) if a.write else cmd_check(readme)
+    return cmd_write(readme) if a.write else cmd_check(readme, check_fold=not a.no_fold)
 
 
 if __name__ == "__main__":
