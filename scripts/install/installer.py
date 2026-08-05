@@ -1633,6 +1633,17 @@ def uninstall(ctx: Ctx, keep_payload: bool = False) -> dict:
                           "measured_entry_digest": None,
                           "result": "absent-clean", "measured_present": False})
 
+    # ---- the partial decision is taken BEFORE any footprint cleanup ----------
+    # A retained registration still points THROUGH the bridge at the payload.
+    # Removing the bridge while retaining the payload would break exactly the
+    # wiring the operator has been asked to reconcile by hand, so a partial run
+    # retains the whole config-home footprint too, leaving a coherent state that
+    # a re-run can finish.
+    retained = [i for i in items
+                if i.get("action") in ("un-merge", "residual")
+                and i.get("result") in RETAINED_RESULTS]
+    partial = bool(retained)
+
     # Remove created entries newest-first: files and links by exact path (never
     # followed), directories only when they are then EMPTY.
     seen: set[str] = set()
@@ -1645,6 +1656,11 @@ def uninstall(ctx: Ctx, keep_payload: bool = False) -> dict:
             if c["kind"] == "file" and c["path"] == ctx.settings_rel:
                 continue  # handled by the un-merge above -- never deleted wholesale
             target = ctx.config_home / c["path"]
+            if partial:
+                items.append({"action": "remove", "path": str(target), "kind": c["kind"],
+                              "result": "kept-partial-unmerge",
+                              "measured_present": target.exists() or target.is_symlink()})
+                continue
             if c["kind"] == "link":
                 if not target.is_symlink():
                     result = "skipped-not-a-link"
