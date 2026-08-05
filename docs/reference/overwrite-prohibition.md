@@ -218,6 +218,15 @@ declared can be traded against, and a gap that is not cannot.
 | `(cmd > victim)` (grouping subshell) | Worse than a miss: `)` was absorbed into the path token, so the guard resolved a path that does not exist, classified a real replacement as **creation**, and returned an affirmative *allow*. `(cd dir && cmd > file)` is a common agent idiom. | Closed. `(` now opens a command word and `)` terminates an unquoted token. Derived against every covered route. |
 | `curl -o<PATH>`, `wget -O<PATH>` (attached flag) | `getopt` accepts the attached form exactly as the spaced form; only the spaced form was read. Same shape as Incident 1. | Closed. |
 
+Closing the backslash form made the *family* visible, so the family was probed
+rather than assumed closed. Three further members — `quoted-command-word`,
+`absolute-path-verb` and `command-substituted-verb` — run and replace, are
+**not** closed, and are now demonstrated as uncovered routes in the table above.
+They were undeclared before this iteration too. Each is left open for a stated
+reason rather than an absent one: closing any of them means loosening a pattern
+that currently prevents the guard from naming a target in a command that is not
+a write at all, and a guard that fires on ordinary work gets switched off.
+
 The token-termination fix lives in the **shared** lexer, so it also corrects a
 false **positive** in `hooks/pretool-tool-policy.py`, which refused a read-only
 `(… 2>/dev/null) | head` by inventing a write target named `/dev/null)`. One
