@@ -123,13 +123,9 @@
       "event": "PreToolUse",
       "matcher": "EnterWorktree",
       "command": "bash \"<bridge>/hooks/pretool-block-enterworktree.sh\""
-    },
-    {
-      "event": "PreToolUse",
-      "matcher": null,
-      "command": "python3 \"<bridge>/hooks/pretool-capability-gate.py\""
     }
   ],
+  "hook_registrations_exclusion_note": "The capability gate is DELIBERATELY NOT REGISTERED here, and this is the only measured configuration in which this profile's own installed command works. Measured on an isolated root built from payload.copied: with the gate registered, /harness-doctor -- the one slash command this profile installs -- is refused. Closing the dependency set does not fix it, it only changes the refusal reason from manifest_unreadable to unmanifested_route, because no live PASS is reachable yet. The protection forgone is zero: this profile excludes commands/ and skills/, and the manifest's entire protected surface is the slashcommand: and skill: prefixes, so a core install contains no manifested protected route to protect. The binding invariant is NOT(gate registered AND any decision-path artifact missing from payload.copied); this satisfies it by making the left conjunct false. A FUTURE profile that registers the gate must satisfy it by the closure limb instead, and must additionally demonstrate that the slash commands it installs are reachable -- that is the limb that failed here. See docs/dev/registration-readiness-dev-20260804-010515-capability.md.",
   "block_decision_smoke": {
     "component": "safety-hooks",
     "hook": "hooks/pretool-block-background-tasks.py",

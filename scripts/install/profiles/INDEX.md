@@ -1,13 +1,14 @@
 # profiles
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-08-02T10:31:05Z*
-**Total entries**: 0
+*Last updated: 2026-08-05T03:21:06Z*
+**Total entries**: 1
 **Convention**: kebab
 
 ## Tree
 ```
 profiles/
+└── `core.json` - Minimal core profile: blocking safety hooks + the capability gate + the shared harness-home resolver. Nothing that edits, commits, pushes or orchestrates.
 ```
 <!-- /AUTO:index-stats -->
 
