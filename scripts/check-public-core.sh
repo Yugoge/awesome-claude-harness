@@ -75,7 +75,7 @@ WS_MARKER='/dev/shm/dev-workspace/dot-claude'
 # ---------------------------------------------------------------------------
 residue_audit() {
   python3 - "$@" <<'PY'
-import hashlib, io, json, os, re, subprocess, sys, tokenize
+import ast, hashlib, io, json, os, re, subprocess, sys, tokenize
 
 root, allowlist_rel, mode = sys.argv[1], sys.argv[2], sys.argv[3]
 if mode == "git":
