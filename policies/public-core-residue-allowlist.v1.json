@@ -1595,7 +1595,7 @@
       "fingerprint": "b21259cfb76925ea",
       "ordinal": 1,
       "class": "comment_or_narrative_doc",
-      "rationale": "def main() — whole-line comment describing the resolver's ${CONTROL_ROOT:-/root} fallback; never read as a path at runtime. Re-surfaced when the left boundary was narrowed to (?<![A-Za-z0-9])."
+      "rationale": "def main() — whole-line comment describing the resolver's ${CONTROL_ROOT:-...} fallback; never read as a path at runtime. Re-surfaced when the left boundary was narrowed to (?<![A-Za-z0-9])."
     },
     {
       "path": "scripts/close-scoring-decide.py",
