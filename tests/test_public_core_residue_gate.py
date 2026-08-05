@@ -333,3 +333,264 @@ def test_scan_set_equals_full_ledger_public_core_set(pristine):
     # in-scope entry must be live — an exact 1:1, not merely "no failures".
     in_scope = [e for e in doc["entries"] if e["path"] in expected]
     assert scanned == len(in_scope), "scanned occurrences must equal the in-scope exempted set on a clean tree"
+
+
+# ---------------------------------------------------------------------------
+# Boundary-aware matching (backlog item 1) — AC-REL-1 / AC-REL-2 / AC-REL-3.
+#
+# The previous pattern anchored every alternative on a TRAILING "/", so it caught
+# a home directory's DESCENDANTS but never the directory ROOT. These controls fail
+# on that pattern: the exact-root half of the matrix exits 0 against it.
+# ---------------------------------------------------------------------------
+
+RESIDUE_MATRIX = [
+    ("root",  'EXACT_ROOT="/root"',                     'DESC_ROOT="/root/.claude/x"'),
+    ("home",  'EXACT_HOME="/home/authorname"',          'DESC_HOME="/home/authorname/x"'),
+    ("users", 'EXACT_MAC="/Users/AuthorName"',          'DESC_MAC="/Users/AuthorName/x"'),
+]
+
+
+def _staged_tree(repo: Path, dest: Path) -> Path:
+    """Stage the release-membership set exactly as release.yml does.
+
+    shutil.copy2 mirrors `cp -p`: metadata-preserving and symlink-DEREFERENCING,
+    which is why no symlink reaches the archive (see AC-REL-8).
+    """
+    dest.mkdir(parents=True, exist_ok=True)
+    members = subprocess.run(
+        ["python3", "scripts/lib/release_membership.py", "--from-git", "--root", ".",
+         "--manifest", "release-membership.v1.json"],
+        cwd=repo, capture_output=True, text=True).stdout.split()
+    assert members, "release-membership resolved an empty path set"
+    for rel in members:
+        src = repo / rel
+        if not src.is_file():
+            continue
+        (dest / rel).parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(src, dest / rel)
+    return dest
+
+
+@pytest.fixture(scope="module")
+def staged(pristine, tmp_path_factory) -> Path:
+    return _staged_tree(pristine, tmp_path_factory.mktemp("pc-staged") / "stage")
+
+
+def _run_archive(repo: Path, stage: Path) -> subprocess.CompletedProcess:
+    return subprocess.run(
+        ["bash", CHECKER, "--scan-root", str(stage),
+         "--release-manifest", str(stage / "release-membership.v1.json")],
+        cwd=repo, capture_output=True, text=True)
+
+
+def _copy_stage(staged: Path, tmp_path: Path) -> Path:
+    dest = tmp_path / "stage"
+    shutil.copytree(staged, dest, symlinks=True)
+    return dest
+
+
+@pytest.mark.parametrize("label, exact, descendant", RESIDUE_MATRIX)
+@pytest.mark.parametrize("form", ["exact", "descendant"])
+def test_author_home_root_and_descendant_gate_in_checkout_mode(
+        pristine, tmp_path, label, exact, descendant, form):
+    """AC-REL-1 (checkout limb): both the ROOT form and the DESCENDANT form of every
+    author-home class hard-fail. The exact-root half is the half that used to pass."""
+    root = _copy(pristine, tmp_path)
+    assert _run(root).returncode == 0, "baseline control must be clean"
+    literal = exact if form == "exact" else descendant
+    _append(root / "agents" / "dev.md", f"\nInjected {label}/{form}: {literal}\n")
+    _stage(root)
+    r = _run(root)
+    assert r.returncode != 0, f"{label}/{form} residue escaped the checkout gate"
+    assert "agents/dev.md" in r.stdout, "failure must name the injected file"
+    assert "un-allowlisted author-path residue" in r.stdout
+
+
+@pytest.mark.parametrize("label, exact, descendant", RESIDUE_MATRIX)
+@pytest.mark.parametrize("form", ["exact", "descendant"])
+def test_author_home_root_and_descendant_gate_in_archive_mode(
+        pristine, staged, tmp_path, label, exact, descendant, form):
+    """AC-REL-1 (archive limb): the same matrix over an extracted staged tree.
+
+    Exercised through the ARCHIVE path specifically — the prior cycle's archive-mode
+    gap survived undetected because only the checkout path was ever exercised."""
+    stage = _copy_stage(staged, tmp_path)
+    assert _run_archive(pristine, stage).returncode == 0, "baseline control must be clean"
+    literal = exact if form == "exact" else descendant
+    victim = stage / "agents" / "dev.md"
+    assert victim.is_file(), "agents/dev.md must be a release member"
+    with victim.open("a", encoding="utf8") as fh:
+        fh.write(f"\nInjected {label}/{form}: {literal}\n")
+    r = _run_archive(pristine, stage)
+    assert r.returncode != 0, f"{label}/{form} residue escaped the ARCHIVE gate"
+    assert "agents/dev.md" in r.stdout
+
+
+def test_clean_tree_is_green_in_both_modes(pristine, staged):
+    """AC-REL-2: widening the pattern was landed by RESOLVING every newly surfaced
+    occurrence, not by leaving the gate permanently red."""
+    co = _run(pristine)
+    assert co.returncode == 0, co.stdout + co.stderr
+    assert "0 failure(s)" in co.stdout
+    ar = _run_archive(pristine, staged)
+    assert ar.returncode == 0, ar.stdout + ar.stderr
+    assert "0 failure(s)" in ar.stdout
+
+
+def test_operational_literal_stays_non_allowlistable(pristine, tmp_path):
+    """AC-REL-3: a live author-home code literal fails BEFORE and AFTER an allowlist
+    entry is added for its exact (path, fingerprint, ordinal) key.
+
+    Without this, AC-REL-2 could have been satisfied by making everything
+    allowlistable instead of by extending occurrence CLASSIFICATION."""
+    root = _copy(pristine, tmp_path)
+    assert _run(root).returncode == 0
+    line = 'OPERATIONAL_AUTHOR_HOME = "/home/authorname"'
+    _append(root / "hooks" / "lib" / "claude_home.py", "\n" + line + "\n")
+    _stage(root)
+    before = _run(root)
+    assert before.returncode != 0, "operational literal was not gated before the entry"
+    assert "operational, NOT allowlistable" in before.stdout
+    doc = json.loads((root / ALLOWLIST).read_text(encoding="utf8"))
+    doc["entries"].append({
+        "path": "hooks/lib/claude_home.py",
+        "fingerprint": hashlib.sha256(line.encode()).hexdigest()[:16],
+        "ordinal": 1,
+        "class": "system_path_constant_enumeration",
+        "rationale": "claimed to be a protected-system-directory table element",
+    })
+    _write(root / ALLOWLIST, json.dumps(doc, indent=2))
+    _stage(root)
+    after = _run(root)
+    assert after.returncode != 0, "an allowlist entry bought an operational exemption"
+    assert "operational, NOT allowlistable" in after.stdout
+
+
+def test_system_path_enumeration_class_cannot_launder_a_real_author_home(pristine, tmp_path):
+    """AC-REL-3 corollary: the new structurally-derived class is bounded.
+
+    A BARE top-level directory ("/root") inside a table of bare directories is a
+    protected-root constant. A path carrying a user component ("/home/authorname")
+    disqualifies the whole enumeration, so the occurrence stays operational."""
+    root = _copy(pristine, tmp_path)
+    assert _run(root).returncode == 0
+    _append(root / "hooks" / "lib" / "claude_home.py",
+            '\nSNEAKY_ROOTS = ("/", "/home/authorname", "/etc")\n')
+    _stage(root)
+    r = _run(root)
+    assert r.returncode != 0, "a user-specific path was laundered as a system-dir table"
+    assert "operational, NOT allowlistable" in r.stdout
+
+
+def test_trailing_comment_does_not_launder_a_live_literal_on_the_same_line(pristine, tmp_path):
+    """Occurrence-level, not line-level: one commented occurrence must never exempt a
+    second, LIVE occurrence sharing the line (mirrors param_line_ok's discipline)."""
+    root = _copy(pristine, tmp_path)
+    assert _run(root).returncode == 0
+    _append(root / "hooks" / "lib" / "claude_home.py",
+            '\nLIVE = "/root/.claude/secret"  # documented default under /root\n')
+    _stage(root)
+    r = _run(root)
+    assert r.returncode != 0, "a trailing comment exempted a live literal on the same line"
+    assert "operational, NOT allowlistable" in r.stdout
+
+
+# ---------------------------------------------------------------------------
+# Archive-mode hard markers (backlog item 2) — AC-REL-4.
+#
+# The HARD_MARKERS loop used to sit AFTER the archive branch's `exit "$rc"`, so it
+# was unreachable over a release artifact: every injection below exits 0 against
+# that arrangement.
+# ---------------------------------------------------------------------------
+
+HARD_MARKERS = ["git@github.com:" + "Yugoge", "/root/.claude" + ".bak", "/root/sync-" + "backup.sh"]
+
+
+@pytest.mark.parametrize("marker", HARD_MARKERS)
+def test_hard_marker_in_a_non_exempt_archive_member_fails(pristine, staged, tmp_path, marker):
+    """AC-REL-4 limb a: a maintainer identifier inside a released artifact is caught."""
+    stage = _copy_stage(staged, tmp_path)
+    assert _run_archive(pristine, stage).returncode == 0, "baseline control must be clean"
+    victim = stage / "agents" / "dev.md"
+    exempt = json.loads((stage / "release-membership.v1.json").read_text(encoding="utf8"))
+    assert "agents/dev.md" not in exempt["hard_marker_exempt_paths"], "victim must be non-exempt"
+    with victim.open("a", encoding="utf8") as fh:
+        fh.write(f"\nInjected hard marker {marker}\n")
+    r = _run_archive(pristine, stage)
+    assert r.returncode != 0, f"hard marker {marker} shipped undetected in the archive"
+    assert "hard residue marker in released archive" in r.stdout
+    assert "agents/dev.md" in r.stdout
+
+
+def test_unmodified_staged_tree_does_not_false_fail_on_legitimate_carriers(pristine, staged):
+    """AC-REL-4 limb b (anti-vacuity): the two legitimate carriers must NOT fail.
+
+    Without this, limb a could be satisfied by failing every release."""
+    r = _run_archive(pristine, staged)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "no un-exempted hard residue markers" in r.stdout
+
+
+def test_emptying_the_hard_marker_exemption_turns_the_archive_gate_red(pristine, staged, tmp_path):
+    """AC-REL-4 limb c: the exemption is load-bearing, not decorative."""
+    stage = _copy_stage(staged, tmp_path)
+    assert _run_archive(pristine, stage).returncode == 0
+    manifest = stage / "release-membership.v1.json"
+    doc = json.loads(manifest.read_text(encoding="utf8"))
+    doc["hard_marker_exempt_paths"] = []
+    manifest.write_text(json.dumps(doc, indent=2), encoding="utf8")
+    r = _run_archive(pristine, stage)
+    assert r.returncode != 0, "emptying the exemption did not turn the gate red"
+    assert "hard residue marker in released archive" in r.stdout
+
+
+def test_hard_marker_exemption_is_its_own_key_with_its_own_rationale(pristine):
+    """AC-REL-4 limb d: the consulted key is hard-marker-scoped, and its rationale is
+    not a copy of the workspace-marker rationale (which describes another class)."""
+    doc = json.loads((pristine / "release-membership.v1.json").read_text(encoding="utf8"))
+    assert "hard_marker_exempt_paths" in doc, "hard markers need their own exemption key"
+    assert "hard_marker_exempt_rationale" in doc
+    checker = (pristine / CHECKER).read_text(encoding="utf8")
+    assert "hard_marker_exempt_paths" in checker, "the gate must read the hard-marker key"
+    ws_texts = set(doc["workspace_marker_exempt_rationale"].values())
+    for path, text in doc["hard_marker_exempt_rationale"].items():
+        assert text.strip(), f"{path} exemption carries no rationale"
+        assert text not in ws_texts, (
+            f"{path}: hard-marker rationale is byte-identical to a workspace-marker "
+            "rationale — an exemption whose justification describes a different class")
+    for path in doc["hard_marker_exempt_paths"]:
+        assert path in doc["hard_marker_exempt_rationale"], f"{path} exempted without a rationale"
+
+
+# ---------------------------------------------------------------------------
+# Symlink comment (backlog item 7) — AC-REL-8.
+# ---------------------------------------------------------------------------
+
+def test_symlink_comment_states_what_actually_happens(pristine):
+    """AC-REL-8: the false load-bearing claim is gone, the replacement states the
+    measured behaviour, and `-type l` is RETAINED as defence in depth."""
+    src = (pristine / CHECKER).read_text(encoding="utf8")
+    assert "would drop it from the ACTUAL set" not in src, \
+        "the false `-type f` load-bearing claim is still present"
+    assert "-type f -o -type l" in src, \
+        "the -type l predicate must be retained as defence in depth"
+    assert "cp -p" in src and "DEREFERENCE" in src.upper(), \
+        "the comment must state that the staging copy dereferences symlinks"
+
+
+def test_staging_copy_dereferences_symlinks(pristine, tmp_path):
+    """AC-REL-8 (OA-3 closed empirically): `cp -p` produces a regular file, so no
+    symlink reaches tar and `-type l` cannot be the load-bearing predicate."""
+    src_dir = tmp_path / "src"
+    (src_dir / "templates").mkdir(parents=True)
+    (src_dir / "real.md").write_text("body\n", encoding="utf8")
+    link = src_dir / "templates" / "spec.md"
+    link.symlink_to(Path("..") / "real.md")
+    assert link.is_symlink(), "fixture must start as a symlink"
+    out = tmp_path / "stage" / "templates" / "spec.md"
+    out.parent.mkdir(parents=True)
+    subprocess.run(["cp", "-p", str(link), str(out)], check=True)
+    assert out.is_file() and not out.is_symlink(), "cp -p did not dereference the symlink"
+    found = subprocess.run(["find", ".", "-type", "l"], cwd=tmp_path / "stage",
+                           capture_output=True, text=True).stdout.split()
+    assert found == [], "a symlink survived staging; the comment's premise would change"
