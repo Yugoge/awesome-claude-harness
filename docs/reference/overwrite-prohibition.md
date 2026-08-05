@@ -97,8 +97,30 @@ A blanket prohibition with no escape blocks legitimate work, so the escape is a
   `grant-self-minting` in section 6, where it is demonstrated by execution.
   This guard adds **no** new issuance channel; it inherits an escape hatch whose
   file-level integrity was never enforced.
-- Consumed on any terminal result by the existing
-  `hooks/posttool-allowlist-consume.py`.
+- **Correction, measured rather than assumed (2)**: this document previously
+  stated that the grant is "consumed on any terminal result by the existing
+  `hooks/posttool-allowlist-consume.py`". That was **false as shipped**, and it
+  made the escape a *mode* rather than the one-shot claimed two paragraphs
+  above. That consumer gates its unlink on `match_sentinel_grant_for_bash_command`,
+  which reads the shell command's **first word** as the op name; the only grant
+  shape this guard accepts is `{"op": "Write", "target": …}`, which no shell
+  command can spell. The unlink therefore never fired and one grant authorized
+  replacements of its target **without limit** until it expired. Combined with
+  the self-minting route above, one minted grant was an open licence.
+- **Consumed by this guard, at the moment it authorizes.** The grant file is
+  unlinked before the call is permitted, so the second identical attempt is
+  refused. Because `unlink` is atomic, the file *is* the mutual exclusion:
+  two guards racing on one grant both attempt it, exactly one succeeds, and the
+  loser is refused with `decision: refused_grant_not_consumed`. The property
+  therefore holds **concurrently**, not merely serially — see
+  `concurrent-grant-reuse` in the corpus, which this reclassified from uncovered
+  to covered.
+- **The cost of that, stated plainly**: the grant is spent when the replacement
+  is *authorized*, not when it succeeds. A call that another hook then blocks,
+  or that fails, has still spent its grant and the human re-issues it. The
+  opposite choice would restore unlimited reuse. Nothing else spends it: an
+  ungated command, an append, an in-place edit, a creation, and a refused
+  attempt on a different file all leave the grant intact.
 - The grant must carry an explicit **absolute** target. Both the grant target
   and the candidate are `realpath`-normalized before comparison: the sentinel
   records no grant-time cwd, so a relative target could not be compared
