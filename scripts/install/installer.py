@@ -1157,27 +1157,40 @@ def apply_plan(ctx: Ctx, plan: dict) -> dict:
                     path.rmdir()
             except OSError:
                 pass
+        # The config home is back where it started, so the prepared intent
+        # describes a mutation that no longer exists. Retract it rather than
+        # leaving a record uninstall would try to invert.
+        try:
+            rolled_back = ctx.load_state()
+            gens = rolled_back.get("generations") or []
+            if gens and gens[-1].get("generation") == gen and \
+                    gens[-1].get("record_status") == "prepared":
+                gens.pop()
+                ctx.write_state(rolled_back)
+        except (OSError, ValueError):
+            pass
         raise
 
-    # ---- phase 4: record ownership ------------------------------------------
+    # ---- phase 4: PROMOTE the prepared record to committed -------------------
+    record["created"] = created
+    record["modified"] = [
+        {**m, "pre_install_sha256": sha256_file(Path(m["backup"]))} for m in modified
+    ]
+    live_settings = ctx.settings_target
+    if live_settings.is_file() and not live_settings.is_symlink():
+        # Measured from the bytes actually on disk, not from what was intended.
+        record["settings_sha256_as_installed"] = sha256_file(live_settings)
+    record["record_status"] = "committed"
     state = ctx.load_state()
-    record = {
-        "generation": gen,
-        "profile": ctx.profile.get("profile"),
-        "isolated_root": str(ctx.isolated_root),
-        "config_home": str(ctx.config_home),
-        # An install performed on a host that could not prove its hooks are
-        # enforced stays auditable here after the terminal output has scrolled.
-        "host_handshake": os.environ.get("HARNESS_INSTALL_HANDSHAKE", "unknown"),
-        "created": created,
-        "modified": [
-            {**m, "pre_install_sha256": sha256_file(Path(m["backup"]))} for m in modified
-        ],
-        "conflicts": plan["conflicts"],
-    }
-    state["generations"].append(record)
-    ctx.state_path.parent.mkdir(parents=True, exist_ok=True)
-    atomic_write(ctx.state_path, (json.dumps(state, indent=2) + "\n").encode("utf-8"))
+    gens = state.setdefault("generations", [])
+    for index, existing in enumerate(gens):
+        if existing.get("generation") == gen and existing.get("record_status") == "prepared":
+            gens[index] = record
+            break
+    else:
+        gens.append(record)
+    state["schema"] = STATE_SCHEMA
+    ctx.write_state(state)
     return record
 
 
