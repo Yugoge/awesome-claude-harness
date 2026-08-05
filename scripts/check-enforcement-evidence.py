@@ -893,38 +893,53 @@ def check_claims(args, report):
 
     # 5. Token sets. A widened _WRAPPERS changes the SIZE of the residual class even when every
     #    probed representative still behaves exactly as recorded -- the unprobed-sibling case.
-    block = re.search(r"_WRAPPERS\s*=\s*\{(.*?)\}", classifier_src, re.S)
-    live_wrappers = sorted(re.findall(r"'([^']+)'", block.group(1))) if block else []
-    if live_wrappers == sorted(RECORDED_WRAPPERS):
+    live_wrappers = extract_wrappers(classifier_src)
+    if live_wrappers is None:
+        report.fail("_WRAPPERS changed: the constant could not be resolved from "
+                    f"{args.classifier} by ast.literal_eval -- an unresolvable declaration "
+                    f"cannot be compared against the published set")
+    elif live_wrappers == sorted(RECORDED_WRAPPERS):
         report.ok(f"_WRAPPERS unchanged ({len(live_wrappers)} tokens, recorded @{RECORDED_AT})")
     else:
         report.fail(f"_WRAPPERS changed: {live_wrappers} != {sorted(RECORDED_WRAPPERS)} -- the "
                     f"residual class named in the published matrix has a different size now")
 
+    # The token sets are matched ONLY inside their anchored publication regions. Matching
+    # anywhere in the document is vacuous: '>' appears on every blockquote line and '<' inside
+    # HTML comment delimiters, so two of the seven redirection operators used to be satisfied
+    # by unrelated prose and could never be reported missing.
     ledger_text = read_text(args.ledger_file)
+    token_check_failed = False
     for label, expected in (("wrapper", RECORDED_WRAPPERS),
                             ("leading-redirection", RECORDED_REDIRECTION_OPS)):
-        absent = [t for t in expected if t not in ledger_text]
+        region = published_token_region(ledger_text, label)
+        if region is None:
+            token_check_failed = True
+            report.fail(f"published {label} token set is incomplete in the ledger: missing "
+                        f"{sorted(expected)} (the published-tokens:{label} region is absent)")
+            continue
+        absent = sorted(t for t in expected if t not in region)
         if absent:
+            token_check_failed = True
             report.fail(f"published {label} token set is incomplete in the ledger: missing "
                         f"{absent}")
-    report.ok("published wrapper + leading-redirection token sets match the recorded sets")
+    # Reported ONLY when the loop above found nothing. Calling this unconditionally made one
+    # run emit a FAIL and a PASS for the same assertion -- a reporting-integrity defect in the
+    # one document whose premise is that its rows can be trusted.
+    if not token_check_failed:
+        report.ok("published wrapper + leading-redirection token sets match the recorded sets")
 
-    # 6. Gate-architecture census.
-    census = {
-        "architecture_a": len(re.findall(r'\[\s*"\$CLASSIFIER_STATUS"\s*!=\s*"ok"\s*\]', bash_src)),
-        "architecture_b": len(re.findall(r'grep\s+-qE\s+"\$\{GIT_CMD_RE\}', bash_src)),
-        "architecture_c": len(re.findall(r'\[\s*"\$CLASSIFIER_HAS_PATH_QUALIFIED_GIT"\s*=\s*"1"\s*\]',
-                                         bash_src)),
-    }
-    for key, observed in census.items():
-        expected = RECORDED_CENSUS[key]
+    # 6. Gate-architecture census, derived structurally so a respelled guard cannot hide.
+    census = shell_gate_census(bash_src)
+    for key in sorted(RECORDED_CENSUS):
+        observed, expected = census[key], RECORDED_CENSUS[key]
         if observed == expected:
             report.ok(f"{key.replace('_', '-')} gate census unchanged ({observed})")
         else:
-            report.fail(f"{key.replace('_', '-')} gate census changed: {observed} != {expected} "
-                        f"-- a gate gaining or losing a classifier-consumption shape changes "
-                        f"which inputs keep a backstop, without any probed form changing")
+            report.fail(f"{key.replace('_', '-')} gate census changed: observed {observed} "
+                        f"recorded {expected} -- a gate gaining or losing a "
+                        f"classifier-consumption shape changes which inputs keep a backstop, "
+                        f"without any probed form changing")
 
     # 7. Ledger registered-hook rows == settings-derived hook set, both directions.
     reg = ledger_tables(args.ledger_file)["registered"]
