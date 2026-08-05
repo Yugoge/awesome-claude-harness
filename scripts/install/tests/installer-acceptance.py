@@ -1428,6 +1428,25 @@ def ac14(tmp: Path) -> None:
               (rc == 0 and not prefix.exists()) or (rc == 3 and prefix.exists()),
               f"rc={rc} payload_present={prefix.exists()}")
 
+    # The prefix is chosen by the CALLER and may hold the user's own files.
+    # A recursive removal of it would delete them while reporting success.
+    home_p, prefix_p = base / "cotenant" / "cfg", base / "cotenant" / "prefix"
+    home_p.mkdir(parents=True); prefix_p.mkdir(parents=True)
+    (prefix_p / "user.keep").write_text("mine\n")
+    write_unconventional(home_p / "settings.json", user_doc())
+    engine_run("apply", "--prefix", prefix_p, "--config-dir", home_p)
+    if require_installed(home_p, prefix_p, "AC14(f)"):
+        rc_p, _o, _e = engine_run("uninstall", "--prefix", prefix_p, "--config-dir", home_p,
+                                  "--json")
+        check("AC14(f)", "a pre-existing user file under the caller-chosen prefix "
+                         "survives a SUCCESSFUL uninstall",
+              (prefix_p / "user.keep").is_file()
+              and (prefix_p / "user.keep").read_text() == "mine\n",
+              f"rc={rc_p} prefix_present={prefix_p.exists()}")
+        check("AC14(f)", "the installer's own artifacts under that prefix are gone",
+              not (prefix_p / "harness").exists()
+              and not (prefix_p / "state").exists(), f"rc={rc_p}")
+
     # AC-INST-7 / AC-INST-20 / AC-INST-24 -- v1 records
     def make_v1(name: str, mutate=None):
         h, p = base / name / "cfg", base / name / "prefix"
