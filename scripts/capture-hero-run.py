@@ -225,14 +225,20 @@ class GrantWatcher(threading.Thread):
                         f"[verifier] installed one single-use grant for "
                         f"task_id={RESERVED_TASK_ID}"))
                     (self.fixture / "work" / ".grant-installed").touch()
+            # The timestamp is read BEFORE the observation it carries, never after.
+            # Taken afterwards it would post-date its own evidence: digesting the grant
+            # file is unbounded work, so a sample could claim a time later than the
+            # moment the state it reports was actually true. Stamping first makes the
+            # recorded time a lower bound on the observation window -- the sample can lag
+            # reality, but it can never claim to be newer than the evidence it carries.
+            t_sample = round(time.monotonic() - self.t0, 4)
             try:
                 present = GRANT_PATH.is_file()
                 digest = sha256_file(GRANT_PATH) if present else None
             except (OSError, FileNotFoundError):
                 present, digest = False, None
             self.samples.append(
-                {"t": round(time.monotonic() - self.t0, 4),
-                 "present": present, "sha256": digest}
+                {"t": t_sample, "present": present, "sha256": digest}
             )
             self._halt.wait(WATCH_INTERVAL_S)
 
