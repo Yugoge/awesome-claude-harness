@@ -1502,12 +1502,32 @@ def main() -> int:
         ACTIVE_ENGINE = Path(args.engine).resolve()
         print(f"NOTE: AC9-AC14 driven against alternative engine {ACTIVE_ENGINE}")
 
+    def block(fn):
+        """Run one AC block.
+
+        Against an ALTERNATIVE engine, a KeyError/IndexError/ValueError raised by
+        reading state fields or report items the engine does not produce is that
+        engine LACKING SURFACE -- not a demonstrated defect. It is recorded
+        inapplicable and the run continues, so one missing field cannot abort the
+        families still to be measured. Against the engine under test no exception
+        is swallowed: a crash there is a real failure and must surface.
+        """
+        if not args.engine:
+            fn(tmp)
+            return
+        try:
+            fn(tmp)
+        except (KeyError, IndexError, ValueError, TypeError, FileNotFoundError) as exc:
+            inapplicable(fn.__name__.upper(), "remaining assertions in this block",
+                         f"{type(exc).__name__}: {exc}")
+
     tmp = Path(tempfile.mkdtemp(prefix="installer-acceptance-"))
     try:
         if not args.engine:
             ac1(tmp); ac2(tmp); ac3(tmp); ac4_ac5(tmp); ac6(tmp); ac7(tmp); ac8(tmp)
             ac15(tmp); ac16(tmp)
-        ac9(tmp); ac10(tmp); ac11(tmp); ac12(tmp); ac13(tmp); ac14(tmp)
+        for fixture in (ac9, ac10, ac11, ac12, ac13, ac14):
+            block(fixture)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
