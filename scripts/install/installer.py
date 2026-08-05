@@ -84,7 +84,49 @@ from pathlib import Path
 
 STATE_REL = "state/install-state.json"
 BACKUPS_REL = "backups"
-STATE_SCHEMA = "claude-harness/install-state/v1"
+STATE_SCHEMA_V1 = "claude-harness/install-state/v1"
+STATE_SCHEMA = "claude-harness/install-state/v2"
+
+# R9 -- the self-management bundle. An EXPLICIT, NON-RECURSIVE, versioned file
+# list shipped beneath the isolated root so uninstall runs with no source
+# checkout present. A recursive copy of scripts/install/ would re-import the test
+# harness and every future sibling file, so the list is enumerated, recorded in
+# state, and validated before use.
+SELF_MANAGE_REL = ".self-manage"
+SELF_MANAGE_VERSION = "claude-harness/self-manage/v1"
+SELF_MANAGE_FILES = ("installer.py", "profile.json", "uninstall")
+
+EXIT_OK = 0
+EXIT_FAILURE = 1
+EXIT_REFUSAL = 2
+EXIT_PARTIAL = 3
+
+# Results that mean "something the installer put here is still here on purpose".
+# Each one suppresses payload removal and makes the run a partial uninstall.
+RETAINED_RESULTS = ("kept-user-modified", "ambiguous-kept", "kept-unrecognized-residual")
+
+
+class Refusal(Exception):
+    """A refusal raised strictly BEFORE the first mutation.
+
+    Carries its own exit code so the caller never has to re-derive one. The
+    invariant every raise site must honour: nothing has been written to the
+    config home, the state file, or the payload at the point this is raised.
+    """
+
+    def __init__(self, message: str, code: int = EXIT_REFUSAL, plan: list | None = None):
+        super().__init__(message)
+        self.code = code
+        self.plan = plan or []
+
+
+class DuplicateKeyError(ValueError):
+    """R15 -- a JSON document carrying a duplicate key at any level.
+
+    json.loads silently keeps the LAST occurrence, so a load/dump round-trip
+    discards the earlier one. The document cannot be rewritten without losing
+    user content, so both apply and uninstall refuse rather than normalize.
+    """
 
 
 # --------------------------------------------------------------------------- #
