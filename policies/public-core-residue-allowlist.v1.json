@@ -66,6 +66,13 @@
     },
     {
       "path": "PUBLIC-CORE.md",
+      "fingerprint": "cf2e7148c2cf0a02",
+      "ordinal": 1,
+      "class": "comment_or_narrative_doc",
+      "rationale": "Prose/comment text documenting the residue policy; never read as a path at runtime. Line: \"\"public-core\": several `public-core` files still carry deferred `<author-path>` leaks (roadmap\""
+    },
+    {
+      "path": "PUBLIC-CORE.md",
       "fingerprint": "d5eb97f86ee18db1",
       "ordinal": 1,
       "class": "comment_or_narrative_doc",

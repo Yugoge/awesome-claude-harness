@@ -134,15 +134,63 @@ fi
 # 5. SBOM must genuinely describe the archive, not merely parse.
 # ---------------------------------------------------------------------------
 python3 - "$SBOM" "$ROOTDIR" "$ACTUAL_SHA" <<'PY'
-import hashlib, json, os, sys
+import hashlib, json, os, re, sys
 sbom_path, root, archive_sha = sys.argv[1], sys.argv[2], sys.argv[3]
 try:
     bom = json.load(open(sbom_path, encoding="utf8"))
 except Exception as exc:
     print(f"FAIL: SBOM is not valid JSON: {exc}"); sys.exit(1)
 problems = 0
-if bom.get("bomFormat") != "CycloneDX" or not bom.get("specVersion"):
-    print("FAIL: SBOM does not declare a CycloneDX format/specVersion"); problems += 1
+
+# --- CycloneDX validation AGAINST THE DECLARED specVersion -------------------
+# Presence of a specVersion field says nothing: it was previously enough for the
+# field to be non-empty, so a document declaring any version at all, in any shape,
+# passed. The version is now matched against an explicitly declared supported set
+# and the document is validated against the structure that version requires.
+SUPPORTED_SPEC_VERSIONS = ("1.4", "1.5", "1.6")
+CDX_COMPONENT_TYPES = {"application", "framework", "library", "container", "operating-system",
+                       "device", "firmware", "file", "platform", "device-driver",
+                       "machine-learning-model", "data"}
+CDX_HASH_ALGS = {"MD5", "SHA-1", "SHA-256", "SHA-384", "SHA-512",
+                 "SHA3-256", "SHA3-384", "SHA3-512", "BLAKE2b-256", "BLAKE2b-384",
+                 "BLAKE2b-512", "BLAKE3"}
+spec_version = bom.get("specVersion")
+if bom.get("bomFormat") != "CycloneDX":
+    print(f"FAIL: SBOM bomFormat is {bom.get('bomFormat')!r}, not 'CycloneDX'"); problems += 1
+if spec_version not in SUPPORTED_SPEC_VERSIONS:
+    print(f"FAIL: SBOM declares unsupported CycloneDX specVersion {spec_version!r} "
+          f"(supported: {', '.join(SUPPORTED_SPEC_VERSIONS)})"); problems += 1
+else:
+    schema_problems = []
+    ver = bom.get("version")
+    if not isinstance(ver, int) or isinstance(ver, bool) or ver < 1:
+        schema_problems.append(f"top-level 'version' must be an integer >= 1, got {ver!r}")
+    if not isinstance(bom.get("components"), list):
+        schema_problems.append("'components' must be an array")
+    meta_component = (bom.get("metadata") or {}).get("component")
+    if not isinstance(meta_component, dict):
+        schema_problems.append("'metadata.component' is required and must be an object")
+    elif meta_component.get("type") not in CDX_COMPONENT_TYPES:
+        schema_problems.append(f"metadata.component.type {meta_component.get('type')!r} is not a "
+                               f"CycloneDX {spec_version} component type")
+    for i, c in enumerate(bom.get("components") or []):
+        if not isinstance(c, dict):
+            schema_problems.append(f"components[{i}] is not an object"); continue
+        if c.get("type") not in CDX_COMPONENT_TYPES:
+            schema_problems.append(f"components[{i}].type {c.get('type')!r} is not a "
+                                   f"CycloneDX {spec_version} component type")
+        if not c.get("name"):
+            schema_problems.append(f"components[{i}] has no 'name'")
+        for h in c.get("hashes") or []:
+            if not isinstance(h, dict) or h.get("alg") not in CDX_HASH_ALGS:
+                schema_problems.append(f"components[{i}] declares hash alg "
+                                       f"{(h or {}).get('alg')!r}, not a CycloneDX algorithm")
+    if schema_problems:
+        print(f"FAIL: SBOM does not satisfy the CycloneDX {spec_version} schema it declares "
+              f"({len(schema_problems)} problem(s)):")
+        for p in schema_problems[:8]:
+            print(f"    {p}")
+        problems += 1
 components = bom.get("components") or []
 if not components:
     print("FAIL: SBOM has zero components (an empty SBOM describes nothing)"); problems += 1
