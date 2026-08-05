@@ -849,3 +849,23 @@ def test_ac10_consumers_still_compile_and_import_the_frozen_symbol(consumer):
     compiled = subprocess.run([sys.executable, "-m", "py_compile", str(path)],
                               capture_output=True, text=True)
     assert compiled.returncode == 0, compiled.stderr
+
+
+def test_ac10_fourth_consumer_of_the_shared_module_is_pinned_too():
+    """CORRECTION to the analysis: the module has FOUR consumers, not three.
+
+    hooks/pretool-wrapper-userintent.py imports command_without_heredoc_bodies
+    from the same module. The criterion enumerated only the three that import
+    extract_bash_write_paths, so this consumer had no pin at all. It does now.
+    """
+    path = REPO / "hooks" / "pretool-wrapper-userintent.py"
+    assert "from lib.bash_write_targets import command_without_heredoc_bodies" in \
+        path.read_text(encoding="utf-8")
+    compiled = subprocess.run([sys.executable, "-m", "py_compile", str(path)],
+                              capture_output=True, text=True)
+    assert compiled.returncode == 0, compiled.stderr
+    signature = inspect.signature(bwt.command_without_heredoc_bodies)
+    assert list(signature.parameters) == ["command"]
+    assert bwt.command_without_heredoc_bodies("cat > /tmp/a << EOF\nhello\nEOF") == \
+        "cat > /tmp/a << EOF"
+    assert bwt.command_without_heredoc_bodies("echo plain") == "echo plain"
