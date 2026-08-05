@@ -1101,8 +1101,16 @@ def apply_plan(ctx: Ctx, plan: dict) -> dict:
         "settings_pre_image_sha256": settings_plan.get("pre_image_sha256"),
         "settings_sha256_as_installed": settings_plan.get("as_installed_sha256"),
         "skipped_mandatory": list(plan.get("skipped_mandatory") or []),
-        "created": [],
-        "modified": [],
+        # The PLANNED footprint, not an empty placeholder. An interruption after
+        # the bridge is created but before the commit would otherwise leave a
+        # bridge and a command document that no record mentions, so uninstall
+        # would tidy the settings wiring and the payload and leave that footprint
+        # stranded. The planned inventory carries the same digest and link-target
+        # guards the committed one does, so the crash-window uninstall is no less
+        # careful than a normal one.
+        "created": planned_created,
+        "modified": planned_modified,
+        "inventory_source": "planned",
         "conflicts": plan["conflicts"],
     }
     state.setdefault("generations", []).append(record)
