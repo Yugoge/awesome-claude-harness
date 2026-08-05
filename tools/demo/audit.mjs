@@ -324,7 +324,14 @@ for (const c of clipped) {
   const detail = `${c.id}: rendered text overflows the asset's logical width ` +
     `(${c.chars} chars, right edge ${Math.round(c.right)}px > ${LOGICAL_W}px); ` +
     `${c.lost.length} characters are cut off after "…${c.visibleEndsAt}": "${c.lost}"`;
-  if (!ledgerIds.has(c.id)) W(`${detail} — and it is ABSENT from the known-clipped ledger`);
+  if (ledgerIds.has(c.id)) continue;
+  if (c.kind === 'verdict') {
+    W(`${detail} — this line is kind "verdict", so it can NEVER be ledgered away; the ` +
+      `clipping itself must be removed (shorten the emitting source, or give the renderer ` +
+      `room for ${Math.ceil(c.right)}px) before this asset can pass --strict`);
+  } else {
+    W(`${detail} — and it is ABSENT from the known-clipped ledger`);
+  }
 }
 
 // ---------- strict-mode escalation (opt-in) ----------
