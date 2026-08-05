@@ -1675,6 +1675,9 @@ def main(argv=None) -> int:
     ap.add_argument("--keep-payload", dest="keep_payload", action="store_true",
                     help="uninstall: remove the config-home footprint but keep the "
                          "isolated payload directory on disk")
+    ap.add_argument("--allow-partial-install", dest="allow_partial", action="store_true",
+                    help="apply: proceed even though a MANDATORY footprint entry was "
+                         "skipped. Still exits 3 and names what was skipped.")
     args = ap.parse_args(argv)
 
     if args.command == "snapshot":
