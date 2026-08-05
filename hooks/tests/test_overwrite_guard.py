@@ -851,24 +851,32 @@ def test_ac09_check_use_race(tmp_path):
     assert target.read_text(encoding="utf-8") != original
 
 
-def test_ac09_concurrent_grant_reuse(tmp_path):
-    work = tmp_path / "concurrent-grant-reuse"
+def test_ac09_the_registered_posttool_consumer_still_cannot_see_a_write_grant(tmp_path):
+    """Why single-use had to move INTO the guard, asserted rather than asserted-about.
+
+    The registered consumer gates its unlink on
+    match_sentinel_grant_for_bash_command, which reads the shell command's
+    FIRST WORD as the op name. The only grant shape this guard accepts is
+    {"op":"Write","target":...}, which no shell command can spell — so that
+    matcher returns None for every replacement command, and the unlink never
+    fired. This test pins the reason: if the matcher ever does match a Write
+    grant against a bash command, the guard's own consumption would become a
+    double-consume and this assertion says so out loud.
+    """
+    work = tmp_path / "posttool-blind"
     work.mkdir()
     target = work / "victim.txt"
-    original = original_bytes()
-    target.write_text(original, encoding="utf-8")
+    target.write_text(original_bytes(), encoding="utf-8")
     task_id = f"ovwtest-{uuid.uuid4().hex}"
     session_id = f"sid-{uuid.uuid4().hex}"
-    command = f"echo {NEW} > {target}"
     try:
         write_grant(task_id, session_id, [{"op": "Write", "target": str(target)}])
-        # Two PreToolUse checks with no terminal result between them.
-        first = run_guard(command, cwd=work, session_id=session_id, task_id=task_id)
-        second = run_guard(command, cwd=work, session_id=session_id, task_id=task_id)
-        assert first.returncode == 0 and second.returncode == 0, (
-            "single-use holds for SERIAL use only; this is the declared gap")
-        assert sh(command, cwd=work).returncode == 0
-        assert target.read_text(encoding="utf-8") != original
+        for command in (f"echo {NEW} > {target}", f"cp src {target}", f"tee {target}"):
+            assert match_sentinel_grant_for_bash_command(task_id, command) is None, (
+                "the PostToolUse gate now matches a Write grant — the guard's own "
+                "consumption must be reviewed for double-consume")
+        # And the helper it would have called is, and always was, fine.
+        assert consume_sentinel_grant_on_terminal_result(task_id, "success") is True
     finally:
         drop_grants(task_id)
 
