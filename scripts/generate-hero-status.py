@@ -19,10 +19,12 @@ edit to the limits statement while allowing it to be MOVED anywhere in the docum
 which would have silently voided the adjacency an orchestrator ruling depends on.
 
 NUMBERS ARE DERIVED, NEVER TRANSCRIBED. The disclosure region publishes the hero's
-recorded duration, loop period, first-proof offset and truncation count, each computed
-from a committed artifact at build time. The recorded duration is additionally
-cross-validated against the capture's own first and last timestamps, so a coordinated
-edit of this README and the evidence file together still cannot agree.
+recorded duration, loop period, first-proof offset, truncation count and rendered inline
+glyph height, each computed from a committed artifact at build time. The recorded duration
+is additionally cross-validated against the capture's own first and last timestamps, so a
+coordinated edit of this README and the evidence file together still cannot agree; the
+glyph height is cross-validated against a live browser by the fold measurement it is
+imported from, which fails if the published model and the measurement disagree.
 
 WHY THREE REGIONS FROM ONE GENERATOR. The limits statement must sit ADJACENT to the
 headline, and it must also sit INSIDE the byte-compared canonical content. With a single
