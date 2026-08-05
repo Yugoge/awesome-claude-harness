@@ -1127,7 +1127,7 @@ def apply_plan(ctx: Ctx, plan: dict) -> dict:
                                 "target": str(ctx.isolated_root)})
                 created[-1]["sha256"] = None
             elif kind == "file":
-                if rel == "settings.json":
+                if rel == ctx.settings_rel:
                     content = plan["settings_plan"]["content"]
                 else:
                     content = command_doc_bytes(ctx)
