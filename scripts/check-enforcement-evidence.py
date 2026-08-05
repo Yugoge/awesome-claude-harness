@@ -39,8 +39,9 @@ is the same two-hand-synced-copies drift class that RISK-2 of docs/THREAT-MODEL.
 teach. So the sets are declared ONCE here, in DECLARED_SCHEMA, and every other consumer DERIVES
 them:
   * scripts/verify-claims.sh invokes this script rather than restating any set;
-  * docs/ENFORCEMENT-LEDGER.md publishes a machine-readable schema block which --ledger asserts
-    is byte-equal to DECLARED_SCHEMA, so the document cannot drift from the code.
+  * docs/ENFORCEMENT-LEDGER.md publishes a machine-readable schema block which --ledger parses
+    and asserts EQUAL AS JSON to DECLARED_SCHEMA -- key order and formatting are not compared,
+    only the decoded value -- so the document cannot drift from the code.
 
 `behavior` is EXACTLY the four labels the requirement names. `unexercised` is NOT a behavior --
 whether the corpus reaches a hook is an exercise state, orthogonal to how that hook behaves --
