@@ -93,12 +93,18 @@ else:
 # `EXACT_HOME="/home/yugoge"` and `MAC="/Users/Yugoge"` walked straight through.
 #   right (?![A-Za-z0-9_-]) : the root form matches as well as the descendant form,
 #                             while /homework and /rootkit still do not.
-#   left  (?<![A-Za-z0-9_-]): an author path must START a path component. Without it
+#   left  (?<![A-Za-z0-9])  : an author path must START a path component. Without it
 #                             ordinary prose ("a protected workspace/root") reads as
 #                             residue. It deliberately does NOT exclude a preceding
-#                             "/", so `//home/<user>` is still caught.
+#                             "/", so `//home/<user>` is still caught — and it must
+#                             NOT exclude "-" or "_" either: the shell default idiom
+#                             `${VAR:-/root/bin/x}` places a "-" immediately before
+#                             the path, so suppressing on "-" blinded the gate to the
+#                             very form PUBLIC-CORE.md section 3 sanctions. The prose
+#                             cases stay suppressed regardless, being preceded by
+#                             alphanumerics.
 RESIDUE = re.compile(
-    r"(?<![A-Za-z0-9_-])"
+    r"(?<![A-Za-z0-9])"
     r"(?:/root|/home/[a-z][a-z0-9_-]*|/Users/[A-Za-z][A-Za-z0-9_-]*)"
     r"(?![A-Za-z0-9_-])")
 # A BARE top-level directory literal: "/" or "/name" with no second path component.
