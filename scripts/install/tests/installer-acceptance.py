@@ -1196,14 +1196,26 @@ def ac12(tmp: Path) -> None:
           and gen["config_home_resolved"] == os.path.realpath(home3)
           and gen["settings_sha256_as_installed"] == sha256_file(home3 / "settings.json"),
           str({k: gen.get(k) for k in ("config_home_lexical", "config_home_resolved")})[:200])
-    sibling_edited = hashlib.sha256(json.dumps(
-        {"type": "command", "command": gen["contributions"][0]["command"], "timeout": 60},
-        sort_keys=True, separators=(",", ":")).encode()).hexdigest()
-    check("AC12(c)", "the entry digest covers the WHOLE entry object, so a sibling-key "
-                     "edit that preserves the identity tuple still changes it "
-                     "(a {type, command} digest could never mismatch, because both "
+    def canonical(obj):
+        return hashlib.sha256(json.dumps(obj, sort_keys=True, separators=(",", ":"),
+                                         ensure_ascii=False).encode("utf-8")).hexdigest()
+
+    installed_entry = {"type": gen["contributions"][0]["hook_type"],
+                       "command": gen["contributions"][0]["command"]}
+    # Positive limb first: the recorded digest must BE the canonical digest of the
+    # exact entry installed. Without it, a constant digest -- or one over only
+    # {type, command} -- also satisfies the inequality below and the assertion
+    # proves nothing about what is actually digested.
+    check("AC12(c)", "the recorded entry digest EQUALS the canonical digest of the "
+                     "exact entry that was installed",
+          gen["contributions"][0]["entry_digest"] == canonical(installed_entry),
+          f"recorded={gen['contributions'][0]['entry_digest'][:16]} "
+          f"computed={canonical(installed_entry)[:16]}")
+    check("AC12(c)", "and a sibling-key edit that preserves the identity tuple CHANGES "
+                     "it (a {type, command} digest could never mismatch, because both "
                      "fields are already inside the tuple that located the entry)",
-          gen["contributions"][0]["entry_digest"] != sibling_edited)
+          gen["contributions"][0]["entry_digest"]
+          != canonical({**installed_entry, "timeout": 60}))
     check("AC12(c)", "the record is COMMITTED, and the prepared/committed field exists "
                      "so a crash window is recoverable",
           gen.get("record_status") == "committed", str(gen.get("record_status")))
