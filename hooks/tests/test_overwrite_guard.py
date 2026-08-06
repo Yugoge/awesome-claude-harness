@@ -1579,9 +1579,63 @@ def test_iter2_declared_residual_is_stated_at_its_true_width(
 
 
 def test_iter2_corpus_residual_row_names_every_measured_position():
-    """The corpus row must NAME the positions, not gesture at them."""
+    """The corpus row must NAME the positions, not gesture at them — and must
+    not claim a completeness it does not have.
+
+    The row previously read 'The full set was enumerated by execution' above a
+    10-item list while 23 positions were measurable, which is a completeness
+    claim published as fact and disproved by execution. Both halves are pinned
+    here: the families must be named, AND the exhaustiveness must be disclaimed.
+    """
     row = next(r for r in ROUTES
                if r["route_id"] == "absolute-path-verb-after-prefix-word")
     stated = row["why_uncovered"]
-    for token in ("OVW=1", "sudo", "time", "! /bin/cp", "then", "do", "{ /bin/cp"):
+    for token in ("OVW=1", "sudo", "time", "! /bin/cp", "then", "else", "elif",
+                  "until", "do", "{ /bin/cp", "command", "exec", "nohup",
+                  "stdbuf", "xargs", "2>/dev/null"):
         assert token in stated, f"the residual does not name the {token!r} position"
+    assert "NOT EXHAUSTIVE" in stated, "the residual must disclaim exhaustiveness"
+    assert "COMPLETE STATEMENT" in stated, (
+        "the residual must say which sentence IS complete — the universal rule")
+    assert "full set was enumerated" not in stated, (
+        "the disproved completeness claim must not return")
+
+
+def test_iter3_prefix_word_family_is_unbounded(tmp_path):
+    """'ANY preceding word' quantifies over an OPEN set, not over a list.
+
+    This is why the corpus states the RULE as the complete statement and its
+    positions as illustrative: a wrapper word invented in this run — which no
+    published enumeration could contain — reproduces the asymmetry exactly. Any
+    list is therefore representative by construction, and a row claiming to
+    enumerate the full set would be false however long the list grew.
+    """
+    absolute = shutil.which("cp")
+    assert absolute and os.path.isabs(absolute)
+    work = tmp_path / "unbounded"
+    work.mkdir(parents=True)
+    invented = f"./w{uuid.uuid4().hex}"
+    wrapper = work / invented[2:]
+    wrapper.write_text('#!/bin/sh\nexec "$@"\n', encoding="utf-8")
+    wrapper.chmod(0o755)
+    target = work / "victim.txt"
+    original = original_bytes()
+    target.write_text(original, encoding="utf-8")
+    source = work / "source.txt"
+    source.write_text(NEW, encoding="utf-8")
+
+    absolute_cmd = f"{invented} {absolute} {source} {target}"
+    uncovered = run_guard(absolute_cmd, cwd=work)
+    assert uncovered.returncode == 0, (
+        f"an invented prefix word is uncovered like every other one\n"
+        f"{uncovered.stderr}")
+    sh(absolute_cmd, cwd=work)
+    assert target.read_text(encoding="utf-8") == NEW, (
+        "an uncovered route must be DEMONSTRATED to still replace")
+
+    target.write_text(original, encoding="utf-8")
+    covered = run_guard(f"{invented} cp {source} {target}", cwd=work)
+    assert covered.returncode == 2, (
+        f"the bare spelling after an invented word must still be refused, or "
+        f"the asymmetry claim is false\n{covered.stderr}")
+    assert target.read_text(encoding="utf-8") == original
