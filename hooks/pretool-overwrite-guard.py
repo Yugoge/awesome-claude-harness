@@ -76,7 +76,7 @@ try:
     if str(_HOOKS_DIR) not in sys.path:
         sys.path.insert(0, str(_HOOKS_DIR))
     from lib.allowlist import (  # noqa: E402
-        SENTINEL_GRANT_DIR,
+        _enumerate_sentinel_grant_files,
         load_sentinel_grant_for_task,
         match_sentinel_grant_for_write,
     )
