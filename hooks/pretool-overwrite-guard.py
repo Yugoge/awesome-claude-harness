@@ -303,7 +303,36 @@ def grant_for(resolved: str, session_id: str, task_id: str) -> dict | None:
     return None
 
 
-def _consume_grants(grants: list[dict]) -> list[str]:
+def _owned_grant_files(key: str) -> list[Path]:
+    """Grant files whose OWN ``task_id`` field is EXACTLY `key`.
+
+    Deliberately NOT the shared prefix enumerator. That enumerator matches a
+    basename equal to ``<task_id>.json`` OR starting ``<task_id>-``, which under
+    this repository's fan-out naming — parent ``dev-<cycle>`` and lanes
+    ``dev-<cycle>-<lane>`` — makes every child lane's grant a candidate for the
+    parent id. Reading the file's own ``task_id`` is what makes the match exact,
+    and it stays exact regardless of the filename a future issuer chooses.
+
+    A file that cannot be read or parsed is skipped rather than consumed:
+    ownership that cannot be established must never authorize a deletion.
+    """
+    out: list[Path] = []
+    try:
+        entries = sorted(Path(SENTINEL_GRANT_DIR).glob("*.json"))
+    except Exception:
+        return out
+    for p in entries:
+        try:
+            with open(p) as fh:
+                grant = json.load(fh)
+        except Exception:
+            continue
+        if isinstance(grant, dict) and grant.get("task_id") == key:
+            out.append(p)
+    return out
+
+
+def _consume_grants(grants: list[dict], session_id: str) -> list[str]:
     """Spend every grant that authorized this call. [] means NOT authorized.
 
     A partial result is reported as [] and the caller denies: a grant that was
@@ -322,16 +351,52 @@ def _consume_grants(grants: list[dict]) -> list[str]:
     and returns True, and the loser returns False and is refused by the caller.
     So the property holds under concurrency, not merely serially.
 
+    WHAT MAY BE SPENT IS BOUND THREE WAYS, and all three must hold on the SAME
+    file: the grant's own ``task_id`` equals the running task exactly, its
+    ``session_id`` equals this session, and it itself authorizes every target
+    this key was credited with. Without the first bound, an agent whose id is a
+    strict PREFIX of the grant owner's destroyed a grant it did not own — the
+    parent lane spending a child lane's grant, which is this repository's own
+    fan-out naming and not a hypothetical. Without the third, a task holding an
+    unrelated grant of its own could have that unrelated grant spent instead of
+    the one that actually authorized. A call the bounds reject spends nothing
+    and is DENIED, so the pre-existing prefix latitude in the shared matcher can
+    no longer carry a replacement through.
+
     The cost is honest and stated: the grant is spent when the replacement is
     AUTHORIZED, not when it succeeds. A command that is then blocked by another
     hook, or that fails, has still spent the grant and the human re-issues it.
     That direction is deliberate — the opposite error would restore exactly the
     unlimited-reuse defect this closes.
     """
-    keys = sorted({off["grant_identity"]["task_key"] for off in grants})
-    spent = [key for key in keys
-             if consume_sentinel_grant_on_terminal_result(key, "overwrite_guard_authorized")]
-    return spent if len(spent) == len(keys) else []
+    wanted: dict[str, set[str]] = {}
+    for off in grants:
+        wanted.setdefault(off["grant_identity"]["task_key"], set()).add(
+            off["resolved_target"])
+    spent: list[str] = []
+    for key in sorted(wanted):
+        for path in _owned_grant_files(key):
+            try:
+                with open(path) as fh:
+                    grant = json.load(fh)
+            except Exception:
+                continue
+            if grant.get("session_id") != session_id:
+                continue
+            ops = [e for e in (grant.get("allowed_operations") or [])
+                   if isinstance(e, dict) and e.get("op") == "Write"]
+            if not all(any(_entry_authorizes(e, t) for e in ops) for t in wanted[key]):
+                continue
+            try:
+                os.unlink(path)
+            except Exception:
+                continue  # lost the race, or unremovable: this call spends nothing
+            sys.stderr.write(
+                f"[ALLOW-SENTINEL] grant CONSUMED for task_id={key} "
+                f"terminal_result=overwrite_guard_authorized path={path}\n")
+            spent.append(key)
+            break
+    return spent if len(spent) == len(wanted) else []
 
 
 # ---------------------------------------------------------------------------
