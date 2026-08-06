@@ -12,7 +12,9 @@ Three subcommands, one consumer each:
                                      wrapper/redirection token sets are unchanged, the
                                      gate-architecture census is unchanged, the ledger's
                                      registered-hook row set equals the settings-derived set,
-                                     and every threat-model section-4 citation is pinned.
+                                     every threat-model section-4 citation is pinned, and every
+                                     declared section-4 residual risk carries exactly one status
+                                     line valued in its own accepted closed set.
   --coverage  CI artifact gate    -- the run manifest maps one-to-one onto the corpus, every
                                      field is populated, and the results are provably the
                                      product of THIS run (executed == emitted == corpus).
