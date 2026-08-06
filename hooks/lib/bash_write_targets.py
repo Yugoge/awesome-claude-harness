@@ -909,6 +909,19 @@ def extract_bash_write_targets_with_modes(command: str) -> List[WriteTarget]:
     >>> [(t.path, t.mode) for t in extract_bash_write_targets_with_modes('\\\\cp /tmp/s /tmp/a')]
     [('/tmp/a', 'truncating')]
 
+    An ABSOLUTE-path command word names the same verb as its bare spelling, but
+    only the DIRECTORY is blanked, so a near-miss basename and a redirect target
+    are both left exactly as written:
+
+    >>> [(t.path, t.mode) for t in extract_bash_write_targets_with_modes('/bin/cp /tmp/s /tmp/a')]
+    [('/tmp/a', 'truncating')]
+
+    >>> extract_bash_write_targets_with_modes('/opt/x/my-cp /tmp/s /tmp/a')
+    []
+
+    >>> [(t.path, t.mode) for t in extract_bash_write_targets_with_modes('echo x > /tmp/cp')]
+    [('/tmp/cp', 'truncating')]
+
     >>> [(t.path, t.mode) for t in extract_bash_write_targets_with_modes('curl -sS -o/tmp/a http://h/f')]
     [('/tmp/a', 'truncating')]
 
