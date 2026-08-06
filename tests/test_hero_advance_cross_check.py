@@ -94,7 +94,7 @@ def test_false_small_advance_cannot_hide_real_clipping(tmp_path: Path) -> None:
         f"guards may be masked by an unrelated failure.\n{r.stdout}\n{r.stderr}")
 
 
-def _blinded(**pin: str) -> str:
+def _blinded() -> str:
     """The narrowed asset with every corroborator rescaled to agree with a FALSE advance of 1.
 
     Root font-size 1.667 brackets an advance of 1 (0.45*1.667 .. 0.80*1.667), and moving the
