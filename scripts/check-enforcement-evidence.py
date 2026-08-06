@@ -402,7 +402,19 @@ def published_token_set(ledger_text, label):
     `N tokens:` marker are the published set, compared for exact set equality. Parsing the
     published list rather than restating it also keeps the token set declared exactly once in
     code (RECORDED_*) and exactly once in the document.
+
+    That second property is ENFORCED here, not assumed. Taking the first match of a repeatable
+    marker would re-open the defect region-scoping exists to close: a second, correct copy of
+    the region placed earlier in the document -- or hidden inside a fenced code block -- would
+    satisfy the check while the token list a reader actually sees had a token removed from it.
+    The gate would then establish only that SOME region matches the recorded set, not that the
+    published one does, and this document's own premise is that no published claim may exceed
+    what the checks establish. `published_column_set` is guarded identically.
     """
+    begins = re.findall(r"<!--\s*published-tokens:%s:begin\s*-->" % re.escape(label), ledger_text)
+    ends = re.findall(r"<!--\s*published-tokens:%s:end\s*-->" % re.escape(label), ledger_text)
+    if len(begins) != 1 or len(ends) != 1:
+        return None
     match = re.search(
         r"<!--\s*published-tokens:%s:begin\s*-->(.*?)<!--\s*published-tokens:%s:end\s*-->"
         % (re.escape(label), re.escape(label)),
