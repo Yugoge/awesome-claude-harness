@@ -299,8 +299,12 @@ const ADV = deriveAdvance();
 // without visibly destroying itself, none of which is the declaration:
 //   (a) the font-size IN EFFECT ON THE MEASURED LINE TEXT — a monospace advance is a fixed
 //       fraction of the em, so shrinking the advance means shrinking the type to match, to a
-//       size no one can read. Resolved through the cascade, never read off the root: see
-//       lineFontSizes() below for the proven attack that reading the root alone let through;
+//       size no one can read IN THAT TEXT'S OWN USER SPACE. That qualifier is load-bearing and
+//       was previously omitted: this corroborator checks a RATIO, and a ratio survives an
+//       ancestor transform that scales type and advance together, so it does NOT establish that
+//       the reader sees small type — see the transform-stack note above. Resolved through the
+//       cascade, never read off the root: see lineFontSizes() below for the proven attack that
+//       reading the root alone let through;
 //   (b) the stage-rail pitch — consecutive rail label x positions divided by the label's own
 //       character count, where the label TEXT is already pinned to the manifest above. Present
 //       in every asset, including those with no typed line, which is exactly the case the
