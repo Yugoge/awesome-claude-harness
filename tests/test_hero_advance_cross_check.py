@@ -94,6 +94,61 @@ def test_false_small_advance_cannot_hide_real_clipping(tmp_path: Path) -> None:
         f"guards may be masked by an unrelated failure.\n{r.stdout}\n{r.stderr}")
 
 
+def _blinded(**pin: str) -> str:
+    """The narrowed asset with every corroborator rescaled to agree with a FALSE advance of 1.
+
+    Root font-size 1.667 brackets an advance of 1 (0.45*1.667 .. 0.80*1.667), and moving the
+    second rail label to x=50 makes the rail pitch exactly 1. Both corroborators then agree,
+    so the only thing left to catch the forgery is the size the text really renders at.
+    """
+    s = narrowed()
+    s = s.replace(f'values="0;{TRUE_ADVANCE}" keyTimes="0;0.5"',
+                  f'values="0;{FALSE_ADVANCE}" keyTimes="0;0.5"', 1)
+    s = re.sub(r'(<svg\b[^>]*\bfont-size=")15(")', r"\g<1>1.667\g<2>", s, count=1)
+    s = s.replace('<text data-role="stage" x="130"', '<text data-role="stage" x="50"', 1)
+    for old, new in pin.items():
+        s = s.replace(old.replace("__", " ").replace("_LT_", "<"), new)
+    return s
+
+
+@pytest.mark.parametrize("name,restored", [
+    # the type pinned back to full size on the measured element itself
+    ("per-element attribute", ('<text data-trace-id="', '<text font-size="15" data-trace-id="')),
+    # ... on the enclosing group, which the text inherits from
+    ("enclosing group", ('<g data-role="line"', '<g font-size="15" data-role="line"')),
+    # ... through an inline style, which beats the attribute
+    ("inline style", ('<text data-trace-id="', '<text style="font-size:15px" data-trace-id="')),
+    # ... or at runtime, where no static attribute states it at all
+    ("SMIL animation", ('<g data-role="line" opacity="0" transform="translate(0 6)">',
+                        '<g data-role="line" opacity="0" transform="translate(0 6)">'
+                        '<set attributeName="font-size" to="15" begin="0s"/>')),
+])
+def test_readable_type_cannot_hide_real_clipping(name: str, restored: tuple[str, str],
+                                                 tmp_path: Path) -> None:
+    """Every route by which the rendered size can diverge from the root declaration.
+
+    Each of these renders at 15px with 9 of 16 lines overflowing -- 4 of them kind "verdict"
+    -- while every static corroborator agrees with an advance of 1. Before the effective-size
+    walk they audited CLEAN: exit 0, "16 source-verified, 0 warned", zero clipping
+    diagnostics. The forger was not forced to shrink anything.
+    """
+    old, new = restored
+    blinded = _blinded()
+    assert old in blinded, f"fixture is stale: {old!r} not found"
+    svg = tmp_path / "blinded.svg"
+    svg.write_text(blinded.replace(old, new), encoding="utf-8")
+
+    r = audit(svg)
+    assert r.returncode != 0, (
+        f"an asset that keeps its type at a fully readable size via {name} audited CLEAN "
+        f"while genuinely clipping verdict lines — the detector is blindable again.\n"
+        f"{r.stdout}\n{r.stderr}")
+    assert ("declared character advance" in (r.stdout + r.stderr)
+            or "animates" in (r.stdout + r.stderr)), (
+        f"the asset was refused, but not for the size its text actually renders at; the "
+        f"regression this test guards may be masked by an unrelated failure.\n{r.stdout}\n{r.stderr}")
+
+
 def test_honest_advance_still_reports_the_clipping(tmp_path: Path) -> None:
     """The width assertion must still do its own job.
 
