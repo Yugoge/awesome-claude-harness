@@ -105,10 +105,7 @@ def _blinded() -> str:
     s = s.replace(f'values="0;{TRUE_ADVANCE}" keyTimes="0;0.5"',
                   f'values="0;{FALSE_ADVANCE}" keyTimes="0;0.5"', 1)
     s = re.sub(r'(<svg\b[^>]*\bfont-size=")15(")', r"\g<1>1.667\g<2>", s, count=1)
-    s = s.replace('<text data-role="stage" x="130"', '<text data-role="stage" x="50"', 1)
-    for old, new in pin.items():
-        s = s.replace(old.replace("__", " ").replace("_LT_", "<"), new)
-    return s
+    return s.replace('<text data-role="stage" x="130"', '<text data-role="stage" x="50"', 1)
 
 
 @pytest.mark.parametrize("name,restored", [
