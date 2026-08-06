@@ -191,7 +191,7 @@ PY
 fi
 
 # ---------------------------------------------------------------------------
-# 3. Run BOTH hero-provenance audits in --strict mode (any provenance downgrade hard-fails).
+# 3. Run ALL THREE hero-provenance audits in --strict mode (any downgrade hard-fails).
 # ---------------------------------------------------------------------------
 run_audit() {
   local manifest="$1" svg="$2"
