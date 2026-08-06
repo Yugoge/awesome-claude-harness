@@ -65,9 +65,48 @@ DEMOTED_ELEMENTS = ("hero", "whynow", "statusLast", "quickstart")
 ALL_ELEMENTS = REQUIRED_ABOVE_FOLD + DEMOTED_ELEMENTS
 GLYPH_FLOOR_PX = 11.0
 
-FONT_PX = 15          # gen-svg.mjs body font-size
+FONT_PX = 15          # gen-svg.mjs body font-size — corroborated by asset_line_font_px()
 COLUMN_MAX_PX = 1012  # prose-column cap; mirrors `main { max-width }` in CSS above
 COLUMN_PAD_PX = 16    # mirrors `main { padding }` in CSS above
+
+
+def asset_line_font_px(svg_text: str) -> float | None:
+    """The font-size actually governing the hero's line text, resolved through the cascade.
+
+    FONT_PX is the ruler the published glyph figure is scaled by, and it CANCELS out of the
+    browser/model drift assertion below -- both sides multiply by it -- so that assertion can
+    never detect a wrong value. Proven: setting FONT_PX to 45 made this script exit 0 with an
+    empty failures list while the page the reader sees was unchanged, which is exactly the
+    "turn a criterion green while changing nothing a reader experiences" outcome the glyph
+    floor exists to refuse. So the ruler is corroborated here against the asset it measures.
+
+    Resolved through the cascade, never read off the root: font-size INHERITS, so a
+    declaration on a <text> element or an enclosing <g> overrides the root attribute. Reading
+    the root alone is the same fail-open the auditor's advance cross-check was proven to have.
+    Returns None when the asset does not resolve to exactly one static size for its line text
+    -- including when a <style> block or a SMIL animation could move it -- and the caller
+    treats None as a failure rather than as an absent check.
+    """
+    if re.search(r"<style[\s>]", svg_text, re.I):
+        return None                                    # selector-driven size this walk cannot resolve
+    if re.search(r'<(?:set|animate)\b[^>]*\battributeName="font[^"]*"', svg_text):
+        return None                                    # a runtime size is not a static one
+    stack: list[float | None] = []
+    sizes: set[float | None] = set()
+    for m in re.finditer(r"<(/?)(svg|g|text)\b([^>]*)>", svg_text):
+        body = m.group(3)
+        if m.group(1):
+            if stack:
+                stack.pop()
+            continue
+        own = (re.search(r'\bstyle\s*=\s*"[^"]*?\bfont-size\s*:\s*([\d.]+)', body)
+               or re.search(r'\bfont-size\s*=\s*"\s*([\d.]+)', body))
+        eff = float(own.group(1)) if own else (stack[-1] if stack else None)
+        if m.group(2) == "text" and "data-trace-id" in body:
+            sizes.add(eff)
+        if not body.rstrip().endswith("/"):
+            stack.append(eff)
+    return sizes.pop() if len(sizes) == 1 else None
 
 
 def hero_img_width(readme_text: str) -> int | None:
