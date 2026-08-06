@@ -393,13 +393,21 @@ def _absolute_command_word_dir_spans(masked: str) -> List[Tuple[int, int]]:
     n = len(masked)
     i = 0
     at_command_word = True
+    prev_sig = ""  # last non-blank byte seen, for multi-byte redirect operators
     while i < n:
         ch = masked[i]
         if ch in " \t":
             i += 1
             continue
         if ch in ";|&(\n":
-            at_command_word = True
+            # `|` and `&` are separators EXCEPT as the tail of a redirect
+            # operator: `>|` (clobber) and `>&`/`<&` (fd duplication). Treating
+            # those as separators would put the redirect TARGET at a
+            # command-word position and truncate it — `echo x >| /tmp/a` would
+            # report `a`. The redirect operators own their operand.
+            if not (ch in "|&" and prev_sig in "><"):
+                at_command_word = True
+            prev_sig = ch
             i += 1
             continue
         j = i
@@ -407,8 +415,10 @@ def _absolute_command_word_dir_spans(masked: str) -> List[Tuple[int, int]]:
             j += 1
         if j == i:  # a bare operator byte such as `>` or `)`
             at_command_word = False
+            prev_sig = ch
             i += 1
             continue
+        prev_sig = masked[j - 1]
         if at_command_word and masked[i] == "/":
             last = masked.rfind("/", i, j)
             if last > i:
