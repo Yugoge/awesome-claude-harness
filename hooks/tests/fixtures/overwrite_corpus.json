@@ -23,7 +23,71 @@
   "notes": [
     "dd at line start is separately blocked by hooks/pretool-bash-safety.sh ('BLOCKED: Destructive disk operation detected'). The dd row here measures THIS guard's verdict, which is independent of that hook and would also fire on a dd that is not the first word of a line.",
     "unlink is the one covered verb that does not create anything on its allow run: creates_on_new is false and the assertion is that the path is still absent. Creation is not denied; there is simply nothing to create.",
-    "rm is deliberately absent. hooks/pretool-bash-safety.sh already blocks all filesystem rm globally, so rm-then-create cannot run in this harness at all. unlink is the residual verb of that class and is covered."
+    "rm is deliberately absent. hooks/pretool-bash-safety.sh already blocks all filesystem rm globally, so rm-then-create cannot run in this harness at all. unlink is the residual verb of that class and is covered.",
+    "false_positive_controls pins the no-false-positive property of the anchored absolute-path rule that closed absolute-path-verb in iteration 2. A coverage claim that cannot cry wolf is worth more than one that can, so the near-misses are executed rather than argued."
+  ],
+  "false_positive_controls": [
+    {
+      "control_id": "counterexample-tools-backup-cp",
+      "command_template": "./tools/backup-cp {SRC} {TARGET}",
+      "why": "the counter-example the DISPROVED reason itself cited. Relative, so the absolute-path rule never fires; and its basename 'backup-cp' puts '-' before 'cp', not a word boundary."
+    },
+    {
+      "control_id": "nearmiss-bare-backup-cp",
+      "command_template": "backup-cp {SRC} {TARGET}",
+      "why": "no directory prefix at all; the rule requires a leading '/'."
+    },
+    {
+      "control_id": "nearmiss-opt-my-cp",
+      "command_template": "/opt/x/my-cp {SRC} {TARGET}",
+      "why": "absolute and at a command-word position, but only the DIRECTORY is blanked, leaving 'my-cp' in which 'cp' is preceded by '-'."
+    },
+    {
+      "control_id": "nearmiss-scp",
+      "command_template": "scp {SRC} {TARGET}",
+      "why": "a different program whose name ends in the verb name."
+    },
+    {
+      "control_id": "nearmiss-absolute-scp",
+      "command_template": "/usr/bin/scp {SRC} {TARGET}",
+      "why": "the absolute spelling of the same near-miss: basename 'scp' keeps 's' before 'cp'."
+    },
+    {
+      "control_id": "nearmiss-rsync-cp",
+      "command_template": "rsync-cp {SRC} {TARGET}",
+      "why": "hyphenated suffix, no directory prefix."
+    },
+    {
+      "control_id": "nearmiss-dot-slash-cp",
+      "command_template": "./cp {SRC} {TARGET}",
+      "why": "a LOCAL program named cp. Relative, so the rule does not fire and './cp' keeps '.' before the verb."
+    },
+    {
+      "control_id": "redirect-target-named-cp",
+      "command_template": "echo NEWCONTENT > {DIR}/cp",
+      "why": "THE case a naive whitespace anchor corrupts. The redirect target must still be named in full; blanking its directory would report a bare 'cp' and lose the real path. Preceding non-blank byte is '>', so it is not a command-word position.",
+      "must_still_name_target": "{DIR}/cp"
+    },
+    {
+      "control_id": "readonly-ls-of-the-verb-binary",
+      "command_template": "ls -la /usr/bin/cp {TARGET}",
+      "why": "the case that REJECTS the looser anchor. A bare [\\s;|&] boundary anchor (the shape first proposed) matches /usr/bin/cp here and names {TARGET} from a read-only listing. The command-word anchor does not fire."
+    },
+    {
+      "control_id": "readonly-diff-of-the-verb-binary",
+      "command_template": "diff /bin/cp /usr/bin/cp",
+      "why": "same rejection, second shape: a read-only comparison of two binaries must name nothing."
+    },
+    {
+      "control_id": "readonly-test-x-the-verb-binary",
+      "command_template": "test -x /bin/cp && echo ok",
+      "why": "same rejection, third shape: the absolute path appears after a flag, not at a command-word position."
+    },
+    {
+      "control_id": "absolute-path-as-source-argument",
+      "command_template": "cp /bin/cp {TARGET}",
+      "why": "the verb binary used as a SOURCE. Only the destination may be named, and the argument's directory must not be blanked."
+    }
   ],
   "routes": [
     {
