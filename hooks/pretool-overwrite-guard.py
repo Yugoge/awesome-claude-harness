@@ -526,7 +526,7 @@ def main() -> int:
             grants.append(off)
 
     decision = "refused" if ungranted else "permitted_by_grant"
-    consumed = _consume_grants(grants) if decision == "permitted_by_grant" else []
+    consumed = _consume_grants(grants, session_id) if decision == "permitted_by_grant" else []
     if decision == "permitted_by_grant" and not consumed:
         decision = "refused_grant_not_consumed"
     sink = str(audit_log_path())
