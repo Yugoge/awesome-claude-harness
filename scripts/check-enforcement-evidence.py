@@ -740,17 +740,40 @@ def check_ledger(args, report):
         report.ok("no published claim in the ledger exceeds this gate's demonstrated scope")
 
     # 0b. The header must enumerate which columns are derived and which are authored, so the
-    #     reader can see the boundary rather than infer it from an unqualified sentence.
-    header = normalize_prose(ledger_header_block(text))
-    missing_derived = [f for f in DERIVED_ROW_FIELDS if f not in header]
-    missing_authored = [f for f in AUTHORED_ROW_FIELDS if f not in header]
-    if missing_derived or missing_authored:
-        if missing_derived:
-            report.fail(f"ledger header does not name the derived column(s) {missing_derived}")
-        if missing_authored:
-            report.fail(f"ledger header does not name the authored column(s) {missing_authored}")
-    else:
-        report.ok(f"ledger header names all {len(DERIVED_ROW_FIELDS)} derived and "
+    #     reader can see the boundary rather than infer it from an unqualified sentence. The
+    #     enumeration is read from its OWN anchored region and compared for exact set
+    #     equality -- a presence-anywhere test over the whole header is vacuous for every name
+    #     that also occurs in the surrounding prose, and six of the ten do.
+    header_block = ledger_header_block(text)
+    enumeration_clean = True
+    for label, recorded in (("derived", DERIVED_ROW_FIELDS),
+                            ("authored", AUTHORED_ROW_FIELDS)):
+        published_cols = published_column_set(header_block, label)
+        if published_cols is None:
+            enumeration_clean = False
+            report.fail(f"ledger header publishes no parseable {label} column enumeration: the "
+                        f"published-columns:{label} region is absent or names no column "
+                        f"(recorded set {sorted(recorded)})")
+            continue
+        absent = sorted(set(recorded) - set(published_cols))
+        extra = sorted(set(published_cols) - set(recorded))
+        duplicated = sorted({c for c in published_cols if published_cols.count(c) > 1})
+        if absent:
+            enumeration_clean = False
+            report.fail(f"ledger header's {label} column enumeration omits {absent} -- a reader "
+                        f"cannot see a boundary the document does not draw")
+        if extra:
+            enumeration_clean = False
+            report.fail(f"ledger header's {label} column enumeration publishes {extra}, which "
+                        f"is not in the recorded {label} set")
+        if duplicated:
+            enumeration_clean = False
+            report.fail(f"ledger header's {label} column enumeration lists {duplicated} more "
+                        f"than once")
+    # Reported ONLY when nothing above failed. Emitting a PASS beside a FAIL for one assertion
+    # is the reporting-integrity defect this gate already fixed for the token sets.
+    if enumeration_clean:
+        report.ok(f"ledger header enumerates exactly the {len(DERIVED_ROW_FIELDS)} derived and "
                   f"{len(AUTHORED_ROW_FIELDS)} authored registered-hook columns")
 
     # 0c. Every companion document the header cites must exist. A citation to a document that
