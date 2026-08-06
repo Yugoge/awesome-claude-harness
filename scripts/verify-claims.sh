@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Description: Self-verifying headline-claims gate. Recomputes the wired-hook entry count and
 #   lifecycle-event count from settings.json (the single source of truth) and fails if
-#   README.md / ARCHITECTURE.md state a different number; then runs BOTH hero-provenance
+#   README.md / ARCHITECTURE.md state a different number; then runs ALL THREE hero-provenance
 #   audits in --strict mode so any source-verification downgrade is a hard failure. Finally
 #   asserts settings.template.json (the PUBLIC install seed) is valid JSON and wires every hook
 #   settings.json wires — path-placeholder differences ({{CLAUDE_HOME}} vs $HOME/.claude/~) are
