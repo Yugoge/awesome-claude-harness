@@ -270,10 +270,17 @@ for (const id of ids) if (!traceSeq.includes(id)) V(`manifest id "${id}" has no 
 // the <animateTransform> elements removed, passes --strict with ZERO diagnostics while Chromium
 // renders 9 of 16 lines outside its 400px viewBox, 4 of them kind "verdict", at a glyph-box height
 // of 18 — IDENTICAL to the honest control. Readable type, proof lines cut off. The committed assets
-// are not exposed only because each line group carries an <animateTransform attributeName="transform">
-// that REPLACES the static attribute — a property of those assets, not of this auditor. Closing it
-// needs the assertion to accumulate the ancestor transform chain, or to refuse a static transform on
-// a measured line's ancestors the way font animation is refused below. NOT closed here.
+// are shielded from that particular construction only incidentally, and only PARTIALLY: an
+// <animateTransform attributeName="transform"> on a line group REPLACES the static attribute, and
+// hook-hero carries one on all 16 of its groups — but pipeline-hero carries them on 10 of 15 and
+// guard-hero on 14 of 17. Measured: ADDING a single transform="translate(1000 6)" to committed
+// pipeline-hero's unanimated s05 group renders that line's right edge at 1094 past its own 960
+// panel while --strict still exits 0 — nothing removed, nothing rescaled, one attribute. All 8
+// unanimated groups across the two assets carry typing-reveal kinds (input/attempt), so cutting a
+// kind "verdict" line still requires removing an animation as above. Protection is a property of
+// those assets, not of this auditor. Closing it needs the assertion to accumulate the ancestor
+// transform chain, or to refuse a static transform on a measured line's ancestors the way font
+// animation is refused below. NOT closed here.
 const vbMatch = svg.match(/viewBox="0 0 (\d+(?:\.\d+)?) (\d+(?:\.\d+)?)"/);
 const LOGICAL_W = vbMatch ? parseFloat(vbMatch[1]) : null;
 
