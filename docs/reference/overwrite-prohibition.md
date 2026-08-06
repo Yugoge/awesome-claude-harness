@@ -121,6 +121,21 @@ A blanket prohibition with no escape blocks legitimate work, so the escape is a
   opposite choice would restore unlimited reuse. Nothing else spends it: an
   ungated command, an append, an in-place edit, a creation, and a refused
   attempt on a different file all leave the grant intact.
+- **Correction, measured rather than assumed (3)**: moving consumption into this
+  guard was right, but the first version of it spent the grant through the
+  shared consumer, which enumerates grant files by task-id **prefix**. Under
+  this repository's own fan-out naming — parent `dev-<cycle>`, lanes
+  `dev-<cycle>-<lane>` — a parent-task agent was therefore authorized by a
+  **child lane's** grant and *destroyed* it. That was a consequence of the
+  fix, and iteration 1 declared it nowhere. **Which** grant may be spent is now
+  bound exactly: the grant's own `task_id` must equal the running task, its
+  `session_id` must equal this session, and it must itself authorize every
+  target credited to that task — all three on the same file. A call that cannot
+  spend an exactly-owned authorizing grant is **denied**, so the prefix latitude
+  in the shared matcher can no longer carry a replacement through. The latitude
+  itself is unchanged, because that module is shared and was not modified: a
+  prefix-sibling grant can still be *offered*, it simply can no longer be spent.
+  Demonstrated by `cross-lane-grant-consumption` in the corpus.
 - The grant must carry an explicit **absolute** target. Both the grant target
   and the candidate are `realpath`-normalized before comparison: the sentinel
   records no grant-time cwd, so a relative target could not be compared
