@@ -376,6 +376,21 @@
       "residual": "Covered at command-word positions only. An absolute-path verb preceded by an environment-assignment or wrapper word — `A=1 /bin/cp`, `sudo /bin/cp` — is NOT at a command-word position by this rule and stays uncovered; it is declared and demonstrated as absolute-path-verb-after-prefix-word. The bare spelling `A=1 cp` IS covered, so this is an asymmetry, and it is deliberate: the anchor that removes it is exactly the one that cries wolf on read-only commands."
     },
     {
+      "route_id": "cross-lane-grant-consumption",
+      "route_class": "cross-lane-grant-consumption",
+      "mechanism": "an agent whose task id is a strict PREFIX of the grant owner's is offered, and formerly destroyed, a grant it does not own",
+      "command_template": "cp {SRC} {TARGET}",
+      "write_mode": "truncating",
+      "expect_on_existing": 2,
+      "expect_on_new": 0,
+      "coverage": "covered",
+      "demonstration": "bespoke",
+      "added_in": "iteration 2",
+      "why_it_existed": "Iteration 1 moved grant consumption INTO this guard, which is what made single use real. It spent the grant through the shared consumer, which enumerates grant files by task-id PREFIX — basename equal to '<task_id>.json' OR starting '<task_id>-'. Under this repository's own fan-out naming the parent task is 'dev-<cycle>' and its lanes are 'dev-<cycle>-<lane>', so the parent id is a strict prefix of every lane id. A parent-task agent replacing a file was therefore authorized by a CHILD LANE'S grant and DESTROYED it. Reproduced with exactly those ids before the fix: exit 0, and the child's grant file gone afterwards. The authorization half pre-existed in the unmodified shared matcher; the destruction half became reachable only once a Write-shaped grant was consumed at all, so iteration 1 introduced it and declared it nowhere.",
+      "how_covered": "hooks/pretool-overwrite-guard.py::_owned_grant_files reads each candidate grant's OWN task_id and keeps only an EXACT match, and _consume_grants additionally requires the same session and that the grant itself authorizes every target credited to that key. All three bounds must hold on the SAME file. A call that cannot spend an exactly-owned authorizing grant is DENIED with decision=refused_grant_not_consumed, so the pre-existing prefix latitude in the shared matcher can no longer carry a replacement through. The candidate set is still the one the authorization side reads, so consumption can never reach a file authorization could not have used, and the guard still names no grant directory and introduces no issuance channel.",
+      "residual": "The prefix latitude in hooks/lib/allowlist.py::_enumerate_sentinel_grant_files is UNCHANGED — that module is shared and was not modified. A prefix-sibling grant can therefore still be OFFERED to the matcher; it simply can no longer be spent, and an offer that cannot be spent now denies instead of proceeding. Bounds measured, not assumed: the leak always required the same session_id and a grant naming the same target file, and consumption was never reachable without successful authorization first."
+    },
+    {
       "route_id": "absolute-path-verb-after-prefix-word",
       "route_class": "opaque-command-word",
       "mechanism": "an absolute-path verb after a prefix word is not at a command-word position, so its directory prefix is not blanked",
