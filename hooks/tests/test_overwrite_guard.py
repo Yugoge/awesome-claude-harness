@@ -1491,26 +1491,47 @@ def test_iter2_redirect_operators_keep_their_operand(tmp_path):
     assert rp(target) in result.stderr
 
 
-#: Every position in which an ABSOLUTE-path verb is NOT at a command-word
-#: position. Enumerated by execution, not guessed: the declared residual must
-#: be stated at its true width, and a residual narrower than reality is the
-#: same defect class as a disproved justification.
+#: Positions in which an ABSOLUTE-path verb is NOT at a command-word position.
+#: Confirmed by execution, not guessed — but ILLUSTRATIVE, NOT EXHAUSTIVE: the
+#: preceding word is drawn from an OPEN set, which is why the governing rule and
+#: not this list is the published statement of the residual, and why
+#: test_iter3_prefix_word_family_is_unbounded exists. The BARE counterpart of
+#: each template is the same text with `{ABS}` -> `cp`, so the two spellings
+#: differ by the directory prefix and by nothing else. The third element names
+#: an external program the position needs, or None when it is pure shell.
 PREFIX_WORD_POSITIONS = [
-    ("env-assignment", "OVW=1 {ABS} {SRC} {TARGET}", "OVW=1 cp {SRC} {TARGET}"),
-    ("time-keyword", "time {ABS} {SRC} {TARGET}", "time cp {SRC} {TARGET}"),
-    ("negation", "! {ABS} {SRC} {TARGET}", "! cp {SRC} {TARGET}"),
-    ("then-keyword", "if true; then {ABS} {SRC} {TARGET}; fi",
-     "if true; then cp {SRC} {TARGET}; fi"),
-    ("do-keyword", "for f in a; do {ABS} {SRC} {TARGET}; done",
-     "for f in a; do cp {SRC} {TARGET}; done"),
-    ("brace-group", "{ {ABS} {SRC} {TARGET}; }", "{ cp {SRC} {TARGET}; }"),
+    ("env-assignment", "OVW=1 {ABS} {SRC} {TARGET}", None),
+    ("two-assignments", "A=1 B=2 {ABS} {SRC} {TARGET}", None),
+    ("time-keyword", "time {ABS} {SRC} {TARGET}", None),
+    ("negation", "! {ABS} {SRC} {TARGET}", None),
+    ("then-keyword", "if true; then {ABS} {SRC} {TARGET}; fi", None),
+    ("else-keyword", "if false; then :; else {ABS} {SRC} {TARGET}; fi", None),
+    ("elif-then-keyword",
+     "if false; then :; elif true; then {ABS} {SRC} {TARGET}; fi", None),
+    ("for-do-keyword", "for f in a; do {ABS} {SRC} {TARGET}; done", None),
+    ("while-do-keyword",
+     "printf 'a\\n' | while read -r l; do {ABS} {SRC} {TARGET}; done", None),
+    ("until-do-keyword", "until false; do {ABS} {SRC} {TARGET}; break; done", None),
+    ("brace-group", "{ {ABS} {SRC} {TARGET}; }", None),
+    ("case-body", "case x in x) {ABS} {SRC} {TARGET} ;; esac", None),
+    ("function-body", "f() { {ABS} {SRC} {TARGET}; }; f", None),
+    ("command-builtin", "command {ABS} {SRC} {TARGET}", None),
+    ("exec-builtin", "exec {ABS} {SRC} {TARGET}", None),
+    ("sudo-wrapper", "sudo -n {ABS} {SRC} {TARGET}", "sudo"),
+    ("env-wrapper", "env {ABS} {SRC} {TARGET}", "env"),
+    ("nice-wrapper", "nice {ABS} {SRC} {TARGET}", "nice"),
+    ("nohup-wrapper", "nohup {ABS} {SRC} {TARGET}", "nohup"),
+    ("timeout-wrapper", "timeout 30 {ABS} {SRC} {TARGET}", "timeout"),
+    ("stdbuf-wrapper", "stdbuf -o0 {ABS} {SRC} {TARGET}", "stdbuf"),
+    ("xargs-wrapper", "echo x | xargs -I@ {ABS} {SRC} {TARGET}", "xargs"),
+    ("redirect-prefixed", "2>/dev/null {ABS} {SRC} {TARGET}", None),
 ]
 
 
-@pytest.mark.parametrize("label,absolute_tpl,bare_tpl", PREFIX_WORD_POSITIONS,
+@pytest.mark.parametrize("label,absolute_tpl,requires", PREFIX_WORD_POSITIONS,
                          ids=[p[0] for p in PREFIX_WORD_POSITIONS])
 def test_iter2_declared_residual_is_stated_at_its_true_width(
-        label, absolute_tpl, bare_tpl, tmp_path):
+        label, absolute_tpl, requires, tmp_path):
     """The residual is real in EVERY position the corpus row names, and the
     bare spelling really is covered in each — which is what makes it an
     asymmetry rather than a uniform gap.
