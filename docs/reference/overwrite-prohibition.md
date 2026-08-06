@@ -205,6 +205,7 @@ without trace is prose again.
 | route_id | Was declared | What changed |
 |---|---|---|
 | `concurrent-grant-reuse` | "Consumption is PostToolUse, so two calls issued before the first terminal result both observe one grant. Single-use holds for **serial** use only." | Both halves were wrong: the grant was never consumed at all, so single-use did not hold even serially. Consumption now happens in this guard at authorization time and the atomic `unlink` is the mutual exclusion, so the concurrent case closed with the serial one. Now `coverage: "covered"` in the corpus, carrying `reclassified_from`, its reasoning, and its residual. |
+| `absolute-path-verb` | "Accepting any token *ending* in the verb name would name a target from `./tools/backup-cp` — the cries-wolf direction the requirement forbids." | **The stated reason was disproved by execution, not merely superseded.** It defeats only a naive *suffix* match and says nothing against an *anchored* rule. An anchored rule — the token must begin with `/` **and** sit at a command-word position — closes the route with **zero** false positives on `./tools/backup-cp` and on every near-miss now pinned in the corpus's `false_positive_controls`. Only the directory part is blanked, so the basename is judged by exactly the same verb patterns as the bare spelling; no verb pattern was loosened and no verb added. Now `coverage: "covered"`, with the residual `absolute-path-verb-after-prefix-word` declared above. |
 
 ### Syntaxes that were silently uncovered, and are now covered
 
