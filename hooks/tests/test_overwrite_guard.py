@@ -1305,7 +1305,7 @@ def test_iter2_a_prefix_sibling_grant_is_neither_honoured_nor_destroyed(tmp_path
     AND unlinked it. Before this fix the assertions below read exit 0 and a
     missing grant file.
     """
-    work, target, source = _grant_scenario(tmp_path, "prefix-sibling")
+    work, target, source, original = _grant_scenario(tmp_path, "prefix-sibling")
     drop_grants(PARENT_TASK)
     drop_grants(CHILD_TASK)
     child_grant = write_grant(CHILD_TASK, "sid-test",
