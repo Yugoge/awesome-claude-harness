@@ -763,9 +763,9 @@ def check_ledger(args, report):
         published_cols = published_column_set(header_block, label)
         if published_cols is None:
             enumeration_clean = False
-            report.fail(f"ledger header publishes no parseable {label} column enumeration: the "
-                        f"published-columns:{label} region is absent or names no column "
-                        f"(recorded set {sorted(recorded)})")
+            report.fail(f"ledger header publishes no single parseable {label} column "
+                        f"enumeration: the published-columns:{label} region is absent, "
+                        f"duplicated, or names no column (recorded set {sorted(recorded)})")
             continue
         absent = sorted(set(recorded) - set(published_cols))
         extra = sorted(set(published_cols) - set(recorded))
