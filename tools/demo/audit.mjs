@@ -301,12 +301,57 @@ const firstStep = (csv) => {
   for (let i = 1; i < vals.length; i++) if (vals[i] - vals[i - 1] > 0) return vals[i] - vals[i - 1];
   return null;
 };
+// The font-size governing the text the clipping check MEASURES, resolved through the SVG
+// cascade rather than read off the root. font-size INHERITS, so a declaration on a <text>
+// element — or on any enclosing <g> — overrides the root attribute. Reading the root alone
+// was fail-OPEN and was proven so: an asset declaring a root font-size of 1.667 while pinning
+// its 16 line elements back to font-size 15 satisfied this corroborator with its type at full
+// readable size, and audited clean — exit 0, "0 warned", zero clipping diagnostics — while a
+// browser measured that same text at 15px and 9 of 16 lines, 4 of them kind "verdict",
+// genuinely overflowed the panel. The forger was NOT forced to shrink anything: the root
+// attribute is a declaration about nothing, and the corroborator has to read the size the
+// measured text actually renders at.
+const FS_ATTR = /\bfont-size\s*=\s*"\s*([\d.]+)(?:px)?\s*"/;
+const FS_STYLE = /\bstyle\s*=\s*"[^"]*?\bfont-size\s*:\s*([\d.]+)(?:px)?/;
+const declaredFS = (tag) => {
+  const s = tag.match(FS_STYLE); if (s) return parseFloat(s[1]); // an inline style beats the attribute
+  const a = tag.match(FS_ATTR); if (a) return parseFloat(a[1]);
+  return null;
+};
+const lineFontSizes = () => {
+  const out = [], stack = [];
+  const tagRe = /<(\/?)(svg|g|text)\b([^>]*)>/g;
+  let t;
+  while ((t = tagRe.exec(svg))) {
+    if (t[1]) { stack.pop(); continue; }
+    const own = declaredFS(t[3]);
+    const eff = own === null ? (stack.length ? stack[stack.length - 1] : null) : own;
+    if (t[2] === 'text' && /\bdata-trace-id\s*=/.test(t[3])) out.push(eff);
+    if (!/\/\s*$/.test(t[3])) stack.push(eff);
+  }
+  return out;
+};
 const advanceCorroborators = () => {
   const out = [];
-  const fsM = svg.match(/<svg\b[^>]*\bfont-size="([\d.]+)"/);
-  const fs = fsM ? parseFloat(fsM[1]) : null;
-  if (fs > 0) out.push({ src: `the root font-size of ${fs}px`, lo: fs * MONO_RATIO_MIN,
-                         hi: fs * MONO_RATIO_MAX,
+  // A <style> block can re-size the measured text through selectors the walk above does not
+  // resolve, so it is REFUSED rather than silently under-read — the same fail-closed choice
+  // the disagreement branch makes below.
+  if (/<style\b[\s\S]*?font-size/i.test(svg))
+    V('the asset declares a font-size inside a <style> block, which the advance cross-check ' +
+      'cannot resolve against the measured line text — refused rather than measured with a ' +
+      'ruler the asset can move out from under it');
+  const fsAll = lineFontSizes().filter((v) => Number.isFinite(v) && v > 0);
+  const fsUniq = [...new Set(fsAll)];
+  if (fsUniq.length > 1)
+    V(`the measured line text does not share a single font-size (${fsUniq.join('px, ')}px), so ` +
+      `no one character advance can describe this asset and the clipping check below would ` +
+      `measure most of its lines with the wrong ruler`);
+  const rootM = svg.match(/<svg\b[^>]*>/);
+  // Lines present ⇒ their own effective size is the only honest ruler. No lines at all ⇒ the
+  // clipping check is vacuous anyway, so the root declaration is all there is to corroborate.
+  const fs = fsUniq.length === 1 ? fsUniq[0] : (fsAll.length ? null : (rootM ? declaredFS(rootM[0]) : null));
+  if (fs > 0) out.push({ src: `the font-size in effect on the measured line text (${fs}px)`,
+                         lo: fs * MONO_RATIO_MIN, hi: fs * MONO_RATIO_MAX,
                          implies: `${(fs * MONO_RATIO_MIN).toFixed(2)}–${(fs * MONO_RATIO_MAX).toFixed(2)}px` });
   const xs = [...svg.matchAll(/<text data-role="stage" x="([\d.]+)"/g)].map((r) => parseFloat(r[1]));
   if (xs.length >= 2 && RAIL.length >= 2 && xs[1] > xs[0]) {
