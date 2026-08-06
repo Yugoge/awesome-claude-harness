@@ -311,12 +311,19 @@ const firstStep = (csv) => {
 // genuinely overflowed the panel. The forger was NOT forced to shrink anything: the root
 // attribute is a declaration about nothing, and the corroborator has to read the size the
 // measured text actually renders at.
-const FS_ATTR = /\bfont-size\s*=\s*"\s*([\d.]+)(?:px)?\s*"/;
-const FS_STYLE = /\bstyle\s*=\s*"[^"]*?\bfont-size\s*:\s*([\d.]+)(?:px)?/;
+// A declaration is either a resolvable px length, or NaN meaning "declared in something this
+// walk will not resolve". NaN is not a parse nicety: font-size="9em" against a root of 1.667
+// renders at 15px, and a regex that quietly skipped the unit-bearing value fell back to the
+// inherited size and let exactly the original forgery through again — proven, 9 of 16 lines
+// overflowing. Units are refused, never guessed.
+const FS_ATTR = /\bfont-size\s*=\s*"([^"]*)"/;
+const FS_STYLE = /\bstyle\s*=\s*"[^"]*?\bfont-size\s*:\s*([^;"]*)/;
+const PX_ONLY = /^\s*([\d.]+)(?:px)?\s*$/;
 const declaredFS = (tag) => {
-  const s = tag.match(FS_STYLE); if (s) return parseFloat(s[1]); // an inline style beats the attribute
-  const a = tag.match(FS_ATTR); if (a) return parseFloat(a[1]);
-  return null;
+  const m = tag.match(FS_STYLE) || tag.match(FS_ATTR); // an inline style beats the attribute
+  if (!m) return null;
+  const px = m[1].match(PX_ONLY);
+  return px ? parseFloat(px[1]) : NaN;
 };
 const lineFontSizes = () => {
   const out = [], stack = [];
