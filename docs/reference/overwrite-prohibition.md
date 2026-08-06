@@ -263,6 +263,21 @@ about what is ungated — editing, appending, in-place editing and creation stay
 completely ungated in grouped and escaped form too, and that is pinned by
 `test_f1_f2_do_not_gate_ordinary_developer_work`.
 
+Since iteration 2 it also covers the **absolute spellings** of those same
+verbs: `/bin/cp config.example.json config.json` and `/usr/bin/install -m 644
+src dest` are refused exactly as `cp` and `install` are. **No verb was added** —
+only the spellings of the verbs already listed in section 3. The widening is
+therefore bounded by that table and by nothing else, and it inherits whatever
+cries-wolf behaviour the bare spelling already had: a vendor script that happens
+to be named `install` is refused as `/opt/tool/install` for the same reason it
+is refused as `install`. What it deliberately does **not** widen to is any token
+that merely *ends* in a verb name (`backup-cp`, `my-cp`, `scp`) or any absolute
+path that is not the command word — a redirect target such as `> /tmp/cp`, an
+argument such as `cp /bin/cp dest`, and read-only inspections such as
+`ls -la /usr/bin/cp file`, `diff /bin/cp /usr/bin/cp` and `test -x /bin/cp` all
+stay silent. Those twelve near-misses are executed, not argued: they are the
+corpus's `false_positive_controls`.
+
 Each has an ungated remedy the deny message names (`>>`, a fresh path, `Edit`,
 or `/allow Write <abs path>`), and none of them is editing, appending or
 creating — the four things the requirement fixes as ungated. But this is the
