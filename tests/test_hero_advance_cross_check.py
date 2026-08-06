@@ -25,6 +25,7 @@ below is correctly refused for.
 
 from __future__ import annotations
 
+import importlib.util
 import json
 import re
 import shutil
