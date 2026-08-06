@@ -1270,3 +1270,220 @@ def test_ac10_fourth_consumer_of_the_shared_module_is_pinned_too():
     assert bwt.command_without_heredoc_bodies("cat > /tmp/a << EOF\nhello\nEOF") == \
         "cat > /tmp/a << EOF"
     assert bwt.command_without_heredoc_bodies("echo plain") == "echo plain"
+
+
+# ---------------------------------------------------------------------------
+# Iteration 2 — the two majors found by re-verifying iteration 1
+#
+# (1) The F5 fix spent grants through a task-id PREFIX enumeration, so a parent
+#     lane destroyed a child lane's grant. (2) `absolute-path-verb` was left
+#     open on a reason that did not survive execution.
+# ---------------------------------------------------------------------------
+
+#: This repository's real fan-out naming: the parent task id is a strict PREFIX
+#: of every lane id, which is precisely what made the leak reachable.
+PARENT_TASK = "dev-20260804-010515"
+CHILD_TASK = "dev-20260804-010515-overwrite"
+
+
+def _grant_scenario(tmp_path, name):
+    work = tmp_path / name
+    work.mkdir(parents=True)
+    target = work / "victim.txt"
+    original = original_bytes()  # freshly randomized per call, so capture it
+    target.write_text(original, encoding="utf-8")
+    source = work / "source.txt"
+    source.write_text(NEW, encoding="utf-8")
+    return work, target, source, original
+
+
+def test_iter2_a_prefix_sibling_grant_is_neither_honoured_nor_destroyed(tmp_path):
+    """A parent lane must not spend — or destroy — a child lane's grant.
+
+    Consumption enumerated grant files by task-id PREFIX, so an agent whose id
+    is a strict prefix of the owner's was authorized by a grant it did not own
+    AND unlinked it. Before this fix the assertions below read exit 0 and a
+    missing grant file.
+    """
+    work, target, source = _grant_scenario(tmp_path, "prefix-sibling")
+    drop_grants(PARENT_TASK)
+    drop_grants(CHILD_TASK)
+    child_grant = write_grant(CHILD_TASK, "sid-test",
+                              [{"op": "Write", "target": rp(target)}])
+    try:
+        result = run_guard(f"cp {source} {target}", cwd=work, task_id=PARENT_TASK)
+        assert result.returncode == 2, (
+            "a prefix-sibling's grant must not authorize this task\n" + result.stderr)
+        assert child_grant.is_file(), "the child lane's grant must SURVIVE"
+        assert target.read_text(encoding="utf-8") == original_bytes()
+
+        # The owner itself is unaffected: it still spends its own grant once.
+        owner = run_guard(f"cp {source} {target}", cwd=work, task_id=CHILD_TASK)
+        assert owner.returncode == 0, owner.stderr
+        assert not child_grant.exists(), "the owner's authorized call still spends it"
+    finally:
+        drop_grants(CHILD_TASK)
+        drop_grants(PARENT_TASK)
+
+
+def test_iter2_an_unrelated_grant_of_ones_own_is_not_spent_instead(tmp_path):
+    """The spent grant must be the one that authorized, not merely one we own.
+
+    A task holding its own grant for a DIFFERENT file, while a prefix sibling's
+    grant names the victim, must not have its own grant burned as the price of
+    a replacement it was never entitled to.
+    """
+    work, target, source = _grant_scenario(tmp_path, "own-unrelated")
+    other = work / "other.txt"
+    other.write_text(original_bytes(), encoding="utf-8")
+    drop_grants(PARENT_TASK)
+    drop_grants(CHILD_TASK)
+    own = write_grant(PARENT_TASK, "sid-test", [{"op": "Write", "target": rp(other)}])
+    time.sleep(0.02)  # the sibling grant is the most recent, so mtime prefers it
+    sibling = write_grant(CHILD_TASK, "sid-test", [{"op": "Write", "target": rp(target)}])
+    try:
+        result = run_guard(f"cp {source} {target}", cwd=work, task_id=PARENT_TASK)
+        assert result.returncode == 2, result.stderr
+        assert own.is_file(), "our own unrelated grant must not be spent"
+        assert sibling.is_file(), "the sibling's grant must not be spent"
+        assert target.read_text(encoding="utf-8") == original_bytes()
+    finally:
+        drop_grants(PARENT_TASK)
+        drop_grants(CHILD_TASK)
+
+
+def test_iter2_cross_lane_route_is_recorded_as_covered_with_its_residual():
+    """The closure cannot vanish from the corpus quietly."""
+    rows = [r for r in ROUTES if r["route_class"] == "cross-lane-grant-consumption"]
+    assert len(rows) == 1, "the cross-lane route must be present exactly once"
+    row = rows[0]
+    assert row["coverage"] == "covered"
+    for field in ("why_it_existed", "how_covered", "residual"):
+        assert row.get(field), f"{field} must be stated"
+    # The residual must keep naming the shared latitude that was NOT changed.
+    assert "_enumerate_sentinel_grant_files" in row["residual"]
+    assert "cross-lane-grant-consumption" in \
+        [r["route_id"] for r in ROUTES if r["route_class"] == "concurrent-grant-reuse"][0]["residual"]
+
+
+# --- absolute-path-verb: closed, and pinned against crying wolf -------------
+
+FP_CONTROLS = CORPUS["false_positive_controls"]
+
+
+@pytest.mark.parametrize("control", FP_CONTROLS,
+                         ids=[c["control_id"] for c in FP_CONTROLS])
+def test_iter2_false_positive_controls_are_silent(control, tmp_path):
+    """Every near-miss must be ALLOWED, and must not name the victim.
+
+    This is what makes the closure worth having. The reason iteration 1 gave
+    for leaving the route open was that closing it must cry wolf; these twelve
+    executed controls are the disproof, and they are executed rather than
+    argued so a later loosening cannot restore the false positive silently.
+    """
+    work = tmp_path / control["control_id"]
+    work.mkdir(parents=True)
+    target = work / "victim.txt"
+    original = original_bytes()
+    target.write_text(original, encoding="utf-8")
+    source = work / "source.txt"
+    source.write_text(NEW, encoding="utf-8")
+
+    command = fill(control["command_template"],
+                   {"{SRC}": str(source), "{TARGET}": str(target), "{DIR}": str(work)})
+    result = run_guard(command, cwd=work)
+    assert result.returncode == 0, (
+        f"{control['control_id']} must NOT be gated: {command!r}\n{result.stderr}")
+    assert rp(target) not in result.stderr
+
+    # A control that pins a target must still have that target named in full,
+    # so the anchored rule cannot silently truncate a path it must not touch.
+    expected = control.get("must_still_name_target")
+    if expected:
+        wanted = fill(expected, {"{DIR}": str(work)})
+        named = [t.path for t in bwt.extract_bash_write_targets_with_modes(command)]
+        assert named == [wanted], f"{command!r} named {named}, expected [{wanted!r}]"
+
+
+@pytest.mark.parametrize("row", VERB_ROWS, ids=[r["route_id"] for r in VERB_ROWS])
+def test_iter2_absolute_path_form_defeats_no_covered_verb(row, tmp_path, http_url):
+    """Derived over EVERY covered verb, so a verb added later cannot reacquire it.
+
+    Like the backslash and subshell derivations, this reads each covered row's
+    own template rather than a hardcoded list: adding a covered verb row
+    automatically produces a case here, and it fails loudly if the absolute
+    spelling of that verb is not gated.
+    """
+    verb = _verb_of(row)
+    absolute = shutil.which(verb)
+    if not absolute:
+        pytest.skip(f"{verb} is not installed in this environment")
+    assert os.path.isabs(absolute)
+
+    work = tmp_path / row["route_id"]
+    work.mkdir(parents=True)
+    target = work / (row.get("victim_name") or "victim.txt")
+    original = original_bytes()
+    target.write_text(original, encoding="utf-8")
+    source = work / "source.txt"
+    source.write_text(NEW, encoding="utf-8")
+
+    template = fill(row["command_template"],
+                    {"{SRC}": str(source), "{DIR}": str(work),
+                     "{URL}": http_url, "{TARGET}": str(target)})
+    absolute_form, count = re.subn(rf"(^|[\s;|&]){re.escape(verb)}\b",
+                                   lambda m: m.group(1) + absolute, template, count=1)
+    assert count == 1, f"could not derive the absolute form of {template!r}"
+
+    result = run_guard(absolute_form, cwd=work)
+    assert result.returncode == row["expect_on_existing"], (
+        f"{row['route_id']}: {absolute_form!r} must be refused\n{result.stderr}")
+    assert target.read_text(encoding="utf-8") == original
+
+
+def test_iter2_the_rejected_looser_anchor_really_would_cry_wolf():
+    """The published reason for the REMAINING residual must itself survive testing.
+
+    `absolute-path-verb-after-prefix-word` stays uncovered because the anchor
+    that would close it — a bare `[\\s;|&]` word boundary, the shape first
+    proposed — fires on ordinary read-only commands. That claim is the kind of
+    claim this iteration exists to stop publishing unverified, so it is
+    measured here rather than asserted in prose.
+    """
+    loose = re.compile(r"(?:^|[\s;|&])(?:/[\w.-]+)*/cp\b")
+    cries_wolf = ["ls -la /usr/bin/cp /tmp/v", "diff /bin/cp /usr/bin/cp",
+                  "cat /bin/cp > /tmp/copy", "test -x /bin/cp && echo ok"]
+    for command in cries_wolf:
+        assert loose.search(command), f"expected the loose anchor to match {command!r}"
+        # The shipped anchored rule does not name a target from any of them.
+        named = [t.path for t in bwt.extract_bash_write_targets_with_modes(command)]
+        assert "/tmp/v" not in named
+        assert not any(n.endswith("/cp") and "bin" in n for n in named)
+
+    # And the residual really is a residual: the prefixed form still replaces.
+    assert not bwt.extract_bash_write_paths("OVW=1 /bin/cp /tmp/s /tmp/v")
+    assert bwt.extract_bash_write_paths("OVW=1 cp /tmp/s /tmp/v") == ["/tmp/v"]
+
+
+def test_iter2_redirect_operators_keep_their_operand(tmp_path):
+    """`>|` and `>&` are redirect operators, not command separators.
+
+    Their trailing `|`/`&` must not put the redirect TARGET at a command-word
+    position; doing so truncated `echo x >| /tmp/a` to the bare name `a`.
+    """
+    assert [(t.path, t.mode) for t in
+            bwt.extract_bash_write_targets_with_modes("echo x >| /tmp/a")] == \
+        [("/tmp/a", "truncating")]
+    assert [(t.path, t.mode) for t in
+            bwt.extract_bash_write_targets_with_modes("echo x >|/tmp/a")] == \
+        [("/tmp/a", "truncating")]
+    assert bwt.extract_bash_write_targets_with_modes("echo x >& /tmp/a") == []
+    assert bwt.extract_bash_write_targets_with_modes("echo x 2>&1") == []
+
+    work = tmp_path / "clobber"
+    work.mkdir()
+    target = work / "victim.txt"
+    target.write_text(original_bytes(), encoding="utf-8")
+    result = run_guard(f"echo {NEW} >| {target}", cwd=work)
+    assert result.returncode == 2, result.stderr
+    assert rp(target) in result.stderr
