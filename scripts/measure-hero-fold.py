@@ -99,9 +99,17 @@ def asset_line_font_px(svg_text: str) -> float | None:
             if stack:
                 stack.pop()
             continue
-        own = (re.search(r'\bstyle\s*=\s*"[^"]*?\bfont-size\s*:\s*([\d.]+)', body)
-               or re.search(r'\bfont-size\s*=\s*"\s*([\d.]+)', body))
-        eff = float(own.group(1)) if own else (stack[-1] if stack else None)
+        # A unit-bearing value is REFUSED, never guessed: font-size="9em" against a root of
+        # 1.667 renders at 15px, and a regex that grabbed the leading digits would read it as
+        # 9px and corroborate a figure the reader never sees. None means "unresolvable", which
+        # the caller already treats as a failure.
+        raw = (re.search(r'\bstyle\s*=\s*"[^"]*?\bfont-size\s*:\s*([^;"]*)', body)
+               or re.search(r'\bfont-size\s*=\s*"([^"]*)"', body))
+        if raw is None:
+            eff = stack[-1] if stack else None
+        else:
+            px = re.match(r"\s*([\d.]+)(?:px)?\s*$", raw.group(1))
+            eff = float(px.group(1)) if px else None
         if m.group(2) == "text" and "data-trace-id" in body:
             sizes.add(eff)
         if not body.rstrip().endswith("/"):
