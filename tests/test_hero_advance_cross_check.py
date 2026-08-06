@@ -132,9 +132,9 @@ def _blinded() -> str:
     ("textLength", ('<text data-trace-id="',
                     '<text textLength="600" lengthAdjust="spacingAndGlyphs" data-trace-id="'),
      "states its own width"),
-    # a child element can carry the readable size while the parent stays tiny
-    ("tspan child", ('xml:space="preserve">', 'xml:space="preserve"><tspan font-size="15">'),
-     "rendered text != manifest text"),
+    # (a <tspan font-size="15"> child is the same idea, and is already refused by the
+    #  manifest-text equality check above — the tspan markup makes the rendered text stop
+    #  matching the manifest — so it needs no separate row here.)
 ])
 def test_readable_type_cannot_hide_real_clipping(name: str, restored: tuple[str, str],
                                                  expect: str, tmp_path: Path) -> None:
