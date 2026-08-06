@@ -226,6 +226,20 @@ def main() -> int:
     img_w = hero_img_width(readme_text)
 
     results, failures, tradeoffs, model_drift = [], [], [], []
+
+    # The ruler the published figure is scaled by must match the asset it describes. Reported
+    # into model_drift as well as into failures: a figure computed with the wrong font-size HAS
+    # drifted from the measurement that gates it, and model_drift is the one result here that
+    # the status ratchet consumes — so a wrong ruler turns the README's own gate red instead of
+    # sitting in a list nothing reads. It stays separate from the glyph floor's verdict, which
+    # is deliberately un-gated and disclosed on the page instead.
+    line_fs = asset_line_font_px(svg)
+    if line_fs is None or abs(line_fs - FONT_PX) > 1e-9:
+        ruler = (f"the published glyph figure is scaled by FONT_PX={FONT_PX} but the hero's own "
+                 f"line text resolves to {line_fs}px — the ruler the figure is computed with "
+                 f"has drifted from the asset it describes")
+        failures.append(ruler)
+        model_drift.append(ruler)
     with sync_playwright() as p:
         browser = p.chromium.launch()
         for w, h, scheme in COMBOS:
