@@ -333,13 +333,19 @@ const lineFontSizes = () => {
 };
 const advanceCorroborators = () => {
   const out = [];
-  // A <style> block can re-size the measured text through selectors the walk above does not
-  // resolve, so it is REFUSED rather than silently under-read — the same fail-closed choice
-  // the disagreement branch makes below.
-  if (/<style\b[\s\S]*?font-size/i.test(svg))
-    V('the asset declares a font-size inside a <style> block, which the advance cross-check ' +
-      'cannot resolve against the measured line text — refused rather than measured with a ' +
-      'ruler the asset can move out from under it');
+  // A static walk cannot evaluate SMIL, so an animation retargeting a font attribute makes the
+  // size resolved above a statement about a declaration rather than about what the reader
+  // sees. Proven, not hypothesised: a <set attributeName="font-size" to="15"> on the line group
+  // leaves every static declaration tiny and mutually consistent, yet renders the same 15px
+  // text with the same 9 of 16 lines overflowing that the honest control is refused for.
+  // Refused rather than resolved. The committed assets animate opacity, transform, fill, width
+  // and x — no font attribute at all — so nothing honest is caught here. (A <style> block can
+  // do the same through selectors; self-containment above already refuses those outright.)
+  const fontAnim = svg.match(/<(?:set|animate)\b[^>]*\battributeName="(font[^"]*)"/);
+  if (fontAnim)
+    V(`the asset animates "${fontAnim[1]}", so the font-size resolved from its static ` +
+      `attributes is not the size the reader sees — the advance cross-check is refused rather ` +
+      `than measured against a declaration the asset moves out from under it at runtime`);
   const fsAll = lineFontSizes().filter((v) => Number.isFinite(v) && v > 0);
   const fsUniq = [...new Set(fsAll)];
   if (fsUniq.length > 1)
