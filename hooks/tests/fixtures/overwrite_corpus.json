@@ -297,16 +297,32 @@
     },
     {
       "route_id": "absolute-path-verb",
-      "route_class": "opaque-command-word",
-      "mechanism": "the verb is invoked by path, so the [\\s;|&] word boundary never precedes the bare verb name",
+      "route_class": "hidden-command-word",
+      "mechanism": "cp-dest",
       "command_template": "/bin/cp {SRC} {TARGET}",
+      "write_mode": "truncating",
+      "expect_on_existing": 2,
+      "expect_on_new": 0,
+      "creates_on_new": true,
+      "coverage": "covered",
+      "added_in": "iteration 1",
+      "reclassified_from": "uncovered",
+      "reclassification_reason": "MEASURED CORRECTION, iteration 2. This row previously read 'Admitting a leading path component would mean accepting any token ENDING in the verb name, which then matches a path such as ./tools/backup-cp — naming a target from a command that is not the verb at all. That is the cries-wolf direction the requirement forbids.' That premise was DISPROVED by execution. It defeats only a naive SUFFIX match. It says nothing against an ANCHORED rule, and an anchored rule closes the route with zero false positives on ./tools/backup-cp and on every near-miss in false_positive_controls below. The reason was published as fact and was false; it is corrected here rather than left standing.",
+      "how_covered": "hooks/lib/bash_write_targets.py::_absolute_command_word_dir_spans blanks the DIRECTORY part of an absolute-path command word, length-preservingly, so the basename is judged by exactly the same verb patterns as the bare spelling. No verb pattern was loosened and no verb was added. The rule is anchored twice: the token must sit at a COMMAND-WORD position (start of text, or first token after ; | & ( or a newline) and must begin with '/'. The command-word anchor is what leaves a redirect TARGET alone — in `echo x > /tmp/cp` the preceding non-blank byte is '>' — and it is strictly stronger than a bare word-boundary anchor, which would fire on the read-only `ls -la /usr/bin/cp /tmp/v` (see false_positive_controls).",
+      "residual": "Covered at command-word positions only. An absolute-path verb preceded by an environment-assignment or wrapper word — `A=1 /bin/cp`, `sudo /bin/cp` — is NOT at a command-word position by this rule and stays uncovered; it is declared and demonstrated as absolute-path-verb-after-prefix-word. The bare spelling `A=1 cp` IS covered, so this is an asymmetry, and it is deliberate: the anchor that removes it is exactly the one that cries wolf on read-only commands."
+    },
+    {
+      "route_id": "absolute-path-verb-after-prefix-word",
+      "route_class": "opaque-command-word",
+      "mechanism": "an absolute-path verb after a prefix word is not at a command-word position, so its directory prefix is not blanked",
+      "command_template": "OVW=1 /bin/cp {SRC} {TARGET}",
       "write_mode": "truncating",
       "expect_on_existing": 0,
       "expect_on_new": 0,
       "coverage": "uncovered",
       "demonstration": "generic",
-      "added_in": "iteration 1",
-      "why_uncovered": "FOUND WHILE VERIFYING THE BACKSLASH FIX. `/bin/cp` and `/usr/bin/cp` name the same program as `cp` but the character before the verb is '/', not a word boundary. Admitting a leading path component would mean accepting any token ENDING in the verb name, which then matches a path such as ./tools/backup-cp — naming a target from a command that is not the verb at all. That is the cries-wolf direction the requirement forbids, so this is declared rather than closed by a looser pattern. NOTE: `command cp` and `env cp` ARE covered, because the verb follows a space there."
+      "added_in": "iteration 2",
+      "why_uncovered": "FOUND WHILE CLOSING absolute-path-verb, and declared rather than left silent because it is the residual of that closure. The absolute form is recognized only at a COMMAND-WORD position; an environment-assignment prefix (`OVW=1 /bin/cp`) or a wrapper word (`sudo /bin/cp`, `time /bin/cp`) puts it one token later. The BARE spelling after the same prefix (`OVW=1 cp`, `sudo cp`) IS covered, because the bare verb patterns anchor on any [\\s;|&] boundary. Removing the asymmetry by relaxing this rule to the same bare boundary is the option that was TESTED AND REJECTED: it fires on the read-only `ls -la /usr/bin/cp /tmp/v`, `diff /bin/cp /usr/bin/cp` and `test -x /bin/cp && echo ok`, which is the cries-wolf direction the requirement forbids. Recognizing prefix words instead would need a blessed-name list of wrappers, which this guard deliberately does not keep. Declared, with the rejected alternative named and demonstrated rather than asserted."
     },
     {
       "route_id": "command-substituted-verb",
