@@ -1080,8 +1080,8 @@ def check_claims(args, report):
         if published is None:
             token_check_failed = True
             report.fail(f"published {label} token set is incomplete in the ledger: missing "
-                        f"{sorted(expected)} (the published-tokens:{label} region is absent "
-                        f"or carries no 'N tokens:' list)")
+                        f"{sorted(expected)} (the published-tokens:{label} region is absent, "
+                        f"duplicated, or carries no 'N tokens:' list)")
             continue
         absent = sorted(set(expected) - set(published))
         extra = sorted(set(published) - set(expected))
