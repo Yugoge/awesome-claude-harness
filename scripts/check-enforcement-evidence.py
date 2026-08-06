@@ -430,7 +430,17 @@ def published_column_set(header_text, label):
     anchored region and compared for exact set equality. An empty parse is a PARSE FAILURE,
     not an enumeration of nothing: returning [] would report "names all 0 columns" and pass
     vacuously, which is the failure mode `companion_paths` already guards against.
+
+    The region must also occur EXACTLY ONCE. Reading the first match of a repeatable marker
+    re-opens the defect this function exists to close: a second, correct copy of the region --
+    placed earlier in the header, or hidden inside a fenced code block -- would satisfy the
+    check while the enumeration a reader actually sees had a column removed from it. The gate
+    would then establish only that SOME region is correct, not that the published one is.
     """
+    begins = re.findall(r"<!--\s*published-columns:%s:begin\s*-->" % re.escape(label), header_text)
+    ends = re.findall(r"<!--\s*published-columns:%s:end\s*-->" % re.escape(label), header_text)
+    if len(begins) != 1 or len(ends) != 1:
+        return None
     match = re.search(
         r"<!--\s*published-columns:%s:begin\s*-->(.*?)<!--\s*published-columns:%s:end\s*-->"
         % (re.escape(label), re.escape(label)),
