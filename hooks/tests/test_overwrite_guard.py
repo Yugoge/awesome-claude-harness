@@ -1541,6 +1541,13 @@ def test_iter2_declared_residual_is_stated_at_its_true_width(
     fails too. Either way the published width cannot drift from the measured
     one in silence.
     """
+    if requires and not shutil.which(requires):
+        pytest.skip(f"{requires} is not installed here; this position is an "
+                    "ordinary wrapper word, pinned identically by the others")
+    if requires == "sudo" and subprocess.run(
+            ["sudo", "-n", "true"], capture_output=True).returncode != 0:
+        pytest.skip("passwordless sudo unavailable; the position is an ordinary "
+                    "wrapper word, pinned identically by the others")
     absolute = shutil.which("cp")
     assert absolute and os.path.isabs(absolute)
     work = tmp_path / label
@@ -1551,6 +1558,7 @@ def test_iter2_declared_residual_is_stated_at_its_true_width(
     source = work / "source.txt"
     source.write_text(NEW, encoding="utf-8")
     sub = {"{ABS}": absolute, "{SRC}": str(source), "{TARGET}": str(target)}
+    bare_tpl = absolute_tpl.replace("{ABS}", "cp")
 
     # The absolute spelling is UNCOVERED in this position, and really replaces.
     uncovered = run_guard(fill(absolute_tpl, sub), cwd=work)
