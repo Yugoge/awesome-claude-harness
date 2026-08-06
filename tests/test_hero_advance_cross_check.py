@@ -156,8 +156,7 @@ def test_readable_type_cannot_hide_real_clipping(name: str, restored: tuple[str,
         f"an asset that keeps its type at a fully readable size via {name} audited CLEAN "
         f"while genuinely clipping verdict lines — the detector is blindable again.\n"
         f"{r.stdout}\n{r.stderr}")
-    assert ("declared character advance" in (r.stdout + r.stderr)
-            or "animates" in (r.stdout + r.stderr)), (
+    assert expect in (r.stdout + r.stderr), (
         f"the asset was refused, but not for the size its text actually renders at; the "
         f"regression this test guards may be masked by an unrelated failure.\n{r.stdout}\n{r.stderr}")
 
