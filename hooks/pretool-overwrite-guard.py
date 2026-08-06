@@ -306,22 +306,26 @@ def grant_for(resolved: str, session_id: str, task_id: str) -> dict | None:
 def _owned_grant_files(key: str) -> list[Path]:
     """Grant files whose OWN ``task_id`` field is EXACTLY `key`.
 
-    Deliberately NOT the shared prefix enumerator. That enumerator matches a
-    basename equal to ``<task_id>.json`` OR starting ``<task_id>-``, which under
-    this repository's fan-out naming — parent ``dev-<cycle>`` and lanes
-    ``dev-<cycle>-<lane>`` — makes every child lane's grant a candidate for the
-    parent id. Reading the file's own ``task_id`` is what makes the match exact,
-    and it stays exact regardless of the filename a future issuer chooses.
+    The candidate set is the SAME one the authorization side reads, so this can
+    never reach a file that could not have authorized the call, and the guard
+    still never learns where grants live or how they are named — it introduces
+    no issuance channel. What is added is the exactness the candidate set does
+    not have: that enumerator matches a basename equal to ``<task_id>.json`` OR
+    starting ``<task_id>-``, which under this repository's fan-out naming —
+    parent ``dev-<cycle>`` and lanes ``dev-<cycle>-<lane>`` — makes every child
+    lane's grant a candidate for the parent id. Reading the file's own
+    ``task_id`` is what makes the match exact, and it stays exact regardless of
+    the filename a future issuer chooses.
 
     A file that cannot be read or parsed is skipped rather than consumed:
     ownership that cannot be established must never authorize a deletion.
     """
     out: list[Path] = []
     try:
-        entries = sorted(Path(SENTINEL_GRANT_DIR).glob("*.json"))
+        candidates = sorted(_enumerate_sentinel_grant_files(key))
     except Exception:
         return out
-    for p in entries:
+    for p in candidates:
         try:
             with open(p) as fh:
                 grant = json.load(fh)
