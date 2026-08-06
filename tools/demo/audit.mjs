@@ -259,6 +259,21 @@ for (const id of ids) if (!traceSeq.includes(id)) V(`manifest id "${id}" has no 
 // clipping that is hidden. A line the manifest classifies as `verdict` carries the
 // demonstration's proof and may NEVER be ledgered: that is the difference between
 // disclosing a defect and blessing one.
+//
+// NOT CHECKED — THE TRANSFORM STACK. The right edge above, and the advance cross-check below,
+// are both computed in the measured text's own user space and compared against the ROOT viewBox
+// width, which silently assumes an identity transform from that text up to the root. A static
+// transform on a line's ancestor scales position, type and advance together, so it relocates the
+// rendering without disturbing any ratio checked here. Measured, not hypothesised: hook-hero
+// declaring advance 1 with root font-size 1.667 and rail pitch 1 — every corroborator honest and
+// agreeing — plus transform="scale(9)" on the line groups, in-group coordinates divided by 9 and
+// the <animateTransform> elements removed, passes --strict with ZERO diagnostics while Chromium
+// renders 9 of 16 lines outside its 400px viewBox, 4 of them kind "verdict", at a glyph-box height
+// of 18 — IDENTICAL to the honest control. Readable type, proof lines cut off. The committed assets
+// are not exposed only because each line group carries an <animateTransform attributeName="transform">
+// that REPLACES the static attribute — a property of those assets, not of this auditor. Closing it
+// needs the assertion to accumulate the ancestor transform chain, or to refuse a static transform on
+// a measured line's ancestors the way font animation is refused below. NOT closed here.
 const vbMatch = svg.match(/viewBox="0 0 (\d+(?:\.\d+)?) (\d+(?:\.\d+)?)"/);
 const LOGICAL_W = vbMatch ? parseFloat(vbMatch[1]) : null;
 
