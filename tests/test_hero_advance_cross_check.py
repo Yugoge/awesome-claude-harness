@@ -173,3 +173,34 @@ def test_committed_assets_corroborate_their_own_advance(manifest: str, asset: st
         cwd=ROOT, capture_output=True, text=True, timeout=300,
     )
     assert r.returncode == 0, f"{asset} no longer audits clean.\n{r.stdout}\n{r.stderr}"
+
+
+def test_the_published_figures_ruler_is_corroborated_against_the_asset() -> None:
+    """The same defect, in the script that publishes the README's glyph figure.
+
+    scripts/measure-hero-fold.py scales that figure by FONT_PX, and FONT_PX cancels out of its
+    browser/model drift assertion -- both sides multiply by it -- so that assertion can never
+    catch a wrong value. Setting it to 45 once made the legibility gate exit 0 with an empty
+    failures list while the page the reader sees was unchanged. It is now corroborated against
+    the size the hero's own line text resolves to, by the same cascade walk and with the same
+    fail-closed treatment of sizes a static read cannot see.
+    """
+    spec = importlib.util.spec_from_file_location("fold", ROOT / "scripts/measure-hero-fold.py")
+    fold = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(fold)
+    svg = (ROOT / ".github/assets/guard-hero.svg").read_text(encoding="utf-8")
+
+    assert fold.asset_line_font_px(svg) == fold.FONT_PX, (
+        "the constant the published glyph figure is scaled by no longer matches the font-size "
+        "the hero's own line text resolves to")
+
+    pinned = svg.replace('<text data-trace-id="', '<text font-size="9" data-trace-id="')
+    assert fold.asset_line_font_px(pinned) == 9.0, (
+        "a per-element font-size is not being resolved — this is the root-attribute read that "
+        "was proven fail-open in the auditor")
+
+    animated = svg.replace('<g data-role="line">',
+                           '<g data-role="line"><set attributeName="font-size" to="9" begin="0s"/>', 1)
+    assert animated != svg, "fixture is stale: no plain line group found"
+    assert fold.asset_line_font_px(animated) is None, (
+        "a font-size the asset moves at runtime must not resolve to a static value")
