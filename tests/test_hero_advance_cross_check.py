@@ -6,12 +6,21 @@ asset which declares a too-small advance reports itself un-clipped. It was prove
 end -- a 16-line asset cutting 9 lines, 4 of them kind "verdict", declared an advance of 1
 instead of 9 and audited clean with exit 0 and zero clipping diagnostics.
 
-The auditor now corroborates the declared advance against the root font-size, the stage-rail
-pitch and (when present) the first typing-reveal clip step, and refuses a declaration that
-disagrees with any of them. These tests hold that closed, and hold the checks around it
-intact: the committed assets must still pass, and a genuinely clipped asset with an HONEST
-advance must still fail. A cross-check that passed by suppressing the clipping check would
-satisfy the first test and fail the last.
+The auditor now corroborates the declared advance against the font-size IN EFFECT ON THE
+MEASURED LINE TEXT, the stage-rail pitch and (when present) the first typing-reveal clip
+step, and refuses a declaration that disagrees with any of them. These tests hold that
+closed, and hold the checks around it intact: the committed assets must still pass, and a
+genuinely clipped asset with an HONEST advance must still fail. A cross-check that passed by
+suppressing the clipping check would satisfy the first test and fail the last.
+
+The font-size corroborator was itself proven fail-open once, and the two tests that follow
+the original one are that regression. It read the ROOT <svg font-size> attribute, but
+font-size INHERITS, so a declaration on the <text> element -- or on an enclosing <g>, or via
+SMIL at runtime -- overrides it. An asset could therefore declare a root font-size of 1.667
+to satisfy the corroborator while pinning its lines back to 15px, leaving the type fully
+readable and 9 of 16 lines genuinely overflowing, and still audit clean. Browser-measured,
+not argued: those forgeries render the byte-identical clipping set that the honest control
+below is correctly refused for.
 """
 
 from __future__ import annotations
