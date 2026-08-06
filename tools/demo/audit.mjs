@@ -282,8 +282,10 @@ const ADV = deriveAdvance();
 //
 // The declared advance is therefore corroborated against sources the asset cannot restate
 // without visibly destroying itself, none of which is the declaration:
-//   (a) the root font-size — a monospace advance is a fixed fraction of the em, so shrinking
-//       the advance means shrinking the type to match, to a size no one can read;
+//   (a) the font-size IN EFFECT ON THE MEASURED LINE TEXT — a monospace advance is a fixed
+//       fraction of the em, so shrinking the advance means shrinking the type to match, to a
+//       size no one can read. Resolved through the cascade, never read off the root: see
+//       lineFontSizes() below for the proven attack that reading the root alone let through;
 //   (b) the stage-rail pitch — consecutive rail label x positions divided by the label's own
 //       character count, where the label TEXT is already pinned to the manifest above. Present
 //       in every asset, including those with no typed line, which is exactly the case the

@@ -1489,3 +1489,70 @@ def test_iter2_redirect_operators_keep_their_operand(tmp_path):
     result = run_guard(f"echo {NEW} >| {target}", cwd=work)
     assert result.returncode == 2, result.stderr
     assert rp(target) in result.stderr
+
+
+#: Every position in which an ABSOLUTE-path verb is NOT at a command-word
+#: position. Enumerated by execution, not guessed: the declared residual must
+#: be stated at its true width, and a residual narrower than reality is the
+#: same defect class as a disproved justification.
+PREFIX_WORD_POSITIONS = [
+    ("env-assignment", "OVW=1 {ABS} {SRC} {TARGET}", "OVW=1 cp {SRC} {TARGET}"),
+    ("time-keyword", "time {ABS} {SRC} {TARGET}", "time cp {SRC} {TARGET}"),
+    ("negation", "! {ABS} {SRC} {TARGET}", "! cp {SRC} {TARGET}"),
+    ("then-keyword", "if true; then {ABS} {SRC} {TARGET}; fi",
+     "if true; then cp {SRC} {TARGET}; fi"),
+    ("do-keyword", "for f in a; do {ABS} {SRC} {TARGET}; done",
+     "for f in a; do cp {SRC} {TARGET}; done"),
+    ("brace-group", "{ {ABS} {SRC} {TARGET}; }", "{ cp {SRC} {TARGET}; }"),
+]
+
+
+@pytest.mark.parametrize("label,absolute_tpl,bare_tpl", PREFIX_WORD_POSITIONS,
+                         ids=[p[0] for p in PREFIX_WORD_POSITIONS])
+def test_iter2_declared_residual_is_stated_at_its_true_width(
+        label, absolute_tpl, bare_tpl, tmp_path):
+    """The residual is real in EVERY position the corpus row names, and the
+    bare spelling really is covered in each — which is what makes it an
+    asymmetry rather than a uniform gap.
+
+    If a future change closes one of these positions, this test fails and the
+    corpus row must be narrowed. If a future change OPENS the bare form, it
+    fails too. Either way the published width cannot drift from the measured
+    one in silence.
+    """
+    absolute = shutil.which("cp")
+    assert absolute and os.path.isabs(absolute)
+    work = tmp_path / label
+    work.mkdir(parents=True)
+    target = work / "victim.txt"
+    original = original_bytes()
+    target.write_text(original, encoding="utf-8")
+    source = work / "source.txt"
+    source.write_text(NEW, encoding="utf-8")
+    sub = {"{ABS}": absolute, "{SRC}": str(source), "{TARGET}": str(target)}
+
+    # The absolute spelling is UNCOVERED in this position, and really replaces.
+    uncovered = run_guard(fill(absolute_tpl, sub), cwd=work)
+    assert uncovered.returncode == 0, (
+        f"{label}: the residual is declared uncovered; if it is now gated the "
+        f"corpus row must be narrowed\n{uncovered.stderr}")
+    sh(fill(absolute_tpl, sub), cwd=work)  # `! cmd` NEGATES status; content is
+    assert target.read_text(encoding="utf-8") == NEW, (                # the proof
+        f"{label}: an uncovered route must be DEMONSTRATED to still replace")
+
+    # ...while the BARE spelling in the same position IS covered.
+    target.write_text(original, encoding="utf-8")
+    covered = run_guard(fill(bare_tpl, sub), cwd=work)
+    assert covered.returncode == 2, (
+        f"{label}: the bare spelling must still be refused, or the corpus row's "
+        f"asymmetry claim is false\n{covered.stderr}")
+    assert target.read_text(encoding="utf-8") == original
+
+
+def test_iter2_corpus_residual_row_names_every_measured_position():
+    """The corpus row must NAME the positions, not gesture at them."""
+    row = next(r for r in ROUTES
+               if r["route_id"] == "absolute-path-verb-after-prefix-word")
+    stated = row["why_uncovered"]
+    for token in ("OVW=1", "sudo", "time", "! /bin/cp", "then", "do", "{ /bin/cp"):
+        assert token in stated, f"the residual does not name the {token!r} position"
