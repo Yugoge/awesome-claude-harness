@@ -353,7 +353,21 @@ const advanceCorroborators = () => {
     V(`the asset animates "${fontAnim[1]}", so the font-size resolved from its static ` +
       `attributes is not the size the reader sees — the advance cross-check is refused rather ` +
       `than measured against a declaration the asset moves out from under it at runtime`);
-  const fsAll = lineFontSizes().filter((v) => Number.isFinite(v) && v > 0);
+  // textLength makes the asset STATE its own rendered advance, overriding the glyph metrics
+  // this whole check reasons from — the ruler substitution in its purest form. Proven: tiny
+  // 1.667px type with textLength="600" renders every one of 16 lines out to 667px past a
+  // 400px panel while every font-size corroborator agrees with a declared advance of 1.
+  if (/<text\b[^>]*\bdata-trace-id[^>]*\b(textLength|lengthAdjust)=/.test(svg)
+      || /<text\b[^>]*\b(?:textLength|lengthAdjust)=[^>]*\bdata-trace-id/.test(svg))
+    V('a measured line sets textLength/lengthAdjust, which overrides glyph advance with a ' +
+      'width the asset declares for itself — the clipping check cannot measure a line that ' +
+      'states its own width, so it is refused');
+  const fsRaw = lineFontSizes();
+  if (fsRaw.some((v) => Number.isNaN(v)))
+    V('a measured line declares its font-size in units this cross-check will not resolve ' +
+      '(em, %, pt or similar) — refused rather than silently falling back to the inherited ' +
+      'size, which is how the original forgery passed');
+  const fsAll = fsRaw.filter((v) => Number.isFinite(v) && v > 0);
   const fsUniq = [...new Set(fsAll)];
   if (fsUniq.length > 1)
     V(`the measured line text does not share a single font-size (${fsUniq.join('px, ')}px), so ` +
