@@ -366,26 +366,85 @@ _GROUP_OPEN_LEADIN = " \t\n;|&("
 _ESCAPED_COMMAND_WORD_RE = re.compile(r"\\[A-Za-z_]")
 
 
+def _absolute_command_word_dir_spans(masked: str) -> List[Tuple[int, int]]:
+    """`(start, end)` of the DIRECTORY prefix of every ABSOLUTE-path command word.
+
+    This is the anchored dir-prefix rule. A token qualifies only when BOTH hold:
+
+    * it sits at a COMMAND-WORD position — the start of the text, or the first
+      token after ``;``  ``|``  ``&``  ``(`` or a newline; and
+    * it begins with ``/``.
+
+    Both halves are load-bearing, and together they are why this cannot cry
+    wolf. Requiring a command-word position is what leaves a redirect TARGET
+    alone: in ``echo x > /tmp/cp`` the preceding non-blank byte is ``>``, so the
+    span is not taken and the redirect still names ``/tmp/cp`` rather than a
+    truncated ``cp``. Requiring a leading ``/`` is what leaves the whole
+    near-miss family alone: ``./tools/backup-cp`` and ``./cp`` are relative, and
+    ``/opt/x/my-cp`` and ``/usr/bin/scp`` keep their basenames ``my-cp`` and
+    ``scp``, in which ``cp`` is preceded by ``-`` and ``s`` rather than by the
+    ``[\\s;|&]`` boundary every verb pattern requires.
+
+    Only the directory part is blanked, so the basename is judged by exactly the
+    same verb patterns as the bare spelling — no verb pattern is loosened, and
+    no verb is added.
+    """
+    spans: List[Tuple[int, int]] = []
+    n = len(masked)
+    i = 0
+    at_command_word = True
+    while i < n:
+        ch = masked[i]
+        if ch in " \t":
+            i += 1
+            continue
+        if ch in ";|&(\n":
+            at_command_word = True
+            i += 1
+            continue
+        j = i
+        while j < n and masked[j] not in " \t\n;|&<>()":
+            j += 1
+        if j == i:  # a bare operator byte such as `>` or `)`
+            at_command_word = False
+            i += 1
+            continue
+        if at_command_word and masked[i] == "/":
+            last = masked.rfind("/", i, j)
+            if last > i:
+                spans.append((i, last + 1))
+        at_command_word = False
+        i = j
+    return spans
+
+
 def _neutralize_command_word_prefixes(s: str) -> str:
-    """Blank a command-word escape (`\\cp`) and a grouping `(`. Length-preserving.
+    """Blank a command-word escape (`\\cp`), a grouping `(`, and an absolute
+    command-word directory prefix (`/bin/cp`). Length-preserving.
 
     Every verb pattern below requires a `[\\s;|&]` boundary before the word, so
-    two ordinary syntaxes hid the verb completely: `\\cp SRC DEST` (nine of the
-    eleven replacing verbs were defeated by that one byte) and `(cp SRC DEST)`.
+    three ordinary syntaxes hid the verb completely: `\\cp SRC DEST` (nine of the
+    eleven replacing verbs were defeated by that one byte), `(cp SRC DEST)`, and
+    `/bin/cp SRC DEST`.
 
     Each such character is replaced by a SPACE rather than removed, so every
     byte offset stays aligned with the ORIGINAL text that path tokens are read
-    from — the masked/original alignment is load-bearing here.
+    from — the masked/original alignment is load-bearing here. Only bytes BEFORE
+    the command word are blanked, so every argument and redirect target is read
+    from exactly the bytes the caller wrote.
 
     Quoted spans are skipped, and a backslash is only neutralized where a
     command word can actually start, so an escaped character INSIDE a path
     (``cp x /tmp/my\\ file``) is left exactly as it was and cannot be turned
     into a shorter path that happens to exist.
     """
-    if "\\" not in s and "(" not in s:
+    if "\\" not in s and "(" not in s and "/" not in s:
         return s
     masked = _strip_quoted_regions(s)
     out = list(s)
+    for start, end in _absolute_command_word_dir_spans(masked):
+        for k in range(start, end):
+            out[k] = " "
     depth = 0
     for i, ch in enumerate(masked):
         if ch == "(" and (i == 0 or masked[i - 1] in _GROUP_OPEN_LEADIN):
