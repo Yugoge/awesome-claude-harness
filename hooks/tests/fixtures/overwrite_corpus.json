@@ -85,8 +85,9 @@
     },
     {
       "control_id": "absolute-path-as-source-argument",
-      "command_template": "cp /bin/cp {TARGET}",
-      "why": "the verb binary used as a SOURCE. Only the destination may be named, and the argument's directory must not be blanked."
+      "command_template": "cp /bin/cp {DIR}/fresh-copy.txt",
+      "why": "the verb binary used as a SOURCE, copied to a path that does not exist. Creation is never denied, and the DESTINATION must still be named in full — an argument's directory must never be blanked, only a command word's.",
+      "must_still_name_target": "{DIR}/fresh-copy.txt"
     }
   ],
   "routes": [

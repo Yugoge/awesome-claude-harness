@@ -1315,7 +1315,7 @@ def test_iter2_a_prefix_sibling_grant_is_neither_honoured_nor_destroyed(tmp_path
         assert result.returncode == 2, (
             "a prefix-sibling's grant must not authorize this task\n" + result.stderr)
         assert child_grant.is_file(), "the child lane's grant must SURVIVE"
-        assert target.read_text(encoding="utf-8") == original_bytes()
+        assert target.read_text(encoding="utf-8") == original
 
         # The owner itself is unaffected: it still spends its own grant once.
         owner = run_guard(f"cp {source} {target}", cwd=work, task_id=CHILD_TASK)
@@ -1333,7 +1333,7 @@ def test_iter2_an_unrelated_grant_of_ones_own_is_not_spent_instead(tmp_path):
     grant names the victim, must not have its own grant burned as the price of
     a replacement it was never entitled to.
     """
-    work, target, source = _grant_scenario(tmp_path, "own-unrelated")
+    work, target, source, original = _grant_scenario(tmp_path, "own-unrelated")
     other = work / "other.txt"
     other.write_text(original_bytes(), encoding="utf-8")
     drop_grants(PARENT_TASK)
@@ -1346,7 +1346,7 @@ def test_iter2_an_unrelated_grant_of_ones_own_is_not_spent_instead(tmp_path):
         assert result.returncode == 2, result.stderr
         assert own.is_file(), "our own unrelated grant must not be spent"
         assert sibling.is_file(), "the sibling's grant must not be spent"
-        assert target.read_text(encoding="utf-8") == original_bytes()
+        assert target.read_text(encoding="utf-8") == original
     finally:
         drop_grants(PARENT_TASK)
         drop_grants(CHILD_TASK)
@@ -1362,8 +1362,10 @@ def test_iter2_cross_lane_route_is_recorded_as_covered_with_its_residual():
         assert row.get(field), f"{field} must be stated"
     # The residual must keep naming the shared latitude that was NOT changed.
     assert "_enumerate_sentinel_grant_files" in row["residual"]
-    assert "cross-lane-grant-consumption" in \
-        [r["route_id"] for r in ROUTES if r["route_class"] == "concurrent-grant-reuse"][0]["residual"]
+    reuse = [r for r in ROUTES if r["route_class"] == "concurrent-grant-reuse"]
+    assert len(reuse) == 1
+    assert "cross-lane-grant-consumption" in reuse[0]["residual"], (
+        "the reuse row's residual must point at the blast-radius bound it lacked")
 
 
 # --- absolute-path-verb: closed, and pinned against crying wolf -------------
