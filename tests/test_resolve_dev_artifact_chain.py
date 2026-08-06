@@ -429,6 +429,108 @@ def test_cli_validation_failure_is_json_and_exit_two(tmp_path: Path) -> None:
     assert json.loads(first.stdout)["status"] == "fail"
 
 
+# ---------------------------------------------------------------------------
+# Shard scoping across the three task-id shapes.  Shards belong to the FULL
+# task-id; the bare YYYYMMDD-HHMMSS timestamp is a truncation of a prefixed or
+# suffixed id and must not be used as the scan key for it.
+# ---------------------------------------------------------------------------
+
+BARE_ID = "20260727-080801"
+SUFFIXED_ID = "20260727-080801-11"
+PREFIXED_ID = TASK_ID
+
+
+def _make_singular_for(root: Path, identity: str) -> dict[str, Path]:
+    dev_dir = _dev_dir(root)
+    paths = {
+        "ticket": dev_dir / f"ticket-{identity}.md",
+        "context": dev_dir / f"context-{identity}.json",
+        "dev": dev_dir / f"dev-report-{identity}.json",
+        "qa": dev_dir / f"qa-report-{identity}.json",
+        "completion": dev_dir / f"completion-{identity}.md",
+    }
+    _write(paths["ticket"], _ticket(identity))
+    _write(paths["context"], {"request_id": identity, "task_id": identity})
+    _write(paths["dev"], _dev_document(identity, modified=["scripts/one.py"]))
+    _write(paths["qa"], _qa_document(identity))
+    references = [
+        _relative(root, paths[key]) for key in ("ticket", "context", "dev", "qa")
+    ]
+    _write(paths["completion"], _completion(identity, references))
+    return paths
+
+
+def _ambiguity_detail(result: dict) -> str:
+    return next(
+        error["detail"]
+        for error in result["errors"]
+        if error["code"] == "AMBIGUOUS_SINGULAR_CHAIN"
+    )
+
+
+def test_suffixed_task_id_canonical_is_not_a_shard_of_itself(tmp_path: Path) -> None:
+    # A pristine suffixed-id chain, alone in docs/dev, must resolve.  Matching
+    # against the truncated timestamp classifies dev-report-<ts>-11.json as
+    # worker '11' of itself.
+    _make_singular_for(tmp_path, SUFFIXED_ID)
+    result = RESOLVER.resolve_chain(tmp_path, SUFFIXED_ID)
+    assert result["status"] == "pass", result["errors"]
+    assert "AMBIGUOUS_SINGULAR_CHAIN" not in _error_codes(result)
+
+
+def test_suffixed_task_id_ignores_siblings_sharing_the_bare_timestamp(
+    tmp_path: Path,
+) -> None:
+    _make_singular_for(tmp_path, SUFFIXED_ID)
+    sibling = _dev_dir(tmp_path) / f"dev-report-{BARE_ID}-12.json"
+    _write(sibling, _dev_document(f"{BARE_ID}-12"))
+    result = RESOLVER.resolve_chain(tmp_path, SUFFIXED_ID)
+    assert result["status"] == "pass", result["errors"]
+    assert sibling.is_file()
+
+
+def test_suffixed_task_id_still_detects_its_own_undeclared_sub_shards(
+    tmp_path: Path,
+) -> None:
+    # The check must keep firing for a real undeclared fan-out parent, and must
+    # name the sub-worker rather than a label carved out of the timestamp.
+    _make_singular_for(tmp_path, SUFFIXED_ID)
+    _write(
+        _dev_dir(tmp_path) / f"dev-report-{SUFFIXED_ID}-S1.json",
+        _dev_document(f"{SUFFIXED_ID}-S1"),
+    )
+    result = RESOLVER.resolve_chain(tmp_path, SUFFIXED_ID)
+    assert "AMBIGUOUS_SINGULAR_CHAIN" in _error_codes(result)
+    assert "'S1'" in _ambiguity_detail(result)
+
+
+def test_prefixed_task_id_ignores_bare_timestamp_sibling_shards(
+    tmp_path: Path,
+) -> None:
+    _make_singular_for(tmp_path, PREFIXED_ID)
+    bare_sibling = _dev_dir(tmp_path) / "dev-report-20260724-120000-lane-x.json"
+    _write(bare_sibling, _dev_document("20260724-120000-lane-x"))
+    result = RESOLVER.resolve_chain(tmp_path, PREFIXED_ID)
+    assert result["status"] == "pass", result["errors"]
+    assert bare_sibling.is_file()
+
+
+def test_bare_task_id_chain_resolves_and_keeps_collecting_its_shards(
+    tmp_path: Path,
+) -> None:
+    # Control for the third shape: a bare id is its own scan key, so nothing is
+    # truncated and its shard discovery is unchanged.
+    _make_singular_for(tmp_path, BARE_ID)
+    assert RESOLVER.resolve_chain(tmp_path, BARE_ID)["status"] == "pass"
+    _write(
+        _dev_dir(tmp_path) / f"dev-report-{BARE_ID}-11.json",
+        _dev_document(f"{BARE_ID}-11"),
+    )
+    result = RESOLVER.resolve_chain(tmp_path, BARE_ID)
+    assert "AMBIGUOUS_SINGULAR_CHAIN" in _error_codes(result)
+    assert "'11'" in _ambiguity_detail(result)
+
+
 def test_invalid_task_id_is_json_and_exit_two(tmp_path: Path) -> None:
     process = subprocess.run(
         [

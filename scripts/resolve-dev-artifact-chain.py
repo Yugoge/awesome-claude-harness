@@ -221,6 +221,26 @@ def _lane_paths(dev_dir: Path, task_id: str, worker: str) -> dict[str, Path]:
     }
 
 
+def _lane_shard_label(filename: str, task_id: str, aggregate: ModuleType) -> str | None:
+    """Return the worker label when filename is a dev-report shard OF task_id.
+
+    Shards are named ``dev-report-<task-id>-<worker>.json`` — the same naming
+    ``_lane_paths`` constructs.  Labels the aggregate classifier treats as
+    non-worker (draft/final/iterN/...) are not lanes.
+    """
+    prefix = f"dev-report-{task_id}-"
+    suffix = ".json"
+    if not filename.startswith(prefix) or not filename.endswith(suffix):
+        return None
+    label = filename[len(prefix) : -len(suffix)]
+    if not WORKER_RE.fullmatch(label):
+        return None
+    lowered = label.lower()
+    if lowered in aggregate.NON_WORKER_LABELS or aggregate.NON_WORKER_LABEL_RE.match(lowered):
+        return None
+    return label
+
+
 def _parent_paths(dev_dir: Path, task_id: str) -> dict[str, Path]:
     return {
         "ticket": dev_dir / f"ticket-{task_id}.md",
@@ -362,6 +382,12 @@ def resolve_chain(project_root: Path | str, task_id: str) -> dict[str, Any]:
     try:
         aggregate = _load_aggregate_module()
         bare_task_id = aggregate._bare_task_id(task_id)
+        # Shards belong to the FULL task-id.  When the bare timestamp is a
+        # truncation of it (prefixed/suffixed ids), classifying against that key
+        # collects this task's own canonical and unrelated sibling tasks, so the
+        # filename must name this task-id plus a worker suffix instead.
+        scan_key_is_truncated = bare_task_id != task_id
+        own_canonical = parents["dev_report"].name
         scanned = []
         try:
             children = sorted(dev_dir.iterdir(), key=lambda path: path.name)
@@ -371,11 +397,15 @@ def resolve_chain(project_root: Path | str, task_id: str) -> dict[str, Any]:
             )
             children = []
         for child in children:
-            if not child.is_file():
+            if not child.is_file() or child.name == own_canonical:
                 continue
-            is_worker, label = aggregate._is_worker_for_task(
-                child.name, bare_task_id, task_id
-            )
+            if scan_key_is_truncated:
+                label = _lane_shard_label(child.name, task_id, aggregate)
+                is_worker = label is not None
+            else:
+                is_worker, label = aggregate._is_worker_for_task(
+                    child.name, bare_task_id, task_id
+                )
             if is_worker and label is not None:
                 scanned.append((label, child))
         scanned.sort(key=lambda item: item[0])
