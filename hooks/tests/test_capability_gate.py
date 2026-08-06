@@ -629,6 +629,29 @@ def test_escape_hatches_survive_a_broken_manifest(
     assert r.returncode == 2, f"{label}/Agent must stay refused: {r.stdout}"
 
 
+@pytest.mark.parametrize("label,content,expect_reason", BROKEN_MANIFEST_STATES)
+def test_repair_floor_branch_is_reached_inside_the_library(
+        home: Path, statedir: Path, label: str, content: str | None, expect_reason: str):
+    """The floor probe above runs through the gate SUBPROCESS, which answers from its
+    pre-import literal and never reaches evaluate_activation() -- so deleting the
+    library's own floor branch leaves the whole suite green. `capability-doctor-strict.py
+    --route` consumes the LIBRARY, not the gate: without that branch a degraded-state
+    repair route flips NOT_PROTECTED/exit 3 to REFUSE/exit 1. Asserted DIRECTLY here,
+    because an invariant only the gate copy can fail is still a review obligation."""
+    _break_manifest(home, content)
+    assert cs.load_manifest(home)[1] == expect_reason, label
+    sid = "floorlib"
+    st = cs.state_path(sid, statedir)
+    for route in sorted(CANONICAL_REPAIR_FLOOR):
+        rec = cs.evaluate_activation(route, home=home, session_id=sid, state_file=st)
+        assert (rec["decision"], rec["exemption"]) == ("NOT_PROTECTED", "repair_floor"), \
+            f"{label}/{route}: {rec}"
+    # Negative control: an off-floor tool stays shut, so a namespace-wide fail-open
+    # cannot satisfy this test either.
+    agent = cs.evaluate_activation("tool:Agent", home=home, session_id=sid, state_file=st)
+    assert (agent["decision"], agent["exemption"]) == ("REFUSE", None), f"{label}: {agent}"
+
+
 @pytest.mark.parametrize("mode", ["raises_on_import", "absent"])
 def test_repair_floor_survives_an_unresolvable_library(tmp_path: Path, home: Path,
                                                        statedir: Path, mode: str):
