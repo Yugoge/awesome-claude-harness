@@ -20,9 +20,11 @@ compares the derived triple set against the published rows and fails on **either
 difference. That check runs inside the already required `baseline` CI job via
 `scripts/verify-claims.sh`.
 
-**The other seven columns are authored in this document.** They are `row_id`,
+**The other seven columns are authored in this document.** They are
+<!-- published-columns:authored:begin -->`row_id`,
 `mode/precondition`, `behavior`, `exercise_status`, `proof_layer`, `citation` and
-`verifying_test`. They are not derived from anything; they receive the following validation and
+`verifying_test`<!-- published-columns:authored:end -->. They are not derived from anything;
+they receive the following validation and
 no more:
 
 - all seven are checked **non-blank** — a blank cell is a failure, not a statement that a value
