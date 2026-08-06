@@ -416,6 +416,30 @@ def published_token_set(ledger_text, label):
     return re.findall(r"`([^`]+)`", region[marker[-1].end():])
 
 
+def published_column_set(header_text, label):
+    """Return the column names published in one anchored header region, or None if absent.
+
+    Assertion 0b used to test `field_name in header` -- presence ANYWHERE in the normalized
+    header block. Six of the ten column names also occur in the surrounding prose (`hook` 4x,
+    `behavior` and `proof_layer` 3x, `citation`, `exercise_status` and `verifying_test` 2x
+    each), so any of those six could be DELETED from the published enumeration and the gate
+    would still exit 0 -- the same vacuous-match defect the token sets were region-scoped to
+    fix, reproduced in this gate's own code. The enumeration is therefore read from its own
+    anchored region and compared for exact set equality. An empty parse is a PARSE FAILURE,
+    not an enumeration of nothing: returning [] would report "names all 0 columns" and pass
+    vacuously, which is the failure mode `companion_paths` already guards against.
+    """
+    match = re.search(
+        r"<!--\s*published-columns:%s:begin\s*-->(.*?)<!--\s*published-columns:%s:end\s*-->"
+        % (re.escape(label), re.escape(label)),
+        header_text,
+        re.S,
+    )
+    if not match:
+        return None
+    return re.findall(r"`([^`]+)`", normalize_prose(match.group(1))) or None
+
+
 # ---------------------------------------------------------------------------
 # Semantic extraction of the wrapper token set.
 # ---------------------------------------------------------------------------
