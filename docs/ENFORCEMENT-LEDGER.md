@@ -13,7 +13,8 @@
 The registered-hook table has **ten** columns. Stating which of them a check recomputes — rather
 than leaving the reader to assume all of them — is the whole point of publishing it.
 
-**Three columns are derived.** `event_class`, `matcher` and `hook` are recomputed from
+**Three columns are derived.** <!-- published-columns:derived:begin -->`event_class`, `matcher`
+and `hook`<!-- published-columns:derived:end --> are recomputed from
 `settings.json` at `@4c33f2f5` by `scripts/check-enforcement-evidence.py --claims`, which
 compares the derived triple set against the published rows and fails on **either** symmetric
 difference. That check runs inside the already required `baseline` CI job via
