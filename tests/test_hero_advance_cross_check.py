@@ -109,20 +109,35 @@ def _blinded() -> str:
     return s.replace('<text data-role="stage" x="130"', '<text data-role="stage" x="50"', 1)
 
 
-@pytest.mark.parametrize("name,restored", [
+@pytest.mark.parametrize("name,restored,expect", [
     # the type pinned back to full size on the measured element itself
-    ("per-element attribute", ('<text data-trace-id="', '<text font-size="15" data-trace-id="')),
+    ("per-element attribute", ('<text data-trace-id="', '<text font-size="15" data-trace-id="'),
+     "declared character advance"),
     # ... on the enclosing group, which the text inherits from
-    ("enclosing group", ('<g data-role="line"', '<g font-size="15" data-role="line"')),
+    ("enclosing group", ('<g data-role="line"', '<g font-size="15" data-role="line"'),
+     "declared character advance"),
     # ... through an inline style, which beats the attribute
-    ("inline style", ('<text data-trace-id="', '<text style="font-size:15px" data-trace-id="')),
+    ("inline style", ('<text data-trace-id="', '<text style="font-size:15px" data-trace-id="'),
+     "declared character advance"),
     # ... or at runtime, where no static attribute states it at all
     ("SMIL animation", ('<g data-role="line" opacity="0" transform="translate(0 6)">',
                         '<g data-role="line" opacity="0" transform="translate(0 6)">'
-                        '<set attributeName="font-size" to="15" begin="0s"/>')),
+                        '<set attributeName="font-size" to="15" begin="0s"/>'),
+     'animates "font-size"'),
+    # ... or in a unit, where reading the leading digits would resolve the WRONG size:
+    # 9em of the inherited 1.667px is 15px on screen
+    ("unit-bearing size", ('<text data-trace-id="', '<text font-size="9em" data-trace-id="'),
+     "units this cross-check will not resolve"),
+    # and the advance itself can be seized directly, leaving font-size honest and tiny
+    ("textLength", ('<text data-trace-id="',
+                    '<text textLength="600" lengthAdjust="spacingAndGlyphs" data-trace-id="'),
+     "states its own width"),
+    # a child element can carry the readable size while the parent stays tiny
+    ("tspan child", ('xml:space="preserve">', 'xml:space="preserve"><tspan font-size="15">'),
+     "rendered text != manifest text"),
 ])
 def test_readable_type_cannot_hide_real_clipping(name: str, restored: tuple[str, str],
-                                                 tmp_path: Path) -> None:
+                                                 expect: str, tmp_path: Path) -> None:
     """Every route by which the rendered size can diverge from the root declaration.
 
     Each of these renders at 15px with 9 of 16 lines overflowing -- 4 of them kind "verdict"
