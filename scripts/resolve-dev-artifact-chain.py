@@ -608,15 +608,31 @@ def resolve_chain(project_root: Path | str, task_id: str) -> dict[str, Any]:
                     )
     else:
         result["mode"] = "singular"
-        result["checks"] = {
-            "canonical_fresh": True,
-            "file_unions_exact": True,
-        }
+        # Both are comparisons of the canonical against a rebuild from two or
+        # more shards.  A singular chain has no shards, so neither has a
+        # singular analogue -- report that, rather than a value that would read
+        # as a check having been performed.  Assigned per key so the
+        # branch-independent checks computed above survive.
+        for check in ("canonical_fresh", "file_unions_exact"):
+            result["checks"][check] = NOT_APPLICABLE
+            result["checks_not_applicable"][check] = SINGULAR_RELATIONAL_REASON
         if scanned:
             validator.error(
                 "AMBIGUOUS_SINGULAR_CHAIN",
                 result["canonical_dev_report"],
                 f"singular canonical coexists with worker shards {[label for label, _ in scanned]!r}",
+            )
+        if workers_declaration == "absent" and scanned:
+            # Additive to AMBIGUOUS_SINGULAR_CHAIN above, which still fires
+            # unchanged.  That error says "a singular chain has shards"; this one
+            # says "this is an aggregate that lost its parallel_workers key",
+            # which is a different diagnosis with a different remedy.
+            validator.error(
+                "LOST_WORKER_DECLARATION",
+                result["canonical_dev_report"],
+                "parallel_workers key is absent, not empty, while worker shards "
+                f"{[label for label, _ in scanned]!r} survive on disk; an aggregate "
+                "that lost the key is indistinguishable from a singular chain",
             )
         completion_refs = [
             _rel(parents[key], root)
