@@ -127,6 +127,7 @@ def _make_singular(root: Path) -> dict[str, Path]:
     paths = _parent_paths(root)
     _write(paths["ticket"], _ticket(TASK_ID))
     _write(paths["context"], {"request_id": TASK_ID, "task_id": TASK_ID})
+    _materialise(root, "scripts/one.py")
     _write(paths["dev"], _dev_document(TASK_ID, modified=["scripts/one.py"]))
     _write(paths["qa"], _qa_document(TASK_ID))
     references = [_relative(root, paths[key]) for key in ("ticket", "context", "dev", "qa")]
