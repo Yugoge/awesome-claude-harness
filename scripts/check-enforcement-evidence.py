@@ -761,7 +761,8 @@ def check_ledger(args, report):
             report.fail(f"published-claim scope: the ledger carries {why} -- the gate "
                         f"establishes less than that")
     else:
-        report.ok("no published claim in the ledger exceeds this gate's demonstrated scope")
+        report.ok(f"no claim matching the {len(FORBIDDEN_CLAIM_PATTERNS)} recorded "
+                  f"over-claim patterns is present in the ledger")
 
     # 0b. The header must enumerate which columns are derived and which are authored, so the
     #     reader can see the boundary rather than infer it from an unqualified sentence. The
