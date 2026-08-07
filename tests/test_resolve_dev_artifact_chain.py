@@ -84,6 +84,19 @@ def _dev_dir(root: Path) -> Path:
     return path
 
 
+def _materialise(root: Path, *declared: str) -> None:
+    """Create every path a fixture's dev-report declares.
+
+    The resolver requires a declared file union to exist on disk, so a fixture
+    that declares paths must produce them.  The correct remedy is to make the
+    fixture honest, never to weaken the check.
+    """
+    for relative in declared:
+        target = root / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.touch()
+
+
 def _parent_paths(root: Path) -> dict[str, Path]:
     dev_dir = _dev_dir(root)
     return {
