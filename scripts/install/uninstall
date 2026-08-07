@@ -1,0 +1,56 @@
+#!/usr/bin/env bash
+# uninstall — remove exactly what scripts/install/install added, and nothing else.
+#
+# Usage: scripts/install/uninstall [--prefix <dir>] [--config-dir <dir>]
+#                                  [--profile core] [--json]
+#
+# Exit codes: 0 = success
+#             1 = failure (crash, I/O error)
+#             2 = preflight / refusal — NOTHING was written. Raised BEFORE the
+#                 first mutation when the prefix was installed against a different
+#                 config home, or when the ownership record predates the
+#                 contribution schema and the live document cannot be proven to be
+#                 its unmodified post-image.
+#             3 = partial — a mutation occurred and something was deliberately
+#                 retained. The payload, the state file and every backup are kept.
+#             The engine's exit code is propagated unchanged.
+#
+# OWNERSHIP-AWARE, NOT A WHOLE-TREE RESTORE:
+#   - Files and links the installer CREATED are removed by exact path. A link is
+#     unlinked, never followed, so nothing inside the isolated root is deleted
+#     through it.
+#   - A directory the installer created is removed ONLY IF IT IS THEN EMPTY. It is
+#     never deleted recursively — which is what lets a file you created inside an
+#     installer-owned directory survive.
+#   - settings.json is UN-MERGED, never whole-file restored: only the individual
+#     registrations recorded as this install's own contributions are removed, from
+#     the CURRENT document, so every change you made after installing survives. A
+#     registration you wrote yourself is recorded `unowned` and is never removed.
+#     The pre-install backup is retained as a manual-recovery artifact.
+#   - Anything the installer did not create or contribute is not touched at all.
+#
+# Every claim in the report is cross-checked against measured filesystem state
+# before it is printed: each un-merge item carries the measured presence of its
+# registration identity, and the settings item carries the measured sha256.
+set -uo pipefail
+
+SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+SOURCE_DIR="$(cd "$SELF_DIR/../.." && pwd -P)"
+PASS=()
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --prefix) PASS+=(--prefix "${2:?--prefix needs a directory}"); shift 2 ;;
+    --config-dir) PASS+=(--config-dir "${2:?--config-dir needs a directory}"); shift 2 ;;
+    --profile) PASS+=(--profile "${2:?--profile needs a name}"); shift 2 ;;
+    --profile-file) PASS+=(--profile-file "${2:?--profile-file needs a file}"); shift 2 ;;
+    --source) SOURCE_DIR="${2:?--source needs a directory}"; shift 2 ;;
+    --keep-payload) PASS+=(--keep-payload); shift ;;
+    --json) PASS+=(--json); shift ;;
+    -h|--help) sed -n '2,36p' "${BASH_SOURCE[0]}"; exit 0 ;;
+    *) echo "uninstall: unknown argument '$1'" >&2; exit 1 ;;
+  esac
+done
+
+PY="${CLAUDE_PYTHON_BIN:-python3}"
+exec "$PY" "$SELF_DIR/installer.py" uninstall "${PASS[@]}" --source "$SOURCE_DIR"

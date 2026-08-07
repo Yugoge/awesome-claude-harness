@@ -21,13 +21,24 @@ from types import ModuleType
 from typing import Any
 
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 IDENTITY_RE = re.compile(
     r"^(?:[-*+]\s*)?(?:task[- ]id|request[- ]id)\s*:\s*(\S+)\s*$",
     re.IGNORECASE,
 )
 TASK_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 WORKER_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9.-]*$")
+
+# A check that has no analogue on the code path taken.  Distinct from both
+# booleans: `False` would claim the check ran and failed, `True` would claim it
+# ran and passed.  Consumers must treat this as "unevaluated here", never as a
+# pass.
+NOT_APPLICABLE = "not_applicable"
+SINGULAR_RELATIONAL_REASON = (
+    "relational comparison requiring two or more independent shard artifacts; "
+    "a singular chain has no second artifact to compare against, so this check "
+    "has no singular analogue"
+)
 
 
 class StableArgumentParser(argparse.ArgumentParser):
@@ -221,6 +232,26 @@ def _lane_paths(dev_dir: Path, task_id: str, worker: str) -> dict[str, Path]:
     }
 
 
+def _lane_shard_label(filename: str, task_id: str, aggregate: ModuleType) -> str | None:
+    """Return the worker label when filename is a dev-report shard OF task_id.
+
+    Shards are named ``dev-report-<task-id>-<worker>.json`` — the same naming
+    ``_lane_paths`` constructs.  Labels the aggregate classifier treats as
+    non-worker (draft/final/iterN/...) are not lanes.
+    """
+    prefix = f"dev-report-{task_id}-"
+    suffix = ".json"
+    if not filename.startswith(prefix) or not filename.endswith(suffix):
+        return None
+    label = filename[len(prefix) : -len(suffix)]
+    if not WORKER_RE.fullmatch(label):
+        return None
+    lowered = label.lower()
+    if lowered in aggregate.NON_WORKER_LABELS or aggregate.NON_WORKER_LABEL_RE.match(lowered):
+        return None
+    return label
+
+
 def _parent_paths(dev_dir: Path, task_id: str) -> dict[str, Path]:
     return {
         "ticket": dev_dir / f"ticket-{task_id}.md",
@@ -279,6 +310,76 @@ def _find_undeclared_lane_artifacts(
                 )
 
 
+def _declared_union(canonical: dict[str, Any]) -> list[str]:
+    """Return the canonical dev-report's declared file union, order-preserving.
+
+    Tolerates a malformed canonical: a non-dict ``dev``, a non-list file list,
+    or a non-string entry contributes nothing rather than raising.  ``validate_dev``
+    already reports those shapes under their own error codes.
+    """
+    dev = canonical.get("dev")
+    if not isinstance(dev, dict):
+        return []
+    union: list[str] = []
+    for key in ("files_modified", "files_created"):
+        entries = dev.get(key)
+        if not isinstance(entries, list):
+            continue
+        for entry in entries:
+            if isinstance(entry, str) and entry and entry not in union:
+                union.append(entry)
+    return union
+
+
+def _check_declared_paths_exist(
+    validator: ChainValidator, canonical: dict[str, Any], result: dict[str, Any]
+) -> None:
+    """Every path the canonical declares must exist on disk.
+
+    Reached by both the singular and the fan-out branch: a report claiming files
+    it did not produce must not be admitted, whichever way it was assembled.
+    Existence is deliberately the weakest defensible predicate -- a directory or
+    a symlink, including a broken one, counts as present, because the claim under
+    test is "the report named a path that is not there", not "it named a regular
+    file".  Read-only: the resolver never creates the paths it looks for.
+
+    One error per absent path, so the report enumerates every miss rather than
+    aggregating them into a single opaque failure.
+    """
+    missing: list[str] = []
+    for declared in _declared_union(canonical):
+        target = validator.root / declared
+        try:
+            present = target.exists() or target.is_symlink()
+        except OSError:
+            present = False
+        if not present:
+            missing.append(declared)
+    result["checks"]["declared_paths_exist"] = not missing
+    for declared in missing:
+        validator.error(
+            "ABSENT_DECLARED_PATH",
+            result["canonical_dev_report"],
+            f"dev-report declares {declared!r}, which does not exist on disk",
+        )
+
+
+def _workers_declaration_state(canonical: dict[str, Any]) -> str:
+    """Classify how the canonical declares ``parallel_workers``.
+
+    ``absent`` and ``empty`` are different facts about an aggregate and must not
+    be conflated: a canonical that LOST the key is structurally indistinguishable
+    from a genuine singular chain, and would otherwise degrade silently into the
+    unchecked branch.
+    """
+    if "parallel_workers" not in canonical:
+        return "absent"
+    value = canonical.get("parallel_workers")
+    if isinstance(value, list) and not value:
+        return "empty"
+    return "declared"
+
+
 def _base_result(task_id: str, canonical: str, completion: str) -> dict[str, Any]:
     return {
         "schema_version": SCHEMA_VERSION,
@@ -288,6 +389,7 @@ def _base_result(task_id: str, canonical: str, completion: str) -> dict[str, Any
         "canonical_dev_report": canonical,
         "completion": completion,
         "parallel_workers": [],
+        "parallel_workers_declaration": "unknown",
         "lanes": [],
         "optional_parent_artifacts": {},
         "report_paths": [],
@@ -297,7 +399,9 @@ def _base_result(task_id: str, canonical: str, completion: str) -> dict[str, Any
         "checks": {
             "canonical_fresh": False,
             "file_unions_exact": False,
+            "declared_paths_exist": False,
         },
+        "checks_not_applicable": {},
         "errors": [],
     }
 
@@ -339,6 +443,10 @@ def resolve_chain(project_root: Path | str, task_id: str) -> dict[str, Any]:
         return result
 
     validator.validate_dev(canonical, task_id, parents["dev_report"])
+    # Reached before the branch split, so both modes are held to it.
+    _check_declared_paths_exist(validator, canonical, result)
+    workers_declaration = _workers_declaration_state(canonical)
+    result["parallel_workers_declaration"] = workers_declaration
     workers_value = canonical.get("parallel_workers", [])
     workers: list[str] = []
     if not isinstance(workers_value, list) or any(
@@ -362,6 +470,12 @@ def resolve_chain(project_root: Path | str, task_id: str) -> dict[str, Any]:
     try:
         aggregate = _load_aggregate_module()
         bare_task_id = aggregate._bare_task_id(task_id)
+        # Shards belong to the FULL task-id.  When the bare timestamp is a
+        # truncation of it (prefixed/suffixed ids), classifying against that key
+        # collects this task's own canonical and unrelated sibling tasks, so the
+        # filename must name this task-id plus a worker suffix instead.
+        scan_key_is_truncated = bare_task_id != task_id
+        own_canonical = parents["dev_report"].name
         scanned = []
         try:
             children = sorted(dev_dir.iterdir(), key=lambda path: path.name)
@@ -371,11 +485,15 @@ def resolve_chain(project_root: Path | str, task_id: str) -> dict[str, Any]:
             )
             children = []
         for child in children:
-            if not child.is_file():
+            if not child.is_file() or child.name == own_canonical:
                 continue
-            is_worker, label = aggregate._is_worker_for_task(
-                child.name, bare_task_id, task_id
-            )
+            if scan_key_is_truncated:
+                label = _lane_shard_label(child.name, task_id, aggregate)
+                is_worker = label is not None
+            else:
+                is_worker, label = aggregate._is_worker_for_task(
+                    child.name, bare_task_id, task_id
+                )
             if is_worker and label is not None:
                 scanned.append((label, child))
         scanned.sort(key=lambda item: item[0])
@@ -490,15 +608,31 @@ def resolve_chain(project_root: Path | str, task_id: str) -> dict[str, Any]:
                     )
     else:
         result["mode"] = "singular"
-        result["checks"] = {
-            "canonical_fresh": True,
-            "file_unions_exact": True,
-        }
+        # Both are comparisons of the canonical against a rebuild from two or
+        # more shards.  A singular chain has no shards, so neither has a
+        # singular analogue -- report that, rather than a value that would read
+        # as a check having been performed.  Assigned per key so the
+        # branch-independent checks computed above survive.
+        for check in ("canonical_fresh", "file_unions_exact"):
+            result["checks"][check] = NOT_APPLICABLE
+            result["checks_not_applicable"][check] = SINGULAR_RELATIONAL_REASON
         if scanned:
             validator.error(
                 "AMBIGUOUS_SINGULAR_CHAIN",
                 result["canonical_dev_report"],
                 f"singular canonical coexists with worker shards {[label for label, _ in scanned]!r}",
+            )
+        if workers_declaration == "absent" and scanned:
+            # Additive to AMBIGUOUS_SINGULAR_CHAIN above, which still fires
+            # unchanged.  That error says "a singular chain has shards"; this one
+            # says "this is an aggregate that lost its parallel_workers key",
+            # which is a different diagnosis with a different remedy.
+            validator.error(
+                "LOST_WORKER_DECLARATION",
+                result["canonical_dev_report"],
+                "parallel_workers key is absent, not empty, while worker shards "
+                f"{[label for label, _ in scanned]!r} survive on disk; an aggregate "
+                "that lost the key is indistinguishable from a singular chain",
             )
         completion_refs = [
             _rel(parents[key], root)

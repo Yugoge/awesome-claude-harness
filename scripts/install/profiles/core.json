@@ -1,0 +1,162 @@
+{
+  "profile": "core",
+  "schema": "claude-harness/install-profile/v1",
+  "description": "Minimal core profile: blocking safety hooks + the capability gate + the shared harness-home resolver. Nothing that edits, commits, pushes or orchestrates.",
+  "isolated_root_subdir": "harness",
+  "components": [
+    {
+      "id": "resolver",
+      "role": "resolver",
+      "files": ["hooks/lib/claude_home.sh", "hooks/lib/claude_home.py"]
+    },
+    {
+      "id": "safety-hooks",
+      "role": "safety_hook",
+      "files": [
+        "hooks/pretool-block-background-tasks.py",
+        "hooks/pretool-block-enterworktree.sh"
+      ]
+    },
+    {
+      "id": "capability-gate",
+      "role": "capability_gate",
+      "files": ["hooks/pretool-capability-gate.py", "hooks/lib/capability_state.py"]
+    },
+    {
+      "id": "policy",
+      "role": "policy",
+      "files": [
+        "policies/tool-policy.v1.json",
+        "policies/protected-workflow-manifest.v1.json"
+      ]
+    },
+    {
+      "id": "preflight",
+      "role": "preflight",
+      "files": ["scripts/doctor"]
+    },
+    {
+      "id": "harness-settings",
+      "role": "generated",
+      "files": ["settings.json"]
+    }
+  ],
+  "payload": {
+    "copied": [
+      { "src": "hooks/lib/claude_home.sh", "dest": "hooks/lib/claude_home.sh", "mode": "0755" },
+      { "src": "hooks/lib/claude_home.py", "dest": "hooks/lib/claude_home.py", "mode": "0755" },
+      { "src": "hooks/lib/capability_state.py", "dest": "hooks/lib/capability_state.py", "mode": "0644" },
+      { "src": "hooks/pretool-block-background-tasks.py", "dest": "hooks/pretool-block-background-tasks.py", "mode": "0755" },
+      { "src": "hooks/pretool-block-enterworktree.sh", "dest": "hooks/pretool-block-enterworktree.sh", "mode": "0755" },
+      { "src": "hooks/pretool-capability-gate.py", "dest": "hooks/pretool-capability-gate.py", "mode": "0755" },
+      { "src": "policies/tool-policy.v1.json", "dest": "policies/tool-policy.v1.json", "mode": "0644" },
+      { "src": "policies/protected-workflow-manifest.v1.json", "dest": "policies/protected-workflow-manifest.v1.json", "mode": "0644" },
+      { "src": "scripts/doctor", "dest": "scripts/doctor", "mode": "0755" }
+    ],
+    "generated": ["settings.json"],
+    "directories": [
+      "hooks",
+      "hooks/lib",
+      "policies",
+      "scripts"
+    ]
+  },
+  "excluded": [
+    "agents",
+    "commands",
+    "skills",
+    "docs",
+    "tests",
+    "tools",
+    "hooks/lib/runtime_guard.py",
+    "hooks/pretool-bash-safety.sh",
+    "scripts/overnight-git",
+    "scripts/install"
+  ],
+  "excluded_rationale": "The core profile is deliberately NOT the whole harness. Orchestration agents, slash commands, skills, the overnight machinery and the maintainer-environment service-integration hook (pretool-bash-safety.sh, which names local docker/systemd units) are all out of core. A stranger installing 'core' gets blocking guardrails and nothing that assumes the maintainer's host.",
+  "live_footprint": [
+    {
+      "path": "harness",
+      "kind": "link",
+      "target": "<isolated_root>",
+      "why": "The MANDATORY pointer bridge. Indirection to code physically located under the isolated root, so claude_home_resolve() walking up from <config_home>/harness/hooks/lib returns the isolated root -- never a sentinel-complete copy beneath the config home."
+    },
+    {
+      "path": "settings.json",
+      "kind": "file",
+      "mutable": true,
+      "why": "Hook registration. When the file already exists it is MERGED ADDITIVELY (never rendered from a template): existing keys, hook registrations, hook order, permissions, env and unrecognized extension keys are all preserved."
+    },
+    {
+      "path": "commands",
+      "kind": "dir",
+      "why": "Created ONLY when absent. A dir entry owns the directory NODE only -- never its descendants, and never recursive deletion."
+    },
+    {
+      "path": "commands/harness-doctor.md",
+      "kind": "file",
+      "why": "One slash command that runs the installed preflight. Separately enumerated because a dir entry confers no ownership over descendants."
+    }
+  ],
+  "mutable_paths": ["settings.json"],
+  "mutable_paths_rationale": "The declared-mutable set. Every OTHER pre-existing node under the config home must hold inode identity ((st_dev, st_ino)), node type and raw symlink target across an apply. For the mutable set inode identity is NOT asserted: the all-or-nothing apply convention writes a temporary file and atomically renames it over the target, which necessarily allocates a new inode. The substituted invariants are: node type unchanged, not relocated (same path), a pre-touch backup whose content equals the file's content before the write, and no alias of the pre-apply inode anywhere under the isolated root.",
+  "settings_merge": {
+    "policy": "additive-only",
+    "adds": ["hooks"],
+    "never_touches": [
+      "permissions.allow",
+      "permissions.deny",
+      "permissions.ask",
+      "env",
+      "model",
+      "theme",
+      "$schema",
+      "<any unrecognized key>"
+    ],
+    "hook_order": "preserved: existing entries keep their positions; core registrations are appended after them",
+    "reserialization": "A merged settings.json is re-serialized with 2-space indentation and UTF-8 preserved (ensure_ascii=false). Key order and every value are preserved exactly; only whitespace/formatting may differ from the user's original file. JSON carries no comments, so nothing can be lost that way.",
+    "why": "Rendering a user's settings.json from a template is the known-destructive path. This installer therefore never renders a user's settings.json -- it only appends hook registrations that are not already present.",
+    "why_measured": {
+      "_note": "RE-MEASURED at implementation time, not transcribed. The figure this field carried before ('re-adds 2 deny entries and strips ~38 allow entries') was wrong in both directions, and so is the backlog's '38 allow and 24 deny lost, 2 deny re-added'. Both are superseded. Re-measure rather than copy these numbers too: settings.template.json is edited by ordinary maintenance, so the delta MOVES. The input digests below are recorded precisely so a divergent recount is attributable to a changed input rather than to a wrong claim.",
+      "derivation": "Expand every {{CLAUDE_HOME}} placeholder in settings.template.json to the live home, parse both files as JSON, and take the set difference of each permissions list against the same list in the live settings.json. 'lost' = present live, absent from the render. 're-added' = present in the render, absent live. No other normalization -- entries are compared verbatim after placeholder expansion.",
+      "measured_at": "2026-08-05, repo HEAD 4c33f2f5, with {{CLAUDE_HOME}} expanded to the invoking user's live harness home -- the same value the installer itself would substitute. The figures below are independent of what that home is: every entry in the delta is a bare command or glob pattern carrying no home path, which is exactly why the expansion step matters (it cancels the entries that DO carry one).",
+      "inputs": {
+        "settings.json": "sha256:1b5f036a6183...",
+        "settings.template.json": "sha256:a5ade0ed937e..."
+      },
+      "result": "allow: 159 live vs 149 rendered -- 10 lost, 0 re-added. deny: 95 live vs 81 rendered -- 14 lost, 0 re-added. ask: 0 live vs 23 rendered -- 0 lost, 23 ADDED.",
+      "what_a_render_would_destroy": "10 allow entries (including Bash(curl:*), Bash(docker run:*), Bash(wget:*) and five Edit(**/<manifest-file>) entries) and -- the serious half -- 14 DENY entries, among them Bash(rm -rf:*), Bash(git push --force:*), Bash(git reset --hard:*), Bash(kubectl delete:*) and Edit(.claude/settings.json). A render does not merely inconvenience the user: it silently removes standing prohibitions and injects 23 unrequested ask entries. That is the whole argument for additive-only merge.",
+      "placeholder_expansion_is_load_bearing": "Without expanding {{CLAUDE_HOME}} the naive diff reports 47 allow lost and 37 re-added; 37 of those are the SAME entries respelled as placeholders. Any recount that omits the expansion step will disagree with the figures above and be wrong."
+    }
+  },
+  "hook_registrations": [
+    {
+      "event": "PreToolUse",
+      "matcher": null,
+      "command": "python3 \"<bridge>/hooks/pretool-block-background-tasks.py\""
+    },
+    {
+      "event": "PreToolUse",
+      "matcher": "EnterWorktree",
+      "command": "bash \"<bridge>/hooks/pretool-block-enterworktree.sh\""
+    }
+  ],
+  "hook_registrations_exclusion_note": "The capability gate is DELIBERATELY NOT REGISTERED here, and this is the only measured configuration in which this profile's own installed command works. Measured on an isolated root built from payload.copied: with the gate registered, /harness-doctor -- the one slash command this profile installs -- is refused. Closing the dependency set does not fix it, it only changes the refusal reason from manifest_unreadable to unmanifested_route, because no live PASS is reachable yet. The protection forgone is zero: this profile excludes commands/ and skills/, and the manifest's entire protected surface is the slashcommand: and skill: prefixes, so a core install contains no manifested protected route to protect. The binding invariant is NOT(gate registered AND any decision-path artifact missing from payload.copied); this satisfies it by making the left conjunct false. A FUTURE profile that registers the gate must satisfy it by the closure limb instead, and must additionally demonstrate that the slash commands it installs are reachable -- that is the limb that failed here.",
+  "hook_registrations_before_you_register_the_gate": {
+    "_why_here": "Restated inside this tracked file on purpose. The expanded handoff record lives at docs/dev/registration-readiness-dev-20260804-010515-capability.md, but docs/dev/ is gitignored, so a clone of this repository does not carry it. The two preconditions below are the half that must never be lost.",
+    "measured_2026_08_05": "Registering the gate with no live PASS refuses 19 of the 21 installed commands/*.md: 10 as unmanifested_route (INDEX, README, checkpoint, clean, codex, pull, redev, spec-update, stop, test) and 9 as state=state_absent (close, commit, dev, dev-command, dev-overnight, merge, push, restart, spec). Only /do and /allow pass, because they are the consent hatches.",
+    "precondition_1": "A reachable live PASS for the 9 manifested non-hatch routes. Until the handshake can reach PASS on a live host, every manifested route falls through to load_state() and refuses.",
+    "precondition_2": "A decision about the 10 unmanifested commands: manifest them, or narrow protected_surface_prefixes. They refuse because slashcommand: is a protected prefix and they are absent from routes[] -- fail-closed by design.",
+    "these_are_preconditions_not_fallbacks": "Neither permits registering early with reduced verification. The repair floor does NOT rescue these routes: every slash command matches the slashcommand: prefix, so it sits inside the effective protected set and is forbidden from any legal floor by the disjointness invariant.",
+    "wired_entry_delta": "+1 (70 -> 71), not +2. The capability status-line command is a top-level statusLine settings key, not a hook entry. Registration is atomic across settings.json, settings.template.json, README.md, ARCHITECTURE.md and docs/ENFORCEMENT-LEDGER.md, because the claims gate compares hook-script basenames between the two settings files and fails if only one changes."
+  },
+  "block_decision_smoke": {
+    "component": "safety-hooks",
+    "hook": "hooks/pretool-block-background-tasks.py",
+    "interpreter": "python3",
+    "stdin": { "tool_name": "Workflow", "tool_input": {} },
+    "expect_exit": 2,
+    "expect_stderr_contains": "[BLOCK]",
+    "documented_at": "hooks/pretool-block-background-tasks.py:11-13 -- 'SendMessage / Workflow -> inherently background with NO synchronous mode ... Workflow remains blocked outright.'"
+  }
+}

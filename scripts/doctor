@@ -4,9 +4,15 @@
 # message, BEFORE the first pipeline run. Exits nonzero when any required
 # dependency is missing; exits 0 when every required dependency is present.
 #
-# Usage: scripts/doctor [--venv <venv-dir>]
+# Usage: scripts/doctor [--venv <venv-dir>] [--strict [--verbose]]
 #   --venv <dir>   Inspect this venv instead of the resolved <home>/venv.
-# Exit codes: 0 = all required deps present; 1 = one or more required missing.
+#   --strict       Run a FRESH host-capability handshake (never trusts a cached or
+#                  preseeded PASS) and print a SHORT compatibility report; exits
+#                  non-zero unless that fresh run is a full PASS.
+#   --verbose      With --strict: print the full per-check detail instead of the
+#                  short report. The short report is the default so it stays short.
+# Exit codes: 0 = all required deps present (and, under --strict, the fresh
+#             handshake passed); 1 = one or more required checks failed.
 #
 # Required checks:
 #   - python3 + git           (base prerequisites, on PATH)
@@ -30,13 +36,28 @@ fi
 [ -n "$HOME_DIR" ] || HOME_DIR="$(cd "$SELF_DIR/.." && pwd -P)"
 
 VENV_DIR="$HOME_DIR/venv"
+STRICT=0
+VERBOSE=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --venv) VENV_DIR="${2:?--venv needs a directory}"; shift 2 ;;
-    -h|--help) sed -n '2,14p' "${BASH_SOURCE[0]}"; exit 0 ;;
+    --strict) STRICT=1; shift ;;
+    --verbose) VERBOSE=1; shift ;;
+    -h|--help) sed -n '2,20p' "${BASH_SOURCE[0]}"; exit 0 ;;
     *) echo "doctor: unknown argument '$1'" >&2; exit 1 ;;
   esac
 done
+
+# --------------------------------------------------------------------------- #
+# --strict: fresh host-capability handshake + INDEPENDENT (non-hook-dispatched)
+# state validation. This path deliberately produces ONLY the compatibility
+# report, because the user asked for a SHORT one and the base preflight output
+# alone would blow the bound. Nothing is lost: --verbose carries the detail.
+# --------------------------------------------------------------------------- #
+if [ "$STRICT" -eq 1 ]; then
+  STRICT_VERBOSE="$VERBOSE" "$HOME_DIR/scripts/capability-doctor-strict.py" --home "$HOME_DIR"
+  exit $?
+fi
 
 MANIFEST="$HOME_DIR/requirements.txt"
 MISSING=0
@@ -80,12 +101,19 @@ if [ "$VENV_PRESENT" -ne 1 ]; then
     miss "$pkg — not checked: the harness venv is missing. Run scripts/bootstrap to create it and install $MANIFEST."
   done
 else
+  # Remediation names the HASH-ENFORCED per-interpreter lockfile — the form CI
+  # actually installs with (baseline.yml: pip install --require-hashes -r
+  # requirements/py3XX.txt). An unpinned `-r requirements.txt` resolves whatever
+  # the index serves today, so pointing there would tell the user to reproduce
+  # something other than the tested, hash-verified dependency set.
+  PYTAG="$("$VENV_PY" -c 'import sys; print(f"{sys.version_info.major}{sys.version_info.minor}")' 2>/dev/null || echo "3XX")"
+  LOCKFILE="$HOME_DIR/requirements/py${PYTAG}.txt"
   # import name may differ from the distribution name (PyYAML -> yaml).
   check_mod() {  # <import-name> <pip-name>
     if "$VENV_PY" -c "import $1" >/dev/null 2>&1; then
       ok "$2 (import $1)"
     else
-      miss "$2 — install with: $VENV_DIR/bin/pip install -r $MANIFEST  (or: pip install $2)"
+      miss "$2 — install with: $VENV_DIR/bin/pip install --require-hashes -r $LOCKFILE"
     fi
   }
   check_mod pytest pytest

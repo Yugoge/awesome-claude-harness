@@ -1,16 +1,27 @@
 # scripts
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-07-26T21:29:27Z*
-**Total entries**: 116
+*Last updated: 2026-08-07T05:46:12Z*
+**Total entries**: 136
 **Convention**: kebab
 
 ## Tree
 ```
 scripts/
 ├── install/
+│   ├── profiles/
+│   │   └── `core.json` - Minimal core profile: blocking safety hooks + the capability gate + the shared harness-home resolver. Nothing that edits, commits, pushes or orchestrates.
+│   ├── tests/
+│   │   └── `installer-acceptance.py` - Runs every acceptance criterion (AC1-AC8) of the installer lane against real
+│   ├── `install` - install file
+│   ├── `installer.py` - Subcommands: plan | apply | uninstall | snapshot
+│   ├── `preflight` - preflight file
 │   ├── `render-settings` - render-settings file
-│   └── `tmp-cleanup-install.sh` - /usr/local/sbin/tmp-cleanup.sh
+│   ├── `tmp-cleanup-install.sh` - /usr/local/sbin/tmp-cleanup.sh
+│   └── `uninstall` - uninstall file
+├── lib/
+│   ├── `make_sbom.py` - The SBOM is built from the archive's real contents, not from the source
+│   └── `release_membership.py` - Single source of truth shared by every consumer, so the archive builder, the
 ├── modern-git-slot/
 ├── overnight-git/
 │   ├── `git-policy-shim` - git-policy-shim file
@@ -55,6 +66,11 @@ scripts/
 ├── `break-overnight-lock.py` - Backdates end_time on every active overnight-state-*.json so
 ├── `build-pipelines-from-triage.py` - Consumes PM triage schema (issues[] keyed by triage_index + pipeline_order[] +
 ├── `canary-verify.sh` - Description: Cache-safe canary that behaviorally verifies the four core PreToolUse hooks.
+├── `capability-doctor-strict.py` - Two properties this file exists to guarantee:
+├── `capability-handshake.py` - Proves (or refuses to claim) that this harness's hook-based security boundary is
+├── `capability-status-line.sh` - Description: statusLine command that renders the persistent host-capability marker.
+├── `capture-hero-run.py` - Description: Builds a hermetic fixture, installs one narrowly-scoped single-use grant,
+├── `check-enforcement-evidence.py` - Three subcommands, one consumer each:
 ├── `check-file-references.sh` - File reference detection script - used by /clean command
 ├── `check-overnight-reports.py` - Description: Validates all overnight required outputs declared by the active
 ├── `check-overnight-reports.sh` - DEPRECATED — replaced by check-overnight-reports.py per spec-20260426-090235 P0/M5.
@@ -79,6 +95,7 @@ scripts/
 ├── `execute-push.py` - Eliminates the timing window that exists when validate + push are && -chained
 ├── `generate-folder-index.sh` - Description: Generate INDEX.md for folder (inventory of contents)
 ├── `generate-folder-readme.sh` - Description: Generate README.md for folder (purpose and organization rules)
+├── `generate-hero-status.py` - Description: One source of truth emits THREE marker-delimited canonical regions -- the
 ├── `graphify-enrich.py` - graphify-enrich.py — pre-DEV focused subgraph extractor (runs between Step 7 and Step 8)
 ├── `graphify-maintain.py` - graphify-maintain.py — Global Graphify cache lifecycle manager (REAL CLI)
 ├── `graphify-query.py` - graphify-query.py — deterministic pre-BA graph hydrator (runs between Step 1 and Step 2)
@@ -88,6 +105,7 @@ scripts/
 ├── `iterate-failed-pipelines.py` - Reads pipelines JSON path; outputs iteration plan JSON to stdout. The orchestrator
 ├── `lifecycle-baseline-import.sh` - Description: One-time idempotent migration — import current agent scores from agent-scores.json
 ├── `lint-spec-id-centralization.py` - markdown from re-deriving a spec-id / views_dir / split_marker / cp_dir from a
+├── `measure-hero-fold.py` - Description: Renders README.md LOCALLY from the working tree in headless Chromium at the
 ├── `migrate-test-to-tests.sh` - Description: Merge test/ folder into tests/ preserving all content (idempotent)
 ├── `mint-git-blessed-token.sh` - mint-git-blessed-token.sh — issuer of the keystone blessed token (M12).
 ├── `normalize-doc-names.sh` - normalize-doc-names.sh - Detect and report non-compliant documentation file names
@@ -119,6 +137,8 @@ scripts/
 ├── `update-gitignore.sh` - update-gitignore.sh - Auto-update .gitignore with project-specific rules
 ├── `update-overnight-state.sh` - update-overnight-state.sh — Atomically update overnight state file
 ├── `verify-claims.sh` - Description: Self-verifying headline-claims gate. Recomputes the wired-hook entry count and
+├── `verify-hero-provenance.py` - Description: Re-runs the demo, normalizes both outputs and byte-diffs them; verifies raw
+├── `verify-release-manifest.sh` - Description: Verify a PUBLISHED release artifact end-to-end, WITHOUT rebuilding it.
 ├── `write-bulk-commit-sentinel.py` - Invoked from commands/commit.md Step 5 (BULK=true) to authorize the
 ├── `write-codex-enforce.sh` - Writes codex-enforce.json into the dev-registry for the given session.
 ├── `write-commit-grant.py` - Invoked from `commands/commit.md` Step 5 (non-bulk mode) to author a
