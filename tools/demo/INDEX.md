@@ -1,8 +1,8 @@
 # demo
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-08-06T12:28:41Z*
-**Total entries**: 7
+*Last updated: 2026-08-07T06:15:36Z*
+**Total entries**: 8
 **Convention**: kebab
 
 ## Tree
@@ -11,6 +11,7 @@ demo/
 ├── `audit.mjs` - mjs file
 ├── `build-hero-manifest.py` - Description: Emits a trace manifest (tools/demo/manifest.schema.md) in which every
 ├── `gen-svg.mjs` - mjs file
+├── `known-clipped-ledger.json` - JSON config: _doc, _not_a_blessing, _measurement, _currently_empty, _corrected_2026-08-06
 ├── `manifest.schema.md` - Trace manifest schema
 ├── `normalize-capture.py` - Description: Produces a COMPARISON COPY of a capture with the four non-deterministic
 ├── `sample-hook-trace.json` - JSON config: meta, lines

@@ -1,8 +1,8 @@
 # tests
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-08-06T12:04:55Z*
-**Total entries**: 31
+*Last updated: 2026-08-07T06:15:36Z*
+**Total entries**: 33
 **Convention**: kebab
 
 ## Tree
@@ -10,6 +10,7 @@
 tests/
 ├── fixtures/
 │   ├── `adversarial_corpus.json` - json config
+│   └── `overwrite_corpus.json` - JSON config: schema_version, task_id, guard, driver, documentation
 ├── `test_ac10_verify.sh` - Shell script
 ├── `test_ac1_verify.sh` - Shell script
 ├── `test_ac3_verify.sh` - Shell script
@@ -30,6 +31,7 @@ tests/
 ├── `test_fail_closed_drift.py` - WHY THIS FILE EXISTS
 ├── `test_final_sweep.sh` - Final sweep — run inline AC checks and print PASS/FAIL summary.
 ├── `test_git_cmd_cross_consistency.py` - Verifies that GIT_CMD_RE (hooks/pretool-bash-safety.sh),
+├── `test_overwrite_guard.py` - Every assertion drives the REAL guard as a subprocess over a synthetic
 ├── `test_push_sentinel_abort.sh` - Unit test for AC1 V5: hooks/push.sh self-aborts before any real git push
 ├── `test_runtime_guard.py` - Two layers:
 ├── `test_unit_anchor.py` - Imports the anchor sibling module DIRECTLY (not via the _core facade) and

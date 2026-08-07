@@ -1,8 +1,8 @@
 # hooks
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-08-06T01:17:25Z*
-**Total entries**: 178
+*Last updated: 2026-08-07T06:21:20Z*
+**Total entries**: 181
 **Convention**: kebab
 
 ## Tree
@@ -60,6 +60,7 @@ hooks/
 ├── tests/
 │   ├── fixtures/
 │   │   ├── `adversarial_corpus.json` - json config
+│   │   └── `overwrite_corpus.json` - JSON config: schema_version, task_id, guard, driver, documentation
 │   ├── `test_ac10_verify.sh` - Shell script
 │   ├── `test_ac1_verify.sh` - Shell script
 │   ├── `test_ac3_verify.sh` - Shell script
@@ -80,6 +81,7 @@ hooks/
 │   ├── `test_fail_closed_drift.py` - WHY THIS FILE EXISTS
 │   ├── `test_final_sweep.sh` - Final sweep — run inline AC checks and print PASS/FAIL summary.
 │   ├── `test_git_cmd_cross_consistency.py` - Verifies that GIT_CMD_RE (hooks/pretool-bash-safety.sh),
+│   ├── `test_overwrite_guard.py` - Every assertion drives the REAL guard as a subprocess over a synthetic
 │   ├── `test_push_sentinel_abort.sh` - Unit test for AC1 V5: hooks/push.sh self-aborts before any real git push
 │   ├── `test_runtime_guard.py` - Two layers:
 │   ├── `test_unit_anchor.py` - Imports the anchor sibling module DIRECTLY (not via the _core facade) and
@@ -144,6 +146,7 @@ hooks/
 ├── `pretool-orchestrator-gate.py` - PreToolUse Hook: Orchestrator Gate (Unified)
 ├── `pretool-orchestrator-prompt-purity.py` - PreToolUse hook: Orchestrator Prompt Purity
 ├── `pretool-overnight-hook-guard.py` - PreToolUse Hook: Overnight session file modification guard
+├── `pretool-overwrite-guard.py` - REGISTRATION: matcher ``Bash`` ONLY. This hook registers against no other tool
 ├── `pretool-quality-gate.py` - PreToolUse Hook: Quality gate for Write/Edit operations
 ├── `pretool-read-size-guard.py` - PreToolUse Hook: Read Size Guard
 ├── `pretool-runcode-watchdog.py` - PreToolUse Hook: Start timeout watchdog for browser_run_code
