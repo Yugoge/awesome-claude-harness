@@ -21,13 +21,24 @@ from types import ModuleType
 from typing import Any
 
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 IDENTITY_RE = re.compile(
     r"^(?:[-*+]\s*)?(?:task[- ]id|request[- ]id)\s*:\s*(\S+)\s*$",
     re.IGNORECASE,
 )
 TASK_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 WORKER_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9.-]*$")
+
+# A check that has no analogue on the code path taken.  Distinct from both
+# booleans: `False` would claim the check ran and failed, `True` would claim it
+# ran and passed.  Consumers must treat this as "unevaluated here", never as a
+# pass.
+NOT_APPLICABLE = "not_applicable"
+SINGULAR_RELATIONAL_REASON = (
+    "relational comparison requiring two or more independent shard artifacts; "
+    "a singular chain has no second artifact to compare against, so this check "
+    "has no singular analogue"
+)
 
 
 class StableArgumentParser(argparse.ArgumentParser):
