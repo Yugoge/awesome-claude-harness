@@ -1,8 +1,8 @@
 # dot-claude
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-08-06T04:50:45Z*
-**Total entries**: 489
+*Last updated: 2026-08-07T14:28:16Z*
+**Total entries**: 496
 **Convention**: kebab
 
 ## Tree
@@ -64,6 +64,7 @@ dot-claude/
 │   │   ├── `launch-plan.md` - Launch Plan — ROI-ranked channels, gated on recorded evidence
 │   │   ├── `lock-file-handling.md` - Git Lock File Handling
 │   │   ├── `monolith-split-plan.md` - Monolith Split Plan (Plan-of-Record)
+│   │   ├── `overwrite-prohibition.md` - Prohibition on wholesale replacement of an existing file
 │   │   ├── `positioning.md` - Positioning
 │   │   ├── `rename-execution-plan.md` - Rename execution plan — `awesome-claude-harness` → `claude-code-guardrails`
 │   │   ├── `roadmap-decomposition-productization.md` - Roadmap: Monolith Decomposition + Productization
@@ -140,6 +141,7 @@ dot-claude/
 │   │   ├── `test_fail_closed_drift.py` - WHY THIS FILE EXISTS
 │   │   ├── `test_final_sweep.sh` - Final sweep — run inline AC checks and print PASS/FAIL summary.
 │   │   ├── `test_git_cmd_cross_consistency.py` - Verifies that GIT_CMD_RE (hooks/pretool-bash-safety.sh),
+│   │   ├── `test_overwrite_guard.py` - Every assertion drives the REAL guard as a subprocess over a synthetic
 │   │   ├── `test_push_sentinel_abort.sh` - Unit test for AC1 V5: hooks/push.sh self-aborts before any real git push
 │   │   ├── `test_runtime_guard.py` - Two layers:
 │   │   ├── `test_unit_anchor.py` - Imports the anchor sibling module DIRECTLY (not via the _core facade) and
@@ -204,6 +206,7 @@ dot-claude/
 │   ├── `pretool-orchestrator-gate.py` - PreToolUse Hook: Orchestrator Gate (Unified)
 │   ├── `pretool-orchestrator-prompt-purity.py` - PreToolUse hook: Orchestrator Prompt Purity
 │   ├── `pretool-overnight-hook-guard.py` - PreToolUse Hook: Overnight session file modification guard
+│   ├── `pretool-overwrite-guard.py` - REGISTRATION: matcher ``Bash`` ONLY. This hook registers against no other tool
 │   ├── `pretool-quality-gate.py` - PreToolUse Hook: Quality gate for Write/Edit operations
 │   ├── `pretool-read-size-guard.py` - PreToolUse Hook: Read Size Guard
 │   ├── `pretool-runcode-watchdog.py` - PreToolUse Hook: Start timeout watchdog for browser_run_code
@@ -463,9 +466,11 @@ dot-claude/
 │   ├── `test_dev_artifact_chain_consumer_contracts.py` - Contract tests for shared /dev artifact-chain consumers.
 │   ├── `test_graphify_scripts.py` - tests/test_graphify_scripts.py — smoke tests for scripts/graphify_lib.py
 │   ├── `test_graphify_workflow_contract.py` - tests/test_graphify_workflow_contract.py — contract tests for graphify agent registration
+│   ├── `test_hero_advance_cross_check.py` - tools/demo/audit.mjs measures a line's rendered right edge on a fixed monospace grid, using
 │   ├── `test_no_artificial_lifecycle_ceremony.py` - Prevent host metadata ceremonies from becoming ordinary lifecycle gates.
 │   ├── `test_overnight_loop_tz.py` - Verifies the overnight loop hook compares end_time correctly against the
 │   ├── `test_public_core_residue_gate.py` - These are the discriminating controls for the "Make CI FAIL (not advisory) on
+│   ├── `test_release_pipeline_contract.py` - verifier
 │   ├── `test_resolve_dev_artifact_chain.py` - Focused tests for the read-only /dev artifact-chain resolver.
 │   ├── `test_resolve_spec_artifacts.py` - resolver) + the static centralization lint (AC-B4 cases 1-12, task 20260530-092123)
 │   ├── `test_restart_command.py` - End-to-end unit coverage for the human-only /restart recovery protocol.
@@ -479,6 +484,7 @@ dot-claude/
 │       ├── `audit.mjs` - mjs file
 │       ├── `build-hero-manifest.py` - Description: Emits a trace manifest (tools/demo/manifest.schema.md) in which every
 │       ├── `gen-svg.mjs` - mjs file
+│       ├── `known-clipped-ledger.json` - JSON config: _doc, _not_a_blessing, _measurement, _currently_empty, _corrected_2026-08-06
 │       ├── `manifest.schema.md` - Trace manifest schema
 │       ├── `normalize-capture.py` - Description: Produces a COMPARISON COPY of a capture with the four non-deterministic
 │       ├── `sample-hook-trace.json` - JSON config: meta, lines
@@ -495,6 +501,7 @@ dot-claude/
 ├── `pytest.ini` - ini file
 ├── `release-membership.v1.json` - EXPLICIT release-membership manifest: the exact set of tracked paths that ship in a release archive. Membership is an edit to this file, never a silent consequence of a class rule. It is deliberately NOT 'public-core + all shared/infra': PUBLIC-CORE.md calls tests/ 'not itself the shippable harness', so a blanket class rule would drag non-shippable fixtures into the distribution. It is also not public-core-only: requirements.txt and requirements/ are shared/infra yet are required to install, so a public-core-only archive would be unusable.
 ├── `requirements.txt` - Python dependency manifest for the Claude Code harness venv
+├── `settings.json` - Claude Code harness configuration (permissions, hooks, env, model)
 ├── `settings.template.json` - Distributable harness settings template (uses CLAUDE_HOME placeholders)
 ├── `VERSION` - VERSION file
 ```
