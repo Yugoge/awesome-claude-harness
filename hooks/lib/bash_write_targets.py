@@ -75,13 +75,25 @@ True
 
 >>> extract_bash_write_paths("echo 'foo > bar'")
 []
+
+A closing parenthesis terminates an unquoted token, so a read-only command in
+a subshell no longer reports a write target that was never named:
+
+>>> extract_bash_write_paths('(ss -ltnp 2>/dev/null || netstat -ltnp) | head')
+['/dev/null']
+
+>>> extract_bash_write_paths('(cd /d && echo x > /tmp/a.txt)')
+['/tmp/a.txt']
+
+>>> extract_bash_write_paths('\\\\cp src /tmp/a.txt')
+['/tmp/a.txt']
 """
 
 from __future__ import annotations
 
 import os
 import re
-from typing import List, Tuple
+from typing import List, NamedTuple, Tuple
 
 # Heredoc opener pattern. Captures three groups:
 #   1: dash flag (- means tab-stripped form)
@@ -192,29 +204,54 @@ _SED_I_RE = re.compile(r"(?:^|[\s;|&])sed\b([^;|&\n]*?-i[^\s;|&\n]*)([^;|&\n]+)"
 _INSTALL_RE = re.compile(r"(?:^|[\s;|&])install\b([^;|&\n]+)")
 
 
-def _read_path_token_from_original(original: str, start: int) -> str:
-    """Read the next path token from `original` starting at offset `start`.
+def _next_token_from_original(original: str, start: int) -> Tuple[str, int]:
+    """Read the next token from `original` and return (token, next_offset).
+
+    Sole implementation of the quoted-PATH-vs-quoted-CONTENT rule; both
+    `_read_path_token_from_original` (frozen public behaviour) and the
+    write-mode segment tokenizer delegate here so the rule exists once.
 
     Skips leading whitespace. If the next char is `'` or `"`, consumes to
     the matching close-quote and strips the surrounding quotes (so a
     quoted PATH like `"/tmp/y"` yields `/tmp/y`). Otherwise reads to the
-    next whitespace or shell separator (`;|&<>`).
+    next whitespace or shell separator (`;|&<>()`).
+
+    `(` and `)` terminate an UNQUOTED token because they are shell syntax,
+    never part of a bare word: without this, `(cmd > /tmp/f)` yields the
+    token `/tmp/f)`, which names a path that does not exist. That single
+    absorbed byte is load-bearing in opposite directions for two consumers —
+    it made pretool-overwrite-guard.py resolve a non-existent path and
+    therefore ALLOW a replacement as if it were creation, and it made
+    pretool-tool-policy.py refuse a read-only `(… 2>/dev/null) | head` by
+    inventing a write target named `/dev/null)`.
+
+    The QUOTED branch above is deliberately untouched, so a filename that
+    really does contain a parenthesis (`> "/tmp/report (1).txt"`) still
+    reads whole and is still judged.
     """
     i, n = start, len(original)
     while i < n and original[i].isspace():
         i += 1
     if i >= n:
-        return ""
+        return ("", n)
     if original[i] in ("'", '"'):
         quote = original[i]
         j = i + 1
         while j < n and original[j] != quote:
             j += 1
-        return original[i + 1:j]
+        return (original[i + 1:j], min(j + 1, n))
     j = i
-    while j < n and original[j] not in " \t\n;|&<>":
+    while j < n and original[j] not in " \t\n;|&<>()":
         j += 1
-    return original[i:j]
+    return (original[i:j], j)
+
+
+def _read_path_token_from_original(original: str, start: int) -> str:
+    """Read the next path token from `original` starting at offset `start`.
+
+    Thin projection of `_next_token_from_original`; behaviour unchanged.
+    """
+    return _next_token_from_original(original, start)[0]
 
 
 # Operator-only patterns for masked-text scanning (no path capture; path
@@ -318,6 +355,126 @@ def _strip_reason_payload(s: str) -> str:
     return ''.join(out)
 
 
+#: A `(` opens a GROUPING subshell only at these positions. After `>` or `<`
+#: it is process substitution and after `$` it is command substitution —
+#: neither introduces a command word, and the redirect pattern's `(?![&\(])`
+#: exclusion still has to be able to see them.
+_GROUP_OPEN_LEADIN = " \t\n;|&("
+
+#: `\cp` is bash's routine alias-bypass idiom. The backslash escapes the
+#: COMMAND WORD; it is not part of any path.
+_ESCAPED_COMMAND_WORD_RE = re.compile(r"\\[A-Za-z_]")
+
+
+def _absolute_command_word_dir_spans(masked: str) -> List[Tuple[int, int]]:
+    """`(start, end)` of the DIRECTORY prefix of every ABSOLUTE-path command word.
+
+    This is the anchored dir-prefix rule. A token qualifies only when BOTH hold:
+
+    * it sits at a COMMAND-WORD position — the start of the text, or the first
+      token after ``;``  ``|``  ``&``  ``(`` or a newline; and
+    * it begins with ``/``.
+
+    Both halves are load-bearing, and together they are why this cannot cry
+    wolf. Requiring a command-word position is what leaves a redirect TARGET
+    alone: in ``echo x > /tmp/cp`` the preceding non-blank byte is ``>``, so the
+    span is not taken and the redirect still names ``/tmp/cp`` rather than a
+    truncated ``cp``. Requiring a leading ``/`` is what leaves the whole
+    near-miss family alone: ``./tools/backup-cp`` and ``./cp`` are relative, and
+    ``/opt/x/my-cp`` and ``/usr/bin/scp`` keep their basenames ``my-cp`` and
+    ``scp``, in which ``cp`` is preceded by ``-`` and ``s`` rather than by the
+    ``[\\s;|&]`` boundary every verb pattern requires.
+
+    Only the directory part is blanked, so the basename is judged by exactly the
+    same verb patterns as the bare spelling — no verb pattern is loosened, and
+    no verb is added.
+    """
+    spans: List[Tuple[int, int]] = []
+    n = len(masked)
+    i = 0
+    at_command_word = True
+    prev_sig = ""  # last non-blank byte seen, for multi-byte redirect operators
+    while i < n:
+        ch = masked[i]
+        if ch in " \t":
+            i += 1
+            continue
+        if ch in ";|&(\n":
+            # `|` and `&` are separators EXCEPT as the tail of a redirect
+            # operator: `>|` (clobber) and `>&`/`<&` (fd duplication). Treating
+            # those as separators would put the redirect TARGET at a
+            # command-word position and truncate it — `echo x >| /tmp/a` would
+            # report `a`. The redirect operators own their operand.
+            if not (ch in "|&" and prev_sig in "><"):
+                at_command_word = True
+            prev_sig = ch
+            i += 1
+            continue
+        j = i
+        while j < n and masked[j] not in " \t\n;|&<>()":
+            j += 1
+        if j == i:  # a bare operator byte such as `>` or `)`
+            at_command_word = False
+            prev_sig = ch
+            i += 1
+            continue
+        prev_sig = masked[j - 1]
+        if at_command_word and masked[i] == "/":
+            last = masked.rfind("/", i, j)
+            if last > i:
+                spans.append((i, last + 1))
+        at_command_word = False
+        i = j
+    return spans
+
+
+def _neutralize_command_word_prefixes(s: str) -> str:
+    """Blank a command-word escape (`\\cp`), a grouping `(`, and an absolute
+    command-word directory prefix (`/bin/cp`). Length-preserving.
+
+    Every verb pattern below requires a `[\\s;|&]` boundary before the word, so
+    three ordinary syntaxes hid the verb completely: `\\cp SRC DEST` (nine of the
+    eleven replacing verbs were defeated by that one byte), `(cp SRC DEST)`, and
+    `/bin/cp SRC DEST`.
+
+    Each such character is replaced by a SPACE rather than removed, so every
+    byte offset stays aligned with the ORIGINAL text that path tokens are read
+    from — the masked/original alignment is load-bearing here. Only bytes BEFORE
+    the command word are blanked, so every argument and redirect target is read
+    from exactly the bytes the caller wrote.
+
+    Quoted spans are skipped, and a backslash is only neutralized where a
+    command word can actually start, so an escaped character INSIDE a path
+    (``cp x /tmp/my\\ file``) is left exactly as it was and cannot be turned
+    into a shorter path that happens to exist.
+    """
+    if "\\" not in s and "(" not in s and "/" not in s:
+        return s
+    masked = _strip_quoted_regions(s)
+    out = list(s)
+    for start, end in _absolute_command_word_dir_spans(masked):
+        for k in range(start, end):
+            out[k] = " "
+    depth = 0
+    for i, ch in enumerate(masked):
+        if ch == "(" and (i == 0 or masked[i - 1] in _GROUP_OPEN_LEADIN):
+            out[i] = " "
+            depth += 1
+        elif ch == ")" and depth:
+            # Close only a group this pass actually opened, so the `)` of a
+            # process substitution is left for the redirect pattern to see and
+            # a `case` label's bare `)` is not touched. The extractors that
+            # split on whitespace rather than reading tokens (cp/mv, sed -i,
+            # install) have no other way to stop at a group close.
+            out[i] = " "
+            depth -= 1
+    for m in _ESCAPED_COMMAND_WORD_RE.finditer(masked):
+        i = m.start()
+        if i == 0 or masked[i - 1] in _GROUP_OPEN_LEADIN:
+            out[i] = " "
+    return "".join(out)
+
+
 def _extract_cp_mv_targets(command: str) -> List[str]:
     targets: List[str] = []
     scan = _strip_quoted_regions(command)
@@ -384,6 +541,7 @@ def extract_bash_write_paths(command: str) -> List[str]:
         return []
     stripped = command_without_heredoc_bodies(command)
     stripped = _strip_reason_payload(stripped)
+    stripped = _neutralize_command_word_prefixes(stripped)
     targets: List[str] = []
     targets.extend(_extract_redirect_targets(stripped))
     targets.extend(_extract_tee_targets(stripped))
@@ -397,6 +555,411 @@ def extract_bash_write_paths(command: str) -> List[str]:
         if t and t not in seen:
             seen.add(t)
             deduped.append(t)
+    return deduped
+
+
+# ---------------------------------------------------------------------------
+# Write-MODE classification (ADDITIVE — task dev-20260804-010515-overwrite, M3)
+#
+# Everything above this banner is FROZEN. `extract_bash_write_paths()` keeps its
+# name, signature and return shape because THREE hooks consume it
+# (pretool-tool-policy.py, pretool-overnight-hook-guard.py and
+# pretool-cp-state-write-guard.py — the last is itself a security guard).
+#
+# The functions below answer a question the frozen extractor never asked: not
+# "which paths does this command write?" but "in what MODE does it write them?"
+# — because replacing an existing file and appending to one are the same path
+# and opposite acts.
+# ---------------------------------------------------------------------------
+
+MODE_TRUNCATING = "truncating"
+MODE_APPENDING = "appending"
+MODE_RENAME_INTO_PLACE = "rename_into_place"
+MODE_DESTROYING = "destroying"
+MODE_IN_PLACE_EDIT = "in_place_edit"
+
+#: Modes that destroy the previous contents of an EXISTING target wholesale.
+#: Appending and in-place editing derive their output from the original, so
+#: neither is a replacement and neither is ever gated.
+REPLACING_MODES = frozenset({MODE_TRUNCATING, MODE_RENAME_INTO_PLACE, MODE_DESTROYING})
+
+
+class WriteTarget(NamedTuple):
+    """One write target with its mode.
+
+    Fields 0 and 1 are exactly the ``(path, write_mode)`` pair the requirement
+    asks for; ``source`` is carried because the move-into-a-directory rule has
+    to re-resolve a directory destination to ``<dir>/<basename(source)>`` and
+    cannot do so from the destination alone.
+    """
+
+    path: str
+    mode: str
+    mechanism: str
+    source: str = ""
+
+
+def _segment_end(masked: str, start: int) -> int:
+    """Offset of the first shell separator at/after `start` in masked text."""
+    for k in range(start, len(masked)):
+        if masked[k] in ";|&\n":
+            return k
+    return len(masked)
+
+
+def _segment_tokens(original: str, masked: str, start: int) -> List[str]:
+    """Tokenize one command segment, reading tokens from the ORIGINAL text.
+
+    `masked` (quoted spans blanked, byte offsets preserved) supplies the
+    segment boundary so a separator inside a quoted argument does not cut the
+    segment short; `original` supplies the token bytes so a quoted PATH
+    survives intact. Stops at a redirect operator, mirroring _split_at_redirect.
+    """
+    end = _segment_end(masked, start)
+    tokens: List[str] = []
+    i = start
+    while i < end:
+        tok, nxt = _next_token_from_original(original, i)
+        if nxt <= i:
+            break
+        if tok:
+            tokens.append(tok)
+        i = nxt
+    return tokens
+
+
+# Redirect operators, mode-aware. Adds the clobber form '>|' that the frozen
+# extractor cannot name (its path reader stops on the '|'). '>&' (fd
+# duplication, e.g. 2>&1) and '>(' (process substitution) stay excluded, and
+# '&>' stays OUT — it is a declared uncovered route, not a silent omission.
+_REDIRECT_MODE_OP_RE = re.compile(r"(?<![<>&\'\"])(>>|>\||>)(?![&\(])")
+_REDIRECT_MECHANISM = {">>": "redirect-append", ">|": "redirect-clobber", ">": "redirect-truncate"}
+
+_TEE_WORD_RE = re.compile(r"(?:^|[\s;|&])tee\b")
+_CP_MV_WORD_RE = re.compile(r"(?:^|[\s;|&])(cp|mv)\b")
+_INSTALL_WORD_RE = re.compile(r"(?:^|[\s;|&])install\b")
+_TRUNCATE_WORD_RE = re.compile(r"(?:^|[\s;|&])truncate\b")
+_DD_WORD_RE = re.compile(r"(?:^|[\s;|&])dd\b")
+_CURL_WORD_RE = re.compile(r"(?:^|[\s;|&])curl\b")
+_WGET_WORD_RE = re.compile(r"(?:^|[\s;|&])wget\b")
+_UNLINK_WORD_RE = re.compile(r"(?:^|[\s;|&])unlink\b")
+
+# Occurrences carrying any of these are NOT attributed a target: the write
+# destination is not decidable from command text, so naming one would be a
+# guess. Each is a declared uncovered route rather than a silent miss.
+_CP_UNDECIDABLE = {"-r", "-R", "--recursive", "-a", "--archive", "-t", "--target-directory"}
+_MV_UNDECIDABLE = {"-t", "--target-directory"}
+_INSTALL_UNDECIDABLE = {"-d", "--directory", "-t", "--target-directory"}
+# Flags whose VALUE is a separate following token (skip that token).
+_TRUNCATE_VALUE_FLAGS = {"-s", "--size", "-r", "--reference"}
+
+
+def _positionals(tokens: List[str], value_flags: frozenset | set = frozenset()) -> List[str]:
+    """Non-flag tokens, dropping flags and the values they consume."""
+    out: List[str] = []
+    skip = False
+    for t in tokens:
+        if skip:
+            skip = False
+            continue
+        if t in value_flags:
+            skip = True
+            continue
+        if t.startswith("-") and t != "-":
+            continue
+        out.append(t)
+    return out
+
+
+def _extract_redirect_mode_targets(command: str) -> List[WriteTarget]:
+    masked = _strip_quoted_regions(command)
+    out: List[WriteTarget] = []
+    for m in _REDIRECT_MODE_OP_RE.finditer(masked):
+        op = m.group(1)
+        token = _read_path_token_from_original(command, m.end()).strip()
+        if not token or token.isdigit():
+            continue
+        mode = MODE_APPENDING if op == ">>" else MODE_TRUNCATING
+        out.append(WriteTarget(_resolve_path(token), mode, _REDIRECT_MECHANISM[op]))
+    return out
+
+
+def _extract_tee_mode_targets(command: str) -> List[WriteTarget]:
+    masked = _strip_quoted_regions(command)
+    out: List[WriteTarget] = []
+    for m in _TEE_WORD_RE.finditer(masked):
+        tokens = _segment_tokens(command, masked, m.end())
+        append = any(
+            t == "--append" or (t.startswith("-") and not t.startswith("--") and "a" in t[1:])
+            for t in tokens
+        )
+        mode = MODE_APPENDING if append else MODE_TRUNCATING
+        mech = "tee-append" if append else "tee-truncate"
+        for path in _positionals(tokens):
+            out.append(WriteTarget(_resolve_path(path), mode, mech))
+    return out
+
+
+def _extract_cp_mv_mode_targets(command: str) -> List[WriteTarget]:
+    masked = _strip_quoted_regions(command)
+    out: List[WriteTarget] = []
+    for m in _CP_MV_WORD_RE.finditer(masked):
+        verb = m.group(1)
+        tokens = _segment_tokens(command, masked, m.end())
+        undecidable = _CP_UNDECIDABLE if verb == "cp" else _MV_UNDECIDABLE
+        if any(t in undecidable for t in tokens):
+            continue
+        if verb == "cp" and any(
+            t.startswith("-") and not t.startswith("--") and ("r" in t[1:] or "R" in t[1:] or "a" in t[1:])
+            for t in tokens
+        ):
+            continue
+        positionals = _positionals(tokens)
+        if not positionals:
+            continue
+        dest = positionals[-1]
+        source = positionals[-2] if len(positionals) >= 2 else ""
+        mode = MODE_RENAME_INTO_PLACE if verb == "mv" else MODE_TRUNCATING
+        out.append(WriteTarget(_resolve_path(dest), mode, f"{verb}-dest",
+                               _resolve_path(source) if source else ""))
+    return out
+
+
+#: `install` as a package-manager SUBCOMMAND names packages, not paths. Naming a
+#: package as a write target is the cries-wolf failure the requirement forbids:
+#: `pip install requests` in a directory holding a file called `requests` would
+#: otherwise be refused as a replacement.
+_PKG_MANAGERS = frozenset({
+    "pip", "pip3", "npm", "pnpm", "yarn", "apt", "apt-get", "aptitude", "yum",
+    "dnf", "apk", "zypper", "pacman", "brew", "cargo", "gem", "go", "poetry",
+    "uv", "conda", "bundle", "composer", "nix-env", "opkg", "stack", "mix",
+})
+
+
+def _preceding_word(masked: str, end_of_word: int, word: str) -> str:
+    """The bare word immediately preceding `word`, which ends at `end_of_word`."""
+    head = masked[:end_of_word].rstrip()
+    if head.endswith(word):
+        head = head[: -len(word)]
+    parts = head.rstrip().split()
+    return parts[-1] if parts else ""
+
+
+def _extract_install_mode_targets(command: str) -> List[WriteTarget]:
+    masked = _strip_quoted_regions(command)
+    out: List[WriteTarget] = []
+    for m in _INSTALL_WORD_RE.finditer(masked):
+        if _preceding_word(masked, m.end(), "install") in _PKG_MANAGERS:
+            continue
+        tokens = _segment_tokens(command, masked, m.end())
+        if any(t in _INSTALL_UNDECIDABLE for t in tokens):
+            continue
+        positionals = _filter_install_positionals(tokens)
+        if not positionals:
+            continue
+        source = positionals[-2] if len(positionals) >= 2 else ""
+        out.append(WriteTarget(_resolve_path(positionals[-1]), MODE_TRUNCATING, "install-dest",
+                               _resolve_path(source) if source else ""))
+    return out
+
+
+def _extract_truncate_mode_targets(command: str) -> List[WriteTarget]:
+    masked = _strip_quoted_regions(command)
+    out: List[WriteTarget] = []
+    for m in _TRUNCATE_WORD_RE.finditer(masked):
+        tokens = _segment_tokens(command, masked, m.end())
+        for path in _positionals(tokens, _TRUNCATE_VALUE_FLAGS):
+            out.append(WriteTarget(_resolve_path(path), MODE_TRUNCATING, "truncate-cmd"))
+    return out
+
+
+def _extract_dd_mode_targets(command: str) -> List[WriteTarget]:
+    masked = _strip_quoted_regions(command)
+    out: List[WriteTarget] = []
+    for m in _DD_WORD_RE.finditer(masked):
+        tokens = _segment_tokens(command, masked, m.end())
+        source = ""
+        for t in tokens:
+            if t.startswith("if="):
+                source = _resolve_path(t[3:])
+        for t in tokens:
+            if t.startswith("of=") and t[3:]:
+                out.append(WriteTarget(_resolve_path(t[3:]), MODE_TRUNCATING, "dd-of", source))
+    return out
+
+
+def _flag_value_targets(tokens: List[str], short: str, long_opt: str) -> List[str]:
+    """Values of `-x VALUE`, `--long VALUE`, `--long=VALUE`, `-abx VALUE`, `-xVALUE`.
+
+    The ATTACHED short form (`curl -o/tmp/f`, `wget -O/tmp/f`) is a write to a
+    named path exactly like the spaced form, and getopt accepts both; reading
+    only the spaced form left the attached one entirely unnamed.
+    """
+    letter = short[1:]
+    out: List[str] = []
+    take_next = False
+    for t in tokens:
+        if take_next:
+            take_next = False
+            if t and not t.startswith("-"):
+                out.append(t)
+            continue
+        if t == short or t == long_opt:
+            take_next = True
+        elif t.startswith(long_opt + "="):
+            value = t[len(long_opt) + 1:]
+            if value:
+                out.append(value)
+        elif t.startswith("-") and not t.startswith("--") and letter in t[1:]:
+            attached = t[t.index(letter, 1) + 1:]
+            if attached:
+                out.append(attached)   # -o/tmp/f, -sSo/tmp/f
+            else:
+                take_next = True       # -o /tmp/f, -sSo /tmp/f
+    return out
+
+
+def _extract_curl_wget_mode_targets(command: str) -> List[WriteTarget]:
+    masked = _strip_quoted_regions(command)
+    out: List[WriteTarget] = []
+    for word_re, short, long_opt, mech in (
+        (_CURL_WORD_RE, "-o", "--output", "curl-output"),
+        (_WGET_WORD_RE, "-O", "--output-document", "wget-output"),
+    ):
+        for m in word_re.finditer(masked):
+            tokens = _segment_tokens(command, masked, m.end())
+            for path in _flag_value_targets(tokens, short, long_opt):
+                out.append(WriteTarget(_resolve_path(path), MODE_TRUNCATING, mech))
+    return out
+
+
+def _extract_unlink_mode_targets(command: str) -> List[WriteTarget]:
+    masked = _strip_quoted_regions(command)
+    out: List[WriteTarget] = []
+    for m in _UNLINK_WORD_RE.finditer(masked):
+        positionals = _positionals(_segment_tokens(command, masked, m.end()))
+        if positionals:
+            out.append(WriteTarget(_resolve_path(positionals[0]), MODE_DESTROYING, "unlink-cmd"))
+    return out
+
+
+def extract_bash_write_targets_with_modes(command: str) -> List[WriteTarget]:
+    """Extract (path, write_mode, mechanism, source) for every named write target.
+
+    ADDITIVE sibling of `extract_bash_write_paths`, which is unchanged. A target
+    this function cannot name is NOT an implicit denial — the caller's contract
+    is affirmative-denial, so an unnamed target is allowed and its syntax is
+    declared uncovered.
+
+    >>> [(t.path, t.mode) for t in extract_bash_write_targets_with_modes('echo x > /tmp/a')]
+    [('/tmp/a', 'truncating')]
+
+    >>> [(t.path, t.mode) for t in extract_bash_write_targets_with_modes('echo x >> /tmp/a')]
+    [('/tmp/a', 'appending')]
+
+    >>> [(t.path, t.mode) for t in extract_bash_write_targets_with_modes('echo x >| /tmp/a')]
+    [('/tmp/a', 'truncating')]
+
+    >>> [(t.path, t.mode) for t in extract_bash_write_targets_with_modes('echo x | tee -a /tmp/a')]
+    [('/tmp/a', 'appending')]
+
+    >>> [(t.path, t.mode) for t in extract_bash_write_targets_with_modes('truncate -s 0 /tmp/a')]
+    [('/tmp/a', 'truncating')]
+
+    >>> [(t.path, t.mode) for t in extract_bash_write_targets_with_modes('dd if=/tmp/s of=/tmp/a')]
+    [('/tmp/a', 'truncating')]
+
+    >>> [(t.path, t.mode) for t in extract_bash_write_targets_with_modes('curl -sS -o /tmp/a http://h/f')]
+    [('/tmp/a', 'truncating')]
+
+    >>> [(t.path, t.mode) for t in extract_bash_write_targets_with_modes('wget -q -O /tmp/a http://h/f')]
+    [('/tmp/a', 'truncating')]
+
+    >>> [(t.path, t.mode) for t in extract_bash_write_targets_with_modes('unlink /tmp/a')]
+    [('/tmp/a', 'destroying')]
+
+    >>> [(t.path, t.mode, t.source) for t in extract_bash_write_targets_with_modes('mv /tmp/s /tmp/a')]
+    [('/tmp/a', 'rename_into_place', '/tmp/s')]
+
+    >>> [(t.path, t.mode) for t in extract_bash_write_targets_with_modes('sed -i s/a/b/ /tmp/a')]
+    [('/tmp/a', 'in_place_edit')]
+
+    Recursive copy carries no decidable single destination, so nothing is named:
+
+    >>> extract_bash_write_targets_with_modes('cp -r /tmp/s /tmp/d')
+    []
+
+    Quoted CONTENT is never mistaken for a target, and '&>' is deliberately
+    not named (declared uncovered):
+
+    >>> extract_bash_write_targets_with_modes("echo 'foo > bar'")
+    []
+    >>> extract_bash_write_targets_with_modes('echo x &> /tmp/a')
+    []
+
+    A grouping subshell and the alias-bypass backslash no longer hide the verb,
+    and the attached output flag names its path:
+
+    >>> [(t.path, t.mode) for t in extract_bash_write_targets_with_modes('(cd /d && echo x > /tmp/a)')]
+    [('/tmp/a', 'truncating')]
+
+    >>> [(t.path, t.mode) for t in extract_bash_write_targets_with_modes('(cp /tmp/s /tmp/a)')]
+    [('/tmp/a', 'truncating')]
+
+    >>> [(t.path, t.mode) for t in extract_bash_write_targets_with_modes('\\\\cp /tmp/s /tmp/a')]
+    [('/tmp/a', 'truncating')]
+
+    An ABSOLUTE-path command word names the same verb as its bare spelling, but
+    only the DIRECTORY is blanked, so a near-miss basename and a redirect target
+    are both left exactly as written:
+
+    >>> [(t.path, t.mode) for t in extract_bash_write_targets_with_modes('/bin/cp /tmp/s /tmp/a')]
+    [('/tmp/a', 'truncating')]
+
+    >>> extract_bash_write_targets_with_modes('/opt/x/my-cp /tmp/s /tmp/a')
+    []
+
+    >>> [(t.path, t.mode) for t in extract_bash_write_targets_with_modes('echo x > /tmp/cp')]
+    [('/tmp/cp', 'truncating')]
+
+    >>> [(t.path, t.mode) for t in extract_bash_write_targets_with_modes('curl -sS -o/tmp/a http://h/f')]
+    [('/tmp/a', 'truncating')]
+
+    Process substitution is still never a named target, and a quoted filename
+    that really contains a parenthesis is still read whole:
+
+    >>> extract_bash_write_targets_with_modes('echo x > >(cat)')
+    []
+
+    >>> [t.path for t in extract_bash_write_targets_with_modes('echo x > "/tmp/report (1).txt"')]
+    ['/tmp/report (1).txt']
+    """
+    if not isinstance(command, str) or not command.strip():
+        return []
+    stripped = command_without_heredoc_bodies(command)
+    stripped = _strip_reason_payload(stripped)
+    stripped = _neutralize_command_word_prefixes(stripped)
+    found: List[WriteTarget] = []
+    found.extend(_extract_redirect_mode_targets(stripped))
+    found.extend(_extract_tee_mode_targets(stripped))
+    found.extend(_extract_cp_mv_mode_targets(stripped))
+    found.extend(_extract_install_mode_targets(stripped))
+    found.extend(_extract_truncate_mode_targets(stripped))
+    found.extend(_extract_dd_mode_targets(stripped))
+    found.extend(_extract_curl_wget_mode_targets(stripped))
+    found.extend(_extract_unlink_mode_targets(stripped))
+    for path in _extract_sed_i_targets(stripped):
+        found.append(WriteTarget(path, MODE_IN_PLACE_EDIT, "sed-in-place"))
+    seen = set()
+    deduped: List[WriteTarget] = []
+    for t in found:
+        if not t.path:
+            continue
+        key = (t.path, t.mode, t.mechanism)
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(t)
     return deduped
 
 

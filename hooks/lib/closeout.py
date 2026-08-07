@@ -31,12 +31,8 @@ if str(_HOOKS_DIR) not in sys.path:
 
 try:  # pragma: no cover - convenience for direct CLI use
     from lib.contract_runtime import load_contract
-    from lib.contract_runtime import resolve_artifact_path as _rt_resolve_artifact_path
-    from lib.contract_runtime import _overnight_worktree_path as _rt_worktree_path
 except Exception:  # pragma: no cover
     load_contract = None  # type: ignore[assignment]
-    _rt_resolve_artifact_path = None  # type: ignore[assignment]
-    _rt_worktree_path = None  # type: ignore[assignment]
 
 if str(_LIB_DIR) not in sys.path:
     sys.path.insert(0, str(_LIB_DIR))
@@ -54,19 +50,8 @@ def _project_dir() -> Path:
 
 
 def _cycle_dir(session_id: str, cycle_id: int) -> Path:
-    # Cycle-scoped artifacts live in the overnight worktree when the session
-    # has one (main repo is read-only for the overnight actor); harness-report
-    # writes must also land there or they fail on the read-only mount.
-    root = _project_dir()
-    if _rt_worktree_path is not None:
-        try:
-            wt = _rt_worktree_path(session_id)
-        except Exception:
-            wt = None
-        if wt is not None:
-            root = wt
     return (
-        root / "docs" / "dev" / "overnight" /
+        _project_dir() / "docs" / "dev" / "overnight" /
         session_id / f"cycle-{cycle_id}"
     )
 
@@ -165,14 +150,6 @@ def _resolve_path(maybe_path: str) -> Path:
     p = Path(maybe_path)
     if p.is_absolute():
         return p
-    # Contracted artifacts are written inside the overnight worktree during a
-    # live session; prefer the root where the file actually exists so pending
-    # required_calls can clear (hook-deadlock, 2026-07-26).
-    if _rt_resolve_artifact_path is not None:
-        try:
-            return _rt_resolve_artifact_path(maybe_path)
-        except Exception:
-            pass
     return _project_dir() / p
 
 

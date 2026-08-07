@@ -466,6 +466,82 @@ def _get_active_worktree_paths() -> list[str]:
     return paths
 
 
+def _get_protected_branches() -> list[str]:
+    """Union of `protected_branch` over every NON-RELEASED overnight session
+    record (M3-RESOLUTION / M5-NO-ENUMERATION).
+
+    The protected branch is never a literal and never a fixed enumeration: it
+    is read from the session-state record at decision time. There is NO literal
+    fallback on the failure branch — an unresolvable set simply carries no
+    branch-name signal, and the independent main-targeting / not-in-worktree
+    predicates at this layer (which are already fail-closed on their own terms)
+    continue to govern. M4's deny-on-unresolvable rule is scoped to the two
+    IN-CONFINEMENT consumers (keystone, policy shim); this pre-execution guard
+    is not one of them and must not be turned into a blanket blocker.
+
+    Union is additive only; the sole subtractive operator is the non-released
+    filter, admissible because `isolation_released_at` is immutable.
+    """
+    project_dir = Path(os.environ.get("CLAUDE_PROJECT_DIR", os.getcwd()))
+    names: list[str] = []
+    try:
+        state_files = list((project_dir / ".claude").glob("overnight-state-*.json"))
+    except OSError:
+        return names
+    for sf in state_files:
+        state = _load_state(sf)
+        if state is None:
+            continue
+        if state.get("isolation_released_at") is not None:
+            continue
+        val = state.get("protected_branch")
+        if isinstance(val, str) and val and val not in names:
+            names.append(val)
+    return names
+
+
+def _operand_branch_names(token: str) -> list[str]:
+    """Reduce one argv token to the branch name(s) it can denote.
+
+    Covers bare <N>, refs/heads/<N>, heads/<N>, <N>@{0} and refspec forms.
+    Every transformation is a STRUCTURAL ref-namespace normalisation; none
+    inspects the branch NAME, so none is a name-shape gate under AC-7.
+    """
+    out: list[str] = []
+    for part in token.lstrip('+').split(':'):
+        part = part.split('@{', 1)[0]
+        for pfx in ('refs/heads/', 'heads/'):
+            if part.startswith(pfx):
+                part = part[len(pfx):]
+                break
+        if part:
+            out.append(part)
+    return out
+
+
+def _mentions_protected_branch(tokens) -> bool:
+    """True iff any token denotes a branch in the RESOLVED protected set.
+
+    Membership is exact string equality against a value read from the record.
+    """
+    protected = _get_protected_branches()
+    if not protected:
+        return False
+    for tok in tokens:
+        for name in _operand_branch_names(tok.strip('\'"')):
+            if name in protected:
+                return True
+    return False
+
+
+def _body_mentions_protected_branch(body: str) -> bool:
+    """True iff a script body names a resolved protected branch as a word."""
+    for name in _get_protected_branches():
+        if re.search(r'(?<![\w/-])' + re.escape(name) + r'(?![\w-])', body):
+            return True
+    return False
+
+
 def _is_path_exempt(file_path: str) -> bool:
     """Check if path is exempt from overnight worktree restrictions (/tmp, /dev/null)."""
     abs_path = os.path.realpath(os.path.abspath(file_path))
@@ -1228,7 +1304,8 @@ def _command_injects_keystone_config(command: str) -> bool:
 _INTERPRETER_LAUNCHER_RE = re.compile(
     r'(?<![\w./-])(?:/[\w./-]*/)?(python3?|perl|ruby|node|nodejs|sh|bash|zsh|env)\b')
 
-# fix-2: dangerous/mutating git subcommands that can move HEAD off master or
+# fix-2: dangerous/mutating git subcommands that can move HEAD off the
+# protected branch or
 # write the main worktree (codex #2 main-targeting dangerous-op predicate).
 _DANGEROUS_GIT_SUBCMDS = {
     'checkout', 'switch', 'reset', 'restore', 'clean', 'stash',
@@ -1337,7 +1414,8 @@ def _scan_script_files_for_main_git(command: str, main_real: str) -> bool:
             except Exception:
                 body = ''
             if _GIT_TOKEN_RE.search(body) and _DANGEROUS_GIT_OP_RE.search(body):
-                if (main_real and main_real in body) or 'master' in body \
+                if (main_real and main_real in body) \
+                   or _body_mentions_protected_branch(body) \
                    or re.search(r'-C\s+\S', body) or 'checkout' in body or 'switch' in body:
                     return True
         else:
@@ -1366,7 +1444,7 @@ def _interpreter_hides_main_git(command: str, main_real: str, main_git_dir: str)
     # main-targeting signal so worktree-local ops are allowed (codex #2):
     #   * a -C / --git-dir / GIT_DIR / GIT_WORK_TREE / GIT_COMMON_DIR into main
     #   * an explicit main_root path operand
-    #   * a `master` / refs/heads/master ref operand (protected ref move)
+    #   * a RESOLVED protected-branch ref operand (protected ref move)
     #   * checkout/switch/reset with NO -C and NO worktree path == ambiguous HEAD
     #     move -> fail closed (cannot prove it targets the worktree)
     if _gitdir_into_main(command, main_real, main_git_dir):
@@ -1376,7 +1454,7 @@ def _interpreter_hides_main_git(command: str, main_real: str, main_git_dir: str)
     if main_real and main_real in command:
         # mentions the main root path AND a dangerous op.
         return True
-    if re.search(r'\b(master|refs/heads/master)\b', command):
+    if _mentions_protected_branch(command.split()):
         return True
     # No qualifying target proven worktree-local; for HEAD-moving ops that lack a
     # -C/path the destination is the process cwd which the launcher controls and
@@ -1401,7 +1479,7 @@ def _enforce_overnight_git_command(command: str, main_root: str, worktree_path: 
                                    main_git_dir: str = '') -> None:
     """M13/M14a/M15 + fix-2/fix-3 (Cycle-2): for an overnight actor, block
     (a) hook-suppression/config overrides (M14a),
-    (b) branch-switch / worktree / master ops targeting main_root (M13/M15) with
+    (b) branch-switch / worktree / protected-branch ops targeting main_root (M13/M15) with
         a realpath-under-main-but-outside-worktree predicate (fix-3),
     (c) --git-dir/GIT_DIR/GIT_COMMON_DIR redirection into main (fix-3),
     (d) an interpreter/subprocess that hides a main-targeting git op — the
@@ -1444,7 +1522,7 @@ def _enforce_overnight_git_command(command: str, main_root: str, worktree_path: 
     if _interpreter_hides_main_git(command, main_real, main_git_dir):
         _block(
             '\nOVERNIGHT SUBPROCESS GIT BLOCK: an interpreter/subprocess that '
-            'could run a main-targeting git op (checkout/switch/reset/master '
+            'could run a main-targeting git op (checkout/switch/reset/protected-branch '
             'ref-move against the main working directory) is forbidden for '
             'overnight actors. This is the exact 2026-06-03 python-subprocess '
             'incident vector; on git 2.43 the reference-transaction keystone '
@@ -1509,8 +1587,7 @@ def _enforce_overnight_git_command(command: str, main_root: str, worktree_path: 
             wt_targets_main = _path_targets_main(wt_real, main_real)
         if wt_targets_main:
             targets_main = True
-        switches_master = any(p == 'master' or p == 'refs/heads/master'
-                              for p in positionals)
+        switches_protected = _mentions_protected_branch(positionals)
 
         # M13: any git op whose effective dir is main-targeting -> block.
         if targets_main:
@@ -1542,19 +1619,20 @@ def _enforce_overnight_git_command(command: str, main_root: str, worktree_path: 
 
         # M15: branch-switch / switch -c is the exact incident when it could move
         # the MAIN worktree's HEAD. A checkout/switch whose effective dir is the
-        # overnight worktree and target is NOT master is LEGITIMATE and ALLOWED.
+        # overnight worktree and the target is NOT in the resolved protected
+        # set is LEGITIMATE and ALLOWED.
         if sub in ('checkout', 'switch'):
-            if targets_main or switches_master or not in_worktree:
+            if targets_main or switches_protected or not in_worktree:
                 _block(
                     f'\nOVERNIGHT BRANCH-SWITCH BLOCK: git {sub} that could move '
-                    "the main worktree's HEAD off master is forbidden for "
+                    "the main worktree's HEAD off the protected branch is forbidden for "
                     'overnight actors (the exact 2026-06-03 incident shape). '
-                    'Branch ops INSIDE the isolated worktree (non-master target) '
+                    'Branch ops INSIDE the isolated worktree (non-protected target) '
                     'are allowed.\n'
                 )
         # fix-3: reset/restore that could write the main worktree.
         if sub in ('reset', 'restore', 'clean'):
-            if targets_main or switches_master or not in_worktree:
+            if targets_main or switches_protected or not in_worktree:
                 _block(
                     f'\nOVERNIGHT MAIN-WRITE BLOCK: git {sub} that could write '
                     'the main working directory is forbidden for overnight '
@@ -1569,20 +1647,22 @@ def _enforce_overnight_git_command(command: str, main_root: str, worktree_path: 
                     'the main working directory is forbidden for overnight '
                     'actors.\n'
                 )
-        # fix-3: master ref-move (branch -f master / update-ref refs/heads/master).
+        # fix-3: protected-branch ref-move (branch -f <protected> /
+        # update-ref refs/heads/<protected>). The operand is resolved from the
+        # session-state record, never a literal (M5-NO-ENUMERATION).
         if sub == 'branch':
             forcey = any(p in ('-f', '--force', '-D', '--delete', '-M', '--move')
                          for p in subtoks)
-            if forcey and (switches_master or targets_main):
+            if forcey and (switches_protected or targets_main):
                 _block(
                     '\nOVERNIGHT MASTER REF-MOVE BLOCK: git branch force/move/'
-                    'delete of master is forbidden for overnight actors.\n'
+                    'delete of the protected branch is forbidden for overnight actors.\n'
                 )
         if sub in ('update-ref', 'symbolic-ref'):
-            if switches_master or targets_main:
+            if switches_protected or targets_main:
                 _block(
                     f'\nOVERNIGHT MASTER REF-MOVE BLOCK: git {sub} touching '
-                    'master / HEAD is forbidden for overnight actors.\n'
+                    'the protected branch / HEAD is forbidden for overnight actors.\n'
                 )
         if sub == 'worktree':
             _block(
@@ -1606,14 +1686,14 @@ def _fail_closed_worktree_context(command: str) -> None:
     """VECTOR-3 (Cycle-3): an in-worktree actor with NO resolvable governing
     overnight state cannot have its main_root derived for a targeted block. Any
     git or interpreter command is therefore refused fail-closed (it could move
-    main HEAD off master or write the main worktree); ordinary non-git commands
+    main HEAD off the protected branch or write the main worktree); ordinary non-git commands
     are left to the worktree-boundary enforcement."""
     if _command_has_git_or_interpreter(command):
         _block(
             '\nOVERNIGHT WORKTREE-CONTEXT FAIL-CLOSED: a git/interpreter command '
             'is running inside an overnight worktree but no governing overnight '
             'state could be resolved to scope a targeted main-root block. '
-            'Refusing fail-closed — it could move the main HEAD off master or '
+            'Refusing fail-closed — it could move the main HEAD off the protected branch or '
             'write the main working directory. Run from a session whose '
             'overnight state is resolvable.\n'
         )
@@ -1747,7 +1827,7 @@ def _shared_common_dir_ro_rebinds(worktree_path: str) -> list[str]:
     `<common>/config` and `<common>/hooks` READ-WRITE, letting an overnight actor
     run `git config --unset core.hooksPath` (writes `<common>/config`) to DISABLE
     the reference-transaction keystone, or drop a malicious default hook, and THEN
-    move main HEAD off master. Return `--ro-bind` args for the shared common-dir's
+    move main HEAD off the protected branch. Return `--ro-bind` args for the shared common-dir's
     `config` FILE and `hooks/` DIR (only those that exist) so the caller can nest
     them OVER the RW common-dir bind: those two paths become EROFS while
     `<common>/objects`, `<common>/refs`, `<common>/logs` (which a commit / ref

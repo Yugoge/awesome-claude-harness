@@ -74,58 +74,20 @@ def _result(ok: bool, errors: list, severity: str) -> dict:
 # ---------------------------------------------------------------------------
 
 
-def _overnight_worktree_path(session_id: str) -> Optional[Path]:
-    """Return ``worktree_path`` from the session's overnight-state file, if any.
-
-    The overnight worktree is the only place the orchestrator can WRITE the
-    contract during a live session (the main repo is a read-only mount for the
-    overnight actor and the worktree guard blocks main-repo writes), so
-    worktree-hosted candidates must be resolvable — and take priority over the
-    main-repo paths (hook-deadlock fix, 2026-07-26). The state file itself
-    always lives in the MAIN repo's ``.claude/``.
-    """
-    project_dir = Path(os.environ.get('CLAUDE_PROJECT_DIR', os.getcwd()))
-    state_path = project_dir / '.claude' / f'overnight-state-{session_id}.json'
-    try:
-        state = json.loads(state_path.read_text(encoding='utf-8'))
-    except (OSError, ValueError):
-        return None
-    if not isinstance(state, dict):
-        return None
-    wt = state.get('worktree_path')
-    if isinstance(wt, str) and wt:
-        p = Path(wt)
-        if p.is_dir():
-            return p
-    return None
-
-
 def _candidate_contract_paths(session_id: str, cycle_id: int) -> list[Path]:
     """Return ordered candidate paths for the cycle contract.
 
-    Worktree-hosted candidates (derived from the overnight state's
-    ``worktree_path``) come FIRST: during a live overnight session that is the
-    only writable location, so a contract published there must shadow any
-    stale main-repo copy.
-
-    WS1: the home-level docs candidate is derived from the resolved harness
-    home's PARENT (``<home>/../docs/dev/overnight``) — matching the author's
-    ``/root/docs`` sibling-of-``/root/.claude`` layout portably — rather than
-    the hardcoded author literal ``/root/docs``.
+    WS1: the third (home-level docs) candidate is derived from the resolved
+    harness home's PARENT (``<home>/../docs/dev/overnight``) — matching the
+    author's ``/root/docs`` sibling-of-``/root/.claude`` layout portably —
+    rather than the hardcoded author literal ``/root/docs``.
     """
     project_dir = Path(os.environ.get('CLAUDE_PROJECT_DIR', os.getcwd()))
     cycle_dirname = f'cycle-{cycle_id}'
-    candidates = []
-    worktree = _overnight_worktree_path(session_id)
-    if worktree is not None:
-        candidates.extend([
-            worktree / 'docs' / 'dev' / 'overnight' / session_id / cycle_dirname / 'cycle-contract.json',
-            worktree / '.claude' / f'overnight-contract-{session_id}-cycle{cycle_id}.json',
-        ])
-    candidates.extend([
+    candidates = [
         project_dir / 'docs' / 'dev' / 'overnight' / session_id / cycle_dirname / 'cycle-contract.json',
         project_dir / '.claude' / f'overnight-contract-{session_id}-cycle{cycle_id}.json',
-    ])
+    ]
     home = claude_home.resolve()
     if home is not None:
         candidates.append(
@@ -143,28 +105,10 @@ def _try_read_contract(path: Path) -> Optional[dict]:
         return None
 
 
-def _is_launch_stub(data) -> bool:
-    """True iff a parsed contract is a non-activating stub (empty required_calls).
-
-    A file with ``required_calls: []`` can never be a legitimately published
-    contract — publication happens at Step 4 with the full call list (see
-    dev-overnight.md, Cycle Contract Manifest). Such a file is either debris
-    from the pre-fix launcher (which pre-created an empty contract and
-    deadlocked every Agent dispatch as Case C) or an interrupted publish.
-    Treating it as absent keeps HARD CUTOVER off until a real contract lands.
-    """
-    return isinstance(data, dict) and data.get('required_calls') == []
-
-
 def load_contract_path(session_id: str, cycle_id: int) -> Optional[Path]:
-    """Return the active cycle-contract path for ``session_id``/``cycle_id``.
-
-    Skips non-activating launch stubs so reconcile writes never target a
-    stale empty contract shadowing the real one.
-    """
+    """Return the active cycle-contract path for ``session_id``/``cycle_id``."""
     for path in _candidate_contract_paths(session_id, cycle_id):
-        data = _try_read_contract(path)
-        if data is not None and not _is_launch_stub(data):
+        if path.exists():
             return path
     return None
 
@@ -175,58 +119,9 @@ def load_contract(session_id: str, cycle_id: int) -> Optional[dict]:
         return None
     for path in _candidate_contract_paths(session_id, cycle_id):
         data = _try_read_contract(path)
-        if data is not None and not _is_launch_stub(data):
+        if data is not None:
             return data
     return None
-
-
-def artifact_roots(session_id: Optional[str] = None) -> list[Path]:
-    """Ordered roots for resolving relative overnight artifact paths.
-
-    Overnight worktrees precede the main project dir: contracted artifacts
-    are written inside the worktree during a live session (the main repo is
-    read-only for the overnight actor). With a ``session_id`` only that
-    session's worktree is considered; without one, every overnight-state
-    file's worktree is (session-agnostic callers like closeout helpers).
-    """
-    roots: list[Path] = []
-    if session_id:
-        wt = _overnight_worktree_path(session_id)
-        if wt is not None:
-            roots.append(wt)
-    else:
-        project_dir = Path(os.environ.get('CLAUDE_PROJECT_DIR', os.getcwd()))
-        try:
-            for sf in sorted((project_dir / '.claude').glob('overnight-state-*.json')):
-                try:
-                    state = json.loads(sf.read_text(encoding='utf-8'))
-                except (OSError, ValueError):
-                    continue
-                wt = state.get('worktree_path') if isinstance(state, dict) else None
-                if isinstance(wt, str) and wt:
-                    p = Path(wt)
-                    if p.is_dir() and p not in roots:
-                        roots.append(p)
-        except OSError:
-            pass
-    project_dir = Path(os.environ.get('CLAUDE_PROJECT_DIR', os.getcwd()))
-    if project_dir not in roots:
-        roots.append(project_dir)
-    return roots
-
-
-def resolve_artifact_path(path_str: str, session_id: Optional[str] = None) -> Path:
-    """Resolve a (possibly relative) contracted artifact path against the
-    overnight roots, preferring a root where the file actually exists."""
-    path = Path(path_str)
-    if path.is_absolute():
-        return path
-    roots = artifact_roots(session_id)
-    for root in roots:
-        candidate = root / path
-        if candidate.exists():
-            return candidate
-    return roots[0] / path
 
 
 # ---------------------------------------------------------------------------
@@ -715,20 +610,18 @@ def _expected_paths(entry: dict) -> list[str]:
     return []
 
 
-def _resolve_artifact_path(path_str: str, session_id: Optional[str] = None) -> Path:
-    # Contracted artifacts live in the overnight worktree during a live
-    # session; resolving against CLAUDE_PROJECT_DIR alone reports them
-    # missing and leaves the step pending forever (hook-deadlock, 2026-07-26).
-    return resolve_artifact_path(path_str, session_id)
+def _resolve_artifact_path(path_str: str) -> Path:
+    path = Path(path_str)
+    return path if path.is_absolute() else _project_dir() / path
 
 
-def _artifact_valid_for_entry(entry: dict, session_id: Optional[str] = None) -> tuple[bool, str]:
+def _artifact_valid_for_entry(entry: dict) -> tuple[bool, str]:
     paths = _expected_paths(entry)
     if not paths:
         return True, ''
     schema_name = entry.get('schema_name') or entry.get('expected_schema') or ''
     for raw in paths:
-        path = _resolve_artifact_path(raw, session_id)
+        path = _resolve_artifact_path(raw)
         if not path.exists():
             return False, f'expected artifact missing: {raw}'
         if not schema_name:
@@ -803,7 +696,7 @@ def reconcile_accepted_artifact(
     contract_path = load_contract_path(session_id, cycle_id)
     if contract_path is None:
         return {'ok': False, 'reason': 'contract missing'}
-    artifact_ok, artifact_reason = _artifact_valid_for_entry(matched_entry, session_id)
+    artifact_ok, artifact_reason = _artifact_valid_for_entry(matched_entry)
     if not artifact_ok:
         return {'ok': False, 'reason': artifact_reason}
     lock_file = _lock_path(session_id, cycle_id).open('w', encoding='utf-8')
