@@ -310,6 +310,76 @@ def _find_undeclared_lane_artifacts(
                 )
 
 
+def _declared_union(canonical: dict[str, Any]) -> list[str]:
+    """Return the canonical dev-report's declared file union, order-preserving.
+
+    Tolerates a malformed canonical: a non-dict ``dev``, a non-list file list,
+    or a non-string entry contributes nothing rather than raising.  ``validate_dev``
+    already reports those shapes under their own error codes.
+    """
+    dev = canonical.get("dev")
+    if not isinstance(dev, dict):
+        return []
+    union: list[str] = []
+    for key in ("files_modified", "files_created"):
+        entries = dev.get(key)
+        if not isinstance(entries, list):
+            continue
+        for entry in entries:
+            if isinstance(entry, str) and entry and entry not in union:
+                union.append(entry)
+    return union
+
+
+def _check_declared_paths_exist(
+    validator: ChainValidator, canonical: dict[str, Any], result: dict[str, Any]
+) -> None:
+    """Every path the canonical declares must exist on disk.
+
+    Reached by both the singular and the fan-out branch: a report claiming files
+    it did not produce must not be admitted, whichever way it was assembled.
+    Existence is deliberately the weakest defensible predicate -- a directory or
+    a symlink, including a broken one, counts as present, because the claim under
+    test is "the report named a path that is not there", not "it named a regular
+    file".  Read-only: the resolver never creates the paths it looks for.
+
+    One error per absent path, so the report enumerates every miss rather than
+    aggregating them into a single opaque failure.
+    """
+    missing: list[str] = []
+    for declared in _declared_union(canonical):
+        target = validator.root / declared
+        try:
+            present = target.exists() or target.is_symlink()
+        except OSError:
+            present = False
+        if not present:
+            missing.append(declared)
+    result["checks"]["declared_paths_exist"] = not missing
+    for declared in missing:
+        validator.error(
+            "ABSENT_DECLARED_PATH",
+            result["canonical_dev_report"],
+            f"dev-report declares {declared!r}, which does not exist on disk",
+        )
+
+
+def _workers_declaration_state(canonical: dict[str, Any]) -> str:
+    """Classify how the canonical declares ``parallel_workers``.
+
+    ``absent`` and ``empty`` are different facts about an aggregate and must not
+    be conflated: a canonical that LOST the key is structurally indistinguishable
+    from a genuine singular chain, and would otherwise degrade silently into the
+    unchecked branch.
+    """
+    if "parallel_workers" not in canonical:
+        return "absent"
+    value = canonical.get("parallel_workers")
+    if isinstance(value, list) and not value:
+        return "empty"
+    return "declared"
+
+
 def _base_result(task_id: str, canonical: str, completion: str) -> dict[str, Any]:
     return {
         "schema_version": SCHEMA_VERSION,
@@ -319,6 +389,7 @@ def _base_result(task_id: str, canonical: str, completion: str) -> dict[str, Any
         "canonical_dev_report": canonical,
         "completion": completion,
         "parallel_workers": [],
+        "parallel_workers_declaration": "unknown",
         "lanes": [],
         "optional_parent_artifacts": {},
         "report_paths": [],
@@ -328,7 +399,9 @@ def _base_result(task_id: str, canonical: str, completion: str) -> dict[str, Any
         "checks": {
             "canonical_fresh": False,
             "file_unions_exact": False,
+            "declared_paths_exist": False,
         },
+        "checks_not_applicable": {},
         "errors": [],
     }
 
