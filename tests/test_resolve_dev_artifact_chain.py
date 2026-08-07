@@ -150,6 +150,7 @@ def _make_fanout(
         identity = f"{TASK_ID}-{worker}"
         paths = _lane_paths(root, worker)
         lanes[worker] = paths
+        _materialise(root, f"scripts/lane-{index}.py", f"tests/lane-{index}.py")
         dev = _dev_document(
             identity,
             modified=[f"scripts/lane-{index}.py"],
