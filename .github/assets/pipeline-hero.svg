@@ -11,7 +11,7 @@
 <circle cx="24" cy="24" r="5" fill="#D8D2C4"/>
 <circle cx="42" cy="24" r="5" fill="#D8D2C4"/>
 <circle cx="60" cy="24" r="5" fill="#D8D2C4"/>
-<text data-role="chrome-title" x="480" y="28" text-anchor="middle" fill="#A9A295" font-size="13">claude — awesome-claude-harness</text>
+<text data-role="chrome-title" x="480" y="28" text-anchor="middle" fill="#A9A295" font-size="13">claude — claude-code-guardrails</text>
 <line x1="0" y1="48" x2="960" y2="48" stroke="#ECE7DB" stroke-width="1"/>
 <rect data-role="stage-marker" x="40" y="82" width="36" height="2" fill="#B07C2C"><animate attributeName="x" begin="0s" dur="24.4s" repeatCount="indefinite" calcMode="discrete" values="40;103;157;229;310" keyTimes="0;0.286885;0.467213;0.647541;0.827869"/><animate attributeName="width" begin="0s" dur="24.4s" repeatCount="indefinite" calcMode="discrete" values="36;27;45;54;36" keyTimes="0;0.286885;0.467213;0.647541;0.827869"/></rect>
 <text data-role="stage" x="40" y="74" fill="#B07C2C" font-size="13">spec<animate attributeName="fill" dur="24.4s" repeatCount="indefinite" calcMode="discrete" values="#B07C2C;#A9A295" keyTimes="0;0.286885"/></text>

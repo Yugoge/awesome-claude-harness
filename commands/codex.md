@@ -130,7 +130,29 @@ else
 fi
 ```
 
-Use 10 minute Bash timeout. Then Read the output file with the Read tool.
+**Timeout.** The Bash tool hard-caps `timeout` at 600000 ms (10 minutes); the
+`codex-iso` wrapper imposes none of its own. A foreground invocation therefore
+cannot run longer than 10 minutes, and a large investigation will be killed
+mid-synthesis with exit 143 after having done the work but before emitting its
+verdict — the dominant codex failure mode observed in practice.
+
+- **Short consultations (default):** run in the foreground with `timeout: 600000`.
+- **Long investigations (up to 30 minutes or more):** do NOT raise the Bash
+  timeout — it will be rejected. Instead detach the run so it survives the tool
+  call, and poll the output file on later turns:
+
+  ```bash
+  setsid nohup "$CODEX_ISO_BIN" exec -c 'model="gpt-5.6-sol"' \
+    -c 'reasoning_effort="xhigh"' "$PROMPT" </dev/null >"$OUT" 2>&1 &
+  echo "detached pid=$! out=$OUT"
+  ```
+
+  The Bash call returns immediately. Poll with a short foreground call that
+  checks whether the process is still alive and tails `$OUT`. Treat the run as
+  `failed_timeout` only after the process has actually exited without a verdict
+  — not merely because one poll found it unfinished.
+
+Then Read the output file with the Read tool.
 
 ### 4. Exec mode
 
@@ -152,7 +174,29 @@ else
 fi
 ```
 
-Use 10 minute Bash timeout. Then Read the output file with the Read tool.
+**Timeout.** The Bash tool hard-caps `timeout` at 600000 ms (10 minutes); the
+`codex-iso` wrapper imposes none of its own. A foreground invocation therefore
+cannot run longer than 10 minutes, and a large investigation will be killed
+mid-synthesis with exit 143 after having done the work but before emitting its
+verdict — the dominant codex failure mode observed in practice.
+
+- **Short consultations (default):** run in the foreground with `timeout: 600000`.
+- **Long investigations (up to 30 minutes or more):** do NOT raise the Bash
+  timeout — it will be rejected. Instead detach the run so it survives the tool
+  call, and poll the output file on later turns:
+
+  ```bash
+  setsid nohup "$CODEX_ISO_BIN" exec -c 'model="gpt-5.6-sol"' \
+    -c 'reasoning_effort="xhigh"' "$PROMPT" </dev/null >"$OUT" 2>&1 &
+  echo "detached pid=$! out=$OUT"
+  ```
+
+  The Bash call returns immediately. Poll with a short foreground call that
+  checks whether the process is still alive and tails `$OUT`. Treat the run as
+  `failed_timeout` only after the process has actually exited without a verdict
+  — not merely because one poll found it unfinished.
+
+Then Read the output file with the Read tool.
 
 ### 5. Present results
 

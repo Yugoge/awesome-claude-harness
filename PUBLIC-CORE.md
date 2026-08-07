@@ -37,9 +37,20 @@ the author's machine), it is `private-lab`. "Release-clean" is a higher bar than
 ## 2. Reference example — `settings.template.json` (public) vs `settings.json` (private)
 
 The cleanest illustration of the carve already exists in the tree: the portable seed
-`settings.template.json` is `public-core`; the tracked personal `settings.json`
-(personal permission allow/deny/ask entries + absolute `/root` paths) is `private-lab`
-and a live boundary violation slated for roadmap phase **P3** (generate-then-untrack).
+`settings.template.json` is `public-core`. Its counterpart, the live per-install
+`settings.json` (permission allow/deny/ask entries + absolute install-home paths), is
+`private-lab`.
+
+Roadmap phase **P3** (generate-then-untrack) is now wired on the *generate* side: the
+file is GENERATED from the template by `scripts/install/render-settings`, which
+`scripts/bootstrap` invokes at install time; it is git-ignored by the root-anchored
+`/settings.json` rule; and CI renders it right after checkout so
+`scripts/verify-claims.sh` still has a concrete file to recompute its counts from.
+
+The *untrack* side is now complete too: `settings.json` has been removed from the index
+(`git rm --cached`, not a history rewrite — every prior commit that touched the file
+remains reachable), so it no longer carries a ledger row. A working copy still exists on
+each install; it is per-install state, not tracked content.
 
 ---
 
@@ -123,11 +134,12 @@ set for the residue markers of §3. Path = first back-ticked token; class = seco
 | `INDEX.md` | `shared/infra` | Auto-generated navigation index (do-not-hand-edit meta). |
 | `pytest.ini` | `shared/infra` | Test-runner configuration — build/CI. |
 | `conftest.py` | `shared/infra` | Pytest collection config — the `generated`-marker gate for tests/generated; build/CI. |
-| `requirements.txt` | `shared/infra` | Python dependency manifest for the harness venv — build/infra. |
+| `requirements.txt` | `shared/infra` | Python dependency manifest for the harness venv — build/infra. Human-authored ABSTRACT spec (compatible ranges); the concrete resolutions live in `requirements/`. |
+| `requirements/` | `shared/infra` | Per-Python-version hash-pinned lockfiles (`py310/py311/py312.txt`) that every install call site uses with `pip install --require-hashes` — build/infra, and shipped, since the harness cannot install without them. |
 | `VERSION` | `shared/infra` | Release version marker — release meta. |
 | `tests/` | `shared/infra` | Test net (incl. generated AC skeletons + fixture strings) that supports the core; not itself the shippable harness. |
 | `PUBLIC-CORE.md` | `shared/infra` | This boundary manifest — governance/meta (self-classified for forward completeness once tracked). |
-| `settings.json` | `private-lab` | Personal config, tracked: personal permission allow/deny/ask entries + absolute `/root` paths (roadmap §4.3 → P3). |
+| `release-membership.v1.json` | `shared/infra` | Shipping ledger: the EXPLICIT path set a release archive contains, plus per-path rationale. Governance/meta, beside this boundary ledger; consumed by the release workflow and by `scripts/verify-release-manifest.sh`. |
 | `NESTED-REPO.md` | `private-lab` | Documents the maintainer's exact `/root/.claude`→tmpfs symlink topology, `git@github.com:Yugoge` remote, `/root/.claude.bak` mirror, `/root/sync-backup.sh` cron. |
 | `push.sh` | `private-lab` | Maintainer pre-push wrapper: `/root/.claude/push.sh` invocation, author git-workflow automation (identity now env-parameterized, purpose still maintainer-specific). |
 <!-- END:public-core-manifest -->

@@ -1,6 +1,6 @@
 # Contributing
 
-Thanks for your interest in improving awesome-claude-harness.
+Thanks for your interest in improving claude-code-guardrails.
 
 ## Before you start
 

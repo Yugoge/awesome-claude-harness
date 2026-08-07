@@ -1,0 +1,79 @@
+{
+  "version": 1,
+  "description": "EXPLICIT release-membership manifest: the exact set of tracked paths that ship in a release archive. Membership is an edit to this file, never a silent consequence of a class rule. It is deliberately NOT 'public-core + all shared/infra': PUBLIC-CORE.md calls tests/ 'not itself the shippable harness', so a blanket class rule would drag non-shippable fixtures into the distribution. It is also not public-core-only: requirements.txt and requirements/ are shared/infra yet are required to install, so a public-core-only archive would be unusable.",
+  "include": [
+    "agents/**",
+    "commands/**",
+    "hooks/**",
+    "scripts/**",
+    "schemas/**",
+    "policies/**",
+    "templates/**",
+    "tools/**",
+    "skills/**",
+    "examples/**",
+    "docs/**",
+    "README.md",
+    "ARCHITECTURE.md",
+    "CHANGELOG.md",
+    "CLAUDE.md",
+    "LICENSE",
+    "NOTICE",
+    "settings.template.json",
+    "requirements.txt",
+    "requirements/**",
+    "VERSION",
+    "PUBLIC-CORE.md",
+    "release-membership.v1.json"
+  ],
+  "include_rationale": {
+    "requirements.txt": "shared/infra, but the harness cannot install without its dependency spec.",
+    "requirements/**": "shared/infra hash-pinned lockfiles; scripts/bootstrap installs from these, so a release without them cannot bootstrap.",
+    "VERSION": "shared/infra release marker; consumers and the verifier read it to confirm the archive matches the tag.",
+    "PUBLIC-CORE.md": "shared/infra governance ledger, but scripts/check-public-core.sh ships (scripts/ is public-core) and READS this ledger; omitting it would ship a checker that cannot run.",
+    "release-membership.v1.json": "this manifest itself: scripts/verify-release-manifest.sh validates the DOWNLOADED archive's contents against it, so it must travel inside the archive rather than being fetched from a source checkout the verifier is forbidden to rebuild from."
+  },
+  "exclude": [
+    "tests/**",
+    ".github/**",
+    ".claude/**",
+    ".gitignore",
+    "INDEX.md",
+    "pytest.ini",
+    "conftest.py",
+    "settings.json",
+    "NESTED-REPO.md",
+    "push.sh",
+    "venv/**"
+  ],
+  "exclude_rationale": {
+    "tests/**": "PUBLIC-CORE.md classifies tests/ as the test net that supports the core and is 'not itself the shippable harness'. baseline.yml already runs pytest with --ignore=tests/generated. Excluding it also removes the 21 tests/generated fixture files that carry the maintainer workspace path — the ledger-consistent resolution, rather than a per-file exemption.",
+    ".github/**": "build/CI meta; not part of the installed harness.",
+    ".claude/**": "repo-identity sentinel and per-repo session state; not shipped.",
+    ".gitignore": "repo meta.",
+    "INDEX.md": "auto-generated navigation meta.",
+    "pytest.ini": "test-runner config; belongs with the excluded test net.",
+    "conftest.py": "pytest collection config; belongs with the excluded test net.",
+    "settings.json": "private-lab AND no longer tracked — it is generated per install by scripts/bootstrap.",
+    "NESTED-REPO.md": "private-lab: documents the maintainer's exact host topology.",
+    "push.sh": "private-lab: maintainer pre-push wrapper.",
+    "venv/**": "local virtualenv, never tracked."
+  },
+  "workspace_marker_exempt_paths": [
+    "PUBLIC-CORE.md",
+    "scripts/check-public-core.sh"
+  ],
+  "workspace_marker_exempt_rationale": {
+    "PUBLIC-CORE.md": "The ledger DEFINES the workspace marker as the residue pattern to gate on; naming it is the file's purpose. Per-path exemption, not a wildcard.",
+    "scripts/check-public-core.sh": "The detector's own constant table. It is self-excluded from the SCAN but is still IN the archive, so it needs an explicit per-path exemption here rather than being silently invisible."
+  },
+  "hard_marker_exempt_paths": [
+    "PUBLIC-CORE.md",
+    "scripts/check-public-core.sh"
+  ],
+  "hard_marker_exempt_rationale": {
+    "_key_scope": "Distinct from workspace_marker_exempt_* on purpose. That key exempts ONE marker -- the maintainer tmpfs workspace path. This key exempts the THREE hard markers (the maintainer git remote, the rsync mirror path and the sync-cron path) that the archive-mode hard-marker loop gates on. The two keys happen to name the same two paths today; reusing one for the other would grant an exemption whose written justification describes a class other than the one being exempted, which is how an exemption stops being evidence of anything. Emptying this key must turn the archive gate red -- that is its negative control.",
+    "PUBLIC-CORE.md": "The published boundary ledger enumerates the three hard markers as the forbidden-identifier list a reader must be able to audit. Quoting the identifiers is what makes the ledger checkable; a ledger that redacted them would name no rule. Prose only -- no line here is read as a remote, a path or a command.",
+    "scripts/check-public-core.sh": "The detector's own HARD_MARKERS constant table: this file cannot gate on identifiers it is forbidden to contain. Parameterizing the three literals out was considered and rejected -- it relocates them into another file that also ships in the archive, reproducing the problem one level down. The file is excluded from its own residue SCAN but is genuinely IN the archive, so it needs this explicit per-path exemption rather than being invisible to the loop."
+  }
+}

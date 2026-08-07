@@ -84,6 +84,19 @@ def _dev_dir(root: Path) -> Path:
     return path
 
 
+def _materialise(root: Path, *declared: str) -> None:
+    """Create every path a fixture's dev-report declares.
+
+    The resolver requires a declared file union to exist on disk, so a fixture
+    that declares paths must produce them.  The correct remedy is to make the
+    fixture honest, never to weaken the check.
+    """
+    for relative in declared:
+        target = root / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.touch()
+
+
 def _parent_paths(root: Path) -> dict[str, Path]:
     dev_dir = _dev_dir(root)
     return {
@@ -114,6 +127,7 @@ def _make_singular(root: Path) -> dict[str, Path]:
     paths = _parent_paths(root)
     _write(paths["ticket"], _ticket(TASK_ID))
     _write(paths["context"], {"request_id": TASK_ID, "task_id": TASK_ID})
+    _materialise(root, "scripts/one.py")
     _write(paths["dev"], _dev_document(TASK_ID, modified=["scripts/one.py"]))
     _write(paths["qa"], _qa_document(TASK_ID))
     references = [_relative(root, paths[key]) for key in ("ticket", "context", "dev", "qa")]
@@ -136,6 +150,7 @@ def _make_fanout(
         identity = f"{TASK_ID}-{worker}"
         paths = _lane_paths(root, worker)
         lanes[worker] = paths
+        _materialise(root, f"scripts/lane-{index}.py", f"tests/lane-{index}.py")
         dev = _dev_document(
             identity,
             modified=[f"scripts/lane-{index}.py"],
@@ -252,6 +267,7 @@ def test_missing_canonical_is_aggregated_before_read_only_resolution(
         paths = _lane_paths(tmp_path, worker)
         _write(paths["ticket"], _ticket(identity))
         _write(paths["context"], {"request_id": identity, "task_id": identity})
+        _materialise(tmp_path, f"scripts/lane-{index}.py")
         _write(
             paths["dev"],
             _dev_document(identity, modified=[f"scripts/lane-{index}.py"]),
@@ -427,6 +443,297 @@ def test_cli_validation_failure_is_json_and_exit_two(tmp_path: Path) -> None:
     assert first.stderr == second.stderr == ""
     assert first.stdout == second.stdout
     assert json.loads(first.stdout)["status"] == "fail"
+
+
+# ---------------------------------------------------------------------------
+# Shard scoping across the three task-id shapes.  Shards belong to the FULL
+# task-id; the bare YYYYMMDD-HHMMSS timestamp is a truncation of a prefixed or
+# suffixed id and must not be used as the scan key for it.
+# ---------------------------------------------------------------------------
+
+BARE_ID = "20260727-080801"
+SUFFIXED_ID = "20260727-080801-11"
+PREFIXED_ID = TASK_ID
+
+
+def _make_singular_for(root: Path, identity: str) -> dict[str, Path]:
+    dev_dir = _dev_dir(root)
+    paths = {
+        "ticket": dev_dir / f"ticket-{identity}.md",
+        "context": dev_dir / f"context-{identity}.json",
+        "dev": dev_dir / f"dev-report-{identity}.json",
+        "qa": dev_dir / f"qa-report-{identity}.json",
+        "completion": dev_dir / f"completion-{identity}.md",
+    }
+    _write(paths["ticket"], _ticket(identity))
+    _write(paths["context"], {"request_id": identity, "task_id": identity})
+    _materialise(root, "scripts/one.py")
+    _write(paths["dev"], _dev_document(identity, modified=["scripts/one.py"]))
+    _write(paths["qa"], _qa_document(identity))
+    references = [
+        _relative(root, paths[key]) for key in ("ticket", "context", "dev", "qa")
+    ]
+    _write(paths["completion"], _completion(identity, references))
+    return paths
+
+
+def _ambiguity_detail(result: dict) -> str:
+    return next(
+        error["detail"]
+        for error in result["errors"]
+        if error["code"] == "AMBIGUOUS_SINGULAR_CHAIN"
+    )
+
+
+def test_suffixed_task_id_canonical_is_not_a_shard_of_itself(tmp_path: Path) -> None:
+    # A pristine suffixed-id chain, alone in docs/dev, must resolve.  Matching
+    # against the truncated timestamp classifies dev-report-<ts>-11.json as
+    # worker '11' of itself.
+    _make_singular_for(tmp_path, SUFFIXED_ID)
+    result = RESOLVER.resolve_chain(tmp_path, SUFFIXED_ID)
+    assert result["status"] == "pass", result["errors"]
+    assert "AMBIGUOUS_SINGULAR_CHAIN" not in _error_codes(result)
+
+
+def test_suffixed_task_id_ignores_siblings_sharing_the_bare_timestamp(
+    tmp_path: Path,
+) -> None:
+    _make_singular_for(tmp_path, SUFFIXED_ID)
+    sibling = _dev_dir(tmp_path) / f"dev-report-{BARE_ID}-12.json"
+    _write(sibling, _dev_document(f"{BARE_ID}-12"))
+    result = RESOLVER.resolve_chain(tmp_path, SUFFIXED_ID)
+    assert result["status"] == "pass", result["errors"]
+    assert sibling.is_file()
+
+
+def test_suffixed_task_id_still_detects_its_own_undeclared_sub_shards(
+    tmp_path: Path,
+) -> None:
+    # The check must keep firing for a real undeclared fan-out parent, and must
+    # name the sub-worker rather than a label carved out of the timestamp.
+    _make_singular_for(tmp_path, SUFFIXED_ID)
+    _write(
+        _dev_dir(tmp_path) / f"dev-report-{SUFFIXED_ID}-S1.json",
+        _dev_document(f"{SUFFIXED_ID}-S1"),
+    )
+    result = RESOLVER.resolve_chain(tmp_path, SUFFIXED_ID)
+    assert "AMBIGUOUS_SINGULAR_CHAIN" in _error_codes(result)
+    assert "'S1'" in _ambiguity_detail(result)
+
+
+def test_prefixed_task_id_ignores_bare_timestamp_sibling_shards(
+    tmp_path: Path,
+) -> None:
+    _make_singular_for(tmp_path, PREFIXED_ID)
+    bare_sibling = _dev_dir(tmp_path) / "dev-report-20260724-120000-lane-x.json"
+    _write(bare_sibling, _dev_document("20260724-120000-lane-x"))
+    result = RESOLVER.resolve_chain(tmp_path, PREFIXED_ID)
+    assert result["status"] == "pass", result["errors"]
+    assert bare_sibling.is_file()
+
+
+def test_bare_task_id_chain_resolves_and_keeps_collecting_its_shards(
+    tmp_path: Path,
+) -> None:
+    # Control for the third shape: a bare id is its own scan key, so nothing is
+    # truncated and its shard discovery is unchanged.
+    _make_singular_for(tmp_path, BARE_ID)
+    assert RESOLVER.resolve_chain(tmp_path, BARE_ID)["status"] == "pass"
+    _write(
+        _dev_dir(tmp_path) / f"dev-report-{BARE_ID}-11.json",
+        _dev_document(f"{BARE_ID}-11"),
+    )
+    result = RESOLVER.resolve_chain(tmp_path, BARE_ID)
+    assert "AMBIGUOUS_SINGULAR_CHAIN" in _error_codes(result)
+    assert "'11'" in _ambiguity_detail(result)
+
+
+# ---------------------------------------------------------------------------
+# The checks object must never claim a check it did not perform.  The two
+# relational checks are computed only on the fan-out branch; on the singular
+# branch they have no analogue and say so.  The declared-path check IS
+# meaningful for a single lane and is enforced on both branches.
+# ---------------------------------------------------------------------------
+
+
+def _absent_path_details(result: dict) -> list[str]:
+    return [
+        error["detail"]
+        for error in result["errors"]
+        if error["code"] == "ABSENT_DECLARED_PATH"
+    ]
+
+
+def test_singular_relational_checks_are_not_applicable_with_a_reason(
+    tmp_path: Path,
+) -> None:
+    # Neither True nor False: a singular chain has no second artifact to compare
+    # against, so reporting either boolean would assert a comparison that never ran.
+    _make_singular(tmp_path)
+    result = RESOLVER.resolve_chain(tmp_path, TASK_ID)
+    assert result["status"] == "pass", result["errors"]
+    for check in ("canonical_fresh", "file_unions_exact"):
+        value = result["checks"][check]
+        assert value is not True and value is not False
+        assert value == RESOLVER.NOT_APPLICABLE
+        reason = result["checks_not_applicable"][check]
+        assert "two or more independent shard artifacts" in reason
+        assert "no singular analogue" in reason
+
+
+def test_base_result_initialises_every_check_fail_closed() -> None:
+    checks = RESOLVER._base_result("t", "c", "d")["checks"]
+    assert checks["canonical_fresh"] is False
+    assert checks["file_unions_exact"] is False
+    assert checks["declared_paths_exist"] is False
+
+
+def test_singular_absent_declared_path_fails_under_its_own_error_code(
+    tmp_path: Path,
+) -> None:
+    parents = _make_singular(tmp_path)
+    _write(
+        parents["dev"],
+        _dev_document(TASK_ID, modified=["scripts/one.py"], created=["scripts/gone.py"]),
+    )
+    result = RESOLVER.resolve_chain(tmp_path, TASK_ID)
+    assert result["status"] == "fail"
+    assert result["checks"]["declared_paths_exist"] is False
+    codes = _error_codes(result)
+    assert "ABSENT_DECLARED_PATH" in codes
+    # A different failure from staleness, so it must not borrow either code.
+    assert "STALE_FILE_UNION" not in codes
+    assert "STALE_CANONICAL" not in codes
+    assert any("scripts/gone.py" in detail for detail in _absent_path_details(result))
+    assert _run_cli(tmp_path).returncode == 2
+
+
+def test_fanout_absent_declared_path_fires_the_same_error_code(tmp_path: Path) -> None:
+    # Models the real corpus case: the canonical is fresh and exactly matches its
+    # shards, but a declared file has since left the tree.  Only the new check
+    # may fire -- the relational checks stay computed and True.
+    _make_fanout(tmp_path)
+    (tmp_path / "tests" / "lane-1.py").unlink()
+    result = RESOLVER.resolve_chain(tmp_path, TASK_ID)
+    assert result["mode"] == "fanout"
+    assert result["status"] == "fail"
+    assert result["checks"]["declared_paths_exist"] is False
+    assert result["checks"]["canonical_fresh"] is True
+    assert result["checks"]["file_unions_exact"] is True
+    codes = _error_codes(result)
+    assert "ABSENT_DECLARED_PATH" in codes
+    assert not codes & {"STALE_FILE_UNION", "STALE_CANONICAL"}
+    assert any("tests/lane-1.py" in detail for detail in _absent_path_details(result))
+
+
+def test_every_absent_path_is_reported_individually(tmp_path: Path) -> None:
+    parents = _make_singular(tmp_path)
+    _write(
+        parents["dev"],
+        _dev_document(
+            TASK_ID,
+            modified=["scripts/one.py", "scripts/missing-a.py"],
+            created=["scripts/missing-b.py"],
+        ),
+    )
+    result = RESOLVER.resolve_chain(tmp_path, TASK_ID)
+    details = _absent_path_details(result)
+    assert len(details) == 2
+    assert any("scripts/missing-a.py" in detail for detail in details)
+    assert any("scripts/missing-b.py" in detail for detail in details)
+
+
+def test_declared_directory_and_symlink_count_as_present(tmp_path: Path) -> None:
+    # Weakest defensible existence semantics: the claim under test is "a path is
+    # there", not "a regular file is there".  A broken symlink is still an entry.
+    parents = _make_singular(tmp_path)
+    (tmp_path / "scripts" / "a-directory").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "scripts" / "dangling").symlink_to(tmp_path / "scripts" / "nowhere.py")
+    _write(
+        parents["dev"],
+        _dev_document(
+            TASK_ID,
+            modified=["scripts/one.py", "scripts/a-directory"],
+            created=["scripts/dangling"],
+        ),
+    )
+    result = RESOLVER.resolve_chain(tmp_path, TASK_ID)
+    assert result["status"] == "pass", result["errors"]
+    assert result["checks"]["declared_paths_exist"] is True
+
+
+def test_absent_and_explicitly_empty_parallel_workers_are_distinguishable(
+    tmp_path: Path,
+) -> None:
+    parents = _make_singular(tmp_path)
+    absent = RESOLVER.resolve_chain(tmp_path, TASK_ID)
+    canonical = json.loads(parents["dev"].read_text(encoding="utf-8"))
+    assert "parallel_workers" not in canonical
+    canonical["parallel_workers"] = []
+    _write(parents["dev"], canonical)
+    empty = RESOLVER.resolve_chain(tmp_path, TASK_ID)
+    assert absent != empty
+    assert absent["parallel_workers_declaration"] == "absent"
+    assert empty["parallel_workers_declaration"] == "empty"
+    # Both remain singular and passing; the distinction is diagnostic, not a
+    # new failure for the ordinary case.
+    assert absent["status"] == empty["status"] == "pass"
+    assert absent["mode"] == empty["mode"] == "singular"
+
+
+def test_declared_parallel_workers_are_reported_as_declared(tmp_path: Path) -> None:
+    _make_fanout(tmp_path)
+    result = RESOLVER.resolve_chain(tmp_path, TASK_ID)
+    assert result["parallel_workers_declaration"] == "declared"
+
+
+def test_lost_worker_declaration_fires_alongside_ambiguous_singular_chain(
+    tmp_path: Path,
+) -> None:
+    # An aggregate stripped of parallel_workers is structurally identical to a
+    # singular chain; only surviving shard evidence reveals it.
+    _make_singular(tmp_path)
+    _write(
+        _lane_paths(tmp_path, "lane-a")["dev"],
+        _dev_document(f"{TASK_ID}-lane-a"),
+    )
+    result = RESOLVER.resolve_chain(tmp_path, TASK_ID)
+    codes = _error_codes(result)
+    assert "LOST_WORKER_DECLARATION" in codes
+    # Additive only: the pre-existing error still fires unchanged beside it.
+    assert "AMBIGUOUS_SINGULAR_CHAIN" in codes
+    assert result["parallel_workers_declaration"] == "absent"
+
+
+def test_explicitly_empty_worker_list_with_shards_is_only_ambiguous(
+    tmp_path: Path,
+) -> None:
+    # The empty key is a deliberate declaration, not a loss, so the new error
+    # must not fire -- that is the whole point of distinguishing the two.
+    parents = _make_singular(tmp_path)
+    canonical = json.loads(parents["dev"].read_text(encoding="utf-8"))
+    canonical["parallel_workers"] = []
+    _write(parents["dev"], canonical)
+    _write(
+        _lane_paths(tmp_path, "lane-a")["dev"],
+        _dev_document(f"{TASK_ID}-lane-a"),
+    )
+    result = RESOLVER.resolve_chain(tmp_path, TASK_ID)
+    codes = _error_codes(result)
+    assert "AMBIGUOUS_SINGULAR_CHAIN" in codes
+    assert "LOST_WORKER_DECLARATION" not in codes
+
+
+def test_malformed_canonical_dev_block_does_not_raise_in_the_new_check(
+    tmp_path: Path,
+) -> None:
+    parents = _make_singular(tmp_path)
+    canonical = json.loads(parents["dev"].read_text(encoding="utf-8"))
+    canonical["dev"] = "not-an-object"
+    _write(parents["dev"], canonical)
+    result = RESOLVER.resolve_chain(tmp_path, TASK_ID)
+    assert "INVALID_DEV_STATUS" in _error_codes(result)
+    assert "ABSENT_DECLARED_PATH" not in _error_codes(result)
 
 
 def test_invalid_task_id_is_json_and_exit_two(tmp_path: Path) -> None:

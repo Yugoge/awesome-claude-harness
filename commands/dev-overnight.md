@@ -187,6 +187,12 @@ The state file has already been created by the UserPromptSubmit hook at `.claude
 
 If no state file exists, HARD ABORT. Do not fabricate a state file and do not proceed; the launch hook fails closed when it cannot produce a validated isolated worktree, so a missing state means the overnight actor must not run.
 
+**`protected_branch` (schema v9)**: the record carries the repository's protected branch name, resolved once by `create-overnight-state.sh` in the primary checkout, at launch, before the worktree exists. It is resolved from **local refs only** (`refs/remotes/origin/HEAD`); the launch **refuses and writes no state** when it cannot be resolved, because a chain that protects a branch the repository does not have is inert. The value is **immutable** (`update-overnight-state.sh` rejects `--set protected_branch`) and is the operand the keystone (`hooks/git-keystone/reference-transaction`) and the policy shim (`scripts/overnight-git/git-policy-shim`) compare against at decision time — neither holds a branch-name literal or a fixed list of names. Both consumers **fail closed** when no live record declares the field: they refuse the ref write and name `/stop` + relaunch as the remedy. A session launched under schema v8 therefore cannot be upgraded in place — release it with `/stop` and relaunch.
+
+It is a **different concept from `main_branch_at_start`**, which records whichever branch the primary checkout happened to be sitting on at launch and is never used for protection.
+
+Scope of the guarantee: correct enforcement against drift and misconfiguration, plus honest attestation. The shared common-dir remains read-write (see the KNOWN ACCEPTED LIMITATION below), so this is not a claim about a malicious actor.
+
 **WORKTREE GUARD**: Check the state file's `worktree_path` field. The launch hook guarantees a validated isolated worktree before any state is written, so `worktree_path` is always a valid isolated root.
 - `cd` into the validated `worktree_path`.
 - If `worktree_path` is missing or invalid: HARD ABORT. Do not create state manually. Do not call EnterWorktree. Do not continue on the main project path. The session simply does not run.
@@ -785,15 +791,11 @@ to the legacy mechanical sort in Step 6 (read the RELEVANT specialist reports on
 
 Immediately after PM Triage completes (Step 4) and before pipeline creation (Step 6), the orchestrator writes the per-cycle contract manifest. This file is the single source of truth that the contract-aware hooks (`pretool-subagent-enforce.py`, `posttool-subagent-track.py`, `posttool-overnight-file-check.py`) and `check-overnight-reports.py` consume to enforce role/pipeline/artifact compliance for every subsequent Agent invocation in the cycle.
 
-**Output paths** (write both — primary plus colocated mirror so hooks can resolve without scanning). All paths below are resolved against the **overnight worktree root** (`worktree_path` in the state file), NOT the main repo: the main repo is a read-only mount for the overnight actor and the worktree guard blocks main-repo writes, so a main-repo publish target is unreachable by design. The contract hooks resolve worktree-hosted candidates first (`hooks/lib/contract_runtime.py::_candidate_contract_paths`). For worktree-less sessions the same relative paths resolve against the project dir.
+**Output paths** (write both — primary plus colocated mirror so hooks can resolve without scanning):
 
-- Primary: `<worktree>/docs/dev/overnight/<session_id>/cycle-<N>/cycle-contract.json`
-- Stable symlink for hooks: `<worktree>/docs/dev/overnight/<session_id>/cycle-current.json` → `cycle-<N>/cycle-contract.json`
-- Colocated mirror: `<worktree>/.claude/overnight-contract-<session_id>-cycle<N>.json`
-
-**Launch template**: `create-overnight-state.sh` stages `cycle-contract.template.json` in cycle-1's dir at session creation (session/spec identity fields prefilled, `required_calls: []`). The launch script MUST NEVER create the live `cycle-contract.json` itself — its mere existence is the HARD CUTOVER switch, and an empty `required_calls` at launch hard-blocks every Agent dispatch (Case C) before any step can legally be registered.
-
-**Publish procedure (atomic — applies to every cycle)**: build the FULLY-POPULATED contract (identity fields + `required_calls` + `pipelines` + `specialist_selection`) in a scratch file (e.g. `cycle-contract.json.tmp` in the same dir), validate it is well-formed JSON, then atomically rename it to `cycle-contract.json`. NEVER create the live filename first and fill it afterwards — an interruption between create and fill leaves an empty/partial live contract, which re-creates the Case C hard-block (defensively, the contract hooks also ignore any contract whose `required_calls` is `[]`, treating it as an unpublished stub). For cycle 1 the staged template supplies the identity fields; for cycle 2+ there is NO staged template — carry the identity fields (`spec_id`, `session_id`, `spec_mode`, `spec_path`, `monolith_sha256`) forward from the previous cycle's contract, updating `cycle_id`, `created_at`, and `trace_log_path` for the new cycle dir.
+- Primary: `docs/dev/overnight/<session_id>/cycle-<N>/cycle-contract.json`
+- Stable symlink for hooks: `docs/dev/overnight/<session_id>/cycle-current.json` → `cycle-<N>/cycle-contract.json`
+- Colocated mirror: `.claude/overnight-contract-<session_id>-cycle<N>.json`
 
 **Schema**: `~/.claude/schemas/cycle-contract.v1.json` (Draft 7). The full shape is documented there; the orchestrator MUST populate at minimum:
 
@@ -816,7 +818,7 @@ Immediately after PM Triage completes (Step 4) and before pipeline creation (Ste
 - `pipelines` derives from PM Triage's `issues` array.
 - `specialist_selection` derives from PM Plan's `recommended_specialists` field (Step 2 output) reconciled with what was actually launched in Step 3.
 
-**HARD CUTOVER**: this file is the trigger that switches the contract-aware hooks from silent passthrough into enforce mode. Until cycle-contract.json exists, the hooks behave like the legacy /spec single-cycle session. Once it exists, role/pipeline mismatches are exit-2 hard blocks (no warning-then-proceed). The contract's mere presence is the switch — there is no env-var override (per spec-20260426-090235 AC10 / user_decisions.rollout_strategy = HARD CUTOVER). Because presence alone flips enforcement, ONLY the Step-4 orchestrator publish may create the file, and only with the fully-populated `required_calls` — never an empty stub (see Launch template above).
+**HARD CUTOVER**: this file is the trigger that switches the contract-aware hooks from silent passthrough into enforce mode. Until cycle-contract.json exists, the hooks behave like the legacy /spec single-cycle session. Once it exists, role/pipeline mismatches are exit-2 hard blocks (no warning-then-proceed). The contract's mere presence is the switch — there is no env-var override (per spec-20260426-090235 AC10 / user_decisions.rollout_strategy = HARD CUTOVER).
 
 **Update cycle**: cycle-contract.json is append-only after publish. If pipeline ids change after Step 6 (e.g. on a re-plan), produce `cycle-contract.v2.json` in the same cycle dir; never edit the v1 file in place.
 

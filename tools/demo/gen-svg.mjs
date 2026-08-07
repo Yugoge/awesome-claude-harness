@@ -32,7 +32,7 @@ const BLOCK_CFG = { glyph: '⊘', marker: 'accent', content: 'inkStrong', typing
 const cfgFor = (ln) => (ln.kind === 'verdict' && ln.block === true ? BLOCK_CFG : KIND_CFG[ln.kind]);
 
 // ---------- layout (fixed monospace grid; we place by column*advance, never measure) ----------
-const W = 960;          // logical width (px)
+const W_MIN = 960;      // logical width FLOOR (px); the frame widens past this to fit content
 const PAD_X = 40;
 const FS = 15;          // body font-size
 const ADV = 9;          // monospace advance (~0.6 * FS)
@@ -89,6 +89,16 @@ for (const ln of lines) {
   if (!KINDS.has(ln.kind)) fail(`line ${ln.id}: invalid kind "${ln.kind}"`);
   if (typeof ln.text !== 'string' || ln.text.length === 0) fail(`line ${ln.id}: text must be a non-empty string`);
 }
+
+// ---------- logical width (auto-fit) ----------
+// The frame widens to whatever the widest line needs, so no transcript line can be cut off by
+// the viewport. This was a fixed 960px, and a longer line was simply clipped mid-text while
+// every provenance check still passed — a verdict line lost its tail with nothing to report it.
+// Fitting the width to the content makes that failure structurally impossible instead of a
+// number someone must remember to raise. Measured on the same grid the rendering uses:
+// content origin + indent + characters, plus the right pad.
+const W = Math.max(W_MIN, ...lines.map(
+  (ln) => CONTENT_X + cfgFor(ln).indent * ADV + nfc(ln.text).length * ADV + PAD_X));
 
 // ---------- data-driven rail ----------
 // Rail labels come from the manifest, never hard-coded: an explicit `meta.rail` list wins;
@@ -168,7 +178,18 @@ const markerFill = (ln, cfg) => C[ln.id === finalId ? 'accent' : cfg.marker];
 const contentFill = (ln, cfg) => C[ln.id === finalId ? 'accent' : cfg.content];
 
 // ---------- build ----------
-const defs = [];
+// Character-advance declaration, first in document order (<defs> precedes the body).
+// A reader of this asset does not assume the monospace advance — it reads the advance back
+// off the asset, from the first width animation. On an asset with no typed line there is no
+// reveal clip to read, so that lands on whichever width animation comes first (the
+// stage-marker rail, which steps by whole rail labels) and every width derived from the asset
+// is silently mis-scaled. Declaring the real advance here makes any asset self-describing,
+// typed or not. Inert: <defs> content is never rendered.
+const defs = [
+  `<rect data-role="grid-advance" x="0" y="0" width="0" height="0" fill="none">` +
+    `<animate attributeName="width" dur="${CYC}s" repeatCount="indefinite" ` +
+    `calcMode="discrete" values="0;${ADV}" keyTimes="0;0.5"/></rect>`,
+];
 const body = [];
 
 // background + window chrome

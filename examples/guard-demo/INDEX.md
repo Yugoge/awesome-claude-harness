@@ -1,13 +1,15 @@
 # guard-demo
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-06-17T20:46:57Z*
-**Total entries**: 0
+*Last updated: 2026-08-04T12:00:26Z*
+**Total entries**: 2
 **Convention**: kebab
 
 ## Tree
 ```
 guard-demo/
+├── `run-demo.sh` - Description: Reproducible guard demo — a dangerous operation is BLOCKED by the
+└── `run-hero-demo.sh` - Description: Five-beat guard demo — a real agent git push is refused pre-execution, a
 ```
 <!-- /AUTO:index-stats -->
 
