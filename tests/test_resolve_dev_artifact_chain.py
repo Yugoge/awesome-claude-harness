@@ -467,6 +467,7 @@ def _make_singular_for(root: Path, identity: str) -> dict[str, Path]:
     }
     _write(paths["ticket"], _ticket(identity))
     _write(paths["context"], {"request_id": identity, "task_id": identity})
+    _materialise(root, "scripts/one.py")
     _write(paths["dev"], _dev_document(identity, modified=["scripts/one.py"]))
     _write(paths["qa"], _qa_document(identity))
     references = [
