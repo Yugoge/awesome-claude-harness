@@ -443,6 +443,10 @@ def resolve_chain(project_root: Path | str, task_id: str) -> dict[str, Any]:
         return result
 
     validator.validate_dev(canonical, task_id, parents["dev_report"])
+    # Reached before the branch split, so both modes are held to it.
+    _check_declared_paths_exist(validator, canonical, result)
+    workers_declaration = _workers_declaration_state(canonical)
+    result["parallel_workers_declaration"] = workers_declaration
     workers_value = canonical.get("parallel_workers", [])
     workers: list[str] = []
     if not isinstance(workers_value, list) or any(
