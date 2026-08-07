@@ -458,11 +458,13 @@ def pred_hero_legibility() -> tuple[str, str, str, str]:
                 f"derived at build time, so legibility is reported as unverified rather "
                 f"than as passing.", HERO_ASSET, "hero-disclosure")
     if g["below_floor"]:
+        n, total = len(g["below_floor"]), g["n_covered"]
+        where = "every" if n == total else f"{n} of {total}"
         return ("partial",
                 f"**Hero legibility** — nothing is cut off: every replayed line fits inside "
                 f"the {f['logical_w']} px panel. But fitting them took a panel that wide, "
                 f"and the page scales it down to fit the column, so the inline text lands "
-                f"below the {g['floor_px']} px readability floor at every measured "
+                f"below the {g['floor_px']} px readability floor at {where} measured "
                 f"viewport. Un-truncated is not the same as readable, so this is reported "
                 f"as partial, with the measured sizes below.",
                 HERO_ASSET, "hero-glyph-floor")
