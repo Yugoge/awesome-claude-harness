@@ -267,6 +267,7 @@ def test_missing_canonical_is_aggregated_before_read_only_resolution(
         paths = _lane_paths(tmp_path, worker)
         _write(paths["ticket"], _ticket(identity))
         _write(paths["context"], {"request_id": identity, "task_id": identity})
+        _materialise(tmp_path, f"scripts/lane-{index}.py")
         _write(
             paths["dev"],
             _dev_document(identity, modified=[f"scripts/lane-{index}.py"]),
