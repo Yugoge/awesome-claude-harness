@@ -1,0 +1,38 @@
+#!/usr/bin/env bash
+# git-selector — modern-git PATH SELECTOR/launcher (M11).
+#
+# SEPARATE from the policy shim (git-policy-shim) per codex round-2 #7. This
+# file's ONLY job is to delegate to the pinned, operator-supplied >=2.46 git
+# distribution at the configured slot when one is present; otherwise it
+# transparently delegates to the system git. It performs NO policy enforcement
+# (that is the shim's job) and NO in-cycle build (the slot is operator-supplied).
+#
+# Slot layout (operator-supplied prerequisite, M17):
+#   <slot>/bin/git                 the pinned >=2.46 binary
+#   <slot>/libexec/git-core/...    matching helpers (git --exec-path target)
+#   <slot>/manifest.json           {version, sha256} provenance (M17)
+# Default slot: <main_root>/.claude/modern-git-slot  (override CLAUDE_MODERN_GIT_SLOT).
+#
+# Removing the slot dir fully reverts Option A (AC-A-prereq): the selector then
+# falls through to system git and no structural claim is possible.
+
+set -u
+
+SLOT="${CLAUDE_MODERN_GIT_SLOT:-}"
+if [ -z "$SLOT" ] && [ -n "${CLAUDE_OVERNIGHT_MAIN_ROOT:-}" ]; then
+  SLOT="${CLAUDE_OVERNIGHT_MAIN_ROOT}/.claude/modern-git-slot"
+fi
+
+_system_git() {
+  for cand in /usr/bin/git /usr/local/bin/git /bin/git; do
+    [ -x "$cand" ] && { printf '%s' "$cand"; return; }
+  done
+  printf '%s' git
+}
+
+if [ -n "$SLOT" ] && [ -x "$SLOT/bin/git" ]; then
+  export GIT_EXEC_PATH="$SLOT/libexec/git-core"
+  exec "$SLOT/bin/git" "$@"
+fi
+
+exec "$(_system_git)" "$@"
