@@ -120,6 +120,11 @@ DENY_CASES = [
     # model cannot be proven NOT to move the cwd, so it denies rather than
     # snapshotting a tree that may not be the one being cleaned.
     "sudo -u root git clean -fd",
+    # The wrapper's own OPERAND can itself basename to git (a git service
+    # account), so the region is re-scanned from every candidate, not the first.
+    "sudo -u git git clean -fd",
+    "env -u GIT_DIR git clean -fd",
+    "env -C /tmp/git git clean -fd",
 ]
 
 
