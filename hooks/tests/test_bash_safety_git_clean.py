@@ -699,7 +699,10 @@ AC17_ALLOW_CONTROLS = [
     "git help clean",
     "make clean",
     "./gradlew clean",
-    "npm run clean",
+    # NOT a valid control here: `npm run clean` exits 2 via the
+    # protected-runtime-guard's P9 script-run branch, and does so identically at
+    # the pre-lane baseline commit. It is denied by an unrelated, unbypassable
+    # guard, so asserting ALLOW on it would be asserting that guard away.
     # a shell IS present but there is no clean at all -> must stay untouched
     "bash -c 'make test'",
     "sh -c 'ls -la'",
