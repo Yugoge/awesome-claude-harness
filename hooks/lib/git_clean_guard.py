@@ -90,6 +90,17 @@ def _is_redirect_config(kv: str) -> bool:
     return _unquote(kv).split("=", 1)[0].strip().lower() in _REDIRECT_CONFIG_KEYS
 
 
+def _abbrev_of(tok: str, full: str, min_len: int) -> bool:
+    """True when git parse-options would accept `tok` as an abbreviation of the
+    long option `full`. Unambiguous prefixes are accepted by git (verified:
+    `git status --no-col` and `--unt=no` both parse), and `git clean`'s option
+    set is small enough that `--no-dry` and `--e` are unambiguous. Used only in
+    the fail-CLOSED direction — to CLEAR a dry-run exemption and to consume an
+    exclude's operand — so a prefix git would actually reject can at worst cause
+    a superfluous snapshot, never a skipped one."""
+    return min_len <= len(tok) <= len(full) and full.startswith(tok)
+
+
 def _is_dry_run(rest: list) -> bool:
     """True only for a PROVEN dry run. A force flag is NOT the destructiveness
     test (`git -c clean.requireForce=false clean -d` deletes without `-f`), so
