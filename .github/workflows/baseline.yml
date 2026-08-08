@@ -54,13 +54,16 @@ jobs:
           node-version: "20"
 
       - name: Render settings.json from the tracked template
-        # settings.json is NOT tracked (it is per-install and carries absolute
-        # paths). A fresh checkout therefore has no settings.json at all, but
-        # scripts/verify-claims.sh recomputes its hook/lifecycle counts by reading
-        # that file with no existence guard — so it MUST be rendered here, after
-        # Checkout and before "Verify headline claims", or that step fails
-        # immediately on every PR. Rendering (not copying the template) is
+        # settings.json IS tracked (a `private-lab` row in PUBLIC-CORE.md), so a
+        # fresh checkout does have one — but it is the MAINTAINER's live copy:
+        # absolute install-home paths, an emptied `ask` section, and allow entries
+        # beyond the template. Rendering replaces it so the gates measure the
+        # PUBLIC install seed on this runner's own paths, not one machine's state.
+        # Must stay after Checkout and before "Verify headline claims", which reads
+        # the file with no existence guard. Rendering (not copying the template) is
         # required: the template carries an unresolved {{CLAUDE_HOME}} placeholder.
+        # Note the --check below runs on the file this step just rendered, so it
+        # does NOT detect drift between the TRACKED settings.json and the template.
         run: |
           set -euo pipefail
           python3 scripts/install/render-settings "$GITHUB_WORKSPACE" \

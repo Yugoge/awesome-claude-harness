@@ -43,14 +43,14 @@ The cleanest illustration of the carve already exists in the tree: the portable 
 
 Roadmap phase **P3** (generate-then-untrack) is now wired on the *generate* side: the
 file is GENERATED from the template by `scripts/install/render-settings`, which
-`scripts/bootstrap` invokes at install time; it is git-ignored by the root-anchored
-`/settings.json` rule; and CI renders it right after checkout so
+`scripts/bootstrap` invokes at install time, and CI renders it right after checkout so
 `scripts/verify-claims.sh` still has a concrete file to recompute its counts from.
 
-The *untrack* side is now complete too: `settings.json` has been removed from the index
-(`git rm --cached`, not a history rewrite — every prior commit that touched the file
-remains reachable), so it no longer carries a ledger row. A working copy still exists on
-each install; it is per-install state, not tracked content.
+The *untrack* side is **not** done and is **not** authorized: `settings.json` remains
+deliberately tracked, and therefore carries a `private-lab` row in the ledger below like
+every other tracked top-level path. An earlier revision of this section claimed the file
+had been removed from the index (`git rm --cached`); that claim was false when written,
+and it is withdrawn together with the `/settings.json` ignore rule it shipped beside.
 
 ---
 
@@ -140,6 +140,7 @@ set for the residue markers of §3. Path = first back-ticked token; class = seco
 | `tests/` | `shared/infra` | Test net (incl. generated AC skeletons + fixture strings) that supports the core; not itself the shippable harness. |
 | `PUBLIC-CORE.md` | `shared/infra` | This boundary manifest — governance/meta (self-classified for forward completeness once tracked). |
 | `release-membership.v1.json` | `shared/infra` | Shipping ledger: the EXPLICIT path set a release archive contains, plus per-path rationale. Governance/meta, beside this boundary ledger; consumed by the release workflow and by `scripts/verify-release-manifest.sh`. |
+| `settings.json` | `private-lab` | Live per-install config, deliberately tracked: personal permission allow/deny/ask entries + absolute install-home paths. Rendered from `settings.template.json` at install time; the P3 *untrack* side is not authorized (§2). |
 | `NESTED-REPO.md` | `private-lab` | Documents the maintainer's exact `/root/.claude`→tmpfs symlink topology, `git@github.com:Yugoge` remote, `/root/.claude.bak` mirror, `/root/sync-backup.sh` cron. |
 | `push.sh` | `private-lab` | Maintainer pre-push wrapper: `/root/.claude/push.sh` invocation, author git-workflow automation (identity now env-parameterized, purpose still maintainer-specific). |
 <!-- END:public-core-manifest -->

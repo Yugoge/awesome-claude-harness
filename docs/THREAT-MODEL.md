@@ -71,7 +71,7 @@ guarantees of this document, and the harness has **no** compensating control for
 |---|---|---|
 | **The Claude Code dispatcher / runtime** | That it invokes the wired hooks at all, routes each tool call to the right matcher, and **honors a non-zero hook exit code by aborting the call**. | **No.** This is the single largest uncontrolled dependency: every "blocked" claim in this repository is downstream of a host behavior this project neither implements nor tests against. Nothing here can detect a host that silently ignores exit 2. |
 | `python3`, `bash`, `git`, `jsonschema` | That the interpreters and binaries behave as documented and are not compromised. | No — versions are not pinned (§5.1). |
-| `settings.json` wiring | That the hook set on disk is the hook set that runs. | Partly — `scripts/verify-claims.sh` asserts the public template wires every hook, but the live file is untracked and per-install. |
+| `settings.json` wiring | That the hook set on disk is the hook set that runs. | Partly — `scripts/verify-claims.sh` asserts the public template wires every hook, but what runs is each install's own rendered copy, editable locally after render. The tracked file is the maintainer's live copy, and CI renders over it from the template before checking, so what CI validates is the template-derived seed, not any deployed install's file. |
 | The human operator | That instructions to disable a guard are genuinely the human's (§5.1). | No. |
 | The filesystem | That a hook file read at dispatch time is the file this repository committed. | No hardware root of trust. |
 
