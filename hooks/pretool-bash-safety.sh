@@ -1927,12 +1927,23 @@ POS_DRY = re.compile(r'^--d(r(y(-(r(u(n)?)?)?)?)?)?$')
 NEG_DRY = re.compile(r'^--no-d(r(y(-(r(u(n)?)?)?)?)?)?$')
 EXCLUDE = re.compile(r'^--e(x(c(l(u(d(e)?)?)?)?)?)?$')
 CLUSTER = re.compile(r'^-[A-Za-z]+$')
-# Coarse `git … clean` counter and shell-in-command-position test, mirroring the
-# shell-side _GIT_CLEAN_FALLBACK_RE / _GC_SHELL_RE. Used ONLY to compare counts.
-COARSE = re.compile(r"""(^|[\s;&|()`])((\S*/)?git|"(\S*/)?git"|'(\S*/)?git')"""
-                    r"""[\s]+["']?clean\b""")
-SHELL_CMD = re.compile(r"""(^|[\s;&|()`])([^\s;&|()`'"]*/)?"""
-                       r"""(mk|pdk|ba|da|ya|tc|fi|z|k|a|c)?sh(\s|$)""")
+# Coarse `git … clean` counter and shell-in-command-position test. These are NOT
+# re-spellings of the shell-side grammar — they ARE it, passed in through the
+# environment, because two independently maintained copies drifted apart and the
+# gap between them executed an ungranted destructive clean. The only transform is
+# POSIX bracket-class -> Python; `[[:space:]]` and `[^[:space:]…]` become `[\s]`
+# and `[^\s…]`, which is the same character set in both engines. Everything else
+# in the shared strings (alternation, quantifiers, `\b`) is common to ERE and
+# Python. A missing or uncompilable regex raises, which kills the heredoc and
+# leaves the verdict empty — and an empty verdict is a BLOCK, so the sharing
+# fails closed.
+def _ere_to_py(pattern):
+    """POSIX ERE bracket classes -> Python, semantics-preserving."""
+    return pattern.replace('[:space:]', r'\s')
+
+
+COARSE = re.compile(_ere_to_py(os.environ['CLEAN_OCCURRENCE_RE']))
+SHELL_CMD = re.compile(_ere_to_py(os.environ['CLEAN_SHELL_RE']))
 
 
 def raw_cleans(text):
