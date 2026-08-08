@@ -108,6 +108,13 @@ _INERT_WRAPPERS = frozenset({
 })
 
 _ENV_ASSIGN_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
+# `env -S` / `env --split-string=` perform their OWN word splitting on the value,
+# using these escapes as separators (env(1): `\_` is a space; `\t`, `\n`, `\f`,
+# `\r`, `\v` are the other whitespace forms). They are NOT shell syntax, so bash
+# hands the whole payload over as one word and a shell-level lexer sees no
+# separator at all. Modelled here because ignoring it left
+# `env -S'git\_clean\_-fd'` classified NONE while really deleting.
+_ENV_S_SEPARATOR_RE = re.compile(r"\\[_tnfrv]")
 
 _VERDICT_EXIT = {"NONE": 0, "SNAPSHOT": 10, "DENY": 11}
 # Embedded-payload recursion budget. Exhausting it DENIES (see _analyze_segment).
