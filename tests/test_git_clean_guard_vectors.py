@@ -81,6 +81,9 @@ NONE_CASES = [
     "echo nothing to do here",
     # Last-wins in the other direction: the trailing -n IS the effective flag.
     "git clean --no-dry-run -n",
+    "git clean --no-dry -n",
+    # An abbreviated exclude in `=` form consumes nothing, so -n still applies.
+    "git clean -n --exc=build",
     # A redirected clean that deletes nothing needs neither snapshot nor deny.
     "env -C /tmp/B git clean -n",
     # A wrapper option on a NON-git command must not be read as a clean at all.
