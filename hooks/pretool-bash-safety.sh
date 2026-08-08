@@ -1901,6 +1901,12 @@ POS_DRY = re.compile(r'^--d(r(y(-(r(u(n)?)?)?)?)?)?$')
 NEG_DRY = re.compile(r'^--no-d(r(y(-(r(u(n)?)?)?)?)?)?$')
 EXCLUDE = re.compile(r'^--e(x(c(l(u(d(e)?)?)?)?)?)?$')
 CLUSTER = re.compile(r'^-[A-Za-z]+$')
+# Coarse `git … clean` counter and shell-in-command-position test, mirroring the
+# shell-side _GIT_CLEAN_FALLBACK_RE / _GC_SHELL_RE. Used ONLY to compare counts.
+COARSE = re.compile(r"""(^|[\s;&|()`])((\S*/)?git|"(\S*/)?git"|'(\S*/)?git')"""
+                    r"""[\s]+["']?clean\b""")
+SHELL_CMD = re.compile(r"""(^|[\s;&|()`])([^\s;&|()`'"]*/)?"""
+                       r"""(mk|pdk|ba|da|ya|tc|fi|z|k|a|c)?sh(\s|$)""")
 
 
 def raw_cleans(text):
