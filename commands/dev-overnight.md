@@ -283,7 +283,7 @@ When you see "OVERNIGHT CONTINUATION" injected by the prompt hook, you are in co
 
 **In continuation mode**:
 1. Read the state file to determine `current_phase`
-2. Skip Step 1 entirely (worktree already exists)
+2. Re-run `scripts/overnight-init.sh --state-file "$STATE_FILE"` (one call, idempotent — it restores any sentinel a cleanup step removed), then skip the rest of Step 1: the working root already exists and is never re-established
 3. Resume from the appropriate step based on current_phase:
    - `initializing` or `exploring` -> Step 2 (PM Plan)
    - `pipeline_creation` -> Step 6 (Create pipelines)
