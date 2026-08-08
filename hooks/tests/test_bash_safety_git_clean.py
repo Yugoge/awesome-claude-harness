@@ -608,6 +608,28 @@ def _ac17_indirect_matrix():
     ]
 
 
+def _ac17_chained_matrix():
+    """A PROVABLE dry-run chained with a nested destructive payload.
+
+    This is the sub-class that made the first attempt at AC17 insufficient. The
+    shell-side fail-closed fallback only runs when the classifier resolved NO
+    clean invocation, so prefixing the payload with `git clean -n;` suppressed
+    it and the destructive half ran ungranted — every form here was measured at
+    exit 0. Closed by comparing the coarse `git … clean` occurrence count with
+    the number the parser could resolve.
+    """
+    return [
+        "git clean -n; sh -c 'git clean -fd'",
+        "git clean -n && sh -c 'git clean -fd'",
+        "sh -c 'git clean -fd'; git clean -n",
+        "git clean -n | sh -c 'git clean -fd'",
+        "git clean -n; ksh -c 'git clean -fd'",
+        "git clean -n; exec sh -c 'git clean -fd'",
+        "git clean -n; printf %s 'git clean -fd' | sh",
+        "git config clean.requireForce false; sh -c 'git clean -fd'",
+    ]
+
+
 def assert_clean_rule_denies(form):
     """Exit 2 AND the clean rule's own stderr token — never a vacuous pass."""
     rc, err = run_hook(form, want_stderr=True)
