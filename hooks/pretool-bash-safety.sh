@@ -645,6 +645,96 @@ PYAUDIT2
   esac
 }
 
+# ── Pre-clean WIP snapshot guard (fail-closed) ───────────────────────────────
+# Safety net on the HUMAN-GRANT RESIDUAL of the `git clean` deny: once a human
+# has explicitly granted a destructive clean it WILL proceed, so take a
+# recoverable snapshot of untracked-non-ignored work FIRST. Root cause: the
+# checkpoint mechanism only ever fired on PostToolUse/Stop, and the four
+# grant/consent `exit 0` escapes below (main /do, structured sentinel, legacy
+# /allow, subagent /do) bypass every downstream block — so a granted clean
+# destroyed untracked WIP with no git trace (the 07-10 run_distribution.py
+# incident). Defined HERE because the first three grant exits run before
+# COMMAND_CONTEXT_STRIPPED / CLASSIFIER_JSON / GIT_CMD_RE exist.
+#
+# Fail-closed contract: only a clean whose target is PROVABLY this hook's own
+# working directory is snapshotted and allowed. A target-redirecting global,
+# an indeterminate cwd, a snapshot failure, or an unclassifiable command all
+# DENY (exit 2) — the lane never allows a clean it could not protect, and never
+# resolves or snapshots a redirected repository.
+#
+# Reuses hooks/lib/checkpoint-core.sh write_checkpoint() UNCHANGED and the
+# token-aware detector hooks/lib/git_clean_guard.py (which itself reuses the
+# shared tokenizer; git_command_classifier.py is deliberately NOT modified —
+# pretool-block-branch-pr-worktree.py imports _git_subcommand directly).
+_preclean_snapshot_guard() {
+  # Cheap substring prefilter only — mirrors the `grep -q 'git'` prefilter in
+  # front of the path-qualified-git classifier below. The DECISION is made by
+  # the token-aware detector, never by a raw-command regex.
+  printf '%s\n' "$COMMAND" | grep -q 'clean' || return 0
+  printf '%s\n' "$COMMAND" | grep -q 'git' || return 0
+
+  local _guard_dir _guard_py _guard_reason _guard_rc
+  _guard_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  _guard_py="${_guard_dir}/lib/git_clean_guard.py"
+  if [ ! -r "$_guard_py" ]; then
+    echo "BLOCKED: granted 'git clean' denied — pre-clean WIP snapshot guard is unavailable (fail-closed)" >&2
+    echo "Command: $COMMAND" >&2
+    echo "REASON: $_guard_py is missing or unreadable, so the clean target cannot be classified." >&2
+    exit 2
+  fi
+
+  _guard_reason=$(CMD_INPUT="$COMMAND" timeout "${CLAUDE_HOOK_CONTEXT_TIMEOUT:-5s}" \
+    "$PYTHON_BIN" "$_guard_py" 2>/dev/null)
+  _guard_rc=$?
+  case "$_guard_rc" in
+    0)  return 0 ;;   # no destructive-or-uncertain `git clean` in this command
+    10) : ;;          # provably hook-cwd destructive clean — snapshot below
+    *)                # 11 = redirect/indeterminate; any other rc = detector failure
+      echo "BLOCKED: granted 'git clean' denied — no protective pre-clean WIP snapshot is possible (fail-closed)" >&2
+      echo "Command: $COMMAND" >&2
+      echo "REASON: ${_guard_reason:-the pre-clean guard could not classify this command}" >&2
+      echo "Hint: re-issue the clean from this working directory without -C/--git-dir/--work-tree" >&2
+      echo "      and without a leading cd/subshell, or snapshot the work yourself first." >&2
+      exit 2
+      ;;
+  esac
+
+  local _ckpt_lib="${_guard_dir}/lib/checkpoint-core.sh"
+  if [ ! -r "$_ckpt_lib" ]; then
+    echo "BLOCKED: granted 'git clean' denied — the pre-clean WIP snapshot library is unavailable (fail-closed)" >&2
+    echo "Command: $COMMAND" >&2
+    echo "REASON: $_ckpt_lib is missing or unreadable, so untracked work cannot be made recoverable." >&2
+    exit 2
+  fi
+  # shellcheck source=lib/checkpoint-core.sh
+  . "$_ckpt_lib"
+  write_checkpoint "" "pre-clean WIP snapshot before granted: $COMMAND"
+  local _ckpt_rc=$?
+  # write_checkpoint's early-failure returns leave its temp-index EXIT trap
+  # installed; clear it so the trap cannot outlive this hook invocation.
+  trap - EXIT INT TERM HUP
+  if [ "$_ckpt_rc" -ne 0 ]; then
+    echo "BLOCKED: granted 'git clean' denied — the protective pre-clean WIP snapshot FAILED (fail-closed)" >&2
+    echo "Command: $COMMAND" >&2
+    if [ "$_ckpt_rc" = "2" ]; then
+      echo "REASON: write_checkpoint rc=2 — this working directory is not a git repository, so untracked work cannot be snapshotted." >&2
+    else
+      echo "REASON: write_checkpoint rc=$_ckpt_rc — the snapshot could not be written, so untracked work would be unrecoverable." >&2
+    fi
+    echo "Hint: see ~/.claude/logs/checkpoint.log, fix the snapshot failure, then re-issue the clean." >&2
+    exit 2
+  fi
+  local _ckpt_branch _ckpt_ref
+  _ckpt_branch=$(git branch --show-current 2>/dev/null)
+  if [ -n "$_ckpt_branch" ]; then
+    _ckpt_ref="refs/checkpoints/$(printf '%s' "$_ckpt_branch" | tr '/' '-')"
+  else
+    _ckpt_ref="refs/checkpoints/*"
+  fi
+  echo "[pre-clean-snapshot] untracked WIP snapshotted to $_ckpt_ref before granted clean; recover with 'git show $_ckpt_ref:<path>'" >&2
+  return 0
+}
+
 # ── Global /allow short-circuit ─────────────────────────────────────────────
 # RELOCATED 2026-05-09 (task-id 20260509-113838) to run BEFORE all four
 # absolute-ban categories (Layer 1.A-E daemon-restart prohibition + the three
