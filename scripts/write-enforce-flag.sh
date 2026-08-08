@@ -90,5 +90,10 @@ for flag in "${FLAGS[@]}"; do
     > "$target" \
     || { echo "ERROR: Failed to write $filename at $target — aborting." >&2; exit 1; }
 
-  echo "${flag} enforcement active: $target"
+  # Preserve the exact success labels the two original scripts emitted; callers
+  # and transcripts grep for these strings.
+  case "$flag" in
+    codex) echo "Codex enforcement active: $target" ;;
+    e2e)   echo "E2E enforcement active: $target" ;;
+  esac
 done
