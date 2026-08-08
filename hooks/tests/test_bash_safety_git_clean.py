@@ -603,11 +603,23 @@ def test_AC17d_nesting_depth_one_and_two_block(form):
     assert_clean_rule_denies(form)
 
 
-def test_AC17e_nested_payload_is_released_by_a_human_grant(granted_sid):
-    """Same escape as the direct spelling: the deny stays in the bypassable
-    region, so an explicit human grant releases it."""
+def test_AC17e_a_human_grant_still_releases_this_deny(granted_sid):
+    """The deny stays in the bypassable region: under a matching /do grant the
+    clean rule no longer denies any of these forms.
+
+    What the command meets NEXT is lane r03-c's pre-clean WIP snapshot guard,
+    which fails CLOSED on an embedded shell payload because it cannot prove the
+    clean targets this working directory. That is the same hand-off AC16b
+    already pins for `git -C /tmp/elsewhere clean -fd`, and it is deliberately
+    not relaxed here — releasing this deny must not weaken a downstream guard.
+    """
     for form in AC17_QA_MEASURED:
-        assert run_hook(form, session_id=granted_sid) == ALLOW, form
+        rc, err = run_hook(form, session_id=granted_sid, want_stderr=True)
+        assert CLEAN_DENY_TOKEN not in err, (
+            "the grant did not release the clean deny: %r -> %r" % (form, err))
+        assert rc == ALLOW or "pre-clean WIP snapshot" in err, (
+            "released, but stopped by something other than the snapshot "
+            "guard: %r -> %r" % (form, err))
 
 
 def test_AC17f_nested_payload_without_a_grant_is_not_released():
