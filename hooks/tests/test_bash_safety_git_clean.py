@@ -385,3 +385,113 @@ def test_AC14_accepted_over_blocks_block(form):
 def test_AC14_over_block_is_escapable_with_a_grant(granted_sid):
     """The same over-blocked preview passes under a matching /do consent."""
     assert run_hook(AC14_ESCAPE_FORM, session_id=granted_sid) == ALLOW
+
+
+# ── AC15: a QUOTED binary or subcommand is still an invocation ───────────────
+# Regression anchor for the highest-severity hole found after the first pass:
+# every form below was measured at rc=0 — ALLOWED with NO grant of any kind —
+# because bash strips the quotes before exec while both detection layers kept
+# them. Two independent causes: the shared classifier basenamed the RAW token,
+# so `"/usr/bin/git"` basenamed to `git"` and no invocation was recorded; and
+# the coarse fallback's anchor and path classes admit neither `/` nor a quote,
+# so it did not catch what the classifier missed.
+
+AC15_QUOTED_BLOCK_FORMS = [
+    # quoted binary, path-qualified and bare, both quote styles
+    '"/usr/bin/git" clean -fd', "'/usr/bin/git' clean -fd",
+    '"git" clean -fd', "'git' clean -fd",
+    '"/usr/bin/git" clean', '"/usr/bin/git" clean -f',
+    '"/usr/bin/git" -C /tmp clean -fd', 'sudo "git" clean -fd',
+    # quoted SUBCOMMAND — context-stripping blanks it, so the stripped stream
+    # sees no `clean` at all and only the fallback can catch these
+    'git "clean" -fd', "git 'clean' -fd",
+    # quoted binary behind a zero-invocation wrapper: neither layer saw these
+    'env -i "/usr/bin/git" clean -fd', 'env -i "git" clean -fd',
+    'command -- "git" clean -fd', "time -p '/usr/bin/git' clean -fdx",
+    # the quoted spelling must not escape the chain, negation or T3 rules either
+    'echo hi; "git" clean -fd', '"git" clean -f -n --no-dry-run',
+    'printf %s --no-dry-run|xargs "git" clean -f -n',
+]
+
+
+@pytest.mark.parametrize("form", AC15_QUOTED_BLOCK_FORMS)
+def test_AC15_quoted_binary_or_subcommand_blocks(form):
+    """No spelling of a destructive clean is allowed without a grant."""
+    assert run_hook(form) == BLOCK
+
+
+# The fix must close the hole WITHOUT swallowing commands that merely quote
+# the phrase as DATA. That is why the fallback matches quotes as a balanced
+# pair hugging the binary (`"git"`) instead of adding quote characters to the
+# anchor class: `"git" clean` and `"git clean"` differ only in where the
+# closing quote falls, and a class-widening anchor cannot tell them apart.
+AC15_ALLOW_FORMS = [
+    # a quoted binary running a PROVABLE dry run is still provable
+    '"/usr/bin/git" clean -n', '"git" clean -nd',
+    # quoted phrases as data: not invocations, must stay usable
+    "grep -n 'git clean' file.txt",
+    'echo "git clean -fd"',
+    "echo 'git clean -fd'",
+]
+
+
+@pytest.mark.parametrize("form", AC15_ALLOW_FORMS)
+def test_AC15_quoted_fix_does_not_over_block(form):
+    """Closing the quoted hole must not cost the dry-run or data surface."""
+    assert run_hook(form) == ALLOW
+
+
+# ── AC16: grant channel 4 of 4 — the subagent side of /do consent ────────────
+# The other three grant exits run BEFORE this deny, so they already reach lane
+# r03-c's pre-clean WIP snapshot guard. The subagent /do exit runs AFTER it, so
+# the deny preempted the snapshot and made an explicit human grant weaker on
+# this channel than on the other three. The deny now honours it, and the
+# release is exactly as wide as that exit's own predicate — never wider.
+
+@pytest.fixture
+def throwaway_repo(tmp_path):
+    """A git repo with one untracked WIP file, so a granted clean has
+    something to snapshot and the snapshot lands outside this repository."""
+    subprocess.run(
+        ["git", "init", "-q", "."], cwd=tmp_path, check=True, capture_output=True)
+    subprocess.run(
+        ["git", "-c", "user.email=t@t", "-c", "user.name=t",
+         "commit", "-q", "--allow-empty", "-m", "base"],
+        cwd=tmp_path, check=True, capture_output=True)
+    (tmp_path / "untracked_wip.txt").write_text("wip")
+    return str(tmp_path)
+
+
+AC16_GRANTED_FORMS = ["git clean -fd", "git clean -fdx", '"/usr/bin/git" clean -fd']
+
+
+@pytest.mark.parametrize("form", AC16_GRANTED_FORMS)
+def test_AC16a_subagent_do_consent_reaches_the_snapshot_guard(
+        granted_sid, throwaway_repo, form):
+    """A granted destructive clean on the subagent channel must proceed —
+    through the snapshot guard, not around this deny."""
+    assert run_hook(form, session_id=granted_sid, agent_id="agent-under-test",
+                    cwd=throwaway_repo) == ALLOW
+
+
+def test_AC16b_subagent_grant_still_denies_an_unprotectable_clean(
+        granted_sid, throwaway_repo):
+    """Releasing the deny hands the command to a FAIL-CLOSED guard: a clean
+    whose target is a redirected tree cannot be snapshotted, so it is denied
+    even though the grant is valid."""
+    assert run_hook("git -C /tmp/elsewhere clean -fd", session_id=granted_sid,
+                    agent_id="agent-under-test", cwd=throwaway_repo) == BLOCK
+
+
+@pytest.mark.parametrize("form", ["git clean -fd", '"/usr/bin/git" clean -fd'])
+def test_AC16c_subagent_without_a_grant_still_blocks(form, throwaway_repo):
+    """The carve-out is the grant, not the agent: no flag, no release."""
+    assert run_hook(form, agent_id="agent-under-test",
+                    cwd=throwaway_repo) == BLOCK
+
+
+def test_AC16d_subagent_grant_for_another_session_does_not_release(
+        granted_sid, throwaway_repo):
+    """Session-scoped exactly like the main-agent channel (AC7b)."""
+    assert run_hook("git clean -fd", session_id=fresh_sid(),
+                    agent_id="agent-under-test", cwd=throwaway_repo) == BLOCK
