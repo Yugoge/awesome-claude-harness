@@ -2022,19 +2022,32 @@ _GIT_CLEAN_FALLBACK_RE="(^|${_GC_SEP})((${_GC_PATH}git)|\"${_GC_PATH}git\"|'${_G
 # `CMD_INPUT="sh -c '…'" python3 x` — has no shell in command position and is
 # therefore left alone rather than over-blocked.
 # Both streams feed ONE grep as two lines (`^` anchors per-line).
-_GC_SHELL_RE="(^|${_GC_SEP})${_GC_PATH}(ba|da|z|k|a)?sh[[:space:]]"
-_GC_PROBE="$COMMAND_CONTEXT_STRIPPED"
-case "$COMMAND_CONTEXT_STRIPPED" in
+# The probe covers BOTH streams, because stripping only exposes a -c payload for
+# the four interpreters bash_context_strip calls shells. For every other route to
+# the same nested shell — ksh/ash/`busybox sh`, `exec sh -c`, `eval sh -c`,
+# `timeout 5 sh -c`, `xargs -I{} sh -c`, `printf … | sh` — the payload is instead
+# BLANKED as an ordinary quoted argument, so the stripped view holds no evidence
+# and only the raw text still carries it. All were measured escaping at exit 0.
+# Gating neutralisation on a shell in COMMAND position is what makes doing this
+# to raw text safe: `echo "git clean -fd"`, `grep -rn 'git clean' docs/` and an
+# assignment VALUE (`CMD_INPUT="sh -c '…'" python3 x`) have no shell there and
+# are left untouched, so the :1979 warning against a class-widened anchor is
+# respected. `$` in the anchor's tail covers a trailing pipe target (`… | sh`).
+_GC_SHELL_RE="(^|${_GC_SEP})${_GC_PATH}(ba|da|z|k|a)?sh([[:space:]]|$)"
+_GC_PROBE=''
+case "$COMMAND$COMMAND_CONTEXT_STRIPPED" in
   *clean*)
-    if printf '%s\n' "$COMMAND_CONTEXT_STRIPPED" | grep -qE "$_GC_SHELL_RE"; then
-      _GC_PROBE="${_GC_PROBE//\"/ }"
+    if printf '%s\n%s\n' "$COMMAND" "$COMMAND_CONTEXT_STRIPPED" \
+       | grep -qE "$_GC_SHELL_RE"; then
+      _GC_PROBE="${COMMAND//\"/ }"$'\n'"${COMMAND_CONTEXT_STRIPPED//\"/ }"
       _GC_PROBE="${_GC_PROBE//\'/ }"
     fi
     ;;
 esac
 _GIT_CLEAN_FAIL_CLOSED=0
 if [ "$_GIT_CLEAN_HAS_INV" != "1" ] && \
-   printf '%s\n%s\n' "$COMMAND" "$_GC_PROBE" | grep -qE "$_GIT_CLEAN_FALLBACK_RE"; then
+   printf '%s\n%s\n%s\n' "$COMMAND" "$COMMAND_CONTEXT_STRIPPED" "$_GC_PROBE" \
+     | grep -qE "$_GIT_CLEAN_FALLBACK_RE"; then
   _GIT_CLEAN_FAIL_CLOSED=1
 fi
 # Grant channel 4 of 4 — the subagent side of /do consent — is the ONLY one of
