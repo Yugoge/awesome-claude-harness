@@ -145,9 +145,11 @@ else
 fi
 
 # ── 3. Render settings.json from the tracked template ────────────────────────
-# settings.json is NOT tracked (it carries absolute install-home paths and
-# per-machine permission entries); it is generated here from the public seed
-# settings.template.json. Mirrors this script's own venv convention exactly:
+# settings.json IS tracked, but it carries absolute install-home paths and
+# per-machine permission entries, so a checkout's copy belongs to whoever made
+# it — never to the machine bootstrapping now. This step regenerates it from the
+# public seed settings.template.json so the local file describes this install.
+# Mirrors this script's own venv convention exactly:
 # non-destructive by default, --force backs the prior file up first using the
 # settings.json.bak-<timestamp> pattern .gitignore already anticipates.
 TEMPLATE="$HOME_DIR/settings.template.json"
