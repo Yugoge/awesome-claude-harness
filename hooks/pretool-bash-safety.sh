@@ -765,6 +765,8 @@ print(d.get('session_id','') or os.environ.get('CLAUDE_SESSION_ID','default'))" 
   [ -z "$_DO_SID" ] && _DO_SID="default"
   _DO_FLAG="/tmp/claude-orchestrator-consent-${_DO_SID}.flag"
   if [ -f "$_DO_FLAG" ] && [ "$(cat "$_DO_FLAG" 2>/dev/null)" = "true" ]; then
+    # Grant exit 1 of 4 — snapshot-or-deny a destructive `git clean` first.
+    _preclean_snapshot_guard
     exit 0
   fi
 fi
