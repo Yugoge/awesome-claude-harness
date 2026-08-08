@@ -162,6 +162,115 @@ DENY_CASES = [
 ]
 
 
+# ---------------------------------------------------------------------------
+# Iteration-5 vectors: every spelling QA measured reaching a grant exit with a
+# destructive clean and NO snapshot. Named individually so a regression names
+# the class it reopened rather than just incrementing a failure count.
+# ---------------------------------------------------------------------------
+
+# Unmodelled wrapper NAMES. The previous revision only stepped over the 12 names
+# in the shared `_WRAPPERS` set; anything else made the clean invisible. These
+# must DENY - the prefix cannot be proven inert, so the target cannot be proven.
+QA5_UNMODELLED_PREFIX_DENY = [
+    "timeout 60 git clean -fd",
+    "flock /tmp/x git clean -fd",
+    "chrt -b 0 git clean -fd",
+    "strace -f git clean -fd",
+    "bash -c 'git clean -fd'",
+    "sh -c 'git clean -fd'",
+    # One unmodelled word in front also reopened the CX-4 redirect.
+    "timeout 60 env -C /tmp/other git clean -fd",
+    # Names that exist nowhere in this codebase: the point is that membership of
+    # any list must stop deciding visibility.
+    "qqzzx git clean -fd",
+    "./wrapper.sh git clean -fd",
+    "/opt/tools/run git clean -fd",
+]
+
+# Quote/backslash splices of the command word. These run a clean in the hook's
+# OWN cwd, so the correct verdict is SNAPSHOT: they used to be invisible only
+# because a raw-text substring prefilter sat in front of the detector.
+QA5_SPLICED_SNAPSHOT = [
+    "g''it clean -fd",
+    'g""it clean -fd',
+    "git cl''ean -fd",
+    r"g\it clean -fd",
+    r"git cl\ean -fd",
+    "git $'clean' -fd",
+    "git \\\nclean -fd",
+    # The CX-1 negation fragmented across a quote boundary: a per-token unquote
+    # cannot rejoin the fragments, so the -n exemption wrongly survived.
+    'git clean -n --no-""dry-run -fd',
+    # Shell grammar the previous revision did not model at all.
+    ">hook.log git clean -fd",
+    "2>/dev/null git clean -fd",
+    "! git clean -fd",
+    "{ git clean -fd; }",
+]
+
+# Allow-with-wrong-snapshot: these used to snapshot tree A, print the success
+# message, and allow a clean of tree B. Worse in kind than no guard, because the
+# operator is told the work is recoverable when the deleted tree was never
+# snapshotted.
+QA5_WRONG_TREE_DENY = [
+    "! cd /tmp/other || git clean -fd",
+    "command -- cd /tmp/other && git clean -fd",
+    "time -p cd /tmp/other && git clean -fd",
+    "git --work-'tree'=/tmp/other clean -fd",
+    'git --work-"tree"=/tmp/other clean -fd',
+]
+
+# The inversion must not become a blunt instrument.
+QA5_STILL_EXEMPT = [
+    "git log --grep='git clean -fd'",
+    "git config --get clean.requireForce",
+    "make clean",
+    "npm run clean",
+    "git clean -n",
+    "git clean --no-dry-run -n",
+    "cd /tmp && ls",
+    "timeout 60 python3 script.py",
+]
+
+
+@pytest.mark.parametrize("command", QA5_UNMODELLED_PREFIX_DENY)
+def test_qa5_unmodelled_prefix_denies_instead_of_vanishing(command):
+    verdict, reason = decide(command)
+    assert verdict == "DENY", (
+        f"{command!r} still reduces to a destructive clean behind a prefix that "
+        f"cannot be proven inert; NONE here means a granted clean runs with no "
+        f"snapshot. Got {verdict}"
+    )
+    assert reason, "a DENY verdict must carry a human-readable reason"
+
+
+@pytest.mark.parametrize("command", QA5_SPLICED_SNAPSHOT)
+def test_qa5_spliced_or_decorated_hook_cwd_clean_snapshots(command):
+    verdict, _reason = decide(command)
+    assert verdict == "SNAPSHOT", (
+        f"{command!r} deletes in the hook cwd once bash removes the quoting or "
+        f"decoration, so it must be snapshotted first. Got {verdict}"
+    )
+
+
+@pytest.mark.parametrize("command", QA5_WRONG_TREE_DENY)
+def test_qa5_wrong_tree_forms_deny_rather_than_snapshot_the_hook_cwd(command):
+    verdict, _reason = decide(command)
+    assert verdict == "DENY", (
+        f"{command!r} aims the clean at another tree; snapshotting the hook cwd "
+        f"and allowing it manufactures false assurance. Got {verdict}"
+    )
+
+
+@pytest.mark.parametrize("command", QA5_STILL_EXEMPT)
+def test_qa5_inversion_does_not_over_block_ordinary_work(command):
+    verdict, _reason = decide(command)
+    assert verdict == "NONE", (
+        f"{command!r} destroys nothing; the fail-closed default must stay narrow "
+        f"or it is just a denial machine. Got {verdict}"
+    )
+
+
 @pytest.mark.parametrize("command", SNAPSHOT_CASES)
 def test_destructive_hook_cwd_clean_snapshots(command):
     verdict, _reason = decide(command)
