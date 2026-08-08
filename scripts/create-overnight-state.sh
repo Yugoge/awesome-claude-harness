@@ -792,6 +792,10 @@ echo "  Session: $SESSION_ID" >&2
 echo "  End time: $END_TIME" >&2
 echo "  Spec mode: $SPEC_MODE" >&2
 if [[ -n "$WORKTREE_PATH" ]]; then
-    echo "  Worktree: $WORKTREE_PATH" >&2
+    # Naming the mode matters: "Worktree: <main root>" reads as "a worktree was
+    # created" when in-place mode created nothing at all.
+    echo "  Isolation: $ISOLATION_KIND" >&2
+    echo "  Working root: $WORKTREE_PATH" >&2
+    echo "  Branch: $WORKTREE_BRANCH" >&2
 fi
 echo "STATE_PATH=$STATE_FILE"
