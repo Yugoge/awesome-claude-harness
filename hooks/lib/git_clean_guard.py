@@ -110,12 +110,18 @@ _INERT_WRAPPERS = frozenset({
 _ENV_ASSIGN_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
 
 _VERDICT_EXIT = {"NONE": 0, "SNAPSHOT": 10, "DENY": 11}
-# Embedded-payload recursion budget. Exhausting it DENIES (see _analyze_segment),
-# so the limit trades a denial on absurdly nested input against an unbounded
-# parse; it was raised from 3 once truncation stopped meaning "allow", because a
-# deeper budget now only reduces over-block and each level costs one re-lex of a
-# strict substring.
-_MAX_EMBED_DEPTH = 6
+# Embedded-payload recursion budget. Exhausting it DENIES (see _analyze_segment).
+# KEEP THIS SMALL. Each level re-lexes every candidate of every word, and a word
+# can yield up to three candidates (itself, its post-`=` value, its fused-option
+# tail), so the work is O(3^depth) in the worst case rather than linear. Measured
+# on a 250 KB crafted payload of the form `-x=sh -c '<...>'` nested d deep:
+# d=3 0.64s, d=4 1.3s, d=5 2.7s, d=6 5.4s - i.e. raising this to 6 pushed the
+# worst case past the hook's own 5s watchdog. That direction fails CLOSED (the
+# watchdog's non-zero rc denies), so it costs availability rather than safety,
+# but it is still a self-inflicted denial and the depth buys nothing: beyond the
+# budget the verdict is DENY either way, so a deeper budget only changes the
+# REASON for denying, never the answer.
+_MAX_EMBED_DEPTH = 3
 
 
 class _Word:
