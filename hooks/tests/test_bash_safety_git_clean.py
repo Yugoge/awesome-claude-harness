@@ -645,6 +645,52 @@ def _ac17_chained_matrix():
     ]
 
 
+def _ac17_globalopt_chained_matrix():
+    """THE class the previous round shipped reachable: a resolvable clean
+    chained with a nested payload whose git invocation carries a GLOBAL OPTION.
+
+    Generated as a CROSS PRODUCT over the class axes — every global-option
+    spelling x chain separator x interpreter x nesting depth — rather than as
+    the handful of example strings QA happened to measure. A fix that closes
+    only the measured examples fails here; only agreement between the two
+    occurrence grammars passes. Every form was measured at exit 0, ungranted,
+    against the pre-fix hook.
+    """
+    forms = []
+    for i, gopt in enumerate(_AC17_GLOBAL_OPTS):
+        payload = "git %s clean -fd" % gopt
+        sep = ["&&", ";", "|"][i % 3]
+        shell = ["sh", "bash", "/bin/sh"][i % 3]
+        forms.append("git clean -n %s %s -c '%s'" % (sep, shell, payload))
+        forms.append('git clean -nd %s %s -c "%s"' % (sep, shell, payload))
+        forms.append("git clean -n --exclude=b %s sh -c 'sh -c \"%s\"'"
+                     % (sep, payload))
+    return forms
+
+
+# Interpreter names NOBODY enumerated: every one of these escaped the previous
+# round's 16-name allowlist at exit 0, and `rbash` is installed on this host and
+# IS bash. Listed here as evidence for the class, not as the definition of it —
+# the rule under test recognises a command-position word ending in `sh` rather
+# than any name, so it must hold for names not written down anywhere.
+_AC17_UNLISTED_SHELLS = [
+    "ksh93", "rbash", "/usr/bin/rbash", "posh", "oksh", "loksh", "dtksh",
+    "elvish", "xonsh", "nsh", "bsh", "sh5", "rzsh", "sash", "wish",
+]
+
+
+def _ac17_unlisted_shell_matrix():
+    """Each unlisted interpreter carrying a destructive payload, bare and
+    chained behind a provable dry-run, with and without a global option."""
+    forms = []
+    for i, name in enumerate(_AC17_UNLISTED_SHELLS):
+        forms.append("%s -c 'git clean -fd'" % name)
+        forms.append("%s -c 'git -c a=b clean -fdx'" % name)
+        if i % 2 == 0:
+            forms.append("git clean -n && %s -c 'git clean -fd'" % name)
+    return forms
+
+
 def assert_clean_rule_denies(form):
     """Exit 2 AND the clean rule's own stderr token — never a vacuous pass."""
     rc, err = run_hook(form, want_stderr=True)
