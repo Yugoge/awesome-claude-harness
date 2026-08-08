@@ -2118,6 +2118,10 @@ if [ "$_GIT_CLEAN_WOULD_BLOCK" = "1" ] && [ "$_GIT_CLEAN_SUBAGENT_GRANT" != "1" 
       echo "DETAIL: a separate-value exclude (-e, a cluster ending in 'e', or --e..--exclude) consumes the NEXT token as its pattern, so a following -n is not a dry-run." >&2
       echo "Use the self-contained form '--exclude=<pattern>' alongside -n." >&2
       ;;
+    BLOCK:nested)
+      echo "DETAIL: the command carries MORE 'git clean' occurrences than can be resolved into invocations — at least one is inside a nested shell payload, so it cannot be proven non-destructive even though another clean in the same command is a dry-run." >&2
+      echo "Issue the dry-run preview on its own, without the nested shell." >&2
+      ;;
     *)
       if [ "$_GIT_CLEAN_FAIL_CLOSED" = "1" ]; then
         echo "DETAIL: a 'git clean' subcommand is present but could not be resolved into a provable invocation (a wrapper prefix such as 'env -i' / 'command --' / 'time -p', or a nested shell payload such as \"sh -c '…'\"); failing closed." >&2
