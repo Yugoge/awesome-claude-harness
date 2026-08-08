@@ -685,7 +685,17 @@ _preclean_snapshot_guard() {
     exit 2
   fi
 
-  _guard_reason=$(CMD_INPUT="$COMMAND" timeout "${CLAUDE_HOOK_CONTEXT_TIMEOUT:-5s}" \
+  # The watchdog duration is VALIDATED and passed after `--`. Unvalidated, it
+  # occupies GNU timeout's OPTION position, so CLAUDE_HOOK_CONTEXT_TIMEOUT=--help
+  # (or --version) makes `timeout` itself exit 0 — which this case statement
+  # would read as verdict NONE and let a granted destructive clean through
+  # unsnapshotted. Anything that is not <number>[smhd] falls back to the default.
+  _guard_timeout="${CLAUDE_HOOK_CONTEXT_TIMEOUT:-5s}"
+  case "$_guard_timeout" in
+    *[!0-9.smhd]*|''|*[!0-9smhd]) _guard_timeout="5s" ;;
+    [!0-9]*) _guard_timeout="5s" ;;
+  esac
+  _guard_reason=$(CMD_INPUT="$COMMAND" timeout -- "$_guard_timeout" \
     "$PYTHON_BIN" "$_guard_py" 2>/dev/null)
   _guard_rc=$?
   case "$_guard_rc" in
