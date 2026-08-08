@@ -635,9 +635,25 @@ def test_AC17c_every_destructive_payload_spelling_blocks(form):
 
 
 @pytest.mark.parametrize("form", _ac17_nesting_matrix())
-def test_AC17d_nesting_depth_one_and_two_block(form):
+def test_AC17d_nesting_depth_one_two_and_three_block(form):
     """A payload nested two deep keeps its inner quotes in the stripped view;
     quote-neutralisation before the grep is what closes that depth."""
+    assert_clean_rule_denies(form)
+
+
+@pytest.mark.parametrize("form", _ac17_shell_name_matrix())
+def test_AC17i_every_interpreter_name_blocks(form):
+    """Coverage must not stop at the four names bash_context_strip unwraps:
+    ksh, mksh, pdksh, ash, yash, csh, tcsh, fish and `busybox sh` reach the
+    same deletion and were all measured escaping at exit 0."""
+    assert_clean_rule_denies(form)
+
+
+@pytest.mark.parametrize("form", _ac17_indirect_matrix())
+def test_AC17j_indirect_routes_to_a_nested_shell_block(form):
+    """exec / eval / timeout / nohup / sudo prefixes, an xargs-injected shell,
+    a payload piped INTO a shell, a cd-prefixed payload, a command
+    substitution and a newline-separated payload."""
     assert_clean_rule_denies(form)
 
 
