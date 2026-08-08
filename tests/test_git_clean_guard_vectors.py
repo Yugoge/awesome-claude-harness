@@ -58,6 +58,14 @@ SNAPSHOT_CASES = [
     "git clean -n --no-dry-run -fd",
     "git clean --dry-run --no-dry-run -fd",
     "git clean -nd --no-dry-run -f",
+    # ...and git accepts any unambiguous ABBREVIATION of that negation.
+    "git clean -n --no-dry -fd",
+    "git clean -n --no-d -fd",
+    "git clean --dry-run --no-dry-r -fd",
+    # An abbreviated exclude swallows the following token exactly like `-e`,
+    # so the trailing -n is its pattern and the clean still deletes.
+    "git clean -fd --exc -n",
+    "git clean -fd --exclud -n",
     # A non-redirecting env ASSIGNMENT through a wrapper is still the hook cwd.
     "env FOO=bar git clean -fd",
 ]
