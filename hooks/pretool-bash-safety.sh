@@ -1895,7 +1895,18 @@ fi
 _GC_SEP='[[:space:];&|()`]'
 _GC_NOSEP="[^[:space:];&|()\`'\"]*"
 _GC_PATH="(${_GC_NOSEP}/)?"
-_GIT_CLEAN_FALLBACK_RE="(^|${_GC_SEP})((${_GC_PATH}git)|\"${_GC_PATH}git\"|'${_GC_PATH}git')${GIT_GLOBAL_OPT_RE}[[:space:]]+[\"']?clean\\b"
+# Global-option segment for the OCCURRENCE grammar only. Deliberately shaped by
+# SYNTAX rather than by the shared GIT_GLOBAL_OPT_RE's enumerated option names:
+# real git 2.54.0 accepts --no-lazy-fetch, --no-advice and --attr-source=, none
+# of which that enumeration lists, so `<dry-run> && sh -c 'git --no-lazy-fetch
+# clean -fd'` was reachable ungranted even with both layers agreeing. A long
+# option never swallows a following bare token (so `git --no-pager grep clean`
+# stays a grep, not an occurrence); a short option may take one separate value
+# (so `-C /tmp` and `-c a=b` are covered). GIT_GLOBAL_OPT_RE itself is NOT
+# touched — it is shared with the reset-block fallback at :1775 and widening it
+# would change an unrelated rule's surface.
+_GC_GOPT="([[:space:]]+(--${_GC_NOSEP}|-[^-[:space:];&|()\`'\"]${_GC_NOSEP}([[:space:]]+[^-[:space:];&|()\`'\"]${_GC_NOSEP})?))*"
+_GIT_CLEAN_FALLBACK_RE="(^|${_GC_SEP})((${_GC_PATH}git)|\"${_GC_PATH}git\"|'${_GC_PATH}git')${_GC_GOPT}[[:space:]]+[\"']?clean\\b"
 # Shell-in-command-position test, gating quote-neutralisation. Deliberately NOT
 # a name list: enumerating interpreter names was the repeated root cause in this
 # task, and a 16-name allowlist was escaped by ksh93, rbash, posh, oksh, elvish,
