@@ -729,7 +729,8 @@ jq -n \
             shim_git: (if $actor_git_shim == "" then null else $actor_git_shim end),
             bindir: (if $actor_git_bindir == "" then null else $actor_git_bindir end),
             shimdir: (if $actor_git_shimdir == "" then null else $actor_git_shimdir end),
-            env_helper: (if $actor_env_helper == "" then null else $actor_env_helper end)
+            env_helper: (if $actor_env_helper == "" then null else $actor_env_helper end),
+            marker_only: ($isolation_kind == "in_place")
         },
         view_paths: $view_paths,
         pm_triage_reports: [],
