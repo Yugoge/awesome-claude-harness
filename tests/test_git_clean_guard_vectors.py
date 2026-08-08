@@ -15,6 +15,15 @@ Regression anchor: `git clean -fd -e -n` DELETES — `-e` consumes the following
 token as its exclude pattern, so the trailing `-n` is a pattern, not a dry run.
 An earlier revision of the detector read that `-n` as a dry run and returned
 NONE, silently skipping the snapshot on a destructive clean.
+
+Two further anchors, both found by adversarial review AFTER every acceptance
+criterion passed (the criterion set had the same blind spot the code did):
+  * CX-1 `git clean -n --no-dry-run -fd` DELETES — git applies the dry-run flag
+    and its generated negation last-wins, so a first-match scan returned NONE
+    and a GRANTED destructive clean reached exit 0 with no snapshot.
+  * CX-4 `env -C <dir> git clean -fd` runs the clean in another tree — the
+    shared tokenizer stops at the wrapper's own option, so the git invocation
+    was invisible and the clean was allowed under a grant, unsnapshotted.
 """
 
 import pathlib
