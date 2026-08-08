@@ -79,11 +79,27 @@ _VERDICT_EXIT = {"NONE": 0, "SNAPSHOT": 10, "DENY": 11}
 
 
 def _unquote(tok: str) -> str:
-    """Strip balanced surrounding quotes so `"/usr/bin/git"` basenames to git."""
+    """Reduce a raw token to the static word bash would hand the program.
+
+    Strips balanced surrounding quotes (`"/usr/bin/git"` -> /usr/bin/git), then
+    any remaining stray quote characters at either end (`'git` -> git, as a
+    whitespace split of `env -S 'git clean -fd'` produces), then backslash
+    escapes (`--no-dry\\-run` -> --no-dry-run). Every one of those reductions is
+    fail-CLOSED for this module: it can only make a token look MORE like a git
+    token or a destructive flag, never less, so a token bash would not actually
+    reduce this way costs at most a superfluous snapshot or deny."""
     t = tok.strip()
     while len(t) >= 2 and t[0] == t[-1] and t[0] in ("'", '"'):
         t = t[1:-1]
-    return t
+    t = t.strip("'\"")
+    return t.replace("\\", "")
+
+
+def _region_word(tok: str) -> str:
+    """The static word a WRAPPER-REGION token contributes. A wrapper option can
+    carry an embedded command in its value (`env --split-string='git clean
+    -fd'`), so the post-`=` value is what matters there."""
+    return _unquote(tok.split("=", 1)[1]) if "=" in tok else _unquote(tok)
 
 
 def _is_redirect_config(kv: str) -> bool:
