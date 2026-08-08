@@ -1970,9 +1970,13 @@ fi
 # in the raw command that the classifier could NOT resolve into any invocation
 # (wrapper prefixes such as `env -i` / `command --` / `time -p`). The `\b`
 # subcommand anchor means `git config clean.requireForce` never matches.
+# GIT_FALLBACK_CMD_RE, not GIT_CMD_RE: the bare-git anchor class
+# (^|[[:space:];&|()`]) omits '/', so `env -i /usr/bin/git clean -fd` — zero
+# classifier invocations AND a path-qualified binary — would otherwise slip
+# through. Same path-tolerant anchor the reset-block fallback uses at :1669.
 _GIT_CLEAN_FAIL_CLOSED=0
 if [ "$_GIT_CLEAN_HAS_INV" != "1" ] && \
-   printf '%s\n' "$COMMAND" | grep -qE "${GIT_CMD_RE}clean\b"; then
+   printf '%s\n' "$COMMAND" | grep -qE "${GIT_FALLBACK_CMD_RE}clean\b"; then
   _GIT_CLEAN_FAIL_CLOSED=1
 fi
 if { [ "$_GIT_CLEAN_HAS_INV" = "1" ] && [ "$_GIT_CLEAN_VERDICT" != "ALLOW" ]; } || \
