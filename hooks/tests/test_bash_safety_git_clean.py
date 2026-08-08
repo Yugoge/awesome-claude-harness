@@ -52,12 +52,17 @@ def fresh_sid() -> str:
 
 
 def run_hook(command: str, session_id: str = None, hook: str = HOOK,
-             agent_id: str = None, cwd: str = None) -> int:
+             agent_id: str = None, cwd: str = None, want_stderr: bool = False):
     """Invoke the real hook with a Bash tool_input and return its exit code.
 
     `agent_id` makes the hook's IS_SUBAGENT true, which is what selects the
     4th grant channel; `cwd` keeps a granted clean's pre-clean WIP snapshot
     inside a throwaway repo instead of this one.
+
+    `want_stderr` additionally returns the hook's stderr, so a BLOCK assertion
+    can prove THIS rule denied the command rather than some sibling rule that
+    happens to exit 2 as well (an exit-code-only assertion is vacuous against a
+    wrapper token like `sudo` that another layer already blocks).
     """
     payload = {
         "tool_name": "Bash",
