@@ -764,6 +764,21 @@ def test_AC17k_accepted_over_blocks_are_blocked_and_escapable(form, granted_sid)
     assert CLEAN_DENY_TOKEN not in err, form
 
 
+@pytest.mark.parametrize("form", _ac17_chained_matrix())
+def test_AC17m_dry_run_chained_with_a_nested_payload_blocks(form):
+    """A provable dry-run must not launder a nested destructive payload."""
+    assert_clean_rule_denies(form)
+
+
+def test_AC17n_chaining_guard_does_not_over_block_a_lone_dry_run():
+    """Polarity control for AC17m: the count comparison must fire only on an
+    UNRESOLVED clean. A dry-run beside a shell that carries no clean, and a
+    dry-run beside a pure data mention, must both still be allowed."""
+    assert run_hook("bash -c 'make test' && git clean -n") == ALLOW
+    assert run_hook('git clean -n && echo "git clean -fd"') == ALLOW
+    assert run_hook("git clean -n") == ALLOW
+
+
 def test_AC17l_script_interpreter_payloads_are_a_symmetric_residual():
     """DOCUMENTED RESIDUAL, deliberately not closed by this lane: a payload
     carried by a LANGUAGE interpreter rather than a shell. Measured symmetric
