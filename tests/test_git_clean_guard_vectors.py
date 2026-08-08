@@ -329,6 +329,16 @@ def test_qa6_fused_option_payload_denies(command):
     )
 
 
+@pytest.mark.parametrize("command", QA6_ENV_S_ESCAPE_STILL_EXEMPT)
+def test_qa6_env_s_escapes_do_not_become_a_blanket_denial(command):
+    verdict, _reason = decide(command)
+    assert verdict == "NONE", (
+        f"{command!r} destroys nothing once env re-splits it; translating env's "
+        f"separators must not turn every escaped option word into a deny. "
+        f"Got {verdict}"
+    )
+
+
 @pytest.mark.parametrize("command", QA6_NESTED_PAYLOAD_DENY)
 def test_qa6_truncated_recursion_denies_rather_than_falling_through(command):
     verdict, _reason = decide(command)
