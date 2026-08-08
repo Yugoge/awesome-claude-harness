@@ -688,19 +688,70 @@ def test_AC17f_nested_payload_without_a_grant_is_not_released():
 # (those are covered by test_AC6 above and are unaffected because this arm only
 # runs when the classifier resolved NO clean invocation at all).
 AC17_ALLOW_CONTROLS = [
+    # phrase as data, no shell in command position -> probe never neutralises
     'echo "git clean -fd"',
     "grep -rn 'git clean' docs/",
+    'python3 -c \'print("git clean -fd")\'',
+    'CMD_INPUT="sh -c \'git clean -fd\'" python3 x.py',
+    'echo "git clean -fd" > notes.txt',
+    # non-git 'clean', and the config/help reads
     "git config clean.requireForce false",
+    "git help clean",
     "make clean",
     "./gradlew clean",
-    "git help clean",
+    "npm run clean",
+    # a shell IS present but there is no clean at all -> must stay untouched
+    "bash -c 'make test'",
+    "sh -c 'ls -la'",
+    "printf %s hello | sh",
+    "timeout 5 sh -c 'sleep 1'",
+    "ls *.sh",
+    "which bash",
 ]
 
 
 @pytest.mark.parametrize("form", AC17_ALLOW_CONTROLS)
 def test_AC17g_quoted_data_and_non_git_clean_still_allowed(form):
-    """The second scan stream must not widen the mention-level over-block."""
+    """The added scan streams must not widen the mention-level over-block
+    beyond the measured, documented set below."""
     assert run_hook(form) == ALLOW, form
+
+
+# The MEASURED cost of scanning the raw stream under a shell-in-command-position
+# gate. Each is a phrase mentioned as DATA in a command that also invokes a
+# shell — once an unparsed shell payload is present the hook cannot separate an
+# inert mention from an executable one, so it fails closed. Accepted, not a
+# defect: fail-safe direction and escapable by a human grant. Pinned so that any
+# future widening of this surface shows up as a test change rather than silently.
+AC17_ACCEPTED_OVER_BLOCKS = [
+    'bash -c \'echo "git clean -fd"\'',
+    "sh -c 'grep -rn \"git clean\" docs/'",
+    'bash -lc "make test" && grep -rn \'git clean\' docs/',
+    'sh scripts/build.sh && echo "git clean -fd"',
+]
+
+
+@pytest.mark.parametrize("form", AC17_ACCEPTED_OVER_BLOCKS)
+def test_AC17k_accepted_over_blocks_are_blocked_and_escapable(form, granted_sid):
+    """Blocked with no grant; released from THIS deny by a matching grant."""
+    assert run_hook(form) == BLOCK, form
+    _, err = run_hook(form, session_id=granted_sid, want_stderr=True)
+    assert CLEAN_DENY_TOKEN not in err, form
+
+
+def test_AC17l_script_interpreter_payloads_are_a_symmetric_residual():
+    """DOCUMENTED RESIDUAL, deliberately not closed by this lane: a payload
+    carried by a LANGUAGE interpreter rather than a shell. Measured symmetric
+    with the rm-block — both allow — so it is a pre-existing cross-cutting gap
+    of the same shape as eval/alias/variable-command-word, not a miss of the
+    nested-SHELL class. Closing it would mean treating every interpreter's
+    string argument as executable, which is a different capability."""
+    for clean_form, rm_form in [
+        ("python3 -c 'import os; os.system(\"git clean -fd\")'",
+         "python3 -c 'import os; os.system(\"rm foo\")'"),
+        ("perl -e 'system(\"git clean -fd\")'", "perl -e 'system(\"rm foo\")'"),
+    ]:
+        assert run_hook(clean_form) == run_hook(rm_form), clean_form
 
 
 def test_AC17h_rm_block_nested_parity_not_regressed():
