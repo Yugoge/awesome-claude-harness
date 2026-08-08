@@ -331,7 +331,12 @@ MONOLITH_SHA="null"
 
 if [[ "$EMIT_RECORD_ONLY" != "1" ]]; then
 
-# --- Establish the working root per the user's isolation choice ---------------
+# --- Create + validate the isolated worktree FIRST (M1, M2, M3) ---------------
+# (Landmark comment: AC-10 / AC-12 anchor the "protected-branch resolution runs
+# strictly BEFORE the isolation-creating region" ordering invariant on this exact
+# phrase. Keep it verbatim.)
+#
+# Establish the working root per the user's isolation choice.
 # TWO MODES. `in_place` (default) runs the actor in the checkout the user is
 # already on and creates NOTHING. `worktree` (explicit --worktree) is the
 # historical path: create + validate an isolated worktree, and refuse the launch
