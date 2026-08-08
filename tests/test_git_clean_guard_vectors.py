@@ -58,7 +58,7 @@ SNAPSHOT_CASES = [
     "git clean -n --no-dry-run -fd",
     "git clean --dry-run --no-dry-run -fd",
     "git clean -nd --no-dry-run -f",
-    # A wrapper option that does NOT move the cwd still snapshots the hook cwd.
+    # A non-redirecting env ASSIGNMENT through a wrapper is still the hook cwd.
     "env FOO=bar git clean -fd",
 ]
 
