@@ -183,11 +183,13 @@ def _scan_segment(seg: str, ignore_dry_run: bool = False):
     if toks[idx] == "--":
         # A wrapper's option TERMINATOR: everything after it is the command and
         # no cwd-changing option preceded it, so `env -- git clean -fd` is a
-        # provable hook-cwd clean and must snapshot rather than deny.
-        idx += 1
-        if idx >= len(toks):
+        # provable hook-cwd clean and must snapshot rather than deny. Re-resolve
+        # rather than assuming the next token is the executable, so a nested
+        # wrapper after the terminator is still analysed.
+        if idx + 1 >= len(toks):
             return (False, False)
-    elif toks[idx].startswith("-"):
+        return _scan_segment(" ".join(toks[idx + 1:]), ignore_dry_run)
+    if toks[idx].startswith("-"):
         # A WRAPPER's own option region. _command_token_index steps over the
         # wrapper token but stops at its first option, so `env -C <dir> git
         # clean -fd` resolves to `-C` and the git invocation is invisible
