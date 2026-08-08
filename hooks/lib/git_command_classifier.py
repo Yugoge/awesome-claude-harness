@@ -97,6 +97,23 @@ def _basename(tok):
     return tok.rsplit('/', 1)[-1]
 
 
+def _unquote_token(tok):
+    """Strip balanced surrounding quotes: `"/usr/bin/git"` -> `/usr/bin/git`.
+
+    Added 2026-08-08 (task dev-20260719-150041-a). Bash removes quotes before
+    exec, so `"/usr/bin/git" clean -fd` runs git — but the raw token basenames
+    to `git"`, so iter_git_invocations() recorded NO invocation and every guard
+    built on it (bash-safety, git-privilege, runtime_guard) silently missed the
+    command. Additive: a new helper, no existing signature or behaviour of
+    _basename / _git_subcommand / _command_token_index is changed
+    (pretool-block-branch-pr-worktree.py imports _git_subcommand directly).
+    """
+    t = tok.strip()
+    while len(t) >= 2 and t[0] == t[-1] and t[0] in ('"', "'"):
+        t = t[1:-1]
+    return t
+
+
 # Command WRAPPERS that prefix the real command token (basename match). The real
 # command token is the first token after skipping leading env-var assignments
 # (NAME=VALUE) and any of these wrappers. Only that one command token is
