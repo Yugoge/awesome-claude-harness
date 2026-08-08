@@ -144,10 +144,23 @@ def _scan_segment(seg: str):
     idx = _command_token_index(toks)
     if idx is None:
         return (False, False)
+    wrapper_opts = False
+    if toks[idx].startswith("-"):
+        # A WRAPPER's own option region. _command_token_index steps over the
+        # wrapper token but stops at its first option, so `env -C <dir> git
+        # clean -fd` resolves to `-C` and the git invocation is invisible
+        # (CX-4). Step over the region to the git token and treat the region as
+        # unprovable: `-C` / `--chdir` move the child's cwd outright, and an
+        # option this module does not model cannot be proven not to.
+        git_idx = next((j for j in range(idx + 1, len(toks))
+                        if os.path.basename(_unquote(toks[j])) == "git"), None)
+        if git_idx is None:
+            return (False, False)
+        idx, wrapper_opts = git_idx, True
     if os.path.basename(_unquote(toks[idx])) != "git":
         return (False, False)
 
-    redirect = False
+    redirect = wrapper_opts
     subcommand = None
     sub_idx = None
     i, n = idx + 1, len(toks)
