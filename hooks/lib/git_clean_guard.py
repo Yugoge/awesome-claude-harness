@@ -587,51 +587,53 @@ def _cwd_indeterminate(words, info, raw: str) -> bool:
 
 
 def decide(command_text: str):
-    """Return (verdict, reason) for one Bash command. Fail-closed by design:
-    every clean in a multi-clean payload must be provably hook-cwd-targeted."""
-    normalized = command_text
-    if strip_non_executable_contexts is not None:
-        try:
-            normalized = strip_non_executable_contexts(command_text)
-        except Exception:  # bounded normalizer failed -> parse the raw command
-            normalized = command_text
+    """Return (verdict, reason) for one Bash command.
 
-    # BOTH parses, unioned fail-closed. The bounded normalizer erases quoted
-    # content, so `git clean -n "--no-dry-run" -fd` loses its negation and reads
-    # as a dry run; the raw text keeps it. Whichever parse sees a destructive
-    # clean wins, so erasing text can never buy an exemption.
-    segments = _segments(normalized)
-    if command_text != normalized:
-        segments = segments + _segments(command_text)
+    Fail-closed by design: a destructive clean is allowed ONLY when every
+    reducible occurrence sits at a provably-inert command position, no git
+    global or environment variable redirects the target, and the effective
+    working directory is provably the hook's own. Every other reducible clean
+    - including one behind a prefix this guard does not model - denies."""
+    tokens, info = _lex(command_text)
+    segments = _split_segments(tokens)
+    words = _all_words(segments)
+
     destructive = False
-    redirect = False
+    provable = True
     for seg in segments:
-        seg_destructive, seg_redirect = _scan_segment(seg)
+        seg_destructive, seg_provable = _analyze_segment(seg)
         if seg_destructive:
             destructive = True
-            redirect = redirect or seg_redirect
+            provable = provable and seg_provable
 
     if not destructive:
-        # A clean whose flag region is built by substitution is not a PROVEN
-        # dry run, and `_segments` has already carved the substitution into its
-        # own segment, so the flag never reaches _is_dry_run.
-        if any(marker in command_text for marker in _SUBST_MARKERS):
+        # A clean whose flag region is built by substitution is not a PROVEN dry
+        # run: _split_segments carved the substitution into its own segment, so
+        # the flags it contributes never reached _is_dry_run.
+        if info["substitution"] or any(m in command_text for m in _SUBST_MARKERS):
             for seg in segments:
-                if _scan_segment(seg, ignore_dry_run=True)[0]:
+                if _analyze_segment(seg, ignore_dry_run=True)[0]:
                     return ("DENY", "a `git clean` carries command substitution "
                                     "in its flag region - the effective flags "
                                     "cannot be proven to be a dry run")
         return ("NONE", "")
-    redirect = redirect or _has_env_redirect(segments)
-    if redirect:
-        return ("DENY", "target-redirecting git global or unprovable wrapper "
-                        "option present (-C / --git-dir / --work-tree / GIT_DIR / "
-                        "GIT_WORK_TREE / -c core.worktree / env -C / env --chdir) - "
+
+    if not provable:
+        return ("DENY", "a destructive `git clean` is reducible from this command, "
+                        "but its target is not provably this working directory: it "
+                        "sits behind a target-redirecting git global (-C / --git-dir "
+                        "/ --work-tree / -c core.worktree), a wrapper option "
+                        "(env -C / env --chdir / env -S), an unrecognised wrapper or "
+                        "interpreter, an embedded shell payload, or plain argument "
+                        "text this guard cannot prove inert")
+    if _has_env_redirect(words):
+        return ("DENY", "a work-tree-redirecting git environment variable "
+                        "(GIT_DIR / GIT_WORK_TREE / GIT_COMMON_DIR) is assigned - "
                         "the clean target is not provably the hook's own working "
                         "directory")
-    if _has_cwd_mutation(normalized, command_text):
+    if _cwd_indeterminate(words, info, command_text):
         return ("DENY", "effective working directory is indeterminate "
-                        "(leading cd/pushd, subshell, or command substitution) - "
+                        "(cd/pushd/popd, subshell, or command substitution) - "
                         "the clean target is not provably the hook's own working "
                         "directory")
     return ("SNAPSHOT", "")
