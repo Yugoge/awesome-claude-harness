@@ -198,10 +198,11 @@ def _scan_segment(seg: str, ignore_dry_run: bool = False):
         # that yields a destructive clean denies, because the option region is
         # an unprovable target: `-C` / `--chdir` move the child's cwd outright,
         # and an option this module does not model cannot be proven not to.
-        for j in range(idx + 1, len(toks)):
-            if os.path.basename(_unquote(toks[j])) != "git":
+        region = [_region_word(t) for t in toks[idx:]]
+        for j in range(len(region)):
+            if os.path.basename(region[j]) != "git":
                 continue
-            if _scan_segment(" ".join(toks[j:]))[0]:
+            if _scan_segment(" ".join(region[j:]), ignore_dry_run)[0]:
                 return (True, True)
         return (False, False)
     if os.path.basename(_unquote(toks[idx])) != "git":
