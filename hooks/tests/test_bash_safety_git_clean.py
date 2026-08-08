@@ -803,17 +803,37 @@ def test_AC17g_quoted_data_and_non_git_clean_still_allowed(form):
     assert run_hook(form) == ALLOW, form
 
 
-# The MEASURED cost of scanning the raw stream under a shell-in-command-position
-# gate. Each is a phrase mentioned as DATA in a command that also invokes a
-# shell — once an unparsed shell payload is present the hook cannot separate an
-# inert mention from an executable one, so it fails closed. Accepted, not a
-# defect: fail-safe direction and escapable by a human grant. Pinned so that any
-# future widening of this surface shows up as a test change rather than silently.
+# The MEASURED cost of the nested-payload coverage. EIGHT forms, in TWO distinct
+# shapes with two distinct mechanisms — the earlier disclosure named only the
+# first shape and attributed the whole cost to it, which understated the real
+# breadth by half:
+#
+#   Shape A (the raw-stream scan, gated on a shell in command position) — the
+#   phrase appears as DATA in a command that ALSO invokes a shell. Once an
+#   unparsed shell payload is present the hook cannot separate an inert mention
+#   from an executable one.
+#
+#   Shape B (the occurrence-count comparison) — an inert prose, grep or
+#   commit-message mention chained with a REAL dry-run preview. There is no
+#   shell in command position at all here, so shape B is not a leak of the
+#   command-position gate; the coarse counter simply cannot tell a mention from
+#   an unresolved invocation, and a legitimate preview-plus-documentation
+#   command is the everyday casualty.
+#
+# Accepted, not a defect: both shapes are in the fail-safe direction and both
+# are escapable by a human grant. Pinned so any future widening of either
+# surface shows up as a test change rather than silently.
 AC17_ACCEPTED_OVER_BLOCKS = [
+    # shape A — phrase as data alongside a shell invocation
     'bash -c \'echo "git clean -fd"\'',
     "sh -c 'grep -rn \"git clean\" docs/'",
     'bash -lc "make test" && grep -rn \'git clean\' docs/',
     'sh scripts/build.sh && echo "git clean -fd"',
+    # shape B — inert mention chained with a real dry-run preview, no shell
+    "git clean -n && echo run git clean later",
+    "git clean -n; echo see git clean docs",
+    "git clean -n && grep -rn git clean docs/",
+    'git clean -n && git commit -m "docs: git clean"',
 ]
 
 
