@@ -550,7 +550,14 @@ GITENV_HELPER="$SCRIPT_DIR_ABS/overnight-git-env.sh"
 # rely on. Dropping the marker too would silently remove the last ref-level
 # protection in the mode that needs it most.
 if [[ "$ISOLATION_KIND" == "in_place" ]]; then
+    # A marker-only helper is still recorded. Each Bash tool call is a fresh
+    # shell, so a one-time `export` in the actor's first command does not reach
+    # its later ones — the marker would silently lapse and the keystone would
+    # stop applying. Recording a sourceable helper makes it reproducible per
+    # command, exactly as the worktree path does with its own helper.
+    INPLACE_ENV_HELPER="$SCRIPT_DIR_ABS/overnight-inplace-env.sh"
     ACTOR_ENV_HELPER_PATH=""
+    [[ -f "$INPLACE_ENV_HELPER" ]] && ACTOR_ENV_HELPER_PATH="$INPLACE_ENV_HELPER"
     ACTOR_GIT_SHIM=""
     ACTOR_GIT_BINDIR=""
     ACTOR_GIT_SHIMDIR=""
