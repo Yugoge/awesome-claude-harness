@@ -182,10 +182,18 @@ FOCUS=""
     [[ "$SPEC_ABS" != /* ]] && SPEC_ABS="$PROJECT_ROOT/$USER_SPEC_PATH"
     if [[ -f "$SPEC_ABS" ]]; then
       printf '\nSection 5 (User Acceptance Criterion):\n'
-      # Verbatim byte-slice from the "## 5" heading to the next same-level
-      # heading. Emits nothing when the spec has no Section 5 rather than
-      # guessing at a substitute.
-      awk '/^##[[:space:]]*5[.[:space:]]/{f=1} f&&/^##[[:space:]]*[^5]/&&!/^##[[:space:]]*5/{if(seen)exit} f{print;seen=1}' "$SPEC_ABS"
+      # Verbatim byte-slice from the Section-5 level-2 heading up to the NEXT
+      # level-2 heading, so the `### 5.x` subsections stay included. Both
+      # heading dialects in use are accepted: "## Section 5: ..." and "## 5. ...".
+      # Emits nothing when the spec has no Section 5 — an empty slice is honest,
+      # a guessed substitute is not.
+      awk '
+        /^##[[:space:]]/ && !/^###/ {
+          if (inside) exit
+          if ($0 ~ /^##[[:space:]]+(Section[[:space:]]+)?5([:.[:space:]]|$)/) { inside = 1 }
+        }
+        inside { print }
+      ' "$SPEC_ABS"
     fi
   fi
 } | _write_confined "$REQUIREMENT_DOC"
