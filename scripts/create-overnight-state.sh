@@ -115,6 +115,20 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
+# --- Resolve the isolation choice (side-effect-free) --------------------------
+# Refuse rather than reconcile: with both flags given there is no non-arbitrary
+# winner, and picking one silently would hand the user the isolation mode they
+# did not ask for. Neither flag => in_place (see WORKTREE_CHOICE above).
+if [[ "$WORKTREE_FLAG_SEEN" == "1" && "$NO_WORKTREE_FLAG_SEEN" == "1" ]]; then
+    echo "Error: --worktree and --no-worktree are mutually exclusive; pass exactly one (or neither, which means --no-worktree)." >&2
+    exit 1
+fi
+if [[ "$WORKTREE_FLAG_SEEN" == "1" ]]; then
+    WORKTREE_CHOICE="worktree"
+else
+    WORKTREE_CHOICE="in_place"
+fi
+
 # --- Session ID ---
 if [[ -z "$SESSION_ID" ]]; then
     SESSION_ID="$(uuidgen)"
