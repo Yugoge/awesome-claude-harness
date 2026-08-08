@@ -2064,9 +2064,8 @@ fi
 # quotes the phrase. A separate local RE, not a widened GIT_FALLBACK_CMD_RE:
 # that variable is shared with the reset-block fallback at :1775 and widening
 # it would change an unrelated rule's surface.
-_GC_SEP='[[:space:];&|()`]'
-_GC_PATH="([^[:space:];&|()\`'\"]*/)?"
-_GIT_CLEAN_FALLBACK_RE="(^|${_GC_SEP})((${_GC_PATH}git)|\"${_GC_PATH}git\"|'${_GC_PATH}git')${GIT_GLOBAL_OPT_RE}[[:space:]]+[\"']?clean\\b"
+# _GIT_CLEAN_FALLBACK_RE and _GC_SHELL_RE are defined ONCE at the top of this
+# block and shared with the Python verdict above; see the rationale there.
 # Scanned over TWO streams. Raw $COMMAND alone let the destructive clean through
 # as the PAYLOAD of a nested shell (`sh -c 'git clean -fd'` and its /bin/sh,
 # bash, `bash -lc`, dash and `env bash -c` siblings all ran UNGRANTED), while the
