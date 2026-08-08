@@ -693,6 +693,16 @@ def _ac17_unlisted_shell_matrix():
         forms.append("%s -c 'git -c a=b clean -fdx'" % name)
         if i % 2 == 0:
             forms.append("git clean -n && %s -c 'git clean -fd'" % name)
+    # QUOTED interpreter binary. The word class that makes the rule structural
+    # necessarily excludes the quote characters, so without a balanced-quote
+    # alternation `"/bin/sh" -c '<destructive>'` was recognised by nobody and ran
+    # ungranted — the same shape the occurrence grammar already handles for the
+    # git binary itself (`"git" clean -fd`). Both quote styles, listed and
+    # unlisted names, bare and chained.
+    for name in ("/bin/sh", "bash", "/usr/bin/rbash", "ksh93"):
+        forms.append('"%s" -c \'git clean -fd\'' % name)
+        forms.append("'%s' -c 'git clean -fd'" % name)
+        forms.append('git clean -n && "%s" -c \'git -C /tmp clean -fd\'' % name)
     return forms
 
 
