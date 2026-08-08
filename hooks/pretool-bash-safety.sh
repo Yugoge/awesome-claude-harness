@@ -2012,15 +2012,26 @@ _GIT_CLEAN_FALLBACK_RE="(^|${_GC_SEP})((${_GC_PATH}git)|\"${_GC_PATH}git\"|'${_G
 # the coverage for free — and the same evidence is already computed here, the
 # stripped view being the plain text `sh -c  git clean -fd`. So read that view
 # (never edit the stripper) instead of building a parallel unwrapper.
-# Quotes are neutralised first, because a payload nested two deep keeps its inner
-# quotes (`sh -c  sh -c "git clean -fd"`). Neutralising on the STRIPPED stream
-# ONLY is what keeps the :1979 warning satisfied: by this point a non-shell
-# command's quoted argument has already been blanked (`echo "git clean -fd"` is
-# `echo ""`), so a quoted `git … clean` that SURVIVED stripping is executable
-# context, not data. Both streams feed ONE grep as two lines — `^` anchors
-# per-line — so no Bash call pays an extra subprocess.
-_GC_PROBE="${COMMAND_CONTEXT_STRIPPED//\"/ }"
-_GC_PROBE="${_GC_PROBE//\'/ }"
+# A payload nested TWO deep keeps its inner quotes through stripping
+# (`sh -c  sh -c "git clean -fd"`), so those quotes are neutralised before the
+# scan — but ONLY when a shell interpreter actually holds COMMAND position in the
+# stripped view. That condition is what stops the :1979 warning from applying: an
+# ordinary command's quoted argument is already blanked by this point
+# (`echo "git clean -fd"` is `echo ""`), and the one quoted form that still
+# survives stripping without being executable — an assignment VALUE, as in
+# `CMD_INPUT="sh -c '…'" python3 x` — has no shell in command position and is
+# therefore left alone rather than over-blocked.
+# Both streams feed ONE grep as two lines (`^` anchors per-line).
+_GC_SHELL_RE="(^|${_GC_SEP})${_GC_PATH}(ba|da|z|k|a)?sh[[:space:]]"
+_GC_PROBE="$COMMAND_CONTEXT_STRIPPED"
+case "$COMMAND_CONTEXT_STRIPPED" in
+  *clean*)
+    if printf '%s\n' "$COMMAND_CONTEXT_STRIPPED" | grep -qE "$_GC_SHELL_RE"; then
+      _GC_PROBE="${_GC_PROBE//\"/ }"
+      _GC_PROBE="${_GC_PROBE//\'/ }"
+    fi
+    ;;
+esac
 _GIT_CLEAN_FAIL_CLOSED=0
 if [ "$_GIT_CLEAN_HAS_INV" != "1" ] && \
    printf '%s\n%s\n' "$COMMAND" "$_GC_PROBE" | grep -qE "$_GIT_CLEAN_FALLBACK_RE"; then
