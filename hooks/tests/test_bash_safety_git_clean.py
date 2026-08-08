@@ -849,6 +849,11 @@ AC17_ACCEPTED_OVER_BLOCKS = [
     "git clean -n; echo see git clean docs",
     "git clean -n && grep -rn git clean docs/",
     'git clean -n && git commit -m "docs: git clean"',
+    # shape C — the one form this round newly over-blocks: a repository whose
+    # DIRECTORY is literally named `clean`, reached via -C. The cost of the
+    # occurrence grammar tolerating global options real git accepts but no
+    # enumeration lists. `git -C ./clean status` is the unaffected spelling.
+    "git -C clean status",
 ]
 
 
