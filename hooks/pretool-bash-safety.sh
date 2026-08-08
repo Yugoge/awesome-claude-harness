@@ -1976,14 +1976,40 @@ fi
 # in the raw command that the classifier could NOT resolve into any invocation
 # (wrapper prefixes such as `env -i` / `command --` / `time -p`). The `\b`
 # subcommand anchor means `git config clean.requireForce` never matches.
-# GIT_FALLBACK_CMD_RE, not GIT_CMD_RE: the bare-git anchor class
-# (^|[[:space:];&|()`]) omits '/', so `env -i /usr/bin/git clean -fd` — zero
-# classifier invocations AND a path-qualified binary — would otherwise slip
-# through. Same path-tolerant anchor the reset-block fallback uses at :1669.
+# The anchor must tolerate BOTH a path prefix and balanced quotes around the
+# binary: `(^|[[:space:];&|()`])` omits '/', so `env -i /usr/bin/git clean -fd`
+# slips past a bare-git anchor, and neither that class nor the path class
+# admits a quote, so `env -i "git" clean -fd` slipped past GIT_FALLBACK_CMD_RE
+# too (measured rc=0, ungranted). Quotes are therefore matched as a BALANCED
+# PAIR hugging the binary — `"git"` / `'/usr/bin/git'` — rather than by adding
+# the quote characters to the anchor class. That distinction is load-bearing:
+# a class-widening anchor cannot tell `"git" clean` (an invocation) from
+# `echo "git clean -fd"` (data), and would over-block every command that merely
+# quotes the phrase. A separate local RE, not a widened GIT_FALLBACK_CMD_RE:
+# that variable is shared with the reset-block fallback at :1775 and widening
+# it would change an unrelated rule's surface.
+_GC_SEP='[[:space:];&|()`]'
+_GC_PATH="([^[:space:];&|()\`'\"]*/)?"
+_GIT_CLEAN_FALLBACK_RE="(^|${_GC_SEP})((${_GC_PATH}git)|\"${_GC_PATH}git\"|'${_GC_PATH}git')${GIT_GLOBAL_OPT_RE}[[:space:]]+[\"']?clean\\b"
 _GIT_CLEAN_FAIL_CLOSED=0
 if [ "$_GIT_CLEAN_HAS_INV" != "1" ] && \
-   printf '%s\n' "$COMMAND" | grep -qE "${GIT_FALLBACK_CMD_RE}clean\b"; then
+   printf '%s\n' "$COMMAND" | grep -qE "$_GIT_CLEAN_FALLBACK_RE"; then
   _GIT_CLEAN_FAIL_CLOSED=1
+fi
+# Grant channel 4 of 4 — the subagent side of /do consent — is the ONLY one of
+# the four that sits DOWNSTREAM of this deny (at :2013-2026, where lane r03-c's
+# pre-clean WIP snapshot guard runs). Denying here would preempt that snapshot
+# and make an explicit human grant weaker on this channel than on the other
+# three, contrary to the rule's contract. The predicate below is character-for
+# -character the one at :2013-2016, so releasing the deny provably lands on
+# that snapshot-or-deny exit and never on the terminal default-allow.
+_GIT_CLEAN_SUBAGENT_GRANT=0
+if [ "$IS_SUBAGENT" = "1" ]; then
+  _GC_SID=$(echo "$INPUT" | "$PYTHON_BIN" -c \
+    "import json,sys; d=json.load(sys.stdin); print(d.get('session_id',''))" 2>/dev/null)
+  if [ -n "$_GC_SID" ] && [ -e "/tmp/claude-orchestrator-consent-${_GC_SID}.flag" ]; then
+    _GIT_CLEAN_SUBAGENT_GRANT=1
+  fi
 fi
 if { [ "$_GIT_CLEAN_HAS_INV" = "1" ] && [ "$_GIT_CLEAN_VERDICT" != "ALLOW" ]; } || \
    [ "$_GIT_CLEAN_FAIL_CLOSED" = "1" ]; then
