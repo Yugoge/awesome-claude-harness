@@ -815,6 +815,9 @@ PYEOF
 )
   case "$SENTINEL_QUERY" in
     SENTINEL_OK)
+      # Grant exit 2 of 4 — snapshot-or-deny BEFORE the approval JSON is emitted,
+      # so a denied clean never advertises an "allow" decision.
+      _preclean_snapshot_guard
       mkdir -p "$(dirname "$CONSENT_LOG")"
       echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) task=$TASK_ID_FOR_SENTINEL SENTINEL_GRANT_MATCHED command='$COMMAND'" >> "$CONSENT_LOG"
       echo "[allow-sentinel] structured grant matched for task=$TASK_ID_FOR_SENTINEL. consume-on-any-terminal-result deferred to PostToolUse." >&2
