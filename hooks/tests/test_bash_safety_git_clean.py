@@ -500,3 +500,146 @@ def test_AC16d_subagent_grant_for_another_session_does_not_release(
     """Session-scoped exactly like the main-agent channel (AC7b)."""
     assert run_hook("git clean -fd", session_id=fresh_sid(),
                     agent_id="agent-under-test", cwd=throwaway_repo) == BLOCK
+
+
+# ── AC17: a destructive clean carried as a NESTED SHELL PAYLOAD ──────────────
+# QA final verification measured seven spellings executing UNGRANTED at exit 0
+# while the rm-block this rule was asked to mirror denies the equivalent
+# `sh -c 'rm foo'`. The gap was one of INPUT, not of capability: the fail-closed
+# fallback scanned only raw $COMMAND, whereas bash_context_strip already unwraps
+# a shell interpreter's -c payload, which is why the rm-block's grep of
+# COMMAND_CONTEXT_STRIPPED inherits the coverage for free.
+#
+# Pinned as a CLASS, not as one example string — every interpreter in
+# bash_context_strip._SHELL_INTERPS, both quote styles, the -c/-lc/-ic flag
+# spellings, wrapper prefixes and two nesting depths — because this lane's
+# recurring failure mode has been criteria passing while real evasions survive.
+# Assertions check the hook's OWN stderr token, so a form that some sibling rule
+# also happens to deny cannot score a vacuous pass here.
+
+CLEAN_DENY_TOKEN = "destructive 'git clean'"
+
+# The seven spellings QA measured at exit 0, verbatim from the QA report.
+AC17_QA_MEASURED = [
+    "sh -c 'git clean -fd'",
+    "/bin/sh -c 'git clean -fd'",
+    'bash -c "git clean -fd"',
+    "bash -lc 'git clean -fd'",
+    "dash -c 'git clean -fd'",
+    "env bash -c 'git clean -fd'",
+    'sh -c \'sh -c "git clean -fd"\'',
+]
+
+# Class sweep. The interpreters are the ones bash_context_strip treats as shells;
+# none of them needs to be installed, because the guard is a text predicate.
+_AC17_SHELLS = ["sh", "/bin/sh", "bash", "/bin/bash", "dash", "zsh"]
+_AC17_CFLAGS = ["-c", "-lc", "-ic"]
+_AC17_PAYLOADS = [
+    "git clean -fd",                 # canonical destructive
+    "git clean -fdx",                # + ignored files
+    "git clean --force",             # long option
+    "git clean",                     # bare (requireForce=false hole)
+    "git clean -f -n --no-dry-run",  # dry-run token present, effective state OFF
+    "/usr/bin/git clean -fd",        # path-qualified inside the payload
+]
+
+
+def _ac17_shell_matrix():
+    """Every shell x -c spelling x quote style carrying a destructive clean."""
+    forms = []
+    for shell in _AC17_SHELLS:
+        for flag in _AC17_CFLAGS:
+            forms.append("%s %s 'git clean -fd'" % (shell, flag))
+            forms.append('%s %s "git clean -fd"' % (shell, flag))
+    return forms
+
+
+def _ac17_payload_matrix():
+    """Each destructive payload spelling, carried by a nested shell."""
+    return ["sh -c '%s'" % payload for payload in _AC17_PAYLOADS]
+
+
+def _ac17_nesting_matrix():
+    """Depth 1 and depth 2, in both quote orders."""
+    return [
+        "sh -c 'git clean -fd'",
+        'sh -c "git clean -fd"',
+        'sh -c \'sh -c "git clean -fd"\'',
+        'bash -c \'bash -c "git clean -fd"\'',
+        'sh -c \'bash -c "git clean -fd"\'',
+    ]
+
+
+def assert_clean_rule_denies(form):
+    """Exit 2 AND the clean rule's own stderr token — never a vacuous pass."""
+    rc, err = run_hook(form, want_stderr=True)
+    assert rc == BLOCK, "ungranted destructive clean ALLOWED: %r" % form
+    assert CLEAN_DENY_TOKEN in err, (
+        "denied by some OTHER rule, not the clean rule: %r -> %r" % (form, err))
+
+
+@pytest.mark.parametrize("form", AC17_QA_MEASURED)
+def test_AC17a_qa_measured_nested_payloads_block(form):
+    """The exact seven spellings QA measured running ungranted."""
+    assert_clean_rule_denies(form)
+
+
+@pytest.mark.parametrize("form", _ac17_shell_matrix())
+def test_AC17b_every_shell_and_c_flag_spelling_blocks(form):
+    """sh / /bin/sh / bash / /bin/bash / dash / zsh x -c / -lc / -ic x '' and ""."""
+    assert_clean_rule_denies(form)
+
+
+@pytest.mark.parametrize("form", _ac17_payload_matrix())
+def test_AC17c_every_destructive_payload_spelling_blocks(form):
+    """The nesting must not become a way to respell the payload either."""
+    assert_clean_rule_denies(form)
+
+
+@pytest.mark.parametrize("form", _ac17_nesting_matrix())
+def test_AC17d_nesting_depth_one_and_two_block(form):
+    """A payload nested two deep keeps its inner quotes in the stripped view;
+    quote-neutralisation before the grep is what closes that depth."""
+    assert_clean_rule_denies(form)
+
+
+def test_AC17e_nested_payload_is_released_by_a_human_grant(granted_sid):
+    """Same escape as the direct spelling: the deny stays in the bypassable
+    region, so an explicit human grant releases it."""
+    for form in AC17_QA_MEASURED:
+        assert run_hook(form, session_id=granted_sid) == ALLOW, form
+
+
+def test_AC17f_nested_payload_without_a_grant_is_not_released():
+    """Polarity control for AC17e — a non-granting session still denies."""
+    for form in AC17_QA_MEASURED:
+        assert run_hook(form, session_id=fresh_sid()) == BLOCK, form
+
+
+# Non-regression: the fix reads the STRIPPED stream, where a non-shell command's
+# quoted argument has already been blanked. Data that merely NAMES the
+# subcommand must therefore still pass, and so must every AC6 dry-run form
+# (those are covered by test_AC6 above and are unaffected because this arm only
+# runs when the classifier resolved NO clean invocation at all).
+AC17_ALLOW_CONTROLS = [
+    'echo "git clean -fd"',
+    "grep -rn 'git clean' docs/",
+    "git config clean.requireForce false",
+    "make clean",
+    "./gradlew clean",
+    "git help clean",
+]
+
+
+@pytest.mark.parametrize("form", AC17_ALLOW_CONTROLS)
+def test_AC17g_quoted_data_and_non_git_clean_still_allowed(form):
+    """The second scan stream must not widen the mention-level over-block."""
+    assert run_hook(form) == ALLOW, form
+
+
+def test_AC17h_rm_block_nested_parity_not_regressed():
+    """The rule was asked to MIRROR the rm-block; closing this class must not
+    have touched it. Depth 1 is denied by both rules; depth 2 is a documented
+    residual of the rm-block that this lane did not widen."""
+    assert run_hook("sh -c 'rm foo'") == BLOCK
+    assert run_hook('bash -c "rm foo"') == BLOCK
