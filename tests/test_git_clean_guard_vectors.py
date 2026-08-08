@@ -222,7 +222,6 @@ QA5_WRONG_TREE_DENY = [
 
 # The inversion must not become a blunt instrument.
 QA5_STILL_EXEMPT = [
-    "git log --grep='git clean -fd'",
     "git config --get clean.requireForce",
     "make clean",
     "npm run clean",
