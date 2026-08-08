@@ -184,7 +184,8 @@ def iter_git_invocations(command_text):
 
     Uses token-aware parsing: tokenizes each shell segment, skips wrappers
     and env-var assignments, then checks whether the command token is git
-    (exact basename match via os.path.basename(token) == 'git').
+    (basename match after stripping balanced surrounding quotes, so both
+    /usr/bin/git and "/usr/bin/git" are recognised).
 
     path_qualified is True when the token contains a '/' (e.g. /usr/bin/git),
     False for bare 'git'.  subcommand and args are computed by _git_subcommand()
