@@ -436,7 +436,7 @@ def _git_invocation(words, start, ignore_dry_run=False):
             i += 1
             continue
         if tok in ("-c", "--config-env"):
-            if i + 1 < n and _is_redirect_config(toks[i + 1]):
+            if i + 1 < n and _is_redirect_config(words[i + 1].text):
                 redirect = True
             i += 2
             continue
