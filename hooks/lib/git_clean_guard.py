@@ -63,42 +63,40 @@ import os
 import re
 import sys
 
-_HERE = os.path.dirname(os.path.abspath(__file__))
-if _HERE not in sys.path:
-    sys.path.insert(0, _HERE)
-
-from git_command_classifier import (  # noqa: E402  (path bootstrap above)
-    _ENV_ASSIGN_RE,
-    _command_token_index,
-    _segments,
-)
-
-try:
-    from bash_context_strip import strip_non_executable_contexts  # noqa: E402
-except ImportError:  # normalizer unavailable -> parse the raw command instead
-    strip_non_executable_contexts = None  # type: ignore[assignment]
-
-
 # git globals that point the invocation at a DIFFERENT repository / work tree.
 _REDIRECT_FLAGS = frozenset({"-C", "--git-dir", "--work-tree"})
 # git globals that consume an operand but do NOT redirect the target.
 _NEUTRAL_GLOBALS_WITH_ARG = frozenset({
     "--namespace", "--exec-path", "--super-prefix",
 })
-# Leading environment assignments that redirect the target (QA obs-1: these
-# aim at ANOTHER tree, so mis-detection would be safe, but denying them keeps
-# the "deny ANY redirect" invariant honest rather than merely safe-by-accident).
+# Environment assignments that redirect the target (QA obs-1: these aim at
+# ANOTHER tree, so mis-detection would be safe, but denying them keeps the
+# "deny ANY redirect" invariant honest rather than merely safe-by-accident).
 _REDIRECT_ENV = frozenset({"GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR"})
 # `-c key=value` config keys that redirect the work tree. NOTE `-c` is config,
 # NOT `-C` chdir: `-c clean.requireForce=false` is NOT a redirect.
 _REDIRECT_CONFIG_KEYS = frozenset({"core.worktree", "core.gitdir"})
 
-# Shell constructs that make the effective working directory indeterminate.
+# Shell builtins that move the effective working directory.
 _CWD_MUTATORS = frozenset({"cd", "pushd", "popd"})
 _SUBST_MARKERS = ("$(", "<(", ">(", "`")
-_SUBSHELL_RE = re.compile(r"(?:^|[;&|(\n])\s*\(")
+
+# Reserved words / decorators that never move the target and take no operand.
+_RESERVED_DECORATORS = frozenset({
+    "!", "{", "}", "then", "else", "elif", "do", "done", "fi", "esac",
+})
+# Wrapper NAMES whose OPTION-FREE form is target-transparent. Membership here is
+# NO LONGER what makes a command visible: an unlisted name simply means "not
+# provably inert", which now DENIES rather than disappearing.
+_INERT_WRAPPERS = frozenset({
+    "sudo", "doas", "env", "xargs", "time", "nohup", "setsid", "stdbuf",
+    "ionice", "command", "builtin", "nice", "exec",
+})
+
+_ENV_ASSIGN_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
 
 _VERDICT_EXIT = {"NONE": 0, "SNAPSHOT": 10, "DENY": 11}
+_MAX_EMBED_DEPTH = 3
 
 
 def _unquote(tok: str) -> str:
