@@ -445,11 +445,23 @@ def _load_state(sf: Path) -> dict | None:
 
 
 def _extract_live_worktree_path(sf: Path) -> str:
-    """Return worktree_path from a live, non-orphaned state file; else empty."""
+    """Return the ISOLATED worktree_path from a live state file; else empty.
+
+    An `in_place` session (2026-08-08: `/dev-overnight` without `--worktree`) is
+    deliberately excluded. Its `worktree_path` is the main root, and this list
+    is the set of roots that writes are confined TO — so including it would
+    declare the main checkout an isolated worktree for *every* session, not just
+    its own. A concurrent `--worktree` actor would then find the main root on
+    its allow-list and be free to write into the very checkout its isolation
+    exists to protect. An in-place session imposes no boundary, which is exactly
+    what the user chose by not asking for one.
+    """
     state = _load_state(sf)
     if state is None:
         return ""
     if not _is_session_live(state):
+        return ""
+    if state.get("isolation_kind") == "in_place":
         return ""
     return state.get("worktree_path", "") or ""
 
