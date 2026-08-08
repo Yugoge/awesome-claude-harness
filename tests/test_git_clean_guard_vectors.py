@@ -27,6 +27,7 @@ criterion passed (the criterion set had the same blind spot the code did):
 """
 
 import pathlib
+import shlex
 import sys
 
 import pytest
