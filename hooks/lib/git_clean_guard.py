@@ -126,13 +126,13 @@ def _is_dry_run(rest: list) -> bool:
             break  # everything after is a pathspec, not a flag
         if tok in ("-n", "--dry-run"):
             dry = True
-        elif tok == "--no-dry-run":
-            dry = False  # last-wins negation
-        elif tok in ("-e", "--exclude"):
-            i += 2  # the next token is this exclude's pattern, not a flag
+        elif _abbrev_of(tok, "--no-dry-run", 6):
+            dry = False  # last-wins negation, `--no-d` upwards
+        elif "=" in tok and _abbrev_of(tok.split("=", 1)[0], "--exclude", 3):
+            i += 1  # self-contained `--exclude=<pat>`, consumes nothing
             continue
-        elif tok.startswith("--exclude="):  # self-contained, consumes nothing
-            i += 1
+        elif tok == "-e" or _abbrev_of(tok, "--exclude", 3):
+            i += 2  # the next token is this exclude's pattern, not a flag
             continue
         elif tok.startswith("-") and not tok.startswith("--"):
             cluster = tok[1:]
