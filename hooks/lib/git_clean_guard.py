@@ -461,43 +461,127 @@ def _git_invocation(words, start, ignore_dry_run=False):
 
     if subcommand != "clean":
         return (False, False)
-    if not ignore_dry_run and _is_dry_run([_unquote(t) for t in toks[sub_idx + 1:]]):
+    if not ignore_dry_run and _is_dry_run([w.text for w in words[sub_idx + 1:]]):
         return (False, False)
     return (True, redirect)
 
 
-def _has_env_redirect(segments: list) -> bool:
-    """True when ANY segment assigns a work-tree-redirecting git environment
-    variable. Scanned across the whole command, not just the git segment's own
-    leading assignments, so `export GIT_DIR=<other> && git clean -fd` is caught
-    as well as the inline `GIT_WORK_TREE=<other> git clean -fd` form."""
-    for seg in segments:
-        for tok in seg.split():
-            stripped = _unquote(tok)
-            if (_ENV_ASSIGN_RE.match(stripped)
-                    and stripped.split("=", 1)[0] in _REDIRECT_ENV):
-                return True
+def _resolve_command(words):
+    """Return (index_of_command_word, prefix_is_provably_inert).
+
+    A prefix is inert only when every word before the command is an env
+    assignment that cannot redirect git, a reserved decorator, an OPTION-FREE
+    wrapper name, or a `--` option terminator. The FIRST option in the prefix
+    region ends the proof: `-C`/`--chdir` move the child's cwd outright, and an
+    option this module does not model cannot be proven not to. An UNKNOWN name
+    is returned as the command with inert=True; it is the caller's region scan
+    that then denies any clean reducible behind it."""
+    i, n = 0, len(words)
+    inert = True
+    while i < n:
+        tok = words[i].text
+        if not tok and words[i].dynamic:
+            return (i, False)
+        if _ENV_ASSIGN_RE.match(tok):
+            name = tok.split("=", 1)[0]
+            if name in _REDIRECT_ENV or name.startswith("GIT_"):
+                inert = False
+            i += 1
+            continue
+        if tok in _RESERVED_DECORATORS or tok == "--":
+            i += 1
+            continue
+        if os.path.basename(tok) in _INERT_WRAPPERS:
+            i += 1
+            continue
+        if tok.startswith("-"):
+            return (i, False)       # a wrapper's own option: unprovable region
+        return (i, inert)
+    return (None, inert)
+
+
+def _region_candidates(word):
+    """Texts inside one region word that could themselves be a command: the word
+    itself, and any post-`=` value (`env --split-string='git clean -fd'`)."""
+    out = [word.text]
+    if "=" in word.text:
+        out.append(word.text.split("=", 1)[1])
+    return [t for t in out if t]
+
+
+def _analyze_segment(words, depth=0, ignore_dry_run=False):
+    """Return (destructive_clean_present, target_provably_hook_cwd).
+
+    The inversion lives here. A provably-inert prefix in front of a literal git
+    token is decided by the git invocation alone. ANY other shape - an
+    unrecognised wrapper name, a wrapper option region, an embedded shell
+    payload, bare argument text - is an unprovable region, and a destructive
+    clean reducible anywhere inside it denies instead of vanishing."""
+    if not words:
+        return (False, False)
+    idx, inert = _resolve_command(words)
+    if idx is None:
+        return (False, False)
+
+    if inert and os.path.basename(words[idx].text) == "git":
+        destructive, redirect = _git_invocation(words, idx, ignore_dry_run)
+        if not destructive:
+            return (False, False)
+        return (True, not redirect)
+
+    for j in range(idx, len(words)):
+        for candidate in _region_candidates(words[j]):
+            if len(candidate.split()) > 1:
+                # An embedded command string (`bash -c '<payload>'`,
+                # `env -S '<payload>'`): re-parse it as a command.
+                if depth < _MAX_EMBED_DEPTH and _reduces_to_clean(
+                        candidate, depth + 1, ignore_dry_run):
+                    return (True, False)
+                continue
+            if os.path.basename(candidate) != "git":
+                continue
+            tail = (words[j:] if candidate == words[j].text
+                    else [_Word(candidate)] + list(words[j + 1:]))
+            if _git_invocation(tail, 0, ignore_dry_run)[0]:
+                return (True, False)
+    return (False, False)
+
+
+def _reduces_to_clean(text: str, depth=0, ignore_dry_run=False) -> bool:
+    """True when an embedded command string statically reduces to a destructive
+    clean in any of its segments."""
+    tokens, _info = _lex(text)
+    for seg in _split_segments(tokens):
+        if _analyze_segment(seg, depth, ignore_dry_run)[0]:
+            return True
     return False
 
 
-def _has_cwd_mutation(normalized: str, raw: str) -> bool:
+def _has_env_redirect(words) -> bool:
+    """True when ANY word assigns a work-tree-redirecting git environment
+    variable. Scanned across the whole command, not just the git segment's own
+    leading assignments, so `export GIT_DIR=<other> && git clean -fd` is caught
+    as well as the inline `GIT_WORK_TREE=<other> git clean -fd` form."""
+    for word in words:
+        text = word.text
+        if _ENV_ASSIGN_RE.match(text) and text.split("=", 1)[0] in _REDIRECT_ENV:
+            return True
+    return False
+
+
+def _cwd_indeterminate(words, info, raw: str) -> bool:
     """True when the effective cwd at the clean cannot be proven to be the hook
-    cwd: a leading `cd`/`pushd`/`popd`, a subshell, or any command/process
-    substitution. Substitution markers are scanned on the RAW command too, since
-    the bounded normalizer may erase them (fail-closed direction)."""
-    for text in (normalized, raw):
-        if any(marker in text for marker in _SUBST_MARKERS):
-            return True
-        if _SUBSHELL_RE.search(text):
-            return True
-    for seg in _segments(normalized):
-        toks = seg.split()
-        if not toks:
-            continue
-        idx = _command_token_index(toks)
-        if idx is None:
-            continue
-        if os.path.basename(_unquote(toks[idx])) in _CWD_MUTATORS:
+    cwd: a `cd`/`pushd`/`popd` word ANYWHERE (a prefix such as `!`, `command --`
+    or `time -p` must not be able to hide one), a subshell, or any command /
+    process substitution. Substitution markers are re-checked on the RAW text so
+    a lexer miss still fails closed. Consulted only once a destructive clean has
+    been found, so a `cd` in an unrelated command costs nothing."""
+    if info["substitution"] or info["subshell"]:
+        return True
+    if any(marker in raw for marker in _SUBST_MARKERS):
+        return True
+    for word in words:
+        if os.path.basename(word.text) in _CWD_MUTATORS:
             return True
     return False
 
