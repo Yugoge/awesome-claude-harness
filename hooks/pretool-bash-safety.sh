@@ -1881,6 +1881,31 @@ fi
 # stripping is exactly what destroys the evidence.
 # Placed in the bypassable region, so /do consent and /allow grants release it
 # exactly like the rm-block at :1476.
+#
+# ONE occurrence grammar, defined HERE and consumed by BOTH layers of the
+# nested-payload defence: the Python verdict heredoc immediately below and the
+# shell-side fail-closed scan at the bottom of this block. Two hand-synced
+# copies is precisely what shipped the previous hole — the shell-side copy
+# interpolated ${GIT_GLOBAL_OPT_RE} and the Python copy did not, so a global
+# option inside the payload was visible to one layer and invisible to the
+# other, and `git clean -n && sh -c 'git -C /tmp clean -fd'` ran UNGRANTED
+# (225 forms of that class measured at exit 0). A single definition cannot
+# disagree with itself; the Python side re-uses these exact strings and only
+# rewrites POSIX bracket classes, which is semantics-preserving.
+_GC_SEP='[[:space:];&|()`]'
+_GC_NOSEP="[^[:space:];&|()\`'\"]*"
+_GC_PATH="(${_GC_NOSEP}/)?"
+_GIT_CLEAN_FALLBACK_RE="(^|${_GC_SEP})((${_GC_PATH}git)|\"${_GC_PATH}git\"|'${_GC_PATH}git')${GIT_GLOBAL_OPT_RE}[[:space:]]+[\"']?clean\\b"
+# Shell-in-command-position test, gating quote-neutralisation. Deliberately NOT
+# a name list: enumerating interpreter names was the repeated root cause in this
+# task, and a 16-name allowlist was escaped by ksh93, rbash, posh, oksh, elvish,
+# xonsh, nsh, bsh and sh5 — rbash being installed on this host and being bash.
+# The test is STRUCTURAL instead: a command-position word ending in `sh`, with an
+# optional version suffix, which holds for interpreter names nobody has listed
+# yet. Glob metacharacters are excluded from the word so a mere `ls *.sh` is not
+# mistaken for an interpreter.
+_GC_CMDW="[^[:space:];&|()\`'\"*?]*"
+_GC_SHELL_RE="(^|${_GC_SEP})${_GC_CMDW}sh[0-9]*([[:space:]]|$)"
 _GIT_CLEAN_HAS_INV=0
 if [ "$CLASSIFIER_STATUS" = "ok" ] && _any_git_has_subcmd clean; then
   _GIT_CLEAN_HAS_INV=1
