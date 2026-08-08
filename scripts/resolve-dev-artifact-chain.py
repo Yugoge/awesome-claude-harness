@@ -193,12 +193,26 @@ class ChainValidator:
         self.validate_json_identity(value, expected, path)
         relative = _rel(path, self.root)
         qa = value.get("qa")
-        if not isinstance(qa, dict) or qa.get("status") != "pass":
+        # `agents/qa.md` defines qa.status as a THREE-value enum, of which two
+        # are terminal: `pass` (zero major issues) and `warning` (all success
+        # criteria verified, root cause addressed, zero critical, 1-3
+        # NON-BLOCKING major issues).  Only `fail` means "the cycle is not
+        # finished": `commands/dev.md` Step 14 routes `fail` to iteration and
+        # routes BOTH `pass` and `warning` forward to completion, and
+        # `agents/qa.md` carries `approve-with-warnings` in its
+        # `release_recommendation` enum.  `commands/close.md` requires "the same
+        # Codex-native artifact contract used by /dev completion" and states no
+        # stricter policy of its own, so this predicate may not be narrower than
+        # Step 14's.  Whether a particular warning's major issues are acceptable
+        # is that Step 14 judgement call, not a structural property of the
+        # artifact chain -- a warning report is well-formed and complete, so
+        # rejecting it as INVALID would conflate "not approved" with "broken".
+        if not isinstance(qa, dict) or qa.get("status") not in ("pass", "warning"):
             actual = qa.get("status") if isinstance(qa, dict) else None
             self.error(
                 "INVALID_QA_STATUS",
                 relative,
-                f"qa.status is {actual!r}; expected 'pass'",
+                f"qa.status is {actual!r}; expected 'pass' or 'warning'",
             )
 
     def validate_completion(
