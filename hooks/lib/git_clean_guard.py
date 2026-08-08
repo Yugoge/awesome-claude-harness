@@ -306,7 +306,13 @@ def decide(command_text: str):
         except Exception:  # bounded normalizer failed -> parse the raw command
             normalized = command_text
 
+    # BOTH parses, unioned fail-closed. The bounded normalizer erases quoted
+    # content, so `git clean -n "--no-dry-run" -fd` loses its negation and reads
+    # as a dry run; the raw text keeps it. Whichever parse sees a destructive
+    # clean wins, so erasing text can never buy an exemption.
     segments = _segments(normalized)
+    if command_text != normalized:
+        segments = segments + _segments(command_text)
     destructive = False
     redirect = False
     for seg in segments:
@@ -316,6 +322,15 @@ def decide(command_text: str):
             redirect = redirect or seg_redirect
 
     if not destructive:
+        # A clean whose flag region is built by substitution is not a PROVEN
+        # dry run, and `_segments` has already carved the substitution into its
+        # own segment, so the flag never reaches _is_dry_run.
+        if any(marker in command_text for marker in _SUBST_MARKERS):
+            for seg in segments:
+                if _scan_segment(seg, ignore_dry_run=True)[0]:
+                    return ("DENY", "a `git clean` carries command substitution "
+                                    "in its flag region - the effective flags "
+                                    "cannot be proven to be a dry run")
         return ("NONE", "")
     redirect = redirect or _has_env_redirect(segments)
     if redirect:
