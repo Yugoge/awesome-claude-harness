@@ -708,6 +708,12 @@ _preclean_snapshot_guard() {
   fi
   # shellcheck source=lib/checkpoint-core.sh
   . "$_ckpt_lib"
+  # write_checkpoint's git steps redirect stderr into $CHECKPOINT_LOG_FILE before
+  # anything creates its directory, so on a host that has never written a
+  # checkpoint the redirect itself fails and every granted clean would be denied.
+  # Create the library's own log dir first (the library does the same in
+  # _checkpoint_log); checkpoint-core.sh itself stays unmodified.
+  mkdir -p "$CHECKPOINT_LOG_DIR" 2>/dev/null || true
   write_checkpoint "" "pre-clean WIP snapshot before granted: $COMMAND"
   local _ckpt_rc=$?
   # write_checkpoint's early-failure returns leave its temp-index EXIT trap
