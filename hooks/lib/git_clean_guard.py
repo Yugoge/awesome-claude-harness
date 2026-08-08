@@ -94,14 +94,37 @@ def _is_dry_run(rest: list) -> bool:
     """True only for a PROVEN dry run. A force flag is NOT the destructiveness
     test (`git -c clean.requireForce=false clean -d` deletes without `-f`), so
     everything that is not `-n`/`--dry-run` counts as destructive-or-uncertain.
-    Scanning stops at `--` so a pathspec literally named `-n` cannot exempt."""
-    for tok in rest:
+
+    A separate-value exclude consumes the FOLLOWING token as its pattern, so a
+    trailing `-n` there is an exclude pattern and NOT a dry run: `git clean -fd
+    -e -n` DELETES. Treating it as exempt would skip the snapshot on a
+    destructive clean, so `-e` / `--exclude` operands are skipped, and inside a
+    short cluster only an `n` occurring BEFORE the first `e` counts (everything
+    after an `e` is that exclude's argument). Scanning stops at `--` so a
+    pathspec literally named `-n` cannot exempt either."""
+    i, n = 0, len(rest)
+    while i < n:
+        tok = rest[i]
         if tok == "--":
             return False
         if tok in ("-n", "--dry-run"):
             return True
-        if tok.startswith("-") and not tok.startswith("--") and "n" in tok[1:]:
-            return True
+        if tok in ("-e", "--exclude"):
+            i += 2  # the next token is this exclude's pattern, not a flag
+            continue
+        if tok.startswith("--exclude="):  # self-contained, consumes nothing
+            i += 1
+            continue
+        if tok.startswith("-") and not tok.startswith("--"):
+            cluster = tok[1:]
+            e_pos = cluster.find("e")
+            n_pos = cluster.find("n")
+            if n_pos >= 0 and (e_pos < 0 or n_pos < e_pos):
+                return True
+            if e_pos == len(cluster) - 1 and e_pos >= 0:
+                i += 2  # cluster ends in `e` -> next token is its pattern
+                continue
+        i += 1
     return False
 
 
