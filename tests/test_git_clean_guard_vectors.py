@@ -98,6 +98,17 @@ DENY_CASES = [
     "pushd /tmp/B && git clean -fd",
     # One redirected clean in a multi-clean payload poisons the whole command.
     "git clean -fd && git -C /tmp/B clean -fd",
+    # CX-4: a cwd-changing WRAPPER option before the git binary. The shared
+    # tokenizer stops at the option, so these were invisible and snapshot-free.
+    "env -C /tmp/B git clean -fd",
+    "env -C/tmp/B git clean -fd",
+    "env --chdir=/tmp/B git clean -fd",
+    "env --chdir /tmp/B git clean -fd",
+    "env -C /tmp/B git clean -n --no-dry-run -fd",
+    # Generalisation of the same rule: a wrapper option this module does not
+    # model cannot be proven NOT to move the cwd, so it denies rather than
+    # snapshotting a tree that may not be the one being cleaned.
+    "sudo -u root git clean -fd",
 ]
 
 
