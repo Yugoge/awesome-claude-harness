@@ -141,6 +141,22 @@ DENY_CASES = [
     "sudo -u git git clean -fd",
     "env -u GIT_DIR git clean -fd",
     "env -C /tmp/git git clean -fd",
+    # Quoted wrapper words: bash strips these before exec, so the wrapper, its
+    # option and the git token must all be seen through their punctuation.
+    '"/usr/bin/env" -C /tmp/B git clean -fd',
+    'env "-C" /tmp/B git clean -fd',
+    'env -C /tmp/B "git" clean -fd',
+    # A wrapper option can carry the whole command in its VALUE.
+    "env -S 'git clean -fd'",
+    "env --split-string='git clean -fd'",
+    # Substitution in the flag region: the effective flags are unprovable, so
+    # the dry-run exemption cannot be granted.
+    "git clean -n $(printf -- --no-dry-run) -fd",
+    # ACCEPTED over-block, pinned so the posture stays deliberate: argument text
+    # that looks like a clean denies, because telling it apart from a wrapper
+    # operand that IS the git binary needs a per-wrapper operand table, and
+    # being wrong there re-opens `sudo -u git git clean -fd`.
+    "sudo -u root echo git clean -fd",
 ]
 
 
