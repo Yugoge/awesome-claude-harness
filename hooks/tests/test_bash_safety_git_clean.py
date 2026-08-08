@@ -281,8 +281,10 @@ def test_AC10_sibling_blocks_not_regressed(form):
 
 # ── AC11: this test file exists and covers AC1-AC10 and AC12-AC14 ────────────
 
-AC11_COVERED = ["AC1", "AC2", "AC3", "AC4", "AC5", "AC6", "AC7", "AC8", "AC9",
-                "AC10", "AC12", "AC13", "AC14"]
+AC11_COVERED = [
+    "AC1", "AC2", "AC3", "AC4", "AC5", "AC6", "AC7",
+    "AC8", "AC9", "AC10", "AC12", "AC13", "AC14",
+]
 
 
 def test_AC11_every_ac_has_an_executing_test():
