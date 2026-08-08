@@ -46,10 +46,11 @@ file is GENERATED from the template by `scripts/install/render-settings`, which
 `scripts/bootstrap` invokes at install time, and CI renders it right after checkout so
 `scripts/verify-claims.sh` still has a concrete file to recompute its counts from.
 
-The *untrack* side is now complete too: `settings.json` has been removed from the index
-(`git rm --cached`, not a history rewrite — every prior commit that touched the file
-remains reachable), so it no longer carries a ledger row. A working copy still exists on
-each install; it is per-install state, not tracked content.
+The *untrack* side is **not** done and is **not** authorized: `settings.json` remains
+deliberately tracked, and therefore carries a `private-lab` row in the ledger below like
+every other tracked top-level path. An earlier revision of this section claimed the file
+had been removed from the index (`git rm --cached`); that claim was false when written,
+and it is withdrawn together with the `/settings.json` ignore rule it shipped beside.
 
 ---
 
