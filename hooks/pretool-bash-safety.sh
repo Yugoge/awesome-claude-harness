@@ -2033,7 +2033,7 @@ _GIT_CLEAN_FALLBACK_RE="(^|${_GC_SEP})((${_GC_PATH}git)|\"${_GC_PATH}git\"|'${_G
 # assignment VALUE (`CMD_INPUT="sh -c '…'" python3 x`) have no shell there and
 # are left untouched, so the :1979 warning against a class-widened anchor is
 # respected. `$` in the anchor's tail covers a trailing pipe target (`… | sh`).
-_GC_SHELL_RE="(^|${_GC_SEP})${_GC_PATH}(ba|da|z|k|a)?sh([[:space:]]|$)"
+_GC_SHELL_RE="(^|${_GC_SEP})${_GC_PATH}(mk|pdk|ba|da|ya|tc|fi|z|k|a|c)?sh([[:space:]]|$)"
 _GC_PROBE=''
 case "$COMMAND$COMMAND_CONTEXT_STRIPPED" in
   *clean*)
