@@ -2004,6 +2004,14 @@ if [ "$IS_SUBAGENT" = "1" ]; then
   # /do bypass (2026-04-25): user has explicitly consented via /do — allow subagent history mutation
   SID=$(echo "$INPUT" | "$PYTHON_BIN" -c "import json,sys; d=json.load(sys.stdin); print(d.get('session_id',''))" 2>/dev/null)
   if [ -n "$SID" ] && [ -e "/tmp/claude-orchestrator-consent-${SID}.flag" ]; then
+    # Grant exit 4 of 4 — the subagent side of the /do channel. A subagent with
+    # /do and no matching sentinel is filtered out of the main /do exit, misses
+    # the sentinel exit and is firewalled out of legacy /allow, so it lands here
+    # and previously reached exit 0 with a destructive clean UNSNAPSHOTTED. The
+    # guard intercepts ONLY destructive `git clean`; every other subagent-/do
+    # command still exits 0 unchanged (the revert/cherry-pick/rebase bypass this
+    # exit was built for is untouched).
+    _preclean_snapshot_guard
     exit 0
   fi
   # Narrowed (2026-05-14): commit|merge|push are fully covered by
