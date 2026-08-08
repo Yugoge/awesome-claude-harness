@@ -93,10 +93,12 @@ while [[ $# -gt 0 ]]; do
         --cycle-subdir) CYCLE_SUBDIR="$2"; shift 2 ;;
         --specs-subdir) SPECS_SUBDIR="$2"; shift 2 ;;
         --codex)     CODEX_REQUIRED=true; shift ;;
+        --worktree)    WORKTREE_CHOICE="worktree"; shift ;;
+        --no-worktree) WORKTREE_CHOICE="in_place"; shift ;;
         --emit-record-only) EMIT_RECORD_ONLY=1; shift ;;
         *)
             echo "Unknown option: $1" >&2
-            echo "Usage: create-overnight-state.sh [--end-time <time>] [--focus <str>] [--spec <path>] [--session-id <uuid>] [--project-dir <path>] [--state-subdir <dir>] [--cycle-subdir <dir>] [--specs-subdir <dir>] [--codex] [--emit-record-only]" >&2
+            echo "Usage: create-overnight-state.sh [--end-time <time>] [--focus <str>] [--spec <path>] [--session-id <uuid>] [--project-dir <path>] [--state-subdir <dir>] [--cycle-subdir <dir>] [--specs-subdir <dir>] [--codex] [--worktree|--no-worktree] [--emit-record-only]" >&2
             exit 1
             ;;
     esac
