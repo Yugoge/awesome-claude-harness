@@ -109,7 +109,12 @@ def _is_dry_run(rest: list) -> bool:
     git parse-options applies the dry-run flag and its generated `--no-dry-run`
     negation LAST-WINS, so the scan is STATEFUL rather than first-match: `git
     clean -n --no-dry-run -fd` DELETES, and an early `return True` on the first
-    `-n` skipped the snapshot on it (CX-1).
+    `-n` skipped the snapshot on it (CX-1). The negation and the exclude are
+    matched as ABBREVIATIONS too (`--no-dry`, `--exc <pat>`), because git accepts
+    any unambiguous prefix; both directions of that are fail-closed, so an
+    abbreviation git would reject only costs a superfluous snapshot. The
+    positive `-n` / `--dry-run` stays exact-match for the same reason: an
+    unrecognised spelling must read as destructive, never as exempt.
 
     A separate-value exclude consumes the FOLLOWING token as its pattern, so a
     trailing `-n` there is an exclude pattern and NOT a dry run: `git clean -fd
