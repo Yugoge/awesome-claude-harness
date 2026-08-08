@@ -262,6 +262,24 @@ def test_AC9_zero_invocation_wrappers_fail_closed(form):
     assert run_hook(form) == BLOCK
 
 
+# Dev self-review extension: the coarse anchor must ALSO cover a PATH-QUALIFIED
+# git behind a zero-invocation wrapper. The bare-git anchor class
+# (^|[[:space:];&|()`])git never matches the '/' in /usr/bin/git, so a
+# GIT_CMD_RE-only fallback lets these through while git still deletes.
+AC9_PATH_QUALIFIED_FAIL_CLOSED_FORMS = [
+    "env -i /usr/bin/git clean -f -n --no-dry-run",
+    "command -- /usr/bin/git clean -f",
+    "time -p /usr/bin/git clean -fd",
+]
+
+
+@pytest.mark.parametrize("form", AC9_PATH_QUALIFIED_FAIL_CLOSED_FORMS)
+def test_AC9_path_qualified_zero_invocation_wrappers_fail_closed(form):
+    """Zero classifier invocations AND a path-qualified git: the fallback must
+    use the path-tolerant anchor, not the bare-git one."""
+    assert run_hook(form) == BLOCK
+
+
 def test_AC9_config_read_is_not_a_clean_subcommand():
     """The `clean` here is a config KEY token; the subcommand anchor must not
     misfire on it."""
