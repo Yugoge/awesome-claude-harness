@@ -331,13 +331,55 @@ MONOLITH_SHA="null"
 
 if [[ "$EMIT_RECORD_ONLY" != "1" ]]; then
 
-# --- Create + validate the isolated worktree FIRST (M1, M2, M3) ---------------
-# Recoverable failures here NEVER fall back to in-place work: a missing/invalid
-# worktree means launch refuses (no state) — distinct from hard-abort-then-work.
+# --- Establish the working root per the user's isolation choice ---------------
+# TWO MODES. `in_place` (default) runs the actor in the checkout the user is
+# already on and creates NOTHING. `worktree` (explicit --worktree) is the
+# historical path: create + validate an isolated worktree, and refuse the launch
+# outright if no durable isolation can be produced. Within the worktree branch,
+# recoverable failures still NEVER silently degrade to in-place work — a user who
+# asked for isolation gets isolation or gets a refusal, never a quiet downgrade.
 WORKTREE_PATH=""
 WORKTREE_BRANCH=""
 WORKTREE_HEAD_AT_START=""
 ISOLATION_KIND=""
+
+if [[ "$WORKTREE_CHOICE" == "in_place" ]]; then
+    # No worktree, no branch, no clone. The "working root" IS the main checkout,
+    # and worktree_path is set to it so the existing consumers that confine
+    # writes to worktree_path (hooks/pretool-overnight-hook-guard.py
+    # _is_path_allowed_during_overnight) resolve to "anywhere in this repo" —
+    # which is the correct boundary once the user has opted out of isolation.
+    IN_PLACE_BRANCH="$("${GIT_UNMARKED[@]}" -C "$MAIN_ROOT" symbolic-ref --quiet --short HEAD 2>/dev/null || echo '')"
+
+    # Detached HEAD: refuse. Every downstream consumer (cycle logging, /merge,
+    # the checkpoint mechanism) names a branch, and commits made on a detached
+    # HEAD are unreachable the moment anything moves. Fail at launch, loudly.
+    if [[ -z "$IN_PLACE_BRANCH" ]]; then
+        echo "Error: in-place mode requires a checked-out branch, but '$MAIN_ROOT' is on a detached HEAD (no state written). Remedy: check out a branch, or relaunch with --worktree to work in an isolated worktree." >&2
+        exit 1
+    fi
+
+    # PROTECTED-BRANCH COINCIDENCE. In-place mode leaves the keystone armed (the
+    # actor marker is still exported below), and the keystone denies every ref
+    # move on the protected branch — including the actor's own commits. If the
+    # checkout is sitting ON the protected branch, the session would launch
+    # successfully and then fail at its first commit, hours later. Refuse now,
+    # at launch, and name both remedies. Disarming the keystone instead is not
+    # an option: that is the only layer still protecting the branch in in-place
+    # mode, since the policy shim is deliberately left uninstalled (see below).
+    if [[ "$IN_PLACE_BRANCH" == "$PROTECTED_BRANCH" ]]; then
+        echo "Error: in-place mode refuses to run on the protected branch '$PROTECTED_BRANCH' — the overnight actor could not commit (the keystone denies protected-branch ref moves), so the session would stall at its first commit. No state written." >&2
+        echo "Remedy: check out a working branch, or relaunch with --worktree to get an isolated worktree off '$PROTECTED_BRANCH'." >&2
+        exit 1
+    fi
+
+    WORKTREE_PATH="$MAIN_ROOT"
+    WORKTREE_BRANCH="$IN_PLACE_BRANCH"
+    WORKTREE_HEAD_AT_START="$MAIN_HEAD_AT_START"
+    ISOLATION_KIND="in_place"
+    echo "In-place mode: working directly in $MAIN_ROOT on branch '$IN_PLACE_BRANCH' (no worktree created). Pass --worktree to isolate." >&2
+else
+
 WORKTREE_SCRIPT="$(dirname "$0")/create-worktree.sh"
 WORKTREE_NAME="overnight-$(date +%Y%m%d)-${SESSION_ID:0:8}"
 # M3-ORDERING: the worktree script's `worktree add -b` is the launcher's most
