@@ -39,6 +39,15 @@ if str(_HOOKS_LIB) not in sys.path:
 from git_clean_guard import decide  # noqa: E402
 
 
+def _nest(payload, depth):
+    """`sh -c '...'` nested `depth` deep, quoted by shlex so the vector is a
+    real shell equivalent. A hand-rolled nester produces strings bash does NOT
+    reduce to a clean, and a vector built that way pins a quoting mistake."""
+    for _ in range(depth):
+        payload = "sh -c " + shlex.quote(payload)
+    return payload
+
+
 SNAPSHOT_CASES = [
     "git clean -fd",
     "git clean -df",
