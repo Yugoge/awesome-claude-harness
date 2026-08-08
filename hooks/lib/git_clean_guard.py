@@ -567,17 +567,32 @@ def _analyze_segment(words, depth=0, ignore_dry_run=False):
 
     if inert and os.path.basename(words[idx].text) == "git":
         destructive, redirect = _git_invocation(words, idx, ignore_dry_run)
-        if not destructive:
-            return (False, False)
-        return (True, not redirect)
+        if destructive:
+            return (True, not redirect)
+        # A NON-clean subcommand is not proof that the command is harmless. git
+        # subcommands that EXECUTE a string argument - `rebase -x/--exec`,
+        # `bisect run`, `submodule foreach`, `filter-branch` - run it in THIS
+        # working tree, so returning early here meant `echo '<clean>'` denied
+        # while the identical text behind `-x` was waved through and destroyed
+        # the WIP unrecoverably. Fall through and scan the arguments the same
+        # way every other command's arguments are scanned; the resulting
+        # over-block (`git commit -m 'add git clean guard'`) is the disclosed
+        # argument-text class, and consistency there is the point.
 
     for j in range(idx, len(words)):
         for candidate in _region_candidates(words[j]):
             if len(candidate.split()) > 1:
                 # An embedded command string (`bash -c '<payload>'`,
                 # `env -S '<payload>'`): re-parse it as a command.
-                if depth < _MAX_EMBED_DEPTH and _reduces_to_clean(
-                        candidate, depth + 1, ignore_dry_run):
+                if depth >= _MAX_EMBED_DEPTH:
+                    # Truncation is precisely the state of NOT KNOWING, and the
+                    # doctrine above says unknown denies. `continue` here made a
+                    # budget-exhausted payload indistinguishable from an empty
+                    # one, so one extra `sh -c` wrapper bought a silent allow -
+                    # and wrapping a target redirect in it re-opened that class
+                    # too.
+                    return (True, False)
+                if _reduces_to_clean(candidate, depth + 1, ignore_dry_run):
                     return (True, False)
                 continue
             if os.path.basename(candidate) != "git":
