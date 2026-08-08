@@ -1882,7 +1882,7 @@ if [ "$_GIT_CLEAN_HAS_INV" = "1" ]; then
 import json, os, re, sys
 sys.path.insert(0, os.environ['HOOKS_DIR_CLEAN'])
 from lib.git_command_classifier import (
-    _basename, _command_token_index, _git_subcommand, _segments)
+    _basename, _command_token_index, _git_subcommand, _segments, _unquote_token)
 
 LITERAL = re.compile(r'^[A-Za-z0-9_./=+:@,-]*$')
 POS_DRY = re.compile(r'^--d(r(y(-(r(u(n)?)?)?)?)?)?$')
