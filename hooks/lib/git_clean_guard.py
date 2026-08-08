@@ -139,11 +139,7 @@ def _scan_segment(seg: str):
     if os.path.basename(_unquote(toks[idx])) != "git":
         return (False, False)
 
-    redirect = any(
-        _ENV_ASSIGN_RE.match(t) and t.split("=", 1)[0] in _REDIRECT_ENV
-        for t in toks[:idx]
-    )
-
+    redirect = False
     subcommand = None
     sub_idx = None
     i, n = idx + 1, len(toks)
