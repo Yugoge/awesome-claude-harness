@@ -54,7 +54,7 @@
     "INDEX.md": "auto-generated navigation meta.",
     "pytest.ini": "test-runner config; belongs with the excluded test net.",
     "conftest.py": "pytest collection config; belongs with the excluded test net.",
-    "settings.json": "private-lab: the maintainer's live config (personal permission entries + absolute install-home paths). It IS tracked — the P3 untrack is not authorized — so this entry excludes it by CLASS, not by absence, and is load-bearing precisely because a tracked path would otherwise be archived. Consumers render their own from settings.template.json via scripts/bootstrap.",
+    "settings.json": "private-lab: the maintainer's live config (personal permission entries + absolute install-home paths). It IS tracked — the P3 untrack is not authorized — so this entry excludes it by CLASS, not by absence, so this entry records why a TRACKED path is withheld rather than noting an absent one. Belt-and-braces, not the operative filter: membership is include-first and no include pattern matches settings.json, so dropping this entry leaves the resolved path set unchanged. Consumers render their own from settings.template.json via scripts/bootstrap.",
     "NESTED-REPO.md": "private-lab: documents the maintainer's exact host topology.",
     "push.sh": "private-lab: maintainer pre-push wrapper.",
     "venv/**": "local virtualenv, never tracked."
