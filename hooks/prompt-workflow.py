@@ -442,7 +442,7 @@ def parse_overnight_args(prompt_text: str) -> tuple[str, str, str, bool, str]:
     return end_time, focus, spec_path, codex_required, worktree_choice
 
 
-def create_overnight_state(end_time: str, focus: str = '', spec_path: str = '', session_id: str = 'default', codex_required: bool = False) -> bool:
+def create_overnight_state(end_time: str, focus: str = '', spec_path: str = '', session_id: str = 'default', codex_required: bool = False, worktree_choice: str = '') -> bool:
     """Create overnight state file by calling the bash script."""
     script = Path.home() / '.claude' / 'scripts' / 'create-overnight-state.sh'
     cmd = [str(script)]
@@ -454,6 +454,15 @@ def create_overnight_state(end_time: str, focus: str = '', spec_path: str = '', 
         cmd += ['--spec', spec_path]
     if codex_required:
         cmd += ['--codex']
+    # Forward the isolation choice verbatim, including the conflict case: the
+    # launcher owns the refusal so the error text lives in exactly one place.
+    # '' forwards nothing, and the launcher defaults to in-place.
+    if worktree_choice == 'conflict':
+        cmd += ['--worktree', '--no-worktree']
+    elif worktree_choice == 'worktree':
+        cmd += ['--worktree']
+    elif worktree_choice == 'no-worktree':
+        cmd += ['--no-worktree']
     cmd += ['--session-id', session_id]
     cmd += ['--project-dir', str(PROJECT_DIR)]
     try:
