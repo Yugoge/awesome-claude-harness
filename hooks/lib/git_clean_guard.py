@@ -38,7 +38,9 @@ pretool-block-branch-pr-worktree.py and must stay stable, and its `_WRAPPERS`
 set is a closed 12-name enumeration that this module must no longer treat as
 exhaustive.
 
-Coverage bounds (deliberate, documented, and stated as the REAL bound):
+Coverage bounds. The previous revision stated this section as a UNIVERSAL
+fail-closed posture and measurement falsified it in three places, so every
+clause below is now a MEASURED bound rather than a generalisation:
   - Ignored-file (`-x`/`-X`) CONTENT protection is out of scope; the snapshot
     still fires for `-x` cleans to preserve the untracked-non-ignored WIP.
   - A command word that exists only after EXPANSION (`$GIT clean -fd`, an
@@ -46,13 +48,25 @@ Coverage bounds (deliberate, documented, and stated as the REAL bound):
     NONE. Those are the accepted CX-2/CX-3 residuals and live in the shared
     classification layer, not in this grant-residual lane.
   - EVERYTHING else that still reduces to a destructive clean DENIES unless its
-    target is proven. An unrecognised prefix denies; it does not fall through.
+    target is proven. That now includes the three shapes that used to fall
+    through to NONE: a FUSED option carrying the command word
+    (`env -S'git clean -fd'`), argument text behind ANY command word INCLUDING
+    a git one (`git rebase -x '<clean>'`), and an embedded payload nested
+    deeper than `_MAX_EMBED_DEPTH`, where TRUNCATED analysis denies instead of
+    reading as "nothing here".
 
 Accepted over-blocks (cost usability under an active grant, never data):
-  - Argument text that reduces to a destructive clean outside a provably-inert
-    git invocation denies (`echo git clean -fd`, `grep -r "git clean" .`).
+  - Argument text that reduces to a destructive clean denies wherever it sits -
+    behind a non-git command (`echo git clean -fd`, `grep -r "git clean" .`)
+    AND behind a git one (`git commit -m 'add git clean guard'`,
+    `git log --grep='git clean -fd'`). The asymmetry between those two was not
+    a design choice, it was the third fail-open: the same text executes under
+    `git rebase -x`.
   - A `cd`/`pushd`/`popd` word anywhere in a command that ALSO contains a
     destructive clean denies, even when the clean textually precedes it.
+  - A command nested more than `_MAX_EMBED_DEPTH` embedded payloads deep denies
+    even when it holds no clean at all, because at that point the analysis is
+    truncated and "no clean found" is not something this module knows.
 
 Exit codes (CLI): 0 = NONE, 10 = SNAPSHOT, 11 = DENY. Reason text on stdout.
 """
