@@ -500,6 +500,21 @@ def _build_worktree_instruction(state: dict) -> str:
     should be unreachable for a properly-launched session).
     """
     wt = state.get('worktree_path')
+    # In-place mode (the user did not pass --worktree): there is no worktree to
+    # enter and nothing to cd into. The actor still carries the overnight marker
+    # so the keystone stays armed on the protected branch, but the policy shim is
+    # deliberately absent — wiring it would deny every git op, since in-place
+    # work IS main-targeting by definition (git-policy-shim:179-182).
+    if state.get('isolation_kind') == 'in_place':
+        branch = state.get('worktree_branch', '') or '<current branch>'
+        return (
+            f'IN-PLACE MODE: no worktree was created. Work directly in {wt} on '
+            f'branch "{branch}". Do NOT call EnterWorktree and do NOT create a '
+            'worktree. Export CLAUDE_OVERNIGHT_ACTOR=1 in your shell (do NOT set '
+            'CLAUDE_OVERNIGHT_MAIN_ROOT — that would activate the policy shim and '
+            'deny every git command in this mode). Never commit to the protected '
+            f'branch "{state.get("protected_branch", "")}".'
+        )
     if wt is not None and wt != '':
         # fix-1 (Cycle-2): also mandate sourcing + verifying the actor git-env so
         # the harness-owned policy shim is the actor's `git` and
