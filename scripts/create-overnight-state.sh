@@ -341,6 +341,20 @@ CONTRACT_FILE=""
 TRACE_LOG_PATH=""
 MONOLITH_SHA="null"
 
+# M1-SEAM pre-seed for in-place mode. Same reads the real launch performs, via
+# the same function — so the seam emits the isolation shape a real in-place
+# launch writes instead of an all-empty record no mode ever produces. Still
+# creates nothing. A detached HEAD leaves the fields empty here rather than
+# refusing, because refusing is a launch decision and the seam does not launch.
+if [[ "$EMIT_RECORD_ONLY" == "1" && "$WORKTREE_CHOICE" == "in_place" ]]; then
+    if resolve_in_place_branch; then
+        WORKTREE_PATH="$MAIN_ROOT"
+        WORKTREE_BRANCH="$IN_PLACE_BRANCH"
+        WORKTREE_HEAD_AT_START="$MAIN_HEAD_AT_START"
+        ISOLATION_KIND="in_place"
+    fi
+fi
+
 if [[ "$EMIT_RECORD_ONLY" != "1" ]]; then
 
 # --- Create + validate the isolated worktree FIRST (M1, M2, M3) ---------------
