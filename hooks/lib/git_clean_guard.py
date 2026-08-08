@@ -110,7 +110,12 @@ _INERT_WRAPPERS = frozenset({
 _ENV_ASSIGN_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
 
 _VERDICT_EXIT = {"NONE": 0, "SNAPSHOT": 10, "DENY": 11}
-_MAX_EMBED_DEPTH = 3
+# Embedded-payload recursion budget. Exhausting it DENIES (see _analyze_segment),
+# so the limit trades a denial on absurdly nested input against an unbounded
+# parse; it was raised from 3 once truncation stopped meaning "allow", because a
+# deeper budget now only reduces over-block and each level costs one re-lex of a
+# strict substring.
+_MAX_EMBED_DEPTH = 6
 
 
 class _Word:
