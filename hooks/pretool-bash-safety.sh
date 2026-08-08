@@ -2057,7 +2057,7 @@ if [ "$_GIT_CLEAN_WOULD_BLOCK" = "1" ] && [ "$_GIT_CLEAN_SUBAGENT_GRANT" != "1" 
       ;;
     *)
       if [ "$_GIT_CLEAN_FAIL_CLOSED" = "1" ]; then
-        echo "DETAIL: a 'git clean' subcommand is present but could not be resolved into a provable invocation (wrapper prefix such as 'env -i', 'command --' or 'time -p'); failing closed." >&2
+        echo "DETAIL: a 'git clean' subcommand is present but could not be resolved into a provable invocation (a wrapper prefix such as 'env -i' / 'command --' / 'time -p', or a nested shell payload such as \"sh -c '…'\"); failing closed." >&2
       else
         echo "DETAIL: the EFFECTIVE dry-run state is OFF for at least one clean invocation (negation is last-wins; tokens after '--' are pathspecs, not flags)." >&2
       fi
