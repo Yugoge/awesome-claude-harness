@@ -237,9 +237,10 @@ def decide(command_text: str):
         except Exception:  # bounded normalizer failed -> parse the raw command
             normalized = command_text
 
+    segments = _segments(normalized)
     destructive = False
     redirect = False
-    for seg in _segments(normalized):
+    for seg in segments:
         seg_destructive, seg_redirect = _scan_segment(seg)
         if seg_destructive:
             destructive = True
@@ -247,6 +248,7 @@ def decide(command_text: str):
 
     if not destructive:
         return ("NONE", "")
+    redirect = redirect or _has_env_redirect(segments)
     if redirect:
         return ("DENY", "target-redirecting git global present "
                         "(-C / --git-dir / --work-tree / GIT_DIR / GIT_WORK_TREE / "
