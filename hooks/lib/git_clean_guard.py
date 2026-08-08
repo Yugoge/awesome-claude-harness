@@ -95,6 +95,11 @@ def _is_dry_run(rest: list) -> bool:
     test (`git -c clean.requireForce=false clean -d` deletes without `-f`), so
     everything that is not `-n`/`--dry-run` counts as destructive-or-uncertain.
 
+    git parse-options applies the dry-run flag and its generated `--no-dry-run`
+    negation LAST-WINS, so the scan is STATEFUL rather than first-match: `git
+    clean -n --no-dry-run -fd` DELETES, and an early `return True` on the first
+    `-n` skipped the snapshot on it (CX-1).
+
     A separate-value exclude consumes the FOLLOWING token as its pattern, so a
     trailing `-n` there is an exclude pattern and NOT a dry run: `git clean -fd
     -e -n` DELETES. Treating it as exempt would skip the snapshot on a
@@ -102,30 +107,33 @@ def _is_dry_run(rest: list) -> bool:
     short cluster only an `n` occurring BEFORE the first `e` counts (everything
     after an `e` is that exclude's argument). Scanning stops at `--` so a
     pathspec literally named `-n` cannot exempt either."""
+    dry = False
     i, n = 0, len(rest)
     while i < n:
         tok = rest[i]
         if tok == "--":
-            return False
+            break  # everything after is a pathspec, not a flag
         if tok in ("-n", "--dry-run"):
-            return True
-        if tok in ("-e", "--exclude"):
+            dry = True
+        elif tok == "--no-dry-run":
+            dry = False  # last-wins negation
+        elif tok in ("-e", "--exclude"):
             i += 2  # the next token is this exclude's pattern, not a flag
             continue
-        if tok.startswith("--exclude="):  # self-contained, consumes nothing
+        elif tok.startswith("--exclude="):  # self-contained, consumes nothing
             i += 1
             continue
-        if tok.startswith("-") and not tok.startswith("--"):
+        elif tok.startswith("-") and not tok.startswith("--"):
             cluster = tok[1:]
             e_pos = cluster.find("e")
             n_pos = cluster.find("n")
             if n_pos >= 0 and (e_pos < 0 or n_pos < e_pos):
-                return True
+                dry = True
             if e_pos == len(cluster) - 1 and e_pos >= 0:
                 i += 2  # cluster ends in `e` -> next token is its pattern
                 continue
         i += 1
-    return False
+    return dry
 
 
 def _scan_segment(seg: str):
