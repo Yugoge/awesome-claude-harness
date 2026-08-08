@@ -104,8 +104,8 @@ while [[ $# -gt 0 ]]; do
         --cycle-subdir) CYCLE_SUBDIR="$2"; shift 2 ;;
         --specs-subdir) SPECS_SUBDIR="$2"; shift 2 ;;
         --codex)     CODEX_REQUIRED=true; shift ;;
-        --worktree)    WORKTREE_CHOICE="worktree"; shift ;;
-        --no-worktree) WORKTREE_CHOICE="in_place"; shift ;;
+        --worktree)    WORKTREE_FLAG_SEEN=1; shift ;;
+        --no-worktree) NO_WORKTREE_FLAG_SEEN=1; shift ;;
         --emit-record-only) EMIT_RECORD_ONLY=1; shift ;;
         *)
             echo "Unknown option: $1" >&2
