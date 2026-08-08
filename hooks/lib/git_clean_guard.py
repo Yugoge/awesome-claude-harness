@@ -645,9 +645,9 @@ if __name__ == "__main__":
         cmd_text = sys.stdin.read()
     try:
         verdict, reason = decide(cmd_text)
-    except Exception as exc:  # unparseable -> DENY, unless plainly not a git command
-        if "git" not in cmd_text:
-            sys.exit(_VERDICT_EXIT["NONE"])
+    except Exception as exc:  # unclassifiable -> DENY, never NONE. The former
+        # `if "git" not in cmd_text: NONE` escape was a raw-substring test, and a
+        # spliced or ANSI-C-quoted command word defeats exactly that test.
         print("pre-clean guard could not classify the command "
               f"({exc.__class__.__name__}); denying fail-closed")
         sys.exit(_VERDICT_EXIT["DENY"])
