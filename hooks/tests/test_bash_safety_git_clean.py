@@ -76,7 +76,7 @@ def run_hook(command: str, session_id: str = None, hook: str = HOOK,
         ["bash", hook], input=json.dumps(payload), text=True,
         capture_output=True, env=env, cwd=cwd,
     )
-    return proc.returncode
+    return (proc.returncode, proc.stderr) if want_stderr else proc.returncode
 
 
 def assert_all(forms, expected):
