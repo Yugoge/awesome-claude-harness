@@ -205,6 +205,10 @@
     {
       "task_id": "dev-20260719-150041-c",
       "manifest_path": "tests/generated/dev-20260719-150041-c/manifest.json"
+    },
+    {
+      "task_id": "dev-20260719-150041-a",
+      "manifest_path": "tests/generated/dev-20260719-150041-a/manifest.json"
     }
   ]
 }
