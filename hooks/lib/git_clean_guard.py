@@ -538,22 +538,37 @@ def _region_candidates(word):
     correctly, which is what marks this a lexer-coverage gap rather than a
     policy.
 
-    Only the FIRST token can hide anything: every later word of the payload is
-    scanned on its own by the caller, so a fused INTERPRETER
+    Only the FIRST token can hide a command word: every later word of the
+    payload is scanned on its own by the caller, so a fused INTERPRETER
     (`env -S'sh -c "git clean -fd"'`) is already caught through its payload
     words, and a fused wrapper (`env -Ssudo git clean -fd`) through the bare
     `git` word that follows. What the caller cannot see is a command word glued
     to the option letters, so the first offset whose basename is `git` is
-    emitted as a candidate too - one extra candidate, no extra recursion."""
-    out = [word.text]
-    if "=" in word.text:
-        out.append(word.text.split("=", 1)[1])
-    if word.text.startswith("-"):
-        head = word.text.split(None, 1)[0]
-        for k in range(1, len(head)):
-            if os.path.basename(head[k:]) == "git":
-                out.append(word.text[k:])
-                break
+    emitted as a candidate too - one extra candidate, no extra recursion.
+
+    THAT ARGUMENT IS ONLY TRUE ONCE THE WORD IS IN SHELL-WORD FORM, which is the
+    correction adversarial review forced. `env -S` carries its own mini-language
+    and uses `\\_` for a space, so `env -S'git\\_clean\\_-fd'` runs a destructive
+    clean while containing NO shell whitespace at all: bash hands over a single
+    word, `_lex` correctly sees one word, "is it multi-word?" answers no, and the
+    payload was invisible. env splits on the escapes below, so a surface form
+    with those translated back to spaces is analysed alongside the raw text."""
+    surfaces = [word.text]
+    if word.text.startswith("-") and "\\" in word.text:
+        unescaped = _ENV_S_SEPARATOR_RE.sub(" ", word.text)
+        if unescaped != word.text:
+            surfaces.append(unescaped)
+    out = []
+    for text in surfaces:
+        out.append(text)
+        if "=" in text:
+            out.append(text.split("=", 1)[1])
+        if text.startswith("-"):
+            head = text.split(None, 1)[0]
+            for k in range(1, len(head)):
+                if os.path.basename(head[k:]) == "git":
+                    out.append(text[k:])
+                    break
     return [t for t in out if t]
 
 
