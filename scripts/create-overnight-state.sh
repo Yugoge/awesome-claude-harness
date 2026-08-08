@@ -438,11 +438,16 @@ fi
 
 # AC3b: refusal-to-LAUNCH only when ALL durable isolation is impossible. NEVER
 # write a null/main-root worktree; NEVER continue in-place.
+# Reached only under an explicit --worktree: the user asked for isolation, so a
+# silent downgrade to the main root would hand them the opposite of their
+# request. In-place mode returns above and never enters this branch.
 if [[ -z "$ISOLATION_KIND" || -z "$WORKTREE_PATH" \
       || "$(realpath "$WORKTREE_PATH" 2>/dev/null || echo "$WORKTREE_PATH")" == "$(realpath "$MAIN_ROOT" 2>/dev/null || echo "$MAIN_ROOT")" ]]; then
-    echo "FATAL: no durable isolated worktree could be produced; refusing to launch the overnight actor (no state, no checklist, no in-place work)." >&2
+    echo "FATAL: --worktree was requested but no durable isolated worktree could be produced; refusing to launch the overnight actor (no state, no checklist, no in-place work). Relaunch without --worktree to run in place." >&2
     exit 1
 fi
+
+fi  # end of the --worktree isolation branch
 
 # --- Spec mode detection (AFTER worktree exists; mismatch DEGRADES, never aborts) ---
 SPEC_MODE="autonomous"
