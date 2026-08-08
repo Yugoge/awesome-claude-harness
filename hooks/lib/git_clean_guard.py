@@ -271,10 +271,11 @@ def decide(command_text: str):
         return ("NONE", "")
     redirect = redirect or _has_env_redirect(segments)
     if redirect:
-        return ("DENY", "target-redirecting git global present "
-                        "(-C / --git-dir / --work-tree / GIT_DIR / GIT_WORK_TREE / "
-                        "-c core.worktree) - the clean target is not provably the "
-                        "hook's own working directory")
+        return ("DENY", "target-redirecting git global or unprovable wrapper "
+                        "option present (-C / --git-dir / --work-tree / GIT_DIR / "
+                        "GIT_WORK_TREE / -c core.worktree / env -C / env --chdir) - "
+                        "the clean target is not provably the hook's own working "
+                        "directory")
     if _has_cwd_mutation(normalized, command_text):
         return ("DENY", "effective working directory is indeterminate "
                         "(leading cd/pushd, subshell, or command substitution) - "
