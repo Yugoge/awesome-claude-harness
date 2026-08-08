@@ -51,16 +51,25 @@ def fresh_sid() -> str:
     return "gitclean-test-%s" % uuid.uuid4().hex
 
 
-def run_hook(command: str, session_id: str = None, hook: str = HOOK) -> int:
-    """Invoke the real hook with a Bash tool_input and return its exit code."""
-    payload = json.dumps({
+def run_hook(command: str, session_id: str = None, hook: str = HOOK,
+             agent_id: str = None, cwd: str = None) -> int:
+    """Invoke the real hook with a Bash tool_input and return its exit code.
+
+    `agent_id` makes the hook's IS_SUBAGENT true, which is what selects the
+    4th grant channel; `cwd` keeps a granted clean's pre-clean WIP snapshot
+    inside a throwaway repo instead of this one.
+    """
+    payload = {
         "tool_name": "Bash",
         "tool_input": {"command": command},
         "session_id": session_id or fresh_sid(),
-    })
+    }
+    if agent_id:
+        payload["agent_id"] = agent_id
     env = {k: v for k, v in os.environ.items() if k not in _HERMETIC_UNSET}
     proc = subprocess.run(
-        ["bash", hook], input=payload, text=True, capture_output=True, env=env,
+        ["bash", hook], input=json.dumps(payload), text=True,
+        capture_output=True, env=env, cwd=cwd,
     )
     return proc.returncode
 
