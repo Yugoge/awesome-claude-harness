@@ -1997,12 +1997,10 @@ if [ "$_GIT_CLEAN_HAS_INV" != "1" ] && \
   _GIT_CLEAN_FAIL_CLOSED=1
 fi
 # Grant channel 4 of 4 — the subagent side of /do consent — is the ONLY one of
-# the four that sits DOWNSTREAM of this deny (at :2013-2026, where lane r03-c's
-# pre-clean WIP snapshot guard runs). Denying here would preempt that snapshot
-# and make an explicit human grant weaker on this channel than on the other
-# three, contrary to the rule's contract. The predicate below is character-for
-# -character the one at :2013-2016, so releasing the deny provably lands on
-# that snapshot-or-deny exit and never on the terminal default-allow.
+# the four that sits DOWNSTREAM of this deny (the subagent-history block below,
+# where lane r03-c's pre-clean WIP snapshot guard runs). Denying here would
+# preempt that snapshot and make an explicit human grant weaker on this channel
+# than on the other three, contrary to the rule's contract.
 _GIT_CLEAN_WOULD_BLOCK=0
 if { [ "$_GIT_CLEAN_HAS_INV" = "1" ] && [ "$_GIT_CLEAN_VERDICT" != "ALLOW" ]; } || \
    [ "$_GIT_CLEAN_FAIL_CLOSED" = "1" ]; then
@@ -2010,15 +2008,26 @@ if { [ "$_GIT_CLEAN_HAS_INV" = "1" ] && [ "$_GIT_CLEAN_VERDICT" != "ALLOW" ]; } 
 fi
 # Consulted ONLY on the verge of denying, so the ordinary subagent command pays
 # no extra subprocess for a grant lookup it will never use.
-_GIT_CLEAN_SUBAGENT_GRANT=0
+#
+# On a match this ACTS on the observation rather than merely falling through to
+# the identical test downstream. Falling through would read the flag twice, and
+# the flag is mutable — stop-cleanup-allowlist.sh unlinks it — so a clean that
+# skipped this deny on the first read and then lost the race on the second would
+# reach the terminal default-allow having passed NO snapshot guard at all: a
+# fail-open created by the carve-out itself. One read, one decision. The action
+# is exactly what the downstream exit would have taken (the same fail-closed
+# _preclean_snapshot_guard, which still denies a clean it cannot protect, then
+# exit 0); nothing between here and there applies to a clean, and that exit is
+# left untouched for every other subagent-/do command.
 if [ "$_GIT_CLEAN_WOULD_BLOCK" = "1" ] && [ "$IS_SUBAGENT" = "1" ]; then
   _GC_SID=$(echo "$INPUT" | "$PYTHON_BIN" -c \
     "import json,sys; d=json.load(sys.stdin); print(d.get('session_id',''))" 2>/dev/null)
   if [ -n "$_GC_SID" ] && [ -e "/tmp/claude-orchestrator-consent-${_GC_SID}.flag" ]; then
-    _GIT_CLEAN_SUBAGENT_GRANT=1
+    _preclean_snapshot_guard
+    exit 0
   fi
 fi
-if [ "$_GIT_CLEAN_WOULD_BLOCK" = "1" ] && [ "$_GIT_CLEAN_SUBAGENT_GRANT" != "1" ]; then
+if [ "$_GIT_CLEAN_WOULD_BLOCK" = "1" ]; then
   echo "BLOCKED: destructive 'git clean' is forbidden in agent flow" >&2
   echo "Command: $COMMAND" >&2
   echo "REASON: git clean removes UNTRACKED files — no rm, no reflog, no reachable git object, so the deletion is unrecoverable and leaves no trace. Uncommitted work-in-progress has been lost this way." >&2
