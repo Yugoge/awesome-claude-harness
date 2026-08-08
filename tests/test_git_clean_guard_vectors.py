@@ -71,6 +71,12 @@ NONE_CASES = [
     "git status",
     "npm run clean",
     "echo nothing to do here",
+    # Last-wins in the other direction: the trailing -n IS the effective flag.
+    "git clean --no-dry-run -n",
+    # A redirected clean that deletes nothing needs neither snapshot nor deny.
+    "env -C /tmp/B git clean -n",
+    # A wrapper option on a NON-git command must not be read as a clean at all.
+    "env -C /tmp/B ls -la",
 ]
 
 DENY_CASES = [
