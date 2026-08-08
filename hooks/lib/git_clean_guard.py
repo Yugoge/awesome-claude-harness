@@ -191,6 +191,20 @@ def _scan_segment(seg: str):
     return (True, redirect)
 
 
+def _has_env_redirect(segments: list) -> bool:
+    """True when ANY segment assigns a work-tree-redirecting git environment
+    variable. Scanned across the whole command, not just the git segment's own
+    leading assignments, so `export GIT_DIR=<other> && git clean -fd` is caught
+    as well as the inline `GIT_WORK_TREE=<other> git clean -fd` form."""
+    for seg in segments:
+        for tok in seg.split():
+            stripped = _unquote(tok)
+            if (_ENV_ASSIGN_RE.match(stripped)
+                    and stripped.split("=", 1)[0] in _REDIRECT_ENV):
+                return True
+    return False
+
+
 def _has_cwd_mutation(normalized: str, raw: str) -> bool:
     """True when the effective cwd at the clean cannot be proven to be the hook
     cwd: a leading `cd`/`pushd`/`popd`, a subshell, or any command/process
