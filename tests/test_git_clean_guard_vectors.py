@@ -232,6 +232,100 @@ QA5_STILL_EXEMPT = [
 ]
 
 
+# ---------------------------------------------------------------------------
+# Iteration-6 vectors. Three classes QA measured reaching a grant exit with a
+# destructive clean and NO snapshot, each execution-proved before being
+# believed. All three are the same structural pattern the inversion was meant to
+# remove - "cannot statically reduce it, therefore allow" - surviving in the
+# three places the inversion did not reach.
+# ---------------------------------------------------------------------------
+
+# (1) A FUSED short option carrying the payload. The spaced and --split-string=
+# spellings already denied; only the fused one re-parsed to the command word
+# `-Sgit`, which is neither inert nor a git basename, so the clean vanished.
+QA6_FUSED_OPTION_DENY = [
+    "env -S'git clean -fd'",
+    "env -vS'git clean -fd'",
+    "env -iS'git clean -fd'",
+    "env -u FOO -S'git clean -fd'",
+    "env -Sgit clean -fd",
+    "env -S'/usr/bin/git clean -fd'",
+    "env -S'sh -c \"git clean -fd\"'",
+]
+
+# (2) Recursion TRUNCATION. Depths 1-3 denied; the fourth `continue`d past the
+# budget, which is indistinguishable from "this region holds no clean". The
+# limit now denies, so the verdict is monotone in depth rather than flipping.
+QA6_NESTED_PAYLOAD_DENY = [
+    _nest("git clean -fd", depth) for depth in range(1, 10)
+] + [
+    # one more wrapper also used to re-open a target redirect
+    _nest("env -C /tmp/other git clean -fd", 4),
+    # ...and the budget must deny even when the payload is harmless, because at
+    # truncation the module does not KNOW that it is harmless
+    _nest("echo harmless", 8),
+]
+
+# (3) Argument text behind a GIT command word. `_git_invocation` returned early
+# on any non-clean subcommand, so the region scan never inspected the arguments
+# of a git command - while `git rebase -x` runs them, in the hook's own tree.
+# This was the sharpest of the three: an ordinary developer command that
+# destroys the incident file with neither deny nor snapshot.
+QA6_GIT_ARGUMENT_DENY = [
+    "git rebase -x 'git clean -fd' HEAD~1",
+    "git rebase --exec 'git clean -fd' HEAD~1",
+    "git rebase --exec='git clean -fd' HEAD~1",
+    "git bisect run git clean -fd",
+    "git submodule foreach 'git clean -fd'",
+    "git filter-branch --tree-filter 'git clean -fd' HEAD",
+]
+
+# The consistency this buys, pinned as an EQUALITY rather than as two verdicts:
+# the same text must be classified the same way wherever it sits. The old
+# asymmetry (`echo '<clean>'` denies, `git commit -m '<clean>'` passes) was not
+# a policy, it was the third fail-open wearing a policy's clothes.
+QA6_SAME_TEXT_SAME_VERDICT = [
+    ("echo 'git clean -fd'", "git commit -m 'git clean -fd'"),
+    ("echo 'git clean -fd'", "git log --grep='git clean -fd'"),
+]
+
+
+@pytest.mark.parametrize("command", QA6_FUSED_OPTION_DENY)
+def test_qa6_fused_option_payload_denies(command):
+    verdict, _reason = decide(command)
+    assert verdict == "DENY", (
+        f"{command!r} runs a destructive clean once env splits the fused "
+        f"option's value; NONE here allows it unsnapshotted. Got {verdict}"
+    )
+
+
+@pytest.mark.parametrize("command", QA6_NESTED_PAYLOAD_DENY)
+def test_qa6_truncated_recursion_denies_rather_than_falling_through(command):
+    verdict, _reason = decide(command)
+    assert verdict == "DENY", (
+        f"{command!r} nests an embedded payload; beyond the analysis budget the "
+        f"answer is UNKNOWN and unknown must deny. Got {verdict}"
+    )
+
+
+@pytest.mark.parametrize("command", QA6_GIT_ARGUMENT_DENY)
+def test_qa6_argument_text_behind_a_git_subcommand_denies(command):
+    verdict, _reason = decide(command)
+    assert verdict == "DENY", (
+        f"{command!r} carries a clean in the argument of a git subcommand that "
+        f"EXECUTES it, in this very working tree. Got {verdict}"
+    )
+
+
+@pytest.mark.parametrize("behind_echo,behind_git", QA6_SAME_TEXT_SAME_VERDICT)
+def test_qa6_the_same_argument_text_is_judged_the_same_behind_git(behind_echo, behind_git):
+    assert decide(behind_echo)[0] == decide(behind_git)[0], (
+        "argument text that denies behind `echo` must not pass behind `git`: "
+        "the difference was never a policy, it was the fail-open that let "
+        "`git rebase -x '<clean>'` through"
+    )
+
+
 @pytest.mark.parametrize("command", QA5_UNMODELLED_PREFIX_DENY)
 def test_qa5_unmodelled_prefix_denies_instead_of_vanishing(command):
     verdict, reason = decide(command)
