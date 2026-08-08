@@ -43,8 +43,7 @@ The cleanest illustration of the carve already exists in the tree: the portable 
 
 Roadmap phase **P3** (generate-then-untrack) is now wired on the *generate* side: the
 file is GENERATED from the template by `scripts/install/render-settings`, which
-`scripts/bootstrap` invokes at install time; it is git-ignored by the root-anchored
-`/settings.json` rule; and CI renders it right after checkout so
+`scripts/bootstrap` invokes at install time, and CI renders it right after checkout so
 `scripts/verify-claims.sh` still has a concrete file to recompute its counts from.
 
 The *untrack* side is now complete too: `settings.json` has been removed from the index
