@@ -541,6 +541,21 @@ _AC17_PAYLOADS = [
     "git clean",                     # bare (requireForce=false hole)
     "git clean -f -n --no-dry-run",  # dry-run token present, effective state OFF
     "/usr/bin/git clean -fd",        # path-qualified inside the payload
+    "git -C /tmp clean -fd",         # git GLOBAL OPTION between binary and sub
+    "git -c core.x=1 clean -fdx",    # -c key=value form
+    "git --no-pager clean -fd",      # long boolean global option
+]
+
+# Every shape of git GLOBAL OPTION that GIT_GLOBAL_OPT_RE admits between the
+# binary and the subcommand. This is the axis the previous round shipped blind:
+# the shell-side scan's regex interpolated the global-option segment and the
+# Python count comparison's copy did not, so a payload spelt with ANY of these
+# was seen by one layer and missed by the other.
+_AC17_GLOBAL_OPTS = [
+    "-C /tmp", "-C/tmp", "-c core.x=1", "-c a=b", "--no-pager",
+    "--git-dir=/tmp/r/.git", "--work-tree=/tmp", "--exec-path=/x",
+    "--namespace=n", "--config-env=k=E", "--bare", "--literal-pathspecs",
+    "--glob-pathspecs", "--icase-pathspecs", "--no-optional-locks", "-p", "-P",
 ]
 
 
