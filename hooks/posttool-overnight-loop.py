@@ -130,7 +130,11 @@ def _print_loop_instructions(state: dict, end_time: datetime, state_path: Path) 
     print()
     print('INSTRUCTIONS: Reset your todo list to all-pending and begin Step 1 again.')
     print(f'State file: {state_path} (read it for current state)')
-    print(f'Worktree: {wt} (already exists, DO NOT create another)')
+    kind = state.get('isolation_kind', '') or 'unknown'
+    if kind == 'in_place':
+        print(f'Working root: {wt} (in-place session — no worktree exists, DO NOT create one)')
+    else:
+        print(f'Worktree: {wt} (already exists, DO NOT create another)')
     print()
     print('Resume from Step 2 (exploration) -- Step 1 setup is already done.')
 

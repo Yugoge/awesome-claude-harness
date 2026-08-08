@@ -582,7 +582,7 @@ Each subagent receives, at the TOP of its prompt before any other content:
 **Specialist prompt rules** (enforced):
 - Every specialist prompt MUST include the test plan path. Specialists have a mandatory Step 0 (read test plan — PM's `pm_experience` is ground truth) and Step 1 (execute the core E2E flow via Playwright) before specialized analysis.
 - The priority context block is appended directly so specialists see PM's priorities immediately; their Step 0 read provides redundancy.
-- Always use `worktree_path` as the project path when set; specialists must scan files inside the worktree, not the main project directory.
+- Always use `worktree_path` as the project path when set; specialists must scan files under that root. In `registered_worktree` / `fresh_clone_checkout` mode that root is the isolated worktree, NOT the main project directory; in `in_place` mode it IS the main checkout, which is what the user chose.
 - Do NOT inline application context, credentials, flow steps, or sample data in the prompt — those live in the test plan file.
 ```
 
@@ -1237,7 +1237,7 @@ Read dev report: `docs/dev/dev-report-{pipeline.timestamp_suffix}.json`
 1. **Read dev artifacts**: For each active pipeline, read `docs/dev/dev-report-{pipeline.timestamp_suffix}.json` and the corresponding `ticket-*.md` (or legacy `ba-spec-*.md`).
 2. **Rebuild Docker (gated on `spec_mode == "autonomous"` per Hard Rule 9)**:
    - Identify affected services from `docker-compose.yml`. Backend changes require backend service rebuild; frontend changes require frontend service rebuild.
-   - Verify build contexts point to the worktree, NOT the main project directory.
+   - Verify build contexts point to `worktree_path`. Under `--worktree` that means the isolated worktree and NOT the main project directory; under `in_place` the two are the same path and no relocation is expected.
    - Run `docker compose build` then `docker compose up -d` for the affected services. Wait for services to be healthy.
    - When `spec_mode == "user-provided"`, skip the rebuild unless the spec's Pipeline Workflow explicitly requires it.
 3. **Write QA verification plans**: For EACH pipeline, write concrete QA verification steps:
@@ -1289,7 +1289,7 @@ Agent(subagent_type: "qa")
     If verdict is fail, also update Section 6 (Why Not Met) and Section 7 (What Must Be Done).
 
     IMPORTANT: All file reads and verification must use the project root above.
-    Verify that changes were made inside the worktree, not the main project.
+    Verify that changes were made under `worktree_path` — the isolated worktree under `--worktree`, or the main checkout itself when `isolation_kind` is `in_place`.
 
     <If focus_verification_criteria array exists from Step 7, include:>
     Focus verification criteria (MANDATORY -- these are hard pass/fail from user's focus directive).
