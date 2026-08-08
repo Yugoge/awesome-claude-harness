@@ -1832,6 +1832,165 @@ if echo "$COMMAND" | grep -qE "${GIT_CMD_RE}(update-ref\b|branch[[:space:]]+(-[f
   exit 2
 fi
 
+# Block: destructive `git clean` (conservative default, task dev-20260719-150041-a).
+# `git clean -fd` removes UNTRACKED files with no rm, no reflog and no reachable
+# git object — the same no-trace deletion channel as the already-blocked rm.
+# Polarity is BLOCK-unless-PROVABLY-non-destructive: a blocklist of destructive
+# spellings can always be respelled around (long-option abbreviations, clusters,
+# last-wins negation, quoting), an allow-list of provably-safe shapes cannot.
+#
+# TRUST GATE first — a dry-run PROOF is valid only when the predicate's view of
+# the invocation provably equals what git will receive. All three fail closed:
+#   T1 token literal-safety: every RAW arg token must match [A-Za-z0-9_./=+:@,-]*
+#      (' " ` $ \ { } ~ ^ ! and whitespace are rewritable by context-stripping or
+#      by bash word-expansion after the hook has read them).
+#   T2 parser agreement: the raw and stripped passes must see the same number of
+#      clean invocations; a mismatch means stripping changed the structure.
+#   T3 argument provenance: an argument-injecting wrapper (basename `xargs`) in
+#      command position appends argv the hook never saw.
+# Only then: a separate-value exclude (-e, a cluster ENDING in e, or an
+# unambiguous --e..--exclude with no `=`) consumes the NEXT token as its pattern,
+# so a following -n is not a dry-run -> BLOCK; otherwise resolve the EFFECTIVE
+# dry-run state (walk to the first `--`, last-wins, default OFF).
+# Two-stream discipline: the trust gate reads RAW args, the decision reads the
+# STRIPPED classifier args (:909). Never mix them — a decision on raw args
+# ignores normalization, and a trust test on stripped args is vacuous because
+# stripping is exactly what destroys the evidence.
+# Placed in the bypassable region, so /do consent and /allow grants release it
+# exactly like the rm-block at :1476.
+_GIT_CLEAN_HAS_INV=0
+if [ "$CLASSIFIER_STATUS" = "ok" ] && _any_git_has_subcmd clean; then
+  _GIT_CLEAN_HAS_INV=1
+fi
+_GIT_CLEAN_VERDICT=''
+if [ "$_GIT_CLEAN_HAS_INV" = "1" ]; then
+  _GIT_CLEAN_VERDICT=$(
+    HOOKS_DIR_CLEAN="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)" \
+    CLEAN_RAW_CMD="$COMMAND" CLEAN_CLASSIFIER_JSON="$CLASSIFIER_JSON" \
+    "$PYTHON_BIN" - <<'PYEOF' 2>/dev/null
+import json, os, re, sys
+sys.path.insert(0, os.environ['HOOKS_DIR_CLEAN'])
+from lib.git_command_classifier import (
+    _basename, _command_token_index, _git_subcommand, _segments)
+
+LITERAL = re.compile(r'^[A-Za-z0-9_./=+:@,-]*$')
+POS_DRY = re.compile(r'^--d(r(y(-(r(u(n)?)?)?)?)?)?$')
+NEG_DRY = re.compile(r'^--no-d(r(y(-(r(u(n)?)?)?)?)?)?$')
+EXCLUDE = re.compile(r'^--e(x(c(l(u(d(e)?)?)?)?)?)?$')
+CLUSTER = re.compile(r'^-[A-Za-z]+$')
+
+
+def raw_cleans(text):
+    """(args, injected) per RAW clean invocation, in segment order.
+
+    injected is True when a command word of the invocation's segment has
+    basename 'xargs' — matching by basename, not token equality, because
+    /usr/bin/xargs injects arguments identically (the classifier already
+    basename-matches the git binary itself).
+    """
+    found = []
+    for seg in _segments(text):
+        toks = seg.split()
+        idx = _command_token_index(toks) if toks else None
+        if idx is None or _basename(toks[idx]) != 'git':
+            continue
+        sub, args = _git_subcommand(toks[idx + 1:])
+        if sub == 'clean':
+            found.append((args, any(_basename(t) == 'xargs' for t in toks[:idx])))
+    return found
+
+
+def separate_value_exclude(args):
+    """True when an exclude takes its PATTERN from the NEXT token (eats a -n)."""
+    for arg in args:
+        if arg == '-e' or (CLUSTER.match(arg) and arg.endswith('e')):
+            return True
+        if EXCLUDE.match(arg) and '=' not in arg:
+            return True
+    return False
+
+
+def dry_run_on(args):
+    """Effective dry-run state: stop at the first '--', last-wins, default OFF."""
+    state = False
+    for arg in args:
+        if arg == '--':
+            break
+        if arg == '-n' or POS_DRY.match(arg):
+            state = True
+        elif NEG_DRY.match(arg):
+            state = False
+        elif CLUSTER.match(arg) and 'n' in arg[1:]:
+            # A cluster's 'e' is a self-contained exclude only when it is not
+            # last; an 'n' after it is that exclude's pattern, not a dry-run.
+            first_e = arg[1:].find('e')
+            if first_e < 0 or arg[1:].index('n') < first_e:
+                state = True
+    return state
+
+
+def verdict():
+    raw = raw_cleans(os.environ.get('CLEAN_RAW_CMD', ''))
+    try:
+        stripped = [inv for inv
+                    in json.loads(os.environ.get('CLEAN_CLASSIFIER_JSON') or '[]')
+                    if inv.get('subcommand') == 'clean']
+    except Exception:
+        return 'BLOCK:trust'
+    if len(raw) != len(stripped):
+        return 'BLOCK:trust'                                          # T2
+    for (raw_args, injected), inv in zip(raw, stripped):
+        if injected or not all(LITERAL.match(t) for t in raw_args):
+            return 'BLOCK:trust'                                      # T3 + T1
+        args = inv.get('args', [])
+        if separate_value_exclude(args):
+            return 'BLOCK:exclude'
+        if not dry_run_on(args):
+            return 'BLOCK:dryrun'
+    return 'ALLOW'
+
+
+print(verdict())
+PYEOF
+  )
+fi
+# Fail closed in BOTH directions: an unparseable/absent verdict when the
+# classifier DID see a clean, and a coarse subcommand-anchored `git … clean`
+# in the raw command that the classifier could NOT resolve into any invocation
+# (wrapper prefixes such as `env -i` / `command --` / `time -p`). The `\b`
+# subcommand anchor means `git config clean.requireForce` never matches.
+_GIT_CLEAN_FAIL_CLOSED=0
+if [ "$_GIT_CLEAN_HAS_INV" != "1" ] && \
+   printf '%s\n' "$COMMAND" | grep -qE "${GIT_CMD_RE}clean\b"; then
+  _GIT_CLEAN_FAIL_CLOSED=1
+fi
+if { [ "$_GIT_CLEAN_HAS_INV" = "1" ] && [ "$_GIT_CLEAN_VERDICT" != "ALLOW" ]; } || \
+   [ "$_GIT_CLEAN_FAIL_CLOSED" = "1" ]; then
+  echo "BLOCKED: destructive 'git clean' is forbidden in agent flow" >&2
+  echo "Command: $COMMAND" >&2
+  echo "REASON: git clean removes UNTRACKED files — no rm, no reflog, no reachable git object, so the deletion is unrecoverable and leaves no trace. Uncommitted work-in-progress has been lost this way." >&2
+  case "$_GIT_CLEAN_VERDICT" in
+    BLOCK:trust)
+      echo "DETAIL: the argument region is not a provable literal (quoting, backslash, \$-expansion, brace, ~, ^, or an argument-injecting xargs wrapper), so what git receives cannot be proven to match what was inspected." >&2
+      echo "Re-run the preview unquoted and unexpanded, or ask the user for a grant." >&2
+      ;;
+    BLOCK:exclude)
+      echo "DETAIL: a separate-value exclude (-e, a cluster ending in 'e', or --e..--exclude) consumes the NEXT token as its pattern, so a following -n is not a dry-run." >&2
+      echo "Use the self-contained form '--exclude=<pattern>' alongside -n." >&2
+      ;;
+    *)
+      if [ "$_GIT_CLEAN_FAIL_CLOSED" = "1" ]; then
+        echo "DETAIL: a 'git clean' subcommand is present but could not be resolved into a provable invocation (wrapper prefix such as 'env -i', 'command --' or 'time -p'); failing closed." >&2
+      else
+        echo "DETAIL: the EFFECTIVE dry-run state is OFF for at least one clean invocation (negation is last-wins; tokens after '--' are pathspecs, not flags)." >&2
+      fi
+      ;;
+  esac
+  echo "Allowed: a provable dry-run preview — 'git clean -n', 'git clean -nd', 'git clean -n --exclude=build'." >&2
+  echo "Escape: the user can authorize this specific command via /do consent or an /allow grant." >&2
+  exit 2
+fi
+
 # Block: subagent-initiated git history mutation (2026-04-23 incident)
 # Subagents have weak context and cannot reliably know whether the user has consented.
 # All git history changes by subagents must be surfaced to the user instead.
