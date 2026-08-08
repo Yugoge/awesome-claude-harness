@@ -99,32 +99,253 @@ _VERDICT_EXIT = {"NONE": 0, "SNAPSHOT": 10, "DENY": 11}
 _MAX_EMBED_DEPTH = 3
 
 
-def _unquote(tok: str) -> str:
-    """Reduce a raw token to the static word bash would hand the program.
+class _Word:
+    """One static shell word plus the provenance the predicates need."""
 
-    Strips balanced surrounding quotes (`"/usr/bin/git"` -> /usr/bin/git), then
-    any remaining stray quote characters at either end (`'git` -> git, as a
-    whitespace split of `env -S 'git clean -fd'` produces), then backslash
-    escapes (`--no-dry\\-run` -> --no-dry-run). Every one of those reductions is
-    fail-CLOSED for this module: it can only make a token look MORE like a git
-    token or a destructive flag, never less, so a token bash would not actually
-    reduce this way costs at most a superfluous snapshot or deny."""
-    t = tok.strip()
-    while len(t) >= 2 and t[0] == t[-1] and t[0] in ("'", '"'):
-        t = t[1:-1]
-    t = t.strip("'\"")
-    return t.replace("\\", "")
+    __slots__ = ("text", "dynamic", "redir_target")
+
+    def __init__(self, text, dynamic=False, redir_target=False):
+        self.text = text
+        self.dynamic = dynamic
+        self.redir_target = redir_target
+
+    def __repr__(self):  # pragma: no cover - debugging aid
+        return f"_Word({self.text!r}, dynamic={self.dynamic})"
 
 
-def _region_word(tok: str) -> str:
-    """The static word a WRAPPER-REGION token contributes. A wrapper option can
-    carry an embedded command in its value (`env --split-string='git clean
-    -fd'`), so the post-`=` value is what matters there."""
-    return _unquote(tok.split("=", 1)[1]) if "=" in tok else _unquote(tok)
+def _decode_ansi_c(inner: str) -> str:
+    """Decode a `$'...'` body. Falls back to the raw body, which is fail-closed:
+    an undecoded body can only look LESS like `git`/`clean`, and a residual that
+    still reduces to a clean is caught by the terminal DENY default."""
+    try:
+        return inner.encode("utf-8", "surrogateescape").decode("unicode_escape")
+    except Exception:
+        return inner
+
+
+def _lex(text: str):
+    """Return (tokens, info) for one command string.
+
+    tokens: list of ("word", _Word) / ("op", str) / ("redir", str)
+    info:   {"substitution": bool, "subshell": bool}
+
+    Adjacent quoted/escaped fragments join into ONE word, which is what defeats
+    the whole splice class (`g''it`, `--no-""dry-run`, `--work-'tree'=<B>`).
+    Never raises: an unterminated quote consumes the remainder of the input."""
+    tokens = []
+    info = {"substitution": False, "subshell": False}
+    buf = []
+    dynamic = False
+    started = False
+    i, n = 0, len(text)
+
+    def flush():
+        nonlocal buf, dynamic, started
+        if started or buf:
+            tokens.append(("word", _Word("".join(buf), dynamic)))
+        buf, dynamic, started = [], False, False
+
+    def at_command_position():
+        if started or buf:
+            return False
+        for kind, _payload in reversed(tokens):
+            return kind == "op"
+        return True
+
+    while i < n:
+        c = text[i]
+        two = text[i:i + 2]
+
+        # `#` starts a comment only at the beginning of a word.
+        if c == "#" and not started and not buf:
+            while i < n and text[i] != "\n":
+                i += 1
+            continue
+
+        if c == "\\":
+            if two == "\\\n":
+                i += 2          # line continuation: joins adjacent fragments
+                continue
+            if i + 1 < n:
+                buf.append(text[i + 1])
+                started = True
+                i += 2
+                continue
+            i += 1
+            continue
+
+        # ANSI-C quoting is STATIC: `git $'clean' -fd` really runs a clean.
+        if two == "$'":
+            j = i + 2
+            while j < n:
+                if text[j] == "\\":
+                    j += 2
+                    continue
+                if text[j] == "'":
+                    break
+                j += 1
+            buf.append(_decode_ansi_c(text[i + 2:j]))
+            started = True
+            i = min(j + 1, n)
+            continue
+
+        if two == '$"':         # locale-translated string behaves like "..."
+            i += 1
+            continue
+
+        if two in ("$(", "<(", ">("):
+            info["substitution"] = True
+            flush()
+            tokens.append(("op", two))
+            i += 2
+            continue
+        if c == "`":
+            info["substitution"] = True
+            flush()
+            tokens.append(("op", "`"))
+            i += 1
+            continue
+
+        if c == "$":            # parameter expansion contributes no static text
+            dynamic = True
+            started = True
+            j = i + 1
+            if j < n and text[j] == "{":
+                depth, j = 1, j + 1
+                while j < n and depth:
+                    if text[j] == "{":
+                        depth += 1
+                    elif text[j] == "}":
+                        depth -= 1
+                    j += 1
+            else:
+                while j < n and (text[j].isalnum() or text[j] == "_"):
+                    j += 1
+                if j == i + 1 and j < n:
+                    j += 1      # $?, $$, $1 ...
+            i = j
+            continue
+
+        if c == "'":
+            j = text.find("'", i + 1)
+            if j < 0:
+                buf.append(text[i + 1:])
+                started = True
+                i = n
+                continue
+            buf.append(text[i + 1:j])
+            started = True
+            i = j + 1
+            continue
+
+        if c == '"':
+            j = i + 1
+            while j < n and text[j] != '"':
+                if text[j] == "\\" and j + 1 < n:
+                    nxt = text[j + 1]
+                    if nxt in '$`"\\':
+                        buf.append(nxt)
+                    elif nxt != "\n":
+                        buf.append(text[j])
+                        buf.append(nxt)
+                    j += 2
+                    continue
+                if text[j] in "$`":
+                    if text[j] == "`" or text[j:j + 2] == "$(":
+                        info["substitution"] = True
+                    dynamic = True
+                    j += 1
+                    continue
+                buf.append(text[j])
+                j += 1
+            started = True
+            i = j + 1
+            continue
+
+        if c in "<>":           # redirection, with an optional leading fd
+            op = c
+            j = i + 1
+            while j < n and text[j] in "<>&" and len(op) < 3:
+                op += text[j]
+                j += 1
+            if buf and all(ch.isdigit() for ch in buf):
+                buf, started = [], False    # the fd belongs to the redirection
+            else:
+                flush()
+            tokens.append(("redir", op))
+            i = j
+            continue
+
+        if two in ("&&", "||", ";;"):
+            flush()
+            tokens.append(("op", two))
+            i += 2
+            continue
+
+        if c in ";\n|&":
+            flush()
+            tokens.append(("op", c))
+            i += 1
+            continue
+
+        if c == "(":
+            if at_command_position():
+                info["subshell"] = True
+            flush()
+            tokens.append(("op", "("))
+            i += 1
+            continue
+
+        if c == ")":
+            flush()
+            tokens.append(("op", ")"))
+            i += 1
+            continue
+
+        if c.isspace():
+            flush()
+            i += 1
+            continue
+
+        buf.append(c)
+        started = True
+        i += 1
+
+    flush()
+
+    # A redirection's operand is data, never a command word.
+    for idx, (kind, _payload) in enumerate(tokens):
+        if kind != "redir":
+            continue
+        for nxt_kind, nxt in tokens[idx + 1:]:
+            if nxt_kind == "word":
+                nxt.redir_target = True
+            break
+    return tokens, info
+
+
+def _split_segments(tokens):
+    """Split the token stream into command segments on shell separators,
+    dropping redirection operators and their operands."""
+    segments, current = [], []
+    for kind, payload in tokens:
+        if kind == "op":
+            segments.append(current)
+            current = []
+            continue
+        if kind == "redir" or payload.redir_target:
+            continue
+        current.append(payload)
+    segments.append(current)
+    return [seg for seg in segments if seg]
+
+
+def _all_words(segments):
+    return [word for seg in segments for word in seg]
 
 
 def _is_redirect_config(kv: str) -> bool:
-    return _unquote(kv).split("=", 1)[0].strip().lower() in _REDIRECT_CONFIG_KEYS
+    return kv.split("=", 1)[0].strip().lower() in _REDIRECT_CONFIG_KEYS
 
 
 def _abbrev_of(tok: str, full: str, min_len: int) -> bool:
