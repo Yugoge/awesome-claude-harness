@@ -855,6 +855,34 @@ def test_AC17l_script_interpreter_payloads_are_a_symmetric_residual():
         assert run_hook(clean_form) == run_hook(rm_form), clean_form
 
 
+@pytest.mark.parametrize("form", _ac17_globalopt_chained_matrix())
+def test_AC17o_global_option_inside_a_nested_payload_blocks(form):
+    """A git GLOBAL OPTION inside the nested payload must not make the payload
+    invisible to the layer that guards the chained case.
+
+    Root cause this pins: the shell-side fail-closed scan runs ONLY when the
+    classifier resolved zero cleans, so when a resolvable dry-run is present the
+    count comparison is the only guard — and its occurrence regex carried no
+    global-option segment while the shell-side one did. Both grammars now come
+    from a single definition, so this class cannot be reopened by re-spelling
+    the option; it can only be reopened by re-introducing a second copy.
+    """
+    assert_clean_rule_denies(form)
+
+
+@pytest.mark.parametrize("form", _ac17_unlisted_shell_matrix())
+def test_AC17p_interpreters_outside_any_name_list_block(form):
+    """Recognition must not depend on having enumerated the interpreter.
+
+    A fixed name allowlist was the repeated root cause in this task; every name
+    here escaped the previous one. The predicate is now structural — a
+    command-position word ending in `sh`, optional version suffix — so passing
+    this requires the structural rule, not a longer list. None of these need to
+    be installed: the guard is a text predicate.
+    """
+    assert_clean_rule_denies(form)
+
+
 def test_AC17h_rm_block_nested_parity_not_regressed():
     """The rule was asked to MIRROR the rm-block; closing this class must not
     have touched it. Depth 1 is denied by both rules; depth 2 is a documented
