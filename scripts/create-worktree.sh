@@ -105,21 +105,26 @@ RESULT="$(make_worktree)" || { echo "Error: could not create a valid isolated wo
 WORKTREE_PATH="${RESULT%%$'\t'*}"
 BRANCH_NAME="${RESULT##*$'\t'}"
 
-# Auto-renew parent .claude/settings.local.json Write/Edit allow entries for the
-# current overnight worktree. Safety boundary is enforced by the overnight hook
-# (pretool-overnight-hook-guard.py); these allow entries only skip permission
+# Auto-renew parent .claude/settings.local.json Edit allow entry for the current
+# overnight worktree. Safety boundary is enforced by the overnight hook
+# (pretool-overnight-hook-guard.py); this allow entry only skips permission
 # prompts inside the worktree. Without renewal, stale overnight-<oldhash> paths
 # cause every Write/Edit in the new worktree to hit a prompt.
+#
+# Only Edit(path) is emitted: since Claude Code 2.1.210 the file permission
+# checks match Edit(path) and Read(path) only, and an Edit rule covers every
+# built-in file-editing tool (Write and NotebookEdit included). A Write(path)
+# entry would be accepted but never matched, and would emit a startup warning.
+# The cleanup predicate still matches the legacy "Write(" prefix so entries
+# written by earlier revisions of this script are pruned rather than orphaned.
 if [[ "$NAME" == overnight-* ]] && command -v jq >/dev/null 2>&1; then
     SETTINGS="${GIT_ROOT}/.claude/settings.local.json"
     if [ -f "$SETTINGS" ]; then
         WORKTREE_BASE="${GIT_ROOT}/.claude/worktrees/overnight-"
-        NEW_WRITE="Write(${WORKTREE_PATH}/**)"
         NEW_EDIT="Edit(${WORKTREE_PATH}/**)"
         TMP="$(mktemp)"
         if jq \
             --arg base "$WORKTREE_BASE" \
-            --arg newW "$NEW_WRITE" \
             --arg newE "$NEW_EDIT" '
             .permissions //= {} |
             .permissions.allow //= [] |
@@ -127,7 +132,7 @@ if [[ "$NAME" == overnight-* ]] && command -v jq >/dev/null 2>&1; then
                 map(select(
                     (startswith("Write(" + $base) | not) and
                     (startswith("Edit("  + $base) | not)
-                )) + [$newW, $newE]
+                )) + [$newE]
             )
         ' "$SETTINGS" > "$TMP" 2>/dev/null; then
             mv "$TMP" "$SETTINGS"
