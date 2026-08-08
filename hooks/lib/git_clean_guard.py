@@ -681,8 +681,10 @@ def decide(command_text: str):
                         "sits behind a target-redirecting git global (-C / --git-dir "
                         "/ --work-tree / -c core.worktree), a wrapper option "
                         "(env -C / env --chdir / env -S), an unrecognised wrapper or "
-                        "interpreter, an embedded shell payload, or plain argument "
-                        "text this guard cannot prove inert")
+                        "interpreter, an embedded shell payload (including one "
+                        "nested deeper than this guard analyses), or plain argument "
+                        "text this guard cannot prove inert - argument text behind a "
+                        "git subcommand included, since `git rebase -x` runs it")
     if _has_env_redirect(words):
         return ("DENY", "a work-tree-redirecting git environment variable "
                         "(GIT_DIR / GIT_WORK_TREE / GIT_COMMON_DIR) is assigned - "
