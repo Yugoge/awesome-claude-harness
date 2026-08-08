@@ -261,6 +261,26 @@ QA6_FUSED_OPTION_DENY = [
     "env -Sgit clean -fd",
     "env -S'/usr/bin/git clean -fd'",
     "env -S'sh -c \"git clean -fd\"'",
+    # ...and the same option's OWN separator escapes, which contain no shell
+    # whitespace whatsoever. Found by adversarial review AFTER the fix above was
+    # green, using this lane's own shell oracle: `env -S` splits on `\_`, so bash
+    # hands over ONE word, "is this multi-word?" answered no, and the payload was
+    # invisible. This is the counter-example to "only the first token can hide a
+    # command word" - true of shell words, false before env re-splits them.
+    r"env -S'git\_clean\_-fd'",
+    r"env -vS'git\_clean\_-fd'",
+    r"env -S'FOO=1\_git\_clean\_-fd'",
+    r"env --split-string='git\_clean\_-fd'",
+    r"env -S'git\tclean\t-fd'",
+]
+
+# The counter-direction for the same escape family: a PROVEN dry run written
+# with env's separators must stay exempt, or the fix above is just a blanket
+# denial of every backslash-bearing option word.
+QA6_ENV_S_ESCAPE_STILL_EXEMPT = [
+    r"env -S'git\_clean\_-n'",
+    r"env -S'git\_status'",
+    r"env -S'echo\_hello\_world'",
 ]
 
 # (2) Recursion TRUNCATION. Depths 1-3 denied; the fourth `continue`d past the
