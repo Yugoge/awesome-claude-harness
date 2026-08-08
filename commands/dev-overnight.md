@@ -232,126 +232,48 @@ If `user_spec_path` was auto-detected (not passed via `--spec`), also announce:
 Overnight development session initialized.
 Start time: <start_time>
 End time: <end_time>
-Worktree: <validated worktree_path from state file>
+Isolation: <isolation_kind> (in_place = no worktree, working directly in the checkout)
+Working root: <worktree_path from state file>
+Branch: <worktree_branch from state file>
 Loop: todo-completion-driven (automatic reset on cycle complete)
 Time-lock hook is active -- session will not terminate until end-time.
 Beginning autonomous exploration...
 ```
 
-**Codex enforcement flag** (only when `codex_required` field in state file is `true`): Read `codex_required` with `jq -r '.codex_required // false'` (defaults safely for old state files). When `true`, after binding `$DEV_SESSION_ID`, run `scripts/write-codex-enforce.sh`. If it exits non-zero, abort. When `codex_required = true`, every BA / QA / dev dispatch prompt below MUST include the literal line `codex_required: true`.
-
-```
-CODEX_REQUIRED=$(jq -r '.codex_required // false' "$STATE_FILE")
-# ... (bind DEV_SESSION_ID from state file first, then) ...
-[[ "$CODEX_REQUIRED" == "true" ]] && \
-  scripts/write-codex-enforce.sh --source-command dev-overnight --session-id "$DEV_SESSION_ID"
-```
-
-**Initialize dev-registry for hard subagent enforcement** (MANDATORY — do this before ANY Agent launch):
-
-The hook `pretool-subagent-code-block.py` blocks non-`dev` subagents from writing code files, but it needs the Claude-internal subagent UUID to be registered against an `agent_type`. Root cause of the /dev gap (see commit `e086ccb`): /dev-overnight sessions produce no `.claude/specs/` cp-state files, so the hook falls open and every subagent can write code. The fix is an orchestrator-provided sentinel file that each subagent reads as its FIRST ACTION; `pretool-cp-checkin.py` then writes the UUID→agent_type mapping into `.claude/dev-registry/agent-index.json`.
-
-Reuse the overnight `session_id` from the state file (do NOT invent a new one — the same value is reused across cycles and continuations). Bind it as `$DEV_SESSION_ID` and derive the registry directory:
+**ONE-CALL INITIALIZATION (MANDATORY — before ANY Agent launch).** Everything the session needs before dispatch is done by a single script. It used to be ~25 separate tool calls — one `mkdir`, ~20 sentinel writes, two enforcement-flag scripts, a spec resolution and a heredoc — and a session that exhausted its usage ceiling partway through that fan-out never reached PM Plan and produced nothing. Run exactly one command:
 
 ```bash
-DEV_SESSION_ID="<reused-from-overnight-state.json>"
-REGISTRY_DIR="$CLAUDE_PROJECT_DIR/.claude/dev-registry/$DEV_SESSION_ID"
+scripts/overnight-init.sh --state-file "$STATE_FILE"
 ```
 
-**E2E enforcement flag** (unconditional — always-on): Now that `$DEV_SESSION_ID` is bound, run `scripts/write-e2e-enforce.sh` to activate the E2E gate for QA. If it exits non-zero, abort.
+It is idempotent, so re-run it verbatim on every continuation cycle. If the last line is not `OVERNIGHT_INIT_OK`, ABORT — do not attempt the individual steps by hand.
 
-```bash
-scripts/write-e2e-enforce.sh --source-command dev-overnight --session-id "$DEV_SESSION_ID"
-```
+In one invocation it: creates `.claude/dev-registry/<session_id>/`; writes one sentinel JSON per agent type (the list is read from `hooks/pretool-cp-checkin.py` `CP_AGENTS`, never re-typed); writes the always-on `e2e` enforcement flag plus `codex` when the record sets `codex_required`; resolves the spec artifacts; and writes the verbatim user-requirement document including Section 5.
 
-Create sentinel files for every agent type this orchestrator can launch, including overnight-only specialists.
+Bind these from its `KEY=VALUE` output — they are the only initialization values you need:
 
-**Sentinel-write idiom (M10 harness-fixes 20260428)**: the worktree-guard's `_extract_bash_write_paths` static scan treats `$VAR` and `${VAR}` tokens as opaque (it intentionally cannot tell legitimate from adversarial `$VAR` writes — see arch-3). The orchestrator MUST therefore use one of the two acceptable forms below. Forms that interpose a same-line-assigned shell variable into the redirect target (e.g. `REG=$CLAUDE_PROJECT_DIR/...; > "$REG/$agent.json"`) will be blocked by the worktree boundary even though the harness-state exemption is active, because the static scan cannot resolve `$REG` and the realpath check fails.
+| Output key | Use |
+|---|---|
+| `SESSION_ID` | `$DEV_SESSION_ID` — reuse across cycles, never invent a new one |
+| `REGISTRY_DIR` | the dev-registry path subagents read their sentinel from |
+| `CODEX_REQUIRED` | when `true`, every BA / QA / dev dispatch prompt MUST carry the literal line `codex_required: true` |
+| `SPEC_ID`, `CP_DIR`, `VIEWS_DIR` | cp-state handoff; all empty means legacy monolith mode |
+| `REQUIREMENT_DOC` | the source-of-truth anchor path to pass to every subagent |
+| `SPEC_MODE`, `USER_SPEC_PATH` | spec announcement and dispatch prompts |
 
-**Acceptable form A — Write tool with an orchestrator-inlined absolute `file_path`** (one tool call per sentinel; the Write tool does NOT shell-expand env vars or `~`, so the orchestrator must compute the concrete resolved project-dir absolute path and inline it — substitute `<RESOLVED_PROJECT_DIR>` with the literal value of `$CLAUDE_PROJECT_DIR` before invoking Write):
+**FIRST ACTION line (every Agent launch).** Each dispatch prompt MUST begin with an instruction to `Read $CLAUDE_PROJECT_DIR/.claude/dev-registry/$DEV_SESSION_ID/<agent>.json` before any other tool call. Without that Read, `pretool-cp-checkin.py` cannot map the subagent UUID to its `agent_type` and `pretool-subagent-code-block.py` falls open for that subagent.
 
-```text
-Write(file_path="<RESOLVED_PROJECT_DIR>/.claude/dev-registry/<session_id>/architect.json", content='{"agent_type": "architect", "session_id": "<session_id>"}')
-Write(file_path="<RESOLVED_PROJECT_DIR>/.claude/dev-registry/<session_id>/ba.json", content='{"agent_type": "ba", "session_id": "<session_id>"}')
-Write(file_path="<RESOLVED_PROJECT_DIR>/.claude/dev-registry/<session_id>/graphify.json", content='{"agent_type": "graphify", "session_id": "<session_id>"}')
-... (one Write per agent type)
-```
-
-**NOTE (C6, redev-tier123)**: the Write tool does not shell-expand env vars or `~`, so the orchestrator must inline the concrete resolved project-dir absolute path (`<RESOLVED_PROJECT_DIR>` = the literal value of `$CLAUDE_PROJECT_DIR`) — NEVER a `$VAR`/`~` token inside the Write operand and NEVER an author-absolute literal. Form B avoids the inlining by using `$CLAUDE_PROJECT_DIR` directly, because Bash redirect targets ARE expanded by the static scan in `lib/bash_write_targets.py:_resolve_path`.
-
-**Acceptable form B — Bash redirect with `$CLAUDE_PROJECT_DIR`-prefixed target** (the static scan resolves `$CLAUDE_PROJECT_DIR` via `lib/bash_write_targets.py:_resolve_path`, lines 156-160). Inline the session_id literally; do NOT introduce intermediate variables in the redirect target:
-
-```bash
-mkdir -p "$CLAUDE_PROJECT_DIR/.claude/dev-registry/<session_id>"
-printf '{"agent_type": "architect", "session_id": "<session_id>"}\n' > "$CLAUDE_PROJECT_DIR/.claude/dev-registry/<session_id>/architect.json"
-printf '{"agent_type": "ba", "session_id": "<session_id>"}\n' > "$CLAUDE_PROJECT_DIR/.claude/dev-registry/<session_id>/ba.json"
-printf '{"agent_type": "graphify", "session_id": "<session_id>"}\n' > "$CLAUDE_PROJECT_DIR/.claude/dev-registry/<session_id>/graphify.json"
-# ... (one printf per agent type; substitute the literal session_id read from the state file)
-```
-
-Either form populates the same sentinel files. Form A is more verbose but tool-policy-cleanly preserves one Write per sentinel; form B is more concise but requires the orchestrator to inline the session_id verbatim into each target path.
-
-Every Agent launch prompt in this orchestrator MUST begin with a `FIRST ACTION` line instructing the subagent to `Read $CLAUDE_PROJECT_DIR/.claude/dev-registry/$DEV_SESSION_ID/<agent>.json` before any other tool call. Without that Read, the enforcement hook will fail open for that subagent. In continuation mode (after a hook-induced context reset), re-run the `mkdir -p` + sentinel loop above — it's idempotent, so re-running is safe and guarantees sentinels exist even if a cleanup step removed them.
-
-**Initialize cp-state handoff when a user-provided `/spec` exists** (MANDATORY in `spec_mode == "user-provided"` when cp-state files exist):
-
-Resolve the spec-id via the centralized resolver — never derive it from the
-`user_spec_path` basename by hand (that prefix drift silently dropped de-prefixed
-specs to monolith mode):
-
-```bash
-if [ -n "$user_spec_path" ]; then
-  RESOLVED_JSON=$(~/.claude/scripts/resolve-spec-artifacts.py \
-      --spec-path "$user_spec_path" --project-dir "$CLAUDE_PROJECT_DIR") || {
-    echo "spec-artifact resolution FAILED (path mismatch / present-but-invalid split)." >&2
-    exit 1; }
-  SPEC_ID=$(jq -r .artifact_id <<<"$RESOLVED_JSON")
-  CP_DIR=$(jq -r '.cp_dir // empty'   <<<"$RESOLVED_JSON")
-  VIEWS_DIR=$(jq -r '.views_dir // empty' <<<"$RESOLVED_JSON")
-  [ -d "$CLAUDE_PROJECT_DIR/$CP_DIR" ] || { SPEC_ID=""; CP_DIR=""; }
-else
-  SPEC_ID=""; CP_DIR=""; VIEWS_DIR=""
-fi
-```
-
-**T1.7 (redev-tier123) — Orchestrator-view + Section 5 read MANDATE**: When `SPEC_ID` is non-empty, BEFORE composing any subagent dispatch prompt, you MUST read the orchestrator view the resolver located — `$CLAUDE_PROJECT_DIR/$VIEWS_DIR/orchestrator.md` (views live under `docs/dev/specs/<artifact_id>/views/`, NOT under `.claude/specs/`) — AND the spec's Section 5 (User's Acceptance Criterion) verbatim from `$user_spec_path`. Quote the user's words from Section 5 directly into every dispatch prompt; do not paraphrase or summarize. The user's verbatim need is the binding contract — every subagent must see the user's literal request, not your reformulation.
-
-If no spec/cp-state directory exists, set `SPEC_ID=""` and skip the `SECOND ACTION`
-lines below. If a particular agent has no cp-state file under that SPEC_ID, omit that
-agent's `SECOND ACTION` for this launch. When `SPEC_ID` is non-empty, every Agent launch prompt for an agent that has a
-cp-state file MUST include a `SECOND ACTION` line immediately after the dev-registry `FIRST ACTION`:
+**SECOND ACTION line (when `SPEC_ID` is non-empty).** For every agent that has a cp-state file under that `SPEC_ID`, add immediately after the FIRST ACTION line:
 
 ```text
 SECOND ACTION: Read $CLAUDE_PROJECT_DIR/$CP_DIR/cp-state-<agent>.json to load your mandatory checklist before doing substantive work. Mark each completed checkpoint with ~/.claude/scripts/spec-check.py mark --spec-id <SPEC_ID> --agent <agent> --agent-id $CLAUDE_AGENT_ID --cp-id <cp-NN>. Waive only with ~/.claude/scripts/spec-check.py waive --spec-id <SPEC_ID> --agent <agent> --agent-id $CLAUDE_AGENT_ID --cp-id <cp-NN> (auto-text records actor + ISO timestamp). You MUST leave zero pending checkpoints before Stop (a discipline expectation tracked via spec-check.py — no hook blocks exit on pending checkpoints today). If `$CLAUDE_AGENT_ID` is unavailable, use the `agent_id` value written into the cp-state file by the read.
 ```
 
-This gives overnight specialists the same checklist semantics as BA/Dev/QA:
-check-in happens on the cp-state read, and each specialist is expected to leave
-the checklist fully done or waived before Stop (tracked via spec-check.py; no hook
-blocks exit on pending checkpoints today).
+Omit that line for any agent with no cp-state file. This gives overnight specialists the same checklist semantics as BA/Dev/QA.
 
-**Write verbatim user requirement document** (MANDATORY — do this once in Step 1, before any Agent dispatch):
+**T1.7 (redev-tier123) — Orchestrator-view + Section 5 read MANDATE**: When `SPEC_ID` is non-empty, BEFORE composing any subagent dispatch prompt, you MUST read the orchestrator view the resolver located — `$CLAUDE_PROJECT_DIR/$VIEWS_DIR/orchestrator.md` (views live under `docs/dev/specs/<artifact_id>/views/`, NOT under `.claude/specs/`) — AND the spec's Section 5 (User's Acceptance Criterion) verbatim from `$USER_SPEC_PATH`. Quote the user's words from Section 5 directly into every dispatch prompt; do not paraphrase or summarize. The user's verbatim need is the binding contract — every subagent must see the user's literal request, not your reformulation. `overnight-init.sh` has already copied Section 5 into `REQUIREMENT_DOC`, so read it from there rather than re-slicing the spec.
 
-```bash
-PROJECT_ROOT="${WORKTREE_PATH:-$CLAUDE_PROJECT_DIR}"
-mkdir -p "$PROJECT_ROOT/docs/dev"
-REQUIREMENT_DOC="$PROJECT_ROOT/docs/dev/user-requirement-${DEV_SESSION_ID}.md"
-cat <<'REQEOF' > "$REQUIREMENT_DOC" || { echo "ERROR: Failed to write user requirement document — aborting." >&2; exit 1; }
-<verbatim focus / requirement text from state file — paste literal text here, no shell variables inside heredoc>
-REQEOF
-```
-
-When `user_spec_path` is non-null, also append the spec path and Section 5 verbatim to the same document (do not summarize):
-
-```bash
-if [ -n "$USER_SPEC_PATH" ]; then
-  printf '\nUser spec path: %s\n' "$USER_SPEC_PATH" >> "$REQUIREMENT_DOC"
-  printf '\nSection 5 (User Acceptance Criterion):\n' >> "$REQUIREMENT_DOC"
-  # Read Section 5 verbatim from the spec file and append — do not paraphrase
-fi
-```
-
-This document is the source-of-truth anchor for the entire overnight session. Every subagent reads it before interpreting any derived context or spec. Use a single-quoted heredoc delimiter (`'REQEOF'`) so `$`, backticks, and shell metacharacters are never expanded. This write is idempotent across continuation cycles (same `DEV_SESSION_ID` reused). When including this path in dispatch prompts, always substitute the resolved value of `$REQUIREMENT_DOC` — MUST NOT pass literal `<PROJECT_ROOT>` or `<DEV_SESSION_ID>` placeholders to subagents; expand them to actual values at dispatch time.
+When including `REQUIREMENT_DOC` in dispatch prompts, always substitute its resolved value — MUST NOT pass literal `<PROJECT_ROOT>` or `<DEV_SESSION_ID>` placeholders to subagents.
 
 ---
 
