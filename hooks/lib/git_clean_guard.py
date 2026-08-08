@@ -255,7 +255,7 @@ def _scan_segment(seg: str, ignore_dry_run: bool = False):
 
     if subcommand != "clean":
         return (False, False)
-    if _is_dry_run([_unquote(t) for t in toks[sub_idx + 1:]]):
+    if not ignore_dry_run and _is_dry_run([_unquote(t) for t in toks[sub_idx + 1:]]):
         return (False, False)
     return (True, redirect)
 
