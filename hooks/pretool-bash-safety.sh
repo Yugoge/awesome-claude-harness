@@ -2003,17 +2003,22 @@ fi
 # three, contrary to the rule's contract. The predicate below is character-for
 # -character the one at :2013-2016, so releasing the deny provably lands on
 # that snapshot-or-deny exit and never on the terminal default-allow.
+_GIT_CLEAN_WOULD_BLOCK=0
+if { [ "$_GIT_CLEAN_HAS_INV" = "1" ] && [ "$_GIT_CLEAN_VERDICT" != "ALLOW" ]; } || \
+   [ "$_GIT_CLEAN_FAIL_CLOSED" = "1" ]; then
+  _GIT_CLEAN_WOULD_BLOCK=1
+fi
+# Consulted ONLY on the verge of denying, so the ordinary subagent command pays
+# no extra subprocess for a grant lookup it will never use.
 _GIT_CLEAN_SUBAGENT_GRANT=0
-if [ "$IS_SUBAGENT" = "1" ]; then
+if [ "$_GIT_CLEAN_WOULD_BLOCK" = "1" ] && [ "$IS_SUBAGENT" = "1" ]; then
   _GC_SID=$(echo "$INPUT" | "$PYTHON_BIN" -c \
     "import json,sys; d=json.load(sys.stdin); print(d.get('session_id',''))" 2>/dev/null)
   if [ -n "$_GC_SID" ] && [ -e "/tmp/claude-orchestrator-consent-${_GC_SID}.flag" ]; then
     _GIT_CLEAN_SUBAGENT_GRANT=1
   fi
 fi
-if [ "$_GIT_CLEAN_SUBAGENT_GRANT" != "1" ] && \
-   { { [ "$_GIT_CLEAN_HAS_INV" = "1" ] && [ "$_GIT_CLEAN_VERDICT" != "ALLOW" ]; } || \
-     [ "$_GIT_CLEAN_FAIL_CLOSED" = "1" ]; }; then
+if [ "$_GIT_CLEAN_WOULD_BLOCK" = "1" ] && [ "$_GIT_CLEAN_SUBAGENT_GRANT" != "1" ]; then
   echo "BLOCKED: destructive 'git clean' is forbidden in agent flow" >&2
   echo "Command: $COMMAND" >&2
   echo "REASON: git clean removes UNTRACKED files — no rm, no reflog, no reachable git object, so the deletion is unrecoverable and leaves no trace. Uncommitted work-in-progress has been lost this way." >&2
