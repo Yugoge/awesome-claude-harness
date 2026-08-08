@@ -1964,8 +1964,29 @@ def dry_run_on(args):
     return state
 
 
+def unresolved_clean(text, parsed_n):
+    """True when the text carries MORE `git … clean` occurrences than the
+    parser could resolve into invocations — i.e. at least one clean the
+    per-invocation walk below will never see.
+
+    This is the chained-nesting hole: the shell-side fail-closed fallback is
+    reached only when the classifier resolved NO clean at all, so prefixing a
+    nested payload with a provable dry-run (`git clean -n; sh -c '<destructive>'`)
+    used to suppress it entirely and the destructive half ran ungranted. Quotes
+    are neutralised, under the same shell-in-command-position condition the
+    shell side uses, so a mere data mention chained after a dry-run
+    (`git clean -n && echo "git clean -fd"`, no shell) is NOT counted.
+    """
+    if SHELL_CMD.search(text):
+        text = text.replace('"', ' ').replace("'", ' ')
+    return len(COARSE.findall(text)) > parsed_n
+
+
 def verdict():
-    raw = raw_cleans(os.environ.get('CLEAN_RAW_CMD', ''))
+    raw_text = os.environ.get('CLEAN_RAW_CMD', '')
+    raw = raw_cleans(raw_text)
+    if unresolved_clean(raw_text, len(raw)):
+        return 'BLOCK:nested'
     try:
         stripped = [inv for inv
                     in json.loads(os.environ.get('CLEAN_CLASSIFIER_JSON') or '[]')
