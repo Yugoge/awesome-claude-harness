@@ -98,6 +98,8 @@ NONE_CASES = [
     "git clean --no-dry -n",
     # An abbreviated exclude in `=` form consumes nothing, so -n still applies.
     "git clean -n --exc=build",
+    # A pathspec after `--` cannot un-dry a dry run.
+    "git clean -n -- -fd",
     # A redirected clean that deletes nothing needs neither snapshot nor deny.
     "env -C /tmp/B git clean -n",
     # A wrapper option on a NON-git command must not be read as a clean at all.
