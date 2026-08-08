@@ -146,17 +146,28 @@ When `spec_mode == "user-provided"` is auto-detected from a spec but the user's 
 ## Arguments
 
 ```
-/dev-overnight [end-time] [focus] [--spec path/to/spec.md] [--codex]
+/dev-overnight [end-time] [focus] [--spec path/to/spec.md] [--codex] [--worktree | --no-worktree]
 ```
 
 **Examples**:
-- `/dev-overnight 6:00` — run until 6:00, no focus (explore everything)
+- `/dev-overnight 6:00` — run until 6:00, no focus (explore everything), in place
 - `/dev-overnight 6:00 fix pipeline bugs` — run until 6:00, focus on pipeline bugs
 - `/dev-overnight fix hooks` — default 8h, focus on hooks issues
 - `/dev-overnight` — default 8h, no focus
 - `/dev-overnight 6:00 --spec docs/my-spec.md` — run until 6:00, use user-provided spec
 - `/dev-overnight 6:00 fix UI --spec docs/ui-spec.md` — focus + user spec
 - `/dev-overnight 6:00 --codex` — run until 6:00 with Codex adversarial review enabled for all subagents
+- `/dev-overnight 6:00 --worktree` — run until 6:00 in a freshly created isolated worktree
+
+**`--worktree` / `--no-worktree` (isolation is the user's choice, 2026-08-08)**: `/dev-overnight` no longer creates a worktree on its own.
+
+- **Default (neither flag, or `--no-worktree`)**: `isolation_kind = "in_place"`. The session works in the checkout you are already on. Nothing is created — no worktree, no branch, no clone — and nothing needs cleaning up afterwards. `worktree_path` is set to the main root so the write-boundary consumers resolve to "anywhere in this repo".
+- **`--worktree`**: restores the historical isolated launch — create the worktree, and if that is impossible fall back through repair/prune to a durable fresh clone. If no durable isolation can be produced, the launch is **refused** rather than silently downgraded to in-place: you asked for isolation, so you get isolation or an error.
+- Passing both flags is an error; the launcher refuses rather than picking one.
+
+Two launch-time refusals apply to in-place mode, both fail-fast with no state written:
+- **Detached HEAD** — every downstream consumer names a branch, and commits on a detached HEAD are unreachable.
+- **The checkout is on `protected_branch`** — the keystone denies protected-branch ref moves for the overnight actor, so the session would launch fine and then fail at its first commit hours later. Check out a working branch, or pass `--worktree`.
 
 **Parse `--codex`**: If `$ARGUMENTS` contains the literal token `--codex` (in any position), strip it from the argument string and set `codex_required = true`. Otherwise set `codex_required = false` (default). When `codex_required = true`, every BA / QA / dev / PM dispatch prompt MUST include the literal line `codex_required: true` so each subagent's OPT-IN Codex consultation block activates. When `codex_required = false`, do NOT include that line.
 
