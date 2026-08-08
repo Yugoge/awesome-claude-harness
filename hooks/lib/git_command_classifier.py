@@ -206,7 +206,9 @@ def iter_git_invocations(command_text):
         if idx is None:
             continue
         token = toks[idx]
-        if os.path.basename(token) != 'git':
+        # Unquote before basenaming: bash strips the quotes before exec, so
+        # `"/usr/bin/git"` and `'git'` are git invocations (fail-closed fix).
+        if os.path.basename(_unquote_token(token)) != 'git':
             continue
         after_git = toks[idx + 1:]
         subcommand, remaining_args = _git_subcommand(after_git)
