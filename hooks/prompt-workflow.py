@@ -398,26 +398,48 @@ def _match_end_time_token(args: str) -> tuple[str, str]:
     return '', args
 
 
-def parse_overnight_args(prompt_text: str) -> tuple[str, str, str, bool]:
-    """Extract end-time, focus, spec path, and codex flag from /dev-overnight args.
+def parse_overnight_args(prompt_text: str) -> tuple[str, str, str, bool, str]:
+    """Extract end-time, focus, spec path, codex flag, and isolation choice.
 
-    Returns (end_time_raw, focus_string, spec_path, codex_required). M4 (harness-fixes
-    20260428): now also recognizes +Nh / +N.Mh / +Nm relative-time
-    tokens; an unknown +token returns INVALID:<token> so the bash layer
-    can surface an explicit error rather than silently defaulting to +8h.
-    Spec dash-form tolerance unchanged (-- / — / –).
+    Returns (end_time_raw, focus_string, spec_path, codex_required,
+    worktree_choice). M4 (harness-fixes 20260428): now also recognizes
+    +Nh / +N.Mh / +Nm relative-time tokens; an unknown +token returns
+    INVALID:<token> so the bash layer can surface an explicit error rather than
+    silently defaulting to +8h. Spec dash-form tolerance unchanged (-- / — / –).
     M5 (2026-05-15): extracts --codex boolean flag and returns it as 4th element.
+
+    2026-08-08: extracts the isolation choice as the 5th element. Both flags are
+    passed through verbatim rather than resolved here — 'both given' is a user
+    error the launcher refuses, and collapsing it to one value in this layer
+    would hide the conflict instead of surfacing it. '' means neither flag was
+    given, which the launcher resolves to in-place.
     """
     match = re.search(r'/dev-overnight\s+(.*)', prompt_text.strip())
     args = match.group(1).strip() if match else ''
     # Extract --codex flag (boolean toggle, no value)
     codex_required = '--codex' in args.split()
     args = re.sub(r'\s*--codex\b', '', args).strip()
+    # Extract the isolation flags. --no-worktree is matched FIRST: '--worktree'
+    # is a proper substring of '--no-worktree', so a \b-anchored --worktree scan
+    # over the raw string would also fire on --no-worktree and report both.
+    tokens = args.split()
+    want_worktree = '--worktree' in tokens
+    want_no_worktree = '--no-worktree' in tokens
+    if want_worktree and want_no_worktree:
+        worktree_choice = 'conflict'
+    elif want_worktree:
+        worktree_choice = 'worktree'
+    elif want_no_worktree:
+        worktree_choice = 'no-worktree'
+    else:
+        worktree_choice = ''
+    args = re.sub(r'\s*--no-worktree\b', '', args)
+    args = re.sub(r'\s*--worktree\b', '', args).strip()
     args, spec_path = _strip_spec_arg(args)
     if not args:
-        return '', '', spec_path, codex_required
+        return '', '', spec_path, codex_required, worktree_choice
     end_time, focus = _match_end_time_token(args)
-    return end_time, focus, spec_path, codex_required
+    return end_time, focus, spec_path, codex_required, worktree_choice
 
 
 def create_overnight_state(end_time: str, focus: str = '', spec_path: str = '', session_id: str = 'default', codex_required: bool = False) -> bool:
