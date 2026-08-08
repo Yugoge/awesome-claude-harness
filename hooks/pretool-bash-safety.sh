@@ -2011,8 +2011,9 @@ if [ "$IS_SUBAGENT" = "1" ]; then
     _GIT_CLEAN_SUBAGENT_GRANT=1
   fi
 fi
-if { [ "$_GIT_CLEAN_HAS_INV" = "1" ] && [ "$_GIT_CLEAN_VERDICT" != "ALLOW" ]; } || \
-   [ "$_GIT_CLEAN_FAIL_CLOSED" = "1" ]; then
+if [ "$_GIT_CLEAN_SUBAGENT_GRANT" != "1" ] && \
+   { { [ "$_GIT_CLEAN_HAS_INV" = "1" ] && [ "$_GIT_CLEAN_VERDICT" != "ALLOW" ]; } || \
+     [ "$_GIT_CLEAN_FAIL_CLOSED" = "1" ]; }; then
   echo "BLOCKED: destructive 'git clean' is forbidden in agent flow" >&2
   echo "Command: $COMMAND" >&2
   echo "REASON: git clean removes UNTRACKED files — no rm, no reflog, no reachable git object, so the deletion is unrecoverable and leaves no trace. Uncommitted work-in-progress has been lost this way." >&2
