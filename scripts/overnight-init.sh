@@ -69,20 +69,50 @@ PROJECT_ROOT="$(cd "$PROJECT_DIR" && pwd -P)"
 # land under PROJECT_ROOT, or the whole init fails. The check runs on the
 # resolved PARENT directory, because the target file itself usually does not
 # exist yet and a symlinked parent is the escape that matters.
-_confined() {
-  local target="$1" parent resolved
-  parent="$(dirname "$target")"
-  mkdir -p "$parent" 2>/dev/null || return 1
-  resolved="$(cd "$parent" && pwd -P)" || return 1
+#
+# Order matters. Checking only AFTER `mkdir -p` is useless: mkdir follows a
+# symlinked ancestor and creates the tree at the far end, so by the time the
+# check runs the escape has already happened. The deepest EXISTING ancestor is
+# therefore canonicalized FIRST, before anything is created, and the resolved
+# parent is re-checked afterwards to catch a race. A target that is itself a
+# symlink is refused outright rather than followed.
+_assert_confined_dir() {
+  # $1 = directory that must resolve under PROJECT_ROOT (need not exist yet)
+  local dir="$1" probe resolved
+  probe="$dir"
+  while [[ -n "$probe" && ! -e "$probe" ]]; do
+    local next="${probe%/*}"
+    [[ "$next" == "$probe" ]] && next=""
+    probe="$next"
+  done
+  [[ -n "$probe" ]] || _die "cannot resolve any existing ancestor of $dir"
+  resolved="$(cd "$probe" 2>/dev/null && pwd -P)" \
+    || _die "cannot canonicalize $probe"
+  case "$resolved" in
+    "$PROJECT_ROOT"|"$PROJECT_ROOT"/*) ;;
+    *) _die "refusing to write outside the project root: $dir (nearest existing ancestor $probe resolves to $resolved, outside $PROJECT_ROOT)" ;;
+  esac
+}
+_mkdir_confined() {
+  local dir="$1" resolved
+  _assert_confined_dir "$dir"
+  mkdir -p "$dir" || _die "failed to create $dir"
+  # Re-check the now-existing directory: the walk above validated the deepest
+  # ancestor that existed at the time, which does not by itself prove the newly
+  # created leaf resolves inside (a concurrent symlink swap would).
+  resolved="$(cd "$dir" && pwd -P)" || _die "cannot canonicalize $dir"
   case "$resolved" in
     "$PROJECT_ROOT"|"$PROJECT_ROOT"/*) return 0 ;;
+    *) _die "refusing to write outside the project root: $dir resolves to $resolved" ;;
   esac
-  return 1
 }
 _write_confined() {
   # $1 = target path, stdin = content
   local target="$1"
-  _confined "$target" || _die "refusing to write outside the project root: $target (resolved parent escapes $PROJECT_ROOT)"
+  _mkdir_confined "$(dirname "$target")"
+  # A pre-existing symlink at the target would redirect the write regardless of
+  # how well the parent is confined. Refuse rather than follow it.
+  [[ -L "$target" ]] && _die "refusing to write through a symlink: $target"
   cat > "$target" || _die "failed to write $target"
 }
 
