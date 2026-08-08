@@ -366,12 +366,10 @@ if [[ "$WORKTREE_CHOICE" == "in_place" ]]; then
     # writes to worktree_path (hooks/pretool-overnight-hook-guard.py
     # _is_path_allowed_during_overnight) resolve to "anywhere in this repo" —
     # which is the correct boundary once the user has opted out of isolation.
-    IN_PLACE_BRANCH="$("${GIT_UNMARKED[@]}" -C "$MAIN_ROOT" symbolic-ref --quiet --short HEAD 2>/dev/null || echo '')"
-
     # Detached HEAD: refuse. Every downstream consumer (cycle logging, /merge,
     # the checkpoint mechanism) names a branch, and commits made on a detached
     # HEAD are unreachable the moment anything moves. Fail at launch, loudly.
-    if [[ -z "$IN_PLACE_BRANCH" ]]; then
+    if ! resolve_in_place_branch; then
         echo "Error: in-place mode requires a checked-out branch, but '$MAIN_ROOT' is on a detached HEAD (no state written). Remedy: check out a branch, or relaunch with --worktree to work in an isolated worktree." >&2
         exit 1
     fi
