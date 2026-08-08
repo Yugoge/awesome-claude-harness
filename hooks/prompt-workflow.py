@@ -507,14 +507,33 @@ def _build_worktree_instruction(state: dict) -> str:
     # work IS main-targeting by definition (git-policy-shim:179-182).
     if state.get('isolation_kind') == 'in_place':
         branch = state.get('worktree_branch', '') or '<current branch>'
-        return (
+        actor_env = state.get('actor_git_env') or {}
+        helper = actor_env.get('env_helper') if isinstance(actor_env, dict) else None
+        main_root = state.get('main_root', '')
+        base = (
             f'IN-PLACE MODE: no worktree was created. Work directly in {wt} on '
             f'branch "{branch}". Do NOT call EnterWorktree and do NOT create a '
-            'worktree. Export CLAUDE_OVERNIGHT_ACTOR=1 in your shell (do NOT set '
-            'CLAUDE_OVERNIGHT_MAIN_ROOT — that would activate the policy shim and '
-            'deny every git command in this mode). Never commit to the protected '
-            f'branch "{state.get("protected_branch", "")}".'
+            'worktree. '
         )
+        if helper:
+            # Sourced per command, not once: a fresh shell per Bash call means a
+            # one-time export lapses and the keystone stops applying.
+            base += (
+                f'At the START OF EVERY command that runs git, source the '
+                f'marker-only actor env: `source "{helper}" --main-root '
+                f'"{main_root}"`. It exports CLAUDE_OVERNIGHT_ACTOR=1 and '
+                'deliberately does NOT set CLAUDE_OVERNIGHT_MAIN_ROOT — setting '
+                'that would arm the policy shim, which denies every git command '
+                'in this mode. '
+            )
+        else:
+            base += (
+                'Export CLAUDE_OVERNIGHT_ACTOR=1 in every shell that runs git '
+                '(do NOT set CLAUDE_OVERNIGHT_MAIN_ROOT — that would arm the '
+                'policy shim and deny every git command in this mode). '
+            )
+        base += f'Never commit to the protected branch "{state.get("protected_branch", "")}".'
+        return base
     if wt is not None and wt != '':
         # fix-1 (Cycle-2): also mandate sourcing + verifying the actor git-env so
         # the harness-owned policy shim is the actor's `git` and
