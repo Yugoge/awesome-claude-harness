@@ -68,6 +68,20 @@ SNAPSHOT_CASES = [
     "git clean -fd --exclud -n",
     # A non-redirecting env ASSIGNMENT through a wrapper is still the hook cwd.
     "env FOO=bar git clean -fd",
+    # Lexical dress must not buy an exemption: the negation survives quoting and
+    # backslash escaping, and the bounded normalizer erasing quoted content must
+    # not lose it either (both parses are unioned fail-closed).
+    'git clean -n "--no-dry-run" -fd',
+    r"git clean -n --no-dry\-run -fd",
+    r"git clean -f --no-dry-run \-- -n",
+    # `--` before any flag means the following -n is a PATHSPEC, not a dry run.
+    "git clean -- -n",
+    # A wrapper option TERMINATOR leaves the cwd alone, so this is provable.
+    "env -- git clean -fd",
+    # Deliberate asymmetry: an unrecognised POSITIVE spelling reads as
+    # destructive. `--dry` is a real dry run, so this snapshot is superfluous —
+    # that is the safe direction and is preferred over risking a wrong exemption.
+    "git clean --dry",
 ]
 
 NONE_CASES = [
