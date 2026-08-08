@@ -168,15 +168,26 @@ def _is_dry_run(rest: list) -> bool:
     return dry
 
 
-def _scan_segment(seg: str):
-    """Return (destructive_clean_present, target_redirect_present) for a segment."""
-    toks = seg.split()
+def _scan_segment(seg: str, ignore_dry_run: bool = False):
+    """Return (destructive_clean_present, target_redirect_present) for a segment.
+
+    Tokens are reduced to static shell words FIRST, so a quoted wrapper or
+    command token (`"/usr/bin/env" -C <dir> "git" clean -fd`) is seen for what
+    bash will actually execute rather than for its punctuation."""
+    toks = [_unquote(t) for t in seg.split()]
     if not toks:
         return (False, False)
     idx = _command_token_index(toks)
     if idx is None:
         return (False, False)
-    if toks[idx].startswith("-"):
+    if toks[idx] == "--":
+        # A wrapper's option TERMINATOR: everything after it is the command and
+        # no cwd-changing option preceded it, so `env -- git clean -fd` is a
+        # provable hook-cwd clean and must snapshot rather than deny.
+        idx += 1
+        if idx >= len(toks):
+            return (False, False)
+    elif toks[idx].startswith("-"):
         # A WRAPPER's own option region. _command_token_index steps over the
         # wrapper token but stops at its first option, so `env -C <dir> git
         # clean -fd` resolves to `-C` and the git invocation is invisible
