@@ -1097,14 +1097,14 @@ def handle_phase_a(cmd_name: str, user_input: str, sid: str, envelope_digest: st
     # any partials, and FAIL CLOSED (no checklist, no command-spec, no
     # EnterWorktree prompt, no silent exit(0)).
     if cmd_name == 'dev-overnight':
-        end_time, focus, spec_path, codex_required = parse_overnight_args(user_input)
+        end_time, focus, spec_path, codex_required, worktree_choice = parse_overnight_args(user_input)
         ok = create_overnight_state(
             end_time, focus, spec_path=spec_path, session_id=sid,
-            codex_required=codex_required)
+            codex_required=codex_required, worktree_choice=worktree_choice)
         if not ok:
-            print('OVERNIGHT LAUNCH ABORTED: failed to create + validate an '
-                  'isolated worktree. No checklist or command spec injected. '
-                  'Do NOT work in the main directory.', file=sys.stderr)
+            print('OVERNIGHT LAUNCH ABORTED: the launcher refused to write a '
+                  'session-state record (see the error above). No checklist or '
+                  'command spec injected.', file=sys.stderr)
             _cleanup_overnight_partials(sid)
             raise SystemExit(2)
     tf = official_todos_path(sid)
