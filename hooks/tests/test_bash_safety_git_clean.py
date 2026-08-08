@@ -556,6 +556,11 @@ _AC17_GLOBAL_OPTS = [
     "--git-dir=/tmp/r/.git", "--work-tree=/tmp", "--exec-path=/x",
     "--namespace=n", "--config-env=k=E", "--bare", "--literal-pathspecs",
     "--glob-pathspecs", "--icase-pathspecs", "--no-optional-locks", "-p", "-P",
+    # Accepted by REAL git 2.54.0 (verified by execution) but absent from the
+    # shared GIT_GLOBAL_OPT_RE enumeration. Adversarial review found these
+    # reachable even once both layers agreed, which is why the occurrence
+    # grammar's option segment is now shaped by SYNTAX, not by a name list.
+    "--no-lazy-fetch", "--no-advice", "--attr-source=HEAD",
 ]
 
 
