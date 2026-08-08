@@ -297,6 +297,18 @@ if [[ -z "$PROTECTED_BRANCH" ]]; then
 fi
 
 # =============================================================================
+# IN-PLACE FIELD RESOLUTION (side-effect-free; ONE definition, TWO call sites).
+# In-place mode creates nothing, so establishing its record fields is pure
+# reading and belongs above the side-effect boundary. Defining it once and
+# calling it from both the M1-SEAM pre-seed and the real launch is what keeps
+# the seam faithful: a seam that reported empty isolation fields for a mode that
+# really does populate them would verify a record shape no launch ever writes.
+# Sets IN_PLACE_BRANCH; returns 1 (with no output) when HEAD is detached.
+resolve_in_place_branch() {
+    IN_PLACE_BRANCH="$("${GIT_UNMARKED[@]}" -C "$MAIN_ROOT" symbolic-ref --quiet --short HEAD 2>/dev/null || echo '')"
+    [[ -n "$IN_PLACE_BRANCH" ]]
+}
+
 # EVERYTHING BELOW THIS LINE CREATES SIDE EFFECTS (worktree/clone/branch, spec
 # resolution, directories). M1-SEAM's component mode pre-seeds the record fields
 # these blocks would populate and then SKIPS the whole region, so the seam
