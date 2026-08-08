@@ -1898,16 +1898,22 @@ def raw_cleans(text):
     basename 'xargs' — matching by basename, not token equality, because
     /usr/bin/xargs injects arguments identically (the classifier already
     basename-matches the git binary itself).
+
+    Tokens are unquoted before basenaming, exactly as the shared classifier
+    now does, so this RAW pass and the STRIPPED pass agree on WHICH commands
+    are git; disagreeing here would make T2 fire on every quoted binary and
+    turn `"/usr/bin/git" clean -n` into an over-block.
     """
     found = []
     for seg in _segments(text):
         toks = seg.split()
         idx = _command_token_index(toks) if toks else None
-        if idx is None or _basename(toks[idx]) != 'git':
+        if idx is None or _basename(_unquote_token(toks[idx])) != 'git':
             continue
         sub, args = _git_subcommand(toks[idx + 1:])
         if sub == 'clean':
-            found.append((args, any(_basename(t) == 'xargs' for t in toks[:idx])))
+            found.append((args, any(_basename(_unquote_token(t)) == 'xargs'
+                                    for t in toks[:idx])))
     return found
 
 
