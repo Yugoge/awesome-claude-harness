@@ -75,6 +75,8 @@ CODEX_REQUIRED=false
 # Conflicting flags are not silently reconciled — last-flag-wins would make the
 # choice positional and therefore accidental. The two flags are recorded and a
 # both-given launch is refused below.
+WORKTREE_FLAG_SEEN=0
+NO_WORKTREE_FLAG_SEEN=0
 WORKTREE_CHOICE=""
 # M1-SEAM: ONE side-effect-free component mode over the SAME pre-confinement
 # code path a real launch executes. It runs the identical protected-branch
