@@ -858,7 +858,12 @@ fi
 # (SENTINEL_EXISTS_FOR_TASK=0) we still run the legacy short-circuit for
 # back-compat with pre-migration grants.
 if [ "$SENTINEL_EXISTS_FOR_TASK" != "1" ]; then
-  check_and_consume_allowlist "$COMMAND" && exit 0
+  # Grant exit 3 of 4. The guard runs only AFTER the allowlist actually matched,
+  # so an UNGRANTED clean still falls through to the normal block rules below.
+  if check_and_consume_allowlist "$COMMAND"; then
+    _preclean_snapshot_guard
+    exit 0
+  fi
 fi
 
 # Layer 1.A — daemon-restart prohibition: systemctl verb gate against happy-daemon-*.
