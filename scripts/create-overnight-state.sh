@@ -529,7 +529,27 @@ ACTOR_GIT_SHIMDIR=""
 ACTOR_ENV_HELPER_PATH=""
 SCRIPT_DIR_ABS="$(cd "$(dirname "$0")" && pwd -P)"
 GITENV_HELPER="$SCRIPT_DIR_ABS/overnight-git-env.sh"
-if [[ -x "$GITENV_HELPER" ]]; then
+# ISOLATION-DEPENDENT WIRING (2026-08-08). The policy shim exists to keep the
+# overnight actor OUT of the main checkout: git-policy-shim:179-182 denies any op
+# whose effective directory is "under main_root and outside every active
+# worktree". In in-place mode that describes EVERY op the actor issues, so wiring
+# the shim would deny every git command and brick the session. The shim is
+# therefore not installed in in-place mode.
+#
+# The actor MARKER is a separate concern and is NOT dropped. The shim needs BOTH
+# CLAUDE_OVERNIGHT_ACTOR=1 and CLAUDE_OVERNIGHT_MAIN_ROOT to activate
+# (git-policy-shim:53), while the keystone needs only the marker
+# (hooks/git-keystone/reference-transaction:42). Exporting the marker WITHOUT
+# main-root therefore leaves the shim inert and the keystone armed — which is
+# what still protects the protected branch when there is no worktree boundary to
+# rely on. Dropping the marker too would silently remove the last ref-level
+# protection in the mode that needs it most.
+if [[ "$ISOLATION_KIND" == "in_place" ]]; then
+    ACTOR_ENV_HELPER_PATH=""
+    ACTOR_GIT_SHIM=""
+    ACTOR_GIT_BINDIR=""
+    ACTOR_GIT_SHIMDIR=""
+elif [[ -x "$GITENV_HELPER" ]]; then
     ACTOR_ENV_HELPER_PATH="$GITENV_HELPER"
     GITENV_OUT="$(bash "$GITENV_HELPER" --main-root "$MAIN_ROOT" --worktree "$WORKTREE_PATH" 2>/dev/null || true)"
     ACTOR_GIT_SHIM="$(printf '%s\n' "$GITENV_OUT" | grep -oP '^# OVERNIGHT_GIT_ENV_SHIM_GIT=\K.*' | head -1 || echo '')"
