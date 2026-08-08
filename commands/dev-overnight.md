@@ -179,13 +179,23 @@ The `focus` string is stored in the state file and passed to all 4 specialist su
 
 ## Implementation
 
-### Step 1: Read State File and Enter Worktree
+### Step 1: Read State File and Establish the Working Root
 
-The state file has already been created by the UserPromptSubmit hook at `.claude/overnight-state-<session_id>.json`, including `worktree_path`, `worktree_branch`, `view_paths`, `user_spec_path`, `spec_mode`, and `current_phase: "exploring"`. List `.claude/overnight-state-*.json` and read the file matching the current session.
+The state file has already been created by the UserPromptSubmit hook at `.claude/overnight-state-<session_id>.json`, including `isolation_kind`, `worktree_path`, `worktree_branch`, `view_paths`, `user_spec_path`, `spec_mode`, and `current_phase: "exploring"`. List `.claude/overnight-state-*.json` and read the file matching the current session.
 
-**Read the state file** to get the end_time, session_id, worktree_path, spec_mode, user_spec_path, view_paths, and confirm initialization. If multiple state files exist, use the one matching the current session.
+**Read the state file** to get the end_time, session_id, isolation_kind, worktree_path, spec_mode, user_spec_path, view_paths, and confirm initialization. If multiple state files exist, use the one matching the current session.
 
-If no state file exists, HARD ABORT. Do not fabricate a state file and do not proceed; the launch hook fails closed when it cannot produce a validated isolated worktree, so a missing state means the overnight actor must not run.
+If no state file exists, HARD ABORT. Do not fabricate a state file and do not proceed; the launcher fails closed on every refusal path, so a missing state means the overnight actor must not run.
+
+**ISOLATION IS THE USER'S CHOICE (2026-08-08).** `/dev-overnight` no longer creates a worktree automatically. `isolation_kind` records what the user asked for and is the ONLY field you branch on:
+
+| `isolation_kind` | How it was selected | Working root | Actor git-env |
+|---|---|---|---|
+| `in_place` | default — no flag, or `--no-worktree` | the existing checkout (`worktree_path` == `main_root`) | marker only, no shim |
+| `registered_worktree` | explicit `--worktree` | the created linked worktree | full shim + env helper |
+| `fresh_clone_checkout` | explicit `--worktree`, worktree path unavailable | the durable fresh clone | full shim + env helper |
+
+Never create a worktree yourself in any mode, and never "upgrade" an `in_place` session to an isolated one — the user chose.
 
 **`protected_branch` (schema v9)**: the record carries the repository's protected branch name, resolved once by `create-overnight-state.sh` in the primary checkout, at launch, before the worktree exists. It is resolved from **local refs only** (`refs/remotes/origin/HEAD`); the launch **refuses and writes no state** when it cannot be resolved, because a chain that protects a branch the repository does not have is inert. The value is **immutable** (`update-overnight-state.sh` rejects `--set protected_branch`) and is the operand the keystone (`hooks/git-keystone/reference-transaction`) and the policy shim (`scripts/overnight-git/git-policy-shim`) compare against at decision time — neither holds a branch-name literal or a fixed list of names. Both consumers **fail closed** when no live record declares the field: they refuse the ref write and name `/stop` + relaunch as the remedy. A session launched under schema v8 therefore cannot be upgraded in place — release it with `/stop` and relaunch.
 
