@@ -410,55 +410,17 @@ def _is_dry_run(rest: list) -> bool:
     return dry
 
 
-def _scan_segment(seg: str, ignore_dry_run: bool = False):
-    """Return (destructive_clean_present, target_redirect_present) for a segment.
-
-    Tokens are reduced to static shell words FIRST, so a quoted wrapper or
-    command token (`"/usr/bin/env" -C <dir> "git" clean -fd`) is seen for what
-    bash will actually execute rather than for its punctuation."""
-    toks = [_unquote(t) for t in seg.split()]
-    if not toks:
-        return (False, False)
-    idx = _command_token_index(toks)
-    if idx is None:
-        return (False, False)
-    if toks[idx] == "--":
-        # A wrapper's option TERMINATOR: everything after it is the command and
-        # no cwd-changing option preceded it, so `env -- git clean -fd` is a
-        # provable hook-cwd clean and must snapshot rather than deny. Re-resolve
-        # rather than assuming the next token is the executable, so a nested
-        # wrapper after the terminator is still analysed.
-        if idx + 1 >= len(toks):
-            return (False, False)
-        return _scan_segment(" ".join(toks[idx + 1:]), ignore_dry_run)
-    if toks[idx].startswith("-"):
-        # A WRAPPER's own option region. _command_token_index steps over the
-        # wrapper token but stops at its first option, so `env -C <dir> git
-        # clean -fd` resolves to `-C` and the git invocation is invisible
-        # (CX-4). Re-scan from EVERY git-basenamed token in the region, not
-        # just the first: a wrapper OPERAND can itself basename to git
-        # (`sudo -u git git clean -fd` on a host with a git service account),
-        # and an argument can too (`... git clean -fd /srv/git`). Any candidate
-        # that yields a destructive clean denies, because the option region is
-        # an unprovable target: `-C` / `--chdir` move the child's cwd outright,
-        # and an option this module does not model cannot be proven not to.
-        region = [_region_word(t) for t in toks[idx:]]
-        for j in range(len(region)):
-            if os.path.basename(region[j]) != "git":
-                continue
-            if _scan_segment(" ".join(region[j:]), ignore_dry_run)[0]:
-                return (True, True)
-        return (False, False)
-    if os.path.basename(_unquote(toks[idx])) != "git":
-        return (False, False)
-
+def _git_invocation(words, start, ignore_dry_run=False):
+    """words[start] basenames to `git`. Return (destructive_clean, redirect)."""
     redirect = False
     subcommand = None
     sub_idx = None
-    i, n = idx + 1, len(toks)
+    i, n = start + 1, len(words)
     while i < n:
-        tok = _unquote(toks[i])
+        tok = words[i].text
         if not tok:
+            if words[i].dynamic:
+                return (False, False)   # an expansion sits in global position
             i += 1
             continue
         if tok in _REDIRECT_FLAGS:
