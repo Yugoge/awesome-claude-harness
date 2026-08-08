@@ -521,10 +521,33 @@ def _resolve_command(words):
 
 def _region_candidates(word):
     """Texts inside one region word that could themselves be a command: the word
-    itself, and any post-`=` value (`env --split-string='git clean -fd'`)."""
+    itself, any post-`=` value (`env --split-string='git clean -fd'`), and the
+    payload of a FUSED short option (`env -S'git clean -fd'`).
+
+    The fused spelling is why this leaked. `-S` and its quoted argument are ONE
+    shell word, so the sole candidate `-Sgit clean -fd` re-parsed to the command
+    word `-Sgit`: `-`-prefixed, so not provably inert, and not a `git` basename,
+    so the region scan skipped it and a granted clean ran unsnapshotted. The
+    spaced (`env -S '...'`) and long (`--split-string=`) spellings denied
+    correctly, which is what marks this a lexer-coverage gap rather than a
+    policy.
+
+    Only the FIRST token can hide anything: every later word of the payload is
+    scanned on its own by the caller, so a fused INTERPRETER
+    (`env -S'sh -c "git clean -fd"'`) is already caught through its payload
+    words, and a fused wrapper (`env -Ssudo git clean -fd`) through the bare
+    `git` word that follows. What the caller cannot see is a command word glued
+    to the option letters, so the first offset whose basename is `git` is
+    emitted as a candidate too - one extra candidate, no extra recursion."""
     out = [word.text]
     if "=" in word.text:
         out.append(word.text.split("=", 1)[1])
+    if word.text.startswith("-"):
+        head = word.text.split(None, 1)[0]
+        for k in range(1, len(head)):
+            if os.path.basename(head[k:]) == "git":
+                out.append(word.text[k:])
+                break
     return [t for t in out if t]
 
 
