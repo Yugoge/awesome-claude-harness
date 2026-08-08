@@ -147,7 +147,7 @@ PYEOF
 [[ -n "$AGENT_LIST" ]] \
   || _die "could not read CP_AGENTS from hooks/pretool-cp-checkin.py; refusing to guess the agent list (a missing sentinel silently disables code-write enforcement for that agent)"
 
-mkdir -p "$REGISTRY_DIR" || _die "failed to create $REGISTRY_DIR"
+_mkdir_confined "$REGISTRY_DIR"
 SENTINEL_COUNT=0
 while IFS= read -r agent; do
   [[ -n "$agent" ]] || continue
