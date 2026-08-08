@@ -67,6 +67,15 @@ PROJECT_DIR="$(resolve_project_dir)"
 
 # --- Parse arguments ---
 CODEX_REQUIRED=false
+# ISOLATION CHOICE (2026-08-08). Creating a worktree is no longer automatic: the
+# user chooses. The default is IN-PLACE (work in the checkout the user is already
+# on); `--worktree` is the explicit opt-in that restores the isolated-worktree
+# launch path. An automatic default would reinstate exactly the behaviour this
+# flag removes, so "unset" resolves to in_place, never to worktree.
+# Conflicting flags are not silently reconciled — last-flag-wins would make the
+# choice positional and therefore accidental. The two flags are recorded and a
+# both-given launch is refused below.
+WORKTREE_CHOICE=""
 # M1-SEAM: ONE side-effect-free component mode over the SAME pre-confinement
 # code path a real launch executes. It runs the identical protected-branch
 # resolution and the identical session-state record construction, emits the
