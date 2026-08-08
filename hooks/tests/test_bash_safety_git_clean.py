@@ -560,13 +560,51 @@ def _ac17_payload_matrix():
 
 
 def _ac17_nesting_matrix():
-    """Depth 1 and depth 2, in both quote orders."""
+    """Depth 1, 2 and 3, in both quote orders."""
     return [
         "sh -c 'git clean -fd'",
         'sh -c "git clean -fd"',
         'sh -c \'sh -c "git clean -fd"\'',
         'bash -c \'bash -c "git clean -fd"\'',
         'sh -c \'bash -c "git clean -fd"\'',
+        'sh -c "sh -c \'sh -c \\"git clean -fd\\"\'"',
+    ]
+
+
+# Interpreter NAMES beyond the four bash_context_strip calls shells. For these
+# the stripper does NOT unwrap the -c payload — it blanks it as an ordinary
+# quoted argument — so the stripped view holds no evidence and only the raw
+# stream still carries it. Every one of these was measured escaping at exit 0
+# before the probe was extended to the raw stream.
+_AC17_SHELL_NAMES = [
+    "sh", "/bin/sh", "bash", "/bin/bash", "dash", "zsh", "ksh", "mksh",
+    "pdksh", "ash", "yash", "csh", "tcsh", "fish", "busybox sh",
+    "/usr/bin/env sh",
+]
+
+
+def _ac17_shell_name_matrix():
+    """One canonical destructive form per interpreter name."""
+    return ["%s -c 'git clean -fd'" % name for name in _AC17_SHELL_NAMES]
+
+
+def _ac17_indirect_matrix():
+    """Routes to a nested shell that are not a bare interpreter in command
+    position: an exec/eval prefix, a wrapper that swallows the command word,
+    an argument-injecting wrapper, and a payload piped INTO a shell."""
+    return [
+        "exec sh -c 'git clean -fd'",
+        "eval sh -c 'git clean -fd'",
+        "timeout 5 sh -c 'git clean -fd'",
+        "nohup sh -c 'git clean -fd'",
+        "sudo sh -c 'git clean -fd'",
+        "echo x | xargs -I{} sh -c 'git clean -fd'",
+        "printf %s 'git clean -fd' | sh",
+        "printf %s 'git clean -fd' | bash",
+        "printf %s 'git clean -fd' | /bin/sh",
+        "sh -c 'cd /tmp && git clean -fd'",
+        "$(sh -c 'git clean -fd')",
+        "sh -c 'true\ngit clean -fd'",
     ]
 
 
