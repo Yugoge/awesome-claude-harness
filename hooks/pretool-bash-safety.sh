@@ -1991,9 +1991,27 @@ fi
 _GC_SEP='[[:space:];&|()`]'
 _GC_PATH="([^[:space:];&|()\`'\"]*/)?"
 _GIT_CLEAN_FALLBACK_RE="(^|${_GC_SEP})((${_GC_PATH}git)|\"${_GC_PATH}git\"|'${_GC_PATH}git')${GIT_GLOBAL_OPT_RE}[[:space:]]+[\"']?clean\\b"
+# Scanned over TWO streams. Raw $COMMAND alone let the destructive clean through
+# as the PAYLOAD of a nested shell (`sh -c 'git clean -fd'` and its /bin/sh,
+# bash, `bash -lc`, dash and `env bash -c` siblings all ran UNGRANTED), while the
+# rm-block this rule mirrors denies `sh -c 'rm foo'`. The asymmetry was one of
+# INPUT, not of capability: bash_context_strip unwraps a shell interpreter's -c
+# payload, so the rm-block's grep of COMMAND_CONTEXT_STRIPPED (:1586) inherits
+# the coverage for free — and the same evidence is already computed here, the
+# stripped view being the plain text `sh -c  git clean -fd`. So read that view
+# (never edit the stripper) instead of building a parallel unwrapper.
+# Quotes are neutralised first, because a payload nested two deep keeps its inner
+# quotes (`sh -c  sh -c "git clean -fd"`). Neutralising on the STRIPPED stream
+# ONLY is what keeps the :1979 warning satisfied: by this point a non-shell
+# command's quoted argument has already been blanked (`echo "git clean -fd"` is
+# `echo ""`), so a quoted `git … clean` that SURVIVED stripping is executable
+# context, not data. Both streams feed ONE grep as two lines — `^` anchors
+# per-line — so no Bash call pays an extra subprocess.
+_GC_PROBE="${COMMAND_CONTEXT_STRIPPED//\"/ }"
+_GC_PROBE="${_GC_PROBE//\'/ }"
 _GIT_CLEAN_FAIL_CLOSED=0
 if [ "$_GIT_CLEAN_HAS_INV" != "1" ] && \
-   printf '%s\n' "$COMMAND" | grep -qE "$_GIT_CLEAN_FALLBACK_RE"; then
+   printf '%s\n%s\n' "$COMMAND" "$_GC_PROBE" | grep -qE "$_GIT_CLEAN_FALLBACK_RE"; then
   _GIT_CLEAN_FAIL_CLOSED=1
 fi
 # Grant channel 4 of 4 — the subagent side of /do consent — is the ONLY one of
