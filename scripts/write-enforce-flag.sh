@@ -58,14 +58,25 @@ flag_agent_types() {
   esac
 }
 
+# Validate EVERY flag before writing ANY sentinel. Validating inside the write
+# loop would leave a half-applied enforcement state behind when a later flag is
+# bad: the first sentinel already on disk, the caller told to abort.
+for flag in "${FLAGS[@]}"; do
+  flag_filename "$flag" >/dev/null || {
+    echo "ERROR: unknown --flag '$flag' (expected: codex, e2e)" >&2; exit 1; }
+done
+
 mkdir -p "$REGISTRY_DIR" \
   || { echo "ERROR: Failed to create registry dir $REGISTRY_DIR — aborting." >&2; exit 1; }
 
 for flag in "${FLAGS[@]}"; do
-  filename="$(flag_filename "$flag")" || {
-    echo "ERROR: unknown --flag '$flag' (expected: codex, e2e)" >&2; exit 1; }
+  filename="$(flag_filename "$flag")"
   agent_types="$(flag_agent_types "$flag")"
   target="$REGISTRY_DIR/$filename"
+  # A symlinked target redirects the write out of the registry entirely; the
+  # sentinel would then read as "enforcement active" while living elsewhere.
+  [[ -L "$target" ]] && {
+    echo "ERROR: refusing to write through a symlink: $target" >&2; exit 1; }
 
   printf '{
   "schema_version": 1,
