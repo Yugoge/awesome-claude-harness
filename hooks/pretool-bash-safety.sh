@@ -1914,9 +1914,13 @@ _GIT_CLEAN_FALLBACK_RE="(^|${_GC_SEP})((${_GC_PATH}git)|\"${_GC_PATH}git\"|'${_G
 # The test is STRUCTURAL instead: a command-position word ending in `sh`, with an
 # optional version suffix, which holds for interpreter names nobody has listed
 # yet. Glob metacharacters are excluded from the word so a mere `ls *.sh` is not
-# mistaken for an interpreter.
+# mistaken for an interpreter. Balanced quotes hugging the binary are matched
+# the same way _GIT_CLEAN_FALLBACK_RE already matches `"git"`: without that
+# alternation `"/bin/sh" -c '<destructive>'` was neutralised by nobody and ran
+# ungranted, because the word class excludes the quote characters themselves.
 _GC_CMDW="[^[:space:];&|()\`'\"*?]*"
-_GC_SHELL_RE="(^|${_GC_SEP})${_GC_CMDW}sh[0-9]*([[:space:]]|$)"
+_GC_SHW="${_GC_CMDW}sh[0-9]*"
+_GC_SHELL_RE="(^|${_GC_SEP})((${_GC_SHW})|\"${_GC_SHW}\"|'${_GC_SHW}')([[:space:]]|$)"
 _GIT_CLEAN_HAS_INV=0
 if [ "$CLASSIFIER_STATUS" = "ok" ] && _any_git_has_subcmd clean; then
   _GIT_CLEAN_HAS_INV=1
