@@ -152,6 +152,8 @@ DENY_CASES = [
     # Substitution in the flag region: the effective flags are unprovable, so
     # the dry-run exemption cannot be granted.
     "git clean -n $(printf -- --no-dry-run) -fd",
+    # A nested wrapper AFTER an option terminator still gets analysed.
+    "env -- env -C /tmp/B git clean -fd",
     # ACCEPTED over-block, pinned so the posture stays deliberate: argument text
     # that looks like a clean denies, because telling it apart from a wrapper
     # operand that IS the git binary needs a per-wrapper operand table, and
