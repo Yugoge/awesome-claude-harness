@@ -4,32 +4,55 @@
 Classifies ONE Bash command for the fail-closed pre-clean guard woven into the
 four human-grant/consent `exit 0` escapes of pretool-bash-safety.sh:
 
-  NONE     - no destructive-or-uncertain `git clean` in the command
+  NONE     - no statically reducible destructive `git clean` in the command
   SNAPSHOT - a destructive clean whose target is PROVABLY the hook's own cwd
-  DENY     - target-redirected or indeterminate clean (fail-closed)
+  DENY     - anything else that still reduces to a destructive clean
 
-Why presence-detection and not target resolution: the shared classifier
-(git_command_classifier.py::_git_subcommand) consumes and DISCARDS the
-target-redirecting globals (`i += 2`), so `git -C B clean -fd` and
-`git clean -fd` are byte-identical in its output. Resolving an arbitrary git
-target (cumulative -C, --work-tree vs --git-dir, relative paths, symlinks) is
-the failure class that would snapshot the WRONG repo while ALLOWING the clean.
-This module therefore only detects redirect PRESENCE and denies, which is a
-decidable token scan and strictly at-least-as-protective.
+THE TERMINAL DEFAULT IS DENY, NOT NONE. The previous revision asked "does the
+command token resolve to git?" and answered NONE whenever it could not tell.
+That inverted the burden of proof: an unmodelled prefix (`timeout 60 git clean
+-fd`, `bash -c '...'`, `flock ... git clean -fd`) made the clean invisible and a
+granted destructive clean proceeded with NO snapshot - the exact incident this
+lane exists to prevent. Enumerating more wrapper names only moves that
+boundary. This module instead asks "can a destructive clean be statically
+reduced out of this command?" and, if so, demands POSITIVE proof that its
+target is the hook's own working directory before allowing it.
 
-Reuses the shared tokenizer (`_segments`, `_command_token_index`,
-`_ENV_ASSIGN_RE`) and the bounded normalizer (`strip_non_executable_contexts`)
-rather than a bespoke raw-command regex. git_command_classifier.py is NOT
-modified: `_git_subcommand`'s return signature is imported directly by
-pretool-block-branch-pr-worktree.py and must stay stable.
+Target resolution is still deliberately NOT attempted: an allowed clean whose
+snapshot covered a DIFFERENT tree is worse than an honest denial, because the
+operator is told their work is recoverable when it is not. Redirect PRESENCE is
+decidable; redirect RESOLUTION is not.
 
-Coverage bounds (deliberate, documented):
+ONE parse feeds every predicate. `_lex` is a small bash-aware static-word
+extractor: it joins adjacent quoted/escaped fragments into a single word
+(`--no-""dry-run` -> `--no-dry-run`, `g''it` -> `git`), decodes `$'...'`,
+honours line continuations, comments and redirections, and marks command
+substitution. The clean detector, the dry-run predicate, the git-global scan
+and the cwd-mutation scan all consume THAT word list, so a splice can no longer
+hide a negation, a `--work-tree` or a `cd` from one predicate while another
+sees it.
+
+git_command_classifier.py is NOT imported and NOT modified: its
+`_git_subcommand` signature is imported directly by
+pretool-block-branch-pr-worktree.py and must stay stable, and its `_WRAPPERS`
+set is a closed 12-name enumeration that this module must no longer treat as
+exhaustive.
+
+Coverage bounds (deliberate, documented, and stated as the REAL bound):
   - Ignored-file (`-x`/`-X`) CONTENT protection is out of scope; the snapshot
     still fires for `-x` cleans to preserve the untracked-non-ignored WIP.
-  - A dynamically-named git token (`$GIT clean -fd`, where the command token is
-    not literally basenamed `git`) is not classified as a clean here. Such a
-    command carries a `$` operand and is covered by the sibling deny lane's
-    general `git clean` rule, not by this grant-residual snapshot lane.
+  - A command word that exists only after EXPANSION (`$GIT clean -fd`, an
+    `alias.wipe=clean` indirection) is not statically reducible and yields
+    NONE. Those are the accepted CX-2/CX-3 residuals and live in the shared
+    classification layer, not in this grant-residual lane.
+  - EVERYTHING else that still reduces to a destructive clean DENIES unless its
+    target is proven. An unrecognised prefix denies; it does not fall through.
+
+Accepted over-blocks (cost usability under an active grant, never data):
+  - Argument text that reduces to a destructive clean outside a provably-inert
+    git invocation denies (`echo git clean -fd`, `grep -r "git clean" .`).
+  - A `cd`/`pushd`/`popd` word anywhere in a command that ALSO contains a
+    destructive clean denies, even when the clean textually precedes it.
 
 Exit codes (CLI): 0 = NONE, 10 = SNAPSHOT, 11 = DENY. Reason text on stdout.
 """
