@@ -667,13 +667,15 @@ PYAUDIT2
 # shared tokenizer; git_command_classifier.py is deliberately NOT modified —
 # pretool-block-branch-pr-worktree.py imports _git_subcommand directly).
 _preclean_snapshot_guard() {
-  # Cheap substring prefilter only — mirrors the `grep -q 'git'` prefilter in
-  # front of the path-qualified-git classifier below. The DECISION is made by
-  # the token-aware detector, never by a raw-command regex.
-  printf '%s\n' "$COMMAND" | grep -q 'clean' || return 0
-  printf '%s\n' "$COMMAND" | grep -q 'git' || return 0
-
-  local _guard_dir _guard_py _guard_reason _guard_rc
+  # NO raw-text prefilter. A `grep -q clean`/`grep -q git` gate used to stand
+  # here; bash performs quote removal and backslash removal BEFORE exec, so
+  # `g''it clean -fd` and `git cl\ean -fd` run git while matching neither
+  # pattern, and the token-aware detector behind the gate was never reached.
+  # A raw-substring test in front of a token-aware detector is strictly
+  # harmful, and `grep` exiting 127 (PATH-front attack) was indistinguishable
+  # from "no match". The detector now runs on every granted command: one
+  # short-lived subprocess on a command a human has already authorized.
+  local _guard_dir _guard_py _guard_reason _guard_rc _guard_timeout
   _guard_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
   _guard_py="${_guard_dir}/lib/git_clean_guard.py"
   if [ ! -r "$_guard_py" ]; then
