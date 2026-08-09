@@ -559,19 +559,27 @@ class TestAC11MarkerOrderingAndWritability(unittest.TestCase):
 
             self.assertTrue(module._marker_writable(marker_path))
             block = fixture.call_direct()
-            self.assertNotIn('cadence bounding is INACTIVE', block)
+            self.assertNotIn('INACTIVE', block)
 
+            # Trigger 1 -- an unwritable marker path, reproducible for EVERY
+            # uid including root, which bypasses the mode bits. os.replace onto
+            # a non-file always fails, so the cadence genuinely is inactive.
+            marker_path.mkdir()
+            self.assertFalse(module._marker_writable(marker_path))
+            block = fixture.call_direct()
+            self.assertIn('INACTIVE', block)
+            self.assertIn(str(marker_path), block)
+            self.assertIn(SPEC_HEADER, block)
+            marker_path.rmdir()
+
+            # Trigger 2 -- a read-only parent, the closer analogue of the
+            # read-only bind mount that broke a sibling lane. Skipped only when
+            # the running uid bypasses the mode bits.
             try:
                 claude_dir.chmod(0o555)
-                if os.access(claude_dir, os.W_OK):
-                    self.skipTest('running as a uid that bypasses the mode bits; '
-                                  'a read-only MOUNT is the real trigger and '
-                                  'cannot be simulated here')
-                self.assertFalse(module._marker_writable(marker_path))
-                block = fixture.call_direct()
-                self.assertIn('INACTIVE', block)
-                self.assertIn(str(marker_path), block)
-                self.assertIn(SPEC_HEADER, block)
+                if not os.access(claude_dir, os.W_OK):
+                    self.assertFalse(module._marker_writable(marker_path))
+                    self.assertIn('INACTIVE', fixture.call_direct())
             finally:
                 claude_dir.chmod(original_mode)
 
