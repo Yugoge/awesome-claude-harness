@@ -14,9 +14,16 @@
 > | `$REPO_ROOT` | the absolute path `git rev-parse --show-toplevel` returns for this checkout — also the value the codex runtime reported as its `workdir` |
 > | `$HOME` | the home directory of the account this harness runs as |
 >
-> The quoted blocks are otherwise verbatim and nothing else in the evidence was altered. The
-> `$HOME` form is also the more accurate citation: the launcher itself resolves its wrapper via
-> the parameter expansion `${CODEX_ISO_BIN:-$HOME/bin/codex-iso}` rather than a hardcoded path.
+> No claim, verdict, or citation target was changed by the redaction. The `$HOME` form is also
+> the more accurate citation: the launcher resolves its wrapper via the parameter expansion
+> `${CODEX_ISO_BIN:-$HOME/bin/codex-iso}`, not a hardcoded path.
+>
+> **Excerpting, separate from redaction.** The runtime banner below is a verbatim line subset.
+> The rollout `turn_context` block is an **excerpt, reformatted for readability** — it keeps the
+> fields the verdict rests on and drops the rest. Notably it omits
+> `permission_profile.type` (value `managed`) and flattens the nested typed path descriptors
+> into the plain `{"path": …, "access": …}` shape shown. Read it as an accurate summary of the
+> access grants, not as a byte-for-byte transcript; the cited rollout file is the authority.
 
 ## Verdict
 

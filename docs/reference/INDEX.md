@@ -1,15 +1,14 @@
 # reference
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-08-09T13:46:09Z*
-**Total entries**: 19
+*Last updated: 2026-08-09T14:04:50Z*
+**Total entries**: 18
 **Convention**: kebab
 
 ## Tree
 ```
 reference/
 ├── `checkpoint-mechanism.md` - Auto-Commit / Checkpoint Mechanism
-├── `codex-sandbox-verification.md` - Codex CLI Sandbox Verification Report
 ├── `core-context-refactor-plan.md` - Core Context Refactor Plan (Plan-of-Record)
 ├── `fswatch-quickref.md` - FSWatch Quick Reference Card
 ├── `generated-tests-policy.md` - `tests/generated/` policy — tracked but ignored, on purpose
