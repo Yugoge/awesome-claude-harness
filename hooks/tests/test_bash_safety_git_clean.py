@@ -1308,6 +1308,10 @@ def test_AC17h_rm_block_nested_parity_not_regressed():
 # Both halves are read from the criteria file at run time so neither the
 # register nor the control list can drift out of enforcement.
 
+def _ac20_check():
+    return _ac("AC20")["check"]
+
+
 def _ac20_register():
     return _criteria()["closure_scope"]["excluded_classes"]
 
@@ -1319,10 +1323,6 @@ def _ac20_control_forms():
     forms = [e["form"] for cls in _ac20_register() for e in cls["not_members"]]
     forms += _ac20_check()["not_members_forms"]
     return sorted(set(forms))
-
-
-def _ac20_check():
-    return _ac("AC20")["check"]
 
 
 def test_AC20_register_is_a_closed_enumeration_of_exactly_three():
