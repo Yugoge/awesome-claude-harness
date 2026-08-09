@@ -763,6 +763,22 @@ def _transcript_size(transcript_path: str) -> int:
         return 0
 
 
+def _transcript_inode(transcript_path: str) -> int:
+    """Identity of the transcript FILE, not merely its path.
+
+    A context reset that replaces the transcript with a fresh file at the same
+    path leaves transcript_path equal and can leave the size >= the recorded
+    offset, so neither of those two terms would notice. The inode changes.
+    Stable across appends, so it does not churn. 0 when unknown.
+    """
+    if not transcript_path:
+        return 0
+    try:
+        return Path(transcript_path).stat().st_ino
+    except Exception:
+        return 0
+
+
 def _compaction_since(transcript_path: str, offset: object) -> bool:
     """True if a compaction record was appended since ``offset``.
 
