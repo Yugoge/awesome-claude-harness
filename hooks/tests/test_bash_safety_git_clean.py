@@ -261,10 +261,32 @@ def test_AC8_quoted_tokens_block(form):
 
 # ── AC9: fail-closed coarse fallback + config-read exemption ─────────────────
 
+# Wrapper prefixes that make the classifier resolve ZERO git invocations, so the
+# coarse occurrence scan is the ONLY guard left.
+_ZERO_INV_WRAPPERS = [
+    "env -u FOO", "time -p", "nice -n 5", "stdbuf -o0", "ionice -c 3",
+    "setsid -w", "nohup", "command --", "env -i",
+]
+# AC9's THEN clause asserts a UNIVERSAL — "every zero-invocation wrapper form
+# fails closed" — but its check listed three literal strings. The three kept
+# passing while the universal was false: `env -i git --namespace ns clean -fd`
+# is a zero-invocation wrapper form and it executed ungranted. The axis is
+# therefore GENERATED, and it crosses the VALUE-JOINING dimension, because the
+# spellings that escaped differed from the ones that passed only in whether the
+# option's value was joined by `=`, by a space, or by quotes.
+_AC9_PAYLOAD_SPELLINGS = [
+    "git clean -f -n --no-dry-run",       # no global option at all
+    "git --namespace=ns clean -fd",       # inline
+    "git --namespace ns clean -fd",       # separate token
+    'git --namespace="ns" clean -fd',     # quoted inline
+    'git --git-dir "/tmp/r/.git" clean -fdx',  # quoted separate
+    'git -c "core.x=1" clean -fd',        # quoted short-option value
+    "git --attr-source HEAD clean -fd",   # unenumerated, separate value
+]
 AC9_FAIL_CLOSED_FORMS = [
-    "env -i git clean -f -n --no-dry-run",
-    "command -- git clean -f -n --no-dry-run",
-    "time -p git clean -f -n --no-dry-run",
+    "%s %s" % (wrapper, payload)
+    for wrapper in _ZERO_INV_WRAPPERS
+    for payload in _AC9_PAYLOAD_SPELLINGS
 ]
 AC9_CONFIG_READ = "git config clean.requireForce false"
 
