@@ -198,6 +198,26 @@ The state file has already been created by the UserPromptSubmit hook at `.claude
 
 If no state file exists, HARD ABORT. Do not fabricate a state file and do not proceed; the launcher fails closed on every refusal path, so a missing state means the overnight actor must not run.
 
+**BINDING BLOCK (MANDATORY — run this BEFORE the `cd` below, BEFORE the ONE-CALL INITIALIZATION, and before any use of `$STATE_FILE`; on the first-run Step 1 path AND on the Continuation Mode path).**
+
+```bash
+# Bind STATE_FILE to the canonical ABSOLUTE path of THIS session's state file.
+# A bare glob is not a binding: several overnight-state files can coexist, so the
+# session_id recorded inside the file is validated against the live session.
+STATE_FILE=""
+for f in "$CLAUDE_PROJECT_DIR"/.claude/overnight-state-*.json; do
+  [ -f "$f" ] || continue
+  grep -Fq "\"session_id\": \"$CLAUDE_SESSION_ID\"" "$f" && { STATE_FILE="$(readlink -f "$f")"; break; }
+done
+[ -n "$STATE_FILE" ] || { echo "ERROR: no overnight state file matches session $CLAUDE_SESSION_ID" >&2; exit 1; }
+
+# Bind the dev-registry path that every FIRST ACTION line resolves against.
+DEV_SESSION_ID="$CLAUDE_SESSION_ID"
+REGISTRY_DIR="$CLAUDE_PROJECT_DIR/.claude/dev-registry/$DEV_SESSION_ID"
+```
+
+`STATE_FILE` is absolute and canonical, so it keeps resolving after the `cd` into `worktree_path`. `REGISTRY_DIR` is also re-emitted by `overnight-init.sh` (see its `KEY=VALUE` table below) — binding it here means it is defined *before* the call, not only after it. If the launcher generated a UUID instead of using `$CLAUDE_SESSION_ID`, take `session_id` from the state file the continuation hook named and use that value on both sides of the comparison.
+
 **ISOLATION IS THE USER'S CHOICE (2026-08-08).** `/dev-overnight` no longer creates a worktree automatically. `isolation_kind` records what the user asked for and is the ONLY field you branch on:
 
 | `isolation_kind` | How it was selected | Working root | Actor git-env |
