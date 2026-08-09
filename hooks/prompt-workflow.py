@@ -1026,6 +1026,12 @@ def handle_phase_b(session_id: str) -> None:
     overnight_ctx = check_overnight_continuation(session_id)
     if overnight_ctx:
         print(overnight_ctx)
+        # M6a: the marker records that a delivery HAPPENED, so it is written
+        # only once the emission has actually completed. Flush first -- a
+        # buffered write that fails at interpreter shutdown would otherwise
+        # leave a marker claiming a delivery that never reached the agent.
+        sys.stdout.flush()
+        commit_overnight_delivery(session_id, overnight_ctx)
     todos_file = official_todos_path(session_id)
     if not todos_file.exists():
         return
