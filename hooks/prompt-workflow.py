@@ -913,14 +913,17 @@ def build_overnight_continuation(state: dict, include_spec: bool = True,
     log = state.get('cycle_log', [])
     last_entry = log[-1] if log else None
     last = f"Cycle {last_entry.get('cycle')}: {last_entry.get('status')}" if last_entry else 'N/A'
-    cmd_spec = read_command_spec('dev-overnight')
+    spec_path = resolve_command_spec_path('dev-overnight')
+    # Read the 128 KB document only when it is actually going to be emitted.
+    cmd_spec = read_command_spec('dev-overnight') if include_spec else ''
     wt_instruction = _build_worktree_instruction(state)
     overnight_todos = _load_overnight_todos()
     step_count = len(overnight_todos) or 22
     step_labels = '; '.join(str(item.get('content', '')) for item in overnight_todos)
-    return '\n'.join([
-        f'OVERNIGHT CONTINUATION - Cycle {cc + 1}', '',
-        '--- COMMAND SPECIFICATION ---', '', cmd_spec, '',
+    parts = [f'OVERNIGHT CONTINUATION - Cycle {cc + 1}', '']
+    if include_spec:
+        parts += [OVERNIGHT_SPEC_HEADER, '', cmd_spec, '']
+    parts += [
         '--- CURRENT STATE ---', '',
         f'Phase: {phase} | Cycles: {cc} | Fixed: {state.get("issues_fixed", 0)}',
         f'End time: {state.get("end_time")} | Active issues: {len(state.get("current_issues", []))}',
