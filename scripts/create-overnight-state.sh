@@ -808,7 +808,53 @@ if [[ "$EMIT_RECORD_ONLY" == "1" ]]; then
     exit 0
 fi
 
-# Atomic move
+# --- INITIALIZE BEFORE PUBLISHING (the ordering fix) -------------------------
+# The registry lives under the MAIN root, which the isolation boundary RO-binds
+# for every Bash command the ACTOR issues. Deferring population to an actor-side
+# run is what made `/dev-overnight --worktree` die at its first sentinel write
+# with EROFS and forced the mandatory ABORT at Step 1.
+#
+# So initialization runs HERE, harness-side, pre-boundary, against the still
+# TEMPORARY record — and the record is published ONLY if it succeeds. A state
+# file therefore never exists in an uninitialized form, and a published state
+# always implies an initialized registry. This is stronger than publishing first
+# and deleting on failure: that leaves a window in which the guard already
+# reports the session live and the boundary can arm over an empty registry, and
+# it depends on a compensating delete that can itself fail.
+#
+# $TMP_FILE is safe to hand the initializer: it is a complete record, and the
+# publish below is a same-directory rename(2), while every consumer globs
+# `overnight-state-*.json`, which cannot match `...json.tmp`.
+OVERNIGHT_INIT="$SCRIPT_DIR_ABS/overnight-init.sh"
+if [[ ! -x "$OVERNIGHT_INIT" ]]; then
+    rm -f "$TMP_FILE"
+    echo "Error: initializer not found or not executable: $OVERNIGHT_INIT" >&2
+    echo "       Refusing the launch; no session state published." >&2
+    exit 1
+fi
+INIT_OUT=""
+INIT_RC=0
+INIT_OUT="$("$OVERNIGHT_INIT" --state-file "$TMP_FILE" 2>&1)" || INIT_RC=$?
+# A zero exit is NOT the success condition on its own: the contract is that the
+# FINAL line is exactly OVERNIGHT_INIT_OK. A truncated run that exits 0 without
+# the token, or one that prints the token and then keeps going, is a failure.
+INIT_LAST_LINE="$(printf '%s\n' "$INIT_OUT" | tail -n 1)"
+if [[ "$INIT_RC" -ne 0 || "$INIT_LAST_LINE" != "OVERNIGHT_INIT_OK" ]]; then
+    rm -f "$TMP_FILE"
+    printf '%s\n' "$INIT_OUT" >&2
+    echo "Error: overnight initialization FAILED (exit $INIT_RC, final line '$INIT_LAST_LINE')." >&2
+    echo "       Refusing the launch; NO session state was published." >&2
+    if [[ "$ISOLATION_KIND" == "in_place" ]]; then
+        echo "       Residue: none — in-place mode created no worktree and no branch." >&2
+    else
+        echo "       Residue retained for inspection: worktree $WORKTREE_PATH (branch $WORKTREE_BRANCH, isolation $ISOLATION_KIND)." >&2
+        echo "       Remove it with: git worktree remove --force $WORKTREE_PATH && git branch -D $WORKTREE_BRANCH" >&2
+    fi
+    exit 1
+fi
+printf '%s\n' "$INIT_OUT" >&2
+
+# Atomic move — reached ONLY after initialization succeeded and validated.
 mv "$TMP_FILE" "$STATE_FILE"
 
 # --- Create minimal cycle contract at session creation ---
