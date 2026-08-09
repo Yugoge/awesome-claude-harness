@@ -1289,6 +1289,10 @@ def test_AC19_interpreters_outside_any_name_list_block(form):
     command-position word ending in `sh`, optional version suffix — so passing
     this requires the structural rule, not a longer list. None of these need to
     be installed: the guard is a text predicate.
+
+    This IS AC19's class. It ran under an AC17-prefixed name until round 7, so
+    AC19 was exercised but untraceable; the generator name stays as AC19's
+    `check.forms_generator` records it.
     """
     assert_clean_rule_denies(form)
 
