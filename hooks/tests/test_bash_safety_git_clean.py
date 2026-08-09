@@ -1281,7 +1281,7 @@ def test_AC18y_single_sourced_grammar_fails_closed(tmp_path, key):
 
 
 @pytest.mark.parametrize("form", _ac17_unlisted_shell_matrix())
-def test_AC17p_interpreters_outside_any_name_list_block(form):
+def test_AC19_interpreters_outside_any_name_list_block(form):
     """Recognition must not depend on having enumerated the interpreter.
 
     A fixed name allowlist was the repeated root cause in this task; every name
