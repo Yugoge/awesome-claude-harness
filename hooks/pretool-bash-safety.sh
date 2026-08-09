@@ -2067,7 +2067,7 @@ def unresolved_clean(text, parsed_n):
     shell side uses, so a mere data mention chained after a dry-run
     (`git clean -n && echo "git clean -fd"`, no shell) is NOT counted.
     """
-    if SHELL_CMD.search(text):
+    if SHELL_CMD.search(text) or EXEC_CTX.search(text):
         text = text.replace('"', ' ').replace("'", ' ')
     return len(COARSE.findall(text)) > parsed_n
 
