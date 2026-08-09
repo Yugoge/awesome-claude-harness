@@ -323,7 +323,24 @@ def main():
             "status": "active",
             "skeleton_functions": [fn],
             "check_kind": item["check"].get("kind"),
-            "schema_validation": {},
+            "schema_validation": {
+                # The four narrow canonical shapes in agents/test-writer.md
+                # (ui/api/data/hook) do not describe these check objects: the BA
+                # uses a richer {kind, <kind-specific payload>} vocabulary. Every
+                # entry was validated against THAT vocabulary - kind present and
+                # non-empty, plus at least one kind-specific payload key - so no
+                # entry is marked deferred_invalid_schema on the narrow-shape
+                # ground alone.
+                "vocabulary": "ba_extended",
+                "kind_present": bool(item["check"].get("kind")),
+                "payload_keys": len([k for k in item["check"] if k != "kind"]),
+                "result": (
+                    "valid"
+                    if item["check"].get("kind")
+                    and len([k for k in item["check"] if k != "kind"]) > 0
+                    else "deferred_invalid_schema"
+                ),
+            },
             "hook_check": item["check"],
         }
         if annotations:
