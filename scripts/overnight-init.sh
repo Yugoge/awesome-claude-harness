@@ -17,8 +17,18 @@
 #   3. spec-artifact resolution (spec id / cp dir / views dir)
 #   4. the verbatim user-requirement document
 #
+# WHO RUNS IT, AND IN WHICH MODE
+# The MUTATING form is run HARNESS-SIDE by scripts/create-overnight-state.sh
+# against its TEMPORARY record, BEFORE the atomic publish and therefore BEFORE
+# the isolation boundary is armed. The ACTOR runs --verify-only, which performs
+# ZERO writes: under `/dev-overnight --worktree` the guard RO-binds the whole
+# main root for every Bash command the actor issues, and every target below
+# lives under that root, so an actor-side mutating run cannot succeed. Ordering,
+# not permissions, was the defect.
+#
 # Usage: overnight-init.sh --state-file <path-to-overnight-state.json>
 #        overnight-init.sh --session-id <sid> [--project-dir <dir>]
+#        overnight-init.sh --verify-only --state-file <path>   # read-only
 # Output: KEY=VALUE lines on stdout, then OVERNIGHT_INIT_OK / OVERNIGHT_INIT_FAIL.
 # Exit: 0 = success, 1 = error (caller must abort).
 set -euo pipefail
@@ -26,12 +36,14 @@ set -euo pipefail
 STATE_FILE=""
 SESSION_ID=""
 PROJECT_DIR="${CLAUDE_PROJECT_DIR:-}"
+VERIFY_ONLY=0
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --state-file)  STATE_FILE="$2"; shift 2 ;;
     --session-id)  SESSION_ID="$2"; shift 2 ;;
     --project-dir) PROJECT_DIR="$2"; shift 2 ;;
+    --verify-only) VERIFY_ONLY=1; shift ;;
     *) echo "Unknown arg: $1" >&2; exit 1 ;;
   esac
 done
