@@ -217,6 +217,10 @@
     {
       "task_id": "20260809-013317-init",
       "manifest_path": "tests/generated/20260809-013317-init/manifest.json"
+    },
+    {
+      "task_id": "20260809-013317-tz",
+      "manifest_path": "tests/generated/20260809-013317-tz/manifest.json"
     }
   ]
 }
