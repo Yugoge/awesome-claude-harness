@@ -46,14 +46,70 @@ _BASH_SAFETY_SH = PROJECT_ROOT / 'hooks' / 'pretool-bash-safety.sh'
 _PRIVILEGE_GUARD_PY = PROJECT_ROOT / 'hooks' / 'pretool-git-privilege-guard.py'
 
 
+# Assignments making up the git-global-option grammar. Matches a whole line of
+# the form  NAME='literal'  or  NAME="interpolating".
+_GRAMMAR_VAR_RE = re.compile(
+    r"""^(GIT_GLOBAL_[A-Z_]+)=(?:'([^']*)'|"([^"]*)")[ \t]*$""",
+    re.MULTILINE,
+)
+
+
+def _resolve_bash_grammar_vars(text: str) -> dict:
+    """Resolve the hook's git-global-option grammar to literal values.
+
+    The grammar is NOT one literal string; it is an interpolation chain:
+        GIT_GLOBAL_VALOPT_NAMES='git-dir|work-tree|...'
+        GIT_GLOBAL_OPT_ALT="...--(${GIT_GLOBAL_VALOPT_NAMES})..."
+        GIT_GLOBAL_OPT_RE="([[:space:]]+(${GIT_GLOBAL_OPT_ALT}))*"
+
+    It is factored this way because the `git clean` rule consumes the inner
+    pieces too (_GC_VALOPT_NAMES derives from GIT_GLOBAL_VALOPT_NAMES), so
+    there is exactly ONE copy of the value-taking option list.  Reading only
+    literal text would therefore be reading a form the hook no longer uses.
+
+    Single-quoted values are literal; double-quoted values interpolate earlier
+    entries.  An unresolvable reference is a hard error rather than a partial
+    expansion, because a partially expanded pattern would silently make the
+    corpus below test a regex the hook does not actually run.
+    """
+    values: dict = {}
+    for match in _GRAMMAR_VAR_RE.finditer(text):
+        name, single, double = match.group(1), match.group(2), match.group(3)
+        if single is not None:
+            values[name] = single
+            continue
+
+        def _substitute(ref, _name=name):
+            key = ref.group(1)
+            assert key in values, (
+                f"{_name} references ${{{key}}} before it is defined in "
+                "pretool-bash-safety.sh (assignment order changed?)"
+            )
+            return values[key]
+
+        resolved = re.sub(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}", _substitute, double)
+        for known in values:
+            assert f"${known}" not in resolved, (
+                f"{name} holds an unbraced reference ${known} that this "
+                "resolver does not expand"
+            )
+        assert "${" not in resolved, (
+            f"{name} still holds an unexpanded reference after resolution: "
+            f"{resolved!r}"
+        )
+        values[name] = resolved
+    return values
+
+
 def _extract_bash_git_cmd_re() -> str:
     """Read pretool-bash-safety.sh and reconstruct GIT_CMD_RE as a Python regex.
 
     The bash file defines:
-      GIT_GLOBAL_OPT_RE='...'
+      GIT_GLOBAL_OPT_RE="([[:space:]]+(${GIT_GLOBAL_OPT_ALT}))*"
       GIT_CMD_RE='(^|[[:space:];&|()`])git'"$GIT_GLOBAL_OPT_RE"'[[:space:]]+'
 
-    We extract GIT_GLOBAL_OPT_RE then assemble the full pattern string.
+    We resolve GIT_GLOBAL_OPT_RE through its interpolation chain (see
+    _resolve_bash_grammar_vars) then assemble the full pattern string.
     POSIX bracket-expression conversion:
       - Compound anchor [[:space:];&|()`]  ->  [\\s;&|()`]
       - Negated class [^[:space:];|&]      ->  [^\\s;|&]
