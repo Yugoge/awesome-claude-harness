@@ -639,8 +639,275 @@ def _load_overnight_todos() -> list[dict]:
     return [item for item in todos if isinstance(item, dict)]
 
 
-def build_overnight_continuation(state: dict) -> str:
-    """Build continuation context for overnight loop prompts."""
+# --- Overnight continuation delivery cadence ---
+#
+# The continuation block carries two content classes whose natural cadences
+# differ by orders of magnitude:
+#
+#   heavy  commands/dev-overnight.md -- 128,288 of 130,785 chars (98.09%,
+#          measured 2026-08-09). Changes only when that file is edited on
+#          disk, i.e. essentially never inside a running session.
+#   light  state summary + continuation instructions + phase->step map --
+#          2,497 chars. Changes WITHIN every cycle: current_phase advances
+#          through 8 values, and issues_fixed/current_issues/cycle_log mutate.
+#
+# Emitting both on every non-slash prompt applied the MOST frequent cadence to
+# the LEAST frequently changing content. That inversion is the defect. The
+# light half stays unconditional -- withholding it would make a resuming
+# orchestrator route from the phase that was current at the last cycle
+# boundary and re-run the pipeline on an already-implemented issue -- and the
+# heavy half is gated on a delivery marker.
+#
+# Reading R-b is in force: a context reset, observed as a compaction record
+# appended to the session transcript, RE-DELIVERS the heavy half. The marker
+# is durable *storage* that survives a context reset as a file (a marker held
+# in context would be destroyed by the very event it must remember across),
+# but its validity key deliberately does not survive the reset itself: the
+# marker models "the orchestrator still holds this document in context", and
+# compaction is precisely the event that falsifies that model. R-a is the
+# strict subset -- set this constant to 'R-a' and the transcript_offset term
+# drops out of the validity key with no other change. The reading is recorded
+# in every marker written, so it is readable from the artifact rather than
+# inferred from behaviour.
+OVERNIGHT_EPOCH_READING = 'R-b'
+
+# The one string that proves the heavy half reached stdout (see
+# commit_overnight_delivery).
+OVERNIGHT_SPEC_HEADER = '--- COMMAND SPECIFICATION ---'
+
+
+def overnight_delivery_marker_path(state_path: Path, session_id: str) -> Path:
+    """Marker location: BESIDE the overnight state record it describes.
+
+    Deliberately derived from the state file's own directory rather than
+    recomputed from PROJECT_DIR. The marker is only ever consulted for a
+    session whose state record was just read out of that directory, and
+    posttool-overnight-loop.py must write cycle_count back into that same file
+    for the loop to advance at all. Any deployment in which this marker cannot
+    be written is therefore one in which the overnight session is already
+    broken for an unrelated reason -- which is the strongest writability
+    guarantee available on this path. Where it does not hold, _marker_writable
+    makes the failure visible instead of silently costing the whole saving.
+    """
+    return state_path.with_name(f'overnight-delivery-{session_id}.json')
+
+
+def _marker_writable(path: Path) -> bool:
+    """Non-mutating probe: can the marker actually be persisted here?
+
+    Creates nothing. A read-only bind mount -- the isolation mode that broke a
+    sibling lane's launch-time writes under exactly this project layout --
+    fails access(W_OK) with EROFS, so this catches the one failure that would
+    otherwise make the entire cadence saving silently zero: every prompt
+    re-delivers the heavy payload, the hook still exits 0, and every hermetic
+    test still passes because each builds its own writable fixture.
+    """
+    try:
+        return os.access(path if path.exists() else path.parent, os.W_OK)
+    except Exception:
+        return False
+
+
+def _resolve_transcript_path(session_id: str) -> str:
+    """Locate the session transcript, or '' when it cannot be resolved.
+
+    The UserPromptSubmit payload carries transcript_path, but main() threads
+    only the session id into Phase B and widening that call is outside this
+    lane's surface. The transcript store keys files by session id
+    ($HOME/.claude/projects/<mangled-cwd>/<session_id>.jsonl), so the id is
+    sufficient. Costs one directory scan of stat()s, never a transcript read.
+
+    Returning '' degrades THIS SESSION to reading R-a rather than failing; the
+    empty value is written into the marker so the degradation is visible in
+    the artifact instead of having to be inferred from behaviour.
+    """
+    if not isinstance(session_id, str) or not session_id:
+        return ''
+    try:
+        for project_dir in (Path.home() / '.claude' / 'projects').iterdir():
+            candidate = project_dir / f'{session_id}.jsonl'
+            if candidate.exists():
+                return str(candidate)
+    except Exception:
+        return ''
+    return ''
+
+
+def _transcript_size(transcript_path: str) -> int:
+    """Byte offset to resume the compaction scan from. 0 when unknown."""
+    if not transcript_path:
+        return 0
+    try:
+        return Path(transcript_path).stat().st_size
+    except Exception:
+        return 0
+
+
+def _compaction_since(transcript_path: str, offset: object) -> bool:
+    """True if a compaction record was appended since ``offset``.
+
+    Compaction APPENDS an isCompactSummary record to the same transcript and
+    preserves session_id, so only [offset, EOF) needs inspecting: the cost is
+    proportional to bytes written since the last delivery, not to the
+    multi-megabyte transcript. Fail-safe: every doubt (missing file, shrunken
+    file, unusable offset, read error) returns True, which RE-DELIVERS.
+
+    The substring gate is only an optimization. A record is confirmed by
+    parsing it, so an ordinary prompt that merely grew the transcript -- even
+    one quoting the token -- does not count as an epoch change.
+    """
+    if not transcript_path:
+        return False
+    if not isinstance(offset, int) or isinstance(offset, bool) or offset < 0:
+        return True
+    try:
+        path = Path(transcript_path)
+        size = path.stat().st_size
+        if size < offset:
+            return True
+        if size == offset:
+            return False
+        with path.open('rb') as handle:
+            handle.seek(offset)
+            appended = handle.read()
+    except Exception:
+        return True
+    if b'isCompactSummary' not in appended:
+        return False
+    for line in appended.splitlines():
+        try:
+            record = json.loads(line)
+        except Exception:
+            continue
+        if isinstance(record, dict) and record.get('isCompactSummary'):
+            return True
+    return False
+
+
+def _spec_fingerprint(cmd_name: str = 'dev-overnight') -> str:
+    """Cheap identity for the spec file: size + mtime, never a 128 KB re-read.
+
+    A touch with no content change re-delivers once. That is the fail-safe
+    direction and is preferred to paying a full content hash on every prompt.
+    """
+    path = resolve_command_spec_path(cmd_name)
+    if path is None:
+        return ''
+    try:
+        stat_result = path.stat()
+    except Exception:
+        return ''
+    return f'{stat_result.st_size}:{stat_result.st_mtime_ns}'
+
+
+def _read_delivery_marker(path: Path) -> dict | None:
+    """Read the marker, or None for absent/unreadable/malformed/non-object."""
+    try:
+        record = json.loads(path.read_text())
+    except Exception:
+        return None
+    return record if isinstance(record, dict) else None
+
+
+def _marker_suppresses_spec(marker: object, session_id: str, state: dict,
+                            transcript_path: str, fingerprint: str) -> bool:
+    """Exact match on all four validity fields, or deliver.
+
+    Fail-safe polarity is the load-bearing property of this whole lane:
+    absent, unreadable, malformed, non-object, field-missing,
+    session-mismatched, cycle-mismatched, epoch-changed and
+    fingerprint-changed markers ALL fall through to False, i.e. deliver.
+    There is no code path in which an anomaly suppresses. Guarded here rather
+    than by main()'s outer handler, which drops the block entirely -- that is
+    the failure this lane exists to remove, not a fallback.
+
+    Session binding is two-factor: the filename is keyed by session_id AND the
+    record's own session_id must equal the submitting id, so a marker cannot
+    be consumed by a session it was not written for.
+
+    bool is rejected explicitly because bool is an int subclass in Python and
+    True == 1 would otherwise satisfy a cycle_count comparison.
+    """
+    if not isinstance(marker, dict) or not session_id:
+        return False
+    if marker.get('session_id') != session_id:
+        return False
+    recorded = marker.get('cycle_count')
+    current = state.get('cycle_count', 0)
+    for value in (recorded, current):
+        if not isinstance(value, int) or isinstance(value, bool):
+            return False
+    if recorded != current:
+        return False
+    if marker.get('spec_fingerprint') != fingerprint:
+        return False
+    if marker.get('transcript_path') != transcript_path:
+        return False
+    if OVERNIGHT_EPOCH_READING == 'R-b' and _compaction_since(
+        transcript_path, marker.get('transcript_offset')
+    ):
+        return False
+    return True
+
+
+def commit_overnight_delivery(session_id: str, emitted: str) -> bool:
+    """Record that the heavy payload was delivered -- AFTER it was emitted.
+
+    Write-after-emit is the single ordering constraint in this design. A
+    marker written first would claim a delivery that never happened, and
+    unlike a stale marker that failure does NOT self-heal within the cycle:
+    the marker stays valid, so every later prompt suppresses and the session
+    stalls until the next cycle advance. The emitted text is therefore the
+    evidence -- no spec header in it, no marker -- and the cycle number is
+    re-read from that same text so a state file that moved between the
+    decision and the write cannot cause a marker to be recorded against a
+    cycle whose spec was never sent.
+
+    Returns True only when a marker was written. Every failure is swallowed
+    deliberately: an unwritten marker merely re-delivers on the next prompt,
+    which is the fail-safe direction.
+    """
+    if OVERNIGHT_SPEC_HEADER not in emitted:
+        return False
+    state, state_path = find_any_overnight_state(session_id)
+    if state is None:
+        return False
+    cycle = state.get('cycle_count', 0)
+    if not isinstance(cycle, int) or isinstance(cycle, bool):
+        return False
+    if f'OVERNIGHT CONTINUATION - Cycle {cycle + 1}' not in emitted:
+        return False
+    transcript_path = _resolve_transcript_path(session_id)
+    try:
+        _atomic_write_json(
+            overnight_delivery_marker_path(state_path, session_id),
+            {
+                'session_id': session_id,
+                'cycle_count': cycle,
+                'spec_fingerprint': _spec_fingerprint(),
+                'transcript_path': transcript_path,
+                'transcript_offset': _transcript_size(transcript_path),
+                'epoch_reading': OVERNIGHT_EPOCH_READING,
+                'delivered_at': datetime.now(timezone.utc).strftime(
+                    '%Y-%m-%dT%H:%M:%SZ'
+                ),
+            },
+        )
+    except Exception:
+        return False
+    return True
+
+
+def build_overnight_continuation(state: dict, include_spec: bool = True,
+                                 notice: str = '') -> str:
+    """Build continuation context for overnight loop prompts.
+
+    include_spec=False emits the light half only: identical text minus the
+    command specification and its header. The light half's own content is
+    unchanged apart from the self-heal pointer, which names the resolved spec
+    path so an orchestrator that has lost the document can recover it with one
+    read instead of stalling.
+    """
     cc = state.get('cycle_count', 0)
     phase = state.get('current_phase', 'unknown')
     log = state.get('cycle_log', [])
