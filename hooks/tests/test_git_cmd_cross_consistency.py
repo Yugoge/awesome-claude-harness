@@ -23,6 +23,7 @@ Legitimate divergence (marked xfail):
 
 import os
 import re
+import subprocess
 import sys
 from pathlib import Path
 
