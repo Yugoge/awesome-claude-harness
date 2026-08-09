@@ -1633,8 +1633,13 @@ def main():
     try:
         raw = sys.stdin.buffer.read()
         data = json.loads(raw)
-        global PROJECT_DIR
+        global PROJECT_DIR, CURRENT_TRANSCRIPT_PATH
         PROJECT_DIR = resolve_project_dir(data)
+        # Authoritative context-epoch signal for the continuation cadence. It
+        # must come from the payload: the session-id-keyed store scan resolves
+        # against $HOME/.claude, a symlink to the repo root, and misses the
+        # account's live transcript store.
+        CURRENT_TRANSCRIPT_PATH = str(data.get('transcript_path') or '')
         user_input = data.get('prompt', '')
         session_id = data.get('session_id', 'default')
         cmd_name = extract_command_name(user_input)
