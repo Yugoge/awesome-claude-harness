@@ -1012,6 +1012,95 @@ def test_AC17o_global_option_inside_a_nested_payload_blocks(form):
     assert_clean_rule_denies(form)
 
 
+@pytest.mark.parametrize("form", _ac17_globalopt_wrapper_matrix())
+def test_AC17q_wrapper_prefixed_global_option_spellings_block(form):
+    """AC9's UNIVERSAL, generated instead of exemplified.
+
+    Behind any wrapper prefix the classifier resolves no invocation, so the
+    coarse occurrence grammar is the only guard left. Round 3 narrowed that
+    grammar and 89 of these flipped from denied to allowed while AC9's three
+    literal examples kept passing.
+    """
+    assert_clean_rule_denies(form)
+
+
+@pytest.mark.parametrize("form", _ac17_execctx_matrix())
+def test_AC17r_exec_taking_git_subcommands_block(form):
+    """A clean carried as the command-string ARGUMENT of a git subcommand that
+    executes it. Proven destructive at real git; open on every prior hook."""
+    assert_clean_rule_denies(form)
+
+
+def _mutant_hook(tmp_path, *replacements):
+    """A copy of the live hook with one property surgically removed, so a
+    criterion can be shown to DISCRIMINATE rather than merely to pass."""
+    src = Path(HOOK).resolve().read_text(encoding="utf-8")
+    for old, new in replacements:
+        assert old in src, "mutation target vanished: %r" % old
+        src = src.replace(old, new)
+    d = tmp_path / "mutant"
+    d.mkdir()
+    (d / "lib").symlink_to(Path(HOOK).resolve().parent / "lib")
+    p = d / "pretool-bash-safety.sh"
+    p.write_text(src, encoding="utf-8")
+    return str(p)
+
+
+# One representative per sub-mechanism, each PROVEN destructive at real git.
+_AC17_MUTANT_PROBES = [
+    "env -u FOO git --namespace ns clean -fd",       # separate-value long opt
+    'command -- git -c "core.x=1" clean -fd',        # quoted option value
+    "git clean -n && sh -c 'git --git-dir /tmp/r/.git clean -fdx'",
+    "git clean -n && sh -c 'git --namespace=\"ns\" clean -fd'",
+    "nohup git --attr-source HEAD clean -fd",        # unenumerated separate val
+]
+
+
+def test_AC18z_corpus_discriminates_against_a_grammar_relapse(tmp_path):
+    """Proving a criterion against the PRE-EDIT hook alone is what let round 3
+    certify a regression as a closure: the pre-edit hook failed the axis for a
+    DIFFERENT reason, so the axis looked sharp while being blind to the new
+    grammar. The axis must also fail against a mutant of TODAY's hook that
+    reintroduces the defect — here, dropping the shared enumeration branch from
+    the union and leaving only the hand-shaped syntax branch.
+    """
+    mut = _mutant_hook(tmp_path, ("${GIT_GLOBAL_OPT_ALT}|", ""))
+    escaped = [f for f in _AC17_MUTANT_PROBES if run_hook(f, hook=mut) != BLOCK]
+    assert escaped, (
+        "the corpus cannot detect a relapse of the round-3 grammar, so passing "
+        "it proves nothing about the class it names")
+    for form in _AC17_MUTANT_PROBES:
+        assert_clean_rule_denies(form)
+
+
+def test_AC17s_corpus_discriminates_against_exec_context_removal(tmp_path):
+    """Same discrimination requirement for the exec-taking-subcommand gate."""
+    mut = _mutant_hook(
+        tmp_path,
+        ('"$_GC_SHELL_RE|$_GC_EXECCTX_RE"', '"$_GC_SHELL_RE"'),
+        (" or EXEC_CTX.search(text)", ""))
+    probes = ["git rebase -x 'git clean -fd' HEAD~2",
+              "git submodule foreach 'git clean -fd'",
+              "git filter-branch --tree-filter 'git clean -fd' HEAD"]
+    assert [f for f in probes if run_hook(f, hook=mut) != BLOCK], (
+        "the exec-context axis does not discriminate")
+    for form in probes:
+        assert_clean_rule_denies(form)
+
+
+@pytest.mark.parametrize("key", ["CLEAN_OCCURRENCE_RE", "CLEAN_SHELL_RE",
+                                 "CLEAN_EXECCTX_RE"])
+def test_AC18y_single_sourced_grammar_fails_closed(tmp_path, key):
+    """Every string shared from the shell into the Python verdict must fail
+    CLOSED if the sharing breaks. Round 4 split the shared env assignment across
+    two lines, which silently defeats a delete-the-line mutation — so the
+    mutation renames the exported binding instead, leaving the lookup intact."""
+    mut = _mutant_hook(tmp_path, (key + '="$', key + '_BROKEN="$'))
+    assert run_hook("git clean -n", hook=mut) == BLOCK, (
+        "breaking %s fails OPEN: a benign dry-run was allowed by a hook whose "
+        "shared grammar is missing" % key)
+
+
 @pytest.mark.parametrize("form", _ac17_unlisted_shell_matrix())
 def test_AC17p_interpreters_outside_any_name_list_block(form):
     """Recognition must not depend on having enumerated the interpreter.
