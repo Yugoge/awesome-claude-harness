@@ -852,6 +852,82 @@ if [[ "$INIT_RC" -ne 0 || "$INIT_LAST_LINE" != "OVERNIGHT_INIT_OK" ]]; then
     fi
     exit 1
 fi
+
+# The success token is a CLAIM made by the initializer. The launcher checks the
+# claim itself, against the filesystem, before publishing: a zero exit that
+# prints OVERNIGHT_INIT_OK while no artifact exists would otherwise publish a
+# session whose enforcement chain is empty. Validating only inside the
+# initializer makes the gate trust the thing it is gating.
+INIT_PY="${CLAUDE_HOME:-$HOME/.claude}/venv/bin/python3"
+[[ -x "$INIT_PY" ]] || INIT_PY="$(command -v python3 || true)"
+if [[ -z "$INIT_PY" ]]; then
+    rm -f "$TMP_FILE"
+    echo "Error: no python3 available to validate the initialized registry; refusing the launch (no state published)." >&2
+    exit 1
+fi
+if ! VALIDATE_ERR="$("$INIT_PY" - "$DEV_REGISTRY_DIR" "$SESSION_ID" \
+        "$SCRIPT_DIR_ABS/../hooks/pretool-cp-checkin.py" "$CODEX_REQUIRED" \
+        "$MAIN_ROOT/docs/dev/user-requirement-$SESSION_ID.md" <<'PYEOF'
+import ast, json, os, sys
+reg, sid, cp_src, codex_required, req_doc = sys.argv[1:6]
+def die(m): print(m); sys.exit(1)
+try:
+    tree = ast.parse(open(cp_src, encoding='utf-8').read())
+except Exception as exc:
+    die(f'cannot parse {cp_src}: {exc}')
+agents = None
+for node in tree.body:
+    if isinstance(node, ast.Assign):
+        for t in node.targets:
+            if isinstance(t, ast.Name) and t.id == 'CP_AGENTS':
+                agents = sorted(str(a) for a in ast.literal_eval(node.value))
+if not agents:
+    die('could not read CP_AGENTS; refusing to validate against a guessed list')
+for a in agents:
+    p = os.path.join(reg, a + '.json')
+    if os.path.islink(p) or not os.path.isfile(p):
+        die(f'missing or non-regular sentinel: {p}')
+    try:
+        d = json.load(open(p, encoding='utf-8'))
+    except Exception:
+        die(f'malformed sentinel JSON: {p}')
+    if d.get('agent_type') != a or d.get('session_id') != sid:
+        die(f'sentinel field mismatch: {p}')
+want = {'e2e-enforce.json': ['qa']}
+if codex_required == 'true':
+    want['codex-enforce.json'] = ['ba', 'dev', 'qa']
+elif os.path.lexists(os.path.join(reg, 'codex-enforce.json')):
+    die('codex-enforce.json present but the record does not set codex_required')
+for name, types in want.items():
+    p = os.path.join(reg, name)
+    # Mirrors ENFORCEMENT_FLAG_VALID: both consumers fail OPEN on absence and on
+    # a falsy `enabled`, and degrade any malformed or non-dict file to {}. A flag
+    # that merely EXISTS is indistinguishable from no flag at all.
+    if os.path.islink(p) or not os.path.isfile(p):
+        die(f'missing, non-regular or symlinked enforcement flag: {p}')
+    try:
+        d = json.load(open(p, encoding='utf-8'))
+    except Exception:
+        die(f'malformed enforcement flag (consumer would fail OPEN): {p}')
+    if not isinstance(d, dict) or d.get('enabled') is not True:
+        die(f'enforcement flag not enabled (consumer would fail OPEN): {p}')
+    if (d.get('schema_version') != 1 or d.get('source_command') != 'dev-overnight'
+            or d.get('dev_session_id') != sid or d.get('enforced_agent_types') != types):
+        die(f'enforcement flag failed writer-conformance: {p}')
+if os.path.islink(req_doc) or not os.path.isfile(req_doc):
+    die(f'missing, non-regular or symlinked requirement document: {req_doc}')
+PYEOF
+    )"; then
+    rm -f "$TMP_FILE"
+    echo "Error: the initialized registry FAILED validation: $VALIDATE_ERR" >&2
+    echo "       Refusing the launch; NO session state was published." >&2
+    if [[ "$ISOLATION_KIND" == "in_place" ]]; then
+        echo "       Residue: none — in-place mode created no worktree and no branch." >&2
+    else
+        echo "       Residue retained for inspection: worktree $WORKTREE_PATH (branch $WORKTREE_BRANCH, isolation $ISOLATION_KIND)." >&2
+    fi
+    exit 1
+fi
 printf '%s\n' "$INIT_OUT" >&2
 
 # Atomic move — reached ONLY after initialization succeeded and validated.

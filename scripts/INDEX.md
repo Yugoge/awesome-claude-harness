@@ -1,8 +1,8 @@
 # scripts
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-08-09T15:04:29Z*
-**Total entries**: 136
+*Last updated: 2026-08-09T15:12:31Z*
+**Total entries**: 138
 **Convention**: kebab
 
 ## Tree
@@ -112,6 +112,7 @@ scripts/
 ├── `orchestrator.sh` - Description: Agent orchestration coordinator for development and cleanup workflows
 ├── `overnight-git-env.sh` - overnight-git-env.sh — prepare the overnight actor's git PATH + env (M11/AC9).
 ├── `overnight-git-selftest.sh` - overnight-git-selftest.sh — launch git-version + symref self-test (M8, M16).
+├── `overnight-init.sh` - overnight-init.sh — perform the ENTIRE /dev-overnight Step 1 initialization in
 ├── `overnight-status.sh` - overnight-status.sh — Zero-LLM overnight session status query
 ├── `plan-style-inspection.sh` - Description: Discover auditable files and split into groups for parallel style inspection
 ├── `precommitted-recovery.sh` - Description: Recovery path helpers for nothing_to_commit_precommitted detection.
@@ -143,6 +144,7 @@ scripts/
 ├── `write-codex-enforce.sh` - Writes codex-enforce.json into the dev-registry for the given session.
 ├── `write-commit-grant.py` - Invoked from `commands/commit.md` Step 5 (non-bulk mode) to author a
 ├── `write-e2e-enforce.sh` - Writes e2e-enforce.json into the dev-registry for the given session.
+├── `write-enforce-flag.sh` - Write one or more enforcement-flag sentinels into a dev-registry session dir.
 └── `write-qa-mode.sh` - Write or update qa_mode field in the QA sentinel file for a dev-registry session.
 ```
 <!-- /AUTO:index-stats -->
