@@ -1591,7 +1591,7 @@ Simply mark this step as completed via TodoWrite. The PostToolUse:TodoWrite hook
 **End time**: <end_time> (planned) / <actual_end> (actual)
 **Duration**: <hours>h <minutes>m
 **Cycles completed**: <cycle_count>
-**Worktree**: <worktree_branch>
+**Isolation**: <isolation_kind> — working root <worktree_path>, branch <worktree_branch>
 
 ## Statistics
 
