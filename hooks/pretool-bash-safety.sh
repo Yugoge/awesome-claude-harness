@@ -1941,7 +1941,7 @@ _GC_VALTOK="([^-[:space:];&|()\`][^[:space:];&|()\`]*)?[/.=:~@%A-Z0-9][^[:space:
 # which is the property the hand-shaped substitute could not offer.
 # GIT_GLOBAL_OPT_RE itself is still not touched: only its inner alternation is
 # reused, and that variable's value is byte-identical to before the factoring.
-_GC_GOPT="([[:space:]]+(${GIT_GLOBAL_OPT_ALT}|--${_GC_QVAL}|-[^-[:space:];&|()\`'\"]${_GC_QVAL}([[:space:]]+[^-[:space:];&|()\`]${_GC_QVAL})?))*"
+_GC_GOPT="([[:space:]]+(${GIT_GLOBAL_OPT_ALT}|--${_GC_QVAL}([[:space:]]+${_GC_VALTOK})?|-[^-[:space:];&|()\`'\"]${_GC_QVAL}([[:space:]]+[^-[:space:];&|()\`]${_GC_QVAL})?))*"
 _GIT_CLEAN_FALLBACK_RE="(^|${_GC_SEP})((${_GC_PATH}git)|\"${_GC_PATH}git\"|'${_GC_PATH}git')${_GC_GOPT}[[:space:]]+[\"']?clean\\b"
 # Shell-in-command-position test, gating quote-neutralisation. Deliberately NOT
 # a name list: enumerating interpreter names was the repeated root cause in this
