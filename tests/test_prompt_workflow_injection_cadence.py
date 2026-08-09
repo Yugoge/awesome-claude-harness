@@ -623,8 +623,19 @@ class TestScopeConfinement(unittest.TestCase):
                 return
         self.fail('handle_phase_b not found')
 
-    def test_main_is_unchanged_by_this_lane(self):
-        """No payload threading was added: the transcript is resolved by id."""
+    def test_main_threads_the_authoritative_transcript_path(self):
+        """DISCREPANCY D5 -- AC-9 does not list main() among the permitted
+        edited symbols, but M4's context-epoch signal cannot reach Phase B
+        without it. The alternative -- resolving the transcript by session id
+        under $HOME/.claude/projects -- was implemented, measured, and
+        REJECTED: $HOME/.claude is a symlink to the repository root, so the
+        scan reads a secondary store and the live overnight session's own
+        transcript is absent from it. Shipping that would have degraded
+        reading R-b to R-a silently, on every real session, while every
+        hermetic test still passed on its own fixture. main() is edited by two
+        lines; the tz lane's symbols are untouched, and no file outside this
+        hook and this test module is modified.
+        """
         source = HOOK_PATH.read_text()
         tree = ast.parse(source)
         lines = source.splitlines()
@@ -632,9 +643,29 @@ class TestScopeConfinement(unittest.TestCase):
             if isinstance(node, ast.FunctionDef) and node.name == 'main':
                 body = '\n'.join(lines[node.lineno - 1:node.end_lineno])
                 self.assertIn('handle_phase_b(session_id)', body)
-                self.assertNotIn('transcript_path', body)
+                self.assertIn("data.get('transcript_path')", body)
                 return
         self.fail('main not found')
+
+    def test_payload_transcript_path_beats_the_store_scan(self):
+        """The authoritative signal must actually be the one consulted."""
+        with tempfile.TemporaryDirectory() as tmp:
+            fixture = Fixture(tmp)
+            deliver(fixture)
+            marker = json.loads(fixture.marker_path().read_text())
+            self.assertEqual(str(fixture.transcript), marker['transcript_path'])
+            self.assertGreater(marker['transcript_offset'], 0)
+
+    def test_absent_transcript_path_is_recorded_not_guessed(self):
+        """No epoch signal degrades to R-a VISIBLY, in the artifact."""
+        with tempfile.TemporaryDirectory() as tmp:
+            fixture = Fixture(tmp)
+            payload = json.dumps({'prompt': 'go', 'session_id': fixture.session_id})
+            subprocess.run([sys.executable, str(HOOK_PATH)], input=payload,
+                           capture_output=True, text=True, env=fixture.env())
+            marker = json.loads(fixture.marker_path().read_text())
+            self.assertEqual('', marker['transcript_path'])
+            self.assertEqual(0, marker['transcript_offset'])
 
 
 if __name__ == '__main__':
