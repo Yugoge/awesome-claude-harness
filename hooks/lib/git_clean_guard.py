@@ -592,7 +592,7 @@ def _region_candidates(word):
     payload was invisible. env splits on the escapes below, so a surface form
     with those translated back to spaces is analysed alongside the raw text."""
     surfaces = [word.text]
-    if word.text.startswith("-") and "\\" in word.text:
+    if "\\" in word.text:
         unescaped = _ENV_S_SEPARATOR_RE.sub(" ", word.text)
         if unescaped != word.text:
             surfaces.append(unescaped)
