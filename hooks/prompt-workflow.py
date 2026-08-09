@@ -944,7 +944,20 @@ def build_overnight_continuation(state: dict, include_spec: bool = True,
         'Phase mapping: initializing/exploring->Step 2, pipeline_creation->Step 6,',
         'analyzing->Step 8, implementing->Step 12, verifying->Step 14,',
         'iterating->Step 17, logging->Step 19, retrospective->Step 20',
-    ])
+    ]
+    # Self-heal pointer: the resolved path, never a hard-coded literal -- a
+    # wrong path makes this mitigation worse than absent. It is the entire
+    # recovery route for a context reset that the epoch check does not catch
+    # (a rebuilt-from-truncated-transcript resume), so it rides on EVERY
+    # prompt, not only the light ones.
+    if spec_path is not None:
+        parts.append(
+            f'Command specification: {spec_path} -- READ that file now if the '
+            '/dev-overnight specification is not already in your context.'
+        )
+    if notice:
+        parts += ['', notice]
+    return '\n'.join(parts)
 
 
 def check_overnight_continuation(session_id: str = '') -> str | None:
