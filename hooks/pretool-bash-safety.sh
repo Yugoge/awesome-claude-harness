@@ -1919,7 +1919,15 @@ _GC_QVAL="[^[:space:];&|()\`]*"
 # names: a subcommand this class fails to exclude costs an over-block, which is
 # fail-safe and grant-escapable, whereas the positive option lists that failed
 # in earlier rounds cost an ungranted deletion.
-_GC_VALTOK="([^-[:space:];&|()\`][^[:space:];&|()\`]*)?[/.=:~@%A-Z0-9][^[:space:];&|()\`]*"
+#
+# Written so the split point is UNIQUE: the prefix excludes the marker
+# characters, so the marker is necessarily the FIRST one in the token and the
+# token has exactly one parse. The obvious spelling — `(any*)?MARKER any*` —
+# instead admits one parse per marker position (four for `HEAD`), and nested in
+# the option run that is 4^n: measured 8.8s on a failing match over twelve
+# tokens, on a regex that runs on every Bash tool call.
+_GC_VMARK="/.=:~@%A-Z0-9"
+_GC_VALTOK="([^-[:space:];&|()\`${_GC_VMARK}][^[:space:];&|()\`${_GC_VMARK}]*)?[${_GC_VMARK}][^[:space:];&|()\`]*"
 # Global-option segment for the OCCURRENCE grammar only, as a UNION of two
 # branches that cover different things and must BOTH be present:
 #
