@@ -2033,8 +2033,15 @@ _GC_SHELL_RE="(^|${_GC_SEP})((${_GC_SHW})|\"${_GC_SHW}\"|'${_GC_SHW}')([[:space:
 # occurrence grammar finds the payload, exactly as it does behind a shell.
 # The exec MARKER is required in addition to the subcommand, so an everyday
 # `git rebase --continue` or `git submodule update --init` neutralises nothing.
+# Only GLOBAL OPTIONS may sit between the binary and the subcommand — using a
+# free "any token" run there let a subcommand NAME appearing as an ordinary
+# search argument masquerade as the subcommand, so `git grep -e rebase -x -e
+# "<phrase>"` was wrongly denied. After the subcommand, any token may precede
+# the exec marker.
+# difftool --extcmd/-x, grep --open-files-in-pager and filter-branch --setup were
+# each proven by adversarial review to run their argument and delete.
 _GC_ANYTOK="([[:space:]]+[^[:space:];&|()\`]+)*"
-_GC_EXECCTX_RE="(^|${_GC_SEP})((${_GC_PATH}git)|\"${_GC_PATH}git\"|'${_GC_PATH}git')${_GC_ANYTOK}[[:space:]]+(rebase${_GC_ANYTOK}[[:space:]]+(-x|--exec)|submodule${_GC_ANYTOK}[[:space:]]+foreach|filter-branch${_GC_ANYTOK}[[:space:]]+--[a-z]+-filter|bisect${_GC_ANYTOK}[[:space:]]+run)\\b"
+_GC_EXECCTX_RE="(^|${_GC_SEP})((${_GC_PATH}git)|\"${_GC_PATH}git\"|'${_GC_PATH}git')${_GC_GOPT}[[:space:]]+(rebase${_GC_ANYTOK}[[:space:]]+(-x|--exec)|submodule${_GC_ANYTOK}[[:space:]]+foreach|filter-branch${_GC_ANYTOK}[[:space:]]+(--[a-z]+-filter|--setup)|bisect${_GC_ANYTOK}[[:space:]]+run|difftool${_GC_ANYTOK}[[:space:]]+(--extcmd|-x)|grep${_GC_ANYTOK}[[:space:]]+--open-files-in-pager)\\b"
 _GIT_CLEAN_HAS_INV=0
 if [ "$CLASSIFIER_STATUS" = "ok" ] && _any_git_has_subcmd clean; then
   _GIT_CLEAN_HAS_INV=1
