@@ -360,6 +360,39 @@ class TestAC3ValidityKeyDiscrimination(unittest.TestCase):
             doc.write_text(doc.read_text() + '\n<!-- edited -->\n')
             self.assertIn(SPEC_HEADER, deliver(fixture))
 
+    def test_transcript_replaced_at_the_same_path_redelivers(self):
+        """A fresh transcript file at the same path with the same size.
+
+        Neither transcript_path (equal) nor transcript_offset (size unchanged)
+        notices this; the inode term is what catches it. Found by fuzzing the
+        marker fields, not by any acceptance criterion.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            fixture = Fixture(tmp)
+            deliver(fixture)
+            replacement = fixture.transcript.with_suffix('.new')
+            replacement.write_text(fixture.transcript.read_text())
+            os.replace(replacement, fixture.transcript)
+            self.assertIn(SPEC_HEADER, deliver(fixture))
+
+    def test_truncated_transcript_redelivers(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            fixture = Fixture(tmp)
+            fixture.append_transcript({'type': 'user', 'pad': 'x' * 200})
+            deliver(fixture)
+            fixture.transcript.write_text('{"a":1}\n')
+            self.assertIn(SPEC_HEADER, deliver(fixture))
+
+    def test_marker_from_a_different_epoch_reading_is_not_honoured(self):
+        """Descoping R-b -> R-a must not silently honour R-b markers."""
+        with tempfile.TemporaryDirectory() as tmp:
+            fixture = Fixture(tmp)
+            deliver(fixture)
+            marker = json.loads(fixture.marker_path().read_text())
+            marker['epoch_reading'] = 'R-a' if marker['epoch_reading'] == 'R-b' else 'R-b'
+            fixture.marker_path().write_text(json.dumps(marker))
+            self.assertIn(SPEC_HEADER, deliver(fixture))
+
     def test_negative_ordinary_transcript_growth_does_not_redeliver(self):
         """What distinguishes an epoch token from a naive transcript-grew check."""
         with tempfile.TemporaryDirectory() as tmp:
