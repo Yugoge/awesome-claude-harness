@@ -319,6 +319,76 @@ QA6_SAME_TEXT_SAME_VERDICT = [
     ("echo 'git clean -fd'", "git log --grep='git clean -fd'"),
 ]
 
+# ---------------------------------------------------------------------------
+# ITERATION 7 — the two carrier families QA measured live under a real grant
+# after iteration 6 was green. These are the FAST detector-level pins; AC21
+# carries the generated cross-product and the hook-level, four-channel,
+# checkpoint-identity proof. Both layers are kept deliberately: if the oracle's
+# environment ever breaks, AC21 errors loudly rather than silently narrowing,
+# and these vectors still hold the line in milliseconds.
+# ---------------------------------------------------------------------------
+
+# (A) A payload delivered on STDIN. `_lex` marked the word after ANY redirection
+# operator as a redirection target and `_split_segments` dropped it — right for a
+# FILE operand, wrong for a here-string, whose operand is stdin CONTENT and is a
+# script whenever its reader executes stdin. The command then reduced to nothing
+# at all and a granted clean ran unsnapshotted. The heredoc form of the same
+# thing already snapshotted, because its newline split the body into its own
+# segment; one spelling of a family handled and its sibling not is what marks
+# this a lexer-coverage gap rather than a policy. Note the reader is NOT
+# enumerated anywhere in the fix: `xargs` and the read/eval loop below execute
+# their stdin too, and both deny for the same structural reason.
+QA7_STDIN_PAYLOAD_DENY = [
+    "bash <<< 'git clean -fd'",
+    "bash <<<'git clean -fd'",
+    'bash <<< "git clean -fd"',
+    "bash -s <<< 'git clean -fd'",
+    "bash -e <<< 'git clean -fd'",
+    "bash <<< $'git clean -fd'",
+    "sh <<< 'git clean -fd'",
+    "sh -s <<< 'git clean -fd'",
+    ". /dev/stdin <<< 'git clean -fd'",
+    "bash 0<<< 'git clean -fd'",
+    "bash <<< 'git clean -fd' > out.log",
+    "bash > out.log <<< 'git clean -fd'",
+    "xargs <<< 'git clean -fd'",
+    "while read -r l; do eval \"$l\"; done <<< 'git clean -fd'",
+    "sh -c 'bash <<< \"git clean -fd\"'",
+]
+
+# The counter-direction: stdin content that destroys nothing must stay exempt,
+# or retaining the operand is just a blanket denial of every here-string.
+QA7_STDIN_PAYLOAD_STILL_EXEMPT = [
+    "bash <<< 'echo hi'",
+    "sh <<< 'ls -la'",
+    "cat <<'EOS'\nhello\nEOS",
+    "bash <<'EOS'\ngit status\nEOS",
+    "wc -l < file.txt",
+]
+
+# And the reason the operand becomes its OWN segment rather than an extra word
+# of the command it feeds: git ignores its stdin, so these really DELETE. Folded
+# into the flag region, that `-n` would read as a proven dry run and strip the
+# snapshot — trading one fail-open for another.
+QA7_STDIN_IS_NOT_AN_ARGUMENT_SNAPSHOT = [
+    "git clean -fd <<< '-n'",
+    "git clean -fd <<< '--dry-run'",
+    "git clean -fd <<< 'anything at all'",
+]
+
+# (B) env's own separator escapes across the FULL {joined, separated} x {plain,
+# escaped} x {-S, --split-string} grid. Iteration 6 unescaped only when the word
+# began with a dash, which is true of the FUSED word `-Sgit\_clean\_-fd` and
+# false of the SPACED payload word, so two cells of the grid were closed and the
+# third stayed open and deleting. Generated here rather than listed, so a cell
+# cannot go missing again — that omission was the whole defect.
+QA7_ENV_SEPARATOR_GRID_DENY = [
+    "env " + placement.format(v="'" + sep.join(("git", "clean", "-fd")) + "'")
+    for placement in ("-S{v}", "-vS{v}", "-iS{v}", "-S {v}", "-u FOO -S {v}",
+                      "-i -S {v}", "--split-string={v}", "--split-string {v}")
+    for sep in (" ", r"\_", r"\t", r"\n", r"\f", r"\r", r"\v")
+]
+
 
 @pytest.mark.parametrize("command", QA6_FUSED_OPTION_DENY)
 def test_qa6_fused_option_payload_denies(command):
