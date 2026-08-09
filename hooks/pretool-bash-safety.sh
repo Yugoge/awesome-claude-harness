@@ -2001,7 +2001,7 @@ _GC_VALTOK="(${_GC_PLAINTOK})?[${_GC_VMARK}][^[:space:];&|()\`]*"
 # neither of which is a real git spelling. That nothing real is lost is not
 # asserted but MEASURED: test_AC18w feeds every spelling the shared enumeration
 # accepts through this grammar, and test_AC18x pins the linear cost.
-_GC_GOPT="([[:space:]]+(-[Cc][[:space:]]+${_GC_PLAINTOK}|--(${GIT_GLOBAL_VALOPT_NAMES})[[:space:]]+${_GC_PLAINTOK}|-${_GC_QVAL}|${_GC_VALTOK}))*"
+_GC_GOPT="([[:space:]]+(-[Cc][[:space:]]+${_GC_PLAINTOK}|--(${_GC_VALOPT_NAMES})[[:space:]]+${_GC_PLAINTOK}|-${_GC_QVAL}|${_GC_VALTOK}))*"
 _GIT_CLEAN_FALLBACK_RE="(^|${_GC_SEP})((${_GC_PATH}git)|\"${_GC_PATH}git\"|'${_GC_PATH}git')${_GC_GOPT}[[:space:]]+[\"']?clean\\b"
 # Shell-in-command-position test, gating quote-neutralisation. Deliberately NOT
 # a name list: enumerating interpreter names was the repeated root cause in this
