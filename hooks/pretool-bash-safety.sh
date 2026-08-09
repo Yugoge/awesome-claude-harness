@@ -1930,18 +1930,30 @@ _GC_VALTOK="([^-[:space:];&|()\`][^[:space:];&|()\`]*)?[/.=:~@%A-Z0-9][^[:space:
 #       Replacing it with a hand-shaped substitute last round dropped both and
 #       opened 89 destructive spellings that had been denied — measured
 #       pre-edit 2 -> live 0, and proven to delete untracked files at real git.
-#   (2) the SYNTAX branch — a long option is any `--…` word, so real options no
+#   (2) any OPTION token — a word starting with `-`, so real options no
 #       enumeration lists (--no-lazy-fetch, --no-advice, --attr-source=) are
-#       covered too. It swallows a following bare token only when that token is
-#       VALUE-shaped (${_GC_VALTOK}), so `git --attr-source HEAD clean -fd` is
-#       an occurrence while `git --no-pager grep clean src/` stays a grep.
+#       covered, in any spelling, with or without an attached value.
+#   (3) any VALUE-shaped token — a word not starting with `-` that carries at
+#       least one character a git subcommand name never contains. This is how a
+#       SEPARATE value is spanned for options nobody enumerated, so
+#       `git --attr-source HEAD clean -fd` is an occurrence while
+#       `git --no-pager grep clean src/` stays a grep: `grep` is a plain
+#       lowercase word, so the run stops there and no `clean` follows.
 #
 # A union can only ADD matches, so relative to either predecessor it can only
 # turn ALLOW into BLOCK — a new ungranted allow is impossible by construction,
 # which is the property the hand-shaped substitute could not offer.
+#
+# Branches 2 and 3 are DISJOINT (one requires a leading `-`, the other forbids
+# it), which is load-bearing for cost, not just for clarity. An earlier shape of
+# this fix wrote branch 3 as an OPTIONAL suffix of branch 2 — `--opt( value)?` —
+# giving every token two parses and the whole segment 2^n. Measured: a failing
+# match over twelve `--unk HEAD` pairs took 8.8s, against 0.0001s for both
+# predecessors, and this regex runs on EVERY Bash tool call. Splitting the
+# optional suffix into its own alternative makes each token's parse unique.
 # GIT_GLOBAL_OPT_RE itself is still not touched: only its inner alternation is
 # reused, and that variable's value is byte-identical to before the factoring.
-_GC_GOPT="([[:space:]]+(${GIT_GLOBAL_OPT_ALT}|--${_GC_QVAL}([[:space:]]+${_GC_VALTOK})?|-[^-[:space:];&|()\`'\"]${_GC_QVAL}([[:space:]]+[^-[:space:];&|()\`]${_GC_QVAL})?))*"
+_GC_GOPT="([[:space:]]+(${GIT_GLOBAL_OPT_ALT}|-${_GC_QVAL}|${_GC_VALTOK}))*"
 _GIT_CLEAN_FALLBACK_RE="(^|${_GC_SEP})((${_GC_PATH}git)|\"${_GC_PATH}git\"|'${_GC_PATH}git')${_GC_GOPT}[[:space:]]+[\"']?clean\\b"
 # Shell-in-command-position test, gating quote-neutralisation. Deliberately NOT
 # a name list: enumerating interpreter names was the repeated root cause in this
