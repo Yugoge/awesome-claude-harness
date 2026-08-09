@@ -486,6 +486,23 @@ def test_qa7_env_separator_grid_denies_in_every_cell(command):
     )
 
 
+@pytest.mark.parametrize("command", QA7_ENV_OVERMODELLED_ESCAPES_DENY)
+def test_qa7_overmodelled_env_escapes_are_a_disclosed_cost_not_a_protection(command):
+    """Pins the CURRENT behaviour of a deliberately conservative model, and says
+    in its own name that this is a cost. These spellings were measured NOT to
+    execute, so denying them protects nothing on this env build; the model is
+    kept broad because narrowing on one build's behaviour is the fail-open
+    direction. Separated from the required-protection group above so no reader
+    can mistake the count for coverage."""
+    verdict, _reason = decide(command)
+    assert verdict == "DENY", (
+        f"{command!r} no longer denies. That is not necessarily a regression - it "
+        f"may be a deliberate narrowing of _ENV_S_SEPARATOR_RE, which REMOVES a "
+        f"disclosed over-block. Confirm with the shell oracle that this spelling "
+        f"still does not execute, then delete this vector. Got {verdict}"
+    )
+
+
 @pytest.mark.parametrize("behind_echo,behind_git", QA6_SAME_TEXT_SAME_VERDICT)
 def test_qa6_the_same_argument_text_is_judged_the_same_behind_git(behind_echo, behind_git):
     assert decide(behind_echo)[0] == decide(behind_git)[0], (
