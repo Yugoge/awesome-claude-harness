@@ -67,7 +67,7 @@ generator gap that shows up as an untested axis rather than as silent coverage:
   - direct, and behind a wrapper name this module has never heard of;
   - a FUSED option carrying the command word (`env -S'git clean -fd'`);
   - env's own separator escapes, in the fused AND spaced spellings of both
-    `-S` and `--split-string` (`env -S 'git\_clean\_-fd'`);
+    `-S` and `--split-string` (`env -S 'git\\_clean\\_-fd'`);
   - argument text behind ANY command word INCLUDING a git one
     (`git rebase -x '<clean>'`, `bisect run`, `submodule foreach`);
   - an interpreter payload at any nesting depth, where analysis truncated at
