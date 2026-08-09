@@ -2063,9 +2063,11 @@ def unresolved_clean(text, parsed_n):
     reached only when the classifier resolved NO clean at all, so prefixing a
     nested payload with a provable dry-run (`git clean -n; sh -c '<destructive>'`)
     used to suppress it entirely and the destructive half ran ungranted. Quotes
-    are neutralised, under the same shell-in-command-position condition the
-    shell side uses, so a mere data mention chained after a dry-run
-    (`git clean -n && echo "git clean -fd"`, no shell) is NOT counted.
+    are neutralised under the same TWO conditions the shell side uses — a shell
+    in command position, or a git subcommand that executes its argument
+    (`rebase -x`, `submodule foreach`, `filter-branch --*-filter`,
+    `bisect run`) — so a mere data mention chained after a dry-run
+    (`git clean -n && echo "git clean -fd"`, neither condition) is NOT counted.
     """
     if SHELL_CMD.search(text) or EXEC_CTX.search(text):
         text = text.replace('"', ' ').replace("'", ' ')
