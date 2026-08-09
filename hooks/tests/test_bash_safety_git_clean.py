@@ -993,6 +993,32 @@ def test_AC17m_dry_run_chained_with_a_nested_payload_blocks(form):
     assert_clean_rule_denies(form)
 
 
+@pytest.mark.parametrize("form", [
+    "git clean -n", "git clean -nd", "git clean -n --exclude=build",
+    "git -C /tmp clean -n", "git --no-pager clean -n",
+    "git --namespace ns clean -n", "git --git-dir .git clean -n",
+    "git --work-tree . clean -n", 'git -c "a=b" clean -n',
+    "git --namespace='ns' clean -n", "git --attr-source=HEAD clean -n",
+    "git --no-lazy-fetch clean -n", "git -p clean -n", "git --bare clean -n",
+    "git --no-pager grep clean src/", "git -C /tmp grep clean",
+    "git --git-dir=/tmp/x grep clean src/", "git --attr-source HEAD grep clean",
+    "git --no-pager log --oneline clean", "git show HEAD:clean",
+    "git rebase --continue", "git rebase -i HEAD~2",
+    "git submodule update --init", "git bisect start",
+    "git rebase -x 'make test' HEAD~2", "git submodule foreach 'npm ci'",
+    "git filter-branch --tree-filter 'ls' HEAD", "ssh localhost 'ls'",
+])
+def test_AC17t_widened_grammar_does_not_over_block_ordinary_use(form):
+    """The bound on the widening, in the direction the union could plausibly
+    cost something. A UNION can only add matches, so it cannot create a new
+    ALLOW — but it can create a new BLOCK, and these are the forms that must
+    survive it: every dry-run spelling across the value-joining axis, the
+    `grep clean` shapes where `clean` is an ARGUMENT rather than a subcommand,
+    and the exec-taking subcommands carrying a payload that is not a clean.
+    """
+    assert run_hook(form) == ALLOW, form
+
+
 def test_AC17n_chaining_guard_does_not_over_block_a_lone_dry_run():
     """Polarity control for AC17m: the count comparison must fire only on an
     UNRESOLVED clean. A dry-run beside a shell that carries no clean, and a
