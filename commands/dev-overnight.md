@@ -220,8 +220,9 @@ done
 DEV_SESSION_ID="$CURRENT_SESSION_ID"
 REGISTRY_DIR="$CLAUDE_PROJECT_DIR/.claude/dev-registry/$DEV_SESSION_ID"
 
-# 4. Initialize, in this same shell. Idempotent — the identical block re-runs every cycle.
-~/.claude/scripts/overnight-init.sh --state-file "$STATE_FILE"
+# 4. Verify, in this same shell. Read-only — the launcher already initialized this
+#    record before publishing it, and the main root is RO-bound for the actor.
+~/.claude/scripts/overnight-init.sh --verify-only --state-file "$STATE_FILE"
 ```
 
 `STATE_FILE` is absolute and canonical, so it stays valid after the `cd` into `worktree_path`. Do NOT split this block across Bash calls, and do NOT invoke the initializer on its own: a fresh shell expands `$STATE_FILE` empty, which is the failure this block exists to prevent.
