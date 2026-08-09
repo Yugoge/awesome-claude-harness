@@ -347,13 +347,17 @@ def _lex(text: str):
 
     flush()
 
-    # A redirection's operand is data, never a command word.
-    for idx, (kind, _payload) in enumerate(tokens):
+    # A redirection's operand is data, never a command word - but WHICH data
+    # depends on the operator. For `>`/`<` it is a FILE PATH and dropping it is
+    # right. For `<<<`/`<<` it is stdin CONTENT, which is a SCRIPT whenever the
+    # command consumes stdin as one, so it is flagged for retention instead.
+    for idx, (kind, payload) in enumerate(tokens):
         if kind != "redir":
             continue
         for nxt_kind, nxt in tokens[idx + 1:]:
             if nxt_kind == "word":
                 nxt.redir_target = True
+                nxt.stdin_script = payload.startswith("<<")
             break
     return tokens, info
 
