@@ -56,6 +56,16 @@ SELF_HEAL_PREFIX = 'Command specification: '
 SID = 'aaaaaaaa-1111-2222-3333-444444444444'
 OTHER_SID = 'zzzzzzzz-9999-8888-7777-666666666666'
 
+
+def spec_body_probe(length: int = 400) -> str:
+    """A prefix of the spec AS INJECTED -- read_command_spec strips frontmatter."""
+    text = COMMAND_DOC.read_text()
+    if text.startswith('---'):
+        end = text.find('\n---', 3)
+        if end != -1:
+            text = text[end + 4:].lstrip('\n')
+    return text.strip()[:length]
+
 # DISCREPANCY D1 -- AC-1 mandates per_prompt_min_chars=1500 inside a fixture
 # that makes the floor unreachable. build_overnight_continuation renders
 # 'Canonical steps: {labels}' from _load_overnight_todos(), which resolves
