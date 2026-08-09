@@ -951,11 +951,31 @@ AC17_ACCEPTED_OVER_BLOCKS = [
     "git clean -n; echo see git clean docs",
     "git clean -n && grep -rn git clean docs/",
     'git clean -n && git commit -m "docs: git clean"',
-    # shape C — the one form this round newly over-blocks: a repository whose
-    # DIRECTORY is literally named `clean`, reached via -C. The cost of the
-    # occurrence grammar tolerating global options real git accepts but no
-    # enumeration lists. `git -C ./clean status` is the unaffected spelling.
-    "git -C clean status",
+    # shape C — a FAMILY, not the single instance previously disclosed: ANY
+    # `-C <directory literally named clean>` with ANY subcommand, with or
+    # without preceding global options. `git -C ./clean status` is the
+    # unaffected spelling. Introduced in round 3, pinned here as a family.
+    "git -C clean status", "git -C clean log", "git -C clean/sub status",
+    "git -c a=b -C clean status", "git -C clean diff --stat",
+    "git --no-pager -C clean status",
+    # shape D — a command-position word ending in `sh` that quotes the phrase.
+    # `ssh` ends in `sh`, so the structural interpreter test treats it as one.
+    # Round 3 introduced this and did not disclose it. `ssh localhost 'ls'` and
+    # every ssh command not naming the phrase stay allowed.
+    "ssh host 'git clean -fd'",
+    # shape E — round 3, undisclosed: a short global option followed by a
+    # subcommand, where the syntax branch swallows the subcommand as if it were
+    # the option's value. Measured and DECLINED rather than relaxed: buying an
+    # over-block back by loosening a fail-closed matcher is precisely the edit
+    # that opened 89 destructive spellings last round.
+    "git -p grep clean", "git -P log clean",
+    # shape F — the only over-block round 4 ADDS, and the direct price of
+    # denying the same option's destructive spelling. A dry-run whose global
+    # option takes a SEPARATE value the shared classifier does not recognise
+    # (`--attr-source HEAD`) resolves to no invocation at all, so dry-run cannot
+    # be proven and the rule fails closed. `git --attr-source=HEAD clean -n`
+    # (inline) is resolved and stays ALLOWED — see AC17t.
+    "git --attr-source HEAD clean -n", 'git --attr-source "HEAD" clean -n',
 ]
 
 
