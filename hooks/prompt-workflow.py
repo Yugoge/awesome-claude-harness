@@ -675,6 +675,10 @@ OVERNIGHT_EPOCH_READING = 'R-b'
 # commit_overnight_delivery).
 OVERNIGHT_SPEC_HEADER = '--- COMMAND SPECIFICATION ---'
 
+# transcript_path as delivered on the UserPromptSubmit payload; threaded by
+# main(). Empty when this module is driven by a caller that has no payload.
+CURRENT_TRANSCRIPT_PATH = ''
+
 
 def overnight_delivery_marker_path(state_path: Path, session_id: str) -> Path:
     """Marker location: BESIDE the overnight state record it describes.
