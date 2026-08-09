@@ -294,8 +294,10 @@ AC9_CONFIG_READ = "git config clean.requireForce false"
 @pytest.mark.parametrize("form", AC9_FAIL_CLOSED_FORMS)
 def test_AC9_zero_invocation_wrappers_fail_closed(form):
     """These wrappers make the classifier yield ZERO clean invocations while
-    git still executes the clean, so the coarse anchor must block."""
-    assert run_hook(form) == BLOCK
+    git still executes the clean, so the coarse anchor must block — and must
+    do so with THIS rule's own token, or a form some sibling rule happens to
+    deny would score a vacuous pass."""
+    assert_clean_rule_denies(form)
 
 
 # Dev self-review extension: the coarse anchor must ALSO cover a PATH-QUALIFIED
