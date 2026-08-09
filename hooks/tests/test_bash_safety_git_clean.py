@@ -984,18 +984,21 @@ AC17_ACCEPTED_OVER_BLOCKS = [
     # Round 3 introduced this and did not disclose it. `ssh localhost 'ls'` and
     # every ssh command not naming the phrase stay allowed.
     "ssh host 'git clean -fd'",
-    # shape E — round 3, undisclosed: a short global option followed by a
-    # subcommand, where the syntax branch swallows the subcommand as if it were
-    # the option's value. Measured and DECLINED rather than relaxed: buying an
-    # over-block back by loosening a fail-closed matcher is precisely the edit
-    # that opened 89 destructive spellings last round.
-    "git -p grep clean", "git -P log clean",
-    # shape F — the only over-block round 4 ADDS, and the direct price of
-    # denying the same option's destructive spelling. A dry-run whose global
-    # option takes a SEPARATE value the shared classifier does not recognise
-    # (`--attr-source HEAD`) resolves to no invocation at all, so dry-run cannot
-    # be proven and the rule fails closed. `git --attr-source=HEAD clean -n`
-    # (inline) is resolved and stays ALLOWED — see AC17t.
+    # shape E — ROUND 4, and mine: a dry-run or an inert mention carried inside
+    # an exec-taking git subcommand's command string. The gate cannot tell a
+    # preview from a deletion inside a string it has proven will be EXECUTED,
+    # so it fails closed. (Attributed to round 4 deliberately: a census that
+    # compares against a round-3 build carrying this same gate reports these as
+    # round-3, which is the instance-for-family style of misattribution this
+    # lane has been pulled up for twice.)
+    "git rebase -x 'git clean -n' HEAD~2",
+    "git submodule foreach 'git clean -n'",
+    # shape F — ROUND 4: a dry-run whose global option takes a SEPARATE value
+    # the shared classifier does not recognise (`--attr-source HEAD`) resolves
+    # to no invocation at all, so dry-run cannot be proven and the rule fails
+    # closed. The direct price of denying the same option's destructive
+    # spelling, which is proven to delete. `git --attr-source=HEAD clean -n`
+    # (inline) IS resolved and stays ALLOWED — see AC17t.
     "git --attr-source HEAD clean -n", 'git --attr-source "HEAD" clean -n',
 ]
 
