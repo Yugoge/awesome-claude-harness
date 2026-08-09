@@ -717,16 +717,26 @@ def _marker_writable(path: Path) -> bool:
 def _resolve_transcript_path(session_id: str) -> str:
     """Locate the session transcript, or '' when it cannot be resolved.
 
-    The UserPromptSubmit payload carries transcript_path, but main() threads
-    only the session id into Phase B and widening that call is outside this
-    lane's surface. The transcript store keys files by session id
-    ($HOME/.claude/projects/<mangled-cwd>/<session_id>.jsonl), so the id is
-    sufficient. Costs one directory scan of stat()s, never a transcript read.
+    The UserPromptSubmit payload's transcript_path is AUTHORITATIVE and is
+    threaded by main() into CURRENT_TRANSCRIPT_PATH; it is already consumed in
+    production at hooks/userprompt-restart-authorize.py:27.
 
-    Returning '' degrades THIS SESSION to reading R-a rather than failing; the
-    empty value is written into the marker so the degradation is visible in
-    the artifact instead of having to be inferred from behaviour.
+    The store scan below is only a fallback for direct callers that have no
+    payload. It is deliberately NOT the primary: transcript files are keyed by
+    session id ($HOME/.claude/projects/<mangled-cwd>/<session_id>.jsonl, which
+    was verified -- file stem == the record's sessionId), but $HOME/.claude is
+    a symlink to the repository root in this harness, so the scan reads a
+    SECONDARY store while the account's live store is elsewhere. Measured: the
+    live overnight session's own transcript is absent from the scanned tree.
+    Relying on the scan would therefore have degraded reading R-b to R-a
+    silently, which is the one outcome this lane must not produce.
+
+    Returning '' degrades THIS SESSION to reading R-a rather than failing, and
+    the empty value is written into the marker so the degradation is visible
+    in the artifact instead of having to be inferred from behaviour.
     """
+    if CURRENT_TRANSCRIPT_PATH:
+        return CURRENT_TRANSCRIPT_PATH
     if not isinstance(session_id, str) or not session_id:
         return ''
     try:
