@@ -320,7 +320,10 @@ fi
 REQUIREMENT_DOC="$PROJECT_ROOT/docs/dev/user-requirement-$SESSION_ID.md"
 FOCUS=""
 [[ -n "$STATE_FILE" ]] && FOCUS="$(jq -r '.focus // empty' "$STATE_FILE")"
-{
+# Rendered by a FUNCTION so the writer and the oracle are the same expression.
+# Comparing against a digest the initializer itself recorded would pass a bad
+# renderer trivially — it would write wrong bytes and record their matching hash.
+_render_requirement_doc() {
   printf '%s\n' "$FOCUS"
   if [[ -n "$USER_SPEC_PATH" ]]; then
     printf '\nUser spec path: %s\n' "$USER_SPEC_PATH"
