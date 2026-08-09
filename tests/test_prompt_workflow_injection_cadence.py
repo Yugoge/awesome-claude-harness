@@ -378,8 +378,15 @@ class TestAC4EndToEndProcessBoundary(unittest.TestCase):
             second = fixture.run()
             self.assertEqual(0, first.returncode)
             self.assertEqual(0, second.returncode)
-            self.assertEqual(1, first.stdout.count('OVERNIGHT CONTINUATION'))
-            self.assertEqual(1, second.stdout.count('OVERNIGHT CONTINUATION'))
+            # DISCREPANCY D4 (not among the four the lane was briefed on) --
+            # AC-4 asks for 'OVERNIGHT CONTINUATION' exactly once, but the
+            # embedded command document contains that phrase itself, so on a
+            # heavy prompt the count is 2. Measured true at the pre-change
+            # baseline as well, so it is a criterion defect and not a
+            # regression. The header form is the discriminating one: it occurs
+            # 0 times in the document and exactly once per emitted block.
+            self.assertEqual(1, first.stdout.count('OVERNIGHT CONTINUATION - Cycle'))
+            self.assertEqual(1, second.stdout.count('OVERNIGHT CONTINUATION - Cycle'))
             self.assertIn(SPEC_HEADER, first.stdout)
             self.assertNotIn(SPEC_HEADER, second.stdout)
             for out in (first.stdout, second.stdout):
