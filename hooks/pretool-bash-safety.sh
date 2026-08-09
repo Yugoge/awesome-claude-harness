@@ -1927,7 +1927,8 @@ _GC_QVAL="[^[:space:];&|()\`]*"
 # the option run that is 4^n: measured 8.8s on a failing match over twelve
 # tokens, on a regex that runs on every Bash tool call.
 _GC_VMARK="/.=:~@%A-Z0-9"
-_GC_VALTOK="([^-[:space:];&|()\`${_GC_VMARK}][^[:space:];&|()\`${_GC_VMARK}]*)?[${_GC_VMARK}][^[:space:];&|()\`]*"
+_GC_PLAINTOK="[^-[:space:];&|()\`${_GC_VMARK}][^[:space:];&|()\`${_GC_VMARK}]*"
+_GC_VALTOK="(${_GC_PLAINTOK})?[${_GC_VMARK}][^[:space:];&|()\`]*"
 # Global-option segment for the OCCURRENCE grammar only, as a UNION of two
 # branches that cover different things and must BOTH be present:
 #
