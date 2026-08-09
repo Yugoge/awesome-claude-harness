@@ -208,8 +208,52 @@ if [[ -n "$STATE_FILE" ]]; then
 fi
 ENFORCE_ARGS=(--source-command dev-overnight --session-id "$SESSION_ID" --flag e2e)
 [[ "$CODEX_REQUIRED" == "true" ]] && ENFORCE_ARGS+=(--flag codex)
-CLAUDE_PROJECT_DIR="$PROJECT_ROOT" bash "$SCRIPT_DIR/write-enforce-flag.sh" "${ENFORCE_ARGS[@]}" >/dev/null \
-  || _die "enforcement flag write failed"
+if [[ "$VERIFY_ONLY" != "1" ]]; then
+  CLAUDE_PROJECT_DIR="$PROJECT_ROOT" bash "$SCRIPT_DIR/write-enforce-flag.sh" "${ENFORCE_ARGS[@]}" >/dev/null \
+    || _die "enforcement flag write failed"
+fi
+
+# ENFORCEMENT_FLAG_VALID — validity, never mere existence.
+# Both consumers fail open TWICE: on absence (subagentstop-e2e-enforce.py:136-138,
+# subagentstop-codex-enforce.py:77) AND on a falsy `enabled`
+# (e2e:140-143, codex:82), where their _read_json degrades ANY malformed or
+# non-dict file to {} so `{}.get("enabled")` is None. A flag that EXISTS but is
+# truncated, non-dict, or disabled is therefore INDISTINGUISHABLE from no flag at
+# all, and enforcement is silently off for the whole session. Group 1 below is
+# what closes that fail-open; group 2 are writer-conformance/integrity clauses
+# that exceed what the consumers read (a wrong dev_session_id does NOT disable
+# enforcement) and are asserted as corruption signals, not as security closure.
+_flag_agent_types() {
+  case "$1" in
+    e2e)   printf '["qa"]' ;;
+    codex) printf '["ba","dev","qa"]' ;;
+    *)     return 1 ;;
+  esac
+}
+_assert_flag_valid() {
+  local flag="$1" target="$REGISTRY_DIR/$2" want
+  want="$(_flag_agent_types "$flag")" || _die "unknown flag: $flag"
+  # group 1 — fail-open closing
+  [[ -e "$target" ]] || _die "enforcement flag missing: $target (consumer would silently skip enforcement)"
+  [[ -L "$target" ]] && _die "enforcement flag is a symlink: $target"
+  [[ -f "$target" ]] || _die "enforcement flag is not a regular file: $target"
+  jq -e 'type == "object"' "$target" >/dev/null 2>&1 \
+    || _die "enforcement flag is not a JSON object: $target (consumer degrades it to {} and fails OPEN)"
+  jq -e '.enabled == true' "$target" >/dev/null 2>&1 \
+    || _die "enforcement flag is not enabled: $target (consumer exits 0 on a falsy 'enabled')"
+  # group 2 — writer conformance / integrity
+  jq -e --arg s "$SESSION_ID" --argjson t "$want" \
+     '.schema_version == 1 and .source_command == "dev-overnight"
+      and .dev_session_id == $s and .enforced_agent_types == $t' "$target" >/dev/null 2>&1 \
+    || _die "enforcement flag failed writer-conformance: $target"
+}
+_assert_flag_valid e2e e2e-enforce.json
+if [[ "$CODEX_REQUIRED" == "true" ]]; then
+  _assert_flag_valid codex codex-enforce.json
+else
+  [[ -e "$REGISTRY_DIR/codex-enforce.json" ]] \
+    && _die "codex-enforce.json present but the record does not set codex_required"
+fi
 
 # --- 3. spec-artifact resolution ---------------------------------------------
 SPEC_MODE="autonomous"
