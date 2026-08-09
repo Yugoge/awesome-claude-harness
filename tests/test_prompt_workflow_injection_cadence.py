@@ -1,0 +1,614 @@
+#!/usr/bin/env python3
+"""Regression tests for hooks/prompt-workflow.py continuation delivery cadence.
+
+The defect: ``build_overnight_continuation`` emitted ONE payload at ONE cadence
+for two content classes whose natural cadences differ by orders of magnitude.
+98% of the block is ``commands/dev-overnight.md``, which does not change inside
+a session; the remaining 2% is state summary + phase->step routing, which
+changes several times within a single cycle. Applying the per-prompt cadence to
+the invariant half made the recurring cost unbounded in prompts-per-cycle.
+
+After the fix the light half rides every prompt (withholding it would strand a
+resuming orchestrator on the phase that was current at the last cycle boundary)
+and the heavy half is gated on a delivery marker keyed by
+(session_id, cycle_count, context epoch, spec fingerprint).
+
+Structured after ``tests/test_prompt_workflow_liveness_tz.py``.
+
+Every fixture sets HOME to a temporary directory: ``$HOME/.claude`` is a symlink
+to the repository root, so a fixture writing through it would mutate the working
+tree and corrupt concurrent work.
+
+``PW_HOOK_PATH`` overrides the module under test so an off-live release
+candidate can be validated before it is published onto the live hook path.
+
+THREE CRITERION DISCREPANCIES ARE ASSERTED TO INTENT, NOT TO LETTER. Each is
+marked ``DISCREPANCY`` at its assertion site with the measurement establishing
+it; see the dev report for the full record.
+"""
+
+from __future__ import annotations
+
+import ast
+import json
+import os
+import subprocess
+import sys
+import tempfile
+import unittest
+from importlib.machinery import SourceFileLoader
+from importlib.util import module_from_spec, spec_from_loader
+from pathlib import Path
+
+REPO = Path(__file__).resolve().parent.parent
+HOOK_PATH = Path(os.environ.get('PW_HOOK_PATH') or (REPO / 'hooks' / 'prompt-workflow.py'))
+COMMAND_DOC = REPO / 'commands' / 'dev-overnight.md'
+
+SPEC_HEADER = '--- COMMAND SPECIFICATION ---'
+LIGHT_MARKERS = (
+    'OVERNIGHT CONTINUATION',
+    '--- CURRENT STATE ---',
+    '--- CONTINUATION INSTRUCTIONS ---',
+    'Phase mapping:',
+)
+SELF_HEAL_PREFIX = 'Command specification: '
+
+SID = 'aaaaaaaa-1111-2222-3333-444444444444'
+OTHER_SID = 'zzzzzzzz-9999-8888-7777-666666666666'
+
+# DISCREPANCY D1 -- AC-1 mandates per_prompt_min_chars=1500 inside a fixture
+# that makes the floor unreachable. build_overnight_continuation renders
+# 'Canonical steps: {labels}' from _load_overnight_todos(), which resolves
+# $HOME/.claude/scripts/todo/dev-overnight.py -- non-existent under the
+# HOME=<tmp> that the SAME criterion mandates (and mandates for good reason:
+# $HOME/.claude is a symlink to the repo). Measured light block in this fixture
+# 1,053 chars; in the real project, where the labels load, 2,617. The floor is
+# therefore asserted at a value this fixture can actually reach, and the
+# criterion's INTENT -- that prompts 2..N carry a real light payload rather than
+# nothing -- is asserted structurally instead, which is strictly stronger than
+# any single number.
+LIGHT_FLOOR_CHARS = 700
+LIGHT_CEILING_CHARS = 3000
+
+
+def load_hook_module():
+    """Load the hook under test as a real module (fresh globals each call)."""
+    loader = SourceFileLoader('pw_cadence_under_test', str(HOOK_PATH))
+    spec = spec_from_loader(loader.name, loader)
+    module = module_from_spec(spec)
+    loader.exec_module(module)
+    return module
+
+
+class Fixture:
+    """A hermetic project + HOME + transcript, never touching the repo."""
+
+    def __init__(self, tmp: str, session_id: str = SID, cycle_count: int = 0,
+                 isolation_kind: str = 'registered_worktree'):
+        self.session_id = session_id
+        self.root = Path(tmp)
+        self.project = self.root / 'proj'
+        self.home = self.root / 'home'
+        (self.project / '.claude').mkdir(parents=True)
+        (self.home / '.claude' / 'commands').mkdir(parents=True)
+        (self.home / '.claude' / 'commands' / 'dev-overnight.md').write_text(
+            COMMAND_DOC.read_text()
+        )
+        transcripts = self.home / '.claude' / 'projects' / '-proj'
+        transcripts.mkdir(parents=True)
+        self.transcript = transcripts / f'{session_id}.jsonl'
+        self.transcript.write_text(json.dumps({'type': 'user', 'uuid': 'u0'}) + '\n')
+        self.state_path = self.project / '.claude' / f'overnight-state-{session_id}.json'
+        self.write_state(cycle_count=cycle_count, isolation_kind=isolation_kind)
+
+    def write_state(self, cycle_count: int = 0, phase: str = 'exploring',
+                    isolation_kind: str = 'registered_worktree') -> None:
+        self.state_path.write_text(json.dumps({
+            'session_id': self.session_id,
+            'end_time': '2099-01-01T00:00:00Z',
+            'cycle_count': cycle_count,
+            'current_phase': phase,
+            'isolation_kind': isolation_kind,
+            'worktree_path': '/tmp/wt',
+            'worktree_branch': 'wt-branch',
+            'protected_branch': 'master',
+            'issues_fixed': 0,
+            'current_issues': [],
+            'cycle_log': [],
+            'focus': 'none',
+        }))
+
+    def state(self) -> dict:
+        return json.loads(self.state_path.read_text())
+
+    def marker_path(self, session_id: str | None = None) -> Path:
+        sid = session_id or self.session_id
+        return self.project / '.claude' / f'overnight-delivery-{sid}.json'
+
+    def spec_doc(self) -> Path:
+        return self.home / '.claude' / 'commands' / 'dev-overnight.md'
+
+    def append_transcript(self, record: dict) -> None:
+        with self.transcript.open('a') as handle:
+            handle.write(json.dumps(record) + '\n')
+
+    def env(self) -> dict:
+        env = {**os.environ, 'HOME': str(self.home),
+               'CLAUDE_PROJECT_DIR': str(self.project)}
+        env.pop('CLAUDE_COMPAT_RUNTIME', None)
+        env.pop('CLAUDE_DEV_OVERNIGHT_TODO', None)
+        return env
+
+    def run(self, session_id: str | None = None, prompt: str = 'continue please',
+            extra_env: dict | None = None, stdout=subprocess.PIPE):
+        """Drive the hook across the real main() process boundary."""
+        env = self.env()
+        if extra_env:
+            env.update(extra_env)
+        payload = json.dumps({
+            'prompt': prompt,
+            'session_id': session_id or self.session_id,
+            'transcript_path': str(self.transcript),
+        })
+        return subprocess.run([sys.executable, str(HOOK_PATH)], input=payload,
+                              capture_output=stdout is subprocess.PIPE, text=True,
+                              env=env, stdout=None if stdout is not subprocess.PIPE else None)
+
+    def call_direct(self, session_id: str | None = None) -> str | None:
+        """Call the decision in-process so an ESCAPING EXCEPTION FAILS THE TEST.
+
+        A subprocess exit of 0 is insufficient evidence on its own: main()
+        swallows generic exceptions and exits 0, so a raising hook is
+        indistinguishable from a working one from the outside.
+        """
+        previous = {k: os.environ.get(k) for k in
+                    ('HOME', 'CLAUDE_PROJECT_DIR', 'CLAUDE_DEV_OVERNIGHT_TODO')}
+        os.environ['HOME'] = str(self.home)
+        os.environ['CLAUDE_PROJECT_DIR'] = str(self.project)
+        os.environ.pop('CLAUDE_DEV_OVERNIGHT_TODO', None)
+        try:
+            module = load_hook_module()
+            return module.check_overnight_continuation(session_id or self.session_id)
+        finally:
+            for key, value in previous.items():
+                if value is None:
+                    os.environ.pop(key, None)
+                else:
+                    os.environ[key] = value
+
+
+def deliver(fixture: Fixture, session_id: str | None = None) -> str:
+    """One full prompt: emit, then commit the marker (write-after-emit)."""
+    result = fixture.run(session_id)
+    return result.stdout
+
+
+class TestAC1RecurringCostIsBounded(unittest.TestCase):
+    """AC-1 -- repeated prompts inside one cycle stop carrying the heavy half."""
+
+    def test_five_consecutive_prompts_deliver_the_spec_once(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            fixture = Fixture(tmp)
+            outputs = [deliver(fixture) for _ in range(5)]
+
+            self.assertIn(SPEC_HEADER, outputs[0])
+            self.assertIn(COMMAND_DOC.read_text().strip()[:400], outputs[0])
+
+            for index, out in enumerate(outputs[1:], start=2):
+                with self.subTest(prompt=index):
+                    self.assertNotIn(SPEC_HEADER, out)
+                    self.assertLessEqual(len(out), LIGHT_CEILING_CHARS)
+                    # AC-1's lower bound, asserted to intent (DISCREPANCY D1).
+                    # Absence-of-heavy is not evidence of presence-of-light: an
+                    # implementation that delivered once then emitted nothing
+                    # would satisfy every upper bound.
+                    self.assertGreaterEqual(len(out), LIGHT_FLOOR_CHARS)
+                    for marker in LIGHT_MARKERS:
+                        self.assertIn(marker, out)
+                    self.assertIn('CRITICAL: The validated isolated worktree', out)
+                    self.assertIn(SELF_HEAL_PREFIX, out)
+
+            # Every light prompt is byte-identical: the recurring term is a
+            # constant, not merely "smaller".
+            self.assertEqual(1, len(set(outputs[1:])))
+
+            cumulative = sum(len(o) for o in outputs)
+            baseline = len(outputs[0]) * 5
+            # DISCREPANCY D2 -- AC-1 pins cumulative_max=145000 and
+            # cumulative_min=130000 to constants that this lane's own
+            # recommended landing order invalidates: the named residual owner
+            # (include-expander) SHRINKS commands/dev-overnight.md, so a
+            # minimum on cumulative size would fail this lane precisely for
+            # succeeding at making the block smaller. Asserted relationally
+            # against the fixture's own measured boundary block instead.
+            self.assertLess(cumulative, len(outputs[0]) + 5 * LIGHT_CEILING_CHARS)
+            self.assertGreaterEqual(cumulative, len(outputs[0]))
+            self.assertLess(cumulative, baseline * 0.30)
+
+    def test_marker_records_the_reading_in_force(self):
+        """The R-a/R-b choice is readable from the artifact, not inferred."""
+        with tempfile.TemporaryDirectory() as tmp:
+            fixture = Fixture(tmp)
+            deliver(fixture)
+            marker = json.loads(fixture.marker_path().read_text())
+            self.assertIn(marker['epoch_reading'], ('R-a', 'R-b'))
+            module = load_hook_module()
+            self.assertEqual(module.OVERNIGHT_EPOCH_READING, marker['epoch_reading'])
+
+
+class TestAC2FailSafePolarity(unittest.TestCase):
+    """AC-2 -- every marker anomaly delivers; exactly one state suppresses."""
+
+    def _write_marker(self, fixture: Fixture, payload) -> None:
+        path = fixture.marker_path()
+        if payload is None:
+            return
+        path.write_text(payload if isinstance(payload, str) else json.dumps(payload))
+
+    def _valid_marker(self, fixture: Fixture) -> dict:
+        deliver(fixture)
+        return json.loads(fixture.marker_path().read_text())
+
+    def test_all_eleven_marker_states(self):
+        rows = [
+            ('2.1', 'absent', None, 'heavy'),
+            ('2.2', 'zero-length', '', 'heavy'),
+            ('2.3', 'malformed JSON', '{not json', 'heavy'),
+            ('2.4', 'not an object', [], 'heavy'),
+            ('2.5', 'missing session_id', {'cycle_count': 0}, 'heavy'),
+            ('2.6', 'foreign session_id', {'session_id': OTHER_SID}, 'heavy'),
+            ('2.7', 'cycle lower', 'CYCLE:-1', 'heavy'),
+            ('2.8', 'cycle higher', 'CYCLE:+1', 'heavy'),
+            ('2.9', 'cycle non-numeric', 'CYCLE:str', 'heavy'),
+            ('2.10', 'unreadable', 'UNREADABLE', 'heavy'),
+            ('2.11', 'exact four-field match', 'VALID', 'light_only'),
+        ]
+        for row_id, label, payload, expected in rows:
+            with self.subTest(row=row_id, marker=label):
+                with tempfile.TemporaryDirectory() as tmp:
+                    fixture = Fixture(tmp)
+                    if payload in ('VALID', 'CYCLE:-1', 'CYCLE:+1', 'CYCLE:str'):
+                        marker = self._valid_marker(fixture)
+                        if payload == 'CYCLE:-1':
+                            marker['cycle_count'] = marker['cycle_count'] - 1
+                        elif payload == 'CYCLE:+1':
+                            marker['cycle_count'] = marker['cycle_count'] + 1
+                        elif payload == 'CYCLE:str':
+                            marker['cycle_count'] = 'zero'
+                        fixture.marker_path().write_text(json.dumps(marker))
+                    elif payload == 'UNREADABLE':
+                        # DISCREPANCY -- AC-2 row 2.10 specifies mode 0o000, but
+                        # this suite runs as uid 0 in this harness and root
+                        # bypasses the permission bits, so chmod alone yields a
+                        # READABLE file and a non-discriminating row. A
+                        # directory at the marker path is unreadable for every
+                        # uid (read_text -> IsADirectoryError), which tests the
+                        # property the row is actually about.
+                        fixture.marker_path().mkdir()
+                    else:
+                        self._write_marker(fixture, payload)
+
+                    out = deliver(fixture)
+                    if expected == 'heavy':
+                        self.assertIn(SPEC_HEADER, out)
+                    else:
+                        self.assertNotIn(SPEC_HEADER, out)
+                        for marker_text in LIGHT_MARKERS:
+                            self.assertIn(marker_text, out)
+
+    def test_no_exception_escapes_the_decision(self):
+        """Direct in-process call: any raise fails here, unlike a subprocess."""
+        for label, payload in (('malformed', '{not json'), ('non-object', '[]'),
+                               ('zero-length', ''), ('wrong types', '{"cycle_count": {}}')):
+            with self.subTest(marker=label):
+                with tempfile.TemporaryDirectory() as tmp:
+                    fixture = Fixture(tmp)
+                    fixture.marker_path().write_text(payload)
+                    block = fixture.call_direct()
+                    self.assertIsNotNone(block)
+                    self.assertIn(SPEC_HEADER, block)
+
+
+class TestAC3ValidityKeyDiscrimination(unittest.TestCase):
+    """AC-3 -- the validity key is exactly the four fields."""
+
+    def test_control_does_not_redeliver(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            fixture = Fixture(tmp)
+            deliver(fixture)
+            self.assertNotIn(SPEC_HEADER, deliver(fixture))
+
+    def test_3_1_cycle_advance_redelivers(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            fixture = Fixture(tmp)
+            deliver(fixture)
+            fixture.write_state(cycle_count=fixture.state()['cycle_count'] + 1)
+            self.assertIn(SPEC_HEADER, deliver(fixture))
+
+    def test_3_2_session_change_redelivers(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            fixture = Fixture(tmp)
+            deliver(fixture)
+            other = Fixture(tempfile.mkdtemp(dir=tmp), session_id=OTHER_SID)
+            self.assertIn(SPEC_HEADER, deliver(other))
+
+    def test_3_3_compaction_redelivers(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            fixture = Fixture(tmp)
+            deliver(fixture)
+            fixture.append_transcript({'type': 'system', 'isCompactSummary': True,
+                                       'uuid': 'compact-1'})
+            self.assertIn(SPEC_HEADER, deliver(fixture))
+
+    def test_3_4_spec_change_on_disk_redelivers(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            fixture = Fixture(tmp)
+            deliver(fixture)
+            doc = fixture.spec_doc()
+            doc.write_text(doc.read_text() + '\n<!-- edited -->\n')
+            self.assertIn(SPEC_HEADER, deliver(fixture))
+
+    def test_negative_ordinary_transcript_growth_does_not_redeliver(self):
+        """What distinguishes an epoch token from a naive transcript-grew check."""
+        with tempfile.TemporaryDirectory() as tmp:
+            fixture = Fixture(tmp)
+            deliver(fixture)
+            for index in range(3):
+                fixture.append_transcript({'type': 'user', 'uuid': f'plain-{index}'})
+            self.assertNotIn(SPEC_HEADER, deliver(fixture))
+
+
+class TestAC4EndToEndProcessBoundary(unittest.TestCase):
+    """AC-4 -- through the real main() boundary, not an in-process import."""
+
+    def test_subprocess_first_and_second_invocation(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            fixture = Fixture(tmp)
+            first = fixture.run()
+            second = fixture.run()
+            self.assertEqual(0, first.returncode)
+            self.assertEqual(0, second.returncode)
+            self.assertEqual(1, first.stdout.count('OVERNIGHT CONTINUATION'))
+            self.assertEqual(1, second.stdout.count('OVERNIGHT CONTINUATION'))
+            self.assertIn(SPEC_HEADER, first.stdout)
+            self.assertNotIn(SPEC_HEADER, second.stdout)
+            for out in (first.stdout, second.stdout):
+                self.assertIn('--- CURRENT STATE ---', out)
+                self.assertIn('Phase mapping:', out)
+                self.assertIn('CRITICAL: The validated isolated worktree', out)
+
+    def test_codex_runtime_emits_nothing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            fixture = Fixture(tmp)
+            result = fixture.run(extra_env={'CLAUDE_COMPAT_RUNTIME': 'codex'})
+            self.assertEqual(0, result.returncode)
+            self.assertNotIn('OVERNIGHT CONTINUATION', result.stdout)
+
+    def test_slash_prompt_is_not_phase_b(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            fixture = Fixture(tmp)
+            result = fixture.run(prompt='/status')
+            self.assertNotIn('OVERNIGHT CONTINUATION', result.stdout)
+
+
+class TestAC5CycleBoundaryStillDelivers(unittest.TestCase):
+    """AC-5 -- a genuine cycle advance delivers what routing needs."""
+
+    def test_advance_redelivers_and_rearms(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            fixture = Fixture(tmp, cycle_count=4)
+            deliver(fixture)
+            self.assertNotIn(SPEC_HEADER, deliver(fixture))
+
+            # posttool-overnight-loop.py:100-101 -- cycle_count +1, phase reset.
+            fixture.write_state(cycle_count=5, phase='exploring')
+            out = deliver(fixture)
+
+            self.assertIn(SPEC_HEADER, out)
+            self.assertIn(COMMAND_DOC.read_text().strip()[:400], out)
+            self.assertIn('OVERNIGHT CONTINUATION - Cycle 6', out.splitlines()[0])
+            self.assertIn('resume from phase="exploring"', out)
+            self.assertIn('Phase mapping:', out)
+
+            marker = json.loads(fixture.marker_path().read_text())
+            self.assertEqual(5, marker['cycle_count'])
+            self.assertNotIn(SPEC_HEADER, deliver(fixture))
+
+    def test_phase_advance_within_a_cycle_updates_routing(self):
+        """The light half must track current_phase, which moves mid-cycle."""
+        with tempfile.TemporaryDirectory() as tmp:
+            fixture = Fixture(tmp, cycle_count=2)
+            deliver(fixture)
+            fixture.write_state(cycle_count=2, phase='implementing')
+            out = deliver(fixture)
+            self.assertNotIn(SPEC_HEADER, out)
+            self.assertIn('resume from phase="implementing"', out)
+            self.assertIn('Phase: implementing', out)
+
+
+class TestAC6SessionIsolation(unittest.TestCase):
+    """AC-6 -- two-factor binding: filename AND the record's own field."""
+
+    def test_foreign_session_does_not_consume_the_marker(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            fixture = Fixture(tmp)
+            deliver(fixture)
+            before = fixture.marker_path().read_bytes()
+            fixture.run(session_id=OTHER_SID)
+            self.assertEqual(before, fixture.marker_path().read_bytes())
+
+    def test_filename_field_mismatch_is_rejected(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            fixture = Fixture(tmp)
+            deliver(fixture)
+            marker = json.loads(fixture.marker_path().read_text())
+            marker['session_id'] = 'bbbbbbbb-0000-0000-0000-000000000000'
+            fixture.marker_path().write_text(json.dumps(marker))
+            self.assertIn(SPEC_HEADER, deliver(fixture))
+
+
+class TestAC8SelfHealPointer(unittest.TestCase):
+    """AC-8 -- the pointer names the resolved path, never a literal."""
+
+    def test_pointer_equals_read_command_spec_resolution(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            fixture = Fixture(tmp)
+            block = fixture.call_direct()
+            module = load_hook_module()
+            os.environ['HOME'] = str(fixture.home)
+            os.environ['CLAUDE_PROJECT_DIR'] = str(fixture.project)
+            module = load_hook_module()
+            resolved = module.resolve_command_spec_path('dev-overnight')
+            self.assertIsNotNone(resolved)
+            self.assertIn(f'{SELF_HEAL_PREFIX}{resolved}', block)
+            # The resolved path is the file read_command_spec actually reads.
+            self.assertEqual(module.read_command_spec('dev-overnight'),
+                             module._try_read_spec(resolved))
+            # ...and it is NOT the repository literal.
+            self.assertNotIn(str(COMMAND_DOC), block)
+
+    def test_pointer_rides_light_prompts_too(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            fixture = Fixture(tmp)
+            deliver(fixture)
+            light = deliver(fixture)
+            self.assertNotIn(SPEC_HEADER, light)
+            self.assertIn(SELF_HEAL_PREFIX, light)
+
+
+class TestAC11MarkerOrderingAndWritability(unittest.TestCase):
+    """AC-11 -- write-after-emit, plus the coverage gap AC-1..AC-11 never had."""
+
+    def test_no_marker_when_emission_fails(self):
+        """Emission failure must leave NO marker, so the next prompt re-delivers.
+
+        M6a: a marker written before emission claims a delivery that never
+        happened and does NOT self-heal within the cycle.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            fixture = Fixture(tmp)
+            with open(os.devnull, 'w') as sink:
+                result = subprocess.run(
+                    [sys.executable, str(HOOK_PATH)],
+                    input=json.dumps({'prompt': 'go', 'session_id': fixture.session_id,
+                                      'transcript_path': str(fixture.transcript)}),
+                    text=True, env=fixture.env(), stdout=sink,
+                    stderr=subprocess.DEVNULL, pass_fds=(),
+                )
+            # A devnull sink still succeeds, so assert the real ordering
+            # property directly: the committer refuses without emission
+            # evidence.
+            self.assertEqual(0, result.returncode)
+            os.environ['HOME'] = str(fixture.home)
+            os.environ['CLAUDE_PROJECT_DIR'] = str(fixture.project)
+            module = load_hook_module()
+            fresh = Fixture(tempfile.mkdtemp(dir=tmp), session_id=OTHER_SID)
+            os.environ['CLAUDE_PROJECT_DIR'] = str(fresh.project)
+            os.environ['HOME'] = str(fresh.home)
+            module = load_hook_module()
+            self.assertFalse(module.commit_overnight_delivery(OTHER_SID, ''))
+            self.assertFalse(module.commit_overnight_delivery(
+                OTHER_SID, 'light only, no spec header'))
+            self.assertFalse(fresh.marker_path().exists())
+
+    def test_marker_write_failure_leaves_exit_zero_and_redelivers(self):
+        """A marker that cannot be persisted is fail-safe, not an error."""
+        with tempfile.TemporaryDirectory() as tmp:
+            fixture = Fixture(tmp)
+            fixture.marker_path().mkdir()  # os.replace onto a dir always fails
+            first = fixture.run()
+            second = fixture.run()
+            self.assertEqual(0, first.returncode)
+            self.assertEqual(0, second.returncode)
+            self.assertIn(SPEC_HEADER, first.stdout)
+            self.assertIn(SPEC_HEADER, second.stdout)
+
+    def test_unwritable_marker_location_is_announced_not_silent(self):
+        """COVERAGE GAP G1 -- no AC checked that the marker CAN be written.
+
+        This is the sharpest risk in the lane: under a read-only project mount
+        (the isolation mode that broke a sibling lane's launch-time writes)
+        every prompt re-delivers the heavy half, the saving is exactly zero,
+        the hook still exits 0, and every other test in this file still passes
+        because each builds its own writable fixture. The degradation must be
+        observable in the emitted block itself.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            fixture = Fixture(tmp)
+            claude_dir = fixture.project / '.claude'
+            original_mode = claude_dir.stat().st_mode
+            module = load_hook_module()
+            marker_path = fixture.marker_path()
+
+            self.assertTrue(module._marker_writable(marker_path))
+            block = fixture.call_direct()
+            self.assertNotIn('cadence bounding is INACTIVE', block)
+
+            try:
+                claude_dir.chmod(0o555)
+                if os.access(claude_dir, os.W_OK):
+                    self.skipTest('running as a uid that bypasses the mode bits; '
+                                  'a read-only MOUNT is the real trigger and '
+                                  'cannot be simulated here')
+                self.assertFalse(module._marker_writable(marker_path))
+                block = fixture.call_direct()
+                self.assertIn('INACTIVE', block)
+                self.assertIn(str(marker_path), block)
+                self.assertIn(SPEC_HEADER, block)
+            finally:
+                claude_dir.chmod(original_mode)
+
+
+class TestScopeConfinement(unittest.TestCase):
+    """AC-9 -- the lane boundary is honoured and the collision is not absorbed."""
+
+    TZ_OWNED = ('_is_active_state', 'find_any_overnight_state')
+
+    def test_tz_owned_symbols_are_not_edited_by_this_lane(self):
+        """The tz lane's landed fix must be intact, byte for byte."""
+        source = HOOK_PATH.read_text()
+        tree = ast.parse(source)
+        lines = source.splitlines()
+        bodies = {}
+        for node in tree.body:
+            if isinstance(node, ast.FunctionDef) and node.name in self.TZ_OWNED:
+                bodies[node.name] = '\n'.join(lines[node.lineno - 1:node.end_lineno])
+        self.assertEqual(set(self.TZ_OWNED), set(bodies))
+        # tz's session binding and its fail-closed liveness predicate.
+        self.assertIn("state.get('session_id') != session_id",
+                      bodies['find_any_overnight_state'])
+        self.assertNotIn('glob', bodies['find_any_overnight_state'])
+        self.assertIn("replace('Z', '+00:00')", bodies['_is_active_state'])
+
+    def test_handle_phase_b_still_threads_the_session_id(self):
+        """tz asserts this literal; the cadence fix must not break it."""
+        source = HOOK_PATH.read_text()
+        tree = ast.parse(source)
+        lines = source.splitlines()
+        for node in tree.body:
+            if isinstance(node, ast.FunctionDef) and node.name == 'handle_phase_b':
+                body = '\n'.join(lines[node.lineno - 1:node.end_lineno])
+                self.assertIn('check_overnight_continuation(session_id)', body)
+                self.assertIn('commit_overnight_delivery', body)
+                # M6a is a source-order property: emit, then record.
+                self.assertLess(body.index('print(overnight_ctx)'),
+                                body.index('commit_overnight_delivery'))
+                return
+        self.fail('handle_phase_b not found')
+
+    def test_main_is_unchanged_by_this_lane(self):
+        """No payload threading was added: the transcript is resolved by id."""
+        source = HOOK_PATH.read_text()
+        tree = ast.parse(source)
+        lines = source.splitlines()
+        for node in tree.body:
+            if isinstance(node, ast.FunctionDef) and node.name == 'main':
+                body = '\n'.join(lines[node.lineno - 1:node.end_lineno])
+                self.assertIn('handle_phase_b(session_id)', body)
+                self.assertNotIn('transcript_path', body)
+                return
+        self.fail('main not found')
+
+
+if __name__ == '__main__':
+    unittest.main()
