@@ -739,7 +739,7 @@ _preclean_snapshot_guard() {
     else
       echo "REASON: write_checkpoint rc=$_ckpt_rc — the snapshot could not be written, so untracked work would be unrecoverable." >&2
     fi
-    echo "Hint: see ~/.claude/logs/checkpoint.log, fix the snapshot failure, then re-issue the clean." >&2
+    echo "Hint: see ${CHECKPOINT_LOG_FILE}, fix the snapshot failure, then re-issue the clean." >&2
     exit 2
   fi
   local _ckpt_branch _ckpt_ref
