@@ -1026,13 +1026,23 @@ def _cleanup_overnight_partials(sid: str) -> None:
     overnight guard keys the isolation boundary on its liveness window, so
     leaving it behind arms the boundary over a registry that never validated.
     """
-    for p in (official_todos_path(sid), workflow_bookmark_path(sid),
-              overnight_state_path(sid)):
+    for p in (official_todos_path(sid), workflow_bookmark_path(sid)):
         try:
             if p.exists():
                 p.unlink()
         except Exception:
             pass
+    # The state record is removed only when it actually belongs to THIS session.
+    # The path is derived from sid, so an unconditional unlink would also delete a
+    # record some other launch left at the same path — and that record may be the
+    # one a currently-armed boundary is keyed on. Reading session_id back is the
+    # cheap way to keep the cleanup attributable rather than positional.
+    sp = overnight_state_path(sid)
+    try:
+        if sp.exists() and json.loads(sp.read_text()).get('session_id') == sid:
+            sp.unlink()
+    except Exception:
+        pass
 
 
 def _dev_start_lock_path(sid: str) -> Path:
