@@ -2082,7 +2082,12 @@ def unresolved_clean(text, parsed_n):
     (`git clean -n && echo "git clean -fd"`, neither condition) is NOT counted.
     """
     if SHELL_CMD.search(text) or EXEC_CTX.search(text):
-        text = text.replace('"', ' ').replace("'", ' ')
+        # Both neutralisations, for the reason given at the shell-side probe:
+        # quote->space splits `--namespace="ns"` into a bare token no branch
+        # consumes, quote->nothing restores the inline spelling; the larger
+        # count wins so neither variant can lose a form the other sees.
+        return max(len(COARSE.findall(text.replace('"', q).replace("'", q)))
+                   for q in (' ', '')) > parsed_n
     return len(COARSE.findall(text)) > parsed_n
 
 
