@@ -40,6 +40,49 @@ HOOK = os.path.join(os.path.dirname(__file__), "..", "pretool-bash-safety.sh")
 CRITERIA_PATH = (Path(__file__).resolve().parents[2] / "docs" / "dev"
                  / "acceptance-criteria-dev-20260719-150041-a.json")
 
+# `docs/dev/` is gitignored (.gitignore:142) and has never had a tracked file,
+# while this module ships inside the release archive under `hooks/**`. So on a
+# fresh clone or an extracted archive the criteria file is simply ABSENT — and
+# because the parametrize builders below run at DECORATOR-EVALUATION time, an
+# unguarded read there raises during collection and pytest aborts the ENTIRE
+# hooks/tests session ("Interrupted: 1 error during collection"), not just this
+# file. That is precisely the failure shape test_git_cmd_cross_consistency.py
+# was repaired for in this same cycle.
+#
+# Absent and broken are therefore treated as DIFFERENT conditions:
+#   absent  -> every test here is skipped with a visible reason (below)
+#   present -> read it and fail CLOSED on anything wrong with it
+# Only the first is relaxed. A present-but-unreadable, malformed, or
+# AC-missing file still raises, because that is the copy-drift defect this
+# module exists to catch and a silent skip there would recreate it.
+CRITERIA_AVAILABLE = CRITERIA_PATH.is_file()
+
+if not CRITERIA_AVAILABLE:
+    pytestmark = pytest.mark.skip(
+        reason=("live acceptance-criteria file absent (%s); these tests assert "
+                "against the source-of-truth criteria and are not portable to a "
+                "tree without it" % CRITERIA_PATH)
+    )
+
+
+class _AbsentCriteria(dict):
+    """Recursively-empty stand-in used ONLY when the criteria file is absent.
+
+    Subscripting yields itself and iteration yields nothing, so the import-time
+    parametrize builders produce empty matrices instead of raising. Every test
+    is already skipped by the module-level mark above, so this never silently
+    weakens an assertion — it only keeps collection alive.
+    """
+
+    def __getitem__(self, key):
+        return _ABSENT
+
+    def __iter__(self):
+        return iter(())
+
+
+_ABSENT = _AbsentCriteria()
+
 
 @functools.lru_cache(maxsize=1)
 def _criteria():
@@ -49,14 +92,18 @@ def _criteria():
     origin and let a green suite coexist with ACs that owned no test at all.
     That is the same copy-drift shape test_git_cmd_cross_consistency.py exists
     to prevent for the shared grammar, so read the source of truth instead.
-    Missing or unreadable fails CLOSED: a self-check that silently skips is the
-    defect it is meant to catch.
+    Present-but-unreadable fails CLOSED: a self-check that silently skips is
+    the defect it is meant to catch. Absent is handled at import (see above).
     """
+    if not CRITERIA_AVAILABLE:
+        return _ABSENT
     return json.loads(CRITERIA_PATH.read_text())
 
 
 def _ac(ac_id):
     """One acceptance criterion, by id, from the live criteria file."""
+    if not CRITERIA_AVAILABLE:
+        return _ABSENT
     for entry in _criteria()["acceptance_criteria"]:
         if entry["id"] == ac_id:
             return entry
