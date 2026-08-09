@@ -1932,8 +1932,9 @@ _GC_VALTOK="([^-[:space:];&|()\`][^[:space:];&|()\`]*)?[/.=:~@%A-Z0-9][^[:space:
 #       pre-edit 2 -> live 0, and proven to delete untracked files at real git.
 #   (2) the SYNTAX branch — a long option is any `--…` word, so real options no
 #       enumeration lists (--no-lazy-fetch, --no-advice, --attr-source=) are
-#       covered too. It deliberately never swallows a following BARE token, so
-#       `git --no-pager grep clean src/` stays a grep rather than an occurrence.
+#       covered too. It swallows a following bare token only when that token is
+#       VALUE-shaped (${_GC_VALTOK}), so `git --attr-source HEAD clean -fd` is
+#       an occurrence while `git --no-pager grep clean src/` stays a grep.
 #
 # A union can only ADD matches, so relative to either predecessor it can only
 # turn ALLOW into BLOCK — a new ungranted allow is impossible by construction,
