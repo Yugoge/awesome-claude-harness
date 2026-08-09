@@ -364,16 +364,22 @@ def test_AC10_sibling_blocks_not_regressed(form):
 
 # ── AC11: this test file exists and covers AC1-AC10 and AC12-AC14 ────────────
 
-AC11_COVERED = [
-    "AC1", "AC2", "AC3", "AC4", "AC5", "AC6", "AC7",
-    "AC8", "AC9", "AC10", "AC12", "AC13", "AC14", "AC15", "AC16", "AC17",
-]
-
-
 def test_AC11_every_ac_has_an_executing_test():
-    """Each covered AC id must own at least one test function in this module."""
+    """Every AC the criteria file says this module covers must own a test.
+
+    `covers` is read from the criteria file at run time. The local copy this
+    replaced was frozen at AC17, so it reported green while AC18-AC21 had no
+    named test — the exact drift the criteria are the single source against.
+
+    `def test_AC2` is also a prefix of `def test_AC20`, so a missing AC2 could
+    be masked by AC20's test; the id must not be followed by another digit.
+    """
+    check = _ac("AC11")["check"]
+    assert check["test_file"].endswith(Path(__file__).name), (
+        "AC11 points at %r, not at this module" % check["test_file"])
     source = Path(__file__).read_text()
-    missing = [ac for ac in AC11_COVERED if ("def test_%s" % ac) not in source]
+    missing = [a for a in check["covers"]
+               if not re.search(r"def test_%s(?![0-9])" % re.escape(a), source)]
     assert missing == [], "ACs without a test function: %s" % missing
 
 
