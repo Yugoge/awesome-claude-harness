@@ -1945,6 +1945,18 @@ _GIT_CLEAN_FALLBACK_RE="(^|${_GC_SEP})((${_GC_PATH}git)|\"${_GC_PATH}git\"|'${_G
 _GC_CMDW="[^[:space:];&|()\`'\"*?]*"
 _GC_SHW="${_GC_CMDW}sh[0-9]*"
 _GC_SHELL_RE="(^|${_GC_SEP})((${_GC_SHW})|\"${_GC_SHW}\"|'${_GC_SHW}')([[:space:]]|$)"
+# A shell is not the only thing that turns a quoted string into execution: some
+# git subcommands run their ARGUMENT as a command. `git rebase -x '<destructive
+# clean>' HEAD~2` was proven to delete an untracked file and a nested untracked
+# directory at real git 2.54.0 while exiting 0 ungranted, because the classifier
+# reports the OUTER subcommand (rebase) so no clean invocation resolves, and the
+# occurrence anchor cannot see an inner `git` hugged by a quote. Recognising the
+# context is enough — the quotes are then neutralised and the ordinary
+# occurrence grammar finds the payload, exactly as it does behind a shell.
+# The exec MARKER is required in addition to the subcommand, so an everyday
+# `git rebase --continue` or `git submodule update --init` neutralises nothing.
+_GC_ANYTOK="([[:space:]]+[^[:space:];&|()\`]+)*"
+_GC_EXECCTX_RE="(^|${_GC_SEP})((${_GC_PATH}git)|\"${_GC_PATH}git\"|'${_GC_PATH}git')${_GC_ANYTOK}[[:space:]]+(rebase${_GC_ANYTOK}[[:space:]]+(-x|--exec)|submodule${_GC_ANYTOK}[[:space:]]+foreach|filter-branch${_GC_ANYTOK}[[:space:]]+--[a-z]+-filter|bisect${_GC_ANYTOK}[[:space:]]+run)\\b"
 _GIT_CLEAN_HAS_INV=0
 if [ "$CLASSIFIER_STATUS" = "ok" ] && _any_git_has_subcmd clean; then
   _GIT_CLEAN_HAS_INV=1
