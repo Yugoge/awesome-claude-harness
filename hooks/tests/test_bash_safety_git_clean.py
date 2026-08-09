@@ -1134,6 +1134,62 @@ _AC17_MUTANT_PROBES = [
 ]
 
 
+# Every spelling the SHARED enumeration accepts, so "the union lost nothing the
+# enumeration matched" is a measured property rather than an argument from
+# having interpolated the string. The clean grammar no longer interpolates
+# ${GIT_GLOBAL_OPT_ALT} whole — its separate-value class admits a leading `-`,
+# which cost 2^n backtracking — so this is the replacement guarantee.
+_AC18_ENUM_SPELLINGS = [
+    "-C /tmp", "-C tmp", "-C/tmp", "-C .", '-C "."', "-C '/tmp'",
+    "-c core.x=1", "-c a=b", "-ca=b", '-c "core.x=1"', "-c 'a=b'",
+    "--git-dir=/tmp/r/.git", "--git-dir /tmp/r/.git", "--git-dir gitdir",
+    "--work-tree=/tmp", "--work-tree /tmp", "--work-tree wt",
+    "--namespace=n", "--namespace n", "--namespace ns",
+    "--exec-path=/x", "--exec-path /x", "--exec-path xp",
+    "--super-prefix=p/", "--super-prefix p/", "--super-prefix sp",
+    "--config-env=k=E", "--config-env k=E",
+    "--bare", "--no-pager", "--paginate", "--no-replace-objects",
+    "--literal-pathspecs", "--glob-pathspecs", "--noglob-pathspecs",
+    "--icase-pathspecs", "--no-optional-locks", "-p", "-P",
+    # real git options the shared enumeration omits, proven destructive
+    "--attr-source HEAD", "--attr-source ns", "--attr-source=HEAD",
+    "--shallow-file ns", "--shallow-file /tmp/sf",
+    "--no-lazy-fetch", "--no-advice",
+]
+
+
+@pytest.mark.parametrize("gopt", _AC18_ENUM_SPELLINGS)
+def test_AC18w_no_enumerated_option_spelling_is_lost(gopt):
+    """Behind a zero-invocation wrapper the occurrence grammar is the only
+    guard, so this is the direct test of whether the grammar still spans every
+    option spelling the shared enumeration spanned — plus the ones it never
+    did. A lowercase separate value (`--attr-source ns`) is included because
+    adversarial review proved exactly that spelling deletes."""
+    assert_clean_rule_denies("env -i git %s clean -fd" % gopt)
+
+
+@pytest.mark.parametrize("pathological", [
+    "git clean -n && git " + ("--namespace ns " * 24) + "zz",
+    "git clean -n && git " + ("--unk HEAD " * 24) + "zz",
+    "git clean -n && git " + ("-C /tmp " * 24) + "zz",
+    "git clean -n && git " + ("--namespace -C /tmp --unk H " * 12) + "zz",
+])
+def test_AC18x_option_run_cost_stays_linear(pathological):
+    """The occurrence grammar runs on EVERY Bash tool call, so an input that
+    makes it backtrack exponentially hangs the whole harness rather than merely
+    slowing a test. An earlier shape of this fix took 8.8s on twelve tokens and
+    over ten seconds on sixteen, against 0.0001s for both predecessors; the
+    branches are disjoint now. A hang shows up here as TimeoutExpired."""
+    proc = subprocess.run(
+        ["bash", HOOK],
+        input=json.dumps({"tool_name": "Bash",
+                          "tool_input": {"command": pathological},
+                          "session_id": fresh_sid()}),
+        text=True, capture_output=True, timeout=60,
+        env={k: v for k, v in os.environ.items() if k not in _HERMETIC_UNSET})
+    assert proc.returncode in (ALLOW, BLOCK)
+
+
 def test_AC18z_corpus_discriminates_against_a_grammar_relapse(tmp_path):
     """Proving a criterion against the PRE-EDIT hook alone is what let round 3
     certify a regression as a closure: the pre-edit hook failed the axis for a
