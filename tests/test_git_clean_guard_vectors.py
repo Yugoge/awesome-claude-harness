@@ -382,12 +382,32 @@ QA7_STDIN_IS_NOT_AN_ARGUMENT_SNAPSHOT = [
 # false of the SPACED payload word, so two cells of the grid were closed and the
 # third stayed open and deleting. Generated here rather than listed, so a cell
 # cannot go missing again — that omission was the whole defect.
-QA7_ENV_SEPARATOR_GRID_DENY = [
-    "env " + placement.format(v="'" + sep.join(("git", "clean", "-fd")) + "'")
-    for placement in ("-S{v}", "-vS{v}", "-iS{v}", "-S {v}", "-u FOO -S {v}",
-                      "-i -S {v}", "--split-string={v}", "--split-string {v}")
-    for sep in (" ", r"\_", r"\t", r"\n", r"\f", r"\r", r"\v")
-]
+_ENV_PLACEMENT_GRID = ("-S{v}", "-vS{v}", "-iS{v}", "-S {v}", "-u FOO -S {v}",
+                       "-i -S {v}", "--split-string={v}", "--split-string {v}")
+
+
+def _env_grid(separators):
+    return ["env " + placement.format(v="'" + sep.join(("git", "clean", "-fd")) + "'")
+            for placement in _ENV_PLACEMENT_GRID for sep in separators]
+
+
+# REQUIRED protections: measured with this lane's shell oracle, a real space and
+# `\_` are the separators env actually splits on, so every cell here is
+# shell-proven to execute a destructive clean and a NONE would be a live leak.
+QA7_ENV_SEPARATOR_GRID_DENY = _env_grid((" ", r"\_"))
+
+# DISCLOSED OVER-BLOCK, deliberately held apart from the group above so the
+# suite never presents a cost as a protection. `_ENV_S_SEPARATOR_RE` models all
+# six of env's escape characters, but measurement says only `\_` separates:
+# `env -S 'git\tclean\t-fd'` produced NO exec at all (the shim recorded nothing
+# and the planted file survived), because the escape yields a literal character
+# inside ONE word. Denying these therefore costs usability and protects nothing
+# HERE — but the broader model is kept on purpose, because whether a given env
+# build splits on those characters is a property of that build, and guessing
+# narrow would be the fail-OPEN direction. Pinned separately so that anyone who
+# later narrows the regex to `\_` alone reads this as a cost being removed
+# rather than a protection being deleted.
+QA7_ENV_OVERMODELLED_ESCAPES_DENY = _env_grid((r"\t", r"\n", r"\f", r"\r", r"\v"))
 
 
 @pytest.mark.parametrize("command", QA6_FUSED_OPTION_DENY)
