@@ -1661,14 +1661,19 @@ Fixed: <issues_fixed> | Skipped: <issues_skipped>
 
 Summary: docs/dev/overnight-summary-<date>.md
 Log: docs/dev/overnight-log-<date>.md
---- Worktree preserved for review ---
+--- Isolation: <isolation_kind> ---
 Branch: <worktree_branch>
 Path:   <worktree_path>
+<If isolation_kind != 'in_place', add the line: "--- Worktree preserved for review ---">
 
 To review changes:
-  git log $DEFAULT_BRANCH..<worktree_branch> --oneline
-  git diff $DEFAULT_BRANCH...<worktree_branch>
+  git log <base_ref>..<worktree_branch> --oneline
+  git diff <base_ref>...<worktree_branch>
+  (base_ref is $DEFAULT_BRANCH under registered_worktree / fresh_clone_checkout.
+   Under in_place the branch pre-dates the session, so use the first cycle
+   commit's parent — $DEFAULT_BRANCH would also list pre-session work.)
 
+<If isolation_kind != 'in_place', include:>
 To merge (when ready):
   /merge <worktree_branch>
 
@@ -1681,6 +1686,14 @@ To ship the worktree end-to-end after overnight completes, see the
 manually runs three independent commands in this order:
   /commit -m "<summary>"   (optional — only for master-side touch-ups)
   /merge <worktree_branch>
+  /push
+
+<If isolation_kind == 'in_place', include instead:>
+Nothing was created, so there is no worktree to preserve and no branch to merge —
+the cycle commits are already on <worktree_branch> in this checkout. To ship, see the
+"Post-loop manual flow (human-in-the-loop)" subsection below. The user
+manually runs two independent commands in this order:
+  /commit -m "<summary>"   (optional — only if work is left uncommitted)
   /push
 
 independent so the user can inspect state between each step.
