@@ -1842,7 +1842,7 @@ All artifact filenames are defined inline in their owning steps (Steps 4-13). Ti
 
 ## Quality Standards Enforcement
 
-Per-agent responsibilities are owned by `agents/<name>.md` (pm, product-owner, architect, user, ui-specialist, ba, dev, qa) — see those files for current contracts. Orchestrator-only obligations: PM explores via Playwright before writing the test plan; specialist prompts always include the test-plan path; all RELEVANT specialists execute the E2E flow before specialized analysis; ALL issues become parallel pipelines ordered by PM triage; cycle deduplication via `addressed_issues`; multi-session isolation via `session_id`-keyed state files.
+Per-agent responsibilities are owned by `agents/<name>.md` (pm, product-owner, architect, user, ui-specialist, ba, dev, qa) — see those files for current contracts. Orchestrator-only obligations: PM explores via Playwright before writing the test plan; specialist prompts always include the test-plan path; all RELEVANT specialists execute the E2E flow before specialized analysis; ALL issues become parallel pipelines ordered by PM triage; cycle deduplication via `addressed_issues`; per-session STATE isolation via `session_id`-keyed state files (working-tree isolation between concurrent sessions exists only under `--worktree`).
 
 ---
 
