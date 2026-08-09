@@ -317,8 +317,8 @@ When including `REQUIREMENT_DOC` in dispatch prompts, always substitute its reso
 When you see "OVERNIGHT CONTINUATION" injected by the prompt hook, you are in continuation mode with fresh context.
 
 **In continuation mode**:
-1. Perform the Step 1 **BINDING BLOCK** first — it binds `STATE_FILE`, `DEV_SESSION_ID` and `REGISTRY_DIR`, and a continuation has no other path to them. Then read the state file to determine `current_phase`
-2. Re-run `~/.claude/scripts/overnight-init.sh --state-file "$STATE_FILE"` (one call, idempotent — it restores any sentinel a cleanup step removed), then skip the rest of Step 1: the working root already exists and is never re-established
+1. Re-run the Step 1 **SESSION BINDING + ONE-CALL INITIALIZATION** block verbatim, as one Bash invocation — a continuation has no other path to `STATE_FILE`, `DEV_SESSION_ID` or `REGISTRY_DIR`, and the initializer is idempotent (it restores any sentinel a cleanup step removed). Then read the state file to determine `current_phase`
+2. Skip the rest of Step 1: the working root already exists and is never re-established
 3. Resume from the appropriate step based on current_phase:
    - `initializing` or `exploring` -> Step 2 (PM Plan)
    - `pipeline_creation` -> Step 6 (Create pipelines)
