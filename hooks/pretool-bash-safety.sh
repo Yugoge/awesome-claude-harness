@@ -1909,6 +1909,17 @@ _GC_PATH="(${_GC_NOSEP}/)?"
 # `-C "."` stopped being spannable, so the option and the subcommand fell into
 # different matches and `git -c "foo.bar=baz" clean -fd` became invisible.
 _GC_QVAL="[^[:space:];&|()\`]*"
+# A long option's SEPARATE value, for options no enumeration lists. The syntax
+# branch below may swallow one following bare token only when that token is
+# VALUE-shaped: it must carry at least one character a git subcommand name never
+# contains (`/ . = : ~ @ %`, an uppercase letter or a digit). That is what keeps
+# `git --attr-source HEAD clean -fd` — proven to delete at real git — an
+# occurrence while leaving `git --no-pager grep clean src/` a grep. The test is
+# a NEGATIVE one on the token's shape rather than a positive list of option
+# names: a subcommand this class fails to exclude costs an over-block, which is
+# fail-safe and grant-escapable, whereas the positive option lists that failed
+# in earlier rounds cost an ungranted deletion.
+_GC_VALTOK="([^-[:space:];&|()\`][^[:space:];&|()\`]*)?[/.=:~@%A-Z0-9][^[:space:];&|()\`]*"
 # Global-option segment for the OCCURRENCE grammar only, as a UNION of two
 # branches that cover different things and must BOTH be present:
 #
