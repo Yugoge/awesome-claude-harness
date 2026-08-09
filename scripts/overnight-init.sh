@@ -127,13 +127,25 @@ _mkdir_confined() {
   esac
 }
 _write_confined() {
-  # $1 = target path, stdin = content
+  # $1 = target path, stdin = content.
+  # In --verify-only this becomes an ASSERTION: the on-disk bytes must equal the
+  # bytes this run would have written. Same producer, same expression — so the
+  # oracle can never drift from the writer, and a verifier is never comparing
+  # against a digest the initializer itself recorded.
   local target="$1"
   _mkdir_confined "$(dirname "$target")"
   # A pre-existing symlink at the target would redirect the write regardless of
-  # how well the parent is confined. Refuse rather than follow it.
+  # how well the parent is confined. Refuse rather than follow it. In verify
+  # mode a symlinked artifact is equally disqualifying: the bytes read are not
+  # the bytes at the recorded path.
   [[ -L "$target" ]] && _die "refusing to write through a symlink: $target"
-  cat > "$target" || _die "failed to write $target"
+  if [[ "$VERIFY_ONLY" == "1" ]]; then
+    [[ -f "$target" ]] || _die "verify: missing artifact: $target"
+    diff -q - "$target" >/dev/null 2>&1 \
+      || _die "verify: content mismatch against the recomputed oracle: $target"
+  else
+    cat > "$target" || _die "failed to write $target"
+  fi
 }
 
 REGISTRY_DIR="$PROJECT_ROOT/.claude/dev-registry/$SESSION_ID"
