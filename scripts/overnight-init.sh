@@ -305,6 +305,18 @@ fi
 # --- 4. verbatim user-requirement document -----------------------------------
 # Source-of-truth anchor every subagent reads before any derived context. Written
 # from the record's own `focus` field, never from a re-typed paraphrase.
+# PLACEMENT IS DELIBERATE (main root, not the isolated working root). Dispatched
+# subagents run confined to worktree_path, so writing this under the main
+# checkout looks like a containment conflict. It is not: the boundary is
+# --ro-bind / / (guard _build_bwrap_argv), so the ENTIRE host stays READABLE and
+# only writes are refused, and every dispatch template substitutes the resolved
+# ABSOLUTE $REQUIREMENT_DOC rather than a working-root-relative path. Nothing
+# rewrites the document after initialization, so the write side never binds.
+# Mirroring a copy into the working root was considered and rejected: a
+# fresh_clone_checkout root is relocatable outside the main root via
+# OVERNIGHT_FRESH_CLONE_ROOT, where _assert_confined_dir would refuse it and
+# fail an otherwise-healthy launch, and the alternative silent skip would be a
+# fall-open in the one mode the mirror exists to serve.
 REQUIREMENT_DOC="$PROJECT_ROOT/docs/dev/user-requirement-$SESSION_ID.md"
 FOCUS=""
 [[ -n "$STATE_FILE" ]] && FOCUS="$(jq -r '.focus // empty' "$STATE_FILE")"
