@@ -158,7 +158,18 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd -P)"
 # would drift silently — a missing sentinel makes pretool-subagent-code-block.py
 # fall open for that agent, which is a security regression that produces no
 # error. Parsed with ast so the module is never imported (no side effects).
-AGENT_LIST="$(python3 - "$SCRIPT_DIR/../hooks/pretool-cp-checkin.py" <<'PYEOF' || true
+#
+# INTERPRETER PREFERENCE (should-have, deliberately not a hard gate). The managed
+# interpreter is tried FIRST, matching write-qa-mode.sh:31-33 and score-inject.sh.
+# It is a FALLBACK CHAIN, not a provenance requirement: an ambient python3 that
+# parses CP_AGENTS and yields fully validated artifacts is not an initialization
+# failure, and refusing it would PREVENT Step 1 from succeeding on hosts without
+# the managed venv. The fail-closed half — abort when NO interpreter can produce
+# the list — is the guard below and is unconditional.
+INIT_PYTHON="${CLAUDE_HOME:-$HOME/.claude}/venv/bin/python3"
+[[ -x "$INIT_PYTHON" ]] || INIT_PYTHON="$(command -v python3 || true)"
+[[ -n "$INIT_PYTHON" ]] || _die "no python3 interpreter available to read CP_AGENTS"
+AGENT_LIST="$("$INIT_PYTHON" - "$SCRIPT_DIR/../hooks/pretool-cp-checkin.py" <<'PYEOF' || true
 import ast, sys
 src = open(sys.argv[1], encoding='utf-8').read()
 tree = ast.parse(src)
