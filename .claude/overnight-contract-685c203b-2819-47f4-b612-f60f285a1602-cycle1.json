@@ -1,0 +1,581 @@
+{
+  "schema_version": 1,
+  "spec_id": "20260808-035658",
+  "session_id": "685c203b-2819-47f4-b612-f60f285a1602",
+  "cycle_id": 1,
+  "spec_mode": "user-provided",
+  "spec_path": "/dev/shm/dev-workspace/dot-claude/docs/dev/specs/spec-20260808-035658.md",
+  "created_at": "2026-08-09T10:21:17Z",
+  "monolith_sha256": "3adeffcc129724aa4f93a5e26432add56803fbf699f6cfd20eff573ceb96f33a",
+  "workflow_type": "general",
+  "trace_log_path": "docs/dev/overnight/685c203b-2819-47f4-b612-f60f285a1602/cycle-1/trace.jsonl",
+  "required_calls": [
+    {
+      "step": "8",
+      "role": "ba",
+      "mode": null,
+      "pipeline_id": "pipeline-0",
+      "expected_output_path": "docs/dev/context-20260809-102007-0.json",
+      "schema_name": "context.v1",
+      "max_retries": 3,
+      "must_run": true
+    },
+    {
+      "step": "8",
+      "role": "ba",
+      "mode": null,
+      "pipeline_id": "pipeline-1",
+      "expected_output_path": "docs/dev/context-20260809-102007-1.json",
+      "schema_name": "context.v1",
+      "max_retries": 3,
+      "must_run": true
+    },
+    {
+      "step": "8",
+      "role": "ba",
+      "mode": null,
+      "pipeline_id": "pipeline-2",
+      "expected_output_path": "docs/dev/context-20260809-102007-2.json",
+      "schema_name": "context.v1",
+      "max_retries": 3,
+      "must_run": true
+    },
+    {
+      "step": "8",
+      "role": "ba",
+      "mode": null,
+      "pipeline_id": "pipeline-3",
+      "expected_output_path": "docs/dev/context-20260809-102007-3.json",
+      "schema_name": "context.v1",
+      "max_retries": 3,
+      "must_run": true
+    },
+    {
+      "step": "8",
+      "role": "ba",
+      "mode": null,
+      "pipeline_id": "pipeline-4",
+      "expected_output_path": "docs/dev/context-20260809-102007-4.json",
+      "schema_name": "context.v1",
+      "max_retries": 3,
+      "must_run": true
+    },
+    {
+      "step": "8",
+      "role": "ba",
+      "mode": null,
+      "pipeline_id": "pipeline-5",
+      "expected_output_path": "docs/dev/context-20260809-102007-5.json",
+      "schema_name": "context.v1",
+      "max_retries": 3,
+      "must_run": true
+    },
+    {
+      "step": "8",
+      "role": "ba",
+      "mode": null,
+      "pipeline_id": "pipeline-6",
+      "expected_output_path": "docs/dev/context-20260809-102007-6.json",
+      "schema_name": "context.v1",
+      "max_retries": 3,
+      "must_run": true
+    },
+    {
+      "step": "8",
+      "role": "ba",
+      "mode": null,
+      "pipeline_id": "pipeline-7",
+      "expected_output_path": "docs/dev/context-20260809-102007-7.json",
+      "schema_name": "context.v1",
+      "max_retries": 3,
+      "must_run": true
+    },
+    {
+      "step": "8",
+      "role": "ba",
+      "mode": null,
+      "pipeline_id": "pipeline-8",
+      "expected_output_path": "docs/dev/context-20260809-102007-8.json",
+      "schema_name": "context.v1",
+      "max_retries": 3,
+      "must_run": true
+    },
+    {
+      "step": "8",
+      "role": "ba",
+      "mode": null,
+      "pipeline_id": "pipeline-9",
+      "expected_output_path": "docs/dev/context-20260809-102007-9.json",
+      "schema_name": "context.v1",
+      "max_retries": 3,
+      "must_run": true
+    },
+    {
+      "step": "8",
+      "role": "ba",
+      "mode": null,
+      "pipeline_id": "pipeline-10",
+      "expected_output_path": "docs/dev/context-20260809-102007-10.json",
+      "schema_name": "context.v1",
+      "max_retries": 3,
+      "must_run": true
+    },
+    {
+      "step": "11g",
+      "role": "graphify",
+      "mode": null,
+      "pipeline_id": null,
+      "expected_output_path": "docs/dev/overnight/685c203b-2819-47f4-b612-f60f285a1602/cycle-1/graphify-run.json",
+      "schema_name": "graphify-run.v1",
+      "max_retries": 0,
+      "must_run": true
+    },
+    {
+      "step": "12",
+      "role": "dev",
+      "mode": null,
+      "pipeline_id": "pipeline-0",
+      "expected_output_path": "docs/dev/dev-report-20260809-102007-0.json",
+      "schema_name": "dev-report.v1",
+      "max_retries": 3,
+      "must_run": true
+    },
+    {
+      "step": "12",
+      "role": "dev",
+      "mode": null,
+      "pipeline_id": "pipeline-1",
+      "expected_output_path": "docs/dev/dev-report-20260809-102007-1.json",
+      "schema_name": "dev-report.v1",
+      "max_retries": 3,
+      "must_run": true
+    },
+    {
+      "step": "12",
+      "role": "dev",
+      "mode": null,
+      "pipeline_id": "pipeline-2",
+      "expected_output_path": "docs/dev/dev-report-20260809-102007-2.json",
+      "schema_name": "dev-report.v1",
+      "max_retries": 3,
+      "must_run": true
+    },
+    {
+      "step": "12",
+      "role": "dev",
+      "mode": null,
+      "pipeline_id": "pipeline-3",
+      "expected_output_path": "docs/dev/dev-report-20260809-102007-3.json",
+      "schema_name": "dev-report.v1",
+      "max_retries": 3,
+      "must_run": true
+    },
+    {
+      "step": "12",
+      "role": "dev",
+      "mode": null,
+      "pipeline_id": "pipeline-4",
+      "expected_output_path": "docs/dev/dev-report-20260809-102007-4.json",
+      "schema_name": "dev-report.v1",
+      "max_retries": 3,
+      "must_run": true
+    },
+    {
+      "step": "12",
+      "role": "dev",
+      "mode": null,
+      "pipeline_id": "pipeline-5",
+      "expected_output_path": "docs/dev/dev-report-20260809-102007-5.json",
+      "schema_name": "dev-report.v1",
+      "max_retries": 3,
+      "must_run": true
+    },
+    {
+      "step": "12",
+      "role": "dev",
+      "mode": null,
+      "pipeline_id": "pipeline-6",
+      "expected_output_path": "docs/dev/dev-report-20260809-102007-6.json",
+      "schema_name": "dev-report.v1",
+      "max_retries": 3,
+      "must_run": true
+    },
+    {
+      "step": "12",
+      "role": "dev",
+      "mode": null,
+      "pipeline_id": "pipeline-7",
+      "expected_output_path": "docs/dev/dev-report-20260809-102007-7.json",
+      "schema_name": "dev-report.v1",
+      "max_retries": 3,
+      "must_run": true
+    },
+    {
+      "step": "12",
+      "role": "dev",
+      "mode": null,
+      "pipeline_id": "pipeline-8",
+      "expected_output_path": "docs/dev/dev-report-20260809-102007-8.json",
+      "schema_name": "dev-report.v1",
+      "max_retries": 3,
+      "must_run": true
+    },
+    {
+      "step": "12",
+      "role": "dev",
+      "mode": null,
+      "pipeline_id": "pipeline-9",
+      "expected_output_path": "docs/dev/dev-report-20260809-102007-9.json",
+      "schema_name": "dev-report.v1",
+      "max_retries": 3,
+      "must_run": true
+    },
+    {
+      "step": "12",
+      "role": "dev",
+      "mode": null,
+      "pipeline_id": "pipeline-10",
+      "expected_output_path": "docs/dev/dev-report-20260809-102007-10.json",
+      "schema_name": "dev-report.v1",
+      "max_retries": 3,
+      "must_run": true
+    },
+    {
+      "step": "15",
+      "role": "qa",
+      "mode": null,
+      "pipeline_id": "pipeline-0",
+      "expected_output_path": "docs/dev/qa-report-20260809-102007-0.json",
+      "schema_name": "qa-report.v1",
+      "max_retries": 3,
+      "must_run": true
+    },
+    {
+      "step": "15",
+      "role": "qa",
+      "mode": null,
+      "pipeline_id": "pipeline-1",
+      "expected_output_path": "docs/dev/qa-report-20260809-102007-1.json",
+      "schema_name": "qa-report.v1",
+      "max_retries": 3,
+      "must_run": true
+    },
+    {
+      "step": "15",
+      "role": "qa",
+      "mode": null,
+      "pipeline_id": "pipeline-2",
+      "expected_output_path": "docs/dev/qa-report-20260809-102007-2.json",
+      "schema_name": "qa-report.v1",
+      "max_retries": 3,
+      "must_run": true
+    },
+    {
+      "step": "15",
+      "role": "qa",
+      "mode": null,
+      "pipeline_id": "pipeline-3",
+      "expected_output_path": "docs/dev/qa-report-20260809-102007-3.json",
+      "schema_name": "qa-report.v1",
+      "max_retries": 3,
+      "must_run": true
+    },
+    {
+      "step": "15",
+      "role": "qa",
+      "mode": null,
+      "pipeline_id": "pipeline-4",
+      "expected_output_path": "docs/dev/qa-report-20260809-102007-4.json",
+      "schema_name": "qa-report.v1",
+      "max_retries": 3,
+      "must_run": true
+    },
+    {
+      "step": "15",
+      "role": "qa",
+      "mode": null,
+      "pipeline_id": "pipeline-5",
+      "expected_output_path": "docs/dev/qa-report-20260809-102007-5.json",
+      "schema_name": "qa-report.v1",
+      "max_retries": 3,
+      "must_run": true
+    },
+    {
+      "step": "15",
+      "role": "qa",
+      "mode": null,
+      "pipeline_id": "pipeline-6",
+      "expected_output_path": "docs/dev/qa-report-20260809-102007-6.json",
+      "schema_name": "qa-report.v1",
+      "max_retries": 3,
+      "must_run": true
+    },
+    {
+      "step": "15",
+      "role": "qa",
+      "mode": null,
+      "pipeline_id": "pipeline-7",
+      "expected_output_path": "docs/dev/qa-report-20260809-102007-7.json",
+      "schema_name": "qa-report.v1",
+      "max_retries": 3,
+      "must_run": true
+    },
+    {
+      "step": "15",
+      "role": "qa",
+      "mode": null,
+      "pipeline_id": "pipeline-8",
+      "expected_output_path": "docs/dev/qa-report-20260809-102007-8.json",
+      "schema_name": "qa-report.v1",
+      "max_retries": 3,
+      "must_run": true
+    },
+    {
+      "step": "15",
+      "role": "qa",
+      "mode": null,
+      "pipeline_id": "pipeline-9",
+      "expected_output_path": "docs/dev/qa-report-20260809-102007-9.json",
+      "schema_name": "qa-report.v1",
+      "max_retries": 3,
+      "must_run": true
+    },
+    {
+      "step": "15",
+      "role": "qa",
+      "mode": null,
+      "pipeline_id": "pipeline-10",
+      "expected_output_path": "docs/dev/qa-report-20260809-102007-10.json",
+      "schema_name": "qa-report.v1",
+      "max_retries": 3,
+      "must_run": true
+    }
+  ],
+  "pipelines": {
+    "pipeline-0": {
+      "ba_status": "pending",
+      "dev_status": "pending",
+      "qa_status": "pending",
+      "artifact_paths": {
+        "ba": "docs/dev/context-20260809-102007-0.json",
+        "dev": "docs/dev/dev-report-20260809-102007-0.json",
+        "qa": "docs/dev/qa-report-20260809-102007-0.json"
+      },
+      "tier": 1,
+      "issue_summary": "Session/role scratch namespace, lifecycle ownership, safe cleanup, checkpoint resource cloning, and allocation locking.",
+      "lane_id": "LANE-B",
+      "target_layer": "L5",
+      "ui_evidence_required": false
+    },
+    "pipeline-1": {
+      "ba_status": "pending",
+      "dev_status": "pending",
+      "qa_status": "pending",
+      "artifact_paths": {
+        "ba": "docs/dev/context-20260809-102007-1.json",
+        "dev": "docs/dev/dev-report-20260809-102007-1.json",
+        "qa": "docs/dev/qa-report-20260809-102007-1.json"
+      },
+      "tier": 1,
+      "issue_summary": "Resolver and aggregate family: honest singular/fanout/parallel-dev shapes, explicit roots, task scoping, sibling resolution, parent close semantics, and sequential/parallel baseline policy.",
+      "lane_id": "LANE-R1",
+      "target_layer": "L4",
+      "ui_evidence_required": false
+    },
+    "pipeline-2": {
+      "ba_status": "pending",
+      "dev_status": "pending",
+      "qa_status": "pending",
+      "artifact_paths": {
+        "ba": "docs/dev/context-20260809-102007-2.json",
+        "dev": "docs/dev/dev-report-20260809-102007-2.json",
+        "qa": "docs/dev/qa-report-20260809-102007-2.json"
+      },
+      "tier": 1,
+      "issue_summary": "Derived lifecycle scanner, Unfuddle-style status table, /tickets rendering, and sequential --auto close/commit over terminal-aware chains.",
+      "lane_id": "LANE-L",
+      "target_layer": "L4",
+      "ui_evidence_required": false
+    },
+    "pipeline-3": {
+      "ba_status": "pending",
+      "dev_status": "pending",
+      "qa_status": "pending",
+      "artifact_paths": {
+        "ba": "docs/dev/context-20260809-102007-3.json",
+        "dev": "docs/dev/dev-report-20260809-102007-3.json",
+        "qa": "docs/dev/qa-report-20260809-102007-3.json"
+      },
+      "tier": 1,
+      "issue_summary": "Audited --fix executor grounded in the historical close/commit failure catalog, with integrity classes permanently unskippable.",
+      "lane_id": "LANE-F",
+      "target_layer": "L4",
+      "ui_evidence_required": false
+    },
+    "pipeline-4": {
+      "ba_status": "pending",
+      "dev_status": "pending",
+      "qa_status": "pending",
+      "artifact_paths": {
+        "ba": "docs/dev/context-20260809-102007-4.json",
+        "dev": "docs/dev/dev-report-20260809-102007-4.json",
+        "qa": "docs/dev/qa-report-20260809-102007-4.json"
+      },
+      "tier": 1,
+      "issue_summary": "Structured restart terminal classifier and durable human-audited unrecoverable absorbing state.",
+      "lane_id": "LANE-RS",
+      "target_layer": "L4",
+      "ui_evidence_required": false
+    },
+    "pipeline-5": {
+      "ba_status": "pending",
+      "dev_status": "pending",
+      "qa_status": "pending",
+      "artifact_paths": {
+        "ba": "docs/dev/context-20260809-102007-5.json",
+        "dev": "docs/dev/dev-report-20260809-102007-5.json",
+        "qa": "docs/dev/qa-report-20260809-102007-5.json"
+      },
+      "tier": 1,
+      "issue_summary": "Harness-enforceable policy contradictions, browser/network role capability gaps, false-positive guards, and project-root consistency.",
+      "lane_id": "LANE-POL",
+      "target_layer": "L5",
+      "ui_evidence_required": false
+    },
+    "pipeline-6": {
+      "ba_status": "pending",
+      "dev_status": "pending",
+      "qa_status": "pending",
+      "artifact_paths": {
+        "ba": "docs/dev/context-20260809-102007-6.json",
+        "dev": "docs/dev/dev-report-20260809-102007-6.json",
+        "qa": "docs/dev/qa-report-20260809-102007-6.json"
+      },
+      "tier": 1,
+      "issue_summary": "Spec-update update/continue dual purpose and removal of migration history from command policy text.",
+      "lane_id": "LANE-SU",
+      "target_layer": "L4",
+      "ui_evidence_required": false
+    },
+    "pipeline-7": {
+      "ba_status": "pending",
+      "dev_status": "pending",
+      "qa_status": "pending",
+      "artifact_paths": {
+        "ba": "docs/dev/context-20260809-102007-7.json",
+        "dev": "docs/dev/dev-report-20260809-102007-7.json",
+        "qa": "docs/dev/qa-report-20260809-102007-7.json"
+      },
+      "tier": 1,
+      "issue_summary": "SubagentStop dispatch binding, qa_mode sentinel removal, and worktree-to-main registry fail-open closure.",
+      "lane_id": "LANE-BIND",
+      "target_layer": "L5",
+      "ui_evidence_required": false
+    },
+    "pipeline-8": {
+      "ba_status": "pending",
+      "dev_status": "pending",
+      "qa_status": "pending",
+      "artifact_paths": {
+        "ba": "docs/dev/context-20260809-102007-8.json",
+        "dev": "docs/dev/dev-report-20260809-102007-8.json",
+        "qa": "docs/dev/qa-report-20260809-102007-8.json"
+      },
+      "tier": 1,
+      "issue_summary": "Deterministic report_version projection for lifecycle and aggregate consumers.",
+      "lane_id": "LANE-SCHEMA",
+      "target_layer": "L3",
+      "ui_evidence_required": false
+    },
+    "pipeline-9": {
+      "ba_status": "pending",
+      "dev_status": "pending",
+      "qa_status": "pending",
+      "artifact_paths": {
+        "ba": "docs/dev/context-20260809-102007-9.json",
+        "dev": "docs/dev/dev-report-20260809-102007-9.json",
+        "qa": "docs/dev/qa-report-20260809-102007-9.json"
+      },
+      "tier": 1,
+      "issue_summary": "Repository lease with TTL and HEAD-CAS enforcement points.",
+      "lane_id": "LANE-LEASE",
+      "target_layer": "L5",
+      "ui_evidence_required": false
+    },
+    "pipeline-10": {
+      "ba_status": "pending",
+      "dev_status": "pending",
+      "qa_status": "pending",
+      "artifact_paths": {
+        "ba": "docs/dev/context-20260809-102007-10.json",
+        "dev": "docs/dev/dev-report-20260809-102007-10.json",
+        "qa": "docs/dev/qa-report-20260809-102007-10.json"
+      },
+      "tier": 1,
+      "issue_summary": "Artifact round markers, symlink-following negative-evidence discipline, todo accounting text, and verified documentation cleanup.",
+      "lane_id": "LANE-DOC",
+      "target_layer": "L1",
+      "ui_evidence_required": false
+    }
+  },
+  "specialist_selection": {
+    "ui-specialist": {
+      "decision": "skip",
+      "reason": "No UI surface in the user spec.",
+      "scope": {},
+      "budget": {
+        "max_pages": 0,
+        "max_viewports": 0,
+        "max_minutes": 0
+      }
+    },
+    "architect": {
+      "decision": "skip",
+      "reason": "Architecture and lane boundaries are already fixed by the spec.",
+      "scope": {},
+      "budget": {
+        "max_pages": 0,
+        "max_viewports": 0,
+        "max_minutes": 0
+      }
+    },
+    "product-owner": {
+      "decision": "skip",
+      "reason": "BA owns the prevalidated acceptance contract.",
+      "scope": {},
+      "budget": {
+        "max_pages": 0,
+        "max_viewports": 0,
+        "max_minutes": 0
+      }
+    },
+    "user": {
+      "decision": "skip",
+      "reason": "No browser journey; CLI core flow is verified by QA.",
+      "scope": {},
+      "budget": {
+        "max_pages": 0,
+        "max_viewports": 0,
+        "max_minutes": 0
+      }
+    }
+  },
+  "governance": {
+    "single_spec": true,
+    "single_orchestrator": true,
+    "close_scope": "one_parent_close_per_parent_task",
+    "commit_scope": "one_parent_commit_after_parent_close"
+  },
+  "dependency_edges": [
+    {
+      "consumer": "pipeline-3",
+      "provider": "pipeline-1",
+      "type": "hard_dev_dispatch_gate"
+    },
+    {
+      "consumer": "pipeline-2",
+      "provider": "pipeline-1",
+      "type": "stub_start_integration_gate"
+    }
+  ]
+}
