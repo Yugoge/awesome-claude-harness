@@ -2280,22 +2280,24 @@ fi
 # Consulted ONLY on the verge of denying, so the ordinary subagent command pays
 # no extra subprocess for a grant lookup it will never use.
 #
-# KNOWN RESIDUAL (codex 2026-08-08, finding 4): the flag is read HERE and read
-# again by the downstream exit. It is mutable (stop-cleanup-allowlist.sh unlinks
-# it), so a clean that passes the first read and loses the second would reach
-# the terminal default-allow having passed NO snapshot guard. The remedy is to
-# act on the first observation here (_preclean_snapshot_guard; exit 0) instead
-# of falling through; that edit was written, then withheld pending explicit
-# human authorization because it adds an exit path to this guard.
-_GIT_CLEAN_SUBAGENT_GRANT=0
+# SINGLE READ (authorized 2026-08-09; closes codex 2026-08-08 finding 4). The
+# marker is mutable — stop-cleanup-allowlist.sh unlinks it — so it is observed
+# ONCE and acted on at that observation. This branch used to set a flag and
+# fall through to the subagent-history block, which re-read the marker; a clean
+# that passed the first read and lost the second reached the terminal
+# default-allow having passed NO snapshot guard and no deny. Acting here does
+# not shorten that interval, it removes it: the downstream re-read is now
+# unreachable for a destructive clean. Same destination — grant exit 4 of 4
+# runs this identical guard and exits 0, and nothing executes in between.
 if [ "$_GIT_CLEAN_WOULD_BLOCK" = "1" ] && [ "$IS_SUBAGENT" = "1" ]; then
   _GC_SID=$(echo "$INPUT" | "$PYTHON_BIN" -c \
     "import json,sys; d=json.load(sys.stdin); print(d.get('session_id',''))" 2>/dev/null)
   if [ -n "$_GC_SID" ] && [ -e "/tmp/claude-orchestrator-consent-${_GC_SID}.flag" ]; then
-    _GIT_CLEAN_SUBAGENT_GRANT=1
+    _preclean_snapshot_guard
+    exit 0
   fi
 fi
-if [ "$_GIT_CLEAN_WOULD_BLOCK" = "1" ] && [ "$_GIT_CLEAN_SUBAGENT_GRANT" != "1" ]; then
+if [ "$_GIT_CLEAN_WOULD_BLOCK" = "1" ]; then
   echo "BLOCKED: destructive 'git clean' is forbidden in agent flow" >&2
   echo "Command: $COMMAND" >&2
   echo "REASON: git clean removes UNTRACKED files — no rm, no reflog, no reachable git object, so the deletion is unrecoverable and leaves no trace. Uncommitted work-in-progress has been lost this way." >&2
