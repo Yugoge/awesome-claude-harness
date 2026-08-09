@@ -52,13 +52,40 @@ terminal path - an unresolved command word, an exhausted recursion budget, a
 raised exception - ends in DENY. That is what covers the carrier nobody has
 thought of yet; the measured list below is evidence, not the guarantee.
 
-MEASURED NOT PROTECTED - declared residuals, both owned outside this lane:
+MEASURED NOT PROTECTED - declared residuals:
   - Ignored-file (`-x`/`-X`) CONTENT; the snapshot still fires for `-x` cleans
     so untracked-non-ignored WIP is preserved.
-  - A command word that exists only after EXPANSION (`$GIT clean -fd`, an
-    `alias.wipe=clean` indirection) is not statically reducible and yields
-    NONE - the accepted CX-2/CX-3 residuals, which live in the shared
-    classification layer, not in this grant-residual lane.
+  - A command word whose value arrives from the ENVIRONMENT or from an earlier
+    process (`$GITX clean -fd`) carries no static text at all. THAT bound is
+    real undecidability and it survives.
+  - THREE further carriers below are NOT undecidable. Each is statically
+    present in the command text and reducible in principle, this module simply
+    does not reduce it yet, and each reaches THIS module on the GRANTED path:
+    measured NONE, exit 0 and no checkpoint on all four grant channels, with
+    the planted incident-class file destroyed in situ. They are out of scope by
+    REQUIREMENT-OWNER SCOPE AMENDMENT 2026-08-09 (AC16 check.excluded_carriers),
+    a scope decision and not a statement about what is knowable, and they are
+    routed to a dedicated follow-up cycle:
+      X1 GIT ALIAS - the invoked word is an alias NAME and the clean is produced
+         by git's own alias expansion, whether defined inline
+         (`-c alias.NAME=...`), installed by a `git config` earlier in the same
+         command text, or already stored in configuration. Two reducer causes: a
+         bang GLUED to the command word defeats the exact basename test (which
+         is why the standalone `! git clean -fd` correctly snapshots and the
+         glued spelling does not), and a plain alias VALUE is a git argv with
+         the git word implicit.
+      X2 DASHED STANDALONE PROGRAM - the command word is git's dashed
+         subcommand executable for clean, bare (`git-clean -fd`), path-qualified
+         into git's exec-path, or behind an inert prefix, so no `git` word and
+         no separate `clean` subcommand word occupies a command position.
+      X3 EXPANSION-ASSEMBLED WORD, decidable half only - the assignment sits in
+         the SAME command text (`g=git; c=clean; $g $c -fd`), so constant
+         propagation would reduce it. The environment-sourced half is the
+         genuine undecidability bound listed above.
+    The exclusion is CONDITIONAL. All three stay in the corpus tagged
+    EXCLUDED_BY_AC16 with that date, ground-truthed and reported on every run,
+    recorded rather than scored; any spelling ever measured non-NONE is promoted
+    straight back into AC16 part 1 and its exclusion entry deleted.
 
 MEASURED PROTECTED, by carrier family, against the GENERATED cross-product in
 tests/generated/dev-20260719-150041-c/test_AC21_*.py - whose rows survive only
