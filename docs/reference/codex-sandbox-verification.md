@@ -5,12 +5,18 @@
 **Deliverable**: investigation report. No source or config file modified by this lane.
 
 > **Redaction note.** This document ships in the public-core release set, where
-> `scripts/check-public-core.sh` hard-gates the maintainer's absolute workspace path with no
-> exemption. Every occurrence of that path — including inside the quoted runtime banner and the
-> quoted rollout JSON below — has been replaced by the placeholder `$REPO_ROOT`. The quoted
-> blocks are otherwise verbatim; `$REPO_ROOT` stands for the absolute path that
-> `git rev-parse --show-toplevel` returns for this checkout, which is also the value the codex
-> runtime reported as its `workdir`. Nothing else in the evidence was altered.
+> `scripts/check-public-core.sh` hard-gates two classes of absolute path with no exemption: the
+> maintainer's workspace root, and author-home literals. Both have been replaced by placeholders
+> throughout — **including inside the quoted runtime banner and the quoted rollout JSON below**:
+>
+> | Placeholder | Stands for |
+> |---|---|
+> | `$REPO_ROOT` | the absolute path `git rev-parse --show-toplevel` returns for this checkout — also the value the codex runtime reported as its `workdir` |
+> | `$HOME` | the home directory of the account this harness runs as |
+>
+> The quoted blocks are otherwise verbatim and nothing else in the evidence was altered. The
+> `$HOME` form is also the more accurate citation: the launcher itself resolves its wrapper via
+> the parameter expansion `${CODEX_ISO_BIN:-$HOME/bin/codex-iso}` rather than a hardcoded path.
 
 ## Verdict
 
