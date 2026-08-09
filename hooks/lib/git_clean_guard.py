@@ -364,17 +364,42 @@ def _lex(text: str):
 
 def _split_segments(tokens):
     """Split the token stream into command segments on shell separators,
-    dropping redirection operators and their operands."""
-    segments, current = [], []
+    dropping redirection operators and their FILE operands.
+
+    A here-string / heredoc operand is NOT dropped. `bash <<< '<payload>'` runs
+    the payload exactly as `bash -c '<payload>'` does, and discarding it made the
+    command reduce to nothing at all: eleven spellings reached a grant exit with
+    verdict NONE and no snapshot. The heredoc form of the same command already
+    snapshotted correctly, because its newline split the body into its own
+    segment - one spelling of a family handled and its sibling not, which marks
+    this a lexer-coverage gap rather than a policy.
+
+    The operand becomes its OWN segment rather than an extra word of the command
+    it feeds, and that distinction is load-bearing in the fail-closed direction.
+    Appending would hand its text to `_is_dry_run` as though it were an argument,
+    so `git clean -fd <<< '-n'` - which really deletes, because git ignores its
+    stdin - would read as a proven dry run and LOSE the snapshot it gets today.
+    stdin content is a command string, never an argument.
+
+    Deliberately NOT keyed on whether the command word is a shell: deciding which
+    programs execute their stdin is the enumeration mistake in a new costume. The
+    operand is scanned like any other unprovable region, so one that reduces to a
+    destructive clean denies wherever it sits and an inert one costs nothing."""
+    segments, current, stdin_scripts = [], [], []
     for kind, payload in tokens:
         if kind == "op":
             segments.append(current)
             current = []
             continue
-        if kind == "redir" or payload.redir_target:
+        if kind == "redir":
+            continue
+        if payload.redir_target:
+            if payload.stdin_script:
+                stdin_scripts.append([payload])
             continue
         current.append(payload)
     segments.append(current)
+    segments.extend(stdin_scripts)
     return [seg for seg in segments if seg]
 
 
