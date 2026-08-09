@@ -345,7 +345,13 @@ _render_requirement_doc() {
       ' "$SPEC_ABS"
     fi
   fi
-} | _write_confined "$REQUIREMENT_DOC"
+}
+_render_requirement_doc | _write_confined "$REQUIREMENT_DOC"
+# Re-read what is ON DISK and compare it to a freshly recomputed render. In
+# mutating mode this catches a short or redirected write; in verify mode it is
+# the oracle AC-1 requires. Recomputed, never trusted.
+_render_requirement_doc | diff -q - "$REQUIREMENT_DOC" >/dev/null 2>&1 \
+  || _die "requirement document does not match the recomputed oracle: $REQUIREMENT_DOC"
 
 # --- summary ------------------------------------------------------------------
 echo "SESSION_ID=$SESSION_ID"
