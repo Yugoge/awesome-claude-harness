@@ -930,6 +930,7 @@ def commit_overnight_delivery(session_id: str, emitted: str) -> bool:
                 'spec_fingerprint': _spec_fingerprint(),
                 'transcript_path': transcript_path,
                 'transcript_offset': _transcript_size(transcript_path),
+                'transcript_inode': _transcript_inode(transcript_path),
                 'epoch_reading': OVERNIGHT_EPOCH_READING,
                 'delivered_at': datetime.now(timezone.utc).strftime(
                     '%Y-%m-%dT%H:%M:%SZ'
