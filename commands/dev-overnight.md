@@ -304,7 +304,7 @@ Omit that line for any agent with no cp-state file. This gives overnight special
 
 **T1.7 (redev-tier123) — Orchestrator-view + Section 5 read MANDATE**: When `SPEC_ID` is non-empty, BEFORE composing any subagent dispatch prompt, you MUST read the orchestrator view the resolver located — `$CLAUDE_PROJECT_DIR/$VIEWS_DIR/orchestrator.md` (views live under `docs/dev/specs/<artifact_id>/views/`, NOT under `.claude/specs/`) — AND the spec's Section 5 (User's Acceptance Criterion) verbatim from `$USER_SPEC_PATH`. Quote the user's words from Section 5 directly into every dispatch prompt; do not paraphrase or summarize. The user's verbatim need is the binding contract — every subagent must see the user's literal request, not your reformulation. `overnight-init.sh` has already copied Section 5 into `REQUIREMENT_DOC`, so read it from there rather than re-slicing the spec.
 
-When including `REQUIREMENT_DOC` in dispatch prompts, always substitute its resolved value — MUST NOT pass literal `<PROJECT_ROOT>` or `<DEV_SESSION_ID>` placeholders to subagents.
+When including `REQUIREMENT_DOC` in dispatch prompts, always substitute its resolved value — MUST NOT pass literal `<PROJECT_ROOT>` or `<DEV_SESSION_ID>` placeholders to subagents. `<PROJECT_ROOT>` resolves to `worktree_path` from the state file (the same working root the `cd` above targets); `$REQUIREMENT_DOC` is the already-resolved requirement-document path emitted by the initialization call, so the dispatch templates below consume it directly instead of rebuilding the path from a placeholder.
 
 ---
 
