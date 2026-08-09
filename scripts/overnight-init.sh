@@ -108,7 +108,15 @@ _assert_confined_dir() {
 _mkdir_confined() {
   local dir="$1" resolved
   _assert_confined_dir "$dir"
-  mkdir -p "$dir" || _die "failed to create $dir"
+  # --verify-only performs ZERO writes: `mkdir -p` on an existing directory is a
+  # silent no-op even on a read-only mount, so calling it here would look
+  # harmless while still being a write ATTEMPT the actor must not make. The
+  # directory is asserted to exist instead.
+  if [[ "$VERIFY_ONLY" == "1" ]]; then
+    [[ -d "$dir" ]] || _die "verify: directory does not exist: $dir"
+  else
+    mkdir -p "$dir" || _die "failed to create $dir"
+  fi
   # Re-check the now-existing directory: the walk above validated the deepest
   # ancestor that existed at the time, which does not by itself prove the newly
   # created leaf resolves inside (a concurrent symlink swap would).
