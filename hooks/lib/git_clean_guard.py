@@ -134,12 +134,14 @@ _MAX_EMBED_DEPTH = 3
 class _Word:
     """One static shell word plus the provenance the predicates need."""
 
-    __slots__ = ("text", "dynamic", "redir_target")
+    __slots__ = ("text", "dynamic", "redir_target", "stdin_script")
 
     def __init__(self, text, dynamic=False, redir_target=False):
         self.text = text
         self.dynamic = dynamic
         self.redir_target = redir_target
+        # True only for a here-string/heredoc operand: stdin CONTENT, not a file.
+        self.stdin_script = False
 
     def __repr__(self):  # pragma: no cover - debugging aid
         return f"_Word({self.text!r}, dynamic={self.dynamic})"
