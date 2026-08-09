@@ -1768,7 +1768,15 @@ fi
 # arguments when normalization succeeds and remains raw (fail-closed) if its
 # own helper is unavailable.  The fallback token explicitly accepts both bare
 # and path-qualified git executables.
-GIT_GLOBAL_OPT_RE='([[:space:]]+(-[Cc][[:space:]]+[^[:space:];|&]+|-[Cc][^[:space:];|&]+|--(git-dir|work-tree|namespace|exec-path|super-prefix|config-env)(=[^[:space:];|&]+|[[:space:]]+[^[:space:];|&]+)|--(bare|no-pager|paginate|no-replace-objects|literal-pathspecs|glob-pathspecs|noglob-pathspecs|icase-pathspecs|no-optional-locks)|-[pP]))*'
+# The INNER alternation is factored out so the clean rule's occurrence grammar
+# can UNION it with a syntax-shaped branch instead of hand-shaping a substitute.
+# Hand-shaping is what opened 89 destructive spellings last round: the substitute
+# silently dropped this enumeration's SEPARATE-value (`--namespace ns`) and
+# QUOTED-value (`-c "k=v"`, `-C "."`) branches. GIT_GLOBAL_OPT_RE's VALUE is
+# unchanged byte for byte by this factoring, so the reset-block fallback below
+# and every other consumer keep exactly the surface they had.
+GIT_GLOBAL_OPT_ALT='-[Cc][[:space:]]+[^[:space:];|&]+|-[Cc][^[:space:];|&]+|--(git-dir|work-tree|namespace|exec-path|super-prefix|config-env)(=[^[:space:];|&]+|[[:space:]]+[^[:space:];|&]+)|--(bare|no-pager|paginate|no-replace-objects|literal-pathspecs|glob-pathspecs|noglob-pathspecs|icase-pathspecs|no-optional-locks)|-[pP]'
+GIT_GLOBAL_OPT_RE="([[:space:]]+(${GIT_GLOBAL_OPT_ALT}))*"
 GIT_CMD_RE='(^|[[:space:];&|()`])git'"$GIT_GLOBAL_OPT_RE"'[[:space:]]+'
 GIT_FALLBACK_CMD_RE='(^|[[:space:];&|()`])([^[:space:];&|()`]*/)?git'"$GIT_GLOBAL_OPT_RE"'[[:space:]]+'
 _CLASSIFIED_RESET_HARD=0
