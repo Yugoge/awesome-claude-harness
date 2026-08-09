@@ -1775,7 +1775,13 @@ fi
 # QUOTED-value (`-c "k=v"`, `-C "."`) branches. GIT_GLOBAL_OPT_RE's VALUE is
 # unchanged byte for byte by this factoring, so the reset-block fallback below
 # and every other consumer keep exactly the surface they had.
-GIT_GLOBAL_OPT_ALT='-[Cc][[:space:]]+[^[:space:];|&]+|-[Cc][^[:space:];|&]+|--(git-dir|work-tree|namespace|exec-path|super-prefix|config-env)(=[^[:space:];|&]+|[[:space:]]+[^[:space:];|&]+)|--(bare|no-pager|paginate|no-replace-objects|literal-pathspecs|glob-pathspecs|noglob-pathspecs|icase-pathspecs|no-optional-locks)|-[pP]'
+# The names of the long global options that TAKE A VALUE are factored out on
+# their own line as well, because the clean rule needs exactly that set — the
+# only options for which a following bare word is a value rather than the
+# subcommand. Sharing the names keeps `--no-pager grep clean src/` a grep while
+# `--namespace ns clean -fd` is an occurrence, without a second copy of the list.
+GIT_GLOBAL_VALOPT_NAMES='git-dir|work-tree|namespace|exec-path|super-prefix|config-env'
+GIT_GLOBAL_OPT_ALT="-[Cc][[:space:]]+[^[:space:];|&]+|-[Cc][^[:space:];|&]+|--(${GIT_GLOBAL_VALOPT_NAMES})(=[^[:space:];|&]+|[[:space:]]+[^[:space:];|&]+)|--(bare|no-pager|paginate|no-replace-objects|literal-pathspecs|glob-pathspecs|noglob-pathspecs|icase-pathspecs|no-optional-locks)|-[pP]"
 GIT_GLOBAL_OPT_RE="([[:space:]]+(${GIT_GLOBAL_OPT_ALT}))*"
 GIT_CMD_RE='(^|[[:space:];&|()`])git'"$GIT_GLOBAL_OPT_RE"'[[:space:]]+'
 GIT_FALLBACK_CMD_RE='(^|[[:space:];&|()`])([^[:space:];&|()`]*/)?git'"$GIT_GLOBAL_OPT_RE"'[[:space:]]+'
