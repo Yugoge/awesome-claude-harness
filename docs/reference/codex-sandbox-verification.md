@@ -4,6 +4,14 @@
 **Verified against live files**: 2026-08-08 | **Repo**: `$REPO_ROOT` @ `1a59a667`
 **Deliverable**: investigation report. No source or config file modified by this lane.
 
+> **Redaction note.** This document ships in the public-core release set, where
+> `scripts/check-public-core.sh` hard-gates the maintainer's absolute workspace path with no
+> exemption. Every occurrence of that path — including inside the quoted runtime banner and the
+> quoted rollout JSON below — has been replaced by the placeholder `$REPO_ROOT`. The quoted
+> blocks are otherwise verbatim; `$REPO_ROOT` stands for the absolute path that
+> `git rev-parse --show-toplevel` returns for this checkout, which is also the value the codex
+> runtime reported as its `workdir`. Nothing else in the evidence was altered.
+
 ## Verdict
 
 **YES — codex CAN write and delete files in this repository.** It runs under
