@@ -1968,24 +1968,28 @@ _GC_VALTOK="(${_GC_PLAINTOK})?[${_GC_VMARK}][^[:space:];&|()\`]*"
 # optional suffix into its own alternative makes each token's parse unique.
 # GIT_GLOBAL_OPT_RE itself is still not touched: only its inner alternation is
 # reused, and that variable's value is byte-identical to before the factoring.
-#   (4) an option token followed by a PLAIN separate value — the one shape
+#   (4) a VALUE-TAKING option followed by a PLAIN separate value — the one shape
 #       branches 2 and 3 cannot reach, e.g. `--namespace ns` or `-C tmp`, whose
-#       value carries no marker character at all.
+#       value carries no marker character at all. The option NAMES come from the
+#       shared ${GIT_GLOBAL_VALOPT_NAMES}, so this is not a second copy of the
+#       list; restricting branch 4 to them is what keeps `--no-pager grep clean
+#       src/` a grep, since `--no-pager` takes no value and `grep` is therefore
+#       the subcommand rather than a value.
 #
-# Why the shared ${GIT_GLOBAL_OPT_ALT} is NOT interpolated here after all, and
-# what replaces the guarantee it was carrying: its separate-value class
+# Why the shared ${GIT_GLOBAL_OPT_ALT} is not interpolated WHOLE, and what
+# replaces the guarantee that would have carried: its separate-value class
 # `[^[:space:];|&]+` admits a leading `-`, so `git --namespace --namespace …`
-# parses two ways at every token and stays alive both ways. That is 2^n on a
-# FAILING match — measured >10s at sixteen option groups, on a regex evaluated
-# for every Bash tool call, i.e. a hang of the whole harness. Branch 4's value
-# is a PLAIN token instead, so the competing "option alone" parse dies at the
-# very next token and the cost stays linear (verified below, and pinned by
-# test_AC18x). The enumeration's remaining reach beyond branches 2-4 is a
-# separate value that starts with `-` or contains a shell metacharacter, which
-# is not a real git spelling; that nothing real is lost is not asserted but
-# MEASURED, by a differential over 725 destructive spellings plus an explicit
-# enumeration-superset corpus (test_AC18w) rather than by reusing the string.
-_GC_GOPT="([[:space:]]+(-${_GC_QVAL}[[:space:]]+${_GC_PLAINTOK}|-${_GC_QVAL}|${_GC_VALTOK}))*"
+# parses two ways at every token and BOTH stay alive. That is 2^n on a FAILING
+# match — measured >10s at sixteen option groups, against 0.0001s for both
+# predecessors, on a regex evaluated for every Bash tool call, i.e. a hang of
+# the whole harness rather than a slow test. Branch 4 takes a PLAIN value
+# instead, so the competing "option alone" parse dies at the very next token and
+# the cost stays linear. The enumeration's remaining reach beyond branches 2-4
+# is a separate value that starts with `-` or contains a shell metacharacter,
+# neither of which is a real git spelling. That nothing real is lost is not
+# asserted but MEASURED: test_AC18w feeds every spelling the shared enumeration
+# accepts through this grammar, and test_AC18x pins the linear cost.
+_GC_GOPT="([[:space:]]+(-[Cc][[:space:]]+${_GC_PLAINTOK}|--(${GIT_GLOBAL_VALOPT_NAMES})[[:space:]]+${_GC_PLAINTOK}|-${_GC_QVAL}|${_GC_VALTOK}))*"
 _GIT_CLEAN_FALLBACK_RE="(^|${_GC_SEP})((${_GC_PATH}git)|\"${_GC_PATH}git\"|'${_GC_PATH}git')${_GC_GOPT}[[:space:]]+[\"']?clean\\b"
 # Shell-in-command-position test, gating quote-neutralisation. Deliberately NOT
 # a name list: enumerating interpreter names was the repeated root cause in this
