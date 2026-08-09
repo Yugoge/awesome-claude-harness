@@ -2153,7 +2153,7 @@ _GC_PROBE=''
 case "$COMMAND$COMMAND_CONTEXT_STRIPPED" in
   *clean*)
     if printf '%s\n%s\n' "$COMMAND" "$COMMAND_CONTEXT_STRIPPED" \
-       | grep -qE "$_GC_SHELL_RE"; then
+       | grep -qE "$_GC_SHELL_RE|$_GC_EXECCTX_RE"; then
       _GC_PROBE="${COMMAND//\"/ }"$'\n'"${COMMAND_CONTEXT_STRIPPED//\"/ }"
       _GC_PROBE="${_GC_PROBE//\'/ }"
     fi
