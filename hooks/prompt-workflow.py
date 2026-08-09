@@ -961,11 +961,37 @@ def build_overnight_continuation(state: dict, include_spec: bool = True,
 
 
 def check_overnight_continuation(session_id: str = '') -> str | None:
-    """Check whether the submitting session's OWN overnight record needs continuation."""
+    """Check whether the submitting session's OWN overnight record needs continuation.
+
+    The heavy half is emitted only when the delivery marker does not exactly
+    match this (session, cycle, context epoch, spec fingerprint). The light
+    half is unconditional: current_phase drives the phase->step routing map
+    and advances several times inside a single cycle, so withholding it would
+    strand a resuming orchestrator on stale routing -- worse than paying for a
+    fresh block.
+    """
     state, state_path = find_any_overnight_state(session_id)
     if state is None:
         return None
-    return build_overnight_continuation(state)
+    marker_path = overnight_delivery_marker_path(state_path, session_id)
+    suppress = _marker_suppresses_spec(
+        _read_delivery_marker(marker_path), session_id, state,
+        _resolve_transcript_path(session_id), _spec_fingerprint(),
+    )
+    notice = ''
+    if not suppress and not _marker_writable(marker_path):
+        # Degraded: without a persistable marker the heavy half is re-sent on
+        # every prompt and the saving is exactly zero. Say so, on every prompt,
+        # rather than let a read-only path silently cost the whole benefit.
+        notice = (
+            f'NOTE: the delivery marker cannot be written at {marker_path} '
+            '(path unwritable). The command specification above will be '
+            're-sent on EVERY prompt until that path is writable -- '
+            'continuation-block cadence bounding is INACTIVE for this session.'
+        )
+    return build_overnight_continuation(
+        state, include_spec=not suppress, notice=notice
+    )
 
 
 # --- Main entry points ---
