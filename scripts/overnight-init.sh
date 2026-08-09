@@ -190,7 +190,16 @@ PYEOF
 [[ -n "$AGENT_LIST" ]] \
   || _die "could not read CP_AGENTS from hooks/pretool-cp-checkin.py; refusing to guess the agent list (a missing sentinel silently disables code-write enforcement for that agent)"
 
+# A SYMLINKED registry leaf passes the confinement walk whenever its target is
+# also under the project root — so `dev-registry/<sidA>` pointing at
+# `dev-registry/<sidB>` would redirect this session's sentinels into another
+# session's registry, overwriting B's records with A's session_id and silently
+# invalidating B's enforcement. Confinement answers "inside the project", not
+# "the directory it claims to be".
+[[ -L "$REGISTRY_DIR" ]] && _die "refusing to use a symlinked registry directory: $REGISTRY_DIR"
 _mkdir_confined "$REGISTRY_DIR"
+[[ -d "$REGISTRY_DIR" && ! -L "$REGISTRY_DIR" ]] \
+  || _die "registry path is not a real directory: $REGISTRY_DIR"
 SENTINEL_COUNT=0
 while IFS= read -r agent; do
   [[ -n "$agent" ]] || continue
