@@ -604,6 +604,35 @@ def test_regex_patterns_are_extractable():
     re.compile(PYTHON_GIT_COMMAND_RE_STR)
 
 
+def test_grammar_resolution_matches_bash_expansion():
+    """Python-side resolution of GIT_GLOBAL_OPT_RE must equal bash's own.
+
+    The previous extractor captured a single-quoted literal, so what it read
+    WAS the hook's value by construction.  _resolve_bash_grammar_vars()
+    emulates shell interpolation instead, and an emulation that drifted from
+    bash would make every corpus row above assert against a pattern the hook
+    does not actually run -- silent wrongness, which is the exact failure mode
+    the RISK-2 guard exists to prevent.  So let bash expand the very same
+    assignment lines and require byte equality.
+    """
+    text = _BASH_SAFETY_SH.read_text()
+    assignments = [m.group(0) for m in _GRAMMAR_VAR_RE.finditer(text)]
+    assert assignments, "No GIT_GLOBAL_* grammar assignments found"
+
+    proc = subprocess.run(
+        ['bash', '-c', "\n".join(assignments) + '\nprintf %s "$GIT_GLOBAL_OPT_RE"'],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    resolved = _resolve_bash_grammar_vars(text)['GIT_GLOBAL_OPT_RE']
+    assert proc.stdout == resolved, (
+        "Python resolution diverges from bash expansion:\n"
+        f"  bash:   {proc.stdout!r}\n"
+        f"  python: {resolved!r}"
+    )
+
+
 def test_bash_and_python_patterns_agree_on_anchor():
     """The two raw regex patterns share equivalent anchor semantics.
 
