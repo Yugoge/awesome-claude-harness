@@ -1299,3 +1299,134 @@ def test_AC17h_rm_block_nested_parity_not_regressed():
     residual of the rm-block that this lane did not widen."""
     assert run_hook("sh -c 'rm foo'") == BLOCK
     assert run_hook('bash -c "rm foo"') == BLOCK
+
+
+# ── AC20: the closure-scope register is CLOSED and its near-misses deny ──────
+# This lane's universal is bounded by three formally excluded classes. The bound
+# is only honest if it cannot be widened from an implementation round, and if a
+# near-miss cannot be reclassified into an exclusion to escape the universal.
+# Both halves are read from the criteria file at run time so neither the
+# register nor the control list can drift out of enforcement.
+
+def _ac20_register():
+    return _criteria()["closure_scope"]["excluded_classes"]
+
+
+def _ac20_control_forms():
+    """Every near-miss control the criteria declare, from BOTH declaration
+    sites — each class's own `not_members` and AC20's explicit list — so a form
+    present in one and absent from the other is still enforced."""
+    forms = [e["form"] for cls in _ac20_register() for e in cls["not_members"]]
+    forms += _ac20_check()["not_members_forms"]
+    return sorted(set(forms))
+
+
+def _ac20_check():
+    return _ac("AC20")["check"]
+
+
+def test_AC20_register_is_a_closed_enumeration_of_exactly_three():
+    """A fourth entry, a missing field or an id outside {E1,E2,E3} FAILS:
+    widening the accepted scope is a requirement-owner decision and must not be
+    reachable from an implementation round."""
+    check = _ac20_check()
+    scope = _criteria()["closure_scope"]
+    register = _ac20_register()
+    assert scope["register_is_closed"] is True
+    assert scope["register_cardinality"] == check["expected_cardinality"]
+    assert [c["id"] for c in register] == check["expected_ids"]
+    for cls in register:
+        missing = [f for f in check["required_entry_fields"] if f not in cls]
+        assert missing == [], "%s is missing %s" % (cls["id"], missing)
+
+
+@pytest.mark.parametrize("form", _ac20_control_forms())
+def test_AC20_near_miss_controls_still_deny(form):
+    """The property that stops an exclusion being an open escape hatch.
+
+    Asserts this rule's OWN stderr token, so a form some sibling rule also
+    denies cannot score a vacuous pass. A deny-nothing implementation fails
+    here; a deny-everything one fails the ALLOW control below.
+    """
+    assert_clean_rule_denies(form)
+
+
+@pytest.mark.parametrize("form", _ac("AC6")["check"]["forms"])
+def test_AC20_bound_was_not_purchased_by_over_blocking(form):
+    """AC20(iii): the whole AC6 ALLOW set must still exit 0, so the bound is
+    falsifiable in BOTH directions rather than a one-way weakening."""
+    assert run_hook(form) == ALLOW, form
+
+
+# ── AC21: each excluded class pinned as a STRICT expected failure ────────────
+# An exclusion carrying no pin decays into a silent hole — this lane's recurring
+# failure mode. xfail(strict=True) makes the suite FAIL the day an excluded form
+# starts being denied, which forces the register to be updated instead of
+# quietly over-claiming. Round 7 authored these; their first execution against
+# the round-6 register immediately produced the XPASS that exposed E3 as stale.
+# Probe forms are fed to the hook AS TEXT ONLY and are never executed.
+
+_AC21_XFAIL_REASON = (
+    "registered as an OPEN residual in closure_scope.excluded_classes — an "
+    "XPASS here is a FAILURE meaning the register is stale and the class has "
+    "been closed without being removed from the exclusion set")
+
+
+def _ac21_check():
+    return _ac("AC21")["check"]
+
+
+def _ac21_probes():
+    return [(cls["id"], form)
+            for cls in _ac21_check()["classes"]
+            for form in cls["probe_forms"]]
+
+
+def _ac21_mirror_pairs():
+    pairs = []
+    for cls in _ac21_check()["classes"]:
+        for key in ("sibling_mirror_pair", "removal_command_mirror_pair"):
+            pair = cls.get(key)
+            if pair:
+                pairs.append((cls["id"], key, pair[0], pair[1]))
+    return pairs
+
+
+@pytest.mark.xfail(strict=True, reason=_AC21_XFAIL_REASON)
+@pytest.mark.parametrize("class_id,form", _ac21_probes())
+def test_AC21_excluded_class_residual_is_still_open(class_id, form):
+    """CHARACTERIZATION, strict. The assertion under xfail is 'this form is
+    denied'; it must currently NOT hold. When it starts holding, pytest reports
+    XPASS as a failure and the register has to be corrected."""
+    assert_clean_rule_denies(form)
+
+
+@pytest.mark.parametrize("class_id,kind,clean_form,mirror_form",
+                         _ac21_mirror_pairs())
+def test_AC21_clean_rule_is_never_weaker_than_the_guard_it_mirrors(
+        class_id, kind, clean_form, mirror_form):
+    """MONOTONE parity. Fails only if the mirrored guard denies while the clean
+    rule allows the same shape. Being STRONGER is allowed, so a future dedicated
+    cycle that closes a class in the clean rule first does not fail this."""
+    probes = [f for cid, f in _ac21_probes() if cid == class_id]
+    assert clean_form in probes, (
+        "%s %s is not wired to that class's own probe forms" % (class_id, kind))
+    if run_hook(mirror_form) != BLOCK:
+        return  # nothing for the clean rule to be weaker than
+    assert run_hook(clean_form) == BLOCK, (
+        "%s: %r denies while %r is allowed — the clean rule is WEAKER than the "
+        "guard it mirrors" % (class_id, mirror_form, clean_form))
+
+
+@pytest.mark.parametrize("control", _ac21_check()["non_vacuity_controls"],
+                         ids=lambda c: c["form"])
+def test_AC21_non_vacuity_controls_still_deny(control):
+    """(i) and (ii) must not be satisfiable by a hook that has stopped denying
+    anything: the removal-command block, the ref-mutation block and the
+    canonical destructive clean all still fire."""
+    rc, err = run_hook(control["form"], want_stderr=True)
+    assert rc == control["expect_exit"], control["form"]
+    token = control.get("deny_stderr_token")
+    if token:
+        assert token in err, "%r denied by another rule: %r" % (
+            control["form"], err)
