@@ -1195,10 +1195,22 @@ def test_AC18z_corpus_discriminates_against_a_grammar_relapse(tmp_path):
     certify a regression as a closure: the pre-edit hook failed the axis for a
     DIFFERENT reason, so the axis looked sharp while being blind to the new
     grammar. The axis must also fail against a mutant of TODAY's hook that
-    reintroduces the defect — here, dropping the shared enumeration branch from
-    the union and leaving only the hand-shaped syntax branch.
+    reintroduces the defect — here, collapsing the option segment back to
+    round 3's shape: option tokens only, from a class that excludes quote
+    characters, with no branch that can span a SEPARATE value. That is exactly
+    the grammar under which 89 destructive spellings executed ungranted.
+
+    The `mutation target vanished` assertion in _mutant_hook is load-bearing:
+    this test already caught its own mutation going stale after the segment was
+    restructured, and a mutation test that silently no-ops reads as a pass while
+    proving nothing — the same failure mode as the delete-a-line fail-closed
+    probe in AC18y.
     """
-    mut = _mutant_hook(tmp_path, ("${GIT_GLOBAL_OPT_ALT}|", ""))
+    mut = _mutant_hook(tmp_path, (
+        "-[Cc][[:space:]]+${_GC_PLAINTOK}"
+        "|--(${_GC_VALOPT_NAMES})[[:space:]]+${_GC_PLAINTOK}"
+        "|-${_GC_QVAL}|${_GC_VALTOK}",
+        "-${_GC_NOSEP}"))
     escaped = [f for f in _AC17_MUTANT_PROBES if run_hook(f, hook=mut) != BLOCK]
     assert escaped, (
         "the corpus cannot detect a relapse of the round-3 grammar, so passing "
