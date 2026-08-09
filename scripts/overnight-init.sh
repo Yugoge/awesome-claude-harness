@@ -194,8 +194,18 @@ _mkdir_confined "$REGISTRY_DIR"
 SENTINEL_COUNT=0
 while IFS= read -r agent; do
   [[ -n "$agent" ]] || continue
-  printf '{"agent_type": "%s", "session_id": "%s"}\n' "$agent" "$SESSION_ID" \
-    | _write_confined "$REGISTRY_DIR/$agent.json"
+  # Sentinels are verified SEMANTICALLY, never byte-wise. scripts/write-qa-mode.sh
+  # legitimately rewrites qa.json with json.dump to add `qa_mode`, and
+  # commands/dev-overnight.md invokes it before every QA dispatch. A byte
+  # comparison would therefore abort every continuation cycle after the first QA
+  # run — stranding a long-running session mid-flight, which is the opposite of
+  # what this change exists to achieve. The fields consumers actually read
+  # (agent_type, session_id) are asserted in the validation pass below, in both
+  # modes; additive keys from a legitimate mutator are tolerated.
+  if [[ "$VERIFY_ONLY" != "1" ]]; then
+    printf '{"agent_type": "%s", "session_id": "%s"}\n' "$agent" "$SESSION_ID" \
+      | _write_confined "$REGISTRY_DIR/$agent.json"
+  fi
   SENTINEL_COUNT=$((SENTINEL_COUNT + 1))
 done <<< "$AGENT_LIST"
 
