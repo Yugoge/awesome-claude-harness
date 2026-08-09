@@ -119,14 +119,11 @@ def _extract_bash_git_cmd_re() -> str:
     """
     text = _BASH_SAFETY_SH.read_text()
 
-    # Extract GIT_GLOBAL_OPT_RE value
-    gor_match = re.search(
-        r"^GIT_GLOBAL_OPT_RE='([^']+)'",
-        text,
-        re.MULTILINE,
+    grammar = _resolve_bash_grammar_vars(text)
+    assert 'GIT_GLOBAL_OPT_RE' in grammar, (
+        "Could not find GIT_GLOBAL_OPT_RE in pretool-bash-safety.sh"
     )
-    assert gor_match, "Could not find GIT_GLOBAL_OPT_RE in pretool-bash-safety.sh"
-    git_global_opt_re = gor_match.group(1)
+    git_global_opt_re = grammar['GIT_GLOBAL_OPT_RE']
 
     # Assemble the raw bash regex string as bash does:
     #   '(^|[[:space:];&|()`])git' + $GIT_GLOBAL_OPT_RE + '[[:space:]]+'
