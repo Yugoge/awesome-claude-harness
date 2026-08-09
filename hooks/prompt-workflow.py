@@ -98,27 +98,66 @@ def overnight_state_path(session_id: str = 'default') -> Path:
 
 
 def _is_active_state(state: dict) -> bool:
-    """Return True if state has a future end_time."""
+    """Return True if state has a future end_time.
+
+    Fail closed: a missing, empty, non-string or unparseable end_time returns
+    False, so a half-written state file never counts as a live session.
+
+    'Z' is normalized to '+00:00' so a launcher-produced zoned end_time parses
+    AWARE and is compared against an AWARE now(); a zone-less end_time stays
+    naive-as-local. Previously the aware parse was compared against a naive
+    datetime.now(), which raises TypeError on Python 3.11+, and the except
+    clause below absorbed that TypeError into False -- so this predicate
+    reported not-live for every real session, silently, since
+    scripts/create-overnight-state.sh emits every end_time as
+    %Y-%m-%dT%H:%M:%SZ. Same defect class as the sibling fix recorded at
+    posttool-overnight-file-check.py:28-32.
+
+    The caught set stays exactly {ValueError, TypeError}. Widening it -- which a
+    str()-less copy of hooks/lib/overnight.py would need, to catch the
+    AttributeError a non-string end_time raises -- would re-swallow a different
+    class of fault; the isinstance guard rejects non-strings before parsing
+    instead.
+    """
     et = state.get('end_time')
-    if not et:
+    if not isinstance(et, str) or not et:
         return False
     try:
-        return datetime.fromisoformat(et) > datetime.now()
+        end = datetime.fromisoformat(et.replace('Z', '+00:00'))
     except (ValueError, TypeError):
         return False
+    if end.tzinfo is None:
+        return end > datetime.now()
+    return end > datetime.now(timezone.utc)
 
 
-def find_any_overnight_state() -> tuple:
-    """Find any active overnight state file for continuation."""
-    claude_dir = PROJECT_DIR / '.claude'
-    for p in sorted(claude_dir.glob('overnight-state-*.json')):
-        try:
-            state = json.loads(p.read_text())
-        except Exception:
-            continue
-        if _is_active_state(state):
-            return state, p
-    return None, None
+def find_any_overnight_state(session_id: str = '') -> tuple:
+    """Return the live overnight state OWNED BY session_id, else (None, None).
+
+    Strict identity binding: the record is resolved from the submitting
+    session_id alone -- no project-wide glob and no fallback scan -- and the
+    record's own session_id must equal that id before liveness is considered.
+    A foreign, blank or absent id on either side injects nothing.
+
+    Deliberately stricter than the posttool-overnight-loop.py:156-159 mirror,
+    whose `if state_session_id and ...` guard still broadcasts a record carrying
+    a blank/absent session_id to every session. The previous project-wide glob
+    returned the first live match, so a second live session was served the first
+    one's state, and any session -- including one with no overnight of its own --
+    received the full continuation block.
+    """
+    if not isinstance(session_id, str) or not session_id:
+        return None, None
+    p = overnight_state_path(session_id)
+    try:
+        state = json.loads(p.read_text())
+    except Exception:
+        return None, None
+    if not isinstance(state, dict) or state.get('session_id') != session_id:
+        return None, None
+    if not _is_active_state(state):
+        return None, None
+    return state, p
 
 
 def extract_command_name(user_input: str) -> str:
@@ -620,9 +659,9 @@ def build_overnight_continuation(state: dict) -> str:
     ])
 
 
-def check_overnight_continuation() -> str | None:
-    """Check if any overnight session needs continuation."""
-    state, state_path = find_any_overnight_state()
+def check_overnight_continuation(session_id: str = '') -> str | None:
+    """Check whether the submitting session's OWN overnight record needs continuation."""
+    state, state_path = find_any_overnight_state(session_id)
     if state is None:
         return None
     return build_overnight_continuation(state)
@@ -657,7 +696,7 @@ def read_bookmark_state(session_id: str) -> dict:
 
 def handle_phase_b(session_id: str) -> None:
     """Phase B: inject overnight continuation and/or workflow progress."""
-    overnight_ctx = check_overnight_continuation()
+    overnight_ctx = check_overnight_continuation(session_id)
     if overnight_ctx:
         print(overnight_ctx)
     todos_file = official_todos_path(session_id)
