@@ -586,11 +586,37 @@ if [[ "$ISOLATION_KIND" == "in_place" ]]; then
     ACTOR_GIT_BINDIR=""
     ACTOR_GIT_SHIMDIR=""
 elif [[ -x "$GITENV_HELPER" ]]; then
+    # WRITE CLASS 4, PROVISIONED PRE-BOUNDARY. This branch catches EVERY
+    # non-in_place kind (registered_worktree AND fresh_clone_checkout). The
+    # helper installs both git shims under the MAIN root, so the actor can never
+    # repair them once the boundary is armed — that is the origin of the two
+    # "install: cannot remove ...: Read-only file system" warnings the user
+    # reported as the first symptom of this same root cause. Provisioning it
+    # here, and REFUSING TO PUBLISH when it fails, is what makes the actor's
+    # later verify-only source a no-write no-op instead of a broken repair.
+    #
+    # The exit status is no longer discarded. `... 2>/dev/null || true` swallowed
+    # both stderr and the status, after which the three ACTOR_GIT_* greps
+    # degraded to empty strings and the launch published anyway — a session whose
+    # policy shim was never installed, recorded as if it had been.
     ACTOR_ENV_HELPER_PATH="$GITENV_HELPER"
-    GITENV_OUT="$(bash "$GITENV_HELPER" --main-root "$MAIN_ROOT" --worktree "$WORKTREE_PATH" 2>/dev/null || true)"
+    if ! GITENV_OUT="$(bash "$GITENV_HELPER" --main-root "$MAIN_ROOT" --worktree "$WORKTREE_PATH" 2>&1)"; then
+        echo "Error: overnight git-env provisioning FAILED for $MAIN_ROOT; refusing the launch (no state published)." >&2
+        printf '%s\n' "$GITENV_OUT" >&2
+        exit 1
+    fi
     ACTOR_GIT_SHIM="$(printf '%s\n' "$GITENV_OUT" | grep -oP '^# OVERNIGHT_GIT_ENV_SHIM_GIT=\K.*' | head -1 || echo '')"
     ACTOR_GIT_BINDIR="$(printf '%s\n' "$GITENV_OUT" | grep -oP '^# OVERNIGHT_GIT_ENV_BINDIR=\K.*' | head -1 || echo '')"
     ACTOR_GIT_SHIMDIR="$(printf '%s\n' "$GITENV_OUT" | grep -oP '^# OVERNIGHT_GIT_ENV_SHIMDIR=\K.*' | head -1 || echo '')"
+    # A zero exit with empty markers is the same fail-open by another route.
+    if [[ -z "$ACTOR_GIT_SHIM" || -z "$ACTOR_GIT_BINDIR" || -z "$ACTOR_GIT_SHIMDIR" ]]; then
+        echo "Error: overnight git-env provisioning returned no resolved shim/bin markers; refusing the launch (no state published)." >&2
+        exit 1
+    fi
+    if [[ ! -x "$ACTOR_GIT_SHIM" ]]; then
+        echo "Error: overnight git policy shim is not executable at $ACTOR_GIT_SHIM; refusing the launch (no state published)." >&2
+        exit 1
+    fi
 fi
 
 # --- Launch git self-test: record honest guarantee fields (M8/M16) -----------
