@@ -776,6 +776,14 @@ _AC17_EXEC_CTX = [
     "git filter-branch --index-filter '%s' HEAD",
     "git bisect run sh -c '%s'",
     "git clean -n && git rebase -x '%s' HEAD~2",
+    # Found by adversarial review after the first four routes were closed, and
+    # proven by execution to run their argument and delete. Enumerating four
+    # routes and stopping is how this lane keeps shipping a closed example set
+    # around an open class.
+    "git filter-branch --setup '%s' HEAD",
+    "git difftool --extcmd '%s' HEAD",
+    "git difftool -x '%s' HEAD",
+    "git grep --open-files-in-pager '%s' needle",
 ]
 _AC17_EXEC_CFG = ["sequence.editor", "core.pager", "diff.external", "core.editor"]
 
