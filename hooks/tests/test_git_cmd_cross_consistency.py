@@ -75,6 +75,18 @@ def _resolve_bash_grammar_vars(text: str) -> dict:
     values: dict = {}
     for match in _GRAMMAR_VAR_RE.finditer(text):
         name, single, double = match.group(1), match.group(2), match.group(3)
+        # Exactly-once is load-bearing, not tidiness.  The hook builds
+        # GIT_CMD_RE at the line where it appears, from whatever value is in
+        # effect THERE.  A later reassignment -- or a line that never executes
+        # at all, inside a heredoc or an uncalled function body -- would make
+        # last-wins resolution disagree with the hook.  The bash cross-check
+        # cannot catch that on its own: it replays these same selected lines,
+        # so it would faithfully agree with the wrong value.  Selection is the
+        # one thing the cross-check cannot validate, so it is asserted here.
+        assert name not in values, (
+            f"{name} is assigned more than once in pretool-bash-safety.sh; "
+            "the extracted grammar would not be the one the hook uses"
+        )
         if single is not None:
             values[name] = single
             continue
