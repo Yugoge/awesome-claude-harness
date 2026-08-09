@@ -274,7 +274,7 @@ Beginning autonomous exploration...
 **ONE-CALL INITIALIZATION (MANDATORY — before ANY Agent launch).** Everything the session needs before dispatch is done by a single script. It used to be ~25 separate tool calls — one `mkdir`, ~20 sentinel writes, two enforcement-flag scripts, a spec resolution and a heredoc — and a session that exhausted its usage ceiling partway through that fan-out never reached PM Plan and produced nothing. Run exactly one command:
 
 ```bash
-scripts/overnight-init.sh --state-file "$STATE_FILE"
+~/.claude/scripts/overnight-init.sh --state-file "$STATE_FILE"
 ```
 
 It is idempotent, so re-run it verbatim on every continuation cycle. If the last line is not `OVERNIGHT_INIT_OK`, ABORT — do not attempt the individual steps by hand.
