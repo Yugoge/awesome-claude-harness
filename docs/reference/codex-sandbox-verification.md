@@ -1,7 +1,7 @@
 # Codex CLI Sandbox Verification Report
 
 **Task**: dev-20260719-150041-b (lane r02-b) — handoff TASK 2
-**Verified against live files**: 2026-08-08 | **Repo**: `&lt;REPO_ROOT&gt;` @ `1a59a667`
+**Verified against live files**: 2026-08-08 | **Repo**: `$REPO_ROOT` @ `1a59a667`
 **Deliverable**: investigation report. No source or config file modified by this lane.
 
 ## Verdict
@@ -92,7 +92,7 @@ The answer is the **middle** one.
 **Runtime confirmation (banner)** — `docs/codex/dev-20260719-150041-b/ba.txt`:
 ```
 :2  OpenAI Codex v0.144.4
-:4  workdir: &lt;REPO_ROOT&gt;
+:4  workdir: $REPO_ROOT
 :7  approval: never
 :8  sandbox: workspace-write [workdir, /tmp, $TMPDIR]
 ```
@@ -105,12 +105,12 @@ The answer is the **middle** one.
                   "exclude_tmpdir_env_var":false,"exclude_slash_tmp":false},
 "permission_profile":{"file_system":{"type":"restricted","entries":[
   {"path":{"kind":"root"},"access":"read"},
-  {"path":"&lt;REPO_ROOT&gt;","access":"write"},
+  {"path":"$REPO_ROOT","access":"write"},
   {"path":{"kind":"slash_tmp"},"access":"write"},
   {"path":{"kind":"tmpdir"},"access":"write"},
-  {"path":"&lt;REPO_ROOT&gt;/.git","access":"read"},
-  {"path":"&lt;REPO_ROOT&gt;/.agents","access":"read"},
-  {"path":"&lt;REPO_ROOT&gt;/.codex","access":"read"}]},
+  {"path":"$REPO_ROOT/.git","access":"read"},
+  {"path":"$REPO_ROOT/.agents","access":"read"},
+  {"path":"$REPO_ROOT/.codex","access":"read"}]},
   "network":"restricted"}
 ```
 
@@ -119,7 +119,7 @@ The answer is the **middle** one.
 ### YES — evidence in descending strength
 
 **3.1 The repo root carries explicit `access: "write"`.** The rollout `permission_profile`
-names `&lt;REPO_ROOT&gt;` with write access, everything else read. This is
+names `$REPO_ROOT` with write access, everything else read. This is
 codex's own machine-readable policy record, not inference.
 
 **3.2 The workspace root IS this repository.** Runtime `workdir` (`ba.txt:4`) is byte-identical
