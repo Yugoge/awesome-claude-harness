@@ -1996,6 +1996,7 @@ def _ere_to_py(pattern):
 
 COARSE = re.compile(_ere_to_py(os.environ['CLEAN_OCCURRENCE_RE']))
 SHELL_CMD = re.compile(_ere_to_py(os.environ['CLEAN_SHELL_RE']))
+EXEC_CTX = re.compile(_ere_to_py(os.environ['CLEAN_EXECCTX_RE']))
 
 
 def raw_cleans(text):
