@@ -1576,7 +1576,7 @@ Simply mark this step as completed via TodoWrite. The PostToolUse:TodoWrite hook
 2. Check overnight-state.json for future end_time
 3. Reset all todos to pending
 4. Print loop continuation instructions
-5. You then resume from Step 2 (worktree already exists)
+5. You then resume from Step 2 (the working root is already established)
 
 **If time expired** (session ending):
 **Read the full state file** to get all cycle data.
