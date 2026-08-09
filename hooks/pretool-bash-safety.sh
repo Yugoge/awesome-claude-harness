@@ -2170,6 +2170,16 @@ case "$COMMAND$COMMAND_CONTEXT_STRIPPED" in
        | grep -qE "$_GC_SHELL_RE|$_GC_EXECCTX_RE"; then
       _GC_PROBE="${COMMAND//\"/ }"$'\n'"${COMMAND_CONTEXT_STRIPPED//\"/ }"
       _GC_PROBE="${_GC_PROBE//\'/ }"
+      # Neutralisation is done TWICE, quote->space and quote->nothing, because
+      # the two disagree on exactly the spellings that hid a deletion: replacing
+      # `-c foo.bar="baz"` with a space splits the value into a bare token no
+      # branch consumes, while removing the quote restores the plain inline
+      # spelling the grammar already covers. Conversely quote->space is the only
+      # one that keeps `'x'"git clean -fd"` from fusing into an unmatchable word.
+      # Both are scanned; either matching is enough, so neither can lose a form
+      # the other sees.
+      _GC_PROBE="${_GC_PROBE}"$'\n'"${COMMAND//\"/}"$'\n'"${COMMAND_CONTEXT_STRIPPED//\"/}"
+      _GC_PROBE="${_GC_PROBE//\'/}"
     fi
     ;;
 esac
