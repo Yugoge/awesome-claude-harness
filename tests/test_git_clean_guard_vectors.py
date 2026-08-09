@@ -427,6 +427,45 @@ def test_qa6_argument_text_behind_a_git_subcommand_denies(command):
     )
 
 
+@pytest.mark.parametrize("command", QA7_STDIN_PAYLOAD_DENY)
+def test_qa7_a_payload_delivered_on_stdin_denies(command):
+    verdict, _reason = decide(command)
+    assert verdict == "DENY", (
+        f"{command!r} hands a destructive clean to a reader that executes its "
+        f"stdin; dropping the operand with the redirection made the whole "
+        f"command reduce to nothing. Got {verdict}"
+    )
+
+
+@pytest.mark.parametrize("command", QA7_STDIN_PAYLOAD_STILL_EXEMPT)
+def test_qa7_inert_stdin_content_is_not_a_blanket_denial(command):
+    verdict, _reason = decide(command)
+    assert verdict == "NONE", (
+        f"{command!r} destroys nothing; retaining here-string operands must not "
+        f"turn every redirection into a deny. Got {verdict}"
+    )
+
+
+@pytest.mark.parametrize("command", QA7_STDIN_IS_NOT_AN_ARGUMENT_SNAPSHOT)
+def test_qa7_stdin_content_never_reaches_the_flag_region(command):
+    verdict, _reason = decide(command)
+    assert verdict == "SNAPSHOT", (
+        f"{command!r} really deletes in THIS tree - git ignores its stdin - so "
+        f"it must snapshot. Anything else means the here-string leaked into the "
+        f"dry-run scan and cost a snapshot. Got {verdict}"
+    )
+
+
+@pytest.mark.parametrize("command", QA7_ENV_SEPARATOR_GRID_DENY)
+def test_qa7_env_separator_grid_denies_in_every_cell(command):
+    verdict, _reason = decide(command)
+    assert verdict == "DENY", (
+        f"{command!r} runs a destructive clean once env re-splits its value; the "
+        f"unescape must key on the REGION, not on whether the word happens to "
+        f"start with a dash. Got {verdict}"
+    )
+
+
 @pytest.mark.parametrize("behind_echo,behind_git", QA6_SAME_TEXT_SAME_VERDICT)
 def test_qa6_the_same_argument_text_is_judged_the_same_behind_git(behind_echo, behind_git):
     assert decide(behind_echo)[0] == decide(behind_git)[0], (
