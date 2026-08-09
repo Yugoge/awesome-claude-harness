@@ -55,7 +55,17 @@ CRITERIA_PATH = (Path(__file__).resolve().parents[2] / "docs" / "dev"
 # Only the first is relaxed. A present-but-unreadable, malformed, or
 # AC-missing file still raises, because that is the copy-drift defect this
 # module exists to catch and a silent skip there would recreate it.
-CRITERIA_AVAILABLE = CRITERIA_PATH.is_file()
+#
+# "Absent" means NOTHING is at the path — not "is_file() is False". A directory
+# or a broken/looping symlink sitting there is packaging or source-of-truth
+# CORRUPTION, which must keep failing closed exactly as the unguarded read did;
+# is_file() alone would silently skip all of it. exists() follows symlinks, so a
+# dangling link reports exists()==False while is_symlink()==True — hence both
+# checks. Anything that is not provably absent falls through to the read below
+# and raises there (IsADirectoryError, FileNotFoundError via the dead link,
+# PermissionError, JSONDecodeError), which is the intended fail-closed path.
+CRITERIA_ABSENT = not CRITERIA_PATH.exists() and not CRITERIA_PATH.is_symlink()
+CRITERIA_AVAILABLE = not CRITERIA_ABSENT
 
 if not CRITERIA_AVAILABLE:
     pytestmark = pytest.mark.skip(
