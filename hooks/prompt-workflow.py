@@ -982,10 +982,52 @@ def _extract_arguments(user_input: str, cmd_name: str) -> str:
     return ''
 
 
+def verify_overnight_state(session_id: str) -> tuple[bool, str]:
+    """Read-only verification of an ALREADY-PUBLISHED overnight record.
+
+    The launcher now initializes before it publishes, so a published record is
+    supposed to imply an initialized registry. This re-checks that claim from
+    the outside rather than trusting it: --verify-only performs zero writes and
+    re-derives every artifact (sentinel count against CP_AGENTS parsed at run
+    time, both enforcement flags against ENFORCEMENT_FLAG_VALID, and the
+    requirement document against a freshly recomputed render).
+
+    A zero exit alone is NOT success: the contract is a final line of exactly
+    OVERNIGHT_INIT_OK, so a truncated run that exits 0 without the token cannot
+    pass. Returns (ok, diagnostic).
+    """
+    sp = overnight_state_path(session_id)
+    if not sp.exists():
+        return False, f'no published state record at {sp}'
+    script = Path.home() / '.claude' / 'scripts' / 'overnight-init.sh'
+    if not os.access(script, os.X_OK):
+        return False, f'initializer missing or not executable: {script}'
+    try:
+        result = subprocess.run(
+            [str(script), '--verify-only', '--state-file', str(sp)],
+            capture_output=True, text=True, timeout=60)
+    except Exception as exc:
+        return False, f'verification could not run: {exc}'
+    out = (result.stdout or '').strip()
+    last = out.splitlines()[-1] if out else ''
+    if result.returncode != 0 or last != 'OVERNIGHT_INIT_OK':
+        detail = (result.stderr or '').strip() or out
+        return False, (f'verification failed (exit {result.returncode}, '
+                       f'final line {last!r}): {detail}')
+    return True, ''
+
+
 def _cleanup_overnight_partials(sid: str) -> None:
     """M5/AC4: remove any partial todo/bookmark/state written for a failed
-    /dev-overnight launch so a failed launch leaves no actionable artifacts."""
-    for p in (official_todos_path(sid), workflow_bookmark_path(sid)):
+    /dev-overnight launch so a failed launch leaves no actionable artifacts.
+
+    The STATE FILE is included. A record that was published and then failed
+    verification is the one artifact a consumer would actually act on: the
+    overnight guard keys the isolation boundary on its liveness window, so
+    leaving it behind arms the boundary over a registry that never validated.
+    """
+    for p in (official_todos_path(sid), workflow_bookmark_path(sid),
+              overnight_state_path(sid)):
         try:
             if p.exists():
                 p.unlink()
