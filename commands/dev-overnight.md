@@ -299,6 +299,17 @@ Bind these from its `KEY=VALUE` output — they are the only initialization valu
 
 **FIRST ACTION line (every Agent launch).** Each dispatch prompt MUST begin with an instruction to `Read $CLAUDE_PROJECT_DIR/.claude/dev-registry/$DEV_SESSION_ID/<agent>.json` before any other tool call. Without that Read, `pretool-cp-checkin.py` cannot map the subagent UUID to its `agent_type` and `pretool-subagent-code-block.py` falls open for that subagent.
 
+**Sentinel coverage for this document's dispatch sites.** `overnight-init.sh` writes one sentinel per `CP_AGENTS` entry, so the authoritative agent list is never re-typed here. What IS pinned here is the concrete filename each of this orchestrator's `FIRST ACTION` lines resolves to — so a dropped registration is auditable against the dispatch sites rather than inferred from a generic count. Every sentinel below MUST exist under `$REGISTRY_DIR` once init reports `OVERNIGHT_INIT_OK`; a missing one disables code-write enforcement for that agent type **silently**, with no error at dispatch time.
+
+| Dispatch site | Sentinel its FIRST ACTION line reads |
+|---|---|
+| PM — Plan (Step 2), Triage (Step 4), Retro | `"$REGISTRY_DIR/pm.json"` |
+| Specialists (Step 3, one per `recommended_specialists` entry) | `"$REGISTRY_DIR/architect.json"`, `"$REGISTRY_DIR/product-owner.json"`, `"$REGISTRY_DIR/ui-specialist.json"`, `"$REGISTRY_DIR/user.json"` |
+| BA (per pipeline) | `"$REGISTRY_DIR/ba.json"` |
+| Graphify (Step 11g precondition) | `"$REGISTRY_DIR/graphify.json"` |
+| Dev (Step 12) | `"$REGISTRY_DIR/dev.json"` |
+| QA (Step 15) | `"$REGISTRY_DIR/qa.json"` |
+
 **SECOND ACTION line (when `SPEC_ID` is non-empty).** For every agent that has a cp-state file under that `SPEC_ID`, add immediately after the FIRST ACTION line:
 
 ```text
