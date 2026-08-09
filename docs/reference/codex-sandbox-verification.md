@@ -46,9 +46,9 @@ repo source of truth.)
 ```bash
 CODEX_ISO_BIN="${CODEX_ISO_BIN:-$HOME/bin/codex-iso}"
 ```
-A parameter-expansion default, not a hardcoded path. Under the account running this repo
-`$HOME=/root`, so it resolves to `$HOME/bin/codex-iso`. It is **caller-overridable** via the
-`CODEX_ISO_BIN` env var.
+A parameter-expansion default, not a hardcoded path — so it resolves to `$HOME/bin/codex-iso`
+for whichever account runs the harness. It is **caller-overridable** via the `CODEX_ISO_BIN`
+env var.
 
 **Primary invocation (exec, default model) — `commands/codex.md:162`** (`:164` is the identical
 fallback branch, differing only in the `tee` target):
