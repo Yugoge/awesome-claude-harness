@@ -1786,8 +1786,8 @@ The state file is created by `create-overnight-state.sh` during session initiali
     }
   ],
   "consecutive_clean_sweeps": 0,
-  "worktree_path": "/abs/main/.claude/worktrees/overnight-... (always a validated isolated root; never null)",
-  "worktree_branch": "worktree-overnight-YYYYMMDD-<session_id_short> (never master)",
+  "worktree_path": "absolute path to the session working root; never null. Equals main_root under in_place; /abs/main/.claude/worktrees/overnight-... under registered_worktree; the clone path under fresh_clone_checkout",
+  "worktree_branch": "the session working branch; never the protected branch. Under in_place this is the branch the checkout was already on; otherwise worktree-overnight-YYYYMMDD-<session_id_short>",
   "pm_triage_reports": [],
   "pm_retro_reports": [],
   "unresolved_issues": [
