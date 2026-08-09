@@ -1903,17 +1903,33 @@ fi
 _GC_SEP='[[:space:];&|()`]'
 _GC_NOSEP="[^[:space:];&|()\`'\"]*"
 _GC_PATH="(${_GC_NOSEP}/)?"
-# Global-option segment for the OCCURRENCE grammar only. Deliberately shaped by
-# SYNTAX rather than by the shared GIT_GLOBAL_OPT_RE's enumerated option names:
-# real git 2.54.0 accepts --no-lazy-fetch, --no-advice and --attr-source=, none
-# of which that enumeration lists, so `<dry-run> && sh -c 'git --no-lazy-fetch
-# clean -fd'` was reachable ungranted even with both layers agreeing. A long
-# option never swallows a following bare token (so `git --no-pager grep clean`
-# stays a grep, not an occurrence); a short option may take one separate value
-# (so `-C /tmp` and `-c a=b` are covered). GIT_GLOBAL_OPT_RE itself is NOT
-# touched — it is shared with the reset-block fallback at :1775 and widening it
-# would change an unrelated rule's surface.
-_GC_GOPT="([[:space:]]+(--${_GC_NOSEP}|-[^-[:space:];&|()\`'\"]${_GC_NOSEP}([[:space:]]+[^-[:space:];&|()\`'\"]${_GC_NOSEP})?))*"
+# VALUE region of a global option. Quote characters ARE admitted here — a quoted
+# value is still one shell word — while the command separators are not. Excluding
+# them from the value was half of last round's regression: `-c "k=v"` and
+# `-C "."` stopped being spannable, so the option and the subcommand fell into
+# different matches and `git -c "foo.bar=baz" clean -fd` became invisible.
+_GC_QVAL="[^[:space:];&|()\`]*"
+# Global-option segment for the OCCURRENCE grammar only, as a UNION of two
+# branches that cover different things and must BOTH be present:
+#
+#   (1) ${GIT_GLOBAL_OPT_ALT} — the shared ENUMERATION, reused verbatim rather
+#       than restated. It is the only branch that spans a long option whose
+#       value is a SEPARATE token (`--namespace ns`, `--git-dir /p`) and the
+#       only one whose value class admits quotes (`-c "k=v"`, `-C "."`).
+#       Replacing it with a hand-shaped substitute last round dropped both and
+#       opened 89 destructive spellings that had been denied — measured
+#       pre-edit 2 -> live 0, and proven to delete untracked files at real git.
+#   (2) the SYNTAX branch — a long option is any `--…` word, so real options no
+#       enumeration lists (--no-lazy-fetch, --no-advice, --attr-source=) are
+#       covered too. It deliberately never swallows a following BARE token, so
+#       `git --no-pager grep clean src/` stays a grep rather than an occurrence.
+#
+# A union can only ADD matches, so relative to either predecessor it can only
+# turn ALLOW into BLOCK — a new ungranted allow is impossible by construction,
+# which is the property the hand-shaped substitute could not offer.
+# GIT_GLOBAL_OPT_RE itself is still not touched: only its inner alternation is
+# reused, and that variable's value is byte-identical to before the factoring.
+_GC_GOPT="([[:space:]]+(${GIT_GLOBAL_OPT_ALT}|--${_GC_QVAL}|-[^-[:space:];&|()\`'\"]${_GC_QVAL}([[:space:]]+[^-[:space:];&|()\`]${_GC_QVAL})?))*"
 _GIT_CLEAN_FALLBACK_RE="(^|${_GC_SEP})((${_GC_PATH}git)|\"${_GC_PATH}git\"|'${_GC_PATH}git')${_GC_GOPT}[[:space:]]+[\"']?clean\\b"
 # Shell-in-command-position test, gating quote-neutralisation. Deliberately NOT
 # a name list: enumerating interpreter names was the repeated root cause in this
