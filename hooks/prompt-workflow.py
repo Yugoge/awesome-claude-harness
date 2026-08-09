@@ -879,10 +879,17 @@ def _marker_suppresses_spec(marker: object, session_id: str, state: dict,
         return False
     if marker.get('transcript_path') != transcript_path:
         return False
-    if OVERNIGHT_EPOCH_READING == 'R-b' and _compaction_since(
-        transcript_path, marker.get('transcript_offset')
-    ):
+    # A marker written under a DIFFERENT epoch reading must not be honoured
+    # under this one: flipping the constant to descope R-b -> R-a (or back)
+    # changes what the marker means, and an absent field means the marker was
+    # not written by this implementation at all.
+    if marker.get('epoch_reading') != OVERNIGHT_EPOCH_READING:
         return False
+    if OVERNIGHT_EPOCH_READING == 'R-b':
+        if marker.get('transcript_inode') != _transcript_inode(transcript_path):
+            return False
+        if _compaction_since(transcript_path, marker.get('transcript_offset')):
+            return False
     return True
 
 
