@@ -24,8 +24,10 @@ same lists so the two can never drift.
 Run with: python3 -m pytest hooks/tests/test_bash_safety_git_clean.py -v
 """
 
+import functools
 import json
 import os
+import re
 import subprocess
 import time
 import uuid
@@ -34,6 +36,31 @@ from pathlib import Path
 import pytest
 
 HOOK = os.path.join(os.path.dirname(__file__), "..", "pretool-bash-safety.sh")
+
+CRITERIA_PATH = (Path(__file__).resolve().parents[2] / "docs" / "dev"
+                 / "acceptance-criteria-dev-20260719-150041-a.json")
+
+
+@functools.lru_cache(maxsize=1)
+def _criteria():
+    """The LIVE acceptance-criteria file — never a local transcription of it.
+
+    A hand-maintained copy of `AC11.check.covers` froze three ACs behind its
+    origin and let a green suite coexist with ACs that owned no test at all.
+    That is the same copy-drift shape test_git_cmd_cross_consistency.py exists
+    to prevent for the shared grammar, so read the source of truth instead.
+    Missing or unreadable fails CLOSED: a self-check that silently skips is the
+    defect it is meant to catch.
+    """
+    return json.loads(CRITERIA_PATH.read_text())
+
+
+def _ac(ac_id):
+    """One acceptance criterion, by id, from the live criteria file."""
+    for entry in _criteria()["acceptance_criteria"]:
+        if entry["id"] == ac_id:
+            return entry
+    raise AssertionError("no %s in %s" % (ac_id, CRITERIA_PATH))
 
 BLOCK = 2
 ALLOW = 0
