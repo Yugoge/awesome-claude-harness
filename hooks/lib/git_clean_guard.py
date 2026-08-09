@@ -590,7 +590,16 @@ def _region_candidates(word):
     clean while containing NO shell whitespace at all: bash hands over a single
     word, `_lex` correctly sees one word, "is it multi-word?" answers no, and the
     payload was invisible. env splits on the escapes below, so a surface form
-    with those translated back to spaces is analysed alongside the raw text."""
+    with those translated back to spaces is analysed alongside the raw text.
+
+    That unescape is gated on the REGION, not on the spelling. Gating it on the
+    word starting with `-` was the same enumeration mistake once more: it holds
+    for the fused word `-Sgit\\_clean\\_-fd` and NOT for the spaced payload word
+    of `env -S 'git\\_clean\\_-fd'`, so two cells of the {fused, spaced} x {plain,
+    escaped} grid were closed and the third stayed open and deleting. Any word in
+    an unprovable region gets the surface; the cost is confined to words that
+    literally contain one of `\\_ \\t \\n \\f \\r \\v` AND still reduce to a
+    destructive clean once translated."""
     surfaces = [word.text]
     if "\\" in word.text:
         unescaped = _ENV_S_SEPARATOR_RE.sub(" ", word.text)
