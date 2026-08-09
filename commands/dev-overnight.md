@@ -436,7 +436,7 @@ Use Agent tool with:
 
   You are the PM subagent. Follow agents/pm.md instructions precisely.
 
-  User requirement document: <PROJECT_ROOT>/docs/dev/user-requirement-<DEV_SESSION_ID>.md
+  User requirement document: $REQUIREMENT_DOC
   (Read this file before interpreting Requirement, Context file, BA spec, Dev report, or state-derived focus.)
 
   Project path: <validated worktree_path from state file>
@@ -589,7 +589,7 @@ Available specialists:
 Each subagent receives, at the TOP of its prompt before any other content:
 - FIRST ACTION line: "Read $CLAUDE_PROJECT_DIR/.claude/dev-registry/$DEV_SESSION_ID/<specialist.type>.json to register with the enforcement system. Do this BEFORE any other tool call."
 - CHECKPOINT MARKING line: "see agents/<specialist.type>.md §Checkpoint Marking Contract. Mark every cp-NN done or waived before Stop or SubagentStop hook will block exit." (full SECOND ACTION SPEC_ID/cp-state semantics are defined once in the Step 1 cp-state handoff section above and need not be repeated per dispatch.)
-- User requirement document: <PROJECT_ROOT>/docs/dev/user-requirement-<DEV_SESSION_ID>.md (Read this file before interpreting Requirement, Context file, BA spec, Dev report, or state-derived focus.)
+- User requirement document: $REQUIREMENT_DOC (Read this file before interpreting Requirement, Context file, BA spec, Dev report, or state-derived focus.)
 - Project path: <validated worktree_path from state file>
 - Already addressed: <addressed_issues array from state file>
 - Focus: <focus string from state file, or "none">
@@ -694,7 +694,7 @@ Use Agent tool with:
 
   You are the PM subagent in TRIAGE mode. Follow agents/pm.md Triage Protocol.
 
-  User requirement document: <PROJECT_ROOT>/docs/dev/user-requirement-<DEV_SESSION_ID>.md
+  User requirement document: $REQUIREMENT_DOC
   (Read this file before interpreting Requirement, Context file, BA spec, Dev report, or state-derived focus.)
 
   Project path: <validated worktree_path from state file>
@@ -921,7 +921,7 @@ Agent(subagent_type: "ba")
 
     You are the BA subagent. Follow .claude/agents/ba.md instructions precisely.
 
-    User requirement document: <PROJECT_ROOT>/docs/dev/user-requirement-<DEV_SESSION_ID>.md
+    User requirement document: $REQUIREMENT_DOC
     (Read this file before interpreting Requirement, Context file, BA spec, Dev report, or state-derived focus.)
 
     Requirement: '{pipeline.description}'
@@ -1014,7 +1014,7 @@ Agent(subagent_type: "qa")
     DO NOT: build, deploy, open browser, run Playwright, or test code.
     DO: read BA's deliverables and challenge every claim.
 
-    User requirement document: <PROJECT_ROOT>/docs/dev/user-requirement-<DEV_SESSION_ID>.md
+    User requirement document: $REQUIREMENT_DOC
     (Read this file before interpreting Requirement, Context file, BA spec, Dev report, or state-derived focus.)
 
     BA spec file: docs/dev/ticket-{pipeline.timestamp_suffix}.md (legacy: docs/dev/ba-spec-{pipeline.timestamp_suffix}.md)
@@ -1110,7 +1110,7 @@ Use Agent tool with:
 
   You are the BA subagent. Follow .claude/agents/ba.md instructions precisely.
 
-  User requirement document: <PROJECT_ROOT>/docs/dev/user-requirement-<DEV_SESSION_ID>.md
+  User requirement document: $REQUIREMENT_DOC
   (Read this file before interpreting Requirement, Context file, BA spec, Dev report, or state-derived focus.)
 
   Your previous analysis was REJECTED by QA. Address each objection below
@@ -1200,7 +1200,7 @@ Agent(subagent_type: "dev")
 
     You are the dev subagent. Follow agents/dev.md instructions precisely.
 
-    User requirement document: <PROJECT_ROOT>/docs/dev/user-requirement-<DEV_SESSION_ID>.md
+    User requirement document: $REQUIREMENT_DOC
     (Read this file before interpreting Requirement, Context file, BA spec, Dev report, or state-derived focus.)
 
     Context file: docs/dev/context-{pipeline.timestamp_suffix}.json
@@ -1297,7 +1297,7 @@ Agent(subagent_type: "qa")
 
     You are the QA subagent. Follow agents/qa.md instructions precisely.
 
-    User requirement document: <PROJECT_ROOT>/docs/dev/user-requirement-<DEV_SESSION_ID>.md
+    User requirement document: $REQUIREMENT_DOC
     (Read this file before interpreting Requirement, Context file, BA spec, Dev report, or state-derived focus.)
 
     Context file: docs/dev/context-{pipeline.timestamp_suffix}.json
@@ -1513,7 +1513,7 @@ Use Agent tool with:
 
   You are the PM subagent in RETRO mode. Follow agents/pm.md Retrospective Protocol.
 
-  User requirement document: <PROJECT_ROOT>/docs/dev/user-requirement-<DEV_SESSION_ID>.md
+  User requirement document: $REQUIREMENT_DOC
   (Read this file before interpreting Requirement, Context file, BA spec, Dev report, or state-derived focus.)
 
   Project path: <validated worktree_path from state file>
