@@ -258,6 +258,24 @@ def read_command_spec(cmd_name: str) -> str:
     return ''
 
 
+def resolve_command_spec_path(cmd_name: str) -> Path | None:
+    """The file read_command_spec would read, resolved WITHOUT reading it.
+
+    Same search order as read_command_spec above. Needed for two things that
+    must not cost a 128 KB read on every prompt: the self-heal pointer printed
+    in the light continuation payload, and the spec fingerprint. It diverges
+    from read_command_spec only when the first candidate exists but cannot be
+    read, where that function falls through to the second candidate.
+    """
+    for search_path in [
+        PROJECT_DIR / '.claude' / 'commands' / f'{cmd_name}.md',
+        Path.home() / '.claude' / 'commands' / f'{cmd_name}.md',
+    ]:
+        if search_path.exists():
+            return search_path
+    return None
+
+
 def run_todo_script(cmd_name: str, user_input: str = "") -> list:
     todo_script = PROJECT_DIR / 'scripts' / 'todo' / f'{cmd_name}.py'
     if not todo_script.exists():
