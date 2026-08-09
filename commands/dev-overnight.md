@@ -232,7 +232,7 @@ Never create a worktree yourself in any mode, and never "upgrade" an `in_place` 
 
 It is a **different concept from `main_branch_at_start`**, which records whichever branch the primary checkout happened to be sitting on at launch and is never used for protection.
 
-Scope of the guarantee: correct enforcement against drift and misconfiguration, plus honest attestation. The shared common-dir remains read-write (see the KNOWN ACCEPTED LIMITATION below), so this is not a claim about a malicious actor.
+Scope of the guarantee: correct enforcement against drift and misconfiguration, plus honest attestation. In `registered_worktree` mode the shared common-dir remains read-write, and in `in_place` mode there is no worktree boundary at all (see the KNOWN ACCEPTED LIMITATION below), so in neither case is this a claim about a malicious actor.
 
 **WORKING-ROOT GUARD**: `cd` into `worktree_path` in every mode — the launcher sets it to the main root for `in_place` and to the isolated root otherwise, so one instruction covers both. If `worktree_path` is missing or invalid: HARD ABORT. Do not create state manually. Do not call EnterWorktree. Do not create a worktree. The session simply does not run.
 
