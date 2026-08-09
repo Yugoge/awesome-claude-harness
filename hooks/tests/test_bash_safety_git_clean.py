@@ -551,16 +551,65 @@ _AC17_PAYLOADS = [
 # the shell-side scan's regex interpolated the global-option segment and the
 # Python count comparison's copy did not, so a payload spelt with ANY of these
 # was seen by one layer and missed by the other.
-_AC17_GLOBAL_OPTS = [
-    "-C /tmp", "-C/tmp", "-c core.x=1", "-c a=b", "--no-pager",
-    "--git-dir=/tmp/r/.git", "--work-tree=/tmp", "--exec-path=/x",
-    "--namespace=n", "--config-env=k=E", "--bare", "--literal-pathspecs",
-    "--glob-pathspecs", "--icase-pathspecs", "--no-optional-locks", "-p", "-P",
+# Option NAME and the value it takes, kept apart from the SPELLING so the value
+# can be generated in every joining style. Writing the option and its value as
+# one frozen string is what made this axis blind for three consecutive rounds:
+# every long option was written with `=`, so a grammar that could not span
+# `--namespace ns` or `-c "k=v"` passed the suite while 89 destructive spellings
+# executed ungranted. The axis must vary the JOIN, not just the name.
+_AC17_GOPT_SPECS = [
+    ("--namespace", "ns"), ("--git-dir", "/tmp/r/.git"), ("--work-tree", "/tmp"),
+    ("--exec-path", "/x"), ("--super-prefix", "p/"), ("--config-env", "k=E"),
     # Accepted by REAL git 2.54.0 (verified by execution) but absent from the
-    # shared GIT_GLOBAL_OPT_RE enumeration. Adversarial review found these
-    # reachable even once both layers agreed, which is why the occurrence
-    # grammar's option segment is now shaped by SYNTAX, not by a name list.
-    "--no-lazy-fetch", "--no-advice", "--attr-source=HEAD",
+    # shared GIT_GLOBAL_OPT_RE enumeration, and PROVEN to delete an untracked
+    # file and a nested untracked directory in its separate-value spelling.
+    ("--attr-source", "HEAD"),
+    ("-c", "core.x=1"), ("-C", "/tmp"),
+]
+# Options that take NO value, so they have exactly one spelling.
+_AC17_GOPT_NOVAL = [
+    "--no-pager", "--bare", "--literal-pathspecs", "--glob-pathspecs",
+    "--icase-pathspecs", "--no-optional-locks", "-p", "-P",
+    "--no-lazy-fetch", "--no-advice",
+]
+
+
+def _ac17_value_joinings(name, value):
+    """EVERY way one global option's value can be JOINED to it.
+
+    THE axis every prior corpus omitted. `--namespace=ns` and `--namespace ns`
+    are the same option to git and different strings to a regex, and a fix
+    validated only against the first cannot be shown to cover the second.
+    """
+    if name.startswith("--"):
+        return ["%s=%s" % (name, value),          # inline
+                "%s %s" % (name, value),          # separate token
+                '%s="%s"' % (name, value),        # quoted inline, double
+                "%s='%s'" % (name, value),        # quoted inline, single
+                '%s "%s"' % (name, value)]        # quoted separate
+    return ["%s %s" % (name, value),              # separate token
+            "%s%s" % (name, value),               # attached
+            '%s "%s"' % (name, value),            # quoted separate, double
+            "%s '%s'" % (name, value)]            # quoted separate, single
+
+
+def _ac17_global_opts():
+    forms = []
+    for name, value in _AC17_GOPT_SPECS:
+        forms.extend(_ac17_value_joinings(name, value))
+    return forms + _AC17_GOPT_NOVAL
+
+
+_AC17_GLOBAL_OPTS = _ac17_global_opts()
+
+# Wrapper prefixes that make the shared classifier resolve ZERO git invocations,
+# so the coarse occurrence scan is the ONLY remaining guard. AC9 asserts a
+# UNIVERSAL over this class but listed three literal strings; the three passed
+# while the universal was false, which is how a green suite certified a
+# regression. Generated as a cross product with the joining axis instead.
+_AC17_WRAPPERS = [
+    "env -u FOO", "time -p", "nice -n 5", "stdbuf -o0", "ionice -c 3",
+    "setsid -w", "nohup", "command --", "env -i",
 ]
 
 
