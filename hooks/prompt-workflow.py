@@ -1183,6 +1183,18 @@ def handle_phase_a(cmd_name: str, user_input: str, sid: str, envelope_digest: st
                   'command spec injected.', file=sys.stderr)
             _cleanup_overnight_partials(sid)
             raise SystemExit(2)
+        # The launcher claims a published record implies an initialized
+        # registry. Verify it here, read-only, BEFORE any todos/bookmark/
+        # checklist exist — a post-publication corruption is the one failure the
+        # publish gate structurally cannot see. Failing closed removes the
+        # record too, so no consumer can arm the boundary over it.
+        verified, why = verify_overnight_state(sid)
+        if not verified:
+            print('OVERNIGHT LAUNCH ABORTED: the published session record did '
+                  f'not verify ({why}). The record has been removed. No '
+                  'checklist or command spec injected.', file=sys.stderr)
+            _cleanup_overnight_partials(sid)
+            raise SystemExit(2)
     tf = official_todos_path(sid)
     tf.parent.mkdir(parents=True, exist_ok=True)
     tf.write_text(json.dumps(todos, ensure_ascii=False))
