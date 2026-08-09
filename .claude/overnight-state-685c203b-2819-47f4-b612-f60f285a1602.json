@@ -1,0 +1,74 @@
+{
+  "schema_version": 9,
+  "session_id": "685c203b-2819-47f4-b612-f60f285a1602",
+  "protected_branch": "master",
+  "end_time": "2026-08-09T23:59:00Z",
+  "start_time": "2026-08-09T09:58:55Z",
+  "isolation_active_until": "2026-08-09T23:59:00Z",
+  "isolation_released_at": null,
+  "focus": "",
+  "spec_mode": "user-provided",
+  "user_spec_path": "docs/dev/specs/spec-20260808-035658.md",
+  "cycle_id": 1,
+  "cycle_contract_path": "/dev/shm/dev-workspace/dot-claude/docs/dev/overnight/685c203b-2819-47f4-b612-f60f285a1602/cycle-1/cycle-contract.json",
+  "cycle_count": 0,
+  "issues_found": 0,
+  "issues_fixed": 0,
+  "issues_skipped": 0,
+  "current_phase": "exploring",
+  "current_issues": [],
+  "failed_attempts": {},
+  "addressed_issues": [],
+  "cycle_log": [],
+  "consecutive_clean_sweeps": 0,
+  "main_root": "/dev/shm/dev-workspace/dot-claude",
+  "main_git_dir": "/dev/shm/dev-workspace/dot-claude/.git",
+  "main_branch_at_start": "fix/dev-fanout-gatekeeper-20260717",
+  "main_head_at_start": "43ec459336762a68394e5533cd24d8fa5b9395c8",
+  "main_dirty_at_start": true,
+  "worktree_path": "/dev/shm/dev-workspace/dot-claude/.claude/worktrees/overnight-20260809-685c203b",
+  "worktree_branch": "worktree-overnight-20260809-685c203b",
+  "worktree_head_at_start": "43ec459336762a68394e5533cd24d8fa5b9395c8",
+  "isolation_kind": "registered_worktree",
+  "dev_registry_session_id": "685c203b-2819-47f4-b612-f60f285a1602",
+  "dev_registry_dir": "/dev/shm/dev-workspace/dot-claude/.claude/dev-registry/685c203b-2819-47f4-b612-f60f285a1602",
+  "guarantee_level": "structural_head_switch",
+  "structural_claim_allowed": true,
+  "git_version": "2.54.0",
+  "git_effective_path": "/usr/bin/git",
+  "git_exec_path": "/usr/lib/git-core",
+  "reference_transaction_selftest_result": "structural_head_switch",
+  "actor_git_env": {
+    "shim_git": "/dev/shm/dev-workspace/dot-claude/.claude/overnight-git-policy-bin/git",
+    "bindir": "/dev/shm/dev-workspace/dot-claude/.claude/overnight-git-bin",
+    "shimdir": "/dev/shm/dev-workspace/dot-claude/.claude/overnight-git-policy-bin",
+    "env_helper": "/dev/shm/dev-workspace/dot-claude/scripts/overnight-git-env.sh",
+    "marker_only": false
+  },
+  "view_paths": {
+    "ba": {
+      "path": "views/ba.md",
+      "lines": 197
+    },
+    "dev": {
+      "path": "views/dev.md",
+      "lines": 272
+    },
+    "qa": {
+      "path": "views/qa.md",
+      "lines": 207
+    },
+    "pm": {
+      "path": "views/pm.md",
+      "lines": 137
+    },
+    "orchestrator": {
+      "path": "views/orchestrator.md",
+      "lines": 172
+    }
+  },
+  "pm_triage_reports": [],
+  "pm_retro_reports": [],
+  "unresolved_issues": [],
+  "codex_required": true
+}
