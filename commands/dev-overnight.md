@@ -198,25 +198,33 @@ The state file has already been created by the UserPromptSubmit hook at `.claude
 
 If no state file exists, HARD ABORT. Do not fabricate a state file and do not proceed; the launcher fails closed on every refusal path, so a missing state means the overnight actor must not run.
 
-**BINDING BLOCK (MANDATORY — run this BEFORE the `cd` below, BEFORE the ONE-CALL INITIALIZATION, and before any use of `$STATE_FILE`; on the first-run Step 1 path AND on the Continuation Mode path).**
+**SESSION BINDING + ONE-CALL INITIALIZATION (MANDATORY — ONE Bash invocation, issued before the `cd` below and before ANY Agent launch; run the identical block on the first-run Step 1 path AND on the Continuation Mode path).** Every Bash tool call is a fresh shell, so a binding made in one call does not survive into the next. The bindings and the call that consumes them MUST therefore be issued together, as a single command:
 
 ```bash
-# Bind STATE_FILE to the canonical ABSOLUTE path of THIS session's state file.
-# A bare glob is not a binding: several overnight-state files can coexist, so the
-# session_id recorded inside the file is validated against the live session.
+# 1. Resolve the live session id. The Bash environment exposes CLAUDE_CODE_SESSION_ID;
+#    CLAUDE_SESSION_ID is a legacy fallback and is normally unset.
+CURRENT_SESSION_ID="${CLAUDE_CODE_SESSION_ID:-${CLAUDE_SESSION_ID:-}}"
+[ -n "$CURRENT_SESSION_ID" ] || { echo "ERROR: no session id in environment" >&2; exit 1; }
+
+# 2. Bind STATE_FILE to the canonical ABSOLUTE path of THIS session's state file.
+#    A bare glob is not a binding: several overnight-state files can coexist, so the
+#    session_id recorded inside the file is validated against the live session.
 STATE_FILE=""
 for f in "$CLAUDE_PROJECT_DIR"/.claude/overnight-state-*.json; do
   [ -f "$f" ] || continue
-  grep -Fq "\"session_id\": \"$CLAUDE_SESSION_ID\"" "$f" && { STATE_FILE="$(readlink -f "$f")"; break; }
+  grep -Fq "\"session_id\": \"$CURRENT_SESSION_ID\"" "$f" && { STATE_FILE="$(readlink -f "$f")"; break; }
 done
-[ -n "$STATE_FILE" ] || { echo "ERROR: no overnight state file matches session $CLAUDE_SESSION_ID" >&2; exit 1; }
+[ -n "$STATE_FILE" ] || { echo "ERROR: no state file matches session $CURRENT_SESSION_ID" >&2; exit 1; }
 
-# Bind the dev-registry path that every FIRST ACTION line resolves against.
-DEV_SESSION_ID="$CLAUDE_SESSION_ID"
+# 3. Bind the dev-registry path that every FIRST ACTION line resolves against.
+DEV_SESSION_ID="$CURRENT_SESSION_ID"
 REGISTRY_DIR="$CLAUDE_PROJECT_DIR/.claude/dev-registry/$DEV_SESSION_ID"
+
+# 4. Initialize, in this same shell. Idempotent — the identical block re-runs every cycle.
+~/.claude/scripts/overnight-init.sh --state-file "$STATE_FILE"
 ```
 
-`STATE_FILE` is absolute and canonical, so it keeps resolving after the `cd` into `worktree_path`. `REGISTRY_DIR` is also re-emitted by `overnight-init.sh` (see its `KEY=VALUE` table below) — binding it here means it is defined *before* the call, not only after it. If the launcher generated a UUID instead of using `$CLAUDE_SESSION_ID`, take `session_id` from the state file the continuation hook named and use that value on both sides of the comparison.
+`STATE_FILE` is absolute and canonical, so it stays valid after the `cd` into `worktree_path`. Do NOT split this block across Bash calls, and do NOT invoke the initializer on its own: a fresh shell expands `$STATE_FILE` empty, which is the failure this block exists to prevent.
 
 **ISOLATION IS THE USER'S CHOICE (2026-08-08).** `/dev-overnight` no longer creates a worktree automatically. `isolation_kind` records what the user asked for and is the ONLY field you branch on:
 
@@ -1742,65 +1750,8 @@ The state file is created by `create-overnight-state.sh` during session initiali
 
 **Worktree naming** (`registered_worktree` / `fresh_clone_checkout` only): a session launched with `--worktree` creates `overnight-<YYYYMMDD>-<session_id_short>` (first 8 chars of session_id) to avoid conflicts between concurrent sessions. Under `in_place` nothing is created and the session stays on the branch the checkout was already on.
 
-**Schema**:
-```json
-{
-  "session_id": "string (from $CLAUDE_SESSION_ID or UUID)",
-  "end_time": "ISO-8601 datetime",
-  "start_time": "ISO-8601 datetime",
-  "focus": "string (discovery hint from user, or empty)",
-  "spec_mode": "autonomous|user-provided",
-  "user_spec_path": "string (path to user-provided spec, or null)",
-  "cycle_count": 0,
-  "issues_found": 0,
-  "issues_fixed": 0,
-  "issues_skipped": 0,
-  "current_phase": "initializing|exploring|pipeline_creation|analyzing|implementing|verifying|iterating|logging|retrospective|completed",
-  "current_issues": [
-    {
-      "index": 0,
-      "description": "issue description",
-      "location": "file:line",
-      "severity": "critical|major|minor|cosmetic",
-      "category": "category string",
-      "agents_flagged": ["product-owner", "architect"],
-      "phase": "pending|ba_complete|dev_complete|qa_failed|done",
-      "iteration": 0,
-      "status": "active|fixed|skipped",
-      "timestamp_suffix": "YYYYMMDD-HHMMSS-0",
-      "spec_path": "docs/dev/overnight/<session_id>/spec-pipeline-<index>.md"
-    }
-  ],
-  "failed_attempts": {"issue_desc": 2},
-  "addressed_issues": ["issue_desc_1", "issue_desc_2"],
-  "cycle_log": [
-    {
-      "cycle": 1,
-      "pipeline_index": 0,
-      "issue": "description",
-      "location": "file:line",
-      "severity": "critical|major|minor|cosmetic",
-      "status": "fixed|skipped",
-      "iterations": 1,
-      "timestamp": "ISO-8601"
-    }
-  ],
-  "consecutive_clean_sweeps": 0,
-  "worktree_path": "absolute path to the session working root; never null. Equals main_root under in_place; /abs/main/.claude/worktrees/overnight-... under registered_worktree; the clone path under fresh_clone_checkout",
-  "worktree_branch": "the session working branch; never the protected branch. Under in_place this is the branch the checkout was already on; otherwise worktree-overnight-YYYYMMDD-<session_id_short>",
-  "pm_triage_reports": [],
-  "pm_retro_reports": [],
-  "unresolved_issues": [
-    {
-      "description": "issue description",
-      "severity": "critical|major|minor|cosmetic",
-      "cycles_unresolved": 0,
-      "last_attempt_reason": "why it failed or was deferred",
-      "recommended_approach": "what to try next"
-    }
-  ]
-}
-```
+**Schema**: the full state-file field catalogue lives in `docs/reference/overnight-reference.md`
+(§State file schema). The orchestrator reads named fields and never writes this file.
 
 ---
 
@@ -1848,23 +1799,7 @@ Per-agent responsibilities are owned by `agents/<name>.md` (pm, product-owner, a
 
 ## Comparison: /dev vs /dev-overnight
 
-| Aspect | /dev | /dev-overnight |
-|--------|------|----------------|
-| Input | User provides requirement | Agent discovers issues via 4 specialist subagents |
-| BA phase | Full BA + clarification loop (max 3 rounds) | BA with clarification skipped (round=3) |
-| BA validation | Step 8 | Step 9 |
-| Dev validation | Step 12 | Step 13 |
-| QA processing | Step 14 decision tree | Step 16 autonomous decision |
-| Iteration loop | Step 10 (max 5, asks user after 5) | Step 17 (max 5 per pipeline, auto-skip after 5) |
-| Settings update | Step 9 | Step 18 (aggregated from all pipelines) |
-| Loop | Single pass | Continuous until end-time |
-| Termination | After QA passes | After end-time expires |
-| User interaction | Required (clarification, approval) | None (fully autonomous) |
-| Scope per cycle | One complete feature/fix | User-pathway-filtered findings (parallel pipelines, gated by PM Step 4 — Tier 1 + multi-agent-consensus in autonomous mode; user-need-relevant in user-provided mode); specialists' free exploration is preserved per Section 5.7 anti-pattern #5 |
-| Subagent usage | BA + dev + QA | product-owner + architect + user + ui-specialist + BA + dev + QA |
-| Stop hook | Workflow enforcement only | Workflow + time-lock |
-| Worktree | Not used | Not used by default (`in_place`); created on first run and reused across cycles only under `--worktree` |
-| Total steps | 13 | 21 |
+Orientation table only — see `docs/reference/overnight-reference.md`.
 
 ---
 
