@@ -1628,11 +1628,11 @@ Simply mark this step as completed via TodoWrite. The PostToolUse:TodoWrite hook
 
 **CRITICAL: DO NOT auto-merge to $DEFAULT_BRANCH.**
 
-DO NOT squash merge. DO NOT manually copy files. DO NOT create a single commit on $DEFAULT_BRANCH with worktree changes. DO NOT cherry-pick commits. The worktree branch preserves full commit history. A proper `git merge` brings all commits to $DEFAULT_BRANCH with their original authorship and messages intact. Only the USER should trigger the merge, after reviewing the changes.
+DO NOT squash merge. DO NOT manually copy files. DO NOT create a single commit on $DEFAULT_BRANCH with this session's changes. DO NOT cherry-pick commits. Under `registered_worktree` / `fresh_clone_checkout` the worktree branch preserves full commit history, and a proper `git merge` brings all commits to $DEFAULT_BRANCH with their original authorship and messages intact. Under `in_place` the cycles already committed to the checkout's own working branch, so there is no session-created branch to merge and nothing for the session to promote. In every mode, only the USER decides what happens next, after reviewing the changes.
 
-The overnight session does NOT merge anything. It preserves the worktree for user review.
+The overnight session does NOT merge anything. Under `registered_worktree` / `fresh_clone_checkout` it preserves the worktree for user review; under `in_place` it leaves the cycle commits on the working branch it launched from.
 
-**State file cleanup**: Automatic, owned by the orchestrator hooks listed under "Integration with Hooks" below. No manual deletion needed.
+**State file cleanup**: Under `registered_worktree` / `fresh_clone_checkout`, `hooks/merge.sh` deletes the state file after a successful `/merge` keyed on the worktree branch. Under `in_place` there is no worktree branch to merge, so no automatic cleanup path fires — the record at `<project_dir>/.claude/overnight-state-<session_id>.json` stays until the user removes it.
 
 **Default-branch resolver** (run BEFORE producing the announcement):
 
