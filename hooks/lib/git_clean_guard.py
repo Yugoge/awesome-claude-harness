@@ -38,22 +38,42 @@ pretool-block-branch-pr-worktree.py and must stay stable, and its `_WRAPPERS`
 set is a closed 12-name enumeration that this module must no longer treat as
 exhaustive.
 
-Coverage bounds. The previous revision stated this section as a UNIVERSAL
-fail-closed posture and measurement falsified it in three places, so every
-clause below is now a MEASURED bound rather than a generalisation:
-  - Ignored-file (`-x`/`-X`) CONTENT protection is out of scope; the snapshot
-    still fires for `-x` cleans to preserve the untracked-non-ignored WIP.
+Coverage bounds. TWICE this section has asserted a universal fail-closed
+posture and twice measurement has falsified it - three carriers the first time,
+two more the second, each found by someone choosing inputs this module's author
+had not imagined. The universal claim is RETIRED rather than re-hedged, because
+the habit of stating a bound broader than the one measured is exactly what makes
+a green suite read as coverage. An unlisted carrier below reads as UNKNOWN.
+
+What holds without reference to any corpus is STRUCTURAL, and it is the only
+thing offered as a guarantee: a region this module cannot prove inert is
+scanned, and a destructive clean reducible anywhere inside it DENIES. Every
+terminal path - an unresolved command word, an exhausted recursion budget, a
+raised exception - ends in DENY. That is what covers the carrier nobody has
+thought of yet; the measured list below is evidence, not the guarantee.
+
+MEASURED NOT PROTECTED - declared residuals, both owned outside this lane:
+  - Ignored-file (`-x`/`-X`) CONTENT; the snapshot still fires for `-x` cleans
+    so untracked-non-ignored WIP is preserved.
   - A command word that exists only after EXPANSION (`$GIT clean -fd`, an
     `alias.wipe=clean` indirection) is not statically reducible and yields
-    NONE. Those are the accepted CX-2/CX-3 residuals and live in the shared
+    NONE - the accepted CX-2/CX-3 residuals, which live in the shared
     classification layer, not in this grant-residual lane.
-  - EVERYTHING else that still reduces to a destructive clean DENIES unless its
-    target is proven. That now includes the three shapes that used to fall
-    through to NONE: a FUSED option carrying the command word
-    (`env -S'git clean -fd'`), argument text behind ANY command word INCLUDING
-    a git one (`git rebase -x '<clean>'`), and an embedded payload nested
-    deeper than `_MAX_EMBED_DEPTH`, where TRUNCATED analysis denies instead of
-    reading as "nothing here".
+
+MEASURED PROTECTED, by carrier family, against the GENERATED cross-product in
+tests/generated/dev-20260719-150041-c/test_AC21_*.py - whose rows survive only
+when bash is observed to execute them, so a family absent from this list is a
+generator gap that shows up as an untested axis rather than as silent coverage:
+  - direct, and behind a wrapper name this module has never heard of;
+  - a FUSED option carrying the command word (`env -S'git clean -fd'`);
+  - env's own separator escapes, in the fused AND spaced spellings of both
+    `-S` and `--split-string` (`env -S 'git\_clean\_-fd'`);
+  - argument text behind ANY command word INCLUDING a git one
+    (`git rebase -x '<clean>'`, `bisect run`, `submodule foreach`);
+  - an interpreter payload at any nesting depth, where analysis truncated at
+    `_MAX_EMBED_DEPTH` DENIES instead of reading as "nothing here";
+  - a payload delivered on STDIN by here-string or heredoc, to any command,
+    in every quoting form - previously dropped with the redirection operand.
 
 Accepted over-blocks (cost usability under an active grant, never data):
   - Argument text that reduces to a destructive clean denies wherever it sits -
