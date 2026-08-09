@@ -1829,7 +1829,7 @@ The state file is created by `create-overnight-state.sh` during session initiali
 ### Loop Mechanism (v3)
 - When all todo steps are marked completed via TodoWrite (every todo, including the letter-suffix Step 11g), the posttool-overnight-loop.py hook fires
 - It checks overnight-state.json: if end_time is in the future, it resets all todos to pending and injects loop continuation instructions
-- The agent then resumes from Step 2 (exploration) since worktree already exists
+- The agent then resumes from Step 2 (exploration) since the working root is already established
 - This provides natural context boundaries at each cycle without requiring external cron triggers
 
 ---
