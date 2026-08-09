@@ -1932,6 +1932,18 @@ _GC_QVAL="[^[:space:];&|()\`]*"
 # instead admits one parse per marker position (four for `HEAD`), and nested in
 # the option run that is 4^n: measured 8.8s on a failing match over twelve
 # tokens, on a regex that runs on every Bash tool call.
+# Value-taking long options = the shared list PLUS an explicit delta. git 2.54.0
+# accepts `--attr-source <tree-ish>` and `--shallow-file <path>` with a SEPARATE
+# value and the shared enumeration lists neither; adversarial review proved
+# `git --attr-source ns clean -fd` and `git --shallow-file ns clean -fd` delete
+# an untracked file and a nested untracked directory while exiting 0 ungranted.
+# The delta is stated as a delta rather than a rewritten list so the shared names
+# stay single-sourced. RESIDUAL, disclosed rather than hidden: a value-taking
+# long option that nobody has listed, whose value carries no marker character at
+# all, is still unspanned — the same gap the shared enumeration itself has. Only
+# the marker-free case is affected; a value with a `/`, `.`, `=`, `:` or an
+# uppercase letter or digit is covered generically by branch 3, no name needed.
+_GC_VALOPT_NAMES="${GIT_GLOBAL_VALOPT_NAMES}|attr-source|shallow-file"
 _GC_VMARK="/.=:~@%A-Z0-9"
 _GC_PLAINTOK="[^-[:space:];&|()\`${_GC_VMARK}][^[:space:];&|()\`${_GC_VMARK}]*"
 _GC_VALTOK="(${_GC_PLAINTOK})?[${_GC_VMARK}][^[:space:];&|()\`]*"
