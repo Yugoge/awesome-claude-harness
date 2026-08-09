@@ -1214,7 +1214,11 @@ Agent(subagent_type: "dev")
     After implementation, update the spec: Section 2 (What Was Attempted) and Section 3 (What Was Changed).
 
     IMPORTANT: All file reads, writes, and git operations must use absolute paths
-    inside the project root above. Do not modify files in the main project directory.
+    inside the project root above. Under isolation_kind registered_worktree or
+    fresh_clone_checkout that root is an isolated tree, and you must not modify
+    files in the main project directory. Under in_place that root IS the main
+    checkout — it is where the work belongs, and there is no second directory to
+    stay out of.
   "
 ```
 
