@@ -701,9 +701,15 @@ def _marker_writable(path: Path) -> bool:
     otherwise make the entire cadence saving silently zero: every prompt
     re-delivers the heavy payload, the hook still exits 0, and every hermetic
     test still passes because each builds its own writable fixture.
+
+    An existing NON-FILE at the marker path counts as unwritable: os.replace
+    onto a directory always fails, so the cadence really is inactive and the
+    condition must be announced rather than merely retried forever.
     """
     try:
-        return os.access(path if path.exists() else path.parent, os.W_OK)
+        if path.exists():
+            return path.is_file() and os.access(path, os.W_OK)
+        return os.access(path.parent, os.W_OK)
     except Exception:
         return False
 
