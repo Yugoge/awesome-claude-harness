@@ -722,6 +722,59 @@ def _ac17_globalopt_chained_matrix():
     return forms
 
 
+def _ac17_globalopt_wrapper_matrix():
+    """A DESTRUCTIVE clean behind a wrapper prefix, in every value-joining
+    spelling. This is the direction the previous round could not see: its
+    differential ran over ORDINARY commands, which by construction can only
+    reveal over-blocks, never a new ALLOW. Every form here was measured at
+    exit 0 ungranted against the round-3 hook and PROVEN to delete an untracked
+    file and a nested untracked directory at real git 2.54.0.
+    """
+    forms = []
+    for i, (name, value) in enumerate(_AC17_GOPT_SPECS):
+        for j, gopt in enumerate(_ac17_value_joinings(name, value)):
+            wrapper = _AC17_WRAPPERS[(i + j) % len(_AC17_WRAPPERS)]
+            forms.append("%s git %s clean -fd" % (wrapper, gopt))
+    for i, gopt in enumerate(_AC17_GOPT_NOVAL):
+        forms.append("%s git %s clean -fdx"
+                     % (_AC17_WRAPPERS[i % len(_AC17_WRAPPERS)], gopt))
+    return forms
+
+
+# git subcommands that run an ARBITRARY STRING as a command. A destructive clean
+# sitting in those quotes is execution, not data, and `git rebase -x '<clean>'`
+# was proven to delete while exiting 0 ungranted on BOTH the pre-lane hook and
+# the round-3 hook — an ordinary developer command, in no exclusion list.
+_AC17_EXEC_CTX = [
+    "git rebase -x '%s' HEAD~2",
+    'git rebase --exec "%s" -i HEAD~3',
+    "git rebase --exec='%s' HEAD~2",
+    "git submodule foreach '%s'",
+    "git submodule foreach --recursive '%s'",
+    "git filter-branch --tree-filter '%s' HEAD",
+    "git filter-branch --index-filter '%s' HEAD",
+    "git bisect run sh -c '%s'",
+    "git clean -n && git rebase -x '%s' HEAD~2",
+]
+_AC17_EXEC_CFG = ["sequence.editor", "core.pager", "diff.external", "core.editor"]
+
+
+def _ac17_execctx_matrix():
+    """Each exec-taking subcommand carrying each destructive payload spelling,
+    plus the `-c <key>='<command>'` route that reaches the same place."""
+    forms = []
+    payloads = ["git clean -fd", "git -c a=b clean -fdx",
+                'git -C "." clean -fd', "git --namespace ns clean -fd",
+                "git --attr-source HEAD clean -fd"]
+    for i, tmpl in enumerate(_AC17_EXEC_CTX):
+        for payload in payloads:
+            forms.append(tmpl % payload)
+    for key in _AC17_EXEC_CFG:
+        forms.append("git -c %s='git clean -fdx' rebase -i HEAD~2" % key)
+        forms.append('git -c %s="git clean -fdx" log' % key)
+    return forms
+
+
 # Interpreter names NOBODY enumerated: every one of these escaped the previous
 # round's 16-name allowlist at exit 0, and `rbash` is installed on this host and
 # IS bash. Listed here as evidence for the class, not as the definition of it —
