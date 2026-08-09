@@ -629,10 +629,7 @@ _AC17_GLOBAL_OPTS = _ac17_global_opts()
 # UNIVERSAL over this class but listed three literal strings; the three passed
 # while the universal was false, which is how a green suite certified a
 # regression. Generated as a cross product with the joining axis instead.
-_AC17_WRAPPERS = [
-    "env -u FOO", "time -p", "nice -n 5", "stdbuf -o0", "ionice -c 3",
-    "setsid -w", "nohup", "command --", "env -i",
-]
+_AC17_WRAPPERS = _ZERO_INV_WRAPPERS
 
 
 def _ac17_shell_matrix():
