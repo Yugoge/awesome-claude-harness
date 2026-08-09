@@ -1703,22 +1703,25 @@ The time-lock has been released. The session can now end normally.
 
 ### Post-loop manual flow (human-in-the-loop)
 
-After all overnight cycles complete, the user is expected to review results and run the following three commands MANUALLY, in this order:
+After all overnight cycles complete, the user is expected to review results and run the following commands MANUALLY, in this order — **three** under `registered_worktree` / `fresh_clone_checkout`, and **two** under `in_place`, where step 2 does not apply because the cycles already landed on the checkout's own working branch:
 
 1. **`/commit -m "<session summary>"`** (optional)
-   - Use this if the user has master-branch touch-ups OUTSIDE the worktree cycles (e.g. README updates, doc fixes)
-   - Skip if there's nothing to commit on master beyond what overnight cycles produced
+   - Under `registered_worktree` / `fresh_clone_checkout`: use this if the user has master-branch touch-ups OUTSIDE the worktree cycles (e.g. README updates, doc fixes)
+   - Under `in_place`: there is no master-side / worktree-side distinction — use it only if work is left uncommitted after the final cycle's end-of-cycle commit
+   - Skip if there's nothing to commit beyond what overnight cycles produced
    - The commit message MUST be a real session summary the agent writes (not a placeholder); per redev6 P-MSG, `-m` is REQUIRED in non-bridge modes
    - For `--force` overrides on `/commit` (e.g., spec-only commits without ceremony artifacts), see `commands/commit.md`
 
-2. **`/merge <worktree-branch>`**
+2. **`/merge <worktree-branch>`** — `registered_worktree` / `fresh_clone_checkout` ONLY; **skip entirely under `in_place`**
    - Merges the overnight worktree branch back into master
    - The blessed-bridge env-var (`CLAUDE_MERGE_COMMAND_ACTIVE=1`) handles privilege-guard authorization
    - If merge conflicts arise, the user resolves manually before continuing
+   - Under `in_place` no session-created branch exists, so this step has no operand and the blessed-bridge authorization is never needed
 
 3. **`/push`**
-   - Pushes master to origin
-   - Requires clean working tree post-merge and commits ahead of upstream
+   - Under `registered_worktree` / `fresh_clone_checkout`: pushes master to origin
+   - Under `in_place`: pushes the checkout's own working branch to origin — never master, which the launcher refused to start on
+   - Requires clean working tree (post-merge in the isolated modes) and commits ahead of upstream
    - The push wrapper writes its own grant manifest; no further user action required
 
 
