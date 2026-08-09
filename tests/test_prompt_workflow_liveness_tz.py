@@ -421,6 +421,14 @@ class TestAC5SessionBinding(unittest.TestCase):
         mismatched = build_state('AAAA', future_z(1), cycle_count=7)
         self._assert_zero(self._run_row([('BBBB', mismatched)], 'BBBB'))
 
+    def test_row_5_11b_identity_comparison_is_case_sensitive(self):
+        """Mutation lock: a case-insensitive identity comparison would accept
+        'aaaa' as the owner of 'AAAA' and pass every other row unchanged."""
+        variant = build_state('aaaa', future_z(1), cycle_count=7)
+        self._assert_zero(self._run_row([('AAAA', variant)], 'AAAA'))
+        owned = build_state('AAAA', future_z(1), cycle_count=7)
+        self._assert_zero(self._run_row([('AAAA', owned)], 'aaaa'))
+
     def test_row_5_12_rejected_record_must_not_trigger_fallback_scan(self):
         """DISCRIMINATING: rejection must not be followed by a scan onto another record."""
         mismatched = build_state('AAAA', future_z(1), cycle_count=7)
