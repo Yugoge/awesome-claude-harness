@@ -202,7 +202,7 @@ class TestAC1RecurringCostIsBounded(unittest.TestCase):
             outputs = [deliver(fixture) for _ in range(5)]
 
             self.assertIn(SPEC_HEADER, outputs[0])
-            self.assertIn(COMMAND_DOC.read_text().strip()[:400], outputs[0])
+            self.assertIn(spec_body_probe(), outputs[0])
 
             for index, out in enumerate(outputs[1:], start=2):
                 with self.subTest(prompt=index):
@@ -415,7 +415,7 @@ class TestAC5CycleBoundaryStillDelivers(unittest.TestCase):
             out = deliver(fixture)
 
             self.assertIn(SPEC_HEADER, out)
-            self.assertIn(COMMAND_DOC.read_text().strip()[:400], out)
+            self.assertIn(spec_body_probe(), out)
             self.assertIn('OVERNIGHT CONTINUATION - Cycle 6', out.splitlines()[0])
             self.assertIn('resume from phase="exploring"', out)
             self.assertIn('Phase mapping:', out)
@@ -587,7 +587,9 @@ class TestScopeConfinement(unittest.TestCase):
         # tz's session binding and its fail-closed liveness predicate.
         self.assertIn("state.get('session_id') != session_id",
                       bodies['find_any_overnight_state'])
-        self.assertNotIn('glob', bodies['find_any_overnight_state'])
+        # No project-wide scan survives (a prose mention in the docstring
+        # explaining the removed glob is not a call site).
+        self.assertNotIn('.glob(', bodies['find_any_overnight_state'])
         self.assertIn("replace('Z', '+00:00')", bodies['_is_active_state'])
 
     def test_handle_phase_b_still_threads_the_session_id(self):
