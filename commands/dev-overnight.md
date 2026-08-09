@@ -56,9 +56,9 @@ Every Agent dispatch from this orchestrator shares the following invariant prelu
 ## Overview
 
 ```
-Hook creates state file + worktree + view detection (automatic)
+Hook creates state file + view detection (automatic; a worktree only under --worktree)
   |
-Step 1: Read state file + enter worktree (first run only)
+Step 1: Read state file + cd into the working root (first run only)
   |
   +---> EXPLORATION PHASE (Step 2)
   |       Step 2: PM-Plan subagent (builds test plan with priorities + recommended_specialists)
