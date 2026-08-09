@@ -1051,7 +1051,14 @@ def handle_phase_b(session_id: str) -> None:
         # buffered write that fails at interpreter shutdown would otherwise
         # leave a marker claiming a delivery that never reached the agent.
         sys.stdout.flush()
-        commit_overnight_delivery(session_id, overnight_ctx)
+        recorded = commit_overnight_delivery(session_id, overnight_ctx)
+        if OVERNIGHT_SPEC_HEADER in overnight_ctx and not recorded:
+            # The pre-emission probe can pass while the write still fails (an
+            # immutable attribute, a full filesystem, a state file that moved).
+            # Without this line that case is indistinguishable from a normal
+            # first delivery and the saving silently never materializes.
+            print('NOTE: the overnight delivery marker was not recorded; the '
+                  'command specification will be re-sent on the next prompt.')
     todos_file = official_todos_path(session_id)
     if not todos_file.exists():
         return

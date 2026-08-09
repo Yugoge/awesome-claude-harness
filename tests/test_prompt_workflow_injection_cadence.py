@@ -94,7 +94,8 @@ class Fixture:
     """A hermetic project + HOME + transcript, never touching the repo."""
 
     def __init__(self, tmp: str, session_id: str = SID, cycle_count: int = 0,
-                 isolation_kind: str = 'registered_worktree'):
+                 isolation_kind: str = 'registered_worktree',
+                 with_transcript: bool = True):
         self.session_id = session_id
         self.root = Path(tmp)
         self.project = self.root / 'proj'
@@ -107,7 +108,8 @@ class Fixture:
         transcripts = self.home / '.claude' / 'projects' / '-proj'
         transcripts.mkdir(parents=True)
         self.transcript = transcripts / f'{session_id}.jsonl'
-        self.transcript.write_text(json.dumps({'type': 'user', 'uuid': 'u0'}) + '\n')
+        if with_transcript:
+            self.transcript.write_text(json.dumps({'type': 'user', 'uuid': 'u0'}) + '\n')
         self.state_path = self.project / '.claude' / f'overnight-state-{session_id}.json'
         self.write_state(cycle_count=cycle_count, isolation_kind=isolation_kind)
 
@@ -656,16 +658,26 @@ class TestScopeConfinement(unittest.TestCase):
             self.assertEqual(str(fixture.transcript), marker['transcript_path'])
             self.assertGreater(marker['transcript_offset'], 0)
 
-    def test_absent_transcript_path_is_recorded_not_guessed(self):
-        """No epoch signal degrades to R-a VISIBLY, in the artifact."""
+    def _run_without_payload_transcript(self, fixture) -> dict:
+        payload = json.dumps({'prompt': 'go', 'session_id': fixture.session_id})
+        subprocess.run([sys.executable, str(HOOK_PATH)], input=payload,
+                       capture_output=True, text=True, env=fixture.env())
+        return json.loads(fixture.marker_path().read_text())
+
+    def test_store_scan_is_the_fallback_when_the_payload_omits_the_path(self):
         with tempfile.TemporaryDirectory() as tmp:
             fixture = Fixture(tmp)
-            payload = json.dumps({'prompt': 'go', 'session_id': fixture.session_id})
-            subprocess.run([sys.executable, str(HOOK_PATH)], input=payload,
-                           capture_output=True, text=True, env=fixture.env())
-            marker = json.loads(fixture.marker_path().read_text())
+            marker = self._run_without_payload_transcript(fixture)
+            self.assertEqual(str(fixture.transcript), marker['transcript_path'])
+
+    def test_no_epoch_signal_at_all_degrades_to_R_a_VISIBLY(self):
+        """When neither source resolves, the marker SAYS SO rather than guessing."""
+        with tempfile.TemporaryDirectory() as tmp:
+            fixture = Fixture(tmp, with_transcript=False)
+            marker = self._run_without_payload_transcript(fixture)
             self.assertEqual('', marker['transcript_path'])
             self.assertEqual(0, marker['transcript_offset'])
+            self.assertEqual('R-b', marker['epoch_reading'])
 
 
 if __name__ == '__main__':
