@@ -1967,9 +1967,15 @@ _GC_VALTOK="(${_GC_PLAINTOK})?[${_GC_VMARK}][^[:space:];&|()\`]*"
 #       `git --no-pager grep clean src/` stays a grep: `grep` is a plain
 #       lowercase word, so the run stops there and no `clean` follows.
 #
-# A union can only ADD matches, so relative to either predecessor it can only
-# turn ALLOW into BLOCK — a new ungranted allow is impossible by construction,
-# which is the property the hand-shaped substitute could not offer.
+# NOT claimed: that widening the grammar cannot possibly produce a new ALLOW.
+# That "by construction" argument is FALSE and was retracted after adversarial
+# review supplied a counterexample — `git --foo clean.x --foo /p/git clean`
+# yields two matches under the narrower grammar and one longer match under the
+# wider one, so an occurrence COUNT can go DOWN, and the count is what
+# unresolved_clean() compares. No reachable ALLOW follows from it here, but that
+# is a MEASURED result (the 725-form destructive differential), not a proof.
+# Match-set reasoning is the kind of claim that shipped the last regression;
+# the differential is the evidence.
 #
 # Branches 2 and 3 are DISJOINT (one requires a leading `-`, the other forbids
 # it), which is load-bearing for cost, not just for clarity. An earlier shape of
