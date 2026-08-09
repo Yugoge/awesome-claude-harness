@@ -541,6 +541,20 @@ class TestAC11MarkerOrderingAndWritability(unittest.TestCase):
             self.assertEqual(0, second.returncode)
             self.assertIn(SPEC_HEADER, first.stdout)
             self.assertIn(SPEC_HEADER, second.stdout)
+            # The failure must be announced, not merely survived: a write that
+            # fails on every prompt means the saving is exactly zero.
+            self.assertIn('marker was not recorded', first.stdout)
+            self.assertIn('marker was not recorded', second.stdout)
+
+    def test_successful_delivery_announces_nothing(self):
+        """The degradation notices must not fire on the healthy path."""
+        with tempfile.TemporaryDirectory() as tmp:
+            fixture = Fixture(tmp)
+            out = deliver(fixture)
+            self.assertIn(SPEC_HEADER, out)
+            self.assertNotIn('marker was not recorded', out)
+            self.assertNotIn('INACTIVE', out)
+            self.assertTrue(fixture.marker_path().is_file())
 
     def test_unwritable_marker_location_is_announced_not_silent(self):
         """COVERAGE GAP G1 -- no AC checked that the marker CAN be written.
