@@ -1967,6 +1967,7 @@ if [ "$_GIT_CLEAN_HAS_INV" = "1" ]; then
     HOOKS_DIR_CLEAN="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)" \
     CLEAN_RAW_CMD="$COMMAND" CLEAN_CLASSIFIER_JSON="$CLASSIFIER_JSON" \
     CLEAN_OCCURRENCE_RE="$_GIT_CLEAN_FALLBACK_RE" CLEAN_SHELL_RE="$_GC_SHELL_RE" \
+    CLEAN_EXECCTX_RE="$_GC_EXECCTX_RE" \
     "$PYTHON_BIN" - <<'PYEOF' 2>/dev/null
 import json, os, re, sys
 sys.path.insert(0, os.environ['HOOKS_DIR_CLEAN'])
