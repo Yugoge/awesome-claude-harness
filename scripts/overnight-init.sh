@@ -199,6 +199,23 @@ while IFS= read -r agent; do
   SENTINEL_COUNT=$((SENTINEL_COUNT + 1))
 done <<< "$AGENT_LIST"
 
+# Direct artifact validation, in BOTH modes, before any success is claimed. In
+# verify mode _write_confined already compared bytes; in mutating mode `cat >`
+# can still leave a short write behind. Re-reading each sentinel with jq is the
+# only check that proves what is ON DISK — never what was intended. The count is
+# asserted against len(CP_AGENTS) parsed at run time, never a literal.
+EXPECTED_SENTINELS="$(grep -c . <<< "$AGENT_LIST")"
+[[ "$SENTINEL_COUNT" == "$EXPECTED_SENTINELS" ]] \
+  || _die "sentinel count $SENTINEL_COUNT != CP_AGENTS length $EXPECTED_SENTINELS"
+while IFS= read -r agent; do
+  [[ -n "$agent" ]] || continue
+  _s="$REGISTRY_DIR/$agent.json"
+  [[ -f "$_s" && ! -L "$_s" ]] || _die "sentinel missing or not a regular file: $_s"
+  jq -e --arg a "$agent" --arg s "$SESSION_ID" \
+     '.agent_type == $a and .session_id == $s' "$_s" >/dev/null 2>&1 \
+    || _die "sentinel failed validation (malformed, wrong agent_type, or wrong session_id): $_s"
+done <<< "$AGENT_LIST"
+
 # --- 2. enforcement flags -----------------------------------------------------
 # E2E is unconditional; codex is opt-in via the record. Both are written by a
 # single write-enforce-flag.sh invocation.
