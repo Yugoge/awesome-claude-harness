@@ -6,7 +6,7 @@
   "spec_mode": "user-provided",
   "spec_path": "/dev/shm/dev-workspace/dot-claude/docs/dev/specs/spec-20260808-035658.md",
   "created_at": "2026-08-09T10:21:17Z",
-  "monolith_sha256": "3adeffcc129724aa4f93a5e26432add56803fbf699f6cfd20eff573ceb96f33a",
+  "monolith_sha256": "887e0675f4c848130acf417876cd1b6ebe550546617562f6932997d8afddfd96",
   "workflow_type": "general",
   "trace_log_path": "docs/dev/overnight/685c203b-2819-47f4-b612-f60f285a1602/cycle-1/trace.jsonl",
   "required_calls": [
@@ -353,169 +353,590 @@
   ],
   "pipelines": {
     "pipeline-0": {
-      "ba_status": "pending",
+      "ba_status": "repair",
       "dev_status": "pending",
       "qa_status": "pending",
       "artifact_paths": {
         "ba": "docs/dev/context-20260809-102007-0.json",
         "dev": "docs/dev/dev-report-20260809-102007-0.json",
-        "qa": "docs/dev/qa-report-20260809-102007-0.json"
+        "qa": "docs/dev/qa-report-20260809-102007-0.json",
+        "ba_qa": "docs/dev/ba-qa-report-20260809-102007-0.json"
       },
       "tier": 1,
       "issue_summary": "Session/role scratch namespace, lifecycle ownership, safe cleanup, checkpoint resource cloning, and allocation locking.",
       "lane_id": "LANE-B",
       "target_layer": "L5",
-      "ui_evidence_required": false
+      "ui_evidence_required": false,
+      "ba_qa_verdict": "fail",
+      "ba_qa_iteration": 3,
+      "phase": "pending",
+      "phase_detail": "ba_qa_repair_required",
+      "ba_evidence": {
+        "context_path": "docs/dev/context-20260809-102007-0.json",
+        "context_sha256": "66c68771ca7f68ccb73e99e9c0af5c8d7dbf92dc0d37ab8fe76042faaede026c",
+        "ba_qa_report_path": "docs/dev/ba-qa-report-20260809-102007-0.json",
+        "ba_qa_report_sha256": "0de9aaac56f1671425b2b3d35aa6ed7d0fda9395560ba462d4c20b3bde440088",
+        "ba_qa_verdict": "fail",
+        "ba_qa_iteration": 3
+      },
+      "dependencies": [],
+      "scheduling_status": "blocked",
+      "readiness": {
+        "state": "blocked_ba_repair",
+        "dev_dispatch_allowed": false,
+        "blocking_dependency_gates": [],
+        "blocking_external_gates": [
+          "LANE-B-INTEGRATION-OWNERSHIP"
+        ],
+        "reason": "Final BA-QA failed; LANE-B remains an independent root with zero inbound pipeline dependencies.",
+        "independent_fanout": true,
+        "inbound_pipeline_dependencies": 0
+      }
     },
     "pipeline-1": {
-      "ba_status": "pending",
+      "ba_status": "repair",
       "dev_status": "pending",
       "qa_status": "pending",
       "artifact_paths": {
         "ba": "docs/dev/context-20260809-102007-1.json",
         "dev": "docs/dev/dev-report-20260809-102007-1.json",
-        "qa": "docs/dev/qa-report-20260809-102007-1.json"
+        "qa": "docs/dev/qa-report-20260809-102007-1.json",
+        "ba_qa": "docs/dev/ba-qa-report-20260809-102007-1.json"
       },
       "tier": 1,
       "issue_summary": "Resolver and aggregate family: honest singular/fanout/parallel-dev shapes, explicit roots, task scoping, sibling resolution, parent close semantics, and sequential/parallel baseline policy.",
       "lane_id": "LANE-R1",
       "target_layer": "L4",
-      "ui_evidence_required": false
+      "ui_evidence_required": false,
+      "ba_qa_verdict": "fail",
+      "ba_qa_iteration": 3,
+      "phase": "pending",
+      "phase_detail": "ba_qa_repair_required",
+      "ba_evidence": {
+        "context_path": "docs/dev/context-20260809-102007-1.json",
+        "context_sha256": "e6a24da40cbc1de4d9cb02cf7289124d26e6b48214b009f231726880266d09f2",
+        "ba_qa_report_path": "docs/dev/ba-qa-report-20260809-102007-1.json",
+        "ba_qa_report_sha256": "942c5f318bb746a9c391b81ffb763c8adb9a882ad6fca8f468a2d4d461c3cf33",
+        "ba_qa_verdict": "fail",
+        "ba_qa_iteration": 3
+      },
+      "dependencies": [
+        {
+          "provider": "pipeline-8",
+          "gate_id": "schema-before-r1-agents-dev",
+          "type": "hard_shared_file_handoff_gate",
+          "required_provider_state": "dev_and_qa_pass_with_handoff",
+          "status": "waiting_provider_artifacts"
+        }
+      ],
+      "scheduling_status": "blocked",
+      "readiness": {
+        "state": "blocked_ba_repair",
+        "dev_dispatch_allowed": false,
+        "blocking_dependency_gates": [
+          "schema-before-r1-agents-dev"
+        ],
+        "blocking_external_gates": [],
+        "reason": "Final BA-QA failed and the SCHEMA predecessor handoff is not complete."
+      }
     },
     "pipeline-2": {
-      "ba_status": "pending",
+      "ba_status": "done",
       "dev_status": "pending",
       "qa_status": "pending",
       "artifact_paths": {
         "ba": "docs/dev/context-20260809-102007-2.json",
         "dev": "docs/dev/dev-report-20260809-102007-2.json",
-        "qa": "docs/dev/qa-report-20260809-102007-2.json"
+        "qa": "docs/dev/qa-report-20260809-102007-2.json",
+        "ba_qa": "docs/dev/ba-qa-report-20260809-102007-2.json"
       },
       "tier": 1,
       "issue_summary": "Derived lifecycle scanner, Unfuddle-style status table, /tickets rendering, and sequential --auto close/commit over terminal-aware chains.",
       "lane_id": "LANE-L",
       "target_layer": "L4",
-      "ui_evidence_required": false
+      "ui_evidence_required": false,
+      "ba_qa_verdict": "pass",
+      "ba_qa_iteration": 2,
+      "phase": "ba_complete",
+      "phase_detail": "ba_qa_passed",
+      "ba_evidence": {
+        "context_path": "docs/dev/context-20260809-102007-2.json",
+        "context_sha256": "087e29056775de1a45b2e8c238d441168d856437fe1677ee68a6b41ab6074f3b",
+        "ba_qa_report_path": "docs/dev/ba-qa-report-20260809-102007-2.json",
+        "ba_qa_report_sha256": "df8b5aef9bfbaf3ee5f715e270532b72bc079c8659276d7f4cf8f2f28f6725df",
+        "ba_qa_verdict": "pass",
+        "ba_qa_iteration": 2
+      },
+      "dependencies": [
+        {
+          "provider": "pipeline-1",
+          "gate_id": "r1-before-l-artifact-chain",
+          "type": "hard_integration_dispatch_gate",
+          "required_provider_state": "dev_and_qa_pass",
+          "status": "blocked_provider_ba_repair"
+        },
+        {
+          "provider": "pipeline-4",
+          "gate_id": "rs-before-l-restart-state",
+          "type": "hard_integration_dispatch_gate",
+          "required_provider_state": "dev_and_qa_pass",
+          "status": "waiting_provider_artifacts"
+        },
+        {
+          "provider": "pipeline-7",
+          "gate_id": "bind-before-l-workflow-identity",
+          "type": "hard_integration_dispatch_gate",
+          "required_provider_state": "dev_and_qa_pass",
+          "status": "waiting_provider_artifacts"
+        }
+      ],
+      "scheduling_status": "waiting",
+      "readiness": {
+        "state": "waiting_on_dependencies",
+        "dev_dispatch_allowed": false,
+        "blocking_dependency_gates": [
+          "r1-before-l-artifact-chain",
+          "rs-before-l-restart-state",
+          "bind-before-l-workflow-identity"
+        ],
+        "blocking_external_gates": [
+          "L-OWNERSHIP-ADMISSION"
+        ],
+        "reason": "BA-QA passed; R1, RS, and BIND provider Dev/QA plus ownership admission are outstanding."
+      }
     },
     "pipeline-3": {
-      "ba_status": "pending",
+      "ba_status": "done",
       "dev_status": "pending",
       "qa_status": "pending",
       "artifact_paths": {
         "ba": "docs/dev/context-20260809-102007-3.json",
         "dev": "docs/dev/dev-report-20260809-102007-3.json",
-        "qa": "docs/dev/qa-report-20260809-102007-3.json"
+        "qa": "docs/dev/qa-report-20260809-102007-3.json",
+        "ba_qa": "docs/dev/ba-qa-report-20260809-102007-3.json"
       },
       "tier": 1,
       "issue_summary": "Audited --fix executor grounded in the historical close/commit failure catalog, with integrity classes permanently unskippable.",
       "lane_id": "LANE-F",
       "target_layer": "L4",
-      "ui_evidence_required": false
+      "ui_evidence_required": false,
+      "ba_qa_verdict": "pass",
+      "ba_qa_iteration": 3,
+      "phase": "ba_complete",
+      "phase_detail": "ba_qa_passed",
+      "ba_evidence": {
+        "context_path": "docs/dev/context-20260809-102007-3.json",
+        "context_sha256": "3eb43b77a5bc18110e59a2c2a0346773e607ac7e5a4289646c30b8656de31f53",
+        "ba_qa_report_path": "docs/dev/ba-qa-report-20260809-102007-3.json",
+        "ba_qa_report_sha256": "f3e2498dfe7881d8761c444c66febf60ab740cbc533da4ff4a89de89026fde95",
+        "ba_qa_verdict": "pass",
+        "ba_qa_iteration": 3
+      },
+      "dependencies": [
+        {
+          "provider": "pipeline-1",
+          "gate_id": "r1-before-f-declaration-provider",
+          "type": "hard_dev_dispatch_gate",
+          "required_provider_state": "dev_and_qa_pass",
+          "status": "blocked_provider_ba_repair"
+        }
+      ],
+      "scheduling_status": "waiting",
+      "readiness": {
+        "state": "waiting_on_dependencies",
+        "dev_dispatch_allowed": false,
+        "blocking_dependency_gates": [
+          "r1-before-f-declaration-provider"
+        ],
+        "blocking_external_gates": [
+          "F-GLOBAL-OWNERSHIP-ADMISSION"
+        ],
+        "reason": "BA-QA passed; R1 provider completion and global ownership admission are outstanding."
+      }
     },
     "pipeline-4": {
-      "ba_status": "pending",
-      "dev_status": "pending",
-      "qa_status": "pending",
+      "ba_status": "done",
+      "dev_status": "done",
+      "qa_status": "done",
       "artifact_paths": {
         "ba": "docs/dev/context-20260809-102007-4.json",
         "dev": "docs/dev/dev-report-20260809-102007-4.json",
-        "qa": "docs/dev/qa-report-20260809-102007-4.json"
+        "qa": "docs/dev/qa-report-20260809-102007-4.json",
+        "ba_qa": "docs/dev/ba-qa-report-20260809-102007-4.json"
       },
       "tier": 1,
       "issue_summary": "Structured restart terminal classifier and durable human-audited unrecoverable absorbing state.",
       "lane_id": "LANE-RS",
       "target_layer": "L4",
-      "ui_evidence_required": false
+      "ui_evidence_required": false,
+      "ba_qa_verdict": "pass",
+      "ba_qa_iteration": 2,
+      "phase": "ba_complete",
+      "phase_detail": "ba_qa_passed",
+      "ba_evidence": {
+        "context_path": "docs/dev/context-20260809-102007-4.json",
+        "context_sha256": "ba18f0d6983f47e8e32e3c2c859ef69bbe276e23a2f0c5f9b2e7f236aef5fad4",
+        "ba_qa_report_path": "docs/dev/ba-qa-report-20260809-102007-4.json",
+        "ba_qa_report_sha256": "7eb80c0743b9890d9f14ab68d71e2e8940a0ff89176e43bbdc81a857154ab0a5",
+        "ba_qa_verdict": "pass",
+        "ba_qa_iteration": 2
+      },
+      "dependencies": [],
+      "scheduling_status": "ready",
+      "readiness": {
+        "state": "ready_for_dev",
+        "dev_dispatch_allowed": true,
+        "blocking_dependency_gates": [],
+        "blocking_external_gates": [],
+        "reason": "BA-QA passed and no pipeline or external dependency gate is declared."
+      },
+      "dev_report_sha256": "2057c4386148bd18aa0f407afba93ed16a86ff290b4672f3bf07b8a907912dbc",
+      "qa_report_sha256": "6e3a456f4b6169d6b66d05d4ed77574de950ae74e2a20847a2b436b2eb73be92"
     },
     "pipeline-5": {
-      "ba_status": "pending",
-      "dev_status": "pending",
-      "qa_status": "pending",
+      "ba_status": "done",
+      "dev_status": "done",
+      "qa_status": "escalate",
       "artifact_paths": {
         "ba": "docs/dev/context-20260809-102007-5.json",
         "dev": "docs/dev/dev-report-20260809-102007-5.json",
-        "qa": "docs/dev/qa-report-20260809-102007-5.json"
+        "qa": "docs/dev/qa-report-20260809-102007-5.json",
+        "ba_qa": "docs/dev/ba-qa-report-20260809-102007-5.json"
       },
       "tier": 1,
       "issue_summary": "Harness-enforceable policy contradictions, browser/network role capability gaps, false-positive guards, and project-root consistency.",
       "lane_id": "LANE-POL",
-      "target_layer": "L5",
-      "ui_evidence_required": false
+      "target_layer": "L4",
+      "ui_evidence_required": false,
+      "ba_qa_verdict": "pass",
+      "ba_qa_iteration": 1,
+      "phase": "done",
+      "phase_detail": "ba_qa_passed",
+      "ba_evidence": {
+        "context_path": "docs/dev/context-20260809-102007-5.json",
+        "context_sha256": "2040d70061bdb2c42593e4a22ffedd416f6ffff0639ab7a4f56e959bd9f0cbcc",
+        "ba_qa_report_path": "docs/dev/ba-qa-report-20260809-102007-5.json",
+        "ba_qa_report_sha256": "440f1d6618244f24a6aad2789b7176cf56ff699fa4fae6ae29e0cb8a2ec2a843",
+        "ba_qa_verdict": "pass",
+        "ba_qa_iteration": 1
+      },
+      "dependencies": [],
+      "scheduling_status": "skipped_after_max_iterations",
+      "readiness": {
+        "state": "terminal_qa_failed",
+        "dev_dispatch_allowed": false,
+        "blocking_dependency_gates": [],
+        "blocking_external_gates": [],
+        "reason": "AC-POL-04 failed terminal iteration 5; pipeline skipped by iteration guard."
+      },
+      "dev_report_sha256": "503197a43cc21ada7e760660c44ed17dab950cd1ba89843a14640440477dcc6b",
+      "qa_report_sha256": "10ed226f9dae23544e9deac0758abd5f6aebca68c8943070285c6d042c387edb"
     },
     "pipeline-6": {
-      "ba_status": "pending",
+      "ba_status": "repair",
       "dev_status": "pending",
       "qa_status": "pending",
       "artifact_paths": {
         "ba": "docs/dev/context-20260809-102007-6.json",
         "dev": "docs/dev/dev-report-20260809-102007-6.json",
-        "qa": "docs/dev/qa-report-20260809-102007-6.json"
+        "qa": "docs/dev/qa-report-20260809-102007-6.json",
+        "ba_qa": "docs/dev/ba-qa-report-20260809-102007-6.json"
       },
       "tier": 1,
       "issue_summary": "Spec-update update/continue dual purpose and removal of migration history from command policy text.",
       "lane_id": "LANE-SU",
       "target_layer": "L4",
-      "ui_evidence_required": false
+      "ui_evidence_required": false,
+      "ba_qa_verdict": "fail",
+      "ba_qa_iteration": 3,
+      "phase": "pending",
+      "phase_detail": "ba_qa_repair_required",
+      "ba_evidence": {
+        "context_path": "docs/dev/context-20260809-102007-6.json",
+        "context_sha256": "f2fb7521ccfbb026cd7f119d63f4c2a81761cbd96d44b30cd51ceb230aebfb92",
+        "ba_qa_report_path": "docs/dev/ba-qa-report-20260809-102007-6.json",
+        "ba_qa_report_sha256": "857edd77a35192e53f7e6acce31133fe53c0270e2436f74c32a41b23e0f507c3",
+        "ba_qa_verdict": "fail",
+        "ba_qa_iteration": 3
+      },
+      "dependencies": [],
+      "scheduling_status": "blocked",
+      "readiness": {
+        "state": "blocked_ba_repair_and_dependency_cycle",
+        "dev_dispatch_allowed": false,
+        "blocking_dependency_gates": [],
+        "blocking_external_gates": [
+          "GATE-MAT-DOC10"
+        ],
+        "reason": "Final BA-QA failed, and its MAT-DOC10 prerequisite conflicts with DOC's behavior-before-DOC requirement.",
+        "blocking_cycle_ids": [
+          "SU-DOC-MAT-DOC10"
+        ]
+      }
     },
     "pipeline-7": {
-      "ba_status": "pending",
+      "ba_status": "done",
       "dev_status": "pending",
       "qa_status": "pending",
       "artifact_paths": {
         "ba": "docs/dev/context-20260809-102007-7.json",
         "dev": "docs/dev/dev-report-20260809-102007-7.json",
-        "qa": "docs/dev/qa-report-20260809-102007-7.json"
+        "qa": "docs/dev/qa-report-20260809-102007-7.json",
+        "ba_qa": "docs/dev/ba-qa-report-20260809-102007-7.json"
       },
       "tier": 1,
       "issue_summary": "SubagentStop dispatch binding, qa_mode sentinel removal, and worktree-to-main registry fail-open closure.",
       "lane_id": "LANE-BIND",
       "target_layer": "L5",
-      "ui_evidence_required": false
+      "ui_evidence_required": false,
+      "ba_qa_verdict": "pass",
+      "ba_qa_iteration": 1,
+      "phase": "ba_complete",
+      "phase_detail": "ba_qa_passed",
+      "ba_evidence": {
+        "context_path": "docs/dev/context-20260809-102007-7.json",
+        "context_sha256": "7dcbce0121eaf6c879aba313d0ab1705c13fb9eda9b7bf39ae658b15bbb0556f",
+        "ba_qa_report_path": "docs/dev/ba-qa-report-20260809-102007-7.json",
+        "ba_qa_report_sha256": "fd1f5fc81b0138d57b88ad87d8131c59cab5ec0515d9592056ca30a8f79c0e4c",
+        "ba_qa_verdict": "pass",
+        "ba_qa_iteration": 1
+      },
+      "dependencies": [
+        {
+          "provider": "pipeline-8",
+          "gate_id": "schema-before-bind-contract-runtime",
+          "type": "hard_shared_file_handoff_gate",
+          "required_provider_state": "dev_and_qa_pass_with_handoff",
+          "status": "waiting_provider_artifacts"
+        },
+        {
+          "provider": "pipeline-5",
+          "gate_id": "pipeline-5-before-pipeline-7-shared-files",
+          "type": "hard_shared_file_handoff_gate",
+          "required_provider_state": "validated_dev_report_shared_file_handoff_and_no_active_provider",
+          "status": "blocked_provider_qa_failed",
+          "provider_dev_report": "docs/dev/dev-report-20260809-102007-5.json",
+          "provider_dev_report_sha256": "503197a43cc21ada7e760660c44ed17dab950cd1ba89843a14640440477dcc6b",
+          "shared_file_handoff": [
+            {
+              "path": "scripts/write-qa-mode.sh",
+              "sha256": "1222f42f1c53ba557593072858cd8f3a1c4735fe5c85ef2256a24baea711bf89"
+            },
+            {
+              "path": "settings.template.json",
+              "sha256": "30208a1e716218d234217f9e2339b81e00e9e2d66eea5b6abdf1621038359194"
+            },
+            {
+              "path": "settings.json",
+              "sha256": "1b33aea7f9415511a4a1f93b0ef221b1b480e4d3d01ff29de3c74aa8d4898510"
+            }
+          ],
+          "updated_at": "2026-08-09T23:21:34.166046Z",
+          "provider_qa_report": "docs/dev/qa-report-20260809-102007-5.json",
+          "provider_qa_report_sha256": "10ed226f9dae23544e9deac0758abd5f6aebca68c8943070285c6d042c387edb"
+        },
+        {
+          "provider": "pipeline-0",
+          "gate_id": "pipeline-0-before-pipeline-7-binding-handoff",
+          "type": "hard_shared_file_handoff_gate",
+          "required_provider_state": "ba_qa_pass_then_dev_report_handoff_and_no_active_provider",
+          "status": "blocked_provider_ba_repair"
+        }
+      ],
+      "scheduling_status": "waiting",
+      "readiness": {
+        "state": "waiting_on_dependencies",
+        "dev_dispatch_allowed": false,
+        "blocking_dependency_gates": [
+          "schema-before-bind-contract-runtime",
+          "pipeline-5-before-pipeline-7-shared-files",
+          "pipeline-0-before-pipeline-7-binding-handoff"
+        ],
+        "blocking_external_gates": [
+          "BIND-OWNER-LEDGER"
+        ],
+        "reason": "BA-QA passed; POL, LANE-B, SCHEMA, and the durable owner ledger are outstanding."
+      }
     },
     "pipeline-8": {
-      "ba_status": "pending",
+      "ba_status": "done",
       "dev_status": "pending",
       "qa_status": "pending",
       "artifact_paths": {
         "ba": "docs/dev/context-20260809-102007-8.json",
         "dev": "docs/dev/dev-report-20260809-102007-8.json",
-        "qa": "docs/dev/qa-report-20260809-102007-8.json"
+        "qa": "docs/dev/qa-report-20260809-102007-8.json",
+        "ba_qa": "docs/dev/ba-qa-report-20260809-102007-8.json"
       },
       "tier": 1,
       "issue_summary": "Deterministic report_version projection for lifecycle and aggregate consumers.",
       "lane_id": "LANE-SCHEMA",
       "target_layer": "L3",
-      "ui_evidence_required": false
+      "ui_evidence_required": false,
+      "ba_qa_verdict": "pass",
+      "ba_qa_iteration": 1,
+      "phase": "ba_complete",
+      "phase_detail": "ba_qa_passed",
+      "ba_evidence": {
+        "context_path": "docs/dev/context-20260809-102007-8.json",
+        "context_sha256": "16e185d9c64927051a5364e0112ccb107de0ef7a2bc30de3e8629fa1c94f2587",
+        "ba_qa_report_path": "docs/dev/ba-qa-report-20260809-102007-8.json",
+        "ba_qa_report_sha256": "77251a8b9cef04a4cf6d52ea1310474d588f68fc8947c87352138bbc153303d5",
+        "ba_qa_verdict": "pass",
+        "ba_qa_iteration": 1
+      },
+      "dependencies": [],
+      "scheduling_status": "waiting",
+      "readiness": {
+        "state": "waiting_on_external_gate",
+        "dev_dispatch_allowed": false,
+        "blocking_dependency_gates": [],
+        "blocking_external_gates": [
+          "SCHEMA-OWNERSHIP-ADMISSION"
+        ],
+        "reason": "BA-QA passed; exclusive SCHEMA ownership admission must be granted before Dev."
+      }
     },
     "pipeline-9": {
-      "ba_status": "pending",
+      "ba_status": "repair",
       "dev_status": "pending",
       "qa_status": "pending",
       "artifact_paths": {
         "ba": "docs/dev/context-20260809-102007-9.json",
         "dev": "docs/dev/dev-report-20260809-102007-9.json",
-        "qa": "docs/dev/qa-report-20260809-102007-9.json"
+        "qa": "docs/dev/qa-report-20260809-102007-9.json",
+        "ba_qa": "docs/dev/ba-qa-report-20260809-102007-9.json"
       },
       "tier": 1,
       "issue_summary": "Repository lease with TTL and HEAD-CAS enforcement points.",
       "lane_id": "LANE-LEASE",
       "target_layer": "L5",
-      "ui_evidence_required": false
+      "ui_evidence_required": false,
+      "ba_qa_verdict": "fail",
+      "ba_qa_iteration": 3,
+      "phase": "pending",
+      "phase_detail": "ba_qa_repair_required",
+      "ba_evidence": {
+        "context_path": "docs/dev/context-20260809-102007-9.json",
+        "context_sha256": "1454a5be97a56e3f77866d0574c0a8eb3fa4cfa5e464119e0c536319792e9116",
+        "ba_qa_report_path": "docs/dev/ba-qa-report-20260809-102007-9.json",
+        "ba_qa_report_sha256": "f574b84a45ac8771e5a4e0e65a84add3aff4182d0c68d6c81dbe00ddedbf3f85",
+        "ba_qa_verdict": "fail",
+        "ba_qa_iteration": 3
+      },
+      "dependencies": [
+        {
+          "provider": "pipeline-1",
+          "gate_id": "r1-before-lease-parent-identity",
+          "type": "hard_provider_completion_gate",
+          "required_provider_state": "dev_and_qa_pass",
+          "status": "blocked_provider_ba_repair"
+        },
+        {
+          "provider": "pipeline-2",
+          "gate_id": "l-before-lease-commands-commit",
+          "type": "hard_shared_file_serialization_gate",
+          "required_provider_state": "dev_and_qa_pass_with_handoff",
+          "status": "waiting_provider_artifacts"
+        }
+      ],
+      "scheduling_status": "blocked",
+      "readiness": {
+        "state": "blocked_external_readiness",
+        "dev_dispatch_allowed": false,
+        "blocking_dependency_gates": [
+          "r1-before-lease-parent-identity",
+          "l-before-lease-commands-commit"
+        ],
+        "blocking_external_gates": [
+          "LEASE-EXCLUSIVE-DOWNSTREAM-SLOT"
+        ],
+        "reason": "BA-QA verdict is FAIL solely on external readiness; R1/L completion and the exclusive downstream slot remain outstanding."
+      }
     },
     "pipeline-10": {
-      "ba_status": "pending",
+      "ba_status": "done",
       "dev_status": "pending",
       "qa_status": "pending",
       "artifact_paths": {
         "ba": "docs/dev/context-20260809-102007-10.json",
         "dev": "docs/dev/dev-report-20260809-102007-10.json",
-        "qa": "docs/dev/qa-report-20260809-102007-10.json"
+        "qa": "docs/dev/qa-report-20260809-102007-10.json",
+        "ba_qa": "docs/dev/ba-qa-report-20260809-102007-10.json"
       },
       "tier": 1,
       "issue_summary": "Artifact round markers, symlink-following negative-evidence discipline, todo accounting text, and verified documentation cleanup.",
       "lane_id": "LANE-DOC",
       "target_layer": "L1",
-      "ui_evidence_required": false
+      "ui_evidence_required": false,
+      "ba_qa_verdict": "pass",
+      "ba_qa_iteration": 2,
+      "phase": "ba_complete",
+      "phase_detail": "ba_qa_passed",
+      "ba_evidence": {
+        "context_path": "docs/dev/context-20260809-102007-10.json",
+        "context_sha256": "ef6fafc744b5c40d59e16dbda5f972025ac5d71d90000075db3e0069e76c6f8c",
+        "ba_qa_report_path": "docs/dev/ba-qa-report-20260809-102007-10.json",
+        "ba_qa_report_sha256": "371e267d09bc217c672f284896a07b5f70ae6e7a910879c6feb34c42aedcf428",
+        "ba_qa_verdict": "pass",
+        "ba_qa_iteration": 2
+      },
+      "dependencies": [
+        {
+          "provider": "pipeline-1",
+          "gate_id": "GATE-L-CHAIN",
+          "type": "behavior_provider_qa_gate",
+          "required_provider_state": "dev_and_qa_pass_with_semantic_predicate",
+          "status": "blocked_provider_ba_repair"
+        },
+        {
+          "provider": "pipeline-5",
+          "gate_id": "GATE-L-GUARDS",
+          "type": "behavior_provider_qa_gate",
+          "required_provider_state": "dev_and_qa_pass_with_semantic_predicate",
+          "status": "blocked_provider_scope_and_reports"
+        },
+        {
+          "provider": "pipeline-6",
+          "gate_id": "GATE-L-SPECUX",
+          "type": "behavior_provider_qa_gate",
+          "required_provider_state": "dev_and_qa_pass_with_semantic_predicate",
+          "status": "blocked_provider_ba_repair"
+        },
+        {
+          "provider": "pipeline-7",
+          "gate_id": "GATE-L-PROVENANCE-BIND",
+          "type": "behavior_provider_qa_gate",
+          "required_provider_state": "dev_and_qa_pass_with_semantic_predicate",
+          "status": "blocked_provider_scope_and_reports"
+        },
+        {
+          "provider": "pipeline-8",
+          "gate_id": "GATE-L-PROVENANCE-SCHEMA",
+          "type": "behavior_provider_qa_gate",
+          "required_provider_state": "dev_and_qa_pass_with_semantic_predicate",
+          "status": "blocked_provider_scope_and_reports"
+        }
+      ],
+      "scheduling_status": "blocked",
+      "readiness": {
+        "state": "blocked_dependency_cycle_and_providers",
+        "dev_dispatch_allowed": false,
+        "blocking_dependency_gates": [
+          "GATE-L-CHAIN",
+          "GATE-L-GUARDS",
+          "GATE-L-SPECUX",
+          "GATE-L-PROVENANCE-BIND",
+          "GATE-L-PROVENANCE-SCHEMA"
+        ],
+        "blocking_external_gates": [
+          "GATE-MAT-DOC10"
+        ],
+        "reason": "BA-QA passed, but all behavior providers, MAT-DOC10, and the SU/DOC cycle resolution remain outstanding.",
+        "blocking_cycle_ids": [
+          "SU-DOC-MAT-DOC10"
+        ]
+      }
     }
   },
   "specialist_selection": {
@@ -568,14 +989,528 @@
   },
   "dependency_edges": [
     {
-      "consumer": "pipeline-3",
-      "provider": "pipeline-1",
-      "type": "hard_dev_dispatch_gate"
+      "provider": "pipeline-8",
+      "consumer": "pipeline-1",
+      "type": "hard_shared_file_handoff_gate",
+      "gate_id": "schema-before-r1-agents-dev",
+      "orientation": "provider_before_consumer",
+      "required_provider_state": "dev_and_qa_pass_with_handoff",
+      "status": "waiting_provider_artifacts",
+      "contract": "LANE-SCHEMA Dev+QA and final hash/diff precede the LANE-R1 agents/dev.md writer.",
+      "source_artifacts": [
+        "docs/dev/context-20260809-102007-8.json",
+        "docs/dev/ba-qa-report-20260809-102007-8.json",
+        "docs/dev/context-20260809-102007-1.json",
+        "docs/dev/ba-qa-report-20260809-102007-1.json"
+      ]
     },
     {
-      "consumer": "pipeline-2",
+      "provider": "pipeline-8",
+      "consumer": "pipeline-7",
+      "type": "hard_shared_file_handoff_gate",
+      "gate_id": "schema-before-bind-contract-runtime",
+      "orientation": "provider_before_consumer",
+      "required_provider_state": "dev_and_qa_pass_with_handoff",
+      "status": "waiting_provider_artifacts",
+      "contract": "LANE-SCHEMA Dev+QA and final hash/diff precede the LANE-BIND hooks/lib/contract_runtime.py writer.",
+      "source_artifacts": [
+        "docs/dev/context-20260809-102007-8.json",
+        "docs/dev/ba-qa-report-20260809-102007-8.json",
+        "docs/dev/context-20260809-102007-7.json",
+        "docs/dev/ba-qa-report-20260809-102007-7.json"
+      ]
+    },
+    {
       "provider": "pipeline-1",
-      "type": "stub_start_integration_gate"
+      "consumer": "pipeline-3",
+      "type": "hard_dev_dispatch_gate",
+      "gate_id": "r1-before-f-declaration-provider",
+      "orientation": "provider_before_consumer",
+      "required_provider_state": "dev_and_qa_pass",
+      "status": "blocked_provider_ba_repair",
+      "contract": "LANE-F dispatch waits for the R1 declaration validation/injection provider and QA.",
+      "source_artifacts": [
+        "docs/dev/context-20260809-102007-1.json",
+        "docs/dev/ba-qa-report-20260809-102007-1.json",
+        "docs/dev/context-20260809-102007-3.json",
+        "docs/dev/ba-qa-report-20260809-102007-3.json"
+      ]
+    },
+    {
+      "provider": "pipeline-1",
+      "consumer": "pipeline-2",
+      "type": "hard_integration_dispatch_gate",
+      "gate_id": "r1-before-l-artifact-chain",
+      "orientation": "provider_before_consumer",
+      "required_provider_state": "dev_and_qa_pass",
+      "status": "blocked_provider_ba_repair",
+      "contract": "LANE-L integration waits for the real R1 artifact_chain_result.v2 provider and QA.",
+      "source_artifacts": [
+        "docs/dev/context-20260809-102007-1.json",
+        "docs/dev/ba-qa-report-20260809-102007-1.json",
+        "docs/dev/context-20260809-102007-2.json",
+        "docs/dev/ba-qa-report-20260809-102007-2.json"
+      ]
+    },
+    {
+      "provider": "pipeline-4",
+      "consumer": "pipeline-2",
+      "type": "hard_integration_dispatch_gate",
+      "gate_id": "rs-before-l-restart-state",
+      "orientation": "provider_before_consumer",
+      "required_provider_state": "dev_and_qa_pass",
+      "status": "satisfied",
+      "contract": "LANE-L integration waits for the LANE-RS restart-state.v2 provider and QA.",
+      "source_artifacts": [
+        "docs/dev/context-20260809-102007-4.json",
+        "docs/dev/ba-qa-report-20260809-102007-4.json",
+        "docs/dev/context-20260809-102007-2.json",
+        "docs/dev/ba-qa-report-20260809-102007-2.json"
+      ],
+      "provider_dev_report": "docs/dev/dev-report-20260809-102007-4.json",
+      "provider_dev_report_sha256": "2057c4386148bd18aa0f407afba93ed16a86ff290b4672f3bf07b8a907912dbc",
+      "provider_qa_report": "docs/dev/qa-report-20260809-102007-4.json",
+      "provider_qa_report_sha256": "6e3a456f4b6169d6b66d05d4ed77574de950ae74e2a20847a2b436b2eb73be92",
+      "satisfied_at": "2026-08-09T19:50:44Z"
+    },
+    {
+      "provider": "pipeline-7",
+      "consumer": "pipeline-2",
+      "type": "hard_integration_dispatch_gate",
+      "gate_id": "bind-before-l-workflow-identity",
+      "orientation": "provider_before_consumer",
+      "required_provider_state": "dev_and_qa_pass",
+      "status": "waiting_provider_artifacts",
+      "contract": "LANE-L integration waits for BIND dispatch-binding.v1 and dev-workflow-identity.v1 provider QA.",
+      "source_artifacts": [
+        "docs/dev/context-20260809-102007-7.json",
+        "docs/dev/ba-qa-report-20260809-102007-7.json",
+        "docs/dev/context-20260809-102007-2.json",
+        "docs/dev/ba-qa-report-20260809-102007-2.json"
+      ]
+    },
+    {
+      "provider": "pipeline-5",
+      "consumer": "pipeline-7",
+      "type": "hard_dev_dispatch_gate",
+      "gate_id": "pipeline-5-before-pipeline-7-shared-files",
+      "orientation": "provider_before_consumer",
+      "required_provider_state": "dev_and_qa_pass_with_handoff",
+      "status": "blocked_provider_qa_failed",
+      "contract": "POL-END-TO-END must finish and hand off scripts/write-qa-mode.sh, settings.template.json, and settings.json before BIND Dev dispatch.",
+      "source_artifacts": [
+        "docs/dev/context-20260809-102007-5.json",
+        "docs/dev/ba-qa-report-20260809-102007-5.json",
+        "docs/dev/context-20260809-102007-7.json",
+        "docs/dev/ba-qa-report-20260809-102007-7.json"
+      ],
+      "provider_dev_report": "docs/dev/dev-report-20260809-102007-5.json",
+      "provider_dev_report_sha256": "503197a43cc21ada7e760660c44ed17dab950cd1ba89843a14640440477dcc6b",
+      "shared_file_handoff": [
+        {
+          "path": "scripts/write-qa-mode.sh",
+          "sha256": "1222f42f1c53ba557593072858cd8f3a1c4735fe5c85ef2256a24baea711bf89"
+        },
+        {
+          "path": "settings.template.json",
+          "sha256": "30208a1e716218d234217f9e2339b81e00e9e2d66eea5b6abdf1621038359194"
+        },
+        {
+          "path": "settings.json",
+          "sha256": "1b33aea7f9415511a4a1f93b0ef221b1b480e4d3d01ff29de3c74aa8d4898510"
+        }
+      ],
+      "materialized_at": "2026-08-09T23:21:34.166046Z",
+      "trace_event_id": "gate-p5-p7-terminal-qa-fail-iter5",
+      "provider_qa_report": "docs/dev/qa-report-20260809-102007-5.json",
+      "provider_qa_report_sha256": "10ed226f9dae23544e9deac0758abd5f6aebca68c8943070285c6d042c387edb"
+    },
+    {
+      "provider": "pipeline-0",
+      "consumer": "pipeline-7",
+      "type": "hard_shared_file_handoff_gate",
+      "gate_id": "pipeline-0-before-pipeline-7-binding-handoff",
+      "orientation": "provider_before_consumer",
+      "required_provider_state": "ba_qa_pass_then_dev_report_handoff_and_no_active_provider",
+      "status": "blocked_provider_ba_repair",
+      "contract": "BIND G2 waits for the repaired LANE-B provider handoff; LANE-B itself retains zero inbound dependencies.",
+      "source_artifacts": [
+        "docs/dev/context-20260809-102007-0.json",
+        "docs/dev/ba-qa-report-20260809-102007-0.json",
+        "docs/dev/context-20260809-102007-7.json",
+        "docs/dev/ba-qa-report-20260809-102007-7.json"
+      ]
+    },
+    {
+      "provider": "pipeline-1",
+      "consumer": "pipeline-9",
+      "type": "hard_provider_completion_gate",
+      "gate_id": "r1-before-lease-parent-identity",
+      "orientation": "provider_before_consumer",
+      "required_provider_state": "dev_and_qa_pass",
+      "status": "blocked_provider_ba_repair",
+      "contract": "LANE-LEASE waits for schema-valid R1 Dev plus terminal QA PASS for artifact_chain_result.v2.",
+      "source_artifacts": [
+        "docs/dev/context-20260809-102007-1.json",
+        "docs/dev/ba-qa-report-20260809-102007-1.json",
+        "docs/dev/context-20260809-102007-9.json",
+        "docs/dev/ba-qa-report-20260809-102007-9.json"
+      ]
+    },
+    {
+      "provider": "pipeline-2",
+      "consumer": "pipeline-9",
+      "type": "hard_shared_file_serialization_gate",
+      "gate_id": "l-before-lease-commands-commit",
+      "orientation": "provider_before_consumer",
+      "required_provider_state": "dev_and_qa_pass_with_handoff",
+      "status": "waiting_provider_artifacts",
+      "contract": "LANE-L completes and hands off commands/commit.md SHA/diff before the exclusive LANE-LEASE writer slot.",
+      "source_artifacts": [
+        "docs/dev/context-20260809-102007-2.json",
+        "docs/dev/ba-qa-report-20260809-102007-2.json",
+        "docs/dev/context-20260809-102007-9.json",
+        "docs/dev/ba-qa-report-20260809-102007-9.json"
+      ]
+    },
+    {
+      "provider": "pipeline-1",
+      "consumer": "pipeline-10",
+      "type": "behavior_provider_qa_gate",
+      "gate_id": "GATE-L-CHAIN",
+      "orientation": "provider_before_consumer",
+      "required_provider_state": "dev_and_qa_pass_with_semantic_predicate",
+      "status": "blocked_provider_ba_repair",
+      "contract": "Artifact-chain behavior must be landed and QA-passed before LANE-DOC.",
+      "source_artifacts": [
+        "docs/dev/context-20260809-102007-1.json",
+        "docs/dev/ba-qa-report-20260809-102007-1.json",
+        "docs/dev/context-20260809-102007-10.json",
+        "docs/dev/ba-qa-report-20260809-102007-10.json"
+      ]
+    },
+    {
+      "provider": "pipeline-5",
+      "consumer": "pipeline-10",
+      "type": "behavior_provider_qa_gate",
+      "gate_id": "GATE-L-GUARDS",
+      "orientation": "provider_before_consumer",
+      "required_provider_state": "dev_and_qa_pass_with_semantic_predicate",
+      "status": "blocked_provider_scope_and_reports",
+      "contract": "Complete C2/C10 guard behavior must be landed and QA-passed before LANE-DOC.",
+      "source_artifacts": [
+        "docs/dev/context-20260809-102007-5.json",
+        "docs/dev/ba-qa-report-20260809-102007-5.json",
+        "docs/dev/context-20260809-102007-10.json",
+        "docs/dev/ba-qa-report-20260809-102007-10.json"
+      ]
+    },
+    {
+      "provider": "pipeline-6",
+      "consumer": "pipeline-10",
+      "type": "behavior_provider_qa_gate",
+      "gate_id": "GATE-L-SPECUX",
+      "orientation": "provider_before_consumer",
+      "required_provider_state": "dev_and_qa_pass_with_semantic_predicate",
+      "status": "blocked_provider_ba_repair",
+      "contract": "Update/continue/temp behavior and history placement must be landed and QA-passed before LANE-DOC.",
+      "source_artifacts": [
+        "docs/dev/context-20260809-102007-6.json",
+        "docs/dev/ba-qa-report-20260809-102007-6.json",
+        "docs/dev/context-20260809-102007-10.json",
+        "docs/dev/ba-qa-report-20260809-102007-10.json"
+      ]
+    },
+    {
+      "provider": "pipeline-7",
+      "consumer": "pipeline-10",
+      "type": "behavior_provider_qa_gate",
+      "gate_id": "GATE-L-PROVENANCE-BIND",
+      "orientation": "provider_before_consumer",
+      "required_provider_state": "dev_and_qa_pass_with_semantic_predicate",
+      "status": "blocked_provider_scope_and_reports",
+      "contract": "The BIND half of provenance behavior must be landed and QA-passed before LANE-DOC.",
+      "source_artifacts": [
+        "docs/dev/context-20260809-102007-7.json",
+        "docs/dev/ba-qa-report-20260809-102007-7.json",
+        "docs/dev/context-20260809-102007-10.json",
+        "docs/dev/ba-qa-report-20260809-102007-10.json"
+      ]
+    },
+    {
+      "provider": "pipeline-8",
+      "consumer": "pipeline-10",
+      "type": "behavior_provider_qa_gate",
+      "gate_id": "GATE-L-PROVENANCE-SCHEMA",
+      "orientation": "provider_before_consumer",
+      "required_provider_state": "dev_and_qa_pass_with_semantic_predicate",
+      "status": "blocked_provider_scope_and_reports",
+      "contract": "The SCHEMA half of provenance behavior must be landed and QA-passed before LANE-DOC.",
+      "source_artifacts": [
+        "docs/dev/context-20260809-102007-8.json",
+        "docs/dev/ba-qa-report-20260809-102007-8.json",
+        "docs/dev/context-20260809-102007-10.json",
+        "docs/dev/ba-qa-report-20260809-102007-10.json"
+      ]
     }
-  ]
+  ],
+  "dependency_graph": {
+    "orientation": "provider_before_consumer",
+    "status": "acyclic",
+    "node_count": 11,
+    "published_edge_count": 15,
+    "topological_order": [
+      "pipeline-0",
+      "pipeline-4",
+      "pipeline-5",
+      "pipeline-6",
+      "pipeline-8",
+      "pipeline-1",
+      "pipeline-3",
+      "pipeline-7",
+      "pipeline-2",
+      "pipeline-9",
+      "pipeline-10"
+    ],
+    "independent_roots": [
+      "pipeline-0",
+      "pipeline-4",
+      "pipeline-5",
+      "pipeline-6",
+      "pipeline-8"
+    ],
+    "lane_b_inbound_dependencies": 0,
+    "phase_only_gates_excluded_from_pipeline_edges": [
+      "G3-BIND-DEV-TO-R1-INTEGRATION",
+      "G4-R1-INTEGRATION-TO-BIND-QA"
+    ],
+    "suppressed_cycle_edges": [
+      {
+        "provider": "pipeline-10",
+        "consumer": "pipeline-6",
+        "reason": "Publishing it with GATE-L-SPECUX would create a pipeline dependency cycle."
+      }
+    ]
+  },
+  "external_gates": [
+    {
+      "gate_id": "LANE-B-INTEGRATION-OWNERSHIP",
+      "blocks": [
+        {
+          "pipeline_id": "pipeline-0",
+          "phase": "dev_dispatch"
+        }
+      ],
+      "status": "blocked",
+      "predicate": "Every required registration, authorization, Read-hook checkpoint, and effective Stop hookup has exactly one same-spec owner and fan-in pass is mandatory for end-to-end closure.",
+      "source_artifacts": [
+        "docs/dev/context-20260809-102007-0.json",
+        "docs/dev/ba-qa-report-20260809-102007-0.json"
+      ]
+    },
+    {
+      "gate_id": "L-OWNERSHIP-ADMISSION",
+      "blocks": [
+        {
+          "pipeline_id": "pipeline-2",
+          "phase": "dev_dispatch"
+        }
+      ],
+      "status": "pending",
+      "predicate": "Fresh owner-count=1 admission for all LANE-L paths with no active overlapping writer.",
+      "source_artifacts": [
+        "docs/dev/context-20260809-102007-2.json",
+        "docs/dev/ba-qa-report-20260809-102007-2.json"
+      ]
+    },
+    {
+      "gate_id": "F-GLOBAL-OWNERSHIP-ADMISSION",
+      "blocks": [
+        {
+          "pipeline_id": "pipeline-3",
+          "phase": "dev_dispatch"
+        }
+      ],
+      "status": "blocked",
+      "predicate": "Fresh digest-bound ownership_admission_result.v2 has invalid_claim_count=0, global_owner_intersection_count=0, and one active phase owner.",
+      "source_artifacts": [
+        "docs/dev/context-20260809-102007-3.json",
+        "docs/dev/ba-qa-report-20260809-102007-3.json"
+      ]
+    },
+    {
+      "gate_id": "BIND-OWNER-LEDGER",
+      "blocks": [
+        {
+          "pipeline_id": "pipeline-7",
+          "phase": "dev_dispatch"
+        }
+      ],
+      "status": "pending",
+      "predicate": "Durable orchestrator-owned path ownership/order record exists before any BIND shared-file writer.",
+      "source_artifacts": [
+        "docs/dev/context-20260809-102007-7.json",
+        "docs/dev/ba-qa-report-20260809-102007-7.json"
+      ]
+    },
+    {
+      "gate_id": "SCHEMA-OWNERSHIP-ADMISSION",
+      "blocks": [
+        {
+          "pipeline_id": "pipeline-8",
+          "phase": "dev_dispatch"
+        }
+      ],
+      "status": "pending",
+      "predicate": "Fresh exclusive SCHEMA ownership of agents/dev.md, agents/qa.md, and hooks/lib/contract_runtime.py with no active R1/BIND writer; post-QA hashes/diff precede handoff.",
+      "source_artifacts": [
+        "docs/dev/context-20260809-102007-8.json",
+        "docs/dev/ba-qa-report-20260809-102007-8.json"
+      ]
+    },
+    {
+      "gate_id": "LEASE-EXCLUSIVE-DOWNSTREAM-SLOT",
+      "blocks": [
+        {
+          "pipeline_id": "pipeline-9",
+          "phase": "dev_dispatch"
+        }
+      ],
+      "status": "pending",
+      "predicate": "One exclusive downstream LANE-LEASE slot exists after the LANE-L commands/commit.md handoff and no pipeline-2 writer remains active.",
+      "source_artifacts": [
+        "docs/dev/context-20260809-102007-9.json",
+        "docs/dev/ba-qa-report-20260809-102007-9.json"
+      ]
+    },
+    {
+      "gate_id": "GATE-MAT-DOC10",
+      "blocks": [
+        {
+          "pipeline_id": "pipeline-6",
+          "phase": "dev_dispatch"
+        },
+        {
+          "pipeline_id": "pipeline-10",
+          "phase": "dev_dispatch"
+        }
+      ],
+      "status": "blocked_dependency_cycle",
+      "contract_id": "MAT-DOC10.v1",
+      "canonical_sha256": "2157e04b5f3051f4e58b3168ed444acd052836181122b6300d153e53154a0bb9",
+      "predicate": "Parent-owned orchestration authority materializes MAT-DOC10 independently of DOC Dev completion, then enforces behavior providers -> DOC -> generator -> DOC QA.",
+      "source_artifacts": [
+        "docs/dev/context-20260809-102007-6.json",
+        "docs/dev/ba-qa-report-20260809-102007-6.json",
+        "docs/dev/context-20260809-102007-10.json",
+        "docs/dev/ba-qa-report-20260809-102007-10.json"
+      ]
+    }
+  ],
+  "phase_gates": [
+    {
+      "gate_id": "G3-BIND-DEV-TO-R1-INTEGRATION",
+      "provider": "pipeline-7",
+      "provider_phase": "dev_complete",
+      "consumer": "pipeline-1",
+      "consumer_phase": "bind_callsite_integration",
+      "status": "future_waiting",
+      "pipeline_dependency_edge": false,
+      "reason": "This is a phase handoff, not a BIND-before-R1 pipeline-start edge.",
+      "source_artifacts": [
+        "docs/dev/context-20260809-102007-7.json",
+        "docs/dev/ba-qa-report-20260809-102007-7.json",
+        "docs/dev/context-20260809-102007-1.json",
+        "docs/dev/ba-qa-report-20260809-102007-1.json"
+      ]
+    },
+    {
+      "gate_id": "G4-R1-INTEGRATION-TO-BIND-QA",
+      "provider": "pipeline-1",
+      "provider_phase": "bind_callsite_integration_complete",
+      "consumer": "pipeline-7",
+      "consumer_phase": "qa_dispatch",
+      "status": "future_waiting",
+      "pipeline_dependency_edge": false,
+      "reason": "Together with G3 this is acyclic at phase granularity; publishing both as pipeline-start edges would fabricate a cycle.",
+      "source_artifacts": [
+        "docs/dev/context-20260809-102007-7.json",
+        "docs/dev/ba-qa-report-20260809-102007-7.json",
+        "docs/dev/context-20260809-102007-1.json",
+        "docs/dev/ba-qa-report-20260809-102007-1.json"
+      ]
+    }
+  ],
+  "blocked_dependency_cycles": [
+    {
+      "cycle_id": "SU-DOC-MAT-DOC10",
+      "status": "blocked",
+      "affected_pipelines": [
+        "pipeline-6",
+        "pipeline-10"
+      ],
+      "declared_constraints": [
+        {
+          "provider": "pipeline-6",
+          "consumer": "pipeline-10",
+          "gate_id": "GATE-L-SPECUX",
+          "meaning": "L-SPECUX behavior Dev+QA must complete before DOC.",
+          "published": true,
+          "source_artifacts": [
+            "docs/dev/context-20260809-102007-10.json",
+            "docs/dev/ba-qa-report-20260809-102007-10.json"
+          ]
+        },
+        {
+          "provider": "pipeline-10",
+          "consumer": "pipeline-6",
+          "gate_id": "GATE-MAT-DOC10",
+          "meaning": "Pipeline-6 currently treats the MAT-DOC10 authority proposed only in pipeline-10 as a prerequisite.",
+          "published": false,
+          "source_artifacts": [
+            "docs/dev/context-20260809-102007-6.json",
+            "docs/dev/ba-qa-report-20260809-102007-6.json",
+            "docs/dev/context-20260809-102007-10.json",
+            "docs/dev/ba-qa-report-20260809-102007-10.json"
+          ]
+        }
+      ],
+      "suppressed_edge": {
+        "provider": "pipeline-10",
+        "consumer": "pipeline-6",
+        "reason": "Publishing it with GATE-L-SPECUX would create a pipeline dependency cycle."
+      },
+      "resolution_required": "Materialize MAT-DOC10 as parent-owned orchestration authority independent of pipeline-10 Dev completion; retain pipeline-6 -> pipeline-10 behavior ordering and do not create pipeline-10 -> pipeline-6."
+    }
+  ],
+  "orchestration_reconciliation": {
+    "status": "materialized_with_blocked_cycles",
+    "reconciled_at": "2026-08-09T17:42:22Z",
+    "source_policy": "Current context and BA-QA report for every pipeline, plus the absolute monolith and orchestrator view; BA-QA verdicts govern BA status and final artifacts govern scheduling gates.",
+    "absolute_spec_path": "/dev/shm/dev-workspace/dot-claude/docs/dev/specs/spec-20260808-035658.md",
+    "absolute_orchestrator_view_path": "/dev/shm/dev-workspace/dot-claude/docs/dev/specs/20260808-035658/views/orchestrator.md",
+    "required_calls_count": 34,
+    "required_calls_sha256": "874fa9f21dc204f7c33094b2a6506fb6f4f8a0a75c807852deb4735198c08ba0",
+    "required_call_identities_paths_sha256": "3c651b4ddae88629e814bc072c4d74fafe67dd4f3d12a5ff3c66cc9ddbd1c316",
+    "ba_pass_pipelines": [
+      "pipeline-2",
+      "pipeline-3",
+      "pipeline-4",
+      "pipeline-5",
+      "pipeline-7",
+      "pipeline-8",
+      "pipeline-10"
+    ],
+    "ba_repair_pipelines": [
+      "pipeline-0",
+      "pipeline-1",
+      "pipeline-6",
+      "pipeline-9"
+    ],
+    "ready_for_dev_pipelines": [
+      "pipeline-4",
+      "pipeline-5"
+    ],
+    "dispatch_rule": "Dispatch only when readiness.dev_dispatch_allowed is true; after any provider artifact or ownership change, re-read and revalidate every listed gate before changing readiness."
+  }
 }
