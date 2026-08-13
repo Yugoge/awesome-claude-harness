@@ -1070,6 +1070,60 @@ parse the result without screen-scraping human-readable text.
 | `dryrun` | `DRYRUN=true` was set; no commit was attempted; the staged file list was printed. |
 | `failed` | The commit attempt failed (see `failure_code`). |
 
+### Push-gate reconciliation (missing token for this task's OWN existing commit)
+
+**The gap this closes.** A push-gate token is normally written in Phase 10, in the same
+invocation that created the commit. Exactly one other path writes a token without a fresh
+commit — the `nothing_to_commit_precommitted` recovery below — and it is gated on the HEAD
+subject matching `/^auto-bulk:/`. A conventional-commit subject can never match that. So when
+Phase 10's rule-7 collision check correctly skips the token write (the token path was occupied
+by ANOTHER session's file), the commit lands tokenless and **no subsequent invocation can ever
+tokenize it**: the tree is now clean, so no future run commits, and the auto-bulk gate excludes
+the conventional subject. `/push` stays blocked forever, and re-running `/commit` returns
+`nothing_to_commit` indefinitely. This section is the missing path.
+
+It is deliberately narrow. It does NOT relax DO NOT rule 7, does NOT create a commit, and
+cannot tokenize a commit that is not provably this task's own.
+
+**Trigger — reconcile only when ALL SIX conditions hold:**
+
+1. `BULK=false` AND `DRYRUN=false`. Under `DRYRUN=true` report the status without writing —
+   the DRYRUN guard binds here exactly as it does for the recovery path below.
+2. The candidate set is empty after exclusions (there is genuinely nothing to commit).
+3. `git rev-parse --verify HEAD` succeeds (not unborn, not detached).
+4. **No token exists at `token_path`.** If a token is present, this path does NOT run —
+   whether it belongs to `PUSH_GATE_SID` (already tokenized; nothing to reconcile) or to a
+   peer session (rule 7 forbids touching it; report `push_gate_collision` as before). Rule 7
+   remains absolute; reconciliation only ever fills an EMPTY slot.
+5. **The HEAD commit is provably this task's own.** BOTH sub-checks must pass:
+   - `git show -s --format=%B "$HEAD_SHA"` contains the literal trailer `Task-id: <TASK_ID>`.
+     Every commit this agent authors carries that trailer, so it is the attribution anchor —
+     it is what makes reconciliation unable to tokenize an arbitrary or peer-authored commit.
+   - `COMMIT_FILES` (from `git show --name-only --format= "$HEAD_SHA"`, blank lines filtered)
+     intersects `task_cycle_files` (the normalized union of `dev.files_modified` +
+     `dev.files_created` from the canonical dev-report).
+   A subject-pattern check is NOT used and MUST NOT be added: the subject is free-form by
+   design, and gating on its shape is the exact defect this section exists to remove.
+6. Every owned path in the plan is clean in `git status` — consistent with condition 2, and
+   re-asserted here because tokenizing HEAD while owned work is still uncommitted would
+   authorize a push that does not contain that work.
+
+**Action.** Write the token for `HEAD_SHA` using the SAME mechanism and the SAME safety checks
+as Phase 10 — the Write tool per rule CP-3, preceded by the PRE-write HEAD-stability check and
+the PRE-write collision re-check, and followed by the POST-write HEAD re-check. A HEAD move at
+any of those points yields `push_gate_race`; a token that appeared at `token_path` in the
+meantime yields `push_gate_collision`. Do NOT create a commit, do NOT stage, do NOT acquire the
+fd-9 commit lock (no index mutation occurs), and do NOT consume a commit grant — the privilege
+guard gates `git commit`, and this path runs none.
+
+**Result.** Return `commit_status: push_gate_reconciled` with a `repository_results` entry whose
+`status` is `nothing_to_commit`, `push_gate_written` is `true`, and `reconciled_commit_sha` is
+`HEAD_SHA`. Record `reconciliation_basis` naming which attribution sub-checks passed, so the
+write is auditable as a reconciliation rather than mistaken for a fresh commit.
+
+**When conditions 2-6 hold except condition 4** (a token already exists and it is this
+session's own, matching HEAD): there is nothing to reconcile — return `nothing_to_commit`.
+
 ### nothing_to_commit_precommitted detection (THREE-STEP SHA-STABLE CHECK)
 
 Use this exact procedure to avoid TOCTOU and blank-line ambiguity:
