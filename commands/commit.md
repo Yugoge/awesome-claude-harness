@@ -353,6 +353,27 @@ recovery commit merely because another planned repository remains dirty.
 Print: `WARNING: changelog-analyst found nothing to commit after exclusions. Verify the task cycle produced staged changes.`
 Continue to Step 8 (skip spec-update if no real commit occurred — Step 8 skip conditions apply).
 
+#### status = `push_gate_reconciled`
+
+No new commit was created. This task's own prior commit was already at HEAD without a
+push-gate token — the normal Phase 10 write had been correctly skipped because a peer
+session's token occupied the path — and changelog-analyst has now written the missing token
+for that existing commit. See `agents/changelog-analyst.md` §Push-gate reconciliation for the
+six trigger conditions; the two that matter here are that the token slot was EMPTY (DO NOT
+rule 7 is never relaxed) and that HEAD carried this task's `Task-id:` trailer.
+
+Require the `repository_results` entry to report `push_gate_written: true` and a
+`reconciled_commit_sha` equal to the current HEAD. Verify that equality yourself before
+treating the gate as open — a reconciled token whose sha does not match live HEAD is not
+authorizing, and `/push` would reject it anyway.
+
+Print: `INFO: no new commit; wrote the missing push-gate token for existing commit <reconciled_commit_sha>. /push is now unblocked.`
+
+Continue to Step 8. Note that Step 8's skip condition is worded around "no real commit
+occurred": a reconciliation creates no commit, so Step 8 SKIPS the spec-update dispatch. That
+is correct — the spec was already updated by the cycle that produced the commit being
+reconciled, and re-dispatching would append a duplicate cycle block.
+
 #### status = `nothing_to_commit_precommitted`
 Record `auto_bulk_commits[]` from the structured output in the Step 8 summary.
 Print: `INFO: Changes were already committed in an auto-bulk commit. auto_bulk_commits: <auto_bulk_commits[]>`
