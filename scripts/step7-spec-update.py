@@ -16,7 +16,7 @@ USAGE:
       --task-id <TASK_ID> \\
       --dev-docs-root <DEV_DOCS_ROOT> \\
       [--bulk true|false] [--dryrun true|false] \\
-      [--changelog-status committed|nothing_to_commit|failed] \\
+      [--changelog-status committed|nothing_to_commit|nothing_to_commit_precommitted|push_gate_reconciled|failed] \\
       [--push-gate-token-path <path-or-NONE>]
 
 ENV:
