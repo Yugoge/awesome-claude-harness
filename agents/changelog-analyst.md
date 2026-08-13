@@ -1298,7 +1298,7 @@ never an unbounded loop, and never a duplicate `git commit`.
 
 ```json
 {
-  "commit_status": "committed | partially_committed | nothing_to_commit | nothing_to_commit_precommitted | failed | dryrun",
+  "commit_status": "committed | partially_committed | nothing_to_commit | nothing_to_commit_precommitted | push_gate_reconciled | failed | dryrun",
   "repository_results": [
     {
       "order": 0,
