@@ -1419,6 +1419,6 @@ manual intervention required — see `/commit` Step 7 status table for the
 ## Outputs
 
 - Real branch commit(s) in the normal-mode `REPOSITORY_PLAN` (or the legacy bulk control+nested pair)
-- Push-gate token at `/tmp/agentic-commit/push/<repo-hash>/<branch-encoded>.json`
+- Push-gate token at `/tmp/agentic-commit/push/<repo-hash>/<PUSH_GATE_SID>/<branch-encoded>.json`
 - Synthetic close-annotations at `${CONTROL_ROOT}/docs/dev/close-report-bulk-*.md` (bulk mode only)
 - Human-readable summary of what was committed
