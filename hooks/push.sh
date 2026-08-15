@@ -206,7 +206,17 @@ _BRANCH="$(python3 -c "print('${_BRANCH_RAW}'.replace('/', '__'))")"
 # its own commit. Keying the path by session removes the contention instead of arbitrating it.
 # Nothing here validates session identity: the gate below still authorizes purely on
 # commit_sha == HEAD, exactly as before.
-_PUSH_GATE_SID="${CLAUDE_CODE_SESSION_ID:-${CLAUDE_SESSION_ID:-unknown}}"
+#
+# The session id becomes a PATH SEGMENT, so it must be sanitised before use. It arrives from
+# the environment and is not trustworthy as a filename: a value containing `/` or `..` would
+# escape the session directory, and two distinct ids that normalise to the same segment would
+# recreate the very collision this change removes. Reduce it to a fixed-width hex digest —
+# collision-free in practice, fixed length, and containing no path-significant characters, so
+# it is also safe to interpolate into the validator below. `unknown` (both env vars absent) is
+# digested like any other value, giving one shared slot for that degenerate case rather than a
+# traversal primitive.
+_PUSH_GATE_SID_RAW="${CLAUDE_CODE_SESSION_ID:-${CLAUDE_SESSION_ID:-unknown}}"
+_PUSH_GATE_SID="$(printf '%s' "$_PUSH_GATE_SID_RAW" | sha256sum | cut -c1-16)"
 _TOKEN_PATH="/tmp/agentic-commit/push/${_REPO_HASH}/${_PUSH_GATE_SID}/${_BRANCH}.json"
 
 # Back-compat: tokens written by a pre-migration /commit live at the legacy session-less path.
