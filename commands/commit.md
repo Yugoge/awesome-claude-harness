@@ -317,7 +317,7 @@ Constraints:
 - Commit message must NOT match: `\bsync\b.*\buncommitted\b` or `chore\(claude\)\s*:\s*sync`
 - Handle every admitted repository independently and return a `repository_results` entry for each one
 - Write push-gate token after each successful commit
-- Push-gate token path MUST be: `/tmp/agentic-commit/push/<sha256(os.path.realpath(GIT_ROOT))[:16]>/<BRANCH with / replaced by __>.json`
+- Push-gate token path MUST be: `/tmp/agentic-commit/push/<sha256(os.path.realpath(GIT_ROOT))[:16]>/<PUSH_GATE_SID>/<BRANCH with / replaced by __>.json` — session-scoped, where `PUSH_GATE_SID` is the Phase 10 three-part chain (`CLAUDE_CODE_SESSION_ID` → `CLAUDE_SESSION_ID` → `"unknown"`); per-session paths stop two sessions on one branch from contending for a single token slot
 - Push-gate validates commit_sha only; expires_at is no longer written or checked
 - **BULK mode commit message prefix (REQUIRED when BULK=true)**: every commit message MUST begin with `auto-bulk: end-of-cycle commit for <current-branch>` where `<current-branch>` is the actual current git branch of the repo being committed (run `git rev-parse --abbrev-ref HEAD`). This prefix matches `BLESSED_BRIDGE_RE`; the privilege guard requires a valid bulk-commit sentinel (written in Step 5) to allow the commit. Do NOT use this prefix when BULK=false.
 ```
