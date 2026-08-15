@@ -359,8 +359,8 @@ No new commit was created. This task's own prior commit was already at HEAD with
 push-gate token — the normal Phase 10 write had been correctly skipped because a peer
 session's token occupied the path — and changelog-analyst has now written the missing token
 for that existing commit. See `agents/changelog-analyst.md` §Push-gate reconciliation for the
-six trigger conditions; the two that matter here are that the token slot was EMPTY (DO NOT
-rule 7 is never relaxed) and that HEAD carried this task's `Task-id:` trailer.
+full trigger conditions; that section only permits this outcome when the token slot was EMPTY
+(DO NOT rule 7 is never relaxed) and when HEAD carried this task's own `Task-id:` trailer.
 
 Require the `repository_results` entry to report `push_gate_written: true` and a
 `reconciled_commit_sha` equal to the current HEAD. Verify that equality yourself before
