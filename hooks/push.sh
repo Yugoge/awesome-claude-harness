@@ -220,11 +220,31 @@ _PUSH_GATE_SID="$(printf '%s' "$_PUSH_GATE_SID_RAW" | sha256sum | cut -c1-16)"
 _TOKEN_PATH="/tmp/agentic-commit/push/${_REPO_HASH}/${_PUSH_GATE_SID}/${_BRANCH}.json"
 
 # Back-compat: tokens written by a pre-migration /commit live at the legacy session-less path.
-# Honour one only when no session-scoped token exists; the gate re-validates commit_sha either
-# way, so an inherited token can never authorize a push of the wrong HEAD.
+# Honour one only when no session-scoped token exists AND it is OURS.
+#
+# The ownership test is not optional. The legacy path is shared by construction, so without it
+# session B could push on session A's token, and — because $_TOKEN_PATH is what the post-push
+# cleanup deletes — B would then consume A's token too. That is exactly the cross-session
+# interference this migration removes; an unguarded fallback would smuggle it back in.
+# commit_sha == HEAD is NOT a sufficient guard here: two sessions on one branch routinely sit
+# at the same HEAD, which is precisely when they contend.
+#
+# A legacy token predating the session_id field (or carrying an empty one) is treated as
+# unowned and is NOT inherited: unclaimed is not the same as ours. Re-run /commit to mint a
+# session-scoped token instead.
 _LEGACY_TOKEN_PATH="/tmp/agentic-commit/push/${_REPO_HASH}/${_BRANCH}.json"
 if [ ! -f "$_TOKEN_PATH" ] && [ -f "$_LEGACY_TOKEN_PATH" ]; then
-  _TOKEN_PATH="$_LEGACY_TOKEN_PATH"
+  # Compare against the RAW session id: session_id inside the token is stored undigested.
+  if _LEGACY_OWNER="$(python3 -c "
+import json, sys
+try:
+    print(json.load(open(sys.argv[1])).get('session_id') or '')
+except Exception:
+    print('')
+" "$_LEGACY_TOKEN_PATH" 2>/dev/null)" \
+     && [ -n "$_LEGACY_OWNER" ] && [ "$_LEGACY_OWNER" = "$_PUSH_GATE_SID_RAW" ]; then
+    _TOKEN_PATH="$_LEGACY_TOKEN_PATH"
+  fi
 fi
 
 if [ -f "$_TOKEN_PATH" ]; then
