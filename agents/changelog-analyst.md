@@ -1073,9 +1073,12 @@ parse the result without screen-scraping human-readable text.
 ### Push-gate reconciliation (missing token for this task's OWN existing commit)
 
 **The gap this closes.** A push-gate token is normally written in Phase 10, in the same
-invocation that created the commit. Exactly one other path writes a token without a fresh
-commit — the `nothing_to_commit_precommitted` recovery below — and it is gated on the HEAD
-subject matching `/^auto-bulk:/`. A conventional-commit subject can never match that. So when
+invocation that created the commit. Exactly one other path can produce a token for a cycle
+whose candidate set is already empty — the `nothing_to_commit_precommitted` recovery below —
+and it is gated on the HEAD subject matching `/^auto-bulk:/`. Note that recovery path does
+NOT avoid committing: it creates its own attributed commit (`git commit --allow-empty`) and
+returns `committed`. The path defined HERE is the only one that writes a token while creating
+no commit at all. A conventional-commit subject can never match the auto-bulk gate. So when
 Phase 10's rule-7 collision check correctly skips the token write (the token path was occupied
 by ANOTHER session's file), the commit lands tokenless and **no subsequent invocation can ever
 tokenize it**: the tree is now clean, so no future run commits, and the auto-bulk gate excludes
