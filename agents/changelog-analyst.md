@@ -1109,13 +1109,42 @@ cannot tokenize a commit that is not provably this task's own.
    whether it belongs to `PUSH_GATE_SID` (already tokenized; nothing to reconcile) or to a
    peer session (rule 7 forbids touching it; report `push_gate_collision` as before). Rule 7
    remains absolute; reconciliation only ever fills an EMPTY slot.
-5. **The HEAD commit is provably this task's own.** BOTH sub-checks must pass:
-   - `git show -s --format=%B "$HEAD_SHA"` contains the literal trailer `Task-id: <TASK_ID>`.
-     Every commit this agent authors carries that trailer, so it is the attribution anchor —
-     it is what makes reconciliation unable to tokenize an arbitrary or peer-authored commit.
-   - `COMMIT_FILES` (from `git show --name-only --format= "$HEAD_SHA"`, blank lines filtered)
-     intersects `task_cycle_files` (the normalized union of `dev.files_modified` +
-     `dev.files_created` from the canonical dev-report).
+5. **The HEAD commit is attributable to this task.** ALL THREE sub-checks must pass:
+
+   - **(a) Line-anchored trailer match.** The commit body must contain a line that is EXACTLY
+     `Task-id: <TASK_ID>` — anchored at BOTH ends, i.e. start-of-line, the literal trailer, then
+     optional trailing whitespace, then end-of-line. Read the body with
+     `git show -s --format=%B "$HEAD_SHA"` and match per line; do NOT use an unanchored
+     substring search.
+
+     **Why both ends, non-negotiable.** Task ids are not prefix-free. A right-unanchored search
+     for `Task-id: dev-20260522-080646` also matches a commit carrying
+     `Task-id: dev-20260522-080646-A` — a real prefix pair from this repository's own
+     dev-registry, where lane-suffixed ids extend their parent id. Left-anchoring alone is
+     equally insufficient. An unanchored match would let one task tokenize a *different* task's
+     commit whenever one id is a prefix of the other, which is exactly the relationship
+     fan-out lanes create by construction.
+
+     **Verify against a prefix pair, not merely an unrelated id.** A test that passes only
+     because the two ids happen to share no prefix does not exercise this failure mode at all.
+
+   - **(b) File-set intersection.** `COMMIT_FILES` (from
+     `git show --name-only --format= "$HEAD_SHA"`, blank lines filtered) intersects
+     `task_cycle_files` (the normalized union of `dev.files_modified` + `dev.files_created`
+     from the canonical dev-report).
+
+   - **(c) Provenance binding.** The commit must be reachable from — and consistent with — this
+     invocation's own plan, not merely self-describing. Confirm `HEAD_SHA` is a descendant of
+     the plan's `baseline_head_sha` (or equal to the plan's `expected_head`), so a commit that
+     predates this cycle's baseline cannot qualify however its body reads.
+
+     **Why (a) and (b) alone are not enough.** Both read attacker-controllable content: a commit
+     message body is free text, and the file set is chosen by whoever made the commit. Per
+     `docs/THREAT-MODEL.md` the adversary is the agent itself, running concurrently, with no
+     layer assumed impenetrable — and the commit grant binds only repo, branch and HEAD, never
+     the message body or the file set. So a crafted commit body is INSIDE the threat model.
+     Sub-check (c) is the one that is not forgeable from message text.
+
    A subject-pattern check is NOT used and MUST NOT be added: the subject is free-form by
    design, and gating on its shape is the exact defect this section exists to remove.
 6. Every owned path in the plan is clean in `git status` — consistent with condition 2, and
