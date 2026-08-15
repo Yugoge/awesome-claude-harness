@@ -19,6 +19,7 @@
     "PLAYWRIGHT_RUNCODE_TIMEOUT": "120",
     "ENABLE_TOOL_SEARCH": "false",
     "CLAUDE_CODE_ENABLE_TASKS": "false",
+    "CLAUDE_CODE_ENABLE_TODO_TOOLS": "1",
     "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1",
     "CLAUDE_GRAPHIFY_ENABLED": "auto",
     "GRAPHIFY_BIN": "/root/.claude/venv/bin/graphify",
