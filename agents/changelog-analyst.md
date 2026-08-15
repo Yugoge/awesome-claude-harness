@@ -828,7 +828,7 @@ Procedure:
 `/commit` and `/push` must use this identical algorithm for the repo-hash derivation.
 
 **Push-gate token path** (for reference by `/push`):
-`/tmp/agentic-commit/push/<sha256(os.path.realpath(GIT_ROOT))[:16]>/<PUSH_GATE_SID>/<BRANCH with / replaced by __>.json`
+`/tmp/agentic-commit/push/<sha256(os.path.realpath(GIT_ROOT))[:16]>/<PUSH_GATE_SID_DIGEST>/<BRANCH with / replaced by __>.json`
 
 **Why the session segment is in the path** (do NOT "simplify" it back out): the token has
 always carried a `session_id` field, but the path did not — so any two sessions working the
@@ -836,10 +836,21 @@ same branch of the same repo contended for one slot. Combined with DO NOT rule 7
 overwrite another session's token), that contention was not merely deferred but permanent:
 the losing session's commit could never be tokenized at all, because the only opportunity to
 write a token is the moment of that commit, and once the tree is clean no later run commits.
-Keying the path by `PUSH_GATE_SID` removes the contention instead of arbitrating it, at zero
+Keying the path by session removes the contention instead of arbitrating it, at zero
 cost to the gate's semantics — `/push` still authorizes on `commit_sha == HEAD` alone and
 never reads `session_id`. Rule 7 is unchanged and still correct: it simply stops firing in
 the common case, and continues to protect the path if two writers ever do target one.
+
+**Why that segment is `PUSH_GATE_SID_DIGEST` and not `PUSH_GATE_SID`** (do NOT "simplify"
+that out either): the raw id arrives from the environment and here becomes a path segment, so
+it is not trustworthy as a filename — a value carrying `/` or `..` would escape the session
+directory, and two distinct ids normalizing to the same segment would recreate the very
+collision session-scoping removes. The digest is fixed-width hex containing no
+path-significant characters, so it is also safe to interpolate into `/push`'s validator;
+`"unknown"` (both env vars absent) is digested like any other value, giving one shared slot
+for that degenerate case rather than a traversal primitive. Only the PATH SEGMENT is
+digested: the token JSON's `session_id` field keeps the raw `PUSH_GATE_SID`, which is what
+rule 7 compares against and what makes the token auditable.
 
 ---
 
