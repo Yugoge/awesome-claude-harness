@@ -370,9 +370,22 @@ authorizing, and `/push` would reject it anyway.
 Print: `INFO: no new commit; wrote the missing push-gate token for existing commit <reconciled_commit_sha>. /push is now unblocked.`
 
 Continue to Step 8. Note that Step 8's skip condition is worded around "no real commit
-occurred": a reconciliation creates no commit, so Step 8 SKIPS the spec-update dispatch. That
-is correct — the spec was already updated by the cycle that produced the commit being
-reconciled, and re-dispatching would append a duplicate cycle block.
+occurred": a reconciliation creates no commit, so Step 8 SKIPS the spec-update dispatch. Keep
+that skip — it is correct because this invocation has no cycle result of its own to fold into
+a spec, and dispatching here would append a block describing work this invocation never did.
+
+Do NOT read the skip as evidence that the spec is already current. On the route this status
+exists for, the originating cycle's Phase 10 token write was skipped by the rule-7 collision
+check, so that cycle's own Step 8 saw "no push-gate token written" and skipped the spec-update
+as well: the update was never performed, and reconciliation does not perform it. **On the
+reconciliation route the originating cycle's spec update may have been skipped and therefore
+lost.** That is a known, accepted consequence of this path, not an oversight — if the spec
+matters for the reconciled commit, update it through a separate explicit cycle.
+
+The absent token proves nothing about which route was taken: `hooks/push.sh` deletes the token
+after a successful push, so an empty slot is equally consistent with a cycle that wrote its
+token, ran Step 8, and pushed. Neither this handler nor changelog-analyst can tell the two
+apart, which is why the skip is unconditional rather than conditioned on the spec's state.
 
 #### status = `nothing_to_commit_precommitted`
 Record `auto_bulk_commits[]` from the structured output in the Step 8 summary.
