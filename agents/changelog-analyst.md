@@ -1090,8 +1090,19 @@ cannot tokenize a commit that is not provably this task's own.
 
 **Trigger — reconcile only when ALL SIX conditions hold:**
 
-1. `BULK=false` AND `DRYRUN=false`. Under `DRYRUN=true` report the status without writing —
-   the DRYRUN guard binds here exactly as it does for the recovery path below.
+1. `BULK=false` AND `DRYRUN=false`.
+
+   **DRYRUN guard (NON-NEGOTIABLE)**: under `DRYRUN=true` this path does NOT run at all — no
+   token is written, and specifically do NOT emit `push_gate_reconciled`. That status asserts
+   the token WAS written, and the consumer acts on that assertion: /commit's handler requires
+   `push_gate_written: true` and announces that `/push` is unblocked. Fall through to the
+   ordinary empty-candidate dry-run result (`nothing_to_commit`) instead. This is reachable in
+   the real flow, not a hypothetical: /commit's Step 6 planning phase runs an internal
+   `DRYRUN=true` pass over exactly this state to produce a staging plan for the QA gate. The
+   sibling recovery path below may fall back to reporting its own status under `DRYRUN=true`
+   because that status is pure DETECTION and asserts no action taken; `push_gate_reconciled`
+   is an ACTION status with no action-free equivalent, so there is nothing here to fall back
+   to.
 2. The candidate set is empty after exclusions (there is genuinely nothing to commit).
 3. `git rev-parse --verify HEAD` succeeds (not unborn, not detached).
 4. **No token exists at `token_path`.** If a token is present, this path does NOT run —
