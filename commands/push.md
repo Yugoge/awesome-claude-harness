@@ -55,14 +55,23 @@ accepts only an optional remote and `--auto` for non-interactive lock handling.
 
 `/push` requires a valid push-gate token written by a prior `/commit` in this session.
 
-Token location: `/tmp/agentic-commit/push/<repo-hash>/<branch-encoded>.json`
+Token location: `/tmp/agentic-commit/push/<repo-hash>/<session-digest>/<branch-encoded>.json`
 
 - `repo-hash` = `sha256(os.path.realpath(repo_root)).hexdigest()[:16]`
+- `session-digest` = `sha256(<raw session id>).hexdigest()[:16]`, where the raw session id is
+  `CLAUDE_CODE_SESSION_ID`, else `CLAUDE_SESSION_ID`, else the literal `unknown`. The raw id is
+  digested rather than used verbatim because it becomes a path segment and arrives from the
+  environment: a value carrying `/` or `..` would escape the session directory, and two ids
+  normalizing to the same segment would recreate the very collision session-scoping removes.
 - `branch-encoded` = branch name with `/` replaced by `__`
 - Token content: `{"commit_sha": "<sha>", "branch": "<branch>", "repo_root": "<root>"}`
+- Legacy fallback: a session-less token at `/tmp/agentic-commit/push/<repo-hash>/<branch-encoded>.json`,
+  written by a pre-migration `/commit`, is still honoured by `push.sh` when no session-scoped token
+  exists. Pre-validation MUST check that path too — aborting because the session-scoped path alone
+  is empty makes the fallback unreachable through this wrapper.
 
 **Rejection conditions** (push is blocked if any hold):
-- Token file is absent (no `/commit` ran in this session)
+- No token file at either the session-scoped or the legacy path (no `/commit` ran in this session)
 - Token `commit_sha` does not match current `git rev-parse HEAD` (HEAD moved since commit)
 
 **Resolution**: run `/commit [<task-id>]` first. The `changelog-analyst` subagent writes
