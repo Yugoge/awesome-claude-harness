@@ -116,9 +116,15 @@ fi
 **Step 1: Validate push-gate token (Chain A — existing, unchanged)**
 
 This is the existing session commit prerequisite check. Verify the push-gate token at
-`/tmp/agentic-commit/push/<repo-hash>/<branch-encoded>.json` exists and that its
-`commit_sha` matches the current `git rev-parse HEAD`. If the token is absent or
-mismatched, abort and instruct the user to run `/commit` first.
+`/tmp/agentic-commit/push/<repo-hash>/<session-digest>/<branch-encoded>.json` exists and that
+its `commit_sha` matches the current `git rev-parse HEAD`. `session-digest` is derived exactly
+as in the Session commit prerequisite above: `sha256` of the raw session id
+(`CLAUDE_CODE_SESSION_ID`, else `CLAUDE_SESSION_ID`, else the literal `unknown`), first 16 hex
+characters. If no session-scoped token exists, check the legacy session-less path
+`/tmp/agentic-commit/push/<repo-hash>/<branch-encoded>.json` before concluding anything —
+`push.sh` falls back to it, so aborting on an empty session-scoped path alone would make that
+fallback unreachable. Abort and instruct the user to run `/commit` first only when neither path
+holds a token, or when the token found there is mismatched.
 
 **Step 2: Compute pre-push snapshot**
 
