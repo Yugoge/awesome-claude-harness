@@ -1155,9 +1155,20 @@ cannot tokenize a commit that is not provably this task's own.
 as Phase 10 — the Write tool per rule CP-3, preceded by the PRE-write HEAD-stability check and
 the PRE-write collision re-check, and followed by the POST-write HEAD re-check. A HEAD move at
 any of those points yields `push_gate_race`; a token that appeared at `token_path` in the
-meantime yields `push_gate_collision`. Do NOT create a commit, do NOT stage, do NOT acquire the
-fd-9 commit lock (no index mutation occurs), and do NOT consume a commit grant — the privilege
-guard gates `git commit`, and this path runs none.
+meantime yields `push_gate_collision`.
+
+**Condition 4's emptiness result is ADVISORY by write time; the pre-write re-check is the
+AUTHORITATIVE one.** Condition 4 observes the empty slot earlier in the sequence, and nothing
+holds that slot across the gap — no lock is taken over the window between checking and
+writing — so a peer session may create a token at `token_path` in between. The re-read
+performed immediately before the Write is therefore the check that decides. If a token has
+appeared in that window it is NEVER overwritten, regardless of which session owns it, and the
+outcome is the `push_gate_collision` already named above. This is the same TOCTOU shape
+Phase 10 already carries; the handling is deliberately identical rather than a new mechanism.
+
+Do NOT create a commit, do NOT stage, do NOT acquire the fd-9 commit lock (no index mutation
+occurs), and do NOT consume a commit grant — the privilege guard gates `git commit`, and this
+path runs none.
 
 **Result.** Return `commit_status: push_gate_reconciled` with a `repository_results` entry whose
 `status` is `nothing_to_commit`, `push_gate_written` is `true`, and `reconciled_commit_sha` is
