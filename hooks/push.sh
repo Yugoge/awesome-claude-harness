@@ -199,7 +199,24 @@ _REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || echo "$_CLAUDE_HOME_F
 _REPO_HASH="$(python3 -c "import hashlib,os; print(hashlib.sha256(os.path.realpath('${_REPO_ROOT}').encode()).hexdigest()[:16])")"
 _BRANCH_RAW="$(git rev-parse --abbrev-ref HEAD 2>/dev/null)"
 _BRANCH="$(python3 -c "print('${_BRANCH_RAW}'.replace('/', '__'))")"
-_TOKEN_PATH="/tmp/agentic-commit/push/${_REPO_HASH}/${_BRANCH}.json"
+# Session-scoped token path. The token has ALWAYS carried a session_id field, but the path
+# did not, so two sessions working the same branch contended for one slot — and DO NOT rule 7
+# (never overwrite another session's token) then made that contention permanent: the loser's
+# commit could never be tokenized at all, because the only write opportunity is the moment of
+# its own commit. Keying the path by session removes the contention instead of arbitrating it.
+# Nothing here validates session identity: the gate below still authorizes purely on
+# commit_sha == HEAD, exactly as before.
+_PUSH_GATE_SID="${CLAUDE_CODE_SESSION_ID:-${CLAUDE_SESSION_ID:-unknown}}"
+_TOKEN_PATH="/tmp/agentic-commit/push/${_REPO_HASH}/${_PUSH_GATE_SID}/${_BRANCH}.json"
+
+# Back-compat: tokens written by a pre-migration /commit live at the legacy session-less path.
+# Honour one only when no session-scoped token exists; the gate re-validates commit_sha either
+# way, so an inherited token can never authorize a push of the wrong HEAD.
+_LEGACY_TOKEN_PATH="/tmp/agentic-commit/push/${_REPO_HASH}/${_BRANCH}.json"
+if [ ! -f "$_TOKEN_PATH" ] && [ -f "$_LEGACY_TOKEN_PATH" ]; then
+  _TOKEN_PATH="$_LEGACY_TOKEN_PATH"
+fi
+
 if [ -f "$_TOKEN_PATH" ]; then
   _HEAD_SHA="$(git rev-parse HEAD 2>/dev/null)"
   _GATE_RESULT="$(python3 - <<PYEOF 2>/dev/null
