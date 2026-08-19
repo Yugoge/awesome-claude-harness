@@ -1440,6 +1440,16 @@ never an unbounded loop, and never a duplicate `git commit`.
       "expected_head": "<plan SHA>",
       "commit_sha": "<present only when committed>",
       "push_gate_written": true,
+      "reconciled_commit_sha": "<present only when push_gate_reconciled; equals live HEAD>",
+      "reconciliation_basis": {
+        "attribution": "commit_event_journal",
+        "task_id": "<from the matched journal entry>",
+        "resulting_head": "<from the matched journal entry>",
+        "parent_head": "<from the matched journal entry>",
+        "created_at": "<from the matched journal entry>",
+        "corroboration": "<optional, explicitly NON-authorizing observations>"
+      },
+      "push_gate_reconciliation_declined": "<reason, e.g. no_journal_entry; present when a tokenless HEAD could not be attributed>",
       "failure_code": "<present only when failed>",
       "failure_reason": "<present only when failed>"
     }
