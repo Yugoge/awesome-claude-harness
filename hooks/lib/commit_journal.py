@@ -269,5 +269,4 @@ def _main(argv):
 
 
 if __name__ == "__main__":
-    import sys
     sys.exit(_main(sys.argv))
