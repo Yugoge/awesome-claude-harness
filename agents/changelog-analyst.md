@@ -1125,7 +1125,7 @@ the token. That is what makes the attribution basis below both sound and suffici
 It is deliberately narrow. It does NOT relax DO NOT rule 7, does NOT create a commit, and
 cannot tokenize a commit that is not provably this task's own.
 
-**Trigger — reconcile only when ALL SIX conditions hold:**
+**Trigger — reconcile only when ALL SEVEN conditions hold:**
 
 1. `BULK=false` AND `DRYRUN=false`.
 
