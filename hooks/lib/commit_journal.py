@@ -249,7 +249,7 @@ def _main(argv):
     """
     if len(argv) < 2 or argv[1] != "query":
         print("usage: commit_journal.py query --repo-root R --head SHA "
-              "--task-id T --session-id S", file=__import__("sys").stderr)
+              "--task-id T --session-id S", file=sys.stderr)
         return 2
     args = {}
     rest = argv[2:]
@@ -257,8 +257,7 @@ def _main(argv):
         args[rest[index].lstrip("-").replace("-", "_")] = rest[index + 1]
     for required in ("repo_root", "head", "task_id", "session_id"):
         if not args.get(required):
-            print("missing --" + required.replace("_", "-"),
-                  file=__import__("sys").stderr)
+            print("missing --" + required.replace("_", "-"), file=sys.stderr)
             return 2
     entry = find_attributable_event(
         args["repo_root"], args["head"], args["task_id"], args["session_id"]
