@@ -1146,47 +1146,62 @@ cannot tokenize a commit that is not provably this task's own.
    whether it belongs to `PUSH_GATE_SID` (already tokenized; nothing to reconcile) or to a
    peer session (rule 7 forbids touching it; report `push_gate_collision` as before). Rule 7
    remains absolute; reconciliation only ever fills an EMPTY slot.
-5. **The HEAD commit is attributable to this task.** ALL THREE sub-checks must pass:
+5. **A commit-event journal entry attributes `HEAD_SHA` to this task AND this session.**
+   This is the ONLY attribution test. Run:
 
-   - **(a) Line-anchored trailer match.** The commit body must contain a line that is EXACTLY
-     `Task-id: <TASK_ID>` — anchored at BOTH ends, i.e. start-of-line, the literal trailer, then
-     optional trailing whitespace, then end-of-line. Read the body with
-     `git show -s --format=%B "$HEAD_SHA"` and match per line; do NOT use an unanchored
-     substring search.
+   ```
+   python3 ~/.claude/hooks/lib/commit_journal.py query \
+     --repo-root "${GIT_ROOT}" --head "${HEAD_SHA}" \
+     --task-id "${TASK_ID}" --session-id "${PUSH_GATE_SID}"
+   ```
 
-     **Why both ends, non-negotiable.** Task ids are not prefix-free. A right-unanchored search
-     for `Task-id: dev-20260522-080646` also matches a commit carrying
-     `Task-id: dev-20260522-080646-A` — a real prefix pair from this repository's own
-     dev-registry, where lane-suffixed ids extend their parent id. Left-anchoring alone is
-     equally insufficient. An unanchored match would let one task tokenize a *different* task's
-     commit whenever one id is a prefix of the other, which is exactly the relationship
-     fan-out lanes create by construction.
+   Exit 0 (an entry is printed) is the ONLY result that permits reconciliation. Exit 1 means
+   not attributable. **Any other exit code, or any error, MUST be treated as not attributable**
+   — the query fails closed, and an unattributable HEAD is never tokenized. Pass the RAW
+   `PUSH_GATE_SID`, never the digest: the journal stores raw session ids.
 
-     **Verify against a prefix pair, not merely an unrelated id.** A test that passes only
-     because the two ids happen to share no prefix does not exercise this failure mode at all.
+   **What the journal is.** `hooks/posttool-allowlist-consume.py` appends one entry at the
+   instant a `git commit` authorized by a single-use commit grant returns successfully. The
+   entry records the task id, repo root, branch, the grant's pre-commit `expected_head`, the
+   HEAD the hook OBSERVED after the commit, and the session ids the harness supplied. Read
+   `hooks/lib/commit_journal.py` for the record format and the matching rule.
 
-   - **(b) File-set intersection.** `COMMIT_FILES` (from
-     `git show --name-only --format= "$HEAD_SHA"`, blank lines filtered) intersects
-     `task_cycle_files` (the normalized union of `dev.files_modified` + `dev.files_created`
-     from the canonical dev-report).
+   **Why this and not the commit.** The previous design inferred attribution from a `Task-id:`
+   trailer in the commit body and from the commit's file set. Both are chosen by whoever made
+   the commit, so neither attributes anything: they describe the actor's claim about itself.
+   Worse, they misfire without any adversary at all — fan-out lanes carry prefix-related task
+   ids and overlapping file sets BY CONSTRUCTION, so two lanes of one task routinely satisfy
+   each other's checks. The journal is written by the hook layer from data the committing agent
+   does not author, so it cannot be satisfied by a commit crafted to look like this task's.
 
-   - **(c) Provenance binding.** The commit must be reachable from — and consistent with — this
-     invocation's own plan, not merely self-describing. Confirm `HEAD_SHA` is a descendant of
-     the plan's `baseline_head_sha` (or equal to the plan's `expected_head`), so a commit that
-     predates this cycle's baseline cannot qualify however its body reads.
+   **What this does NOT claim.** The journal is an ATTRIBUTION record, not an authorization
+   boundary, and must never be described as one. No hook guards `/tmp/agentic-commit/**`, and
+   `hooks/push.sh` authorizes on `commit_sha == HEAD` alone — so an adversary who can emit
+   arbitrary Bash (`docs/THREAT-MODEL.md` §1.2) can write the push-gate token directly and open
+   the gate, which is strictly cheaper than forging a journal entry. The journal therefore
+   grants an attacker NO new capability; what it removes is every dependence on actor-chosen
+   content, and with it the coincidental mis-attribution above. Do not "strengthen" this
+   paragraph into a security claim the harness cannot support.
 
-     **Why (a) and (b) alone are not enough.** Both read attacker-controllable content: a commit
-     message body is free text, and the file set is chosen by whoever made the commit. Per
-     `docs/THREAT-MODEL.md` the adversary is the agent itself, running concurrently, with no
-     layer assumed impenetrable — and the commit grant binds only repo, branch and HEAD, never
-     the message body or the file set. So a crafted commit body is INSIDE the threat model.
-     Sub-check (c) is the one that is not forgeable from message text.
+   **Commits that can never be reconciled, by design:** anything not authorized by a single-use
+   commit grant — auto-bulk and `--bulk` commits carry a multi-use sentinel instead, so no entry
+   is ever written for them. Their recovery path is the `nothing_to_commit_precommitted` section
+   below, which creates its own attributed commit.
 
    A subject-pattern check is NOT used and MUST NOT be added: the subject is free-form by
-   design, and gating on its shape is the exact defect this section exists to remove.
+   design, and gating on its shape is the exact defect this section exists to remove. For the
+   same reason, do NOT re-add the trailer or file-set checks as gates. They MAY be recorded in
+   `reconciliation_basis` as non-authorizing corroboration; they may never decide the outcome.
 6. Every owned path in the plan is clean in `git status` — consistent with condition 2, and
    re-asserted here because tokenizing HEAD while owned work is still uncommitted would
    authorize a push that does not contain that work.
+7. **`HEAD_SHA` is not already published.** If an upstream is configured and
+   `git -C "${GIT_ROOT}" merge-base --is-ancestor HEAD @{u}` succeeds, HEAD is already on the
+   remote: there is nothing to push, so there is nothing to reconcile — return
+   `nothing_to_commit`. Without this, the ordinary happy path re-triggers reconciliation
+   forever, because `/push` DELETES the token after a successful push, leaving exactly the
+   empty-slot-plus-attributable-HEAD state this section fires on. When no upstream is
+   configured the command errors; treat that as "not published" and continue.
 
 **Action.** Write the token for `HEAD_SHA` using the SAME mechanism and the SAME safety checks
 as Phase 10 — the Write tool per rule CP-3, preceded by the PRE-write HEAD-stability check and
