@@ -8,6 +8,7 @@
 
 ## Files
 - `test_bash_safety_context.py` - pytest suite for bash_context_strip.py including TestScriptInterpArgStripping (49 tests)
+- `test_commit_journal.py` - Adversarial tests for hooks/lib/commit_journal.py — the push-gate reconciliation
 - `test_cp_checkin.py` - of ba-spec-20260427-194324.md (P1 view-trigger removal + P2 generation field)
 
 ---
