@@ -1100,12 +1100,27 @@ whose candidate set is already empty — the `nothing_to_commit_precommitted` re
 and it is gated on the HEAD subject matching `/^auto-bulk:/`. Note that recovery path does
 NOT avoid committing: it creates its own attributed commit (`git commit --allow-empty`) and
 returns `committed`. The path defined HERE is the only one that writes a token while creating
-no commit at all. A conventional-commit subject can never match the auto-bulk gate. So when
-Phase 10's rule-7 collision check correctly skips the token write (the token path was occupied
-by ANOTHER session's file), the commit lands tokenless and **no subsequent invocation can ever
-tokenize it**: the tree is now clean, so no future run commits, and the auto-bulk gate excludes
-the conventional subject. `/push` stays blocked forever, and re-running `/commit` returns
-`nothing_to_commit` indefinitely. This section is the missing path.
+no commit at all. A conventional-commit subject can never match the auto-bulk gate. So whenever
+Phase 10 reaches its end without writing a token, the commit lands tokenless and **no subsequent
+invocation can ever tokenize it**: the tree is now clean, so no future run commits, and the
+auto-bulk gate excludes the conventional subject. `/push` stays blocked forever, and re-running
+`/commit` returns `nothing_to_commit` indefinitely. This section is the missing path.
+
+**Which cases actually survive.** This section was originally written for the cross-session
+rule-7 collision — two sessions on one branch contending for a single token slot. That
+collision is now PREVENTED, not arbitrated: the token path carries a session segment (see
+**Why the session segment is in the path**), so peer sessions no longer share a slot. Rule 7
+still fires, but it is no longer the routine cause, and this path must not be described as if
+it were. The cases that genuinely survive are:
+
+- the Phase 10 step-6 Write itself failed or was refused (tool error, guard rejection, disk);
+- the invocation was interrupted between the commit and the token Write (quota exhaustion and
+  subagent termination are both live events in this harness);
+- two lanes of ONE fan-out, sharing a single session id, contend for that session's own slot —
+  the residue of rule 7 after session-scoping.
+
+All three are SAME-SESSION: the session that made the commit is the session that still needs
+the token. That is what makes the attribution basis below both sound and sufficient.
 
 It is deliberately narrow. It does NOT relax DO NOT rule 7, does NOT create a commit, and
 cannot tokenize a commit that is not provably this task's own.
