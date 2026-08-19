@@ -356,16 +356,21 @@ Continue to Step 8 (skip spec-update if no real commit occurred — Step 8 skip 
 #### status = `push_gate_reconciled`
 
 No new commit was created. This task's own prior commit was already at HEAD without a
-push-gate token — the normal Phase 10 write had been correctly skipped because a peer
-session's token occupied the path — and changelog-analyst has now written the missing token
-for that existing commit. See `agents/changelog-analyst.md` §Push-gate reconciliation for the
-full trigger conditions; that section only permits this outcome when the token slot was EMPTY
-(DO NOT rule 7 is never relaxed) and when HEAD carried this task's own `Task-id:` trailer.
+push-gate token — the normal Phase 10 write was lost (Write failure, or interruption between
+the commit and the token write) — and changelog-analyst has now written the missing token for
+that existing commit. See `agents/changelog-analyst.md` §Push-gate reconciliation for the full
+trigger conditions; that section only permits this outcome when the token slot was EMPTY (DO
+NOT rule 7 is never relaxed) and when a commit-event journal entry — appended by the
+PostToolUse hook layer at the moment the commit returned, not by the committing agent —
+attributes that HEAD commit to this task AND this session.
 
-Require the `repository_results` entry to report `push_gate_written: true` and a
-`reconciled_commit_sha` equal to the current HEAD. Verify that equality yourself before
-treating the gate as open — a reconciled token whose sha does not match live HEAD is not
-authorizing, and `/push` would reject it anyway.
+Require the `repository_results` entry to report `push_gate_written: true`, a
+`reconciled_commit_sha` equal to the current HEAD, and a `reconciliation_basis` whose
+`attribution` is `commit_event_journal`. Verify the sha equality yourself before treating the
+gate as open — a reconciled token whose sha does not match live HEAD is not authorizing, and
+`/push` would reject it anyway. A result claiming reconciliation on any other attribution
+basis (a `Task-id:` trailer, a file-set overlap, a subject pattern) is REJECTED: those read
+content the committing actor chose and are not attribution.
 
 Print: `INFO: no new commit; wrote the missing push-gate token for existing commit <reconciled_commit_sha>. /push is now unblocked.`
 
