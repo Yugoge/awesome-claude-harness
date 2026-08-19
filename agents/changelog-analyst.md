@@ -1224,11 +1224,38 @@ path runs none.
 
 **Result.** Return `commit_status: push_gate_reconciled` with a `repository_results` entry whose
 `status` is `nothing_to_commit`, `push_gate_written` is `true`, and `reconciled_commit_sha` is
-`HEAD_SHA`. Record `reconciliation_basis` naming which attribution sub-checks passed, so the
-write is auditable as a reconciliation rather than mistaken for a fresh commit.
+`HEAD_SHA`. Record `reconciliation_basis` as an object carrying the matched journal entry's
+`task_id`, `resulting_head`, `parent_head` and `created_at`, plus
+`attribution: "commit_event_journal"`, so the write is auditable as a reconciliation rather
+than mistaken for a fresh commit. Corroborating observations (trailer present, file-set
+overlap) MAY be recorded alongside, explicitly marked non-authorizing.
 
-**When conditions 2-6 hold except condition 4** (a token already exists and it is this
+**When conditions 2-7 hold except condition 4** (a token already exists and it is this
 session's own, matching HEAD): there is nothing to reconcile — return `nothing_to_commit`.
+
+**When every condition holds except 5** (HEAD is tokenless and un-pushable, but no journal
+entry attributes it to this task and session): do NOT reconcile and do NOT guess. Return
+`nothing_to_commit` with `push_gate_reconciliation_declined` set to the reason
+(`no_journal_entry`), and print a WARNING naming `HEAD_SHA` as un-pushable by this session.
+This is a LOUD refusal on purpose: the state is unrecoverable through this path, and the human
+needs to see it rather than have it silently swallowed.
+
+**The accepted residual: a DIFFERENT session cannot reconcile.** If the session that made the
+commit is gone, its commit stays un-pushable through this path forever. That is deliberate. The
+only cross-session basis available would be "same task id", and a task id is not an identity —
+any actor can mint a grant carrying any `--task-id`, and a legitimate retry after a restart
+produces two live sessions sharing one task id, which is precisely the confusion this rewrite
+exists to end. A weaker tier here would restore the defect in a new costume. The honest
+recovery for that state is a human `git push`, or re-running the originating session.
+
+**The real fix, deliberately NOT implemented here.** The journal exists because the token is
+written by the AGENT after its commit, leaving a window in which the write can be lost. The
+hook that appends the journal entry holds, at that same instant, everything needed to write the
+TOKEN itself — which would close the window entirely and delete this whole section along with
+rule 7's remaining collision case. That is the better design. It is out of scope here because it
+rewrites Phase 10's contract and ripples into bulk mode (no grant, so no hook write point),
+multi-repository commit ordering, the `DRYRUN` planning pass, and `/push`'s token expectations.
+It should be scoped and security-reviewed as its own cycle, not slid into this one.
 
 ### nothing_to_commit_precommitted detection (THREE-STEP SHA-STABLE CHECK)
 
