@@ -68,6 +68,18 @@ def _finalize_deferred_commit_grant(session_id: str, terminal_result: str) -> No
         original_path = pointer.get('original_path', '')
 
         if terminal_result == 'success':
+            # Commit-event journal (hooks/lib/commit_journal.py). This is the ONLY moment
+            # in the whole lifecycle at which a non-agent observer holds both the identity
+            # of the committing session and the sha the commit produced, so it is the only
+            # place a durable, non-actor-authored attribution record can be created. Read
+            # the grant BEFORE the unlink below destroys it. Wrapped and fail-open: a
+            # journal defect must never disturb a commit that has already landed.
+            try:
+                from lib.commit_journal import append_commit_event
+                with open(locked_path, 'r') as fp:
+                    append_commit_event(json.load(fp), session_id)
+            except Exception:
+                pass
             try:
                 os.unlink(locked_path)
             except OSError:
