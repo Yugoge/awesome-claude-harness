@@ -351,6 +351,13 @@ recovery commit merely because another planned repository remains dirty.
 
 #### status = `nothing_to_commit`
 Print: `WARNING: changelog-analyst found nothing to commit after exclusions. Verify the task cycle produced staged changes.`
+
+If the result carries `push_gate_reconciliation_declined`, ALSO print:
+`WARNING: HEAD <sha> has no push-gate token and could not be attributed to this session (<reason>); /push stays blocked for this session.`
+Do not retry and do not attempt to tokenize HEAD by any other route — the refusal is the
+correct outcome, and the recovery is a human `git push` or re-running the originating session
+(see `agents/changelog-analyst.md` §Push-gate reconciliation, "The accepted residual").
+
 Continue to Step 8 (skip spec-update if no real commit occurred — Step 8 skip conditions apply).
 
 #### status = `push_gate_reconciled`
