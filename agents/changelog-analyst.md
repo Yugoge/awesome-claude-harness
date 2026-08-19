@@ -1088,7 +1088,7 @@ parse the result without screen-scraping human-readable text.
 | `partially_committed` | At least one planned repository commit landed, then a later repository failed; see `repository_results` and `remaining_repos`. No cross-repo rollback is claimed. |
 | `nothing_to_commit` | No files remained after exclusions (candidate set empty). |
 | `nothing_to_commit_precommitted` | Candidate set was empty AND the HEAD commit was an auto-bulk commit that already covered the task cycle files. |
-| `push_gate_reconciled` | Candidate set was empty AND this task's own prior commit sits at HEAD WITHOUT a push-gate token; the missing token was written for that existing commit. No new commit was created. See "Push-gate reconciliation". |
+| `push_gate_reconciled` | Candidate set was empty AND a commit-event journal entry attributes the tokenless HEAD commit to this task AND this session; the missing token was written for that existing commit. No new commit was created. See "Push-gate reconciliation". |
 | `dryrun` | `DRYRUN=true` was set; no commit was attempted; the staged file list was printed. |
 | `failed` | The commit attempt failed (see `failure_code`). |
 
