@@ -16,6 +16,7 @@
 - `claude_home.sh` - claude_home.sh — shared "harness home" resolver (shell consumable).
 - `close-verdict.py` - Shared CLOSE verdict classifier for commit/close tooling.
 - `closeout.py` - Public API:
+- `commit_journal.py` - Commit-event journal — a hook-written witness correlating a session to a resulting commit sha.
 - `contract_runtime.py` - This module is the single shared engine consumed by every contract-aware
 - `git_command_classifier.py` - Provides iter_git_invocations() — a token-aware parser that detects git
 - `grepguard_context_strip.py` - PURPOSE (narrow, guard-specific)
