@@ -1,8 +1,8 @@
 # lib
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-08-09T06:04:47Z*
-**Total entries**: 32
+*Last updated: 2026-08-19T11:58:55Z*
+**Total entries**: 33
 **Convention**: kebab
 
 ## Tree
@@ -30,6 +30,7 @@ lib/
 ├── `close-verdict.py` - Shared CLOSE verdict classifier for commit/close tooling.
 ├── `closeout.py` - Public API:
 ├── `contract_runtime.py` - This module is the single shared engine consumed by every contract-aware
+├── `git_clean_guard.py` - Classifies ONE Bash command for the fail-closed pre-clean guard woven into the
 ├── `git_command_classifier.py` - Provides iter_git_invocations() — a token-aware parser that detects git
 ├── `grepguard_context_strip.py` - PURPOSE (narrow, guard-specific)
 ├── `overnight.py` - Single source of truth for "is a /dev-overnight session currently live?". A
