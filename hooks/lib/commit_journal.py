@@ -48,7 +48,7 @@ import hashlib
 import json
 import os
 import subprocess
-import time
+import sys
 from datetime import datetime, timezone
 
 SCHEMA = "commit-event/1"
