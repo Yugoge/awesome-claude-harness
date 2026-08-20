@@ -917,6 +917,66 @@ for name, types in want.items():
         die(f'enforcement flag failed writer-conformance: {p}')
 if os.path.islink(req_doc) or not os.path.isfile(req_doc):
     die(f'missing, non-regular or symlinked requirement document: {req_doc}')
+# CONTENT, not existence. Sentinels and flags above are re-validated on content
+# while this clause used to stop at "the file is there", so an initializer that
+# produced a perfect registry and then wrote a WRONG requirement document still
+# published (rc=0). The document is the source-of-truth anchor every subagent
+# reads before any derived context, and A1.5's defining property is that the
+# FULL artifact set validates AT THE PUBLICATION EVENT -- "valid at end of
+# launch" leaves a window in which a subagent is dispatched against unvalidated
+# state, which is the publish-then-detect shape A1.5 was chosen over.
+#
+# The oracle is RECOMPUTED here from the record itself (focus / user_spec_path)
+# and the spec file, never read back from something the initializer recorded --
+# a bad renderer would otherwise write wrong bytes and record their matching
+# hash. It is deliberately a SECOND implementation of
+# scripts/overnight-init.sh::_render_requirement_doc rather than a re-invocation
+# of that script: this validator exists precisely because the launcher must not
+# trust the component it is gating, and a stubbed initializer would fake its own
+# oracle too. Agreement between the two renderers is pinned by a differential
+# test, so drift surfaces as a test failure rather than as a refused launch.
+def jq_raw(v):
+    # jq -r '<f> // empty': null/false/absent -> '', strings raw, others as JSON.
+    if v is None or v is False:
+        return ''
+    return v if isinstance(v, str) else json.dumps(v)
+try:
+    st = json.load(open(record, encoding='utf-8'))
+except Exception as exc:
+    die(f'cannot read the record being published ({record}): {exc}')
+focus = jq_raw(st.get('focus'))
+usp = jq_raw(st.get('user_spec_path'))
+if usp == 'null':
+    usp = ''
+expected = focus.encode('utf-8') + b'\n'
+if usp:
+    expected += b'\nUser spec path: ' + usp.encode('utf-8') + b'\n'
+    spec_abs = usp if usp.startswith('/') else os.path.join(main_root, usp)
+    if os.path.isfile(spec_abs):
+        expected += b'\nSection 5 (User Acceptance Criterion):\n'
+        # Byte-faithful port of the awk slice: from the Section-5 level-2
+        # heading up to the NEXT level-2 heading, '###' excluded so the 5.x
+        # subsections stay in. [[:space:]] is spelled out because awk's class
+        # includes \r\f\v, which \s would widen and [ \t] would narrow.
+        h2 = re.compile(rb'^##[ \t\r\f\v]')
+        h3 = re.compile(rb'^###')
+        s5 = re.compile(rb'^##[ \t\r\f\v]+(Section[ \t\r\f\v]+)?5([:.[ \t\r\f\v]|$)')
+        lines = open(spec_abs, 'rb').read().split(b'\n')
+        if lines and lines[-1] == b'':
+            lines.pop()  # a trailing newline does not make an extra awk record
+        inside = False
+        for line in lines:
+            if h2.match(line) and not h3.match(line):
+                if inside:
+                    break
+                if s5.match(line):
+                    inside = True
+            if inside:
+                expected += line + b'\n'
+actual = open(req_doc, 'rb').read()
+if actual != expected:
+    die(f'requirement document does not match the recomputed oracle '
+        f'({len(actual)} bytes on disk, {len(expected)} expected): {req_doc}')
 PYEOF
     )"; then
     rm -f "$TMP_FILE"
