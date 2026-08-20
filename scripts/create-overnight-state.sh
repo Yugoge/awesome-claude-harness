@@ -935,17 +935,28 @@ if os.path.islink(req_doc) or not os.path.isfile(req_doc):
 # trust the component it is gating, and a stubbed initializer would fake its own
 # oracle too. Agreement between the two renderers is pinned by a differential
 # test, so drift surfaces as a test failure rather than as a refused launch.
-def jq_raw(v):
-    # jq -r '<f> // empty': null/false/absent -> '', strings raw, others as JSON.
+def jq_raw(field, v):
+    # Mirrors `jq -r '<f> // empty'` CAPTURED IN "$(...)": null/false/absent give
+    # '', a string comes through raw, and command substitution then strips every
+    # trailing newline. A NON-string is refused rather than emulated: jq and
+    # json.dumps format objects, arrays and some numbers differently, so
+    # emulating them would let a record shape exist that this oracle accepts and
+    # the initializer's own renderer rejects. Refusing is the fail-closed half of
+    # the same argument that makes this a second implementation at all.
     if v is None or v is False:
         return ''
-    return v if isinstance(v, str) else json.dumps(v)
+    if not isinstance(v, str):
+        die(f'record field {field!r} is {type(v).__name__}, not a string; refusing to '
+            f'publish a record whose requirement document cannot be verified')
+    if '\x00' in v:
+        die(f'record field {field!r} contains NUL, which the shell renderer cannot carry')
+    return v.rstrip('\n')
 try:
     st = json.load(open(record, encoding='utf-8'))
 except Exception as exc:
     die(f'cannot read the record being published ({record}): {exc}')
-focus = jq_raw(st.get('focus'))
-usp = jq_raw(st.get('user_spec_path'))
+focus = jq_raw('focus', st.get('focus'))
+usp = jq_raw('user_spec_path', st.get('user_spec_path'))
 if usp == 'null':
     usp = ''
 expected = focus.encode('utf-8') + b'\n'
