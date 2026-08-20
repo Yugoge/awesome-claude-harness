@@ -285,10 +285,7 @@ def resolve_command_spec_path(cmd_name: str) -> Path | None:
     from read_command_spec only when the first candidate exists but cannot be
     read, where that function falls through to the second candidate.
     """
-    for search_path in [
-        PROJECT_DIR / '.claude' / 'commands' / f'{cmd_name}.md',
-        Path.home() / '.claude' / 'commands' / f'{cmd_name}.md',
-    ]:
+    for search_path in _command_spec_candidates(cmd_name):
         if search_path.exists():
             return search_path
     return None
