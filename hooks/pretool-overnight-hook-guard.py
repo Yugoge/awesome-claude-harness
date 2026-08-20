@@ -1009,6 +1009,12 @@ def _governing_state_for_cwd(cwd: str) -> dict | None:
         state = _load_state(sf)
         if state is None or not _is_session_live(state):
             continue
+        # `worktree_context` means the cwd is inside an ISOLATED worktree, a set
+        # an in_place record contributes nothing to. Its root IS the main root,
+        # so it would otherwise match EVERY cwd under main -- including another
+        # session's worktree -- and become that actor's governing state.
+        if state.get('isolation_kind') == 'in_place':
+            continue
         wt = state.get('worktree_path', '') or ''
         if wt and _path_under_prefix(cwd_real, wt):
             return state
