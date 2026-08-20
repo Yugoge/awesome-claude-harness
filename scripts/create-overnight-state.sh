@@ -968,10 +968,15 @@ if usp:
         # Byte-faithful port of the awk slice: from the Section-5 level-2
         # heading up to the NEXT level-2 heading, '###' excluded so the 5.x
         # subsections stay in. [[:space:]] is spelled out because awk's class
-        # includes \r\f\v, which \s would widen and [ \t] would narrow.
+        # includes \r\f\v, which \s would widen and [ \t] would narrow; the awk
+        # side runs under LC_ALL=C so neither renderer accepts locale-dependent
+        # Unicode whitespace the other would reject. The terminator is
+        # (?:[:. \t\r\f\v]|$) -- the ':' and '.' of awk's [:.[:space:]] plus the
+        # space class, and NOT a literal '[', which an earlier spelling admitted
+        # by accident so that '## 5[x' matched here and not in awk.
         h2 = re.compile(rb'^##[ \t\r\f\v]')
         h3 = re.compile(rb'^###')
-        s5 = re.compile(rb'^##[ \t\r\f\v]+(Section[ \t\r\f\v]+)?5([:.[ \t\r\f\v]|$)')
+        s5 = re.compile(rb'^##[ \t\r\f\v]+(Section[ \t\r\f\v]+)?5(?:[:. \t\r\f\v]|$)')
         lines = open(spec_abs, 'rb').read().split(b'\n')
         if lines and lines[-1] == b'':
             lines.pop()  # a trailing newline does not make an extra awk record
