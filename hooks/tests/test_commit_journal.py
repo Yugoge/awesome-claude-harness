@@ -173,9 +173,31 @@ def _run(tmp):
     check("CLI exits 1 and prints nothing on a miss",
           miss.returncode == 1 and miss.stdout.strip() == "")
 
-    total = 19
-    print("\n%d/%d passed" % (total - len(FAILURES), total))
+    print("\n%d/%d passed" % (len(CHECKS) - len(FAILURES), len(CHECKS)))
     return 1 if FAILURES else 0
+
+
+def main():
+    # TemporaryDirectory, not mkdtemp: this builds two git repositories per run, and the
+    # bare mkdtemp form leaked both on every invocation. Module state is saved and
+    # restored so the pytest entry point below can run in a shared interpreter.
+    del CHECKS[:]
+    del FAILURES[:]
+    saved_root = CJ.JOURNAL_ROOT
+    try:
+        with tempfile.TemporaryDirectory(prefix="commit-journal-test-") as tmp:
+            return _run(tmp)
+    finally:
+        CJ.JOURNAL_ROOT = saved_root
+
+
+def test_commit_journal_adversarial():
+    """Collected by the hooks/tests pytest run.
+
+    Without this the module is importable but contributes no test items, so the
+    adversarial checks would not execute as part of the suite at all.
+    """
+    assert main() == 0, "failed checks: %s" % (FAILURES,)
 
 
 if __name__ == "__main__":
