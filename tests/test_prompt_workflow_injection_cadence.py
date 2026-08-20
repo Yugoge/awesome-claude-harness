@@ -30,6 +30,7 @@ it; see the dev report for the full record.
 from __future__ import annotations
 
 import ast
+import contextlib
 import json
 import os
 import shutil
