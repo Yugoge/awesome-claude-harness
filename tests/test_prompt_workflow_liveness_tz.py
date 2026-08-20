@@ -461,13 +461,20 @@ class TestAC6ProcessBoundary(unittest.TestCase):
         # legitimately absent.
         with temp_project(fixture_command_doc=True) as (project, home):
             sid = 'AAAA-owner'
-            write_state(project / '.claude', sid, build_state(sid, future_z(1)))
+            write_state(project / '.claude', sid,
+                        build_state(sid, future_z(1), cycle_count=3))
             result = run_hook(project, home, prompt_payload(sid))
         self.assertEqual(0, result.returncode)
-        # Count the cycle-designated banner, not the bare phrase: the embedded
-        # command document mentions "OVERNIGHT CONTINUATION" in its own prose,
-        # so the bare phrase occurs twice for one actual emission.
-        self.assertEqual(1, result.stdout.count('OVERNIGHT CONTINUATION - Cycle 4'))
+        # Collect whole banner LINES rather than counting the bare phrase: the
+        # embedded command document mentions "OVERNIGHT CONTINUATION" in its own
+        # prose, so the bare phrase occurs twice for one real emission. A bare
+        # substring count of the cycle-designated form would be no better -- it
+        # matches 'Cycle 40' inside 'Cycle 4', and a second banner bearing a
+        # DIFFERENT cycle number would leave the count at 1. Comparing the full
+        # line list catches an extra banner of any cycle number.
+        banners = [line for line in result.stdout.splitlines()
+                   if line.startswith('OVERNIGHT CONTINUATION - Cycle ')]
+        self.assertEqual(['OVERNIGHT CONTINUATION - Cycle 4'], banners)
         for marker in ('--- COMMAND SPECIFICATION ---', '--- CURRENT STATE ---',
                        'Phase mapping:'):
             self.assertIn(marker, result.stdout)
