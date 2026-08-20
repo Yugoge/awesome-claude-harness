@@ -1073,9 +1073,31 @@ def build_overnight_continuation(state: dict, include_spec: bool = True,
             f'Command specification: {spec_path} -- READ that file now if the '
             '/dev-overnight specification is not already in your context.'
         )
+    else:
+        # UNCONDITIONAL: when nothing resolves, the pointer degrades to the
+        # search list rather than vanishing. Vanishing is what left the block
+        # carrying neither content nor route.
+        searched = ', '.join(
+            str(path) for path in _command_spec_candidates('dev-overnight')
+        )
+        parts.append(
+            'Command specification: NOT FOUND on disk -- searched '
+            f'{searched}. Restore or locate that file; the /dev-overnight '
+            'specification cannot be injected until one of those paths reads.'
+        )
+    if include_spec and not spec_delivered:
+        # Never silent. This is the delivery this block was supposed to make.
+        parts += ['', (
+            'NOTE: the /dev-overnight command specification could NOT be read, '
+            'so it is absent from this block and NO delivery has been '
+            'recorded. It will be retried on the next prompt.'
+        )]
     if notice:
         parts += ['', notice]
-    return '\n'.join(parts)
+    text = '\n'.join(parts)
+    _record_delivery_receipt(text, include_spec and spec_delivered,
+                             spec_fingerprint)
+    return text
 
 
 def check_overnight_continuation(session_id: str = '') -> str | None:
