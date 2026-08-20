@@ -22,9 +22,14 @@ tree and corrupt concurrent work.
 ``PW_HOOK_PATH`` overrides the module under test so an off-live release
 candidate can be validated before it is published onto the live hook path.
 
-THREE CRITERION DISCREPANCIES ARE ASSERTED TO INTENT, NOT TO LETTER. Each is
-marked ``DISCREPANCY`` at its assertion site with the measurement establishing
-it; see the dev report for the full record.
+Where a criterion's literal text was unrunnable, the criterion itself has been
+amended rather than quietly substituted at the assertion site; each amendment
+carries an ``_amended_`` note in
+``docs/dev/acceptance-criteria-20260809-013317-inject.json`` stating what was
+unrunnable and why. One earlier substitution -- a lowered light-payload floor --
+turned out to rest on a false premise and has been reverted: the floor is back
+at its mandated value and the fixture now populates what the criterion always
+assumed was there.
 """
 
 from __future__ import annotations
