@@ -2118,6 +2118,10 @@ def main():
     cwd = _payload_cwd(payload)
     wt_paths = _get_active_worktree_paths()
     classification, gov_state = _classify_actor(payload, state, wt_paths, cwd)
+    # Q2 (2026-08-09): scope the governing record's own working root to THIS
+    # request before any main-targeting predicate runs. in_place only; isolated
+    # records leave the main root fully guarded.
+    _set_governing_own_root(gov_state)
 
     # M9: a `normal` concurrent user session on main is NOT enforced — exit 0 so
     # the user's main session is never false-blocked.
