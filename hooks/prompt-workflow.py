@@ -244,6 +244,24 @@ def _try_read_spec(path: Path) -> str | None:
         return None
 
 
+def _command_spec_candidates(cmd_name: str) -> list[Path]:
+    """The paths read_command_spec searches, in its order.
+
+    Extracted so the self-heal pointer can still name them when NONE of them
+    resolves. A continuation block that carries neither the document nor a
+    route to it is FM-1 with no mitigation left, so the pointer must degrade to
+    "look in these places" rather than disappear.
+
+    read_command_spec deliberately keeps its own copy of this list: it belongs
+    to no single lane and rewriting it is outside this lane's permitted scope.
+    test_candidate_list_matches_read_command_spec guards the two against drift.
+    """
+    return [
+        PROJECT_DIR / '.claude' / 'commands' / f'{cmd_name}.md',
+        Path.home() / '.claude' / 'commands' / f'{cmd_name}.md',
+    ]
+
+
 def read_command_spec(cmd_name: str) -> str:
     """Read the command .md file, stripping YAML frontmatter."""
     for search_path in [

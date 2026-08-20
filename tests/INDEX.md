@@ -1,8 +1,8 @@
 # tests
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-08-09T16:43:45Z*
-**Total entries**: 103
+*Last updated: 2026-08-20T22:41:12Z*
+**Total entries**: 104
 **Convention**: kebab
 
 ## Tree
@@ -96,6 +96,7 @@ tests/
 ├── `test_codex_workflow_gate.py` - Regression tests for Codex-native workflow-plan compatibility.
 ├── `test_commit_multi_repo_plan.py` - Python script
 ├── `test_dev_artifact_chain_consumer_contracts.py` - Contract tests for shared /dev artifact-chain consumers.
+├── `test_git_clean_guard_vectors.py` - The pre-clean WIP snapshot guard (task dev-20260719-150041-c, lane r03-c) is
 ├── `test_graphify_scripts.py` - tests/test_graphify_scripts.py — smoke tests for scripts/graphify_lib.py
 ├── `test_graphify_workflow_contract.py` - tests/test_graphify_workflow_contract.py — contract tests for graphify agent registration
 ├── `test_hero_advance_cross_check.py` - tools/demo/audit.mjs measures a line's rendered right edge on a fixed monospace grid, using
