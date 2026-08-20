@@ -69,11 +69,14 @@ def _finalize_deferred_commit_grant(session_id: str, terminal_result: str) -> No
 
         if terminal_result == 'success':
             # Commit-event journal (hooks/lib/commit_journal.py). This is the ONLY moment
-            # in the whole lifecycle at which a non-agent observer holds both the identity
-            # of the committing session and the sha the commit produced, so it is the only
-            # place a durable, non-actor-authored attribution record can be created. Read
-            # the grant BEFORE the unlink below destroys it. Wrapped and fail-open: a
-            # journal defect must never disturb a commit that has already landed.
+            # in the whole lifecycle at which a non-agent observer holds both a session id
+            # for the committing session (harness-supplied when the payload carried one,
+            # env-fallback otherwise — see append_commit_event's docstring) and the sha
+            # the commit produced, so it is the only place a durable, HOOK-WRITTEN
+            # attribution record can be created. Hook-written is the whole claim: parts of
+            # the recorded content remain actor-influenced. Read the grant BEFORE the
+            # unlink below destroys it. Wrapped and fail-open: a journal defect must never
+            # disturb a commit that has already landed.
             try:
                 from lib.commit_journal import append_commit_event
                 with open(locked_path, 'r') as fp:
