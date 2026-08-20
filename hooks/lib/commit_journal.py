@@ -146,11 +146,12 @@ def append_commit_event(grant, payload_session_id):
 
       - `payload_session_id` is whatever the caller passes. The one live caller
         (hooks/posttool-allowlist-consume.py) passes the PostToolUse payload's
-        `session_id` when the payload carries one — harness-supplied in that case only —
-        and otherwise falls back to `CLAUDE_SESSION_ID` from its own environment (the
-        placeholder `default` when that is unset too). So this member is beyond the
-        committing agent's authorship exactly when the payload actually carried it; on the
-        fallback path it is as environment-derived as the next two.
+        `session_id` when the payload carries a non-empty one — harness-supplied in that
+        case only — and when the payload's value is absent, null, or empty it falls back
+        to `CLAUDE_SESSION_ID` from its own environment (the placeholder `default` when
+        that is unset too). So this member is beyond the committing agent's authorship
+        exactly when the payload actually carried it; on the fallback path it is as
+        environment-derived as the next two.
       - `CLAUDE_CODE_SESSION_ID` / `CLAUDE_SESSION_ID` are read from the agent's own
         environment.
       - `grant["sid"]` originates from the grant, whose `--sid` is CLI-supplied at mint time.
