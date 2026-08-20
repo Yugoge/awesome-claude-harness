@@ -868,17 +868,17 @@ class TestScopeConfinement(unittest.TestCase):
         self.fail('handle_phase_b not found')
 
     def test_main_threads_the_authoritative_transcript_path(self):
-        """DISCREPANCY D5 -- AC-9 does not list main() among the permitted
-        edited symbols, but M4's context-epoch signal cannot reach Phase B
-        without it. The alternative -- resolving the transcript by session id
-        under $HOME/.claude/projects -- was implemented, measured, and
-        REJECTED: $HOME/.claude is a symlink to the repository root, so the
-        scan reads a secondary store and the live overnight session's own
-        transcript is absent from it. Shipping that would have degraded
-        reading R-b to R-a silently, on every real session, while every
-        hermetic test still passed on its own fixture. main() is edited by two
-        lines; the tz lane's symbols are untouched, and no file outside this
-        hook and this test module is modified.
+        """AC-9 permits main() to thread the payload transcript_path, and
+        nothing more. That permission was ADDED after the fact: M4's
+        context-epoch signal cannot reach Phase B without it, and the
+        conforming alternative -- resolving the transcript by session id under
+        $HOME/.claude/projects -- was implemented, measured, and REJECTED.
+        $HOME/.claude is a symlink to the repository root, so the scan reads a
+        secondary store holding stubs, and the live overnight session's own
+        transcript is absent from it; shipping it would have degraded reading
+        R-b to R-a silently, on every real session, while every hermetic test
+        still passed on its own fixture. QA reproduced that measurement
+        independently and ruled the two lines must NOT be reverted.
         """
         source = HOOK_PATH.read_text()
         tree = ast.parse(source)
