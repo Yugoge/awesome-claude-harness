@@ -988,7 +988,9 @@ def commit_overnight_delivery(session_id: str, emitted: str,
             {
                 'session_id': session_id,
                 'cycle_count': cycle,
-                'spec_fingerprint': _spec_fingerprint(),
+                # The fingerprint of the bytes ACTUALLY emitted, taken before
+                # they were read, not a fresh sample taken here.
+                'spec_fingerprint': fingerprint,
                 'transcript_path': transcript_path,
                 'transcript_offset': _transcript_size(transcript_path),
                 'transcript_inode': _transcript_inode(transcript_path),
