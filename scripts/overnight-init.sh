@@ -179,7 +179,6 @@ _write_confined() {
         || _die "repair: cannot create a temp file beside $target"
       cat > "$tmp" || { rm -f "$tmp"; _die "repair: failed to write $tmp"; }
       mv -f "$tmp" "$target" || { rm -f "$tmp"; _die "repair: failed to publish $target"; }
-      REPAIRED_ARTIFACTS+=("$target")
     fi
   else
     cat > "$target" || _die "failed to write $target"
@@ -187,7 +186,14 @@ _write_confined() {
 }
 # Names every artifact this run had to materialize. Empty is the healthy case;
 # a non-empty list is reported so a silently degraded registry becomes visible.
+# Recorded by the CALL SITES, not inside _write_confined: every content-bearing
+# call reaches it through a pipe, and the right-hand side of a pipeline runs in
+# a subshell whose array assignments never reach this scope.
 REPAIRED_ARTIFACTS=()
+_note_if_absent() {
+  [[ "$REPAIR_ONLY" == "1" && ! -e "$1" ]] && REPAIRED_ARTIFACTS+=("$1")
+  return 0
+}
 
 REGISTRY_DIR="$PROJECT_ROOT/.claude/dev-registry/$SESSION_ID"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd -P)"
