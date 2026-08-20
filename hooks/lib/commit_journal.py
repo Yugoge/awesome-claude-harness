@@ -17,8 +17,11 @@ prefix-related task ids and overlapping file sets, so the inference misfires by 
 and not only under attack.
 
 This journal is the missing record: it is written by the PostToolUse hook layer at the
-moment `git commit` returns, from data the committing actor does not choose — the
-harness-supplied session id, and HEAD as observed by the hook after the commit. It is
+moment `git commit` returns, and it is keyed on fields that live OUTSIDE the commit
+object — HEAD as observed by the hook after the commit, and session ids drawn from the
+hook payload, the hook's environment, and the commit grant. HEAD-as-observed is beyond
+the committing actor's authorship; the session ids are not all — the append_commit_event
+docstring states exactly which candidates the actor can influence, and when. It is
 appended only when the commit was authorized by a single-use commit grant (see
 `scripts/write-commit-grant.py`), so it witnesses grant-authorized `/commit` commits only;
 bulk/auto-bulk commits carry a multi-use sentinel instead of a grant, produce no grant
