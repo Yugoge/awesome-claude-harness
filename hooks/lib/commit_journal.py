@@ -34,8 +34,12 @@ guards `/tmp/agentic-commit/**`, and `hooks/push.sh` authorizes purely on
 `token.commit_sha == HEAD`. An adversary who can emit arbitrary Bash (THREAT-MODEL §1.2)
 can therefore write the push-gate token directly and open the gate, which is strictly
 cheaper than forging a journal entry. The journal accordingly grants an attacker NO new
-capability; what it does is remove every dependence on actor-chosen content, which
-eliminates the coincidental mis-attribution that the message/file-set heuristics allowed.
+capability; what it does is remove every dependence on content the committing actor
+chooses IN THE COMMIT ITSELF — message body and file set — which eliminates the
+coincidental mis-attribution that the message/file-set heuristics allowed. It does not
+remove every actor-influenced input: some recorded session ids remain settable through
+the environment or the grant (see append_commit_event's docstring), which is why this is
+a non-regression argument and not a soundness claim.
 Read `docs/THREAT-MODEL.md` before strengthening any claim in this docstring.
 
 FAIL-OPEN CONTRACT
