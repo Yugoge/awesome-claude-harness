@@ -446,6 +446,98 @@ def test_protected_branch_switch_refused_for_in_place_actor(main_root, command):
     )
 
 
+# ---------------------------------------------------------------------------
+# the other predicates that consult the main-targeting question
+# ---------------------------------------------------------------------------
+
+
+def test_in_place_work_tree_override_at_its_own_root_is_allowed(main_root):
+    """`_worktree_into_main` asks the same question and must get the same answer."""
+    _write_state(main_root, "sid-inplace", "in_place", main_root)
+    res = _run_hook(main_root, "Bash",
+                    {"command": f"git --work-tree={main_root} status --porcelain"},
+                    session_id="sid-inplace", cwd=str(main_root))
+    assert res.returncode == ALLOW_EXIT, res.stderr
+
+
+def test_in_place_git_allowed_when_bwrap_boundary_unavailable(main_root):
+    """`_command_is_worktree_local` (the fail-closed floor) must also agree.
+
+    With the boundary forced unavailable the guard falls back to proving the
+    command is local to the working root. Under in_place that root is the main
+    root, so ordinary git must still pass rather than be refused fail-closed.
+    """
+    _write_state(main_root, "sid-inplace", "in_place", main_root)
+    res = _run_hook(main_root, "Bash", {"command": "git status --porcelain"},
+                    session_id="sid-inplace", cwd=str(main_root),
+                    extra_env={"CLAUDE_OVERNIGHT_FORCE_NO_BWRAP": "1"})
+    assert res.returncode == ALLOW_EXIT, res.stderr
+
+
+def test_isolated_work_tree_override_into_main_still_blocked(main_root, isolated_worktree):
+    """The same predicate must keep refusing the isolated actor."""
+    _write_state(main_root, "sid-inplace", "in_place", main_root)
+    _write_state(main_root, "sid-iso", "registered_worktree", isolated_worktree)
+    res = _run_hook(main_root, "Bash",
+                    {"command": f"git --work-tree={main_root} checkout ."},
+                    session_id="sid-iso", cwd=str(isolated_worktree))
+    assert res.returncode == BLOCK_EXIT, "work-tree redirect into main was allowed"
+
+
+def test_unregistered_worktree_context_write_to_main_still_blocked(
+        main_root, isolated_worktree):
+    """Shared write-confinement, exercised without session-specific enforcement."""
+    _write_state(main_root, "sid-inplace", "in_place", main_root)
+    _write_state(main_root, "sid-iso", "registered_worktree", isolated_worktree)
+    res = _run_hook(main_root, "Write",
+                    {"file_path": str(main_root / "planted.txt"), "content": "x"},
+                    session_id="unregistered-sid", cwd=str(isolated_worktree))
+    assert res.returncode == BLOCK_EXIT, (
+        "an unregistered in-worktree actor wrote into the main root"
+    )
+
+
+# ---------------------------------------------------------------------------
+# end to end: the permitted command must also actually RUN
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git not installed")
+def test_in_place_git_round_trip_actually_executes(tmp_path):
+    """Requirement B end to end: add + commit + log really work under in_place.
+
+    The hook may rewrite the command (bwrap re-exec); this runs whatever the
+    hook actually authorises, so a rewrite that is permitted but unexecutable
+    still fails the test.
+    """
+    root = tmp_path / "main"
+    root.mkdir()
+    for args in (["init", "-b", "work"], ["config", "user.email", "t@example.com"],
+                 ["config", "user.name", "T"]):
+        assert subprocess.run(["git", *args], cwd=root,
+                              capture_output=True).returncode == 0
+    (root / ".claude").mkdir()
+    _write_state(root, "sid-inplace", "in_place", root)
+    (root / "tracked.txt").write_text("hello\n")
+
+    for command in ("git add -A", 'git commit -m "cycle work"', "git log --oneline"):
+        res = _run_hook(root, "Bash", {"command": command},
+                        session_id="sid-inplace", cwd=str(root))
+        assert res.returncode == ALLOW_EXIT, f"{command!r} refused:\n{res.stderr}"
+        effective = command
+        if res.stdout.strip():
+            effective = json.loads(res.stdout)["hookSpecificOutput"]["updatedInput"]["command"]
+        run = subprocess.run(["/bin/bash", "-c", effective], cwd=root,
+                             capture_output=True, text=True, timeout=120)
+        assert run.returncode == 0, (
+            f"authorised command failed to execute: {command!r}\n{run.stderr}"
+        )
+
+    log = subprocess.run(["git", "log", "--oneline"], cwd=root,
+                         capture_output=True, text=True)
+    assert "cycle work" in log.stdout, "the in-place commit never landed"
+
+
 def test_in_place_actor_still_refused_git_config_hook_suppression(main_root):
     """The config firewall never relaxes, in either isolation mode."""
     _write_state(main_root, "sid-inplace", "in_place", main_root)
