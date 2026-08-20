@@ -933,7 +933,8 @@ def _marker_suppresses_spec(marker: object, session_id: str, state: dict,
     return True
 
 
-def commit_overnight_delivery(session_id: str, emitted: str) -> bool:
+def commit_overnight_delivery(session_id: str, emitted: str,
+                              receipt: dict | None = None) -> bool:
     """Record that the heavy payload was delivered -- AFTER it was emitted.
 
     Write-after-emit is the single ordering constraint in this design. A
