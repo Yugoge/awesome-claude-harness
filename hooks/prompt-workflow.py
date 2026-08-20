@@ -1039,7 +1039,7 @@ def build_overnight_continuation(state: dict, include_spec: bool = True,
     step_count = len(overnight_todos) or 22
     step_labels = '; '.join(str(item.get('content', '')) for item in overnight_todos)
     parts = [f'OVERNIGHT CONTINUATION - Cycle {cc + 1}', '']
-    if include_spec:
+    if include_spec and spec_delivered:
         parts += [OVERNIGHT_SPEC_HEADER, '', cmd_spec, '']
     parts += [
         '--- CURRENT STATE ---', '',
