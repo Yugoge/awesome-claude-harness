@@ -1120,10 +1120,13 @@ it were. The cases that genuinely survive are:
   the residue of rule 7 after session-scoping.
 
 All three are SAME-SESSION: the session that made the commit is the session that still needs
-the token. That is what makes the attribution basis below both sound and sufficient.
+the token. That is why the same-session-only attribution test below COVERS every surviving
+case without needing a cross-session tier — a coverage claim, not a soundness claim. The
+journal attributes; it does not prove identity (see **What this does NOT claim** below).
 
 It is deliberately narrow. It does NOT relax DO NOT rule 7, does NOT create a commit, and
-cannot tokenize a commit that is not provably this task's own.
+cannot tokenize a commit that the journal does not attribute to this task AND this session —
+attribution by hook-written record, not proof of identity.
 
 **Trigger — reconcile only when ALL SEVEN conditions hold:**
 
