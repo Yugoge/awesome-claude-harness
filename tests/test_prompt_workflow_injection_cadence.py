@@ -44,6 +44,7 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 HOOK_PATH = Path(os.environ.get('PW_HOOK_PATH') or (REPO / 'hooks' / 'prompt-workflow.py'))
 COMMAND_DOC = REPO / 'commands' / 'dev-overnight.md'
+TODO_PROVIDER = REPO / 'scripts' / 'todo' / 'dev-overnight.py'
 
 SPEC_HEADER = '--- COMMAND SPECIFICATION ---'
 LIGHT_MARKERS = (
