@@ -83,8 +83,21 @@ def _write_state(main_root: Path, session_id: str, isolation_kind: str,
     return path
 
 
+def _write_agent_index(main_root: Path, mapping: dict) -> None:
+    """Register subagent ids so `_classify_actor` can reach `overnight_child`.
+
+    Without this the payload's agent_id resolves to nothing and the actor falls
+    through to `normal`, which exits before ANY enforcement -- a test written
+    that way proves nothing about the child path.
+    """
+    reg = main_root / ".claude" / "dev-registry"
+    reg.mkdir(parents=True, exist_ok=True)
+    (reg / "agent-index.json").write_text(json.dumps(mapping))
+
+
 def _run_hook(main_root: Path, tool_name: str, tool_input: dict,
-              session_id: str = "", cwd: str = "") -> subprocess.CompletedProcess:
+              session_id: str = "", cwd: str = "", agent_id: str = "",
+              extra_env: dict | None = None) -> subprocess.CompletedProcess:
     """Drive the PreToolUse guard exactly as the runtime does: JSON on stdin."""
     payload = {
         "tool_name": tool_name,
@@ -92,11 +105,14 @@ def _run_hook(main_root: Path, tool_name: str, tool_input: dict,
         "session_id": session_id,
         "cwd": cwd or str(main_root),
     }
+    if agent_id:
+        payload["agent_id"] = agent_id
     env = dict(os.environ)
     env["CLAUDE_PROJECT_DIR"] = str(main_root)
     env["PWD"] = payload["cwd"]
     # A stray role in the ambient env must not leak into grant resolution.
     env.pop("CLAUDE_AGENT_TYPE", None)
+    env.update(extra_env or {})
     return subprocess.run(
         [sys.executable, str(HOOK)],
         input=json.dumps(payload),
@@ -104,8 +120,20 @@ def _run_hook(main_root: Path, tool_name: str, tool_input: dict,
         text=True,
         env=env,
         cwd=payload["cwd"],
-        timeout=60,
+        timeout=120,
     )
+
+
+def _rw_binds(rewritten: str) -> list[str]:
+    """Read-write bind TARGETS out of a bwrap re-exec argv.
+
+    Token-aware on purpose: `--ro-bind` must never be counted as `--bind`, and
+    a substring/arithmetic shortcut here silently yields an empty list, which
+    makes every downstream `all(...)` assertion vacuously true.
+    """
+    toks = shlex.split(rewritten)
+    return [toks[i + 1] for i, t in enumerate(toks)
+            if t == "--bind" and i + 1 < len(toks)]
 
 
 @pytest.fixture()
