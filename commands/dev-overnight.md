@@ -242,6 +242,8 @@ REGISTRY_DIR="$PROJECT_DIR/.claude/dev-registry/$DEV_SESSION_ID"
 
 `PROJECT_DIR` and `STATE_FILE` are absolute and canonical, so both stay valid after the `cd` into `worktree_path`. Do NOT split this block across Bash calls, and do NOT invoke the initializer on its own: a fresh shell expands `$STATE_FILE` empty, which is the failure this block exists to prevent. The walk is the only resolution step that may legitimately fail — it does so when the working root is NOT under the main root, which happens only when `OVERNIGHT_FRESH_CLONE_ROOT` was pointed outside it. The error names the searched path; the remedy is to re-issue the block from the main root, not to hand-bind a guess.
 
+**BINDING-EVAPORATION RULE (applies to EVERY later Bash call site in this document, not just this one).** The bindings above live in one shell and die with it. Any subsequent Bash call that needs `PROJECT_DIR`, `STATE_FILE`, `DEV_SESSION_ID` or `REGISTRY_DIR` MUST carry the **resolved literal value**, substituted into the command string exactly as `{pipeline.index}` is. A later `$DEV_SESSION_ID` that nobody bound expands to the empty string and silently builds a wrong path — it does not error. Where this document writes `<DEV_SESSION_ID>` in a command, that is a substitution slot, not a variable to expand. The alternative — repeating the whole binding block as a prelude in each consuming call — is permitted but is never the shorter option.
+
 **ISOLATION IS THE USER'S CHOICE (2026-08-08).** `/dev-overnight` no longer creates a worktree automatically. `isolation_kind` records what the user asked for and is the ONLY field you branch on:
 
 | `isolation_kind` | How it was selected | Working root | Actor git-env |
