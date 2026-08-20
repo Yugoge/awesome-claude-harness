@@ -1017,12 +1017,13 @@ def check_overnight_continuation(session_id: str = '') -> str | None:
     state, state_path = find_any_overnight_state(session_id)
     if state is None:
         return None
+    registry_notice = _repair_overnight_registry(session_id)
     marker_path = overnight_delivery_marker_path(state_path, session_id)
     suppress = _marker_suppresses_spec(
         _read_delivery_marker(marker_path), session_id, state,
         _resolve_transcript_path(session_id), _spec_fingerprint(),
     )
-    notice = ''
+    notice = registry_notice
     if not suppress and not _marker_writable(marker_path):
         # Degraded: without a persistable marker the heavy half is re-sent on
         # every prompt and the saving is exactly zero. Say so, on every prompt,
