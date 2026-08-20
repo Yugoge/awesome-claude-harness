@@ -229,11 +229,17 @@ while [ -n "$d" ] && [ -z "$STATE_FILE" ]; do
 done
 [ -n "$STATE_FILE" ] || { echo "ERROR: no overnight-state file for session $CURRENT_SESSION_ID at or above ${CLAUDE_PROJECT_DIR:-$PWD}" >&2; exit 1; }
 
-# 3. Bind the dev-registry path that every FIRST ACTION line resolves against.
-DEV_SESSION_ID="$CURRENT_SESSION_ID"
-REGISTRY_DIR="$PROJECT_DIR/.claude/dev-registry/$DEV_SESSION_ID"
+# 3. REPAIR the variable rather than routing around it: export the resolved root
+#    back into CLAUDE_PROJECT_DIR. The canonical anchor below, every FIRST ACTION
+#    line, and the initializer's own ambient fallback all resolve against this one
+#    name, so binding it once here fixes all three at the source.
+export CLAUDE_PROJECT_DIR="$PROJECT_DIR"
 
-# 4. Verify, in this same shell. Read-only by ORDERING, not by permission: the
+# 4. Bind the dev-registry path that every FIRST ACTION line resolves against.
+DEV_SESSION_ID="$CURRENT_SESSION_ID"
+REGISTRY_DIR="$CLAUDE_PROJECT_DIR/.claude/dev-registry/$DEV_SESSION_ID"
+
+# 5. Verify, in this same shell. Read-only by ORDERING, not by permission: the
 #    launcher ran the mutating form against its temporary record BEFORE publishing
 #    it, so the actor has nothing left to write. --project-dir is passed explicitly
 #    so the initializer never re-derives a root from the same unreliable variable.
