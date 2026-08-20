@@ -455,12 +455,19 @@ class TestAC6ProcessBoundary(unittest.TestCase):
     """AC6 -- the block reaches a user prompt through the real main() boundary."""
 
     def test_live_session_injects_once(self):
-        with temp_project() as (project, home):
+        # fixture_command_doc: same reason as AC2 -- the builder now refuses to
+        # certify an empty payload, so without a resolvable command document the
+        # heavy half (and the COMMAND SPECIFICATION marker asserted below) is
+        # legitimately absent.
+        with temp_project(fixture_command_doc=True) as (project, home):
             sid = 'AAAA-owner'
             write_state(project / '.claude', sid, build_state(sid, future_z(1)))
             result = run_hook(project, home, prompt_payload(sid))
         self.assertEqual(0, result.returncode)
-        self.assertEqual(1, result.stdout.count('OVERNIGHT CONTINUATION'))
+        # Count the cycle-designated banner, not the bare phrase: the embedded
+        # command document mentions "OVERNIGHT CONTINUATION" in its own prose,
+        # so the bare phrase occurs twice for one actual emission.
+        self.assertEqual(1, result.stdout.count('OVERNIGHT CONTINUATION - Cycle 4'))
         for marker in ('--- COMMAND SPECIFICATION ---', '--- CURRENT STATE ---',
                        'Phase mapping:'):
             self.assertIn(marker, result.stdout)
