@@ -164,7 +164,13 @@ _write_confined() {
     diff -q - "$target" >/dev/null 2>&1 \
       || _die "verify: content mismatch against the recomputed oracle: $target"
   elif [[ "$REPAIR_ONLY" == "1" ]]; then
-    if [[ -f "$target" ]]; then
+    # ABSENT means "nothing is there at all" (-e covers every file type; -L
+    # catches a dangling symlink, which -e does not). Testing -f instead would
+    # classify a FIFO, socket, device or directory sitting at the target as
+    # missing, and `mv -f` would then REPLACE it — repair silently destroying an
+    # object it was never asked to touch, while _note_if_absent reported
+    # REPAIRED_COUNT=0 because it uses this same wider test.
+    if [[ -e "$target" || -L "$target" ]]; then
       # Present: leave it EXACTLY as it is — no open(O_TRUNC), no utime, no
       # rename, so sha256, inode and mtime all survive. stdin is drained rather
       # than dropped: closing it would SIGPIPE the producer on the left of the
