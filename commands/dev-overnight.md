@@ -207,32 +207,33 @@ CURRENT_SESSION_ID="${CLAUDE_CODE_SESSION_ID:-${CLAUDE_SESSION_ID:-}}"
 [ -n "$CURRENT_SESSION_ID" ] || { echo "ERROR: no session id in environment" >&2; exit 1; }
 
 # 2. Bind the main root and STATE_FILE together, to the canonical ABSOLUTE path of
-#    THIS session's state file. CLAUDE_PROJECT_DIR is PREFERRED but is NOT reliably
-#    exported into Bash (measured UNSET in this harness while CLAUDE_CODE_SESSION_ID
-#    was set), so treat it as an optimisation, never a precondition: the fallback
-#    walks up from $PWD, because the state file lives at <main_root>/.claude/ and
-#    every default working root sits UNDER that root (in_place == main root;
-#    .claude/worktrees/<n>; .claude/overnight-fresh-clones/<n>). A bare glob is not
-#    a binding either — several overnight-state files can coexist, so the session_id
-#    recorded INSIDE the file is matched against the live session, and a directory
-#    holding only other sessions' files does not stop the walk.
+#    THIS session's state file. CLAUDE_PROJECT_DIR is a HINT, never a precondition:
+#    it is measured UNSET in this harness (while CLAUDE_CODE_SESSION_ID is set), and
+#    a STALE value must not veto the fallback — so BOTH it and $PWD are tried, in
+#    that order. Each start walks UP, because the state file lives at
+#    <main_root>/.claude/ and every default working root sits UNDER that root
+#    (in_place == main root; .claude/worktrees/<n>; .claude/overnight-fresh-clones/<n>).
+#    Selection is by exact session-keyed FILENAME and then a parsed field check, so
+#    it cannot be fooled by another session's file or by JSON whitespace drift.
 PROJECT_DIR=""; STATE_FILE=""
-d="$(cd "${CLAUDE_PROJECT_DIR:-$PWD}" 2>/dev/null && pwd -P)" || d=""
-while [ -n "$d" ] && [ -z "$STATE_FILE" ]; do
-  for f in "$d"/.claude/overnight-state-*.json; do
-    [ -f "$f" ] || continue
-    grep -Fq "\"session_id\": \"$CURRENT_SESSION_ID\"" "$f" \
-      && { STATE_FILE="$(readlink -f "$f")"; PROJECT_DIR="$d"; break; }
+for start in "${CLAUDE_PROJECT_DIR:-}" "$PWD"; do
+  [ -n "$start" ] || continue
+  d="$(cd "$start" 2>/dev/null && pwd -P)" || continue
+  while [ -n "$d" ]; do
+    f="$d/.claude/overnight-state-$CURRENT_SESSION_ID.json"
+    if [ -f "$f" ] && jq -e --arg s "$CURRENT_SESSION_ID" '.session_id == $s' "$f" >/dev/null 2>&1; then
+      STATE_FILE="$(readlink -f "$f")"; PROJECT_DIR="$d"; break
+    fi
+    [ "$d" = "/" ] && break
+    d="$(dirname "$d")"
   done
-  [ "$d" = "/" ] && break
-  d="$(dirname "$d")"
+  [ -n "$STATE_FILE" ] && break
 done
-[ -n "$STATE_FILE" ] || { echo "ERROR: no overnight-state file for session $CURRENT_SESSION_ID at or above ${CLAUDE_PROJECT_DIR:-$PWD}" >&2; exit 1; }
+[ -n "$STATE_FILE" ] || { echo "ERROR: no readable overnight-state file for session $CURRENT_SESSION_ID at or above ${CLAUDE_PROJECT_DIR:-<unset>} or $PWD" >&2; exit 1; }
 
-# 3. REPAIR the variable rather than routing around it: export the resolved root
-#    back into CLAUDE_PROJECT_DIR. The canonical anchor below, every FIRST ACTION
-#    line, and the initializer's own ambient fallback all resolve against this one
-#    name, so binding it once here fixes all three at the source.
+# 3. Normalise the variable IN THIS SHELL, so the canonical anchor below resolves.
+#    Same-shell only: this export does NOT reach later Bash calls, hooks, or Agent
+#    prompts — those need substituted literals (see the BINDING-EVAPORATION RULE).
 export CLAUDE_PROJECT_DIR="$PROJECT_DIR"
 
 # 4. Bind the dev-registry path that every FIRST ACTION line resolves against.
