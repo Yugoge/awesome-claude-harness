@@ -566,33 +566,44 @@ class TestAC11MarkerOrderingAndWritability(unittest.TestCase):
         """Emission failure must leave NO marker, so the next prompt re-delivers.
 
         M6a: a marker written before emission claims a delivery that never
-        happened and does NOT self-heal within the cycle.
+        happened and does NOT self-heal within the cycle -- every later prompt
+        suppresses and the session stalls until the next cycle advance.
+
+        The sink is /dev/full, which accepts the open and then fails every
+        write with ENOSPC. An earlier revision of this test used /dev/null,
+        which SUCCEEDS -- so it proved nothing about ordering and would have
+        stayed green against an implementation that committed the marker BEFORE
+        printing. The assertion below is the ordering property itself: the run
+        whose emission failed must leave no marker behind.
         """
         with tempfile.TemporaryDirectory() as tmp:
             fixture = Fixture(tmp)
-            with open(os.devnull, 'w') as sink:
+            with open('/dev/full', 'w') as sink:
                 result = subprocess.run(
                     [sys.executable, str(HOOK_PATH)],
                     input=json.dumps({'prompt': 'go', 'session_id': fixture.session_id,
                                       'transcript_path': str(fixture.transcript)}),
                     text=True, env=fixture.env(), stdout=sink,
-                    stderr=subprocess.DEVNULL, pass_fds=(),
+                    stderr=subprocess.PIPE,
                 )
-            # A devnull sink still succeeds, so assert the real ordering
-            # property directly: the committer refuses without emission
-            # evidence.
             self.assertEqual(0, result.returncode)
-            os.environ['HOME'] = str(fixture.home)
-            os.environ['CLAUDE_PROJECT_DIR'] = str(fixture.project)
-            module = load_hook_module()
-            fresh = Fixture(tempfile.mkdtemp(dir=tmp), session_id=OTHER_SID)
-            os.environ['CLAUDE_PROJECT_DIR'] = str(fresh.project)
-            os.environ['HOME'] = str(fresh.home)
-            module = load_hook_module()
-            self.assertFalse(module.commit_overnight_delivery(OTHER_SID, ''))
+            self.assertFalse(fixture.marker_path().exists(),
+                             'marker written despite a failed emission')
+            # ...and the delivery is therefore still owed: the next ordinary
+            # prompt must carry the heavy half.
+            self.assertIn(SPEC_HEADER, deliver(fixture))
+
+    def test_committer_refuses_emissions_it_did_not_build(self):
+        """No receipt, no certification -- the committer's own input guard."""
+        with tempfile.TemporaryDirectory() as tmp:
+            fixture = Fixture(tmp)
+            module = fixture.load_module()
+            self.assertFalse(module.commit_overnight_delivery(SID, ''))
             self.assertFalse(module.commit_overnight_delivery(
-                OTHER_SID, 'light only, no spec header'))
-            self.assertFalse(fresh.marker_path().exists())
+                SID, 'light only, no spec header'))
+            self.assertFalse(module.commit_overnight_delivery(
+                SID, f'OVERNIGHT CONTINUATION - Cycle 1\n{SPEC_HEADER}\nbody'))
+            self.assertFalse(fixture.marker_path().exists())
 
     def test_marker_write_failure_leaves_exit_zero_and_redelivers(self):
         """A marker that cannot be persisted is fail-safe, not an error."""
