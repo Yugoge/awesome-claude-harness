@@ -1443,6 +1443,80 @@ def verify_overnight_state(session_id: str) -> tuple[bool, str]:
     return True, ''
 
 
+def _repair_overnight_registry(session_id: str) -> str:
+    """Re-verify a LIVE session's enforcement artifacts; restore only what is gone.
+
+    Verification used to run exactly ONCE, at launch (handle_phase_a). Nothing
+    re-checked the registry afterwards, so a live session that lost a sentinel
+    mid-flight kept receiving continuation blocks while
+    pretool-subagent-code-block.py fell OPEN for that agent: enforcement off,
+    reported nowhere. A check that stops enforcing without saying it stopped is
+    the failure mode this closes -- the same class the user's own report names.
+
+    Returns a notice to be carried INSIDE the continuation block, '' when the
+    registry is healthy. What the block contains and how often it is sent are
+    deliberately untouched: the block is never withheld and never re-sent
+    because of this check. Withholding it would strand a resuming orchestrator
+    on stale routing while repairing nothing -- trading a silent enforcement gap
+    for a silent liveness one.
+
+    Cost is one --verify-only run (~0.2s) per prompt, and only while an
+    overnight record is live: find_any_overnight_state has already returned a
+    session-owned live state before this is reached, so ordinary sessions pay
+    nothing.
+    """
+    ok, why = verify_overnight_state(session_id)
+    if ok:
+        return ''
+    sp = overnight_state_path(session_id)
+    script = Path.home() / '.claude' / 'scripts' / 'overnight-init.sh'
+    repaired: list[str] = []
+    detail = ''
+    if not sp.exists() or not os.access(script, os.X_OK):
+        detail = f'repair unavailable (state {sp}, initializer {script})'
+    else:
+        try:
+            r = subprocess.run(
+                [str(script), '--repair-only', '--state-file', str(sp)],
+                capture_output=True, text=True, timeout=120)
+            repaired = [ln.split('=', 1)[1]
+                        for ln in (r.stdout or '').splitlines()
+                        if ln.startswith('REPAIRED=')]
+            if r.returncode != 0:
+                detail = (r.stderr or r.stdout or '').strip()
+        except Exception as exc:
+            detail = f'repair could not run: {exc}'
+    # Re-verified from the outside, never inferred from the repair's own exit
+    # code -- the repair is the thing being checked.
+    ok, why_after = verify_overnight_state(session_id)
+    if not ok:
+        return (
+            'WARNING: this session\'s enforcement registry is INVALID and could '
+            f'not be repaired ({why_after}'
+            f'{"; " + detail if detail else ""}). An artifact that is PRESENT '
+            'but wrong is deliberately not overwritten -- it is either a '
+            'legitimate mutation or evidence -- so this needs a human. While it '
+            'stands, code-write and e2e/codex enforcement may be silently OFF '
+            'for this session: do NOT treat subagent output as gated. Re-launch '
+            'from a clean state, or end the session with /stop.'
+        )
+    if not repaired:
+        return (
+            'NOTE: this session\'s enforcement registry failed verification '
+            f'({why}) and then passed on re-check without any artifact being '
+            'restored. Treat the first reading as a transient fault worth '
+            'investigating, not as a healthy registry.'
+        )
+    return (
+        'NOTE: this session\'s enforcement registry was INCOMPLETE and has been '
+        'repaired. Restored: ' + ', '.join(repaired) + f'. Original finding: '
+        f'{why}. A missing dev-registry sentinel makes '
+        'pretool-subagent-code-block.py fall OPEN for that agent, so code-write '
+        'enforcement was OFF for any dispatch between the loss and this prompt. '
+        'Re-check subagent work done in that window.'
+    )
+
+
 def _cleanup_overnight_partials(sid: str) -> None:
     """M5/AC4: remove any partial todo/bookmark/state written for a failed
     /dev-overnight launch so a failed launch leaves no actionable artifacts.
