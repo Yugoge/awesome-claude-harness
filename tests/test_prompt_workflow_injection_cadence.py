@@ -182,6 +182,28 @@ class Fixture:
                               capture_output=stdout is subprocess.PIPE, text=True,
                               env=env, stdout=None if stdout is not subprocess.PIPE else None)
 
+    @contextlib.contextmanager
+    def module(self):
+        """The hook loaded with THIS fixture's environment in force.
+
+        PROJECT_DIR is captured at import time while $HOME is consulted at call
+        time, so the environment must hold across both -- and be restored
+        afterwards, so one test cannot leak a deleted temp HOME into the next.
+        """
+        previous = {key: os.environ.get(key) for key in
+                    ('HOME', 'CLAUDE_PROJECT_DIR', 'CLAUDE_DEV_OVERNIGHT_TODO')}
+        os.environ['HOME'] = str(self.home)
+        os.environ['CLAUDE_PROJECT_DIR'] = str(self.project)
+        os.environ.pop('CLAUDE_DEV_OVERNIGHT_TODO', None)
+        try:
+            yield load_hook_module()
+        finally:
+            for key, value in previous.items():
+                if value is None:
+                    os.environ.pop(key, None)
+                else:
+                    os.environ[key] = value
+
     def call_direct(self, session_id: str | None = None) -> str | None:
         """Call the decision in-process so an ESCAPING EXCEPTION FAILS THE TEST.
 
