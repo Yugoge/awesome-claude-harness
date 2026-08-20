@@ -1364,11 +1364,20 @@ def _set_governing_own_root(gov_state: dict | None) -> None:
     Isolated records already answer Q2 through `_get_active_worktree_paths()`,
     so they deliberately set nothing here -- keeping the main root fully guarded
     for every isolated actor.
+
+    The exemption is BOUNDED by the record's own `main_root` (the launcher sets
+    the two equal under `in_place`). A record whose working root escapes its
+    main_root is malformed and earns no exemption -- so the widest this can ever
+    reach is the checkout the guard was already scoped to, never `/`.
     """
     global _GOVERNING_OWN_ROOT
     _GOVERNING_OWN_ROOT = ''
-    if isinstance(gov_state, dict) and gov_state.get('isolation_kind') == 'in_place':
-        _GOVERNING_OWN_ROOT = gov_state.get('worktree_path', '') or ''
+    if not isinstance(gov_state, dict) or gov_state.get('isolation_kind') != 'in_place':
+        return
+    own = gov_state.get('worktree_path', '') or ''
+    main = gov_state.get('main_root', '') or ''
+    if own and main and _path_under_prefix(own, main):
+        _GOVERNING_OWN_ROOT = own
 
 
 def _path_targets_main(tgt_dir: str, main_real: str) -> bool:
