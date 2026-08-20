@@ -425,6 +425,7 @@ _render_requirement_doc() {
     fi
   fi
 }
+_note_if_absent "$REQUIREMENT_DOC"
 _render_requirement_doc | _write_confined "$REQUIREMENT_DOC"
 # Re-read what is ON DISK and compare it to a freshly recomputed render. In
 # mutating mode this catches a short or redirected write; in verify mode it is
