@@ -64,11 +64,20 @@ Token location: `/tmp/agentic-commit/push/<repo-hash>/<session-digest>/<branch-e
   environment: a value carrying `/` or `..` would escape the session directory, and two ids
   normalizing to the same segment would recreate the very collision session-scoping removes.
 - `branch-encoded` = branch name with `/` replaced by `__`
-- Token content: `{"commit_sha": "<sha>", "branch": "<branch>", "repo_root": "<root>"}`
+- Token content: `{"commit_sha": "<sha>", "branch": "<branch>", "repo_root": "<root>", "session_id": "<raw session id, undigested>"}`.
+  `session_id` carries the RAW id, never the digest — the digest appears only as a path segment.
 - Legacy fallback: a session-less token at `/tmp/agentic-commit/push/<repo-hash>/<branch-encoded>.json`,
-  written by a pre-migration `/commit`, is still honoured by `push.sh` when no session-scoped token
-  exists. Pre-validation MUST check that path too — aborting because the session-scoped path alone
-  is empty makes the fallback unreachable through this wrapper.
+  written by a pre-migration `/commit`, is honoured by `push.sh` only when BOTH hold: no
+  session-scoped token exists, AND the legacy token's `session_id` is present, non-empty, and
+  equal to this session's RAW id. A token owned by another session, or carrying no `session_id`
+  at all, is REFUSED — matching `commit_sha` is not sufficient, because two sessions on one
+  branch routinely share a HEAD, which is exactly when they contend. The ownership test is not
+  merely about authorization: `push.sh` deletes the resolved token path after a successful push,
+  so inheriting a foreign token would also destroy it.
+  Pre-validation MUST check the legacy path too, and MUST apply the same ownership test —
+  aborting because the session-scoped path alone is empty makes the fallback unreachable through
+  this wrapper, while accepting the legacy path without the ownership test makes this wrapper
+  admit what the gate rejects.
 
 **Rejection conditions** (push is blocked if any hold):
 - No token file at either the session-scoped or the legacy path (no `/commit` ran in this session)
