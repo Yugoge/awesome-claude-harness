@@ -1014,6 +1014,12 @@ def build_overnight_continuation(state: dict, include_spec: bool = True,
     unchanged apart from the self-heal pointer, which names the resolved spec
     path so an orchestrator that has lost the document can recover it with one
     read instead of stalling.
+
+    include_spec=True is a REQUEST, not a guarantee: when the document cannot
+    be read the header is withheld too, the omission is announced in the block,
+    and the receipt records that nothing was delivered -- so no marker can be
+    written and the next prompt retries. Every exit from this function records
+    a receipt; see _record_delivery_receipt.
     """
     cc = state.get('cycle_count', 0)
     phase = state.get('current_phase', 'unknown')
