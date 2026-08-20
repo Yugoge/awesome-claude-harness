@@ -139,8 +139,15 @@ as in the Session commit prerequisite above: `sha256` of the raw session id
 characters. If no session-scoped token exists, check the legacy session-less path
 `/tmp/agentic-commit/push/<repo-hash>/<branch-encoded>.json` before concluding anything —
 `push.sh` falls back to it, so aborting on an empty session-scoped path alone would make that
-fallback unreachable. Abort and instruct the user to run `/commit` first only when neither path
-holds a token, or when the token found there is mismatched.
+fallback unreachable. A legacy token is usable ONLY under the ownership test from the Session
+commit prerequisite above: its `session_id` must be present, non-empty, and equal to this
+session's RAW id. `push.sh` applies that test before any sha comparison, and a matching
+`commit_sha` never substitutes for it — a legacy token that is unreadable, carries no
+`session_id`, or belongs to another session is not a usable token at all, even at the right
+HEAD. Abort and instruct the user to run `/commit` first when any of these hold: neither path
+yields a usable token (counting an unowned legacy token as unusable); the resolved token's
+`commit_sha` does not match the current `git rev-parse HEAD`; or the resolved token cannot be
+read or parsed (the gate fails closed on it — see Rejection conditions above).
 
 **Step 2: Compute pre-push snapshot**
 
