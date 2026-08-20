@@ -131,8 +131,25 @@ def append_commit_event(grant, payload_session_id):
     `grant` is the parsed single-use commit grant that the privilege guard validated for
     this `git commit` (it supplies task_id, repo_root, branch and the pre-commit
     expected_head). `payload_session_id` is the session id the harness handed the
-    PostToolUse hook — the one identifier in the entry that the committing agent does not
-    author.
+    PostToolUse hook.
+
+    PRECISION ON WHAT IS AUTHORED, because `session_ids[]` — not `payload_session_id` alone
+    — is what the matcher below searches, and the two do not have the same properties:
+
+      - `payload_session_id` is supplied by the harness and is the ONE member the committing
+        agent does not author.
+      - `CLAUDE_CODE_SESSION_ID` / `CLAUDE_SESSION_ID` are read from the agent's own
+        environment.
+      - `grant["sid"]` originates from the grant, whose `--sid` is CLI-supplied at mint time.
+
+    All four are recorded because an orchestrator and its subagent legitimately carry
+    different ids for one logical session, and keying on a single one would refuse
+    legitimate matches (see the divergence check in the test module). The consequence must
+    be stated rather than glossed: membership in `session_ids[]` is NOT unforgeable against
+    an actor that can set the latter three. That is the same NON-REGRESSION position taken
+    for the journal as a whole — forging this is strictly more expensive than writing the
+    push-gate token directly, so it confers no new capability — and it is likewise NOT a
+    soundness claim. Do not restate this array as proof of identity.
 
     NEVER raises: every failure path returns None, leaving reconciliation with no
     attribution rather than leaving the commit in any way affected.

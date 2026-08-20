@@ -1,7 +1,7 @@
 # lib
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-08-19T11:59:10Z*
+*Last updated: 2026-08-20T13:31:32Z*
 **Total entries**: 33
 **Convention**: kebab
 
@@ -29,7 +29,6 @@ lib/
 ├── `claude_home.sh` - claude_home.sh — shared "harness home" resolver (shell consumable).
 ├── `close-verdict.py` - Shared CLOSE verdict classifier for commit/close tooling.
 ├── `closeout.py` - Public API:
-├── `commit_journal.py` - Commit-event journal — a hook-written witness correlating a session to a resulting commit sha.
 ├── `contract_runtime.py` - This module is the single shared engine consumed by every contract-aware
 ├── `git_clean_guard.py` - Classifies ONE Bash command for the fail-closed pre-clean guard woven into the
 ├── `git_command_classifier.py` - Provides iter_git_invocations() — a token-aware parser that detects git
