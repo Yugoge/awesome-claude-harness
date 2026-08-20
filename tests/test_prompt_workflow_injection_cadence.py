@@ -99,16 +99,27 @@ class Fixture:
 
     def __init__(self, tmp: str, session_id: str = SID, cycle_count: int = 0,
                  isolation_kind: str = 'registered_worktree',
-                 with_transcript: bool = True):
+                 with_transcript: bool = True, with_spec: bool = True,
+                 with_todo: bool = True):
         self.session_id = session_id
         self.root = Path(tmp)
         self.project = self.root / 'proj'
         self.home = self.root / 'home'
         (self.project / '.claude').mkdir(parents=True)
         (self.home / '.claude' / 'commands').mkdir(parents=True)
-        (self.home / '.claude' / 'commands' / 'dev-overnight.md').write_text(
-            COMMAND_DOC.read_text()
-        )
+        if with_spec:
+            (self.home / '.claude' / 'commands' / 'dev-overnight.md').write_text(
+                COMMAND_DOC.read_text()
+            )
+        if with_todo:
+            # The canonical step labels are ~1,000 chars of the light payload
+            # and load from $HOME/.claude/scripts/todo/dev-overnight.py. AC-1
+            # mandates a TEMPORARY home, not an empty one -- leaving the
+            # provider out silently emptied 'Canonical steps:' and was the
+            # false premise behind the lowered floor.
+            provider = self.home / '.claude' / 'scripts' / 'todo'
+            provider.mkdir(parents=True)
+            shutil.copy(TODO_PROVIDER, provider / 'dev-overnight.py')
         transcripts = self.home / '.claude' / 'projects' / '-proj'
         transcripts.mkdir(parents=True)
         self.transcript = transcripts / f'{session_id}.jsonl'
