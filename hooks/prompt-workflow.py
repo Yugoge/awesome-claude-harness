@@ -1476,9 +1476,14 @@ def _repair_overnight_registry(session_id: str) -> str:
         detail = f'repair unavailable (state {sp}, initializer {script})'
     else:
         try:
+            # Bounded well below verify's 60s. This whole helper sits on the
+            # prompt path, and verify->repair->verify is three subprocesses: at
+            # the inherited 120s a single hung repair would freeze a prompt for
+            # minutes. A repair that has not finished in 20s is not going to
+            # finish usefully, and the WARNING path below is the correct answer.
             r = subprocess.run(
                 [str(script), '--repair-only', '--state-file', str(sp)],
-                capture_output=True, text=True, timeout=120)
+                capture_output=True, text=True, timeout=20)
             repaired = [ln.split('=', 1)[1]
                         for ln in (r.stdout or '').splitlines()
                         if ln.startswith('REPAIRED=')]
