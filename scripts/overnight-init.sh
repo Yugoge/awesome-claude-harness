@@ -259,6 +259,7 @@ while IFS= read -r agent; do
   # (agent_type, session_id) are asserted in the validation pass below, in both
   # modes; additive keys from a legitimate mutator are tolerated.
   if [[ "$VERIFY_ONLY" != "1" ]]; then
+    _note_if_absent "$REGISTRY_DIR/$agent.json"
     printf '{"agent_type": "%s", "session_id": "%s"}\n' "$agent" "$SESSION_ID" \
       | _write_confined "$REGISTRY_DIR/$agent.json"
   fi
