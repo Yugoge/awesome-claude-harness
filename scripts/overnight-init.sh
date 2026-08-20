@@ -300,9 +300,11 @@ ENFORCE_FLAGS=(e2e)
 # must-not-change file, and a second copy of the schema would drift from the
 # consumers that read it.
 for _flag in "${ENFORCE_FLAGS[@]}"; do
-  [[ "$REPAIR_ONLY" == "1" && -e "$REGISTRY_DIR/$_flag-enforce.json" ]] && continue
+  if [[ "$REPAIR_ONLY" == "1" && -e "$REGISTRY_DIR/$_flag-enforce.json" ]]; then
+    continue
+  fi
+  _note_if_absent "$REGISTRY_DIR/$_flag-enforce.json"
   ENFORCE_ARGS+=(--flag "$_flag")
-  [[ "$REPAIR_ONLY" == "1" ]] && REPAIRED_ARTIFACTS+=("$REGISTRY_DIR/$_flag-enforce.json")
 done
 if [[ "$VERIFY_ONLY" != "1" && ${#ENFORCE_ARGS[@]} -gt 4 ]]; then
   CLAUDE_PROJECT_DIR="$PROJECT_ROOT" bash "$SCRIPT_DIR/write-enforce-flag.sh" "${ENFORCE_ARGS[@]}" >/dev/null \
