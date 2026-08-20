@@ -241,7 +241,11 @@ class TestAC2Continuation(unittest.TestCase):
     """AC2 -- the owning session's live record yields a block with the four markers."""
 
     def test_owning_session_gets_block(self):
-        with temp_project() as (project, home):
+        # fixture_command_doc: the heavy half is only emitted when a command
+        # document actually resolves. Without it the builder now correctly
+        # refuses to certify an empty payload, so this test would be asserting
+        # against the degenerate emission rather than a real block.
+        with temp_project(fixture_command_doc=True) as (project, home):
             module = load_hook_module()
             module.PROJECT_DIR = project
             sid = 'AAAA-owner'
