@@ -1021,8 +1021,19 @@ def build_overnight_continuation(state: dict, include_spec: bool = True,
     last_entry = log[-1] if log else None
     last = f"Cycle {last_entry.get('cycle')}: {last_entry.get('status')}" if last_entry else 'N/A'
     spec_path = resolve_command_spec_path('dev-overnight')
+    # Fingerprint BEFORE the read, never after. If the file is edited between
+    # the two, a pre-read stat records the OLD identity for possibly-NEW bytes,
+    # so the next prompt sees a mismatch and re-delivers. A post-read stat
+    # would record the NEW identity for OLD bytes and suppress the new document
+    # for the rest of the cycle -- the one direction this design forbids.
+    spec_fingerprint = _spec_fingerprint('dev-overnight') if include_spec else ''
     # Read the 128 KB document only when it is actually going to be emitted.
     cmd_spec = read_command_spec('dev-overnight') if include_spec else ''
+    # An empty body is a FAILED read, not a delivery. Emitting the header over
+    # nothing yielded a block the committer certified, a marker carrying an
+    # empty fingerprint, and suppression on the very next prompt -- leaving the
+    # orchestrator with neither the document nor a route to it, at exit 0.
+    spec_delivered = bool(cmd_spec.strip())
     wt_instruction = _build_worktree_instruction(state)
     overnight_todos = _load_overnight_todos()
     step_count = len(overnight_todos) or 22
