@@ -266,9 +266,13 @@ while IFS= read -r agent; do
   SENTINEL_COUNT=$((SENTINEL_COUNT + 1))
 done <<< "$AGENT_LIST"
 
-# Direct artifact validation, in BOTH modes, before any success is claimed. In
-# verify mode _write_confined already compared bytes; in mutating mode `cat >`
-# can still leave a short write behind. Re-reading each sentinel with jq is the
+# Direct artifact validation, in EVERY mode, before any success is claimed.
+# Sentinels reach this pass UNCOMPARED: verify mode skips _write_confined for
+# them entirely (above), and repair mode leaves a present one alone — so this is
+# the only thing that inspects them. The older note claiming _write_confined had
+# already compared their bytes described a check the code deliberately does not
+# perform. In mutating mode `cat >` can additionally leave a short write behind.
+# Re-reading each sentinel with jq is the
 # only check that proves what is ON DISK — never what was intended. The count is
 # asserted against len(CP_AGENTS) parsed at run time, never a literal.
 EXPECTED_SENTINELS="$(grep -c . <<< "$AGENT_LIST")"
