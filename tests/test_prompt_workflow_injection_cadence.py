@@ -204,6 +204,17 @@ class Fixture:
                     os.environ[key] = value
 
 
+CANONICAL_PREFIX = 'Canonical steps: '
+
+
+def canonical_steps(block: str) -> str:
+    """The rendered step labels, or '' when the line is absent or empty."""
+    for line in block.splitlines():
+        if line.startswith(CANONICAL_PREFIX):
+            return line[len(CANONICAL_PREFIX):].strip()
+    return ''
+
+
 def deliver(fixture: Fixture, session_id: str | None = None) -> str:
     """One full prompt: emit, then commit the marker (write-after-emit)."""
     result = fixture.run(session_id)
