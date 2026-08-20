@@ -620,12 +620,14 @@ class TestAC11MarkerOrderingAndWritability(unittest.TestCase):
         """No receipt, no certification -- the committer's own input guard."""
         with tempfile.TemporaryDirectory() as tmp:
             fixture = Fixture(tmp)
-            module = fixture.load_module()
-            self.assertFalse(module.commit_overnight_delivery(SID, ''))
-            self.assertFalse(module.commit_overnight_delivery(
-                SID, 'light only, no spec header'))
-            self.assertFalse(module.commit_overnight_delivery(
-                SID, f'OVERNIGHT CONTINUATION - Cycle 1\n{SPEC_HEADER}\nbody'))
+            with fixture.module() as module:
+                self.assertFalse(module.commit_overnight_delivery(SID, ''))
+                self.assertFalse(module.commit_overnight_delivery(
+                    SID, 'light only, no spec header'))
+                # Well-formed, plausible, and still uncertifiable: no builder
+                # in this process ever produced it.
+                self.assertFalse(module.commit_overnight_delivery(
+                    SID, f'OVERNIGHT CONTINUATION - Cycle 1\n{SPEC_HEADER}\nbody'))
             self.assertFalse(fixture.marker_path().exists())
 
     def test_marker_write_failure_leaves_exit_zero_and_redelivers(self):
