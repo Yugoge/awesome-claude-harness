@@ -1033,8 +1033,9 @@ Read BA output files:
 ```
 For each active pipeline[i]:
 
-# Write qa_mode sentinel immediately before each QA dispatch (preserve existing fields)
-bash ~/.claude/scripts/write-qa-mode.sh --session-id "$DEV_SESSION_ID" --mode ba_validation \
+# Write qa_mode sentinel immediately before each QA dispatch (preserve existing fields).
+# Fresh shell: substitute the resolved session id, do not expand $DEV_SESSION_ID.
+bash ~/.claude/scripts/write-qa-mode.sh --session-id "<DEV_SESSION_ID>" --mode ba_validation \
   || { echo 'ERROR: Failed to set qa_mode=ba_validation in qa.json — aborting' >&2; exit 1; }
 
 Agent(subagent_type: "qa")
