@@ -130,24 +130,35 @@ def append_commit_event(grant, payload_session_id):
 
     `grant` is the parsed single-use commit grant that the privilege guard validated for
     this `git commit` (it supplies task_id, repo_root, branch and the pre-commit
-    expected_head). `payload_session_id` is the session id the harness handed the
-    PostToolUse hook.
+    expected_head). `payload_session_id` is the session id the calling hook resolved for
+    this PostToolUse event — see below for exactly what that resolution is.
 
     PRECISION ON WHAT IS AUTHORED, because `session_ids[]` — not `payload_session_id` alone
-    — is what the matcher below searches, and the two do not have the same properties:
+    — is what the matcher below searches, and the candidates do not have the same
+    properties:
 
-      - `payload_session_id` is supplied by the harness and is the ONE member the committing
-        agent does not author.
+      - `payload_session_id` is whatever the caller passes. The one live caller
+        (hooks/posttool-allowlist-consume.py) passes the PostToolUse payload's
+        `session_id` when the payload carries one — harness-supplied in that case only —
+        and otherwise falls back to `CLAUDE_SESSION_ID` from its own environment (the
+        placeholder `default` when that is unset too). So this member is beyond the
+        committing agent's authorship exactly when the payload actually carried it; on the
+        fallback path it is as environment-derived as the next two.
       - `CLAUDE_CODE_SESSION_ID` / `CLAUDE_SESSION_ID` are read from the agent's own
         environment.
       - `grant["sid"]` originates from the grant, whose `--sid` is CLI-supplied at mint time.
 
-    All four are recorded because an orchestrator and its subagent legitimately carry
-    different ids for one logical session, and keying on a single one would refuse
-    legitimate matches (see the divergence check in the test module). The consequence must
-    be stated rather than glossed: membership in `session_ids[]` is NOT unforgeable against
-    an actor that can set the latter three. That is the same NON-REGRESSION position taken
-    for the journal as a whole — forging this is strictly more expensive than writing the
+    All four are CANDIDATES, considered because an orchestrator and its subagent
+    legitimately carry different ids for one logical session, and keying on a single one
+    would refuse legitimate matches (see the divergence check in the test module). What is
+    RECORDED is the subset `_identifying` leaves standing: placeholder values
+    (NON_IDENTIFYING) are dropped and duplicates collapse to their first occurrence, so
+    `session_ids[]` holds anywhere from zero to four entries whose membership depends on
+    the inputs — and the zero case aborts the write below rather than record an
+    unmatchable entry. The consequence must be stated rather than glossed: membership in
+    `session_ids[]` is NOT unforgeable against an actor that can influence every candidate
+    the harness did not pin. That is the same NON-REGRESSION position taken for the
+    journal as a whole — forging this is strictly more expensive than writing the
     push-gate token directly, so it confers no new capability — and it is likewise NOT a
     soundness claim. Do not restate this array as proof of identity.
 
