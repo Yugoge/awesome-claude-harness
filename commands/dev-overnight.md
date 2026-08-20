@@ -240,7 +240,7 @@ REGISTRY_DIR="$PROJECT_DIR/.claude/dev-registry/$DEV_SESSION_ID"
 ~/.claude/scripts/overnight-init.sh --verify-only --state-file "$STATE_FILE" --project-dir "$PROJECT_DIR"
 ```
 
-`STATE_FILE` is absolute and canonical, so it stays valid after the `cd` into `worktree_path`. Do NOT split this block across Bash calls, and do NOT invoke the initializer on its own: a fresh shell expands `$STATE_FILE` empty, which is the failure this block exists to prevent.
+`PROJECT_DIR` and `STATE_FILE` are absolute and canonical, so both stay valid after the `cd` into `worktree_path`. Do NOT split this block across Bash calls, and do NOT invoke the initializer on its own: a fresh shell expands `$STATE_FILE` empty, which is the failure this block exists to prevent. The walk is the only resolution step that may legitimately fail — it does so when the working root is NOT under the main root, which happens only when `OVERNIGHT_FRESH_CLONE_ROOT` was pointed outside it. The error names the searched path; the remedy is to re-issue the block from the main root, not to hand-bind a guess.
 
 **ISOLATION IS THE USER'S CHOICE (2026-08-08).** `/dev-overnight` no longer creates a worktree automatically. `isolation_kind` records what the user asked for and is the ONLY field you branch on:
 

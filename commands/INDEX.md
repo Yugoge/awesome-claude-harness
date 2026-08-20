@@ -1,7 +1,7 @@
 # commands
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-08-20T17:54:57Z*
+*Last updated: 2026-08-20T17:55:07Z*
 **Total entries**: 19
 **Convention**: kebab
 
