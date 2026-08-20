@@ -437,4 +437,12 @@ echo "SPEC_ID=$SPEC_ID"
 echo "CP_DIR=$CP_DIR"
 echo "VIEWS_DIR=$VIEWS_DIR"
 echo "REQUIREMENT_DOC=$REQUIREMENT_DOC"
+# A repair that succeeded is still a report of DAMAGE: something removed an
+# enforcement artifact from a live session, and the caller must be able to say
+# so rather than resume as if nothing happened. Count is always emitted so the
+# healthy case is a positive statement (REPAIRED_COUNT=0), not an absence.
+echo "REPAIRED_COUNT=${#REPAIRED_ARTIFACTS[@]}"
+for _r in ${REPAIRED_ARTIFACTS[@]+"${REPAIRED_ARTIFACTS[@]}"}; do
+  echo "REPAIRED=$_r"
+done
 echo "OVERNIGHT_INIT_OK"
