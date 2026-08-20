@@ -255,7 +255,6 @@ def test_concurrent_worktree_context_actor_cannot_git_into_main_root(
 @pytest.mark.parametrize("tool_name,tool_input", [
     ("Write", {"file_path": "<MAIN>/planted.txt", "content": "x"}),
     ("Edit", {"file_path": "<MAIN>/planted.txt", "old_string": "a", "new_string": "b"}),
-    ("Bash", {"command": "echo x > <MAIN>/planted.txt"}),
 ])
 def test_concurrent_isolated_session_cannot_write_into_main_root(
         main_root, isolated_worktree, tool_name, tool_input):
@@ -270,6 +269,33 @@ def test_concurrent_isolated_session_cannot_write_into_main_root(
                     session_id="sid-iso", cwd=str(isolated_worktree))
     assert res.returncode == BLOCK_EXIT, (
         f"isolated session wrote into the main root via {tool_name}"
+    )
+
+
+def test_concurrent_isolated_session_bash_write_to_main_root_is_confined(
+        main_root, isolated_worktree):
+    """A Bash write is confined by the OS boundary rather than an exit-2 block.
+
+    The guard rewrites the actor's command to re-exec inside a bwrap mount
+    namespace in which the whole host is `--ro-bind` and the ONLY read-write
+    bind is the isolated worktree, so the write hits EROFS. Either outcome --
+    a refusal, or a rewrite whose sole RW bind is the worktree -- satisfies the
+    contract; silently passing the raw command through does not.
+    """
+    _write_state(main_root, "sid-inplace", "in_place", main_root)
+    _write_state(main_root, "sid-iso", "registered_worktree", isolated_worktree)
+    command = f"echo x > {main_root}/planted.txt"
+    res = _run_hook(main_root, "Bash", {"command": command},
+                    session_id="sid-iso", cwd=str(isolated_worktree))
+    if res.returncode == BLOCK_EXIT:
+        return
+    assert res.returncode == ALLOW_EXIT, res.stderr
+    rewritten = json.loads(res.stdout)["hookSpecificOutput"]["updatedInput"]["command"]
+    assert "--ro-bind / /" in rewritten, "main tree was not bound read-only"
+    rw_binds = [rewritten.split("--bind ")[i + 1].split(" ")[0]
+                for i in range(rewritten.count("--bind ") - rewritten.count("--ro-bind "))]
+    assert all(b.startswith(str(isolated_worktree)) for b in rw_binds), (
+        f"a read-write bind escaped the isolated worktree: {rw_binds}"
     )
 
 
