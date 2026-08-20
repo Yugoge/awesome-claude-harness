@@ -285,13 +285,13 @@ class TestAC1RecurringCostIsBounded(unittest.TestCase):
 
             cumulative = sum(len(o) for o in outputs)
             baseline = len(outputs[0]) * 5
-            # DISCREPANCY D2 -- AC-1 pins cumulative_max=145000 and
-            # cumulative_min=130000 to constants that this lane's own
-            # recommended landing order invalidates: the named residual owner
-            # (include-expander) SHRINKS commands/dev-overnight.md, so a
-            # minimum on cumulative size would fail this lane precisely for
-            # succeeding at making the block smaller. Asserted relationally
-            # against the fixture's own measured boundary block instead.
+            # AC-1's cumulative bounds, in the relational form the criterion
+            # now carries. Its original absolute constants were derived from a
+            # document size that has since moved, and the named residual owner
+            # (include-expander) SHRINKS that document -- so an absolute
+            # MINIMUM would have failed this lane precisely for succeeding at
+            # making the block smaller. The criterion was amended rather than
+            # substituted at this assertion site; see its _amended_ note.
             self.assertLess(cumulative, len(outputs[0]) + 5 * LIGHT_CEILING_CHARS)
             self.assertGreaterEqual(cumulative, len(outputs[0]))
             self.assertLess(cumulative, baseline * 0.30)
