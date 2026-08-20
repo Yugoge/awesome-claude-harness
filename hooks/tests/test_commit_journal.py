@@ -69,8 +69,7 @@ def grant(task_id, repo_root, sid="grant-sid", parent="p"):
             "branch": "master", "expected_head": parent}
 
 
-def main():
-    tmp = tempfile.mkdtemp(prefix="commit-journal-test-")
+def _run(tmp):
     CJ.JOURNAL_ROOT = os.path.join(tmp, "commit-events")
     repo_a = make_repo(tmp, "repoA")
     repo_b = make_repo(tmp, "repoB")
