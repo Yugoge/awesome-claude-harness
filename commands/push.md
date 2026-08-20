@@ -80,7 +80,9 @@ Token location: `/tmp/agentic-commit/push/<repo-hash>/<session-digest>/<branch-e
   admit what the gate rejects.
 
 **Rejection conditions** (push is blocked if any hold):
-- No token file at either the session-scoped or the legacy path (no `/commit` ran in this session)
+- No usable token: nothing at the session-scoped path, and nothing at the legacy path that
+  passes the ownership test above (no `/commit` ran in this session, or the only legacy token
+  present belongs to a different session)
 - Token `commit_sha` does not match current `git rev-parse HEAD` (HEAD moved since commit)
 
 **Resolution**: run `/commit [<task-id>]` first. The `changelog-analyst` subagent writes
