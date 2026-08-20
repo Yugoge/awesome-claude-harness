@@ -147,14 +147,20 @@ def _run(tmp):
     check("corrupt journal line is skipped, valid entries still found",
           CJ.find_attributable_event(repo_a, sha1, "T-A", "sid-subagent") is not None)
 
-    # Growth bound.
+    # Growth bound. MAX_ENTRIES is restored in a finally block, exactly as main() does
+    # for JOURNAL_ROOT: CJ is shared interpreter state, and an inline restore on the
+    # normal path only would leak the test value into every later test item or repeated
+    # invocation if anything between the override and the restore raises.
     original_max = CJ.MAX_ENTRIES
     CJ.MAX_ENTRIES = 5
-    for _ in range(20):
-        CJ.append_commit_event(grant("bulk", repo_a, sid="sid-subagent"), "sid-subagent")
-    line_count = sum(1 for _ in open(CJ.journal_path(repo_a)))
-    check("journal is pruned to MAX_ENTRIES", line_count <= 5)
-    CJ.MAX_ENTRIES = original_max
+    try:
+        for _ in range(20):
+            CJ.append_commit_event(grant("bulk", repo_a, sid="sid-subagent"),
+                                   "sid-subagent")
+        line_count = sum(1 for _ in open(CJ.journal_path(repo_a)))
+        check("journal is pruned to MAX_ENTRIES", line_count <= 5)
+    finally:
+        CJ.MAX_ENTRIES = original_max
 
     # CLI contract consumed by changelog-analyst: exit 0 + JSON on match, exit 1 on miss.
     sha5 = make_commit(repo_a, "feat: cli")
