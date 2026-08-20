@@ -225,11 +225,16 @@ class TestAC1RecurringCostIsBounded(unittest.TestCase):
                 with self.subTest(prompt=index):
                     self.assertNotIn(SPEC_HEADER, out)
                     self.assertLessEqual(len(out), LIGHT_CEILING_CHARS)
-                    # AC-1's lower bound, asserted to intent (DISCREPANCY D1).
-                    # Absence-of-heavy is not evidence of presence-of-light: an
-                    # implementation that delivered once then emitted nothing
-                    # would satisfy every upper bound.
+                    # AC-1's lower bound at its mandated value. Absence-of-heavy
+                    # is not evidence of presence-of-light: an implementation
+                    # that delivered once then emitted nothing would satisfy
+                    # every upper bound.
                     self.assertGreaterEqual(len(out), LIGHT_FLOOR_CHARS)
+                    # ...and a size floor alone would still pass with the
+                    # ~1,000-char step list emptied, so assert that component
+                    # is populated in its own right.
+                    self.assertTrue(canonical_steps(out),
+                                    'Canonical steps rendered empty')
                     for marker in LIGHT_MARKERS:
                         self.assertIn(marker, out)
                     self.assertIn('CRITICAL: The validated isolated worktree', out)
