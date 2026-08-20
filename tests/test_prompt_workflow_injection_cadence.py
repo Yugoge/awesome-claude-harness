@@ -66,18 +66,20 @@ def spec_body_probe(length: int = 400) -> str:
             text = text[end + 4:].lstrip('\n')
     return text.strip()[:length]
 
-# DISCREPANCY D1 -- AC-1 mandates per_prompt_min_chars=1500 inside a fixture
-# that makes the floor unreachable. build_overnight_continuation renders
-# 'Canonical steps: {labels}' from _load_overnight_todos(), which resolves
-# $HOME/.claude/scripts/todo/dev-overnight.py -- non-existent under the
-# HOME=<tmp> that the SAME criterion mandates (and mandates for good reason:
-# $HOME/.claude is a symlink to the repo). Measured light block in this fixture
-# 1,053 chars; in the real project, where the labels load, 2,617. The floor is
-# therefore asserted at a value this fixture can actually reach, and the
-# criterion's INTENT -- that prompts 2..N carry a real light payload rather than
-# nothing -- is asserted structurally instead, which is strictly stronger than
-# any single number.
-LIGHT_FLOOR_CHARS = 700
+# AC-1's per_prompt_min_chars, asserted at its mandated value.
+#
+# An earlier revision of this module lowered the floor to 700 on the premise
+# that AC-1's own fixture made 1,500 unreachable. That premise was FALSE and QA
+# falsified it by measurement: AC-1 mandates HOME=<temp dir>, not an EMPTY one,
+# and the fixture was already populating that temp HOME with the command
+# document. 'Canonical steps: {labels}' renders from _load_overnight_todos(),
+# which resolves $HOME/.claude/scripts/todo/dev-overnight.py -- so the provider
+# simply had to be fixtured there too, exactly as the document already was.
+# Measured with the provider fixtured: 2,772 chars. The floor never needed
+# lowering, and at 700 the suite passed with an EMPTY 'Canonical steps:' field,
+# so a regression that silently dropped that ~1,000-char component would not
+# have been caught. It is now asserted non-empty in its own right.
+LIGHT_FLOOR_CHARS = 1500
 LIGHT_CEILING_CHARS = 3000
 
 
