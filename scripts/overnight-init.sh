@@ -283,9 +283,21 @@ CODEX_REQUIRED=false
 if [[ -n "$STATE_FILE" ]]; then
   CODEX_REQUIRED="$(jq -r '.codex_required // false' "$STATE_FILE")"
 fi
-ENFORCE_ARGS=(--source-command dev-overnight --session-id "$SESSION_ID" --flag e2e)
-[[ "$CODEX_REQUIRED" == "true" ]] && ENFORCE_ARGS+=(--flag codex)
-if [[ "$VERIFY_ONLY" != "1" ]]; then
+ENFORCE_ARGS=(--source-command dev-overnight --session-id "$SESSION_ID")
+ENFORCE_FLAGS=(e2e)
+[[ "$CODEX_REQUIRED" == "true" ]] && ENFORCE_FLAGS+=(codex)
+# Repair asks for a SUBSET. write-enforce-flag.sh writes every flag it is given
+# with a truncating `>`, so passing a flag whose file is already present would
+# bump its mtime — the one thing repair must not do. Flags are still delegated
+# to their single canonical writer rather than re-rendered here: it is a
+# must-not-change file, and a second copy of the schema would drift from the
+# consumers that read it.
+for _flag in "${ENFORCE_FLAGS[@]}"; do
+  [[ "$REPAIR_ONLY" == "1" && -e "$REGISTRY_DIR/$_flag-enforce.json" ]] && continue
+  ENFORCE_ARGS+=(--flag "$_flag")
+  [[ "$REPAIR_ONLY" == "1" ]] && REPAIRED_ARTIFACTS+=("$REGISTRY_DIR/$_flag-enforce.json")
+done
+if [[ "$VERIFY_ONLY" != "1" && ${#ENFORCE_ARGS[@]} -gt 4 ]]; then
   CLAUDE_PROJECT_DIR="$PROJECT_ROOT" bash "$SCRIPT_DIR/write-enforce-flag.sh" "${ENFORCE_ARGS[@]}" >/dev/null \
     || _die "enforcement flag write failed"
 fi
