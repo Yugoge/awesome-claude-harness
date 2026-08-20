@@ -867,9 +867,10 @@ if [[ -z "$INIT_PY" ]]; then
 fi
 if ! VALIDATE_ERR="$("$INIT_PY" - "$DEV_REGISTRY_DIR" "$SESSION_ID" \
         "$SCRIPT_DIR_ABS/../hooks/pretool-cp-checkin.py" "$CODEX_REQUIRED" \
-        "$MAIN_ROOT/docs/dev/user-requirement-$SESSION_ID.md" <<'PYEOF'
-import ast, json, os, sys
-reg, sid, cp_src, codex_required, req_doc = sys.argv[1:6]
+        "$MAIN_ROOT/docs/dev/user-requirement-$SESSION_ID.md" \
+        "$TMP_FILE" "$MAIN_ROOT" <<'PYEOF'
+import ast, json, os, re, sys
+reg, sid, cp_src, codex_required, req_doc, record, main_root = sys.argv[1:8]
 def die(m): print(m); sys.exit(1)
 try:
     tree = ast.parse(open(cp_src, encoding='utf-8').read())
