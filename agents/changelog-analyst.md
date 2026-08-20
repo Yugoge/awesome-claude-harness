@@ -1190,9 +1190,10 @@ attribution by hook-written record, not proof of identity.
    `hooks/push.sh` authorizes on `commit_sha == HEAD` alone — so an adversary who can emit
    arbitrary Bash (`docs/THREAT-MODEL.md` §1.2) can write the push-gate token directly and open
    the gate, which is strictly cheaper than forging a journal entry. The journal therefore
-   grants an attacker NO new capability; what it removes is every dependence on actor-chosen
-   content, and with it the coincidental mis-attribution above. Do not "strengthen" this
-   paragraph into a security claim the harness cannot support.
+   grants an attacker NO new capability; what it removes is every dependence on content the
+   committing actor chooses in the commit itself — message and file set — and with it the
+   coincidental mis-attribution above. Do not "strengthen" this paragraph into a security
+   claim the harness cannot support.
 
    **Commits that can never be reconciled, by design:** anything not authorized by a single-use
    commit grant — auto-bulk and `--bulk` commits carry a multi-use sentinel instead, so no entry
