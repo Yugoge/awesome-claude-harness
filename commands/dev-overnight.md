@@ -346,7 +346,7 @@ When including `REQUIREMENT_DOC` in dispatch prompts, always substitute its reso
 When you see "OVERNIGHT CONTINUATION" injected by the prompt hook, you are in continuation mode with fresh context.
 
 **In continuation mode**:
-1. Re-run the Step 1 **SESSION BINDING + ONE-CALL INITIALIZATION** block verbatim, as one Bash invocation — a continuation has no other path to `STATE_FILE`, `DEV_SESSION_ID` or `REGISTRY_DIR`, and the initializer is idempotent (it restores any sentinel a cleanup step removed). Then read the state file to determine `current_phase`
+1. Re-run the Step 1 **SESSION BINDING + ONE-CALL INITIALIZATION** block verbatim, as one Bash invocation — a continuation has no other path to `PROJECT_DIR`, `STATE_FILE`, `DEV_SESSION_ID` or `REGISTRY_DIR`. The actor's `--verify-only` run re-checks the record; it does NOT restore a sentinel a cleanup step removed, it ABORTS on one. The remedy for a damaged record is `/stop` plus relaunch, which re-runs the mutating form harness-side; there is no actor-side repair. Then read the state file to determine `current_phase`
 2. Skip the rest of Step 1: the working root already exists and is never re-established
 3. Resume from the appropriate step based on current_phase:
    - `initializing` or `exploring` -> Step 2 (PM Plan)
