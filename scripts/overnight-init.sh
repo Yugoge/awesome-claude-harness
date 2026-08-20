@@ -29,14 +29,28 @@
 # Usage: overnight-init.sh --state-file <path-to-overnight-state.json>
 #        overnight-init.sh --session-id <sid> [--project-dir <dir>]
 #        overnight-init.sh --verify-only --state-file <path>   # read-only
+#        overnight-init.sh --repair-only --state-file <path>   # ABSENT-only writes
 # Output: KEY=VALUE lines on stdout, then OVERNIGHT_INIT_OK / OVERNIGHT_INIT_FAIL.
 # Exit: 0 = success, 1 = error (caller must abort).
+#
+# --repair-only exists for the CONTINUATION entry point. handle_phase_b runs the
+# continuation check on every non-command prompt, so the plain mutating form is
+# unusable there: `cat >` rewrites every artifact on every prompt, which changes
+# mtime on a healthy registry and would repeatedly truncate the very files the
+# enforcement chain reads. Repair therefore materializes ONLY what is ABSENT --
+# each such artifact via a same-directory temp + rename(2), never a truncating
+# write -- and leaves every present artifact untouched on sha256 AND inode AND
+# mtime. A present-but-INVALID artifact is deliberately NOT overwritten: it is
+# either a legitimate mutation this script has no authority to discard or real
+# corruption worth preserving as evidence, and the validation passes below fail
+# closed on it either way.
 set -euo pipefail
 
 STATE_FILE=""
 SESSION_ID=""
 PROJECT_DIR="${CLAUDE_PROJECT_DIR:-}"
 VERIFY_ONLY=0
+REPAIR_ONLY=0
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -44,9 +58,15 @@ while [[ $# -gt 0 ]]; do
     --session-id)  SESSION_ID="$2"; shift 2 ;;
     --project-dir) PROJECT_DIR="$2"; shift 2 ;;
     --verify-only) VERIFY_ONLY=1; shift ;;
+    --repair-only) REPAIR_ONLY=1; shift ;;
     *) echo "Unknown arg: $1" >&2; exit 1 ;;
   esac
 done
+if [[ "$VERIFY_ONLY" == "1" && "$REPAIR_ONLY" == "1" ]]; then
+  echo "ERROR: --verify-only and --repair-only are mutually exclusive" >&2
+  echo "OVERNIGHT_INIT_FAIL"
+  exit 1
+fi
 
 _die() { echo "ERROR: $*" >&2; echo "OVERNIGHT_INIT_FAIL"; exit 1; }
 
