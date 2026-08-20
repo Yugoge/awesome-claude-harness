@@ -299,6 +299,30 @@ def test_concurrent_isolated_session_bash_write_to_main_root_is_confined(
     )
 
 
+def test_malformed_in_place_record_earns_no_exemption(main_root):
+    """The exemption is bounded by the record's own main_root, never wider.
+
+    A record claiming a working root outside its main_root is malformed; it must
+    not be able to widen the main-targeting exemption to an arbitrary prefix.
+    """
+    claude_dir = main_root / ".claude"
+    claude_dir.mkdir(parents=True, exist_ok=True)
+    (claude_dir / "overnight-state-sid-bad.json").write_text(json.dumps({
+        "schema_version": 9,
+        "session_id": "sid-bad",
+        "isolation_kind": "in_place",
+        "main_root": str(main_root),
+        "worktree_path": "/",          # escapes main_root
+        "protected_branch": PROTECTED,
+        "end_time": FAR_FUTURE,
+    }))
+    res = _run_hook(main_root, "Bash", {"command": "git commit -m x"},
+                    session_id="sid-bad", cwd=str(main_root))
+    assert res.returncode == BLOCK_EXIT, (
+        "a malformed in-place record widened the main-targeting exemption"
+    )
+
+
 def test_in_place_record_never_joins_the_write_confinement_allow_list(main_root):
     """Q1 invariant, asserted directly on the collection that answers it."""
     guard = _load_guard_module()
