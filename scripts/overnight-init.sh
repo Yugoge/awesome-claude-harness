@@ -421,7 +421,13 @@ _render_requirement_doc() {
       # heading dialects in use are accepted: "## Section 5: ..." and "## 5. ...".
       # Emits nothing when the spec has no Section 5 — an empty slice is honest,
       # a guessed substitute is not.
-      awk '
+      #
+      # LC_ALL=C pins [[:space:]] to the ASCII set. Under a UTF-8 locale GNU awk
+      # widens it to Unicode whitespace, so a heading separated by U+2003 would
+      # start the slice HERE but not in the launcher's independent recomputation
+      # of the same oracle — a locale-dependent divergence that would refuse an
+      # otherwise valid launch on one machine and not another.
+      LC_ALL=C awk '
         /^##[[:space:]]/ && !/^###/ {
           if (inside) exit
           if ($0 ~ /^##[[:space:]]+(Section[[:space:]]+)?5([:.[:space:]]|$)/) { inside = 1 }
