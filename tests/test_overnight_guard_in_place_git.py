@@ -322,11 +322,16 @@ def test_concurrent_isolated_session_bash_write_to_main_root_is_confined(
     assert res.returncode == ALLOW_EXIT, res.stderr
     rewritten = json.loads(res.stdout)["hookSpecificOutput"]["updatedInput"]["command"]
     assert "--ro-bind / /" in rewritten, "main tree was not bound read-only"
-    rw_binds = [rewritten.split("--bind ")[i + 1].split(" ")[0]
-                for i in range(rewritten.count("--bind ") - rewritten.count("--ro-bind "))]
-    assert all(b.startswith(str(isolated_worktree)) for b in rw_binds), (
-        f"a read-write bind escaped the isolated worktree: {rw_binds}"
-    )
+    rw_binds = _rw_binds(rewritten)
+    assert rw_binds, "no read-write bind found -- the assertion below would be vacuous"
+    main_s = str(main_root)
+    for b in rw_binds:
+        assert not (b == main_s or main_s.startswith(b.rstrip("/") + os.sep)), (
+            f"a read-write bind covers the main root: {b}"
+        )
+        assert b.startswith(str(isolated_worktree)) or b.startswith(main_s + "/.git"), (
+            f"unexpected read-write bind outside the worktree and git metadata: {b}"
+        )
 
 
 def test_malformed_in_place_record_earns_no_exemption(main_root):
