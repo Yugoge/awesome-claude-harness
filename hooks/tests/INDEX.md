@@ -1,7 +1,7 @@
 # tests
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-08-19T12:01:18Z*
+*Last updated: 2026-08-20T13:30:03Z*
 **Total entries**: 34
 **Convention**: kebab
 
@@ -25,7 +25,6 @@ tests/
 ├── `test_block_branch_pr_worktree.py` - The hook forbids branch / PR / worktree CREATION on the Bash surface, with three
 ├── `test_bulk_commit_sentinel.py` - Covers:
 ├── `test_capability_gate.py` - Every test drives the real artefacts: the library, the PreToolUse gate hook as a
-├── `test_commit_journal.py` - Adversarial tests for hooks/lib/commit_journal.py — the push-gate reconciliation
 ├── `test_cp_checkin.py` - of ba-spec-20260427-194324.md (P1 view-trigger removal + P2 generation field)
 ├── `test_do_taskid_mint.py` - Covers the root-cause fix for the do-report task-id collision (memory
 ├── `test_dual_runtime_lifecycle_e2e.py` - Real-entrypoint regressions for single-owner ordinary dev lifecycle.

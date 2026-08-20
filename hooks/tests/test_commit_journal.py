@@ -30,10 +30,16 @@ if str(HOOKS_DIR) not in sys.path:
 
 import lib.commit_journal as CJ  # noqa: E402
 
+CHECKS = []
 FAILURES = []
 
 
 def check(name, condition):
+    # CHECKS is appended to by every executed check, so the summary line below counts
+    # what actually ran. Do NOT reintroduce a hardcoded total: a literal cannot notice
+    # a check being deleted or short-circuited, and the exit status is computed from
+    # FAILURES independently, so a stale total would misreport coverage silently.
+    CHECKS.append(name)
     print(("PASS  " if condition else "FAIL  ") + name)
     if not condition:
         FAILURES.append(name)
