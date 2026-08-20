@@ -163,10 +163,31 @@ _write_confined() {
     [[ -f "$target" ]] || _die "verify: missing artifact: $target"
     diff -q - "$target" >/dev/null 2>&1 \
       || _die "verify: content mismatch against the recomputed oracle: $target"
+  elif [[ "$REPAIR_ONLY" == "1" ]]; then
+    if [[ -f "$target" ]]; then
+      # Present: leave it EXACTLY as it is — no open(O_TRUNC), no utime, no
+      # rename, so sha256, inode and mtime all survive. stdin is drained rather
+      # than dropped: closing it would SIGPIPE the producer on the left of the
+      # pipe and `set -o pipefail` would turn a successful no-op into a failure.
+      cat > /dev/null
+    else
+      # Absent: materialize atomically. A truncating `cat >` is observable in a
+      # half-written state by any consumer that reads concurrently, and the
+      # enforcement hooks read these files on every dispatch.
+      local tmp
+      tmp="$(mktemp "$(dirname "$target")/.$(basename "$target").XXXXXX")" \
+        || _die "repair: cannot create a temp file beside $target"
+      cat > "$tmp" || { rm -f "$tmp"; _die "repair: failed to write $tmp"; }
+      mv -f "$tmp" "$target" || { rm -f "$tmp"; _die "repair: failed to publish $target"; }
+      REPAIRED_ARTIFACTS+=("$target")
+    fi
   else
     cat > "$target" || _die "failed to write $target"
   fi
 }
+# Names every artifact this run had to materialize. Empty is the healthy case;
+# a non-empty list is reported so a silently degraded registry becomes visible.
+REPAIRED_ARTIFACTS=()
 
 REGISTRY_DIR="$PROJECT_ROOT/.claude/dev-registry/$SESSION_ID"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd -P)"
