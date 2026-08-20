@@ -206,16 +206,40 @@ def test_in_place_session_git_allowed_in_a_subdirectory(main_root):
 
 
 def test_in_place_child_subagent_may_run_git(main_root):
-    """A subagent of the in-place session resolves to the same governing record.
+    """A registered subagent of the in-place session inherits its working root.
 
-    The child arrives with no resolvable dev-registry entry here, so it falls
-    through to `normal` and is not enforced -- the assertion is simply that the
-    guard does not block it, which is the user-visible contract.
+    The agent-index mapping is what makes this the `overnight_child` path rather
+    than an unenforced `normal` fall-through, so the second assertion proves
+    enforcement actually ran instead of being skipped.
     """
     _write_state(main_root, "sid-inplace", "in_place", main_root)
+    _write_agent_index(main_root, {
+        "child-of-inplace": {"agent_type": "dev", "dev_session_id": "sid-inplace"},
+    })
     res = _run_hook(main_root, "Bash", {"command": "git add -A"},
-                    session_id="", cwd=str(main_root))
+                    session_id="", cwd=str(main_root), agent_id="child-of-inplace")
     assert res.returncode == ALLOW_EXIT, res.stderr
+
+    # Same actor, a command the guard must still refuse -> enforcement ran.
+    blocked = _run_hook(main_root, "Bash",
+                        {"command": "git -c core.hooksPath=/dev/null commit -m x"},
+                        session_id="", cwd=str(main_root), agent_id="child-of-inplace")
+    assert blocked.returncode == BLOCK_EXIT, (
+        "the child actor was never enforced -- it fell through to `normal`"
+    )
+
+
+def test_isolated_child_subagent_still_blocked_at_main_root(main_root, isolated_worktree):
+    """The child path must not inherit an exemption from a different record."""
+    _write_state(main_root, "sid-inplace", "in_place", main_root)
+    _write_state(main_root, "sid-iso", "registered_worktree", isolated_worktree)
+    _write_agent_index(main_root, {
+        "child-of-iso": {"agent_type": "dev", "dev_session_id": "sid-iso"},
+    })
+    res = _run_hook(main_root, "Bash", {"command": "git status --porcelain"},
+                    session_id="", cwd=str(main_root), agent_id="child-of-iso")
+    assert res.returncode == BLOCK_EXIT, "isolated subagent reached the main root"
+    assert "MAIN-ROOT BLOCK" in res.stderr
 
 
 # ---------------------------------------------------------------------------
