@@ -87,8 +87,16 @@ Token location: `/tmp/agentic-commit/push/<repo-hash>/<session-digest>/<branch-e
 **Rejection conditions** (push is blocked if any hold):
 - No usable token: nothing at the session-scoped path, and nothing at the legacy path that
   passes the ownership test above (no `/commit` ran in this session, or the only legacy token
-  present belongs to a different session)
+  present is unowned — its `session_id` is foreign, absent, or empty, or the legacy file
+  cannot be read at all, which the ownership probe treats as unowned)
 - Token `commit_sha` does not match current `git rev-parse HEAD` (HEAD moved since commit)
+- Token unreadable or unparseable: the resolved token file exists but cannot be read, or its
+  JSON does not parse — including the degenerate case where the validator produces no output
+  at all, which `push.sh` handles in the same fail-closed branch. This is DISTINCT from "no
+  usable token": the gate rejects on the unparseable token itself rather than falling through
+  to any other path. In particular, an unparseable session-scoped token blocks the push even
+  when a valid legacy token exists, because the legacy fallback triggers only on session-scoped
+  file ABSENCE, never on parse failure.
 
 **Resolution**: run `/commit [<task-id>]` first. The `changelog-analyst` subagent writes
 the token after a successful real-branch commit. The token is consumed (deleted) after
