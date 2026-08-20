@@ -1166,8 +1166,11 @@ attribution by hook-written record, not proof of identity.
    **What the journal is.** `hooks/posttool-allowlist-consume.py` appends one entry at the
    instant a `git commit` authorized by a single-use commit grant returns successfully. The
    entry records the task id, repo root, branch, the grant's pre-commit `expected_head`, the
-   HEAD the hook OBSERVED after the commit, and the session ids the harness supplied. Read
-   `hooks/lib/commit_journal.py` for the record format and the matching rule.
+   HEAD the hook OBSERVED after the commit, and the identifying session ids drawn from the
+   hook payload, the hook's environment, and the grant — placeholder values filtered and
+   duplicates collapsed, so a SUBSET of those candidates, and not all of them beyond the
+   committing actor's influence. Read `hooks/lib/commit_journal.py` for the record format,
+   the matching rule, and exactly which candidates the actor can influence.
 
    **Why this and not the commit.** The previous design inferred attribution from a `Task-id:`
    trailer in the commit body and from the commit's file set. Both are chosen by whoever made
