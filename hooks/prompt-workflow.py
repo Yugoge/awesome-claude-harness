@@ -951,6 +951,18 @@ def commit_overnight_delivery(session_id: str, emitted: str,
     deliberately: an unwritten marker merely re-delivers on the next prompt,
     which is the fail-safe direction.
     """
+    # The receipt is the only admissible evidence that a delivery occurred. An
+    # emission with no matching receipt is not certifiable at all -- which is
+    # what closed the case where an unresolvable spec produced a header over an
+    # empty body and the committer certified it anyway.
+    receipt = LAST_DELIVERY_RECEIPT if receipt is None else receipt
+    if not isinstance(receipt, dict) or receipt.get('emitted') != emitted:
+        return False
+    if not receipt.get('spec_delivered'):
+        return False
+    fingerprint = receipt.get('spec_fingerprint')
+    if not isinstance(fingerprint, str) or not fingerprint:
+        return False
     if OVERNIGHT_SPEC_HEADER not in emitted:
         return False
     state, state_path = find_any_overnight_state(session_id)
@@ -959,7 +971,15 @@ def commit_overnight_delivery(session_id: str, emitted: str,
     cycle = state.get('cycle_count', 0)
     if not isinstance(cycle, int) or isinstance(cycle, bool):
         return False
-    if f'OVERNIGHT CONTINUATION - Cycle {cycle + 1}' not in emitted:
+    # A WHOLE-LINE match, never a substring: 'Cycle 1' is a substring of an
+    # emitted 'Cycle 10', so the unanchored form let a block advertising one
+    # cycle certify a marker against a different one.
+    if f'OVERNIGHT CONTINUATION - Cycle {cycle + 1}' not in emitted.splitlines():
+        return False
+    # The spec moved between the read and this write, so the emitted bytes are
+    # already stale. Recording them would suppress the NEW document for the
+    # rest of the cycle; refusing merely re-delivers on the next prompt.
+    if _spec_fingerprint() != fingerprint:
         return False
     transcript_path = _resolve_transcript_path(session_id)
     try:
