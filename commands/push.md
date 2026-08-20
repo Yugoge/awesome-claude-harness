@@ -64,8 +64,13 @@ Token location: `/tmp/agentic-commit/push/<repo-hash>/<session-digest>/<branch-e
   environment: a value carrying `/` or `..` would escape the session directory, and two ids
   normalizing to the same segment would recreate the very collision session-scoping removes.
 - `branch-encoded` = branch name with `/` replaced by `__`
-- Token content: `{"commit_sha": "<sha>", "branch": "<branch>", "repo_root": "<root>", "session_id": "<raw session id, undigested>"}`.
+- Token content as WRITTEN: `{"commit_sha": "<sha>", "branch": "<branch>", "repo_root": "<root>", "session_id": "<raw session id, undigested>"}`.
   `session_id` carries the RAW id, never the digest — the digest appears only as a path segment.
+- Token content as VALIDATED — these are not the same set, and a wrapper must not conflate them.
+  For a token found at the session-scoped path, `push.sh` compares `commit_sha` against HEAD and
+  reads NOTHING else: `branch`, `repo_root` and `session_id` are written for auditability and are
+  not gate inputs. `session_id` becomes decisive in exactly one place, the legacy-fallback
+  ownership test below. Do not add validation the gate does not perform.
 - Legacy fallback: a session-less token at `/tmp/agentic-commit/push/<repo-hash>/<branch-encoded>.json`,
   written by a pre-migration `/commit`, is honoured by `push.sh` only when BOTH hold: no
   session-scoped token exists, AND the legacy token's `session_id` is present, non-empty, and
