@@ -206,23 +206,38 @@ If no state file exists, HARD ABORT. Do not fabricate a state file and do not pr
 CURRENT_SESSION_ID="${CLAUDE_CODE_SESSION_ID:-${CLAUDE_SESSION_ID:-}}"
 [ -n "$CURRENT_SESSION_ID" ] || { echo "ERROR: no session id in environment" >&2; exit 1; }
 
-# 2. Bind STATE_FILE to the canonical ABSOLUTE path of THIS session's state file.
-#    A bare glob is not a binding: several overnight-state files can coexist, so the
-#    session_id recorded inside the file is validated against the live session.
-STATE_FILE=""
-for f in "$CLAUDE_PROJECT_DIR"/.claude/overnight-state-*.json; do
-  [ -f "$f" ] || continue
-  grep -Fq "\"session_id\": \"$CURRENT_SESSION_ID\"" "$f" && { STATE_FILE="$(readlink -f "$f")"; break; }
+# 2. Bind the main root and STATE_FILE together, to the canonical ABSOLUTE path of
+#    THIS session's state file. CLAUDE_PROJECT_DIR is PREFERRED but is NOT reliably
+#    exported into Bash (measured UNSET in this harness while CLAUDE_CODE_SESSION_ID
+#    was set), so treat it as an optimisation, never a precondition: the fallback
+#    walks up from $PWD, because the state file lives at <main_root>/.claude/ and
+#    every default working root sits UNDER that root (in_place == main root;
+#    .claude/worktrees/<n>; .claude/overnight-fresh-clones/<n>). A bare glob is not
+#    a binding either — several overnight-state files can coexist, so the session_id
+#    recorded INSIDE the file is matched against the live session, and a directory
+#    holding only other sessions' files does not stop the walk.
+PROJECT_DIR=""; STATE_FILE=""
+d="$(cd "${CLAUDE_PROJECT_DIR:-$PWD}" 2>/dev/null && pwd -P)" || d=""
+while [ -n "$d" ] && [ -z "$STATE_FILE" ]; do
+  for f in "$d"/.claude/overnight-state-*.json; do
+    [ -f "$f" ] || continue
+    grep -Fq "\"session_id\": \"$CURRENT_SESSION_ID\"" "$f" \
+      && { STATE_FILE="$(readlink -f "$f")"; PROJECT_DIR="$d"; break; }
+  done
+  [ "$d" = "/" ] && break
+  d="$(dirname "$d")"
 done
-[ -n "$STATE_FILE" ] || { echo "ERROR: no state file matches session $CURRENT_SESSION_ID" >&2; exit 1; }
+[ -n "$STATE_FILE" ] || { echo "ERROR: no overnight-state file for session $CURRENT_SESSION_ID at or above ${CLAUDE_PROJECT_DIR:-$PWD}" >&2; exit 1; }
 
 # 3. Bind the dev-registry path that every FIRST ACTION line resolves against.
 DEV_SESSION_ID="$CURRENT_SESSION_ID"
-REGISTRY_DIR="$CLAUDE_PROJECT_DIR/.claude/dev-registry/$DEV_SESSION_ID"
+REGISTRY_DIR="$PROJECT_DIR/.claude/dev-registry/$DEV_SESSION_ID"
 
-# 4. Verify, in this same shell. Read-only — the launcher already initialized this
-#    record before publishing it, and the main root is RO-bound for the actor.
-~/.claude/scripts/overnight-init.sh --verify-only --state-file "$STATE_FILE"
+# 4. Verify, in this same shell. Read-only by ORDERING, not by permission: the
+#    launcher ran the mutating form against its temporary record BEFORE publishing
+#    it, so the actor has nothing left to write. --project-dir is passed explicitly
+#    so the initializer never re-derives a root from the same unreliable variable.
+~/.claude/scripts/overnight-init.sh --verify-only --state-file "$STATE_FILE" --project-dir "$PROJECT_DIR"
 ```
 
 `STATE_FILE` is absolute and canonical, so it stays valid after the `cd` into `worktree_path`. Do NOT split this block across Bash calls, and do NOT invoke the initializer on its own: a fresh shell expands `$STATE_FILE` empty, which is the failure this block exists to prevent.
