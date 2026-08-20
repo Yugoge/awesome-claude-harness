@@ -700,6 +700,129 @@ class TestAC11MarkerOrderingAndWritability(unittest.TestCase):
                 claude_dir.chmod(original_mode)
 
 
+class TestDeliveryReceiptIsTrustworthy(unittest.TestCase):
+    """The marker must certify what was ACTUALLY emitted -- nothing weaker.
+
+    Every case below was a live defect: each one let a marker be written for a
+    delivery that did not happen, or for bytes that were never sent, and each
+    one then SUPPRESSED the next prompt. Suppression on an anomaly is the one
+    outcome this design forbids, because unlike a stale marker it does not
+    self-heal within the cycle.
+    """
+
+    def test_unresolvable_spec_delivers_no_header_and_no_marker(self):
+        """AC-2 row 2.12 -- the anomaly the eleven-row enumeration missed.
+
+        Previously: the header was emitted over an EMPTY body, the self-heal
+        pointer vanished because the path was None, the committer certified it
+        anyway, and a marker carrying an empty fingerprint suppressed the next
+        prompt. The orchestrator was left with neither the document nor a route
+        to it, silently, at exit 0.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            fixture = Fixture(tmp, with_spec=False)
+            first = deliver(fixture)
+
+            self.assertNotIn(SPEC_HEADER, first)
+            self.assertFalse(fixture.marker_path().exists())
+            # Neither content NOR route is the failure mode; a route survives.
+            self.assertIn(SELF_HEAL_PREFIX, first)
+            self.assertIn('NOT FOUND on disk', first)
+            for candidate in (fixture.project / '.claude' / 'commands',
+                              fixture.home / '.claude' / 'commands'):
+                self.assertIn(str(candidate / 'dev-overnight.md'), first)
+            # The omission is announced, never silent.
+            self.assertIn('could NOT be read', first)
+
+            # ...and the delivery is still owed, so nothing is suppressed.
+            second = deliver(fixture)
+            self.assertNotIn(SPEC_HEADER, second)
+            self.assertIn('could NOT be read', second)
+            self.assertFalse(fixture.marker_path().exists())
+
+    def test_spec_edited_between_read_and_commit_is_not_certified(self):
+        """The window in which the committer re-sampled its own evidence.
+
+        The marker used to record a fingerprint taken at WRITE time, so bytes
+        read before an edit were certified as the edited document -- and the
+        new document was then suppressed for the rest of the cycle and never
+        delivered. Fail-DANGEROUS, and live whenever anything edits the command
+        document mid-session.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            fixture = Fixture(tmp)
+            with fixture.module() as module:
+                emitted = module.check_overnight_continuation(SID)
+                self.assertIn(SPEC_HEADER, emitted)
+                doc = fixture.spec_doc()
+                doc.write_text(doc.read_text() + '\nEDITED BETWEEN READ AND COMMIT\n')
+                self.assertFalse(module.commit_overnight_delivery(SID, emitted))
+            self.assertFalse(fixture.marker_path().exists())
+            # Refusing merely re-delivers; the NEW document reaches the agent.
+            self.assertIn(SPEC_HEADER, deliver(fixture))
+
+    def test_cycle_number_is_matched_as_a_whole_line(self):
+        """'Cycle 1' must not be satisfied by an emitted 'Cycle 10'.
+
+        The guard was an unanchored substring test, so a block advertising one
+        cycle certified a marker recorded against a different one -- for every
+        cycle number that is a decimal prefix of another.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            fixture = Fixture(tmp)
+            with fixture.module() as module:
+                fingerprint = module._spec_fingerprint()
+
+                def receipt_for(text: str) -> dict:
+                    return {'emitted': text, 'spec_delivered': True,
+                            'spec_fingerprint': fingerprint}
+
+                mismatched = (f'OVERNIGHT CONTINUATION - Cycle 10\n{SPEC_HEADER}\nbody')
+                self.assertFalse(module.commit_overnight_delivery(
+                    SID, mismatched, receipt_for(mismatched)))
+                self.assertFalse(fixture.marker_path().exists())
+
+                # The control: the honest cycle number, same shape, IS accepted
+                # -- so the assertion above is about anchoring, not about the
+                # receipt path rejecting everything.
+                honest = (f'OVERNIGHT CONTINUATION - Cycle 1\n{SPEC_HEADER}\nbody')
+                self.assertTrue(module.commit_overnight_delivery(
+                    SID, honest, receipt_for(honest)))
+                self.assertTrue(fixture.marker_path().is_file())
+
+    def test_light_build_cannot_certify_a_heavy_delivery(self):
+        """A light block carries no spec, so its receipt certifies nothing."""
+        with tempfile.TemporaryDirectory() as tmp:
+            fixture = Fixture(tmp)
+            with fixture.module() as module:
+                light = module.build_overnight_continuation(
+                    fixture.state(), include_spec=False)
+                self.assertNotIn(SPEC_HEADER, light)
+                self.assertFalse(module.commit_overnight_delivery(SID, light))
+            self.assertFalse(fixture.marker_path().exists())
+
+    def test_candidate_list_matches_read_command_spec(self):
+        """The self-heal fallback must name the paths actually searched.
+
+        read_command_spec keeps its own copy of this list (rewriting it is
+        outside this lane's scope), so a pointer built from a drifted copy
+        would send the orchestrator to the wrong place -- worse than absent.
+        """
+        source = ast.parse(HOOK_PATH.read_text())
+        bodies = {node.name: node for node in source.body
+                  if isinstance(node, ast.FunctionDef)}
+        self.assertIn('_command_spec_candidates', bodies)
+
+        def path_literals(node: ast.AST) -> list[str]:
+            return [element.value for element in ast.walk(node)
+                    if isinstance(element, ast.Constant)
+                    and isinstance(element.value, str)
+                    and element.value in ('.claude', 'commands')]
+
+        self.assertEqual(path_literals(bodies['_command_spec_candidates']),
+                         path_literals(bodies['read_command_spec']))
+
+
 class TestScopeConfinement(unittest.TestCase):
     """AC-9 -- the lane boundary is honoured and the collision is not absorbed."""
 
