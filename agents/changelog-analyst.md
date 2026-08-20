@@ -1177,8 +1177,13 @@ attribution by hook-written record, not proof of identity.
    the commit, so neither attributes anything: they describe the actor's claim about itself.
    Worse, they misfire without any adversary at all — fan-out lanes carry prefix-related task
    ids and overlapping file sets BY CONSTRUCTION, so two lanes of one task routinely satisfy
-   each other's checks. The journal is written by the hook layer from data the committing agent
-   does not author, so it cannot be satisfied by a commit crafted to look like this task's.
+   each other's checks. The journal is written by the hook layer, not by the committing agent,
+   and it is matched on fields that live outside the commit object — so NO property of the
+   commit itself (subject, trailer, file set) can satisfy it, and a commit crafted to look
+   like this task's gains nothing. Some recorded session ids remain settable by the actor
+   through its environment or the grant (see `hooks/lib/commit_journal.py`); influencing those
+   means acting outside the commit, which is the non-regression position below, not a
+   soundness property.
 
    **What this does NOT claim.** The journal is an ATTRIBUTION record, not an authorization
    boundary, and must never be described as one. No hook guards `/tmp/agentic-commit/**`, and
