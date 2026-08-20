@@ -1028,12 +1028,14 @@ def check_overnight_continuation(session_id: str = '') -> str | None:
         # Degraded: without a persistable marker the heavy half is re-sent on
         # every prompt and the saving is exactly zero. Say so, on every prompt,
         # rather than let a read-only path silently cost the whole benefit.
-        notice = (
+        # Appended, never assigned: notice already carries any registry
+        # finding, and a marker problem must not erase an enforcement one.
+        notice = '\n\n'.join(filter(None, (notice, (
             f'NOTE: the delivery marker cannot be written at {marker_path} '
             '(path unwritable). The command specification above will be '
             're-sent on EVERY prompt until that path is writable -- '
             'continuation-block cadence bounding is INACTIVE for this session.'
-        )
+        ))))
     return build_overnight_continuation(
         state, include_spec=not suppress, notice=notice
     )
