@@ -694,6 +694,31 @@ OVERNIGHT_SPEC_HEADER = '--- COMMAND SPECIFICATION ---'
 # main(). Empty when this module is driven by a caller that has no payload.
 CURRENT_TRANSCRIPT_PATH = ''
 
+# What the builder ACTUALLY emitted, recorded at build time and consumed by
+# commit_overnight_delivery. Without it the committer re-derived the spec
+# fingerprint at WRITE time, certifying bytes it had never seen: a spec edited
+# between the read and the write was recorded as delivered, and the new
+# document was then suppressed for the rest of the cycle. Keyed by the emitted
+# text so a receipt can only ever certify the emission it was built for.
+LAST_DELIVERY_RECEIPT: dict | None = None
+
+
+def _record_delivery_receipt(emitted: str, spec_delivered: bool,
+                             spec_fingerprint: str) -> None:
+    """Bind an emission to the evidence needed to certify it.
+
+    A second build inside one process REPLACES the receipt rather than adding
+    one, and text no builder produced matches no receipt at all -- so the
+    committer cannot be handed a hand-assembled block and be talked into
+    recording a delivery that never came from this module.
+    """
+    global LAST_DELIVERY_RECEIPT
+    LAST_DELIVERY_RECEIPT = {
+        'emitted': emitted,
+        'spec_delivered': bool(spec_delivered),
+        'spec_fingerprint': spec_fingerprint,
+    }
+
 
 def overnight_delivery_marker_path(state_path: Path, session_id: str) -> Path:
     """Marker location: BESIDE the overnight state record it describes.
