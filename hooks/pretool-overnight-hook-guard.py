@@ -445,23 +445,11 @@ def _load_state(sf: Path) -> dict | None:
 
 
 def _extract_live_worktree_path(sf: Path) -> str:
-    """Return the ISOLATED worktree_path from a live state file; else empty.
-
-    An `in_place` session (2026-08-08: `/dev-overnight` without `--worktree`) is
-    deliberately excluded. Its `worktree_path` is the main root, and this list
-    is the set of roots that writes are confined TO — so including it would
-    declare the main checkout an isolated worktree for *every* session, not just
-    its own. A concurrent `--worktree` actor would then find the main root on
-    its allow-list and be free to write into the very checkout its isolation
-    exists to protect. An in-place session imposes no boundary, which is exactly
-    what the user chose by not asking for one.
-    """
+    """Return worktree_path from a live, non-orphaned state file; else empty."""
     state = _load_state(sf)
     if state is None:
         return ""
     if not _is_session_live(state):
-        return ""
-    if state.get("isolation_kind") == "in_place":
         return ""
     return state.get("worktree_path", "") or ""
 
@@ -1009,12 +997,6 @@ def _governing_state_for_cwd(cwd: str) -> dict | None:
         state = _load_state(sf)
         if state is None or not _is_session_live(state):
             continue
-        # `worktree_context` means the cwd is inside an ISOLATED worktree, a set
-        # an in_place record contributes nothing to. Its root IS the main root,
-        # so it would otherwise match EVERY cwd under main -- including another
-        # session's worktree -- and become that actor's governing state.
-        if state.get('isolation_kind') == 'in_place':
-            continue
         wt = state.get('worktree_path', '') or ''
         if wt and _path_under_prefix(cwd_real, wt):
             return state
@@ -1338,63 +1320,14 @@ _DANGEROUS_GIT_OP_RE = re.compile(
     r'branch|merge|rebase|pull|cherry-pick|am|worktree)\b')
 
 
-# Per-request working root of the record GOVERNING this actor, for `in_place`
-# records only (2026-08-09). This exists because ONE collection
-# (`_get_active_worktree_paths`) was answering TWO different questions:
-#   Q1  which roots are write-confinement targets for EVERY session -- an
-#       in_place record must NOT contribute (see `_extract_live_worktree_path`:
-#       its root IS the main checkout, and putting it on the shared allow-list
-#       would hand a concurrent isolated session write access to the very tree
-#       its isolation exists to protect).
-#   Q2  which root is the legitimate working root of a GIVEN live record, used
-#       to decide whether a git op is main-targeting -- an in_place record MUST
-#       contribute, or its own session cannot run git at all (not status, not
-#       add, not commit, not even a read-only log) in the root it was told to
-#       work in. in_place is the DEFAULT mode.
-# Q2 is answered PER REQUEST, never as a shared collection: the exemption is
-# scoped to the record governing THIS actor, so a concurrently running isolated
-# session (whose governing record is its own worktree record) still sees the
-# main root as fully main-targeting.
-_GOVERNING_OWN_ROOT: str = ''
-
-
-def _set_governing_own_root(gov_state: dict | None) -> None:
-    """Record the governing state's own working root, for `in_place` only (Q2).
-
-    Isolated records already answer Q2 through `_get_active_worktree_paths()`,
-    so they deliberately set nothing here -- keeping the main root fully guarded
-    for every isolated actor.
-
-    The exemption is BOUNDED by the record's own `main_root` (the launcher sets
-    the two equal under `in_place`). A record whose working root escapes its
-    main_root is malformed and earns no exemption -- so the widest this can ever
-    reach is the checkout the guard was already scoped to, never `/`.
-    """
-    global _GOVERNING_OWN_ROOT
-    _GOVERNING_OWN_ROOT = ''
-    if not isinstance(gov_state, dict) or gov_state.get('isolation_kind') != 'in_place':
-        return
-    own = gov_state.get('worktree_path', '') or ''
-    main = gov_state.get('main_root', '') or ''
-    if own and main and _path_under_prefix(own, main):
-        _GOVERNING_OWN_ROOT = own
-
-
 def _path_targets_main(tgt_dir: str, main_real: str) -> bool:
     """fix-3: True iff tgt_dir resolves UNDER main_root but OUTSIDE every active
     overnight worktree. Replaces the exact-root equality (which let a main-subdir
     target evade). A worktree physically lives under .claude/worktrees but is an
-    independent checkout, so it is NOT main-targeting.
-
-    2026-08-09 (Q2): the governing record's OWN working root is likewise not
-    main-targeting FOR THAT RECORD'S ACTOR. Under `in_place` that root IS the
-    main root, so without this the actor's own checkout is unreachable.
-    """
+    independent checkout, so it is NOT main-targeting."""
     if not main_real or not tgt_dir:
         return False
     if not _path_under_prefix(tgt_dir, main_real):
-        return False
-    if _GOVERNING_OWN_ROOT and _path_under_prefix(tgt_dir, _GOVERNING_OWN_ROOT):
         return False
     for wt in _get_active_worktree_paths():
         if _path_under_prefix(tgt_dir, wt):
@@ -2127,10 +2060,6 @@ def main():
     cwd = _payload_cwd(payload)
     wt_paths = _get_active_worktree_paths()
     classification, gov_state = _classify_actor(payload, state, wt_paths, cwd)
-    # Q2 (2026-08-09): scope the governing record's own working root to THIS
-    # request before any main-targeting predicate runs. in_place only; isolated
-    # records leave the main root fully guarded.
-    _set_governing_own_root(gov_state)
 
     # M9: a `normal` concurrent user session on main is NOT enforced — exit 0 so
     # the user's main session is never false-blocked.

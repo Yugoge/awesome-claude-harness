@@ -67,17 +67,6 @@ PROJECT_DIR="$(resolve_project_dir)"
 
 # --- Parse arguments ---
 CODEX_REQUIRED=false
-# ISOLATION CHOICE (2026-08-08). Creating a worktree is no longer automatic: the
-# user chooses. The default is IN-PLACE (work in the checkout the user is already
-# on); `--worktree` is the explicit opt-in that restores the isolated-worktree
-# launch path. An automatic default would reinstate exactly the behaviour this
-# flag removes, so "unset" resolves to in_place, never to worktree.
-# Conflicting flags are not silently reconciled — last-flag-wins would make the
-# choice positional and therefore accidental. The two flags are recorded and a
-# both-given launch is refused below.
-WORKTREE_FLAG_SEEN=0
-NO_WORKTREE_FLAG_SEEN=0
-WORKTREE_CHOICE=""
 # M1-SEAM: ONE side-effect-free component mode over the SAME pre-confinement
 # code path a real launch executes. It runs the identical protected-branch
 # resolution and the identical session-state record construction, emits the
@@ -104,30 +93,14 @@ while [[ $# -gt 0 ]]; do
         --cycle-subdir) CYCLE_SUBDIR="$2"; shift 2 ;;
         --specs-subdir) SPECS_SUBDIR="$2"; shift 2 ;;
         --codex)     CODEX_REQUIRED=true; shift ;;
-        --worktree)    WORKTREE_FLAG_SEEN=1; shift ;;
-        --no-worktree) NO_WORKTREE_FLAG_SEEN=1; shift ;;
         --emit-record-only) EMIT_RECORD_ONLY=1; shift ;;
         *)
             echo "Unknown option: $1" >&2
-            echo "Usage: create-overnight-state.sh [--end-time <time>] [--focus <str>] [--spec <path>] [--session-id <uuid>] [--project-dir <path>] [--state-subdir <dir>] [--cycle-subdir <dir>] [--specs-subdir <dir>] [--codex] [--worktree|--no-worktree] [--emit-record-only]" >&2
+            echo "Usage: create-overnight-state.sh [--end-time <time>] [--focus <str>] [--spec <path>] [--session-id <uuid>] [--project-dir <path>] [--state-subdir <dir>] [--cycle-subdir <dir>] [--specs-subdir <dir>] [--codex] [--emit-record-only]" >&2
             exit 1
             ;;
     esac
 done
-
-# --- Resolve the isolation choice (side-effect-free) --------------------------
-# Refuse rather than reconcile: with both flags given there is no non-arbitrary
-# winner, and picking one silently would hand the user the isolation mode they
-# did not ask for. Neither flag => in_place (see WORKTREE_CHOICE above).
-if [[ "$WORKTREE_FLAG_SEEN" == "1" && "$NO_WORKTREE_FLAG_SEEN" == "1" ]]; then
-    echo "Error: --worktree and --no-worktree are mutually exclusive; pass exactly one (or neither, which means --no-worktree)." >&2
-    exit 1
-fi
-if [[ "$WORKTREE_FLAG_SEEN" == "1" ]]; then
-    WORKTREE_CHOICE="worktree"
-else
-    WORKTREE_CHOICE="in_place"
-fi
 
 # --- Session ID ---
 if [[ -z "$SESSION_ID" ]]; then
@@ -297,18 +270,6 @@ if [[ -z "$PROTECTED_BRANCH" ]]; then
 fi
 
 # =============================================================================
-# IN-PLACE FIELD RESOLUTION (side-effect-free; ONE definition, TWO call sites).
-# In-place mode creates nothing, so establishing its record fields is pure
-# reading and belongs above the side-effect boundary. Defining it once and
-# calling it from both the M1-SEAM pre-seed and the real launch is what keeps
-# the seam faithful: a seam that reported empty isolation fields for a mode that
-# really does populate them would verify a record shape no launch ever writes.
-# Sets IN_PLACE_BRANCH; returns 1 (with no output) when HEAD is detached.
-resolve_in_place_branch() {
-    IN_PLACE_BRANCH="$("${GIT_UNMARKED[@]}" -C "$MAIN_ROOT" symbolic-ref --quiet --short HEAD 2>/dev/null || echo '')"
-    [[ -n "$IN_PLACE_BRANCH" ]]
-}
-
 # EVERYTHING BELOW THIS LINE CREATES SIDE EFFECTS (worktree/clone/branch, spec
 # resolution, directories). M1-SEAM's component mode pre-seeds the record fields
 # these blocks would populate and then SKIPS the whole region, so the seam
@@ -341,74 +302,15 @@ CONTRACT_FILE=""
 TRACE_LOG_PATH=""
 MONOLITH_SHA="null"
 
-# M1-SEAM pre-seed for in-place mode. Same reads the real launch performs, via
-# the same function — so the seam emits the isolation shape a real in-place
-# launch writes instead of an all-empty record no mode ever produces. Still
-# creates nothing. A detached HEAD leaves the fields empty here rather than
-# refusing, because refusing is a launch decision and the seam does not launch.
-if [[ "$EMIT_RECORD_ONLY" == "1" && "$WORKTREE_CHOICE" == "in_place" ]]; then
-    if resolve_in_place_branch; then
-        WORKTREE_PATH="$MAIN_ROOT"
-        WORKTREE_BRANCH="$IN_PLACE_BRANCH"
-        WORKTREE_HEAD_AT_START="$MAIN_HEAD_AT_START"
-        ISOLATION_KIND="in_place"
-    fi
-fi
-
 if [[ "$EMIT_RECORD_ONLY" != "1" ]]; then
 
 # --- Create + validate the isolated worktree FIRST (M1, M2, M3) ---------------
-# (Landmark comment: AC-10 / AC-12 anchor the "protected-branch resolution runs
-# strictly BEFORE the isolation-creating region" ordering invariant on this exact
-# phrase. Keep it verbatim.)
-#
-# Establish the working root per the user's isolation choice.
-# TWO MODES. `in_place` (default) runs the actor in the checkout the user is
-# already on and creates NOTHING. `worktree` (explicit --worktree) is the
-# historical path: create + validate an isolated worktree, and refuse the launch
-# outright if no durable isolation can be produced. Within the worktree branch,
-# recoverable failures still NEVER silently degrade to in-place work — a user who
-# asked for isolation gets isolation or gets a refusal, never a quiet downgrade.
+# Recoverable failures here NEVER fall back to in-place work: a missing/invalid
+# worktree means launch refuses (no state) — distinct from hard-abort-then-work.
 WORKTREE_PATH=""
 WORKTREE_BRANCH=""
 WORKTREE_HEAD_AT_START=""
 ISOLATION_KIND=""
-
-if [[ "$WORKTREE_CHOICE" == "in_place" ]]; then
-    # No worktree, no branch, no clone. The "working root" IS the main checkout,
-    # and worktree_path is set to it so the existing consumers that confine
-    # writes to worktree_path (hooks/pretool-overnight-hook-guard.py
-    # _is_path_allowed_during_overnight) resolve to "anywhere in this repo" —
-    # which is the correct boundary once the user has opted out of isolation.
-    # Detached HEAD: refuse. Every downstream consumer (cycle logging, /merge,
-    # the checkpoint mechanism) names a branch, and commits made on a detached
-    # HEAD are unreachable the moment anything moves. Fail at launch, loudly.
-    if ! resolve_in_place_branch; then
-        echo "Error: in-place mode requires a checked-out branch, but '$MAIN_ROOT' is on a detached HEAD (no state written). Remedy: check out a branch, or relaunch with --worktree to work in an isolated worktree." >&2
-        exit 1
-    fi
-
-    # PROTECTED-BRANCH COINCIDENCE. In-place mode leaves the keystone armed (the
-    # actor marker is still exported below), and the keystone denies every ref
-    # move on the protected branch — including the actor's own commits. If the
-    # checkout is sitting ON the protected branch, the session would launch
-    # successfully and then fail at its first commit, hours later. Refuse now,
-    # at launch, and name both remedies. Disarming the keystone instead is not
-    # an option: that is the only layer still protecting the branch in in-place
-    # mode, since the policy shim is deliberately left uninstalled (see below).
-    if [[ "$IN_PLACE_BRANCH" == "$PROTECTED_BRANCH" ]]; then
-        echo "Error: in-place mode refuses to run on the protected branch '$PROTECTED_BRANCH' — the overnight actor could not commit (the keystone denies protected-branch ref moves), so the session would stall at its first commit. No state written." >&2
-        echo "Remedy: check out a working branch, or relaunch with --worktree to get an isolated worktree off '$PROTECTED_BRANCH'." >&2
-        exit 1
-    fi
-
-    WORKTREE_PATH="$MAIN_ROOT"
-    WORKTREE_BRANCH="$IN_PLACE_BRANCH"
-    WORKTREE_HEAD_AT_START="$MAIN_HEAD_AT_START"
-    ISOLATION_KIND="in_place"
-    echo "In-place mode: working directly in $MAIN_ROOT on branch '$IN_PLACE_BRANCH' (no worktree created). Pass --worktree to isolate." >&2
-else
-
 WORKTREE_SCRIPT="$(dirname "$0")/create-worktree.sh"
 WORKTREE_NAME="overnight-$(date +%Y%m%d)-${SESSION_ID:0:8}"
 # M3-ORDERING: the worktree script's `worktree add -b` is the launcher's most
@@ -467,16 +369,11 @@ fi
 
 # AC3b: refusal-to-LAUNCH only when ALL durable isolation is impossible. NEVER
 # write a null/main-root worktree; NEVER continue in-place.
-# Reached only under an explicit --worktree: the user asked for isolation, so a
-# silent downgrade to the main root would hand them the opposite of their
-# request. In-place mode returns above and never enters this branch.
 if [[ -z "$ISOLATION_KIND" || -z "$WORKTREE_PATH" \
       || "$(realpath "$WORKTREE_PATH" 2>/dev/null || echo "$WORKTREE_PATH")" == "$(realpath "$MAIN_ROOT" 2>/dev/null || echo "$MAIN_ROOT")" ]]; then
-    echo "FATAL: --worktree was requested but no durable isolated worktree could be produced; refusing to launch the overnight actor (no state, no checklist, no in-place work). Relaunch without --worktree to run in place." >&2
+    echo "FATAL: no durable isolated worktree could be produced; refusing to launch the overnight actor (no state, no checklist, no in-place work)." >&2
     exit 1
 fi
-
-fi  # end of the --worktree isolation branch
 
 # --- Spec mode detection (AFTER worktree exists; mismatch DEGRADES, never aborts) ---
 SPEC_MODE="autonomous"
@@ -558,65 +455,12 @@ ACTOR_GIT_SHIMDIR=""
 ACTOR_ENV_HELPER_PATH=""
 SCRIPT_DIR_ABS="$(cd "$(dirname "$0")" && pwd -P)"
 GITENV_HELPER="$SCRIPT_DIR_ABS/overnight-git-env.sh"
-# ISOLATION-DEPENDENT WIRING (2026-08-08). The policy shim exists to keep the
-# overnight actor OUT of the main checkout: git-policy-shim:179-182 denies any op
-# whose effective directory is "under main_root and outside every active
-# worktree". In in-place mode that describes EVERY op the actor issues, so wiring
-# the shim would deny every git command and brick the session. The shim is
-# therefore not installed in in-place mode.
-#
-# The actor MARKER is a separate concern and is NOT dropped. The shim needs BOTH
-# CLAUDE_OVERNIGHT_ACTOR=1 and CLAUDE_OVERNIGHT_MAIN_ROOT to activate
-# (git-policy-shim:53), while the keystone needs only the marker
-# (hooks/git-keystone/reference-transaction:42). Exporting the marker WITHOUT
-# main-root therefore leaves the shim inert and the keystone armed — which is
-# what still protects the protected branch when there is no worktree boundary to
-# rely on. Dropping the marker too would silently remove the last ref-level
-# protection in the mode that needs it most.
-if [[ "$ISOLATION_KIND" == "in_place" ]]; then
-    # A marker-only helper is still recorded. Each Bash tool call is a fresh
-    # shell, so a one-time `export` in the actor's first command does not reach
-    # its later ones — the marker would silently lapse and the keystone would
-    # stop applying. Recording a sourceable helper makes it reproducible per
-    # command, exactly as the worktree path does with its own helper.
-    INPLACE_ENV_HELPER="$SCRIPT_DIR_ABS/overnight-inplace-env.sh"
-    ACTOR_ENV_HELPER_PATH=""
-    [[ -f "$INPLACE_ENV_HELPER" ]] && ACTOR_ENV_HELPER_PATH="$INPLACE_ENV_HELPER"
-    ACTOR_GIT_SHIM=""
-    ACTOR_GIT_BINDIR=""
-    ACTOR_GIT_SHIMDIR=""
-elif [[ -x "$GITENV_HELPER" ]]; then
-    # WRITE CLASS 4, PROVISIONED PRE-BOUNDARY. This branch catches EVERY
-    # non-in_place kind (registered_worktree AND fresh_clone_checkout). The
-    # helper installs both git shims under the MAIN root, so the actor can never
-    # repair them once the boundary is armed — that is the origin of the two
-    # "install: cannot remove ...: Read-only file system" warnings the user
-    # reported as the first symptom of this same root cause. Provisioning it
-    # here, and REFUSING TO PUBLISH when it fails, is what makes the actor's
-    # later verify-only source a no-write no-op instead of a broken repair.
-    #
-    # The exit status is no longer discarded. `... 2>/dev/null || true` swallowed
-    # both stderr and the status, after which the three ACTOR_GIT_* greps
-    # degraded to empty strings and the launch published anyway — a session whose
-    # policy shim was never installed, recorded as if it had been.
+if [[ -x "$GITENV_HELPER" ]]; then
     ACTOR_ENV_HELPER_PATH="$GITENV_HELPER"
-    if ! GITENV_OUT="$(bash "$GITENV_HELPER" --main-root "$MAIN_ROOT" --worktree "$WORKTREE_PATH" 2>&1)"; then
-        echo "Error: overnight git-env provisioning FAILED for $MAIN_ROOT; refusing the launch (no state published)." >&2
-        printf '%s\n' "$GITENV_OUT" >&2
-        exit 1
-    fi
+    GITENV_OUT="$(bash "$GITENV_HELPER" --main-root "$MAIN_ROOT" --worktree "$WORKTREE_PATH" 2>/dev/null || true)"
     ACTOR_GIT_SHIM="$(printf '%s\n' "$GITENV_OUT" | grep -oP '^# OVERNIGHT_GIT_ENV_SHIM_GIT=\K.*' | head -1 || echo '')"
     ACTOR_GIT_BINDIR="$(printf '%s\n' "$GITENV_OUT" | grep -oP '^# OVERNIGHT_GIT_ENV_BINDIR=\K.*' | head -1 || echo '')"
     ACTOR_GIT_SHIMDIR="$(printf '%s\n' "$GITENV_OUT" | grep -oP '^# OVERNIGHT_GIT_ENV_SHIMDIR=\K.*' | head -1 || echo '')"
-    # A zero exit with empty markers is the same fail-open by another route.
-    if [[ -z "$ACTOR_GIT_SHIM" || -z "$ACTOR_GIT_BINDIR" || -z "$ACTOR_GIT_SHIMDIR" ]]; then
-        echo "Error: overnight git-env provisioning returned no resolved shim/bin markers; refusing the launch (no state published)." >&2
-        exit 1
-    fi
-    if [[ ! -x "$ACTOR_GIT_SHIM" ]]; then
-        echo "Error: overnight git policy shim is not executable at $ACTOR_GIT_SHIM; refusing the launch (no state published)." >&2
-        exit 1
-    fi
 fi
 
 # --- Launch git self-test: record honest guarantee fields (M8/M16) -----------
@@ -791,8 +635,7 @@ jq -n \
             shim_git: (if $actor_git_shim == "" then null else $actor_git_shim end),
             bindir: (if $actor_git_bindir == "" then null else $actor_git_bindir end),
             shimdir: (if $actor_git_shimdir == "" then null else $actor_git_shimdir end),
-            env_helper: (if $actor_env_helper == "" then null else $actor_env_helper end),
-            marker_only: ($isolation_kind == "in_place")
+            env_helper: (if $actor_env_helper == "" then null else $actor_env_helper end)
         },
         view_paths: $view_paths,
         pm_triage_reports: [],
@@ -808,206 +651,7 @@ if [[ "$EMIT_RECORD_ONLY" == "1" ]]; then
     exit 0
 fi
 
-# --- INITIALIZE BEFORE PUBLISHING (the ordering fix) -------------------------
-# The registry lives under the MAIN root, which the isolation boundary RO-binds
-# for every Bash command the ACTOR issues. Deferring population to an actor-side
-# run is what made `/dev-overnight --worktree` die at its first sentinel write
-# with EROFS and forced the mandatory ABORT at Step 1.
-#
-# So initialization runs HERE, harness-side, pre-boundary, against the still
-# TEMPORARY record — and the record is published ONLY if it succeeds. A state
-# file therefore never exists in an uninitialized form, and a published state
-# always implies an initialized registry. This is stronger than publishing first
-# and deleting on failure: that leaves a window in which the guard already
-# reports the session live and the boundary can arm over an empty registry, and
-# it depends on a compensating delete that can itself fail.
-#
-# $TMP_FILE is safe to hand the initializer: it is a complete record, and the
-# publish below is a same-directory rename(2), while every consumer globs
-# `overnight-state-*.json`, which cannot match `...json.tmp`.
-OVERNIGHT_INIT="$SCRIPT_DIR_ABS/overnight-init.sh"
-if [[ ! -x "$OVERNIGHT_INIT" ]]; then
-    rm -f "$TMP_FILE"
-    echo "Error: initializer not found or not executable: $OVERNIGHT_INIT" >&2
-    echo "       Refusing the launch; no session state published." >&2
-    exit 1
-fi
-INIT_OUT=""
-INIT_RC=0
-INIT_OUT="$("$OVERNIGHT_INIT" --state-file "$TMP_FILE" 2>&1)" || INIT_RC=$?
-# A zero exit is NOT the success condition on its own: the contract is that the
-# FINAL line is exactly OVERNIGHT_INIT_OK. A truncated run that exits 0 without
-# the token, or one that prints the token and then keeps going, is a failure.
-INIT_LAST_LINE="$(printf '%s\n' "$INIT_OUT" | tail -n 1)"
-if [[ "$INIT_RC" -ne 0 || "$INIT_LAST_LINE" != "OVERNIGHT_INIT_OK" ]]; then
-    rm -f "$TMP_FILE"
-    printf '%s\n' "$INIT_OUT" >&2
-    echo "Error: overnight initialization FAILED (exit $INIT_RC, final line '$INIT_LAST_LINE')." >&2
-    echo "       Refusing the launch; NO session state was published." >&2
-    if [[ "$ISOLATION_KIND" == "in_place" ]]; then
-        echo "       Residue: none — in-place mode created no worktree and no branch." >&2
-    else
-        echo "       Residue retained for inspection: worktree $WORKTREE_PATH (branch $WORKTREE_BRANCH, isolation $ISOLATION_KIND)." >&2
-        echo "       Remove it with: git worktree remove --force $WORKTREE_PATH && git branch -D $WORKTREE_BRANCH" >&2
-    fi
-    exit 1
-fi
-
-# The success token is a CLAIM made by the initializer. The launcher checks the
-# claim itself, against the filesystem, before publishing: a zero exit that
-# prints OVERNIGHT_INIT_OK while no artifact exists would otherwise publish a
-# session whose enforcement chain is empty. Validating only inside the
-# initializer makes the gate trust the thing it is gating.
-INIT_PY="${CLAUDE_HOME:-$HOME/.claude}/venv/bin/python3"
-[[ -x "$INIT_PY" ]] || INIT_PY="$(command -v python3 || true)"
-if [[ -z "$INIT_PY" ]]; then
-    rm -f "$TMP_FILE"
-    echo "Error: no python3 available to validate the initialized registry; refusing the launch (no state published)." >&2
-    exit 1
-fi
-if ! VALIDATE_ERR="$("$INIT_PY" - "$DEV_REGISTRY_DIR" "$SESSION_ID" \
-        "$SCRIPT_DIR_ABS/../hooks/pretool-cp-checkin.py" "$CODEX_REQUIRED" \
-        "$MAIN_ROOT/docs/dev/user-requirement-$SESSION_ID.md" \
-        "$TMP_FILE" "$MAIN_ROOT" <<'PYEOF'
-import ast, json, os, re, sys
-reg, sid, cp_src, codex_required, req_doc, record, main_root = sys.argv[1:8]
-def die(m): print(m); sys.exit(1)
-try:
-    tree = ast.parse(open(cp_src, encoding='utf-8').read())
-except Exception as exc:
-    die(f'cannot parse {cp_src}: {exc}')
-agents = None
-for node in tree.body:
-    if isinstance(node, ast.Assign):
-        for t in node.targets:
-            if isinstance(t, ast.Name) and t.id == 'CP_AGENTS':
-                agents = sorted(str(a) for a in ast.literal_eval(node.value))
-if not agents:
-    die('could not read CP_AGENTS; refusing to validate against a guessed list')
-for a in agents:
-    p = os.path.join(reg, a + '.json')
-    if os.path.islink(p) or not os.path.isfile(p):
-        die(f'missing or non-regular sentinel: {p}')
-    try:
-        d = json.load(open(p, encoding='utf-8'))
-    except Exception:
-        die(f'malformed sentinel JSON: {p}')
-    if d.get('agent_type') != a or d.get('session_id') != sid:
-        die(f'sentinel field mismatch: {p}')
-want = {'e2e-enforce.json': ['qa']}
-if codex_required == 'true':
-    want['codex-enforce.json'] = ['ba', 'dev', 'qa']
-elif os.path.lexists(os.path.join(reg, 'codex-enforce.json')):
-    die('codex-enforce.json present but the record does not set codex_required')
-for name, types in want.items():
-    p = os.path.join(reg, name)
-    # Mirrors ENFORCEMENT_FLAG_VALID: both consumers fail OPEN on absence and on
-    # a falsy `enabled`, and degrade any malformed or non-dict file to {}. A flag
-    # that merely EXISTS is indistinguishable from no flag at all.
-    if os.path.islink(p) or not os.path.isfile(p):
-        die(f'missing, non-regular or symlinked enforcement flag: {p}')
-    try:
-        d = json.load(open(p, encoding='utf-8'))
-    except Exception:
-        die(f'malformed enforcement flag (consumer would fail OPEN): {p}')
-    if not isinstance(d, dict) or d.get('enabled') is not True:
-        die(f'enforcement flag not enabled (consumer would fail OPEN): {p}')
-    if (d.get('schema_version') != 1 or d.get('source_command') != 'dev-overnight'
-            or d.get('dev_session_id') != sid or d.get('enforced_agent_types') != types):
-        die(f'enforcement flag failed writer-conformance: {p}')
-if os.path.islink(req_doc) or not os.path.isfile(req_doc):
-    die(f'missing, non-regular or symlinked requirement document: {req_doc}')
-# CONTENT, not existence. Sentinels and flags above are re-validated on content
-# while this clause used to stop at "the file is there", so an initializer that
-# produced a perfect registry and then wrote a WRONG requirement document still
-# published (rc=0). The document is the source-of-truth anchor every subagent
-# reads before any derived context, and A1.5's defining property is that the
-# FULL artifact set validates AT THE PUBLICATION EVENT -- "valid at end of
-# launch" leaves a window in which a subagent is dispatched against unvalidated
-# state, which is the publish-then-detect shape A1.5 was chosen over.
-#
-# The oracle is RECOMPUTED here from the record itself (focus / user_spec_path)
-# and the spec file, never read back from something the initializer recorded --
-# a bad renderer would otherwise write wrong bytes and record their matching
-# hash. It is deliberately a SECOND implementation of
-# scripts/overnight-init.sh::_render_requirement_doc rather than a re-invocation
-# of that script: this validator exists precisely because the launcher must not
-# trust the component it is gating, and a stubbed initializer would fake its own
-# oracle too. Agreement between the two renderers is pinned by a differential
-# test, so drift surfaces as a test failure rather than as a refused launch.
-def jq_raw(field, v):
-    # Mirrors `jq -r '<f> // empty'` CAPTURED IN "$(...)": null/false/absent give
-    # '', a string comes through raw, and command substitution then strips every
-    # trailing newline. A NON-string is refused rather than emulated: jq and
-    # json.dumps format objects, arrays and some numbers differently, so
-    # emulating them would let a record shape exist that this oracle accepts and
-    # the initializer's own renderer rejects. Refusing is the fail-closed half of
-    # the same argument that makes this a second implementation at all.
-    if v is None or v is False:
-        return ''
-    if not isinstance(v, str):
-        die(f'record field {field!r} is {type(v).__name__}, not a string; refusing to '
-            f'publish a record whose requirement document cannot be verified')
-    if '\x00' in v:
-        die(f'record field {field!r} contains NUL, which the shell renderer cannot carry')
-    return v.rstrip('\n')
-try:
-    st = json.load(open(record, encoding='utf-8'))
-except Exception as exc:
-    die(f'cannot read the record being published ({record}): {exc}')
-focus = jq_raw('focus', st.get('focus'))
-usp = jq_raw('user_spec_path', st.get('user_spec_path'))
-if usp == 'null':
-    usp = ''
-expected = focus.encode('utf-8') + b'\n'
-if usp:
-    expected += b'\nUser spec path: ' + usp.encode('utf-8') + b'\n'
-    spec_abs = usp if usp.startswith('/') else os.path.join(main_root, usp)
-    if os.path.isfile(spec_abs):
-        expected += b'\nSection 5 (User Acceptance Criterion):\n'
-        # Byte-faithful port of the awk slice: from the Section-5 level-2
-        # heading up to the NEXT level-2 heading, '###' excluded so the 5.x
-        # subsections stay in. [[:space:]] is spelled out because awk's class
-        # includes \r\f\v, which \s would widen and [ \t] would narrow; the awk
-        # side runs under LC_ALL=C so neither renderer accepts locale-dependent
-        # Unicode whitespace the other would reject. The terminator is
-        # (?:[:. \t\r\f\v]|$) -- the ':' and '.' of awk's [:.[:space:]] plus the
-        # space class, and NOT a literal '[', which an earlier spelling admitted
-        # by accident so that '## 5[x' matched here and not in awk.
-        h2 = re.compile(rb'^##[ \t\r\f\v]')
-        h3 = re.compile(rb'^###')
-        s5 = re.compile(rb'^##[ \t\r\f\v]+(Section[ \t\r\f\v]+)?5(?:[:. \t\r\f\v]|$)')
-        lines = open(spec_abs, 'rb').read().split(b'\n')
-        if lines and lines[-1] == b'':
-            lines.pop()  # a trailing newline does not make an extra awk record
-        inside = False
-        for line in lines:
-            if h2.match(line) and not h3.match(line):
-                if inside:
-                    break
-                if s5.match(line):
-                    inside = True
-            if inside:
-                expected += line + b'\n'
-actual = open(req_doc, 'rb').read()
-if actual != expected:
-    die(f'requirement document does not match the recomputed oracle '
-        f'({len(actual)} bytes on disk, {len(expected)} expected): {req_doc}')
-PYEOF
-    )"; then
-    rm -f "$TMP_FILE"
-    echo "Error: the initialized registry FAILED validation: $VALIDATE_ERR" >&2
-    echo "       Refusing the launch; NO session state was published." >&2
-    if [[ "$ISOLATION_KIND" == "in_place" ]]; then
-        echo "       Residue: none — in-place mode created no worktree and no branch." >&2
-    else
-        echo "       Residue retained for inspection: worktree $WORKTREE_PATH (branch $WORKTREE_BRANCH, isolation $ISOLATION_KIND)." >&2
-    fi
-    exit 1
-fi
-printf '%s\n' "$INIT_OUT" >&2
-
-# Atomic move — reached ONLY after initialization succeeded and validated.
+# Atomic move
 mv "$TMP_FILE" "$STATE_FILE"
 
 # --- Create minimal cycle contract at session creation ---
@@ -1048,10 +692,6 @@ echo "  Session: $SESSION_ID" >&2
 echo "  End time: $END_TIME" >&2
 echo "  Spec mode: $SPEC_MODE" >&2
 if [[ -n "$WORKTREE_PATH" ]]; then
-    # Naming the mode matters: "Worktree: <main root>" reads as "a worktree was
-    # created" when in-place mode created nothing at all.
-    echo "  Isolation: $ISOLATION_KIND" >&2
-    echo "  Working root: $WORKTREE_PATH" >&2
-    echo "  Branch: $WORKTREE_BRANCH" >&2
+    echo "  Worktree: $WORKTREE_PATH" >&2
 fi
 echo "STATE_PATH=$STATE_FILE"

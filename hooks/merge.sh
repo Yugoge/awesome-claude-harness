@@ -100,21 +100,6 @@ if git diff --quiet "$BRANCH_NAME" 2>/dev/null; then
   # Locate worktree path (if branch was checked out as a worktree)
   WORKTREE_PATH=$(git worktree list --porcelain 2>/dev/null | awk -v b="refs/heads/$BRANCH_NAME" 'BEGIN{p=""} /^worktree /{p=$2} $1=="branch" && $2==b{print p; exit}')
 
-  # In-place overnight sessions (`/dev-overnight` without --worktree) leave the
-  # branch checked out in the MAIN working tree, so the porcelain lookup above
-  # resolves WORKTREE_PATH to the main root. Removing that is not a cleanup, it
-  # is the user's checkout. Git itself refuses, but the refusal was swallowed by
-  # 2>/dev/null and reported as a generic "could not remove" — so the guard is
-  # made explicit here and the skip is stated plainly.
-  MAIN_ROOT_PATH=$(git rev-parse --path-format=absolute --show-toplevel 2>/dev/null || echo "")
-  MAIN_COMMON=$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null || echo "")
-  MAIN_GITDIR=$(git rev-parse --path-format=absolute --absolute-git-dir 2>/dev/null || echo "")
-  if [ -n "$WORKTREE_PATH" ] && [ "$MAIN_COMMON" = "$MAIN_GITDIR" ] && \
-     [ "$(realpath "$WORKTREE_PATH" 2>/dev/null || echo "$WORKTREE_PATH")" = "$(realpath "$MAIN_ROOT_PATH" 2>/dev/null || echo "$MAIN_ROOT_PATH")" ]; then
-    echo "  - skipped worktree removal: $WORKTREE_PATH is the main working tree (in-place session — nothing was created, so nothing is removed)"
-    WORKTREE_PATH=""
-  fi
-
   if [ -n "$WORKTREE_PATH" ] && [ -d "$WORKTREE_PATH" ]; then
     git worktree remove "$WORKTREE_PATH" --force 2>/dev/null && \
       echo "  ✓ removed worktree: $WORKTREE_PATH" || \

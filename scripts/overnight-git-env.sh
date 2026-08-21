@@ -36,70 +36,26 @@ done
 
 SRC_DIR="$_OGE_DIR/overnight-git"
 BIN_DIR="${CLAUDE_OVERNIGHT_GIT_BINDIR:-$MAIN_ROOT/.claude/overnight-git-bin}"
+mkdir -p "$BIN_DIR"
+# `git` on PATH == the SELECTOR (puts modern git first, else system git).
+install -m 0755 "$SRC_DIR/git-selector" "$BIN_DIR/git"
+# the policy shim is installed under its own name AND chained: the selector
+# delegates to the real git; the shim enforces policy. We name the shim `git`
+# inside a policy-prefixed dir so it runs FIRST, then delegates to the selector
+# as its real git.
 SHIM_DIR="${CLAUDE_OVERNIGHT_GIT_POLICY_BINDIR:-$MAIN_ROOT/.claude/overnight-git-policy-bin}"
-
-# VERIFY FIRST, INSTALL ONLY IF NEEDED.
-# Both wrappers live under the MAIN root. The overnight ACTOR sources this file
-# from inside an armed boundary that RO-binds that root, so an unconditional
-# `mkdir -p` + `install` re-installed already-correct files and emitted
-#   install: cannot remove '.../overnight-git-bin/git': Read-only file system
-# on every source — the user's reported first symptom of this same root cause.
-# The launcher now provisions these pre-boundary, so by the time the actor
-# sources this the healthy path must perform ZERO write attempts.
-_oge_wrapper_ok() {  # $1 = installed path, $2 = source path
-    [[ -f "$1" && ! -L "$1" && -x "$1" ]] && cmp -s "$1" "$2"
-}
-_oge_provisioned() {
-    _oge_wrapper_ok "$BIN_DIR/git" "$SRC_DIR/git-selector" \
-        && _oge_wrapper_ok "$SHIM_DIR/git" "$SRC_DIR/git-policy-shim"
-}
-
-if ! _oge_provisioned; then
-    # Absent or corrupt. Repair is attempted, but it is allowed to FAIL: under an
-    # armed boundary it always will, and that must fail CLOSED rather than leave
-    # a half-applied environment behind.
-    mkdir -p "$BIN_DIR" 2>/dev/null || true
-    # `git` on PATH == the SELECTOR (puts modern git first, else system git).
-    install -m 0755 "$SRC_DIR/git-selector" "$BIN_DIR/git" 2>/dev/null || true
-    # the policy shim is installed under its own name AND chained: the selector
-    # delegates to the real git; the shim enforces policy. We name the shim `git`
-    # inside a policy-prefixed dir so it runs FIRST, then delegates to the
-    # selector as its real git.
-    mkdir -p "$SHIM_DIR" 2>/dev/null || true
-    install -m 0755 "$SRC_DIR/git-policy-shim" "$SHIM_DIR/git" 2>/dev/null || true
-fi
-
-# ALL-OR-NOTHING. Every export below, plus the blessed-token unset, is applied
-# only AFTER the wrappers are known good. A partial transition is the dangerous
-# state: PATH pointing at a missing shim, or CLAUDE_OVERNIGHT_ACTOR set without
-# CLAUDE_OVERNIGHT_WORKTREE, leaves the shim unable to classify "under main_root
-# but outside the worktree" and silently stops enforcing.
-if ! _oge_provisioned; then
-    echo "Error: overnight git wrappers are absent or corrupt and could not be repaired." >&2
-    echo "       Expected: $SHIM_DIR/git and $BIN_DIR/git" >&2
-    echo "       Environment left UNCHANGED (no PATH, marker or token mutation)." >&2
-    return 1 2>/dev/null || exit 1
-fi
+mkdir -p "$SHIM_DIR"
+install -m 0755 "$SRC_DIR/git-policy-shim" "$SHIM_DIR/git"
 
 # Order on PATH: policy shim FIRST (enforces), then selector (modern git), then
 # system. The shim's real-git is the selector (via CLAUDE_OVERNIGHT_REAL_GIT).
-# Drop the blessed token FIRST, and verify it actually went. `unset` fails on a
-# readonly variable, and swallowing that failure would hand the overnight actor a
-# shim-first PATH while it still holds the token the overnight env must not have
-# (:12) — enforcement bypassed by a variable the caller made readonly. This is a
-# mutation, so it belongs on the same all-or-nothing side as the exports.
-unset CLAUDE_GIT_BLESSED_TOKEN 2>/dev/null || true
-if [[ -n "${CLAUDE_GIT_BLESSED_TOKEN+x}" ]]; then
-    echo "Error: CLAUDE_GIT_BLESSED_TOKEN could not be unset (readonly?); refusing to arm the overnight git env." >&2
-    echo "       Environment left UNCHANGED (no PATH or marker mutation)." >&2
-    return 1 2>/dev/null || exit 1
-fi
 export CLAUDE_OVERNIGHT_ACTOR=1
 export CLAUDE_OVERNIGHT_MAIN_ROOT="$MAIN_ROOT"
 # fix-3 (Cycle-2): the shim's main-targeting predicate needs the worktree root to
 # classify "under main_root but outside the worktree" as main-targeting.
 [[ -n "$WORKTREE" ]] && export CLAUDE_OVERNIGHT_WORKTREE="$WORKTREE"
 export CLAUDE_OVERNIGHT_REAL_GIT="$BIN_DIR/git"   # shim delegates to the selector
+unset CLAUDE_GIT_BLESSED_TOKEN 2>/dev/null || true
 export PATH="$SHIM_DIR:$BIN_DIR:$PATH"
 
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
