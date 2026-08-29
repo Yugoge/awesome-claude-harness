@@ -1,0 +1,606 @@
+{
+ "allowing": {
+  "[": {
+   "argv_derived_execution_facility": [],
+   "boundary_reason_code": "inert_consumer_operand_position_only:operand_of_documentation_or_query_consumer",
+   "justification": "predicate/arithmetic builtin: argv words are operands of a comparison or expression, never a command name",
+   "proof_kind": "operand_of_documentation_or_query_consumer"
+  },
+  "apropos": {
+   "argv_derived_execution_facility": [
+    "--pager",
+    "-P"
+   ],
+   "boundary_reason_code": "inert_consumer_operand_position_only:operand_of_documentation_or_query_consumer",
+   "justification": "name/documentation lookup: argv words are names or paths looked up in a database or PATH; no argv-derived program is executed",
+   "proof_kind": "operand_of_documentation_or_query_consumer"
+  },
+  "arch": {
+   "argv_derived_execution_facility": [],
+   "boundary_reason_code": "inert_consumer_operand_position_only:operand_of_documentation_or_query_consumer",
+   "justification": "path/metadata inspection: argv words are paths; results are printed, never executed",
+   "proof_kind": "operand_of_documentation_or_query_consumer"
+  },
+  "b2sum": {
+   "argv_derived_execution_facility": [],
+   "boundary_reason_code": "inert_consumer_operand_position_only:operand_of_documentation_or_query_consumer",
+   "justification": "digest computation: argv words are paths hashed as bytes",
+   "proof_kind": "operand_of_documentation_or_query_consumer"
+  },
+  "base32": {
+   "argv_derived_execution_facility": [],
+   "boundary_reason_code": "inert_consumer_operand_position_only:operand_of_documentation_or_query_consumer",
+   "justification": "file read/transform: argv words are paths and format strings; the program never execs an argv-derived command",
+   "proof_kind": "operand_of_documentation_or_query_consumer"
+  },
+  "base64": {
+   "argv_derived_execution_facility": [],
+   "boundary_reason_code": "inert_consumer_operand_position_only:operand_of_documentation_or_query_consumer",
+   "justification": "file read/transform: argv words are paths and format strings; the program never execs an argv-derived command",
+   "proof_kind": "operand_of_documentation_or_query_consumer"
+  },
+  "basename": {
+   "argv_derived_execution_facility": [],
+   "boundary_reason_code": "inert_consumer_operand_position_only:operand_of_documentation_or_query_consumer",
+   "justification": "path/metadata inspection: argv words are paths; results are printed, never executed",
+   "proof_kind": "operand_of_documentation_or_query_consumer"
+  },
+  "bzcat": {
+   "argv_derived_execution_facility": [],
+   "boundary_reason_code": "inert_consumer_operand_position_only:operand_of_documentation_or_query_consumer",
+   "justification": "file read/transform: argv words are paths and format strings; the program never execs an argv-derived command",
+   "proof_kind": "operand_of_documentation_or_query_consumer"
+  },
+  "cat": {
+   "argv_derived_execution_facility": [],
+   "boundary_reason_code": "inert_consumer_operand_position_only:operand_of_documentation_or_query_consumer",
+   "justification": "file read/transform: argv words are paths and format strings; the program never execs an argv-derived command",
+   "proof_kind": "operand_of_documentation_or_query_consumer"
+  },
+  "cksum": {
+   "argv_derived_execution_facility": [],
+   "boundary_reason_code": "inert_consumer_operand_position_only:operand_of_documentation_or_query_consumer",
+   "justification": "digest computation: argv words are paths hashed as bytes",
+   "proof_kind": "operand_of_documentation_or_query_consumer"
+  },
+  "cmp": {
+   "argv_derived_execution_facility": [],
+   "boundary_reason_code": "inert_consumer_operand_position_only:operand_of_documentation_or_query_consumer",
+   "justification": "file read/transform: argv words are paths and format strings; the program never execs an argv-derived command",
+   "proof_kind": "operand_of_documentation_or_query_consumer"
+  },
+  "column": {
+   "argv_derived_execution_facility": [],
+   "boundary_reason_code": "inert_consumer_operand_position_only:operand_of_documentation_or_query_consumer",
+   "justification": "file read/transform: argv words are paths and format strings; the program never execs an argv-derived command",
+   "proof_kind": "operand_of_documentation_or_query_consumer"
+  },
+  "comm": {
+   "argv_derived_execution_facility": [],
+   "boundary_reason_code": "inert_consumer_operand_position_only:operand_of_documentation_or_query_consumer",
+   "justification": "file read/transform: argv words are paths and format strings; the program never execs an argv-derived command",
+   "proof_kind": "operand_of_documentation_or_query_consumer"
+  },
+  "csplit": {
+   "argv_derived_execution_facility": [],
+   "boundary_reason_code": "inert_consumer_operand_position_only:operand_of_documentation_or_query_consumer",
+   "justification": "file read/transform: argv words are paths and format strings; the program never execs an argv-derived command",
+   "proof_kind": "operand_of_documentation_or_query_consumer"
+  },
+  "cut": {
+   "argv_derived_execution_facility": [],
+   "boundary_reason_code": "inert_consumer_operand_position_only:operand_of_documentation_or_query_consumer",
+   "justification": "file read/transform: argv words are paths and format strings; the program never execs an argv-derived command",
+   "proof_kind": "operand_of_documentation_or_query_consumer"
+  },
+  "date": {
+   "argv_derived_execution_facility": [],
+   "boundary_reason_code": "inert_consumer_operand_position_only:literal_output_text",
+   "justification": "text emission: argv words are rendered to stdout as text; no argv-derived program is executed",
+   "proof_kind": "literal_output_text"
+  },
+  "df": {
+   "argv_derived_execution_facility": [],
+   "boundary_reason_code": "inert_consumer_operand_position_only:operand_of_documentation_or_query_consumer",
+   "justification": "path/metadata inspection: argv words are paths; results are printed, never executed",
+   "proof_kind": "operand_of_documentation_or_query_consumer"
+  },
+  "diff": {
+   "argv_derived_execution_facility": [],
+   "boundary_reason_code": "inert_consumer_operand_position_only:operand_of_documentation_or_query_consumer",
+   "justification": "file read/transform: argv words are paths and format strings; the program never execs an argv-derived command",
+   "proof_kind": "operand_of_documentation_or_query_consumer"
+  },
+  "diff3": {
+   "argv_derived_execution_facility": [
+    "--diff-program"
+   ],
+   "boundary_reason_code": "inert_consumer_operand_position_only:operand_of_documentation_or_query_consumer",
+   "justification": "file read/transform: argv words are paths and format strings; the program never execs an argv-derived command; EXCEPT --diff-program, which names the diff binary diff3 execs",
+   "proof_kind": "operand_of_documentation_or_query_consumer"
+  },
+  "dir": {
+   "argv_derived_execution_facility": [],
+   "boundary_reason_code": "inert_consumer_operand_position_only:operand_of_documentation_or_query_consumer",
+   "justification": "path/metadata inspection: argv words are paths; results are printed, never executed",
+   "proof_kind": "operand_of_documentation_or_query_consumer"
+  },
+  "dircolors": {
+   "argv_derived_execution_facility": [],
+   "boundary_reason_code": "inert_consumer_operand_position_only:operand_of_documentation_or_query_consumer",
+   "justification": "path/metadata inspection: argv words are paths; results are printed, never executed",
+   "proof_kind": "operand_of_documentation_or_query_consumer"
+  },
+  "dirname": {
+   "argv_derived_execution_facility": [],
+   "boundary_reason_code": "inert_consumer_operand_position_only:operand_of_documentation_or_query_consumer",
+   "justification": "path/metadata inspection: argv words are paths; results are printed, never executed",
+   "proof_kind": "operand_of_documentation_or_query_consumer"
+  },
+  "du": {
+   "argv_derived_execution_facility": [],
+   "boundary_reason_code": "inert_consumer_operand_position_only:operand_of_documentation_or_query_consumer",
+   "justification": "path/metadata inspection: argv words are paths; results are printed, never executed",
+   "proof_kind": "operand_of_documentation_or_query_consumer"
+  },
+  "echo": {
+   "argv_derived_execution_facility": [],
+   "boundary_reason_code": "inert_consumer_operand_position_only:literal_output_text",
+   "justification": "text emission: argv words are rendered to stdout as text; no argv-derived program is executed",
+   "proof_kind": "literal_output_text"
+  },
+  "egrep": {
+   "argv_derived_execution_facility": [],
+   "boundary_reason_code": "inert_consumer_operand_position_only:search_pattern_operand",
+   "justification": "text search: argv words are patterns and paths read as data; GNU/BSD search tools expose no argv-derived exec facility",
+   "proof_kind": "search_pattern_operand"
+  },
+  "expand": {
+   "argv_derived_execution_facility": [],
+   "boundary_reason_code": "inert_consumer_operand_position_only:operand_of_documentation_or_query_consumer",
+   "justification": "file read/transform: argv words are paths and format strings; the program never execs an argv-derived command",
+   "proof_kind": "operand_of_documentation_or_query_consumer"
+  },
+  "expr": {
+   "argv_derived_execution_facility": [],
+   "boundary_reason_code": "inert_consumer_operand_position_only:operand_of_documentation_or_query_consumer",
+   "justification": "predicate/arithmetic builtin: argv words are operands of a comparison or expression, never a command name",
+   "proof_kind": "operand_of_documentation_or_query_consumer"
+  },
+  "false": {
+   "argv_derived_execution_facility": [],
+   "boundary_reason_code": "inert_consumer_operand_position_only:operand_of_documentation_or_query_consumer",
+   "justification": "predicate/arithmetic builtin: argv words are operands of a comparison or expression, never a command name",
+   "proof_kind": "operand_of_documentation_or_query_consumer"
+  },
+  "fgrep": {
+   "argv_derived_execution_facility": [],
+   "boundary_reason_code": "inert_consumer_operand_position_only:search_pattern_operand",
+   "justification": "text search: argv words are patterns and paths read as data; GNU/BSD search tools expose no argv-derived exec facility",
+   "proof_kind": "search_pattern_operand"
+  },
+  "file": {
+   "argv_derived_execution_facility": [],
+   "boundary_reason_code": "inert_consumer_operand_position_only:operand_of_documentation_or_query_consumer",
+   "justification": "path/metadata inspection: argv words are paths; results are printed, never executed",
+   "proof_kind": "operand_of_documentation_or_query_consumer"
+  },
+  "fmt": {
+   "argv_derived_execution_facility": [],
+   "boundary_reason_code": "inert_consumer_operand_position_only:operand_of_documentation_or_query_consumer",
+   "justification": "file read/transform: argv words are paths and format strings; the program never execs an argv-derived command",
+   "proof_kind": "operand_of_documentation_or_query_consumer"
+  },
+  "fold": {
+   "argv_derived_execution_facility": [],
+   "boundary_reason_code": "inert_consumer_operand_position_only:operand_of_documentation_or_query_consumer",
+   "justification": "file read/transform: argv words are paths and format strings; the program never execs an argv-derived command",
+   "proof_kind": "operand_of_documentation_or_query_consumer"
+  },
+  "grep": {
+   "argv_derived_execution_facility": [],
+   "boundary_reason_code": "inert_consumer_operand_position_only:search_pattern_operand",
+   "justification": "text search: argv words are patterns and paths read as data; GNU/BSD search tools expose no argv-derived exec facility",
+   "proof_kind": "search_pattern_operand"
+  },
+  "head": {
+   "argv_derived_execution_facility": [],
+   "boundary_reason_code": "inert_consumer_operand_position_only:operand_of_documentation_or_query_consumer",
+   "justification": "file read/transform: argv words are paths and format strings; the program never execs an argv-derived command",
+   "proof_kind": "operand_of_documentation_or_query_consumer"
+  },
+  "hexdump": {
+   "argv_derived_execution_facility": [],
+   "boundary_reason_code": "inert_consumer_operand_position_only:operand_of_documentation_or_query_consumer",
+   "justification": "file read/transform: argv words are paths and format strings; the program never execs an argv-derived command",
+   "proof_kind": "operand_of_documentation_or_query_consumer"
+  },
+  "hostname": {
+   "argv_derived_execution_facility": [],
+   "boundary_reason_code": "inert_consumer_operand_position_only:operand_of_documentation_or_query_consumer",
+   "justification": "path/metadata inspection: argv words are paths; results are printed, never executed",
+   "proof_kind": "operand_of_documentation_or_query_consumer"
+  },
+  "iconv": {
+   "argv_derived_execution_facility": [],
+   "boundary_reason_code": "inert_consumer_operand_position_only:operand_of_documentation_or_query_consumer",
+   "justification": "file read/transform: argv words are paths and format strings; the program never execs an argv-derived command",
+   "proof_kind": "operand_of_documentation_or_query_consumer"
+  },
+  "id": {
+   "argv_derived_execution_facility": [],
+   "boundary_reason_code": "inert_consumer_operand_position_only:operand_of_documentation_or_query_consumer",
+   "justification": "path/metadata inspection: argv words are paths; results are printed, never executed",
+   "proof_kind": "operand_of_documentation_or_query_consumer"
+  },
+  "info": {
+   "argv_derived_execution_facility": [],
+   "boundary_reason_code": "inert_consumer_operand_position_only:operand_of_documentation_or_query_consumer",
+   "justification": "name/documentation lookup: argv words are names or paths looked up in a database or PATH; no argv-derived program is executed",
+   "proof_kind": "operand_of_documentation_or_query_consumer"
+  },
+  "join": {
+   "argv_derived_execution_facility": [],
+   "boundary_reason_code": "inert_consumer_operand_position_only:operand_of_documentation_or_query_consumer",
+   "justification": "file read/transform: argv words are paths and format strings; the program never execs an argv-derived command",
+   "proof_kind": "operand_of_documentation_or_query_consumer"
+  },
+  "jq": {
+   "argv_derived_execution_facility": [],
+   "boundary_reason_code": "inert_consumer_operand_position_only:operand_of_documentation_or_query_consumer",
+   "justification": "file read/transform: argv words are paths and format strings; the program never execs an argv-derived command",
+   "proof_kind": "operand_of_documentation_or_query_consumer"
+  },
+  "less": {
+   "argv_derived_execution_facility": [],
+   "boundary_reason_code": "inert_consumer_operand_position_only:operand_of_documentation_or_query_consumer",
+   "justification": "file read/transform: argv words are paths and format strings; the program never execs an argv-derived command; less has no argv option that names a program (its input filter is the LESSOPEN environment hook, which this analyzer denies as an assignment-prefix vector)",
+   "proof_kind": "operand_of_documentation_or_query_consumer"
+  },
+  "logname": {
+   "argv_derived_execution_facility": [],
+   "boundary_reason_code": "inert_consumer_operand_position_only:operand_of_documentation_or_query_consumer",
+   "justification": "path/metadata inspection: argv words are paths; results are printed, never executed",
+   "proof_kind": "operand_of_documentation_or_query_consumer"
+  },
+  "look": {
+   "argv_derived_execution_facility": [],
+   "boundary_reason_code": "inert_consumer_operand_position_only:search_pattern_operand",
+   "justification": "text search: argv words are patterns and paths read as data; GNU/BSD search tools expose no argv-derived exec facility",
+   "proof_kind": "search_pattern_operand"
+  },
+  "ls": {
+   "argv_derived_execution_facility": [],
+   "boundary_reason_code": "inert_consumer_operand_position_only:operand_of_documentation_or_query_consumer",
+   "justification": "path/metadata inspection: argv words are paths; results are printed, never executed",
+   "proof_kind": "operand_of_documentation_or_query_consumer"
+  },
+  "man": {
+   "argv_derived_execution_facility": [
+    "--browser",
+    "--html",
+    "--pager",
+    "-B",
+    "-H",
+    "-P"
+   ],
+   "boundary_reason_code": "inert_consumer_operand_position_only:operand_of_documentation_or_query_consumer",
+   "justification": "name/documentation lookup: argv words are names or paths looked up in a database or PATH; no argv-derived program is executed; EXCEPT the pager/browser options, which name a program",
+   "proof_kind": "operand_of_documentation_or_query_consumer"
+  },
+  "md5sum": {
+   "argv_derived_execution_facility": [],
+   "boundary_reason_code": "inert_consumer_operand_position_only:operand_of_documentation_or_query_consumer",
+   "justification": "digest computation: argv words are paths hashed as bytes",
+   "proof_kind": "operand_of_documentation_or_query_consumer"
+  },
+  "more": {
+   "argv_derived_execution_facility": [],
+   "boundary_reason_code": "inert_consumer_operand_position_only:operand_of_documentation_or_query_consumer",
+   "justification": "file read/transform: argv words are paths and format strings; the program never execs an argv-derived command",
+   "proof_kind": "operand_of_documentation_or_query_consumer"
+  },
+  "namei": {
+   "argv_derived_execution_facility": [],
+   "boundary_reason_code": "inert_consumer_operand_position_only:operand_of_documentation_or_query_consumer",
+   "justification": "path/metadata inspection: argv words are paths; results are printed, never executed",
+   "proof_kind": "operand_of_documentation_or_query_consumer"
+  },
+  "nl": {
+   "argv_derived_execution_facility": [],
+   "boundary_reason_code": "inert_consumer_operand_position_only:operand_of_documentation_or_query_consumer",
+   "justification": "file read/transform: argv words are paths and format strings; the program never execs an argv-derived command",
+   "proof_kind": "operand_of_documentation_or_query_consumer"
+  },
+  "od": {
+   "argv_derived_execution_facility": [],
+   "boundary_reason_code": "inert_consumer_operand_position_only:operand_of_documentation_or_query_consumer",
+   "justification": "file read/transform: argv words are paths and format strings; the program never execs an argv-derived command",
+   "proof_kind": "operand_of_documentation_or_query_consumer"
+  },
+  "paste": {
+   "argv_derived_execution_facility": [],
+   "boundary_reason_code": "inert_consumer_operand_position_only:operand_of_documentation_or_query_consumer",
+   "justification": "file read/transform: argv words are paths and format strings; the program never execs an argv-derived command",
+   "proof_kind": "operand_of_documentation_or_query_consumer"
+  },
+  "patch": {
+   "argv_derived_execution_facility": [],
+   "boundary_reason_code": "inert_consumer_operand_position_only:operand_of_documentation_or_query_consumer",
+   "justification": "file read/transform: argv words are paths and format strings; the program never execs an argv-derived command",
+   "proof_kind": "operand_of_documentation_or_query_consumer"
+  },
+  "pr": {
+   "argv_derived_execution_facility": [],
+   "boundary_reason_code": "inert_consumer_operand_position_only:operand_of_documentation_or_query_consumer",
+   "justification": "file read/transform: argv words are paths and format strings; the program never execs an argv-derived command",
+   "proof_kind": "operand_of_documentation_or_query_consumer"
+  },
+  "printf": {
+   "argv_derived_execution_facility": [],
+   "boundary_reason_code": "inert_consumer_operand_position_only:literal_output_text",
+   "justification": "text emission: argv words are rendered to stdout as text; no argv-derived program is executed",
+   "proof_kind": "literal_output_text"
+  },
+  "pwd": {
+   "argv_derived_execution_facility": [],
+   "boundary_reason_code": "inert_consumer_operand_position_only:operand_of_documentation_or_query_consumer",
+   "justification": "path/metadata inspection: argv words are paths; results are printed, never executed",
+   "proof_kind": "operand_of_documentation_or_query_consumer"
+  },
+  "readlink": {
+   "argv_derived_execution_facility": [],
+   "boundary_reason_code": "inert_consumer_operand_position_only:operand_of_documentation_or_query_consumer",
+   "justification": "path/metadata inspection: argv words are paths; results are printed, never executed",
+   "proof_kind": "operand_of_documentation_or_query_consumer"
+  },
+  "realpath": {
+   "argv_derived_execution_facility": [],
+   "boundary_reason_code": "inert_consumer_operand_position_only:operand_of_documentation_or_query_consumer",
+   "justification": "path/metadata inspection: argv words are paths; results are printed, never executed",
+   "proof_kind": "operand_of_documentation_or_query_consumer"
+  },
+  "rev": {
+   "argv_derived_execution_facility": [],
+   "boundary_reason_code": "inert_consumer_operand_position_only:operand_of_documentation_or_query_consumer",
+   "justification": "file read/transform: argv words are paths and format strings; the program never execs an argv-derived command",
+   "proof_kind": "operand_of_documentation_or_query_consumer"
+  },
+  "rgrep": {
+   "argv_derived_execution_facility": [],
+   "boundary_reason_code": "inert_consumer_operand_position_only:search_pattern_operand",
+   "justification": "text search: argv words are patterns and paths read as data; GNU/BSD search tools expose no argv-derived exec facility",
+   "proof_kind": "search_pattern_operand"
+  },
+  "sdiff": {
+   "argv_derived_execution_facility": [
+    "--diff-program"
+   ],
+   "boundary_reason_code": "inert_consumer_operand_position_only:operand_of_documentation_or_query_consumer",
+   "justification": "file read/transform: argv words are paths and format strings; the program never execs an argv-derived command; EXCEPT --diff-program, which names the diff binary sdiff execs",
+   "proof_kind": "operand_of_documentation_or_query_consumer"
+  },
+  "seq": {
+   "argv_derived_execution_facility": [],
+   "boundary_reason_code": "inert_consumer_operand_position_only:literal_output_text",
+   "justification": "text emission: argv words are rendered to stdout as text; no argv-derived program is executed",
+   "proof_kind": "literal_output_text"
+  },
+  "sha1sum": {
+   "argv_derived_execution_facility": [],
+   "boundary_reason_code": "inert_consumer_operand_position_only:operand_of_documentation_or_query_consumer",
+   "justification": "digest computation: argv words are paths hashed as bytes",
+   "proof_kind": "operand_of_documentation_or_query_consumer"
+  },
+  "sha224sum": {
+   "argv_derived_execution_facility": [],
+   "boundary_reason_code": "inert_consumer_operand_position_only:operand_of_documentation_or_query_consumer",
+   "justification": "digest computation: argv words are paths hashed as bytes",
+   "proof_kind": "operand_of_documentation_or_query_consumer"
+  },
+  "sha256sum": {
+   "argv_derived_execution_facility": [],
+   "boundary_reason_code": "inert_consumer_operand_position_only:operand_of_documentation_or_query_consumer",
+   "justification": "digest computation: argv words are paths hashed as bytes",
+   "proof_kind": "operand_of_documentation_or_query_consumer"
+  },
+  "sha384sum": {
+   "argv_derived_execution_facility": [],
+   "boundary_reason_code": "inert_consumer_operand_position_only:operand_of_documentation_or_query_consumer",
+   "justification": "digest computation: argv words are paths hashed as bytes",
+   "proof_kind": "operand_of_documentation_or_query_consumer"
+  },
+  "sha512sum": {
+   "argv_derived_execution_facility": [],
+   "boundary_reason_code": "inert_consumer_operand_position_only:operand_of_documentation_or_query_consumer",
+   "justification": "digest computation: argv words are paths hashed as bytes",
+   "proof_kind": "operand_of_documentation_or_query_consumer"
+  },
+  "shasum": {
+   "argv_derived_execution_facility": [],
+   "boundary_reason_code": "inert_consumer_operand_position_only:operand_of_documentation_or_query_consumer",
+   "justification": "digest computation: argv words are paths hashed as bytes",
+   "proof_kind": "operand_of_documentation_or_query_consumer"
+  },
+  "shuf": {
+   "argv_derived_execution_facility": [],
+   "boundary_reason_code": "inert_consumer_operand_position_only:operand_of_documentation_or_query_consumer",
+   "justification": "file read/transform: argv words are paths and format strings; the program never execs an argv-derived command",
+   "proof_kind": "operand_of_documentation_or_query_consumer"
+  },
+  "sleep": {
+   "argv_derived_execution_facility": [],
+   "boundary_reason_code": "inert_consumer_operand_position_only:literal_output_text",
+   "justification": "text emission: argv words are rendered to stdout as text; no argv-derived program is executed",
+   "proof_kind": "literal_output_text"
+  },
+  "sort": {
+   "argv_derived_execution_facility": [
+    "--compress-program"
+   ],
+   "boundary_reason_code": "inert_consumer_operand_position_only:operand_of_documentation_or_query_consumer",
+   "justification": "file read/transform: argv words are paths and format strings; the program never execs an argv-derived command; EXCEPT --compress-program, which names a program run on temporary files",
+   "proof_kind": "operand_of_documentation_or_query_consumer"
+  },
+  "split": {
+   "argv_derived_execution_facility": [
+    "--filter"
+   ],
+   "boundary_reason_code": "inert_consumer_operand_position_only:operand_of_documentation_or_query_consumer",
+   "justification": "file read/transform: argv words are paths and format strings; the program never execs an argv-derived command; EXCEPT --filter, which is a shell command each output chunk is piped into",
+   "proof_kind": "operand_of_documentation_or_query_consumer"
+  },
+  "stat": {
+   "argv_derived_execution_facility": [],
+   "boundary_reason_code": "inert_consumer_operand_position_only:operand_of_documentation_or_query_consumer",
+   "justification": "path/metadata inspection: argv words are paths; results are printed, never executed",
+   "proof_kind": "operand_of_documentation_or_query_consumer"
+  },
+  "strings": {
+   "argv_derived_execution_facility": [],
+   "boundary_reason_code": "inert_consumer_operand_position_only:operand_of_documentation_or_query_consumer",
+   "justification": "file read/transform: argv words are paths and format strings; the program never execs an argv-derived command",
+   "proof_kind": "operand_of_documentation_or_query_consumer"
+  },
+  "sum": {
+   "argv_derived_execution_facility": [],
+   "boundary_reason_code": "inert_consumer_operand_position_only:operand_of_documentation_or_query_consumer",
+   "justification": "digest computation: argv words are paths hashed as bytes",
+   "proof_kind": "operand_of_documentation_or_query_consumer"
+  },
+  "tac": {
+   "argv_derived_execution_facility": [],
+   "boundary_reason_code": "inert_consumer_operand_position_only:operand_of_documentation_or_query_consumer",
+   "justification": "file read/transform: argv words are paths and format strings; the program never execs an argv-derived command",
+   "proof_kind": "operand_of_documentation_or_query_consumer"
+  },
+  "tail": {
+   "argv_derived_execution_facility": [],
+   "boundary_reason_code": "inert_consumer_operand_position_only:operand_of_documentation_or_query_consumer",
+   "justification": "file read/transform: argv words are paths and format strings; the program never execs an argv-derived command",
+   "proof_kind": "operand_of_documentation_or_query_consumer"
+  },
+  "tee": {
+   "argv_derived_execution_facility": [],
+   "boundary_reason_code": "inert_consumer_operand_position_only:operand_of_documentation_or_query_consumer",
+   "justification": "file read/transform: argv words are paths and format strings; the program never execs an argv-derived command",
+   "proof_kind": "operand_of_documentation_or_query_consumer"
+  },
+  "test": {
+   "argv_derived_execution_facility": [],
+   "boundary_reason_code": "inert_consumer_operand_position_only:operand_of_documentation_or_query_consumer",
+   "justification": "predicate/arithmetic builtin: argv words are operands of a comparison or expression, never a command name",
+   "proof_kind": "operand_of_documentation_or_query_consumer"
+  },
+  "tr": {
+   "argv_derived_execution_facility": [],
+   "boundary_reason_code": "inert_consumer_operand_position_only:operand_of_documentation_or_query_consumer",
+   "justification": "file read/transform: argv words are paths and format strings; the program never execs an argv-derived command",
+   "proof_kind": "operand_of_documentation_or_query_consumer"
+  },
+  "tree": {
+   "argv_derived_execution_facility": [],
+   "boundary_reason_code": "inert_consumer_operand_position_only:operand_of_documentation_or_query_consumer",
+   "justification": "path/metadata inspection: argv words are paths; results are printed, never executed",
+   "proof_kind": "operand_of_documentation_or_query_consumer"
+  },
+  "true": {
+   "argv_derived_execution_facility": [],
+   "boundary_reason_code": "inert_consumer_operand_position_only:operand_of_documentation_or_query_consumer",
+   "justification": "predicate/arithmetic builtin: argv words are operands of a comparison or expression, never a command name",
+   "proof_kind": "operand_of_documentation_or_query_consumer"
+  },
+  "tty": {
+   "argv_derived_execution_facility": [],
+   "boundary_reason_code": "inert_consumer_operand_position_only:operand_of_documentation_or_query_consumer",
+   "justification": "path/metadata inspection: argv words are paths; results are printed, never executed",
+   "proof_kind": "operand_of_documentation_or_query_consumer"
+  },
+  "uname": {
+   "argv_derived_execution_facility": [],
+   "boundary_reason_code": "inert_consumer_operand_position_only:operand_of_documentation_or_query_consumer",
+   "justification": "path/metadata inspection: argv words are paths; results are printed, never executed",
+   "proof_kind": "operand_of_documentation_or_query_consumer"
+  },
+  "unexpand": {
+   "argv_derived_execution_facility": [],
+   "boundary_reason_code": "inert_consumer_operand_position_only:operand_of_documentation_or_query_consumer",
+   "justification": "file read/transform: argv words are paths and format strings; the program never execs an argv-derived command",
+   "proof_kind": "operand_of_documentation_or_query_consumer"
+  },
+  "uniq": {
+   "argv_derived_execution_facility": [],
+   "boundary_reason_code": "inert_consumer_operand_position_only:operand_of_documentation_or_query_consumer",
+   "justification": "file read/transform: argv words are paths and format strings; the program never execs an argv-derived command",
+   "proof_kind": "operand_of_documentation_or_query_consumer"
+  },
+  "vdir": {
+   "argv_derived_execution_facility": [],
+   "boundary_reason_code": "inert_consumer_operand_position_only:operand_of_documentation_or_query_consumer",
+   "justification": "path/metadata inspection: argv words are paths; results are printed, never executed",
+   "proof_kind": "operand_of_documentation_or_query_consumer"
+  },
+  "wc": {
+   "argv_derived_execution_facility": [],
+   "boundary_reason_code": "inert_consumer_operand_position_only:operand_of_documentation_or_query_consumer",
+   "justification": "file read/transform: argv words are paths and format strings; the program never execs an argv-derived command",
+   "proof_kind": "operand_of_documentation_or_query_consumer"
+  },
+  "whatis": {
+   "argv_derived_execution_facility": [
+    "--pager",
+    "-P"
+   ],
+   "boundary_reason_code": "inert_consumer_operand_position_only:operand_of_documentation_or_query_consumer",
+   "justification": "name/documentation lookup: argv words are names or paths looked up in a database or PATH; no argv-derived program is executed",
+   "proof_kind": "operand_of_documentation_or_query_consumer"
+  },
+  "whereis": {
+   "argv_derived_execution_facility": [],
+   "boundary_reason_code": "inert_consumer_operand_position_only:operand_of_documentation_or_query_consumer",
+   "justification": "name/documentation lookup: argv words are names or paths looked up in a database or PATH; no argv-derived program is executed",
+   "proof_kind": "operand_of_documentation_or_query_consumer"
+  },
+  "which": {
+   "argv_derived_execution_facility": [],
+   "boundary_reason_code": "inert_consumer_operand_position_only:operand_of_documentation_or_query_consumer",
+   "justification": "name/documentation lookup: argv words are names or paths looked up in a database or PATH; no argv-derived program is executed",
+   "proof_kind": "operand_of_documentation_or_query_consumer"
+  },
+  "whoami": {
+   "argv_derived_execution_facility": [],
+   "boundary_reason_code": "inert_consumer_operand_position_only:operand_of_documentation_or_query_consumer",
+   "justification": "path/metadata inspection: argv words are paths; results are printed, never executed",
+   "proof_kind": "operand_of_documentation_or_query_consumer"
+  },
+  "xxd": {
+   "argv_derived_execution_facility": [],
+   "boundary_reason_code": "inert_consumer_operand_position_only:operand_of_documentation_or_query_consumer",
+   "justification": "file read/transform: argv words are paths and format strings; the program never execs an argv-derived command",
+   "proof_kind": "operand_of_documentation_or_query_consumer"
+  },
+  "xzcat": {
+   "argv_derived_execution_facility": [],
+   "boundary_reason_code": "inert_consumer_operand_position_only:operand_of_documentation_or_query_consumer",
+   "justification": "file read/transform: argv words are paths and format strings; the program never execs an argv-derived command",
+   "proof_kind": "operand_of_documentation_or_query_consumer"
+  },
+  "yes": {
+   "argv_derived_execution_facility": [],
+   "boundary_reason_code": "inert_consumer_operand_position_only:literal_output_text",
+   "justification": "text emission: argv words are rendered to stdout as text; no argv-derived program is executed",
+   "proof_kind": "literal_output_text"
+  },
+  "zcat": {
+   "argv_derived_execution_facility": [],
+   "boundary_reason_code": "inert_consumer_operand_position_only:operand_of_documentation_or_query_consumer",
+   "justification": "file read/transform: argv words are paths and format strings; the program never execs an argv-derived command",
+   "proof_kind": "operand_of_documentation_or_query_consumer"
+  }
+ },
+ "allowing_count": 96,
+ "criterion": "AC-R02-11",
+ "probe_shape": "<P> /bin/rm -rf qa-target (analyzed, never executed)",
+ "program_set_size": 2406,
+ "schema": "pol-installed-program-allow-set.v1"
+}

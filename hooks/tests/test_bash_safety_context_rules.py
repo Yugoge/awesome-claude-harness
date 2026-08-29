@@ -22,6 +22,8 @@ import os
 import shutil
 import subprocess
 
+import pytest
+
 HOOK = os.path.join(os.path.dirname(__file__), "..", "pretool-bash-safety.sh")
 
 
@@ -91,6 +93,19 @@ class TestGitResetExecutionClassification:
             os.path.join(os.path.dirname(HOOK), "lib", "bash_context_strip.py"),
             hook_dir / "lib" / "bash_context_strip.py",
         )
+        # The execution-boundary analyzer is deliberately NOT staged: this
+        # fixture exercises the CLASSIFIER fallback with the removal policy in
+        # its degraded branch. That branch reads its removal-reference
+        # predicate from a shared file (the single definition the AC-R02-10
+        # differential test also consumes), so the file has to travel with the
+        # hook — an absent predicate is itself a degraded deployment and denies
+        # everything, which is asserted separately in
+        # test_pol_generative_sweeps.py::test_missing_degraded_predicate_file_denies.
+        shutil.copy2(
+            os.path.join(os.path.dirname(HOOK), "lib",
+                         "pol_degraded_removal_reference.ere"),
+            hook_dir / "lib" / "pol_degraded_removal_reference.ere",
+        )
         if malformed_classifier:
             classifier = hook_dir / "lib" / "git_command_classifier.py"
             classifier.write_text("print('not-json')\n")
@@ -137,6 +152,191 @@ class TestGitResetExecutionClassification:
     def test_malformed_classifier_falls_back_closed_for_real_execution(self, tmp_path):
         hook = self._fallback_hook(tmp_path, malformed_classifier=True)
         self._assert_fallback_boundary(hook)
+
+
+# ── Removal policy: historical control sets (LANE-POL, spec-20260808-035658) ──
+# Ported verbatim from the iteration-5 worktree's terminal test file
+# (overnight-20260809-685c203b, sha256 ad46f54c009b01be411e7eddc404a13578fdc8264
+# adef1a5d78b03c8affc39ec). Commands and expected results are byte-identical to
+# the source; only the surrounding module differs.
+#
+# These are the three historical control sets the removal-policy rewrite must
+# keep green, in the order they were accumulated:
+#   * the original iteration-3 constructive counterexamples
+#     (test_structural_command_positions_fail_closed and its inert/safe twin)
+#   * the iteration-4 exact-mismatch set: 41 forms that must block plus the one
+#     safe `git rm --cached>/dev/null tracked.txt` that must be allowed
+#     (test_iteration_five_structural_mismatches_are_blocked)
+#   * the iteration-5 representation boundaries
+#     (test_iteration_five_representation_boundaries)
+# Every one of them is a form some earlier iteration got wrong. They exist to
+# make a regression loud, so do not "simplify" a case to make it pass.
+
+class TestCachedGitRmClassification:
+    """Every rm occurrence must be a proven cached-Git or Docker removal."""
+
+    def test_cached_index_removal_is_allowed(self):
+        assert run_hook("git rm --cached tracked.txt") == ALLOW
+
+    def test_path_qualified_repo_cached_removal_is_allowed(self):
+        assert run_hook("/usr/bin/git -C repo rm -r --cached tracked.txt") == ALLOW
+
+    def test_non_cached_git_rm_is_blocked(self):
+        assert run_hook("git rm tracked.txt") == BLOCK
+
+    def test_bare_rm_is_blocked(self):
+        assert run_hook("rm tracked.txt") == BLOCK
+
+    def test_cached_git_rm_mixed_with_bare_rm_is_blocked(self):
+        assert run_hook("git rm --cached tracked.txt; rm other.txt") == BLOCK
+
+    def test_docker_rm_is_allowed(self):
+        assert run_hook("docker rm dev-container") == ALLOW
+
+    def test_path_qualified_docker_rm_is_allowed(self):
+        assert run_hook("/usr/bin/docker rm dev-container") == ALLOW
+
+    def test_docker_rm_then_bare_rm_is_blocked(self):
+        assert run_hook("docker rm dev-container; rm other.txt") == BLOCK
+
+    def test_bare_rm_then_docker_rm_is_blocked(self):
+        assert run_hook("rm other.txt; docker rm dev-container") == BLOCK
+
+    def test_docker_rm_then_non_cached_git_rm_is_blocked(self):
+        assert run_hook("docker rm dev-container; git rm tracked.txt") == BLOCK
+
+    def test_non_cached_git_rm_then_docker_rm_is_blocked(self):
+        assert run_hook("git rm tracked.txt; docker rm dev-container") == BLOCK
+
+    def test_wrapped_docker_rm_then_bare_rm_is_blocked(self):
+        assert run_hook('bash -lc "docker rm dev-container; rm other.txt"') == BLOCK
+
+    def test_path_qualified_docker_rm_then_bare_rm_is_blocked(self):
+        assert run_hook("/usr/bin/docker rm dev-container; rm other.txt") == BLOCK
+
+    def test_docker_rm_with_cached_git_rm_is_allowed(self):
+        assert run_hook("docker rm dev-container; git rm --cached tracked.txt") == ALLOW
+
+    @pytest.mark.parametrize("command", (
+        "/bin/rm tracked.txt",
+        "/usr/bin/rm tracked.txt",
+        "/bin/rm tracked.txt; docker rm dev-container",
+        "docker rm dev-container; /bin/rm tracked.txt",
+        "git rm --cached tracked.txt; /bin/rm other.txt",
+        'bash -lc "/bin/rm tracked.txt"',
+        "command /bin/rm tracked.txt",
+    ))
+    def test_path_qualified_filesystem_rm_is_blocked(self, command):
+        assert run_hook(command) == BLOCK
+
+    @pytest.mark.parametrize("malformed", (False, True))
+    def test_path_qualified_rm_fails_closed_without_classifier(self, tmp_path, malformed):
+        hook = TestGitResetExecutionClassification._fallback_hook(tmp_path, malformed)
+        assert run_hook("/bin/rm tracked.txt", hook) == BLOCK
+
+    @pytest.mark.parametrize(("command", "expected"), (
+        ("'rm' tracked.txt", BLOCK),
+        ('"rm" tracked.txt', BLOCK),
+        ("'/bin/rm' tracked.txt", BLOCK),
+        ('"/bin/rm" tracked.txt', BLOCK),
+        ("command 'rm' tracked.txt", BLOCK),
+        ('env FOO=1 "/bin/rm" tracked.txt', BLOCK),
+        ('bash -lc "\'/bin/rm\' tracked.txt"', BLOCK),
+        ("docker rm dev-container; '/bin/rm' tracked.txt", BLOCK),
+        ('"/bin/rm" tracked.txt; docker rm dev-container', BLOCK),
+        ("git rm --cached tracked.txt; '/bin/rm' other.txt", BLOCK),
+        ("'/usr/bin/git' rm tracked.txt", BLOCK),
+        ('"/usr/bin/git" rm tracked.txt', BLOCK),
+        ("git 'rm' tracked.txt", BLOCK),
+        ('git "rm" tracked.txt', BLOCK),
+        ("r''m tracked.txt", BLOCK),
+        (r"r\m tracked.txt", BLOCK),
+        ("/bin/'rm' tracked.txt", BLOCK),
+        ("command r''m tracked.txt", BLOCK),
+        (r"env FOO=1 /bin/r\m tracked.txt", BLOCK),
+        ("g''it r''m tracked.txt", BLOCK),
+        (r"git r\m tracked.txt", BLOCK),
+        ('eval "\'/bin/rm\' tracked.txt"', BLOCK),
+        ("git 'rm' --cached tracked.txt", ALLOW),
+        ('docker "rm" dev-container', ALLOW),
+        ('echo "rm tracked.txt"', ALLOW),
+        ("printf '%s' '/bin/rm tracked.txt'", ALLOW),
+        ('python3 checker.py \'git "rm" tracked.txt\'', ALLOW),
+    ))
+    def test_shell_quote_and_escape_equivalence(self, command, expected):
+        assert run_hook(command) == expected
+
+    @pytest.mark.parametrize("command", (
+        "$(printf r)$(printf m) tracked.txt", "r$(printf m) tracked.txt",
+        "$(printf r)m tracked.txt", '"$(printf r)$(printf m)" tracked.txt',
+        "`printf r``printf m` tracked.txt", 'R=r; M=m; "$R$M" tracked.txt',
+        r"$'\x72\x6d' tracked.txt", r"$'\162\155' tracked.txt",
+        "/bin/r? tracked.txt", "r\\\nm tracked.txt",
+        "eval '$(printf r)$(printf m) tracked.txt'",
+        "bash -c '$(printf r)$(printf m) tracked.txt'",
+        "sh -lc 'r$(printf m) tracked.txt'",
+        "EMPTY=; r${EMPTY}m tracked.txt", "command -p /bin/rm tracked.txt",
+        "env -i /bin/rm tracked.txt", "exec /bin/rm tracked.txt",
+        ">/dev/null /bin/rm tracked.txt", "! /bin/rm tracked.txt",
+        "{ /bin/rm tracked.txt; }", "bash -O extglob -c '/bin/rm tracked.txt'",
+        "eval -- '/bin/rm tracked.txt'", 'printf \'%s\' "$(\'/bin/rm\' tracked.txt)"',
+        "find . -exec /bin/rm {} +", "printf x | xargs -n 1 /bin/rm",
+    ))
+    def test_structural_command_positions_fail_closed(self, command):
+        assert run_hook(command) == BLOCK, command
+
+    @pytest.mark.parametrize("command", (
+        "printf '%s' '$(printf r)$(printf m) tracked.txt'",
+        "python3 checker.py '$\\x72\\x6d tracked.txt'",
+        "rg -n 'command -p /bin/rm' docs", "echo '/bin/r? tracked.txt'",
+        "git rm --cached tracked.txt", "/usr/bin/git -C repo rm -r --cached tracked.txt",
+        "command git rm --cached tracked.txt", "env -i git rm --cached tracked.txt",
+        "bash -c 'git rm --cached tracked.txt'", "eval 'git rm --cached tracked.txt'",
+        "docker rm dev-container", "/usr/bin/docker rm dev-container",
+    ))
+    def test_structural_classifier_preserves_inert_and_safe_controls(self, command):
+        assert run_hook(command) == ALLOW, command
+
+    @pytest.mark.parametrize("command", (
+        "bash -O extglob -c '/bin/r@(m) tracked.txt'", "bash -O extglob -c '/bin/r+(m) tracked.txt'",
+        "env -S '/bin/rm tracked.txt'", "env --split-string='/bin/rm tracked.txt'",
+        "/usr/bin/time -f fmt /bin/rm tracked.txt", "sudo -p prompt /bin/rm tracked.txt",
+        "coproc JOB { /bin/rm tracked.txt; }", "A+=x /bin/rm tracked.txt",
+        "rm>/dev/null tracked.txt", "/bin/rm>/dev/null tracked.txt",
+        "command >/dev/null -p /bin/rm tracked.txt", "env >/dev/null -i /bin/rm tracked.txt",
+        "sudo >/dev/null -u root /bin/rm tracked.txt", "eval >/dev/null -- /bin/rm tracked.txt",
+        "bash -c 'git rm -- --cached tracked.txt'", "bash -c 'rm>/dev/null tracked.txt'",
+        "bash <<< '/bin/rm tracked.txt'", "printf '%s\\n' '/bin/rm tracked.txt' | bash",
+        "eval 'rm>/dev/null tracked.txt'", "eval 'git rm -- --cached tracked.txt'",
+        "printf tracked.txt | xargs -d x /bin/rm", "printf tracked.txt | xargs --delimiter x /bin/rm",
+        r"find . -ok /bin/rm {} \;", r"find . -okdir /bin/rm {} \;",
+        r"find . -exec env -S '/bin/rm {}' \;", 'echo "$(git rm -- --cached tracked.txt)"',
+        'echo "$(rm>/dev/null tracked.txt)"', "echo $(( $(/bin/rm tracked.txt) + 1 ))",
+        'echo "${X:-$(/bin/rm tracked.txt)}"', 'echo "${X:=$(/bin/rm tracked.txt)}"',
+        "cat <<EOF\n$(/bin/rm tracked.txt)\nEOF", "cat <<EOF\n`/bin/rm tracked.txt`\nEOF",
+        "cat <<EOF\n${X:-$(/bin/rm tracked.txt)}\nEOF", "cat <<EOF\n$(/bin/rm tracked.txt)",
+        "echo ${X:-$(/bin/rm tracked.txt)", "echo $(( $(/bin/rm tracked.txt) + 1",
+        "git rm -- --cached tracked.txt", "command git rm -- --cached tracked.txt",
+        "git --literal-pathspecs rm -- --cached tracked.txt", "git rm --ignore-unmatch -- --cached tracked.txt",
+        "docker rm dev; git rm -- --cached tracked.txt",
+    ))
+    def test_iteration_five_structural_mismatches_are_blocked(self, command):
+        assert run_hook(command) == BLOCK, command
+
+    @pytest.mark.parametrize(("command", "expected"), (
+        ("git rm --cached>/dev/null tracked.txt", ALLOW), ("rm2>/dev/null tracked.txt", ALLOW),
+        ("git rm --cached -- --cached", ALLOW), ("git rm \"$maybe\" --cached tracked.txt", BLOCK),
+        ("env -S 'echo $(/bin/rm)'", ALLOW), ("printf '/bin/rm tracked.txt' | cat", ALLOW),
+        ("A=rm echo ok", ALLOW), (r"find . -name rm", ALLOW), ("{r,echo}m tracked.txt", BLOCK),
+        ("echo '${X:-$(/bin/rm tracked.txt)}'", ALLOW), ("cat <<'EOF'\n$(/bin/rm tracked.txt)\nEOF", ALLOW),
+        ("cat <<EOF\n\\$(/bin/rm tracked.txt)\nEOF", ALLOW), ("bash <<'EOF'\n/bin/rm tracked.txt\nEOF", BLOCK),
+    ))
+    def test_iteration_five_representation_boundaries(self, command, expected):
+        assert run_hook(command) == expected, command
+
+    def test_quoted_reset_rule_data_and_sed_range_are_allowed(self):
+        assert run_hook("echo 'permission: git reset --hard' >/dev/null") == ALLOW
+        assert run_hook("sed -n '1,3p' README.md >/dev/null") == ALLOW
 
 
 # ── Layer 1.F false-positive regression: protected name in quoted arg ─────────

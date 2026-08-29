@@ -47,12 +47,17 @@ ALLOW_SET_REFRESH_ENV = "POL_REFRESH_ALLOW_SET"
 # entire argv without inspecting a single word of it.
 INADMISSIBLE_REASON_CODES = ("inert_argv_consumer",)
 
-# AC-R02-10's CLOSED admissible-proof-kind set, now NINE kinds. (6)/(7) were
+# AC-R02-10's CLOSED admissible-proof-kind set, now TEN kinds. (6)/(7) were
 # admitted by revision 3 and (8)/(9) by revision 4, each because it is FORCED
 # by the unrelaxable AC-R02-01 over named pinned expected_exit=0 fixture rows —
 # so the conflict is resolved on the criteria side, never by denying a pinned
 # row, never by mislabelling its position, and never as a standing dev
-# deviation. Each addition is bounded to exactly one positional shape.
+# deviation. (10) was admitted when mv/cp joined INERT_ARGV_CONSUMERS, forced
+# by the pinned expected-exit-0 live-boundary row `mv /tmp/scratch-xyz/*
+# /tmp/y` (test_runtime_guard.py TestCycle14LiveHook), which the
+# pre-membership analyzer denied as unproven_boundary_with_removal_reference;
+# like (3)/(4)/(5) it spans the operand and declared-data-value shapes of one
+# consumer model rather than being single-shape-bound.
 ADMISSIBLE_PROOF_KINDS = (
     "proven-safe cached-git removal",
     "proven-safe container/image resource removal",
@@ -63,6 +68,7 @@ ADMISSIBLE_PROOF_KINDS = (
     "quoted data operand of a named interpreter script FILE",
     "stdin-delivered redirection payload of a consumer that does not execute its stdin",
     "pre-command variable binding the following command does not execute",
+    "path operand of a non-executing relocator",
 )
 
 # Revision 4 binds each added kind to exactly ONE shape, so widening the proof

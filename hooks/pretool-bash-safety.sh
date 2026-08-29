@@ -87,6 +87,35 @@ TOOL_NAME=$(echo "$INPUT" | "$PYTHON_BIN" -c "import json,sys; d=json.load(sys.s
 COMMAND=$(echo "$INPUT" | "$PYTHON_BIN" -c "import json,sys; d=json.load(sys.stdin); print(d.get('tool_input',{}).get('command',''))" 2>/dev/null)
 COMPOSE_COMMAND=$(strip_shell_prelude_for_compose "$COMMAND")
 
+# Extractor liveness — fail-closed, and ONLY when extraction actually failed.
+#
+# TOOL_NAME and COMMAND above are produced by "$PYTHON_BIN" with stderr
+# discarded. If that interpreter cannot run at all, BOTH come back empty and
+# the non-Bash exit immediately below reads an unparseable payload as "not a
+# Bash call" and allows it. That is the deepest fail-open in this file: with a
+# dead interpreter every rule in it — removal policy, git stash/checkout, npm
+# -g, kill, docker daemon guards — silently evaporates, and it presents exactly
+# as the removal-policy failure conditions ("analyzer module absent",
+# "interpreter crash") this lane must never let allow.
+#
+# The probe fires only when TOOL_NAME is already empty, so a HEALTHY
+# interpreter never reaches it and the non-Bash contract below is byte-for-byte
+# unchanged: same condition, same exit 0, same silence.
+# A real tool name is a single identifier token. A dead interpreter yields "",
+# and a WRONG one (a binary that is not Python) echoes the -c script back, so
+# both are caught by the same shape test — done with bash pattern matching so
+# the healthy path spawns no extra process and pays no latency.
+case "$TOOL_NAME" in
+  "" | *[!A-Za-z0-9_.-]* ) _TOOL_NAME_UNPARSED=1 ;;
+  * )                      _TOOL_NAME_UNPARSED='' ;;
+esac
+if [ -n "$_TOOL_NAME_UNPARSED" ] \
+   && [ "$(printf 'ok' | "$PYTHON_BIN" -c 'import sys; sys.stdout.write(sys.stdin.read())' 2>/dev/null)" != "ok" ]; then
+  echo "BLOCKED: safety-hook FAIL-CLOSED — the Python interpreter this hook depends on ($PYTHON_BIN) is unavailable, so the tool payload could not be parsed and no safety rule could be evaluated." >&2
+  echo "REASON: repair the interpreter deployment; an unparseable payload must never be treated as a non-Bash call." >&2
+  exit 2
+fi
+
 # Only act on Bash tool
 if [ "$TOOL_NAME" != "Bash" ]; then
   exit 0
@@ -1473,15 +1502,126 @@ if echo "$COMMAND_CONTEXT_STRIPPED" | grep -qE '(rm|mv)\s' && echo "$COMMAND" | 
   exit 2
 fi
 
-# Block: filesystem rm (but NOT docker rm, which is handled above)
-# Pattern uses [ \t;|&(] so that rm appearing after a space (e.g. inside a -c payload
-# that was unwrapped by context stripping) or inside $( ) is still detected.
-# Note: \s inside bracket expressions is NOT whitespace in grep -E; use [ \t] instead.
-if echo "$COMMAND_CONTEXT_STRIPPED" | grep -qE '(^|[ \t;|&(])rm\s' && ! echo "$COMMAND" | grep -qE 'docker\s+rm\s'; then
-  echo "BLOCKED: rm is forbidden — delete files manually or ask the user" >&2
-  echo "Command: $COMMAND" >&2
-  exit 2
+# ── Removal policy: generic fail-closed execution-boundary model ─────────────
+# (LANE-POL, spec-20260808-035658 Section 7 Cycle 7)
+#
+# WHAT THIS REPLACED AND WHY. The previous rule was a grep for `rm` in command
+# position of the context-stripped view, plus a raw-text carve-out that exempted
+# any command merely CONTAINING `docker rm `. Its authorization question was
+# "did a known pattern find a forbidden removal?" — so unknown wrappers,
+# aliases, generated-code modes, substitution positions and arity paths produced
+# no finding, and no finding meant ALLOW. Six iterations of adding patterns
+# lowered sample mismatch counts but could never prove coverage: an independent
+# 436-case matrix still showed 335 dangerous forms exiting 0 against this file,
+# alongside 18 safe forms wrongly denied (no `git rm --cached` allowance existed
+# at all, and `docker container|image|compose rm` missed the text carve-out).
+#
+# The algebra is now INVERTED. hooks/lib/bash_execution_boundary.py resolves
+# every execution-bearing boundary and the command clears this policy only when
+# EVERY boundary is affirmatively proven terminal-safe (PROVEN_INERT or
+# PROVEN_SAFE_REMOVAL). Analyzer silence, parse failure, unsupported syntax, an
+# unnameable command head, or an active-syntax census obligation left
+# undischarged all resolve to UNRESOLVED — which denies. Lookup tables inside
+# the analyzer may therefore only ever move a boundary toward SAFE; absence from
+# a table falls to UNRESOLVED, never to allow.
+#
+# Scope: this block decides the REMOVAL policy only. Every other rule in this
+# hook — /do, /allow, the bulk-writer form, git stash/checkout/reset/push/ref
+# rules, npm, kill, docker daemon/compose/happy-container protections — keeps
+# its existing behavior and ordering.
+#
+# FAIL-CLOSED CONTRACT: the analyzer is a mandatory deployment artifact shipped
+# in this repo. If it is missing, times out, crashes, or returns anything but a
+# valid verdict object, we MUST NOT fall through to allow. The fallback is a
+# conservative raw-text removal-evidence check that is strictly BROADER than the
+# guard this block replaced (any rm/unlink/shred/srm token anywhere in the raw
+# command, not just in command position of the stripped view), so a broken
+# analyzer denies more than before, never less.
+_EB_PY="$HOOKS_DIR_CTX/lib/bash_execution_boundary.py"
+_EB_DECISION=''
+if [ -r "$_EB_PY" ]; then
+  _EB_OUT=$(
+    ulimit -v "${CLAUDE_HOOK_BOUNDARY_MEM_KB:-524288}" 2>/dev/null || true
+    CMD_INPUT="$COMMAND" timeout "${CLAUDE_HOOK_BOUNDARY_TIMEOUT:-5s}" \
+      "$PYTHON_BIN" "$_EB_PY" 2>/dev/null
+  )
+  if [ $? -eq 0 ]; then
+    _EB_DECISION=$(printf '%s' "$_EB_OUT" | "$PYTHON_BIN" -c '
+import json, sys
+try:
+    v = json.load(sys.stdin)
+except Exception:
+    raise SystemExit(0)
+if not isinstance(v, dict) or v.get("schema") != "bash-execution-boundary.v1":
+    raise SystemExit(0)
+verdict = v.get("verdict")
+if verdict not in ("PROVEN_INERT", "PROVEN_SAFE_REMOVAL", "FORBIDDEN_REMOVAL", "UNRESOLVED"):
+    raise SystemExit(0)
+if v.get("allowed") is True and verdict in ("PROVEN_INERT", "PROVEN_SAFE_REMOVAL"):
+    print("ALLOW")
+elif v.get("allowed") is False:
+    print("DENY " + verdict + " " + str(v.get("reason", ""))[:200])
+' 2>/dev/null)
+  fi
+  unset _EB_OUT
 fi
+case "$_EB_DECISION" in
+  ALLOW)
+    : ;;
+  "DENY "*)
+    echo "BLOCKED: removal-policy — ${_EB_DECISION#DENY }" >&2
+    echo "Command: $COMMAND" >&2
+    echo "REASON: every execution boundary must be provably inert or a provably non-filesystem removal (e.g. git rm --cached, docker container rm); this command has a boundary that is neither." >&2
+    exit 2 ;;
+  *)
+    # DEGRADED MODE. The analyzer is missing, crashed, timed out, or hit the
+    # memory ceiling, so nothing has been proven about this command. The same
+    # inversion applies here: allow ONLY what is provably plain.
+    #
+    # A literal-token test is not enough and was measured failing. Matching
+    # only rm|unlink|shred|srm let 23 of 360 known-dangerous forms through
+    # whenever the analyzer failed — every obfuscated command head carries no
+    # removal token at all (${R}${M}, "${R}m", $'\x72m', $'rm',
+    # r\<newline>m, r${EMPTY}m, /bin/r[mp], /bin/r?, /bin/{r,}m, C=r; C+=m;
+    # "$C"), and neither do the structurally incomplete forms (`bash -c`,
+    # `env -S`, `echo >`) whose missing operand is the whole danger.
+    #
+    # So the gate is now three questions, any YES denies:
+    #   1. does the raw text name a removal front end or a removal action?
+    #   2. does it carry an ASSEMBLY CHANNEL — expansion, substitution, glob,
+    #      brace, extglob/history bang, heredoc, or a line continuation — any
+    #      construct able to build a command head that is not written down?
+    #   3. does it END on a bare option or a dangling operator, i.e. is it
+    #      structurally incomplete with its payload unresolvable?
+    # Quotes alone are NOT an assembly channel and deliberately do not deny:
+    # `rg -n 'git reset --hard' docs` must keep flowing even here.
+    # The contract is that a broken analyzer denies MORE than the guard it
+    # replaced, never less.
+    # Question 1 lives in hooks/lib/pol_degraded_removal_reference.ere — the
+    # SINGLE definition the differential test (AC-R02-10) also consumes, so the
+    # "primary never laxer than degraded inside the removal-reference domain"
+    # invariant cannot drift between the two. An unreadable or empty pattern
+    # file is itself a degraded deployment and DENIES.
+    _RMREF_FILE="$HOOKS_DIR_CTX/lib/pol_degraded_removal_reference.ere"
+    _RMREF_RE=$(LC_ALL=C grep -v -e '^[[:space:]]*#' -e '^[[:space:]]*$' "$_RMREF_FILE" 2>/dev/null | head -1)
+    if [ -z "$_RMREF_RE" ]; then
+      echo "BLOCKED: removal-policy FAIL-CLOSED — the degraded removal-reference predicate at $_RMREF_FILE is missing or empty. Denied conservatively." >&2
+      echo "Command: $COMMAND" >&2
+      exit 2
+    fi
+    if printf '%s' "$COMMAND" | LC_ALL=C grep -qE "$_RMREF_RE" \
+       || printf '%s' "$COMMAND" | LC_ALL=C grep -qE '[]$`[?*{}!]|<<' \
+       || printf '%s' "$COMMAND" | LC_ALL=C grep -qE '\\$' \
+       || printf '%s' "$COMMAND" | LC_ALL=C grep -qE '(^|[[:blank:]])[-+][A-Za-z0-9=_-]*[[:blank:]]*$' \
+       || printf '%s' "$COMMAND" | LC_ALL=C grep -qE '[<>|&;][[:blank:]]*$'; then
+      echo "BLOCKED: removal-policy FAIL-CLOSED — the execution-boundary analyzer is unavailable or returned no usable verdict, and this command is not provably plain. Denied conservatively." >&2
+      echo "Command: $COMMAND" >&2
+      echo "REASON: repair the analyzer deployment at $_EB_PY; never widen this fallback to allow." >&2
+      exit 2
+    fi
+    unset _RMREF_RE _RMREF_FILE ;;
+esac
+unset _EB_DECISION
 
 # Block: npm install -g (strip comments first to avoid false positives)
 # Installing a package globally can replace a shared binary, trigger auto-upgrade,
