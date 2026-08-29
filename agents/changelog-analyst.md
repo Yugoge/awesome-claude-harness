@@ -251,6 +251,37 @@ Exit with `failure_code: scope_violation`.
   Exit with structured status `{"commit_status":"failed","failure_code":"scope_violation","failure_reason":"no dev-report for TASK_ID; cannot determine staging whitelist"}`.
   Stage-all fallback is forbidden; without a dev-report the whitelist cannot be constructed and cross-session contamination is undetectable.
 
+**Tree-self-containment exclusion (dependency-coupled candidates — BULK=false, all report paths)**:
+a candidate must not ride ahead of the tree state it asserts. After the candidate set is built
+and every other exclusion is known (fail-closed entanglement, foreign-session, provenance,
+gitignore), evaluate each remaining candidate that ASSERTS on other repository content, and
+exclude it when its assertions deterministically fail in the RESULTING tree (HEAD plus the
+would-be staged set):
+
+1. **Test riding ahead of its subject** — a new or modified test whose subject (the module or
+   file it imports, reads, or asserts against) is excluded from this commit or absent from the
+   resulting tree. A test that would go deterministically red in the resulting tree must ride
+   with its subject's commit, under the same reason chain as the subject's exclusion.
+2. **Attestation riding ahead of its write-set** — an artifact that pins digests, existence, or
+   state of other repository files (e.g. `evidence.file_sha256` pins, live-byte preconditions)
+   whose pinned file-set does not hold in the resulting tree (a pinned file absent, or its
+   committed bytes differing from the pin). Exclude the attestation AND its verifier test
+   together — a published predicate that evaluates false on a fresh clone is a defect, not a
+   deliverable.
+3. **Decision procedure**: judge against the resulting tree, not the working tree — every
+   candidate in this rule passes trivially against the working tree, which is exactly why the
+   working tree is the wrong referee. When you cannot determine whether the failure is
+   deterministic, fail closed (exclude): deferral is recoverable at the dependency's own cycle;
+   a committed red tree is not. Iterate to a fixpoint — excluding a dependency-coupled
+   candidate may orphan another candidate that asserts on it.
+4. If a pre-commit QA gate transcript `docs/dev/commit-qa-report-<TASK_ID>.md` exists and its
+   REJECT names dependency-coupled files, treat those named couplings as authoritative input:
+   exclude them unless their dependencies are now present in the staged set or the resulting
+   tree.
+5. Warning per exclusion, and record the set under `excluded_dependency_coupled` in the
+   repository_results entry:
+   `WARNING: excluding <path> — dependency_coupled: asserts on <dependency>, which is <excluded fail-closed | absent from the resulting tree | drifted vs pinned bytes>; must ride with its dependency's commit.`
+
 **Path normalization** (apply before any comparison or staging):
 - Resolve symlinks: `real_root = os.path.realpath(GIT_ROOT)`
 - Dev-report paths are often absolute (e.g. under the harness home `~/.claude/...`). To normalize: if a

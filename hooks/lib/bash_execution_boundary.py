@@ -951,6 +951,7 @@ def _ic(why, bool_=(), exec_=(), val=()):
 _KIND_LOOKUP = "operand_of_documentation_or_query_consumer"
 _KIND_SEARCH = "search_pattern_operand"
 _KIND_OUTPUT = "literal_output_text"
+_KIND_RELOCATE = "path_operand_of_non_executing_relocator"
 
 
 def _kind_for_why(why):
@@ -958,6 +959,8 @@ def _kind_for_why(why):
         return _KIND_SEARCH
     if why.startswith(_EMIT_WHY):
         return _KIND_OUTPUT
+    if why.startswith(_RELOCATE_WHY):
+        return _KIND_RELOCATE
     return _KIND_LOOKUP
 
 
@@ -968,6 +971,7 @@ _READ_WHY = "file read/transform: argv words are paths and format strings; the p
 _META_WHY = "path/metadata inspection: argv words are paths; results are printed, never executed"
 _DIGEST_WHY = "digest computation: argv words are paths hashed as bytes"
 _PRED_WHY = "predicate/arithmetic builtin: argv words are operands of a comparison or expression, never a command name"
+_RELOCATE_WHY = "file relocation/copy: argv words are source and destination paths renamed or copied as bytes; GNU mv/cp document no argv-derived exec facility"
 
 # DECLARED DATA VALUES (`val`). The ONE option-value position with an
 # affirmative proof of data-ness: the program reads this option's value as a
@@ -1177,6 +1181,33 @@ INERT_ARGV_CONSUMERS = {
     "look": _ic(_SEARCH_WHY, bool_=("-a", "-d", "-f")),
     "strings": _ic(_READ_WHY, bool_=("-a", "-f", "-o", "-p", "-U", "-z", "--all",
                                      "--print-file-name", "--include-all-whitespace")),
+    # ---- file relocation / copy -------------------------------------------
+    # GNU mv and cp rename or copy the bytes their operands NAME; neither
+    # documents any argv-derived execution facility (no --to-command, no -e,
+    # no exec hook), so an operand can never become a command head. Membership
+    # answers ONLY the removal-policy question — protected-path writes and
+    # moves stay under the runtime guard's path-aware model, which denies them
+    # independently of this table (the live-hook pins: protected-glob mv/cp
+    # BLOCK, unprotected mv/cp ALLOW). Optional-value options
+    # (--backup[=CONTROL], --update[=UPDATE], --preserve[=LIST],
+    # --reflink[=WHEN], --sparse[=WHEN], --debug) are deliberately undeclared
+    # per the val doctrine above: ambiguous arity is not a proof, so their
+    # values fall to the opaque-value scan.
+    "mv": _ic(_RELOCATE_WHY,
+              bool_=("-b", "-f", "-i", "-n", "-T", "-u", "-v", "-Z", "--force",
+                     "--interactive", "--no-clobber", "--no-target-directory",
+                     "--strip-trailing-slashes", "--verbose"),
+              val=("-t", "--target-directory", "-S", "--suffix")),
+    "cp": _ic(_RELOCATE_WHY,
+              bool_=("-a", "-b", "-d", "-f", "-H", "-i", "-l", "-L", "-n", "-p",
+                     "-P", "-r", "-R", "-s", "-T", "-u", "-v", "-x", "-Z",
+                     "--archive", "--copy-contents", "--dereference", "--force",
+                     "--interactive", "--link", "--no-clobber",
+                     "--no-dereference", "--no-target-directory",
+                     "--one-file-system", "--parents", "--recursive",
+                     "--remove-destination", "--strip-trailing-slashes",
+                     "--symbolic-link", "--verbose"),
+              val=("-t", "--target-directory", "-S", "--suffix")),
     # ---- file content read / transform ------------------------------------
     "cat": _ic(_READ_WHY, bool_=("-A", "-b", "-e", "-E", "-n", "-s", "-t", "-T",
                                  "-u", "-v", "--number", "--squeeze-blank",
