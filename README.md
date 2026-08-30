@@ -332,7 +332,7 @@ The orchestrator dispatches specialists by *describing the problem* — never th
 | **Develop** | `/dev` | Orchestrated single-pass development pipeline. | You have one clear, single-shot requirement to build. |
 | **Develop** | `/dev-command` | Command-authoring dev pipeline. | The thing you're building is itself a command or agent. |
 | **Develop** | `/dev-overnight` | Autonomous overnight loop. | A backlog to grind through unattended, all night. |
-| **Develop** | `/redev` | Re-dev a prior cycle with a revised context. | Re-running one cycle after feedback or a revised context. |
+| **Develop** | `/redev` | Re-attach the /dev workflow harness to the current in-conversation development need. | The /dev workflow context is already present; new requirement text is optional. |
 | **Ship** | `/close` | Release-readiness gate (QA verdict + optional Codex debate). | After dev finishes, before committing — the go/no-go gate. |
 | **Ship** | `/commit` | Surgical staging + conventional commit message + commit grant. | Once /close passes and you're ready to record the change. |
 | **Ship** | `/merge` | Bridge to target branch with pre-merge analyst grant. | After commit, to carry the change into a target branch. |
