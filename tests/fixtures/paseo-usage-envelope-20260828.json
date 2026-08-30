@@ -1,0 +1,77 @@
+{
+  "_comment": "Captured-envelope fixture derived from the live provider.usage.list.response reading of 2026-08-28T19:07:02Z (docs/dev/ticket-20260828-112025-b.md Evidence). Deterministic input for the BUILD-AC08 end-to-end chain: adapter --from-envelope -> ledger usage-ingest -> persisted per-account state -> scheduling decision. Contains >=1 available account row with a weekly window plus a live blind-window specimen (yugetang unavailable).",
+  "type": "session",
+  "message": {
+    "type": "provider.usage.list.response",
+    "requestId": "fixture-20260828-190702",
+    "fetchedAt": "2026-08-28T19:07:02Z",
+    "providers": [
+      {
+        "providerId": "claude",
+        "displayName": "Claude · orchestrade",
+        "status": "available",
+        "planLabel": "Max 20x",
+        "windows": [
+          {
+            "id": "five_hour",
+            "label": "Session",
+            "usedPct": 8,
+            "remainingPct": 92,
+            "resetsAt": "2026-08-29T00:00:00Z",
+            "tone": "ok"
+          },
+          {
+            "id": "weekly",
+            "label": "Weekly",
+            "usedPct": 14,
+            "remainingPct": 86,
+            "resetsAt": "2026-09-03T18:00:00Z",
+            "tone": "ok"
+          }
+        ],
+        "balances": [],
+        "details": [],
+        "error": null
+      },
+      {
+        "providerId": "claude-yugoge",
+        "displayName": "Claude · yugoge",
+        "status": "available",
+        "planLabel": "Max 20x",
+        "windows": [
+          {
+            "id": "weekly",
+            "label": "Weekly",
+            "usedPct": 16,
+            "remainingPct": 84,
+            "resetsAt": "2026-09-02T14:00:00Z",
+            "tone": "ok"
+          }
+        ],
+        "balances": [],
+        "details": [],
+        "error": null
+      },
+      {
+        "providerId": "claude-yugetang",
+        "displayName": "Claude · yugetang",
+        "status": "unavailable",
+        "planLabel": null,
+        "windows": [],
+        "balances": [],
+        "details": [],
+        "error": null
+      },
+      {
+        "providerId": "codex",
+        "displayName": "Codex",
+        "status": "available",
+        "planLabel": "pro",
+        "windows": [],
+        "balances": [],
+        "details": [],
+        "error": null
+      }
+    ]
+  }
+}

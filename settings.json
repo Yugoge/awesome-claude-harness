@@ -190,7 +190,13 @@
       "mcp__memory-server__open_nodes",
       "mcp__memory-server__read_graph",
       "mcp__memory-server__search_nodes",
-      "mcp__playwright__*"
+      "mcp__playwright__*",
+      "Bash(/root/bin/session-link-sync.sh:*)",
+      "Bash(/root/bin/paseo-timeline-healer.mjs:*)",
+      "Bash(node --disable-warning=DEP0040 /root/bin/paseo-timeline-healer.mjs:*)",
+      "Bash(/usr/local/bin/paseo-self-update --help:*)",
+      "Bash(/usr/local/bin/paseo-self-update --reset-state:*)",
+      "Bash(node scripts/paseo-usage-read.mjs:*)"
     ],
     "deny": [
       "Bash(*session_dirs.txt*)",
@@ -271,6 +277,7 @@
       "Skill(fswatch:*)",
       "Skill(merge:*)",
       "Skill(optimize:*)",
+      "Skill(paseo-daemon:*)",
       "Skill(playwright-helper:*)",
       "Skill(pull:*)",
       "Skill(push:*)",

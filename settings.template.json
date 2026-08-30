@@ -255,6 +255,7 @@
       "Skill(fswatch:*)",
       "Skill(merge:*)",
       "Skill(optimize:*)",
+      "Skill(paseo-daemon:*)",
       "Skill(playwright-helper:*)",
       "Skill(pull:*)",
       "Skill(push:*)",

@@ -1,0 +1,218 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "paseo-dossier.v1",
+  "title": "paseo-daemon per-managed-session dossier sidecar (blueprint F12/F13)",
+  "description": "Structured sidecar validated by scripts/paseo-daemon-ledger.py dossier-validate. Fail-closed: a dossier missing any required F12 field, or carrying a malformed seven-field decision-journal record, must never become a committed generation. The dossier is an index and checkpoint ONLY — authoritative evidence remains the session transcript and hash-verified artifact files.",
+  "type": "object",
+  "required": [
+    "schema",
+    "logical_task_id",
+    "session_incarnations",
+    "spec_fingerprint",
+    "lanes",
+    "ac_status",
+    "artifacts",
+    "event_watermark",
+    "last_confirmed_action",
+    "side_effects",
+    "permissions",
+    "routing_generation",
+    "next_legal_transition",
+    "verbatim_zone",
+    "derived_zone",
+    "decision_journal"
+  ],
+  "properties": {
+    "schema": { "const": "paseo-dossier.v1" },
+    "logical_task_id": { "type": "string", "minLength": 1 },
+    "session_incarnations": {
+      "description": "ALL paseo/claude session incarnations of this logical session",
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["kind", "id"],
+        "properties": {
+          "kind": { "enum": ["paseo_agent", "claude_session"] },
+          "id": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+    "spec_fingerprint": {
+      "type": "object",
+      "required": ["command_sha256", "spec_sha256"],
+      "properties": {
+        "command_sha256": { "$ref": "#/$defs/sha256" },
+        "spec_sha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "lanes": {
+      "description": "per-lane status and retry counts",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["lane_id", "status", "retries"],
+        "properties": {
+          "lane_id": { "type": "string", "minLength": 1 },
+          "status": { "type": "string", "minLength": 1 },
+          "retries": { "type": "integer", "minimum": 0 }
+        }
+      }
+    },
+    "ac_status": {
+      "description": "per-AC status keyed by unique AC id",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["ac_id", "status"],
+        "properties": {
+          "ac_id": { "type": "string", "minLength": 1 },
+          "status": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+    "artifacts": {
+      "description": "artifact paths + content hashes",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["path", "sha256"],
+        "properties": {
+          "path": { "type": "string", "minLength": 1 },
+          "sha256": { "$ref": "#/$defs/sha256" }
+        }
+      }
+    },
+    "event_watermark": {
+      "type": "object",
+      "required": ["processed_count", "observed_at"],
+      "properties": {
+        "processed_count": { "type": "integer", "minimum": 0 },
+        "last_event_id": { "type": ["string", "null"] },
+        "observed_at": { "$ref": "#/$defs/aware_ts" }
+      }
+    },
+    "last_confirmed_action": {
+      "type": "object",
+      "required": ["action"],
+      "properties": {
+        "action": { "type": "string", "minLength": 1 },
+        "artifact": { "type": ["string", "null"] }
+      }
+    },
+    "side_effects": {
+      "description": "side-effect ledger",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["desc", "at"],
+        "properties": {
+          "desc": { "type": "string", "minLength": 1 },
+          "at": { "$ref": "#/$defs/aware_ts" }
+        }
+      }
+    },
+    "permissions": {
+      "description": "permission states; only a live-revalidated unconsumed grant is executable",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "state"],
+        "properties": {
+          "id": { "type": "string", "minLength": 1 },
+          "state": {
+            "enum": ["pending", "denied", "granted_unconsumed", "consumed", "expired", "abandoned"]
+          }
+        }
+      }
+    },
+    "routing_generation": {
+      "type": "object",
+      "required": ["account", "model", "generation"],
+      "properties": {
+        "account": { "type": "string", "minLength": 1 },
+        "model": { "type": "string", "minLength": 1 },
+        "generation": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "next_legal_transition": { "type": "string", "minLength": 1 },
+    "interrupted_children": {
+      "description": "optional: children interrupted mid-flight (quota etc.); original agent IDs persisted for recovery-identity judgment",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["agent_id", "reason"],
+        "properties": {
+          "agent_id": { "type": "string", "minLength": 1 },
+          "reason": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+    "verbatim_zone": {
+      "description": "append-only original-text zone: user requirements / scope / AC / revisions / rejected commands + hook output, verbatim + hash; never rewritten",
+      "type": "object",
+      "required": ["entries"],
+      "properties": {
+        "entries": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["ts", "kind", "text", "sha256"],
+            "properties": {
+              "ts": { "$ref": "#/$defs/aware_ts" },
+              "kind": { "type": "string", "minLength": 1 },
+              "text": { "type": "string", "minLength": 1 },
+              "sha256": { "$ref": "#/$defs/sha256" }
+            }
+          }
+        }
+      }
+    },
+    "derived_zone": {
+      "description": "derived summaries; every entry explicitly marked derived_summary: true; never authoritative for scope/completion/authorization",
+      "type": "object",
+      "required": ["entries"],
+      "properties": {
+        "entries": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["derived_summary", "text"],
+            "properties": {
+              "derived_summary": { "const": true },
+              "text": { "type": "string" }
+            }
+          }
+        }
+      }
+    },
+    "decision_journal": {
+      "description": "append-only adjudication journal (F13): every record carries all seven fields; a malformed record fails validation and blocks generation-commit",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["actor", "time", "scope", "rationale", "evidence", "supersedes", "status"],
+        "properties": {
+          "actor": { "type": "string", "minLength": 1 },
+          "time": { "$ref": "#/$defs/aware_ts" },
+          "scope": { "type": "string", "minLength": 1 },
+          "rationale": { "type": "string", "minLength": 1 },
+          "evidence": { "type": "string", "minLength": 1 },
+          "supersedes": { "type": ["string", "null"] },
+          "status": { "enum": ["active", "superseded", "reversed"] }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "aware_ts": {
+      "description": "timezone-aware ISO-8601 timestamp; naive timestamps are rejected (repo defect history: aware/naive comparison)",
+      "type": "string",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}(:[0-9]{2}(\\.[0-9]+)?)?(Z|[+-][0-9]{2}:?[0-9]{2})$"
+    }
+  }
+}

@@ -1,13 +1,14 @@
 # fixtures
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-06-17T20:10:11Z*
-**Total entries**: 0
+*Last updated: 2026-08-28T21:17:21Z*
+**Total entries**: 1
 **Convention**: kebab
 
 ## Tree
 ```
 fixtures/
+├── `canary-tool-policy.v1.json` - JSON config: _fixture, _purpose, _contract, policy_version, default_action
 ```
 <!-- /AUTO:index-stats -->
 

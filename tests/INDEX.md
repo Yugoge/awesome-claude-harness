@@ -9,7 +9,7 @@
 ```
 tests/
 ├── fixtures/
-│   └── `canary-tool-policy.v1.json` - JSON config: _fixture, _purpose, _contract, policy_version, default_action
+│   ├── `canary-tool-policy.v1.json` - JSON config: _fixture, _purpose, _contract, policy_version, default_action
 ├── generated/
 │   ├── 20260704-134650/
 │   │   ├── `manifest.json` - JSON config: schema_version, task_id, generated_at, active_tests, archived_tests
