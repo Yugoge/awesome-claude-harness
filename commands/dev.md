@@ -809,6 +809,8 @@ baseline_dirty_snapshot=$(git -C "$CLAUDE_PROJECT_DIR" status --porcelain 2>/dev
 
 Both values MUST be passed into the dev dispatch payload body (see below). If the repo has no commits yet, `baseline_head_sha` will be empty — pass it as empty string, not omitted.
 
+**R1 dispatch precondition**: do not invoke the shared Dev agent until the provider has validated the exact declaration/binding described in Step 11. Every dispatch prompt carries one recognized `artifact_chain_role`; missing or unknown roles block report emission.
+
 **Use Task tool to invoke dev subagent with file paths only**:
 
 ```
@@ -823,6 +825,10 @@ Use Task tool with:
   CHECKPOINT MARKING: see agents/dev.md §Checkpoint Marking Contract. Mark every cp-NN done or waived before Stop or SubagentStop hook will block exit.
 
   You are the dev subagent. Follow agents/dev.md instructions precisely.
+
+  artifact_chain_role: <lifecycle_singular_parent|lifecycle_declared_member selected before dispatch>
+  artifact_chain_declaration: <exact provider-normalized object for lifecycle_singular_parent; omitted for member>
+  artifact_chain_binding: <null for singular; exact {parent_task_id,member_id,lineage_digest,attempt} for member>
 
   <DEV_SCORE_HEADER prepended here — score-inject output is placed AFTER the role declaration above and BEFORE the task instructions below, per spec 5.1 line 113: Injection position: after role declaration, before task instructions>
 
@@ -842,87 +848,65 @@ Use Task tool with:
 
 **Wait for dev subagent completion** before proceeding.
 
-### Step 11: Write Canonical Aggregate Dev-Report (Parallel-Dev Only)
+### Step 11: Publish the declared parent canonical and phase (R1)
 
-**Applies ONLY when N>1 parallel dev subagents were dispatched in Step 10.** Single-dev cycles SKIP this step entirely (the lone dev subagent writes `dev-report-<task-id>.json` directly).
+`artifact_chain_declaration.v1` is the sole authority for shape and membership.
+The orchestrator selects exactly one declaration before dispatch:
 
-**Procedural enforcement**: This step is gated by `pretool-aggregate-check.py` (PreToolUse Agent matcher). When `docs/dev/` contains 2+ per-worker dev-report files for the same `<task-id>` AND the canonical singular `docs/dev/dev-report-<task-id>.json` is missing, the next Agent dispatch (Step 13 QA) is BLOCKED with exit 2 until the orchestrator writes the aggregate. Shard detection uses BOTH naming patterns: role-first (`dev-report-<role>-<task-id>.json`) and task-first (`dev-report-<task-id>-<worker>.json`).
+| Produced lifecycle | `shape` | Exact declaration/report result |
+|---|---|---|
+| N == 1 | `singular` | one `singular_parent`; the Dev report is the parent canonical |
+| one requirement, N > 1 implementation workers | `parallel_dev` | parent five-pack plus N declaration-bound immutable worker Dev reports; one parent QA |
+| N > 1 requirement lanes | `requirement_fanout` | N full lane four-packs plus parent canonical/completion; parent ticket/context/QA are optional declared entries only |
 
-**Authoritative construction rule**: see the "Parallel Dev Aggregate" subsection below (Aggregate construction rule + Example aggregate JSON) for the full schema and union semantics. Summary:
-- `request_id` = `<task-id>`; `dev_report_path` = canonical singular path
-- `parallel_workers` = list of per-worker ids
-- `dev.status`, `dev.tasks_completed`, `dev.scripts_created`, `dev.permissions_to_add`, `dev.files_modified`, `dev.files_created`, `blocking_issues`, `recommendations` = unions of per-worker reports
-- `baseline_head_sha` = equality-verified across all workers (aggregate status = `"blocked"` if any worker disagrees, citing `baseline_head_sha` mismatch); value taken from orchestrator dispatch
-- `baseline_dirty_snapshot` = equality-verified across all workers (aggregate status = `"blocked"` if any worker disagrees, citing `baseline_dirty_snapshot` mismatch); value taken verbatim from orchestrator dispatch
-- `dev.observed_preexisting` = UNION of all per-worker `dev.observed_preexisting` lists
-- The orchestrator invokes `source venv/bin/activate && python3 scripts/aggregate-dev-report.py --task-id "$TASK_ID"` to write the initial canonical aggregate. Capture stdout JSON; action field will be `"aggregated"`, `"validated"`, or `"skipped"`. This initial invocation selects only the filename-declared Step 10 worker shards; iteration reports are never discovered by mtime, directory order, or a `latest` heuristic. Do NOT modify the `/commit` command implementation (`~/.claude/commands/commit.md`).
+Shape is never derived from `parallel_workers`, filenames, globs, shard count, or
+presence/absence heuristics. Before the first lifecycle dispatch, build the exact
+`artifact_chain_declaration.v1` (including immutable inventory, member lineage,
+baseline bindings, attempt-1 reservations, initial phase events and all four
+attempt fields), then normalize it through the read-only provider:
 
-**Single-dev cycles**: mark this todo step waived (skip). The aggregate-check hook does not fire for single-dev cycles because only one per-worker file pattern can match.
-
-#### Parallel Dev Aggregate (when dispatching N parallel dev subagents, N>1)
-
-When the orchestrator dispatches N parallel `dev` subagents (one per file-disjoint
-work item), EACH dev writes its own report to
-`docs/dev/dev-report-<task-id>-<worker-id>.json`. Downstream `/commit`
-(`~/.claude/commands/commit.md`) reads ONLY the canonical singular path
-`docs/dev/dev-report-<task-id>.json` and fails closed if it is missing
-(redev7 cycle could not self-deploy for this exact reason).
-
-**After ALL parallel devs return, the orchestrator MUST write a canonical
-aggregate `dev-report-<task-id>.json`** that unions the per-worker reports
-into a single artifact consumable by downstream `/commit`. This is an
-orchestrator-side rule; do NOT modify the `/commit` command implementation
-(`~/.claude/commands/commit.md`), the singular-filename consumer contract
-stays as-is.
-
-**Aggregate construction rule**:
-- `request_id` = `<task-id>` (literal, matches the cycle task-id)
-- `timestamp` = ISO-8601 of the aggregate write
-- `dev_report_path` = `docs/dev/dev-report-<task-id>.json` (the canonical path)
-- `parallel_workers` = list of per-worker ids `["<worker-id>", ...]`
-  (top-level field for traceability; sources the per-worker reports)
-- `baseline_head_sha` = equality-verified across all workers: assert every worker's `baseline_head_sha` equals the orchestrator's dispatch value; if any worker differs, set aggregate `dev.status = "blocked"` and append a `blocking_issues` entry citing `baseline_head_sha` mismatch. Value in the aggregate is taken from the orchestrator dispatch (not unioned from workers).
-- `baseline_dirty_snapshot` = equality-verified across all workers: assert every worker's `baseline_dirty_snapshot` equals the orchestrator's dispatch value (the `git status --porcelain` string captured pre-dispatch); if any worker differs, set aggregate `dev.status = "blocked"` and append a `blocking_issues` entry citing `baseline_dirty_snapshot` mismatch. Value in the aggregate is taken verbatim from the orchestrator dispatch.
-- `dev.status` = `"completed"` iff ALL workers reported `"completed"` **and** no `baseline_head_sha` / `baseline_dirty_snapshot` mismatch was found during equality verification above; otherwise `"blocked"` with rationale in `blocking_issues`
-- `dev.tasks_completed` = UNION of all per-worker `dev.tasks_completed`
-- `dev.scripts_created` = UNION of all per-worker `dev.scripts_created`
-- `dev.permissions_to_add` = UNION of all per-worker `dev.permissions_to_add`
-- `dev.files_modified` = UNION of all per-worker `dev.files_modified`
-- `dev.files_created` = UNION of all per-worker `dev.files_created`
-- `dev.observed_preexisting` = UNION of all per-worker `dev.observed_preexisting` lists (informational; QA reads this field from the aggregate)
-- `blocking_issues` = UNION of all per-worker `blocking_issues`
-- `recommendations` = UNION of all per-worker `recommendations`
-
-**Example aggregate JSON** (written by `source venv/bin/activate && python3 scripts/aggregate-dev-report.py --task-id $TASK_ID`):
-
-```json
-{
-  "request_id": "<task-id>",
-  "task_id": "<task-id>",
-  "timestamp": "<ISO-8601>",
-  "baseline_head_sha": "<orchestrator dispatch value — equality-verified across all workers>",
-  "baseline_dirty_snapshot": "<orchestrator dispatch value — equality-verified across all workers>",
-  "dev_report_path": "docs/dev/dev-report-<task-id>.json",
-  "parallel_workers": ["pcwd", "ppush"],
-  "dev": {
-    "status": "completed",
-    "tasks_completed": [],
-    "scripts_created": [],
-    "permissions_to_add": [],
-    "files_modified": [],
-    "files_created": [],
-    "observed_preexisting": []
-  },
-  "blocking_issues": [],
-  "recommendations": []
-}
+```bash
+DECLARATION_RESULT="$(python3 scripts/aggregate-dev-report.py \
+  --project-dir "$CLAUDE_PROJECT_DIR" --task-id "$TASK_ID" \
+  --declaration-file "$DECLARATION_INPUT" --validate-declaration-only)" || exit 2
 ```
 
-**Single-dev path is unaffected** (do NOT add aggregate logic for N=1):
-when only one dev was dispatched, that dev writes
-`dev-report-<task-id>.json` directly and the orchestrator does NOT write an
-additional aggregate (that would clobber). The aggregate rule applies ONLY
-when N>1 parallel devs were dispatched.
+Retain the returned declaration, `lineage_digest`, `phase_digest`, and exact
+paths. `singular` dispatches `artifact_chain_role=lifecycle_singular_parent` and
+the complete provider-returned declaration; the agent copies it exactly into the
+single report. Each parallel member dispatches
+`artifact_chain_role=lifecycle_declared_member` with only the exact
+`artifact_chain_binding={parent_task_id,member_id,lineage_digest,attempt}`. A
+member never binds mutable `phase_digest` or `declaration_digest`.
+
+After immutable member Dev publication, promote each reservation to its closed
+`immutable_member` ledger row and append exact evidence-bound phase events under
+canonical SHA + phase-digest CAS. For a missing audited parallel parent canonical,
+only the lifecycle owner/LANE-F uses an explicit transient declaration and
+`--expect-canonical-absent`; the provider creates canonical+declaration in one
+replace and never fabricates ticket/context/QA/completion:
+
+```bash
+python3 scripts/aggregate-dev-report.py \
+  --project-dir "$CLAUDE_PROJECT_DIR" --task-id "$TASK_ID" \
+  --declaration-file "$DECLARATION_INPUT" --expect-canonical-absent
+```
+
+Existing parallel phase changes use an explicit next declaration plus both
+`--expected-canonical-sha256` and `--expected-phase-digest`. Existing singular
+phase-only changes use `--update-declaration-only` with the same two CAS values.
+Every writer uses the one shared task lock. No sidecar is authoritative.
+
+Before parent QA, every active member must be `awaiting_qa` or already
+`qa_pass`; an implementation-QA run has at least the member(s) under current
+review in `awaiting_qa`, while a later final-close QA may see all members already
+`qa_pass`. `needs_review`/`retry_dispatched`/`dev_completed` still block either
+dispatch. A parallel-dev parent QA must publish one closed
+`parallel_dev_worker_outcomes.v1` object with exact parent/lineage/prior-phase
+identity and `all` or valid `subset` coverage.
+The orchestrator expands the outcomes, appends `qa_pass|needs_review` events for
+all active workers, and applies the next declaration under CAS before continuing.
+Requirement-fanout consumes each exact lane QA relationship instead.
 
 ### Step 12: Validate Dev Implementation
 
@@ -1216,16 +1200,31 @@ jq -s '.[0] * {
 
 **Return to Step 10** with new context JSON
 
-**Retry report naming (parallel-dev cycles, OPTIONAL convention)**:
+**Declared retry publication (mandatory)**:
 
-A retry lane MAY write its report as
-`docs/dev/dev-report-iter<N>-<TASK_ID>-<lane>.json` so retry evidence is
-distinguishable from the immutable initial shard. This is a naming convention
-only: there is NO promotion barrier, NO lineage declaration, and NO
-re-aggregation requirement before QA. The `iter<N>-` filename prefix matches
-none of the worker-shard patterns in `scripts/aggregate-dev-report.py` /
-`hooks/pretool-aggregate-check.py`, so such a report is never mistaken for an
-initial worker shard.
+Retries are never accepted from an optional filename convention. In the same
+canonical-SHA/current-phase-digest CAS mutation as `retry_dispatched`, append the
+closed reservation for attempt N+1. Immutable-member retry path is exactly
+`docs/dev/dev-report-iter<N>-<parent-task-id>-<member-id>.json`, is create-only,
+and is promoted only after its full-file and stable-projection hashes are placed
+in an `immutable_member` ledger row. Mutable singular retries reuse the one
+canonical path: reserve with `expected_absent=false`, then atomically publish the
+transient new report body plus its `mutable_singular` base64 stable-projection
+snapshot, ledger row, current alias, and `dev_completed` event. Undeclared retry
+artifacts, gaps, changed prior bytes, stale CAS, or invisible/no-promotion retries
+are contract failures.
+
+The singular publication transaction supplies both transient objects explicitly;
+neither input becomes a sidecar:
+
+```bash
+python3 scripts/aggregate-dev-report.py \
+  --project-dir "$CLAUDE_PROJECT_DIR" --task-id "$TASK_ID" \
+  --declaration-file "$NEXT_DECLARATION_INPUT" --update-declaration-only \
+  --report-file "$TRANSIENT_REPORT_INPUT" \
+  --expected-canonical-sha256 "$CURRENT_CANONICAL_SHA256" \
+  --expected-phase-digest "$CURRENT_PHASE_DIGEST"
+```
 
 **Iteration tracking**: Update TodoWrite with iteration number
 
@@ -1329,45 +1328,26 @@ Development completed successfully!
 
 **Save report to**: `docs/dev/completion-<timestamp>.md`
 
-**Codex-native artifact postcondition (hard check before completion)**:
+**Declared artifact-chain postcondition (hard check before completion)**:
 
-Before `/dev` or `/redev` may be treated as complete, invoke the shared read-only
-resolver from the project root and retain its JSON as `ARTIFACT_CHAIN`:
+Invoke only the shared read-only resolver with explicit root and exact parent id:
 
 ```bash
 ARTIFACT_CHAIN="$(python3 scripts/resolve-dev-artifact-chain.py \
-  --task-id "$TASK_ID" --project-dir "$CLAUDE_PROJECT_DIR")" || exit 2
+  --project-dir "$CLAUDE_PROJECT_DIR" --task-id "$TASK_ID")" || exit 2
 ```
 
-The fixed entrypoint contract is
-`scripts/resolve-dev-artifact-chain.py --task-id <id> --project-dir <root>`.
-Completion requires process exit 0 and top-level `status == "pass"`; exit 2 or
-`status == "fail"` blocks with the resolver's exact `errors[]`. Do not reproduce
-the validator with ad-hoc file tests. The same result object (`mode`, `lanes`,
-`report_paths`, `artifact_paths`, `commit_whitelist_artifacts`, and `qa_inputs`)
-is the downstream handoff used by `/close` and normal `/commit`.
-
-- **Single-lane cycle (N == 1):** `mode == "singular"` preserves the existing
-  five-artifact contract: parent ticket, context, dev-report, QA-report, and
-  completion are required with the existing identity and nested-status checks.
-- **Fan-out cycle (N > 1):** `mode == "fanout"` requires, for every entry in
-  `lanes`, its lane ticket, context, dev-report, and passing QA-report, plus only
-  the parent canonical aggregate dev-report and parent completion. The parent
-  ticket, context, and QA-report are optional; their absence is valid, while any
-  present optional parent artifact must validate. Never create, copy, or invent
-  a parent ticket/context/QA-report to satisfy a singular-shaped check. The
-  completion must index the canonical report and every lane artifact.
-- Artifact identities, nested `dev.status == "completed"` /
-  `qa.status == "pass"`, exact lane-set/provenance/file-union freshness, and
-  malformed/missing artifact handling are owned by the resolver. A failed lane
-  fails the parent chain.
-- If `claude_code_required = true`, context/report metadata must record that flag
-  or a structured `claude_code_consult` failure/unavailable status in addition
-  to the resolver postcondition.
-
-Subagent final messages, lifecycle records, and JSON-like stdout are not
-completion artifacts. The resolver is read-only: this completion check must not
-repair, refresh, or fabricate any artifact.
+Require `schema_version == "artifact_chain_result.v2"`, exit 0, and
+`status == "pass"`. Retain the entire result. Branch on `shape`; `mode` is only
+the deterministic compatibility alias (`singular`, `parallel_dev`, `fanout`).
+Consume `parent`, `lanes`, `excluded_lanes`, `report_paths`, `qa_inputs`, and
+`commit_whitelist_artifacts` exactly as returned. Never reconstruct a path,
+normalize evidence, glob a lane, fabricate a singular canonical, or accept an
+undeclared retry. Both parallel shapes have one parent completion, one later
+parent `/close`, and one parent `/commit`; members are never independently
+closeable. The resolver is read-only and reports exact root/parent/lineage/phase,
+phase-conditioned artifact validity, baseline/freshness, attempt history, and
+closed parent-QA outcomes.
 
 **Workflow update**:
 

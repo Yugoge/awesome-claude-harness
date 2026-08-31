@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""PostToolUse: record successful validated restart SendMessage calls."""
+"""PostToolUse: record the structured result of validated restart sends."""
 
 from __future__ import annotations
 
@@ -22,11 +22,19 @@ def main() -> int:
     params = payload.get("tool_input") or {}
     session_id = payload.get("session_id")
     agent_id = params.get("to") if isinstance(params, dict) else None
+    send_tool_use_id = payload.get("tool_use_id") or payload.get("toolUseId")
     try:
-        view = restart.mark_dispatched(str(session_id or ""), str(agent_id or ""))
+        view = restart.record_send_result(
+            str(session_id or ""), str(agent_id or ""), str(send_tool_use_id or ""),
+            payload.get("tool_response"),
+        )
     except restart.RestartError:
         return 0
-    print(f"RESTART DISPATCH RECORDED: {agent_id}; incomplete={len(view['incomplete_agent_ids'])}")
+    row = next(item for item in view["candidates"] if item.get("agent_id") == agent_id)
+    print(
+        f"RESTART SEND RESULT RECORDED: {agent_id}; status={row['status']}; "
+        f"incomplete={len(view['incomplete_agent_ids'])}"
+    )
     return 0
 
 

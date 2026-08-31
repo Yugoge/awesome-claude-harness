@@ -7,6 +7,7 @@ lib/closeout.py.
 
 Public surface:
     load_contract(session_id, cycle_id) -> dict | None
+    type_strict_json_equal(left, right) -> bool
     validate(record, schema_name) -> Result
     validate_required_call(contract, role, pipeline_id, mode, step) -> Result
     iter_matching_required_calls(contract, step, role, pipeline_id, mode)
@@ -125,8 +126,236 @@ def load_contract(session_id: str, cycle_id: int) -> Optional[dict]:
 
 
 # ---------------------------------------------------------------------------
-# Schema validation (with required_when_ui pre-pass)
+# Schema validation (with deterministic report-projection pre-pass)
 # ---------------------------------------------------------------------------
+
+
+_MISSING = object()
+
+
+def type_strict_json_equal(left, right) -> bool:
+    """Compare JSON-shaped values without Python's scalar coercions.
+
+    ``bool`` is a subclass of ``int`` in Python and ``1 == 1.0`` is true, so a
+    plain equality check is not a faithful JSON contract comparison.  Require
+    the exact node type at every level before recursively comparing objects
+    and arrays.  Object key order is irrelevant; array order is significant.
+    The inputs are only read and are never normalized or mutated.
+    """
+    if type(left) is not type(right):
+        return False
+    if isinstance(left, dict):
+        return (
+            left.keys() == right.keys()
+            and all(type_strict_json_equal(left[key], right[key]) for key in left)
+        )
+    if isinstance(left, list):
+        return (
+            len(left) == len(right)
+            and all(type_strict_json_equal(a, b) for a, b in zip(left, right))
+        )
+    return left == right
+
+
+def _nested_value(record: dict, path: tuple[str, ...]):
+    value = record
+    for key in path:
+        if not isinstance(value, dict) or key not in value:
+            return _MISSING
+        value = value[key]
+    return value
+
+
+def _json_type_name(expected_type: type) -> str:
+    return {
+        bool: 'boolean',
+        dict: 'object',
+        list: 'array',
+        str: 'string',
+    }.get(expected_type, expected_type.__name__)
+
+
+def _projection_prefix(schema_name: str) -> str:
+    return f'projection {schema_name}'
+
+
+def _check_projection_header(record: dict, schema_name: str) -> list[str]:
+    """Check the two source-free fields shared by both v1 report contracts."""
+    errors: list[str] = []
+    prefix = _projection_prefix(schema_name)
+    version = record.get('report_version', _MISSING)
+    if type(version) is not int or version != 1:
+        errors.append(
+            f"{prefix}: flat field 'report_version' must be literal integer 1"
+        )
+    task_id = record.get('task_id', _MISSING)
+    if type(task_id) is not str or not task_id:
+        errors.append(
+            f"{prefix}: flat field 'task_id' must be a non-empty string "
+            "(top-level identity; no nested alias)"
+        )
+    return errors
+
+
+def _check_projected_field(
+    record: dict,
+    schema_name: str,
+    flat_field: str,
+    source_path: tuple[str, ...],
+    source_type: type,
+    *,
+    source_must_be_non_empty: bool = False,
+    projected_value=_MISSING,
+) -> list[str]:
+    """Validate one flat alias against its canonical nested source."""
+    prefix = _projection_prefix(schema_name)
+    source_name = '.'.join(source_path)
+    source = _nested_value(record, source_path)
+    if source is _MISSING:
+        return [
+            f"{prefix}: canonical source '{source_name}' missing for flat field "
+            f"'{flat_field}'"
+        ]
+    if type(source) is not source_type or (source_must_be_non_empty and not source):
+        qualifier = 'non-empty ' if source_must_be_non_empty else ''
+        return [
+            f"{prefix}: canonical source '{source_name}' must be an exact "
+            f"{qualifier}JSON {_json_type_name(source_type)} for flat field "
+            f"'{flat_field}'"
+        ]
+    if flat_field not in record:
+        return [
+            f"{prefix}: flat field '{flat_field}' missing for canonical source "
+            f"'{source_name}'"
+        ]
+    expected = source if projected_value is _MISSING else projected_value
+    actual = record[flat_field]
+    if not type_strict_json_equal(actual, expected):
+        return [
+            f"{prefix}: flat field '{flat_field}' must type-strictly equal "
+            f"canonical source '{source_name}'"
+        ]
+    return []
+
+
+def _check_dev_report_projection(record: dict) -> list[str]:
+    """Validate the deterministic dev-report.v1 compatibility projection."""
+    schema_name = 'dev-report.v1'
+    errors = _check_projection_header(record, schema_name)
+
+    source_status = _nested_value(record, ('dev', 'status'))
+    status_map = {
+        'completed': 'completed',
+        'blocked': 'blocked',
+        'needs_review': 'partial',
+    }
+    if source_status is _MISSING:
+        errors.append(
+            f"{_projection_prefix(schema_name)}: canonical source 'dev.status' "
+            "missing for flat field 'status'"
+        )
+    elif type(source_status) is not str or source_status not in status_map:
+        errors.append(
+            f"{_projection_prefix(schema_name)}: canonical source 'dev.status' "
+            f"has unsupported value {source_status!r} for flat field 'status'"
+        )
+    else:
+        errors.extend(_check_projected_field(
+            record,
+            schema_name,
+            'status',
+            ('dev', 'status'),
+            str,
+            projected_value=status_map[source_status],
+        ))
+
+    for flat_field, source_path, source_type, non_empty in (
+        ('files_modified', ('dev', 'files_modified'), list, False),
+        ('files_created', ('dev', 'files_created'), list, False),
+        (
+            'root_cause_addressed',
+            ('dev', 'git_rationale', 'how_fix_addresses_root'),
+            str,
+            True,
+        ),
+        ('ac_status', ('dev', 'ac_status'), dict, False),
+    ):
+        errors.extend(_check_projected_field(
+            record,
+            schema_name,
+            flat_field,
+            source_path,
+            source_type,
+            source_must_be_non_empty=non_empty,
+        ))
+    return errors
+
+
+def _check_qa_report_projection(record: dict) -> list[str]:
+    """Validate the deterministic qa-report.v1 compatibility projection."""
+    schema_name = 'qa-report.v1'
+    errors = _check_projection_header(record, schema_name)
+    if 'status' in record:
+        errors.append(
+            f"{_projection_prefix(schema_name)}: top-level field 'status' is "
+            "forbidden; flat field 'verdict' projects canonical source 'qa.status'"
+        )
+
+    source_status = _nested_value(record, ('qa', 'status'))
+    accepted_statuses = {'pass', 'warning', 'fail'}
+    if source_status is _MISSING:
+        errors.append(
+            f"{_projection_prefix(schema_name)}: canonical source 'qa.status' "
+            "missing for flat field 'verdict'"
+        )
+    elif type(source_status) is not str or source_status not in accepted_statuses:
+        errors.append(
+            f"{_projection_prefix(schema_name)}: canonical source 'qa.status' "
+            f"has unsupported value {source_status!r} for flat field 'verdict'"
+        )
+    else:
+        errors.extend(_check_projected_field(
+            record,
+            schema_name,
+            'verdict',
+            ('qa', 'status'),
+            str,
+        ))
+
+    for flat_field, source_path, source_type in (
+        ('evidence_summary', ('qa', 'evidence_summary'), dict),
+        ('ui_pipeline', ('qa', 'ui_pipeline'), bool),
+    ):
+        errors.extend(_check_projected_field(
+            record,
+            schema_name,
+            flat_field,
+            source_path,
+            source_type,
+        ))
+
+    # ac_status is an optional QA schema alias.  Once emitted, however, its
+    # canonical nested source is mandatory and must match exactly.
+    if 'ac_status' in record:
+        errors.extend(_check_projected_field(
+            record,
+            schema_name,
+            'ac_status',
+            ('qa', 'ac_status'),
+            dict,
+        ))
+    return errors
+
+
+def _check_report_projection(record: dict, schema_name: str) -> list[str]:
+    """Dispatch the v1 report projection pre-pass in a stable field order."""
+    if not isinstance(record, dict):
+        return [f'{_projection_prefix(schema_name)}: report must be a JSON object']
+    if schema_name == 'dev-report.v1':
+        return _check_dev_report_projection(record)
+    if schema_name == 'qa-report.v1':
+        return _check_qa_report_projection(record)
+    return []
 
 
 def _required_when_ui_keys(schema: dict) -> list[str]:
@@ -221,6 +450,13 @@ def validate(record: dict, schema_name: str) -> dict:
 
     if schema is None:
         return _result(False, [f"schema '{schema_name}' not registered"], 'fail')
+
+    # A projection contradiction is a self-contained report-contract failure,
+    # not validator infrastructure.  Return it before the optional Draft7
+    # engine so jsonschema unavailability can never turn known drift into SKIP.
+    errors = _check_report_projection(record, schema_name)
+    if errors:
+        return _result(False, errors, 'fail')
 
     errors = _check_required_when_ui(record, _required_when_ui_keys(schema))
     errors.extend(_check_evidence_taxonomy(record))
@@ -476,17 +712,23 @@ def _gate_result(status: str, schema, errors, reason: str) -> dict:
     }
 
 
-# Tell-tale substrings that mark a :func:`validate` ok=False result as a
+# Exact forms that mark a :func:`validate` ok=False result as a
 # schema-INFRASTRUCTURE failure (validator could not run) rather than a genuine
-# schema violation. Sourced verbatim from validate()'s own error strings:
+# schema violation. They are matched only when the result has one error and the
+# complete error has one of these forms; user-controlled schema/projection
+# diagnostics containing the same words remain authoritative failures.
 #   - 'schema_registry error:'  -> registry raised (validate() line ~220)
 #   - 'not registered'          -> schema not registered (validate() line ~223)
 #   - 'validator raised:'       -> Draft7Validator threw (_run_jsonschema line ~211)
-_INFRA_ERROR_TELLS = (
-    'schema_registry error:',
-    'not registered',
-    'validator raised:',
-)
+
+
+def _is_exact_infrastructure_error(error) -> bool:
+    text = str(error)
+    if text.startswith('schema_registry error:'):
+        return True
+    if text.startswith("schema '") and text.endswith("' not registered"):
+        return True
+    return text.startswith('validator raised:')
 
 
 def _skip_reason_if_unvalidatable(result: dict) -> Optional[str]:
@@ -505,8 +747,8 @@ def _skip_reason_if_unvalidatable(result: dict) -> Optional[str]:
     if result.get('ok') and result.get('severity') == 'warn':
         return 'validator unavailable (jsonschema/Draft7Validator missing) — cannot validate'
     if not result.get('ok'):
-        joined = ' '.join(str(e) for e in (result.get('errors') or []))
-        if any(tell in joined for tell in _INFRA_ERROR_TELLS):
+        errors = result.get('errors') or []
+        if len(errors) == 1 and _is_exact_infrastructure_error(errors[0]):
             return 'schema infra error (registry/schema-load/validator exception) — cannot validate'
     return None
 

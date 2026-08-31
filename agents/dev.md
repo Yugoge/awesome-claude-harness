@@ -488,6 +488,29 @@ This is NOT QA's job — QA does thorough verification. This is a basic sanity c
 
 If either check fails and you cannot fix it, report `"status": "blocked"` instead of `"status": "success"`.
 
+#### Negative repository claims require a bound receipt (MANDATORY)
+
+Do not report a repository path/basename as absent from `grep`, raw `find`, an
+empty stdout, or a scan rooted by cwd. Produce the evidence with
+`scripts/negative-evidence.py scan`, using the dispatch-supplied absolute final
+context and immutable parent-admission paths, their exact external raw digests,
+the fixed authority-projection digest, the exact registered scan root, explicit
+root-relative scopes/prunes, a literal target, an exact positive control, and
+bounded timeout/byte/file limits. Do not fabricate, refresh, or self-compute an
+authority digest from mutable/scanned state.
+
+A Dev report negative claim MUST include `receipt_path`, externally computed
+`receipt_sha256`, `target_kind`, `target`, `conclusion`, `authority_file`,
+`authority_sha256`, `authority_projection_sha256`, `contract_context`, and
+`context_sha256`. Only a schema-valid exit-0 receipt whose conclusion is
+`absent` supports absence. Any `unknown`, nonzero, stderr, timeout, truncation,
+duplicate, control failure, exclusion, authority/schema/root/repository/HEAD/
+spec/cycle drift, manifest/read/decode error, or verify failure is
+inconclusive; report it truthfully and do not turn it into success. If consuming
+an existing receipt, validate it through `hooks/lib/contract_runtime.py` as
+`negative-evidence.v1` first, then run the CLI `verify` subcommand against the
+current bytes and external bindings.
+
 ---
 
 ## Score-injection echo contract (M2 / AC-02 — task 20260524-205206)
@@ -507,9 +530,93 @@ When the orchestrator prepends a score-inject block to your dispatch prompt, the
 
 ## Output Format
 
+## R1 artifact-chain role and evidence contract
+
+Every dispatch supplies exactly one `artifact_chain_role`; missing/unknown roles
+block report emission:
+
+- `lifecycle_singular_parent`: copy the complete provider-returned
+  `artifact_chain_declaration.v1` exactly to the top-level
+  `artifact_chain_declaration`. Do not recompute or normalize it. The initial
+  report uses its one mutable-singular attempt reservation; the orchestrator
+  promotes the report under CAS. On retry, emit the transient report body only
+  at the orchestrator-supplied provider input; `--report-file` and the explicit
+  next declaration are atomically applied to the same canonical, never written
+  as a retry file or sidecar.
+- `lifecycle_declared_member`: emit top-level `artifact_chain_binding` with
+  exactly `parent_task_id`, `member_id`, immutable `lineage_digest`, and integer
+  `attempt`. Emit no full declaration and never bind mutable `phase_digest` or
+  `declaration_digest`. Write only the exact reservation path supplied by the
+  orchestrator; retry writes are create-only when declared immutable attempts.
+- `overnight_pipeline_intermediate`: emit top-level
+  `artifact_chain_declaration: null` plus the supplied session/cycle/pipeline
+  identity. It is not an R1 lifecycle canonical and cannot enter `/close` or
+  `/commit`.
+
+All artifact-chain evidence fields live only inside the optional top-level
+`artifact_chain_evidence` object. The stable Dev evidence is
+`stable_dev_projection.v1`: remove only top-level
+`artifact_chain_declaration` and `artifact_chain_evidence`, then serialize the
+unchanged report with
+`json.dumps(ensure_ascii=False,sort_keys=True,separators=(",",":"),allow_nan=False)`
+and UTF-8. Never normalize Unicode, newlines, paths, or dirty-snapshot evidence.
+Immutable-member records bind both full-file and stable-projection hashes;
+mutable-singular records forbid a full canonical hash and retain exact canonical
+base64 projection bytes in the one embedded attempt ledger. These R1 fields are
+additive to, and must preserve, the mandatory `dev-report.v1` compatibility
+projection below.
+
+### v1 compatibility projection (MANDATORY for every new report)
+
+The nested `dev` object remains the canonical operational record. Every NEW
+Dev report MUST also emit the one flat `dev-report.v1` compatibility projection
+below; `report_version` is the literal integer `1`, never a string or boolean.
+Populate the nested sources first, then copy their JSON values to the flat
+aliases without coercion, normalization, sorting, default injection, or input
+mutation. The only transformation is the status map
+`completed -> completed`, `blocked -> blocked`, `needs_review -> partial`.
+
+| Flat field | Canonical source |
+|---|---|
+| `status` | `dev.status` through the status map above |
+| `files_modified` | `dev.files_modified` (same list and order) |
+| `files_created` | `dev.files_created` (same list and order) |
+| `root_cause_addressed` | `dev.git_rationale.how_fix_addresses_root` (same non-empty string) |
+| `ac_status` | `dev.ac_status` (same object) |
+
+`task_id` remains the existing non-empty top-level identity; there is no nested
+alias for it. `dev.git_rationale.how_fix_addresses_root` is the **only** nested
+root-cause narrative source: do NOT create `dev.root_cause_addressed`. A flat
+value that disagrees with its named source is an invalid report rather than a
+choice between two authorities.
+
+<!-- report-projection-example:start -->
+```json
+{
+  "report_version": 1,
+  "request_id": "20260101-120000-example",
+  "task_id": "20260101-120000-example",
+  "status": "completed",
+  "files_modified": ["hooks/lib/example.py"],
+  "files_created": [],
+  "root_cause_addressed": "The shared contract boundary now enforces the producer invariant.",
+  "ac_status": {"AC-01": "met"},
+  "dev": {
+    "status": "completed",
+    "files_modified": ["hooks/lib/example.py"],
+    "files_created": [],
+    "ac_status": {"AC-01": "met"},
+    "git_rationale": {
+      "how_fix_addresses_root": "The shared contract boundary now enforces the producer invariant."
+    }
+  }
+}
+```
+<!-- report-projection-example:end -->
+
 **Task-ID Convention** (canonical from /redev5 onward): the `task-id` is a single literal string (e.g. `20260426-095000-wid`) that appears identically in (a) artifact filename suffix, (b) `request_id` field of every artifact JSON, (c) `task_id` field of every artifact JSON, (d) completion-report heading 1, (e) all artifact JSON files. No prefixed forms (`dev-`, `qa-`, `ba-`, `ui-`) are permitted in NEW artifacts. Past artifacts are not retroactively rewritten.
 
-**Top-level non-null lists** (CRITICAL): `dev.files_modified` and `dev.files_created` MUST be non-null lists at the `dev` root level (in addition to any per-task `tasks_completed[].files_*` fields). Empty list `[]` is the documented acceptable value for no-edit cycles. `commit.sh` closure detection treats `null` as a missing field and refuses the report.
+**Top-level non-null lists** (CRITICAL): `dev.files_modified` and `dev.files_created` MUST be non-null lists at the `dev` root level (in addition to any per-task `tasks_completed[].files_*` fields), and the flat `files_modified` / `files_created` aliases MUST be exact copies. Empty list `[]` is the documented acceptable value for no-edit cycles. `commit.sh` closure detection treats `null` as a missing field and refuses the report.
 
 **Git-diff derivation (MANDATORY)**: `dev.files_modified` and `dev.files_created` MUST be derived from git commands run at the end of your implementation, before writing the report — NOT from work-tree inspection of expected state.
 
@@ -585,8 +692,14 @@ The dev report MUST be written to the filesystem so QA can read it directly. Als
 
 ```json
 {
+  "report_version": 1,
   "request_id": "<task-id>",
   "task_id": "<task-id>",
+  "status": "completed|blocked|partial",
+  "files_modified": [],
+  "files_created": [],
+  "root_cause_addressed": "Calculate timeout based on actual measurements, not arbitrary reduction",
+  "ac_status": {"AC-01": "met|not_met|n/a"},
   "timestamp": "ISO-8601",
   "baseline_head_sha": "<git rev-parse HEAD at dispatch time, or empty string if unborn repo>",
   "baseline_dirty_snapshot": "<git status --porcelain output at dispatch time, or empty string>",
@@ -602,6 +715,7 @@ The dev report MUST be written to the filesystem so QA can read it directly. Als
     "files_modified": [],
     "files_created": [],
     "observed_preexisting": [],
+    "ac_status": {"AC-01": "met|not_met|n/a"},
     "tasks_completed": [
       {
         "id": 1,

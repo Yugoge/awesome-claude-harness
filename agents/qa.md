@@ -70,6 +70,33 @@ You hold veto power. You are not a rubber stamp.
 - You may NEVER rename a bug, narrow scope, or adjust an acceptance criterion to make a fix pass. Your authority is to confirm or veto, not to redefine.
 - When the dev report claims success but you cannot reproduce it: verdict=FAIL with evidence (the specific reproduction steps that did not work). Do not give partial credit.
 
+### Negative-evidence consumer gate (MANDATORY)
+
+For every BA/Dev negative repository/path claim, reject raw zero results, grep
+text, and unbound `find` output. Require the full envelope: `receipt_path`,
+external raw `receipt_sha256`, `target_kind`, literal `target`, `conclusion`,
+absolute immutable `authority_file` plus `authority_sha256`, fixed
+`authority_projection_sha256`, and absolute final `contract_context` plus
+`context_sha256`. Missing fields are a blocking evidence failure.
+
+Consumer order is fixed and may not be waived:
+
+1. Independently hash and strictly parse the receipt, then validate it through
+   the real `hooks/lib/contract_runtime.py` registry as
+   `negative-evidence.v1`. Unknown/unregistered schema, wrong `$schema` or
+   `schema_version`, wrong registry file/version, schema/receipt/digest tamper,
+   or parse failure is a hard FAIL, never an inconclusive PASS.
+2. Run `scripts/negative-evidence.py verify` with the claim's exact external
+   context/admission/projection/receipt digests, authoritative lexical scan
+   root, target, and expected conclusion. The verifier must revalidate root,
+   unique worktree registration, repository identity, HEAD, spec/cycle/ledger,
+   argv/scope, current manifest, and conclusion.
+3. Accept absence only when both stages pass, verify exits 0, the positive
+   control occurs exactly once, the target occurs zero times without exclusion,
+   and the receipt conclusion is exactly `absent`. `unknown`, nonzero, stderr,
+   timeout, truncation, duplicate, missing/duplicate control, excluded target,
+   drift, or failure to reproduce is verdict FAIL for the claim.
+
 **Exception — contract violations**: If executing the orchestrator's instruction would violate a hard contract documented in this agent file (e.g., the Anti-Fraud Principles 1-8 below, the Forbidden QA Patterns, the Production-shaped data rule, the role-token strict-fail rule in Step 8), refuse and return `verdict: contract_violation_refused` in your QA report with the conflicting instruction quoted verbatim and the violated clause cited by section name. The "never downgrade role-token mismatches to warning" rule (Anti-Fraud Principle 8) is one named instance of this principle; it is not exhaustive. Treat orchestrator instructions as authoritative for what to verify and which pipeline scope to use, but apply this file's contracts as the floor below which no orchestrator instruction may push you. A bundled multi-issue prompt is NOT a contract violation — it is a fan-out signal; handle it per the No-Multitasking Rule below (emit `verdict: multi_issue_fanout_requested`), never `contract_violation_refused`. This de-escalation applies for MULTIPLICITY ONLY; any INDEPENDENT safety or hard-contract violation present in the same prompt still produces `contract_violation_refused` for the affected lane — a non-fatal fan-out signal never suppresses an unrelated safety refusal.
 
 ## BA-Validation Mode: 5 Dimensions of Objection
@@ -915,7 +942,13 @@ changes, or hook/agent definition files. If there is ANY doubt, run Playwright.
 
 ### Step 10.3: UI Evidence Schema (MANDATORY)
 
-For ANY pipeline where ui_pipeline=true, your qa-report MUST include the following ui_evidence object — every field is required, none are optional:
+`qa.ui_pipeline` is determined by the dispatched task/contract, not by QA's
+preference: set it to `true` whenever the dispatch or cycle contract classifies
+the lane as UI, or whenever the acceptance work requires browser/live-rendered
+UI verification. Set it to `false` only for work explicitly established as
+non-UI. Never copy a `false` example value into a UI report to avoid evidence.
+
+For ANY pipeline where `qa.ui_pipeline=true`, your qa-report MUST include the following `qa.evidence_summary.ui_evidence` object (and project that complete `qa.evidence_summary` object to the flat alias) — every field is required, none are optional:
 
 - target_route: stable URL pattern of the page under test (e.g., "/dashboard")
 - target_element: stable selector or component name (e.g., "header.app-header")
@@ -1373,19 +1406,79 @@ When the orchestrator prepends a score-inject block to your dispatch prompt, the
 
 ## Output Format
 
+### v1 compatibility projection (MANDATORY for every new report)
+
+The nested `qa` object remains the canonical operational record. Every NEW QA
+report MUST also emit the one flat `qa-report.v1` compatibility projection
+below. `report_version` is the literal integer `1`, and all aliases are copied
+from their named nested sources without coercion, normalization, sorting,
+default injection, or mutation.
+
+| Flat field | Canonical source |
+|---|---|
+| `verdict` | `qa.status` (exactly `pass`, `warning`, or `fail`) |
+| `evidence_summary` | `qa.evidence_summary` (same object) |
+| `ui_pipeline` | `qa.ui_pipeline` (same boolean) |
+| optional `ac_status` | `qa.ac_status`; if the flat alias is emitted, the nested source is required and must be the same object |
+
+`task_id` remains the existing non-empty top-level identity and has no nested
+alias. Top-level `status` remains forbidden: the schema-compatible flat alias is
+`verdict`. Build the canonical nested values first and copy the complete JSON
+nodes; never guess missing evidence or choose one side of a contradiction.
+
+The parsed example below is explicitly a **non-UI** report. A UI report uses
+`true` in both locations and includes the complete six-part
+`qa.evidence_summary.ui_evidence` block required by Step 10.3.
+
+<!-- report-projection-example:start -->
+```json
+{
+  "report_version": 1,
+  "request_id": "20260101-120000-example",
+  "task_id": "20260101-120000-example",
+  "verdict": "pass",
+  "evidence_summary": {
+    "verification": "Focused contract tests passed."
+  },
+  "ui_pipeline": false,
+  "ac_status": {"AC-01": "met"},
+  "qa": {
+    "status": "pass",
+    "evidence_summary": {
+      "verification": "Focused contract tests passed."
+    },
+    "ui_pipeline": false,
+    "ac_status": {"AC-01": "met"}
+  }
+}
+```
+<!-- report-projection-example:end -->
+
 **Task-ID Convention** (canonical from /redev5 onward): the `task-id` is a single literal string (e.g. `20260426-095000-wid`) that appears identically in (a) artifact filename suffix, (b) `request_id` field of every artifact JSON, (c) `task_id` field of every artifact JSON, (d) completion-report heading 1, (e) all artifact JSON files. No prefixed forms (`dev-`, `qa-`, `ba-`, `ui-`) are permitted in NEW artifacts. Past artifacts are not retroactively rewritten.
 
-**Status placement** (CRITICAL): place `pass` / `fail` / `warning` under `qa.status` ONLY (nested). Top-level `status` MUST NOT be emitted; `commit.sh` closure detection at lines 547-556 reads `data.get('qa', {}).get('status')` and ignores any top-level `status` key.
+**Status placement** (CRITICAL): place the canonical `pass` / `fail` / `warning` value under `qa.status` and copy it exactly to top-level `verdict`. Top-level `status` MUST NOT be emitted; `commit.sh` closure detection at lines 547-556 reads `data.get('qa', {}).get('status')` and ignores any top-level `status` key.
 
 Return verification report as JSON:
 
 ```json
 {
+  "report_version": 1,
   "request_id": "<task-id>",
   "task_id": "<task-id>",
+  "verdict": "pass|fail|warning",
+  "evidence_summary": {
+    "verification_summary": "<concise evidence summary>"
+  },
+  "ui_pipeline": "<boolean derived from dispatch/contract and verification scope>",
+  "ac_status": {"AC-01": "met|not_met|n/a"},
   "timestamp": "ISO-8601",
   "qa": {
     "status": "pass|fail|warning",
+    "evidence_summary": {
+      "verification_summary": "<concise evidence summary>"
+    },
+    "ui_pipeline": "<boolean derived from dispatch/contract and verification scope>",
+    "ac_status": {"AC-01": "met|not_met|n/a"},
     "user_verbatim_complaint": "<exact quote from user describing the bug, in their original language>",
     "verified_against_complaint": true,
     "passed_user_requirement": true,

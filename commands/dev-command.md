@@ -569,6 +569,30 @@ After BA-QA validation passes, dispatch the graphify subagent (mode=enrich) to e
 
 ### Step 10: Delegate to Dev Subagent
 
+`/dev-command` is an active lifecycle **singular** producer. Before
+its Dev dispatch it builds the exact singleton five-path inventory and immutable
+shared baseline binding, validates the complete `artifact_chain_declaration.v1`
+through:
+
+```bash
+python3 scripts/aggregate-dev-report.py \
+  --project-dir "$CLAUDE_PROJECT_DIR" --task-id "$TASK_ID" \
+  --declaration-file "$DECLARATION_INPUT" --validate-declaration-only
+```
+
+Pass `artifact_chain_role=lifecycle_singular_parent` and the exact returned
+declaration. The Dev agent copies it into the one canonical report. Promote the
+mutable-singular attempt using its stable non-self-referential projection, then
+apply every phase-only event with `--update-declaration-only`, exact canonical
+SHA, and current phase digest. A retry reserves and atomically publishes a new
+report body plus base64 projection ledger row/current alias in that same
+canonical by passing the explicit next declaration and transient body with
+`--update-declaration-only --report-file <transient-report>` plus both CAS
+values; it never writes a version file or full-canonical ledger hash. Before
+handoff, require the shared read-only `artifact_chain_result.v2` for the exact
+parent and pass only that parent to `/close`, then `/commit` after the one parent
+close.
+
 **Use Task tool to invoke dev subagent with file paths only**:
 
 ```
@@ -579,6 +603,10 @@ Use Task tool with:
   CHECKPOINT MARKING: see agents/dev.md §Checkpoint Marking Contract. Mark every cp-NN done or waived before Stop or SubagentStop hook will block exit.
 
   You are the dev subagent. Follow agents/dev.md instructions precisely.
+
+  artifact_chain_role: lifecycle_singular_parent
+  artifact_chain_declaration: <exact provider-normalized artifact_chain_declaration.v1>
+  artifact_chain_binding: null
 
   User requirement document: docs/dev/user-requirement-<DEV_SESSION_ID>.md
   (Read this file before interpreting Requirement, Context file, BA spec, Dev report, or state-derived focus.)

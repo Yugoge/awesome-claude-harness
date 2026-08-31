@@ -225,6 +225,42 @@ Every spec MUST populate:
 If BA cannot populate `measured` or `expected`, the spec is NOT allowed to ship.
 This forces measurement before solutioning.
 
+#### Authority-bound negative repository evidence (MANDATORY)
+
+For an ordinary `/dev` claim that a repository path or basename is absent, a
+zero-result search is not evidence. BA MUST produce a conclusive receipt with
+`scripts/negative-evidence.py scan`; the command is bound to an immutable
+parent admission and the final context by externally supplied raw SHA-256
+digests. The scan root, every scope/prune, literal target, exact positive
+control, timeout, output-byte limit, and file-count limit MUST be explicit.
+`cwd`, `CLAUDE_PROJECT_DIR`, the scanned root, and another worktree never
+establish authority.
+
+The negative claim MUST carry this complete envelope:
+
+```json
+{
+  "receipt_path": "<absolute immutable receipt path>",
+  "receipt_sha256": "<external raw receipt SHA-256>",
+  "target_kind": "exact-path|basename",
+  "target": "<literal target>",
+  "conclusion": "absent",
+  "authority_file": "<absolute parent admission path>",
+  "authority_sha256": "<external raw admission SHA-256>",
+  "authority_projection_sha256": "<external canonical projection SHA-256>",
+  "contract_context": "<absolute final context path>",
+  "context_sha256": "<external raw context SHA-256>"
+}
+```
+
+Only exit 0 plus receipt `conclusion: "absent"` (target zero, positive control
+exactly one, clean bounded diagnostics, and target not excluded) supports the
+claim. `unknown`, nonzero, stderr, timeout, truncation, duplicate, missing or
+duplicate control, excluded target, authority/schema error, or raw grep/find
+output MUST be reported as inconclusive and MUST NOT be translated, waived, or
+paraphrased into absence. Scope this rule to negative repository/path claims;
+it does not turn unrelated observations into repository scans.
+
 ### Contract B: Scope
 
 User-reported scope is the **starting point**. The full scope is **the user-need

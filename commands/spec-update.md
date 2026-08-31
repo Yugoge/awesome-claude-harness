@@ -1,116 +1,175 @@
 ---
-description: Continuation spec update or temp session note (was /update then /spec-continue — renamed to avoid collision with MAP's /update portfolio mutation command)
-argument-hint: "[--temp] [--spec <path>] [what the next session should focus on]"
+description: Update an existing spec, continue unfinished development, or write a temp session note
+argument-hint: "[--update|--continue|--temp] [--spec <path>|--path <path>] [--codex] [--] [material]"
 disable-model-invocation: true
 ---
 
-# /spec-update — Continuation Spec Update
+# /spec-update — Update, Continue, or Temp Note
 
-Turn unfinished work into a continuation spec that a fresh Claude Code or Codex
-session can continue with `/dev`. Use a compact temp note only when explicitly
-requested for non-development session continuity.
+Use exactly one of three purposes:
 
-**Migration note**: This command was previously `/update` at `~/.claude/commands/update.md`,
-then renamed to `/spec-continue`, and is now `/spec-update`. The renames resolve name
-collisions and improve clarity. Users with muscle-memory for `/update --temp` should
-now use `/spec-update --temp` instead.
+1. `--update` enriches an authorized existing spec. It does not create a cycle,
+   add a continuation marker, or hand off to `/dev`.
+2. `--continue` records unfinished development for a later spec-backed run. No
+   purpose flag is the compatibility form of `--continue`.
+3. `--temp` creates one compact non-spec session note.
 
-Inspired by Matt Pocock's `mattpocock/skills` handoff skill; renamed and adapted here for
-our `spec → dev → close → commit → push` workflow.
+The read-only contract at `scripts/spec-update-contract.py` is the authority for
+argument parsing, target authorization, pre-state inventory, post-state
+verification, and final response bytes. Fail closed on every contract error.
 
-## Mode selection
+## Argument grammar
 
-1. **Continuation-spec mode (default)** — use when there is unfinished
-   development work after `/dev`, `/redev`, or a failed `/close`, or when the
-   user says to continue/improve the plan. The output is a spec under
-   `docs/dev/specs/`.
-2. **Temp-note mode (`--temp`)** — use only when the user explicitly asks for a
-   session/bootstrap note, or when `/commit`/`/push` need a non-repo recovery
-   note after branch-moving actions. The output is a temp markdown file.
+Pass the exact `$ARGUMENTS` string to the planner. It tokenizes with Python
+`shlex.split(..., posix=True)`. Before the first literal `--`, the complete
+grammar is:
+
+```text
+purpose := --update | --continue | --temp
+value   := --spec PATH | --path PATH
+review  := --codex
+end     := --
+```
+
+- At most one purpose is allowed. With none, select `continue`.
+- `--spec`, `--path`, and `--codex` may each appear at most once.
+- Value options use separate tokens only; `--spec=x` and `--path=x` are invalid.
+- The first `--` ends option parsing. Every later token, including flag-looking
+  tokens and another `--`, is literal material.
+- Any unrecognized pre-delimiter token beginning `-`, malformed quoting,
+  missing/empty value, duplicate, or incompatible combination is invalid.
+- Material tokens retain decoded order and join with one U+0020.
+
+Mode compatibility is closed:
+
+| Mode | `--spec` | `--path` | `--codex` | Material |
+|---|---|---|---|---|
+| update | optional only when an exact bound active task authorizes the target | forbidden | optional | required |
+| continue/default | optional | forbidden | optional | optional for an existing target; required for creation |
+| temp | forbidden | optional | forbidden | required |
+
+Every invalid request exits 2 before writes. Its authorized `write_set` is empty.
+
+## Pre-write plan
+
+Before creating or modifying any file, run:
+
+```text
+python3 <project-root>/scripts/spec-update-contract.py plan
+```
+
+Supply one JSON object on stdin:
+
+- `project_dir`: explicit absolute project root. Do not infer it from cwd, an
+  environment variable, script location, mtime, or a newest-file search.
+- `raw_arguments`: exact `$ARGUMENTS` bytes decoded as the command string.
+- `active_task`: for repository modes without `--spec`, either
+  `{"state":"bound","task_id":"<exact-id>"}` or `{"state":"none"}`.
+  With explicit `--spec`, it is optional; a supplied bound task must agree.
+- `actor_scratch_dir`: explicit absolute trusted actor scratch directory for
+  temp mode.
+
+The planner must exit 0 and return `status=pass` before any write. Preserve its
+complete JSON object and digest for verification. It is read-only and exposes no
+checkpoint mutation operation.
+
+### Target authorization
+
+For repository modes:
+
+- The canonical spec root is the real, non-symlink directory
+  `<project-root>/docs/dev/specs`.
+- An existing target is a readable, non-symlink regular direct child named
+  `spec-*.md`, where the middle is nonempty but is not timestamp-restricted.
+- An explicit target must also pass `resolve-spec-artifacts.py` with the exact
+  canonical target and explicit project root. Present-invalid or ambiguous split
+  evidence is a hard rejection.
+- A bound active task is resolved only through
+  `resolve-dev-artifact-chain.py --task-id <id> --project-dir <root>`. Read the
+  declared singular context or every declared fan-out `lanes[].context`; never
+  glob, infer, or fabricate a parent context. Shape, lane, context identity, and
+  schema errors reject. Every context must name one identical canonical
+  `parent_spec` with one current SHA-256.
+- If explicit and active evidence are both present, path and SHA-256 must agree.
+- Update never creates. Continue may create only with explicit
+  `active_task.state=none`, no `--spec`, and nonempty material. Missing, failed,
+  or ambiguous task evidence never falls through to creation.
+
+Reject nested paths, `..`, symlink components/files, directories, devices,
+`README.md`, `INDEX.md`, and every non-`spec-*.md` name.
+
+For temp mode, confine an explicit `--path` beneath the project root or actor
+scratch directory through non-symlink parents, require an absent `.md` target,
+and reject any canonical/same-file alias of a spec. Without `--path`, use the
+planner's `temp_parent` and perform one exclusive `update-*.md` allocation. Temp
+mode never enters spec resolution or split/checkpoint work. Post-write
+verification uses that same confinement union for an explicit target; only the
+allocator-only form is restricted to the actor scratch root. Audit every
+existing lexical parent component with `lstat` before `resolve`; canonicalization
+must never erase an intermediate directory symlink from the authorization proof.
+For both explicit and allocated targets, post-write verification must preserve
+the exact planned spec inventory and reject a target that is `samefile` with any
+spec. A spec-named symlink inventory entry binds its raw link bytes, link
+identity, valid/broken state, and, when valid, the resolved regular-file path,
+identity, size, and SHA-256. Relative/absolute spelling changes, retargeting,
+referent byte/type changes, and validity changes are inventory drift even when
+they resolve to an otherwise equivalent referent. Read, hash, type, or observed
+race uncertainty fails closed. Inspect referent type before acquisition and use
+only a nonblocking read-only acquisition, then require the opened object to be
+the same regular file observed by the preflight. FIFO/socket/device/directory,
+broken, error, or raced states must return a contract rejection rather than
+wait for I/O. Any inventory drift or hardlink alias rejects before target
+hashing or a success response.
+
+## Mode effects
+
+### Update
+
+Append only the supplied enrichment to the authorized existing monolith. Do not:
+
+- create another spec;
+- add a `### Cycle N` heading;
+- add a `spec-continuation-of` marker;
+- harvest unrelated artifacts; or
+- include a `/dev` handoff in metadata or response text.
+
+The final response is one `Updated spec:` line produced by the renderer.
 
 ## Continuation-spec mode
 
-Resolve the target spec:
+For an existing target, append; never overwrite earlier content. Determine the
+next cycle number as the maximum existing `### Cycle N` across Sections 1–8 plus
+one, or Cycle 1 when none exists. Add the exact
+`<!-- spec-continuation-of: <task-id> -->` marker before the first new heading
+only when that exact task/spec marker is absent. Never write a placeholder.
 
-1. If `--spec <path>` is provided, update that spec.
-2. Else if the active `/dev` artifact chain is available, inspect the validated
-   singular context or every fan-out `lanes[].context`; use `spec_path` /
-   `spec_file` / `user_spec_path` only when all populated values agree. A
-   fan-out cycle does not need, and this command must not create, a parent
-   context merely to resolve the spec.
-3. Else create a new spec from `~/.claude/templates/overnight-spec.md` at
-   `${CLAUDE_PROJECT_DIR:-$(pwd)}/docs/dev/specs/spec-<YYYYMMDD-HHMMSS>.md`.
+When a bound `/dev` task exists, consume the same validated resolver result used
+for target authorization from
+`scripts/resolve-dev-artifact-chain.py --task-id <id> --project-dir <root>`.
+Gather source references only from `artifact_paths`, `report_paths`, `qa_inputs`, and
+`lanes[]`. In singular mode this is the declared parent chain. In fan-out mode it
+is every lane ticket/context/dev/QA plus the canonical/completion artifacts and
+only optional parent artifacts that actually exist. A fan-out continuation does
+not need, and this command must not create, a parent context. Do not replace the
+lane matrix with a singular-parent assumption or fabricate missing parent artifacts.
 
-Gather source artifacts from the active task-id when available. For `/dev`
-work, invoke the shared read-only
-`scripts/resolve-dev-artifact-chain.py --task-id <id> --project-dir <root>`
-and retain its JSON even when `status == "fail"`: a failed continuation is
-precisely where `errors[]` and the existing lane matrix are useful. Use the
-existing paths named by `artifact_paths`, `report_paths`, `qa_inputs`, and
-`lanes[]`, plus `docs/dev/close-report-<task-id>.md` when present. In singular
-mode this is the existing parent chain; in fan-out mode it is every lane
-ticket/context/dev/QA plus the parent canonical/completion and only optional
-parent artifacts that actually exist. Never replace this with a singular
-parent context/QA assumption or fabricate missing parent artifacts.
+Record concise references rather than raw diffs or copied reports:
 
-For legacy or non-`/dev` work where no resolver result is available, retain the
-existing same-task parent context/dev-report/QA/close/completion lookup. Always
-include the user's latest message or explicit focus string.
+- Section 2: attempted work and why it did not finish.
+- Section 3: changed-file and artifact references.
+- Section 4: measured state and latest QA/close result.
+- Section 5: only a new or materially refined remaining criterion.
+- Section 6: the measured gap to done.
+- Section 7: the concrete next plan.
+- Section 8: traps, stale assumptions, and warnings.
 
-When updating an existing spec, append; never overwrite prior cycles. Determine
-the next cycle number as `max(existing "### Cycle N" headings across Sections
-1-7) + 1`; if none exist, use Cycle 1.
+Leave Section 9 references intact. For a newly created continuation, retain the
+original user goal when known and the remaining acceptance criteria. The final
+response contains the continuation path and exactly one `/dev --spec` handoff.
 
-Before appending the first new `### Cycle N` heading for this run, check whether
-the spec file already contains `<!-- spec-continuation-of: <resolved-task-id> -->`
-(substituting the actual task-id value — never a literal `${TASK_ID}` or
-`<task-id>` placeholder). If that exact line is absent, write it as the very
-first line of the new cycle block, before any section headings. If it is already
-present, do not write a second copy. This marker is written exactly once per
-(task-id, spec file) pair and must appear only in this continuation-spec mode,
-never in temp-note mode.
+## Temp-note mode
 
-Populate the per-cycle sections (Sections 2-8) as follows:
-
-- Section 2: what was attempted and why it did not finish.
-- Section 3: changed files or artifact references, not raw diffs.
-- Section 4: current measured state / QA result / close dissent.
-- Section 5: remaining user acceptance criteria; append as `### 5.N` only when
-  the remaining criterion is new or materially refined.
-- Section 6: specific gap between current state and done.
-- Section 7: concrete next plan for the next `/dev` run.
-- Section 8: traps, stale assumptions, and warnings for the next agent.
-
-Section 9 (Design & Evidence References) is owned by the `/spec` orchestrator at
-design/evidence capture time, not by `/spec-update`. Leave any existing Section 9
-reference lines intact; do not populate or rewrite Section 9 here.
-
-For a newly created continuation spec, Section 5 must contain the original
-user-facing goal if known plus the remaining acceptance criteria. For an
-existing spec, do not rewrite Section 5 unless the remaining criterion is new or
-materially refined.
-
-If the spec already has `docs/dev/specs/<spec-id>/views/` or
-`.claude/specs/<spec-id>/cp-state-*.json`, record in Section 8 that those split
-views/checkpoints predate the continuation update and must not be treated as
-fresh unless regenerated. Updating the spec makes its mtime newer than
-`.split-complete`; `/dev` and `/dev-command` must then ignore stale views and
-fall back to the monolith spec.
-
-Output the spec path and next command:
-
-```text
-Continuation spec: <spec_path>
-Next: /dev --spec <spec_path>
-```
-
-## Temp-note mode (`--temp`)
-
-Create the path with `mktemp -t update-XXXXXX.md`. Read the newly created empty
-file before writing to it. Do not write temp updates into the repo unless the
-user explicitly passes `--path <path>`.
-
-Required temp-note shape:
+Create one compact note with the following shape:
 
 ```markdown
 # Update — <short focus>
@@ -121,35 +180,111 @@ Current phase: <spec|dev|close|commit|push|ad hoc>
 Task/spec id: <id or "unknown">
 
 ## Resume prompt
-<3-8 sentences the next agent can paste/read to resume.>
+<3-8 sentences>
 
 ## Artifact map
 - Spec/ticket: <path or URL>
 - Context/dev/QA/close reports: <paths>
-- Commit/branch/remote: <SHA / branch / remote when relevant>
+- Commit/branch/remote: <known values>
 
 ## Decisions not captured elsewhere
-- <only decisions absent from the artifacts above>
+- <only uncaptured decisions>
 
 ## Blockers / risks
 - <known blocker or "none known">
 
 ## Next actions
-1. <exact next command or action>
+1. <exact next action>
 2. <verification or fallback>
 
 ## Suggested skills
-- <skill/command name> — <why>
+- <skill/command> — <reason>
 ```
 
-If `$ARGUMENTS` contains free-form text, treat it as the next-session focus and
-tailor the `Resume prompt`, `Next actions`, and `Suggested skills` around it.
+Temp writes no spec, view, checkpoint, manifest, or continuation marker.
 
-## Universal rules
+## Codex review propagation
 
-- Do not duplicate existing artifacts. Reference specs, tickets, PRDs, plans,
-  ADRs, issues, reports, commits, and diffs by path/URL/SHA.
-- Keep it compact: no raw diffs, full logs, copied reports, secrets, or
-  transcript dumps.
-- The next action for unfinished dev work is a spec-backed `/dev --spec
-  <path>`, not `/close` or `/commit`.
+`--codex` is a review modifier, never material or a purpose. When the valid plan
+has `codex_required=true`, include the literal line `codex_required: true` in
+every enrichment/spec-split initial dispatch and every split-QA initial or retry
+dispatch. Without it, omit the line and record `not_requested`. Temp plus
+`--codex` is invalid.
+
+## Canonical split and checkpoint lifecycle
+
+After the authorized repository monolith mutation, use only the existing spec
+provider and `scripts/spec-check.py` lifecycle. The contract script never writes
+`cp-state-*.json`.
+
+1. **Precheck:** retain the plan's complete spec/checkpoint inventory. Any
+   corrupt, symlinked, invalid-generation, or active primary/numbered slot
+   blocks before the monolith write. Normalize checkpoint slots by
+   `(role, numeric instance)` and reject aliases such as `-2.json` plus
+   `-02.json`, or a lone noncanonical numeric filename, before mutation.
+2. **Split:** run the existing spec provider's Phase 0/1 for the authorized
+   monolith, then recheck the exact checkpoint inventory before each role.
+3. **Check in:** when a role has no primary or numbered slot, use ordinary
+   primary check-in and require generation 1. When a terminal primary exists,
+   use its `--bump-generation` primary path and require `g+1`. Numbered without
+   primary, a changed pre-state, or an emitted numbered/wrong path is failure.
+4. **Populate/status:** only the checked-in owner may populate 1–10 fresh,
+   verb-first pending checkpoints through the existing locked provider stanza.
+   Run real `spec-check.py status` and capture generation and population digest.
+5. **Check out:** use the same role and agent id. Require a terminal canonical
+   primary with `is_running=false`, `agent_id=null`, pending checkpoints, and the
+   expected generation. Do not modify numbered or never-selected history.
+6. **Bind:** after all selected roles are terminal, atomically commit the
+   `checkpoint_binding.v1` manifest data and only then the split-complete marker.
+   Bind post-monolith SHA, lifecycle receipt digest, selected primaries, and
+   byte-identical historical slots. Each selected-primary binding contains the
+   closed per-round object and its digest, including branch, pre-state and
+   generation, check-in/argv kind, emitted path, agent id, before/after SHA,
+   population digest, status/check-out exits, terminal SHA, and split round;
+   bind the exact maximum as `final_round`. It must be a JSON integer with
+   booleans excluded, not merely a value that compares equal to the maximum.
+   Missing, extra, mistyped, or independently changed round fields fail even when
+   the enclosing receipt digest is recomputed.
+7. **Verify:** run the read-only verifier below. No failure branch may render a
+   success response. Cleanup of an exactly owned running slot uses check-out
+   only; never unlock, directly edit, delete, or fabricate checkpoint state.
+
+## Post-write verification and response
+
+Pass the preserved plan and the provider's `split_lifecycle_receipt.v1` as one
+JSON object to:
+
+```text
+python3 <project-root>/scripts/spec-update-contract.py verify --emit-response
+```
+
+For an allocated temp note, also pass `allocated_target`. Verification must
+prove the exact authorized post-state, fresh resolver output, manifest binding,
+creation `null→1` or refresh `g→g+1` arithmetic, terminal selected primaries,
+and unchanged historical slots. Temp verification must additionally prove the
+exact planned spec inventory is unchanged and the note is not a same-file alias
+of any spec, including exact symlink link and referent evidence. The verifier
+internally calls the same closed renderer used by `render-response`.
+
+On success, renderer stdout is the whole final command response. Append nothing:
+
+```text
+update:   Updated spec: <canonical-target>
+continue: Continuation spec: <canonical-target>
+          Next: /dev --spec <canonical-target>
+temp:     Temp note: <canonical-target>
+```
+
+The canonical response object fixes mode, plan digest, status, handoff flag,
+next command, line count/order/content, and rendered bytes. Reject embedded CR or
+LF, any extra/different line, or any update response containing a boundary-safe
+`/dev` token. Ordinary `docs/dev/specs/...` and `/dev/shm/...` paths are not
+slash-command tokens.
+
+## Universal limits
+
+- Reference existing artifacts by path, URL, or SHA; do not duplicate raw
+  diffs, full logs, reports, secrets, or transcripts.
+- Do not touch unrelated specs, repository files, or checkpoint history.
+- Never show a success response until planning, provider work, binding, and
+  read-only verification all succeed.

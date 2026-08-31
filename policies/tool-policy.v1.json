@@ -1,5 +1,5 @@
 {
-  "policy_version": 6,
+  "policy_version": 7,
   "default_action": "deny",
   "_shared_protected_path_prefixes": [
     "/.claude/hooks/",
@@ -10,7 +10,7 @@
     "/.claude/scripts/",
     "/.claude/settings.json"
   ],
-  "_note": "Path prefixes containing '*' use glob-aware matching (fnmatch-style). Use '*/docs/dev/foo-' to match the prefix 'docs/dev/foo-' anywhere under any worktree. Use '/docs/dev/foo-' to anchor at any path that ends with '/docs/dev/foo-' boundary. Shared protected list is the SOLE catch-all for /.claude/ — DO NOT add broad '/.claude/' to denied prefixes; use only the explicit subdirs above so legitimate worktree artifact paths remain writable. spec-20260507-142952 AC-1: cp-state-*.json globs are documented here AND propagated into every subagent role's denied_write_path_prefixes; spec-check.py is the only legal writer. policy_version 2 (2026-05-09): added defense-in-depth denied_tools=[Write,Edit,MultiEdit,NotebookEdit] conventions for read-only roles; project-specific roles introduced in this version were later removed during harness de-privatization. policy_version 3 (spec-20260519-211515 R7 reconciliation, 2026-05-20): broadened codex-detection invariant — added Skill to allowed_tools for 9 roles whose agents/*.md mention codex consultation (architect, cleanliness-inspector, pm, product-owner, prompt-inspector, spec, style-inspector, ui-specialist, user). ba gained docs/dev/acceptance-criteria- and docs/dev/retrospective-classification- write-prefixes; qa gained docs/dev/retrospective-classification-. Reconciliation closes item 7 of qa-output-retrospective-classification-20260519-175339.json. policy_version 4 (20260521-090100, 2026-05-23): adds */docs/codex/ to allowed_write_path_prefixes for 11 codex-consultation roles (ba, qa, pm, architect, product-owner, user, ui-specialist, spec, prompt-inspector, cleanliness-inspector, style-inspector). dev excluded — wildcard * already covers docs/codex/. Establishes docs/codex/<task_id>/<role>.txt as canonical codex output path; demotes /var/tmp/codex-outputs/ to fallback. policy_version 5 (20260524-122910, 2026-05-24, spec-20260518-225715 Cycle 3 Debt 8 / AC-08): adds */.claude/dev-registry/*/blast-radius-map.json to ba.allowed_write_path_prefixes so BA can author its per-task blast-radius-map for the dev pipeline (Phase 1 prediction). The existing */docs/dev/acceptance-criteria- prefix is preserved. dev/qa unaffected because they consume the map but the file is authored by ba. policy_version 6 (20260530-165718, 2026-05-30): registers the graphify Step-7.5 enrichment role with allowed_tools [Read, Bash, Write] (no Skill/Edit — graphify.md uses neither). Its Write grant is scoped TIGHT to */.claude/dev-registry/*/graphify/ (the graphify sub-prefix only, NOT the whole dev-registry) plus scratch/tmp, so it cannot author peer artifacts such as blast-radius-map.json; denied_write_path_prefixes mirrors the shared protected list verbatim. No broad */docs/dev/context- write-prefix is granted — graphify-enrich.py patches context-<ts>.json via --context-file under the already-granted Bash (B2-S1 / codex #9). Before this entry an unregistered graphify role hit default-deny on every dispatch.",
+  "_note": "Path prefixes containing '*' use glob-aware matching (fnmatch-style). Use '*/docs/dev/foo-' to match the prefix 'docs/dev/foo-' anywhere under any worktree. Use '/docs/dev/foo-' to anchor at any path that ends with '/docs/dev/foo-' boundary. Shared protected list is the SOLE catch-all for /.claude/ — DO NOT add broad '/.claude/' to denied prefixes; use only the explicit subdirs above so legitimate worktree artifact paths remain writable. spec-20260507-142952 AC-1: cp-state-*.json globs are documented here AND propagated into every subagent role's denied_write_path_prefixes; spec-check.py is the only legal writer. policy_version 2 (2026-05-09): added defense-in-depth denied_tools=[Write,Edit,MultiEdit,NotebookEdit] conventions for read-only roles; project-specific roles introduced in this version were later removed during harness de-privatization. policy_version 3 (spec-20260519-211515 R7 reconciliation, 2026-05-20): broadened codex-detection invariant — added Skill to allowed_tools for 9 roles whose agents/*.md mention codex consultation (architect, cleanliness-inspector, pm, product-owner, prompt-inspector, spec, style-inspector, ui-specialist, user). ba gained docs/dev/acceptance-criteria- and docs/dev/retrospective-classification- write-prefixes; qa gained docs/dev/retrospective-classification-. Reconciliation closes item 7 of qa-output-retrospective-classification-20260519-175339.json. policy_version 4 (20260521-090100, 2026-05-23): adds */docs/codex/ to allowed_write_path_prefixes for 11 codex-consultation roles (ba, qa, pm, architect, product-owner, user, ui-specialist, spec, prompt-inspector, cleanliness-inspector, style-inspector). dev excluded — wildcard * already covers docs/codex/. Establishes docs/codex/<task_id>/<role>.txt as canonical codex output path; demotes /var/tmp/codex-outputs/ to fallback. policy_version 5 (20260524-122910, 2026-05-24, spec-20260518-225715 Cycle 3 Debt 8 / AC-08): adds */.claude/dev-registry/*/blast-radius-map.json to ba.allowed_write_path_prefixes so BA can author its per-task blast-radius-map for the dev pipeline (Phase 1 prediction). The existing */docs/dev/acceptance-criteria- prefix is preserved. dev/qa unaffected because they consume the map but the file is authored by ba. policy_version 6 (20260530-165718, 2026-05-30): registers the graphify Step-7.5 enrichment role with allowed_tools [Read, Bash, Write] (no Skill/Edit — graphify.md uses neither). Its Write grant is scoped TIGHT to */.claude/dev-registry/*/graphify/ (the graphify sub-prefix only, NOT the whole dev-registry) plus scratch/tmp, so it cannot author peer artifacts such as blast-radius-map.json; denied_write_path_prefixes mirrors the shared protected list verbatim. No broad */docs/dev/context- write-prefix is granted — graphify-enrich.py patches context-<ts>.json via --context-file under the already-granted Bash (B2-S1 / codex #9). Before this entry an unregistered graphify role hit default-deny on every dispatch. policy_version 7 (LANE-B r02, parent RULING_2 G0 admission): adds the managed scratch namespace '*/.claude/scratch/' to every role and REMOVES the bare raw-temp grants '/tmp/*' and '/var/tmp/*' from the 21 roles that held them. Pre-existing exact temp exceptions ('*/tmp/claude-scratch/<role>/', '*/var/tmp/codex-outputs/', '/tmp/agentic-commit/<role>/*') are UNCHANGED and remain allowed for exactly the role that held each. A JSON prefix cannot express actor identity and cannot deny a role that holds a bare '*' grant, so raw-temp denial and owner-vs-sibling scratch exactness are enforced behaviorally by hooks/pretool-tool-policy.py; this list is the declaration, not the sole enforcement.",
   "roles": {
     "user": {
       "allowed_tools": [
@@ -47,8 +47,7 @@
         "*/docs/dev/user-report-",
         "*/tmp/claude-scratch/user/",
         "*/var/tmp/codex-outputs/",
-        "/tmp/*",
-        "/var/tmp/*"
+        "*/.claude/scratch/"
       ],
       "denied_write_path_prefixes": [
         "/src/",
@@ -90,8 +89,7 @@
         "*/docs/dev/ui-specialist-",
         "*/tmp/claude-scratch/ui-specialist/",
         "*/var/tmp/codex-outputs/",
-        "/tmp/*",
-        "/var/tmp/*"
+        "*/.claude/scratch/"
       ],
       "denied_write_path_prefixes": [
         "/src/",
@@ -140,8 +138,7 @@
         "*/docs/research/",
         "*/tmp/claude-scratch/ba/",
         "*/var/tmp/codex-outputs/",
-        "/tmp/*",
-        "/var/tmp/*"
+        "*/.claude/scratch/"
       ],
       "denied_write_path_prefixes": [
         "/src/",
@@ -172,8 +169,7 @@
       "allowed_write_path_prefixes": [
         "*",
         "*/docs/dev/overnight/",
-        "/tmp/*",
-        "/var/tmp/*"
+        "*/.claude/scratch/"
       ],
       "rationale": "Dev: write per files_to_modify/files_to_create from BA context; orchestrator-level enforcement of scope"
     },
@@ -208,8 +204,7 @@
         "*/docs/dev/specs/*/qa-",
         "*/tmp/claude-scratch/qa/",
         "*/var/tmp/codex-outputs/",
-        "/tmp/*",
-        "/var/tmp/*"
+        "*/.claude/scratch/"
       ],
       "denied_write_path_prefixes": [
         "/src/",
@@ -254,8 +249,7 @@
         "*/docs/dev/test-plan",
         "*/tmp/claude-scratch/pm/",
         "*/var/tmp/codex-outputs/",
-        "/tmp/*",
-        "/var/tmp/*"
+        "*/.claude/scratch/"
       ],
       "denied_write_path_prefixes": [
         "/src/",
@@ -293,8 +287,7 @@
         "*/docs/dev/specs/*/cp-state-architect.json",
         "*/tmp/claude-scratch/architect/",
         "*/var/tmp/codex-outputs/",
-        "/tmp/*",
-        "/var/tmp/*"
+        "*/.claude/scratch/"
       ],
       "denied_write_path_prefixes": [
         "/src/",
@@ -334,8 +327,7 @@
         "*/docs/dev/user-report-",
         "*/tmp/claude-scratch/product-owner/",
         "*/var/tmp/codex-outputs/",
-        "/tmp/*",
-        "/var/tmp/*"
+        "*/.claude/scratch/"
       ],
       "denied_write_path_prefixes": [
         "/src/",
@@ -373,8 +365,7 @@
         "*/docs/dev/specs/*/cp-state-cleaner.json",
         "*/tmp/claude-scratch/cleaner/",
         "*/var/tmp/codex-outputs/",
-        "/tmp/*",
-        "/var/tmp/*"
+        "*/.claude/scratch/"
       ],
       "denied_write_path_prefixes": [
         "/src/",
@@ -415,8 +406,7 @@
         "*/docs/dev/specs/*/cp-state-cleanliness-inspector.json",
         "*/tmp/claude-scratch/cleanliness-inspector/",
         "*/var/tmp/codex-outputs/",
-        "/tmp/*",
-        "/var/tmp/*"
+        "*/.claude/scratch/"
       ],
       "denied_write_path_prefixes": [
         "/src/",
@@ -455,8 +445,7 @@
         "*/docs/dev/specs/*/git-edge-case-analyst-",
         "*/tmp/claude-scratch/git-edge-case-analyst/",
         "*/var/tmp/codex-outputs/",
-        "/tmp/*",
-        "/var/tmp/*"
+        "*/.claude/scratch/"
       ],
       "denied_write_path_prefixes": [
         "/src/",
@@ -497,8 +486,7 @@
         "*/docs/dev/specs/*/prompt-inspector-",
         "*/tmp/claude-scratch/prompt-inspector/",
         "*/var/tmp/codex-outputs/",
-        "/tmp/*",
-        "/var/tmp/*"
+        "*/.claude/scratch/"
       ],
       "denied_write_path_prefixes": [
         "/src/",
@@ -537,8 +525,7 @@
         "*/docs/dev/specs/*/rule-inspector-",
         "*/tmp/claude-scratch/rule-inspector/",
         "*/var/tmp/codex-outputs/",
-        "/tmp/*",
-        "/var/tmp/*"
+        "*/.claude/scratch/"
       ],
       "denied_write_path_prefixes": [
         "/src/",
@@ -579,8 +566,7 @@
         "*/docs/dev/style-inspector_",
         "*/tmp/claude-scratch/style-inspector/",
         "*/var/tmp/codex-outputs/",
-        "/tmp/*",
-        "/var/tmp/*"
+        "*/.claude/scratch/"
       ],
       "denied_write_path_prefixes": [
         "/src/",
@@ -618,8 +604,7 @@
         "*/dev/stdout",
         "*/tmp/claude-scratch/test-writer/",
         "*/var/tmp/codex-outputs/",
-        "/tmp/*",
-        "/var/tmp/*"
+        "*/.claude/scratch/"
       ],
       "denied_write_path_prefixes": [
         "/src/",
@@ -657,8 +642,7 @@
         "*/docs/dev/test-executor_",
         "*/tmp/claude-scratch/test-executor/",
         "*/var/tmp/codex-outputs/",
-        "/tmp/*",
-        "/var/tmp/*"
+        "*/.claude/scratch/"
       ],
       "denied_write_path_prefixes": [
         "/src/",
@@ -697,8 +681,7 @@
         "*/docs/dev/test-validator_",
         "*/tmp/claude-scratch/test-validator/",
         "*/var/tmp/codex-outputs/",
-        "/tmp/*",
-        "/var/tmp/*"
+        "*/.claude/scratch/"
       ],
       "denied_write_path_prefixes": [
         "/src/",
@@ -735,8 +718,7 @@
         "*/docs/dev/specs/",
         "*/tmp/claude-scratch/spec/",
         "*/var/tmp/codex-outputs/",
-        "/tmp/*",
-        "/var/tmp/*"
+        "*/.claude/scratch/"
       ],
       "denied_write_path_prefixes": [
         "/src/",
@@ -769,10 +751,9 @@
         "WebSearch": {}
       },
       "allowed_write_path_prefixes": [
-        "/tmp/*",
-        "/var/tmp/*",
         "*/docs/dev/*",
-        "*/tmp/claude-scratch/general-purpose/"
+        "*/tmp/claude-scratch/general-purpose/",
+        "*/.claude/scratch/"
       ]
     },
     "changelog-analyst": {
@@ -788,8 +769,7 @@
         "*/dev/stderr",
         "*/dev/stdout",
         "*/tmp/claude-scratch/changelog-analyst/",
-        "/tmp/*",
-        "/var/tmp/*"
+        "*/.claude/scratch/"
       ],
       "denied_write_path_prefixes": [
         "/.claude/hooks/",
@@ -815,7 +795,8 @@
         "*/dev/stderr",
         "*/dev/stdout",
         "*/tmp/claude-scratch/push-analyst/",
-        "/tmp/agentic-commit/push-analyst/*"
+        "/tmp/agentic-commit/push-analyst/*",
+        "*/.claude/scratch/"
       ],
       "denied_write_path_prefixes": [
         "/.claude/hooks/",
@@ -841,7 +822,8 @@
         "*/dev/stderr",
         "*/dev/stdout",
         "*/tmp/claude-scratch/merge-analyst/",
-        "/tmp/agentic-commit/merge-analyst/*"
+        "/tmp/agentic-commit/merge-analyst/*",
+        "*/.claude/scratch/"
       ],
       "denied_write_path_prefixes": [
         "/.claude/hooks/",
@@ -861,7 +843,9 @@
         "Grep",
         "Bash"
       ],
-      "allowed_write_path_prefixes": [],
+      "allowed_write_path_prefixes": [
+        "*/.claude/scratch/"
+      ],
       "denied_write_path_prefixes": [
         "/.claude/hooks/",
         "/.claude/agents/",
@@ -885,8 +869,7 @@
         "*/dev/null",
         "*/dev/stderr",
         "*/dev/stdout",
-        "/tmp/*",
-        "/var/tmp/*"
+        "*/.claude/scratch/"
       ],
       "denied_write_path_prefixes": [
         "/.claude/hooks/",

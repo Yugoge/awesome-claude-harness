@@ -7,6 +7,7 @@
     "test-plan.v1": "test-plan.v1.json",
     "graphify-prequery.v1": "graphify-prequery.v1.json",
     "graphify-run.v1": "graphify-run.v1.json",
-    "graphify-focused-subgraph.v1": "graphify-focused-subgraph.v1.json"
+    "graphify-focused-subgraph.v1": "graphify-focused-subgraph.v1.json",
+    "negative-evidence.v1": "negative-evidence.v1.json"
   }
 }

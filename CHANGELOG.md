@@ -8,6 +8,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- **Spec continuation command evolved into `/spec-update`.** The original
+  `/update --temp` command was renamed to `/spec-continue` and then to
+  `/spec-update` to avoid command-name collisions. The current command now has
+  explicit update, continue, and temp purposes while preserving no-purpose as
+  the continue compatibility form.
+- **Hardened `/spec-update` temp verification.** Read-only verification now
+  rejects same-file/hardlink aliases of specs and any drift from the exact spec
+  inventory authorized by the plan before rendering a success response,
+  including symlink link-text, validity, resolved identity, and referent-byte
+  changes with fail-closed read/hash/race handling. Referent acquisition is
+  type-preflighted and nonblocking so FIFO and adjacent non-regular drift cannot
+  hang verification.
 - **Version claim held below a stable `1.0.0`.** `VERSION` now reads `1.0.0-dev`.
   The previous unconditioned `1.0.0` marker overclaimed: it was never published as
   a git tag, and the release-hygiene work it implies was still open. The marker is

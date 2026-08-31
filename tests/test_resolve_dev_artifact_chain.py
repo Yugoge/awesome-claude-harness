@@ -1,755 +1,538 @@
-#!/usr/bin/env python3
-"""Focused tests for the read-only /dev artifact-chain resolver."""
-
+"""Focused read-only result/preflight contract tests for LANE-R1."""
 from __future__ import annotations
 
-import hashlib
+import copy
 import importlib.util
 import json
-import os
 import subprocess
 import sys
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
-RESOLVER_PATH = REPO_ROOT / "scripts" / "resolve-dev-artifact-chain.py"
-TASK_ID = "dev-20260724-120000"
-WORKERS = ["lane-a", "lane-b"]
+import pytest
+
+ROOT = Path(__file__).resolve().parent.parent
+RESOLVER_PATH = ROOT / "scripts" / "resolve-dev-artifact-chain.py"
+HELPERS_PATH = ROOT / "tests" / "test_aggregate_dev_report.py"
 
 
-def _load_resolver():
-    spec = importlib.util.spec_from_file_location("dev_chain_resolver", RESOLVER_PATH)
-    assert spec is not None and spec.loader is not None
+def load(path: Path, name: str):
+    spec = importlib.util.spec_from_file_location(name, path)
+    assert spec and spec.loader
     module = importlib.util.module_from_spec(spec)
+    sys.modules[name] = module
     spec.loader.exec_module(module)
     return module
 
 
-RESOLVER = _load_resolver()
+H = load(HELPERS_PATH, "r1_contract_helpers")
+RESOLVER = load(RESOLVER_PATH, "r1_resolver")
 
 
-def _write(path: Path, value: str | dict) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    if isinstance(value, dict):
-        value = json.dumps(value, indent=2, ensure_ascii=False) + "\n"
-    path.write_text(value, encoding="utf-8")
-
-
-def _dev_document(
-    identity: str,
-    *,
-    modified: list[str] | None = None,
-    created: list[str] | None = None,
-) -> dict:
-    return {
-        "request_id": identity,
-        "task_id": identity,
-        "baseline_head_sha": "0123456789abcdef",
-        "baseline_dirty_snapshot": "",
-        "dev": {
-            "status": "completed",
-            "tasks_completed": [f"completed {identity}"],
-            "scripts_created": [],
-            "permissions_to_add": [],
-            "files_modified": modified or [],
-            "files_created": created or [],
-            "observed_preexisting": [],
-        },
-        "blocking_issues": [],
-        "recommendations": [],
-    }
-
-
-def _qa_document(identity: str, status: str = "pass") -> dict:
-    return {
-        "request_id": identity,
-        "task_id": identity,
-        "qa": {"status": status},
-    }
-
-
-def _ticket(identity: str) -> str:
-    return f"# Ticket\n\n**TASK-ID**: `{identity}`\n"
-
-
-def _completion(identity: str, references: list[str]) -> str:
-    lines = [f"# Completion\n\n**Request ID**: `{identity}`\n"]
-    lines.extend(f"- `{reference}`\n" for reference in references)
-    return "".join(lines)
-
-
-def _dev_dir(root: Path) -> Path:
-    path = root / "docs" / "dev"
-    path.mkdir(parents=True, exist_ok=True)
-    return path
-
-
-def _materialise(root: Path, *declared: str) -> None:
-    """Create every path a fixture's dev-report declares.
-
-    The resolver requires a declared file union to exist on disk, so a fixture
-    that declares paths must produce them.  The correct remedy is to make the
-    fixture honest, never to weaken the check.
-    """
-    for relative in declared:
-        target = root / relative
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.touch()
-
-
-def _parent_paths(root: Path) -> dict[str, Path]:
-    dev_dir = _dev_dir(root)
-    return {
-        "ticket": dev_dir / f"ticket-{TASK_ID}.md",
-        "context": dev_dir / f"context-{TASK_ID}.json",
-        "dev": dev_dir / f"dev-report-{TASK_ID}.json",
-        "qa": dev_dir / f"qa-report-{TASK_ID}.json",
-        "completion": dev_dir / f"completion-{TASK_ID}.md",
-    }
-
-
-def _lane_paths(root: Path, worker: str) -> dict[str, Path]:
-    dev_dir = _dev_dir(root)
-    identity = f"{TASK_ID}-{worker}"
-    return {
-        "ticket": dev_dir / f"ticket-{identity}.md",
-        "context": dev_dir / f"context-{identity}.json",
-        "dev": dev_dir / f"dev-report-{identity}.json",
-        "qa": dev_dir / f"qa-report-{identity}.json",
-    }
-
-
-def _relative(root: Path, path: Path) -> str:
-    return path.relative_to(root).as_posix()
-
-
-def _make_singular(root: Path) -> dict[str, Path]:
-    paths = _parent_paths(root)
-    _write(paths["ticket"], _ticket(TASK_ID))
-    _write(paths["context"], {"request_id": TASK_ID, "task_id": TASK_ID})
-    _materialise(root, "scripts/one.py")
-    _write(paths["dev"], _dev_document(TASK_ID, modified=["scripts/one.py"]))
-    _write(paths["qa"], _qa_document(TASK_ID))
-    references = [_relative(root, paths[key]) for key in ("ticket", "context", "dev", "qa")]
-    _write(paths["completion"], _completion(TASK_ID, references))
-    return paths
-
-
-def _make_fanout(
-    root: Path,
-    *,
-    workers: list[str] | None = None,
-    optional_parent: bool = False,
-) -> tuple[dict[str, Path], dict[str, dict[str, Path]]]:
-    workers = workers or list(WORKERS)
-    parents = _parent_paths(root)
-    lanes: dict[str, dict[str, Path]] = {}
-    loaded = []
-    references = [_relative(root, parents["dev"])]
-    for index, worker in enumerate(workers):
-        identity = f"{TASK_ID}-{worker}"
-        paths = _lane_paths(root, worker)
-        lanes[worker] = paths
-        _materialise(root, f"scripts/lane-{index}.py", f"tests/lane-{index}.py")
-        dev = _dev_document(
-            identity,
-            modified=[f"scripts/lane-{index}.py"],
-            created=[f"tests/lane-{index}.py"],
-        )
-        _write(paths["ticket"], _ticket(identity))
-        _write(paths["context"], {"request_id": identity, "task_id": identity})
-        _write(paths["dev"], dev)
-        _write(paths["qa"], _qa_document(identity))
-        loaded.append((worker, dev))
-        references.extend(
-            _relative(root, paths[key]) for key in ("ticket", "context", "dev", "qa")
-        )
-    aggregate = RESOLVER._load_aggregate_module()._build_aggregate(loaded, TASK_ID)
-    _write(parents["dev"], aggregate)
-    _write(parents["completion"], _completion(TASK_ID, references))
-    if optional_parent:
-        _write(parents["ticket"], _ticket(TASK_ID))
-        _write(parents["context"], {"request_id": TASK_ID, "task_id": TASK_ID})
-        _write(parents["qa"], _qa_document(TASK_ID))
-    return parents, lanes
-
-
-def _snapshot(root: Path) -> dict[str, str]:
-    return {
-        path.relative_to(root).as_posix(): hashlib.sha256(path.read_bytes()).hexdigest()
-        for path in sorted(root.rglob("*"))
-        if path.is_file()
-    }
-
-
-def _error_codes(result: dict) -> set[str]:
-    return {error["code"] for error in result["errors"]}
-
-
-def _run_cli(root: Path) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
-        [
-            sys.executable,
-            str(RESOLVER_PATH),
-            "--task-id",
-            TASK_ID,
-            "--project-dir",
-            str(root),
-        ],
-        capture_output=True,
-        text=True,
-        check=False,
+def singular_with_declared_paths(
+    root: Path, files_modified: list, *, files_created: list | None = None,
+    flat_files_modified: list | None = None,
+) -> tuple[dict, dict[str, Path]]:
+    declaration, paths = H.make_final_chain(root, "singular")
+    declaration, _ = H.rebind_singular_declared_paths(
+        declaration, paths["canonical"], files_modified=files_modified,
+        files_created=files_created, flat_files_modified=flat_files_modified,
     )
+    return declaration, paths
 
 
-def test_singular_chain_passes_with_stable_consumer_fields(tmp_path: Path) -> None:
-    parents = _make_singular(tmp_path)
-    result = RESOLVER.resolve_chain(tmp_path, TASK_ID)
-    assert result["status"] == "pass"
-    assert result["mode"] == "singular"
-    assert result["canonical_dev_report"] == _relative(tmp_path, parents["dev"])
-    assert result["completion"] == _relative(tmp_path, parents["completion"])
-    assert result["lanes"] == []
-    assert result["report_paths"] == [
-        _relative(tmp_path, parents["dev"]),
-        _relative(tmp_path, parents["qa"]),
-    ]
-    assert result["optional_parent_artifacts"] == {}
-
-
-def test_markdown_identity_accepts_generated_bullet_style(tmp_path: Path) -> None:
-    parents = _make_singular(tmp_path)
-    _write(parents["ticket"], f"# Ticket\n\n- **REQUEST-ID:** `{TASK_ID}`\n")
-    result = RESOLVER.resolve_chain(tmp_path, TASK_ID)
-    assert result["status"] == "pass"
-
-
-def test_fanout_without_parent_optional_artifacts_is_read_only_and_stable(
-    tmp_path: Path,
-) -> None:
-    parents, lanes = _make_fanout(tmp_path)
-    before = _snapshot(tmp_path)
-    first = _run_cli(tmp_path)
-    middle = _snapshot(tmp_path)
-    second = _run_cli(tmp_path)
-    after = _snapshot(tmp_path)
-    assert first.returncode == second.returncode == 0
-    assert first.stderr == second.stderr == ""
-    assert first.stdout == second.stdout
-    result = json.loads(first.stdout)
-    assert result["status"] == "pass"
-    assert result["mode"] == "fanout"
-    assert result["parallel_workers"] == WORKERS
-    assert result["report_paths"] == [
-        _relative(tmp_path, parents["dev"]),
-        *[
-            _relative(tmp_path, lanes[worker][kind])
-            for worker in WORKERS
-            for kind in ("dev", "qa")
-        ],
-    ]
-    assert all(
-        not item["present"] for item in result["optional_parent_artifacts"].values()
-    )
-    assert before == middle == after
-    assert not parents["ticket"].exists()
-    assert not parents["context"].exists()
-    assert not parents["qa"].exists()
-
-
-def test_missing_canonical_is_aggregated_before_read_only_resolution(
-    tmp_path: Path,
-) -> None:
-    parents = _parent_paths(tmp_path)
-    references = [_relative(tmp_path, parents["dev"])]
-    for index, worker in enumerate(WORKERS):
-        identity = f"{TASK_ID}-{worker}"
-        paths = _lane_paths(tmp_path, worker)
-        _write(paths["ticket"], _ticket(identity))
-        _write(paths["context"], {"request_id": identity, "task_id": identity})
-        _materialise(tmp_path, f"scripts/lane-{index}.py")
-        _write(
-            paths["dev"],
-            _dev_document(identity, modified=[f"scripts/lane-{index}.py"]),
-        )
-        _write(paths["qa"], _qa_document(identity))
-        references.extend(
-            _relative(tmp_path, paths[key])
-            for key in ("ticket", "context", "dev", "qa")
-        )
-    _write(parents["completion"], _completion(TASK_ID, references))
-    assert not parents["dev"].exists()
-
-    env = os.environ.copy()
-    env["CLAUDE_PROJECT_DIR"] = str(tmp_path)
-    aggregate = subprocess.run(
-        [
-            sys.executable,
-            str(REPO_ROOT / "scripts" / "aggregate-dev-report.py"),
-            "--task-id",
-            TASK_ID,
-        ],
-        capture_output=True,
-        text=True,
-        check=False,
-        env=env,
-    )
-    assert aggregate.returncode == 0, aggregate.stderr
-    assert json.loads(aggregate.stdout)["action"] == "aggregated"
-    assert parents["dev"].is_file()
-
-    resolved = _run_cli(tmp_path)
-    assert resolved.returncode == 0, resolved.stderr
-    result = json.loads(resolved.stdout)
-    assert result["status"] == "pass"
-    assert result["mode"] == "fanout"
-    assert [lane["worker"] for lane in result["lanes"]] == WORKERS
-
-
-def test_fanout_accepts_valid_optional_parent_artifacts(tmp_path: Path) -> None:
-    parents, _ = _make_fanout(tmp_path, optional_parent=True)
-    result = RESOLVER.resolve_chain(tmp_path, TASK_ID)
-    assert result["status"] == "pass"
-    assert all(
-        item["present"] for item in result["optional_parent_artifacts"].values()
-    )
-    assert result["report_paths"][-1] == _relative(tmp_path, parents["qa"])
-
-
-def test_current_three_lane_shape_with_r01_identity_and_full_index_passes(
-    tmp_path: Path,
-) -> None:
-    workers = ["r01", "r02", "r03"]
-    parents, lanes = _make_fanout(tmp_path, workers=workers)
-    result = RESOLVER.resolve_chain(tmp_path, TASK_ID)
-    assert result["status"] == "pass"
-    assert result["parallel_workers"] == workers
-    r01 = result["lanes"][0]
-    assert r01["task_id"] == f"{TASK_ID}-r01"
-    completion = parents["completion"].read_text(encoding="utf-8")
-    for worker in workers:
-        for path in lanes[worker].values():
-            assert _relative(tmp_path, path) in completion
-
-
-def test_missing_lane_context_fails_closed(tmp_path: Path) -> None:
-    _, lanes = _make_fanout(tmp_path)
-    lanes[WORKERS[0]]["context"].unlink()
-    result = RESOLVER.resolve_chain(tmp_path, TASK_ID)
-    assert result["status"] == "fail"
-    assert "MISSING_ARTIFACT" in _error_codes(result)
-
-
-def test_lane_identity_mismatch_fails_closed(tmp_path: Path) -> None:
-    _, lanes = _make_fanout(tmp_path)
-    _write(
-        lanes[WORKERS[0]]["context"],
-        {"request_id": TASK_ID, "task_id": TASK_ID},
-    )
-    result = RESOLVER.resolve_chain(tmp_path, TASK_ID)
-    assert "IDENTITY_MISMATCH" in _error_codes(result)
-
-
-def test_lane_qa_must_pass(tmp_path: Path) -> None:
-    _, lanes = _make_fanout(tmp_path)
-    identity = f"{TASK_ID}-{WORKERS[0]}"
-    _write(lanes[WORKERS[0]]["qa"], _qa_document(identity, "fail"))
-    result = RESOLVER.resolve_chain(tmp_path, TASK_ID)
-    assert "INVALID_QA_STATUS" in _error_codes(result)
-
-
-def test_completion_must_index_every_lane_artifact(tmp_path: Path) -> None:
-    parents, lanes = _make_fanout(tmp_path)
-    missing = _relative(tmp_path, lanes[WORKERS[1]]["qa"])
-    text = parents["completion"].read_text(encoding="utf-8").replace(missing, "")
-    _write(parents["completion"], text)
-    result = RESOLVER.resolve_chain(tmp_path, TASK_ID)
-    assert "MISSING_COMPLETION_REFERENCE" in _error_codes(result)
-
-
-def test_changed_shard_makes_canonical_stale_without_rewriting_it(
-    tmp_path: Path,
-) -> None:
-    parents, lanes = _make_fanout(tmp_path)
-    canonical_before = parents["dev"].read_bytes()
-    identity = f"{TASK_ID}-{WORKERS[0]}"
-    changed = _dev_document(identity, modified=["scripts/changed.py"])
-    _write(lanes[WORKERS[0]]["dev"], changed)
-    result = RESOLVER.resolve_chain(tmp_path, TASK_ID)
-    assert result["status"] == "fail"
-    assert {
-        "STALE_FILE_UNION",
-        "STALE_CANONICAL",
-    }.issubset(_error_codes(result))
-    assert parents["dev"].read_bytes() == canonical_before
-
-
-def test_owned_files_only_change_stays_pass_without_provenance(
-    tmp_path: Path,
-) -> None:
-    # Restored post-rollback narrower freshness (consumer side): a shard change
-    # confined to the non-projected owned_files field leaves the canonical fresh
-    # and file unions exact, so the chain stays pass with no STALE_SHARD_PROVENANCE.
-    parents, lanes = _make_fanout(tmp_path)
-    dev_path = lanes[WORKERS[0]]["dev"]
-    shard = json.loads(dev_path.read_text(encoding="utf-8"))
-    shard["owned_files"] = {"alpha.py": "after"}
-    _write(dev_path, shard)
-    result = RESOLVER.resolve_chain(tmp_path, TASK_ID)
-    assert result["status"] == "pass"
-    assert result["checks"]["canonical_fresh"] is True
-    assert result["checks"]["file_unions_exact"] is True
-    assert "STALE_SHARD_PROVENANCE" not in _error_codes(result)
-
-
-def test_extra_shard_is_an_ambiguous_lane_set(tmp_path: Path) -> None:
-    _make_fanout(tmp_path)
-    extra = _lane_paths(tmp_path, "lane-c")["dev"]
-    _write(extra, _dev_document(f"{TASK_ID}-lane-c"))
-    result = RESOLVER.resolve_chain(tmp_path, TASK_ID)
-    assert "LANE_SET_MISMATCH" in _error_codes(result)
-
-
-def test_malformed_json_fails_with_stable_error(tmp_path: Path) -> None:
-    _, lanes = _make_fanout(tmp_path)
-    _write(lanes[WORKERS[0]]["context"], "{not json\n")
-    first = RESOLVER.resolve_chain(tmp_path, TASK_ID)
-    second = RESOLVER.resolve_chain(tmp_path, TASK_ID)
-    assert first == second
-    assert "MALFORMED_JSON" in _error_codes(first)
-
-
-def test_singular_with_worker_shard_is_ambiguous(tmp_path: Path) -> None:
-    _make_singular(tmp_path)
-    lane = _lane_paths(tmp_path, "lane-a")["dev"]
-    _write(lane, _dev_document(f"{TASK_ID}-lane-a"))
-    result = RESOLVER.resolve_chain(tmp_path, TASK_ID)
-    assert "AMBIGUOUS_SINGULAR_CHAIN" in _error_codes(result)
-
-
-def test_invalid_optional_parent_artifact_is_not_ignored(tmp_path: Path) -> None:
-    parents, _ = _make_fanout(tmp_path)
-    _write(parents["qa"], _qa_document("wrong-parent"))
-    result = RESOLVER.resolve_chain(tmp_path, TASK_ID)
-    assert "IDENTITY_MISMATCH" in _error_codes(result)
-
-
-def test_cli_validation_failure_is_json_and_exit_two(tmp_path: Path) -> None:
-    _make_fanout(tmp_path)
-    (_parent_paths(tmp_path)["completion"]).unlink()
-    first = _run_cli(tmp_path)
-    second = _run_cli(tmp_path)
-    assert first.returncode == second.returncode == 2
-    assert first.stderr == second.stderr == ""
-    assert first.stdout == second.stdout
-    assert json.loads(first.stdout)["status"] == "fail"
-
-
-# ---------------------------------------------------------------------------
-# Shard scoping across the three task-id shapes.  Shards belong to the FULL
-# task-id; the bare YYYYMMDD-HHMMSS timestamp is a truncation of a prefixed or
-# suffixed id and must not be used as the scan key for it.
-# ---------------------------------------------------------------------------
-
-BARE_ID = "20260727-080801"
-SUFFIXED_ID = "20260727-080801-11"
-PREFIXED_ID = TASK_ID
-
-
-def _make_singular_for(root: Path, identity: str) -> dict[str, Path]:
-    dev_dir = _dev_dir(root)
-    paths = {
-        "ticket": dev_dir / f"ticket-{identity}.md",
-        "context": dev_dir / f"context-{identity}.json",
-        "dev": dev_dir / f"dev-report-{identity}.json",
-        "qa": dev_dir / f"qa-report-{identity}.json",
-        "completion": dev_dir / f"completion-{identity}.md",
-    }
-    _write(paths["ticket"], _ticket(identity))
-    _write(paths["context"], {"request_id": identity, "task_id": identity})
-    _materialise(root, "scripts/one.py")
-    _write(paths["dev"], _dev_document(identity, modified=["scripts/one.py"]))
-    _write(paths["qa"], _qa_document(identity))
-    references = [
-        _relative(root, paths[key]) for key in ("ticket", "context", "dev", "qa")
-    ]
-    _write(paths["completion"], _completion(identity, references))
-    return paths
-
-
-def _ambiguity_detail(result: dict) -> str:
-    return next(
-        error["detail"]
-        for error in result["errors"]
-        if error["code"] == "AMBIGUOUS_SINGULAR_CHAIN"
-    )
-
-
-def test_suffixed_task_id_canonical_is_not_a_shard_of_itself(tmp_path: Path) -> None:
-    # A pristine suffixed-id chain, alone in docs/dev, must resolve.  Matching
-    # against the truncated timestamp classifies dev-report-<ts>-11.json as
-    # worker '11' of itself.
-    _make_singular_for(tmp_path, SUFFIXED_ID)
-    result = RESOLVER.resolve_chain(tmp_path, SUFFIXED_ID)
+@pytest.mark.parametrize(
+    ("shape", "mode"),
+    [("singular", "singular"), ("parallel_dev", "parallel_dev"), ("requirement_fanout", "fanout")],
+)
+def test_all_declared_shapes_resolve_with_compatibility_aliases(tmp_path: Path, shape: str, mode: str) -> None:
+    declaration, _ = H.make_final_chain(tmp_path, shape)
+    result = RESOLVER.resolve_chain(tmp_path, H.TASK)
     assert result["status"] == "pass", result["errors"]
-    assert "AMBIGUOUS_SINGULAR_CHAIN" not in _error_codes(result)
+    assert result["schema_version"] == RESOLVER.RESULT_VERSION
+    assert result["shape"] == shape
+    assert result["mode"] == mode
+    assert result["task_id"] == result["parent_task_id"] == H.TASK
+    assert result["canonical_dev_report"] == result["parent"]["canonical_dev_report"]
+    assert result["completion"] == result["parent"]["completion"]
+    assert result["commit_whitelist_artifacts"] == result["artifact_paths"]
+    assert result["lineage_digest"] == declaration["lineage_digest"]
 
 
-def test_suffixed_task_id_ignores_siblings_sharing_the_bare_timestamp(
-    tmp_path: Path,
-) -> None:
-    _make_singular_for(tmp_path, SUFFIXED_ID)
-    sibling = _dev_dir(tmp_path) / f"dev-report-{BARE_ID}-12.json"
-    _write(sibling, _dev_document(f"{BARE_ID}-12"))
-    result = RESOLVER.resolve_chain(tmp_path, SUFFIXED_ID)
-    assert result["status"] == "pass", result["errors"]
-    assert sibling.is_file()
+def test_exact_relationship_matrix_for_parallel_dev(tmp_path: Path) -> None:
+    declaration, _ = H.make_final_chain(tmp_path, "parallel_dev")
+    result = RESOLVER.resolve_chain(tmp_path, H.TASK)
+    assert len(result["lanes"]) == 2
+    for row in result["lanes"]:
+        assert row["member_kind"] == "parallel_worker"
+        assert row["ticket"] is row["context"] is row["qa_report"] is None
+        assert row["task_id"] == row["member_id"]
+        assert row["lineage_digest"] == result["lineage_digest"]
+        assert row["attempt_history"][0]["record_kind"] == "immutable_member"
+    assert result["qa_inputs"] == [{
+        "scope": "parent", "member_id": None, "task_id": H.TASK,
+        "qa_report": f"docs/dev/qa-report-{H.TASK}.json",
+    }]
+    expected_reports = [f"docs/dev/dev-report-{H.TASK}.json"] + [m["artifact_paths"]["dev_report"] for m in declaration["member_lineage"]] + [f"docs/dev/qa-report-{H.TASK}.json"]
+    assert result["report_paths"] == expected_reports
 
 
-def test_suffixed_task_id_still_detects_its_own_undeclared_sub_shards(
-    tmp_path: Path,
-) -> None:
-    # The check must keep firing for a real undeclared fan-out parent, and must
-    # name the sub-worker rather than a label carved out of the timestamp.
-    _make_singular_for(tmp_path, SUFFIXED_ID)
-    _write(
-        _dev_dir(tmp_path) / f"dev-report-{SUFFIXED_ID}-S1.json",
-        _dev_document(f"{SUFFIXED_ID}-S1"),
-    )
-    result = RESOLVER.resolve_chain(tmp_path, SUFFIXED_ID)
-    assert "AMBIGUOUS_SINGULAR_CHAIN" in _error_codes(result)
-    assert "'S1'" in _ambiguity_detail(result)
+def test_exact_relationship_matrix_for_requirement_fanout(tmp_path: Path) -> None:
+    declaration, _ = H.make_final_chain(tmp_path, "requirement_fanout")
+    result = RESOLVER.resolve_chain(tmp_path, H.TASK)
+    assert result["parent"]["ticket"] is None
+    assert result["parent"]["context"] is None
+    assert result["parent"]["qa_report"] is None
+    assert [item["scope"] for item in result["qa_inputs"]] == ["member", "member"]
+    assert [item["member_id"] for item in result["qa_inputs"]] == [m["member_id"] for m in declaration["member_lineage"]]
+    assert all(all(row[field] is not None for field in ("ticket", "context", "dev_report", "qa_report")) for row in result["lanes"])
 
 
-def test_prefixed_task_id_ignores_bare_timestamp_sibling_shards(
-    tmp_path: Path,
-) -> None:
-    _make_singular_for(tmp_path, PREFIXED_ID)
-    bare_sibling = _dev_dir(tmp_path) / "dev-report-20260724-120000-lane-x.json"
-    _write(bare_sibling, _dev_document("20260724-120000-lane-x"))
-    result = RESOLVER.resolve_chain(tmp_path, PREFIXED_ID)
-    assert result["status"] == "pass", result["errors"]
-    assert bare_sibling.is_file()
+def test_preflight_redirects_exact_child_before_any_mutation(tmp_path: Path) -> None:
+    declaration, paths = H.make_final_chain(tmp_path, "parallel_dev")
+    child = declaration["member_lineage"][0]["member_id"]
+    before = {p.relative_to(tmp_path).as_posix(): p.read_bytes() for p in tmp_path.rglob("*") if p.is_file()}
+    result = RESOLVER.preflight_parent(tmp_path, child)
+    after = {p.relative_to(tmp_path).as_posix(): p.read_bytes() for p in tmp_path.rglob("*") if p.is_file()}
+    assert result["status"] == "redirect"
+    assert result["parent_task_id"] == H.TASK
+    assert result["errors"][0]["code"] == "PARENT_TASK_ID_REQUIRED"
+    assert before == after
 
 
-def test_bare_task_id_chain_resolves_and_keeps_collecting_its_shards(
-    tmp_path: Path,
-) -> None:
-    # Control for the third shape: a bare id is its own scan key, so nothing is
-    # truncated and its shard discovery is unchanged.
-    _make_singular_for(tmp_path, BARE_ID)
-    assert RESOLVER.resolve_chain(tmp_path, BARE_ID)["status"] == "pass"
-    _write(
-        _dev_dir(tmp_path) / f"dev-report-{BARE_ID}-11.json",
-        _dev_document(f"{BARE_ID}-11"),
-    )
-    result = RESOLVER.resolve_chain(tmp_path, BARE_ID)
-    assert "AMBIGUOUS_SINGULAR_CHAIN" in _error_codes(result)
-    assert "'11'" in _ambiguity_detail(result)
+def test_parent_preflight_is_ready_and_read_only(tmp_path: Path) -> None:
+    declaration, paths = H.make_final_chain(tmp_path, "parallel_dev")
+    before = paths["canonical"].read_bytes()
+    result = RESOLVER.preflight_parent(tmp_path, H.TASK)
+    assert result["status"] == "ready"
+    assert result["canonical_state"] == "present"
+    assert result["canonical_sha256"] == H.hashlib.sha256(before).hexdigest()
+    assert result["phase_digest"] == declaration["phase_projection"]["phase_digest"]
+    assert paths["canonical"].read_bytes() == before
 
 
-# ---------------------------------------------------------------------------
-# The checks object must never claim a check it did not perform.  The two
-# relational checks are computed only on the fan-out branch; on the singular
-# branch they have no analogue and say so.  The declared-path check IS
-# meaningful for a single lane and is enforced on both branches.
-# ---------------------------------------------------------------------------
-
-
-def _absent_path_details(result: dict) -> list[str]:
-    return [
-        error["detail"]
-        for error in result["errors"]
-        if error["code"] == "ABSENT_DECLARED_PATH"
-    ]
-
-
-def test_singular_relational_checks_are_not_applicable_with_a_reason(
-    tmp_path: Path,
-) -> None:
-    # Neither True nor False: a singular chain has no second artifact to compare
-    # against, so reporting either boolean would assert a comparison that never ran.
-    _make_singular(tmp_path)
-    result = RESOLVER.resolve_chain(tmp_path, TASK_ID)
-    assert result["status"] == "pass", result["errors"]
-    for check in ("canonical_fresh", "file_unions_exact"):
-        value = result["checks"][check]
-        assert value is not True and value is not False
-        assert value == RESOLVER.NOT_APPLICABLE
-        reason = result["checks_not_applicable"][check]
-        assert "two or more independent shard artifacts" in reason
-        assert "no singular analogue" in reason
-
-
-def test_base_result_initialises_every_check_fail_closed() -> None:
-    checks = RESOLVER._base_result("t", "c", "d")["checks"]
-    assert checks["canonical_fresh"] is False
-    assert checks["file_unions_exact"] is False
-    assert checks["declared_paths_exist"] is False
-
-
-def test_singular_absent_declared_path_fails_under_its_own_error_code(
-    tmp_path: Path,
-) -> None:
-    parents = _make_singular(tmp_path)
-    _write(
-        parents["dev"],
-        _dev_document(TASK_ID, modified=["scripts/one.py"], created=["scripts/gone.py"]),
-    )
-    result = RESOLVER.resolve_chain(tmp_path, TASK_ID)
-    assert result["status"] == "fail"
-    assert result["checks"]["declared_paths_exist"] is False
-    codes = _error_codes(result)
-    assert "ABSENT_DECLARED_PATH" in codes
-    # A different failure from staleness, so it must not borrow either code.
-    assert "STALE_FILE_UNION" not in codes
-    assert "STALE_CANONICAL" not in codes
-    assert any("scripts/gone.py" in detail for detail in _absent_path_details(result))
-    assert _run_cli(tmp_path).returncode == 2
-
-
-def test_fanout_absent_declared_path_fires_the_same_error_code(tmp_path: Path) -> None:
-    # Models the real corpus case: the canonical is fresh and exactly matches its
-    # shards, but a declared file has since left the tree.  Only the new check
-    # may fire -- the relational checks stay computed and True.
-    _make_fanout(tmp_path)
-    (tmp_path / "tests" / "lane-1.py").unlink()
-    result = RESOLVER.resolve_chain(tmp_path, TASK_ID)
-    assert result["mode"] == "fanout"
-    assert result["status"] == "fail"
-    assert result["checks"]["declared_paths_exist"] is False
-    assert result["checks"]["canonical_fresh"] is True
-    assert result["checks"]["file_unions_exact"] is True
-    codes = _error_codes(result)
-    assert "ABSENT_DECLARED_PATH" in codes
-    assert not codes & {"STALE_FILE_UNION", "STALE_CANONICAL"}
-    assert any("tests/lane-1.py" in detail for detail in _absent_path_details(result))
-
-
-def test_every_absent_path_is_reported_individually(tmp_path: Path) -> None:
-    parents = _make_singular(tmp_path)
-    _write(
-        parents["dev"],
-        _dev_document(
-            TASK_ID,
-            modified=["scripts/one.py", "scripts/missing-a.py"],
-            created=["scripts/missing-b.py"],
-        ),
-    )
-    result = RESOLVER.resolve_chain(tmp_path, TASK_ID)
-    details = _absent_path_details(result)
-    assert len(details) == 2
-    assert any("scripts/missing-a.py" in detail for detail in details)
-    assert any("scripts/missing-b.py" in detail for detail in details)
-
-
-def test_declared_directory_and_symlink_count_as_present(tmp_path: Path) -> None:
-    # Weakest defensible existence semantics: the claim under test is "a path is
-    # there", not "a regular file is there".  A broken symlink is still an entry.
-    parents = _make_singular(tmp_path)
-    (tmp_path / "scripts" / "a-directory").mkdir(parents=True, exist_ok=True)
-    (tmp_path / "scripts" / "dangling").symlink_to(tmp_path / "scripts" / "nowhere.py")
-    _write(
-        parents["dev"],
-        _dev_document(
-            TASK_ID,
-            modified=["scripts/one.py", "scripts/a-directory"],
-            created=["scripts/dangling"],
-        ),
-    )
-    result = RESOLVER.resolve_chain(tmp_path, TASK_ID)
+def test_lawful_real_in_root_declared_file_resolves(tmp_path: Path) -> None:
+    tracked = tmp_path / "src" / "tracked.txt"
+    tracked.parent.mkdir()
+    tracked.write_text("inside", encoding="utf-8")
+    singular_with_declared_paths(tmp_path, ["src/tracked.txt"])
+    result = RESOLVER.resolve_chain(tmp_path, H.TASK)
     assert result["status"] == "pass", result["errors"]
     assert result["checks"]["declared_paths_exist"] is True
 
 
-def test_absent_and_explicitly_empty_parallel_workers_are_distinguishable(
-    tmp_path: Path,
-) -> None:
-    parents = _make_singular(tmp_path)
-    absent = RESOLVER.resolve_chain(tmp_path, TASK_ID)
-    canonical = json.loads(parents["dev"].read_text(encoding="utf-8"))
-    assert "parallel_workers" not in canonical
-    canonical["parallel_workers"] = []
-    _write(parents["dev"], canonical)
-    empty = RESOLVER.resolve_chain(tmp_path, TASK_ID)
-    assert absent != empty
-    assert absent["parallel_workers_declaration"] == "absent"
-    assert empty["parallel_workers_declaration"] == "empty"
-    # Both remain singular and passing; the distinction is diagnostic, not a
-    # new failure for the ordinary case.
-    assert absent["status"] == empty["status"] == "pass"
-    assert absent["mode"] == empty["mode"] == "singular"
+@pytest.mark.parametrize(
+    "layout",
+    [
+        "direct-external-file", "external-directory", "nested-external-directory",
+        "broken-file", "broken-intermediate", "directory-target", "non-directory-intermediate",
+    ],
+)
+def test_declared_paths_reject_symlink_escape_and_broken_components(tmp_path: Path, layout: str) -> None:
+    outside = tmp_path.parent / f"{tmp_path.name}-external"
+    outside.mkdir()
+    (outside / "outside.txt").write_text("outside", encoding="utf-8")
+    if layout == "direct-external-file":
+        (tmp_path / "declared.txt").symlink_to(outside / "outside.txt")
+        relative = "declared.txt"
+    elif layout == "external-directory":
+        (tmp_path / "escape").symlink_to(outside, target_is_directory=True)
+        relative = "escape/outside.txt"
+    elif layout == "nested-external-directory":
+        (tmp_path / "real").mkdir()
+        (tmp_path / "real" / "escape").symlink_to(outside, target_is_directory=True)
+        relative = "real/escape/outside.txt"
+    elif layout == "broken-file":
+        (tmp_path / "declared.txt").symlink_to(tmp_path / "missing.txt")
+        relative = "declared.txt"
+    elif layout == "broken-intermediate":
+        (tmp_path / "broken").symlink_to(tmp_path / "missing-directory", target_is_directory=True)
+        relative = "broken/missing.txt"
+    elif layout == "directory-target":
+        (tmp_path / "declared-directory").mkdir()
+        relative = "declared-directory"
+    else:
+        (tmp_path / "not-a-directory").write_text("file", encoding="utf-8")
+        relative = "not-a-directory/missing.txt"
+    singular_with_declared_paths(tmp_path, [relative])
+    result = RESOLVER.resolve_chain(tmp_path, H.TASK)
+    assert result["status"] == "fail"
+    assert result["checks"]["declared_paths_exist"] is False
+    assert any(error["code"] in {"INVENTORY_MISMATCH", "MISSING_ARTIFACT"} for error in result["errors"])
 
 
-def test_declared_parallel_workers_are_reported_as_declared(tmp_path: Path) -> None:
-    _make_fanout(tmp_path)
-    result = RESOLVER.resolve_chain(tmp_path, TASK_ID)
-    assert result["parallel_workers_declaration"] == "declared"
+@pytest.mark.parametrize(
+    "relative",
+    ["../outside.txt", "./tracked.txt", "dir/../tracked.txt", "dir//tracked.txt", "dir\\tracked.txt", "/tracked.txt"],
+)
+def test_declared_paths_reject_lexical_traversal_and_aliases(tmp_path: Path, relative: str) -> None:
+    (tmp_path / "tracked.txt").write_text("inside", encoding="utf-8")
+    singular_with_declared_paths(tmp_path, [relative])
+    result = RESOLVER.resolve_chain(tmp_path, H.TASK)
+    assert result["status"] == "fail"
+    assert result["checks"]["declared_paths_exist"] is False
+    assert any(error["code"] == "INVENTORY_MISMATCH" for error in result["errors"])
 
 
-def test_lost_worker_declaration_fires_alongside_ambiguous_singular_chain(
-    tmp_path: Path,
-) -> None:
-    # An aggregate stripped of parallel_workers is structurally identical to a
-    # singular chain; only surviving shard evidence reveals it.
-    _make_singular(tmp_path)
-    _write(
-        _lane_paths(tmp_path, "lane-a")["dev"],
-        _dev_document(f"{TASK_ID}-lane-a"),
+@pytest.mark.parametrize("bad", [False, True, 1, 1.0, None, [], {}])
+def test_declared_paths_reject_wrong_json_types(tmp_path: Path, bad) -> None:
+    singular_with_declared_paths(tmp_path, [bad])
+    result = RESOLVER.resolve_chain(tmp_path, H.TASK)
+    assert result["status"] == "fail"
+    assert result["checks"]["declared_paths_exist"] is False
+    assert any(error["code"] in {"INVALID_STATUS", "INVENTORY_MISMATCH"} for error in result["errors"])
+
+
+def test_declared_paths_reject_duplicate_cross_list_and_hardlink_aliases(tmp_path: Path) -> None:
+    tracked = tmp_path / "tracked.txt"
+    alias = tmp_path / "alias.txt"
+    tracked.write_text("inside", encoding="utf-8")
+    alias.hardlink_to(tracked)
+    cases = [
+        (["tracked.txt", "tracked.txt"], []),
+        (["tracked.txt"], ["tracked.txt"]),
+        (["tracked.txt", "alias.txt"], []),
+    ]
+    for index, (modified, created) in enumerate(cases):
+        root = tmp_path / f"case-{index}"
+        root.mkdir()
+        (root / "tracked.txt").hardlink_to(tracked)
+        (root / "alias.txt").hardlink_to(tracked)
+        singular_with_declared_paths(root, modified, files_created=created)
+        result = RESOLVER.resolve_chain(root, H.TASK)
+        assert result["status"] == "fail"
+        assert result["checks"]["declared_paths_exist"] is False
+        assert any(error["code"] == "INVENTORY_MISMATCH" for error in result["errors"])
+
+
+def test_declared_paths_reject_flat_nested_alias_ambiguity(tmp_path: Path) -> None:
+    (tmp_path / "tracked.txt").write_text("inside", encoding="utf-8")
+    singular_with_declared_paths(
+        tmp_path, ["tracked.txt"], flat_files_modified=[],
     )
-    result = RESOLVER.resolve_chain(tmp_path, TASK_ID)
-    codes = _error_codes(result)
-    assert "LOST_WORKER_DECLARATION" in codes
-    # Additive only: the pre-existing error still fires unchanged beside it.
-    assert "AMBIGUOUS_SINGULAR_CHAIN" in codes
-    assert result["parallel_workers_declaration"] == "absent"
+    result = RESOLVER.resolve_chain(tmp_path, H.TASK)
+    assert result["status"] == "fail"
+    assert result["checks"]["declared_paths_exist"] is False
+    assert any(error["code"] == "INVALID_STATUS" and "type-strictly equal" in error["message"] for error in result["errors"])
 
 
-def test_explicitly_empty_worker_list_with_shards_is_only_ambiguous(
+def test_missing_canonical_requires_repair_and_is_not_created(tmp_path: Path) -> None:
+    (tmp_path / "docs/dev").mkdir(parents=True)
+    result = RESOLVER.preflight_parent(tmp_path, H.TASK)
+    assert result["status"] == "repair_required"
+    assert result["canonical_state"] == "absent"
+    assert result["errors"][0]["code"] == "CANONICAL_NOT_FOUND"
+    assert not (tmp_path / f"docs/dev/dev-report-{H.TASK}.json").exists()
+
+
+def test_overnight_intermediate_is_non_lifecycle(tmp_path: Path) -> None:
+    dev = tmp_path / "docs/dev"
+    dev.mkdir(parents=True)
+    H.write_json(dev / f"dev-report-{H.TASK}.json", {
+        "request_id": H.TASK, "task_id": H.TASK,
+        "artifact_chain_role": "overnight_pipeline_intermediate",
+        "artifact_chain_declaration": None,
+    })
+    result = RESOLVER.preflight_parent(tmp_path, H.TASK)
+    assert result["status"] == "repair_required"
+    assert result["errors"][0]["code"] == "NON_LIFECYCLE_REPORT"
+
+
+def test_changed_immutable_member_bytes_fail_freshness_and_hash(tmp_path: Path) -> None:
+    declaration, _ = H.make_final_chain(tmp_path, "parallel_dev")
+    member_path = tmp_path / declaration["member_lineage"][0]["artifact_paths"]["dev_report"]
+    report = json.loads(member_path.read_text())
+    report["dev"]["tasks_completed"] = [{"changed": True}]
+    H.write_json(member_path, report)
+    result = RESOLVER.resolve_chain(tmp_path, H.TASK)
+    assert result["status"] == "fail"
+    assert "STALE_CANONICAL" in {error["code"] for error in result["errors"]}
+
+
+def test_undeclared_retry_is_rejected_without_path_inference_acceptance(tmp_path: Path) -> None:
+    declaration, _ = H.make_final_chain(tmp_path, "parallel_dev")
+    member = declaration["member_lineage"][0]
+    report = H.dev_report(member["member_id"], binding={
+        "parent_task_id": H.TASK, "member_id": member["member_id"],
+        "lineage_digest": declaration["lineage_digest"], "attempt": 2,
+    })
+    rogue = tmp_path / f"docs/dev/dev-report-iter2-{H.TASK}-{member['member_id']}.json"
+    H.write_json(rogue, report)
+    result = RESOLVER.resolve_chain(tmp_path, H.TASK)
+    assert result["status"] == "fail"
+    assert any(error["code"] == "INVENTORY_MISMATCH" and error["path"].endswith(rogue.name) for error in result["errors"])
+
+
+def test_exact_singular_sidecar_has_aggregate_resolver_parity_and_zero_mutation(
     tmp_path: Path,
 ) -> None:
-    # The empty key is a deliberate declaration, not a loss, so the new error
-    # must not fire -- that is the whole point of distinguishing the two.
-    parents = _make_singular(tmp_path)
-    canonical = json.loads(parents["dev"].read_text(encoding="utf-8"))
-    canonical["parallel_workers"] = []
-    _write(parents["dev"], canonical)
-    _write(
-        _lane_paths(tmp_path, "lane-a")["dev"],
-        _dev_document(f"{TASK_ID}-lane-a"),
+    declaration, _ = H.make_final_chain(tmp_path, "singular")
+    sidecar = tmp_path / "docs/dev/arbitrary-content-authority.json"
+    H.write_json(sidecar, H.dev_report(H.TASK))
+    before = {
+        path.relative_to(tmp_path).as_posix(): path.read_bytes()
+        for path in tmp_path.rglob("*") if path.is_file() and not path.is_symlink()
+    }
+
+    normalized, aggregate_errors = H.AGG.validate_declaration(
+        declaration, H.TASK, root=tmp_path, validate_artifacts=True,
     )
-    result = RESOLVER.resolve_chain(tmp_path, TASK_ID)
-    codes = _error_codes(result)
-    assert "AMBIGUOUS_SINGULAR_CHAIN" in codes
-    assert "LOST_WORKER_DECLARATION" not in codes
+    result = RESOLVER.resolve_chain(tmp_path, H.TASK)
+    aggregate_match = [
+        error for error in aggregate_errors
+        if error["path"] == "docs/dev/arbitrary-content-authority.json"
+    ]
+    resolver_match = [
+        error for error in result["errors"]
+        if error["path"] == "docs/dev/arbitrary-content-authority.json"
+    ]
+    assert normalized is None
+    assert result["status"] == "fail"
+    assert aggregate_match == resolver_match
+    assert aggregate_match[0]["code"] == "INVENTORY_MISMATCH"
+    assert "exact_mutable_singular_identity" in aggregate_match[0]["message"]
+    after = {
+        path.relative_to(tmp_path).as_posix(): path.read_bytes()
+        for path in tmp_path.rglob("*") if path.is_file() and not path.is_symlink()
+    }
+    assert after == before
 
 
-def test_malformed_canonical_dev_block_does_not_raise_in_the_new_check(
-    tmp_path: Path,
+@pytest.mark.parametrize(
+    ("request_id", "task_id", "role"),
+    [
+        (H.TASK + "-foreign", H.TASK + "-foreign", "lifecycle_singular_parent"),
+        (H.TASK, H.TASK + "-foreign", "lifecycle_singular_parent"),
+        (H.TASK + "-foreign", H.TASK, "lifecycle_singular_parent"),
+        (H.TASK, H.TASK, "lifecycle_singular_parent-suffix"),
+        (False, H.TASK, "lifecycle_singular_parent"),
+        (H.TASK, {}, "lifecycle_singular_parent"),
+    ],
+)
+def test_resolver_singular_sidecar_negative_identity_and_suffix_controls(
+    tmp_path: Path, request_id, task_id, role,
 ) -> None:
-    parents = _make_singular(tmp_path)
-    canonical = json.loads(parents["dev"].read_text(encoding="utf-8"))
-    canonical["dev"] = "not-an-object"
-    _write(parents["dev"], canonical)
-    result = RESOLVER.resolve_chain(tmp_path, TASK_ID)
-    assert "INVALID_DEV_STATUS" in _error_codes(result)
-    assert "ABSENT_DECLARED_PATH" not in _error_codes(result)
+    H.make_final_chain(tmp_path, "singular")
+    report = H.dev_report(H.TASK)
+    report.update(request_id=request_id, task_id=task_id, artifact_chain_role=role)
+    sidecar = tmp_path / f"docs/dev/dev-report-iter2-{H.TASK}-suffix.json"
+    sidecar_raw = H.write_json(sidecar, report)
+    result = RESOLVER.resolve_chain(tmp_path, H.TASK)
+    assert result["status"] == "pass", result["errors"]
+    assert sidecar.read_bytes() == sidecar_raw
 
 
-def test_invalid_task_id_is_json_and_exit_two(tmp_path: Path) -> None:
-    process = subprocess.run(
-        [
-            sys.executable,
-            str(RESOLVER_PATH),
-            "--task-id",
-            "../escape",
-            "--project-dir",
-            str(tmp_path),
-        ],
-        capture_output=True,
-        text=True,
-        check=False,
+def test_resolver_rejects_hardlink_alias_of_exact_singular_sidecar(tmp_path: Path) -> None:
+    H.make_final_chain(tmp_path, "singular")
+    origin = tmp_path / "unscanned-retry-source.bin"
+    origin_raw = H.write_json(origin, H.dev_report(H.TASK))
+    alias = tmp_path / "docs/dev/content-addressed-alias.json"
+    alias.hardlink_to(origin)
+    result = RESOLVER.resolve_chain(tmp_path, H.TASK)
+    assert result["status"] == "fail"
+    assert any(
+        error["code"] == "INVENTORY_MISMATCH"
+        and error["path"] == "docs/dev/content-addressed-alias.json"
+        for error in result["errors"]
     )
-    assert process.returncode == 2
-    assert process.stderr == ""
-    assert "INVALID_TASK_ID" in _error_codes(json.loads(process.stdout))
+    assert origin.read_bytes() == alias.read_bytes() == origin_raw
+
+
+def test_resolver_sidecar_replacement_during_discovery_fails_closed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    H.make_final_chain(tmp_path, "singular")
+    canonical = tmp_path / f"docs/dev/dev-report-{H.TASK}.json"
+    canonical_before = canonical.read_bytes()
+    sidecar = tmp_path / "docs/dev/raced-retry.json"
+    H.write_json(sidecar, H.dev_report(H.TASK + "-foreign"))
+    replacement = H.dev_report(H.TASK)
+    original_read = RESOLVER.AGG._read_regular_file_at
+    replaced = False
+
+    def replace_after_snapshot(directory_fd: int, name: str, display_path: str):
+        nonlocal replaced
+        raw, fingerprint = original_read(directory_fd, name, display_path)
+        if display_path == "docs/dev/raced-retry.json" and not replaced:
+            replaced = True
+            sidecar.unlink()
+            H.write_json(sidecar, replacement)
+        return raw, fingerprint
+
+    monkeypatch.setattr(RESOLVER.AGG, "_read_regular_file_at", replace_after_snapshot)
+    result = RESOLVER.resolve_chain(tmp_path, H.TASK)
+    assert replaced
+    assert result["status"] == "fail"
+    assert any(
+        error["code"] == "INVENTORY_MISMATCH"
+        and error["path"] == "docs/dev/raced-retry.json"
+        for error in result["errors"]
+    )
+    assert canonical.read_bytes() == canonical_before
+    assert json.loads(sidecar.read_text(encoding="utf-8"))["task_id"] == H.TASK
+
+
+def test_parallel_parent_outcomes_are_closed_and_complete(tmp_path: Path) -> None:
+    declaration, _ = H.make_final_chain(tmp_path, "parallel_dev")
+    qa_path = tmp_path / f"docs/dev/qa-report-{H.TASK}.json"
+    qa = json.loads(qa_path.read_text())
+    qa["parallel_dev_worker_outcomes"]["worker_outcomes"].pop()
+    H.write_json(qa_path, qa)
+    result = RESOLVER.resolve_chain(tmp_path, H.TASK)
+    codes = {error["code"] for error in result["errors"]}
+    assert result["status"] == "fail"
+    assert "INVALID_STATUS" in codes or "INVALID_PHASE_TRANSITION" in codes
+
+
+def test_decomposed_unicode_baseline_does_not_equal_precomposed(tmp_path: Path) -> None:
+    declaration, _ = H.make_final_chain(tmp_path, "parallel_dev")
+    path = tmp_path / declaration["member_lineage"][0]["artifact_paths"]["dev_report"]
+    report = json.loads(path.read_text())
+    report["baseline_dirty_snapshot"] = report["baseline_dirty_snapshot"].replace("e\u0301", "é")
+    H.write_json(path, report)
+    result = RESOLVER.resolve_chain(tmp_path, H.TASK)
+    assert any(error["code"] == "BASELINE_MISMATCH" for error in result["errors"])
+
+
+@pytest.mark.parametrize("invalid_layout", ["evidence_scalar", "nested_phase_digest"])
+def test_singular_resolve_rejects_stable_evidence_outside_exact_top_level_object(
+    tmp_path: Path, invalid_layout: str,
+) -> None:
+    declaration, paths = H.make_final_chain(tmp_path, "singular")
+    canonical = json.loads(paths["canonical"].read_text(encoding="utf-8"))
+    candidate = copy.deepcopy(declaration)
+    if invalid_layout == "evidence_scalar":
+        canonical["artifact_chain_evidence"] = True
+    else:
+        canonical["dev"]["phase_digest"] = "sha256:" + "f" * 64
+        projection = {
+            key: copy.deepcopy(value)
+            for key, value in canonical.items()
+            if key not in {"artifact_chain_declaration", "artifact_chain_evidence"}
+        }
+        projection_raw = H.AGG._canonical_bytes(projection)
+        stable_digest = H.AGG._bytes_digest(projection_raw)
+        ledger = candidate["phase_projection"]["members"][0]["attempt_ledger"][0]
+        ledger["stable_projection_sha256"] = stable_digest
+        ledger["stable_projection_utf8_base64"] = H.base64.b64encode(projection_raw).decode("ascii")
+        for event in candidate["phase_projection"]["events"]:
+            if event["to_state"] in {"dev_completed", "awaiting_qa"}:
+                event["evidence_digest"] = stable_digest
+        candidate = H.AGG.finalize_declaration(candidate)
+        canonical["artifact_chain_declaration"] = candidate
+    before = H.write_json(paths["canonical"], canonical)
+    result = RESOLVER.resolve_chain(tmp_path, H.TASK)
+    assert result["status"] == "fail"
+    assert any(error["code"] == "INVALID_DECLARATION" for error in result["errors"])
+    assert paths["canonical"].read_bytes() == before
+
+
+def test_cli_failure_is_parseable_v2_and_exit_two(tmp_path: Path) -> None:
+    (tmp_path / "docs/dev").mkdir(parents=True)
+    proc = subprocess.run(
+        [sys.executable, str(RESOLVER_PATH), "--project-dir", str(tmp_path), "--task-id", H.TASK],
+        text=True, capture_output=True,
+    )
+    payload = json.loads(proc.stdout)
+    assert proc.returncode == 2
+    assert payload["schema_version"] == RESOLVER.RESULT_VERSION
+    assert payload["status"] == "fail"
+    assert set(("shape", "mode", "parent", "lanes", "qa_inputs", "artifact_paths")).issubset(payload)
+
+
+def test_cli_preflight_exit_pairing(tmp_path: Path) -> None:
+    H.make_final_chain(tmp_path, "singular")
+    proc = subprocess.run(
+        [sys.executable, str(RESOLVER_PATH), "--project-dir", str(tmp_path), "--task-id", H.TASK, "--preflight-parent"],
+        text=True, capture_output=True,
+    )
+    assert proc.returncode == 0
+    assert json.loads(proc.stdout)["status"] == "ready"
+
+
+def test_parent_outcome_subset_expands_one_default_per_active_worker(tmp_path: Path) -> None:
+    declaration, _ = H.make_final_chain(tmp_path, "parallel_dev")
+    before = RESOLVER._prior_parallel_qa_declaration(declaration)
+    assert before is not None
+    active = [m["member_id"] for m in before["phase_projection"]["members"] if m["state"] != "superseded"]
+    report = H.qa_report(H.TASK, outcomes={
+        "schema_version": H.AGG.OUTCOMES_VERSION,
+        "parent_task_id": H.TASK,
+        "lineage_digest": before["lineage_digest"],
+        "phase_digest_before": before["phase_projection"]["phase_digest"],
+        "coverage": "subset",
+        "default_outcome": "pass",
+        "worker_outcomes": [{"member_id": active[0], "outcome": "needs_review"}],
+    }, status="needs_review")
+    expanded, errors = H.AGG.validate_parallel_worker_outcomes(report, before)
+    assert errors == []
+    assert expanded == {active[0]: "needs_review", active[1]: "pass"}
+
+
+def test_fanout_optional_parent_entries_may_be_declared_but_absent(tmp_path: Path) -> None:
+    declaration, paths = H.make_final_chain(tmp_path, "requirement_fanout")
+    paths["canonical"].unlink()
+    optional = {
+        "parent_ticket": f"docs/dev/ticket-{H.TASK}.md",
+        "parent_context": f"docs/dev/context-{H.TASK}.json",
+        "parent_qa_report": f"docs/dev/qa-report-{H.TASK}.json",
+    }
+    for kind, path in optional.items():
+        declaration["inventory"].append(H._inventory_entry(kind, path, None, False))
+    declaration["inventory"].sort(key=H.AGG._inventory_sort_key)
+    declaration["inventory_digest"] = H.AGG._digest(declaration["inventory"])
+    declaration["lineage_digest"] = H.AGG._digest({
+        key: declaration[key]
+        for key in ("schema_version", "parent_task_id", "shape", "execution", "origin", "member_lineage", "inventory", "inventory_digest", "baseline_policy", "baseline_bindings")
+    })
+    phase_by_id = {member["member_id"]: member for member in declaration["phase_projection"]["members"]}
+    for member in declaration["member_lineage"]:
+        report_path = tmp_path / member["artifact_paths"]["dev_report"]
+        report = json.loads(report_path.read_text())
+        report["artifact_chain_binding"]["lineage_digest"] = declaration["lineage_digest"]
+        raw = H.write_json(report_path, report)
+        stable = H.AGG.stable_dev_projection(report)[1]
+        ledger = phase_by_id[member["member_id"]]["attempt_ledger"][0]
+        ledger["artifact_sha256"] = H.AGG._bytes_digest(raw)
+        ledger["stable_projection_sha256"] = stable
+    for event in declaration["phase_projection"]["events"]:
+        if event["to_state"] in {"dev_completed", "awaiting_qa"}:
+            event["evidence_digest"] = phase_by_id[event["member_id"]]["attempt_ledger"][0]["artifact_sha256"]
+    declaration = H.AGG.finalize_declaration(declaration)
+    created = H.AGG.apply_artifact_chain_declaration(
+        tmp_path, H.TASK, declaration, operation="default_aggregate", expect_canonical_absent=True,
+    )
+    assert created["status"] == "ok", created
+    result = RESOLVER.resolve_chain(tmp_path, H.TASK)
+    assert result["status"] == "pass", result["errors"]
+    assert result["parent"]["ticket"] == optional["parent_ticket"]
+    assert result["parent"]["context"] == optional["parent_context"]
+    assert result["parent"]["qa_report"] == optional["parent_qa_report"]
+    assert optional["parent_qa_report"] not in result["report_paths"]
+    assert set(optional.values()).isdisjoint(result["artifact_paths"])
+
+
+def test_suffix_collision_report_is_not_claimed_by_filename_prefix(tmp_path: Path) -> None:
+    H.make_final_chain(tmp_path, "parallel_dev")
+    foreign_parent = H.TASK + "-other"
+    foreign_member = foreign_parent + "-w1"
+    rogue = H.dev_report(foreign_member, binding={
+        "parent_task_id": foreign_parent, "member_id": foreign_member,
+        "lineage_digest": "sha256:" + "f" * 64, "attempt": 2,
+    })
+    H.write_json(
+        tmp_path / f"docs/dev/dev-report-iter2-{H.TASK}-other-w1.json", rogue,
+    )
+    result = RESOLVER.resolve_chain(tmp_path, H.TASK)
+    assert result["status"] == "pass", result["errors"]
+
+
+def test_duplicate_embedded_declaration_sidecar_is_rejected(tmp_path: Path) -> None:
+    declaration, _ = H.make_final_chain(tmp_path, "parallel_dev")
+    sidecar = tmp_path / "docs/dev/not-a-canonical-sidecar.json"
+    H.write_json(sidecar, {
+        "request_id": H.TASK, "task_id": H.TASK,
+        "artifact_chain_declaration": declaration,
+    })
+    result = RESOLVER.resolve_chain(tmp_path, H.TASK)
+    assert result["status"] == "fail"
+    assert any(error["code"] == "INVENTORY_MISMATCH" and error["path"].endswith(sidecar.name) for error in result["errors"])

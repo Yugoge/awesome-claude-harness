@@ -1178,3 +1178,102 @@ def test_r03_prior_passes_and_no_superseded_ceremony_gate() -> None:
         NATIVE.read_text(),
         next(node for node in ast.parse(NATIVE.read_text()).body if isinstance(node, ast.FunctionDef) and node.name == "register_ordinary_start"),
     )
+
+
+def test_laneb_claude_terminal_receipt_precedes_identity_retirement_and_is_non_destructive(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    hooks_dir = SOURCE_ROOT / "hooks"
+    if str(hooks_dir) not in sys.path:
+        sys.path.insert(0, str(hooks_dir))
+    from lib import session_resources
+
+    trust_root = tmp_path / "laneb-external-trust"
+    trust_root.mkdir(mode=0o700)
+    monkeypatch.setenv(session_resources.TRUST_ROOT_ENV, str(trust_root))
+    monkeypatch.setenv(session_resources.TRUST_KEY_ENV, "de" * 32)
+
+    root = tmp_path / "laneb-claude-receipt"
+    (root / "scripts/todo").mkdir(parents=True)
+    shutil.copy2(SOURCE_ROOT / "scripts/todo/dev.py", root / "scripts/todo/dev.py")
+    sid = "laneb-receipt-session"
+    resource_id = "laneb-receipt-resource"
+    binding = {
+        "claude_session_id": sid,
+        "resource_session_id": resource_id,
+        "role": "dev",
+        "dispatch_id": "dispatch-laneb",
+        "agent_id": "dispatch-laneb",
+        "command": "dev",
+        "workflow_instance_id": "workflow-laneb",
+        "workflow_generation": 1,
+        "spec_id": "20260808-035658",
+    }
+    provisioned = session_resources.provision(root, binding)
+    scratch = Path(provisioned["scratch_path"])
+    (scratch / "evidence").write_bytes(b"preserve")
+    before = _file_snapshot([scratch])
+    bookmark = root / ".claude" / f"workflow-{sid}.json"
+    bookmark.write_text(
+        json.dumps(
+            {
+                "command": "dev",
+                "task_id": resource_id,
+                "workflow_instance_id": "workflow-laneb",
+                "workflow_generation": 1,
+            }
+        )
+    )
+    canonical = json.loads(
+        subprocess.run(
+            [sys.executable, str(root / "scripts/todo/dev.py")],
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout
+    )
+    completed = [{**item, "status": "completed"} for item in canonical]
+    home = root / "home"
+    official = home / ".claude/todos" / f"{sid}-agent-{sid}.json"
+    official.parent.mkdir(parents=True)
+    official.write_text(json.dumps(completed))
+    result = _run(
+        POSTTODO,
+        None,
+        {"session_id": sid, "tool_input": {"todos": completed}},
+        {**os.environ, "HOME": str(home), "CLAUDE_PROJECT_DIR": str(root)},
+    )
+    assert result.returncode == 0, result.stderr
+    receipt = root / ".claude/session-resources" / resource_id / "terminal.json"
+    assert receipt.is_file()
+    assert json.loads(receipt.read_text())["terminal_status"] == "completed"
+    assert not bookmark.exists() and not official.exists()
+    assert _file_snapshot([scratch]) == before
+
+
+def test_laneb_claude_timelock_never_falls_back_to_foreign_state(tmp_path: Path) -> None:
+    root = tmp_path / "laneb-exact-overnight"
+    state_dir = root / ".claude"
+    state_dir.mkdir(parents=True)
+    foreign = state_dir / "overnight-state-foreign-session.json"
+    foreign.write_text(
+        json.dumps(
+            {
+                "session_id": "foreign-session",
+                "dev_registry_session_id": "foreign-resource",
+                "end_time": "2999-01-01T00:00:00",
+            }
+        )
+    )
+    before = foreign.read_bytes()
+    result = _run(
+        CLAUDE_STOP,
+        None,
+        {"session_id": "current-session", "cwd": str(root)},
+        {**os.environ, "CLAUDE_PROJECT_DIR": str(root)},
+    )
+    assert result.returncode == 0
+    assert "TIME-LOCK ACTIVE" not in result.stderr
+    assert foreign.read_bytes() == before
+    assert not (state_dir / "session-resources").exists()

@@ -149,8 +149,7 @@ Resolve the spec to evaluate (in priority order):
 - If `$ARGUMENTS` is an explicit path (ends in `.md`/`.json` or contains `/`): use that path. Verify it exists; fail clearly if not. Derive the task-id by stripping the `ticket-` prefix (or legacy `ba-spec-` prefix) and `.md`/`.json` suffix from the basename (e.g. `docs/dev/ticket-X.md` → task-id `X`; `docs/dev/ba-spec-X.md` → task-id `X`). If the basename starts with `do-report-`, also strip that prefix and set `DO_REPORT=$ARGUMENTS` (e.g. `docs/dev/do-report-X.json` → task-id `X`, `DO_REPORT` set, proceeds to do-report lite preflight).
 - Elif `$ARGUMENTS` matches a timestamp pattern (e.g. `20260424-103044`):
   - **Non-force path**: bind `TASK_ID=$ARGUMENTS` without first requiring a
-    parent ticket or parent QA-report. Immediately run Step 0's canonical
-    aggregate + shared artifact-chain resolver sequence. This ordering is
+    parent ticket or parent QA-report. Immediately run Step 0's read-only parent preflight, shape-authorized refresh, and shared resolver sequence. This ordering is
     mandatory: those parent artifacts are optional for a valid fan-out cycle,
     so a singular-shaped existence check before aggregation/resolution would
     reject N > 1.
@@ -164,8 +163,7 @@ Resolve the spec to evaluate (in priority order):
   The task-id IS `$ARGUMENTS` directly (timestamp form is a valid task-id; this preserves backwards compatibility for `/close <ts>` invocations and works for both ticket- and ba-spec- artifact name conventions).
 - Else (no argument): the orchestrator invoking /close MUST already know this
   conversation's parent task-id from the active `/dev` or `/do` cycle. For
-  `/dev`, bind that parent task-id and immediately run Step 0's same aggregate
-  + resolver sequence; do not select a parent ticket/QA-report from context
+  `/dev`, bind that parent task-id and immediately run Step 0's same preflight + authorized refresh + resolver sequence; do not select a parent ticket/QA-report from context
   first. The resolver's `mode` identifies singular versus fan-out and its lane
   matrix supplies the paths. For `/do`, infer `TASK_ID` and `DO_REPORT` from the do-report path in
   context. There is NO filesystem scan and NO default-to-newest. If the
@@ -176,50 +174,60 @@ If no task-id can be derived (no argument, no /dev context, no parseable filenam
 
 Bind the resolved value as `TASK_ID` (e.g. `"$ARGUMENTS"` when timestamp form, or derived from path basename).
 
-### Step 0: Refresh the canonical aggregate, then resolve the artifact chain
+### Step 0: Read-only parent preflight, one lawful refresh, then resolve
 (non-force, normal `/dev` path)
 
-For both explicit `/close <task-id-or-path>` and bare `/close`, fan-out
-recognition MUST happen before any parent ticket/context/QA assumption. Resolve
-the project root that owns the selected `docs/dev/` directory. First invoke the
-existing aggregate writer, whose shared shard classifier is scoped to
-`TASK_ID`. It returns `action == "skipped"` for N == 1; for 2+ valid lanes it
-creates a missing canonical aggregate, validates an identical one, or refreshes
-a stale projection from the current lane reports:
+Bind `INPUT_TASK_ID` and the explicit project root before any writer. Capture the
+read-only preflight JSON even when it returns exit 2:
 
 ```bash
 PROJECT_ROOT="${CLAUDE_PROJECT_DIR:-$(pwd)}"
-source ~/.claude/venv/bin/activate 2>/dev/null || true
-AGGREGATE_RESULT="$(cd "$PROJECT_ROOT" && \
-  python3 scripts/aggregate-dev-report.py --task-id "$TASK_ID")" || exit 1
-ARTIFACT_CHAIN="$(python3 scripts/resolve-dev-artifact-chain.py \
-  --task-id "$TASK_ID" --project-dir "$PROJECT_ROOT")" || exit 2
+if PREFLIGHT_JSON="$(python3 scripts/resolve-dev-artifact-chain.py \
+    --project-dir "$PROJECT_ROOT" --task-id "$INPUT_TASK_ID" \
+    --preflight-parent)"; then
+  PREFLIGHT_RC=0
+else
+  PREFLIGHT_RC=$?
+fi
 ```
 
-This order is mandatory for explicit and bare close alike: bind the parent
-task-id, let the aggregate writer's canonical shard classifier perform the
-recoverable write/refresh, and only then invoke the read-only resolver. Do not
-put a singular parent ticket/QA existence gate before either command. If
-aggregation fails, block before the resolver and report its error.
+Parse only `artifact_chain_preflight.v1` and enforce its exit/status pairing.
+The state machine is exact:
 
-The fixed entrypoint is
-`scripts/resolve-dev-artifact-chain.py --task-id <id> --project-dir <root>`.
-Require exit 0 and top-level `status == "pass"`; exit 2 or `status == "fail"`
-blocks before inspectors or QA and reports the resolver's exact `errors[]`.
-Retain the entire JSON for every later close step. In particular, `mode`,
-`lanes`, `report_paths`, `artifact_paths`, `commit_whitelist_artifacts`, and
-`qa_inputs` MUST come from this one result, not a fresh glob, filename guess, or
-hand-rolled singular check.
+1. `redirect`: require `PARENT_TASK_ID_REQUIRED` and the exact
+   `parent_task_id`; print it and exit 2 **before any aggregate call**. `/close
+   <child>` never silently rebinds or creates a child close report.
+2. `repair_required|fail`: surface exact errors and exit 2 with zero writes.
+   Missing, legacy, or invalid canonicals route to audited LANE-F repair; normal
+   close never synthesizes a candidate or creates a missing canonical.
+3. `ready`: require `input_task_id == parent_task_id`; bind
+   `TASK_ID=parent_task_id`. `shape=singular` performs zero aggregate calls.
+4. For `shape=parallel_dev|requirement_fanout`, perform only this existing-parent,
+   phase-preserving CAS refresh:
 
-- `mode == "singular"` preserves the existing N == 1 chain.
-- `mode == "fanout"` requires each lane ticket/context/dev-report/passing
-  QA-report plus the parent canonical aggregate and parent completion. Parent
-  ticket/context/QA are optional, not missing prerequisites.
-- The aggregate writer is the sole permitted close-time artifact repair and may
-  write only the canonical aggregate. `/close` MUST NOT copy lane data into, or
-  fabricate, a parent ticket/context/QA-report or completion. A missing
-  completion remains a resolver failure that the originating `/dev` cycle must
-  fix.
+   ```bash
+   python3 scripts/aggregate-dev-report.py \
+     --project-dir "$PROJECT_ROOT" --task-id "$TASK_ID" \
+     --declaration-from-canonical \
+     --expected-canonical-sha256 "$PREFLIGHT_CANONICAL_SHA256" \
+     --expected-phase-digest "$PREFLIGHT_PHASE_DIGEST"
+   ```
+
+   The provider rereads the embedded declaration under the shared lock.
+   `CANONICAL_CHANGED`, phase/evidence conflict, or any provider failure blocks;
+   there is no retry, alternate scan, derived event, sidecar, or fabrication.
+5. Only after the singular skip or successful parallel refresh, invoke the full
+   read-only resolver with the exact parent:
+
+   ```bash
+   ARTIFACT_CHAIN="$(python3 scripts/resolve-dev-artifact-chain.py \
+     --project-dir "$PROJECT_ROOT" --task-id "$TASK_ID")" || exit 2
+   ```
+
+Require `artifact_chain_result.v2` and `status == "pass"`. Retain the whole
+result. This is exactly one parent close decision and later exactly one parent
+commit; a child `/commit` remains fail-closed at its unchanged missing-close
+report gate.
 
 ### do-report lite preflight (non-force, /do path)
 
@@ -340,7 +348,7 @@ The orchestrator MUST emit a TodoWrite call updating the Step-N todo item to `in
 
 **Parallel detection check** — before dispatch, use only the retained resolver
 result: a parallel cycle is detected exactly when
-`ARTIFACT_CHAIN.mode == "fanout"`. Do not re-scan filenames or reinterpret
+`ARTIFACT_CHAIN.shape in {"parallel_dev","requirement_fanout"}`. Do not re-scan filenames or reinterpret
 `parallel_workers`; that would create a second, divergent fan-out authority.
 
 **If a parallel cycle is detected** — dispatch inspectors SEQUENTIALLY (one Agent call at a time, wait for each to return before the next):
@@ -384,8 +392,10 @@ In both modes, the caller does NOT orchestrate rounds; you own the loop.
 
 Input artifacts (read them first):
 - Artifact-chain result: <the complete retained ARTIFACT_CHAIN JSON, or "none" for /do>
-- Mode: <ARTIFACT_CHAIN.mode, or "do">
+- Shape: <ARTIFACT_CHAIN.shape, or "do">
+- Parent: <ARTIFACT_CHAIN.parent object, or null for /do>
 - Lane matrix: <ARTIFACT_CHAIN.lanes JSON array; [] for singular or /do>
+- Excluded lanes: <ARTIFACT_CHAIN.excluded_lanes JSON array; [] for singular or /do>
 - Report paths: <ARTIFACT_CHAIN.report_paths JSON array; [] for /do>
 - QA inputs: <ARTIFACT_CHAIN.qa_inputs JSON array; [] for /do>
 - Singular inputs: <parent ticket/context/dev-report/QA-report/completion paths
@@ -409,15 +419,15 @@ Round 1:
       - Regression risks? Scope drift? Missed edge cases?
 
       WORKFLOW INTEGRITY DIMENSION (mandatory — evaluate ALL four bullets explicitly; report a per-bullet PASS / FAIL / N/A-with-reason in the transcript; ANY FAIL forces CLOSE: NO regardless of AC coverage):
-        1. **Downstream consumability** — Can the artifacts under evaluation be consumed by downstream commands (`/commit`, `/push`, `/merge`) without manual patching of timestamps, names, or artifact contracts? Require the supplied resolver result to have `status == "pass"` and verify that normal `/commit` can admit the exact `commit_whitelist_artifacts`. In singular mode this is the existing parent chain. In fan-out mode the lane artifacts in that exact whitelist are consumable without copying/renaming them or fabricating parent ticket/context/QA artifacts. If a human would have to patch an artifact or manufacture a pseudo-parent artifact, this bullet is FAIL. **For /do path** (DO_REPORT is set): N/A-with-reason — changelog-analyst accepts the do-report as its staging-whitelist source; evaluate consumability against do-report + planned close-report only.
-        2. **task-id chain consistency** — Use the supplied resolver matrix rather than imposing one universal filename shape. `mode == "singular"` requires the existing parent ticket → context → dev-report → QA-report → completion chain under one task-id. `mode == "fanout"` requires every `lanes[]` row's ticket/context/dev-report/QA-report to use that row's lane task-id, plus the parent canonical dev-report and completion under the parent task-id; parent ticket/context/QA are optional and absence is PASS. Any required identity mismatch, undeclared/missing lane, stale canonical, or completion index gap would contradict `status == "pass"` and is FAIL. **For /do path** (DO_REPORT is set): N/A-with-reason — chain is `do-report → close-report` under the same `<task-id>`; the `/dev` artifact chain is intentionally absent.
+        1. **Downstream consumability** — Can the artifacts under evaluation be consumed by downstream commands (`/commit`, `/push`, `/merge`) without manual patching of timestamps, names, or artifact contracts? Require the supplied resolver result to have `status == "pass"` and verify that normal `/commit` can admit the exact `commit_whitelist_artifacts`. In singular mode this is the parent five-pack. In parallel-dev it is the parent five-pack plus immutable worker Dev rows and one parent QA. In requirement-fanout it is active lane four-packs plus parent canonical/completion and only present optional parent artifacts; neither parallel shape copies/renames artifacts or fabricates a pseudo-parent. If a human would have to patch an artifact or manufacture a pseudo-parent artifact, this bullet is FAIL. **For /do path** (DO_REPORT is set): N/A-with-reason — changelog-analyst accepts the do-report as its staging-whitelist source; evaluate consumability against do-report + planned close-report only.
+        2. **task-id chain consistency** — Use the supplied resolver matrix rather than imposing one universal filename shape. `shape == "singular"` requires the parent five-pack. `shape == "parallel_dev"` requires the parent five-pack, immutable worker Dev-only rows, and one parent QA. `shape == "requirement_fanout"` requires each active `lanes[]` four-pack plus parent canonical/completion; optional parent ticket/context/QA are accepted only when the resolver returns their declared paths. Any required identity mismatch, undeclared/missing lane, stale canonical, or completion index gap would contradict `status == "pass"` and is FAIL. **For /do path** (DO_REPORT is set): N/A-with-reason — chain is `do-report → close-report` under the same `<task-id>`; the `/dev` artifact chain is intentionally absent.
         3. **Pre-existing-defect rule** (rewritten per spec-20260503-091826 Section 5.4 rule 1+2 — out-of-scope-by-default UNLESS user-need-impact OR security OR cleanliness-of-THIS-diff) — If a Round-1 critique surfaces a "pre-existing architectural defect" or similar, the debate resolves as follows:
              (a) if THIS cycle's BA spec CLAIMS to address the defect AND the claim maps to user-need / path-dependent shared infrastructure / security / cleanliness-of-THIS-diff → the defect IS in scope and must be evaluated on its merits. If the BA-spec claim does NOT map to one of those four axes (i.e., BA over-expanded into path-external scope), the claim is itself out-of-scope and falls through to (d) — pre-existing-out-of-scope, NOT NO; the AC-deviation / out_of_scope_observations path applies instead.
              (b) if the pre-existing defect actively blocks user-need success in THIS cycle's spec (i.e., the user-stated requirement cannot be satisfied without addressing the defect) → it IS in scope; bullet evaluates on its merits and FAILS only if the defect remains;
              (c) if the pre-existing defect is a security hole (Section 5.4 rule 2: security holes are exceptions — must be fixed even when outside the user-need path) → it IS in scope and must be fixed; bullet FAILS unless addressed;
              (d) otherwise — the pre-existing defect is OUT of scope by default. Bullet PASSES. Recording in `out_of_scope_observations` is the correct disposition; the "pre-existing / out-of-scope" walkback is the default behavior, not a forbidden one. The user's binding directive: if something does not impede user experience, security, or the cleanliness of the repository as a whole, it is not necessarily a reason for NO — pre-existing defects that do not impact user needs / security / cleanliness-of-THIS-diff are NOT NO triggers.
         4. **Self-deployability** — Can the changes be committed and shipped via the project's own commit/push toolchain (`/commit`, `/push`, `/merge`) without out-of-band patching? Evaluate as the AND of these sub-items:
-             (i) **/commit consumability** (PASS/FAIL) — `/commit` accepts the resolver's exact `commit_whitelist_artifacts` plus the close/inspector outputs without orchestrator-side jq/Edit patches. For fan-out this explicitly includes each validated lane artifact and does not require optional parent ticket/context/QA artifacts. FAIL if any manual artifact patch or pseudo-parent artifact was required.
+             (i) **/commit consumability** (PASS/FAIL) — `/commit` accepts the resolver's exact `commit_whitelist_artifacts` plus the close/inspector outputs without orchestrator-side jq/Edit patches. For either parallel shape this uses the exact resolver whitelist; parallel-dev includes its workers and parent QA, while requirement-fanout includes lane artifacts and only declared-present optional parent artifacts. FAIL if any manual artifact patch or pseudo-parent artifact was required.
              (ii) **Push permission** (PASS/FAIL) — the orchestrator's git identity has write access to the target remote(s). FAIL if push was blocked by remote permissions or required a human to push from a different identity.
              (iii) **No commit-channel bypass** (PASS/FAIL) — no manual `git commit` outside agent context, no `CLAUDE_PROJECT_DIR` override to bypass repo-rooted hook gates, no `auto-bulk:` pattern abuse to smuggle changes past `pretool-git-privilege-guard.py`. FAIL if any of these bypass channels was used.
              (iv) **User-only physical filesystem actions** (N/A-with-reason — NEVER FAIL) — any sub-item that would require the user to perform a physical filesystem action the orchestrator structurally cannot perform itself is evaluated as N/A-with-reason, NOT FAIL. The canonical example is the user touching `.hook-refactor-allow` to authorize a hook-tree edit: human-in-the-loop is intentional anti-fabrication protection per Trap 11; orchestrator-creatable sentinels would defeat the protection's threat model. The N/A reason MUST cite Trap 11 verbatim. This clause covers ONLY user-only physical filesystem actions; it does NOT cover the bypasses listed in sub-item (iii), which remain FAIL.
@@ -517,7 +527,7 @@ The /close --force escape hatch (Step 2) is unchanged. It bypasses Step 5 entire
 
 Transcript file: write the full debate to `docs/dev/close-report-<task-id>.md` (substitute `<task-id>` with the value resolved in Step 3 — e.g. the source `/dev` cycle's task-id; do NOT use a fresh `date +%Y%m%d-%H%M%S` here, that would break /commit's PRIMARY-path lookup) with this structure:
   # Close Debate Report
-  Task-id, artifact-chain mode, Input files, Rounds run, Verdict. For fan-out,
+  Task-id, artifact-chain shape, Input files, Rounds run, Verdict. Record the supplied `shape`, `parent`, `lanes`, `excluded_lanes`, and `qa_inputs` verbatim. For either parallel shape,
   include the supplied `lanes[]` matrix and `qa_inputs[]` paths so the report
   records which independently-passed lanes were rolled into the parent decision.
   Workflow Integrity Dimension: explicit per-bullet status (1. Downstream consumability: PASS/FAIL/N/A; 2. task-id chain consistency: PASS/FAIL/N/A; 3. Pre-existing-defect rule: PASS/FAIL/N/A; 4. Self-deployability: PASS/FAIL/N/A) — with one-sentence reason for each FAIL or N/A.

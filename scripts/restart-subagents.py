@@ -23,6 +23,15 @@ def _parser() -> argparse.ArgumentParser:
         command.add_argument("--session-id")
         if name == "status":
             command.add_argument("--wait-seconds", type=int, default=0)
+    propose = sub.add_parser("propose-unrecoverable")
+    propose.add_argument("--session-id")
+    propose.add_argument("--tool-use-id", required=True)
+    propose.add_argument("--agent-id", required=True)
+    propose.add_argument("--reason", required=True)
+    propose.add_argument("--evidence-ref", action="append", required=True)
+    mark = sub.add_parser("mark-unrecoverable")
+    mark.add_argument("--session-id")
+    mark.add_argument("--audit-id", required=True)
     return parser
 
 
@@ -43,6 +52,16 @@ def main(argv: list[str] | None = None) -> int:
             result = restart.prepare_state(session_id)
         elif args.command == "status":
             result = restart.get_status(session_id, wait_seconds=max(0, args.wait_seconds))
+        elif args.command == "propose-unrecoverable":
+            try:
+                evidence_refs = [json.loads(value) for value in args.evidence_ref]
+            except ValueError as exc:
+                raise restart.RestartError("evidence-ref must be canonical JSON") from exc
+            result = restart.propose_unrecoverable(
+                session_id, args.tool_use_id, args.agent_id, args.reason, evidence_refs,
+            )
+        elif args.command == "mark-unrecoverable":
+            result = restart.mark_unrecoverable(session_id, args.audit_id)
         else:
             result = restart.finalize(session_id)
         print(json.dumps(result, ensure_ascii=False, indent=2))

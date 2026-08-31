@@ -17,6 +17,16 @@ This command runs an unattended development loop. When `spec_mode == "autonomous
 
 ## Standard Dispatch Envelope
 
+### R1 classification of shared Dev-agent calls
+
+Every Step-12 Dev dispatch is `artifact_chain_role=overnight_pipeline_intermediate`
+and carries exact `session_id`, `cycle_id`, and `pipeline_id`. Its report must
+emit `artifact_chain_declaration: null`. Per-pipeline overnight reports are cycle
+contract intermediates: they have Dev/QA outcomes but no R1 parent completion,
+no R1 resolver handoff, and no per-pipeline `/close` or `/commit`. Missing or
+another role blocks report emission. Overnight must not synthesize a lifecycle
+declaration from pipeline filenames.
+
 > **Status**: reference material for the dispatch templates in Steps 2a/2b/2c/3-14. The per-dispatch templates in this file are NOT yet rewritten to reference this envelope — that compression is deferred to Cycle 2 (per architect Section D ordering: envelope MUST exist before templates can point at it). This section captures the truly-invariant prose so the next cycle can replace per-template duplicates with `<<envelope>>` references.
 
 Every Agent dispatch from this orchestrator shares the following invariant prelude. The variant per-dispatch text (Requirement, Context file, Output path, role-specific instructions) is composed AFTER this prelude and remains in each step.
@@ -1234,6 +1244,10 @@ Agent(subagent_type: "dev")
     CHECKPOINT MARKING: see agents/dev.md §Checkpoint Marking Contract. Mark every cp-NN done or waived before Stop or SubagentStop hook will block exit.
 
     You are the dev subagent. Follow agents/dev.md instructions precisely.
+
+    artifact_chain_role: overnight_pipeline_intermediate
+    artifact_chain_declaration: null
+    artifact_chain_identity: {session_id: $DEV_SESSION_ID, cycle_id: <current cycle>, pipeline_id: pipeline-{i}}
 
     User requirement document: <PROJECT_ROOT>/docs/dev/user-requirement-<DEV_SESSION_ID>.md
     (Read this file before interpreting Requirement, Context file, BA spec, Dev report, or state-derived focus.)

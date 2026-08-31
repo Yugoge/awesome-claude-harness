@@ -32,6 +32,20 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+# Shared checkpoint-directory transaction (hooks/lib/checkpoint_resources.py).
+# Both checkpoint entrypoints -- the spec-check.py CLI and this Read hook --
+# MUST reach the SAME directory_transaction, so the allocation window is
+# serialized across processes by one owner of the policy.  The import is
+# guarded because the module ships with the LANE-B cluster: when it is absent
+# the hook FAILS CLOSED (no registration) rather than falling back to a private
+# unserialized scan/clone.
+try:  # pragma: no cover - exercised by the module-absent branch test
+    from lib import checkpoint_resources
+except Exception:  # ImportError, or a broken install
+    checkpoint_resources = None
+
 
 # Dev-registry sentinel: sibling mechanism for /dev, /dev-command, /dev-overnight
 # workflows. These workflows produce no spec views, so VIEW_PATH_PATTERN never
@@ -226,46 +240,6 @@ def _read_payload(path):
         return None
 
 
-def _cp_checkin_dir_lock_path(cp_dir):
-    """Return the dir-level lock path used by FINDING-6 to serialize
-    read-pick-write windows for parallel agent registrations against the
-    same (spec, agent) pair. Sibling to the cp-state files inside cp_dir.
-    """
-    return cp_dir / ".cp-checkin.lock"
-
-
-def _open_dir_lock(cp_dir):
-    """Open and EX-lock the dir-level checkin lock. Caller must close the
-    returned file handle to release. Returns None on any I/O error so the
-    caller can fall through to fail-open behavior.
-    """
-    try:
-        cp_dir.mkdir(parents=True, exist_ok=True)
-        lock_path = _cp_checkin_dir_lock_path(cp_dir)
-        lh = open(lock_path, "w")
-    except OSError:
-        return None
-    try:
-        fcntl.flock(lh.fileno(), fcntl.LOCK_EX)
-    except OSError:
-        lh.close()
-        return None
-    return lh
-
-
-def _release_dir_lock(lh):
-    if lh is None:
-        return
-    try:
-        fcntl.flock(lh.fileno(), fcntl.LOCK_UN)
-    except OSError:
-        pass
-    try:
-        lh.close()
-    except OSError:
-        pass
-
-
 def _write_payload(path, payload):
     lock_path = path.with_suffix(path.suffix + ".lock")
     with open(lock_path, "w") as lh:
@@ -398,17 +372,24 @@ def _do_pick_and_write(files, agent_id, cp_dir=None, agent=None):
 
 
 def _checkin_under_lock(project_dir, spec_id, agent, data):
-    """FINDING-6: hold a dir-level fcntl.LOCK_EX across pick + write.
+    """FINDING-6: hold the SHARED checkpoint directory transaction across
+    pick + write.
 
-    The shared lock file at <cp_dir>/.cp-checkin.lock serializes parallel
-    agent registrations for the same (spec, agent) pair so two concurrent
-    pretool-cp-checkin invocations cannot both pick the same idle slot.
+    The transaction is ``checkpoint_resources.directory_transaction`` -- the
+    same object ``spec-check.py check-in`` enters -- so the two checkpoint
+    entrypoints serialize against each other through one owner of the
+    allocation policy instead of each running a private scan/clone that
+    merely happens to open a lock file of the same name.
 
-    Returns True when the slot was picked and written; False when the
-    cp_dir is missing, no slot is available, or the lock could not be
-    acquired (fail-open on lock failure: the slot still gets the per-file
-    fcntl in _write_payload, just without the wider read-pick-write
-    serialization).
+    Returns True when the slot was picked and written; False when the cp_dir
+    is missing, no slot is available, the shared module is unavailable, or the
+    transaction could not be entered.
+
+    FAIL CLOSED (repairs the prior fail-open branch): a registration that
+    cannot be serialized is ABANDONED, never performed with only the
+    per-file fcntl in _write_payload.  A serialization primitive that
+    proceeds unserialized on error cannot underwrite the no-reassignment
+    invariant this lock exists to provide.
     """
     cp_dir = _cp_dir(project_dir, spec_id)
     if not cp_dir.exists():
@@ -416,12 +397,15 @@ def _checkin_under_lock(project_dir, spec_id, agent, data):
     files = _all_cp_files(project_dir, spec_id, agent)
     if not files:
         return False
+    if checkpoint_resources is None:
+        return False
     agent_id = data.get("agent_id")
-    lh = _open_dir_lock(cp_dir)
+    primary_path = cp_dir / f"cp-state-{agent}.json"
     try:
-        return _do_pick_and_write(files, agent_id, cp_dir, agent)
-    finally:
-        _release_dir_lock(lh)
+        with checkpoint_resources.directory_transaction(primary_path):
+            return _do_pick_and_write(files, agent_id, cp_dir, agent)
+    except OSError:
+        return False
 
 
 def _handle_cp_state_direct_read(data, project_dir):

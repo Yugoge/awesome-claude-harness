@@ -12,11 +12,13 @@ interrupted subagents.
 
 ```text
 /restart
+/restart confirm-unrecoverable <audit-id>
 ```
 
-Only the exact bare command is valid. There is deliberately no agent selector:
-every recoverable interrupted subagent in the current parent transcript is
-handled as one recovery wave.
+The bare command handles every recoverable interrupted subagent as one wave;
+there is deliberately no agent selector. The second form is valid only after
+the bare command emitted the exact matching audit request. It confirms one
+content-addressed proposal and never resumes or replaces a child.
 
 ## Mandatory procedure
 
@@ -42,6 +44,9 @@ handled as one recovery wave.
    enqueue a duplicate message. Use its exact `agent_id` as `to` and the exact
    `resume_message` emitted by the prepare command as `message`. Do not edit,
    summarize, prefix, suffix, translate, or otherwise rewrite that message.
+   PostToolUse records the native structured result. `success:false`, an error,
+   or an unknown result remains `pending` with an audited attempt and is safe to
+   retry; only a truthful success becomes `dispatched`.
 4. **Wait for response evidence.** Successful sends are journaled automatically;
    `SubagentStop` records response evidence. After all sends return, invoke the
    helper with a tool timeout of at least 600000 ms:
@@ -53,18 +58,42 @@ handled as one recovery wave.
    If `complete` is false, report `RESTART_INCOMPLETE` with every
    `incomplete_agent_ids` entry. Never claim recovery succeeded merely because
    messages were dispatched. A later `/restart` safely retries those same IDs.
+   If durable evidence proves one pending exact tuple cannot be resumed, use
+   `propose-unrecoverable` with its exact tuple, a 20-2000 character reason, and
+   at least one hash-matching structured evidence reference. Print the returned
+   `RESTART_AUDIT_CONFIRMATION_REQUIRED` record and exact confirmation prompt,
+   then pause. **Do not mark it or submit the prompt yourself.**
 5. **Finalize only after all responses.** When `complete` is true, invoke:
 
    ```text
    $HOME/.claude/venv/bin/python $HOME/.claude/scripts/restart-subagents.py finalize
    ```
 
-   Report the recovered agent IDs and point to their existing transcript paths.
+   Report `recovered_agent_ids` and `unrecoverable_agent_ids` separately and
+   point to their evidence/transcript paths. Unrecoverable means only that the
+   restart wave was human-audited as permanently unresumable; it never claims
+   the original development task, QA, close, or commit succeeded.
+
+## Human audit confirmation mode
+
+For an exact human `/restart confirm-unrecoverable <audit-id>` turn, do not run
+prepare or send messages. The UserPromptSubmit hook mints a one-use capability;
+invoke only:
+
+```text
+$HOME/.claude/venv/bin/python $HOME/.claude/scripts/restart-subagents.py mark-unrecoverable --audit-id <audit-id>
+```
+
+Report the exact durable audit result. A missing, expired, changed, ambiguous,
+or model-originated capability is `RESTART_AUDIT_CONFIRMATION_BLOCKED`; do not
+retry, weaken, or synthesize audit fields.
 
 ## Non-negotiable prohibitions
 
 - **DO NOT call `Agent` or `Task`** to replace an interrupted subagent.
 - **DO NOT omit any candidate**, even if its last transcript entry looks nearly complete.
+- **DO NOT infer `unrecoverable`** from a failed send, stale/missing path,
+  elapsed time, retry count, or final-looking prose.
 - **DO NOT copy a transcript into a fresh prompt** and call that a restart.
 - **DO NOT repeat irreversible operations.** The fixed recovery message requires
   each resumed agent to inspect its last tool result and workspace side effects first.

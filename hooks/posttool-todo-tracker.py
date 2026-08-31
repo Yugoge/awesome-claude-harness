@@ -17,6 +17,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from lib import session_resources
+
 STATUS_SYMBOL = {'completed': '[x]', 'in_progress': '[~]', 'pending': '[ ]'}
 
 
@@ -86,22 +88,48 @@ def main():
 
         all_completed = all(t.get('status') == 'completed' for t in todos)
         todos_file = official_todos_path(session_id)
+        canonical = run_todo_script(cmd_name, project_dir, arguments) if cmd_name != '?' else []
 
         if all_completed:
-            # Clean up workflow state so future conversations aren't locked
-            try:
-                todos_file.unlink(missing_ok=True)
-            except Exception:
-                pass
-            try:
-                bookmark_path.unlink(missing_ok=True)
-            except Exception:
-                pass
+            # Completion is trusted only when the submitted list is the exact
+            # canonical list.  A short/all-completed payload is nonterminal.
+            exact_canonical = bool(canonical) and len(todos) == len(canonical)
+            if exact_canonical:
+                for submitted, expected in zip(todos, canonical):
+                    for field in ('content', 'activeForm'):
+                        if submitted.get(field) != expected.get(field):
+                            exact_canonical = False
+                            break
+                    if not exact_canonical:
+                        break
+            receipt_published = False
+            if exact_canonical and cmd_name != 'dev-overnight' and bookmark_state:
+                try:
+                    result = session_resources.publish_workflow_receipt(
+                        project_dir,
+                        claude_session_id=session_id,
+                        bookmark=bookmark_state,
+                    )
+                    receipt_published = result.get('status') == 'pass'
+                except (OSError, ValueError) as exc:
+                    sys.stderr.write(
+                        f'[posttool-todo-tracker] terminal receipt not published: {exc}\n'
+                    )
+            if receipt_published:
+                # Receipt publication precedes identity retirement and is
+                # non-destructive with respect to scratch/process resources.
+                try:
+                    todos_file.unlink(missing_ok=True)
+                except Exception:
+                    pass
+                try:
+                    bookmark_path.unlink(missing_ok=True)
+                except Exception:
+                    pass
         else:
             # Write updated todos back so Phase B reads current state
             # BUT only if count matches canonical — prevents corrupting file with bad data
             # when agent submits wrong number of steps (count hook will handle the error)
-            canonical = run_todo_script(cmd_name, project_dir, arguments) if cmd_name != '?' else []
             blocking_count = len(canonical) if canonical else 0
             count_ok = blocking_count == 0 or len(todos) >= blocking_count
             if count_ok:
@@ -122,7 +150,6 @@ def main():
                     pass
 
         # Get blocking_count fresh from todo script — never from cache
-        canonical = run_todo_script(cmd_name, project_dir, arguments) if cmd_name != '?' else []
         blocking_count = len(canonical) if canonical else len(todos)
 
         print(format_checklist('/' + cmd_name, todos, blocking_count))

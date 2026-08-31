@@ -17,9 +17,13 @@ All follow-up operations (mark, waive, status, check-out) accept an optional
 --instance-id to target a specific numbered slot. Without it they target the
 primary slot. `unlock` clears every slot (primary + numbered) for the spec.
 
-Every write acquires fcntl.LOCK_EX on the JSON file itself. Missing files
-default-initialize; corrupt files are overwritten (fail-forward) with a
-stderr warning. All timestamps are ISO-8601 UTC.
+BOTH check-in branches -- slot allocation and ``--bump-generation`` -- run
+inside the shared checkpoint directory transaction from
+``hooks/lib/checkpoint_resources.py``, because both write the PRIMARY file and
+two writers of one file serialising on two different lock files do not exclude
+each other.  A missing, corrupt, or empty primary template fails closed rather
+than creating an unusable numbered slot.  mark/waive/check-out/unlock retain
+their existing per-file locks. All timestamps are ISO-8601 UTC.
 
 Usage:
   spec-check.py check-in   --spec-id SID --agent AGENT --agent-id AID [--artifact PATH]
@@ -40,6 +44,13 @@ import re
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
+
+
+_HOOKS_DIR = Path(__file__).resolve().parents[1] / "hooks"
+if str(_HOOKS_DIR) not in sys.path:
+    sys.path.insert(0, str(_HOOKS_DIR))
+
+from lib import checkpoint_resources
 
 
 ALLOWED_AGENTS = (
@@ -86,35 +97,6 @@ def _cp_file(spec_id, agent, instance_id=None):
     """
     suffix = f"-{instance_id}" if instance_id else ""
     return _cp_dir(spec_id) / f"cp-state-{agent}{suffix}.json"
-
-
-def _is_running(path):
-    """Return True if the cp-state file at `path` is flagged is_running."""
-    if not path.exists():
-        return False
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return False
-    return bool(data.get("is_running"))
-
-
-def _allocate_instance_id(spec_id, agent):
-    """Find the next available cp-state slot for this agent type.
-
-    Returns None if the primary slot is free (not existing or not running).
-    Otherwise returns the smallest integer N >= 2 for which
-    cp-state-<agent>-N.json is free.
-    """
-    primary = _cp_file(spec_id, agent)
-    if not _is_running(primary):
-        return None
-    i = 2
-    while True:
-        candidate = _cp_file(spec_id, agent, i)
-        if not _is_running(candidate):
-            return i
-        i += 1
 
 
 def _all_instance_files(spec_id, agent):
@@ -194,14 +176,24 @@ def _stamp_runtime(payload, args, instance_id):
         payload["terminal_artifact"]["path"] = args.artifact
 
 
-def _bump_and_reset(payload):
+def _bump_and_reset(payload, actor=None):
     """P2 ba-spec-20260427-194324: increment generation, reset all
     checkpoints to pending, clear waived_reason, refresh updated_at on
-    every checkpoint AND on the cp-state-level marker."""
+    every checkpoint AND on the cp-state-level marker.
+
+    AUDIT-PRESERVING (parent RULING_5 outstanding liability): a checkpoint
+    that is waived-with-reason carries the ONLY surviving record that its
+    holder waived under duress rather than falsely marking it done. Clearing
+    waived_reason without an audit row destroys that record, so the prior
+    state/reason/updated_at are appended to audit_history first -- the same
+    shape mark uses -- with transitioned_to 'pending'.
+    """
     now = _now_iso_z()
     payload["generation"] = int(payload.get("generation", 1)) + 1
     payload["updated_at"] = now
     for cp in payload.get("checkpoints", []):
+        if cp.get("state") == "waived-with-reason":
+            _append_waived_audit(cp, actor, now, transitioned_to="pending")
         cp["state"] = "pending"
         cp["waived_reason"] = None
         cp["updated_at"] = now
@@ -209,38 +201,84 @@ def _bump_and_reset(payload):
 
 def _check_in_rmw(args, instance_id):
     """Read-modify-write the cp-state file under fcntl.LOCK_EX so concurrent
-    --bump-generation invocations cannot tear (AC10d)."""
+    --bump-generation invocations cannot tear (AC10d).
+
+    The per-file lock is nested INSIDE the shared checkpoint directory
+    transaction so a concurrent --bump-generation and a concurrent plain
+    check-in -- which both write the PRIMARY file -- cannot run at the same
+    time. Serialising two writers of one file on two different lock files
+    does not exclude them, which is the defect this nesting closes.
+    """
     path = _cp_file(args.spec_id, args.agent, instance_id)
     path.parent.mkdir(parents=True, exist_ok=True)
-    lock_path = path.with_suffix(path.suffix + ".lock")
-    with open(lock_path, "w") as lh:
-        fcntl.flock(lh.fileno(), fcntl.LOCK_EX)
-        try:
-            payload = _read_payload(args.spec_id, args.agent, instance_id)
-            _stamp_runtime(payload, args, instance_id)
-            if getattr(args, "bump_generation", False):
-                _bump_and_reset(payload)
-            path.write_text(json.dumps(payload, indent=2, ensure_ascii=False),
-                            encoding="utf-8")
-        finally:
-            fcntl.flock(lh.fileno(), fcntl.LOCK_UN)
+    primary_path = _cp_file(args.spec_id, args.agent, None)
+    with checkpoint_resources.directory_transaction(primary_path):
+        lock_path = path.with_suffix(path.suffix + ".lock")
+        with open(lock_path, "w") as lh:
+            fcntl.flock(lh.fileno(), fcntl.LOCK_EX)
+            try:
+                payload = _read_payload(args.spec_id, args.agent, instance_id)
+                _stamp_runtime(payload, args, instance_id)
+                if getattr(args, "bump_generation", False):
+                    _bump_and_reset(payload, getattr(args, "agent_id", None))
+                path.write_text(json.dumps(payload, indent=2, ensure_ascii=False),
+                                encoding="utf-8")
+            finally:
+                fcntl.flock(lh.fileno(), fcntl.LOCK_UN)
 
 
-def _pick_check_in_slot(args):
-    # --bump-generation is an explicit re-split on the primary slot; it does
-    # NOT auto-allocate a numbered slot (AC10d invariant: parallel bumps
-    # target the same slot to compose serially under the file lock).
-    if getattr(args, "bump_generation", False):
-        return None
-    return _allocate_instance_id(args.spec_id, args.agent)
+def _enforce_reset_scope(args):
+    """Apply the cross-role ownership refusal to the audit-preserving reset.
+
+    mark and waive already refuse cross-role mutation unconditionally. A reset
+    path that skipped the same check would open a hole in an existing contract,
+    so --bump-generation runs it over every checkpoint id it is about to
+    re-open. Returns 0 to proceed, 1 to refuse.
+    """
+    payload = _read_payload(args.spec_id, args.agent, None)
+    for cp in payload.get("checkpoints", []) or []:
+        cp_id = cp.get("id")
+        if not cp_id:
+            continue
+        if _enforce_cross_role_scope(args.spec_id, args.agent, cp_id,
+                                     "bump-generation reset") != 0:
+            return 1
+    return 0
 
 
 def _cmd_check_in(args):
     if not _validate_agent(args.agent):
         return 1
-    instance_id = _pick_check_in_slot(args)
-    _check_in_rmw(args, instance_id)
-    path = _cp_file(args.spec_id, args.agent, instance_id)
+    if getattr(args, "bump_generation", False):
+        # Explicit generation bumps intentionally compose on the primary file.
+        if _enforce_reset_scope(args) != 0:
+            return 1
+        _check_in_rmw(args, None)
+        instance_id = None
+        path = _cp_file(args.spec_id, args.agent, None)
+    else:
+        primary_path = _cp_file(args.spec_id, args.agent, None)
+
+        def _claim_primary(payload):
+            _stamp_runtime(payload, args, None)
+            return payload
+
+        result = checkpoint_resources.claim_slot(
+            primary_path,
+            agent_id=args.agent_id,
+            artifact=args.artifact,
+            primary_updater=_claim_primary,
+        )
+        if result.get("status") != "pass":
+            # AC-LB-06 is a machine contract: do not decorate this object.
+            print(json.dumps({
+                "status": "fail",
+                "numbered_path": None,
+                "error_code": result.get("error_code"),
+            }, sort_keys=True))
+            return 1
+        instance_id = result.get("instance_id")
+        path = Path(result["path"])
     slot_label = "primary" if instance_id is None else f"instance-id={instance_id}"
     agent_id_label = f" agent-id={args.agent_id}" if args.agent_id else ""
     print(f"checked in: spec={args.spec_id} agent={args.agent} slot={slot_label}{agent_id_label}")
@@ -399,11 +437,16 @@ def _check_lifecycle_open(payload):
     return True
 
 
-def _append_waived_audit(cp, actor, now_iso):
-    """F6: preserve waiver context per AC4 minimum-keys schema."""
+def _append_waived_audit(cp, actor, now_iso, transitioned_to="done"):
+    """F6: preserve waiver context per AC4 minimum-keys schema.
+
+    transitioned_to is a PARAMETER, not the literal 'done': the reset path
+    re-opens a waived checkpoint to 'pending', and recording 'done' there
+    would write a false transition into the audit trail.
+    """
     cp.setdefault("audit_history", []).append({
         "prior_state": "waived-with-reason", "prior_waived_reason": cp.get("waived_reason"),
-        "prior_updated_at": cp.get("updated_at"), "transitioned_to": "done",
+        "prior_updated_at": cp.get("updated_at"), "transitioned_to": transitioned_to,
         "transitioned_at": now_iso, "actor": actor,
     })
 

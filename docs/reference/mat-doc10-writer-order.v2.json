@@ -1,0 +1,219 @@
+{
+  "schema": "mat-doc10-writer-order.v2",
+  "contract_id": "MAT-DOC10.v2",
+  "spec_id": "20260808-035658",
+  "lane_id": "LANE-SU",
+  "published_by_task_id": "20260819-124121-r03",
+  "published_at": "2026-08-20T07:20:00Z",
+  "baseline_head_sha": "43ec459336762a68394e5533cd24d8fa5b9395c8",
+  "purpose": "Declarative single-writer / phase-order contract for the SU -> DOC -> generator -> QA materialization chain. Replaces the multi-actor offer/acceptance/admission/receipt ceremony with one digest-verifiable JSON artifact, so LANE-DOC's SU-side precondition is evaluable from repository state alone.",
+  "phases": [
+    "SU_PUBLISH",
+    "DOC_CONSUME",
+    "GENERATE",
+    "SU_QA"
+  ],
+  "phase_order_semantics": "Strictly ordered. A phase may begin only after every earlier phase has status 'complete'. No phase may write a path owned by another phase.",
+  "single_writer_map": {
+    "SU_PUBLISH": {
+      "order": 1,
+      "owner": "LANE-SU",
+      "status": "complete",
+      "writes": [
+        "commands/spec-update.md",
+        "scripts/spec-update-contract.py",
+        "tests/test_spec_update_command_contracts.py",
+        "CHANGELOG.md"
+      ],
+      "evidence": {
+        "file_sha256": {
+          "commands/spec-update.md": "ba6420ace050aa80e48bc6f00661cdc07d0879c130bfbaafb0b26e460cee7a47",
+          "scripts/spec-update-contract.py": "56399efe84b20503768a974f30f84e7bce4df66f6d121996cd0c2b3ff9c7a530",
+          "tests/test_spec_update_command_contracts.py": "821dc5f5b985abe67555020e1d9d7f24f9fcaeecb977ec472c21fda95c73686a",
+          "CHANGELOG.md": "bab7853db2e6fb223f48a891a94955cbd94e61fd6ac52225510f1279ff4181b5"
+        },
+        "hashes_recomputed_from_live_bytes_at": "2026-08-20T07:18:26Z",
+        "qa_report": {
+          "path": "docs/dev/qa-report-20260810-lane-su-p1-iter7.json",
+          "sha256": "4f314da3b1300c0bd69141c042b0203bc6e70deb8d78f2bf62191ed966eee0f0",
+          "field": "p1_verdict",
+          "value": "PASS"
+        },
+        "behavior_suites": {
+          "tests/test_spec_update_command_contracts.py": "87/87 pass",
+          "tests/test_spec_update_command_contracts.py::subset[response or token or tamper]": "21/21 pass, 66 deselected",
+          "tests/test_dev_artifact_chain_consumer_contracts.py": "24/24 pass"
+        }
+      }
+    },
+    "DOC_CONSUME": {
+      "order": 2,
+      "owner": "LANE-DOC",
+      "status": "pending",
+      "writes": [
+        "commands/dev.md",
+        "commands/dev-command.md"
+      ],
+      "evidence": null
+    },
+    "GENERATE": {
+      "order": 3,
+      "owner": "doc-sync-generator",
+      "status": "pending",
+      "writes": [
+        "README.md",
+        "INDEX.md",
+        "commands/README.md",
+        "commands/INDEX.md"
+      ],
+      "pass_constraint": {
+        "admitted_passes": 1,
+        "rule": "Exactly ONE admitted doc-sync generator pass may write these paths. Additional passes are contract violations.",
+        "surface": {
+          "driver": "hooks/doc_sync/main.py",
+          "entrypoint": "hooks/posttool-doc-sync.py",
+          "writers": [
+            "hooks/doc_sync/regen_readme.py",
+            "hooks/doc_sync/regen_index.py"
+          ]
+        }
+      },
+      "evidence": null
+    },
+    "SU_QA": {
+      "order": 4,
+      "owner": "LANE-SU",
+      "status": "pending",
+      "writes": [],
+      "mode": "read-only",
+      "validates": [
+        "SU_PUBLISH behavior unchanged (suite re-run)",
+        "DOC_CONSUME authored bytes",
+        "GENERATE produced bytes"
+      ],
+      "evidence": null
+    }
+  },
+  "writer_map_invariants": {
+    "pairwise_disjoint": true,
+    "rule": "The write sets of SU_PUBLISH, DOC_CONSUME, GENERATE and SU_QA are pairwise disjoint; every listed path has exactly one owning phase.",
+    "read_only_phases": [
+      "SU_QA"
+    ]
+  },
+  "no_forward_output_claim": {
+    "asserted": true,
+    "statement": "This contract makes NO claim about the outcome, content, or success of DOC_CONSUME, GENERATE or SU_QA. Those phases are declared pending with null evidence and are LANE-DOC / generator work, not SU work. Only SU_PUBLISH is claimed complete, and that claim is backed by recomputable sha256 evidence over live bytes."
+  },
+  "durability": {
+    "contract_path": "docs/reference/mat-doc10-writer-order.v2.json",
+    "tracked_eligible": true,
+    "tracked_eligible_evidence": {
+      "git_check_ignore_exit": 1,
+      "git_check_ignore_note": "No .gitignore rule matches docs/reference/mat-doc10-writer-order.v2.json, so /commit can stage it and a fresh clone will contain it.",
+      "tracked_siblings_in_dir": 20,
+      "release_manifest_include": "docs/**",
+      "public_core_ledger_entry": "docs/"
+    },
+    "superseded_draft_path": "docs/dev/mat-doc10-writer-order-contract.v2.json",
+    "superseded_draft_sha256": "f2fd35c8a31284713a07758c846ea5f7a46af7754fa1999adadaacd03d1ea585",
+    "superseded_draft_status": "non-authoritative evidence — preserved byte-for-byte, never amended, never deleted; it lives under the gitignored docs/dev/ tree (.gitignore:142) and is therefore unstageable and absent from a fresh clone",
+    "rationale": "The v2 contract was first drafted at docs/dev/mat-doc10-writer-order-contract.v2.json, which .gitignore:142 excludes. LANE-DOC's gate and the goal(b)/M1 word 'durable' both require an artifact that survives /commit and a fresh clone, so the authoritative home moved to this git-tracked path. Consumers MUST bind to contract_path; the draft is retained only so the iteration-1 QA evidence chain stays resolvable."
+  },
+  "lane_doc_precondition": {
+    "description": "The SU-side precondition LANE-DOC must satisfy before dispatching P2 (DOC_CONSUME). Evaluable from repository state alone.",
+    "predicate": [
+      "contract file docs/reference/mat-doc10-writer-order.v2.json exists",
+      "contract parses as JSON",
+      "single_writer_map.SU_PUBLISH.status == 'complete'",
+      "every SU_PUBLISH.evidence.file_sha256 entry equals the sha256 of the live worktree file"
+    ],
+    "evaluation_inputs": "repository state only",
+    "ceremony_artifacts_read": 0,
+    "ceremony_free": true,
+    "note": "No step of this evaluation reads any path under docs/dev/overnight/*/cycle-1/. The predicate is satisfiable with every ceremony artifact treated as nonexistent. The SU_PUBLISH.evidence.qa_report pointer is provenance, not a gate input: it is deliberately excluded from this predicate so the gate stays evaluable from tracked repository state alone."
+  },
+  "supersedes": {
+    "rationale": "The prior MAT-DOC10 gate was expressed as a multi-actor authorization ceremony (offer -> acceptance -> admission -> receipt). The user abolished that ceremony on 2026-08-19. The SUBSTANTIVE obligation it carried (single writer per path, SU -> DOC -> generator -> QA order) survives and is re-published here in plain Claude-harness form.",
+    "user_directive_verbatim": "仪式是codex发明的话就不要管了，我们按照claude正式harness走",
+    "user_directive_source": "docs/dev/user-requirement-dev-20260819-124121.md",
+    "user_directive_date": "2026-08-19",
+    "superseded": [
+      {
+        "identity": "MAT-DOC10.v1",
+        "kind": "contract",
+        "canonical_digest": "2157e04b5f3051f4e58b3168ed444acd052836181122b6300d153e53154a0bb9",
+        "source_object": "admission inputs of the abolished ceremony cycle-contract.json",
+        "source_paths": [
+          "docs/dev/overnight/019fe5c1-5b46-7dd1-8086-591a5b932bf3/cycle-1/cycle-contract.json",
+          "docs/dev/overnight/685c203b-2819-47f4-b612-f60f285a1602/cycle-1/cycle-contract.json"
+        ],
+        "reason": "Superseded by MAT-DOC10.v2. LANE-DOC's GATE-MAT-DOC10 must re-point from this v1 canonical digest to this contract file plus the lane_doc_precondition predicate; the literal v1 digest gate is unsatisfiable by v2 (different schema, path and digest) and is void under the ceremony abolition."
+      },
+      {
+        "identity": "cycle-routing-offer.v2.json",
+        "kind": "ceremony_chain_root",
+        "sha256": "f20776d9bc31f1f974f4c84632357ffa8f7d3947bc37ddc96b3dab95d99d4512",
+        "path": "docs/dev/overnight/019fe5c1-5b46-7dd1-8086-591a5b932bf3/cycle-1/cycle-routing-offer.v2.json",
+        "reason": "Root of the abolished offer/acceptance/admission/receipt chain. Retained on disk as historical evidence only; carries no precondition semantics."
+      }
+    ],
+    "prior_ac_reconciliation": {
+      "superseded_clauses": "AC-SU-L06 admission-machinery clauses (P0 offer acceptance, dispatch admission, provider receipts)",
+      "carried_forward": "AC-SU-L06 substantive core — exact scope, one writer per path, no forward-phase claims — is enforced by single_writer_map, writer_map_invariants and no_forward_output_claim in this contract.",
+      "qa_instruction": "QA must NOT fail on absent or stale ceremony artifacts."
+    }
+  },
+  "abolished_ceremony_inventory": {
+    "status": "historical evidence only — no precondition semantics; do not delete, do not amend",
+    "base_dir": "docs/dev/overnight/019fe5c1-5b46-7dd1-8086-591a5b932bf3/cycle-1/",
+    "total_files_in_dir": 569,
+    "known_chain_artifacts": {
+      "offer": [
+        "cycle-routing-offer.v2.json"
+      ],
+      "acceptance_and_amendments": [
+        "cycle-routing-acceptance.v2.json",
+        "cycle-routing-acceptance-amendment-b.v2.json",
+        "cycle-routing-acceptance-amendment-r1.v2.json",
+        "cycle-routing-acceptance-amendment-r1-iter4.v2.json"
+      ],
+      "admission": [
+        "cycle-contract.json",
+        "cycle-contract.bootstrap-empty.json",
+        "dev-admission-b-su.v1.json",
+        "dev-admission-r1.v1.json"
+      ],
+      "p1_receipt": [
+        "mat-doc10-p1-su-publish-provider-receipt.v1.json"
+      ],
+      "p2_readiness": [
+        "mat-doc10-p2-dispatch-readiness.v1.json"
+      ],
+      "parent_amendments": [
+        "mat-doc10-parent-amendment-a1.v1.json",
+        "mat-doc10-parent-amendment-a1-qa.v1.json",
+        "mat-doc10-parent-amendment-a2.v1.json",
+        "mat-doc10-parent-amendment-a2-qa.v1.json"
+      ]
+    },
+    "note": "Enumeration is the curated MAT-DOC10 chain, not the full 569-file directory. The remainder (pol-v*, lane-b-*, h-b-*) belongs to other abolished ceremony lineages."
+  },
+  "reconciliation_notes": [
+    {
+      "topic": "README.md ownership",
+      "detail": "This contract publishes the previously-accepted map, which assigns root README.md to the GENERATE phase (hooks/doc_sync/regen_readme.py rewrites it wholesale via write_text at regen_readme.py:175). The LANE-DOC ticket (docs/dev/ticket-20260809-102007-10.md:380, Must-7) separately treats root README.md prose as DOC-authored. LANE-DOC BA must reconcile authored-prose vs regenerated-file semantics BEFORE P2 dispatch. This cycle does not adjudicate the split.",
+      "owner": "LANE-DOC BA"
+    },
+    {
+      "topic": "GATE-MAT-DOC10 re-pointing",
+      "detail": "LANE-DOC's gate currently binds the v1 canonical digest 2157e04b5f3051f4e58b3168ed444acd052836181122b6300d153e53154a0bb9 (docs/dev/ticket-20260809-102007-10.md:105,320,447,481). It must be re-pointed to this contract file plus the lane_doc_precondition predicate.",
+      "owner": "LANE-DOC BA"
+    },
+    {
+      "topic": "Contract path migration",
+      "detail": "Any consumer that pinned the iteration-1 draft path docs/dev/mat-doc10-writer-order-contract.v2.json must re-point to docs/reference/mat-doc10-writer-order.v2.json. The draft is gitignored (.gitignore:142) and therefore not clone-durable; see the durability block.",
+      "owner": "LANE-DOC BA"
+    }
+  ]
+}
