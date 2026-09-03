@@ -1,5 +1,4 @@
 {
-  "$schema": "https://json.schemastore.org/claude-code-settings.json",
   "cleanupPeriodDays": 365,
   "env": {
     "CLAUDE_BASH_MAINTAIN_PROJECT_WORKING_DIR": "1",
@@ -29,6 +28,11 @@
     "TMPDIR": "/dev/shm/claude-tmp",
     "_comment_tmpdir": "Harness stdout-capture and agent scratch are pinned to a disk-backed filesystem. The 4G /tmp tmpfs was exhausted three times in one cycle by agent scratch trees, each time killing every Bash call before execution (the capture file itself fails with ENOSPC, so even 'true' fails) and once producing a spurious provenance failure. /dev/shm has 6G+ free."
   },
+  "deniedMcpServers": [
+    { "serverName": "claude.ai Gmail" },
+    { "serverName": "claude.ai Google Calendar" },
+    { "serverName": "claude.ai Google Drive" }
+  ],
   "includeCoAuthoredBy": true,
   "permissions": {
     "allow": [
