@@ -16,16 +16,16 @@ All counts below were established by enumerating the actual repository, not copi
 | Component | Count | How counted |
 |---|---|---|
 | **Subagents** (`agents/*.md`, excluding `INDEX.md`/`README.md`) | **23** | `ls agents/*.md \| grep -vE '/(INDEX\|README)\.md$'` |
-| **Slash commands** (`commands/*.md`, excluding `INDEX.md`/`README.md`) | **19** | `ls commands/*.md \| grep -vE '/(INDEX\|README)\.md$'` |
+| **Slash commands** (`commands/*.md`, excluding `INDEX.md`/`README.md`) | **20** | `ls commands/*.md \| grep -vE '/(INDEX\|README)\.md$'` |
 | **Hook command entries wired** in `settings.json` | **71** | sum of `hooks[*][*].hooks[]` over all lifecycle events |
 | **Distinct hook files referenced** by `settings.json` | **69** (+1 = **70** paths) | unique `hooks/*.py\|*.sh` paths in those entries; the remaining wired executable is the non-hooks `scripts/canary-verify.sh` (SessionStart) → 70 distinct wired executable paths |
 | **Lifecycle events used** | **8** | keys of `settings.json.hooks` |
-| **Hook files present on disk** (`hooks/*.py` + `*.sh`, excl. `.bak`) | **93** | `find hooks -maxdepth 1 -type f \( -name '*.py' -o -name '*.sh' \)` |
+| **Hook files present on disk** (`hooks/*.py` + `*.sh`, excl. `.bak`) | **94** | `find hooks -maxdepth 1 -type f \( -name '*.py' -o -name '*.sh' \)` |
 | **Helper scripts** (`scripts/` top-level *tracked* files, excl. `INDEX/README`) | **94** | `git ls-files scripts/ \| grep -E 'scripts/[^/]+$'` minus `INDEX`/`README` |
 | **Skills** (`skills/*/` directories) | **8** | `ls -d skills/*/` |
-| `permissions.allow` / `deny` / `ask` entries | 154 / 81 / 23 | keys of `settings.json.permissions` |
+| `permissions.allow` / `deny` / `ask` entries | 165 / 96 / 0 | keys of `settings.json.permissions` |
 
-> Note on the hook count: more hook *files* exist on disk (**93**) than are *wired* (**69** hooks files / 70 executable entries). The unwired files are install scripts, libraries, legacy/`.bak` variants, and intentionally-staged hooks. The number that matters for behavior is **what `settings.json` wires**: 69 distinct `hooks/` files plus `scripts/canary-verify.sh` under `SessionStart` — **no referenced executable is duplicated**. The eight lifecycle events are `SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `PostToolUseFailure`, `Notification`, `Stop`, `SubagentStop`.
+> Note on the hook count: more hook *files* exist on disk (**94**) than are *wired* (**69** hooks files / 70 executable entries). The unwired files are install scripts, libraries, legacy/`.bak` variants, and intentionally-staged hooks. The number that matters for behavior is **what `settings.json` wires**: 69 distinct `hooks/` files plus `scripts/canary-verify.sh` under `SessionStart` — **no referenced executable is duplicated**. The eight lifecycle events are `SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `PostToolUseFailure`, `Notification`, `Stop`, `SubagentStop`.
 
 ### Per-event wiring (from `settings.json`)
 
@@ -115,7 +115,7 @@ flowchart TD
 ```
 
 - **Orchestrator (main agent).** Owns the conversation, the todo list, and dispatch. Allowed tools are a small whitelist (`Agent`, `TodoWrite`, `AskUserQuestion`, `Skill`, `Read`, `Glob`, `Grep`, `Bash`, cron/title tools); everything else is rate-limited or blocked by the orchestrator gate. (`CLAUDE.md` §Orchestrator-Only Rule.)
-- **Command surface (`commands/*.md`).** 19 slash commands. Each is a prompt that scripts a workflow (parse → dispatch → validate → ship). Release/control commands carry `disable-model-invocation: true`, which blocks **SlashCommand self-dispatch only**; the `Skill`-tool path is closed separately by an explicit `Skill(<name>:*)` deny in `permissions.deny` (see *Why `disable-model-invocation`?* below).
+- **Command surface (`commands/*.md`).** 20 slash commands. Each is a prompt that scripts a workflow (parse → dispatch → validate → ship). Release/control commands carry `disable-model-invocation: true`, which blocks **SlashCommand self-dispatch only**; the `Skill`-tool path is closed separately by an explicit `Skill(<name>:*)` deny in `permissions.deny` (see *Why `disable-model-invocation`?* below).
 - **Subagent fleet (`agents/*.md`).** 23 specialists, each a system prompt with `name`/`description`/`tools` frontmatter. Subagents bypass the orchestrator gate (they are *supposed* to do work) but are still subject to the safety, git, and worktree hooks.
 - **Hook enforcement (`settings.json` + `hooks/`).** The kernel. Every tool call the agent makes is intercepted; hooks return exit 2 to block. Shared logic lives in `hooks/lib/` (allowlist/sentinel grants, checkpoint core, contract runtime, agent resolver).
 - **Support.** `scripts/` (94 helpers: grant writers, graphify code-graph, spec/dev-report resolvers), `skills/` (8: Playwright UI-audit suite), `schemas/` (JSON contracts like `context.v1.json`, `cycle-contract.v1.json`, `dev-report.v1.json`, `qa-report.v1.json`), `templates/` (`spec-template.md`, `overnight-spec.md`).
@@ -351,8 +351,8 @@ flowchart LR
 ├── INDEX.md                 # top-level index
 ├── settings.json            # 69 wired hook files / 71 entries across 8 lifecycle events; permissions; env
 ├── agents/                  # 23 subagent definitions  (+ INDEX.md, README.md)
-├── commands/                # 19 slash-command workflows (+ INDEX.md, README.md)
-├── hooks/                   # enforcement layer (93 files on disk; 69 wired)
+├── commands/                # 20 slash-command workflows (+ INDEX.md, README.md)
+├── hooks/                   # enforcement layer (94 files on disk; 69 wired)
 │   ├── lib/                 #   allowlist (sentinel grants), checkpoint-core, contract runtime, resolvers
 │   ├── doc_sync/            #   self-updating INDEX/README/CLAUDE regeneration package
 │   └── git-keystone/        #   git-native ref-transaction protection
