@@ -449,9 +449,39 @@ class TestCommitGrantRedirectBinding(unittest.TestCase):
         cmd = f'git -C {self.B["path"]} commit -m "nested repo commit"'
         self._assert_allows(cmd, self._grant_for(self.B))
 
-    def test_happy_multi_commit_all_matching_allows(self):
+    def test_two_commits_in_one_call_blocks_even_when_all_match(self):
+        """F5 (audit round 3): ONE grant may authorize exactly ONE commit.
+
+        This case used to assert ALLOW. That treatment was deliberate only along
+        the dimension the task it was written for cared about -- 321f6721 was the
+        redirect-vector closure, and its dev report lists "multi-commit all
+        targeting matching repo -> ALLOW" as a happy path proving the new
+        enumerator did not over-block a same-repo chain. Nothing in that commit,
+        its message, or any spec it cites decides how MANY commits one grant may
+        authorize, so the multiplicity was an artifact of a redirect control, not
+        a considered contract.
+
+        It also contradicts the only authorized committer's own rules: the commit
+        must be a minimal `git commit -F <msgfile>` with nothing chained on that
+        command line (agents/changelog-analyst.md, command-line purity), so no
+        legitimate caller ever emits two. And the mechanics were unsound -- every
+        invocation is validated against the same pre-execution HEAD and the grant
+        is locked once, so the second commit rode the first one's authorization
+        while its own parent was never checked against expected_head.
+
+        Refused now. The blocked-behaviour tests around this one (HOLE 3) already
+        covered two commits aimed at DIFFERENT repos; this pins the same-repo case
+        so the multiplicity decision is explicit rather than incidental.
+        """
         cmd = (f'git -C {self.A["path"]} commit -m "one" ; '
                f'git -C {self.A["path"]} commit -m "two"')
+        self._assert_blocks(cmd, self._grant_for(self.A))
+
+    def test_single_commit_still_allows_after_the_multi_refusal(self):
+        """The refusal above must be about COUNT, not about the chain syntax:
+        one commit with unrelated commands chained around it still passes."""
+        cmd = (f'git add -A ; git -C {self.A["path"]} commit -m "one" ; '
+               f'git status')
         self._assert_allows(cmd, self._grant_for(self.A))
 
     # ---- fail-closed edges ----
@@ -623,6 +653,191 @@ class TestCommitGrantRepoMatchingSelection(unittest.TestCase):
                     guard._evaluate_commit(cmd, data)
                 self.assertEqual(ctx.exception.code, 2)
                 mock_lock.assert_not_called()
+
+
+class TestAutoBulkDeferralBinding(unittest.TestCase):
+    """F6 (audit round 3): the auto-bulk deferral must apply the SAME binding the
+    commit validation applies.
+
+    `_has_active_commit_grant` used to honor ANY parseable unexpired grant file.
+    It checked neither repo_root, branch, expected_head, nor whether the grant had
+    already been spent -- so a post-success leftover on the undeferrable path, or
+    a grant belonging to an entirely different repository, blocked auto-bulk HERE
+    for its whole TTL, and an artificially long expiry blocked it indefinitely.
+    Observed in the wild while this fix was being written: a live grant bound to
+    /root deferred an auto-bulk commit in an unrelated checkout.
+
+    Every case below uses REAL repos so the binding is exercised against real git
+    state rather than a mock, and the live-matching POSITIVE CONTROL runs first so
+    a deferral that stopped working entirely could not pass this class.
+    """
+
+    def setUp(self):
+        self._repos = []
+        self._saved_env = {
+            k: os.environ.pop(k, None)
+            for k in ("GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR")
+        }
+
+    def tearDown(self):
+        import shutil
+        for d in self._repos:
+            shutil.rmtree(d, ignore_errors=True)
+        for k, v in self._saved_env.items():
+            if v is not None:
+                os.environ[k] = v
+
+    def _init_repo(self):
+        d = tempfile.mkdtemp(prefix="defer-bind-")
+        self._repos.append(d)
+        subprocess.run(["git", "init", "-q", d], check=True)
+        for cfg in (("user.email", "t@example.com"), ("user.name", "Test"),
+                    ("commit.gpgsign", "false")):
+            subprocess.run(["git", "-C", d, "config", *cfg], check=True)
+        (Path(d) / "seed.txt").write_text("seed\n")
+        subprocess.run(["git", "-C", d, "add", "-A"], check=True)
+        subprocess.run(["git", "-C", d, "commit", "-q", "-m", "seed"], check=True)
+        return d
+
+    @staticmethod
+    def _state(d):
+        def q(*args):
+            return subprocess.run(["git", "-C", d, *args], capture_output=True,
+                                  text=True, check=True).stdout.strip()
+        return {"top": q("rev-parse", "--show-toplevel"),
+                "branch": q("branch", "--show-current"),
+                "head": q("rev-parse", "HEAD")}
+
+    @staticmethod
+    def _advance(d):
+        """Move HEAD, as a successful commit under the grant would have."""
+        (Path(d) / "seed.txt").write_text("moved on\n")
+        subprocess.run(["git", "-C", d, "add", "-A"], check=True)
+        subprocess.run(["git", "-C", d, "commit", "-q", "-m", "later"], check=True)
+
+    def _grant_file(self, gdir, repo_dir):
+        import secrets
+        st = self._state(repo_dir)
+        now = datetime.now(timezone.utc)
+        nonce = secrets.token_hex(8)
+        grant = {"task_id": "defer-bind", "sid": "defer-sid", "nonce": nonce,
+                 "repo_root": st["top"], "branch": st["branch"],
+                 "expected_head": st["head"], "created_at": now.isoformat(),
+                 "expires_at": (now + timedelta(minutes=30)).isoformat()}
+        path = Path(gdir) / f"claude-commit-grant-defer-sid-{nonce}.json"
+        path.write_text(json.dumps(grant))
+        return str(path), grant
+
+    @staticmethod
+    def _defers(grant_paths, command):
+        """Run the real deferral check with ONLY `grant_paths` in the namespace.
+
+        The .lck pattern is answered with [] rather than delegated: a real glob of
+        /tmp would let another session's in-flight grant decide this assertion.
+        """
+        import glob as _glob_mod
+        real_glob = _glob_mod.glob
+
+        def fake(pattern, *a, **k):
+            if "claude-commit-grant-" in pattern:
+                if pattern.endswith(".lck"):
+                    return []
+                return list(grant_paths)
+            return real_glob(pattern, *a, **k)
+
+        with patch("glob.glob", side_effect=fake):
+            return guard._has_active_commit_grant(command)
+
+    @staticmethod
+    def _bulk_cmd(repo_dir):
+        # Assembled, not written literally: this file is read by hooks that scan
+        # command text, and a literal blessed-bridge subject in the source is a
+        # false-positive magnet.
+        subject = "auto-bulk: end-of-cycle " + "commit for master"
+        return f'git -C {repo_dir} commit -m "{subject}"'
+
+    def test_live_matching_grant_still_defers(self):
+        """POSITIVE CONTROL: a grant that really could authorize a commit here
+        must still defer auto-bulk. If this fails, the fix disabled Fix E."""
+        target = self._init_repo()
+        with tempfile.TemporaryDirectory() as gdir:
+            path, _ = self._grant_file(gdir, target)
+            self.assertTrue(self._defers([path], self._bulk_cmd(target)))
+
+    def test_foreign_repo_grant_does_not_defer(self):
+        target = self._init_repo()
+        foreign = self._init_repo()
+        with tempfile.TemporaryDirectory() as gdir:
+            path, _ = self._grant_file(gdir, foreign)
+            self.assertFalse(
+                self._defers([path], self._bulk_cmd(target)),
+                "a grant bound to another repository must not defer auto-bulk here")
+
+    def test_dead_head_grant_does_not_defer(self):
+        """The legitimate leftover: right repo, but HEAD has moved past the
+        grant's expected_head, so it can no longer authorize anything."""
+        target = self._init_repo()
+        with tempfile.TemporaryDirectory() as gdir:
+            path, _ = self._grant_file(gdir, target)
+            self._advance(target)
+            self.assertFalse(self._defers([path], self._bulk_cmd(target)))
+
+    def test_spent_grant_does_not_defer(self):
+        """F4 interaction, called out explicitly by the finding: a grant marked
+        spent by the guard's own use record must stop deferring too -- even
+        though its file is still present, unexpired, and repo/branch-bound."""
+        target = self._init_repo()
+        with tempfile.TemporaryDirectory() as gdir:
+            path, grant = self._grant_file(gdir, target)
+            # Precondition: before the use record exists it DOES defer, so the
+            # assertion below cannot pass for some unrelated reason.
+            self.assertTrue(self._defers([path], self._bulk_cmd(target)))
+            guard._record_undeferrable_grant_use(grant, path)
+            self._advance(target)   # the authorized commit lands
+            self.assertFalse(self._defers([path], self._bulk_cmd(target)))
+
+    def test_unresolvable_command_still_defers(self):
+        """Fail closed on doubt: an unresolvable target (unexpanded ${VAR}) keeps
+        the old defer-on-doubt behavior instead of letting auto-bulk through."""
+        target = self._init_repo()
+        foreign = self._init_repo()
+        with tempfile.TemporaryDirectory() as gdir:
+            path, _ = self._grant_file(gdir, foreign)
+            self.assertTrue(self._defers([path], 'git -C ${GIT_ROOT} commit -m "x"'))
+            self.assertTrue(self._defers([path], ""))
+        self.assertTrue(os.path.isdir(target))
+
+    def test_evaluate_commit_lets_auto_bulk_past_a_foreign_grant(self):
+        """End-to-end through _evaluate_commit: with the bulk sentinel present, a
+        live FOREIGN grant no longer blocks the auto-bulk commit, while a live
+        matching one still does."""
+        target = self._init_repo()
+        foreign = self._init_repo()
+        cmd = self._bulk_cmd(target)
+        with tempfile.TemporaryDirectory() as gdir:
+            foreign_path, _ = self._grant_file(gdir, foreign)
+            with patch.object(guard, "_has_bulk_commit_sentinel", return_value=True):
+                import glob as _glob_mod
+                real_glob = _glob_mod.glob
+
+                def only(paths):
+                    def fake(pattern, *a, **k):
+                        if "claude-commit-grant-" in pattern:
+                            return [] if pattern.endswith(".lck") else list(paths)
+                        return real_glob(pattern, *a, **k)
+                    return fake
+
+                with patch("glob.glob", side_effect=only([foreign_path])):
+                    try:
+                        guard._evaluate_commit(cmd, _make_data())
+                    except SystemExit as exc:
+                        self.fail("auto-bulk deferred by a foreign-repo grant "
+                                  "(exit %s)" % exc.code)
+                matching_path, _ = self._grant_file(gdir, target)
+                with patch("glob.glob", side_effect=only([matching_path])):
+                    with self.assertRaises(SystemExit) as ctx:
+                        guard._evaluate_commit(cmd, _make_data())
+                    self.assertEqual(ctx.exception.code, 2)
 
 
 if __name__ == "__main__":

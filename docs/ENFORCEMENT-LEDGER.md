@@ -168,14 +168,16 @@ be reconciled rather than argued.
 
 ## 3. Registered-hook rows
 
-All **seven** lifecycle event classes are represented. `settings.json @4c33f2f5` wires 7 event
-classes / 41 matchers / **70 hook commands**, and there are exactly 70 rows below.
+All **eight** lifecycle event classes are represented. `settings.json` wires 8 event
+classes / 42 matchers / **71 hook commands**, and there are exactly 71 rows below (70 recorded
+`@4c33f2f5`; H-071 records the later `PostToolUseFailure` registration).
 
 **The authoring rule `behavior` follows** — applied by hand, and checked only for closed-set
 membership, not recomputed from the event class: events that can deny a pending action
 — `PreToolUse`, `UserPromptSubmit`, `Stop`, `SubagentStop` — are `advisory`, because they are
 deny-*capable* but their prevention has not been observed on a host. Events that fire after the
-fact or carry no veto — `PostToolUse`, `SessionStart`, `Notification` — are `detected`.
+fact or carry no veto — `PostToolUse`, `PostToolUseFailure`, `SessionStart`, `Notification` —
+are `detected`.
 
 | row_id | event_class | matcher | hook | mode/precondition | behavior | exercise_status | proof_layer | citation | verifying_test |
 |---|---|---|---|---|---|---|---|---|---|
@@ -249,6 +251,7 @@ fact or carry no veto — `PostToolUse`, `SessionStart`, `Notification` — are 
 | H-068 | SubagentStop | * | subagentstop-cp-enforce.py | advisory when CP_ENFORCE_MODE is unset (the default); blocking only under CP_ENFORCE_MODE=block | advisory | unexercised | source-level | hooks/subagentstop-cp-enforce.py:1 @4c33f2f5 | none yet |
 | H-069 | SubagentStop | * | subagentstop-e2e-enforce.py | none | advisory | unexercised | source-level | hooks/subagentstop-e2e-enforce.py:1 @4c33f2f5 | none yet |
 | H-070 | SubagentStop | * | subagentstop-restart-track.py | none | advisory | unexercised | source-level | hooks/subagentstop-restart-track.py:1 @4c33f2f5 | none yet |
+| H-071 | PostToolUseFailure | Bash | posttool-allowlist-consume.py | none | detected | unexercised | source-level | hooks/posttool-allowlist-consume.py:1 @4c33f2f5 | hooks/tests/test_posttool_commit_grant_finalize.py |
 
 ---
 
@@ -345,14 +348,22 @@ redirection operators were previously satisfied by unrelated prose and could nev
 missing.
 
 <!-- published-tokens:wrapper:begin -->
-- **`_WRAPPERS` @4c33f2f5** (`hooks/lib/git_command_classifier.py:105-108 @4c33f2f5`), 12 tokens:
+- **`_WRAPPERS` @4c33f2f5** (`hooks/lib/git_command_classifier.py:105-108 @4c33f2f5`), 19 tokens:
   `sudo`, `doas`, `env`, `xargs`, `time`, `nohup`, `setsid`, `stdbuf`, `ionice`, `command`,
-  `builtin`, `nice`.
+  `builtin`, `nice`, `exec`, `eval`, `timeout`, `flock`, `chrt`, `taskset`, `unbuffer`.
 <!-- published-tokens:wrapper:end -->
 <!-- published-tokens:leading-redirection:begin -->
 - **Leading-redirection operators** covered by the published matrix, 7 tokens:
   `2>/dev/null`, `>`, `>>`, `<`, `2>&1`, `&>`, `1>`.
 <!-- published-tokens:leading-redirection:end -->
+- **Boundary moved 2026-09-03.** The last seven wrapper tokens above were added
+  together with three new constructs in the same module — a shell-reserved-word
+  prefix set, a leading-redirection matcher, and a per-wrapper value-flag table.
+  Together they closed the wrapper-with-flag, leading-redirection and
+  reserved-word residual cells: witnesses W4–W11 moved from `MISS` to
+  `detected`. The reserved-word family (`if ! git …`, `then git …`, `do git …`)
+  had never been published as a cell at all, because the matrix was built from
+  the wrapper/redirection axis and no one had probed a keyword prefix.
 - **Gate-architecture census @4c33f2f5**: **1** classifier-exclusive fallback guard
   (architecture A — the only shape the empty-parse suppression affects), **2** unconditional
   `GIT_CMD_RE` branches (architecture B), and **8** classifier-only path-qualified augmentation

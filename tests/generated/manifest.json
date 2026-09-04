@@ -201,6 +201,42 @@
     {
       "task_id": "20260804-010346",
       "manifest_path": "tests/generated/20260804-010346/manifest.json"
+    },
+    {
+      "task_id": "dev-20260719-150041-c",
+      "manifest_path": "tests/generated/dev-20260719-150041-c/manifest.json"
+    },
+    {
+      "task_id": "dev-20260719-150041-a",
+      "manifest_path": "tests/generated/dev-20260719-150041-a/manifest.json"
+    },
+    {
+      "task_id": "20260809-013317-doc",
+      "manifest_path": "tests/generated/20260809-013317-doc/manifest.json"
+    },
+    {
+      "task_id": "20260809-013317-init",
+      "manifest_path": "tests/generated/20260809-013317-init/manifest.json"
+    },
+    {
+      "task_id": "20260809-013317-tz",
+      "manifest_path": "tests/generated/20260809-013317-tz/manifest.json"
+    },
+    {
+      "task_id": "20260809-013317-inject",
+      "manifest_path": "tests/generated/20260809-013317-inject/manifest.json"
+    },
+    {
+      "task_id": "20260828-112025-b",
+      "manifest_path": "tests/generated/20260828-112025-b/manifest.json"
+    },
+    {
+      "task_id": "20260828-112025-a",
+      "manifest_path": "tests/generated/20260828-112025-a/manifest.json"
+    },
+    {
+      "task_id": "20260831-031316",
+      "manifest_path": "tests/generated/20260831-031316/manifest.json"
     }
   ]
 }

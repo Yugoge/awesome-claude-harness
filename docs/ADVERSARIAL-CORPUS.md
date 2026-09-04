@@ -41,7 +41,7 @@ These are not decoration; each is enforced by an assertion, not by good intentio
 | field | meaning |
 |---|---|
 | `case_id` | Stable unique identifier. Uniqueness is asserted. |
-| `case_class` | `deny`, `known_residual`, `gate_deny`, or `boundary_control`. |
+| `case_class` | `deny`, `gate_deny`, or `boundary_control`. (`known_residual` was retired 2026-09-03 — see §6; no case carries it now.) |
 | `table_row` | The `docs/ENFORCEMENT-LEDGER.md` row this case is evidence for. Referential integrity is asserted. |
 | `lifecycle_event` | The Claude Code lifecycle event the guard is wired to. |
 | `guard_chain` | Which guard(s) the case actually drives. |
@@ -53,7 +53,7 @@ These are not decoration; each is enforced by an assertion, not by good intentio
 | `expected_verdict` | `deny`, `allow`, or `not_detected`. |
 | `matrix_cell` | The residual-matrix equivalence class this case witnesses. |
 | `gate_architecture` | `A`, `B`, or `n/a` — see §4. |
-| `witness_id` | `W1`–`W11` for mandated cell witnesses, `null` otherwise. |
+| `witness_id` | `W1`–`W11` for mandated cell witnesses, `null` otherwise. The `ADV-K-*` reserved-word cases added 2026-09-03 are all `null`: they witness a family the published cell matrix never enumerated. |
 
 ## 4. Why `gate_architecture` is a field and not a footnote
 
@@ -88,17 +88,45 @@ match the observed behavior — **not** the other way round. A lane whose produc
 At the revision this corpus was authored, all 20 cases were run and **every observed outcome
 matched its published expectation**, so no correction was required.
 
+**The clause was exercised for real on 2026-09-03**, and this is what it looks like when it
+fires. `_command_token_index()` was taught the shell constructs it had never skipped — the
+reserved words, leading redirections, and a wrapper's own option flags — and eight cases
+published as `not_detected` were then observed as `deny`. Per the clause, the published rows
+were corrected to match observation: `ADV-W04-envi-bare-archA`, `ADV-W05-envu-bare-archA`,
+`ADV-W06-redir-bare-archA`, and `ADV-W07`–`ADV-W11` moved from `known_residual` /
+`not_detected` to `deny` / `deny`, and `known_residual` now has no members. Nineteen
+`ADV-K-*` cases were added for the reserved-word family. The corpus is **39 cases**.
+
 ## 6. Precision about what the residual entries mean
 
-The `known_residual` entries are **detection-layer measurements** — tokenizer misses and regex
-non-matches — plus a source-level reading of gate control flow. They are **not** demonstrated
+The `known_residual` entries were **detection-layer measurements** — tokenizer misses and regex
+non-matches — plus a source-level reading of gate control flow. They were **not** demonstrated
 executable bypasses, and no push, reset or ref mutation was performed to produce any of them.
 A sibling lane independently reached the same boundary from the host-shaped layer (synthetic
 PreToolUse payload, exit code read) and its result is cited by reference rather than re-run.
 
-This residual is a **deliberately accepted** design boundary — the classifier's own docstring
-says so at `hooks/lib/git_command_classifier.py:17 @4c33f2f5`. Publishing it does not widen it.
-Closing it is a separate, security-reviewed decision and is deliberately out of scope here.
+**Retired 2026-09-03.** The residual was published as a *deliberately accepted* design boundary,
+on the strength of the classifier's own docstring saying so. That framing turned out to under-
+state the exposure in two ways, and both are the reason the class no longer exists:
+
+1. **The accepted boundary was wider than the matrix said.** The matrix was built on a
+   wrapper × path-qualification grid, so nobody probed a *shell reserved word*. `if ! git … `,
+   `then git …`, `do git …`, `while ! git …` and thirteen more forms enumerated to NOTHING —
+   and `if ! git commit …` is this repository's own documented error-handling idiom, present
+   twice in the committed text of `agents/changelog-analyst.md`. The residual was not an exotic
+   corner; it was the house style.
+2. **"Detection-layer only" understated the blast radius.** `pretool-git-privilege-guard.py`
+   built its invocation list once and returned immediately when that list was empty, *before*
+   dispatching any check. A miss in the enumerator was therefore not a miss in one gate — it
+   skipped the commit policy, the reset-hard check, the direct-ref-mutation check, the push
+   check, the merge check and the forbidden-plumbing check together.
+
+Both are closed. The enumerator now skips every construct the shell permits before a command
+word, and an empty invocation list is no longer silently equivalent to "no git here": a
+command that is git-shaped but statically unresolvable (`g\it push`, `$GIT push`,
+`$(which git) push`) is refused rather than dropped through the early return. Measured against
+71,598 unique real commands from the harness transcripts, that fail-closed branch fires on 2
+(0.003%) and no command the guard previously refused is now permitted.
 
 ## 7. Prior art — reused, not duplicated
 

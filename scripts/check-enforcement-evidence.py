@@ -158,9 +158,16 @@ AUTHORED_ROW_FIELDS = ["row_id", "mode/precondition", "behavior", "exercise_stat
 # the published claim must break loudly rather than silently describe a boundary that moved.
 RECORDED_AT = "4c33f2f5"
 
+# Re-recorded 2026-09-03: _command_token_index() was taught the shell reserved
+# words, leading redirections and wrapper option flags it never handled, so the
+# residual class named by the published matrix genuinely SHRANK. These values are
+# the NEW boundary, not a relaxation of the old assertion — the drift that broke
+# this check was the intended product of that fix, and the eight witnesses below
+# moved from `MISS` to `detected` as a result.
 RECORDED_WRAPPERS = [
     "sudo", "doas", "env", "xargs", "time", "nohup",
     "setsid", "stdbuf", "ionice", "command", "builtin", "nice",
+    "exec", "eval", "timeout", "flock", "chrt", "taskset", "unbuffer",
 ]
 RECORDED_REDIRECTION_OPS = ["2>/dev/null", ">", ">>", "<", "2>&1", "&>", "1>"]
 
@@ -194,21 +201,21 @@ MANDATED_WITNESSES = [
     {"id": "W3",  "form": "env /usr/bin/git status",         "cell": "wrapper-no-flag/path-qualified",
      "classifier": "detected", "anchor": "no-match", "gate_architecture": "n/a"},
     {"id": "W4",  "form": "env -i git status",               "cell": "wrapper-with-flag/bare",
-     "classifier": "MISS",     "anchor": "MATCH",    "gate_architecture": "A|B"},
+     "classifier": "detected",     "anchor": "MATCH",    "gate_architecture": "A|B"},
     {"id": "W5",  "form": "env -u FOO git status",           "cell": "wrapper-with-flag/bare",
-     "classifier": "MISS",     "anchor": "MATCH",    "gate_architecture": "A|B"},
+     "classifier": "detected",     "anchor": "MATCH",    "gate_architecture": "A|B"},
     {"id": "W6",  "form": "2>/dev/null git status",          "cell": "leading-redirection/bare",
-     "classifier": "MISS",     "anchor": "MATCH",    "gate_architecture": "A|B"},
+     "classifier": "detected",     "anchor": "MATCH",    "gate_architecture": "A|B"},
     {"id": "W7",  "form": "env -i /usr/bin/git status",      "cell": "wrapper-with-flag/path-qualified",
-     "classifier": "MISS",     "anchor": "no-match", "gate_architecture": "A|B"},
+     "classifier": "detected",     "anchor": "no-match", "gate_architecture": "A|B"},
     {"id": "W8",  "form": "env -u FOO /usr/bin/git status",  "cell": "wrapper-with-flag/path-qualified",
-     "classifier": "MISS",     "anchor": "no-match", "gate_architecture": "A|B"},
+     "classifier": "detected",     "anchor": "no-match", "gate_architecture": "A|B"},
     {"id": "W9",  "form": "2>/dev/null /usr/bin/git status", "cell": "leading-redirection/path-qualified",
-     "classifier": "MISS",     "anchor": "no-match", "gate_architecture": "A|B"},
+     "classifier": "detected",     "anchor": "no-match", "gate_architecture": "A|B"},
     {"id": "W10", "form": "sudo -n /usr/bin/git status",     "cell": "wrapper-with-flag/path-qualified",
-     "classifier": "MISS",     "anchor": "no-match", "gate_architecture": "A|B"},
+     "classifier": "detected",     "anchor": "no-match", "gate_architecture": "A|B"},
     {"id": "W11", "form": "nice -n 5 /usr/bin/git status",   "cell": "wrapper-with-flag/path-qualified",
-     "classifier": "MISS",     "anchor": "no-match", "gate_architecture": "A|B"},
+     "classifier": "detected",     "anchor": "no-match", "gate_architecture": "A|B"},
 ]
 
 PIN_RE = re.compile(r"@[0-9a-f]{7,8}\b")

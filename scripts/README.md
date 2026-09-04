@@ -4,7 +4,7 @@ Organization and usage documentation for `scripts/`.
 
 <!-- AUTO:readme-stats -->
 ## Overview
-- **Total files**: 95
+- **Total files**: 100
 - **Subdirectories**: 6
 - **Naming convention**: kebab
 
@@ -66,7 +66,10 @@ Organization and usage documentation for `scripts/`.
 - `orchestrator.sh` - Description: Agent orchestration coordinator for development and cleanup workflows
 - `overnight-git-env.sh` - overnight-git-env.sh — prepare the overnight actor's git PATH + env (M11/AC9).
 - `overnight-git-selftest.sh` - overnight-git-selftest.sh — launch git-version + symref self-test (M8, M16).
+- `overnight-init.sh` - overnight-init.sh — perform the ENTIRE /dev-overnight Step 1 initialization in
 - `overnight-status.sh` - overnight-status.sh — Zero-LLM overnight session status query
+- `paseo-daemon-ledger.py` - Deterministic CLI realizing blueprint F6/F8/F10/F11/F14 local-persistence
+- `paseo-usage-read.mjs` - mjs file
 - `plan-style-inspection.sh` - Description: Discover auditable files and split into groups for parallel style inspection
 - `precommitted-recovery.sh` - Description: Recovery path helpers for nothing_to_commit_precommitted detection.
 - `qa-manifest-guard.py` - Dual-mode tool per BA spec docs/dev/ticket-20260529-081014.md M4:
@@ -97,6 +100,8 @@ Organization and usage documentation for `scripts/`.
 - `write-codex-enforce.sh` - Writes codex-enforce.json into the dev-registry for the given session.
 - `write-commit-grant.py` - Invoked from `commands/commit.md` Step 5 (non-bulk mode) to author a
 - `write-e2e-enforce.sh` - Writes e2e-enforce.json into the dev-registry for the given session.
+- `write-enforce-flag.sh` - Write one or more enforcement-flag sentinels into a dev-registry session dir.
+- `write-git-residual-override.py` - Answers the "could not be statically classified" refusal emitted by
 - `write-qa-mode.sh` - Write or update qa_mode field in the QA sentinel file for a dev-registry session.
 
 ## Subdirectories

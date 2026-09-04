@@ -324,14 +324,14 @@ Every witness below is probed individually on every CI run by
 | W1 | `git status` | none/bare | detected | MATCH |
 | W2 | `/usr/bin/git status` | none/path-qualified | detected | no-match |
 | W3 | `env /usr/bin/git status` | wrapper-no-flag/path-qualified | detected | no-match |
-| W4 | `env -i git status` | wrapper-with-flag/bare | miss | MATCH |
-| W5 | `env -u FOO git status` | wrapper-with-flag/bare | miss | MATCH |
-| W6 | `2>/dev/null git status` | leading-redirection/bare | miss | MATCH |
-| W7 | `env -i /usr/bin/git status` | wrapper-with-flag/path-qualified | miss | no-match |
-| W8 | `env -u FOO /usr/bin/git status` | wrapper-with-flag/path-qualified | miss | no-match |
-| W9 | `2>/dev/null /usr/bin/git status` | leading-redirection/path-qualified | miss | no-match |
-| W10 | `sudo -n /usr/bin/git status` | wrapper-with-flag/path-qualified | miss | no-match |
-| W11 | `nice -n 5 /usr/bin/git status` | wrapper-with-flag/path-qualified | miss | no-match |
+| W4 | `env -i git status` | wrapper-with-flag/bare | detected | MATCH |
+| W5 | `env -u FOO git status` | wrapper-with-flag/bare | detected | MATCH |
+| W6 | `2>/dev/null git status` | leading-redirection/bare | detected | MATCH |
+| W7 | `env -i /usr/bin/git status` | wrapper-with-flag/path-qualified | detected | no-match |
+| W8 | `env -u FOO /usr/bin/git status` | wrapper-with-flag/path-qualified | detected | no-match |
+| W9 | `2>/dev/null /usr/bin/git status` | leading-redirection/path-qualified | detected | no-match |
+| W10 | `sudo -n /usr/bin/git status` | wrapper-with-flag/path-qualified | detected | no-match |
+| W11 | `nice -n 5 /usr/bin/git status` | wrapper-with-flag/path-qualified | detected | no-match |
 
 `env -u FOO` (W5, W8) is the least-disputable witness: unsetting an unset variable perturbs
 nothing — 57 environment variables remain intact, versus 0 under `env -i` — so it cannot be

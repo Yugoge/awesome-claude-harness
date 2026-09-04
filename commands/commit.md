@@ -317,7 +317,7 @@ Constraints:
 - Commit message must NOT match: `\bsync\b.*\buncommitted\b` or `chore\(claude\)\s*:\s*sync`
 - Handle every admitted repository independently and return a `repository_results` entry for each one
 - Write push-gate token after each successful commit
-- Push-gate token path MUST be: `/tmp/agentic-commit/push/<sha256(os.path.realpath(GIT_ROOT))[:16]>/<BRANCH with / replaced by __>.json`
+- Push-gate token path MUST be: `/tmp/agentic-commit/push/<sha256(os.path.realpath(GIT_ROOT))[:16]>/<PUSH_GATE_SID_DIGEST>/<BRANCH with / replaced by __>.json` — session-scoped, where `PUSH_GATE_SID` is the Phase 10 three-part chain (`CLAUDE_CODE_SESSION_ID` → `CLAUDE_SESSION_ID` → `"unknown"`) and `PUSH_GATE_SID_DIGEST` is `sha256(PUSH_GATE_SID)[:16]`; only the path segment is digested (it comes from the environment and must not carry `/` or `..`), while the token's `session_id` field keeps the raw `PUSH_GATE_SID`; per-session paths stop two sessions on one branch from contending for a single token slot
 - Push-gate validates commit_sha only; expires_at is no longer written or checked
 - **BULK mode commit message prefix (REQUIRED when BULK=true)**: every commit message MUST begin with `auto-bulk: end-of-cycle commit for <current-branch>` where `<current-branch>` is the actual current git branch of the repo being committed (run `git rev-parse --abbrev-ref HEAD`). This prefix matches `BLESSED_BRIDGE_RE`; the privilege guard requires a valid bulk-commit sentinel (written in Step 5) to allow the commit. Do NOT use this prefix when BULK=false.
 ```
@@ -351,7 +351,102 @@ recovery commit merely because another planned repository remains dirty.
 
 #### status = `nothing_to_commit`
 Print: `WARNING: changelog-analyst found nothing to commit after exclusions. Verify the task cycle produced staged changes.`
+
+If the result carries `push_gate_reconciliation_declined`, ALSO print:
+`WARNING: HEAD <sha> has no push-gate token and could not be attributed to this session (<reason>); /push stays blocked for this session.`
+Do not retry and do not attempt to tokenize HEAD by any other route — the refusal is the
+correct outcome, and the recovery is a human `git push` or re-running the originating session
+(see `agents/changelog-analyst.md` §Push-gate reconciliation, "The accepted residual").
+
 Continue to Step 8 (skip spec-update if no real commit occurred — Step 8 skip conditions apply).
+
+#### status = `push_gate_reconciled`
+
+No new commit was created. A prior commit ATTRIBUTED to this task was already at HEAD without
+a push-gate token, and changelog-analyst has now written the missing token for that existing
+commit. Say "attributed to", not "this task's own": attribution is by journal entry, and
+`hooks/lib/commit_journal.py::_parent_linkage_verified` records a narrow race in which the
+attributed commit was made by a peer that committed from the same recorded parent.
+
+Seven routes reach that state, and nothing here can tell which one applied: the Phase 10
+step-6 Write itself failed or was refused; the invocation was interrupted between the commit
+and the token Write; the commit was already pushed — `/push` deletes the token on success,
+and with no upstream configured the already-published check (condition 7) cannot establish
+publication and permits reconciliation anyway; a peer replaced HEAD with a SAME-PARENT commit
+inside the post-lock window — the journal accepted the peer's HEAD (linkage validates: same
+first parent) while the original invocation's pre-write HEAD-stability check returned
+`push_gate_race` and wrote no token, so on this route the reconciled commit is the PEER's,
+not this session's; HEAD left this session's own journaled commit before that same pre-write
+check — again `push_gate_race`, no token — and was LATER RESTORED to it, which re-enables the
+match because freshness is compared against live HEAD at query time and no entry is ever
+marked superseded (so a HEAD move defeats reconciliation only while it lasts, never
+permanently); or the token namespace drifted in either segment of the token path — tokens are
+keyed by branch AND by one session alias, while journal matching ignores the recorded branch
+entirely and accepts MEMBERSHIP in a set of up to four session ids, so renaming/switching
+branch at the same unpublished HEAD, or a later run resolving a different alias of the same
+set, leaves the old token in the old slot and reconciliation mints into the empty new one.
+`agents/changelog-analyst.md` §Push-gate
+reconciliation, "Which cases actually survive", is the canonical enumeration — do not restate
+any one route as THE cause, and do NOT re-add same-session fan-out contention: rule 7 compares
+against the writer's own session id and cannot fire within one session (see "Why rule 7 cannot
+be one of these cases").
+
+See that section for the full trigger conditions; it only permits this outcome when the token
+slot was EMPTY (DO NOT rule 7 is never relaxed) and when a commit-event journal entry —
+appended by the PostToolUse hook layer, not by the committing agent — attributes that HEAD
+commit to this task AND this session. That entry is appended once the committing shell call
+has exited and the commit lock is released, NOT at the moment the commit returned, so a peer's
+commit can land in that window and be recorded under this session's ids. RULE: attribution
+therefore also requires VERIFIED PARENT LINKAGE — the entry's recorded parent must be the
+actual first parent of its recorded resulting sha, in the bound repository — and fails closed
+whenever that cannot be read. Do not remove that condition.
+
+Require the `repository_results` entry to report `push_gate_written: true`, a
+`reconciled_commit_sha` equal to the current HEAD, and a `reconciliation_basis` whose
+`attribution` is `commit_event_journal`. Verify the sha equality yourself before treating the
+gate as open — a reconciled token whose sha does not match live HEAD is not authorizing, and
+`/push` would reject it anyway. A result claiming reconciliation on any other attribution
+basis (a `Task-id:` trailer, a file-set overlap, a subject pattern) is REJECTED: those read
+content the committing actor chose and are not attribution.
+
+Print: `INFO: no new commit; wrote the missing push-gate token for existing commit <reconciled_commit_sha>. /push is now unblocked.`
+
+Continue to Step 8. Note that Step 8's skip condition is worded around "no real commit
+occurred": a reconciliation creates no commit, so Step 8 SKIPS the spec-update dispatch. Keep
+that skip — it is correct because this invocation has no cycle result of its own to fold into
+a spec, and dispatching here would append a block describing work this invocation never did.
+
+Do NOT read the skip as evidence that the spec is already current. On the route where the
+originating cycle kept running and itself observed "no push-gate token written" — the failed
+or refused Phase 10 Write — its own Step 8 skipped the spec-update on that ABSENT TOKEN
+(`scripts/step7-spec-update.py` gates on the token file existing, whatever the reason it is
+missing), so the update was never performed. On the interruption route the cycle never reached
+Step 8 at all, with the same result. On BOTH routes where the pre-write HEAD-stability check
+fired — the same-parent race and the HEAD round trip — the cycle returned `failed` with
+`push_gate_race`, which is not in the retryable set, so this handler stopped at the
+non-retryable branch before Step 8 ever ran.
+**On those four routes the originating cycle's spec update was never performed and is
+therefore lost.** That is a known, accepted consequence of this path, not an oversight — if
+the spec matters for the reconciled commit, update it through a separate explicit cycle.
+
+The four are not equally recoverable, and the difference decides what a follow-up cycle should
+describe. On three of them the lost update describes exactly the commit that was reconciled,
+because that commit is this session's own. On the same-parent race ALONE the loss is
+compounded: the update that never ran described THIS session's commit, which a peer had
+already replaced, while the commit later reconciled is the PEER's, whose spec state belongs
+to a cycle this session never saw. Reconciliation performs the update on none of them.
+
+The remaining three routes — already-pushed, branch drift and session drift — are weaker
+exceptions than they look, and they are why the skip must stay unconditional rather than
+conditioned on the spec's state: on all three, the originating cycle DID write its token
+(into the then-current branch's slot on branch drift, under the then-resolved alias on
+session drift) and DID reach Step 8. But reaching Step 8 does not
+guarantee the spec was updated: Step 8's own dispatch-failure contract permits the update
+dispatch to FAIL — print a WARNING and continue — so even an already-pushed or
+namespace-drifted commit can have lost its spec update. What these routes guarantee is only
+that the cycle reached its spec-update step; whether the update landed is unknowable from
+here. So an empty slot is equally consistent with a completed cycle and with a lost one.
+Neither this handler nor changelog-analyst can tell them apart, so neither may assume either.
 
 #### status = `nothing_to_commit_precommitted`
 Record `auto_bulk_commits[]` from the structured output in the Step 8 summary.
@@ -495,9 +590,9 @@ nested-repo handling, push-gate write) are delegated entirely to `changelog-anal
 Authorization flow for changelog-analyst commits:
 
 1. `/commit` writes `/tmp/claude-commit-grant-<SID>-<nonce>.json` before dispatching changelog-analyst (Step 5).
-2. `_evaluate_commit(command, data)` calls `_find_grant('commit', sid)` using the subagent's session_id from the PreToolUse payload.
-3. If SID-specific grant not found (subagent session_id differs from orchestrator's CLAUDE_SESSION_ID), falls back to `_find_grant_any('commit')` — any valid unexpired commit grant is accepted.
-4. Grant validates: expires_at (30 min window), single-use unlink. No message-hash validation.
+2. `_evaluate_commit(command, data)` collects EVERY unexpired grant candidate (the any-SID glob covers the subagent SID-propagation fallback) and SELECTS the one whose `repo_root`/`branch`/`expected_head` match the commit's target repo — recency alone never decides.
+3. The selected grant passes the authoritative binding re-check (`_enforce_commit_grant_binding`: redirect vectors, then repo/branch/HEAD). A Bash call containing MORE THAN ONE `git commit` invocation is hard-BLOCKED before any of that: every invocation in one call would be validated against the same pre-execution HEAD under one lock, so a second commit would ride the first one's authorization (audit round 3, F5). One grant authorizes exactly one commit; issue each as its own call. The grant is then LOCKED for deferred consumption — renamed to `.lck`, with a pointer keyed on this tool event's `tool_use_id` and recording that raw id. The pointer is published ATOMICALLY (content written to a temp name, then `link(2)` into the final name), so a reader never sees a torn pointer (audit F7).
+4. Grant validates: expires_at (30 min window); no message-hash validation. Consumption is deferred to the finalizer (`posttool-allowlist-consume.py`, registered under PostToolUse AND PostToolUseFailure), which classifies the terminal result from the payload shape — not from an exit code: success unlinks the `.lck` (single-use) and journals the commit event; any other TERMINAL result restores the grant for retry. A NONTERMINAL background-launch receipt (the command is still running) finalizes nothing at all — no unlink, no restore, no journal entry (audit F2/F3). An event with no usable `tool_use_id` leaves the grant in place un-deferred, and single-use there is NOT enforced by the `expected_head` binding: "a landed commit moves HEAD past the grant" was disproven — `git reset --soft <expected_head>` restores the matching tuple and a deterministic `--amend` reproduces the same sha, so HEAD need never move (audit round 3, F4). The guard instead writes its own validation-time use record (`<grant>.json.use`) holding an APPEND-ONLY witness of the target repo — HEAD sha plus HEAD reflog entry COUNT — and honors a later authorization only while that witness is unchanged and under `_MAX_GRANT_USE_ATTEMPTS`. The count rises on commit, reset and amend alike, so neither a soft reset nor a same-sha amend can replay a grant; an unreadable witness fails closed.
 
 **DO NOT extend `BLESSED_BRIDGE_RE` with conventional commit patterns** (e.g. `^feat\(`, `^fix\(`).
 This would allow any agent that learns the commit format to bypass the guard — destroying the
@@ -505,7 +600,11 @@ security model. The grant-file mechanism provides the correct narrow authorizati
 
 auto-bulk bridge commits (matching BLESSED_BRIDGE_RE) require a **bulk-commit sentinel**
 written by `/commit --bulk` Step 5 (`scripts/write-bulk-commit-sentinel.py`, 30 min TTL,
-multi-use). Without it the guard blocks the commit even if the message prefix is correct.
+multi-use). Without it the guard blocks the commit even if the message prefix is correct. With
+it, the commit is still DEFERRED (blocked, retry next cycle) while a `/commit` grant that could
+actually authorize a commit HERE is live — the deferral applies the same repo/branch/HEAD
+binding and spent test the commit validation applies, so a foreign-repo or already-spent
+leftover no longer defers auto-bulk for its whole TTL (audit round 3, F6).
 changelog-analyst non-bulk commits use the single-use grant-file path.
 The BLESSED_BRIDGE_RE check runs first in `_evaluate_commit`, followed by the sentinel check.
 

@@ -477,22 +477,77 @@ CORPUS = [
         "git inside command substitution — _segments() opens a new segment at $(",
     ),
     # ------------------------------------------------------------------
-    # Documented classifier scope boundaries (arch-F7 in classifier docstring).
-    # Both regexes fire; the classifier does not (env -i skips env-var
-    # assignment parsing, leading redirection prefixes are not stripped).
-    # Marked xfail: known disagreement that is accepted by design.
+    # Former arch-F7 scope boundaries — CLOSED 2026-09-03.
+    # _command_token_index() now skips a wrapper's own option flags and leading
+    # shell redirections, so all three mechanisms agree and these are no longer
+    # xfail. They stay in the corpus as regression detectors: if the classifier
+    # column ever reverts to False these fail outright rather than going quiet.
     # ------------------------------------------------------------------
     (
         "env -i git status",
-        True, True, False,
-        "arch-F7: env -i/-u flags before git token not handled by _command_token_index(); regexes match, classifier does not",
-        "env -i git status -- regex matches, classifier arch-F7 gap",
+        True, True, True,
+        None,
+        "env -i git status -- wrapper option flag skipped (was arch-F7 gap)",
+    ),
+    (
+        "env -u FOO git status",
+        True, True, True,
+        None,
+        "env -u FOO git status -- wrapper value flag consumes FOO (was arch-F7 gap)",
     ),
     (
         "2>/dev/null git status",
+        True, True, True,
+        None,
+        "2>/dev/null git status -- leading redirection skipped (was arch-F7 gap)",
+    ),
+    (
+        "sudo -n git status",
+        True, True, True,
+        None,
+        "sudo -n git status -- sudo's -n takes NO value, so git is not eaten",
+    ),
+    # ------------------------------------------------------------------
+    # Shell reserved words in front of the command word (2026-09-03).
+    # Both regex anchor classes include the space before `git`, so the regexes
+    # always matched these; only the classifier was blind, which is precisely
+    # what made pretool-git-privilege-guard.py a no-op for them.
+    # ------------------------------------------------------------------
+    (
+        "if ! git commit -m x; then echo no; fi",
+        True, True, True,
+        None,
+        "if ! git commit -- the repo's own documented error-handling idiom",
+    ),
+    (
+        "while ! git push; do sleep 1; done",
+        True, True, True,
+        None,
+        "while ! git push -- retry loop",
+    ),
+    (
+        "for f in a; do git commit -m x; done",
+        True, True, True,
+        None,
+        "for/do git commit -- loop body",
+    ),
+    (
+        "if [ -f x ]; then git commit -m y; fi",
+        True, True, True,
+        None,
+        "then git commit -- consequent branch",
+    ),
+    # A reserved word that is NOT followed by a command must NOT be skipped:
+    # `for git in a b` binds a LOOP VARIABLE named git and runs nothing.
+    (
+        "for git in a b; do echo $git; done",
         True, True, False,
-        "arch-F7: leading shell redirection not stripped before classifier; regexes match, classifier does not",
-        "2>/dev/null git status -- regex matches, classifier arch-F7 gap",
+        "`for` is deliberately NOT in _SHELL_PREFIX_KEYWORDS: the token after it "
+        "is a loop VARIABLE, not a command. The classifier is correct to decline; "
+        "both regexes over-match because their anchor class only requires "
+        "whitespace before `git`. Divergence is in the SAFE direction (the coarse "
+        "regex prefilter over-fires, the precise classifier does not under-fire).",
+        "for git in ... -- loop variable named git is not an invocation",
     ),
 ]
 

@@ -2,34 +2,18 @@
 # Writes codex-enforce.json into the dev-registry for the given session.
 # Usage: write-codex-enforce.sh --source-command <dev|dev-overnight> --session-id <DEV_SESSION_ID>
 # Exits 1 on failure; callers must abort if this script fails.
+#
+# Thin wrapper: the body now lives in write-enforce-flag.sh, which writes any
+# number of enforcement sentinels per invocation. This entry point is kept
+# because commands/dev.md, commands/dev-command.md and
+# hooks/prompt-workflow.py:_init_dev_registry call it by name.
 set -euo pipefail
-
-SOURCE_CMD=""
-SESSION_ID=""
-
-while [[ $# -gt 0 ]]; do
-  case "$1" in
-    --source-command) SOURCE_CMD="$2"; shift 2 ;;
-    --session-id)     SESSION_ID="$2"; shift 2 ;;
-    *) echo "Unknown arg: $1" >&2; exit 1 ;;
-  esac
+# This entry point writes exactly the codex sentinel, as it always did. A
+# caller-supplied --flag would silently widen that to other enforcement gates,
+# which the original script had no way to do — reject it rather than forward it.
+for arg in "$@"; do
+  [[ "$arg" == "--flag" ]] && {
+    echo "ERROR: --flag is not accepted here; use write-enforce-flag.sh directly" >&2
+    exit 1; }
 done
-
-[[ -n "$SOURCE_CMD" ]] || { echo "ERROR: --source-command required" >&2; exit 1; }
-[[ -n "$SESSION_ID" ]] || { echo "ERROR: --session-id required" >&2; exit 1; }
-
-ENFORCE_FLAG="${CLAUDE_PROJECT_DIR:?CLAUDE_PROJECT_DIR not set}/.claude/dev-registry/$SESSION_ID/codex-enforce.json"
-
-printf '{
-  "schema_version": 1,
-  "enabled": true,
-  "source_command": "%s",
-  "dev_session_id": "%s",
-  "claude_session_id": "%s",
-  "enforced_agent_types": ["ba", "dev", "qa"],
-  "created_at": "%s"
-}\n' "$SOURCE_CMD" "$SESSION_ID" "${CLAUDE_SESSION_ID:-unknown}" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-  > "$ENFORCE_FLAG" \
-  || { echo "ERROR: Failed to write codex-enforce.json at $ENFORCE_FLAG — aborting." >&2; exit 1; }
-
-echo "Codex enforcement active: $ENFORCE_FLAG"
+exec "$(dirname "$0")/write-enforce-flag.sh" --flag codex "$@"

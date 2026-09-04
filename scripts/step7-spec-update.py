@@ -16,7 +16,7 @@ USAGE:
       --task-id <TASK_ID> \\
       --dev-docs-root <DEV_DOCS_ROOT> \\
       [--bulk true|false] [--dryrun true|false] \\
-      [--changelog-status committed|nothing_to_commit|failed] \\
+      [--changelog-status committed|nothing_to_commit|nothing_to_commit_precommitted|push_gate_reconciled|failed] \\
       [--push-gate-token-path <path-or-NONE>]
 
 ENV:
@@ -158,9 +158,16 @@ def main() -> int:
     ap.add_argument("--dev-docs-root", required=True)
     ap.add_argument("--bulk", default="false", choices=["true", "false"])
     ap.add_argument("--dryrun", default="false", choices=["true", "false"])
+    # push_gate_reconciled: changelog-analyst wrote a missing push-gate token for an
+    # already-existing HEAD commit ATTRIBUTED to this task (attribution is by journal
+    # entry, not authorship — see hooks/lib/commit_journal.py) and created no new commit. It
+    # must be an accepted choice so the status routes to the normal
+    # "changelog_no_real_commit" skip below; without it argparse aborts before
+    # that branch is ever reached.
     ap.add_argument("--changelog-status", default="committed",
                     choices=["committed", "nothing_to_commit",
-                             "nothing_to_commit_precommitted", "failed"])
+                             "nothing_to_commit_precommitted",
+                             "push_gate_reconciled", "failed"])
     ap.add_argument("--push-gate-token-path", default="",
                     help="Path to push-gate token; empty/NONE => not present")
     args = ap.parse_args()
