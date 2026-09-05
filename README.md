@@ -128,7 +128,7 @@ Run the guard demo: `bash examples/guard-demo/run-demo.sh`
 
 ```mermaid
 graph TD
-    U([Human]) --> CMD[Slash commands<br/>19 entry points]
+    U([Human]) --> CMD[Slash commands<br/>20 entry points]
     CMD --> ORC{{Main Agent / Orchestrator<br/>think + route — no direct writes}}
 
     ORC -.->|PreToolUse gate| HL
@@ -323,7 +323,7 @@ The orchestrator dispatches specialists by *describing the problem* — never th
 
 ---
 
-## The command surface: 19 slash commands
+## The command surface: 20 slash commands
 
 | Group | Command | What it does | When to use |
 |---|---|---|---|
@@ -346,6 +346,7 @@ The orchestrator dispatches specialists by *describing the problem* — never th
 | **Control** | `/restart` | Resume every quota-interrupted subagent from its original transcript and ID. | A session/usage limit interrupted one or more running subagents. |
 | **Control** | `/stop` | Cancel an overnight session. | Mid-overnight, to abort a running session. |
 | **Control** | `/codex` | OpenAI Codex adversarial delegation. | You want an adversarial second opinion from an outside model. |
+| **Control** | `/paseo-daemon` | Multi-session monitoring and three-account scheduling control plane. | Bootstrapping or advancing the persistent scheduling state machine. |
 
 > Full, auto-maintained list: [`commands/README.md`](commands/README.md).
 
@@ -526,7 +527,7 @@ Each row maps to a capability in the dependency table above.
 ├── NESTED-REPO.md     # Why ~/.claude is its own git repo on a RAM disk
 ├── settings.json      # 71 wired hook entries across 8 lifecycle events
 ├── agents/            # 23 subagent definitions (BA, dev, QA, architect, …)
-├── commands/          # 19 slash-command workflows (/spec, /dev, /close, /commit, …)
+├── commands/          # 20 slash-command workflows (/spec, /dev, /close, /commit, …)
 ├── hooks/             # SessionStart / UserPromptSubmit / PreToolUse / PostToolUse / Notification / Stop / SubagentStop gates
 │   ├── lib/           #   shared libs: allowlist (structured sentinel grants), checkpoint-core
 │   ├── doc_sync/      #   self-updating INDEX/README/CLAUDE regeneration
@@ -564,8 +565,9 @@ Everything else (`agents/`, `commands/`, `skills/`, `schemas/`, `templates/`, `t
 |---|---|---|
 | SessionStart | 7 | Environment setup, resolver announcement, dependency checks |
 | UserPromptSubmit | 6 | Per-turn sentinel pre-creation, prompt-purity enforcement, dedup check |
-| PreToolUse | 31 | The gate layer: orchestrator rate-limit, bash-safety, git kernel, tool-policy, branch/PR firewall |
+| PreToolUse | 30 | The gate layer: orchestrator rate-limit, bash-safety, git kernel, tool-policy, branch/PR firewall |
 | PostToolUse | 15 | Doc-sync, allowlist grant consumption, checkpoint writes |
+| PostToolUseFailure | 1 | Allowlist grant consumption on a failed tool result |
 | Notification | 1 | User-facing notification routing |
 | Stop | 4 | Overnight timelock, allowlist reap, cp-state enforcement |
 | SubagentStop | 7 | cp-state enforcement, subagent output capture |
