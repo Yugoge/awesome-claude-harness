@@ -1,0 +1,193 @@
+{
+  "meta": {
+    "session_title": "claude — guard demo (captured run)",
+    "rail": [
+      "blocked",
+      "granted",
+      "consumed"
+    ],
+    "footer": "every line above is a byte-exact slice of .github/assets/hero-capture.txt · re-run: python3 scripts/capture-hero-run.py"
+  },
+  "capture": {
+    "path": ".github/assets/hero-capture.txt",
+    "capture_mode": "pipe (never a pseudo-terminal)",
+    "capture_lines": 17,
+    "manifest_lines": 17,
+    "coverage": "bijection over every visible display line, in capture order"
+  },
+  "omitted": [],
+  "lines": [
+    {
+      "id": "hero-001",
+      "ordinal": 1,
+      "stage": "blocked",
+      "kind": "attempt",
+      "text": "$ git push hero-remote main",
+      "source_ref": ".github/assets/hero-capture.txt",
+      "source_locator": ".github/assets/hero-capture.txt:1",
+      "extract_hash": "cd478801d5ad74f4d77f089d365c94850bd9516d9ab340a9d8533d43b95e675f"
+    },
+    {
+      "id": "hero-002",
+      "ordinal": 2,
+      "stage": "blocked",
+      "kind": "verdict",
+      "text": "BLOCKED: agent git push - agents are not authorized to push to remote from an agent context.",
+      "source_ref": ".github/assets/hero-capture.txt",
+      "source_locator": ".github/assets/hero-capture.txt:2",
+      "extract_hash": "7f026ff809b946a67f37d44e6573c5a1b7e1c2aad741c897d295f5910bad1256",
+      "block": true
+    },
+    {
+      "id": "hero-003",
+      "ordinal": 3,
+      "stage": "blocked",
+      "kind": "artifact",
+      "text": "Command excerpt: git push hero-remote main",
+      "source_ref": ".github/assets/hero-capture.txt",
+      "source_locator": ".github/assets/hero-capture.txt:3",
+      "extract_hash": "af91d35fcf57c415a4c3421abb9860f7c5c632ec30965fcf8d269a8edbdb7910"
+    },
+    {
+      "id": "hero-004",
+      "ordinal": 4,
+      "stage": "blocked",
+      "kind": "artifact",
+      "text": "For automated push, use the /push slash command (which sets CLAUDE_PUSH_COMMAND_ACTIVE=1 and writes a single-use grant).",
+      "source_ref": ".github/assets/hero-capture.txt",
+      "source_locator": ".github/assets/hero-capture.txt:4",
+      "extract_hash": "f462c8ac11902dac74ea12d3161b91555451c5f2314f767ee8174db27e0ae852"
+    },
+    {
+      "id": "hero-005",
+      "ordinal": 5,
+      "stage": "blocked",
+      "kind": "artifact",
+      "text": "For human-driven push, exit the agent context and run git push directly.",
+      "source_ref": ".github/assets/hero-capture.txt",
+      "source_locator": ".github/assets/hero-capture.txt:5",
+      "extract_hash": "a1ee5a9bd853a3299b52045454d8de337bbe544f08a1bbdc9d2c2306a11873de"
+    },
+    {
+      "id": "hero-006",
+      "ordinal": 6,
+      "stage": "blocked",
+      "kind": "artifact",
+      "text": "Spec: spec-20260424-233926 section 5.2.4 (R4.3); ba-spec-20260425-redev2.md AC-A5.",
+      "source_ref": ".github/assets/hero-capture.txt",
+      "source_locator": ".github/assets/hero-capture.txt:6",
+      "extract_hash": "e987364d00674bee3f3fd6b65e25cdfc1e37c58a10f726297ccb62027e06c1db"
+    },
+    {
+      "id": "hero-007",
+      "ordinal": 7,
+      "stage": "blocked",
+      "kind": "artifact",
+      "text": "[verifier] installed one single-use grant for task_id=readme-hero-demo-reserved",
+      "source_ref": ".github/assets/hero-capture.txt",
+      "source_locator": ".github/assets/hero-capture.txt:7",
+      "extract_hash": "66639cc14d5348ff9757091ab8ac125b692118c93fb5f70e618a28b433ee492b"
+    },
+    {
+      "id": "hero-008",
+      "ordinal": 8,
+      "stage": "granted",
+      "kind": "attempt",
+      "text": "$ git push hero-remote main",
+      "source_ref": ".github/assets/hero-capture.txt",
+      "source_locator": ".github/assets/hero-capture.txt:8",
+      "extract_hash": "cd478801d5ad74f4d77f089d365c94850bd9516d9ab340a9d8533d43b95e675f"
+    },
+    {
+      "id": "hero-009",
+      "ordinal": 9,
+      "stage": "granted",
+      "kind": "artifact",
+      "text": "To ../hero-remote.git",
+      "source_ref": ".github/assets/hero-capture.txt",
+      "source_locator": ".github/assets/hero-capture.txt:9",
+      "extract_hash": "eb90c043f00c4866363a3f1c6dc7d2d2871280a617150ffcb8dcb5da0da2e557"
+    },
+    {
+      "id": "hero-010",
+      "ordinal": 10,
+      "stage": "granted",
+      "kind": "artifact",
+      "text": " * [new branch]      main -> main",
+      "source_ref": ".github/assets/hero-capture.txt",
+      "source_locator": ".github/assets/hero-capture.txt:10",
+      "extract_hash": "9cffc56565cdbb064db2752420d86808fadbe9a06e38849acff0562713b76ee4"
+    },
+    {
+      "id": "hero-011",
+      "ordinal": 11,
+      "stage": "granted",
+      "kind": "verdict",
+      "text": "[ALLOW-SENTINEL] grant CONSUMED for task_id=readme-hero-demo-reserved terminal_result=success path=/tmp/claude-grants/readme-hero-demo-reserved.json",
+      "source_ref": ".github/assets/hero-capture.txt",
+      "source_locator": ".github/assets/hero-capture.txt:11",
+      "extract_hash": "74c1cb49471b03aa849d3bede5942e6b4ec1eea6bed204fd50b4e5092945c573"
+    },
+    {
+      "id": "hero-012",
+      "ordinal": 12,
+      "stage": "consumed",
+      "kind": "attempt",
+      "text": "$ git push hero-remote main",
+      "source_ref": ".github/assets/hero-capture.txt",
+      "source_locator": ".github/assets/hero-capture.txt:12",
+      "extract_hash": "cd478801d5ad74f4d77f089d365c94850bd9516d9ab340a9d8533d43b95e675f"
+    },
+    {
+      "id": "hero-013",
+      "ordinal": 13,
+      "stage": "consumed",
+      "kind": "verdict",
+      "text": "BLOCKED: agent git push - agents are not authorized to push to remote from an agent context.",
+      "source_ref": ".github/assets/hero-capture.txt",
+      "source_locator": ".github/assets/hero-capture.txt:13",
+      "extract_hash": "7f026ff809b946a67f37d44e6573c5a1b7e1c2aad741c897d295f5910bad1256",
+      "block": true
+    },
+    {
+      "id": "hero-014",
+      "ordinal": 14,
+      "stage": "consumed",
+      "kind": "artifact",
+      "text": "Command excerpt: git push hero-remote main",
+      "source_ref": ".github/assets/hero-capture.txt",
+      "source_locator": ".github/assets/hero-capture.txt:14",
+      "extract_hash": "af91d35fcf57c415a4c3421abb9860f7c5c632ec30965fcf8d269a8edbdb7910"
+    },
+    {
+      "id": "hero-015",
+      "ordinal": 15,
+      "stage": "consumed",
+      "kind": "artifact",
+      "text": "For automated push, use the /push slash command (which sets CLAUDE_PUSH_COMMAND_ACTIVE=1 and writes a single-use grant).",
+      "source_ref": ".github/assets/hero-capture.txt",
+      "source_locator": ".github/assets/hero-capture.txt:15",
+      "extract_hash": "f462c8ac11902dac74ea12d3161b91555451c5f2314f767ee8174db27e0ae852"
+    },
+    {
+      "id": "hero-016",
+      "ordinal": 16,
+      "stage": "consumed",
+      "kind": "artifact",
+      "text": "For human-driven push, exit the agent context and run git push directly.",
+      "source_ref": ".github/assets/hero-capture.txt",
+      "source_locator": ".github/assets/hero-capture.txt:16",
+      "extract_hash": "a1ee5a9bd853a3299b52045454d8de337bbe544f08a1bbdc9d2c2306a11873de"
+    },
+    {
+      "id": "hero-017",
+      "ordinal": 17,
+      "stage": "consumed",
+      "kind": "artifact",
+      "text": "Spec: spec-20260424-233926 section 5.2.4 (R4.3); ba-spec-20260425-redev2.md AC-A5.",
+      "source_ref": ".github/assets/hero-capture.txt",
+      "source_locator": ".github/assets/hero-capture.txt:17",
+      "extract_hash": "e987364d00674bee3f3fd6b65e25cdfc1e37c58a10f726297ccb62027e06c1db"
+    }
+  ]
+}

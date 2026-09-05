@@ -251,6 +251,37 @@ Exit with `failure_code: scope_violation`.
   Exit with structured status `{"commit_status":"failed","failure_code":"scope_violation","failure_reason":"no dev-report for TASK_ID; cannot determine staging whitelist"}`.
   Stage-all fallback is forbidden; without a dev-report the whitelist cannot be constructed and cross-session contamination is undetectable.
 
+**Tree-self-containment exclusion (dependency-coupled candidates — BULK=false, all report paths)**:
+a candidate must not ride ahead of the tree state it asserts. After the candidate set is built
+and every other exclusion is known (fail-closed entanglement, foreign-session, provenance,
+gitignore), evaluate each remaining candidate that ASSERTS on other repository content, and
+exclude it when its assertions deterministically fail in the RESULTING tree (HEAD plus the
+would-be staged set):
+
+1. **Test riding ahead of its subject** — a new or modified test whose subject (the module or
+   file it imports, reads, or asserts against) is excluded from this commit or absent from the
+   resulting tree. A test that would go deterministically red in the resulting tree must ride
+   with its subject's commit, under the same reason chain as the subject's exclusion.
+2. **Attestation riding ahead of its write-set** — an artifact that pins digests, existence, or
+   state of other repository files (e.g. `evidence.file_sha256` pins, live-byte preconditions)
+   whose pinned file-set does not hold in the resulting tree (a pinned file absent, or its
+   committed bytes differing from the pin). Exclude the attestation AND its verifier test
+   together — a published predicate that evaluates false on a fresh clone is a defect, not a
+   deliverable.
+3. **Decision procedure**: judge against the resulting tree, not the working tree — every
+   candidate in this rule passes trivially against the working tree, which is exactly why the
+   working tree is the wrong referee. When you cannot determine whether the failure is
+   deterministic, fail closed (exclude): deferral is recoverable at the dependency's own cycle;
+   a committed red tree is not. Iterate to a fixpoint — excluding a dependency-coupled
+   candidate may orphan another candidate that asserts on it.
+4. If a pre-commit QA gate transcript `docs/dev/commit-qa-report-<TASK_ID>.md` exists and its
+   REJECT names dependency-coupled files, treat those named couplings as authoritative input:
+   exclude them unless their dependencies are now present in the staged set or the resulting
+   tree.
+5. Warning per exclusion, and record the set under `excluded_dependency_coupled` in the
+   repository_results entry:
+   `WARNING: excluding <path> — dependency_coupled: asserts on <dependency>, which is <excluded fail-closed | absent from the resulting tree | drifted vs pinned bytes>; must ride with its dependency's commit.`
+
 **Path normalization** (apply before any comparison or staging):
 - Resolve symlinks: `real_root = os.path.realpath(GIT_ROOT)`
 - Dev-report paths are often absolute (e.g. under the harness home `~/.claude/...`). To normalize: if a
@@ -812,9 +843,9 @@ reads that descriptor and performs step 6 via the Write tool.
 
 Procedure:
 
-1. Resolve `PUSH_GATE_SID = os.environ.get("CLAUDE_CODE_SESSION_ID") or os.environ.get("CLAUDE_SESSION_ID") or "unknown"` — this resolves the stable orchestrator session ID first (so all changelog-analyst subagent invocations within the same user session share one `session_id`); falls back to the subagent's own `CLAUDE_SESSION_ID`; defaults to `"unknown"` if both env vars are absent or empty. This value is the single authoritative source for the push-gate session identity. Resolving it (e.g. `echo "$CLAUDE_CODE_SESSION_ID"` / `echo "$CLAUDE_SESSION_ID"`) does not place the token content on the command line and is permitted in Bash.
+1. Resolve `PUSH_GATE_SID = os.environ.get("CLAUDE_CODE_SESSION_ID") or os.environ.get("CLAUDE_SESSION_ID") or "unknown"` — this resolves the stable orchestrator session ID first (so all changelog-analyst subagent invocations within the same user session share one `session_id`); falls back to the subagent's own `CLAUDE_SESSION_ID`; defaults to `"unknown"` if both env vars are absent or empty. This RAW value is the single authoritative source for the push-gate session identity: it is what the token's `session_id` field carries and what every rule-7 collision check compares against. Then derive `PUSH_GATE_SID_DIGEST = sha256(PUSH_GATE_SID)[:16]` — a distinct value with exactly one use, the session PATH SEGMENT (see the **Push-gate token path** note below for why it is digested). Never substitute one for the other: the digest never reaches the token JSON, and the raw id never appears in a path. Resolving them (e.g. `echo "$CLAUDE_CODE_SESSION_ID"` / `echo "$CLAUDE_SESSION_ID"`) does not place the token content on the command line and is permitted in Bash.
 2. Compute `repo_hash = sha256(realpath(GIT_ROOT))[:16]`.
-3. Set `token_dir = /tmp/agentic-commit/push/<repo_hash>` and create it (`mkdir -p "${token_dir}"` — a literal `/tmp` prefix, never a leading `${VAR}`, per the Phase 3 lock-path note). The ONLY accepted form for `/tmp/agentic-commit/...` on a bash command line is this bare `mkdir -p` (directory creation) / read-only path-computation form — the SAME form the Phase 3 lock setup already uses successfully (`mkdir -p /tmp/agentic-commit/locks`), which is the live empirical proof it does not trip the guard. The guard fires on protected-BUNDLE paths (`.git`, monorepo roots) inlined alongside a heredoc/redirect, not on a bare `mkdir -p` of a `/tmp/agentic-commit` subdir. Do NOT widen this: never put the token JSON, a redirect into `/tmp/agentic-commit/...`, or the full token filename onto a bash command line — those go through the Write tool (step 6). The token PATH appearing in `mkdir` is the directory only; the token CONTENT and its full filename are written in step 6 via the Write tool.
+3. Set `token_dir = /tmp/agentic-commit/push/<repo_hash>/<PUSH_GATE_SID_DIGEST>` — session-scoped, and the digest not the raw id; see the **Push-gate token path** note below — and create it (`mkdir -p "${token_dir}"` — a literal `/tmp` prefix, never a leading `${VAR}`, per the Phase 3 lock-path note). The ONLY accepted form for `/tmp/agentic-commit/...` on a bash command line is this bare `mkdir -p` (directory creation) / read-only path-computation form — the SAME form the Phase 3 lock setup already uses successfully (`mkdir -p /tmp/agentic-commit/locks`), which is the live empirical proof it does not trip the guard. The guard fires on protected-BUNDLE paths (`.git`, monorepo roots) inlined alongside a heredoc/redirect, not on a bare `mkdir -p` of a `/tmp/agentic-commit` subdir. Do NOT widen this: never put the token JSON, a redirect into `/tmp/agentic-commit/...`, or the full token filename onto a bash command line — those go through the Write tool (step 6). The token PATH appearing in `mkdir` is the directory only; the token CONTENT and its full filename are written in step 6 via the Write tool.
 4. Compute the token file path: `{token_dir}/{branch.replace('/','__')}.json`.
 5. Existing-token collision check (DO NOT rule 7, in-flock): if the token file already exists and its `session_id` field differs from `PUSH_GATE_SID`, set the descriptor's `collision` true. (Reading the existing file to compare `session_id` is a read, not a command-line content write — permitted.) This in-flock check is ADVISORY by the time of the post-flock Write — it is re-validated in step 6. Then PRINT the structured token-descriptor (`repo_root`, `branch`, `commit_sha`, `session_id`, `token_path`, `collision`) to stdout and let the Bash process exit (releasing fd 9). The descriptor is emitted on the process's STDOUT — a PreToolUse Bash hook scans the agent-submitted COMMAND STRING, not the process's runtime stdout, so printing the descriptor (even though it contains `token_path` under `/tmp/agentic-commit/...`) adds nothing scannable to any command line.
 6. **After** fd 9 is released: the agent reads the descriptor, then applies the pre-write checks from the Phase 3 reconciliation note (item 3), in order, immediately before the Write:
@@ -828,7 +859,29 @@ Procedure:
 `/commit` and `/push` must use this identical algorithm for the repo-hash derivation.
 
 **Push-gate token path** (for reference by `/push`):
-`/tmp/agentic-commit/push/<sha256(os.path.realpath(GIT_ROOT))[:16]>/<BRANCH with / replaced by __>.json`
+`/tmp/agentic-commit/push/<sha256(os.path.realpath(GIT_ROOT))[:16]>/<PUSH_GATE_SID_DIGEST>/<BRANCH with / replaced by __>.json`
+
+**Why the session segment is in the path** (do NOT "simplify" it back out): the token has
+always carried a `session_id` field, but the path did not — so any two sessions working the
+same branch of the same repo contended for one slot. Combined with DO NOT rule 7 (never
+overwrite another session's token), that contention was not merely deferred but permanent:
+the losing session's commit could never be tokenized at all, because the only opportunity to
+write a token is the moment of that commit, and once the tree is clean no later run commits.
+Keying the path by session removes the contention instead of arbitrating it, at zero
+cost to the gate's semantics — `/push` still authorizes on `commit_sha == HEAD` alone and
+never reads `session_id`. Rule 7 is unchanged and still correct: it simply stops firing in
+the common case, and continues to protect the path if two writers ever do target one.
+
+**Why that segment is `PUSH_GATE_SID_DIGEST` and not `PUSH_GATE_SID`** (do NOT "simplify"
+that out either): the raw id arrives from the environment and here becomes a path segment, so
+it is not trustworthy as a filename — a value carrying `/` or `..` would escape the session
+directory, and two distinct ids normalizing to the same segment would recreate the very
+collision session-scoping removes. The digest is fixed-width hex containing no
+path-significant characters, so it is also safe to interpolate into `/push`'s validator;
+`"unknown"` (both env vars absent) is digested like any other value, giving one shared slot
+for that degenerate case rather than a traversal primitive. Only the PATH SEGMENT is
+digested: the token JSON's `session_id` field keeps the raw `PUSH_GATE_SID`, which is what
+rule 7 compares against and what makes the token auditable.
 
 ---
 
@@ -1066,8 +1119,306 @@ parse the result without screen-scraping human-readable text.
 | `partially_committed` | At least one planned repository commit landed, then a later repository failed; see `repository_results` and `remaining_repos`. No cross-repo rollback is claimed. |
 | `nothing_to_commit` | No files remained after exclusions (candidate set empty). |
 | `nothing_to_commit_precommitted` | Candidate set was empty AND the HEAD commit was an auto-bulk commit that already covered the task cycle files. |
+| `push_gate_reconciled` | Candidate set was empty AND a commit-event journal entry attributes the tokenless HEAD commit to this task AND this session; the missing token was written for that existing commit. No new commit was created. See "Push-gate reconciliation". |
 | `dryrun` | `DRYRUN=true` was set; no commit was attempted; the staged file list was printed. |
 | `failed` | The commit attempt failed (see `failure_code`). |
+
+### Push-gate reconciliation (missing token for an existing commit ATTRIBUTED to this task)
+
+**The gap this closes.** A push-gate token is normally written in Phase 10, in the same
+invocation that created the commit. Exactly one other path can produce a token for a cycle
+whose candidate set is already empty — the `nothing_to_commit_precommitted` recovery below —
+and it is gated on the HEAD subject matching `/^auto-bulk:/`. Note that recovery path does
+NOT avoid committing: it creates its own attributed commit (`git commit --allow-empty`) and
+returns `committed`. The path defined HERE is the only one that writes a token while creating
+no commit at all. A conventional-commit subject can never match the auto-bulk gate. So whenever
+Phase 10 reaches its end without writing a token, the commit lands tokenless and **no subsequent
+invocation can ever tokenize it**: the tree is now clean, so no future run commits, and the
+auto-bulk gate excludes the conventional subject. `/push` stays blocked forever, and re-running
+`/commit` returns `nothing_to_commit` indefinitely. This section is the missing path.
+
+**Which cases actually survive.** This section was originally written for the cross-session
+rule-7 collision — two sessions on one branch contending for a single token slot. That
+collision is now PREVENTED, not arbitrated: the token path carries a session segment (see
+**Why the session segment is in the path**), so peer sessions no longer share a slot. Rule 7
+is therefore no longer a cause of this state AT ALL, and this path must not be described as if
+it were — see **Why rule 7 cannot be one of these cases** below. The cases that genuinely
+survive are:
+
+- the Phase 10 step-6 Write itself failed or was refused (tool error, guard rejection, disk);
+- the invocation was interrupted between the commit and the token Write (quota exhaustion and
+  subagent termination are both live events in this harness);
+- the commit was already pushed. `/push` DELETES the token on success (`hooks/push.sh` runs
+  `rm -f "$_TOKEN_PATH"` on the post-push success path), leaving exactly the empty slot plus
+  attributable HEAD that this section fires on. Condition 7 below is what normally absorbs
+  that, but it can only do so when an upstream is configured; with no upstream
+  `merge-base --is-ancestor HEAD @{u}` errors (`fatal: no upstream configured`, exit 128) and
+  condition 7 treats publication as UNKNOWN and continues. A later empty-candidate `/commit`
+  for the same task then re-reconciles an already-published HEAD, writing a token nothing
+  needs. Harmless to the gate — `/push` still authorizes on `commit_sha == HEAD` — but it IS
+  this path firing, so it belongs in this enumeration.
+- a peer replaced HEAD with a SAME-PARENT commit inside the post-lock window (a hard reset
+  to this session's grant head, then a re-commit — history destruction at exactly the raced
+  instant). The journal hook, reading live HEAD in that window, records the PEER's sha
+  against this session's `parent_head` — an entry that PASSES the parent-linkage bind,
+  because the peer's commit genuinely has that first parent — while Phase 10's PRE-write
+  HEAD-stability check finds HEAD no longer equal to this cycle's own `commit_sha`, returns
+  `push_gate_race`, and writes no token. The state this section fires on then holds with one
+  inversion that must be stated plainly: **the attributable commit at HEAD is the PEER's,
+  not this session's** — this session's own commit was replaced and no longer sits at HEAD.
+  Reconciliation on this route tokenizes the peer's commit under this session's attribution.
+  That is exactly the accepted residual of
+  `hooks/lib/commit_journal.py::_parent_linkage_verified`, arriving here as a ROUTE rather
+  than only as a matcher caveat. (Only the EARLY sub-window produces THIS route: a peer
+  landing after the journal hook has read HEAD leaves an entry naming this session's own
+  sha, which fails the freshness bind while the peer's commit sits at HEAD. That refusal is
+  point-in-time, not permanent — if HEAD returns to this session's sha the entry matches
+  again, which is the separate HEAD-round-trip route below.)
+- HEAD left this session's own journaled commit and was LATER RESTORED to it. The hook
+  records commit C; anything moves HEAD off C before Phase 10's PRE-write HEAD-stability
+  check, so that check returns `push_gate_race` and writes no token; HEAD is then put back
+  to C. The freshness bind is evaluated against LIVE HEAD at query time and no entry is ever
+  marked superseded (`find_attributable_event`), so the round trip RE-ENABLES the match and
+  the state this section fires on holds. Unlike the same-parent race above this needs no
+  history destruction and no shared parent — only that HEAD leave C and come back, which a
+  peer abandoning its own commit, a `reset`/`checkout` back, or a `rebase --abort` all do.
+  The reconciled commit here IS this session's own; the route is benign in attribution and
+  is listed because it fits none of the others, not because it mis-attributes.
+- the token namespace drifted in the BRANCH segment under an unchanged HEAD. Push-gate
+  tokens are BRANCH-keyed (`.../<sid-digest>/<branch>.json`) while journal matching
+  deliberately ignores the entry's recorded `branch` (`find_attributable_event` documents
+  why). Renaming the branch — or switching to another branch at the same unpublished HEAD —
+  leaves whatever token Phase 10 wrote in the OLD branch's slot and presents an EMPTY slot
+  in the new one, which a later empty-candidate `/commit` fills. The reconciled token names
+  the SAME attributed commit object under the new ref name; the old slot's token stays
+  behind until swept.
+- the token namespace drifted in the SESSION segment under an unchanged HEAD. The path
+  carries ONE alias — `PUSH_GATE_SID`, resolved by a chain preferring
+  `CLAUDE_CODE_SESSION_ID` — while the journal records up to four identifying ids and
+  `find_attributable_event` accepts MEMBERSHIP in that set; the grant's own `sid` is even
+  resolved by the OPPOSITE precedence (`scripts/write-commit-grant.py` prefers
+  `CLAUDE_SESSION_ID`), so under the ordinary orchestrator/subagent divergence the two
+  disagree by construction. A later run that resolves a DIFFERENT member of the same set
+  finds an empty slot and reconciles into it while the first run's token still exists under
+  the first alias. Same consequence as the branch case — a second token for the SAME
+  attributed commit, in a sibling slot. This is DOCUMENTED, not fixed, and deliberately:
+  narrowing the matcher to one canonical id would refuse the legitimate id divergence the
+  candidate set exists to admit while adding no forgery resistance, and no single-alias path
+  derivation can cover a set that is intentionally wider than one, so re-ordering the chain
+  would only change WHICH pair drifts. Removing the session segment outright would re-open
+  the cross-session contention it exists to prevent (see **Why the session segment is in the
+  path**), which is strictly worse.
+
+All seven are SAME-SESSION in the sense the coverage claim needs: in each, the session that
+reconciles is a session the journal entry names. That is why the same-session-only attribution
+test below COVERS every surviving case without needing a cross-session tier — a coverage claim,
+not a soundness claim. Do not strengthen it into "the commit is this session's own": the
+same-parent-race route above is the standing counterexample — there the entry names this
+session for a commit a peer created. The journal attributes; it does not prove identity (see
+**What this does NOT claim** below), and "attributed to this session" is not the same as
+"created by this session" (the residual in
+`hooks/lib/commit_journal.py::_parent_linkage_verified`).
+
+**Why rule 7 cannot be one of these cases.** DO NOT rule 7 rejects a token only when its
+recorded `session_id` DIFFERS from `PUSH_GATE_SID`, so it cannot fire within one session, and
+two lanes of ONE fan-out share `PUSH_GATE_SID` by construction (both resolve
+`CLAUDE_CODE_SESSION_ID` first). Since the path segment is `sha256(PUSH_GATE_SID)[:16]`, two
+writers reach one slot only by sharing the raw id — which is exactly when the rule-7
+inequality is unsatisfiable. What actually arbitrates same-session lanes is the PRE-write
+HEAD-stability check: the lane whose commit is no longer HEAD returns `push_gate_race` and
+writes nothing, and the lane at HEAD writes (overwriting a same-session token is permitted).
+That converges on a token naming HEAD; when it does not, a token EXISTS, so condition 4
+excludes the state from this path entirely. Rule 7 now only guards a token whose `session_id`
+disagrees with the digest segment it sits under — a foreign or pre-session-scoping token,
+never peer contention. Do not re-add same-session contention to the list above.
+
+It is deliberately narrow. It does NOT relax DO NOT rule 7, does NOT create a commit, and
+cannot tokenize a commit that the journal does not attribute to this task AND this session —
+attribution by hook-written record, not proof of identity.
+
+**Trigger — reconcile only when ALL SEVEN conditions hold:**
+
+1. `BULK=false` AND `DRYRUN=false`.
+
+   **DRYRUN guard (NON-NEGOTIABLE)**: under `DRYRUN=true` this path does NOT run at all — no
+   token is written, and specifically do NOT emit `push_gate_reconciled`. That status asserts
+   the token WAS written, and the consumer acts on that assertion: /commit's handler requires
+   `push_gate_written: true` and announces that `/push` is unblocked. Fall through to the
+   ordinary empty-candidate dry-run result (`nothing_to_commit`) instead. This is reachable in
+   the real flow, not a hypothetical: /commit's Step 6 planning phase runs an internal
+   `DRYRUN=true` pass over exactly this state to produce a staging plan for the QA gate. The
+   sibling recovery path below may fall back to reporting its own status under `DRYRUN=true`
+   because that status is pure DETECTION and asserts no action taken; `push_gate_reconciled`
+   is an ACTION status with no action-free equivalent, so there is nothing here to fall back
+   to.
+2. The candidate set is empty after exclusions (there is genuinely nothing to commit).
+3. `git rev-parse --verify HEAD` succeeds (not unborn, not detached).
+4. **No token exists at `token_path`.** If a token is present, this path does NOT run —
+   whether it belongs to `PUSH_GATE_SID` (already tokenized; nothing to reconcile) or to a
+   peer session (rule 7 forbids touching it; report `push_gate_collision` as before). Rule 7
+   remains absolute; reconciliation only ever fills an EMPTY slot.
+5. **A commit-event journal entry attributes `HEAD_SHA` to this task AND this session.**
+   This is the ONLY attribution test. Run:
+
+   ```
+   source venv/bin/activate && python3 ~/.claude/hooks/lib/commit_journal.py query \
+     --repo-root "${GIT_ROOT}" --head "${HEAD_SHA}" \
+     --task-id "${TASK_ID}" --session-id "${PUSH_GATE_SID}"
+   ```
+
+   Exit 0 (an entry is printed) is the ONLY result that permits reconciliation. Exit 1 means
+   not attributable. **Any other exit code, or any error, MUST be treated as not attributable**
+   — the query fails closed, and an unattributable HEAD is never tokenized. Pass the RAW
+   `PUSH_GATE_SID`, never the digest: the journal stores raw session ids.
+
+   **What the journal is.** `hooks/posttool-allowlist-consume.py` appends one entry for a
+   `git commit` authorized by a single-use commit grant that reached a SUCCESS terminal
+   result — classified from the harness's real payload shape, not from an exit code (a
+   successful Bash tool_response carries no exit_code; a failed or thrown call fires
+   PostToolUseFailure, under which the same finalizer restores the grant for retry and
+   journals nothing). It appends
+   it from PostToolUse — once the committing shell call has EXITED and the commit lock is
+   released — not at the instant the commit returns, and it reads LIVE HEAD at that later
+   point. The entry records the task id, repo root, branch, the grant's pre-commit
+   `expected_head`, the HEAD the hook OBSERVED after the commit, and the identifying session
+   ids drawn from the hook payload, the hook's environment, and the grant — placeholder values
+   filtered and duplicates collapsed, so a SUBSET of those candidates, and not all of them
+   beyond the committing actor's influence. Because of that window the entry's two head fields
+   can describe DIFFERENT commits: a peer committing inside it is recorded as this session's
+   `resulting_head` while `parent_head` still holds this session's own pre-commit head.
+
+   **RULE — attribution requires verified parent linkage.** The query above refuses any entry
+   whose recorded `parent_head` is not the actual first parent of its recorded
+   `resulting_head`, resolved in the repository the entry is bound to and compared as exact
+   shas, and it fails closed whenever that cannot be read. This is what stops a peer's commit,
+   journaled under this session's ids in the window above, from being tokenized as this
+   session's — do not remove or weaken it. `hooks/lib/commit_journal.py` documents the record
+   format, the matching rule, exactly which candidates the actor can influence, and the one
+   residual this bind accepts. That residual is why this must be read as "attributed to", not
+   "created by": a peer that commits from the SAME recorded parent inside the window still
+   validates.
+
+   **RULE — the linkage is read from the RAW commit object with replacement suppressed**
+   (`git --no-replace-objects cat-file commit <sha>`), which is what makes it immune to BOTH
+   `refs/replace/*` and `.git/info/grafts`. Each mechanism defeats only one half of that
+   command, both are reachable from inside the repository, and either can move the answer in
+   EITHER direction — forging a raced entry's linkage or breaking a legitimate one. Do not
+   "simplify" it to a revision-graph read such as `rev-parse <sha>^1`. The read is BOUNDED to
+   the commit header (the actor-sized message is never buffered), and a parent is extracted
+   only when those bytes are STRUCTURALLY a commit (canonical tree/parent/author/committer
+   shape) — a header that never terminates within the bound, or an object stored under the
+   commit type without that shape, is unverifiable and fails closed.
+
+   **Why this and not the commit.** The previous design inferred attribution from a `Task-id:`
+   trailer in the commit body and from the commit's file set. Both are chosen by whoever made
+   the commit, so neither attributes anything: they describe the actor's claim about itself.
+   Worse, they misfire without any adversary at all — fan-out lanes carry prefix-related task
+   ids and overlapping file sets BY CONSTRUCTION, so two lanes of one task routinely satisfy
+   each other's checks. The journal is written by the hook layer, not by the committing agent,
+   and it is matched on fields that live outside the commit object — so NO property of the
+   commit itself (subject, trailer, file set) can satisfy it, and a commit crafted to look
+   like this task's gains nothing. The matcher does read one property of the commit, its first
+   parent, but only ever to REFUSE (the linkage rule above); nothing about a commit can make
+   it match. Some recorded session ids remain settable by the actor
+   through its environment or the grant (see `hooks/lib/commit_journal.py`); influencing those
+   means acting outside the commit, which is the non-regression position below, not a
+   soundness property.
+
+   **What this does NOT claim.** The journal is an ATTRIBUTION record, not an authorization
+   boundary, and must never be described as one. No hook guards `/tmp/agentic-commit/**`, and
+   `hooks/push.sh` authorizes on `commit_sha == HEAD` alone — so an adversary who can emit
+   arbitrary Bash (`docs/THREAT-MODEL.md` §1.2) can write the push-gate token directly and open
+   the gate, which is strictly cheaper than forging a journal entry. The journal therefore
+   grants an attacker NO new capability; what it removes is every dependence on content the
+   committing actor chooses in the commit itself — message and file set — and with it the
+   coincidental mis-attribution above. Do not "strengthen" this paragraph into a security
+   claim the harness cannot support.
+
+   **Commits that can never be reconciled, by design:** anything not authorized by a single-use
+   commit grant — auto-bulk and `--bulk` commits carry a multi-use sentinel instead, mint no
+   grant and no pointer, and the finalizer resolves the pointer for THE TOOL EVENT IT IS
+   FINALIZING — one name derived from that event's `tool_use_id`, cross-checked against the id
+   recorded inside the pointer, with no session lookup and no scan — so an event that minted no
+   pointer reaches no other event's and no entry is ever written for them. **RULE: that
+   conclusion rests on the PER-EVENT binding** (see `hooks/lib/commit_journal.py`); it did NOT
+   hold under the superseded session keying, where a bulk commit sharing a session with a live
+   ordinary grant resolved that grant by name. Their recovery path is the
+   `nothing_to_commit_precommitted` section below, which creates its own attributed commit.
+
+   A subject-pattern check is NOT used and MUST NOT be added: the subject is free-form by
+   design, and gating on its shape is the exact defect this section exists to remove. For the
+   same reason, do NOT re-add the trailer or file-set checks as gates. They MAY be recorded in
+   `reconciliation_basis` as non-authorizing corroboration; they may never decide the outcome.
+6. Every owned path in the plan is clean in `git status` — consistent with condition 2, and
+   re-asserted here because tokenizing HEAD while owned work is still uncommitted would
+   authorize a push that does not contain that work.
+7. **`HEAD_SHA` is not already published.** If an upstream is configured and
+   `git -C "${GIT_ROOT}" merge-base --is-ancestor HEAD @{u}` succeeds, HEAD is already on the
+   remote: there is nothing to push, so there is nothing to reconcile — return
+   `nothing_to_commit`. Without this, the ordinary happy path re-triggers reconciliation
+   forever, because `/push` DELETES the token after a successful push, leaving exactly the
+   empty-slot-plus-attributable-HEAD state this section fires on. When no upstream is
+   configured the command errors; treat that as "not published" and continue.
+
+**Action.** Write the token for `HEAD_SHA` using the SAME mechanism and the SAME safety checks
+as Phase 10 — the Write tool per rule CP-3, preceded by the PRE-write HEAD-stability check and
+the PRE-write collision re-check, and followed by the POST-write HEAD re-check. A HEAD move at
+any of those points yields `push_gate_race`; a token that appeared at `token_path` in the
+meantime yields `push_gate_collision`.
+
+**Condition 4's emptiness result is ADVISORY by write time; the pre-write re-check is the
+AUTHORITATIVE one.** Condition 4 observes the empty slot earlier in the sequence, and nothing
+holds that slot across the gap — no lock is taken over the window between checking and
+writing — so a peer session may create a token at `token_path` in between. The re-read
+performed immediately before the Write is therefore the check that decides. If a token has
+appeared in that window it is NEVER overwritten, regardless of which session owns it, and the
+outcome is the `push_gate_collision` already named above. This is the same TOCTOU shape
+Phase 10 already carries; the handling is deliberately identical rather than a new mechanism.
+
+Do NOT create a commit, do NOT stage, do NOT acquire the fd-9 commit lock (no index mutation
+occurs), and do NOT consume a commit grant — the privilege guard gates `git commit`, and this
+path runs none.
+
+**Result.** Return `commit_status: push_gate_reconciled` with a `repository_results` entry whose
+`status` is `nothing_to_commit`, `push_gate_written` is `true`, and `reconciled_commit_sha` is
+`HEAD_SHA`. Record `reconciliation_basis` as an object carrying the matched journal entry's
+`task_id`, `resulting_head`, `parent_head` and `created_at`, plus
+`attribution: "commit_event_journal"`, so the write is auditable as a reconciliation rather
+than mistaken for a fresh commit. Corroborating observations (trailer present, file-set
+overlap) MAY be recorded alongside, explicitly marked non-authorizing.
+
+**When conditions 2-7 hold except condition 4** (a token already exists and it is this
+session's own, matching HEAD): there is nothing to reconcile — return `nothing_to_commit`.
+
+**When every condition holds except 5** (HEAD is tokenless and un-pushable, but no journal
+entry attributes it to this task and session): do NOT reconcile and do NOT guess. Return
+`nothing_to_commit` with `push_gate_reconciliation_declined` set to the reason
+(`no_journal_entry`), and print a WARNING naming `HEAD_SHA` as un-pushable by this session.
+This is a LOUD refusal on purpose: the state is unrecoverable through this path, and the human
+needs to see it rather than have it silently swallowed.
+
+**The accepted residual: a session the journal does not name cannot reconcile.** If no
+surviving session appears in an entry attributing HEAD, that commit stays un-pushable through
+this path forever. Stated that way on purpose: the bound is on being NAMED by an entry, not on
+having authored the commit, and the two come apart in the narrow race
+`hooks/lib/commit_journal.py::_parent_linkage_verified` records — where a session IS named for
+a peer commit it did not create, and can reconcile it. That is deliberate. The
+only cross-session basis available would be "same task id", and a task id is not an identity —
+any actor can mint a grant carrying any `--task-id`, and a legitimate retry after a restart
+produces two live sessions sharing one task id, which is precisely the confusion this rewrite
+exists to end. A weaker tier here would restore the defect in a new costume. The honest
+recovery for that state is a human `git push`, or re-running the originating session.
+
+**The real fix, deliberately NOT implemented here.** The journal exists because the token is
+written by the AGENT after its commit, leaving a window in which the write can be lost. The
+hook that appends the journal entry holds everything needed to write the TOKEN itself, which
+would close that LOSS window and delete this whole section along with rule 7's remaining
+collision case. It would NOT close the HEAD race: that hook runs after the commit lock is
+released and reads live HEAD too, so a hook-written token would need the same parent-linkage
+bind before it authorized anything. That is still the better design. It is out of scope here because it
+rewrites Phase 10's contract and ripples into bulk mode (no grant, so no hook write point),
+multi-repository commit ordering, the `DRYRUN` planning pass, and `/push`'s token expectations.
+It should be scoped and security-reviewed as its own cycle, not slid into this one.
 
 ### nothing_to_commit_precommitted detection (THREE-STEP SHA-STABLE CHECK)
 
@@ -1220,9 +1571,9 @@ multi-repo setups).
 
 | Code | Meaning | Retryable by /commit? |
 |------|---------|----------------------|
-| `grant_missing` | No usable commit grant file found at commit time (not present, or already unlinked by a prior successful validation). | Yes |
+| `grant_missing` | No usable commit grant file found at commit time (not present, locked in-flight as `.lck` by a concurrent commit event, or already consumed — the PostToolUse finalizer unlinks the grant on a success terminal result; validation itself no longer unlinks). | Yes |
 | `grant_expired` | A parseable grant exists but `expires_at` is in the past or invalid. | Yes |
-| `grant_consumed` | Grant was already unlinked by a prior successful commit attempt. If the grant path from Step 5 is not recorded, emit `grant_missing` as the fallback. | Yes |
+| `grant_consumed` | Grant was already consumed by a prior successful commit — unlinked by the PostToolUse finalizer on that commit's success terminal result (a failed commit restores the grant for retry instead). If the grant path from Step 5 is not recorded, emit `grant_missing` as the fallback. | Yes |
 | `git_error` | `git commit` exited non-zero for a non-grant reason (merge conflict, lock, index error, etc.). | No |
 | `staging_error` | `git add` failed for one or more files in the classified set. | No |
 | `hook_blocked` | A non-grant PreToolUse hook (e.g. `pretool-bash-safety.sh`) blocked the commit command. | No |
@@ -1243,7 +1594,7 @@ never an unbounded loop, and never a duplicate `git commit`.
 
 ```json
 {
-  "commit_status": "committed | partially_committed | nothing_to_commit | nothing_to_commit_precommitted | failed | dryrun",
+  "commit_status": "committed | partially_committed | nothing_to_commit | nothing_to_commit_precommitted | push_gate_reconciled | failed | dryrun",
   "repository_results": [
     {
       "order": 0,
@@ -1252,6 +1603,16 @@ never an unbounded loop, and never a duplicate `git commit`.
       "expected_head": "<plan SHA>",
       "commit_sha": "<present only when committed>",
       "push_gate_written": true,
+      "reconciled_commit_sha": "<present only when push_gate_reconciled; equals live HEAD>",
+      "reconciliation_basis": {
+        "attribution": "commit_event_journal",
+        "task_id": "<from the matched journal entry>",
+        "resulting_head": "<from the matched journal entry>",
+        "parent_head": "<from the matched journal entry>",
+        "created_at": "<from the matched journal entry>",
+        "corroboration": "<optional, explicitly NON-authorizing observations>"
+      },
+      "push_gate_reconciliation_declined": "<reason, e.g. no_journal_entry; present when a tokenless HEAD could not be attributed>",
       "failure_code": "<present only when failed>",
       "failure_reason": "<present only when failed>"
     }
@@ -1299,6 +1660,6 @@ manual intervention required — see `/commit` Step 7 status table for the
 ## Outputs
 
 - Real branch commit(s) in the normal-mode `REPOSITORY_PLAN` (or the legacy bulk control+nested pair)
-- Push-gate token at `/tmp/agentic-commit/push/<repo-hash>/<branch-encoded>.json`
+- Push-gate token at `/tmp/agentic-commit/push/<repo-hash>/<PUSH_GATE_SID_DIGEST>/<branch-encoded>.json`
 - Synthetic close-annotations at `${CONTROL_ROOT}/docs/dev/close-report-bulk-*.md` (bulk mode only)
 - Human-readable summary of what was committed

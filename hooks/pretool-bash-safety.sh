@@ -645,6 +645,114 @@ PYAUDIT2
   esac
 }
 
+# ── Pre-clean WIP snapshot guard (fail-closed) ───────────────────────────────
+# Safety net on the HUMAN-GRANT RESIDUAL of the `git clean` deny: once a human
+# has explicitly granted a destructive clean it WILL proceed, so take a
+# recoverable snapshot of untracked-non-ignored work FIRST. Root cause: the
+# checkpoint mechanism only ever fired on PostToolUse/Stop, and the four
+# grant/consent `exit 0` escapes below (main /do, structured sentinel, legacy
+# /allow, subagent /do) bypass every downstream block — so a granted clean
+# destroyed untracked WIP with no git trace (the 07-10 run_distribution.py
+# incident). Defined HERE because the first three grant exits run before
+# COMMAND_CONTEXT_STRIPPED / CLASSIFIER_JSON / GIT_CMD_RE exist.
+#
+# Fail-closed contract: only a clean whose target is PROVABLY this hook's own
+# working directory is snapshotted and allowed. A target-redirecting global,
+# an indeterminate cwd, a snapshot failure, or an unclassifiable command all
+# DENY (exit 2) — the lane never allows a clean it could not protect, and never
+# resolves or snapshots a redirected repository.
+#
+# Reuses hooks/lib/checkpoint-core.sh write_checkpoint() UNCHANGED and the
+# token-aware detector hooks/lib/git_clean_guard.py (which itself reuses the
+# shared tokenizer; git_command_classifier.py is deliberately NOT modified —
+# pretool-block-branch-pr-worktree.py imports _git_subcommand directly).
+_preclean_snapshot_guard() {
+  # NO raw-text prefilter. A `grep -q clean`/`grep -q git` gate used to stand
+  # here; bash performs quote removal and backslash removal BEFORE exec, so
+  # `g''it clean -fd` and `git cl\ean -fd` run git while matching neither
+  # pattern, and the token-aware detector behind the gate was never reached.
+  # A raw-substring test in front of a token-aware detector is strictly
+  # harmful, and `grep` exiting 127 (PATH-front attack) was indistinguishable
+  # from "no match". The detector now runs on every granted command: one
+  # short-lived subprocess on a command a human has already authorized.
+  local _guard_dir _guard_py _guard_reason _guard_rc _guard_timeout
+  _guard_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  _guard_py="${_guard_dir}/lib/git_clean_guard.py"
+  if [ ! -r "$_guard_py" ]; then
+    echo "BLOCKED: granted 'git clean' denied — pre-clean WIP snapshot guard is unavailable (fail-closed)" >&2
+    echo "Command: $COMMAND" >&2
+    echo "REASON: $_guard_py is missing or unreadable, so the clean target cannot be classified." >&2
+    exit 2
+  fi
+
+  # The watchdog duration is VALIDATED and passed after `--`. Unvalidated, it
+  # occupies GNU timeout's OPTION position, so CLAUDE_HOOK_CONTEXT_TIMEOUT=--help
+  # (or --version) makes `timeout` itself exit 0 — which this case statement
+  # would read as verdict NONE and let a granted destructive clean through
+  # unsnapshotted. Anything that is not <number>[smhd] falls back to the default.
+  _guard_timeout="${CLAUDE_HOOK_CONTEXT_TIMEOUT:-5s}"
+  case "$_guard_timeout" in
+    *[!0-9.smhd]*|''|*[!0-9smhd]) _guard_timeout="5s" ;;
+    [!0-9]*) _guard_timeout="5s" ;;
+  esac
+  _guard_reason=$(CMD_INPUT="$COMMAND" timeout -- "$_guard_timeout" \
+    "$PYTHON_BIN" "$_guard_py" 2>/dev/null)
+  _guard_rc=$?
+  case "$_guard_rc" in
+    0)  return 0 ;;   # no destructive-or-uncertain `git clean` in this command
+    10) : ;;          # provably hook-cwd destructive clean — snapshot below
+    *)                # 11 = redirect/indeterminate; any other rc = detector failure
+      echo "BLOCKED: granted 'git clean' denied — no protective pre-clean WIP snapshot is possible (fail-closed)" >&2
+      echo "Command: $COMMAND" >&2
+      echo "REASON: ${_guard_reason:-the pre-clean guard could not classify this command}" >&2
+      echo "Hint: re-issue the clean from this working directory without -C/--git-dir/--work-tree" >&2
+      echo "      and without a leading cd/subshell, or snapshot the work yourself first." >&2
+      exit 2
+      ;;
+  esac
+
+  local _ckpt_lib="${_guard_dir}/lib/checkpoint-core.sh"
+  if [ ! -r "$_ckpt_lib" ]; then
+    echo "BLOCKED: granted 'git clean' denied — the pre-clean WIP snapshot library is unavailable (fail-closed)" >&2
+    echo "Command: $COMMAND" >&2
+    echo "REASON: $_ckpt_lib is missing or unreadable, so untracked work cannot be made recoverable." >&2
+    exit 2
+  fi
+  # shellcheck source=lib/checkpoint-core.sh
+  . "$_ckpt_lib"
+  # write_checkpoint's git steps redirect stderr into $CHECKPOINT_LOG_FILE before
+  # anything creates its directory, so on a host that has never written a
+  # checkpoint the redirect itself fails and every granted clean would be denied.
+  # Create the library's own log dir first (the library does the same in
+  # _checkpoint_log); checkpoint-core.sh itself stays unmodified.
+  mkdir -p "$CHECKPOINT_LOG_DIR" 2>/dev/null || true
+  write_checkpoint "" "pre-clean WIP snapshot before granted: $COMMAND"
+  local _ckpt_rc=$?
+  # write_checkpoint's early-failure returns leave its temp-index EXIT trap
+  # installed; clear it so the trap cannot outlive this hook invocation.
+  trap - EXIT INT TERM HUP
+  if [ "$_ckpt_rc" -ne 0 ]; then
+    echo "BLOCKED: granted 'git clean' denied — the protective pre-clean WIP snapshot FAILED (fail-closed)" >&2
+    echo "Command: $COMMAND" >&2
+    if [ "$_ckpt_rc" = "2" ]; then
+      echo "REASON: write_checkpoint rc=2 — this working directory is not a git repository, so untracked work cannot be snapshotted." >&2
+    else
+      echo "REASON: write_checkpoint rc=$_ckpt_rc — the snapshot could not be written, so untracked work would be unrecoverable." >&2
+    fi
+    echo "Hint: see ${CHECKPOINT_LOG_FILE}, fix the snapshot failure, then re-issue the clean." >&2
+    exit 2
+  fi
+  local _ckpt_branch _ckpt_ref
+  _ckpt_branch=$(git branch --show-current 2>/dev/null)
+  if [ -n "$_ckpt_branch" ]; then
+    _ckpt_ref="refs/checkpoints/$(printf '%s' "$_ckpt_branch" | tr '/' '-')"
+  else
+    _ckpt_ref="refs/checkpoints/*"
+  fi
+  echo "[pre-clean-snapshot] untracked WIP snapshotted to $_ckpt_ref before granted clean; recover with 'git show $_ckpt_ref:<path>'" >&2
+  return 0
+}
+
 # ── Global /allow short-circuit ─────────────────────────────────────────────
 # RELOCATED 2026-05-09 (task-id 20260509-113838) to run BEFORE all four
 # absolute-ban categories (Layer 1.A-E daemon-restart prohibition + the three
@@ -675,6 +783,8 @@ print(d.get('session_id','') or os.environ.get('CLAUDE_SESSION_ID','default'))" 
   [ -z "$_DO_SID" ] && _DO_SID="default"
   _DO_FLAG="/tmp/claude-orchestrator-consent-${_DO_SID}.flag"
   if [ -f "$_DO_FLAG" ] && [ "$(cat "$_DO_FLAG" 2>/dev/null)" = "true" ]; then
+    # Grant exit 1 of 4 — snapshot-or-deny a destructive `git clean` first.
+    _preclean_snapshot_guard
     exit 0
   fi
 fi
@@ -723,6 +833,9 @@ PYEOF
 )
   case "$SENTINEL_QUERY" in
     SENTINEL_OK)
+      # Grant exit 2 of 4 — snapshot-or-deny BEFORE the approval JSON is emitted,
+      # so a denied clean never advertises an "allow" decision.
+      _preclean_snapshot_guard
       mkdir -p "$(dirname "$CONSENT_LOG")"
       echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) task=$TASK_ID_FOR_SENTINEL SENTINEL_GRANT_MATCHED command='$COMMAND'" >> "$CONSENT_LOG"
       echo "[allow-sentinel] structured grant matched for task=$TASK_ID_FOR_SENTINEL. consume-on-any-terminal-result deferred to PostToolUse." >&2
@@ -763,7 +876,12 @@ fi
 # (SENTINEL_EXISTS_FOR_TASK=0) we still run the legacy short-circuit for
 # back-compat with pre-migration grants.
 if [ "$SENTINEL_EXISTS_FOR_TASK" != "1" ]; then
-  check_and_consume_allowlist "$COMMAND" && exit 0
+  # Grant exit 3 of 4. The guard runs only AFTER the allowlist actually matched,
+  # so an UNGRANTED clean still falls through to the normal block rules below.
+  if check_and_consume_allowlist "$COMMAND"; then
+    _preclean_snapshot_guard
+    exit 0
+  fi
 fi
 
 # Layer 1.A — daemon-restart prohibition: systemctl verb gate against happy-daemon-*.
@@ -1650,7 +1768,21 @@ fi
 # arguments when normalization succeeds and remains raw (fail-closed) if its
 # own helper is unavailable.  The fallback token explicitly accepts both bare
 # and path-qualified git executables.
-GIT_GLOBAL_OPT_RE='([[:space:]]+(-[Cc][[:space:]]+[^[:space:];|&]+|-[Cc][^[:space:];|&]+|--(git-dir|work-tree|namespace|exec-path|super-prefix|config-env)(=[^[:space:];|&]+|[[:space:]]+[^[:space:];|&]+)|--(bare|no-pager|paginate|no-replace-objects|literal-pathspecs|glob-pathspecs|noglob-pathspecs|icase-pathspecs|no-optional-locks)|-[pP]))*'
+# The INNER alternation is factored out so the clean rule's occurrence grammar
+# can UNION it with a syntax-shaped branch instead of hand-shaping a substitute.
+# Hand-shaping is what opened 89 destructive spellings last round: the substitute
+# silently dropped this enumeration's SEPARATE-value (`--namespace ns`) and
+# QUOTED-value (`-c "k=v"`, `-C "."`) branches. GIT_GLOBAL_OPT_RE's VALUE is
+# unchanged byte for byte by this factoring, so the reset-block fallback below
+# and every other consumer keep exactly the surface they had.
+# The names of the long global options that TAKE A VALUE are factored out on
+# their own line as well, because the clean rule needs exactly that set — the
+# only options for which a following bare word is a value rather than the
+# subcommand. Sharing the names keeps `--no-pager grep clean src/` a grep while
+# `--namespace ns clean -fd` is an occurrence, without a second copy of the list.
+GIT_GLOBAL_VALOPT_NAMES='git-dir|work-tree|namespace|exec-path|super-prefix|config-env'
+GIT_GLOBAL_OPT_ALT="-[Cc][[:space:]]+[^[:space:];|&]+|-[Cc][^[:space:];|&]+|--(${GIT_GLOBAL_VALOPT_NAMES})(=[^[:space:];|&]+|[[:space:]]+[^[:space:];|&]+)|--(bare|no-pager|paginate|no-replace-objects|literal-pathspecs|glob-pathspecs|noglob-pathspecs|icase-pathspecs|no-optional-locks)|-[pP]"
+GIT_GLOBAL_OPT_RE="([[:space:]]+(${GIT_GLOBAL_OPT_ALT}))*"
 GIT_CMD_RE='(^|[[:space:];&|()`])git'"$GIT_GLOBAL_OPT_RE"'[[:space:]]+'
 GIT_FALLBACK_CMD_RE='(^|[[:space:];&|()`])([^[:space:];&|()`]*/)?git'"$GIT_GLOBAL_OPT_RE"'[[:space:]]+'
 _CLASSIFIED_RESET_HARD=0
@@ -1737,6 +1869,464 @@ if echo "$COMMAND" | grep -qE "${GIT_CMD_RE}(update-ref\b|branch[[:space:]]+(-[f
   exit 2
 fi
 
+# Block: destructive `git clean` (conservative default, task dev-20260719-150041-a).
+# `git clean -fd` removes UNTRACKED files with no rm, no reflog and no reachable
+# git object — the same no-trace deletion channel as the already-blocked rm.
+# Polarity is BLOCK-unless-PROVABLY-non-destructive: a blocklist of destructive
+# spellings can always be respelled around (long-option abbreviations, clusters,
+# last-wins negation, quoting), an allow-list of provably-safe shapes cannot.
+#
+# TRUST GATE first — a dry-run PROOF is valid only when the predicate's view of
+# the invocation provably equals what git will receive. All three fail closed:
+#   T1 token literal-safety: every RAW arg token must match [A-Za-z0-9_./=+:@,-]*
+#      (' " ` $ \ { } ~ ^ ! and whitespace are rewritable by context-stripping or
+#      by bash word-expansion after the hook has read them).
+#   T2 parser agreement: the raw and stripped passes must see the same number of
+#      clean invocations; a mismatch means stripping changed the structure.
+#   T3 argument provenance: an argument-injecting wrapper (basename `xargs`) in
+#      command position appends argv the hook never saw.
+# Only then: a separate-value exclude (-e, a cluster ENDING in e, or an
+# unambiguous --e..--exclude with no `=`) consumes the NEXT token as its pattern,
+# so a following -n is not a dry-run -> BLOCK; otherwise resolve the EFFECTIVE
+# dry-run state (walk to the first `--`, last-wins, default OFF).
+# Two-stream discipline: the trust gate reads RAW args, the decision reads the
+# STRIPPED classifier args (:909). Never mix them — a decision on raw args
+# ignores normalization, and a trust test on stripped args is vacuous because
+# stripping is exactly what destroys the evidence.
+# Placed in the bypassable region, so /do consent and /allow grants release it
+# exactly like the rm-block at :1476.
+#
+# ONE occurrence grammar, defined HERE and consumed by BOTH layers of the
+# nested-payload defence: the Python verdict heredoc immediately below and the
+# shell-side fail-closed scan at the bottom of this block. Two hand-synced
+# copies is precisely what shipped the previous hole — the shell-side copy
+# interpolated ${GIT_GLOBAL_OPT_RE} and the Python copy did not, so a global
+# option inside the payload was visible to one layer and invisible to the
+# other, and `git clean -n && sh -c 'git -C /tmp clean -fd'` ran UNGRANTED
+# (225 forms of that class measured at exit 0). A single definition cannot
+# disagree with itself; the Python side re-uses these exact strings and only
+# rewrites POSIX bracket classes, which is semantics-preserving.
+_GC_SEP='[[:space:];&|()`]'
+_GC_NOSEP="[^[:space:];&|()\`'\"]*"
+_GC_PATH="(${_GC_NOSEP}/)?"
+# VALUE region of a global option. Quote characters ARE admitted here — a quoted
+# value is still one shell word — while the command separators are not. Excluding
+# them from the value was half of last round's regression: `-c "k=v"` and
+# `-C "."` stopped being spannable, so the option and the subcommand fell into
+# different matches and `git -c "foo.bar=baz" clean -fd` became invisible.
+_GC_QVAL="[^[:space:];&|()\`]*"
+# A long option's SEPARATE value, for options no enumeration lists. The syntax
+# branch below may swallow one following bare token only when that token is
+# VALUE-shaped: it must carry at least one character a git subcommand name never
+# contains (`/ . = : ~ @ %`, an uppercase letter or a digit). That is what keeps
+# `git --attr-source HEAD clean -fd` — proven to delete at real git — an
+# occurrence while leaving `git --no-pager grep clean src/` a grep. The test is
+# a NEGATIVE one on the token's shape rather than a positive list of option
+# names: a subcommand this class fails to exclude costs an over-block, which is
+# fail-safe and grant-escapable, whereas the positive option lists that failed
+# in earlier rounds cost an ungranted deletion.
+#
+# Written so the split point is UNIQUE: the prefix excludes the marker
+# characters, so the marker is necessarily the FIRST one in the token and the
+# token has exactly one parse. The obvious spelling — `(any*)?MARKER any*` —
+# instead admits one parse per marker position (four for `HEAD`), and nested in
+# the option run that is 4^n: measured 8.8s on a failing match over twelve
+# tokens, on a regex that runs on every Bash tool call.
+# Value-taking long options = the shared list PLUS an explicit delta. git 2.54.0
+# accepts `--attr-source <tree-ish>` and `--shallow-file <path>` with a SEPARATE
+# value and the shared enumeration lists neither; adversarial review proved
+# `git --attr-source ns clean -fd` and `git --shallow-file ns clean -fd` delete
+# an untracked file and a nested untracked directory while exiting 0 ungranted.
+# The delta is stated as a delta rather than a rewritten list so the shared names
+# stay single-sourced. RESIDUAL, disclosed rather than hidden: a value-taking
+# long option that nobody has listed, whose value carries no marker character at
+# all, is still unspanned — the same gap the shared enumeration itself has. Only
+# the marker-free case is affected; a value with a `/`, `.`, `=`, `:` or an
+# uppercase letter or digit is covered generically by branch 3, no name needed.
+_GC_VALOPT_NAMES="${GIT_GLOBAL_VALOPT_NAMES}|attr-source|shallow-file"
+_GC_VMARK="/.=:~@%A-Z0-9"
+_GC_PLAINTOK="[^-[:space:];&|()\`${_GC_VMARK}][^[:space:];&|()\`${_GC_VMARK}]*"
+_GC_VALTOK="(${_GC_PLAINTOK})?[${_GC_VMARK}][^[:space:];&|()\`]*"
+# Global-option segment for the OCCURRENCE grammar only, as a UNION of two
+# branches that cover different things and must BOTH be present:
+#
+#   (1) ${GIT_GLOBAL_OPT_ALT} — the shared ENUMERATION, reused verbatim rather
+#       than restated. It is the only branch that spans a long option whose
+#       value is a SEPARATE token (`--namespace ns`, `--git-dir /p`) and the
+#       only one whose value class admits quotes (`-c "k=v"`, `-C "."`).
+#       Replacing it with a hand-shaped substitute last round dropped both and
+#       opened 89 destructive spellings that had been denied — measured
+#       pre-edit 2 -> live 0, and proven to delete untracked files at real git.
+#   (2) any OPTION token — a word starting with `-`, so real options no
+#       enumeration lists (--no-lazy-fetch, --no-advice, --attr-source=) are
+#       covered, in any spelling, with or without an attached value.
+#   (3) any VALUE-shaped token — a word not starting with `-` that carries at
+#       least one character a git subcommand name never contains. This is how a
+#       SEPARATE value is spanned for options nobody enumerated, so
+#       `git --attr-source HEAD clean -fd` is an occurrence while
+#       `git --no-pager grep clean src/` stays a grep: `grep` is a plain
+#       lowercase word, so the run stops there and no `clean` follows.
+#
+# NOT claimed: that widening the grammar cannot possibly produce a new ALLOW.
+# That "by construction" argument is FALSE and was retracted after adversarial
+# review supplied a counterexample — `git --foo clean.x --foo /p/git clean`
+# yields two matches under the narrower grammar and one longer match under the
+# wider one, so an occurrence COUNT can go DOWN, and the count is what
+# unresolved_clean() compares. No reachable ALLOW follows from it here, but that
+# is a MEASURED result (the 725-form destructive differential), not a proof.
+# Match-set reasoning is the kind of claim that shipped the last regression;
+# the differential is the evidence.
+#
+# Branches 2 and 3 are DISJOINT (one requires a leading `-`, the other forbids
+# it), which is load-bearing for cost, not just for clarity. An earlier shape of
+# this fix wrote branch 3 as an OPTIONAL suffix of branch 2 — `--opt( value)?` —
+# giving every token two parses and the whole segment 2^n. Measured: a failing
+# match over twelve `--unk HEAD` pairs took 8.8s, against 0.0001s for both
+# predecessors, and this regex runs on EVERY Bash tool call. Splitting the
+# optional suffix into its own alternative makes each token's parse unique.
+# GIT_GLOBAL_OPT_RE itself is still not touched: only its inner alternation is
+# reused, and that variable's value is byte-identical to before the factoring.
+#   (4) a VALUE-TAKING option followed by a PLAIN separate value — the one shape
+#       branches 2 and 3 cannot reach, e.g. `--namespace ns` or `-C tmp`, whose
+#       value carries no marker character at all. The option NAMES come from the
+#       shared ${GIT_GLOBAL_VALOPT_NAMES}, so this is not a second copy of the
+#       list; restricting branch 4 to them is what keeps `--no-pager grep clean
+#       src/` a grep, since `--no-pager` takes no value and `grep` is therefore
+#       the subcommand rather than a value.
+#
+# Why the shared ${GIT_GLOBAL_OPT_ALT} is not interpolated WHOLE, and what
+# replaces the guarantee that would have carried: its separate-value class
+# `[^[:space:];|&]+` admits a leading `-`, so `git --namespace --namespace …`
+# parses two ways at every token and BOTH stay alive. That is 2^n on a FAILING
+# match — measured >10s at sixteen option groups, against 0.0001s for both
+# predecessors, on a regex evaluated for every Bash tool call, i.e. a hang of
+# the whole harness rather than a slow test. Branch 4 takes a PLAIN value
+# instead, so the competing "option alone" parse dies at the very next token and
+# the cost stays linear. The enumeration's remaining reach beyond branches 2-4
+# is a separate value that starts with `-` or contains a shell metacharacter,
+# neither of which is a real git spelling. That nothing real is lost is not
+# asserted but MEASURED: test_AC18w feeds every spelling the shared enumeration
+# accepts through this grammar, and test_AC18x pins the linear cost.
+_GC_GOPT="([[:space:]]+(-[Cc][[:space:]]+${_GC_PLAINTOK}|--(${_GC_VALOPT_NAMES})[[:space:]]+${_GC_PLAINTOK}|-${_GC_QVAL}|${_GC_VALTOK}))*"
+_GIT_CLEAN_FALLBACK_RE="(^|${_GC_SEP})((${_GC_PATH}git)|\"${_GC_PATH}git\"|'${_GC_PATH}git')${_GC_GOPT}[[:space:]]+[\"']?clean\\b"
+# Shell-in-command-position test, gating quote-neutralisation. Deliberately NOT
+# a name list: enumerating interpreter names was the repeated root cause in this
+# task, and a 16-name allowlist was escaped by ksh93, rbash, posh, oksh, elvish,
+# xonsh, nsh, bsh and sh5 — rbash being installed on this host and being bash.
+# The test is STRUCTURAL instead: a command-position word ending in `sh`, with an
+# optional version suffix, which holds for interpreter names nobody has listed
+# yet. Glob metacharacters are excluded from the word so a mere `ls *.sh` is not
+# mistaken for an interpreter. Balanced quotes hugging the binary are matched
+# the same way _GIT_CLEAN_FALLBACK_RE already matches `"git"`: without that
+# alternation `"/bin/sh" -c '<destructive>'` was neutralised by nobody and ran
+# ungranted, because the word class excludes the quote characters themselves.
+_GC_CMDW="[^[:space:];&|()\`'\"*?]*"
+_GC_SHW="${_GC_CMDW}sh[0-9]*"
+_GC_SHELL_RE="(^|${_GC_SEP})((${_GC_SHW})|\"${_GC_SHW}\"|'${_GC_SHW}')([[:space:]]|$)"
+# A shell is not the only thing that turns a quoted string into execution: some
+# git subcommands run their ARGUMENT as a command. `git rebase -x '<destructive
+# clean>' HEAD~2` was proven to delete an untracked file and a nested untracked
+# directory at real git 2.54.0 while exiting 0 ungranted, because the classifier
+# reports the OUTER subcommand (rebase) so no clean invocation resolves, and the
+# occurrence anchor cannot see an inner `git` hugged by a quote. Recognising the
+# context is enough — the quotes are then neutralised and the ordinary
+# occurrence grammar finds the payload, exactly as it does behind a shell.
+# The exec MARKER is required in addition to the subcommand, so an everyday
+# `git rebase --continue` or `git submodule update --init` neutralises nothing.
+# Only GLOBAL OPTIONS may sit between the binary and the subcommand — using a
+# free "any token" run there let a subcommand NAME appearing as an ordinary
+# search argument masquerade as the subcommand, so `git grep -e rebase -x -e
+# "<phrase>"` was wrongly denied. After the subcommand, any token may precede
+# the exec marker.
+# difftool --extcmd/-x, grep --open-files-in-pager and filter-branch --setup were
+# each proven by adversarial review to run their argument and delete.
+_GC_ANYTOK="([[:space:]]+[^[:space:];&|()\`]+)*"
+_GC_EXECCTX_RE="(^|${_GC_SEP})((${_GC_PATH}git)|\"${_GC_PATH}git\"|'${_GC_PATH}git')${_GC_GOPT}[[:space:]]+(rebase${_GC_ANYTOK}[[:space:]]+(-x|--exec)|submodule${_GC_ANYTOK}[[:space:]]+foreach|filter-branch${_GC_ANYTOK}[[:space:]]+(--[a-z]+-filter|--setup)|bisect${_GC_ANYTOK}[[:space:]]+run|difftool${_GC_ANYTOK}[[:space:]]+(--extcmd|-x)|grep${_GC_ANYTOK}[[:space:]]+--open-files-in-pager)\\b"
+_GIT_CLEAN_HAS_INV=0
+if [ "$CLASSIFIER_STATUS" = "ok" ] && _any_git_has_subcmd clean; then
+  _GIT_CLEAN_HAS_INV=1
+fi
+_GIT_CLEAN_VERDICT=''
+if [ "$_GIT_CLEAN_HAS_INV" = "1" ]; then
+  _GIT_CLEAN_VERDICT=$(
+    HOOKS_DIR_CLEAN="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)" \
+    CLEAN_RAW_CMD="$COMMAND" CLEAN_CLASSIFIER_JSON="$CLASSIFIER_JSON" \
+    CLEAN_OCCURRENCE_RE="$_GIT_CLEAN_FALLBACK_RE" CLEAN_SHELL_RE="$_GC_SHELL_RE" \
+    CLEAN_EXECCTX_RE="$_GC_EXECCTX_RE" \
+    "$PYTHON_BIN" - <<'PYEOF' 2>/dev/null
+import json, os, re, sys
+sys.path.insert(0, os.environ['HOOKS_DIR_CLEAN'])
+from lib.git_command_classifier import (
+    _basename, _command_token_index, _git_subcommand, _segments, _unquote_token)
+
+LITERAL = re.compile(r'^[A-Za-z0-9_./=+:@,-]*$')
+POS_DRY = re.compile(r'^--d(r(y(-(r(u(n)?)?)?)?)?)?$')
+NEG_DRY = re.compile(r'^--no-d(r(y(-(r(u(n)?)?)?)?)?)?$')
+EXCLUDE = re.compile(r'^--e(x(c(l(u(d(e)?)?)?)?)?)?$')
+CLUSTER = re.compile(r'^-[A-Za-z]+$')
+# Coarse `git … clean` counter and shell-in-command-position test. These are NOT
+# re-spellings of the shell-side grammar — they ARE it, passed in through the
+# environment, because two independently maintained copies drifted apart and the
+# gap between them executed an ungranted destructive clean. The only transform is
+# POSIX bracket-class -> Python; `[[:space:]]` and `[^[:space:]…]` become `[\s]`
+# and `[^\s…]`, which is the same character set in both engines. Everything else
+# in the shared strings (alternation, quantifiers, `\b`) is common to ERE and
+# Python. A missing or uncompilable regex raises, which kills the heredoc and
+# leaves the verdict empty — and an empty verdict is a BLOCK, so the sharing
+# fails closed.
+def _ere_to_py(pattern):
+    """POSIX ERE bracket classes -> Python, semantics-preserving."""
+    return pattern.replace('[:space:]', r'\s')
+
+
+COARSE = re.compile(_ere_to_py(os.environ['CLEAN_OCCURRENCE_RE']))
+SHELL_CMD = re.compile(_ere_to_py(os.environ['CLEAN_SHELL_RE']))
+EXEC_CTX = re.compile(_ere_to_py(os.environ['CLEAN_EXECCTX_RE']))
+
+
+def raw_cleans(text):
+    """(args, injected) per RAW clean invocation, in segment order.
+
+    injected is True when a command word of the invocation's segment has
+    basename 'xargs' — matching by basename, not token equality, because
+    /usr/bin/xargs injects arguments identically (the classifier already
+    basename-matches the git binary itself).
+
+    Tokens are unquoted before basenaming, exactly as the shared classifier
+    now does, so this RAW pass and the STRIPPED pass agree on WHICH commands
+    are git; disagreeing here would make T2 fire on every quoted binary and
+    turn `"/usr/bin/git" clean -n` into an over-block.
+    """
+    found = []
+    for seg in _segments(text):
+        toks = seg.split()
+        idx = _command_token_index(toks) if toks else None
+        if idx is None or _basename(_unquote_token(toks[idx])) != 'git':
+            continue
+        sub, args = _git_subcommand(toks[idx + 1:])
+        if sub == 'clean':
+            found.append((args, any(_basename(_unquote_token(t)) == 'xargs'
+                                    for t in toks[:idx])))
+    return found
+
+
+def separate_value_exclude(args):
+    """True when an exclude takes its PATTERN from the NEXT token (eats a -n)."""
+    for arg in args:
+        if arg == '-e' or (CLUSTER.match(arg) and arg.endswith('e')):
+            return True
+        if EXCLUDE.match(arg) and '=' not in arg:
+            return True
+    return False
+
+
+def dry_run_on(args):
+    """Effective dry-run state: stop at the first '--', last-wins, default OFF."""
+    state = False
+    for arg in args:
+        if arg == '--':
+            break
+        if arg == '-n' or POS_DRY.match(arg):
+            state = True
+        elif NEG_DRY.match(arg):
+            state = False
+        elif CLUSTER.match(arg) and 'n' in arg[1:]:
+            # A cluster's 'e' is a self-contained exclude only when it is not
+            # last; an 'n' after it is that exclude's pattern, not a dry-run.
+            first_e = arg[1:].find('e')
+            if first_e < 0 or arg[1:].index('n') < first_e:
+                state = True
+    return state
+
+
+def unresolved_clean(text, parsed_n):
+    """True when the text carries MORE `git … clean` occurrences than the
+    parser could resolve into invocations — i.e. at least one clean the
+    per-invocation walk below will never see.
+
+    This is the chained-nesting hole: the shell-side fail-closed fallback is
+    reached only when the classifier resolved NO clean at all, so prefixing a
+    nested payload with a provable dry-run (`git clean -n; sh -c '<destructive>'`)
+    used to suppress it entirely and the destructive half ran ungranted. Quotes
+    are neutralised under the same TWO conditions the shell side uses — a shell
+    in command position, or a git subcommand that executes its argument
+    (`rebase -x`, `submodule foreach`, `filter-branch --*-filter`,
+    `bisect run`) — so a mere data mention chained after a dry-run
+    (`git clean -n && echo "git clean -fd"`, neither condition) is NOT counted.
+    """
+    if SHELL_CMD.search(text) or EXEC_CTX.search(text):
+        # Both neutralisations, for the reason given at the shell-side probe:
+        # quote->space splits `--namespace="ns"` into a bare token no branch
+        # consumes, quote->nothing restores the inline spelling; the larger
+        # count wins so neither variant can lose a form the other sees.
+        return max(len(COARSE.findall(text.replace('"', q).replace("'", q)))
+                   for q in (' ', '')) > parsed_n
+    return len(COARSE.findall(text)) > parsed_n
+
+
+def verdict():
+    raw_text = os.environ.get('CLEAN_RAW_CMD', '')
+    raw = raw_cleans(raw_text)
+    if unresolved_clean(raw_text, len(raw)):
+        return 'BLOCK:nested'
+    try:
+        stripped = [inv for inv
+                    in json.loads(os.environ.get('CLEAN_CLASSIFIER_JSON') or '[]')
+                    if inv.get('subcommand') == 'clean']
+    except Exception:
+        return 'BLOCK:trust'
+    if len(raw) != len(stripped):
+        return 'BLOCK:trust'                                          # T2
+    for (raw_args, injected), inv in zip(raw, stripped):
+        if injected or not all(LITERAL.match(t) for t in raw_args):
+            return 'BLOCK:trust'                                      # T3 + T1
+        args = inv.get('args', [])
+        if separate_value_exclude(args):
+            return 'BLOCK:exclude'
+        if not dry_run_on(args):
+            return 'BLOCK:dryrun'
+    return 'ALLOW'
+
+
+print(verdict())
+PYEOF
+  )
+fi
+# Fail closed in BOTH directions: an unparseable/absent verdict when the
+# classifier DID see a clean, and a coarse subcommand-anchored `git … clean`
+# in the raw command that the classifier could NOT resolve into any invocation
+# (wrapper prefixes such as `env -i` / `command --` / `time -p`). The `\b`
+# subcommand anchor means `git config clean.requireForce` never matches.
+# The anchor must tolerate BOTH a path prefix and balanced quotes around the
+# binary: `(^|[[:space:];&|()`])` omits '/', so `env -i /usr/bin/git clean -fd`
+# slips past a bare-git anchor, and neither that class nor the path class
+# admits a quote, so `env -i "git" clean -fd` slipped past GIT_FALLBACK_CMD_RE
+# too (measured rc=0, ungranted). Quotes are therefore matched as a BALANCED
+# PAIR hugging the binary — `"git"` / `'/usr/bin/git'` — rather than by adding
+# the quote characters to the anchor class. That distinction is load-bearing:
+# a class-widening anchor cannot tell `"git" clean` (an invocation) from
+# `echo "git clean -fd"` (data), and would over-block every command that merely
+# quotes the phrase. A separate local RE, not a widened GIT_FALLBACK_CMD_RE:
+# that variable is shared with the reset-block fallback at :1775 and widening
+# it would change an unrelated rule's surface.
+# _GIT_CLEAN_FALLBACK_RE and _GC_SHELL_RE are defined ONCE at the top of this
+# block and shared with the Python verdict above; see the rationale there.
+# Scanned over TWO streams. Raw $COMMAND alone let the destructive clean through
+# as the PAYLOAD of a nested shell (`sh -c 'git clean -fd'` and its /bin/sh,
+# bash, `bash -lc`, dash and `env bash -c` siblings all ran UNGRANTED), while the
+# rm-block this rule mirrors denies `sh -c 'rm foo'`. The asymmetry was one of
+# INPUT, not of capability: bash_context_strip unwraps a shell interpreter's -c
+# payload, so the rm-block's grep of COMMAND_CONTEXT_STRIPPED (:1586) inherits
+# the coverage for free — and the same evidence is already computed here, the
+# stripped view being the plain text `sh -c  git clean -fd`. So read that view
+# (never edit the stripper) instead of building a parallel unwrapper.
+# A payload nested TWO deep keeps its inner quotes through stripping
+# (`sh -c  sh -c "git clean -fd"`), so those quotes are neutralised before the
+# scan — but ONLY when a shell interpreter actually holds COMMAND position in the
+# stripped view. That condition is what stops the :1979 warning from applying: an
+# ordinary command's quoted argument is already blanked by this point
+# (`echo "git clean -fd"` is `echo ""`), and the one quoted form that still
+# survives stripping without being executable — an assignment VALUE, as in
+# `CMD_INPUT="sh -c '…'" python3 x` — has no shell in command position and is
+# therefore left alone rather than over-blocked.
+# Both streams feed ONE grep as two lines (`^` anchors per-line).
+# The probe covers BOTH streams, because stripping only exposes a -c payload for
+# the four interpreters bash_context_strip calls shells. For every other route to
+# the same nested shell — ksh/ash/`busybox sh`, `exec sh -c`, `eval sh -c`,
+# `timeout 5 sh -c`, `xargs -I{} sh -c`, `printf … | sh` — the payload is instead
+# BLANKED as an ordinary quoted argument, so the stripped view holds no evidence
+# and only the raw text still carries it. All were measured escaping at exit 0.
+# Gating neutralisation on a shell in COMMAND position is what makes doing this
+# to raw text safe: `echo "git clean -fd"`, `grep -rn 'git clean' docs/` and an
+# assignment VALUE (`CMD_INPUT="sh -c '…'" python3 x`) have no shell there and
+# are left untouched, so the :1979 warning against a class-widened anchor is
+# respected. `$` in the anchor's tail covers a trailing pipe target (`… | sh`).
+_GC_PROBE=''
+case "$COMMAND$COMMAND_CONTEXT_STRIPPED" in
+  *clean*)
+    if printf '%s\n%s\n' "$COMMAND" "$COMMAND_CONTEXT_STRIPPED" \
+       | grep -qE "$_GC_SHELL_RE|$_GC_EXECCTX_RE"; then
+      _GC_PROBE="${COMMAND//\"/ }"$'\n'"${COMMAND_CONTEXT_STRIPPED//\"/ }"
+      _GC_PROBE="${_GC_PROBE//\'/ }"
+      # Neutralisation is done TWICE, quote->space and quote->nothing, because
+      # the two disagree on exactly the spellings that hid a deletion: replacing
+      # `-c foo.bar="baz"` with a space splits the value into a bare token no
+      # branch consumes, while removing the quote restores the plain inline
+      # spelling the grammar already covers. Conversely quote->space is the only
+      # one that keeps `'x'"git clean -fd"` from fusing into an unmatchable word.
+      # Both are scanned; either matching is enough, so neither can lose a form
+      # the other sees.
+      _GC_PROBE="${_GC_PROBE}"$'\n'"${COMMAND//\"/}"$'\n'"${COMMAND_CONTEXT_STRIPPED//\"/}"
+      _GC_PROBE="${_GC_PROBE//\'/}"
+    fi
+    ;;
+esac
+_GIT_CLEAN_FAIL_CLOSED=0
+if [ "$_GIT_CLEAN_HAS_INV" != "1" ] && \
+   printf '%s\n%s\n%s\n' "$COMMAND" "$COMMAND_CONTEXT_STRIPPED" "$_GC_PROBE" \
+     | grep -qE "$_GIT_CLEAN_FALLBACK_RE"; then
+  _GIT_CLEAN_FAIL_CLOSED=1
+fi
+# Grant channel 4 of 4 — the subagent side of /do consent — is the ONLY one of
+# the four that sits DOWNSTREAM of this deny (the subagent-history block below,
+# where lane r03-c's pre-clean WIP snapshot guard runs). Denying here would
+# preempt that snapshot and make an explicit human grant weaker on this channel
+# than on the other three, contrary to the rule's contract.
+_GIT_CLEAN_WOULD_BLOCK=0
+if { [ "$_GIT_CLEAN_HAS_INV" = "1" ] && [ "$_GIT_CLEAN_VERDICT" != "ALLOW" ]; } || \
+   [ "$_GIT_CLEAN_FAIL_CLOSED" = "1" ]; then
+  _GIT_CLEAN_WOULD_BLOCK=1
+fi
+# Consulted ONLY on the verge of denying, so the ordinary subagent command pays
+# no extra subprocess for a grant lookup it will never use.
+#
+# SINGLE READ (authorized 2026-08-09; closes codex 2026-08-08 finding 4). The
+# marker is mutable — stop-cleanup-allowlist.sh unlinks it — so it is observed
+# ONCE and acted on at that observation. This branch used to set a flag and
+# fall through to the subagent-history block, which re-read the marker; a clean
+# that passed the first read and lost the second reached the terminal
+# default-allow having passed NO snapshot guard and no deny. Acting here does
+# not shorten that interval, it removes it: the downstream re-read is now
+# unreachable for a destructive clean. Same destination — grant exit 4 of 4
+# runs this identical guard and exits 0, and nothing executes in between.
+if [ "$_GIT_CLEAN_WOULD_BLOCK" = "1" ] && [ "$IS_SUBAGENT" = "1" ]; then
+  _GC_SID=$(echo "$INPUT" | "$PYTHON_BIN" -c \
+    "import json,sys; d=json.load(sys.stdin); print(d.get('session_id',''))" 2>/dev/null)
+  if [ -n "$_GC_SID" ] && [ -e "/tmp/claude-orchestrator-consent-${_GC_SID}.flag" ]; then
+    _preclean_snapshot_guard
+    exit 0
+  fi
+fi
+if [ "$_GIT_CLEAN_WOULD_BLOCK" = "1" ]; then
+  echo "BLOCKED: destructive 'git clean' is forbidden in agent flow" >&2
+  echo "Command: $COMMAND" >&2
+  echo "REASON: git clean removes UNTRACKED files — no rm, no reflog, no reachable git object, so the deletion is unrecoverable and leaves no trace. Uncommitted work-in-progress has been lost this way." >&2
+  case "$_GIT_CLEAN_VERDICT" in
+    BLOCK:trust)
+      echo "DETAIL: the argument region is not a provable literal (quoting, backslash, \$-expansion, brace, ~, ^, or an argument-injecting xargs wrapper), so what git receives cannot be proven to match what was inspected." >&2
+      echo "Re-run the preview unquoted and unexpanded, or ask the user for a grant." >&2
+      ;;
+    BLOCK:exclude)
+      echo "DETAIL: a separate-value exclude (-e, a cluster ending in 'e', or --e..--exclude) consumes the NEXT token as its pattern, so a following -n is not a dry-run." >&2
+      echo "Use the self-contained form '--exclude=<pattern>' alongside -n." >&2
+      ;;
+    BLOCK:nested)
+      echo "DETAIL: the command carries MORE 'git clean' occurrences than can be resolved into invocations — at least one is inside a nested shell payload, so it cannot be proven non-destructive even though another clean in the same command is a dry-run." >&2
+      echo "Issue the dry-run preview on its own, without the nested shell." >&2
+      ;;
+    *)
+      if [ "$_GIT_CLEAN_FAIL_CLOSED" = "1" ]; then
+        echo "DETAIL: a 'git clean' subcommand is present but could not be resolved into a provable invocation (a wrapper prefix such as 'env -i' / 'command --' / 'time -p', or a nested shell payload such as \"sh -c '…'\"); failing closed." >&2
+      else
+        echo "DETAIL: the EFFECTIVE dry-run state is OFF for at least one clean invocation (negation is last-wins; tokens after '--' are pathspecs, not flags)." >&2
+      fi
+      ;;
+  esac
+  echo "Allowed: a provable dry-run preview — 'git clean -n', 'git clean -nd', 'git clean -n --exclude=build'." >&2
+  echo "Escape: the user can authorize this specific command via /do consent or an /allow grant." >&2
+  exit 2
+fi
+
 # Block: subagent-initiated git history mutation (2026-04-23 incident)
 # Subagents have weak context and cannot reliably know whether the user has consented.
 # All git history changes by subagents must be surfaced to the user instead.
@@ -1745,6 +2335,14 @@ if [ "$IS_SUBAGENT" = "1" ]; then
   # /do bypass (2026-04-25): user has explicitly consented via /do — allow subagent history mutation
   SID=$(echo "$INPUT" | "$PYTHON_BIN" -c "import json,sys; d=json.load(sys.stdin); print(d.get('session_id',''))" 2>/dev/null)
   if [ -n "$SID" ] && [ -e "/tmp/claude-orchestrator-consent-${SID}.flag" ]; then
+    # Grant exit 4 of 4 — the subagent side of the /do channel. A subagent with
+    # /do and no matching sentinel is filtered out of the main /do exit, misses
+    # the sentinel exit and is firewalled out of legacy /allow, so it lands here
+    # and previously reached exit 0 with a destructive clean UNSNAPSHOTTED. The
+    # guard intercepts ONLY destructive `git clean`; every other subagent-/do
+    # command still exits 0 unchanged (the revert/cherry-pick/rebase bypass this
+    # exit was built for is untouched).
+    _preclean_snapshot_guard
     exit 0
   fi
   # Narrowed (2026-05-14): commit|merge|push are fully covered by

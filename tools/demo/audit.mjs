@@ -29,7 +29,8 @@
 import { readFileSync, existsSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
-import { resolve, isAbsolute } from 'node:path';
+import { resolve, isAbsolute, dirname, basename, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 const KINDS = new Set(['input', 'attempt', 'artifact', 'verdict', 'condensation', 'adaptation']);
 const TYPING_KINDS = new Set(['input', 'attempt']); // the only kinds where a prefix reveal is allowed
@@ -187,6 +188,7 @@ const stripChildren = (s) => s.replace(/<[^>]*>/g, ''); // drop nested <set>/<an
 const byId = new Map(lines.map((l) => [l.id, l]));
 
 const traceSeq = [];
+const traceGeom = []; // {id, x, text, kind} — feeds the rendered-width/clipping assertion
 const stageLabels = [];
 let footerText = null, titleText = null;
 let m;
@@ -199,6 +201,8 @@ while ((m = textRe.exec(svg))) {
     if (!ln) { V(`SVG text data-trace-id="${id}" not present in manifest`); continue; }
     const txt = nfc(unesc(m[2]));
     const want = nfc(ln.text);
+    const xAttr = parseFloat(a['x']);
+    traceGeom.push({ id, x: Number.isFinite(xAttr) ? xAttr : null, text: want, kind: nfc(ln.kind) });
     if (TYPING_KINDS.has(ln.kind)) {
       // typing reveal: full text, or an exact prefix captured mid-type
       if (txt !== want && !want.startsWith(txt)) V(`${id}: rendered text is not an exact prefix of manifest text`);
@@ -243,6 +247,253 @@ for (let i = 0; i < Math.min(traceSeq.length, expected.length); i++) {
 }
 for (const id of ids) if (!traceSeq.includes(id)) V(`manifest id "${id}" has no <text data-trace-id> in SVG`);
 
+// ---------- rendered-width / clipping detection ----------
+// The renderer lays every transcript line on a FIXED MONOSPACE GRID, so a line's rendered
+// right edge is exactly linear in its character count and is computable here without a
+// browser. Anything past the asset's own viewBox width is cut off by the SVG viewport.
+// Nothing else in this file could see that: the manifest text and the SVG text still match
+// byte-for-byte, so a load-bearing proof line was published cut mid-path while this auditor
+// reported "17 source-verified, 0 warned". Provenance was intact; the RENDERING was not.
+//
+// The ledger below records clipping that is known, itemised and accepted for now — never
+// clipping that is hidden. A line the manifest classifies as `verdict` carries the
+// demonstration's proof and may NEVER be ledgered: that is the difference between
+// disclosing a defect and blessing one.
+//
+// NOT CHECKED — THE TRANSFORM STACK. The right edge above, and the advance cross-check below,
+// are both computed in the measured text's own user space and compared against the ROOT viewBox
+// width, which silently assumes an identity transform from that text up to the root. A static
+// transform on a line's ancestor scales position, type and advance together, so it relocates the
+// rendering without disturbing any ratio checked here. Measured, not hypothesised: hook-hero
+// declaring advance 1 with root font-size 1.667 and rail pitch 1 — every corroborator honest and
+// agreeing — plus transform="scale(9)" on the line groups, in-group coordinates divided by 9 and
+// the <animateTransform> elements removed, passes --strict with ZERO diagnostics while Chromium
+// renders 9 of 16 lines outside its 400px viewBox, 4 of them kind "verdict", at a glyph-box height
+// of 18 — IDENTICAL to the honest control. Readable type, proof lines cut off. The committed assets
+// are shielded from that particular construction only incidentally, and only PARTIALLY: an
+// <animateTransform attributeName="transform"> on a line group REPLACES the static attribute, and
+// hook-hero carries one on all 16 of its groups — but pipeline-hero carries them on 10 of 15 and
+// guard-hero on 14 of 17. Measured: ADDING a single transform="translate(1000 6)" to committed
+// pipeline-hero's unanimated s05 group renders that line's right edge at 1094 past its own 960
+// panel while --strict still exits 0 — nothing removed, nothing rescaled, one attribute. All 8
+// unanimated groups across the two assets carry typing-reveal kinds (input/attempt), so cutting a
+// kind "verdict" line still requires removing an animation as above. Protection is a property of
+// those assets, not of this auditor. Closing it needs the assertion to accumulate the ancestor
+// transform chain, or to refuse a static transform on a measured line's ancestors the way font
+// animation is refused below. NOT closed here.
+const vbMatch = svg.match(/viewBox="0 0 (\d+(?:\.\d+)?) (\d+(?:\.\d+)?)"/);
+const LOGICAL_W = vbMatch ? parseFloat(vbMatch[1]) : null;
+
+// Character advance is DERIVED from the asset, not assumed: a typing clip reveals its line
+// in whole-character steps, so the first positive step is exactly one character advance.
+const deriveAdvance = () => {
+  const m2 = svg.match(/<animate attributeName="width"[^>]*values="([^"]+)"/);
+  if (!m2) return null;
+  const vals = m2[1].split(';').map(Number).filter((v) => Number.isFinite(v));
+  for (let i = 1; i < vals.length; i++) if (vals[i] - vals[i - 1] > 0) return vals[i] - vals[i - 1];
+  return null;
+};
+const ADV = deriveAdvance();
+
+// ---------- advance cross-check: the asset must not supply the ruler that measures it ----------
+// The clipping assertion below measures with a unit READ FROM THE ASSET UNDER TEST, so an asset
+// that declares a too-small advance reports itself un-clipped. That is fail-OPEN, and it was
+// proven end-to-end: a 16-line asset cutting 9 lines, 4 of them kind "verdict", declaring an
+// advance of 1 instead of 9, audited clean — exit 0, zero clipping diagnostics. A detector an
+// asset can blind is not a detector.
+//
+// The declared advance is therefore corroborated against sources the asset cannot restate
+// without visibly destroying itself, none of which is the declaration:
+//   (a) the font-size IN EFFECT ON THE MEASURED LINE TEXT — a monospace advance is a fixed
+//       fraction of the em, so shrinking the advance means shrinking the type to match, to a
+//       size no one can read IN THAT TEXT'S OWN USER SPACE. That qualifier is load-bearing and
+//       was previously omitted: this corroborator checks a RATIO, and a ratio survives an
+//       ancestor transform that scales type and advance together, so it does NOT establish that
+//       the reader sees small type — see the transform-stack note above. Resolved through the
+//       cascade, never read off the root: see lineFontSizes() below for the proven attack that
+//       reading the root alone let through;
+//   (b) the stage-rail pitch — consecutive rail label x positions divided by the label's own
+//       character count, where the label TEXT is already pinned to the manifest above. Present
+//       in every asset, including those with no typed line, which is exactly the case the
+//       proven attack used;
+//   (c) the first typing-reveal clip step, when the asset has a typed line.
+// Disagreement with any corroborator is a HARD violation: it is an attack signature, not a
+// degradation. Having NO corroborator is a provenance downgrade, so --strict escalates it.
+// This validates the assertion's INPUT; the assertion itself is untouched.
+const MONO_RATIO_MIN = 0.45, MONO_RATIO_MAX = 0.80; // ui-monospace/Menlo/Consolas sit at ~0.6
+const RAIL_GUTTER_COLS = 3;                         // gen-svg: rx += label.length*ADV + 3*ADV
+const firstStep = (csv) => {
+  const vals = String(csv).split(';').map(Number).filter((v) => Number.isFinite(v));
+  for (let i = 1; i < vals.length; i++) if (vals[i] - vals[i - 1] > 0) return vals[i] - vals[i - 1];
+  return null;
+};
+// The font-size governing the text the clipping check MEASURES, resolved through the SVG
+// cascade rather than read off the root. font-size INHERITS, so a declaration on a <text>
+// element — or on any enclosing <g> — overrides the root attribute. Reading the root alone
+// was fail-OPEN and was proven so: an asset declaring a root font-size of 1.667 while pinning
+// its 16 line elements back to font-size 15 satisfied this corroborator with its type at full
+// readable size, and audited clean — exit 0, "0 warned", zero clipping diagnostics — while a
+// browser measured that same text at 15px and 9 of 16 lines, 4 of them kind "verdict",
+// genuinely overflowed the panel. The forger was NOT forced to shrink anything: the root
+// attribute is a declaration about nothing, and the corroborator has to read the size the
+// measured text actually renders at.
+// A declaration is either a resolvable px length, or NaN meaning "declared in something this
+// walk will not resolve". NaN is not a parse nicety: font-size="9em" against a root of 1.667
+// renders at 15px, and a regex that quietly skipped the unit-bearing value fell back to the
+// inherited size and let exactly the original forgery through again — proven, 9 of 16 lines
+// overflowing. Units are refused, never guessed.
+const FS_ATTR = /\bfont-size\s*=\s*"([^"]*)"/;
+const FS_STYLE = /\bstyle\s*=\s*"[^"]*?\bfont-size\s*:\s*([^;"]*)/;
+const PX_ONLY = /^\s*([\d.]+)(?:px)?\s*$/;
+const declaredFS = (tag) => {
+  const m = tag.match(FS_STYLE) || tag.match(FS_ATTR); // an inline style beats the attribute
+  if (!m) return null;
+  const px = m[1].match(PX_ONLY);
+  return px ? parseFloat(px[1]) : NaN;
+};
+const lineFontSizes = () => {
+  const out = [], stack = [];
+  const tagRe = /<(\/?)(svg|g|text)\b([^>]*)>/g;
+  let t;
+  while ((t = tagRe.exec(svg))) {
+    if (t[1]) { stack.pop(); continue; }
+    const own = declaredFS(t[3]);
+    const eff = own === null ? (stack.length ? stack[stack.length - 1] : null) : own;
+    if (t[2] === 'text' && /\bdata-trace-id\s*=/.test(t[3])) out.push(eff);
+    if (!/\/\s*$/.test(t[3])) stack.push(eff);
+  }
+  return out;
+};
+const advanceCorroborators = () => {
+  const out = [];
+  // A static walk cannot evaluate SMIL, so an animation retargeting a font attribute makes the
+  // size resolved above a statement about a declaration rather than about what the reader
+  // sees. Proven, not hypothesised: a <set attributeName="font-size" to="15"> on the line group
+  // leaves every static declaration tiny and mutually consistent, yet renders the same 15px
+  // text with the same 9 of 16 lines overflowing that the honest control is refused for.
+  // Refused rather than resolved. The committed assets animate opacity, transform, fill, width
+  // and x — no font attribute at all — so nothing honest is caught here. (A <style> block can
+  // do the same through selectors; self-containment above already refuses those outright.)
+  const fontAnim = svg.match(/<(?:set|animate)\b[^>]*\battributeName="(font[^"]*)"/);
+  if (fontAnim)
+    V(`the asset animates "${fontAnim[1]}", so the font-size resolved from its static ` +
+      `attributes is not the size the reader sees — the advance cross-check is refused rather ` +
+      `than measured against a declaration the asset moves out from under it at runtime`);
+  // textLength makes the asset STATE its own rendered advance, overriding the glyph metrics
+  // this whole check reasons from — the ruler substitution in its purest form. Proven: tiny
+  // 1.667px type with textLength="600" renders every one of 16 lines out to 667px past a
+  // 400px panel while every font-size corroborator agrees with a declared advance of 1.
+  if (/<text\b[^>]*\bdata-trace-id[^>]*\b(textLength|lengthAdjust)=/.test(svg)
+      || /<text\b[^>]*\b(?:textLength|lengthAdjust)=[^>]*\bdata-trace-id/.test(svg))
+    V('a measured line sets textLength/lengthAdjust, which overrides glyph advance with a ' +
+      'width the asset declares for itself — the clipping check cannot measure a line that ' +
+      'states its own width, so it is refused');
+  const fsRaw = lineFontSizes();
+  if (fsRaw.some((v) => Number.isNaN(v)))
+    V('a measured line declares its font-size in units this cross-check will not resolve ' +
+      '(em, %, pt or similar) — refused rather than silently falling back to the inherited ' +
+      'size, which is how the original forgery passed');
+  const fsAll = fsRaw.filter((v) => Number.isFinite(v) && v > 0);
+  const fsUniq = [...new Set(fsAll)];
+  if (fsUniq.length > 1)
+    V(`the measured line text does not share a single font-size (${fsUniq.join('px, ')}px), so ` +
+      `no one character advance can describe this asset and the clipping check below would ` +
+      `measure most of its lines with the wrong ruler`);
+  const rootM = svg.match(/<svg\b[^>]*>/);
+  // Lines present ⇒ their own effective size is the only honest ruler. No lines at all ⇒ the
+  // clipping check is vacuous anyway, so the root declaration is all there is to corroborate.
+  const fs = fsUniq.length === 1 ? fsUniq[0] : (fsAll.length ? null : (rootM ? declaredFS(rootM[0]) : null));
+  if (fs > 0) out.push({ src: `the font-size in effect on the measured line text (${fs}px)`,
+                         lo: fs * MONO_RATIO_MIN, hi: fs * MONO_RATIO_MAX,
+                         implies: `${(fs * MONO_RATIO_MIN).toFixed(2)}–${(fs * MONO_RATIO_MAX).toFixed(2)}px` });
+  const xs = [...svg.matchAll(/<text data-role="stage" x="([\d.]+)"/g)].map((r) => parseFloat(r[1]));
+  if (xs.length >= 2 && RAIL.length >= 2 && xs[1] > xs[0]) {
+    const pitch = (xs[1] - xs[0]) / (RAIL[0].length + RAIL_GUTTER_COLS);
+    if (pitch > 0) out.push({ src: `the stage-rail pitch (labels "${RAIL[0]}" at x=${xs[0]}, "${RAIL[1]}" at x=${xs[1]})`,
+                              lo: pitch - 1e-6, hi: pitch + 1e-6, implies: `${pitch}px` });
+  }
+  const clipM = svg.match(/<clipPath\b[^>]*>[\s\S]*?<animate attributeName="width"[^>]*values="([^"]+)"/);
+  const clipStep = clipM ? firstStep(clipM[1]) : null;
+  if (clipStep > 0) out.push({ src: 'the first typing-reveal clip step',
+                               lo: clipStep - 1e-6, hi: clipStep + 1e-6, implies: `${clipStep}px` });
+  return out;
+};
+if (ADV) {
+  const corroborators = advanceCorroborators();
+  if (!corroborators.length) {
+    W(`the declared character advance (${ADV}px) could not be corroborated by any independent ` +
+      `source in this asset, so clipping below is measured with an un-cross-checked ruler`);
+  }
+  for (const c of corroborators) {
+    if (ADV < c.lo || ADV > c.hi) {
+      V(`declared character advance ${ADV}px disagrees with ${c.src}, which implies ` +
+        `${c.implies}. The clipping check measures with the advance the asset declares, so a ` +
+        `false advance hides real clipping — a disagreeing declaration is refused, not used`);
+    }
+  }
+}
+
+const ledgerPath = join(dirname(fileURLToPath(import.meta.url)), 'known-clipped-ledger.json');
+let ledgerEntries = [];
+if (existsSync(ledgerPath)) {
+  try {
+    const all = JSON.parse(readFileSync(ledgerPath, 'utf8'));
+    ledgerEntries = ((all.assets || {})[basename(svgPath)]) || [];
+    if (!Array.isArray(ledgerEntries)) { V('known-clipped ledger: asset entry is not an array'); ledgerEntries = []; }
+  } catch (e) { V(`known-clipped ledger is unreadable or invalid JSON: ${e.message}`); }
+}
+
+const clipped = [];
+if (LOGICAL_W === null) W("asset logical width (viewBox) could not be parsed — clipping NOT checked");
+else if (!ADV) W('character advance could not be derived from the asset — clipping NOT checked');
+else {
+  for (const g of traceGeom) {
+    if (g.x === null) { W(`${g.id}: text node has no numeric x — clipping NOT checked for this line`); continue; }
+    const right = g.x + g.text.length * ADV;
+    if (right <= LOGICAL_W) continue;
+    const visible = Math.max(0, Math.floor((LOGICAL_W - g.x) / ADV));
+    clipped.push({ id: g.id, kind: g.kind, chars: g.text.length, right,
+                   lost: g.text.slice(visible), visibleEndsAt: g.text.slice(0, visible).slice(-6) });
+  }
+}
+
+// (1) Every ledger entry must itself be legitimate.
+const clippedById = new Map(clipped.map((c) => [c.id, c]));
+for (const e of ledgerEntries) {
+  const id = e && e.trace_id;
+  const ln = byId.get(id);
+  if (!ln) { V(`known-clipped ledger names "${id}", which is absent from the manifest`); continue; }
+  if (nfc(ln.kind) === 'verdict') {
+    V(`known-clipped ledger contains "${id}", which the manifest classifies as kind "verdict" — ` +
+      `a verdict line carries the demonstration's proof and may never be ledgered as acceptably clipped`);
+  }
+  if (typeof e.lost_text !== 'string') V(`known-clipped ledger entry "${id}" has no lost_text`);
+  if (!e.restoration_condition || !String(e.restoration_condition).trim())
+    V(`known-clipped ledger entry "${id}" has no restoration_condition`);
+  const c = clippedById.get(id);
+  if (!c) V(`known-clipped ledger entry "${id}" is stale: that line no longer overflows the logical width`);
+  else if (typeof e.lost_text === 'string' && nfc(e.lost_text) !== nfc(c.lost))
+    V(`known-clipped ledger entry "${id}": lost_text does not match what is actually cut off ` +
+      `(ledger "${e.lost_text.slice(0, 48)}", measured "${c.lost.slice(0, 48)}")`);
+}
+
+// (2) Every clipped line is itemised with the exact substring it loses. Unledgered ones are
+//     provenance downgrades, so --strict escalates them into hard violations centrally below.
+const ledgerIds = new Set(ledgerEntries.map((e) => e && e.trace_id));
+for (const c of clipped) {
+  const detail = `${c.id}: rendered text overflows the asset's logical width ` +
+    `(${c.chars} chars, right edge ${Math.round(c.right)}px > ${LOGICAL_W}px); ` +
+    `${c.lost.length} characters are cut off after "…${c.visibleEndsAt}": "${c.lost}"`;
+  if (ledgerIds.has(c.id)) continue;
+  if (c.kind === 'verdict') {
+    W(`${detail} — this line is kind "verdict", so it can NEVER be ledgered away; the ` +
+      `clipping itself must be removed (shorten the emitting source, or give the renderer ` +
+      `room for ${Math.ceil(c.right)}px) before this asset can pass --strict`);
+  } else {
+    W(`${detail} — and it is ABSENT from the known-clipped ledger`);
+  }
+}
+
 // ---------- strict-mode escalation (opt-in) ----------
 // In --strict, EVERY provenance downgrade (any warning recorded by W(), present OR future)
 // becomes a hard violation. Implemented centrally here at the verdict — the individual W()
@@ -256,6 +507,16 @@ if (STRICT && warnings.length) {
 
 // ---------- verdict ----------
 const bytes = Buffer.byteLength(svg, 'utf8');
+// Clipping is ALWAYS itemised, on pass and on fail alike — a counted-but-unnamed defect is
+// how this went unnoticed before. Each line names the exact substring the reader never sees.
+if (clipped.length) {
+  const say = violations.length ? console.error : console.log;
+  say(`  clipped (${clipped.length} of ${traceGeom.length} lines exceed the ${LOGICAL_W}px logical width):`);
+  for (const c of clipped) {
+    const led = ledgerIds.has(c.id) ? 'ledgered' : 'NOT ledgered';
+    say(`    ! ${c.id} [${c.kind}] loses ${c.lost.length} chars (${led}): "${c.lost}"`);
+  }
+}
 if (violations.length) {
   console.error(`AUDIT FAIL (${violations.length} violation${violations.length === 1 ? '' : 's'}):`);
   for (const v of violations) console.error('  - ' + v);

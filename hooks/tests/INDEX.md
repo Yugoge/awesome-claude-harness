@@ -1,13 +1,16 @@
 # tests
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-07-21T13:59:50Z*
-**Total entries**: 26
+*Last updated: 2026-09-03T17:54:16Z*
+**Total entries**: 39
 **Convention**: kebab
 
 ## Tree
 ```
 tests/
+├── fixtures/
+│   ├── `adversarial_corpus.json` - json config
+│   └── `overwrite_corpus.json` - JSON config: schema_version, task_id, guard, driver, documentation
 ├── `test_ac10_verify.sh` - Shell script
 ├── `test_ac1_verify.sh` - Shell script
 ├── `test_ac3_verify.sh` - Shell script
@@ -17,15 +20,25 @@ tests/
 ├── `test_allowlist_consolidation.py` - Covers AC8 IS_SUBAGENT firewall scenarios and matching semantics invariants
 ├── `test_bash_safety_context.py` - Tests strip_non_executable_contexts() in isolation, covering the main
 ├── `test_bash_safety_context_rules.py` - converted to COMMAND_CONTEXT_STRIPPED in hooks/pretool-bash-safety.sh
+├── `test_bash_safety_git_clean.py` - hooks/pretool-bash-safety.sh (task dev-20260719-150041-a, lane r01-a)
+├── `test_blackbox_integration.py` - WHAT THIS PROVES, AND WHAT IT EXPLICITLY DOES NOT
 ├── `test_block_branch_pr_worktree.py` - The hook forbids branch / PR / worktree CREATION on the Bash surface, with three
 ├── `test_bulk_commit_sentinel.py` - Covers:
+├── `test_capability_gate.py` - Every test drives the real artefacts: the library, the PreToolUse gate hook as a
+├── `test_commit_journal.py` - attribution basis
 ├── `test_cp_checkin.py` - of ba-spec-20260427-194324.md (P1 view-trigger removal + P2 generation field)
 ├── `test_do_taskid_mint.py` - Covers the root-cause fix for the do-report task-id collision (memory
+├── `test_dual_runtime_lifecycle_e2e.py` - Real-entrypoint regressions for single-owner ordinary dev lifecycle.
 ├── `test_extract.py` - Unit tests for hooks/doc_sync/extract.py — covers all 4 defects + known-file cases.
 ├── `test_fail_closed_drift.py` - WHY THIS FILE EXISTS
 ├── `test_final_sweep.sh` - Final sweep — run inline AC checks and print PASS/FAIL summary.
 ├── `test_git_cmd_cross_consistency.py` - Verifies that GIT_CMD_RE (hooks/pretool-bash-safety.sh),
+├── `test_git_prefix_enumeration.py` - THE DEFECT
+├── `test_git_residual_override.py` - Background
+├── `test_overwrite_guard.py` - Every assertion drives the REAL guard as a subprocess over a synthetic
+├── `test_posttool_commit_grant_finalize.py` - hooks/posttool-allowlist-consume.py, and for the pointer WRITE side in
 ├── `test_push_sentinel_abort.sh` - Unit test for AC1 V5: hooks/push.sh self-aborts before any real git push
+├── `test_residual_false_positives.py` - Context (task 20260903-residual-fp). `classify_git_command()` returns a
 ├── `test_runtime_guard.py` - Two layers:
 ├── `test_unit_anchor.py` - Imports the anchor sibling module DIRECTLY (not via the _core facade) and
 ├── `test_unit_config.py` - Imports the config sibling module DIRECTLY (not via the _core facade) and

@@ -1,0 +1,113 @@
+#!/usr/bin/env bash
+# install — install the Claude Code harness WITHOUT taking over your Claude home.
+#
+# Usage:
+#   scripts/install/install [--profile core] [--dry-run]
+#                           [--prefix <dir>] [--config-dir <dir>]
+#                           [--allow-unprotected] [--matrix <file>] [--json]
+#
+#   --profile <name>      Component profile to install. Default: core (minimal).
+#   --dry-run             Print the exact change plan and write NOTHING.
+#   --prefix <dir>        Installer data directory. The isolated harness root is
+#                         <prefix>/harness. Default: $XDG_DATA_HOME/claude-harness
+#                         or ~/.local/share/claude-harness.
+#   --config-dir <dir>    Your Claude config home. Overrides detection, which is
+#                         ${CLAUDE_CONFIG_DIR:-$HOME/.claude} — the same expression
+#                         this repo's own permission hook uses.
+#   --require-handshake   Refuse to install unless the host-capability handshake
+#                         returns a fresh PASS. Off by default: a host that has
+#                         never installed the harness cannot pass a handshake for
+#                         components it does not have yet. A failing handshake is
+#                         always printed as a persistent UNPROTECTED HOST verdict
+#                         and recorded in the install inventory.
+#   --json                Machine-readable output.
+#
+# Exit codes: 0 = success
+#             1 = failure (install crashed, I/O error)
+#             2 = preflight / refusal — NOTHING was written. The preflight runs
+#                 strictly before the first mutation, and so does the engine's
+#                 refusal when a MANDATORY footprint entry cannot be honoured.
+#             3 = partial — a mutation occurred and something was deliberately
+#                 retained (an opted-in partial install via --allow-partial-install).
+#             The engine's exit code is propagated unchanged.
+#
+# WHAT THIS DOES NOT DO: it does not clone anything over your Claude home, it does
+# not render your settings.json from a template, and it does not take ownership of
+# any file it did not create. Everything it puts in your config home is enumerated
+# in the profile's live_footprint and removable with scripts/install/uninstall.
+set -uo pipefail
+
+SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+SOURCE_DIR="$(cd "$SELF_DIR/../.." && pwd -P)"
+
+PROFILE="core"
+DRY_RUN=0
+REQUIRE_HANDSHAKE=0
+JSON=0
+MATRIX=""
+PASS=()
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --profile) PROFILE="${2:?--profile needs a name}"; shift 2 ;;
+    --dry-run) DRY_RUN=1; shift ;;
+    --prefix) PASS+=(--prefix "${2:?--prefix needs a directory}"); shift 2 ;;
+    --config-dir) PASS+=(--config-dir "${2:?--config-dir needs a directory}"); shift 2 ;;
+    --profile-file) PASS+=(--profile-file "${2:?--profile-file needs a file}"); shift 2 ;;
+    --source) SOURCE_DIR="${2:?--source needs a directory}"; shift 2 ;;
+    --matrix) MATRIX="${2:?--matrix needs a file}"; shift 2 ;;
+    --require-handshake) REQUIRE_HANDSHAKE=1; shift ;;
+    --allow-partial-install) PASS+=(--allow-partial-install); shift ;;
+    --json) JSON=1; shift ;;
+    -h|--help) sed -n '2,38p' "${BASH_SOURCE[0]}"; exit 0 ;;
+    *) echo "install: unknown argument '$1'" >&2; exit 1 ;;
+  esac
+done
+
+PY="${CLAUDE_PYTHON_BIN:-python3}"
+ENGINE="$SELF_DIR/installer.py"
+PRE="$SELF_DIR/preflight"
+PRE_ARGS=(--source "$SOURCE_DIR")
+[ -n "$MATRIX" ] && PRE_ARGS+=(--matrix "$MATRIX")
+[ "$REQUIRE_HANDSHAKE" -eq 1 ] && PRE_ARGS+=(--require-handshake)
+PASS+=(--profile "$PROFILE" --source "$SOURCE_DIR")
+[ "$JSON" -eq 1 ] && PASS+=(--json)
+
+HANDSHAKE_RESULT_FILE="$(mktemp)"
+export HANDSHAKE_RESULT_FILE
+cleanup() { rm -f "$HANDSHAKE_RESULT_FILE"; }
+trap cleanup EXIT
+
+# ── PREFLIGHT — strictly before any mutation ────────────────────────────────── #
+if [ "$DRY_RUN" -eq 1 ]; then
+  # A dry run writes nothing, so aborting would protect nothing and would hide the
+  # very plan the user asked to see. The preflight still RUNS and its verdict is
+  # still printed; it just does not block a read-only preview.
+  echo "=== preflight (advisory for --dry-run; a real apply aborts on failure) ==="
+  "$PRE" "${PRE_ARGS[@]}"
+  PRE_RC=$?
+  if [ "$PRE_RC" -ne 0 ]; then
+    echo "" >&2
+    echo "install: preflight reported failures — a REAL apply would ABORT here and write nothing." >&2
+  fi
+  echo ""
+  "$PY" "$ENGINE" plan "${PASS[@]}"
+  exit $?
+fi
+
+echo "=== preflight ==="
+if ! "$PRE" "${PRE_ARGS[@]}"; then
+  echo "" >&2
+  echo "install: preflight FAILED — aborting before any change. Nothing was written." >&2
+  exit 2
+fi
+echo ""
+
+# Record the handshake verdict in the install inventory: an install performed on an
+# unprotected host must stay auditable after the terminal output has scrolled away.
+# shellcheck source=/dev/null
+[ -s "$HANDSHAKE_RESULT_FILE" ] && . "$HANDSHAKE_RESULT_FILE"
+export HARNESS_INSTALL_HANDSHAKE="${HARNESS_INSTALL_HANDSHAKE:-unknown}"
+
+"$PY" "$ENGINE" apply "${PASS[@]}"
+exit $?

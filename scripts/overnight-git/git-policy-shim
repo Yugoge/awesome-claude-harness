@@ -3,14 +3,20 @@
 #
 # SEPARATE from the modern-git selector (git-selector) per codex round-2 #7:
 # the selector puts a pinned >=2.46 git first on PATH; THIS shim refuses
-# main-root / master ops for an overnight actor. Relaxing the policy must never
-# drop the selector, hence two files.
+# main-root / protected-branch ops for an overnight actor. Relaxing the policy
+# must never drop the selector, hence two files.
+#
+# The protected branch is NEVER a literal and NEVER a fixed enumeration of
+# names: it is resolved at decision time from the overnight session-state
+# record(s) (M3-RESOLUTION, M5-NO-ENUMERATION). When it cannot be resolved the
+# shim FAILS CLOSED on branch-protection decisions (M4).
 #
 # Installed (named `git`) on the overnight actor's PATH ahead of system git via
 # the selector dir. Catches normal `git ...` and python subprocess(["git",...])
 # whose argv resolves by BASENAME to `git`. It resolves -C / --git-dir /
 # --work-tree / GIT_DIR / GIT_WORK_TREE to an effective target and REFUSES
-# when that target resolves to MAIN_ROOT or the op touches master/branch-switch.
+# when that target resolves to MAIN_ROOT or the op touches the resolved
+# protected branch / a branch-switch.
 #
 # Activation: only when CLAUDE_OVERNIGHT_ACTOR=1 AND CLAUDE_OVERNIGHT_MAIN_ROOT
 # is set. Otherwise it is a transparent pass-through to the real git (so it is
@@ -50,9 +56,26 @@ fi
 
 MAIN_ROOT="$(cd "${CLAUDE_OVERNIGHT_MAIN_ROOT}" 2>/dev/null && pwd -P || printf '%s' "${CLAUDE_OVERNIGHT_MAIN_ROOT}")"
 
-_blocked() {
-  echo "OVERNIGHT POLICY SHIM: refused git op targeting the main worktree/master ($1). Overnight actors are confined to the isolated worktree." >&2
+# Every block emits EXACTLY ONE dedicated machine-readable line carrying
+# exactly one `reason=` field and at most one `ref=` field (M4-REASON-TOKENS).
+# The reason token is a CONSTANT — never interpolated from the ref or branch
+# name. Human-readable prose goes on a SEPARATE line so the structured line
+# stays unambiguously parseable.
+_blocked_tok() {
+  # $1 = reason token (constant), $2 = ref verbatim (may be empty), $3 = prose
+  if [ -n "${2:-}" ]; then
+    echo "OVERNIGHT-SHIM-DENY reason=$1 ref=$2" >&2
+  else
+    echo "OVERNIGHT-SHIM-DENY reason=$1" >&2
+  fi
+  echo "OVERNIGHT POLICY SHIM: refused git op ($3). Overnight actors are confined to the isolated worktree." >&2
   exit 2
+}
+# Path/dir-based blocks. These are NOT branch-name decisions; `main_targeting`
+# is the OPTIONAL diagnostic token of M4-REASON-TOKENS and no criterion depends
+# on it. It is emitted for consistency of the structured line only.
+_blocked() {
+  _blocked_tok 'main_targeting' '' "$1"
 }
 
 # Parse the leading git global options to find -C / --git-dir / --work-tree and
@@ -166,8 +189,8 @@ if [ -n "$worktree_target" ] && _targets_main "$worktree_target"; then
   _blocked "--work-tree/GIT_WORK_TREE -> main (writes the main working directory)"
 fi
 
-# Block dangerous/mutating ops that touch master or move HEAD, BUT only when they
-# are main-targeting or move the protected `master` ref — a worktree-local
+# Block dangerous/mutating ops that touch a protected branch or move HEAD, BUT
+# only when they are main-targeting or move a RESOLVED protected ref — a worktree-local
 # checkout/switch/reset is a LEGITIMATE op and is ALLOWED (codex #2/#6: no
 # all-checkout overblocking).
 _op_is_main_targeting="$( _targets_main "$target_dir" && echo 1 || echo 0 )"
@@ -176,22 +199,214 @@ if [ -n "$worktree_target" ] && _targets_main "$worktree_target"; then
   _op_is_main_targeting=1
 fi
 _in_worktree="$( _is_under_a_worktree "$target_dir" && echo 1 || echo 0 )"
-_mentions_master() {
-  for a in "$@"; do
-    case "$a" in
-      master|refs/heads/master) return 0 ;;
+
+# ==========================================================================
+# PROTECTED-BRANCH RESOLUTION (M3-RESOLUTION) — shim copy
+# ==========================================================================
+# Identical semantics to the keystone's resolution, plus candidate root K4
+# (CLAUDE_OVERNIGHT_MAIN_ROOT), which is admissible HERE and not in the
+# keystone: the shim is already wholly inert without that variable (see the
+# activation gate above), so consuming it adds no attack surface the shim does
+# not already have. The union is ADDITIVE ONLY, so K4 can only over-protect.
+#
+# Deliberately INLINED rather than sourced: overnight-git-env.sh installs this
+# file as a SINGLE copy into the actor's policy bindir, so a sibling library
+# would not exist at the install location.
+_OBP_RESOLVED=0        # memo guard: resolve at most ONCE per shim invocation
+_OBP_SET=""            # newline-delimited protected names
+
+_obp_subdirs() {
+  printf '%s\n' '.claude'
+  if [ -n "${OVERNIGHT_STATE_SUBDIR:-}" ] && [ "${OVERNIGHT_STATE_SUBDIR}" != ".claude" ]; then
+    printf '%s\n' "${OVERNIGHT_STATE_SUBDIR}"
+  fi
+}
+# EXCLUDED only when the record declares a NON-NULL isolation_released_at. This
+# is the only subtractive operator in the resolution; no other filter may be
+# added (each would be a subtraction an actor could influence).
+_obp_is_released() {
+  # Anchored to a TOP-LEVEL key (preceded by line start, '{' or ','), so a
+  # nested string that merely mentions the field name cannot make a live record
+  # look released. That direction matters: it is the only SUBTRACTIVE operator
+  # in the resolution, so a false positive here would silently fail OPEN.
+  grep -qE '(^|[{,])[[:space:]]*"isolation_released_at"[[:space:]]*:[[:space:]]*null' "$1" 2>/dev/null && return 1
+  grep -qE '(^|[{,])[[:space:]]*"isolation_released_at"[[:space:]]*:' "$1" 2>/dev/null && return 0
+  return 1
+}
+# Absent field contributes NOTHING (M6 case (ii)) -> empty set -> same
+# fail-closed path as the no-record case.
+_obp_field() {
+  # The value is a JSON string, so it may carry escapes. A naive [^"]* stops at
+  # the first ESCAPED quote and yields a truncated name — which would leave the
+  # real branch unprotected. Match escaped pairs explicitly, then unescape.
+  # (git permits '"' and '\' in a ref name; control-char escapes cannot occur.)
+  sed -n 's/.*"protected_branch"[[:space:]]*:[[:space:]]*"\(\([^"\\]\|\\.\)*\)".*/\1/p' "$1" 2>/dev/null \
+    | head -n1 | sed 's/\\\(.\)/\1/g'
+}
+_obp_scan_root() {
+  local root="$1" sub f val
+  local found=1
+  [ -n "$root" ] && [ -d "$root" ] || return 1
+  while IFS= read -r sub; do
+    [ -n "$sub" ] || continue
+    [ -d "$root/$sub" ] || continue
+    for f in "$root/$sub"/overnight-state-*.json; do
+      [ -f "$f" ] || continue
+      found=0
+      _obp_is_released "$f" && continue
+      val="$(_obp_field "$f")"
+      if [ -n "$val" ]; then
+        _OBP_SET="$_OBP_SET$val
+"
+      fi
+    done
+  done <<EOF
+$(_obp_subdirs)
+EOF
+  return $found
+}
+# Bounded ancestor walk: stops at the filesystem root and at a mount boundary,
+# and cannot follow a symlink out of the tree because it walks a PHYSICAL
+# (pwd -P) path by string truncation rather than by chdir.
+_obp_walk_up() {
+  local start="$1" dir dev0 dev
+  [ -n "$start" ] && [ -d "$start" ] || return 0
+  dir="$(cd "$start" 2>/dev/null && pwd -P)" || return 0
+  [ -n "$dir" ] || return 0
+  dev0="$(stat -c %d "$dir" 2>/dev/null || echo '')"
+  while [ -n "$dir" ]; do
+    dev="$(stat -c %d "$dir" 2>/dev/null || echo '')"
+    if [ -n "$dev0" ] && [ -n "$dev" ] && [ "$dev" != "$dev0" ]; then break; fi
+    _obp_scan_root "$dir" >/dev/null 2>&1 || true
+    [ "$dir" = "/" ] && break
+    dir="${dir%/*}"
+    [ -n "$dir" ] || dir="/"
+  done
+}
+_obp_origin_root() {
+  local url gd
+  url="$("$REAL_GIT" config --get remote.origin.url 2>/dev/null || echo '')"
+  case "$url" in
+    ''|*://*|*@*:*) return 0 ;;
+  esac
+  [ -d "$url" ] || return 0
+  gd="$(cd "$url" 2>/dev/null && pwd -P)" || return 0
+  printf '%s\n' "${gd%/*}"
+}
+_obp_resolve() {
+  [ "$_OBP_RESOLVED" = "1" ] && return 0
+  _OBP_RESOLVED=1
+  local cd_abs k1="" k2_needed=1 k3="" top
+  # K4 — the shim's own activation context.
+  _obp_scan_root "$MAIN_ROOT" >/dev/null 2>&1 || true
+  # K1 — parent of the git common dir (git's own resolution, not cwd/env).
+  cd_abs="$("$REAL_GIT" rev-parse --path-format=absolute --git-common-dir 2>/dev/null || echo '')"
+  if [ -n "$cd_abs" ]; then
+    cd_abs="$(cd "$cd_abs" 2>/dev/null && pwd -P || printf '%s' "$cd_abs")"
+    k1="${cd_abs%/*}"
+    if _obp_scan_root "$k1"; then k2_needed=0; fi
+  fi
+  # K2 — bounded ancestor walk from the repository toplevel.
+  if [ "$k2_needed" = "1" ]; then
+    top="$("$REAL_GIT" rev-parse --path-format=absolute --show-toplevel 2>/dev/null || echo '')"
+    [ -n "$top" ] || top="$(pwd -P 2>/dev/null || echo '')"
+    _obp_walk_up "$top"
+  fi
+  # K3 — the local origin's parent (fresh clone relocated outside main root).
+  k3="$(_obp_origin_root)"
+  [ -n "$k3" ] && _obp_scan_root "$k3" >/dev/null 2>&1
+  return 0
+}
+_obp_set_is_empty() {
+  printf '%s' "$_OBP_SET" | grep -q '[^[:space:]]' && return 1
+  return 0
+}
+# Exact string equality against a value READ FROM THE RECORD — never a pattern,
+# prefix, regex or name shape.
+_obp_is_protected() {
+  local want="$1" name
+  [ -n "$want" ] || return 1
+  while IFS= read -r name; do
+    [ -n "$name" ] || continue
+    [ "$name" = "$want" ] && return 0
+  done <<EOF
+$_OBP_SET
+EOF
+  return 1
+}
+
+# Operand normalisation (M5-OPERANDS). Reduces one argv token to the branch
+# name(s) it can denote, covering the forms the prior literal matcher missed:
+#   bare <N> | refs/heads/<N> | heads/<N> | <N>@{0}
+#   refspecs <N>:<N> | +<N>:refs/heads/<N> | refs/heads/<N>:refs/heads/<N>
+# Every transformation here is a STRUCTURAL ref-namespace normalisation
+# (namespace prefixes and reflog suffixes). None of them inspects the branch
+# NAME, so none is a name-shape gate under AC-7.
+_obp_operand_names() {
+  local a="${1#+}" part rest
+  rest="$a"
+  while [ -n "$rest" ]; do
+    case "$rest" in
+      *:*) part="${rest%%:*}"; rest="${rest#*:}" ;;
+      *)   part="$rest"; rest="" ;;
     esac
+    part="${part%%@\{*}"          # drop a reflog/revision suffix: <N>@{0}
+    case "$part" in
+      refs/heads/*) part="${part#refs/heads/}" ;;
+      heads/*)      part="${part#heads/}" ;;
+    esac
+    [ -n "$part" ] && printf '%s\n' "$part"
+  done
+}
+
+# True iff any argv token denotes a branch in the RESOLVED protected set.
+_mentions_protected() {
+  local a name
+  for a in "$@"; do
+    while IFS= read -r name; do
+      [ -n "$name" ] || continue
+      _obp_is_protected "$name" && return 0
+    done <<EOF
+$(_obp_operand_names "$a")
+EOF
   done
   return 1
+}
+
+# The single branch-protection decision seam. Emits the structured denial and
+# exits; returns normally when the operand set carries no protected name.
+# Fail-closed (M4): an unresolvable protected set blocks the ref-affecting op
+# rather than leaving it silently unprotected.
+_branch_protection_gate() {
+  local subcmd_label="$1"; shift
+  local a name
+  _obp_resolve
+  if _obp_set_is_empty; then
+    _blocked_tok 'unresolved_protected_branch' '' \
+"$subcmd_label — no live overnight session-state record declares a 'protected_branch' (the field is missing, or no record is discoverable under any candidate governing root). Protection cannot be enforced, so the operation is refused rather than left silently unprotected. Remedy: release this session with /stop and relaunch"
+  fi
+  for a in "$@"; do
+    while IFS= read -r name; do
+      [ -n "$name" ] || continue
+      if _obp_is_protected "$name"; then
+        _blocked_tok 'branch_protected' "refs/heads/$name" \
+          "$subcmd_label targeting the protected branch '$name'"
+      fi
+    done <<EOF
+$(_obp_operand_names "$a")
+EOF
+  done
+  return 0
 }
 case "$subcmd" in
   checkout|switch|reset|restore|clean|rebase|merge|cherry-pick|am|pull|stash)
     # A branch/tree mutation. Block when main-targeting, or when the effective
     # dir cannot be proven to be inside an isolated worktree (fail-closed for the
-    # HEAD-moving forms), or when it force-moves master.
-    if [ "$_op_is_main_targeting" = "1" ] || _mentions_master "$@"; then
-      _blocked "$subcmd (main-targeting / master)"
+    # HEAD-moving forms), or when it moves a PROTECTED branch.
+    if [ "$_op_is_main_targeting" = "1" ]; then
+      _blocked "$subcmd (main-targeting)"
     fi
+    _branch_protection_gate "$subcmd" "$@"
     if [ "$_in_worktree" != "1" ] && { [ "$subcmd" = "checkout" ] || [ "$subcmd" = "switch" ] || [ "$subcmd" = "reset" ]; }; then
       # cwd/-C is not provably inside a worktree -> a branch/HEAD move could land
       # on main. Fail closed (the exact 2026-06-03 incident shape).
@@ -199,20 +414,26 @@ case "$subcmd" in
     fi
     ;;
   branch)
-    # Force-move / rename / delete of `master` is a master ref-move -> block.
-    if _mentions_master "$@" || [ "$_op_is_main_targeting" = "1" ]; then
-      for a in "$@"; do
-        case "$a" in
-          -f|-D|-M|--force|--delete|--move) _blocked "branch force/move/delete (master ref-move)" ;;
-        esac
-      done
+    # Force-move / rename / delete of a PROTECTED branch is a ref-move -> block.
+    _br_mutating=0
+    for a in "$@"; do
+      case "$a" in
+        -f|-D|-M|--force|--delete|--move) _br_mutating=1 ;;
+      esac
+    done
+    if [ "$_br_mutating" = "1" ]; then
+      if [ "$_op_is_main_targeting" = "1" ]; then
+        _blocked "branch force/move/delete (main-targeting)"
+      fi
+      _branch_protection_gate "branch force/move/delete" "$@"
     fi
     ;;
   update-ref|symbolic-ref)
-    # update-ref refs/heads/master / symbolic-ref HEAD -> protected ref move.
-    if _mentions_master "$@" || [ "$_op_is_main_targeting" = "1" ]; then
-      _blocked "$subcmd (master/HEAD ref move)"
+    # update-ref refs/heads/<protected> / symbolic-ref HEAD -> protected ref move.
+    if [ "$_op_is_main_targeting" = "1" ]; then
+      _blocked "$subcmd (main-targeting ref move)"
     fi
+    _branch_protection_gate "$subcmd (ref move)" "$@"
     case "$subcmd" in
       symbolic-ref)
         for a in "$@"; do [ "$a" = "HEAD" ] && [ "$_in_worktree" != "1" ] && _blocked "symbolic-ref HEAD (not provably in worktree)"; done ;;

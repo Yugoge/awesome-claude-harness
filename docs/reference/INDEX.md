@@ -1,21 +1,28 @@
 # reference
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-07-18T11:56:10Z*
-**Total entries**: 13
+*Last updated: 2026-09-04T02:48:04Z*
+**Total entries**: 20
 **Convention**: kebab
 
 ## Tree
 ```
 reference/
 ├── `checkpoint-mechanism.md` - Auto-Commit / Checkpoint Mechanism
+├── `codex-sandbox-verification.md` - Codex CLI Sandbox Verification Report
 ├── `core-context-refactor-plan.md` - Core Context Refactor Plan (Plan-of-Record)
 ├── `fswatch-quickref.md` - FSWatch Quick Reference Card
 ├── `generated-tests-policy.md` - `tests/generated/` policy — tracked but ignored, on purpose
 ├── `git-fswatch.md` - Git File Watcher (fswatch) Documentation
 ├── `graphify-integration.md` - Graphify Knowledge Graph Integration
+├── `install-compatibility-matrix.md` - Install compatibility matrix
+├── `launch-plan.md` - Launch Plan — ROI-ranked channels, gated on recorded evidence
 ├── `lock-file-handling.md` - Git Lock File Handling
 ├── `monolith-split-plan.md` - Monolith Split Plan (Plan-of-Record)
+├── `overnight-reference.md` - Overnight reference (maintainer-facing)
+├── `overwrite-prohibition.md` - Prohibition on wholesale replacement of an existing file
+├── `positioning.md` - Positioning
+├── `rename-execution-plan.md` - Rename execution plan — `awesome-claude-harness` → `claude-code-guardrails`
 ├── `roadmap-decomposition-productization.md` - Roadmap: Monolith Decomposition + Productization
 ├── `slashcommand-quick-reference.md` - Slash Command Quick Reference
 ├── `test-suite-overhaul-plan.md` - Test Suite Overhaul Plan (Plan-of-Record)

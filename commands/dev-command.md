@@ -1055,13 +1055,9 @@ WHEN TO SCRIPT:
 
 ```json
 "ask": [
-  "Write(.claude/commands/**)",
   "Edit(.claude/commands/**)",
-  "Write(.claude/agents/**)",
   "Edit(.claude/agents/**)",
-  "Write(.claude/hooks/**)",
   "Edit(.claude/hooks/**)",
-  "Write(.claude/scripts/**)",
   "Edit(.claude/scripts/**)",
   "Edit(.claude/settings.json)",
   "Edit(.claude/CLAUDE.md)"

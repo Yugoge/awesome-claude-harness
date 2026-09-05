@@ -56,9 +56,9 @@ Every Agent dispatch from this orchestrator shares the following invariant prelu
 ## Overview
 
 ```
-Hook creates state file + worktree + view detection (automatic)
+Hook creates state file + view detection (automatic; a worktree only under --worktree)
   |
-Step 1: Read state file + enter worktree (first run only)
+Step 1: Read state file + cd into the working root (first run only)
   |
   +---> EXPLORATION PHASE (Step 2)
   |       Step 2: PM-Plan subagent (builds test plan with priorities + recommended_specialists)
@@ -121,7 +121,7 @@ Step 1: Read state file + enter worktree (first run only)
 5. **Skip unfixable issues**. If a fix fails verification 3 times, mark it as skipped and move on.
 6. **Track everything**. Use TodoWrite for per-cycle progress. Do NOT write to `.claude/overnight-state-<sid>.json` from the main agent — that file is owned by the orchestrator hooks. See `docs/dev/state-file-write-policy.md` for the full per-field write matrix.
 7. **The Stop hook prevents premature exit**. The time-lock hook will block conversation termination until end-time. Do not try to circumvent it.
-8. **Git checkpoint vs HEAD commit are distinct semantic layers**. The existing posttool-git-checkpoint.sh hook writes mid-cycle Write/Edit snapshots to `refs/checkpoints/*` only — these are NOT merge-ready commits and they do NOT advance any branch HEAD. They exist for crash recovery and audit, not for shipping. End-of-cycle Step 19 lands a real HEAD commit on the worktree branch by calling `commit.sh "chore(overnight): end-of-cycle commit for <branch>"` directly via Bash (single positional arg, CC-valid `chore` type, `(overnight)` scope identifies automated context) — that HEAD commit IS merge-ready and is the only artifact `/merge` consumes. See `~/.claude/CLAUDE.md` (Auto-Commit Mechanism section) for the full checkpoint-ref vs HEAD-commit contract. Do NOT conflate "checkpoint after fix" (refs/checkpoints/*, recovery-only) with "ship upstream" (HEAD commit + `/merge`, distribution).
+8. **Git checkpoint vs HEAD commit are distinct semantic layers**. The existing posttool-git-checkpoint.sh hook writes mid-cycle Write/Edit snapshots to `refs/checkpoints/*` only — these are NOT merge-ready commits and they do NOT advance any branch HEAD. They exist for crash recovery and audit, not for shipping. End-of-cycle Step 19 lands a real HEAD commit on the session's working branch (`worktree_branch` from the state file — the branch the checkout was already on under `in_place`, the created worktree branch otherwise) by calling `commit.sh "chore(overnight): end-of-cycle commit for <branch>"` directly via Bash (single positional arg, CC-valid `chore` type, `(overnight)` scope identifies automated context) — that HEAD commit IS merge-ready and is the only artifact `/merge` consumes. See `~/.claude/CLAUDE.md` (Auto-Commit Mechanism section) for the full checkpoint-ref vs HEAD-commit contract. Do NOT conflate "checkpoint after fix" (refs/checkpoints/*, recovery-only) with "ship upstream" (HEAD commit + `/merge`, distribution).
 9. **Cycle-end deploy is autonomous-mode only** (canonical overnight Hard Rule 9). When `spec_mode == "autonomous"`, every cycle MUST end with QA rebuilding and redeploying via `docker compose build` and `docker compose up -d` for the project's own services (identified from `docker-compose.yml`); deploy verification is REQUIRED in this mode. When `spec_mode == "user-provided"`, deploy is NOT mandatory at the engine level — the user spec dictates whether to deploy (the orchestrator view's Pipeline Workflow may instruct deploy, may instruct skip, or may defer to a user gate). Regular `/dev` (single-pass, NOT `/dev-overnight`) MUST NOT auto-deploy regardless of spec_mode — `/dev` is a single-feature implementation pass, not an overnight cycle. Do NOT touch unrelated services or infrastructure.
 10. **Deduplicate**. Check the state file's cycle_log before starting a fix -- do not re-fix issues already addressed.
 11. **One issue per subagent, no exceptions**. Each BA subagent analyzes exactly ONE pipeline issue. Each Dev subagent implements exactly ONE pipeline fix. Each QA subagent verifies exactly ONE pipeline fix. The orchestrator launches N parallel subagents for N pipelines -- but each individual subagent handles only its own single pipeline. NEVER bundle multiple pipeline issues into one subagent prompt.
@@ -146,17 +146,28 @@ When `spec_mode == "user-provided"` is auto-detected from a spec but the user's 
 ## Arguments
 
 ```
-/dev-overnight [end-time] [focus] [--spec path/to/spec.md] [--codex]
+/dev-overnight [end-time] [focus] [--spec path/to/spec.md] [--codex] [--worktree | --no-worktree]
 ```
 
 **Examples**:
-- `/dev-overnight 6:00` — run until 6:00, no focus (explore everything)
+- `/dev-overnight 6:00` — run until 6:00, no focus (explore everything), in place
 - `/dev-overnight 6:00 fix pipeline bugs` — run until 6:00, focus on pipeline bugs
 - `/dev-overnight fix hooks` — default 8h, focus on hooks issues
 - `/dev-overnight` — default 8h, no focus
 - `/dev-overnight 6:00 --spec docs/my-spec.md` — run until 6:00, use user-provided spec
 - `/dev-overnight 6:00 fix UI --spec docs/ui-spec.md` — focus + user spec
 - `/dev-overnight 6:00 --codex` — run until 6:00 with Codex adversarial review enabled for all subagents
+- `/dev-overnight 6:00 --worktree` — run until 6:00 in a freshly created isolated worktree
+
+**`--worktree` / `--no-worktree` (isolation is the user's choice, 2026-08-08)**: `/dev-overnight` no longer creates a worktree on its own.
+
+- **Default (neither flag, or `--no-worktree`)**: `isolation_kind = "in_place"`. The session works in the checkout you are already on. Nothing is created — no worktree, no branch, no clone — and nothing needs cleaning up afterwards. `worktree_path` is set to the main root so the write-boundary consumers resolve to "anywhere in this repo".
+- **`--worktree`**: restores the historical isolated launch — create the worktree, and if that is impossible fall back through repair/prune to a durable fresh clone. If no durable isolation can be produced, the launch is **refused** rather than silently downgraded to in-place: you asked for isolation, so you get isolation or an error.
+- Passing both flags is an error; the launcher refuses rather than picking one.
+
+Two launch-time refusals apply to in-place mode, both fail-fast with no state written:
+- **Detached HEAD** — every downstream consumer names a branch, and commits on a detached HEAD are unreachable.
+- **The checkout is on `protected_branch`** — the keystone denies protected-branch ref moves for the overnight actor, so the session would launch fine and then fail at its first commit hours later. Check out a working branch, or pass `--worktree`.
 
 **Parse `--codex`**: If `$ARGUMENTS` contains the literal token `--codex` (in any position), strip it from the argument string and set `codex_required = true`. Otherwise set `codex_required = false` (default). When `codex_required = true`, every BA / QA / dev / PM dispatch prompt MUST include the literal line `codex_required: true` so each subagent's OPT-IN Codex consultation block activates. When `codex_required = false`, do NOT include that line.
 
@@ -179,24 +190,108 @@ The `focus` string is stored in the state file and passed to all 4 specialist su
 
 ## Implementation
 
-### Step 1: Read State File and Enter Worktree
+### Step 1: Read State File and Establish the Working Root
 
-The state file has already been created by the UserPromptSubmit hook at `.claude/overnight-state-<session_id>.json`, including `worktree_path`, `worktree_branch`, `view_paths`, `user_spec_path`, `spec_mode`, and `current_phase: "exploring"`. List `.claude/overnight-state-*.json` and read the file matching the current session.
+The state file has already been created by the UserPromptSubmit hook at `.claude/overnight-state-<session_id>.json`, including `isolation_kind`, `worktree_path`, `worktree_branch`, `view_paths`, `user_spec_path`, `spec_mode`, and `current_phase: "exploring"`. List `.claude/overnight-state-*.json` and read the file matching the current session.
 
-**Read the state file** to get the end_time, session_id, worktree_path, spec_mode, user_spec_path, view_paths, and confirm initialization. If multiple state files exist, use the one matching the current session.
+**Read the state file** to get the end_time, session_id, isolation_kind, worktree_path, spec_mode, user_spec_path, view_paths, and confirm initialization. If multiple state files exist, use the one matching the current session.
 
-If no state file exists, HARD ABORT. Do not fabricate a state file and do not proceed; the launch hook fails closed when it cannot produce a validated isolated worktree, so a missing state means the overnight actor must not run.
+If no state file exists, HARD ABORT. Do not fabricate a state file and do not proceed; the launcher fails closed on every refusal path, so a missing state means the overnight actor must not run.
 
-**WORKTREE GUARD**: Check the state file's `worktree_path` field. The launch hook guarantees a validated isolated worktree before any state is written, so `worktree_path` is always a valid isolated root.
-- `cd` into the validated `worktree_path`.
-- If `worktree_path` is missing or invalid: HARD ABORT. Do not create state manually. Do not call EnterWorktree. Do not continue on the main project path. The session simply does not run.
+**SESSION BINDING + ONE-CALL INITIALIZATION (MANDATORY — ONE Bash invocation, issued before the `cd` below and before ANY Agent launch; run the identical block on the first-run Step 1 path AND on the Continuation Mode path).** Every Bash tool call is a fresh shell, so a binding made in one call does not survive into the next. The bindings and the call that consumes them MUST therefore be issued together, as a single command:
 
-**ACTOR GIT-ENV GUARD (fix-1, MANDATORY — do this immediately after `cd` into the worktree, before any git op):** The launch hook installs the policy-shim + selector git wrappers and records their location in the state file's `actor_git_env` object. Source the actor env so every subsequent `git` resolves to the harness-owned policy shim and `CLAUDE_OVERNIGHT_ACTOR=1` is set in your runtime, then VERIFY it took effect:
-- Read `actor_git_env.env_helper` from the state file. If non-null, run `source "<env_helper>" --main-root "<main_root>" --worktree "<worktree_path>"` (the helper prepends the shim dir to PATH and exports `CLAUDE_OVERNIGHT_ACTOR=1`, `CLAUDE_OVERNIGHT_MAIN_ROOT`, `CLAUDE_OVERNIGHT_WORKTREE`).
-- VERIFY: `command -v git` MUST equal `actor_git_env.shim_git`, and `git rev-parse --show-toplevel` MUST equal the validated `worktree_path`. The actor-flag + shim-first PATH MUST persist across subsequent tool calls (export them in your shell session; re-source if a new shell does not inherit them).
-- This wiring is defense-in-depth ONLY. The authoritative protection is the PreTool hook-guard, which derives overnight-actor status from the LIVE overnight state (not from this env) and blocks the covered main-targeting git ops and known subprocess forms — including a python-subprocess `git -C <main> checkout` — regardless of whether this env was sourced. (Git-native ref protection additionally depends on the keystone remaining installed; see the accepted shared-.git limitation below.) Never rely on the env alone; never attempt to strip `CLAUDE_OVERNIGHT_ACTOR` or run git against the main working directory.
+```bash
+# 1. Resolve the live session id. The Bash environment exposes CLAUDE_CODE_SESSION_ID;
+#    CLAUDE_SESSION_ID is a legacy fallback and is normally unset.
+CURRENT_SESSION_ID="${CLAUDE_CODE_SESSION_ID:-${CLAUDE_SESSION_ID:-}}"
+[ -n "$CURRENT_SESSION_ID" ] || { echo "ERROR: no session id in environment" >&2; exit 1; }
 
-> **⚠️ KNOWN ACCEPTED LIMITATION (2026-06-12) — shared `.git` common-dir.** The overnight session runs in a *linked* git worktree, which **shares the repository `.git` common-dir** with the main checkout. The current locks (the git 2.54 reference-transaction keystone for HEAD/master-ref moves, and the per-Bash-command bwrap RO-bind boundary for main working-tree writes) are accepted as **sufficient for this cycle**. However, the shared-.git residual remains a **valid accepted deviation, not a QA pass**: an actor mutating shared git config/hooks (e.g. `git config --unset core.hooksPath`) can disable the keystone through the RW-bound common-dir and then move main HEAD off master. **Do NOT claim protection against shared-.git mutation.** The sound closure (fresh-clone / no-shared-git isolation, or RO-binding `<common>/config` + `<common>/hooks` and blocking protected-key git-config mutation) is deferred to future work.
+# 2. Bind the main root and STATE_FILE together, to the canonical ABSOLUTE path of
+#    THIS session's state file. CLAUDE_PROJECT_DIR is a HINT, never a precondition:
+#    it is measured UNSET in this harness (while CLAUDE_CODE_SESSION_ID is set), and
+#    a STALE value must not veto the fallback — so BOTH it and $PWD are tried, in
+#    that order. Each start walks UP, because the state file lives at
+#    <main_root>/.claude/ and every default working root sits UNDER that root
+#    (in_place == main root; .claude/worktrees/<n>; .claude/overnight-fresh-clones/<n>).
+#    Selection is by exact session-keyed FILENAME and then a parsed field check, so
+#    it cannot be fooled by another session's file or by JSON whitespace drift.
+PROJECT_DIR=""; STATE_FILE=""
+for start in "${CLAUDE_PROJECT_DIR:-}" "$PWD"; do
+  [ -n "$start" ] || continue
+  d="$(cd "$start" 2>/dev/null && pwd -P)" || continue
+  while [ -n "$d" ]; do
+    f="$d/.claude/overnight-state-$CURRENT_SESSION_ID.json"
+    if [ -f "$f" ] && jq -e --arg s "$CURRENT_SESSION_ID" '.session_id == $s' "$f" >/dev/null 2>&1; then
+      STATE_FILE="$(readlink -f "$f")"; break
+    fi
+    [ "$d" = "/" ] && break
+    d="$(dirname "$d")"
+  done
+  [ -n "$STATE_FILE" ] && break
+done
+[ -n "$STATE_FILE" ] || { echo "ERROR: no readable overnight-state file for session $CURRENT_SESSION_ID at or above ${CLAUDE_PROJECT_DIR:-<unset>} or $PWD" >&2; exit 1; }
+#    The walk DISCOVERS the record; it does NOT define the root. Take the root
+#    from what the record SAYS about itself, never from the directory the record
+#    happens to sit in: the launcher writes the record under its own resolved
+#    project dir but the dev-registry under the git toplevel (`main_root`), and
+#    those DIFFER whenever the session was launched from a SUBDIRECTORY — the
+#    ordinary case, since the launcher's own resolution falls back to `$PWD`.
+#    Binding to the containing directory is what made Step 1 hard-abort with
+#    "verify: directory does not exist: <subdir>/.claude/dev-registry/<sid>".
+PROJECT_DIR="$(jq -r '.main_root // empty' "$STATE_FILE")"
+[ -n "$PROJECT_DIR" ] && [ -d "$PROJECT_DIR" ] || { echo "ERROR: $STATE_FILE records no usable main_root: '${PROJECT_DIR:-<empty>}'" >&2; exit 1; }
+PROJECT_DIR="$(cd "$PROJECT_DIR" && pwd -P)"
+
+# 3. Normalise the variable IN THIS SHELL, so the canonical anchor below resolves.
+#    Same-shell only: this export does NOT reach later Bash calls, hooks, or Agent
+#    prompts — those need substituted literals (see the BINDING-EVAPORATION RULE).
+export CLAUDE_PROJECT_DIR="$PROJECT_DIR"
+
+# 4. Bind the dev-registry path that every FIRST ACTION line resolves against.
+DEV_SESSION_ID="$CURRENT_SESSION_ID"
+REGISTRY_DIR="$CLAUDE_PROJECT_DIR/.claude/dev-registry/$DEV_SESSION_ID"
+
+# 5. Verify, in this same shell. Read-only by ORDERING, not by permission: the
+#    launcher ran the mutating form against its temporary record BEFORE publishing
+#    it, so the actor has nothing left to write. --project-dir is passed explicitly
+#    so the initializer never re-derives a root from the same unreliable variable.
+~/.claude/scripts/overnight-init.sh --verify-only --state-file "$STATE_FILE" --project-dir "$PROJECT_DIR"
+```
+
+`PROJECT_DIR` and `STATE_FILE` are absolute and canonical, so both stay valid after the `cd` into `worktree_path`. Do NOT split this block across Bash calls, and do NOT invoke the initializer on its own: a fresh shell expands `$STATE_FILE` empty, which is the failure this block exists to prevent. The walk fails closed whenever no readable, session-matching record is reachable from EITHER start — an externally located fresh clone (`OVERNIGHT_FRESH_CLONE_ROOT` pointed outside the main root) is one cause, but so are a deleted or unreadable working directory and a malformed record. One more, introduced by the very launch shape this block now supports: a session launched from a SUBDIRECTORY leaves its record in that subdirectory, so on an isolated-mode CONTINUATION — where `$PWD` is the worktree, a sibling of the subdirectory rather than a descendant — the upward walk cannot reach it. First-run initialization from the subdirectory succeeds; the continuation aborts. Re-issue from the main root, or launch in place. It never guesses: the error names both searched starts, and the remedy is to re-issue the block from the main root, not to hand-bind a path.
+
+**BINDING-EVAPORATION RULE (applies to EVERY later Bash call site in this document, not just this one).** The bindings above live in one shell and die with it. Any subsequent Bash call that needs `PROJECT_DIR`, `STATE_FILE`, `DEV_SESSION_ID` or `REGISTRY_DIR` MUST carry the **resolved literal value**, substituted into the command string exactly as `{pipeline.index}` is. A later `$DEV_SESSION_ID` that nobody bound expands to the empty string and silently builds a wrong path — it does not error. Where this document writes `<DEV_SESSION_ID>` or `<MAIN_ROOT>` in a command, that is a substitution slot, not a variable to expand. `<MAIN_ROOT>` is the resolved `PROJECT_DIR` above (the record's `main_root`, where the dev-registry lives) and is **distinct from** `<PROJECT_ROOT>`, which is `worktree_path`. The two are equal only in `in_place` mode. A called script that hard-requires an environment variable needs it supplied as a `VAR='<slot>' cmd …` prefix, because exporting it upstream does not reach the callee's shell. The alternative — repeating the whole binding block as a prelude in each consuming call — is permitted but is never the shorter option.
+
+**ISOLATION IS THE USER'S CHOICE (2026-08-08).** `/dev-overnight` no longer creates a worktree automatically. `isolation_kind` records what the user asked for and is the ONLY field you branch on:
+
+| `isolation_kind` | How it was selected | Working root | Actor git-env |
+|---|---|---|---|
+| `in_place` | default — no flag, or `--no-worktree` | the existing checkout (`worktree_path` == `main_root`) | marker only, no shim |
+| `registered_worktree` | explicit `--worktree` | the created linked worktree | full shim + env helper |
+| `fresh_clone_checkout` | explicit `--worktree`, worktree path unavailable | the durable fresh clone | full shim + env helper |
+
+Never create a worktree yourself in any mode, and never "upgrade" an `in_place` session to an isolated one — the user chose.
+
+**`protected_branch` (schema v9)**: the record carries the repository's protected branch name, resolved once by `create-overnight-state.sh` in the primary checkout, at launch, before any working root is established (and, under `--worktree`, before the worktree exists). It is resolved from **local refs only** (`refs/remotes/origin/HEAD`); the launch **refuses and writes no state** when it cannot be resolved, because a chain that protects a branch the repository does not have is inert. The value is **immutable** (`update-overnight-state.sh` rejects `--set protected_branch`) and is the operand the keystone (`hooks/git-keystone/reference-transaction`) and the policy shim (`scripts/overnight-git/git-policy-shim`) compare against at decision time — neither holds a branch-name literal or a fixed list of names. Both consumers **fail closed** when no live record declares the field: they refuse the ref write and name `/stop` + relaunch as the remedy. A session launched under schema v8 therefore cannot be upgraded in place — release it with `/stop` and relaunch.
+
+It is a **different concept from `main_branch_at_start`**, which records whichever branch the primary checkout happened to be sitting on at launch and is never used for protection.
+
+Scope of the guarantee: correct enforcement against drift and misconfiguration, plus honest attestation. In `registered_worktree` mode the shared common-dir remains read-write, and in `in_place` mode there is no worktree boundary at all (see the KNOWN ACCEPTED LIMITATION below), so in neither case is this a claim about a malicious actor.
+
+**WORKING-ROOT GUARD**: `cd` into `worktree_path` in every mode — the launcher sets it to the main root for `in_place` and to the isolated root otherwise, so one instruction covers both. If `worktree_path` is missing or invalid: HARD ABORT. Do not create state manually. Do not call EnterWorktree. Do not create a worktree. The session simply does not run.
+
+**ACTOR GIT-ENV GUARD (MANDATORY — immediately after `cd`, before any git op).** What you wire depends on `actor_git_env.marker_only`:
+
+- **`marker_only: true` (in-place mode)** — source the marker-only helper recorded at `actor_git_env.env_helper` **at the start of every command that runs git**, joined to it with `&&` and never with `;`: `source "<env_helper>" --main-root "<main_root>" && git …`. It exports `CLAUDE_OVERNIGHT_ACTOR=1` and deliberately unsets `CLAUDE_OVERNIGHT_MAIN_ROOT`. Do **NOT** set `CLAUDE_OVERNIGHT_MAIN_ROOT` and do **NOT** put any shim on `PATH`: the policy shim denies any op whose effective directory is under the main root and outside a worktree (`scripts/overnight-git/git-policy-shim:179-182`) — in in-place mode that is *every* git command you will ever issue, so arming it would brick the session. The marker alone arms the keystone (`hooks/git-keystone/reference-transaction:42`), which is what keeps the protected branch protected when there is no worktree boundary. Source it **per command, not once**: each Bash call is a fresh shell, so a single `export` lapses on the next call and the keystone silently stops applying. The launcher already refused to start if the checkout was sitting on the protected branch, so ordinary commits on your working branch pass while a `master` ref move is denied.
+- **`marker_only: false` (worktree / fresh-clone mode)** — source the actor env recorded in `actor_git_env` and join it to the git op with `&&`, never with `;`: run `source "<env_helper>" --main-root "<main_root>" --worktree "<worktree_path>" && command -v git` (the helper prepends the shim dir to `PATH` and exports `CLAUDE_OVERNIGHT_ACTOR=1`, `CLAUDE_OVERNIGHT_MAIN_ROOT`, `CLAUDE_OVERNIGHT_WORKTREE`). The conjunction is load-bearing: the helper returns non-zero and mutates nothing when the wrappers are absent or corrupt, and a `;` would run git anyway — resolving it to the system binary, with no actor marker and no shim on `PATH`, exactly the state the helper refused to create. Every later command that runs git must be composed the same way (`source … && git …`). VERIFY: `command -v git` MUST equal `actor_git_env.shim_git`, and `git rev-parse --show-toplevel` MUST equal `worktree_path`. Exporting does NOT make these persist across tool calls — each call is a fresh shell (BINDING-EVAPORATION RULE), so re-source the helper with resolved literal paths at the start of every Bash invocation that runs git, exactly as the `marker_only: true` bullet requires.
+
+In both modes this wiring is defense-in-depth ONLY. The authoritative protection is the PreTool hook-guard, which derives overnight-actor status from the LIVE overnight state (not from this env). Never attempt to strip `CLAUDE_OVERNIGHT_ACTOR`.
+
+> **⚠️ KNOWN ACCEPTED LIMITATION (2026-06-12) — shared `.git` common-dir.** In `registered_worktree` mode the session runs in a *linked* git worktree, which **shares the repository `.git` common-dir** with the main checkout. The current locks (the git 2.54 reference-transaction keystone for HEAD/master-ref moves, and the per-Bash-command bwrap RO-bind boundary for main working-tree writes) are accepted as **sufficient for this cycle**. However, the shared-.git residual remains a **valid accepted deviation, not a QA pass**: an actor mutating shared git config/hooks (e.g. `git config --unset core.hooksPath`) can disable the keystone through the RW-bound common-dir and then move main HEAD off master. **Do NOT claim protection against shared-.git mutation.** The sound closure (fresh-clone / no-shared-git isolation, or RO-binding `<common>/config` + `<common>/hooks` and blocking protected-key git-config mutation) is deferred to future work.
+>
+> **In `in_place` mode there is no worktree boundary at all** — that is what the user chose by not passing `--worktree`. The surviving protection is the keystone on the protected branch plus the launcher's refusal to start on that branch. Do not describe an in-place session as isolated.
+>
+> **The RO-bind is never an unconditional property of the main root** — it is a per-command mount namespace, and two conditions bound what it actually protects. (i) The namespace is built ONLY on the guard's `Bash` branch (`hooks/pretool-overnight-hook-guard.py:2094` gates `_apply_write_boundary` on `tool_name == 'Bash'`); the `Write` / `Edit` / `MultiEdit` entry points of that same hook are path-checked instead (`:931-941`) and get no namespace at all. (ii) The namespace is still BUILT under `in_place`, but it protects no main working-tree content there: `worktree_path` EQUALS `main_root`, so the RW bind of the working root covers the whole main root. Effective read-only protection of main working-tree content therefore exists only when `worktree_path` DIFFERS from `main_root`. Never write "the main root is RO-bound" without both qualifiers.
 
 **Spec announcement**: If `spec_mode` is `"user-provided"` and `user_spec_path` is set, announce:
 ```
@@ -214,126 +309,55 @@ If `user_spec_path` was auto-detected (not passed via `--spec`), also announce:
 Overnight development session initialized.
 Start time: <start_time>
 End time: <end_time>
-Worktree: <validated worktree_path from state file>
+Isolation: <isolation_kind> (in_place = no worktree, working directly in the checkout)
+Working root: <worktree_path from state file>
+Branch: <worktree_branch from state file>
 Loop: todo-completion-driven (automatic reset on cycle complete)
 Time-lock hook is active -- session will not terminate until end-time.
 Beginning autonomous exploration...
 ```
 
-**Codex enforcement flag** (only when `codex_required` field in state file is `true`): Read `codex_required` with `jq -r '.codex_required // false'` (defaults safely for old state files). When `true`, after binding `$DEV_SESSION_ID`, run `scripts/write-codex-enforce.sh`. If it exits non-zero, abort. When `codex_required = true`, every BA / QA / dev dispatch prompt below MUST include the literal line `codex_required: true`.
+**ONE-CALL INITIALIZATION (MANDATORY — before ANY Agent launch).** Everything the session needs before dispatch is done by a single script. It used to be ~25 separate tool calls — one `mkdir`, ~20 sentinel writes, two enforcement-flag scripts, a spec resolution and a heredoc — and a session that exhausted its usage ceiling partway through that fan-out never reached PM Plan and produced nothing. That call is issued by the **SESSION BINDING + ONE-CALL INITIALIZATION** block above, in the same Bash invocation that binds `$STATE_FILE`. Do not issue it separately here.
 
-```
-CODEX_REQUIRED=$(jq -r '.codex_required // false' "$STATE_FILE")
-# ... (bind DEV_SESSION_ID from state file first, then) ...
-[[ "$CODEX_REQUIRED" == "true" ]] && \
-  scripts/write-codex-enforce.sh --source-command dev-overnight --session-id "$DEV_SESSION_ID"
-```
+Re-run it verbatim on every continuation cycle. The MUTATING form is idempotent, but the actor never runs that form — the actor runs `--verify-only`, which is a **fail-closed verification and repairs nothing**: it dies on a missing registry directory (`scripts/overnight-init.sh:116`) and on a missing or byte-mismatched artifact (`:143-145`). If the last line is not `OVERNIGHT_INIT_OK`, ABORT — do not attempt the individual steps by hand, and do not expect a re-run to heal the record.
 
-**Initialize dev-registry for hard subagent enforcement** (MANDATORY — do this before ANY Agent launch):
+In one invocation it: creates `.claude/dev-registry/<session_id>/`; writes one sentinel JSON per agent type (the list is read from `hooks/pretool-cp-checkin.py` `CP_AGENTS`, never re-typed); writes the always-on `e2e` enforcement flag plus `codex` when the record sets `codex_required`; resolves the spec artifacts; and writes the verbatim user-requirement document including Section 5.
 
-The hook `pretool-subagent-code-block.py` blocks non-`dev` subagents from writing code files, but it needs the Claude-internal subagent UUID to be registered against an `agent_type`. Root cause of the /dev gap (see commit `e086ccb`): /dev-overnight sessions produce no `.claude/specs/` cp-state files, so the hook falls open and every subagent can write code. The fix is an orchestrator-provided sentinel file that each subagent reads as its FIRST ACTION; `pretool-cp-checkin.py` then writes the UUID→agent_type mapping into `.claude/dev-registry/agent-index.json`.
+Bind these from its `KEY=VALUE` output — they are the only initialization values you need:
 
-Reuse the overnight `session_id` from the state file (do NOT invent a new one — the same value is reused across cycles and continuations). Bind it as `$DEV_SESSION_ID` and derive the registry directory:
+| Output key | Use |
+|---|---|
+| `SESSION_ID` | `$DEV_SESSION_ID` — reuse across cycles, never invent a new one |
+| `REGISTRY_DIR` | the dev-registry path subagents read their sentinel from |
+| `CODEX_REQUIRED` | when `true`, every BA / QA / dev dispatch prompt MUST carry the literal line `codex_required: true` |
+| `SPEC_ID`, `CP_DIR`, `VIEWS_DIR` | cp-state handoff; all empty means legacy monolith mode |
+| `REQUIREMENT_DOC` | the source-of-truth anchor path to pass to every subagent |
+| `SPEC_MODE`, `USER_SPEC_PATH` | spec announcement and dispatch prompts |
 
-```bash
-DEV_SESSION_ID="<reused-from-overnight-state.json>"
-REGISTRY_DIR="$CLAUDE_PROJECT_DIR/.claude/dev-registry/$DEV_SESSION_ID"
-```
+**FIRST ACTION line (every Agent launch).** Each dispatch prompt MUST begin with an instruction to `Read $CLAUDE_PROJECT_DIR/.claude/dev-registry/$DEV_SESSION_ID/<agent>.json` before any other tool call. Without that Read, `pretool-cp-checkin.py` cannot map the subagent UUID to its `agent_type` and `pretool-subagent-code-block.py` falls open for that subagent.
 
-**E2E enforcement flag** (unconditional — always-on): Now that `$DEV_SESSION_ID` is bound, run `scripts/write-e2e-enforce.sh` to activate the E2E gate for QA. If it exits non-zero, abort.
+**Sentinel coverage for this document's dispatch sites.** `overnight-init.sh` writes one sentinel per `CP_AGENTS` entry, so the authoritative agent list is never re-typed here. What IS pinned here is the concrete filename each of this orchestrator's `FIRST ACTION` lines resolves to — so a dropped registration is auditable against the dispatch sites rather than inferred from a generic count. Every sentinel below MUST exist under `$REGISTRY_DIR` once init reports `OVERNIGHT_INIT_OK`; a missing one disables code-write enforcement for that agent type **silently**, with no error at dispatch time.
 
-```bash
-scripts/write-e2e-enforce.sh --source-command dev-overnight --session-id "$DEV_SESSION_ID"
-```
+| Dispatch site | Sentinel its FIRST ACTION line reads |
+|---|---|
+| PM — Plan (Step 2), Triage (Step 4), Retro | `"$REGISTRY_DIR/pm.json"` |
+| Specialists (Step 3, one per `recommended_specialists` entry) | `"$REGISTRY_DIR/architect.json"`, `"$REGISTRY_DIR/product-owner.json"`, `"$REGISTRY_DIR/ui-specialist.json"`, `"$REGISTRY_DIR/user.json"` |
+| BA (per pipeline) | `"$REGISTRY_DIR/ba.json"` |
+| Graphify (Step 11g precondition) | `"$REGISTRY_DIR/graphify.json"` |
+| Dev (Step 12) | `"$REGISTRY_DIR/dev.json"` |
+| QA (Step 15) | `"$REGISTRY_DIR/qa.json"` |
 
-Create sentinel files for every agent type this orchestrator can launch, including overnight-only specialists.
-
-**Sentinel-write idiom (M10 harness-fixes 20260428)**: the worktree-guard's `_extract_bash_write_paths` static scan treats `$VAR` and `${VAR}` tokens as opaque (it intentionally cannot tell legitimate from adversarial `$VAR` writes — see arch-3). The orchestrator MUST therefore use one of the two acceptable forms below. Forms that interpose a same-line-assigned shell variable into the redirect target (e.g. `REG=$CLAUDE_PROJECT_DIR/...; > "$REG/$agent.json"`) will be blocked by the worktree boundary even though the harness-state exemption is active, because the static scan cannot resolve `$REG` and the realpath check fails.
-
-**Acceptable form A — Write tool with an orchestrator-inlined absolute `file_path`** (one tool call per sentinel; the Write tool does NOT shell-expand env vars or `~`, so the orchestrator must compute the concrete resolved project-dir absolute path and inline it — substitute `<RESOLVED_PROJECT_DIR>` with the literal value of `$CLAUDE_PROJECT_DIR` before invoking Write):
-
-```text
-Write(file_path="<RESOLVED_PROJECT_DIR>/.claude/dev-registry/<session_id>/architect.json", content='{"agent_type": "architect", "session_id": "<session_id>"}')
-Write(file_path="<RESOLVED_PROJECT_DIR>/.claude/dev-registry/<session_id>/ba.json", content='{"agent_type": "ba", "session_id": "<session_id>"}')
-Write(file_path="<RESOLVED_PROJECT_DIR>/.claude/dev-registry/<session_id>/graphify.json", content='{"agent_type": "graphify", "session_id": "<session_id>"}')
-... (one Write per agent type)
-```
-
-**NOTE (C6, redev-tier123)**: the Write tool does not shell-expand env vars or `~`, so the orchestrator must inline the concrete resolved project-dir absolute path (`<RESOLVED_PROJECT_DIR>` = the literal value of `$CLAUDE_PROJECT_DIR`) — NEVER a `$VAR`/`~` token inside the Write operand and NEVER an author-absolute literal. Form B avoids the inlining by using `$CLAUDE_PROJECT_DIR` directly, because Bash redirect targets ARE expanded by the static scan in `lib/bash_write_targets.py:_resolve_path`.
-
-**Acceptable form B — Bash redirect with `$CLAUDE_PROJECT_DIR`-prefixed target** (the static scan resolves `$CLAUDE_PROJECT_DIR` via `lib/bash_write_targets.py:_resolve_path`, lines 156-160). Inline the session_id literally; do NOT introduce intermediate variables in the redirect target:
-
-```bash
-mkdir -p "$CLAUDE_PROJECT_DIR/.claude/dev-registry/<session_id>"
-printf '{"agent_type": "architect", "session_id": "<session_id>"}\n' > "$CLAUDE_PROJECT_DIR/.claude/dev-registry/<session_id>/architect.json"
-printf '{"agent_type": "ba", "session_id": "<session_id>"}\n' > "$CLAUDE_PROJECT_DIR/.claude/dev-registry/<session_id>/ba.json"
-printf '{"agent_type": "graphify", "session_id": "<session_id>"}\n' > "$CLAUDE_PROJECT_DIR/.claude/dev-registry/<session_id>/graphify.json"
-# ... (one printf per agent type; substitute the literal session_id read from the state file)
-```
-
-Either form populates the same sentinel files. Form A is more verbose but tool-policy-cleanly preserves one Write per sentinel; form B is more concise but requires the orchestrator to inline the session_id verbatim into each target path.
-
-Every Agent launch prompt in this orchestrator MUST begin with a `FIRST ACTION` line instructing the subagent to `Read $CLAUDE_PROJECT_DIR/.claude/dev-registry/$DEV_SESSION_ID/<agent>.json` before any other tool call. Without that Read, the enforcement hook will fail open for that subagent. In continuation mode (after a hook-induced context reset), re-run the `mkdir -p` + sentinel loop above — it's idempotent, so re-running is safe and guarantees sentinels exist even if a cleanup step removed them.
-
-**Initialize cp-state handoff when a user-provided `/spec` exists** (MANDATORY in `spec_mode == "user-provided"` when cp-state files exist):
-
-Resolve the spec-id via the centralized resolver — never derive it from the
-`user_spec_path` basename by hand (that prefix drift silently dropped de-prefixed
-specs to monolith mode):
-
-```bash
-if [ -n "$user_spec_path" ]; then
-  RESOLVED_JSON=$(~/.claude/scripts/resolve-spec-artifacts.py \
-      --spec-path "$user_spec_path" --project-dir "$CLAUDE_PROJECT_DIR") || {
-    echo "spec-artifact resolution FAILED (path mismatch / present-but-invalid split)." >&2
-    exit 1; }
-  SPEC_ID=$(jq -r .artifact_id <<<"$RESOLVED_JSON")
-  CP_DIR=$(jq -r '.cp_dir // empty'   <<<"$RESOLVED_JSON")
-  VIEWS_DIR=$(jq -r '.views_dir // empty' <<<"$RESOLVED_JSON")
-  [ -d "$CLAUDE_PROJECT_DIR/$CP_DIR" ] || { SPEC_ID=""; CP_DIR=""; }
-else
-  SPEC_ID=""; CP_DIR=""; VIEWS_DIR=""
-fi
-```
-
-**T1.7 (redev-tier123) — Orchestrator-view + Section 5 read MANDATE**: When `SPEC_ID` is non-empty, BEFORE composing any subagent dispatch prompt, you MUST read the orchestrator view the resolver located — `$CLAUDE_PROJECT_DIR/$VIEWS_DIR/orchestrator.md` (views live under `docs/dev/specs/<artifact_id>/views/`, NOT under `.claude/specs/`) — AND the spec's Section 5 (User's Acceptance Criterion) verbatim from `$user_spec_path`. Quote the user's words from Section 5 directly into every dispatch prompt; do not paraphrase or summarize. The user's verbatim need is the binding contract — every subagent must see the user's literal request, not your reformulation.
-
-If no spec/cp-state directory exists, set `SPEC_ID=""` and skip the `SECOND ACTION`
-lines below. If a particular agent has no cp-state file under that SPEC_ID, omit that
-agent's `SECOND ACTION` for this launch. When `SPEC_ID` is non-empty, every Agent launch prompt for an agent that has a
-cp-state file MUST include a `SECOND ACTION` line immediately after the dev-registry `FIRST ACTION`:
+**SECOND ACTION line (when `SPEC_ID` is non-empty).** For every agent that has a cp-state file under that `SPEC_ID`, add immediately after the FIRST ACTION line:
 
 ```text
 SECOND ACTION: Read $CLAUDE_PROJECT_DIR/$CP_DIR/cp-state-<agent>.json to load your mandatory checklist before doing substantive work. Mark each completed checkpoint with ~/.claude/scripts/spec-check.py mark --spec-id <SPEC_ID> --agent <agent> --agent-id $CLAUDE_AGENT_ID --cp-id <cp-NN>. Waive only with ~/.claude/scripts/spec-check.py waive --spec-id <SPEC_ID> --agent <agent> --agent-id $CLAUDE_AGENT_ID --cp-id <cp-NN> (auto-text records actor + ISO timestamp). You MUST leave zero pending checkpoints before Stop (a discipline expectation tracked via spec-check.py — no hook blocks exit on pending checkpoints today). If `$CLAUDE_AGENT_ID` is unavailable, use the `agent_id` value written into the cp-state file by the read.
 ```
 
-This gives overnight specialists the same checklist semantics as BA/Dev/QA:
-check-in happens on the cp-state read, and each specialist is expected to leave
-the checklist fully done or waived before Stop (tracked via spec-check.py; no hook
-blocks exit on pending checkpoints today).
+Omit that line for any agent with no cp-state file. This gives overnight specialists the same checklist semantics as BA/Dev/QA.
 
-**Write verbatim user requirement document** (MANDATORY — do this once in Step 1, before any Agent dispatch):
+**T1.7 (redev-tier123) — Orchestrator-view + Section 5 read MANDATE**: When `SPEC_ID` is non-empty, BEFORE composing any subagent dispatch prompt, you MUST read the orchestrator view the resolver located — `$CLAUDE_PROJECT_DIR/$VIEWS_DIR/orchestrator.md` (views live under `docs/dev/specs/<artifact_id>/views/`, NOT under `.claude/specs/`) — AND the spec's Section 5 (User's Acceptance Criterion) verbatim from `$USER_SPEC_PATH`. Quote the user's words from Section 5 directly into every dispatch prompt; do not paraphrase or summarize. The user's verbatim need is the binding contract — every subagent must see the user's literal request, not your reformulation. `overnight-init.sh` has already copied Section 5 into `REQUIREMENT_DOC`, so read it from there rather than re-slicing the spec.
 
-```bash
-PROJECT_ROOT="${WORKTREE_PATH:-$CLAUDE_PROJECT_DIR}"
-mkdir -p "$PROJECT_ROOT/docs/dev"
-REQUIREMENT_DOC="$PROJECT_ROOT/docs/dev/user-requirement-${DEV_SESSION_ID}.md"
-cat <<'REQEOF' > "$REQUIREMENT_DOC" || { echo "ERROR: Failed to write user requirement document — aborting." >&2; exit 1; }
-<verbatim focus / requirement text from state file — paste literal text here, no shell variables inside heredoc>
-REQEOF
-```
-
-When `user_spec_path` is non-null, also append the spec path and Section 5 verbatim to the same document (do not summarize):
-
-```bash
-if [ -n "$USER_SPEC_PATH" ]; then
-  printf '\nUser spec path: %s\n' "$USER_SPEC_PATH" >> "$REQUIREMENT_DOC"
-  printf '\nSection 5 (User Acceptance Criterion):\n' >> "$REQUIREMENT_DOC"
-  # Read Section 5 verbatim from the spec file and append — do not paraphrase
-fi
-```
-
-This document is the source-of-truth anchor for the entire overnight session. Every subagent reads it before interpreting any derived context or spec. Use a single-quoted heredoc delimiter (`'REQEOF'`) so `$`, backticks, and shell metacharacters are never expanded. This write is idempotent across continuation cycles (same `DEV_SESSION_ID` reused). When including this path in dispatch prompts, always substitute the resolved value of `$REQUIREMENT_DOC` — MUST NOT pass literal `<PROJECT_ROOT>` or `<DEV_SESSION_ID>` placeholders to subagents; expand them to actual values at dispatch time.
+When including `REQUIREMENT_DOC` in dispatch prompts, always substitute its resolved value — MUST NOT pass literal `<PROJECT_ROOT>` or `<DEV_SESSION_ID>` placeholders to subagents. `<PROJECT_ROOT>` resolves to `worktree_path` from the state file (the same working root the `cd` above targets); `$REQUIREMENT_DOC` is the already-resolved requirement-document path emitted by the initialization call, so the dispatch templates below consume it directly instead of rebuilding the path from a placeholder.
 
 ---
 
@@ -342,8 +366,8 @@ This document is the source-of-truth anchor for the entire overnight session. Ev
 When you see "OVERNIGHT CONTINUATION" injected by the prompt hook, you are in continuation mode with fresh context.
 
 **In continuation mode**:
-1. Read the state file to determine `current_phase`
-2. Skip Step 1 entirely (worktree already exists)
+1. Re-run the Step 1 **SESSION BINDING + ONE-CALL INITIALIZATION** block verbatim, as one Bash invocation — a continuation has no other path to `PROJECT_DIR`, `STATE_FILE`, `DEV_SESSION_ID` or `REGISTRY_DIR`. The actor's `--verify-only` run re-checks the record; it does NOT restore a sentinel a cleanup step removed, it ABORTS on one. The remedy for a damaged record is `/stop` plus relaunch, which re-runs the mutating form harness-side; there is no actor-side repair. Then read the state file to determine `current_phase`
+2. Skip the rest of Step 1: the working root already exists and is never re-established
 3. Resume from the appropriate step based on current_phase:
    - `initializing` or `exploring` -> Step 2 (PM Plan)
    - `pipeline_creation` -> Step 6 (Create pipelines)
@@ -465,7 +489,7 @@ Use Agent tool with:
 
   You are the PM subagent. Follow agents/pm.md instructions precisely.
 
-  User requirement document: <PROJECT_ROOT>/docs/dev/user-requirement-<DEV_SESSION_ID>.md
+  User requirement document: $REQUIREMENT_DOC
   (Read this file before interpreting Requirement, Context file, BA spec, Dev report, or state-derived focus.)
 
   Project path: <validated worktree_path from state file>
@@ -618,7 +642,7 @@ Available specialists:
 Each subagent receives, at the TOP of its prompt before any other content:
 - FIRST ACTION line: "Read $CLAUDE_PROJECT_DIR/.claude/dev-registry/$DEV_SESSION_ID/<specialist.type>.json to register with the enforcement system. Do this BEFORE any other tool call."
 - CHECKPOINT MARKING line: "see agents/<specialist.type>.md §Checkpoint Marking Contract. Mark every cp-NN done or waived before Stop or SubagentStop hook will block exit." (full SECOND ACTION SPEC_ID/cp-state semantics are defined once in the Step 1 cp-state handoff section above and need not be repeated per dispatch.)
-- User requirement document: <PROJECT_ROOT>/docs/dev/user-requirement-<DEV_SESSION_ID>.md (Read this file before interpreting Requirement, Context file, BA spec, Dev report, or state-derived focus.)
+- User requirement document: $REQUIREMENT_DOC (Read this file before interpreting Requirement, Context file, BA spec, Dev report, or state-derived focus.)
 - Project path: <validated worktree_path from state file>
 - Already addressed: <addressed_issues array from state file>
 - Focus: <focus string from state file, or "none">
@@ -631,7 +655,7 @@ Each subagent receives, at the TOP of its prompt before any other content:
 **Specialist prompt rules** (enforced):
 - Every specialist prompt MUST include the test plan path. Specialists have a mandatory Step 0 (read test plan — PM's `pm_experience` is ground truth) and Step 1 (execute the core E2E flow via Playwright) before specialized analysis.
 - The priority context block is appended directly so specialists see PM's priorities immediately; their Step 0 read provides redundancy.
-- Always use `worktree_path` as the project path when set; specialists must scan files inside the worktree, not the main project directory.
+- Always use `worktree_path` as the project path when set; specialists must scan files under that root. In `registered_worktree` / `fresh_clone_checkout` mode that root is the isolated worktree, NOT the main project directory; in `in_place` mode it IS the main checkout, which is what the user chose.
 - Do NOT inline application context, credentials, flow steps, or sample data in the prompt — those live in the test plan file.
 ```
 
@@ -723,7 +747,7 @@ Use Agent tool with:
 
   You are the PM subagent in TRIAGE mode. Follow agents/pm.md Triage Protocol.
 
-  User requirement document: <PROJECT_ROOT>/docs/dev/user-requirement-<DEV_SESSION_ID>.md
+  User requirement document: $REQUIREMENT_DOC
   (Read this file before interpreting Requirement, Context file, BA spec, Dev report, or state-derived focus.)
 
   Project path: <validated worktree_path from state file>
@@ -922,13 +946,15 @@ The `focus_verification_criteria` array will be passed to each QA subagent in St
 
 **Graphify pre-BA Bash hydrator** (per pipeline, before each BA dispatch; mirrors `commands/dev.md` Step 2 — do NOT duplicate its full prose). Before dispatching BA for pipeline[i], run `scripts/graphify-query.py` as a direct read-only Bash call (NOT a subagent — gate-exempt, no contract impact), advisory and fail-open: if the binary or cache is absent it exits 0 with `status=unavailable` and BA proceeds unchanged. Use a **pipeline-scoped task-id** `${DEV_SESSION_ID}-pipeline-{pipeline.index}` (derived from the existing `pipeline.index`/`pipeline.timestamp_suffix`, NOT a new field) and a **per-pipeline requirement file**, NOT the session-level requirement file, so concurrent fanout writes to disjoint `.claude/dev-registry/${DEV_SESSION_ID}-pipeline-{pipeline.index}/graphify/pre_query.json`. First materialize a per-pipeline requirement file that carries the pipeline's strongest anchors — its `description` AND `location` (file/path hints) AND `spec_path` — because in autonomous mode the spec template alone may omit the file/path `location`; then pass that file:
 
+**Substitute, do not expand** (see the BINDING-EVAPORATION RULE in Step 1): `${DEV_SESSION_ID}` below is written as a variable only to name the value. This is a fresh shell that never bound it, so replace it with the resolved session id string before issuing the call — as you already do for `{pipeline.index}`.
+
 ```bash
-mkdir -p ".claude/dev-registry/${DEV_SESSION_ID}-pipeline-{pipeline.index}/graphify"
+mkdir -p ".claude/dev-registry/<DEV_SESSION_ID>-pipeline-{pipeline.index}/graphify"
 printf '%s\n\nLocation: %s\n\nSpec: %s\n' "{pipeline.description}" "{pipeline.location}" "{pipeline.spec_path}" \
-  > ".claude/dev-registry/${DEV_SESSION_ID}-pipeline-{pipeline.index}/graphify/requirement.txt"
+  > ".claude/dev-registry/<DEV_SESSION_ID>-pipeline-{pipeline.index}/graphify/requirement.txt"
 source ~/.claude/venv/bin/activate && python3 ~/.claude/scripts/graphify-query.py \
-  --task-id "${DEV_SESSION_ID}-pipeline-{pipeline.index}" \
-  --requirement-file ".claude/dev-registry/${DEV_SESSION_ID}-pipeline-{pipeline.index}/graphify/requirement.txt" || true
+  --task-id "<DEV_SESSION_ID>-pipeline-{pipeline.index}" \
+  --requirement-file ".claude/dev-registry/<DEV_SESSION_ID>-pipeline-{pipeline.index}/graphify/requirement.txt" || true
 ```
 
 When that pipeline's `pre_query.json` exists with `status=ok` or `status=degraded`, include `Pre-query context file: .claude/dev-registry/${DEV_SESSION_ID}-pipeline-{pipeline.index}/graphify/pre_query.json` in that pipeline's BA dispatch prompt only. When `status=unavailable`/`status=skipped`, omit it — BA runs its original flow unchanged. See `commands/dev.md` Step 2 graphify hydrator block for the canonical invocation. These are sidecar artifacts (not contract-gated).
@@ -950,7 +976,7 @@ Agent(subagent_type: "ba")
 
     You are the BA subagent. Follow .claude/agents/ba.md instructions precisely.
 
-    User requirement document: <PROJECT_ROOT>/docs/dev/user-requirement-<DEV_SESSION_ID>.md
+    User requirement document: $REQUIREMENT_DOC
     (Read this file before interpreting Requirement, Context file, BA spec, Dev report, or state-derived focus.)
 
     Requirement: '{pipeline.description}'
@@ -1027,8 +1053,19 @@ Read BA output files:
 ```
 For each active pipeline[i]:
 
-# Write qa_mode sentinel immediately before each QA dispatch (preserve existing fields)
-bash ~/.claude/scripts/write-qa-mode.sh --session-id "$DEV_SESSION_ID" --mode ba_validation \
+# Write qa_mode sentinel immediately before each QA dispatch (preserve existing fields).
+# Fresh shell: substitute BOTH resolved literals, expand neither. The script hard-
+# requires CLAUDE_PROJECT_DIR (write-qa-mode.sh:23) and nothing exports it into a
+# fresh shell, so the prefix is mandatory — same form as overnight-init.sh:320.
+# MODE-SCOPED RESIDUAL (measured, not theoretical): the prefix makes the path
+# CORRECT, which is all this document can do. The write still lands in
+# <main_root>/.claude/dev-registry/, and under registered_worktree / fresh_clone
+# the per-command bwrap boundary RW-binds only the worktree, so the write gets
+# EROFS while READS of the same registry succeed. This site therefore works in
+# in_place mode and fails LOUDLY (never silently) in the isolated modes. Do NOT
+# "fix" that by dropping the `|| exit 1` handler; the write path is owned by
+# scripts/write-qa-mode.sh and the guard, not by this document.
+CLAUDE_PROJECT_DIR='<MAIN_ROOT>' bash ~/.claude/scripts/write-qa-mode.sh --session-id "<DEV_SESSION_ID>" --mode ba_validation \
   || { echo 'ERROR: Failed to set qa_mode=ba_validation in qa.json — aborting' >&2; exit 1; }
 
 Agent(subagent_type: "qa")
@@ -1043,7 +1080,7 @@ Agent(subagent_type: "qa")
     DO NOT: build, deploy, open browser, run Playwright, or test code.
     DO: read BA's deliverables and challenge every claim.
 
-    User requirement document: <PROJECT_ROOT>/docs/dev/user-requirement-<DEV_SESSION_ID>.md
+    User requirement document: $REQUIREMENT_DOC
     (Read this file before interpreting Requirement, Context file, BA spec, Dev report, or state-derived focus.)
 
     BA spec file: docs/dev/ticket-{pipeline.timestamp_suffix}.md (legacy: docs/dev/ba-spec-{pipeline.timestamp_suffix}.md)
@@ -1139,7 +1176,7 @@ Use Agent tool with:
 
   You are the BA subagent. Follow .claude/agents/ba.md instructions precisely.
 
-  User requirement document: <PROJECT_ROOT>/docs/dev/user-requirement-<DEV_SESSION_ID>.md
+  User requirement document: $REQUIREMENT_DOC
   (Read this file before interpreting Requirement, Context file, BA spec, Dev report, or state-derived focus.)
 
   Your previous analysis was REJECTED by QA. Address each objection below
@@ -1186,7 +1223,7 @@ The word "validated" MUST NOT gate this precondition — it fires for the pipeli
 
 1. **Mark the `Step 11g` todo `in_progress` BEFORE the graphify `Agent` call** (and restore the surrounding step — Step 12 / Step 13 / Step 17 — `in_progress` after enrichment completes and before the Dev `Agent` call). Otherwise `hooks/pretool-subagent-enforce.py` (`_current_step_label`) would resolve the active step as the Dev step and validate the graphify dispatch against the Dev required_call (role mismatch → spurious exit-2). With Step 11g in-progress, the contract hook matches the graphify dispatch against the `Step 11g` `{role: "graphify", pipeline_id: null}` wildcard entry.
 2. **Idempotency by CONTEXT FINGERPRINT, not bare existence.** `context_sha256` is the SHA-256 of the EXACT context file Dev will consume, computed at the SAME instant the precondition decides (i.e. BEFORE this run's graphify enrichment patches it — graphify-enrich patches `graph_context` in place, so always fingerprint the pre-enrichment bytes of the context Dev reads, and record those same pre-enrichment bytes' SHA so a subsequent unchanged resume matches). Compute `{pipeline_index, iteration, context_path, context_sha256}`. If a `graphify-run.json` for `${DEV_SESSION_ID}-pipeline-{pipeline.index}` already exists AND its recorded fingerprint matches the current context (same `context_path` + `context_sha256` + `iteration`), SKIP re-dispatch. If the artifact is absent, OR ANY fingerprint field is missing, OR its fingerprint does NOT match (Step 13 refinement / Step 17 wrote a new `context-iter<N>`), RE-RUN enrichment and overwrite the manifest. Bare-existence idempotency is FORBIDDEN — it would wrongly skip re-enrichment of changed Dev input; treat a missing fingerprint field as a mismatch (re-enrich).
-3. **Dispatch graphify** (mode=enrich) using a **pipeline-scoped task-id** `${DEV_SESSION_ID}-pipeline-{pipeline.index}` against the context Dev will consume. The precondition ALWAYS dispatches the graphify `Agent` (so the `Step 11g` todo's `subagent_call` is always satisfied) — graphify itself fail-opens internally (exits 0 with `status=skipped`/`status=unavailable` when the sentinel/binary/blast-radius-map is absent), so there is no "skip-without-Agent" path that could leave the todo's subagent completion guard unsatisfied. Then dispatch Dev:
+3. **Dispatch graphify** (mode=enrich) using a **pipeline-scoped task-id** `${DEV_SESSION_ID}-pipeline-{pipeline.index}` against the context Dev will consume. The precondition ALWAYS dispatches the graphify `Agent` (so the `Step 11g` todo's `subagent_call` is always satisfied) — graphify itself fail-opens internally (exits 0 with `status=skipped`/`status=unavailable` when the sentinel/binary/blast-radius-map is absent), so there is no "skip-without-Agent" path that could leave the todo's subagent completion guard unsatisfied. Like every other dispatch in this document, the prompt below opens with the `FIRST ACTION` read of `"$REGISTRY_DIR/graphify.json"`; because this precondition is dispatched mid-step rather than from a numbered step of its own, that line is the one most easily dropped when this section is restructured — and dropping it fails the graphify subagent open with no error. Then dispatch Dev:
 
 ```
 Use Agent tool with:
@@ -1197,7 +1234,7 @@ Use Agent tool with:
 
   You are the graphify subagent. Follow agents/graphify.md instructions precisely.
 
-  Run: source ~/.claude/venv/bin/activate && python3 ~/.claude/scripts/graphify-enrich.py --task-id ${DEV_SESSION_ID}-pipeline-{pipeline.index} --context-file <the context file Dev will consume for this pipeline/iteration>
+  Run: source ~/.claude/venv/bin/activate && python3 ~/.claude/scripts/graphify-enrich.py --task-id <DEV_SESSION_ID>-pipeline-{pipeline.index} --context-file <the context file Dev will consume for this pipeline/iteration>
 
   This is advisory — if the binary is absent or blast-radius-map is missing, exit 0 with status=skipped.
 
@@ -1229,7 +1266,7 @@ Agent(subagent_type: "dev")
 
     You are the dev subagent. Follow agents/dev.md instructions precisely.
 
-    User requirement document: <PROJECT_ROOT>/docs/dev/user-requirement-<DEV_SESSION_ID>.md
+    User requirement document: $REQUIREMENT_DOC
     (Read this file before interpreting Requirement, Context file, BA spec, Dev report, or state-derived focus.)
 
     Context file: docs/dev/context-{pipeline.timestamp_suffix}.json
@@ -1243,7 +1280,11 @@ Agent(subagent_type: "dev")
     After implementation, update the spec: Section 2 (What Was Attempted) and Section 3 (What Was Changed).
 
     IMPORTANT: All file reads, writes, and git operations must use absolute paths
-    inside the project root above. Do not modify files in the main project directory.
+    inside the project root above. Under isolation_kind registered_worktree or
+    fresh_clone_checkout that root is an isolated tree, and you must not modify
+    files in the main project directory. Under in_place that root IS the main
+    checkout — it is where the work belongs, and there is no second directory to
+    stay out of.
   "
 ```
 
@@ -1286,7 +1327,7 @@ Read dev report: `docs/dev/dev-report-{pipeline.timestamp_suffix}.json`
 1. **Read dev artifacts**: For each active pipeline, read `docs/dev/dev-report-{pipeline.timestamp_suffix}.json` and the corresponding `ticket-*.md` (or legacy `ba-spec-*.md`).
 2. **Rebuild Docker (gated on `spec_mode == "autonomous"` per Hard Rule 9)**:
    - Identify affected services from `docker-compose.yml`. Backend changes require backend service rebuild; frontend changes require frontend service rebuild.
-   - Verify build contexts point to the worktree, NOT the main project directory.
+   - Verify build contexts point to `worktree_path`. Under `--worktree` that means the isolated worktree and NOT the main project directory; under `in_place` the two are the same path and no relocation is expected.
    - Run `docker compose build` then `docker compose up -d` for the affected services. Wait for services to be healthy.
    - When `spec_mode == "user-provided"`, skip the rebuild unless the spec's Pipeline Workflow explicitly requires it.
 3. **Write QA verification plans**: For EACH pipeline, write concrete QA verification steps:
@@ -1310,8 +1351,9 @@ Do NOT proceed to QA with stale containers.
 ```
 For each active pipeline[i]:
 
-# Write qa_mode sentinel immediately before each QA dispatch (preserve existing fields)
-bash ~/.claude/scripts/write-qa-mode.sh --session-id "$DEV_SESSION_ID" --mode final_verification \
+# Write qa_mode sentinel immediately before each QA dispatch (preserve existing fields).
+# Both literals substituted, neither expanded — see the :1047 site for why.
+CLAUDE_PROJECT_DIR='<MAIN_ROOT>' bash ~/.claude/scripts/write-qa-mode.sh --session-id "<DEV_SESSION_ID>" --mode final_verification \
   || { echo 'ERROR: Failed to set qa_mode=final_verification in qa.json — aborting' >&2; exit 1; }
 
 Agent(subagent_type: "qa")
@@ -1322,7 +1364,7 @@ Agent(subagent_type: "qa")
 
     You are the QA subagent. Follow agents/qa.md instructions precisely.
 
-    User requirement document: <PROJECT_ROOT>/docs/dev/user-requirement-<DEV_SESSION_ID>.md
+    User requirement document: $REQUIREMENT_DOC
     (Read this file before interpreting Requirement, Context file, BA spec, Dev report, or state-derived focus.)
 
     Context file: docs/dev/context-{pipeline.timestamp_suffix}.json
@@ -1338,7 +1380,7 @@ Agent(subagent_type: "qa")
     If verdict is fail, also update Section 6 (Why Not Met) and Section 7 (What Must Be Done).
 
     IMPORTANT: All file reads and verification must use the project root above.
-    Verify that changes were made inside the worktree, not the main project.
+    Verify that changes were made under `worktree_path` — the isolated worktree under `--worktree`, or the main checkout itself when `isolation_kind` is `in_place`.
 
     <If focus_verification_criteria array exists from Step 7, include:>
     Focus verification criteria (MANDATORY -- these are hard pass/fail from user's focus directive).
@@ -1439,7 +1481,7 @@ bash ~/.claude/scripts/refine-context.sh \
 The merged context records `iteration=<new-iter>` and appends a `previous_attempts[]` entry with `iteration=<new-iter>-1`. Then dispatch:
 - **Dev-dispatch precondition (B2-INV)**: BEFORE the Dev dispatch below, route this pipeline through the shared **Step 11g: Graphify Dev-Dispatch Precondition** against the FRESH `docs/dev/context-iter<new-iter>-<timestamp_suffix>.json` Dev will consume. The new iteration context has a different fingerprint, so the precondition RE-ENRICHES (it does NOT skip on bare existence).
 - `Agent(subagent_type: "dev")` with iteration context. Include in Dev prompt: `Overnight spec file: <pipeline.spec_path>`. Also include: `User requirement document: <resolved $REQUIREMENT_DOC path>`. Dev reads spec first for cross-cycle context, then updates Sections 2 and 3.
-- Before dispatching QA, write qa_mode sentinel: `bash ~/.claude/scripts/write-qa-mode.sh --session-id "$DEV_SESSION_ID" --mode final_verification || { echo 'ERROR: Failed to set qa_mode=final_verification — aborting' >&2; exit 1; }`
+- Before dispatching QA, write qa_mode sentinel: `CLAUDE_PROJECT_DIR='<MAIN_ROOT>' bash ~/.claude/scripts/write-qa-mode.sh --session-id "<DEV_SESSION_ID>" --mode final_verification || { echo 'ERROR: Failed to set qa_mode=final_verification — aborting' >&2; exit 1; }`
 - `Agent(subagent_type: "qa")` with new dev report. Include in QA prompt: `Overnight spec file: <pipeline.spec_path>`. Also include: `User requirement document: <resolved $REQUIREMENT_DOC path>`. QA reads spec first, then updates Section 4 (and Sections 6-7 if fail).
 
 Loop termination:
@@ -1512,7 +1554,7 @@ The aggregator filters QA reports to those whose `timestamp_suffix` matches a `s
 
 **Per-cycle commit**:
 
-After the time check, land a HEAD commit on the worktree branch covering this cycle's accumulated changes. Call `commit.sh "chore(overnight): end-of-cycle commit for <worktree_branch>"` directly via Bash (single positional arg; `chore` is a valid CC type so M3 lint passes; `(overnight)` scope identifies the automated context). The CAS engine and content-bound ledger still apply. If the invocation exits non-zero (empty ledger for this session, disk content changed, or other CAS refusal), log the failure to the cycle log and continue — per-fix `refs/checkpoints/*` snapshots remain intact and the operator can promote them manually.
+After the time check, land a HEAD commit on the session's working branch (`worktree_branch` from the state file — under `in_place` that is the branch the checkout was already on, not a session-created one) covering this cycle's accumulated changes. Call `commit.sh "chore(overnight): end-of-cycle commit for <worktree_branch>"` directly via Bash (single positional arg; `chore` is a valid CC type so M3 lint passes; `(overnight)` scope identifies the automated context). The CAS engine and content-bound ledger still apply. If the invocation exits non-zero (empty ledger for this session, disk content changed, or other CAS refusal), log the failure to the cycle log and continue — per-fix `refs/checkpoints/*` snapshots remain intact and the operator can promote them manually.
 
 If time expired: proceed to Step 20 (PM Retro) then Step 21 for final summary.
 If time remains: proceed to Step 20 (PM Retro), then mark Step 21 as completed via TodoWrite. The posttool-overnight-loop.py hook will detect all todo steps completed (it checks every todo's status, including the letter-suffix Step 11g, not a fixed count), reset todos to pending, and inject continuation instructions.
@@ -1538,7 +1580,7 @@ Use Agent tool with:
 
   You are the PM subagent in RETRO mode. Follow agents/pm.md Retrospective Protocol.
 
-  User requirement document: <PROJECT_ROOT>/docs/dev/user-requirement-<DEV_SESSION_ID>.md
+  User requirement document: $REQUIREMENT_DOC
   (Read this file before interpreting Requirement, Context file, BA spec, Dev report, or state-derived focus.)
 
   Project path: <validated worktree_path from state file>
@@ -1588,7 +1630,7 @@ Use Agent tool with:
 If validation fails, log warning and proceed (retro is informational, not blocking).
 
 **Check qa_rerun_required**: Read the retro report's `qa_rerun_required` field.
-- If `qa_rerun_required: true`: For each pipeline to be re-run, write qa_mode sentinel before dispatch: `bash ~/.claude/scripts/write-qa-mode.sh --session-id "$DEV_SESSION_ID" --mode final_verification || { echo 'ERROR: Failed to set qa_mode=final_verification — aborting' >&2; exit 1; }`. Then re-invoke QA for the pipelines listed in `qa_rerun_reasons`. Use the same QA invocation pattern as Step 14-16, but pass additional context: `"This is a PM-requested QA re-run. Reasons: <qa_rerun_reasons>. Focus on the specific concerns raised."` After QA re-run completes, proceed to Step 21 (do NOT re-invoke RETRO — avoid infinite loops).
+- If `qa_rerun_required: true`: For each pipeline to be re-run, write qa_mode sentinel before dispatch: `CLAUDE_PROJECT_DIR='<MAIN_ROOT>' bash ~/.claude/scripts/write-qa-mode.sh --session-id "<DEV_SESSION_ID>" --mode final_verification || { echo 'ERROR: Failed to set qa_mode=final_verification — aborting' >&2; exit 1; }`. Then re-invoke QA for the pipelines listed in `qa_rerun_reasons`. Use the same QA invocation pattern as Step 14-16, but pass additional context: `"This is a PM-requested QA re-run. Reasons: <qa_rerun_reasons>. Focus on the specific concerns raised."` After QA re-run completes, proceed to Step 21 (do NOT re-invoke RETRO — avoid infinite loops).
 - If `qa_rerun_required: false` or field absent: proceed normally to Step 21.
 
 ---
@@ -1601,7 +1643,7 @@ Simply mark this step as completed via TodoWrite. The PostToolUse:TodoWrite hook
 2. Check overnight-state.json for future end_time
 3. Reset all todos to pending
 4. Print loop continuation instructions
-5. You then resume from Step 2 (worktree already exists)
+5. You then resume from Step 2 (the working root is already established)
 
 **If time expired** (session ending):
 **Read the full state file** to get all cycle data.
@@ -1616,7 +1658,7 @@ Simply mark this step as completed via TodoWrite. The PostToolUse:TodoWrite hook
 **End time**: <end_time> (planned) / <actual_end> (actual)
 **Duration**: <hours>h <minutes>m
 **Cycles completed**: <cycle_count>
-**Worktree**: <worktree_branch>
+**Isolation**: <isolation_kind> — working root <worktree_path>, branch <worktree_branch>
 
 ## Statistics
 
@@ -1653,11 +1695,11 @@ Simply mark this step as completed via TodoWrite. The PostToolUse:TodoWrite hook
 
 **CRITICAL: DO NOT auto-merge to $DEFAULT_BRANCH.**
 
-DO NOT squash merge. DO NOT manually copy files. DO NOT create a single commit on $DEFAULT_BRANCH with worktree changes. DO NOT cherry-pick commits. The worktree branch preserves full commit history. A proper `git merge` brings all commits to $DEFAULT_BRANCH with their original authorship and messages intact. Only the USER should trigger the merge, after reviewing the changes.
+DO NOT squash merge. DO NOT manually copy files. DO NOT create a single commit on $DEFAULT_BRANCH with this session's changes. DO NOT cherry-pick commits. Under `registered_worktree` / `fresh_clone_checkout` the worktree branch preserves full commit history, and a proper `git merge` brings all commits to $DEFAULT_BRANCH with their original authorship and messages intact. Under `in_place` the cycles already committed to the checkout's own working branch, so there is no session-created branch to merge and nothing for the session to promote. In every mode, only the USER decides what happens next, after reviewing the changes.
 
-The overnight session does NOT merge anything. It preserves the worktree for user review.
+The overnight session does NOT merge anything. Under `registered_worktree` / `fresh_clone_checkout` it preserves the worktree for user review; under `in_place` it leaves the cycle commits on the working branch it launched from.
 
-**State file cleanup**: Automatic, owned by the orchestrator hooks listed under "Integration with Hooks" below. No manual deletion needed.
+**State file cleanup**: Under `registered_worktree` / `fresh_clone_checkout`, `hooks/merge.sh` deletes the state file after a successful `/merge` keyed on the worktree branch. Under `in_place` there is no worktree branch to merge, so no automatic cleanup path fires — the record at `<project_dir>/.claude/overnight-state-<session_id>.json` stays until the user removes it.
 
 **Default-branch resolver** (run BEFORE producing the announcement):
 
@@ -1686,14 +1728,19 @@ Fixed: <issues_fixed> | Skipped: <issues_skipped>
 
 Summary: docs/dev/overnight-summary-<date>.md
 Log: docs/dev/overnight-log-<date>.md
---- Worktree preserved for review ---
+--- Isolation: <isolation_kind> ---
 Branch: <worktree_branch>
 Path:   <worktree_path>
+<If isolation_kind != 'in_place', add the line: "--- Worktree preserved for review ---">
 
 To review changes:
-  git log $DEFAULT_BRANCH..<worktree_branch> --oneline
-  git diff $DEFAULT_BRANCH...<worktree_branch>
+  git log <base_ref>..<worktree_branch> --oneline
+  git diff <base_ref>...<worktree_branch>
+  (base_ref is $DEFAULT_BRANCH under registered_worktree / fresh_clone_checkout.
+   Under in_place the branch pre-dates the session, so use the first cycle
+   commit's parent — $DEFAULT_BRANCH would also list pre-session work.)
 
+<If isolation_kind != 'in_place', include:>
 To merge (when ready):
   /merge <worktree_branch>
 
@@ -1708,6 +1755,14 @@ manually runs three independent commands in this order:
   /merge <worktree_branch>
   /push
 
+<If isolation_kind == 'in_place', include instead:>
+Nothing was created, so there is no worktree to preserve and no branch to merge —
+the cycle commits are already on <worktree_branch> in this checkout. To ship, see the
+"Post-loop manual flow (human-in-the-loop)" subsection below. The user
+manually runs two independent commands in this order:
+  /commit -m "<summary>"   (optional — only if work is left uncommitted)
+  /push
+
 independent so the user can inspect state between each step.
 
 The time-lock has been released. The session can now end normally.
@@ -1715,22 +1770,25 @@ The time-lock has been released. The session can now end normally.
 
 ### Post-loop manual flow (human-in-the-loop)
 
-After all overnight cycles complete, the user is expected to review results and run the following three commands MANUALLY, in this order:
+After all overnight cycles complete, the user is expected to review results and run the following commands MANUALLY, in this order — **three** under `registered_worktree` / `fresh_clone_checkout`, and **two** under `in_place`, where step 2 does not apply because the cycles already landed on the checkout's own working branch:
 
 1. **`/commit -m "<session summary>"`** (optional)
-   - Use this if the user has master-branch touch-ups OUTSIDE the worktree cycles (e.g. README updates, doc fixes)
-   - Skip if there's nothing to commit on master beyond what overnight cycles produced
+   - Under `registered_worktree` / `fresh_clone_checkout`: use this if the user has master-branch touch-ups OUTSIDE the worktree cycles (e.g. README updates, doc fixes)
+   - Under `in_place`: there is no master-side / worktree-side distinction — use it only if work is left uncommitted after the final cycle's end-of-cycle commit
+   - Skip if there's nothing to commit beyond what overnight cycles produced
    - The commit message MUST be a real session summary the agent writes (not a placeholder); per redev6 P-MSG, `-m` is REQUIRED in non-bridge modes
    - For `--force` overrides on `/commit` (e.g., spec-only commits without ceremony artifacts), see `commands/commit.md`
 
-2. **`/merge <worktree-branch>`**
+2. **`/merge <worktree-branch>`** — `registered_worktree` / `fresh_clone_checkout` ONLY; **skip entirely under `in_place`**
    - Merges the overnight worktree branch back into master
    - The blessed-bridge env-var (`CLAUDE_MERGE_COMMAND_ACTIVE=1`) handles privilege-guard authorization
    - If merge conflicts arise, the user resolves manually before continuing
+   - Under `in_place` no session-created branch exists, so this step has no operand and the blessed-bridge authorization is never needed
 
 3. **`/push`**
-   - Pushes master to origin
-   - Requires clean working tree post-merge and commits ahead of upstream
+   - Under `registered_worktree` / `fresh_clone_checkout`: pushes master to origin
+   - Under `in_place`: pushes the checkout's own working branch to origin — never master, which the launcher refused to start on
+   - Requires clean working tree (post-merge in the isolated modes) and commits ahead of upstream
    - The push wrapper writes its own grant manifest; no further user action required
 
 
@@ -1747,69 +1805,12 @@ The state file is created by `create-overnight-state.sh` during session initiali
 
 **State file location**: `<project_dir>/.claude/overnight-state-<session_id>.json`
 
-**Multi-session support**: Each overnight session uses its own state file keyed by `session_id` (from `$CLAUDE_SESSION_ID` env var or a generated UUID). This allows multiple concurrent overnight sessions on the same project. The Stop hook scans for ALL `overnight-state-*.json` files and blocks termination if ANY has a future end_time.
+**Multi-session support**: Each overnight session uses its own state file keyed by `session_id` (the id the launcher recorded — resolve it as the Step 1 binding block does, from `$CLAUDE_CODE_SESSION_ID`, or a generated UUID). This keys each session's *state* separately, which is not the same as isolating its *work*: concurrent sessions get separate working roots only under `registered_worktree` / `fresh_clone_checkout`. Under the `in_place` default two sessions share one checkout and will collide on the working tree, so run at most one in-place session per checkout. The Stop hook scans for ALL `overnight-state-*.json` files and blocks termination if ANY has a future end_time.
 
-**Worktree naming**: Each session creates `overnight-<YYYYMMDD>-<session_id_short>` (first 8 chars of session_id) to avoid conflicts between concurrent sessions.
+**Worktree naming** (`registered_worktree` / `fresh_clone_checkout` only): a session launched with `--worktree` creates `overnight-<YYYYMMDD>-<session_id_short>` (first 8 chars of session_id) to avoid conflicts between concurrent sessions. Under `in_place` nothing is created and the session stays on the branch the checkout was already on.
 
-**Schema**:
-```json
-{
-  "session_id": "string (from $CLAUDE_SESSION_ID or UUID)",
-  "end_time": "ISO-8601 datetime",
-  "start_time": "ISO-8601 datetime",
-  "focus": "string (discovery hint from user, or empty)",
-  "spec_mode": "autonomous|user-provided",
-  "user_spec_path": "string (path to user-provided spec, or null)",
-  "cycle_count": 0,
-  "issues_found": 0,
-  "issues_fixed": 0,
-  "issues_skipped": 0,
-  "current_phase": "initializing|exploring|pipeline_creation|analyzing|implementing|verifying|iterating|logging|retrospective|completed",
-  "current_issues": [
-    {
-      "index": 0,
-      "description": "issue description",
-      "location": "file:line",
-      "severity": "critical|major|minor|cosmetic",
-      "category": "category string",
-      "agents_flagged": ["product-owner", "architect"],
-      "phase": "pending|ba_complete|dev_complete|qa_failed|done",
-      "iteration": 0,
-      "status": "active|fixed|skipped",
-      "timestamp_suffix": "YYYYMMDD-HHMMSS-0",
-      "spec_path": "docs/dev/overnight/<session_id>/spec-pipeline-<index>.md"
-    }
-  ],
-  "failed_attempts": {"issue_desc": 2},
-  "addressed_issues": ["issue_desc_1", "issue_desc_2"],
-  "cycle_log": [
-    {
-      "cycle": 1,
-      "pipeline_index": 0,
-      "issue": "description",
-      "location": "file:line",
-      "severity": "critical|major|minor|cosmetic",
-      "status": "fixed|skipped",
-      "iterations": 1,
-      "timestamp": "ISO-8601"
-    }
-  ],
-  "consecutive_clean_sweeps": 0,
-  "worktree_path": "/abs/main/.claude/worktrees/overnight-... (always a validated isolated root; never null)",
-  "worktree_branch": "worktree-overnight-YYYYMMDD-<session_id_short> (never master)",
-  "pm_triage_reports": [],
-  "pm_retro_reports": [],
-  "unresolved_issues": [
-    {
-      "description": "issue description",
-      "severity": "critical|major|minor|cosmetic",
-      "cycles_unresolved": 0,
-      "last_attempt_reason": "why it failed or was deferred",
-      "recommended_approach": "what to try next"
-    }
-  ]
-}
-```
+**Schema**: the full state-file field catalogue lives in `docs/reference/overnight-reference.md`
+(§State file schema). The orchestrator reads named fields and never writes this file.
 
 ---
 
@@ -1819,13 +1820,13 @@ The state file is created by `create-overnight-state.sh` during session initiali
 - **Unfixable issue (5 failed iterations per pipeline)** — see Step 17 (per-pipeline iteration cap).
 - **Very short time remaining (< 5 minutes)** — see Step 6 (severity-aware time guard).
 - **State file corruption** — create a fresh state file preserving `end_time`, continue.
-- **Worktree creation failure / missing on continuation** — HARD ABORT (see Step 1 worktree guard). The launch hook fails closed when no validated isolated worktree can be produced; the session does not run in the main directory.
+- **Working root missing or invalid on continuation** — HARD ABORT (see the Step 1 WORKING-ROOT GUARD). Under `--worktree` the launch refuses outright when no durable isolation can be produced rather than silently downgrading to in-place. Under the `in_place` default there is no worktree to create or lose, and running in the main checkout is the intended behavior, not a failure.
 
 ---
 
 ## Integration with Hooks
 
-- **prompt-workflow.py** (UserPromptSubmit): Creates overnight-state-<session_id>.json (complete with worktree_path, worktree_branch, view_paths, spec detection) on /dev-overnight detection; injects continuation context with worktree guard
+- **prompt-workflow.py** (UserPromptSubmit): Creates overnight-state-<session_id>.json (complete with worktree_path, worktree_branch, view_paths, spec detection) on /dev-overnight detection; injects continuation context with the mode-neutral working-root guard
 - **posttool-overnight-loop.py** (PostToolUse:TodoWrite): Detects all-completed state, resets todos for new cycle if end_time is future
 - **pretool-overnight-hook-guard.py** (PreToolUse): Blocks Write/Edit/Bash targeting .claude/hooks/ during overnight sessions
 - **pretool-workflow-gate.py** (PreToolUse): Gates tools until TodoWrite is called
@@ -1838,7 +1839,7 @@ The state file is created by `create-overnight-state.sh` during session initiali
 ### Loop Mechanism (v3)
 - When all todo steps are marked completed via TodoWrite (every todo, including the letter-suffix Step 11g), the posttool-overnight-loop.py hook fires
 - It checks overnight-state.json: if end_time is in the future, it resets all todos to pending and injects loop continuation instructions
-- The agent then resumes from Step 2 (exploration) since worktree already exists
+- The agent then resumes from Step 2 (exploration) since the working root is already established
 - This provides natural context boundaries at each cycle without requiring external cron triggers
 
 ---
@@ -1851,29 +1852,13 @@ All artifact filenames are defined inline in their owning steps (Steps 4-13). Ti
 
 ## Quality Standards Enforcement
 
-Per-agent responsibilities are owned by `agents/<name>.md` (pm, product-owner, architect, user, ui-specialist, ba, dev, qa) — see those files for current contracts. Orchestrator-only obligations: PM explores via Playwright before writing the test plan; specialist prompts always include the test-plan path; all RELEVANT specialists execute the E2E flow before specialized analysis; ALL issues become parallel pipelines ordered by PM triage; cycle deduplication via `addressed_issues`; multi-session isolation via `session_id`-keyed state files.
+Per-agent responsibilities are owned by `agents/<name>.md` (pm, product-owner, architect, user, ui-specialist, ba, dev, qa) — see those files for current contracts. Orchestrator-only obligations: PM explores via Playwright before writing the test plan; specialist prompts always include the test-plan path; all RELEVANT specialists execute the E2E flow before specialized analysis; ALL issues become parallel pipelines ordered by PM triage; cycle deduplication via `addressed_issues`; per-session STATE isolation via `session_id`-keyed state files (working-tree isolation between concurrent sessions exists only under `--worktree`).
 
 ---
 
 ## Comparison: /dev vs /dev-overnight
 
-| Aspect | /dev | /dev-overnight |
-|--------|------|----------------|
-| Input | User provides requirement | Agent discovers issues via 4 specialist subagents |
-| BA phase | Full BA + clarification loop (max 3 rounds) | BA with clarification skipped (round=3) |
-| BA validation | Step 8 | Step 9 |
-| Dev validation | Step 12 | Step 13 |
-| QA processing | Step 14 decision tree | Step 16 autonomous decision |
-| Iteration loop | Step 10 (max 5, asks user after 5) | Step 17 (max 5 per pipeline, auto-skip after 5) |
-| Settings update | Step 9 | Step 18 (aggregated from all pipelines) |
-| Loop | Single pass | Continuous until end-time |
-| Termination | After QA passes | After end-time expires |
-| User interaction | Required (clarification, approval) | None (fully autonomous) |
-| Scope per cycle | One complete feature/fix | User-pathway-filtered findings (parallel pipelines, gated by PM Step 4 — Tier 1 + multi-agent-consensus in autonomous mode; user-need-relevant in user-provided mode); specialists' free exploration is preserved per Section 5.7 anti-pattern #5 |
-| Subagent usage | BA + dev + QA | product-owner + architect + user + ui-specialist + BA + dev + QA |
-| Stop hook | Workflow enforcement only | Workflow + time-lock |
-| Worktree | Not used | Created on first run, reused across cycles |
-| Total steps | 13 | 21 |
+Orientation table only — see `docs/reference/overnight-reference.md`.
 
 ---
 

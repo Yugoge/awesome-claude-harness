@@ -1,8 +1,8 @@
 # lib
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-07-26T16:50:09Z*
-**Total entries**: 31
+*Last updated: 2026-09-03T12:31:26Z*
+**Total entries**: 34
 **Convention**: kebab
 
 ## Tree
@@ -23,12 +23,15 @@ lib/
 ├── `allowlist.py` - Single source of truth for grant-read, grant-match, and grant-consume
 ├── `bash_context_strip.py` - This is deliberately NOT a full shell parser.  It only computes a conservative
 ├── `bash_write_targets.py` - Provides two public functions used by tool-policy and overnight-hook-guard:
+├── `capability_state.py` - verdict, and the INDEPENDENT (non-hook-dispatched) preactivation consumer
 ├── `checkpoint-core.sh` - checkpoint-core.sh - Shared library for automated snapshot commits
 ├── `claude_home.py` - Generalizes the in-repo gold-standard fail-closed self-resolution pattern
 ├── `claude_home.sh` - claude_home.sh — shared "harness home" resolver (shell consumable).
 ├── `close-verdict.py` - Shared CLOSE verdict classifier for commit/close tooling.
 ├── `closeout.py` - Public API:
+├── `commit_journal.py` - WHY THIS EXISTS
 ├── `contract_runtime.py` - This module is the single shared engine consumed by every contract-aware
+├── `git_clean_guard.py` - Classifies ONE Bash command for the fail-closed pre-clean guard woven into the
 ├── `git_command_classifier.py` - Provides iter_git_invocations() — a token-aware parser that detects git
 ├── `grepguard_context_strip.py` - PURPOSE (narrow, guard-specific)
 ├── `overnight.py` - Single source of truth for "is a /dev-overnight session currently live?". A

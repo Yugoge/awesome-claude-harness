@@ -14,6 +14,28 @@
 
 set -euo pipefail
 
+# --- M3-ORDERING: neutralise the actor marker for THIS SCRIPT'S OWN git calls ---
+# Every git invocation this launcher issues runs in the PRE-STATE region: no
+# overnight session-state record exists yet, so a fail-closed protection consumer
+# cannot resolve a protected branch. The keystone then denies the launcher's own
+# ref writes (`worktree add -b`, `clone`, `checkout -b`) and the policy shim
+# blocks every main-targeting op unconditionally, repo-identity reads included.
+# When /dev-overnight is invoked from a context that ALREADY exports
+# CLAUDE_OVERNIGHT_ACTOR=1 (ambient inheritance), that is exactly what happens.
+# Each invocation below therefore runs through one of these two arrays, which
+# clear the marker FOR THAT INVOCATION ONLY. The variable is never unset
+# process-wide and is never reassigned here: the overnight actor's own later
+# operations must keep it, because that marker is what the whole protection chain
+# keys on (hooks/prompt-workflow.py:491).
+#   _ENV  — for a child PROCESS that runs git itself. scripts/create-worktree.sh
+#           owns the most ref-mutating pre-state op (`worktree add -b`, where
+#           old 0000... != new, so the keystone evaluates it) and is frozen
+#           out-of-scope, so it is neutralised at the CALL BOUNDARY and its git
+#           calls inherit the cleared environment.
+#   plain — for this script's own direct git invocations.
+GIT_UNMARKED_ENV=(env -u CLAUDE_OVERNIGHT_ACTOR)
+GIT_UNMARKED=("${GIT_UNMARKED_ENV[@]}" git)
+
 # --- Defaults ---
 END_TIME=""
 FOCUS=""
@@ -33,7 +55,7 @@ resolve_project_dir() {
         return 0
     fi
     local toplevel
-    toplevel="$(git rev-parse --show-toplevel 2>/dev/null)" || toplevel=""
+    toplevel="$("${GIT_UNMARKED[@]}" rev-parse --show-toplevel 2>/dev/null)" || toplevel=""
     if [[ -n "$toplevel" ]]; then
         printf '%s\n' "$toplevel"
         return 0
@@ -45,6 +67,17 @@ PROJECT_DIR="$(resolve_project_dir)"
 
 # --- Parse arguments ---
 CODEX_REQUIRED=false
+# M1-SEAM: ONE side-effect-free component mode over the SAME pre-confinement
+# code path a real launch executes. It runs the identical protected-branch
+# resolution and the identical session-state record construction, emits the
+# record as exactly one top-level JSON object on stdout, and creates NO
+# worktree, clone, branch, state file, temporary file, cycle-contract file,
+# checklist or bookmark. It exists because the only end-to-end route to M1/M6
+# creates a worktree, which no verifying agent role may do — a requirement
+# whose sole verification route is blocked is a requirement that ships
+# unverified. It is NOT a second implementation: it is the same lines, with
+# the isolation-creating region skipped.
+EMIT_RECORD_ONLY=0
 # Override state and cycle directories via env vars or CLI
 STATE_SUBDIR="${OVERNIGHT_STATE_SUBDIR:-.claude}"
 CYCLE_SUBDIR="${OVERNIGHT_CYCLE_SUBDIR:-docs/dev/overnight}"
@@ -60,9 +93,10 @@ while [[ $# -gt 0 ]]; do
         --cycle-subdir) CYCLE_SUBDIR="$2"; shift 2 ;;
         --specs-subdir) SPECS_SUBDIR="$2"; shift 2 ;;
         --codex)     CODEX_REQUIRED=true; shift ;;
+        --emit-record-only) EMIT_RECORD_ONLY=1; shift ;;
         *)
             echo "Unknown option: $1" >&2
-            echo "Usage: create-overnight-state.sh [--end-time <time>] [--focus <str>] [--spec <path>] [--session-id <uuid>] [--project-dir <path>] [--state-subdir <dir>] [--cycle-subdir <dir>] [--specs-subdir <dir>] [--codex]" >&2
+            echo "Usage: create-overnight-state.sh [--end-time <time>] [--focus <str>] [--spec <path>] [--session-id <uuid>] [--project-dir <path>] [--state-subdir <dir>] [--cycle-subdir <dir>] [--specs-subdir <dir>] [--codex] [--emit-record-only]" >&2
             exit 1
             ;;
     esac
@@ -172,26 +206,103 @@ fi
 # --- Repo identity + MAIN_HEAD capture (side-effect-free; may precede worktree) ---
 # M1/round-3: only side-effect-free repo-identity discovery and MAIN_HEAD capture
 # may run before worktree creation. Everything fallible (spec/focus/view) runs AFTER.
-MAIN_ROOT="$(git -C "$PROJECT_DIR" rev-parse --show-toplevel 2>/dev/null || echo '')"
+MAIN_ROOT="$("${GIT_UNMARKED[@]}" -C "$PROJECT_DIR" rev-parse --show-toplevel 2>/dev/null || echo '')"
 if [[ -z "$MAIN_ROOT" ]]; then
     echo "Error: --project-dir is not inside a git repo: $PROJECT_DIR" >&2
     exit 1
 fi
-MAIN_GIT_DIR="$(git -C "$MAIN_ROOT" rev-parse --absolute-git-dir 2>/dev/null || echo "$MAIN_ROOT/.git")"
-MAIN_BRANCH_AT_START="$(git -C "$MAIN_ROOT" branch --show-current 2>/dev/null || echo '')"
-# Fatal unless the main checkout is exactly on master (round-3 §2): we will never
-# move it; launching from a non-master main dir is an unsafe precondition.
-if [[ "$MAIN_BRANCH_AT_START" != "master" ]]; then
-    echo "Error: overnight launch requires the main checkout on 'master' (found: '${MAIN_BRANCH_AT_START:-<detached>}'). Refusing to launch (no state written)." >&2
+MAIN_GIT_DIR="$("${GIT_UNMARKED[@]}" -C "$MAIN_ROOT" rev-parse --absolute-git-dir 2>/dev/null || echo "$MAIN_ROOT/.git")"
+MAIN_BRANCH_AT_START="$("${GIT_UNMARKED[@]}" -C "$MAIN_ROOT" branch --show-current 2>/dev/null || echo '')"
+# Branch-name agnostic (round-3 §2 revised): the branch the main checkout sits on
+# is recorded but never gated — 'master', 'main', or any other name is fine, and
+# we never move it. The real precondition is that --project-dir resolves to the
+# repository's PRIMARY checkout and not a linked worktree, because the overnight
+# actor creates its own isolated worktree from here and must never nest one
+# worktree inside another. Primary checkout <=> git-dir == git-common-dir.
+MAIN_COMMON_DIR="$("${GIT_UNMARKED[@]}" -C "$MAIN_ROOT" rev-parse --git-common-dir 2>/dev/null || echo '')"
+case "$MAIN_COMMON_DIR" in
+    '')  MAIN_COMMON_DIR="$MAIN_ROOT/.git" ;;
+    /*)  ;;
+    *)   MAIN_COMMON_DIR="$MAIN_ROOT/$MAIN_COMMON_DIR" ;;
+esac
+MAIN_COMMON_DIR="$(realpath "$MAIN_COMMON_DIR" 2>/dev/null || echo "$MAIN_COMMON_DIR")"
+MAIN_GIT_DIR_REAL="$(realpath "$MAIN_GIT_DIR" 2>/dev/null || echo "$MAIN_GIT_DIR")"
+if [[ "$MAIN_GIT_DIR_REAL" != "$MAIN_COMMON_DIR" ]]; then
+    echo "Error: overnight launch requires the repository's primary checkout, but --project-dir resolves to a linked worktree (git-dir='$MAIN_GIT_DIR_REAL', common-dir='$MAIN_COMMON_DIR'). Refusing to launch (no state written)." >&2
     exit 1
 fi
-MAIN_HEAD_AT_START="$(git -C "$MAIN_ROOT" rev-parse HEAD 2>/dev/null || echo '')"
+MAIN_HEAD_AT_START="$("${GIT_UNMARKED[@]}" -C "$MAIN_ROOT" rev-parse HEAD 2>/dev/null || echo '')"
 # Dirty main tree is ALLOWED; we record it and NEVER stash/copy/commit it.
-if [[ -n "$(git -C "$MAIN_ROOT" status --porcelain 2>/dev/null)" ]]; then
+if [[ -n "$("${GIT_UNMARKED[@]}" -C "$MAIN_ROOT" status --porcelain 2>/dev/null)" ]]; then
     MAIN_DIRTY_AT_START=true
 else
     MAIN_DIRTY_AT_START=false
 fi
+
+# --- M1/M2: resolve the PROTECTED BRANCH once, here, before confinement -------
+# This is the single authoritative resolution. It runs inside the region this
+# file designates side-effect-free (see the comment above), and therefore
+# strictly BEFORE the worktree/clone block below — which is what lets an
+# unresolvable branch refuse the launch without having created any worktree,
+# branch or clone.
+#
+# STRICT wrapper over the tier-1 rule of scripts/derive-default-branch.sh. That
+# script's ordered tiers are reused; its permissive TAIL deliberately is not:
+#   * its `git remote show origin` network tier is NOT used here — it is
+#     unbounded, and a launch-time hang is a denial of service;
+#   * its literal fallback is NOT used here — silently protecting a branch the
+#     repository does not have is exactly the defect this resolution removes.
+# Local refs only. Unresolvable => refuse the launch, write no state (M2).
+#
+# The value is DISTINCT from MAIN_BRANCH_AT_START, which records whatever branch
+# the primary checkout happened to be sitting on. They are different concepts:
+# one is the repository's protected branch, the other is a transient position.
+resolve_protected_branch() {
+    # tier 1 (local refs only): the remote-tracking default-branch symref.
+    "${GIT_UNMARKED[@]}" -C "$MAIN_ROOT" symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null \
+        | sed 's@^origin/@@'
+}
+PROTECTED_BRANCH="$(resolve_protected_branch || true)"
+PROTECTED_BRANCH="${PROTECTED_BRANCH%%$'\n'*}"
+if [[ -z "$PROTECTED_BRANCH" ]]; then
+    echo "Error: cannot resolve the repository's protected branch from local refs (refs/remotes/origin/HEAD is unset or dangling in '$MAIN_ROOT'). The overnight protection chain would be inert, so the launch is refused (no state written). Remedy: set the default-branch symref, e.g. 'git remote set-head origin -a'." >&2
+    exit 1
+fi
+
+# =============================================================================
+# EVERYTHING BELOW THIS LINE CREATES SIDE EFFECTS (worktree/clone/branch, spec
+# resolution, directories). M1-SEAM's component mode pre-seeds the record fields
+# these blocks would populate and then SKIPS the whole region, so the seam
+# reaches the record construction over the same code path without creating
+# anything. The pre-seeded values are the same empty/neutral defaults the real
+# launch starts from — they are never a substitute source for PROTECTED_BRANCH,
+# which was resolved above, in the side-effect-free region, for both modes.
+# =============================================================================
+WORKTREE_PATH=""
+WORKTREE_BRANCH=""
+WORKTREE_HEAD_AT_START=""
+ISOLATION_KIND=""
+ISOLATION_ACTIVE_UNTIL=""
+SPEC_MODE="autonomous"
+USER_SPEC_PATH="null"
+VIEW_PATHS="{}"
+RESOLVED_SPEC_ID=""
+DEV_REGISTRY_DIR=""
+GUARANTEE_LEVEL=""
+STRUCTURAL_CLAIM_ALLOWED=false
+GIT_VERSION_FIELD=""
+GIT_EFFECTIVE_PATH_FIELD=""
+GIT_EXEC_PATH_FIELD=""
+SELFTEST_RESULT_FIELD=""
+ACTOR_GIT_SHIM=""
+ACTOR_GIT_BINDIR=""
+ACTOR_GIT_SHIMDIR=""
+ACTOR_ENV_HELPER_PATH=""
+CONTRACT_FILE=""
+TRACE_LOG_PATH=""
+MONOLITH_SHA="null"
+
+if [[ "$EMIT_RECORD_ONLY" != "1" ]]; then
 
 # --- Create + validate the isolated worktree FIRST (M1, M2, M3) ---------------
 # Recoverable failures here NEVER fall back to in-place work: a missing/invalid
@@ -202,13 +313,18 @@ WORKTREE_HEAD_AT_START=""
 ISOLATION_KIND=""
 WORKTREE_SCRIPT="$(dirname "$0")/create-worktree.sh"
 WORKTREE_NAME="overnight-$(date +%Y%m%d)-${SESSION_ID:0:8}"
+# M3-ORDERING: the worktree script's `worktree add -b` is the launcher's most
+# ref-mutating pre-state operation (old 0000... != new, so the keystone evaluates
+# it). It is out of scope for edits, so the marker is cleared AT THE CALL
+# BOUNDARY: the whole child process tree, and therefore every git call inside it,
+# runs unmarked. Per invocation only — the parent's own environment is untouched.
 if [[ -x "$WORKTREE_SCRIPT" ]] && \
-   WORKTREE_RESULT=$(bash "$WORKTREE_SCRIPT" --project-dir "$MAIN_ROOT" "$WORKTREE_NAME" 2>/dev/null); then
+   WORKTREE_RESULT=$("${GIT_UNMARKED_ENV[@]}" bash "$WORKTREE_SCRIPT" --project-dir "$MAIN_ROOT" "$WORKTREE_NAME" 2>/dev/null); then
     WORKTREE_PATH=$(echo "$WORKTREE_RESULT" | grep -oP 'WORKTREE_PATH=\K\S+' || echo '')
     WORKTREE_BRANCH=$(echo "$WORKTREE_RESULT" | grep -oP 'WORKTREE_BRANCH=\K\S+' || echo '')
     if [[ -n "$WORKTREE_PATH" && -d "$WORKTREE_PATH" ]]; then
         ISOLATION_KIND="registered_worktree"
-        WORKTREE_HEAD_AT_START="$(git -C "$WORKTREE_PATH" rev-parse HEAD 2>/dev/null || echo '')"
+        WORKTREE_HEAD_AT_START="$("${GIT_UNMARKED[@]}" -C "$WORKTREE_PATH" rev-parse HEAD 2>/dev/null || echo '')"
         echo "Created worktree: $WORKTREE_PATH (branch: $WORKTREE_BRANCH)" >&2
     fi
 fi
@@ -217,15 +333,15 @@ fi
 # could not be produced. NEVER work in-place; NEVER use tmpfs as a default.
 if [[ -z "$ISOLATION_KIND" ]]; then
     echo "Primary worktree creation failed; attempting recovery ladder (repair -> prune -> fresh-clone)." >&2
-    git -C "$MAIN_ROOT" worktree repair >/dev/null 2>&1 || true
-    git -C "$MAIN_ROOT" worktree prune >/dev/null 2>&1 || true
+    "${GIT_UNMARKED[@]}" -C "$MAIN_ROOT" worktree repair >/dev/null 2>&1 || true
+    "${GIT_UNMARKED[@]}" -C "$MAIN_ROOT" worktree prune >/dev/null 2>&1 || true
     # one more registered-worktree attempt after repair/prune
-    if WORKTREE_RESULT=$(bash "$WORKTREE_SCRIPT" --project-dir "$MAIN_ROOT" "$WORKTREE_NAME" 2>/dev/null); then
+    if WORKTREE_RESULT=$("${GIT_UNMARKED_ENV[@]}" bash "$WORKTREE_SCRIPT" --project-dir "$MAIN_ROOT" "$WORKTREE_NAME" 2>/dev/null); then
         WORKTREE_PATH=$(echo "$WORKTREE_RESULT" | grep -oP 'WORKTREE_PATH=\K\S+' || echo '')
         WORKTREE_BRANCH=$(echo "$WORKTREE_RESULT" | grep -oP 'WORKTREE_BRANCH=\K\S+' || echo '')
         if [[ -n "$WORKTREE_PATH" && -d "$WORKTREE_PATH" ]]; then
             ISOLATION_KIND="registered_worktree"
-            WORKTREE_HEAD_AT_START="$(git -C "$WORKTREE_PATH" rev-parse HEAD 2>/dev/null || echo '')"
+            WORKTREE_HEAD_AT_START="$("${GIT_UNMARKED[@]}" -C "$WORKTREE_PATH" rev-parse HEAD 2>/dev/null || echo '')"
             echo "Recovered worktree after repair/prune: $WORKTREE_PATH" >&2
         fi
     fi
@@ -240,12 +356,12 @@ if [[ -z "$ISOLATION_KIND" ]]; then
     elif mkdir -p "$FRESH_ROOT" 2>/dev/null && [[ -w "$FRESH_ROOT" ]]; then
         FRESH_WT="$FRESH_ROOT/${WORKTREE_NAME}"
         FRESH_BRANCH="worktree-${WORKTREE_NAME}"
-        if git clone -q --local "$MAIN_GIT_DIR" "$FRESH_WT" 2>/dev/null \
-           && git -C "$FRESH_WT" checkout -q -b "$FRESH_BRANCH" "$MAIN_HEAD_AT_START" 2>/dev/null; then
+        if "${GIT_UNMARKED[@]}" clone -q --local "$MAIN_GIT_DIR" "$FRESH_WT" 2>/dev/null \
+           && "${GIT_UNMARKED[@]}" -C "$FRESH_WT" checkout -q -b "$FRESH_BRANCH" "$MAIN_HEAD_AT_START" 2>/dev/null; then
             WORKTREE_PATH="$FRESH_WT"
             WORKTREE_BRANCH="$FRESH_BRANCH"
             ISOLATION_KIND="fresh_clone_checkout"
-            WORKTREE_HEAD_AT_START="$(git -C "$FRESH_WT" rev-parse HEAD 2>/dev/null || echo '')"
+            WORKTREE_HEAD_AT_START="$("${GIT_UNMARKED[@]}" -C "$FRESH_WT" rev-parse HEAD 2>/dev/null || echo '')"
             echo "Durable fresh-clone fallback created at $FRESH_WT" >&2
         fi
     fi
@@ -307,9 +423,23 @@ fi
 # Wires the reference-transaction hook via core.hooksPath relocation WITHOUT
 # clobbering pre-commit/post-commit (the installer re-homes/chains them, AC6).
 KEYSTONE_INSTALLER="$(dirname "$0")/install-git-keystone.sh"
+# M3-ORDERING: this is a pre-state child that runs git against MAIN_ROOT
+# (install-git-keystone.sh:35 `rev-parse --git-common-dir`). Under an ambient
+# marker the shim denies any main-targeting op before op-specific logic
+# (git-policy-shim:181), so the installer would exit at :36 BEFORE KEYSTONE_DIR
+# is computed and copy nothing — leaving an existing repo on its OLD keystone.
+# Neutralised at the CALL BOUNDARY, per invocation, exactly as :322/:339.
 if [[ -x "$KEYSTONE_INSTALLER" ]]; then
-    bash "$KEYSTONE_INSTALLER" --project-dir "$MAIN_ROOT" >&2 || \
-        echo "Warning: keystone installation reported a problem (layered defenses still active)." >&2
+    # FAIL CLOSED (was a warning). A launch that cannot install its own
+    # enforcement hook cannot deliver the protection the state record it would
+    # then write attests. Same posture as the M2 unresolvable-branch refusal
+    # above; the installer is idempotent (it exits 0 refreshing an already
+    # installed keystone), so a healthy repo is never refused.
+    if ! "${GIT_UNMARKED_ENV[@]}" bash "$KEYSTONE_INSTALLER" --project-dir "$MAIN_ROOT" >&2; then
+        echo "Error: keystone installation failed for $MAIN_ROOT; refusing the launch (no state written)." >&2
+        echo "Remedy: run scripts/install-git-keystone.sh --project-dir $MAIN_ROOT and fix the reported cause." >&2
+        exit 1
+    fi
 fi
 
 # --- Prepare + CAPTURE the overnight actor's git PATH wrappers (fix-1) ---------
@@ -344,7 +474,12 @@ GIT_EXEC_PATH_FIELD=""
 SELFTEST_RESULT_FIELD=""
 SELFTEST_SCRIPT="$(dirname "$0")/overnight-git-selftest.sh"
 if [[ -x "$SELFTEST_SCRIPT" ]]; then
-    SELFTEST_JSON_LINE="$(bash "$SELFTEST_SCRIPT" --project-dir "$MAIN_ROOT" 2>/dev/null | grep '^SELFTEST_JSON=' | head -1 || echo '')"
+    # M3-ORDERING: pre-state child with one main-targeting read
+    # (overnight-git-selftest.sh:689 `config --get core.hooksPath`). Denied under
+    # an ambient marker, which would silently DOWNGRADE the recorded guarantee
+    # fields. Safe to clear: the selftest sets the marker explicitly per probe
+    # rather than inheriting it.
+    SELFTEST_JSON_LINE="$("${GIT_UNMARKED_ENV[@]}" bash "$SELFTEST_SCRIPT" --project-dir "$MAIN_ROOT" 2>/dev/null | grep '^SELFTEST_JSON=' | head -1 || echo '')"
     SELFTEST_JSON="${SELFTEST_JSON_LINE#SELFTEST_JSON=}"
     if [[ -n "$SELFTEST_JSON" ]] && echo "$SELFTEST_JSON" | jq empty >/dev/null 2>&1; then
         GUARANTEE_LEVEL="$(echo "$SELFTEST_JSON" | jq -r '.guarantee_level // "best_effort_head_switch"')"
@@ -411,8 +546,20 @@ if [[ "$USER_SPEC_PATH" != "null" && -n "$USER_SPEC_PATH" && -f "$USER_SPEC_PATH
     MONOLITH_SHA="$(sha256sum "$USER_SPEC_PATH" | awk '{print $1}')"
 fi
 
-# --- Build JSON with jq (schema v8 + Option-A immutable guarantee fields) -----
+fi   # end of the side-effect-creating region (M1-SEAM skips it wholesale)
+
+if [[ "$EMIT_RECORD_ONLY" == "1" ]]; then
+    OUT_TARGET="/dev/stdout"
+else
+    OUT_TARGET="$TMP_FILE"
+fi
+
+# --- Build JSON with jq (schema v9 + Option-A immutable guarantee fields) -----
+# ONE top-level JSON object. In seam mode it goes to stdout; in a real launch it
+# goes to the temp file that is then atomically moved into place. Same lines,
+# same fields, same source for protected_branch — that is the point of the seam.
 jq -n \
+    --arg protected_branch "$PROTECTED_BRANCH" \
     --arg session_id "$SESSION_ID" \
     --arg end_time "$END_TIME" \
     --arg start_time "$START_TIME" \
@@ -445,8 +592,9 @@ jq -n \
     --argjson view_paths "$VIEW_PATHS" \
     --argjson codex_required "$CODEX_REQUIRED" \
     '{
-        schema_version: 8,
+        schema_version: 9,
         session_id: $session_id,
+        protected_branch: $protected_branch,
         end_time: $end_time,
         start_time: $start_time,
         isolation_active_until: $isolation_active_until,
@@ -494,7 +642,14 @@ jq -n \
         pm_retro_reports: [],
         unresolved_issues: [],
         codex_required: $codex_required
-    }' > "$TMP_FILE"
+    }' > "$OUT_TARGET"
+
+# M1-SEAM: the component mode stops here. Nothing above it created a worktree,
+# clone, branch, state file, temporary file, cycle-contract file, checklist or
+# bookmark, and nothing below it runs.
+if [[ "$EMIT_RECORD_ONLY" == "1" ]]; then
+    exit 0
+fi
 
 # Atomic move
 mv "$TMP_FILE" "$STATE_FILE"
@@ -531,7 +686,7 @@ jq -n \
 jq empty "$CONTRACT_TMP" >/dev/null
 mv "$CONTRACT_TMP" "$CONTRACT_FILE"
 
-echo "Created overnight state v8: $STATE_FILE" >&2
+echo "Created overnight state v9: $STATE_FILE" >&2
 echo "Created minimal cycle contract: $CONTRACT_FILE" >&2
 echo "  Session: $SESSION_ID" >&2
 echo "  End time: $END_TIME" >&2

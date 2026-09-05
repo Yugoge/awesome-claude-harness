@@ -88,10 +88,21 @@ def load_config(project_dir: Path) -> dict:
 def _tracked_relpaths(dir_path: Path) -> set[str] | None:
     """Forward-slash relative paths of every git-tracked file under dir_path.
 
-    Returns None (NOT an empty set) when the tracked set cannot be determined --
-    git is unavailable or dir_path is not inside a work-tree -- so callers can
-    distinguish "no tracked files here" ({}) from "git not consulted" (None) and
-    fall back to the hand denylist for non-git consumers.
+    Returns None (never an empty set) when the tracked filter must not be applied:
+    git is unavailable, dir_path is not inside a work-tree, or dir_path contains no
+    tracked file at all. Callers treat None as "git not consulted" and fall back to
+    the hand denylist.
+
+    Why zero-tracked-files falls back instead of filtering everything out: the
+    filter exists to keep gitignored / untracked runtime junk out of PUBLISHED
+    docs. When a directory has no tracked file, its own INDEX.md / README.md is
+    necessarily untracked too, so there is no published doc to protect -- and
+    filtering against the empty set would emit "Total entries: 0" for a directory
+    full of content. That false zero then gets committed alongside the content it
+    denies (a brand-new directory is 100% untracked at generation time). Any
+    directory holding at least one tracked file -- which includes every directory
+    whose INDEX/README is itself committed -- keeps the strict tracked-only filter
+    unchanged.
     """
     try:
         proc = subprocess.run(
@@ -103,7 +114,8 @@ def _tracked_relpaths(dir_path: Path) -> set[str] | None:
     if proc.returncode != 0:
         return None
     out = proc.stdout.decode('utf-8', errors='replace')
-    return {entry.replace('\\', '/') for entry in out.split('\0') if entry}
+    relpaths = {entry.replace('\\', '/') for entry in out.split('\0') if entry}
+    return relpaths or None
 
 
 def tracked_names(dir_path: Path) -> set[str] | None:

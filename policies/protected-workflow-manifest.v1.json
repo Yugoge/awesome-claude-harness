@@ -1,0 +1,117 @@
+{
+  "schema_version": 1,
+  "manifest_version": "v1",
+  "description": "Every protected workflow and activation route the host-capability handshake gates. A route inside protected_surface_prefixes but absent from routes[] is blocked fail-closed until explicitly added; a route outside every prefix is reported not_protected so the gate cannot brick tool use it was never meant to police.",
+  "default_for_unmanifested_route_in_surface": "block",
+  "independent_enforcement_callsite": "scripts/capability-doctor-strict.py --route <route>",
+  "_independent_enforcement_note": "MEASURED, not assumed: every route below reports independent_enforcement FALSE, because zero manifested entrypoints invoke the callsite named above. The field previously read true on all 12 routes while no entrypoint invoked the preflight -- a coverage claim with nothing behind it, and worse than an absent one, since this is the field a reader consults to ask whether a route is enforced anywhere the PreToolUse hook cannot be silently no-opped. FALSE here means UNSUPPORTED, not unprotected: the route is still blocked fail-closed by the gate and by evaluate_activation(), and independent_enforcement is a COVERAGE annotation that is recorded on the decision record, never a verdict input. Refusing on it once produced a refusal no state could satisfy. A route flips to true only when its entrypoint actually invokes the per-route preflight, which cannot be landed until a live PASS is reachable on a real host -- until then a blocking preflight would refuse every protected workflow. hooks/tests/test_capability_gate.py::test_independent_enforcement_claims_match_reality asserts the claim against reality in BOTH directions, so neither a stale true nor a stale false can survive.",
+  "_surface_note": "The prefixes are intentionally the bare route-class tags, not 'slashcommand:/'. A malformed or empty slash-command route classifies as 'slashcommand:' and must land INSIDE the surface so it blocks fail-closed; a narrower prefix would let it fall outside and be treated as ordinary traffic.",
+  "_dispatch_route_note": "tool:Agent and tool:Task were REMOVED from the surface (and the subagent-dispatch route deleted) because subagent dispatch has no non-hook entrypoint this harness controls. Keeping it in the surface bought ZERO protection on the threat host -- one that lists the gate and never dispatches it, where the gate never runs at all -- while inflicting a permanent, unsatisfiable block on a healthy host: the evaluator refused before ever loading state, so not even a fresh valid PASS could permit a dispatch. STATUS: OPEN COVERAGE REDUCTION -- direct subagent dispatch is UNGATED on every host. An earlier version of this note claimed dispatch stayed gated TRANSITIVELY through the workflows that perform it (/dev, /dev-command, /dev-overnight, /close, /commit). That claim is RETRACTED as measurably false: classify_route() maps a direct dispatch to tool:Agent / tool:Task, which never presents a SlashCommand envelope, so the manifested slash-command workflows cannot gate it. The workflows are gated; the route is not, and nothing gates a dispatch issued outside them. VERIFIED FACT (which stands): no non-hook enforcement point for this route exists in this harness, so refusing it refused it on grounds no state could satisfy. POLICY INFERENCE (stated separately, because clause (E) denies it): that this licenses removal from the surface rather than reporting the route unsupported. RESTORATION CONDITION -- both limbs, not either: (1) a reachable live PASS on a real host, and (2) an entrypoint consumer that invokes independent_enforcement_callsite for the route. Until both hold, restoring the routes only re-creates the unsatisfiable refusal. tool:Agent additionally serves as the NON-FLOOR NEGATIVE CONTROL for the repair floor in hooks/lib/capability_state.py: it must keep refusing in every degraded state, and admitting it to that floor would make this open reduction permanent in the degraded state as well.",
+  "_escape_hatch_note": "Routes flagged human_consent_escape_hatch are PERMITTED even when handshake state is absent. Fail-closed must not mean fail-sealed: these are the harness's two documented human-authorisation routes, and blocking them on an unprotected host removes the only in-harness path by which a human could authorise a repair. Both carry `disable-model-invocation: true`, so neither is reachable from a model turn, and neither performs a privileged operation itself -- each records consent that OTHER gates consult, and those gates remain fully in force. The exemption is recorded on every decision record so it is auditable, never silent.",
+  "protected_surface_prefixes": [
+    "slashcommand:",
+    "skill:"
+  ],
+  "routes": [
+    {
+      "id": "dev-pipeline",
+      "route": "slashcommand:/dev",
+      "route_type": "SlashCommand",
+      "entrypoint": "commands/dev.md",
+      "independent_enforcement": false,
+      "why_protected": "Orchestrates subagents that edit the tree; relies on hook-enforced tool policy and orchestrator gating."
+    },
+    {
+      "id": "dev-command-pipeline",
+      "route": "slashcommand:/dev-command",
+      "route_type": "SlashCommand",
+      "entrypoint": "commands/dev-command.md",
+      "independent_enforcement": false,
+      "why_protected": "Same pipeline as /dev, targeting harness command definitions."
+    },
+    {
+      "id": "dev-overnight-pipeline",
+      "route": "slashcommand:/dev-overnight",
+      "route_type": "SlashCommand",
+      "entrypoint": "commands/dev-overnight.md",
+      "independent_enforcement": false,
+      "why_protected": "Unattended multi-cycle loop and the sole branch/PR/worktree bypass; the highest-value route to gate."
+    },
+    {
+      "id": "close-pipeline",
+      "route": "slashcommand:/close",
+      "route_type": "SlashCommand",
+      "entrypoint": "commands/close.md",
+      "independent_enforcement": false,
+      "why_protected": "Evidence-gated closeout; its verdict is trusted downstream."
+    },
+    {
+      "id": "commit-pipeline",
+      "route": "slashcommand:/commit",
+      "route_type": "SlashCommand",
+      "entrypoint": "commands/commit.md",
+      "independent_enforcement": false,
+      "why_protected": "Stages and commits repository state via an agentic subagent."
+    },
+    {
+      "id": "push-pipeline",
+      "route": "slashcommand:/push",
+      "route_type": "SlashCommand",
+      "entrypoint": "commands/push.md",
+      "independent_enforcement": false,
+      "why_protected": "Publishes commits outside the machine; gated on a nonce-keyed push-analyst grant."
+    },
+    {
+      "id": "merge-pipeline",
+      "route": "slashcommand:/merge",
+      "route_type": "SlashCommand",
+      "entrypoint": "commands/merge.md",
+      "independent_enforcement": false,
+      "why_protected": "Mutates branch topology behind a nonce-keyed merge-analyst grant."
+    },
+    {
+      "id": "restart-recovery",
+      "route": "slashcommand:/restart",
+      "route_type": "SlashCommand",
+      "entrypoint": "commands/restart.md",
+      "independent_enforcement": false,
+      "why_protected": "The only sanctioned SendMessage path; human-only and credential-minting."
+    },
+    {
+      "id": "allow-grant",
+      "route": "slashcommand:/allow",
+      "route_type": "SlashCommand",
+      "entrypoint": "commands/allow.md",
+      "independent_enforcement": false,
+      "human_consent_escape_hatch": true,
+      "why_protected": "Mints structured sentinel grants that relax the Bash safety boundary.",
+      "why_exempt": "Human-only break-glass (disable-model-invocation: true). It never overrides a settings DENY and only narrows one declared hook's refusal, so exempting it cannot widen the boundary beyond what a human explicitly typed -- while blocking it would strand a human on an unprotected host with no way to authorise the repair."
+    },
+    {
+      "id": "do-consent",
+      "route": "slashcommand:/do",
+      "route_type": "SlashCommand",
+      "entrypoint": "commands/do.md",
+      "independent_enforcement": false,
+      "human_consent_escape_hatch": true,
+      "why_protected": "Session-wide orchestrator-gate bypass consent.",
+      "why_exempt": "Human-only consent (disable-model-invocation: true). It relaxes the orchestrator gate only; the permanently-blocked tools, the Bash safety hook and the settings DENY list are all unaffected. Exempting it is what preserves a human repair path on a state-absent host."
+    },
+    {
+      "id": "spec-pipeline",
+      "route": "slashcommand:/spec",
+      "route_type": "SlashCommand",
+      "entrypoint": "commands/spec.md",
+      "independent_enforcement": false,
+      "why_protected": "Generates checkpoint state that later gates subagent exit."
+    },
+    {
+      "id": "codex-delegation",
+      "route": "skill:codex",
+      "route_type": "Skill",
+      "entrypoint": "skills/codex",
+      "independent_enforcement": false,
+      "why_protected": "Delegates work to an external CLI with repository access."
+    }
+  ]
+}

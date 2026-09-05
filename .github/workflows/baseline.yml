@@ -11,6 +11,12 @@ on:
   push:
     branches: [master, main]
   pull_request:
+  # Callable so the release pipeline can make these gates a REAL job-graph
+  # dependency of publishing. A `needs:` cannot reference a job in another
+  # workflow file, and a tag push matches neither trigger above, so without
+  # workflow_call a tag could publish without these gates ever running on that
+  # commit. Purely additive: the push/pull_request triggers are unchanged.
+  workflow_call:
 
 jobs:
   baseline:
@@ -28,7 +34,9 @@ jobs:
         python-version: ["3.10", "3.11", "3.12"]
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        # Pinned to a full 40-char commit SHA, not a mutable tag: a tag can be
+        # repointed at arbitrary code by anyone who can push to the action repo.
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           # Full history so the provenance audit can resolve commit-source lines
           # (e.g. 62957b3); a shallow clone would downgrade them to warnings and
@@ -36,32 +44,78 @@ jobs:
           fetch-depth: 0
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: ${{ matrix.python-version }}
 
       - name: Set up Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: "20"
 
-      - name: Install Python dependencies
-        run: python3 -m pip install -r requirements.txt
-
-      - name: Clean-install smoke (fresh venv from requirements.txt)
-        # Reproducibility guarantee: prove a CLEAN environment can install the
-        # declared deps and import the key modules. Builds a THROWAWAY venv under
-        # a mktemp dir (never the repo/user venv), installs from requirements.txt,
-        # then imports pytest / jsonschema / pyyaml. Fails the build if a fresh
-        # install cannot resolve or import the pinned range.
+      - name: Render settings.json from the tracked template
+        # settings.json IS tracked (a `private-lab` row in PUBLIC-CORE.md), so a
+        # fresh checkout does have one — but it is the MAINTAINER's live copy:
+        # absolute install-home paths, an emptied `ask` section, and allow entries
+        # beyond the template. Rendering replaces it so the gates measure the
+        # PUBLIC install seed on this runner's own paths, not one machine's state.
+        # Must stay after Checkout and before "Verify headline claims", which reads
+        # the file with no existence guard. Rendering (not copying the template) is
+        # required: the template carries an unresolved {{CLAUDE_HOME}} placeholder.
+        # Note the --check below runs on the file this step just rendered, so it
+        # does NOT detect drift between the TRACKED settings.json and the template.
         run: |
           set -euo pipefail
+          python3 scripts/install/render-settings "$GITHUB_WORKSPACE" \
+            --template settings.template.json --out settings.json
+          # The install-home positional is REQUIRED in --check mode: without it
+          # render-settings normalizes against $HOME/.claude, which on a runner is
+          # /home/runner/.claude and never equals $GITHUB_WORKSPACE — so every
+          # rendered path reads as "allow broadened beyond template" and the step
+          # fails on a correctly-rendered file. Passing the same home used to
+          # render keeps the check load-bearing (a genuinely broadened allow
+          # entry still fails) instead of merely silencing it.
+          python3 scripts/install/render-settings "$GITHUB_WORKSPACE" \
+            --check settings.json --template settings.template.json
+          if grep -q '{{CLAUDE_HOME}}' settings.json; then
+            echo "::error::rendered settings.json still contains an unresolved placeholder"
+            exit 1
+          fi
+
+      - name: Install Python dependencies
+        # Hash-verified install from the lockfile matching THIS matrix leg.
+        # --require-hashes makes pip reject the whole install if any requirement,
+        # direct or transitive, is unpinned or unhashed.
+        run: |
+          set -euo pipefail
+          lock="requirements/py$(echo '${{ matrix.python-version }}' | tr -d '.').txt"
+          echo "Installing from $lock"
+          python3 -m pip install --require-hashes -r "$lock"
+
+      - name: Clean-install smoke
+        # Reproducibility guarantee: prove a CLEAN environment, installed by an
+        # UNPRIVILEGED user, can install the declared deps and import the key
+        # modules. Builds a THROWAWAY venv under a mktemp dir (never the repo/user
+        # venv) and installs hash-verified from the lockfile matching the running
+        # interpreter. Both properties are load-bearing and are asserted, not
+        # assumed: the uid guard EXITS NON-ZERO under root rather than merely
+        # printing the uid, and the fresh mktemp+venv provisioning is what makes
+        # this a clean-install test rather than a re-import of the job's venv.
+        run: |
+          set -euo pipefail
+          if [ "$(id -u)" -eq 0 ]; then
+            echo "::error::clean-install smoke must run as an unprivileged user, but uid is 0"
+            exit 1
+          fi
+          echo "Running as uid $(id -u) ($(id -un)) — non-root, as required."
           smoke_root="$(mktemp -d)"
           smoke_venv="$smoke_root/smoke-venv"
           echo "Creating throwaway venv at $smoke_venv ..."
           python3 -m venv "$smoke_venv"
           "$smoke_venv/bin/python" -m pip install --upgrade pip
-          "$smoke_venv/bin/python" -m pip install -r requirements.txt
+          lock="requirements/py$("$smoke_venv/bin/python" -c 'import sys; print(f"{sys.version_info.major}{sys.version_info.minor}")').txt"
+          echo "Installing hash-verified from $lock ..."
+          "$smoke_venv/bin/python" -m pip install --require-hashes -r "$lock"
           echo "Importing declared modules in the clean venv ..."
           "$smoke_venv/bin/python" -c "import importlib.metadata as m, pytest, jsonschema, yaml; print('clean-install smoke OK — pytest', m.version('pytest'), '/ jsonschema', m.version('jsonschema'), '/ pyyaml', m.version('pyyaml'))"
           rm -rf "$smoke_root"
@@ -148,4 +202,43 @@ jobs:
         # asserts settings.template.json (the PUBLIC install seed) is valid JSON and wires
         # every hook settings.json wires (basename-normalized) so the public template can
         # never silently drift from the real hook set. All counts recomputed at check time.
+        # Also runs scripts/check-enforcement-evidence.py --ledger and --claims, which gate
+        # docs/ENFORCEMENT-LEDGER.md against settings.json and against the guard sources.
         run: bash scripts/verify-claims.sh
+
+      # ---------------------------------------------------------------------
+      # Enforcement evidence: run the adversarial corpus at the subprocess
+      # boundary and publish a machine-readable manifest of what was ACTUALLY
+      # exercised. Additive: both steps are new, and neither alters any
+      # pre-existing step's triggering condition or success criterion.
+      # ---------------------------------------------------------------------
+      - name: Adversarial corpus suite (component / subprocess boundary)
+        # The suite deletes any stale manifest before running and writes results
+        # only from live invocations, so the artifact is evidence of EXECUTION
+        # rather than evidence of authorship. This is component-tested proof and
+        # is NOT a substitute for R3 (tests against real Claude Code builds).
+        run: python3 -m pytest hooks/tests/test_blackbox_integration.py -q
+
+      - name: Upload enforcement-evidence manifest
+        # if: always() so the evidence survives a failing suite -- an artifact
+        # published only on green runs cannot show what a red run exercised.
+        if: always()
+        # Pinned to a full 40-char commit SHA, matching every other action in this
+        # repository: a tag can be repointed at arbitrary code by anyone who can
+        # push to the action repo. SHA resolved from the upstream repository at
+        # implementation time, not written from memory.
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          # Matrix-unique: a fixed name would have each Python leg silently
+          # overwrite the previous leg's evidence.
+          name: enforcement-evidence-py${{ matrix.python-version }}
+          path: hooks/tests/.enforcement-run-manifest.json
+          if-no-files-found: warn
+
+      - name: Enforcement-evidence coverage gate
+        # Fails the build when the manifest does not map one-to-one onto the
+        # corpus, when any result field is unpopulated, when an observed outcome
+        # is not bound to captured process evidence, or when the executed /
+        # emitted / corpus case-ID sets disagree. A manifest that cannot
+        # distinguish "exercised" from "asserted" does not show what ran.
+        run: python3 scripts/check-enforcement-evidence.py --coverage

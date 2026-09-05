@@ -1,0 +1,205 @@
+# Codex CLI Sandbox Verification Report
+
+**Task**: dev-20260719-150041-b (lane r02-b) — handoff TASK 2
+**Verified against live files**: 2026-08-08 | **Repo**: `$REPO_ROOT` @ `1a59a667`
+**Deliverable**: investigation report. No source or config file modified by this lane.
+
+> **Redaction note.** This document ships in the public-core release set, where
+> `scripts/check-public-core.sh` hard-gates two classes of absolute path with no exemption: the
+> maintainer's workspace root, and author-home literals. Both have been replaced by placeholders
+> throughout — **including inside the quoted runtime banner and the quoted rollout JSON below**:
+>
+> | Placeholder | Stands for |
+> |---|---|
+> | `$REPO_ROOT` | the absolute path `git rev-parse --show-toplevel` returns for this checkout — also the value the codex runtime reported as its `workdir` |
+> | `$HOME` | the home directory of the account this harness runs as |
+>
+> No claim, verdict, or citation target was changed by the redaction. The `$HOME` form is also
+> the more accurate citation: the launcher resolves its wrapper via the parameter expansion
+> `${CODEX_ISO_BIN:-$HOME/bin/codex-iso}`, not a hardcoded path.
+>
+> **Excerpting, separate from redaction.** The runtime banner below is a verbatim line subset.
+> The rollout `turn_context` block is an **excerpt, reformatted for readability** — it keeps the
+> fields the verdict rests on and drops the rest. Notably it omits
+> `permission_profile.type` (value `managed`) and flattens the nested typed path descriptors
+> into the plain `{"path": …, "access": …}` shape shown. Read it as an accurate summary of the
+> access grants, not as a byte-for-byte transcript; the cited rollout file is the authority.
+
+## Verdict
+
+**YES — codex CAN write and delete files in this repository.** It runs under
+`sandbox_mode = "workspace-write"` with the sandbox workspace root equal to the repo root.
+Precisely: codex can create, modify, and delete ordinary working-tree files, **excluding the
+read-only carve-outs `.git`, `.agents`, `.codex`**. It is **not** `danger-full-access`.
+
+## 1. How the codex CLI is actually launched
+
+### Path correction
+The requirement pointed at `.claude/skills/codex/`. **That path does not exist in this repo** —
+nor does its parent `.claude/skills/`; nothing under that prefix is tracked
+(`git ls-files .claude/skills/` → empty). The skill is defined in one file: **`commands/codex.md`**,
+surfaced to the `Skill` tool as skill `codex`. (A generated Codex-native mirror exists *outside*
+the repo at `$HOME/.agents/skills/codex/SKILL.md`; it mirrors the same launch body and is not the
+repo source of truth.)
+
+### The chain
+| Stage | Location | What it does |
+|---|---|---|
+| 1. Skill | `commands/codex.md` | Resolves wrapper, runs `exec`/`review` with `-c` overrides |
+| 2. Wrapper | `$HOME/bin/codex-iso:49` | `exec "$REAL_CODEX" "$@"` — pure passthrough |
+| 3. CLI | `/usr/bin/codex` | codex-cli `0.144.4` (symlink → `@openai/codex/bin/codex.js`) |
+
+**Wrapper resolution — `commands/codex.md:120`**, quoted literally as it appears in source:
+```bash
+CODEX_ISO_BIN="${CODEX_ISO_BIN:-$HOME/bin/codex-iso}"
+```
+A parameter-expansion default, not a hardcoded path — so it resolves to `$HOME/bin/codex-iso`
+for whichever account runs the harness. It is **caller-overridable** via the `CODEX_ISO_BIN`
+env var.
+
+**Primary invocation (exec, default model) — `commands/codex.md:162`** (`:164` is the identical
+fallback branch, differing only in the `tee` target):
+```bash
+"$CODEX_ISO_BIN" exec -c 'model="gpt-5.6-sol"' -c 'reasoning_effort="xhigh"' "$PROMPT" < /dev/null 2>&1 | tee ...
+```
+
+| Mode | Lines |
+|---|---|
+| Review | `commands/codex.md:127`, `:129` |
+| Exec, default model | `commands/codex.md:162`, `:164` |
+| Exec, `--model <m>` | `commands/codex.md:171`, `:173` |
+| Exec, detached long-run | `commands/codex.md:145-146`, `:189-190` |
+
+**Every site passes model and reasoning only.** No `-s`/`--sandbox`, no `--ask-for-approval`, no
+`--dangerously-bypass-approvals-and-sandbox`, no `--add-dir`, no `-C`, no `-c 'sandbox_mode=…'`.
+A scan of `commands/`, `agents/`, `scripts/`, `hooks/` for sandbox flags returns **zero hits**.
+
+The wrapper adds nothing. It **defaults** `CODEX_HOME` to `$HOME/.codex-cli` — note line 25 is
+`: "${CODEX_HOME:=$ISOLATED_HOME}"`, a default-if-unset, **not** a force: a preset `CODEX_HOME`
+is preserved, and the fail-closed guard (28-36, exit 3) rejects only values resolving inside the
+daemon-watched `$HOME/.codex`. Lines 42-46 attempt a best-effort config/auth refresh, but
+`$HOME/.codex-cli/config.toml` is a **symlink** to `$HOME/.codex/config.toml`, so for config.toml
+the copy is a no-op. Line 49 hands off unchanged.
+
+### Citation drift (for anyone re-checking)
+BA cited exec at `:140` and `--model` at `:149`. Those were correct at commit `96cc84a9`
+(verified via `git show 96cc84a9:commands/codex.md`). Commit **`712238a2` (2026-08-07, +46/−2)**
+inserted a duplicated `**Timeout.**` block (now `:133-155`, duplicating `:177-199`), shifting
+everything after `:132` down 22 lines. **Live numbers `:162`/`:171` are authoritative.** The
+invocation text is unchanged.
+
+## 2. Effective sandbox / permission mode
+
+**`sandbox_mode = "workspace-write"`.** The mode is **not a CLI flag at all — it lives in codex's
+`config.toml`.** That is exactly why the originating session's flag search could never succeed.
+
+| Setting | Value | Source |
+|---|---|---|
+| `sandbox_mode` | `"workspace-write"` | `$HOME/.codex-cli/config.toml:7` |
+| `approval_policy` | `"on-request"` | `$HOME/.codex-cli/config.toml:6` |
+
+`$HOME/.codex-cli/config.toml` is a symlink to `$HOME/.codex/config.toml`, so these are the *same
+file* — one config governs both homes. It is machine-generated (`config.toml:1` — "GENERATED by
+`$HOME/bin/sync-claude-to-codex.py`").
+
+**The three possible values**, from `/usr/bin/codex exec --help` (lines 52-55, codex-cli 0.144.4):
+```
+-s, --sandbox <SANDBOX_MODE>
+        Select the sandbox policy to use when executing model-generated shell commands
+        [possible values: read-only, workspace-write, danger-full-access]
+```
+The answer is the **middle** one.
+
+**Runtime confirmation (banner)** — `docs/codex/dev-20260719-150041-b/ba.txt`:
+```
+:2  OpenAI Codex v0.144.4
+:4  workdir: $REPO_ROOT
+:7  approval: never
+:8  sandbox: workspace-write [workdir, /tmp, $TMPDIR]
+```
+
+**Runtime confirmation (authoritative, machine-readable)** — the session rollout `turn_context` at
+`$HOME/.codex-cli/sessions/2026/08/08/rollout-2026-08-08T14-55-30-019fe1df-3a4d-7ab2-88c9-479f17da6ca9.jsonl:8`:
+```json
+"approval_policy":"never",
+"sandbox_policy":{"type":"workspace-write","network_access":false,
+                  "exclude_tmpdir_env_var":false,"exclude_slash_tmp":false},
+"permission_profile":{"file_system":{"type":"restricted","entries":[
+  {"path":{"kind":"root"},"access":"read"},
+  {"path":"$REPO_ROOT","access":"write"},
+  {"path":{"kind":"slash_tmp"},"access":"write"},
+  {"path":{"kind":"tmpdir"},"access":"write"},
+  {"path":"$REPO_ROOT/.git","access":"read"},
+  {"path":"$REPO_ROOT/.agents","access":"read"},
+  {"path":"$REPO_ROOT/.codex","access":"read"}]},
+  "network":"restricted"}
+```
+
+## 3. Can codex write or delete files in this repository?
+
+### YES — evidence in descending strength
+
+**3.1 The repo root carries explicit `access: "write"`.** The rollout `permission_profile`
+names `$REPO_ROOT` with write access, everything else read. This is
+codex's own machine-readable policy record, not inference.
+
+**3.2 The workspace root IS this repository.** Runtime `workdir` (`ba.txt:4`) is byte-identical
+to `git rev-parse --show-toplevel`. `commands/codex.md` never `cd`s and passes no `-C`.
+
+**3.3 Deletion, not merely creation.** `workspace-write` grants write access to the workspace
+subtree, which includes unlinking ordinary files. The 2026-06-11 incident shows in-place
+modification and config mutation; the permission profile shows no create-only restriction.
+
+**3.4 No approval gate intervenes.** Write capability comes from `workspace-write` itself.
+Config `approval_policy = "on-request"` governs **escalation** (acting outside the sandbox), not
+ordinary in-workspace edits; headless `exec` selects runtime `approval: never` (`ba.txt:7`),
+which disables escalation prompts — denied operations simply fail rather than prompting.
+Separately, `< /dev/null` (`commands/codex.md:162`) means no prompt could be answered anyway.
+*(Note: `</dev/null` does not itself cause `never`; the two are independent.)*
+
+**3.5 Empirically observed.** `projects/-root-multi-asset-portfolio/memory/feedback_codex_exec_writes_files.md`
+records a real incident (2026-06-11, task `20260611-191009`): during a read-only-intent audit,
+codex exec injected `flatten_phantom_lots()` into `scripts/trading/order_reconciler.py`
+(+137 lines), added a field to `reconcile.py`, and **flipped `config/daily-trading.json`
+`reconcile.auto_flatten_phantom` to `true`**. Caught only by `git diff --stat`.
+
+**3.6 Supporting.** `$HOME/.codex-cli/config.toml:167-168` marks this repo
+`trust_level = "trusted"`.
+
+### Boundaries — what the verdict does NOT say
+- **Not `danger-full-access`.** Writes outside `[workdir, /tmp, $TMPDIR]` are sandbox-blocked.
+- **`.git` is read-only.** Codex can delete an untracked working-tree file but **cannot** write
+  git internals — no ref/history rewriting. `.agents` and `.codex` are likewise read-only.
+- **Network is disabled** — `network_access:false` / `"network":"restricted"`, verified locally
+  in the rollout `turn_context` (not merely a documented default).
+
+## 4. Security implication
+Codex is used here as an audit/second-opinion tool, including inside `/dev` subagent flows. Its
+shell actions do **not** pass through Claude Code's `PreToolUse` Bash hooks, so the `rm` deny rule
+and the `git clean` deny rule (sibling lane) **do not gate codex at all**. Combined with §3.5,
+treat every codex invocation as potentially mutating: run `git diff --stat` + `git status`
+afterward and reconcile each changed line against what was authored.
+
+## 5. Scope of this finding
+Valid for `commands/codex.md` @ `1a59a667` and `$HOME/.codex/config.toml` as read 2026-08-08.
+The verdict changes if any of these appear: `-s/--sandbox`, `-c 'sandbox_mode=…'`,
+`--dangerously-bypass-approvals-and-sandbox`, `--add-dir`, a `CODEX_HOME`/`CODEX_ISO_BIN`
+override pointing at a different config, or a regenerated `config.toml`.
+
+## Evidence index
+| # | Claim | Evidence |
+|---|---|---|
+| 1 | Skill is `commands/codex.md`, not `.claude/skills/codex/` | path absent on disk, untracked in git |
+| 2 | Codex-native mirror outside repo | `$HOME/.agents/skills/codex/SKILL.md` |
+| 3 | Wrapper resolution (literal source form) | `commands/codex.md:120` |
+| 4 | Exec / review / --model / detached | `:162`,`:164` / `:127`,`:129` / `:171`,`:173` / `:145-146`,`:189-190` |
+| 5 | `CODEX_HOME` defaulted (not forced); guard; passthrough | `$HOME/bin/codex-iso:25`, `:28-36`, `:49` |
+| 6 | Isolated config is a symlink to the real one | `ls -la $HOME/.codex-cli/config.toml` |
+| 7 | No sandbox flag on any launch path | scan of `commands/`,`agents/`,`scripts/`,`hooks/` → 0 hits |
+| 8 | `sandbox_mode` / `approval_policy` | `$HOME/.codex-cli/config.toml:7` / `:6` |
+| 9 | Three possible sandbox values | `/usr/bin/codex exec --help` lines 52-55, v0.144.4 |
+| 10 | Runtime banner | `docs/codex/dev-20260719-150041-b/ba.txt:8`,`:4`,`:7` |
+| 11 | Machine-readable policy: repo=write, `.git`=read, network=false | rollout `…019fe1df….jsonl:8` |
+| 12 | Codex empirically wrote repo files | `projects/-root-multi-asset-portfolio/memory/feedback_codex_exec_writes_files.md` |
+| 13 | Repo marked trusted | `$HOME/.codex-cli/config.toml:167-168` |
+| 14 | Citation drift `:140`→`:162`, `:149`→`:171` | `712238a2` vs `git show 96cc84a9:commands/codex.md` |

@@ -1,8 +1,8 @@
 # hooks
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-07-26T16:50:09Z*
-**Total entries**: 171
+*Last updated: 2026-09-04T02:49:37Z*
+**Total entries**: 189
 **Convention**: kebab
 
 ## Tree
@@ -40,12 +40,15 @@ hooks/
 │   ├── `allowlist.py` - Single source of truth for grant-read, grant-match, and grant-consume
 │   ├── `bash_context_strip.py` - This is deliberately NOT a full shell parser.  It only computes a conservative
 │   ├── `bash_write_targets.py` - Provides two public functions used by tool-policy and overnight-hook-guard:
+│   ├── `capability_state.py` - verdict, and the INDEPENDENT (non-hook-dispatched) preactivation consumer
 │   ├── `checkpoint-core.sh` - checkpoint-core.sh - Shared library for automated snapshot commits
 │   ├── `claude_home.py` - Generalizes the in-repo gold-standard fail-closed self-resolution pattern
 │   ├── `claude_home.sh` - claude_home.sh — shared "harness home" resolver (shell consumable).
 │   ├── `close-verdict.py` - Shared CLOSE verdict classifier for commit/close tooling.
 │   ├── `closeout.py` - Public API:
+│   ├── `commit_journal.py` - WHY THIS EXISTS
 │   ├── `contract_runtime.py` - This module is the single shared engine consumed by every contract-aware
+│   ├── `git_clean_guard.py` - Classifies ONE Bash command for the fail-closed pre-clean guard woven into the
 │   ├── `git_command_classifier.py` - Provides iter_git_invocations() — a token-aware parser that detects git
 │   ├── `grepguard_context_strip.py` - PURPOSE (narrow, guard-specific)
 │   ├── `overnight.py` - Single source of truth for "is a /dev-overnight session currently live?". A
@@ -57,6 +60,9 @@ hooks/
 │   ├── `subagent_restart.py` - Claude Code persists each subagent transcript under the parent session.  This
 │   └── `todo_canonical.py` - Shared canonical todo validation utilities
 ├── tests/
+│   ├── fixtures/
+│   │   ├── `adversarial_corpus.json` - json config
+│   │   └── `overwrite_corpus.json` - JSON config: schema_version, task_id, guard, driver, documentation
 │   ├── `test_ac10_verify.sh` - Shell script
 │   ├── `test_ac1_verify.sh` - Shell script
 │   ├── `test_ac3_verify.sh` - Shell script
@@ -66,8 +72,12 @@ hooks/
 │   ├── `test_allowlist_consolidation.py` - Covers AC8 IS_SUBAGENT firewall scenarios and matching semantics invariants
 │   ├── `test_bash_safety_context.py` - Tests strip_non_executable_contexts() in isolation, covering the main
 │   ├── `test_bash_safety_context_rules.py` - converted to COMMAND_CONTEXT_STRIPPED in hooks/pretool-bash-safety.sh
+│   ├── `test_bash_safety_git_clean.py` - hooks/pretool-bash-safety.sh (task dev-20260719-150041-a, lane r01-a)
+│   ├── `test_blackbox_integration.py` - WHAT THIS PROVES, AND WHAT IT EXPLICITLY DOES NOT
 │   ├── `test_block_branch_pr_worktree.py` - The hook forbids branch / PR / worktree CREATION on the Bash surface, with three
 │   ├── `test_bulk_commit_sentinel.py` - Covers:
+│   ├── `test_capability_gate.py` - Every test drives the real artefacts: the library, the PreToolUse gate hook as a
+│   ├── `test_commit_journal.py` - attribution basis
 │   ├── `test_cp_checkin.py` - of ba-spec-20260427-194324.md (P1 view-trigger removal + P2 generation field)
 │   ├── `test_do_taskid_mint.py` - Covers the root-cause fix for the do-report task-id collision (memory
 │   ├── `test_dual_runtime_lifecycle_e2e.py` - Real-entrypoint regressions for single-owner ordinary dev lifecycle.
@@ -75,7 +85,12 @@ hooks/
 │   ├── `test_fail_closed_drift.py` - WHY THIS FILE EXISTS
 │   ├── `test_final_sweep.sh` - Final sweep — run inline AC checks and print PASS/FAIL summary.
 │   ├── `test_git_cmd_cross_consistency.py` - Verifies that GIT_CMD_RE (hooks/pretool-bash-safety.sh),
+│   ├── `test_git_prefix_enumeration.py` - THE DEFECT
+│   ├── `test_git_residual_override.py` - Background
+│   ├── `test_overwrite_guard.py` - Every assertion drives the REAL guard as a subprocess over a synthetic
+│   ├── `test_posttool_commit_grant_finalize.py` - hooks/posttool-allowlist-consume.py, and for the pointer WRITE side in
 │   ├── `test_push_sentinel_abort.sh` - Unit test for AC1 V5: hooks/push.sh self-aborts before any real git push
+│   ├── `test_residual_false_positives.py` - Context (task 20260903-residual-fp). `classify_git_command()` returns a
 │   ├── `test_runtime_guard.py` - Two layers:
 │   ├── `test_unit_anchor.py` - Imports the anchor sibling module DIRECTLY (not via the _core facade) and
 │   ├── `test_unit_config.py` - Imports the config sibling module DIRECTLY (not via the _core facade) and
@@ -86,6 +101,7 @@ hooks/
 │   └── `test_unit_shell_lex.py` - Imports the shell_lex sibling module DIRECTLY (not via the _core facade's
 ├── `audit-slashcommand.sh` - audit-slashcommand.sh
 ├── `auto-commit.sh` - auto-commit.sh - Stop hook: snapshot on conversation end
+├── `capability-canary.py` - Registered once per relied-upon lifecycle event, each registration carrying its
 ├── `check-todo-md-sync.py` - check-todo-md-sync.py — Session-start drift detector for todo scripts
 ├── `checkpoint.sh` - checkpoint.sh - Manual /checkpoint command
 ├── `fswatch-manager.sh` - fswatch-manager.sh - Manage git-fswatch instances
@@ -126,6 +142,7 @@ hooks/
 ├── `pretool-block-branch-pr-worktree.py` - Policy (user directive 2026-06-04; the verbatim user directive is preserved in
 ├── `pretool-block-enterworktree.sh` - PreToolUse hook: Block EnterWorktree tool
 ├── `pretool-bulk-commit-detector.py` - PreToolUse Hook: Bulk-commit detector
+├── `pretool-capability-gate.py` - Blocks (exit 2) any protected-workflow activation route unless the host-capability
 ├── `pretool-claude-config-guard.py` - PreToolUse Hook: Claude config (.claude/hooks + .claude/commands) protection
 ├── `pretool-cp-checkin.py` - cp-state file read
 ├── `pretool-cp-state-write-guard.py` - Cycle-3 slim form (2026-05-14): Bash-extractor removed — 22-form adversarial
@@ -137,6 +154,7 @@ hooks/
 ├── `pretool-orchestrator-gate.py` - PreToolUse Hook: Orchestrator Gate (Unified)
 ├── `pretool-orchestrator-prompt-purity.py` - PreToolUse hook: Orchestrator Prompt Purity
 ├── `pretool-overnight-hook-guard.py` - PreToolUse Hook: Overnight session file modification guard
+├── `pretool-overwrite-guard.py` - REGISTRATION: matcher ``Bash`` ONLY. This hook registers against no other tool
 ├── `pretool-quality-gate.py` - PreToolUse Hook: Quality gate for Write/Edit operations
 ├── `pretool-read-size-guard.py` - PreToolUse Hook: Read Size Guard
 ├── `pretool-runcode-watchdog.py` - PreToolUse Hook: Start timeout watchdog for browser_run_code

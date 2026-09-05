@@ -100,6 +100,26 @@ Revision history:
   and validates repo/branch/HEAD per invocation against its own resolved -C
   target. The parallel PUSH-grant redirect hole is documented as a separate
   follow-up (see comment atop `_evaluate_push`) and intentionally left unfixed.
+  2026-08-31 (single-use closure, audit round 3 F4/F5/F6): three semantic holes
+  in the commit grant's single-use guarantee.
+    F4 - "expected_head neutralizes a left-in-place grant" was false. A grant
+    that cannot be deferred to PostToolUse (no per-event key, rename failure,
+    pointer-write failure) is left in place, and the claim that a successful
+    commit moves HEAD past it does not hold: `git reset --soft <expected_head>`
+    (an operation this guard permits) restores the matching tuple, and a
+    deterministic `--amend` (fixed author/committer dates) reproduces the SAME
+    sha so HEAD never moves at all. Both were reproduced against real repos.
+    Spentness is therefore no longer INFERRED from repo state; the guard writes
+    its own validation-time use record (`<grant>.json.use`) holding an
+    APPEND-ONLY witness of the target repo. See `_repo_use_witness`.
+    F5 - every commit invocation in one Bash call was validated against the same
+    pre-execution HEAD and the grant locked once, so one grant authorized N
+    commits in one call. Now refused; see `_enforce_commit_grant_binding`.
+    F6 - the auto-bulk deferral honored ANY parseable unexpired grant file with
+    no repo/branch/HEAD binding check, so a dead leftover or a foreign-repo
+    grant blocked auto-bulk for its whole TTL. The deferral now applies the same
+    binding + spent test the commit validation applies; see
+    `_grant_can_authorize_here`.
 
 Exit codes:
   0: Allow tool use
@@ -107,6 +127,7 @@ Exit codes:
 """
 
 import glob
+import hashlib
 import json
 import os
 import re
@@ -117,7 +138,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 from lib.allowlist import read_grant_for_git_command, match_sentinel_grant_for_bash_command  # noqa: E402
-from lib.git_command_classifier import iter_git_invocations, GitInvocation  # noqa: E402
+from lib.git_command_classifier import (  # noqa: E402
+    iter_git_invocations, GitInvocation, classify_git_command)
 # Segment/tokenization primitives reused (read-only) so the commit-grant binding
 # can enumerate EVERY git-commit invocation in a chained command string and
 # inspect each invocation's leading env-assignments + global-option flags
@@ -383,38 +405,372 @@ def _unlink_grant(grant_path):
         pass
 
 
+# ---------------------------------------------------------------------------
+# Validation-time use record (audit round 3, F4)
+# ---------------------------------------------------------------------------
+#
+# WHY THIS EXISTS. The deferred path (PreToolUse locks the grant aside, PostToolUse
+# consumes on success / restores on failure) already gives a true single use: the
+# .lck name is invisible to every grant search, so a second event cannot find it.
+# The hole is the UNDEFERRABLE fallback — no per-event key, rename failure, or a
+# pointer write that failed — where the grant is deliberately LEFT IN PLACE so a
+# failed commit can still retry. The safety argument for leaving it was that
+# expected_head neutralizes reuse because a successful commit moves HEAD. It does
+# not:
+#   - `git reset --soft <expected_head>` is permitted by this guard and puts the
+#     repo/branch/HEAD tuple back exactly as the grant recorded it, re-arming the
+#     leftover for another commit — and it can be repeated;
+#   - a deterministic `git commit --amend` (fixed GIT_AUTHOR_DATE and
+#     GIT_COMMITTER_DATE, unchanged tree/parent/message) reproduces the IDENTICAL
+#     sha, so HEAD never moves and the grant never goes stale at all.
+# Both were reproduced against real repositories before this fix.
+#
+# WHAT REPLACES IT. Spentness is no longer inferred from repo state, which the
+# above shows is restorable. The guard records, at validation time, a witness of
+# the target repo that only ever moves FORWARD: the HEAD sha plus the HEAD reflog
+# entry COUNT. The reflog is append-only under every operation an agent can reach
+# here — a commit appends `commit:`, a reset appends `reset:`, an amend appends
+# `commit (amend):` — so the count rises even when the sha is put back or never
+# moves. A later authorization is honored ONLY while the witness still equals the
+# recorded one, i.e. only while nothing has been committed since. That is exactly
+# the retry-after-FAILURE case the leave-in-place decision was made to protect
+# (a failed commit creates no reflog entry), and it fails closed the moment a
+# commit actually lands.
+#
+# RESIDUALS, stated rather than hidden:
+#   - Two authorizations that both happen BEFORE either commit lands still both
+#     pass: at validation time they are indistinguishable from one retry. The
+#     window is now bounded by _MAX_GRANT_USE_ATTEMPTS instead of running to TTL.
+#   - `git reflog delete HEAD@{0}` would restore the witness. It is not blocked
+#     here because `git reflog expire` is a legitimate operation in this repo
+#     (scripts/checkpoint-prune.sh), and narrowing that is a separate change.
+#   - A record whose grant is consumed by the finalizer is orphaned in /tmp until
+#     the >7d sweep; expired-grant records are reaped in _evaluate_commit.
+_GRANT_USE_SUFFIX = '.use'
+
+# How many authorizations one grant may receive while its witness is UNCHANGED
+# (i.e. while no commit has landed). Retry after a failed commit needs more than
+# one; nothing legitimate needs many. Bounds the pre-landing window above.
+_MAX_GRANT_USE_ATTEMPTS = 3
+
+
+def _use_record_path(grant_path):
+    """Sidecar path for a grant's use record.
+
+    Deliberately `<grant>.json.use`, which matches NONE of the existing globs:
+    not the grant searches (`*-*.json`), not the in-flight check (`*.json` /
+    `*.lck`), and not the Stop sweep's pointer/locked globs. The record must be
+    inert to every reader that already scans this namespace.
+    """
+    return grant_path + _GRANT_USE_SUFFIX
+
+
+def _repo_use_witness(repo_root):
+    """Append-only witness of "has anything been committed in this repo".
+
+    (HEAD sha, HEAD reflog entry count). The count is what carries the property:
+    it rises on commit, on reset, and on amend, so neither a soft reset back to
+    expected_head nor a same-sha amend can return it to a previously recorded
+    value. Returns '' when either component is unreadable (unborn HEAD, reflogs
+    disabled, or the repo is gone) — the caller treats '' as "cannot prove the
+    grant is unspent" and fails closed.
+    """
+    head = _commit_target_git_output(repo_root, 'rev-parse', 'HEAD')
+    entries = _commit_target_git_output(
+        repo_root, 'rev-list', '--walk-reflogs', '--count', 'HEAD')
+    # `entries == '0'` is the reflogs-disabled case, and it must be treated as
+    # UNREADABLE, not as a reading of zero. `not '0'` is False in Python, so the
+    # docstring's promise above ("returns '' when ... reflogs disabled") was not
+    # kept: the witness came back as '<sha>:0', which is a CONSTANT — it cannot
+    # rise on commit, reset or amend, so recorded == current would hold forever
+    # and _grant_use_permitted() would re-authorize a spent grant up to the
+    # attempt cap instead of failing closed. Verified 2026-09-03 against a bare
+    # clone (core.logAllRefUpdates unset): `rev-list --walk-reflogs --count HEAD`
+    # prints exactly `0`.
+    if not head or not entries or entries == '0':
+        return ''
+    return '%s:%s' % (head, entries)
+
+
+def _grant_use_permitted(grant, grant_path):
+    """False iff a previous authorization of THIS grant already produced a commit.
+
+    No record means the grant has never been authorized on the undeferrable path,
+    so this is a first use and nothing is in question. With a record, the grant is
+    honored only while the target repo's witness still equals the one captured at
+    that first use, and only up to _MAX_GRANT_USE_ATTEMPTS. Every failure mode
+    (unreadable witness, unparseable counter) resolves to False: an unprovable
+    grant is refused, not guessed.
+    """
+    record = _load_grant(_use_record_path(grant_path))
+    if record is None:
+        return True
+    recorded = record.get('witness') or ''
+    current = _repo_use_witness(grant.get('repo_root') or '')
+    if not recorded or not current or recorded != current:
+        return False
+    try:
+        uses = int(record.get('uses'))
+    except (TypeError, ValueError):
+        return False
+    return uses < _MAX_GRANT_USE_ATTEMPTS
+
+
+def _record_undeferrable_grant_use(grant, grant_path):
+    """Record an authorization that could NOT be deferred to PostToolUse.
+
+    Only this path writes a record: on the deferred path the rename-aside is
+    itself the single-use enforcement, and writing here would change a lifecycle
+    that is pinned byte-for-byte by the finalizer tests.
+
+    The witness is captured ONCE, at first use, and never refreshed — refreshing
+    it on a later use would re-arm a grant whose commit had already landed, which
+    is the whole defect. Best effort: a record that cannot be written leaves the
+    pre-existing (weaker) behavior rather than blocking a commit already
+    authorized.
+    """
+    path = _use_record_path(grant_path)
+    prior = _load_grant(path) or {}
+    try:
+        uses = int(prior.get('uses'))
+    except (TypeError, ValueError):
+        uses = 0
+    record = {
+        'grant_path': grant_path,
+        'repo_root': grant.get('repo_root') or '',
+        'witness': prior.get('witness') or _repo_use_witness(grant.get('repo_root') or ''),
+        'uses': uses + 1,
+        'expires_at': grant.get('expires_at') or '',
+    }
+    tmp_path = '%s.wip.%d.%s' % (path, os.getpid(), os.urandom(4).hex())
+    try:
+        with open(tmp_path, 'w') as fp:
+            json.dump(record, fp)
+            fp.flush()
+            os.fsync(fp.fileno())
+        os.replace(tmp_path, path)
+    except (OSError, ValueError, TypeError):
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+
+
+def _grant_can_authorize_here(grant, grant_path, command):
+    """True iff `grant` could authorize a commit for `command` right now.
+
+    Applies the same two tests the commit validation applies — is the grant
+    unspent (_grant_use_permitted), and is it bound to this target
+    (_grant_matches_commit_target) — but in a NON-BLOCKING form, because the
+    deferral is a scheduling decision and must never turn into an exit-2 on a
+    command the pre-fix code would merely have deferred. The commit path keeps
+    its own blocking copy of the same tests, which stays the single source of
+    truth for the allow.
+
+    Audit round 3, F6: before this, the deferral honored ANY parseable unexpired
+    grant file, so a post-success leftover or a grant belonging to a completely
+    different repository blocked auto-bulk here for its whole TTL.
+
+    Fail closed on doubt: an empty command, or a command whose target cannot be
+    resolved without blocking (multiple -C, unresolved ${VAR} — conditions that
+    make _grant_matches_commit_target _block()), counts as "could authorize", so
+    this can only ever NARROW deferral, never allow an auto-bulk commit that the
+    pre-fix code would have deferred for a reason that still holds. Swallowing
+    that SystemExit leaves the _block() message it already wrote on stderr while
+    the hook goes on to exit 0 — cosmetic only (PreToolUse blocks on the exit
+    code, not on stderr), and it only occurs for a malformed auto-bulk command.
+    """
+    if grant_path.endswith('.lck'):
+        grant_path = grant_path[:-len('.lck')]
+    if not _grant_use_permitted(grant, grant_path):
+        return False
+    if not command:
+        return True
+    try:
+        return _grant_matches_commit_target(grant, command)
+    except SystemExit:
+        return True
+    except Exception:
+        return True
+
+
 # Pointer-file path template for deferred commit-grant consumption (Fix B).
 # PreToolUse locks the grant (rename → .lck) and writes this pointer so
 # PostToolUse can locate it for finalization.
+#
+# The `{sid}` slot holds a PER-EVENT key (see _event_key), not a session id. The
+# literal must stay character-identical to _COMMIT_GRANT_POINTER_TEMPLATE in
+# hooks/posttool-allowlist-consume.py, and must keep matching the
+# `/tmp/claude-commit-grant-active-*.json` glob that hooks/stop-cleanup-allowlist.sh
+# sweeps at session end; both are pinned by
+# hooks/tests/test_posttool_commit_grant_finalize.py.
 _COMMIT_GRANT_ACTIVE_TEMPLATE = '/tmp/claude-commit-grant-active-{sid}.json'
 
+# Characters kept verbatim from a tool_use_id when it becomes a filename. Everything
+# else folds to '-', so a payload value can neither escape the /tmp pointer namespace
+# (path separators, `..`) nor smuggle a glob metacharacter into the reader's scan.
+_EVENT_KEY_UNSAFE_RE = re.compile(r'[^A-Za-z0-9_-]')
 
-def _lock_grant_for_posttool(grant_path, effective_sid):
+
+def _raw_tool_use_id(data):
+    """The UNSANITIZED tool_use_id from the payload, or '' when unavailable.
+
+    Recorded verbatim inside the pointer (audit R2-2): the filename derivation in
+    _event_key is deliberately lossy (safe-alphabet fold + length cap), so two
+    DISTINCT raw ids can share a derived key. The filename may stay lossy — it only
+    has to be a safe /tmp name — but the ownership check inside the pointer must
+    not be, or a colliding second event could finalize the first event's grant.
+    """
+    try:
+        return str(data.get('tool_use_id') or '').strip()
+    except Exception:
+        return ''
+
+
+def _event_key(data):
+    """Per-event pointer key for this tool invocation, or '' when unavailable.
+
+    `tool_use_id` is the one identifier the runtime hands to BOTH hook events of a
+    single tool call. claude-code 2.1.239 builds the two payloads as
+    `{...,hook_event_name:"PreToolUse",tool_name,tool_input,tool_use_id:t}` and
+    `{...,hook_event_name:"PostToolUse",...,tool_use_id:t}`, and one tool-execution
+    frame passes the SAME `t` into both. It is the `toolu_...` id of the assistant's
+    tool_use block: unique per event, and assigned by the API rather than by the
+    committing agent.
+
+    A session id is NOT a substitute, and replacing it is the point. It proves only
+    that two things share a session, so a later unrelated commit under the same
+    session -- an auto-bulk commit, which mints no grant and no pointer at all --
+    could claim an earlier event's pointer.
+
+    The derivation is NOT injective (audit R2-2): the fold and the cap can map two
+    distinct raw ids to one name. That is acceptable for the FILENAME only because
+    the pointer also records the raw id (_raw_tool_use_id) and the finalizer
+    compares raw values; a filename collision therefore degrades to an O_EXCL
+    refusal on the write side (handled by restoring the grant), never to a
+    cross-finalization.
+
+    Returns '' when the payload carries no usable id; _lock_grant_for_posttool then
+    declines to defer rather than write a pointer nobody can bind to this event.
+    """
+    raw = _raw_tool_use_id(data)
+    if not raw:
+        return ''
+    safe = _EVENT_KEY_UNSAFE_RE.sub('-', raw)[:96]
+    return 'tu-' + safe if safe.strip('-') else ''
+
+
+def _restore_locked_grant(locked_path, grant_path):
+    """Best-effort rename of a just-locked grant back to its original name.
+
+    Used when the deferral pointer cannot be written AFTER the rename-aside
+    already happened (audit R2-3b): a .lck referenced by no pointer is a
+    stranded grant nothing will ever finalize. If the restore itself fails the
+    .lck remains — and with no pointer naming it, the finalizer's stale reaper
+    cannot reach it (that reaper discovers locked grants only through pointers).
+    The residual is reaped by hooks/stop-cleanup-allowlist.sh, which globs .lck
+    files directly (session-owned or over-age), and by the >7d /tmp sweep.
+    """
+    try:
+        os.rename(locked_path, grant_path)
+    except OSError:
+        pass
+
+
+def _lock_grant_for_posttool(grant_path, event_key, raw_event_id=''):
     """Lock a commit grant for deferred PostToolUse consumption (Fix B).
 
     Renames grant_path → grant_path + ".lck" to atomically remove it from
-    _find_grant / _find_grant_any searches (prevents double-use), then writes
-    a pointer at _COMMIT_GRANT_ACTIVE_TEMPLATE so posttool-allowlist-consume.py
-    can finalize:
-      - exit 0  → unlink the .lck file (consumed)
-      - non-zero → rename .lck back to original (grant preserved for retry)
+    _find_grant / _find_grant_any searches (prevents double-use), then writes a
+    pointer named for THIS EVENT so posttool-allowlist-consume.py can finalize:
+      - success terminal result → journal the commit event, unlink the .lck (consumed)
+      - any other terminal      → rename .lck back to original (preserved for retry)
+    The finalizer classifies that result from the payload SHAPE, not from an exit
+    code — a successful Bash tool_response carries no exit_code, and a thrown call
+    fires PostToolUseFailure, under which the finalizer is also registered (see
+    _classify_terminal_result in posttool-allowlist-consume.py).
 
-    Falls back to immediate _unlink_grant if the rename fails (e.g., cross-
-    device move or permission error) so the guard stays fail-closed.
+    The pointer records BOTH the derived event_key (its own name, so a squatter
+    file merely occupying the name is refutable) and the RAW tool_use_id (audit
+    R2-2): the filename derivation is lossy, so ownership is proven by the raw
+    id, which the finalizer compares verbatim. Two distinct raw ids that share a
+    derived name can therefore never finalize each other's grant.
+
+    Returns True iff the grant was actually deferred (locked aside AND a pointer
+    published for it). A False return is the caller's signal that this
+    authorization will never reach PostToolUse, so the caller records a
+    validation-time use instead (audit round 3 F4 — the leave-in-place cases
+    below are exactly where the single-use guarantee used to evaporate).
+
+    When the grant cannot be deferred it is LEFT IN PLACE, not destroyed
+    (audit R2-3a — this reverses the earlier "spend it so it is never left
+    reusable" call):
+      - no per-event key, or rename failure: the commit this PreToolUse just
+        authorized is about to run; destroying the grant here meant a FAILED
+        commit could never retry and a successful one had nothing to journal.
+        Reuse-after-success is stopped by the caller's use record, NOT by the
+        expected_head binding: that binding was believed sufficient because a
+        successful commit moves HEAD, but a permitted `git reset --soft
+        <expected_head>` puts the tuple back and a deterministic `--amend`
+        reproduces the same sha, so the leftover stayed live (audit round 3 F4).
+        Residual: no journal entry for this event (inherent — no key means no
+        pointer to finalize).
+      - pointer write failure AFTER the rename (O_EXCL name collision, ENOSPC,
+        permission, serialization error): the .lck would be referenced by
+        nothing (audit R2-3b), so the rename is undone and the grant restored.
+        Same use-record protection as above.
+
+    The pointer is published ATOMICALLY (audit F7): the content is fully
+    written and fsynced under a private temp name in the same directory, then
+    linked into the final name. Writing into an O_EXCL-opened final name let a
+    concurrently colliding event read PARTIAL JSON and reap the still-being-
+    written pointer as corrupt, stranding the owner's .lck with no journal
+    record. link(2) atomically materialises the complete inode at the final
+    name and fails EEXIST when the name is taken — the same no-clobber O_EXCL
+    provided, so a name is still only ever published by the event that owns it
+    and no writer can overwrite another event's -- or another session's --
+    token (a taken name is a duplicate PreToolUse for one tool_use_id, or a
+    lossy-name collision between two distinct raw ids). rename(2) was rejected
+    because it silently REPLACES an existing destination (no-clobber lost);
+    O_EXCL-probe-then-rename was rejected for its probe-to-rename race, in
+    which a concurrent publisher's just-linked pointer would be clobbered.
+    The temp name matches neither the pointer glob nor the .lck glob, so no
+    reaper or sweep can observe it; a crash-orphaned temp file is inert and
+    falls to the >7d /tmp cron.
     """
+    if not event_key:
+        return False
     locked_path = grant_path + '.lck'
     try:
         os.rename(grant_path, locked_path)
     except OSError:
-        _unlink_grant(grant_path)
-        return
-    pointer_key = effective_sid or 'any'
-    pointer_path = _COMMIT_GRANT_ACTIVE_TEMPLATE.format(sid=pointer_key)
+        return False
+    pointer_path = _COMMIT_GRANT_ACTIVE_TEMPLATE.format(sid=event_key)
+    tmp_path = '%s.wip.%d.%s' % (pointer_path, os.getpid(), os.urandom(4).hex())
     try:
-        with open(pointer_path, 'w') as fp:
-            json.dump({'locked_path': locked_path, 'original_path': grant_path}, fp)
+        handle = os.open(tmp_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     except OSError:
-        pass
+        _restore_locked_grant(locked_path, grant_path)
+        return False
+    deferred = False
+    try:
+        with os.fdopen(handle, 'w') as fp:
+            json.dump({'locked_path': locked_path,
+                       'original_path': grant_path,
+                       'event_key': event_key,
+                       'tool_use_id': raw_event_id}, fp)
+            fp.flush()
+            os.fsync(fp.fileno())
+        os.link(tmp_path, pointer_path)
+        deferred = True
+    except (OSError, ValueError, TypeError):
+        _restore_locked_grant(locked_path, grant_path)
+    finally:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+    return deferred
 
 
 def _git_output(args):
@@ -652,6 +1008,20 @@ def _enforce_commit_grant_binding(grant, command):
             'Command excerpt: %s\n' % command[:200]
             + 'Fail closed: an unlocatable commit target is rejected, not '
             'guessed.\n'
+        )
+    if len(invocations) > 1:
+        _block(
+            '\nBLOCKED: agent git commit - %d commit invocations in ONE command; '
+            'a commit grant authorizes exactly ONE commit.\n' % len(invocations)
+            + 'Command excerpt: %s\n' % command[:200]
+            + 'Every invocation in one call is validated against the SAME '
+            'pre-execution HEAD and the grant is locked once, so a second commit '
+            'here would ride the first one\'s authorization (audit round 3, F5). '
+            'The authorized committer is already required to issue a minimal '
+            '`git commit -F <msgfile>` with nothing chained on that command line '
+            '(agents/changelog-analyst.md, command-line purity), so no legitimate '
+            'caller reaches this. Issue each commit as its own call under its own '
+            'grant.\n'
         )
     for inv in invocations:
         if inv['inline_env_redirect']:
@@ -985,20 +1355,33 @@ def _has_bulk_commit_sentinel(data):
     return False
 
 
-def _has_active_commit_grant():
-    """Return True if any single-use commit grant is pending or in-flight (Fix E).
+def _has_active_commit_grant(command=''):
+    """Return True if a commit grant that could authorize a commit HERE is
+    pending or in-flight (Fix E, narrowed by audit round 3 F6).
 
     Used to defer auto-bulk commits while a concurrent /commit cycle is active.
     Checks .json (written, not yet locked) and .lck (locked by PreToolUse;
     git commit subprocess is running) grant files.
+
+    F6: this used to honor ANY parseable unexpired grant file, with none of the
+    repo/branch/HEAD binding the commit validation itself applies. A grant that
+    could not possibly authorize a commit here — a post-success leftover on the
+    undeferrable path, or one belonging to an entirely different repository —
+    therefore blocked auto-bulk in THIS repo for its whole TTL, and an
+    artificially long expiry blocked it indefinitely. Observed in the wild: a
+    live grant bound to /root deferred an auto-bulk commit in an unrelated
+    checkout. `command` supplies the auto-bulk commit's own target so the same
+    binding + spent test decides both; an empty command (or an unresolvable
+    target) keeps the old defer-on-doubt behavior.
     """
     for pattern in ('/tmp/claude-commit-grant-*.json',
                     '/tmp/claude-commit-grant-*.lck'):
         try:
             for path in glob.glob(pattern):
                 grant = _load_grant(path)
-                if grant is not None and not _end_time_passed(
-                        grant.get('expires_at', '')):
+                if grant is None or _end_time_passed(grant.get('expires_at', '')):
+                    continue
+                if _grant_can_authorize_here(grant, path, command):
                     return True
         except Exception:
             pass
@@ -1013,10 +1396,11 @@ def _evaluate_commit(command, data):
         if _has_bulk_commit_sentinel(data):
             # Fix E: defer auto-bulk if a single-use /commit grant is active.
             # A concurrent /commit cycle is in progress; let it finish first.
-            if _has_active_commit_grant():
+            if _has_active_commit_grant(command):
                 _block(
                     '\nDEFERRED: auto-bulk commit skipped — an active single-use '
-                    'commit grant exists (/tmp/claude-commit-grant-*.json or *.lck).\n'
+                    'commit grant exists (/tmp/claude-commit-grant-*.json or *.lck) '
+                    'that is bound to THIS repo/branch/HEAD and still unspent.\n'
                     'A /commit cycle is in progress; auto-bulk will retry on the '
                     'next scheduled cycle.\n'
                 )
@@ -1038,19 +1422,39 @@ def _evaluate_commit(command, data):
     # (docs/dev/peer-review-grant-parity.md CRITICAL). Collect every candidate
     # (the any-SID glob is a superset of the SID-specific one, covering the
     # subagent SID-propagation fallback) and pick the one bound to this target.
-    sid = _get_session_id(data)
-    live = [
-        (path, grant)
-        for (path, grant) in _collect_commit_grant_candidates()
-        if not _end_time_passed(grant.get('expires_at', ''))
-    ]
+    live = []
+    for path, grant in _collect_commit_grant_candidates():
+        if _end_time_passed(grant.get('expires_at', '')):
+            # An expired grant can never authorize again, so its use record has
+            # nothing left to protect — reap it here rather than leaving /tmp
+            # litter for the >7d sweep.
+            _unlink_grant(_use_record_path(path))
+            continue
+        live.append((path, grant))
     for grant_path, grant in live:
+        # A grant already spent on the undeferrable path is not a candidate at
+        # all (audit round 3, F4). Checked BEFORE the target match so a spent
+        # grant falls through to the next candidate / default-deny instead of
+        # being selected and then blocked on a confusing binding diagnostic.
+        if not _grant_use_permitted(grant, grant_path):
+            continue
         if _grant_matches_commit_target(grant, command):
             # Authoritative binding re-check (redirect vectors + repo/branch/HEAD
             # across EVERY invocation): a matching grant passes; any redirect
             # still _block()s (exit 2). Single source of truth for the allow.
             _enforce_commit_grant_binding(grant, command)
-            _lock_grant_for_posttool(grant_path, grant.get('sid') or sid or 'any')
+            # Key the pointer on THIS EVENT, not on any session id: the grant's sid
+            # and the finalizer's sid legitimately differ (see _find_grant_any), and
+            # a session-named pointer is claimable by an unrelated later commit.
+            # The RAW tool_use_id rides along so ownership survives the lossy
+            # filename derivation (audit R2-2).
+            if not _lock_grant_for_posttool(grant_path, _event_key(data),
+                                            _raw_tool_use_id(data)):
+                # Undeferrable: this authorization will never reach PostToolUse,
+                # so the grant stays on disk with nothing to consume it. Record
+                # the use now — that record, not the (restorable) expected_head
+                # binding, is what refuses the second one (audit round 3, F4).
+                _record_undeferrable_grant_use(grant, grant_path)
             return
     # Fail closed (security preserved): no unexpired grant is bound to this
     # commit's target repo/branch/HEAD. If a live-but-mismatched grant exists,
@@ -1256,11 +1660,270 @@ def _evaluate_forbidden_plumbing(command, data):
     )
 
 
+# ---------------------------------------------------------------------------
+# Residual-refusal recovery route (2026-09-03)
+#
+# The residual refusal below is the ONE block in this guard that left an agent
+# nothing: it fires before the invocation list, the allowlist cannot reach it
+# (see the ordering note in _evaluate_command), and /do is main-agent-only. A
+# stuck subagent is how guards get disabled wholesale, so the refusal needs a
+# route -- WITHOUT becoming a laundering channel.
+#
+# Binding. The refusal exists BECAUSE the command did not parse, so the route
+# cannot bind to operations the way a sentinel grant does: there is no op to
+# name. The only thing left to bind to is the command's exact bytes. The
+# override therefore carries sha256 of the FULL command text -- the full text,
+# not the residual segment, because a segment binding would leave every other
+# segment free to be appended after authorization. Full-text digest means the
+# authorized command and the executed command are the same string by
+# construction, with zero degrees of freedom.
+#
+# Reach. An override may only ANSWER a refusal this guard already emitted and
+# journaled (_digest_was_refused). It cannot be minted pre-emptively for a
+# command that was never refused, and it is single-use and short-lived.
+#
+# What this route does NOT claim. It does not claim an agent cannot forge the
+# file. This repository has already MEASURED that it can -- see route_id
+# "grant-self-minting" in hooks/tests/fixtures/overwrite_corpus.json: a grant
+# under /tmp is an ordinary JSON file, creating a path that does not yet exist
+# is never denied, so any agent with Bash can mint one. That finding is
+# declared there rather than claimed closed, and this route inherits exactly
+# that declared limitation and adds no new surface. What the route does supply
+# is the property forgery cannot erase: honoring an override emits a
+# non-suppressible stderr audit record naming who authorized it, why, and what
+# was refused, so a forged authorization is visible in the transcript rather
+# than silent.
+# ---------------------------------------------------------------------------
+
+_RESIDUAL_OVERRIDE_DIR = '/tmp/claude-git-residual-override'
+_RESIDUAL_OVERRIDE_KIND = 'git-residual-override'
+_RESIDUAL_HUMAN_ORIGIN = 'userpromptsubmit-hook'
+
+
+def _residual_ns_path(name):
+    """Path inside the override namespace. One constant, so tests repoint all."""
+    return Path(_RESIDUAL_OVERRIDE_DIR) / name
+
+
+def _command_digest(command):
+    """sha256 of the FULL command text -- the override's only sound binding."""
+    return hashlib.sha256(
+        command.encode('utf-8', 'surrogateescape')).hexdigest()
+
+
+def _append_residual_record(name, record):
+    """Append one JSONL record. Best effort: audit must never crash the guard."""
+    try:
+        os.makedirs(_RESIDUAL_OVERRIDE_DIR, exist_ok=True)
+        with open(_residual_ns_path(name), 'a') as fp:
+            fp.write(json.dumps(record, sort_keys=True) + '\n')
+    except Exception:
+        pass
+
+
+def _journal_residual_refusal(command, kinds, segments, digest, data):
+    """Record that this exact command was refused, so an override can answer it.
+
+    Also the human-facing record of WHAT to authorize: the digest printed in the
+    refusal message is the key into this journal.
+    """
+    _append_residual_record('refusals.jsonl', {
+        'event': 'residual_refusal',
+        'at': datetime.now(timezone.utc).isoformat(),
+        'command_sha256': digest,
+        'command_excerpt': command[:200],
+        'residual_kinds': kinds,
+        'residual_segments': segments,
+        'session_id': _get_session_id(data),
+        'agent_id': str(data.get('agent_id') or ''),
+    })
+
+
+def _digest_was_refused(digest):
+    """True iff this guard has already refused this exact command.
+
+    Fails CLOSED: an unreadable/absent journal yields False, which leaves the
+    refusal in place.
+    """
+    try:
+        path = _residual_ns_path('refusals.jsonl')
+        if not path.exists():
+            return False
+        for line in path.read_text().splitlines():
+            if not line.strip():
+                continue
+            try:
+                rec = json.loads(line)
+            except Exception:
+                continue
+            if (rec.get('event') == 'residual_refusal'
+                    and rec.get('command_sha256') == digest):
+                return True
+    except Exception:
+        return False
+    return False
+
+
+def _find_residual_override(digest, kinds, was_refused):
+    """Return (path, override) for a valid override answering this refusal.
+
+    Every condition fails closed. `kinds` must be a SUBSET of what the human
+    signed: an override issued for an obfuscated-token refusal cannot be spent
+    on a command-substitution one.
+
+    `was_refused` is the journal state as it stood BEFORE the current run
+    journaled itself. Reading it after would make the property vacuous -- the
+    run would satisfy its own precondition and a pre-minted override would fire
+    on first contact.
+    """
+    if not was_refused:
+        return None, None
+    try:
+        candidates = glob.glob(str(_residual_ns_path('*.json')))
+        candidates.sort(key=lambda p: os.stat(p).st_mtime, reverse=True)
+    except Exception:
+        return None, None
+    for path in candidates:
+        ovr = _load_grant(path)
+        if ovr is None:
+            continue
+        if ovr.get('kind') != _RESIDUAL_OVERRIDE_KIND:
+            continue
+        # Human-origin marker (a convention, not a guarantee -- see the header).
+        if ovr.get('origin') != _RESIDUAL_HUMAN_ORIGIN:
+            continue
+        # WHO and WHY are structurally required, so no override can pass through
+        # without an attributable authorizer and a stated justification.
+        if not str(ovr.get('authorized_by') or '').strip():
+            continue
+        if not str(ovr.get('reason') or '').strip():
+            continue
+        if _end_time_passed(ovr.get('expires_at', '')):
+            continue
+        if ovr.get('command_sha256') != digest:
+            continue
+        signed = ovr.get('residual_kinds')
+        if not isinstance(signed, list) or not set(kinds).issubset(set(signed)):
+            continue
+        return path, ovr
+    return None, None
+
+
+def _consume_residual_override(path):
+    """Single-use: unlink BEFORE allowing, so a crash cannot leave it live."""
+    try:
+        os.unlink(path)
+        return True
+    except Exception:
+        return False
+
+
+def _audit_residual_override(path, ovr, command, kinds, segments, digest, data):
+    """Emit the honor record. stderr first: the transcript is the durable copy."""
+    sys.stderr.write(
+        '\nRESIDUAL-OVERRIDE HONORED: a human authorization cleared the '
+        '"could not be statically classified" refusal for this command.\n'
+        'Authorized by: %s\n' % ovr.get('authorized_by', '')
+        + 'Reason: %s\n' % ovr.get('reason', '')
+        + 'What was refused: %s\n' % ', '.join(kinds)
+        + 'Refused segment(s): %s\n' % '; '.join(s.strip()[:80] for s in segments[:3])
+        + 'Command sha256: %s\n' % digest
+        + 'Override: %s (issued %s, expires %s, single-use -- now consumed)\n'
+        % (path, ovr.get('created_at', ''), ovr.get('expires_at', ''))
+        + 'This clears ONLY the unparseable-token refusal. Every other policy '
+        'check still applies to every part of this command the guard can read.\n'
+    )
+    _append_residual_record('audit.jsonl', {
+        'event': 'residual_override_honored',
+        'at': datetime.now(timezone.utc).isoformat(),
+        'override_path': str(path),
+        'authorized_by': ovr.get('authorized_by', ''),
+        'reason': ovr.get('reason', ''),
+        'origin': ovr.get('origin', ''),
+        'issued_session_id': ovr.get('session_id', ''),
+        'used_session_id': _get_session_id(data),
+        'used_agent_id': str(data.get('agent_id') or ''),
+        'command_sha256': digest,
+        'command_excerpt': command[:200],
+        'residual_kinds': kinds,
+        'residual_segments': [s.strip()[:200] for s in segments],
+        'created_at': ovr.get('created_at', ''),
+        'expires_at': ovr.get('expires_at', ''),
+    })
+
+
 def _evaluate_command(command, data):
     # Classify once: build invocations list for all _looks_like_* and _evaluate_* calls.
     # iter_git_invocations uses token-aware parsing so path-qualified forms like
     # /usr/bin/git are detected alongside bare 'git' (closes RISK-3 bypass).
-    invocations = list(iter_git_invocations(command))
+    invocations, residuals = classify_git_command(command)
+    # An EMPTY invocation list is not proof that no git runs. Two distinct cases
+    # hide behind it, and conflating them is what made this guard a no-op:
+    #   * genuinely git-free (`echo hi`, `grep git .`) — must stay fast and
+    #     permissive; this hook sees EVERY Bash call in the harness.
+    #   * git-shaped but unparseable (`g\it push`, `$GIT push`, `$(which git)
+    #     push`) — the command token cannot be resolved statically, so NO check
+    #     below can be trusted to judge it. Refuse rather than fall through.
+    # Checked BEFORE the invocation list and WITHOUT an allowlist bypass: a
+    # grant is bound to a specific repo/branch/HEAD, and a command whose binary
+    # is unknowable cannot be shown to be the command the grant authorized.
+    #
+    # That ordering is LOAD-BEARING, and measurably so: the two sides use
+    # DIFFERENT splitters. lib/allowlist.py::_bash_subcommands (the grant
+    # matcher) splits on && || ; | but NOT on `&`, while
+    # lib/git_command_classifier.py::_segments (the residual detector) does
+    # split on `&`. So `git status & $GIT push --force origin master` is ONE
+    # grant-matchable subcommand whose head token is `git status` -- which a
+    # structural sentinel grant satisfies -- while carrying an unresolvable
+    # `$GIT push --force` the guard cannot judge. Run the allowlist first and
+    # authority earned for `git status` is spent on a force-push through an
+    # unknown binary. The recovery route below therefore sits INSIDE this
+    # branch rather than reordering it, and binds to the command's bytes
+    # instead of to operations the allowlist could match.
+    if residuals:
+        kinds = sorted({kind for kind, _seg in residuals})
+        segments = [seg for _k, seg in residuals]
+        digest = _command_digest(command)
+        # Read the journal BEFORE writing to it: an override must answer a
+        # refusal from an EARLIER run, never the one this run is about to
+        # record. Then journal unconditionally, so the attempt is auditable
+        # whether or not it is subsequently cleared.
+        was_refused = _digest_was_refused(digest)
+        _journal_residual_refusal(command, kinds, segments, digest, data)
+        ovr_path, ovr = _find_residual_override(digest, kinds, was_refused)
+        if ovr is not None:
+            # NOT a bypass. This clears the unparseable-token refusal only;
+            # control falls through to every check below, so each part of the
+            # command the guard CAN parse is still judged on its merits.
+            _consume_residual_override(ovr_path)
+            _audit_residual_override(
+                ovr_path, ovr, command, kinds, segments, digest, data)
+        else:
+            _block(
+                '\nBLOCKED: agent git command could not be statically classified.\n'
+                'Command excerpt: %s\n' % command[:200]
+                + 'Unresolvable command token(s): %s\n' % ', '.join(kinds)
+                + 'Segment(s): %s\n' % '; '.join(seg.strip()[:80] for seg in segments[:3])
+                + 'This command names its binary through a shell expansion, a '
+                'substitution, or an escaped/quoted spelling, so the guard cannot '
+                'prove which program runs or which git subcommand it receives.\n'
+                + '\nTWO RECOVERY ROUTES, cheapest first:\n'
+                + '  1. Re-issue it with the binary written literally (e.g. '
+                '`git push` or `/usr/bin/git push`) so the policy checks can '
+                'judge it on its merits. This is almost always the right fix '
+                'and needs no authorization.\n'
+                + '  2. If the binary genuinely cannot be written literally, ask '
+                'your user for a residual override. Only the human can issue '
+                'one -- you cannot authorize yourself and neither can another '
+                'agent. It is bound to this exact command text, is single-use, '
+                'expires, and its use is recorded in the transcript. The human '
+                'runs:\n'
+                + '       scripts/write-git-residual-override.py \\\n'
+                + '         --command-sha256 %s \\\n' % digest
+                + '         --residual-kinds %s \\\n' % ','.join(kinds)
+                + '         --reason "<why this command must run as written>"\n'
+                + '     Command sha256: %s\n' % digest
+            )
     if not invocations:
         return
     # Fast path: if /allow grant matches for non-push commands, allow immediately.

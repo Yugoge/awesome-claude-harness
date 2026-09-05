@@ -199,7 +199,54 @@ _REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || echo "$_CLAUDE_HOME_F
 _REPO_HASH="$(python3 -c "import hashlib,os; print(hashlib.sha256(os.path.realpath('${_REPO_ROOT}').encode()).hexdigest()[:16])")"
 _BRANCH_RAW="$(git rev-parse --abbrev-ref HEAD 2>/dev/null)"
 _BRANCH="$(python3 -c "print('${_BRANCH_RAW}'.replace('/', '__'))")"
-_TOKEN_PATH="/tmp/agentic-commit/push/${_REPO_HASH}/${_BRANCH}.json"
+# Session-scoped token path. The token has ALWAYS carried a session_id field, but the path
+# did not, so two sessions working the same branch contended for one slot — and DO NOT rule 7
+# (never overwrite another session's token) then made that contention permanent: the loser's
+# commit could never be tokenized at all, because the only write opportunity is the moment of
+# its own commit. Keying the path by session removes the contention instead of arbitrating it.
+# Nothing here validates session identity: the gate below still authorizes purely on
+# commit_sha == HEAD, exactly as before.
+#
+# The session id becomes a PATH SEGMENT, so it must be sanitised before use. It arrives from
+# the environment and is not trustworthy as a filename: a value containing `/` or `..` would
+# escape the session directory, and two distinct ids that normalise to the same segment would
+# recreate the very collision this change removes. Reduce it to a fixed-width hex digest —
+# collision-free in practice, fixed length, and containing no path-significant characters, so
+# it is also safe to interpolate into the validator below. `unknown` (both env vars absent) is
+# digested like any other value, giving one shared slot for that degenerate case rather than a
+# traversal primitive.
+_PUSH_GATE_SID_RAW="${CLAUDE_CODE_SESSION_ID:-${CLAUDE_SESSION_ID:-unknown}}"
+_PUSH_GATE_SID="$(printf '%s' "$_PUSH_GATE_SID_RAW" | sha256sum | cut -c1-16)"
+_TOKEN_PATH="/tmp/agentic-commit/push/${_REPO_HASH}/${_PUSH_GATE_SID}/${_BRANCH}.json"
+
+# Back-compat: tokens written by a pre-migration /commit live at the legacy session-less path.
+# Honour one only when no session-scoped token exists AND it is OURS.
+#
+# The ownership test is not optional. The legacy path is shared by construction, so without it
+# session B could push on session A's token, and — because $_TOKEN_PATH is what the post-push
+# cleanup deletes — B would then consume A's token too. That is exactly the cross-session
+# interference this migration removes; an unguarded fallback would smuggle it back in.
+# commit_sha == HEAD is NOT a sufficient guard here: two sessions on one branch routinely sit
+# at the same HEAD, which is precisely when they contend.
+#
+# A legacy token predating the session_id field (or carrying an empty one) is treated as
+# unowned and is NOT inherited: unclaimed is not the same as ours. Re-run /commit to mint a
+# session-scoped token instead.
+_LEGACY_TOKEN_PATH="/tmp/agentic-commit/push/${_REPO_HASH}/${_BRANCH}.json"
+if [ ! -f "$_TOKEN_PATH" ] && [ -f "$_LEGACY_TOKEN_PATH" ]; then
+  # Compare against the RAW session id: session_id inside the token is stored undigested.
+  if _LEGACY_OWNER="$(python3 -c "
+import json, sys
+try:
+    print(json.load(open(sys.argv[1])).get('session_id') or '')
+except Exception:
+    print('')
+" "$_LEGACY_TOKEN_PATH" 2>/dev/null)" \
+     && [ -n "$_LEGACY_OWNER" ] && [ "$_LEGACY_OWNER" = "$_PUSH_GATE_SID_RAW" ]; then
+    _TOKEN_PATH="$_LEGACY_TOKEN_PATH"
+  fi
+fi
+
 if [ -f "$_TOKEN_PATH" ]; then
   _HEAD_SHA="$(git rev-parse HEAD 2>/dev/null)"
   _GATE_RESULT="$(python3 - <<PYEOF 2>/dev/null

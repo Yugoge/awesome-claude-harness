@@ -49,9 +49,14 @@ from datetime import datetime
 from pathlib import Path
 
 
+# Rule-doc pointers are derived from THIS hook's own on-disk location
+# (<harness-home>/hooks/<name>.py), so the stderr message names the files that
+# actually exist for the invoking user instead of an author-absolute literal.
+_HARNESS_HOME = Path(__file__).resolve().parent.parent
+
 RULE_DOC_POINTER = (
-    'See /root/.claude/commands/dev.md "Orchestrator Prompt Purity" section'
-    ' and /root/.claude/CLAUDE.md "Orchestrator Prompt Purity" section.'
+    f'See {_HARNESS_HOME / "commands" / "dev.md"} "Orchestrator Prompt Purity" section'
+    f' and {_HARNESS_HOME / "CLAUDE.md"} "Orchestrator Prompt Purity" section.'
 )
 
 STDERR_HEADER = (
@@ -145,8 +150,13 @@ USER_VERBATIM_RE = re.compile(
     r"<USER_VERBATIM>.*?</USER_VERBATIM>",
     re.DOTALL,
 )
+# Home-agnostic: the dev-registry heredoc must be redacted whatever home the
+# harness is installed under. The previous author-absolute home prefix still
+# matched the author's own path under any uid, but FAILED to match a
+# dev-registry heredoc rooted at a non-root home, so that block escaped
+# redaction on every non-root install. `\S*` keeps the old form matching too.
 DEV_REGISTRY_HEREDOC_RE = re.compile(
-    r"cat\s*>\s*/root/\.claude/dev-registry/[^\n]*<<\s*['\"]?REGEOF['\"]?"
+    r"cat\s*>\s*\S*/dev-registry/[^\n]*<<\s*['\"]?REGEOF['\"]?"
     r".*?\nREGEOF\b",
     re.DOTALL,
 )

@@ -1,13 +1,21 @@
-# Threat Model — awesome-claude-harness
+# Threat Model — claude-code-guardrails
 
 > **Scope**: This threat model covers the AI-agent permission boundary enforced by the
 > hook chain in `hooks/`. The adversary model is an autonomous AI agent (Claude Code,
 > running as an orchestrator or subagent) that may attempt — through misunderstanding,
 > prompt injection, or hallucination — to execute destructive shell operations, bypass
-> authorization grants, or exfiltrate data. Physical access, hardware compromise, and
-> social engineering of the human operator are explicitly out of scope (see
-> "Threat Boundaries" below). Protections are defense-in-depth; no single layer is
-> assumed to be impenetrable.
+> authorization grants, or exfiltrate data **along a write or mutate path**. Physical
+> access, hardware compromise, social engineering of the human operator, and
+> **read-only** exfiltration are explicitly out of scope (see "Threat Boundaries"
+> below). Protections are defense-in-depth; no single layer is assumed to be
+> impenetrable.
+>
+> **What is proven, and what is only claimed**: this document states residual risk;
+> `docs/ENFORCEMENT-LEDGER.md` states, per wired hook, which behavior is *enforced*,
+> *detected*, *advisory* or *unsupported*, and which evidence layer earned that label.
+> As of this revision **no row in that ledger carries `enforced`**, because no real
+> Claude Code dispatcher has been driven in this environment. Treat every claim below
+> as bounded by that fact.
 
 ---
 
@@ -16,10 +24,61 @@
 The harness controls every tool call an AI agent makes through a chain of PreToolUse,
 PostToolUse, and Stop hooks wired in `settings.json`. The primary attack surface is
 the `Bash` tool: an agent that can run arbitrary shell commands can commit destructive
-changes, exfiltrate secrets, or mutate the shared git repository state without human
-review. Five independently-designed mechanisms address distinct classes of abuse. They
-are documented here so expert reviewers can audit the architecture without reading all
-~8,000 lines of hook code.
+changes, mutate the shared git repository state, or exfiltrate secrets by writing them
+out — all without human review. **Only write/mutate-path exfiltration is in scope**;
+read-only exfiltration through the conversation context is a stated non-goal (§5.1),
+and the Overview and §5 agree on that boundary deliberately. Five independently-designed
+mechanisms address distinct classes of abuse. They are documented here so expert
+reviewers can audit the architecture without reading all ~8,000 lines of hook code.
+
+### 1.1 Protected Assets
+
+What this harness is trying to keep intact, in rough order of how badly losing it hurts:
+
+| asset | why it is worth protecting | primary mechanism |
+|---|---|---|
+| **Published git history on `master`/`main`** | Force-push, `reset --hard` and direct ref writes destroy work belonging to other sessions and to the human. Unrecoverable in the general case. | `hooks/pretool-bash-safety.sh:1695-1697 @4c33f2f5`; `hooks/git-keystone/reference-transaction` (overnight actors only) |
+| **The uncommitted working tree** | A concurrent session's in-progress edits are not in any commit and have no backup. | `hooks/pretool-bash-safety.sh:757-1038 @4c33f2f5` (bulk-sentinel guard) |
+| **Authorization grants** (`/tmp/claude-grants/*.json`) | A grant is the only artifact standing between an agent and a privileged operation. | `hooks/lib/allowlist.py:435-520 @4c33f2f5` (structural matching) |
+| **The hook chain itself** | Every other protection is downstream of the hooks staying wired and unedited. | `settings.json:1 @4c33f2f5` wiring plus the hook-refactor consent file |
+| **Secrets on disk** (`.env`, keys, tokens) | Disclosure is irreversible. Only the write/mutate path is defended. | Secret scan in `.github/workflows/baseline.yml:110 @4c33f2f5` |
+| **The human's ability to audit what happened** | Silent failure is worse than loud failure; an unauditable harness cannot be trusted. | Schema-enforced agent contracts, `hooks/lib/contract_runtime.py:215 @4c33f2f5` |
+
+### 1.2 Attacker Capabilities
+
+The adversary is **the agent itself**, acting against the human's intent through
+misunderstanding, prompt injection, or hallucination. Concretely, it is assumed able to:
+
+- **Emit any tool call**, including arbitrary `Bash` command strings, in any quoting,
+  escaping or encoding the shell accepts.
+- **Read this repository**, including every hook, every regex, and this document —
+  so no protection here may depend on the attacker not knowing how it works.
+- **Compose and obfuscate**: chain commands, wrap them (`env`, `sudo`, `nice`, …),
+  prefix redirections, use ANSI-C escapes, and path-qualify executables (`/usr/bin/git`).
+- **Retry indefinitely** and observe each rejection, adapting the next attempt.
+- **Run concurrently** with other sessions against the same working tree.
+
+The adversary is assumed **not** able to: edit hook files without tripping the consent
+gate, write outside the filesystem the harness sees, or compromise the Python/git
+binaries themselves (§5.1).
+
+### 1.3 Trusted Components
+
+Everything below is inside the trust boundary. A defect in any of them voids the
+guarantees of this document, and the harness has **no** compensating control for them.
+
+| trusted component | what is trusted about it | controlled by this project? |
+|---|---|---|
+| **The Claude Code dispatcher / runtime** | That it invokes the wired hooks at all, routes each tool call to the right matcher, and **honors a non-zero hook exit code by aborting the call**. | **No.** This is the single largest uncontrolled dependency: every "blocked" claim in this repository is downstream of a host behavior this project neither implements nor tests against. Nothing here can detect a host that silently ignores exit 2. |
+| `python3`, `bash`, `git`, `jsonschema` | That the interpreters and binaries behave as documented and are not compromised. | No — versions are not pinned (§5.1). |
+| `settings.json` wiring | That the hook set on disk is the hook set that runs. | Partly — `scripts/verify-claims.sh` asserts the public template wires every hook, but what runs is each install's own rendered copy, editable locally after render. The tracked file is the maintainer's live copy, and CI renders over it from the template before checking, so what CI validates is the template-derived seed, not any deployed install's file. |
+| The human operator | That instructions to disable a guard are genuinely the human's (§5.1). | No. |
+| The filesystem | That a hook file read at dispatch time is the file this repository committed. | No hardware root of trust. |
+
+The Claude Code dispatcher/runtime is an **uncontrolled** trust dependency — this harness
+relies on it but **does not control** it, does not ship it, and cannot test against it here.
+Because of that, this project can never label a mechanism `enforced` on its own evidence
+alone — see `docs/ENFORCEMENT-LEDGER.md` §1.1.
 
 ---
 
@@ -93,28 +152,218 @@ The overnight `reference-transaction` keystone (§2.1 secondary backstop) acts a
 
 ## 4. Known Residual Risks
 
-### RISK-1: `hooks/lib/runtime_guard.py` is a 5,839-line SPOF
+> **Citation contract for this section**: every file reference is written `path:line @<sha8>`,
+> and every numeric claim is pinned to the revision it was measured at. A citation without a
+> revision is not evidence — it is a snapshot that decays silently. This section proves that on
+> itself: the RISK-2 entry's original citations (`:105`, `:1367`) were exactly correct when
+> written and were both wrong thirteen days later. `scripts/check-enforcement-evidence.py
+> --claims` fails CI if any citation here loses its pin.
 
-- **Description**: `runtime_guard.py` is a single monolithic module (5,839 lines as of HEAD `06e0b0dd`) imported fail-closed by `pretool-bash-safety.sh` via the embedded Python interpreter. It is the single largest file in the codebase and serves as the central routing hub for Bash safety decisions. A bug anywhere in the module can affect the entire Bash guard.
-- **Current risk**: If `runtime_guard.py` raises an unhandled exception, `pretool-bash-safety.sh` falls back to a protected-verb-family deny list at lines 96-103 (covers push, reset --hard, known destructive forms). That fallback is fail-closed for the covered verbs but may lose fine-grained/project-specific coverage for commands outside it. The module's size also makes it difficult to audit and to test comprehensively.
-- **Planned mitigation**: Decompose into a package (`hooks/lib/runtime_guard/`) with domain-scoped sub-modules. Tracked as GAP-1 in `docs/dev/roadmap-world-class-readiness-20260704.md` B4 (P2 backlog, medium effort). Not yet in scope for the current work batch.
-- **Acceptance test reference**: No dedicated RISK-1 unit test exists yet. Coverage comes indirectly through `hooks/tests/test_bash_safety_context.py` and `test_bash_safety_context_rules.py`.
+### RISK-1: The Bash-Guard Core Is Still the Largest File in the Tree
 
-### RISK-2: Two Hand-Synced Git Regex Engines with No Cross-Consistency Test
+status: PARTIALLY MITIGATED
 
-- **Description**: The harness maintains two independent regex engines for detecting dangerous git commands: (1) `GIT_COMMAND_RE` in `hooks/pretool-git-privilege-guard.py:105` (Python `re` pattern), and (2) `GIT_CMD_RE` in `hooks/pretool-bash-safety.sh:1367` (POSIX ERE for `grep -E`). Both are hand-authored with no shared source. Their current definitions are:
+- **Description**: the Bash guard's decision logic was a single monolithic module. It is now a
+  package, but the mass moved rather than shrank, and the core is still the largest file in the
+  repository, so the single-point-of-failure and auditability concerns are **reduced, not
+  removed**.
+- **What actually changed** (each figure pinned to its own revision):
+  - `407888c4` turned `hooks/lib/runtime_guard.py:1 @407888c4` into a 17-line delegating shim
+    and moved the logic to `hooks/lib/runtime_guard/_core.py:1 @407888c4`, which was itself
+    **5,839 lines @407888c4** — the same figure the original entry attributed to
+    `runtime_guard.py` at `06e0b0dd`, where it was also accurate. The claim went stale by
+    *relocation*, not by being wrong when written.
+  - Decomposition then ran as six phases — `455f5be6` (shell_lex), `9752a8c0` (constants),
+    `72a2525f` (pathmatch), `96cc84a9` (config), `8aeaa718` (find_cmds + git_cmds) and
+    `432c8d70`, *"complete monolith decomposition"* — hardened at `915aa830`.
+  - Current size: `hooks/lib/runtime_guard/_core.py:1 @4c33f2f5` is **4,717** lines, with 8
+    sibling modules alongside it.
+- **Residual**: a defect anywhere in the core still affects the whole Bash guard. If it raises,
+  `hooks/pretool-bash-safety.sh:96 @4c33f2f5` falls back to a protected-verb-family deny list
+  that is fail-closed for the verbs it covers and blind to everything else.
+- **Verifying test**: no dedicated RISK-1 test. Indirect coverage via
+  `hooks/tests/test_bash_safety_context.py:1 @4c33f2f5`.
+
+### RISK-2: Two Hand-Synced Git Regex Engines
+
+status: MITIGATED
+
+- **Description**: the harness maintains two independently hand-authored regex engines for
+  detecting git commands.
+  `GIT_COMMAND_RE` at `hooks/pretool-git-privilege-guard.py:145 @4c33f2f5` is the Python `re`
+  pattern; `GIT_CMD_RE` at `hooks/pretool-bash-safety.sh:1654 @4c33f2f5` is the POSIX ERE used
+  by `grep -E`. Editing one without the other creates an asymmetric bypass. Both engines still
+  exist as separate hand-authored patterns. Their current definitions are:
   - Python: `GIT_COMMAND_RE = r'(?:^|[\s;&|()`])git' + GIT_GLOBAL_OPTION_RE + r'\s+'`
   - POSIX ERE: `GIT_CMD_RE='(^|[[:space:];&|()`])git'`
-- **Risk**: Any future edit to one regex without updating the other creates an asymmetric bypass: commands blocked by one guard but not the other can be routed through the unpatched engine. This is the class of drift that RISK-3 already exemplifies — both regexes currently lack the `/` character in the anchor class, meaning `/usr/bin/git push` matches neither.
-- **Planned mitigation**: Add a cross-consistency test that runs a canonical command corpus against both engines and asserts identical outcomes. Long term: consolidate into `hooks/lib/git_command_classifier.py` (sub-task F of the current work batch). Tracked as RISK-2 in `docs/dev/roadmap-world-class-readiness-20260704.md` B3.4.
-- **Acceptance test reference**: No cross-consistency test exists yet. The sub-task F tests (`tests/generated/20260704-134650/test_AC_F1_a1b2c3d4e5f60015.py`, `test_AC_F2_a1b2c3d4e5f60016.py`) will provide partial coverage once sub-task F is implemented.
+- **Risk**: any future edit to one regex without updating the other creates an asymmetric
+  bypass — commands blocked by one guard but not the other can be routed through the unpatched
+  engine. Both anchor classes still lack the `/` character, which is one dimension of RISK-3.
+- **What actually mitigated it — and what did not.** Consolidation into a single engine **did
+  not occur**, and the earlier plan to perform one has been withdrawn from this entry rather
+  than left standing as an aspiration. What closed the drift risk is the originally-planned
+  cross-consistency test: `hooks/tests/test_git_cmd_cross_consistency.py:1 @4c33f2f5` (added
+  `407888c4`) runs a shared corpus against both engines *and* against
+  `hooks/lib/git_command_classifier.py:1 @4c33f2f5`, asserting agreement, with accepted
+  divergences marked `xfail`. Drift between the two engines now fails a test instead of opening
+  a silent hole.
+- **Note on the classifier's role**: `hooks/lib/git_command_classifier.py:1 @4c33f2f5` is a
+  *supplementary augmentation layer* consulted by both guard sites for path-qualified forms. It
+  is not a replacement for either regex, and describing it as one would be the same overclaim
+  this section exists to remove.
+- **Standing guard**: `scripts/check-enforcement-evidence.py --claims` asserts both symbols
+  still exist on every CI run, so a future consolidation invalidates this prose loudly instead
+  of outdating it quietly.
+- **Verifying test**: `hooks/tests/test_git_cmd_cross_consistency.py:1 @4c33f2f5`.
 
-### RISK-3: Path-Qualified Git (`/usr/bin/git push`) Bypasses Both Regex Engines in Interactive Sessions
+### RISK-3: Wrapper-Flag and Leading-Redirection Prefixes Defeat Git-Command Detection
 
-- **Description**: Both `GIT_COMMAND_RE` (Python) and `GIT_CMD_RE` (POSIX ERE) use an anchor character class `[\s;&|()\`]` / `[[:space:];&|()\`]` that does not include `/`. As a result, the command `/usr/bin/git push --force origin master` does not match either regex and passes through both guards without triggering a block. In the overnight scope, the `git-keystone/reference-transaction` backstop intercepts this at the git layer. In interactive sessions where `CLAUDE_OVERNIGHT_ACTOR` is not set, there is no backstop — the bypass is un-backstopped.
-- **Incident context**: RISK-3 is the security seam referenced as "incident `b5d447e`" in `docs/dev/roadmap-world-class-readiness-20260704.md` B3.4. The commit class represents the interactive-session gap where the keystone actor-scope gate leaves a window.
-- **Fix in progress**: Sub-task F of the current work batch (`task_id: 20260704-134650`) will introduce `hooks/lib/git_command_classifier.py`, a shared Python classifier that uses command-position parsing (`os.path.basename(token) == 'git'`) rather than regex anchor class extension. Both `pretool-git-privilege-guard.py` and `pretool-bash-safety.sh` will consume the classifier. The fix is tracked as `R6` in `docs/dev/ticket-20260704-134650.md` and will be acceptance-tested by the pending generated AC-F tests (`test_AC_F1_a1b2c3d4e5f60015.py`, `test_AC_F2_a1b2c3d4e5f60016.py`, `test_AC_F4_a1b2c3d4e5f6001f.py`) once sub-task F is implemented — those tests currently contain `pytest.fail(TEST_INCOMPLETE)` stubs.
-- **Current status**: RISK-3 gap UNMITIGATED in interactive sessions until sub-task F is merged.
+status: PARTIALLY MITIGATED
+
+**This entry previously described the wrong boundary in both directions — too broad and too
+narrow at the same time — and both corrections are published here rather than quietly amended.**
+
+- **Too broad.** The entry's own title named path-qualified `/usr/bin/git push` carrying a force
+  flag as passing through both guards. That is **false** at `4c33f2f5`: the force/delete push
+  gate at `hooks/pretool-bash-safety.sh:1695 @4c33f2f5` fires on the `GIT_CMD_RE` push branch
+  **OR** on the classifier's `_PQ_PUSH_FORCE` flag, and the classifier detects the
+  path-qualified form. A sibling lane's host-shaped probe (synthetic PreToolUse payload on
+  stdin, exit code read) observed **exit 2** for exactly that command. The plain path-qualified
+  force-push form is blocked.
+- **Too narrow.** The real residual is not about path qualification at all. It is
+  **`wrapper-with-flag`** and **`leading-redirection`** prefixes — and for one gate shape a
+  *bare* form with no path qualification is enough.
+
+#### The residual class, by dimension
+
+The classifier's own module docstring accepts these residuals under the heading *"Known scope
+boundaries (arch-F7)"* at `hooks/lib/git_command_classifier.py:17 @4c33f2f5`, adding *"The
+speed-bump design accepts this."* Measured this cycle across 12 wrapper tokens x 4 flag shapes,
+7 redirection operators, x {bare, path-qualified}: **136 forms probed, 110 classifier misses,
+55 forms missing both detection mechanisms**.
+
+| prefix form | qualification | `iter_git_invocations()` | anchor class | forms |
+|---|---|---|---|---|
+| none | bare | detected | MATCH | 1 |
+| none | path-qualified | detected (`path_qualified:true`) | no-match | 1 |
+| wrapper-no-flag (12 tokens) | bare | detected | MATCH | 12 |
+| wrapper-no-flag (12 tokens) | path-qualified | detected (`path_qualified:true`) | no-match | 12 |
+| **wrapper-with-flag** | bare | `[]` | MATCH | 48 |
+| **wrapper-with-flag** | **path-qualified** | `[]` | no-match | **48 — both miss** |
+| **leading-redirection** (7 ops) | bare | `[]` | MATCH | 7 |
+| **leading-redirection** (7 ops) | **path-qualified** | `[]` | no-match | **7 — both miss** |
+
+**Scope of the leading-redirection dimension.** The 7 operators enumerated above are the ones
+that were probed; **the enumerated leading-redirection operator set is not exhaustive**. Shell
+admits further redirection forms — among them numeric descriptor duplications, here-documents
+and here-strings, and `{name}>` descriptor-variable forms. **Forms outside the enumerated set
+were not probed and are not counted in the published figures** above, so the 136 / 110 / 55
+totals bound the measured set, not the whole grammar. This limit is stated rather than closed:
+generalizing the enumeration to a full redirection grammar would move published figures, row
+labels and the recorded token set together, which is a separate, separately-reviewed change.
+
+**Mechanism**: `_command_token_index()` at `hooks/lib/git_command_classifier.py:113 @4c33f2f5`
+skips env-assignments and the 12 `_WRAPPERS` tokens at
+`hooks/lib/git_command_classifier.py:105 @4c33f2f5` (`sudo`, `doas`, `env`, `xargs`, `time`,
+`nohup`, `setsid`, `stdbuf`, `ionice`, `command`, `builtin`, `nice`) — but a wrapper *flag* such
+as `-i` is neither an assignment nor a wrapper, so it is returned as the command token and the
+git token is never reached. Separately, both anchor classes omit `/`, so they miss every
+path-qualified token. Only the `env` family and redirections are named in any docstring in this
+repository; the **privilege** family (`sudo`, `doas`) and the **scheduling** family (`nice`,
+`ionice`, `time`, `nohup`, `setsid`) appear in none.
+
+#### Third dimension: gate architecture
+
+An anchor MATCH does **not** mean the gate fires. **Three** shapes consume the classifier in
+`hooks/pretool-bash-safety.sh:1 @4c33f2f5`, and only the first is affected by the suppression
+described below. All three are counted, because publishing only the two that carry the finding
+would be a cherry-picked census: a reader counting classifier-consuming branches in that file
+finds **11**, not 3.
+
+- **Architecture A — classifier-primary with a *mutually exclusive* regex fallback.** The
+  classifier branch at `hooks/pretool-bash-safety.sh:1657 @4c33f2f5` requires
+  `CLASSIFIER_STATUS` to be `ok` **and** a match to be found. Its regex fallback at
+  `hooks/pretool-bash-safety.sh:1667 @4c33f2f5` is guarded on `CLASSIFIER_STATUS` **not** being
+  `ok`. But `CLASSIFIER_STATUS` is set to `ok` for a *successful-but-empty* parse — an empty
+  list trivially passes the schema validator, whose per-item loop runs zero times
+  (`hooks/pretool-bash-safety.sh:906 @4c33f2f5`, `hooks/pretool-bash-safety.sh:930 @4c33f2f5`).
+  **So an input the classifier tokenizes without finding git suppresses its own backstop.**
+  Every wrapper-with-flag and leading-redirection form produces exactly that parse. Census at
+  `4c33f2f5`: **exactly one** gate has this shape — the destructive-reset gate at
+  `hooks/pretool-bash-safety.sh:1657 @4c33f2f5`.
+- **Architecture B — unconditional regex OR classifier.** The `GIT_CMD_RE` branch runs
+  unconditionally and is OR-ed with the classifier result, so the anchor still fires for bare
+  forms. Census at `4c33f2f5`: **2** such branches —
+  `hooks/pretool-bash-safety.sh:1695 @4c33f2f5` (force/delete push) and
+  `hooks/pretool-bash-safety.sh:1732 @4c33f2f5` (`update-ref`, branch deletion,
+  `symbolic-ref`). **These two are unaffected by the suppression above.**
+- **Architecture C — classifier-only path-qualified augmentation.** Branches guarded on
+  `CLASSIFIER_HAS_PATH_QUALIFIED_GIT` that have no regex fallback of their own — because they
+  never had one to lose. Each exists to *add* path-qualified coverage alongside a separate
+  bare-form regex gate, so an empty parse suppresses nothing: it simply means this branch
+  contributes nothing and the bare-form gate is unchanged. Census at `4c33f2f5`: **8** branches,
+  at `hooks/pretool-bash-safety.sh:1524 @4c33f2f5` and `:1553`, `:1576`, `:1612`, `:1683`,
+  `:1705`, `:1755`, `:1788` (stash, stash, checkout, restore, push, ref surfaces, revert).
+  **Unaffected by the suppression**, and named here so the census cannot be read as
+  cherry-picked. This shape is the numerically dominant one.
+
+**Consequence**: for the single architecture-A gate a **bare** wrapper-with-flag form defeats
+the gate despite the anchor matching. Path qualification is not required. A sibling lane's
+host-shaped re-probe found 9 of 15 tested destructive-reset forms exit 0 across the Bash
+PreToolUse chain, **including an environment-unset form with no path qualification** — that is
+this mechanism, observed from outside.
+
+#### Cell witnesses
+
+Every witness below is probed individually on every CI run by
+`scripts/check-enforcement-evidence.py --claims`, and each is a corpus entry in
+`hooks/tests/fixtures/adversarial_corpus.json:1 @4c33f2f5`.
+
+| id | form | cell | classifier | anchor |
+|---|---|---|---|---|
+| W1 | `git status` | none/bare | detected | MATCH |
+| W2 | `/usr/bin/git status` | none/path-qualified | detected | no-match |
+| W3 | `env /usr/bin/git status` | wrapper-no-flag/path-qualified | detected | no-match |
+| W4 | `env -i git status` | wrapper-with-flag/bare | detected | MATCH |
+| W5 | `env -u FOO git status` | wrapper-with-flag/bare | detected | MATCH |
+| W6 | `2>/dev/null git status` | leading-redirection/bare | detected | MATCH |
+| W7 | `env -i /usr/bin/git status` | wrapper-with-flag/path-qualified | detected | no-match |
+| W8 | `env -u FOO /usr/bin/git status` | wrapper-with-flag/path-qualified | detected | no-match |
+| W9 | `2>/dev/null /usr/bin/git status` | leading-redirection/path-qualified | detected | no-match |
+| W10 | `sudo -n /usr/bin/git status` | wrapper-with-flag/path-qualified | detected | no-match |
+| W11 | `nice -n 5 /usr/bin/git status` | wrapper-with-flag/path-qualified | detected | no-match |
+
+`env -u FOO` (W5, W8) is the least-disputable witness: unsetting an unset variable perturbs
+nothing — 57 environment variables remain intact, versus 0 under `env -i` — so it cannot be
+dismissed as a self-defeating payload.
+
+#### No permission-layer backstop
+
+Parsed from `settings.json:1 @4c33f2f5`: `permissions.deny` carries 96 rules,
+of which **0 of 96** are git-related.
+`permissions.ask` carries 30 rules, 3 of them git-related (force-push,
+short-form force-push, and hard-reset prefixes) — and all three are **prefix-anchored**, so they
+match no wrapped or redirected form. Publishing the hook-layer residual while omitting the
+absence of a permission-layer backstop would describe half the boundary.
+
+#### Precision, held deliberately
+
+These are **detection-layer measurements** — tokenizer and regex misses — plus a source-level
+reading of gate control flow. They are **not** 55 demonstrated executable bypasses. Every probe
+in this repository used the harmless `status` subcommand, which is valid because both
+`_command_token_index()` and the anchor classes are subcommand-independent. **No push, reset or
+ref mutation was ever executed** to produce any figure in this section.
+
+#### Why this is published
+
+The residual is a *deliberately accepted* design boundary, and the harness makes public
+"fail closed" claims that a reader could not otherwise bound. An undisclosed accepted residual
+is exactly the overclaim this document exists to end. Closing the residual is a separate,
+security-reviewed decision that the classifier's own docstring reserves; this entry publishes
+and regression-guards it rather than silently changing the guard.
+
+- **Verifying test**: `hooks/tests/test_blackbox_integration.py:1 @4c33f2f5` (component /
+  subprocess boundary) and `scripts/check-enforcement-evidence.py --claims` (drift guard).
 
 ---
 
@@ -128,6 +377,21 @@ The following threat classes are explicitly NOT addressed by this threat model o
 - **Claude model-level jailbreaks**: prompt injection that overrides the model's adherence to its system prompt is a model safety problem, not a harness problem. The harness defends against the model's output (tool calls) but not against the model being instructed to produce a particular output.
 - **Exfiltration via read-only Bash**: the harness permits many read-only Bash commands. An agent can `cat`, `curl`, or `grep` files and exfiltrate their content through the conversation context. Read-only exfiltration is out of scope; the harness focuses on write/mutate operations.
 - **Secrets disclosure via `SECURITY.md` disclosure policy**: see `SECURITY.md` for the responsible disclosure process; that document governs how to report security vulnerabilities in the harness itself.
+
+### 5.1 Explicit Non-Goals
+
+The same boundaries again, stated as a table a hostile reader can check against §1.1-1.3 rather
+than as prose to be skimmed. **A non-goal is not a defect report** — it is a deliberate
+exclusion, and each one names what would have to change for it to become in-scope.
+
+| non-goal | why it is excluded | what would move it in-scope |
+|---|---|---|
+| **Read-only exfiltration** | The harness permits many read-only Bash commands; an agent can read a file and carry its content out through the conversation context. Defending this would require gating reads, which would make the harness unusable. Only write/mutate-path exfiltration is defended. | An egress-classifying layer over read results, plus a policy for what counts as sensitive. |
+| **Social engineering of the human operator** | Every guard here has a documented human escape hatch by design. An attacker who persuades the human to open one has not defeated a control, they have used it. | Nothing — this is definitionally outside a harness that must remain human-overridable. |
+| **Hardware compromise / physical filesystem access** | An attacker who can rewrite hook files directly is already inside every Python-level control. No hardware root-of-trust exists. | Signed hooks verified by something outside the filesystem the agent can reach. |
+| **Supply-chain compromise of `python3`, `bash`, `git`, `jsonschema`** | System package versions are not pinned; every guard is downstream of those binaries behaving as documented (§1.3). | Pinned, hash-verified system dependencies and a verified boot path. |
+| **Claude model-level jailbreaks** | The harness defends against the model's *output* (tool calls), not against the model being talked into producing a particular output. | Nothing at this layer; that is a model-safety problem. |
+| **Whether the host honors a non-zero hook exit code** | Untested and untestable here — no real Claude Code dispatcher is driven in this environment. This is why `docs/ENFORCEMENT-LEDGER.md` carries **zero** `enforced` rows. | A CI harness running real Claude Code builds (tracked as R3, **incomplete — not satisfiable in this environment**). |
 
 ---
 

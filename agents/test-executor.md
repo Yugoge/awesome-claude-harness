@@ -353,7 +353,7 @@ python3 -c "import sys; print(sys.prefix)"
 **Fix**:
 - Check venv exists: `ls ~/.claude/venv/bin/activate`
 - Recreate venv if corrupted: `python3 -m venv ~/.claude/venv`
-- Install dependencies: `pip install -r requirements.txt`
+- Install dependencies (hash-enforced, matching the running interpreter): `pip install --require-hashes -r requirements/py$(python3 -c 'import sys;print(f"{sys.version_info.major}{sys.version_info.minor}")').txt`
 
 ### Script Execution Timeout
 

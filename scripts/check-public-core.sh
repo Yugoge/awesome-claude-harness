@@ -5,8 +5,14 @@
 #   residue marker leaks into a public-core-classified file un-parameterized. Companion to
 #   PUBLIC-CORE.md (the ledger) and docs/reference/roadmap-decomposition-productization.md §4.
 # Usage: bash scripts/check-public-core.sh
+#        bash scripts/check-public-core.sh --scan-root <dir> --release-manifest <file>
+#   Default (no args): gate the git checkout — ledger completeness + residue over the
+#   ledger-derived public-core set.
+#   --scan-root: gate an EXTRACTED RELEASE ARCHIVE instead. The scanned path set is
+#   asserted EQUAL to the release-membership manifest, then the same residue classes run
+#   over those bytes. Git-derived ledger sections are skipped (an archive is not a clone).
 # Exit codes: 0 = boundary clean + complete, 1 = one or more checks failed (unclassified
-#   path, invalid class, and/or residue leak). Advisory deferred-leak counts never affect rc.
+#   path, invalid class, residue leak, or archive/manifest path-set mismatch).
 # Root cause (design): the public-core surface was described in prose (roadmap §4) with no
 #   machine check, so a new top-level file could escape classification and author-specific
 #   literals could re-enter the shippable core unnoticed. This gate recomputes both from the
@@ -23,6 +29,20 @@ cd "$ROOT" || { echo "ERROR: cannot cd to repo root" >&2; exit 1; }
 MANIFEST="PUBLIC-CORE.md"
 SELF="scripts/check-public-core.sh"   # excluded from the residue scan: it enumerates the
                                        # markers by necessity (as does the manifest).
+# Set-based exemption ledger for the generic author-path residue gate (section 5). Keyed on
+# (path, fingerprint, ordinal) so it can never degrade into a bypassable aggregate count.
+RESIDUE_ALLOWLIST="policies/public-core-residue-allowlist.v1.json"
+
+SCAN_ROOT=""          # non-empty => archive mode (gate extracted bytes, not the checkout)
+RELEASE_MANIFEST=""   # release-membership manifest (explicit; never a class wildcard)
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --scan-root)        SCAN_ROOT="${2:?--scan-root needs a directory}"; shift 2 ;;
+    --release-manifest) RELEASE_MANIFEST="${2:?--release-manifest needs a file}"; shift 2 ;;
+    -h|--help)          sed -n '2,14p' "${BASH_SOURCE[0]}"; exit 0 ;;
+    *) echo "check-public-core: unknown argument '$1'" >&2; exit 1 ;;
+  esac
+done
 
 command -v git  >/dev/null 2>&1 || { echo "ERROR: git is required"  >&2; exit 1; }
 command -v awk  >/dev/null 2>&1 || { echo "ERROR: awk is required"  >&2; exit 1; }
@@ -31,9 +51,404 @@ rc=0
 fail() { echo "FAIL: $*"; rc=1; }
 pass() { echo "PASS: $*"; }
 
+WS_MARKER='/dev/shm/dev-workspace/dot-claude'
+
+# ---------------------------------------------------------------------------
+# Shared generic author-path residue audit. ONE engine, used for both the git
+# checkout and an extracted release archive, so the two can never drift apart.
+#
+#   $1    : root directory the scanned paths are relative to
+#   $2    : allowlist JSON path (relative to that root)
+#   $3    : "git" (enumerate via git ls-files + pathspecs) | "tree" (walk the root)
+#   $4... : pathspecs, in "git" mode only
+#   return: 0 clean, 1 residue/allowlist failure
+#
+# The file set is enumerated INSIDE this engine rather than piped in: the python
+# program arrives on stdin via the heredoc, so stdin is not available for data.
+#
+# Every occurrence's exemption CLASS is re-derived from the live source structure
+# (comment / docstring / heredoc / test tree / env `:-` default / the detector's
+# own constant tables). A hand-written label the structure does not support is
+# rejected, so the audit is not circular. Any author-path literal that is a live
+# code literal or a unit-file directive value is `operational` and can NEVER be
+# allowlisted — it must be fixed.
+# ---------------------------------------------------------------------------
+residue_audit() {
+  python3 - "$@" <<'PY'
+import ast, hashlib, io, json, os, re, subprocess, sys, tokenize
+
+root, allowlist_rel, mode = sys.argv[1], sys.argv[2], sys.argv[3]
+if mode == "git":
+    scan_paths = subprocess.run(["git", "-C", root, "ls-files", "--", *sys.argv[4:]],
+                                capture_output=True, text=True).stdout.split()
+else:
+    scan_paths = []
+    for dirpath, _dirs, files in os.walk(root):
+        for f in files:
+            scan_paths.append(os.path.relpath(os.path.join(dirpath, f), root))
+    scan_paths.sort()
+# Boundary-aware on BOTH sides. The previous form anchored every alternative on a
+# TRAILING "/", so it matched a home directory's descendants but never the directory
+# ROOT itself: `p = "/root/.claude"` was caught while `EXACT_ROOT="/root"`,
+# `EXACT_HOME="/home/yugoge"` and `MAC="/Users/Yugoge"` walked straight through.
+#   right (?![A-Za-z0-9_-]) : the root form matches as well as the descendant form,
+#                             while /homework and /rootkit still do not.
+#   left  (?<![A-Za-z0-9])  : an author path must START a path component. Without it
+#                             ordinary prose ("a protected workspace/root") reads as
+#                             residue. It deliberately does NOT exclude a preceding
+#                             "/", so `//home/<user>` is still caught — and it must
+#                             NOT exclude "-" or "_" either: the shell default idiom
+#                             `${VAR:-<author-path>}` places a "-" immediately before
+#                             the path, so suppressing on "-" blinded the gate to the
+#                             very form PUBLIC-CORE.md section 3 sanctions. The prose
+#                             cases stay suppressed regardless, being preceded by
+#                             alphanumerics.
+RESIDUE = re.compile(
+    r"(?<![A-Za-z0-9])"
+    r"(?:/root|/home/[a-z][a-z0-9_-]*|/Users/[A-Za-z][A-Za-z0-9_-]*)"
+    r"(?![A-Za-z0-9_-])")
+# A BARE top-level directory literal: "/" or "/name" with no second path component.
+# "/home/yugoge" can never satisfy it, which is what keeps a genuine author-home
+# literal `operational` (and therefore non-allowlistable) under SYS_DIR classification.
+SYS_DIR_LITERAL = re.compile(r"^/[A-Za-z0-9_.-]*$")
+SYS_DIR_MIN_ELEMENTS = 3   # a table, not an incidental pair
+DOC_EXTS = {".md", ".txt", ".rst"}
+CODE_EXTS = {".py", ".sh", ".bash", ".mjs", ".js", ".ts"}
+UNIT_EXTS = {".service", ".socket", ".timer", ".path", ".mount"}
+# STRICT comment markers only: "-", "|", ">" and "*" also start YAML sequence
+# nodes / block scalars, so accepting them would let a live config value pose as
+# a comment. Whole-file prose is covered separately by DOC_EXTS.
+COMMENT_STARTS = ("#", "//", "<!--", ";")
+JSON_DOC_KEY = re.compile(
+    r'"([A-Za-z0-9_]*(reference|doc|note|rationale|description|comment)[A-Za-z0-9_]*)"\s*:', re.I)
+HD = re.compile(r"<<-?\s*['\"]?([A-Za-z_][A-Za-z0-9_]*)['\"]?")
+PLACEHOLDER = {"", "tbd", "n/a", "na", "none", "todo", "-"}
+
+try:
+    doc = json.load(open(os.path.join(root, allowlist_rel), encoding="utf8"))
+except Exception as exc:
+    print(f"FAIL: residue-allowlist unreadable ({allowlist_rel}): {exc}")
+    sys.exit(1)
+SCANNER_PATHS = set(doc.get("self_exempt_paths") or [])
+LEGIT = set(doc.get("legitimate_classes") or [])
+entries, dup = {}, False
+for e in doc.get("entries") or []:
+    key = (e.get("path"), e.get("fingerprint"), e.get("ordinal"))
+    if key in entries:
+        print(f"FAIL: residue-allowlist duplicate key {key}"); dup = True
+    entries[key] = e
+
+def lang_of(path, text):
+    ext = os.path.splitext(path)[1]
+    if ext:
+        return ext
+    head = text.split("\n", 1)[0]
+    if head.startswith("#!"):
+        return ".py" if "python" in head else (".sh" if "sh" in head else "")
+    return ""
+
+def py_docstrings(text):
+    spans = set()
+    try:
+        for t in tokenize.generate_tokens(io.StringIO(text).readline):
+            if t.type == tokenize.STRING and t.string.lstrip("rbuRBUfF")[:3] in ('"""', "'''"):
+                spans.update(range(t.start[0], t.end[0] + 1))
+    except Exception:
+        pass
+    return spans
+
+def sh_heredocs(lines):
+    spans, term = set(), None
+    for i, ln in enumerate(lines, 1):
+        if term is None:
+            m = HD.search(ln)
+            if m:
+                term = m.group(1)
+        elif ln.strip() == term:
+            term = None
+        else:
+            spans.add(i)
+    return spans
+
+def py_comment_spans(text):
+    """lineno -> [(startcol, endcol)] for every COMMENT token, TRAILING ones included.
+
+    Whole-line comment detection alone cannot see residue that sits after live code
+    (`try:  # ... route the audit-log default off /root`), so such an occurrence was
+    misread as an operational code literal."""
+    spans = {}
+    try:
+        for t in tokenize.generate_tokens(io.StringIO(text).readline):
+            if t.type == tokenize.COMMENT:
+                spans.setdefault(t.start[0], []).append((t.start[1], t.start[1] + len(t.string)))
+    except Exception:
+        pass
+    return spans
+
+
+def sh_comment_spans(lines):
+    """Same idea for shell: an UNQUOTED '#' starting a word runs to end of line."""
+    spans, quote = {}, None
+    for i, ln in enumerate(lines, 1):
+        quote = None
+        for col, ch in enumerate(ln):
+            if quote:
+                if ch == quote:
+                    quote = None
+            elif ch in ("'", '"'):
+                quote = ch
+            elif ch == "#" and (col == 0 or ln[col - 1] in " \t;&|()"):
+                spans.setdefault(i, []).append((col, len(ln)))
+                break
+    return spans
+
+
+def py_system_path_enum(text):
+    """lineno -> {bare system-dir literals} that are elements of an ENUMERATION of
+    absolute bare directories, e.g. `("/", "/root", "/home", "/etc", "/usr", ...)`.
+
+    Structurally derived from the AST, never from a hand-written label: the literal
+    must sit in a list/tuple/set whose every element is a bare top-level directory
+    string and which has at least SYS_DIR_MIN_ELEMENTS of them. A path carrying a
+    second component (an actual author home such as "/home/yugoge") can never
+    qualify, so this class cannot launder a genuine residue literal."""
+    out = {}
+    try:
+        tree = ast.parse(text)
+    except Exception:
+        return out
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.List, ast.Tuple, ast.Set)):
+            continue
+        elts = node.elts
+        if len(elts) < SYS_DIR_MIN_ELEMENTS:
+            continue
+        if not all(isinstance(e, ast.Constant) and isinstance(e.value, str)
+                   and SYS_DIR_LITERAL.match(e.value) for e in elts):
+            continue
+        for e in elts:
+            out.setdefault(e.lineno, set()).add(e.value)
+    return out
+
+
+def classify(path, lineno, content, lang, dspans, hspans, cspans, sspans, matches):
+    tl = content.lstrip()
+    # Occurrence-level, mirroring param_line_ok()'s discipline: EVERY residue
+    # occurrence on the line must sit inside a comment span, so one commented
+    # occurrence can never whitelist a second, live one on the same line.
+    line_cspans = cspans.get(lineno) or ()
+    trailing_comment = bool(line_cspans) and all(
+        any(s <= m.start() < e for s, e in line_cspans) for m in matches)
+    is_comment = tl.startswith(COMMENT_STARTS) or trailing_comment
+    sys_literals = sspans.get(lineno) or ()
+    is_sysdir = bool(sys_literals) and all(m.group(0) in sys_literals for m in matches)
+    is_doc = lang in DOC_EXTS
+    is_docstring = lineno in dspans or tl.startswith(">>>")
+    is_heredoc = lineno in hspans
+    is_test = "/tests/" in path or os.path.basename(path).startswith("test_")
+    is_env = bool(re.search(r':-\s*["\']?(/root|/home/|/Users/)', content))
+    is_unit = lang in UNIT_EXTS and bool(re.match(r"^[A-Za-z][A-Za-z0-9]*=", content.strip()))
+    is_scanner = path in SCANNER_PATHS
+    is_jsondoc = lang == ".json" and bool(JSON_DOC_KEY.search(content))
+    derived = set()
+    if is_comment or is_doc or is_jsondoc:
+        derived.add("comment_or_narrative_doc")
+    if is_docstring or is_heredoc:
+        derived.add("doctest_or_docstring_example")
+    if is_test:
+        derived.add("test_fixture")
+    if is_env:
+        derived.add("env_parameterized_default")
+    if is_scanner:
+        derived.add("scanner_pattern_definition")
+    if is_sysdir:
+        derived.add("system_path_constant_enumeration")
+    operational = False
+    if not is_scanner:
+        if is_unit:
+            operational = True
+        elif lang in CODE_EXTS and not (is_comment or is_docstring or is_heredoc
+                                        or is_env or is_test or is_sysdir):
+            operational = True
+    return derived, operational
+
+failures = 0 if not dup else 1
+live = set()
+scanned = set()
+for rel in scan_paths:
+    if not rel:
+        continue
+    full = os.path.join(root, rel)
+    try:
+        text = open(full, encoding="utf8").read()
+    except (OSError, UnicodeDecodeError):
+        continue          # binary / unreadable: no textual residue to gate
+    scanned.add(rel)
+    lang = lang_of(rel, text)
+    lines = text.splitlines()
+    dspans = py_docstrings(text) if lang == ".py" else set()
+    hspans = sh_heredocs(lines) if lang in (".sh", ".bash") else set()
+    cspans = py_comment_spans(text) if lang == ".py" else (
+        sh_comment_spans(lines) if lang in (".sh", ".bash") else {})
+    sspans = py_system_path_enum(text) if lang == ".py" else {}
+    ordinals = {}
+    for lineno, content in enumerate(lines, 1):
+        matches = list(RESIDUE.finditer(content))
+        if not matches:
+            continue
+        derived, operational = classify(rel, lineno, content, lang, dspans, hspans,
+                                        cspans, sspans, matches)
+        fp = hashlib.sha256(content.encode()).hexdigest()[:16]
+        ordinals[(rel, fp)] = ordinals.get((rel, fp), 0) + 1
+        key = (rel, fp, ordinals[(rel, fp)])
+        live.add(key)
+        if operational:
+            print(f"FAIL: author-path residue (operational, NOT allowlistable) -> {rel}:{lineno}: {content.strip()[:120]}")
+            failures += 1
+            continue
+        entry = entries.get(key)
+        if entry is None:
+            print(f"FAIL: NEW un-allowlisted author-path residue -> {rel}:{lineno}: {content.strip()[:120]}")
+            failures += 1
+            continue
+        cls = entry.get("class")
+        if cls not in LEGIT:
+            print(f"FAIL: residue-allowlist entry declares unknown class {cls!r} -> {rel}:{lineno}")
+            failures += 1
+        elif cls not in derived:
+            print(f"FAIL: residue-allowlist class {cls!r} is NOT supported by the source structure "
+                  f"(structurally derived: {sorted(derived) or 'none'}) -> {rel}:{lineno}")
+            failures += 1
+        rat = (entry.get("rationale") or "").strip()
+        if rat.lower() in PLACEHOLDER:
+            print(f"FAIL: residue-allowlist entry has no per-entry rationale -> {rel}:{lineno}")
+            failures += 1
+
+# ONE allowlist serves two scan scopes (the public-core checkout set, and the wider
+# release-archive set). An entry is only judged against a scope that actually looked
+# at its path: otherwise every archive-only entry would read as "stale" in checkout
+# mode and vice versa. Entries whose path was scanned must still match exactly;
+# entries naming a path that exists nowhere are dangling in either scope.
+for key, e in entries.items():
+    if key in live:
+        continue
+    path = key[0]
+    if not os.path.exists(os.path.join(root, path)):
+        # Dangling entries are only meaningful against the full repository (git
+        # mode). In archive mode an absent path is EXPECTED — the membership
+        # manifest deliberately excludes the test net, so its entries do not ship.
+        if mode == "git":
+            print(f"FAIL: residue-allowlist entry references a path that no longer exists -> {path}")
+            failures += 1
+        continue
+    if path in scanned:
+        print(f"FAIL: STALE residue-allowlist entry (fingerprint/ordinal no longer present) -> {path} {key[1]}#{key[2]}")
+        failures += 1
+
+print(f"  residue audit: {len(live)} occurrence(s) scanned, {len(entries)} allowlist entr(ies), {failures} failure(s)")
+sys.exit(1 if failures else 0)
+PY
+}
+
 if [ ! -f "$MANIFEST" ]; then
   echo "FAIL: boundary manifest not found: $MANIFEST" >&2
   exit 1
+fi
+
+# ---------------------------------------------------------------------------
+# Hard markers — author-environment identifiers that must NEVER ship, in EITHER
+# scan mode. Defined HERE, above the archive branch, precisely because they used
+# to be defined below it: archive mode reached `exit "$rc"` before the array
+# existed, so the hard-marker loop was unreachable over a release artifact and a
+# maintainer remote could travel inside a published tarball undetected. ONE
+# definition consumed by both modes, so the two can never drift apart again.
+# ---------------------------------------------------------------------------
+HARD_MARKERS=(
+  'git@github.com:Yugoge'      # maintainer git remote
+  '/root/.claude.bak'          # maintainer rsync mirror
+  '/root/sync-backup.sh'       # maintainer sync cron
+)
+
+# ---------------------------------------------------------------------------
+# ARCHIVE MODE — gate the EXTRACTED RELEASE ARCHIVE rather than the checkout.
+# Scanning the source checkout proves nothing about the bytes that are actually
+# published, so the release pipeline runs the gate again over the extracted
+# archive. The scanned path set is asserted EQUAL to the release-membership
+# manifest, so no shipped path can escape the residue classes.
+# ---------------------------------------------------------------------------
+if [ -n "$SCAN_ROOT" ]; then
+  [ -d "$SCAN_ROOT" ] || { echo "FAIL: --scan-root is not a directory: $SCAN_ROOT" >&2; exit 1; }
+  [ -n "$RELEASE_MANIFEST" ] || { echo "FAIL: --scan-root requires --release-manifest" >&2; exit 1; }
+  [ -f "$RELEASE_MANIFEST" ] || { echo "FAIL: release manifest not found: $RELEASE_MANIFEST" >&2; exit 1; }
+
+  # `-type l` is defence in depth, NOT the load-bearing predicate an earlier
+  # revision of this comment claimed. Measured: release.yml stages members with
+  # `cp -p`, which (carrying none of -d/-P/-a) DEREFERENCES a symlink source, so
+  # the staged tree holds a regular file and no symlink ever reaches `tar` — the
+  # one tracked symlink, templates/overnight-spec.md, extracts as a regular file.
+  # The predicate is retained so that a future staging step which does preserve
+  # symlinks cannot silently drop a member from the ACTUAL set.
+  ACTUAL="$(cd "$SCAN_ROOT" && find . \( -type f -o -type l \) | sed 's#^\./##' | sort)"
+  EXPECTED="$(python3 "$ROOT/scripts/lib/release_membership.py" --from-tree \
+                   --root "$SCAN_ROOT" --manifest "$RELEASE_MANIFEST" | sort)"
+  if [ "$ACTUAL" != "$EXPECTED" ]; then
+    fail "archive path set != release-membership manifest path set (set equality is required):"
+    diff <(printf '%s\n' "$EXPECTED") <(printf '%s\n' "$ACTUAL") \
+      | sed 's/^</    only-in-manifest: /;s/^>/    only-in-archive:  /' | grep -E 'only-in-' | head -40
+  else
+    pass "extracted archive path set EQUALS the release-membership manifest ($(printf '%s\n' "$ACTUAL" | wc -l | tr -d ' ') paths)"
+  fi
+
+  # Residue class 1: maintainer workspace/tmpfs marker — hard-gating over the archive.
+  WS_EXEMPT="$(python3 -c 'import json,sys;print("\n".join(json.load(open(sys.argv[1])).get("workspace_marker_exempt_paths",[])))' "$RELEASE_MANIFEST")"
+  ws_hits=0
+  while IFS= read -r f; do
+    [ -z "$f" ] && continue
+    printf '%s\n' "$WS_EXEMPT" | grep -qxF "$f" && continue
+    if grep -qF -- "$WS_MARKER" "$SCAN_ROOT/$f" 2>/dev/null; then
+      fail "maintainer workspace-path residue in released archive -> $f"
+      ws_hits=$((ws_hits + 1))
+    fi
+  done <<< "$ACTUAL"
+  [ "$ws_hits" -eq 0 ] && pass "no un-exempted workspace-path residue in the released archive"
+
+  # Residue class 2: generic author-home paths — same engine as the checkout gate.
+  if residue_audit "$SCAN_ROOT" "$RESIDUE_ALLOWLIST" tree; then
+    pass "no un-allowlisted author-path residue in the released archive"
+  else
+    fail "author-path residue gate failed over the released archive (see FAIL lines above)"
+  fi
+
+  # Residue class 3: HARD markers over every archive member. This loop is the whole
+  # point of gating the artifact rather than the checkout — a maintainer git remote
+  # or backup path inside a published tarball is not recoverable after the fact.
+  # It uses the same fail() accumulator as the checkout path, so a hard-marker leak
+  # is reported alongside every other archive violation in ONE run.
+  # The exemption is read from a HARD-MARKER-SCOPED key: the workspace-marker key
+  # names the same two paths but its written rationale describes a different class,
+  # and an exemption whose justification does not describe what it exempts is not
+  # an exemption. An absent or empty key therefore fails closed.
+  HM_EXEMPT="$(python3 -c 'import json,sys;print("\n".join(json.load(open(sys.argv[1])).get("hard_marker_exempt_paths",[])))' "$RELEASE_MANIFEST")"
+  hm_hits=0
+  for m in "${HARD_MARKERS[@]}"; do
+    while IFS= read -r f; do
+      [ -z "$f" ] && continue
+      printf '%s\n' "$HM_EXEMPT" | grep -qxF "$f" && continue
+      if grep -qF -- "$m" "$SCAN_ROOT/$f" 2>/dev/null; then
+        fail "hard residue marker in released archive: '$m'  ->  $f"
+        hm_hits=$((hm_hits + 1))
+      fi
+    done <<< "$ACTUAL"
+  done
+  [ "$hm_hits" -eq 0 ] && pass "no un-exempted hard residue markers in the released archive"
+
+  echo "----------------------------------------------------------------------"
+  if [ "$rc" -eq 0 ]; then
+    echo "check-public-core(archive): RELEASE ARCHIVE CLEAN (path set == manifest, no residue leaks)"
+  else
+    echo "check-public-core(archive): FAILURES DETECTED — see FAIL lines above"
+  fi
+  exit "$rc"
 fi
 
 # ---------------------------------------------------------------------------
@@ -124,11 +539,7 @@ fi
 #    CLAUDE_PROTECTED_DAEMON_PREFIX; the default reproduces today's behavior) — see
 #    PUBLIC-CORE.md §3. It was previously an un-scanned deliberately-literal exception.
 # ---------------------------------------------------------------------------
-HARD_MARKERS=(
-  'git@github.com:Yugoge'      # maintainer git remote
-  '/root/.claude.bak'          # maintainer rsync mirror
-  '/root/sync-backup.sh'       # maintainer sync cron
-)
+#    HARD_MARKERS is defined ABOVE the archive branch so both scan modes consume it.
 PARAM_MARKERS=(
   'happy-web-dev'                    # CLAUDE_DEV_CONTAINERS default
   '/root/bin/claude-allow-restart'  # CLAUDE_DAEMON_RESTART_GRANT_HELPER default
@@ -147,6 +558,12 @@ PC_PATHSPECS+=(":(exclude)$SELF")
 # that names a guarded unit (e.g. hooks/tests/*) is test data, not residue. Scan param
 # markers over the public-core set MINUS any test tree. Hard markers keep the full set.
 PARAM_PATHSPECS=("${PC_PATHSPECS[@]}" ":(exclude)*/tests/*")
+
+# Pathspecs for the section-5 residue audit. Unlike the marker scans above, this
+# deliberately does NOT drop $SELF: the audit re-derives every exemption class
+# structurally, and this detector's own constant tables are exempted BY CLASS
+# (scanner_pattern_definition), not by being hidden from the scan.
+PC_SCAN_SPECS=("${PC_PATHSPECS[@]:0:$(( ${#PC_PATHSPECS[@]} - 1 ))}")
 
 # A public-core match line is an allowed (parameterized) use of marker M when the line is a
 # comment (trimmed starts with #) OR EVERY occurrence of M on the line is an env default
@@ -194,13 +611,30 @@ if [ "$leaks" -eq 0 ]; then
 fi
 
 # ---------------------------------------------------------------------------
-# 4. Advisory (non-gating): deferred broad path leaks tracked by roadmap phases P1/P2.
+# 4. Maintainer workspace/tmpfs path — HARD GATE (was advisory until this cycle).
+#    "Make CI FAIL (not advisory) on ... the tmpfs workspace path" — the advisory
+#    branch never set rc=1, so a leak of this class could never turn CI red.
 # ---------------------------------------------------------------------------
-WS_MARKER='/dev/shm/dev-workspace/dot-claude'
-ws_count="$(git grep -lF -- "$WS_MARKER" -- "${PC_PATHSPECS[@]}" 2>/dev/null | wc -l | tr -d ' ')"
-if [ "${ws_count:-0}" -gt 0 ]; then
-  echo "ADVISORY: $ws_count public-core file(s) still reference the maintainer workspace path"
-  echo "          ('$WS_MARKER') — deferred to roadmap §4.3 phases P1/P2; not gated here."
+ws_hits="$(git grep -nF -- "$WS_MARKER" -- "${PC_PATHSPECS[@]}" 2>/dev/null)"
+if [ -n "$ws_hits" ]; then
+  while IFS= read -r hit; do
+    [ -z "$hit" ] && continue
+    fail "maintainer workspace-path residue in public-core: '$WS_MARKER'  ->  $hit"
+  done <<< "$ws_hits"
+else
+  pass "no maintainer workspace-path residue in the public-core set"
+fi
+
+# ---------------------------------------------------------------------------
+# 5. Generic author-home residue (/root/, /home/<user>/, /Users/<User>/) — HARD
+#    GATE, exemptions driven by a checked-in SET (not an aggregate count).
+# ---------------------------------------------------------------------------
+if [ ! -f "$RESIDUE_ALLOWLIST" ]; then
+  fail "residue allowlist not found: $RESIDUE_ALLOWLIST"
+elif residue_audit "$ROOT" "$RESIDUE_ALLOWLIST" git "${PC_SCAN_SPECS[@]}"; then
+  pass "no un-allowlisted author-path residue in the public-core set"
+else
+  fail "author-path residue gate failed (new/operational occurrence, unsupported class label, or stale allowlist entry)"
 fi
 
 # ---------------------------------------------------------------------------

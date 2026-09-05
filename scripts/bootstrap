@@ -3,20 +3,24 @@
 #
 # On a fresh non-root clone it:
 #   1. creates the Python venv the hooks/scripts expect (<home>/venv),
-#   2. installs the REQUIRED dependencies from requirements.txt,
-#   3. makes the shell hooks executable,
-#   4. verifies the shared resolver (hooks/lib/claude_home.{sh,py}) resolves
+#   2. installs the REQUIRED dependencies with hash verification,
+#   3. renders settings.json from the tracked settings.template.json,
+#   4. makes the shell hooks executable,
+#   5. verifies the shared resolver (hooks/lib/claude_home.{sh,py}) resolves
 #      THIS clone as the harness home,
-#   5. runs scripts/doctor as the final preflight.
+#   6. runs scripts/doctor as the final preflight.
 #
 # It is NON-DESTRUCTIVE: it refuses to clobber an already-populated home (an
 # existing venv) unless you pass --force, and it documents how to restore. With
 # --force it BACKS UP the existing venv (to <home>/venv.bak-<timestamp>) before
-# recreating it, so the prior state can always be restored.
+# recreating it, so the prior state can always be restored. An existing
+# settings.json follows the same convention: left byte-identical by default,
+# backed up to <home>/settings.json.bak-<timestamp> before a --force re-render.
 #
 # Usage: scripts/bootstrap [--force] [--no-doctor]
-#   --force       Re-bootstrap a populated home: back up the existing venv, then
-#                 recreate it (opt-in to the otherwise-refused clobber).
+#   --force       Re-bootstrap a populated home: back up the existing venv and
+#                 settings.json, then recreate both (opt-in to the otherwise-
+#                 refused clobber).
 #   --no-doctor   Skip the final scripts/doctor preflight.
 # Exit codes: 0 = success; 1 = refused (populated home, no --force) or a step
 #             failed.
@@ -116,24 +120,89 @@ _CREATED_VENV=1
 VENV_PY="$VENV_DIR/bin/python"
 
 # ── 2. Install the required dependencies from the manifest ───────────────────
-if [ -f "$MANIFEST" ]; then
-  echo "bootstrap: installing required dependencies from $MANIFEST"
+# Install hash-verified from the lockfile matching THIS interpreter.
+# --require-hashes makes pip reject the entire install if any requirement, direct
+# or transitive, is unpinned or unhashed, so a tampered or substituted artifact
+# cannot enter a fresh clone. requirements.txt stays the human-authored abstract
+# spec; requirements/py3XX.txt is its resolved, pinned form.
+PY_TAG="py$("$VENV_PY" -c 'import sys; print(f"{sys.version_info.major}{sys.version_info.minor}")')"
+LOCKFILE="$HOME_DIR/requirements/$PY_TAG.txt"
+if [ -f "$LOCKFILE" ]; then
+  echo "bootstrap: installing hash-verified dependencies from $LOCKFILE"
   "$VENV_PY" -m pip install --upgrade pip >/dev/null 2>&1 || true
-  if ! "$VENV_PY" -m pip install -r "$MANIFEST"; then
-    echo "bootstrap: dependency install failed (check network / pip)." >&2
+  if ! "$VENV_PY" -m pip install --require-hashes -r "$LOCKFILE"; then
+    echo "bootstrap: dependency install failed (check network / pip / lockfile integrity)." >&2
     exit 1
   fi
+elif [ -f "$MANIFEST" ]; then
+  echo "bootstrap: no lockfile for this interpreter at $LOCKFILE." >&2
+  echo "  Supported interpreters have a lockfile under $HOME_DIR/requirements/." >&2
+  echo "  Refusing to fall back to an unhashed install of $MANIFEST." >&2
+  exit 1
 else
-  echo "bootstrap: requirements.txt not found at $MANIFEST — cannot install deps." >&2
+  echo "bootstrap: neither $LOCKFILE nor $MANIFEST found — cannot install deps." >&2
   exit 1
 fi
 
-# ── 3. Make the shell hooks executable ───────────────────────────────────────
+# ── 3. Render settings.json from the tracked template ────────────────────────
+# settings.json IS tracked, but it carries absolute install-home paths and
+# per-machine permission entries, so a checkout's copy belongs to whoever made
+# it — never to the machine bootstrapping now. This step regenerates it from the
+# public seed settings.template.json so the local file describes this install.
+# Mirrors this script's own venv convention exactly:
+# non-destructive by default, --force backs the prior file up first using the
+# settings.json.bak-<timestamp> pattern .gitignore already anticipates.
+TEMPLATE="$HOME_DIR/settings.template.json"
+SETTINGS="$HOME_DIR/settings.json"
+RENDERER="$SELF_DIR/install/render-settings"
+if [ ! -f "$TEMPLATE" ]; then
+  echo "bootstrap: settings.template.json not found at $TEMPLATE — cannot render settings." >&2
+  exit 1
+fi
+if [ ! -f "$RENDERER" ]; then
+  echo "bootstrap: scripts/install/render-settings is missing — cannot render settings." >&2
+  exit 1
+fi
+if [ -f "$SETTINGS" ] && [ "$FORCE" -ne 1 ]; then
+  # Non-destructive default: keep the existing file BYTE-IDENTICAL and continue
+  # the install (this is not an error — re-running bootstrap must be safe).
+  echo "bootstrap: settings.json already exists — left untouched (re-run with --force to re-render)."
+else
+  if [ -f "$SETTINGS" ]; then
+    _sts="$(date +%Y%m%d-%H%M%S)"
+    SBACKUP="$SETTINGS.bak-$_sts"
+    _sn=1
+    while [ -e "$SBACKUP" ]; do
+      SBACKUP="$SETTINGS.bak-$_sts-$_sn"
+      _sn=$((_sn + 1))
+    done
+    echo "bootstrap: --force — backing up existing settings.json to $SBACKUP"
+    cp -p "$SETTINGS" "$SBACKUP" || { echo "bootstrap: settings backup failed; aborting." >&2; exit 1; }
+  fi
+  echo "bootstrap: rendering settings.json from settings.template.json"
+  if ! python3 "$RENDERER" "$HOME_DIR" --template "$TEMPLATE" --out "$SETTINGS"; then
+    echo "bootstrap: settings render failed (nothing applied)." >&2
+    exit 1
+  fi
+  # The renderer validates parity internally before applying; re-assert it on the
+  # applied file so a bad write can never survive this step silently.
+  # The install-home positional is REQUIRED in --check mode: without it the
+  # renderer normalizes against $HOME/.claude, so any install home other than
+  # the default (an isolated test home, a clone checked out elsewhere) reports
+  # every rendered path as "allow broadened beyond template" on a file it just
+  # wrote correctly. Passing $HOME_DIR keeps the assertion load-bearing.
+  if ! python3 "$RENDERER" "$HOME_DIR" --check "$SETTINGS" --template "$TEMPLATE"; then
+    echo "bootstrap: rendered settings.json failed template parity validation." >&2
+    exit 1
+  fi
+fi
+
+# ── 4. Make the shell hooks executable ───────────────────────────────────────
 if [ -d "$HOME_DIR/hooks" ]; then
   chmod +x "$HOME_DIR"/hooks/*.sh 2>/dev/null || true
 fi
 
-# ── 4. Verify BOTH resolvers resolve THIS clone ──────────────────────────────
+# ── 5. Verify BOTH resolvers resolve THIS clone ──────────────────────────────
 # Both the shell and python resolvers must resolve to this clone's home, so a
 # fresh clone proves the resolver is engaged (not just non-empty). Compare each
 # resolved path's realpath to the expected HOME_DIR realpath.
@@ -153,7 +222,7 @@ fi
 echo "  resolver (sh) -> $RESOLVED_SH"
 echo "  resolver (py) -> $RESOLVED_PY"
 
-# ── 5. Final preflight ───────────────────────────────────────────────────────
+# ── 6. Final preflight ───────────────────────────────────────────────────────
 # Run doctor via `bash` so a missing executable bit (e.g. a zip checkout) is not
 # load-bearing. When RUN_DOCTOR=1, doctor MUST exist — otherwise fail, never
 # silently skip the preflight.
