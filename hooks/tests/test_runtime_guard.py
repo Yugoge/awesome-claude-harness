@@ -3849,7 +3849,25 @@ class TestCycle14LiveHook:
     def test_live_boundary_allows(self):
         assert self._run("mv /tmp/scratch-xyz/* /tmp/y") == ALLOW
         assert self._run(f"cat {_LIVE_CFG_PATH}") == ALLOW
-        assert self._run(f"find {_LIVE_HOME} -path /tmp/unrelated -delete") == ALLOW
+        # MIGRATION-AWARE PIN (supersedes the unconditional ALLOW): under the
+        # pre-removal-policy hook this find -delete was ALLOW because the -path
+        # predicate cannot match under the given root (a structural no-op).
+        # The execution-boundary removal policy denies EVERY find -delete as
+        # FORBIDDEN_REMOVAL (find_delete_action) regardless of predicate
+        # reachability -- the same pinned expectation as
+        # test_bash_execution_boundary.py ("find /tmp -name '*.tmp' -delete"
+        # denies) -- because -delete is an rm-equivalent primitive and
+        # predicate reachability is not a proof the analyzer performs. The pin
+        # asserts the contract of the hook generation actually present in THIS
+        # tree, so every commit along the hook migration stays green on
+        # live-config machines; once the removal-policy hook is landed,
+        # collapse the legacy branch to the unconditional BLOCK expectation.
+        # The runtime guard's own over-block concern is preserved by the
+        # non-delete form below, which stays ALLOW under both generations.
+        _hook_has_removal_policy = "removal-policy" in open(HOOK, encoding="utf-8").read()
+        expected_find_delete = BLOCK if _hook_has_removal_policy else ALLOW
+        assert self._run(f"find {_LIVE_HOME} -path /tmp/unrelated -delete") == expected_find_delete
+        assert self._run(f"find {_LIVE_HOME} -path /tmp/unrelated") == ALLOW
         assert self._run("chgrp root /tmp/unrelated-xyz") == ALLOW
 
 

@@ -1,0 +1,29 @@
+{
+  "schema": "pol-benign-strictness-exceptions.v1",
+  "criterion": "AC-R02-14",
+  "task_id": "20260819-124121-r02",
+  "iteration": 4,
+  "_doc": {
+    "what": "The BOUNDED, VISIBLE residue of over-denial. A member of an AC-R02-14 shape class may be excluded from that class's zero-denial floor only by appearing here, with the specific argv-derived execution facility that motivates denying it. Capped at 10 entries so residual strictness stays auditable instead of invisible.",
+    "why_a_literal_command_is_required_here": "Unlike the AC-R02-10 laxity ledger, whose domain runs to ~400 elements and therefore has to be keyed by class, this list is capped at 10. A literal command per entry is satisfiable at that size, and it is what makes the residue checkable by reading.",
+    "rule": "No member of the AC-R02-14 named must-allow set may appear here. Every entry names a REAL facility of the program in the command, not a limitation of the analyzer.",
+    "how_the_other_candidates_were_removed_instead": "QA iteration-3 measured three ordinary-work denials. `grep -e rm <file>` was repaired by DECLARING -e as a data-value option in grep's model (AC-R02-12 revision 3's third counterweight), not excepted. `pytest -k rm` and `go test -run rm` were repaired the same way, by declaring the runners' selector options in SELECTOR_DATA_OPTIONS. Only the two entries below resist a declaration, because in both the removal token is not confined to a declared data position."
+  },
+  "max_entries": 10,
+  "exceptions": [
+    {
+      "command": "python3 -m pytest -k rm hooks/tests",
+      "shape_class": "C4_test_or_tool_selector_value",
+      "argv_derived_execution_facility": "python3 -m <module> loads and executes an argv-named module as __main__. The module name is taken from argv, so the program that runs is chosen by the command line; the analyzer cannot prove which module was resolved, let alone that its own argv handling confines `rm` to a selector. The direct form `pytest -k rm hooks/tests` IS allowed, because there the head is the runner itself and `-k` is declared as a selector data option.",
+      "why_not_repaired_by_declaration": "Declaring selector options for a module reached through `-m` would require the analyzer to trust that the resolved module is the pytest it expects, which is precisely the argv-derived choice that makes `-m` an execution facility.",
+      "narrower_alternative_that_is_allowed": "pytest -k rm hooks/tests"
+    },
+    {
+      "command": "awk '/rm/ {print}' f.txt",
+      "shape_class": "C2_search_pattern_or_data_option_value",
+      "argv_derived_execution_facility": "awk's program text is a full language with system() and command pipes (`print | \"cmd\"`, `cmd | getline`), all of which execute a string built inside that program text. The removal token here sits in a match pattern rather than in a call, but the enclosing text is a PROGRAM, not a search pattern, and this analyzer does not evaluate awk semantics well enough to prove which of the two it is.",
+      "why_not_repaired_by_declaration": "awk is deliberately EXCLUDED from INERT_ARGV_CONSUMERS for the same reason as sed's `e` flag and every shell: it has a documented argv-derived exec facility. Declaring it would contradict the table's own exclusion policy.",
+      "narrower_alternative_that_is_allowed": "grep -e rm f.txt"
+    }
+  ]
+}
