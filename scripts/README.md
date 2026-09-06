@@ -4,7 +4,7 @@ Organization and usage documentation for `scripts/`.
 
 <!-- AUTO:readme-stats -->
 ## Overview
-- **Total files**: 100
+- **Total files**: 101
 - **Subdirectories**: 6
 - **Naming convention**: kebab
 
@@ -93,6 +93,7 @@ Organization and usage documentation for `scripts/`.
 - `test` - test file
 - `update-gitignore.sh` - update-gitignore.sh - Auto-update .gitignore with project-specific rules
 - `update-overnight-state.sh` - update-overnight-state.sh — Atomically update overnight state file
+- `verify-claims-extended.sh` - Description: Extended headline-claims gate. Closes the four documented coverage gaps in
 - `verify-claims.sh` - Description: Self-verifying headline-claims gate. Recomputes the wired-hook entry count and
 - `verify-hero-provenance.py` - Description: Re-runs the demo, normalizes both outputs and byte-diffs them; verifies raw
 - `verify-release-manifest.sh` - Description: Verify a PUBLISHED release artifact end-to-end, WITHOUT rebuilding it.
