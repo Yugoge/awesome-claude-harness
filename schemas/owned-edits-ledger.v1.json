@@ -1,0 +1,251 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://claude.local/schemas/owned-edits-ledger.v1.json",
+  "title": "Owned-edits ledger contract (v1)",
+  "description": "Machine-readable definition of the owned-edits ledger a dev-report must carry so that scripts/stage-owned-hunks.py can stage this cycle's owned hunks. DERIVED FROM THE CONSUMER'S CODE, not from agent prose; see x-consumer for the digest it is derived from and x-citation-policy for why nothing here cites a line number. Plus the snapshot-materialization rule in agents/changelog-analyst.md, locatable by searching for '2. Snapshot materialization (REQUIRED', which is the only place the report-level pre_edit_snapshots map is turned into the --snapshot file the consumer reads. Where prose and code disagree, the code governs; see x-prose-code-disagreements below.",
+
+  "x-citation-policy": {
+    "rule": "Every citation in this schema names a FUNCTION, CLASS or distinctive quoted fragment. Line numbers are forbidden.",
+    "why": "This tree is written by several concurrent sessions. A pinned line number rots by construction: it keeps resolving, silently, to whatever code later occupies that offset, so a reader who follows it is misled with no signal that anything moved. A symbol or a quoted anchor either still resolves or fails loudly under a search, which is a detectable state. An earlier revision of this schema pinned ~33 distinct consumer line ranges; when the consumer grew from 1087 to 1110 lines at least 18 of them provably no longer contained the construct they named.",
+    "how_to_follow_a_citation": "grep -n \"<the quoted fragment>\" <the named file>"
+  },
+
+  "x-consumer": {
+    "path": "scripts/stage-owned-hunks.py",
+    "sha256": "6fef38d59b70c1a6bc0fba1cd2b3ce962d25e4140442ad6800c3fc5c718ff083",
+    "lines": 1110,
+    "measured_at": "2026-09-06",
+    "materializer": "agents/changelog-analyst.md Phase 5, anchor '2. Snapshot materialization (REQUIRED'",
+    "binding": "ACTIVE, not decorative. tests/test_owned_edits_ledger_contract.py::test_consumer_digest_binding_is_active recomputes this digest from the delivered file and FAILS when it differs, so a consumer change cannot silently invalidate the rules derived from it. scripts/check-owned-edits-ledger.py additionally imports the consumer's own _count_occurrences/_locate_unique and asserts their empty-needle semantics at every startup, so a behavioural change is caught even within one digest.",
+    "on_failure": "Do not re-pin the digest reflexively. Re-read the consumer's replay primitives and _load_untracked_modified_contract, confirm every rule below still describes them, and only then record the new digest."
+  },
+
+  "x-unexpressible-in-schema": {
+    "note": "These consumer requirements CANNOT be expressed in pure JSON Schema. They are enforced by scripts/check-owned-edits-ledger.py instead. A validator that runs this schema ALONE is incomplete; run the checker.",
+    "rules": [
+      {
+        "id": "REPLAY-UNIQUE",
+        "requirement": "At each step i of the forward replay, entry[i].old must occur EXACTLY ONCE in the replay buffer as it has evolved through entries 0..i-1.",
+        "why_unexpressible": "Depends on evolving external state (the pre-edit snapshot bytes mutated by every prior edit), not on the document alone. JSON Schema has no cross-document state or sequential evaluation.",
+        "consumer_source": "scripts/stage-owned-hunks.py def _replay_live() and def main(), both reporting 'not uniquely locatable during replay'",
+        "checker_rule_id": "REPLAY-UNIQUE"
+      },
+      {
+        "id": "SNAPSHOT-BLOB-RESOLVES",
+        "requirement": "A 7-40 lowercase-hex snapshot value must actually resolve via `git cat-file -e <val>`; otherwise the materializer silently falls through to the literal branch and replay uses the hex text as file content.",
+        "why_unexpressible": "Requires a git object-database lookup.",
+        "consumer_source": "agents/changelog-analyst.md, anchor '2. Snapshot materialization (REQUIRED'",
+        "checker_rule_id": "SNAPSHOT-BLOB-UNRESOLVED"
+      },
+      {
+        "id": "UMP-KEY-BINDING",
+        "requirement": "Every key of untracked_modified_provenance must be a path claimed exactly once in dev.files_modified and never in dev.files_created; and pre_edit_provenance.files[<key>] / .statuses[<key>] / final_source_hashes[<key>] must agree with that same key's inner hashes.",
+        "why_unexpressible": "The binding is to a DYNAMIC key. JSON Schema cannot assert that the value under an arbitrary property name in one object equals a value under the same name in a sibling object, nor that the name is a member of a sibling array.",
+        "consumer_source": "scripts/stage-owned-hunks.py def _load_untracked_modified_contract(): its dev.files_modified/files_created claim scan, its contract-path vs claim-key check, and its pre_edit_provenance / final_source_hashes cross-checks",
+        "checker_rule_id": "UMP-NOT-CLAIMED / UMP-IN-CREATED / UMP-PREEDIT-PROV-MISMATCH / UMP-FINAL-HASH-MISMATCH"
+      },
+      {
+        "id": "UMP-CANONICAL-ONLY",
+        "requirement": "The untracked_modified_provenance contract is only ever read out of the canonical report whose FILENAME is dev-report-<task_id>.json and whose sha256 is bound into the repository plan. A lane shard carrying it is inert.",
+        "why_unexpressible": "Binds the document to its own filename and to an external digest.",
+        "consumer_source": "scripts/stage-owned-hunks.py def _load_untracked_modified_contract(), its `expected_name` filename check and the --report-sha256 digest gate that admits it",
+        "checker_rule_id": "UMP-LANE-ONLY"
+      },
+      {
+        "id": "LEDGER-SNAPSHOT-COPRESENCE",
+        "requirement": "Every path with an owned_edits entry needs a pre_edit_snapshots entry (and vice versa); a dirty tracked file with neither is warn-and-skipped, contributing nothing to the commit.",
+        "why_unexpressible": "Cross-property key-set equality between two objects with dynamic keys.",
+        "consumer_source": "agents/changelog-analyst.md, anchor 'Fail-closed for ambiguous shared dirty files'",
+        "checker_rule_id": "LEDGER-SNAPSHOT-ORPHAN"
+      }
+    ]
+  },
+
+  "x-prose-code-disagreements": [
+    {
+      "topic": "singular vs plural snapshot field",
+      "prose": "agents/dev.md documents a top-level PLURAL map `pre_edit_snapshots`.",
+      "code": "scripts/stage-owned-hunks.py def _load_provenance_plan() reads a SINGULAR `pre_edit_snapshot` string, and only inside a provenance_segments[<path>][i] live segment. The plural top-level map is read by NO production script; it is consumed only by agents/changelog-analyst.md Phase 5 (anchor '2. Snapshot materialization (REQUIRED'), which materializes it into the --snapshot FILE the consumer actually opens.",
+      "resolution": "Both names exist and mean different things. This schema defines the plural report-level map (the write-time artifact dev emits) and the singular per-segment field."
+    },
+    {
+      "topic": "'a git blob SHA OR the literal pre-edit content'",
+      "prose": "agents/dev.md says values may be either a git blob SHA or the literal content.",
+      "code": "agents/changelog-analyst.md, at the anchor '2. Snapshot materialization (REQUIRED', accepts a blob ref ONLY when it matches ^[0-9a-f]{7,40}$ AND resolves. A sha256 digest (64 hex, or 'sha256:'-prefixed) matches neither branch, so it falls through to 'write the literal value bytes' and the digest text becomes the replay buffer. The prose reading of 'a SHA' as 'any hash' is what produced malformation 1.",
+      "resolution": "Only a 7-40 hex, resolvable blob ref is a valid non-literal form. 64-hex and 'sha256:'-prefixed values are REJECTED by this schema."
+    }
+  ],
+
+  "type": "object",
+
+  "$comment": "TOP-LEVEL LEDGER-PRESENCE CONSTRAINT. Without the anyOf below this schema had NO top-level required constraint, so a document carrying no ledger at all validated: `{}` passed, and so did every dev-report from a cycle that never emitted a ledger. That made the corpus pass-rate meaningless as evidence of discrimination -- a measured 208 of 308 reports 'passed', but 151 of those carried no ledger field whatsoever and 12 more carried only empty {} maps, so the schema was mostly counting silence as compliance. The constraint below makes a ledger-less or empty-ledger document fail, which scripts/check-owned-edits-ledger.py surfaces under its own rule id LEDGER-ABSENT rather than as generic schema noise, so 'this report has no ledger' stays legible as a different act from 'this report emitted a malformed one'.",
+
+  "anyOf": [
+    {
+      "title": "hunk-staging ledger",
+      "description": "The ordinary form: owned_edits and pre_edit_snapshots together, NEITHER EMPTY. Neither alone is usable -- scripts/stage-owned-hunks.py needs both --ledger and --snapshot, and agents/changelog-analyst.md warn-and-skips a dirty tracked file that has one without the other. The minProperties are repeated inside this branch on purpose: `required` alone is satisfied by a key whose value is {}, which is how 12 corpus reports carrying two empty maps were counted as conforming.",
+      "required": ["owned_edits", "pre_edit_snapshots"],
+      "properties": {
+        "owned_edits": { "type": "object", "minProperties": 1 },
+        "pre_edit_snapshots": { "type": "object", "minProperties": 1 }
+      }
+    },
+    {
+      "title": "whole-file adoption contract",
+      "description": "The adoption-only form: a cycle whose sole claim is an authenticated pre-existing untracked file, carrying untracked_modified_provenance and no hunk ledger. This is a real shipped shape (docs/dev/dev-report-20260720-211059-g2.json), so the constraint must admit it.",
+      "required": ["untracked_modified_provenance"],
+      "properties": {
+        "untracked_modified_provenance": { "type": "object", "minProperties": 1 }
+      }
+    }
+  ],
+
+  "properties": {
+    "owned_edits": { "$ref": "#/$defs/ownedEditsMap" },
+    "pre_edit_snapshots": { "$ref": "#/$defs/preEditSnapshotsMap" },
+    "untracked_modified_provenance": { "$ref": "#/$defs/untrackedModifiedProvenanceMap" },
+    "pre_edit_provenance": { "$ref": "#/$defs/preEditProvenance" },
+    "final_source_hashes": {
+      "type": "object",
+      "additionalProperties": { "$ref": "#/$defs/lowercaseSha256" }
+    }
+  },
+
+  "$defs": {
+    "lowercaseSha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$",
+      "description": "scripts/stage-owned-hunks.py def _valid_sha256(): exactly 64 chars, all lowercase hex."
+    },
+
+    "nulFreeString": {
+      "type": "string",
+      "pattern": "^[^\\u0000]*$",
+      "description": "A NUL byte makes git treat the content as binary and the consumer EXCLUDEs it. scripts/stage-owned-hunks.py def _is_binary(); grep 'binary' for its call sites in def _load_provenance_plan() and def main()."
+    },
+
+    "ownedEditsMap": {
+      "type": "object",
+      "minProperties": 1,
+      "description": "Map of repo-relative path -> ordered list of this cycle's authored edits. agents/changelog-analyst.md Phase 5 writes each list verbatim to the --ledger file that scripts/stage-owned-hunks.py def main() loads. MUST NOT be empty: agents/dev.md permits `{}` only for a cycle that made no file edits, and such a report carries no ledger for this schema to validate -- admitting it would be counting silence as compliance (see the top-level $comment).",
+      "additionalProperties": { "$ref": "#/$defs/ownedEditsList" }
+    },
+
+    "ownedEditsList": {
+      "type": "array",
+      "minItems": 1,
+      "description": "MUST be a non-empty array. An empty or non-array value is EXCLUDEd as 'owned-edits ledger empty/invalid' -- grep that string in scripts/stage-owned-hunks.py to find both the def main() and def _replay_live() sites.",
+      "items": { "$ref": "#/$defs/ownedEditEntry" }
+    },
+
+    "ownedEditEntry": {
+      "type": "object",
+      "required": ["old", "new"],
+      "description": "scripts/stage-owned-hunks.py EXCLUDEs any entry that is not a dict carrying BOTH 'old' and 'new' -- grep 'malformed (need old+new)' for both the def main() and def _replay_live() sites. Entries keyed with a prose summary (or with before/after digests) are malformed no matter how informative they are.",
+      "properties": {
+        "old": {
+          "allOf": [
+            { "$ref": "#/$defs/nulFreeString" },
+            {
+              "minLength": 1,
+              "description": "MUST be non-empty. An empty 'old' is shape-plausible but can NEVER execute: in scripts/stage-owned-hunks.py, def _count_occurrences() RAISES EmptyOwnedOldStringError for an empty needle rather than returning a count, def _locate_unique() propagates it deliberately, and BOTH replay sites (def _replay_live() and def main()) catch it and report 'ledger entry N has an empty old_string', held distinct from the 'not uniquely locatable during replay' message used for real content drift. Pure insertions must be expressed as an anchored replacement whose 'old' is the unique surrounding text."
+            }
+          ]
+        },
+        "new": {
+          "$ref": "#/$defs/nulFreeString",
+          "description": "MAY be empty (a pure deletion is executable). MUST be a string: scripts/stage-owned-hunks.py def _encode_edit_value() passes a non-str through unchanged and def _replay_live() then EXCLUDEs it as 'values must be strings/bytes'."
+        }
+      }
+    },
+
+    "preEditSnapshotsMap": {
+      "type": "object",
+      "minProperties": 1,
+      "description": "Map of repo-relative path -> the pre-edit trust anchor for that file. MUST NOT be empty, for the same reason as ownedEditsMap: an empty map is a report with no ledger, not a report with a valid one.",
+      "additionalProperties": { "$ref": "#/$defs/preEditSnapshotValue" }
+    },
+
+    "preEditSnapshotValue": {
+      "type": "string",
+      "description": "MUST be a string: the value is either resolved as a blob ref or written to disk verbatim as the snapshot bytes (agents/changelog-analyst.md, anchor '2. Snapshot materialization (REQUIRED'), and the segment-level equivalent is type-gated in scripts/stage-owned-hunks.py def _load_provenance_plan(). An object/dict form (snapshot_path + sha256 + size_bytes) is NOT a string and is rejected here.",
+      "allOf": [
+        { "$ref": "#/$defs/nulFreeString" },
+        {
+          "not": { "pattern": "^[0-9a-fA-F]{64}$" },
+          "$comment": "MALFORMATION 1a. A bare 64-hex sha256 does not match the ^[0-9a-f]{7,40}$ blob-ref branch in agents/changelog-analyst.md (anchor '2. Snapshot materialization (REQUIRED'), so the materializer writes the 64-character digest TEXT as the snapshot content. Replay then searches a 64-byte buffer for the owned old_string and reports 'not uniquely locatable during replay' (scripts/stage-owned-hunks.py def _replay_live()). A real source file whose entire content is 64 hex characters would be a false positive; record it as a git blob ref instead."
+        },
+        {
+          "not": { "pattern": "^[A-Za-z0-9_-]{2,16}[:=]" },
+          "$comment": "MALFORMATION 1b. An algorithm-prefixed digest such as 'sha256:17d6448a...' fails the hex-only blob-ref test in agents/changelog-analyst.md (anchor '2. Snapshot materialization (REQUIRED') and is likewise written out as literal content, producing the same spurious EXCLUDE. This also catches 'sha1:', 'blake2b:', 'md5=' and the '<digest> ... (N lines) - full pre-edit content at /tmp/...' pointer form, none of which are content."
+        }
+      ]
+    },
+
+    "untrackedModifiedProvenanceMap": {
+      "type": "object",
+      "minProperties": 1,
+      "description": "Map of claim path -> adoption contract for a pre-existing untracked file this cycle modified. Read by scripts/stage-owned-hunks.py def _load_untracked_modified_contract(). Present ONLY in the canonical report (see x-unexpressible-in-schema/UMP-CANONICAL-ONLY). MUST NOT be empty: an empty map is not an adoption claim, and admitting it would let a ledger-less report satisfy the top-level anyOf.",
+      "additionalProperties": { "$ref": "#/$defs/untrackedModifiedContract" }
+    },
+
+    "untrackedModifiedContract": {
+      "type": "object",
+      "required": ["path", "admission", "pre_edit", "final", "evidence_source"],
+      "description": "MALFORMATION 3 rejects here: a flat record carrying pre_git_status / pre_sha256 / final_git_status / final_sha256 / evidence omits the required 'path', the nested 'pre_edit' and 'final' objects, and 'evidence_source'.",
+      "properties": {
+        "path": {
+          "type": "string",
+          "minLength": 1,
+          "description": "MUST equal the map key. scripts/stage-owned-hunks.py def _load_untracked_modified_contract(), the contract-path vs claim-key check."
+        },
+        "admission": {
+          "const": "authenticated_preexisting_untracked_whole_file",
+          "description": "scripts/stage-owned-hunks.py def _load_untracked_modified_contract(), the admission-constant check. Exactly this constant; 'authenticated_preexisting_untracked_external_file' is NOT accepted."
+        },
+        "pre_edit": { "$ref": "#/$defs/untrackedModifiedState" },
+        "final": { "$ref": "#/$defs/untrackedModifiedState" },
+        "evidence_source": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "\\S",
+          "description": "scripts/stage-owned-hunks.py def _load_untracked_modified_contract(), the evidence_source non-empty-string check."
+        }
+      }
+    },
+
+    "untrackedModifiedState": {
+      "type": "object",
+      "required": ["git_status", "sha256"],
+      "properties": {
+        "git_status": {
+          "const": "??",
+          "description": "scripts/stage-owned-hunks.py def _load_untracked_modified_contract(), the git_status check: exactly the two-character untracked marker, before AND after."
+        },
+        "sha256": { "$ref": "#/$defs/lowercaseSha256" }
+      },
+      "$comment": "pre_edit.sha256 != final.sha256 is required (scripts/stage-owned-hunks.py def _load_untracked_modified_contract(), the digest-difference check) but compares two sibling subtrees and is enforced by the checker as UMP-HASH-IDENTICAL."
+    },
+
+    "preEditProvenance": {
+      "type": "object",
+      "required": ["verified_before_edit", "source", "files", "statuses"],
+      "description": "Required sibling whenever untracked_modified_provenance is present. scripts/stage-owned-hunks.py def _load_untracked_modified_contract(), the pre_edit_provenance gate.",
+      "properties": {
+        "verified_before_edit": {
+          "const": true,
+          "description": "scripts/stage-owned-hunks.py def _load_untracked_modified_contract(): must be literally true, not truthy."
+        },
+        "source": { "type": "string", "minLength": 1, "pattern": "\\S" },
+        "files": {
+          "type": "object",
+          "additionalProperties": { "$ref": "#/$defs/lowercaseSha256" }
+        },
+        "statuses": {
+          "type": "object",
+          "additionalProperties": { "const": "??" }
+        }
+      }
+    }
+  }
+}

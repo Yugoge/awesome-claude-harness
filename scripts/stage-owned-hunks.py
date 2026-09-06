@@ -237,7 +237,10 @@ def _replay_live(snapshot, edits, rel):
         new_b = _encode_edit_value(edit["new"])
         if not isinstance(old_b, bytes) or not isinstance(new_b, bytes):
             return None, "ledger entry %d values must be strings/bytes for %s" % (i, rel)
-        off = _locate_unique(replay, old_b)
+        try:
+            off = _locate_unique(replay, old_b)
+        except EmptyOwnedOldStringError as exc:
+            return None, "ledger entry %d has an empty old_string for %s: %s" % (i, rel, exc)
         if off is None:
             return None, (
                 "owned old_string for edit %d not uniquely locatable during replay "
@@ -821,10 +824,21 @@ def _is_binary(data):
     return b"\x00" in data
 
 
+class EmptyOwnedOldStringError(ValueError):
+    """A ledger entry's `old` is empty: unlocatable in principle, not merely absent."""
+
+
 def _count_occurrences(haystack, needle):
-    """Count non-overlapping occurrences of needle in haystack (bytes)."""
+    """Count non-overlapping occurrences of needle in haystack (bytes).
+
+    Raises EmptyOwnedOldStringError for an empty needle so callers can tell a
+    malformed ledger entry apart from real content drift.
+    """
     if not needle:
-        return -1  # empty needle is never uniquely locatable
+        raise EmptyOwnedOldStringError(
+            "empty old_string is structurally unlocatable (a pure insertion has no "
+            "anchor); malformed ledger entry, not content drift"
+        )
     count = 0
     start = 0
     while True:
@@ -838,7 +852,11 @@ def _count_occurrences(haystack, needle):
 
 def _locate_unique(haystack, needle):
     """Return the unique byte offset of needle in haystack, or None if absent
-    or non-unique."""
+    or non-unique.
+
+    Propagates EmptyOwnedOldStringError for an empty needle: that is a malformed
+    ledger entry, not an absent-or-ambiguous match.
+    """
     n = _count_occurrences(haystack, needle)
     if n != 1:
         return None
@@ -991,7 +1009,12 @@ def main(argv):
         new_b = edit["new"].encode("utf-8") if isinstance(edit["new"], str) else edit["new"]
         old_b = edit["old"].encode("utf-8") if isinstance(edit["old"], str) else edit["old"]
 
-        off = _locate_unique(replay, old_b)
+        try:
+            off = _locate_unique(replay, old_b)
+        except EmptyOwnedOldStringError as exc:
+            return _excluded(
+                "ledger entry %d has an empty old_string for %s: %s" % (i, rel, exc)
+            )
         if off is None:
             return _excluded(
                 "owned old_string for edit %d not uniquely locatable during replay "
