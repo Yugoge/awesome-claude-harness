@@ -274,7 +274,7 @@ and from which checkout**, or they will not reproduce it.
 
 ## 5. Determination
 
-Both cycles are **terminal and cannot be closed**:
+**Three** cycles are **terminal and cannot be closed**:
 
 - `20260903-115527` — at a terminal passing state; all seven successor states rejected by
   the live validator, two of them as absorbing terminal states; control accepted with zero
@@ -282,6 +282,10 @@ Both cycles are **terminal and cannot be closed**:
 - `20260902-140306` — declaration-less; a truthful two-round history is unrepresentable
   under one mutable verification path per singular parent; positive control returned zero
   errors. (§1.2)
+- `20260904-181435` — implementation complete and verified, blocked by the **aggregation
+  contract**: the canonical aggregate's `baseline_dirty_snapshot` equality invariant is
+  constructionally inapplicable under the sequential dispatch its own file-overlap forced.
+  Both lane shards are `completed` with empty `blocking_issues`. (§6)
 
 **These two bullets were transposed in an earlier revision of this section**, which attached
 the terminal-state finding to `20260902-140306` and the declaration-less finding to
@@ -318,3 +322,101 @@ moved above every heading then present (the highest was R29) to clear the collis
 other session's R22 was not touched. Cite these defects by the new numbers — the old
 R22–R27 numbers no longer identify them, and R22 in particular now resolves to a different
 item entirely.
+
+---
+
+## 6. The cycle blocked by its own aggregation contract
+
+`20260904-181435` — fan-out, two lanes (`-a` = req-01, `-b` = req-02), parent session
+`dev-20260904-181435`. **Terminated blocked at Step 12 of 17.** Steps 13–17 were not run and
+are not marked run.
+
+### 6.1 The implementation is good; the contract stopped it
+
+Both lane shards report `dev.status: "completed"` with **empty** `blocking_issues`, and both
+were verified by execution rather than by reading:
+
+- **lane a** — 26 of 26 executable criteria pass under their own recipes, plus one `data`
+  criterion; **four adversarial ledger rebuilds each fail as required** (`newkeyonly` 4 failed,
+  `windowonly` 3, `constreason` 2 — the last caught *solely* by the reason-equality assertion,
+  proving the two assertions are non-subsuming — and `alwaysrearm` 7), while the conforming
+  build passes 7.
+- **lane b** — 12 of 12 criteria pass across **129 machine assertions, zero failures**; it found
+  and fixed one regression in the sibling lane's tests by execution.
+
+### 6.2 Two figures this record originally carried, and their refutation
+
+Both were refuted by an **independent test-executor that wrote none of the code**. The
+superseded values are kept deliberately: a record that preserves its own overturned numbers is
+more trustworthy than one that reads as though it were right the first time.
+
+| Claim as first recorded | Independently measured | Disposition |
+|---|---|---|
+| facade module `159 collected / 159 passed`, ~112s | **`167 passed in 121.93s`** — 167 collected, 0 failed, 0 error, 0 skipped, 0 xfail | **Refuted by +8.** 159 was *correct when taken*; lane b afterwards added 8 tests to the same uncommitted file. Stale, not wrong-at-source. |
+| whole `tests/` tree `167 passed, 0 skipped` | **`51 failed, 824 passed` of 875 collected**, 467.27s | **Refuted by +657.** A lane reported its own **single-module** count as a whole-tree result. That is an error in the lane's report, corrected here and in the aggregate. |
+
+Generated skeleton trees contribute **0** to both figures (`conftest.py`'s `pytest_ignore_collect`
+never descends without opt-in; the bare `875 tests collected` carries no `deselected` suffix,
+proving non-collection). Under explicit opt-in this cycle's two trees hold 94 tests, **all**
+unrealized `TEST_INCOMPLETE` stubs converted to xfail — zero realized.
+
+### 6.3 The 51 red tests — attribution is PROVISIONAL and must be re-measured
+
+They sit in two modules: 50 in `tests/test_public_core_residue_gate.py`, 1 in
+`tests/test_release_pipeline_contract.py::test_wellformed_sbom_verifies`. Single shared root
+cause: `scripts/check-public-core.sh` is red against the working tree, so that module's
+in-source "causal control" fails and its dependents fall with it. Zero failures in the facade
+module inside the tree run; the two modules run alone reproduce exactly `51 failed, 21 passed`,
+so the failures are neither order-dependent nor cross-module pollution.
+
+The evidence pointed to *pre-existing and unrelated*: three residue lines are committed **at
+HEAD** (`hooks/pretool-git-privilege-guard.py:1372`, `hooks/tests/test_bulk_commit_sentinel.py:668`,
+`hooks/tests/test_residual_false_positives.py:125`) and clean in `git status`; a further new
+residue line at `commands/dev-overnight.md:1070` is a **concurrent session's** uncommitted edit;
+and the one flagged lane file (`commands/paseo-daemon.md:432`, `/root/bin/*`) is pre-existing —
+the identical line sits at HEAD line 310 and `git diff -U0 HEAD` contains no hunk adding it.
+
+**Do not inherit that attribution as settled.** It was measured against HEAD `71f5dfbc`. HEAD has
+since advanced to `68a2205b` (via `b4b5f13b`), so **the 51 failures and their attribution must be
+re-measured before any downstream cycle relies on them.**
+
+### 6.4 Why the cycle cannot complete
+
+The two lanes' target file sets **overlap completely** — `scripts/paseo-daemon-ledger.py`,
+`tests/test_paseo_daemon_ledger.py`, `commands/paseo-daemon.md`. Parallel dispatch would
+therefore lose updates, so the orchestrator dispatched them **sequentially**. Lane b consequently
+observed a working tree that already contained lane a's edits, including the new file
+`tests/fixtures/paseo_cron_vendor_vectors.json`.
+
+The canonical aggregate requires every worker's `baseline_dirty_snapshot` to be **equal**. Under
+sequential dispatch that invariant is not violated — it is **constructionally inapplicable**, and
+the mismatch is a *true* report of a real difference. `scripts/aggregate-dev-report.py:270`
+reports `shard 'b': baseline_dirty_snapshot mismatch`; `:447` then errors with **zero artifact**,
+where `commands/dev.md` Step 11 prescribes writing a **blocked** aggregate instead. Both defects
+are recorded as **R28** and **R29** in `docs/dev/specs/spec-20260904-harness-fixes.md` (that
+pointer does not survive a clone — `docs/dev/` is ignored at `.gitignore:142` — which is why the
+substance is restated here).
+
+The orchestrator wrote the blocked aggregate **by hand, per the specification**, and did **not**
+edit either shard to equalise the field: forcing the two values equal would assert that both
+lanes saw the same tree, which is false. The read-only artifact-chain resolver then returned
+`status: fail`, exit 2, six errors:
+
+    INVALID_DEV_STATUS    dev.status is 'blocked'; expected 'completed'
+    UNRESOLVED_BLOCKERS   blocking_issues is not empty
+    INVALID_SHARD_SET     shard 'b': baseline_dirty_snapshot mismatch
+    MISSING_ARTIFACT      docs/dev/completion-20260904-181435.md
+    MISSING_ARTIFACT      docs/dev/qa-report-20260904-181435-a.json
+    MISSING_ARTIFACT      docs/dev/qa-report-20260904-181435-b.json
+
+The last three are Steps 13/17 output, not yet produced. Producing them would retire **two** of
+the six; **the first three survive any amount of further work**, which is why Step 13 was not run
+and the cycle was terminated here rather than pushed toward a completion it cannot reach.
+
+### 6.5 Disposition
+
+Nothing from this cycle was committed, staged or pushed. Its artifacts remain on disk under
+`docs/dev/` (ignored, so not clone-reachable): two lane tickets, contexts and criteria files, the
+per-lane BA-QA reports carrying three full validation rounds plus two narrow verifications each,
+two lane dev-reports, the hand-written blocked aggregate, two test-writer reports and two
+generated skeleton trees. Recorded 2026-09-05; determination **blocked-terminal**.

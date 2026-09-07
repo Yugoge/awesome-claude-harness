@@ -753,3 +753,212 @@ def test_invalid_task_id_is_json_and_exit_two(tmp_path: Path) -> None:
     assert process.returncode == 2
     assert process.stderr == ""
     assert "INVALID_TASK_ID" in _error_codes(json.loads(process.stdout))
+
+
+# ---------------------------------------------------------------------------
+# Lane attribution for non-canonical artifacts.  Which lane an artifact belongs
+# to is settled by the identity the artifact declares about itself, not by the
+# label its writer happened to put in the filename.  The pairing that matters is
+# the first two tests below: the check must stop flagging a declared lane's
+# round-one report AND keep flagging a lane that really was never declared.
+# ---------------------------------------------------------------------------
+
+UNDECLARED_WORKER = "lane-c"
+
+
+def _undeclared_lane_paths(result: dict) -> list[str]:
+    return sorted(
+        error["path"]
+        for error in result["errors"]
+        if error["code"] == "UNDECLARED_LANE_ARTIFACT"
+    )
+
+
+def _undeclared_lane_details(result: dict) -> list[str]:
+    return sorted(
+        error["detail"]
+        for error in result["errors"]
+        if error["code"] == "UNDECLARED_LANE_ARTIFACT"
+    )
+
+
+def _variant(root: Path, name: str) -> Path:
+    """A non-canonical artifact whose filename suffix is not a lane name."""
+    return _dev_dir(root) / name
+
+
+def test_round_one_report_of_a_declared_lane_is_not_an_undeclared_lane(
+    tmp_path: Path,
+) -> None:
+    # The regression under repair: a declared lane's earlier-round QA report
+    # carries a distinguishing filename suffix while declaring, in both identity
+    # fields, the lane it belongs to.  Attributing it to a worker carved out of
+    # the whole suffix invents a lane that never ran.
+    _make_fanout(tmp_path)
+    variant = _variant(tmp_path, f"qa-report-{TASK_ID}-{WORKERS[0]}-round1.json")
+    _write(variant, _qa_document(f"{TASK_ID}-{WORKERS[0]}", status="warning"))
+    result = RESOLVER.resolve_chain(tmp_path, TASK_ID)
+    assert _undeclared_lane_paths(result) == []
+    assert result["status"] == "pass", result["errors"]
+
+
+def test_genuinely_undeclared_lane_is_still_flagged(tmp_path: Path) -> None:
+    # The finding that must survive: a lane that really ran without being
+    # declared, whose artifacts carry its own distinct identity.  Consulting the
+    # identity fields must sharpen this detection, never suppress it.
+    _make_fanout(tmp_path)
+    identity = f"{TASK_ID}-{UNDECLARED_WORKER}"
+    lane = _lane_paths(tmp_path, UNDECLARED_WORKER)
+    _write(lane["ticket"], _ticket(identity))
+    _write(lane["context"], {"request_id": identity, "task_id": identity})
+    _write(lane["qa"], _qa_document(identity))
+    result = RESOLVER.resolve_chain(tmp_path, TASK_ID)
+    assert _undeclared_lane_paths(result) == [
+        _relative(tmp_path, lane[key]) for key in ("context", "qa", "ticket")
+    ]
+    assert all(
+        f"{UNDECLARED_WORKER!r} (from declared identity)" in detail
+        for detail in _undeclared_lane_details(result)
+    )
+    assert result["status"] == "fail"
+
+
+def test_declared_identity_outranks_a_filename_naming_a_declared_lane(
+    tmp_path: Path,
+) -> None:
+    # A file cannot buy an exemption by being named after a lane that was
+    # declared; what it says it is decides.
+    _make_fanout(tmp_path)
+    variant = _variant(tmp_path, f"qa-report-{TASK_ID}-{WORKERS[0]}-r2.json")
+    _write(variant, _qa_document(f"{TASK_ID}-{UNDECLARED_WORKER}"))
+    result = RESOLVER.resolve_chain(tmp_path, TASK_ID)
+    assert _undeclared_lane_paths(result) == [_relative(tmp_path, variant)]
+
+
+# --- Degenerate identities.  Every one falls back to the filename, so none of
+# --- them is a way to slip past the check.
+
+def _assert_falls_back_to_filename(root: Path, path: Path) -> None:
+    result = RESOLVER.resolve_chain(root, TASK_ID)
+    assert _undeclared_lane_paths(result) == [_relative(root, path)]
+    assert all(
+        "(from filename, no usable declared identity)" in detail
+        for detail in _undeclared_lane_details(result)
+    )
+
+
+def test_absent_identity_keys_fall_back_to_the_filename(tmp_path: Path) -> None:
+    _make_fanout(tmp_path)
+    path = _variant(tmp_path, f"qa-report-{TASK_ID}-{UNDECLARED_WORKER}.json")
+    _write(path, {"qa": {"status": "pass"}})
+    _assert_falls_back_to_filename(tmp_path, path)
+
+
+def test_blank_and_non_string_identity_values_fall_back(tmp_path: Path) -> None:
+    for value in ("", "   ", 17, None, ["a"]):
+        root = tmp_path / f"case-{abs(hash(repr(value)))}"
+        _make_fanout(root)
+        path = _variant(root, f"qa-report-{TASK_ID}-{UNDECLARED_WORKER}.json")
+        _write(
+            path,
+            {
+                "request_id": value,
+                "task_id": f"{TASK_ID}-{WORKERS[0]}",
+                "qa": {"status": "pass"},
+            },
+        )
+        _assert_falls_back_to_filename(root, path)
+
+
+def test_contradictory_identity_keys_fall_back(tmp_path: Path) -> None:
+    _make_fanout(tmp_path)
+    path = _variant(tmp_path, f"qa-report-{TASK_ID}-{UNDECLARED_WORKER}.json")
+    _write(
+        path,
+        {
+            "request_id": f"{TASK_ID}-{WORKERS[0]}",
+            "task_id": f"{TASK_ID}-{WORKERS[1]}",
+            "qa": {"status": "pass"},
+        },
+    )
+    _assert_falls_back_to_filename(tmp_path, path)
+
+
+def test_malformed_and_non_object_json_fall_back(tmp_path: Path) -> None:
+    for body in ("{not json\n", '["lane-a"]\n', ""):
+        root = tmp_path / f"body-{abs(hash(body))}"
+        _make_fanout(root)
+        path = _variant(root, f"qa-report-{TASK_ID}-{UNDECLARED_WORKER}.json")
+        _write(path, body)
+        _assert_falls_back_to_filename(root, path)
+
+
+def test_markdown_without_identity_metadata_falls_back(tmp_path: Path) -> None:
+    _make_fanout(tmp_path)
+    path = _variant(tmp_path, f"ticket-{TASK_ID}-{UNDECLARED_WORKER}.md")
+    _write(path, "# Ticket\n\nNo identity metadata here.\n")
+    _assert_falls_back_to_filename(tmp_path, path)
+
+
+def test_markdown_with_contradictory_identity_lines_falls_back(
+    tmp_path: Path,
+) -> None:
+    _make_fanout(tmp_path)
+    path = _variant(tmp_path, f"ticket-{TASK_ID}-{UNDECLARED_WORKER}.md")
+    _write(
+        path,
+        f"# Ticket\n\n**TASK-ID**: `{TASK_ID}-{WORKERS[0]}`\n"
+        f"**Request ID**: `{TASK_ID}-{WORKERS[1]}`\n",
+    )
+    _assert_falls_back_to_filename(tmp_path, path)
+
+
+def test_identity_naming_another_task_cannot_vouch(tmp_path: Path) -> None:
+    # Outside this task's lane namespace, so it says nothing about which lane of
+    # THIS task the file belongs to.
+    _make_fanout(tmp_path)
+    path = _variant(tmp_path, f"qa-report-{TASK_ID}-{UNDECLARED_WORKER}.json")
+    _write(path, _qa_document(f"dev-20260101-000000-{WORKERS[0]}"))
+    _assert_falls_back_to_filename(tmp_path, path)
+
+
+def test_identity_equal_to_the_parent_task_id_cannot_vouch(tmp_path: Path) -> None:
+    # A parent-scoped identity names no worker at all.
+    _make_fanout(tmp_path)
+    path = _variant(tmp_path, f"qa-report-{TASK_ID}-{UNDECLARED_WORKER}.json")
+    _write(path, _qa_document(TASK_ID))
+    _assert_falls_back_to_filename(tmp_path, path)
+
+
+def test_identity_with_an_invalid_worker_label_cannot_vouch(tmp_path: Path) -> None:
+    _make_fanout(tmp_path)
+    path = _variant(tmp_path, f"qa-report-{TASK_ID}-{UNDECLARED_WORKER}.json")
+    _write(path, _qa_document(f"{TASK_ID}-not a worker"))
+    _assert_falls_back_to_filename(tmp_path, path)
+
+
+# --- Symmetry with the shard classifier: a revision label is not a lane name.
+
+def test_revision_labelled_filename_without_identity_is_not_a_lane(
+    tmp_path: Path,
+) -> None:
+    # The sibling shard classifier already treats draft/final/iterN as non-lane
+    # labels; this path must classify the same filename the same way.
+    for label in ("draft", "final", "iter2", "RETRY"):
+        root = tmp_path / f"label-{label}"
+        _make_fanout(root)
+        _write(_variant(root, f"qa-report-{TASK_ID}-{label}.json"), {"qa": {}})
+        result = RESOLVER.resolve_chain(root, TASK_ID)
+        assert _undeclared_lane_paths(result) == [], label
+
+
+def test_revision_labelled_filename_declaring_an_undeclared_lane_is_flagged(
+    tmp_path: Path,
+) -> None:
+    # The filename heuristic must not become an exemption a lane can claim by
+    # naming its artifacts after a revision label.
+    _make_fanout(tmp_path)
+    path = _variant(tmp_path, f"qa-report-{TASK_ID}-final.json")
+    _write(path, _qa_document(f"{TASK_ID}-{UNDECLARED_WORKER}"))
+    result = RESOLVER.resolve_chain(tmp_path, TASK_ID)
+    assert _undeclared_lane_paths(result) == [_relative(tmp_path, path)]

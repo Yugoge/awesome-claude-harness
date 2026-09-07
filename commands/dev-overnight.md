@@ -1057,15 +1057,18 @@ For each active pipeline[i]:
 # Fresh shell: substitute BOTH resolved literals, expand neither. The script hard-
 # requires CLAUDE_PROJECT_DIR (write-qa-mode.sh:23) and nothing exports it into a
 # fresh shell, so the prefix is mandatory — same form as overnight-init.sh:320.
-# MODE-SCOPED RESIDUAL (measured, not theoretical): the prefix makes the path
-# CORRECT, which is all this document can do. The write still lands in
-# <main_root>/.claude/dev-registry/, and under registered_worktree / fresh_clone
-# the per-command bwrap boundary RW-binds only the worktree, so the write gets
-# EROFS while READS of the same registry succeed. This site therefore works in
-# in_place mode and fails LOUDLY (never silently) in the isolated modes. Do NOT
-# "fix" that by dropping the `|| exit 1` handler; the write path is owned by
-# scripts/write-qa-mode.sh and the guard, not by this document.
-CLAUDE_PROJECT_DIR='<MAIN_ROOT>' bash ~/.claude/scripts/write-qa-mode.sh --session-id "<DEV_SESSION_ID>" --mode ba_validation \
+# NO `bash` TOKEN — measured (task 20260809-013317). An interpreter token made
+# pretool-overnight-hook-guard.py::_scan_script_files_for_main_git fail closed: `~`
+# is unexpandable by os.path.isfile, so the .sh operand read as unreadable, and the
+# else-branch then tripped on the <MAIN_ROOT> literal above — rc=2 at all four sites
+# in EVERY isolation mode, before the write boundary was reached, though write-qa-
+# mode.sh holds no git token at all. Direct execution (the script is executable,
+# bash shebang) drops that false premise without weakening the guard, which still
+# blocks every genuine `bash <script>` case. The write lands in <main_root>/.claude/
+# dev-registry/ and succeeds in all three modes via the hook's qa.json RW bind.
+# Do NOT re-add `bash`, do NOT drop the prefix (re-breaks write-qa-mode.sh:23), do
+# NOT substitute an absolute /root/… path (hardcoding), do NOT drop `|| exit 1`.
+CLAUDE_PROJECT_DIR='<MAIN_ROOT>' ~/.claude/scripts/write-qa-mode.sh --session-id "<DEV_SESSION_ID>" --mode ba_validation \
   || { echo 'ERROR: Failed to set qa_mode=ba_validation in qa.json — aborting' >&2; exit 1; }
 
 Agent(subagent_type: "qa")
@@ -1352,8 +1355,9 @@ Do NOT proceed to QA with stale containers.
 For each active pipeline[i]:
 
 # Write qa_mode sentinel immediately before each QA dispatch (preserve existing fields).
-# Both literals substituted, neither expanded — see the :1047 site for why.
-CLAUDE_PROJECT_DIR='<MAIN_ROOT>' bash ~/.claude/scripts/write-qa-mode.sh --session-id "<DEV_SESSION_ID>" --mode final_verification \
+# Both literals substituted, neither expanded, and NO `bash` token — see the :1047
+# site for why all three are load-bearing.
+CLAUDE_PROJECT_DIR='<MAIN_ROOT>' ~/.claude/scripts/write-qa-mode.sh --session-id "<DEV_SESSION_ID>" --mode final_verification \
   || { echo 'ERROR: Failed to set qa_mode=final_verification in qa.json — aborting' >&2; exit 1; }
 
 Agent(subagent_type: "qa")
@@ -1481,7 +1485,7 @@ bash ~/.claude/scripts/refine-context.sh \
 The merged context records `iteration=<new-iter>` and appends a `previous_attempts[]` entry with `iteration=<new-iter>-1`. Then dispatch:
 - **Dev-dispatch precondition (B2-INV)**: BEFORE the Dev dispatch below, route this pipeline through the shared **Step 11g: Graphify Dev-Dispatch Precondition** against the FRESH `docs/dev/context-iter<new-iter>-<timestamp_suffix>.json` Dev will consume. The new iteration context has a different fingerprint, so the precondition RE-ENRICHES (it does NOT skip on bare existence).
 - `Agent(subagent_type: "dev")` with iteration context. Include in Dev prompt: `Overnight spec file: <pipeline.spec_path>`. Also include: `User requirement document: <resolved $REQUIREMENT_DOC path>`. Dev reads spec first for cross-cycle context, then updates Sections 2 and 3.
-- Before dispatching QA, write qa_mode sentinel: `CLAUDE_PROJECT_DIR='<MAIN_ROOT>' bash ~/.claude/scripts/write-qa-mode.sh --session-id "<DEV_SESSION_ID>" --mode final_verification || { echo 'ERROR: Failed to set qa_mode=final_verification — aborting' >&2; exit 1; }`
+- Before dispatching QA, write qa_mode sentinel (no `bash` token — see the :1047 site): `CLAUDE_PROJECT_DIR='<MAIN_ROOT>' ~/.claude/scripts/write-qa-mode.sh --session-id "<DEV_SESSION_ID>" --mode final_verification || { echo 'ERROR: Failed to set qa_mode=final_verification — aborting' >&2; exit 1; }`
 - `Agent(subagent_type: "qa")` with new dev report. Include in QA prompt: `Overnight spec file: <pipeline.spec_path>`. Also include: `User requirement document: <resolved $REQUIREMENT_DOC path>`. QA reads spec first, then updates Section 4 (and Sections 6-7 if fail).
 
 Loop termination:
@@ -1630,7 +1634,7 @@ Use Agent tool with:
 If validation fails, log warning and proceed (retro is informational, not blocking).
 
 **Check qa_rerun_required**: Read the retro report's `qa_rerun_required` field.
-- If `qa_rerun_required: true`: For each pipeline to be re-run, write qa_mode sentinel before dispatch: `CLAUDE_PROJECT_DIR='<MAIN_ROOT>' bash ~/.claude/scripts/write-qa-mode.sh --session-id "<DEV_SESSION_ID>" --mode final_verification || { echo 'ERROR: Failed to set qa_mode=final_verification — aborting' >&2; exit 1; }`. Then re-invoke QA for the pipelines listed in `qa_rerun_reasons`. Use the same QA invocation pattern as Step 14-16, but pass additional context: `"This is a PM-requested QA re-run. Reasons: <qa_rerun_reasons>. Focus on the specific concerns raised."` After QA re-run completes, proceed to Step 21 (do NOT re-invoke RETRO — avoid infinite loops).
+- If `qa_rerun_required: true`: For each pipeline to be re-run, write qa_mode sentinel before dispatch (no `bash` token — see the :1047 site): `CLAUDE_PROJECT_DIR='<MAIN_ROOT>' ~/.claude/scripts/write-qa-mode.sh --session-id "<DEV_SESSION_ID>" --mode final_verification || { echo 'ERROR: Failed to set qa_mode=final_verification — aborting' >&2; exit 1; }`. Then re-invoke QA for the pipelines listed in `qa_rerun_reasons`. Use the same QA invocation pattern as Step 14-16, but pass additional context: `"This is a PM-requested QA re-run. Reasons: <qa_rerun_reasons>. Focus on the specific concerns raised."` After QA re-run completes, proceed to Step 21 (do NOT re-invoke RETRO — avoid infinite loops).
 - If `qa_rerun_required: false` or field absent: proceed normally to Step 21.
 
 ---

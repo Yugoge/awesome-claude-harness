@@ -213,18 +213,70 @@ The candidate set is restricted to a **staging whitelist** consisting of:
 
 1. All files listed in `dev.files_modified[]` from the dev-report.
 2. All files listed in `dev.files_created[]` from the dev-report.
-3. Every exact path in `ARTIFACT_CHAIN.commit_whitelist_artifacts`. This is
+3. All files listed in `dev.files_required_to_ship[]`, sourced from the **shard-union
+   declaration** defined immediately after this list — never read from the canonical
+   dev-report. Unlike
+   items 1 and 2 — which are git-derived and therefore assert the cycle AUTHORED the
+   path — this category is DECLARED and asserts only that the path must be present in
+   the tree this cycle ships. Its motivating case is a file that pre-existed the cycle
+   untracked and that the cycle's own change made load-bearing at runtime. It is
+   admitted to the whitelist on exactly the same terms as items 1 and 2; it is never
+   optional or advisory. A declared path's absence from the tree is a **hard error,
+   never a silent skip** — if a
+   declared path is absent from the working tree AND absent from HEAD, **ABORT** with
+   `ABORT: files_required_to_ship — <path> declared required to ship but absent from the working tree and from HEAD; refusing to ship a tree the dev-report declares incomplete.`
+   and `failure_code: scope_violation`. If the path is instead already tracked and clean,
+   its required content is already in HEAD, so the requirement is satisfied and there is
+   nothing to stage for it: log
+   `INFO: files_required_to_ship — <path> already present in HEAD; requirement satisfied, nothing to stage.`
+4. Every exact path in `ARTIFACT_CHAIN.commit_whitelist_artifacts`. This is
    equivalent to the existing parent ticket/context/dev/QA/completion set when
    `mode == "singular"`. When `mode == "fanout"` it instead admits every
    resolver-validated lane ticket/context/dev/QA artifact plus the parent
    canonical/completion and only those optional parent artifacts that were
    actually present and validated. Do not glob lane suffixes, require missing
    optional parents, or create pseudo-parent artifacts.
-4. Post-chain artifacts matching **anchored patterns** for THIS parent
+5. Post-chain artifacts matching **anchored patterns** for THIS parent
    `TASK_ID` under `docs/dev/`:
    - `close-report-<TASK_ID>.md`
    - `acceptance-criteria-<TASK_ID>.json`
    - `*-inspector-report-*<TASK_ID>*` (glob pattern under `docs/dev/` only)
+
+**Sourcing the item-3 declaration — shard union, not canonical.** On a fan-out cycle
+the canonical dev-report provably cannot carry `dev.files_required_to_ship`: the
+aggregate writer emits a fixed set of list keys that does not include it, and the
+resolver's freshness check compares the whole enclosing `dev` object, so adding the key
+turns the chain `STALE_CANONICAL`. Reading item 3 from the canonical therefore makes
+every fan-out declaration invisible and silently drops the declared file as a
+`foreign_session_candidate`. Derive it instead with `scripts/lib/candidate_tree.py` —
+`derive_declaration(<dev-reports dir>, TASK_ID, fields=("files_required_to_ship",))` —
+which discovers the aggregate plus every per-lane shard and unions the category across
+exactly those reports agreeing on one baseline. Do not reimplement that discovery, and
+do not widen the canonical's shape to carry the key.
+
+**An unobtainable declaration is not an empty one.** Absence and emptiness are different
+facts: an explicit empty declaration positively states that nothing is required, whereas
+an inability to establish a declaration at all states nothing and must not be read as
+permission to proceed. Branch on whether the DERIVATION succeeded, never on whether the
+key happened to appear in any one report:
+
+- **Derivation succeeds, union non-empty** — every path in the union enters the item-3
+  whitelist and is subject to item 3's hard-error posture.
+- **Derivation succeeds, union empty** — no report carries the key, or every report that
+  does carries `[]`. This is a positive statement that the cycle requires nothing.
+  Proceed normally, contributing 0 to the count guard. This is the ordinary case and
+  MUST NOT abort: a naive fail-closed rule here would break every legitimate cycle that
+  simply has nothing to declare.
+- **Derivation is impossible** — the reports directory does not exist, no report matches
+  `TASK_ID`, a report is unreadable or is not valid JSON, the category is present but is
+  not a list, or no report records a baseline to agree on (any `DeclarationError` from
+  the library). The ship-set cannot be established, so **ABORT** with
+  `ABORT: files_required_to_ship — declaration could not be derived for <TASK_ID> (<reason>); refusing to ship a tree whose ship-set cannot be established.`
+  and `failure_code: scope_violation`.
+
+A report that merely omits the key is *not* the impossible case: the library skips an
+absent key while still deriving successfully, so a cycle that never declares anything
+lands in the empty case. The fail-closed posture sits on the derivation, not on the key.
 
 Only files that appear in BOTH the git status output AND this whitelist are
 candidates for staging. Files that appear in git status but are NOT in this
@@ -234,9 +286,12 @@ staging** with a warning:
 
 **Staged-file count guard** (BULK=false only, when dev-report exists): after
 building the candidate set, count the files. If the count exceeds
-`len(dev.files_modified) + len(dev.files_created) + 30 +
+`len(dev.files_modified) + len(dev.files_created) + len(dev.files_required_to_ship) + 30 +
 max(0, len(ARTIFACT_CHAIN.commit_whitelist_artifacts) - 5)` (the original
-singular overhead plus only the validated fan-out expansion),
+singular overhead plus only the validated fan-out expansion; the third term is the
+size of the shard-union declaration derived per item 3, so a successfully-derived
+empty declaration contributes 0 — an *underivable* one has already aborted at item 3
+and never reaches this arithmetic),
 **ABORT** with a scope violation report:
 `ABORT: scope violation — staged file count (<N>) exceeds whitelist limit (<limit>). Possible cross-session contamination.`
 Exit with `failure_code: scope_violation`.
@@ -310,11 +365,25 @@ it falls back to `CONTROL_ROOT/docs/dev/dev-report-${TASK_ID}.json`. The script
 prints the resolved path to stdout (empty if not found). Assign the output to
 `dev_report_path`.
 
-Extract `dev.files_modified[]` and `dev.files_created[]` arrays from the resolved path.
-When BULK=false, these arrays form the **primary staging whitelist** (along with
-the resolver-validated `commit_whitelist_artifacts` and anchored post-chain
-artifacts defined above). When BULK=true, they are used for commit message
+Extract the `dev.files_modified[]` and `dev.files_created[]`
+arrays from the resolved path; obtain `dev.files_required_to_ship[]` from the shard
+union instead, exactly as item 3 and its sourcing note specify — derived with
+`scripts/lib/candidate_tree.py` over the reports directory holding the resolved path,
+never read from the canonical, and aborting rather than defaulting to empty when the
+derivation is impossible. When BULK=false, these three arrays form the **primary staging
+whitelist** (along with the resolver-validated `commit_whitelist_artifacts` and anchored
+post-chain artifacts defined above). When BULK=true, they are used for commit message
 enrichment only (existing behavior).
+
+**Authorship asymmetry — do NOT enrich from `files_required_to_ship`.** The first two
+arrays are evidence of authorship; the third is evidence of a requirement only. Any
+derivation that describes, attributes, or summarises what this cycle DID — commit
+type/scope/subject/body determination, changed-file narration, `files_touched`-style
+attribution — MUST be derived from `dev.files_modified` + `dev.files_created` only.
+Deriving a "modified"/"added" claim from a required-to-ship path would attribute to this
+cycle a file it did not write. Such a path is staged for the ship-set and, when it needs
+mentioning at all, is described as a requirement (e.g. `ship-required: <path> (not authored by this cycle)`),
+never as this cycle's own change.
 
 **Provenance filter** (apply before using dev-report for enrichment):
 
@@ -334,7 +403,17 @@ When a valid repository baseline is present:
 1. Compute the working-tree diff since baseline: `git -C "$GIT_ROOT" diff --name-only <baseline_head_sha>` (Phase 2 runs before staging/commit, so changes are uncommitted; `..HEAD` form is WRONG here and would return an empty set, falsely flagging all legitimate changes as anomalies).
 2. Read `baseline_dirty_snapshot` from the dev-report top-level field (may be absent in older reports — treat as empty).
 3. Apply a split provenance filter:
-   - For every path in `dev.files_modified` that is **absent** from the `git diff --name-only <baseline_head_sha>` output **AND** absent from `baseline_dirty_snapshot`, classify it as `provenance_anomaly`.
+   - **Adoption carve-out (`untracked_modified_adoption`) — evaluate FIRST, before the two `provenance_anomaly` bullets below.** Classify a path `untracked_modified_adoption` **only if all five** of these conjuncts hold (a dispatch pre-filter, not an admission decision — see the precedence note below):
+     1. **untracked** — `git -C "$GIT_ROOT" ls-files --error-unmatch <path>` fails (the path is not in the index);
+     2. **claimed modified** — the path is in `dev.files_modified`;
+     3. **not claimed created** — the path is **not** in `dev.files_created`;
+     4. **contract-covered** — the canonical report carries an `untracked_modified_provenance[<path>]` entry whose `path` field equals `<path>` and whose `admission` is `authenticated_preexisting_untracked_whole_file`;
+     5. **external anchor** — the live tree agrees with that entry: the sha256 of the bytes currently at `<path>` equals the entry's `final.sha256`, **and** `git status --porcelain -- <path>` reports exactly `?? <path>`.
+
+     A path meeting **all five** is **retained** in the staging candidate set and is **NOT** `provenance_anomaly`. Log: `INFO: untracked_modified_adoption — <path> is a pre-existing untracked path adopted under a report-digest-bound provenance contract; retained in the staging candidate set`. A path meeting **four or fewer** of the five conjuncts is **not** adopted and falls through to the `provenance_anomaly` bullets below with today's behavior unchanged — four conjuncts are not enough, or the filter becomes fail-open for any path a report merely claims.
+
+     NON-NORMATIVE SUMMARY — the normative definition of `untracked_modified_adoption` is the admission predicate `.claude/scripts/stage-owned-hunks.py` executes for `--untracked-modified-report` (`_load_untracked_modified_contract()` followed by `_untracked_modified_main()`); it enforces every conjunct summarised here plus further checks this summary does not restate (canonical-report digest binding, task/request-id and report-filename binding, differing `pre_edit`/`final` digests, `pre_edit_provenance` and `final_source_hashes` agreement, `evidence_source` presence, regular-non-symlink target, absence from the index, and non-binary content). If this summary and that predicate disagree, the predicate governs.
+   - For every path in `dev.files_modified` that is **absent** from the `git diff --name-only <baseline_head_sha>` output **AND** absent from `baseline_dirty_snapshot` **AND** not classified `untracked_modified_adoption` above, classify it as `provenance_anomaly`.
    - For every path in `dev.files_created`, check via `git ls-files --others --exclude-standard`. If the path is **absent** from that output **AND** absent from `baseline_dirty_snapshot`, classify it as `provenance_anomaly`. (New untracked files do not appear in `git diff --name-only` output; using ls-files is the correct check for this set.)
 
    Concurrency caveat (explanatory, human-triage only): `baseline_dirty_snapshot` is a point-in-time capture (see `agents/dev.md`), so under concurrent `/dev` sessions sharing one working tree a `provenance_anomaly` attributable to a peer session's file written after the snapshot was captured is a false positive of the point-in-time semantics. Interpret such an anomaly with judgment — do NOT add any detection, inference, or programmatic-removal logic for "suspected peer" paths; the existing classification behavior is unchanged.
@@ -519,10 +598,61 @@ the file set and never reaches a non-whitelisted/foreign file.
 
 For each file in the candidate set (per repo), use repo-relative paths.
 
+**Branch precedence within this per-file loop (first match wins):** the
+**adoption branch immediately below is evaluated BEFORE the entangled-file detection**
+that follows it, and before every non-entangled clause. Every clause the ordering
+governs is mutually exclusive with the adoption branch by its own predicate, not by the
+ordering alone: the entangled predicate below carries a conjunct excluding
+adoption-classified paths; the `owned_edits` clause defers to the branch that already
+staged the path; the `dev.files_created` clause requires a file created by this cycle,
+which the carve-out's not-created conjunct excludes; the required-to-ship clause carries
+the report-coverage conjunct below; and the tracked-modified clause and the
+ambiguous-dirty paragraph both require a *tracked* file, which the carve-out's untracked
+conjunct excludes. So this ordering states what the predicates already guarantee rather
+than breaking a tie between two matching branches, and the blanket sentence below is
+belt-and-braces rather than load-bearing.
+
+**Adoption branch (`untracked_modified_adoption` — authenticated pre-existing untracked file):**
+When, and only when, Phase 2 classified this candidate `untracked_modified_adoption` (all
+five conjuncts of the Phase-2 adoption carve-out held), route staging through the helper's
+authenticated adoption route — not whole-file `git add`, and not the hunk-filtered ledger
+route below (the file is untracked, so `git apply --cached` cannot hunk-stage it):
+
+```bash
+"${CLAUDE_PROJECT_DIR}/.claude/scripts/stage-owned-hunks.py" \
+    --git-root "${GIT_ROOT}" \
+    --file "<repo-rel-path>" \
+    --untracked-modified-report "<resolved dev_report_path>" \
+    --report-sha256 "<sha256 of that resolved report, as bound into the repository plan>" \
+    --task-id "${TASK_ID}"
+rc=$?
+```
+
+**This dispatch is CONDITIONAL on the Phase-2 classification and MUST NEVER be issued
+unconditionally.** The helper dispatches `--untracked-modified-report` pre-emptively, with
+no fall-through to hunk-staging, so passing the flag for a path Phase 2 did **not** classify
+`untracked_modified_adoption` converts that path's correct hunk-filtered or whole-file
+staging into a fail-closed exit-10 EXCLUDE.
+
+Interpret the helper exit code:
+- `0` — the adopted file was staged whole-file under the report-digest-bound attestation
+  (pre-edit digest, final digest, `??` status binding and report digest all verified).
+- `10` or any other non-zero — EXCLUDE (fail-closed): **warn-and-skip, and do NOT fall back
+  to whole-file `git add`.** Print:
+  `WARNING: excluding <repo-rel-path> from staging — untracked_modified_adoption route fail-closed (see stderr for the specific reason).`
+
+A candidate classified `untracked_modified_adoption` is handled **only** here: it is
+excluded from the entangled predicate below and from every non-entangled clause below, so
+no later branch may re-stage, re-route or warn-and-skip it.
+
 **Entangled-file detection (hunk-filtered staging):** A whitelisted candidate file is
 *entangled* when it is dirty AND the dev-report supplies an `owned_edits` entry for it
+AND it was **not** classified `untracked_modified_adoption` in Phase 2
 (i.e. this cycle authored only PART of the file's current diff and a concurrent peer
-session may have uncommitted hunks in the same file). For an entangled file, route
+session may have uncommitted hunks in the same file). The third conjunct is what makes
+this predicate and the adoption branch above mutually exclusive: an adopted pre-existing
+untracked path may satisfy the first two conjuncts, and without this exclusion both
+branches would match the same path. For an entangled file, route
 staging through the line-precise helper instead of whole-file `git add`:
 
 ```bash
@@ -575,6 +705,29 @@ A file is *non-entangled* (safe to whole-file stage) when EITHER:
 - it is a NEW file created by this cycle (in `dev.files_created`, untracked) — a
   brand-new file has no peer baseline to entangle with, so whole-file `git add` is
   correct; OR
+- it is an untracked path declared in `dev.files_required_to_ship` — the cycle claims no
+  authorship of any part of it, so there are no owned hunks to separate from unowned
+  ones, and the declaration is precisely that this file must ship whole. Whole-file
+  `git add` is then the only staging form that satisfies the declaration. (This
+  admits the path only because a report declared it; presence in the working tree alone
+  still admits nothing.) **AND the same dev-report does not itself contradict that
+  no-authorship premise — the path is named in NONE of `dev.files_modified`,
+  `owned_edits`, `pre_edit_snapshots` or `untracked_modified_provenance`.** A declared
+  path covered by ANY ONE of those four fields is one the report itself says this cycle
+  authored, so this clause does NOT admit it: route it through the authenticated
+  `untracked_modified_adoption` helper route above when it is eligible for that cell,
+  and otherwise warn-and-skip fail-closed, printing
+  `WARNING: excluding <repo-rel-path> from staging — declared required-to-ship, but the
+  same report claims authorship of it (covered by dev.files_modified / owned_edits /
+  pre_edit_snapshots / untracked_modified_provenance); the unauthenticated whole-file
+  route is refused, and the path is not eligible for the authenticated adoption route.`
+  This conjunct tests report COVERAGE and adoption ELIGIBILITY, never the Phase-2
+  classification OUTCOME: a path declared only in this array is never evaluated by
+  Phase 2 at all (its provenance loops iterate `dev.files_modified` and
+  `dev.files_created` only), so an "it was not classified" test would be vacuously true
+  here and would close nothing. **Honest scope:** no conjunct here can catch a report
+  that omits all evidence of modification; what it closes is that a report cannot both
+  claim authorship and take the cheap route. OR
 - it is a tracked-modified file for which the dev-report provides NO `owned_edits`
   entry AND there is no evidence of peer dirtiness (i.e. the file's entire working-tree
   diff is attributable to this cycle — e.g. a deletion, a rename, or a whole-file
@@ -1445,7 +1598,13 @@ COMMIT_FILES=$(git show --name-only --format= "$HEAD_SHA" | grep -v '^$')
 ```
 
 Compute `task_cycle_files` = normalized union of `dev.files_modified` + `dev.files_created`
-from the canonical dev-report (`docs/dev/dev-report-<TASK_ID>.json`).
+from the canonical dev-report (`docs/dev/dev-report-<TASK_ID>.json`), plus
+`dev.files_required_to_ship` taken from the item-3 shard-union declaration — the canonical
+cannot carry that key, so reading it from there would silently contribute nothing on every
+fan-out cycle. The third array belongs in this union because the
+question here is whether this cycle's SHIP-SET was already committed, not who authored it;
+omitting it would let a pre-empted required file read as "nothing to commit" and close the
+cycle without the recovery path ever running.
 
 Trigger `nothing_to_commit_precommitted` only when ALL THREE conditions hold:
 1. The candidate set is empty after exclusions.

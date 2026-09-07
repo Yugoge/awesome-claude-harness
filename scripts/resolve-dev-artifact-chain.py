@@ -232,6 +232,24 @@ def _lane_paths(dev_dir: Path, task_id: str, worker: str) -> dict[str, Path]:
     }
 
 
+def _is_non_worker_label(label: str, aggregate: ModuleType | None) -> bool:
+    """Whether the aggregate classifier treats a filename label as non-lane.
+
+    draft/final/fix/continuation/wip and iterN/retryN/attemptN name a revision of
+    one artifact, not a parallel lane.  Shared so every filename-derived label in
+    this module is classified by the one predicate; an asymmetry here would let
+    the same filename be a lane on one code path and not on another.  Without the
+    aggregate module no label can be excluded, which is the fail-closed answer.
+    """
+    if aggregate is None:
+        return False
+    lowered = label.lower()
+    return bool(
+        lowered in aggregate.NON_WORKER_LABELS
+        or aggregate.NON_WORKER_LABEL_RE.match(lowered)
+    )
+
+
 def _lane_shard_label(filename: str, task_id: str, aggregate: ModuleType) -> str | None:
     """Return the worker label when filename is a dev-report shard OF task_id.
 
@@ -246,10 +264,70 @@ def _lane_shard_label(filename: str, task_id: str, aggregate: ModuleType) -> str
     label = filename[len(prefix) : -len(suffix)]
     if not WORKER_RE.fullmatch(label):
         return None
-    lowered = label.lower()
-    if lowered in aggregate.NON_WORKER_LABELS or aggregate.NON_WORKER_LABEL_RE.match(lowered):
+    if _is_non_worker_label(label, aggregate):
         return None
     return label
+
+
+def _self_declared_identity(path: Path) -> str | None:
+    """Return the task identity an artifact declares about ITSELF, or ``None``.
+
+    ``None`` means "no usable self-declaration" and deliberately conflates every
+    degenerate shape — unreadable, non-UTF-8, empty, malformed JSON, a non-object
+    top level, an absent/blank/non-string identity key, or two keys that
+    contradict each other.  They collapse to one answer so that damaging or
+    omitting one's own identity can never buy a weaker verdict than declaring it
+    honestly; the caller treats ``None`` as "not vouched for".
+
+    Silent and read-only by design: the artifacts that belong to the chain are
+    read and reported on by the validator's own readers, so raising here would
+    duplicate their errors under a second code.
+    """
+    try:
+        raw = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return None
+    declared: set[str] = set()
+    if path.suffix == ".json":
+        try:
+            value = json.loads(raw)
+        except (json.JSONDecodeError, RecursionError):
+            return None
+        if not isinstance(value, dict):
+            return None
+        for key in ("request_id", "task_id"):
+            actual = value.get(key)
+            if not isinstance(actual, str) or not actual.strip():
+                return None
+            declared.add(actual.strip())
+    else:
+        for line in raw.splitlines():
+            cleaned = line.strip().replace("**", "").replace("`", "")
+            match = IDENTITY_RE.fullmatch(cleaned)
+            if match is not None:
+                declared.add(match.group(1))
+    if len(declared) != 1:
+        return None
+    return declared.pop()
+
+
+def _self_declared_worker(path: Path, task_id: str) -> str | None:
+    """Return the worker an artifact's own identity names, or ``None``.
+
+    A lane identity is exactly ``<task-id>-<worker>``.  An identity naming some
+    other task, or the parent task-id with no worker, is outside this task's lane
+    namespace and cannot vouch for the file, so it too yields ``None``.
+    """
+    identity = _self_declared_identity(path)
+    if identity is None:
+        return None
+    prefix = f"{task_id}-"
+    if not identity.startswith(prefix):
+        return None
+    worker = identity[len(prefix) :]
+    if not WORKER_RE.fullmatch(worker):
+        return None
+    return worker
 
 
 def _parent_paths(dev_dir: Path, task_id: str) -> dict[str, Path]:
@@ -290,8 +368,27 @@ def _optional_parent_result(
 
 
 def _find_undeclared_lane_artifacts(
-    validator: ChainValidator, workers: list[str]
+    validator: ChainValidator, workers: list[str], aggregate: ModuleType | None
 ) -> None:
+    """Report artifacts belonging to a lane the canonical never declared.
+
+    Which lane an artifact belongs to is settled by the artifact's own declared
+    identity, not by its filename.  A filename suffix is only a label a writer
+    chose: a round-two or round-one report of a declared lane carries a
+    distinguishing suffix while still declaring — and being — that lane's
+    artifact, and attributing it to a lane named after the whole suffix invents a
+    worker that never ran.  The identity fields are the authoritative statement of
+    what a file is, so they decide.
+
+    The filename remains the fallback, never an escape.  When a file declares no
+    usable identity (see ``_self_declared_identity``) it is not vouched for, and
+    its filename suffix is attributed to it exactly as before — so an artifact
+    cannot evade the check by dropping, blanking, or corrupting its own identity.
+    The non-worker label filter applies to that fallback only: it is a heuristic
+    about filenames, needed only where no authoritative evidence exists, and
+    applying it to a self-declared worker would let a lane exempt itself by
+    naming its files after a revision label.
+    """
     declared = set(workers)
     families = (
         ("ticket-", ".md"),
@@ -301,12 +398,19 @@ def _find_undeclared_lane_artifacts(
     for prefix, suffix in families:
         start = f"{prefix}{validator.task_id}-"
         for path in sorted(validator.dev_dir.glob(f"{start}*{suffix}")):
-            worker = path.name[len(start) : -len(suffix)]
+            worker = _self_declared_worker(path, validator.task_id)
+            source = "declared identity"
+            if worker is None:
+                worker = path.name[len(start) : -len(suffix)]
+                source = "filename, no usable declared identity"
+                if _is_non_worker_label(worker, aggregate):
+                    continue
             if worker not in declared:
                 validator.error(
                     "UNDECLARED_LANE_ARTIFACT",
                     _rel(path, validator.root),
-                    f"worker {worker!r} is not in canonical parallel_workers",
+                    f"worker {worker!r} (from {source}) is not in canonical "
+                    "parallel_workers",
                 )
 
 
@@ -521,7 +625,7 @@ def resolve_chain(project_root: Path | str, task_id: str) -> dict[str, Any]:
                 result["canonical_dev_report"],
                 f"parallel_workers {workers!r} do not exactly match shards {scanned_labels!r}",
             )
-        _find_undeclared_lane_artifacts(validator, workers)
+        _find_undeclared_lane_artifacts(validator, workers, aggregate)
 
         loaded_shards: list[tuple[str, dict[str, Any]]] = []
         completion_refs = [result["canonical_dev_report"]]

@@ -33,19 +33,34 @@ source "${CLAUDE_PROJECT_DIR}/.venv/bin/activate" 2>/dev/null \
   || source "$HOME/.claude/venv/bin/activate" 2>/dev/null \
   || true
 
-python3 - "$QA_PATH" "$MODE" <<'PYEOF'
+python3 - "$QA_PATH" "$MODE" "$SESSION_ID" <<'PYEOF'
 import json, os, sys
-path = sys.argv[1]
-mode = sys.argv[2]
-data = {}
-if os.path.exists(path):
-    try:
-        with open(path) as f:
-            loaded = json.load(f)
-        if isinstance(loaded, dict):
-            data = loaded
-    except Exception:
-        pass
+path, mode, sid = sys.argv[1], sys.argv[2], sys.argv[3]
+
+def die(msg):
+    print(f"ERROR: {msg}", file=sys.stderr)
+    raise SystemExit(1)
+
+# The sentinel is PRE-CREATED by the launcher (overnight-init.sh, or the /dev
+# Step-1 hook) and carries the agent_type/session_id fields the enforcement chain
+# resolves subagents through. Creating or repairing it here would quietly destroy
+# those fields and leave enforcement failing open, so an absent, unparseable, or
+# foreign-session sentinel is a LOUD refusal that touches nothing -- never a
+# silent rewrite. Writing stays IN PLACE (no temp+rename): under the overnight
+# boundary this file is a bind mountpoint and rename() over it returns EBUSY.
+if not os.path.exists(path):
+    die(f"qa sentinel missing (initialization did not run): {path}")
+try:
+    with open(path) as f:
+        data = json.load(f)
+except Exception as exc:
+    die(f"qa sentinel is not readable JSON ({exc}): {path}")
+if not isinstance(data, dict):
+    die(f"qa sentinel is not a JSON object: {path}")
+if data.get('agent_type') != 'qa':
+    die(f"qa sentinel agent_type={data.get('agent_type')!r}, expected 'qa': {path}")
+if data.get('session_id') != sid:
+    die(f"qa sentinel session_id={data.get('session_id')!r} != --session-id {sid!r}: {path}")
 data['qa_mode'] = mode
 with open(path, 'w') as f:
     json.dump(data, f)
