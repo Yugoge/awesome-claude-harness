@@ -20,7 +20,11 @@ import os
 import subprocess
 import sys
 from pathlib import Path
+from types import ModuleType
 from typing import Any
+
+sys.path.insert(0, str(Path(__file__).resolve().parent / "lib"))
+from sibling_loader import load_sibling_module  # noqa: E402
 
 
 SCHEMA_VERSION = 1
@@ -28,6 +32,15 @@ SCHEMA_VERSION = 1
 
 class PlanError(RuntimeError):
     """A fail-closed repository-plan admission error."""
+
+
+def _load_late_repair_controller() -> ModuleType:
+    """Load late-repair-controller.py (R4 tri-state guard).
+
+    Delegates to the single canonical implementation in
+    scripts/lib/sibling_loader.py.
+    """
+    return load_sibling_module("late-repair-controller.py", __file__)
 
 
 def _git_capture(repo_or_path: Path, *args: str) -> str:
@@ -80,7 +93,7 @@ def _contains(root: Path, path: Path) -> bool:
     return True
 
 
-def _load_report(path: Path, task_id: str) -> tuple[dict[str, Any], str]:
+def _load_report(path: Path, task_id: str, control_root: Path) -> tuple[dict[str, Any], str]:
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
@@ -99,6 +112,21 @@ def _load_report(path: Path, task_id: str) -> tuple[dict[str, Any], str]:
         section_name = "dev"
     elif path.name == f"do-report-{task_id}.json" and payload.get("source") == "do":
         section_name = "do"
+    elif path.name == f"dev-report-{task_id}.effective.json":
+        # R4 tri-state guard (Architect (f) v2, QA round-2 objection 3): a
+        # provenance-refresh artifact is accepted ONLY when this function
+        # independently re-derives corroboration itself -- never trusted
+        # from the caller's filename alone. State A (no run record at all)
+        # never reaches this branch. State C (present but uncorroborated,
+        # e.g. drift/corruption discovered after finalize) MUST fail closed
+        # here, never silently fall back to the canonical dev-report.
+        controller = _load_late_repair_controller()
+        state, resolved_path = controller.resolve_effective_report_state(control_root, task_id)
+        if state != "verified" or resolved_path is None or resolved_path.resolve() != path.resolve():
+            raise PlanError(
+                f"effective report present but not independently corroborated: {path}"
+            )
+        section_name = "dev"
     else:
         raise PlanError(f"report is neither a canonical dev report nor a source=do report: {path}")
     section = payload.get(section_name)
@@ -114,6 +142,14 @@ def _resolve_report(control_root: Path, task_id: str, explicit: str | None) -> P
             raise PlanError(f"explicit report does not exist: {report}")
         return report
     docs = control_root / "docs" / "dev"
+    # R4 tri-state guard: prefer a corroborated effective report ONLY when
+    # verify-disclosure independently admits it for this task-id (State B).
+    # No run record at all (State A) or an uncorroborated one (State C) both
+    # fall through to the unchanged canonical/do-report glob below.
+    controller = _load_late_repair_controller()
+    state, effective_path = controller.resolve_effective_report_state(control_root, task_id)
+    if state == "verified" and effective_path is not None and effective_path.is_file():
+        return effective_path.resolve()
     for name in (f"dev-report-{task_id}.json", f"do-report-{task_id}.json"):
         candidate = docs / name
         if candidate.is_file():
@@ -134,7 +170,7 @@ def build_plan(
     report_path = _resolve_report(control_root, task_id, report_arg)
     if not _contains(control_root, report_path):
         raise PlanError(f"report must resolve under the control repository: {report_path}")
-    payload, section_name = _load_report(report_path, task_id)
+    payload, section_name = _load_report(report_path, task_id, control_root)
     section = payload[section_name]
 
     supported: list[Path] = []

@@ -1,0 +1,52 @@
+{
+  "artifact_paths": [
+    "docs/dev/ticket-20260101-000000.md",
+    "docs/dev/context-20260101-000000.json",
+    "docs/dev/dev-report-20260101-000000.json",
+    "docs/dev/qa-report-20260101-000000.json",
+    "docs/dev/completion-20260101-000000.md"
+  ],
+  "canonical_dev_report": "docs/dev/dev-report-20260101-000000.json",
+  "checks": {
+    "canonical_fresh": "not_applicable",
+    "declared_paths_exist": true,
+    "file_unions_exact": "not_applicable"
+  },
+  "checks_not_applicable": {
+    "canonical_fresh": "relational comparison requiring two or more independent shard artifacts; a singular chain has no second artifact to compare against, so this check has no singular analogue",
+    "file_unions_exact": "relational comparison requiring two or more independent shard artifacts; a singular chain has no second artifact to compare against, so this check has no singular analogue"
+  },
+  "commit_whitelist_artifacts": [
+    "docs/dev/ticket-20260101-000000.md",
+    "docs/dev/context-20260101-000000.json",
+    "docs/dev/dev-report-20260101-000000.json",
+    "docs/dev/qa-report-20260101-000000.json",
+    "docs/dev/completion-20260101-000000.md"
+  ],
+  "completion": "docs/dev/completion-20260101-000000.md",
+  "errors": [
+    {
+      "code": "MISSING_ARTIFACT",
+      "detail": "required JSON artifact is absent",
+      "path": "docs/dev/qa-report-20260101-000000.json"
+    }
+  ],
+  "lanes": [],
+  "mode": "singular",
+  "optional_parent_artifacts": {},
+  "parallel_workers": [],
+  "parallel_workers_declaration": "absent",
+  "qa_inputs": [
+    {
+      "qa_report": "docs/dev/qa-report-20260101-000000.json",
+      "task_id": "20260101-000000"
+    }
+  ],
+  "report_paths": [
+    "docs/dev/dev-report-20260101-000000.json",
+    "docs/dev/qa-report-20260101-000000.json"
+  ],
+  "schema_version": 2,
+  "status": "fail",
+  "task_id": "20260101-000000"
+}

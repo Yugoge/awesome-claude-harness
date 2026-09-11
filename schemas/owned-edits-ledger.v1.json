@@ -12,9 +12,9 @@
 
   "x-consumer": {
     "path": "scripts/stage-owned-hunks.py",
-    "sha256": "6fef38d59b70c1a6bc0fba1cd2b3ce962d25e4140442ad6800c3fc5c718ff083",
-    "lines": 1110,
-    "measured_at": "2026-09-06",
+    "sha256": "ea15a1eb721dfe144dd117a4f8a92644187f5633d92ec6e8808fa757c424fcf5",
+    "lines": 1131,
+    "measured_at": "2026-09-10",
     "materializer": "agents/changelog-analyst.md Phase 5, anchor '2. Snapshot materialization (REQUIRED'",
     "binding": "ACTIVE, not decorative. tests/test_owned_edits_ledger_contract.py::test_consumer_digest_binding_is_active recomputes this digest from the delivered file and FAILS when it differs, so a consumer change cannot silently invalidate the rules derived from it. scripts/check-owned-edits-ledger.py additionally imports the consumer's own _count_occurrences/_locate_unique and asserts their empty-needle semantics at every startup, so a behavioural change is caught even within one digest.",
     "on_failure": "Do not re-pin the digest reflexively. Re-read the consumer's replay primitives and _load_untracked_modified_contract, confirm every rule below still describes them, and only then record the new digest."
@@ -46,9 +46,9 @@
       },
       {
         "id": "UMP-CANONICAL-ONLY",
-        "requirement": "The untracked_modified_provenance contract is only ever read out of the canonical report whose FILENAME is dev-report-<task_id>.json and whose sha256 is bound into the repository plan. A lane shard carrying it is inert.",
+        "requirement": "The untracked_modified_provenance contract is only ever read out of the canonical report whose FILENAME is dev-report-<task_id>.json and whose sha256 is bound into the repository plan. A lane shard carrying it is inert. R4 late-repair addition (spec-20260907-115508-lawful-commit-channel.md, codex round-2 finding #11): the consumer's `expected_name` check ALSO accepts the sibling basename dev-report-<task_id>.effective.json, but ONLY when the caller passes the CLI flag --effective-report-verified -- a flag only scripts/late-repair-controller.py finalize ever sets, and only after its own independent, out-of-process corroboration (verify-disclosure) has already succeeded. Without that flag this rule is completely unchanged: any other filename, including the effective one without the flag, is rejected exactly as before. This checker (check-owned-edits-ledger.py, unwired from the live gate -- see docs/dev/ticket-20260910-091226.md) does not know about the flag and still enforces the pre-R4 single-canonical-name rule; that is a disclosed, intentional scope boundary, not a bug -- wiring this checker into the live gate remains a separate, out-of-scope change.",
         "why_unexpressible": "Binds the document to its own filename and to an external digest.",
-        "consumer_source": "scripts/stage-owned-hunks.py def _load_untracked_modified_contract(), its `expected_name` filename check and the --report-sha256 digest gate that admits it",
+        "consumer_source": "scripts/stage-owned-hunks.py def _load_untracked_modified_contract(), its `expected_name`/`effective_name` filename check (gated on ns.effective_report_verified) and the --report-sha256 digest gate that admits it",
         "checker_rule_id": "UMP-LANE-ONLY"
       },
       {

@@ -1,0 +1,93 @@
+{
+  "artifact_paths": [
+    "docs/dev/dev-report-20260101-000000.json",
+    "docs/dev/completion-20260101-000000.md",
+    "docs/dev/ticket-20260101-000000-lane-a.md",
+    "docs/dev/context-20260101-000000-lane-a.json",
+    "docs/dev/dev-report-20260101-000000-lane-a.json",
+    "docs/dev/qa-report-20260101-000000-lane-a.json",
+    "docs/dev/ticket-20260101-000000-lane-b.md",
+    "docs/dev/context-20260101-000000-lane-b.json",
+    "docs/dev/dev-report-20260101-000000-lane-b.json",
+    "docs/dev/qa-report-20260101-000000-lane-b.json"
+  ],
+  "canonical_dev_report": "docs/dev/dev-report-20260101-000000.json",
+  "checks": {
+    "canonical_fresh": true,
+    "declared_paths_exist": true,
+    "file_unions_exact": true
+  },
+  "checks_not_applicable": {},
+  "commit_whitelist_artifacts": [
+    "docs/dev/dev-report-20260101-000000.json",
+    "docs/dev/completion-20260101-000000.md",
+    "docs/dev/ticket-20260101-000000-lane-a.md",
+    "docs/dev/context-20260101-000000-lane-a.json",
+    "docs/dev/dev-report-20260101-000000-lane-a.json",
+    "docs/dev/qa-report-20260101-000000-lane-a.json",
+    "docs/dev/ticket-20260101-000000-lane-b.md",
+    "docs/dev/context-20260101-000000-lane-b.json",
+    "docs/dev/dev-report-20260101-000000-lane-b.json",
+    "docs/dev/qa-report-20260101-000000-lane-b.json"
+  ],
+  "completion": "docs/dev/completion-20260101-000000.md",
+  "errors": [],
+  "lanes": [
+    {
+      "context": "docs/dev/context-20260101-000000-lane-a.json",
+      "dev_report": "docs/dev/dev-report-20260101-000000-lane-a.json",
+      "qa_report": "docs/dev/qa-report-20260101-000000-lane-a.json",
+      "task_id": "20260101-000000-lane-a",
+      "ticket": "docs/dev/ticket-20260101-000000-lane-a.md",
+      "worker": "lane-a"
+    },
+    {
+      "context": "docs/dev/context-20260101-000000-lane-b.json",
+      "dev_report": "docs/dev/dev-report-20260101-000000-lane-b.json",
+      "qa_report": "docs/dev/qa-report-20260101-000000-lane-b.json",
+      "task_id": "20260101-000000-lane-b",
+      "ticket": "docs/dev/ticket-20260101-000000-lane-b.md",
+      "worker": "lane-b"
+    }
+  ],
+  "mode": "fanout",
+  "optional_parent_artifacts": {
+    "context": {
+      "path": "docs/dev/context-20260101-000000.json",
+      "present": false
+    },
+    "qa_report": {
+      "path": "docs/dev/qa-report-20260101-000000.json",
+      "present": false
+    },
+    "ticket": {
+      "path": "docs/dev/ticket-20260101-000000.md",
+      "present": false
+    }
+  },
+  "parallel_workers": [
+    "lane-a",
+    "lane-b"
+  ],
+  "parallel_workers_declaration": "declared",
+  "qa_inputs": [
+    {
+      "qa_report": "docs/dev/qa-report-20260101-000000-lane-a.json",
+      "task_id": "20260101-000000-lane-a"
+    },
+    {
+      "qa_report": "docs/dev/qa-report-20260101-000000-lane-b.json",
+      "task_id": "20260101-000000-lane-b"
+    }
+  ],
+  "report_paths": [
+    "docs/dev/dev-report-20260101-000000.json",
+    "docs/dev/dev-report-20260101-000000-lane-a.json",
+    "docs/dev/qa-report-20260101-000000-lane-a.json",
+    "docs/dev/dev-report-20260101-000000-lane-b.json",
+    "docs/dev/qa-report-20260101-000000-lane-b.json"
+  ],
+  "schema_version": 2,
+  "status": "pass",
+  "task_id": "20260101-000000"
+}

@@ -661,7 +661,18 @@ def _load_untracked_modified_contract(ns, report_bytes):
     if not identities or any(identity != ns.task_id for identity in identities):
         return None, "canonical dev report task binding missing or mismatched"
     expected_name = "dev-report-%s.json" % ns.task_id
-    if os.path.basename(ns.untracked_modified_report) != expected_name:
+    effective_name = "dev-report-%s.effective.json" % ns.task_id
+    actual_name = os.path.basename(ns.untracked_modified_report)
+    # Narrowly-scoped R4 exception (codex round-2 finding #11): the
+    # .effective.json basename is accepted ONLY when the caller explicitly
+    # passes --effective-report-verified, which only
+    # late-repair-controller.py finalize sets, and only after its own
+    # independent corroboration has already succeeded. The plain canonical
+    # name stays the default/only accepted name otherwise -- this does not
+    # loosen the check for any ordinary (non-late-repair) invocation.
+    if actual_name == effective_name and getattr(ns, "effective_report_verified", False):
+        pass
+    elif actual_name != expected_name:
         return None, "canonical dev report filename does not match task"
 
     dev = document.get("dev")
@@ -876,6 +887,16 @@ def main(argv):
     ap.add_argument("--task-id")
     ap.add_argument("--plan-only", action="store_true")
     ap.add_argument("--approved-sha256")
+    ap.add_argument(
+        "--effective-report-verified",
+        action="store_true",
+        help=(
+            "R4 late-repair only: authorizes --untracked-modified-report to accept "
+            "the dev-report-<task-id>.effective.json basename. Only "
+            "late-repair-controller.py finalize sets this, and only after its own "
+            "independent corroboration has already succeeded."
+        ),
+    )
     try:
         ns = ap.parse_args(argv)
     except SystemExit as exc:

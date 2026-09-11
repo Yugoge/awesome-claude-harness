@@ -14,6 +14,42 @@ Exit 0 in both cases; non-zero only on argument errors.
 import argparse
 import os
 import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent / "lib"))
+from sibling_loader import load_sibling_module  # noqa: E402
+
+
+def _load_late_repair_controller():
+    """Load late-repair-controller.py (R4 tri-state guard).
+
+    Delegates to the single canonical implementation in
+    scripts/lib/sibling_loader.py.
+    """
+    return load_sibling_module("late-repair-controller.py", __file__)
+
+
+_FAIL_CLOSED = object()
+
+
+def _tri_state_guard(candidate_root, task_id):
+    """R4 tri-state guard for one candidate project root.
+
+    Returns the verified effective report path (State B), the sentinel
+    _FAIL_CLOSED (State C -- a run record/effective report exists but
+    corroboration fails; caller MUST NOT fall back to stale canonical), or
+    None (State A -- no late-repair state at all; caller's existing
+    canonical/fallback resolution is unaffected).
+    """
+    controller = _load_late_repair_controller()
+    state, effective_path = controller.resolve_effective_report_state(
+        Path(candidate_root), task_id
+    )
+    if state == "verified" and effective_path is not None and effective_path.is_file():
+        return str(effective_path)
+    if state == "invalid":
+        return _FAIL_CLOSED
+    return None
 
 
 def parse_changed_paths(lines):
@@ -50,6 +86,12 @@ def resolve(task_id, git_root, control_root, changed_paths):
         dev_report_path = None
         while True:
             if os.path.isdir(os.path.join(candidate, "docs", "dev")):
+                guard = _tri_state_guard(candidate, task_id)
+                if guard is _FAIL_CLOSED:
+                    return None
+                if guard is not None:
+                    dev_report_path = guard
+                    break
                 path = os.path.join(candidate, "docs", "dev", f"dev-report-{task_id}.json")
                 if os.path.isfile(path):
                     dev_report_path = path
@@ -60,9 +102,15 @@ def resolve(task_id, git_root, control_root, changed_paths):
             candidate = parent
 
     if dev_report_path is None:
-        fallback = os.path.join(control_root, "docs", "dev", f"dev-report-{task_id}.json")
-        if os.path.isfile(fallback):
-            dev_report_path = fallback
+        guard = _tri_state_guard(control_root, task_id)
+        if guard is _FAIL_CLOSED:
+            return None
+        if guard is not None:
+            dev_report_path = guard
+        else:
+            fallback = os.path.join(control_root, "docs", "dev", f"dev-report-{task_id}.json")
+            if os.path.isfile(fallback):
+                dev_report_path = fallback
 
     return dev_report_path
 
