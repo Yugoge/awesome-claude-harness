@@ -4,7 +4,7 @@ Stop Hook: Block conversation termination until overnight end-time.
 
 Logic:
   1. Read JSON from stdin (session_id)
-  2. Scan for any .claude/overnight-state-*.json files
+  2. Load only .claude/overnight-state-<session_id>.json
   3. If no state file: exit 0 (allow stop)
   4. If current time < end_time: exit 2 (block stop)
   5. If current time >= end_time: exit 0 (allow stop)
@@ -26,8 +26,10 @@ if str(_HOOKS_DIR) not in sys.path:
     sys.path.insert(0, str(_HOOKS_DIR))
 
 try:
+    from lib import session_resources
     from lib.closeout import has_pending_required_calls, run_cycle_closeout
 except Exception:  # pragma: no cover - fail-soft if lib missing
+    session_resources = None  # type: ignore[assignment]
     has_pending_required_calls = None  # type: ignore[assignment]
     run_cycle_closeout = None  # type: ignore[assignment]
 
@@ -51,20 +53,14 @@ def _try_load_json(path: Path) -> dict | None:
 
 
 def load_state(project_dir: Path, session_id: str) -> dict | None:
-    """Load overnight state file. Tries exact session_id match first, then scans."""
-    claude_dir = project_dir / '.claude'
-    # Prefer exact match for this session
-    if session_id:
-        exact = claude_dir / f'overnight-state-{session_id}.json'
-        state = _try_load_json(exact)
-        if state:
-            return state
-    # Fallback: scan all state files (backward compat / legacy "default" naming)
-    for p in sorted(claude_dir.glob('overnight-state-*.json')):
-        state = _try_load_json(p)
-        if state:
-            return state
-    return None
+    """Load only the exact session state; global/newest scans are unauthorized."""
+    if not session_id:
+        return None
+    exact = project_dir / '.claude' / f'overnight-state-{session_id}.json'
+    state = _try_load_json(exact)
+    if not state or state.get('session_id') != session_id:
+        return None
+    return state
 
 
 def parse_end_time(state: dict) -> datetime | None:
@@ -210,8 +206,35 @@ def block_with_message(end_time: datetime, state: dict) -> None:
     sys.exit(2)
 
 
-def _enforce_timelock(session_id: str, state: dict) -> None:
+
+
+def _publish_terminal_receipt(
+    project_dir: Path, session_id: str, state: dict, terminal_status: str
+) -> bool:
+    """Publish evidence only; this writer never finalizes or signals resources."""
+    if session_resources is None:
+        return False
+    try:
+        result = session_resources.publish_overnight_receipt(
+            project_dir,
+            claude_session_id=session_id,
+            state=state,
+            terminal_status=terminal_status,
+        )
+    except (OSError, ValueError) as exc:
+        sys.stderr.write(
+            f'[stop-overnight-timelock] terminal receipt not published: {exc}\n'
+        )
+        return False
+    return result.get('status') == 'pass'
+
+def _enforce_timelock(session_id: str, state: dict, project_dir: Path | None = None) -> None:
     """Run closeout + apply blocking rules. Exits 0 or 2 directly."""
+    project_dir = project_dir or Path(os.environ.get('CLAUDE_PROJECT_DIR', os.getcwd()))
+    terminal_hint = state.get('terminal_status') or state.get('status')
+    if terminal_hint in {'cancelled_by_user', 'user_cancelled', 'cancelled'}:
+        _publish_terminal_receipt(project_dir, session_id, state, 'cancelled_by_user')
+        sys.exit(0)
     end_time = parse_end_time(state)
     end_time_expired = end_time is not None and datetime.now() >= end_time
     # Always run closeout (produces harness-report). HARD CUTOVER: closeout
@@ -227,6 +250,7 @@ def _enforce_timelock(session_id: str, state: dict) -> None:
         sys.exit(0)
     if datetime.now() < end_time:
         block_with_message(end_time, state)
+    _publish_terminal_receipt(project_dir, session_id, state, 'completed_by_deadline')
     sys.exit(0)
 
 
@@ -244,7 +268,7 @@ def main():
         _pdir = Path(os.environ.get('CLAUDE_PROJECT_DIR', os.getcwd()))
         _st = load_state(_pdir, _sid)
         _et = parse_end_time(_st) if _st else None
-        if _et is None or datetime.now() >= _et:
+        if _et is None:
             sys.exit(0)
 
     session_id = context.get('session_id', '')
@@ -257,7 +281,7 @@ def main():
     if is_session_mismatch(session_id, state):
         sys.exit(0)
 
-    _enforce_timelock(session_id, state)
+    _enforce_timelock(session_id, state, project_dir)
 
 
 if __name__ == '__main__':

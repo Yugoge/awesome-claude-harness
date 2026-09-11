@@ -7,7 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- `/spec-update --update` mode: append enrichment content to an existing
+  spec's Section 5 without implying a new dev cycle, distinct from the
+  default continuation-spec mode. Requires an explicit `--spec <path>`
+  naming an existing spec file; there is no auto-resolution fallback. Also
+  added an explicit `--continue` flag as a named alias for the existing
+  default (no-flag) continuation-spec behavior. `--update`, `--continue`,
+  and `--temp` are mutually exclusive.
+
 ### Changed
+- Moved `/spec-update`'s inline rename-history note out of the live command
+  body and frontmatter into this changelog entry: the command was previously
+  `/update` at `~/.claude/commands/update.md`, then renamed to
+  `/spec-continue`, and is now `/spec-update`. The renames (which predate the
+  `1.0.0` tag) resolved a name collision and improved clarity; that history
+  no longer lives in the command's operative instructions.
 - **Version claim held below a stable `1.0.0`.** `VERSION` now reads `1.0.0-dev`.
   The previous unconditioned `1.0.0` marker overclaimed: it was never published as
   a git tag, and the release-hygiene work it implies was still open. The marker is

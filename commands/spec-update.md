@@ -1,6 +1,6 @@
 ---
-description: Continuation spec update or temp session note (was /update then /spec-continue — renamed to avoid collision with MAP's /update portfolio mutation command)
-argument-hint: "[--temp] [--spec <path>] [what the next session should focus on]"
+description: Update an existing spec, continue unfinished development, or write a temp session note.
+argument-hint: "[--update --spec <path> | --continue | --temp] [--spec <path>] [what the next session should focus on]"
 disable-model-invocation: true
 ---
 
@@ -10,23 +10,29 @@ Turn unfinished work into a continuation spec that a fresh Claude Code or Codex
 session can continue with `/dev`. Use a compact temp note only when explicitly
 requested for non-development session continuity.
 
-**Migration note**: This command was previously `/update` at `~/.claude/commands/update.md`,
-then renamed to `/spec-continue`, and is now `/spec-update`. The renames resolve name
-collisions and improve clarity. Users with muscle-memory for `/update --temp` should
-now use `/spec-update --temp` instead.
-
-Inspired by Matt Pocock's `mattpocock/skills` handoff skill; renamed and adapted here for
+Inspired by Matt Pocock's `mattpocock/skills` handoff skill; adapted here for
 our `spec → dev → close → commit → push` workflow.
 
 ## Mode selection
 
-1. **Continuation-spec mode (default)** — use when there is unfinished
-   development work after `/dev`, `/redev`, or a failed `/close`, or when the
-   user says to continue/improve the plan. The output is a spec under
-   `docs/dev/specs/`.
-2. **Temp-note mode (`--temp`)** — use only when the user explicitly asks for a
+`--update`, `--continue`, and `--temp` are mutually exclusive select-one
+flags. Dispatch order:
+
+1. If both `--update` and `--temp` are passed, stop with a mutual-exclusivity
+   error — do not guess which was intended.
+2. **Update mode (`--update`)** — pure enrichment of an existing spec's
+   Section 5, with no dev-cycle semantics. Requires an explicit `--spec
+   <path>` naming an existing spec file; if `--spec` is missing or the path
+   does not exist, stop with an error. There is no auto-resolution fallback.
+   See `## Update mode` below.
+3. **Temp-note mode (`--temp`)** — use only when the user explicitly asks for a
    session/bootstrap note, or when `/commit`/`/push` need a non-repo recovery
    note after branch-moving actions. The output is a temp markdown file.
+4. **Continuation-spec mode (default)** — use when there is unfinished
+   development work after `/dev`, `/redev`, or a failed `/close`, or when the
+   user says to continue/improve the plan. The output is a spec under
+   `docs/dev/specs/`. `--continue` is an explicit alias for this default
+   (no-flag) behavior.
 
 ## Continuation-spec mode
 
@@ -144,6 +150,32 @@ Task/spec id: <id or "unknown">
 
 If `$ARGUMENTS` contains free-form text, treat it as the next-session focus and
 tailor the `Resume prompt`, `Next actions`, and `Suggested skills` around it.
+
+## Update mode (`--update`)
+
+Use `--update` to append enrichment content to an existing spec's Section 5
+without implying an unfinished `/dev` cycle. This mode never creates a new
+`### Cycle N` heading and never touches Sections 1-4 or 6-9.
+
+Resolution: `--update` requires an explicit `--spec <path>` naming an existing
+spec file. If `--spec` is missing or the path does not exist, stop with an
+error — do not fall back to the active `/dev` artifact chain and do not
+invoke `scripts/resolve-dev-artifact-chain.py`. Update mode has no task-id or
+dev-cycle reconciliation concept.
+
+Append the enrichment content within Section 5 only, as a new `### 5.N`
+subsection. If the target spec's Section 5 already uses numbered `### 5.N`
+headings, use `max(N) + 1`; otherwise follow whatever convention that
+specific target spec already uses.
+
+If the target spec already has `docs/dev/specs/<spec-id>/views/` or
+`.claude/specs/<spec-id>/cp-state-*.json`, record in Section 8 that those
+split views/checkpoints predate this update and must not be treated as fresh
+unless regenerated — the same rule Continuation-spec mode applies for its own
+appends.
+
+Do not write the continuation marker comment that Continuation-spec mode
+writes at the start of a new cycle block; Update mode has no cycle block.
 
 ## Universal rules
 
