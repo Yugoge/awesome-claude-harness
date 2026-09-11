@@ -215,5 +215,28 @@
       "detail": "Any consumer that pinned the iteration-1 draft path docs/dev/mat-doc10-writer-order-contract.v2.json must re-point to docs/reference/mat-doc10-writer-order.v2.json. The draft is gitignored (.gitignore:142) and therefore not clone-durable; see the durability block.",
       "owner": "LANE-DOC BA"
     }
-  ]
+  ],
+  "reconciliation_record": {
+    "gate_mat_doc10": {
+      "active_binding": "docs/reference/mat-doc10-writer-order.v2.json#lane_doc_precondition",
+      "predicates": [
+        "contract file docs/reference/mat-doc10-writer-order.v2.json exists",
+        "contract parses as JSON",
+        "single_writer_map.SU_PUBLISH.status == 'complete'",
+        "every SU_PUBLISH.evidence.file_sha256 entry equals the sha256 of the live worktree file"
+      ],
+      "superseded_binding_note": "GATE-MAT-DOC10 previously bound, in ticket prose only, to a superseded canonical digest for a since-abolished admission ceremony (see reconciliation_notes[] above for the historical reference, retained unmodified). The active binding now sources its predicate list from this contract's own lane_doc_precondition object at runtime rather than a hardcoded digest.",
+      "su_publish_evidence_match_count_at_recording_time": "0/4",
+      "su_publish_gap_status": "0/4 SU_PUBLISH.evidence.file_sha256 entries match the current main checkout as of this recording (commands/spec-update.md and CHANGELOG.md hash-mismatch; scripts/spec-update-contract.py and tests/test_spec_update_command_contracts.py are absent). Repointing this binding does not by itself unblock LANE-DOC's P2 dispatch: landing LANE-SU's own P1 deliverables so this predicate evaluates true is a separate, LANE-SU-owned prerequisite, out of this lane's scope."
+    },
+    "readme_ownership": {
+      "decision": "No conflict exists at the implementation level. Root README.md is DOC-owned/hand-maintained; GENERATE-phase ownership is scoped to marker-bearing files only, never the root README.md.",
+      "evidence": "hooks/doc_sync/regen_readme.py's _readme_needs_update() guard returns False for root README.md (no <!-- AUTO:readme-stats --> marker present), and regen_readme() returns before any write; empirically verified in-process this cycle: _readme_needs_update(Path('README.md')) == False and sha256 of README.md identical before/after calling regen_readme(Path('.'), Path('.')); positive control _readme_needs_update() on commands/README.md and scripts/README.md (marker-bearing) == True for both."
+    },
+    "draft_path_status": {
+      "decision": "docs/dev/mat-doc10-writer-order-contract.v2.json is confirmed non-authoritative, superseded evidence; no live consumer references it (grep across hooks/, scripts/, commands/, agents/ returned zero hits).",
+      "tracked_target": "docs/reference/mat-doc10-writer-order.v2.json",
+      "superseded_draft_path": "docs/dev/mat-doc10-writer-order-contract.v2.json"
+    }
+  }
 }
