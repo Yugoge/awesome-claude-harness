@@ -106,10 +106,16 @@ Before dispatching changelog-analyst, write the appropriate authorization token:
 
   The fixed entrypoint is
   `scripts/resolve-dev-artifact-chain.py --task-id <id> --project-dir <root>`.
-  Require exit 0 and `status == "pass"` and retain the complete JSON. Exit 2 or
-  `status == "fail"` blocks before grants, dry-run staging, or dispatch. A
-  source=`do` report has no `/dev` chain, so set `ARTIFACT_CHAIN=""` and retain
-  the existing do-report whitelist path.
+  Require exit 0 and `status in {"pass", "pass_with_exceptions"}` and retain
+  the complete JSON. Exit 2 or `status == "fail"` blocks before grants,
+  dry-run staging, or dispatch. `pass_with_exceptions` (ticket 20260911-011232)
+  is not a new trust decision at this gate: Step 3 above already required a
+  passing `CLOSE: YES` verdict, and `/close`'s own QA debate already
+  independently corroborated every `disclosed_exceptions[]` entry before
+  granting it -- this check consumes a chain a prior gate already vouched
+  for, it does not itself widen admission. A source=`do` report has no
+  `/dev` chain, so set `ARTIFACT_CHAIN=""` and retain the existing do-report
+  whitelist path.
 
   Resolve roots from the active environment, de-duplicate them through the helper,
   and capture stdout without `eval`. Preserve the existing subproject resolution:
@@ -307,11 +313,12 @@ Constraints:
 - CONTROL_ROOT is the fallback root for dev-report resolution; changelog-analyst MUST apply the subproject path-walk (dirname-of-changed-files → commonpath → walk up to docs/dev/) and check the subproject docs/dev/ first before falling back to ${CONTROL_ROOT}/docs/dev/
 - GIT_ROOT must be computed per repo via `git rev-parse --show-toplevel`; never conflate with CONTROL_ROOT
 - In normal mode, process exactly `REPOSITORY_PLAN.repositories[]` in `order`. Verify the plan schema/task/report digest and each live repo/branch/HEAD before staging; never add a repo from the report or dirty status. Bulk mode alone retains the legacy CONTROL_ROOT + NESTED_REPO sweep.
-- In normal `/dev` mode, require `ARTIFACT_CHAIN.status == "pass"`,
-  `ARTIFACT_CHAIN.task_id == TASK_ID`, and its canonical report to equal the
-  plan's report. The base cycle-artifact whitelist is exactly
-  `ARTIFACT_CHAIN.commit_whitelist_artifacts`; this admits validated lane
-  artifacts in fan-out mode and never invents optional parent artifacts.
+- In normal `/dev` mode, require `ARTIFACT_CHAIN.status in {"pass",
+  "pass_with_exceptions"}`, `ARTIFACT_CHAIN.task_id == TASK_ID`, and its
+  canonical report to equal the plan's report. The base cycle-artifact
+  whitelist is exactly `ARTIFACT_CHAIN.commit_whitelist_artifacts`; this
+  admits validated lane artifacts in fan-out mode and never invents optional
+  parent artifacts.
 - **TOCTOU guard (pre-commit QA gate)**: when `QA_APPROVED_FILES` is non-empty (the Step 6 gate ran and approved this exact set), it is the commit CEILING. Re-classify normally, then intersect the classified set with `QA_APPROVED_FILES`: stage/commit ONLY files in both. If your fresh classification yields any file NOT in `QA_APPROVED_FILES` (working tree changed since QA review), do NOT commit the unreviewed file; if the divergence is material (a QA-approved file vanished, or a new non-approved candidate appeared that you would otherwise commit), ABORT with `failure_code: scope_violation` rather than commit an unreviewed set. When `QA_APPROVED_FILES` is empty (FORCE bypass), this guard does not apply.
 - Stage only files in the classified set; never use `git add -A` or `git add .`
 - Commit message must NOT match: `\bsync\b.*\buncommitted\b` or `chore\(claude\)\s*:\s*sync`

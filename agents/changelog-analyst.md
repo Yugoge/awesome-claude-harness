@@ -121,7 +121,7 @@ handling are all unchanged).
 - `FORCE` — `true` | `false`
 - `REPOSITORY_PLAN` — required in normal mode. Exact schema-1 JSON emitted by `resolve-commit-repos.py`, including task/report digest and ordered repository-specific repo/branch/HEAD/path bindings. Empty only in bulk mode, which preserves the legacy control+nested sweep.
 - `ARTIFACT_CHAIN` — required and non-empty for normal `/dev` mode. Exact
-  status=pass JSON emitted by
+  status in {"pass", "pass_with_exceptions"} JSON emitted by
   `scripts/resolve-dev-artifact-chain.py --task-id <id> --project-dir <root>`.
   Empty only in bulk mode or when the normal source is a source=`do` report.
 - `QA_APPROVED_FILES` — optional; when non-empty, the commit CEILING set approved by /commit's Step 6 pre-commit QA gate. You MUST NOT stage or commit any file outside this set: re-classify normally, intersect the classified set with `QA_APPROVED_FILES`, and act only on the intersection. If your fresh classification would otherwise commit a file NOT in `QA_APPROVED_FILES` (working tree drifted since QA review) and the divergence is material, ABORT with `failure_code: scope_violation` rather than commit an unreviewed file. Empty/absent (e.g. FORCE bypass) → this ceiling does not apply.
@@ -150,14 +150,21 @@ Any mismatch returns `failed/repository_plan_invalid` before index mutation. Do 
 silently rebuild or widen the plan inside this agent.
 
 When the plan's report is `dev-report-<TASK_ID>.json`, fail closed unless
-`ARTIFACT_CHAIN` is an object with `status == "pass"`, `task_id == TASK_ID`,
-`mode` in `{singular, fanout}`, and `canonical_dev_report` resolving to the same
-file as `REPOSITORY_PLAN.report_path`. Require arrays for `lanes`,
-`report_paths`, `artifact_paths`, `commit_whitelist_artifacts`, and `qa_inputs`.
-The passed chain result is the only authority for base cycle artifacts; do not
-re-scan lane suffixes or impose a singular parent shape. A source=`do` plan
-instead requires an empty `ARTIFACT_CHAIN` and follows the existing do-report
-path.
+`ARTIFACT_CHAIN` is an object with `status in {"pass", "pass_with_exceptions"}`,
+`task_id == TASK_ID`, `mode` in `{singular, fanout}`, and `canonical_dev_report`
+resolving to the same file as `REPOSITORY_PLAN.report_path`. Require arrays for
+`lanes`, `report_paths`, `artifact_paths`, `commit_whitelist_artifacts`, and
+`qa_inputs`. `pass_with_exceptions` (ticket 20260911-011232) admits here
+without this agent widening admission on its own judgment: by the time
+changelog-analyst runs, `/commit`'s own Step 3 close-gate has already required
+a passing `CLOSE: YES` verdict from `/close`, and `/close`'s own QA debate
+already independently corroborated every `disclosed_exceptions[]` entry
+before granting that verdict -- this check consumes a chain a prior gate
+already vouched for, it does not itself adjudicate the exceptions. A genuine
+`status == "fail"` is refused exactly as before. The passed chain result is
+the only authority for base cycle artifacts; do not re-scan lane suffixes or
+impose a singular parent shape. A source=`do` plan instead requires an empty
+`ARTIFACT_CHAIN` and follows the existing do-report path.
 
 After validation, set `GIT_ROOT` to each plan entry in ascending `order` and run
 `git -C "${GIT_ROOT}" status --porcelain=v1`. Parse each output. Extract ALL files
