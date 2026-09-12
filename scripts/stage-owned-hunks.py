@@ -251,7 +251,7 @@ def _replay_live(snapshot, edits, rel):
     return replay, ""
 
 
-def _live_patch(snapshot, replay, rel):
+def _live_patch(snapshot, replay, rel, context=0):
     with tempfile.TemporaryDirectory() as td:
         a_path = os.path.join(td, "a")
         b_path = os.path.join(td, "b")
@@ -260,7 +260,7 @@ def _live_patch(snapshot, replay, rel):
         with open(b_path, "wb") as fh:
             fh.write(replay)
         proc = subprocess.run(
-            ["git", "diff", "--no-index", "-U0", "--src-prefix=a/",
+            ["git", "diff", "--no-index", "-U%d" % context, "--src-prefix=a/",
              "--dst-prefix=b/", "--", a_path, b_path],
             stdout=subprocess.PIPE, stderr=subprocess.PIPE,
         )
@@ -306,8 +306,71 @@ def _patch_headers_and_hunks(patch):
     return b"".join(header), hunks
 
 
-def _filter_segments_against_index(git_root, segments):
-    """Return segment copies containing only hunks composable in one index."""
+def _index_forward_anchor_resolve(current_bytes, segment, hunk):
+    """Verify and re-resolve a live segment's pure-insertion hunk's TRUE
+    insertion point in `current_bytes` (the scratch index buffer under
+    test) -- the forward-direction counterpart of `_content_anchor_retry`'s
+    reverse-direction resolution, reusing the same fail-closed primitives
+    (`_resolve_pure_insertion_anchor`, `_locate_unique`, `_regenerate_hunk`)
+    rather than reimplementing uniqueness logic.
+
+    A zero-context pure-insertion hunk carries no old/context text, so
+    `git apply` cannot fail to match it regardless of where it lands; its
+    declared offset is meaningful only in the coordinate space of the
+    segment's own `pre_edit_snapshot`, which the tracked index/HEAD this
+    function verifies against is allowed to diverge from by design (see
+    module docstring). Returns (corrected_hunk, anchor, inserted_text)
+    positioned in `current_bytes`'s own coordinate space on a unique,
+    verified anchor match; None otherwise (non-insertion hunk, or 0/2+
+    anchor matches in the ledger or in `current_bytes`) -- fail-closed
+    EXCLUDE, per the "no fail-open path" invariant.
+    """
+    parsed = _parse_hunk_header(hunk)
+    if parsed is None or parsed[1] != 0:
+        return None
+    inserted_text = _hunk_inserted_text(hunk)
+    if not inserted_text:
+        return None
+    anchor = _resolve_pure_insertion_anchor(segment, inserted_text)
+    if not anchor:
+        return None
+    off = _locate_unique(current_bytes, anchor)
+    if off is None:
+        return None
+    point = off + len(anchor)
+    target = current_bytes[:point] + inserted_text + current_bytes[point:]
+    corrected_hunk = _regenerate_hunk(current_bytes, target)
+    if corrected_hunk is None:
+        return None
+    return corrected_hunk, anchor, inserted_text
+
+
+def _filter_segments_against_index(git_root, rel, segments):
+    """Return segment copies containing only hunks composable in one index.
+
+    A `kind == "live"` segment's zero-context PURE-INSERTION hunk (old_count
+    == 0) carries no old/context text, so the naive `git apply` below cannot
+    fail to match it regardless of where it lands against this scratch
+    index (a copy of the real tracked HEAD, which the hunk's own
+    `pre_edit_snapshot`-relative offset is allowed to diverge from by
+    design -- see module docstring). Such a hunk's true position is
+    verified and re-resolved by content anchor via
+    `_index_forward_anchor_resolve` BEFORE it is tested here: the CORRECTED
+    hunk (not the raw, unverifiable one) is what is actually applied to
+    this scratch index, so later hunks in this same pass are tested
+    against an accurately-reconstructed buffer. The RAW hunk is still what
+    is recorded in `patch_hunks`/`patch` -- `_filter_segments_against_worktree`
+    needs that unchanged coordinate space for its own worktree-reversal
+    round trip -- and the (anchor, inserted_text) pair is carried forward
+    on `pending_insertions` so `_composed_main`'s existing staging-time
+    re-resolution (added by 8bcb4532) positions it correctly against the
+    REAL buffer it is finally staged into, exactly like an insertion
+    corrected by the worktree-reversal leg. A hunk whose anchor cannot be
+    uniquely resolved (0 or 2+ matches, in the ledger or in this buffer) is
+    fail-closed EXCLUDEd here rather than accepted on an unverifiable
+    offset. Every other hunk (non-insertion, or not `kind == "live"`) keeps
+    the prior, unchanged behavior.
+    """
     td = tempfile.mkdtemp()
     try:
         rc, index_path, err = _git(git_root, ["rev-parse", "--git-path", "index"])
@@ -324,8 +387,31 @@ def _filter_segments_against_index(git_root, segments):
         for segment in segments:
             header, hunks = _patch_headers_and_hunks(segment["patch"])
             accepted = []
+            pending = dict(segment.get("pending_insertions") or {})
             for hunk in hunks:
-                candidate = header + hunk
+                to_apply, resolved = hunk, None
+                if segment.get("kind") == "live":
+                    rc_show, current_bytes, _ = _git(
+                        git_root, ["show", ":%s" % rel], env=env
+                    )
+                    if not rc_show:
+                        resolved = _index_forward_anchor_resolve(
+                            current_bytes, segment, hunk
+                        )
+                    is_pure_insertion = (
+                        _hunk_inserted_text(hunk) is not None
+                        and _parse_hunk_header(hunk) is not None
+                        and _parse_hunk_header(hunk)[1] == 0
+                    )
+                    if resolved is None and is_pure_insertion:
+                        # A live pure-insertion hunk whose true anchor could
+                        # not be uniquely re-resolved against this buffer --
+                        # fail-closed EXCLUDE rather than trust its
+                        # unverifiable snapshot-relative offset.
+                        continue
+                    if resolved is not None:
+                        to_apply = resolved[0]
+                candidate = header + to_apply
                 rc, _, _ = _git(
                     git_root,
                     ["apply", "--cached", "--recount", "--unidiff-zero", "-"],
@@ -333,11 +419,14 @@ def _filter_segments_against_index(git_root, segments):
                 )
                 if not rc:
                     accepted.append(hunk)
+                    if resolved is not None:
+                        pending[hunk] = (resolved[1], resolved[2])
             item = dict(segment)
             item["patch_header"] = header
             item["patch_hunks"] = accepted
             item["patch"] = header + b"".join(accepted) if accepted else b""
             item["original_hunk_count"] = segment.get("original_hunk_count", len(hunks))
+            item["pending_insertions"] = pending
             result.append(item)
         return result, ""
     finally:
@@ -428,7 +517,27 @@ def _resolve_pure_insertion_anchor(segment, inserted_text):
     """Return the non-empty anchor bytes for a pure-insertion hunk within
     `segment`, or None if no unique anchor can be derived for its kind."""
     if segment.get("kind") == "live":
-        return _live_pure_insertion_anchor(segment.get("edits"), inserted_text)
+        anchor = _live_pure_insertion_anchor(segment.get("edits"), inserted_text)
+        if anchor:
+            return anchor
+        # Fallback: a ledger entry that replaces a whole surrounding block
+        # (e.g. a rewritten method whose new body happens to add these exact
+        # lines somewhere in its middle) is not a plain `new == old +
+        # inserted_text` append, so the prefix/suffix check above cannot
+        # match it even though the snapshot->replay BYTE diff still renders
+        # it as a pure-insertion hunk. Re-derive the anchor the same way
+        # _checkpoint_pure_insertion_anchor already does for the checkpoint
+        # kind: from the stable, UNCHANGED context lines a context=3 diff of
+        # this same snapshot->replay transformation places immediately
+        # before the identical inserted_text -- content that does not
+        # depend on how the ledger entry's own old/new strings were shaped.
+        snapshot = segment.get("pre_edit_snapshot")
+        replay = segment.get("replay")
+        if isinstance(snapshot, (bytes, bytearray)) and isinstance(replay, (bytes, bytearray)):
+            validation_patch, verr = _live_patch(snapshot, replay, "live", context=3)
+            if not verr and validation_patch:
+                return _checkpoint_pure_insertion_anchor(validation_patch, inserted_text)
+        return None
     if segment.get("kind") == "checkpoint":
         return _checkpoint_pure_insertion_anchor(
             segment.get("validation_patch"), inserted_text
@@ -666,6 +775,11 @@ def _composed_main(ns, plan):
             prepared.append({
                 "kind": kind, "edits": edits, "patch": patch,
                 "original_hunk_count": len(live_hunks),
+                # Carried only so _resolve_pure_insertion_anchor's live-kind
+                # fallback can re-derive a context=3 validation patch on
+                # demand (mirrors the checkpoint kind's own validation_patch)
+                # -- not otherwise read by the index/worktree filters.
+                "pre_edit_snapshot": snapshot, "replay": replay,
             })
         else:
             return _excluded("unknown provenance segment kind at position %d" % number)
@@ -677,7 +791,7 @@ def _composed_main(ns, plan):
     candidates = prepared
     total_hunks = sum(item["original_hunk_count"] for item in prepared)
     for _ in range(total_hunks + 1):
-        indexed, error = _filter_segments_against_index(ns.git_root, candidates)
+        indexed, error = _filter_segments_against_index(ns.git_root, rel, candidates)
         if indexed is None:
             return _excluded(error)
         current_filtered, reversed_bytes = _filter_segments_against_worktree(

@@ -12,8 +12,8 @@
 
   "x-consumer": {
     "path": "scripts/stage-owned-hunks.py",
-    "sha256": "55b4bd031b84bcf8a2f058bed5e925d3736130fb2820ea42e2a4a35c725d9609",
-    "lines": 1400,
+    "sha256": "b041ba3aaffb464b484150d18e44608e43ea57cfb7eb1a512d797dda8cd0fb72",
+    "lines": 1514,
     "measured_at": "2026-09-12",
     "materializer": "agents/changelog-analyst.md Phase 5, anchor '2. Snapshot materialization (REQUIRED'",
     "binding": "ACTIVE, not decorative. tests/test_owned_edits_ledger_contract.py::test_consumer_digest_binding_is_active recomputes this digest from the delivered file and FAILS when it differs, so a consumer change cannot silently invalidate the rules derived from it. scripts/check-owned-edits-ledger.py additionally imports the consumer's own _count_occurrences/_locate_unique and asserts their empty-needle semantics at every startup, so a behavioural change is caught even within one digest.",
