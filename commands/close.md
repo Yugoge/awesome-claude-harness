@@ -226,12 +226,19 @@ aggregation fails, block before the resolver and report its error.
 
 The fixed entrypoint is
 `scripts/resolve-dev-artifact-chain.py --task-id <id> --project-dir <root>`.
-Require exit 0 and top-level `status == "pass"`; exit 2 or `status == "fail"`
-blocks before inspectors or QA and reports the resolver's exact `errors[]`.
-Retain the entire JSON for every later close step. In particular, `mode`,
-`lanes`, `report_paths`, `artifact_paths`, `commit_whitelist_artifacts`, and
-`qa_inputs` MUST come from this one result, not a fresh glob, filename guess, or
-hand-rolled singular check.
+Require exit 0 and top-level `status in {"pass", "pass_with_exceptions"}`;
+exit 2 or `status == "fail"` blocks before inspectors or QA and reports the
+resolver's exact `errors[]`. `pass_with_exceptions` (ticket 20260911-011232)
+means every hard error is resolved but one or more disclosed, evidenced,
+non-defect conditions remain — retain `disclosed_exceptions[]` from the result
+verbatim; it MUST be surfaced into the Step 2 QA dispatch prompt below (never
+silently absorbed into an undifferentiated pass) and QA MUST independently
+corroborate each entry before granting `CLOSE: YES` (see Step 2's appended
+verdict branch 10). Retain the entire JSON for every later close step. In
+particular, `mode`, `lanes`, `report_paths`, `artifact_paths`,
+`commit_whitelist_artifacts`, `qa_inputs`, and `disclosed_exceptions` MUST come
+from this one result, not a fresh glob, filename guess, or hand-rolled
+singular check.
 
 - `mode == "singular"` preserves the existing N == 1 chain.
 - `mode == "fanout"` requires each lane ticket/context/dev-report/passing
@@ -352,7 +359,7 @@ The orchestrator MUST emit a TodoWrite call updating the Step-N todo item to `in
 
 **Compute the cycle-diff file list** before dispatch:
 
-- **Closed-task path** (`ARTIFACT_CHAIN.status == "pass"`): read the
+- **Closed-task path** (`ARTIFACT_CHAIN.status in {"pass", "pass_with_exceptions"}`): read the
   `dev.files_modified` array from the canonical report named by
   `ARTIFACT_CHAIN.canonical_dev_report`; use that aggregate union verbatim as
   `<cycle-diff-file-list>`. Do not rebuild the union from lane files.
@@ -410,6 +417,13 @@ Input artifacts (read them first):
 - Lane matrix: <ARTIFACT_CHAIN.lanes JSON array; [] for singular or /do>
 - Report paths: <ARTIFACT_CHAIN.report_paths JSON array; [] for /do>
 - QA inputs: <ARTIFACT_CHAIN.qa_inputs JSON array; [] for /do>
+- Disclosed exceptions: <ARTIFACT_CHAIN.disclosed_exceptions JSON array VERBATIM;
+  [] when status=="pass". Non-empty only when status=="pass_with_exceptions"
+  (ticket 20260911-011232) — each entry names a hard error the resolver moved
+  out of errors[] because it matched a structured, evidenced, non-defect
+  disclosure. You MUST independently corroborate every entry before granting
+  CLOSE: YES on a pass_with_exceptions chain (see verdict branch 10 below);
+  never treat this array as pre-cleared just because it reached you.>
 - Singular inputs: <parent ticket/context/dev-report/QA-report/completion paths
   from artifact_paths when mode=singular; otherwise omit>
 - Fan-out inputs: <for each lanes[] row, its task_id/ticket/context/dev_report/
@@ -431,8 +445,8 @@ Round 1:
       - Regression risks? Scope drift? Missed edge cases?
 
       WORKFLOW INTEGRITY DIMENSION (mandatory — evaluate ALL four bullets explicitly; report a per-bullet PASS / FAIL / N/A-with-reason in the transcript; ANY FAIL forces CLOSE: NO regardless of AC coverage):
-        1. **Downstream consumability** — Can the artifacts under evaluation be consumed by downstream commands (`/commit`, `/push`, `/merge`) without manual patching of timestamps, names, or artifact contracts? Require the supplied resolver result to have `status == "pass"` and verify that normal `/commit` can admit the exact `commit_whitelist_artifacts`. In singular mode this is the existing parent chain. In fan-out mode the lane artifacts in that exact whitelist are consumable without copying/renaming them or fabricating parent ticket/context/QA artifacts. If a human would have to patch an artifact or manufacture a pseudo-parent artifact, this bullet is FAIL. **For /do path** (DO_REPORT is set): N/A-with-reason — changelog-analyst accepts the do-report as its staging-whitelist source; evaluate consumability against do-report + planned close-report only.
-        2. **task-id chain consistency** — Use the supplied resolver matrix rather than imposing one universal filename shape. `mode == "singular"` requires the existing parent ticket → context → dev-report → QA-report → completion chain under one task-id. `mode == "fanout"` requires every `lanes[]` row's ticket/context/dev-report/QA-report to use that row's lane task-id, plus the parent canonical dev-report and completion under the parent task-id; parent ticket/context/QA are optional and absence is PASS. Any required identity mismatch, undeclared/missing lane, stale canonical, or completion index gap would contradict `status == "pass"` and is FAIL. **For /do path** (DO_REPORT is set): N/A-with-reason — chain is `do-report → close-report` under the same `<task-id>`; the `/dev` artifact chain is intentionally absent.
+        1. **Downstream consumability** — Can the artifacts under evaluation be consumed by downstream commands (`/commit`, `/push`, `/merge`) without manual patching of timestamps, names, or artifact contracts? Require the supplied resolver result to have `status in {"pass", "pass_with_exceptions"}` and verify that normal `/commit` can admit the exact `commit_whitelist_artifacts`. In singular mode this is the existing parent chain. In fan-out mode the lane artifacts in that exact whitelist are consumable without copying/renaming them or fabricating parent ticket/context/QA artifacts. If a human would have to patch an artifact or manufacture a pseudo-parent artifact, this bullet is FAIL. **For /do path** (DO_REPORT is set): N/A-with-reason — changelog-analyst accepts the do-report as its staging-whitelist source; evaluate consumability against do-report + planned close-report only.
+        2. **task-id chain consistency** — Use the supplied resolver matrix rather than imposing one universal filename shape. `mode == "singular"` requires the existing parent ticket → context → dev-report → QA-report → completion chain under one task-id. `mode == "fanout"` requires every `lanes[]` row's ticket/context/dev-report/QA-report to use that row's lane task-id, plus the parent canonical dev-report and completion under the parent task-id; parent ticket/context/QA are optional and absence is PASS. Any required identity mismatch, undeclared/missing lane, stale canonical, or completion index gap would contradict `status in {"pass", "pass_with_exceptions"}` and is FAIL. **For /do path** (DO_REPORT is set): N/A-with-reason — chain is `do-report → close-report` under the same `<task-id>`; the `/dev` artifact chain is intentionally absent.
         3. **Pre-existing-defect rule** (rewritten per spec-20260503-091826 Section 5.4 rule 1+2 — out-of-scope-by-default UNLESS user-need-impact OR security OR cleanliness-of-THIS-diff) — If a Round-1 critique surfaces a "pre-existing architectural defect" or similar, the debate resolves as follows:
              (a) if THIS cycle's BA spec CLAIMS to address the defect AND the claim maps to user-need / path-dependent shared infrastructure / security / cleanliness-of-THIS-diff → the defect IS in scope and must be evaluated on its merits. If the BA-spec claim does NOT map to one of those four axes (i.e., BA over-expanded into path-external scope), the claim is itself out-of-scope and falls through to (d) — pre-existing-out-of-scope, NOT NO; the AC-deviation / out_of_scope_observations path applies instead.
              (b) if the pre-existing defect actively blocks user-need success in THIS cycle's spec (i.e., the user-stated requirement cannot be satisfied without addressing the defect) → it IS in scope; bullet evaluates on its merits and FAILS only if the defect remains;
@@ -534,6 +548,12 @@ Verdict branches:
    - AC-deviation-PASS branch 2 is fully applicable in the codex-disabled path — when QA verdict is YES on user-need verification AND dev report contains a valid `ac_deviation_with_user_need_satisfied: true` block satisfying clauses (a)–(d) of branch 2, **CLOSE: YES** is granted with the deviation rationale recorded.
    - Branches 3 / 6 / 7 / 8 are all N/A in the codex-disabled path (codex was never invoked; there is no codex dissent to weigh, no infrastructure failure to handle, no parse failure to scan).
    - The close-report MUST record `codex_status: disabled_by_user` in the "Codex consultation" section (NOT `failed_*`), and the per-round entries record `[Codex] consultation skipped: --codex flag not passed; QA-only assessment performed`. The final verdict line MUST use the form `CLOSE: YES — codex disabled by user` (when YES) or the standard `CLOSE: NO — <reason>` (when NO); the em-dash form distinguishes branch 9 YES from branch 1 unanimous YES for downstream `/commit` consumers.
+
+10. **Disclosed-exceptions corroboration (ticket 20260911-011232 — appended, does NOT renumber branches 1-9)**: applies ONLY when `ARTIFACT_CHAIN.status == "pass_with_exceptions"` (i.e., `disclosed_exceptions[]` is non-empty). This branch runs IN ADDITION to whichever of branches 1-9 above determined the base verdict from QA/codex positions and the four Workflow Integrity bullets — it is a second, independent gate layered on top, mirroring R4's `late-repair-controller.py verify-disclosure` being a separate substantive check on top of a structural eligibility computation.
+    - For EVERY entry in `disclosed_exceptions[]`, QA MUST independently re-verify and cite the entry's underlying evidence — re-running at least the commands the cited qa-report/dev-report itself cites, not merely re-reading its prose. Record each entry's `code`/`path`/`lane_task_id`/`classification` plus the corroboration performed and its result in the close-report transcript.
+    - If QA corroborates every entry, and the base verdict from branches 1-9 was YES, → **CLOSE: YES** proceeds with the disclosed-exceptions corroboration recorded verbatim in the close-report (a new "Disclosed exceptions corroboration" section: one row per entry).
+    - If QA CANNOT corroborate an entry (the cited evidence does not hold up, is missing, or on re-running contradicts the disclosure), that entry's original error is treated as a **live dissent** — it falls through to the existing branch-5 (QA dissent) / branch-8 (conservative default) `CLOSE: NO` logic, regardless of what the base verdict from branches 1-9 was. A `pass_with_exceptions` chain therefore NEVER reaches `CLOSE: YES` on the strength of the resolver's structural eligibility computation alone; QA's independent corroboration is the actual truth-adjudication step, exactly as `late-repair-controller.py verify-disclosure` is for R4.
+    - Out-of-scope-by-default (Pre-existing-defect rule, bullet 3) does NOT apply here — a disclosed exception is, by construction, part of THIS chain's own deliverable being evaluated, not a pre-existing defect elsewhere.
 
 The /close --force escape hatch (Step 2) is unchanged. It bypasses Step 5 entirely; none of the verdict branches above run on the forced path.
 

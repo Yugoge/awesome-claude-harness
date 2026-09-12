@@ -6,7 +6,8 @@ chain rooted at ``docs/dev/dev-report-<task-id>.json`` and emits one stable JSON
 document suitable for /dev completion, /close, Close QA, and /commit.
 
 Exit codes:
-    0  the complete artifact chain is valid
+    0  the complete artifact chain is valid (status == "pass" or
+       "pass_with_exceptions" -- see disclosed_exceptions[] in the JSON output)
     2  invalid arguments, or a missing/stale/mismatched/ambiguous chain
 """
 
@@ -68,6 +69,11 @@ class ChainValidator:
         self.dev_dir = project_root / "docs" / "dev"
         self.task_id = task_id
         self.errors: list[dict[str, str]] = []
+        # Every JSON object successfully parsed by read_json(), keyed by its
+        # path relative to `root`.  Threaded into _reclassify_disclosed_exceptions
+        # (M1) so the reclassification pass never re-reads the filesystem --
+        # it only re-examines what validate_dev()/validate_qa() already loaded.
+        self.loaded_reports: dict[str, dict[str, Any]] = {}
 
     def error(self, code: str, path: str, detail: str) -> None:
         self.errors.append({"code": code, "path": path, "detail": detail})
@@ -98,6 +104,7 @@ class ChainValidator:
         if not isinstance(value, dict):
             self.error("INVALID_JSON_TYPE", relative, "top-level value must be an object")
             return None
+        self.loaded_reports[relative] = value
         return value
 
     def read_text(self, path: Path, *, required: bool = True) -> str | None:
@@ -522,6 +529,16 @@ def resolve_chain(project_root: Path | str, task_id: str) -> dict[str, Any]:
         _rel(parents["completion"], root),
     )
     validator = ChainValidator(root, task_id)
+    # M1: maps every dev-report/qa-report path this resolution touches to the
+    # lane (or parent) task-id that owns it -- the canonical/parent pair is
+    # seeded here unconditionally; fan-out lane pairs are added as each lane
+    # is discovered below.  Read by _reclassify_disclosed_exceptions() to
+    # populate disclosed_exceptions[].lane_task_id and to locate a dev-report's
+    # sibling qa-report for the M3 same-lane cross-check.
+    lane_task_id_by_path: dict[str, str] = {
+        _rel(parents["dev_report"], root): task_id,
+        _rel(parents["qa_report"], root): task_id,
+    }
 
     if not _safe_task_id(task_id):
         validator.error(
@@ -640,6 +657,8 @@ def resolve_chain(project_root: Path | str, task_id: str) -> dict[str, Any]:
                 **{key: _rel(path, root) for key, path in paths.items()},
             }
             result["lanes"].append(lane)
+            lane_task_id_by_path[lane["dev_report"]] = lane_id
+            lane_task_id_by_path[lane["qa_report"]] = lane_id
             result["report_paths"].extend((lane["dev_report"], lane["qa_report"]))
             lane_refs = [lane[key] for key in ("ticket", "context", "dev_report", "qa_report")]
             completion_refs.extend(lane_refs)
@@ -793,7 +812,7 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     result = resolve_chain(args.project_dir, args.task_id)
     print(json.dumps(result, ensure_ascii=False, separators=(",", ":"), sort_keys=True))
-    return 0 if result["status"] == "pass" else 2
+    return 0 if result["status"] in ("pass", "pass_with_exceptions") else 2
 
 
 if __name__ == "__main__":
