@@ -467,12 +467,26 @@ def _content_anchor_retry(before, rel, mode, segment, hunk):
     CONTENT: if the segment's own anchor context is uniquely locatable in
     `before` (the real worktree state at this point in the reversal loop) and
     the recorded inserted text is exactly where the anchor says it should be,
-    accept it there and regenerate the hunk so the corrected position -- not
-    the stale -U0 header -- is what is staged end-to-end (AC7/M4).
+    accept it there and regenerate a hunk positioned in `before`'s own
+    coordinate space -- unchanged from the prior fix (5ab61c99); this part
+    (anchor location, insertion-presence verification, and the worktree-
+    relative `corrected_hunk` used to prove reversibility against the real
+    worktree) is confirmed correct in isolation and is not reopened here.
 
-    Returns (reversed_value, corrected_hunk) on a verified match; None leaves
-    the existing fail-closed exclusion for this hunk unchanged (0 or 2+ anchor
-    matches, a non-insertion hunk, or any inconsistency in reconstruction).
+    `corrected_hunk`'s POSITION is only valid in the worktree-reversal-walk's
+    own coordinate space, though -- NOT in the isolated per-segment index
+    reconstruction _composed_main actually stages against, which may lack
+    sibling-hunk or foreign content `before` includes (M1's own bug). Rather
+    than trying to pick ONE position that would satisfy both buffers (they
+    can genuinely differ), this function also returns the raw ingredients
+    (`anchor`, `inserted_text`) a caller can use to re-resolve a FRESH,
+    correctly-positioned hunk immediately before the real staging apply --
+    see _composed_main's per-segment "pending_insertions" resolution.
+
+    Returns (reversed_value, corrected_hunk, anchor, inserted_text) on a
+    verified match; None leaves the existing fail-closed exclusion for this
+    hunk unchanged (0 or 2+ anchor matches, a non-insertion hunk, or any
+    inconsistency in reconstruction).
     """
     parsed = _parse_hunk_header(hunk)
     if parsed is None or parsed[1] != 0:
@@ -498,7 +512,7 @@ def _content_anchor_retry(before, rel, mode, segment, hunk):
     )
     if roundtrip != before:
         return None
-    return reversed_value, corrected_hunk
+    return reversed_value, corrected_hunk, anchor, inserted_text
 
 
 def _filter_segments_against_worktree(worktree, rel, mode, segments):
@@ -506,13 +520,30 @@ def _filter_segments_against_worktree(worktree, rel, mode, segments):
 
     A pure-insertion hunk (old_count == 0) that fails the line-offset round
     trip is retried by content anchor (_content_anchor_retry) before being
-    excluded -- see that helper for the acceptance/rejection contract.
+    excluded -- see that helper for the acceptance/rejection contract. A
+    retried hunk's (anchor, inserted_text) is carried forward on the returned
+    segment as `pending_insertions` (keyed by the accepted hunk's own bytes)
+    so _composed_main can re-resolve its position against the buffer it is
+    actually staged against, immediately before that staging happens (M1) --
+    `corrected_hunk` itself remains valid ONLY in this function's own
+    worktree-reversal coordinate space (used above to prove reversibility).
+
+    _composed_main's convergence loop calls this function repeatedly, and a
+    hunk that was corrected on an earlier iteration is (by construction) now
+    self-consistent with a PLAIN reversal against this same worktree -- so a
+    later iteration accepts it via the "continue" path below without ever
+    calling _content_anchor_retry again. That must not silently drop its
+    `pending_insertions` entry (plain-reversal success here says nothing
+    about validity in the DIFFERENT staging-time buffer): a hunk already
+    flagged pending on the segment handed in stays pending.
     """
     candidate = worktree
     accepted_by_segment = [[] for _ in segments]
+    pending_by_segment = [{} for _ in segments]
     for segment_index in range(len(segments) - 1, -1, -1):
         segment = segments[segment_index]
         header = segment["patch_header"]
+        carried_pending = segment.get("pending_insertions") or {}
         for hunk in reversed(segment["patch_hunks"]):
             before = candidate
             reversed_value = _apply_worktree_patch(
@@ -525,17 +556,21 @@ def _filter_segments_against_worktree(worktree, rel, mode, segments):
             if reversed_value is not None and roundtrip == before:
                 candidate = reversed_value
                 accepted_by_segment[segment_index].append(hunk)
+                if hunk in carried_pending:
+                    pending_by_segment[segment_index][hunk] = carried_pending[hunk]
                 continue
             retried = _content_anchor_retry(before, rel, mode, segment, hunk)
             if retried is not None:
-                candidate, corrected_hunk = retried
+                candidate, corrected_hunk, anchor, inserted_text = retried
                 accepted_by_segment[segment_index].append(corrected_hunk)
+                pending_by_segment[segment_index][corrected_hunk] = (anchor, inserted_text)
         accepted_by_segment[segment_index].reverse()
     result = []
-    for segment, hunks in zip(segments, accepted_by_segment):
+    for segment, hunks, pending in zip(segments, accepted_by_segment, pending_by_segment):
         item = dict(segment)
         item["patch_hunks"] = hunks
         item["patch"] = item["patch_header"] + b"".join(hunks) if hunks else b""
+        item["pending_insertions"] = pending
         result.append(item)
     return result, candidate
 
@@ -688,10 +723,76 @@ def _composed_main(ns, plan):
         for number, segment in enumerate(prepared):
             if not segment["patch"].strip():
                 continue
+            patch = segment["patch"]
+            pending = segment.get("pending_insertions") or {}
+            if pending:
+                # M1: re-resolve each content-anchor-retried insertion's
+                # position against the SAME buffer it is about to be staged
+                # into (the running index, reflecting every earlier segment
+                # already applied above) -- never the worktree-reversal
+                # buffer `corrected_hunk` was positioned against, which may
+                # contain sibling-hunk or foreign content this buffer lacks.
+                rc, current_bytes, err = _git(ns.git_root, ["show", ":%s" % rel], env=env)
+                if rc:
+                    if not ns.plan_only:
+                        _git(ns.git_root, ["restore", "--staged", "--", rel])
+                    return _excluded(
+                        "cannot read staging target for content-anchored "
+                        "insertion in %s: %s" % (rel, err.strip())
+                    )
+                rebuilt_hunks = []
+                for hunk in segment["patch_hunks"]:
+                    record = pending.get(hunk)
+                    if record is None:
+                        # Not a retried insertion -- its declared position is
+                        # already correct relative to this segment's own base
+                        # (unchanged since generation). Actually apply it (in
+                        # memory) so `current_bytes` keeps tracking the exact
+                        # buffer a LATER pending insertion in this same
+                        # segment will truly land in once every hunk before
+                        # it has applied -- a fresh hunk's position must be
+                        # cumulative-consistent with its neighbors, not just
+                        # correct against the segment's raw, pre-hunk base.
+                        advanced = _apply_worktree_patch(
+                            current_bytes, segment["patch_header"] + hunk, rel, index_mode
+                        )
+                        if advanced is None:
+                            if not ns.plan_only:
+                                _git(ns.git_root, ["restore", "--staged", "--", rel])
+                            return _excluded(
+                                "cannot advance staging target past a prior "
+                                "hunk while resolving a content-anchored "
+                                "insertion for %s" % rel
+                            )
+                        rebuilt_hunks.append(hunk)
+                        current_bytes = advanced
+                        continue
+                    anchor, inserted_text = record
+                    off = _locate_unique(current_bytes, anchor)
+                    if off is None:
+                        if not ns.plan_only:
+                            _git(ns.git_root, ["restore", "--staged", "--", rel])
+                        return _excluded(
+                            "content-anchored insertion anchor not uniquely "
+                            "resolvable against the staging target for %s" % rel
+                        )
+                    point = off + len(anchor)
+                    target = current_bytes[:point] + inserted_text + current_bytes[point:]
+                    fresh_hunk = _regenerate_hunk(current_bytes, target)
+                    if fresh_hunk is None:
+                        if not ns.plan_only:
+                            _git(ns.git_root, ["restore", "--staged", "--", rel])
+                        return _excluded(
+                            "cannot regenerate content-anchored insertion "
+                            "against the staging target for %s" % rel
+                        )
+                    rebuilt_hunks.append(fresh_hunk)
+                    current_bytes = target  # keep cumulative for >1 pending insertion in one segment
+                patch = segment["patch_header"] + b"".join(rebuilt_hunks)
             rc, _, err = _git(
                 ns.git_root,
                 ["apply", "--cached", "--recount", "--unidiff-zero", "-"],
-                input_bytes=segment["patch"], env=env,
+                input_bytes=patch, env=env,
             )
             if rc:
                 if not ns.plan_only:
