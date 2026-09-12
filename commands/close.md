@@ -1,6 +1,6 @@
 ---
-description: Close the current dev cycle (agent infers task-id from conversation). QA evaluates Workflow Integrity bullets and returns CLOSE YES/NO. Pass --codex to enable multi-round QA-codex debate; default is QA-only single-round assessment. Append --force to skip the debate entirely.
-argument-hint: "[--codex | --force [--reason \"<text>\"]] [<task-id>|<path>]"
+description: Close the current dev cycle (agent infers task-id from conversation). QA evaluates Workflow Integrity bullets and returns CLOSE YES/NO. Pass --codex to enable multi-round QA-codex debate; default is QA-only single-round assessment. Append --force to skip the debate entirely. Pass --auto to discover and sequentially close every close_pending parent (see `--auto mode` below).
+argument-hint: "[--codex | --force [--reason \"<text>\"] | --auto] [<task-id>|<path>]"
 disable-model-invocation: true
 ---
 
@@ -51,6 +51,28 @@ Parse `--codex` from `$ARGUMENTS` BEFORE evaluating the forced-override path or 
 - **`codex_required = false`** (default): dispatch prompt for QA SKIPS all `Skill(codex)` invocations and runs QA-only single-round assessment of the 4 Workflow Integrity bullets + step 1b cleanliness preconditions. Verdict branch 9 (codex disabled) applies; branches 3 / 6 / 7 are N/A.
 
 When `--force` is also present, `--codex` is ignored (the forced-override path short-circuits the entire debate path; no QA invocation, no codex consultation, no verdict-branch evaluation). The two flags are not mutually exclusive parse-wise (orchestrator strips both), but `--force` wins.
+
+### Argument parsing: `--auto` flag (Must-Have #8, task 20260808-035658-lanel)
+
+Parse `--auto` from `$ARGUMENTS` BEFORE evaluating the forced-override path or task-id resolution:
+
+- If `$ARGUMENTS` contains the literal token `--auto`, strip it and set `auto = true`.
+- Otherwise set `auto = false` (default — every rule below is inert).
+
+**Rejection (before any action)**: when `auto = true`, `/close` MUST reject — printing the reason and stopping before Task-id resolution, before Step 0, before any Agent dispatch — if `$ARGUMENTS` (after stripping `--auto` itself) still contains ANY of: an explicit task-id or path token, `--force`, or a `--reason` value. `--auto` and `--codex` MAY combine (each `--auto` walk below still honors `codex_required` exactly as the non-`--auto` path does). This mirrors `scripts/dev-lifecycle.py`'s `validate_auto_flag_combination()` pure predicate (`--force`/explicit-task-id/`--bulk` all reject; `--bulk` does not exist for `/close` so only the first two apply here) — the mechanical check:
+
+```bash
+python3 -c "
+import sys; sys.path.insert(0, 'scripts')
+import importlib.util
+spec = importlib.util.spec_from_file_location('dlc', 'scripts/dev-lifecycle.py')
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+err = m.validate_auto_flag_combination(True, '<explicit-task-id-or-empty>', <force_bool>, False)
+print(err or 'OK')
+"
+```
+
+When `auto = true` and the combination is legal, skip Task-id resolution and Steps 0-3 entirely at THIS level — control passes to the `--auto mode` section below, which drives Steps 0-3 once per discovered parent.
 
 ### Forced-override path: `--force` flag short-circuit
 
@@ -651,11 +673,83 @@ Then branch the workflow update:
   otherwise create a new spec. Next action: `/dev --spec <spec_path>`. Do NOT
   direct a failed close to `/commit`.
 
+## `--auto` mode: batch-discover and sequentially close (Must-Have #6, task 20260808-035658-lanel)
+
+`--auto` discovers every `close_pending` PARENT task-id and walks each one, ONE
+AT A TIME, through the exact same unmodified **Step 0 → Step 3** body (the
+`### Step 0` through `### Step 3` headings above, up to this section) an
+explicit `/close <task-id>` would run. It is structurally distinct from the human-only
+`--bulk` escape hatch documented in `commands/commit.md` — `--auto` never
+skips the close gate; it walks every discovered parent THROUGH the gate,
+never around it.
+
+1. **Discover** the candidate parent snapshot (frozen once, at the start of
+   the batch — parents discovered mid-batch by a later scan are NOT added to
+   the running batch):
+
+   ```bash
+   PROJECT_ROOT="${CLAUDE_PROJECT_DIR:-$(pwd)}"
+   source ~/.claude/venv/bin/activate 2>/dev/null || true
+   mapfile -t CLOSE_PENDING_PARENTS < <(python3 scripts/dev-lifecycle.py list-actionable --next-action close --project-dir "$PROJECT_ROOT")
+   ```
+
+   `list-actionable` already returns a deterministically sorted list of
+   `kind == "ticket"` parent task-ids only — lane rows and spec rows never
+   appear (Must-Have #3). A `blocked` task is never included and is never
+   force-closed by `--auto`.
+
+2. **Walk each parent sequentially** — no two parents run concurrently, and
+   parent N+1's walk does not begin until parent N's walk has been classified
+   (step 3 below). For each `TASK_ID` in `CLOSE_PENDING_PARENTS`, in order,
+   bind `TASK_ID` and re-enter this file at **Task-id resolution**'s
+   `$ARGUMENTS` matches a timestamp pattern → non-force path branch, then run
+   **Step 0** through **Step 3** exactly as written — same aggregate refresh,
+   same resolver invocation (or do-report lite preflight), same artifact
+   schema gate, same Step 1 inspector dispatch, same Step 2 QA debate
+   (`codex_required` from the `--codex` parsing above, shared across every
+   parent in the batch), same Step 3 close-report write. Nothing in Steps 0-3
+   is aware `--auto` is driving it.
+
+3. **Classify the walk's outcome** at the orchestrator-procedure level (the
+   walk is a sequence of individual tool calls this file's prose drives an
+   agent through — not a single bash process an exit code terminates
+   wholesale; see `scripts/dev-lifecycle.py`'s `classify_walk_outcome()` for
+   the exact recognition predicate this mirrors):
+   - **`hook_deny`** — a `PreToolUse`/`PostToolUse`/`Stop` hook literally
+     blocked a tool call during the walk (observable shape: a
+     `<Phase>:<hook-script> hook error: ... BLOCKED ...` tool result, per
+     CLAUDE.md's Subagent Hook Discipline). **Abort the entire remaining
+     batch immediately** — do not start parent N+1. Report which parent was
+     mid-walk and the verbatim hook rejection.
+   - **`ordinary_reject`** — any other non-success outcome: aggregation/
+     resolver/schema-gate non-zero exit, a substantive `CLOSE: NO` verdict
+     from Step 2, an inspector-forced rejection. **Record the outcome and
+     continue** to the next parent in the frozen list.
+   - **`success`** — the walk reached Step 3 and wrote a `CLOSE: YES*`
+     close-report. **Record and continue** to the next parent.
+
+4. **Batch summary**: after the batch ends (list exhausted, or a `hook_deny`
+   aborted it), print one line per attempted parent (`task-id: outcome`) plus
+   a line for every parent that was never attempted because the batch was
+   aborted (`task-id: not_attempted`). Do not run the Session Summary / user
+   rating block (those remain per-parent, inside each successful walk's own
+   Step 3, unchanged) as a SECOND batch-level summary — the per-parent Step 3
+   output already covers each `CLOSE: YES` parent individually.
+
+Human-operator verification of this mode (QA cannot literally invoke
+`/close --auto` — `disable-model-invocation: true` plus `settings.json`'s
+global `Skill(close:*)` deny) is documented in `docs/dev/ticket-20260808-035658-lanel.md`
+AC-L21: a separate human-operator-executed transcript at
+`docs/dev/human-operator-transcript-<task-id>.md`, using the
+`PARENT_START: <task_id>` / `PARENT_END: <task_id> outcome=<...>` schema
+`scripts/dev-lifecycle.py`'s `parse_human_operator_transcript()` parses.
+
 ## Constraints
 
 - /close does NOT call Skill(codex). QA does, internally.
 - /close does NOT manage rounds. QA does, internally.
 - /close does NOT evaluate verdict. QA does, internally.
-- QA is invoked EXACTLY ONCE (non-force path) or ZERO times (forced path).
+- QA is invoked EXACTLY ONCE per parent close decision (non-force path) or ZERO times (forced path). `--auto` does not change this per-decision invariant — it drives multiple SEQUENTIAL parent close decisions, each still invoking QA exactly once, never concurrently.
+- `--auto` never bypasses Steps 0-3; it is structurally distinct from `--bulk` (documented in `commands/commit.md`), which skips the close gate entirely. `--auto` walks every discovered parent THROUGH the unmodified gate.
 - **Scoped default-NO** (per spec-20260503-091826 Section 5.1: if something does not impede user experience, security, or the overall cleanliness of the repository, it is not necessarily a reason for NO): Default to CLOSE: NO when error / ambiguity / tool-unavailability **blocks evaluation of user-need satisfaction OR security OR cleanliness-of-THIS-diff**. Errors / ambiguity / tool-unavailability that do NOT impede those three evaluation axes are NOT automatic NO triggers. Codex-refined: "Unknown but relevant" still defaults to NO — when the error blocks the evaluation itself (i.e., we cannot determine whether the user need is satisfied), default remains NO. Recoverable transient infrastructure failures (e.g., Codex quota / timeout) follow the existing branch-6/7 graceful-degradation logic — this clause does NOT override branches 6/7. EXCEPT when `--force` is explicitly passed by a human user, in which case CLOSE: YES (FORCED) is the result regardless of upstream artifact state (Forced-override path short-circuit).
 - `disable-model-invocation: true` (frontmatter) means the model cannot self-invoke /close via SlashCommand — this applies equally to the forced path. Only a human can trigger `--force`.
