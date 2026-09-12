@@ -57,6 +57,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -343,8 +344,170 @@ def _filter_segments_against_index(git_root, segments):
         shutil.rmtree(td)
 
 
+_HUNK_HEADER_RE = re.compile(rb"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@")
+
+
+def _parse_hunk_header(hunk):
+    """Parse a -U0 hunk's leading `@@ -a[,b] +c[,d] @@` line.
+
+    Returns (old_start, old_count, new_start, new_count) -- an omitted count
+    defaults to 1 per unified-diff convention -- or None if malformed.
+    """
+    match = _HUNK_HEADER_RE.match(hunk.split(b"\n", 1)[0])
+    if not match:
+        return None
+    old_count = int(match.group(2)) if match.group(2) is not None else 1
+    new_count = int(match.group(4)) if match.group(4) is not None else 1
+    return int(match.group(1)), old_count, int(match.group(3)), new_count
+
+
+def _hunk_inserted_text(hunk):
+    """Return the exact added bytes of a pure-insertion (-U0, old_count == 0)
+    hunk body, or None if the body is not purely additions."""
+    out = []
+    for line in hunk.splitlines(keepends=True)[1:]:
+        if line.startswith(b"+"):
+            out.append(line[1:])
+        elif line.rstrip(b"\r\n") == b"\\ No newline at end of file":
+            continue
+        else:
+            return None
+    return b"".join(out) if out else None
+
+
+def _live_pure_insertion_anchor(edits, inserted_text):
+    """Identify the unique ledger anchor for a pure-insertion hunk's added
+    bytes: a ledger entry whose non-empty `old` is a prefix of `new` and whose
+    suffix (the inserted content) matches `inserted_text` exactly. Returns the
+    anchor bytes, or None when no such entry is unique (caller keeps today's
+    line-offset-only behavior unchanged)."""
+    if not isinstance(edits, list):
+        return None
+    matches = []
+    for edit in edits:
+        if not isinstance(edit, dict):
+            continue
+        old_b = _encode_edit_value(edit.get("old"))
+        new_b = _encode_edit_value(edit.get("new"))
+        if not isinstance(old_b, bytes) or not isinstance(new_b, bytes) or not old_b:
+            continue
+        if new_b.startswith(old_b) and new_b[len(old_b):] == inserted_text:
+            matches.append(old_b)
+    return matches[0] if len(matches) == 1 else None
+
+
+def _checkpoint_pure_insertion_anchor(validation_patch, inserted_text):
+    """Derive an anchor from the checkpoint's own context=3 validation patch
+    (scripts/stage-owned-hunks.py's _checkpoint_patch): the context lines
+    immediately preceding a pure-addition run matching `inserted_text`.
+    Returns anchor bytes, or None (caller falls back unchanged)."""
+    if not validation_patch:
+        return None
+    _, hunks = _patch_headers_and_hunks(validation_patch)
+    matches = []
+    for hunk in hunks:
+        lines = hunk.splitlines(keepends=True)[1:]
+        if any(line.startswith(b"-") for line in lines):
+            continue  # not a pure addition; this fix targets pure insertions only
+        added = b"".join(line[1:] for line in lines if line.startswith(b"+"))
+        if added != inserted_text:
+            continue
+        context_before = []
+        for line in lines:
+            if line.startswith(b"+"):
+                break
+            if line.startswith(b" "):
+                context_before.append(line[1:])
+        anchor = b"".join(context_before)
+        if anchor:
+            matches.append(anchor)
+    return matches[0] if len(matches) == 1 else None
+
+
+def _resolve_pure_insertion_anchor(segment, inserted_text):
+    """Return the non-empty anchor bytes for a pure-insertion hunk within
+    `segment`, or None if no unique anchor can be derived for its kind."""
+    if segment.get("kind") == "live":
+        return _live_pure_insertion_anchor(segment.get("edits"), inserted_text)
+    if segment.get("kind") == "checkpoint":
+        return _checkpoint_pure_insertion_anchor(
+            segment.get("validation_patch"), inserted_text
+        )
+    return None
+
+
+def _regenerate_hunk(old_bytes, new_bytes):
+    """Produce a fresh -U0 hunk (header discarded) for old_bytes -> new_bytes.
+
+    Correct by construction from the real content offsets, per the ticket's
+    recommended technique, instead of hand-rewriting a stale line-number
+    header -- this is what makes the corrected position, not the original
+    hunk's header, what downstream re-apply and staging actually use.
+    """
+    with tempfile.TemporaryDirectory() as td:
+        a_path = os.path.join(td, "a")
+        b_path = os.path.join(td, "b")
+        with open(a_path, "wb") as fh:
+            fh.write(old_bytes)
+        with open(b_path, "wb") as fh:
+            fh.write(new_bytes)
+        proc = subprocess.run(
+            ["git", "diff", "--no-index", "-U0", "--src-prefix=a/",
+             "--dst-prefix=b/", "--", a_path, b_path],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        )
+    if proc.returncode not in (0, 1):
+        return None
+    _, hunks = _patch_headers_and_hunks(proc.stdout)
+    return hunks[0] if len(hunks) == 1 else None
+
+
+def _content_anchor_retry(before, rel, mode, segment, hunk):
+    """Retry a pure-insertion hunk that failed the line-offset round trip by
+    CONTENT: if the segment's own anchor context is uniquely locatable in
+    `before` (the real worktree state at this point in the reversal loop) and
+    the recorded inserted text is exactly where the anchor says it should be,
+    accept it there and regenerate the hunk so the corrected position -- not
+    the stale -U0 header -- is what is staged end-to-end (AC7/M4).
+
+    Returns (reversed_value, corrected_hunk) on a verified match; None leaves
+    the existing fail-closed exclusion for this hunk unchanged (0 or 2+ anchor
+    matches, a non-insertion hunk, or any inconsistency in reconstruction).
+    """
+    parsed = _parse_hunk_header(hunk)
+    if parsed is None or parsed[1] != 0:
+        return None
+    inserted_text = _hunk_inserted_text(hunk)
+    if not inserted_text:
+        return None
+    anchor = _resolve_pure_insertion_anchor(segment, inserted_text)
+    if not anchor:
+        return None
+    off = _locate_unique(before, anchor)
+    if off is None:
+        return None  # absent or ambiguous in the real worktree -> unchanged EXCLUDE
+    insertion_point = off + len(anchor)
+    if before[insertion_point:insertion_point + len(inserted_text)] != inserted_text:
+        return None  # anchor located, but the insertion isn't where it claims
+    reversed_value = before[:insertion_point] + before[insertion_point + len(inserted_text):]
+    corrected_hunk = _regenerate_hunk(reversed_value, before)
+    if corrected_hunk is None:
+        return None
+    roundtrip = _apply_worktree_patch(
+        reversed_value, segment["patch_header"] + corrected_hunk, rel, mode
+    )
+    if roundtrip != before:
+        return None
+    return reversed_value, corrected_hunk
+
+
 def _filter_segments_against_worktree(worktree, rel, mode, segments):
-    """Reverse composable hunks newest-first, omitting real current overlap."""
+    """Reverse composable hunks newest-first, omitting real current overlap.
+
+    A pure-insertion hunk (old_count == 0) that fails the line-offset round
+    trip is retried by content anchor (_content_anchor_retry) before being
+    excluded -- see that helper for the acceptance/rejection contract.
+    """
     candidate = worktree
     accepted_by_segment = [[] for _ in segments]
     for segment_index in range(len(segments) - 1, -1, -1):
@@ -362,6 +525,11 @@ def _filter_segments_against_worktree(worktree, rel, mode, segments):
             if reversed_value is not None and roundtrip == before:
                 candidate = reversed_value
                 accepted_by_segment[segment_index].append(hunk)
+                continue
+            retried = _content_anchor_retry(before, rel, mode, segment, hunk)
+            if retried is not None:
+                candidate, corrected_hunk = retried
+                accepted_by_segment[segment_index].append(corrected_hunk)
         accepted_by_segment[segment_index].reverse()
     result = []
     for segment, hunks in zip(segments, accepted_by_segment):
