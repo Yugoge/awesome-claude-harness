@@ -41,6 +41,36 @@ SINGULAR_RELATIONAL_REASON = (
     "has no singular analogue"
 )
 
+# R4 (spec-20260907-115508-lawful-commit-channel.md) gap classification.  A
+# stage gap means an entire BA/Dev-stage artifact is absent or empty; every
+# other non-qa-report error is a "non-gap" integrity problem that must NOT be
+# treated as late-repair eligible even when a real stage gap is also present
+# (codex finding #7 / QA round-2 objection 7).
+STAGE_GAP_CODES = frozenset({"MISSING_ARTIFACT", "EMPTY_ARTIFACT"})
+
+# Disclosed-exception vocabulary (ticket 20260911-011232).  Additive over the
+# already-computed validate_dev()/validate_qa() errors -- those two functions
+# are NOT edited in place (Contract D novelty requirement).  Only these three
+# codes are ever eligible for reclassification into disclosed_exceptions[].
+RECLASSIFIABLE_CODES = frozenset(
+    {"INVALID_QA_STATUS", "INVALID_DEV_STATUS", "UNRESOLVED_BLOCKERS"}
+)
+
+# primary_cause enum reused VERBATIM from agents/qa.md:1575 -- do not invent a
+# divergent enum.  Only "environment" ever excuses a blocking finding here.
+QA_ENVIRONMENT_PRIMARY_CAUSE = "environment"
+
+QA_DISCLOSED_EXCEPTION_CLASSIFICATIONS = frozenset(
+    {"shared_working_tree_concurrency", "infrastructure_unavailability", "other_environmental"}
+)
+DEV_STATUS_RATIONALE_CLASSIFICATIONS = frozenset(
+    {"pending_commit_handoff", "pending_external_authorization", "other_disclosed_handoff"}
+)
+DISCLOSED_EXCEPTION_ATTESTATION = (
+    "This is a disclosed, evidenced, non-defect exception -- not a defect in "
+    "this lane's deliverable."
+)
+
 
 class StableArgumentParser(argparse.ArgumentParser):
     def error(self, message: str) -> None:
@@ -200,6 +230,9 @@ class ChainValidator:
         self.validate_json_identity(value, expected, path)
         relative = _rel(path, self.root)
         qa = value.get("qa")
+        # Binary by design (`commands/dev.md`:1354, :1361). A 20260806 relaxation
+        # widened this to accept `warning`; /close QA judged it improper and it
+        # was reverted -- see the close report for task 20260806-115859.
         if not isinstance(qa, dict) or qa.get("status") != "pass":
             actual = qa.get("status") if isinstance(qa, dict) else None
             self.error(
@@ -223,6 +256,352 @@ class ChainValidator:
                     relative,
                     f"completion does not reference {reference}",
                 )
+
+
+def _compute_gap_fields(
+    errors: list[dict[str, str]], qa_report_path: str
+) -> tuple[list[str], list[str], bool, str]:
+    """Classify a singular chain's errors into stage gaps vs. integrity errors.
+
+    THE SOLE PLACE stage_gaps/non_gap_errors/late_repair_eligible/
+    gap_classification are computed (R4/AC-6).  Every consumer -- the
+    late-repair controller, /close's own gate -- MUST read these fields from
+    this resolver's output rather than recomputing them; there is exactly one
+    source of truth.
+
+    stage_gaps: the distinct non-qa-report paths whose only problem is that an
+    entire BA/Dev/completion-stage artifact is absent or empty
+    (MISSING_ARTIFACT / EMPTY_ARTIFACT).  non_gap_errors: every other
+    non-qa-report error path -- a genuine integrity problem (malformed JSON,
+    identity mismatch, invalid dev status, etc).  late_repair_eligible is true
+    only when there is at least one stage gap AND zero non-gap errors: a chain
+    with both a real gap and an unrelated integrity error is NOT late-repair
+    eligible, even though the coarser gap_classification still reports
+    'beyond_qa' for it (codex finding #7 / QA round-2 objection 7).
+    """
+    stage_gaps: set[str] = set()
+    non_gap_errors: set[str] = set()
+    qa_has_error = False
+    for entry in errors:
+        path = entry.get("path", "")
+        if path == qa_report_path:
+            qa_has_error = True
+            continue
+        if entry.get("code") in STAGE_GAP_CODES:
+            stage_gaps.add(path)
+        else:
+            non_gap_errors.add(path)
+    late_repair_eligible = bool(stage_gaps) and not non_gap_errors
+    if stage_gaps or non_gap_errors:
+        gap_classification = "beyond_qa"
+    elif qa_has_error:
+        gap_classification = "qa_only"
+    else:
+        gap_classification = "complete"
+    return sorted(stage_gaps), sorted(non_gap_errors), late_repair_eligible, gap_classification
+
+
+def _qa_findings(qa: dict[str, Any]) -> list[Any]:
+    """Return every entry in qa.all_findings/qa.failures, concatenated.
+
+    Both keys are read (not either/or) -- a report populating only one of the
+    two must still be checked in full.
+    """
+    findings: list[Any] = []
+    for key in ("all_findings", "failures"):
+        entries = qa.get(key)
+        if isinstance(entries, list):
+            findings.extend(entries)
+    return findings
+
+
+def _qa_environmental_eligible(value: dict[str, Any] | None) -> bool:
+    """M2: is a qa-report's INVALID_QA_STATUS error a disclosed exception?
+
+    ALL of the following must hold, or the finding stays a hard error:
+    (a) qa.disclosed_exception is present with an accepted classification,
+        non-empty string evidence[], and the exact-literal attestation;
+    (b) top-level iteration_needed is literally False;
+    (c) every blocking finding (blocks_release is True, or severity is
+        "critical") in qa.all_findings/qa.failures carries
+        primary_cause == "environment" -- the enum reused verbatim from
+        agents/qa.md.  A single disqualifying finding makes the whole report
+        ineligible.
+    """
+    if not isinstance(value, dict):
+        return False
+    qa = value.get("qa")
+    if not isinstance(qa, dict):
+        return False
+    disclosed = qa.get("disclosed_exception")
+    if not isinstance(disclosed, dict):
+        return False
+    if disclosed.get("classification") not in QA_DISCLOSED_EXCEPTION_CLASSIFICATIONS:
+        return False
+    evidence = disclosed.get("evidence")
+    if not isinstance(evidence, list) or not evidence:
+        return False
+    if any(not isinstance(item, str) or not item for item in evidence):
+        return False
+    if disclosed.get("attestation") != DISCLOSED_EXCEPTION_ATTESTATION:
+        return False
+    if value.get("iteration_needed") is not False:
+        return False
+    for finding in _qa_findings(qa):
+        if not isinstance(finding, dict):
+            # An unreadable finding shape cannot be vouched for as environmental.
+            return False
+        blocks = finding.get("blocks_release") is True or finding.get("severity") == "critical"
+        if blocks and finding.get("primary_cause") != QA_ENVIRONMENT_PRIMARY_CAUSE:
+            return False
+    return True
+
+
+def _dev_handoff_eligible(
+    dev_value: dict[str, Any] | None, qa_value: dict[str, Any] | None
+) -> bool:
+    """M3: is a dev-report's needs_review status a disclosed handoff?
+
+    ALL of the following must hold, or the finding stays a hard error:
+    (a) dev.status is literally "needs_review" (never "blocked" -- AC-6 keeps
+        that value unconditionally hard-fail) with a complete
+        dev.status_rationale (accepted classification, non-empty blocked_by
+        and forbidden_action strings);
+    (b) the SAME lane's own qa-report independently shows qa.status == "pass".
+        If that lane's own QA did not pass, the needs_review claim is
+        untrustworthy and the error stays hard.
+    """
+    if not isinstance(dev_value, dict):
+        return False
+    dev = dev_value.get("dev")
+    if not isinstance(dev, dict):
+        return False
+    if dev.get("status") != "needs_review":
+        return False
+    rationale = dev.get("status_rationale")
+    if not isinstance(rationale, dict):
+        return False
+    if rationale.get("classification") not in DEV_STATUS_RATIONALE_CLASSIFICATIONS:
+        return False
+    blocked_by = rationale.get("blocked_by")
+    forbidden_action = rationale.get("forbidden_action")
+    if not isinstance(blocked_by, str) or not blocked_by:
+        return False
+    if not isinstance(forbidden_action, str) or not forbidden_action:
+        return False
+    if not isinstance(qa_value, dict):
+        return False
+    qa = qa_value.get("qa")
+    return isinstance(qa, dict) and qa.get("status") == "pass"
+
+
+def _parent_handoff_eligible(
+    dev_value: dict[str, Any] | None,
+    contributing_qa_values: list[dict[str, Any] | None],
+) -> bool:
+    """M3 cross-check for the PARENT/canonical dev-report path (fan-out only).
+
+    Ticket 20260911-011232 iteration 2.  `_dev_handoff_eligible` above locates
+    "the same lane's own qa-report" via `_sibling_qa_report_path`, which is
+    correct for an ordinary lane (that file exists) but wrong for the
+    parent/canonical: a parent-level `qa-report-<bare-task-id>.json`
+    structurally does not, and should not, exist in fan-out mode -- only
+    lane-level QA reports do (commands/close.md documents parent
+    ticket/context/QA as optional, never required).  Constructing that
+    filename for the parent path only ever finds nothing, so the parent's own
+    needs_review reclassification was permanently unreachable even when every
+    contributing lane's own QA independently passed.
+
+    The fix: cross-check against the ACTUAL synthesis source instead.  EVERY
+    lane whose own dev-report shows dev.status == "needs_review" (i.e. every
+    lane that actually contributed to the parent's synthesized
+    dev.status_rationale, mirroring aggregate-dev-report.py's
+    `_synthesize_status_rationale`) must have that SAME lane's own qa-report
+    independently showing qa.status == "pass".  A single contributing lane
+    whose own QA is missing, unreadable, or not a genuine pass keeps the
+    parent's error hard -- exactly as `_dev_handoff_eligible` keeps a single
+    ordinary lane hard when ITS OWN qa is not a pass.  An empty contributing
+    set is also ineligible: a parent needs_review claim with zero lane-level
+    evidence behind it is not trustworthy.
+    """
+    if not isinstance(dev_value, dict):
+        return False
+    dev = dev_value.get("dev")
+    if not isinstance(dev, dict):
+        return False
+    if dev.get("status") != "needs_review":
+        return False
+    rationale = dev.get("status_rationale")
+    if not isinstance(rationale, dict):
+        return False
+    if rationale.get("classification") not in DEV_STATUS_RATIONALE_CLASSIFICATIONS:
+        return False
+    blocked_by = rationale.get("blocked_by")
+    forbidden_action = rationale.get("forbidden_action")
+    if not isinstance(blocked_by, str) or not blocked_by:
+        return False
+    if not isinstance(forbidden_action, str) or not forbidden_action:
+        return False
+    if not contributing_qa_values:
+        return False
+    for qa_value in contributing_qa_values:
+        if not isinstance(qa_value, dict):
+            return False
+        qa = qa_value.get("qa")
+        if not isinstance(qa, dict) or qa.get("status") != "pass":
+            return False
+    return True
+
+
+def _sibling_qa_report_path(dev_report_path: str, lane_task_id: str | None) -> str | None:
+    """Return the qa-report path for the SAME lane as a dev-report path.
+
+    Both paths are constructed from the same lane/parent identity by
+    `_lane_paths`/`_parent_paths` (``dev-report-<id>.json`` and
+    ``qa-report-<id>.json`` side by side in docs/dev/) -- rebuilt here from the
+    dev-report's own directory rather than re-deriving `dev_dir` independently,
+    so it stays correct under any project-root/dev-dir binding.
+    """
+    if not lane_task_id:
+        return None
+    directory, _, name = dev_report_path.rpartition("/")
+    if not name.startswith("dev-report-") or not name.endswith(".json"):
+        return None
+    qa_name = f"qa-report-{lane_task_id}.json"
+    return f"{directory}/{qa_name}" if directory else qa_name
+
+
+def _evidence_ref_count(kind: str, value: dict[str, Any] | None) -> int:
+    """Diagnostic count of the disclosure's own supporting evidence refs."""
+    if not isinstance(value, dict):
+        return 0
+    if kind == "qa_environmental":
+        qa = value.get("qa")
+        disclosed = qa.get("disclosed_exception") if isinstance(qa, dict) else None
+        evidence = disclosed.get("evidence") if isinstance(disclosed, dict) else None
+        return len(evidence) if isinstance(evidence, list) else 0
+    if kind == "dev_handoff":
+        blocking = value.get("blocking_issues")
+        return len(blocking) if isinstance(blocking, list) else 0
+    return 0
+
+
+def _reclassify_disclosed_exceptions(
+    errors: list[dict[str, str]],
+    loaded_reports: dict[str, dict[str, Any]],
+    lane_task_id_by_path: dict[str, str],
+    *,
+    mode: str,
+    parent_dev_report_path: str,
+    lane_dev_report_paths: list[str],
+) -> tuple[list[dict[str, str]], list[dict[str, Any]]]:
+    """M1: additive post-pass moving eligible errors into disclosed_exceptions[].
+
+    Strictly additive over already-computed `errors` -- validate_dev()/
+    validate_qa() are never edited in place (Contract D).  A path's
+    RECLASSIFIABLE_CODES errors are moved as a group only when every one of
+    them is jointly eligible (M2 for a lone INVALID_QA_STATUS; M3 for
+    INVALID_DEV_STATUS/UNRESOLVED_BLOCKERS together) -- a single disqualifying
+    finding anywhere at that path keeps ALL of that path's errors hard (M2's
+    "single mislabeled defect anywhere disqualifies the whole lane").  Every
+    other error code (MISSING_ARTIFACT, IDENTITY_MISMATCH, STALE_*, ...) is
+    passed through untouched; the original binary checks are unreachable from
+    this function.
+
+    `mode`/`parent_dev_report_path`/`lane_dev_report_paths` (ticket
+    20260911-011232 iteration 2) exist ONLY to distinguish the
+    PARENT/canonical dev-report path from an ordinary lane path in fan-out
+    mode -- resolve_chain() always passes mode="singular" with an empty
+    lane_dev_report_paths for a singular chain, so `_dev_handoff_eligible`'s
+    existing same-lane-own-qa-report lookup below is completely unchanged for
+    singular chains and for every ordinary fan-out lane path; only the
+    parent path takes the new `_parent_handoff_eligible` cross-check.
+    """
+    grouped: dict[str, list[dict[str, str]]] = {}
+    for entry in errors:
+        if entry.get("code") in RECLASSIFIABLE_CODES:
+            grouped.setdefault(entry.get("path", ""), []).append(entry)
+
+    eligible: dict[str, tuple[str, str]] = {}
+    for path, entries in grouped.items():
+        codes_here = {entry["code"] for entry in entries}
+        if codes_here == {"INVALID_QA_STATUS"}:
+            qa_value = loaded_reports.get(path)
+            if _qa_environmental_eligible(qa_value):
+                classification = qa_value["qa"]["disclosed_exception"]["classification"]
+                eligible[path] = ("qa_environmental", classification)
+        elif codes_here and codes_here <= {"INVALID_DEV_STATUS", "UNRESOLVED_BLOCKERS"}:
+            dev_value = loaded_reports.get(path)
+            if mode == "fanout" and path == parent_dev_report_path:
+                # No parent-level qa-report exists to be a "sibling" of --
+                # cross-check every actually-contributing lane's own qa
+                # instead (see _parent_handoff_eligible docstring).
+                contributing_qa_values: list[dict[str, Any] | None] = []
+                for lane_dev_path in lane_dev_report_paths:
+                    lane_dev_value = loaded_reports.get(lane_dev_path)
+                    lane_dev = (
+                        lane_dev_value.get("dev")
+                        if isinstance(lane_dev_value, dict)
+                        else None
+                    )
+                    if not (
+                        isinstance(lane_dev, dict)
+                        and lane_dev.get("status") == "needs_review"
+                    ):
+                        continue
+                    lane_qa_path = _sibling_qa_report_path(
+                        lane_dev_path, lane_task_id_by_path.get(lane_dev_path)
+                    )
+                    contributing_qa_values.append(
+                        loaded_reports.get(lane_qa_path) if lane_qa_path else None
+                    )
+                if _parent_handoff_eligible(dev_value, contributing_qa_values):
+                    classification = dev_value["dev"]["status_rationale"]["classification"]
+                    eligible[path] = ("dev_handoff", classification)
+            else:
+                lane_task_id = lane_task_id_by_path.get(path)
+                qa_path = _sibling_qa_report_path(path, lane_task_id)
+                qa_value = loaded_reports.get(qa_path) if qa_path else None
+                if _dev_handoff_eligible(dev_value, qa_value):
+                    classification = dev_value["dev"]["status_rationale"]["classification"]
+                    eligible[path] = ("dev_handoff", classification)
+
+    remaining: list[dict[str, str]] = []
+    disclosed: list[dict[str, Any]] = []
+    for entry in errors:
+        code = entry.get("code")
+        path = entry.get("path", "")
+        if code in RECLASSIFIABLE_CODES and path in eligible:
+            kind, classification = eligible[path]
+            disclosed.append(
+                {
+                    "code": code,
+                    "path": path,
+                    "lane_task_id": lane_task_id_by_path.get(path),
+                    "kind": kind,
+                    "classification": classification,
+                    "evidence_ref_count": _evidence_ref_count(kind, loaded_reports.get(path)),
+                }
+            )
+        else:
+            remaining.append(entry)
+    return remaining, disclosed
+
+
+def _dev_report_has_sibling_shards(dev_dir: Path, task_id: str) -> bool:
+    """Whether any dev-report-<task_id>-<label>.json sibling exists.
+
+    Consulted only when the canonical dev-report itself cannot be read at
+    all.  A genuinely singular chain missing its dev-report has no such
+    sibling; any sibling means the shape may actually be a fan-out canonical
+    that also happens to be missing/broken, which gap classification does not
+    cover this cycle (singular-mode only) -- fail closed to NOT_APPLICABLE
+    rather than guess.
+    """
+    try:
+        return any(dev_dir.glob(f"dev-report-{task_id}-*.json"))
+    except OSError:
+        return False
 
 
 def _safe_task_id(task_id: str) -> bool:
@@ -514,6 +893,18 @@ def _base_result(task_id: str, canonical: str, completion: str) -> dict[str, Any
         },
         "checks_not_applicable": {},
         "errors": [],
+        # R4 additive fields (spec-20260907-115508-lawful-commit-channel.md).
+        # NOT_APPLICABLE by default; overwritten only where determinable (see
+        # _compute_gap_fields call sites in resolve_chain()).
+        "stage_gaps": NOT_APPLICABLE,
+        "non_gap_errors": NOT_APPLICABLE,
+        "late_repair_eligible": NOT_APPLICABLE,
+        "gap_classification": NOT_APPLICABLE,
+        # Disclosed-exception vocabulary (ticket 20260911-011232).  Populated
+        # by _reclassify_disclosed_exceptions(); [] means no eligible
+        # reclassification occurred (either no reclassifiable error existed,
+        # or none was eligible) -- never absorbed into a bare "pass".
+        "disclosed_exceptions": [],
     }
 
 
@@ -561,6 +952,23 @@ def resolve_chain(project_root: Path | str, task_id: str) -> dict[str, Any]:
     completion = validator.read_text(parents["completion"])
     if canonical is None:
         result["errors"] = validator.errors
+        # The dev-report itself could not be read (absent, empty, malformed,
+        # or non-object) -- exactly the R1.4 "missing more than QA" shape that
+        # can include a wholly-absent dev-report (R4/AC-13).  A sibling shard
+        # makes the shape ambiguous (possibly a broken fan-out canonical,
+        # out of scope this cycle); classify only when unambiguous.
+        if not _dev_report_has_sibling_shards(dev_dir, task_id):
+            # No sibling shard evidence of a fan-out canonical: classify as
+            # the singular shape gap classification requires (R4/AC-13's
+            # wholly-absent-dev-report case can only be reached this way).
+            result["mode"] = "singular"
+            qa_report_path = _rel(parents["qa_report"], root)
+            (
+                result["stage_gaps"],
+                result["non_gap_errors"],
+                result["late_repair_eligible"],
+                result["gap_classification"],
+            ) = _compute_gap_fields(validator.errors, qa_report_path)
         return result
 
     validator.validate_dev(canonical, task_id, parents["dev_report"])
@@ -785,8 +1193,35 @@ def resolve_chain(project_root: Path | str, task_id: str) -> dict[str, Any]:
         ]
 
     result["parallel_workers"] = workers
-    result["errors"] = validator.errors
-    result["status"] = "pass" if not validator.errors else "fail"
+    # M1: additive reclassification pass over the already-computed errors --
+    # validate_dev()/validate_qa() above are never revisited.  Final status:
+    # "pass" when both lists are empty, "pass_with_exceptions" when errors is
+    # empty but disclosed_exceptions is not, "fail" whenever errors is
+    # non-empty (regardless of disclosed_exceptions).
+    remaining_errors, disclosed_exceptions = _reclassify_disclosed_exceptions(
+        validator.errors,
+        validator.loaded_reports,
+        lane_task_id_by_path,
+        mode=result["mode"],
+        parent_dev_report_path=result["canonical_dev_report"],
+        lane_dev_report_paths=[lane["dev_report"] for lane in result["lanes"]],
+    )
+    result["errors"] = remaining_errors
+    result["disclosed_exceptions"] = disclosed_exceptions
+    if remaining_errors:
+        result["status"] = "fail"
+    elif disclosed_exceptions:
+        result["status"] = "pass_with_exceptions"
+    else:
+        result["status"] = "pass"
+    if result["mode"] == "singular":
+        qa_report_path = _rel(parents["qa_report"], root)
+        (
+            result["stage_gaps"],
+            result["non_gap_errors"],
+            result["late_repair_eligible"],
+            result["gap_classification"],
+        ) = _compute_gap_fields(remaining_errors, qa_report_path)
     return result
 
 
