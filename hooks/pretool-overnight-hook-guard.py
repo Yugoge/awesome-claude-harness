@@ -21,6 +21,7 @@ import json
 import os
 import re
 import shutil
+import stat
 import sys
 import time
 from datetime import datetime, timezone
@@ -445,11 +446,23 @@ def _load_state(sf: Path) -> dict | None:
 
 
 def _extract_live_worktree_path(sf: Path) -> str:
-    """Return worktree_path from a live, non-orphaned state file; else empty."""
+    """Return the ISOLATED worktree_path from a live state file; else empty.
+
+    An `in_place` session (2026-08-08: `/dev-overnight` without `--worktree`) is
+    deliberately excluded. Its `worktree_path` is the main root, and this list
+    is the set of roots that writes are confined TO — so including it would
+    declare the main checkout an isolated worktree for *every* session, not just
+    its own. A concurrent `--worktree` actor would then find the main root on
+    its allow-list and be free to write into the very checkout its isolation
+    exists to protect. An in-place session imposes no boundary, which is exactly
+    what the user chose by not asking for one.
+    """
     state = _load_state(sf)
     if state is None:
         return ""
     if not _is_session_live(state):
+        return ""
+    if state.get("isolation_kind") == "in_place":
         return ""
     return state.get("worktree_path", "") or ""
 
@@ -997,6 +1010,12 @@ def _governing_state_for_cwd(cwd: str) -> dict | None:
         state = _load_state(sf)
         if state is None or not _is_session_live(state):
             continue
+        # `worktree_context` means the cwd is inside an ISOLATED worktree, a set
+        # an in_place record contributes nothing to. Its root IS the main root,
+        # so it would otherwise match EVERY cwd under main -- including another
+        # session's worktree -- and become that actor's governing state.
+        if state.get('isolation_kind') == 'in_place':
+            continue
         wt = state.get('worktree_path', '') or ''
         if wt and _path_under_prefix(cwd_real, wt):
             return state
@@ -1320,14 +1339,105 @@ _DANGEROUS_GIT_OP_RE = re.compile(
     r'branch|merge|rebase|pull|cherry-pick|am|worktree)\b')
 
 
+# Per-request working root of the record GOVERNING this actor, for `in_place`
+# records only (2026-08-09). This exists because ONE collection
+# (`_get_active_worktree_paths`) was answering TWO different questions:
+#   Q1  which roots are write-confinement targets for EVERY session -- an
+#       in_place record must NOT contribute (see `_extract_live_worktree_path`:
+#       its root IS the main checkout, and putting it on the shared allow-list
+#       would hand a concurrent isolated session write access to the very tree
+#       its isolation exists to protect).
+#   Q2  which root is the legitimate working root of a GIVEN live record, used
+#       to decide whether a git op is main-targeting -- an in_place record MUST
+#       contribute, or its own session cannot run git at all (not status, not
+#       add, not commit, not even a read-only log) in the root it was told to
+#       work in. in_place is the DEFAULT mode.
+# Q2 is answered PER REQUEST, never as a shared collection: the exemption is
+# scoped to the record governing THIS actor, so a concurrently running isolated
+# session (whose governing record is its own worktree record) still sees the
+# main root as fully main-targeting.
+#
+# QA F5 (2026-09-03) -- LAYERING DEPENDENCY, DO NOT ASSUME THIS LAYER COVERS IT.
+# Every protected-branch rule in this file is COMMAND-SHAPED: it matches argv
+# tokens and never resolves HEAD. So it cannot see that an ordinary permitted
+# `commit` advances the protected branch when HEAD is attached to it. Under
+# in_place that STATEFUL case is owned entirely by two other layers:
+#   * `scripts/create-overnight-state.sh` refuses to launch in-place mode while
+#     the checkout is on the protected branch (so the configuration cannot be
+#     produced by the supported launch path); and
+#   * the git-native `hooks/git-keystone/reference-transaction`, which denies
+#     the ref move itself (`OVERNIGHT-KEYSTONE-DENY reason=branch_protected`).
+# Before the Q2 exemption the blanket main-root block masked this gap by
+# refusing the commit as collateral. It no longer does. Neither of those two
+# layers may be removed on the assumption that this PreToolUse guard covers the
+# stateful case -- it does not, and after Q2 it covers it less than it
+# incidentally did before.
+_GOVERNING_OWN_ROOT: str = ''
+
+
+def _set_governing_own_root(gov_state: dict | None,
+                            payload: dict | None = None) -> None:
+    """Record the governing state's own working root, for `in_place` only (Q2).
+
+    Isolated records already answer Q2 through `_get_active_worktree_paths()`,
+    so they deliberately set nothing here -- keeping the main root fully guarded
+    for every isolated actor.
+
+    The exemption is BOUNDED by the record's own `main_root` (the launcher sets
+    the two equal under `in_place`). A record whose working root escapes its
+    main_root is malformed and earns no exemption -- so the widest this can ever
+    reach is the checkout the guard was already scoped to, never `/`.
+
+    QA F1 (2026-09-03): the exemption also requires an UNCONTRADICTED identity.
+    `_classify_actor` resolves `overnight_owner` from the payload's session_id
+    before it consults the agent_id -> dev_session_id child mapping, so a payload
+    whose session_id named this in_place record while its agent_id mapped to a
+    different live session took the exemption on an identity the agent index
+    disagrees with (measured: `git -C <main> commit` allowed). When the two
+    identities cannot be proven to name the SAME record we decline the exemption
+    and fall back to '' -- the pre-exemption value, which blocks. Declining is
+    the only safe direction: preferring the child mapping instead would let an
+    isolated actor borrow the exemption through a stale index entry, which is
+    strictly worse than the hole it would close.
+
+    Both identities are corroborated, not just the child, so the rule does not
+    depend on the order `_classify_actor` happens to consult them in -- that
+    ordering IS the hazard, and a check that only reads the later one would be
+    fixed against today's order alone.
+    """
+    global _GOVERNING_OWN_ROOT
+    _GOVERNING_OWN_ROOT = ''
+    if not isinstance(gov_state, dict) or gov_state.get('isolation_kind') != 'in_place':
+        return
+    gov_sid = gov_state.get('session_id') or ''
+    for ident in (_load_session_state((payload or {}).get('session_id') or ''),
+                  _resolve_child_session(payload) if isinstance(payload, dict) else None):
+        if ident is None or not _is_session_live(ident):
+            continue  # silent identity: no opinion, so nothing to contradict
+        ident_sid = ident.get('session_id') or ''
+        if not (gov_sid and ident_sid and gov_sid == ident_sid):
+            return
+    own = gov_state.get('worktree_path', '') or ''
+    main = gov_state.get('main_root', '') or ''
+    if own and main and _path_under_prefix(own, main):
+        _GOVERNING_OWN_ROOT = own
+
+
 def _path_targets_main(tgt_dir: str, main_real: str) -> bool:
     """fix-3: True iff tgt_dir resolves UNDER main_root but OUTSIDE every active
     overnight worktree. Replaces the exact-root equality (which let a main-subdir
     target evade). A worktree physically lives under .claude/worktrees but is an
-    independent checkout, so it is NOT main-targeting."""
+    independent checkout, so it is NOT main-targeting.
+
+    2026-08-09 (Q2): the governing record's OWN working root is likewise not
+    main-targeting FOR THAT RECORD'S ACTOR. Under `in_place` that root IS the
+    main root, so without this the actor's own checkout is unreachable.
+    """
     if not main_real or not tgt_dir:
         return False
     if not _path_under_prefix(tgt_dir, main_real):
+        return False
+    if _GOVERNING_OWN_ROOT and _path_under_prefix(tgt_dir, _GOVERNING_OWN_ROOT):
         return False
     for wt in _get_active_worktree_paths():
         if _path_under_prefix(tgt_dir, wt):
@@ -1664,6 +1774,22 @@ def _enforce_overnight_git_command(command: str, main_root: str, worktree_path: 
                     f'\nOVERNIGHT MASTER REF-MOVE BLOCK: git {sub} touching '
                     'the protected branch / HEAD is forbidden for overnight actors.\n'
                 )
+        # QA F3 (2026-09-03): publication of the protected branch to a remote.
+        # Under in_place this used to be refused only as COLLATERAL of the
+        # blanket main-root block above -- the same block that also refused a
+        # read-only `log`, so the redundancy was incidental, not designed.
+        # Removing that collateral was correct, but it left protected-branch
+        # publication resting on a single other hook's registration. This layer
+        # already owns three command-shaped protected-branch rules, so the
+        # publication verb belongs beside them, in BOTH isolation modes.
+        # Command-shaped like its siblings: a bare `git push` naming no refspec
+        # carries no branch signal here and is covered by the layers named in
+        # the Q2 note above.
+        if sub == 'push' and switches_protected:
+            _block(
+                '\nOVERNIGHT MASTER PUBLISH BLOCK: git push of the protected '
+                'branch to a remote is forbidden for overnight actors.\n'
+            )
         if sub == 'worktree':
             _block(
                 '\nOVERNIGHT WORKTREE BLOCK: an overnight actor may not manage '
@@ -1847,8 +1973,80 @@ def _shared_common_dir_ro_rebinds(worktree_path: str) -> list[str]:
     return args
 
 
+def _state_str(state: dict, key: str) -> str:
+    """A state field as a non-empty str, else ''. A record field is JSON and may be
+    any type; feeding a non-str to os.path.join raises out of the hook."""
+    v = state.get(key) if isinstance(state, dict) else None
+    return v if isinstance(v, str) and v else ''
+
+
+def _qa_mode_sentinel_rw_bind(main_real: str, wt_real: str, registry_dir: str) -> list[str]:
+    """MID-SESSION harness-state closure (task 20260809-013317). `qa.json`'s
+    `qa_mode` is the ONE sentinel the orchestrator must UPDATE while the session
+    runs — `scripts/write-qa-mode.sh` flips it before each QA dispatch. It lives
+    under the RO-bound main root, so that write hits EROFS under
+    `registered_worktree` / `fresh_clone_checkout` while the same path stays
+    READABLE (measured, not theoretical). The launcher's pre-create ORDERING escape
+    (`scripts/overnight-init.sh`, run harness-side before the boundary is armed)
+    cannot cover it: pre-creation cannot carry a value that changes mid-session.
+    Return `--bind` args RW-exposing exactly that ONE FILE, nested over the RO main
+    bind — the same shape as the worktree exception (step 5).
+
+    Scope is the SINGLE FILE, never its directory. A directory bind would also make
+    `e2e-enforce.json` / `codex-enforce.json` writable AND removable, and
+    `subagentstop-e2e-enforce.py` fails OPEN on an absent flag — a directory bind
+    therefore hands the actor a one-`rm` enforcement bypass. The file bind is also
+    why `write-qa-mode.sh` must keep writing IN PLACE (`open(path,'w')`): a
+    temp-file + `rename()` would hit EBUSY on a bind mountpoint.
+
+    Every rejection yields NO bind, leaving the write to fail LOUDLY (EROFS, rc=1,
+    caller aborts) — the correct signal. Refused: a symlinked or redirected
+    `.claude/dev-registry` root; a session dir that is not a DIRECT child of that
+    root, not a directory, or outside main; a symlinked `qa.json` (lstat, no
+    follow); a non-regular `qa.json`; and `st_nlink != 1`, which is what stops a
+    hardlink planted in the session dir from aliasing a tracked main-tree or `.git`
+    inode through the RW bind (gitignore status does not prevent that).
+
+    ACTOR GATE (QA F1): granted ONLY to the orchestrator, mirroring
+    `_is_harness_state_exempt`, whose string-layer exemption for THIS SAME path is
+    itself gated on `_is_orchestrator_actor()`. `_apply_write_boundary` also runs
+    for `overnight_child` / `worktree_context` — i.e. for SUBAGENTS — so an ungated
+    bind lets a subagent rewrite `qa_mode`, and `subagentstop-e2e-enforce.py` exits
+    0 when it reads `ba_validation`: a one-write stop-gate bypass (reproduced
+    end-to-end, pre-fix). The string layer cannot backstop it — `_apply_write_
+    boundary` leaves via `_emit_command_rewrite`'s `sys.exit(0)` BEFORE
+    `apply_global_worktree_enforcement` runs. The gate lives INSIDE this helper
+    rather than at the call site so any future call site inherits it. `_REQUEST_CTX`
+    is populated at `main()` before the boundary is applied (verified by execution:
+    an unpopulated context would make this gate fail OPEN, since `not {}.get(...)`
+    is True)."""
+    if not _is_orchestrator_actor():
+        return []
+    if not isinstance(registry_dir, str) or not registry_dir or not main_real:
+        return []
+    try:
+        reg_root_lit = os.path.join(main_real, '.claude', 'dev-registry')
+        if os.path.islink(reg_root_lit) or not os.path.isdir(reg_root_lit):
+            return []  # a redirected registry root could aim the bind into .git
+        reg_root = os.path.realpath(reg_root_lit)
+        reg_real = os.path.realpath(registry_dir)
+        if os.path.dirname(reg_real) != reg_root or not os.path.isdir(reg_real):
+            return []  # must be a DIRECT child session dir, never the root itself
+        if not _path_under_prefix(reg_real, main_real):
+            return []
+        if wt_real and _path_under_prefix(reg_real, wt_real):
+            return []  # already RW via the worktree bind (in_place): no second bind
+        target = os.path.join(reg_real, 'qa.json')
+        st = os.lstat(target)  # no-follow: a symlinked sentinel is refused
+        if not stat.S_ISREG(st.st_mode) or st.st_nlink != 1:
+            return []
+    except (OSError, ValueError, TypeError):
+        return []
+    return ['--bind', target, target]
+
+
 def _build_bwrap_argv(command: str, main_root: str, worktree_path: str,
-                      isolation_kind: str) -> list[str] | None:
+                      isolation_kind: str, registry_dir: str = '') -> list[str] | None:
     """Build the bwrap argv that re-execs `command` with the PROTECTED MAIN tree
     RO and the overnight worktree RW. Returns None if the layout cannot be built.
 
@@ -1870,6 +2068,12 @@ def _build_bwrap_argv(command: str, main_root: str, worktree_path: str,
                                   a keystone-disabling `git config --unset
                                   core.hooksPath` / hook drop hits EROFS while
                                   objects/refs/logs stay RW for commits
+      8. --bind <dev-registry>/<session>/qa.json   that ONE harness-state FILE, RW
+                                  so the MID-SESSION qa_mode update works in every
+                                  isolation mode; the enclosing dir and every other
+                                  sentinel stay RO, and the bind is emitted ONLY for
+                                  the ORCHESTRATOR — a subagent gets no bind and its
+                                  write hits EROFS (_qa_mode_sentinel_rw_bind)
     Because every RW bind is applied AFTER the RO binds, and each RW bind targets
     a path UNDER main that is itself an approved exception, no mount exposes a RW
     source/root covering the protected main tree except the worktree + git paths.
@@ -1911,6 +2115,9 @@ def _build_bwrap_argv(command: str, main_root: str, worktree_path: str,
         # drops hit EROFS, while <common>/objects + <common>/refs + logs stay RW so
         # the legitimate keystone-guarded commit / ref-update path is unaffected.
         argv += _shared_common_dir_ro_rebinds(wt_real)
+    # (8) MID-SESSION harness-state closure: RW-bind the qa_mode sentinel FILE,
+    # orchestrator-only (the helper self-gates; subagents get no bind).
+    argv += _qa_mode_sentinel_rw_bind(main_real, wt_real, registry_dir)
     argv += ['--', '/bin/bash', '-c', command]
     return argv
 
@@ -2026,7 +2233,19 @@ def _apply_write_boundary(command: str, gov_state: dict, main_git_dir: str) -> N
             'keystone and the RO-bind). Use git inside the worktree instead.\n'
         )
     if _bwrap_boundary_available():
-        argv = _build_bwrap_argv(command, main_root, worktree_path, isolation_kind)
+        # dev_registry_dir is schema-v9 authoritative; derive it for older records
+        # so an in-flight session still gets the mid-session sentinel exception.
+        # Only STRING values are used: a malformed record must degrade to "no
+        # registry bind" (write then fails loudly through the writer), never raise
+        # out of the hook — that would skip the bwrap rewrite itself.
+        registry_dir = _state_str(gov_state, 'dev_registry_dir')
+        if not registry_dir:
+            sid = (_state_str(gov_state, 'dev_registry_session_id')
+                   or _state_str(gov_state, 'session_id'))
+            registry_dir = os.path.join(
+                main_root, '.claude', 'dev-registry', sid) if sid else ''
+        argv = _build_bwrap_argv(command, main_root, worktree_path, isolation_kind,
+                                 registry_dir)
         if argv:
             # shlex-quote the argv into a single re-exec command string.
             import shlex
@@ -2060,6 +2279,10 @@ def main():
     cwd = _payload_cwd(payload)
     wt_paths = _get_active_worktree_paths()
     classification, gov_state = _classify_actor(payload, state, wt_paths, cwd)
+    # Q2 (2026-08-09): scope the governing record's own working root to THIS
+    # request before any main-targeting predicate runs. in_place only; isolated
+    # records leave the main root fully guarded.
+    _set_governing_own_root(gov_state, payload)
 
     # M9: a `normal` concurrent user session on main is NOT enforced — exit 0 so
     # the user's main session is never false-blocked.
