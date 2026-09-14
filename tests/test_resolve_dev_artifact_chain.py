@@ -962,3 +962,122 @@ def test_revision_labelled_filename_declaring_an_undeclared_lane_is_flagged(
     _write(path, _qa_document(f"{TASK_ID}-{UNDECLARED_WORKER}"))
     result = RESOLVER.resolve_chain(tmp_path, TASK_ID)
     assert _undeclared_lane_paths(result) == [_relative(tmp_path, path)]
+def test_qa_findings_malformed_dict_all_findings_stays_hard_fail(tmp_path: Path) -> None:
+    """AC1 (dev-20260914-075954): a dict-shaped qa.all_findings must not be
+    silently treated as zero findings -- a critical dev_implementation
+    finding smuggled inside it must still hard-fail the chain, matching the
+    already-correct list-shaped behavior in test_ac_n2 above."""
+    parents = _make_singular(tmp_path)
+    doc = _qa_document_with_disclosed_exception(TASK_ID)
+    doc["qa"]["all_findings"] = {
+        "smuggled": {
+            "severity": "critical",
+            "primary_cause": "dev_implementation",
+            "blocks_release": True,
+        }
+    }
+    _write(parents["qa"], doc)
+    result = RESOLVER.resolve_chain(tmp_path, TASK_ID)
+    assert result["status"] == "fail"
+    assert "INVALID_QA_STATUS" in _error_codes(result)
+    assert result["disclosed_exceptions"] == []
+
+
+def test_qa_findings_malformed_dict_failures_stays_hard_fail(tmp_path: Path) -> None:
+    """AC2 (dev-20260914-075954): same bypass via qa.failures instead of
+    qa.all_findings -- both container keys share the vulnerable path."""
+    parents = _make_singular(tmp_path)
+    doc = _qa_document_with_disclosed_exception(TASK_ID)
+    doc["qa"]["failures"] = {
+        "smuggled": {
+            "severity": "critical",
+            "primary_cause": "dev_implementation",
+            "blocks_release": True,
+        }
+    }
+    _write(parents["qa"], doc)
+    result = RESOLVER.resolve_chain(tmp_path, TASK_ID)
+    assert result["status"] == "fail"
+    assert "INVALID_QA_STATUS" in _error_codes(result)
+    assert result["disclosed_exceptions"] == []
+
+
+def test_qa_findings_malformed_explicit_null_stays_hard_fail(tmp_path: Path) -> None:
+    """AC3 (dev-20260914-075954): an explicit JSON null for a present
+    all_findings key is malformed, not "no findings" -- only a truly absent
+    key means zero findings, so this must hard-fail exactly like the
+    dict-shaped cases above."""
+    parents = _make_singular(tmp_path)
+    doc = _qa_document_with_disclosed_exception(TASK_ID)
+    doc["qa"]["all_findings"] = None
+    _write(parents["qa"], doc)
+    result = RESOLVER.resolve_chain(tmp_path, TASK_ID)
+    assert result["status"] == "fail"
+    assert "INVALID_QA_STATUS" in _error_codes(result)
+    assert result["disclosed_exceptions"] == []
+
+
+def test_qa_findings_absent_key_guard_preserved_pass_with_exceptions(tmp_path: Path) -> None:
+    """AC4 (dev-20260914-075954): guard preservation -- a truly absent
+    all_findings key (the pre-existing, legitimate shape almost every
+    fixture relies on) must still resolve to pass_with_exceptions; the fix
+    must fail closed only on a present-but-malformed container, never on
+    plain absence."""
+    parents = _make_singular(tmp_path)
+    doc = _qa_document_with_disclosed_exception(TASK_ID)
+    assert "all_findings" not in doc["qa"]
+    _write(parents["qa"], doc)
+    result = RESOLVER.resolve_chain(tmp_path, TASK_ID)
+    assert result["status"] == "pass_with_exceptions", result["errors"]
+    assert result["errors"] == []
+
+
+def test_qa_findings_malformed_scalar_shapes_stay_hard_fail(tmp_path: Path) -> None:
+    """Codex round-1 finding #1 (dev-20260914-075954): the fix's isinstance
+    check is a general "not a list" guard, not special-cased to dict/null --
+    prove that generality holds for scalar JSON shapes too (string, number,
+    boolean), for BOTH all_findings and failures."""
+    parents = _make_singular(tmp_path)
+    for container_key in ("all_findings", "failures"):
+        for malformed_value in ("a string", 42, True):
+            doc = _qa_document_with_disclosed_exception(TASK_ID)
+            doc["qa"][container_key] = malformed_value
+            _write(parents["qa"], doc)
+            result = RESOLVER.resolve_chain(tmp_path, TASK_ID)
+            assert result["status"] == "fail", (container_key, malformed_value)
+            assert "INVALID_QA_STATUS" in _error_codes(result)
+            assert result["disclosed_exceptions"] == []
+
+
+def test_qa_findings_malformed_explicit_null_via_failures_stays_hard_fail(tmp_path: Path) -> None:
+    """Symmetric counterpart of AC3 via the failures key (Codex round-1
+    finding #1)."""
+    parents = _make_singular(tmp_path)
+    doc = _qa_document_with_disclosed_exception(TASK_ID)
+    doc["qa"]["failures"] = None
+    _write(parents["qa"], doc)
+    result = RESOLVER.resolve_chain(tmp_path, TASK_ID)
+    assert result["status"] == "fail"
+    assert "INVALID_QA_STATUS" in _error_codes(result)
+    assert result["disclosed_exceptions"] == []
+
+
+def test_qa_findings_absent_all_findings_with_valid_list_failures_still_pass_with_exceptions(
+    tmp_path: Path,
+) -> None:
+    """Symmetric counterpart of AC4 (Codex round-1 finding #1): all_findings
+    entirely absent while failures IS present and list-shaped with only a
+    non-blocking finding must still resolve to pass_with_exceptions -- the
+    fix must not regress this valid mixed-presence case either."""
+    parents = _make_singular(tmp_path)
+    doc = _qa_document_with_disclosed_exception(TASK_ID)
+    assert "all_findings" not in doc["qa"]
+    doc["qa"]["failures"] = [
+        {"blocks_release": False, "severity": "minor", "primary_cause": "dev_implementation"},
+    ]
+    _write(parents["qa"], doc)
+    result = RESOLVER.resolve_chain(tmp_path, TASK_ID)
+    assert result["status"] == "pass_with_exceptions", result["errors"]
+    assert result["errors"] == []
+
+

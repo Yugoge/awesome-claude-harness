@@ -200,15 +200,24 @@ NOT emit `multi_issue_fanout_requested` merely because `mode == "fanout"` or
 `lanes` has multiple rows.
 
 In that close-only mode:
-- require the supplied chain to have `status == "pass"` and consume its `mode`,
-  `lanes`, `report_paths`, `artifact_paths`,
-  `commit_whitelist_artifacts`, and `qa_inputs` as one authoritative snapshot;
+- require the supplied chain to have `status in {"pass", "pass_with_exceptions"}`
+  and consume its `mode`, `lanes`, `report_paths`, `artifact_paths`,
+  `commit_whitelist_artifacts`, `qa_inputs`, and `disclosed_exceptions` as one
+  authoritative snapshot;
 - read every lane matrix row and QA input, and fail the parent close if the
   supplied artifacts contradict the passed resolver result;
 - for `mode == "fanout"`, evaluate lane ticket/context/dev/QA identity plus
   parent canonical dev-report/completion; parent ticket/context/QA are optional,
   and you MUST NOT request, create, or pretend that those optional parents
-  exist; and
+  exist;
+- when `status == "pass_with_exceptions"` (i.e. `disclosed_exceptions` is
+  non-empty), independently re-verify and cite evidence for EVERY
+  `disclosed_exceptions[]` entry -- re-running at least the commands its
+  underlying qa-report/dev-report itself cites, not merely re-reading its
+  prose -- before treating that chain as closeable; an entry that cannot be
+  corroborated is a live dissent and the parent close must fail, mirroring
+  `commands/close.md`'s branch-10 disclosed-exceptions corroboration gate;
+  and
 - record the lane matrix in the close report's input section and use it for
   Workflow Integrity. Normal N == 1 QA behavior is unchanged.
 

@@ -301,17 +301,26 @@ def _compute_gap_fields(
     return sorted(stage_gaps), sorted(non_gap_errors), late_repair_eligible, gap_classification
 
 
-def _qa_findings(qa: dict[str, Any]) -> list[Any]:
+def _qa_findings(qa: dict[str, Any]) -> list[Any] | None:
     """Return every entry in qa.all_findings/qa.failures, concatenated.
 
     Both keys are read (not either/or) -- a report populating only one of the
-    two must still be checked in full.
+    two must still be checked in full. A truly absent key contributes zero
+    findings (the majority-case shape almost every fixture relies on). A
+    *present* key whose value is not a list -- a dict, an explicit JSON
+    null, or any other non-list shape -- is malformed and must fail closed:
+    this returns None rather than silently treating it as empty, so a
+    critical finding hidden inside a wrongly-shaped container can never be
+    mistaken for "no findings".
     """
     findings: list[Any] = []
     for key in ("all_findings", "failures"):
+        if key not in qa:
+            continue
         entries = qa.get(key)
-        if isinstance(entries, list):
-            findings.extend(entries)
+        if not isinstance(entries, list):
+            return None
+        findings.extend(entries)
     return findings
 
 
@@ -347,7 +356,13 @@ def _qa_environmental_eligible(value: dict[str, Any] | None) -> bool:
         return False
     if value.get("iteration_needed") is not False:
         return False
-    for finding in _qa_findings(qa):
+    qa_findings = _qa_findings(qa)
+    if qa_findings is None:
+        # A present-but-malformed all_findings/failures container cannot be
+        # vouched for as environmental -- fail closed instead of silently
+        # treating it as zero findings.
+        return False
+    for finding in qa_findings:
         if not isinstance(finding, dict):
             # An unreadable finding shape cannot be vouched for as environmental.
             return False

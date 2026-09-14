@@ -111,6 +111,24 @@ def test_close_qa_accepts_one_parent_lane_matrix_without_fake_parents() -> None:
     assert "parent ticket/context/QA are optional" in flat
     assert "MUST NOT request, create, or pretend" in flat
 
+    # dev-20260914-075954 (M3/AC5): the close-gate lane-matrix exception must
+    # be reconciled with the pass_with_exceptions/disclosed_exceptions
+    # vocabulary commands/close.md already uses, not the narrower literal
+    # status == "pass".
+    assert 'status in {"pass", "pass_with_exceptions"}' in section
+    assert "`disclosed_exceptions`" in section
+    assert "independently re-verify and cite evidence" in flat
+    assert "disclosed_exceptions" in flat and "corroborat" in flat
+    assert 'status == "pass"' not in section
+    # Codex round-1 finding #2: lock the crucial failure semantics themselves
+    # (not just the presence of the vocabulary) -- EVERY entry, re-running
+    # cited commands rather than re-reading prose, and an uncorroborated
+    # entry must fail the parent close.
+    assert "for EVERY" in section
+    assert "re-running at least the commands" in flat
+    assert "cannot be corroborated is a live dissent" in flat
+    assert "parent close must fail" in flat
+
 
 def test_spec_update_consumes_lane_matrix_without_fake_parent_context() -> None:
     text = _read("commands/spec-update.md")
