@@ -28,6 +28,26 @@
       "type": "string",
       "enum": ["pass", "warning", "fail"]
     },
+    "disclosed_exception": {
+      "type": "object",
+      "description": "Ticket 20260911-011232 M2/M6: declares a legitimate, evidenced, non-defect exception for a non-passing verdict (e.g. an environmental provenance/audit failure in a shared working tree). Does NOT widen the 'verdict'/nested qa.status enum -- 'warning' is still never silently accepted anywhere; this only documents the disclosure shape the resolver's reclassification pass reads under the runtime-nested qa.disclosed_exception path (schema flat/nested mismatch is pre-existing and out of scope, see ticket S2).",
+      "required": ["classification", "evidence", "attestation"],
+      "properties": {
+        "classification": {
+          "type": "string",
+          "enum": ["shared_working_tree_concurrency", "infrastructure_unavailability", "other_environmental"]
+        },
+        "evidence": {
+          "type": "array",
+          "minItems": 1,
+          "items": {"type": "string", "minLength": 1}
+        },
+        "attestation": {
+          "type": "string",
+          "const": "This is a disclosed, evidenced, non-defect exception -- not a defect in this lane's deliverable."
+        }
+      }
+    },
     "ui_pipeline": {
       "type": "boolean",
       "default": false

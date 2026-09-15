@@ -28,7 +28,20 @@
     },
     "status": {
       "type": "string",
-      "enum": ["completed", "blocked", "partial"]
+      "enum": ["completed", "blocked", "partial", "needs_review"]
+    },
+    "status_rationale": {
+      "type": "object",
+      "description": "Required when status == 'needs_review' (ticket 20260911-011232 M3/M6). A disclosed, evidenced, non-defect handoff -- NEVER a relaxation of 'blocked', which stays unconditionally hard-fail.",
+      "required": ["classification", "blocked_by", "forbidden_action"],
+      "properties": {
+        "classification": {
+          "type": "string",
+          "enum": ["pending_commit_handoff", "pending_external_authorization", "other_disclosed_handoff"]
+        },
+        "blocked_by": {"type": "string", "minLength": 1},
+        "forbidden_action": {"type": "string", "minLength": 1}
+      }
     },
     "files_modified": {
       "type": "array",
@@ -74,5 +87,12 @@
     "implementation_notes": {
       "type": "string"
     }
+  },
+  "if": {
+    "properties": {"status": {"const": "needs_review"}},
+    "required": ["status"]
+  },
+  "then": {
+    "required": ["status_rationale"]
   }
 }

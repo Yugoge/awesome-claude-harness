@@ -1296,6 +1296,8 @@ initial worker shard.
 
 **Iterations**: {N}
 
+**Disclosed Exceptions** (only when `ARTIFACT_CHAIN.status == "pass_with_exceptions"` — ticket 20260911-011232; omit this bullet entirely otherwise): one line per `disclosed_exceptions[]` entry, verbatim — `code` / `path` / `lane_task_id` / `classification`. Never silently absorbed into "PASSED" above.
+
 ## Files Generated
 
 *(Single-lane cycle, N == 1)*
@@ -1341,11 +1343,21 @@ ARTIFACT_CHAIN="$(python3 scripts/resolve-dev-artifact-chain.py \
 
 The fixed entrypoint contract is
 `scripts/resolve-dev-artifact-chain.py --task-id <id> --project-dir <root>`.
-Completion requires process exit 0 and top-level `status == "pass"`; exit 2 or
-`status == "fail"` blocks with the resolver's exact `errors[]`. Do not reproduce
-the validator with ad-hoc file tests. The same result object (`mode`, `lanes`,
-`report_paths`, `artifact_paths`, `commit_whitelist_artifacts`, and `qa_inputs`)
-is the downstream handoff used by `/close` and normal `/commit`.
+Completion requires process exit 0 and top-level
+`status in {"pass", "pass_with_exceptions"}`; exit 2 or `status == "fail"`
+blocks with the resolver's exact `errors[]`. Do not reproduce the validator
+with ad-hoc file tests. The same result object (`mode`, `lanes`,
+`report_paths`, `artifact_paths`, `commit_whitelist_artifacts`, `qa_inputs`,
+and `disclosed_exceptions`) is the downstream handoff used by `/close` and
+normal `/commit`. When `status == "pass_with_exceptions"` (ticket
+20260911-011232 — a lane's own deliverable is independently QA-verified
+correct but carries a disclosed, non-defect condition), completion is NOT
+blocked, but the completion report (`docs/dev/completion-<timestamp>.md`)
+MUST explicitly list every `disclosed_exceptions[]` entry verbatim (`code`,
+`path`, `lane_task_id`, `classification`) — never silently absorbed into an
+undifferentiated "complete". Without this symmetry a fan-out `/dev` cycle
+carrying a disclosed exception could never finish to hand off to `/close` at
+all.
 
 - **Single-lane cycle (N == 1):** `mode == "singular"` preserves the existing
   five-artifact contract: parent ticket, context, dev-report, QA-report, and
