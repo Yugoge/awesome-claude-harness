@@ -102,11 +102,30 @@ settings.json.bak-*
 /.claude/specs/spec-*/
 
 # Live per-machine Claude state — credentials + runtime; NEVER commit
-# (.claude.json holds machineID/userID/oauthAccount/email; the dirs are runtime locks/replays)
+# (.claude.json holds machineID/userID/oauthAccount/email)
 /.claude.json
-/.claude/workflow-locks/
-/.claude/dev-start-replays/
-/.claude/.hook-refactor-allow
+
+# Runtime coordination/replay/daemon state. This repo's own root doubles as
+# the .claude/ dir referenced elsewhere (self-hosted /dev-overnight cycles
+# also grow a genuine nested .claude/), so the same runtime dir can exist at
+# BOTH depths at once. The root-anchored /.claude/<name>/ forms previously
+# here matched only the nested copy, never the top-level one, and were
+# inert since introduction (34c2b0d0, 2026-07-26) — fixed here in
+# dev-20260915-051511-a. Unanchored basename patterns (no leading/internal
+# slash) match at any depth per git's own
+# gitignore(5) semantics, so one line per name below covers both depths now
+# and any future nesting layer without going silently inert again.
+# Directory-pattern matching is path-component-exact, not substring:
+# paseo-daemon/ cannot match commands/paseo-daemon.md or
+# scripts/paseo-daemon-ledger.py (verified via git check-ignore -v, exit 1).
+workflow-locks/
+dev-start-replays/
+.hook-refactor-allow
+paseo-daemon/
+scratch/
+workflow-history/
+overnight-git-bin/
+overnight-git-policy-bin/
 
 # Harness-generated output (transient per-cycle; not for version control)
 # tests/generated/ bulk-untracked; only 20260704-134650 and 20260704-225139 retained

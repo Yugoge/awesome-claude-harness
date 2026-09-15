@@ -1,0 +1,141 @@
+{
+  "quarantine_task_id": "dev-20260915-020044",
+  "quarantined_by_task_id": "dev-20260915-051511-b",
+  "quarantined_at": "2026-09-15T11:58:37Z",
+  "file_count": 22,
+  "move_method": "mv, one file at a time, verified byte-identical (size+sha256) immediately after each move; zero copies, zero deletes",
+  "entries": [
+    {
+      "original_path": ".claude/dev-registry/dev-20260915-020044/architect.json",
+      "quarantined_path": ".claude/quarantined-phantom-dev-cycles/dev-20260915-020044/.claude/dev-registry/dev-20260915-020044/architect.json",
+      "size_bytes": 65,
+      "sha256": "b492c97a054288c21b27acaa33cab30d8bb25da7835711f3b77e67aab75d51b0"
+    },
+    {
+      "original_path": ".claude/dev-registry/dev-20260915-020044/ba.json",
+      "quarantined_path": ".claude/quarantined-phantom-dev-cycles/dev-20260915-020044/.claude/dev-registry/dev-20260915-020044/ba.json",
+      "size_bytes": 58,
+      "sha256": "3f287adddc68a50a18d1019057d9f77531f7edaa7ecf98df56aa74c858e22af7"
+    },
+    {
+      "original_path": ".claude/dev-registry/dev-20260915-020044/cleaner.json",
+      "quarantined_path": ".claude/quarantined-phantom-dev-cycles/dev-20260915-020044/.claude/dev-registry/dev-20260915-020044/cleaner.json",
+      "size_bytes": 63,
+      "sha256": "2f7bf18a4fcd6e1ce9c91541c9c8de583ea8ee1366067ac8b5b6630970dfd773"
+    },
+    {
+      "original_path": ".claude/dev-registry/dev-20260915-020044/cleanliness-inspector.json",
+      "quarantined_path": ".claude/quarantined-phantom-dev-cycles/dev-20260915-020044/.claude/dev-registry/dev-20260915-020044/cleanliness-inspector.json",
+      "size_bytes": 77,
+      "sha256": "fd12b979564459341585d472ee7ba6a617148c380784685c055446e1bd719580"
+    },
+    {
+      "original_path": ".claude/dev-registry/dev-20260915-020044/codex-enforce.json",
+      "quarantined_path": ".claude/quarantined-phantom-dev-cycles/dev-20260915-020044/.claude/dev-registry/dev-20260915-020044/codex-enforce.json",
+      "size_bytes": 265,
+      "sha256": "f6d6c78a1f857e5a63d91946dc72f02125d696c7d1c7ee15e440b9fecf7d9166"
+    },
+    {
+      "original_path": ".claude/dev-registry/dev-20260915-020044/dev.json",
+      "quarantined_path": ".claude/quarantined-phantom-dev-cycles/dev-20260915-020044/.claude/dev-registry/dev-20260915-020044/dev.json",
+      "size_bytes": 59,
+      "sha256": "18bd3705764d0c8f8dfaa0c05e7f75246e72303e9309c660934378b7a2ef8489"
+    },
+    {
+      "original_path": ".claude/dev-registry/dev-20260915-020044/e2e-enforce.json",
+      "quarantined_path": ".claude/quarantined-phantom-dev-cycles/dev-20260915-020044/.claude/dev-registry/dev-20260915-020044/e2e-enforce.json",
+      "size_bytes": 252,
+      "sha256": "0e25caa6a84614bfefeefe52dcc7672044ad66468ce270470918aadfee633a73"
+    },
+    {
+      "original_path": ".claude/dev-registry/dev-20260915-020044/git-edge-case-analyst.json",
+      "quarantined_path": ".claude/quarantined-phantom-dev-cycles/dev-20260915-020044/.claude/dev-registry/dev-20260915-020044/git-edge-case-analyst.json",
+      "size_bytes": 77,
+      "sha256": "41e4b2670218fa42e7908ff4183055cb2fed5d47cf76843928a2375d89032335"
+    },
+    {
+      "original_path": ".claude/dev-registry/dev-20260915-020044/graphify.json",
+      "quarantined_path": ".claude/quarantined-phantom-dev-cycles/dev-20260915-020044/.claude/dev-registry/dev-20260915-020044/graphify.json",
+      "size_bytes": 64,
+      "sha256": "65a8d22ca398529aa48545695689ad37a2f46b1d6f20dbcca15fd12ca0cc8186"
+    },
+    {
+      "original_path": ".claude/dev-registry/dev-20260915-020044/pm.json",
+      "quarantined_path": ".claude/quarantined-phantom-dev-cycles/dev-20260915-020044/.claude/dev-registry/dev-20260915-020044/pm.json",
+      "size_bytes": 58,
+      "sha256": "c6f3a3895f8c5da61c620fd13abe9f8d296511fea40cb6d260962cf1f08a484c"
+    },
+    {
+      "original_path": ".claude/dev-registry/dev-20260915-020044/product-owner.json",
+      "quarantined_path": ".claude/quarantined-phantom-dev-cycles/dev-20260915-020044/.claude/dev-registry/dev-20260915-020044/product-owner.json",
+      "size_bytes": 69,
+      "sha256": "272760028355a9dc6dcd06b9d9b984902edc3e75804986d28e22b2a42b51d8c6"
+    },
+    {
+      "original_path": ".claude/dev-registry/dev-20260915-020044/prompt-inspector.json",
+      "quarantined_path": ".claude/quarantined-phantom-dev-cycles/dev-20260915-020044/.claude/dev-registry/dev-20260915-020044/prompt-inspector.json",
+      "size_bytes": 72,
+      "sha256": "77fc0abc82051afd530b0ac705fd903c5832b90dfcd15e2ab143d1d53128bc24"
+    },
+    {
+      "original_path": ".claude/dev-registry/dev-20260915-020044/qa.json",
+      "quarantined_path": ".claude/quarantined-phantom-dev-cycles/dev-20260915-020044/.claude/dev-registry/dev-20260915-020044/qa.json",
+      "size_bytes": 58,
+      "sha256": "7bb96a924e5436e5b21ee93890c4ce4426e51f3e569c95b84612ce71de8b33e2"
+    },
+    {
+      "original_path": ".claude/dev-registry/dev-20260915-020044/rule-inspector.json",
+      "quarantined_path": ".claude/quarantined-phantom-dev-cycles/dev-20260915-020044/.claude/dev-registry/dev-20260915-020044/rule-inspector.json",
+      "size_bytes": 70,
+      "sha256": "ceb8325e9a7fefdd202e1f35f3a20e03b404c2cee9fa17041b32348c86393145"
+    },
+    {
+      "original_path": ".claude/dev-registry/dev-20260915-020044/style-inspector.json",
+      "quarantined_path": ".claude/quarantined-phantom-dev-cycles/dev-20260915-020044/.claude/dev-registry/dev-20260915-020044/style-inspector.json",
+      "size_bytes": 71,
+      "sha256": "e0188b90ccba065f933e1e290b04c96387b14cf1fdc6d3f271e7d95225c2166f"
+    },
+    {
+      "original_path": ".claude/dev-registry/dev-20260915-020044/test-executor.json",
+      "quarantined_path": ".claude/quarantined-phantom-dev-cycles/dev-20260915-020044/.claude/dev-registry/dev-20260915-020044/test-executor.json",
+      "size_bytes": 69,
+      "sha256": "cdb8cbdf18157bd20c4f9559173e38c87d4ca23e9cb626ff6bb18e4d08e8940f"
+    },
+    {
+      "original_path": ".claude/dev-registry/dev-20260915-020044/test-validator.json",
+      "quarantined_path": ".claude/quarantined-phantom-dev-cycles/dev-20260915-020044/.claude/dev-registry/dev-20260915-020044/test-validator.json",
+      "size_bytes": 70,
+      "sha256": "ea8e026d51db214fd7757dd73ffa05894eb543b2105bec21d608c50fad78a8db"
+    },
+    {
+      "original_path": ".claude/dev-registry/dev-20260915-020044/test-writer.json",
+      "quarantined_path": ".claude/quarantined-phantom-dev-cycles/dev-20260915-020044/.claude/dev-registry/dev-20260915-020044/test-writer.json",
+      "size_bytes": 67,
+      "sha256": "471bf5e6ffe111dbce71022ed4f10bcc90dc230f3e335c244109192c5313b03e"
+    },
+    {
+      "original_path": ".claude/dev-registry/dev-20260915-020044/ui-specialist.json",
+      "quarantined_path": ".claude/quarantined-phantom-dev-cycles/dev-20260915-020044/.claude/dev-registry/dev-20260915-020044/ui-specialist.json",
+      "size_bytes": 69,
+      "sha256": "c7a4ebc6ad977b55a2688e13eceb6cd3be78a443ef37463f115d22a1861f8907"
+    },
+    {
+      "original_path": ".claude/dev-registry/dev-20260915-020044/user.json",
+      "quarantined_path": ".claude/quarantined-phantom-dev-cycles/dev-20260915-020044/.claude/dev-registry/dev-20260915-020044/user.json",
+      "size_bytes": 60,
+      "sha256": "533d462c8dbe6a4a6198e40e38c090f46e51b7f25cca7a5de28d9b4de70a4ddd"
+    },
+    {
+      "original_path": ".claude/dev-start-replays/0a0db999-3273-4172-82e1-9ef1c91a8fa2/c0e2280e0968f70cea9a79f345b72e20389b7263562d1c8aba4a89cd58218906.json",
+      "quarantined_path": ".claude/quarantined-phantom-dev-cycles/dev-20260915-020044/.claude/dev-start-replays/0a0db999-3273-4172-82e1-9ef1c91a8fa2/c0e2280e0968f70cea9a79f345b72e20389b7263562d1c8aba4a89cd58218906.json",
+      "size_bytes": 102461,
+      "sha256": "ed773669d97f6c12d352e08d680fc1cfd878d65324f1c116e49fc259d52edebc"
+    },
+    {
+      "original_path": "docs/dev/user-requirement-dev-20260915-020044.md",
+      "quarantined_path": ".claude/quarantined-phantom-dev-cycles/dev-20260915-020044/docs/dev/user-requirement-dev-20260915-020044.md",
+      "size_bytes": 71,
+      "sha256": "4d08521bee18f8f08695202488e813a8220213830326e0742fe3e61596c70725"
+    }
+  ]
+}
