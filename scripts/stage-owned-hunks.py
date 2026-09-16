@@ -9,7 +9,7 @@ snapshot is used ONLY for a fail-closed out-of-owned-region cross-check.
 
 Usage:
   stage-owned-hunks.py --git-root <root> --file <repo-rel-path> \
-      --ledger <ledger.json> --snapshot <snapshot-file>
+      --ledger <ledger.json> --snapshot <snapshot-file> [--dry-run]
   stage-owned-hunks.py --git-root <root> --file <repo-rel-path> \
       --checkpoint-provenance <entry.json> --task-id <task-id> [--plan-only]
   stage-owned-hunks.py --git-root <root> --file <repo-rel-path> \
@@ -38,6 +38,8 @@ Usage:
   --report-sha256  SHA-256 of the canonical report already bound into the
               repository plan. Required with --untracked-modified-report.
   --plan-only  Compute exact selected patch/digest against a temporary index.
+  --dry-run    Ledger path only: emit INCLUDE/EXCLUDE diagnostic without modifying
+               the git index or working tree.
   --approved-sha256  Fail closed unless recomputed selected bytes have this digest.
 
 Exit codes:
@@ -1269,6 +1271,7 @@ def main(argv):
     ap.add_argument("--report-sha256")
     ap.add_argument("--task-id")
     ap.add_argument("--plan-only", action="store_true")
+    ap.add_argument("--dry-run", action="store_true", help="Ledger path only: emit INCLUDE/EXCLUDE diagnostic without modifying the git index or working tree.")
     ap.add_argument("--approved-sha256")
     ap.add_argument(
         "--effective-report-verified",
@@ -1383,7 +1386,8 @@ def main(argv):
         # Fail-closed MUST leave the file contributing NOTHING to the commit: the
         # pre-staged (possibly peer) bytes are unstaged here, so `git diff --cached
         # -- <rel>` is empty after EXCLUDE (AC3/AC7). Worktree content is untouched.
-        _git(git_root, ["restore", "--staged", "--", rel])
+        if not ns.dry_run:
+            _git(git_root, ["restore", "--staged", "--", rel])
         return _excluded(
             "target file already had staged content in the index; unstaged it and "
             "EXCLUDE (will not commit unattributed staged bytes): %s" % rel
@@ -1475,6 +1479,18 @@ def main(argv):
     # Rewrite the temp-file paths in the patch headers to the real repo-relative
     # path so `git apply --cached` targets the tracked file.
     patch = _rewrite_patch_paths(patch, rel)
+
+    if ns.dry_run:
+        # --dry-run: emit INCLUDE diagnostic to stdout and return OK without touching
+        # the index.  The git apply --cached call and the git restore --staged on
+        # apply failure below are unreachable in dry-run mode.
+        hunk_count = sum(1 for l in patch.split(b"\n") if l.startswith(b"@@"))
+        diag = {"decision": "INCLUDE", "dry_run": True, "hunk_count": hunk_count,
+                "mode": "ledger+snapshot", "patch": patch.decode("utf-8", "replace"),
+                "patch_bytes": len(patch), "patch_sha256": hashlib.sha256(patch).hexdigest(),
+                "path": rel}
+        sys.stdout.write(json.dumps(diag, sort_keys=True) + "\n")
+        return OK
 
     # --- Stage via git apply --cached (never git add, never -A/.) ----------
     rc, out, err = _git(
