@@ -370,7 +370,9 @@ fi
 # silently coerced the no-upstream case to "0 ahead" and exited "Nothing to push". That
 # blocked legitimate first-push flows for branches like cycle6-fixes-* pushed to fork.
 if [ "$STAGED_COUNT" = "0" ]; then
-  HAS_UPSTREAM=$(git rev-parse --abbrev-ref --symbolic-full-name @{u} 2>/dev/null)
+  # On failure this rev-parse echoes the literal `@{u}` to stdout, so the captured value
+  # is non-empty even with no upstream; the exit status is the only reliable signal (R22).
+  HAS_UPSTREAM=$(git rev-parse --abbrev-ref --symbolic-full-name @{u} 2>/dev/null) || HAS_UPSTREAM=""
   if [ -z "$HAS_UPSTREAM" ]; then
     # Case (b): no upstream → first-push flow is the right path. Fall through to step 9.
     BRANCH_COMMIT_COUNT=$(git rev-list --count HEAD 2>/dev/null || echo "0")

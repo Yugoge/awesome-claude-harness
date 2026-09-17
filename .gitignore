@@ -127,6 +127,17 @@ workflow-history/
 overnight-git-bin/
 overnight-git-policy-bin/
 
+# /dev-overnight session runtime state (schema state + per-cycle contract) and
+# test-writer's throwaway one-off generation scripts — same any-depth basename
+# rationale as the block above.
+overnight-state-*.json
+overnight-contract-*.json
+tw-gen-*.py
+
+# Stray root-level scratch fragment (2026-09-17 sweep); root-anchored since
+# this is a single stray file, not a repeatable runtime-state pattern.
+/downstream
+
 # Harness-generated output (transient per-cycle; not for version control)
 # tests/generated/ bulk-untracked; only 20260704-134650 and 20260704-225139 retained
 # (ignore children, not parent dir — git negations cannot re-include children of an ignored dir)
