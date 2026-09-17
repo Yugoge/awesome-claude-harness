@@ -2,10 +2,6 @@
 # /usr/local/sbin/tmp-cleanup.sh
 #
 # Daily cleanup of /tmp (4G tmpfs) and /var/tmp/codex-outputs/.
-# Installed 2026-05-01; extended 2026-05-19 (dev-20260519-161035) with
-# EXCLUSION-FIRST ordering, full pattern coverage, IEC-i freed-bytes total,
-# per-category "what was removed" logging, and conditional dry-run output
-# (tee-to-stdout-AND-log when DRY_RUN=1).
 #
 # Usage:
 #   tmp-cleanup.sh            # delete (called from cron)

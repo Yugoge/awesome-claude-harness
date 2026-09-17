@@ -432,7 +432,12 @@ write_checkpoint() {
     touch "$lockfile" 2>/dev/null || true
 
     local result_file
-    result_file=$(mktemp 2>/dev/null || printf '%s' "/tmp/checkpoint-result.$$.${ns}")
+    # mktemp already honors $TMPDIR itself; the fallback (mktemp unavailable
+    # or failing) previously hard-coded /tmp, the sole literal /tmp path
+    # among the repo's TMPDIR-honoring temp creations (task 20260907-015935
+    # AC8). ${TMPDIR:-/tmp} keeps /tmp only as the last-resort default when
+    # TMPDIR itself is unset.
+    result_file=$(mktemp 2>/dev/null || printf '%s' "${TMPDIR:-/tmp}/checkpoint-result.$$.${ns}")
 
     if command -v flock >/dev/null 2>&1; then
         # Run the critical section inside a flock-protected subshell.

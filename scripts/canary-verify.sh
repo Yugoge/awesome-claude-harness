@@ -153,6 +153,38 @@ verify_read_size_guard() {
   fi
 }
 
+verify_cleanup_drift() {
+  # Scratch Lifecycle Contract Layer D (task 20260907-015935, AC5): compares
+  # each deployed cleanup artifact against its repo source-of-truth copy.
+  # Heals today's known drift class silently (a missing repo copy is just
+  # advisory -- the pair is not yet part of this host's deployment) but a
+  # BYTE DIFFERENCE between a deployed artifact and its repo copy is a real
+  # failure: the deployed reaper/tmpfiles rule is no longer what was reviewed.
+  local install_dir
+  install_dir="$(dirname "${HOOKS_DIR}")/scripts/install"
+  local pairs=(
+    "/usr/local/sbin/tmp-cleanup.sh:${install_dir}/tmp-cleanup-install.sh"
+    "/etc/tmpfiles.d/claude-scratch.conf:${install_dir}/tmpfiles-claude-scratch.conf"
+    "/etc/tmpfiles.d/tmp.conf:${install_dir}/tmpfiles-tmp-override.conf"
+    "/etc/tmpfiles.d/var-tmp-claude.conf:${install_dir}/tmpfiles-var-tmp-override.conf"
+  )
+  local pair deployed repo
+  for pair in "${pairs[@]}"; do
+    deployed="${pair%%:*}"
+    repo="${pair#*:}"
+    if [[ ! -f "${repo}" ]]; then
+      continue
+    fi
+    if [[ ! -f "${deployed}" ]]; then
+      emit_advisory "cleanup artifact not yet deployed: ${deployed} (repo copy: ${repo})"
+      continue
+    fi
+    if ! diff -q "${deployed}" "${repo}" >/dev/null 2>&1; then
+      emit_failure "cleanup artifact drift: ${deployed} differs from ${repo}"
+    fi
+  done
+}
+
 verify_git_privilege_guard() {
   local hook="${HOOKS_DIR}/pretool-git-privilege-guard.py"
   if [[ ! -f "${hook}" ]]; then
@@ -206,6 +238,7 @@ verify_bash_safety
 verify_write_guard
 verify_read_size_guard
 verify_git_privilege_guard
+verify_cleanup_drift
 check_advisory_prerequisites
 
 if [[ "${failures}" -gt 0 ]]; then
