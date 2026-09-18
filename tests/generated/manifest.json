@@ -3,6 +3,14 @@
   "kind": "index",
   "tasks": [
     {
+      "task_id": "20260918-161516",
+      "manifest_path": "tests/generated/20260918-161516/manifest.json"
+    },
+    {
+      "task_id": "20260918-134709",
+      "manifest_path": "tests/generated/20260918-134709/manifest.json"
+    },
+    {
       "task_id": "20260520-221452",
       "manifest_path": "tests/generated/20260520-221452/manifest.json"
     },
@@ -237,6 +245,82 @@
     {
       "task_id": "20260831-031316",
       "manifest_path": "tests/generated/20260831-031316/manifest.json"
+    },
+    {
+      "task_id": "20260904-181435-b",
+      "manifest_path": "tests/generated/20260904-181435-b/manifest.json"
+    },
+    {
+      "task_id": "20260904-181435-a",
+      "manifest_path": "tests/generated/20260904-181435-a/manifest.json"
+    },
+    {
+      "task_id": "20260808-035658-lanersgap",
+      "manifest_path": "tests/generated/20260808-035658-lanersgap/manifest.json"
+    },
+    {
+      "task_id": "20260808-035658-laner1salvage",
+      "manifest_path": "tests/generated/20260808-035658-laner1salvage/manifest.json"
+    },
+    {
+      "task_id": "20260808-035658-lanesuspecupdate",
+      "manifest_path": "tests/generated/20260808-035658-lanesuspecupdate/manifest.json"
+    },
+    {
+      "task_id": "20260808-035658-lanesumatdoc10",
+      "manifest_path": "tests/generated/20260808-035658-lanesumatdoc10/manifest.json"
+    },
+    {
+      "task_id": "20260808-035658-lanel",
+      "manifest_path": "tests/generated/20260808-035658-lanel/manifest.json"
+    },
+    {
+      "task_id": "20260808-035658-laneb",
+      "manifest_path": "tests/generated/20260808-035658-laneb/manifest.json"
+    },
+    {
+      "task_id": "20260910-091226",
+      "manifest_path": "tests/generated/20260910-091226/manifest.json"
+    },
+    {
+      "task_id": "20260911-011232",
+      "manifest_path": "tests/generated/20260911-011232/manifest.json"
+    },
+    {
+      "task_id": "20260911-220120",
+      "manifest_path": "tests/generated/20260911-220120/manifest.json"
+    },
+    {
+      "task_id": "20260912-015952",
+      "manifest_path": "tests/generated/20260912-015952/manifest.json"
+    },
+    {
+      "task_id": "20260912-090039",
+      "manifest_path": "tests/generated/20260912-090039/manifest.json"
+    },
+    {
+      "task_id": "20260911-011102",
+      "manifest_path": "tests/generated/20260911-011102/manifest.json"
+    },
+    {
+      "task_id": "dev-20260914-035503",
+      "manifest_path": "tests/generated/dev-20260914-035503/manifest.json"
+    },
+    {
+      "task_id": "20260907-015935",
+      "manifest_path": "tests/generated/20260907-015935/manifest.json"
+    },
+    {
+      "task_id": "20260916-021800-b",
+      "manifest_path": "tests/generated/20260916-021800-b/manifest.json"
+    },
+    {
+      "task_id": "20260917-171021",
+      "manifest_path": "tests/generated/20260917-171021/manifest.json"
+    },
+    {
+      "task_id": "20260918-084500",
+      "manifest_path": "tests/generated/20260918-084500/manifest.json"
     }
   ]
 }

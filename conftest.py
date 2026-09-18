@@ -3,8 +3,19 @@
 # Phase 3 of docs/reference/test-suite-overhaul-plan.md (ratified decision in
 # docs/reference/generated-tests-policy.md): retire the blanket
 # `--ignore=tests/generated` and instead make the test-writer AC skeletons
-# OPT-IN-RUNNABLE behind a `generated` pytest marker, while the DEFAULT run stays
-# green (1250 passed / 9 xpassed) with the generated tree not collected.
+# OPT-IN-RUNNABLE behind a `generated` pytest marker, with the generated tree not
+# collected by the DEFAULT run.
+#
+# Default-run baseline, measured 2026-09-06: 63 failed, 3531 passed, 1 skipped,
+# 13 xfailed, 8 xpassed, 87 subtests passed in ~1230s. The run is NOT green, and
+# has not been since well before this measurement: all 63 failures reproduce on a
+# pristine `git archive HEAD` tree (identical node-id set), so they are inherited,
+# not working-tree damage. They are 50 in tests/test_public_core_residue_gate.py,
+# 12 in hooks/tests/test_allowlist_consolidation.py (a missing per-account venv
+# interpreter, plus one test encoding a settings policy the project has since
+# superseded), and 1 in tests/test_release_pipeline_contract.py. Re-measure before
+# quoting these numbers; an earlier baseline here (1250 passed / 9 xpassed) sat
+# stale long enough to mislead.
 #
 # Mechanism (standard pytest, no hacks):
 #   * pytest_ignore_collect  — the default run never DESCENDS into tests/generated,
