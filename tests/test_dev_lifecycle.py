@@ -299,6 +299,30 @@ def test_scan_marks_lane_rows_non_actionable(tmp_path):
         assert lane_row["parent_task_id"] == parent
 
 
+# --------------------------------------------------------------------------
+# roster_preview() failure-path regression (R29, AC-07, task dev-20260914-035503)
+# --------------------------------------------------------------------------
+
+
+def test_roster_preview_malformed_shard_stays_complete_false_no_exception(tmp_path):
+    """_load_shard()'s dict|None return contract is unchanged by R29's new
+    _load_shard_with_diagnostic() helper (used only by aggregate-dev-report.py's
+    own main()) -- roster_preview()'s FAILURE-path handling of a malformed
+    shard must keep working exactly as before, with no exception raised."""
+    project = make_project(tmp_path)
+    dd = dev_dir(project)
+    task_id = "20260101-010109"
+    write_json(dd / f"dev-report-A-{task_id}.json", dev_report(task_id))
+    write_text(dd / f"dev-report-B-{task_id}.json", "{not valid json")
+
+    aggregate_mod = dlc._load_aggregate_module()
+    result = dlc.roster_preview(dd, task_id, aggregate_mod)
+    assert result["complete"] is False
+    assert "unreadable/malformed" in result["reason"]
+    assert "B" in result["reason"]
+    assert sorted(result["lane_labels"]) == ["A", "B"]
+
+
 def test_actionable_parents_excludes_lanes_and_specs():
     rows = [
         {"task_id": "p1", "kind": "ticket", "next_action": "close"},
