@@ -1,13 +1,14 @@
 # reference
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-09-04T02:48:04Z*
-**Total entries**: 20
+*Last updated: 2026-09-18T15:18:45Z*
+**Total entries**: 34
 **Convention**: kebab
 
 ## Tree
 ```
 reference/
+├── `abandoned-cycles-20260905.md` - Abandoned cycles — terminal determination
 ├── `checkpoint-mechanism.md` - Auto-Commit / Checkpoint Mechanism
 ├── `codex-sandbox-verification.md` - Codex CLI Sandbox Verification Report
 ├── `core-context-refactor-plan.md` - Core Context Refactor Plan (Plan-of-Record)
@@ -15,14 +16,27 @@ reference/
 ├── `generated-tests-policy.md` - `tests/generated/` policy — tracked but ignored, on purpose
 ├── `git-fswatch.md` - Git File Watcher (fswatch) Documentation
 ├── `graphify-integration.md` - Graphify Knowledge Graph Integration
+├── `harness-defects-20260906-controller.md` - 控制器实测缺陷记录 — 2026-09-06
+├── `harness-fix-status-20260905.md` - Harness fix status — R1..R20 of `spec-20260904-harness-fixes.md`
+├── `harness-issues-backlog.md` - 待下次 spec 处理的 harness 问题清单（当前有 harness 修复在 worktree 跑，新问题只记录不并行修）
 ├── `install-compatibility-matrix.md` - Install compatibility matrix
+├── `lane-pol-catchup-plan-20260808-035658-lanepolcatchup.md` - LANE-POL Catch-Up Plan — origin/master → fix/dev-fanout-gatekeeper-20260717
 ├── `launch-plan.md` - Launch Plan — ROI-ranked channels, gated on recorded evidence
 ├── `lock-file-handling.md` - Git Lock File Handling
+├── `mat-doc10-writer-order.v2.json` - JSON config: schema, contract_id, spec_id, lane_id, published_by_task_id
 ├── `monolith-split-plan.md` - Monolith Split Plan (Plan-of-Record)
+├── `MORNING-20260907.md` - 晨间交接 — 2026-09-07
+├── `overnight-cycle-20260809-013317-shared-file-attribution-20260914.md` - Attribution of unattributed content in four shared files, cycle 20260809-013317
 ├── `overnight-reference.md` - Overnight reference (maintainer-facing)
 ├── `overwrite-prohibition.md` - Prohibition on wholesale replacement of an existing file
+├── `paseo-daemon-concurrent-staging-triple-repro-20260904-181435-20260914.md` - Triple, independent reproduction of the shared-file concurrent-staging defect
+├── `paseo-daemon-shared-file-attribution-20260913.md` - Attribution of unattributed content in the three paseo-daemon shared files
+├── `paseo-daemon-teachings-20260910.md` - paseo-daemon 控制器教训合并与运行契约（2026-09-10）
 ├── `positioning.md` - Positioning
+├── `push-gate-reconciliation-decision.md` - Push-gate reconciliation — decision to keep
+├── `quarantine-record-dev-20260915-020044.md` - Quarantine record: phantom `/dev` cycle `dev-20260915-020044`
 ├── `rename-execution-plan.md` - Rename execution plan — `awesome-claude-harness` → `claude-code-guardrails`
+├── `restart-detector-quota-text-match-false-positive-20260915.md` - `/restart` interruption detector: textual quota-proxy instead of structural liveness check
 ├── `roadmap-decomposition-productization.md` - Roadmap: Monolith Decomposition + Productization
 ├── `slashcommand-quick-reference.md` - Slash Command Quick Reference
 ├── `test-suite-overhaul-plan.md` - Test Suite Overhaul Plan (Plan-of-Record)

@@ -1,8 +1,8 @@
 # dot-claude
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-09-04T02:49:37Z*
-**Total entries**: 517
+*Last updated: 2026-09-18T15:19:41Z*
+**Total entries**: 570
 **Convention**: kebab
 
 ## Tree
@@ -36,7 +36,7 @@ dot-claude/
 │   ├── `allow.md` - Single-use break-glass for a declared grant-aware safety hook; it never overrides a settings DENY. Requires an explicit narrow selector. Forms — /allow <command...> (literal, upgraded to regex only when it contains true regex metacharacters), /allow --tool <literal> (always literal, regex off), or /allow re:<anchored-regex> (explicit regex, must be anchored). Bare /allow with no argument is refused. Trailing tokens become an audit-log comment. Auto-expires at stop.
 │   ├── `checkpoint.md` - Checkpoint Command
 │   ├── `clean.md` - Aggressive project cleanup - normalize docs structure, archive everything, delete one-time scripts/tests. Pass --codex to enable adversarial codex consultation on cleanliness-inspector and style-inspector; default is self-review only.
-│   ├── `close.md` - Close the current dev cycle (agent infers task-id from conversation). QA evaluates Workflow Integrity bullets and returns CLOSE YES/NO. Pass --codex to enable multi-round QA-codex debate; default is QA-only single-round assessment. Append --force to skip the debate entirely.
+│   ├── `close.md` - Close the current dev cycle (agent infers task-id from conversation). QA evaluates Workflow Integrity bullets and returns CLOSE YES/NO. Pass --codex to enable multi-round QA-codex debate; default is QA-only single-round assessment. Append --force to skip the debate entirely. Pass --auto to discover and sequentially close every close_pending parent (see `--auto mode` below).
 │   ├── `codex.md` - Delegate a task to OpenAI Codex CLI (gpt-5.6-sol, xhigh reasoning) for a second opinion or parallel coding
 │   ├── `commit.md` - Commit session changes via changelog-analyst subagent
 │   ├── `dev-command.md` - Enhanced development workflow with BA subagent delegation, command development best practices, Three-Party Architecture, and comprehensive automation patterns
@@ -49,12 +49,14 @@ dot-claude/
 │   ├── `push.md` - Push Command
 │   ├── `redev.md` - dev workflow harness re-attach — for conversations where the /dev workflow context has already appeared; may be invoked with no new requirement text to purely re-attach the harness (canonical TodoList, gates, dev-registry, artifact conventions) to that context. Pass --codex to enable adversarial codex consultation on each subagent's draft; default is self-review only.
 │   ├── `restart.md` - Resume every quota-interrupted subagent in the current Claude Code parent session from its original transcript and agent ID.
-│   ├── `spec-update.md` - Continuation spec update or temp session note (was /update then /spec-continue — renamed to avoid collision with MAP's /update portfolio mutation command)
+│   ├── `spec-update.md` - Update an existing spec, continue unfinished development, or write a temp session note.
 │   ├── `spec.md` - Create spec files for any dev workflow (/dev, /dev-overnight, or standalone reference). Pass --codex to enable adversarial codex consultation on each spec-subagent / QA dispatch; default is self-review only.
 │   ├── `stop.md` - Cancel active overnight time-lock + workflow-enforce so the session can terminate normally. User-invoked only — agents cannot self-stop.
-│   └── `test.md` - Test validation workflow with edge case detection, systematic validation, and quality enforcement
+│   ├── `test.md` - Test validation workflow with edge case detection, systematic validation, and quality enforcement
+│   └── `tickets.md` - Read-only Unfuddle-style lifecycle table of every ticket/spec/lane.
 ├── docs/
 │   ├── reference/
+│   │   ├── `abandoned-cycles-20260905.md` - Abandoned cycles — terminal determination
 │   │   ├── `checkpoint-mechanism.md` - Auto-Commit / Checkpoint Mechanism
 │   │   ├── `codex-sandbox-verification.md` - Codex CLI Sandbox Verification Report
 │   │   ├── `core-context-refactor-plan.md` - Core Context Refactor Plan (Plan-of-Record)
@@ -62,14 +64,27 @@ dot-claude/
 │   │   ├── `generated-tests-policy.md` - `tests/generated/` policy — tracked but ignored, on purpose
 │   │   ├── `git-fswatch.md` - Git File Watcher (fswatch) Documentation
 │   │   ├── `graphify-integration.md` - Graphify Knowledge Graph Integration
+│   │   ├── `harness-defects-20260906-controller.md` - 控制器实测缺陷记录 — 2026-09-06
+│   │   ├── `harness-fix-status-20260905.md` - Harness fix status — R1..R20 of `spec-20260904-harness-fixes.md`
+│   │   ├── `harness-issues-backlog.md` - 待下次 spec 处理的 harness 问题清单（当前有 harness 修复在 worktree 跑，新问题只记录不并行修）
 │   │   ├── `install-compatibility-matrix.md` - Install compatibility matrix
+│   │   ├── `lane-pol-catchup-plan-20260808-035658-lanepolcatchup.md` - LANE-POL Catch-Up Plan — origin/master → fix/dev-fanout-gatekeeper-20260717
 │   │   ├── `launch-plan.md` - Launch Plan — ROI-ranked channels, gated on recorded evidence
 │   │   ├── `lock-file-handling.md` - Git Lock File Handling
+│   │   ├── `mat-doc10-writer-order.v2.json` - JSON config: schema, contract_id, spec_id, lane_id, published_by_task_id
 │   │   ├── `monolith-split-plan.md` - Monolith Split Plan (Plan-of-Record)
+│   │   ├── `MORNING-20260907.md` - 晨间交接 — 2026-09-07
+│   │   ├── `overnight-cycle-20260809-013317-shared-file-attribution-20260914.md` - Attribution of unattributed content in four shared files, cycle 20260809-013317
 │   │   ├── `overnight-reference.md` - Overnight reference (maintainer-facing)
 │   │   ├── `overwrite-prohibition.md` - Prohibition on wholesale replacement of an existing file
+│   │   ├── `paseo-daemon-concurrent-staging-triple-repro-20260904-181435-20260914.md` - Triple, independent reproduction of the shared-file concurrent-staging defect
+│   │   ├── `paseo-daemon-shared-file-attribution-20260913.md` - Attribution of unattributed content in the three paseo-daemon shared files
+│   │   ├── `paseo-daemon-teachings-20260910.md` - paseo-daemon 控制器教训合并与运行契约（2026-09-10）
 │   │   ├── `positioning.md` - Positioning
+│   │   ├── `push-gate-reconciliation-decision.md` - Push-gate reconciliation — decision to keep
+│   │   ├── `quarantine-record-dev-20260915-020044.md` - Quarantine record: phantom `/dev` cycle `dev-20260915-020044`
 │   │   ├── `rename-execution-plan.md` - Rename execution plan — `awesome-claude-harness` → `claude-code-guardrails`
+│   │   ├── `restart-detector-quota-text-match-false-positive-20260915.md` - `/restart` interruption detector: textual quota-proxy instead of structural liveness check
 │   │   ├── `roadmap-decomposition-productization.md` - Roadmap: Monolith Decomposition + Productization
 │   │   ├── `slashcommand-quick-reference.md` - Slash Command Quick Reference
 │   │   ├── `test-suite-overhaul-plan.md` - Test Suite Overhaul Plan (Plan-of-Record)
@@ -120,6 +135,7 @@ dot-claude/
 │   │   ├── `policy_registry.py` - Reads the harness ``policies/tool-policy.v1.json`` (resolved via the shared
 │   │   ├── `runtime_guard.py` - This file exists for backwards-compatibility with callers that invoke
 │   │   ├── `schema_registry.py` - Reads schemas/registry.json once and lazily loads referenced schema files
+│   │   ├── `session_resources.py` - Every destructive operation is bound to an immutable resource session and a
 │   │   ├── `specialist_yield.py` - Public API:
 │   │   ├── `subagent.py` - Single source of truth for is_subagent_context() and supporting helpers
 │   │   ├── `subagent_restart.py` - Claude Code persists each subagent transcript under the parent session.  This
@@ -140,6 +156,7 @@ dot-claude/
 │   │   ├── `test_block_branch_pr_worktree.py` - The hook forbids branch / PR / worktree CREATION on the Bash surface, with three
 │   │   ├── `test_bulk_commit_sentinel.py` - Covers:
 │   │   ├── `test_capability_gate.py` - Every test drives the real artefacts: the library, the PreToolUse gate hook as a
+│   │   ├── `test_checkpoint_pii_gate.sh` - Regression tests for the checkpoint PII/credential hard-exclude + push gate
 │   │   ├── `test_commit_journal.py` - attribution basis
 │   │   ├── `test_cp_checkin.py` - of ba-spec-20260427-194324.md (P1 view-trigger removal + P2 generation field)
 │   │   ├── `test_do_taskid_mint.py` - Covers the root-cause fix for the do-report task-id collision (memory
@@ -150,11 +167,17 @@ dot-claude/
 │   │   ├── `test_git_cmd_cross_consistency.py` - Verifies that GIT_CMD_RE (hooks/pretool-bash-safety.sh),
 │   │   ├── `test_git_prefix_enumeration.py` - THE DEFECT
 │   │   ├── `test_git_residual_override.py` - Background
+│   │   ├── `test_gitignore_preflight_close_contract.py` - The gate previously harvested any docs/dev/dev-report-*.json cited anywhere in an
+│   │   ├── `test_laneb_stop_overnight_timelock_scoping.py` - Blast-radius-map.json (dev-20260910-111227/blast-radius-map-20260808-035658-laneb)
+│   │   ├── `test_overnight_gitenv_failclosed.py` - Two halves of one fail-open, scoped together because closing either alone leaves
+│   │   ├── `test_overnight_qa_sentinel_bind.py` - `_qa_mode_sentinel_rw_bind` / `_build_bwrap_argv` had ZERO test callers, so the
 │   │   ├── `test_overwrite_guard.py` - Every assertion drives the REAL guard as a subprocess over a synthetic
 │   │   ├── `test_posttool_commit_grant_finalize.py` - hooks/posttool-allowlist-consume.py, and for the pointer WRITE side in
+│   │   ├── `test_push_no_upstream_guard.sh` - Regression test for hooks/push.sh R22 (line ~375): HAS_UPSTREAM must be
 │   │   ├── `test_push_sentinel_abort.sh` - Unit test for AC1 V5: hooks/push.sh self-aborts before any real git push
 │   │   ├── `test_residual_false_positives.py` - Context (task 20260903-residual-fp). `classify_git_command()` returns a
 │   │   ├── `test_runtime_guard.py` - Two layers:
+│   │   ├── `test_scratch_lifecycle.py` - Covers:
 │   │   ├── `test_unit_anchor.py` - Imports the anchor sibling module DIRECTLY (not via the _core facade) and
 │   │   ├── `test_unit_config.py` - Imports the config sibling module DIRECTLY (not via the _core facade) and
 │   │   ├── `test_unit_constants.py` - Imports the constants sibling module DIRECTLY (not via the _core facade) and
@@ -242,12 +265,15 @@ dot-claude/
 │   ├── `session-gitignore-propagate.sh` - SessionStart hook: append missing standard harness gitignore rules to project repo
 │   ├── `session-info.sh` - s-info.sh — SessionStart: display environment info + tool quick reference
 │   ├── `session-promote-hook.sh` - Description: SessionStart hook that promotes a cold session back to ramdisk.
+│   ├── `session-scratch-init.sh` - session-scratch-init.sh — SessionStart hook (Scratch Lifecycle Contract
 │   ├── `session-tmpfs-banner.sh` - session-tmpfs-banner.sh — SessionStart hook (6th in the SessionStart hooks block).
 │   ├── `session_start.sh` - SessionStart Hook - Display working environment info
+│   ├── `sessionend-scratch-sweep.sh` - sessionend-scratch-sweep.sh — SessionEnd hook (Scratch Lifecycle Contract
 │   ├── `start-fswatch-all.sh` - start-fswatch-all.sh - Start fswatch monitoring for all important repositories
 │   ├── `stop-cleanup-allowlist.sh` - Stop Hook: Wipe any unconsumed /allow grant at turn end.
 │   ├── `stop-overnight-timelock.py` - Stop Hook: Block conversation termination until overnight end-time
 │   ├── `stop-spec-coverage-enforce.py` - Stop Hook: Block spec agent from exiting with < 100% monolith coverage
+│   ├── `stop-workflow-coordinator.py` - LANE-B (20260808-035658) M4/M7: registered as the harness's actual Stop hook,
 │   ├── `stop.sh` - stop.sh - wrapper for /stop slash command
 │   ├── `subagent-stop-diff-check.sh` - SubagentStop hook: flag large diffs without minimum-diff justification
 │   ├── `subagent-stop-guard-integrity.sh` - subagent-stop-guard-integrity.sh
@@ -276,6 +302,7 @@ dot-claude/
 │   ├── `graphify-focused-subgraph.v1.json` - Task-scoped subgraph extracted from the global Graphify knowledge graph, focused on files in the BA blast-radius-map. Written to .claude/dev-registry/{task_id}/graphify/focused-subgraph.json by graphify-enrich.py.
 │   ├── `graphify-prequery.v1.json` - Step 1.5 output from graphify-query.py. Contains structural_context extracted from the global Graphify cache before BA analysis. Status field drives BA behaviour: ok/degraded proceed, unavailable/skipped silently bypass.
 │   ├── `graphify-run.v1.json` - Step 7.5 run manifest. Records the graphify subagent's execution: update run, focused subgraph extraction, and context patching status.
+│   ├── `owned-edits-ledger.v1.json` - Machine-readable definition of the owned-edits ledger a dev-report must carry so that scripts/stage-owned-hunks.py can stage this cycle's owned hunks. DERIVED FROM THE CONSUMER'S CODE, not from agent prose; see x-consumer for the digest it is derived from and x-citation-policy for why nothing here cites a line number. Plus the snapshot-materialization rule in agents/changelog-analyst.md, locatable by searching for '2. Snapshot materialization (REQUIRED', which is the only place the report-level pre_edit_snapshots map is turned into the --snapshot file the consumer reads. Where prose and code disagree, the code governs; see x-prose-code-disagreements below.
 │   ├── `paseo-dossier.v1.json` - Structured sidecar validated by scripts/paseo-daemon-ledger.py dossier-validate. Fail-closed: a dossier missing any required F12 field, or carrying a malformed seven-field decision-journal record, must never become a committed generation. The dossier is an index and checkpoint ONLY — authoritative evidence remains the session transcript and hash-verified artifact files.
 │   ├── `qa-report.v1.json` - QA verdict + evidence summary for a single pipeline. When ui_pipeline=true, evidence_summary.ui_evidence MUST satisfy the ui-specialist's ui_evidence_schema fragment (target_route, target_element, viewports {desktop, mobile}, evidence_map keyed AC-N, trace, captured_at). Custom keyword 'required_when_ui' is enforced by lib/contract_runtime.validate() as a pre-validation pass before the standard jsonschema Draft7Validator runs.
 │   ├── `registry.json` - JSON config: schemas
@@ -289,10 +316,15 @@ dot-claude/
 │   │   ├── `preflight` - preflight file
 │   │   ├── `render-settings` - render-settings file
 │   │   ├── `tmp-cleanup-install.sh` - /usr/local/sbin/tmp-cleanup.sh
+│   │   ├── `tmpfiles-claude-scratch.conf` - conf file
+│   │   ├── `tmpfiles-tmp-override.conf` - conf file
+│   │   ├── `tmpfiles-var-tmp-override.conf` - conf file
 │   │   └── `uninstall` - uninstall file
 │   ├── lib/
+│   │   ├── `candidate_tree.py` - An acceptance harness usually has to evaluate its criterion against neither the
 │   │   ├── `make_sbom.py` - The SBOM is built from the archive's real contents, not from the source
-│   │   └── `release_membership.py` - Single source of truth shared by every consumer, so the archive builder, the
+│   │   ├── `release_membership.py` - Single source of truth shared by every consumer, so the archive builder, the
+│   │   └── `sibling_loader.py` - ``scripts/close-route-select.py``, ``scripts/late-repair-controller.py`` and
 │   ├── modern-git-slot/
 │   ├── overnight-git/
 │   │   ├── `git-policy-shim` - git-policy-shim file
@@ -343,6 +375,7 @@ dot-claude/
 │   ├── `capture-hero-run.py` - Description: Builds a hermetic fixture, installs one narrowly-scoped single-use grant,
 │   ├── `check-enforcement-evidence.py` - Three subcommands, one consumer each:
 │   ├── `check-file-references.sh` - File reference detection script - used by /clean command
+│   ├── `check-late-repair-provenance.py` - Takes ONLY ``--task-id`` and ``--project-dir`` (never a caller-supplied file
 │   ├── `check-overnight-reports.py` - Description: Validates all overnight required outputs declared by the active
 │   ├── `check-overnight-reports.sh` - DEPRECATED — replaced by check-overnight-reports.py per spec-20260426-090235 P0/M5.
 │   ├── `check-public-core.sh` - Description: Public/private boundary gate. Recomputes the top-level tracked-path set from
@@ -350,7 +383,9 @@ dot-claude/
 │   ├── `check-security-hook-drift.sh` - Description: Audit always-on security-critical hook files against a cycle baseline SHA
 │   ├── `checkpoint-prune.sh` - checkpoint-prune.sh — trim refs/checkpoints/* to the most recent N commits
 │   ├── `cleanup-close-force-sentinel.sh` - Removes the force-close sentinel file for a given dev session.
+│   ├── `close-route-select.py` - Without ``--late-repair`` this is a pass-through: it resolves the artifact
 │   ├── `close-scoring-decide.py` - Description: Decide which close_success_* event /close should issue based on
+│   ├── `commit.sh` - Description: Discoverable canonical entrypoint for commands/dev-overnight.md's
 │   ├── `create-overnight-state.sh` - create-overnight-state.sh — Create overnight state file (v7 schema)
 │   ├── `create-worktree.sh` - Create a git worktree from local HEAD (not origin/main).
 │   ├── `derive-default-branch.sh` - Description: Resolve the repository's default branch name dynamically (handles main/master/any other).
@@ -361,6 +396,7 @@ dot-claude/
 │   ├── `detect-orphan-agents.sh` - Description: Detect agents not referenced by any command
 │   ├── `detect-orphan-commands.sh` - Description: Detect orphan commands (one-time patterns, no todo script, unused)
 │   ├── `detect-orphan-scripts.sh` - Description: Detect scripts not referenced by any command/agent/other script
+│   ├── `dev-lifecycle.py` - Derives, per on-disk task-id, a state using the TOTAL REDUCTION ORDER from
 │   ├── `discover-folders.sh` - Description: Dynamically discover project folders excluding system directories
 │   ├── `doctor` - doctor file
 │   ├── `execute-push.py` - Eliminates the timing window that exists when validate + push are && -chained
@@ -374,6 +410,7 @@ dot-claude/
 │   ├── `install-checkpoint-refspec.sh` - install-checkpoint-refspec.sh — idempotently add refs/checkpoints/* to
 │   ├── `install-git-keystone.sh` - install-git-keystone.sh — wire the git-native reference-transaction keystone
 │   ├── `iterate-failed-pipelines.py` - Reads pipelines JSON path; outputs iteration plan JSON to stdout. The orchestrator
+│   ├── `late-repair-controller.py` - Owns the run-record lifecycle for the deliberately-invoked ``/close
 │   ├── `lifecycle-baseline-import.sh` - Description: One-time idempotent migration — import current agent scores from agent-scores.json
 │   ├── `lint-spec-id-centralization.py` - markdown from re-deriving a spec-id / views_dir / split_marker / cp_dir from a
 │   ├── `measure-hero-fold.py` - Description: Renders README.md LOCALLY from the working tree in headless Chromium at the
@@ -384,6 +421,7 @@ dot-claude/
 │   ├── `overnight-git-env.sh` - overnight-git-env.sh — prepare the overnight actor's git PATH + env (M11/AC9).
 │   ├── `overnight-git-selftest.sh` - overnight-git-selftest.sh — launch git-version + symref self-test (M8, M16).
 │   ├── `overnight-init.sh` - overnight-init.sh — perform the ENTIRE /dev-overnight Step 1 initialization in
+│   ├── `overnight-inplace-env.sh` - overnight-inplace-env.sh — export the overnight ACTOR MARKER, and nothing else.
 │   ├── `overnight-status.sh` - overnight-status.sh — Zero-LLM overnight session status query
 │   ├── `paseo-daemon-ledger.py` - Deterministic CLI realizing blueprint F6/F8/F10/F11/F14 local-persistence
 │   ├── `paseo-usage-read.mjs` - mjs file
@@ -404,12 +442,14 @@ dot-claude/
 │   ├── `scan-project.sh` - Description: Scan project structure and detect project type
 │   ├── `score-inject.sh` - Description: Emit a prompt-injection text block describing an agent's current rank/range
 │   ├── `score-update.sh` - Description: Update agent score by appending an entry to the lifecycle JSONL log.
+│   ├── `session-resources.py` - Provider-neutral CLI for the LANE-B session resource broker.
 │   ├── `spec-check.py` - Subcommands: check-in, mark, waive, status, check-out, unlock
 │   ├── `stage-owned-hunks.py` - Stages ONLY this cycle's owned hunks within a single already-authorized file,
 │   ├── `step7-spec-update.py` - Step 8 (Spec-update dispatch) reference harness — task 20260524-205206 iter-2
 │   ├── `test` - test file
 │   ├── `update-gitignore.sh` - update-gitignore.sh - Auto-update .gitignore with project-specific rules
 │   ├── `update-overnight-state.sh` - update-overnight-state.sh — Atomically update overnight state file
+│   ├── `verify-claims-extended.sh` - Description: Extended headline-claims gate. Closes the four documented coverage gaps in
 │   ├── `verify-claims.sh` - Description: Self-verifying headline-claims gate. Recomputes the wired-hook entry count and
 │   ├── `verify-hero-provenance.py` - Description: Re-runs the demo, normalizes both outputs and byte-diffs them; verifies raw
 │   ├── `verify-release-manifest.sh` - Description: Verify a PUBLISHED release artifact end-to-end, WITHOUT rebuilding it.
@@ -446,8 +486,10 @@ dot-claude/
 │   └── `spec-template.md` - Spec: <issue_description>
 ├── tests/
 │   ├── fixtures/
+│   │   ├── late_repair_golden/
 │   │   ├── `canary-tool-policy.v1.json` - JSON config: _fixture, _purpose, _contract, policy_version, default_action
-│   │   └── `paseo-usage-envelope-20260828.json` - JSON config: _comment, type, message
+│   │   ├── `paseo-usage-envelope-20260828.json` - JSON config: _comment, type, message
+│   │   └── `paseo_cron_vendor_vectors.json` - JSON config: _what, provenance, positive, negative, horizon
 │   ├── generated/
 │   │   ├── 20260704-134650/
 │   │   ├── 20260704-225139/
@@ -474,28 +516,39 @@ dot-claude/
 │   │   ├── `validate-todowrite-requirement.py` - Validator: validate-todowrite-requirement
 │   │   ├── `validate-venv-usage.py` - Validator: validate-venv-usage
 │   │   └── `validate-workflow-json-cleanup.py` - Validator: validate-workflow-json-cleanup
+│   ├── `_dev_lifecycle_fixtures.py` - NOT a test file itself (no test_ prefix, not collected by pytest). Imported by
 │   ├── `fresh-clone-bootstrap-smoke.sh` - Description: Fresh-clone bootstrap smoke — proves "core is runnable + guards engaged"
 │   ├── `integration-test.sh` - integration-test.sh - Integration tests for git tracking solution
 │   ├── `test-lock-detection.sh` - Test script to verify git lock file detection and handling
 │   ├── `test_aggregate_dev_report.py` - Unit tests for scripts/aggregate-dev-report.py
+│   ├── `test_candidate_tree.py` - Every test builds its own throwaway git repository. None of them reads this
+│   ├── `test_changelog_analyst_declaration_categories.py` - `agents/changelog-analyst.md` decides what a cycle commits by reading declaration
+│   ├── `test_changelog_analyst_required_to_ship_sourcing.py` - unobtainable declaration must not be silently read as an empty one
 │   ├── `test_checkpoint_provenance.py` - These modes are DORMANT: no command, agent definition, or hook invokes them by
 │   ├── `test_codex_workflow_gate.py` - Regression tests for Codex-native workflow-plan compatibility.
 │   ├── `test_commit_multi_repo_plan.py` - Python script
+│   ├── `test_commit_sh_reachability.py` - commands/dev-overnight.md:1561 previously called a bare, unqualified
 │   ├── `test_dev_artifact_chain_consumer_contracts.py` - Contract tests for shared /dev artifact-chain consumers.
+│   ├── `test_empty_old_string_diagnosis.py` - A real cycle emitted twenty-one ledger entries whose `old` was the empty string
 │   ├── `test_git_clean_guard_vectors.py` - The pre-clean WIP snapshot guard (task dev-20260719-150041-c, lane r03-c) is
 │   ├── `test_graphify_scripts.py` - tests/test_graphify_scripts.py — smoke tests for scripts/graphify_lib.py
 │   ├── `test_graphify_workflow_contract.py` - tests/test_graphify_workflow_contract.py — contract tests for graphify agent registration
 │   ├── `test_hero_advance_cross_check.py` - tools/demo/audit.mjs measures a line's rendered right edge on a fixed monospace grid, using
 │   ├── `test_no_artificial_lifecycle_ceremony.py` - Prevent host metadata ceremonies from becoming ordinary lifecycle gates.
+│   ├── `test_overnight_guard_in_place_git.py` - Defect (2026-08-09): `hooks/pretool-overnight-hook-guard.py` blocked EVERY git
 │   ├── `test_overnight_loop_tz.py` - Verifies the overnight loop hook compares end_time correctly against the
+│   ├── `test_owned_edits_ledger_contract.py` - Every negative fixture here is REDUCED FROM AN ARTIFACT THAT ACTUALLY SHIPPED --
 │   ├── `test_paseo_daemon_ledger.py` - MANDATORY pytest facade for lane 20260828-112025-b: collects EVERY test
 │   ├── `test_paseo_usage_read.py` - MANDATORY pytest facade for lane 20260828-112025-b: collects EVERY test
+│   ├── `test_prompt_workflow_injection_cadence.py` - The defect: ``build_overnight_continuation`` emitted ONE payload at ONE cadence
+│   ├── `test_prompt_workflow_liveness_tz.py` - Two defects, both reproduced before this suite was written:
 │   ├── `test_public_core_residue_gate.py` - These are the discriminating controls for the "Make CI FAIL (not advisory) on
 │   ├── `test_release_pipeline_contract.py` - verifier
 │   ├── `test_resolve_dev_artifact_chain.py` - Focused tests for the read-only /dev artifact-chain resolver.
 │   ├── `test_resolve_spec_artifacts.py` - resolver) + the static centralization lint (AC-B4 cases 1-12, task 20260530-092123)
 │   ├── `test_restart_command.py` - End-to-end unit coverage for the human-only /restart recovery protocol.
 │   ├── `test_specialist_yield.py` - Tests use a tmp dir for the yield log and the bundled production policy file
+│   ├── `test_stage_owned_hunks_boundary.py` - content-anchor-retry boundary/coordinate-space defect (task 20260912-015952)
 │   ├── `test_todo_md_sync.py` - Regression tests for the session-start todo/Markdown drift detector.
 │   ├── `TESTING.md` - Test Topology & Runner Map (authoritative)
 │   ├── `verify-stop-spec-session-isolation.sh` - QA verification harness for stop-spec-coverage-enforce.py session isolation fix.

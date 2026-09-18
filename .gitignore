@@ -133,6 +133,7 @@ overnight-git-policy-bin/
 overnight-state-*.json
 overnight-contract-*.json
 tw-gen-*.py
+overnight-delivery-*.json
 
 # Stray root-level scratch fragment (2026-09-17 sweep); root-anchored since
 # this is a single stray file, not a repeatable runtime-state pattern.

@@ -1,8 +1,8 @@
 # install
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-08-05T04:32:44Z*
-**Total entries**: 10
+*Last updated: 2026-09-17T08:24:24Z*
+**Total entries**: 13
 **Convention**: kebab
 
 ## Tree
@@ -17,6 +17,9 @@ install/
 ├── `preflight` - preflight file
 ├── `render-settings` - render-settings file
 ├── `tmp-cleanup-install.sh` - /usr/local/sbin/tmp-cleanup.sh
+├── `tmpfiles-claude-scratch.conf` - conf file
+├── `tmpfiles-tmp-override.conf` - conf file
+├── `tmpfiles-var-tmp-override.conf` - conf file
 └── `uninstall` - uninstall file
 ```
 <!-- /AUTO:index-stats -->

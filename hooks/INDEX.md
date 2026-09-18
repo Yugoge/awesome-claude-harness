@@ -1,8 +1,8 @@
 # hooks
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-09-04T02:49:37Z*
-**Total entries**: 189
+*Last updated: 2026-09-17T13:51:14Z*
+**Total entries**: 196
 **Convention**: kebab
 
 ## Tree
@@ -55,6 +55,7 @@ hooks/
 │   ├── `policy_registry.py` - Reads the harness ``policies/tool-policy.v1.json`` (resolved via the shared
 │   ├── `runtime_guard.py` - This file exists for backwards-compatibility with callers that invoke
 │   ├── `schema_registry.py` - Reads schemas/registry.json once and lazily loads referenced schema files
+│   ├── `session_resources.py` - Every destructive operation is bound to an immutable resource session and a
 │   ├── `specialist_yield.py` - Public API:
 │   ├── `subagent.py` - Single source of truth for is_subagent_context() and supporting helpers
 │   ├── `subagent_restart.py` - Claude Code persists each subagent transcript under the parent session.  This
@@ -87,6 +88,9 @@ hooks/
 │   ├── `test_git_cmd_cross_consistency.py` - Verifies that GIT_CMD_RE (hooks/pretool-bash-safety.sh),
 │   ├── `test_git_prefix_enumeration.py` - THE DEFECT
 │   ├── `test_git_residual_override.py` - Background
+│   ├── `test_laneb_stop_overnight_timelock_scoping.py` - Blast-radius-map.json (dev-20260910-111227/blast-radius-map-20260808-035658-laneb)
+│   ├── `test_overnight_gitenv_failclosed.py` - Two halves of one fail-open, scoped together because closing either alone leaves
+│   ├── `test_overnight_qa_sentinel_bind.py` - `_qa_mode_sentinel_rw_bind` / `_build_bwrap_argv` had ZERO test callers, so the
 │   ├── `test_overwrite_guard.py` - Every assertion drives the REAL guard as a subprocess over a synthetic
 │   ├── `test_posttool_commit_grant_finalize.py` - hooks/posttool-allowlist-consume.py, and for the pointer WRITE side in
 │   ├── `test_push_sentinel_abort.sh` - Unit test for AC1 V5: hooks/push.sh self-aborts before any real git push
@@ -179,12 +183,15 @@ hooks/
 ├── `session-gitignore-propagate.sh` - SessionStart hook: append missing standard harness gitignore rules to project repo
 ├── `session-info.sh` - s-info.sh — SessionStart: display environment info + tool quick reference
 ├── `session-promote-hook.sh` - Description: SessionStart hook that promotes a cold session back to ramdisk.
+├── `session-scratch-init.sh` - session-scratch-init.sh — SessionStart hook (Scratch Lifecycle Contract
 ├── `session-tmpfs-banner.sh` - session-tmpfs-banner.sh — SessionStart hook (6th in the SessionStart hooks block).
 ├── `session_start.sh` - SessionStart Hook - Display working environment info
+├── `sessionend-scratch-sweep.sh` - sessionend-scratch-sweep.sh — SessionEnd hook (Scratch Lifecycle Contract
 ├── `start-fswatch-all.sh` - start-fswatch-all.sh - Start fswatch monitoring for all important repositories
 ├── `stop-cleanup-allowlist.sh` - Stop Hook: Wipe any unconsumed /allow grant at turn end.
 ├── `stop-overnight-timelock.py` - Stop Hook: Block conversation termination until overnight end-time
 ├── `stop-spec-coverage-enforce.py` - Stop Hook: Block spec agent from exiting with < 100% monolith coverage
+├── `stop-workflow-coordinator.py` - LANE-B (20260808-035658) M4/M7: registered as the harness's actual Stop hook,
 ├── `stop.sh` - stop.sh - wrapper for /stop slash command
 ├── `subagent-stop-diff-check.sh` - SubagentStop hook: flag large diffs without minimum-diff justification
 ├── `subagent-stop-guard-integrity.sh` - subagent-stop-guard-integrity.sh

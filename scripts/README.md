@@ -4,7 +4,7 @@ Organization and usage documentation for `scripts/`.
 
 <!-- AUTO:readme-stats -->
 ## Overview
-- **Total files**: 101
+- **Total files**: 109
 - **Subdirectories**: 6
 - **Naming convention**: kebab
 
@@ -25,15 +25,19 @@ Organization and usage documentation for `scripts/`.
 - `capture-hero-run.py` - Description: Builds a hermetic fixture, installs one narrowly-scoped single-use grant,
 - `check-enforcement-evidence.py` - Three subcommands, one consumer each:
 - `check-file-references.sh` - File reference detection script - used by /clean command
+- `check-late-repair-provenance.py` - Takes ONLY ``--task-id`` and ``--project-dir`` (never a caller-supplied file
 - `check-overnight-reports.py` - Description: Validates all overnight required outputs declared by the active
 - `check-overnight-reports.sh` - DEPRECATED — replaced by check-overnight-reports.py per spec-20260426-090235 P0/M5.
+- `check-owned-edits-ledger.py` - The owned-edits ledger (``owned_edits`` / ``pre_edit_snapshots`` /
 - `check-public-core.sh` - Description: Public/private boundary gate. Recomputes the top-level tracked-path set from
 - `check-readme-freshness.sh` - Check README.md freshness for all major folders
 - `check-security-hook-drift.sh` - Description: Audit always-on security-critical hook files against a cycle baseline SHA
 - `checkpoint-prune.sh` - checkpoint-prune.sh — trim refs/checkpoints/* to the most recent N commits
 - `cleanup-close-force-sentinel.sh` - Removes the force-close sentinel file for a given dev session.
 - `cleanup-tests-folder.sh` - Description: Remove validators that don't match git edge cases, preserving reports/
+- `close-route-select.py` - Without ``--late-repair`` this is a pass-through: it resolves the artifact
 - `close-scoring-decide.py` - Description: Decide which close_success_* event /close should issue based on
+- `commit.sh` - Description: Discoverable canonical entrypoint for commands/dev-overnight.md's
 - `create-overnight-state.sh` - create-overnight-state.sh — Create overnight state file (v7 schema)
 - `create-worktree.sh` - Create a git worktree from local HEAD (not origin/main).
 - `derive-default-branch.sh` - Description: Resolve the repository's default branch name dynamically (handles main/master/any other).
@@ -44,6 +48,7 @@ Organization and usage documentation for `scripts/`.
 - `detect-orphan-agents.sh` - Description: Detect agents not referenced by any command
 - `detect-orphan-commands.sh` - Description: Detect orphan commands (one-time patterns, no todo script, unused)
 - `detect-orphan-scripts.sh` - Description: Detect scripts not referenced by any command/agent/other script
+- `dev-lifecycle.py` - Derives, per on-disk task-id, a state using the TOTAL REDUCTION ORDER from
 - `discover-folders.sh` - Description: Dynamically discover project folders excluding system directories
 - `doctor` - doctor file
 - `execute-push.py` - Eliminates the timing window that exists when validate + push are && -chained
@@ -57,6 +62,7 @@ Organization and usage documentation for `scripts/`.
 - `install-checkpoint-refspec.sh` - install-checkpoint-refspec.sh — idempotently add refs/checkpoints/* to
 - `install-git-keystone.sh` - install-git-keystone.sh — wire the git-native reference-transaction keystone
 - `iterate-failed-pipelines.py` - Reads pipelines JSON path; outputs iteration plan JSON to stdout. The orchestrator
+- `late-repair-controller.py` - Owns the run-record lifecycle for the deliberately-invoked ``/close
 - `lifecycle-baseline-import.sh` - Description: One-time idempotent migration — import current agent scores from agent-scores.json
 - `lint-spec-id-centralization.py` - markdown from re-deriving a spec-id / views_dir / split_marker / cp_dir from a
 - `measure-hero-fold.py` - Description: Renders README.md LOCALLY from the working tree in headless Chromium at the
@@ -67,6 +73,7 @@ Organization and usage documentation for `scripts/`.
 - `overnight-git-env.sh` - overnight-git-env.sh — prepare the overnight actor's git PATH + env (M11/AC9).
 - `overnight-git-selftest.sh` - overnight-git-selftest.sh — launch git-version + symref self-test (M8, M16).
 - `overnight-init.sh` - overnight-init.sh — perform the ENTIRE /dev-overnight Step 1 initialization in
+- `overnight-inplace-env.sh` - overnight-inplace-env.sh — export the overnight ACTOR MARKER, and nothing else.
 - `overnight-status.sh` - overnight-status.sh — Zero-LLM overnight session status query
 - `paseo-daemon-ledger.py` - Deterministic CLI realizing blueprint F6/F8/F10/F11/F14 local-persistence
 - `paseo-usage-read.mjs` - mjs file
@@ -87,6 +94,7 @@ Organization and usage documentation for `scripts/`.
 - `scan-project.sh` - Description: Scan project structure and detect project type
 - `score-inject.sh` - Description: Emit a prompt-injection text block describing an agent's current rank/range
 - `score-update.sh` - Description: Update agent score by appending an entry to the lifecycle JSONL log.
+- `session-resources.py` - Provider-neutral CLI for the LANE-B session resource broker.
 - `spec-check.py` - Subcommands: check-in, mark, waive, status, check-out, unlock
 - `stage-owned-hunks.py` - Stages ONLY this cycle's owned hunks within a single already-authorized file,
 - `step7-spec-update.py` - Step 8 (Spec-update dispatch) reference harness — task 20260524-205206 iter-2

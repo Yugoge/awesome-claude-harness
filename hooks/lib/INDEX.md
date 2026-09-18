@@ -1,8 +1,8 @@
 # lib
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-09-03T12:31:26Z*
-**Total entries**: 34
+*Last updated: 2026-09-18T09:16:46Z*
+**Total entries**: 35
 **Convention**: kebab
 
 ## Tree
@@ -38,6 +38,7 @@ lib/
 ├── `policy_registry.py` - Reads the harness ``policies/tool-policy.v1.json`` (resolved via the shared
 ├── `runtime_guard.py` - This file exists for backwards-compatibility with callers that invoke
 ├── `schema_registry.py` - Reads schemas/registry.json once and lazily loads referenced schema files
+├── `session_resources.py` - Every destructive operation is bound to an immutable resource session and a
 ├── `specialist_yield.py` - Public API:
 ├── `subagent.py` - Single source of truth for is_subagent_context() and supporting helpers
 ├── `subagent_restart.py` - Claude Code persists each subagent transcript under the parent session.  This
