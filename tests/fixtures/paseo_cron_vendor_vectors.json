@@ -1,0 +1,192 @@
+{
+ "_what": "Golden occurrence vectors CAPTURED FROM the deployed paseo scheduler. They are the delivery channel's own answers, not this engine's, so scoring the engine against them cannot be circular. Committed so the differential asserts unconditionally on any host, with or without node and /opt/paseo.",
+ "provenance": {
+  "captured_at": "2026-09-05",
+  "captured_from": "/opt/paseo/node_modules/@getpaseo/server/dist/server/server/schedule/cron.js",
+  "server_package": "@getpaseo/server 0.2.2",
+  "protocol_package": "@getpaseo/protocol 0.2.2",
+  "cron_js_sha256": "7e4de9dc39a982751637523b4f4aaf89c2c32c07469312b222deab8b1b98c97e",
+  "cron_expression_js_sha256": "b1862c360f5361148e12131fef30e38f0238539bbe3210a9e62ecdea22dcab14",
+  "node_version": "v20.19.5",
+  "capture_method": "computeNextRunAt({type:'cron',expression,timezone}, cursor) iterated, with each returned Date fed back as the next `after`"
+ },
+ "positive": [
+  {
+   "zone_class": "fall_back",
+   "expression": "30 1 * * *",
+   "timezone": "America/New_York",
+   "after": "2026-11-01T04:00:00Z",
+   "count": 4,
+   "sequence": [
+    "2026-11-01T05:30:00Z",
+    "2026-11-01T06:30:00Z",
+    "2026-11-02T06:30:00Z",
+    "2026-11-03T06:30:00Z"
+   ]
+  },
+  {
+   "zone_class": "fall_back",
+   "expression": "* * * * *",
+   "timezone": "America/New_York",
+   "after": "2026-11-01T05:57:00Z",
+   "count": 8,
+   "sequence": [
+    "2026-11-01T05:58:00Z",
+    "2026-11-01T05:59:00Z",
+    "2026-11-01T06:00:00Z",
+    "2026-11-01T06:01:00Z",
+    "2026-11-01T06:02:00Z",
+    "2026-11-01T06:03:00Z",
+    "2026-11-01T06:04:00Z",
+    "2026-11-01T06:05:00Z"
+   ]
+  },
+  {
+   "zone_class": "spring_forward",
+   "expression": "30 2 * * *",
+   "timezone": "America/New_York",
+   "after": "2026-03-08T05:00:00Z",
+   "count": 3,
+   "sequence": [
+    "2026-03-09T06:30:00Z",
+    "2026-03-10T06:30:00Z",
+    "2026-03-11T06:30:00Z"
+   ]
+  },
+  {
+   "zone_class": "sub_hour_offset",
+   "expression": "45 3 * * *",
+   "timezone": "Pacific/Chatham",
+   "after": "2026-09-26T13:29:00Z",
+   "count": 4,
+   "sequence": [
+    "2026-09-26T14:00:00Z",
+    "2026-09-27T14:00:00Z",
+    "2026-09-28T14:00:00Z",
+    "2026-09-29T14:00:00Z"
+   ]
+  },
+  {
+   "zone_class": "sub_hour_offset",
+   "expression": "0,30 1-4 * * *",
+   "timezone": "Australia/Lord_Howe",
+   "after": "2026-10-03T14:00:00Z",
+   "count": 8,
+   "sequence": [
+    "2026-10-03T14:30:00Z",
+    "2026-10-03T15:00:00Z",
+    "2026-10-03T15:30:00Z",
+    "2026-10-03T16:00:00Z",
+    "2026-10-03T16:30:00Z",
+    "2026-10-03T17:00:00Z",
+    "2026-10-03T17:30:00Z",
+    "2026-10-04T14:00:00Z"
+   ]
+  },
+  {
+   "zone_class": "sub_hour_offset",
+   "expression": "7 4 * * *",
+   "timezone": "Asia/Kathmandu",
+   "after": "2026-03-07T00:00:00Z",
+   "count": 3,
+   "sequence": [
+    "2026-03-07T22:22:00Z",
+    "2026-03-08T22:22:00Z",
+    "2026-03-09T22:22:00Z"
+   ]
+  },
+  {
+   "zone_class": "five_field_and",
+   "expression": "0 0 13 * 5",
+   "timezone": "UTC",
+   "after": "2026-02-01T00:00:00Z",
+   "count": 3,
+   "sequence": [
+    "2026-02-13T00:00:00Z",
+    "2026-03-13T00:00:00Z",
+    "2026-11-13T00:00:00Z"
+   ]
+  },
+  {
+   "zone_class": "five_field_and",
+   "expression": "*/15 8-9 13,27 9-10 0",
+   "timezone": "UTC",
+   "after": "2026-09-13T08:13:00Z",
+   "count": 4,
+   "sequence": [
+    "2026-09-13T08:15:00Z",
+    "2026-09-13T08:30:00Z",
+    "2026-09-13T08:45:00Z",
+    "2026-09-13T09:00:00Z"
+   ]
+  },
+  {
+   "zone_class": "control",
+   "expression": "12,57 * * * *",
+   "timezone": "UTC",
+   "after": "2026-08-28T12:00:00Z",
+   "count": 4,
+   "sequence": [
+    "2026-08-28T12:12:00Z",
+    "2026-08-28T12:57:00Z",
+    "2026-08-28T13:12:00Z",
+    "2026-08-28T13:57:00Z"
+   ]
+  }
+ ],
+ "negative": [
+  {
+   "kind": "cron_step",
+   "expression": "*/01 * * * *",
+   "timezone": "UTC",
+   "after": "2026-02-01T00:00:00Z",
+   "vendor_error": "Invalid cron minute step"
+  },
+  {
+   "kind": "cron_non_ascii_digit",
+   "expression": "٣ * * * *",
+   "timezone": "UTC",
+   "after": "2026-02-01T00:00:00Z",
+   "vendor_error": "Invalid cron minute value"
+  },
+  {
+   "kind": "cron_dow_seven",
+   "expression": "0 0 * * 7",
+   "timezone": "UTC",
+   "after": "2026-02-01T00:00:00Z",
+   "vendor_error": "Invalid cron day-of-week value"
+  },
+  {
+   "kind": "timezone",
+   "expression": "0 0 * * *",
+   "timezone": "Factory",
+   "after": "2026-02-01T00:00:00Z",
+   "vendor_error": "Invalid cron time zone: Factory"
+  },
+  {
+   "kind": "timezone",
+   "expression": "0 0 * * *",
+   "timezone": "localtime",
+   "after": "2026-02-01T00:00:00Z",
+   "vendor_error": "Invalid cron time zone: localtime"
+  }
+ ],
+ "horizon": [
+  {
+   "boundary": "last_in_budget_candidate",
+   "expression": "0 0 2 1 6",
+   "timezone": "UTC",
+   "after": "2026-01-01T00:00:00Z",
+   "instant": "2027-01-02T00:00:00Z",
+   "vendor_error": null
+  },
+  {
+   "boundary": "first_out_of_budget_candidate",
+   "expression": "0 0 2 1 6",
+   "timezone": "UTC",
+   "after": "2025-12-31T23:59:00Z",
+   "instant": null,
+   "vendor_error": "Unable to compute next run time for cron expression: 0 0 2 1 6"
+  }
+ ]
+}

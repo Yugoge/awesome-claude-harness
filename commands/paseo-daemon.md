@@ -59,7 +59,9 @@ account-state transition, error classification, usage-ingest,
 scheduling-decision, recovery nonce, co-drive intent queue/resolve,
 SUSPECT / switch_pending session flags, dossier publication
 (dossier-write), rehydration barrier enter/clear, dossier-validate,
-generation-commit — maps to a named subcommand of that CLI. Ad-hoc direct writes (Edit/Write
+generation-commit, wake-channel arming state (wake-arm / wake-observe;
+wake-status is read-only), session-end teardown declaration
+(teardown-declare) — maps to a named subcommand of that CLI. Ad-hoc direct writes (Edit/Write
 tools, free-hand shell redirection) into the ledger directory are FORBIDDEN;
 read-only inspection of ledger files is allowed. Rationale: F11/F14 and
 RUNTIME-AC16/RUNTIME-AC20-class invariants demand exactly-once and
@@ -73,14 +75,118 @@ generations, dossiers, accounts.json, config.json, watermark).
 Step 2: acquire the leader lease (`lease-acquire` with an incarnation id and
 TTL). A successor controller reads the SAME ledger and takes over ONLY after
 the previous lease expires; renew the lease each tick.
-Step 3: arm the tick: create a paseo scheduler heartbeat (`create_heartbeat` /
-`create_schedule`, cron cadence — the proven pattern) that wakes the
-controller. EVERY tick re-arms or verifies the schedule; scheduler expiry
-(7-day auto-expire, maxRuns caps) is a first-class failure mode — a dead
-scheduler must be detected by the next manual wake and re-armed, never
-silently accepted (green liveness is not health).
+Step 3: arm the tick with a recurring cadence: create a paseo scheduler
+heartbeat (`create_heartbeat` / `create_schedule`) whose cron repeats
+indefinitely. ANY finite `maxRuns` on the tick channel is FORBIDDEN — every
+cap leaves a last fire after which loss is permanent, and a one-shot strands
+the controller on its FIRST lost delivery (observed live 2026-08-30: one lost
+fire, 3h20m43s strand, lease expired, forced succession); capped runs and
+one-shots are reserved for explicit channel tests with teardown and
+proof-by-delivery. Prefer an explicit minute-list
+cron (e.g. `12,57 * * * *`) over `*/45` — true cron `*/45` fires at :00 and
+:45 with alternating 45/15-minute gaps. At arm time, persist the armed
+channel in the ledger (`wake-arm`: channel kind/id, cron, IANA timezone,
+role, `expected_next_fire`); re-arming overwrites and re-journals.
+Delivery-proof doctrine: the wake prompt text carries the armed channel id;
+ARRIVAL is the only proof of channel health — create-API success is NOT
+proof (the read-back doctrine, extended to arming). A delivery claim MUST
+name the channel it proves (`wake-observe --delivered` requires
+`--channel-id`, matched against the armed record): an unnamed claim would
+validate whichever channel happens to be armed and degrade proof-by-delivery
+into an assertion. A delivery claim MUST also name the ARMING it proves, not
+only the channel: `wake-observe --delivered` requires `--arming-token`,
+compared by equality against the armed record. The wake prompt MUST carry
+the `arming_token` value returned by the `wake-arm` invocation that armed
+it, captured at arming time, and MUST NOT re-derive or re-read the current
+token at fire time. Binding to the channel id alone lets a late wake from a
+superseded arming certify the replacement that may itself be dead, so a
+non-matching claim is reported `superseded_arming` and grants no liveness.
+A record armed before this binding carries no arming token at all: absence
+terminates the comparison instead of matching another absence, so it is
+reported `unversioned_arming` and is repaired only by a re-arm.
+Every wake — scheduled
+or manual — runs `wake-observe` on arrival. Verification is wake-watermark
+ageing, NOT scheduler inspection (the paseo MCP surface has no heartbeat
+list/inspect/run-history tool): compare now against the persisted
+`expected_next_fire` + `wake_slack`; a stale watermark journals a schema'd
+`wake_channel_missed` event, appends it to the inbox (engaging the F5
+unresolved-record machinery), and triggers re-arm via `wake-arm`. The
+re-arm demand is LATCHED in the ledger (`needs_rearm`) and cleared ONLY by a
+successful `wake-arm`: a later arrival proves the channel is alive now but
+does not retire the earlier loss, and persisting the flag keeps a crash
+between observation and re-arm from reading fresh. Scheduler
+expiry (7-day auto-expire, maxRuns caps) remains a first-class failure mode —
+never silently accepted (green liveness is not health).
 Step 4: seed per-account records (`account-init`) with each account's weekly
 reset instant — all three accounts differ; track each independently.
+
+DST policy of the cron engine: candidates advance monotonically in UTC and are
+projected into the IANA zone only to match cron fields — local-clock
+arithmetic is never used, because `local + timedelta` resets the PEP 495
+`fold` flag and at a fall-back transition walks backwards and skips the
+repeated hour, which would UNDERCOUNT missed fires. A spring-forward wall time
+that does not exist never fires and resumes the next day. In the fall-back
+repeated hour EVERY real instant fires, for every hour field: the deployed
+scheduler carries no fold handling at all, so both occurrences of a repeated
+wall time are fires it will deliver, and expecting fewer of them is exactly
+how a dead channel came to read healthy. Occurrence search evaluates the
+deployed scheduler's own budget of 527,040 candidates, end-exclusive from the
+first whole minute after the search start; exhausting it means the deployed
+scheduler would never fire the cadence, and is a fail-closed refusal.
+
+The block below is the NORMATIVE statement of this doctrine. Where narrative
+prose anywhere in this file disagrees with it, the block governs, and the test
+suite drives every directive against the ledger's actual behaviour — so an
+inverted directive fails twice rather than quietly misinforming an operator.
+
+```wake-doctrine
+# One directive per line, "key: value". Normative; driven by the suite.
+fall_back_fixed_time_job: fires-at-both-occurrences
+late_delivery: latches-needs-rearm
+occurrence_search_budget_candidates: 527040
+manual_wake_observation: without-delivered
+scheduled_arrival_observation: wake-observe --delivered --channel-id --arming-token
+accepted_divergences: D4,D6
+stale_false_alone: never-health
+rule_source_divergent: refuse-at-arm
+rule_source_unverifiable: arm-untrusted
+rule_source_fingerprint_changed: read-untrusted
+verification_window_expired: read-untrusted
+untrusted_discharged_by: rearm-verification-success
+untrusted_reads: needs-rearm-true-both-surfaces
+```
+
+Reading the block: the ledger and the deployed scheduler read DIFFERENT
+timezone rule sources (dpkg `tzdata` under `/usr/share/zoneinfo` here, the tz
+rules compiled into the scheduler's own runtime there). Those are not the same
+artifact and cannot be made one from this side, so exact alignment is
+impossible in principle and the divergence is BOUNDED instead. `wake-arm`
+compares the two whole-minute UTC-offset tables for the armed zone over an
+explicit verification window (`wake_verify_window_days`, default 30, ceiling
+365) and records what it proved; every read re-evaluates that proof and
+withholds a health claim when it no longer holds. `needs_rearm` on the output
+of `wake-status` and `wake-observe` therefore now means EITHER a measured miss
+OR "rule source unproven" — an operator following the re-arm loop below may
+receive an arm-time refusal naming a zone whose rule sources diverge, and that
+refusal is the guarantee working, not a fault. `missed_total` and `stale` are
+never overloaded this way: they stay measurements.
+
+### Wake-channel deviation from blueprint F6 (documented)
+
+Blueprint F6 (`turn-3-solutions-adopted.md:35`) prescribed the HARNESS
+scheduler for the tick, proven only in an interactive REPL session. This
+command deviates deliberately: paseo-managed sessions have no resident REPL
+loop between turns (a harness session-only timer was observed to vanish
+without firing, dry-run 2026-08-30), so the harness scheduler is structurally
+unsound here and the tick uses the PASEO scheduler. Paseo heartbeat delivery
+is at-most-once with no inspect surface — hence the delivery-proof and
+watermark-ageing doctrine of Step 3. Residual risk: total wake-channel death
+is detected only at the NEXT contact (next delivered fire or manual wake);
+the manual wake remains the last-resort channel and runs `wake-observe`
+reconciliation on arrival. OPTIONAL Phase-2 hardening (doctrine only, off by
+default, NOT implemented this cycle): a successor-probe watchdog via
+`create_schedule` spawning an independent prober whose delivery path does not
+share a stranded session's fate.
 
 ## Tick loop — reconciliation is the authority (F1, F2)
 
@@ -104,7 +210,10 @@ its planned outcome recorded, and never planned twice).
 Step 4: drain the durable backlog within hook budgets — never more than one
 non-whitelist same-name tool call per turn, never a sixth consecutive Bash
 call; whatever does not fit this turn stays queued for the next turn.
-Step 5: renew the lease and re-arm the scheduler.
+Step 5: run `wake-observe` (watermark ageing: a stale `expected_next_fire` +
+`wake_slack` journals `wake_channel_missed`, appends the consolidated inbox
+event, and demands re-arm), renew the lease, and re-arm via the paseo
+scheduler + `wake-arm` whenever the observation reports `needs_rearm`.
 
 Notifications (if they arrive at all) are wake hints ONLY — they may advance the next tick
 but NEVER directly trigger pipeline actions. Exactly-once inbox processing
@@ -151,7 +260,20 @@ Zero-scan is legal ONLY when the ledger holds no unresolved managed record.
 Otherwise a low-frequency heartbeat persists (default 45 minutes,
 configurable). User-started turns are caught by the next tick's
 lastUserMessageAt diff. Manual wake: the user says one line to the controller
-session; the next tick reconciles everything from the ledger.
+session; the next tick reconciles everything from the ledger, and the manual
+wake ALSO runs `wake-observe` reconciliation on arrival (the manual channel
+is the last resort and folds its observation into the same wake watermark).
+
+## Session-end teardown — drain or declare (F5, F6)
+
+Before a controller session ends, pending inbox events MUST be either
+drained (consume→plan→ack, exactly once each) or DECLARED via the ledger CLI
+`teardown-declare`, which journals the pending event ids, the reason, and
+the lease disposition. Silently abandoning pending events and a live lease
+(the state observed after the 2026-08-30 dry-run: 5 pending events, expired
+lease, no journaled teardown) is a contract violation. A successor
+controller reads the teardown declaration to distinguish a clean handoff
+from a crash.
 
 ## Three-account scheduling state (F7, F8)
 
@@ -395,4 +517,7 @@ turn-1-monitoring-dynamics.md, revised per Section 5):
 | Max switches per task | 2 |
 | Min account residency | 30 min |
 | Switch hysteresis | 2 consecutive same-direction signals |
+| Lease TTL (`lease_ttl_seconds`) | 7200 s — invariant: `lease_ttl_seconds` >= (`tolerated_missed_fires`+1) x `heartbeat_minutes` x 60 + `wake_slack_minutes` x 60 (7200 >= 6300 at defaults); a violating TTL warns at lease-acquire/renew but succeeds |
+| Tolerated missed wake fires (`tolerated_missed_fires`) | 1 |
+| Wake slack (`wake_slack_minutes`) | 15 min — the ageing deadline is `expected_next_fire` + `wake_slack_minutes` |
 | Controller account safety line | migrate the controller session proactively at near-limit |

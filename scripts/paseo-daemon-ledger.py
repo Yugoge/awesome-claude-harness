@@ -19,6 +19,9 @@ Subcommands:
   classify-error               F8 five-class error-text classification
   usage-ingest                 adapter stdout JSON -> persisted per-account state
   scheduling-decision          (tier, task class) -> dispatch/switch/degrade/stop
+  wake-arm / wake-observe / wake-status    recurring wake-channel arming state:
+                               delivery-proof observations + watermark ageing
+  teardown-declare             session-end drain-or-declare teardown record
   recovery-record / recovery-demand / recovery-judge   (resume nonce + AC14 identity)
   dossier-validate             fail-closed schema validation (F12/F13)
   generation-commit / generation-verify           crash-safe generation journal (F14)
@@ -37,9 +40,12 @@ import hashlib
 import json
 import os
 import re
+import secrets
+import subprocess
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 EXIT_OK = 0
 EXIT_USAGE = 1
@@ -168,6 +174,18 @@ def cmd_init(args, root, now):
             "max_switches_per_task": 2,
             "min_account_residency_minutes": 30,
             "switch_hysteresis_signals": 2,
+            # wake-channel / lease coupling knobs (task 20260831-031316): the
+            # defaults satisfy lease_ttl_seconds >= (tolerated_missed_fires+1)
+            # x heartbeat_minutes x 60 + wake_slack_minutes x 60 (7200 >= 6300);
+            # pre-existing ledgers lack these keys, so every reader uses
+            # .get(key, default) fallbacks — never direct-key reads.
+            "lease_ttl_seconds": 7200,
+            "tolerated_missed_fires": 1,
+            "wake_slack_minutes": 15,
+            # timezone rule-source verification (M14/M15): same config surface
+            # as wake_slack_minutes, never a second configuration path.
+            "wake_verify_window_days": WAKE_VERIFY_WINDOW_DEFAULT_DAYS,
+            "wake_vendor_node_path": WAKE_VENDOR_NODE_PATH_DEFAULT,
         })
     wm = root / "inbox" / "watermark.json"
     if not wm.exists():
@@ -183,10 +201,43 @@ def require_root(root):
 
 # ---------------- lease (F6 leader succession) ----------------
 
+def load_config(root):
+    """Knob reads tolerate a missing config.json AND missing keys: every new
+    knob is read with .get(key, default) so pre-existing ledgers keep working
+    (never the read_json(...)["key"] direct-key pattern of cmd_usage_ingest —
+    older ledgers lack the wake/lease knobs seeded by newer inits)."""
+    path = root / "config.json"
+    return read_json(path) if path.exists() else {}
+
+
+def effective_lease_ttl(args, config):
+    if args.ttl_seconds is not None:
+        return args.ttl_seconds
+    return config.get("lease_ttl_seconds", 3600)
+
+
+def warn_ttl_cadence_coupling(config, ttl):
+    """Lease-safety bound (task 20260831-031316 M6): the TTL must survive
+    tolerated_missed_fires lost wake fires plus slack, or one lost fire
+    expires the lease and forces a spurious succession (observed live
+    2026-08-30: TTL 3600 s at 45-min cadence tolerated zero misses).
+    Warning, never an error — existing callers keep working."""
+    required = ((config.get("tolerated_missed_fires", 1) + 1)
+                * config.get("heartbeat_minutes", 45) * 60
+                + config.get("wake_slack_minutes", 15) * 60)
+    if ttl < required:
+        print(f"WARNING: lease TTL {ttl}s violates the TTL/cadence coupling "
+              f"invariant: required >= {required}s = (tolerated_missed_fires+1)"
+              f" x heartbeat_minutes x 60 + wake_slack_minutes x 60",
+              file=sys.stderr)
+
+
 def cmd_lease_acquire(args, root, now):
     require_root(root)
     lease_path = root / "lease.json"
-    ttl = args.ttl_seconds
+    config = load_config(root)
+    ttl = effective_lease_ttl(args, config)
+    warn_ttl_cadence_coupling(config, ttl)
     if lease_path.exists():
         lease = read_json(lease_path)
         expires = parse_aware(lease["expires_at"], "lease.expires_at")
@@ -215,8 +266,11 @@ def cmd_lease_renew(args, root, now):
     lease = read_json(lease_path)
     if lease["holder"] != args.holder:
         fail(EXIT_REFUSED, f"lease held by {lease['holder']}, not {args.holder}")
+    config = load_config(root)
+    ttl = effective_lease_ttl(args, config)
+    warn_ttl_cadence_coupling(config, ttl)
     lease["heartbeat_at"] = iso(now)
-    lease["expires_at"] = iso(datetime.fromtimestamp(now.timestamp() + args.ttl_seconds, tz=timezone.utc))
+    lease["expires_at"] = iso(datetime.fromtimestamp(now.timestamp() + ttl, tz=timezone.utc))
     atomic_write_json(lease_path, lease)
     print(json.dumps({"ok": True}))
 
@@ -1096,6 +1150,758 @@ def cmd_barrier_clear(args, root, now):
     print(json.dumps({"ok": True, "barrier": "cleared"}))
 
 
+# ---------------- wake channel (task 20260831-031316 M1-M5, M7): recurring
+# ---------------- arming state + delivery proof + watermark ageing +
+# ---------------- session-end drain-or-declare teardown
+
+WAKE_CHANNEL_KINDS = ["paseo_heartbeat", "paseo_schedule"]
+WAKE_ROLES = ["tick", "test"]
+# Supported 5-field cron subset (anything else refused fail-closed at
+# wake-arm): numeric, "*", "*/N", comma lists, "a-b" ranges per field; fields
+# are minute hour day-of-month month day-of-week, with the deployed parser's
+# bounds (dow 0-6; 7 is refused there and so is refused here).  All five field
+# predicates are ANDed, exactly as the deployed scheduler ANDs them.
+CRON_FIELD_SPECS = [("minute", 0, 59), ("hour", 0, 23), ("day-of-month", 1, 31),
+                    ("month", 1, 12), ("day-of-week", 0, 6)]
+# The deployed scheduler's own occurrence-search budget, read at
+# /opt/paseo/node_modules/@getpaseo/server/dist/server/server/schedule/cron.js:68
+# as `const limit = 366 * 24 * 60`, evaluated END-EXCLUSIVE from
+# startOfNextMinute(after).  A cadence the vendor cannot reach inside this
+# budget is one it will never fire, so the ledger must refuse it rather than
+# watch a channel that can never be delivered.
+VENDOR_OCCURRENCE_BUDGET_CANDIDATES = 366 * 24 * 60
+
+# Bumped whenever the enumeration policy of this engine changes.  An armed
+# record that does not carry THIS marker was written by a different policy and
+# is never read as trusted (M6): absence is not equivalence.
+WAKE_ENGINE_POLICY = "vendor-parity-2026-09"
+
+# Verification-window knob (M15): default via load_config, computed floor at
+# expected_next_fire + wake_slack, fixed ceiling so the bound stays meaningful.
+WAKE_VERIFY_WINDOW_DEFAULT_DAYS = 30
+WAKE_VERIFY_WINDOW_MAX_DAYS = 365
+# Resolved through load_config so a test can record the digest of a fixture it
+# owns; the deployed absolute path is only the default (M14).
+WAKE_VENDOR_NODE_PATH_DEFAULT = "/usr/bin/node"
+
+# The vendor rule-source probe.  Runs in the DEPLOYED runtime and reports the
+# zone's whole-minute UTC-offset table in the canonical form of M13:
+# newline-joined "<epoch_seconds>:<offset_seconds>" run starts, integers only.
+# A canonical integer form is mandatory -- comparing the two runtimes' ISO
+# renderings reports every zone as divergent, because Node emits milliseconds
+# and Python does not.  Exit 3 means the vendor REJECTS the zone (its
+# assertValidTimeZone would throw), which is a refusal and not an outage.
+VENDOR_TZ_PROBE_JS = r"""
+const zone = process.argv[1], fromMs = Number(process.argv[2]),
+      untilMs = Number(process.argv[3]);
+let dtf;
+try {
+  dtf = new Intl.DateTimeFormat("en-US", {timeZone: zone, hourCycle: "h23",
+    year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit",
+    minute: "2-digit", second: "2-digit"});
+  dtf.format(new Date(0));
+} catch (e) { process.stderr.write("invalid timezone"); process.exit(3); }
+function offsetSeconds(ms) {
+  const p = {};
+  for (const part of dtf.formatToParts(new Date(ms)))
+    if (part.type !== "literal") p[part.type] = part.value;
+  return Math.round((Date.UTC(+p.year, +p.month - 1, +p.day, +p.hour,
+                              +p.minute, +p.second) - ms) / 1000);
+}
+const runs = [];
+let previous = null;
+for (let ms = fromMs; ms < untilMs; ms += 60000) {
+  const offset = offsetSeconds(ms);
+  if (offset !== previous) { runs.push((ms / 1000) + ":" + offset); previous = offset; }
+}
+process.stdout.write(runs.join("\n"));
+"""
+
+
+def parse_cron_field(text, what, lo, hi):
+    """Return (restricted, allowed-values set). TRUE cron semantics: '*/45'
+    in the minute field means minutes {0, 45} — alternating 45/15-minute
+    gaps — NEVER 'every 45 minutes'; an arithmetic `expected += cadence`
+    model is wrong for cron channels and is deliberately not implemented."""
+    if text == "*":
+        return False, set(range(lo, hi + 1))
+    # ASCII digits only, in every field form below: the pinned vendor parser
+    # tests with the JavaScript /^\d+$/, which is ASCII-only, while Python's
+    # \d admits every Unicode decimal digit -- so a cron the vendor rejects
+    # outright would otherwise arm here.
+    m = re.fullmatch(r"\*/([0-9]+)", text)
+    if m:
+        step = int(m.group(1))
+        # The vendor requires the CANONICAL spelling (String(step) === source),
+        # so "*/01" is "Invalid cron minute step" there and must not normalise
+        # through int() here.
+        if m.group(1) != str(step):
+            fail(EXIT_REFUSED,
+                 f"non-canonical cron {what} step in {text!r}: the deployed "
+                 f"parser requires {str(step)!r} and refuses zero-padded steps")
+        if step < 1 or step > hi:
+            fail(EXIT_REFUSED, f"unsupported cron {what} step in {text!r}")
+        return True, set(range(lo, hi + 1, step))
+    values = set()
+    for part in text.split(","):
+        m = re.fullmatch(r"([0-9]+)-([0-9]+)", part)
+        if m:
+            a, b = int(m.group(1)), int(m.group(2))
+            if not lo <= a <= b <= hi:
+                fail(EXIT_REFUSED, f"cron {what} range {part!r} outside {lo}-{hi}")
+            values.update(range(a, b + 1))
+            continue
+        if re.fullmatch(r"[0-9]+", part):
+            v = int(part)
+            if not lo <= v <= hi:
+                fail(EXIT_REFUSED, f"cron {what} value {part!r} outside {lo}-{hi}")
+            values.add(v)
+            continue
+        fail(EXIT_REFUSED,
+             f"unsupported cron {what} element {part!r}; supported subset: "
+             f"numeric, *, */N, comma lists, a-b ranges")
+    return True, values
+
+
+def parse_cron(expr):
+    fields = expr.split()
+    if len(fields) != 5:
+        fail(EXIT_REFUSED, f"cron needs exactly 5 fields, got {len(fields)}: {expr!r}")
+    parsed = [parse_cron_field(text, what, lo, hi)
+              for text, (what, lo, hi) in zip(fields, CRON_FIELD_SPECS)]
+    return {
+        "minutes": parsed[0][1],
+        "hours": parsed[1][1],
+        "dom": parsed[2],
+        "months": parsed[3][1],
+        "dow": parsed[4],
+    }
+
+
+def cron_day_matches(spec, local_dt):
+    """Unconditional conjunction of the two day fields, matching the deployed
+    scheduler, which ANDs all five field predicates at cron.js:72-76 with no
+    day-field special case. The classic Vixie union rule manufactured fires
+    the vendor will never deliver, and each phantom fire latched a re-arm
+    demand whose remedy erased the real miss evidence."""
+    dom_values = spec["dom"][1]
+    dow_values = spec["dow"][1]
+    dom_ok = local_dt.day in dom_values
+    dow_ok = (local_dt.weekday() + 1) % 7 in dow_values  # cron: Sunday == 0
+    return dom_ok and dow_ok
+
+
+def cron_next_fire(spec, after, tzname):
+    """Next occurrence STRICTLY after `after` (aware UTC in, aware UTC out).
+
+    The candidate advances MONOTONICALLY IN UTC and is projected into the IANA
+    zone only to evaluate cron fields. Local-clock arithmetic is never used:
+    `local_dt + timedelta` resets the PEP 495 `fold` flag, which at a fall-back
+    transition walks BACKWARDS (returning instants earlier than `after`, in
+    breach of this contract) and skips the repeated hour outright -- fail-open
+    miss detection, the precise failure this engine exists to prevent.
+
+    DST policy, explicit in both directions:
+      * spring-forward gap -- a wall time that does not exist that day never
+        fires; walking real UTC instants simply never projects onto it, and the
+        occurrence resumes on the next day that has the wall time.
+      * fall-back repeated hour -- EVERY real instant fires, for every hour
+        field. The deployed scheduler carries no fold handling at all: it
+        projects each whole-minute UTC candidate through Intl.DateTimeFormat
+        and matches the fields it reads, so both the fold=0 and the fold=1
+        occurrence of a repeated wall time are real fires there. Suppressing
+        the repeat here made the ledger expect FEWER fires than the channel
+        actually delivers, which is exactly how a dead channel read healthy.
+    """
+    tz = ZoneInfo(tzname)
+    cand = (after.astimezone(timezone.utc).replace(second=0, microsecond=0)
+            + timedelta(minutes=1))
+    try:
+        # End-exclusive, exactly as cron.js:70 evaluates `index < limit` over
+        # candidates spaced 60 s apart from startOfNextMinute(after).
+        budget_end = cand + timedelta(
+            minutes=VENDOR_OCCURRENCE_BUDGET_CANDIDATES)
+    except OverflowError:
+        # Refuse rather than claim an occurrence search was authoritative when
+        # Python cannot represent the bound the deployed scheduler evaluates.
+        fail(EXIT_REFUSED,
+             "cannot search the deployed scheduler's "
+             f"{VENDOR_OCCURRENCE_BUDGET_CANDIDATES}-candidate occurrence "
+             f"window after {iso(after)}")
+    while cand < budget_end:
+        local = cand.astimezone(tz)
+        if (local.month not in spec["months"] or not cron_day_matches(spec, local)
+                or local.hour not in spec["hours"]):
+            step = timedelta(minutes=60 - local.minute)  # next local hour boundary
+            # The coarse skip is sound ONLY while the UTC offset is constant
+            # across it: local-minute arithmetic equals UTC-minute arithmetic
+            # only then, and the whole jumped span then shares one non-matching
+            # local hour. When the offset shifts INSIDE the jump the local hour
+            # can turn into a matching one mid-jump and the skip would silently
+            # lose that fire -- e.g. Pacific/Chatham (+12:45 -> +13:45, 2026-09-27)
+            # jumped 13:30Z straight to 14:15Z, stepping over the 14:00Z match of
+            # `45 3 * * *`. Fall back to minute granularity across the shift.
+            # Assumes no IANA zone changes offset twice inside 60 minutes (none
+            # does; the tightest real steps are single 30/45/60/120-minute ones).
+            if (cand + step).astimezone(tz).utcoffset() != local.utcoffset():
+                step = timedelta(minutes=1)
+            cand += step
+            continue
+        if local.minute in spec["minutes"]:
+            return cand
+        cand += timedelta(minutes=1)
+    fail(EXIT_REFUSED,
+         "no cron occurrence within the deployed scheduler's "
+         f"{VENDOR_OCCURRENCE_BUDGET_CANDIDATES}-candidate window after "
+         f"{iso(after)}: the deployed scheduler would never fire this cadence")
+
+
+def wake_path(root):
+    return root / "wake.json"
+
+
+# ---------------- timezone rule-source trust (M11-M16) ----------------
+#
+# The ledger reads /usr/share/zoneinfo (dpkg tzdata) while the deployed
+# scheduler reads the tz rules compiled into its own runtime.  Those two rule
+# sources are not the same artifact and cannot be made the same one from here,
+# so exact behavioural alignment is impossible IN PRINCIPLE.  The divergence is
+# therefore BOUNDED instead of removed: arming proves agreement over an
+# explicit window and records what it proved, and every READ re-evaluates that
+# proof.  Nothing about this is a health claim -- it can only ever withhold
+# one.
+
+def zone_offset_table(tzname, start, end):
+    """The zone's whole-minute UTC-offset table over [start, end), in the
+    canonical comparison form: newline-joined '<epoch_seconds>:<offset_seconds>'
+    RUN STARTS, integers only. Returns None when the zone cannot be resolved
+    from this runtime's rule source at all."""
+    try:
+        tz = ZoneInfo(tzname)
+    except (KeyError, ValueError, OSError):
+        return None
+    runs = []
+    previous = None
+    cand = start
+    step = timedelta(minutes=1)
+    while cand < end:
+        offset = int(cand.astimezone(tz).utcoffset().total_seconds())
+        if offset != previous:
+            runs.append(f"{int(cand.timestamp())}:{offset}")
+            previous = offset
+        cand += step
+    return "\n".join(runs)
+
+
+def vendor_offset_table(node_path, tzname, start, end):
+    """Run the vendor rule-source probe in the DEPLOYED runtime.
+
+    Returns (status, table): status 'ok' with the canonical table, 'rejected'
+    when the deployed runtime refuses the zone identifier outright (its own
+    assertValidTimeZone would throw, so it will never schedule that channel),
+    or 'unconsultable' when the runtime cannot be reached at all."""
+    try:
+        proc = subprocess.run(
+            [node_path, "-e", VENDOR_TZ_PROBE_JS, "--", tzname,
+             str(int(start.timestamp() * 1000)), str(int(end.timestamp() * 1000))],
+            capture_output=True, text=True, timeout=300)
+    except (OSError, subprocess.SubprocessError):
+        return "unconsultable", None
+    if proc.returncode == 3:
+        return "rejected", None
+    if proc.returncode != 0:
+        return "unconsultable", None
+    return "ok", proc.stdout
+
+
+def first_table_disagreement(ledger_table, vendor_table):
+    """The first run-start line the two tables do not share, or None."""
+    ledger_runs = ledger_table.split("\n") if ledger_table else []
+    vendor_runs = vendor_table.split("\n") if vendor_table else []
+    for index in range(max(len(ledger_runs), len(vendor_runs))):
+        mine = ledger_runs[index] if index < len(ledger_runs) else None
+        theirs = vendor_runs[index] if index < len(vendor_runs) else None
+        if mine != theirs:
+            return {"ledger": mine, "vendor": theirs}
+    return None
+
+
+def file_digest(path):
+    """sha256 of a file's bytes, or None when it is absent or unreadable.
+    Reads the file; NEVER executes it (M14, Adjudication 1)."""
+    try:
+        with open(path, "rb") as fh:
+            digest = hashlib.sha256()
+            for chunk in iter(lambda: fh.read(1 << 20), b""):
+                digest.update(chunk)
+            return digest.hexdigest()
+    except OSError:
+        return None
+
+
+def wake_trust_state(record, now):
+    """The single read-time trust predicate (M12).
+
+    A POSITIVE-EVIDENCE conjunction: every input must be PRESENT before it is
+    examined, and an absent input TERMINATES the predicate with a reason code
+    before any comparison is reached. Two absent values are therefore never
+    compared and can never compare equal -- the defect shape that already cost
+    this workstream one fail-open. No evidence field is read through a
+    defaulting accessor; a default would reintroduce exactly that hole.
+    Executes nothing: the vendor runtime is never launched from a read path.
+    """
+    policy = record.get("engine_policy")
+    if policy is None:
+        return "untrusted", "engine_policy_absent"
+    if policy != WAKE_ENGINE_POLICY:
+        return "untrusted", "engine_policy_unknown"
+    container = record.get("tz_rule_source")
+    if not isinstance(container, dict):
+        return "untrusted", "trust_container_absent"
+    if container.get("verified") is not True:
+        return "untrusted", container.get("reason") or "rule_source_unverified"
+    verified_from = container.get("verified_from")
+    verified_until = container.get("verified_until")
+    if verified_from is None or verified_until is None:
+        return "untrusted", "verification_window_absent"
+    window_start = parse_aware(verified_from, "wake.tz_rule_source.verified_from")
+    window_end = parse_aware(verified_until, "wake.tz_rule_source.verified_until")
+    if not window_start <= now < window_end:
+        return "untrusted", "window_expired"
+    recorded = container.get("fingerprint")
+    if recorded is None:
+        return "untrusted", "rule_source_fingerprint_absent"
+    tzname = record.get("timezone")
+    if tzname is None:
+        return "untrusted", "timezone_absent"
+    current = zone_offset_table(tzname, window_start, window_end)
+    if current is None:
+        return "untrusted", "rule_source_unreadable"
+    if sha256_bytes(current.encode("utf-8")) != recorded:
+        return "untrusted", "rule_source_changed"
+    binary_path = container.get("vendor_binary_path")
+    binary_digest = container.get("vendor_binary_digest")
+    if binary_path is None or binary_digest is None:
+        return "untrusted", "vendor_binary_reference_absent"
+    actual = file_digest(binary_path)
+    if actual is None:
+        return "untrusted", "vendor_binary_unreadable"
+    if actual != binary_digest:
+        return "untrusted", "vendor_binary_digest_mismatch"
+    return "trusted", None
+
+
+def wake_verify_window_days(args, config):
+    """M15: the window is a knob read through the ledger's existing config
+    surface, never a second configuration path."""
+    if getattr(args, "verify_window_days", None) is not None:
+        return args.verify_window_days
+    return config.get("wake_verify_window_days", WAKE_VERIFY_WINDOW_DEFAULT_DAYS)
+
+
+def cmd_wake_arm(args, root, now):
+    """Persist the armed wake channel so arming is reconstructable and a
+    successor can distinguish 'wake missed' from 'nothing armed' (the
+    2026-08-30 dry-run could not). Every finite role=tick maxRuns is refused
+    fail-closed: any cap leaves a last fire after which delivery loss is
+    permanent (observed: one lost fire, 3h20m43s strand)."""
+    require_root(root)
+    check_barrier(root)
+    # The rule-source comparison below stamps its FIRST run with the literal
+    # `now` instant on both sides (zone_offset_table's canonical form is
+    # integer seconds; see its docstring), but the deployed vendor probe
+    # inherits whatever sub-second fraction `now` carries and does not round
+    # it away. A sub-second `now` -- the default datetime.now() resolution,
+    # or an explicit fractional --now -- then leaks through as e.g.
+    # ledger='1789442655:0' vendor='1789442655.201:0': the SAME instant at
+    # two precisions, misread as disagreeing rule sources. Normalize once,
+    # up front, so every downstream use (armed_at, verified_from, and both
+    # offset tables) shares one precision.
+    now = now.replace(microsecond=0)
+    if args.role == "tick" and args.max_runs is not None:
+        fail(EXIT_REFUSED,
+             f"recurring-cadence-only: a finite maxRuns ({args.max_runs}) on the tick "
+             "channel is forbidden -- the cadence must repeat indefinitely, and ANY "
+             "cap leaves a last fire after which loss is permanent; one-shots and "
+             "capped runs are reserved for explicit channel tests with teardown and "
+             "proof-by-delivery")
+    try:
+        ZoneInfo(args.timezone)
+    except (KeyError, ValueError, OSError) as exc:
+        fail(EXIT_REFUSED, f"unknown IANA timezone {args.timezone!r}: {exc}")
+    spec = parse_cron(args.cron)
+    expected = cron_next_fire(spec, now, args.timezone)
+    config = load_config(root)
+    window_days = wake_verify_window_days(args, config)
+    if window_days < 1 or window_days > WAKE_VERIFY_WINDOW_MAX_DAYS:
+        fail(EXIT_REFUSED,
+             f"verification window {window_days}d outside 1-"
+             f"{WAKE_VERIFY_WINDOW_MAX_DAYS}d: a window beyond the ceiling "
+             "would make the vendor-side bound vacuous")
+    verified_until = now + timedelta(days=window_days)
+    slack = timedelta(minutes=config.get("wake_slack_minutes", 15))
+    if verified_until < expected + slack:
+        fail(EXIT_REFUSED,
+             f"verification window ends {iso(verified_until)}, before this "
+             f"channel could ever prove a delivery ({iso(expected + slack)}): "
+             "arming it would go untrusted before its first fire")
+    node_path = config.get("wake_vendor_node_path", WAKE_VENDOR_NODE_PATH_DEFAULT)
+    status, vendor_table = vendor_offset_table(node_path, args.timezone,
+                                               now, verified_until)
+    if status == "rejected":
+        fail(EXIT_REFUSED,
+             f"deployed scheduler refuses timezone {args.timezone!r}: it would "
+             "never create this channel, so the ledger must not watch one")
+    ledger_table = zone_offset_table(args.timezone, now, verified_until)
+    if status == "ok":
+        disagreement = first_table_disagreement(ledger_table, vendor_table)
+        if disagreement is not None:
+            # M11 branch 1: provable disagreement inside the window. The two
+            # rule sources cannot be reconciled from here, so refuse BEFORE any
+            # record exists that a consumer could read as healthy.
+            fail(EXIT_REFUSED,
+                 f"timezone rule sources disagree for {args.timezone!r} within "
+                 f"[{iso(now)}, {iso(verified_until)}): first disagreeing run "
+                 f"start ledger={disagreement['ledger']!r} "
+                 f"vendor={disagreement['vendor']!r}")
+        trust = {
+            "verified": True,
+            "reason": None,
+            "verified_from": iso(now),
+            "verified_until": iso(verified_until),
+            "fingerprint": sha256_bytes(ledger_table.encode("utf-8")),
+            "vendor_binary_path": str(Path(node_path).resolve()),
+            "vendor_binary_digest": file_digest(node_path),
+        }
+        if trust["vendor_binary_digest"] is None:
+            trust["verified"] = False
+            trust["reason"] = "vendor_binary_unreadable"
+    else:
+        # M11 branch 2: the vendor could not be consulted at all. Arm, because
+        # refusing would strand the channel, but arm UNTRUSTED -- an
+        # unconsultable rule source is not an agreeing one.
+        trust = {
+            "verified": False,
+            "reason": "vendor_unconsultable",
+            "verified_from": iso(now),
+            "verified_until": iso(verified_until),
+            "fingerprint": None,
+            "vendor_binary_path": None,
+            "vendor_binary_digest": None,
+        }
+    # M16: blindness is measurable, so the counter survives re-arming. Re-arm
+    # clears the MISS latch, never the accumulated untrusted time.
+    previous = read_json(wake_path(root)) if wake_path(root).exists() else {}
+    carried = previous.get("untrusted_minutes_total")
+    # Per-arming identity: an opaque token compared only by EQUALITY, never
+    # ordered. Drawn from the OS entropy pool, so no caller -- notably not the
+    # --now fake clock, which makes armed_at caller-supplied -- can force a
+    # collision. Collision-RESISTANT, not collision-proof.
+    arming_token = secrets.token_hex(16)
+    atomic_write_json(wake_path(root), {
+        "channel_kind": args.channel_kind,
+        "channel_id": args.channel_id,
+        "cron": args.cron,
+        "timezone": args.timezone,
+        "role": args.role,
+        "max_runs": args.max_runs,
+        "armed_at": iso(now),
+        "arming_token": arming_token,
+        "expected_next_fire": iso(expected),
+        "last_observed_at": None,
+        "last_verdict": None,
+        "missed_total": 0,
+        # Latched health flag: set by any observed miss, cleared ONLY here by a
+        # successful re-arm. Persisted so a crash between the observation and
+        # the external re-arm cannot let wake-status read fresh.
+        "needs_rearm": False,
+        # Engine-policy marker (M6): what enumeration policy wrote this record.
+        "engine_policy": WAKE_ENGINE_POLICY,
+        # What arming actually PROVED about the two rule sources, and over
+        # which window. Untrusted is discharged only by the SUCCESS of this
+        # verification, never by the act of re-arming (M16).
+        "tz_rule_source": trust,
+        "untrusted_minutes_total": 0 if carried is None else carried,
+        "untrusted_since": None,
+    })
+    journal_append(root, {"op": "wake-arm", "channel_kind": args.channel_kind,
+                          "channel_id": args.channel_id, "cron": args.cron,
+                          "timezone": args.timezone, "role": args.role,
+                          "expected_next_fire": iso(expected),
+                          "tz_rule_source_verified": trust["verified"]}, now)
+    print(json.dumps({"ok": True, "channel_id": args.channel_id,
+                      # Reported so the operator can capture it into the wake
+                      # prompt at ARMING time; the prompt must never re-read it.
+                      "arming_token": arming_token,
+                      "expected_next_fire": iso(expected),
+                      "tz_rule_source_verified": trust["verified"],
+                      "verified_until": trust["verified_until"]}))
+
+
+def append_wake_missed_event(root, record, missed_fires, slack_minutes, now):
+    """ONE consolidated schema'd inbox event per observe invocation carrying
+    the missed-fire count — never one event per missed period (a long strand
+    must not flood the inbox). Duplicate event ids are idempotent no-ops,
+    mirroring cmd_inbox_append.
+
+    The id is derived from INTERVAL IDENTITY — channel, arming generation
+    (armed_at), and the first/last reconciled missed fire — never from
+    observation wall time: a crash after the inbox append but before wake.json
+    advances re-reconciles the SAME interval, so the retry must produce the
+    SAME id and collapse into the idempotent no-op above instead of appending a
+    second event for one interval."""
+    missed = len(missed_fires)
+    fmt = "%Y%m%dT%H%M%SZ"
+    armed_at = parse_aware(record["armed_at"], "wake.armed_at")
+    event_id = (f"wake-missed-{record['channel_id']}-{armed_at.strftime(fmt)}"
+                f"-{missed_fires[0].strftime(fmt)}-{missed_fires[-1].strftime(fmt)}")
+    pending = root / "inbox" / "pending" / f"{event_id}.json"
+    acked = root / "inbox" / "acked" / f"{event_id}.json"
+    if pending.exists() or acked.exists():
+        return event_id
+    atomic_write_json(pending, {"event_id": event_id, "appended_at": iso(now), "payload": {
+        "type": "wake_channel_missed",
+        "channel_kind": record["channel_kind"],
+        "channel_id": record["channel_id"],
+        "cron": record["cron"],
+        "missed_fires": missed,
+        "first_missed_fire": iso(missed_fires[0]),
+        "last_missed_fire": iso(missed_fires[-1]),
+        "expected_next_fire": record["expected_next_fire"],
+        "wake_slack_minutes": slack_minutes,
+        "observed_at": iso(now),
+    }})
+    journal_append(root, {"op": "inbox-append", "event_id": event_id}, now)
+    return event_id
+
+
+def cmd_wake_observe(args, root, now):
+    """Delivery-proof + watermark ageing: ARRIVAL is the only proof of
+    channel health (create-API success is not). Runs at every wake —
+    scheduled or manual. Verdict against expected_next_fire + wake_slack:
+    on_time / late when delivered against an elapsed occurrence, non_proving
+    when the claim names no due occurrence at all, missed / pending when the
+    observation is manual (no --delivered); a miss journals
+    wake_channel_missed, appends the consolidated inbox event, and demands
+    re-arm. Deterministic under the --now fake clock."""
+    require_root(root)
+    check_barrier(root)
+    if args.delivered and args.channel_id is None:
+        fail(EXIT_REFUSED,
+             "--delivered requires --channel-id: arrival is proved by the channel id "
+             "the wake prompt carries, so a delivery claim must NAME the channel it "
+             "proves; an unnamed claim would validate whichever channel happens to be "
+             "armed and turn proof-by-delivery into an assertion")
+    path = wake_path(root)
+    if not path.exists():
+        fail(EXIT_REFUSED, "nothing armed: run wake-arm first (an absent armed record "
+                           "must never read as a healthy channel)")
+    record = read_json(path)
+    if args.channel_id is not None and args.channel_id != record["channel_id"]:
+        fail(EXIT_REFUSED, f"observed channel {args.channel_id!r} does not match armed "
+                           f"channel {record['channel_id']!r}; re-arm before observing")
+    # Delivery proof binds to the ARMING, not to the channel alone: a late wake
+    # belonging to a superseded arming must never certify the arming that
+    # replaced it. Compared by EQUALITY only -- the token carries no order.
+    # ABSENCE TERMINATES the predicate before any comparison, so an
+    # identity-less legacy record and a claim that names nothing can never
+    # match by both being absent -- the fail-open shape this workstream has
+    # already paid for once.
+    armed_token = record.get("arming_token")
+    arming_verdict = None
+    if args.delivered:
+        if armed_token is None:
+            arming_verdict = "unversioned_arming"
+        elif args.arming_token is None:
+            fail(EXIT_REFUSED,
+                 "--delivered requires --arming-token against a record that carries "
+                 "an arming token: a delivery claim must name the ARMING it proves, "
+                 "not merely the channel; a claim bound to the channel id alone "
+                 "would validate whichever arming happens to be current and let a "
+                 "superseded wake certify a replacement that may itself be dead")
+        elif args.arming_token != armed_token:
+            arming_verdict = "superseded_arming"
+    # A non-certifying arrival proves nothing, so it is scored EXACTLY as the
+    # plain non-delivery observation it is: the persisted health state is
+    # whatever non-delivery would have written. The distinct classification
+    # reaches only the DIAGNOSIS channels (stdout + journal) below.
+    delivered = args.delivered and arming_verdict is None
+    config = load_config(root)
+    slack_minutes = config.get("wake_slack_minutes", 15)
+    slack = timedelta(minutes=slack_minutes)
+    spec = parse_cron(record["cron"])
+    expected = parse_aware(record["expected_next_fire"], "wake.expected_next_fire")
+    fires = []
+    fire = expected
+    while fire <= now:
+        fires.append(fire)
+        fire = cron_next_fire(spec, fire, record["timezone"])
+    if delivered and not fires:
+        # M9: a delivery claim naming no due occurrence proves nothing about a
+        # scheduled channel, so it is NON-PROVING and changes no health-bearing
+        # field. Recording it as on_time (or merely stamping last_observed_at)
+        # would manufacture a proof of life out of an arrival nobody scheduled.
+        record["last_non_proving_claim_at"] = iso(now)
+        atomic_write_json(path, record)
+        state, reason = wake_trust_state(record, now)
+        journal_append(root, {"op": "wake-observe",
+                              "channel_id": record["channel_id"],
+                              "verdict": "non_proving", "missed_fires": 0,
+                              "needs_rearm": bool(record.get("needs_rearm"))}, now)
+        print(json.dumps({
+            "ok": True, "verdict": "non_proving", "missed_fires": 0,
+            "needs_rearm": bool(record.get("needs_rearm")) or state != "trusted",
+            "expected_next_fire": record["expected_next_fire"],
+            "inbox_event_id": None, "trust_state": state, "trust_reason": reason}))
+        return
+    # ONE miss rule for delivered and undelivered observations alike: every
+    # elapsed fire whose slack has expired is missed. Excluding the delivered
+    # fire let a late arrival EXONERATE the very fire it failed to honour.
+    missed_fires = [f for f in fires if f + slack < now]
+    if delivered:
+        delivered_fire = fires[-1]
+        verdict = "on_time" if now <= delivered_fire + slack else "late"
+    else:
+        verdict = "missed" if missed_fires else "pending"
+    # M3 channel separation: the record takes the non-delivery verdict, so the
+    # health state really is identical; only the diagnosis channels see the
+    # distinct classification.
+    reported_verdict = verdict if arming_verdict is None else arming_verdict
+    missed = len(missed_fires)
+    # Latched: an arrival proves the channel is alive NOW but does not retire an
+    # earlier loss, so only a successful wake-arm clears this. Persisting it is
+    # what makes the demand survive a crash before the external re-arm.
+    needs_rearm = bool(record.get("needs_rearm", False)) or missed > 0
+    event_id = None
+    if missed:
+        event_id = append_wake_missed_event(root, record, missed_fires, slack_minutes, now)
+    record["last_observed_at"] = iso(now)
+    record["last_verdict"] = verdict
+    record["missed_total"] = record.get("missed_total", 0) + missed
+    record["needs_rearm"] = needs_rearm
+    if verdict != "pending":
+        # A resolving verdict only proves the fate of fires this call actually
+        # judged. `missed_fires` is always a PREFIX of `fires`: both are
+        # ordered and `f + slack < now` is monotone in f. So the UNJUDGED
+        # remainder is exactly fires[len(missed_fires):] -- every fire still
+        # inside its own legitimate grace window. Advancing past them to
+        # cron_next_fire(now) orphans them: they can never be counted missed
+        # once their own grace finally expires, and a later --delivered claim
+        # finds no due occurrence at all (fires=[]) and reports non_proving
+        # instead of on_time. So the watermark parks at the FIRST unjudged
+        # fire. Parking at fires[-1] instead rescues only the newest of them
+        # and silently discards the rest whenever two or more fires are
+        # simultaneously elapsed-but-still-in-grace -- which is every cron
+        # whose interval is shorter than wake_slack_minutes.
+        #
+        # The delivered branch deliberately does NOT park: an arrival is
+        # scored against fires[-1], so parking below it would re-present an
+        # ALREADY-HONOURED fire for judgment on the next tick and count a
+        # delivered fire as missed. Advancing past the whole batch is the
+        # correct treatment there.
+        if delivered or len(missed_fires) == len(fires):
+            # every fire in the batch is judged -- advance to the next TRUE
+            # cron occurrence strictly after now
+            record["expected_next_fire"] = iso(cron_next_fire(spec, now, record["timezone"]))
+        else:
+            # index is in range precisely because the branch above consumed
+            # the all-judged case
+            record["expected_next_fire"] = iso(fires[len(missed_fires)])
+    state, reason = wake_trust_state(record, now)
+    # M16: accumulate the time this channel has spent unable to prove its rule
+    # source, in the command that already writes. wake-status must not, so the
+    # counter lives here and only here; a re-arm carries it forward.
+    if state != "trusted":
+        since = record.get("untrusted_since")
+        if since is not None:
+            elapsed = (now - parse_aware(since, "wake.untrusted_since")
+                       ).total_seconds() / 60.0
+            if elapsed > 0:
+                carried = record.get("untrusted_minutes_total")
+                record["untrusted_minutes_total"] = round(
+                    (0 if carried is None else carried) + elapsed, 6)
+        record["untrusted_since"] = iso(now)
+    else:
+        record["untrusted_since"] = None
+    atomic_write_json(path, record)
+    journal_entry = {"op": "wake-observe", "channel_id": record["channel_id"],
+                     "verdict": reported_verdict, "missed_fires": missed,
+                     "needs_rearm": needs_rearm, "trust_state": state}
+    if arming_verdict is not None:
+        # Both tokens in BOUND roles: 'both values appear somewhere' would be
+        # satisfied by a swapped or ambiguous pair.
+        journal_entry["claimed_arming_token"] = args.arming_token
+        journal_entry["armed_arming_token"] = armed_token
+    if missed:
+        journal_entry["event"] = "wake_channel_missed"
+    journal_append(root, journal_entry, now)
+    print(json.dumps({"ok": True, "verdict": reported_verdict,
+                      "missed_fires": missed,
+                      # The consumer surface, not the stored latch: an
+                      # untrusted rule source cannot prove delivery, so the
+                      # documented loop must re-arm on it too.
+                      "needs_rearm": needs_rearm or state != "trusted",
+                      "expected_next_fire": record["expected_next_fire"],
+                      "inbox_event_id": event_id,
+                      "trust_state": state, "trust_reason": reason}))
+
+
+def cmd_wake_status(args, root, now):
+    """Read-only ageing snapshot (mirrors lease-status): the armed record plus
+    the current watermark verdict and the current trust reading; never
+    mutates, never journals, never executes the vendor runtime.
+
+    The stored record is splatted FIRST and every computed field is written
+    AFTER it. The reverse order silently returns the stored value for any key
+    the surface also computes, which is precisely how this surface came to
+    carry no trust computation at all."""
+    require_root(root)
+    path = wake_path(root)
+    if not path.exists():
+        print(json.dumps({"armed": False}))
+        return
+    record = read_json(path)
+    config = load_config(root)
+    slack = timedelta(minutes=config.get("wake_slack_minutes", 15))
+    expected = parse_aware(record["expected_next_fire"], "wake.expected_next_fire")
+    state, reason = wake_trust_state(record, now)
+    print(json.dumps({
+        **record,
+        "armed": True,
+        # stale stays exactly 'now > expected_next_fire + wake_slack'.
+        # Overloading it with untrustedness would make a late-but-trusted
+        # channel indistinguishable from a punctual-but-unproven one.
+        "stale": now > expected + slack,
+        "deadline": iso(expected + slack),
+        "needs_rearm": bool(record.get("needs_rearm")) or state != "trusted",
+        "trust_state": state,
+        "trust_reason": reason,
+    }))
+
+
+def cmd_teardown_declare(args, root, now):
+    """Session-end drain-or-declare (M7): journal the pending event ids, the
+    reason, and the lease disposition so a successor can distinguish a clean
+    handoff from a crash. Deliberately NOT barrier-gated: refusing the
+    declaration under an active rehydration barrier would force the silent
+    abandonment this record exists to prevent (lease ops are likewise
+    ungated)."""
+    require_root(root)
+    pending_ids = sorted(p.stem for p in (root / "inbox" / "pending").glob("*.json"))
+    lease_path = root / "lease.json"
+    if lease_path.exists():
+        lease = read_json(lease_path)
+        expires = parse_aware(lease["expires_at"], "lease.expires_at")
+        disposition = {"state": "held" if now < expires else "expired",
+                       "holder": lease["holder"], "incarnation": lease["incarnation"]}
+    else:
+        disposition = {"state": "none"}
+    journal_append(root, {"op": "teardown-declare", "pending_event_ids": pending_ids,
+                          "reason": args.reason, "lease_disposition": disposition}, now)
+    print(json.dumps({"ok": True, "pending_event_ids": pending_ids,
+                      "reason": args.reason, "lease_disposition": disposition}))
+
+
 # ---------------- argument parsing ----------------
 
 def build_parser():
@@ -1111,11 +1917,13 @@ def build_parser():
 
     s = sub.add_parser("lease-acquire")
     s.add_argument("--holder", required=True)
-    s.add_argument("--ttl-seconds", type=int, default=3600)
+    s.add_argument("--ttl-seconds", type=int, default=None,
+                   help="lease TTL seconds; default: config lease_ttl_seconds (fallback 3600)")
     s.set_defaults(fn=cmd_lease_acquire)
     s = sub.add_parser("lease-renew")
     s.add_argument("--holder", required=True)
-    s.add_argument("--ttl-seconds", type=int, default=3600)
+    s.add_argument("--ttl-seconds", type=int, default=None,
+                   help="lease TTL seconds; default: config lease_ttl_seconds (fallback 3600)")
     s.set_defaults(fn=cmd_lease_renew)
     s = sub.add_parser("lease-status")
     s.set_defaults(fn=cmd_lease_status)
@@ -1238,6 +2046,37 @@ def build_parser():
     s.add_argument("--generation", type=int, default=None)
     s.add_argument("--expect-sha256", default=None)
     s.set_defaults(fn=cmd_generation_verify)
+
+    s = sub.add_parser("wake-arm")
+    s.add_argument("--channel-kind", required=True, choices=WAKE_CHANNEL_KINDS)
+    s.add_argument("--channel-id", required=True)
+    s.add_argument("--cron", required=True,
+                   help="5-field cron; supported subset: numeric, *, */N, comma lists, a-b ranges")
+    s.add_argument("--timezone", default="UTC", help="IANA timezone for the cron cadence")
+    s.add_argument("--role", required=True, choices=WAKE_ROLES)
+    s.add_argument("--max-runs", type=int, default=None,
+                   help="declared maxRuns of the armed channel; any finite value is refused for role=tick")
+    s.add_argument("--verify-window-days", type=int, default=None,
+                   help="timezone rule-source verification window in days "
+                        f"(default: config wake_verify_window_days, else "
+                        f"{WAKE_VERIFY_WINDOW_DEFAULT_DAYS}; refused beyond "
+                        f"{WAKE_VERIFY_WINDOW_MAX_DAYS})")
+    s.set_defaults(fn=cmd_wake_arm)
+    s = sub.add_parser("wake-observe")
+    s.add_argument("--delivered", action="store_true",
+                   help="a wake actually arrived (the prompt carried the channel id)")
+    s.add_argument("--channel-id", default=None,
+                   help="channel id carried by the arriving wake; must match the armed record")
+    s.add_argument("--arming-token", default=None,
+                   help="arming token the wake prompt captured at arming time; compared "
+                        "by equality against the armed record, so a superseded arming "
+                        "cannot certify the arming that replaced it")
+    s.set_defaults(fn=cmd_wake_observe)
+    s = sub.add_parser("wake-status")
+    s.set_defaults(fn=cmd_wake_status)
+    s = sub.add_parser("teardown-declare")
+    s.add_argument("--reason", required=True)
+    s.set_defaults(fn=cmd_teardown_declare)
     return p
 
 
