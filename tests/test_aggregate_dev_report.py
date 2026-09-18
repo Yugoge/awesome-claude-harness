@@ -21,6 +21,9 @@ main = _mod.main
 _is_worker_for_task = _mod._is_worker_for_task
 _validate_shards = _mod._validate_shards
 _build_aggregate = _mod._build_aggregate
+_canonical_projection = _mod._canonical_projection
+_merge_owned_edits = _mod._merge_owned_edits
+_merge_pre_edit_snapshots = _mod._merge_pre_edit_snapshots
 
 _HOOK = Path(__file__).parent.parent / "hooks" / "pretool-aggregate-check.py"
 _hook_spec = importlib.util.spec_from_file_location("pretool_aggregate_check", _HOOK)
@@ -1798,3 +1801,255 @@ class TestWriteTimeReconciliation:
         doc = json.loads(canonical_path.read_text())
         assert doc["dev"]["status"] == "blocked"
         assert doc["baseline_head_sha"] == "shaY"
+
+
+# ---------------------------------------------------------------------------
+# Task 20260917-195216: canonical must carry forward a lane shard's
+# owned_edits/pre_edit_snapshots ledger fields (M1-M5, S1-S3). Reproduces the
+# exact failure mode observed on task 20260904-181435 -- lane a's own report
+# had its ledger corrected, but the canonical (predating this fix) could
+# never absorb the correction because _canonical_projection's whitelist
+# dropped both fields from the staleness comparison and _build_aggregate
+# never emitted them in the first place.
+# ---------------------------------------------------------------------------
+
+class TestCanonicalProjectionIncludesOwnedEditsAndPreEditSnapshots:
+    def test_canonical_projection_includes_owned_edits_and_pre_edit_snapshots(self):
+        """AC-01: two documents identical except for owned_edits/
+        pre_edit_snapshots must now project to DIFFERENT dicts -- proving
+        the fields survive the whitelist instead of being silently masked
+        out of the L1081 staleness comparison."""
+        without_ledger = {
+            "request_id": BARE_TID,
+            "task_id": BARE_TID,
+            "baseline_head_sha": "sha1",
+            "baseline_dirty_snapshot": "",
+            "dev_report_path": f"docs/dev/dev-report-{BARE_TID}.json",
+            "parallel_workers": ["A"],
+            "dev": {"status": "completed"},
+            "blocking_issues": [],
+            "recommendations": [],
+        }
+        with_ledger = dict(without_ledger)
+        with_ledger["owned_edits"] = {"f.py": [{"old": "a", "new": "b"}]}
+        with_ledger["pre_edit_snapshots"] = {"f.py": "a"}
+
+        projection_without = _canonical_projection(without_ledger)
+        projection_with = _canonical_projection(with_ledger)
+
+        assert projection_without != projection_with
+        assert projection_with["owned_edits"] == {"f.py": [{"old": "a", "new": "b"}]}
+        assert projection_with["pre_edit_snapshots"] == {"f.py": "a"}
+        assert projection_without["owned_edits"] is None
+        assert projection_without["pre_edit_snapshots"] is None
+
+
+class TestBuildAggregateMergesLedgerFields:
+    def test_build_aggregate_merges_owned_edits_across_shards(self):
+        """AC-02: owned_edits is a per-file ORDERED UNION of hunks across
+        shards in _scan_shards' alphabetical shard order, deduplicated by
+        exact JSON value per file -- _union_list's convention extended from
+        a plain list field to a dict-of-lists field."""
+        hunk1 = {"old": "x = 1", "new": "x = 2"}
+        hunk2 = {"old": "y = 1", "new": "y = 2"}
+        hunk3 = {"old": "", "new": "z = 3"}
+        shard_a = _good_shard()
+        shard_a["owned_edits"] = {"shared.py": [hunk1]}
+        shard_b = _good_shard()
+        shard_b["owned_edits"] = {"shared.py": [hunk2], "only_b.py": [hunk3]}
+
+        aggregate = _build_aggregate([("A", shard_a), ("B", shard_b)], BARE_TID)
+
+        assert aggregate["owned_edits"] == {
+            "shared.py": [hunk1, hunk2],
+            "only_b.py": [hunk3],
+        }
+
+    def test_build_aggregate_merges_owned_edits_dedups_by_exact_value(self):
+        """The SAME hunk declared by two shards for the same file must not
+        be duplicated -- dedup is by exact JSON value, mirroring
+        _union_list's own dedup rule."""
+        hunk = {"old": "x = 1", "new": "x = 2"}
+        shard_a = _good_shard()
+        shard_a["owned_edits"] = {"shared.py": [hunk]}
+        shard_b = _good_shard()
+        shard_b["owned_edits"] = {"shared.py": [dict(hunk)]}
+
+        aggregate = _build_aggregate([("A", shard_a), ("B", shard_b)], BARE_TID)
+
+        assert aggregate["owned_edits"] == {"shared.py": [hunk]}
+
+    def test_build_aggregate_owned_edits_defaults_to_empty_dict(self):
+        """No shard declares owned_edits -- the key must still be present,
+        defaulting to {} rather than being omitted."""
+        aggregate = _build_aggregate(
+            [("A", _good_shard()), ("B", _good_shard())], BARE_TID
+        )
+        assert aggregate["owned_edits"] == {}
+
+    def test_build_aggregate_owned_edits_skips_malformed_shard_value(self):
+        """A shard whose owned_edits is not a dict, or whose per-file value
+        is not a list, is skipped for that shard/file -- never crashes."""
+        shard_a = _good_shard()
+        shard_a["owned_edits"] = "not-a-dict"
+        shard_b = _good_shard()
+        shard_b["owned_edits"] = {
+            "weird.py": "not-a-list",
+            "ok.py": [{"old": "a", "new": "b"}],
+        }
+
+        aggregate = _build_aggregate([("A", shard_a), ("B", shard_b)], BARE_TID)
+
+        assert aggregate["owned_edits"] == {"ok.py": [{"old": "a", "new": "b"}]}
+
+    def test_build_aggregate_pre_edit_snapshots_first_shard_wins(self):
+        """AC-03: two shards declare a pre_edit_snapshots entry for the SAME
+        file with DIFFERENT content (lane b's baseline is lane a's post-edit
+        tree, under sequential dispatch / baseline_provenance, spec R28).
+        The first shard in _scan_shards' alphabetical order wins, mirroring
+        the existing next(... for _, d in shards) first-shard-wins
+        convention already used for baseline_head_sha/baseline_dirty_snapshot."""
+        shard_a = _good_shard()
+        shard_a["pre_edit_snapshots"] = {"shared.py": "content-before-lane-a"}
+        shard_b = _good_shard()
+        shard_b["pre_edit_snapshots"] = {"shared.py": "content-before-lane-b"}
+
+        aggregate = _build_aggregate([("A", shard_a), ("B", shard_b)], BARE_TID)
+
+        assert aggregate["pre_edit_snapshots"] == {"shared.py": "content-before-lane-a"}
+
+    def test_build_aggregate_pre_edit_snapshots_defaults_to_empty_dict(self):
+        aggregate = _build_aggregate(
+            [("A", _good_shard()), ("B", _good_shard())], BARE_TID
+        )
+        assert aggregate["pre_edit_snapshots"] == {}
+
+    def test_build_aggregate_pre_edit_snapshots_skips_malformed_shard_value(self):
+        shard_a = _good_shard()
+        shard_a["pre_edit_snapshots"] = "not-a-dict"
+        shard_b = _good_shard()
+        shard_b["pre_edit_snapshots"] = {"ok.py": "snapshot-content"}
+
+        aggregate = _build_aggregate([("A", shard_a), ("B", shard_b)], BARE_TID)
+
+        assert aggregate["pre_edit_snapshots"] == {"ok.py": "snapshot-content"}
+
+
+class TestLedgerFieldsCanonicalRefresh:
+    """AC-04/AC-05/AC-06: reproduces the exact failure mode observed on task
+    20260904-181435 -- an existing canonical predates the ledger fields,
+    shard A's ledger has since been corrected, and re-running the aggregator
+    must pick up the correction (non-dry-run) or report staleness without
+    writing (dry-run), while a canonical that has already adopted the {}
+    default must not churn again when no shard declares real ledger data."""
+
+    def _existing_canonical_missing_ledger(self) -> dict:
+        return {
+            "task_id": BARE_TID,
+            "parallel_workers": ["A", "B"],
+            "baseline_head_sha": "abc123def456",
+            # owned_edits / pre_edit_snapshots intentionally absent, matching
+            # every pre-existing canonical written before this fix landed.
+        }
+
+    def test_canonical_refreshes_when_only_ledger_fields_changed(
+        self, project_dir: Path, capsys: pytest.CaptureFixture
+    ):
+        dev_dir = project_dir / "docs" / "dev"
+        shard_a = _good_shard()
+        shard_a["owned_edits"] = {"shared.py": [{"old": "a", "new": "b"}]}
+        shard_a["pre_edit_snapshots"] = {"shared.py": "a"}
+        _write(dev_dir, f"dev-report-A-{BARE_TID}.json", shard_a)
+        _write(dev_dir, f"dev-report-B-{BARE_TID}.json", _good_shard())
+        canonical_path = _write(
+            dev_dir,
+            f"dev-report-{BARE_TID}.json",
+            self._existing_canonical_missing_ledger(),
+        )
+
+        rc = main(["--task-id", BARE_TID])
+        assert rc == 0
+        out = json.loads(capsys.readouterr().out)
+        assert out["action"] == "aggregated"
+
+        refreshed = json.loads(canonical_path.read_text())
+        assert refreshed["owned_edits"] == {"shared.py": [{"old": "a", "new": "b"}]}
+        assert refreshed["pre_edit_snapshots"] == {"shared.py": "a"}
+
+    def test_dry_run_reports_stale_when_only_ledger_fields_changed(
+        self, project_dir: Path, capsys: pytest.CaptureFixture
+    ):
+        dev_dir = project_dir / "docs" / "dev"
+        shard_a = _good_shard()
+        shard_a["owned_edits"] = {"shared.py": [{"old": "a", "new": "b"}]}
+        shard_a["pre_edit_snapshots"] = {"shared.py": "a"}
+        _write(dev_dir, f"dev-report-A-{BARE_TID}.json", shard_a)
+        _write(dev_dir, f"dev-report-B-{BARE_TID}.json", _good_shard())
+        canonical_path = _write(
+            dev_dir,
+            f"dev-report-{BARE_TID}.json",
+            self._existing_canonical_missing_ledger(),
+        )
+        before = canonical_path.read_bytes()
+
+        rc = main(["--task-id", BARE_TID, "--dry-run"])
+        assert rc == 0
+        out = json.loads(capsys.readouterr().out)
+        assert out["action"] == "skipped"
+        assert "stale" in out["reason"].lower()
+        assert canonical_path.read_bytes() == before
+
+    def test_no_spurious_refresh_when_ledger_fields_absent_from_all_shards(
+        self, project_dir: Path, capsys: pytest.CaptureFixture
+    ):
+        """AC-06: once the canonical has already adopted the {} default (the
+        one-time schema-adoption churn documented in the ticket's Edge Cases
+        section has already happened once -- the first `main()` call below),
+        re-running against the SAME shards, which still declare no ledger
+        data at all, must NOT churn again -- both sides of the projection
+        resolve to the same {} default value. Mirrors the existing
+        TestCanonicalPresent.test_matching_canonical_returns_validated
+        two-call pattern."""
+        dev_dir = project_dir / "docs" / "dev"
+        _write(dev_dir, f"dev-report-A-{BARE_TID}.json", _good_shard())
+        _write(dev_dir, f"dev-report-B-{BARE_TID}.json", _good_shard())
+
+        assert main(["--task-id", BARE_TID]) == 0
+        assert json.loads(capsys.readouterr().out)["action"] == "aggregated"
+
+        canonical_path = dev_dir / f"dev-report-{BARE_TID}.json"
+        written = json.loads(canonical_path.read_text())
+        assert written["owned_edits"] == {}
+        assert written["pre_edit_snapshots"] == {}
+        before = canonical_path.read_bytes()
+
+        rc = main(["--task-id", BARE_TID])
+        assert rc == 0
+        out = json.loads(capsys.readouterr().out)
+        assert out["action"] == "validated"
+        assert canonical_path.read_bytes() == before
+
+
+class TestBlockedAggregateCarriesForwardOwnedEdits:
+    def test_blocked_aggregate_carries_forward_owned_edits(
+        self, project_dir: Path, capsys: pytest.CaptureFixture
+    ):
+        """AC-07: a shard-mismatch (mismatched baseline_head_sha) triggers
+        _write_blocked_aggregate, which reuses _build_aggregate UNMODIFIED --
+        so the blocked canonical must carry forward owned_edits/
+        pre_edit_snapshots with ZERO changes to that function's own 5-field
+        override list (dev.status, dev.status_rationale, blocking_issues,
+        baseline_head_sha, parallel_workers -- never the ledger fields)."""
+        dev_dir = project_dir / "docs" / "dev"
+        shard_a = _good_shard(sha="sha1111")
+        shard_a["owned_edits"] = {"shared.py": [{"old": "a", "new": "b"}]}
+        shard_a["pre_edit_snapshots"] = {"shared.py": "a"}
+        _write(dev_dir, f"dev-report-A-{BARE_TID}.json", shard_a)
+        _write(dev_dir, f"dev-report-B-{BARE_TID}.json", _good_shard(sha="sha9999"))
+
+        rc = main(["--task-id", BARE_TID])
+        assert rc == 1
+        doc = json.loads((dev_dir / f"dev-report-{BARE_TID}.json").read_text())
+        assert doc["dev"]["status"] == "blocked"
+        assert doc["owned_edits"] == {"shared.py": [{"old": "a", "new": "b"}]}
+        assert doc["pre_edit_snapshots"] == {"shared.py": "a"}

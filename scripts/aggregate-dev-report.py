@@ -543,6 +543,58 @@ def _union_list(shards: list[tuple[str, dict]], key_path: list[str]) -> list:
     return result
 
 
+def _merge_owned_edits(shards: list[tuple[str, dict]]) -> dict:
+    """Per-file ordered union of owned-edit hunks across shards (task 20260917-195216).
+
+    Mirrors _union_list's ordered-union/dedup-by-exact-JSON-value convention,
+    extended from a plain list field to a dict-of-lists field: shard order is
+    _scan_shards' existing alphabetical label sort, which this file's own
+    baseline_provenance chain (spec R28) already assumes reflects dispatch
+    order (a predecessor label sorts before its successor), so concatenating
+    per-file hunk lists in that same order is a documented assumption, not a
+    guess. A shard whose owned_edits is not a dict, or a per-file value that
+    is not a list, is skipped for that shard/file rather than raising.
+    """
+    result: dict[str, list] = {}
+    seen_json: dict[str, set] = {}
+    for _, data in shards:
+        owned = data.get("owned_edits")
+        if not isinstance(owned, dict):
+            continue
+        for file_path, hunks in owned.items():
+            if not isinstance(hunks, list):
+                continue
+            bucket = result.setdefault(file_path, [])
+            seen = seen_json.setdefault(file_path, set())
+            for hunk in hunks:
+                hunk_json = json.dumps(hunk, sort_keys=True)
+                if hunk_json not in seen:
+                    seen.add(hunk_json)
+                    bucket.append(hunk)
+    return result
+
+
+def _merge_pre_edit_snapshots(shards: list[tuple[str, dict]]) -> dict:
+    """Per-file first-shard-wins scalar across shards (task 20260917-195216).
+
+    Mirrors the existing next(... for _, d in shards) first-shard-wins
+    convention already used for baseline_head_sha/baseline_dirty_snapshot:
+    once a file's snapshot has been claimed by the earliest shard (in
+    _scan_shards' alphabetical order) declaring it, later shards' values for
+    that same file are ignored. A shard whose pre_edit_snapshots is not a
+    dict is skipped entirely rather than raising.
+    """
+    result: dict[str, object] = {}
+    for _, data in shards:
+        snapshots = data.get("pre_edit_snapshots")
+        if not isinstance(snapshots, dict):
+            continue
+        for file_path, snapshot in snapshots.items():
+            if file_path not in result:
+                result[file_path] = snapshot
+    return result
+
+
 def _canonical_projection(document: dict) -> dict:
     """Select deterministic aggregate fields; timestamp is intentionally excluded."""
     keys = (
@@ -555,6 +607,8 @@ def _canonical_projection(document: dict) -> dict:
         "dev",
         "blocking_issues",
         "recommendations",
+        "owned_edits",
+        "pre_edit_snapshots",
     )
     return {key: document.get(key) for key in keys}
 
@@ -668,6 +722,8 @@ def _build_aggregate(shards: list[tuple[str, dict]], task_id: str) -> dict:
         "dev": dev_block,
         "blocking_issues": _union_list(shards, ["blocking_issues"]),
         "recommendations": _union_list(shards, ["recommendations"]),
+        "owned_edits": _merge_owned_edits(shards),
+        "pre_edit_snapshots": _merge_pre_edit_snapshots(shards),
     }
     return aggregate
 
