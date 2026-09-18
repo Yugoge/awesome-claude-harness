@@ -1431,6 +1431,31 @@ def main(argv):
         replay = replay[:off] + new_b + replay[off + len(old_b):]
 
     if replay != worktree:
+        # Defect-signature detection (I12-snapshot-mismatch, task 20260918-180648):
+        # a pre_edit_snapshot captured against HEAD:<rel> instead of the true
+        # dispatch-time working-tree bytes is byte-identical to the committed
+        # blob. When that coincides with a replay mismatch, the failure is a
+        # stale-capture defect, not necessarily unattributed peer entanglement --
+        # name it distinctly so it is machine-greppable and never conflated with
+        # a genuine peer edit (see docs/reference/harness-issues-backlog.md).
+        head_entry = _tree_entry(git_root, "HEAD", rel)
+        if head_entry is not None:
+            rc_head, head_blob_bytes, _ = _git(
+                git_root, ["cat-file", "blob", head_entry[2]]
+            )
+            if rc_head == 0 and head_blob_bytes == snapshot:
+                return _excluded(
+                    "I12-snapshot-mismatch: pre_edit_snapshot for %s is byte-"
+                    "identical to the current HEAD blob rather than the file's "
+                    "true dispatch-time working-tree bytes -- the file was "
+                    "already dirty when this cycle's capture ran, so the "
+                    "recorded snapshot never reflected the pre-existing "
+                    "uncommitted content and forward replay cannot reproduce "
+                    "the worktree by construction. Re-capture pre_edit_snapshots "
+                    "from actual dispatch-time working-tree bytes (e.g. `git "
+                    "hash-object <path>` against the live file at cycle start), "
+                    "not HEAD:%s." % (rel, rel)
+                )
         return _excluded(
             "replayed owned edits do not reproduce the worktree (unattributed peer "
             "edit or ledger inconsistency detected) for %s" % rel
