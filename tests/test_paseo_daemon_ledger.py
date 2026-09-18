@@ -159,6 +159,279 @@ def test_inbox_ack_exactly_once_and_reack_idempotent(tmp_path):
     assert wm2["processed_count"] == 1  # re-ack does not double-count
 
 
+# ---------------- inbox-check-staleness: R1 self-bootstrapping judge ----------------
+# spec-20260910-164747.md AC-1.1/AC-1.3: the drain step is embedded INSIDE the
+# tick loop it protects and cannot, by construction, detect that same loop
+# silently failing to run it (measured live: watermark frozen 5+ days, zero
+# alarm). These tests pin the new independent judge's positive/negative
+# verdicts and the two properties AC-1.1 requires: self-bootstrapping
+# ledger-persistence and a configurable (never hardcoded) threshold.
+
+def check_staleness(root, **kw):
+    return ok(root, "inbox-check-staleness", **kw)
+
+
+def test_inbox_check_staleness_empty_pending_not_stale(tmp_path):
+    root = ledger(tmp_path)
+    out = check_staleness(root)
+    assert out["inbox_drain_stale"] is False
+    assert out["oldest_pending_event_id"] is None
+
+
+def test_inbox_check_staleness_negative_fresh_pending_within_threshold(tmp_path):
+    # AC-1.3 negative: watermark/plans keep pace -- a freshly-appended event
+    # well inside the default threshold must never trigger.
+    root = ledger(tmp_path)
+    append(root, "ev-fresh")
+    out = check_staleness(root, now="2026-08-28T12:05:00Z")
+    assert out["inbox_drain_stale"] is False
+    assert out["oldest_pending_event_id"] == "ev-fresh"
+
+
+def test_inbox_check_staleness_positive_aged_pending_no_plan_triggers(tmp_path):
+    # AC-1.3 positive: an event appended 3 days ago with no inbox/plans/
+    # entry must trigger true -- the exact shape of the live 2026-09-10
+    # incident (oldest pending ~7 days stale, zero plans/ activity).
+    root = ledger(tmp_path)
+    ok(root, "inbox-append", "--event-id", "ev-old", "--payload", "{}",
+       now="2026-09-04T05:03:59Z")
+    out = check_staleness(root, now="2026-09-11T04:14:00Z")
+    assert out["inbox_drain_stale"] is True
+    assert out["oldest_pending_event_id"] == "ev-old"
+    assert out["has_plan"] is False
+
+
+def test_inbox_check_staleness_negative_plan_acked_in_time_not_stale(tmp_path):
+    # R1 AC-1.1 substate (b) negative: the plan progressed to inbox-ack well
+    # within its own timeout window. Once acked, the event leaves
+    # inbox/pending entirely, so it can no longer be a stale candidate under
+    # either substate. This test previously asserted only "has a plan => not
+    # stale" (QA close-debate, task 20260911-011102, iteration-3 finding: that
+    # assertion accidentally pinned the missing plan_not_acked substate as
+    # correct "not stale" behavior instead of exercising the acked-in-time
+    # case). Renamed and rewritten to actually exercise ack-in-time.
+    root = ledger(tmp_path)
+    ok(root, "inbox-append", "--event-id", "ev-old", "--payload", "{}",
+       now="2026-09-04T05:03:59Z")
+    ok(root, "inbox-consume", "--planned-outcome", "dispatch-qa",
+       now="2026-09-11T04:14:00Z")
+    ok(root, "inbox-ack", "--event-id", "ev-old", now="2026-09-11T04:16:00Z")
+    out = check_staleness(root, now="2026-09-11T04:20:00Z")
+    assert out["inbox_drain_stale"] is False
+    assert out["stale_reasons"] == []
+    assert out["oldest_pending_event_id"] is None
+    assert out["oldest_unacked_planned_event_id"] is None
+
+
+def test_inbox_check_staleness_negative_plan_fresh_not_yet_due_not_stale(tmp_path):
+    # R1 AC-1.1 substate (b) negative boundary: plan exists, not yet acked,
+    # but the plan itself is still well within plan_ack_stale_threshold_minutes.
+    # Must not trigger merely because a plan exists (that was the bug) --
+    # must not trigger because the plan is still fresh relative to its OWN
+    # timeout window.
+    root = ledger(tmp_path)
+    ok(root, "inbox-append", "--event-id", "ev-old", "--payload", "{}",
+       now="2026-09-04T05:03:59Z")
+    ok(root, "inbox-consume", "--planned-outcome", "dispatch-qa",
+       now="2026-09-11T04:14:00Z")
+    out = check_staleness(root, now="2026-09-11T04:15:00Z")  # 1 min after planned_at
+    assert out["inbox_drain_stale"] is False
+    assert out["has_plan"] is True
+    assert out["stale_reasons"] == []
+    assert out["oldest_unacked_planned_event_id"] == "ev-old"
+    assert out["plan_age_minutes"] < out["plan_ack_threshold_minutes"]
+
+
+def test_inbox_check_staleness_positive_plan_exists_ack_overdue_triggers(tmp_path):
+    # R1 AC-1.1 substate (b) positive -- the core gap QA's close-debate found
+    # (task 20260911-011102): a plan exists but has itself aged past its own
+    # plan_ack_stale_threshold_minutes without ever reaching inbox-ack. Must
+    # trigger inbox_drain_stale with a distinguishable "plan_not_acked"
+    # reason, never masked by has_plan being True.
+    root = ledger(tmp_path)
+    ok(root, "inbox-append", "--event-id", "ev-old", "--payload", "{}",
+       now="2026-09-04T05:03:59Z")
+    ok(root, "inbox-consume", "--planned-outcome", "dispatch-qa",
+       now="2026-09-04T06:00:00Z")  # planned shortly after appended
+    # ~7 days after planned_at, still never acked
+    out = check_staleness(root, now="2026-09-11T04:14:00Z")
+    assert out["inbox_drain_stale"] is True
+    assert out["has_plan"] is True
+    assert out["stale_reasons"] == ["plan_not_acked"]
+    assert out["oldest_unacked_planned_event_id"] == "ev-old"
+
+
+def test_inbox_check_staleness_both_substates_independently_true_simultaneously(tmp_path):
+    # R1 AC-1.1 (per spec-20260910-164747): the two staleness substates must
+    # be independently triggerable and neither may mask the other -- an
+    # unplanned aged event and a separate planned-but-never-acked aged event
+    # coexisting in pending/ must BOTH surface in stale_reasons.
+    root = ledger(tmp_path)
+    # "aaa-with-plan" sorts first alphabetically, so inbox-consume (which
+    # picks the filename-sorted-first pending event -- a separate pre-
+    # existing ordering quirk flagged out-of-scope for R1) plans this one
+    # first, leaving "zzz-no-plan" unplanned.
+    ok(root, "inbox-append", "--event-id", "aaa-with-plan", "--payload", "{}",
+       now="2026-09-02T00:00:00Z")
+    ok(root, "inbox-append", "--event-id", "zzz-no-plan", "--payload", "{}",
+       now="2026-09-01T00:00:00Z")
+    ok(root, "inbox-consume", "--planned-outcome", "dispatch-qa",
+       now="2026-09-02T01:00:00Z")
+    out = check_staleness(root, now="2026-09-11T04:14:00Z")
+    assert out["inbox_drain_stale"] is True
+    assert set(out["stale_reasons"]) == {"no_plan", "plan_not_acked"}
+    assert out["oldest_pending_event_id"] == "zzz-no-plan"
+    assert out["has_plan"] is False
+    assert out["oldest_unacked_planned_event_id"] == "aaa-with-plan"
+
+
+def test_inbox_check_staleness_legacy_oldest_field_picks_true_oldest_across_substates(tmp_path):
+    # codex review (task 20260911-011102 iteration 3): the legacy
+    # oldest_pending_event_id/age_minutes/has_plan fields must name whichever
+    # of the two independent candidates is ACTUALLY oldest by appended_at,
+    # not unconditionally prefer the unplanned one -- otherwise journal/
+    # escalation evidence could cite a younger event while an older
+    # planned-but-unacked event is what really triggered the verdict. Here
+    # the planned-but-unacked event is OLDER by appended_at than the
+    # unplanned one, so it must win the legacy fields even though both
+    # substates still fire independently.
+    root = ledger(tmp_path)
+    # "aaa-old-with-plan" sorts first alphabetically, so inbox-consume plans
+    # it first; it is also the true oldest by appended_at.
+    ok(root, "inbox-append", "--event-id", "aaa-old-with-plan", "--payload", "{}",
+       now="2026-09-01T00:00:00Z")
+    ok(root, "inbox-append", "--event-id", "zzz-newer-no-plan", "--payload", "{}",
+       now="2026-09-02T00:00:00Z")
+    ok(root, "inbox-consume", "--planned-outcome", "dispatch-qa",
+       now="2026-09-01T01:00:00Z")
+    out = check_staleness(root, now="2026-09-11T04:14:00Z")
+    assert out["inbox_drain_stale"] is True
+    assert set(out["stale_reasons"]) == {"no_plan", "plan_not_acked"}
+    # the OLDER planned-but-unacked event wins the legacy fields
+    assert out["oldest_pending_event_id"] == "aaa-old-with-plan"
+    assert out["has_plan"] is True
+    assert out["oldest_unacked_planned_event_id"] == "aaa-old-with-plan"
+
+
+def test_inbox_check_staleness_acked_crash_residue_never_misclassified_stale(tmp_path):
+    # codex review (task 20260911-011102 iteration 3): cmd_inbox_ack's commit
+    # point is the acked write, BEFORE it unlinks the pending file (the
+    # "after-acked-write" crash-injection point). A crash there leaves an
+    # ALREADY-acked event still physically present in inbox/pending as
+    # cleanup residue -- oldest_unacked_planned() must exclude it even
+    # though its plan is old, or the judge would falsely flag
+    # "plan_not_acked" for an event the ledger already authoritatively acked.
+    root = ledger(tmp_path)
+    ok(root, "inbox-append", "--event-id", "ev-old", "--payload", "{}",
+       now="2026-09-04T05:03:59Z")
+    ok(root, "inbox-consume", "--planned-outcome", "dispatch-qa",
+       now="2026-09-04T06:00:00Z")
+    # simulate the after-acked-write crash: acked/ record committed, but
+    # pending/ cleanup (unlink) never ran -- reproduce via --inject-crash.
+    r = run(root, "inbox-ack", "--event-id", "ev-old",
+            "--inject-crash", "after-acked-write", now="2026-09-04T06:05:00Z")
+    assert r.returncode == 9
+    assert (root / "inbox" / "acked" / "ev-old.json").exists()
+    assert (root / "inbox" / "pending" / "ev-old.json").exists()  # residue
+    # ~7 days later, well past any plan_ack_stale_threshold_minutes default
+    out = check_staleness(root, now="2026-09-11T04:14:00Z")
+    assert out["inbox_drain_stale"] is False
+    assert out["stale_reasons"] == []
+    assert out["oldest_unacked_planned_event_id"] is None
+
+
+def test_inbox_check_staleness_plan_ack_threshold_falls_back_to_legacy_key(tmp_path):
+    # codex review (task 20260911-011102 iteration 3): a ledger that already
+    # customized inbox_drain_stale_threshold_minutes but predates
+    # plan_ack_stale_threshold_minutes must carry that customization forward
+    # to substate (b) too, rather than silently reverting to the raw
+    # heartbeat formula.
+    root = ledger(tmp_path)
+    cfg_path = root / "config.json"
+    cfg = json.loads(cfg_path.read_text())
+    cfg.pop("plan_ack_stale_threshold_minutes")
+    cfg["inbox_drain_stale_threshold_minutes"] = 10
+    cfg_path.write_text(json.dumps(cfg))
+    ok(root, "inbox-append", "--event-id", "ev-1", "--payload", "{}",
+       now="2026-08-28T12:00:00Z")
+    ok(root, "inbox-consume", "--planned-outcome", "dispatch-qa",
+       now="2026-08-28T12:00:00Z")
+    out = check_staleness(root, now="2026-08-28T12:30:00Z")  # 30 min later
+    assert out["plan_ack_threshold_minutes"] == 10  # inherited, not 135
+    assert out["inbox_drain_stale"] is True
+    assert out["stale_reasons"] == ["plan_not_acked"]
+    # explicit plan_ack key, when present, still wins over the legacy one
+    set_config(root, plan_ack_stale_threshold_minutes=60)
+    out2 = check_staleness(root, now="2026-08-28T12:30:00Z")
+    assert out2["plan_ack_threshold_minutes"] == 60
+    assert out2["inbox_drain_stale"] is False
+
+
+def test_inbox_check_staleness_sorts_by_appended_at_not_filename(tmp_path):
+    # Regression pinning the fix does NOT inherit cmd_inbox_consume's known
+    # filename-sort-vs-appended_at bug (scripts/paseo-daemon-ledger.py:317,
+    # flagged out-of-scope for R1): "zzz-new" sorts LAST alphabetically but is
+    # the true oldest by appended_at, and must be the one judged.
+    root = ledger(tmp_path)
+    ok(root, "inbox-append", "--event-id", "aaa-recent", "--payload", "{}",
+       now="2026-09-11T00:00:00Z")
+    ok(root, "inbox-append", "--event-id", "zzz-old", "--payload", "{}",
+       now="2026-09-04T05:03:59Z")
+    out = check_staleness(root, now="2026-09-11T04:14:00Z")
+    assert out["oldest_pending_event_id"] == "zzz-old"
+    assert out["inbox_drain_stale"] is True
+
+
+def test_inbox_check_staleness_threshold_configurable_via_config(tmp_path):
+    # AC-1.1: "configurable, not hardcoded" -- an operator-set threshold
+    # overrides the heartbeat-proportional default in both directions.
+    root = ledger(tmp_path)
+    ok(root, "inbox-append", "--event-id", "ev-1", "--payload", "{}",
+       now="2026-08-28T12:00:00Z")
+    # 30 minutes old; default threshold (135) would not trigger.
+    out = check_staleness(root, now="2026-08-28T12:30:00Z")
+    assert out["inbox_drain_stale"] is False
+    set_config(root, inbox_drain_stale_threshold_minutes=10)
+    out2 = check_staleness(root, now="2026-08-28T12:30:00Z")
+    assert out2["threshold_minutes"] == 10
+    assert out2["inbox_drain_stale"] is True
+
+
+def test_inbox_check_staleness_default_threshold_proportional_to_heartbeat(tmp_path):
+    # AC-1.1: "default proportional to heartbeat period" -- a pre-existing
+    # ledger from before this knob existed (key absent, like every other
+    # wake/lease knob's legacy-fallback tests above) derives its default
+    # from heartbeat_minutes x INBOX_DRAIN_STALE_TICK_MULTIPLIER, and moves
+    # when heartbeat_minutes moves.
+    root = ledger(tmp_path)
+    cfg_path = root / "config.json"
+    cfg = json.loads(cfg_path.read_text())
+    cfg.pop("inbox_drain_stale_threshold_minutes")
+    cfg_path.write_text(json.dumps(cfg))
+    assert check_staleness(root)["threshold_minutes"] == 135  # 45 x 3
+    set_config(root, heartbeat_minutes=20)
+    assert check_staleness(root)["threshold_minutes"] == 60  # 20 x 3
+
+
+def test_inbox_check_staleness_persists_verdict_into_ledger(tmp_path):
+    # AC-1.1: "recorded into the ledger itself... visible without any
+    # external monitor" -- not merely printed to stdout.
+    root = ledger(tmp_path)
+    ok(root, "inbox-append", "--event-id", "ev-old", "--payload", "{}",
+       now="2026-09-04T05:03:59Z")
+    out = check_staleness(root, now="2026-09-11T04:14:00Z")
+    status = json.loads((root / "inbox" / "drain_status.json").read_text())
+    assert status["inbox_drain_stale"] == out["inbox_drain_stale"] is True
+    assert "inbox-check-staleness" in (root / "journal.ndjson").read_text()
+
+
+def test_inbox_check_staleness_blocked_by_rehydration_barrier(tmp_path):
+    root = ledger(tmp_path)
+    ok(root, "barrier-enter")
+    r = run(root, "inbox-check-staleness")
+    assert r.returncode == 2 and "rehydration barrier" in r.stderr
+
+
 # ---------------- action FSM idempotency key ----------------
 
 def transition(root, to, attempt="1", **kw):
@@ -1892,6 +2165,172 @@ def test_teardown_declare_journals_pending_ids_reason_and_lease_disposition(tmp_
     assert last["reason"] == "session ending: user stop"
     assert last["lease_disposition"]["holder"] == "ctl-A"
     assert last["lease_disposition"]["incarnation"] == 1
+
+
+# ---------------- watchdog-check: R1 AC-1.2 consolidated Bash-call budget
+# ---------------- fix (task 20260911-011102, QA iteration-2 correction) ----------------
+# QA classified all 17 historical a814a9a0 (paseo-daemon-watchdog) runs that
+# mentioned DEAD/STRANDED/escalation and found 6/13 (46%) of genuine
+# escalation attempts blocked by hooks/pretool-orchestrator-gate.py's
+# 5-consecutive-Bash-call cap, because the watchdog's prompt drove
+# wake-status + lease-status + inbox-check-staleness + the conditional
+# inbox-append as SEPARATE Bash calls. These tests pin `watchdog-check`'s
+# single-call combination of all four steps, and specifically pin the
+# decisive-evidence scenario BA measured live: the wake/lease "controller
+# alive" check is ORTHOGONAL to inbox_drain_stale, not a superset of it, so
+# a healthy controller must still escalate when the inbox judge alone fires.
+
+def watchdog_check(root, **kw):
+    return ok(root, "watchdog-check", **kw)
+
+
+def escalation_files(root):
+    return list((root / "inbox" / "pending").glob("watchdog-escalation-*.json"))
+
+
+def test_watchdog_check_alive_controller_no_stale_inbox_no_escalation(tmp_path):
+    root = ledger(tmp_path)
+    wake_arm(root, now=T0)  # expected_next_fire 12:12Z, deadline 12:27Z (slack 15m)
+    ok(root, "lease-acquire", "--holder", "ctl-A", now=T0)  # held until 14:00Z
+    ok(root, "inbox-append", "--event-id", "biz-ev-1", "--payload", "{}", now=T0)
+    out = watchdog_check(root, now="2026-08-28T12:15:00Z")
+    assert out["escalation_needed"] is False
+    assert out["escalation_reasons"] == []
+    assert out["escalation_event_id"] is None
+    assert out["escalation_event_appended"] is False
+    assert out["staleness"]["inbox_drain_stale"] is False
+    assert out["wake_status"]["stale"] is False
+    assert out["lease_status"]["held"] is True
+    assert escalation_files(root) == []
+
+
+def test_watchdog_check_stale_wake_watermark_escalates(tmp_path):
+    root = ledger(tmp_path)
+    wake_arm(root, now=T0)
+    ok(root, "lease-acquire", "--holder", "ctl-A", now=T0)
+    out = watchdog_check(root, now="2026-08-28T13:00:00Z")  # past 12:27Z deadline
+    assert out["escalation_needed"] is True
+    assert out["escalation_reasons"] == ["controller_dead_or_stranded"]
+    assert out["escalation_event_appended"] is True
+    assert len(escalation_files(root)) == 1
+
+
+def test_watchdog_check_expired_lease_escalates(tmp_path):
+    root = ledger(tmp_path)
+    wake_arm(root, now=T0)  # fresh until 12:27Z
+    ok(root, "lease-acquire", "--holder", "ctl-A", "--ttl-seconds", "60", now=T0)
+    out = watchdog_check(root, now="2026-08-28T12:05:00Z")  # wake fresh, lease expired
+    assert out["wake_status"]["stale"] is False
+    assert out["lease_status"]["held"] is False
+    assert out["escalation_needed"] is True
+    assert out["escalation_reasons"] == ["controller_dead_or_stranded"]
+
+
+def test_watchdog_check_no_wake_or_lease_record_treated_as_dead(tmp_path):
+    # A freshly-initialized ledger before any wake-arm/lease-acquire: absence
+    # is DEAD/STRANDED, not a silent pass.
+    root = ledger(tmp_path)
+    out = watchdog_check(root, now=T0)
+    assert out["wake_status"] == {"armed": False}
+    assert out["lease_status"]["held"] is False
+    assert out["escalation_needed"] is True
+    assert out["escalation_reasons"] == ["controller_dead_or_stranded"]
+
+
+def test_watchdog_check_inbox_drain_stale_escalates_while_controller_alive(tmp_path):
+    # THE decisive-evidence scenario (BA ac_1_2_schedule_design_decision):
+    # a814a9a0's own wake/lease "controller alive" check is orthogonal to
+    # inbox_drain_stale, not a superset of it -- a healthy, ticking,
+    # lease-holding controller can still be silently failing to drain the
+    # inbox, and watchdog-check must escalate for THAT reason alone.
+    root = ledger(tmp_path)
+    wake_arm(root, now=T0)
+    ok(root, "lease-acquire", "--holder", "ctl-A", now=T0)  # held until 14:00Z
+    ok(root, "inbox-append", "--event-id", "ev-old", "--payload", "{}",
+       now="2026-08-25T00:00:00Z")  # far older than the 135min default threshold
+    out = watchdog_check(root, now="2026-08-28T12:15:00Z")  # wake fresh, lease held
+    assert out["wake_status"]["stale"] is False
+    assert out["lease_status"]["held"] is True
+    assert out["staleness"]["inbox_drain_stale"] is True
+    assert out["escalation_needed"] is True
+    assert out["escalation_reasons"] == ["inbox_drain_stale"]  # controller was NOT flagged
+
+
+def test_watchdog_check_plan_not_acked_escalates_while_controller_alive(tmp_path):
+    # R1 AC-1.1 substate (b), exercised through the watchdog-check call site:
+    # a plan exists for the pending event but has aged past its own
+    # plan_ack_stale_threshold_minutes without ever reaching inbox-ack. Both
+    # call sites share compute_inbox_drain_staleness, so this pins that the
+    # fix reaches watchdog-check too, not just inbox-check-staleness (QA
+    # close-debate, task 20260911-011102, iteration-3 correction).
+    root = ledger(tmp_path)
+    wake_arm(root, now=T0)
+    ok(root, "lease-acquire", "--holder", "ctl-A", now=T0)  # held until 14:00Z
+    ok(root, "inbox-append", "--event-id", "ev-old", "--payload", "{}",
+       now="2026-08-25T00:00:00Z")
+    ok(root, "inbox-consume", "--planned-outcome", "dispatch-qa",
+       now="2026-08-25T00:30:00Z")  # planned soon after appended, never acked
+    out = watchdog_check(root, now="2026-08-28T12:15:00Z")  # wake fresh, lease held
+    assert out["wake_status"]["stale"] is False
+    assert out["lease_status"]["held"] is True
+    assert out["staleness"]["inbox_drain_stale"] is True
+    assert out["staleness"]["stale_reasons"] == ["plan_not_acked"]
+    assert out["escalation_needed"] is True
+    assert out["escalation_reasons"] == ["inbox_drain_stale"]  # controller was NOT flagged
+
+
+def test_watchdog_check_persists_staleness_verdict_and_journals_both_ops(tmp_path):
+    root = ledger(tmp_path)
+    ok(root, "inbox-append", "--event-id", "ev-old", "--payload", "{}",
+       now="2026-08-25T00:00:00Z")
+    out = watchdog_check(root, now="2026-08-28T12:15:00Z")
+    status = json.loads((root / "inbox" / "drain_status.json").read_text())
+    assert status["inbox_drain_stale"] == out["staleness"]["inbox_drain_stale"] is True
+    files = escalation_files(root)
+    assert len(files) == 1
+    event = json.loads(files[0].read_text())
+    assert event["event_id"] == out["escalation_event_id"]
+    assert event["payload"]["reasons"] == out["escalation_reasons"]
+    assert event["payload"]["staleness"]["inbox_drain_stale"] is True
+    ops = [json.loads(line)["op"]
+           for line in (root / "journal.ndjson").read_text().strip().splitlines()]
+    assert "inbox-check-staleness" in ops
+    assert "inbox-append" in ops
+
+
+def test_watchdog_check_escalation_idempotent_within_same_instant(tmp_path):
+    # A retry at the identical --now (e.g. a crash between the append and the
+    # controller message, then an immediate re-fire) must collapse into the
+    # same escalation event id, never a second flooding append -- mirrors
+    # cmd_inbox_append's own duplicate-event-id idempotency.
+    root = ledger(tmp_path)
+    wake_arm(root, now=T0)
+    ok(root, "lease-acquire", "--holder", "ctl-A", now=T0)
+    first = watchdog_check(root, now="2026-08-28T13:00:00Z")
+    second = watchdog_check(root, now="2026-08-28T13:00:00Z")
+    assert first["escalation_event_appended"] is True
+    assert second["escalation_event_appended"] is False
+    assert first["escalation_event_id"] == second["escalation_event_id"]
+    assert len(escalation_files(root)) == 1
+
+
+def test_watchdog_check_blocked_by_rehydration_barrier(tmp_path):
+    root = ledger(tmp_path)
+    ok(root, "barrier-enter")
+    r = run(root, "watchdog-check")
+    assert r.returncode == 2 and "rehydration barrier" in r.stderr
+    assert escalation_files(root) == []
+
+
+def test_watchdog_check_single_cli_invocation_replaces_four_separate_calls(tmp_path):
+    # Contract pin, not a behavioral assertion: AC-1.2's fix is that the
+    # watchdog's prompt needs at most ONE Bash call for the full
+    # read+judge+escalate sequence. Assert the subcommand exists standalone
+    # (no required args beyond --root/--now shared by every subcommand) so a
+    # single `watchdog-check` invocation is always sufficient.
+    r = run(tmp_path, "watchdog-check", "--help", now=None)
+    assert r.returncode == 0
+    assert "--event-id" not in r.stdout  # no per-call args a caller must chain in
 
 
 def test_teardown_contract_text_mandates_drain_or_declare():

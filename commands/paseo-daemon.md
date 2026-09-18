@@ -54,7 +54,8 @@ committed to git).
 
 `scripts/paseo-daemon-ledger.py` is the **sole mutation surface** for
 `.claude/paseo-daemon/`. Every controller mutation of the ledger — init,
-lease, inbox append/consume/ack, action FSM transition, reservation,
+lease, inbox append/consume/ack, inbox drain-staleness judge
+(inbox-check-staleness), action FSM transition, reservation,
 account-state transition, error classification, usage-ingest,
 scheduling-decision, recovery nonce, co-drive intent queue/resolve,
 SUSPECT / switch_pending session flags, dossier publication
@@ -180,13 +181,35 @@ loop between turns (a harness session-only timer was observed to vanish
 without firing, dry-run 2026-08-30), so the harness scheduler is structurally
 unsound here and the tick uses the PASEO scheduler. Paseo heartbeat delivery
 is at-most-once with no inspect surface — hence the delivery-proof and
-watermark-ageing doctrine of Step 3. Residual risk: total wake-channel death
-is detected only at the NEXT contact (next delivered fire or manual wake);
-the manual wake remains the last-resort channel and runs `wake-observe`
-reconciliation on arrival. OPTIONAL Phase-2 hardening (doctrine only, off by
-default, NOT implemented this cycle): a successor-probe watchdog via
-`create_schedule` spawning an independent prober whose delivery path does not
-share a stranded session's fate.
+watermark-ageing doctrine of Step 3. A single missed fire self-heals at this
+channel's next delivered fire. This channel's TOTAL death, by contrast,
+produces no further delivered fires, so within this channel's own doctrine it
+can only ever surface via manual wake — the last resort (see 'Bootstrap (F6)'
+above). The independent watchdog below closes that gap with a genuinely
+contact-independent detection path (see 'Independent watchdog schedule').
+
+### Independent watchdog schedule (`paseo-daemon-watchdog`)
+
+A separate live paseo schedule, `paseo-daemon-watchdog` (id `a814a9a0`, cron
+`23,53 * * * *` UTC — offset from this tick channel's `12,57 * * * *` so the
+two cadences never collide), spawns a fresh agent independent of this tick
+channel's own session and lease. It exists because the controller's own
+heartbeat channel can only be checked while the controller is alive — a
+circular dependency that let the controller die silently overnight
+(2026-08-30, 2026-09-02). Each fire runs the ledger CLI's `watchdog-check`
+subcommand (R1 AC-1.2) — a single Bash call combining `wake-status`,
+`lease-status`, and `inbox-check-staleness`, plus a conditional escalation
+`inbox-append` — and, if `escalation_needed` is true, lists paseo sessions
+and messages the controller session naming the reasons and evidence.
+`watchdog-check`'s single-call design keeps the escalation path inside the
+5-consecutive-Bash-call orchestrator-gate budget even when escalation
+actually fires: driving the equivalent reads as separate Bash calls
+previously blocked 6 of 13 (46%) of genuine escalation attempts (measured
+2026-09-05 through 2026-09-11). This schedule never creates, modifies, or
+deletes any heartbeat or schedule, including itself, and never dispatches
+subagents; administrative changes to its prompt (such as this R1 extension)
+are made via the schedule-update mechanism, never by the spawned agent
+editing itself mid-run.
 
 ## Tick loop — reconciliation is the authority (F1, F2)
 
@@ -206,7 +229,36 @@ Step 3: drain the inbox exactly once per event via the deterministic
 consume→plan→ack protocol (`inbox-consume` records the planned outcome
 atomically; `inbox-ack` advances the processed watermark; a crash between
 consume and commit leaves the event pending; an event is never ACKed without
-its planned outcome recorded, and never planned twice).
+its planned outcome recorded, and never planned twice). Because this step
+lives INSIDE the loop it protects, it cannot by construction detect its own
+silent failure (R1, `docs/dev/specs/spec-20260910-164747.md`; measured live
+2026-09-10: watermark frozen 5+ days, zero alarm). Every tick MUST also
+invoke `inbox-check-staleness`, which sorts pending events by their
+`appended_at` FIELD (never filename order — a latent bug in
+`cmd_inbox_consume`'s own sort) and persists an `inbox_drain_stale` verdict
+into the ledger itself (`inbox/drain_status.json`) whenever the oldest
+pending event has no corresponding `inbox/plans/<id>.json` entry after
+exceeding the configurable `inbox_drain_stale_threshold_minutes` (config.json
+key; default `heartbeat_minutes` × 3). The same judge independently covers a
+second substate: a plan can exist for some pending event
+(`inbox/plans/<id>.json` present) yet itself age past its own
+`plan_ack_stale_threshold_minutes` (config.json key, independently
+configurable; if absent, inherits the effective
+`inbox_drain_stale_threshold_minutes`, itself defaulting to
+`heartbeat_minutes` × 3) without ever progressing to
+`inbox-ack` — scanned separately so neither substate masks the other, both
+may fire at once on different events, and the verdict's `stale_reasons`
+array names whichever fired ("no_plan" for the first substate,
+"plan_not_acked" for this one). This verdict is self-bootstrapping —
+queryable without any external monitor. The independent `paseo-daemon-watchdog`
+schedule (already separate from this tick channel; see "Independent watchdog
+schedule" above) additionally re-evaluates this same judge on its own
+cadence, via the consolidated `watchdog-check` subcommand (R1 AC-1.2, one
+Bash call for the full read+judge+escalate sequence — see above), and
+escalates via its existing dead/stranded-controller pattern (append one
+inbox event with the evidence, then message the controller session)
+whenever `inbox_drain_stale` is true — so this failure class is caught even
+when the main tick loop itself is the thing that stopped running.
 Step 4: drain the durable backlog within hook budgets — never more than one
 non-whitelist same-name tool call per turn, never a sixth consecutive Bash
 call; whatever does not fit this turn stays queued for the next turn.
@@ -260,9 +312,9 @@ Zero-scan is legal ONLY when the ledger holds no unresolved managed record.
 Otherwise a low-frequency heartbeat persists (default 45 minutes,
 configurable). User-started turns are caught by the next tick's
 lastUserMessageAt diff. Manual wake: the user says one line to the controller
-session; the next tick reconciles everything from the ledger, and the manual
-wake ALSO runs `wake-observe` reconciliation on arrival (the manual channel
-is the last resort and folds its observation into the same wake watermark).
+session; the next tick reconciles everything from the ledger (the manual
+channel is the last resort; its observation is folded into the wake
+watermark described in "Bootstrap (F6)" above).
 
 ## Session-end teardown — drain or declare (F5, F6)
 

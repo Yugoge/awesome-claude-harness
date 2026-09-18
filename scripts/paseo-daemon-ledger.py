@@ -19,8 +19,16 @@ Subcommands:
   classify-error               F8 five-class error-text classification
   usage-ingest                 adapter stdout JSON -> persisted per-account state
   scheduling-decision          (tier, task class) -> dispatch/switch/degrade/stop
+  inbox-check-staleness        R1: self-bootstrapping inbox_drain_stale judge
+                               (oldest pending by appended_at, no plan, past
+                               threshold) persisted into the ledger itself
   wake-arm / wake-observe / wake-status    recurring wake-channel arming state:
                                delivery-proof observations + watermark ageing
+  watchdog-check                R1 AC-1.2: ONE Bash call combining wake-status +
+                               lease-status + inbox-check-staleness + conditional
+                               escalation inbox-append, so the watchdog's full
+                               check-and-maybe-escalate sequence stays within the
+                               5-consecutive-Bash-call orchestrator-gate budget
   teardown-declare             session-end drain-or-declare teardown record
   recovery-record / recovery-demand / recovery-judge   (resume nonce + AC14 identity)
   dossier-validate             fail-closed schema validation (F12/F13)
@@ -69,6 +77,12 @@ ERROR_CLASS_ACTION = {
 # (ordered thresholds; unavailable/missing -> unknown) is normative.
 DEFAULT_TIER_THRESHOLDS = {"plentiful_min": 50, "near_limit_max": 15, "exhausted_max": 5}
 DEFAULT_ACCOUNTS = ["orchestrade", "yugetang", "yugoge"]
+# Inbox-drain staleness judge (R1, spec-20260910-164747 AC-1.1): the default
+# threshold is proportional to heartbeat_minutes, never a hardcoded absolute
+# -- 3 tick periods is long enough that one missed/late tick never
+# false-positives, short enough that a genuinely stalled drain (observed
+# live: 5+ days silently stalled) is caught well within a day.
+INBOX_DRAIN_STALE_TICK_MULTIPLIER = 3
 
 
 def fail(code, msg):
@@ -186,6 +200,17 @@ def cmd_init(args, root, now):
             # as wake_slack_minutes, never a second configuration path.
             "wake_verify_window_days": WAKE_VERIFY_WINDOW_DEFAULT_DAYS,
             "wake_vendor_node_path": WAKE_VENDOR_NODE_PATH_DEFAULT,
+            # R1 (spec-20260910-164747 AC-1.1): default is documented as
+            # heartbeat_minutes x INBOX_DRAIN_STALE_TICK_MULTIPLIER (45x3=135);
+            # pre-existing ledgers lack this key, so inbox_drain_stale_threshold_minutes()
+            # always reads it with the same .get(key, default) fallback as every
+            # other wake/lease knob above -- never a direct-key read.
+            "inbox_drain_stale_threshold_minutes": 45 * INBOX_DRAIN_STALE_TICK_MULTIPLIER,
+            # R1 substate (b) (spec-20260910-164747 AC-1.1, QA close-debate
+            # task 20260911-011102 iteration 3 correction): a plan's OWN
+            # ack-timeout window, independently tunable from the key above;
+            # same default formula and same .get(key, default) fallback.
+            "plan_ack_stale_threshold_minutes": 45 * INBOX_DRAIN_STALE_TICK_MULTIPLIER,
         })
     wm = root / "inbox" / "watermark.json"
     if not wm.exists():
@@ -377,6 +402,206 @@ def cmd_inbox_ack(args, root, now):
     rebuild_watermark(root)
     journal_append(root, {"op": "inbox-ack", "event_id": event_id}, now)
     print(json.dumps({"ok": True, "event_id": event_id, "already_acked": False}))
+
+
+def inbox_drain_stale_threshold_minutes(config):
+    """Configurable staleness threshold (AC-1.1). A freshly-inited ledger
+    carries the key explicitly (see cmd_init); a pre-existing ledger from
+    before this knob existed falls back to heartbeat_minutes x
+    INBOX_DRAIN_STALE_TICK_MULTIPLIER -- same .get(key, default) convention
+    as every other wake/lease knob (never a direct-key read)."""
+    if "inbox_drain_stale_threshold_minutes" in config:
+        return config["inbox_drain_stale_threshold_minutes"]
+    return config.get("heartbeat_minutes", 45) * INBOX_DRAIN_STALE_TICK_MULTIPLIER
+
+
+def drain_status_path(root):
+    return root / "inbox" / "drain_status.json"
+
+
+def plan_ack_stale_threshold_minutes(config):
+    """Configurable threshold (AC-1.1 substate b) for how long a plan may sit
+    un-acked before its OWN timeout is breached -- independent of (and not
+    satisfied merely by the existence of a plan under)
+    inbox_drain_stale_threshold_minutes above, which only governs the
+    no-plan-yet substate. spec-20260910-164747 R1/AC-1.1 documents the same
+    default formula (3 x heartbeat_minutes) for this substate as (a)'s; kept
+    as its OWN config key (not reusing (a)'s) so the two windows remain
+    independently tunable, per the same .get(key, default) convention as
+    every other wake/lease/staleness knob (never a direct-key read). A
+    ledger that already customized inbox_drain_stale_threshold_minutes but
+    predates this key falls back to THAT value (not straight to the raw
+    heartbeat formula), so an operator's existing intent carries forward
+    instead of being silently overridden by an unrelated default (codex
+    review, task 20260911-011102 iteration 3)."""
+    if "plan_ack_stale_threshold_minutes" in config:
+        return config["plan_ack_stale_threshold_minutes"]
+    return inbox_drain_stale_threshold_minutes(config)
+
+
+def oldest_unplanned_pending(root):
+    """Oldest pending event (by its `appended_at` FIELD -- never filename;
+    cmd_inbox_consume's `sorted(pending_dir.glob("*.json"))` is a latent
+    filename-sort bug, flagged out-of-scope for R1, that this judge must not
+    inherit) that has NO `inbox/plans/<id>.json` entry yet -- AC-1.1 substate
+    (a) candidate. Scanned independently of oldest_unacked_planned below so
+    neither substate can mask the other, per spec-20260910-164747 R1 AC-1.1
+    (the two staleness substates must be independently triggerable and
+    neither may mask the other). Returns None when no such event exists."""
+    pending_dir = root / "inbox" / "pending"
+    plans_dir = root / "inbox" / "plans"
+    events = []
+    for p in pending_dir.glob("*.json"):
+        event = read_json(p)
+        if not (plans_dir / f"{event['event_id']}.json").exists():
+            events.append((parse_aware(event["appended_at"], f"{p.name}.appended_at"), event))
+    if not events:
+        return None
+    events.sort(key=lambda pair: pair[0])
+    return events[0]
+
+
+def oldest_unacked_planned(root):
+    """Oldest-by-`planned_at` pending event that HAS an `inbox/plans/` entry
+    but is still sitting in `inbox/pending` (inbox-ack removes the pending
+    file on commit) -- AC-1.1 substate (b) candidate: a plan can itself age
+    past its own timeout without ever progressing to inbox-ack, a state
+    transition independent of substate (a). Previously the shipped judge
+    treated any existing plan as permanently non-stale (QA close-debate,
+    task 20260911-011102); this helper is the fix.
+
+    Excludes events that already have an authoritative `inbox/acked/<id>.json`
+    record: cmd_inbox_ack's commit point is the acked write, BEFORE it
+    unlinks the pending file (see its `after-acked-write` crash-injection
+    point); a crash in that narrow window leaves an event ALREADY acked yet
+    still physically present in inbox/pending as cleanup residue, which must
+    never be misclassified as `plan_not_acked` (codex review, task
+    20260911-011102 iteration 3). Returns None when no such event exists."""
+    pending_dir = root / "inbox" / "pending"
+    plans_dir = root / "inbox" / "plans"
+    acked_dir = root / "inbox" / "acked"
+    events = []
+    for p in pending_dir.glob("*.json"):
+        event = read_json(p)
+        event_id = event["event_id"]
+        if (acked_dir / f"{event_id}.json").exists():
+            continue  # already ACKed; pending file is unlinked cleanup residue
+        plan_path = plans_dir / f"{event_id}.json"
+        if plan_path.exists():
+            plan = read_json(plan_path)
+            planned_at = parse_aware(plan["planned_at"], f"{event_id}.planned_at")
+            events.append((planned_at, event))
+    if not events:
+        return None
+    events.sort(key=lambda pair: pair[0])
+    return events[0]
+
+
+def compute_inbox_drain_staleness(root, config, now):
+    """R1 AC-1.1: the unified `inbox_drain_stale` verdict, covering the two
+    independent stale substates spec-20260910-164747 R1 names explicitly --
+    (a) `no_plan`: oldest unplanned pending event aged past
+    inbox_drain_stale_threshold_minutes; (b) `plan_not_acked`: a plan exists
+    for some pending event but has itself aged past
+    plan_ack_stale_threshold_minutes without ever progressing to inbox-ack.
+    Each is computed from its own independent scan (oldest_unplanned_pending /
+    oldest_unacked_planned) so neither can mask the other and both may be
+    true at once; `stale_reasons` names whichever fired. Shared verbatim by
+    cmd_inbox_check_staleness and cmd_watchdog_check so a correctness fix
+    here is applied exactly once, never duplicated or allowed to drift
+    between the two call sites."""
+    threshold_minutes = inbox_drain_stale_threshold_minutes(config)
+    plan_ack_threshold_minutes = plan_ack_stale_threshold_minutes(config)
+    result = {
+        "checked_at": iso(now),
+        "threshold_minutes": threshold_minutes,
+        "plan_ack_threshold_minutes": plan_ack_threshold_minutes,
+        "inbox_drain_stale": False,
+        "stale_reasons": [],
+        "oldest_pending_event_id": None,
+        "oldest_pending_appended_at": None,
+        "age_minutes": None,
+        "has_plan": None,
+        "oldest_unacked_planned_event_id": None,
+        "oldest_unacked_planned_at": None,
+        "plan_age_minutes": None,
+    }
+
+    unplanned = oldest_unplanned_pending(root)
+    unplanned_appended_at = None
+    if unplanned is not None:
+        unplanned_appended_at, event = unplanned
+        age_minutes = (now - unplanned_appended_at).total_seconds() / 60.0
+        if age_minutes > threshold_minutes:
+            result["stale_reasons"].append("no_plan")
+
+    unacked_planned = oldest_unacked_planned(root)
+    unacked_appended_at = None
+    if unacked_planned is not None:
+        planned_at, planned_event = unacked_planned
+        unacked_appended_at = parse_aware(planned_event["appended_at"],
+                                           f"{planned_event['event_id']}.appended_at")
+        plan_age_minutes = (now - planned_at).total_seconds() / 60.0
+        result.update({
+            "oldest_unacked_planned_event_id": planned_event["event_id"],
+            "oldest_unacked_planned_at": iso(planned_at),
+            "plan_age_minutes": round(plan_age_minutes, 6),
+        })
+        if plan_age_minutes > plan_ack_threshold_minutes:
+            result["stale_reasons"].append("plan_not_acked")
+
+    # The legacy oldest_pending_event_id/age_minutes/has_plan fields must
+    # name the TRUE oldest-by-appended_at pending event across BOTH
+    # candidates -- not unconditionally prefer the unplanned one -- so
+    # journal/escalation evidence never cites a younger event while an
+    # older planned-but-unacked one is what actually triggered the verdict
+    # (codex review, task 20260911-011102 iteration 3).
+    if unplanned is not None and (unacked_planned is None or unplanned_appended_at <= unacked_appended_at):
+        _, event = unplanned
+        result.update({
+            "oldest_pending_event_id": event["event_id"],
+            "oldest_pending_appended_at": iso(unplanned_appended_at),
+            "age_minutes": round((now - unplanned_appended_at).total_seconds() / 60.0, 6),
+            "has_plan": False,
+        })
+    elif unacked_planned is not None:
+        _, planned_event = unacked_planned
+        result.update({
+            "oldest_pending_event_id": planned_event["event_id"],
+            "oldest_pending_appended_at": iso(unacked_appended_at),
+            "age_minutes": round((now - unacked_appended_at).total_seconds() / 60.0, 6),
+            "has_plan": True,
+        })
+
+    result["inbox_drain_stale"] = bool(result["stale_reasons"])
+    return result
+
+
+def cmd_inbox_check_staleness(args, root, now):
+    """R1 (spec-20260910-164747 AC-1.1): consume->plan->ack (Step 3 of the
+    Tick loop) is specified as an ordinary step INSIDE the same loop it is
+    meant to protect -- a step embedded inside a loop cannot, by
+    construction, detect that same loop silently failing to run it (measured
+    live: watermark frozen 5+ days, zero alarm). This judge is the
+    independent, self-bootstrapping check: it persists its verdict into the
+    ledger itself (inbox/drain_status.json), queryable without any external
+    monitor, so AC-1.2's watchdog (a schedule outside the main tick loop)
+    can read it even when the tick loop is the thing that stopped. Covers
+    BOTH AC-1.1 substates (no_plan, plan_not_acked) via
+    compute_inbox_drain_staleness -- see that function for the substate
+    definitions the previous revision only covered the first of (QA
+    close-debate, task 20260911-011102)."""
+    require_root(root)
+    check_barrier(root)
+    config = load_config(root)
+    result = compute_inbox_drain_staleness(root, config, now)
+    atomic_write_json(drain_status_path(root), result)
+    journal_append(root, {"op": "inbox-check-staleness",
+                          "inbox_drain_stale": result["inbox_drain_stale"],
+                          "stale_reasons": result["stale_reasons"],
+                          "oldest_pending_event_id": result["oldest_pending_event_id"],
+                          "age_minutes": result["age_minutes"]}, now)
+    print(json.dumps({"ok": True, **result}))
 
 
 # ---------------- action FSM + idempotency key (F11) ----------------
@@ -1879,6 +2104,135 @@ def cmd_wake_status(args, root, now):
     }))
 
 
+def cmd_watchdog_check(args, root, now):
+    """R1 AC-1.2 (QA 20260911-011102 iteration 2 correction): the watchdog
+    agent's full liveness-check + staleness-check + conditional-escalation
+    sequence must fit within hooks/pretool-orchestrator-gate.py's
+    5-consecutive-Bash-call budget even when escalation fires. QA measured
+    that it did not: driving wake-status, lease-status, inbox-check-staleness
+    and the conditional inbox-append as SEPARATE Bash calls let the sequence
+    exceed the cap, and classified 6/13 (46%) of historical genuine
+    DEAD/STRANDED/inbox_drain_stale escalation attempts across a814a9a0's run
+    history as blocked by exactly this — both the pre-existing step-4 path
+    (run d7786d71, 2026-09-10) and the new step-1b path (run eac446fc,
+    2026-09-11).
+
+    This subcommand performs all of: read wake status, read lease status,
+    re-evaluate inbox-check-staleness, decide whether escalation is
+    warranted, and (only if so) append ONE inbox event recording the
+    evidence — as a SINGLE Bash invocation, so the watchdog prompt needs at
+    most one Bash call for the entire read+judge+append sequence. Messaging
+    the controller session remains a paseo-tool (non-Bash) step the watchdog
+    performs itself afterward using this command's output — that step was
+    never the thing exceeding the Bash-call cap and is intentionally left
+    outside this CLI (see commands/paseo-daemon.md).
+
+    Escalation is warranted when EITHER the controller looks DEAD/STRANDED
+    (wake watermark stale, unarmed, or lease not held — the same ALIVE test
+    ==  'wake watermark fresh AND lease unexpired'  already named in
+    a814a9a0's own step 2/3 prompt text) OR inbox_drain_stale is true (R1's
+    judge) — the two conditions are independent by design (BA's
+    ac_1_2_schedule_design_decision.decisive_evidence: the wake/lease check
+    is orthogonal to inbox_drain_stale, not a superset of it).
+
+    Deliberately duplicates (does not import/call) cmd_wake_status's and
+    cmd_lease_status's read logic rather than refactoring those functions to
+    share a helper: QA's iteration-2 correction explicitly scoped that fix to
+    a NEW consolidated entry point and asked dev not to re-touch those two
+    read-only commands; leaving them untouched keeps that same
+    zero-regression-risk posture. The inbox-drain-staleness computation, by
+    contrast, calls compute_inbox_drain_staleness() -- the single shared
+    implementation of BOTH AC-1.1 substates (no_plan, plan_not_acked) also
+    used by cmd_inbox_check_staleness -- so a correctness fix to the judge is
+    applied exactly once and the two call sites can never drift apart (task
+    20260911-011102, QA close-debate iteration 3 correction).
+    """
+    require_root(root)
+    check_barrier(root)
+    config = load_config(root)
+
+    wake_record_path = wake_path(root)
+    if wake_record_path.exists():
+        wake_record = read_json(wake_record_path)
+        slack = timedelta(minutes=config.get("wake_slack_minutes", 15))
+        expected = parse_aware(wake_record["expected_next_fire"], "wake.expected_next_fire")
+        trust_state, trust_reason = wake_trust_state(wake_record, now)
+        wake_status = {
+            **wake_record,
+            "armed": True,
+            "stale": now > expected + slack,
+            "deadline": iso(expected + slack),
+            "needs_rearm": bool(wake_record.get("needs_rearm")) or trust_state != "trusted",
+            "trust_state": trust_state,
+            "trust_reason": trust_reason,
+        }
+    else:
+        wake_status = {"armed": False}
+
+    lease_path = root / "lease.json"
+    if lease_path.exists():
+        lease = read_json(lease_path)
+        expires = parse_aware(lease["expires_at"], "lease.expires_at")
+        lease_status = {"held": now < expires, **lease}
+    else:
+        lease_status = {"held": False}
+
+    staleness = compute_inbox_drain_staleness(root, config, now)
+    atomic_write_json(drain_status_path(root), staleness)
+    journal_append(root, {"op": "inbox-check-staleness",
+                          "inbox_drain_stale": staleness["inbox_drain_stale"],
+                          "stale_reasons": staleness["stale_reasons"],
+                          "oldest_pending_event_id": staleness["oldest_pending_event_id"],
+                          "age_minutes": staleness["age_minutes"]}, now)
+
+    # ALIVE == wake watermark fresh (armed AND not stale) AND lease held.
+    # DEAD/STRANDED is the negation -- exactly a814a9a0's own step 2/3 text.
+    wake_fresh = wake_status.get("armed", False) and not wake_status.get("stale", True)
+    lease_ok = lease_status.get("held", False)
+    controller_dead_or_stranded = not (wake_fresh and lease_ok)
+    escalation_needed = controller_dead_or_stranded or staleness["inbox_drain_stale"]
+
+    escalation_reasons = []
+    if controller_dead_or_stranded:
+        escalation_reasons.append("controller_dead_or_stranded")
+    if staleness["inbox_drain_stale"]:
+        escalation_reasons.append("inbox_drain_stale")
+
+    result = {
+        "ok": True,
+        "checked_at": iso(now),
+        "wake_status": wake_status,
+        "lease_status": lease_status,
+        "staleness": staleness,
+        "escalation_needed": escalation_needed,
+        "escalation_reasons": escalation_reasons,
+        "escalation_event_id": None,
+        "escalation_event_appended": False,
+    }
+
+    if escalation_needed:
+        fmt = "%Y%m%dT%H%M%SZ"
+        event_id = f"watchdog-escalation-{now.strftime(fmt)}"
+        pending = root / "inbox" / "pending" / f"{event_id}.json"
+        acked = root / "inbox" / "acked" / f"{event_id}.json"
+        result["escalation_event_id"] = event_id
+        if pending.exists() or acked.exists():
+            result["escalation_event_appended"] = False  # duplicate id: already recorded
+        else:
+            payload = {
+                "type": "watchdog_escalation",
+                "reasons": escalation_reasons,
+                "wake_status": wake_status,
+                "lease_status": lease_status,
+                "staleness": staleness,
+            }
+            atomic_write_json(pending, {"event_id": event_id, "payload": payload, "appended_at": iso(now)})
+            journal_append(root, {"op": "inbox-append", "event_id": event_id}, now)
+            result["escalation_event_appended"] = True
+
+    print(json.dumps(result))
+
+
 def cmd_teardown_declare(args, root, now):
     """Session-end drain-or-declare (M7): journal the pending event ids, the
     reason, and the lease disposition so a successor can distinguish a clean
@@ -1940,6 +2294,8 @@ def build_parser():
     s.add_argument("--event-id", required=True)
     s.add_argument("--inject-crash", choices=["after-acked-write", "after-pending-unlink"])
     s.set_defaults(fn=cmd_inbox_ack)
+    s = sub.add_parser("inbox-check-staleness")
+    s.set_defaults(fn=cmd_inbox_check_staleness)
 
     s = sub.add_parser("action-transition")
     s.add_argument("--logical-session", required=True)
@@ -2074,6 +2430,8 @@ def build_parser():
     s.set_defaults(fn=cmd_wake_observe)
     s = sub.add_parser("wake-status")
     s.set_defaults(fn=cmd_wake_status)
+    s = sub.add_parser("watchdog-check")
+    s.set_defaults(fn=cmd_watchdog_check)
     s = sub.add_parser("teardown-declare")
     s.add_argument("--reason", required=True)
     s.set_defaults(fn=cmd_teardown_declare)
