@@ -1,8 +1,8 @@
 # tests
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-09-18T00:53:14Z*
-**Total entries**: 123
+*Last updated: 2026-09-19T16:33:53Z*
+**Total entries**: 124
 **Convention**: kebab
 
 ## Tree
@@ -16,6 +16,7 @@ tests/
 │   │   └── `qa_only.json` - JSON config: artifact_paths, canonical_dev_report, checks, checks_not_applicable, commit_whitelist_artifacts
 │   ├── `canary-tool-policy.v1.json` - JSON config: _fixture, _purpose, _contract, policy_version, default_action
 │   ├── `paseo-usage-envelope-20260828.json` - JSON config: _comment, type, message
+│   └── `paseo_cron_vendor_vectors.json` - JSON config: _what, provenance, positive, negative, horizon
 ├── generated/
 │   ├── 20260704-134650/
 │   │   ├── `manifest.json` - JSON config: schema_version, task_id, generated_at, active_tests, archived_tests
