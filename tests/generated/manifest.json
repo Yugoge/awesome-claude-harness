@@ -3,6 +3,10 @@
   "kind": "index",
   "tasks": [
     {
+      "task_id": "20260919-135733",
+      "manifest_path": "tests/generated/20260919-135733/manifest.json"
+    },
+    {
       "task_id": "20260918-161516",
       "manifest_path": "tests/generated/20260918-161516/manifest.json"
     },
@@ -329,6 +333,14 @@
     {
       "task_id": "20260919-004556",
       "manifest_path": "tests/generated/20260919-004556/manifest.json"
+    },
+    {
+      "task_id": "20260919-061244",
+      "manifest_path": "tests/generated/20260919-061244/manifest.json"
+    },
+    {
+      "task_id": "20260919-180650",
+      "manifest_path": "tests/generated/20260919-180650/manifest.json"
     }
   ]
 }
