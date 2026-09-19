@@ -8,6 +8,7 @@ from pathlib import Path
 from .regen_index import regen_index
 from .regen_readme import regen_readme
 from .patch import patch_claude_md
+from .notice import emit_post_tool_notice
 
 WATCHED_DIRS = {
     '.claude/commands',
@@ -74,32 +75,51 @@ def _match_watch_dir(rel: str):
 
 
 def _regen_if_dir(d: Path, project_dir: Path):
-    if d.is_dir():
-        regen_index(d, project_dir)
-        regen_readme(d, project_dir)
+    """Regenerate INDEX.md and README.md; the README status, or None when d is no directory."""
+    if not d.is_dir():
+        return None
+    regen_index(d, project_dir)
+    return regen_readme(d, project_dir)
 
 
 def _maybe_regen_global(parent_dir: Path, rel: str):
+    """Same for the matching global directory; (README path, status), or None when not applicable."""
     wd = _match_watch_dir(rel)
     if wd is None:
-        return
+        return None
     global_dir = Path.home() / wd
     if global_dir.is_dir() and global_dir.resolve() != parent_dir.resolve():
         # Global dirs live under ~/.claude; anchor the reserved-subtree check to
         # $HOME so it is framed the same way global rel paths are (.claude/...).
         regen_index(global_dir, Path.home())
-        regen_readme(global_dir, Path.home())
+        return global_dir / 'README.md', regen_readme(global_dir, Path.home())
+    return None
 
 
-def process_parent_dirs(parent_dir: Path, project_dir: Path):
-    _regen_if_dir(parent_dir, project_dir)
+def process_parent_dirs(parent_dir: Path, project_dir: Path, results: list | None = None):
+    """Regenerate the parent (and matching global) directory; returns (README path, status) pairs.
+
+    Pairs are appended to the caller's `results` as each directory finishes, so a failure
+    in a later directory does not lose what an earlier one already reported.
+    """
+    if results is None:
+        results = []
+    status = _regen_if_dir(parent_dir, project_dir)
+    if status is not None:
+        results.append((parent_dir / 'README.md', status))
     rel = str(parent_dir.relative_to(project_dir))
-    _maybe_regen_global(parent_dir, rel)
+    regenerated = _maybe_regen_global(parent_dir, rel)
+    if regenerated is not None:
+        results.append(regenerated)
+    return results
 
 
 def main():
+    results: list = []
+    payload = {}
     try:
         data = json.load(sys.stdin)
+        payload = data
         file_path = data.get('tool_input', {}).get('file_path', '')
         if not file_path:
             sys.exit(0)
@@ -112,10 +132,12 @@ def main():
             sys.exit(0)
         if not should_sync(fp, rel):
             sys.exit(0)
-        process_parent_dirs(fp.parent, project_dir)
+        process_parent_dirs(fp.parent, project_dir, results)
         patch_claude_md(project_dir)
     except Exception:
         pass
+    # Outside the try: skips collected before a later failure still reach the caller.
+    emit_post_tool_notice(results, payload)
     sys.exit(0)
 
 

@@ -1,8 +1,8 @@
 # doc_sync
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-08-07T01:07:46Z*
-**Total entries**: 10
+*Last updated: 2026-09-19T12:04:32Z*
+**Total entries**: 11
 **Convention**: kebab
 
 ## Tree
@@ -13,6 +13,7 @@ doc_sync/
 ├── `docker.py` - Parse docker-compose.yml and generate markdown table.
 ├── `extract.py` - Extract description from various file types.
 ├── `main.py` - Main entry point for doc-sync hook.
+├── `notice.py` - A skipped README is a deliberate outcome (regeneration is opt-in through the AUTO
 ├── `patch.py` - Patch CLAUDE.md dynamic sections using AUTO markers.
 ├── `regen_index.py` - Regenerate INDEX.md for a directory.
 ├── `regen_readme.py` - Regenerate README.md for a directory.

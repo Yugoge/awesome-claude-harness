@@ -21,7 +21,7 @@ def _replace_section(content: str, marker_id: str, new_body: str) -> str:
     end = f'<!-- /AUTO:{marker_id} -->'
     s = content.find(start)
     e = content.find(end)
-    if s == -1 or e == -1:
+    if s == -1 or e == -1 or e < s:
         return content
     return content[:s + len(start)] + '\n' + new_body + '\n' + content[e:]
 

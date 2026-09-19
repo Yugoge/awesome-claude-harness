@@ -21,6 +21,8 @@ from pathlib import Path
 
 CACHE_FILE: Path = Path.home() / '.claude' / '.doc-sync-cache.json'
 CHECK_INTERVAL: int = 300  # seconds between checks
+HOOK_EVENT_NAME: str = 'UserPromptSubmit'
+MAX_OUTPUT_CHARS: int = 10000  # documented cap for hook output strings
 
 # Must match posttool-doc-sync.py constants
 WATCHED_DIRS: set[str] = {
@@ -70,7 +72,49 @@ def get_dir_snapshot(dir_path: Path) -> set[str]:
     }
 
 
+def relay_child_notice(child_stdout) -> str | None:
+    """Notice text carried by the posttool-doc-sync.py child's stdout, else None.
+
+    Empty, non-JSON and wrong-shape output all mean "nothing to relay". Kept free of
+    doc_sync imports: an import error here would break every prompt submission.
+    """
+    if not isinstance(child_stdout, str) or not child_stdout.strip():
+        return None
+    try:
+        output = json.loads(child_stdout)
+    except ValueError:
+        return None
+    text = output.get('systemMessage') if isinstance(output, dict) else None
+    return text if isinstance(text, str) and text.strip() else None
+
+
+def flush_output(lines: list[str], notices: list[str]) -> None:
+    """Print what was collected, then empty both lists so a later failure cannot repeat it.
+
+    With a relayed notice the whole stdout is one JSON object: the harness reads JSON
+    only when the output starts with '{' and parses as a whole, so plain lines and JSON
+    are never mixed. The resynced lines move into additionalContext (agent) and
+    systemMessage carries only the notices (user). Without a notice the output is the
+    plain resync text, unchanged.
+    """
+    if notices:
+        output = {
+            'systemMessage': '\n'.join(notices)[:MAX_OUTPUT_CHARS],
+            'hookSpecificOutput': {
+                'hookEventName': HOOK_EVENT_NAME,
+                'additionalContext': '\n'.join(lines + notices)[:MAX_OUTPUT_CHARS],
+            },
+        }
+        print(json.dumps(output, ensure_ascii=True))
+    elif lines:
+        print('\n'.join(lines))
+    lines.clear()
+    notices.clear()
+
+
 def main() -> None:
+    lines: list[str] = []
+    notices: list[str] = []
     try:
         now: float = datetime.now(timezone.utc).timestamp()
 
@@ -125,7 +169,7 @@ def main() -> None:
                 fake_input: str = json.dumps({
                     'tool_input': {'file_path': trigger_file}
                 })
-                subprocess.run(
+                child = subprocess.run(
                     ['python3', str(hook_dir / 'posttool-doc-sync.py')],
                     input=fake_input,
                     capture_output=True,
@@ -133,10 +177,16 @@ def main() -> None:
                     env={**os.environ, 'CLAUDE_PROJECT_DIR': str(dir_path.parent)},
                     timeout=5,
                 )
-                print(
+                lines.append(
                     f'doc-sync: detected deletion in {dir_path}, '
                     f'resynced INDEX.md'
                 )
+                notice = relay_child_notice(child.stdout)
+                if notice:
+                    notices.append(notice)
+
+        # Output goes out before the cache update, as before.
+        flush_output(lines, notices)
 
         # Update cache
         cache = {
@@ -146,6 +196,11 @@ def main() -> None:
         CACHE_FILE.parent.mkdir(parents=True, exist_ok=True)
         CACHE_FILE.write_text(json.dumps(cache))
 
+    except Exception:
+        pass
+    try:
+        # Output collected before a failure (e.g. a timeout on a later directory).
+        flush_output(lines, notices)
     except Exception:
         pass
     sys.exit(0)
