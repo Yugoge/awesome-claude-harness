@@ -8,6 +8,14 @@ delegates the eligibility check and run-record creation entirely to
 ``late-repair-controller.py init`` (the single source of truth for
 eligibility -- this script never recomputes it).
 
+The pass-through payload is ``{"outcome": "not_selected", "artifact_chain":
+<resolver result>}`` with ``artifact_chain`` byte-identical to the resolver's
+own result.  Only when that result carries the resolver's additive
+``AC_DEVIATION_REJECTION_CODE`` error (a malformed AC-deviation record) does the
+payload gain a top-level ``explicit_rejection`` ``{code, path, detail}`` copied
+from that error; the outcome and the exit code do not change.  The code is read
+from the resolver module, never re-typed here.
+
 Exit codes:
   0  not_selected (no --late-repair) with a passing chain (status "pass" or
      "pass_with_exceptions" -- ticket 20260911-011232), or initialized
@@ -44,6 +52,16 @@ def run(task_id: str, project_dir: str, late_repair: bool, force: bool) -> tuple
         resolver = _resolver_module()
         result = resolver.resolve_chain(project_dir, task_id)
         payload = {"outcome": "not_selected", "artifact_chain": result}
+        rejection = next(
+            (e for e in result["errors"] if e.get("code") == resolver.AC_DEVIATION_REJECTION_CODE),
+            None,
+        )
+        if rejection is not None:
+            payload["explicit_rejection"] = {
+                "code": rejection["code"],
+                "path": rejection["path"],
+                "detail": rejection["detail"],
+            }
         return (0 if result["status"] in ("pass", "pass_with_exceptions") else 2), payload
 
     controller = _controller_module()

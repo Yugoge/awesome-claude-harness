@@ -7,8 +7,12 @@ document suitable for /dev completion, /close, Close QA, and /commit.
 
 Exit codes:
     0  the complete artifact chain is valid (status == "pass" or
-       "pass_with_exceptions" -- see disclosed_exceptions[] in the JSON output)
-    2  invalid arguments, or a missing/stale/mismatched/ambiguous chain
+       "pass_with_exceptions" -- see disclosed_exceptions[] in the JSON output;
+       a blocked dev-report that carries a legitimate AC-deviation record is
+       disclosed this way, singular chains only -- never as a plain "pass")
+    2  invalid arguments, or a missing/stale/mismatched/ambiguous chain, or a
+       deviation record whose shape is not compliant
+       (INVALID_AC_DEVIATION_RECORD)
 """
 
 from __future__ import annotations
@@ -70,6 +74,52 @@ DISCLOSED_EXCEPTION_ATTESTATION = (
     "This is a disclosed, evidenced, non-defect exception -- not a defect in "
     "this lane's deliverable."
 )
+
+# AC-deviation record (harness backlog #92): THE ONE PLACE that defines the
+# machine shape of a legitimately recorded acceptance-criteria deviation.  A
+# dev-report that is `blocked` because one AC's literal check fails while the
+# user need is satisfied carries, at its top level, the flag (literally true)
+# and the record object below; `_ac_deviation_violations` is the single
+# validator of this shape and every consumer reads its one result.  Rules:
+#   * flag: absent or literally false -> the record is never read; literally
+#     true -> the record is validated; any other value is rejected explicitly.
+#   * record: an object holding
+#       - AC_DEVIATION_IDS_KEY: a non-empty array of unique AC ids, at most
+#         AC_DEVIATION_MAX_IDS, each matching AC_DEVIATION_ID_RE via fullmatch;
+#       - AC_DEVIATION_VERBATIM_KEY: an object whose AC_DEVIATION_VERBATIM_
+#         REQUIRED_KEYS are non-blank strings (the verbatim user need and where
+#         it is cited);
+#       - AC_DEVIATION_EVIDENCE_KEY: a non-empty object whose every value is a
+#         non-blank string, a non-empty array or a non-empty object.
+#     Unknown extra keys are tolerated; clause (d) of the close command's
+#     verdict branch is deliberately NOT part of the shape (QA decides it).
+#   * blocking_issues: a non-empty array whose every entry begins with a
+#     recorded id followed by a colon.  This is a coverage / self-consistency
+#     check between two fields dev writes itself, NOT a security boundary: QA's
+#     independent corroboration of every disclosed entry is the real guard.
+AC_DEVIATION_FLAG_KEY = "ac_deviation_with_user_need_satisfied"
+AC_DEVIATION_RECORD_KEY = AC_DEVIATION_FLAG_KEY + "_block"
+AC_DEVIATION_IDS_KEY = "clause_a_deviated_ac_ids"
+AC_DEVIATION_VERBATIM_KEY = "clause_b_user_need_verbatim"
+AC_DEVIATION_EVIDENCE_KEY = "clause_c_evidence"
+AC_DEVIATION_REQUIRED_RECORD_KEYS = (
+    AC_DEVIATION_IDS_KEY,
+    AC_DEVIATION_VERBATIM_KEY,
+    AC_DEVIATION_EVIDENCE_KEY,
+)
+AC_DEVIATION_VERBATIM_TEXT_KEY = "text"
+AC_DEVIATION_VERBATIM_SOURCE_KEY = "source"
+AC_DEVIATION_VERBATIM_REQUIRED_KEYS = (
+    AC_DEVIATION_VERBATIM_TEXT_KEY,
+    AC_DEVIATION_VERBATIM_SOURCE_KEY,
+)
+# Applied with fullmatch (never match plus `$`, which accepts a trailing
+# newline).  Bounds the dev-authored text that can reach the QA prompt.
+AC_DEVIATION_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}")
+AC_DEVIATION_MAX_IDS = 32
+AC_DEVIATION_REJECTION_CODE = "INVALID_AC_DEVIATION_RECORD"
+AC_DEVIATION_DISCLOSURE_KIND = "ac_deviation"
+AC_DEVIATION_CLASSIFICATIONS = frozenset({AC_DEVIATION_FLAG_KEY})
 
 
 class StableArgumentParser(argparse.ArgumentParser):
@@ -259,7 +309,9 @@ class ChainValidator:
 
 
 def _compute_gap_fields(
-    errors: list[dict[str, str]], qa_report_path: str
+    errors: list[dict[str, str]],
+    qa_report_path: str,
+    ac_deviation_paths: frozenset[str] | set[str] = frozenset(),
 ) -> tuple[list[str], list[str], bool, str]:
     """Classify a singular chain's errors into stage gaps vs. integrity errors.
 
@@ -278,6 +330,14 @@ def _compute_gap_fields(
     with both a real gap and an unrelated integrity error is NOT late-repair
     eligible, even though the coarser gap_classification still reports
     'beyond_qa' for it (codex finding #7 / QA round-2 objection 7).
+
+    ac_deviation_paths: dev-report paths whose blocked status was released as
+    an AC-deviation disclosure (their INVALID_DEV_STATUS/UNRESOLVED_BLOCKERS
+    errors no longer appear in `errors`).  Such a path is still a genuine
+    integrity problem, exactly as its un-released errors were, so when a real
+    stage gap is present it joins non_gap_errors and the chain is not
+    late-repair eligible; with no stage gap nothing is added and a clean
+    deviation pass keeps gap_classification "complete".
     """
     stage_gaps: set[str] = set()
     non_gap_errors: set[str] = set()
@@ -291,6 +351,8 @@ def _compute_gap_fields(
             stage_gaps.add(path)
         else:
             non_gap_errors.add(path)
+    if stage_gaps:
+        non_gap_errors |= set(ac_deviation_paths)
     late_repair_eligible = bool(stage_gaps) and not non_gap_errors
     if stage_gaps or non_gap_errors:
         gap_classification = "beyond_qa"
@@ -378,10 +440,13 @@ def _dev_handoff_eligible(
     """M3: is a dev-report's needs_review status a disclosed handoff?
 
     ALL of the following must hold, or the finding stays a hard error:
-    (a) dev.status is literally "needs_review" (never "blocked" -- AC-6 keeps
-        that value unconditionally hard-fail) with a complete
-        dev.status_rationale (accepted classification, non-empty blocked_by
-        and forbidden_action strings);
+    (a) dev.status is literally "needs_review" (never "blocked": this function
+        keeps that value hard-fail unconditionally, whatever its
+        status_rationale says.  The one narrow exception to AC-6 is the
+        separate, explicit AC-6 NARROWING documented on
+        `_ac_deviation_release_eligible`, which never routes through here)
+        with a complete dev.status_rationale (accepted classification,
+        non-empty blocked_by and forbidden_action strings);
     (b) the SAME lane's own qa-report independently shows qa.status == "pass".
         If that lane's own QA did not pass, the needs_review claim is
         untrustworthy and the error stays hard.
@@ -403,6 +468,197 @@ def _dev_handoff_eligible(
     if not isinstance(blocked_by, str) or not blocked_by:
         return False
     if not isinstance(forbidden_action, str) or not forbidden_action:
+        return False
+    if not isinstance(qa_value, dict):
+        return False
+    qa = qa_value.get("qa")
+    return isinstance(qa, dict) and qa.get("status") == "pass"
+
+
+def _ac_deviation_violations(dev_value: Any) -> list[str] | None:
+    """THE single validator of the AC-deviation record (harness backlog #92).
+
+    `dev_value` is the parsed top-level dev-report.  Returns None when the
+    record does not apply (anything but a `blocked` report, or the flag absent
+    or literally false: the record is then never read, so today's behavior is
+    byte-identical), [] when the flag is literally true and the record is
+    valid, and otherwise a non-empty list of violations.  Identity checks
+    (`is True` / `is False`), never truthiness, so type confusion (the string
+    "true", 1, null, a list) is rejected explicitly instead of opening the
+    door.  The wording names locations and expectations only and never echoes
+    dev-authored text, so the rejection detail stays bounded and inert.  The
+    shape itself is defined by the AC_DEVIATION_* constants above; both the
+    rejection and the eligibility below consume this one result.
+    """
+    if not isinstance(dev_value, dict):
+        return None
+    dev = dev_value.get("dev")
+    if not isinstance(dev, dict) or dev.get("status") != "blocked":
+        return None
+    if AC_DEVIATION_FLAG_KEY not in dev_value:
+        return None
+    flag = dev_value[AC_DEVIATION_FLAG_KEY]
+    if flag is False:
+        return None
+    if flag is not True:
+        return [f"{AC_DEVIATION_FLAG_KEY} must be literally true or false when present"]
+
+    violations: list[str] = []
+    valid_ids: list[str] = []
+    record = dev_value.get(AC_DEVIATION_RECORD_KEY)
+    if not isinstance(record, dict):
+        if AC_DEVIATION_RECORD_KEY in dev:
+            violations.append(
+                f"{AC_DEVIATION_RECORD_KEY} must be a top-level key of the dev-report; "
+                "a copy nested under dev is never read"
+            )
+        elif AC_DEVIATION_RECORD_KEY not in dev_value:
+            violations.append(f"top-level {AC_DEVIATION_RECORD_KEY} is absent")
+        else:
+            violations.append(f"top-level {AC_DEVIATION_RECORD_KEY} must be a JSON object")
+    else:
+        ids_value = record.get(AC_DEVIATION_IDS_KEY)
+        if AC_DEVIATION_IDS_KEY not in record:
+            violations.append(f"{AC_DEVIATION_IDS_KEY} is absent from the record")
+        elif not isinstance(ids_value, list):
+            violations.append(f"{AC_DEVIATION_IDS_KEY} must be an array of AC ids")
+        elif not ids_value:
+            violations.append(f"{AC_DEVIATION_IDS_KEY} must not be empty")
+        else:
+            if len(ids_value) > AC_DEVIATION_MAX_IDS:
+                violations.append(
+                    f"{AC_DEVIATION_IDS_KEY} holds more than {AC_DEVIATION_MAX_IDS} ids"
+                )
+            checked = ids_value[:AC_DEVIATION_MAX_IDS]
+            valid_ids = [
+                item
+                for item in checked
+                if isinstance(item, str) and AC_DEVIATION_ID_RE.fullmatch(item)
+            ]
+            malformed = [
+                index
+                for index, item in enumerate(checked)
+                if not (isinstance(item, str) and AC_DEVIATION_ID_RE.fullmatch(item))
+            ]
+            if malformed:
+                violations.append(
+                    f"{AC_DEVIATION_IDS_KEY} elements at positions {malformed[:8]} are not "
+                    f"strings matching the AC id pattern {AC_DEVIATION_ID_RE.pattern}"
+                )
+            if len(set(valid_ids)) != len(valid_ids):
+                violations.append(f"{AC_DEVIATION_IDS_KEY} must hold unique ids")
+
+        verbatim = record.get(AC_DEVIATION_VERBATIM_KEY)
+        if AC_DEVIATION_VERBATIM_KEY not in record:
+            violations.append(f"{AC_DEVIATION_VERBATIM_KEY} is absent from the record")
+        elif not isinstance(verbatim, dict):
+            violations.append(
+                f"{AC_DEVIATION_VERBATIM_KEY} must be an object with the non-blank string "
+                f"keys {list(AC_DEVIATION_VERBATIM_REQUIRED_KEYS)}"
+            )
+        else:
+            for key in AC_DEVIATION_VERBATIM_REQUIRED_KEYS:
+                value = verbatim.get(key)
+                if not isinstance(value, str) or not value.strip():
+                    violations.append(
+                        f"{AC_DEVIATION_VERBATIM_KEY}.{key} must be a non-blank string"
+                    )
+
+        evidence = record.get(AC_DEVIATION_EVIDENCE_KEY)
+        if AC_DEVIATION_EVIDENCE_KEY not in record:
+            violations.append(f"{AC_DEVIATION_EVIDENCE_KEY} is absent from the record")
+        elif not isinstance(evidence, dict):
+            violations.append(f"{AC_DEVIATION_EVIDENCE_KEY} must be an object")
+        elif not evidence:
+            violations.append(f"{AC_DEVIATION_EVIDENCE_KEY} must not be empty")
+        else:
+            weak = [
+                index
+                for index, value in enumerate(evidence.values())
+                if not (
+                    (isinstance(value, str) and value.strip())
+                    or (isinstance(value, (list, dict)) and value)
+                )
+            ]
+            if weak:
+                violations.append(
+                    f"{AC_DEVIATION_EVIDENCE_KEY} values at positions {weak[:8]} are not a "
+                    "non-blank string, a non-empty array or a non-empty object"
+                )
+
+    blockers = dev_value.get("blocking_issues")
+    if not isinstance(blockers, list) or not blockers:
+        violations.append("blocking_issues must be a non-empty array")
+    elif valid_ids:
+        unattributed = [
+            index
+            for index, item in enumerate(blockers)
+            if not (
+                isinstance(item, str)
+                and any(item.startswith(f"{ac_id}:") for ac_id in valid_ids)
+            )
+        ]
+        if unattributed:
+            violations.append(
+                f"blocking_issues entries at positions {unattributed[:8]} do not begin with "
+                "a recorded AC id followed by a colon"
+            )
+    return violations
+
+
+def _ac_deviation_rejection_detail(violations: list[str]) -> str:
+    """Bounded rejection detail: the violations plus the required key set,
+    rendered from the AC_DEVIATION_* constants (never re-typed)."""
+    required = (
+        f"required shape: top-level {AC_DEVIATION_FLAG_KEY} literally true and a top-level "
+        f"{AC_DEVIATION_RECORD_KEY} object holding "
+        f"{AC_DEVIATION_IDS_KEY} (non-empty array of unique ids, at most "
+        f"{AC_DEVIATION_MAX_IDS}, each matching {AC_DEVIATION_ID_RE.pattern}), "
+        f"{AC_DEVIATION_VERBATIM_KEY} (object with non-blank string keys "
+        f"{', '.join(AC_DEVIATION_VERBATIM_REQUIRED_KEYS)}) and "
+        f"{AC_DEVIATION_EVIDENCE_KEY} (non-empty object whose values are non-blank strings, "
+        "non-empty arrays or non-empty objects); every blocking_issues entry must begin "
+        "with a recorded AC id followed by a colon"
+    )
+    return ("; ".join(violations) + " | " + required)[:4000]
+
+
+def _ac_deviation_record(dev_value: Any) -> dict[str, Any]:
+    """The (already validated) deviation record of a dev-report, or {}."""
+    record = dev_value.get(AC_DEVIATION_RECORD_KEY) if isinstance(dev_value, dict) else None
+    return record if isinstance(record, dict) else {}
+
+
+def _ac_deviation_release_eligible(
+    path: str,
+    mode: str,
+    ac_deviation_paths: frozenset[str] | set[str],
+    qa_value: dict[str, Any] | None,
+) -> bool:
+    """AC-6 NARROWING: may a blocked dev-report's errors become an ac_deviation
+    disclosure instead of hard errors?
+
+    AC-6 keeps `dev.status == "blocked"` a hard failure everywhere; this is the
+    ONE explicit, narrow exception, hosted next to (never inside)
+    `_dev_handoff_eligible`, whose behavior is unchanged.  ALL of these hold,
+    or the errors stay hard with today's codes:
+    (a) dev.status is literally "blocked" (established by the single validator);
+    (b) the top-level flag is literally true;
+    (c) the record validates against the AC_DEVIATION_* shape;
+    (d) every blocker is attributable to a recorded AC id (blocking_issues
+        non-empty, each entry beginning with a recorded id and a colon);
+        (a)-(d) are exactly the paths in `ac_deviation_paths`, produced by one
+        `_ac_deviation_violations` call per chain;
+    (e) singular mode -- a fan-out chain is pinned to today's behavior;
+    (f) the SAME lane's own qa-report independently shows qa.status == "pass".
+
+    This decides shape and reachability only.  It never judges whether the
+    recorded deviation is real, whether the user need is satisfied, or clause
+    (d) of the close command's verdict branch: those stay with QA, which must
+    corroborate every disclosed entry.  Release is not a pass -- the chain
+    status becomes pass_with_exceptions, never pass.
+    """
+    if mode != "singular" or path not in ac_deviation_paths:
         return False
     if not isinstance(qa_value, dict):
         return False
@@ -498,6 +754,9 @@ def _evidence_ref_count(kind: str, value: dict[str, Any] | None) -> int:
     if kind == "dev_handoff":
         blocking = value.get("blocking_issues")
         return len(blocking) if isinstance(blocking, list) else 0
+    if kind == AC_DEVIATION_DISCLOSURE_KIND:
+        evidence = _ac_deviation_record(value).get(AC_DEVIATION_EVIDENCE_KEY)
+        return len(evidence) if isinstance(evidence, dict) else 0
     return 0
 
 
@@ -509,6 +768,7 @@ def _reclassify_disclosed_exceptions(
     mode: str,
     parent_dev_report_path: str,
     lane_dev_report_paths: list[str],
+    ac_deviation_paths: frozenset[str] | set[str] = frozenset(),
 ) -> tuple[list[dict[str, str]], list[dict[str, Any]]]:
     """M1: additive post-pass moving eligible errors into disclosed_exceptions[].
 
@@ -531,6 +791,14 @@ def _reclassify_disclosed_exceptions(
     existing same-lane-own-qa-report lookup below is completely unchanged for
     singular chains and for every ordinary fan-out lane path; only the
     parent path takes the new `_parent_handoff_eligible` cross-check.
+
+    Harness backlog #92 adds a third, mutually exclusive kind in the same
+    lane/singular branch: an "ac_deviation" disclosure for a blocked
+    dev-report whose legitimate AC-deviation record was validated once by
+    `_ac_deviation_violations` (its path is in `ac_deviation_paths`) and whose
+    same-lane qa-report passes -- the explicit AC-6 NARROWING documented on
+    `_ac_deviation_release_eligible`.  Singular chains only; this function
+    still never emits a hard error itself.
     """
     grouped: dict[str, list[dict[str, str]]] = {}
     for entry in errors:
@@ -580,6 +848,11 @@ def _reclassify_disclosed_exceptions(
                 if _dev_handoff_eligible(dev_value, qa_value):
                     classification = dev_value["dev"]["status_rationale"]["classification"]
                     eligible[path] = ("dev_handoff", classification)
+                elif _ac_deviation_release_eligible(path, mode, ac_deviation_paths, qa_value):
+                    eligible[path] = (
+                        AC_DEVIATION_DISCLOSURE_KIND,
+                        min(AC_DEVIATION_CLASSIFICATIONS),
+                    )
 
     remaining: list[dict[str, str]] = []
     disclosed: list[dict[str, Any]] = []
@@ -588,16 +861,18 @@ def _reclassify_disclosed_exceptions(
         path = entry.get("path", "")
         if code in RECLASSIFIABLE_CODES and path in eligible:
             kind, classification = eligible[path]
-            disclosed.append(
-                {
-                    "code": code,
-                    "path": path,
-                    "lane_task_id": lane_task_id_by_path.get(path),
-                    "kind": kind,
-                    "classification": classification,
-                    "evidence_ref_count": _evidence_ref_count(kind, loaded_reports.get(path)),
-                }
-            )
+            disclosure = {
+                "code": code,
+                "path": path,
+                "lane_task_id": lane_task_id_by_path.get(path),
+                "kind": kind,
+                "classification": classification,
+                "evidence_ref_count": _evidence_ref_count(kind, loaded_reports.get(path)),
+            }
+            if kind == AC_DEVIATION_DISCLOSURE_KIND:
+                recorded = _ac_deviation_record(loaded_reports.get(path)).get(AC_DEVIATION_IDS_KEY)
+                disclosure["deviated_ac_ids"] = list(recorded) if isinstance(recorded, list) else []
+            disclosed.append(disclosure)
         else:
             remaining.append(entry)
     return remaining, disclosed
@@ -1208,6 +1483,22 @@ def resolve_chain(project_root: Path | str, task_id: str) -> dict[str, Any]:
         ]
 
     result["parallel_workers"] = workers
+    # Harness backlog #92: the AC-deviation record is validated ONCE, singular
+    # chains only (a fan-out chain stays pinned to today's behavior).  A
+    # non-empty violation list becomes the additive rejection error (in
+    # addition to the dev errors that stay hard); a valid record only makes the
+    # dev-report path a candidate for the reclassification pass below.
+    ac_deviation_paths: set[str] = set()
+    if result["mode"] == "singular":
+        deviation_violations = _ac_deviation_violations(canonical)
+        if deviation_violations:
+            validator.error(
+                AC_DEVIATION_REJECTION_CODE,
+                result["canonical_dev_report"],
+                _ac_deviation_rejection_detail(deviation_violations),
+            )
+        elif deviation_violations is not None:
+            ac_deviation_paths.add(result["canonical_dev_report"])
     # M1: additive reclassification pass over the already-computed errors --
     # validate_dev()/validate_qa() above are never revisited.  Final status:
     # "pass" when both lists are empty, "pass_with_exceptions" when errors is
@@ -1220,6 +1511,7 @@ def resolve_chain(project_root: Path | str, task_id: str) -> dict[str, Any]:
         mode=result["mode"],
         parent_dev_report_path=result["canonical_dev_report"],
         lane_dev_report_paths=[lane["dev_report"] for lane in result["lanes"]],
+        ac_deviation_paths=ac_deviation_paths,
     )
     result["errors"] = remaining_errors
     result["disclosed_exceptions"] = disclosed_exceptions
@@ -1231,12 +1523,17 @@ def resolve_chain(project_root: Path | str, task_id: str) -> dict[str, Any]:
         result["status"] = "pass"
     if result["mode"] == "singular":
         qa_report_path = _rel(parents["qa_report"], root)
+        released_deviation_paths = {
+            entry["path"]
+            for entry in disclosed_exceptions
+            if entry.get("kind") == AC_DEVIATION_DISCLOSURE_KIND
+        }
         (
             result["stage_gaps"],
             result["non_gap_errors"],
             result["late_repair_eligible"],
             result["gap_classification"],
-        ) = _compute_gap_fields(remaining_errors, qa_report_path)
+        ) = _compute_gap_fields(remaining_errors, qa_report_path, released_deviation_paths)
     return result
 
 

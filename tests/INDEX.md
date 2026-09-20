@@ -1,8 +1,8 @@
 # tests
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-09-19T16:33:53Z*
-**Total entries**: 124
+*Last updated: 2026-09-20T07:32:06Z*
+**Total entries**: 125
 **Convention**: kebab
 
 ## Tree
@@ -104,6 +104,7 @@ tests/
 ├── `test_changelog_analyst_declaration_categories.py` - `agents/changelog-analyst.md` decides what a cycle commits by reading declaration
 ├── `test_changelog_analyst_required_to_ship_sourcing.py` - unobtainable declaration must not be silently read as an empty one
 ├── `test_checkpoint_provenance.py` - These modes are DORMANT: no command, agent definition, or hook invokes them by
+├── `test_close_report_append.py` - failure semantics (round-7 CRITICAL fix, ticket dev-20260919-135733)
 ├── `test_codex_workflow_gate.py` - Regression tests for Codex-native workflow-plan compatibility.
 ├── `test_commit_multi_repo_plan.py` - Python script
 ├── `test_commit_sh_reachability.py` - commands/dev-overnight.md:1561 previously called a bare, unqualified
