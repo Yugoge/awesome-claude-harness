@@ -1,8 +1,8 @@
 # tests
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-09-20T07:32:06Z*
-**Total entries**: 125
+*Last updated: 2026-09-21T02:24:29Z*
+**Total entries**: 127
 **Convention**: kebab
 
 ## Tree
@@ -99,6 +99,8 @@ tests/
 ├── `fresh-clone-bootstrap-smoke.sh` - Description: Fresh-clone bootstrap smoke — proves "core is runnable + guards engaged"
 ├── `integration-test.sh` - integration-test.sh - Integration tests for git tracking solution
 ├── `test-lock-detection.sh` - Test script to verify git lock file detection and handling
+├── `test_ac_deviation_fanout_consumer.py` - records and the lifecycle presentation of ``pass_with_exceptions``
+├── `test_ac_deviation_record_chain.py` - A dev report that legitimately records an acceptance-criteria deviation is
 ├── `test_aggregate_dev_report.py` - Unit tests for scripts/aggregate-dev-report.py
 ├── `test_candidate_tree.py` - Every test builds its own throwaway git repository. None of them reads this
 ├── `test_changelog_analyst_declaration_categories.py` - `agents/changelog-analyst.md` decides what a cycle commits by reading declaration

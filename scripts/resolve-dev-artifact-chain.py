@@ -9,7 +9,9 @@ Exit codes:
     0  the complete artifact chain is valid (status == "pass" or
        "pass_with_exceptions" -- see disclosed_exceptions[] in the JSON output;
        a blocked dev-report that carries a legitimate AC-deviation record is
-       disclosed this way, singular chains only -- never as a plain "pass")
+       disclosed this way, in singular and fan-out chains alike (a fan-out
+       lane, and the canonical that merges the lane records, each need the
+       record to validate) -- never as a plain "pass")
     2  invalid arguments, or a missing/stale/mismatched/ambiguous chain, or a
        deviation record whose shape is not compliant
        (INVALID_AC_DEVIATION_RECORD)
@@ -22,7 +24,7 @@ import json
 import re
 import sys
 from pathlib import Path
-from types import ModuleType
+from types import ModuleType, SimpleNamespace
 from typing import Any
 
 
@@ -120,6 +122,12 @@ AC_DEVIATION_MAX_IDS = 32
 AC_DEVIATION_REJECTION_CODE = "INVALID_AC_DEVIATION_RECORD"
 AC_DEVIATION_DISCLOSURE_KIND = "ac_deviation"
 AC_DEVIATION_CLASSIFICATIONS = frozenset({AC_DEVIATION_FLAG_KEY})
+# Fan-out merge (harness backlog #92 residual): the canonical of a fan-out chain
+# carries ONE record merged from the lanes' records.  These two names are the
+# only additions to the shape above: the additive per-lane map inside the
+# verbatim object, and the separator qualifying each evidence key with its lane.
+AC_DEVIATION_VERBATIM_LANES_KEY = "lanes"
+AC_DEVIATION_EVIDENCE_KEY_SEPARATOR = ":"
 
 
 class StableArgumentParser(argparse.ArgumentParser):
@@ -629,6 +637,75 @@ def _ac_deviation_record(dev_value: Any) -> dict[str, Any]:
     return record if isinstance(record, dict) else {}
 
 
+def _ac_deviation_merge(shards: list[tuple[str, dict[str, Any]]]) -> dict[str, Any]:
+    """Merge the legitimate per-lane records of a fan-out chain into the ONE
+    record the canonical carries.
+
+    Only lanes whose dev-report the single validator accepts (`[]`) contribute,
+    in the order given (the aggregator's label order).  Ids: ordered,
+    de-duplicated union.  Evidence: every key qualified `<lane label><separator>
+    <key>`, so lanes never collide and no value is lost.  Verbatim: the first
+    contributing lane's required pair (the shape holds a single pair) plus an
+    additive per-lane map holding every contributing lane's pair.  Returns `{}`
+    when no lane carries a record, so a chain without a deviation gains no key
+    and every existing canonical stays byte-identical and fresh.
+    """
+    contributing = [
+        (label, data) for label, data in shards if _ac_deviation_violations(data) == []
+    ]
+    if not contributing:
+        return {}
+    ids: list[str] = []
+    evidence: dict[str, Any] = {}
+    lanes: dict[str, dict[str, Any]] = {}
+    for label, data in contributing:
+        record = _ac_deviation_record(data)
+        for ac_id in record[AC_DEVIATION_IDS_KEY]:
+            if ac_id not in ids:
+                ids.append(ac_id)
+        for key, value in record[AC_DEVIATION_EVIDENCE_KEY].items():
+            evidence[f"{label}{AC_DEVIATION_EVIDENCE_KEY_SEPARATOR}{key}"] = value
+        verbatim = record[AC_DEVIATION_VERBATIM_KEY]
+        lanes[label] = {key: verbatim[key] for key in AC_DEVIATION_VERBATIM_REQUIRED_KEYS}
+    first = next(iter(lanes.values()))
+    return {
+        AC_DEVIATION_FLAG_KEY: True,
+        AC_DEVIATION_RECORD_KEY: {
+            AC_DEVIATION_IDS_KEY: ids,
+            AC_DEVIATION_VERBATIM_KEY: {**first, AC_DEVIATION_VERBATIM_LANES_KEY: lanes},
+            AC_DEVIATION_EVIDENCE_KEY: evidence,
+        },
+    }
+
+
+def _ac_deviation_projection(document: Any) -> dict[str, Any]:
+    """Extra keys the canonical freshness comparison must include for one
+    document: the flag and the record, but only when the single validator says
+    the record applies to it (a blocked report whose flag is present and not
+    literally false).  Anything else contributes `{}`, so the comparison of a
+    document without a record is unchanged."""
+    if _ac_deviation_violations(document) is None:
+        return {}
+    return {
+        key: document.get(key) for key in (AC_DEVIATION_FLAG_KEY, AC_DEVIATION_RECORD_KEY)
+    }
+
+
+def ac_deviation_provider() -> SimpleNamespace:
+    """The ONE way other scripts obtain the record's shape (never re-typed).
+
+    Three callables built only from the validator and constants above:
+    `violations(dev_report)` (exactly `_ac_deviation_violations`),
+    `merge(shards)` and `projection(document)`.  The aggregator and the
+    lifecycle receive this object; neither holds a copy of the shape.
+    """
+    return SimpleNamespace(
+        violations=_ac_deviation_violations,
+        merge=_ac_deviation_merge,
+        projection=_ac_deviation_projection,
+    )
+
+
 def _ac_deviation_release_eligible(
     path: str,
     mode: str,
@@ -649,7 +726,9 @@ def _ac_deviation_release_eligible(
         non-empty, each entry beginning with a recorded id and a colon);
         (a)-(d) are exactly the paths in `ac_deviation_paths`, produced by one
         `_ac_deviation_violations` call per chain;
-    (e) singular mode -- a fan-out chain is pinned to today's behavior;
+    (e) singular or fan-out mode; in a fan-out chain the path is a lane's own
+        dev-report (the canonical is released by the parent predicate hosted
+        below, which reuses this one for every record-bearing lane);
     (f) the SAME lane's own qa-report independently shows qa.status == "pass".
 
     This decides shape and reachability only.  It never judges whether the
@@ -658,12 +737,39 @@ def _ac_deviation_release_eligible(
     corroborate every disclosed entry.  Release is not a pass -- the chain
     status becomes pass_with_exceptions, never pass.
     """
-    if mode != "singular" or path not in ac_deviation_paths:
+    if mode not in ("singular", "fanout") or path not in ac_deviation_paths:
         return False
     if not isinstance(qa_value, dict):
         return False
     qa = qa_value.get("qa")
     return isinstance(qa, dict) and qa.get("status") == "pass"
+
+
+def _parent_ac_deviation_eligible(
+    parent_path: str,
+    mode: str,
+    ac_deviation_paths: frozenset[str] | set[str],
+    lane_qa_by_path: dict[str, dict[str, Any] | None],
+) -> bool:
+    """May the PARENT/canonical dev-report of a fan-out chain be released as an
+    ac_deviation disclosure?  Hosted next to `_parent_handoff_eligible`.
+
+    ALL of these hold: the parent path validated on its own (it is in
+    `ac_deviation_paths`, which the resolver fills only when the merged record
+    passes the single validator); at least one record-bearing lane exists
+    (`lane_qa_by_path` maps each record-bearing lane's dev-report path to its
+    own qa-report; an empty map is ineligible, like an empty contributing set
+    in `_parent_handoff_eligible`); and EVERY one of those lanes satisfies the
+    per-lane predicate `_ac_deviation_release_eligible` (its own qa-report
+    passes).  One record-bearing lane that is not releasable keeps the
+    parent's errors hard.
+    """
+    if parent_path not in ac_deviation_paths or not lane_qa_by_path:
+        return False
+    return all(
+        _ac_deviation_release_eligible(lane_path, mode, ac_deviation_paths, qa_value)
+        for lane_path, qa_value in lane_qa_by_path.items()
+    )
 
 
 def _parent_handoff_eligible(
@@ -797,8 +903,10 @@ def _reclassify_disclosed_exceptions(
     dev-report whose legitimate AC-deviation record was validated once by
     `_ac_deviation_violations` (its path is in `ac_deviation_paths`) and whose
     same-lane qa-report passes -- the explicit AC-6 NARROWING documented on
-    `_ac_deviation_release_eligible`.  Singular chains only; this function
-    still never emits a hard error itself.
+    `_ac_deviation_release_eligible`.  Singular chains and fan-out lanes; the
+    fan-out parent/canonical path takes `_parent_ac_deviation_eligible`
+    instead (after `_parent_handoff_eligible`).  This function still never
+    emits a hard error itself.
     """
     grouped: dict[str, list[dict[str, str]]] = {}
     for entry in errors:
@@ -841,6 +949,25 @@ def _reclassify_disclosed_exceptions(
                 if _parent_handoff_eligible(dev_value, contributing_qa_values):
                     classification = dev_value["dev"]["status_rationale"]["classification"]
                     eligible[path] = ("dev_handoff", classification)
+                elif _parent_ac_deviation_eligible(
+                    path,
+                    mode,
+                    ac_deviation_paths,
+                    {
+                        lane_dev_path: loaded_reports.get(
+                            _sibling_qa_report_path(
+                                lane_dev_path, lane_task_id_by_path.get(lane_dev_path)
+                            )
+                            or ""
+                        )
+                        for lane_dev_path in lane_dev_report_paths
+                        if lane_dev_path in ac_deviation_paths
+                    },
+                ):
+                    eligible[path] = (
+                        AC_DEVIATION_DISCLOSURE_KIND,
+                        min(AC_DEVIATION_CLASSIFICATIONS),
+                    )
             else:
                 lane_task_id = lane_task_id_by_path.get(path)
                 qa_path = _sibling_qa_report_path(path, lane_task_id)
@@ -1395,13 +1522,21 @@ def resolve_chain(project_root: Path | str, task_id: str) -> dict[str, Any]:
         ]
 
         if aggregate is not None and len(loaded_shards) == len(workers):
-            shard_errors = aggregate._validate_shards(loaded_shards, task_id)
+            # The provider hands the aggregator the ONE shape definition above:
+            # a blocked lane whose record validates is a legitimate shard, and
+            # the expected canonical / freshness projection carry the record.
+            deviation = ac_deviation_provider()
+            shard_errors = aggregate._validate_shards(
+                loaded_shards, task_id, deviation=deviation
+            )
             for detail in shard_errors:
                 validator.error(
                     "INVALID_SHARD_SET", result["canonical_dev_report"], detail
                 )
             if not shard_errors:
-                expected = aggregate._build_aggregate(loaded_shards, task_id)
+                expected = aggregate._build_aggregate(
+                    loaded_shards, task_id, deviation=deviation
+                )
                 canonical_dev = canonical.get("dev")
                 if not isinstance(canonical_dev, dict):
                     canonical_dev = {}
@@ -1412,8 +1547,8 @@ def resolve_chain(project_root: Path | str, task_id: str) -> dict[str, Any]:
                     == expected.get("dev", {}).get("files_created")
                 )
                 result["checks"]["canonical_fresh"] = (
-                    aggregate._canonical_projection(canonical)
-                    == aggregate._canonical_projection(expected)
+                    aggregate._canonical_projection(canonical, deviation=deviation)
+                    == aggregate._canonical_projection(expected, deviation=deviation)
                 )
                 if not result["checks"]["file_unions_exact"]:
                     validator.error(
@@ -1483,11 +1618,14 @@ def resolve_chain(project_root: Path | str, task_id: str) -> dict[str, Any]:
         ]
 
     result["parallel_workers"] = workers
-    # Harness backlog #92: the AC-deviation record is validated ONCE, singular
-    # chains only (a fan-out chain stays pinned to today's behavior).  A
-    # non-empty violation list becomes the additive rejection error (in
-    # addition to the dev errors that stay hard); a valid record only makes the
-    # dev-report path a candidate for the reclassification pass below.
+    # Harness backlog #92: the AC-deviation record is validated ONCE per
+    # dev-report, by the single validator.  A non-empty violation list becomes
+    # the additive rejection error (in addition to the dev errors that stay
+    # hard); a valid record only makes the dev-report path a candidate for the
+    # reclassification pass below.  Singular chains validate the canonical
+    # itself.  Fan-out chains validate every lane, and the canonical (the merge
+    # of the lane records) only when at least one lane carries a valid record,
+    # so a record forged on the canonical alone is never even read.
     ac_deviation_paths: set[str] = set()
     if result["mode"] == "singular":
         deviation_violations = _ac_deviation_violations(canonical)
@@ -1499,6 +1637,29 @@ def resolve_chain(project_root: Path | str, task_id: str) -> dict[str, Any]:
             )
         elif deviation_violations is not None:
             ac_deviation_paths.add(result["canonical_dev_report"])
+    elif result["mode"] == "fanout":
+        for lane in result["lanes"]:
+            lane_violations = _ac_deviation_violations(
+                validator.loaded_reports.get(lane["dev_report"])
+            )
+            if lane_violations:
+                validator.error(
+                    AC_DEVIATION_REJECTION_CODE,
+                    lane["dev_report"],
+                    _ac_deviation_rejection_detail(lane_violations),
+                )
+            elif lane_violations is not None:
+                ac_deviation_paths.add(lane["dev_report"])
+        if ac_deviation_paths:
+            deviation_violations = _ac_deviation_violations(canonical)
+            if deviation_violations:
+                validator.error(
+                    AC_DEVIATION_REJECTION_CODE,
+                    result["canonical_dev_report"],
+                    _ac_deviation_rejection_detail(deviation_violations),
+                )
+            elif deviation_violations is not None:
+                ac_deviation_paths.add(result["canonical_dev_report"])
     # M1: additive reclassification pass over the already-computed errors --
     # validate_dev()/validate_qa() above are never revisited.  Final status:
     # "pass" when both lists are empty, "pass_with_exceptions" when errors is

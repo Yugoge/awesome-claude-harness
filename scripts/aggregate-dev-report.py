@@ -52,6 +52,7 @@ import tempfile
 from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
+from types import ModuleType
 
 # ---------------------------------------------------------------------------
 # Filename patterns — MUST mirror hooks/pretool-aggregate-check.py exactly.
@@ -426,8 +427,17 @@ def _validate_baseline_chain(shards: list[tuple[str, dict]]) -> list[str]:
     return errors
 
 
-def _validate_shards(shards: list[tuple[str, dict]], task_id: str) -> list[str]:
+def _validate_shards(
+    shards: list[tuple[str, dict]], task_id: str, deviation=None
+) -> list[str]:
     """Return list of validation error strings (empty = all pass).
+
+    `deviation` (harness backlog #92 residual) is the optional provider the
+    resolver exposes (`ac_deviation_provider()`); None keeps the behavior below
+    byte-identical.  With a provider, a `blocked` shard is accepted exactly
+    when the provider's single validator accepts its AC-deviation record, and a
+    blocked shard that carries a flag but a defective record gets one extra
+    explicit rejection line after today's line.
 
     Each shard must have:
     - Non-empty task_id or request_id matching the target (bare-timestamp normalized)
@@ -435,7 +445,9 @@ def _validate_shards(shards: list[tuple[str, dict]], task_id: str) -> list[str]:
     - Explicit baseline_dirty_snapshot key (may be empty string if clean)
     - dev.status in ('completed', 'needs_review') -- 'needs_review' is a disclosed,
       narrower sibling of 'completed' (ticket 20260911-011232 M5); it is NEVER a
-      relaxation of 'blocked', which stays a hard shard-validation failure.
+      relaxation of 'blocked', which stays a hard shard-validation failure --
+      except, when a deviation provider is passed, for a lane whose AC-deviation
+      record its single validator accepts (harness backlog #92 residual).
       Substantive eligibility for the resulting needs_review canonical is decided
       downstream by resolve-dev-artifact-chain.py's reclassification pass, not here.
     - Consistent baseline_head_sha across all shards
@@ -479,9 +491,16 @@ def _validate_shards(shards: list[tuple[str, dict]], task_id: str) -> list[str]:
         dev = data.get("dev", {})
         status = dev.get("status") if isinstance(dev, dict) else None
         if status not in ("completed", "needs_review"):
-            errors.append(
-                f"shard '{label}': dev.status is {status!r}, expected 'completed' or 'needs_review'"
-            )
+            violations = deviation.violations(data) if deviation is not None else None
+            if violations != []:
+                errors.append(
+                    f"shard '{label}': dev.status is {status!r}, expected 'completed' or 'needs_review'"
+                )
+                if violations:
+                    errors.append(
+                        f"shard '{label}': AC-deviation record rejected: "
+                        + "; ".join(violations)
+                    )
 
         # Require non-empty baseline_head_sha.
         sha = data.get("baseline_head_sha", "")
@@ -595,8 +614,14 @@ def _merge_pre_edit_snapshots(shards: list[tuple[str, dict]]) -> dict:
     return result
 
 
-def _canonical_projection(document: dict) -> dict:
-    """Select deterministic aggregate fields; timestamp is intentionally excluded."""
+def _canonical_projection(document: dict, deviation=None) -> dict:
+    """Select deterministic aggregate fields; timestamp is intentionally excluded.
+
+    With a provider (`deviation`), the fields it names for this document (the
+    AC-deviation flag and record, only when they apply) join the projection so
+    a canonical that lost or gained the record compares stale; None keeps the
+    eleven baseline keys exactly.
+    """
     keys = (
         "request_id",
         "task_id",
@@ -610,7 +635,10 @@ def _canonical_projection(document: dict) -> dict:
         "owned_edits",
         "pre_edit_snapshots",
     )
-    return {key: document.get(key) for key in keys}
+    projection = {key: document.get(key) for key in keys}
+    if deviation is not None:
+        projection.update(deviation.projection(document))
+    return projection
 
 
 def _atomic_write_json(path: Path, document: dict) -> None:
@@ -662,8 +690,18 @@ def _synthesize_status_rationale(shards: list[tuple[str, dict]], needs_review_la
     }
 
 
-def _build_aggregate(shards: list[tuple[str, dict]], task_id: str) -> dict:
+def _build_aggregate(
+    shards: list[tuple[str, dict]], task_id: str, deviation=None
+) -> dict:
     """Construct the canonical aggregate document from the given shards.
+
+    `deviation` (harness backlog #92 residual) is the optional provider the
+    resolver exposes; None keeps every behavior below byte-identical.  With a
+    provider, a shard whose AC-deviation record the single validator accepts
+    makes the canonical `blocked` (worst-of: blocked > needs_review >
+    completed), the provider's merged record is added to the document, and the
+    needs_review rationale is synthesized only when the canonical stays
+    needs_review.
 
     On the successful path, called only after _validate_shards passes (all
     shards 'completed' or the disclosed 'needs_review' sibling, consistent
@@ -699,8 +737,16 @@ def _build_aggregate(shards: list[tuple[str, dict]], task_id: str) -> dict:
         if isinstance(data.get("dev"), dict) and data["dev"].get("status") == "needs_review"
     ]
 
+    has_deviation = deviation is not None and any(
+        deviation.violations(data) == [] for _, data in shards
+    )
+    if has_deviation:
+        canonical_status = "blocked"
+    else:
+        canonical_status = "needs_review" if needs_review_labels else "completed"
+
     dev_block = {
-        "status": "needs_review" if needs_review_labels else "completed",
+        "status": canonical_status,
         "tasks_completed": _union_list(shards, ["dev", "tasks_completed"]),
         "scripts_created": _union_list(shards, ["dev", "scripts_created"]),
         "permissions_to_add": _union_list(shards, ["dev", "permissions_to_add"]),
@@ -708,7 +754,7 @@ def _build_aggregate(shards: list[tuple[str, dict]], task_id: str) -> dict:
         "files_created": _union_list(shards, ["dev", "files_created"]),
         "observed_preexisting": _union_list(shards, ["dev", "observed_preexisting"]),
     }
-    if needs_review_labels:
+    if needs_review_labels and not has_deviation:
         dev_block["status_rationale"] = _synthesize_status_rationale(shards, needs_review_labels)
 
     aggregate = {
@@ -725,6 +771,8 @@ def _build_aggregate(shards: list[tuple[str, dict]], task_id: str) -> dict:
         "owned_edits": _merge_owned_edits(shards),
         "pre_edit_snapshots": _merge_pre_edit_snapshots(shards),
     }
+    if deviation is not None:
+        aggregate.update(deviation.merge(shards))
     return aggregate
 
 
@@ -745,6 +793,46 @@ def _emit_ok(action: str, output_path: str, reason: str) -> None:
 
 def _emit_error(reason: str) -> None:
     sys.stderr.write(f"aggregate-dev-report: {reason}\n")
+
+
+_DEVIATION_PROVIDER_CACHE: list = []
+
+
+def _load_deviation_provider():
+    """The AC-deviation provider of the resolver next to this script, or None.
+
+    The resolver owns the ONE definition of the deviation record's shape and
+    exposes it through `ac_deviation_provider()`.  It is loaded lazily and only
+    by `main` (the resolver loads this module inside `resolve_chain`, so an
+    import here would be a cycle), by executing the resolver source located
+    next to this file -- the mirror of the resolver's own loader -- and cached
+    for the process.  FAILS CLOSED: when the source is absent, cannot be
+    executed or exposes no provider, exactly one stderr line names the loss and
+    None is returned, so the caller keeps the baseline behavior (a blocked lane
+    is rejected) and never releases a lane on a guess.
+    """
+    if _DEVIATION_PROVIDER_CACHE:
+        return _DEVIATION_PROVIDER_CACHE[0]
+    try:
+        path = Path(__file__).with_name("resolve-dev-artifact-chain.py")
+        module = ModuleType("_dev_resolver_provider")
+        module.__file__ = str(path)
+        exec(compile(path.read_bytes(), str(path), "exec"), module.__dict__)
+        provider = module.ac_deviation_provider()
+    except Exception as exc:
+        _emit_error("AC-deviation provider unavailable: " + " ".join(str(exc).split()))
+        provider = None
+    _DEVIATION_PROVIDER_CACHE.append(provider)
+    return provider
+
+
+def _has_blocked_shard(shards: list[tuple[str, dict]]) -> bool:
+    """Whether any shard reports dev.status == 'blocked' (the only shards the
+    deviation provider can affect)."""
+    return any(
+        isinstance(data.get("dev"), dict) and data["dev"].get("status") == "blocked"
+        for _, data in shards
+    )
 
 
 def _is_str_list(value) -> bool:
@@ -1119,8 +1207,13 @@ def main(argv: list[str] | None = None) -> int:
             loaded, task_id, full_roster, mismatch_entries, canonical_path, args.dry_run
         )
 
+    # A blocked lane can be legitimate only through the resolver's deviation
+    # provider, so it is fetched (fail closed to None) only when some shard is
+    # blocked: no other document is affected by it.
+    deviation = _load_deviation_provider() if _has_blocked_shard(loaded) else None
+
     # Validate consistency — fail closed on any mismatch.
-    errors = _validate_shards(loaded, task_id)
+    errors = _validate_shards(loaded, task_id, deviation=deviation)
     if errors:
         _emit_error("Shard validation failed:\n  " + "\n  ".join(errors))
         return _write_blocked_aggregate(
@@ -1173,8 +1266,10 @@ def main(argv: list[str] | None = None) -> int:
                 + ", ".join(stale_clauses)
             )
             return 1
-        expected = _build_aggregate(loaded, task_id)
-        if _canonical_projection(existing) != _canonical_projection(expected):
+        expected = _build_aggregate(loaded, task_id, deviation=deviation)
+        if _canonical_projection(existing, deviation) != _canonical_projection(
+            expected, deviation
+        ):
             if args.dry_run:
                 _emit_ok(
                     action="skipped",
@@ -1215,7 +1310,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     # Build and write canonical aggregate.
-    aggregate = _build_aggregate(loaded, task_id)
+    aggregate = _build_aggregate(loaded, task_id, deviation=deviation)
     try:
         _atomic_write_json(canonical_path, aggregate)
     except OSError as exc:

@@ -14,7 +14,7 @@ environment variable ``AC_DEVIATION_SCRIPTS_DIR`` (default: the repository
 Test functions are named ``test_c<N>_...``: N is the class of the acceptance
 criterion AC<N> whose behaviour they pin (1 unchanged chains, 2 legitimate
 record, 3 record shape, 4 real dev failure and blocker coverage, 5 the AC-6
-narrowing, 6 release is not a pass, 7 late-repair, 8 fan-out pinned unchanged,
+narrowing, 6 release is not a pass, 7 late-repair, 8 fan-out lane records,
 9 real-cycle replay, 10 one shape definition, 11 clause (d) neutrality,
 12 route selector).
 """
@@ -1011,7 +1011,7 @@ def test_c7_control_blocked_without_a_flag_plus_a_gap_keeps_todays_shape(tmp_pat
 
 
 # ==========================================================================
-# class 8: fan-out chains stay exactly as they are (a stated residual)
+# class 8: fan-out lane records reach the judgment; parent-only pins stay
 # ==========================================================================
 
 GOOD_RECORD = {K_IDS: ["AC19"], K_VERB: {"text": "t", "source": "s"}, K_EVID: {"a": "b"}}
@@ -1038,20 +1038,50 @@ def _blocked_lane(record):
     return fn
 
 
-@pytest.mark.parametrize("label,record", RECORDS, ids=[r[0] for r in RECORDS])
-def test_c8_a_blocked_lane_with_a_record_is_identical_to_one_without(tmp_path, label, record):
-    plain = resolve(fanout(tmp_path, lane_a=_blocked_lane(None)))
-    with_record = resolve(fanout(tmp_path, lane_a=_blocked_lane(record)))
-    assert plain["mode"] == with_record["mode"] == "fanout"
-    assert plain["status"] == with_record["status"] == "fail"
-    assert errs(with_record) == errs(plain) != []
-    assert "INVALID_SHARD_SET" in codes(with_record)
-    assert NEWCODE not in codes(with_record)
-    assert with_record["disclosed_exceptions"] == []
-    assert gap(with_record) == ("not_applicable",) * 4
+LANE_A_DEV = "docs/dev/dev-report-%s-lane-a.json" % TASK
+# A blocked lane with the old-style canonical (built without the record): a
+# valid record is released on its own evidence and only the stale canonical
+# fails; a malformed record is rejected explicitly (once at the lane, twice as
+# the shard set at the canonical).  Expected (code, path) pairs, sorted by the
+# assertion.
+RECORD_JUDGMENTS = [
+    (
+        "valid-record",
+        GOOD_RECORD,
+        [("STALE_CANONICAL", PATHS["dev"]), ("UNRESOLVED_BLOCKERS", PATHS["dev"])],
+        True,
+    ),
+    (
+        "malformed-record",
+        BAD_RECORD,
+        [
+            (NEWCODE, LANE_A_DEV),
+            ("INVALID_DEV_STATUS", LANE_A_DEV),
+            ("INVALID_SHARD_SET", PATHS["dev"]),
+            ("INVALID_SHARD_SET", PATHS["dev"]),
+            ("UNRESOLVED_BLOCKERS", LANE_A_DEV),
+            ("UNRESOLVED_BLOCKERS", PATHS["dev"]),
+        ],
+        False,
+    ),
+]
 
 
-def test_c8_a_blocked_lane_carrying_a_record_exits_2_without_explicit_rejection(tmp_path):
+@pytest.mark.parametrize(
+    "label,record,expected,released", RECORD_JUDGMENTS, ids=[r[0] for r in RECORD_JUDGMENTS]
+)
+def test_c8_a_blocked_lane_with_a_record_is_judged_on_the_record(
+    tmp_path, label, record, expected, released
+):
+    result = resolve(fanout(tmp_path, lane_a=_blocked_lane(record)))
+    assert result["mode"] == "fanout"
+    assert result["status"] == "fail"
+    assert errs(result) == sorted(expected)
+    assert bool(result["disclosed_exceptions"]) is released
+    assert gap(result) == ("not_applicable",) * 4
+
+
+def test_c8_a_blocked_lane_with_a_valid_record_and_a_stale_canonical_exits_2_without_explicit_rejection(tmp_path):
     root = fanout(tmp_path, lane_a=_blocked_lane(GOOD_RECORD))
     assert cli(root)[0] == 2
     rc, payload = select(root)

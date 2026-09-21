@@ -79,6 +79,29 @@ def _load_resolver_module() -> ModuleType:
     return _cached_module(_scripts_dir() / "resolve-dev-artifact-chain.py", "_dlc_resolver")
 
 
+def _resolver_provider(resolver_mod: Any) -> Any:
+    """The AC-deviation provider a resolver module exposes, or None.
+
+    Fails closed: a stub module without `ac_deviation_provider`, or one whose
+    provider raises, yields None and the callers keep the pre-provider
+    behavior.  The lifecycle holds no copy of the record's shape.
+    """
+    factory = getattr(resolver_mod, "ac_deviation_provider", None)
+    if not callable(factory):
+        return None
+    try:
+        return factory()
+    except Exception:
+        return None
+
+
+def _deviation_provider() -> Any:
+    try:
+        return _resolver_provider(_load_resolver_module())
+    except Exception:
+        return None
+
+
 def _load_commit_repos_module() -> ModuleType:
     return _cached_module(_scripts_dir() / "resolve-commit-repos.py", "_dlc_commit_repos")
 
@@ -175,7 +198,23 @@ def do_report_lite_preflight(doc: dict) -> Optional[str]:
 # --------------------------------------------------------------------------
 
 
-def stage1_dev_chain(dev_dir: Path, task_id: str, dev_doc: dict) -> Optional[dict]:
+def _blocked_report_is_released(dev_doc: dict, dev_status: Any, provider_loader: Any) -> bool:
+    """A blocked dev report is still "being developed" unless the resolver's
+    single validator accepts its AC-deviation record (harness backlog #92
+    residual): only then may it fall through, so the resolver -- not this stage
+    -- judges it.  The provider is fetched only for blocked reports, so a
+    resolver load problem cannot affect any other row; every other blocked
+    report (no flag, malformed record, no provider) stays "developing".
+    """
+    if dev_status != "blocked" or provider_loader is None:
+        return False
+    provider = provider_loader()
+    return provider is not None and provider.violations(dev_doc) == []
+
+
+def stage1_dev_chain(
+    dev_dir: Path, task_id: str, dev_doc: dict, provider_loader: Any = None
+) -> Optional[dict]:
     """Returns a terminal row dict, or None when close-eligible (fall through).
 
     A declared fan-out canonical (non-empty `parallel_workers`) has its own
@@ -184,11 +223,14 @@ def stage1_dev_chain(dev_dir: Path, task_id: str, dev_doc: dict) -> Optional[dic
     required to have -- only the optional aggregate). The qa_pending/qa_failed
     sub-states therefore apply to the singular track only; a fan-out canonical
     proceeds directly from "dev completed" to Stage 2 once its own dev.status
-    is completed.
+    is completed.  A blocked report carrying a legitimate AC-deviation record
+    (accepted by `provider_loader()`'s single validator) proceeds the same way.
     """
     dev = dev_doc.get("dev")
     dev_status = dev.get("status") if isinstance(dev, dict) else None
-    if dev_status != "completed":
+    if dev_status != "completed" and not _blocked_report_is_released(
+        dev_doc, dev_status, provider_loader
+    ):
         return {
             "state": "developing",
             "next_action": "wait",
@@ -239,12 +281,18 @@ def validate_resolver_contract_shape(result: Any) -> bool:
     return True
 
 
-def roster_preview(dev_dir: Path, task_id: str, aggregate_mod: ModuleType) -> dict:
+def roster_preview(
+    dev_dir: Path, task_id: str, aggregate_mod: ModuleType, deviation: Any = None
+) -> dict:
     """Read-only lane-roster completeness preview (objection 3).
 
     Reuses aggregate-dev-report.py's _scan_shards / _load_shard / _validate_shards
     -- the same pure primitives resolve-dev-artifact-chain.py itself calls via
-    _load_aggregate_module(). Never writes the canonical aggregate.
+    _load_aggregate_module(). Never writes the canonical aggregate.  `deviation`
+    is the resolver's optional AC-deviation provider, forwarded to the shard
+    check exactly as the resolver forwards it, so the preview and the resolver
+    cannot disagree about a lane that carries a legitimate record; None keeps
+    the shard check unchanged.
     """
     bare_tid = aggregate_mod._bare_task_id(task_id)
     shards = aggregate_mod._scan_shards(dev_dir, bare_tid, task_id)
@@ -257,7 +305,11 @@ def roster_preview(dev_dir: Path, task_id: str, aggregate_mod: ModuleType) -> di
         if data is None:
             return {"complete": False, "reason": f"shard '{label}' unreadable/malformed", "lane_labels": lane_labels}
         loaded.append((label, data))
-    errors = aggregate_mod._validate_shards(loaded, task_id)
+    errors = (
+        aggregate_mod._validate_shards(loaded, task_id)
+        if deviation is None
+        else aggregate_mod._validate_shards(loaded, task_id, deviation=deviation)
+    )
     if errors:
         return {"complete": False, "reason": "; ".join(errors), "lane_labels": lane_labels}
     for label, _ in shards:
@@ -298,7 +350,9 @@ def stage2_close_eligibility(
     is_fanout_candidate = isinstance(workers, list) and len(workers) > 0
 
     if is_fanout_candidate:
-        preview = roster_preview(dev_dir, task_id, aggregate_mod)
+        preview = roster_preview(
+            dev_dir, task_id, aggregate_mod, deviation=_resolver_provider(resolver_mod)
+        )
         lanes = [
             {"task_id": f"{task_id}-{label}", "kind": "lane", "next_action": "none", "parent_task_id": task_id}
             for label in preview["lane_labels"]
@@ -328,7 +382,10 @@ def stage2_close_eligibility(
             "invoke_resolver": True,
             "blocker": "RESOLVER_CONTRACT_MISMATCH",
         }
-    if result.get("status") == "pass" and result.get("mode") == "singular":
+    status = result.get("status")
+    mode = result.get("mode")
+    errors = result.get("errors", [])
+    if status == "pass" and mode == "singular":
         return {
             "state": "close_pending",
             "next_action": "close",
@@ -336,12 +393,39 @@ def stage2_close_eligibility(
             "resolver_schema_version": result.get("schema_version"),
             "resolver_mode": result.get("mode"),
         }
+    if status == "pass_with_exceptions" and mode == "singular" and not errors:
+        # Released, not passed: still close-eligible (close is where release is
+        # judged), with the status and a summary of every disclosed exception
+        # carried as additive fields so a consumer never reads it as a plain pass.
+        return {
+            "state": "close_pending",
+            "next_action": "close",
+            "invoke_resolver": True,
+            "resolver_schema_version": result.get("schema_version"),
+            "resolver_mode": result.get("mode"),
+            "resolver_status": status,
+            "disclosed_exceptions": [
+                {key: entry.get(key) for key in ("code", "path", "kind", "classification")}
+                for entry in result.get("disclosed_exceptions", [])
+                if isinstance(entry, dict)
+            ],
+        }
     return {
         "state": "blocked",
         "next_action": "inspect",
         "invoke_resolver": True,
         "blocker": "RESOLVER_FAIL",
-        "resolver_errors": result.get("errors", []),
+        # Never an empty reason: a status this mapping does not recognise, with
+        # no error to show, is reported by name instead of as `[]`.
+        "resolver_errors": errors
+        or [
+            {
+                "code": "RESOLVER_STATUS_UNMAPPED",
+                "path": "",
+                "detail": f"resolver status {status!r} in mode {mode!r} has no "
+                "lifecycle mapping and carried no errors",
+            }
+        ],
     }
 
 
@@ -501,7 +585,7 @@ def derive_state(project_root: Path, task_id: str) -> dict:
             if dev_doc is None:
                 row.update(state="blocked", next_action="inspect", invoke_resolver=False, blocker="MALFORMED_DEV_REPORT")
                 return row
-            sub = stage1_dev_chain(dev_dir, task_id, dev_doc)
+            sub = stage1_dev_chain(dev_dir, task_id, dev_doc, provider_loader=_deviation_provider)
             if sub is not None:
                 row.update(sub)
                 return row
