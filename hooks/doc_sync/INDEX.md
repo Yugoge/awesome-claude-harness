@@ -1,8 +1,8 @@
 # doc_sync
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-09-19T12:04:32Z*
-**Total entries**: 11
+*Last updated: 2026-09-20T13:40:06Z*
+**Total entries**: 12
 **Convention**: kebab
 
 ## Tree
@@ -13,10 +13,11 @@ doc_sync/
 ├── `docker.py` - Parse docker-compose.yml and generate markdown table.
 ├── `extract.py` - Extract description from various file types.
 ├── `main.py` - Main entry point for doc-sync hook.
-├── `notice.py` - A skipped README is a deliberate outcome (regeneration is opt-in through the AUTO
+├── `notice.py` - A skipped README, INDEX or CLAUDE.md section is a deliberate outcome (regeneration is opt-in
 ├── `patch.py` - Patch CLAUDE.md dynamic sections using AUTO markers.
 ├── `regen_index.py` - Regenerate INDEX.md for a directory.
 ├── `regen_readme.py` - Regenerate README.md for a directory.
+├── `regions.py` - Four unrelated predicates used to decide what a file's AUTO region is (README first
 ├── `systemd.py` - Query systemctl for project-configured services and generate a markdown table.
 └── `tree.py` - Build directory trees for INDEX.md.
 ```

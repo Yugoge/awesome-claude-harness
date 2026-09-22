@@ -1,8 +1,8 @@
 # scripts
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-09-19T14:34:57Z*
-**Total entries**: 154
+*Last updated: 2026-09-22T11:36:24Z*
+**Total entries**: 155
 **Convention**: kebab
 
 ## Tree
@@ -85,6 +85,7 @@ scripts/
 ├── `check-security-hook-drift.sh` - Description: Audit always-on security-critical hook files against a cycle baseline SHA
 ├── `checkpoint-prune.sh` - checkpoint-prune.sh — trim refs/checkpoints/* to the most recent N commits
 ├── `cleanup-close-force-sentinel.sh` - Removes the force-close sentinel file for a given dev session.
+├── `close-report-append.py` - Description: Deterministic read-append-reread-verify helper for the
 ├── `close-route-select.py` - Without ``--late-repair`` this is a pass-through: it resolves the artifact
 ├── `close-scoring-decide.py` - Description: Decide which close_success_* event /close should issue based on
 ├── `commit.sh` - Description: Discoverable canonical entrypoint for commands/dev-overnight.md's

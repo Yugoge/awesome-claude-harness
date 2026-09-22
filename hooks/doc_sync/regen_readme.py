@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """Regenerate README.md for a directory."""
 
-from enum import Enum
 from pathlib import Path
 
 # Dual-mode import: relative when loaded as `hooks.doc_sync.regen_readme`
@@ -9,11 +8,15 @@ from pathlib import Path
 # importlib.util spec_from_file_location (spec-20260518-225715 Cycle 3
 # Debt 7 / AC-07 test). The fallback installs the parent of `hooks/` onto
 # sys.path and imports the full package, so transitive relative imports
-# (regen_readme -> patch -> claude/docker/systemd) all resolve.
+# (regen_readme -> regions/config/extract) all resolve. Loaded either way, RegenStatus is
+# the one class object defined in regions, never a second copy.
 try:
     from .extract import extract_description
-    from .patch import _replace_section
     from .config import tracked_names, is_github_reserved_subtree
+    from .regions import (
+        README_MARKER_ID, RegenStatus, RegionShape, classify_region, marker_close,
+        marker_line_numbers, marker_open, replace_region,
+    )
 except ImportError:
     import importlib as _importlib
     import os as _os
@@ -22,25 +25,22 @@ except ImportError:
     if _pkg_root not in _sys.path:
         _sys.path.insert(0, _pkg_root)
     _extract = _importlib.import_module("hooks.doc_sync.extract")
-    _patch = _importlib.import_module("hooks.doc_sync.patch")
     _config = _importlib.import_module("hooks.doc_sync.config")
+    _regions = _importlib.import_module("hooks.doc_sync.regions")
     extract_description = _extract.extract_description  # type: ignore[no-redef]
-    _replace_section = _patch._replace_section  # type: ignore[no-redef]
     tracked_names = _config.tracked_names  # type: ignore[no-redef]
     is_github_reserved_subtree = _config.is_github_reserved_subtree  # type: ignore[no-redef]
+    README_MARKER_ID = _regions.README_MARKER_ID  # type: ignore[no-redef]
+    RegenStatus = _regions.RegenStatus  # type: ignore[no-redef,misc]
+    RegionShape = _regions.RegionShape  # type: ignore[no-redef,misc]
+    classify_region = _regions.classify_region  # type: ignore[no-redef]
+    marker_close = _regions.marker_close  # type: ignore[no-redef]
+    marker_line_numbers = _regions.marker_line_numbers  # type: ignore[no-redef]
+    marker_open = _regions.marker_open  # type: ignore[no-redef]
+    replace_region = _regions.replace_region  # type: ignore[no-redef]
 
-README_MARKER_ID = 'readme-stats'
-README_OPEN_MARKER = f'<!-- AUTO:{README_MARKER_ID} -->'
-README_CLOSE_MARKER = f'<!-- /AUTO:{README_MARKER_ID} -->'
-
-
-class RegenStatus(str, Enum):
-    """Outcome of regen_readme(); every path returns one so a caller can tell a skip
-    from a regeneration."""
-    WRITTEN = 'WRITTEN'
-    SKIPPED_GITHUB_RESERVED = 'SKIPPED_GITHUB_RESERVED'
-    SKIPPED_NO_OPENING_MARKER = 'SKIPPED_NO_OPENING_MARKER'
-    SKIPPED_NO_CLOSING_MARKER = 'SKIPPED_NO_CLOSING_MARKER'
+README_OPEN_MARKER = marker_open(README_MARKER_ID)
+README_CLOSE_MARKER = marker_close(README_MARKER_ID)
 
 
 SKIP_NAMES = {
@@ -118,17 +118,10 @@ def _detect_convention(dir_path: Path) -> str:
 def _skip_status(text: str) -> RegenStatus | None:
     """Skip status of an existing README's text, or None when its AUTO region is well-formed.
 
-    Uses the same first-occurrence predicate as patch._replace_section (first opening
-    marker, first closing marker, closing must not precede opening), so classifying a
-    README and replacing its region can never disagree.
+    The same classifier replace_region uses, so classifying a README and replacing its
+    region can never disagree.
     """
-    s = text.find(README_OPEN_MARKER)
-    e = text.find(README_CLOSE_MARKER)
-    if s == -1:
-        return RegenStatus.SKIPPED_NO_OPENING_MARKER
-    if e == -1 or e < s:
-        return RegenStatus.SKIPPED_NO_CLOSING_MARKER
-    return None
+    return classify_region(text, README_MARKER_ID).status
 
 
 def _readme_needs_update(readme_path: Path) -> bool:
@@ -152,25 +145,33 @@ def _list_subdirs(dir_path: Path) -> list[str]:
     return [f'- `{d.name}/`' for d in subdirs]
 
 
-def _build_readme_content(dir_path: Path, convention: str) -> str:
+def _build_readme_body(dir_path: Path, convention: str) -> str:
+    """The generated text between the markers. Built on its own, never cut out of a whole
+    README by splitting on marker text, so a description that carries a marker line cannot
+    truncate it."""
     stats = _build_stats(dir_path)
     file_lines = _list_files(dir_path)
     dir_lines = _list_subdirs(dir_path)
-    lines = [f'# {dir_path.name}', '', README_OPEN_MARKER]
-    lines.append(f'## Overview\n- **Total files**: {stats["total"]}')
+    lines = [f'## Overview\n- **Total files**: {stats["total"]}']
     lines.append(f'- **Subdirectories**: {stats["dirs"]}')
     lines.append(f'- **Naming convention**: {convention}')
     if file_lines:
         lines.append('\n## Files\n' + '\n'.join(file_lines))
     if dir_lines:
         lines.append('\n## Subdirectories\n' + '\n'.join(dir_lines))
-    # Close the AUTO region (mirrors regen_index's AUTO_START/AUTO_END pair).
-    # Without this terminator _replace_section cannot locate the region's end and
-    # returns the old text verbatim, which froze every generated README at its
-    # first write -- stats could never be refreshed.
-    lines.append(f'\n{README_CLOSE_MARKER}')
-    lines.append('\n---\n*Auto-generated by doc-sync hook.*')
     return '\n'.join(lines)
+
+
+def _compose_readme(dir_path: Path, body: str) -> str:
+    # The closing marker terminates the AUTO region (mirrors regen_index's AUTO_START/AUTO_END
+    # pair): without it replace_region cannot locate the region's end, which froze every
+    # generated README at its first write -- stats could never be refreshed.
+    return (f'# {dir_path.name}\n\n{README_OPEN_MARKER}\n{body}\n\n{README_CLOSE_MARKER}'
+            '\n\n---\n*Auto-generated by doc-sync hook.*')
+
+
+def _build_readme_content(dir_path: Path, convention: str) -> str:
+    return _compose_readme(dir_path, _build_readme_body(dir_path, convention))
 
 
 def regen_readme(dir_path: Path, project_dir: Path | None = None) -> RegenStatus:
@@ -179,7 +180,9 @@ def regen_readme(dir_path: Path, project_dir: Path | None = None) -> RegenStatus
     project_dir (the repository root) anchors the GitHub-reserved-subtree check to
     the repo, making it CWD-independent; see config.is_github_reserved_subtree.
     An existing README is classified from its original text before anything is
-    written, so a skip never touches the file (no bytes, no mtime).
+    written, so a skip never touches the file (no bytes, no mtime). Content that would put
+    marker text of its own into the file (a multi-line description) is refused the same way:
+    a file the classifier rejects on the next run must never be produced by this one.
     """
     # GitHub renders .github/README.md in place of the repo-root README, so a
     # doc-sync stub anywhere under the GitHub-reserved subtree would hijack the
@@ -197,14 +200,17 @@ def regen_readme(dir_path: Path, project_dir: Path | None = None) -> RegenStatus
         skip = _skip_status(old)
         if skip is not None:
             return skip
-    convention = _detect_convention(dir_path)
-    content = _build_readme_content(dir_path, convention)
-    if old is not None:
-        # Cut the freshly built body at the closing marker. The old form split
-        # on bare '-->', which matched nothing (no terminator was emitted) and
-        # so swallowed the trailing footer into the body.
-        body = (content.split(README_OPEN_MARKER)[1]
-                .split(README_CLOSE_MARKER)[0].strip('\n'))
-        content = _replace_section(old, README_MARKER_ID, body)
+    body = _build_readme_body(dir_path, _detect_convention(dir_path))
+    if marker_line_numbers(body):
+        return RegenStatus.SKIPPED_MALFORMED_MARKERS
+    if old is None:
+        content = _compose_readme(dir_path, body)
+        if classify_region(content, README_MARKER_ID).shape is not RegionShape.WELL_FORMED:
+            return RegenStatus.SKIPPED_MALFORMED_MARKERS
+    else:
+        replaced = replace_region(old, README_MARKER_ID, body.strip('\n'))
+        if not replaced.replaced:
+            return RegenStatus.SKIPPED_MALFORMED_MARKERS
+        content = replaced.text
     readme_path.write_text(content)
     return RegenStatus.WRITTEN

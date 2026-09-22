@@ -70,11 +70,13 @@ class World:
         self.target = self.folder / 'tool.py'
         self.target.write_text('"""Tool."""\n')
         self.readme = self.folder / 'README.md'
-        # A CLAUDE.md that already has a header and no AUTO region, and a markerless
-        # INDEX.md (regen_index leaves those untouched), so the only file the hook could
-        # write in this world is the README under test and, later, the notice state.
+        # A CLAUDE.md that already has a header and no AUTO region, and a well-formed INDEX.md
+        # stub (regenerated silently; a markerless one would be skipped and reported, which is
+        # a separate notice these README tests must not carry), so the only notice this world
+        # can produce is the one for the README under test.
         (self.project / 'CLAUDE.md').write_text('# CLAUDE.md\n\nproject notes\n')
-        (self.folder / 'INDEX.md').write_text('# index\n')
+        (self.folder / 'INDEX.md').write_text(
+            '# index\n\n<!-- AUTO:index-stats -->\nstale\n<!-- /AUTO:index-stats -->\n')
 
     def register_session(self, session_id):
         """Create <TMPDIR>/<session_id> with the .owner record session-scratch-init.sh writes."""

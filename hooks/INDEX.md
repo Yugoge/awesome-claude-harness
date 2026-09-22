@@ -1,7 +1,7 @@
 # hooks
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-09-19T12:04:32Z*
+*Last updated: 2026-09-22T02:56:20Z*
 **Total entries**: 204
 **Convention**: kebab
 
@@ -14,7 +14,7 @@ hooks/
 │   ├── `docker.py` - Parse docker-compose.yml and generate markdown table.
 │   ├── `extract.py` - Extract description from various file types.
 │   ├── `main.py` - Main entry point for doc-sync hook.
-│   ├── `notice.py` - A skipped README is a deliberate outcome (regeneration is opt-in through the AUTO
+│   ├── `notice.py` - A skipped README, INDEX or CLAUDE.md section is a deliberate outcome (regeneration is opt-in
 │   ├── `patch.py` - Patch CLAUDE.md dynamic sections using AUTO markers.
 │   ├── `regen_index.py` - Regenerate INDEX.md for a directory.
 │   ├── `regen_readme.py` - Regenerate README.md for a directory.

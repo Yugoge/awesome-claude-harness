@@ -9,6 +9,10 @@ from .regen_index import regen_index
 from .regen_readme import regen_readme
 from .patch import patch_claude_md
 from .notice import emit_post_tool_notice
+from .regions import (
+    INDEX_MARKER_ID, README_MARKER_ID, ArtifactKind, RegenRecord, RegenStatus, RegionShape,
+    classify_region,
+)
 
 WATCHED_DIRS = {
     '.claude/commands',
@@ -74,16 +78,48 @@ def _match_watch_dir(rel: str):
     return None
 
 
-def _regen_if_dir(d: Path, project_dir: Path):
-    """Regenerate INDEX.md and README.md; the README status, or None when d is no directory."""
+def _refusal_shape(path: Path):
+    """(shape, detail) of a MALFORMED skip, by re-classifying the file the skip left untouched.
+
+    regen_* return the bare status (that identity contract is what keeps their callers simple),
+    so the shape is recovered here. A file that is itself well-formed, or absent, was refused
+    because of the content that would have been generated.
+    """
+    marker_id = INDEX_MARKER_ID if path.name == 'INDEX.md' else README_MARKER_ID
+    try:
+        region = classify_region(path.read_text(), marker_id)
+    except Exception:
+        return RegionShape.BODY_BREAKS_REGION, None
+    if region.shape is RegionShape.WELL_FORMED:
+        return RegionShape.BODY_BREAKS_REGION, None
+    detail = str(region.fence_line) if region.fence_line is not None else None
+    return region.shape, detail
+
+
+def _regen_and_record(regen, kind: ArtifactKind, d: Path, project_dir: Path, results):
+    """Run one regeneration and append its record at once: a failure in the next call of the
+    same directory (an unwritable INDEX after a README skip) must not lose what was reported."""
+    status = regen(d, project_dir)
+    if results is not None and status is not None:
+        path = d / ('README.md' if kind is ArtifactKind.README else 'INDEX.md')
+        shape, detail = (None, None)
+        if status is RegenStatus.SKIPPED_MALFORMED_MARKERS:
+            shape, detail = _refusal_shape(path)
+        results.append(RegenRecord(kind, path, status, None, shape, detail))
+    return status
+
+
+def _regen_if_dir(d: Path, project_dir: Path, results: list | None = None):
+    """Regenerate README.md, then INDEX.md; the README status, or None when d is no directory."""
     if not d.is_dir():
         return None
-    regen_index(d, project_dir)
-    return regen_readme(d, project_dir)
+    status = _regen_and_record(regen_readme, ArtifactKind.README, d, project_dir, results)
+    _regen_and_record(regen_index, ArtifactKind.INDEX, d, project_dir, results)
+    return status
 
 
-def _maybe_regen_global(parent_dir: Path, rel: str):
-    """Same for the matching global directory; (README path, status), or None when not applicable."""
+def _maybe_regen_global(parent_dir: Path, rel: str, results: list | None = None):
+    """Same for the matching global directory; the README status, or None when not applicable."""
     wd = _match_watch_dir(rel)
     if wd is None:
         return None
@@ -91,26 +127,24 @@ def _maybe_regen_global(parent_dir: Path, rel: str):
     if global_dir.is_dir() and global_dir.resolve() != parent_dir.resolve():
         # Global dirs live under ~/.claude; anchor the reserved-subtree check to
         # $HOME so it is framed the same way global rel paths are (.claude/...).
-        regen_index(global_dir, Path.home())
-        return global_dir / 'README.md', regen_readme(global_dir, Path.home())
+        status = _regen_and_record(regen_readme, ArtifactKind.README, global_dir, Path.home(), results)
+        _regen_and_record(regen_index, ArtifactKind.INDEX, global_dir, Path.home(), results)
+        return status
     return None
 
 
 def process_parent_dirs(parent_dir: Path, project_dir: Path, results: list | None = None):
-    """Regenerate the parent (and matching global) directory; returns (README path, status) pairs.
+    """Regenerate the parent (and matching global) directory; returns the `results` list.
 
-    Pairs are appended to the caller's `results` as each directory finishes, so a failure
-    in a later directory does not lose what an earlier one already reported.
+    Records (README first, then INDEX, per directory) are appended to the caller's `results`
+    as each call finishes, so a failure in a later call does not lose what an earlier one
+    already reported.
     """
     if results is None:
         results = []
-    status = _regen_if_dir(parent_dir, project_dir)
-    if status is not None:
-        results.append((parent_dir / 'README.md', status))
+    _regen_if_dir(parent_dir, project_dir, results)
     rel = str(parent_dir.relative_to(project_dir))
-    regenerated = _maybe_regen_global(parent_dir, rel)
-    if regenerated is not None:
-        results.append(regenerated)
+    _maybe_regen_global(parent_dir, rel, results)
     return results
 
 
@@ -133,7 +167,9 @@ def main():
         if not should_sync(fp, rel):
             sys.exit(0)
         process_parent_dirs(fp.parent, project_dir, results)
-        patch_claude_md(project_dir)
+        section_skips = patch_claude_md(project_dir)
+        if isinstance(section_skips, list):
+            results.extend(section_skips)
     except Exception:
         pass
     # Outside the try: skips collected before a later failure still reach the caller.

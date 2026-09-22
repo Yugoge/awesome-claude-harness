@@ -4,7 +4,7 @@ Organization and usage documentation for `scripts/`.
 
 <!-- AUTO:readme-stats -->
 ## Overview
-- **Total files**: 109
+- **Total files**: 110
 - **Subdirectories**: 6
 - **Naming convention**: kebab
 
@@ -35,6 +35,7 @@ Organization and usage documentation for `scripts/`.
 - `checkpoint-prune.sh` - checkpoint-prune.sh — trim refs/checkpoints/* to the most recent N commits
 - `cleanup-close-force-sentinel.sh` - Removes the force-close sentinel file for a given dev session.
 - `cleanup-tests-folder.sh` - Description: Remove validators that don't match git edge cases, preserving reports/
+- `close-report-append.py` - Description: Deterministic read-append-reread-verify helper for the
 - `close-route-select.py` - Without ``--late-repair`` this is a pass-through: it resolves the artifact
 - `close-scoring-decide.py` - Description: Decide which close_success_* event /close should issue based on
 - `commit.sh` - Description: Discoverable canonical entrypoint for commands/dev-overnight.md's

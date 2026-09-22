@@ -23,6 +23,10 @@ CACHE_FILE: Path = Path.home() / '.claude' / '.doc-sync-cache.json'
 CHECK_INTERVAL: int = 300  # seconds between checks
 HOOK_EVENT_NAME: str = 'UserPromptSubmit'
 MAX_OUTPUT_CHARS: int = 10000  # documented cap for hook output strings
+# Opens every notice line about a skipped INDEX. Copied from doc_sync.notice.INDEX_NOTICE_PREFIX
+# because this hook must not import doc_sync (an import error would break every prompt
+# submission); a test keeps the two copies equal.
+INDEX_NOTICE_PREFIX: str = 'doc-sync: INDEX not regenerated'
 
 # Must match posttool-doc-sync.py constants
 WATCHED_DIRS: set[str] = {
@@ -86,6 +90,11 @@ def relay_child_notice(child_stdout) -> str | None:
         return None
     text = output.get('systemMessage') if isinstance(output, dict) else None
     return text if isinstance(text, str) and text.strip() else None
+
+
+def notice_reports_index_skip(notice: str) -> bool:
+    """True when the relayed notice says an INDEX.md was skipped (not regenerated)."""
+    return any(line.startswith(INDEX_NOTICE_PREFIX) for line in notice.split('\n'))
 
 
 def flush_output(lines: list[str], notices: list[str]) -> None:
@@ -177,11 +186,18 @@ def main() -> None:
                     env={**os.environ, 'CLAUDE_PROJECT_DIR': str(dir_path.parent)},
                     timeout=5,
                 )
-                lines.append(
-                    f'doc-sync: detected deletion in {dir_path}, '
-                    f'resynced INDEX.md'
-                )
                 notice = relay_child_notice(child.stdout)
+                # An INDEX that was skipped was not resynced: the line must not say it was.
+                if notice and notice_reports_index_skip(notice):
+                    lines.append(
+                        f'doc-sync: detected deletion in {dir_path}, '
+                        f'doc-sync re-run, a notice follows'
+                    )
+                else:
+                    lines.append(
+                        f'doc-sync: detected deletion in {dir_path}, '
+                        f'resynced INDEX.md'
+                    )
                 if notice:
                     notices.append(notice)
 

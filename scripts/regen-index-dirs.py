@@ -8,7 +8,8 @@ script calls the underlying regen_index function directly — it does NOT invoke
 the slash command.
 
 Usage: regen-index-dirs.py <dir> [<dir> ...]
-Exit codes: 0=all regenerated, 1=usage/error
+Prints `regenerated: <INDEX>` only when the INDEX was written, else `skipped (<STATUS>): <INDEX>`.
+Exit codes: 0=every directory processed (a skip is not an error), 1=usage/error
 """
 import sys
 from pathlib import Path
@@ -22,17 +23,22 @@ from hooks.doc_sync.regen_index import (  # noqa: E402
     regen_index, AUTO_START, AUTO_END,
 )
 from hooks.doc_sync.config import is_github_reserved_subtree  # noqa: E402
+from hooks.doc_sync.regions import (  # noqa: E402
+    INDEX_MARKER_ID, RegenStatus, RegionShape, classify_region,
+)
 
 
-def _ensure_marker(index_path: Path, dir_name: str) -> None:
+def _ensure_marker(index_path: Path, dir_name: str) -> bool:
     """Insert AUTO markers around the generated stats+tree block of a markerless
-    INDEX, preserving everything else verbatim. No-op if marker already present
-    or the file is absent (regen handles those)."""
+    INDEX, preserving everything else verbatim; True when markers were inserted.
+    No-op unless the classifier says the file has no marker at all (a prose mention or a
+    fenced example is not a marker, a malformed one is left for regen to report) or the
+    file is absent (regen handles those)."""
     if not index_path.exists():
-        return
+        return False
     text = index_path.read_text()
-    if AUTO_START in text:
-        return
+    if classify_region(text, INDEX_MARKER_ID).shape is not RegionShape.NO_MARKERS:
+        return False
     lines = text.splitlines()
     n = len(lines)
 
@@ -46,7 +52,7 @@ def _ensure_marker(index_path: Path, dir_name: str) -> None:
     if start is None:
         # No recognizable generated block; let regen build one from scratch by
         # bracketing nothing — fall back to a leading marker after the title.
-        return
+        return False
 
     # Find the '## Tree' fence open after start, then its closing fence.
     tree_open = None
@@ -61,10 +67,11 @@ def _ensure_marker(index_path: Path, dir_name: str) -> None:
                 end = i
                 break
     if end is None:
-        return
+        return False
 
     new_lines = lines[:start] + [AUTO_START] + lines[start:end + 1] + [AUTO_END] + lines[end + 1:]
     index_path.write_text('\n'.join(new_lines) + '\n')
+    return True
 
 
 def main(argv: list[str]) -> int:
@@ -84,8 +91,11 @@ def main(argv: list[str]) -> int:
             print(f"skipped (GitHub-reserved subtree): {d / 'INDEX.md'}")
             continue
         _ensure_marker(d / 'INDEX.md', d.name)
-        regen_index(d, REPO_ROOT)
-        print(f"regenerated: {d / 'INDEX.md'}")
+        status = regen_index(d, REPO_ROOT)
+        if status is RegenStatus.WRITTEN:
+            print(f"regenerated: {d / 'INDEX.md'}")
+        else:
+            print(f"skipped ({status.value}): {d / 'INDEX.md'}")
     return 0
 
 

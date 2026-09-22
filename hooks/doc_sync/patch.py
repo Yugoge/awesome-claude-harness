@@ -5,6 +5,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from .claude import ensure_claude_md
 from .docker import build_docker_table
+from .regions import (
+    ArtifactKind, RegenRecord, RegenStatus, RegionShape, classify_region, replace_region,
+)
 from .systemd import build_systemd_table
 
 
@@ -17,13 +20,9 @@ def _is_global_claude_md(claude_md: Path) -> bool:
 
 
 def _replace_section(content: str, marker_id: str, new_body: str) -> str:
-    start = f'<!-- AUTO:{marker_id} -->'
-    end = f'<!-- /AUTO:{marker_id} -->'
-    s = content.find(start)
-    e = content.find(end)
-    if s == -1 or e == -1 or e < s:
-        return content
-    return content[:s + len(start)] + '\n' + new_body + '\n' + content[e:]
+    """The text with the region's body replaced, or `content` itself when the region is not
+    well-formed or the body would break it (see regions.replace_region)."""
+    return replace_region(content, marker_id, new_body).text
 
 
 def _count_entries(subdir_path: Path, is_skills: bool) -> int:
@@ -63,59 +62,78 @@ def _build_file_list(dir_path: Path) -> str:
     return f'See `.claude/{rel}/INDEX.md` ({len(files)} entries)'
 
 
-def _patch_inventory(content: str, project_dir: Path) -> str:
-    if '<!-- AUTO:claude-inventory -->' in content:
-        return _replace_section(content, 'claude-inventory', _build_inventory(project_dir))
-    return content
+def _patch_section(content: str, marker_id: str, build_body, notes: list) -> str:
+    """Regenerate one section. A section without markers is not opted in and stays silent; any
+    other shape the classifier refuses is appended to `notes` and the text is left untouched."""
+    region = classify_region(content, marker_id)
+    if region.shape is RegionShape.NO_MARKERS:
+        return content
+    if region.shape is not RegionShape.WELL_FORMED:
+        notes.append((marker_id, region.status, region.shape, region.fence_line))
+        return content
+    body = build_body()
+    if body is None:
+        return content
+    replaced = replace_region(content, marker_id, body)
+    if not replaced.replaced:
+        notes.append((marker_id, RegenStatus.SKIPPED_MALFORMED_MARKERS, replaced.shape, None))
+    return replaced.text
 
 
-def _patch_commands(content: str, project_dir: Path) -> str:
-    if '<!-- AUTO:command-list -->' in content:
-        return _replace_section(content, 'command-list', _build_file_list(project_dir / '.claude' / 'commands'))
-    return content
+def _patch_inventory(content: str, project_dir: Path, notes: list | None = None) -> str:
+    return _patch_section(content, 'claude-inventory', lambda: _build_inventory(project_dir),
+                          [] if notes is None else notes)
 
 
-def _patch_agents(content: str, project_dir: Path) -> str:
-    if '<!-- AUTO:agent-list -->' in content:
-        return _replace_section(content, 'agent-list', _build_file_list(project_dir / '.claude' / 'agents'))
-    return content
+def _patch_commands(content: str, project_dir: Path, notes: list | None = None) -> str:
+    return _patch_section(content, 'command-list',
+                          lambda: _build_file_list(project_dir / '.claude' / 'commands'),
+                          [] if notes is None else notes)
 
 
-def _patch_skills(content: str, project_dir: Path) -> str:
-    if '<!-- AUTO:skill-list -->' in content:
-        sd = project_dir / '.claude' / 'skills'
-        if sd.is_dir():
-            dirs = sorted([d.name for d in sd.iterdir() if d.is_dir() and not d.name.startswith('.')])
-            return _replace_section(content, 'skill-list', '\n'.join(f'- `{d}/`' for d in dirs))
-    return content
+def _patch_agents(content: str, project_dir: Path, notes: list | None = None) -> str:
+    return _patch_section(content, 'agent-list',
+                          lambda: _build_file_list(project_dir / '.claude' / 'agents'),
+                          [] if notes is None else notes)
 
 
-def _patch_last_updated(content: str) -> str:
-    if '<!-- AUTO:last-updated -->' in content:
-        ts = datetime.now(timezone.utc).strftime('%Y-%m-%d')
-        return _replace_section(content, 'last-updated', f'> Last updated: {ts}')
-    return content
+def _build_skill_list(project_dir: Path):
+    sd = project_dir / '.claude' / 'skills'
+    if not sd.is_dir():
+        return None
+    dirs = sorted([d.name for d in sd.iterdir() if d.is_dir() and not d.name.startswith('.')])
+    return '\n'.join(f'- `{d}/`' for d in dirs)
 
 
-def _patch_docker(content: str) -> str:
-    if '<!-- AUTO:docker-services -->' in content:
-        table = build_docker_table()
-        if table:
-            return _replace_section(content, 'docker-services', table)
-    return content
+def _patch_skills(content: str, project_dir: Path, notes: list | None = None) -> str:
+    return _patch_section(content, 'skill-list', lambda: _build_skill_list(project_dir),
+                          [] if notes is None else notes)
 
 
-def _patch_systemd(content: str, project_dir: Path) -> str:
-    if '<!-- AUTO:systemd-services -->' in content:
-        table = build_systemd_table(project_dir)
-        if table:
-            return _replace_section(content, 'systemd-services', table)
-    return content
+def _patch_last_updated(content: str, notes: list | None = None) -> str:
+    def build_body():
+        return f'> Last updated: {datetime.now(timezone.utc).strftime("%Y-%m-%d")}'
+    return _patch_section(content, 'last-updated', build_body, [] if notes is None else notes)
 
 
-def patch_claude_md(project_dir: Path):
-    """Patch CLAUDE.md dynamic sections using AUTO markers."""
+def _patch_docker(content: str, notes: list | None = None) -> str:
+    return _patch_section(content, 'docker-services', lambda: build_docker_table() or None,
+                          [] if notes is None else notes)
+
+
+def _patch_systemd(content: str, project_dir: Path, notes: list | None = None) -> str:
+    return _patch_section(content, 'systemd-services', lambda: build_systemd_table(project_dir) or None,
+                          [] if notes is None else notes)
+
+
+def patch_claude_md(project_dir: Path) -> list:
+    """Patch CLAUDE.md dynamic sections using AUTO markers.
+
+    Returns one RegenRecord per opted-in section the classifier refused (nothing was written
+    for it); a section without markers and a regenerated one produce no record.
+    """
     ensure_claude_md(project_dir)
+    records: list = []
     candidates = [
         project_dir / 'CLAUDE.md',
         project_dir / '.claude' / 'CLAUDE.md',
@@ -128,17 +146,24 @@ def patch_claude_md(project_dir: Path):
             continue
         is_global = _is_global_claude_md(claude_md)
         new_content = content
-        new_content = _patch_inventory(new_content, project_dir)
-        new_content = _patch_commands(new_content, project_dir)
-        new_content = _patch_agents(new_content, project_dir)
-        new_content = _patch_skills(new_content, project_dir)
-        new_content = _patch_last_updated(new_content)
+        notes: list = []
+        new_content = _patch_inventory(new_content, project_dir, notes)
+        new_content = _patch_commands(new_content, project_dir, notes)
+        new_content = _patch_agents(new_content, project_dir, notes)
+        new_content = _patch_skills(new_content, project_dir, notes)
+        new_content = _patch_last_updated(new_content, notes)
         # Project-specific infrastructure (docker/systemd) must never be patched
         # into the global ~/.claude/CLAUDE.md — it leaks one project's service
         # status into every other project's context.
         if not is_global:
-            new_content = _patch_docker(new_content)
-            new_content = _patch_systemd(new_content, project_dir)
+            new_content = _patch_docker(new_content, notes)
+            new_content = _patch_systemd(new_content, project_dir, notes)
         if new_content != content:
             claude_md.write_text(new_content)
+        records = [
+            RegenRecord(ArtifactKind.CLAUDE_MD_SECTION, claude_md, status, marker_id, shape,
+                        None if fence_line is None else str(fence_line))
+            for marker_id, status, shape, fence_line in notes
+        ]
         break
+    return records
