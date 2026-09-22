@@ -47,6 +47,7 @@ import argparse
 import json
 import os
 import re
+import subprocess
 import sys
 import tempfile
 from collections import Counter
@@ -82,6 +83,25 @@ PER_WORKER_TASK_FIRST_RE = re.compile(
 CANONICAL_RE = re.compile(
     r"^dev-report-(?P<task_id>\d{8}-\d{6})\.json$"
 )
+
+# Superseded-round shard, discovered under docs/dev/superseded-<task-id>/ for
+# a lane already present in the primary shard set (backlog #99): a QA-FAIL'd
+# round-N attempt archived there before a corrective retry was promoted as
+# that lane's own top-level shard.
+SUPERSEDED_ROUND_RE = re.compile(
+    r"^dev-report-(?P<task_id>\d{8}-\d{6})-(?P<lane>[A-Za-z0-9][A-Za-z0-9.\-]*)-round(?P<round>\d+)\.json$"
+)
+
+# Strips a superseded-round label's "-round<N>" suffix back to its lane's own
+# base label (backlog #99 iteration 1): e.g. "d-round0" -> "d". Used by
+# _merge_owned_edits to recognise that a round shard and its lane's own
+# promoted shard are the SAME lane, for the same-anchor collapse there.
+_ROUND_LABEL_SUFFIX_RE = re.compile(r"-round\d+$")
+
+
+def _base_lane(label: str) -> str:
+    return _ROUND_LABEL_SUFFIX_RE.sub("", label)
+
 
 # NON_WORKER_LABELS — MUST mirror pretool-aggregate-check.py exactly.
 NON_WORKER_LABELS = frozenset({
@@ -573,23 +593,69 @@ def _merge_owned_edits(shards: list[tuple[str, dict]]) -> dict:
     per-file hunk lists in that same order is a documented assumption, not a
     guess. A shard whose owned_edits is not a dict, or a per-file value that
     is not a list, is skipped for that shard/file rather than raising.
+
+    Same-anchor collapse (backlog #99 iteration 1): when
+    _expand_shards_with_superseded_rounds feeds a lane's own superseded
+    round(s) ahead of its promoted shard, the promoted report is free to
+    re-declare a hunk for the SAME `old` anchor a round already declared --
+    e.g. a squashed "final authored text of the region" hunk that already
+    incorporates the round's own edit plus later revisions (observed on the
+    real cycle 20260921-134709's lane a: round0 and promoted both anchor a
+    hunk on the identical `old` text, but promoted's `new` text differs and
+    carries an extra 'note' key). Exact-JSON-value dedup does not recognise
+    these as the same edit, so BOTH would ship, and stage-owned-hunks.py's
+    sequential replay then double-applies the same region -- corrupting the
+    ledger even though a naive anchor search may still "succeed" (a large
+    `new` block can happen to re-embed the anchor text at its own tail).
+    Two hunks sharing an `old` anchor can never BOTH be truthfully replayed,
+    so only one may survive: within a single lane's OWN fold sequence (its
+    round(s), then its own promoted shard -- `_base_lane` strips the
+    "-roundN" suffix _expand_shards_with_superseded_rounds adds, to
+    recognise this), the LATER declaration wins on CONTENT (it is that
+    lane's own final authored state for the region -- verified empirically
+    against the real cycle: taking the promoted shard's hunks alone already
+    byte-replays the live file), while keeping the EARLIER declaration's
+    ledger POSITION so replay order is otherwise unaffected. No information
+    is lost by discarding the earlier declaration here: it remains fully
+    recoverable from its own archived docs/dev/superseded-<task-id>/ report
+    (untouched by this fix); it is excluded only from this replay-facing
+    ledger. The winning hunk's own auxiliary metadata (e.g. 'note') is kept
+    as-is, since the entry is kept wholesale, not merged field-by-field.
+    This collapse is intentionally scoped to a single base lane -- two
+    DIFFERENT lanes sharing an `old` anchor (never observed in practice,
+    and not this ticket's defect) are NOT collapsed, so ordinary cross-lane
+    merges keep their pre-existing exact-JSON-only dedup, unchanged.
     """
     result: dict[str, list] = {}
     seen_json: dict[str, set] = {}
-    for _, data in shards:
+    anchor_index: dict[str, dict[tuple[str, str], int]] = {}
+    for label, data in shards:
         owned = data.get("owned_edits")
         if not isinstance(owned, dict):
             continue
+        base_lane = _base_lane(label)
         for file_path, hunks in owned.items():
             if not isinstance(hunks, list):
                 continue
             bucket = result.setdefault(file_path, [])
             seen = seen_json.setdefault(file_path, set())
+            anchors = anchor_index.setdefault(file_path, {})
             for hunk in hunks:
                 hunk_json = json.dumps(hunk, sort_keys=True)
-                if hunk_json not in seen:
+                if hunk_json in seen:
+                    continue
+                old_text = hunk.get("old") if isinstance(hunk, dict) else None
+                anchor_key = (base_lane, old_text) if isinstance(old_text, str) else None
+                if anchor_key is not None and anchor_key in anchors:
+                    idx = anchors[anchor_key]
+                    seen.discard(json.dumps(bucket[idx], sort_keys=True))
+                    bucket[idx] = hunk
                     seen.add(hunk_json)
-                    bucket.append(hunk)
+                    continue
+                seen.add(hunk_json)
+                bucket.append(hunk)
+                if anchor_key is not None:
+                    anchors[anchor_key] = len(bucket) - 1
     return result
 
 
@@ -612,6 +678,83 @@ def _merge_pre_edit_snapshots(shards: list[tuple[str, dict]]) -> dict:
             if file_path not in result:
                 result[file_path] = snapshot
     return result
+
+
+def _scan_superseded_shards(
+    dev_dir: Path, bare_tid: str, lanes: set[str]
+) -> dict[str, list[tuple[int, Path]]]:
+    """Discover per-lane superseded-round shards for lanes already present in
+    the primary shard set (backlog #99): scans docs/dev/superseded-<task-id>/
+    directories whose own bare timestamp matches bare_tid, for files named
+    dev-report-<bare_tid>-<lane>-round<N>.json, restricted to `lanes`.
+
+    Ordering within a lane is derived strictly from the filename's numeric
+    round suffix -- never mtime or directory-listing order, per
+    commands/dev.md:858's existing "never discovered by mtime" principle. A
+    lane with no superseded rounds on disk is simply absent from the result,
+    leaving the no-retry case untouched.
+    """
+    by_lane: dict[str, list[tuple[int, Path]]] = {}
+    if not dev_dir.is_dir():
+        return by_lane
+    try:
+        top_level = list(dev_dir.iterdir())
+    except OSError:
+        return by_lane
+    for entry in top_level:
+        if not entry.is_dir() or not entry.name.startswith("superseded-"):
+            continue
+        if _bare_task_id(entry.name[len("superseded-"):]) != bare_tid:
+            continue
+        try:
+            children = list(entry.iterdir())
+        except OSError:
+            continue
+        for child in children:
+            if not child.is_file():
+                continue
+            m = SUPERSEDED_ROUND_RE.match(child.name)
+            if not m or m.group("task_id") != bare_tid:
+                continue
+            lane = m.group("lane")
+            if lane not in lanes:
+                continue
+            by_lane.setdefault(lane, []).append((int(m.group("round")), child))
+    for entries in by_lane.values():
+        entries.sort(key=lambda t: t[0])
+    return by_lane
+
+
+def _expand_shards_with_superseded_rounds(
+    shards: list[tuple[str, dict]], dev_dir: Path, bare_tid: str
+) -> list[tuple[str, dict]]:
+    """Fold each lane's superseded-round reports ahead of its own promoted
+    shard, for owned_edits/pre_edit_snapshots merge input ONLY (backlog #99).
+
+    A retried lane's promoted report may record only a delta on top of its
+    superseded round(s) rather than full re-attribution; without this, the
+    round(s)' owned_edits/pre_edit_snapshots entries would be invisible to
+    _merge_owned_edits/_merge_pre_edit_snapshots. Callers must use the
+    returned list ONLY for that merge -- every OTHER field
+    (tasks_completed/files_modified/etc.) keeps using the original `shards`
+    unchanged. `shards`' own alphabetical-by-lane order (from _scan_shards)
+    is preserved; only each lane's own superseded rounds are inserted
+    immediately before that lane's entry, in ascending round order. When no
+    lane in `shards` has any superseded round on disk (the ordinary
+    no-retry case), this returns `shards` itself, unmodified.
+    """
+    lanes = {label for label, _ in shards}
+    superseded = _scan_superseded_shards(dev_dir, bare_tid, lanes)
+    if not superseded:
+        return shards
+    expanded: list[tuple[str, dict]] = []
+    for label, data in shards:
+        for round_num, round_path in superseded.get(label, []):
+            round_data = _load_shard(round_path)
+            if round_data is not None:
+                expanded.append((f"{label}-round{round_num}", round_data))
+        expanded.append((label, data))
+    return expanded
 
 
 def _canonical_projection(document: dict, deviation=None) -> dict:
@@ -757,6 +900,22 @@ def _build_aggregate(
     if needs_review_labels and not has_deviation:
         dev_block["status_rationale"] = _synthesize_status_rationale(shards, needs_review_labels)
 
+    # backlog #99: fold each lane's superseded-round reports (a QA-FAIL'd
+    # attempt archived under docs/dev/superseded-<task-id>/) ahead of that
+    # lane's own promoted contribution, for owned_edits/pre_edit_snapshots
+    # ONLY -- every other field above still unions the original `shards`.
+    # _resolve_project_root()'s __file__ fallback is unavailable when this
+    # module is exec()'d into a bare namespace without CLAUDE_PROJECT_DIR set
+    # (e.g. tests/test_ac_deviation_record_chain.py's minimal loader) -- fall
+    # back to `shards` unchanged rather than crash a caller that never asked
+    # for superseded-round discovery in the first place.
+    try:
+        owned_edit_shards = _expand_shards_with_superseded_rounds(
+            shards, _resolve_dev_dir(_resolve_project_root()), _bare_task_id(task_id)
+        )
+    except NameError:
+        owned_edit_shards = shards
+
     aggregate = {
         "request_id": task_id,
         "task_id": task_id,
@@ -768,8 +927,8 @@ def _build_aggregate(
         "dev": dev_block,
         "blocking_issues": _union_list(shards, ["blocking_issues"]),
         "recommendations": _union_list(shards, ["recommendations"]),
-        "owned_edits": _merge_owned_edits(shards),
-        "pre_edit_snapshots": _merge_pre_edit_snapshots(shards),
+        "owned_edits": _merge_owned_edits(owned_edit_shards),
+        "pre_edit_snapshots": _merge_pre_edit_snapshots(owned_edit_shards),
     }
     if deviation is not None:
         aggregate.update(deviation.merge(shards))
@@ -1050,6 +1209,140 @@ def _write_blocked_aggregate(
     return 1
 
 
+_BLOB_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
+
+
+def _git(project_root: Path, args: list[str]) -> tuple[int, bytes, bytes]:
+    """Run a read-only git command scoped to project_root; return (rc, stdout,
+    stderr). Used only by the backlog #99 criterion-C completeness check
+    (ls-files/cat-file/show only -- never mutates the index or worktree)."""
+    proc = subprocess.run(
+        ["git", "-C", str(project_root)] + args,
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+    )
+    return proc.returncode, proc.stdout, proc.stderr
+
+
+def _resolve_baseline_snapshot(
+    project_root: Path, baseline_head_sha: str, rel: str, declared_value
+) -> tuple[bytes | None, str]:
+    """Resolve the TRUE pre-cycle snapshot bytes of rel for the criterion-C
+    completeness check ONLY -- never mutates the aggregate's own
+    pre_edit_snapshots field, which _merge_pre_edit_snapshots computes
+    unchanged (backlog #99 Edge Case 2: the first-shard-wins declared value
+    can silently be wrong when the alphabetically-first lane is not the
+    chronologically-first editor).
+
+    Resolution order (AC-7): (1) `git show <baseline_head_sha>:rel` when rel
+    is tracked at that commit, independent of any shard's own declaration;
+    (2) `git cat-file blob <declared_value>` when declared_value is a
+    resolvable 40-hex object (a git-blob-SHA-form declaration); (3)
+    declared_value treated as literal pre-edit bytes (a literal-text-form
+    declaration).
+    """
+    if baseline_head_sha:
+        rc, _, _ = _git(project_root, ["cat-file", "-e", f"{baseline_head_sha}:{rel}"])
+        if rc == 0:
+            rc2, blob, _ = _git(project_root, ["show", f"{baseline_head_sha}:{rel}"])
+            if rc2 == 0:
+                return blob, "baseline_head_sha"
+    if isinstance(declared_value, str) and _BLOB_SHA_RE.match(declared_value):
+        rc, _, _ = _git(project_root, ["cat-file", "-e", declared_value])
+        if rc == 0:
+            rc2, blob, _ = _git(project_root, ["cat-file", "blob", declared_value])
+            if rc2 == 0:
+                return blob, "declared_blob_sha"
+    if isinstance(declared_value, str):
+        return declared_value.encode("utf-8"), "literal_text"
+    return None, "no resolvable pre-edit snapshot declared for this file"
+
+
+def _completeness_check_file(
+    project_root: Path, baseline_head_sha: str, rel: str, hunks, declared_snapshot
+) -> tuple[bool, str]:
+    """Backlog #99 criterion C for one file: reuse scripts/stage-owned-hunks.py's
+    OWN --ledger --snapshot --dry-run replay-and-compare logic (never
+    reimplemented here) to verify the merged owned_edits union actually
+    covers the live file's bytes. Returns (ok, diagnostic); diagnostic is
+    empty when ok."""
+    snapshot_bytes, source = _resolve_baseline_snapshot(
+        project_root, baseline_head_sha, rel, declared_snapshot
+    )
+    if snapshot_bytes is None:
+        return False, f"{rel}: {source}"
+    if not isinstance(hunks, list) or not hunks:
+        return False, f"{rel}: owned_edits ledger is empty/invalid for completeness check"
+    stage_script = Path(__file__).resolve().with_name("stage-owned-hunks.py")
+    with tempfile.TemporaryDirectory() as td:
+        ledger_path = os.path.join(td, "ledger.json")
+        snapshot_path = os.path.join(td, "snapshot")
+        with open(ledger_path, "w", encoding="utf-8") as fh:
+            json.dump(hunks, fh)
+        with open(snapshot_path, "wb") as fh:
+            fh.write(snapshot_bytes)
+        proc = subprocess.run(
+            [sys.executable, str(stage_script),
+             "--git-root", str(project_root), "--file", rel,
+             "--ledger", ledger_path, "--snapshot", snapshot_path, "--dry-run"],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        )
+    if proc.returncode == 0:
+        return True, ""
+    return False, "%s: stage-owned-hunks.py --dry-run exit %d: %s" % (
+        rel, proc.returncode, proc.stderr.decode("utf-8", "replace").strip()
+    )
+
+
+def _tracked_at_baseline(project_root: Path, baseline_head_sha: str, rel: str) -> bool:
+    """Whether rel existed in the git tree AT baseline_head_sha (backlog #99
+    iteration 1, AC-6 fix). A file untracked AT CYCLE TIME but since
+    committed by an unrelated/intervening commit (e.g. this same task-id's
+    own earlier partial /commit of another lane) must stay skipped -- the
+    live index/HEAD is not this check's reference point, baseline_head_sha
+    is. When baseline_head_sha itself is empty (never true for a shard that
+    passed _validate_shards, but _write_blocked_aggregate's own
+    reconciliation-failure path can leave it '' on the aggregate), falls
+    back to the current index so a missing baseline never makes this check
+    MORE permissive than before this fix.
+    """
+    if not baseline_head_sha:
+        rc, _, _ = _git(project_root, ["ls-files", "--error-unmatch", "--", rel])
+        return rc == 0
+    rc, _, _ = _git(project_root, ["cat-file", "-e", f"{baseline_head_sha}:{rel}"])
+    return rc == 0
+
+
+def _apply_completeness_check(aggregate: dict, project_root: Path) -> list[str]:
+    """Backlog #99 criterion C, applied to every file in the final merged
+    owned_edits. Files untracked AT baseline_head_sha are SKIPPED (AC-6):
+    they are brand-new, whole-file-owned files, not hunk-stageable, and
+    stage-owned-hunks.py's own new-file gate would EXCLUDE them for an
+    unrelated reason. Scoped to baseline_head_sha (backlog #99 iteration
+    1), NOT the live index/HEAD: a file legitimately untracked at cycle
+    time that has since been committed by an unrelated/intervening commit
+    must stay skipped, since the live index would otherwise wrongly
+    re-include it and route its legitimate whole-file-creation hunk into
+    this tracked-file replay check. Returns a list of diagnostic strings;
+    empty means the union is complete for every file tracked at baseline
+    that was checked."""
+    owned = aggregate.get("owned_edits")
+    if not isinstance(owned, dict) or not owned:
+        return []
+    snapshots = aggregate.get("pre_edit_snapshots")
+    snapshots = snapshots if isinstance(snapshots, dict) else {}
+    baseline_head_sha = aggregate.get("baseline_head_sha") or ""
+    diagnostics: list[str] = []
+    for rel in sorted(owned):
+        if not _tracked_at_baseline(project_root, baseline_head_sha, rel):
+            continue  # untracked at baseline / new-at-cycle-time -- AC-6, skip
+        ok, diagnostic = _completeness_check_file(
+            project_root, baseline_head_sha, rel, owned[rel], snapshots.get(rel)
+        )
+        if not ok:
+            diagnostics.append(diagnostic)
+    return diagnostics
+
+
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
@@ -1267,6 +1560,23 @@ def main(argv: list[str] | None = None) -> int:
             )
             return 1
         expected = _build_aggregate(loaded, task_id, deviation=deviation)
+        completeness_gaps = (
+            [] if args.dry_run else _apply_completeness_check(expected, project_root)
+        )
+        if completeness_gaps:
+            expected["blocking_issues"] = (
+                list(expected.get("blocking_issues") or []) + completeness_gaps
+            )
+            try:
+                _atomic_write_json(canonical_path, expected)
+            except OSError as exc:
+                _emit_error(f"Cannot write canonical aggregate at {canonical_path}: {exc}")
+                return 1
+            _emit_error(
+                "Completeness check failed (backlog #99 criterion C):\n  "
+                + "\n  ".join(completeness_gaps)
+            )
+            return 1
         if _canonical_projection(existing, deviation) != _canonical_projection(
             expected, deviation
         ):
@@ -1311,6 +1621,21 @@ def main(argv: list[str] | None = None) -> int:
 
     # Build and write canonical aggregate.
     aggregate = _build_aggregate(loaded, task_id, deviation=deviation)
+    completeness_gaps = _apply_completeness_check(aggregate, project_root)
+    if completeness_gaps:
+        aggregate["blocking_issues"] = (
+            list(aggregate.get("blocking_issues") or []) + completeness_gaps
+        )
+        try:
+            _atomic_write_json(canonical_path, aggregate)
+        except OSError as exc:
+            _emit_error(f"Cannot write canonical aggregate to {canonical_path}: {exc}")
+            return 1
+        _emit_error(
+            "Completeness check failed (backlog #99 criterion C):\n  "
+            + "\n  ".join(completeness_gaps)
+        )
+        return 1
     try:
         _atomic_write_json(canonical_path, aggregate)
     except OSError as exc:
