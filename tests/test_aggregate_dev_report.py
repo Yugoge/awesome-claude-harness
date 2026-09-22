@@ -238,6 +238,170 @@ class TestPrefixedTaskIdNaming:
 
 
 # ---------------------------------------------------------------------------
+# backlog #102 / #110: role-first branch must apply the same
+# NON_WORKER_LABELS / NON_WORKER_LABEL_RE filter its prefixed-worker and
+# task-first siblings already apply, so a misnamed report file (ghost shard)
+# using role-first naming is never registered as a real worker shard.
+# ---------------------------------------------------------------------------
+
+class TestRoleFirstLabelFilterParity:
+    """Unit-level parity: role-first must reject exactly what its siblings
+    reject, and must not over-reject legitimate role/lane labels."""
+
+    def test_role_first_iter_label_excluded_like_siblings(self):
+        # Live-incident shape: dev-report-iter1-<task-id>.json
+        assert _is_worker_for_task(
+            f"dev-report-iter1-{BARE_TID}.json", BARE_TID, BARE_TID
+        ) == (False, None)
+        # Sibling branches already reject the identical label — unchanged.
+        assert _is_worker_for_task(
+            f"dev-report-{BARE_TID}-iter1.json", BARE_TID, BARE_TID
+        ) == (False, None)
+        assert _is_worker_for_task(
+            f"dev-report-{PREFIXED_TID}-iter1.json", PREFIXED_TID, PREFIXED_TID
+        ) == (False, None)
+
+    def test_role_first_retry_and_attempt_labels_excluded(self):
+        for label in ("iter", "iter2", "retry", "retry3", "attempt", "attempt2", "ITER1", "Retry"):
+            assert _is_worker_for_task(
+                f"dev-report-{label}-{BARE_TID}.json", BARE_TID, BARE_TID
+            ) == (False, None), f"label={label!r} leaked through role-first"
+
+    def test_role_first_bare_non_worker_labels_excluded(self):
+        for label in ("draft", "final", "fix", "continuation", "wip"):
+            assert _is_worker_for_task(
+                f"dev-report-{label}-{BARE_TID}.json", BARE_TID, BARE_TID
+            ) == (False, None), f"label={label!r} leaked through role-first"
+
+    def test_role_first_legitimate_labels_unaffected(self):
+        for label in ("a", "b", "ba", "lane1", "worker1"):
+            assert _is_worker_for_task(
+                f"dev-report-{label}-{BARE_TID}.json", BARE_TID, BARE_TID
+            ) == (True, label), f"legitimate label={label!r} was over-rejected"
+
+
+class TestRoleFirstGhostShardRegression:
+    """End-to-end (main()) pin for the exact live-incident shape, covering
+    both a singular (non-lane) cycle and a fan-out cycle alongside the same
+    ghost file."""
+
+    def test_ghost_iter1_shard_in_singular_cycle_is_skipped(
+        self, project_dir: Path, capsys: pytest.CaptureFixture
+    ):
+        dev_dir = project_dir / "docs" / "dev"
+        _write(dev_dir, f"dev-report-iter1-{BARE_TID}.json", _good_shard())
+
+        rc = main(["--task-id", BARE_TID])
+        assert rc == 0
+        out = json.loads(capsys.readouterr().out)
+        assert out["action"] == "skipped"
+        assert not (dev_dir / f"dev-report-{BARE_TID}.json").exists()
+
+    def test_ghost_iter1_shard_excluded_alongside_real_fanout_lanes(
+        self, project_dir: Path, capsys: pytest.CaptureFixture
+    ):
+        dev_dir = project_dir / "docs" / "dev"
+        _write(dev_dir, f"dev-report-a-{BARE_TID}.json", _good_shard())
+        _write(dev_dir, f"dev-report-b-{BARE_TID}.json", _good_shard())
+        _write(dev_dir, f"dev-report-iter1-{BARE_TID}.json", _good_shard())
+
+        rc = main(["--task-id", BARE_TID])
+        assert rc == 0
+        out = json.loads(capsys.readouterr().out)
+        assert out["action"] == "aggregated"
+
+        canonical = dev_dir / f"dev-report-{BARE_TID}.json"
+        data = json.loads(canonical.read_text())
+        assert sorted(data["parallel_workers"]) == ["a", "b"]
+        assert "iter1" not in data["parallel_workers"]
+
+
+# ---------------------------------------------------------------------------
+# backlog #102 / #110, scope-amendment revision 3: the identical role-first
+# filter gap also exists in hooks/pretool-aggregate-check.py::_classify_filename
+# (both files' docstrings declare a mirror invariant with each other). AC-04
+# pins hook-side filter parity, AC-05 pins the hook-side ghost-shard shape
+# plus resolution of the hook-block/aggregator-skip deadlock a partial
+# single-file fix would otherwise introduce, and AC-06 machine-verifies the
+# two classifiers agree across a shared label corpus.
+# ---------------------------------------------------------------------------
+
+class TestHookRoleFirstLabelFilterParity:
+    """Unit-level parity (hook side): hooks/pretool-aggregate-check.py's
+    role-first branch must reject exactly what its own siblings reject,
+    mirroring the fix already landed in scripts/aggregate-dev-report.py."""
+
+    def test_hook_role_first_iter_label_excluded_like_siblings(self):
+        # Live-incident shape: dev-report-iter1-<task-id>.json
+        assert _hook_mod._classify_filename(
+            f"dev-report-iter1-{BARE_TID}.json"
+        ) is None
+
+    def test_hook_role_first_retry_and_attempt_labels_excluded(self):
+        for label in ("iter", "iter2", "retry", "retry3", "attempt", "attempt2", "ITER1", "Retry"):
+            assert _hook_mod._classify_filename(
+                f"dev-report-{label}-{BARE_TID}.json"
+            ) is None, f"label={label!r} leaked through hook role-first"
+
+    def test_hook_role_first_bare_non_worker_labels_excluded(self):
+        for label in ("draft", "final", "fix", "continuation", "wip"):
+            assert _hook_mod._classify_filename(
+                f"dev-report-{label}-{BARE_TID}.json"
+            ) is None, f"label={label!r} leaked through hook role-first"
+
+    def test_hook_role_first_legitimate_labels_unaffected(self):
+        for label in ("a", "b", "ba", "lane1", "worker1"):
+            assert _hook_mod._classify_filename(
+                f"dev-report-{label}-{BARE_TID}.json"
+            ) == ("worker", BARE_TID, label), f"legitimate label={label!r} was over-rejected"
+
+
+class TestHookRoleFirstGhostShardRegression:
+    """Hook-side pin for the live-incident ghost shape, plus resolution of
+    the hook-block/aggregator-skip deadlock the controller identified when
+    only the script side had the filter (revision 3 scope amendment)."""
+
+    def test_hook_classify_filename_rejects_ghost_iter1_shard(self):
+        assert _hook_mod._classify_filename(
+            f"dev-report-iter1-{BARE_TID}.json"
+        ) is None
+
+    def test_hook_no_longer_deadlocks_with_one_real_shard_plus_ghost(
+        self, project_dir: Path
+    ):
+        dev_dir = project_dir / "docs" / "dev"
+        _write(dev_dir, f"dev-report-a-{BARE_TID}.json", _good_shard())
+        _write(dev_dir, f"dev-report-iter1-{BARE_TID}.json", _good_shard())
+
+        workers, canonical = _hook_mod._scan_dev_dir(dev_dir)
+        assert workers[BARE_TID] == ["a"]
+        assert _hook_mod._collect_violations(workers, canonical, [BARE_TID]) == []
+
+
+class TestRoleFirstMirrorInvariant:
+    """Cross-module mirror-invariant test (AC-06): both classifiers must
+    agree on worker-vs-not-worker for every label in the shared corpus via
+    role-first naming, restoring the mirror invariant both files' own
+    docstrings declare."""
+
+    def test_role_first_classifiers_agree_across_shared_label_corpus(self):
+        corpus = (
+            "draft", "final", "fix", "continuation", "wip",
+            "iter", "iter1", "iter2", "retry", "retry3", "attempt", "attempt2",
+            "ITER1", "Retry",
+            "a", "b", "ba", "lane1", "worker1",
+        )
+        for label in corpus:
+            filename = f"dev-report-{label}-{BARE_TID}.json"
+            script_is_worker = bool(_is_worker_for_task(filename, BARE_TID, BARE_TID)[0])
+            hook_result = _hook_mod._classify_filename(filename)
+            hook_is_worker = hook_result is not None and hook_result[0] == "worker"
+            assert script_is_worker == hook_is_worker, (
+                f"label={label!r} disagreement: script={script_is_worker} hook={hook_is_worker}"
+            )
+
+
+# ---------------------------------------------------------------------------
 # AC4: canonical present + 2 matching shards → action=validated
 # ---------------------------------------------------------------------------
 

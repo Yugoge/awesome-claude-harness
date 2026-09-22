@@ -189,9 +189,13 @@ def _is_worker_for_task(filename: str, target_bare_tid: str, original_task_id: s
     # Role-first: dev-report-<role>-<task-id>.json
     m_role = PER_WORKER_ROLE_FIRST_RE.match(filename)
     if m_role is not None:
-        if m_role.group("task_id") == target_bare_tid:
-            return True, m_role.group("role")
-        return False, None
+        if m_role.group("task_id") != target_bare_tid:
+            return False, None
+        role = m_role.group("role")
+        role_lc = role.lower()
+        if role_lc in NON_WORKER_LABELS or NON_WORKER_LABEL_RE.match(role_lc):
+            return False, None
+        return True, role
 
     # Task-first: dev-report-<task-id>-<worker>.json
     m_task = PER_WORKER_TASK_FIRST_RE.match(filename)

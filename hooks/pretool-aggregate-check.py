@@ -207,7 +207,11 @@ def _classify_filename(name):
         return ("canonical", m_can.group("task_id"))
     m_role = PER_WORKER_ROLE_FIRST_RE.match(name)
     if m_role is not None:
-        return ("worker", m_role.group("task_id"), m_role.group("role"))
+        role = m_role.group("role")
+        role_lc = role.lower()
+        if role_lc in NON_WORKER_LABELS or NON_WORKER_LABEL_RE.match(role_lc):
+            return None
+        return ("worker", m_role.group("task_id"), role)
     m_task = PER_WORKER_TASK_FIRST_RE.match(name)
     if m_task is None:
         return None
