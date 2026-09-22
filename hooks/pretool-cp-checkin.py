@@ -28,6 +28,8 @@ import fcntl
 import json
 import os
 import re
+import secrets
+import stat
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -266,11 +268,49 @@ def _release_dir_lock(lh):
         pass
 
 
+def _atomic_write_text(path, text):
+    """Replace `path` atomically (temp file in the same directory, flush, fsync,
+    os.replace) so lock-free readers never see a partial slot file. Same helper as
+    scripts/spec-check.py; the previous file is untouched when anything fails and the
+    error propagates (this hook is fail-open: main() turns it into exit 0)."""
+    tmp = None
+    try:
+        try:
+            mode = stat.S_IMODE(path.stat().st_mode)
+        except FileNotFoundError:
+            mode = None
+        fd = None
+        for _attempt in range(8):
+            candidate = path.parent / f".{path.name}.{os.getpid()}.{secrets.token_hex(4)}.tmp"
+            try:
+                fd = os.open(candidate, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC, 0o666)
+            except FileExistsError:
+                continue
+            tmp = candidate
+            break
+        if fd is None:
+            raise FileExistsError(f"no free temporary name beside {path.name}")
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            if mode is not None:
+                os.fchmod(fh.fileno(), mode)
+            fh.write(text)
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp, path)
+    except BaseException:
+        if tmp is not None:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+        raise
+
+
 def _write_payload(path, payload):
     lock_path = path.with_suffix(path.suffix + ".lock")
     with open(lock_path, "w") as lh:
         fcntl.flock(lh.fileno(), fcntl.LOCK_EX)
-        path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
+        _atomic_write_text(path, json.dumps(payload, indent=2, ensure_ascii=False))
         fcntl.flock(lh.fileno(), fcntl.LOCK_UN)
 
 

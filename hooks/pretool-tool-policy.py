@@ -265,6 +265,48 @@ def _emit_block(role: str, tool: str, target, reason: str) -> None:
     )
 
 
+def _note_bash_write_target(data: dict, target) -> None:
+    """Explain an INFERRED Bash write-target refusal (lane e, self-explaining
+    denial for the known false-positive class): state the target is inferred
+    from static shell-text scanning, not an observed write, name the target
+    and the shell segment it came from, and give the actionable rewording.
+
+    Entirely swallowed on any failure: an exception here must never turn a
+    DENY into an ALLOW via the __main__ blanket `except Exception: sys.exit(0)`
+    fail-open catch (D4 safety contract) -- this body never raises outward.
+    """
+    try:
+        import re
+
+        command = (data.get("tool_input") or {}).get("command") or ""
+        word = str(target)
+        pieces = re.split(r"&&|\|\||;|\||\n", command)
+        pattern = re.compile(r"(?<![\w./~$-])" + re.escape(word) + r"(?![\w./-])")
+        segment = command
+        for piece in pieces:
+            if pattern.search(piece):
+                segment = piece
+                break
+        segment = segment.strip()
+        if len(segment) > 200:
+            segment = segment[:200] + "..."
+        note = (
+            'tool-policy.v1 note: the target above is INFERRED from the Bash '
+            'command text by a static scan (Bash write targets are checked as '
+            'Write requests, hence "tool":"Write"); it is not an observed file '
+            'write. Inferred target: ' + json.dumps(target) + '; read from the '
+            'command segment: ' + json.dumps(segment) + '. If the command does '
+            'not really write that path, reword it: keep the checkpoint id as '
+            'the LAST argument of the marking command, quote it '
+            '(--cp-id "cp-01"), or drop the trailing redirect (such as 2>&1) '
+            'and any pipe after it. To really write a file, use an absolute '
+            'allowed scratch path.\n'
+        )
+        sys.stderr.write(note)
+    except Exception:
+        pass
+
+
 def _check_targets(role: str, tool_name: str, targets: list, data: dict) -> None:
     """Iterate targets, exit 2 on first deny. For Bash, treat each
     extracted write target (idx > 0) as a Write authorization request.
@@ -281,11 +323,15 @@ def _check_targets(role: str, tool_name: str, targets: list, data: dict) -> None
         allowed, reason = is_allowed(role, check_tool, target)
         if not allowed:
             _emit_block(role, check_tool, target, reason)
+            if tool_name == "Bash" and idx > 0:
+                _note_bash_write_target(data, target)
             sys.exit(2)
         if check_tool in WRITE_TOOLS:
             allowed, reason = _check_scratch_actor_exactness(role, target, data)
             if not allowed:
                 _emit_block(role, check_tool, target, reason)
+                if tool_name == "Bash" and idx > 0:
+                    _note_bash_write_target(data, target)
                 sys.exit(2)
 
 

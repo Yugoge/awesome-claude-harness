@@ -91,6 +91,7 @@ a subshell no longer reports a write target that was never named:
 
 from __future__ import annotations
 
+import bisect
 import os
 import re
 from typing import List, NamedTuple, Tuple
@@ -475,10 +476,107 @@ def _neutralize_command_word_prefixes(s: str) -> str:
     return "".join(out)
 
 
+#: `for cp in ...` / `select mv in ...` declare a loop VARIABLE: at a COMMAND position (start of the
+#: text, after `;` `&` `|` `(` `{ ` or a newline, behind reserved words) the word after `for` or
+#: `select` is a NAME, never a command. Narrow on purpose: `for` as an ordinary word (`sudo -u for cp
+#: a b`, `> for cp a b`) is not a header, so a real copy behind a prefix stays reported.
+_LOOP_HEADER_TAIL_RE = re.compile(
+    r"(?:\A|(?<![\\<>])[;&|]|(?<!\\)[(\n]|(?<!\\)\{(?=[ \t]))[ \t]*"
+    r"(?:(?:!|do|then|else|elif|if|while|until|time)[ \t]+)*"
+    r"(?:for|select)[ \t]+\Z"
+)
+_LOOP_HEADER_LOOKBACK = 256
+
+#: A word that MAY be the copy/move verb ("does this segment hold a copy or move at all?"): (1) bare
+#: `cp`/`mv` as the verb patterns read it (`cp.txt` counts, `cp-01` does not); (2) a word that
+#: unquotes to `cp`/`mv` behind an optional directory (`/bin/cp`, `"cp"`, `c\p`); (3) a word that
+#: starts with an expansion (`$CP`, `$(...)`, a backtick) or holds one behind an optional directory
+#: and one letter c/m (`c$X`, `/usr/bin/$CMD`); (4) `_quoted_expansion_verb`.
+_VERB_SHAPED_RE = re.compile(
+    r"(?<![^\s;|&(){}!`])(?:(?:cp|mv)\b(?!-)"
+    r"|(?!-)(?![A-Za-z_][A-Za-z0-9_]*=)(?:[^\s;|&<>(){}`$]*/)?[cm]?[$`])"
+)
+_UNQUOTED_VERB_RE = re.compile(
+    r"(?<![^\s;|&(){}!`])(?:[^\s;|&<>(){}`]*/)?[\\\"']*(?:c[\\\"']*p|m[\\\"']*v)[\\\"']*"
+    r"(?=[\s;|&<>)}]|\Z)"
+)
+_QUOTED_SPAN_RE = re.compile(r"\"[^\"]*\"|'[^']*'")
+#: `>&` `<&` `>|` `&>` and an escaped `\;` or newline join words to the command before them.
+_COMMAND_SEPARATOR_RE = re.compile(r"(?<![\\<>])[;|&](?!>)|(?<!\\)\n")
+#: Words that leave the command position to the next word (`sudo -u X "$CP" a b`), with the letters of
+#: their short options that take a value: wrapper commands and reserved words.
+_COMMAND_PREFIXES = dict.fromkeys("command builtin nohup setsid do then else elif if while until".split(), "") | {
+    "sudo": "ughpCDRrtTU", "doas": "uC", "env": "uCS", "nice": "n", "ionice": "cnp", "timeout": "ks",
+    "stdbuf": "ioe", "xargs": "IniPLsdEa", "time": "fo", "exec": "a",
+}
+
+
+def _quoted_expansion_verb(glued: str, lo: int, hi: int) -> bool:
+    """Is the command word of the segment `glued[lo:hi]` (the first word left after assignments,
+    redirections, prefix words, `case X in` and arm patterns) a double-quoted expansion, `"$CP"` or `c"$X"`?
+    The same shape further right is an argument: `python3 "$SC" --agent-id "$ID"`."""
+    letters, skip = None, re.search(r"(?<!\\);[;&]\Z", glued[max(0, lo - 3):lo]) is not None
+    for m in re.finditer(r"\S+", glued[lo:hi]):
+        word = re.sub(r"(?:[A-Za-z_]\w*\+?=(?=\$\(|`))?(?:[({!`]|\$\()*", "", m.group(), count=1)
+        if skip or not word:
+            skip = False
+        elif word[0] == "-":
+            skip = letters is not None and re.fullmatch(r"-[A-Za-z]+", word) and word[-1] in letters
+        elif re.match(r"[A-Za-z_][A-Za-z0-9_]*\+?=|[0-9]*[<>]", word):
+            skip = re.fullmatch(r"[0-9]*[<>]+&?", word) is not None
+        elif re.search(r"\"[^\"]*[$`][^\"]*\"", word):
+            return True
+        elif word in ("case", "in"):
+            skip = True
+        elif word.rsplit("/", 1)[-1] in _COMMAND_PREFIXES:
+            letters = _COMMAND_PREFIXES[word.rsplit("/", 1)[-1]]
+        elif not (word.endswith(")") or (letters is not None and re.fullmatch(r"\d+(\.\d+)?[smhd]?", word))):
+            return False
+    return False
+
+
+def _is_loop_header_name(original: str, head: int) -> bool:
+    lo = max(0, head - _LOOP_HEADER_LOOKBACK)
+    return original[lo:head].rstrip(" \t").endswith(("for", "select")) and (
+        _LOOP_HEADER_TAIL_RE.search(original, lo, head) is not None
+    )
+
+
+def _verb_matches(pattern, original: str, masked: str):
+    """Yield the matches of `pattern` over `masked` except (1) the NAME of a `for`/`select` loop
+    header and (2) a `cp-`/`mv-` word (a checkpoint id, a tool name) in a command segment with no
+    word that may be the verb. A skipped match is just not yielded: nothing is ever added."""
+    verbs = cuts = glued = None
+    quoted = {}
+    for m in pattern.finditer(masked):
+        head = m.start(1)
+        if _is_loop_header_name(original, head):
+            continue
+        if masked.startswith("-", m.end(1)):
+            if cuts is None:
+                glued = _QUOTED_SPAN_RE.sub(lambda q: re.sub(r"[\s;|&<>(){}]", "_", q.group()), original)
+                verbs = sorted(
+                    {x.start() for x in _VERB_SHAPED_RE.finditer(masked)}
+                    | {x.start() for x in _UNQUOTED_VERB_RE.finditer(glued)}
+                )
+                verbs = [p for p in verbs if not _is_loop_header_name(original, p)]
+                cuts = [x.end() for x in _COMMAND_SEPARATOR_RE.finditer(masked)]
+            i = bisect.bisect_right(cuts, head)
+            lo = cuts[i - 1] if i else 0
+            hi = cuts[i] - 1 if i < len(cuts) else len(masked)
+            j = bisect.bisect_left(verbs, lo)
+            if not (j < len(verbs) and verbs[j] < hi):
+                if i not in quoted:
+                    quoted[i] = _quoted_expansion_verb(glued, lo, hi)
+                if not quoted[i]:
+                    continue
+        yield m
+
+
 def _extract_cp_mv_targets(command: str) -> List[str]:
     targets: List[str] = []
     scan = _strip_quoted_regions(command)
-    for m in _CP_MV_RE.finditer(scan):
+    for m in _verb_matches(_CP_MV_RE, command, scan):
         rest = _split_at_redirect(m.group(2).strip())
         dest = _last_non_flag_token(rest.split())
         if dest:
@@ -570,6 +668,7 @@ def extract_bash_write_paths(command: str) -> List[str]:
 # "which paths does this command write?" but "in what MODE does it write them?"
 # — because replacing an existing file and appending to one are the same path
 # and opposite acts.
+# 20260921 (lane a of dev-20260921-134709): `_verb_matches` narrows the two cp/mv verb readings.
 # ---------------------------------------------------------------------------
 
 MODE_TRUNCATING = "truncating"
@@ -703,7 +802,7 @@ def _extract_tee_mode_targets(command: str) -> List[WriteTarget]:
 def _extract_cp_mv_mode_targets(command: str) -> List[WriteTarget]:
     masked = _strip_quoted_regions(command)
     out: List[WriteTarget] = []
-    for m in _CP_MV_WORD_RE.finditer(masked):
+    for m in _verb_matches(_CP_MV_WORD_RE, command, masked):
         verb = m.group(1)
         tokens = _segment_tokens(command, masked, m.end())
         undecidable = _CP_UNDECIDABLE if verb == "cp" else _MV_UNDECIDABLE
