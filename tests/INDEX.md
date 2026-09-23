@@ -1,8 +1,8 @@
 # tests
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-09-21T02:24:29Z*
-**Total entries**: 127
+*Last updated: 2026-09-23T19:05:56Z*
+**Total entries**: 133
 **Convention**: kebab
 
 ## Tree
@@ -102,6 +102,8 @@ tests/
 ├── `test_ac_deviation_fanout_consumer.py` - records and the lifecycle presentation of ``pass_with_exceptions``
 ├── `test_ac_deviation_record_chain.py` - A dev report that legitimately records an acceptance-criteria deviation is
 ├── `test_aggregate_dev_report.py` - Unit tests for scripts/aggregate-dev-report.py
+├── `test_aggregate_dev_report_superseded_rounds.py` - aggregate dev-report silently dropped a retried lane's superseded round(s)'
+├── `test_bash_write_targets_verb_narrowing.py` - The library used to read a word that merely begins `cp-`/`mv-` (a checkpoint id such as `cp-01`, a
 ├── `test_candidate_tree.py` - Every test builds its own throwaway git repository. None of them reads this
 ├── `test_changelog_analyst_declaration_categories.py` - `agents/changelog-analyst.md` decides what a cycle commits by reading declaration
 ├── `test_changelog_analyst_required_to_ship_sourcing.py` - unobtainable declaration must not be silently read as an empty one
@@ -129,9 +131,13 @@ tests/
 ├── `test_resolve_dev_artifact_chain.py` - Focused tests for the read-only /dev artifact-chain resolver.
 ├── `test_resolve_spec_artifacts.py` - resolver) + the static centralization lint (AC-B4 cases 1-12, task 20260530-092123)
 ├── `test_restart_command.py` - End-to-end unit coverage for the human-only /restart recovery protocol.
+├── `test_spec_check_agent_id_guard.py` - Lane b of task 20260921-134709. Self-contained and subprocess based: one scratch
+├── `test_spec_check_closed_slot.py` - task 20260921-134709)
+├── `test_spec_check_concurrent_marking.py` - hooks/pretool-cp-checkin.py (harness backlog #97)
 ├── `test_specialist_yield.py` - Tests use a tmp dir for the yield log and the bundled production policy file
 ├── `test_stage_owned_hunks_boundary.py` - content-anchor-retry boundary/coordinate-space defect (task 20260912-015952)
 ├── `test_todo_md_sync.py` - Regression tests for the session-start todo/Markdown drift detector.
+├── `test_tool_policy_inference_note.py` - inference note appended by hooks/pretool-tool-policy.py to a Bash write-target
 ├── `TESTING.md` - Test Topology & Runner Map (authoritative)
 ├── `verify-stop-spec-session-isolation.sh` - QA verification harness for stop-spec-coverage-enforce.py session isolation fix.
 └── `ws2_zero_literal_gate.py` - Scans the EXPLICITLY-defined load-bearing surfaces of a rendered fresh clone with

@@ -9,6 +9,7 @@ from .regen_index import regen_index
 from .regen_readme import regen_readme
 from .patch import patch_claude_md
 from .notice import emit_post_tool_notice
+from .hook_ledger import record_landed_files
 from .regions import (
     INDEX_MARKER_ID, README_MARKER_ID, ArtifactKind, RegenRecord, RegenStatus, RegionShape,
     classify_region,
@@ -167,6 +168,13 @@ def main():
         if not should_sync(fp, rel):
             sys.exit(0)
         process_parent_dirs(fp.parent, project_dir, results)
+        # backlog #122 M1: declare every real (WRITTEN) regeneration above to
+        # the hook-authored side-effect ledger, so it can later be merged
+        # into a dev-report's files_landed_whole exemption channel
+        # (backlog #121) instead of being an unattributable files_modified
+        # path. Fail-open internally; never affects the patch_claude_md call
+        # below.
+        record_landed_files(results, payload, project_dir)
         section_skips = patch_claude_md(project_dir)
         if isinstance(section_skips, list):
             results.extend(section_skips)

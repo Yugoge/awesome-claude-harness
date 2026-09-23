@@ -807,6 +807,103 @@ def _atomic_write_json(path: Path, document: dict) -> None:
         raise
 
 
+_HOOK_LEDGER_ENTRY_FIELDS = ("path", "diff_sha256", "reason")
+
+
+def _hook_ledger_dirs(project_root: Path, task_id: str, bare_tid: str) -> list[Path]:
+    """Candidate .claude/dev-registry/<...>/hook-landed-files/ directories
+    for this task-id's own single-lane dev cycle (backlog #122 M3).
+
+    The write side (hooks/doc_sync/hook_ledger.py) resolves the writing
+    agent's own dev_session_id via hooks/lib/agent_resolver.py at hook-fire
+    time. This script only receives --task-id, not that session id, and
+    this repo's own dev-registry/ tree carries both a bare-timestamp
+    directory-naming convention (older cycles) and a "dev-"-prefixed one
+    (current /dev dispatch) -- both are tried; whichever directory actually
+    exists supplies entries, which in practice is at most one for a
+    genuine single-lane cycle.
+    """
+    root = project_root / ".claude" / "dev-registry"
+    names: list[str] = []
+    for candidate in (task_id, f"dev-{bare_tid}"):
+        if candidate not in names:
+            names.append(candidate)
+    return [root / name / "hook-landed-files" for name in names]
+
+
+def _load_hook_ledger_entries(ledger_dirs: list[Path]) -> list[dict]:
+    """Load every readable, well-shaped ledger entry across candidate dirs.
+
+    Mirrors _load_shard_with_diagnostic's per-entry fail-closed read
+    pattern: an unreadable or malformed individual ledger file is skipped,
+    never fatal to the whole merge.
+    """
+    entries: list[dict] = []
+    for ledger_dir in ledger_dirs:
+        if not ledger_dir.is_dir():
+            continue
+        try:
+            children = sorted(ledger_dir.iterdir())
+        except OSError:
+            continue
+        for child in children:
+            if not child.is_file() or child.suffix != ".json":
+                continue
+            try:
+                parsed = json.loads(child.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError, UnicodeError):
+                continue
+            if not isinstance(parsed, dict):
+                continue
+            if not all(
+                isinstance(parsed.get(field), str) and parsed.get(field)
+                for field in _HOOK_LEDGER_ENTRY_FIELDS
+            ):
+                continue
+            entries.append(parsed)
+    return entries
+
+
+def _merge_hook_ledger_into_singular(existing_doc: dict, ledger_dirs: list[Path]) -> bool:
+    """Merge validated hook-ledger entries into existing_doc['files_landed_whole'].
+
+    Backlog #122 M3: additive-only, dedupe by path, never drops a
+    pre-existing entry. Mirrors resolve-commit-repos.py:523-535's own
+    dual-listing constraint (belt-and-suspenders, not a substitute for it --
+    that gate still independently enforces it at admission time): a path
+    already claimed by owned_edits or pre_edit_snapshots is never routed
+    through files_landed_whole instead.
+
+    Returns True iff at least one new entry was appended -- the caller only
+    writes the canonical report back to disk when this is True, preserving
+    AC4's byte-for-byte-unchanged-when-empty guarantee.
+    """
+    entries = _load_hook_ledger_entries(ledger_dirs)
+    if not entries:
+        return False
+    owned_paths = set(existing_doc.get("owned_edits") or {})
+    snapshot_paths = set(existing_doc.get("pre_edit_snapshots") or {})
+    existing_landed = existing_doc.get("files_landed_whole")
+    if not isinstance(existing_landed, list):
+        existing_landed = []
+    existing_paths = {item.get("path") for item in existing_landed if isinstance(item, dict)}
+    appended = False
+    for entry in entries:
+        path = entry["path"]
+        if path in owned_paths or path in snapshot_paths or path in existing_paths:
+            continue
+        existing_landed.append({
+            "path": path,
+            "diff_sha256": entry["diff_sha256"],
+            "reason": entry["reason"],
+        })
+        existing_paths.add(path)
+        appended = True
+    if appended:
+        existing_doc["files_landed_whole"] = existing_landed
+    return appended
+
+
 def _synthesize_status_rationale(shards: list[tuple[str, dict]], needs_review_labels: list[str]) -> dict:
     """Aggregate the contributing needs_review shards' own status_rationale.
 
@@ -1424,6 +1521,23 @@ def main(argv: list[str] | None = None) -> int:
             # /close's Step 0 invoked this script (the single most common
             # invocation shape) -- see
             # test_len_below_2_singular_dev_report_with_no_parallel_workers_key_is_skipped_untouched.
+            #
+            # backlog #122 M3: before the no-op return, merge any
+            # hook-authored side-effect-file declarations (hooks/doc_sync/
+            # hook_ledger.py's write side) into this genuine singular
+            # report's files_landed_whole exemption channel, so a
+            # hook-regenerated file (e.g. an INDEX.md doc-sync rewrites as a
+            # side effect of a dev cycle's own edit) gets a legitimate
+            # declaration path into build_plan()'s ownership gate. Writes
+            # ONLY when there is something new to merge -- an empty or
+            # absent ledger leaves this branch's own untouched guarantee
+            # (see test_len_below_2_singular_dev_report_with_no_parallel_
+            # workers_key_is_skipped_untouched) unaffected. `action` stays
+            # "skipped" either way -- this insertion never invents a 4th
+            # action value.
+            ledger_dirs = _hook_ledger_dirs(project_root, task_id, bare_tid)
+            if _merge_hook_ledger_into_singular(existing_doc, ledger_dirs):
+                _atomic_write_json(canonical_path, existing_doc)
             _emit_ok(action="skipped", output_path=str(canonical_path), reason=skip_reason)
             return 0
 
