@@ -220,6 +220,81 @@ def test_tool_policy_still_detected_case_arm_verb(role, command):
     assert (rc, _policy_target(err)) == (2, DEST), "real copy in a case arm not refused for %s: %r" % (role, command)
 
 
+# ---- KNOWN LOSS pins: backlog #100 case-arm paren residual (controller condition 2) --------------
+# hooks/lib/bash_write_targets.py's shared _segment_end (line ~701-706) cuts a command segment at
+# every `|` and newline, including inside a case arm's own pattern. That cut lands before the walker
+# reaches the verb word whenever the arm's pattern is parenthesized AND either carries a `|`
+# alternative on the same line, or sits on the line after `case X in`. The three commands below all
+# execute a real `cp`/`mv` under real bash (BA independently confirmed with a PATH-shimmed $CP,
+# 2026-09-23) yet both library outputs (extract_bash_write_paths, extract_bash_write_targets_with_
+# modes) return empty for all three today. Accepted as a deferred fix (controller ruling 2026-09-22,
+# backlog #100) because reachability is 0/145064 in this project's own real command history (a
+# 74592-command synthetic grid found 308/74592 missed of this exact class) -- NOT because the loss is
+# benign. These three tests pin the CURRENT (wrong) behavior through the tool_policy consumer entry
+# point so a future fix to the shared segment-cutting mechanism is forced to turn them red instead of
+# silently landing unnoticed.
+KNOWN_LOSS_SHAPE_1_SAME_LINE_ALTERNATION = 'case x in (y|x) "$CP" cp-01 ' + DEST + ' ;; esac'
+KNOWN_LOSS_SHAPE_2_NEXT_LINE = 'case x in\n(x) "$CP" cp-01 ' + DEST + '\n;; esac'
+# subject `b` genuinely matches one alternative of (a|b|c) under real bash; the qa-report's own
+# `case x in (a|b|c) ...` transcription does NOT (subject x matches none of a/b/c) and must not be
+# copied here -- BA reproduced this live, 2026-09-23.
+KNOWN_LOSS_SHAPE_3_MULTI_ALTERNATION = 'case b in (a|b|c) "$CP" cp-01 ' + DEST + ' ;; esac'
+# CONTROL, not a loss: `(x)` with no `|` alternative on the same line as `case ... in` is still
+# correctly detected today (this exact row already lives inside CASE_ARM_ROWS at module scope, line
+# 106 above, via the undifferentiated REAL_CASE_ARM sweep). Asserted again here on its own, distinctly
+# labeled, per AC4's requirement not to fold the control anonymously into that machinery.
+CONTROL_PAREN_NO_ALTERNATIVE = 'case x in (x) "$CP" cp-01 ' + DEST + ' ;; esac'
+
+
+@pytest.mark.parametrize("role", ROLES)
+def test_tool_policy_known_loss_backlog_100_shape1_same_line_alternation(role):
+    """KNOWN LOSS (backlog #100), NOT expected behavior. Real bash executes this copy (BA-confirmed
+    with a PATH-shimmed $CP), but the shared segment-cutting mechanism drops the verb before the
+    walker reaches it. Pins the CURRENT (wrong) rc == 0 / no-refusal outcome: once the segment-cutting
+    mechanism is fixed, tool_policy will refuse this command and this assertion turns red -- that is
+    the intended signal to update the pin, not a bug in the test."""
+    rc, err = _run_policy(role, KNOWN_LOSS_SHAPE_1_SAME_LINE_ALTERNATION)
+    assert rc == 0, (
+        "KNOWN LOSS pin (backlog #100) is stale: shape 1 (y|x) is now refused (target %r) -- "
+        "the segment-cutting mechanism appears fixed; update/remove this pin" % _policy_target(err))
+
+
+@pytest.mark.parametrize("role", ROLES)
+def test_tool_policy_known_loss_backlog_100_shape2_next_line(role):
+    """KNOWN LOSS (backlog #100), NOT expected behavior. Same mechanism as shape 1, triggered by the
+    parenthesized pattern sitting on the line after `case X in` instead of a `|` alternative. Real
+    bash executes this copy; pins the CURRENT (wrong) rc == 0 outcome for the same fail-red reason."""
+    rc, err = _run_policy(role, KNOWN_LOSS_SHAPE_2_NEXT_LINE)
+    assert rc == 0, (
+        "KNOWN LOSS pin (backlog #100) is stale: shape 2 (next-line) is now refused (target %r) -- "
+        "the segment-cutting mechanism appears fixed; update/remove this pin" % _policy_target(err))
+
+
+@pytest.mark.parametrize("role", ROLES)
+def test_tool_policy_known_loss_backlog_100_shape3_multi_alternation(role):
+    """KNOWN LOSS (backlog #100), NOT expected behavior. QA's own newly-found generalization of
+    shapes 1-2 to a 3-way `(a|b|c)` alternation. Subject `b` genuinely matches one alternative under
+    real bash (unlike the qa-report's own non-matching `case x in (a|b|c) ...` prose transcription --
+    BA corrected this live, 2026-09-23). Pins the CURRENT (wrong) rc == 0 outcome for the same
+    fail-red reason as shapes 1-2."""
+    rc, err = _run_policy(role, KNOWN_LOSS_SHAPE_3_MULTI_ALTERNATION)
+    assert rc == 0, (
+        "KNOWN LOSS pin (backlog #100) is stale: shape 3 (a|b|c) is now refused (target %r) -- "
+        "the segment-cutting mechanism appears fixed; update/remove this pin" % _policy_target(err))
+
+
+@pytest.mark.parametrize("role", ROLES)
+def test_tool_policy_control_case_arm_paren_no_alternative_still_detected(role):
+    """CONTROL, not a loss pin. `(x)` with no `|` alternative, same line as `case ... in`, is outside
+    the backlog #100 residual class and remains correctly detected today. Distinct from the three
+    KNOWN LOSS tests above: this assertion is expected to stay green both before and after any future
+    fix to the shared segment-cutting mechanism (AC4)."""
+    rc, err = _run_policy(role, CONTROL_PAREN_NO_ALTERNATIVE)
+    assert (rc, _policy_target(err)) == (2, DEST), (
+        "CONTROL regressed: (x) with no alternative must still be detected and refused: %r"
+        % CONTROL_PAREN_NO_ALTERNATIVE)
+
+
 # ---- consumer 2: the overnight guard, six decision functions ------------------------------------
 @pytest.fixture(scope="module")
 def overnight():
