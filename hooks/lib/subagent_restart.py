@@ -33,7 +33,7 @@ SESSION_RE = re.compile(r"^[A-Za-z0-9._-]{1,160}$")
 AGENT_RE = re.compile(r"^[A-Za-z0-9._-]{3,160}$")
 AGENT_ID_TEXT_RE = re.compile(r"agentId:\s*([A-Za-z0-9._-]+)")
 INTERRUPT_RE = re.compile(
-    r"request interrupted|interrupted by user|aborterror|aborted|cancelled",
+    r"\b(?:request interrupted|interrupted by user|aborterror|aborted|cancelled)\b",
     re.IGNORECASE,
 )
 QUOTA_RE = re.compile(
@@ -372,11 +372,22 @@ def discover_candidates(transcript_path: str | Path) -> list[dict[str, Any]]:
             )
             if notification_after_call and notification.get("quota_interrupted"):
                 interruption_lines.append(notification["line"])
-        if result_text and INTERRUPT_RE.search(result_text):
+        # Real Agent/Task tool_results set is_error present-only-when-true
+        # (never explicit False) on genuine transport/hook errors -- see
+        # docs/dev/context-20260808-035658-lanersgap.json corpus measurement.
+        # interrupted_tool_result therefore requires is_error is True AND the
+        # word-bounded phrase match on the SAME block; there is no
+        # is_error-less fallback, and one block's error must never vouch for
+        # a different block's unrelated success text.
+        interrupted_blocks = [
+            block for block in result_blocks
+            if block.get("is_error") is True and INTERRUPT_RE.search(_textify(block))
+        ]
+        if interrupted_blocks:
             evidence.append("interrupted_tool_result")
             interruption_lines.extend(
-                block["_parent_line"] for block in result_blocks
-                if isinstance(block.get("_parent_line"), int) and INTERRUPT_RE.search(_textify(block))
+                block["_parent_line"] for block in interrupted_blocks
+                if isinstance(block.get("_parent_line"), int)
             )
         if not evidence:
             continue
@@ -387,6 +398,7 @@ def discover_candidates(transcript_path: str | Path) -> list[dict[str, Any]]:
         description = meta.get("description") or tool_input.get("description") or ""
         agent_type = meta.get("agent_type") or tool_input.get("subagent_type") or ""
         candidates.append({
+            "parent_session_id": transcript.stem,
             "agent_id": agent_id,
             "agent_type": agent_type if isinstance(agent_type, str) else "",
             "description": description if isinstance(description, str) else "",
@@ -399,6 +411,101 @@ def discover_candidates(transcript_path: str | Path) -> list[dict[str, Any]]:
             "evidence": evidence,
         })
     return candidates
+
+
+ACCOUNTS_ROOT = Path(os.environ.get("CLAUDE_RESTART_ACCOUNTS_ROOT", "/var/lib/claude-accounts"))
+
+
+def project_slug(project_dir: str | Path) -> str:
+    return str(Path(project_dir).resolve()).replace("/", "-")
+
+
+def account_project_roots() -> list[Path]:
+    """Every account's session-transcript root, plus the caller's own $HOME.
+
+    Separate Claude account logins (used to spread API quota) each persist
+    session transcripts under their own /var/lib/claude-accounts/<name>/claude
+    tree rather than a tree shared across accounts, so discovery must walk
+    all of them explicitly — $HOME alone only ever sees the currently active
+    account.
+    """
+    roots: list[Path] = []
+    if ACCOUNTS_ROOT.is_dir():
+        try:
+            children = sorted(ACCOUNTS_ROOT.iterdir())
+        except OSError:
+            children = []
+        for child in children:
+            candidate = child / "claude" / "projects"
+            if candidate.is_dir():
+                roots.append(candidate)
+    home_projects = Path.home() / ".claude" / "projects"
+    if home_projects.is_dir():
+        roots.append(home_projects)
+    return roots
+
+
+DEFAULT_SIBLING_WINDOW_SECONDS = 86400
+
+
+def sibling_window_seconds() -> int:
+    try:
+        return int(os.environ.get(
+            "CLAUDE_RESTART_SIBLING_WINDOW_SECONDS", str(DEFAULT_SIBLING_WINDOW_SECONDS)
+        ))
+    except (TypeError, ValueError):
+        return DEFAULT_SIBLING_WINDOW_SECONDS
+
+
+def sibling_transcripts(project_dir: str | Path, exclude: str | Path) -> list[Path]:
+    """Other RECENT sessions' top-level transcripts for this project, any account.
+
+    Restricted to the exact project slug so recovery never reads unrelated
+    projects. Deduplicates by session id, first root wins: two different
+    accounts producing the same session id (astronomically unlikely — ids
+    are UUID-shaped) would have one silently dropped rather than merged.
+
+    Bounded to transcripts modified within sibling_window_seconds() of now
+    (default 24h). Fanning out to every sibling account's *entire* project
+    history (unbounded) surfaced hundreds of candidates spanning months of
+    abandoned/superseded work on first real use — this window keeps
+    cross-account recovery to what a session left behind recently, which is
+    what "even after switching accounts" actually means in practice. The
+    current session's own transcript is never subject to this window: it is
+    read unconditionally by the caller before sibling_transcripts runs.
+    """
+    slug = project_slug(project_dir)
+    try:
+        exclude_resolved = Path(exclude).resolve()
+    except OSError:
+        exclude_resolved = Path(exclude)
+    cutoff = time.time() - sibling_window_seconds()
+    seen: dict[str, Path] = {}
+    for root in account_project_roots():
+        candidate_dir = root / slug
+        if not candidate_dir.is_dir():
+            continue
+        try:
+            entries = list(candidate_dir.glob("*.jsonl"))
+        except OSError:
+            continue
+        for entry in entries:
+            try:
+                resolved = entry.resolve()
+            except OSError:
+                continue
+            if resolved == exclude_resolved:
+                continue
+            sid = entry.stem
+            if not SESSION_RE.fullmatch(sid):
+                continue
+            try:
+                if entry.stat().st_mtime < cutoff:
+                    continue
+            except OSError:
+                continue
+            seen.setdefault(sid, resolved)
+    return list(seen.values())
 
 
 def build_resume_message(session_id: str, agent_id: str) -> str:
@@ -417,10 +524,14 @@ def build_resume_message(session_id: str, agent_id: str) -> str:
     ])
 
 
-def prepare_state(session_id: str) -> dict[str, Any]:
+def prepare_state(session_id: str, project_dir: str | Path | None = None) -> dict[str, Any]:
     sid = _safe_session_id(session_id)
     grant = load_valid_grant(sid)
-    discovered = discover_candidates(grant["transcript_path"])
+    own_transcript = Path(grant["transcript_path"])
+    discovered = discover_candidates(own_transcript)
+    if project_dir is not None:
+        for sibling in sibling_transcripts(project_dir, exclude=own_transcript):
+            discovered.extend(discover_candidates(sibling))
     with _state_lock(sid):
         old = _load_json(state_path(sid)) or {}
         old_items = {
@@ -443,7 +554,9 @@ def prepare_state(session_id: str) -> dict[str, Any]:
                 "status": status,
                 "attempts": previous.get("attempts", 0)
                 if isinstance(previous.get("attempts", 0), int) else 0,
-                "resume_message": build_resume_message(sid, candidate["agent_id"]),
+                "resume_message": build_resume_message(
+                    candidate["parent_session_id"], candidate["agent_id"]
+                ),
             }
             for key in (
                 "last_dispatched_at", "last_stop_at", "interruption_line_at_dispatch",
@@ -481,7 +594,7 @@ def status_view(state: dict[str, Any]) -> dict[str, Any]:
         if not isinstance(item, dict):
             continue
         public.append({key: item.get(key) for key in (
-            "agent_id", "agent_type", "description", "tool_use_id",
+            "agent_id", "parent_session_id", "agent_type", "description", "tool_use_id",
             "agent_transcript_path", "evidence", "interruption_line", "status",
             "attempts", "resume_message",
         )})
@@ -508,23 +621,25 @@ def get_status(session_id: str, *, wait_seconds: int = 0, poll_seconds: float = 
 
 
 def authorize_send_message(payload: dict[str, Any]) -> tuple[bool, str]:
-    """Authorize only the exact recovery message to a discovered agent id."""
+    """Authorize only the exact recovery message to a discovered agent id.
+
+    Validates against this operator session's prepared state rather than
+    re-discovering from a single transcript: prepared candidates may
+    legitimately originate from a different account's earlier session in the
+    same project (see sibling_transcripts), so their resume_message already
+    embeds the correct originating parent_session_id.
+    """
     if not isinstance(payload, dict):
         return False, "malformed hook payload"
     sid = payload.get("session_id") or payload.get("sessionId") or os.environ.get("CLAUDE_SESSION_ID")
     try:
         sid = _safe_session_id(str(sid or ""))
-        grant = load_valid_grant(sid)
+        load_valid_grant(sid)  # the operator must still hold a live /restart grant
         params = payload.get("tool_input") if "tool_input" in payload else payload.get("params")
         if not isinstance(params, dict):
             raise RestartError("SendMessage input is missing")
         agent_id = _safe_agent_id(str(params.get("to") or ""))
         message = params.get("message")
-        if message != build_resume_message(sid, agent_id):
-            raise RestartError("SendMessage body is not the exact restart-v1 recovery message")
-        discovered = {item["agent_id"]: item for item in discover_candidates(grant["transcript_path"])}
-        if agent_id not in discovered:
-            raise RestartError("target is not a recoverable interrupted subagent in this parent transcript")
         state = _load_state(sid)
         item = next(
             (entry for entry in state.get("candidates", [])
@@ -532,7 +647,9 @@ def authorize_send_message(payload: dict[str, Any]) -> tuple[bool, str]:
             None,
         )
         if not item:
-            raise RestartError("target is absent from prepared restart state")
+            raise RestartError("target is not a recoverable interrupted subagent for this /restart session")
+        if message != item.get("resume_message"):
+            raise RestartError("SendMessage body is not the exact restart-v1 recovery message")
         if item.get("status") != "pending":
             raise RestartError("target is not pending; duplicate restart dispatch denied")
         return True, "validated /restart recovery"

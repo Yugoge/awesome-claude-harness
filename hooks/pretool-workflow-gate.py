@@ -32,6 +32,52 @@ from pathlib import Path
 CODEX_PLAN_TOOLS = {'update_plan', 'UpdatePlan', 'functions.update_plan'}
 CODEX_RUNTIME_ENV = 'CLAUDE_COMPAT_RUNTIME'
 
+# /restart is documented as an orthogonal control operation that must never
+# touch another command's TodoWrite bookmark (commands/restart.md). If the
+# invoking session also happens to hold its own unacknowledged bookmark (e.g.
+# a /dev cycle was invoked and interrupted before its first TodoWrite), that
+# bookmark must not be able to block /restart's own recovery script — doing
+# so would force a choice between two contradictory NON-NEGOTIABLE rules.
+# Matched structurally against the exact three documented invocations only
+# (no --session-id: commands/restart.md never passes it, so admitting it
+# would only widen attack surface for zero functional benefit), with shell
+# metacharacters rejected so this can never become a chaining bypass.
+_RESTART_HELPER_COMMAND_RE = re.compile(
+    r'^(?:\$HOME|~|' + re.escape(str(Path.home())) + r')'
+    r'/\.claude/venv/bin/python3?\s+'
+    r'(?:\$HOME|~|' + re.escape(str(Path.home())) + r')'
+    r'/\.claude/scripts/restart-subagents\.py\s+'
+    r'(?:prepare|status|finalize)'
+    r'(?:\s+--wait-seconds\s+\d+)?'
+    r'\s*$'
+)
+_SHELL_METACHAR_RE = re.compile(r'[;&|`\n<>]|\$\(')
+_HOME_UNSAFE_RE = re.compile(r'[\s;&|`\n<>$]')
+
+
+def is_restart_helper_bash_command(data: dict) -> bool:
+    """True only for the exact, unchained /restart helper invocation.
+
+    The pattern's literal-$HOME alternative is only trustworthy if $HOME
+    itself expands to a single clean word when Bash actually runs the
+    command; a HOME value containing whitespace or shell metacharacters
+    would let that expansion smuggle in extra words or operators the regex
+    never saw. Fail closed (no bypass, ordinary gate enforcement applies)
+    whenever the resolved home directory looks unsafe.
+    """
+    if data.get('tool_name') != 'Bash':
+        return False
+    tool_input = data.get('tool_input') if isinstance(data.get('tool_input'), dict) else {}
+    command = tool_input.get('command')
+    if not isinstance(command, str):
+        return False
+    command = command.strip()
+    if not command or _SHELL_METACHAR_RE.search(command):
+        return False
+    if _HOME_UNSAFE_RE.search(str(Path.home())):
+        return False
+    return bool(_RESTART_HELPER_COMMAND_RE.match(command))
+
 
 def official_todos_path(session_id: str) -> Path:
     return Path.home() / '.claude' / 'todos' / f'{session_id}-agent-{session_id}.json'
@@ -1018,6 +1064,9 @@ def main():
         )
         sys.exit(2)
     bookmark_path = project_dir / '.claude' / f'workflow-{session_id}.json'
+
+    if is_restart_helper_bash_command(data):
+        sys.exit(0)
 
     if (
         tool_name in CODEX_PLAN_TOOLS

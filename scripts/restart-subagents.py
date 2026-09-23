@@ -35,12 +35,16 @@ def _session_id(explicit: str | None) -> str:
     return session_id
 
 
+def _project_dir() -> Path:
+    return Path(os.environ.get("CLAUDE_PROJECT_DIR", os.getcwd()))
+
+
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     try:
         session_id = _session_id(args.session_id)
         if args.command == "prepare":
-            result = restart.prepare_state(session_id)
+            result = restart.prepare_state(session_id, project_dir=_project_dir())
         elif args.command == "status":
             result = restart.get_status(session_id, wait_seconds=max(0, args.wait_seconds))
         else:

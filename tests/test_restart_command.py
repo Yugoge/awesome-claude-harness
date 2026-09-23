@@ -460,6 +460,128 @@ def test_command_and_settings_keep_restart_human_only_and_lossless() -> None:
         assert "posttool-restart-sendmessage.py" in posttool_commands
 
 
+def test_restart_helper_bash_command_bypasses_workflow_gate_deadlock(tmp_path: Path) -> None:
+    """/restart's own helper must run even when the invoking session holds an
+    unrelated, never-acknowledged bookmark (e.g. /dev was invoked and
+    interrupted before its first TodoWrite) — without the gate being disabled
+    for anything else."""
+    gate = HOOKS / "pretool-workflow-gate.py"
+    project_dir = tmp_path / "project"
+    (project_dir / ".claude").mkdir(parents=True)
+    sid = str(uuid.uuid4())
+    bookmark = project_dir / ".claude" / f"workflow-{sid}.json"
+    bookmark.write_text(json.dumps({
+        "command": "dev", "arguments": "", "todo_acknowledged": False,
+    }))
+    env = {**os.environ, "CLAUDE_PROJECT_DIR": str(project_dir)}
+    home = Path(os.environ.get("HOME", str(Path.home())))
+
+    restart_call = {
+        "tool_name": "Bash",
+        "session_id": sid,
+        "tool_input": {
+            "command": f"{home}/.claude/venv/bin/python "
+            f"{home}/.claude/scripts/restart-subagents.py prepare",
+        },
+    }
+    allowed = _run_hook(gate, restart_call, env)
+    assert allowed.returncode == 0, allowed.stderr
+
+    ordinary_call = {
+        "tool_name": "Bash",
+        "session_id": sid,
+        "tool_input": {"command": "echo hello"},
+    }
+    blocked = _run_hook(gate, ordinary_call, env)
+    assert blocked.returncode == 2
+    assert "CHECKLIST NOT STARTED" in blocked.stderr
+
+    chained_call = {
+        "tool_name": "Bash",
+        "session_id": sid,
+        "tool_input": {
+            "command": f"{home}/.claude/venv/bin/python "
+            f"{home}/.claude/scripts/restart-subagents.py prepare"
+            " && rm -rf /tmp/should-not-run",
+        },
+    }
+    chained_blocked = _run_hook(gate, chained_call, env)
+    assert chained_blocked.returncode == 2, "chained command must not bypass the gate"
+
+
+def test_restart_helper_bypass_fails_closed_on_unsafe_home(tmp_path: Path) -> None:
+    """If $HOME itself contains whitespace/shell-special characters, the literal
+    $HOME text in the command cannot be trusted to expand to a single clean
+    word — the bypass must fail closed rather than assume the expansion is
+    safe."""
+    gate = HOOKS / "pretool-workflow-gate.py"
+    project_dir = tmp_path / "project"
+    (project_dir / ".claude").mkdir(parents=True)
+    sid = str(uuid.uuid4())
+    bookmark = project_dir / ".claude" / f"workflow-{sid}.json"
+    bookmark.write_text(json.dumps({
+        "command": "dev", "arguments": "", "todo_acknowledged": False,
+    }))
+    unsafe_home = tmp_path / "evil home; rm -rf"
+    unsafe_home.mkdir(parents=True)
+    env = {**os.environ, "CLAUDE_PROJECT_DIR": str(project_dir), "HOME": str(unsafe_home)}
+
+    restart_call = {
+        "tool_name": "Bash",
+        "session_id": sid,
+        "tool_input": {
+            "command": "$HOME/.claude/venv/bin/python $HOME/.claude/scripts/restart-subagents.py prepare",
+        },
+    }
+    blocked = _run_hook(gate, restart_call, env)
+    assert blocked.returncode == 2, "unsafe $HOME must not be trusted to grant the bypass"
+    assert "CHECKLIST NOT STARTED" in blocked.stderr
+
+
+def test_prepare_discovers_sibling_account_sessions(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A session under one Claude account must be able to recover interrupted
+    subagents left behind by a session under a different account, since each
+    account persists transcripts under its own /var/lib/claude-accounts/<name>
+    root rather than a tree shared across accounts."""
+    monkeypatch.setenv("CLAUDE_RESTART_GRANT_DIR", str(tmp_path / "grants"))
+    monkeypatch.setenv("CLAUDE_RESTART_STATE_DIR", str(tmp_path / "states"))
+    accounts_root = tmp_path / "accounts"
+    monkeypatch.setattr(restart, "ACCOUNTS_ROOT", accounts_root)
+
+    project_dir = tmp_path / "project"
+    project_dir.mkdir()
+    slug = restart.project_slug(project_dir)
+
+    operator_sid = str(uuid.uuid4())
+    operator_transcript = accounts_root / "yugetang" / "claude" / "projects" / slug / f"{operator_sid}.jsonl"
+    op_tool = "toolu_operator_missing"
+    _write_jsonl(operator_transcript, [_record("assistant", [_tool_use(op_tool, "operator interrupted")])])
+    _write_meta(operator_transcript, "agent-operator", op_tool, "operator interrupted")
+
+    foreign_sid = str(uuid.uuid4())
+    foreign_transcript = accounts_root / "orchestrade" / "claude" / "projects" / slug / f"{foreign_sid}.jsonl"
+    fx_tool = "toolu_foreign_missing"
+    _write_jsonl(foreign_transcript, [_record("assistant", [_tool_use(fx_tool, "foreign interrupted")])])
+    _write_meta(foreign_transcript, "agent-foreign", fx_tool, "foreign interrupted")
+
+    restart.mint_grant(operator_sid, str(operator_transcript), ttl_seconds=600)
+    view = restart.prepare_state(operator_sid, project_dir=project_dir)
+
+    origins = {item["agent_id"]: item["parent_session_id"] for item in view["candidates"]}
+    assert origins == {"agent-operator": operator_sid, "agent-foreign": foreign_sid}
+
+    foreign_item = next(item for item in view["candidates"] if item["agent_id"] == "agent-foreign")
+    assert f"parent_session_id={foreign_sid}" in foreign_item["resume_message"]
+    payload = {
+        "tool_name": "SendMessage",
+        "session_id": operator_sid,
+        "tool_input": {"to": "agent-foreign", "message": foreign_item["resume_message"]},
+    }
+    assert restart.authorize_send_message(payload) == (True, "validated /restart recovery")
+
+
 def test_cli_resolves_session_id_from_claude_environment(recovery: dict) -> None:
     result = subprocess.run(
         [sys.executable, str(ROOT / "scripts" / "restart-subagents.py"), "prepare"],
@@ -471,3 +593,5 @@ def test_cli_resolves_session_id_from_claude_environment(recovery: dict) -> None
     )
     assert result.returncode == 0, result.stderr
     assert json.loads(result.stdout)["parent_session_id"] == recovery["sid"]
+
+

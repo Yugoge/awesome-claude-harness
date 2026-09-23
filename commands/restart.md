@@ -33,9 +33,16 @@ handled as one recovery wave.
    $HOME/.claude/venv/bin/python $HOME/.claude/scripts/restart-subagents.py prepare
    ```
 
-   The output is the complete transcript-derived candidate set. A zero count is
-   a successful no-op; continue to the finalize command in step 5 to consume the
-   grant, then report that no recoverable interrupted child exists.
+   The output is the complete transcript-derived candidate set. Discovery is not
+   limited to the invoking session's own transcript or account: separate Claude
+   account logins persist sessions under separate
+   `/var/lib/claude-accounts/<name>/claude/projects/<slug>/` roots, so `prepare`
+   also scans sibling transcripts for the same project across every account root
+   and reports each candidate's true originating `parent_session_id`. Running
+   `/restart` after switching accounts still recovers what an earlier account's
+   session left interrupted. A zero count is a successful no-op; continue to the
+   finalize command in step 5 to consume the grant, then report that no
+   recoverable interrupted child exists.
 3. **Resume every pending candidate.** In one parallel tool-call batch where
    supported, call `SendMessage` exactly once for every candidate whose status is
    `pending`. A `dispatched` candidate is already running: wait for it and never
@@ -70,7 +77,12 @@ handled as one recovery wave.
   each resumed agent to inspect its last tool result and workspace side effects first.
 - **DO NOT overwrite or complete the active `/dev`, `/redev`, `/spec`, or
   `/dev-overnight` TodoWrite/workflow bookmark.** `/restart` is an orthogonal
-  control operation and intentionally has no todo script.
+  control operation and intentionally has no todo script. Because of this,
+  `pretool-workflow-gate.py` exempts the exact `restart-subagents.py`
+  invocations in steps 2, 4, and 5 from the checklist gate: even a session
+  whose own bookmark was never acknowledged (e.g. an unrelated command was
+  invoked and interrupted before its first `TodoWrite`) can still run
+  `/restart`'s recovery steps without initializing that bookmark first.
 - **DO NOT treat `SubagentStop` fallback as proven native Codex parity.** This is
   a Claude Code native command. On a Codex runtime without equivalent
   `SendMessage` plus authoritative child lifecycle events, report
