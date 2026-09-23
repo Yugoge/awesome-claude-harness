@@ -111,6 +111,141 @@ def _canonicalized_ledger_identities(owned_edits: Any, control_root: Path) -> se
     return identities
 
 
+_PORCELAIN_C_ESCAPES = {
+    "\\": "\\",
+    '"': '"',
+    "n": "\n",
+    "t": "\t",
+    "r": "\r",
+    "a": "\a",
+    "b": "\b",
+    "f": "\f",
+    "v": "\v",
+}
+
+
+def _unquote_porcelain_path(token: str) -> str:
+    """Undo git's C-style double-quoting for one porcelain path token.
+
+    Empirically confirmed this session (real ``git status --porcelain``
+    subprocess fixture, git 2.54.0 -- not taken from documentation alone,
+    per this ticket's tier_3_unverified flag on this exact behavior): git
+    wraps a path in ``"..."`` and backslash/octal-escapes it whenever the
+    raw bytes would otherwise be ambiguous for a machine parser splitting on
+    the fixed ``"XY "`` single-space prefix -- a plain space in the path is
+    already sufficient to trigger quoting. A token that is not quoted is
+    returned unchanged.
+    """
+    if len(token) < 2 or token[0] != '"' or token[-1] != '"':
+        return token
+    body = token[1:-1]
+    raw = bytearray()
+    i, n = 0, len(body)
+    while i < n:
+        ch = body[i]
+        if ch != "\\" or i + 1 >= n:
+            raw.extend(ch.encode("utf-8", "surrogateescape"))
+            i += 1
+            continue
+        octal = body[i + 1 : i + 4]
+        if len(octal) == 3 and all(digit in "01234567" for digit in octal):
+            raw.append(int(octal, 8))
+            i += 4
+            continue
+        nxt = body[i + 1]
+        raw.extend(_PORCELAIN_C_ESCAPES.get(nxt, nxt).encode("utf-8", "surrogateescape"))
+        i += 2
+    return raw.decode("utf-8", "surrogateescape")
+
+
+def _split_porcelain_rename(rest: str) -> tuple[str, str] | None:
+    """Split a rename/copy porcelain data field into (old, new) tokens.
+
+    Only called for 'R'/'C' status lines, where the ' -> ' arrow is git's
+    own emitted syntax (never ambiguous with an unrelated entry that happens
+    to contain the literal substring). The old-side token may itself be
+    independently quoted (git quotes each path based on whether THAT path
+    needs it), so this walks past a leading quoted token instead of blindly
+    splitting on the first ' -> ' substring.
+    """
+    if rest.startswith('"'):
+        end, n = 1, len(rest)
+        while end < n and rest[end] != '"':
+            end += 2 if rest[end] == "\\" else 1
+        if end >= n:
+            return None
+        remainder = rest[end + 1 :]
+        if not remainder.startswith(" -> "):
+            return None
+        return rest[: end + 1], remainder[4:]
+    if " -> " in rest:
+        old, new = rest.split(" -> ", 1)
+        return old, new
+    return None
+
+
+def _parse_porcelain_snapshot_paths(snapshot: str) -> list[str]:
+    """Split ``git status --porcelain`` text into raw (unquoted) path strings.
+
+    Mirrors the line-splitting shape of scripts/resolve-dev-report.py's
+    parse_changed_paths() (``"XY path"`` / ``"XY orig -> dest"``) but keeps
+    BOTH rename endpoints (AC-5: files_modified's git-diff-name-only capture
+    may reference either endpoint depending on rename-detection settings at
+    capture time, so under-covering either would reproduce this ticket's
+    false-positive-rejection bug for the rename case specifically) and
+    unquotes each token (AC-6) instead of leaving quote/escape artifacts.
+    """
+    paths: list[str] = []
+    for line in snapshot.splitlines():
+        if len(line) < 3 or line[2] != " ":
+            continue
+        status, rest = line[:2], line[3:]
+        if status[0] in ("R", "C"):
+            split = _split_porcelain_rename(rest)
+            if split is not None:
+                old, new = split
+                paths.append(_unquote_porcelain_path(old))
+                paths.append(_unquote_porcelain_path(new))
+                continue
+        paths.append(_unquote_porcelain_path(rest))
+    return paths
+
+
+def _canonicalized_baseline_dirty_identities(
+    baseline_dirty_snapshot: Any, control_root: Path
+) -> set[tuple[Path, str]]:
+    """Canonicalize baseline_dirty_snapshot's porcelain paths to (owner, relative) identities.
+
+    ``baseline_dirty_snapshot`` is the ``git status --porcelain`` text
+    captured before dev dispatch (agents/dev.md:807, agents/dev.md:533): a
+    files_modified-derived identity that is a pre-existing dirty tracked
+    file from another session -- not this cycle's own edit, and therefore
+    absent from owned_edits -- is exempt from the ownership gate exactly as
+    an owned_edits match would be (agents/dev.md:521/533: presence in
+    baseline_dirty_snapshot is "a reason to keep it in files_modified, never
+    a reason to drop it"). Parses through the SAME
+    _canonical_owned_path / _repo_root / .relative_to() pipeline already
+    used by _canonicalized_ledger_identities so both exemption sources share
+    one canonicalization convention -- no second scheme is invented. Fails
+    closed per-entry: an unparseable path is dropped, never masking a real
+    gap. A missing, non-string, or empty snapshot yields an empty set,
+    degrading to the pre-fix strict behavior (AC-3): the subtraction then
+    exempts nothing.
+    """
+    identities: set[tuple[Path, str]] = set()
+    if not isinstance(baseline_dirty_snapshot, str) or not baseline_dirty_snapshot:
+        return identities
+    for raw in _parse_porcelain_snapshot_paths(baseline_dirty_snapshot):
+        try:
+            absolute = _canonical_owned_path(raw, control_root)
+            owner = _repo_root(_existing_ancestor(absolute))
+            relative = absolute.relative_to(owner).as_posix()
+        except (PlanError, ValueError, OSError):
+            continue
+        identities.add((owner, relative))
+    return identities
+
+
 def _contains(root: Path, path: Path) -> bool:
     try:
         path.relative_to(root)
@@ -195,9 +330,12 @@ def build_plan(
 
     ``verify_ownership`` (default True) gates a fail-closed cross-check, for
     ``section_name == "dev"`` reports only: every canonical identity declared
-    via ``files_modified`` must also be a canonicalized key of the report's
-    ``owned_edits`` ledger -- read from the TOP-LEVEL report payload
-    (``payload["owned_edits"]``), never from ``section["owned_edits"]``,
+    via ``files_modified`` must also be EITHER a canonicalized key of the
+    report's ``owned_edits`` ledger OR a canonicalized path parsed from the
+    report's ``baseline_dirty_snapshot`` (a pre-existing dirty tracked file
+    from another session, exempt per agents/dev.md:521/533) -- both read
+    from the TOP-LEVEL report payload (``payload["owned_edits"]`` /
+    ``payload["baseline_dirty_snapshot"]``), never from ``section[...]``,
     which is never populated (see agents/dev.md, agents/changelog-analyst.md).
     ``files_created``-only paths are exempt; a path dual-listed in both
     ``files_modified`` and ``files_created`` is not. Pass ``verify_ownership=
@@ -252,27 +390,38 @@ def build_plan(
         identity_fields.setdefault(identity, set()).update(raw_fields.get(raw, set()))
         identity_display.setdefault(identity, raw)
 
-    # Ownership gate (backlog #110): files_modified is never blindly trusted --
-    # it must be backed by this cycle's own owned_edits ledger, or the plan
-    # would silently admit a foreign seat's uncommitted work in a shared
-    # worktree. files_created-only identities are exempt (a brand-new file's
-    # ledger entry is legitimately absent -- see agents/dev.md/schemas/owned-
-    # edits-ledger.v1.json's minLength:1 on `old`); a dual-listed identity is
-    # not. Missing/empty owned_edits falls out of the same set-difference with
-    # no special branch: an absent/empty ledger has an empty key-set, so a
-    # non-empty files_modified always yields a full-set reject (agents/dev.md
-    # requires the ledger be non-empty whenever edits were made).
+    # Ownership gate (backlog #110, extended -- task 20260923-024043):
+    # files_modified is never blindly trusted -- it must be backed by this
+    # cycle's own owned_edits ledger OR by baseline_dirty_snapshot (a
+    # pre-existing dirty tracked file from another session in a shared
+    # worktree, per agents/dev.md:521/533), or the plan would silently admit
+    # a foreign seat's uncommitted work. files_created-only identities are
+    # exempt (a brand-new file's ledger entry is legitimately absent -- see
+    # agents/dev.md/schemas/owned-edits-ledger.v1.json's minLength:1 on
+    # `old`); a dual-listed identity is not. Missing/empty owned_edits AND
+    # missing/empty baseline_dirty_snapshot both fall out of the same
+    # set-difference with no special branch: an absent/empty input
+    # canonicalizes to an empty identity-set, so a files_modified path
+    # backed by neither always yields a reject (agents/dev.md requires the
+    # ledger be non-empty whenever edits were made, and requires
+    # baseline_dirty_snapshot itself be a mandatory top-level field).
     if verify_ownership and section_name == "dev":
         ledger_identities = _canonicalized_ledger_identities(payload.get("owned_edits"), control_root)
+        baseline_identities = _canonicalized_baseline_dirty_identities(
+            payload.get("baseline_dirty_snapshot"), control_root
+        )
         missing = sorted(
             identity_display[identity]
             for identity, fields in identity_fields.items()
-            if "files_modified" in fields and identity not in ledger_identities
+            if "files_modified" in fields
+            and identity not in ledger_identities
+            and identity not in baseline_identities
         )
         if missing:
             raise PlanError(
                 "files_modified declares path(s) with no matching owned_edits "
-                f"ledger entry (foreign or unaccounted-for edit): {', '.join(missing)}"
+                "ledger entry and absent from baseline_dirty_snapshot (foreign "
+                f"or unaccounted-for edit): {', '.join(missing)}"
             )
 
     targets: list[dict[str, Any]] = []
