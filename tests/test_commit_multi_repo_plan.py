@@ -4,6 +4,7 @@ import importlib.util
 import json
 import subprocess
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -36,19 +37,41 @@ def _repo(path: Path) -> Path:
     return path
 
 
-def _report(control: Path, task: str, modified: list[str]) -> Path:
-    path = control / "docs" / "dev" / f"dev-report-{task}.json"
-    path.parent.mkdir(parents=True)
-    path.write_text(
-        json.dumps(
-            {
-                "task_id": task,
-                "request_id": task,
-                "dev": {"files_modified": modified, "files_created": []},
-            }
-        ),
-        encoding="utf-8",
-    )
+def _report(
+    control: Path,
+    task: str,
+    modified: list[str],
+    *,
+    created: list[str] | None = None,
+    owned_edits: dict[str, list[dict[str, str]]] | None = None,
+    section_name: str = "dev",
+    source: str | None = None,
+) -> Path:
+    """Write a dev/do-report fixture.
+
+    ``owned_edits`` defaults to one ledger entry per ``modified`` path (the
+    exact raw string, so it canonicalizes to the same identity as its
+    files_modified entry) -- this keeps every pre-existing caller of this
+    helper passing under the new ownership gate (task 20260922-215750)
+    without per-test edits. Pass ``owned_edits={}`` explicitly to test the
+    missing/empty-ledger boundary, or a custom dict to test a real gap.
+    """
+    created = created if created is not None else []
+    if owned_edits is None:
+        owned_edits = {path: [{"old": "placeholder-old", "new": "placeholder-new"}] for path in modified}
+    filename = f"{section_name}-report-{task}.json" if section_name != "dev" else f"dev-report-{task}.json"
+    path = control / "docs" / "dev" / filename
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload: dict[str, Any] = {
+        "task_id": task,
+        "request_id": task,
+        section_name: {"files_modified": modified, "files_created": created},
+    }
+    if owned_edits:
+        payload["owned_edits"] = owned_edits
+    if source is not None:
+        payload["source"] = source
+    path.write_text(json.dumps(payload), encoding="utf-8")
     return path
 
 
@@ -239,3 +262,196 @@ def test_codex_profile_path_fails_closed(tmp_path: Path) -> None:
             supported_repo_args=[str(control), str(nested)],
             report_arg=str(report),
         )
+
+
+# --------------------------------------------------------------------------
+# Ownership gate (task 20260922-215750, backlog #110): files_modified must be
+# backed by the report's owned_edits ledger for source=="dev" reports.
+# --------------------------------------------------------------------------
+
+
+def test_ac1_rejects_files_modified_path_missing_from_owned_edits_ledger(tmp_path: Path) -> None:
+    control = _repo(tmp_path / "control")
+    (control / "owned.txt").write_text("owned\n", encoding="utf-8")
+    (control / "foreign.txt").write_text("foreign\n", encoding="utf-8")
+    task = "task-ac1-missing-ledger-entry"
+    report = _report(
+        control,
+        task,
+        ["owned.txt", "foreign.txt"],
+        owned_edits={"owned.txt": [{"old": "a", "new": "b"}]},
+    )
+
+    with pytest.raises(MODULE.PlanError, match="foreign.txt"):
+        MODULE.build_plan(
+            task_id=task,
+            control_root_arg=str(control),
+            supported_repo_args=[],
+            report_arg=str(report),
+        )
+
+
+def test_ac2_passes_when_files_modified_fully_covered_by_owned_edits(tmp_path: Path) -> None:
+    control = _repo(tmp_path / "control")
+    (control / "owned.txt").write_text("owned\n", encoding="utf-8")
+    (control / "other.txt").write_text("other\n", encoding="utf-8")
+    task = "task-ac2-fully-covered"
+    # _report()'s default owned_edits auto-populates one entry per `modified`
+    # path -- exercises the common case with no explicit ledger override.
+    report = _report(control, task, ["owned.txt", "other.txt"])
+
+    plan = MODULE.build_plan(
+        task_id=task,
+        control_root_arg=str(control),
+        supported_repo_args=[],
+        report_arg=str(report),
+    )
+
+    assert plan["schema_version"] == 1
+    assert plan["repositories"][0]["owned_paths"] == sorted(["owned.txt", "other.txt"])
+
+
+def test_ac3a_rejects_when_owned_edits_missing_and_files_modified_nonempty(tmp_path: Path) -> None:
+    control = _repo(tmp_path / "control")
+    (control / "owned.txt").write_text("owned\n", encoding="utf-8")
+    task = "task-ac3a-empty-ledger-nonempty-fm"
+    report = _report(control, task, ["owned.txt"], owned_edits={})
+
+    with pytest.raises(MODULE.PlanError, match="owned.txt"):
+        MODULE.build_plan(
+            task_id=task,
+            control_root_arg=str(control),
+            supported_repo_args=[],
+            report_arg=str(report),
+        )
+
+
+def test_ac3b_passes_when_owned_edits_missing_and_files_modified_empty(tmp_path: Path) -> None:
+    control = _repo(tmp_path / "control")
+    task = "task-ac3b-empty-ledger-empty-fm"
+    report = _report(control, task, [], owned_edits={})
+
+    plan = MODULE.build_plan(
+        task_id=task,
+        control_root_arg=str(control),
+        supported_repo_args=[],
+        report_arg=str(report),
+    )
+
+    assert plan["repositories"][0]["owned_paths"] == []
+
+
+def test_ac4a_files_created_only_path_exempt_from_ownership_ledger(tmp_path: Path) -> None:
+    control = _repo(tmp_path / "control")
+    (control / "owned.txt").write_text("owned\n", encoding="utf-8")
+    (control / "new_file.txt").write_text("new\n", encoding="utf-8")
+    task = "task-ac4a-created-only-exempt"
+    report = _report(
+        control,
+        task,
+        ["owned.txt"],
+        created=["new_file.txt"],
+        owned_edits={"owned.txt": [{"old": "a", "new": "b"}]},
+    )
+
+    plan = MODULE.build_plan(
+        task_id=task,
+        control_root_arg=str(control),
+        supported_repo_args=[],
+        report_arg=str(report),
+    )
+
+    assert plan["repositories"][0]["owned_paths"] == sorted(["owned.txt", "new_file.txt"])
+
+
+def test_ac4b_dual_listed_path_not_exempt_from_ownership_ledger(tmp_path: Path) -> None:
+    control = _repo(tmp_path / "control")
+    (control / "dual.txt").write_text("dual\n", encoding="utf-8")
+    task = "task-ac4b-dual-listed-not-exempt"
+    report = _report(control, task, ["dual.txt"], created=["dual.txt"], owned_edits={})
+
+    with pytest.raises(MODULE.PlanError, match="dual.txt"):
+        MODULE.build_plan(
+            task_id=task,
+            control_root_arg=str(control),
+            supported_repo_args=[],
+            report_arg=str(report),
+        )
+
+
+def test_ac5_do_report_exempt_from_ownership_gate(tmp_path: Path) -> None:
+    control = _repo(tmp_path / "control")
+    (control / "foreign.txt").write_text("foreign\n", encoding="utf-8")
+    task = "task-ac5-do-report-exempt"
+    report = _report(
+        control,
+        task,
+        ["foreign.txt"],
+        owned_edits={},
+        section_name="do",
+        source="do",
+    )
+
+    plan = MODULE.build_plan(
+        task_id=task,
+        control_root_arg=str(control),
+        supported_repo_args=[],
+        report_arg=str(report),
+    )
+
+    assert plan["repositories"][0]["owned_paths"] == ["foreign.txt"]
+
+
+def test_ac6_dev_lifecycle_call_site_passes_verify_ownership_false(tmp_path: Path) -> None:
+    """scripts/dev-lifecycle.py's one build_plan() call site must pass
+    verify_ownership=False -- confirmed here by reading the call site's
+    source, plus a functional check that the same gap MODULE.build_plan()
+    rejects by default is admitted when verify_ownership=False is passed
+    explicitly (the parameter this ticket adds)."""
+    dev_lifecycle_src = (
+        Path(__file__).parents[1] / "scripts" / "dev-lifecycle.py"
+    ).read_text(encoding="utf-8")
+    assert "verify_ownership=False" in dev_lifecycle_src
+
+    control = _repo(tmp_path / "control")
+    (control / "gap.txt").write_text("gap\n", encoding="utf-8")
+    task = "task-ac6-verify-ownership-false"
+    report = _report(control, task, ["gap.txt"], owned_edits={})
+
+    with pytest.raises(MODULE.PlanError, match="gap.txt"):
+        MODULE.build_plan(
+            task_id=task,
+            control_root_arg=str(control),
+            supported_repo_args=[],
+            report_arg=str(report),
+        )
+
+    plan = MODULE.build_plan(
+        task_id=task,
+        control_root_arg=str(control),
+        supported_repo_args=[],
+        report_arg=str(report),
+        verify_ownership=False,
+    )
+    assert plan["repositories"][0]["owned_paths"] == ["gap.txt"]
+
+
+def test_ac7_canonicalization_path_form_parity_between_fm_and_ledger(tmp_path: Path) -> None:
+    control = _repo(tmp_path / "control")
+    (control / "owned.txt").write_text("owned\n", encoding="utf-8")
+    task = "task-ac7-path-form-parity"
+    report = _report(
+        control,
+        task,
+        ["./owned.txt"],
+        owned_edits={"owned.txt": [{"old": "a", "new": "b"}]},
+    )
+
+    plan = MODULE.build_plan(
+        task_id=task,
+        control_root_arg=str(control),
+        supported_repo_args=[],
+        report_arg=str(report),
+    )
+
+    assert plan["repositories"][0]["owned_paths"] == ["owned.txt"]

@@ -502,6 +502,14 @@ def commit_detection(
             control_root_arg=str(project_root),
             supported_repo_args=[],
             report_arg=str(report_path),
+            # Read-only historical-status reuse predates the owned_edits
+            # ownership ledger and reports on already-landed tasks; a
+            # majority of already-committed dev-reports have a legitimate
+            # files_modified/owned_edits gap (ticket 20260922-215750,
+            # Root-Cause #6: 59.2% of Sept-2026 reports alone). Do NOT
+            # restore the build_plan() default here -- that would misreport
+            # most historical tasks as "blocked".
+            verify_ownership=False,
         )
     except commit_repos_mod.PlanError as exc:
         return {"state": "blocked", "next_action": "inspect", "blocker": f"REPO_PLAN_ERROR:{exc}"}

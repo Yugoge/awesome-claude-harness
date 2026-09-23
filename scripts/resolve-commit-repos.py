@@ -85,6 +85,32 @@ def _canonical_owned_path(raw: str, control_root: Path) -> Path:
     return resolved
 
 
+def _canonicalized_ledger_identities(owned_edits: Any, control_root: Path) -> set[tuple[Path, str]]:
+    """Canonicalize an owned_edits ledger's keys to (owner, relative) identities.
+
+    Applies the identical _canonical_owned_path / _repo_root / .relative_to()
+    pipeline already used for files_modified/files_created so both sides of
+    the ownership-gate comparison share one canonicalization path (no second
+    convention is invented). A key that cannot be canonicalized (malformed,
+    non-string, NUL, or no existing ancestor) is dropped rather than raised --
+    it fails closed by covering nothing, never masking a real gap.
+    """
+    identities: set[tuple[Path, str]] = set()
+    if not isinstance(owned_edits, dict):
+        return identities
+    for key in owned_edits:
+        if not isinstance(key, str):
+            continue
+        try:
+            absolute = _canonical_owned_path(key, control_root)
+            owner = _repo_root(_existing_ancestor(absolute))
+            relative = absolute.relative_to(owner).as_posix()
+        except (PlanError, ValueError, OSError):
+            continue
+        identities.add((owner, relative))
+    return identities
+
+
 def _contains(root: Path, path: Path) -> bool:
     try:
         path.relative_to(root)
@@ -163,7 +189,22 @@ def build_plan(
     control_root_arg: str,
     supported_repo_args: list[str],
     report_arg: str | None = None,
+    verify_ownership: bool = True,
 ) -> dict[str, Any]:
+    """Resolve a task's owned paths into an admitted repository plan.
+
+    ``verify_ownership`` (default True) gates a fail-closed cross-check, for
+    ``section_name == "dev"`` reports only: every canonical identity declared
+    via ``files_modified`` must also be a canonicalized key of the report's
+    ``owned_edits`` ledger -- read from the TOP-LEVEL report payload
+    (``payload["owned_edits"]``), never from ``section["owned_edits"]``,
+    which is never populated (see agents/dev.md, agents/changelog-analyst.md).
+    ``files_created``-only paths are exempt; a path dual-listed in both
+    ``files_modified`` and ``files_created`` is not. Pass ``verify_ownership=
+    False`` only for read-only historical-status reuse (scripts/dev-
+    lifecycle.py's commit_detection()) that predates the ledger and must not
+    misreport already-landed tasks as blocked.
+    """
     if not task_id.strip():
         raise PlanError("task id must be non-empty")
     control_root = _repo_root(Path(control_root_arg).expanduser().resolve())
@@ -180,13 +221,18 @@ def build_plan(
             supported.append(repo)
 
     owned_raw: list[str] = []
+    raw_fields: dict[str, set[str]] = {}
     for field in ("files_modified", "files_created"):
         values = section.get(field, [])
         if not isinstance(values, list) or any(not isinstance(item, str) for item in values):
             raise PlanError(f"{section_name}.{field} must be an array of strings")
         owned_raw.extend(values)
+        for raw in values:
+            raw_fields.setdefault(raw, set()).add(field)
 
     by_repo: dict[Path, list[str]] = {control_root: []}
+    identity_fields: dict[tuple[Path, str], set[str]] = {}
+    identity_display: dict[tuple[Path, str], str] = {}
     for raw in owned_raw:
         absolute = _canonical_owned_path(raw, control_root)
         actual_owner = _repo_root(_existing_ancestor(absolute))
@@ -202,6 +248,32 @@ def build_plan(
         by_repo.setdefault(owner, [])
         if relative not in by_repo[owner]:
             by_repo[owner].append(relative)
+        identity = (owner, relative)
+        identity_fields.setdefault(identity, set()).update(raw_fields.get(raw, set()))
+        identity_display.setdefault(identity, raw)
+
+    # Ownership gate (backlog #110): files_modified is never blindly trusted --
+    # it must be backed by this cycle's own owned_edits ledger, or the plan
+    # would silently admit a foreign seat's uncommitted work in a shared
+    # worktree. files_created-only identities are exempt (a brand-new file's
+    # ledger entry is legitimately absent -- see agents/dev.md/schemas/owned-
+    # edits-ledger.v1.json's minLength:1 on `old`); a dual-listed identity is
+    # not. Missing/empty owned_edits falls out of the same set-difference with
+    # no special branch: an absent/empty ledger has an empty key-set, so a
+    # non-empty files_modified always yields a full-set reject (agents/dev.md
+    # requires the ledger be non-empty whenever edits were made).
+    if verify_ownership and section_name == "dev":
+        ledger_identities = _canonicalized_ledger_identities(payload.get("owned_edits"), control_root)
+        missing = sorted(
+            identity_display[identity]
+            for identity, fields in identity_fields.items()
+            if "files_modified" in fields and identity not in ledger_identities
+        )
+        if missing:
+            raise PlanError(
+                "files_modified declares path(s) with no matching owned_edits "
+                f"ledger entry (foreign or unaccounted-for edit): {', '.join(missing)}"
+            )
 
     targets: list[dict[str, Any]] = []
     ordered_roots = [control_root] + sorted(
