@@ -2109,18 +2109,47 @@ def strip_wake_knobs(root):
 
 
 def test_lease_ttl_fallback_on_legacy_config_warns_but_succeeds(tmp_path):
+    # Corrected (task 20260923-060338): the missing-key fallback now derives
+    # from required_lease_ttl_seconds(config) instead of an independently
+    # hand-typed literal 3600, so it satisfies the validator's own invariant
+    # by construction and no longer WARNs on the missing-key path. Function
+    # name kept unchanged -- test-writer AC7 pins it as the same test
+    # corrected, not deleted. The explicit-below-floor WARNING protection
+    # this name once described is still covered separately (AC6, see
+    # tests/generated/20260923-060338/test_AC6_c02f7463833e0468.py).
     root = ledger(tmp_path)
-    strip_wake_knobs(root)
+    cfg = strip_wake_knobs(root)
+    required = ((cfg.get("tolerated_missed_fires", 1) + 1)
+                * cfg.get("heartbeat_minutes", 45) * 60
+                + cfg.get("wake_slack_minutes", 15) * 60)  # 6300 s at seeded defaults
     r = run(root, "lease-acquire", "--holder", "ctl-A", now=T0)
     assert r.returncode == 0  # no KeyError: .get() fallback, never direct-key reads
     lease = json.loads((root / "lease.json").read_text())
-    assert lease["expires_at"] == "2026-08-28T13:00:00Z"  # ultimate fallback 3600 s
-    assert "WARNING" in r.stderr and "6300" in r.stderr  # invariant violated, op succeeds
+    assert lease["expires_at"] == "2026-08-28T13:45:00Z"  # T0 + required (6300s)
+    assert "WARNING" not in r.stderr  # fallback == required: invariant satisfied
     r = run(root, "lease-renew", "--holder", "ctl-A", now="2026-08-28T12:10:00Z")
     assert r.returncode == 0
     lease = json.loads((root / "lease.json").read_text())
-    assert lease["expires_at"] == "2026-08-28T13:10:00Z"
-    assert "WARNING" in r.stderr
+    assert lease["expires_at"] == "2026-08-28T13:55:00Z"  # +10min T0 + required (6300s)
+    assert "WARNING" not in r.stderr
+
+
+def test_lease_ttl_fallback_tracks_invariant_at_non_default_heartbeat_minutes(tmp_path):
+    """Should-Have regression (task 20260923-060338): the missing-key
+    fallback must track required_lease_ttl_seconds(config)'s inputs, not a
+    value re-pinned to today's 45-minute template default -- proven by
+    changing heartbeat_minutes before stripping the wake/lease knobs."""
+    root = ledger(tmp_path)
+    set_config(root, heartbeat_minutes=10)
+    cfg = strip_wake_knobs(root)
+    required = ((cfg.get("tolerated_missed_fires", 1) + 1)
+                * cfg.get("heartbeat_minutes", 45) * 60
+                + cfg.get("wake_slack_minutes", 15) * 60)  # 2100 s at heartbeat_minutes=10
+    r = run(root, "lease-acquire", "--holder", "ctl-A", now=T0)
+    assert r.returncode == 0
+    assert "WARNING" not in r.stderr
+    lease = json.loads((root / "lease.json").read_text())
+    assert lease["expires_at"] == "2026-08-28T12:35:00Z"  # T0 + required (2100s)
 
 
 def test_lease_ttl_default_from_seeded_config_satisfies_invariant(tmp_path):

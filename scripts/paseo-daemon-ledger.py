@@ -235,10 +235,25 @@ def load_config(root):
     return read_json(path) if path.exists() else {}
 
 
+def required_lease_ttl_seconds(config):
+    """TTL/cadence-coupling invariant floor (task 20260831-031316 M6): the
+    single source of truth for what lease_ttl_seconds must be at least, and
+    -- when the config key is absent -- for what it effectively is. Shared
+    by effective_lease_ttl()'s missing-key fallback, by
+    warn_ttl_cadence_coupling()'s validation, and by build_parser()'s
+    --ttl-seconds help text, so all three agree by construction for any
+    tolerated_missed_fires/heartbeat_minutes/wake_slack_minutes (task
+    20260923-060338 -- previously three independently hand-typed,
+    mutually contradictory literals: 7200 / 3600 / 6300-computed)."""
+    return ((config.get("tolerated_missed_fires", 1) + 1)
+            * config.get("heartbeat_minutes", 45) * 60
+            + config.get("wake_slack_minutes", 15) * 60)
+
+
 def effective_lease_ttl(args, config):
     if args.ttl_seconds is not None:
         return args.ttl_seconds
-    return config.get("lease_ttl_seconds", 3600)
+    return config.get("lease_ttl_seconds", required_lease_ttl_seconds(config))
 
 
 def warn_ttl_cadence_coupling(config, ttl):
@@ -247,9 +262,7 @@ def warn_ttl_cadence_coupling(config, ttl):
     expires the lease and forces a spurious succession (observed live
     2026-08-30: TTL 3600 s at 45-min cadence tolerated zero misses).
     Warning, never an error — existing callers keep working."""
-    required = ((config.get("tolerated_missed_fires", 1) + 1)
-                * config.get("heartbeat_minutes", 45) * 60
-                + config.get("wake_slack_minutes", 15) * 60)
+    required = required_lease_ttl_seconds(config)
     if ttl < required:
         print(f"WARNING: lease TTL {ttl}s violates the TTL/cadence coupling "
               f"invariant: required >= {required}s = (tolerated_missed_fires+1)"
@@ -2269,15 +2282,21 @@ def build_parser():
                    help="comma-separated account names (default: the three claude accounts)")
     s.set_defaults(fn=cmd_init)
 
+    # build_parser() runs before any config file is read (main() calls
+    # parse_args() before load_config()), so the help text is computed once
+    # from required_lease_ttl_seconds()'s default inputs -- the same
+    # function effective_lease_ttl()'s fallback and warn_ttl_cadence_coupling()
+    # use (task 20260923-060338: one source, not a hand-typed literal).
+    default_ttl_seconds = required_lease_ttl_seconds({})
+    ttl_help = (f"lease TTL seconds; default: config lease_ttl_seconds "
+                f"(fallback {default_ttl_seconds})")
     s = sub.add_parser("lease-acquire")
     s.add_argument("--holder", required=True)
-    s.add_argument("--ttl-seconds", type=int, default=None,
-                   help="lease TTL seconds; default: config lease_ttl_seconds (fallback 3600)")
+    s.add_argument("--ttl-seconds", type=int, default=None, help=ttl_help)
     s.set_defaults(fn=cmd_lease_acquire)
     s = sub.add_parser("lease-renew")
     s.add_argument("--holder", required=True)
-    s.add_argument("--ttl-seconds", type=int, default=None,
-                   help="lease TTL seconds; default: config lease_ttl_seconds (fallback 3600)")
+    s.add_argument("--ttl-seconds", type=int, default=None, help=ttl_help)
     s.set_defaults(fn=cmd_lease_renew)
     s = sub.add_parser("lease-status")
     s.set_defaults(fn=cmd_lease_status)
