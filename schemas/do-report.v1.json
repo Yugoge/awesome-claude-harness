@@ -1,0 +1,71 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "do-report.v1",
+  "title": "Do Report",
+  "description": "Lightweight /do completion report. Skeleton is hook-authored at consent time (status=pending); the agent MUST rewrite it to a terminal status before session stop (enforced by hooks/stop-do-report-gate.py). Read by /close (do-report path) and /commit.",
+  "type": "object",
+  "additionalProperties": true,
+  "required": [
+    "report_version",
+    "task_id",
+    "request_id",
+    "source",
+    "request",
+    "do"
+  ],
+  "properties": {
+    "report_version": {
+      "type": "integer",
+      "const": 1
+    },
+    "task_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "request_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "source": {
+      "type": "string",
+      "const": "do"
+    },
+    "request": {
+      "type": "string"
+    },
+    "do": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["status", "summary", "files_modified", "files_created"],
+      "properties": {
+        "status": {
+          "type": "string",
+          "enum": ["pending", "completed", "blocked"]
+        },
+        "summary": {
+          "type": "string"
+        },
+        "files_modified": {
+          "type": "array",
+          "items": {"type": "string"}
+        },
+        "files_created": {
+          "type": "array",
+          "items": {"type": "string"}
+        }
+      }
+    },
+    "codex_consult": {
+      "type": "object",
+      "description": "Present only when a --codex audit was requested and failed (quota/timeout/parse) — see commands/do.md Step 3.",
+      "required": ["status"],
+      "properties": {
+        "status": {
+          "type": "string",
+          "enum": ["failed_quota", "failed_timeout", "failed_parse"]
+        },
+        "note": {"type": "string"}
+      }
+    }
+  }
+}

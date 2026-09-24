@@ -10,6 +10,7 @@ schemas/
 ├── `context.v1.json` - json config
 ├── `cycle-contract.v1.json` - json config
 ├── `dev-report.v1.json` - json config
+├── `do-report.v1.json` - json config
 ├── `graphify-focused-subgraph.v1.json` - json config
 ├── `graphify-prequery.v1.json` - json config
 ├── `graphify-run.v1.json` - json config

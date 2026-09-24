@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Preloaded TodoList for /do workflow.
 
-Injects the 4-step /do workflow checklist via hook-todo-injection.
+Injects the 5-step /do workflow checklist via hook-todo-injection.
 Step 3 (Codex audit) is always listed; the agent skips it when --codex is absent.
+Step 5 (do-report) is enforced at session stop by hooks/stop-do-report-gate.py.
 """
 
 _STEPS = [
@@ -10,6 +11,7 @@ _STEPS = [
     ("2", "Develop", "Developing", None),
     ("3", "Codex audit (skip if --codex not in $ARGUMENTS)", "Running codex audit (--codex only)", None),
     ("4", "Summary", "Writing summary", None),
+    ("5", "Write do-report (complete the pending skeleton)", "Writing do-report", None),
 ]
 
 

@@ -3,6 +3,7 @@
     "cycle-contract.v1": "cycle-contract.v1.json",
     "qa-report.v1": "qa-report.v1.json",
     "dev-report.v1": "dev-report.v1.json",
+    "do-report.v1": "do-report.v1.json",
     "context.v1": "context.v1.json",
     "test-plan.v1": "test-plan.v1.json",
     "graphify-prequery.v1": "graphify-prequery.v1.json",

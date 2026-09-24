@@ -449,11 +449,12 @@ def validate_artifact(record: dict, schema_name: str) -> dict:
 #     preflight of dev.status / qa.status).
 
 # Map an interactive report-artifact kind (by filename prefix) to its registered
-# schema name. ``do-report`` is intentionally ABSENT: no do-report schema exists,
-# so the gate no-ops for it rather than fail-closing.
+# schema name. Version-gating still applies: an unversioned legacy record (no
+# report_version) skips, so pre-schema do-reports are never retro-rejected.
 _INTERACTIVE_REPORT_SCHEMAS = {
     'dev-report': 'dev-report.v1',
     'qa-report': 'qa-report.v1',
+    'do-report': 'do-report.v1',
 }
 
 
@@ -520,7 +521,7 @@ def validate_report_artifact(path) -> dict:
         schema; ``errors`` names the offending field(s). This is the only
         blocking status.
       - ``'skip'`` — no-op (never fail-closed): artifact absent, no registered
-        schema for the kind (do-report), unparseable JSON, unversioned legacy
+        schema for the kind, unparseable JSON, unversioned legacy
         record (no report_version), OR the validator could not actually run
         (jsonschema/Draft7Validator unavailable, or a schema-infra error such as
         registry failure / unregistered schema / validator exception). The gate

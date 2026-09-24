@@ -43,9 +43,14 @@ If codex fails (quota/timeout/parse): record `codex_consult: {status: "<failed_q
 
 State what changed, which files were modified, and (if Step 3 ran) whether codex found any blocking issues.
 
-## Before /close: write do-report
+### Step 5: Write do-report
 
-Before invoking `/close`, the agent MUST write `docs/dev/do-report-<TASK_ID>.json`.
+Every `/do` invocation MUST end with a terminal do-report at `docs/dev/do-report-<TASK_ID>.json` — this is no longer deferred to "before /close". The consent hook pre-writes a skeleton there (`do.status: "pending"`, task_id/request already filled); rewrite it to a terminal state:
+
+- `"completed"` — normal finish. Fill `do.summary` and `do.files_modified`/`do.files_created`.
+- `"blocked"` — honest terminal state when the task could not be finished (user abandoned it, an operation stayed unauthorized). Fill `do.summary` with what blocked it. NEVER report abandoned work as completed.
+
+Enforcement: `hooks/stop-do-report-gate.py` (Stop hook) checks this report against `schemas/do-report.v1.json` plus terminal-status/summary shape at session stop. In block mode a pending or malformed report blocks the stop (deadlock-guarded); in advisory mode (default) violations are logged to `~/.claude/logs/do-report-gate-advisory.jsonl`. The gate checks shape only — it never derives `files_modified` from git, and it never writes the report for you.
 
 **Resolve `TASK_ID` deterministically for the CURRENT session** — do NOT run `ls -t /tmp/claude-orchestrator-consent-*.flag | head -1` (that returns the globally-newest flag, so two concurrent `/do` sessions alias onto ONE id and silently overwrite each other's do-reports — the cross-task data-loss bug this resolution exists to prevent). Instead:
 1. `SID = $CLAUDE_CODE_SESSION_ID` (fallback `$CLAUDE_SESSION_ID`).
@@ -56,6 +61,7 @@ Use this `TASK_ID` for the do-report filename AND every downstream `/close $TASK
 
 ```json
 {
+  "report_version": 1,
   "task_id": "<TASK_ID>",
   "request_id": "<TASK_ID>",
   "source": "do",
@@ -68,6 +74,8 @@ Use this `TASK_ID` for the do-report filename AND every downstream `/close $TASK
   }
 }
 ```
+
+`report_version: 1` declares `schemas/do-report.v1.json`; the /close Artifact schema gate and the stop gate both validate against it (keep the field — an unversioned report skips schema validation but still fails the stop gate's shape check if malformed).
 
 `files_modified` and `files_created` MUST be filled by the agent from its own knowledge of what it changed — NOT derived from `git diff` (git diff is session-unaware and breaks under parallel /do sessions).
 

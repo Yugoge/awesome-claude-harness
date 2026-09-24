@@ -1357,10 +1357,46 @@ def _mint_unique_do_taskid() -> str:
     raise RuntimeError("unable to reserve a unique /do task-id after 300 probes")
 
 
-def handle_do_consent(sid: str) -> None:
+def _write_do_report_skeleton(task_id: str, request_text: str, project_dir: Path) -> Path | None:
+    """Pre-write the pending do-report skeleton at consent time.
+
+    Guarantees EXISTENCE mechanically: even a hard-killed /do session leaves an
+    attributable pending record (task_id + verbatim request) instead of a blank,
+    so /close can distinguish a died-mid-task /do from hand-edits. Only the
+    fields the hook actually knows are filled; summary/files_modified stay for
+    the agent (git-diff derivation is forbidden by commands/do.md). O_EXCL
+    create: the freshly-minted task_id can never clobber an existing report.
+    Best-effort — returns None on any failure, never raises."""
+    try:
+        report_dir = project_dir / "docs" / "dev"
+        report_dir.mkdir(parents=True, exist_ok=True)
+        report = report_dir / f"do-report-{task_id}.json"
+        fd = os.open(str(report), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump({
+                "report_version": 1,
+                "task_id": task_id,
+                "request_id": task_id,
+                "source": "do",
+                "request": request_text,
+                "do": {
+                    "status": "pending",
+                    "summary": "",
+                    "files_modified": [],
+                    "files_created": [],
+                },
+            }, f, ensure_ascii=False, indent=2)
+        return report
+    except Exception as e:
+        sys.stderr.write(f"[/do] Failed to write do-report skeleton: {e}\n")
+        return None
+
+
+def handle_do_consent(sid: str, user_input: str = "", project_dir: Path | None = None) -> None:
     """Handle /do command: write the consent flag, mint a unique per-invocation
-    task-id, and write a session-keyed task sidecar so the agent can resolve ITS
-    OWN task-id deterministically. Fixes the silent cross-task collision where the
+    task-id, write a session-keyed task sidecar so the agent can resolve ITS
+    OWN task-id deterministically, and pre-write the pending do-report skeleton.
+    Fixes the silent cross-task collision where the
     agent guessed its id via `ls -t /tmp/...consent-*.flag | head -1` (globally
     newest) — which aliased parallel /do sessions onto one id and overwrote each
     other's do-reports."""
@@ -1384,6 +1420,16 @@ def handle_do_consent(sid: str) -> None:
         print(f"[/do] task-id minted: {task_id} — resolve via $CLAUDE_CODE_SESSION_ID → /tmp/claude-do-task-<sid>.json (NOT `ls -t | head -1`).")
     except Exception as e:
         sys.stderr.write(f"[/do] Failed to write task sidecar: {e}\n")
+        return
+    # request = $ARGUMENTS verbatim: the raw prompt minus the leading /do token.
+    request_text = user_input.strip()
+    if request_text.startswith("/do"):
+        request_text = request_text[len("/do"):].strip()
+    skeleton = _write_do_report_skeleton(task_id, request_text, project_dir or PROJECT_DIR)
+    if skeleton is not None:
+        print(f"[/do] do-report skeleton pre-written (status=pending): {skeleton} — "
+              f"you MUST rewrite it to a terminal status (completed/blocked) with summary + "
+              f"files_modified before session stop; /close rejects pending.")
 
 
 def _write_userintent_sentinel(cmd_name: str, sid: str) -> None:
@@ -1828,7 +1874,7 @@ def handle_phase_a(cmd_name: str, user_input: str, sid: str, envelope_digest: st
     if cmd_name in ("commit", "push", "merge", "stop"):
         _write_userintent_sentinel(cmd_name, sid)
     if cmd_name == "do":
-        handle_do_consent(sid)
+        handle_do_consent(sid, user_input)
     if cmd_name in ('dev', 'dev-command', 'redev'):
         _ordinary_dev_start(cmd_name, user_input, sid, envelope_digest)
         return
