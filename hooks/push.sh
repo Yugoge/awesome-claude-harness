@@ -194,93 +194,48 @@ esac
 # writes a sentinel mid-flow.
 trap 'rm -f "$_CHAIN_B_SENTINEL_PATH" 2>/dev/null' EXIT INT TERM
 
-# --- Push-gate: verify a valid session commit token exists ---
+# --- Push-gate: verify SOME valid commit token exists (any session, any HEAD ancestor) ---
 _REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || echo "$_CLAUDE_HOME_FALLBACK")"
 _REPO_HASH="$(python3 -c "import hashlib,os; print(hashlib.sha256(os.path.realpath('${_REPO_ROOT}').encode()).hexdigest()[:16])")"
 _BRANCH_RAW="$(git rev-parse --abbrev-ref HEAD 2>/dev/null)"
 _BRANCH="$(python3 -c "print('${_BRANCH_RAW}'.replace('/', '__'))")"
-# Session-scoped token path. The token has ALWAYS carried a session_id field, but the path
-# did not, so two sessions working the same branch contended for one slot — and DO NOT rule 7
-# (never overwrite another session's token) then made that contention permanent: the loser's
-# commit could never be tokenized at all, because the only write opportunity is the moment of
-# its own commit. Keying the path by session removes the contention instead of arbitrating it.
-# Nothing here validates session identity: the gate below still authorizes purely on
-# commit_sha == HEAD, exactly as before.
-#
-# The session id becomes a PATH SEGMENT, so it must be sanitised before use. It arrives from
-# the environment and is not trustworthy as a filename: a value containing `/` or `..` would
-# escape the session directory, and two distinct ids that normalise to the same segment would
-# recreate the very collision this change removes. Reduce it to a fixed-width hex digest —
-# collision-free in practice, fixed length, and containing no path-significant characters, so
-# it is also safe to interpolate into the validator below. `unknown` (both env vars absent) is
-# digested like any other value, giving one shared slot for that degenerate case rather than a
-# traversal primitive.
-_PUSH_GATE_SID_RAW="${CLAUDE_CODE_SESSION_ID:-${CLAUDE_SESSION_ID:-unknown}}"
-_PUSH_GATE_SID="$(printf '%s' "$_PUSH_GATE_SID_RAW" | sha256sum | cut -c1-16)"
-_TOKEN_PATH="/tmp/agentic-commit/push/${_REPO_HASH}/${_PUSH_GATE_SID}/${_BRANCH}.json"
-
-# Back-compat: tokens written by a pre-migration /commit live at the legacy session-less path.
-# Honour one only when no session-scoped token exists AND it is OURS.
-#
-# The ownership test is not optional. The legacy path is shared by construction, so without it
-# session B could push on session A's token, and — because $_TOKEN_PATH is what the post-push
-# cleanup deletes — B would then consume A's token too. That is exactly the cross-session
-# interference this migration removes; an unguarded fallback would smuggle it back in.
-# commit_sha == HEAD is NOT a sufficient guard here: two sessions on one branch routinely sit
-# at the same HEAD, which is precisely when they contend.
-#
-# A legacy token predating the session_id field (or carrying an empty one) is treated as
-# unowned and is NOT inherited: unclaimed is not the same as ours. Re-run /commit to mint a
-# session-scoped token instead.
-_LEGACY_TOKEN_PATH="/tmp/agentic-commit/push/${_REPO_HASH}/${_BRANCH}.json"
-if [ ! -f "$_TOKEN_PATH" ] && [ -f "$_LEGACY_TOKEN_PATH" ]; then
-  # Compare against the RAW session id: session_id inside the token is stored undigested.
-  if _LEGACY_OWNER="$(python3 -c "
+_HEAD_SHA="$(git rev-parse HEAD 2>/dev/null)"
+# WRITE path is unchanged: /commit still mints tokens under a session-scoped
+# digest, so two sessions committing back-to-back never contend for one slot
+# (2026-09-04 fix, preserved). READ side (2026-09-24): accepts any session's
+# token whose commit_sha is an ANCESTOR of (or equal to) HEAD, proving a real
+# /commit is still part of HEAD's history — see commands/push.md "Session
+# commit prerequisite (push-gate)" for the full rationale.
+_TOKEN_BASE_DIR="/tmp/agentic-commit/push/${_REPO_HASH}"
+_TOKEN_PATH=""
+_CANDIDATE_COUNT=0
+if [ -d "$_TOKEN_BASE_DIR" ]; then
+  # -maxdepth 2 covers both layouts in one pass: the legacy session-less path
+  # ${_TOKEN_BASE_DIR}/${_BRANCH}.json (depth 1) and every session-scoped path
+  # ${_TOKEN_BASE_DIR}/<session-digest>/${_BRANCH}.json (depth 2). Sort newest-mtime
+  # first so that when multiple valid tokens exist, the freshest one is consumed.
+  while IFS= read -r _cand; do
+    _CANDIDATE_COUNT=$((_CANDIDATE_COUNT + 1))
+    _CAND_SHA="$(python3 -c "
 import json, sys
 try:
-    print(json.load(open(sys.argv[1])).get('session_id') or '')
+    d = json.load(open(sys.argv[1]))
+    sha = d.get('commit_sha', '')
+    print(sha if sha else '')
 except Exception:
     print('')
-" "$_LEGACY_TOKEN_PATH" 2>/dev/null)" \
-     && [ -n "$_LEGACY_OWNER" ] && [ "$_LEGACY_OWNER" = "$_PUSH_GATE_SID_RAW" ]; then
-    _TOKEN_PATH="$_LEGACY_TOKEN_PATH"
-  fi
+" "$_cand" 2>/dev/null)"
+    [ -z "$_CAND_SHA" ] && continue
+    if git merge-base --is-ancestor "$_CAND_SHA" "$_HEAD_SHA" 2>/dev/null; then
+      _TOKEN_PATH="$_cand"
+      break
+    fi
+  done < <(find "$_TOKEN_BASE_DIR" -maxdepth 2 -type f -name "${_BRANCH}.json" -printf '%T@ %p\n' 2>/dev/null | sort -rn | cut -d' ' -f2-)
 fi
 
-if [ -f "$_TOKEN_PATH" ]; then
-  _HEAD_SHA="$(git rev-parse HEAD 2>/dev/null)"
-  _GATE_RESULT="$(python3 - <<PYEOF 2>/dev/null
-import json, sys
-
-try:
-    d = json.load(open('${_TOKEN_PATH}'))
-except Exception as e:
-    print(f"parse_error: {e}")
-    sys.exit(0)
-
-commit_sha = d.get('commit_sha', '')
-
-if commit_sha != '${_HEAD_SHA}':
-    print(f"sha_mismatch: token={commit_sha} HEAD=${_HEAD_SHA}")
-    sys.exit(0)
-
-print("ok")
-PYEOF
-)"
-  case "$_GATE_RESULT" in
-    ok) ;;
-    sha_mismatch:*)
-      echo "❌ Push gate: ${_GATE_RESULT#sha_mismatch: }. Run /commit to refresh." >&2
-      exit 3
-      ;;
-    parse_error:*|"")
-      echo "❌ Push gate: could not read token at ${_TOKEN_PATH} (${_GATE_RESULT}). Run /commit to refresh." >&2
-      exit 3
-      ;;
-  esac
-else
-  echo "❌ Push gate: no session commit token found at ${_TOKEN_PATH}." >&2
-  echo "   Run /commit first to create the push-gate token." >&2
+if [ -z "$_TOKEN_PATH" ]; then
+  echo "❌ Push gate: no push-gate token (checked ${_CANDIDATE_COUNT} candidate(s) across all sessions under ${_TOKEN_BASE_DIR}) has a commit_sha that is an ancestor of current HEAD (${_HEAD_SHA})." >&2
+  echo "   Run /commit (in any session) first to create a valid push-gate token." >&2
   exit 3
 fi
 

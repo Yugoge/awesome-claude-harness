@@ -53,54 +53,57 @@ accepts only an optional remote and `--auto` for non-interactive lock handling.
 
 ## Session commit prerequisite (push-gate)
 
-`/push` requires a valid push-gate token written by a prior `/commit` in this session.
+`/push` requires SOME valid push-gate token to exist proving a real `/commit` happened on this
+branch — written by ANY session, not necessarily this one, and its recorded commit need only be
+an ANCESTOR of current HEAD, not equal to it. (Changed 2026-09-24: this gate used to require the
+token to belong to the calling session AND its `commit_sha` to equal HEAD exactly. On a branch
+shared by many concurrent sessions with no push coordination between them, that meant any
+session's token was invalidated by literally anyone else's next commit, even though nothing was
+lost — the original commit stayed safely in history, just no longer the tip. The property this
+gate actually needs to prove is "did a real `/commit` produce something still part of HEAD's
+history" — an ancestor check proves that exactly as well as equality, and doesn't require the
+token to be *this session's own* or *the newest one*, since there is no cross-tenant boundary
+here to enforce: one machine, one user, many cooperating sessions.)
 
-Token location: `/tmp/agentic-commit/push/<repo-hash>/<session-digest>/<branch-encoded>.json`
+Token base directory: `/tmp/agentic-commit/push/<repo-hash>/`
 
 - `repo-hash` = `sha256(os.path.realpath(repo_root)).hexdigest()[:16]`
-- `session-digest` = `sha256(<raw session id>).hexdigest()[:16]`, where the raw session id is
-  `CLAUDE_CODE_SESSION_ID`, else `CLAUDE_SESSION_ID`, else the literal `unknown`. The raw id is
-  digested rather than used verbatim because it becomes a path segment and arrives from the
-  environment: a value carrying `/` or `..` would escape the session directory, and two ids
-  normalizing to the same segment would recreate the very collision session-scoping removes.
+- `/commit` still WRITES its token to a session-scoped path under that base,
+  `<repo-hash>/<session-digest>/<branch-encoded>.json`, where `session-digest` =
+  `sha256(<raw session id>).hexdigest()[:16]` (raw session id: `CLAUDE_CODE_SESSION_ID`, else
+  `CLAUDE_SESSION_ID`, else the literal `unknown`; digested because it becomes a path segment and
+  a raw value could contain `/`/`..` or collide with another id). This keeps two sessions
+  committing back-to-back from contending for one write slot (2026-09-04 fix, unchanged).
+  A legacy session-less path, `<repo-hash>/<branch-encoded>.json`, still exists from
+  pre-migration `/commit` runs and is treated as just another candidate now (see below) — no
+  special-casing needed.
 - `branch-encoded` = branch name with `/` replaced by `__`
-- Token content as WRITTEN: `{"commit_sha": "<sha>", "branch": "<branch>", "repo_root": "<root>", "session_id": "<raw session id, undigested>"}`.
-  `session_id` carries the RAW id, never the digest — the digest appears only as a path segment.
-- Token content as VALIDATED — these are not the same set, and a wrapper must not conflate them.
-  For a token found at the session-scoped path, `push.sh` compares `commit_sha` against HEAD and
-  reads NOTHING else: `branch`, `repo_root` and `session_id` are written for auditability and are
-  not gate inputs. `session_id` becomes decisive in exactly one place, the legacy-fallback
-  ownership test below. Do not add validation the gate does not perform.
-- Legacy fallback: a session-less token at `/tmp/agentic-commit/push/<repo-hash>/<branch-encoded>.json`,
-  written by a pre-migration `/commit`, is honoured by `push.sh` only when BOTH hold: no
-  session-scoped token exists, AND the legacy token's `session_id` is present, non-empty, and
-  equal to this session's RAW id. A token owned by another session, or carrying no `session_id`
-  at all, is REFUSED — matching `commit_sha` is not sufficient, because two sessions on one
-  branch routinely share a HEAD, which is exactly when they contend. The ownership test is not
-  merely about authorization: `push.sh` deletes the resolved token path after a successful push,
-  so inheriting a foreign token would also destroy it.
-  Pre-validation MUST check the legacy path too, and MUST apply the same ownership test —
-  aborting because the session-scoped path alone is empty makes the fallback unreachable through
-  this wrapper, while accepting the legacy path without the ownership test makes this wrapper
-  admit what the gate rejects.
+- Token content: `{"commit_sha": "<sha>", "branch": "<branch>", "repo_root": "<root>", "session_id": "<raw session id, undigested>"}`.
+  `push.sh` reads only `commit_sha` for the gate decision; `branch`, `repo_root`, `session_id` are
+  written for auditability only and are no longer gate inputs — session identity does not gate
+  reads (see rationale above), only writes (via the path it's written to).
+- **READ side**: `push.sh` scans every `<branch-encoded>.json` file found at either depth under
+  the repo-hash directory (`find <repo-hash-dir> -maxdepth 2 -name '<branch-encoded>.json'`) —
+  every session's slot, plus the legacy path, all as equal candidates, sorted newest-mtime-first.
+  For each candidate it parses `commit_sha` and tests `git merge-base --is-ancestor <commit_sha>
+  HEAD`; the first candidate that passes wins and is consumed. Malformed/unparseable candidates
+  are skipped (not fatal) as long as some other candidate is valid — the gate only fails closed
+  when NO candidate anywhere validates.
 
 **Rejection conditions** (push is blocked if any hold):
-- No usable token: nothing at the session-scoped path, and nothing at the legacy path that
-  passes the ownership test above (no `/commit` ran in this session, or the only legacy token
-  present is unowned — its `session_id` is foreign, absent, or empty, or the legacy file
-  cannot be read at all, which the ownership probe treats as unowned)
-- Token `commit_sha` does not match current `git rev-parse HEAD` (HEAD moved since commit)
-- Token unreadable or unparseable: the resolved token file exists but cannot be read, or its
-  JSON does not parse — including the degenerate case where the validator produces no output
-  at all, which `push.sh` handles in the same fail-closed branch. This is DISTINCT from "no
-  usable token": the gate rejects on the unparseable token itself rather than falling through
-  to any other path. In particular, an unparseable session-scoped token blocks the push even
-  when a valid legacy token exists, because the legacy fallback triggers only on session-scoped
-  file ABSENCE, never on parse failure.
+- No usable token: the repo-hash directory doesn't exist, contains no `<branch-encoded>.json`
+  file at any session depth, or every candidate found either fails to parse or has a `commit_sha`
+  that is not an ancestor of current HEAD (e.g. it names a commit that was reset/rebased away, or
+  belongs to an unrelated branch/repo state).
+- No ancestor-passing candidate: every discovered candidate's `commit_sha` fails
+  `git merge-base --is-ancestor <commit_sha> HEAD` (distinct from "no usable token" above only in
+  that files did exist and parse; they just don't name anything still reachable from HEAD).
 
-**Resolution**: run `/commit [<task-id>]` first. The `changelog-analyst` subagent writes
-the token after a successful real-branch commit. The token is consumed (deleted) after
-a successful push.
+**Resolution**: run `/commit [<task-id>]` — in ANY session on this branch, not necessarily this
+one. The `changelog-analyst` subagent writes the token after a successful real-branch commit; as
+long as that commit is still reachable from HEAD (not reset/rebased away), its token remains
+usable by any session's `/push` indefinitely, not just the session that minted it. The token is
+consumed (deleted) after a successful push.
 
 **Guard registration note**: `pretool-git-privilege-guard.py` is REGISTERED in `settings.json` (PreToolUse, Bash matcher). changelog-analyst commits require either a valid commit grant (written by `/commit` Step 5) or the `auto-bulk:` prefix (matched by `BLESSED_BRIDGE_RE`). Direct `git commit` by agents without a grant or blessed prefix is blocked.
 
@@ -137,25 +140,16 @@ fi
 # Explicit user-provided remote argument overrides the above
 ```
 
-**Step 1: Validate push-gate token (Chain A — existing, unchanged)**
+**Step 1: Validate push-gate token (Chain A — existing, relaxed 2026-09-24)**
 
-This is the existing session commit prerequisite check. Verify the push-gate token at
-`/tmp/agentic-commit/push/<repo-hash>/<session-digest>/<branch-encoded>.json` exists and that
-its `commit_sha` matches the current `git rev-parse HEAD`. `session-digest` is derived exactly
-as in the Session commit prerequisite above: `sha256` of the raw session id
-(`CLAUDE_CODE_SESSION_ID`, else `CLAUDE_SESSION_ID`, else the literal `unknown`), first 16 hex
-characters. If no session-scoped token exists, check the legacy session-less path
-`/tmp/agentic-commit/push/<repo-hash>/<branch-encoded>.json` before concluding anything —
-`push.sh` falls back to it, so aborting on an empty session-scoped path alone would make that
-fallback unreachable. A legacy token is usable ONLY under the ownership test from the Session
-commit prerequisite above: its `session_id` must be present, non-empty, and equal to this
-session's RAW id. `push.sh` applies that test before any sha comparison, and a matching
-`commit_sha` never substitutes for it — a legacy token that is unreadable, carries no
-`session_id`, or belongs to another session is not a usable token at all, even at the right
-HEAD. Abort and instruct the user to run `/commit` first when any of these hold: neither path
-yields a usable token (counting an unowned legacy token as unusable); the resolved token's
-`commit_sha` does not match the current `git rev-parse HEAD`; or the resolved token cannot be
-read or parsed (the gate fails closed on it — see Rejection conditions above).
+This is the existing session commit prerequisite check, now cross-session and ancestor-based
+(see Session commit prerequisite above for the full rationale). Scan every `<branch-encoded>.json`
+candidate under `/tmp/agentic-commit/push/<repo-hash>/` (own session slot, every other session's
+slot, and the legacy session-less path — all equal candidates now, no ownership test), and accept
+the first one (newest-mtime-first) whose `commit_sha` passes `git merge-base --is-ancestor
+<commit_sha> HEAD`. Abort and instruct the user to run `/commit` (in any session) first only when
+NO candidate anywhere validates — either none exist, or every one that parses names a commit that
+is not an ancestor of current HEAD.
 
 **Step 2: Compute pre-push snapshot**
 
