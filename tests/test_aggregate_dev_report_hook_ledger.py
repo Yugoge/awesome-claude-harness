@@ -287,6 +287,141 @@ def test_ac4_empty_ledger_directory_also_leaves_canonical_report_unchanged(
     assert report_path.read_bytes() == before
 
 
+def test_stale_ledger_entry_mismatched_diff_sha256_is_not_folded_into_files_landed_whole(
+    tmp_path, monkeypatch, capsys,
+):
+    """AC1 (dev-20260926-044454, ac_uid bcd554c4015094fe): a ledger entry
+    recorded with a diff_sha256 that no longer matches the path's current
+    git diff HEAD (the file was edited again after the entry was recorded)
+    must never be folded into files_landed_whole -- the freshness recheck in
+    _merge_hook_ledger_into_singular rejects it, including when the
+    recompute itself would fail (treated identically to a mismatch)."""
+    control = _repo(tmp_path / "control")
+    rel_path = "hooks/tests/INDEX.md"
+    _track_and_modify(
+        control, rel_path,
+        initial="# tests\n\n<!-- AUTO:index-stats -->\nstale\n<!-- /AUTO:index-stats -->\n",
+        modified="# tests\n\n<!-- AUTO:index-stats -->\nregenerated real stats\n<!-- /AUTO:index-stats -->\n",
+    )
+    stale_recorded_hash = hashlib.sha256(b"a diff that no longer matches the tree").hexdigest()
+    assert stale_recorded_hash != _real_diff_sha256(control, rel_path)
+
+    task_id = "20260101-180000"
+    dev_session_id = f"dev-{task_id}"
+    _write_ledger_entry(control, dev_session_id, {
+        "path": rel_path,
+        "diff_sha256": stale_recorded_hash,
+        "reason": "PostToolUse doc-sync regeneration side effect; not reviewed by dev",
+        "source_agent_id": "agent-stale-ac1",
+        "ts": "2026-01-01T18:00:00Z",
+    })
+    report_path = _write_singular_report(control, task_id, [rel_path])
+
+    monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(control))
+    rc = agg_mod.main(["--task-id", task_id])
+    assert rc == 0
+
+    updated = json.loads(report_path.read_text(encoding="utf-8"))
+    assert not updated.get("files_landed_whole"), (
+        "a stale ledger entry (recorded diff_sha256 no longer matching the "
+        "path's current git diff HEAD) must never be folded into "
+        "files_landed_whole"
+    )
+
+
+def test_empty_diff_hash_entry_rejected_when_current_diff_is_non_empty(
+    tmp_path, monkeypatch, capsys,
+):
+    """AC2 (ac_uid 61f82908939ad5c8): sha256('') is a legitimate write-side
+    value (hook_ledger.py::_diff_sha256's own docstring: the ordinary hash
+    of a genuinely empty diff, meaning "no diff existed at record time"),
+    but the compare side applies the identical mismatch rule -- an entry
+    recorded with that value, compared against a path that NOW has a
+    non-empty diff, is rejected on the same terms as any other mismatch. No
+    special-case exemption for the empty-hash value; the write side
+    (hook_ledger.py) is unmodified by this fix."""
+    control = _repo(tmp_path / "control")
+    rel_path = "scripts/README.md"
+    _track_and_modify(
+        control, rel_path,
+        initial="# scripts\n",
+        modified="# scripts\n\nnewly regenerated content\n",
+    )
+    empty_diff_hash = hashlib.sha256(b"").hexdigest()
+    assert empty_diff_hash != _real_diff_sha256(control, rel_path)
+
+    task_id = "20260101-190000"
+    dev_session_id = f"dev-{task_id}"
+    _write_ledger_entry(control, dev_session_id, {
+        "path": rel_path,
+        "diff_sha256": empty_diff_hash,
+        "reason": "PostToolUse doc-sync regeneration side effect; not reviewed by dev",
+        "source_agent_id": "agent-empty-ac2",
+        "ts": "2026-01-01T19:00:00Z",
+    })
+    report_path = _write_singular_report(control, task_id, [rel_path])
+
+    monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(control))
+    rc = agg_mod.main(["--task-id", task_id])
+    assert rc == 0
+
+    updated = json.loads(report_path.read_text(encoding="utf-8"))
+    assert not updated.get("files_landed_whole"), (
+        "an entry recorded as sha256('') must be rejected under the "
+        "identical mismatch rule once the path has a non-empty current diff"
+    )
+
+
+def test_ac3_hooks_tests_readme_stale_empty_hash_regression_fixture(
+    tmp_path, monkeypatch, capsys,
+):
+    """AC3 (ac_uid a85db87ca3700d0c): regression fixture reproducing the
+    REAL on-disk shape found in this repo's own
+    .claude/dev-registry/dev-20260923-175747/hook-landed-files/ ledger: the
+    hooks/tests/README.md entry (source_agent_id/ts copied verbatim from
+    that real entry) was recorded with diff_sha256 = sha256('') (no diff
+    existed at record time), and the path has since been genuinely edited
+    again, so its current git diff HEAD is non-empty. This test FAILS
+    against the pre-fix _merge_hook_ledger_into_singular (which folds every
+    well-formed loaded entry unconditionally, with no recompute/compare
+    step at all) and PASSES against the post-fix recompute-and-compare
+    code."""
+    control = _repo(tmp_path / "control")
+    rel_path = "hooks/tests/README.md"
+    _track_and_modify(
+        control, rel_path,
+        initial="# hooks/tests\n\nDoc-sync regenerated test directory notes.\n",
+        modified=(
+            "# hooks/tests\n\nDoc-sync regenerated test directory notes.\n\n"
+            "Updated after the ledger entry was recorded.\n"
+        ),
+    )
+    empty_diff_hash = hashlib.sha256(b"").hexdigest()
+    assert empty_diff_hash != _real_diff_sha256(control, rel_path)
+
+    task_id = "20260923-175747"
+    dev_session_id = f"dev-{task_id}"
+    _write_ledger_entry(control, dev_session_id, {
+        "path": rel_path,
+        "diff_sha256": empty_diff_hash,
+        "reason": "PostToolUse doc-sync regeneration side effect; not reviewed by dev",
+        "source_agent_id": "ad1029bee1ffd17c6",
+        "ts": "2026-09-23T19:04:49Z",
+    })
+    report_path = _write_singular_report(control, task_id, [rel_path])
+
+    monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(control))
+    rc = agg_mod.main(["--task-id", task_id])
+    assert rc == 0
+
+    updated = json.loads(report_path.read_text(encoding="utf-8"))
+    assert not updated.get("files_landed_whole"), (
+        "the real hooks/tests/README.md / lane dev-20260923-175747 shape "
+        "(recorded sha256(''), now genuinely diffed) must be rejected, not "
+        "folded into files_landed_whole"
+    )
+
+
 def test_dual_listing_constraint_ledger_entry_never_exempts_owned_edits_path(
     tmp_path, monkeypatch, capsys,
 ):

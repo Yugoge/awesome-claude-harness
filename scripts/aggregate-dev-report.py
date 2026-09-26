@@ -864,7 +864,9 @@ def _load_hook_ledger_entries(ledger_dirs: list[Path]) -> list[dict]:
     return entries
 
 
-def _merge_hook_ledger_into_singular(existing_doc: dict, ledger_dirs: list[Path]) -> bool:
+def _merge_hook_ledger_into_singular(
+    existing_doc: dict, ledger_dirs: list[Path], project_root: Path
+) -> bool:
     """Merge validated hook-ledger entries into existing_doc['files_landed_whole'].
 
     Backlog #122 M3: additive-only, dedupe by path, never drops a
@@ -874,6 +876,22 @@ def _merge_hook_ledger_into_singular(existing_doc: dict, ledger_dirs: list[Path]
     already claimed by owned_edits or pre_edit_snapshots is never routed
     through files_landed_whole instead.
 
+    Freshness recheck (backlog #122 M4, ticket dev-20260926-044454): a
+    ledger entry's diff_sha256 is only ever true AT RECORD TIME -- the path
+    may have been edited again since. Before folding a surviving entry in,
+    recompute sha256(git diff HEAD -- path) against project_root using
+    hook_ledger.py's own _diff_sha256 (imported directly, not re-derived) and
+    require byte-for-byte equality with the recorded value. Any mismatch --
+    including a None/failed recompute -- is rejected on the same fail-closed
+    terms, with NO special-case exemption for a recorded sha256("") (a
+    legitimate "no diff existed at record time" write-side value per
+    hook_ledger.py::_diff_sha256's own docstring, but not exempt from this
+    comparison: recorded-empty vs. now-non-empty is a mismatch like any
+    other). This mirrors agents/changelog-analyst.md:793-809's own
+    recompute/compare/fail-closed pattern for the same files_landed_whole
+    channel at a later (staging-time) point -- defense-in-depth, not a
+    duplicate of that later check.
+
     Returns True iff at least one new entry was appended -- the caller only
     writes the canonical report back to disk when this is True, preserving
     AC4's byte-for-byte-unchanged-when-empty guarantee.
@@ -881,6 +899,22 @@ def _merge_hook_ledger_into_singular(existing_doc: dict, ledger_dirs: list[Path]
     entries = _load_hook_ledger_entries(ledger_dirs)
     if not entries:
         return False
+
+    # Reuse hook_ledger.py's own _diff_sha256 directly (not a re-derived
+    # hashing scheme), imported lazily HERE rather than at module top level --
+    # mirrors the scripts/*.py -> hooks.doc_sync.* import precedent already
+    # established by scripts/regen-index-dirs.py:18-26. A module-top-level
+    # __file__ reference breaks
+    # tests/test_ac_deviation_fanout_consumer.py's bare_aggregator() helper,
+    # which execs this file's source into a bare namespace with no __file__
+    # at all (test_c8_..._bare_namespace__pin); deferring the reference into
+    # this function body means it is only evaluated when this function
+    # actually runs, which that helper never does.
+    own_repo_root = Path(__file__).resolve().parent.parent
+    if str(own_repo_root) not in sys.path:
+        sys.path.insert(0, str(own_repo_root))
+    from hooks.doc_sync.hook_ledger import _diff_sha256 as hook_ledger_diff_sha256
+
     owned_paths = set(existing_doc.get("owned_edits") or {})
     snapshot_paths = set(existing_doc.get("pre_edit_snapshots") or {})
     existing_landed = existing_doc.get("files_landed_whole")
@@ -891,6 +925,9 @@ def _merge_hook_ledger_into_singular(existing_doc: dict, ledger_dirs: list[Path]
     for entry in entries:
         path = entry["path"]
         if path in owned_paths or path in snapshot_paths or path in existing_paths:
+            continue
+        current_diff_sha256 = hook_ledger_diff_sha256(path, project_root)
+        if current_diff_sha256 != entry["diff_sha256"]:
             continue
         existing_landed.append({
             "path": path,
@@ -1536,7 +1573,7 @@ def main(argv: list[str] | None = None) -> int:
             # "skipped" either way -- this insertion never invents a 4th
             # action value.
             ledger_dirs = _hook_ledger_dirs(project_root, task_id, bare_tid)
-            if _merge_hook_ledger_into_singular(existing_doc, ledger_dirs):
+            if _merge_hook_ledger_into_singular(existing_doc, ledger_dirs, project_root):
                 _atomic_write_json(canonical_path, existing_doc)
             _emit_ok(action="skipped", output_path=str(canonical_path), reason=skip_reason)
             return 0
