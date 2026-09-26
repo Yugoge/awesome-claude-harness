@@ -14,7 +14,7 @@
 #
 # Usage: write-enforce-flag.sh --source-command <dev|dev-overnight> \
 #                              --session-id <DEV_SESSION_ID> \
-#                              --flag <codex|e2e> [--flag <...>]
+#                              --flag <codex|e2e|artifact-contract> [--flag <...>]
 # Exits 1 on failure; callers must abort if this script fails.
 set -euo pipefail
 
@@ -45,16 +45,18 @@ CREATED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 # Per-flag definitions: output filename + the agent types the gate applies to.
 flag_filename() {
   case "$1" in
-    codex) echo "codex-enforce.json" ;;
-    e2e)   echo "e2e-enforce.json" ;;
-    *)     return 1 ;;
+    codex)             echo "codex-enforce.json" ;;
+    e2e)               echo "e2e-enforce.json" ;;
+    artifact-contract) echo "artifact-contract-enforce.json" ;;
+    *)                 return 1 ;;
   esac
 }
 flag_agent_types() {
   case "$1" in
-    codex) echo '["ba", "dev", "qa"]' ;;
-    e2e)   echo '["qa"]' ;;
-    *)     return 1 ;;
+    codex)             echo '["ba", "dev", "qa"]' ;;
+    e2e)               echo '["qa"]' ;;
+    artifact-contract) echo '["dev", "qa"]' ;;
+    *)                 return 1 ;;
   esac
 }
 
@@ -63,7 +65,7 @@ flag_agent_types() {
 # bad: the first sentinel already on disk, the caller told to abort.
 for flag in "${FLAGS[@]}"; do
   flag_filename "$flag" >/dev/null || {
-    echo "ERROR: unknown --flag '$flag' (expected: codex, e2e)" >&2; exit 1; }
+    echo "ERROR: unknown --flag '$flag' (expected: codex, e2e, artifact-contract)" >&2; exit 1; }
 done
 
 mkdir -p "$REGISTRY_DIR" \
@@ -93,7 +95,8 @@ for flag in "${FLAGS[@]}"; do
   # Preserve the exact success labels the two original scripts emitted; callers
   # and transcripts grep for these strings.
   case "$flag" in
-    codex) echo "Codex enforcement active: $target" ;;
-    e2e)   echo "E2E enforcement active: $target" ;;
+    codex)             echo "Codex enforcement active: $target" ;;
+    e2e)               echo "E2E enforcement active: $target" ;;
+    artifact-contract) echo "Artifact-contract enforcement active: $target" ;;
   esac
 done

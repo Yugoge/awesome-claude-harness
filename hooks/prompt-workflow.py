@@ -1498,7 +1498,8 @@ def _init_dev_registry(cmd_name: str, user_input: str, claude_session_id: str, p
 
     Creates .claude/dev-registry/<dev_session_id>/ with per-agent sentinel JSON files,
     writes docs/dev/user-requirement-<dev_session_id>.md with the cleaned requirement,
-    and calls write-e2e-enforce.sh (and optionally write-codex-enforce.sh) as subprocesses.
+    and calls write-e2e-enforce.sh and write-enforce-flag.sh --flag artifact-contract
+    (and optionally write-codex-enforce.sh) as subprocesses.
     Returns the generated dev_session_id string.
     """
     # Reserving the directory with mkdir(exist_ok=False) is the allocation
@@ -1581,6 +1582,23 @@ def _init_dev_registry(cmd_name: str, user_input: str, claude_session_id: str, p
             print(f'_init_dev_registry: write-e2e-enforce.sh error: {result.stderr}', file=sys.stderr)
     except Exception as e:
         print(f'_init_dev_registry: write-e2e-enforce.sh exception: {e}', file=sys.stderr)
+
+    # Call write-enforce-flag.sh --flag artifact-contract (fail-open): activates
+    # the producer-side report schema stop-gate
+    # (hooks/subagentstop-artifact-contract-enforce.py) for this session's
+    # dev/qa subagents — the same contract_runtime schema check /close applies
+    # at its Artifact schema gate, moved to the report producer's stop boundary.
+    try:
+        flag_script = scripts_dir / 'write-enforce-flag.sh'
+        result = subprocess.run(
+            [str(flag_script), '--source-command', cmd_name, '--session-id', dev_session_id,
+             '--flag', 'artifact-contract'],
+            capture_output=True, text=True, timeout=15, env=base_env,
+        )
+        if result.returncode != 0:
+            print(f'_init_dev_registry: write-enforce-flag.sh (artifact-contract) error: {result.stderr}', file=sys.stderr)
+    except Exception as e:
+        print(f'_init_dev_registry: write-enforce-flag.sh (artifact-contract) exception: {e}', file=sys.stderr)
 
     # Call write-codex-enforce.sh if --codex flag present (fail-open)
     if '--codex' in user_input.split():

@@ -134,6 +134,7 @@ The `UserPromptSubmit` hook has already:
 3. Written `docs/dev/user-requirement-<DEV_SESSION_ID>.md` with the verbatim user requirement
 4. Run `write-e2e-enforce.sh` — E2E enforcement is ACTIVE
 5. Run `write-codex-enforce.sh` (if `--codex` was passed)
+6. Run `write-enforce-flag.sh --flag artifact-contract` — producer-side report schema gate ACTIVE (see `commands/dev.md` item 6)
 
 **Read `DEV_SESSION_ID` from the hook output above.** Store it for use in every Agent launch prompt below.
 
@@ -156,6 +157,7 @@ done
 **E2E and Codex enforcement** (hook pre-done): The hook has already called `write-e2e-enforce.sh` and (if `--codex`) `write-codex-enforce.sh`. Both enforce flags are active. **Fallback** (if hook absent): call the scripts manually:
 ```bash
 scripts/write-e2e-enforce.sh --source-command dev-command --session-id $DEV_SESSION_ID
+scripts/write-enforce-flag.sh --source-command dev-command --session-id $DEV_SESSION_ID --flag artifact-contract
 # Only when --codex:
 # scripts/write-codex-enforce.sh --source-command dev-command --session-id $DEV_SESSION_ID
 ```
