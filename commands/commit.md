@@ -14,16 +14,17 @@ are supported without a project-root override.
 ## Usage
 
 ```
-/commit [<task-id>] [--force] [--bulk] [--dry-run] [--codex]
+/commit [<task-id>] [--force] [--bulk] [--dry-run] [--codex] [--auto]
 ```
 
 | Flag | Meaning |
 |------|---------|
-| `<task-id>` | Required unless `--force` or `--bulk`. Task-id from the completed `/dev` cycle (e.g. `20260516-212024`). |
+| `<task-id>` | Optional when the session context identifies the active cycle: if omitted (and `BULK=false`, `AUTO=false`), the orchestrator infers the task-id from the current session's conversation context (see Step 2; ambiguity hard-fails); an explicit task-id is always allowed and authoritative. Unused in `--bulk` mode; rejected as an explicit token by `--auto` (which never enters Step 2). Task-id from the completed `/dev` cycle (e.g. `20260516-212024`). |
 | `--force` | Bypass close-gate check **AND the pre-commit QA gate** (Step 6). Human-only (enforced by `disable-model-invocation: true`). Audited. |
-| `--bulk` | Smart batch mode — group by task-id then subsystem, commit coherently, flag orphan files separately. Human-only (enforced by `disable-model-invocation: true`). |
+| `--bulk` | Smart batch mode — group by task-id then subsystem, commit coherently, flag orphan files separately. Human-only (enforced by `disable-model-invocation: true`). Skips the close gate (Step 3); retains the pre-commit QA gate (Step 6). |
 | `--dry-run` | Print what would be staged/committed (and the QA verdict); do not execute the real commit. |
 | `--codex` | In the pre-commit QA gate (Step 6), QA additionally runs an adversarial Codex round on the planned per-file changes (each PLAN_GROUPS path vs HEAD), not the staged index. Without it, QA does a single-round self-review. |
+| `--auto` | Discover every `commit_pending` PARENT task-id and walk each one, sequentially, through the SAME non-bulk Steps 3-8 gate a bare `/commit <task-id>` would run — never concurrently, never skipping the close gate. Structurally distinct from `--bulk` (see `--auto mode` below). Human-only (enforced by `disable-model-invocation: true`). |
 
 ## Step-by-step workflow
 
@@ -34,13 +35,41 @@ Parse `$ARGUMENTS`:
 - Strip `--bulk` if present → set `BULK=true`; else `BULK=false`
 - Strip `--dry-run` if present → set `DRYRUN=true`; else `DRYRUN=false`
 - Strip `--codex` if present → set `QA_CODEX=true`; else `QA_CODEX=false`
+- Strip `--auto` if present → set `AUTO=true`; else `AUTO=false` (default — every `--auto`-specific rule below is inert)
 - Remaining token (if any) is `TASK_ID`
 
-### Step 2: Resolve task-id (unless --bulk)
+**`--auto` rejection (Must-Have #8, task 20260808-035658-lanel)**: when
+`AUTO=true`, reject — before any action — if `TASK_ID` is non-empty, or
+`FORCE=true`, or `BULK=true`. `--auto` and `--dry-run`/`--codex` MAY combine
+(each `--auto` walk below still honors `DRYRUN`/`QA_CODEX` exactly as the
+non-`--auto` path does). This mirrors `scripts/dev-lifecycle.py`'s
+`validate_auto_flag_combination(True, TASK_ID, FORCE, BULK)` pure predicate.
+When `AUTO=true` and the combination is legal, skip Step 2's single-task
+resolution — control passes to the `--auto mode` section below, which binds
+`TASK_ID` itself once per discovered parent and drives Steps 3-8.
 
-If `BULK=false`:
-- If `TASK_ID` was supplied, use it directly.
-- If `TASK_ID` is empty: exit with: `No task-id provided. Supply an explicit task-id (/commit <task-id>), use --force to bypass close-gate, or use --bulk for batch mode.` Do NOT scan close-reports by mtime — mtime-scan picks up unrelated reports from other sessions and causes close-gate failures on unrelated tasks.
+### Step 2: Resolve task-id (unless --bulk or --auto)
+
+If `BULK=false` AND `AUTO=false` (a legal `--auto` invocation skips Step 2 entirely —
+see the Step 1 rejection block; `--auto` binds `TASK_ID` itself per discovered parent):
+- If `TASK_ID` was supplied, use it directly. An explicit task-id is always allowed and
+  authoritative.
+- If `TASK_ID` is empty: the orchestrator invoking `/commit` infers the task-id from the
+  current session's conversation context — the parent task-id of the active `/dev` cycle,
+  `/do` cycle, or the `/close` that just ran in this session (the same bare-invocation
+  resolution `/close` uses; see `commands/close.md` § Task-id resolution). Inference comes
+  from conversation context ONLY: there is NO filesystem scan and NO default-to-newest.
+  Do NOT scan close-reports by mtime — mtime-scan picks up unrelated reports from other sessions and causes close-gate failures on unrelated tasks.
+  - **Uniqueness precondition**: inference succeeds ONLY when the conversation identifies
+    exactly ONE unambiguous candidate task-id; with two or more candidate cycles, or any
+    doubt which cycle is meant, do NOT guess — take the no-context exit below. The
+    close-gate hard checks (close-report existence, `CLOSE: YES` final line,
+    filename/task-id match) backstop an inference landing on a task with NO passing
+    close-report, but NOT one landing on a different validly-closed task — which is why
+    ambiguity hard-fails instead of guessing.
+  - If the orchestrator cannot identify an active cycle's task-id from conversation
+    context (e.g. a fresh session with no cycle context), or the uniqueness precondition
+    fails, exit with: `No task-id provided. Supply an explicit task-id (/commit <task-id>), use --force to bypass close-gate, or use --bulk for batch mode.`
 
 If `BULK=true`: `TASK_ID` may remain empty; changelog-analyst operates in bulk mode.
 
@@ -60,7 +89,7 @@ message in check 1 below.
 CLOSE_REPORT="$(bash ~/.claude/scripts/resolve-close-report.sh "$TASK_ID")" || true
 ```
 
-Run these checks (abort on first failure with a clear error message):
+Run these checks in order (each HARD check — 1, 2, 4 — aborts on failure with a clear error message; check 3 is advisory and only warns):
 
 1. **File exists**: `CLOSE_REPORT` must exist. Error: `Close-gate: no close-report for task ${TASK_ID} at ${CLOSE_REPORT}. Run /close first.`
 2. **Last non-empty line starts with CLOSE: YES**: extract the last non-empty line from the file and verify it begins with `CLOSE: YES`. Accepted variants:
@@ -70,8 +99,45 @@ Run these checks (abort on first failure with a clear error message):
    - `CLOSE: YES — codex disabled by user`
    - `CLOSE: YES (FORCED)`
    Error: `Close-gate: task ${TASK_ID} close-report does not end with CLOSE: YES (found: <last-line>). Run /close to produce a passing verdict.`
-3. **Mtime recency**: close-report mtime must be within 86400 seconds (24 h) of now. Error: `Close-gate: close-report for task ${TASK_ID} is older than 24h (mtime: <mtime>). Re-run /close or use --force.`
+   **Dry-run carve-out (2026-09-06 §10.1 ruling)**: check 2 — and check 2 alone — does
+   not abort when `DRYRUN=true`, where `DRYRUN` is exactly the value parsed from the
+   user's `--dry-run` argument in Step 1 and nothing else. Print
+   `Close-gate: check 2 relaxed for --dry-run (found: <last-line>). Preview only — no commit will be created.`
+   and continue with check 3. When `DRYRUN=false`, check 2 aborts exactly as written
+   above. Checks 1 and 4 and the `CLOSE_REPORT` binding are never relaxed under
+   either value (check 3 was separately demoted to advisory for ALL invocations on
+   2026-09-26 — see check 3; that demotion is independent of `DRYRUN`). Read the trigger from Step 1 only: the Step 6 planning phase raises
+   `DRYRUN` internally on every invocation, so a trigger keyed on "a dry-run is
+   executing" would admit a plain `/commit` with a failing close-report through to a
+   real commit in Step 7. This is not a `--force` affordance; `--force` is unchanged
+   and remains forbidden.
+3. **Mtime staleness (advisory since 2026-09-26 — never aborts)**: if close-report mtime is older than 86400 seconds (24 h), print `Close-gate: WARNING — close-report for task ${TASK_ID} is older than 24h (mtime: <mtime>). Proceeding — staleness is advisory. Re-run /close if the tree has drifted since this approval.` and continue with check 4. Age alone never blocks a commit and never requires `--force`: wall-clock age is only a proxy for tree drift, and the Step 6 pre-commit QA gate reviews every planned file's actual change vs HEAD on every non-`--force` invocation. Known widening, disclosed: Step 6 does NOT re-validate changes against the closed cycle's acceptance criteria, so an aged `CLOSE: YES` vouches indefinitely for a tree that may have drifted in-scope — accepted trade-off (2026-09-26 user ruling: age must not block); acceptance-consistency checking inside Step 6 is a separate cycle, not a reason to re-harden this check.
 4. **Task-id in filename matches argument**: the task-id derived from the filename must equal `TASK_ID`. Error: `Close-gate: filename task-id mismatch (file has <file-task-id>, argument is ${TASK_ID}).`
+
+**Dry-run close-gate relaxation (2026-09-06 §10.1 ruling)**: check 2 above was made
+conditional on the Step 1 `DRYRUN` value; nothing else in this command changed.
+Rationale: a `--dry-run` invocation creates no commit, moves no ref, leaves HEAD and
+worktree bytes unchanged, and leaves the index byte-identical — so gating the preview
+behind the very `CLOSE: YES` approval that the preview exists to help earn is a design
+error, and it left the supporting evidence for one close-report unobtainable across
+five cycles. Deliberately NOT claimed here is the stronger general property the
+ruling's phrasing assumed, that a dry-run never touches the index at all: measured
+otherwise, `agents/changelog-analyst.md` saves the index bytes and installs a restoring
+exit trap (mutate-then-restore), and `scripts/stage-owned-hunks.py` redirects
+`GIT_INDEX_FILE` to a throwaway index for untracked candidates. What holds is the
+byte-identical outcome, not a never-touched mechanism. Scope: check 2 only — checks 1,
+3 and 4, the `CLOSE_REPORT` binding, Step 6's QA gate, and every permission, hook and
+admission gate were unchanged by this ruling (check 3 has since been demoted to
+advisory on 2026-09-26, independently of and after this ruling — see check 3), and
+`--force` is not loosened in any form. Known
+widening, disclosed rather than narrowed: Step 5 mints a real single-use 30-minute
+commit grant per plan entry before any dry-run runs, and that minting is not
+conditioned on `DRYRUN`, so a task with a failing close-report can now cause one to be
+minted. Four independent backstops bound it — the `--dry-run` stop path and the
+empty-plan path each revoke it, the grant is single-use and bound to repo + branch +
+`expected_head`, changelog-analyst's DRYRUN guard forbids consuming it, and
+`pretool-git-privilege-guard.py` blocks agent commits independently. Narrowing it would
+alter a second gate, which this ruling forbids.
 
 ### Step 4: Force-bypass audit (only when FORCE=true)
 
@@ -130,12 +196,31 @@ Before dispatching changelog-analyst, write the appropriate authorization token:
   TASK_DOCS_ROOT="${CLOSE_REPORT:+$(dirname "$CLOSE_REPORT")}"
   TASK_DOCS_ROOT="${TASK_DOCS_ROOT:-$CONTROL_ROOT/docs/dev}"
   TASK_PROJECT_ROOT="$(dirname "$(dirname "$(realpath "$TASK_DOCS_ROOT")")")"
-  if [ -f "$TASK_DOCS_ROOT/dev-report-$TASK_ID.json" ]; then
+  # R4 tri-state guard (Architect (f) v2, QA round-2 objection 3): prefer a
+  # corroborated dev-report-<task-id>.effective.json ONLY when
+  # late-repair-controller.py's verify-disclosure independently admits it
+  # for this task-id (State B). No late-repair state at all (State A) keeps
+  # TASK_REPORT selection below byte-identical to pre-R4 behavior. A
+  # present-but-uncorroborated state (State C) fails closed here rather than
+  # silently falling back to stale canonical provenance.
+  LATE_REPAIR_JSON="$(source venv/bin/activate && python3 scripts/late-repair-controller.py \
+      resolve-effective-report --task-id "$TASK_ID" --project-dir "$TASK_PROJECT_ROOT")"
+  LATE_REPAIR_STATE="$(jq -r .state <<<"$LATE_REPAIR_JSON")"
+  if [ "$LATE_REPAIR_STATE" = "invalid" ]; then
+      echo "Commit-gate: a late-repair effective report exists for $TASK_ID but is not independently corroborated (State C). Refusing rather than falling back to stale canonical provenance -- re-run /close --late-repair $TASK_ID." >&2
+      exit 2
+  fi
+  if [ "$LATE_REPAIR_STATE" = "verified" ]; then
+      TASK_REPORT="$(jq -r .path <<<"$LATE_REPAIR_JSON")"
+  elif [ -f "$TASK_DOCS_ROOT/dev-report-$TASK_ID.json" ]; then
       TASK_REPORT="$TASK_DOCS_ROOT/dev-report-$TASK_ID.json"
+  else
+      TASK_REPORT="$TASK_DOCS_ROOT/do-report-$TASK_ID.json"
+  fi
+  if [ "$LATE_REPAIR_STATE" = "verified" ] || [ -f "$TASK_DOCS_ROOT/dev-report-$TASK_ID.json" ]; then
       ARTIFACT_CHAIN="$(python3 scripts/resolve-dev-artifact-chain.py \
           --task-id "$TASK_ID" --project-dir "$TASK_PROJECT_ROOT")" || exit 2
   else
-      TASK_REPORT="$TASK_DOCS_ROOT/do-report-$TASK_ID.json"
       ARTIFACT_CHAIN=""
   fi
   REPOSITORY_PLAN="$(python3 ~/.claude/scripts/resolve-commit-repos.py \
@@ -584,6 +669,73 @@ Follow the ## Continuation-spec mode instructions from ~/.claude/commands/spec-u
 If the Agent dispatch fails for any reason (error, timeout, or exception), print `WARNING: spec-update dispatch failed for task-id=${TASK_ID} — spec not updated` and continue. The commit is already recorded; Step 8 failure does NOT roll back or affect the commit.
 
 **Reversal-rationale guidance for changelog-analyst (R9 cross-reference)**: the binding rule that any forward-fix commit which intentionally reverses prior behavior MUST include `Reverses <SHA>: <one-line rationale for why prior reasoning no longer holds>` in the commit-message body lives in `agents/changelog-analyst.md` Phase 6 (the SOLE binding landing). `/commit` orchestrator does NOT enforce the rule directly; changelog-analyst owns commit-message construction and is the contract holder.
+
+## `--auto` mode: batch-discover and sequentially commit (Must-Have #7, task 20260808-035658-lanel)
+
+`--auto` discovers every `commit_pending` PARENT task-id and walks each one,
+ONE AT A TIME, through the exact same unmodified **Step 3 → Step 8** body (the
+`### Step 3` through `### Step 8` headings above, up to this section) an
+explicit `/commit <task-id>` would run — `--auto` performs Step 1-2's job itself
+(binding `FORCE=false`, `BULK=false`, and the current parent's `TASK_ID`)
+before entering that shared body. It is structurally distinct from the
+human-only `--bulk` escape hatch: `--bulk` skips the close gate (Step 3)
+entirely; `--auto` never skips it — every discovered parent walks THROUGH
+Step 3's close-gate validation, never around it.
+
+1. **Discover** the candidate parent snapshot (frozen once, at the start of
+   the batch):
+
+   ```bash
+   PROJECT_ROOT="${CLAUDE_PROJECT_DIR:-$(pwd)}"
+   source ~/.claude/venv/bin/activate 2>/dev/null || true
+   mapfile -t COMMIT_PENDING_PARENTS < <(python3 scripts/dev-lifecycle.py list-actionable --next-action commit --project-dir "$PROJECT_ROOT")
+   ```
+
+   `list-actionable` returns a deterministically sorted list of
+   `kind == "ticket"` parent task-ids only.
+
+2. **Walk each parent sequentially** — no two parents run concurrently, and
+   parent N+1's walk does not begin until parent N's walk has been
+   classified. For each `TASK_ID` in `COMMIT_PENDING_PARENTS`, in order, bind
+   `FORCE=false`, `BULK=false`, `DRYRUN` as passed to the batch (default
+   `false`), `QA_CODEX` as passed to the batch, and run **Step 3** through
+   **Step 8** exactly as written for that `TASK_ID` — same close-gate
+   validation, same repository-plan resolution, same pre-commit QA gate, same
+   changelog-analyst dispatch, same Step 8 spec-update dispatch. Nothing in
+   Steps 3-8 is aware `--auto` is driving it.
+
+3. **Classify the walk's outcome** (mirrors
+   `scripts/dev-lifecycle.py`'s `classify_walk_outcome()`):
+   - **`hook_deny`** — a `PreToolUse`/`PostToolUse`/`Stop` hook literally
+     blocked a tool call during the walk (e.g. `pretool-git-privilege-guard.py`
+     denying an unauthorized commit attempt). **Abort the entire remaining
+     batch immediately** — do not start parent N+1.
+   - **`partial_abort`** — this parent's OWN walk reported
+     `commit_status = partially_committed` (a partial multi-repository
+     commit within that one parent). **Abort the entire remaining batch**,
+     marking every remaining parent `not_attempted` — a partial commit is a
+     signal that the repository/grant state needs human attention before any
+     further `--auto` parent is attempted.
+   - **`ordinary_reject`** — any other non-success outcome: close-gate
+     failure, `COMMIT: REJECT` from Step 6, a non-retryable
+     changelog-analyst failure. **Record the outcome and continue** to the
+     next parent.
+   - **`success`** — `commit_status ∈ {committed, nothing_to_commit,
+     push_gate_reconciled, nothing_to_commit_precommitted}`. **Record and
+     continue** to the next parent.
+
+4. **Batch summary**: after the batch ends, print one line per attempted
+   parent (`task-id: outcome`) plus a line for every parent that was never
+   attempted because the batch was aborted (`task-id: not_attempted`).
+
+Human-operator verification of this mode (QA cannot literally invoke
+`/commit --auto` — `disable-model-invocation: true` plus `settings.json`'s
+global `Skill(commit:*)` deny) is documented in
+`docs/dev/ticket-20260808-035658-lanel.md` AC-L21: a separate
+human-operator-executed transcript at
+`docs/dev/human-operator-transcript-<task-id>.md`, using the
+`PARENT_START: <task_id>` / `PARENT_END: <task_id> outcome=<...>` schema
+`scripts/dev-lifecycle.py`'s `parse_human_operator_transcript()` parses.
 
 ## Close-gate verification reference
 
