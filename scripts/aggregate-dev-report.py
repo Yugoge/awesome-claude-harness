@@ -879,18 +879,19 @@ def _merge_hook_ledger_into_singular(
     Freshness recheck (backlog #122 M4, ticket dev-20260926-044454): a
     ledger entry's diff_sha256 is only ever true AT RECORD TIME -- the path
     may have been edited again since. Before folding a surviving entry in,
-    recompute sha256(git diff HEAD -- path) against project_root using
-    hook_ledger.py's own _diff_sha256 (imported directly, not re-derived) and
-    require byte-for-byte equality with the recorded value. Any mismatch --
-    including a None/failed recompute -- is rejected on the same fail-closed
-    terms, with NO special-case exemption for a recorded sha256("") (a
-    legitimate "no diff existed at record time" write-side value per
-    hook_ledger.py::_diff_sha256's own docstring, but not exempt from this
-    comparison: recorded-empty vs. now-non-empty is a mismatch like any
-    other). This mirrors agents/changelog-analyst.md:793-809's own
-    recompute/compare/fail-closed pattern for the same files_landed_whole
-    channel at a later (staging-time) point -- defense-in-depth, not a
-    duplicate of that later check.
+    recompute sha256(git diff --no-ext-diff --no-textconv HEAD -- path)
+    against project_root using hook_ledger.py's own _diff_sha256 (imported
+    directly, not re-derived) and require byte-for-byte equality with the
+    recorded value. Any mismatch -- including a None/failed recompute -- is
+    rejected on the same fail-closed terms, with NO special-case exemption
+    for a recorded sha256("") (a legitimate "no diff existed at record
+    time" write-side value per hook_ledger.py::_diff_sha256's own
+    docstring, but not exempt from this comparison: recorded-empty vs.
+    now-non-empty is a mismatch like any other). This mirrors
+    agents/changelog-analyst.md:792-832's own recompute/compare/fail-closed
+    pattern for the same files_landed_whole channel at a later point (there
+    stage-then-verify against the index, since staging is the operation it
+    protects) -- defense-in-depth, not a duplicate of that later check.
 
     Returns True iff at least one new entry was appended -- the caller only
     writes the canonical report back to disk when this is True, preserving

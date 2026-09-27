@@ -38,10 +38,18 @@ def _now_iso_z() -> str:
 
 
 def _diff_sha256(rel_path: str, project_dir: Path) -> str | None:
-    """sha256 of `git diff HEAD -- <rel_path>` output, or None on any failure."""
+    """sha256 of `git diff --no-ext-diff --no-textconv HEAD -- <rel_path>`, or None on any failure.
+
+    This is the REFERENCE producer for the files_landed_whole diff_sha256
+    format (agents/changelog-analyst.md's staging clause verifies with the
+    identical flags, against `--cached`, after staging). The two `--no-*`
+    flags change nothing for ordinary paths; they pin down paths carrying a
+    textconv/ext-diff attribute, whose rendered diffs could alias two
+    different byte-states to one digest.
+    """
     try:
         proc = subprocess.run(
-            ["git", "diff", "HEAD", "--", rel_path],
+            ["git", "diff", "--no-ext-diff", "--no-textconv", "HEAD", "--", rel_path],
             cwd=str(project_dir),
             capture_output=True,
             check=False,

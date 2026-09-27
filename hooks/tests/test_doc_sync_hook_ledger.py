@@ -80,8 +80,11 @@ def _register_dev_agent(project_dir: Path, agent_id: str, dev_session_id: str, a
 
 
 def _real_diff_sha256(project_dir: Path, rel_path: str) -> str:
+    # Same canonical flags as hook_ledger._diff_sha256 (the reference
+    # producer): --no-ext-diff --no-textconv.
     proc = subprocess.run(
-        ['git', 'diff', 'HEAD', '--', rel_path], cwd=str(project_dir), capture_output=True, check=True,
+        ['git', 'diff', '--no-ext-diff', '--no-textconv', 'HEAD', '--', rel_path],
+        cwd=str(project_dir), capture_output=True, check=True,
     )
     return hashlib.sha256(proc.stdout).hexdigest()
 
