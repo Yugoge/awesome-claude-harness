@@ -5,17 +5,24 @@
 # Step 0: if agent_id is present in the hook JSON input, exit 0 without writing
 #         (subagent write-firewall — defense in depth with consume-path check).
 # Step 1: extract prompt + session_id; detect `/allow ` prefix (case-sensitive).
-# Step 2: derive an EXPLICIT, NARROWLY-scoped grant pattern from the argument.
-#         REFUSE-BY-DEFAULT: when no explicit command pattern can be derived
-#         (empty arg, no leading-ASCII command token, missing/empty flag operand,
-#         empty/vacuous re: body) OR the derived regex is effectively universal
-#         (matches commands unrelated to a named token), the hook writes NO grant
-#         on EITHER channel, removes any stale grant, prints a usage error, and
-#         exits 0 without wedging the session. There is NO wildcard fallback.
+# Step 2: derive the grant selector from the argument.
+#         ARGUMENT-LESS `/allow` (no argument at all) is the owner-authorized
+#         UNRESTRICTED selector: a match-all grant that is still SINGLE-USE,
+#         TTL-bounded and human-only. Every EXPLICIT selector remains
+#         REFUSE-BY-DEFAULT: when an argument is present but no narrowly-scoped
+#         command pattern can be derived (no leading-ASCII command token,
+#         missing/empty flag operand, empty/vacuous re: body) OR the derived
+#         regex is effectively universal (matches commands unrelated to a named
+#         token), the hook writes NO grant on EITHER channel, removes any stale
+#         grant, prints a usage error, and exits 0 without wedging the session.
+#         There is no wildcard FALLBACK: an explicit selector never degrades
+#         into match-all; match-all is reachable only by naming no argument.
 #         Pattern passed via env var — never shell-interpolated into Python source.
-# Step 3: on an explicit narrow grant only: write the legacy flag
+# Step 3: on a grant (narrow or unrestricted): write the legacy flag
 #         /tmp/claude-bash-allowlist-<sid>.json with {pattern, is_regex} AND the
 #         structured per-task sentinel; log to ~/.claude/logs/bash-consent.log.
+#         An unrestricted grant is logged with a distinct GRANTED_MATCH_ALL verb
+#         so a match-all bypass is never invisible in the audit log.
 #
 # Exit 0 always. Stop hook (stop-cleanup-allowlist.sh) wipes any unconsumed flag.
 set -u
@@ -79,28 +86,37 @@ case "$PROMPT" in
   *) exit 0 ;;
 esac
 
-# ── Step 2: parse flags + optional comment; derive an EXPLICIT narrow grant ──
-# REFUSE-BY-DEFAULT: there is NO wildcard fallback anywhere below. When an
-# explicit, narrowly-scoped command pattern cannot be derived, the parser emits
-# STATUS=REFUSE and the shell writes no grant, removes any stale grant, prints a
-# usage error, and exits 0 (non-wedging).
+# ── Step 2: parse flags + optional comment; derive the grant selector ──
+# Two disjoint regimes, and only the ARGUMENT-LESS form is unrestricted:
+#   (a) argument-less `/allow` -> owner-authorized match-all selector (below).
+#   (b) any EXPLICIT argument  -> REFUSE-BY-DEFAULT. There is no wildcard
+#       fallback anywhere below: when an explicit, narrowly-scoped command
+#       pattern cannot be derived from the argument the user typed, the parser
+#       emits STATUS=REFUSE and the shell writes no grant, removes any stale
+#       grant, prints a usage error, and exits 0 (non-wedging). An explicit
+#       selector can never decay into the match-all selector.
 #
-# Syntax (explicit-command forms only — each must name a concrete command):
+# Syntax:
+#   /allow                                  -> UNRESTRICTED match-all, single-use
 #   /allow --tool rm                        -> literal pattern "rm"
 #   /allow --tool rm 删冗余文件             -> literal "rm" + CJK comment
 #   /allow git stash                        -> literal pattern "git stash"
 #   /allow re:^git\s+stash                  -> anchored narrow regex
 #   /allow Write /abs/path                  -> path-scoped Write grant
 #   /allow Write                            -> bare Write carve-out (any target)
-# Refused (no grant written): /allow (no arg); /allow <CJK-only> (no leading
-#   ASCII command token); /allow --tool (missing/empty operand); /allow re:
-#   (empty/quote-only regex body); any effectively-universal regex (e.g. .*, ^,
-#   a?, [\s\S]*, re:git unanchored) that would match commands unrelated to a
-#   concrete named command token.
+# Refused (no grant written): /allow <CJK-only> (no leading ASCII command
+#   token); /allow --tool (missing/empty operand); /allow re: (empty/quote-only
+#   regex body); any effectively-universal EXPLICIT regex (e.g. .*, ^, a?,
+#   [\s\S]*, re:git unanchored) that would match commands unrelated to a
+#   concrete named command token. Typing an explicit universal pattern is a
+#   scoping mistake and stays refused; wanting no scope at all is stated by
+#   typing no argument.
 #
 # Output protocol (5 lines): STATUS(GRANT|REFUSE) / PATTERN / IS_REGEX / COMMENT
-#   / REFUSE_REASON. The pattern value is passed back via this protocol, never
-#   shell-interpolated into Python source.
+#   / REASON. REASON carries the refusal reason on REFUSE, and the grant KIND on
+#   GRANT ('match_all' for the unrestricted selector, empty for narrow grants).
+#   The pattern value is passed back via this protocol, never shell-interpolated
+#   into Python source.
 PARSED=$(PROMPT="$PROMPT" python3 -c "
 import os, shlex
 import re as _re
@@ -330,14 +346,32 @@ elif bare:
         emit('GRANT', pattern=pattern, is_regex=is_regex,
              comment=' '.join(comment_bare))
 else:
-    # AC1: bare /allow with no argument -> REFUSE (no wildcard fallback).
-    emit('REFUSE', reason='no_argument')
+    # ARGUMENT-LESS /allow -> UNRESTRICTED match-all grant (owner directive:
+    # 'allow with no remark means allow everything ... but only once').
+    # Reinstated deliberately after e713beff removed it. This is NOT a fallback:
+    # it is reachable ONLY when the user typed no argument whatsoever, so none
+    # of the refusal branches above can ever land here, and no explicit selector
+    # can decay into it. The representation is the one both consumers already
+    # understand for an unrestricted entry -- legacy {pattern:'.*',is_regex:true}
+    # and sentinel {op:'*',regex:'.*'} -- so no new channel or schema is added.
+    # Breadth is traded for lifetime: this grant stays single-use (consumed on
+    # any terminal result), TTL-bounded, and human-only.
+    emit('GRANT', pattern='.*', is_regex=True, reason='match_all')
 " 2>/dev/null)
 PARSED_STATUS=$(echo "$PARSED" | sed -n '1p')
 PATTERN=$(echo "$PARSED" | sed -n '2p')
 PARSED_IS_REGEX=$(echo "$PARSED" | sed -n '3p')
 COMMENT=$(echo "$PARSED" | sed -n '4p')
+PARSED_REASON=$(echo "$PARSED" | sed -n '5p')
 IS_REGEX="$PARSED_IS_REGEX"
+
+# Grant KIND: only the parser's argument-less branch may emit 'match_all'. The
+# shell trusts the marker rather than sniffing PATTERN='.*', so the unrestricted
+# form stays explicitly declared (and auditable) at its single origin.
+ALLOW_MATCH_ALL=false
+if [ "$PARSED_STATUS" = "GRANT" ] && [ "$PARSED_REASON" = "match_all" ]; then
+  ALLOW_MATCH_ALL=true
+fi
 
 # ── Refuse gate (AC1-AC5, AC10, AC13, AC14): no explicit narrow command was
 # derivable, OR the derived regex is effectively universal. Write NO grant on
@@ -361,8 +395,26 @@ fi
 # effective-permission enforcement remains the runtime's responsibility.  ASK
 # is not handled here; the runtime's human confirmation path owns ASK.
 CLAUDE_HOME_ALLOW="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
-PYTHON_BIN_ALLOW="${CLAUDE_PYTHON_BIN:-${CLAUDE_HOME_ALLOW}/venv/bin/python}"
-if [ ! -x "$PYTHON_BIN_ALLOW" ]; then
+# Interpreter derivation is DECOUPLED from CLAUDE_CONFIG_DIR: live sessions
+# point CLAUDE_CONFIG_DIR at a per-account runtime state dir that carries no
+# interpreter (CLAUDE_HOME_ALLOW above stays correct for the settings.json
+# lookup below). An explicit CLAUDE_PYTHON_BIN always wins when set — including
+# failing closed when it names a missing binary. Otherwise the shared structural
+# resolver (hooks/lib/claude_home.sh) locates the harness home from this hook's
+# own location and the interpreter is <home>/venv/bin/python.
+if [ -n "${CLAUDE_PYTHON_BIN:-}" ]; then
+  PYTHON_BIN_ALLOW="$CLAUDE_PYTHON_BIN"
+else
+  PYTHON_BIN_ALLOW=""
+  ALLOW_HOME_LIB="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd -P)/lib/claude_home.sh"
+  if [ -r "$ALLOW_HOME_LIB" ]; then
+    # shellcheck source=lib/claude_home.sh
+    . "$ALLOW_HOME_LIB"
+    ALLOW_HARNESS_HOME="$(claude_home_resolve)" || ALLOW_HARNESS_HOME=""
+    [ -n "$ALLOW_HARNESS_HOME" ] && PYTHON_BIN_ALLOW="${ALLOW_HARNESS_HOME}/venv/bin/python"
+  fi
+fi
+if [ -z "$PYTHON_BIN_ALLOW" ] || [ ! -x "$PYTHON_BIN_ALLOW" ]; then
   _remove_stale_grants
   echo "[allow] REFUSED: configured Python interpreter is unavailable; settings policy could not prove this selector grantable." >&2
   exit 0
@@ -513,6 +565,29 @@ for origin, source in deny:
 print("PASS")
 PY
 )
+# ── Deny-preflight applicability for the UNRESTRICTED selector ──────────────
+# WHY the preflight is not evaluated for the argument-less form: the preflight
+# answers exactly one question -- "is THIS named selector already covered by an
+# absolute file-based settings DENY?" -- and it answers it by matching a
+# concrete command head against deny rules. An unrestricted selector names no
+# command, so the preflight has no head to match and structurally returns
+# INCONCLUSIVE; honoring that as a refusal would silently veto the capability
+# the harness owner deliberately re-authorized. The opposite reading -- refuse
+# because a match-all selector "overlaps" some deny rule -- is equally wrong:
+# it trivially overlaps EVERY rule, so a single deny entry anywhere would kill
+# the form outright. Neither answer is information, so the preflight abstains.
+# This is safe because the preflight was never the authority: it is an early
+# UX/defense-in-depth predictor over file-based sources only, and this hook's
+# own documented position is that runtime effective-permission enforcement
+# remains final. That runtime check still runs later with the REAL concrete
+# command in hand, and this grant neither overrides nor is intended to override
+# it. The abstention is narrow: it skips the deny EVALUATION only, and leaves
+# untouched the interpreter-availability fail-closed above, the
+# nested-quantifier rejection below, the single-use consumption lifecycle, the
+# sentinel TTL, and the human-only subagent firewall at Step 0.
+if [ "$ALLOW_MATCH_ALL" = "true" ]; then
+  ALLOW_POLICY_RESULT="PASS"
+fi
 case "$ALLOW_POLICY_RESULT" in
   DENY$'\t'*)
     DENY_DETAIL="${ALLOW_POLICY_RESULT#*$'\t'}"
@@ -584,16 +659,29 @@ with open(os.environ['FLAG_PATH'], 'w') as f:
 # ── Audit log ───────────────────────────────────────────────────────
 CONSENT_LOG="$HOME/.claude/logs/bash-consent.log"
 mkdir -p "$(dirname "$CONSENT_LOG")"
+# A match-all bypass must never be invisible in the audit log: it is recorded
+# with its own verb plus an explicit scope token, so grepping the log for
+# unrestricted grants never depends on recognizing '.*' as a pattern value.
+# The verb keeps 'GRANTED' as a prefix so existing log readers still match.
+GRANT_VERB="GRANTED"
+GRANT_SCOPE=""
+if [ "$ALLOW_MATCH_ALL" = "true" ]; then
+  GRANT_VERB="GRANTED_MATCH_ALL"
+  GRANT_SCOPE=" scope=unrestricted single_use=true"
+fi
 if [ -n "$COMMENT" ]; then
-  echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) sid=$SID GRANTED pattern='$PATTERN' is_regex=$IS_REGEX comment='$COMMENT'" >> "$CONSENT_LOG"
+  echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) sid=$SID $GRANT_VERB pattern='$PATTERN' is_regex=$IS_REGEX$GRANT_SCOPE comment='$COMMENT'" >> "$CONSENT_LOG"
 else
-  echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) sid=$SID GRANTED pattern='$PATTERN' is_regex=$IS_REGEX" >> "$CONSENT_LOG"
+  echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) sid=$SID $GRANT_VERB pattern='$PATTERN' is_regex=$IS_REGEX$GRANT_SCOPE" >> "$CONSENT_LOG"
 fi
 
 if [ -n "$COMMENT" ]; then
   echo "[allow] Grant recorded: pattern='$PATTERN' is_regex=$IS_REGEX comment='$COMMENT'. Valid for ONE matching bash call this turn."
 else
   echo "[allow] Grant recorded: pattern='$PATTERN' is_regex=$IS_REGEX. Valid for ONE matching bash call this turn."
+fi
+if [ "$ALLOW_MATCH_ALL" = "true" ]; then
+  echo "[allow] UNRESTRICTED grant: no command was named, so this matches ANY command. It is consumed by the FIRST matching operation and expires with the sentinel TTL."
 fi
 
 # ── Step 4: write sentinel grant (task 20260519-211515 R2 / AC2) ──
