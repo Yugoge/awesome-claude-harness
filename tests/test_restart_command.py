@@ -487,6 +487,20 @@ def test_restart_helper_bash_command_bypasses_workflow_gate_deadlock(tmp_path: P
     allowed = _run_hook(gate, restart_call, env)
     assert allowed.returncode == 0, allowed.stderr
 
+    cross_account_call = {
+        "tool_name": "Bash",
+        "session_id": sid,
+        "tool_input": {
+            "command": f"{home}/.claude/venv/bin/python "
+            f"{home}/.claude/scripts/restart-subagents.py prepare --cross-account",
+        },
+    }
+    cross_allowed = _run_hook(gate, cross_account_call, env)
+    assert cross_allowed.returncode == 0, (
+        "the documented --cross-account prepare variant must share the deadlock "
+        f"exemption: {cross_allowed.stderr}"
+    )
+
     ordinary_call = {
         "tool_name": "Bash",
         "session_id": sid,
@@ -538,13 +552,14 @@ def test_restart_helper_bypass_fails_closed_on_unsafe_home(tmp_path: Path) -> No
     assert "CHECKLIST NOT STARTED" in blocked.stderr
 
 
-def test_prepare_discovers_sibling_account_sessions(
+def test_prepare_defaults_to_own_session_and_gates_cross_account(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A session under one Claude account must be able to recover interrupted
-    subagents left behind by a session under a different account, since each
-    account persists transcripts under its own /var/lib/claude-accounts/<name>
-    root rather than a tree shared across accounts."""
+    """Default discovery is scoped to the invoking session's own transcript: a
+    genuinely interrupted subagent left by ANOTHER account's same-project
+    session must stay out of the candidate set unless the human explicitly
+    opted into cross-account discovery at prepare time, and only a state
+    carrying that recorded opt-in may authorize a foreign-origin dispatch."""
     monkeypatch.setenv("CLAUDE_RESTART_GRANT_DIR", str(tmp_path / "grants"))
     monkeypatch.setenv("CLAUDE_RESTART_STATE_DIR", str(tmp_path / "states"))
     accounts_root = tmp_path / "accounts"
@@ -566,20 +581,222 @@ def test_prepare_discovers_sibling_account_sessions(
     _write_jsonl(foreign_transcript, [_record("assistant", [_tool_use(fx_tool, "foreign interrupted")])])
     _write_meta(foreign_transcript, "agent-foreign", fx_tool, "foreign interrupted")
 
+    # Account roots hold byte-copies of the same session file (observed in the
+    # 20260915 corpus: "7 agents appear twice, once per account root"). A copy
+    # shares the operator's session id, so foreign-ness must be decided by
+    # origin transcript path, never by session id alone.
+    copy_transcript = accounts_root / "orchestrade" / "claude" / "projects" / slug / f"{operator_sid}.jsonl"
+    copy_tool = "toolu_copy_missing"
+    _write_jsonl(copy_transcript, [_record("assistant", [_tool_use(copy_tool, "copied interrupted")])])
+    _write_meta(copy_transcript, "copycat-foreign", copy_tool, "copied interrupted")
+
     restart.mint_grant(operator_sid, str(operator_transcript), ttl_seconds=600)
-    view = restart.prepare_state(operator_sid, project_dir=project_dir)
 
-    origins = {item["agent_id"]: item["parent_session_id"] for item in view["candidates"]}
-    assert origins == {"agent-operator": operator_sid, "agent-foreign": foreign_sid}
+    default_view = restart.prepare_state(operator_sid, project_dir=project_dir)
+    assert default_view["cross_account"] is False
+    assert {item["agent_id"] for item in default_view["candidates"]} == {"agent-operator"}
 
-    foreign_item = next(item for item in view["candidates"] if item["agent_id"] == "agent-foreign")
+    cross_view = restart.prepare_state(operator_sid, project_dir=project_dir, cross_account=True)
+    assert cross_view["cross_account"] is True
+    origins = {item["agent_id"]: item["parent_session_id"] for item in cross_view["candidates"]}
+    assert origins == {
+        "agent-operator": operator_sid,
+        "agent-foreign": foreign_sid,
+        "copycat-foreign": operator_sid,
+    }
+    foreign_item = next(item for item in cross_view["candidates"] if item["agent_id"] == "agent-foreign")
     assert f"parent_session_id={foreign_sid}" in foreign_item["resume_message"]
+    assert foreign_item["origin_transcript_path"] == str(foreign_transcript)
+    copycat_item = next(item for item in cross_view["candidates"] if item["agent_id"] == "copycat-foreign")
+    assert copycat_item["origin_transcript_path"] == str(copy_transcript)
     payload = {
         "tool_name": "SendMessage",
         "session_id": operator_sid,
         "tool_input": {"to": "agent-foreign", "message": foreign_item["resume_message"]},
     }
+    copycat_payload = {
+        "tool_name": "SendMessage",
+        "session_id": operator_sid,
+        "tool_input": {"to": "copycat-foreign", "message": copycat_item["resume_message"]},
+    }
     assert restart.authorize_send_message(payload) == (True, "validated /restart recovery")
+    assert restart.authorize_send_message(copycat_payload) == (True, "validated /restart recovery")
+
+    # The opt-in is epoch-bound: after a LATER bare /restart mints a fresh
+    # grant, the stale cross-account state must stop authorizing foreign sends
+    # until the operator explicitly re-opts in under the new grant.
+    restart.mint_grant(operator_sid, str(operator_transcript), ttl_seconds=600)
+    ok, reason = restart.authorize_send_message(payload)
+    assert ok is False and "stale" in reason
+    recross_view = restart.prepare_state(operator_sid, project_dir=project_dir, cross_account=True)
+    foreign_item = next(item for item in recross_view["candidates"] if item["agent_id"] == "agent-foreign")
+    payload["tool_input"]["message"] = foreign_item["resume_message"]
+    assert restart.authorize_send_message(payload) == (True, "validated /restart recovery")
+
+    # A state without the recorded opt-in — e.g. any legacy state file predating
+    # the flag, whose stale foreign entries may still sit on disk — must fail
+    # closed on foreign-origin targets, INCLUDING the same-session-id copy.
+    state_file = Path(recross_view["state_path"])
+    state = json.loads(state_file.read_text(encoding="utf-8"))
+    state.pop("cross_account", None)
+    state_file.write_text(json.dumps(state), encoding="utf-8")
+    ok, reason = restart.authorize_send_message(payload)
+    assert ok is False and "another parent session" in reason
+    ok, reason = restart.authorize_send_message(copycat_payload)
+    assert ok is False and "another parent session" in reason
+
+    # Re-running prepare without the flag drops foreign candidates entirely.
+    reverted = restart.prepare_state(operator_sid, project_dir=project_dir)
+    assert {item["agent_id"] for item in reverted["candidates"]} == {"agent-operator"}
+
+
+def test_authorize_refuses_candidate_without_recorded_origin_transcript(
+    recovery: dict,
+) -> None:
+    """Locality must be PROVEN, never assumed. A candidate carrying no recorded
+    origin transcript — the shape of every state file written before the field
+    existed — cannot be shown to be local, because account roots hold diverging
+    transcripts that share a session-id stem. Such a candidate must be refused
+    even when its parent_session_id equals the operator's own session id, and
+    the refusal must name the remedy (re-run prepare, which records the origin
+    for every genuine candidate)."""
+    view = restart.prepare_state(recovery["sid"])
+    candidate = next(i for i in view["candidates"] if i["agent_id"] == "agent-missing")
+    assert candidate["parent_session_id"] == recovery["sid"]
+    assert candidate["origin_transcript_path"] == str(recovery["transcript"])
+    payload = {
+        "tool_name": "SendMessage",
+        "session_id": recovery["sid"],
+        "tool_input": {"to": candidate["agent_id"], "message": candidate["resume_message"]},
+    }
+    # Origin recorded and equal to the grant-bound transcript: normal path.
+    assert restart.authorize_send_message(payload) == (True, "validated /restart recovery")
+
+    state_file = Path(view["state_path"])
+    state = json.loads(state_file.read_text(encoding="utf-8"))
+    for item in state["candidates"]:
+        item.pop("origin_transcript_path", None)
+    state_file.write_text(json.dumps(state), encoding="utf-8")
+    assert state["candidates"][0]["parent_session_id"] == recovery["sid"]
+
+    ok, reason = restart.authorize_send_message(payload)
+    assert ok is False, "unprovable locality must fail closed, not degrade to session id"
+    assert "origin" in reason and "prepare" in reason
+
+
+def test_authorize_rechecks_child_completion_at_dispatch_time(recovery: dict) -> None:
+    """A child that delivers its terminal end_turn report between prepare and
+    dispatch (or a legacy-state candidate never structurally screened) must be
+    refused at authorization time — completed agents are never resumed."""
+    view = restart.prepare_state(recovery["sid"])
+    candidate = next(i for i in view["candidates"] if i["agent_id"] == "agent-missing")
+    payload = {
+        "tool_name": "SendMessage",
+        "session_id": recovery["sid"],
+        "tool_input": {"to": candidate["agent_id"], "message": candidate["resume_message"]},
+    }
+    assert restart.authorize_send_message(payload) == (True, "validated /restart recovery")
+    _write_jsonl(Path(candidate["agent_transcript_path"]), [
+        {"type": "assistant", "message": {
+            "role": "assistant", "stop_reason": "end_turn",
+            "content": [{"type": "text", "text": "terminal report"}],
+        }},
+    ])
+    ok, reason = restart.authorize_send_message(payload)
+    assert ok is False and "end_turn" in reason
+
+
+def test_discovery_excludes_children_with_terminal_end_turn_reports(tmp_path: Path) -> None:
+    """A child whose own transcript reached stop_reason=end_turn finished
+    naturally and must never be resumed — even when its clean report quotes
+    quota banners (the 39/217 false-positive corpus of
+    docs/reference/restart-detector-quota-text-match-false-positive-20260915.md)
+    and even when a later re-woken turn was itself cut off afterwards."""
+    sid = str(uuid.uuid4())
+    transcript = tmp_path / f"{sid}.jsonl"
+    reporter_tool = "toolu_reporter"
+    rewoken_tool = "toolu_rewoken"
+    genuine_tool = "toolu_genuine"
+    records = [
+        _record("assistant", [_tool_use(reporter_tool, "quota recon report")]),
+        _record("user", [_tool_result(
+            reporter_tool,
+            "The other session's last entry is verbatim: You've hit your session"
+            " limit · resets 9:20pm (UTC)\nagentId: reporter-clean",
+        )]),
+        _record("assistant", [_tool_use(rewoken_tool, "reported then rewoken")]),
+        _record("assistant", [_tool_use(genuine_tool, "genuinely cut off")]),
+    ]
+    _write_jsonl(transcript, records)
+    _write_meta(transcript, "reporter-clean", reporter_tool, "quota recon report")
+    _write_meta(transcript, "rewoken-cut", rewoken_tool, "reported then rewoken")
+    _write_meta(transcript, "genuine-cut", genuine_tool, "genuinely cut off")
+    subagents = transcript.with_suffix("") / "subagents"
+    _write_jsonl(subagents / "agent-reporter-clean.jsonl", [
+        {"type": "assistant", "message": {
+            "role": "assistant", "stop_reason": "end_turn",
+            "content": [{"type": "text", "text": "clean report quoting: resets 9:20pm"}],
+        }},
+    ])
+    _write_jsonl(subagents / "agent-rewoken-cut.jsonl", [
+        {"type": "assistant", "message": {
+            "role": "assistant", "stop_reason": "end_turn",
+            "content": [{"type": "text", "text": "terminal report"}],
+        }},
+        {"type": "assistant", "isApiErrorMessage": True, "message": {
+            "role": "assistant", "stop_reason": "stop_sequence",
+            "content": [{"type": "text",
+                         "text": "You've hit your session limit · resets 3:50pm (UTC)"}],
+        }},
+    ])
+    # agent-genuine keeps the fixture's report-less child transcript.
+
+    candidates = restart.discover_candidates(transcript)
+    assert {item["agent_id"] for item in candidates} == {"genuine-cut"}
+
+
+def test_discovery_keeps_candidate_when_child_transcript_is_unreadable(tmp_path: Path) -> None:
+    """Liveness is only provable from the child transcript; when that file is
+    missing, parent-side interruption evidence must keep the candidate — the
+    detector fails toward recovering a genuinely cut-off child, never toward
+    silently dropping it."""
+    sid = str(uuid.uuid4())
+    transcript = tmp_path / f"{sid}.jsonl"
+    tool = "toolu_lost_child"
+    _write_jsonl(transcript, [_record("assistant", [_tool_use(tool, "lost child transcript")])])
+    meta_path = _write_meta(transcript, "lost-child", tool, "lost child transcript")
+    (meta_path.parent / "agent-lost-child.jsonl").unlink()
+
+    candidates = restart.discover_candidates(transcript)
+    assert [item["agent_id"] for item in candidates] == ["lost-child"]
+    assert candidates[0]["evidence"] == ["missing_parent_tool_result"]
+
+
+def test_observe_stop_prefers_recovery_status_sentinel_over_quota_text(recovery: dict) -> None:
+    """A resumed agent reporting ON a quota outage legitimately quotes limit
+    banners; the explicit RECOVERY_STATUS sentinel demanded by the fixed resume
+    message must outrank the quota text-match when grading its response."""
+    restart.prepare_state(recovery["sid"])
+    restart.mark_dispatched(recovery["sid"], "agent-missing")
+    view = restart.observe_subagent_stop({
+        "session_id": recovery["sid"],
+        "agent_id": "agent-missing",
+        "last_assistant_message": "the outage banner read: You've hit your session"
+        " limit · resets 2:40pm (UTC)\nRECOVERY_STATUS: completed",
+    })
+    assert view is not None
+    item = next(i for i in view["candidates"] if i["agent_id"] == "agent-missing")
+    assert item["status"] == "response_observed"
+
+    restart.mark_dispatched(recovery["sid"], "agent-quota")
+    view = restart.observe_subagent_stop({
+        "session_id": recovery["sid"],
+        "agent_id": "agent-quota",
+        "last_assistant_message": "partial work only\nRECOVERY_STATUS: quota_interrupted",
+    })
+    assert view is not None
+    item = next(i for i in view["candidates"] if i["agent_id"] == "agent-quota")
+    assert item["status"] == "quota_interrupted"
 
 
 def test_cli_resolves_session_id_from_claude_environment(recovery: dict) -> None:
@@ -592,6 +809,36 @@ def test_cli_resolves_session_id_from_claude_environment(recovery: dict) -> None
         check=False,
     )
     assert result.returncode == 0, result.stderr
-    assert json.loads(result.stdout)["parent_session_id"] == recovery["sid"]
+    view = json.loads(result.stdout)
+    assert view["parent_session_id"] == recovery["sid"]
+    assert view["cross_account"] is False
+
+
+def test_cli_prepare_cross_account_requires_explicit_flag(
+    recovery: dict, tmp_path: Path,
+) -> None:
+    """The CLI records the human's --cross-account opt-in in the prepared state;
+    the env pins the accounts root and project dir to empty temp paths so the
+    subprocess sweep can never touch real account transcripts."""
+    env = {
+        **recovery["env"],
+        "CLAUDE_RESTART_ACCOUNTS_ROOT": str(tmp_path / "empty-accounts"),
+        "CLAUDE_PROJECT_DIR": str(tmp_path / "project"),
+    }
+    (tmp_path / "empty-accounts").mkdir()
+    (tmp_path / "project").mkdir()
+    result = subprocess.run(
+        [sys.executable, str(ROOT / "scripts" / "restart-subagents.py"),
+         "prepare", "--cross-account"],
+        text=True,
+        capture_output=True,
+        env=env,
+        cwd=str(ROOT),
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    view = json.loads(result.stdout)
+    assert view["cross_account"] is True
+    assert view["parent_session_id"] == recovery["sid"]
 
 

@@ -49,6 +49,12 @@ TASK_NOTIFICATION_RE = re.compile(
     r"<status>completed</status>(.*?)</task-notification>",
     re.IGNORECASE | re.DOTALL,
 )
+# The fixed resume message instructs every resumed agent to end with an explicit
+# RECOVERY_STATUS sentinel. That sentinel outranks QUOTA_RE text-matching when
+# grading the response: an agent reporting ON a quota outage legitimately quotes
+# limit banners, and grading such a report by substring inverts its meaning
+# (docs/reference/restart-detector-quota-text-match-false-positive-20260915.md §2).
+RECOVERY_STATUS_RE = re.compile(r"RECOVERY_STATUS:\s*(completed|quota_interrupted)\b")
 
 
 class RestartError(RuntimeError):
@@ -333,6 +339,44 @@ def _metadata_by_tool_use(transcript: Path) -> dict[str, dict[str, Any]]:
     return result
 
 
+def _child_reported_end_turn(agent_transcript_path: str | Path) -> bool | None:
+    """True iff the child's own transcript contains a terminal end_turn report.
+
+    ``stop_reason`` is written by the harness, never by report prose, so any
+    assistant record carrying ``stop_reason == "end_turn"`` proves the child
+    reached a natural stopping point and emitted its own terminal report —
+    including the completed-then-rewoken shape where a later resume turn was
+    itself cut off after the report already landed. Synthetic quota-abort
+    records carry ``stop_sequence`` (plus ``isApiErrorMessage``) and can never
+    satisfy this test. Returns None when the transcript is missing or
+    unreadable: liveness is then unknowable and the caller must fall back to
+    parent-side evidence rather than silently dropping the candidate.
+    """
+    path = Path(agent_transcript_path)
+    try:
+        handle = path.open("r", encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+    with handle:
+        for line in handle:
+            # Cheap substring pre-filter; every hit is still structurally
+            # verified below, so prose merely quoting "end_turn" cannot match.
+            if '"end_turn"' not in line:
+                continue
+            try:
+                record = json.loads(line)
+            except ValueError:
+                continue
+            if not isinstance(record, dict) or record.get("isApiErrorMessage") is True:
+                continue
+            message = record.get("message")
+            if not isinstance(message, dict):
+                continue
+            if message.get("role") == "assistant" and message.get("stop_reason") == "end_turn":
+                return True
+    return False
+
+
 def discover_candidates(transcript_path: str | Path) -> list[dict[str, Any]]:
     """Return every recoverable interrupted/quota Agent call in parent order."""
     transcript = Path(transcript_path).expanduser().resolve()
@@ -395,10 +439,25 @@ def discover_candidates(transcript_path: str | Path) -> list[dict[str, Any]]:
             # A hook-rejected Agent call has no child identity and must never be
             # replaced with a fresh agent: it is not a resumable invocation.
             continue
+        agent_transcript_path = meta.get("agent_transcript_path") or str(
+            transcript.with_suffix("") / "subagents" / f"agent-{agent_id}.jsonl"
+        )
+        # Structural liveness gate. The parent's Agent tool_result IS the
+        # child's own report whenever the child completed, so the textual
+        # evidence above cannot distinguish "was quota-interrupted" from
+        # "reported on a quota event": 39 of 217 candidates in the measured
+        # corpus were clean end_turn reports merely quoting limit banners
+        # (docs/reference/restart-detector-quota-text-match-false-positive-
+        # 20260915.md §4-5). A child that reached end_turn finished naturally
+        # and must never be resumed; an unreadable child transcript (None)
+        # keeps the candidate so a genuinely cut-off child is never dropped.
+        if _child_reported_end_turn(agent_transcript_path) is True:
+            continue
         description = meta.get("description") or tool_input.get("description") or ""
         agent_type = meta.get("agent_type") or tool_input.get("subagent_type") or ""
         candidates.append({
             "parent_session_id": transcript.stem,
+            "origin_transcript_path": str(transcript),
             "agent_id": agent_id,
             "agent_type": agent_type if isinstance(agent_type, str) else "",
             "description": description if isinstance(description, str) else "",
@@ -406,8 +465,7 @@ def discover_candidates(transcript_path: str | Path) -> list[dict[str, Any]]:
             "tool_name": call.get("tool_name", "Agent"),
             "parent_line": call.get("line"),
             "interruption_line": max(interruption_lines or [call["line"]]),
-            "agent_transcript_path": meta.get("agent_transcript_path")
-            or str(transcript.with_suffix("") / "subagents" / f"agent-{agent_id}.jsonl"),
+            "agent_transcript_path": agent_transcript_path,
             "evidence": evidence,
         })
     return candidates
@@ -460,10 +518,24 @@ def sibling_window_seconds() -> int:
 def sibling_transcripts(project_dir: str | Path, exclude: str | Path) -> list[Path]:
     """Other RECENT sessions' top-level transcripts for this project, any account.
 
+    Consulted ONLY when the operator explicitly opted into cross-account
+    discovery (``prepare --cross-account``). Default discovery never leaves the
+    invoking session's own transcript: a same-project sibling within the window
+    is routinely a live, unrelated work lane whose still-running children look
+    exactly like interrupted ones from the parent side.
+
     Restricted to the exact project slug so recovery never reads unrelated
-    projects. Deduplicates by session id, first root wins: two different
-    accounts producing the same session id (astronomically unlikely — ids
-    are UUID-shaped) would have one silently dropped rather than merged.
+    projects. Deduplicates by session id, first root wins: when two account
+    roots hold the same session stem, the later copy is dropped, not merged.
+
+    KNOWN LIMITATION — same-stem transcripts are common here, not
+    astronomical: measured 2026-09-27, 52 (slug, stem) pairs exist under
+    more than one ACCOUNTS_ROOT root, 51 of them with divergent byte sizes
+    (28 of 28 divergent inside this project's own slug), because each
+    account records its own partial view of one logical session. An
+    interrupted child living only in a dropped copy is therefore
+    unreachable under --cross-account: under-recovery confined to the
+    opt-in path, never over-recovery, so the default scope is unaffected.
 
     Bounded to transcripts modified within sibling_window_seconds() of now
     (default 24h). Fanning out to every sibling account's *entire* project
@@ -524,12 +596,28 @@ def build_resume_message(session_id: str, agent_id: str) -> str:
     ])
 
 
-def prepare_state(session_id: str, project_dir: str | Path | None = None) -> dict[str, Any]:
+def prepare_state(
+    session_id: str,
+    project_dir: str | Path | None = None,
+    *,
+    cross_account: bool = False,
+) -> dict[str, Any]:
+    """Build the recovery candidate set for the invoking parent session.
+
+    Default scope is the invoking session's OWN transcript only (after
+    ``claude --resume`` that transcript already carries the interrupted history
+    forward, so the lineage is covered by construction). The cross-account
+    sibling sweep — the account-rotation case where another account's earlier
+    session left interrupted children in this same project — runs only on the
+    operator's explicit ``cross_account=True`` opt-in, and that opt-in is
+    recorded in the state file because authorize_send_message refuses
+    foreign-origin dispatches from a state that was not prepared with it.
+    """
     sid = _safe_session_id(session_id)
     grant = load_valid_grant(sid)
     own_transcript = Path(grant["transcript_path"])
     discovered = discover_candidates(own_transcript)
-    if project_dir is not None:
+    if cross_account and project_dir is not None:
         for sibling in sibling_transcripts(project_dir, exclude=own_transcript):
             discovered.extend(discover_candidates(sibling))
     with _state_lock(sid):
@@ -569,6 +657,7 @@ def prepare_state(session_id: str, project_dir: str | Path | None = None) -> dic
             "parent_session_id": sid,
             "transcript_path": grant["transcript_path"],
             "grant_issued_at": grant.get("issued_at"),
+            "cross_account": bool(cross_account),
             "created_at": old.get("created_at") or _iso(),
             "updated_at": _iso(),
             "candidates": items,
@@ -594,7 +683,8 @@ def status_view(state: dict[str, Any]) -> dict[str, Any]:
         if not isinstance(item, dict):
             continue
         public.append({key: item.get(key) for key in (
-            "agent_id", "parent_session_id", "agent_type", "description", "tool_use_id",
+            "agent_id", "parent_session_id", "origin_transcript_path", "agent_type",
+            "description", "tool_use_id",
             "agent_transcript_path", "evidence", "interruption_line", "status",
             "attempts", "resume_message",
         )})
@@ -602,6 +692,7 @@ def status_view(state: dict[str, Any]) -> dict[str, Any]:
     return {
         "schema_version": SCHEMA_VERSION,
         "parent_session_id": state.get("parent_session_id"),
+        "cross_account": state.get("cross_account") is True,
         "state_path": str(state_path(str(state.get("parent_session_id")))),
         "candidate_count": len(public),
         "complete": not incomplete,
@@ -623,18 +714,22 @@ def get_status(session_id: str, *, wait_seconds: int = 0, poll_seconds: float = 
 def authorize_send_message(payload: dict[str, Any]) -> tuple[bool, str]:
     """Authorize only the exact recovery message to a discovered agent id.
 
-    Validates against this operator session's prepared state rather than
-    re-discovering from a single transcript: prepared candidates may
-    legitimately originate from a different account's earlier session in the
-    same project (see sibling_transcripts), so their resume_message already
-    embeds the correct originating parent_session_id.
+    Validates against this operator session's prepared state. A candidate whose
+    parent_session_id is not the operator's own session is dispatchable ONLY
+    when the state itself records the explicit ``--cross-account`` opt-in from
+    prepare time; a state without that marker — including every legacy state
+    file predating the flag, with its possibly stale foreign entries — fails
+    closed on foreign-origin targets. A candidate whose origin transcript was
+    never recorded is refused outright: unprovable locality is not locality.
     """
     if not isinstance(payload, dict):
         return False, "malformed hook payload"
     sid = payload.get("session_id") or payload.get("sessionId") or os.environ.get("CLAUDE_SESSION_ID")
     try:
         sid = _safe_session_id(str(sid or ""))
-        load_valid_grant(sid)  # the operator must still hold a live /restart grant
+        # The operator must still hold a live /restart grant; keep it for the
+        # origin and epoch checks below.
+        grant = load_valid_grant(sid)
         params = payload.get("tool_input") if "tool_input" in payload else payload.get("params")
         if not isinstance(params, dict):
             raise RestartError("SendMessage input is missing")
@@ -648,6 +743,49 @@ def authorize_send_message(payload: dict[str, Any]) -> tuple[bool, str]:
         )
         if not item:
             raise RestartError("target is not a recoverable interrupted subagent for this /restart session")
+        # Foreign origin is decided by transcript path, not session id alone:
+        # account roots hold byte-copies of the same session file (same stem,
+        # different root), so a same-sid candidate discovered from another root
+        # must still count as foreign. A candidate without the recorded origin
+        # path (legacy state) therefore cannot be PROVEN local — session id is
+        # not an identity here — so it fails closed instead of degrading to the
+        # session-id comparison. Origin is never inferred from anything else.
+        origin_transcript = item.get("origin_transcript_path")
+        if not isinstance(origin_transcript, str) or not origin_transcript:
+            raise RestartError(
+                "target records no origin transcript, so its locality cannot be "
+                "proven; re-run prepare to record the origin of every genuine "
+                "candidate (add --cross-account if the target is foreign)"
+            )
+        is_foreign = (
+            item.get("parent_session_id") != sid
+            or origin_transcript != grant.get("transcript_path")
+        )
+        if is_foreign:
+            if state.get("cross_account") is not True:
+                raise RestartError(
+                    "target originates from another parent session; only a prepare run "
+                    "explicitly opted into --cross-account may authorize resuming it"
+                )
+            # The opt-in is epoch-bound: a state prepared with --cross-account
+            # under an EARLIER grant must not keep authorizing foreign sends
+            # after a later bare /restart mints a fresh grant. Same-epoch is
+            # proven by the issued_at the prepare recorded.
+            if state.get("grant_issued_at") != grant.get("issued_at"):
+                raise RestartError(
+                    "cross-account state is stale: it was prepared under an earlier "
+                    "/restart grant; re-run prepare (with --cross-account) first"
+                )
+        # Completion is rechecked at dispatch time, not only at discovery: a
+        # child that reached its terminal end_turn report after prepare (or a
+        # legacy-state candidate never structurally screened) must not be
+        # resumed. Only an unreadable transcript (None) stays dispatchable —
+        # the same fail-toward-recovery rule discovery applies.
+        if _child_reported_end_turn(str(item.get("agent_transcript_path") or "")) is True:
+            raise RestartError(
+                "target's child transcript already contains its terminal end_turn "
+                "report; completed agents are never resumed"
+            )
         if message != item.get("resume_message"):
             raise RestartError("SendMessage body is not the exact restart-v1 recovery message")
         if item.get("status") != "pending":
@@ -694,7 +832,16 @@ def observe_subagent_stop(payload: dict[str, Any]) -> dict[str, Any] | None:
         for item in state.get("candidates", []):
             if not isinstance(item, dict) or item.get("agent_id") != agent_id:
                 continue
-            item["status"] = "quota_interrupted" if QUOTA_RE.search(last_message) else "response_observed"
+            # The explicit sentinel the fixed resume message demands outranks the
+            # quota text-match: a recovered agent reporting on an outage quotes
+            # limit banners in a legitimately complete response. Take the LAST
+            # sentinel so quoted earlier ones cannot mask the final verdict.
+            sentinels = RECOVERY_STATUS_RE.findall(last_message)
+            if sentinels:
+                interrupted = sentinels[-1] == "quota_interrupted"
+            else:
+                interrupted = bool(QUOTA_RE.search(last_message))
+            item["status"] = "quota_interrupted" if interrupted else "response_observed"
             item["last_stop_at"] = _iso()
             agent_transcript = payload.get("agent_transcript_path")
             if isinstance(agent_transcript, str) and agent_transcript:

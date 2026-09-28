@@ -33,15 +33,23 @@ handled as one recovery wave.
    $HOME/.claude/venv/bin/python $HOME/.claude/scripts/restart-subagents.py prepare
    ```
 
-   The output is the complete transcript-derived candidate set. Discovery is not
-   limited to the invoking session's own transcript or account: separate Claude
-   account logins persist sessions under separate
-   `/var/lib/claude-accounts/<name>/claude/projects/<slug>/` roots, so `prepare`
-   also scans sibling transcripts for the same project across every account root
-   and reports each candidate's true originating `parent_session_id`. Running
-   `/restart` after switching accounts still recovers what an earlier account's
-   session left interrupted. A zero count is a successful no-op; continue to the
-   finalize command in step 5 to consume the grant, then report that no
+   The output is the transcript-derived candidate set for THIS parent session
+   only. Discovery reads the invoking session's own transcript (after
+   `claude --resume` that transcript already carries the interrupted history
+   forward) and NEVER scans other sessions or other account roots by default.
+   A listed candidate must also be structurally interrupted: a child whose own
+   transcript reached a `stop_reason: "end_turn"` terminal report finished
+   naturally and is never listed, even when its report quotes quota/limit text
+   (the false-positive corpus in
+   `docs/reference/restart-detector-quota-text-match-false-positive-20260915.md`).
+   For the account-rotation case only — recovering what another account's
+   recent session left behind in this same project under
+   `/var/lib/claude-accounts/<name>/claude/projects/<slug>/` — the human may
+   append `--cross-account` to the prepare command; each candidate then reports
+   its true originating `parent_session_id` and origin transcript path, and
+   only a state prepared with that flag can authorize resuming a
+   foreign-origin candidate. A zero count is a successful no-op; continue to
+   the finalize command in step 5 to consume the grant, then report that no
    recoverable interrupted child exists.
 3. **Resume every pending candidate.** In one parallel tool-call batch where
    supported, call `SendMessage` exactly once for every candidate whose status is

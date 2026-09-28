@@ -23,6 +23,14 @@ def _parser() -> argparse.ArgumentParser:
         command.add_argument("--session-id")
         if name == "status":
             command.add_argument("--wait-seconds", type=int, default=0)
+        if name == "prepare":
+            command.add_argument(
+                "--cross-account",
+                action="store_true",
+                help="Also sweep other accounts' recent same-project sessions "
+                "(account-rotation recovery). Default discovery is strictly the "
+                "invoking session's own transcript.",
+            )
     return parser
 
 
@@ -44,7 +52,11 @@ def main(argv: list[str] | None = None) -> int:
     try:
         session_id = _session_id(args.session_id)
         if args.command == "prepare":
-            result = restart.prepare_state(session_id, project_dir=_project_dir())
+            result = restart.prepare_state(
+                session_id,
+                project_dir=_project_dir(),
+                cross_account=args.cross_account,
+            )
         elif args.command == "status":
             result = restart.get_status(session_id, wait_seconds=max(0, args.wait_seconds))
         else:

@@ -38,16 +38,24 @@ CODEX_RUNTIME_ENV = 'CLAUDE_COMPAT_RUNTIME'
 # a /dev cycle was invoked and interrupted before its first TodoWrite), that
 # bookmark must not be able to block /restart's own recovery script — doing
 # so would force a choice between two contradictory NON-NEGOTIABLE rules.
-# Matched structurally against the exact three documented invocations only
-# (no --session-id: commands/restart.md never passes it, so admitting it
-# would only widen attack surface for zero functional benefit), with shell
+# Matched structurally against the documented invocations only (no
+# --session-id: commands/restart.md never passes it, so admitting it would
+# only widen attack surface for zero functional benefit), with shell
 # metacharacters rejected so this can never become a chaining bypass.
+# The two optional groups are positional, not bound to a subcommand: this
+# pattern admits either flag after any of the three subcommands, a
+# permissive superset of what the CLI accepts. argparse registers each flag
+# on its own subparser, so a combination this pattern admits but the CLI
+# does not (e.g. finalize --cross-account) exits non-zero there rather than
+# running. Enforcing the pairing here too would duplicate that authority in
+# a second place that could drift from it.
 _RESTART_HELPER_COMMAND_RE = re.compile(
     r'^(?:\$HOME|~|' + re.escape(str(Path.home())) + r')'
     r'/\.claude/venv/bin/python3?\s+'
     r'(?:\$HOME|~|' + re.escape(str(Path.home())) + r')'
     r'/\.claude/scripts/restart-subagents\.py\s+'
     r'(?:prepare|status|finalize)'
+    r'(?:\s+--cross-account)?'
     r'(?:\s+--wait-seconds\s+\d+)?'
     r'\s*$'
 )
