@@ -233,6 +233,207 @@ def test_discovery_scans_full_parent_and_classifies_notifications(tmp_path: Path
     assert all(item["evidence"] == ["quota_or_usage_limit"] for item in candidates)
 
 
+QUOTA_SUMMARY = (
+    "Agent \"BA lane\" failed: Agent terminated early due to an API error: "
+    "You've hit your session limit · resets 7:50pm (UTC) "
+    "(error type rate_limit, HTTP 429, request id req_011Cf, model sent to the "
+    "API: claude-opus-5)"
+)
+
+
+def _notification(agent_id: str, status: str, *, summary: str = "", result: str = "") -> str:
+    """One notification in the harness element order: status precedes summary."""
+    return (
+        "<task-notification>"
+        f"<task-id>{agent_id}</task-id>"
+        f"<tool-use-id>toolu_notify_{agent_id}</tool-use-id>"
+        f"<status>{status}</status>"
+        f"<summary>{summary}</summary>"
+        "<note>A task-notification fires each time this agent stops.</note>"
+        f"<result>{result}</result>"
+        "</task-notification>"
+    )
+
+
+def test_failed_quota_notification_rearms_a_dispatched_candidate(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A second session-limit kill must make an already-dispatched resume retryable.
+
+    A subagent revived by SendMessage and killed again by the session limit is
+    reported as status=failed with the quota banner in <summary>, and the hard
+    kill fires no SubagentStop. The notification is therefore the only evidence
+    that can advance interruption_line past interruption_line_at_dispatch, which
+    is what prepare_state needs to re-derive dispatched back to pending.
+    """
+    monkeypatch.setenv("CLAUDE_RESTART_GRANT_DIR", str(tmp_path / "grants"))
+    monkeypatch.setenv("CLAUDE_RESTART_STATE_DIR", str(tmp_path / "states"))
+    sid = str(uuid.uuid4())
+    transcript = tmp_path / f"{sid}.jsonl"
+    tool_id = "toolu_wedged"
+    _write_jsonl(transcript, [
+        _record("assistant", [_tool_use(tool_id, "twice interrupted lane")]),
+        _record("user", [_tool_result(
+            tool_id,
+            "You've hit your session limit · resets at 4pm (UTC)\nagentId: agent-wedged",
+        )]),
+    ])
+    _write_meta(transcript, "agent-wedged", tool_id, "twice interrupted lane")
+    restart.mint_grant(sid, str(transcript), ttl_seconds=600)
+
+    first = restart.prepare_state(sid)
+    dispatch_line = first["candidates"][0]["interruption_line"]
+    restart.mark_dispatched(sid, "agent-wedged")
+    assert restart.authorize_send_message({
+        "session_id": sid,
+        "tool_input": {
+            "to": "agent-wedged",
+            "message": first["candidates"][0]["resume_message"],
+        },
+    })[0] is False, "an in-flight resume must not be dispatched twice"
+
+    with transcript.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps({
+            "type": "queue-operation",
+            "content": _notification(
+                "agent-wedged", "failed",
+                summary=QUOTA_SUMMARY,
+                result="Now the out-of-scope observation rows.",
+            ),
+        }) + "\n")
+
+    retried = restart.prepare_state(sid)
+    item = next(c for c in retried["candidates"] if c["agent_id"] == "agent-wedged")
+    assert item["status"] == "pending"
+    assert item["interruption_line"] > dispatch_line
+    assert item["evidence"] == ["quota_or_usage_limit"]
+    ok, reason = restart.authorize_send_message({
+        "session_id": sid,
+        "tool_input": {"to": "agent-wedged", "message": item["resume_message"]},
+    })
+    assert (ok, reason) == (True, "validated /restart recovery")
+
+
+STOPPED_SUMMARY = (
+    "Background agent \"Resuming agent a8ab56b\" didn't finish before the "
+    "previous session ended"
+)
+
+
+def test_stopped_notification_rearms_a_dispatched_candidate(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Host-process teardown must make an already-dispatched resume retryable.
+
+    A subagent revived by SendMessage whose host Claude process then exits
+    (account rotation, teardown) is reported as status=stopped with no quota
+    text anywhere, and the hard teardown fires no SubagentStop. The stopped
+    notification is therefore the only evidence that can advance
+    interruption_line past interruption_line_at_dispatch; while it went
+    unparsed, the candidate wedged at dispatched and the authorization hook
+    refused the redispatch forever (2026-09-28, agent a8ab56bdd1870882d).
+    """
+    monkeypatch.setenv("CLAUDE_RESTART_GRANT_DIR", str(tmp_path / "grants"))
+    monkeypatch.setenv("CLAUDE_RESTART_STATE_DIR", str(tmp_path / "states"))
+    sid = str(uuid.uuid4())
+    transcript = tmp_path / f"{sid}.jsonl"
+    tool_id = "toolu_torn"
+    _write_jsonl(transcript, [
+        _record("assistant", [_tool_use(tool_id, "teardown-stopped lane")]),
+        _record("user", [_tool_result(
+            tool_id,
+            "You've hit your session limit · resets at 4pm (UTC)\nagentId: agent-torn",
+        )]),
+    ])
+    _write_meta(transcript, "agent-torn", tool_id, "teardown-stopped lane")
+    restart.mint_grant(sid, str(transcript), ttl_seconds=600)
+
+    first = restart.prepare_state(sid)
+    dispatch_line = first["candidates"][0]["interruption_line"]
+    restart.mark_dispatched(sid, "agent-torn")
+    assert restart.authorize_send_message({
+        "session_id": sid,
+        "tool_input": {
+            "to": "agent-torn",
+            "message": first["candidates"][0]["resume_message"],
+        },
+    })[0] is False, "an in-flight resume must not be dispatched twice"
+
+    with transcript.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps({
+            "type": "queue-operation",
+            "content": _notification("agent-torn", "stopped", summary=STOPPED_SUMMARY),
+        }) + "\n")
+
+    retried = restart.prepare_state(sid)
+    item = next(c for c in retried["candidates"] if c["agent_id"] == "agent-torn")
+    assert item["status"] == "pending"
+    assert item["interruption_line"] > dispatch_line
+    assert "session_teardown_stop" in item["evidence"]
+    ok, reason = restart.authorize_send_message({
+        "session_id": sid,
+        "tool_input": {"to": "agent-torn", "message": item["resume_message"]},
+    })
+    assert (ok, reason) == (True, "validated /restart recovery")
+
+
+def test_notification_status_semantics_are_block_scoped(tmp_path: Path) -> None:
+    """Only a clean status=completed block settles a candidate, and never across blocks.
+
+    ``failed`` never means "came to rest", with or without quota text. And when
+    one JSONL line carries several notifications, each status belongs to the
+    task-id inside its own block: a line-wide DOTALL scan used to pair a failed
+    block's task-id with the NEXT block's <status>completed</status>, inverting
+    both verdicts at once.
+    """
+    sid = str(uuid.uuid4())
+    transcript = tmp_path / f"{sid}.jsonl"
+    tools = {
+        "agent-failed-quota": "toolu_fq",
+        "agent-failed-plain": "toolu_fp",
+        "agent-stopped-plain": "toolu_sp",
+        "agent-completed-clean": "toolu_cc",
+    }
+    records = [
+        _record("assistant", [_tool_use(tools[name], name)])
+        for name in tools
+    ]
+    # One line, three blocks, in an order that lets a bridging match steal the
+    # trailing completed status for the two preceding failed blocks.
+    records.append({
+        "type": "queue-operation",
+        "content": (
+            _notification("agent-failed-quota", "failed", summary=QUOTA_SUMMARY)
+            + _notification(
+                "agent-failed-plain", "failed",
+                summary="Agent \"lane\" failed: tool use was rejected by a hook",
+            )
+            + _notification("agent-stopped-plain", "stopped", summary=STOPPED_SUMMARY)
+            + _notification(
+                "agent-completed-clean", "completed",
+                summary="Agent \"lane\" finished", result="all acceptance criteria met",
+            )
+        ),
+    })
+    _write_jsonl(transcript, records)
+    for name, tool_id in tools.items():
+        _write_meta(transcript, name, tool_id, name)
+
+    candidates = {item["agent_id"]: item for item in restart.discover_candidates(transcript)}
+    assert "agent-completed-clean" not in candidates, "a clean completion is settled"
+    assert candidates["agent-failed-quota"]["evidence"] == [
+        "missing_parent_tool_result", "quota_or_usage_limit",
+    ]
+    # No quota text: the failure adds no evidence of its own, but it must not let
+    # the neighbouring completed block mark this candidate as settled either.
+    assert candidates["agent-failed-plain"]["evidence"] == ["missing_parent_tool_result"]
+    # stopped IS evidence of its own (host process died mid-run), quota or not,
+    # and must not be settled by the neighbouring completed block either.
+    assert candidates["agent-stopped-plain"]["evidence"] == [
+        "missing_parent_tool_result", "session_teardown_stop",
+    ]
+
+
 def test_prepare_authorizes_exact_original_ids_and_message(recovery: dict) -> None:
     view = restart.prepare_state(recovery["sid"])
     assert view["candidate_count"] == 2

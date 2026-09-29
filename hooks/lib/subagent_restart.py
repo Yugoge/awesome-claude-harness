@@ -44,9 +44,28 @@ QUOTA_RE = re.compile(
     r"resets?\s+(?:at|in)\s+\d",
     re.IGNORECASE,
 )
+NOTIFICATION_OPEN = "<task-notification>"
+NOTIFICATION_CLOSE = "</task-notification>"
+# Applied to ONE already-delimited notification body (see
+# _iter_notification_blocks), never to a whole JSONL line: a line can carry
+# several notifications, and a line-wide DOTALL non-greedy scan let a failed
+# block's <task-id> bridge across </task-notification> to a LATER block's
+# <status>completed</status>, attributing that status and summary to the wrong
+# agent and swallowing the real completed block.
+#
+# All three protocol statuses are recognised. A hard session-limit kill of an
+# agent resumed by SendMessage is reported as status=failed with the quota
+# banner inside <summary>, and matching only `completed` made that kill
+# invisible: the agent's interruption_line never advanced, so prepare_state
+# could not re-derive a dispatched candidate back to pending and a second
+# /restart was refused. The same blindness recurred with status=stopped ("didn't
+# finish before the previous session ended"): when the HOST Claude process exits
+# mid-run (account rotation, teardown), the child is structurally incapable of
+# still running, yet the unparsed notification left the candidate wedged at
+# dispatched and the authorization hook refused the redispatch (2026-09-28,
+# agent a8ab56bdd1870882d).
 TASK_NOTIFICATION_RE = re.compile(
-    r"<task-notification>.*?<task-id>([^<]+)</task-id>.*?"
-    r"<status>completed</status>(.*?)</task-notification>",
+    r"<task-id>([^<]+)</task-id>.*?<status>(completed|failed|stopped)</status>(.*)",
     re.IGNORECASE | re.DOTALL,
 )
 # The fixed resume message instructs every resumed agent to end with an explicit
@@ -252,6 +271,33 @@ def _extract_agent_id(value: Any) -> str:
     return ""
 
 
+def _iter_notification_blocks(line: str) -> Iterator[str]:
+    """Yield each complete task-notification body found on one JSONL line.
+
+    Blocks are sliced by literal tag scanning instead of one line-wide DOTALL
+    regex so no field can ever be read across a block boundary, and so a line
+    holding an unterminated notification cannot make the matcher backtrack over
+    the whole (multi-hundred-KB) line.
+    """
+    pos = 0
+    while True:
+        start = line.find(NOTIFICATION_OPEN, pos)
+        if start < 0:
+            return
+        body_start = start + len(NOTIFICATION_OPEN)
+        end = line.find(NOTIFICATION_CLOSE, body_start)
+        if end < 0:
+            return
+        nested = line.find(NOTIFICATION_OPEN, body_start)
+        if 0 <= nested < end:
+            # The outer opener was never closed before a new one began; parse the
+            # inner block on its own rather than merging two agents' fields.
+            pos = nested
+            continue
+        yield line[body_start:end]
+        pos = end + len(NOTIFICATION_CLOSE)
+
+
 def _read_parent_calls(
     transcript: Path,
 ) -> tuple[
@@ -271,12 +317,18 @@ def _read_parent_calls(
             # Notifications can appear as top-level queue-operation content,
             # message.content, or attachment.prompt. Scan the complete JSONL line
             # before walking message blocks so all three persisted forms count.
-            for match in TASK_NOTIFICATION_RE.finditer(line):
+            for block in _iter_notification_blocks(line):
+                match = TASK_NOTIFICATION_RE.search(block)
+                if not match:
+                    continue
                 agent_id = match.group(1).strip()
                 if AGENT_RE.fullmatch(agent_id):
-                    tail = match.group(2)
+                    # <status> precedes <summary>, so the post-status tail covers
+                    # the failure summary that carries the quota banner.
+                    tail = match.group(3)
                     latest_notifications[agent_id] = {
                         "line": line_no,
+                        "status": match.group(2).lower(),
                         "quota_interrupted": bool(QUOTA_RE.search(tail)),
                     }
             try:
@@ -393,11 +445,27 @@ def discover_candidates(transcript_path: str | Path) -> list[dict[str, Any]]:
             isinstance(notification.get("line"), int)
             and notification["line"] > call["line"]
         )
-        # A normal post-call notification is authoritative evidence that this
-        # exact child already came to rest successfully, including after a prior
-        # SendMessage resume. A notification whose result is the Claude quota
-        # message is an interruption, despite its protocol status="completed".
-        if notification_after_call and not notification.get("quota_interrupted"):
+        # A post-call status=completed notification is authoritative evidence
+        # that this exact child already came to rest successfully, including
+        # after a prior SendMessage resume. Three shapes must NOT reach that
+        # skip: a completed notification whose body carries the Claude quota
+        # message (an interruption despite its protocol status), ANY
+        # status=failed notification — a failed agent never came to rest, so
+        # counting failure as settled would strand exactly the children
+        # /restart recovers — and ANY status=stopped notification.
+        # A failed notification without quota text adds no evidence of its own
+        # either; failure is ambiguous (a transport error can strike an agent
+        # whose work still landed), so such a candidate stands or falls on the
+        # parent-side evidence below, as it did while failed notifications were
+        # unparsed. A stopped notification is NOT ambiguous the same way: it
+        # means the host process exited with no completion record, so the child
+        # cannot still be running, and it counts as interruption evidence in
+        # its own right (below) — subject only to the end_turn structural gate.
+        settled = (
+            notification.get("status") == "completed"
+            and not notification.get("quota_interrupted")
+        )
+        if notification_after_call and settled:
             continue
         evidence: list[str] = []
         interruption_lines: list[int] = []
@@ -416,6 +484,12 @@ def discover_candidates(transcript_path: str | Path) -> list[dict[str, Any]]:
             )
             if notification_after_call and notification.get("quota_interrupted"):
                 interruption_lines.append(notification["line"])
+        if notification_after_call and notification.get("status") == "stopped":
+            # Host-process teardown left this child with no completion record;
+            # the notification line itself is the interruption point that lets
+            # prepare_state re-derive a dispatched candidate back to pending.
+            evidence.append("session_teardown_stop")
+            interruption_lines.append(notification["line"])
         # Real Agent/Task tool_results set is_error present-only-when-true
         # (never explicit False) on genuine transport/hook errors -- see
         # docs/dev/context-20260808-035658-lanersgap.json corpus measurement.
