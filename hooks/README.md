@@ -100,7 +100,7 @@
 - `userprompt-bulk-commit-capability.py` - human prompt, NOT from an LLM-emitted Bash command
 - `userprompt-consent-allowlist.sh` - UserPromptSubmit Hook: parse `/allow <pattern>` and write a single-use
 - `userprompt-doc-sync-check.py` - UserPromptSubmit Hook: Periodic file deletion detection for doc-sync
-- `userprompt-restart-authorize.py` - UserPromptSubmit: mint a session-bound capability for exact bare /restart.
+- `userprompt-restart-authorize.py` - UserPromptSubmit: mint a session-bound capability for a human /restart invocation.
 - `userprompt-tmpfs-pressure.sh` - userprompt-tmpfs-pressure.sh — UserPromptSubmit hook (4th block, appended).
 
 ## Subdirectories

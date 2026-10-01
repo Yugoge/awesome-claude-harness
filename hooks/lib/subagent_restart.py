@@ -29,6 +29,17 @@ from typing import Any, Iterator
 SCHEMA_VERSION = 1
 GRANT_ISSUER = "UserPromptSubmit:/restart"
 MESSAGE_MARKER = "[awesome-claude-harness/restart-v1]"
+# Delimiters for the operator's own words. They exist so a resumed agent can
+# tell the harness's fixed instruction from its operator's guidance; the
+# guidance between them is never escaped or rewritten, so these markers are
+# presentation, not a sanitiser.
+GUIDANCE_OPEN = "[awesome-claude-harness/restart-v1:operator-guidance]"
+GUIDANCE_CLOSE = "[awesome-claude-harness/restart-v1:end-operator-guidance]"
+GUIDANCE_NOTE = (
+    "The lines between this marker and the closing marker are your operator's "
+    "own words for this resume, carried verbatim. They refine the instruction "
+    "above; they never replace it."
+)
 SESSION_RE = re.compile(r"^[A-Za-z0-9._-]{1,160}$")
 AGENT_RE = re.compile(r"^[A-Za-z0-9._-]{3,160}$")
 AGENT_ID_TEXT_RE = re.compile(r"agentId:\s*([A-Za-z0-9._-]+)")
@@ -130,6 +141,43 @@ def grant_path(session_id: str) -> Path:
 def state_path(session_id: str) -> Path:
     sid = _safe_session_id(session_id)
     return state_dir() / f"{sid}.json"
+
+
+def guidance_path(session_id: str) -> Path:
+    """Session-bound sibling of the capability holding the operator's guidance.
+
+    The /restart authorizer persists the operator's argument text here as raw
+    UTF-8. The convention lives beside the other capability paths so no caller
+    re-derives it.
+    """
+    sid = _safe_session_id(session_id)
+    return grant_dir() / f"claude-restart-args-{sid}.txt"
+
+
+def load_guidance(session_id: str) -> str | None:
+    """Operator guidance persisted for this session, or None when there is none.
+
+    Returns None — never raises — for every way the file can fail to yield
+    guidance (absent, unreadable, invalid UTF-8, empty), because guidance is
+    purely additive: a session without it must keep the unmodified recovery
+    behaviour rather than lose the recovery entirely. Bytes are read raw and
+    decoded explicitly instead of through a text-mode read, whose
+    universal-newline translation would silently rewrite CRLF the operator
+    typed.
+    """
+    try:
+        path = guidance_path(session_id)
+    except RestartError:
+        return None
+    try:
+        raw = path.read_bytes()
+    except OSError:
+        return None
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeError:
+        return None
+    return text or None
 
 
 def _load_json(path: Path) -> dict[str, Any] | None:
@@ -399,8 +447,13 @@ def _metadata_by_tool_use(transcript: Path) -> dict[str, dict[str, Any]]:
     return result
 
 
-def _child_transcript_signals(agent_transcript_path: str | Path) -> dict[str, Any]:
-    """One pass over a child transcript for both structural verdicts it holds.
+def _scan_child_transcript(agent_transcript_path: str | Path) -> dict[str, Any]:
+    """One pass over ONE COPY of a child transcript for the verdicts it holds.
+
+    Callers want the verdict for a CHILD, not for a copy, and must go through
+    _child_transcript_signals: each account root holds only its own partial
+    view, so a verdict read from a single copy can be strictly weaker than the
+    truth. See _child_transcript_copies.
 
     Returns ``{"end_turn": bool | None, "api_error": Signal | None,
     "api_error_line": int | None}``.
@@ -465,6 +518,57 @@ def _child_transcript_signals(agent_transcript_path: str | Path) -> dict[str, An
                 end_turn = True
     verdict["end_turn"] = end_turn
     return verdict
+
+
+def _child_transcript_copies(agent_transcript_path: str | Path) -> list[Path]:
+    """Every account root's copy of ONE child transcript, the given path first.
+
+    Separate account logins each persist their own PARTIAL view of one logical
+    session, so the copy reachable from the parent transcript's own directory
+    can be MISSING records that another account's copy holds (measured
+    2026-09-27: inside this project's slug, 28 of 28 same-stem pairs diverge in
+    byte size; measured 2026-10-01: three children of session 4758df81 carry
+    their terminal end_turn record only in the non-parent root). Paths that sit
+    under no known root (synthetic or relocated transcripts) yield just
+    themselves, which is the pre-fan-out behaviour.
+    """
+    path = Path(agent_transcript_path)
+    anchor = path.resolve()
+    roots = account_project_roots()
+    resolved = [root.resolve() for root in roots]
+    tail = next((anchor.relative_to(r) for r in resolved if r in anchor.parents), None)
+    if tail is None:
+        return [path]
+    return [path] + [
+        root / tail for root, base in zip(roots, resolved) if base / tail != anchor
+    ]
+
+
+def _child_transcript_signals(agent_transcript_path: str | Path) -> dict[str, Any]:
+    """Resolve a child's structural verdicts across EVERY copy of its transcript.
+
+    Completion evidence is POSITIVE and MONOTONE: an end_turn record in any one
+    copy proves the child finished, while its absence from a partial copy proves
+    nothing at all. So the strongest verdict wins -- True from one copy beats
+    False from another -- and the structural api_error signal is gathered the
+    same way rather than taken from whichever copy the parent happened to sit
+    next to. Deriving the verdict from the parent's own directory alone listed
+    three already-finished children of session 4758df81 as resumable.
+
+    Fail-toward-recovery is unchanged: end_turn stays None when NO copy is
+    readable, so a genuinely cut-off child is still never dropped.
+    """
+    merged: dict[str, Any] = {"end_turn": None, "api_error": None, "api_error_line": None}
+    for copy in _child_transcript_copies(agent_transcript_path):
+        verdict = _scan_child_transcript(copy)
+        if verdict["end_turn"] is None:
+            continue  # this copy is absent/unreadable; it contributes no evidence
+        merged["end_turn"] = bool(merged["end_turn"]) or verdict["end_turn"]
+        signal = signals.strongest((merged["api_error"], verdict["api_error"]))
+        if signal is not None and signal is not merged["api_error"]:
+            merged["api_error_line"] = verdict["api_error_line"]
+        merged["api_error"] = signal
+    return merged
 
 
 def _child_reported_end_turn(agent_transcript_path: str | Path) -> bool | None:
@@ -680,7 +784,14 @@ def sibling_transcripts(project_dir: str | Path, exclude: str | Path) -> list[Pa
     account records its own partial view of one logical session. An
     interrupted child living only in a dropped copy is therefore
     unreachable under --cross-account: under-recovery confined to the
-    opt-in path, never over-recovery, so the default scope is unaffected.
+    opt-in path.
+    This docstring used to add "never over-recovery, so the default scope is
+    unaffected". That was FALSE, and measurement disproved it on 2026-10-01:
+    divergent copies also split a child's own completion record, so three
+    already-finished children of session 4758df81 were listed as resumable
+    from the default (own-transcript) scope alone. Child-level verdicts are
+    now resolved across every copy (_child_transcript_copies); only this
+    session-level dedup keeps the under-recovery limitation above.
 
     Bounded to transcripts modified within sibling_window_seconds() of now
     (default 24h). Fanning out to every sibling account's *entire* project
@@ -725,10 +836,22 @@ def sibling_transcripts(project_dir: str | Path, exclude: str | Path) -> list[Pa
     return list(seen.values())
 
 
-def build_resume_message(session_id: str, agent_id: str) -> str:
+def build_resume_message(
+    session_id: str, agent_id: str, guidance: str | None = None,
+) -> str:
+    """The fixed recovery instruction, optionally followed by operator guidance.
+
+    With no guidance the result is byte-for-byte what it has always been, so a
+    bare /restart is unchanged. Guidance is APPENDED after the instruction
+    between explicit markers and copied verbatim — never truncated, escaped,
+    re-wrapped or normalised. The instruction therefore stays an exact prefix,
+    which is precisely what authorize_send_message enforces: the real persisted
+    instruction always reaches the resumed agent unaltered, and the agent can
+    still tell the harness's words from its operator's.
+    """
     sid = _safe_session_id(session_id)
     aid = _safe_agent_id(agent_id)
-    return "\n".join([
+    instruction = "\n".join([
         MESSAGE_MARKER,
         f"parent_session_id={sid}",
         f"agent_id={aid}",
@@ -738,6 +861,12 @@ def build_resume_message(session_id: str, agent_id: str) -> str:
         "Continue only the original single assigned issue; do not broaden scope and do not spawn a replacement agent.",
         "If the original work was already complete, make no duplicate edits and re-emit the terminal report after verification.",
         "If quota blocks again, end with `RECOVERY_STATUS: quota_interrupted`; otherwise end with `RECOVERY_STATUS: completed`.",
+    ])
+    if not isinstance(guidance, str) or not guidance:
+        return instruction
+    return "".join([
+        instruction, "\n\n", GUIDANCE_OPEN, "\n", GUIDANCE_NOTE, "\n",
+        guidance, "\n", GUIDANCE_CLOSE,
     ])
 
 
@@ -761,6 +890,12 @@ def prepare_state(
     sid = _safe_session_id(session_id)
     grant = load_valid_grant(sid)
     own_transcript = Path(grant["transcript_path"])
+    # Guidance belongs to THIS operator session's /restart invocation: it is
+    # read fresh here, keyed by this sid alone, and never inherited from the
+    # previous state below — so it cannot leak across sessions, and a later bare
+    # /restart (which removes the file) cannot replay an earlier invocation's
+    # guidance as if it were current.
+    guidance = load_guidance(sid)
     discovered = discover_candidates(own_transcript)
     if cross_account and project_dir is not None:
         for sibling in sibling_transcripts(project_dir, exclude=own_transcript):
@@ -788,7 +923,7 @@ def prepare_state(
                 "attempts": previous.get("attempts", 0)
                 if isinstance(previous.get("attempts", 0), int) else 0,
                 "resume_message": build_resume_message(
-                    candidate["parent_session_id"], candidate["agent_id"]
+                    candidate["parent_session_id"], candidate["agent_id"], guidance
                 ),
             }
             for key in (
@@ -803,6 +938,7 @@ def prepare_state(
             "transcript_path": grant["transcript_path"],
             "grant_issued_at": grant.get("issued_at"),
             "cross_account": bool(cross_account),
+            "operator_guidance": guidance,
             "created_at": old.get("created_at") or _iso(),
             "updated_at": _iso(),
             "candidates": items,
@@ -838,6 +974,10 @@ def status_view(state: dict[str, Any]) -> dict[str, Any]:
         "schema_version": SCHEMA_VERSION,
         "parent_session_id": state.get("parent_session_id"),
         "cross_account": state.get("cross_account") is True,
+        # Top-level and unconditional: a caller must be able to read the
+        # guidance it passed even when discovery found ZERO candidates and no
+        # resume_message exists to carry it.
+        "operator_guidance": state.get("operator_guidance"),
         "state_path": str(state_path(str(state.get("parent_session_id")))),
         "candidate_count": len(public),
         "complete": not incomplete,
@@ -857,7 +997,7 @@ def get_status(session_id: str, *, wait_seconds: int = 0, poll_seconds: float = 
 
 
 def authorize_send_message(payload: dict[str, Any]) -> tuple[bool, str]:
-    """Authorize only the exact recovery message to a discovered agent id.
+    """Authorize only the exact recovery message, as a prefix, to a discovered id.
 
     Validates against this operator session's prepared state. A candidate whose
     parent_session_id is not the operator's own session is dispatchable ONLY
@@ -931,8 +1071,23 @@ def authorize_send_message(payload: dict[str, Any]) -> tuple[bool, str]:
                 "target's child transcript already contains its terminal end_turn "
                 "report; completed agents are never resumed"
             )
-        if message != item.get("resume_message"):
+        # Relaxed from byte-equality to a REQUIRED EXACT PREFIX. The rule being
+        # enforced is that the REAL persisted resume instruction reaches the
+        # agent unaltered, so an orchestrator can never pass a freshly
+        # reconstructed prompt off as a resume. Content AFTER the instruction is
+        # additive and cannot change it, so operator guidance may follow; any
+        # message that rewords, truncates or reorders the instruction itself
+        # fails this test exactly as it did under equality.
+        expected = item.get("resume_message")
+        if not isinstance(expected, str) or not expected or not isinstance(message, str):
             raise RestartError("SendMessage body is not the exact restart-v1 recovery message")
+        if not message.startswith(expected):
+            raise RestartError(
+                "SendMessage body does not begin with the exact restart-v1 recovery "
+                "message; the persisted instruction must be delivered verbatim as an "
+                "exact prefix (trailing operator guidance is allowed, altering the "
+                "instruction is not)"
+            )
         if item.get("status") != "pending":
             raise RestartError("target is not pending; duplicate restart dispatch denied")
         return True, "validated /restart recovery"
