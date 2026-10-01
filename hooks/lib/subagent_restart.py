@@ -32,18 +32,26 @@ MESSAGE_MARKER = "[awesome-claude-harness/restart-v1]"
 SESSION_RE = re.compile(r"^[A-Za-z0-9._-]{1,160}$")
 AGENT_RE = re.compile(r"^[A-Za-z0-9._-]{3,160}$")
 AGENT_ID_TEXT_RE = re.compile(r"agentId:\s*([A-Za-z0-9._-]+)")
-INTERRUPT_RE = re.compile(
-    r"\b(?:request interrupted|interrupted by user|aborterror|aborted|cancelled)\b",
-    re.IGNORECASE,
-)
-QUOTA_RE = re.compile(
-    r"you(?:'|’)?ve hit your session limit|session usage limit|"
-    r"usage limit (?:has been )?(?:reached|exceeded)|"
-    r"(?:anthropic|claude)[^\n]{0,80}rate[-_ ]limit|"
-    r"(?:error|code)[\"' :=_-]{0,12}rate_limit|"
-    r"resets?\s+(?:at|in)\s+\d",
-    re.IGNORECASE,
-)
+
+# Interruption/quota detection lives in interruption_signals: this module used to
+# carry one enumerated phrase list, which silently recovered NOTHING for every
+# banner its author had not personally seen ("weekly limit", "529 Overloaded",
+# "stalled mid-stream", "did NOT finish" all measured as misses on 2026-09-30).
+# The scope word in "You've hit your <SCOPE> limit" is an open set, so that list
+# was unwinnable by construction. See that module's docstring for the corpus
+# measurement and the three evidence tiers.
+try:  # package import (hooks.lib.subagent_restart)
+    from . import interruption_signals as signals
+except ImportError:  # direct sys.path import (lib/ on path)
+    import interruption_signals as signals  # type: ignore[no-redef]
+
+
+def _is_quota_text(value: Any) -> bool:
+    return signals.is_quota_text(_textify(value) if not isinstance(value, str) else value)
+
+
+def _is_interrupt_text(value: Any) -> bool:
+    return signals.is_interrupt_text(_textify(value) if not isinstance(value, str) else value)
 NOTIFICATION_OPEN = "<task-notification>"
 NOTIFICATION_CLOSE = "</task-notification>"
 # Applied to ONE already-delimited notification body (see
@@ -69,9 +77,9 @@ TASK_NOTIFICATION_RE = re.compile(
     re.IGNORECASE | re.DOTALL,
 )
 # The fixed resume message instructs every resumed agent to end with an explicit
-# RECOVERY_STATUS sentinel. That sentinel outranks QUOTA_RE text-matching when
-# grading the response: an agent reporting ON a quota outage legitimately quotes
-# limit banners, and grading such a report by substring inverts its meaning
+# RECOVERY_STATUS sentinel. That sentinel outranks ALL text-tier quota matching
+# when grading the response: an agent reporting ON a quota outage legitimately
+# quotes limit banners, and grading such a report by text inverts its meaning
 # (docs/reference/restart-detector-quota-text-match-false-positive-20260915.md §2).
 RECOVERY_STATUS_RE = re.compile(r"RECOVERY_STATUS:\s*(completed|quota_interrupted)\b")
 
@@ -329,7 +337,7 @@ def _read_parent_calls(
                     latest_notifications[agent_id] = {
                         "line": line_no,
                         "status": match.group(2).lower(),
-                        "quota_interrupted": bool(QUOTA_RE.search(tail)),
+                        "quota_interrupted": signals.is_quota_text(tail),
                     }
             try:
                 record = json.loads(line)
@@ -391,42 +399,77 @@ def _metadata_by_tool_use(transcript: Path) -> dict[str, dict[str, Any]]:
     return result
 
 
-def _child_reported_end_turn(agent_transcript_path: str | Path) -> bool | None:
-    """True iff the child's own transcript contains a terminal end_turn report.
+def _child_transcript_signals(agent_transcript_path: str | Path) -> dict[str, Any]:
+    """One pass over a child transcript for both structural verdicts it holds.
 
-    ``stop_reason`` is written by the harness, never by report prose, so any
-    assistant record carrying ``stop_reason == "end_turn"`` proves the child
-    reached a natural stopping point and emitted its own terminal report —
-    including the completed-then-rewoken shape where a later resume turn was
-    itself cut off after the report already landed. Synthetic quota-abort
-    records carry ``stop_sequence`` (plus ``isApiErrorMessage``) and can never
-    satisfy this test. Returns None when the transcript is missing or
-    unreadable: liveness is then unknowable and the caller must fall back to
-    parent-side evidence rather than silently dropping the candidate.
+    Returns ``{"end_turn": bool | None, "api_error": Signal | None,
+    "api_error_line": int | None}``.
+
+    ``end_turn``
+        True iff the child emitted a terminal end_turn report. ``stop_reason``
+        is written by the harness, never by report prose, so an assistant record
+        carrying ``stop_reason == "end_turn"`` proves the child reached a natural
+        stopping point — including the completed-then-rewoken shape where a later
+        resume turn was itself cut off after the report already landed.
+        Synthetic quota-abort records carry ``stop_sequence`` (plus
+        ``isApiErrorMessage``) and can never satisfy this test. None when the
+        transcript is missing or unreadable: liveness is then unknowable and the
+        caller must fall back to parent-side evidence rather than silently
+        dropping the candidate.
+
+    ``api_error``
+        The strongest structural interruption signal among the child's own
+        ``isApiErrorMessage`` records. This is the evidence source the detector
+        previously lacked entirely: recovery read only the PARENT's prose, so a
+        child killed mid-run contributed nothing unless the parent happened to
+        phrase the banner in a way the old phrase list recognised. These records
+        are machine-written, so they hold for wordings nobody has seen yet.
+
+    Both verdicts come from one read because the caller needs them together and
+    child transcripts are large.
     """
     path = Path(agent_transcript_path)
+    verdict: dict[str, Any] = {"end_turn": None, "api_error": None, "api_error_line": None}
     try:
         handle = path.open("r", encoding="utf-8", errors="replace")
     except OSError:
-        return None
+        return verdict
+    end_turn = False
     with handle:
-        for line in handle:
-            # Cheap substring pre-filter; every hit is still structurally
-            # verified below, so prose merely quoting "end_turn" cannot match.
-            if '"end_turn"' not in line:
+        for line_no, line in enumerate(handle, 1):
+            # Cheap substring pre-filters; every hit is structurally verified
+            # below, so prose merely quoting these tokens cannot match.
+            has_end_turn = '"end_turn"' in line
+            has_api_error = "isApiErrorMessage" in line
+            if not has_end_turn and not has_api_error:
                 continue
             try:
                 record = json.loads(line)
             except ValueError:
                 continue
-            if not isinstance(record, dict) or record.get("isApiErrorMessage") is True:
+            if not isinstance(record, dict):
+                continue
+            if has_api_error:
+                signal = signals.classify_record(record)
+                if signal is not None:
+                    verdict["api_error"] = signals.strongest(
+                        (verdict["api_error"], signal)
+                    )
+                    verdict["api_error_line"] = line_no
+            if not has_end_turn or record.get("isApiErrorMessage") is True:
                 continue
             message = record.get("message")
             if not isinstance(message, dict):
                 continue
             if message.get("role") == "assistant" and message.get("stop_reason") == "end_turn":
-                return True
-    return False
+                end_turn = True
+    verdict["end_turn"] = end_turn
+    return verdict
+
+
+def _child_reported_end_turn(agent_transcript_path: str | Path) -> bool | None:
+    """Back-compat wrapper: only the end_turn verdict of the combined scan."""
+    return _child_transcript_signals(agent_transcript_path)["end_turn"]
 
 
 def discover_candidates(transcript_path: str | Path) -> list[dict[str, Any]]:
@@ -474,13 +517,13 @@ def discover_candidates(transcript_path: str | Path) -> list[dict[str, Any]]:
         if not result_blocks and not is_background:
             evidence.append("missing_parent_tool_result")
             interruption_lines.append(call["line"])
-        if (result_text and QUOTA_RE.search(result_text)) or (
+        if (result_text and _is_quota_text(result_text)) or (
             notification_after_call and notification.get("quota_interrupted")
         ):
             evidence.append("quota_or_usage_limit")
             interruption_lines.extend(
                 block["_parent_line"] for block in result_blocks
-                if isinstance(block.get("_parent_line"), int) and QUOTA_RE.search(_textify(block))
+                if isinstance(block.get("_parent_line"), int) and _is_quota_text(block)
             )
             if notification_after_call and notification.get("quota_interrupted"):
                 interruption_lines.append(notification["line"])
@@ -499,7 +542,7 @@ def discover_candidates(transcript_path: str | Path) -> list[dict[str, Any]]:
         # a different block's unrelated success text.
         interrupted_blocks = [
             block for block in result_blocks
-            if block.get("is_error") is True and INTERRUPT_RE.search(_textify(block))
+            if block.get("is_error") is True and _is_interrupt_text(block)
         ]
         if interrupted_blocks:
             evidence.append("interrupted_tool_result")
@@ -507,15 +550,17 @@ def discover_candidates(transcript_path: str | Path) -> list[dict[str, Any]]:
                 block["_parent_line"] for block in interrupted_blocks
                 if isinstance(block.get("_parent_line"), int)
             )
-        if not evidence:
-            continue
+        # Child identity and the child's OWN structural record are resolved
+        # BEFORE the evidence-sufficiency test, because that record is often the
+        # only evidence in existence. A hook-rejected Agent call has no child
+        # identity and must never be replaced with a fresh agent: it is not a
+        # resumable invocation.
         if not isinstance(agent_id, str) or not AGENT_RE.fullmatch(agent_id):
-            # A hook-rejected Agent call has no child identity and must never be
-            # replaced with a fresh agent: it is not a resumable invocation.
             continue
         agent_transcript_path = meta.get("agent_transcript_path") or str(
             transcript.with_suffix("") / "subagents" / f"agent-{agent_id}.jsonl"
         )
+        child = _child_transcript_signals(agent_transcript_path)
         # Structural liveness gate. The parent's Agent tool_result IS the
         # child's own report whenever the child completed, so the textual
         # evidence above cannot distinguish "was quota-interrupted" from
@@ -525,7 +570,33 @@ def discover_candidates(transcript_path: str | Path) -> list[dict[str, Any]]:
         # 20260915.md §4-5). A child that reached end_turn finished naturally
         # and must never be resumed; an unreadable child transcript (None)
         # keeps the candidate so a genuinely cut-off child is never dropped.
-        if _child_reported_end_turn(agent_transcript_path) is True:
+        if child["end_turn"] is True:
+            continue
+        # Structural interruption evidence, machine-written and prose-free. This
+        # is what the enumerated phrase list never had: a background child killed
+        # by the API leaves the parent no tool_result to read and no banner to
+        # match, so the whole fan-out used to discover zero candidates. The
+        # child's own isApiErrorMessage record survives that, and survives
+        # banner wordings nobody has seen yet.
+        child_signal = child["api_error"]
+        if child_signal is not None:
+            evidence.append(
+                "quota_or_usage_limit_structural"
+                if child_signal.kind == signals.KIND_QUOTA
+                else "child_api_error_structural"
+            )
+            # interruption_line is a PARENT-transcript line: prepare_state
+            # compares it against interruption_line_at_dispatch to re-derive a
+            # dispatched candidate back to pending. The child's own line
+            # numbering is a different axis, so anchor to the furthest parent
+            # line this call is known to occupy instead of mixing the two.
+            interruption_lines.append(max(
+                [
+                    block["_parent_line"] for block in result_blocks
+                    if isinstance(block.get("_parent_line"), int)
+                ] or [call["line"]]
+            ))
+        if not evidence:
             continue
         description = meta.get("description") or tool_input.get("description") or ""
         agent_type = meta.get("agent_type") or tool_input.get("subagent_type") or ""
@@ -914,7 +985,7 @@ def observe_subagent_stop(payload: dict[str, Any]) -> dict[str, Any] | None:
             if sentinels:
                 interrupted = sentinels[-1] == "quota_interrupted"
             else:
-                interrupted = bool(QUOTA_RE.search(last_message))
+                interrupted = signals.is_quota_text(last_message)
             item["status"] = "quota_interrupted" if interrupted else "response_observed"
             item["last_stop_at"] = _iso()
             agent_transcript = payload.get("agent_transcript_path")

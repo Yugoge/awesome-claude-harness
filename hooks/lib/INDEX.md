@@ -1,8 +1,8 @@
 # lib
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-09-18T09:16:46Z*
-**Total entries**: 35
+*Last updated: 2026-09-30T14:32:45Z*
+**Total entries**: 36
 **Convention**: kebab
 
 ## Tree
@@ -34,6 +34,7 @@ lib/
 ├── `git_clean_guard.py` - Classifies ONE Bash command for the fail-closed pre-clean guard woven into the
 ├── `git_command_classifier.py` - Provides iter_git_invocations() — a token-aware parser that detects git
 ├── `grepguard_context_strip.py` - PURPOSE (narrow, guard-specific)
+├── `interruption_signals.py` - Decides whether a subagent was cut off — and whether a usage limit did it — from
 ├── `overnight.py` - Single source of truth for "is a /dev-overnight session currently live?". A
 ├── `policy_registry.py` - Reads the harness ``policies/tool-policy.v1.json`` (resolved via the shared
 ├── `runtime_guard.py` - This file exists for backwards-compatibility with callers that invoke
