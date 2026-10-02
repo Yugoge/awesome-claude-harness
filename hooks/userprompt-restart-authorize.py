@@ -35,14 +35,36 @@ def split_invocation(prompt: object) -> tuple[bool, str]:
     return True, remainder.lstrip()
 
 
-def _persist_guidance(session_id: str, args: str) -> Path | None:
-    """Store the operator argument verbatim beside the capability.
+def _sweep_superseded(session_id: str, keep: Path | None) -> list[str]:
+    """Best-effort removal of this session's earlier guidance files.
+
+    Hygiene, not correctness -- see lib/subagent_restart.py guidance_path for
+    why a leftover this cannot delete is already inert. Failures are collected
+    and reported, never silently swallowed, so the operator learns which file
+    resisted removal.
+    """
+    failures: list[str] = []
+    for path in restart.superseded_guidance_paths(session_id, keep):
+        try:
+            path.unlink()
+        except FileNotFoundError:
+            continue
+        except OSError as exc:
+            failures.append(f"{path}: {exc}")
+    return failures
+
+
+def _persist_guidance(grant: dict, args: str) -> Path | None:
+    """Store the operator argument verbatim, bound to the capability it is for.
 
     The argument is untrusted operator data, so it gets its own raw UTF-8 file:
     no character in it can be significant to the capability's JSON framing, and
-    no quoting or escaping is applied that could lose bytes. An empty argument
-    removes any file an earlier invocation of this session left behind, so
-    stale guidance is never replayed as if it were current.
+    no quoting or escaping is applied that could lose bytes. Its path is bound
+    to THIS invocation's capability (``guidance_path`` takes the grant just
+    minted) -- see that function for why this keeps an earlier invocation's
+    text out of a later resume. An empty argument therefore does not have to
+    succeed at deleting anything to be honoured -- it simply writes no file for
+    the live capability, and the reader finds none.
 
     Runs only AFTER the capability exists and reports every failure as a
     RestartError for the caller to downgrade to a warning: guidance is purely
@@ -51,14 +73,15 @@ def _persist_guidance(session_id: str, args: str) -> Path | None:
     the library's, never re-derived here, so the writer and the reader cannot
     drift apart.
     """
-    path = restart.guidance_path(session_id)
+    session_id = str(grant.get("session_id", ""))
+    path = restart.guidance_path(session_id, grant)
     if not args:
-        try:
-            path.unlink()
-        except FileNotFoundError:
-            pass
-        except OSError as exc:
-            raise restart.RestartError(f"cannot clear stale guidance at {path}: {exc}") from exc
+        failures = _sweep_superseded(session_id, None)
+        if failures:
+            raise restart.RestartError(
+                "earlier guidance could not be deleted (it is already inert, since "
+                f"only this capability's own path is read): {'; '.join(failures)}"
+            )
         return None
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -80,9 +103,8 @@ def _persist_guidance(session_id: str, args: str) -> Path | None:
         # Operator text is deliberately unfiltered, so it can carry an unpaired
         # surrogate that UTF-8 cannot represent. That raises UnicodeError, not
         # OSError, so it has to be recognised here as one more way persistence
-        # can fail -- never left to escape as a traceback. Either way the words
-        # were not stored, so an earlier invocation's file is dropped rather
-        # than replayed as if it were this invocation's guidance.
+        # can fail -- never left to escape as a traceback. The unlink below is
+        # hygiene for a half-made file; its failure changes no outcome.
         try:
             path.unlink()
         except OSError:
@@ -90,6 +112,12 @@ def _persist_guidance(session_id: str, args: str) -> Path | None:
         raise restart.RestartError(
             f"cannot persist guidance at {path}: {type(exc).__name__}: {exc}"
         ) from exc
+    for failure in _sweep_superseded(session_id, path):
+        print(
+            f"[/restart] note: an earlier guidance file could not be deleted ({failure}); "
+            "it is inert -- only this capability's own guidance is read.",
+            file=sys.stderr,
+        )
     return path
 
 
@@ -111,7 +139,9 @@ def main() -> int:
     # for a human-only emergency command, so nothing about the operator's
     # optional guidance -- not a stale file that resists removal, not a failed
     # write, not text UTF-8 cannot hold -- may stand between the operator and
-    # the recovery capability, nor change this hook's exit status.
+    # the recovery capability, nor change this hook's exit status. It also comes
+    # first because it is what the guidance is bound to: the grant minted here
+    # names the single path this invocation's guidance can occupy.
     try:
         grant = restart.mint_grant(str(session_id or ""), str(transcript_path or ""))
     except restart.RestartError as exc:
@@ -122,7 +152,7 @@ def main() -> int:
         f"{grant['session_id']}; only transcript-discovered interrupted agent ids may be resumed."
     )
     try:
-        carried = _persist_guidance(grant["session_id"], args)
+        carried = _persist_guidance(grant, args)
     except restart.RestartError as exc:
         carried = None
         print(

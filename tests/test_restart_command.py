@@ -636,7 +636,7 @@ def test_userprompt_authorizer_accepts_only_human_command_invocations(tmp_path: 
     grant = json.loads((tmp_path / "grants" / f"claude-restart-grant-{sid}.json").read_text())
     assert grant["issued_by"] == restart.GRANT_ISSUER
     assert grant["session_id"] == sid
-    assert not (tmp_path / "grants" / f"claude-restart-args-{sid}.txt").exists()
+    assert list((tmp_path / "grants").glob(f"claude-restart-args-{sid}*")) == []
 
 
 def test_userprompt_authorizer_carries_operator_argument_verbatim(tmp_path: Path) -> None:
@@ -651,26 +651,44 @@ def test_userprompt_authorizer_carries_operator_argument_verbatim(tmp_path: Path
     hook = HOOKS / "userprompt-restart-authorize.py"
     base = {"session_id": sid, "transcript_path": str(transcript), "cwd": str(tmp_path)}
     grant_file = tmp_path / "grants" / f"claude-restart-grant-{sid}.json"
-    args_file = tmp_path / "grants" / f"claude-restart-args-{sid}.txt"
+
+    def _args_file() -> Path:
+        """Where the guidance of the capability that is live RIGHT NOW lives.
+
+        The token and separator come from the library's own helpers, because
+        each invocation mints a new capability and so moves the file; only the
+        directory is pinned to ``tmp_path`` directly rather than through
+        ``guidance_path``'s own ``grant_dir()``, since that resolves
+        ``CLAUDE_RESTART_GRANT_DIR`` from THIS process's environment while the
+        hook under test reads it from the separate ``env`` handed to the
+        subprocess below.
+        """
+        grant = json.loads(grant_file.read_text(encoding="utf-8"))
+        token = restart.capability_token(sid, grant)
+        return tmp_path / "grants" / f"claude-restart-args-{sid}{restart.GUIDANCE_TOKEN_SEP}{token}.txt"
+
     guidance = '继续，下一阶段注意 X\n\n{"quote": "it\'s \\"fine\\""}\ttab\r\nend  '
     accepted = _run_hook(hook, {**base, "prompt": f"/restart   {guidance}"}, env)
     assert accepted.returncode == 0
     assert "capability issued for parent session" in accepted.stdout
     assert guidance not in accepted.stdout
     assert json.loads(grant_file.read_text())["issued_by"] == restart.GRANT_ISSUER
-    assert args_file.read_bytes() == guidance.encode("utf-8")
+    assert _args_file().read_bytes() == guidance.encode("utf-8")
     newline_form = _run_hook(hook, {**base, "prompt": f"  /restart\n{guidance}\t"}, env)
     assert newline_form.returncode == 0
-    assert args_file.read_bytes() == f"{guidance}\t".encode("utf-8")
+    assert _args_file().read_bytes() == f"{guidance}\t".encode("utf-8")
     large = '百万言 "quoted" {json}\n' * 4000
     assert len(large.encode("utf-8")) > 100_000
     big = _run_hook(hook, {**base, "prompt": f"/restart {large}"}, env)
     assert big.returncode == 0
-    assert args_file.read_bytes() == large.encode("utf-8")
+    assert _args_file().read_bytes() == large.encode("utf-8")
     bare = _run_hook(hook, {**base, "prompt": " /restart  "}, env)
     assert bare.returncode == 0
     assert json.loads(grant_file.read_text())["session_id"] == sid
-    assert not args_file.exists()
+    assert not _args_file().exists()
+    # Each invocation's words live under its own capability, and the bare one
+    # above took every earlier file with it.
+    assert list((tmp_path / "grants").glob(f"claude-restart-args-{sid}*")) == []
 
 
 def test_command_and_settings_keep_restart_human_only_and_lossless() -> None:
@@ -1363,15 +1381,20 @@ def test_guidance_persistence_can_never_deny_the_recovery_capability(
     that returned non-zero here would block the prompt that carries a human-only
     emergency command -- the one moment this path exists to serve.
 
-    The failure is SIMULATED rather than assumed impossible: the guidance path is
-    occupied by a non-empty directory, so the bare invocation's stale clear
-    (unlink) and the guided invocation's write (os.replace) both fail with EISDIR
-    even for a privileged process.
+    The failure is SIMULATED rather than assumed impossible: an earlier
+    invocation's guidance file is replaced by a NON-EMPTY DIRECTORY under the
+    same name, so removing it fails with EISDIR even for a privileged process.
+    A bare invocation reports that and still mints; a guided invocation is not
+    even slowed by it, because its own words go to its own capability's path.
     """
     hook = HOOKS / "userprompt-restart-authorize.py"
     for label, prompt in (("bare", "/restart"), ("guided", "/restart do X first")):
         session = _unminted_session(tmp_path / label, monkeypatch)
-        stale = restart.guidance_path(session["sid"])
+        # Shaped like what an earlier capability would have left behind, so the
+        # hook's sweep of superseded guidance really does try to unlink it.
+        stale = restart.grant_dir() / (
+            f"claude-restart-args-{session['sid']}{restart.GUIDANCE_TOKEN_SEP}{'0' * 32}.txt"
+        )
         stale.mkdir(parents=True)
         (stale / "occupied").write_text("an earlier invocation's words", encoding="utf-8")
         grant_file = restart.grant_path(session["sid"])
@@ -1387,14 +1410,23 @@ def test_guidance_persistence_can_never_deny_the_recovery_capability(
         assert "Traceback" not in result.stderr, label
         assert grant_file.is_file(), f"{label}: the capability must be minted anyway"
         assert restart.load_valid_grant(session["sid"])["session_id"] == session["sid"], label
-        assert "warning: operator guidance was not preserved" in result.stderr, label
-        # Degraded, not denied: with no readable guidance the recovery message is
-        # exactly the pinned baseline, and the words are not silently replayed.
-        assert restart.load_guidance(session["sid"]) is None, label
-        assert restart.build_resume_message(
-            "sess-baseline-0001", "agent-baseline-0001",
-            restart.load_guidance(session["sid"]),
-        ) == BASELINE_RESUME_MESSAGE, label
+        assert stale.is_dir(), f"{label}: the obstruction must really have resisted removal"
+        if label == "bare":
+            # Reported, not denied: the clear failed, and with no guidance at the
+            # live capability's path the recovery message is exactly the pinned
+            # baseline -- the obstructed text is not replayed in its place.
+            assert "warning: operator guidance was not preserved" in result.stderr, label
+            assert restart.load_guidance(session["sid"]) is None, label
+            assert restart.build_resume_message(
+                "sess-baseline-0001", "agent-baseline-0001",
+                restart.load_guidance(session["sid"]),
+            ) == BASELINE_RESUME_MESSAGE, label
+        else:
+            # An undeletable leftover no longer costs the operator their words:
+            # it is inert, so the write proceeds and is reported as hygiene only.
+            assert "an earlier guidance file could not be deleted" in result.stderr, label
+            assert "operator argument preserved verbatim" in result.stdout, label
+            assert restart.load_guidance(session["sid"]) == "do X first", label
 
 
 def test_operator_guidance_utf8_cannot_hold_is_recognised_never_crashes(
@@ -1434,8 +1466,13 @@ def test_load_guidance_tolerates_absent_unreadable_and_undecodable_files(
     losing the operator's words must never cost the recovery itself."""
     monkeypatch.setenv("CLAUDE_RESTART_GRANT_DIR", str(tmp_path / "grants"))
     sid = str(uuid.uuid4())
+    assert restart.load_guidance(sid) is None, "no capability at all"
+    transcript = tmp_path / f"{sid}.jsonl"
+    _write_jsonl(transcript, [])
+    grant = restart.mint_grant(sid, str(transcript), ttl_seconds=600)
     assert restart.load_guidance(sid) is None, "absent"
     path = restart.guidance_path(sid)
+    assert path == restart.guidance_path(sid, grant), "the live grant is the default binding"
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(b"")
     assert restart.load_guidance(sid) is None, "empty"
@@ -1449,9 +1486,22 @@ def test_load_guidance_tolerates_absent_unreadable_and_undecodable_files(
     path.write_bytes("a\r\n\tb".encode("utf-8"))
     assert restart.load_guidance(sid) == "a\r\n\tb", "CRLF and tabs must survive the read"
 
-    # One path convention, bound to its producer at runtime rather than restated.
+    # One path convention, bound to its producer at runtime rather than restated,
+    # and carrying the token of the capability whose guidance it holds.
     assert path.parent == restart.grant_path(sid).parent
-    assert path.name == f"claude-restart-args-{sid}.txt"
+    assert path.name == (
+        f"claude-restart-args-{sid}{restart.GUIDANCE_TOKEN_SEP}"
+        f"{restart.capability_token(sid, grant)}.txt"
+    )
+    # The pre-binding name is no longer a name the reader will open, so text
+    # parked there by an older harness cannot be read as current guidance.
+    legacy = path.parent / f"claude-restart-args-{sid}.txt"
+    legacy.write_bytes("text from before the binding existed".encode("utf-8"))
+    assert restart.load_guidance(sid) == "a\r\n\tb", "the live capability's own file still wins"
+    path.unlink()
+    assert restart.load_guidance(sid) is None, "an unbound file is never current guidance"
+    assert legacy.is_file(), "it is inert, not deleted, until a sweep reaches it"
+    legacy.unlink()
     spec = importlib.util.spec_from_file_location(
         "restart_authorize_producer", HOOKS / "userprompt-restart-authorize.py",
     )
@@ -1463,5 +1513,375 @@ def test_load_guidance_tolerates_absent_unreadable_and_undecodable_files(
     assert producer.restart.guidance_path is restart.guidance_path, (
         "the producer must write through the same helper the consumer reads"
     )
+
+
+def test_prepare_reads_guidance_through_the_capability_it_just_validated(
+    recovery: dict,
+) -> None:
+    """Time-of-check to time-of-use: prepare validates ONE capability and reads
+    guidance through that very object, instead of re-resolving the live one.
+
+    The capability on disk is rotated AFTER prepare has validated it -- a second
+    /restart in another process mints its own, which is exactly the window a
+    re-load would fall into. Both capabilities' guidance files exist, carrying
+    different words, so the prepared state proves WHICH one the read followed.
+    """
+    sid = recovery["sid"]
+    validated = restart.load_valid_grant(sid)
+    validated_text = "WORDS BOUND TO THE CAPABILITY PREPARE VALIDATED"
+    successor_text = "WORDS OF A CAPABILITY MINTED AFTER THAT VALIDATION"
+    restart.guidance_path(sid, validated).write_bytes(validated_text.encode("utf-8"))
+    rotated: list[dict] = []
+    real_load_valid_grant = restart.load_valid_grant
+
+    def racing_load_valid_grant(session_id: str) -> dict:
+        grant = real_load_valid_grant(session_id)
+        if not rotated:  # fires once: between prepare's check and its use
+            successor = restart.mint_grant(
+                session_id, str(recovery["transcript"]), ttl_seconds=600,
+            )
+            restart.guidance_path(session_id, successor).write_bytes(
+                successor_text.encode("utf-8")
+            )
+            rotated.append(successor)
+        return grant
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(restart, "load_valid_grant", racing_load_valid_grant)
+        view = restart.prepare_state(sid)
+
+    # The instrument really did open the window: by read time a DIFFERENT
+    # capability, with its own guidance path and words, is the live one.
+    assert rotated, "the rotation never fired, so no race was simulated"
+    successor = rotated[0]
+    assert successor["issued_at"] != validated["issued_at"]
+    assert restart.guidance_path(sid, successor) != restart.guidance_path(sid, validated)
+    assert restart.load_valid_grant(sid)["issued_at"] == successor["issued_at"]
+    assert restart.load_guidance(sid, successor) == successor_text
+
+    # And the read followed the validated capability, not the live one -- so the
+    # guidance and the grant_issued_at persisted beside it are one capability's.
+    persisted = json.loads(restart.state_path(sid).read_text(encoding="utf-8"))
+    assert view["operator_guidance"] == validated_text
+    assert persisted["operator_guidance"] == validated_text
+    assert persisted["grant_issued_at"] == validated["issued_at"]
+    assert successor_text not in json.dumps(view, ensure_ascii=False)
+    assert successor_text not in restart.state_path(sid).read_text(encoding="utf-8")
+    for item in view["candidates"]:
+        assert validated_text in item["resume_message"]
+        assert successor_text not in item["resume_message"]
+
+
+def test_load_guidance_honours_the_grant_it_is_handed_over_the_live_one(
+    recovery: dict,
+) -> None:
+    """The reader's grant argument is load-bearing, not decoration: a caller
+    that has already validated a capability reads THAT one's words even once a
+    newer capability has become the live one on disk."""
+    sid = recovery["sid"]
+    handed = restart.load_valid_grant(sid)
+    handed_text = "the words of the capability the caller validated"
+    restart.guidance_path(sid, handed).write_bytes(handed_text.encode("utf-8"))
+
+    live = restart.mint_grant(sid, str(recovery["transcript"]), ttl_seconds=600)
+    live_text = "the words of whichever capability is live right now"
+    assert live["issued_at"] != handed["issued_at"], "the mint must really rotate"
+    live_path = restart.guidance_path(sid, live)
+    assert live_path != restart.guidance_path(sid, handed)
+    live_path.write_bytes(live_text.encode("utf-8"))
+
+    assert restart.load_guidance(sid, handed) == handed_text
+    assert restart.load_guidance(sid, live) == live_text
+    assert restart.load_guidance(sid) == live_text, "no grant handed means the live one"
+
+
+def test_capability_token_refuses_a_grant_from_another_session(recovery: dict) -> None:
+    """The fingerprint names ONE session's capability, so a grant whose own
+    session id is not the session being fingerprinted is refused rather than
+    fingerprinted as this session's -- which would hand a foreign capability
+    this session's operator words."""
+    sid = recovery["sid"]
+    grant = restart.load_valid_grant(sid)
+    live_text = "this session's words, for this session's capability alone"
+    restart.guidance_path(sid, grant).write_bytes(live_text.encode("utf-8"))
+    foreign = {**grant, "session_id": str(uuid.uuid4())}
+
+    with pytest.raises(restart.RestartError) as refused:
+        restart.capability_token(sid, foreign)
+    assert "restart grant identity mismatch" in str(refused.value)
+    # The consequence at the reader: a foreign capability yields no guidance,
+    # while this session's own still does, so this is the binding and not a
+    # file that simply cannot be read.
+    assert restart.load_guidance(sid, foreign) is None
+    assert restart.load_guidance(sid, grant) == live_text
+
+
+def test_capability_token_refuses_a_grant_carrying_no_issue_time(recovery: dict) -> None:
+    """The issue time is the only field that tells two mints of one session
+    apart, so with no usable one there is nothing honest to fingerprint.
+
+    Asserted as the DOMAIN error specifically, by type and by message: without
+    the guard the material join raises a bare TypeError, which the reader does
+    not catch -- a crash would replace the degradation to None that keeps a
+    recovery alive when only the words are lost.
+    """
+    sid = recovery["sid"]
+    grant = restart.load_valid_grant(sid)
+    for label, candidate in (
+        ("absent", {key: value for key, value in grant.items() if key != "issued_at"}),
+        ("null", {**grant, "issued_at": None}),
+        ("empty", {**grant, "issued_at": ""}),
+        ("not a string", {**grant, "issued_at": 1759393790}),
+    ):
+        with pytest.raises(restart.RestartError) as refused:
+            restart.capability_token(sid, candidate)
+        assert "restart grant carries no issue time" in str(refused.value), label
+        assert restart.load_guidance(sid, candidate) is None, label
+
+
+def _set_immutable(path: Path, on: bool) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        ["chattr", "+i" if on else "-i", str(path)],
+        text=True, capture_output=True, check=False,
+    )
+
+
+def _require_unremovable_file(directory: Path) -> None:
+    """Skip unless THIS filesystem can really refuse a privileged unlink.
+
+    The suite runs as root, so a permission bit proves nothing; the immutable
+    attribute is what makes a file resist deletion. It is probed on a throwaway
+    sibling rather than assumed, and rather than probed on the file under test.
+    """
+    probe = directory / ".immutability-probe"
+    probe.write_bytes(b"probe")
+    marked = _set_immutable(probe, True)
+    try:
+        probe.unlink()
+    except PermissionError:
+        return
+    finally:
+        if probe.exists():
+            _set_immutable(probe, False)
+            probe.unlink()
+    pytest.skip(
+        f"{directory} cannot hold an undeletable file (chattr: "
+        f"rc={marked.returncode} {marked.stderr.strip()}), so the cleanup "
+        "failure cannot be simulated at the filesystem here"
+    )
+
+
+def test_earlier_capabilitys_guidance_is_inert_even_when_its_cleanup_fails(
+    recovery: dict,
+) -> None:
+    """The guarantee holds in the one case the old `unlink` could not deliver it.
+
+    An earlier invocation's guidance file is made UNDELETABLE at the filesystem
+    (immutable attribute, which a privileged process cannot unlink either), so
+    the hook's removal of it genuinely fails. It survives on disk and stays
+    perfectly readable -- and is still not returned as current guidance, does
+    not reach a resume message, and does not displace the words of a later
+    invocation, because currency is proved by the capability-bound path rather
+    than by the file's continued existence.
+    """
+    hook = HOOKS / "userprompt-restart-authorize.py"
+    base = {
+        "session_id": recovery["sid"],
+        "transcript_path": str(recovery["transcript"]),
+        "cwd": str(recovery["transcript"].parent),
+    }
+    _require_unremovable_file(recovery["grant_dir"])
+    stale_text = "STALE: abandon this lane and hand the keys to the other one"
+
+    first = _run_hook(hook, {**base, "prompt": f"/restart {stale_text}"}, recovery["env"])
+    assert first.returncode == 0, first.stderr
+    earlier_grant = restart.load_valid_grant(recovery["sid"])
+    stale = restart.guidance_path(recovery["sid"])
+    assert stale.read_bytes() == stale_text.encode("utf-8")
+    # Positive control for the instrument: while its OWN capability is live this
+    # very file is the guidance, is returned, and does ride into the resume. So
+    # the assertions below are about the binding, not about an unreadable file.
+    assert restart.load_guidance(recovery["sid"]) == stale_text
+    assert stale_text in restart.prepare_state(recovery["sid"])["candidates"][0]["resume_message"]
+
+    assert _set_immutable(stale, True).returncode == 0
+    try:
+        bare = _run_hook(hook, {**base, "prompt": "/restart"}, recovery["env"])
+        assert bare.returncode == 0, bare.stderr
+        assert "Traceback" not in bare.stderr
+        assert "warning: operator guidance was not preserved" in bare.stderr
+        # The cleanup really did fail: the file is still there, still readable.
+        assert stale.is_file() and stale.read_bytes() == stale_text.encode("utf-8")
+        live_grant = restart.load_valid_grant(recovery["sid"])
+        assert live_grant["issued_at"] != earlier_grant["issued_at"]
+        assert restart.guidance_path(recovery["sid"], live_grant) != stale, (
+            "a new capability must not inherit the earlier one's guidance path"
+        )
+
+        # The surviving text is inert, at every layer that could carry it.
+        assert restart.load_guidance(recovery["sid"]) is None
+        view = restart.prepare_state(recovery["sid"])
+        assert view["operator_guidance"] is None
+        assert stale_text not in json.dumps(view, ensure_ascii=False)
+        assert stale_text not in restart.state_path(recovery["sid"]).read_text(encoding="utf-8")
+        for item in view["candidates"]:
+            assert item["resume_message"] == restart.build_resume_message(
+                item["parent_session_id"], item["agent_id"],
+            )
+
+        # And a later GUIDED invocation gets its own words, not the survivor's.
+        fresh_text = "FRESH: finish the lane you are on"
+        guided = _run_hook(hook, {**base, "prompt": f"/restart {fresh_text}"}, recovery["env"])
+        assert guided.returncode == 0, guided.stderr
+        assert stale.is_file(), "the undeletable file is still there"
+        assert restart.load_guidance(recovery["sid"]) == fresh_text
+        after = restart.prepare_state(recovery["sid"])
+        assert after["operator_guidance"] == fresh_text
+        assert stale_text not in json.dumps(after, ensure_ascii=False)
+        for item in after["candidates"]:
+            assert stale_text not in item["resume_message"]
+    finally:
+        assert _set_immutable(stale, False).returncode == 0, (
+            f"left an immutable file behind at {stale}"
+        )
+
+
+def test_bare_restart_still_deletes_removable_earlier_guidance(recovery: dict) -> None:
+    """Hygiene is no longer load-bearing, but it must still happen: removable
+    guidance of earlier invocations is deleted rather than accumulated."""
+    hook = HOOKS / "userprompt-restart-authorize.py"
+    base = {
+        "session_id": recovery["sid"],
+        "transcript_path": str(recovery["transcript"]),
+        "cwd": str(recovery["transcript"].parent),
+    }
+    pattern = f"claude-restart-args-{recovery['sid']}*"
+
+    first = _run_hook(hook, {**base, "prompt": "/restart first words"}, recovery["env"])
+    assert first.returncode == 0, first.stderr
+    first_path = restart.guidance_path(recovery["sid"])
+    assert first_path.is_file()
+
+    second = _run_hook(hook, {**base, "prompt": "/restart second words"}, recovery["env"])
+    assert second.returncode == 0, second.stderr
+    second_path = restart.guidance_path(recovery["sid"])
+    assert second_path != first_path, "each invocation writes under its own capability"
+    assert restart.load_guidance(recovery["sid"]) == "second words"
+    assert sorted(restart.grant_dir().glob(pattern)) == [second_path], (
+        "a guided invocation must not leave the previous invocation's file behind"
+    )
+
+    # A longer session id that merely starts with this one owns its own file;
+    # the sweep is this session's hygiene, not a licence over the directory.
+    neighbour = restart.grant_dir() / f"claude-restart-args-{recovery['sid']}-sibling.txt"
+    neighbour.write_bytes("another session's guidance".encode("utf-8"))
+
+    bare = _run_hook(hook, {**base, "prompt": "/restart"}, recovery["env"])
+    assert bare.returncode == 0, bare.stderr
+    assert "warning" not in bare.stderr, bare.stderr
+    assert not second_path.exists(), "a bare invocation must delete earlier guidance"
+    assert sorted(restart.grant_dir().glob(pattern)) == [neighbour]
+    assert restart.load_guidance(recovery["sid"]) is None
+    neighbour.unlink()
+
+
+def test_superseded_sweep_never_misreads_a_hyphenated_session_id_as_bound(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Session A's live, capability-bound guidance file must never be collected
+    by session B's hygiene sweep merely because B's own id happens to spell
+    A + "-" + A's own token -- the two readings this cycle exists to make
+    textually impossible, not just unlikely.
+
+    B is built from A's REAL token, straight out of ``capability_token``,
+    rather than an invented 32-hex string, so this is not a contrived shape:
+    any session A ever mints puts a reachable B one SESSION_RE-legal id away.
+    """
+    monkeypatch.setenv("CLAUDE_RESTART_GRANT_DIR", str(tmp_path / "grants"))
+    monkeypatch.setenv("CLAUDE_RESTART_STATE_DIR", str(tmp_path / "states"))
+    sid_a = str(uuid.uuid4())
+    transcript_a = tmp_path / f"{sid_a}.jsonl"
+    _write_jsonl(transcript_a, [])
+    grant_a = restart.mint_grant(sid_a, str(transcript_a), ttl_seconds=600)
+    token_a = restart.capability_token(sid_a, grant_a)
+    path_a = restart.guidance_path(sid_a, grant_a)
+    path_a.parent.mkdir(parents=True, exist_ok=True)
+    path_a.write_bytes(b"A's live operator guidance")
+
+    sid_b = f"{sid_a}-{token_a}"
+    assert restart.SESSION_RE.fullmatch(sid_b), (
+        "the colliding id must itself be one SESSION_RE already accepts, or "
+        "this is not a reachable collision under the sanitiser's own contract"
+    )
+    assert sid_b != sid_a
+
+    victims = restart.superseded_guidance_paths(sid_b)
+    assert path_a not in victims, (
+        "session B's hygiene sweep collected session A's live, capability-"
+        "bound guidance file because B's id spells A + '-' + A's own token"
+    )
+    for victim in victims:
+        victim.unlink()
+    assert path_a.is_file() and path_a.read_bytes() == b"A's live operator guidance", (
+        "A's guidance must survive B's sweep untouched"
+    )
+
+    # A's own sweep still finds -- and would still correctly retire -- its own
+    # earlier file once that file is no longer the one being kept, so the
+    # legitimate hygiene case this guards is not collateral damage.
+    assert restart.superseded_guidance_paths(sid_a) == [path_a]
+    assert restart.superseded_guidance_paths(sid_a, keep=path_a) == []
+
+
+# Overridable so the pin can be retargeted without editing the test; the
+# literal stays the default.
+BASELINE_BUILDER_COMMIT = os.environ.get("CLAUDE_RESTART_BASELINE_COMMIT") or "34e74295"
+
+
+def test_no_guidance_resume_message_equals_the_committed_builders_output(
+    tmp_path: Path,
+) -> None:
+    """The bare resume message is pinned to the BUILDER AS COMMITTED, not to a
+    constant this version also produces: the committed blob is loaded as its own
+    module and its output compared byte for byte, or the pin skips visibly when
+    that commit is not reachable here."""
+    show = subprocess.run(
+        ["git", "-C", str(ROOT), "show",
+         f"{BASELINE_BUILDER_COMMIT}:hooks/lib/subagent_restart.py"],
+        capture_output=True, check=False,
+    )
+    if show.returncode != 0:
+        pytest.skip(
+            f"commit {BASELINE_BUILDER_COMMIT} is unavailable here: "
+            f"{show.stderr.decode('utf-8', 'replace').strip()}"
+        )
+    blob = tmp_path / "baseline_subagent_restart.py"
+    blob.write_bytes(show.stdout)
+    spec = importlib.util.spec_from_file_location("baseline_subagent_restart", blob)
+    baseline = importlib.util.module_from_spec(spec)
+    sys.path.insert(0, str(HOOKS / "lib"))
+    try:
+        spec.loader.exec_module(baseline)
+    finally:
+        sys.path.remove(str(HOOKS / "lib"))
+
+    assert baseline.build_resume_message is not restart.build_resume_message
+    for sid, agent_id in (
+        ("sess-baseline-0001", "agent-baseline-0001"),
+        (str(uuid.uuid4()), "agent-quota"),
+    ):
+        for absent in (None, ""):
+            assert restart.build_resume_message(sid, agent_id, absent).encode("utf-8") == (
+                baseline.build_resume_message(sid, agent_id, absent).encode("utf-8")
+            ), "the no-guidance message must not have moved a single byte"
+        assert restart.build_resume_message(sid, agent_id).encode("utf-8") == (
+            baseline.build_resume_message(sid, agent_id).encode("utf-8")
+        )
+        # And the committed instruction is still the exact prefix once guidance
+        # is appended, which is what the dispatch authorizer enforces.
+        guided = restart.build_resume_message(sid, agent_id, "操作员的话\nverbatim")
+        assert guided.encode("utf-8").startswith(
+            baseline.build_resume_message(sid, agent_id).encode("utf-8")
+        )
 
 

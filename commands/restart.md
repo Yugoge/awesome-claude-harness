@@ -22,11 +22,12 @@ mention mint nothing (`hooks/userprompt-restart-authorize.py::split_invocation`)
 Everything after that separating whitespace is the operator's **guidance text**,
 taken verbatim with **no length limit, no character filtering, and no
 truncation**. It is persisted raw beside the capability as
-`claude-restart-args-<session-id>.txt` and is never echoed back into session
-context — on success the issuer prints only its byte count and path
-(`::_persist_guidance`; the path convention has a single definition at
-`hooks/lib/subagent_restart.py::guidance_path`, which the issuer calls rather
-than re-deriving).
+`claude-restart-args-<session-id>:<capability-token>.txt` and is never echoed
+back into session context — on success the issuer prints only its byte count
+and path (`::_persist_guidance`). The token identifies the one capability
+minted for that same invocation, so every invocation gets a fresh one; both it
+and the path convention are defined once in the library and never re-derived by
+a caller (`hooks/lib/subagent_restart.py::capability_token`, `::guidance_path`).
 
 Persistence is strictly additive and cannot cost you the recovery itself: the
 capability is minted FIRST, and a guidance write that fails — including text
@@ -35,11 +36,19 @@ capability standing, and still exits 0. The earlier ordering could deny the
 capability outright, and a **bare** invocation carrying no guidance at all was
 reachable that way whenever a stale guidance file could not be removed; since
 the state most likely to be stale is what a quota interruption leaves behind,
-that put the failure squarely on the path this command exists to serve. A bare
-invocation removes any guidance an earlier `/restart` of this same session left
-behind, so the absence of that file is current fact rather than stale silence;
-when a failed write cannot be cleaned up either, the stale text is discarded
-rather than attached to a later resume as if it were current.
+that put the failure squarely on the path this command exists to serve.
+
+<a id="guidance-binding"></a>**Guidance binding.** The reader derives the name
+it opens from the live capability alone, never from anything a file claims
+about itself (`::load_guidance`, which `::prepare_state` calls with the very
+grant it validated), so an earlier invocation's text sits at that invocation's
+own token, is unreachable, and can never be attached to a later resume.
+Deletion is hygiene rather than the guarantee: a bare invocation still deletes
+every earlier guidance file of this session and reports any it could not remove
+(`hooks/userprompt-restart-authorize.py::_sweep_superseded`), but a leftover
+that resists removal is already inert. Absence is authoritative — with no file
+at the live token there is no guidance, and the resume message is byte-for-byte
+the bare baseline.
 
 There is deliberately no agent selector: every recoverable interrupted subagent
 in the current parent transcript is handled as one recovery wave. When the
@@ -134,19 +143,22 @@ complete, valid prepare result, never an error to retry.
 
 6. **Consume the capability.** Run the step 5 finalize command. With zero
    candidates `complete` is already true, so finalize succeeds and unlinks the
-   grant (`::finalize`). Finalize consumes only the capability, never the
-   guidance file, so step 7 can still read it afterwards.
+   grant (`::finalize`). Finalize consumes only the capability and leaves the
+   guidance file alone, but step 5 has already recorded the guidance in the
+   session state, which is what step 7 reads.
 7. **Branch on the guidance text.** The guidance is the byte content of
-   `claude-restart-args-<session-id>.txt` beside the capability, which `prepare`
-   also surfaces as a top-level `operator_guidance` field of its JSON
-   (`::prepare_state` writes it, `::status_view` emits it, and it is present
-   even at zero candidates); the file is the byte source of record, so read it
-   directly if the field is absent.
+   `claude-restart-args-<session-id>:<capability-token>.txt` beside the
+   capability, which `prepare` reads through that capability and surfaces as a
+   top-level `operator_guidance` field of its JSON (`::prepare_state` writes it,
+   `::status_view` emits it, and it is present even at zero candidates). Use
+   that field here: it is recorded in the session state and so survives step 6,
+   whereas the file's own name can only be re-derived while the capability it is
+   bound to still exists.
    - **No guidance** — the plain bare invocation. Behaviour is exactly what it
      was before this section existed: report that no recoverable interrupted
-     child exists, and stop. Start no work and dispatch nothing. Guidance
-     absence is authoritative, because a bare invocation deletes any earlier
-     text rather than leaving it to be replayed (`::_persist_guidance`).
+     child exists, and stop. Start no work and dispatch nothing. A bare
+     invocation writes nothing at this capability's own path, so nothing
+     earlier can stand in — see [Guidance binding](#guidance-binding).
    - **Guidance present** — continue to step 8.
 8. **Continue this session's own main agent.** With no interrupted child, the
    only thing needing to continue is the main agent, and the invocation is a

@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import contextlib
 import fcntl
+import hashlib
 import json
 import os
 import re
@@ -41,6 +42,22 @@ GUIDANCE_NOTE = (
     "above; they never replace it."
 )
 SESSION_RE = re.compile(r"^[A-Za-z0-9._-]{1,160}$")
+# Shape of capability_token, used to tell this session's own guidance files from
+# a longer session id that merely starts with the same characters.
+GUIDANCE_TOKEN_RE = re.compile(r"^[0-9a-f]{32}$")
+# Separator between a guidance file's session id and its capability_token.
+# SESSION_RE's own character class allows "-", so a session id MAY itself
+# contain hyphens: splitting a name on "the last hyphen" cannot then tell
+# "session A, token F" apart from "session A-F, legacy unfingerprinted name"
+# whenever A-F happens to equal A + "-" + F. GUIDANCE_TOKEN_SEP is asserted
+# below to fall outside SESSION_RE's character class, so no session id the
+# sanitiser will ever accept can contain it -- the two readings become
+# textually distinguishable rather than merely less likely to collide.
+GUIDANCE_TOKEN_SEP = ":"
+assert not SESSION_RE.fullmatch(GUIDANCE_TOKEN_SEP), (
+    "GUIDANCE_TOKEN_SEP must stay outside SESSION_RE's own character class, "
+    "or a session id could contain it and reopen the ambiguity this guards against"
+)
 AGENT_RE = re.compile(r"^[A-Za-z0-9._-]{3,160}$")
 AGENT_ID_TEXT_RE = re.compile(r"agentId:\s*([A-Za-z0-9._-]+)")
 
@@ -143,30 +160,110 @@ def state_path(session_id: str) -> Path:
     return state_dir() / f"{sid}.json"
 
 
-def guidance_path(session_id: str) -> Path:
-    """Session-bound sibling of the capability holding the operator's guidance.
+def capability_token(session_id: str, grant: Any) -> str:
+    """Fingerprint of ONE minted capability, for binding its guidance to it.
+
+    The hashed material is four components -- a fixed schema version, the
+    fixed grant issuer, the session id, and the issue time. Only the last two
+    vary: they are the same pair ``authorize_send_message`` already treats as
+    the capability's identity, so nothing new has to be invented or stored
+    beyond what the grant already carries. The schema version and issuer are
+    mixed in for domain separation and never change. Two invocations of one
+    session get different tokens because each mint stamps its own
+    ``issued_at``.
+    """
+    if not isinstance(grant, dict):
+        raise RestartError("no /restart capability to bind operator guidance to")
+    if grant.get("session_id") != session_id:
+        raise RestartError("restart grant identity mismatch")
+    issued_at = grant.get("issued_at")
+    if not isinstance(issued_at, str) or not issued_at:
+        raise RestartError("restart grant carries no issue time to bind guidance to")
+    material = "\n".join([str(SCHEMA_VERSION), GRANT_ISSUER, session_id, issued_at])
+    return hashlib.sha256(material.encode("utf-8")).hexdigest()[:32]
+
+
+def guidance_path(session_id: str, grant: Any = None) -> Path:
+    """Capability-bound file holding ONE invocation's operator guidance.
 
     The /restart authorizer persists the operator's argument text here as raw
-    UTF-8. The convention lives beside the other capability paths so no caller
+    UTF-8 — no header, no framing, no escaping — and the name carries the
+    ``capability_token`` of the capability minted for that same invocation,
+    joined to the session id by ``GUIDANCE_TOKEN_SEP`` rather than a plain
+    hyphen: a session id may itself contain hyphens, so a hyphen separator
+    cannot always be told apart from one that is merely part of the id (see
+    ``GUIDANCE_TOKEN_SEP``). The file is therefore bound to its capability by
+    its own location: the reader derives the name it will open from the LIVE
+    grant alone, so a file written for an earlier capability is never opened,
+    let alone returned as current guidance. That is what makes the discard
+    unconditional — it no longer depends on removing the earlier file
+    succeeding, which is exactly the case where removal fails.
+
+    ``grant`` defaults to the live capability on disk; the producer passes the
+    grant it just minted, so writer and reader cannot resolve different mints.
+    The convention lives beside the other capability paths so no caller
     re-derives it.
     """
     sid = _safe_session_id(session_id)
-    return grant_dir() / f"claude-restart-args-{sid}.txt"
+    live = grant if grant is not None else load_valid_grant(sid)
+    token = capability_token(sid, live)
+    return grant_dir() / f"claude-restart-args-{sid}{GUIDANCE_TOKEN_SEP}{token}.txt"
 
 
-def load_guidance(session_id: str) -> str | None:
-    """Operator guidance persisted for this session, or None when there is none.
+def superseded_guidance_paths(session_id: str, keep: Path | None = None) -> list[Path]:
+    """This session's guidance files other than ``keep`` — hygiene only.
+
+    Housekeeping, never correctness -- see ``guidance_path`` for why a leftover
+    that resists removal is already inert.
+
+    ``bound`` is tested against a prefix ending in ``GUIDANCE_TOKEN_SEP``, not
+    a plain hyphen, specifically so a session id containing hyphens (e.g.
+    ``A-F``) can never be misread as "session A, token F": SESSION_RE never
+    admits ``GUIDANCE_TOKEN_SEP`` into a session id, so that reading of the
+    name is impossible rather than merely unlikely. The ``legacy`` reading is
+    unaffected -- it is still a plain, whole-string equality check -- so a
+    name written before this binding existed is still recognised and swept by
+    its true owner alone.
+    """
+    try:
+        sid = _safe_session_id(session_id)
+    except RestartError:
+        return []
+    legacy = f"claude-restart-args-{sid}.txt"
+    prefix = f"claude-restart-args-{sid}{GUIDANCE_TOKEN_SEP}"
+    try:
+        entries = sorted(grant_dir().glob(f"claude-restart-args-{sid}*.txt"))
+    except OSError:
+        return []
+    found: list[Path] = []
+    for entry in entries:
+        name = entry.name
+        bound = name.startswith(prefix) and GUIDANCE_TOKEN_RE.fullmatch(
+            name[len(prefix):-len(".txt")]
+        )
+        if name != legacy and not bound:
+            # A session id that merely begins with this one: not ours to delete.
+            continue
+        if keep is None or entry != keep:
+            found.append(entry)
+    return found
+
+
+def load_guidance(session_id: str, grant: Any = None) -> str | None:
+    """Operator guidance of the LIVE capability, or None when there is none.
 
     Returns None — never raises — for every way the file can fail to yield
-    guidance (absent, unreadable, invalid UTF-8, empty), because guidance is
-    purely additive: a session without it must keep the unmodified recovery
-    behaviour rather than lose the recovery entirely. Bytes are read raw and
-    decoded explicitly instead of through a text-mode read, whose
+    guidance (no live capability, a file bound to an EARLIER capability,
+    absent, unreadable, invalid UTF-8, empty), because guidance is purely
+    additive: a session without it must keep the unmodified recovery behaviour
+    rather than lose the recovery entirely. Currency is proved by the path, not
+    by anything the file claims -- see ``guidance_path``. Bytes are read raw
+    and decoded explicitly instead of through a text-mode read, whose
     universal-newline translation would silently rewrite CRLF the operator
     typed.
     """
     try:
-        path = guidance_path(session_id)
+        path = guidance_path(session_id, grant)
     except RestartError:
         return None
     try:
@@ -890,12 +987,13 @@ def prepare_state(
     sid = _safe_session_id(session_id)
     grant = load_valid_grant(sid)
     own_transcript = Path(grant["transcript_path"])
-    # Guidance belongs to THIS operator session's /restart invocation: it is
-    # read fresh here, keyed by this sid alone, and never inherited from the
-    # previous state below — so it cannot leak across sessions, and a later bare
-    # /restart (which removes the file) cannot replay an earlier invocation's
-    # guidance as if it were current.
-    guidance = load_guidance(sid)
+    # Guidance belongs to THIS operator session's THIS /restart invocation: it
+    # is read fresh here and never inherited from the previous state below, and
+    # it is read through the very grant validated above, so the guidance and the
+    # grant_issued_at recorded in the state are the same capability's. An
+    # earlier invocation's text is unreachable from here regardless of removal
+    # (see guidance_path).
+    guidance = load_guidance(sid, grant)
     discovered = discover_candidates(own_transcript)
     if cross_account and project_dir is not None:
         for sibling in sibling_transcripts(project_dir, exclude=own_transcript):
