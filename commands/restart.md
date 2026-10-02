@@ -23,10 +23,23 @@ Everything after that separating whitespace is the operator's **guidance text**,
 taken verbatim with **no length limit, no character filtering, and no
 truncation**. It is persisted raw beside the capability as
 `claude-restart-args-<session-id>.txt` and is never echoed back into session
-context — the issuer prints only its byte count and path
-(`::_persist_guidance`, `::guidance_path`). A bare invocation removes any
-guidance an earlier `/restart` of this same session left behind, so the absence
-of that file is current fact rather than stale silence.
+context — on success the issuer prints only its byte count and path
+(`::_persist_guidance`; the path convention has a single definition at
+`hooks/lib/subagent_restart.py::guidance_path`, which the issuer calls rather
+than re-deriving).
+
+Persistence is strictly additive and cannot cost you the recovery itself: the
+capability is minted FIRST, and a guidance write that fails — including text
+this host cannot encode — degrades to a warning naming the failure, leaves the
+capability standing, and still exits 0. The earlier ordering could deny the
+capability outright, and a **bare** invocation carrying no guidance at all was
+reachable that way whenever a stale guidance file could not be removed; since
+the state most likely to be stale is what a quota interruption leaves behind,
+that put the failure squarely on the path this command exists to serve. A bare
+invocation removes any guidance an earlier `/restart` of this same session left
+behind, so the absence of that file is current fact rather than stale silence;
+when a failed write cannot be cleaned up either, the stale text is discarded
+rather than attached to a later resume as if it were current.
 
 There is deliberately no agent selector: every recoverable interrupted subagent
 in the current parent transcript is handled as one recovery wave. When the
@@ -76,9 +89,11 @@ directive to this session's own main agent — see
    append `--cross-account` to the prepare command; each candidate then reports
    its true originating `parent_session_id` and origin transcript path, and
    only a state prepared with that flag can authorize resuming a
-   foreign-origin candidate. A `candidate_count` of `0` does not enter the
-   subagent path at all: skip steps 3-5 and follow
-   [Zero-candidate continuation](#zero-candidate-continuation) instead.
+   foreign-origin candidate. A `candidate_count` of `0` has nothing to resume
+   and sends no message: skip steps 3-4 and follow
+   [Zero-candidate continuation](#zero-candidate-continuation) instead. Step 5
+   is not skipped on either path — it is the capability-consumption action, and
+   the zero-candidate path reaches it from its own step 6.
 3. **Resume every pending candidate.** In one parallel tool-call batch where
    supported, call `SendMessage` exactly once for every candidate whose status is
    `pending`. A `dispatched` candidate is already running: wait for it and never
@@ -113,7 +128,8 @@ directive to this session's own main agent — see
 `candidate_count` from step 2 is the only discriminator
 (`hooks/lib/subagent_restart.py::status_view`). Greater than `0` runs steps 3-5
 unchanged, and the guidance text rides along with each resume. Exactly `0` runs
-the steps below. There is no third case: a zero count with `candidates: []` is a
+steps 6-8 below in place of steps 3-4, and its step 6 makes the same step 5
+finalize call. There is no third case: a zero count with `candidates: []` is a
 complete, valid prepare result, never an error to retry.
 
 6. **Consume the capability.** Run the step 5 finalize command. With zero
@@ -148,8 +164,9 @@ complete, valid prepare result, never an error to retry.
      operator's text outranks this session's own earlier plan for how to proceed
      from here. It may redirect, constrain, or re-prioritise the interrupted
      work. It may NOT add a separate issue, enlarge the change beyond the
-     original one, or lift any prohibition below — guidance that would do so is
-     reported back to the operator instead of executed.
+     original one, or lift any other bullet of this step 8 or any entry under
+     [Non-negotiable prohibitions](#non-negotiable-prohibitions) — guidance that
+     would do so is reported back to the operator instead of executed.
    - **No stand-in agent.** Continuation is the main agent resuming its own
      work. It never becomes an `Agent`/`Task` dispatch carrying the session's
      transcript as a prompt.

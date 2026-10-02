@@ -1332,6 +1332,101 @@ def test_cli_prepare_exposes_operator_guidance_even_with_zero_candidates(
         assert view["operator_guidance"] == guidance, command
 
 
+def _unminted_session(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict:
+    """A session whose capability does NOT exist yet, so a run of the /restart
+    authorizer is the only thing that can bring one into being."""
+    grant_dir = tmp_path / "grants"
+    state_dir = tmp_path / "states"
+    monkeypatch.setenv("CLAUDE_RESTART_GRANT_DIR", str(grant_dir))
+    monkeypatch.setenv("CLAUDE_RESTART_STATE_DIR", str(state_dir))
+    sid = str(uuid.uuid4())
+    transcript = tmp_path / f"{sid}.jsonl"
+    _write_jsonl(transcript, [])
+    grant_dir.mkdir(parents=True, exist_ok=True)
+    return {
+        "sid": sid,
+        "transcript": transcript,
+        "env": {
+            **os.environ,
+            "CLAUDE_RESTART_GRANT_DIR": str(grant_dir),
+            "CLAUDE_RESTART_STATE_DIR": str(state_dir),
+        },
+    }
+
+
+def test_guidance_persistence_can_never_deny_the_recovery_capability(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Guidance is additive, so every way persisting it can fail costs the words
+    and nothing else: the capability is minted first, the failure is reported as
+    a warning, and the exit status still admits the operator's prompt. A hook
+    that returned non-zero here would block the prompt that carries a human-only
+    emergency command -- the one moment this path exists to serve.
+
+    The failure is SIMULATED rather than assumed impossible: the guidance path is
+    occupied by a non-empty directory, so the bare invocation's stale clear
+    (unlink) and the guided invocation's write (os.replace) both fail with EISDIR
+    even for a privileged process.
+    """
+    hook = HOOKS / "userprompt-restart-authorize.py"
+    for label, prompt in (("bare", "/restart"), ("guided", "/restart do X first")):
+        session = _unminted_session(tmp_path / label, monkeypatch)
+        stale = restart.guidance_path(session["sid"])
+        stale.mkdir(parents=True)
+        (stale / "occupied").write_text("an earlier invocation's words", encoding="utf-8")
+        grant_file = restart.grant_path(session["sid"])
+        assert not grant_file.exists(), label
+
+        result = _run_hook(hook, {
+            "session_id": session["sid"],
+            "transcript_path": str(session["transcript"]),
+            "prompt": prompt,
+        }, session["env"])
+
+        assert result.returncode == 0, f"{label}: {result.stderr}"
+        assert "Traceback" not in result.stderr, label
+        assert grant_file.is_file(), f"{label}: the capability must be minted anyway"
+        assert restart.load_valid_grant(session["sid"])["session_id"] == session["sid"], label
+        assert "warning: operator guidance was not preserved" in result.stderr, label
+        # Degraded, not denied: with no readable guidance the recovery message is
+        # exactly the pinned baseline, and the words are not silently replayed.
+        assert restart.load_guidance(session["sid"]) is None, label
+        assert restart.build_resume_message(
+            "sess-baseline-0001", "agent-baseline-0001",
+            restart.load_guidance(session["sid"]),
+        ) == BASELINE_RESUME_MESSAGE, label
+
+
+def test_operator_guidance_utf8_cannot_hold_is_recognised_never_crashes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Operator text is deliberately unfiltered, so it can carry an unpaired
+    surrogate that UTF-8 cannot encode. That is a UnicodeError, not an OSError,
+    so it must be recognised explicitly: it may not escape as a raw traceback,
+    and it may not cost the capability either."""
+    hook = HOOKS / "userprompt-restart-authorize.py"
+    session = _unminted_session(tmp_path, monkeypatch)
+    prompt = "/restart keep \ud800 going"
+    assert json.dumps(prompt).isascii(), "the surrogate reaches the hook as an escape"
+
+    result = _run_hook(hook, {
+        "session_id": session["sid"],
+        "transcript_path": str(session["transcript"]),
+        "prompt": prompt,
+    }, session["env"])
+
+    assert result.returncode == 0, result.stderr
+    assert "Traceback" not in result.stderr
+    assert "UnicodeEncodeError" in result.stderr, "the failure must be named, not swallowed"
+    assert "warning: operator guidance was not preserved" in result.stderr
+    assert restart.grant_path(session["sid"]).is_file()
+    assert restart.load_valid_grant(session["sid"])["session_id"] == session["sid"]
+    assert restart.load_guidance(session["sid"]) is None
+    # Nothing half-written is left behind for a later read to pick up.
+    assert not restart.guidance_path(session["sid"]).exists()
+    assert list(restart.grant_dir().glob(".claude-restart-args-*")) == []
+
+
 def test_load_guidance_tolerates_absent_unreadable_and_undecodable_files(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1362,8 +1457,11 @@ def test_load_guidance_tolerates_absent_unreadable_and_undecodable_files(
     )
     producer = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(producer)
-    assert producer.guidance_path(sid) == restart.guidance_path(sid), (
-        "the consumer must read exactly the path the /restart authorizer writes"
+    assert "guidance_path" not in vars(producer), (
+        "the convention must have ONE definition: the producer may not restate it"
+    )
+    assert producer.restart.guidance_path is restart.guidance_path, (
+        "the producer must write through the same helper the consumer reads"
     )
 
 
