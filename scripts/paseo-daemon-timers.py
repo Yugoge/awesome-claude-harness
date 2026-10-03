@@ -28,6 +28,17 @@ Subcommands:
            is unavailable for it, the ENTIRE invocation fails closed
            (non-zero exit, every blocked timer key named, zero files
            written) rather than partially creating some and not others.
+           On-disk presence alone is NOT health: any inventory timer found
+           with status=paused is reported under the `deviations` key (id,
+           pausedAt, and the exact `resume` command shape to recover it) —
+           ensure NEVER reports zero deviation for a paused timer, and it
+           NEVER auto-resumes one itself (that mutation is `resume`'s job
+           alone, kept out of ensure's create-only write path on purpose, so
+           a deliberate maintenance pause is never silently reverted by a
+           routine bootstrap call). A prior incident (task 20260926-111239
+           follow-up): four timers sat paused for 5 days after a drain
+           because bootstrap's `ensure` saw `created: []` and nobody
+           inspected `status`; this `deviations` field is the fix.
   drain    safety-ordered stop of all four: watchdog first (a mid-teardown
            watchdog fire would judge the controller dead and escalate),
            then sweep, tick, reinject (DRAIN_ORDER). Prefers `pause`
@@ -35,9 +46,21 @@ Subcommands:
            atomic os.replace; never deletes. Finishes with exactly one
            `scripts/paseo-daemon-ledger.py teardown-declare` call against
            --ledger-root to journal the teardown.
+  resume   paired with drain: restores any paused timer (within the
+           four-entry inventory only) back to status=active, in the exact
+           reverse of DRAIN_ORDER — reinject, sweep, tick, watchdog last.
+           Watchdog resumes last so it never wakes before the rest of the
+           control plane is back online; an early watchdog fire against a
+           still-recovering fleet would judge it dead and escalate (the
+           same hazard DRAIN_ORDER's watchdog-first avoids, mirrored for the
+           opposite direction). Same file-safety chain as drain: backup ->
+           temp-write -> parse-validate -> atomic os.replace. Idempotent: an
+           already-active (or missing) timer is a no-op.
   status   read-only: existence / active-vs-paused / nextRunAt / deviation
-           from the inventory for each of the four. Never creates, modifies,
-           or deletes any file under --registry-dir.
+           from the inventory for each of the four — a paused timer always
+           carries `"paused"` in its `deviations` list, never a silent
+           active-looking entry. Never creates, modifies, or deletes any
+           file under --registry-dir.
 
 Exit codes: 0=success, 1=usage error (missing/invalid CLI input), 2=refused
 (corrupt registry data, or a downstream failure such as teardown-declare
@@ -119,6 +142,11 @@ INVENTORY = [
 # Structurally separate from INVENTORY's own order (M4) -- drain iterates
 # THIS constant, never INVENTORY.keys()/order. Watchdog first, always.
 DRAIN_ORDER = ["watchdog", "sweep", "tick", "reinject"]
+
+# resume iterates THIS constant, never DRAIN_ORDER or INVENTORY order --
+# exact reverse of DRAIN_ORDER; see the module docstring's `resume` entry
+# for why watchdog goes last.
+RESUME_ORDER = list(reversed(DRAIN_ORDER))
 
 
 class TimerWriteValidationError(Exception):
@@ -259,13 +287,39 @@ def build_registration(entry, timer_id, prompt, controller_agent_id, now):
     }
 
 
+def paused_deviation(registry_dir, entry, path, obj):
+    """A present-but-paused inventory timer is a deviation, not a silent
+    pass (see module docstring's `ensure` entry for why). ensure never
+    auto-resumes (that would make a bootstrap reconciliation able to
+    silently revert a deliberate maintenance pause) -- the deviation
+    instead names the exact `resume` command shape an operator runs to
+    recover it."""
+    return {
+        "key": entry["key"],
+        "id": path.stem,
+        "status": "paused",
+        "pausedAt": obj.get("pausedAt"),
+        "recovery_command": f"scripts/paseo-daemon-timers.py --registry-dir {registry_dir} resume",
+    }
+
+
 def cmd_ensure(args):
     registry_dir = Path(args.registry_dir)
     registrations = scan_registry(registry_dir)
 
-    missing = [entry for entry in INVENTORY if find_match(entry, registrations) is None]
+    missing = []
+    deviations = []
+    for entry in INVENTORY:
+        match = find_match(entry, registrations)
+        if match is None:
+            missing.append(entry)
+            continue
+        path, obj = match
+        if obj.get("status") == "paused":
+            deviations.append(paused_deviation(registry_dir, entry, path, obj))
+
     if not missing:
-        print(json.dumps({"ok": True, "created": []}))
+        print(json.dumps({"ok": True, "created": [], "deviations": deviations}))
         return
 
     problems = {}
@@ -299,7 +353,7 @@ def cmd_ensure(args):
         atomic_write_registration(path, obj, backup=False, now=now)
         created.append({"key": entry["key"], "id": timer_id, "name": entry["name"]})
 
-    print(json.dumps({"ok": True, "created": created}))
+    print(json.dumps({"ok": True, "created": created, "deviations": deviations}))
 
 
 def cmd_status(args):
@@ -317,6 +371,10 @@ def cmd_status(args):
             continue
         _, obj = match
         deviations = []
+        if obj.get("status") == "paused":
+            # A paused timer is always a deviation, never a silent
+            # active-looking entry (see module docstring's `ensure` entry).
+            deviations.append("paused")
         cadence = obj.get("cadence") or {}
         if cadence.get("expression") != entry["cron"]:
             deviations.append("cron_mismatch")
@@ -373,6 +431,42 @@ def cmd_drain(args):
     print(json.dumps({"ok": True, "drained": drained, "teardown_declare": declare}))
 
 
+def cmd_resume(args):
+    """Paired with drain: restore paused timers back to active, in
+    RESUME_ORDER (the exact reverse of DRAIN_ORDER -- watchdog last). Scoped
+    to the four-entry INVENTORY only, same as drain's own by_key filter --
+    never touches any other *.json file in --registry-dir. Idempotent: an
+    entry that is missing, or already not paused, is a no-op."""
+    registry_dir = Path(args.registry_dir)
+    registrations = scan_registry(registry_dir)
+    by_key = {}
+    for entry in INVENTORY:
+        match = find_match(entry, registrations)
+        if match is not None:
+            by_key[entry["key"]] = match
+
+    now = resolve_now(args.now)
+    resumed = []
+    for key in RESUME_ORDER:
+        if key not in by_key:
+            continue
+        path, obj = by_key[key]
+        if obj.get("status") != "paused":
+            continue
+        updated = dict(obj)
+        updated["status"] = "active"
+        updated["pausedAt"] = None
+        updated["updatedAt"] = iso(now)
+        try:
+            atomic_write_registration(path, updated, backup=True, now=now)
+        except TimerWriteValidationError as exc:
+            fail(EXIT_REFUSED, str(exc))
+        resumed.append(key)
+        print(json.dumps({"op": "resume", "key": key, "id": path.stem}))
+
+    print(json.dumps({"ok": True, "resumed": resumed}))
+
+
 def build_parser():
     p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     p.add_argument("--registry-dir", default="/root/.paseo/schedules",
@@ -397,6 +491,9 @@ def build_parser():
     s.add_argument("--reason", default="paseo-daemon-timers.py drain: scheduled fleet teardown",
                    help="non-empty --reason forwarded to teardown-declare")
     s.set_defaults(fn=cmd_drain)
+
+    s = sub.add_parser("resume")
+    s.set_defaults(fn=cmd_resume)
 
     return p
 

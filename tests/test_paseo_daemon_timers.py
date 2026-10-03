@@ -96,7 +96,8 @@ def by_name(registry_dir):
     return out
 
 
-def write_registration(registry_dir, timer_id, name, cron, target, status="active", prompt=None):
+def write_registration(registry_dir, timer_id, name, cron, target, status="active", prompt=None,
+                        paused_at=None):
     registry_dir.mkdir(parents=True, exist_ok=True)
     obj = {
         "id": timer_id, "name": name, "prompt": prompt or f"real prompt for {name}",
@@ -104,7 +105,7 @@ def write_registration(registry_dir, timer_id, name, cron, target, status="activ
         "target": target, "status": status,
         "createdAt": "2026-09-01T00:00:00Z", "updatedAt": "2026-09-01T00:00:00Z",
         "nextRunAt": "2026-09-26T20:41:00Z", "lastRunAt": "2026-09-26T16:41:01Z",
-        "pausedAt": None, "expiresAt": None, "maxRuns": None, "runs": [],
+        "pausedAt": paused_at, "expiresAt": None, "maxRuns": None, "runs": [],
     }
     path = registry_dir / f"{timer_id}.json"
     path.write_text(json.dumps(obj, indent=1, sort_keys=True) + "\n")
@@ -229,7 +230,8 @@ def test_ac5_status_after_drain_reports_all_four_paused(tmp_path):
     for key in FOUR_KEYS:
         entry = status["timers"][key]
         assert entry["status"] == "paused"
-        assert entry["deviations"] == []
+        # a paused timer is always a deviation, never []
+        assert entry["deviations"] == ["paused"]
 
 
 # ---------------- AC6: fail closed on corrupt JSON ----------------
@@ -330,3 +332,164 @@ def test_ac11_ensure_fails_closed_when_prompts_dir_entirely_absent(tmp_path):
     for key in FOUR_KEYS:
         assert key in r.stderr
     assert registry_snapshot(registry) == {}
+
+
+# ---------------- paused-timer detection (idempotency-gap fix, task 20260926-111239 followup) ----------------
+
+def test_status_flags_paused_timer_as_deviation(tmp_path):
+    registry = tmp_path / "registry"
+    registry.mkdir()
+    write_registration(registry, "754bb5da", "reader-board-sweep", KEY_TO_CRON["sweep"],
+                        {"type": "agent", "agentId": CONTROLLER_AGENT_ID},
+                        status="paused", paused_at="2026-09-28T02:36:43Z")
+
+    status = ok(registry, "status")
+    entry = status["timers"]["sweep"]
+    assert entry["status"] == "paused"
+    assert entry["deviations"] == ["paused"]
+
+
+def test_ensure_reports_deviation_for_paused_existing_timer_with_id_and_pausedAt(tmp_path):
+    registry = tmp_path / "registry"
+    registry.mkdir()
+    seed_all_four(registry)
+    sweep_path, sweep_obj = by_name(registry)["reader-board-sweep"]
+    paused_at = "2026-09-28T02:36:43Z"
+    write_registration(registry, sweep_path.stem, "reader-board-sweep", KEY_TO_CRON["sweep"],
+                        sweep_obj["target"], status="paused", paused_at=paused_at)
+    before = registry_snapshot(registry)
+
+    result = ok(registry, "ensure")
+
+    after = registry_snapshot(registry)
+    assert before == after, "ensure must never mutate an existing (even paused) registration"
+    assert result["created"] == []
+    deviations = {d["key"]: d for d in result["deviations"]}
+    assert set(deviations) == {"sweep"}
+    dev = deviations["sweep"]
+    assert dev["id"] == sweep_path.stem
+    assert dev["status"] == "paused"
+    assert dev["pausedAt"] == paused_at
+    assert "resume" in dev["recovery_command"]
+    assert str(registry) in dev["recovery_command"]
+
+
+def test_ensure_reports_paused_deviation_while_also_creating_a_missing_timer(tmp_path):
+    registry = tmp_path / "registry"
+    registry.mkdir()
+    seed_all_four(registry)
+    tick_path, _ = by_name(registry)["paseo-daemon-tick hbtick-20260902T1158Z-c7d1"]
+    os.remove(tick_path)
+    sweep_path, sweep_obj = by_name(registry)["reader-board-sweep"]
+    write_registration(registry, sweep_path.stem, "reader-board-sweep", KEY_TO_CRON["sweep"],
+                        sweep_obj["target"], status="paused", paused_at="2026-09-28T02:36:43Z")
+    prompts = make_prompts_dir(tmp_path, keys=("tick",))
+
+    result = ok(registry, "ensure", "--controller-agent-id", CONTROLLER_AGENT_ID,
+                "--prompts-dir", str(prompts))
+
+    assert [c["key"] for c in result["created"]] == ["tick"]
+    assert [d["key"] for d in result["deviations"]] == ["sweep"]
+
+
+def test_ac2_style_ensure_noop_still_reports_empty_deviations_when_all_active(tmp_path):
+    registry = tmp_path / "registry"
+    registry.mkdir()
+    seed_all_four(registry)
+
+    result = ok(registry, "ensure")
+
+    assert result["created"] == []
+    assert result["deviations"] == []
+
+
+# ---------------- resume (paired with drain, idempotency-gap fix) ----------------
+
+def test_resume_restores_all_paused_timers_in_reverse_drain_order(tmp_path):
+    registry = tmp_path / "registry"
+    registry.mkdir()
+    seed_all_four(registry)
+    ledger_root = ledger_init(tmp_path)
+    ok(registry, "drain", "--ledger-root", str(ledger_root))
+
+    r = run(registry, "resume")
+    assert r.returncode == 0, r.stderr
+
+    call_order = []
+    for line in r.stdout.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        rec = json.loads(line)
+        if rec.get("op") == "resume":
+            call_order.append(rec["key"])
+
+    # exact reverse of DRAIN_ORDER (watchdog last)
+    assert call_order == ["reinject", "tick", "sweep", "watchdog"]
+
+    status = ok(registry, "status")
+    for key in FOUR_KEYS:
+        entry = status["timers"][key]
+        assert entry["status"] == "active"
+        assert entry["deviations"] == []
+
+
+def test_resume_is_idempotent_on_already_active_entries(tmp_path):
+    registry = tmp_path / "registry"
+    registry.mkdir()
+    seed_all_four(registry)  # all active, nothing paused
+    before = registry_snapshot(registry)
+
+    result = ok(registry, "resume")
+
+    after = registry_snapshot(registry)
+    assert result["resumed"] == []
+    assert before == after
+
+
+def test_resume_running_twice_after_drain_is_idempotent_on_second_run(tmp_path):
+    registry = tmp_path / "registry"
+    registry.mkdir()
+    seed_all_four(registry)
+    ledger_root = ledger_init(tmp_path)
+    ok(registry, "drain", "--ledger-root", str(ledger_root))
+
+    first = ok(registry, "resume")
+    assert set(first["resumed"]) == set(FOUR_KEYS)
+    before = registry_snapshot(registry)
+
+    second = ok(registry, "resume")
+
+    after = registry_snapshot(registry)
+    assert second["resumed"] == []
+    assert before == after
+
+
+def test_resume_only_touches_the_four_inventory_timers(tmp_path):
+    registry = tmp_path / "registry"
+    registry.mkdir()
+    seed_all_four(registry)
+    ledger_root = ledger_init(tmp_path)
+    ok(registry, "drain", "--ledger-root", str(ledger_root))
+    stray = registry / "not-an-inventory-timer.json"
+    stray.write_text(json.dumps({"id": "stray", "name": "unrelated-schedule",
+                                 "status": "paused"}) + "\n")
+    before_stray = stray.read_bytes()
+
+    ok(registry, "resume")
+
+    assert stray.read_bytes() == before_stray
+
+
+def test_resume_clears_pausedAt_back_to_none(tmp_path):
+    registry = tmp_path / "registry"
+    registry.mkdir()
+    seed_all_four(registry)
+    ledger_root = ledger_init(tmp_path)
+    ok(registry, "drain", "--ledger-root", str(ledger_root))
+
+    ok(registry, "resume")
+
+    for name, (_, obj) in by_name(registry).items():
+        assert obj["status"] == "active"
+        assert obj["pausedAt"] is None
