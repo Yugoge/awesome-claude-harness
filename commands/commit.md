@@ -5,7 +5,7 @@ disable-model-invocation: true
 
 # /commit
 
-Agentic commit command. Validates the close-gate (unless `--force`), then dispatches
+Agentic commit command. Validates the close-gate (unless `--bulk`; `--force` is deprecated and no longer bypasses it), then dispatches
 the `changelog-analyst` subagent to classify files, stage them, and create real
 branch commits. Normal task mode admits every task-owned path only after partitioning
 it across an explicit supported-repository set; the control checkout and `~/.claude`
@@ -19,8 +19,8 @@ are supported without a project-root override.
 
 | Flag | Meaning |
 |------|---------|
-| `<task-id>` | Optional when the session context identifies the active cycle: if omitted (and `BULK=false`, `AUTO=false`), the orchestrator infers the task-id from the current session's conversation context (see Step 2; ambiguity hard-fails); an explicit task-id is always allowed and authoritative. Unused in `--bulk` mode; rejected as an explicit token by `--auto` (which never enters Step 2). Task-id from the completed `/dev` cycle (e.g. `20260516-212024`). |
-| `--force` | Bypass close-gate check **AND the pre-commit QA gate** (Step 6). Human-only (enforced by `disable-model-invocation: true`). Audited. |
+| `<task-id>` | Optional when the session context identifies the active cycle: if omitted (and `BULK=false`, `AUTO=false`), the orchestrator infers the task-id from the current session's conversation context (see Step 2; ambiguity never guesses, it asks); an explicit task-id is always allowed and authoritative. Unused in `--bulk` mode; rejected as an explicit token by `--auto` (which never enters Step 2). Task-id from the completed `/dev` cycle (e.g. `20260516-212024`). |
+| `--force` | **Deprecated (lane L7, AC11): no-op alias of the normal path.** No gate is bypassed — Step 3's close-gate and Step 6's pre-commit QA gate both still run exactly as a bare invocation would. Human-only (enforced by `disable-model-invocation: true`). The only remaining effect is a best-effort audit-log append (Step 4), kept for backward-compatible invocation. |
 | `--bulk` | Smart batch mode — group by task-id then subsystem, commit coherently, flag orphan files separately. Human-only (enforced by `disable-model-invocation: true`). Skips the close gate (Step 3); retains the pre-commit QA gate (Step 6). |
 | `--dry-run` | Print what would be staged/committed (and the QA verdict); do not execute the real commit. |
 | `--codex` | In the pre-commit QA gate (Step 6), QA additionally runs an adversarial Codex round on the planned per-file changes (each PLAN_GROUPS path vs HEAD), not the staged index. Without it, QA does a single-round self-review. |
@@ -38,9 +38,11 @@ Parse `$ARGUMENTS`:
 - Strip `--auto` if present → set `AUTO=true`; else `AUTO=false` (default — every `--auto`-specific rule below is inert)
 - Remaining token (if any) is `TASK_ID`
 
-**`--auto` rejection (Must-Have #8, task 20260808-035658-lanel)**: when
-`AUTO=true`, reject — before any action — if `TASK_ID` is non-empty, or
-`FORCE=true`, or `BULK=true`. `--auto` and `--dry-run`/`--codex` MAY combine
+**`--auto` flag-combination check (Must-Have #8, task 20260808-035658-lanel)**: when
+`AUTO=true` and `TASK_ID` is non-empty, or `FORCE=true`, or `BULK=true`, take no
+action and print
+`AWAITING_INPUT: need=a legal flag combination (--auto takes no task-id, --force, or --bulk); why=--auto discovers its own parents and never skips the close gate; addressee=human`
+then resume at this step in place when the corrected invocation arrives. `--auto` and `--dry-run`/`--codex` MAY combine
 (each `--auto` walk below still honors `DRYRUN`/`QA_CODEX` exactly as the
 non-`--auto` path does). This mirrors `scripts/dev-lifecycle.py`'s
 `validate_auto_flag_combination(True, TASK_ID, FORCE, BULK)` pure predicate.
@@ -62,20 +64,122 @@ see the Step 1 rejection block; `--auto` binds `TASK_ID` itself per discovered p
   Do NOT scan close-reports by mtime — mtime-scan picks up unrelated reports from other sessions and causes close-gate failures on unrelated tasks.
   - **Uniqueness precondition**: inference succeeds ONLY when the conversation identifies
     exactly ONE unambiguous candidate task-id; with two or more candidate cycles, or any
-    doubt which cycle is meant, do NOT guess — take the no-context exit below. The
+    doubt which cycle is meant, do NOT guess — take the no-context branch below. The
     close-gate hard checks (close-report existence, `CLOSE: YES` final line,
     filename/task-id match) backstop an inference landing on a task with NO passing
     close-report, but NOT one landing on a different validly-closed task — which is why
-    ambiguity hard-fails instead of guessing.
+    ambiguity never guesses.
   - If the orchestrator cannot identify an active cycle's task-id from conversation
     context (e.g. a fresh session with no cycle context), or the uniqueness precondition
-    fails, exit with: `No task-id provided. Supply an explicit task-id (/commit <task-id>), use --force to bypass close-gate, or use --bulk for batch mode.`
+    fails, print:
+    `AWAITING_INPUT: need=an explicit task-id (/commit <task-id>), or --bulk for batch mode; why=no unambiguous active cycle task-id in this session; addressee=human`
+    and resume at this step in place once it arrives.
 
 If `BULK=true`: `TASK_ID` may remain empty; changelog-analyst operates in bulk mode.
 
-### Step 3: Close-gate validation (skip if FORCE=true or BULK=true)
+### Artifact-to-role routing and the awaiting-input line
 
-If `FORCE=false` AND `BULK=false`:
+Every finding from Step 3 through Step 5 is routed to the role that produced
+the implicated artifact, repaired there, and re-checked. No code, table or
+engine output is consulted: the orchestrator builds the entry itself, at the
+call site, from the finding it just observed. `commands/close.md` uses the
+same mapping, entry shape and awaiting-input line.
+
+Eight-row mapping, first match wins, in this row order. Finding codes
+(`commit#6`, `LATE_REPAIR_STATE_C`, ...) are display labels only; nothing is
+looked up by code. A finding with no artifact path binds `path=$TASK_ID` and
+lands on row 8. `CANONICAL_DEV_REPORT` is `ARTIFACT_CHAIN.canonical_dev_report`
+and is set only when `ARTIFACT_CHAIN.mode` is `fanout`; when `ARTIFACT_CHAIN`
+is not in hand but the cycle is known to be a fan-out (`FANOUT_MODE=true`), a
+basename equal to `dev-report-${TASK_ID}.json` exactly counts as the canonical
+aggregate (lane files `dev-report-${TASK_ID}-<suffix>.json` do not). The
+canonical row precedes `dev-report*` so an aggregate finding is never mis-routed
+to dev.
+
+```bash
+artifact_role() {   # $1 = artifact path (empty/unknown allowed); always prints a role
+  local p base; p="$1"; base="${p##*/}"
+  if [ -n "$p" ] && { [ "$p" = "${CANONICAL_DEV_REPORT:-}" ] \
+      || { [ -z "${CANONICAL_DEV_REPORT:-}" ] && [ "${FANOUT_MODE:-false}" = true ] \
+           && [ "$base" = "dev-report-${TASK_ID:-}.json" ]; }; }; then
+    echo orchestrator; return   # row 1: canonical aggregate -> orchestrator reruns aggregate-dev-report.py
+  fi
+  case "$base" in
+    dev-report*)                                    echo dev ;;                 # row 2
+    *qa-report*)                                    echo qa ;;                  # row 3
+    ticket*|ba-spec*|context*|acceptance-criteria*) echo ba ;;                  # row 4
+    test-writer-report*|*manifest*)                 echo test-writer ;;         # row 5
+    close-report*)                                  echo qa ;;                  # row 6
+    changelog-status*)                              echo changelog-analyst ;;   # row 7
+    *)                                              echo orchestrator ;;        # row 8 default, fail-closed
+  esac
+}
+```
+
+Required-action entry shape, built locally by the orchestrator whenever a
+check fails: `{path, detail, source_check, producer_role}`. `path` is the
+implicated artifact, `detail` says what is wrong, `producer_role` is
+`artifact_role(path)`, and `source_check` is the single originating check
+already in hand at that call site (the artifact-chain resolver,
+`resolve-commit-repos.py`, `late-repair-controller.py resolve-effective-report`,
+the close-report resolver, or the QA verdict line); any rerun data (command,
+arguments) lives inside `source_check`. No other key exists. Because the
+entry is built from the live finding, it is never empty on a failed check and
+the loop below always starts.
+
+Awaiting-input line, printed when only a human (or the orchestrator, for an
+orchestrator-class input) can supply what the loop needs:
+
+`AWAITING_INPUT: need=<what input>; why=<reason>; addressee=<human|orchestrator>`
+
+This is a pending state, not an exit: nothing lands as complete while it
+holds, no commit and no verdict line is written, and when the input arrives
+the loop resumes at the same step in place. Cause set: a human-only operation
+(`/allow`, deletion, freeing `/tmp`, a missing session environment variable),
+a hook rejection (pause and report per the Subagent Hook Discipline; the
+rejected operation is never retried, wrapped or bypassed), or a usage input
+the human must supply (an explicit task-id, a legal flag combination). Any
+other cause is routed through the loop, not waited on.
+
+### Required-action dispatch-and-recheck loop
+
+Applies at every call site below (Step 3 checks 1/2/4, Step 5's
+late-repair, artifact-chain and repository-plan sites, Step 6 verdict
+routing, Step 7 failure routing). Per failed check:
+
+1. Build the entry (shape above) from the finding just observed.
+2. Dispatch `producer_role` (Agent, `run_in_background: false`), scoped to the
+   entry's `path` and `detail` and to the root cause of why the check keeps
+   failing, not "rerun it again". `producer_role` = `orchestrator` means the
+   orchestrator repairs or reruns it itself (row 1 reruns
+   `aggregate-dev-report.py`; row 8 diagnoses and repairs). A missing lane
+   artifact is a missing artifact whose row gives its role.
+3. Rerun ONLY the entry's `source_check` (e.g. `resolve-dev-artifact-chain.py`,
+   `resolve-commit-repos.py`, `late-repair-controller.py
+   resolve-effective-report`, the close-report resolver) — never the whole
+   `/commit` flow from scratch.
+4. The check now succeeds: proceed. It still fails: apply the R15 progress
+   test below.
+
+**R15 progress measure (single definition for every loop in this file; same
+semantics as `hooks/lib/progress_measure.py`).** Each round must change world
+state: the implicated artifact's bytes changed, or the set of unresolved
+findings strictly shrank to a set not seen in an earlier round. A round with
+neither (including a revisit of an earlier unresolved set) is no progress, and
+escalates to orchestrator arbitration: the orchestrator reruns the
+`source_check` itself, decides, and either repairs it itself or re-dispatches
+the producer with its own finding. There is no attempt counter, no
+unbounded same-state retry, and no pass granted because retries ran out.
+A repair that completed is appended as a disclosure record (path, problem,
+role, fix evidence) for the commit message's `Disclosures: <n>` line; a
+disclosure is never a substitute for the repair. When the next step needs an
+input only a human can give, print the awaiting-input line and resume in
+place on arrival. Environment-class system faults follow the harness
+environment rule (R14), not this loop.
+
+### Step 3: Close-gate validation (skip if BULK=true; `--force` is deprecated and never skips this step — AC11)
+
+If `BULK=false`:
 
 Resolve the close-report path via the helper script (which probes
 subproject docs/dev/ first, then falls back to the resolved control-root
@@ -89,68 +193,60 @@ message in check 1 below.
 CLOSE_REPORT="$(bash ~/.claude/scripts/resolve-close-report.sh "$TASK_ID")" || true
 ```
 
-Run these checks in order (each HARD check — 1, 2, 4 — aborts on failure with a clear error message; check 3 is advisory and only warns):
+Run these checks in order (checks 1, 2, 4 each build a required-action entry
+from the failure and route it through the dispatch-and-recheck loop above;
+check 3 remains advisory and only warns). In every case `source_check` is this
+close-report resolution plus the check itself, and `producer_role` is
+`artifact_role "$CLOSE_REPORT"`; when the only fix is a human-only operation
+(for example re-running `/close`), print the awaiting-input line naming it and
+resume at this check on arrival.
 
-1. **File exists**: `CLOSE_REPORT` must exist. Error: `Close-gate: no close-report for task ${TASK_ID} at ${CLOSE_REPORT}. Run /close first.`
+1. **File exists**: `CLOSE_REPORT` must exist. On failure, build the entry
+   `{path: "$TASK_ID", detail: "no close-report for task ${TASK_ID} at ${CLOSE_REPORT}", source_check: <the resolve-close-report.sh call plus this existence test>, producer_role: <artifact_role of that path>}`
+   (failure label `commit#6`), dispatch `producer_role`, rerun that check, and
+   apply the R15 test until the file exists.
 2. **Last non-empty line starts with CLOSE: YES**: extract the last non-empty line from the file and verify it begins with `CLOSE: YES`. Accepted variants:
    - `CLOSE: YES`
+   - `CLOSE: YES - with disclosures: <n> items`
    - `CLOSE: YES — FORCED`
    - `CLOSE: YES - degraded codex consultation: codex_status=<...>`
    - `CLOSE: YES — codex disabled by user`
    - `CLOSE: YES (FORCED)`
-   Error: `Close-gate: task ${TASK_ID} close-report does not end with CLOSE: YES (found: <last-line>). Run /close to produce a passing verdict.`
-   **Dry-run carve-out (2026-09-06 §10.1 ruling)**: check 2 — and check 2 alone — does
-   not abort when `DRYRUN=true`, where `DRYRUN` is exactly the value parsed from the
+   On failure, build the entry
+   `{path: "$CLOSE_REPORT", detail: "close-report does not end with CLOSE: YES (found: <last-line>)", source_check: <re-read of the close-report's last non-empty line>, producer_role: <artifact_role of that path>}`
+   (failure label `commit#7`), dispatch `producer_role`, rerun that read, and
+   apply the R15 test.
+   **Dry-run carve-out**: check 2 — and check 2 alone — does
+   not abort (and never reaches the dispatch above) when `DRYRUN=true`, where `DRYRUN` is exactly the value parsed from the
    user's `--dry-run` argument in Step 1 and nothing else. Print
    `Close-gate: check 2 relaxed for --dry-run (found: <last-line>). Preview only — no commit will be created.`
-   and continue with check 3. When `DRYRUN=false`, check 2 aborts exactly as written
+   and continue with check 3. When `DRYRUN=false`, check 2 dispatches exactly as written
    above. Checks 1 and 4 and the `CLOSE_REPORT` binding are never relaxed under
-   either value (check 3 was separately demoted to advisory for ALL invocations on
-   2026-09-26 — see check 3; that demotion is independent of `DRYRUN`). Read the trigger from Step 1 only: the Step 6 planning phase raises
+   either value (check 3 is advisory for ALL invocations — see check 3; that is independent of `DRYRUN`). Read the trigger from Step 1 only: the Step 6 planning phase raises
    `DRYRUN` internally on every invocation, so a trigger keyed on "a dry-run is
    executing" would admit a plain `/commit` with a failing close-report through to a
-   real commit in Step 7. This is not a `--force` affordance; `--force` is unchanged
-   and remains forbidden.
-3. **Mtime staleness (advisory since 2026-09-26 — never aborts)**: if close-report mtime is older than 86400 seconds (24 h), print `Close-gate: WARNING — close-report for task ${TASK_ID} is older than 24h (mtime: <mtime>). Proceeding — staleness is advisory. Re-run /close if the tree has drifted since this approval.` and continue with check 4. Age alone never blocks a commit and never requires `--force`: wall-clock age is only a proxy for tree drift, and the Step 6 pre-commit QA gate reviews every planned file's actual change vs HEAD on every non-`--force` invocation. Known widening, disclosed: Step 6 does NOT re-validate changes against the closed cycle's acceptance criteria, so an aged `CLOSE: YES` vouches indefinitely for a tree that may have drifted in-scope — accepted trade-off (2026-09-26 user ruling: age must not block); acceptance-consistency checking inside Step 6 is a separate cycle, not a reason to re-harden this check.
-4. **Task-id in filename matches argument**: the task-id derived from the filename must equal `TASK_ID`. Error: `Close-gate: filename task-id mismatch (file has <file-task-id>, argument is ${TASK_ID}).`
+   real commit in Step 7.
+3. **Mtime staleness (advisory — never aborts)**: if close-report mtime is older than 86400 seconds (24 h), print `Close-gate: WARNING — close-report for task ${TASK_ID} is older than 24h (mtime: <mtime>). Proceeding — staleness is advisory. Re-run /close if the tree has drifted since this approval.` and continue with check 4. Age alone never blocks a commit: wall-clock age is only a proxy for tree drift, and the Step 6 pre-commit QA gate reviews every planned file's actual change vs HEAD on every invocation. Known widening, disclosed: Step 6 does NOT re-validate changes against the closed cycle's acceptance criteria, so an aged `CLOSE: YES` vouches indefinitely for a tree that may have drifted in-scope — accepted trade-off (age must not block); acceptance-consistency checking inside Step 6 is a separate cycle, not a reason to re-harden this check.
+4. **Task-id in filename matches argument**: the task-id derived from the filename must equal `TASK_ID`. On failure, build the entry
+   `{path: "$CLOSE_REPORT", detail: "filename task-id mismatch (file has <file-task-id>, argument is ${TASK_ID})", source_check: <re-derivation of the task-id from the filename>, producer_role: <artifact_role of that path>}`
+   (failure label `commit#8`), dispatch `producer_role`, rerun that
+   derivation, and apply the R15 test.
 
-**Dry-run close-gate relaxation (2026-09-06 §10.1 ruling)**: check 2 above was made
-conditional on the Step 1 `DRYRUN` value; nothing else in this command changed.
-Rationale: a `--dry-run` invocation creates no commit, moves no ref, leaves HEAD and
-worktree bytes unchanged, and leaves the index byte-identical — so gating the preview
-behind the very `CLOSE: YES` approval that the preview exists to help earn is a design
-error, and it left the supporting evidence for one close-report unobtainable across
-five cycles. Deliberately NOT claimed here is the stronger general property the
-ruling's phrasing assumed, that a dry-run never touches the index at all: measured
-otherwise, `agents/changelog-analyst.md` saves the index bytes and installs a restoring
-exit trap (mutate-then-restore), and `scripts/stage-owned-hunks.py` redirects
-`GIT_INDEX_FILE` to a throwaway index for untracked candidates. What holds is the
-byte-identical outcome, not a never-touched mechanism. Scope: check 2 only — checks 1,
-3 and 4, the `CLOSE_REPORT` binding, Step 6's QA gate, and every permission, hook and
-admission gate were unchanged by this ruling (check 3 has since been demoted to
-advisory on 2026-09-26, independently of and after this ruling — see check 3), and
-`--force` is not loosened in any form. Known
-widening, disclosed rather than narrowed: Step 5 mints a real single-use 30-minute
-commit grant per plan entry before any dry-run runs, and that minting is not
-conditioned on `DRYRUN`, so a task with a failing close-report can now cause one to be
-minted. Four independent backstops bound it — the `--dry-run` stop path and the
-empty-plan path each revoke it, the grant is single-use and bound to repo + branch +
-`expected_head`, changelog-analyst's DRYRUN guard forbids consuming it, and
-`pretool-git-privilege-guard.py` blocks agent commits independently. Narrowing it would
-alter a second gate, which this ruling forbids.
+**Dry-run close-gate relaxation (scope)**: only check 2 is conditional on the Step 1 `DRYRUN` value. Checks 1, 3 and 4, the `CLOSE_REPORT` binding, Step 6's QA gate, and every permission, hook and admission gate apply unchanged, and `--force` is not loosened in any form. A dry-run leaves HEAD, worktree bytes and index bytes identical, but it does mutate-then-restore the index (`agents/changelog-analyst.md` saves and restores index bytes; `scripts/stage-owned-hunks.py` uses a throwaway `GIT_INDEX_FILE`) — never assume a dry-run does not touch the index. Disclosed widening: Step 5 mints a real single-use commit grant per plan entry before any dry-run runs, unconditioned on `DRYRUN`; it is bounded by four backstops that MUST stay intact (every unstage pause, the `--dry-run` preview end, and the plan-computed-OK-but-nothing-pending report each revoke it; it is single-use and bound to repo + branch + `expected_head`; changelog-analyst's DRYRUN guard forbids consuming it; `pretool-git-privilege-guard.py` blocks agent commits independently). Do not narrow the minting here — that would alter a second gate. Rationale record: `docs/reference/commit-dryrun-close-gate-ruling.md`.
 
-### Step 4: Force-bypass audit (only when FORCE=true)
+### Step 4: Deprecated --force usage audit (only when FORCE=true)
 
-If `FORCE=true`: create `~/.claude/logs/` and append a line with ISO timestamp, task-id, and mode=force to `~/.claude/logs/commit-overrides.log`. Best-effort; proceed even if log append fails.
+AC11: `--force` bypasses nothing — this step is a
+pure audit log, kept for backward-compatible invocation. If `FORCE=true`: create `~/.claude/logs/` and append a line with ISO timestamp, task-id, and mode=force to `~/.claude/logs/commit-overrides.log`. Best-effort; proceed even if log append fails.
 
-Print: `WARNING: --force bypasses close-gate. Audit entry written to ~/.claude/logs/commit-overrides.log.`
+Print: `WARNING: --force is deprecated and is now a no-op alias of the normal path — no gate is bypassed. Audit entry written to ~/.claude/logs/commit-overrides.log.`
 
 ### Step 5: Write commit grant(s) after resolving the repository plan
 
 Before dispatching changelog-analyst, write the appropriate authorization token:
 - **BULK=true**: the multi-use bulk-commit capability is now minted by the TRUSTED `userprompt-bulk-commit-capability.py` hook the moment the human submits `/commit --bulk` (an LLM cannot self-invoke a `disable-model-invocation: true` slash command, so the prompt itself is the trust root). The orchestrator MUST NOT emit a Bash command to write the sentinel — that fragile exact-string path is retired.
-  - PRIMARY: assume the hook already minted `/tmp/claude-bulk-commit-sentinel-<sid>-<nonce>.json` (origin `userpromptsubmit-hook`). Proceed to the **Step 6 pre-commit QA gate** (then Step 7) — `--bulk` is NOT exempt from the QA gate (only `FORCE=true` bypasses it). An optional read-only check is a single bare `ls /tmp/claude-bulk-commit-sentinel-*.json`.
-  - NO FALLBACK: the canonical writer is no longer Bash-executable (Layer 1.F deny-only, stage-2). The hook is the SOLE minter. If the capability is absent, the `userprompt-bulk-commit-capability.py` hook is not yet active in this session — instruct the user to restart the session so settings.json reloads the hook, then re-run `/commit --bulk`. Do NOT attempt to write the sentinel via Bash.
+  - PRIMARY: assume the hook already minted `/tmp/claude-bulk-commit-sentinel-<sid>-<nonce>.json` (origin `userpromptsubmit-hook`). Proceed to the **Step 6 pre-commit QA gate** (then Step 7) — `--bulk` is NOT exempt from the QA gate, and (lane L7, AC11) neither is `--force` anymore; nothing bypasses it. An optional read-only check is a single bare `ls /tmp/claude-bulk-commit-sentinel-*.json`.
+  - NO FALLBACK: the canonical writer is no longer Bash-executable (Layer 1.F deny-only, stage-2). The hook is the SOLE minter. If the capability is absent, the `userprompt-bulk-commit-capability.py` hook is not yet active in this session — print `AWAITING_INPUT: need=a session restart so settings.json reloads the hook, then a re-run of /commit --bulk; why=the bulk-commit capability was not minted in this session; addressee=human`. Do NOT attempt to write the sentinel via Bash.
 - **BULK=false**: before writing any grant, build `REPOSITORY_PLAN` with
   `scripts/resolve-commit-repos.py`. Pass the resolved control checkout and the
   de-duplicated supported repository: the real `~/.claude` checkout.
@@ -162,7 +258,11 @@ Before dispatching changelog-analyst, write the appropriate authorization token:
   plan whose per-repository entries bind `repo_root`, `branch`, `expected_head`,
   task-owned repo-relative paths, and whether the control repo owns cycle artifacts.
   A malformed report, unattached branch, absent HEAD, unsupported owner, or identity
-  mismatch aborts before grant issuance or staging.
+  mismatch is a finding: no grant is issued and nothing is staged while it holds.
+  The finding is routed through the dispatch-and-recheck loop (the plan derives
+  from the dev-report, so `producer_role` is `artifact_role` of that report) and
+  rechecked with `resolve-commit-repos.py` until the plan validates; a cause only
+  a human can remove prints the awaiting-input line.
 
   For a normal `/dev` report, resolve its complete artifact chain before
   repository planning. This is the same read-only authority used by `/dev`
@@ -173,8 +273,10 @@ Before dispatching changelog-analyst, write the appropriate authorization token:
   The fixed entrypoint is
   `scripts/resolve-dev-artifact-chain.py --task-id <id> --project-dir <root>`.
   Require exit 0 and `status in {"pass", "pass_with_exceptions"}` and retain
-  the complete JSON. Exit 2 or `status == "fail"` blocks before grants,
-  dry-run staging, or dispatch. `pass_with_exceptions` (ticket 20260911-011232)
+  the complete JSON. A non-passing resolver result or `status == "fail"` holds
+  grants, dry-run staging, and dispatch until the finding is routed (entry built from
+  the resolver's output, producer role dispatched, resolver rerun) and the
+  resolver passes. `pass_with_exceptions` (ticket 20260911-011232)
   is not a new trust decision at this gate: Step 3 above already required a
   passing `CLOSE: YES` verdict, and `/close`'s own QA debate already
   independently corroborated every `disclosed_exceptions[]` entry before
@@ -201,15 +303,24 @@ Before dispatching changelog-analyst, write the appropriate authorization token:
   # late-repair-controller.py's verify-disclosure independently admits it
   # for this task-id (State B). No late-repair state at all (State A) keeps
   # TASK_REPORT selection below byte-identical to pre-R4 behavior. A
-  # present-but-uncorroborated state (State C) fails closed here rather than
-  # silently falling back to stale canonical provenance.
+  # present-but-uncorroborated state (State C) is a finding routed through the
+  # dispatch-and-recheck loop: route_finding builds the entry
+  # {path, detail, source_check, producer_role}, dispatches artifact_role(path),
+  # and the SAME resolve-effective-report check is rerun until the state is no
+  # longer "invalid". Control then falls through to the chain below (never the
+  # "verified" branch unless the controller itself says verified), so
+  # TASK_REPORT is never pointed at an unverified effective-report.
   LATE_REPAIR_JSON="$(source venv/bin/activate && python3 scripts/late-repair-controller.py \
       resolve-effective-report --task-id "$TASK_ID" --project-dir "$TASK_PROJECT_ROOT")"
   LATE_REPAIR_STATE="$(jq -r .state <<<"$LATE_REPAIR_JSON")"
-  if [ "$LATE_REPAIR_STATE" = "invalid" ]; then
-      echo "Commit-gate: a late-repair effective report exists for $TASK_ID but is not independently corroborated (State C). Refusing rather than falling back to stale canonical provenance -- re-run /close --late-repair $TASK_ID." >&2
-      exit 2
-  fi
+  while [ "$LATE_REPAIR_STATE" = "invalid" ]; do
+      route_finding "$TASK_DOCS_ROOT/dev-report-$TASK_ID.effective.json" \
+          "a late-repair effective report exists for $TASK_ID but is not independently corroborated (State C)" \
+          "late-repair-controller.py resolve-effective-report --task-id $TASK_ID --project-dir $TASK_PROJECT_ROOT"
+      LATE_REPAIR_JSON="$(source venv/bin/activate && python3 scripts/late-repair-controller.py \
+          resolve-effective-report --task-id "$TASK_ID" --project-dir "$TASK_PROJECT_ROOT")"
+      LATE_REPAIR_STATE="$(jq -r .state <<<"$LATE_REPAIR_JSON")"
+  done
   if [ "$LATE_REPAIR_STATE" = "verified" ]; then
       TASK_REPORT="$(jq -r .path <<<"$LATE_REPAIR_JSON")"
   elif [ -f "$TASK_DOCS_ROOT/dev-report-$TASK_ID.json" ]; then
@@ -218,16 +329,71 @@ Before dispatching changelog-analyst, write the appropriate authorization token:
       TASK_REPORT="$TASK_DOCS_ROOT/do-report-$TASK_ID.json"
   fi
   if [ "$LATE_REPAIR_STATE" = "verified" ] || [ -f "$TASK_DOCS_ROOT/dev-report-$TASK_ID.json" ]; then
-      ARTIFACT_CHAIN="$(python3 scripts/resolve-dev-artifact-chain.py \
-          --task-id "$TASK_ID" --project-dir "$TASK_PROJECT_ROOT")" || exit 2
+      # A failed chain check is a finding on the dev-report chain: route it and
+      # rerun the SAME resolver until it passes; ARTIFACT_CHAIN is never blanked.
+      until ARTIFACT_CHAIN="$(python3 scripts/resolve-dev-artifact-chain.py \
+          --task-id "$TASK_ID" --project-dir "$TASK_PROJECT_ROOT")"; do
+          route_finding "$TASK_REPORT" \
+              "resolve-dev-artifact-chain.py (chain-recheck) failed during commit-time repository planning" \
+              "resolve-dev-artifact-chain.py --task-id $TASK_ID --project-dir $TASK_PROJECT_ROOT"
+      done
+      # Row 1 applies only to a fan-out chain's canonical aggregate.
+      FANOUT_MODE=false; CANONICAL_DEV_REPORT=""
+      if [ "$(jq -r .mode <<<"$ARTIFACT_CHAIN")" = "fanout" ]; then
+          FANOUT_MODE=true; CANONICAL_DEV_REPORT="$(jq -r .canonical_dev_report <<<"$ARTIFACT_CHAIN")"
+      fi
   else
       ARTIFACT_CHAIN=""
   fi
-  REPOSITORY_PLAN="$(python3 ~/.claude/scripts/resolve-commit-repos.py \
+  # A failed plan computation is never an empty plan and never "nothing to
+  # commit": the plan derives from the dev-report, so route the finding
+  # (artifact_role of the report; a dev-report maps to dev, or to the
+  # orchestrator for a fan-out canonical aggregate) and rerun the SAME
+  # computation until it succeeds (exit status 0).
+  until REPOSITORY_PLAN="$(python3 ~/.claude/scripts/resolve-commit-repos.py \
       --task-id "$TASK_ID" --control-root "$CONTROL_ROOT" \
       --report "$TASK_REPORT" \
-      --supported-repo "$NESTED_REPO")" || exit 2
+      --supported-repo "$NESTED_REPO")"; do
+      route_finding "$TASK_REPORT" \
+          "resolve-commit-repos.py could not construct a repository plan" \
+          "resolve-commit-repos.py --task-id $TASK_ID --control-root $CONTROL_ROOT --report $TASK_REPORT --supported-repo $NESTED_REPO"
+  done
   ```
+
+  **Attribution-log slice (ground-truth attribution, additive to the plan above).**
+  Immediately after `REPOSITORY_PLAN` resolves, build `ATTRIBUTION_LOG` — a slice of
+  the write-time attribution journal (`hooks/lib/attribution_journal.py`) scoped to
+  exactly this plan's owned paths. This is the fact-based attribution source
+  `agents/changelog-analyst.md`'s staging decision reads instead of (or as a
+  cross-check alongside) the dev-report's self-reported ledger fields. No retry
+  loop here — unlike `REPOSITORY_PLAN`, an exit code of 2 (no journaled events for
+  any requested path — e.g. the path pre-dates the journal's rollout) is an
+  ordinary, expected outcome, not a finding to route:
+
+  ```bash
+  ATTRIBUTION_FILES=()
+  while IFS= read -r abs_path; do
+      [ -n "$abs_path" ] && ATTRIBUTION_FILES+=(--file "$abs_path")
+  done < <(jq -r '.repositories[] | .repo_root as $root | (.owned_paths[]? // empty) | $root + "/" + .' <<<"$REPOSITORY_PLAN")
+  ATTRIBUTION_LOG="$(python3 ~/.claude/scripts/verify-attribution-chain.py --json "${ATTRIBUTION_FILES[@]}" 2>/dev/null)"
+  ATTRIBUTION_LOG="${ATTRIBUTION_LOG:-{\"results\":[],\"no_events\":[],\"discarded_lines\":[]}}"
+  ```
+
+  `ATTRIBUTION_LOG.results[]` carries, per owned path, its folded write-event
+  chain verdict (`CONTINUOUS_TAIL_MATCH` / `CONTINUOUS_TAIL_MISMATCH` / `BREAK`)
+  and the `session_id`/`agent_id`/`task_id` of every witnessing event —
+  `agents/changelog-analyst.md` groups commits from this. `no_events[]` lists
+  owned paths the journal has zero coverage for (pre-journal backlog or a write
+  that bypassed the hooks surface): for those, changelog-analyst's backup
+  investigative path applies, never a block.
+
+  `route_finding <path> <detail> <source_check>` is the loop above made
+  concrete: build the entry with `producer_role="$(artifact_role "$path")"`,
+  dispatch that role (the orchestrator itself when the role is
+  `orchestrator`), then return so the caller reruns exactly its
+  `source_check`; it applies the R15 progress test between rounds and escalates
+  to orchestrator arbitration on no progress. It has no failure return: it
+  either returns after a dispatch or prints the awaiting-input line and holds.
 
   Do not use `CLAUDE_PROJECT_DIR`, a
   user-supplied root override, or a report field to populate this list.
@@ -235,11 +401,14 @@ Before dispatching changelog-analyst, write the appropriate authorization token:
   Write **one single-use commit grant per `REPOSITORY_PLAN.repositories[]` entry**,
   always passing that entry's `repo_root` to `write-commit-grant.py`. Verify that
   the writer's captured repo/branch/HEAD equals the plan entry; any mismatch revokes
-  all grants for this task/session and aborts. The script resolves the session ID
+  all grants for this task/session and is a finding on the plan/grant artifact:
+  rebuild the plan (resolve-commit-repos.py, above), re-mint, and re-verify, routed
+  through the dispatch-and-recheck loop; a mismatch cause only a human can fix
+  prints the awaiting-input line. The script resolves the session ID
   from `CLAUDE_CODE_SESSION_ID` (primary) or `CLAUDE_SESSION_ID` (fallback). If
-  neither is set, abort immediately with: `Cannot write commit grant:
-  CLAUDE_CODE_SESSION_ID (and CLAUDE_SESSION_ID) not set. Invoke /commit from
-  within a Claude Code session.` Do NOT dispatch changelog-analyst. Each grant is
+  neither is set, print
+  `AWAITING_INPUT: need=CLAUDE_CODE_SESSION_ID (or CLAUDE_SESSION_ID) set, i.e. invoke /commit from within a Claude Code session; why=cannot write the commit grant without a session id; addressee=human`
+  and hold at this step in place. Do NOT dispatch changelog-analyst meanwhile. Each grant is
   still a single-repository capability; a report cannot mint admission for a new
   repository.
 
@@ -259,7 +428,8 @@ source venv/bin/activate && python3 ~/.claude/scripts/write-commit-grant.py \
 ```
 
 Do not flatten the plan into one grant and do not infer repositories from current
-dirty status. Unused per-repository grants expire normally or are revoked on a stop path.
+dirty status. Unused per-repository grants expire normally or are revoked at every
+unstage pause and at the `--dry-run` preview end.
 
 Both `created_at` and `expires_at` MUST match the regex `^20\d{2}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(\+\d{2}:\d{2}|Z)$`. Do NOT substitute `time.time()`, `int(time.time())`, or `datetime.utcnow()` (the last returns a naive datetime whose `.isoformat()` omits the TZ offset and falls into the naive-comparison branch at line 382).
 
@@ -270,7 +440,10 @@ Also write the dispatch-snapshot manifest (non-bulk mode only): capture
 digest), the exact `ARTIFACT_CHAIN` JSON (when non-empty), and
 `files_at_dispatch` keyed by canonical repository root. Best-effort status
 capture is permitted, but losing or changing `REPOSITORY_PLAN` or
-`ARTIFACT_CHAIN` is not; abort instead. Bulk mode retains its existing
+`ARTIFACT_CHAIN` is not: a lost or changed plan or chain is a finding on that
+artifact, routed through the dispatch-and-recheck loop (the plan derives from the
+dev-report; the chain is rebuilt by the orchestrator rerunning
+`resolve-dev-artifact-chain.py`), then rebuilt before the manifest is written. Bulk mode retains its existing
 control+nested behavior.
 
 **Transaction boundary:** Git provides no cross-repository atomic commit. Normal mode
@@ -280,19 +453,17 @@ own lock/grant/CAS/commit/token transaction, and any later failure is surfaced a
 `partially_committed` with per-repository results. Never claim cross-repository atomicity,
 silently roll back an already-created commit, or hide a partially completed transaction.
 
-### Step 6: Pre-commit QA review gate (skip if FORCE=true)
+### Step 6: Pre-commit QA review gate
 
-A QA agent reviews **what is actually about to be committed** (each planned file's change vs HEAD) and may BLOCK the commit. This is an independent second reviewer on top of `changelog-analyst`'s own staging judgment — it exists because `--bulk` / `--force` skip `/close` entirely, and even a normal commit's *actual file changes* deserve a fresh adversarial check for junk / secrets / scope contamination. The gate reviews the file changes themselves, NOT the dev-report.
+A QA agent reviews **what is actually about to be committed** (each planned file's change vs HEAD) and may BLOCK the commit. This is an independent second reviewer on top of `changelog-analyst`'s own staging judgment — it exists because `--bulk` skips `/close`'s gate entirely, and even a normal commit's *actual file changes* deserve a fresh adversarial check for junk / secrets / scope contamination. The gate reviews the file changes themselves, NOT the dev-report.
 
-**If `FORCE=true`: skip this entire step.** Print `WARNING: --force bypasses the pre-commit QA gate.` and proceed to Step 7 (human override accepts the risk; the bypass is already audited by Step 4).
-
-Otherwise (applies to BOTH `BULK=false` and `BULK=true`):
+**AC11: `--force` never skips this step.** This gate always runs, for BOTH `BULK=false` and `BULK=true`:
 
 **Step 6 — Planning phase (internal dry-run; plan-only).**
 Dispatch `changelog-analyst` (Agent, `subagent_type: changelog-analyst`) with the **same prompt as Step 7 but `DRYRUN=true`** (force dry-run regardless of the user's `--dry-run`). Under `DRYRUN=true` changelog-analyst classifies, stages the candidate set into the index, and STOPS before commit — it does NOT commit, write push-gate tokens, run any recovery commit, or consume the Step 5 grant (guaranteed by the DRYRUN guard in `agents/changelog-analyst.md` — the `nothing_to_commit_precommitted` recovery path is disabled under DRYRUN). Capture from its output:
 - `PLAN_GROUPS` — the per-proposed-commit groups, each `{repo, commit_message, files[]}` (one entry per intended commit; bulk yields several). **Preserve group boundaries — do NOT flatten across groups** (QA needs them to detect cross-task mixing).
 - `PLAN_FILES` — the union of all group files, per repo.
-- If the dry-run reports `nothing_to_commit` / empty plan: print `Nothing to commit — QA gate skipped.`; then **when `BULK=false`, revoke the Step 5 commit grant** (it will never be consumed — same Grant-hygiene rationale as the Step 6 decision phase) via `source venv/bin/activate && python3 ~/.claude/scripts/write-commit-grant.py --task-id "$TASK_ID" --revoke-only` (skip in `BULK=true` — no per-task grant, empty TASK_ID); then proceed to Step 7 (which also no-ops). Do NOT dispatch QA on an empty plan.
+- If the dry-run reports `nothing_to_commit` / empty plan: first compare it to the plan. If the plan computed OK, its owned paths exist, and those paths are not already landed, the disagreement between the owned-edit declaration and the live bytes is a finding routed to dev (not a silent no-op) and the planning phase is rerun after the fix. Only when the plan computed OK and the paths are already landed (or the plan lists no owned path), print `Nothing to commit (plan computed OK; dry-run found no pending change) — QA gate skipped.` It is never printed after a failed plan computation; then **when `BULK=false`, revoke the Step 5 commit grant** (it will never be consumed — same Grant-hygiene rationale as the Step 6 decision phase) via `source venv/bin/activate && python3 ~/.claude/scripts/write-commit-grant.py --task-id "$TASK_ID" --revoke-only` (skip in `BULK=true` — no per-task grant, empty TASK_ID); then proceed to Step 7 (which also no-ops). Do NOT dispatch QA on an empty plan.
 
 QA reviews each planned file's change **directly against HEAD** (staging-independent), NOT via `git diff --cached`. Rationale: in multi-group `--bulk`, changelog-analyst stages per subsystem group and Phase 4 unstages cross-group files each iteration, so after the dry-run only the LAST group remains staged — a `--cached` review would silently skip every earlier group while ALL groups still enter `QA_APPROVED_FILES` and get committed. Reviewing each `PLAN_GROUPS` file vs HEAD (or reading new files) covers ALL groups regardless of staging state.
 
@@ -306,6 +477,24 @@ in PLAN_GROUPS — by reading each file's ACTUAL change, NOT the dev-report.
 Proposed commit groups (preserve boundaries): <PLAN_GROUPS>
   (each = {repo, commit_message, files[]} — one intended commit)
 TASK_ID: <TASK_ID or "bulk">   BULK: <true|false>
+
+<obligation v="1">
+{
+  "task_id": <"$TASK_ID" when BULK=false, else null>,
+  "lane": null,
+  "lane_set": null,
+  "role": "qa",
+  "pipeline": "commit",
+  "profile": "commit-qa",
+  "dispatched_at": "<ISO-8601 timestamp of this dispatch>",
+  "artifacts": [
+    {"kind": "markdown", "path": "docs/dev/commit-qa-report-<TASK_ID or \"bulk\">.md",
+     "identity_anchor": "<TASK_ID or \"bulk\">",
+     "terminal_line_regex": "^COMMIT: (APPROVE|REJECT)"},
+    {"kind": "response_line", "terminal_line_regex": "^COMMIT: (APPROVE|REJECT)"}
+  ]
+}
+</obligation>
 
 For EVERY path in EVERY group, review its actual change DIRECTLY (do NOT rely on the
 staging state — in multi-group bulk only the LAST group is left staged, so `git diff
@@ -356,18 +545,26 @@ Return, as the LAST line, EXACTLY one of:
 
 **Step 6 — Decision phase.**
 
-**Grant hygiene (`BULK=false` stop paths only — REJECT, `--dry-run` stop, unparseable):** in addition to unstaging, when `BULK=false` REVOKE the Step 5 commit grant so a blocked/stopped gate never leaves live commit authorization lingering (30-min TTL):
+**Grant hygiene (`BULK=false`, at every unstage pause — REJECT routing, bad verifier report, unparseable verdict — and at the `--dry-run` preview end):** in addition to unstaging, when `BULK=false` REVOKE the Step 5 commit grant so a gate under repair never leaves live commit authorization lingering (30-min TTL; never hold a live grant across a producer repair — re-mint by re-entering Step 5 after the fix, because bytes and plan changed):
 ```bash
 source venv/bin/activate && python3 ~/.claude/scripts/write-commit-grant.py --task-id "$TASK_ID" --revoke-only
 ```
 **Skip this revoke entirely when `BULK=true`**: bulk wrote NO per-task commit grant (Step 5 minted the multi-use bulk-commit sentinel, which self-expires on its own 30-min TTL) and `TASK_ID` is empty, so calling the writer with an empty `--task-id` would error (exit 2). (Only the `COMMIT: APPROVE` + real-commit path keeps the grant — it is consumed by Step 7.)
 
-- `COMMIT: REJECT`: print the verdict + offending files; **unstage the dry-run-staged set so the tree is left clean** — per repo, unstage ONLY currently-staged paths, computed rename-aware. Run `git -C <repo> diff --cached --name-status -z -M` and build the unstage set from its entries: a plain (non-rename) staged path → include it if it is in `PLAN_FILES`; a staged `R`/`C` entry → include BOTH its old and new paths if EITHER endpoint is in `PLAN_FILES` (the analyst may list only the new path, yet `--name-only` / a single-endpoint unstage leaves the other endpoint — e.g. `D old` — staged). Unstage that set via `git -C <repo> restore --staged -- <those>` (unborn repo: `git -C <repo> rm --cached -- <those>`). Do NOT pass planned files that are not currently staged — in multi-group bulk Phase 4 already unstaged the earlier groups, and `restore --staged` / `rm --cached` on an unstaged/untracked pathspec errors out and leaves the last group staged. Then revoke the grant (Grant hygiene above). Do NOT proceed to Step 7; do NOT commit. Tell the user to remove/fix the flagged files, or re-run with `--force` to override. **Stop.**
+- `COMMIT: REJECT`: this is a verdict on the product, not a broken artifact. Print the verdict + offending files; **unstage the dry-run-staged set so the tree is left clean** — per repo, unstage ONLY currently-staged paths, computed rename-aware. Run `git -C <repo> diff --cached --name-status -z -M` and build the unstage set from its entries: a plain (non-rename) staged path → include it if it is in `PLAN_FILES`; a staged `R`/`C` entry → include BOTH its old and new paths if EITHER endpoint is in `PLAN_FILES` (the analyst may list only the new path, yet `--name-only` / a single-endpoint unstage leaves the other endpoint — e.g. `D old` — staged). Unstage that set via `git -C <repo> restore --staged -- <those>` (unborn repo: `git -C <repo> rm --cached -- <those>`). Do NOT pass planned files that are not currently staged — in multi-group bulk Phase 4 already unstaged the earlier groups, and `restore --staged` / `rm --cached` on an unstaged/untracked pathspec errors out and leaves the last group staged. Then revoke the grant (Grant hygiene above). Do NOT proceed to Step 7; do NOT commit (`--force` does not override this gate — it is a no-op alias of the normal path). Route the REJECT through the verdict loop:
+    1. **Findings to the producer.** Send the offending files and reason (from the verdict line and `commit-qa-report`) to the role that produced the flagged material, by what each finding points at: code/doc files and the dev-report → dev; ticket/context/acceptance-criteria defects → ba (`artifact_role`); anything else → orchestrator. QA never edits the subject, and "fix until APPROVE" as a formality is not a path.
+    2. **Fresh independent re-verification.** After the producer's fix, rebuild the plan (Step 5), rerun the planning dry-run, and dispatch a NEW QA subagent (a fresh dispatch; the prior verdict, the findings and any ruling are NOT in its prompt) that re-judges the actual changes against HEAD. The loop ends only on that fresh verdict being `COMMIT: APPROVE` (with the file cross-check below unchanged); a further `COMMIT: REJECT` repeats this routing.
+    3. **Dispute.** If the producer contends a finding is wrong, the orchestrator reruns the check itself (re-reads the diff and contents of the cited path) and arbitrates. Producer right → the `commit-qa-report` is a bad artifact: dispatch a FRESH QA subagent (same fresh-dispatch rule) to re-judge from the actual changes; the old report is never edited or re-emitted by the verifier that wrote it. Verifier right → the producer continues. No third role judges, and QA's prompt never contains the orchestrator's ruling, the producer's dispute or any prior verdict.
+    4. **R15 bound (definition above).** A round whose flagged files have identical bytes and whose finding set is unchanged is no progress: it escalates to orchestrator arbitration, never a further identical dispatch and never an acceptance after a number of rounds.
 - `COMMIT: APPROVE`:
+  - **File cross-check (fail-closed; hardens this gate against trusting the returned string alone)**: before honoring this verdict, read `docs/dev/commit-qa-report-<TASK_ID or "bulk">.md`'s last non-empty line and compare it to the Agent tool's returned last line:
+    - File does not exist → sub-case `missing_file`: the verifier's own report is a bad artifact, not a REJECT of the product. Run the SAME unstage-and-revoke cleanup as the `COMMIT: REJECT` branch above, print a message naming the `missing_file` sub-case, do NOT proceed to Step 7, do NOT commit, and dispatch a fresh QA subagent (new dispatch; the prior verdict is not in its prompt) to produce a valid report from the actual changes, rerunning this cross-check on its output (R15 bound as above).
+    - File exists but its last non-empty line does not match `^COMMIT: APPROVE` → sub-case `line_mismatch`: same cleanup, print a message naming the `line_mismatch` sub-case (quoting the file's actual last line), do NOT proceed to Step 7, do NOT commit, and dispatch a fresh QA subagent exactly as for `missing_file`.
+    - File exists and its last non-empty line matches `^COMMIT: APPROVE` → the two channels agree; continue below unchanged.
   - Record `QA_APPROVED_FILES` = `PLAN_FILES` (the exact reviewed set, per repo). This is passed to Step 7 as the commit **ceiling** (TOCTOU guard — Step 7 must not commit anything outside it).
-  - If the user passed `--dry-run` (`DRYRUN=true`): print the plan + `QA: APPROVE`, unstage the dry-run-staged set (clean tree, as in the REJECT branch), and **stop** — no real commit.
+  - If the user passed `--dry-run` (`DRYRUN=true`): print the plan + `QA: APPROVE`, unstage the dry-run-staged set (clean tree, as in the REJECT branch), revoke the grant, and end the invocation with the preview delivered — the requested end state; no real commit.
   - Otherwise proceed to Step 7 for the real commit.
-- Unparseable / missing `COMMIT:` final line: treat as REJECT (fail-closed); unstage (as above), print the raw QA output, and stop.
+- Unparseable / missing `COMMIT:` final line: the verifier's report is a bad artifact (fail-closed: it is not an APPROVE); unstage (as above), revoke the grant, print the raw QA output, and dispatch a fresh QA subagent (prior verdict not in its prompt) to produce a valid verdict, rerunning the cross-check on it.
 
 ### Step 7: Dispatch changelog-analyst
 
@@ -384,15 +581,52 @@ CONTROL_ROOT=<CONTROL_ROOT>
 NESTED_REPO=<NESTED_REPO>
 REPOSITORY_PLAN=<exact Step 5 JSON; empty only in bulk mode>
 ARTIFACT_CHAIN=<exact resolver JSON; empty only for bulk or source=do>
+ATTRIBUTION_LOG=<exact Step 5 verify-attribution-chain.py --json output scoped to REPOSITORY_PLAN's owned paths; empty object ({"results":[],"no_events":[],"discarded_lines":[]}) in bulk mode>
 TASK_ID=<resolved task-id or empty for bulk>
 BULK=<true|false>
 DRYRUN=<true|false>
 FORCE=<true|false>
-QA_APPROVED_FILES=<the Step 6 decision-phase QA-approved file set, per repo; empty when FORCE=true (gate skipped)>
+QA_APPROVED_FILES=<the Step 6 decision-phase QA-approved file set, per repo — Step 6 now runs unconditionally (lane L7, AC11), so this is non-empty whenever the planned file set was non-empty>
+
+<obligation v="1">
+{
+  "task_id": <"$TASK_ID" when BULK=false, else null>,
+  "role": "changelog-analyst",
+  "pipeline": "commit",
+  "profile": <"commit-landing" when BULK=false, else "commit-bulk">,
+  "dispatched_at": "<ISO-8601 timestamp of this dispatch>",
+  "artifacts": [
+    {
+      "kind": "response_block",
+      "begin": "--- CHANGELOG-ANALYST-STATUS-BEGIN ---",
+      "end": "--- CHANGELOG-ANALYST-STATUS-END ---",
+      "format": "json",
+      "schema": "changelog-status.v1"
+    }
+  ]
+}
+</obligation>
 
 You are the changelog-analyst subagent. Execute the commit workflow as specified
 in your agent definition (agents/changelog-analyst.md). Use the variables above
 to guide your behavior.
+
+Disclosures (lane L7, AC10): when `BULK=false` and the close-report consumed
+for `TASK_ID` (at `$CLOSE_REPORT`, or its late-repair effective-report
+equivalent) contains a non-empty `## Disclosures` section, append to the
+commit message body a `Disclosures: <n>` line followed by up to 10 items in
+the same three-element format (`[code] path: problem | 归因: role(lane) |
+修复: action`); beyond 10 items, write "see close-report" instead of listing
+the rest. Do NOT create a separate file to duplicate the list.
+
+**Standard-6 exemption (English-only) for this format string**: the `归因`/`修复`
+field labels are not a violation to translate here — they are a verbatim
+pass-through of `commands/close.md`'s own `## Disclosures` line format (that
+command's own text: "field labels stay in Chinese"), which this line quotes so
+`/commit` reproduces exactly what `/close` wrote rather than re-labeling it.
+Translating only this copy would make the two commands describe two different
+formats for the same artifact. If the convention is ever translated, do it in
+`commands/close.md` first and update this quoted copy to match.
 
 Constraints:
 - CONTROL_ROOT is the fallback root for dev-report resolution; changelog-analyst MUST apply the subproject path-walk (dirname-of-changed-files → commonpath → walk up to docs/dev/) and check the subproject docs/dev/ first before falling back to ${CONTROL_ROOT}/docs/dev/
@@ -404,7 +638,7 @@ Constraints:
   whitelist is exactly `ARTIFACT_CHAIN.commit_whitelist_artifacts`; this
   admits validated lane artifacts in fan-out mode and never invents optional
   parent artifacts.
-- **TOCTOU guard (pre-commit QA gate)**: when `QA_APPROVED_FILES` is non-empty (the Step 6 gate ran and approved this exact set), it is the commit CEILING. Re-classify normally, then intersect the classified set with `QA_APPROVED_FILES`: stage/commit ONLY files in both. If your fresh classification yields any file NOT in `QA_APPROVED_FILES` (working tree changed since QA review), do NOT commit the unreviewed file; if the divergence is material (a QA-approved file vanished, or a new non-approved candidate appeared that you would otherwise commit), ABORT with `failure_code: scope_violation` rather than commit an unreviewed set. When `QA_APPROVED_FILES` is empty (FORCE bypass), this guard does not apply.
+- **TOCTOU guard (pre-commit QA gate)**: when `QA_APPROVED_FILES` is non-empty (the Step 6 gate ran and approved this exact set), it is the commit CEILING. Re-classify normally, then intersect the classified set with `QA_APPROVED_FILES`: stage/commit ONLY files in both. If your fresh classification yields any file NOT in `QA_APPROVED_FILES` (working tree changed since QA review), do NOT commit the unreviewed file; if the divergence is material (a QA-approved file vanished, or a new non-approved candidate appeared that you would otherwise commit), ABORT with `failure_code: scope_violation` rather than commit an unreviewed set. `QA_APPROVED_FILES` is empty only when Step 6's own planned file set was empty (nothing to commit); this guard does not apply in that case.
 - Stage only files in the classified set; never use `git add -A` or `git add .`
 - Commit message must NOT match: `\bsync\b.*\buncommitted\b` or `chore\(claude\)\s*:\s*sync`
 - Handle every admitted repository independently and return a `repository_results` entry for each one
@@ -421,8 +655,10 @@ Wait for changelog-analyst to complete. Echo its final status to the user.
 Parse changelog-analyst's structured status output (see `agents/changelog-analyst.md`
 §Structured Final Status Output). The machine-readable JSON block contains
 `commit_status`, `repository_results[]`, and, when applicable, `failure_code`,
-`failure_reason`, and `auto_bulk_commits[]`. In normal mode reject a result whose
-repository roots/order do not exactly equal `REPOSITORY_PLAN`.
+`failure_reason`, and `auto_bulk_commits[]`. In normal mode a result whose
+repository roots/order do not exactly equal `REPOSITORY_PLAN` is not accepted as a
+landing: it is a finding on the changelog status artifact (`changelog-status*` →
+changelog-analyst), routed through the dispatch-and-recheck loop and re-read.
 
 **Handle each commit_status value:**
 
@@ -435,20 +671,24 @@ failed/remaining entry. Continue to Step 8 normally.
 
 At least one repository commit already landed and a later repository failed. Print
 the complete ordered `repository_results`, the first failure, and `remaining_repos`.
-Do NOT claim rollback or cross-repository atomicity; do NOT retry automatically and
-do NOT run Step 8. Revoke all still-unused grants for this task/session. The next
-normal `/commit <TASK_ID>` invocation may plan only the still-dirty owned material;
+Do NOT claim rollback or cross-repository atomicity, and do NOT run Step 8 yet.
+Revoke all still-unused grants for this task/session, then continue with the
+remaining repositories in order: rebuild the plan for only the still-dirty owned
+material, re-mint fresh grants, rerun the planning dry-run and QA, and
+re-dispatch. The plan may cover only the still-dirty owned material;
 repositories already clean must return `nothing_to_commit`, not receive a synthetic
 recovery commit merely because another planned repository remains dirty.
 
 #### status = `nothing_to_commit`
-Print: `WARNING: changelog-analyst found nothing to commit after exclusions. Verify the task cycle produced staged changes.`
+Print: `WARNING: changelog-analyst found nothing to commit after exclusions (plan computed OK). Verify the task cycle produced staged changes.`
 
 If the result carries `push_gate_reconciliation_declined`, ALSO print:
 `WARNING: HEAD <sha> has no push-gate token and could not be attributed to this session (<reason>); /push stays blocked for this session.`
-Do not retry and do not attempt to tokenize HEAD by any other route — the refusal is the
-correct outcome, and the recovery is a human `git push` or re-running the originating session
+Do not retry and do not attempt to tokenize HEAD by any other route — the refusal is a
+rejected operation, paused and reported per the Subagent Hook Discipline, never bypassed;
+print `AWAITING_INPUT: need=a human git push, or a re-run of the originating session; why=HEAD has no push-gate token and could not be attributed to this session; addressee=human`
 (see `agents/changelog-analyst.md` §Push-gate reconciliation, "The accepted residual").
+The landed commit itself stands; only the push gate waits.
 
 Continue to Step 8 (skip spec-update if no real commit occurred — Step 8 skip conditions apply).
 
@@ -515,15 +755,17 @@ or refused Phase 10 Write — its own Step 8 skipped the spec-update on that ABS
 missing), so the update was never performed. On the interruption route the cycle never reached
 Step 8 at all, with the same result. On BOTH routes where the pre-write HEAD-stability check
 fired — the same-parent race and the HEAD round trip — the cycle returned `failed` with
-`push_gate_race`, which is not in the retryable set, so this handler stopped at the
-non-retryable branch before Step 8 ever ran.
-**On those four routes the originating cycle's spec update was never performed and is
-therefore lost.** That is a known, accepted consequence of this path, not an oversight — if
-the spec matters for the reconciled commit, update it through a separate explicit cycle.
+`push_gate_race`, which is not in the retryable set; that code is routed by the
+non-retryable handling below (rerun the cause; a hook rejection pauses and reports),
+and Step 8 runs after the landing — previously the handler ended there before Step 8 ran.
+**On those four routes the originating cycle's spec update was not performed by that
+cycle and remains owed.** This reconciliation does not perform it (see the skip above);
+the owed update is a finding for the spec-update path, not an accepted outcome: carry it
+into a separate explicit cycle and do not treat the spec as current.
 
 The four are not equally recoverable, and the difference decides what a follow-up cycle should
-describe. On three of them the lost update describes exactly the commit that was reconciled,
-because that commit is this session's own. On the same-parent race ALONE the loss is
+describe. On three of them the owed update describes exactly the commit that was reconciled,
+because that commit is this session's own. On the same-parent race ALONE the gap is
 compounded: the update that never ran described THIS session's commit, which a peer had
 already replaced, while the commit later reconciled is the PEER's, whose spec state belongs
 to a cycle this session never saw. Reconciliation performs the update on none of them.
@@ -535,9 +777,9 @@ conditioned on the spec's state: on all three, the originating cycle DID write i
 session drift) and DID reach Step 8. But reaching Step 8 does not
 guarantee the spec was updated: Step 8's own dispatch-failure contract permits the update
 dispatch to FAIL — print a WARNING and continue — so even an already-pushed or
-namespace-drifted commit can have lost its spec update. What these routes guarantee is only
+namespace-drifted commit can have missed its spec update. What these routes guarantee is only
 that the cycle reached its spec-update step; whether the update landed is unknowable from
-here. So an empty slot is equally consistent with a completed cycle and with a lost one.
+here. So an empty slot is equally consistent with a completed cycle and with one whose update never landed.
 Neither this handler nor changelog-analyst can tell them apart, so neither may assume either.
 
 #### status = `nothing_to_commit_precommitted`
@@ -552,7 +794,7 @@ Check `failure_code`:
 **Retryable** (`grant_missing`, `grant_expired`, `grant_consumed`) only when
 `repository_results` proves that zero repository commits landed:
 
-Retry exactly once (max 1 retry):
+Retry with a fresh grant (each further round must pass the R15 progress test):
 1. Revoke stale grants, rebuild `REPOSITORY_PLAN`, and write a fresh bound grant
    for every newly planned repository. Never refresh only the control-root grant:
    ```bash
@@ -567,17 +809,29 @@ Retry exactly once (max 1 retry):
 3. Parse the retry result using the same status table as the initial result:
    - If `commit_status = committed` or `commit_status = nothing_to_commit_precommitted`: continue to Step 8 (handle as specified above for each status).
    - If `commit_status = nothing_to_commit`: warn user and continue to Step 8.
-   - If retry `commit_status = failed` or unknown: print `ERROR: changelog-analyst retry failed (failure_code: <code>, reason: <reason>). Manual intervention required.` and stop — do NOT proceed to Step 8.
+   - If retry `commit_status = failed` or unknown: print `ERROR: changelog-analyst retry failed (failure_code: <code>, reason: <reason>).` and route the cause as for a non-retryable code below; do NOT proceed to Step 8 until a landing is confirmed.
 
 **Non-retryable** (`git_error`, `staging_error`, `hook_blocked`, `scope_violation`,
 `repository_plan_invalid`, or any other code; also every failure after one or more
 repository commits landed):
 
-Print: `ERROR: changelog-analyst failed with non-retryable failure_code: <failure_code>. Reason: <failure_reason>. Manual intervention required.`
-Stop — do NOT retry, do NOT proceed to Step 8.
+Print: `ERROR: changelog-analyst failed with failure_code: <failure_code>. Reason: <failure_reason>.`
+Do NOT proceed to Step 8 until a landing is confirmed. Route the cause through the
+dispatch-and-recheck loop: build the entry with `path` = the changelog status artifact
+or the implicated file named in `failure_reason`, `source_check` = this changelog-analyst
+result, and `producer_role` = `artifact_role(path)`; dispatch it (the cause is rerun,
+not the same dispatch repeated), then re-run Step 5 through Step 7 for the repositories
+not yet landed, under the R15 progress test. `scope_violation` means the tree changed
+after QA reviewed it: rebuild the plan and dispatch a fresh QA over the actual set. A
+`hook_blocked` failure, or any hook rejection, pauses and reports per the Subagent Hook
+Discipline with
+`AWAITING_INPUT: need=authorization or a ruling for the rejected operation; why=<hook output verbatim>; addressee=human`
+and the rejected operation is never retried, wrapped or bypassed.
 
 #### status unknown / unparseable
-Treat as non-retryable. Print the raw changelog-analyst output and stop.
+The status artifact is bad (`changelog-status*` → changelog-analyst). Print the raw
+changelog-analyst output and re-dispatch changelog-analyst to emit a valid structured
+status for the same plan, re-reading it under the R15 progress test.
 
 ### Step 8: Spec-update dispatch (post-commit, deterministic fail-closed)
 
@@ -597,7 +851,7 @@ Skip this step entirely if ANY of the following are true:
 - `STEP7_SKIPPED: changelog_no_real_commit` — at the no-push-gate / changelog-error skip branch
 - `STEP7_SPEC_UPDATE_DISPATCHED: task-id=<TASK_ID> stage=<1|2> spec_path=<SPEC_PATH>` — emitted IMMEDIATELY BEFORE the Agent dispatch in stages (1) and (2)
 - `STEP7_NO_SPEC: task-id=<TASK_ID>` — at stage (3) empty-set outcome
-- `STEP7_UNLINKED_SPEC: task-id=<TASK_ID> count=<N> paths=<paths>` — at stage (3) one-or-more-element outcome (fail-closed)
+- `STEP7_UNLINKED_SPEC: task-id=<TASK_ID> count=<N> paths=<paths>` — at stage (3) one-or-more-element outcome (routed to ba, selection rerun)
 
 This trace is OFF by default (no env var). When ON, the markers are emitted to stderr only; they MUST NOT affect stdout, exit codes, or dispatch behavior. The trace is consumed by the AC-05 Phase B test harness (tests/generated/20260524-205206/test_AC_05_e5f7a9b1c4d6e8fb.py) which exercises the Step 8 SELECTION + TRACE algorithm via `scripts/step7-spec-update.py` — the executable reference embodiment of the SELECTION portion of this Step 8 specification (stages 1-4 + STEP7_* markers). The script does NOT perform the Agent dispatch described in the "Dispatch payload" subsection below — that step is the orchestrator's responsibility, performed as a Claude Code Agent call after the selection marker emits. The orchestrator MAY either follow the prose directly OR invoke the harness to compute the selection; in both cases the orchestrator must perform the real Agent dispatch when a stage 1 or stage 2 path is selected.
 
@@ -621,7 +875,7 @@ The algorithm is total-ordered and mandatory. Implementers MUST NOT introduce wo
       - Leading `^[-*+]?\s*` accepts an optional markdown list marker (`- `, `* `, `+ `).
       - Optional `(\s*\([^)]*\))?` accepts parenthetical qualifiers such as `(from prior NO)`, `(this cycle)`, `(rebuilt)`.
       - Inline backticks `` ` `` around the path are accepted (markdown code-span).
-    The verbatim real-world close-report line proving this case is `docs/dev/close-report-20260519-175339.md:151` —
+    A conforming close-report line looks like:
 
         - Continuation spec (from prior NO): `docs/dev/specs/spec-20260520-044700.md`
 
@@ -633,8 +887,8 @@ The algorithm is total-ordered and mandatory. Implementers MUST NOT introduce wo
 
 (4) Outcome (fail-closed).
     - If set is empty: print `No spec associated with task-id ${TASK_ID}` and exit 0 (silent, unchanged from prior behavior). When `COMMIT_STEP7_TRACE=1`, also emit `STEP7_NO_SPEC: task-id=${TASK_ID}` to stderr.
-    - If set has exactly one element: print `spec produced this cycle but not linked in context: <path>` and exit non-zero (fail-closed). When `COMMIT_STEP7_TRACE=1`, also emit `STEP7_UNLINKED_SPEC: task-id=${TASK_ID} count=1 paths=<path>` to stderr.
-    - If set has multiple elements: print `multiple specs produced this cycle without context linkage: <paths>; explicit context.spec_path required` and exit non-zero (fail-closed). When `COMMIT_STEP7_TRACE=1`, also emit `STEP7_UNLINKED_SPEC: task-id=${TASK_ID} count=<N> paths=<paths>` to stderr.
+    - If set has exactly one element: print `spec produced this cycle but not linked in context: <path>` (the finding stays visible; no spec update is dispatched for an unlinked spec). When `COMMIT_STEP7_TRACE=1`, also emit `STEP7_UNLINKED_SPEC: task-id=${TASK_ID} count=1 paths=<path>` to stderr. Route the finding to ba (`artifact_role` of `context-${TASK_ID}.json`: the context lacks `spec_path` linkage), then rerun this selection under the R15 progress test.
+    - If set has multiple elements: print `multiple specs produced this cycle without context linkage: <paths>; explicit context.spec_path required` (no spec update is dispatched). When `COMMIT_STEP7_TRACE=1`, also emit `STEP7_UNLINKED_SPEC: task-id=${TASK_ID} count=<N> paths=<paths>` to stderr. Route the finding to ba exactly as above, then rerun this selection.
 
 **Dispatch payload (when stage 1 or 2 selects a path)**
 
@@ -666,7 +920,7 @@ Follow the ## Continuation-spec mode instructions from ~/.claude/commands/spec-u
 - Output the spec path when done.
 ```
 
-If the Agent dispatch fails for any reason (error, timeout, or exception), print `WARNING: spec-update dispatch failed for task-id=${TASK_ID} — spec not updated` and continue. The commit is already recorded; Step 8 failure does NOT roll back or affect the commit.
+If the Agent dispatch fails for any reason (error, timeout, or exception), retry the identical dispatch (same prompt, same `TASK_ID`/`SPEC_PATH`/`DEV_DOCS_ROOT` substitutions) exactly once. If the retry also fails for any reason, print `WARNING: spec-update dispatch failed for task-id=${TASK_ID} — spec not updated` and continue. The commit is already recorded; neither the initial failure nor an exhausted retry rolls back or affects the commit — Step 8 (including its one retry) runs entirely after the commit has already landed and must never block or delay it.
 
 **Reversal-rationale guidance for changelog-analyst (R9 cross-reference)**: the binding rule that any forward-fix commit which intentionally reverses prior behavior MUST include `Reverses <SHA>: <one-line rationale for why prior reasoning no longer holds>` in the commit-message body lives in `agents/changelog-analyst.md` Phase 6 (the SOLE binding landing). `/commit` orchestrator does NOT enforce the rule directly; changelog-analyst owns commit-message construction and is the contract holder.
 
@@ -708,25 +962,32 @@ Step 3's close-gate validation, never around it.
    `scripts/dev-lifecycle.py`'s `classify_walk_outcome()`):
    - **`hook_deny`** — a `PreToolUse`/`PostToolUse`/`Stop` hook literally
      blocked a tool call during the walk (e.g. `pretool-git-privilege-guard.py`
-     denying an unauthorized commit attempt). **Abort the entire remaining
-     batch immediately** — do not start parent N+1.
-   - **`partial_abort`** — this parent's OWN walk reported
+     denying an unauthorized commit attempt). Pause and report per the
+     Subagent Hook Discipline as an awaiting-input cause (hook rejection
+     pause, addressee human): print the awaiting-input line with the hook's
+     output, record this parent as awaiting input, and continue with the
+     remaining parents (parents are independent). The rejected operation is
+     never retried or bypassed.
+   - **`partial_abort`** (a class name only; it does not abort anything) — this parent's OWN walk reported
      `commit_status = partially_committed` (a partial multi-repository
-     commit within that one parent). **Abort the entire remaining batch**,
-     marking every remaining parent `not_attempted` — a partial commit is a
-     signal that the repository/grant state needs human attention before any
-     further `--auto` parent is attempted.
-   - **`ordinary_reject`** — any other non-success outcome: close-gate
-     failure, `COMMIT: REJECT` from Step 6, a non-retryable
-     changelog-analyst failure. **Record the outcome and continue** to the
-     next parent.
+     commit within that one parent). Continue the remaining repositories of
+     that parent in order under fresh grants (Step 7 `partially_committed`
+     handling); it is not a batch-level class and no later parent is
+     skipped because of it.
+   - **`ordinary_reject`** — a close-gate failure, `COMMIT: REJECT` from
+     Step 6, or a changelog-analyst failure inside this parent's walk. It is
+     routed within that parent's walk per the dispatch-and-recheck loop, the
+     Step 6 verdict routing and the Step 7 failure routing; the walk ends a
+     parent only by landing (or the `--dry-run` preview end state), never by
+     recording the rejection and moving on.
    - **`success`** — `commit_status ∈ {committed, nothing_to_commit,
      push_gate_reconciled, nothing_to_commit_precommitted}`. **Record and
      continue** to the next parent.
 
-4. **Batch summary**: after the batch ends, print one line per attempted
-   parent (`task-id: outcome`) plus a line for every parent that was never
-   attempted because the batch was aborted (`task-id: not_attempted`).
+4. **Batch summary**: the walk ends only when every parent has landed or is
+   awaiting input. Print one line per parent: `task-id: <landed outcome>` or
+   `task-id: awaiting_input` (a parent paused by `hook_deny` or another
+   awaiting-input cause).
 
 Human-operator verification of this mode (QA cannot literally invoke
 `/commit --auto` — `disable-model-invocation: true` plus `settings.json`'s
