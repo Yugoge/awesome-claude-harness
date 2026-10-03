@@ -1,17 +1,19 @@
 # lib
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-09-18T15:24:56Z*
-**Total entries**: 4
+*Last updated: 2026-10-03T02:37:35Z*
+**Total entries**: 6
 **Convention**: kebab
 
 ## Tree
 ```
 lib/
+├── `attribution_adjudicator.py` - PURELY ADDITIVE (Phase C): nothing imports this yet; no consumer is switched
+├── `attribution_aggregate_view.py` - Emits the canonical dev-report document shape that /close and /commit
 ├── `candidate_tree.py` - An acceptance harness usually has to evaluate its criterion against neither the
 ├── `make_sbom.py` - The SBOM is built from the archive's real contents, not from the source
 ├── `release_membership.py` - Single source of truth shared by every consumer, so the archive builder, the
-└── `sibling_loader.py` - ``scripts/close-route-select.py``, ``scripts/late-repair-controller.py`` and
+├── `sibling_loader.py` - ``scripts/close-route-select.py``, ``scripts/late-repair-controller.py`` and
 ```
 <!-- /AUTO:index-stats -->
 
