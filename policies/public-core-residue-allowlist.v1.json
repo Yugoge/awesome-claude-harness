@@ -143,24 +143,10 @@
     },
     {
       "path": "commands/dev.md",
-      "fingerprint": "4e16466daa990b0d",
-      "ordinal": 1,
-      "class": "comment_or_narrative_doc",
-      "rationale": "Orchestrator Prompt Purity (MANDATORY) — prose/comment text; never read as a path at runtime."
-    },
-    {
-      "path": "commands/dev.md",
       "fingerprint": "7d6340d619802e4d",
       "ordinal": 1,
       "class": "comment_or_narrative_doc",
       "rationale": "How the rule is enforced — prose/comment text; never read as a path at runtime."
-    },
-    {
-      "path": "commands/dev.md",
-      "fingerprint": "99bacaf9e98569fd",
-      "ordinal": 1,
-      "class": "comment_or_narrative_doc",
-      "rationale": "Why this rule exists — prose/comment text; never read as a path at runtime."
     },
     {
       "path": "commands/dev.md",

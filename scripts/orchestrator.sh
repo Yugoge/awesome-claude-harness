@@ -259,12 +259,15 @@ clean_inspect() {
 }
 
 # Mode: clean-merge-reports
-# Merges cleanliness and style inspection reports
+# Merges cleanliness, style, and prompt inspection reports
 clean_merge_reports() {
   echo "=== Clean Merge Reports Orchestration ===" >&2
   echo "Context: $CONTEXT_FILE" >&2
 
-  # Validate both reports exist in context
+  # Validate all three reports exist in context -- prompt-inspector is
+  # MANDATORY on every /clean run (commands/clean.md Step 10A), so its
+  # report is required here on the same footing as the other two, not an
+  # optional post-merge patch the orchestrator might forget to apply.
   if ! jq -e '.cleanliness_report' "$CONTEXT_FILE" >/dev/null 2>&1; then
     echo "Error: Missing cleanliness_report in context" >&2
     exit 1
@@ -272,6 +275,11 @@ clean_merge_reports() {
 
   if ! jq -e '.style_report' "$CONTEXT_FILE" >/dev/null 2>&1; then
     echo "Error: Missing style_report in context" >&2
+    exit 1
+  fi
+
+  if ! jq -e '.prompt_report' "$CONTEXT_FILE" >/dev/null 2>&1; then
+    echo "Error: Missing prompt_report in context" >&2
     exit 1
   fi
 
@@ -284,22 +292,27 @@ clean_merge_reports() {
       timestamp: (now | strftime("%Y-%m-%dT%H:%M:%SZ")),
       cleanliness_report: .cleanliness_report,
       style_report: .style_report,
+      prompt_report: .prompt_report,
       combined_summary: {
         total_issues: (
           (.cleanliness_report.summary.total_issues // 0) +
-          (.style_report.summary.violations_found // 0)
+          (.style_report.summary.violations_found // 0) +
+          (.prompt_report.findings // [] | length)
         ),
         critical: (
           (.cleanliness_report.summary.critical // 0) +
-          (.style_report.summary.critical // 0)
+          (.style_report.summary.critical // 0) +
+          (.prompt_report.summary.critical // 0)
         ),
         major: (
           (.cleanliness_report.summary.major // 0) +
-          (.style_report.summary.major // 0)
+          (.style_report.summary.major // 0) +
+          (.prompt_report.summary.major // 0)
         ),
         minor: (
           (.cleanliness_report.summary.minor // 0) +
-          (.style_report.summary.minor // 0)
+          (.style_report.summary.minor // 0) +
+          (.prompt_report.summary.minor // 0)
         )
       }
     }' "$CONTEXT_FILE" > "$COMBINED_OUTPUT"
