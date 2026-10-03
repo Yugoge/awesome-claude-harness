@@ -1,8 +1,8 @@
 # lib
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-09-30T14:32:45Z*
-**Total entries**: 36
+*Last updated: 2026-10-03T03:10:16Z*
+**Total entries**: 37
 **Convention**: kebab
 
 ## Tree
@@ -21,6 +21,7 @@ lib/
 │   └── `shell_lex.py` - Dependency LEAF: imports only the stdlib, references nothing from _core
 ├── `agent_resolver.py` - Refactored from pretool-subagent-code-block.py::_find_agent_type so that
 ├── `allowlist.py` - Single source of truth for grant-read, grant-match, and grant-consume
+├── `attribution_journal.py` - Capture side (used by pretool-attribution-pre.py / posttool-attribution-post.py):
 ├── `bash_context_strip.py` - This is deliberately NOT a full shell parser.  It only computes a conservative
 ├── `bash_write_targets.py` - Provides two public functions used by tool-policy and overnight-hook-guard:
 ├── `capability_state.py` - verdict, and the INDEPENDENT (non-hook-dispatched) preactivation consumer

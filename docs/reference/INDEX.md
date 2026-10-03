@@ -1,14 +1,15 @@
 # reference
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-09-19T17:32:27Z*
-**Total entries**: 34
+*Last updated: 2026-10-03T02:33:12Z*
+**Total entries**: 35
 **Convention**: kebab
 
 ## Tree
 ```
 reference/
 ├── `abandoned-cycles-20260905.md` - Abandoned cycles — terminal determination
+├── `attribution-journal-phase0-facility.md` - Write-time attribution journal — Phase 0 facility notes
 ├── `checkpoint-mechanism.md` - Auto-Commit / Checkpoint Mechanism
 ├── `codex-sandbox-verification.md` - Codex CLI Sandbox Verification Report
 ├── `core-context-refactor-plan.md` - Core Context Refactor Plan (Plan-of-Record)
