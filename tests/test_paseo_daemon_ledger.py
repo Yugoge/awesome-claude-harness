@@ -2063,6 +2063,9 @@ def test_wake_liveness_still_granted_after_rearm(tmp_path):
     record = wake_record(root)
     assert record["last_verdict"] == "on_time"
     assert record["expected_next_fire"] != before_fire
+    # the companion timestamp this call just wrote, surfaced on the SAME
+    # command's own stdout -- not only visible later via wake-status
+    assert out["last_observed_at"] == record["last_observed_at"] == "2026-08-28T13:05:00Z"
 
 
 def test_wake_backward_compatible_legacy_ledger(tmp_path):
@@ -2229,6 +2232,7 @@ def test_watchdog_check_alive_controller_no_stale_inbox_no_escalation(tmp_path):
     assert out["escalation_event_appended"] is False
     assert out["staleness"]["inbox_drain_stale"] is False
     assert out["wake_status"]["stale"] is False
+    assert out["wake_status"]["last_verdict_stale"] is False
     assert out["lease_status"]["held"] is True
     assert escalation_files(root) == []
 
@@ -2242,6 +2246,9 @@ def test_watchdog_check_stale_wake_watermark_escalates(tmp_path):
     assert out["escalation_reasons"] == ["controller_dead_or_stranded"]
     assert out["escalation_event_appended"] is True
     assert len(escalation_files(root)) == 1
+    # consumer-sync for the same companion field cmd_wake_status carries:
+    # this duplicated read path must mirror it exactly, not drift from it.
+    assert out["wake_status"]["last_verdict_stale"] is True
 
 
 def test_watchdog_check_expired_lease_escalates(tmp_path):
@@ -2503,6 +2510,14 @@ def test_fail_open_window_closed_status_only_reads_unhealthy_after_deadline(tmp_
     out = ok(root, "wake-status", now="2026-11-01T06:46:00Z")
     assert out["deadline"] == "2026-11-01T06:45:00Z"
     assert out["stale"] is True
+    # The frozen reading from arm_fall_back_channel's own delivered claim
+    # (05:31Z, long before this 06:46Z read): the output must carry the
+    # verdict's own observation instant AND an explicit flag naming it
+    # stale, so a reader needs no knowledge outside this JSON to avoid
+    # mistaking the old "on_time" for a current reading.
+    assert out["last_verdict"] == "on_time"
+    assert out["last_observed_at"] == "2026-11-01T05:31:00Z"
+    assert out["last_verdict_stale"] is True
 
 
 # ---------------- AC-03: a late delivery no longer exonerates its fire ----------------
@@ -2815,6 +2830,10 @@ def test_prefire_delivery_non_proving_verdict_is_not_on_time(tmp_path):
     assert out["verdict"] != "on_time"
     assert out["verdict"] == "non_proving"
     assert out["missed_fires"] == 0
+    # the companion timestamp is carried through UNCHANGED (never observed
+    # yet here), never backfilled with this claim's own instant -- that
+    # would manufacture the exact proof of life M9 above refuses to grant.
+    assert out["last_observed_at"] is None
 
 
 def test_prefire_delivery_non_proving_watermark_does_not_advance(tmp_path):

@@ -1990,6 +1990,11 @@ def cmd_wake_observe(args, root, now):
             "ok": True, "verdict": "non_proving", "missed_fires": 0,
             "needs_rearm": bool(record.get("needs_rearm")) or state != "trusted",
             "expected_next_fire": record["expected_next_fire"],
+            # This claim changed no health-bearing field (see M9 above), so
+            # last_observed_at here is the PRIOR real observation, not this
+            # call -- carried through unchanged to keep this surface's key
+            # set identical to the resolving print below.
+            "last_observed_at": record["last_observed_at"],
             "inbox_event_id": None, "trust_state": state, "trust_reason": reason}))
         return
     # ONE miss rule for delivered and undelivered observations alike: every
@@ -2080,6 +2085,10 @@ def cmd_wake_observe(args, root, now):
                       # documented loop must re-arm on it too.
                       "needs_rearm": needs_rearm or state != "trusted",
                       "expected_next_fire": record["expected_next_fire"],
+                      # The instant THIS call just wrote -- pairs with
+                      # "verdict" so a logged copy of this line is never
+                      # read, out of context, as a claim about the present.
+                      "last_observed_at": record["last_observed_at"],
                       "inbox_event_id": event_id,
                       "trust_state": state, "trust_reason": reason}))
 
@@ -2103,17 +2112,25 @@ def cmd_wake_status(args, root, now):
     slack = timedelta(minutes=config.get("wake_slack_minutes", 15))
     expected = parse_aware(record["expected_next_fire"], "wake.expected_next_fire")
     state, reason = wake_trust_state(record, now)
+    # stale stays exactly 'now > expected_next_fire + wake_slack'.
+    # Overloading it with untrustedness would make a late-but-trusted
+    # channel indistinguishable from a punctual-but-unproven one.
+    stale = now > expected + slack
     print(json.dumps({
         **record,
         "armed": True,
-        # stale stays exactly 'now > expected_next_fire + wake_slack'.
-        # Overloading it with untrustedness would make a late-but-trusted
-        # channel indistinguishable from a punctual-but-unproven one.
-        "stale": now > expected + slack,
+        "stale": stale,
         "deadline": iso(expected + slack),
         "needs_rearm": bool(record.get("needs_rearm")) or state != "trusted",
         "trust_state": state,
         "trust_reason": reason,
+        # last_verdict only ever advances inside wake-observe, in lockstep
+        # with expected_next_fire -- so this read-only surface going past
+        # the deadline on its OWN watermark means last_verdict (and its
+        # last_observed_at companion) are exactly as stale. Named on
+        # last_verdict directly so a reader never has to already know that
+        # "stale" above governs the verdict's currency too.
+        "last_verdict_stale": stale,
     }))
 
 
@@ -2170,14 +2187,20 @@ def cmd_watchdog_check(args, root, now):
         slack = timedelta(minutes=config.get("wake_slack_minutes", 15))
         expected = parse_aware(wake_record["expected_next_fire"], "wake.expected_next_fire")
         trust_state, trust_reason = wake_trust_state(wake_record, now)
+        # Mirrors cmd_wake_status's "last_verdict_stale" companion exactly
+        # (same formula, same reasoning) -- this surface duplicates that
+        # function's read logic deliberately (see docstring above) rather
+        # than importing it, so the mirror is kept by hand too.
+        stale = now > expected + slack
         wake_status = {
             **wake_record,
             "armed": True,
-            "stale": now > expected + slack,
+            "stale": stale,
             "deadline": iso(expected + slack),
             "needs_rearm": bool(wake_record.get("needs_rearm")) or trust_state != "trusted",
             "trust_state": trust_state,
             "trust_reason": trust_reason,
+            "last_verdict_stale": stale,
         }
     else:
         wake_status = {"armed": False}
