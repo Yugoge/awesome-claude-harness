@@ -154,3 +154,29 @@ def test_membership_still_requires_a_report(doc):
     assert "presence in the working tree alone" in window, (
         "the new clause must restate that the tree alone admits nothing, or it reads "
         "as a licence to stage any untracked file")
+
+
+def test_landed_whole_ledger_mechanism_is_retired_by_the_attribution_journal_cutover(doc):
+    """Superseded test (attribution-journal cutover, stage 1 — see
+    docs/reference/attribution-journal-cutover-flip-plan-20261003.md and
+    agents/changelog-analyst.md's "Historical note" paragraphs).
+
+    This test used to pin files_landed_whole's TOCTOU-safe stage-then-verify digest
+    sequence (codex bulk-commit-qa-20260926 finding #4). That mechanism's prose has
+    been replaced: attribution for every whitelisted candidate now reads the
+    write-time attribution journal (ATTRIBUTION_LOG) as the main path, with a
+    best-evidence backup path when the journal has no coverage -- neither path
+    needs a self-reported files_landed_whole digest to prove no unreviewed peer
+    hunk rode in, because the file is always staged whole and the journal (or the
+    disclosed backup basis) explains who wrote it, never a pre-stage/post-stage
+    digest comparison. The TOCTOU property this test pinned is moot once there is
+    no verify-then-stage ordering to get wrong. Same evidence-strength caveat as
+    the module docstring: this pins the prose the model executes, not the runtime
+    behaviour."""
+    assert "Verification is stage-then-verify" not in doc, (
+        "the retired files_landed_whole digest-verify clause is back; it belongs "
+        "to the ledger mechanism this cutover replaced")
+    window = _window(doc, "**Attribution and staging decision", after=3200)
+    assert "ATTRIBUTION_LOG" in window
+    assert "never escalate" in window or "never escalated" in window
+    assert "co_authored_sources" in window

@@ -1,0 +1,172 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "changelog-status.v1",
+  "title": "changelog-analyst structured status output v1",
+  "description": "Validates the JSON payload of the '--- CHANGELOG-ANALYST-STATUS-BEGIN ---' / '--- CHANGELOG-ANALYST-STATUS-END ---' response block (agents/changelog-analyst.md '### Output schema' / '### Structured output sentinel'). This schema is a DESCRIPTION of an already-existing, already-correct output format (lane L7 of spec-20260930-092323) -- it formalizes the prose for obligation-block validation (schemas/obligation.v1.json's response_block artifact kind) and does not change what changelog-analyst emits. additionalProperties false at every level: a drifted/unexpected field is a shape bug worth surfacing, not silently accepted.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["commit_status"],
+  "properties": {
+    "commit_status": {
+      "type": "string",
+      "enum": [
+        "committed",
+        "partially_committed",
+        "nothing_to_commit",
+        "nothing_to_commit_precommitted",
+        "push_gate_reconciled",
+        "failed",
+        "dryrun"
+      ],
+      "description": "The outcome of this dispatch's own commit attempt. /commit Step 7's result-handling table branches on this value verbatim -- see commands/commit.md 'Changelog-analyst result handling and retry protocol'."
+    },
+    "repository_results": {
+      "type": "array",
+      "description": "Mandatory in normal mode (including dryrun, where each planned repository is represented without a commit SHA); may be omitted only in legacy bulk mode, per the prose this schema describes.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["order", "repo_root", "status", "expected_head", "push_gate_written"],
+        "properties": {
+          "order": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Position in the ordered REPOSITORY_PLAN -- the transaction boundary is explicit ordered/non-atomic, so order is load-bearing for reconstructing what happened before a partial failure."
+          },
+          "repo_root": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Canonical (realpath'd) repository root this result describes."
+          },
+          "status": {
+            "type": "string",
+            "enum": ["committed", "nothing_to_commit", "failed", "not_attempted"],
+            "description": "Per-repository outcome -- distinct from the top-level commit_status, which summarizes across all repositories in the plan."
+          },
+          "expected_head": {
+            "type": "string",
+            "description": "The plan SHA this repository's commit grant was bound to; used to detect drift between planning and execution."
+          },
+          "commit_sha": {
+            "type": "string",
+            "description": "Present only when status == committed. Equals the LAST entry in commits[] (see commits[] for the full per-source-group breakdown when more than one commit landed)."
+          },
+          "commits": {
+            "type": "array",
+            "description": "Present (non-empty) only when status == committed. One entry per attribution-source group from agents/changelog-analyst.md's Phase 3 item-0 loop, in commit order -- PRIMARY (this cycle's own, including backup-path candidates) first when present, then one entry per distinct multi-source group. A dispatch with no multi-source candidates still has exactly one entry here (source_key: PRIMARY).",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["commit_sha", "source_key", "sources", "paths"],
+              "properties": {
+                "commit_sha": { "type": "string" },
+                "source_key": {
+                  "type": "string",
+                  "description": "\"PRIMARY\" or the sorted, pipe-joined tuple of every source identifier (ticket/task id or session id) this group's files share."
+                },
+                "sources": {
+                  "type": "array",
+                  "items": { "type": "string" },
+                  "description": "The source identifiers named in source_key, as a list."
+                },
+                "paths": {
+                  "type": "array",
+                  "items": { "type": "string" },
+                  "description": "Repo-relative paths committed in this group."
+                }
+              }
+            }
+          },
+          "push_gate_written": {
+            "type": "boolean",
+            "description": "Whether the push-gate token was written for this repository's new HEAD. /push reads this token; its absence blocks /push even after a successful commit."
+          },
+          "reconciled_commit_sha": {
+            "type": "string",
+            "description": "Present only when commit_status == push_gate_reconciled; equals live HEAD. Verified against live HEAD by the /commit caller before treating the gate as open."
+          },
+          "reconciliation_basis": {
+            "type": "object",
+            "description": "Present only alongside reconciled_commit_sha. The ONLY accepted attribution is commit_event_journal (a PostToolUse-appended journal entry with verified parent linkage) -- a Task-id trailer, file-set overlap, or subject pattern is never authorizing, so this object's shape matters for trust, not just display.",
+            "additionalProperties": false,
+            "properties": {
+              "attribution": {
+                "type": "string",
+                "enum": ["commit_event_journal"]
+              },
+              "task_id": { "type": "string" },
+              "resulting_head": { "type": "string" },
+              "parent_head": { "type": "string" },
+              "created_at": { "type": "string" },
+              "corroboration": {
+                "type": "string",
+                "description": "Optional, explicitly NON-authorizing observations -- attribution comes from the journal entry fields above, never from this field."
+              }
+            }
+          },
+          "push_gate_reconciliation_declined": {
+            "type": "string",
+            "description": "Present when a tokenless HEAD could not be attributed to this task/session and reconciliation was therefore declined; names the reason (e.g. no_journal_entry)."
+          },
+          "failure_code": {
+            "type": "string",
+            "description": "Present only when status == failed. Drives /commit's retryable-vs-non-retryable branch."
+          },
+          "failure_reason": {
+            "type": "string",
+            "description": "Present only when status == failed. Human-readable detail paired with failure_code."
+          }
+        }
+      }
+    },
+    "remaining_repos": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Canonical paths of repositories not yet attempted; non-empty only when commit_status == partially_committed. /commit never retries these automatically."
+    },
+    "auto_bulk_commits": {
+      "type": "array",
+      "description": "Present (and non-empty) only when commit_status == nothing_to_commit_precommitted -- the changes were already landed by a prior auto-bulk commit this dispatch discovered rather than created.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["repo_root", "branch", "sha"],
+        "properties": {
+          "repo_root": { "type": "string" },
+          "branch": { "type": "string" },
+          "sha": { "type": "string" }
+        }
+      }
+    },
+    "failure_reason": {
+      "type": "string",
+      "description": "Top-level, human-readable failure summary; present for commit_status in {failed, partially_committed}."
+    },
+    "failure_code": {
+      "type": "string",
+      "description": "Top-level failure code; present for commit_status in {failed, partially_committed}. For partially_committed this duplicates the first failed repository result for simple consumers that do not walk repository_results[]."
+    },
+    "baseline_check": {
+      "type": "object",
+      "description": "Required by the charter's 'Requirement Baseline and Scope Authority' section (agents/changelog-analyst.md, top). Optional here (not in required[]) because it predates this field and /commit's dispatch carries no requirement document for most invocations -- see agents/changelog-analyst.md's note on when verdict is necessarily not_provided.",
+      "additionalProperties": false,
+      "required": ["verdict"],
+      "properties": {
+        "verdict": {
+          "type": "string",
+          "enum": [
+            "consistent",
+            "not_provided",
+            "baseline_contradiction",
+            "coupled_issues_merge_requested",
+            "recurring_mechanism_failure"
+          ]
+        },
+        "evidence": {
+          "type": "string",
+          "description": "Cited evidence (file:line or document section) for any verdict other than consistent/not_provided."
+        }
+      }
+    }
+  }
+}

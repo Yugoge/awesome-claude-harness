@@ -53,6 +53,28 @@ worktree with every owned range reverted to its recorded `old_string` yields byt
 BYTE-IDENTICAL to the pre-edit snapshot. Any unattributed byte change must occupy
 either owned bytes (caught by the byte-match check) or non-owned bytes (caught by
 the cross-check) -> EXCLUDE. There is no fail-open path.
+
+Session-private index (scripts/lib/session_index.py / scripts/session-index.py):
+this script never names or imports either -- it needs no code of its own to honor
+one. Every git invocation here goes through `_git()`, which passes its `env`
+argument straight to `subprocess.run` and defaults to `None`, which means "inherit
+this process's environment" (Python subprocess semantics), and git's own
+`--git-path index` resolution (used internally, e.g. by `_temporary_index()`)
+already honors `$GIT_INDEX_FILE` (verified directly: `GIT_INDEX_FILE=/tmp/x git
+rev-parse --git-path index` prints `/tmp/x`, not `.git/index`). So a caller that
+exports `GIT_INDEX_FILE` before invoking this script as a subprocess -- exactly
+what `agents/changelog-analyst.md`'s Phase 3 does via
+`eval "$(session-index.py init ...)"` before it ever calls this script -- gets
+every `add`/`rm`/`show :path`/`diff --cached` call in this file transparently
+redirected to that private index, with zero special-casing here. Adding an
+explicit session-index.py call inside this script would be redundant with (and
+could conflict with) the caller's own `init`/`export`/`sync-shared` lifecycle, and
+would break callers (tests, `--dry-run` probes) that legitimately invoke this
+script against the ordinary shared index with no private index ever seeded. If a
+future caller needs this script to use the shared index deliberately even when
+`GIT_INDEX_FILE` happens to be set in its environment, unset it before invoking --
+this script has no flag for that override and should not grow one that duplicates
+what the environment already expresses.
 """
 
 import argparse
