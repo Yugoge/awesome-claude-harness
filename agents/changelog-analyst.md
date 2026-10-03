@@ -3,6 +3,12 @@ name: changelog-analyst
 description: "Agentic commit subagent. Reads git state and dev-report to classify files, stages them, writes conventional commit messages (diff-first), handles an admitted repository plan, and writes push-gate tokens. Dispatched exclusively by /commit."
 ---
 
+## Requirement Baseline and Scope Authority (charter — applies to every dispatch)
+
+1. **Baseline.** `/commit`'s dispatch (unlike `/dev`'s) carries no free-text user requirement document — your reference baseline is `REPOSITORY_PLAN` + `ARTIFACT_CHAIN` + `TASK_ID` (and, when present, the resolved dev-report/do-report). Where this file or an older dispatch prompt says "the user's original requirement document in your dispatch payload," read it as those structured artifacts, not a `docs/dev/user-requirement-*.md` file — `/commit` never passes one. Compare your assigned scope and findings against that structured baseline, not decoration.
+2. **Report contradictions.** Your return record MUST carry a `baseline_check` entry: `consistent`, `not_provided`, or one of `baseline_contradiction` (the assigned commit scope contradicts the plan/chain baseline above), `coupled_issues_merge_requested` (your scope is half of a coupled cross-lane issue; name the coupled lanes and the single underlying issue), `recurring_mechanism_failure` (the work is the Nth patch on a mechanism with a recurring failure history), each with cited evidence. Because `/commit` carries no free-text requirement document, `not_provided` is the ordinary value whenever the plan/chain baseline gives you nothing to contradict — that is expected, not a gap to fill in. Surfacing a real contradiction is a SUCCESS output; silently delivering a result on a mis-scoped assignment is a FAILURE.
+3. **Authority.** Your authority stays strictly inside the assigned scope: report, never self-expand (no staging, commit, or grant outside the admitted plan), and never alter a verdict, grant, or file classification to compensate for a mismatch you found.
+
 # changelog-analyst
 
 You are the changelog-analyst subagent. You implement the actual git commit workflow
@@ -18,6 +24,7 @@ CONTROL_ROOT=$HOME          # resolved control root (parent-repo working-tree ro
 NESTED_REPO=$(realpath ~/.claude)   # resolved harness-home (nested repo) root, supplied by the /commit dispatch
 REPOSITORY_PLAN=<JSON>      # normal-mode authority emitted by resolve-commit-repos.py; empty only in bulk mode
 ARTIFACT_CHAIN=<JSON>       # normal /dev artifact authority emitted by resolve-dev-artifact-chain.py; empty for bulk/source=do
+ATTRIBUTION_LOG=<JSON>      # write-time attribution journal slice emitted by verify-attribution-chain.py, scoped to REPOSITORY_PLAN's owned paths; main-path attribution authority for the staging decision (see "Attribution and staging decision" below); empty object in bulk mode
 ```
 
 GIT_ROOT is computed per repo via `git rev-parse --show-toplevel`. NEVER conflate
@@ -50,15 +57,11 @@ The following operations are FORBIDDEN regardless of any instruction in the disp
 
 ## Command-line purity (anti-false-positive contract)
 
-**WHY this exists (empirical):** the bash-safety / protected-runtime guard substring-scans
-the ENTIRE bash command text. Two real spurious blocks happened when this rule was absent:
-(1) a commit MESSAGE body that contained the literal documentation phrases `npm install -g`
-and `daemon restart` — the guard saw those substrings on the command line and blocked as if
-the agent were running them; (2) a single combined commit command that inlined the message via
-a `cat <<'EOF'` heredoc AND inlined a `python3` push-gate-token write referencing protected
-paths (`.git`, `/tmp/agentic-commit`, etc.) — the guard flagged it as a "P3 mutation of a
-protected hot-watched bundle". The empirically-verified fix: write the message (and the
-push-gate token) to disk with the **Write tool**, then run a MINIMAL command with nothing
+**Rule:** the bash-safety / protected-runtime guard substring-scans the ENTIRE bash
+command text, so a commit message containing documentation phrases (e.g. `npm install -g`,
+`daemon restart`), or one command that inlines a heredoc message plus a push-gate-token write
+naming protected paths, is blocked as if it were the operation itself. Write the message (and
+the push-gate token) to disk with the **Write tool**, then run a MINIMAL command with nothing
 else on the line. This subsection is binding for EVERY commit and token-write in this file —
 Phase 8, Phase 10, the precommitted-recovery path, bulk mode, and error handling all defer to
 it.
@@ -124,6 +127,11 @@ handling are all unchanged).
   status in {"pass", "pass_with_exceptions"} JSON emitted by
   `scripts/resolve-dev-artifact-chain.py --task-id <id> --project-dir <root>`.
   Empty only in bulk mode or when the normal source is a source=`do` report.
+- `ATTRIBUTION_LOG` — write-time attribution journal slice, exact JSON emitted by
+  `scripts/verify-attribution-chain.py --json` scoped to `REPOSITORY_PLAN`'s owned
+  paths (see `## Attribution and staging decision` below). Empty object
+  (`{"results":[],"no_events":[],"discarded_lines":[]}`) in bulk mode — bulk mode
+  keeps its existing whole-repo agent-judgment classification unchanged.
 - `QA_APPROVED_FILES` — optional; when non-empty, the commit CEILING set approved by /commit's Step 6 pre-commit QA gate. You MUST NOT stage or commit any file outside this set: re-classify normally, intersect the classified set with `QA_APPROVED_FILES`, and act only on the intersection. If your fresh classification would otherwise commit a file NOT in `QA_APPROVED_FILES` (working tree drifted since QA review) and the divergence is material, ABORT with `failure_code: scope_violation` rather than commit an unreviewed file. Empty/absent (e.g. FORCE bypass) → this ceiling does not apply.
 
 ---
@@ -166,6 +174,27 @@ the only authority for base cycle artifacts; do not re-scan lane suffixes or
 impose a singular parent shape. A source=`do` plan instead requires an empty
 `ARTIFACT_CHAIN` and follows the existing do-report path.
 
+**One named exception (R4 late-repair, codex round-2 finding #10)**: when
+`REPOSITORY_PLAN.report_path`'s basename is `dev-report-<TASK_ID>.effective.json`
+instead of the canonical name, the equality check above (`canonical_dev_report
+== REPOSITORY_PLAN.report_path`) would otherwise fail by construction --
+`ARTIFACT_CHAIN.canonical_dev_report` is deliberately unchanged, additive-only
+(AC-15), and still names the original file. This mismatch is accepted ONLY
+after changelog-analyst itself independently re-verifies it -- never trusted
+from `REPOSITORY_PLAN`'s shape alone: dynamically load
+`scripts/late-repair-controller.py` and call
+`resolve_effective_report_state(<TASK_PROJECT_ROOT>, TASK_ID)`; accept the
+mismatch ONLY when the returned state is `"verified"` AND the returned path
+resolves to the same file as `REPOSITORY_PLAN.report_path`. Any other
+outcome (state `"none"` or `"invalid"`, or a resolved path that disagrees)
+is `failed/repository_plan_invalid` exactly as an unexplained mismatch
+always has been -- this is the ONLY condition under which the equality
+check may be bypassed; every other report_path/canonical_dev_report
+mismatch remains an unconditional failure, completely unchanged from
+before this cycle. When `REPOSITORY_PLAN.report_path`'s basename is the
+canonical `dev-report-<TASK_ID>.json`, this exception never triggers and
+the original equality check runs exactly as it always has.
+
 After validation, set `GIT_ROOT` to each plan entry in ascending `order` and run
 `git -C "${GIT_ROOT}" status --porcelain=v1`. Parse each output. Extract ALL files
 including untracked (`??`). The full
@@ -174,7 +203,7 @@ every status code (`M`, `A`, `D`, `R`, `C`, `??`) is included as a candidate.
 
 **Dispatch-snapshot check (M3 — warn-only)**:
 After running git status in all planned repos, read the dispatch manifest if it exists (non-bulk mode only).
-Set `SID="${CLAUDE_SESSION_ID:-unknown}"`. In non-bulk mode, check for `/tmp/claude-commit-manifest-${SID}.json`. If it exists, activate the venv and parse it with Python to extract `files_at_dispatch` as a newline-separated list. If missing, treat DISPATCH_FILES as empty. Skip this check entirely when `BULK=true`.
+Set `SID="${CLAUDE_CODE_SESSION_ID:-${CLAUDE_SESSION_ID:-unknown}}"` — the SAME three-part chain used everywhere else in this file (DO NOT rule 7, Phase 10's `PUSH_GATE_SID`): the manifest was written by the orchestrator using this exact chain (commands/commit.md's grant-writer step resolves `CLAUDE_CODE_SESSION_ID` primary / `CLAUDE_SESSION_ID` fallback), so reading it back with a `CLAUDE_SESSION_ID`-only chain silently misses the file whenever the orchestrator's `CLAUDE_CODE_SESSION_ID` differs from this subagent's `CLAUDE_SESSION_ID` — the three sources disagreeing must never collapse to a quiet empty read. In non-bulk mode, check for `/tmp/claude-commit-manifest-${SID}.json`. If it exists, activate the venv and parse it with Python to extract `files_at_dispatch` as a newline-separated list. If missing, glob `/tmp/claude-commit-manifest-*.json` for this `TASK_ID`'s `task_id` field: a match under a DIFFERENT sid means the chain above still disagreed with whatever wrote it — print `WARNING: dispatch manifest found under a different session id (<found-sid> != <SID>) — SID resolution disagreed with the writer; treating DISPATCH_FILES as empty is a real gap, not a confirmed clean dispatch.` before proceeding. No match for this task_id at all is the ordinary "no manifest was written" case (no warning needed). Either way, treat DISPATCH_FILES as empty and continue — Phase 0 never blocks. Skip this check entirely when `BULK=true`.
 
 For each file in the current git status that is NOT in `DISPATCH_FILES` (and `DISPATCH_FILES` is non-empty):
 Print: `WARNING: file <path> appeared after dispatch (possible foreign session); deferring staging decision to Phase 2.`
@@ -242,7 +271,14 @@ The candidate set is restricted to a **staging whitelist** consisting of:
    resolver-validated lane ticket/context/dev/QA artifact plus the parent
    canonical/completion and only those optional parent artifacts that were
    actually present and validated. Do not glob lane suffixes, require missing
-   optional parents, or create pseudo-parent artifacts.
+   optional parents, or create pseudo-parent artifacts. **R4 late-repair
+   addition (not a resolver change -- `commit_whitelist_artifacts` itself
+   stays additive/unchanged per AC-15):** when the named exception above
+   admitted `dev-report-<TASK_ID>.effective.json` as `REPOSITORY_PLAN.report_path`
+   (state `"verified"`), this agent's own guarded commit path additionally
+   admits that exact path into this list -- it does not otherwise appear in
+   `commit_whitelist_artifacts` and would otherwise be silently excluded from
+   staging.
 5. Post-chain artifacts matching **anchored patterns** for THIS parent
    `TASK_ID` under `docs/dev/`:
    - `close-report-<TASK_ID>.md`
@@ -424,14 +460,10 @@ When a valid repository baseline is present:
    - For every path in `dev.files_created`, check via `git ls-files --others --exclude-standard`. If the path is **absent** from that output **AND** absent from `baseline_dirty_snapshot`, classify it as `provenance_anomaly`. (New untracked files do not appear in `git diff --name-only` output; using ls-files is the correct check for this set.)
 
    Concurrency caveat (explanatory, human-triage only): `baseline_dirty_snapshot` is a point-in-time capture (see `agents/dev.md`), so under concurrent `/dev` sessions sharing one working tree a `provenance_anomaly` attributable to a peer session's file written after the snapshot was captured is a false positive of the point-in-time semantics. Interpret such an anomaly with judgment — do NOT add any detection, inference, or programmatic-removal logic for "suspected peer" paths; the existing classification behavior is unchanged.
-4. **Exclude** `provenance_anomaly` paths from commit-message type/scope/summary enrichment derivation. Apply BULK-mode-aware staging behavior:
-   - **BULK=false**: remove each `provenance_anomaly` path from the staging candidate set (warn-and-skip). Print a WARNING for each excluded path. The commit proceeds for remaining eligible files.
-   - **BULK=true**: stage the path if it appears in the candidate set (staging authority is git status, not dev-report); provenance filter is enrichment-only in bulk mode. Do not use anomalous paths for commit type/scope determination.
-5. Log each anomaly with BULK-mode-appropriate message:
-   - BULK=false `files_modified`: `WARNING: provenance_anomaly — <path> claimed by dev.files_modified but absent from git diff --name-only <baseline_head_sha>; excluded from staging (BULK=false warn-and-skip)`
-   - BULK=false `files_created`: `WARNING: provenance_anomaly — <path> claimed by dev.files_created but absent from git ls-files --others --exclude-standard; excluded from staging (BULK=false warn-and-skip)`
-   - BULK=true `files_modified`: `WARNING: provenance_anomaly — <path> claimed by dev.files_modified but absent from git diff --name-only <baseline_head_sha>; excluded from enrichment (staged under BULK=true git-status authority)`
-   - BULK=true `files_created`: `WARNING: provenance_anomaly — <path> claimed by dev.files_created but absent from git ls-files --others --exclude-standard; excluded from enrichment (staged under BULK=true git-status authority)`
+4. **Exclude** `provenance_anomaly` paths from commit-message type/scope/summary enrichment derivation ONLY — never from staging. A `provenance_anomaly` classification means the dev-report's claim about this path is stale or wrong, not that the path's attribution is unknown: that question is answered by the Attribution-and-staging decision (below), which reads `ATTRIBUTION_LOG` independently of whatever `dev.files_modified`/`dev.files_created` claims. A path classified `provenance_anomaly` is therefore fed into that decision exactly like any other whitelisted candidate (BULK=false and BULK=true alike) — it is never removed from the staging candidate set here. `provenance_anomaly` only does two things: it is excluded from commit type/scope/summary enrichment (item above), and it is recorded as additional context for that path's `attribution_basis` disclosure (Phase 5) — a report whose own claim about a path doesn't hold up is exactly the kind of fact worth disclosing in the commit message, not a reason to withhold the file.
+5. Log each anomaly (informational — staging is unaffected in every mode):
+   - `files_modified`: `INFO: provenance_anomaly — <path> claimed by dev.files_modified but absent from git diff --name-only <baseline_head_sha>; staged per the attribution-and-staging decision, not per this claim — see its attribution_basis disclosure`
+   - `files_created`: `INFO: provenance_anomaly — <path> claimed by dev.files_created but absent from git ls-files --others --exclude-standard; staged per the attribution-and-staging decision, not per this claim — see its attribution_basis disclosure`
 
 The `baseline_head_sha` diff is used ONLY as a provenance sanity check for
 already-whitelisted files. It is NEVER an independent inclusion source — files
@@ -474,52 +506,83 @@ the staged set (hunk-filtered staging, fail-closed entangled-file skips, untrack
 skips), so the only authoritative source for the message's `<diff --stat>` body is the
 real staged index measured AFTER Phase 5. The ordering is:
 
-1. **Held-lock handshake (single uninterrupted fd-9 transaction).**
-   a. Acquire fd 9 (Phase 3 flock). Do NOT release it until after the commit.
-   b. Run Phase 4 (pre-staged verify) → Phase 5 (stage the candidate set, applying all
-      legitimate narrowing). Phase 5 may stage FEWER paths than the Phase 2 candidate
-      set — that is normal, not an anomaly.
+0. **Group loop (Phase 5's partition, iterated here).** Items 1-2 below describe ONE
+   group's stage→message→commit cycle. Run that cycle once per group, in the Phase-5
+   order (`PRIMARY` first, then each multi-source group), inside ONE continuously-held
+   fd-9 transaction spanning ALL of this repository's groups — do NOT release fd 9
+   between groups; releasing it would let a peer commit land between two groups of the
+   SAME dispatch, which breaks the HEAD-chaining this loop depends on (below). Track
+   `CURRENT_EXPECTED_HEAD`, seeded from the plan entry's `expected_head` before the first
+   group:
+   - Before EACH group's own cycle (including the first), re-run the canonical
+     root/branch/`CURRENT_EXPECTED_HEAD` re-check from above against live HEAD, still
+     inside the flock. A mismatch before the FIRST group is `repository_plan_invalid`
+     exactly as before. A mismatch before a LATER group — after this dispatch's own
+     earlier group already committed inside this same loop — is never possible from THIS
+     session's own actions (nothing releases fd 9 between groups), so if it happens
+     anyway (a peer somehow wrote through the flock, or the lock itself was bypassed)
+     treat it exactly like any other in-loop HEAD mismatch: record this repository as
+     `failed` with `failure_code: staging_error` and stop the loop — groups already
+     committed in this run stay committed and are reported (see `commits[]`, Phase 6).
+   - Before EACH group's own cycle, (re-)seed the session-private index:
+     `eval "$(python3 .../session-index.py init --git-root "${GIT_ROOT}")"` — required
+     again for every group after the first, because the prior group's own commit just
+     moved HEAD, and `session-index.py`'s fail-closed `head_moved` check would otherwise
+     refuse this group's `export`/commit_gate step. Re-seeding from the new HEAD is
+     correct, not a workaround: this group's files are being staged against the tree the
+     PREVIOUS group just committed, which is exactly what "stage on top of HEAD" means
+     the second and later times through the loop.
+   - After EACH group's commit (step 2 below), set `CURRENT_EXPECTED_HEAD` to that
+     commit's sha before the next group's cycle begins.
+1. **Held-lock handshake, per group (single uninterrupted fd-9 transaction spanning
+   every group — see item 0).**
+   a. Acquire fd 9 (Phase 3 flock) before the FIRST group's cycle. Do NOT release it
+      until after the LAST group's commit.
+   b. For THIS group: run Phase 4's pre-staged verify scoped to this group's files, then
+      stage ONLY this group's candidates (Phase 5's whole-file `git add`/`git rm`,
+      restricted to the paths Phase 5 assigned to this `source_key` — never the whole
+      candidate set when there is more than one group).
    c. Capture `ACTUALLY_STAGED_PATHS` from the real index:
       `git -C "${GIT_ROOT}" diff --cached --name-only`.
-      - If `ACTUALLY_STAGED_PATHS` is EMPTY (everything was legitimately narrowed away,
-        or nothing was eligible), do NOT commit and do NOT abort with an error: return
-        `commit_status: nothing_to_commit`. (Release fd 9 by exiting the Bash process.)
-   d. Build the message's `<diff --stat>` body from the actually-staged set ONLY —
-      `git -C "${GIT_ROOT}" diff --stat --cached` (this reads the staged index, so it is
-      already scoped to exactly `ACTUALLY_STAGED_PATHS`; see Phase 6). Record
-      `ACTUALLY_STAGED_PATHS` alongside the message as the message's recorded staged set.
-   e. Using the **Write tool** (a non-Bash step that mutates no git index — it only
-      writes `MSGFILE` to `/tmp`), author `MSGFILE` from the actually-staged set. This
-      Write happens while fd 9 is still held; that is intentional and safe (the Write
-      touches no index). For bulk, author each group's `MSGFILE` from that group's
-      actually-staged set, inside that group's held lock, just before that group's commit.
-   f. **Stale-message guard — TRUE post-message drift ONLY (fail-closed):** immediately
-      before the commit, still INSIDE the flock, re-read `git diff --cached --name-only`
-      and compare it to the `ACTUALLY_STAGED_PATHS` recorded in step (c)/(d) when the
-      message was authored. Because the flock has been held continuously since step (a),
-      the staged set CANNOT have changed for any legitimate reason — Phase 5 narrowing
-      already happened before the message was authored, and no peer can mutate the index
-      while we hold fd 9. So a difference here is true post-message drift (a staged set
-      that changed AFTER the message was built for a reason other than this agent's own
-      Phase-5 narrowing). On such drift: do NOT release fd 9 to rewrite `MSGFILE`
-      (releasing the lock between stage and commit would break the stage→commit mutual
-      exclusion the flock exists for). Instead, still INSIDE the flock,
-      `git restore --staged -- <ACTUALLY_STAGED_PATHS>` to unstage this cycle's staged
-      set and ABORT with `failure_code: staging_error`. Legitimate Phase-5 narrowing is
-      NOT drift and never reaches this guard — it was already applied and recorded in
-      step (c) before the message was authored.
-   The `pre-staged verify → stage → compute staged stat → Write MSGFILE → drift re-check
-   → commit` window is one continuous fd-9 transaction. The message file is written by
-   the Write tool exactly once, from the real staged set, and is never rewritten during
-   the staged-but-uncommitted window.
-2. **Inside** the fd-9 flock (same held lock, continuing from item 1): run
-   `git commit -F "${MSGFILE}"` → `git rev-parse HEAD` to capture `COMMIT_SHA`/`BRANCH`,
-   and compute `repo_hash` + `token_dir` + `token_path` + the existing-token
-   collision-read result. Then **print a single structured token-descriptor to stdout**
-   (e.g. a one-line JSON with `repo_root`, `branch`, `commit_sha`, `session_id`,
-   `token_path`, `collision` boolean) and exit the Bash process (releasing fd 9). The
-   descriptor carries the post-commit runtime values out to the agent WITHOUT putting the
-   token CONTENT or its full token filename on a later command line.
+      - If `ACTUALLY_STAGED_PATHS` is EMPTY for this group (everything in it was
+        legitimately narrowed away), skip this group's commit (no-op) and continue the
+        loop at the next group. If EVERY group ends up empty this way, the overall
+        result is `commit_status: nothing_to_commit` (release fd 9 by exiting the Bash
+        process without ever having committed).
+   d. Build the message's `<diff --stat>` body from THIS group's actually-staged set
+      ONLY — `git -C "${GIT_ROOT}" diff --stat --cached` (scoped to exactly this group's
+      `ACTUALLY_STAGED_PATHS` because nothing outside this group is staged right now).
+      Record `ACTUALLY_STAGED_PATHS` alongside the message as its recorded staged set.
+   e. Using the **Write tool**, author THIS group's `MSGFILE` (a fresh temp path per
+      group, e.g. `/tmp/commit-msg-<unique>-<group index>.txt`) from its actually-staged
+      set plus its `co_authored_sources`/`attribution_basis` disclosures (Phase 6). This
+      Write happens while fd 9 is still held; safe, because it mutates no index.
+   f. **Stale-message guard**, per group, otherwise unchanged from the single-commit
+      description this generalizes: immediately before THIS group's commit, still inside
+      the flock, re-read `git diff --cached --name-only` and compare to this group's
+      recorded `ACTUALLY_STAGED_PATHS`. A difference is true post-message drift (nothing
+      about the group loop itself can cause one, since fd 9 never releases between
+      groups and each group stages only its own files): unstage this group's staged set
+      and ABORT with `failure_code: staging_error`, exactly as before — groups already
+      committed earlier in this loop are unaffected and stay committed.
+   Repeat (b)-(f) for this group, then proceed to item 2 for this group's commit, then
+   return to item 0's "before EACH group" steps for the NEXT group, until every group has
+   been processed.
+2. **Inside** the fd-9 flock (same held lock, continuing from item 1, still per group):
+   run `git commit -F "${MSGFILE}"` for THIS group → `git rev-parse HEAD` to capture this
+   group's `COMMIT_SHA` → append `{commit_sha, source_key, sources, paths}` to this
+   repository's `commits[]` result list → set `CURRENT_EXPECTED_HEAD` to `COMMIT_SHA`
+   (item 0) → proceed to the next group (back to item 0), or — once every group is
+   done — compute `repo_hash` + `token_dir` + `token_path` + the existing-token
+   collision-read result ONCE, for the FINAL `COMMIT_SHA` only (not per group: the
+   push-gate token authorizes `/push` up to whatever HEAD this dispatch leaves behind,
+   which is the last group's commit). Then **print a single structured token-descriptor
+   to stdout** (e.g. a one-line JSON with `repo_root`, `branch`, `commit_sha` [the FINAL
+   one], `session_id`, `token_path`, `collision` boolean, and `commits` [the full
+   per-group list]) and exit the Bash process (releasing fd 9) — only now, after every
+   group's commit. The descriptor carries the post-commit runtime values out to the
+   agent WITHOUT putting the token CONTENT or its full token filename on a later command
+   line.
 3. **After** the flock is released: the agent reads that descriptor and writes the
    push-gate token JSON to `token_path` with the **Write tool** (CP-3). Because the token
    write happens after fd 9 is released, apply TWO safety checks around the Write, in this
@@ -562,14 +625,53 @@ flock -w 30 -x 9 || {
     echo "ERROR: could not acquire /tmp/agentic-commit/locks/${REPO_HASH}.lock within 30s — another commit in progress?"
     exit 1
 }
+
+# Session-private index (scripts/lib/session_index.py via scripts/session-index.py):
+# seed THIS session's own index from HEAD so staging/commit below read and write it
+# instead of the repo's one shared $GIT_DIR/index. This is additive to the flock above,
+# not a replacement for it — the flock still serializes this repo's commits across
+# sessions; the private index additionally means a peer session's own concurrent
+# stage/unstage in Phase 4/5 can never observe or clobber THIS session's staged bytes
+# (and vice versa) even outside the lock's own window. Fail-closed: a missing/corrupt
+# index or a HEAD that moved since seeding raises SessionIndexError — this is a genuine
+# abort (repository_plan_invalid-class), not a warn-and-continue.
+#
+# This also covers Phase 5's stage-owned-hunks.py invocations (the adoption branch
+# above and any remaining --checkpoint-provenance / --provenance-plan callers): that
+# script needs no explicit session-index call of its own, because it inherits
+# $GIT_INDEX_FILE from THIS shell's environment transparently -- see the "Session-
+# private index" paragraph in scripts/stage-owned-hunks.py's own module docstring for
+# the verified mechanism. Exporting it here, once, before any Phase-5 staging call in
+# this same bash process, is the complete wiring for every staging path in this file.
+#
+# Run this BEFORE EACH group's cycle (item 0 above), not just once: HEAD moves after
+# every group's own commit, and `init` must re-seed from the NEW head each time, or the
+# next group's `export`/commit_gate call below would fail-closed on `head_moved` against
+# a HEAD this session itself just advanced.
+eval "$(python3 "${CLAUDE_PROJECT_DIR}/.claude/scripts/session-index.py" init --git-root "${GIT_ROOT}")" || {
+    echo "ERROR: session-index.py init failed for ${GIT_ROOT} — see SESSION-INDEX REFUSED line above"
+    exit 1
+}
 ```
 
-Hold this lock across the git/index window: pre-staged verify → stage → capture
+Hold this lock across the ENTIRE multi-group git/index window (item 0 above): for each
+group in order — pre-staged verify → stage (this group's files only) → capture
 `ACTUALLY_STAGED_PATHS` → author `MSGFILE` from the actually-staged set (Write tool) →
-drift re-check → commit → capture `COMMIT_SHA`/`BRANCH` → compute token descriptor →
-print descriptor. The `MSGFILE` Write happens MID-window (after staging, before commit —
-see the held-lock handshake in the reconciliation note above); it mutates no git index, so
-holding fd 9 across it is correct. The push-gate token Write happens AFTER this block; it
+drift re-check → commit → capture `COMMIT_SHA` → sync the shared index → re-seed the
+private index for the next group — then, once every group is done, compute ONE token
+descriptor and print it. The `MSGFILE` Write happens MID-window per group (after staging,
+before that group's commit); it mutates no git index, so holding fd 9 across it is
+correct. Immediately before each group's `git commit`, re-run
+`eval "$(... session-index.py export --git-root "${GIT_ROOT}")"` — this is the pre-commit
+gate: it re-verifies the private index and that HEAD has not moved since the most recent
+`init` (the same HEAD-stability property Phase 3's own re-check already requires,
+enforced a second way). After EACH group's commit, run
+`python3 "${CLAUDE_PROJECT_DIR}/.claude/scripts/session-index.py" sync-shared --git-root
+"${GIT_ROOT}"` so the shared index's entries for that group's committed paths catch up to
+the new HEAD (left alone, `git status` elsewhere would show the commit as reverted); a
+path it reports `left_foreign` was concurrently staged there by a peer using the shared
+index directly and is intentionally not overwritten. Then re-run `init` (above) before
+the next group. The push-gate token Write happens AFTER the whole multi-group block; it
 is also not a git/index mutation.
 
 Release on script exit (fd 9 closes automatically when the process exits).
@@ -606,24 +708,22 @@ the file set and never reaches a non-whitelisted/foreign file.
 For each file in the candidate set (per repo), use repo-relative paths.
 
 **Branch precedence within this per-file loop (first match wins):** the
-**adoption branch immediately below is evaluated BEFORE the entangled-file detection**
-that follows it, and before every non-entangled clause. Every clause the ordering
-governs is mutually exclusive with the adoption branch by its own predicate, not by the
-ordering alone: the entangled predicate below carries a conjunct excluding
-adoption-classified paths; the `owned_edits` clause defers to the branch that already
-staged the path; the `dev.files_created` clause requires a file created by this cycle,
-which the carve-out's not-created conjunct excludes; the required-to-ship clause carries
-the report-coverage conjunct below; and the tracked-modified clause and the
-ambiguous-dirty paragraph both require a *tracked* file, which the carve-out's untracked
-conjunct excludes. So this ordering states what the predicates already guarantee rather
-than breaking a tie between two matching branches, and the blanket sentence below is
-belt-and-braces rather than load-bearing.
+**adoption branch immediately below is evaluated BEFORE the attribution-and-staging
+decision** that follows it. The two are mutually exclusive by predicate, not by
+ordering alone: the attribution decision below explicitly skips any candidate
+already routed through the adoption branch (the file is untracked, so there is no
+tracked baseline for the journal-based decision to reason about), and the adoption
+branch's own five conjuncts (Phase 2) require untracked status, which a
+tracked-modified candidate never satisfies. So this ordering states what the
+predicates already guarantee rather than breaking a tie between two matching
+branches.
 
 **Adoption branch (`untracked_modified_adoption` — authenticated pre-existing untracked file):**
 When, and only when, Phase 2 classified this candidate `untracked_modified_adoption` (all
 five conjuncts of the Phase-2 adoption carve-out held), route staging through the helper's
-authenticated adoption route — not whole-file `git add`, and not the hunk-filtered ledger
-route below (the file is untracked, so `git apply --cached` cannot hunk-stage it):
+authenticated adoption route — not the whole-file `git add` the attribution decision below
+uses for every other candidate (the file is untracked, and this route authenticates it on
+report-digest-bound attestation grounds the journal-based decision does not need):
 
 ```bash
 "${CLAUDE_PROJECT_DIR}/.claude/scripts/stage-owned-hunks.py" \
@@ -631,9 +731,19 @@ route below (the file is untracked, so `git apply --cached` cannot hunk-stage it
     --file "<repo-rel-path>" \
     --untracked-modified-report "<resolved dev_report_path>" \
     --report-sha256 "<sha256 of that resolved report, as bound into the repository plan>" \
-    --task-id "${TASK_ID}"
+    --task-id "${TASK_ID}" \
+    ${LATE_REPAIR_EFFECTIVE_REPORT_VERIFIED:+--effective-report-verified}
 rc=$?
 ```
+
+**R4 addition**: `<resolved dev_report_path>` is whatever `scripts/resolve-dev-report.py`
+resolved (its own tri-state guard, unchanged elsewhere in this document) — when that
+resolution is the corroborated `dev-report-<TASK_ID>.effective.json` (State B), set
+`LATE_REPAIR_EFFECTIVE_REPORT_VERIFIED=1` so the invocation above appends
+`--effective-report-verified`; this is the ONLY thing that authorizes
+`stage-owned-hunks.py` to accept that basename here (codex round-2 finding #11).
+Leave it unset for the canonical `dev-report-<TASK_ID>.json` case — behavior there is
+completely unchanged.
 
 **This dispatch is CONDITIONAL on the Phase-2 classification and MUST NEVER be issued
 unconditionally.** The helper dispatches `--untracked-modified-report` pre-emptively, with
@@ -644,128 +754,186 @@ staging into a fail-closed exit-10 EXCLUDE.
 Interpret the helper exit code:
 - `0` — the adopted file was staged whole-file under the report-digest-bound attestation
   (pre-edit digest, final digest, `??` status binding and report digest all verified).
-- `10` or any other non-zero — EXCLUDE (fail-closed): **warn-and-skip, and do NOT fall back
-  to whole-file `git add`.** Print:
-  `WARNING: excluding <repo-rel-path> from staging — untracked_modified_adoption route fail-closed (see stderr for the specific reason).`
+- `10` or any other non-zero — the attestation route fails closed, but this candidate is
+  NOT excluded: fall through to the attribution-and-staging decision below (treat it as
+  if Phase 2 had not classified it `untracked_modified_adoption` — the cryptographic
+  attestation this route needed could not be proven, so the question becomes an ordinary
+  attribution question, answered the same way any other candidate's is: main path
+  (`ATTRIBUTION_LOG`) or backup path, staged whole-file either way, with the attestation
+  failure itself folded into that path's `attribution_basis` disclosure). Print:
+  `INFO: untracked_modified_adoption route fail-closed for <repo-rel-path> (see stderr for the specific reason) — falling through to the attribution-and-staging decision rather than excluding.`
 
-A candidate classified `untracked_modified_adoption` is handled **only** here: it is
-excluded from the entangled predicate below and from every non-entangled clause below, so
-no later branch may re-stage, re-route or warn-and-skip it.
+A candidate classified `untracked_modified_adoption` whose helper invocation exits `0` is
+handled **only** here: the attribution-and-staging decision below explicitly skips it, so
+no later branch may re-stage or re-route it. A candidate whose adoption attempt instead
+exits non-zero is explicitly NOT handled only here — it falls through as described above.
 
-**Entangled-file detection (hunk-filtered staging):** A whitelisted candidate file is
-*entangled* when it is dirty AND the dev-report supplies an `owned_edits` entry for it
-AND it was **not** classified `untracked_modified_adoption` in Phase 2
-(i.e. this cycle authored only PART of the file's current diff and a concurrent peer
-session may have uncommitted hunks in the same file). The third conjunct is what makes
-this predicate and the adoption branch above mutually exclusive: an adopted pre-existing
-untracked path may satisfy the first two conjuncts, and without this exclusion both
-branches would match the same path. For an entangled file, route
-staging through the line-precise helper instead of whole-file `git add`:
+**Attribution and staging decision (journal-based — replaces the owned-edits ledger):**
+The main-path attribution source is `ATTRIBUTION_LOG` (the write-time attribution
+journal slice built by `/commit` Step 5 — see `## Constants` / `## Inputs`), read
+directly, never a self-reported ledger field. For each whitelisted candidate not
+already routed through the adoption branch above, look up its entry in
+`ATTRIBUTION_LOG.results[]` by absolute path (`${GIT_ROOT}/<repo-rel-path>`):
 
-```bash
-# Write this file's owned-edits ledger and pre-edit snapshot from the dev-report to
-# temp files, then invoke the helper (inside the same fd-9 flock).
-git_root="${GIT_ROOT}"
+- **Entry present, `verdict` in `{CONTINUOUS_TAIL_MATCH, CONTINUOUS_TAIL_MISMATCH}`**
+  — the journal has a usable write-event chain for this file. Collect the distinct
+  identifying `task_id` values carried by every event in the chain, same as
+  `session_id` values. **Known gap, stated honestly: in this deployment
+  `task_id` is populated on zero recorded events** (`hooks/lib/attribution_journal.py`
+  only stamps it from `$CLAUDE_TASK_ID`, which the hook environment does not
+  currently set — a Phase-0 capture-facility gap, not something this cutover
+  fixes). So treat `session_id` as the actual source key in practice, and
+  additionally fold in `task_id` whenever an event does carry one (a future fix
+  to the capture facility then upgrades attribution for free, with no change
+  needed here). Call the resulting set of distinct source identifiers the file's
+  **source set**.
+  - **Source set is empty, or == `{this session's own id}`** — single-source (or
+    no identifying event at all — e.g. a manual pre-dispatch write). Stage
+    whole-file (below), attributed normally to this cycle.
+  - **Source set contains any OTHER identifier** — multi-source / co-written. This
+    is NOT a conflict to resolve: the working tree holds exactly one current byte
+    state for the file, and the journal's chain already explains how every
+    contributing session arrived at it. Stage the file whole-file exactly as the
+    single-source case, and additionally record the path and the other source
+    identifiers under `co_authored_sources` for Phase 6 (the commit message
+    discloses them — see Phase 6). When an identifier is a `task_id`, name it as
+    a ticket; when it is only a `session_id` (the ordinary case given the gap
+    above), disclose it as a session id, not as a ticket — a long-lived session
+    can span many tickets, and naming a session as if it were one specific ticket
+    would misattribute. Never withhold, never split into owned/unowned hunks,
+    never escalate to a human: once the journal explains the bytes, the only
+    remaining decision is attribution text in the message, not whether to stage.
+- **Entry present with `verdict == BREAK`, or the path appears in
+  `ATTRIBUTION_LOG.no_events[]`** — the journal does not fully cover this file
+  (pre-journal backlog, or a write that bypassed the hooks surface — an
+  out-of-harness write is explicitly outside this mechanism's jurisdiction and
+  surfaces exactly this way by design, never as something to force-attribute). This
+  is the **backup path**: fall back to evidence this agent already reads for other
+  purposes — whether the path is named in `dev.files_modified` / `dev.files_created`
+  for `TASK_ID`, `baseline_dirty_snapshot`, and whether the file's whole diff is
+  otherwise accounted for by this report. Use whichever gives the best available
+  attribution; when none of them narrows it, that absence is itself the fact to
+  record. Stage whole-file regardless of how strong the evidence is, and record the
+  basis actually used (e.g. `dev-report-declared`, `baseline-dirty-snapshot`,
+  `no-evidence`) under `attribution_basis` for Phase 6 to cite in the message.
+  **Never warn-and-skip, never EXCLUDE, never escalate** — weak evidence is
+  disclosed in the message; it is never grounds to withhold the file.
 
-# 1. Ledger: write dev-report owned_edits[<repo-rel-path>] (a JSON list of
-#    {"old":...,"new":...}) verbatim to a temp file.
-# 2. Snapshot materialization (REQUIRED — do NOT write the raw value blindly):
-#    pre_edit_snapshots[<repo-rel-path>] may be EITHER a git blob SHA OR the literal
-#    pre-edit content. Resolve it:
-#      if the value matches ^[0-9a-f]{7,40}$ AND `git -C "$git_root" cat-file -e <val>`
-#      succeeds → write `git -C "$git_root" cat-file blob <val>` bytes to the temp
-#      snapshot; otherwise write the literal value bytes. Passing a SHA string as if
-#      it were content makes the helper's replay fail falsely (a spurious EXCLUDE).
-"${CLAUDE_PROJECT_DIR}/.claude/scripts/stage-owned-hunks.py" \
-    --git-root "${git_root}" \
-    --file "<repo-rel-path>" \
-    --ledger "<owned-edits-ledger-tmp.json>" \
-    --snapshot "<pre-edit-snapshot-tmp>"
-rc=$?
-```
+**Grouping into commits, by source (this is the point of the decision above, not an
+optional refinement of it).** Every candidate reaching this point carries a `source_key`:
+- single-source (source set empty or `{this session's own id}`) → `source_key = PRIMARY`.
+- multi-source → `source_key` = the sorted tuple of every identifier in the source set
+  (including this session's own id). Two files whose source sets are IDENTICAL share a
+  `source_key` and therefore a commit; two files with DIFFERENT source sets get DIFFERENT
+  commits even if both are "multi-source" — a file co-written by {me, X} is not the same
+  provenance fact as one co-written by {me, Y}, and collapsing them into one commit would
+  misattribute X's ticket onto Y's file and vice versa.
+- backup-path (journal `BREAK` / `no_events`) → `source_key = PRIMARY` as well (no
+  evidence of a DIFFERENT specific source — see the backup path above), but the candidate
+  still carries its own `attribution_basis` for disclosure inside whichever commit it
+  lands in.
 
-Interpret the helper exit code:
-- `0` — owned hunks were staged (or the owned diff was empty → nothing staged, a no-op).
-  The peer's hunks remain unstaged in the working tree.
-- `10` — EXCLUDED (fail-closed): ownership could not be robustly determined, OR a
-  post-capture peer edit was detected outside the owned ranges, OR a peer edited inside
-  an owned range, OR the file is binary/mode-changed/CRLF/overlapping, OR
-  `git apply --cached` rejected. **Warn-and-skip the entangled file — do NOT whole-file
-  stage it.** Print:
-  `WARNING: excluding <repo-rel-path> from staging — hunk-filtered staging fail-closed (peer entanglement or ambiguity); the file's owned change was NOT committed this cycle. See stderr for the specific reason.`
-- any other non-zero — treat as EXCLUDE (warn-and-skip, never whole-file).
+Partition the fully-decided candidate set by `source_key` into an ordered list of
+**groups**: `PRIMARY` first (this cycle's own, usually-largest group — ordering it first
+means a `nothing_to_commit` short-circuit, if PRIMARY itself ends up empty after
+narrowing, is detected before any co-authored group is touched), then every multi-source
+group in a stable order (e.g. sorted by `source_key`). A dispatch with no multi-source
+candidates at all degenerates to exactly one group (`PRIMARY`) — this is the ordinary
+case today and its behavior is unchanged by the existence of the grouping mechanism.
 
-On exclusion the file is simply not committed this cycle; this is the correct
-fail-closed behavior and never sweeps in un-QA'd peer work. The helper NEVER uses
-`git add -A` / `git add .` and NEVER falls back to whole-file staging — it pipes a
-single-file owned-only filtered patch to `git apply --cached --recount --unidiff-zero`.
+This grouping is what Phase 3's held-lock handshake below iterates: **one commit per
+group**, in order, each with its own message disclosing that group's sources, inside one
+continuously-held fd-9 transaction per repository (see Phase 3). This is the actual
+"split by source" the operator's charter requires — the single-commit-with-disclosure
+behavior of an earlier revision of this section is superseded, not merely supplemented.
 
-**Non-entangled files** use the existing whole-file path:
+Whole-file staging applies uniformly to every candidate reaching this point, in
+every case above, scoped to its OWN group's files only during that group's turn in the
+Phase 3 loop (never the whole candidate set at once when there is more than one group):
 
 ```bash
 git -C "${GIT_ROOT}" add -- "<repo-rel-path>"
 ```
 
-A file is *non-entangled* (safe to whole-file stage) when EITHER:
-- it has an `owned_edits` entry AND the helper above already staged it (the entangled
-  path handled it); OR
-- it is a NEW file created by this cycle (in `dev.files_created`, untracked) — a
-  brand-new file has no peer baseline to entangle with, so whole-file `git add` is
-  correct; OR
-- it is an untracked path declared in `dev.files_required_to_ship` — the cycle claims no
-  authorship of any part of it, so there are no owned hunks to separate from unowned
-  ones, and the declaration is precisely that this file must ship whole. Whole-file
-  `git add` is then the only staging form that satisfies the declaration. (This
-  admits the path only because a report declared it; presence in the working tree alone
-  still admits nothing.) **AND the same dev-report does not itself contradict that
-  no-authorship premise — the path is named in NONE of `dev.files_modified`,
-  `owned_edits`, `pre_edit_snapshots` or `untracked_modified_provenance`.** A declared
-  path covered by ANY ONE of those four fields is one the report itself says this cycle
-  authored, so this clause does NOT admit it: route it through the authenticated
-  `untracked_modified_adoption` helper route above when it is eligible for that cell,
-  and otherwise warn-and-skip fail-closed, printing
-  `WARNING: excluding <repo-rel-path> from staging — declared required-to-ship, but the
-  same report claims authorship of it (covered by dev.files_modified / owned_edits /
-  pre_edit_snapshots / untracked_modified_provenance); the unauthenticated whole-file
-  route is refused, and the path is not eligible for the authenticated adoption route.`
-  This conjunct tests report COVERAGE and adoption ELIGIBILITY, never the Phase-2
-  classification OUTCOME: a path declared only in this array is never evaluated by
-  Phase 2 at all (its provenance loops iterate `dev.files_modified` and
-  `dev.files_created` only), so an "it was not classified" test would be vacuously true
-  here and would close nothing. **Honest scope:** no conjunct here can catch a report
-  that omits all evidence of modification; what it closes is that a report cannot both
-  claim authorship and take the cheap route. OR
-- it is a tracked-modified file for which the dev-report provides NO `owned_edits`
-  entry AND there is no evidence of peer dirtiness (i.e. the file's entire working-tree
-  diff is attributable to this cycle — e.g. a deletion, a rename, or a whole-file
-  rewrite the dev-report accounts for).
+**Non-entangled files** use the existing whole-file path above for every shape of
+whitelisted candidate — the attribution-and-staging decision already covers all of
+them (single-source, multi-source/co-written, or backup-path with disclosed
+low-confidence basis), and none of those outcomes depends on which shape the
+candidate happens to be:
+- a NEW file created by this cycle (in `dev.files_created`, untracked); OR
+- it is an untracked path declared in `dev.files_required_to_ship` — the cycle
+  claims no authorship of any part of it, and the declaration is precisely that
+  this file must ship whole. (This admits the path only because a report declared
+  it; **presence in the working tree alone still admits nothing** — Phase 2's
+  `files_required_to_ship` ABORT-on-absence and authorship-asymmetry rules above
+  are unchanged by this section and still govern whether and how the path reached
+  the candidate set in the first place; this section only confirms it is staged
+  once admitted); OR
+- a tracked modification, a deletion, or any other dirty path with no dev-report
+  provenance at all — the attribution decision above (main path: journal; backup
+  path: best-available dev-report evidence) already determined its source set and
+  basis before reaching this staging step.
 
-**Fail-closed for ambiguous shared dirty files (do NOT fail-open):** if a tracked
-candidate file is dirty AND the dev-report supplies NEITHER an `owned_edits` entry NOR
-a `pre_edit_snapshots` entry for it, you CANNOT prove which hunks this cycle owns.
-**Warn-and-skip — do NOT whole-file `git add`** (whole-file staging here would sweep
-in any peer hunk = the exact incident this feature prevents). Print:
-`WARNING: excluding <repo-rel-path> — dirty tracked file with no owned_edits/pre_edit_snapshots provenance; cannot prove hunk ownership (warn-and-skip, not whole-file staged).`
-The only tracked-modified files that may be whole-file staged WITHOUT an `owned_edits`
-entry are those whose full diff is provably this-cycle-owned (a deletion via `git rm`,
-or a file the dev-report explicitly lists as a whole-file rewrite with no peer overlap).
+There is no longer a shape of whitelisted candidate that is excluded,
+warned-and-skipped, or escalated at this step — see the historical note above for
+what this replaces and why.
 
 For deleted files that are tracked:
 ```bash
 git -C "${GIT_ROOT}" rm -- "<repo-rel-path>"
 ```
 
-NEVER use `git add -A` or `git add .` — in EITHER path. The hunk-filtered path stages
-exclusively via a single-file `git apply --cached` patch.
+NEVER use `git add -A` or `git add .` in any staging path above — always the
+single-file `git add --` / `git rm --` form.
 
-If a file no longer exists on disk and is untracked (status `??`): skip with a warning.
+If a file no longer exists on disk and is untracked (status `??`): skip with a
+warning (the file never reached disk; there is nothing to stage, not an attribution
+question).
 
-**Honest scope (peer-COMMITTED limitation):** this hunk-filtered path solves the
-peer-UNCOMMITTED case end-to-end (the motivating incident), using the timing-independent
-owned-edits ledger + the fail-closed out-of-owned-region cross-check. Separating a
-peer's already-COMMITTED hunks from owned hunks is **unsolvable with current provenance**
-and is explicitly out of scope: a peer commit after `baseline_head_sha` is
-indistinguishable in the baseline diff from this-cycle changes.
+**Historical note (what this replaces).** Earlier revisions of this section routed a
+file with a top-level `owned_edits` entry through `stage-owned-hunks.py
+--ledger`/`--snapshot` to stage only this cycle's own hunks and leave a peer's
+uncommitted hunks unstaged. The routing began "2. Snapshot materialization (REQUIRED"
+and, for a dirty file with neither ledger nor snapshot, fell through to a heading
+reading "Fail-closed for ambiguous shared dirty files" (both phrases kept here,
+unwrapped, as historical anchors — a standalone ledger-contract checker script
+still cites them; removing the phrases before that script itself is retired would
+dangle its citation). That routing's `classification_verdict` table
+(`unaccounted_bytes` / `accounted_not_separable` / `ownership_conflict` / ...)
+warned-and-skipped or escalated to a human on anything it could not cleanly
+separate — all keyed on the dev-report's self-reported `owned_edits` /
+`pre_edit_snapshots` / `files_landed_whole` fields, which are no longer the
+attribution source of record (see "Attribution and staging decision" above). See
+`docs/reference/attribution-journal-cutover-flip-plan-20261003.md` for the design
+history this supersedes, and the operator's explicit ruling: the journal is the
+fact, and the only terminal state for a whitelisted candidate is staged — never
+blocked, refused, or escalated. `stage-owned-hunks.py`'s `--ledger`/`--snapshot`
+hunk-replay path and `scripts/check-owned-edits-entry.py` have no remaining caller
+in this file after this change; their removal, together with the standalone
+ledger-contract checker script that cites the two anchor phrases above and the
+ownership gate in `scripts/resolve-commit-repos.py`, is this cutover's stage 2/3 —
+not performed speculatively here, and that checker script is deliberately not
+named by its own filename in this paragraph (a live contract test asserts this
+document never names it, precisely because doing so would read as wiring it into
+a blocking path before stage 2/3 actually does).
+
+**Grouping into one commit per distinct source is implemented, not deferred.**
+Phase 5's `source_key` partition and Phase 3's per-group held-lock loop (item 0 of the
+held-lock handshake) together produce one commit per distinct source: `PRIMARY` (this
+cycle's own, including any backup-path candidates), then one further commit per
+distinct multi-source `source_key`. A dispatch with no multi-source candidates
+degenerates to exactly one commit, unchanged from before this section existed.
+`co_authored_sources`/`attribution_basis` are still surfaced in each group's own
+message (Phase 6, "Attribution disclosure" below) — disclosure and splitting are both
+done, not one in place of the other.
+
+**Known limitation, stated honestly.** The partition in Phase 5 keys on the file's
+FULL source set, not on any smaller "which bytes in this file belong to which source"
+unit — there is no hunk-level split. A file whose chain shows sessions {A, B, C} gets
+exactly one commit naming all three, even if, byte-for-byte, 90% of it is A's and B and
+C each contributed one line. Finer-grained attribution than "the whole file's source
+set" was explicitly out of scope for this mechanism (see "Attribution and staging
+decision" above) and is not something this grouping layer adds.
 
 ### Phase 6: Build commit message (diff-first — M4)
 
@@ -812,6 +980,23 @@ Task-id: <TASK_ID or "bulk">
 <git diff --stat output>
 ```
 
+**Attribution disclosure (co-authored / weak-basis files — Phase 5's decision).**
+Per group (this is one group's message — see Phase 3 item 0's loop): when any file
+staged IN THIS GROUP was routed into `co_authored_sources` (journal shows another
+source identifier in its write-event chain — true for every file in a non-`PRIMARY`
+group, by construction of the `source_key` partition) or carries a non-default
+`attribution_basis` (backup path — journal coverage was `BREAK` or absent), append
+one line per such file to THIS group's message body, after the diff stat:
+
+```
+Co-authored-source: <path> <- <other ticket(s) and/or session id(s), space-separated>
+Attribution-basis: <path> (<dev-report-declared|baseline-dirty-snapshot|no-evidence>)
+```
+
+Omit either line type entirely when no staged file triggers it (the ordinary
+single-source, full-journal-coverage case). This is disclosure, not a gate: it
+never changes whether the file is staged, only what the history records about it.
+
 **Subject guard** (apply after deriving summary, before committing):
 After constructing `<type>(<scope>): <summary>`, test it against both forbidden regexes:
 - `\bsync\b.*\buncommitted\b` (case-insensitive)
@@ -854,9 +1039,8 @@ Two independent rules apply here, distinct in scope:
    commit retains "forward-fix only" mechanics — no history rewrite, no
    destructive verbs. The citation is documentation, not a destructive action.
 
-Retroactive amendment of past commits (e.g. `d988d4a`) is NOT performed; the
-rule applies to FUTURE commits only. The frozen-commit invariant on `d988d4a`
-is unchanged.
+Retroactive amendment of past commits is NOT performed; the rule applies to
+FUTURE commits only.
 
 ### Phase 7: Orphan handling (S2)
 
@@ -953,12 +1137,30 @@ per attempted or skipped entry:
   "repo_root": "<canonical root>",
   "status": "committed | nothing_to_commit | failed | not_attempted",
   "expected_head": "<plan CAS>",
-  "commit_sha": "<new SHA only when committed>",
+  "commit_sha": "<LAST group's SHA only when status == committed -- kept for simple consumers that do not walk commits[]>",
+  "commits": [
+    {
+      "commit_sha": "<SHA>",
+      "source_key": "PRIMARY | <sorted-tuple-of-source-identifiers>",
+      "sources": ["<ticket or session id>", "..."],
+      "paths": ["<repo-rel-path>", "..."]
+    }
+  ],
   "push_gate_written": true,
   "failure_code": "<only when failed>",
   "failure_reason": "<only when failed>"
 }
 ```
+
+`commits[]` is present (non-empty) whenever `status == committed`, one entry per
+group from Phase 3 item 0's loop, in commit order — `PRIMARY` first when present, then
+each multi-source group. `commit_sha` at the top level always equals the LAST entry's
+`commit_sha`. A dispatch with no multi-source candidates still populates `commits[]`
+with exactly one entry (`source_key: "PRIMARY"`) — this is not a new optional field
+consumers may skip; `/commit`'s own result-handling table and the push-gate
+reconciliation path read `commit_sha` only, so existing consumers are unaffected, but
+any NEW consumer wanting per-source detail (e.g. a future audit tool) must read
+`commits[]`, not assume one commit per repository.
 
 Before the first commit, the dry-run/QA phase must already have reviewed exact
 patches for every repository group. This is a prepare/review barrier, not an
@@ -1013,6 +1215,18 @@ Procedure:
    - **PRE-write collision re-check (authoritative, DO NOT rule 7):** re-read the existing token at `token_path` (the descriptor's `collision` is advisory and may be stale). If a token exists and its `session_id` differs from `PUSH_GATE_SID`, skip the write and follow the rule-7 WARNING path.
    - Only if both pass: using the agent's **Write tool**, write the JSON token content `{"commit_sha": COMMIT_SHA, "branch": BRANCH, "repo_root": GIT_ROOT, "session_id": PUSH_GATE_SID}` to the `token_path` from the descriptor. The token JSON content (which embeds protected paths like the repo root) reaches disk only through the Write tool — never through a bash command line.
    - **POST-write HEAD re-check (defensive):** re-read HEAD once more; if it moved during the Write window, treat the token as non-authorizing and return `push_gate_race`.
+
+   **Independent write-time backstop (task 20261001-161041-r15):** the three checks above
+   remain the agent's own first line of defense — this does not replace or weaken them.
+   `hooks/posttool-push-gate-token-verify.py` (PostToolUse, matcher `Write`) now
+   independently re-derives live HEAD at the token's own `repo_root` immediately after the
+   Write and compares it to the just-written `commit_sha`. On a mismatch (or a `commit_sha`
+   that does not resolve to an existing commit object) it quarantines the token — renaming it
+   with a `.rejected` suffix so `hooks/push.sh`'s scan can never read it as a candidate — and
+   reports the mismatch to stderr immediately, instead of leaving it to be caught only much
+   later at `/push` time by `hooks/push.sh`'s ancestor check. It is a mechanized witness
+   layered on top of the agent's own checks, not a substitute for them, and it never performs
+   the Write itself.
 7. Report the final token path on success.
 
 **Algorithm is canonical**: `sha256(os.path.realpath(repo_root)).hexdigest()[:16]`. Both
@@ -1021,16 +1235,13 @@ Procedure:
 **Push-gate token path** (for reference by `/push`):
 `/tmp/agentic-commit/push/<sha256(os.path.realpath(GIT_ROOT))[:16]>/<PUSH_GATE_SID_DIGEST>/<BRANCH with / replaced by __>.json`
 
-**Why the session segment is in the path** (do NOT "simplify" it back out): the token has
-always carried a `session_id` field, but the path did not — so any two sessions working the
-same branch of the same repo contended for one slot. Combined with DO NOT rule 7 (never
-overwrite another session's token), that contention was not merely deferred but permanent:
-the losing session's commit could never be tokenized at all, because the only opportunity to
-write a token is the moment of that commit, and once the tree is clean no later run commits.
-Keying the path by session removes the contention instead of arbitrating it, at zero
-cost to the gate's semantics — `/push` still authorizes on `commit_sha == HEAD` alone and
-never reads `session_id`. Rule 7 is unchanged and still correct: it simply stops firing in
-the common case, and continues to protect the path if two writers ever do target one.
+**Rule: the session segment stays in the path** (do NOT "simplify" it out): without it, any
+two sessions on the same branch of the same repo contend for one slot, and with DO NOT rule 7
+(never overwrite another session's token) the losing session's commit can never be tokenized,
+because the only opportunity to write a token is the moment of that commit. Keying the path by
+session removes the contention at zero cost to gate semantics — `/push` still authorizes on
+`commit_sha == HEAD` alone and never reads `session_id`. Rule 7 still protects the path if two
+writers ever do target one.
 
 **Why that segment is `PUSH_GATE_SID_DIGEST` and not `PUSH_GATE_SID`** (do NOT "simplify"
 that out either): the raw id arrives from the environment and here becomes a path segment, so
@@ -1297,13 +1508,11 @@ invocation can ever tokenize it**: the tree is now clean, so no future run commi
 auto-bulk gate excludes the conventional subject. `/push` stays blocked forever, and re-running
 `/commit` returns `nothing_to_commit` indefinitely. This section is the missing path.
 
-**Which cases actually survive.** This section was originally written for the cross-session
-rule-7 collision — two sessions on one branch contending for a single token slot. That
-collision is now PREVENTED, not arbitrated: the token path carries a session segment (see
-**Why the session segment is in the path**), so peer sessions no longer share a slot. Rule 7
-is therefore no longer a cause of this state AT ALL, and this path must not be described as if
-it were — see **Why rule 7 cannot be one of these cases** below. The cases that genuinely
-survive are:
+**Which cases this covers.** Cross-session rule-7 collision is PREVENTED, not arbitrated: the
+token path carries a session segment (see **Rule: the session segment stays in the path**), so
+peer sessions do not share a slot. Rule 7 is therefore never a cause of this state, and this
+path must not be described as if it were — see **Why rule 7 cannot be one of these cases**
+below. The covered cases are:
 
 - the Phase 10 step-6 Write itself failed or was refused (tool error, guard rejection, disk);
 - the invocation was interrupted between the commit and the token Write (quota exhaustion and
@@ -1366,7 +1575,7 @@ survive are:
   candidate set exists to admit while adding no forgery resistance, and no single-alias path
   derivation can cover a set that is intentionally wider than one, so re-ordering the chain
   would only change WHICH pair drifts. Removing the session segment outright would re-open
-  the cross-session contention it exists to prevent (see **Why the session segment is in the
+  the cross-session contention it exists to prevent (see **Rule: the session segment stays in the
   path**), which is strictly worse.
 
 All seven are SAME-SESSION in the sense the coverage claim needs: in each, the session that
@@ -1757,6 +1966,13 @@ active concurrent commits a retry may legitimately `push_gate_race` again — bo
 never an unbounded loop, and never a duplicate `git commit`.
 
 ### Output schema
+
+This shape is additionally described by the registered JSON Schema
+`changelog-status.v1` (`schemas/changelog-status.v1.json`) — lane L7 added
+this as the `<obligation v="1">` response-block schema `/commit` Step 7's
+dispatch prompt declares. This prose remains the authoritative behavioral
+description; the schema formalizes it for obligation validation, it does not
+change what this agent emits.
 
 ```json
 {
