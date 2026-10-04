@@ -9,13 +9,13 @@ obligation was instruction-only — nothing compared declared vs. actual at
 runtime, so omissions surfaced only when /close later failed to find the report.
 This gate is the runtime binder.
 
-MODE (env DO_REPORT_GATE_MODE): "advisory" (default) | "block" | "off".
-ADVISORY-FIRST: a buggy blocking Stop hook on the MAIN session traps every
-session exit — worse blast radius than the SubagentStop analogue that taught
-this lesson (subagentstop-cp-enforce.py). Default mode therefore only appends
-would-block records to ~/.claude/logs/do-report-gate-advisory.jsonl; flipping to
-"block" is a separate, deliberate decision made AFTER the advisory log shows
-low false positives.
+MODE (env DO_REPORT_GATE_MODE): "block" (default) | "advisory" | "off".
+ADVISORY-FIRST shipped the gate deliberately conservatively — a buggy blocking
+Stop hook on the MAIN session traps every session exit, worse blast radius
+than the SubagentStop analogue that taught this lesson
+(subagentstop-cp-enforce.py). The advisory log has since shown low false
+positives, so spec-20260930-092323 L5 flips the default to "block"; the
+MAX_BLOCKS deadlock guard below still prevents a true deadlock.
 
 Compliance (all required to allow stop in block mode):
   1. docs/dev/do-report-<task_id>.json exists and parses as a JSON object.
@@ -50,6 +50,9 @@ import os
 import re
 import sys
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from lib.harness_state_dir import harness_state_dir  # noqa: E402
 
 MAX_BLOCKS = 2
 ADVISORY_LOG = Path.home() / ".claude" / "logs" / "do-report-gate-advisory.jsonl"
@@ -121,8 +124,31 @@ def _compliance_problems(report_path: Path, task_id: str) -> list[str]:
     return problems
 
 
+def _consent_flag_path(sid: str) -> Path:
+    return Path(f"{harness_state_dir()}/claude-orchestrator-consent-{sid}.flag")
+
+
+def _clear_do_consent(sid: str) -> None:
+    """Release the /do cycle's orchestrator-gate consent once its do-report
+    has reached a terminal state (here, or via the deadlock-guard force-
+    allow). Without this, hooks/pretool-do-block-subagents.py (and every
+    other reader of this SAME session-level flag: pretool-orchestrator-
+    gate.py, pretool-subagent-enforce.py, pretool-block-background-tasks.py)
+    keep treating the session as "mid-/do-cycle" forever, since nothing else
+    ever clears a flag handle_do_consent only ever sets. That permanently
+    blocked subagent dispatch (including changelog-analyst, so /commit could
+    never run again) in a session that had already finished and reported its
+    /do work -- the exact incident this closes. Best-effort: a failed unlink
+    leaves the pre-existing (stuck) behavior rather than raising through a
+    Stop hook that must never trap the session."""
+    try:
+        _consent_flag_path(sid).unlink()
+    except OSError:
+        pass
+
+
 def _counter_path(sid: str) -> Path:
-    return Path(f"/tmp/claude-do-report-gate-{sid}.json")
+    return Path(f"{harness_state_dir()}/claude-do-report-gate-{sid}.json")
 
 
 def _read_blocks(sid: str, task_id: str) -> int:
@@ -143,8 +169,28 @@ def _write_blocks(sid: str, task_id: str, blocks: int) -> None:
         pass
 
 
+def _rewrite_pending_to_blocked(report_path: Path, task_id: str) -> bool:
+    """Best-effort: when the deadlock guard gives up and the do-report's own
+    status is still 'pending', rewrite it to an honest terminal 'blocked'
+    state instead of leaving it silently pending forever. Never raises."""
+    try:
+        record = json.loads(report_path.read_text(encoding="utf-8"))
+        if not isinstance(record, dict):
+            return False
+        do = record.get("do")
+        if not isinstance(do, dict) or do.get("status") != "pending":
+            return False
+        do["status"] = "blocked"
+        do["summary"] = "session ended without completing the do-report"
+        report_path.write_text(
+            json.dumps(record, ensure_ascii=False, indent=2), encoding="utf-8")
+        return True
+    except Exception:
+        return False
+
+
 def main() -> int:
-    mode = (os.environ.get("DO_REPORT_GATE_MODE", "advisory") or "advisory").strip().lower()
+    mode = (os.environ.get("DO_REPORT_GATE_MODE", "block") or "block").strip().lower()
     if mode == "off":
         return 0
 
@@ -161,7 +207,7 @@ def main() -> int:
     if not sid or not _TASK_ID_RE.match(sid):
         return 0
 
-    sidecar = Path(f"/tmp/claude-do-task-{sid}.json")
+    sidecar = Path(f"{harness_state_dir()}/claude-do-task-{sid}.json")
     if not sidecar.exists():
         return 0  # no /do consent this session — gate is out of scope
     try:
@@ -182,6 +228,7 @@ def main() -> int:
             _counter_path(sid).unlink()
         except OSError:
             pass
+        _clear_do_consent(sid)
         return 0
 
     if mode != "block":
@@ -191,13 +238,21 @@ def main() -> int:
 
     blocks = _read_blocks(sid, task_id)
     if blocks >= MAX_BLOCKS:
+        rewritten = _rewrite_pending_to_blocked(report_path, task_id)
+        # Force-allow is the deadlock breaker: the session is leaving /do
+        # either way, compliant or not, so it must not stay permanently
+        # marked "mid-/do-cycle" -- same rationale as the compliant branch.
+        _clear_do_consent(sid)
         _log_event({"event": "forced_allow", "mode": mode, "session_id": sid,
                     "task_id": task_id, "report": str(report_path),
-                    "blocks": blocks, "problems": problems})
+                    "blocks": blocks, "problems": problems,
+                    "rewrote_pending_to_blocked": rewritten})
         sys.stderr.write(
             f"[do-report-gate] FORCED ALLOW after {blocks} blocks — do-report for task "
-            f"{task_id} is STILL non-compliant ({'; '.join(problems)}). /close will reject "
-            f"this task until the report is completed.\n")
+            f"{task_id} is STILL non-compliant ({'; '.join(problems)})."
+            + (" Status was rewritten from pending to blocked."
+               if rewritten else "")
+            + " /close will reject this task until the report is completed.\n")
         return 0
 
     _write_blocks(sid, task_id, blocks + 1)

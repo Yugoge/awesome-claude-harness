@@ -849,7 +849,32 @@ behavior of an earlier revision of this section is superseded, not merely supple
 
 Whole-file staging applies uniformly to every candidate reaching this point, in
 every case above, scoped to its OWN group's files only during that group's turn in the
-Phase 3 loop (never the whole candidate set at once when there is more than one group):
+Phase 3 loop (never the whole candidate set at once when there is more than one group).
+
+**Guard: a deliberately partially-staged path is never overwritten by the whole-file
+`git add` below.** Before running it for a given candidate, check whether the index
+already holds a deliberate partial stage for that path — staged content differs from
+HEAD, AND the working tree still differs from the index for the same path (there is
+additional, not-yet-staged change sitting on top of what is staged):
+
+```bash
+if git -C "${GIT_ROOT}" diff --cached --name-only -- "<repo-rel-path>" | grep -qx "<repo-rel-path>" && \
+   git -C "${GIT_ROOT}" diff --name-only -- "<repo-rel-path>" | grep -qx "<repo-rel-path>"; then
+  # deliberately partially staged: SKIP the git add below, leave the index as-is,
+  # and run attribution-and-disclosure against whatever IS staged, not the full
+  # working-tree diff.
+  :
+fi
+```
+
+When both checks list the path, skip the `git add` for this path entirely — the index
+is left exactly as it is. This exists because silently overwriting a deliberate partial
+stage is wrong in any circumstance, not specific to any one task: it is the mechanical
+enforcement of the operator's existing "whole-file-by-default, but respect a deliberate
+partial stage when one exists" policy for multi-source files. When the path is NOT in
+`git diff --name-only`'s output (working tree already matches the index, whether or not
+anything is staged) or nothing is staged for it at all, this guard does not fire and the
+whole-file `git add` below proceeds exactly as before:
 
 ```bash
 git -C "${GIT_ROOT}" add -- "<repo-rel-path>"

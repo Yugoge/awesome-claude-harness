@@ -32,10 +32,29 @@ branch, or expected_head no longer match the live git state at commit time
 written by a stale copy of this script) is treated as invalid, never as
 "binding not enforced".
 
+Mint authorization (2026-10-03 self-mint closure): minting used to require
+nothing beyond a resolvable git repo and a --task-id -- any agent could call
+this script directly, mint a grant for the current repo/branch/HEAD, and
+immediately follow it with a bare `git commit` that
+hooks/pretool-git-privilege-guard.py would honor, completely bypassing the
+/commit flow (changelog-analyst, QA, the close gate). `_mint_authorized` now
+requires a LIVE `/commit` user-intent sentinel
+(`<state-dir>/claude-commit-userintent-<sid>.flag`) before minting (not
+before --revoke-only, which only ever narrows authorization). That sentinel
+is written ONLY by prompt-workflow.py's UserPromptSubmit hook
+(`_write_userintent_sentinel`) when a human actually types `/commit` --
+never by this script, and never by any other Bash-reachable path (direct
+forgery of the sentinel file itself is blocked at the Bash layer by
+hooks/pretool-bash-safety.sh Layer 1.E2, mirroring the existing daemon-
+restart and bulk-commit sentinel protections). Checked, not consumed: one
+/commit cycle mints one grant per REPOSITORY_PLAN entry and may re-mint on
+retry (Step 8), all within the same human-initiated invocation.
+
 Exit codes:
   0  success (grant written)
-  2  CLAUDE_SESSION_ID unresolved (neither --sid nor env var supplied), or
-     repo_root/branch/expected_head could not be resolved via git
+  2  CLAUDE_SESSION_ID unresolved (neither --sid nor env var supplied),
+     repo_root/branch/expected_head could not be resolved via git, or no
+     live /commit user-intent sentinel authorizes minting for this session
   argparse-default 2 when --task-id is omitted (handled by argparse)
 """
 
@@ -46,8 +65,15 @@ import secrets
 import stat
 import subprocess
 import sys
+import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+
+# This script lives at <harness home>/scripts/write-commit-grant.py, so the
+# shared hook-runtime-state resolver is at ../hooks/lib (same cross-directory
+# import shape as scripts/break-overnight-lock.py).
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "hooks" / "lib"))
+from harness_state_dir import harness_state_dir  # noqa: E402
 
 # Grant validity window. The privilege guard expires the grant at
 # created_at + GRANT_TTL_MINUTES; do not duplicate this literal at the
@@ -365,6 +391,50 @@ def _resolve_sid(cli_sid: str | None) -> str:
     return env_sid
 
 
+# Window during which a /commit user-intent sentinel authorizes minting.
+# Shares GRANT_TTL_MINUTES rather than a separate literal: a /commit cycle
+# that cannot finish minting within the window the resulting grant would
+# itself be valid for is retried by re-invoking /commit, same failure mode
+# as a grant that expires mid-cycle.
+_USERINTENT_WINDOW_MINUTES = GRANT_TTL_MINUTES
+
+
+def _sentinel_dir() -> str:
+    """Resolve the sentinel root via the single shared `harness_state_dir()`
+    helper (hooks/lib/harness_state_dir.py) -- the SAME resolution the writer,
+    prompt-workflow.py's `_write_userintent_sentinel`, uses. There is no
+    second env var or override layered on top here, so writer and reader
+    agree by construction rather than by two independently-written checks
+    happening to list the same variables in the same order."""
+    return harness_state_dir()
+
+
+def _mint_authorized(sid: str) -> bool:
+    """True iff a live `/commit` user-intent sentinel authorizes minting now.
+
+    The sentinel is written ONLY by prompt-workflow.py's UserPromptSubmit
+    hook when a human types `/commit` -- never by this script, and direct
+    Bash forgery of the file is blocked separately (hooks/pretool-bash-
+    safety.sh Layer 1.E2). Checked by content AND freshness (mtime), never
+    consumed here: a single /commit cycle may call this script several
+    times (one grant per REPOSITORY_PLAN entry, plus Step 8 retries).
+    """
+    path = Path(_sentinel_dir()) / f"claude-commit-userintent-{sid}.flag"
+    try:
+        st = path.stat()
+    except OSError:
+        return False
+    if not stat.S_ISREG(st.st_mode):
+        return False
+    age_minutes = (time.time() - st.st_mtime) / 60.0
+    if age_minutes < 0 or age_minutes > _USERINTENT_WINDOW_MINUTES:
+        return False
+    try:
+        return path.read_text().strip() == "true"
+    except OSError:
+        return False
+
+
 def main(argv: list[str] | None = None) -> int:
     args = _parse_args(sys.argv[1:] if argv is None else argv)
     if not args.task_id.strip():
@@ -386,6 +456,18 @@ def main(argv: list[str] | None = None) -> int:
     # Scoped to current sid to avoid deleting grants for other sessions.
     if args.revoke_existing_for_task:
         _revoke_grants_for_task(args.output_dir, args.revoke_existing_for_task, sid)
+    # Minting (unlike revocation) requires proof that an actual /commit
+    # invocation is in progress for this session -- see _mint_authorized.
+    if not _mint_authorized(sid):
+        print(
+            "Cannot write commit grant: no live /commit user-intent sentinel "
+            f"for session {sid!r}. A commit grant may only be minted from "
+            "within an actual /commit (non-bulk) invocation -- the sentinel "
+            "is written by the UserPromptSubmit hook when a human types "
+            "/commit, and only then. Invoke /commit from a fresh turn.",
+            file=sys.stderr,
+        )
+        return 2
     # Resolve the repo/branch/HEAD binding fields BEFORE writing anything --
     # a grant that cannot establish its own baseline is unusable and must not
     # be written (fail closed, mirroring the SID-resolution failure above).

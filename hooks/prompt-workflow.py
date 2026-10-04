@@ -38,6 +38,11 @@ try:
     import claude_home  # noqa: E402
 except Exception:  # pragma: no cover - fail-soft if lib missing
     claude_home = None  # type: ignore[assignment]
+try:
+    from harness_state_dir import harness_state_dir  # noqa: E402
+except Exception:  # pragma: no cover - fail-soft if lib missing
+    def harness_state_dir() -> str:
+        return "/tmp"
 
 
 def _try_git_toplevel() -> Path | None:
@@ -1400,7 +1405,7 @@ def handle_do_consent(sid: str, user_input: str = "", project_dir: Path | None =
     agent guessed its id via `ls -t /tmp/...consent-*.flag | head -1` (globally
     newest) — which aliased parallel /do sessions onto one id and overwrote each
     other's do-reports."""
-    flag = Path(f"/tmp/claude-orchestrator-consent-{sid}.flag")
+    flag = Path(f"{harness_state_dir()}/claude-orchestrator-consent-{sid}.flag")
     try:
         flag.write_text("true")
         print(f"[/do] Consent granted. Main agent may now perform direct operations this session.")
@@ -1438,7 +1443,7 @@ def _write_userintent_sentinel(cmd_name: str, sid: str) -> None:
     hook) resolve sid from stdin JSON, so sid-keying round-trips correctly.
     Single-use; consumed by the PreToolUse hook before the wrapper runs."""
     try:
-        Path(f"/tmp/claude-{cmd_name}-userintent-{sid}.flag").write_text("true")
+        Path(f"{harness_state_dir()}/claude-{cmd_name}-userintent-{sid}.flag").write_text("true")
     except OSError:
         pass
 

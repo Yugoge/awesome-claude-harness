@@ -7,12 +7,17 @@ INPUT=$(cat)
 
 CLAUDE_HOME="${CLAUDE_HOME:-${HOME}/.claude}"
 CLAUDE_TMPDIR="${CLAUDE_TMPDIR:-${TMPDIR:-/tmp}}"
+# Hook runtime-state root (CLAUDE_STATE_DIR; default /tmp). Fail-soft fallback.
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)/lib/harness_state_dir.sh" 2>/dev/null \
+  || harness_state_dir() { printf '%s\n' /tmp; }
 PYTHON_BIN="${CLAUDE_PYTHON_BIN:-${CLAUDE_HOME}/venv/bin/python}"
 if [ ! -x "$PYTHON_BIN" ]; then
   PYTHON_BIN="${CLAUDE_PYTHON_FALLBACK:-python3}"
 fi
 DAEMON_RESTART_GRANT_DIR="${CLAUDE_DAEMON_RESTART_GRANT_DIR:-${CLAUDE_TMPDIR}}"
 DAEMON_RESTART_SENTINEL_RE="$(printf '%s' "${DAEMON_RESTART_GRANT_DIR%/}/claude-allow-daemon-restart-" | sed 's/[][\\.^$*+?{}|()]/\\&/g')"
+USERINTENT_SENTINEL_DIR="$(harness_state_dir)"
+COMMIT_USERINTENT_SENTINEL_RE="$(printf '%s' "${USERINTENT_SENTINEL_DIR%/}/claude-commit-userintent-" | sed 's/[][\\.^$*+?{}|()]/\\&/g')"
 
 # ── Local service-integration layer — maintainer environment ─────────────────
 # This hook gates REAL docker / systemd / daemon operations on the maintainer's
@@ -360,7 +365,7 @@ check_and_consume_allowlist() {
     2>/dev/null)
   [ -z "$sid" ] && sid="default"
 
-  local flag_file="/tmp/claude-bash-allowlist-${sid}.json"
+  local flag_file; flag_file="$(harness_state_dir)/claude-bash-allowlist-${sid}.json"
   [ ! -f "$flag_file" ] && return 1
 
   # Consolidated consume path: V1 (SIGALRM regex timeout) + V2 (flock atomic read-match-unlink) +
@@ -781,7 +786,7 @@ if [ "$IS_SUBAGENT" != "1" ]; then
 print(d.get('session_id','') or os.environ.get('CLAUDE_SESSION_ID','default'))" \
     2>/dev/null)
   [ -z "$_DO_SID" ] && _DO_SID="default"
-  _DO_FLAG="/tmp/claude-orchestrator-consent-${_DO_SID}.flag"
+  _DO_FLAG="$(harness_state_dir)/claude-orchestrator-consent-${_DO_SID}.flag"
   if [ -f "$_DO_FLAG" ] && [ "$(cat "$_DO_FLAG" 2>/dev/null)" = "true" ]; then
     # Grant exit 1 of 4 — snapshot-or-deny a destructive `git clean` first.
     _preclean_snapshot_guard
@@ -954,6 +959,27 @@ if echo "$COMMAND" | grep -qE "${DAEMON_RESTART_SENTINEL_RE}[A-Za-z0-9_-]+\.flag
   echo "Command: $COMMAND" >&2
   echo "REASON: per c3-20260504-223115, only $DAEMON_RESTART_GRANT_HELPER (run by user from TTY)" >&2
   echo "        may create the grant sentinel." >&2
+  exit 2
+fi
+
+# Layer 1.E2 — commit user-intent sentinel write block: any Bash that
+# creates/edits the /commit mint-authorization flag is forbidden. Mirrors
+# Layer 1.E exactly, scoped to the commit-grant self-mint closure (defect:
+# scripts/write-commit-grant.py accepted ANY caller as authorized to mint a
+# grant that hooks/pretool-git-privilege-guard.py then honored for a bare
+# `git commit`, completely bypassing /commit's changelog-analyst + QA
+# pipeline). The only legitimate writer is prompt-workflow.py's
+# UserPromptSubmit hook (`_write_userintent_sentinel`), fired when a human
+# actually types /commit -- that write happens OUTSIDE any Bash tool call,
+# so this block cannot interfere with it. Without this block, an agent could
+# forge the sentinel's "true" content directly via Bash and defeat the
+# write-commit-grant.py-side freshness/content check it gates.
+# Stable label: commit-userintent-sentinel-write.
+if echo "$COMMAND" | grep -qE "${COMMIT_USERINTENT_SENTINEL_RE}[A-Za-z0-9_-]+\.flag" \
+   && echo "$COMMAND" | grep -qE '(>|>>|tee|cp|mv|ln|touch|cat\s)'; then
+  echo "BLOCKED: commit-userintent-sentinel-write — writing to the /commit mint-authorization sentinel is FORBIDDEN" >&2
+  echo "Command: $COMMAND" >&2
+  echo "REASON: only the UserPromptSubmit hook (fired when a human types /commit) may write this flag." >&2
   exit 2
 fi
 
@@ -2292,7 +2318,7 @@ fi
 if [ "$_GIT_CLEAN_WOULD_BLOCK" = "1" ] && [ "$IS_SUBAGENT" = "1" ]; then
   _GC_SID=$(echo "$INPUT" | "$PYTHON_BIN" -c \
     "import json,sys; d=json.load(sys.stdin); print(d.get('session_id',''))" 2>/dev/null)
-  if [ -n "$_GC_SID" ] && [ -e "/tmp/claude-orchestrator-consent-${_GC_SID}.flag" ]; then
+  if [ -n "$_GC_SID" ] && [ -e "$(harness_state_dir)/claude-orchestrator-consent-${_GC_SID}.flag" ]; then
     _preclean_snapshot_guard
     exit 0
   fi
@@ -2334,7 +2360,7 @@ fi
 if [ "$IS_SUBAGENT" = "1" ]; then
   # /do bypass (2026-04-25): user has explicitly consented via /do — allow subagent history mutation
   SID=$(echo "$INPUT" | "$PYTHON_BIN" -c "import json,sys; d=json.load(sys.stdin); print(d.get('session_id',''))" 2>/dev/null)
-  if [ -n "$SID" ] && [ -e "/tmp/claude-orchestrator-consent-${SID}.flag" ]; then
+  if [ -n "$SID" ] && [ -e "$(harness_state_dir)/claude-orchestrator-consent-${SID}.flag" ]; then
     # Grant exit 4 of 4 — the subagent side of the /do channel. A subagent with
     # /do and no matching sentinel is filtered out of the main /do exit, misses
     # the sentinel exit and is firewalled out of legacy /allow, so it lands here
