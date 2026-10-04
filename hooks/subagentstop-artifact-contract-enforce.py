@@ -267,7 +267,6 @@ LEGACY_FLAG_DIR = "/tmp"  # historical forced-close flag location (read-only)
 WIRE_FILE_TIMEOUT_S = 30
 WIRE_TOTAL_BUDGET_S = 120
 ACK_PREFIX = "ESCALATION_ACK"
-_SHA_REF_RE = re.compile(r"^[0-9a-f]{7,40}$")
 
 
 class _WireTimeout(BaseException):
@@ -388,38 +387,6 @@ def _with_alarm(seconds: float, fn):
         signal.signal(signal.SIGALRM, previous)
 
 
-def _tail(text: str, limit: int = 6) -> list:
-    lines = [ln.rstrip() for ln in (text or "").splitlines() if ln.strip()]
-    return [ln[:300] for ln in lines[-limit:]]
-
-
-def _wire_ledger(report_full: Path, report_rel: str, project_dir: str, no_discover: bool,
-                 timeout: float):
-    argv = [sys.executable, str(SCRIPTS_DIR / "check-owned-edits-ledger.py"),
-            str(report_full), "--git-root", project_dir, "--json"]
-    if no_discover:
-        argv.append("--no-discover")
-    try:
-        proc = subprocess.run(argv, capture_output=True, text=True, timeout=timeout)
-    except subprocess.TimeoutExpired:
-        return [], [_fault("gate_infrastructure_fault", "owned-edits ledger checker timed out", report_rel)]
-    except OSError as exc:
-        return [], [_fault("gate_infrastructure_fault", f"owned-edits ledger checker not runnable: {exc!r}", report_rel)]
-    if proc.returncode == 0:
-        return [], []
-    if proc.returncode == 1:
-        return [{
-            "path": report_rel, "reason": "owned_edits_ledger_violation",
-            "errors": ["rejected by check-owned-edits-ledger.py (consumer: owned-edits ledger checker)"]
-                      + _tail(proc.stdout or proc.stderr),
-        }], []
-    return [], [_fault(
-        "gate_infrastructure_fault",
-        f"check-owned-edits-ledger.py exit {proc.returncode}: " + " | ".join(_tail(proc.stderr or proc.stdout, 3)),
-        report_rel,
-    )]
-
-
 def _wire_trial_plan(report_full: Path, report_rel: str, project_dir: str, task_id: str):
     """Returns (findings, faults, plan_or_None). PlanError of any code (or none)
     is a finding against the producer's report."""
@@ -444,76 +411,6 @@ def _wire_trial_plan(report_full: Path, report_rel: str, project_dir: str, task_
             "errors": [f"/commit would reject this report (consumer: resolve-commit-repos.py build_plan), code={code}: {exc}"],
         }], [], None
     return [], [], plan
-
-
-def _materialize_snapshot(value, git_root: str) -> bytes:
-    if isinstance(value, str) and _SHA_REF_RE.match(value):
-        try:
-            probe = subprocess.run(["git", "-C", git_root, "cat-file", "-e", value],
-                                   capture_output=True, timeout=10)
-            if probe.returncode == 0:
-                blob = subprocess.run(["git", "-C", git_root, "cat-file", "blob", value],
-                                      capture_output=True, timeout=10)
-                if blob.returncode == 0:
-                    return blob.stdout
-        except (OSError, subprocess.TimeoutExpired):
-            pass
-    return (value if isinstance(value, str) else json.dumps(value)).encode("utf-8")
-
-
-def _repo_for_key(plan: dict, project_dir: str, key: str):
-    """(repo_root, repo-relative path) the trial plan assigns ``key`` to."""
-    absolute = os.path.normpath(os.path.join(project_dir, key))
-    for repo in plan.get("repositories", []):
-        root = repo.get("repo_root")
-        if not isinstance(root, str):
-            continue
-        try:
-            rel = os.path.relpath(os.path.realpath(absolute), os.path.realpath(root))
-        except ValueError:
-            continue
-        if rel in repo.get("owned_paths", []):
-            return root, rel
-    return os.path.realpath(project_dir), key
-
-
-def _wire_stager_replay(report: dict, report_rel: str, project_dir: str, plan: dict, deadline: float):
-    owned = report.get("owned_edits")
-    snapshots = report.get("pre_edit_snapshots")
-    findings, faults = [], []
-    if not isinstance(owned, dict) or not isinstance(snapshots, dict):
-        return findings, faults
-    with tempfile.TemporaryDirectory(prefix="l2-replay-") as scratch:
-        for index, key in enumerate(sorted(owned)):
-            if key not in snapshots or not isinstance(owned[key], list):
-                continue  # shape/ledger defects are the ledger checker's finding
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                faults.append(_fault("gate_infrastructure_fault", "stager replay budget exhausted", key))
-                break
-            root, rel = _repo_for_key(plan, project_dir, key)
-            ledger_path = Path(scratch) / f"ledger-{index}.json"
-            snap_path = Path(scratch) / f"snapshot-{index}"
-            ledger_path.write_text(json.dumps(owned[key], ensure_ascii=False), encoding="utf-8")
-            snap_path.write_bytes(_materialize_snapshot(snapshots[key], root))
-            argv = [sys.executable, str(SCRIPTS_DIR / "stage-owned-hunks.py"), "--git-root", root,
-                    "--file", rel, "--ledger", str(ledger_path), "--snapshot", str(snap_path), "--dry-run"]
-            try:
-                proc = subprocess.run(argv, capture_output=True, text=True,
-                                      timeout=min(WIRE_FILE_TIMEOUT_S, remaining))
-            except subprocess.TimeoutExpired:
-                faults.append(_fault("gate_infrastructure_fault", f"stager replay timed out for {key}", key))
-                continue
-            except OSError as exc:
-                faults.append(_fault("gate_infrastructure_fault", f"stager not runnable: {exc!r}", key))
-                continue
-            if proc.returncode != 0:
-                findings.append({
-                    "path": key, "reason": "stager_replay_exclude",
-                    "errors": [f"hunk stager (consumer: stage-owned-hunks.py --dry-run) would EXCLUDE this file, exit {proc.returncode}"]
-                              + _tail(proc.stderr or proc.stdout, 3),
-                })
-    return findings, faults
 
 
 def _load_lib_module(name: str):
@@ -550,9 +447,9 @@ def _wire_ledger_judgment(report: dict, report_rel: str, project_dir: str, task_
     constraint of the follow-up consumer-cutover task): replaces this hook's
     two self-reported-ledger replay checks -- check-owned-edits-ledger.py's
     structural+replay validation and stage-owned-hunks.py --dry-run's hunk-
-    replay exclusion. Both scripts still exist (this cycle switches callers,
-    it does not delete code) but neither is invoked from this blocking path
-    any more.
+    replay exclusion. check-owned-edits-ledger.py has since been deleted;
+    stage-owned-hunks.py still exists but is no longer invoked from this
+    blocking path.
 
     Every path this cycle claims (dev.files_modified + dev.files_created) is
     asked the SAME lane-agnostic question scripts/resolve-commit-repos.py's
