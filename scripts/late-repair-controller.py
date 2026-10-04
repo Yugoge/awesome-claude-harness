@@ -460,13 +460,28 @@ def cmd_verify_disclosure(ns: argparse.Namespace) -> int:
 def resolve_effective_report_state(project_dir: Path, task_id: str) -> tuple[str, Path | None]:
     """Tri-state guard shared by /commit's dev-report resolution points.
 
-    Returns ("none", None) when no late-repair state exists for task_id at
-    all (State A -- byte-identical to pre-R4 behavior).  Returns
+    Returns ("none", None) when there is nothing for a caller to prefer over
+    the canonical dev-report: either no late-repair state exists for task_id
+    at all (byte-identical to pre-R4 behavior), or a corroborated run that
+    finalize carried all the way to its drift-free outcome.  Returns
     ("verified", effective_path) only when verify-disclosure independently
-    corroborates the active run record (State B).  Returns ("invalid", None)
-    when a run record/effective report exists but corroboration fails or is
-    absent (State C -- callers MUST fail closed here, never fall back to
-    stale canonical provenance).
+    corroborates an effective report that exists on disk (State B).  Returns
+    ("invalid", None) when corroboration fails, when it admits an effective
+    report the record names but disk does not have, or when the record
+    carries any other outcome (State C -- callers MUST fail closed here,
+    never fall back to stale canonical provenance).
+
+    A null effective_report does NOT by itself mean "no drift": finalize
+    leaves it null in every terminal state it can reach except the
+    routed-drift one, and cmd_init writes that same null before finalize has
+    run at all.  honest_refuse (drift found but unroutable) reports its drift
+    only in the emitted payload and never records it; fail_closed and a
+    not-yet-finalized record likewise leave drift_detected absent.  Only the
+    drift-free branch records drift_detected == {}, and only it pairs that
+    with outcome 'finalized_pending_verification' (the routed-drift branch
+    shares the outcome but always records a non-empty drift_detected and an
+    effective_report).  That pair is therefore the discriminator, and every
+    other state keeps the fail-closed answer it had before.
     """
     root = Path(project_dir).resolve()
     run_record_path = _run_record_path(root, task_id)
@@ -490,7 +505,16 @@ def resolve_effective_report_state(project_dir: Path, task_id: str) -> tuple[str
     record = _load_active_record(root, task_id)
     effective_rel = record.get("effective_report") if record else None
     if not effective_rel:
-        return "invalid", None
+        # Null in FIVE record states, only one of which is benign, so this
+        # emptiness cannot decide anything on its own.  Require instead the
+        # positive pair only the drift-free branch writes, and writes in one
+        # atomic record write so the two can never disagree.
+        drift_free = (
+            record is not None
+            and record.get("outcome") == "finalized_pending_verification"
+            and record.get("drift_detected") == {}
+        )
+        return ("none", None) if drift_free else ("invalid", None)
     effective_path = root / effective_rel
     if not effective_path.is_file():
         return "invalid", None
