@@ -422,6 +422,14 @@
         "hooks": [
           {
             "type": "command",
+            "command": "python3 \"/root/.claude/hooks/pretool-do-block-subagents.py\""
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
             "command": "python3 \"/root/.claude/hooks/pretool-subagent-enforce.py\""
           }
         ]
