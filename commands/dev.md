@@ -167,6 +167,7 @@ The `UserPromptSubmit` hook has already:
 3. Written `docs/dev/user-requirement-<DEV_SESSION_ID>.md` with the verbatim user requirement
 4. Run `write-e2e-enforce.sh` — E2E enforcement is ACTIVE
 5. Run `write-codex-enforce.sh` (if `--codex` was passed) — Codex enforcement ACTIVE or inactive per hook output
+6. Run `write-enforce-flag.sh --flag artifact-contract` — producer-side report schema gate ACTIVE (`hooks/subagentstop-artifact-contract-enforce.py` blocks a dev/qa subagent from stopping with a versioned-but-schema-invalid report; same `contract_runtime` engine as `/close`'s "Artifact schema gate" section)
 
 **Read `DEV_SESSION_ID` from the hook output above** (line `DEV_SESSION_ID pre-initialized by hook: …`). Store it for use in every Agent launch prompt below.
 
@@ -189,6 +190,7 @@ cat <<'REQEOF' > "$REQUIREMENT_DOC"
 <verbatim stripped $ARGUMENTS text — paste literal requirement here>
 REQEOF
 scripts/write-e2e-enforce.sh --source-command dev --session-id $DEV_SESSION_ID
+scripts/write-enforce-flag.sh --source-command dev --session-id $DEV_SESSION_ID --flag artifact-contract
 # Only when --codex:
 # scripts/write-codex-enforce.sh --source-command dev --session-id $DEV_SESSION_ID
 ```
