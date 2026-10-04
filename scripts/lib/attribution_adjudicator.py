@@ -1,7 +1,16 @@
 #!/usr/bin/env python3
 """Three-way staging adjudicator over write-time attribution journal chains.
 
-PURELY ADDITIVE (Phase C): nothing imports this yet; no consumer is switched.
+Phase D cutover (docs/reference/attribution-journal-cutover-flip-plan-20261003.md,
+docs/reference/attribution-journal-consumer-cutover-20261004.md): the lane-agnostic
+`ledger_structural_verdict()` / `ledger_blocks()` at the bottom of this file are the
+real, executed-path callers for scripts/resolve-commit-repos.py's ownership gate,
+hooks/subagentstop-artifact-contract-enforce.py's artifact-contract section, and
+scripts/aggregate-dev-report.py's same-cycle-only completeness gate. The full
+per-task adjudicator below (adjudicate_file / adjudicate_task, requiring real lane
+metadata from scripts/lib/dispatch_metadata.py, which still has no dispatcher
+caller) remains additive until a future cycle wires dispatch-time capture.
+
 It reads journal events (hooks/lib/attribution_journal.py) and the chain fold
 (scripts/verify-attribution-chain.py), and for each file under a task baseline
 returns exactly one verdict:
@@ -729,6 +738,57 @@ def capture_dispatch_baselines(root, dirty_snapshot_text):
 
 def abs_event_path(root, rel):
     return rel if os.path.isabs(rel) else os.path.normpath(os.path.join(root, rel))
+
+
+# ------------------------------------------------- lane-agnostic consumer gate
+
+def ledger_structural_verdict(path, *, root=None, journal_dir=None, gitdir=None, task_id=None):
+    """Lane-agnostic ledger verdict for ONE path, for a consumer that is
+    switching off the self-reported ("replay owned_edits hunks, compare to
+    disk") judgment per docs/reference/attribution-journal-cutover-flip-plan-
+    20261003.md, without per-task lane metadata (scripts/lib/dispatch_metadata.py
+    has no dispatcher caller yet, so no `agent_id -> task_id` map or
+    dispatch-time baseline exists for any real task today).
+
+    Without that map every event is foreign, so WHOLE_FILE_ELIGIBLE /
+    SYNTHESIZED_STAGE can never be reached here -- this never claims
+    ownership, only structure. The baseline attempted is the CURRENT git HEAD
+    blob (not a dispatch-time capture), so a chain that does not reach back
+    to it returns INSUFFICIENT_COVERAGE ("coverage_window_starts_after_baseline"
+    or "no_journal_events") rather than being treated as explained: chain
+    continuity and a tail match only prove the journal's OWN window is
+    self-consistent, never that it covers every byte back to the last commit
+    (constraint 2 of the cutover task). A file absent from the journal
+    entirely (it predates the ledger, or was never touched this session) is
+    INSUFFICIENT_COVERAGE too -- never a block.
+
+    The one verdict this CAN respect without any lane data is ENTANGLED via
+    `order_not_determinable`: the chain's own edge structure (which does not
+    depend on who owns what) has no provable walk from the baseline. That is
+    a measured defect in the journal's own record for this path, not a
+    judgment about ownership, so it is the only verdict callers should treat
+    as blocking.
+    """
+    root = str(root or ROOT)
+    gitdir = gitdir or aj.git_dir()
+    events, _ = aj.read_all_journals(Path(journal_dir) if journal_dir else None)
+    path_events = [e for e in events if e["path"] == path]
+    head = subprocess.run(["git", "-C", root, "rev-parse", "HEAD"], capture_output=True,
+                          text=True, env=_clean_env()).stdout.strip()
+    rel = os.path.relpath(path, root) if os.path.isabs(path) else path
+    meta = {"task_id": task_id or "ledger-judgment-unscoped",
+            "baseline_head_sha": head, "baseline_dirty_snapshot": ""}
+    meta["baselines"] = fill_clean_baselines(meta, root, [rel])
+    task = task_from_metadata(meta)
+    return adjudicate_file(path, path_events, task, gitdir=gitdir)
+
+
+def ledger_blocks(path, **kw):
+    """True only for a MEASURED structural conflict (ENTANGLED). Every other
+    verdict -- including no journal evidence at all -- is non-blocking; see
+    ledger_structural_verdict()'s docstring for why that is deliberate, not a
+    gap."""
+    return ledger_structural_verdict(path, **kw)["verdict"] == ENTANGLED
 
 
 def main(argv=None):

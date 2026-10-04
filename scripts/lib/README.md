@@ -2,16 +2,17 @@
 
 <!-- AUTO:readme-stats -->
 ## Overview
-- **Total files**: 6
+- **Total files**: 7
 - **Subdirectories**: 0
 - **Naming convention**: lower
 
 ## Files
-- `attribution_adjudicator.py` - PURELY ADDITIVE (Phase C): nothing imports this yet; no consumer is switched
+- `attribution_adjudicator.py` - Phase D cutover (docs/reference/attribution-journal-cutover-flip-plan-20261003.md,
 - `attribution_aggregate_view.py` - Emits the canonical dev-report document shape that /close and /commit
 - `candidate_tree.py` - An acceptance harness usually has to evaluate its criterion against neither the
 - `make_sbom.py` - The SBOM is built from the archive's real contents, not from the source
 - `release_membership.py` - Single source of truth shared by every consumer, so the archive builder, the
+- `session_index.py` - A repository has exactly one shared index file (``$GIT_DIR/index``). Every session
 - `sibling_loader.py` - ``scripts/close-route-select.py``, ``scripts/late-repair-controller.py`` and
 <!-- /AUTO:readme-stats -->
 
