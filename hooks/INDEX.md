@@ -1,8 +1,8 @@
 # hooks
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-09-22T02:56:20Z*
-**Total entries**: 204
+*Last updated: 2026-10-04T18:30:51Z*
+**Total entries**: 226
 **Convention**: kebab
 
 ## Tree
@@ -13,11 +13,13 @@ hooks/
 │   ├── `config.py` - The git-tracked helpers (WS5, AC-WS5-1) let the INDEX/README generators list
 │   ├── `docker.py` - Parse docker-compose.yml and generate markdown table.
 │   ├── `extract.py` - Extract description from various file types.
+│   ├── `hook_ledger.py` - hooks/doc_sync/main.py calls record_landed_files() right after
 │   ├── `main.py` - Main entry point for doc-sync hook.
 │   ├── `notice.py` - A skipped README, INDEX or CLAUDE.md section is a deliberate outcome (regeneration is opt-in
 │   ├── `patch.py` - Patch CLAUDE.md dynamic sections using AUTO markers.
 │   ├── `regen_index.py` - Regenerate INDEX.md for a directory.
 │   ├── `regen_readme.py` - Regenerate README.md for a directory.
+│   ├── `regions.py` - Four unrelated predicates used to decide what a file's AUTO region is (README first
 │   ├── `systemd.py` - Query systemctl for project-configured services and generate a markdown table.
 │   └── `tree.py` - Build directory trees for INDEX.md.
 ├── git-hooks/
@@ -39,6 +41,7 @@ hooks/
 │   │   └── `shell_lex.py` - Dependency LEAF: imports only the stdlib, references nothing from _core
 │   ├── `agent_resolver.py` - Refactored from pretool-subagent-code-block.py::_find_agent_type so that
 │   ├── `allowlist.py` - Single source of truth for grant-read, grant-match, and grant-consume
+│   ├── `attribution_journal.py` - Capture side (used by pretool-attribution-pre.py / posttool-attribution-post.py):
 │   ├── `bash_context_strip.py` - This is deliberately NOT a full shell parser.  It only computes a conservative
 │   ├── `bash_write_targets.py` - Provides two public functions used by tool-policy and overnight-hook-guard:
 │   ├── `capability_state.py` - verdict, and the INDEPENDENT (non-hook-dispatched) preactivation consumer
@@ -52,6 +55,9 @@ hooks/
 │   ├── `git_clean_guard.py` - Classifies ONE Bash command for the fail-closed pre-clean guard woven into the
 │   ├── `git_command_classifier.py` - Provides iter_git_invocations() — a token-aware parser that detects git
 │   ├── `grepguard_context_strip.py` - PURPOSE (narrow, guard-specific)
+│   ├── `harness_state_dir.py` - Hook runtime state (consent flags, grants, sentinels, bookmarks, stamps) lives
+│   ├── `harness_state_dir.sh` - harness_state_dir.sh -- shell twin of hooks/lib/harness_state_dir.py.
+│   ├── `interruption_signals.py` - Decides whether a subagent was cut off — and whether a usage limit did it — from
 │   ├── `overnight.py` - Single source of truth for "is a /dev-overnight session currently live?". A
 │   ├── `policy_registry.py` - Reads the harness ``policies/tool-policy.v1.json`` (resolved via the shared
 │   ├── `runtime_guard.py` - This file exists for backwards-compatibility with callers that invoke
@@ -72,6 +78,9 @@ hooks/
 │   ├── `test_ac6_verify.sh` - Shell script
 │   ├── `test_ac9_verify.sh` - Shell script
 │   ├── `test_allowlist_consolidation.py` - Covers AC8 IS_SUBAGENT firewall scenarios and matching semantics invariants
+│   ├── `test_artifact_contract_enforce.py` - The hook is the producer-side port of /close's Artifact schema gate
+│   ├── `test_attribution_adjudicator.py` - canonical aggregate view (Phase C; purely additive artifacts, nothing switched)
+│   ├── `test_attribution_journal.py` - break detection, verify script verdicts, torn-tail handling, seal
 │   ├── `test_bash_safety_context.py` - Tests strip_non_executable_contexts() in isolation, covering the main
 │   ├── `test_bash_safety_context_rules.py` - converted to COMMAND_CONTEXT_STRIPPED in hooks/pretool-bash-safety.sh
 │   ├── `test_bash_safety_git_clean.py` - hooks/pretool-bash-safety.sh (task dev-20260719-150041-a, lane r01-a)
@@ -82,9 +91,14 @@ hooks/
 │   ├── `test_checkpoint_pii_gate.sh` - Regression tests for the checkpoint PII/credential hard-exclude + push gate
 │   ├── `test_commit_journal.py` - attribution basis
 │   ├── `test_cp_checkin.py` - of ba-spec-20260427-194324.md (P1 view-trigger removal + P2 generation field)
+│   ├── `test_do_block_subagents.py` - During an active /do cycle the main agent could still dispatch dev-type
 │   ├── `test_do_taskid_mint.py` - Covers the root-cause fix for the do-report task-id collision (memory
+│   ├── `test_doc_sync_hook_ledger.py` - hook-authored side-effect files (backlog #122, M1/M2)
 │   ├── `test_doc_sync_hook_notices.py` - Backlog #83: a README that regen_readme() skips (no opening marker, or no closing marker)
+│   ├── `test_doc_sync_index_notices.py` - Backlog #85: the INDEX regeneration path and the CLAUDE.md section patcher now report what
+│   ├── `test_doc_sync_index_status.py` - Backlog #85: regen_index() returned None on every path, so nobody could tell a skipped INDEX
 │   ├── `test_doc_sync_regen_readme_status.py` - Backlog #83: regen_readme() returned None on every path, so nobody could tell a skipped
+│   ├── `test_doc_sync_regions.py` - Backlog #85: four unrelated marker predicates (README first occurrence, INDEX substring
 │   ├── `test_dual_runtime_lifecycle_e2e.py` - Real-entrypoint regressions for single-owner ordinary dev lifecycle.
 │   ├── `test_extract.py` - Unit tests for hooks/doc_sync/extract.py — covers all 4 defects + known-file cases.
 │   ├── `test_fail_closed_drift.py` - WHY THIS FILE EXISTS
@@ -98,11 +112,14 @@ hooks/
 │   ├── `test_overnight_qa_sentinel_bind.py` - `_qa_mode_sentinel_rw_bind` / `_build_bwrap_argv` had ZERO test callers, so the
 │   ├── `test_overwrite_guard.py` - Every assertion drives the REAL guard as a subprocess over a synthetic
 │   ├── `test_posttool_commit_grant_finalize.py` - hooks/posttool-allowlist-consume.py, and for the pointer WRITE side in
+│   ├── `test_push_gate_ancestor_cross_session.sh` - Regression test for hooks/push.sh's push-gate token scan (task 20260924-031253):
 │   ├── `test_push_no_upstream_guard.sh` - Regression test for hooks/push.sh R22 (line ~375): HAS_UPSTREAM must be
 │   ├── `test_push_sentinel_abort.sh` - Unit test for AC1 V5: hooks/push.sh self-aborts before any real git push
+│   ├── `test_regen_index_dirs_script.py` - Backlog #85: the script printed `regenerated: <INDEX>` for every directory, including the ones
 │   ├── `test_residual_false_positives.py` - Context (task 20260903-residual-fp). `classify_git_command()` returns a
 │   ├── `test_runtime_guard.py` - Two layers:
 │   ├── `test_scratch_lifecycle.py` - Covers:
+│   ├── `test_stop_do_report_gate.py` - Covers the contract from commands/do.md Step 5: a /do session may stop only
 │   ├── `test_unit_anchor.py` - Imports the anchor sibling module DIRECTLY (not via the _core facade) and
 │   ├── `test_unit_config.py` - Imports the config sibling module DIRECTLY (not via the _core facade) and
 │   ├── `test_unit_constants.py` - Imports the constants sibling module DIRECTLY (not via the _core facade) and
@@ -110,7 +127,7 @@ hooks/
 │   ├── `test_unit_git_cmds.py` - Imports the git_cmds sibling module DIRECTLY (not via the _core facade) and
 │   ├── `test_unit_pathmatch.py` - Imports the pathmatch sibling module DIRECTLY (not via the _core facade) and
 │   ├── `test_unit_shell_lex.py` - Imports the shell_lex sibling module DIRECTLY (not via the _core facade's
-│   └── `test_userprompt_doc_sync_relay.py` - Backlog #83: the UserPromptSubmit hook resyncs a directory by running
+│   ├── `test_userprompt_doc_sync_relay.py` - Backlog #83: the UserPromptSubmit hook resyncs a directory by running
 ├── `audit-slashcommand.sh` - audit-slashcommand.sh
 ├── `auto-commit.sh` - auto-commit.sh - Stop hook: snapshot on conversation end
 ├── `capability-canary.py` - Registered once per relied-upon lifecycle event, each registration carrying its
@@ -129,6 +146,7 @@ hooks/
 ├── `post-commit-warn.sh` - post-commit-warn.sh - Warn about untracked files after commit
 ├── `post_tool_use.sh` - PostToolUse Hook - Code quality hints after file modifications
 ├── `posttool-allowlist-consume.py` - PostToolUse Hook: /allow grant consumption
+├── `posttool-attribution-post.py` - Pairs with pretool-attribution-pre.py via (session_id, tool_use_id). Purely
 ├── `posttool-codex-skill-ledger.py` - Fires on every PostToolUse for the Skill tool. When tool_input.skill == "codex",
 ├── `posttool-command-frontmatter-validate.py` - PostToolUse Hook: Validate .claude/commands/*.md frontmatter structure
 ├── `posttool-doc-sync.py` - PostToolUse Hook: Auto-sync INDEX.md and CLAUDE.md when structural files change
@@ -147,6 +165,7 @@ hooks/
 ├── `pre_slashcommand_validate.sh` - pre_slashcommand_validate.sh
 ├── `pre_tool_use_safety.sh` - PreToolUse Safety Hook - Warn before dangerous operations
 ├── `pretool-aggregate-check.py` - existence before allowing the orchestrator to dispatch the QA subagent in
+├── `pretool-attribution-pre.py` - Phase 0 of the write-time attribution journal (see hooks/lib/attribution_journal.py)
 ├── `pretool-bash-safety.sh` - PreToolUse Safety Hook - Warn or block before dangerous operations
 ├── `pretool-bash-views-guard.py` - Parallels pretool-bash-safety.sh but focuses on views/cp-state write bypass
 ├── `pretool-bisect-gate.sh` - pretool-bisect-gate.sh
@@ -158,6 +177,7 @@ hooks/
 ├── `pretool-claude-config-guard.py` - PreToolUse Hook: Claude config (.claude/hooks + .claude/commands) protection
 ├── `pretool-cp-checkin.py` - cp-state file read
 ├── `pretool-cp-state-write-guard.py` - Cycle-3 slim form (2026-05-14): Bash-extractor removed — 22-form adversarial
+├── `pretool-do-block-subagents.py` - PreToolUse hook: block Agent/Task dispatch from the MAIN agent while a /do
 ├── `pretool-git-privilege-guard.py` - PreToolUse Hook: Agent git-privilege guard
 ├── `pretool-gitignore-preflight.py` - pretool-gitignore-preflight.py — PreToolUse hook (matcher: Agent)
 ├── `pretool-grep-backtrack-guard.py` - ROOT-CAUSE BACKGROUND (verified ground truth, 2026-06-15 host OOM)
@@ -197,12 +217,14 @@ hooks/
 ├── `sessionend-scratch-sweep.sh` - sessionend-scratch-sweep.sh — SessionEnd hook (Scratch Lifecycle Contract
 ├── `start-fswatch-all.sh` - start-fswatch-all.sh - Start fswatch monitoring for all important repositories
 ├── `stop-cleanup-allowlist.sh` - Stop Hook: Wipe any unconsumed /allow grant at turn end.
+├── `stop-do-report-gate.py` - A /do session mints a task-id sidecar (/tmp/claude-do-task-<sid>.json) and a
 ├── `stop-overnight-timelock.py` - Stop Hook: Block conversation termination until overnight end-time
 ├── `stop-spec-coverage-enforce.py` - Stop Hook: Block spec agent from exiting with < 100% monolith coverage
 ├── `stop-workflow-coordinator.py` - LANE-B (20260808-035658) M4/M7: registered as the harness's actual Stop hook,
 ├── `stop.sh` - stop.sh - wrapper for /stop slash command
 ├── `subagent-stop-diff-check.sh` - SubagentStop hook: flag large diffs without minimum-diff justification
 ├── `subagent-stop-guard-integrity.sh` - subagent-stop-guard-integrity.sh
+├── `subagentstop-artifact-contract-enforce.py` - Ports the /close "Artifact schema gate" (commands/close.md §"Artifact schema gate" — the
 ├── `subagentstop-codex-enforce.py` - Activation logic:
 ├── `subagentstop-cp-enforce.py` - Description: SubagentStop hook for spec checkpoint enforcement (W6).
 ├── `subagentstop-e2e-enforce.py` - Activation logic:
@@ -210,8 +232,8 @@ hooks/
 ├── `userprompt-bulk-commit-capability.py` - human prompt, NOT from an LLM-emitted Bash command
 ├── `userprompt-consent-allowlist.sh` - UserPromptSubmit Hook: parse `/allow <pattern>` and write a single-use
 ├── `userprompt-doc-sync-check.py` - UserPromptSubmit Hook: Periodic file deletion detection for doc-sync
-├── `userprompt-restart-authorize.py` - UserPromptSubmit: mint a session-bound capability for exact bare /restart.
-└── `userprompt-tmpfs-pressure.sh` - userprompt-tmpfs-pressure.sh — UserPromptSubmit hook (4th block, appended).
+├── `userprompt-restart-authorize.py` - UserPromptSubmit: mint a session-bound capability for a human /restart invocation.
+├── `userprompt-tmpfs-pressure.sh` - userprompt-tmpfs-pressure.sh — UserPromptSubmit hook (4th block, appended).
 ```
 <!-- /AUTO:index-stats -->
 
