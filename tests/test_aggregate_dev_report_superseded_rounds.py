@@ -32,7 +32,8 @@ The fix adds two additive capabilities to scripts/aggregate-dev-report.py:
      replay-and-compare logic (never reimplemented here) to verify the
      union actually covers the live file's bytes; a gap makes the
      aggregator exit non-zero with a named diagnostic while still writing
-     the aggregate (blocking_issues populated, never silently omitted).
+     the aggregate (ownership_completeness_gaps populated, never silently
+     omitted).
 """
 
 import importlib.util
@@ -236,6 +237,7 @@ class TestOneRetryFoldsRound0AheadOfPromoted:
         assert doc["owned_edits"][REL] == ALL_HUNKS_CORRECT_ORDER
         assert len(doc["owned_edits"][REL]) == 23
         assert doc["blocking_issues"] == []
+        assert doc[_mod.COMPLETENESS_GAPS_KEY] == []  # the real no-gap witness
 
     def test_bug_reproduction_without_the_fix_matches_pre_fix_12_hunk_shape(
         self, repo: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
@@ -252,12 +254,26 @@ class TestOneRetryFoldsRound0AheadOfPromoted:
 
         rc = main(["--task-id", TASK_ID])
         capsys.readouterr()
-        assert rc != 0  # criterion-C now catches the pre-fix defect shape
+        # Attribution-journal consumer cutover (docs/reference/attribution-
+        # journal-cutover-flip-plan-20261003.md, superseded by the zero-
+        # blocking constraint of the follow-up consumer-cutover task): the
+        # exit code is gated by the write-time ledger now, not by this
+        # criterion-C replay (see _completeness_check_file's require_full_
+        # coverage=False branch) -- a git-only fixture with no journal
+        # evidence is deferred, not blocked, so rc == 0. The replay-based
+        # criterion-C check this test was built to pin still runs, UNCHANGED,
+        # as the non-blocking GLOBAL diagnostic the assertions below verify.
+        assert rc == 0
 
         doc = json.loads((repo / "docs" / "dev" / ("dev-report-%s.json" % TASK_ID)).read_text())
         assert doc["owned_edits"][REL] == BUGGY_ORDER_MISSING_ROUND0
         assert len(doc["owned_edits"][REL]) == 12
-        assert any(REL in issue for issue in doc["blocking_issues"])
+        # The diagnostic is recorded on the aggregate's own completeness key,
+        # never on `blocking_issues`: that field is freshness-compared, so a
+        # diagnostic written there made the canonical permanently stale
+        # against its own rebuild.  Same strength, different channel.
+        assert any(REL in issue for issue in doc[_mod.COMPLETENESS_GAPS_KEY])
+        assert not any(REL in issue for issue in doc["blocking_issues"])
 
 
 # ---------------------------------------------------------------------------
@@ -276,31 +292,64 @@ class TestFullCoveragePasses:
 
 
 # ---------------------------------------------------------------------------
-# AC-4 / D4: genuine gap -> aggregator exits non-zero, diagnostic names the
-# file, and the canonical aggregate is STILL WRITTEN with blocking_issues.
+# AC-4 / D4, REVISED under the same-cycle-only gate rescope (task
+# dev-20260927-135305, spec-20260914-052140 S5.3): criterion C (the full,
+# cross-cycle-aware completeness check) still catches this gap and still
+# names target.py -- that computation and its storage key are UNCHANGED by
+# the rescope. What changed on purpose is which figure drives the aggregator's
+# OWN exit code. This fixture's gap is a same-cycle SHORTFALL, not a
+# same-cycle CONFLICT: round-0's declared ledger replays WITHOUT ERROR from
+# its own declared starting point (every remaining anchor is still uniquely
+# locatable; a hunk is simply absent from the ledger, not colliding with
+# another), it just reproduces fewer bytes than the live file. Mechanically
+# that is indistinguishable, from the checker's own vantage point, from "an
+# unrelated concurrent session holds the remaining bytes and has not declared
+# them yet" -- exactly the shape the rescope forbids blocking on. The
+# narrower, same-cycle-only question (OWNERSHIP_COMPLETENESS_BLOCKING_KEY)
+# therefore no longer fails here; the broader, non-blocking forensic
+# question (COMPLETENESS_GAPS_KEY) still does, so the gap is never silently
+# lost -- it is reported, just not gate-worthy. See
+# test_stage_owned_hunks_boundary.py's own BOUNDARY_INDETERMINATE case
+# (tests/test_aggregate_dev_report.py) for the negative control this rescope
+# still fails closed on: a replay that raises because an anchor is not
+# uniquely locatable is a genuine same-cycle conflict, not a mere shortfall.
 # ---------------------------------------------------------------------------
 
 class TestGenuineGapFailsClosed:
-    def test_ac4_gap_after_fix_still_exits_nonzero_with_named_diagnostic(
+    def test_ac4_shortfall_stays_informational_not_blocking_after_rescope(
         self, repo: Path, capsys: pytest.CaptureFixture
     ):
-        """Even WITH the fix applied, if round-0's own declared owned_edits
-        is itself missing a hunk (a genuine gap the union cannot cover),
-        criterion C must catch it: aggregator exits non-zero, diagnostic
-        names target.py, and the canonical is still written (never a
-        missing artifact)."""
+        """A same-cycle shortfall (round-0's own declared owned_edits is
+        missing a hunk, so the union's replay succeeds but falls short of the
+        live file) no longer fails the aggregator's own exit code after the
+        same-cycle-only gate rescope: the shortfall is not a conflict and not
+        a non-replaying ledger, so it is not this cycle's own incoherence to
+        fail on. Criterion C keeps naming target.py in the non-blocking
+        COMPLETENESS_GAPS_KEY, and the canonical is still written either way
+        (never a missing artifact)."""
         _write_real_shape_fixture(repo, drop_last_round0_hunk=True)
 
         rc = main(["--task-id", TASK_ID])
-        err = capsys.readouterr().err
-        assert rc != 0
-        assert REL in err
+        out = json.loads(capsys.readouterr().out)
+        assert rc == 0, out
+        assert out["status"] == "ok"
 
         canonical_path = repo / "docs" / "dev" / ("dev-report-%s.json" % TASK_ID)
         assert canonical_path.exists(), "canonical must still be written on a criterion-C gap"
         doc = json.loads(canonical_path.read_text())
         assert doc["owned_edits"][REL] == LANE_B_HUNKS + LANE_C_HUNKS + LANE_D_ROUND0_HUNKS[:-1] + LANE_D_PROMOTED_HUNKS
-        assert any(REL in issue for issue in doc["blocking_issues"])
+        # The diagnostic is recorded on the aggregate's own completeness key,
+        # never on `blocking_issues`: that field is freshness-compared, so a
+        # diagnostic written there made the canonical permanently stale
+        # against its own rebuild.  Same strength, different channel.
+        assert any(REL in issue for issue in doc[_mod.COMPLETENESS_GAPS_KEY])
+        assert not any(REL in issue for issue in doc["blocking_issues"])
+        # The narrower, GATING channel is clean: a same-cycle shortfall with
+        # no conflict and no replay error is exactly what the rescope says
+        # must never block (spec-20260914-052140 S5.3) -- this is the
+        # negative-of-the-negative: proof the rescope does not merely log the
+        # old verdict under a new name while still failing the build.
+        assert doc[_mod.OWNERSHIP_COMPLETENESS_BLOCKING_KEY] == []
 
 
 # ---------------------------------------------------------------------------
@@ -333,7 +382,11 @@ class TestUntrackedFileSkipped:
         assert rc == 0, out
         doc = json.loads((dev_dir / ("dev-report-%s.json" % TASK_ID)).read_text())
         assert "brand_new_file.py" in doc["owned_edits"]  # union still records it
-        assert doc["blocking_issues"] == []  # but it never blocks completeness
+        assert doc["blocking_issues"] == []
+        # The real "no completeness gap" witness. `blocking_issues` stopped
+        # being one when the diagnostics moved to their own non-freshness-
+        # compared key, so asserting only that would be vacuous here.
+        assert doc[_mod.COMPLETENESS_GAPS_KEY] == []  # never blocks completeness
 
 
 # ---------------------------------------------------------------------------
@@ -401,6 +454,190 @@ class TestHeterogeneousSnapshotEncodingResolvesToTrueBaseline:
         snapshot, source = _resolve_baseline_snapshot(repo, "", "never-tracked.py", "literal fallback body")
         assert snapshot == b"literal fallback body"
         assert source == "literal_text"
+
+
+# ---------------------------------------------------------------------------
+# Task 20260930-132644: _resolve_baseline_snapshot's priority order was
+# wrong whenever rel was ALREADY DIRTY (uncommitted changes from a prior
+# session or a concurrent sibling lane) before the current cycle's capture
+# ran. baseline_head_sha names the last CLEAN commit, which is not a valid
+# stand-in for "this file's content at the moment this lane began editing
+# it" in that case -- yet the pre-fix function tried baseline_head_sha FIRST
+# unconditionally, so a lane's own correctly-captured, independently-
+# verifiable (git-blob-SHA-form) pre_edit_snapshot was discarded in favor of
+# the wrong HEAD content, producing a false completeness-check EXCLUDE
+# (stage-owned-hunks.py's own I12-snapshot-mismatch) even though the real
+# evidence needed to pass was already on hand.
+#
+# The fix promotes a RESOLVABLE declared_blob_sha above baseline_head_sha
+# whenever it differs from HEAD (or HEAD cannot resolve at all), while
+# literal-text-form declarations keep their pre-fix position BELOW HEAD --
+# preserving AC-7 above, which deliberately protects against trusting an
+# inaccurate literal-text first-shard-wins declaration over HEAD.
+# ---------------------------------------------------------------------------
+
+class TestAlreadyDirtyBaselinePrefersDeclaredBlobOverHead:
+    def test_resolve_baseline_snapshot_prefers_declared_blob_when_file_was_already_dirty(
+        self, repo: Path
+    ):
+        """Unit-level reproduction: baseline_head_sha resolves (rel IS
+        tracked at that commit) but to the WRONG (clean, pre-dirty) content;
+        the lane's own declared_value is a real, independently-verified git
+        blob holding the TRUE dispatch-time (already-dirty) bytes. The fix
+        must prefer the declared blob, not HEAD."""
+        sha = _commit_baseline(repo, REL, b"clean committed content\n")
+        proc = subprocess.run(
+            ["git", "-C", str(repo), "hash-object", "-w", "--stdin"],
+            input=b"true dirty-at-dispatch content\n",
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        )
+        assert proc.returncode == 0
+        declared_sha = proc.stdout.decode().strip()
+
+        snapshot, source = _resolve_baseline_snapshot(repo, sha, REL, declared_sha)
+        assert snapshot == b"true dirty-at-dispatch content\n"
+        assert source == "declared_blob_sha"
+
+    def test_resolve_baseline_snapshot_declared_blob_equal_to_head_prefers_head_label(
+        self, repo: Path
+    ):
+        """When the declared blob resolves but is byte-identical to HEAD's
+        content (the file was NOT actually dirty -- there is no better
+        evidence than HEAD), the function falls back to the
+        baseline_head_sha source label, per the fix's own fallback clause."""
+        sha = _commit_baseline(repo, REL, b"same content\n")
+        # The commit's OWN tree entry for REL -- its blob SHA, not the
+        # commit SHA -- is by construction byte-identical to whatever HEAD
+        # resolution will return for REL at this commit.
+        proc = subprocess.run(
+            ["git", "-C", str(repo), "rev-parse", f"{sha}:{REL}"],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        )
+        assert proc.returncode == 0
+        declared_sha = proc.stdout.decode().strip()
+
+        snapshot, source = _resolve_baseline_snapshot(repo, sha, REL, declared_sha)
+        assert snapshot == b"same content\n"
+        assert source == "baseline_head_sha"
+
+    def test_resolve_baseline_snapshot_head_substitution_when_declared_value_missing(
+        self, repo: Path
+    ):
+        """Old correct behavior, confirmed unchanged: with no declared_value
+        at all (None), HEAD substitution still fires exactly as before."""
+        sha = _commit_baseline(repo, REL, b"true baseline content\n")
+        snapshot, source = _resolve_baseline_snapshot(repo, sha, REL, None)
+        assert snapshot == b"true baseline content\n"
+        assert source == "baseline_head_sha"
+
+    def test_ac_dirty_file_completeness_check_passes_with_correct_declared_blob(
+        self, repo: Path, capsys: pytest.CaptureFixture
+    ):
+        """End-to-end reproduction of the real bug via the unmodified CLI:
+        rel was already dirty BEFORE this cycle started (its true pre-edit
+        content differs from the last clean commit). The lane's hunk only
+        anchors on the true dirty content, and the lane correctly declares
+        that true content as a real git blob. Pre-fix, criterion C
+        substituted HEAD, the hunk's anchor was absent from HEAD, and
+        stage-owned-hunks.py's own I12-snapshot-mismatch check failed
+        closed. Post-fix, the declared blob is used and the check passes."""
+        dev_dir = repo / "docs" / "dev"
+        sha = _commit_baseline(repo, REL, b"clean committed content\n")
+        # Simulate the pre-existing dirty state a prior session/sibling lane
+        # left behind before this cycle's own capture ran.
+        (repo / REL).write_bytes(b"dirty-at-dispatch content\n")
+        proc = subprocess.run(
+            ["git", "-C", str(repo), "hash-object", "-w", "--stdin"],
+            input=b"dirty-at-dispatch content\n",
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        )
+        assert proc.returncode == 0
+        declared_sha = proc.stdout.decode().strip()
+
+        hunks = [{"old": "dirty-at-dispatch content\n", "new": "dirty-at-dispatch content-EDITED\n"}]
+        (repo / REL).write_bytes(_apply_forward(b"dirty-at-dispatch content\n", hunks))
+
+        _write(dev_dir, "dev-report-%s-a.json" % TASK_ID, _shard(
+            TASK_ID, sha, [REL], {REL: hunks}, {REL: declared_sha},
+        ))
+        # A second shard is required -- the aggregator's own >=2-shard
+        # aggregation path only engages for a genuinely parallel cycle.
+        _write(dev_dir, "dev-report-%s-b.json" % TASK_ID, _shard(TASK_ID, sha))
+
+        rc = main(["--task-id", TASK_ID])
+        out_text = capsys.readouterr()
+        doc = json.loads((dev_dir / ("dev-report-%s.json" % TASK_ID)).read_text())
+        assert rc == 0, out_text.err
+        assert doc["blocking_issues"] == []
+        assert doc[_mod.COMPLETENESS_GAPS_KEY] == []  # the real no-gap witness
+
+    def test_bug_reproduction_dirty_file_fails_closed_without_the_fix(
+        self, repo: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+    ):
+        """TDD control: with _resolve_baseline_snapshot stubbed back to the
+        pre-fix HEAD-first order, the identical fixture above reproduces the
+        exact reported defect -- the completeness check fails closed with
+        an I12-snapshot-mismatch-style exclusion, even though the lane's own
+        declared snapshot was correct and resolvable all along."""
+        dev_dir = repo / "docs" / "dev"
+        sha = _commit_baseline(repo, REL, b"clean committed content\n")
+        (repo / REL).write_bytes(b"dirty-at-dispatch content\n")
+        proc = subprocess.run(
+            ["git", "-C", str(repo), "hash-object", "-w", "--stdin"],
+            input=b"dirty-at-dispatch content\n",
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        )
+        assert proc.returncode == 0
+        declared_sha = proc.stdout.decode().strip()
+
+        hunks = [{"old": "dirty-at-dispatch content\n", "new": "dirty-at-dispatch content-EDITED\n"}]
+        (repo / REL).write_bytes(_apply_forward(b"dirty-at-dispatch content\n", hunks))
+
+        _write(dev_dir, "dev-report-%s-a.json" % TASK_ID, _shard(
+            TASK_ID, sha, [REL], {REL: hunks}, {REL: declared_sha},
+        ))
+        # A second shard is required -- the aggregator's own >=2-shard
+        # aggregation path only engages for a genuinely parallel cycle.
+        _write(dev_dir, "dev-report-%s-b.json" % TASK_ID, _shard(TASK_ID, sha))
+
+        def _pre_fix_order(project_root, baseline_head_sha, rel, declared_value):
+            if baseline_head_sha:
+                rc, _, _ = _mod._git(project_root, ["cat-file", "-e", f"{baseline_head_sha}:{rel}"])
+                if rc == 0:
+                    rc2, blob, _ = _mod._git(project_root, ["show", f"{baseline_head_sha}:{rel}"])
+                    if rc2 == 0:
+                        return blob, "baseline_head_sha"
+            if isinstance(declared_value, str) and _mod._BLOB_SHA_RE.match(declared_value):
+                rc, _, _ = _mod._git(project_root, ["cat-file", "-e", declared_value])
+                if rc == 0:
+                    rc2, blob, _ = _mod._git(project_root, ["cat-file", "blob", declared_value])
+                    if rc2 == 0:
+                        return blob, "declared_blob_sha"
+            if isinstance(declared_value, str):
+                return declared_value.encode("utf-8"), "literal_text"
+            return None, "no resolvable pre-edit snapshot declared for this file"
+
+        monkeypatch.setattr(_mod, "_resolve_baseline_snapshot", _pre_fix_order)
+
+        rc = main(["--task-id", TASK_ID])
+        capsys.readouterr()
+        # Attribution-journal consumer cutover (see the sibling TDD control
+        # above, test_bug_reproduction_without_the_fix_matches_pre_fix_12_
+        # hunk_shape, for the full citation): the exit code no longer comes
+        # from this replay at all -- it comes from the write-time ledger,
+        # which defers (no journal evidence in this git-only fixture) rather
+        # than blocks. The monkeypatched pre-fix _resolve_baseline_snapshot
+        # order is therefore a no-op for rc; it still reproduces the pre-fix
+        # defect shape in the non-blocking GLOBAL diagnostic, asserted below.
+        assert rc == 0
+
+        doc = json.loads((dev_dir / ("dev-report-%s.json" % TASK_ID)).read_text())
+        # The diagnostic is recorded on the aggregate's own completeness key,
+        # never on `blocking_issues`: that field is freshness-compared, so a
+        # diagnostic written there made the canonical permanently stale
+        # against its own rebuild.  Same strength, different channel.
+        assert any(REL in issue for issue in doc[_mod.COMPLETENESS_GAPS_KEY])
+        assert not any(REL in issue for issue in doc["blocking_issues"])
 
 
 # ---------------------------------------------------------------------------
@@ -490,6 +727,7 @@ class TestNoRetryLaneUnaffected:
             {"old": "line04\n", "new": "line04-Q\n"},
         ]
         assert doc["blocking_issues"] == []
+        assert doc[_mod.COMPLETENESS_GAPS_KEY] == []  # the real no-gap witness
 
 
 # ---------------------------------------------------------------------------
@@ -612,6 +850,7 @@ class TestSameAnchorHunkCollapse:
         doc = json.loads((dev_dir / ("dev-report-%s.json" % TASK_ID)).read_text())
         assert doc["owned_edits"][REL] == [e0, promoted_e1]
         assert doc["blocking_issues"] == []
+        assert doc[_mod.COMPLETENESS_GAPS_KEY] == []  # the real no-gap witness
 
 
 # ---------------------------------------------------------------------------
@@ -672,7 +911,11 @@ class TestUntrackedAtBaselineStaysSkippedEvenIfSinceCommitted:
         assert rc == 0, out
         doc = json.loads((dev_dir / ("dev-report-%s.json" % TASK_ID)).read_text())
         assert "new_file.py" in doc["owned_edits"]  # union still records it
-        assert doc["blocking_issues"] == []  # but it never blocks completeness
+        assert doc["blocking_issues"] == []
+        # The real "no completeness gap" witness. `blocking_issues` stopped
+        # being one when the diagnostics moved to their own non-freshness-
+        # compared key, so asserting only that would be vacuous here.
+        assert doc[_mod.COMPLETENESS_GAPS_KEY] == []  # never blocks completeness
 
     def test_apply_completeness_check_directly_skips_the_since_committed_file(self, repo: Path):
         sha = _commit_baseline(repo, REL, b"line01\n")

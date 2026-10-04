@@ -294,13 +294,20 @@ def test_ac1_rejects_files_modified_path_missing_from_owned_edits_ledger(tmp_pat
         owned_edits={"owned.txt": [{"old": "a", "new": "b"}]},
     )
 
-    with pytest.raises(MODULE.PlanError, match="foreign.txt"):
-        MODULE.build_plan(
-            task_id=task,
-            control_root_arg=str(control),
-            supported_repo_args=[],
-            report_arg=str(report),
-        )
+    # Attribution-journal consumer cutover (docs/reference/attribution-
+    # journal-cutover-flip-plan-20261003.md, superseded by the zero-blocking
+    # constraint of the follow-up consumer-cutover task): absence from the
+    # self-reported owned_edits ledger alone no longer raises -- the gate now
+    # asks the write-time journal (scripts/resolve-commit-repos.py
+    # _ledger_entangled()), and this fixture's edit is a plain-filesystem
+    # write with no journal evidence, so it is deferred, not rejected.
+    plan = MODULE.build_plan(
+        task_id=task,
+        control_root_arg=str(control),
+        supported_repo_args=[],
+        report_arg=str(report),
+    )
+    assert plan["repositories"][0]["owned_paths"] == sorted(["owned.txt", "foreign.txt"])
 
 
 def test_ac2_passes_when_files_modified_fully_covered_by_owned_edits(tmp_path: Path) -> None:
@@ -329,13 +336,15 @@ def test_ac3a_rejects_when_owned_edits_missing_and_files_modified_nonempty(tmp_p
     task = "task-ac3a-empty-ledger-nonempty-fm"
     report = _report(control, task, ["owned.txt"], owned_edits={})
 
-    with pytest.raises(MODULE.PlanError, match="owned.txt"):
-        MODULE.build_plan(
-            task_id=task,
-            control_root_arg=str(control),
-            supported_repo_args=[],
-            report_arg=str(report),
-        )
+    # Post-cutover (see test_ac1's comment above): no journal evidence for
+    # this plain-filesystem write -> deferred, not rejected.
+    plan = MODULE.build_plan(
+        task_id=task,
+        control_root_arg=str(control),
+        supported_repo_args=[],
+        report_arg=str(report),
+    )
+    assert plan["repositories"][0]["owned_paths"] == ["owned.txt"]
 
 
 def test_ac3b_passes_when_owned_edits_missing_and_files_modified_empty(tmp_path: Path) -> None:
@@ -382,13 +391,18 @@ def test_ac4b_dual_listed_path_not_exempt_from_ownership_ledger(tmp_path: Path) 
     task = "task-ac4b-dual-listed-not-exempt"
     report = _report(control, task, ["dual.txt"], created=["dual.txt"], owned_edits={})
 
-    with pytest.raises(MODULE.PlanError, match="dual.txt"):
-        MODULE.build_plan(
-            task_id=task,
-            control_root_arg=str(control),
-            supported_repo_args=[],
-            report_arg=str(report),
-        )
+    # Post-cutover (see test_ac1's comment above): no journal evidence for
+    # this plain-filesystem write -> deferred, not rejected. The dual-listing
+    # rule itself (files_created does not exempt a files_modified dual-claim)
+    # is about the self-report, which no longer gates on its own; see
+    # test_ac4a (created-only exemption) for the still-live self-report path.
+    plan = MODULE.build_plan(
+        task_id=task,
+        control_root_arg=str(control),
+        supported_repo_args=[],
+        report_arg=str(report),
+    )
+    assert plan["repositories"][0]["owned_paths"] == ["dual.txt"]
 
 
 def test_ac5_do_report_exempt_from_ownership_gate(tmp_path: Path) -> None:
@@ -430,13 +444,20 @@ def test_ac6_dev_lifecycle_call_site_passes_verify_ownership_false(tmp_path: Pat
     task = "task-ac6-verify-ownership-false"
     report = _report(control, task, ["gap.txt"], owned_edits={})
 
-    with pytest.raises(MODULE.PlanError, match="gap.txt"):
-        MODULE.build_plan(
-            task_id=task,
-            control_root_arg=str(control),
-            supported_repo_args=[],
-            report_arg=str(report),
-        )
+    # Post-cutover (see test_ac1's comment above): the default
+    # verify_ownership=True path no longer rejects on self-report absence
+    # alone (no journal evidence for this plain-filesystem write), so both
+    # calls now admit the same gap -- verify_ownership=False's own exemption
+    # from the gate entirely is no longer the ONLY way this path is admitted,
+    # but it is still unconditional (no ledger check at all), unlike the
+    # default path, so the two remain functionally distinct call shapes.
+    plan_default = MODULE.build_plan(
+        task_id=task,
+        control_root_arg=str(control),
+        supported_repo_args=[],
+        report_arg=str(report),
+    )
+    assert plan_default["repositories"][0]["owned_paths"] == ["gap.txt"]
 
     plan = MODULE.build_plan(
         task_id=task,
@@ -872,13 +893,20 @@ def test_ac2_post_baseline_foreign_path_still_rejected(tmp_path: Path) -> None:
         baseline_dirty_snapshot=" M owned.txt\n",
     )
 
-    with pytest.raises(MODULE.PlanError, match="post_baseline_foreign.txt"):
-        MODULE.build_plan(
-            task_id=task,
-            control_root_arg=str(control),
-            supported_repo_args=[],
-            report_arg=str(report),
-        )
+    # Post-cutover (see test_ac1's comment above): the self-reported
+    # baseline-dirty exemption's narrowness is no longer this gate's
+    # protection against a post-baseline foreign write -- the write-time
+    # journal is, and this fixture's edit has no journal evidence (a plain
+    # filesystem write), so it is deferred, not rejected. The self-report
+    # exemption computation itself is untouched (still narrow); what changed
+    # is that falling outside it no longer blocks on its own.
+    plan = MODULE.build_plan(
+        task_id=task,
+        control_root_arg=str(control),
+        supported_repo_args=[],
+        report_arg=str(report),
+    )
+    assert plan["repositories"][0]["owned_paths"] == sorted(["owned.txt", "post_baseline_foreign.txt"])
 
 
 def test_ac3a_missing_baseline_dirty_snapshot_degrades_to_strict(tmp_path: Path) -> None:
@@ -888,13 +916,17 @@ def test_ac3a_missing_baseline_dirty_snapshot_degrades_to_strict(tmp_path: Path)
     report = _report(control, task, ["owned.txt"], owned_edits={})
     assert "baseline_dirty_snapshot" not in json.loads(report.read_text(encoding="utf-8"))
 
-    with pytest.raises(MODULE.PlanError, match="owned.txt"):
-        MODULE.build_plan(
-            task_id=task,
-            control_root_arg=str(control),
-            supported_repo_args=[],
-            report_arg=str(report),
-        )
+    # Post-cutover (see test_ac1's comment above): a strict (absent) baseline
+    # degrades the self-report exemption the same as before, but that
+    # exemption is no longer the gate's blocking authority -- no journal
+    # evidence for this plain-filesystem write means deferred, not rejected.
+    plan = MODULE.build_plan(
+        task_id=task,
+        control_root_arg=str(control),
+        supported_repo_args=[],
+        report_arg=str(report),
+    )
+    assert plan["repositories"][0]["owned_paths"] == ["owned.txt"]
 
 
 def test_ac3b_empty_string_baseline_dirty_snapshot_degrades_to_strict(tmp_path: Path) -> None:
@@ -903,13 +935,15 @@ def test_ac3b_empty_string_baseline_dirty_snapshot_degrades_to_strict(tmp_path: 
     task = "task-ac3b-empty-baseline-dirty"
     report = _report(control, task, ["owned.txt"], owned_edits={}, baseline_dirty_snapshot="")
 
-    with pytest.raises(MODULE.PlanError, match="owned.txt"):
-        MODULE.build_plan(
-            task_id=task,
-            control_root_arg=str(control),
-            supported_repo_args=[],
-            report_arg=str(report),
-        )
+    # Post-cutover (see test_ac3a's comment above): same reasoning for the
+    # empty-string sub-state.
+    plan = MODULE.build_plan(
+        task_id=task,
+        control_root_arg=str(control),
+        supported_repo_args=[],
+        report_arg=str(report),
+    )
+    assert plan["repositories"][0]["owned_paths"] == ["owned.txt"]
 
 
 def test_ac5_rename_line_in_baseline_dirty_exempts_both_endpoints(tmp_path: Path) -> None:
@@ -978,3 +1012,492 @@ def test_ac6b_baseline_dirty_snapshot_with_quoted_path_exempts_real_file(tmp_pat
     )
 
     assert plan["repositories"][0]["owned_paths"] == sorted(["owned.txt", "with space.txt"])
+
+
+# --- backlog #119: distinguish upstream dispatch defect from genuine foreign
+# edit at the ownership-gate raise site (dev-20260923-121345-a). Scoped with
+# a "test_119_" prefix per this file's own existing collision-avoidance note
+# (two independently-scoped "AC1"-prefixed groups already exist above).
+# These four are synthetic-fixture control-flow tests using the existing
+# _repo()/_report() helpers; the real-historical-report ACs (AC1/AC2/AC5/AC6)
+# are covered separately against the actual unmodified on-disk reports.
+
+
+def test_119_non_porcelain_baseline_dirty_snapshot_classified_upstream_defect(
+    tmp_path: Path,
+) -> None:
+    """M2: a present, non-empty, non-porcelain string is a dispatch defect,
+    not a foreign edit -- the raised message must name baseline_dirty_snapshot
+    and porcelain, and PlanError.code must equal 'upstream_defect'."""
+    control = _repo(tmp_path / "control")
+    (control / "uncovered.txt").write_text("uncovered\n", encoding="utf-8")
+    task = "task-119-non-porcelain"
+    report = _report(
+        control,
+        task,
+        ["uncovered.txt"],
+        owned_edits={},
+        baseline_dirty_snapshot="this is prose, not git status --porcelain output",
+    )
+
+    # Post-cutover (see test_ac1's comment above): the upstream_defect
+    # classification lives inside the "if missing:" branch of the ownership
+    # gate, which now only fires for a ledger-measured (ENTANGLED) conflict --
+    # this fixture's edit is a plain-filesystem write with no journal
+    # evidence, so the whole branch (and its M2 classification) is never
+    # reached; build_plan() now succeeds. _classify_baseline_dirty_snapshot
+    # itself is untouched and still classifies this shape as upstream_defect
+    # when it IS reached (e.g. verify_ownership=False never reaches it
+    # either, by a different route -- see test_ac6).
+    plan = MODULE.build_plan(
+        task_id=task,
+        control_root_arg=str(control),
+        supported_repo_args=[],
+        report_arg=str(report),
+    )
+    assert plan["repositories"][0]["owned_paths"] == ["uncovered.txt"]
+
+
+def test_119_missing_baseline_dirty_snapshot_key_classified_upstream_defect(
+    tmp_path: Path,
+) -> None:
+    """M1 (absent sub-state): the key is entirely missing from the report --
+    same dispatch-defect classification as the non-string sub-state, per
+    _classify_baseline_dirty_snapshot's single 'absent' bucket for both."""
+    control = _repo(tmp_path / "control")
+    (control / "uncovered.txt").write_text("uncovered\n", encoding="utf-8")
+    task = "task-119-missing-key"
+    report = _report(control, task, ["uncovered.txt"], owned_edits={})
+    assert "baseline_dirty_snapshot" not in json.loads(report.read_text(encoding="utf-8"))
+
+    # Post-cutover (see test_119_non_porcelain's comment above): same
+    # reasoning for the absent-key sub-state.
+    plan = MODULE.build_plan(
+        task_id=task,
+        control_root_arg=str(control),
+        supported_repo_args=[],
+        report_arg=str(report),
+    )
+    assert plan["repositories"][0]["owned_paths"] == ["uncovered.txt"]
+
+
+def test_119_protection_not_weakened_classification_is_foreign_edit(
+    tmp_path: Path,
+) -> None:
+    """AC3 shape, backlog #118 control-flow-not-wording: valid porcelain
+    baseline_dirty_snapshot present, a files_modified path still covered by
+    neither exemption -- PlanError must still be raised, asserted ONLY via
+    .code (never via matching the accusatory sentence)."""
+    control = _repo(tmp_path / "control")
+    (control / "owned.txt").write_text("owned\n", encoding="utf-8")
+    (control / "foreign.txt").write_text("foreign\n", encoding="utf-8")
+    task = "task-119-protection-not-weakened"
+    report = _report(
+        control,
+        task,
+        ["owned.txt", "foreign.txt"],
+        owned_edits={"owned.txt": [{"old": "a", "new": "b"}]},
+        baseline_dirty_snapshot=" M owned.txt\n",
+    )
+
+    # Post-cutover (see test_119_non_porcelain's comment above): valid
+    # porcelain still does not create an exemption for foreign.txt, but
+    # falling outside the self-report exemption no longer raises on its own
+    # -- no journal evidence for this plain-filesystem write means deferred.
+    plan = MODULE.build_plan(
+        task_id=task,
+        control_root_arg=str(control),
+        supported_repo_args=[],
+        report_arg=str(report),
+    )
+    assert plan["repositories"][0]["owned_paths"] == sorted(["owned.txt", "foreign.txt"])
+
+
+def test_119_compliant_empty_baseline_dirty_snapshot_classified_foreign_edit_not_upstream_defect(
+    tmp_path: Path,
+) -> None:
+    """AC4 shape: baseline_dirty_snapshot == '' is the documented-legitimate
+    compliant value (agents/dev.md:533), not a dispatch defect -- the
+    foreign-edit classification/message must be preserved, never
+    'upstream_defect'."""
+    control = _repo(tmp_path / "control")
+    (control / "uncovered.txt").write_text("uncovered\n", encoding="utf-8")
+    task = "task-119-compliant-empty"
+    report = _report(
+        control, task, ["uncovered.txt"], owned_edits={}, baseline_dirty_snapshot=""
+    )
+
+    # Post-cutover (see test_119_non_porcelain's comment above): the
+    # compliant-empty classification still differs from the non-porcelain
+    # one at the self-report layer (_classify_baseline_dirty_snapshot is
+    # untouched), but neither classification is reached here any more -- no
+    # journal evidence for this plain-filesystem write means deferred.
+    plan = MODULE.build_plan(
+        task_id=task,
+        control_root_arg=str(control),
+        supported_repo_args=[],
+        report_arg=str(report),
+    )
+    assert plan["repositories"][0]["owned_paths"] == ["uncovered.txt"]
+
+
+# --------------------------------------------------------------------------
+# files_landed_whole exemption source (backlog #121): a third, pre-existing
+# whole-file no-authorship declaration channel (agents/changelog-analyst.md:
+# 783-820), never previously read by this gate. AC1/AC4/AC6 use real,
+# unmodified historical docs/dev/dev-report-*.json fixtures (per this
+# ticket's own AC6 requirement: not synthetic-only); AC2/AC5's dual-listing
+# negative case is legitimately synthetic (neither real fixture has a
+# dual-listing conflict to exercise), matching the existing
+# test_ac4b_dual_listed_path_not_exempt_from_ownership_ledger convention.
+# --------------------------------------------------------------------------
+
+
+def test_121_ac1_files_landed_whole_exempts_real_fixture_path() -> None:
+    """AC1: real fixture docs/dev/dev-report-20260904-181435.json declares
+    ALL 3 of its files_modified paths in files_landed_whole, with
+    owned_edits and pre_edit_snapshots both empty -- a full pass post-fix,
+    not a partial 2-of-3 exclusion. Pre-fix, this fixture raises PlanError
+    naming all 3 paths (independently reproduced this session)."""
+    repo_root = Path(__file__).parents[1]
+    task = "20260904-181435"
+    report = repo_root / "docs" / "dev" / f"dev-report-{task}.json"
+
+    plan = MODULE.build_plan(
+        task_id=task,
+        control_root_arg=str(repo_root),
+        supported_repo_args=[],
+        report_arg=str(report),
+    )
+
+    assert plan["schema_version"] == 1
+    owned = set(plan["repositories"][0]["owned_paths"])
+    assert {
+        "scripts/paseo-daemon-ledger.py",
+        "commands/paseo-daemon.md",
+        "tests/test_paseo_daemon_ledger.py",
+    } <= owned
+
+
+def test_121_ac2_dual_listed_files_landed_whole_not_exempt(tmp_path: Path) -> None:
+    """AC2/AC5: a path declared in BOTH files_landed_whole and
+    pre_edit_snapshots (absent from owned_edits and baseline_dirty_snapshot)
+    must still be rejected -- proving the dual-listing subtraction reads
+    pre_edit_snapshots, not baseline_dirty_snapshot (the 'universal skeleton
+    key' risk this ticket flags: subtracting baseline_identities instead
+    would wrongly exempt this path)."""
+    control = _repo(tmp_path / "control")
+    (control / "dual.txt").write_text("dual\n", encoding="utf-8")
+    task = "task-121-ac2-dual-listed-landed-whole"
+    # baseline_dirty_snapshot="" is the documented-legitimate compliant value
+    # (agents/dev.md:533) for "genuinely nothing dirty" -- this keeps the
+    # classification at foreign_or_unaccounted_edit rather than
+    # upstream_defect (a missing/absent key), isolating this test to the
+    # dual-listing subtraction itself, not the absent-key sub-state already
+    # covered by test_119_missing_baseline_dirty_snapshot_key_classified_
+    # upstream_defect.
+    report = _report(control, task, ["dual.txt"], owned_edits={}, baseline_dirty_snapshot="")
+    payload = json.loads(report.read_text(encoding="utf-8"))
+    # _report()'s owned_edits={} is falsy and therefore omitted from the
+    # payload entirely (see _report()'s own docstring/body) -- absent and
+    # empty both canonicalize to an empty ledger identity-set, so either
+    # shape is equally "not covered by owned_edits" for this test's purpose.
+    assert "owned_edits" not in payload
+    assert payload["baseline_dirty_snapshot"] == ""
+    payload["pre_edit_snapshots"] = {"dual.txt": "deadbeef"}
+    payload["files_landed_whole"] = [
+        {"path": "dual.txt", "diff_sha256": "deadbeef", "reason": "test"}
+    ]
+    report.write_text(json.dumps(payload), encoding="utf-8")
+
+    # Post-cutover (see test_ac1's comment above): the dual-listing
+    # subtraction itself is untouched (files_landed_whole still does not
+    # exempt dual.txt, proving it reads pre_edit_snapshots not
+    # baseline_dirty_snapshot), but falling outside every self-report
+    # exemption no longer raises on its own -- no journal evidence for this
+    # plain-filesystem write means deferred.
+    plan = MODULE.build_plan(
+        task_id=task,
+        control_root_arg=str(control),
+        supported_repo_args=[],
+        report_arg=str(report),
+    )
+    assert plan["repositories"][0]["owned_paths"] == ["dual.txt"]
+
+
+def test_121_ac4_three_way_absent_real_fixture_still_rejected() -> None:
+    """AC4 (most important): real fixture
+    docs/dev/dev-report-20260923-121345.json -- hooks/tests/INDEX.md is
+    absent from owned_edits, pre_edit_snapshots, baseline_dirty_snapshot's
+    porcelain text, AND files_landed_whole (null in this report). The new
+    third exemption source must not create a false exemption for a path
+    genuinely absent from all three sources."""
+    repo_root = Path(__file__).parents[1]
+    task = "20260923-121345"
+    report = repo_root / "docs" / "dev" / f"dev-report-{task}.json"
+
+    # Post-cutover (see test_ac1's comment above): absence from all three
+    # self-report exemption sources no longer raises on its own -- the gate
+    # now asks the write-time journal for hooks/tests/INDEX.md, which (for
+    # this long-closed historical task-id) has no evidence reaching back to
+    # the current HEAD blob, so it is deferred, not rejected.
+    plan = MODULE.build_plan(
+        task_id=task,
+        control_root_arg=str(repo_root),
+        supported_repo_args=[],
+        report_arg=str(report),
+    )
+    assert "hooks/tests/INDEX.md" in plan["repositories"][0]["owned_paths"]
+
+    # Post-cutover: main() no longer exits 2 for this shape either (build_plan
+    # no longer raises above).
+    assert (
+        MODULE.main(
+            ["--task-id", task, "--control-root", str(repo_root), "--report", str(report)]
+        )
+        == 0
+    )
+
+
+def test_121_ac6_real_fixture_20260919_180650_still_succeeds() -> None:
+    """AC6 regression: real fixture
+    docs/dev/dev-report-20260919-180650.json -- files_landed_whole declares
+    one of 17 files_modified paths, but every path is already covered by
+    real porcelain baseline_dirty_snapshot text independently of this fix.
+    Confirms no regression whether the new code path is decisive (AC1) or
+    redundant (this AC)."""
+    repo_root = Path(__file__).parents[1]
+    task = "20260919-180650"
+    report = repo_root / "docs" / "dev" / f"dev-report-{task}.json"
+
+    plan = MODULE.build_plan(
+        task_id=task,
+        control_root_arg=str(repo_root),
+        supported_repo_args=[],
+        report_arg=str(report),
+    )
+
+    assert plan["schema_version"] == 1
+
+
+# --------------------------------------------------------------------------
+# Strict subtraction-source validation (codex bulk-commit-qa-20260926
+# finding #3): _canonicalized_ledger_identities()'s drop-malformed behavior
+# is fail-closed only in positive-proof position (dropping shrinks an
+# EXEMPTION set); in the files_landed_whole dual-listing SUBTRACTION the
+# same drop shrinks the EXCLUSION set, so a malformed claim field must
+# raise, never canonicalize to an empty set. Absent and {} remain the two
+# legitimate-absence shapes (both real files_landed_whole fixtures use {}).
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("claim_field", "malformed_value"),
+    [
+        # The exact fail-open shape codex #3 names: a claim expressed in a
+        # list container canonicalizes to an empty exclusion set pre-fix.
+        ("pre_edit_snapshots", [{"dual.txt": "deadbeef"}]),
+        ("pre_edit_snapshots", None),
+        ("owned_edits", "corrupt"),
+        ("owned_edits", [["dual.txt", "deadbeef"]]),
+    ],
+)
+def test_codex3_malformed_claim_field_with_landed_whole_fails_closed(
+    tmp_path: Path, claim_field: str, malformed_value: Any
+) -> None:
+    """Pre-fix, every one of these payloads was ADMITTED: the malformed
+    field canonicalized to an empty exclusion set, so the dual-listed path
+    slipped through as a files_landed_whole exemption (fail-open in the
+    subtraction direction). Post-fix the gate raises naming the malformed
+    field and admits nothing."""
+    control = _repo(tmp_path / "control")
+    (control / "dual.txt").write_text("dual\n", encoding="utf-8")
+    task = "task-codex3-malformed-claim-field"
+    report = _report(control, task, ["dual.txt"], owned_edits={}, baseline_dirty_snapshot="")
+    payload = json.loads(report.read_text(encoding="utf-8"))
+    assert "owned_edits" not in payload
+    payload[claim_field] = malformed_value
+    payload["files_landed_whole"] = [
+        {"path": "dual.txt", "diff_sha256": "deadbeef", "reason": "test"}
+    ]
+    report.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(MODULE.PlanError, match=claim_field) as excinfo:
+        MODULE.build_plan(
+            task_id=task,
+            control_root_arg=str(control),
+            supported_repo_args=[],
+            report_arg=str(report),
+        )
+
+    assert "not a JSON object" in str(excinfo.value)
+    assert excinfo.value.code == "upstream_defect"
+
+
+def test_m5_well_formed_pre_edit_snapshots_passes_through_landed_whole_exemption(
+    tmp_path: Path,
+) -> None:
+    """M5/AC4 happy-path guard: a well-formed, non-empty pre_edit_snapshots
+    dict containing an unrelated legitimate entry must not trip the new
+    code=upstream_defect container-shape check (M3) -- files_landed_whole
+    still exempts a different, uncovered path and the plan builds
+    successfully, proving the new code= tag is purely additive to the raise
+    path and does not alter the happy path."""
+    control = _repo(tmp_path / "control")
+    (control / "dual.txt").write_text("dual\n", encoding="utf-8")
+    task = "task-m5-well-formed-pre-edit-snapshots"
+    report = _report(control, task, ["dual.txt"], owned_edits={}, baseline_dirty_snapshot="")
+    payload = json.loads(report.read_text(encoding="utf-8"))
+    assert "owned_edits" not in payload
+    payload["pre_edit_snapshots"] = {"unrelated.txt": "deadbeef"}
+    payload["files_landed_whole"] = [
+        {"path": "dual.txt", "diff_sha256": "deadbeef", "reason": "test"}
+    ]
+    report.write_text(json.dumps(payload), encoding="utf-8")
+
+    plan = MODULE.build_plan(
+        task_id=task,
+        control_root_arg=str(control),
+        supported_repo_args=[],
+        report_arg=str(report),
+    )
+
+    assert "dual.txt" in set(plan["repositories"][0]["owned_paths"])
+
+
+def test_codex3_empty_dict_and_absent_remain_legitimate_absence(tmp_path: Path) -> None:
+    """The strict container check must not overshoot into rejecting the
+    exact shape every compliant files_landed_whole report declares: absent
+    owned_edits plus present-{} pre_edit_snapshots still exempts the
+    declared path (mirrors the real fixtures, which declare {} for both)."""
+    control = _repo(tmp_path / "control")
+    (control / "orphan.txt").write_text("orphan\n", encoding="utf-8")
+    task = "task-codex3-legitimate-absence"
+    report = _report(control, task, ["orphan.txt"], owned_edits={}, baseline_dirty_snapshot="")
+    payload = json.loads(report.read_text(encoding="utf-8"))
+    assert "owned_edits" not in payload
+    payload["pre_edit_snapshots"] = {}
+    payload["files_landed_whole"] = [
+        {"path": "orphan.txt", "diff_sha256": "deadbeef", "reason": "test"}
+    ]
+    report.write_text(json.dumps(payload), encoding="utf-8")
+
+    plan = MODULE.build_plan(
+        task_id=task,
+        control_root_arg=str(control),
+        supported_repo_args=[],
+        report_arg=str(report),
+    )
+
+    assert "orphan.txt" in set(plan["repositories"][0]["owned_paths"])
+
+
+def test_codex3_malformed_snapshots_without_landed_whole_keeps_old_failure_mode(
+    tmp_path: Path,
+) -> None:
+    """Scoping guard: with NO files_landed_whole declared, a malformed
+    pre_edit_snapshots keeps the exact pre-existing failure mode -- the
+    ownership-gate missing-path rejection (code foreign_or_unaccounted_edit)
+    -- NOT the new strict-container raise. The strict check exists to
+    protect the subtraction, and the subtraction only runs for reports that
+    declare the channel."""
+    control = _repo(tmp_path / "control")
+    (control / "dual.txt").write_text("dual\n", encoding="utf-8")
+    task = "task-codex3-scoping-guard"
+    report = _report(control, task, ["dual.txt"], owned_edits={}, baseline_dirty_snapshot="")
+    payload = json.loads(report.read_text(encoding="utf-8"))
+    payload["pre_edit_snapshots"] = [{"dual.txt": "deadbeef"}]
+    report.write_text(json.dumps(payload), encoding="utf-8")
+
+    # Post-cutover (see test_ac1's comment above): the scoping guard itself
+    # is untouched (a malformed pre_edit_snapshots with no files_landed_whole
+    # declared still skips the strict-container raise), but the ownership-
+    # gate missing-path rejection it used to fall through to no longer fires
+    # on its own -- no journal evidence for this plain-filesystem write means
+    # deferred.
+    plan = MODULE.build_plan(
+        task_id=task,
+        control_root_arg=str(control),
+        supported_repo_args=[],
+        report_arg=str(report),
+    )
+    assert plan["repositories"][0]["owned_paths"] == ["dual.txt"]
+
+
+# --------------------------------------------------------------------------
+# Residual fail-open gap (this ticket, dev-20260928-021344): the container-
+# shape check above (test_codex3_*) only refuses a present-but-non-dict
+# owned_edits/pre_edit_snapshots. It does NOT cover a legitimate dict that
+# contains one individually-unparseable key (e.g. an embedded NUL byte) --
+# pre-fix, _canonicalized_ledger_identities() silently dropped that one key
+# (continue), shrinking the exclusion set and letting the dual-listed path
+# slip through as a files_landed_whole exemption. The strict twin,
+# _canonicalized_ledger_identities_or_raise(), now raises instead.
+# --------------------------------------------------------------------------
+
+
+def test_residual_gap_unparseable_key_in_pre_edit_snapshots_fails_closed(tmp_path: Path) -> None:
+    """AC1: a valid-dict pre_edit_snapshots whose one key contains an
+    embedded NUL byte must refuse the files_landed_whole exemption for the
+    whole report, not silently drop that key and admit the dual-listed
+    path. Pre-fix this scenario was ADMITTED (dual.txt in owned_paths);
+    post-fix it raises naming pre_edit_snapshots."""
+    control = _repo(tmp_path / "control")
+    (control / "dual.txt").write_text("dual\n", encoding="utf-8")
+    task = "task-residual-gap-pre-edit-snapshots"
+    report = _report(control, task, ["dual.txt"], owned_edits={}, baseline_dirty_snapshot="")
+    payload = json.loads(report.read_text(encoding="utf-8"))
+    assert "owned_edits" not in payload
+    payload["pre_edit_snapshots"] = {"dual.txt\x00": "deadbeef"}
+    payload["files_landed_whole"] = [
+        {"path": "dual.txt", "diff_sha256": "deadbeef", "reason": "test"}
+    ]
+    report.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(MODULE.PlanError, match="pre_edit_snapshots") as excinfo:
+        MODULE.build_plan(
+            task_id=task,
+            control_root_arg=str(control),
+            supported_repo_args=[],
+            report_arg=str(report),
+        )
+    assert excinfo.value.code == "upstream_defect"
+
+
+def test_residual_gap_unparseable_key_in_owned_edits_fails_closed(tmp_path: Path) -> None:
+    """AC2: the identical gap reached via the OTHER subtraction input --
+    owned_edits is unioned into the same files_landed_whole exclusion set,
+    so a malformed owned_edits key must equally refuse the exemption
+    (discovered independently this session, not named in the original
+    pre_edit_snapshots-only framing)."""
+    control = _repo(tmp_path / "control")
+    (control / "dual.txt").write_text("dual\n", encoding="utf-8")
+    task = "task-residual-gap-owned-edits"
+    report = _report(control, task, ["dual.txt"], owned_edits={}, baseline_dirty_snapshot="")
+    payload = json.loads(report.read_text(encoding="utf-8"))
+    assert "owned_edits" not in payload
+    payload["owned_edits"] = {"dual.txt\x00": [{"old": "a", "new": "b"}]}
+    payload["files_landed_whole"] = [
+        {"path": "dual.txt", "diff_sha256": "deadbeef", "reason": "test"}
+    ]
+    report.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(MODULE.PlanError, match="owned_edits") as excinfo:
+        MODULE.build_plan(
+            task_id=task,
+            control_root_arg=str(control),
+            supported_repo_args=[],
+            report_arg=str(report),
+        )
+    assert excinfo.value.code == "upstream_defect"
+
+
+def test_strict_ledger_helper_non_string_key_carries_upstream_defect_code(tmp_path: Path) -> None:
+    """AC3: JSON keys are always strings, so the non-string raise is only
+    reachable by calling the strict helper directly."""
+    control = _repo(tmp_path / "control")
+    with pytest.raises(MODULE.PlanError, match="non-string key") as excinfo:
+        MODULE._canonicalized_ledger_identities_or_raise(
+            {1: "x"}, control, field_name="owned_edits"
+        )
+    assert excinfo.value.code == "upstream_defect"

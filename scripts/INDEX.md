@@ -1,8 +1,8 @@
 # scripts
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-09-23T19:01:26Z*
-**Total entries**: 155
+*Last updated: 2026-10-04T00:36:24Z*
+**Total entries**: 164
 **Convention**: kebab
 
 ## Tree
@@ -23,10 +23,13 @@ scripts/
 │   ├── `tmpfiles-var-tmp-override.conf` - conf file
 │   └── `uninstall` - uninstall file
 ├── lib/
+│   ├── `attribution_adjudicator.py` - Phase D cutover (docs/reference/attribution-journal-cutover-flip-plan-20261003.md,
+│   ├── `attribution_aggregate_view.py` - Emits the canonical dev-report document shape that /close and /commit
 │   ├── `candidate_tree.py` - An acceptance harness usually has to evaluate its criterion against neither the
 │   ├── `make_sbom.py` - The SBOM is built from the archive's real contents, not from the source
 │   ├── `release_membership.py` - Single source of truth shared by every consumer, so the archive builder, the
-│   └── `sibling_loader.py` - ``scripts/close-route-select.py``, ``scripts/late-repair-controller.py`` and
+│   ├── `session_index.py` - A repository has exactly one shared index file (``$GIT_DIR/index``). Every session
+│   ├── `sibling_loader.py` - ``scripts/close-route-select.py``, ``scripts/late-repair-controller.py`` and
 ├── modern-git-slot/
 ├── overnight-git/
 │   ├── `git-policy-shim` - git-policy-shim file
@@ -46,7 +49,7 @@ scripts/
 │   ├── `dev-command.py` - This todo script generates workflow steps for the BA-delegated dev-command workflow
 │   ├── `dev-overnight.py` - Preloaded TodoList for /dev-overnight workflow
 │   ├── `dev.py` - Preloaded TodoList for /dev workflow
-│   ├── `do.py` - Injects the 4-step /do workflow checklist via hook-todo-injection
+│   ├── `do.py` - Injects the 5-step /do workflow checklist via hook-todo-injection
 │   ├── `doc-gen.py` - Python script
 │   ├── `explain-code.py` - Python script
 │   ├── `file-analyze.py` - Preloaded TodoList for /file-analyze workflow
@@ -61,11 +64,13 @@ scripts/
 │   ├── `site-navigate.py` - Python script
 │   ├── `spec.py` - Mirrors the ask.py structure in the knowledge-system scripts/todo directory
 │   └── `test.py` - Preloaded TodoList for /test workflow
+├── `adjudicate-attribution-staging.py` - CLI: journal-based three-way staging adjudicator (read-only unless --capture-dispatch-baselines-into or --escalation-store is given; see scripts/lib/attribution_adjudicator.py).
 ├── `aggregate-dev-report.py` - Scans docs/dev/ for per-worker shard dev-reports matching a given task-id,
 ├── `aggregate-permissions.py` - Usage: aggregate-permissions.py <qa-glob-or-dir> [pipelines.json]
 ├── `analyze-folder-history.sh` - Description: Analyze Git history for folder to discover file creation patterns
 ├── `analyze-git-edge-cases.sh` - Description: Analyze git history for edge cases from bug fix commits
 ├── `apply-permissions.sh` - apply-permissions.sh — merge aggregated permissions JSON list into settings.json
+├── `attribution-aggregate-view.py` - CLI: journal-backed canonical aggregate view (read-only unless --escalation-store is given; see scripts/lib/attribution_aggregate_view.py).
 ├── `blast-radius-tool.py` - Two phases:
 ├── `bootstrap` - bootstrap file
 ├── `break-overnight-lock.py` - Backdates end_time on every active overnight-state-*.json so
@@ -127,6 +132,7 @@ scripts/
 ├── `overnight-inplace-env.sh` - overnight-inplace-env.sh — export the overnight ACTOR MARKER, and nothing else.
 ├── `overnight-status.sh` - overnight-status.sh — Zero-LLM overnight session status query
 ├── `paseo-daemon-ledger.py` - Deterministic CLI realizing blueprint F6/F8/F10/F11/F14 local-persistence
+├── `paseo-daemon-timers.py` - four paseo-daemon timer schedules (tick, ctrl-core-reinject, watchdog,
 ├── `paseo-usage-read.mjs` - mjs file
 ├── `plan-style-inspection.sh` - Description: Discover auditable files and split into groups for parallel style inspection
 ├── `precommitted-recovery.sh` - Description: Recovery path helpers for nothing_to_commit_precommitted detection.
@@ -145,6 +151,8 @@ scripts/
 ├── `scan-project.sh` - Description: Scan project structure and detect project type
 ├── `score-inject.sh` - Description: Emit a prompt-injection text block describing an agent's current rank/range
 ├── `score-update.sh` - Description: Update agent score by appending an entry to the lifecycle JSONL log.
+├── `seal-attribution-journal.py` - The repo tree (journals under state/attribution-journal/ AND the git object
+├── `session-index.py` - Subcommands (all take --git-root):
 ├── `session-resources.py` - Provider-neutral CLI for the LANE-B session resource broker.
 ├── `spec-check.py` - Subcommands: check-in, mark, waive, status, check-out, unlock
 ├── `stage-owned-hunks.py` - Stages ONLY this cycle's owned hunks within a single already-authorized file,
@@ -152,6 +160,7 @@ scripts/
 ├── `test` - test file
 ├── `update-gitignore.sh` - update-gitignore.sh - Auto-update .gitignore with project-specific rules
 ├── `update-overnight-state.sh` - update-overnight-state.sh — Atomically update overnight state file
+├── `verify-attribution-chain.py` - Folds each file's events across ALL session journals into a hash chain and
 ├── `verify-claims-extended.sh` - Description: Extended headline-claims gate. Closes the four documented coverage gaps in
 ├── `verify-claims.sh` - Description: Self-verifying headline-claims gate. Recomputes the wired-hook entry count and
 ├── `verify-hero-provenance.py` - Description: Re-runs the demo, normalizes both outputs and byte-diffs them; verifies raw
