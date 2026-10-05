@@ -13,8 +13,8 @@ a landable `docs/reference/` record **and** the terminating commit message).
 
 | | |
 |---|---|
-| Discards performed so far | **2** (below — untracked scratch files removed by decision, 2026-10-05, after this entry landed) |
-| Recovery coordinates on record | 2 pre-emptive (bytes destroyed by a concurrent session, not discarded by decision) + 2 by-decision (scratch files, full content inlined below — too small to need a blob coordinate) |
+| Discards performed so far | **2** (untracked scratch files removed by decision, 2026-10-05, after this entry landed) + **2 pending** (`.claude/scratch_pre_a.txt`, `.claude/tmp-codex-prompt-XeWFCx.txt`, confirmed empty by the zero-coverage takeover-landing pass, 2026-10-05; removal to be attempted after this register update lands) |
+| Recovery coordinates on record | 2 pre-emptive (bytes destroyed by a concurrent session, not discarded by decision) + 4 by-decision (scratch files, full content inlined below — too small to need a blob coordinate) |
 | Register opened | 2026-10-05T06:50Z |
 
 ## Discards by decision
@@ -29,6 +29,18 @@ single short line, far below the size where a blob-sha coordinate would add anyt
 |---|---|---|
 | `scratch-attribution-selfproof.txt` | `v2 from interpreter` | pure self-test residue — its only reason for existing was to be read back by its own test |
 | `scratch-attribution-selfproof2.txt` | `v1 from interpreter` | pure self-test residue — its only reason for existing was to be read back by its own test |
+| `.claude/scratch_pre_a.txt` | *(empty — 0 bytes, verified `wc -c` 2026-10-05)* | zero-coverage takeover-landing pass (2026-10-05): confirmed empty, no recoverable content to lose |
+| `.claude/tmp-codex-prompt-XeWFCx.txt` | *(empty — 0 bytes, verified `wc -c` 2026-10-05)* | zero-coverage takeover-landing pass (2026-10-05): confirmed empty, no recoverable content to lose |
+
+**Correction to the zero-coverage pass's own working assumption**: a third file carried into this
+pass as "confirmed empty, pure throwaway junk" — `.scratch_subagentstop_ancestor.txt` — was
+re-verified here (`wc -c`) and found to be **26416 bytes**, a complete SubagentStop
+producer-side artifact-schema-gate hook draft (tickets `do-20260926-073930`,
+`20261001-161041-r01`/`r12`, `spec-20260914-052140`, `spec-20260916-031427`). It is **not**
+discarded and has **no row** in this register — it is landed as real content in the same
+commit as the other misleading-filename "scratch"/"tmp" artifacts, with a note in that commit
+message. Recorded here only so the discrepancy between the incoming disposition and the
+verified file state is not silently lost.
 
 Nothing has been discarded by decision. The two entries below are **not** discards;
 they are bytes a concurrent session destroyed in the shared worktree, recorded here so
