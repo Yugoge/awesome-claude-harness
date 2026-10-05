@@ -33,6 +33,25 @@ m = importlib.util.module_from_spec(SPEC)
 sys.modules[SPEC.name] = m
 SPEC.loader.exec_module(m)
 
+# docs/dev/ is excluded by .gitignore:173, so the generated cycle-artifact
+# fixtures this module reads at import time are never present on a clean
+# checkout. A missing path here would otherwise raise FileNotFoundError at
+# module level, which aborts pytest collection for the ENTIRE run (not just
+# this file) -- skip only this module instead, with the reason spelled out.
+_GITIGNORED_FIXTURE_PATHS = (
+    ROOT / "docs/dev/context-20260815-lane-b-registry-v4-migration.json",
+    ROOT / "docs/dev/context-20260815-lane-b-registry-v4-repair-v2.json",
+    ROOT / "docs/dev/context-20260816-lane-b-registry-v4-repair-v2-interruption-recovery.json",
+    ROOT / m.V5_CONTEXT_DEFAULT,
+)
+_missing_fixture_paths = [str(path) for path in _GITIGNORED_FIXTURE_PATHS if not path.exists()]
+if _missing_fixture_paths:
+    pytest.skip(
+        "module-level fixture data under gitignored docs/dev/ is unavailable: "
+        + ", ".join(_missing_fixture_paths),
+        allow_module_level=True,
+    )
+
 
 def _sha(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()

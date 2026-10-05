@@ -1,8 +1,8 @@
 # reference
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-10-05T15:13:57Z*
-**Total entries**: 52
+*Last updated: 2026-10-05T15:26:15Z*
+**Total entries**: 53
 **Convention**: kebab
 
 ## Tree
@@ -40,6 +40,7 @@ reference/
 ├── `open-findings-from-read-only-cycles-20261005.md` - Open findings from read-only cycles — extracted 2026-10-05
 ├── `overnight-cycle-20260809-013317-shared-file-attribution-20260914.md` - Attribution of unattributed content in four shared files, cycle 20260809-013317
 ├── `overnight-reference.md` - Overnight reference (maintainer-facing)
+├── `overnight-worktree-20260810-test-gaps-20261005.md` - Overnight 20260810 worktree test landing: diagnosis of 22 files
 ├── `overnight-worktree-test-gaps-20261005.md` - Overnight 20260809 worktree test landing: diagnosis of 15 failures
 ├── `overwrite-prohibition.md` - Prohibition on wholesale replacement of an existing file
 ├── `paseo-daemon-caller-id-rollout-20261004.md` - `--caller-id` enforcement: immediate rollout, no deploy step, doc gap

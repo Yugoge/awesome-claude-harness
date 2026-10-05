@@ -84,3 +84,36 @@ coordinates. Anyone restoring `dcc33193` restores that block too, and owes it a 
 | `8edbfe156` | LEASE enforce holder at ledger CLI | 1 doc | caller-id rollout incident disclosure |
 | `2df31d56c` | same | 4 files | dual-ticket landing satisfying a historical `COMMIT: REJECT`; `Task-id` + `Co-landed-task-id` |
 | `5093dc63d` | /dev-command takeover cycle | 2 files | operator-authorized `--bulk`; positive-control attribution evidence in the message |
+
+## Deviation from verbatim-original landing (`hooks/tests/test_laneb_integration_gate.py`)
+
+Not a discard -- the file is landed and present on master. Recorded here because the
+operator's retrievability requirement ("可恢复") applies to this too: one file among the
+23 landed from worktree `overnight-20260810-019fe5c1` was **not** landed byte-identical to
+the checkpoint/worktree original. This is the one exception; the other 22 remain
+byte-identical.
+
+**What changed and why**: the original module unconditionally executes several
+module-top-level reads of `docs/dev/*.json` fixture data (`docs/dev/` is gitignored, so
+that data can never be present on a clean checkout). On import, those reads raised
+`FileNotFoundError`, which pytest surfaces as a **collection error that aborts the entire
+suite** -- measured: 6226 tests collected, 1 error, `Interrupted`, zero tests executed.
+Commit `b108c1697` landed the file as-is anyway (an orchestration-side misjudgment: the
+"land failures too, they're visible gaps" principle covers *test failures*, not
+*collection errors* -- a collection error hides every other test's gap, it doesn't expose
+one).
+
+**The fix**: a single module-level guard inserted right after the dynamic gate-module load
+(`SPEC.loader.exec_module(m)`), before any of the crash-prone reads. It checks existence of
+the same fixture paths the module already references and, if any are missing, calls
+`pytest.skip(reason, allow_module_level=True)` -- pytest's own mechanism for "skip this
+whole module, with a stated reason" instead of letting the collector crash. Zero
+assertions, test functions, names, or file locations touched; when the fixtures ARE
+present (the original cycle's environment), behavior is unchanged.
+
+**Recovery coordinates for the exact original (unconditional-read) version** -- both
+independently verified reachable:
+- `refs/checkpoints/worktree-overnight-20260810-019fe5c1` = `1af2a2dcbb4a119f01f956e32617dfec9bc0e5a9`
+- commit `b108c1697` (the superseded landing itself, still in history)
+
+Retrieve with `git show <coordinate>:hooks/tests/test_laneb_integration_gate.py`.
