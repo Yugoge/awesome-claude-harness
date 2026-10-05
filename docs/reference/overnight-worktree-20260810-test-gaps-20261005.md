@@ -72,3 +72,17 @@ Every test in the file errors (not a simple assertion failure) with the same pat
 22 of the 23 files landed in `b108c1697` remain byte-identical to the checkpoint commit `1af2a2dcbb4a119f01f956e32617dfec9bc0e5a9`. The 23rd, `hooks/tests/test_laneb_integration_gate.py`, was patched this round per cluster F above — no assertion/skip/xfail/rename changes. Not added to `tests/baselines/default-run-failures.json`: several clusters above (B, D, and the undiagnosed E) are open questions or likely-real gaps, and registering them as accepted would misrepresent that. Clusters A and C are expected and scoped consequences of a partial, source-only landing, not defects in the landed files themselves.
 
 Worktree `overnight-20260810-019fe5c1` and worktree `overnight-20260809-685c203b`'s remaining 18 files were not touched by this round. `docs/reference/mat-doc10-writer-order.v2.json` and `hooks/stop-workflow-coordinator.py` — both present on master with different content than the worktree version (master's coordinator is 342 lines vs. the worktree's 313) — were deliberately excluded and require separate judgment.
+
+## Appendix: the gate's own text-matching defect, found while disclosing the fixes above
+
+A separate, structural defect in `pretool-git-privilege-guard.py`'s R6 rule (no agent-executed git plumbing) was found and confirmed this same evening, while drafting the commit message for commit `38270245f` above.
+
+**Defect**: the R6 detector scans the full command text -- including heredoc body content -- for command-shaped strings. It cannot distinguish an agent *executing* a restricted git operation from an agent *describing that operation in prose*, including when the prose is a factual account of an earlier rejection by this same rule.
+
+**Evidence (controlled comparison, measured the same evening, before commit `38270245f` landed)**: identical file contents, identical staged set, identical procedure. The only variable was how the commit-message body described two earlier blocked attempts. Quoting the blocked commands verbatim in the message body produced a rejection by the same rule. Rewriting the same two sentences as description, with no command-shaped literal anywhere, passed on the first attempt. Nothing else changed between the two tries.
+
+**Why this is worth recording**: it directly conflicts with this project's disclose-honestly convention. A system that requires an operator to record *why* an operation was rejected can itself block the act of recording it, when the record quotes the rejected command -- and the easiest way around that (rephrase vaguely, or omit the detail) is exactly what the convention exists to prevent.
+
+**Scope statement**: this finding is only about the detector's false-positive on narrative prose. It does not argue for relaxing R6's block on actual execution -- the same evening's three rejections of genuine removal-based attempts (a direct tracked-file removal, and a revert-without-committing-plus-selective-restore) were all correct and are out of scope here.
+
+Full write-up, cross-referenced: `docs/reference/harness-issues-backlog.md` (entry dated 2026-10-05, commit `38270245f`).
