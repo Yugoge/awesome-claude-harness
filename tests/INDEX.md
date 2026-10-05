@@ -1,13 +1,15 @@
 # tests
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-10-05T03:52:08Z*
-**Total entries**: 138
+*Last updated: 2026-10-05T11:07:46Z*
+**Total entries**: 149
 **Convention**: kebab
 
 ## Tree
 ```
 tests/
+├── baselines/
+│   └── `default-run-failures.json` - JSON config: environmental_unbaselined, failing_node_ids, generator, invocation, schema_version
 ├── fixtures/
 │   ├── late_repair_golden/
 │   │   ├── `complete.json` - JSON config: artifact_paths, canonical_dev_report, checks, checks_not_applicable, commit_whitelist_artifacts
@@ -96,6 +98,7 @@ tests/
 │   ├── `validate-venv-usage.py` - Validator: validate-venv-usage
 │   └── `validate-workflow-json-cleanup.py` - Validator: validate-workflow-json-cleanup
 ├── `_dev_lifecycle_fixtures.py` - NOT a test file itself (no test_ prefix, not collected by pytest). Imported by
+├── `_late_repair_fixtures.py` - Not collected by pytest (leading underscore).  Builds four representative
 ├── `fresh-clone-bootstrap-smoke.sh` - Description: Fresh-clone bootstrap smoke — proves "core is runnable + guards engaged"
 ├── `integration-test.sh` - integration-test.sh - Integration tests for git tracking solution
 ├── `test-lock-detection.sh` - Test script to verify git lock file detection and handling
@@ -107,6 +110,7 @@ tests/
 ├── `test_bash_write_targets_verb_narrowing.py` - The library used to read a word that merely begins `cp-`/`mv-` (a checkpoint id such as `cp-01`, a
 ├── `test_candidate_tree.py` - Every test builds its own throwaway git repository. None of them reads this
 ├── `test_changelog_analyst_declaration_categories.py` - `agents/changelog-analyst.md` decides what a cycle commits by reading declaration
+├── `test_changelog_analyst_files_landed_whole_toctou.py` - `files_landed_whole` TOCTOU-safe stage-then-verify sequence (currently at
 ├── `test_changelog_analyst_required_to_ship_sourcing.py` - unobtainable declaration must not be silently read as an empty one
 ├── `test_checkpoint_provenance.py` - These modes are DORMANT: no command, agent definition, or hook invokes them by
 ├── `test_close_report_append.py` - failure semantics (round-7 CRITICAL fix, ticket dev-20260919-135733)
@@ -114,25 +118,31 @@ tests/
 ├── `test_commit_multi_repo_plan.py` - Python script
 ├── `test_commit_sh_reachability.py` - commands/dev-overnight.md:1561 previously called a bare, unqualified
 ├── `test_completeness_channel_invariant.py` - One defect with a producer half and a consumer half:
+├── `test_completeness_span_accounting.py` - halves on one code path
 ├── `test_dev_artifact_chain_consumer_contracts.py` - Contract tests for shared /dev artifact-chain consumers.
 ├── `test_empty_old_string_diagnosis.py` - A real cycle emitted twenty-one ledger entries whose `old` was the empty string
+├── `test_generate_repair_map.py` - Covers AC-L8-01..04 and AC-L8-13 (docs/dev/acceptance-criteria-20260930-132644-l8.json)
 ├── `test_git_clean_guard_vectors.py` - The pre-clean WIP snapshot guard (task dev-20260719-150041-c, lane r03-c) is
 ├── `test_graphify_scripts.py` - tests/test_graphify_scripts.py — smoke tests for scripts/graphify_lib.py
 ├── `test_graphify_workflow_contract.py` - tests/test_graphify_workflow_contract.py — contract tests for graphify agent registration
 ├── `test_hero_advance_cross_check.py` - tools/demo/audit.mjs measures a line's rendered right edge on a fixed monospace grid, using
 ├── `test_interruption_signals.py` - Every banner asserted here was measured in the real transcript corpus under
 ├── `test_late_repair_driftfree_effective_state.py` - scripts/late-repair-controller.py's ``resolve_effective_report_state`` is the
+├── `test_late_repair_route.py` - Covers AC-7..AC-11, AC-13, AC-14 (spec-20260907-115508-lawful-commit-channel.md,
 ├── `test_no_artificial_lifecycle_ceremony.py` - Prevent host metadata ceremonies from becoming ordinary lifecycle gates.
 ├── `test_overnight_guard_in_place_git.py` - Defect (2026-08-09): `hooks/pretool-overnight-hook-guard.py` blocked EVERY git
 ├── `test_overnight_loop_tz.py` - Verifies the overnight loop hook compares end_time correctly against the
+├── `test_parent_cycle_claimant_reader.py` - THE DEFECT.  Admission to a cycle's ownership-completeness claimant set was
 ├── `test_paseo_daemon_ledger.py` - MANDATORY pytest facade for lane 20260828-112025-b: collects EVERY test
 ├── `test_paseo_daemon_timers.py` - scripts/paseo-daemon-timers.py (task 20260926-111239)
 ├── `test_paseo_usage_read.py` - MANDATORY pytest facade for lane 20260828-112025-b: collects EVERY test
 ├── `test_prompt_workflow_injection_cadence.py` - The defect: ``build_overnight_continuation`` emitted ONE payload at ONE cadence
 ├── `test_prompt_workflow_liveness_tz.py` - Two defects, both reproduced before this suite was written:
 ├── `test_public_core_residue_gate.py` - These are the discriminating controls for the "Make CI FAIL (not advisory) on
+├── `test_refusal_record_consumers.py` - This is the module named BY NAME as `check.cli_run.harness` by AC12 and AC14 of
 ├── `test_release_pipeline_contract.py` - verifier
 ├── `test_repair_map_call_site_coverage.py` - (ticket-20261001-161041-r19)
+├── `test_repair_orchestrate.py` - Covers AC-L8-05..08 and AC-L8-14..16
 ├── `test_resolve_dev_artifact_chain.py` - Focused tests for the read-only /dev artifact-chain resolver.
 ├── `test_resolve_spec_artifacts.py` - resolver) + the static centralization lint (AC-B4 cases 1-12, task 20260530-092123)
 ├── `test_restart_command.py` - End-to-end unit coverage for the human-only /restart recovery protocol.
@@ -141,6 +151,7 @@ tests/
 ├── `test_spec_check_concurrent_marking.py` - hooks/pretool-cp-checkin.py (harness backlog #97)
 ├── `test_specialist_yield.py` - Tests use a tmp dir for the yield log and the bundled production policy file
 ├── `test_stage_owned_hunks_boundary.py` - content-anchor-retry boundary/coordinate-space defect (task 20260912-015952)
+├── `test_subagentstop_e2e_enforce.py` - Backlog: dev-20260923-083731 -- widen _find_latest_qa_report's correlation
 ├── `test_todo_md_sync.py` - Regression tests for the session-start todo/Markdown drift detector.
 ├── `test_tool_policy_inference_note.py` - inference note appended by hooks/pretool-tool-policy.py to a Bash write-target
 ├── `TESTING.md` - Test Topology & Runner Map (authoritative)
