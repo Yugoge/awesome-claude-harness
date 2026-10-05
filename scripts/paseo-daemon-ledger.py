@@ -23,16 +23,60 @@ Subcommands:
                                (oldest pending by appended_at, no plan, past
                                threshold) persisted into the ledger itself
   wake-arm / wake-observe / wake-status    recurring wake-channel arming state:
-                               delivery-proof observations + watermark ageing
+                               delivery-proof observations + watermark ageing.
+                               wake-arm --token-delivery disk-read declares a
+                               channel whose external prompt can never be
+                               refreshed with a freshly-minted token (no
+                               registry-visible schedule to push it into);
+                               wake-observe then certifies delivery for that
+                               channel against the CURRENT on-disk token
+                               instead of requiring a caller-supplied one.
+                               wake-observe --renew-holder <id> couples lease
+                               renewal to a certifying delivered observation
+                               in the SAME call (task 20261004-050913: a
+                               separately-scheduled renew can silently
+                               decouple from tick processing); soft-fails
+                               (never aborts the delivery-proof write) on a
+                               holder mismatch or absent lease.
   watchdog-check                R1 AC-1.2: ONE Bash call combining wake-status +
                                lease-status + inbox-check-staleness + conditional
                                escalation inbox-append, so the watchdog's full
                                check-and-maybe-escalate sequence stays within the
-                               5-consecutive-Bash-call orchestrator-gate budget
-  teardown-declare             session-end drain-or-declare teardown record
+                               5-consecutive-Bash-call orchestrator-gate budget.
+                               --registry-dir additionally enables a SEPARATE
+                               self-heal branch (task 20261004-050913):
+                               independent of the lease/wake escalation
+                               judgment above (lease expiry alone never
+                               authorizes seizing a live controller's
+                               timers), it resumes paused inventory timers
+                               and re-arms the tick wake channel ONLY when
+                               the ledger's latest teardown-declare was
+                               for_restart and carries no keep_down marker.
+  teardown-declare / teardown-status      session-end drain-or-declare
+                               record (--for-restart / --keep-down mark
+                               whether a future ensure/watchdog-check pass
+                               may auto-resume) and its read-only query
   recovery-record / recovery-demand / recovery-judge   (resume nonce + AC14 identity)
   dossier-validate             fail-closed schema validation (F12/F13)
   generation-commit / generation-verify           crash-safe generation journal (F14)
+
+Multi-controller concurrency model (task 20261004-085212, inc-42): more than
+one controller SESSION is allowed to run against the SAME ledger root at
+once (e.g. across a lease handover) -- that is normal, not a defect. What is
+NEVER allowed is more than one of them MUTATING the ledger at the same
+instant. Every subcommand that is not read-only, `init`, `lease-acquire`,
+`lease-renew`, `teardown-declare`, or `watchdog-check` (each already
+authorized by its own, narrower, documented semantics -- see
+require_lease_holder()'s docstring for the full exemption list and why) is
+refused with EXIT_REFUSED unless `--caller-id` names the CURRENT, unexpired
+lease holder. This is machine-enforced at every one of those call sites, not
+a discipline rule a controller is trusted to follow: incident 2026-10-04
+(holder ctrl-5969224e-fable5, incarnation 42) was a controller whose lease
+expired at 02:58:24Z continuing to drive ledger-mutating calls for roughly
+five hours, until 08:12Z, with zero machine interception, because no
+subcommand other than lease-acquire/lease-renew checked caller identity at
+all. The fix makes the FIRST such call after expiry refused, regardless of
+who makes it or whether it still believes itself to be in charge.
 
 Exit codes: 0=success, 1=CLI/usage error, 2=invariant/validation refusal,
             3=naive (timezone-less) timestamp rejected, 9=injected crash (tests only).
@@ -59,6 +103,16 @@ EXIT_OK = 0
 EXIT_USAGE = 1
 EXIT_REFUSED = 2
 EXIT_NAIVE_TS = 3
+
+# Self-subprocess paths for watchdog-check's self-heal branch (task
+# 20261004-050913): wake-arm is invoked via subprocess, exactly like
+# cmd_drain's existing teardown-declare call, rather than in-process --
+# cmd_wake_arm's fail() paths call sys.exit, which in-process would also
+# discard the escalation judgment this command already computed. A
+# subprocess failure is just a captured non-zero exit; the parent survives.
+LEDGER_SCRIPT = Path(__file__).resolve()
+REPO_ROOT = LEDGER_SCRIPT.parent.parent
+TIMERS_SCRIPT = LEDGER_SCRIPT.parent / "paseo-daemon-timers.py"
 EXIT_CRASH = 9
 
 MODEL_LADDER = ["fable 5", "opus 5", "sonnet 5"]
@@ -313,6 +367,79 @@ def cmd_lease_renew(args, root, now):
     print(json.dumps({"ok": True}))
 
 
+def require_lease_holder(root, caller_id, now):
+    """Single-writer guard (task 20261004-085212, inc-42): called at the top
+    of every mutating subcommand EXCEPT `init` (bootstrap, before any lease
+    can exist), `lease-acquire`/`lease-renew` (each already has its own,
+    stricter, holder-checking semantics -- see their own bodies), `teardown-
+    declare` (deliberately ungated, same "never force silent abandonment"
+    reasoning as its own barrier exemption -- refusing a dying controller's
+    teardown record would destroy the self-heal system's only positive
+    evidence of a restart-authorized recovery), and `watchdog-check` (the
+    merged check+conditional-escalation+self-heal command; it is invoked BY
+    an independent watchdog schedule that never holds the lease at all, so a
+    caller-identity check would be a category error -- its self-heal branch
+    already carries its own, narrower, teardown-status-based authorization,
+    see self_heal_ineligibility_reason()).
+
+    Before any lease has EVER been acquired against this root, there is no
+    holder to usurp, so mutation proceeds unchecked -- the ledger must stay
+    writable during its own bootstrap. Once a lease exists, the caller must
+    be its CURRENT, UNEXPIRED holder: an expired lease authorizes nobody
+    (not even its own prior holder) until a fresh lease-acquire re-
+    establishes one. This is what turns "a stale holder kept mutating after
+    its lease expired" from a discipline rule into a structural
+    impossibility -- the check runs BEFORE the mutation, every time, with no
+    opt-out for a caller who merely believes itself still in charge."""
+    lease_path = root / "lease.json"
+    if not lease_path.exists():
+        return
+    lease = read_json(lease_path)
+    expires = parse_aware(lease["expires_at"], "lease.expires_at")
+    if now >= expires:
+        fail(EXIT_REFUSED,
+             f"lease expired at {lease['expires_at']} (last held by {lease['holder']}, "
+             f"incarnation {lease['incarnation']}); caller {caller_id!r} is not authorized "
+             f"-- a new lease-acquire is required before any further mutation")
+    if caller_id != lease["holder"]:
+        hint = ("you did not pass --caller-id at all" if caller_id is None else
+                f"--caller-id {caller_id!r} does not match")
+        fail(EXIT_REFUSED,
+             f"lease held by {lease['holder']} (incarnation {lease['incarnation']}) "
+             f"until {lease['expires_at']}; caller is {caller_id!r} ({hint} -- pass "
+             f"--caller-id {lease['holder']!r} to this subcommand)")
+
+
+def require_unsuperseded_holder(root, caller_id, now):
+    """Relaxed sibling of require_lease_holder: same holder-match check,
+    deliberately WITHOUT the expiry gate -- exactly cmd_lease_renew's own,
+    pre-existing, unchanged semantics (a holder may renew its own lease
+    even after expiry, as long as nobody else has yet superseded it by
+    acquiring a new one). Used ONLY by wake-observe's --renew-holder
+    coupling, which is itself performing a renewal in this SAME call: it
+    must be held to EXACTLY the authorization lease-renew already grants
+    itself, not a stricter one that would make the coupling unreachable in
+    precisely the scenario it exists to recover -- a lease that lapsed
+    because its own separately-scheduled renewal silently failed while
+    tick processing kept succeeding (the actual inc-42 root cause 050913
+    fixed). A caller who has been genuinely superseded (lease.json now
+    names a DIFFERENT holder) is still refused exactly as under the strict
+    check -- this only relaxes the expiry clock, never the identity match.
+    A plain wake-observe call with no --renew-holder does not use this
+    path; see require_lease_holder."""
+    lease_path = root / "lease.json"
+    if not lease_path.exists():
+        return
+    lease = read_json(lease_path)
+    if caller_id != lease["holder"]:
+        hint = ("you did not pass --caller-id at all" if caller_id is None else
+                f"--caller-id {caller_id!r} does not match")
+        fail(EXIT_REFUSED,
+             f"lease held by {lease['holder']} (incarnation {lease['incarnation']}); "
+             f"caller is {caller_id!r} ({hint} -- pass --caller-id {lease['holder']!r} "
+             f"to this subcommand)")
+
+
 def cmd_lease_status(args, root, now):
     require_root(root)
     lease_path = root / "lease.json"
@@ -328,6 +455,7 @@ def cmd_lease_status(args, root, now):
 
 def cmd_inbox_append(args, root, now):
     require_root(root)
+    require_lease_holder(root, args.caller_id, now)
     check_barrier(root)
     pending = root / "inbox" / "pending" / f"{args.event_id}.json"
     acked = root / "inbox" / "acked" / f"{args.event_id}.json"
@@ -341,8 +469,38 @@ def cmd_inbox_append(args, root, now):
     print(json.dumps({"ok": True, "duplicate": False, "event_id": args.event_id}))
 
 
+def oldest_pending_event(root):
+    """The next event inbox-consume selects, and the TRUE oldest an outside
+    judge (inbox-check-staleness's oldest_unplanned_pending, watchdog-check)
+    would name: by `appended_at` FIELD, ties broken by event_id, same sort
+    key those judges already use (task 20261004-085212). Fixes a latent bug
+    (flagged but deliberately left unfixed by spec-20260910-164747 R1, out
+    of that cycle's scope) where this function instead sorted by filename
+    via `sorted(pending_dir.glob("*.json"))` -- pending files happen to be
+    named `<event_id>.json`, so that was really a lexicographic sort on
+    event_id, disagreeing with every staleness judge's `appended_at` order.
+    A pending event with a lexicographically-later id could then starve
+    forever behind a continuous stream of newer-but-earlier-sorting ids:
+    inbox-check-staleness would keep naming it the oldest offender while
+    inbox-consume never once selected it to plan -- and since inbox-ack
+    refuses to ACK an event with no recorded plan, the starved event could
+    never be ACKed either, a self-inflicted deadlock. Scans ALL pending
+    files, not just unplanned ones: an event already planned-but-not-acked
+    is still a valid "oldest pending" pick (cmd_inbox_consume's own
+    plan_path.exists() replay check handles it). Returns None when
+    inbox/pending is empty."""
+    pending_dir = root / "inbox" / "pending"
+    events = [read_json(p) for p in pending_dir.glob("*.json")]
+    if not events:
+        return None
+    events.sort(key=lambda e: (parse_aware(e["appended_at"], f"{e['event_id']}.appended_at"),
+                               e["event_id"]))
+    return events[0]
+
+
 def cmd_inbox_consume(args, root, now):
-    """Consume the oldest pending event: record its planned outcome atomically.
+    """Consume the oldest pending event (by appended_at -- see
+    oldest_pending_event): record its planned outcome atomically.
 
     Commit point = the atomic rename publishing inbox/plans/<id>.json.
     A crash BEFORE that rename (--inject-crash after-consume) leaves the event
@@ -350,14 +508,12 @@ def cmd_inbox_consume(args, root, now):
     If a plan already exists the existing plan is returned (never planned twice).
     """
     require_root(root)
+    require_lease_holder(root, args.caller_id, now)
     check_barrier(root)
-    pending_dir = root / "inbox" / "pending"
-    events = sorted(pending_dir.glob("*.json"))
-    if not events:
+    event = oldest_pending_event(root)
+    if event is None:
         print(json.dumps({"ok": True, "consumed": None}))
         return
-    event_path = events[0]
-    event = read_json(event_path)
     event_id = event["event_id"]
     plan_path = root / "inbox" / "plans" / f"{event_id}.json"
     if plan_path.exists():
@@ -389,6 +545,7 @@ def cmd_inbox_ack(args, root, now):
     steps 2-3 idempotently, so a crash between commits can never
     head-of-line-block the inbox or leave the watermark stale."""
     require_root(root)
+    require_lease_holder(root, args.caller_id, now)
     check_barrier(root)
     event_id = args.event_id
     pending = root / "inbox" / "pending" / f"{event_id}.json"
@@ -605,6 +762,7 @@ def cmd_inbox_check_staleness(args, root, now):
     definitions the previous revision only covered the first of (QA
     close-debate, task 20260911-011102)."""
     require_root(root)
+    require_lease_holder(root, args.caller_id, now)
     check_barrier(root)
     config = load_config(root)
     result = compute_inbox_drain_staleness(root, config, now)
@@ -624,6 +782,7 @@ FSM_ORDER = ["planned", "dispatched", "acknowledged", "terminal"]
 
 def cmd_action_transition(args, root, now):
     require_root(root)
+    require_lease_holder(root, args.caller_id, now)
     check_barrier(root)
     key = f"{args.logical_session}__{args.phase}__{args.attempt}"
     path = root / "actions" / f"{key}.json"
@@ -662,6 +821,7 @@ def cmd_action_transition(args, root, now):
 
 def cmd_reserve(args, root, now):
     require_root(root)
+    require_lease_holder(root, args.caller_id, now)
     check_barrier(root)
     path = root / "reservations" / f"{args.reservation_id}.json"
     if path.exists():
@@ -705,6 +865,7 @@ def get_account(data, name):
 
 def cmd_account_init(args, root, now):
     require_root(root)
+    require_lease_holder(root, args.caller_id, now)
     data = load_accounts(root)
     acc = get_account(data, args.account)
     reset_at = parse_aware(args.weekly_reset, "weekly_reset")
@@ -718,6 +879,7 @@ def cmd_account_init(args, root, now):
 
 def cmd_account_block(args, root, now):
     require_root(root)
+    require_lease_holder(root, args.caller_id, now)
     check_barrier(root)
     data = load_accounts(root)
     acc = get_account(data, args.account)
@@ -733,6 +895,7 @@ def cmd_account_observe_reset(args, root, now):
     """Reset-instant sweep: ONLY an account whose own reset instant (or
     blocked_until) has passed moves to single-concurrency probation."""
     require_root(root)
+    require_lease_holder(root, args.caller_id, now)
     data = load_accounts(root)
     moved = []
     for name, acc in data["accounts"].items():
@@ -752,6 +915,7 @@ def cmd_account_observe_reset(args, root, now):
 
 def cmd_account_canary_result(args, root, now):
     require_root(root)
+    require_lease_holder(root, args.caller_id, now)
     data = load_accounts(root)
     acc = get_account(data, args.account)
     if acc["state"] != "probation":
@@ -814,6 +978,7 @@ def cmd_classify_error(args, root, now):
     result = {"class": cls, "action": ERROR_CLASS_ACTION[cls]}
     if args.account:
         require_root(root)
+        require_lease_holder(root, args.caller_id, now)
         check_barrier(root)
         data = load_accounts(root)
         acc = get_account(data, args.account)
@@ -868,6 +1033,7 @@ def cmd_usage_ingest(args, root, now):
     account switch is ever triggered by unavailable/missing readings alone.
     """
     require_root(root)
+    require_lease_holder(root, args.caller_id, now)
     raw = sys.stdin.read() if args.input == "-" else Path(args.input).read_text()
     providers = json.loads(raw)
     if isinstance(providers, dict):
@@ -974,6 +1140,7 @@ def recovery_path(root, session):
 
 def cmd_recovery_record(args, root, now):
     require_root(root)
+    require_lease_holder(root, args.caller_id, now)
     check_barrier(root)
     ids = [x.strip() for x in args.original_agent_ids.split(",") if x.strip()]
     if not ids:
@@ -1008,6 +1175,7 @@ def cmd_recovery_demand(args, root, now):
     account's reset instant / reliable nextEligibleAt has PASSED. A pre-reset
     demand stays queued: zero dispatches, no sent-marker, nonce unchanged."""
     require_root(root)
+    require_lease_holder(root, args.caller_id, now)
     check_barrier(root)
     path = recovery_path(root, args.session)
     if not path.exists():
@@ -1179,6 +1347,7 @@ def cmd_generation_commit(args, root, now):
        before this) — the previous valid generation stays current until here.
     """
     require_root(root)
+    require_lease_holder(root, args.caller_id, now)
     check_barrier(root)
     errors = validate_dossier(args.dossier)
     if errors:
@@ -1276,6 +1445,7 @@ def cmd_intent_queue(args, root, now):
     """F3 co-drive: a controller intent observed during a user turn is queued
     in the durable backlog with its observed_state."""
     require_root(root)
+    require_lease_holder(root, args.caller_id, now)
     check_barrier(root)
     path = root / "backlog" / f"{args.intent_id}.json"
     if path.exists():
@@ -1294,6 +1464,7 @@ def cmd_intent_queue(args, root, now):
 
 def cmd_intent_resolve(args, root, now):
     require_root(root)
+    require_lease_holder(root, args.caller_id, now)
     check_barrier(root)
     path = root / "backlog" / f"{args.intent_id}.json"
     if not path.exists():
@@ -1314,6 +1485,7 @@ def cmd_session_flag(args, root, now):
     updateCount + suspect_since; switch_pending records a mid-run switch
     demand; clear removes the flag."""
     require_root(root)
+    require_lease_holder(root, args.caller_id, now)
     check_barrier(root)
     path = root / "sessions" / f"{args.session}.json"
     rec = read_json(path) if path.exists() else {"session": args.session}
@@ -1338,6 +1510,7 @@ def cmd_dossier_write(args, root, now):
     """F12 dossier publication through the sole mutation surface: the sidecar
     must validate fail-closed BEFORE either file lands in dossiers/."""
     require_root(root)
+    require_lease_holder(root, args.caller_id, now)
     check_barrier(root)
     errors = validate_dossier(args.sidecar_file)
     if errors:
@@ -1362,6 +1535,7 @@ def cmd_dossier_write(args, root, now):
 
 def cmd_barrier_enter(args, root, now):
     require_root(root)
+    require_lease_holder(root, args.caller_id, now)
     (root / "barrier").write_text(json.dumps({"entered_at": iso(now)}) + "\n")
     journal_append(root, {"op": "barrier-enter"}, now)
     print(json.dumps({"ok": True, "barrier": "active"}))
@@ -1372,6 +1546,7 @@ def cmd_barrier_clear(args, root, now):
     reloads — command spec, dossier current generation, verbatim anchors,
     live session/account state."""
     require_root(root)
+    require_lease_holder(root, args.caller_id, now)
     if not (root / "barrier").exists():
         print(json.dumps({"ok": True, "barrier": "not_active"}))
         return
@@ -1394,6 +1569,34 @@ def cmd_barrier_clear(args, root, now):
 
 WAKE_CHANNEL_KINDS = ["paseo_heartbeat", "paseo_schedule"]
 WAKE_ROLES = ["tick", "test"]
+# Declarative token-delivery exemption (task 20261004-050913, inc-42
+# forensics): "prompt-capture" is the original doctrine -- the wake prompt
+# text carries the arming_token captured at arm time, and wake-observe
+# requires it to match by equality. Some channels structurally CANNOT
+# satisfy that: their external registration is invisible to every
+# prompt-update surface (observed live: re-arming a channel the registry
+# reports "Schedule not found" for leaves its deployed prompt forever
+# carrying a stale token), so a fresh token minted at every rearm would
+# make EVERY subsequent delivery "superseded_arming" permanently -- the
+# channel can never again prove delivery. "disk-read" is the declared
+# escape: wake-observe certifies such a channel's delivery against the
+# CURRENT on-disk arming_token (what the record already holds) instead of
+# a caller-supplied one. This is not a weaker check invented for
+# convenience -- it is the actual operating mode the live hbtick channel
+# has used correctly for three weeks; this constant makes that mode
+# explicit and queryable instead of implicit and undocumented.
+WAKE_TOKEN_DELIVERY_MODES = ["prompt-capture", "disk-read"]
+WAKE_TOKEN_DELIVERY_DEFAULT = "prompt-capture"
+
+# Mirrors scripts/paseo-daemon-timers.py's INVENTORY "tick" entry (cron,
+# timezone) for watchdog-check's self-heal re-arm call ONLY. Duplicated
+# rather than imported: these are two independently invoked CLI scripts
+# that never import each other (loose coupling via subprocess only -- see
+# paseo-daemon-timers.py's own module docstring), and the tick cadence is a
+# stable, separately documented fact (commands/paseo-daemon.md "Bootstrap
+# (F6)" Step 3).
+SELF_HEAL_TICK_CRON = "12,57 * * * *"
+SELF_HEAL_TICK_TIMEZONE = "UTC"
 # Supported 5-field cron subset (anything else refused fail-closed at
 # wake-arm): numeric, "*", "*/N", comma lists, "a-b" ranges per field; fields
 # are minute hour day-of-month month day-of-week, with the deployed parser's
@@ -1744,6 +1947,24 @@ def cmd_wake_arm(args, root, now):
     fail-closed: any cap leaves a last fire after which delivery loss is
     permanent (observed: one lost fire, 3h20m43s strand)."""
     require_root(root)
+    if getattr(args, "self_heal_authorized", False):
+        # Internal bypass (task 20261004-085212), used ONLY by
+        # self_heal_paused_timers()'s and rearm_tick_wake_channel()'s own
+        # subprocess re-arm call -- never a blanket bypass: it independently
+        # re-derives the SAME narrow, teardown-status-based eligibility
+        # self-heal itself already required before ever constructing this
+        # call, against THIS root's own current state, not a cached belief.
+        # A caller who merely passes this flag without a genuinely eligible
+        # (for_restart, not keep_down) teardown declaration is refused
+        # exactly as if the flag were absent -- this is why self-heal's own
+        # re-arm can safely run with no valid current lease holder (the
+        # exact situation it exists to recover from) while every other
+        # caller still needs one.
+        reason = self_heal_ineligibility_reason(latest_teardown_status(root))
+        if reason is not None:
+            fail(EXIT_REFUSED, f"--self-heal-authorized refused: {reason}")
+    else:
+        require_lease_holder(root, args.caller_id, now)
     check_barrier(root)
     # The rule-source comparison below stamps its FIRST run with the literal
     # `now` instant on both sides (zone_offset_table's canonical form is
@@ -1842,6 +2063,7 @@ def cmd_wake_arm(args, root, now):
         "cron": args.cron,
         "timezone": args.timezone,
         "role": args.role,
+        "token_delivery": getattr(args, "token_delivery", None) or WAKE_TOKEN_DELIVERY_DEFAULT,
         "max_runs": args.max_runs,
         "armed_at": iso(now),
         "arming_token": arming_token,
@@ -1913,6 +2135,38 @@ def append_wake_missed_event(root, record, missed_fires, slack_minutes, now):
     return event_id
 
 
+def renew_lease_for_holder(root, holder, args, config, now):
+    """Soft-fail lease renewal for the wake-observe renew-coupling (task
+    20261004-050913, inc-42 forensics): a controller's tick processing and
+    its lease renewal were two SEPARATELY scheduled actions, and they
+    silently decoupled (renewal kept failing for an unrelated reason while
+    tick processing kept succeeding) -- a dead lease next to a live
+    controller, which then wrongly reads as DEAD/STRANDED. This couples them
+    at the CLI level: a certifying delivered wake-observe renews the SAME
+    call's holder's lease atomically.
+
+    Deliberately NOT shared with cmd_lease_renew: that function's `fail()`
+    calls sys.exit, which would also discard the delivery-proof write this
+    function is called alongside -- a renewal problem must never swallow a
+    successful observation. Returns a result dict instead of raising, so the
+    caller can report the outcome without losing anything already written.
+    Idempotent (another renewal in the same instant just extends again) and
+    REFUSES (ok: False) a holder that does not match the current lease --
+    never renews a lease on behalf of a holder that is not its own."""
+    lease_path = root / "lease.json"
+    if not lease_path.exists():
+        return {"ok": False, "reason": "no_lease"}
+    lease = read_json(lease_path)
+    if lease["holder"] != holder:
+        return {"ok": False, "reason": "holder_mismatch", "actual_holder": lease["holder"]}
+    ttl = effective_lease_ttl(args, config)
+    warn_ttl_cadence_coupling(config, ttl)
+    lease["heartbeat_at"] = iso(now)
+    lease["expires_at"] = iso(datetime.fromtimestamp(now.timestamp() + ttl, tz=timezone.utc))
+    atomic_write_json(lease_path, lease)
+    return {"ok": True, "holder": holder, "expires_at": lease["expires_at"]}
+
+
 def cmd_wake_observe(args, root, now):
     """Delivery-proof + watermark ageing: ARRIVAL is the only proof of
     channel health (create-API success is not). Runs at every wake —
@@ -1921,8 +2175,23 @@ def cmd_wake_observe(args, root, now):
     when the claim names no due occurrence at all, missed / pending when the
     observation is manual (no --delivered); a miss journals
     wake_channel_missed, appends the consolidated inbox event, and demands
-    re-arm. Deterministic under the --now fake clock."""
+    re-arm. Deterministic under the --now fake clock.
+
+    `--renew-holder <id>` (task 20261004-050913): on a certifying
+    (on_time/late) delivered verdict only, renews that holder's lease in
+    this SAME call via renew_lease_for_holder (see its docstring for why
+    that is a separate, soft-failing helper, never cmd_lease_renew
+    directly). Reported under the `renew` output key; a renewal problem
+    never blocks or rolls back the delivery-proof write above it."""
     require_root(root)
+    if getattr(args, "renew_holder", None):
+        # This call is itself attempting a renewal (see
+        # require_unsuperseded_holder's docstring for why that path gets
+        # lease-renew's own relaxed, expiry-blind authorization rather than
+        # the strict one below).
+        require_unsuperseded_holder(root, args.caller_id, now)
+    else:
+        require_lease_holder(root, args.caller_id, now)
     check_barrier(root)
     if args.delivered and args.channel_id is None:
         fail(EXIT_REFUSED,
@@ -1946,9 +2215,17 @@ def cmd_wake_observe(args, root, now):
     # match by both being absent -- the fail-open shape this workstream has
     # already paid for once.
     armed_token = record.get("arming_token")
+    token_delivery = record.get("token_delivery", WAKE_TOKEN_DELIVERY_DEFAULT)
     arming_verdict = None
     if args.delivered:
-        if armed_token is None:
+        if token_delivery == "disk-read":
+            # Declarative exemption (see WAKE_TOKEN_DELIVERY_MODES): this
+            # channel's external prompt can never carry a freshly-minted
+            # token, so certify against the CURRENT on-disk token rather
+            # than demanding caller-supplied equality. A caller MAY still
+            # pass --arming-token; it is simply never compared here.
+            pass
+        elif armed_token is None:
             arming_verdict = "unversioned_arming"
         elif args.arming_token is None:
             fail(EXIT_REFUSED,
@@ -1995,7 +2272,11 @@ def cmd_wake_observe(args, root, now):
             # call -- carried through unchanged to keep this surface's key
             # set identical to the resolving print below.
             "last_observed_at": record["last_observed_at"],
-            "inbox_event_id": None, "trust_state": state, "trust_reason": reason}))
+            "inbox_event_id": None, "trust_state": state, "trust_reason": reason,
+            # A claim naming no due occurrence proves nothing about tick
+            # processing either (see M9 above), so renewal is never
+            # attempted here even when --renew-holder was passed.
+            "renew": None}))
         return
     # ONE miss rule for delivered and undelivered observations alike: every
     # elapsed fire whose slack has expired is missed. Excluding the delivered
@@ -2077,6 +2358,18 @@ def cmd_wake_observe(args, root, now):
         journal_entry["armed_arming_token"] = armed_token
     if missed:
         journal_entry["event"] = "wake_channel_missed"
+    # Renew-coupling (task 20261004-050913): ONLY on a certifying delivered
+    # verdict against a genuinely due occurrence (on_time/late) -- never on
+    # a manual/undelivered observation, and never when arming_verdict fired
+    # (superseded/unversioned claims do not prove THIS controller processed
+    # anything). renew_holder is None by default, so omitting the flag is a
+    # complete no-op, identical to the prior behavior.
+    renew_holder = getattr(args, "renew_holder", None)
+    renew_result = None
+    if renew_holder and delivered and verdict in ("on_time", "late"):
+        renew_result = renew_lease_for_holder(root, renew_holder, args, config, now)
+        journal_entry["renew_holder"] = renew_holder
+        journal_entry["renew_ok"] = renew_result["ok"]
     journal_append(root, journal_entry, now)
     print(json.dumps({"ok": True, "verdict": reported_verdict,
                       "missed_fires": missed,
@@ -2090,7 +2383,8 @@ def cmd_wake_observe(args, root, now):
                       # read, out of context, as a claim about the present.
                       "last_observed_at": record["last_observed_at"],
                       "inbox_event_id": event_id,
-                      "trust_state": state, "trust_reason": reason}))
+                      "trust_state": state, "trust_reason": reason,
+                      "renew": renew_result}))
 
 
 def cmd_wake_status(args, root, now):
@@ -2132,6 +2426,150 @@ def cmd_wake_status(args, root, now):
         # "stale" above governs the verdict's currency too.
         "last_verdict_stale": stale,
     }))
+
+
+def teardown_status_path(root):
+    return root / "teardown_status.json"
+
+
+def latest_teardown_status(root):
+    """Read-only, in-process read of the ledger's latest teardown
+    declaration (see cmd_teardown_declare / cmd_teardown_status). Returns
+    None when nothing was ever declared -- absence is never eligible."""
+    path = teardown_status_path(root)
+    if not path.exists():
+        return None
+    return read_json(path)
+
+
+def self_heal_ineligibility_reason(teardown_status):
+    """None when eligible; otherwise the specific reason it is not (task
+    20261004-050913 inc-42 correction): self-heal is authorized ONLY by a
+    positive for_restart marker with no keep_down marker -- never by lease
+    expiry or wake staleness alone, which the forensics showed can both be
+    true next to a perfectly live controller (inc-42: the holder kept
+    processing ticks after its lease expired; seizing its timers would have
+    been a second controller stepping on a live one)."""
+    if teardown_status is None:
+        return "no_teardown_declared"
+    if teardown_status.get("keep_down") is True:
+        return "keep_down_declared"
+    if teardown_status.get("for_restart") is not True:
+        return "last_teardown_not_for_restart"
+    return None
+
+
+def derive_channel_id_from_timer_name(name):
+    """The live tick registration's name carries its wake-arm channel id as
+    a suffix after a space (see paseo-daemon-timers.py INVENTORY's "tick"
+    entry comment, e.g. "paseo-daemon-tick hbtick-20260902T1158Z-c7d1").
+    Reusing it (rather than minting a fresh id) keeps the re-armed channel's
+    identity continuous with the one that was paused. Returns None when the
+    name carries no such suffix (synthetic/test registrations)."""
+    if name and " " in name:
+        return name.split(" ", 1)[1]
+    return None
+
+
+def self_heal_paused_timers(args, root, now):
+    """Self-heal branch (task 20261004-050913, inc-42 correction): resumes
+    paused inventory timers and re-arms the tick wake channel ONLY when the
+    ledger's latest teardown-declare was for_restart with no keep_down
+    marker -- a judgment completely INDEPENDENT of (never OR'd with) the
+    lease/wake escalation above. A lease that is merely expired, next to
+    timers that are NOT paused, is left to the existing escalation path
+    alone: this function takes no action and the caller still only
+    escalates-and-journals, never seizes.
+
+    'Reachable before minting a token' (prior memory lesson:
+    verify-rebind-before-minting-token): `resume` is attempted whenever
+    eligible (it is idempotent and side-effect-free when nothing is
+    paused), but wake-arm -- which mints a NEW token, invalidating whatever
+    the previous one was -- is called ONLY when `resume` itself reports
+    "tick" among the keys it ACTUALLY flipped from paused to active. A
+    timer that was already active is, by construction, never reported
+    resumed, so this is the same unambiguous on-disk `status` field ensure
+    already uses, not a timing heuristic -- there is no "just fired vs
+    truly paused" guess to make here, because nothing in this repository
+    ever mutates `status` except this script's own pause/resume code.
+    The re-armed channel declares --token-delivery disk-read: the tick
+    channel is the one inc-42 showed to be registry-invisible (its prompt
+    can never be refreshed with a freshly-minted token), so a self-heal
+    that minted a prompt-capture token would recreate exactly the
+    superseded_arming trap it exists to recover from."""
+    result = {"attempted": False, "eligible": False, "reason": None,
+              "resumed": [], "wake_armed": None}
+    registry_dir = getattr(args, "registry_dir", None)
+    if registry_dir is None:
+        result["reason"] = "registry_dir_not_provided"
+        return result
+    teardown_status = latest_teardown_status(root)
+    reason = self_heal_ineligibility_reason(teardown_status)
+    if reason is not None:
+        result["reason"] = reason
+        return result
+    result["eligible"] = True
+    result["attempted"] = True
+
+    resume_cmd = [sys.executable, str(TIMERS_SCRIPT), "--registry-dir", str(registry_dir),
+                  "--now", iso(now), "resume"]
+    resume_proc = subprocess.run(resume_cmd, capture_output=True, text=True, cwd=REPO_ROOT)
+    if resume_proc.returncode != 0:
+        result["reason"] = f"resume_failed: {resume_proc.stderr.strip()}"
+        return result
+    resumed = []
+    tick_name = None
+    for line in resume_proc.stdout.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        rec = json.loads(line)
+        if rec.get("op") == "resume":
+            resumed.append(rec["key"])
+            if rec["key"] == "tick":
+                tick_name = rec.get("name")
+    result["resumed"] = resumed
+
+    if "tick" in resumed:
+        channel_id = (derive_channel_id_from_timer_name(tick_name)
+                      or f"hbtick-{now.strftime('%Y%m%dT%H%M%SZ')}-{secrets.token_hex(2)}")
+        arm_cmd = [sys.executable, str(LEDGER_SCRIPT), "--root", str(root), "--now", iso(now),
+                   "wake-arm", "--self-heal-authorized",
+                   "--channel-kind", "paseo_heartbeat", "--channel-id", channel_id,
+                   "--cron", SELF_HEAL_TICK_CRON, "--timezone", SELF_HEAL_TICK_TIMEZONE,
+                   "--role", "tick", "--token-delivery", "disk-read"]
+        arm_proc = subprocess.run(arm_cmd, capture_output=True, text=True, cwd=REPO_ROOT)
+        if arm_proc.returncode == 0:
+            lines = [l for l in arm_proc.stdout.splitlines() if l.strip()]
+            payload = json.loads(lines[-1]) if lines else {}
+            result["wake_armed"] = {"ok": True, "channel_id": channel_id,
+                                    "arming_token": payload.get("arming_token")}
+        else:
+            result["wake_armed"] = {"ok": False, "channel_id": channel_id,
+                                    "error": arm_proc.stderr.strip()}
+
+    if resumed:
+        fmt = "%Y%m%dT%H%M%SZ"
+        event_id = f"watchdog-self-heal-{now.strftime(fmt)}"
+        pending = root / "inbox" / "pending" / f"{event_id}.json"
+        acked = root / "inbox" / "acked" / f"{event_id}.json"
+        result["self_heal_event_id"] = event_id
+        if pending.exists() or acked.exists():
+            result["self_heal_event_appended"] = False
+        else:
+            atomic_write_json(pending, {"event_id": event_id, "appended_at": iso(now), "payload": {
+                "type": "watchdog_self_heal",
+                "resumed": resumed,
+                "wake_armed": result["wake_armed"],
+                "teardown_status": teardown_status,
+            }})
+            journal_append(root, {"op": "inbox-append", "event_id": event_id}, now)
+            result["self_heal_event_appended"] = True
+    else:
+        result["self_heal_event_id"] = None
+        result["self_heal_event_appended"] = False
+
+    return result
 
 
 def cmd_watchdog_check(args, root, now):
@@ -2266,6 +2704,13 @@ def cmd_watchdog_check(args, root, now):
             journal_append(root, {"op": "inbox-append", "event_id": event_id}, now)
             result["escalation_event_appended"] = True
 
+    # Self-heal (task 20261004-050913, inc-42 correction): a judgment
+    # COMPLETELY INDEPENDENT of escalation_needed/escalation_reasons above
+    # -- it is never OR'd into them, and never gated by lease_ok/wake_fresh.
+    # See self_heal_paused_timers's docstring for why lease expiry alone
+    # must never authorize it.
+    result["self_heal"] = self_heal_paused_timers(args, root, now)
+
     print(json.dumps(result))
 
 
@@ -2275,7 +2720,18 @@ def cmd_teardown_declare(args, root, now):
     handoff from a crash. Deliberately NOT barrier-gated: refusing the
     declaration under an active rehydration barrier would force the silent
     abandonment this record exists to prevent (lease ops are likewise
-    ungated)."""
+    ungated).
+
+    `--for-restart` / `--keep-down` (restart-recovery mechanism, task
+    20261004-050913): structured, caller-declared markers, NEVER inferred
+    from the free-text `--reason` string -- substring-matching a reason for
+    a recovery-authorizing decision would let a human-readable label
+    silently become a control input. Both are persisted into
+    `teardown_status.json` (the LATEST declaration only, overwritten each
+    call -- mirrors `drain_status.json`'s own "latest verdict" shape) so
+    `ensure` (ledger-driven auto-resume) and `watchdog-check` (self-heal) can
+    query the single source of truth via the read-only `teardown-status`
+    subcommand instead of scanning the append-only journal."""
     require_root(root)
     pending_ids = sorted(p.stem for p in (root / "inbox" / "pending").glob("*.json"))
     lease_path = root / "lease.json"
@@ -2286,10 +2742,36 @@ def cmd_teardown_declare(args, root, now):
                        "holder": lease["holder"], "incarnation": lease["incarnation"]}
     else:
         disposition = {"state": "none"}
+    status = {
+        "at": iso(now),
+        "reason": args.reason,
+        "for_restart": bool(args.for_restart),
+        "keep_down": bool(args.keep_down),
+        "pending_event_ids": pending_ids,
+        "lease_disposition": disposition,
+    }
+    atomic_write_json(teardown_status_path(root), status)
     journal_append(root, {"op": "teardown-declare", "pending_event_ids": pending_ids,
-                          "reason": args.reason, "lease_disposition": disposition}, now)
-    print(json.dumps({"ok": True, "pending_event_ids": pending_ids,
-                      "reason": args.reason, "lease_disposition": disposition}))
+                          "reason": args.reason, "lease_disposition": disposition,
+                          "for_restart": status["for_restart"],
+                          "keep_down": status["keep_down"]}, now)
+    print(json.dumps({"ok": True, **status}))
+
+
+def cmd_teardown_status(args, root, now):
+    """Read-only query of the ledger's LATEST teardown declaration (never
+    the journal's full history -- only the most recent call is relevant to a
+    recovery decision). Never mutates, never journals. Absence (no teardown
+    ever declared against this root) reads as `{"declared": false}`, never a
+    default-eligible status: an auto-recovery consumer must see POSITIVE
+    evidence of a restart-flagged teardown, not the mere absence of a
+    keep-down marker."""
+    require_root(root)
+    path = teardown_status_path(root)
+    if not path.exists():
+        print(json.dumps({"declared": False}))
+        return
+    print(json.dumps({"declared": True, **read_json(path)}))
 
 
 # ---------------- argument parsing ----------------
@@ -2299,6 +2781,18 @@ def build_parser():
     p.add_argument("--root", required=True, help="ledger root directory (e.g. .claude/paseo-daemon)")
     p.add_argument("--now", default=None, help="fake clock: aware ISO-8601 timestamp (tests)")
     sub = p.add_subparsers(dest="cmd", required=True)
+
+    # Shared by every subcommand require_lease_holder() actually gates (see
+    # its docstring for the exemption list) -- one definition, so the flag's
+    # name/help/default can never drift between subcommands (task
+    # 20261004-085212).
+    caller_id_parent = argparse.ArgumentParser(add_help=False)
+    caller_id_parent.add_argument(
+        "--caller-id", default=None,
+        help="identity of the calling controller; once any lease has ever been "
+             "acquired against this root, must equal its CURRENT, unexpired "
+             "holder or this subcommand refuses (EXIT_REFUSED) -- see "
+             "require_lease_holder()")
 
     s = sub.add_parser("init")
     s.add_argument("--accounts", default=",".join(DEFAULT_ACCOUNTS),
@@ -2324,22 +2818,22 @@ def build_parser():
     s = sub.add_parser("lease-status")
     s.set_defaults(fn=cmd_lease_status)
 
-    s = sub.add_parser("inbox-append")
+    s = sub.add_parser("inbox-append", parents=[caller_id_parent])
     s.add_argument("--event-id", required=True)
     s.add_argument("--payload", required=True, help="event payload JSON")
     s.set_defaults(fn=cmd_inbox_append)
-    s = sub.add_parser("inbox-consume")
+    s = sub.add_parser("inbox-consume", parents=[caller_id_parent])
     s.add_argument("--planned-outcome", required=True)
     s.add_argument("--inject-crash", choices=["after-consume", "after-plan"])
     s.set_defaults(fn=cmd_inbox_consume)
-    s = sub.add_parser("inbox-ack")
+    s = sub.add_parser("inbox-ack", parents=[caller_id_parent])
     s.add_argument("--event-id", required=True)
     s.add_argument("--inject-crash", choices=["after-acked-write", "after-pending-unlink"])
     s.set_defaults(fn=cmd_inbox_ack)
-    s = sub.add_parser("inbox-check-staleness")
+    s = sub.add_parser("inbox-check-staleness", parents=[caller_id_parent])
     s.set_defaults(fn=cmd_inbox_check_staleness)
 
-    s = sub.add_parser("action-transition")
+    s = sub.add_parser("action-transition", parents=[caller_id_parent])
     s.add_argument("--logical-session", required=True)
     s.add_argument("--phase", required=True)
     s.add_argument("--attempt", required=True)
@@ -2348,34 +2842,34 @@ def build_parser():
                    help="machine-readable completion evidence path (required for terminal)")
     s.set_defaults(fn=cmd_action_transition)
 
-    s = sub.add_parser("reserve")
+    s = sub.add_parser("reserve", parents=[caller_id_parent])
     s.add_argument("--reservation-id", required=True)
     s.add_argument("--account", required=True)
     s.add_argument("--logical-session", required=True)
     s.set_defaults(fn=cmd_reserve)
 
-    s = sub.add_parser("account-init")
+    s = sub.add_parser("account-init", parents=[caller_id_parent])
     s.add_argument("--account", required=True)
     s.add_argument("--weekly-reset", required=True)
     s.set_defaults(fn=cmd_account_init)
-    s = sub.add_parser("account-block")
+    s = sub.add_parser("account-block", parents=[caller_id_parent])
     s.add_argument("--account", required=True)
     s.add_argument("--until", required=True)
     s.set_defaults(fn=cmd_account_block)
-    s = sub.add_parser("account-observe-reset")
+    s = sub.add_parser("account-observe-reset", parents=[caller_id_parent])
     s.set_defaults(fn=cmd_account_observe_reset)
-    s = sub.add_parser("account-canary-result")
+    s = sub.add_parser("account-canary-result", parents=[caller_id_parent])
     s.add_argument("--account", required=True)
     s.add_argument("--result", required=True, choices=["success", "failure"])
     s.set_defaults(fn=cmd_account_canary_result)
 
-    s = sub.add_parser("classify-error")
+    s = sub.add_parser("classify-error", parents=[caller_id_parent])
     s.add_argument("--text", required=True)
     s.add_argument("--account", default=None,
                    help="persist the account-state consequence of the classification")
     s.set_defaults(fn=cmd_classify_error)
 
-    s = sub.add_parser("usage-ingest")
+    s = sub.add_parser("usage-ingest", parents=[caller_id_parent])
     s.add_argument("--input", default="-", help="providers[] JSON file, or - for stdin")
     s.set_defaults(fn=cmd_usage_ingest)
 
@@ -2384,14 +2878,14 @@ def build_parser():
     s.add_argument("--task-class", required=True, choices=sorted(TASK_CLASS_BASE_MODEL))
     s.set_defaults(fn=cmd_scheduling_decision)
 
-    s = sub.add_parser("recovery-record")
+    s = sub.add_parser("recovery-record", parents=[caller_id_parent])
     s.add_argument("--session", required=True)
     s.add_argument("--account", required=True)
     s.add_argument("--original-agent-ids", required=True,
                    help="comma-separated pre-interruption subagent ids")
     s.add_argument("--last-artifact", default=None)
     s.set_defaults(fn=cmd_recovery_record)
-    s = sub.add_parser("recovery-demand")
+    s = sub.add_parser("recovery-demand", parents=[caller_id_parent])
     s.add_argument("--session", required=True)
     s.set_defaults(fn=cmd_recovery_demand)
     s = sub.add_parser("recovery-judge")
@@ -2403,38 +2897,38 @@ def build_parser():
     s.add_argument("--file", required=True)
     s.set_defaults(fn=cmd_dossier_validate)
 
-    s = sub.add_parser("generation-commit")
+    s = sub.add_parser("generation-commit", parents=[caller_id_parent])
     s.add_argument("--dossier", required=True)
     s.add_argument("--inject-crash", choices=["after-write", "after-rename", "before-pointer"])
     s.set_defaults(fn=cmd_generation_commit)
 
-    s = sub.add_parser("intent-queue")
+    s = sub.add_parser("intent-queue", parents=[caller_id_parent])
     s.add_argument("--intent-id", required=True)
     s.add_argument("--session", required=True)
     s.add_argument("--payload", required=True, help="intent payload JSON")
     s.add_argument("--observed-state", required=True)
     s.set_defaults(fn=cmd_intent_queue)
-    s = sub.add_parser("intent-resolve")
+    s = sub.add_parser("intent-resolve", parents=[caller_id_parent])
     s.add_argument("--intent-id", required=True)
     s.add_argument("--outcome", required=True, choices=INTENT_OUTCOMES)
     s.set_defaults(fn=cmd_intent_resolve)
 
-    s = sub.add_parser("session-flag")
+    s = sub.add_parser("session-flag", parents=[caller_id_parent])
     s.add_argument("--session", required=True)
     s.add_argument("--flag", required=True, choices=["suspect", "switch_pending", "clear"])
     s.add_argument("--turn-id", default=None)
     s.add_argument("--update-count", type=int, default=None)
     s.set_defaults(fn=cmd_session_flag)
 
-    s = sub.add_parser("dossier-write")
+    s = sub.add_parser("dossier-write", parents=[caller_id_parent])
     s.add_argument("--session", required=True)
     s.add_argument("--md-file", required=True)
     s.add_argument("--sidecar-file", required=True)
     s.set_defaults(fn=cmd_dossier_write)
 
-    s = sub.add_parser("barrier-enter")
+    s = sub.add_parser("barrier-enter", parents=[caller_id_parent])
     s.set_defaults(fn=cmd_barrier_enter)
-    s = sub.add_parser("barrier-clear")
+    s = sub.add_parser("barrier-clear", parents=[caller_id_parent])
     s.add_argument("--spec-reloaded", action="store_true")
     s.add_argument("--generation-reloaded", action="store_true")
     s.add_argument("--anchors-reloaded", action="store_true")
@@ -2445,7 +2939,15 @@ def build_parser():
     s.add_argument("--expect-sha256", default=None)
     s.set_defaults(fn=cmd_generation_verify)
 
-    s = sub.add_parser("wake-arm")
+    s = sub.add_parser("wake-arm", parents=[caller_id_parent])
+    s.add_argument("--self-heal-authorized", action="store_true",
+                   help="internal: used ONLY by self_heal_paused_timers()'s/"
+                        "rearm_tick_wake_channel()'s own subprocess re-arm call. Bypasses "
+                        "the --caller-id/lease-holder check in favor of independently "
+                        "re-deriving self_heal_ineligibility_reason() against THIS root's "
+                        "own teardown-status -- never a blanket bypass, since a caller "
+                        "without a genuinely eligible (for_restart, not keep_down) teardown "
+                        "declaration is refused exactly as if this flag were absent")
     s.add_argument("--channel-kind", required=True, choices=WAKE_CHANNEL_KINDS)
     s.add_argument("--channel-id", required=True)
     s.add_argument("--cron", required=True,
@@ -2459,8 +2961,15 @@ def build_parser():
                         f"(default: config wake_verify_window_days, else "
                         f"{WAKE_VERIFY_WINDOW_DEFAULT_DAYS}; refused beyond "
                         f"{WAKE_VERIFY_WINDOW_MAX_DAYS})")
+    s.add_argument("--token-delivery", choices=WAKE_TOKEN_DELIVERY_MODES,
+                   default=WAKE_TOKEN_DELIVERY_DEFAULT,
+                   help="'prompt-capture' (default): wake-observe requires a caller-supplied "
+                        "--arming-token matching this arming. 'disk-read': declares a channel "
+                        "whose external prompt can never be refreshed with a freshly-minted "
+                        "token (registry-invisible schedule); wake-observe certifies delivery "
+                        "against the current on-disk token instead")
     s.set_defaults(fn=cmd_wake_arm)
-    s = sub.add_parser("wake-observe")
+    s = sub.add_parser("wake-observe", parents=[caller_id_parent])
     s.add_argument("--delivered", action="store_true",
                    help="a wake actually arrived (the prompt carried the channel id)")
     s.add_argument("--channel-id", default=None,
@@ -2468,15 +2977,56 @@ def build_parser():
     s.add_argument("--arming-token", default=None,
                    help="arming token the wake prompt captured at arming time; compared "
                         "by equality against the armed record, so a superseded arming "
-                        "cannot certify the arming that replaced it")
+                        "cannot certify the arming that replaced it (ignored for a "
+                        "disk-read token-delivery channel)")
+    s.add_argument("--renew-holder", default=None,
+                   help="couple lease renewal to this call: on a certifying on_time/late "
+                        "delivered verdict, renews this holder's lease in the SAME call "
+                        "(task 20261004-050913); soft-fails and is reported under the "
+                        "'renew' output key on a holder mismatch or absent lease")
+    s.add_argument("--ttl-seconds", type=int, default=None,
+                   help="lease TTL seconds for the --renew-holder coupling; default: "
+                        "config lease_ttl_seconds, same resolution as lease-renew")
     s.set_defaults(fn=cmd_wake_observe)
     s = sub.add_parser("wake-status")
     s.set_defaults(fn=cmd_wake_status)
     s = sub.add_parser("watchdog-check")
+    # Defaults to the real, live registry (mirrors paseo-daemon-timers.py's
+    # own --registry-dir default at this module's sibling script) -- NOT
+    # None (QA close-debate, task 20261004-050913: a None default left the
+    # self-heal branch permanently unreachable in the deployed system, since
+    # the live watchdog prompt invokes this subcommand with no
+    # --registry-dir flag at all and that prompt file is out of scope to
+    # edit this cycle. Self-heal's actual safety gate is
+    # self_heal_ineligibility_reason()'s teardown-status check below, NOT
+    # this path -- so defaulting it to the real registry, exactly like the
+    # sibling script already does for every one of ITS subcommands
+    # including the mutating ones, carries no additional risk: a test
+    # ledger with no --for-restart teardown declared against it short-
+    # circuits before ever referencing this path. Every test MUST still
+    # pass an explicit --registry-dir pytest tmp_path whenever it declares
+    # an eligible teardown, exactly as paseo-daemon-timers.py's own tests
+    # always override its --registry-dir.
+    s.add_argument("--registry-dir", default="/root/.paseo/schedules",
+                   help="timer schedule registry dir for the self-heal branch (resume + "
+                        "re-arm tick ONLY when the ledger's latest teardown-declare was "
+                        "--for-restart with no --keep-down); defaults to the real registry "
+                        "so the self-heal branch is reachable from the unchanged watchdog "
+                        "prompt with no flag of its own -- tests MUST override this to a "
+                        "tmp_path")
     s.set_defaults(fn=cmd_watchdog_check)
     s = sub.add_parser("teardown-declare")
     s.add_argument("--reason", required=True)
+    s.add_argument("--for-restart", action="store_true",
+                   help="this teardown is ahead of a planned daemon restart; authorizes "
+                        "ensure's and watchdog-check's ledger-driven auto-resume on the next "
+                        "bootstrap/watchdog pass unless --keep-down is also given")
+    s.add_argument("--keep-down", action="store_true",
+                   help="explicit long-term deactivation: never auto-resume after this "
+                        "teardown even if --for-restart is set")
     s.set_defaults(fn=cmd_teardown_declare)
+    s = sub.add_parser("teardown-status")
+    s.set_defaults(fn=cmd_teardown_status)
     return p
 
 

@@ -266,23 +266,32 @@ def test_inbox_check_staleness_both_substates_independently_true_simultaneously(
     # be independently triggerable and neither may mask the other -- an
     # unplanned aged event and a separate planned-but-never-acked aged event
     # coexisting in pending/ must BOTH surface in stale_reasons.
+    #
+    # "aaa-younger-unplanned" sorts FIRST alphabetically but is appended
+    # SECOND (chronologically younger); "zzz-older-planned" sorts last but
+    # is appended FIRST (chronologically older). Deliberately the inverse
+    # of filename order, so inbox-consume's appended_at-ordered selection
+    # (task 20261004-085212 fix -- previously a filename/event_id-
+    # lexicographic bug, flagged but deliberately left unfixed by this
+    # spec's own R1) can only pass this test by actually using appended_at:
+    # it plans "zzz-older-planned" (the true oldest), leaving
+    # "aaa-younger-unplanned" unplanned.
     root = ledger(tmp_path)
-    # "aaa-with-plan" sorts first alphabetically, so inbox-consume (which
-    # picks the filename-sorted-first pending event -- a separate pre-
-    # existing ordering quirk flagged out-of-scope for R1) plans this one
-    # first, leaving "zzz-no-plan" unplanned.
-    ok(root, "inbox-append", "--event-id", "aaa-with-plan", "--payload", "{}",
+    ok(root, "inbox-append", "--event-id", "aaa-younger-unplanned", "--payload", "{}",
        now="2026-09-02T00:00:00Z")
-    ok(root, "inbox-append", "--event-id", "zzz-no-plan", "--payload", "{}",
+    ok(root, "inbox-append", "--event-id", "zzz-older-planned", "--payload", "{}",
        now="2026-09-01T00:00:00Z")
     ok(root, "inbox-consume", "--planned-outcome", "dispatch-qa",
        now="2026-09-02T01:00:00Z")
     out = check_staleness(root, now="2026-09-11T04:14:00Z")
     assert out["inbox_drain_stale"] is True
     assert set(out["stale_reasons"]) == {"no_plan", "plan_not_acked"}
-    assert out["oldest_pending_event_id"] == "zzz-no-plan"
-    assert out["has_plan"] is False
-    assert out["oldest_unacked_planned_event_id"] == "aaa-with-plan"
+    # "zzz-older-planned" -- now actually planned -- is the TRUE oldest-by-
+    # appended_at across both candidates, so it (not the unplanned one)
+    # correctly wins the legacy oldest_pending_event_id/has_plan fields.
+    assert out["oldest_pending_event_id"] == "zzz-older-planned"
+    assert out["has_plan"] is True
+    assert out["oldest_unacked_planned_event_id"] == "zzz-older-planned"
 
 
 def test_inbox_check_staleness_legacy_oldest_field_picks_true_oldest_across_substates(tmp_path):
@@ -478,6 +487,90 @@ def test_lease_foreign_unexpired_refused_expired_succeeds(tmp_path):
     out = ok(root, "lease-acquire", "--holder", "ctl-B", "--ttl-seconds", "3600",
              now="2026-08-28T13:00:01Z")
     assert out["incarnation"] == 2  # takeover only after expiry
+
+
+# ---------------- single-writer guard (task 20261004-085212, inc-42) ----------------
+
+def test_mutating_subcommand_allowed_before_any_lease_ever_acquired(tmp_path):
+    # Bootstrap must stay writable: before lease-acquire is ever called,
+    # there is no holder to usurp, so --caller-id is not even required.
+    root = ledger(tmp_path)
+    r = run(root, "inbox-append", "--event-id", "ev-1", "--payload", "{}")
+    assert r.returncode == 0, r.stderr
+
+
+def test_mutating_subcommand_refused_for_wrong_caller_once_lease_held(tmp_path):
+    root = ledger(tmp_path)
+    ok(root, "lease-acquire", "--holder", "ctl-A", now=T0)
+    r = run(root, "inbox-append", "--caller-id", "ctl-B", "--event-id", "ev-1",
+            "--payload", "{}", now=T0)
+    assert r.returncode == 2
+    assert "ctl-A" in r.stderr and "'ctl-B'" in r.stderr
+    r = run(root, "inbox-append", "--event-id", "ev-1", "--payload", "{}", now=T0)
+    assert r.returncode == 2  # omitting --caller-id entirely is also refused, not fail-open
+
+
+def test_mutating_subcommand_refused_once_held_lease_expires_even_for_original_holder(tmp_path):
+    # THE inc-42 reproduction: a holder whose OWN lease expired must be
+    # refused at its very next mutating call, with no grace period and no
+    # exception for "but I'm the one who held it" -- the structural fix for
+    # "a stale holder kept mutating for ~5 hours after its lease expired,
+    # zero machine interception" (2026-10-04, holder ctrl-5969224e-fable5,
+    # incarnation 42, expired 02:58:24Z, finally stopped 08:12Z).
+    root = ledger(tmp_path)
+    ok(root, "lease-acquire", "--holder", "ctl-A", "--ttl-seconds", "7200", now=T0)
+    still_valid = ok(root, "inbox-append", "--caller-id", "ctl-A", "--event-id", "ev-1",
+                     "--payload", "{}", now="2026-08-28T13:00:00Z")
+    assert still_valid["ok"] is True
+    r = run(root, "inbox-append", "--caller-id", "ctl-A", "--event-id", "ev-2",
+            "--payload", "{}", now="2026-08-28T14:00:01Z")  # 1s past the 7200s TTL
+    assert r.returncode == 2
+    assert "expired" in r.stderr and "ctl-A" in r.stderr
+    # a fresh lease-acquire re-establishes authorization for the SAME holder
+    ok(root, "lease-acquire", "--holder", "ctl-A", "--ttl-seconds", "7200",
+       now="2026-08-28T14:00:01Z")
+    recovered = ok(root, "inbox-append", "--caller-id", "ctl-A", "--event-id", "ev-2",
+                   "--payload", "{}", now="2026-08-28T14:00:01Z")
+    assert recovered["ok"] is True
+
+
+def test_mutating_subcommand_refused_for_successor_holder_not_original(tmp_path):
+    root = ledger(tmp_path)
+    ok(root, "lease-acquire", "--holder", "ctl-A", "--ttl-seconds", "60", now=T0)
+    ok(root, "lease-acquire", "--holder", "ctl-B", "--ttl-seconds", "7200",
+       now="2026-08-28T12:02:00Z")  # takeover after ctl-A's lease expired
+    r = run(root, "inbox-append", "--caller-id", "ctl-A", "--event-id", "ev-1",
+            "--payload", "{}", now="2026-08-28T12:02:00Z")
+    assert r.returncode == 2
+    assert "ctl-B" in r.stderr  # names the CURRENT holder, not the stale caller's own belief
+    ok(root, "inbox-append", "--caller-id", "ctl-B", "--event-id", "ev-1",
+       "--payload", "{}", now="2026-08-28T12:02:00Z")  # the actual current holder succeeds
+
+
+def test_read_only_and_exempted_subcommands_never_require_caller_id(tmp_path):
+    # lease-status/wake-status/teardown-status (read-only), teardown-declare
+    # (deliberately ungated -- see require_lease_holder's docstring), and
+    # watchdog-check (the merged check command) all stay callable by anyone,
+    # lease held or not, --caller-id given or not.
+    root = ledger(tmp_path)
+    ok(root, "lease-acquire", "--holder", "ctl-A", "--ttl-seconds", "60", now=T0)
+    later = "2026-08-28T12:05:00Z"  # past the 60s TTL: ctl-A's lease is expired
+    assert run(root, "lease-status", now=later).returncode == 0
+    assert run(root, "teardown-status", now=later).returncode == 0
+    assert run(root, "teardown-declare", "--reason", "x", now=later).returncode == 0
+    assert run(root, "watchdog-check", now=later).returncode == 0
+
+
+def test_classify_error_without_account_never_requires_caller_id_but_persist_branch_does(tmp_path):
+    root = ledger(tmp_path)
+    ok(root, "lease-acquire", "--holder", "ctl-A", now=T0)
+    # pure classification (no --account): read-only in effect, never persists
+    assert run(root, "classify-error", "--text", "HTTP 429", now=T0).returncode == 0
+    # --account triggers the persisting branch, which IS gated
+    r = run(root, "classify-error", "--text", "HTTP 429", "--account", "orchestrade", now=T0)
+    assert r.returncode == 2
+    ok(root, "classify-error", "--caller-id", "ctl-A", "--text", "HTTP 429",
+       "--account", "orchestrade", now=T0)
 
 
 # ---------------- F8 error classification ----------------
@@ -2212,8 +2305,8 @@ def test_teardown_declare_journals_pending_ids_reason_and_lease_disposition(tmp_
 # alive" check is ORTHOGONAL to inbox_drain_stale, not a superset of it, so
 # a healthy controller must still escalate when the inbox judge alone fires.
 
-def watchdog_check(root, **kw):
-    return ok(root, "watchdog-check", **kw)
+def watchdog_check(root, *extra_args, **kw):
+    return ok(root, "watchdog-check", *extra_args, **kw)
 
 
 def escalation_files(root):
@@ -2224,7 +2317,7 @@ def test_watchdog_check_alive_controller_no_stale_inbox_no_escalation(tmp_path):
     root = ledger(tmp_path)
     wake_arm(root, now=T0)  # expected_next_fire 12:12Z, deadline 12:27Z (slack 15m)
     ok(root, "lease-acquire", "--holder", "ctl-A", now=T0)  # held until 14:00Z
-    ok(root, "inbox-append", "--event-id", "biz-ev-1", "--payload", "{}", now=T0)
+    ok(root, "inbox-append", "--caller-id", "ctl-A", "--event-id", "biz-ev-1", "--payload", "{}", now=T0)
     out = watchdog_check(root, now="2026-08-28T12:15:00Z")
     assert out["escalation_needed"] is False
     assert out["escalation_reasons"] == []
@@ -2282,7 +2375,7 @@ def test_watchdog_check_inbox_drain_stale_escalates_while_controller_alive(tmp_p
     root = ledger(tmp_path)
     wake_arm(root, now=T0)
     ok(root, "lease-acquire", "--holder", "ctl-A", now=T0)  # held until 14:00Z
-    ok(root, "inbox-append", "--event-id", "ev-old", "--payload", "{}",
+    ok(root, "inbox-append", "--caller-id", "ctl-A", "--event-id", "ev-old", "--payload", "{}",
        now="2026-08-25T00:00:00Z")  # far older than the 135min default threshold
     out = watchdog_check(root, now="2026-08-28T12:15:00Z")  # wake fresh, lease held
     assert out["wake_status"]["stale"] is False
@@ -2302,9 +2395,9 @@ def test_watchdog_check_plan_not_acked_escalates_while_controller_alive(tmp_path
     root = ledger(tmp_path)
     wake_arm(root, now=T0)
     ok(root, "lease-acquire", "--holder", "ctl-A", now=T0)  # held until 14:00Z
-    ok(root, "inbox-append", "--event-id", "ev-old", "--payload", "{}",
+    ok(root, "inbox-append", "--caller-id", "ctl-A", "--event-id", "ev-old", "--payload", "{}",
        now="2026-08-25T00:00:00Z")
-    ok(root, "inbox-consume", "--planned-outcome", "dispatch-qa",
+    ok(root, "inbox-consume", "--caller-id", "ctl-A", "--planned-outcome", "dispatch-qa",
        now="2026-08-25T00:30:00Z")  # planned soon after appended, never acked
     out = watchdog_check(root, now="2026-08-28T12:15:00Z")  # wake fresh, lease held
     assert out["wake_status"]["stale"] is False
@@ -3890,3 +3983,421 @@ def test_wake_doctrine_directive_driven(directive, tmp_path):
     assert set(DOCTRINE_DRIVERS) == set(CANONICAL_DIRECTIVES)
     value = doctrine_block()[directive]
     DOCTRINE_DRIVERS[directive](value, tmp_path)
+
+
+# ================================================================
+# Restart-recovery mechanism (task 20261004-050913)
+#
+# inc-42 forensics correction: lease expiry is NEVER (alone, or combined
+# with wake staleness) sufficient to authorize watchdog-check's self-heal
+# branch -- the live incident showed a controller can keep ticking after
+# its OWN lease expired for an unrelated reason (a prompt-update failure on
+# a registry-invisible channel decoupled renewal from tick processing),
+# and seizing its timers would be a second controller stepping on a live
+# one. Self-heal is authorized ONLY by the ledger's latest
+# teardown-declare: for_restart=true, keep_down not true -- a judgment
+# completely independent of lease/wake state.
+# ================================================================
+
+TIMER_FOUR = {
+    "tick": ("9a4501fd", "paseo-daemon-tick hbtick-test-chan", "12,57 * * * *", "agent"),
+    "reinject": ("5d7152bb", "ctrl-core-reinject", "41 */4 * * *", "agent"),
+    "watchdog": ("a814a9a0", "paseo-daemon-watchdog", "23,53 * * * *", "new-agent"),
+    "sweep": ("754bb5da", "reader-board-sweep", "37 */4 * * *", "agent"),
+}
+
+
+def write_timer(registry_dir, key, *, status="active", paused_at=None):
+    registry_dir.mkdir(parents=True, exist_ok=True)
+    timer_id, name, cron, target_type = TIMER_FOUR[key]
+    target = ({"type": "agent", "agentId": "ctl-agent"} if target_type == "agent"
+              else {"type": "new-agent", "config": {"provider": "claude"}})
+    obj = {"id": timer_id, "name": name, "prompt": f"real prompt for {name}",
+           "cadence": {"type": "cron", "expression": cron, "timezone": "UTC"},
+           "target": target, "status": status,
+           "createdAt": "2026-09-01T00:00:00Z", "updatedAt": "2026-09-01T00:00:00Z",
+           "nextRunAt": None, "lastRunAt": None, "pausedAt": paused_at,
+           "expiresAt": None, "maxRuns": None, "runs": []}
+    (registry_dir / f"{timer_id}.json").write_text(json.dumps(obj, indent=1, sort_keys=True) + "\n")
+
+
+def seed_four_timers(registry_dir, *, paused_keys=()):
+    for key in TIMER_FOUR:
+        if key in paused_keys:
+            write_timer(registry_dir, key, status="paused", paused_at=T0)
+        else:
+            write_timer(registry_dir, key)
+
+
+def declare_teardown(root, *, reason="operator-ordered restart", for_restart=False,
+                      keep_down=False, now=T0):
+    args = ["teardown-declare", "--reason", reason]
+    if for_restart:
+        args.append("--for-restart")
+    if keep_down:
+        args.append("--keep-down")
+    return ok(root, *args, now=now)
+
+
+# ---------------- teardown-declare / teardown-status ----------------
+
+def test_teardown_declare_defaults_for_restart_and_keep_down_false(tmp_path):
+    root = ledger(tmp_path)
+    out = declare_teardown(root)
+    assert out["for_restart"] is False
+    assert out["keep_down"] is False
+
+
+def test_teardown_declare_persists_for_restart_and_keep_down_true(tmp_path):
+    root = ledger(tmp_path)
+    out = declare_teardown(root, for_restart=True, keep_down=True)
+    assert out["for_restart"] is True
+    assert out["keep_down"] is True
+    status = ok(root, "teardown-status")
+    assert status["declared"] is True
+    assert status["for_restart"] is True
+    assert status["keep_down"] is True
+
+
+def test_teardown_status_reports_not_declared_on_fresh_ledger(tmp_path):
+    root = ledger(tmp_path)
+    assert ok(root, "teardown-status") == {"declared": False}
+
+
+def test_teardown_status_reports_latest_declaration_only(tmp_path):
+    root = ledger(tmp_path)
+    declare_teardown(root, reason="first", for_restart=True, now=T0)
+    declare_teardown(root, reason="second", for_restart=False, keep_down=True,
+                      now="2026-08-28T13:00:00Z")
+    status = ok(root, "teardown-status")
+    assert status["reason"] == "second"
+    assert status["for_restart"] is False
+    assert status["keep_down"] is True
+    records = [json.loads(l) for l in (root / "journal.ndjson").read_text().splitlines()]
+    teardown_ops = [r for r in records if r.get("op") == "teardown-declare"]
+    assert len(teardown_ops) == 2  # both declarations are in the audit trail
+
+
+# ---------------- wake-arm token-delivery / disk-read exemption ----------------
+
+def test_wake_arm_token_delivery_defaults_to_prompt_capture(tmp_path):
+    root = ledger(tmp_path)
+    wake_arm(root, now=T0)
+    assert wake_record(root)["token_delivery"] == "prompt-capture"
+
+
+def test_wake_arm_token_delivery_disk_read_persists(tmp_path):
+    root = ledger(tmp_path)
+    r = run(root, "wake-arm", "--channel-kind", "paseo_heartbeat", "--channel-id", "hbtick-x",
+            "--cron", "12,57 * * * *", "--timezone", "UTC", "--role", "tick",
+            "--token-delivery", "disk-read", now=T0)
+    assert r.returncode == 0, r.stderr
+    assert wake_record(root)["token_delivery"] == "disk-read"
+
+
+def test_wake_observe_disk_read_certifies_without_arming_token(tmp_path):
+    root = ledger(tmp_path)
+    run(root, "wake-arm", "--channel-kind", "paseo_heartbeat", "--channel-id", "hbtick-x",
+        "--cron", "12,57 * * * *", "--timezone", "UTC", "--role", "tick",
+        "--token-delivery", "disk-read", now=T0)
+    out = ok(root, "wake-observe", "--delivered", "--channel-id", "hbtick-x",
+             now="2026-08-28T12:12:30Z")
+    assert out["verdict"] == "on_time"
+    assert out["needs_rearm"] is False
+
+
+def test_wake_observe_disk_read_certifies_even_with_wrong_arming_token(tmp_path):
+    # The whole point of the exemption: a caller MAY still pass a token (a
+    # stale/wrong one, since the external prompt can never be refreshed),
+    # and it is simply never compared.
+    root = ledger(tmp_path)
+    run(root, "wake-arm", "--channel-kind", "paseo_heartbeat", "--channel-id", "hbtick-x",
+        "--cron", "12,57 * * * *", "--timezone", "UTC", "--role", "tick",
+        "--token-delivery", "disk-read", now=T0)
+    out = ok(root, "wake-observe", "--delivered", "--channel-id", "hbtick-x",
+             "--arming-token", "stale-token-from-an-old-prompt", now="2026-08-28T12:12:30Z")
+    assert out["verdict"] == "on_time"
+
+
+def test_wake_observe_prompt_capture_default_unaffected_by_exemption(tmp_path):
+    # Regression pin: legacy/default (prompt-capture) channels keep the
+    # original doctrine exactly -- a mismatched token is still superseded.
+    root = ledger(tmp_path)
+    wake_arm(root, now=T0)
+    out = ok(root, "wake-observe", "--delivered", "--channel-id", "hb-1",
+             "--arming-token", "wrong", now="2026-08-28T12:12:30Z")
+    assert out["verdict"] == "superseded_arming"
+
+
+# ---------------- wake-observe --renew-holder lease coupling ----------------
+
+def test_wake_observe_renew_holder_renews_on_certifying_delivery(tmp_path):
+    root = ledger(tmp_path)
+    wake_arm(root, now=T0)
+    ok(root, "lease-acquire", "--holder", "ctl-A", "--ttl-seconds", "60", now=T0)
+    out = ok(root, *delivered_claim(root), "--caller-id", "ctl-A", "--renew-holder", "ctl-A",
+             now="2026-08-28T12:12:30Z")
+    assert out["verdict"] == "on_time"
+    assert out["renew"]["ok"] is True
+    assert out["renew"]["holder"] == "ctl-A"
+    lease = ok(root, "lease-status", now="2026-08-28T12:12:30Z")
+    assert lease["held"] is True
+    assert lease["expires_at"] == out["renew"]["expires_at"]
+
+
+def test_wake_observe_renew_holder_idempotent_across_two_calls(tmp_path):
+    root = ledger(tmp_path)
+    wake_arm(root, now=T0)
+    ok(root, "lease-acquire", "--holder", "ctl-A", "--ttl-seconds", "60", now=T0)
+    first = ok(root, *delivered_claim(root), "--caller-id", "ctl-A", "--renew-holder", "ctl-A",
+               now="2026-08-28T12:12:30Z")
+    second = ok(root, "wake-observe", "--caller-id", "ctl-A", "--delivered", "--channel-id", "hb-1",
+                "--arming-token", armed_token(root), "--renew-holder", "ctl-A",
+                now="2026-08-28T12:57:30Z")
+    assert first["renew"]["ok"] is True
+    assert second["renew"]["ok"] is True
+    assert second["renew"]["expires_at"] > first["renew"]["expires_at"]
+
+
+def test_wake_observe_renew_holder_mismatch_soft_fails_without_losing_delivery_proof(tmp_path):
+    root = ledger(tmp_path)
+    wake_arm(root, now=T0)
+    ok(root, "lease-acquire", "--holder", "ctl-A", "--ttl-seconds", "60", now=T0)
+    before_lease = ok(root, "lease-status", now=T0)
+    out = ok(root, *delivered_claim(root), "--caller-id", "ctl-A", "--renew-holder", "ctl-WRONG",
+             now="2026-08-28T12:12:30Z")
+    assert out["verdict"] == "on_time"  # the delivery-proof write still succeeded
+    assert out["renew"] == {"ok": False, "reason": "holder_mismatch", "actual_holder": "ctl-A"}
+    after_lease = ok(root, "lease-status", now="2026-08-28T12:12:30Z")
+    assert after_lease["expires_at"] == before_lease["expires_at"]  # untouched
+
+
+def test_wake_observe_renew_holder_no_lease_reports_soft_failure(tmp_path):
+    root = ledger(tmp_path)
+    wake_arm(root, now=T0)
+    out = ok(root, *delivered_claim(root), "--renew-holder", "ctl-A",
+             now="2026-08-28T12:12:30Z")
+    assert out["renew"] == {"ok": False, "reason": "no_lease"}
+
+
+def test_wake_observe_renew_holder_skipped_on_non_proving_claim(tmp_path):
+    root = ledger(tmp_path)
+    wake_arm(root, now=T0)  # expected_next_fire 12:12Z
+    ok(root, "lease-acquire", "--holder", "ctl-A", "--ttl-seconds", "60", now=T0)
+    out = ok(root, *delivered_claim(root), "--caller-id", "ctl-A", "--renew-holder", "ctl-A",
+             now="2026-08-28T12:01:00Z")  # before any due occurrence
+    assert out["verdict"] == "non_proving"
+    assert out["renew"] is None
+
+
+def test_wake_observe_renew_holder_skipped_on_manual_undelivered_observation(tmp_path):
+    root = ledger(tmp_path)
+    wake_arm(root, now=T0)
+    ok(root, "lease-acquire", "--holder", "ctl-A", "--ttl-seconds", "60", now=T0)
+    out = ok(root, "wake-observe", "--caller-id", "ctl-A", "--renew-holder", "ctl-A", now="2026-08-28T12:05:00Z")
+    assert out["verdict"] == "pending"
+    assert out["renew"] is None
+
+
+# ---------------- watchdog-check self-heal (inc-42 corrected trigger) ----------------
+
+def test_watchdog_check_self_heal_resumes_paused_timers_when_for_restart(tmp_path):
+    root = ledger(tmp_path)
+    registry = tmp_path / "registry"
+    seed_four_timers(registry, paused_keys=("tick", "reinject", "watchdog", "sweep"))
+    declare_teardown(root, for_restart=True, now=T0)
+    out = watchdog_check(root, "--registry-dir", str(registry), now=T0)
+    heal = out["self_heal"]
+    assert heal["eligible"] is True
+    assert set(heal["resumed"]) == {"tick", "reinject", "watchdog", "sweep"}
+    status = json.loads((registry / f"{TIMER_FOUR['tick'][0]}.json").read_text())
+    assert status["status"] == "active"
+
+
+def test_watchdog_check_self_heal_rearms_tick_with_disk_read_token_delivery(tmp_path):
+    root = ledger(tmp_path)
+    registry = tmp_path / "registry"
+    seed_four_timers(registry, paused_keys=("tick",))
+    declare_teardown(root, for_restart=True, now=T0)
+    out = watchdog_check(root, "--registry-dir", str(registry), now=T0)
+    heal = out["self_heal"]
+    assert heal["resumed"] == ["tick"]
+    assert heal["wake_armed"]["ok"] is True
+    assert heal["wake_armed"]["channel_id"] == "hbtick-test-chan"
+    assert wake_record(root)["token_delivery"] == "disk-read"
+
+
+def test_watchdog_check_self_heal_rearms_tick_even_with_an_expired_lease_in_the_ledger(tmp_path):
+    # Closes a gap the single-writer guard (task 20261004-085212) would
+    # otherwise reopen: self-heal's internal wake-arm re-arm call runs
+    # precisely in the situation where no caller can satisfy the normal
+    # --caller-id/current-holder check (lease expired, no successor has
+    # acquired yet) -- exactly the inc-42 scenario this whole cycle fixes.
+    # --self-heal-authorized must still let it through, authorized by its
+    # OWN independent teardown-status eligibility re-check, never by
+    # impersonating the stale holder.
+    root = ledger(tmp_path)
+    registry = tmp_path / "registry"
+    seed_four_timers(registry, paused_keys=("tick",))
+    ok(root, "lease-acquire", "--holder", "ctl-stale", "--ttl-seconds", "60", now=T0)
+    declare_teardown(root, for_restart=True, now=T0)
+    later = "2026-08-28T12:05:00Z"  # past the 60s TTL: the lease above is expired
+    out = watchdog_check(root, "--registry-dir", str(registry), now=later)
+    heal = out["self_heal"]
+    assert heal["resumed"] == ["tick"]
+    assert heal["wake_armed"]["ok"] is True
+    assert wake_record(root)["token_delivery"] == "disk-read"
+    # and a normal (non-self-heal) wake-arm call by anyone, including the
+    # stale holder itself, is still correctly refused at this instant
+    r = run(root, "wake-arm", "--caller-id", "ctl-stale", "--channel-kind", "paseo_heartbeat",
+            "--channel-id", "hb-x", "--cron", "0 * * * *", "--role", "test", now=later)
+    assert r.returncode == 2
+
+
+def test_watchdog_check_self_heal_does_not_rearm_when_tick_was_not_paused(tmp_path):
+    root = ledger(tmp_path)
+    registry = tmp_path / "registry"
+    seed_four_timers(registry, paused_keys=("reinject",))
+    declare_teardown(root, for_restart=True, now=T0)
+    out = watchdog_check(root, "--registry-dir", str(registry), now=T0)
+    heal = out["self_heal"]
+    assert heal["resumed"] == ["reinject"]
+    assert heal["wake_armed"] is None  # tick untouched -- never re-armed
+
+
+def test_watchdog_check_registry_dir_defaults_to_real_registry_path(tmp_path):
+    """Pure argparse introspection -- never executes watchdog-check, never
+    risks subprocessing into the real registry. Pins the --registry-dir
+    default itself (QA close-debate, task 20261004-050913 Finding A fix):
+    the self-heal branch must be reachable from the live, unchanged
+    watchdog prompt, which invokes watchdog-check with no --registry-dir
+    flag at all, so the default must be the real registry path."""
+    engine = load_engine()
+    parser = engine.build_parser()
+    args = parser.parse_args(["--root", str(tmp_path), "watchdog-check"])
+    assert args.registry_dir == "/root/.paseo/schedules"
+
+
+def test_watchdog_check_self_heal_short_circuits_on_teardown_status_before_registry_default(tmp_path):
+    """Proves the real safety gate is the ledger-local teardown-status
+    check, not the --registry-dir default (QA close-debate, task
+    20261004-050913 Finding A): a fresh ledger with NO teardown declared
+    at all -- and no --registry-dir override given here -- must
+    short-circuit on 'no_teardown_declared' BEFORE self_heal_paused_timers
+    ever constructs the subprocess call that references the defaulted
+    real registry path."""
+    root = ledger(tmp_path)
+    out = watchdog_check(root, now=T0)  # no --registry-dir override
+    assert out["self_heal"] == {"attempted": False, "eligible": False,
+                                "reason": "no_teardown_declared",
+                                "resumed": [], "wake_armed": None}
+
+
+def test_watchdog_check_self_heal_noop_when_no_teardown_declared(tmp_path):
+    root = ledger(tmp_path)
+    registry = tmp_path / "registry"
+    seed_four_timers(registry, paused_keys=("tick",))
+    out = watchdog_check(root, "--registry-dir", str(registry), now=T0)
+    heal = out["self_heal"]
+    assert heal["eligible"] is False
+    assert heal["reason"] == "no_teardown_declared"
+    assert heal["resumed"] == []
+    status = json.loads((registry / f"{TIMER_FOUR['tick'][0]}.json").read_text())
+    assert status["status"] == "paused"  # left untouched
+
+
+def test_watchdog_check_self_heal_noop_when_keep_down_declared(tmp_path):
+    root = ledger(tmp_path)
+    registry = tmp_path / "registry"
+    seed_four_timers(registry, paused_keys=("tick",))
+    declare_teardown(root, for_restart=True, keep_down=True, now=T0)
+    out = watchdog_check(root, "--registry-dir", str(registry), now=T0)
+    heal = out["self_heal"]
+    assert heal["eligible"] is False
+    assert heal["reason"] == "keep_down_declared"
+    assert heal["resumed"] == []
+    status = json.loads((registry / f"{TIMER_FOUR['tick'][0]}.json").read_text())
+    assert status["status"] == "paused"
+
+
+def test_watchdog_check_self_heal_noop_when_last_teardown_not_for_restart(tmp_path):
+    root = ledger(tmp_path)
+    registry = tmp_path / "registry"
+    seed_four_timers(registry, paused_keys=("tick",))
+    declare_teardown(root, for_restart=False, now=T0)  # e.g. a deliberate maintenance pause
+    out = watchdog_check(root, "--registry-dir", str(registry), now=T0)
+    heal = out["self_heal"]
+    assert heal["eligible"] is False
+    assert heal["reason"] == "last_teardown_not_for_restart"
+    assert heal["resumed"] == []
+    status = json.loads((registry / f"{TIMER_FOUR['tick'][0]}.json").read_text())
+    assert status["status"] == "paused"
+
+
+def test_watchdog_check_self_heal_does_not_seize_live_controller_lease_expired_nothing_paused(tmp_path):
+    # THE inc-42 negative case: a controller whose lease expired (for an
+    # unrelated reason) while every timer is still active -- self-heal must
+    # take no action at all, even though it is eligible (a restart WAS
+    # declared, with no keep-down) and even though the existing escalation
+    # path still (correctly, unchanged) fires for the expired lease.
+    root = ledger(tmp_path)
+    registry = tmp_path / "registry"
+    seed_four_timers(registry)  # all active -- nothing paused
+    wake_arm(root, now=T0)
+    ok(root, "lease-acquire", "--holder", "ctl-A", "--ttl-seconds", "60", now=T0)
+    declare_teardown(root, for_restart=True, now=T0)
+    before = {p.name: p.read_bytes() for p in registry.glob("*.json")}
+
+    out = watchdog_check(root, "--registry-dir", str(registry), now="2026-08-28T12:05:00Z")
+
+    assert out["lease_status"]["held"] is False
+    assert out["escalation_needed"] is True  # unchanged existing behavior
+    assert out["escalation_reasons"] == ["controller_dead_or_stranded"]
+    heal = out["self_heal"]
+    assert heal["eligible"] is True  # authorized in principle...
+    assert heal["resumed"] == []     # ...but there was nothing to resume
+    assert heal["wake_armed"] is None
+    after = {p.name: p.read_bytes() for p in registry.glob("*.json")}
+    assert before == after  # registry completely untouched -- no seizure
+
+
+def test_watchdog_check_self_heal_independent_of_escalation_when_lease_held(tmp_path):
+    # Self-heal fires on its own trigger even when the EXISTING escalation
+    # judgment finds nothing wrong (lease held, wake fresh): the two
+    # mechanisms are independent, never gating each other.
+    root = ledger(tmp_path)
+    registry = tmp_path / "registry"
+    seed_four_timers(registry, paused_keys=("reinject",))
+    wake_arm(root, now=T0)
+    ok(root, "lease-acquire", "--holder", "ctl-A", now=T0)
+    declare_teardown(root, for_restart=True, now=T0)
+    out = watchdog_check(root, "--registry-dir", str(registry), now="2026-08-28T12:15:00Z")
+    assert out["escalation_needed"] is False
+    heal = out["self_heal"]
+    assert heal["resumed"] == ["reinject"]
+
+
+def test_watchdog_check_self_heal_journals_inbox_event_with_actions_taken(tmp_path):
+    root = ledger(tmp_path)
+    registry = tmp_path / "registry"
+    seed_four_timers(registry, paused_keys=("tick",))
+    declare_teardown(root, for_restart=True, now=T0)
+    out = watchdog_check(root, "--registry-dir", str(registry), now=T0)
+    heal = out["self_heal"]
+    assert heal["self_heal_event_appended"] is True
+    event_path = root / "inbox" / "pending" / f"{heal['self_heal_event_id']}.json"
+    event = json.loads(event_path.read_text())
+    assert event["payload"]["type"] == "watchdog_self_heal"
+    assert event["payload"]["resumed"] == ["tick"]
+
+
+def test_watchdog_check_self_heal_no_event_when_nothing_resumed(tmp_path):
+    root = ledger(tmp_path)
+    registry = tmp_path / "registry"
+    seed_four_timers(registry)  # nothing paused
+    declare_teardown(root, for_restart=True, now=T0)
+    out = watchdog_check(root, "--registry-dir", str(registry), now=T0)
+    heal = out["self_heal"]
+    assert heal["self_heal_event_id"] is None
+    assert heal["self_heal_event_appended"] is False
+    assert list((root / "inbox" / "pending").glob("watchdog-self-heal-*.json")) == []

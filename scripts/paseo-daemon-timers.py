@@ -31,21 +31,38 @@ Subcommands:
            On-disk presence alone is NOT health: any inventory timer found
            with status=paused is reported under the `deviations` key (id,
            pausedAt, and the exact `resume` command shape to recover it) —
-           ensure NEVER reports zero deviation for a paused timer, and it
-           NEVER auto-resumes one itself (that mutation is `resume`'s job
-           alone, kept out of ensure's create-only write path on purpose, so
-           a deliberate maintenance pause is never silently reverted by a
-           routine bootstrap call). A prior incident (task 20260926-111239
-           follow-up): four timers sat paused for 5 days after a drain
-           because bootstrap's `ensure` saw `created: []` and nobody
-           inspected `status`; this `deviations` field is the fix.
+           ensure NEVER reports zero deviation for a paused timer UNLESS it
+           just auto-resolved it (see --ledger-root below), and it never
+           rebuilds or overwrites an active registration. A prior incident
+           (task 20260926-111239 follow-up): four timers sat paused for 5
+           days after a drain because bootstrap's `ensure` saw `created: []`
+           and nobody inspected `status`; the `deviations` field was that
+           fix. A SECOND incident (task 20261004-050913): `deviations` still
+           required a HUMAN to run `resume` -- the four timers then sat
+           paused for 6 more days after a daemon restart, because nobody
+           did. `--ledger-root` (optional; omitting it reproduces the FIRST
+           fix's behavior exactly, zero auto-mutation) closes that gap:
+           when given, ensure queries `scripts/paseo-daemon-ledger.py
+           teardown-status` and auto-resumes (via the SAME core as `resume`
+           below) any paused timer, and re-arms the tick wake channel, ONLY
+           when the ledger's LATEST teardown-declare carries `for_restart`
+           with no `keep_down` -- a deliberate maintenance pause (no
+           for_restart marker) is STILL never silently reverted. The result
+           is reported under `auto_recovery`, and any key it actually
+           resumed is removed from `deviations` (it is no longer a
+           deviation once fixed). Absence of a ledger-root, an
+           uninitialized/unreadable ledger, or no declared teardown at all
+           are ALL treated as "not authorized" -- positive evidence only,
+           never fail-open.
   drain    safety-ordered stop of all four: watchdog first (a mid-teardown
            watchdog fire would judge the controller dead and escalate),
            then sweep, tick, reinject (DRAIN_ORDER). Prefers `pause`
            (reversible) via backup -> temp-write -> parse-validate ->
            atomic os.replace; never deletes. Finishes with exactly one
            `scripts/paseo-daemon-ledger.py teardown-declare` call against
-           --ledger-root to journal the teardown.
+           --ledger-root to journal the teardown; `--for-restart` /
+           `--keep-down` pass through to that call verbatim (see `ensure`
+           above for what they authorize on the next bootstrap).
   resume   paired with drain: restores any paused timer (within the
            four-entry inventory only) back to status=active, in the exact
            reverse of DRAIN_ORDER — reinject, sweep, tick, watchdog last.
@@ -55,7 +72,8 @@ Subcommands:
            same hazard DRAIN_ORDER's watchdog-first avoids, mirrored for the
            opposite direction). Same file-safety chain as drain: backup ->
            temp-write -> parse-validate -> atomic os.replace. Idempotent: an
-           already-active (or missing) timer is a no-op.
+           already-active (or missing) timer is a no-op. This is the same
+           core `ensure --ledger-root` calls automatically when authorized.
   status   read-only: existence / active-vs-paused / nextRunAt / deviation
            from the inventory for each of the four — a paused timer always
            carries `"paused"` in its `deviations` list, never a silent
@@ -216,6 +234,18 @@ def find_match(entry, registrations):
     return None
 
 
+def find_all_matches(entry, registrations):
+    """Every registration matching `entry`, not just the first (task
+    20261004-085212): `find_match`'s first-match-wins semantics is exactly
+    what hides a duplicate from `ensure`/`status`/`drain`/`resume`'s normal
+    by_key path -- e.g. a stale PAUSED registration sharing the live tick
+    channel's exact `name` (and therefore channel_id) sits invisibly behind
+    whichever of the two `scan_registry`'s filename sort happens to return
+    first. `resume`'s pre-flight collision check scans this list instead of
+    trusting a single match."""
+    return [(path, obj) for path, obj in registrations if timer_matches(entry, obj.get("name", ""))]
+
+
 def atomic_write_registration(path, obj, *, backup, now):
     """Shared file-safety chain for both create (ensure) and pause (drain):
     optional backup -> write temp in same dir -> parse temp back to confirm
@@ -303,6 +333,108 @@ def paused_deviation(registry_dir, entry, path, obj):
     }
 
 
+def ledger_teardown_status(ledger_root):
+    """Read-only query of the ledger's latest teardown declaration, via the
+    ledger CLI subprocess -- timers.py never reads ledger-root files
+    directly, same loose-coupling discipline as cmd_drain's existing
+    teardown-declare call. Returns None on ANY failure (ledger-root
+    unreachable, uninitialized, corrupt output, or nothing ever declared):
+    absence of positive proof never authorizes auto-resume (see module
+    docstring's `ensure` entry)."""
+    cmd = [sys.executable, str(LEDGER_SCRIPT), "--root", str(ledger_root), "teardown-status"]
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, cwd=REPO_ROOT, timeout=30)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if result.returncode != 0:
+        return None
+    try:
+        status = json.loads(result.stdout)
+    except (json.JSONDecodeError, ValueError):
+        return None
+    if not status.get("declared"):
+        return None
+    return status
+
+
+def rearm_tick_wake_channel(ledger_root, resumed, now):
+    """Called ONLY when `resumed` (the list `resume_paused_timers` just
+    flipped from paused to active) contains the "tick" key -- the ledger's
+    wake.json bookkeeping for that channel is now stale (its watermark
+    never advanced during the outage) and must be fenced with a fresh
+    arming. --token-delivery disk-read (task 20261004-050913): the tick
+    channel's live registration is the one known to be invisible to the
+    schedule-query surface (module docstring's CRITICAL dedup constraint),
+    so its external prompt can never be refreshed with a freshly-minted
+    token -- arming prompt-capture here would make every future delivery
+    permanently superseded_arming. The channel id is reused from the
+    resumed registration's own name suffix (continuity of identity), never
+    freshly minted when one is available. --self-heal-authorized (task
+    20261004-085212): the ledger CLI's wake-arm now refuses every caller
+    that is not the current, unexpired lease holder -- which this call,
+    running precisely to recover from an outage, generally is not. The flag
+    makes wake-arm independently re-derive the SAME teardown-status
+    eligibility auto_recover_paused_timers already required before ever
+    reaching this function, rather than needing a lease identity it has no
+    business claiming."""
+    tick_item = next((item for item in resumed if item["key"] == "tick"), None)
+    name = tick_item["name"] if tick_item else None
+    channel_id = None
+    if name and " " in name:
+        channel_id = name.split(" ", 1)[1]
+    if not channel_id:
+        channel_id = f"hbtick-{compact_iso(now)}-{secrets.token_hex(2)}"
+    tick_entry = next(e for e in INVENTORY if e["key"] == "tick")
+    cmd = [sys.executable, str(LEDGER_SCRIPT), "--root", str(ledger_root), "--now", iso(now),
+           "wake-arm", "--self-heal-authorized",
+           "--channel-kind", "paseo_heartbeat", "--channel-id", channel_id,
+           "--cron", tick_entry["cron"], "--timezone", tick_entry.get("timezone", "UTC"),
+           "--role", "tick", "--token-delivery", "disk-read"]
+    result = subprocess.run(cmd, capture_output=True, text=True, cwd=REPO_ROOT)
+    if result.returncode != 0:
+        return {"ok": False, "channel_id": channel_id, "error": result.stderr.strip()}
+    lines = [l for l in result.stdout.splitlines() if l.strip()]
+    payload = json.loads(lines[-1]) if lines else {}
+    return {"ok": True, "channel_id": channel_id, "arming_token": payload.get("arming_token")}
+
+
+def auto_recover_paused_timers(args, registry_dir, deviations, now):
+    """Ledger-driven restart-recovery path (task 20261004-050913; see
+    module docstring's `ensure` entry). Authorized ONLY by the ledger's
+    LATEST teardown-declare carrying `for_restart` with no `keep_down` --
+    never inferred from the mere presence of a paused timer, which is
+    exactly as consistent with "deliberate maintenance pause, still
+    pending" as with "restart recovery owed". Absence of --ledger-root, an
+    unreachable/uninitialized ledger, or no declared teardown at all are
+    ALL "not authorized"; this function never raises and never partially
+    authorizes."""
+    result = {"eligible": False, "reason": None, "resumed": [], "wake_armed": None}
+    if not deviations:
+        result["reason"] = "no_paused_timers"
+        return result
+    ledger_root = getattr(args, "ledger_root", None)
+    if not ledger_root:
+        result["reason"] = "ledger_root_not_provided"
+        return result
+    status = ledger_teardown_status(ledger_root)
+    if status is None:
+        result["reason"] = "no_teardown_declared"
+        return result
+    if status.get("keep_down") is True:
+        result["reason"] = "keep_down_declared"
+        return result
+    if status.get("for_restart") is not True:
+        result["reason"] = "last_teardown_not_for_restart"
+        return result
+    result["eligible"] = True
+    resumed, refused = resume_paused_timers(registry_dir, now)
+    result["resumed"] = resumed
+    result["refused"] = refused
+    if any(item["key"] == "tick" for item in resumed):
+        result["wake_armed"] = rearm_tick_wake_channel(ledger_root, resumed, now)
+    return result
+
+
 def cmd_ensure(args):
     registry_dir = Path(args.registry_dir)
     registrations = scan_registry(registry_dir)
@@ -318,8 +450,15 @@ def cmd_ensure(args):
         if obj.get("status") == "paused":
             deviations.append(paused_deviation(registry_dir, entry, path, obj))
 
+    now = resolve_now(args.now)
+    auto_recovery = auto_recover_paused_timers(args, registry_dir, deviations, now)
+    recovered_keys = {item["key"] for item in auto_recovery["resumed"]}
+    if recovered_keys:
+        deviations = [d for d in deviations if d["key"] not in recovered_keys]
+
     if not missing:
-        print(json.dumps({"ok": True, "created": [], "deviations": deviations}))
+        print(json.dumps({"ok": True, "created": [], "deviations": deviations,
+                          "auto_recovery": auto_recovery}))
         return
 
     problems = {}
@@ -340,7 +479,6 @@ def cmd_ensure(args):
         detail = "; ".join(f"{k}: {', '.join(v)}" for k, v in sorted(problems.items()))
         fail(EXIT_USAGE, f"cannot create missing timer(s), zero files written: {detail}")
 
-    now = resolve_now(args.now)
     registry_dir.mkdir(parents=True, exist_ok=True)
     existing_ids = {path.stem for path, _ in registrations}
     created = []
@@ -353,7 +491,8 @@ def cmd_ensure(args):
         atomic_write_registration(path, obj, backup=False, now=now)
         created.append({"key": entry["key"], "id": timer_id, "name": entry["name"]})
 
-    print(json.dumps({"ok": True, "created": created, "deviations": deviations}))
+    print(json.dumps({"ok": True, "created": created, "deviations": deviations,
+                      "auto_recovery": auto_recovery}))
 
 
 def cmd_status(args):
@@ -423,6 +562,10 @@ def cmd_drain(args):
     if args.now:
         ledger_cmd += ["--now", args.now]
     ledger_cmd += ["teardown-declare", "--reason", args.reason]
+    if getattr(args, "for_restart", False):
+        ledger_cmd.append("--for-restart")
+    if getattr(args, "keep_down", False):
+        ledger_cmd.append("--keep-down")
     result = subprocess.run(ledger_cmd, capture_output=True, text=True, cwd=REPO_ROOT)
     if result.returncode != 0:
         fail(EXIT_REFUSED, f"teardown-declare failed (rc={result.returncode}): {result.stderr.strip()}")
@@ -431,27 +574,68 @@ def cmd_drain(args):
     print(json.dumps({"ok": True, "drained": drained, "teardown_declare": declare}))
 
 
-def cmd_resume(args):
-    """Paired with drain: restore paused timers back to active, in
-    RESUME_ORDER (the exact reverse of DRAIN_ORDER -- watchdog last). Scoped
+def channel_collision(entry, registrations, picked_path):
+    """Pre-resume safety check (task 20261004-085212): refuse to flip
+    `picked_path` to active when some OTHER registration matching the SAME
+    inventory entry is already active. `find_match`'s by_key path only ever
+    looks at the first match, so it cannot see this on its own -- e.g. a
+    stale PAUSED duplicate of the live tick registration, same `name` (and
+    therefore the same wake-arm channel_id, since that id is embedded in
+    `name`), sitting under a different file/timer id. Resuming the paused
+    one in that situation would leave TWO simultaneously-active
+    registrations delivering under the identical channel_id, with no way
+    for an observer to attribute a fire to either. Returns the list of
+    OTHER active registrations (empty list = no collision)."""
+    matches = find_all_matches(entry, registrations)
+    return [(path, obj) for path, obj in matches
+            if path != picked_path and obj.get("status") != "paused"]
+
+
+def resume_paused_timers(registry_dir, now, targets=None):
+    """Shared RESUME_ORDER mutation core (task 20261004-050913): the single
+    implementation behind both the `resume` subcommand and `ensure
+    --ledger-root`'s auto-recovery path, so a correctness fix is applied
+    exactly once and the two call sites can never drift apart (same
+    discipline as compute_inbox_drain_staleness in the ledger CLI). Scoped
     to the four-entry INVENTORY only, same as drain's own by_key filter --
-    never touches any other *.json file in --registry-dir. Idempotent: an
-    entry that is missing, or already not paused, is a no-op."""
-    registry_dir = Path(args.registry_dir)
+    never touches any other *.json file in registry_dir. Idempotent: an
+    entry that is missing, or already not paused, is a no-op and is never
+    included in the returned list. Each resumed entry carries `name` (not
+    just `key`/`id`) so a caller -- notably the ledger CLI's watchdog-check
+    self-heal branch -- can derive the tick channel's wake-arm channel id
+    from the live registration's name suffix without a second read.
+
+    `targets` (task 20261004-085212; optional, default None = all four):
+    restricts which INVENTORY keys are even considered -- an operator who
+    wants ONLY the unrelated, days-paused watchdog back can ask for exactly
+    that without ever touching tick, sidestepping any collision on a key
+    they did not ask for. Keys actually touched still follow RESUME_ORDER
+    (filtered to the requested set), never the caller's own order. Before
+    flipping any key, channel_collision() re-checks for an already-active
+    OTHER registration under the same inventory entry; a hit is reported in
+    the second return value (`refused`) and that key is left untouched --
+    everything else requested still proceeds."""
     registrations = scan_registry(registry_dir)
     by_key = {}
     for entry in INVENTORY:
         match = find_match(entry, registrations)
         if match is not None:
             by_key[entry["key"]] = match
+    entries_by_key = {entry["key"]: entry for entry in INVENTORY}
 
-    now = resolve_now(args.now)
+    order = [k for k in RESUME_ORDER if targets is None or k in targets]
     resumed = []
-    for key in RESUME_ORDER:
+    refused = []
+    for key in order:
         if key not in by_key:
             continue
         path, obj = by_key[key]
         if obj.get("status") != "paused":
+            continue
+        conflicts = channel_collision(entries_by_key[key], registrations, path)
+        if conflicts:
+            refused.append({"key": key, "id": path.stem, "reason": "channel_id_collision",
+                            "conflicting_ids": [p.stem for p, _ in conflicts]})
             continue
         updated = dict(obj)
         updated["status"] = "active"
@@ -461,10 +645,32 @@ def cmd_resume(args):
             atomic_write_registration(path, updated, backup=True, now=now)
         except TimerWriteValidationError as exc:
             fail(EXIT_REFUSED, str(exc))
-        resumed.append(key)
-        print(json.dumps({"op": "resume", "key": key, "id": path.stem}))
+        resumed.append({"key": key, "id": path.stem, "name": obj.get("name")})
+    return resumed, refused
 
-    print(json.dumps({"ok": True, "resumed": resumed}))
+
+def cmd_resume(args):
+    """Paired with drain: restore paused timers back to active, in
+    RESUME_ORDER (the exact reverse of DRAIN_ORDER -- watchdog last). Scoped
+    to the four-entry INVENTORY only, same as drain's own by_key filter --
+    never touches any other *.json file in --registry-dir. Idempotent: an
+    entry that is missing, or already not paused, is a no-op. `--target`
+    (repeatable; omit for all four) and the pre-flight channel_id collision
+    refusal are documented on resume_paused_timers, this command's thin CLI
+    wrapper (see its docstring)."""
+    registry_dir = Path(args.registry_dir)
+    now = resolve_now(args.now)
+    targets = set(args.target) if args.target else None
+    resumed, refused = resume_paused_timers(registry_dir, now, targets=targets)
+    for item in resumed:
+        print(json.dumps({"op": "resume", "key": item["key"], "id": item["id"],
+                          "name": item["name"]}))
+    for item in refused:
+        print(json.dumps({"op": "resume-refused", **item}))
+    print(json.dumps({"ok": not refused, "resumed": [item["key"] for item in resumed],
+                      "refused": [item["key"] for item in refused]}))
+    if refused:
+        sys.exit(EXIT_REFUSED)
 
 
 def build_parser():
@@ -480,6 +686,13 @@ def build_parser():
     s.add_argument("--prompts-dir", default=None,
                    help="dir of <key>.prompt.txt fixtures; required only when a timer "
                         "needs creating and its prompt has no other source")
+    s.add_argument("--ledger-root", default=None,
+                   help="when given, enables the ledger-driven auto-resume path: any "
+                        "paused inventory timer is auto-resumed (and the tick wake "
+                        "channel re-armed) ONLY when this ledger's latest teardown-declare "
+                        "was --for-restart with no --keep-down. Omitting this flag "
+                        "reproduces the pre-20261004-050913 behavior exactly: deviations "
+                        "are reported, never auto-resolved")
     s.set_defaults(fn=cmd_ensure)
 
     s = sub.add_parser("status")
@@ -490,9 +703,25 @@ def build_parser():
                    help="ledger root for the final teardown-declare call (no default: M6)")
     s.add_argument("--reason", default="paseo-daemon-timers.py drain: scheduled fleet teardown",
                    help="non-empty --reason forwarded to teardown-declare")
+    s.add_argument("--for-restart", action="store_true",
+                   help="forwarded to teardown-declare verbatim: this drain is ahead of a "
+                        "planned daemon restart, authorizing a later ensure/watchdog-check "
+                        "auto-resume unless --keep-down is also given")
+    s.add_argument("--keep-down", action="store_true",
+                   help="forwarded to teardown-declare verbatim: explicit long-term "
+                        "deactivation, never auto-resumed")
     s.set_defaults(fn=cmd_drain)
 
     s = sub.add_parser("resume")
+    s.add_argument("--target", action="append", default=None,
+                   choices=[entry["key"] for entry in INVENTORY],
+                   help="inventory key to resume (repeatable); omit to consider all four. "
+                        "Before flipping any key, refuses (EXIT_REFUSED, reported per-key "
+                        "under the 'refused' output key, never silently skipped) if another "
+                        "registration matching the SAME inventory entry is already active -- "
+                        "e.g. a stale paused duplicate sharing the live tick channel's exact "
+                        "name/channel_id -- rather than creating two simultaneously-active "
+                        "schedules delivering under one channel_id")
     s.set_defaults(fn=cmd_resume)
 
     return p

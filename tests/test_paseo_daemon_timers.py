@@ -493,3 +493,300 @@ def test_resume_clears_pausedAt_back_to_none(tmp_path):
     for name, (_, obj) in by_name(registry).items():
         assert obj["status"] == "active"
         assert obj["pausedAt"] is None
+
+
+def test_resume_output_line_includes_name_field(tmp_path):
+    # Additive field (task 20261004-050913): watchdog-check's self-heal
+    # branch derives the tick channel's wake-arm channel id from this name
+    # suffix without a second read. Existing tests only assert on `key`, so
+    # this is purely additive.
+    registry = tmp_path / "registry"
+    registry.mkdir()
+    seed_all_four(registry)
+    ledger_root = ledger_init(tmp_path)
+    ok(registry, "drain", "--ledger-root", str(ledger_root))
+
+    r = run(registry, "resume")
+    lines = [json.loads(l) for l in r.stdout.splitlines() if l.strip()]
+    resume_lines = {l["key"]: l for l in lines if l.get("op") == "resume"}
+    assert resume_lines["tick"]["name"] == "paseo-daemon-tick hbtick-20260902T1158Z-c7d1"
+    assert resume_lines["reinject"]["name"] == "ctrl-core-reinject"
+
+
+# ---------------- resume --target + channel_id collision guard (task 20261004-085212) ----------------
+
+def test_resume_target_restores_only_the_requested_key(tmp_path):
+    # The real motivating scenario: the unrelated, days-paused watchdog (the
+    # only safety net) must be recoverable on its own, without a bare
+    # `resume` touching tick at all.
+    registry = tmp_path / "registry"
+    registry.mkdir()
+    seed_all_four(registry)
+    ledger_root = ledger_init(tmp_path)
+    ok(registry, "drain", "--ledger-root", str(ledger_root))
+
+    result = ok(registry, "resume", "--target", "watchdog")
+
+    assert result["resumed"] == ["watchdog"]
+    status = ok(registry, "status")
+    assert status["timers"]["watchdog"]["status"] == "active"
+    for key in ("tick", "reinject", "sweep"):
+        assert status["timers"][key]["status"] == "paused"
+
+
+def test_resume_target_repeatable_for_multiple_keys(tmp_path):
+    registry = tmp_path / "registry"
+    registry.mkdir()
+    seed_all_four(registry)
+    ledger_root = ledger_init(tmp_path)
+    ok(registry, "drain", "--ledger-root", str(ledger_root))
+
+    result = ok(registry, "resume", "--target", "watchdog", "--target", "sweep")
+
+    assert set(result["resumed"]) == {"watchdog", "sweep"}
+    status = ok(registry, "status")
+    assert status["timers"]["tick"]["status"] == "paused"
+    assert status["timers"]["reinject"]["status"] == "paused"
+
+
+def test_resume_refuses_channel_id_collision_with_already_active_duplicate(tmp_path):
+    # Reproduces the actual incident: a stale PAUSED registration sharing
+    # the live (active) tick channel's exact `name` -- and therefore
+    # channel_id, which is embedded in `name` -- sits in the registry under
+    # a second file/timer id. A bare resume must refuse to also activate
+    # the duplicate rather than silently creating two live schedules under
+    # one channel_id.
+    # Filenames deliberately chosen so scan_registry's sorted-glob order (and
+    # therefore find_match/by_key's first-match-wins pick for "tick") lands
+    # on the PAUSED duplicate, not the active one -- this is the exact
+    # unsafe ordering a bare resume would otherwise act on.
+    registry = tmp_path / "registry"
+    registry.mkdir()
+    tick_name = "paseo-daemon-tick hbtick-20260902T1158Z-c7d1"
+    write_registration(registry, "0000beef", tick_name, KEY_TO_CRON["tick"],
+                        {"type": "agent", "agentId": CONTROLLER_AGENT_ID}, status="paused",
+                        paused_at="2026-09-20T00:00:00Z")
+    write_registration(registry, "9a4501fd", tick_name, KEY_TO_CRON["tick"],
+                        {"type": "agent", "agentId": CONTROLLER_AGENT_ID}, status="active")
+    before = registry_snapshot(registry)
+
+    r = run(registry, "resume", "--target", "tick")
+
+    assert r.returncode == 2
+    lines = [json.loads(l) for l in r.stdout.splitlines() if l.strip()]
+    refused = [l for l in lines if l.get("op") == "resume-refused"]
+    assert len(refused) == 1
+    assert refused[0]["key"] == "tick"
+    assert refused[0]["reason"] == "channel_id_collision"
+    assert "9a4501fd" in refused[0]["conflicting_ids"]
+    assert registry_snapshot(registry) == before  # the paused duplicate is left untouched
+
+
+def test_resume_target_sidesteps_an_unrelated_keys_collision(tmp_path):
+    # The real fix: an operator who wants ONLY the unrelated watchdog back
+    # can get it even while the tick duplicate sits unresolved, because
+    # --target never even considers "tick".
+    registry = tmp_path / "registry"
+    registry.mkdir()
+    tick_name = "paseo-daemon-tick hbtick-20260902T1158Z-c7d1"
+    write_registration(registry, "9a4501fd", tick_name, KEY_TO_CRON["tick"],
+                        {"type": "agent", "agentId": CONTROLLER_AGENT_ID}, status="active")
+    write_registration(registry, "deadbeef", tick_name, KEY_TO_CRON["tick"],
+                        {"type": "agent", "agentId": CONTROLLER_AGENT_ID}, status="paused",
+                        paused_at="2026-09-20T00:00:00Z")
+    write_registration(registry, "a814a9a0", "paseo-daemon-watchdog", KEY_TO_CRON["watchdog"],
+                        {"type": "new-agent", "config": {"provider": "claude"}}, status="paused",
+                        paused_at="2026-09-20T00:00:00Z")
+
+    result = ok(registry, "resume", "--target", "watchdog")
+
+    assert result["resumed"] == ["watchdog"]
+    assert result["refused"] == []
+    status = ok(registry, "status")
+    assert status["timers"]["watchdog"]["status"] == "active"
+
+
+# ---------------- ensure --ledger-root auto-recovery (task 20261004-050913) ----------------
+# Incident: four timers sat paused for 6 days after a daemon restart
+# because bootstrap's `ensure` only ever REPORTED the paused deviation --
+# nobody ran `resume`. `--ledger-root` closes the gap: authorized ONLY by
+# the ledger's latest teardown-declare (for_restart=true, keep_down not
+# true), never by the mere presence of a paused timer alone.
+
+def ledger_teardown_declare(ledger_root, *, reason="operator-ordered restart",
+                            for_restart=False, keep_down=False, now=T0):
+    cmd = [sys.executable, str(LEDGER), "--root", str(ledger_root), "--now", now,
+           "teardown-declare", "--reason", reason]
+    if for_restart:
+        cmd.append("--for-restart")
+    if keep_down:
+        cmd.append("--keep-down")
+    r = subprocess.run(cmd, capture_output=True, text=True, cwd=REPO)
+    assert r.returncode == 0, r.stderr
+    return json.loads(r.stdout)
+
+
+def test_drain_forwards_for_restart_and_keep_down_to_teardown_declare(tmp_path):
+    registry = tmp_path / "registry"
+    registry.mkdir()
+    seed_all_four(registry)
+    ledger_root = ledger_init(tmp_path)
+
+    ok(registry, "drain", "--ledger-root", str(ledger_root),
+       "--reason", "operator-ordered restart", "--for-restart", "--keep-down")
+
+    r = subprocess.run([sys.executable, str(LEDGER), "--root", str(ledger_root),
+                        "teardown-status"], capture_output=True, text=True, cwd=REPO)
+    status = json.loads(r.stdout)
+    assert status["for_restart"] is True
+    assert status["keep_down"] is True
+
+
+def test_ensure_without_ledger_root_never_auto_recovers_even_when_restart_declared(tmp_path):
+    # Regression pin: omitting --ledger-root reproduces the pre-20261004
+    # behavior EXACTLY, even if a qualifying restart teardown exists.
+    registry = tmp_path / "registry"
+    registry.mkdir()
+    seed_all_four(registry)
+    ledger_root = ledger_init(tmp_path)
+    ok(registry, "drain", "--ledger-root", str(ledger_root), "--for-restart")
+    before = registry_snapshot(registry)
+
+    result = ok(registry, "ensure")
+
+    after = registry_snapshot(registry)
+    assert before == after
+    assert {d["key"] for d in result["deviations"]} == set(FOUR_KEYS)
+    assert result["auto_recovery"] == {"eligible": False, "reason": "ledger_root_not_provided",
+                                       "resumed": [], "wake_armed": None}
+
+
+def test_ensure_auto_recovery_ineligible_when_no_teardown_declared(tmp_path):
+    registry = tmp_path / "registry"
+    registry.mkdir()
+    seed_all_four(registry)
+    ledger_root = ledger_init(tmp_path)
+    ok(registry, "drain", "--ledger-root", str(ledger_root))  # no --for-restart
+
+    result = ok(registry, "ensure", "--ledger-root", str(ledger_root))
+
+    assert result["auto_recovery"]["eligible"] is False
+    assert result["auto_recovery"]["reason"] == "last_teardown_not_for_restart"
+    assert {d["key"] for d in result["deviations"]} == set(FOUR_KEYS)
+
+
+def test_ensure_auto_recovery_ineligible_when_keep_down_declared(tmp_path):
+    registry = tmp_path / "registry"
+    registry.mkdir()
+    seed_all_four(registry)
+    ledger_root = ledger_init(tmp_path)
+    ok(registry, "drain", "--ledger-root", str(ledger_root), "--for-restart", "--keep-down")
+
+    result = ok(registry, "ensure", "--ledger-root", str(ledger_root))
+
+    assert result["auto_recovery"]["eligible"] is False
+    assert result["auto_recovery"]["reason"] == "keep_down_declared"
+    assert {d["key"] for d in result["deviations"]} == set(FOUR_KEYS)
+    status = ok(registry, "status")
+    for key in FOUR_KEYS:
+        assert status["timers"][key]["status"] == "paused"
+
+
+def test_ensure_auto_recovery_ineligible_when_ledger_root_uninitialized(tmp_path):
+    registry = tmp_path / "registry"
+    registry.mkdir()
+    seed_all_four(registry)
+    sweep_path, sweep_obj = by_name(registry)["reader-board-sweep"]
+    write_registration(registry, sweep_path.stem, "reader-board-sweep", KEY_TO_CRON["sweep"],
+                        sweep_obj["target"], status="paused", paused_at="2026-09-28T02:36:43Z")
+    never_initialized = tmp_path / "ledger-never-initialized"
+
+    result = ok(registry, "ensure", "--ledger-root", str(never_initialized))
+
+    assert result["auto_recovery"] == {"eligible": False, "reason": "no_teardown_declared",
+                                       "resumed": [], "wake_armed": None}
+    assert result["deviations"][0]["key"] == "sweep"
+
+
+def test_ensure_auto_recovery_full_incident_reproduction_resumes_all_and_rearms_tick(tmp_path):
+    # The exact accident chain from the task: drain --for-restart, then
+    # (days later, after a daemon restart) a bootstrap `ensure --ledger-root`
+    # call alone -- zero human commands -- brings all four back to active
+    # AND re-arms the tick wake channel.
+    registry = tmp_path / "registry"
+    registry.mkdir()
+    seed_all_four(registry)
+    ledger_root = ledger_init(tmp_path)
+    ok(registry, "drain", "--ledger-root", str(ledger_root),
+       "--reason", "operator-ordered restart", "--for-restart", now="2026-09-28T02:05:00Z")
+
+    status_after_drain = ok(registry, "status", now="2026-09-28T02:05:00Z")
+    for key in FOUR_KEYS:
+        assert status_after_drain["timers"][key]["status"] == "paused"
+
+    result = ok(registry, "ensure", "--ledger-root", str(ledger_root),
+                now="2026-10-04T05:04:00Z")  # 6 days later, daemon restarted
+
+    assert result["deviations"] == []
+    assert result["auto_recovery"]["eligible"] is True
+    assert {item["key"] for item in result["auto_recovery"]["resumed"]} == set(FOUR_KEYS)
+    assert result["auto_recovery"]["wake_armed"]["ok"] is True
+    assert result["auto_recovery"]["wake_armed"]["channel_id"] == "hbtick-20260902T1158Z-c7d1"
+
+    status_after_ensure = ok(registry, "status", now="2026-10-04T05:04:00Z")
+    for key in FOUR_KEYS:
+        assert status_after_ensure["timers"][key]["status"] == "active"
+        assert status_after_ensure["timers"][key]["deviations"] == []
+
+
+def test_ensure_auto_recovery_rearm_uses_disk_read_token_delivery(tmp_path):
+    registry = tmp_path / "registry"
+    registry.mkdir()
+    seed_all_four(registry)
+    ledger_root = ledger_init(tmp_path)
+    ok(registry, "drain", "--ledger-root", str(ledger_root), "--for-restart")
+
+    ok(registry, "ensure", "--ledger-root", str(ledger_root))
+
+    wake = json.loads((ledger_root / "wake.json").read_text())
+    assert wake["token_delivery"] == "disk-read"
+
+
+def test_ensure_auto_recovery_skips_rearm_when_tick_was_not_paused(tmp_path):
+    registry = tmp_path / "registry"
+    registry.mkdir()
+    seed_all_four(registry)
+    ledger_root = ledger_init(tmp_path)
+    # Pause only reinject directly (bypassing drain, which pauses all four)
+    reinject_path, reinject_obj = by_name(registry)["ctrl-core-reinject"]
+    write_registration(registry, reinject_path.stem, "ctrl-core-reinject", KEY_TO_CRON["reinject"],
+                        reinject_obj["target"], status="paused", paused_at=T0)
+    ledger_teardown_declare(ledger_root, for_restart=True)
+
+    result = ok(registry, "ensure", "--ledger-root", str(ledger_root))
+
+    assert [item["key"] for item in result["auto_recovery"]["resumed"]] == ["reinject"]
+    assert result["auto_recovery"]["wake_armed"] is None
+    assert not (ledger_root / "wake.json").exists()
+
+
+def test_ensure_auto_recovery_deliberate_maintenance_pause_still_never_reverted(tmp_path):
+    # The ORIGINAL guarantee (task 20260926-111239) must survive: a paused
+    # timer with no for_restart-flagged teardown is STILL just a reported
+    # deviation, never auto-resumed, even with --ledger-root given.
+    registry = tmp_path / "registry"
+    registry.mkdir()
+    seed_all_four(registry)
+    sweep_path, sweep_obj = by_name(registry)["reader-board-sweep"]
+    write_registration(registry, sweep_path.stem, "reader-board-sweep", KEY_TO_CRON["sweep"],
+                        sweep_obj["target"], status="paused", paused_at="2026-09-28T02:36:43Z")
+    ledger_root = ledger_init(tmp_path)
+    ledger_teardown_declare(ledger_root, reason="manual maintenance pause, duration unknown")
+    before = registry_snapshot(registry)
+
+    result = ok(registry, "ensure", "--ledger-root", str(ledger_root))
+
+    after = registry_snapshot(registry)
+    assert before == after
+    assert result["deviations"][0]["key"] == "sweep"
+    assert result["auto_recovery"]["eligible"] is False
