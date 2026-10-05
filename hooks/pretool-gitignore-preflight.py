@@ -379,6 +379,9 @@ import re
 import subprocess
 import sys
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from lib.harness_state_dir import harness_state_dir  # noqa: E402
+
 DEV_REPORT_PATTERN = re.compile(r'docs/dev/dev-report-[A-Za-z0-9._-]+\.json')
 
 # E1: the declaration channel through which /close hands an auditor its READ
@@ -649,7 +652,8 @@ def is_contract_deliverable(path, src_task_id, repo_root=None):
 # E5: a live /commit Step 5 commit-grant reference. Minted only by
 # scripts/write-commit-grant.py after a passing close-gate check for the
 # exact task-id, so its presence and content are not prompt-controlled.
-COMMIT_GRANT_PATTERN = re.compile(r'/tmp/claude-commit-grant-[A-Za-z0-9._-]+\.json')
+COMMIT_GRANT_PATTERN = re.compile(
+    re.escape(harness_state_dir()) + r'/claude-commit-grant-[A-Za-z0-9._-]+\.json')
 
 
 def _parse_iso8601(value):

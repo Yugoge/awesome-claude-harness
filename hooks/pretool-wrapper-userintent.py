@@ -34,6 +34,7 @@ import time
 from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from lib.harness_state_dir import harness_state_dir  # noqa: E402
 try:
     from lib.bash_write_targets import command_without_heredoc_bodies
 except Exception:  # pragma: no cover - fail-soft when lib missing
@@ -70,7 +71,7 @@ _GUARDED_WRAPPERS = {
 }
 
 # Directory holding the user-intent sentinels (overridable for sandbox tests).
-_SENTINEL_DIR = os.environ.get('CLAUDE_USERINTENT_SENTINEL_DIR', '/tmp')
+_SENTINEL_DIR = os.environ.get('CLAUDE_USERINTENT_SENTINEL_DIR', harness_state_dir())
 
 
 def _read_payload() -> dict:

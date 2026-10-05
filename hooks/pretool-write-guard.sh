@@ -3,6 +3,10 @@
 # Forces agents to use Edit for modifying existing files.
 # Reads tool input from stdin as JSON (Claude Code hook protocol)
 
+# Hook runtime-state root (CLAUDE_STATE_DIR; default /tmp). Fail-soft fallback.
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)/lib/harness_state_dir.sh" 2>/dev/null \
+  || harness_state_dir() { printf '%s\n' /tmp; }
+
 # Read full JSON from stdin
 INPUT=$(cat)
 
@@ -53,7 +57,7 @@ if [ "$_WG_IS_SUB" != "1" ]; then
 print(d.get('session_id','') or os.environ.get('CLAUDE_SESSION_ID','default'))" \
     2>/dev/null)
   [ -z "$_WG_SID" ] && _WG_SID="default"
-  _WG_DO_FLAG="/tmp/claude-orchestrator-consent-${_WG_SID}.flag"
+  _WG_DO_FLAG="$(harness_state_dir)/claude-orchestrator-consent-${_WG_SID}.flag"
   if [ -f "$_WG_DO_FLAG" ] && [ "$(cat "$_WG_DO_FLAG" 2>/dev/null)" = "true" ]; then
     exit 0
   fi
@@ -124,7 +128,7 @@ WGEOF
   fi
   # /allow bypass (main-agent only) — delegates to lib/allowlist.read_grant("Write", sid)
   _WG_HOOKS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-  _WG_ALLOW_FILE="/tmp/claude-bash-allowlist-${_WG_SID}.json"
+  _WG_ALLOW_FILE="$(harness_state_dir)/claude-bash-allowlist-${_WG_SID}.json"
   if [ -f "$_WG_ALLOW_FILE" ]; then
     _WG_MATCHED=$(HOOKS_DIR="$_WG_HOOKS_DIR" WG_SID="$_WG_SID" python3 - <<'WGEOF'
 import os, sys

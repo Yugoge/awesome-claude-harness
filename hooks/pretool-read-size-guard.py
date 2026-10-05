@@ -14,6 +14,7 @@ from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from lib.allowlist import read_grant  # noqa: E402
+from lib.harness_state_dir import harness_state_dir  # noqa: E402
 
 BINARY_EXTENSIONS = {
     ".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp", ".ico", ".bmp", ".pdf",
@@ -23,7 +24,7 @@ CHUNK_LIMIT = 600
 
 
 def has_consent(session_id: str) -> bool:
-    flag = Path(f"/tmp/claude-orchestrator-consent-{session_id}.flag")
+    flag = Path(f"{harness_state_dir()}/claude-orchestrator-consent-{session_id}.flag")
     try:
         return flag.exists() and flag.read_text().strip() == "true"
     except Exception:

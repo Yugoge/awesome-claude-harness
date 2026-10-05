@@ -23,6 +23,9 @@ import subprocess
 import sys
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).parent))
+from lib.harness_state_dir import harness_state_dir  # noqa: E402
+
 WATCHDOG_SCRIPT = str(Path.home() / ".claude" / "scripts" / "runcode-watchdog.py")
 
 
@@ -55,7 +58,7 @@ def main():
     timeout = int(os.environ.get("PLAYWRIGHT_RUNCODE_TIMEOUT", "30"))
     cdp_endpoint = os.environ.get("PLAYWRIGHT_CDP_ENDPOINT", "http://127.0.0.1:8080")
     session_id = os.environ.get("CLAUDE_SESSION_ID", "default")
-    pid_file = f"/tmp/.runcode-watchdog-{session_id}.pid"
+    pid_file = f"{harness_state_dir()}/.runcode-watchdog-{session_id}.pid"
 
     # Kill stale watchdog if any
     _kill_stale_watchdog(pid_file)

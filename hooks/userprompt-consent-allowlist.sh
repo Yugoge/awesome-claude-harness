@@ -27,6 +27,10 @@
 # Exit 0 always. Stop hook (stop-cleanup-allowlist.sh) wipes any unconsumed flag.
 set -u
 
+# Hook runtime-state root (CLAUDE_STATE_DIR; default /tmp). Fail-soft fallback.
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)/lib/harness_state_dir.sh" 2>/dev/null \
+  || harness_state_dir() { printf '%s\n' /tmp; }
+
 INPUT=$(cat)
 
 # ── Step 0: subagent write firewall ─────────────────────────────────
@@ -60,10 +64,12 @@ _remove_stale_grants() {
   local grant_path
   local had_stale_grant=false
   local cleanup_failed=false
+  local state_root
+  state_root="$(harness_state_dir)"
   for grant_path in \
-    "/tmp/claude-bash-allowlist-${SID}.json" \
-    "/tmp/claude-grants/${task_id}.json" \
-    "/tmp/claude-grants/${task_id}"-*.json
+    "${state_root}/claude-bash-allowlist-${SID}.json" \
+    "${state_root}/claude-grants/${task_id}.json" \
+    "${state_root}/claude-grants/${task_id}"-*.json
   do
     if [ -e "$grant_path" ] || [ -L "$grant_path" ]; then
       had_stale_grant=true
@@ -645,7 +651,7 @@ else:
 fi
 
 # ── Step 3: write flag via env-var Python (no shell interpolation) ──
-FLAG="/tmp/claude-bash-allowlist-${SID}.json"
+FLAG="$(harness_state_dir)/claude-bash-allowlist-${SID}.json"
 ALLOW_PATTERN="$PATTERN" ALLOW_IS_REGEX="$IS_REGEX" FLAG_PATH="$FLAG" python3 -c "
 import json, os
 data = {
@@ -702,7 +708,7 @@ fi
 #
 # Atomic write-temp+rename so partial files never appear.
 TASK_ID="${CLAUDE_TASK_ID:-${SID}}"
-SENTINEL_DIR="/tmp/claude-grants"
+SENTINEL_DIR="$(harness_state_dir)/claude-grants"
 mkdir -p "$SENTINEL_DIR" 2>/dev/null
 SENTINEL_FILE="${SENTINEL_DIR}/${TASK_ID}.json"
 SENTINEL_TMP="${SENTINEL_FILE}.tmp.$$"

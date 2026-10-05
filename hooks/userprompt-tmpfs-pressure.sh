@@ -60,7 +60,9 @@ if [ -z "$SANITIZED" ]; then
   SANITIZED=$(printf '%s' "$SID" | sha256sum | cut -c1-32)
 fi
 
-COUNTER_FILE="/tmp/claude-pressure-warn-${SANITIZED}"
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)/lib/harness_state_dir.sh" 2>/dev/null \
+  || harness_state_dir() { printf '%s\n' /tmp; }
+COUNTER_FILE="$(harness_state_dir)/claude-pressure-warn-${SANITIZED}"
 LOCK_FILE="${COUNTER_FILE}.lock"
 
 # ── Pressure detection ───────────────────────────────────────────────

@@ -1336,7 +1336,7 @@ def _mint_unique_do_taskid() -> str:
     # (which reserves at-or-after its own `now`). Best-effort.
     try:
         cutoff = base.timestamp() - 300
-        for _m in Path("/tmp").glob("claude-do-resv-*"):
+        for _m in Path(harness_state_dir()).glob("claude-do-resv-*"):
             try:
                 if _m.is_file() and _m.stat().st_mtime < cutoff:
                     _m.unlink()
@@ -1347,7 +1347,7 @@ def _mint_unique_do_taskid() -> str:
     for i in range(300):  # forward-bump on contention; 300 distinct seconds
         ts = (base + timedelta(seconds=i)).strftime("%Y%m%d-%H%M%S")
         try:
-            fd = os.open(f"/tmp/claude-do-resv-{ts}", os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+            fd = os.open(f"{harness_state_dir()}/claude-do-resv-{ts}", os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
             os.close(fd)
             return ts
         except FileExistsError:
@@ -1384,6 +1384,8 @@ def _write_do_report_skeleton(task_id: str, request_text: str, project_dir: Path
                 "request_id": task_id,
                 "source": "do",
                 "request": request_text,
+                "profile": "do",
+                "expected_absent": ["qa-report", "dev-report", "ticket", "context", "completion"],
                 "do": {
                     "status": "pending",
                     "summary": "",
@@ -1416,13 +1418,13 @@ def handle_do_consent(sid: str, user_input: str = "", project_dir: Path | None =
     # content stays "true" so every existence-checking reader is unaffected).
     try:
         task_id = _mint_unique_do_taskid()
-        sidecar = Path(f"/tmp/claude-do-task-{sid}.json")
+        sidecar = Path(f"{harness_state_dir()}/claude-do-task-{sid}.json")
         sidecar.write_text(json.dumps({
             "task_id": task_id,
             "session_id": sid,
             "created_at": datetime.now(timezone.utc).isoformat(),
         }))
-        print(f"[/do] task-id minted: {task_id} — resolve via $CLAUDE_CODE_SESSION_ID → /tmp/claude-do-task-<sid>.json (NOT `ls -t | head -1`).")
+        print(f"[/do] task-id minted: {task_id} — resolve via $CLAUDE_CODE_SESSION_ID → {harness_state_dir()}/claude-do-task-<sid>.json (NOT `ls -t | head -1`).")
     except Exception as e:
         sys.stderr.write(f"[/do] Failed to write task sidecar: {e}\n")
         return
@@ -1780,6 +1782,25 @@ def _dev_replay_path(sid: str, envelope_digest: str) -> Path:
     return PROJECT_DIR / '.claude' / 'dev-start-replays' / sid / f'{envelope_digest}.json'
 
 
+_DEV_REPORT_TERMINAL_STATUSES = {"completed", "blocked", "needs_review"}
+
+
+def _dev_report_reached_terminal(task_id: str) -> bool:
+    """True iff docs/dev/dev-report-<task_id>.json exists and its dev.status
+    is a terminal value. Fails OPEN to False (non-terminal) on any read/parse
+    error, missing file, wrong shape, or unrecognized status -- the fail-safe
+    direction here is to PRESERVE the current replay behavior, not to mint a
+    surprising new task_id."""
+    try:
+        path = PROJECT_DIR / 'docs' / 'dev' / f'dev-report-{task_id}.json'
+        record = json.loads(path.read_text(encoding='utf-8'))
+        return (isinstance(record, dict)
+                and isinstance(record.get('dev'), dict)
+                and record['dev'].get('status') in _DEV_REPORT_TERMINAL_STATUSES)
+    except Exception:
+        return False
+
+
 def _archive_current_generation(sid: str) -> None:
     """Copy current pointer/checklist bytes to immutable, addressable history."""
     bookmark = workflow_bookmark_path(sid)
@@ -1817,15 +1838,23 @@ def _ordinary_dev_start(cmd_name: str, user_input: str, sid: str, envelope_diges
         ).hexdigest()
     replay_path = _dev_replay_path(sid, envelope_digest)
     with _exclusive_lock(_dev_start_lock_path(sid)):
+        terminal_notice = ''
         if replay_path.exists():
             replay = json.loads(replay_path.read_text(encoding='utf-8'))
             output = replay.get('stdout')
             error_output = replay.get('stderr', '')
             if not isinstance(output, str) or not isinstance(error_output, str):
                 raise RuntimeError('malformed Dev start replay record')
-            sys.stdout.write(output)
-            sys.stderr.write(error_output)
-            return
+            prior_task_id = replay.get('task_id', '')
+            if not (isinstance(prior_task_id, str) and prior_task_id
+                    and _dev_report_reached_terminal(prior_task_id)):
+                sys.stdout.write(output)
+                sys.stderr.write(error_output)
+                return
+            terminal_notice = (
+                f'[dev] Previous cycle {prior_task_id} already reached a '
+                'terminal state; starting a new one.\n'
+            )
 
         todos = run_todo_script(cmd_name, user_input)
         if not todos:
@@ -1871,6 +1900,7 @@ def _ordinary_dev_start(cmd_name: str, user_input: str, sid: str, envelope_diges
 
         codex_active = '--codex' in user_input.split()
         output = ''.join([
+            terminal_notice,
             diagnostics,
             f'DEV_SESSION_ID pre-initialized by hook: {task_id}\n',
             f'User requirement document: docs/dev/user-requirement-{task_id}.md\n',

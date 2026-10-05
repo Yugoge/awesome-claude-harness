@@ -19,6 +19,9 @@ import sys
 import time
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).parent))
+from lib.harness_state_dir import harness_state_dir  # noqa: E402
+
 
 def _cancel_watchdog(pid_file: str):
     """Send SIGTERM to watchdog and clean up PID file."""
@@ -60,7 +63,7 @@ def main():
         sys.exit(0)
 
     session_id = os.environ.get("CLAUDE_SESSION_ID", "default")
-    pid_file = f"/tmp/.runcode-watchdog-{session_id}.pid"
+    pid_file = f"{harness_state_dir()}/.runcode-watchdog-{session_id}.pid"
 
     if os.path.exists(pid_file):
         _cancel_watchdog(pid_file)
