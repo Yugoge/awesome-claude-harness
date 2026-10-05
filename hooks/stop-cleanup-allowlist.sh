@@ -5,6 +5,10 @@
 # NOTE: NO `set -e` — missing flag file is expected and must not error out.
 set -u
 
+# Hook runtime-state root (CLAUDE_STATE_DIR; default /tmp). Fail-soft fallback.
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)/lib/harness_state_dir.sh" 2>/dev/null \
+  || harness_state_dir() { printf '%s\n' /tmp; }
+
 INPUT=$(cat)
 SID=$(echo "$INPUT" | python3 -c \
   "import json,sys,os; d=json.load(sys.stdin); print(d.get('session_id','') or os.environ.get('CLAUDE_SESSION_ID','default'))" \
@@ -19,7 +23,7 @@ SID=$(echo "$INPUT" | python3 -c \
 CONSENT_LOG="$HOME/.claude/logs/bash-consent.log"
 mkdir -p "$(dirname "$CONSENT_LOG")"
 
-FLAG="/tmp/claude-bash-allowlist-${SID}.json"
+FLAG="$(harness_state_dir)/claude-bash-allowlist-${SID}.json"
 if [ -f "$FLAG" ]; then
   echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) sid=$SID EXPIRED (turn ended without consumption)" >> "$CONSENT_LOG"
   rm -f "$FLAG"
@@ -28,12 +32,12 @@ fi
 # Also clear /do consent flag - single-turn scope per 2026-04-28 boundary update.
 # /do unlocks tool combinations the main agent normally avoids (context-saving);
 # it must be re-granted explicitly each turn.
-DO_FLAG="/tmp/claude-orchestrator-consent-${SID}.flag"
+DO_FLAG="$(harness_state_dir)/claude-orchestrator-consent-${SID}.flag"
 if [ -f "$DO_FLAG" ]; then
   echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) sid=$SID DO_CONSENT_EXPIRED (turn ended)" >> "$CONSENT_LOG"
   rm -f "$DO_FLAG"
 fi
-rm -f "/tmp/claude-tool-streak-${SID}.json"
+rm -f "$(harness_state_dir)/claude-tool-streak-${SID}.json"
 
 # ── Sentinel-grant reap (task 20260519-211515 R2 / AC2) ──
 # At session stop, sweep /tmp/claude-grants/*.json: unlink any sentinel
@@ -91,10 +95,10 @@ print('[stop-cleanup] reaped', reaped, 'bulk-commit sentinels', flush=True)
 # age-bounded reaper and the >7d /tmp cron sweep are the backstops.
 # CLAUDE_COMMIT_GRANT_SWEEP_DIR is a test seam (defaults to /tmp) so the suite
 # can exercise this sweep by execution without touching live /tmp artifacts.
-CLAUDE_STOP_SWEEP_SID="$SID" python3 - <<'PYSWEEP' 2>>"$CONSENT_LOG" || true
+CLAUDE_STOP_SWEEP_SID="$SID" CLAUDE_STOP_SWEEP_STATE="$(harness_state_dir)" python3 - <<'PYSWEEP' 2>>"$CONSENT_LOG" || true
 import glob, json, os, stat, time
 sid = os.environ.get('CLAUDE_STOP_SWEEP_SID', '')
-root = os.environ.get('CLAUDE_COMMIT_GRANT_SWEEP_DIR') or '/tmp'
+root = os.environ.get('CLAUDE_COMMIT_GRANT_SWEEP_DIR') or os.environ['CLAUDE_STOP_SWEEP_STATE']
 STALE = 1800
 now = time.time()
 UNPROBED = object()

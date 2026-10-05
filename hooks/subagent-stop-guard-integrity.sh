@@ -8,7 +8,9 @@
 set -euo pipefail
 
 # Prevent stacking: concurrent SubagentStop hooks skip instead of piling up CPU.
-exec 9>/tmp/.subagent-stop-guard-integrity.lock
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)/lib/harness_state_dir.sh" 2>/dev/null \
+  || harness_state_dir() { printf '%s\n' /tmp; }
+exec 9>"$(harness_state_dir)/.subagent-stop-guard-integrity.lock"
 flock -n 9 || exit 0
 
 cd "${CLAUDE_PROJECT_DIR:-.}" 2>/dev/null || exit 0

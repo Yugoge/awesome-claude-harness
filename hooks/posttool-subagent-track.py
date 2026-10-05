@@ -38,6 +38,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 from lib.todo_canonical import run_todo_script
+from lib.harness_state_dir import harness_state_dir
 
 try:
     from lib import contract_runtime  # noqa: F401  (Path A optional dep)
@@ -289,12 +290,12 @@ def _try_load_contract(session_id: str, state: dict):
 
 def _contract_bookmark_path(session_id: str, cycle_id: int) -> Path:
     """T2.3: pretool-subagent-enforce wrote /tmp/contract-bookmark-<sid>-<cycle>.json."""
-    return Path(f'/tmp/contract-bookmark-{session_id}-{cycle_id}.json')
+    return Path(f'{harness_state_dir()}/contract-bookmark-{session_id}-{cycle_id}.json')
 
 
 def _artifact_status_path(session_id: str, cycle_id: int) -> Path:
     """T2.3: posttool-overnight-file-check (T3.2) writes per-call sidecar."""
-    return Path(f'/tmp/artifact-status-{session_id}-{cycle_id}.json')
+    return Path(f'{harness_state_dir()}/artifact-status-{session_id}-{cycle_id}.json')
 
 
 def _read_json(path: Path) -> dict | None:
