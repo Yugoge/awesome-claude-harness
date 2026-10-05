@@ -844,12 +844,26 @@ case today and its behavior is unchanged by the existence of the grouping mechan
 This grouping is what Phase 3's held-lock handshake below iterates: **one commit per
 group**, in order, each with its own message disclosing that group's sources, inside one
 continuously-held fd-9 transaction per repository (see Phase 3). This is the actual
-"split by source" the operator's charter requires — the single-commit-with-disclosure
-behavior of an earlier revision of this section is superseded, not merely supplemented.
+"split by source" the operator's charter requires: every group lands as its own commit,
+and each group's message discloses its own sources — splitting and disclosure are both
+mandatory, not alternatives to each other.
 
 Whole-file staging applies uniformly to every candidate reaching this point, in
 every case above, scoped to its OWN group's files only during that group's turn in the
 Phase 3 loop (never the whole candidate set at once when there is more than one group).
+
+**Entangled-file default: whole-file landing, not exclusion.** When a candidate file's
+changes are entangled with another session's uncommitted changes such that a byte-clean
+separation is not possible without carrying away foreign bytes, stage and commit the
+file whole: list every relevant ticket and every identifiable contributing session in
+the commit message, and mark any portion whose authorship cannot be determined
+"归属未定" (attribution undetermined) rather than omitting it. Entanglement is never
+grounds to skip the file, mark it excluded, escalate to a human for manual separation,
+or wait for another session to commit first. The only exception admitting a hunk-level
+split instead is when separation is byte-clean AND whole-file landing would carry a
+known regression into history — decided by the affected test subset, never by
+subjective judgment. Never hand-synthesize a file version that no session actually
+wrote.
 
 **Guard: a deliberately partially-staged path is never overwritten by the whole-file
 `git add` below.** Before running it for a given candidate, check whether the index
@@ -899,9 +913,8 @@ candidate happens to be:
   path: best-available dev-report evidence) already determined its source set and
   basis before reaching this staging step.
 
-There is no longer a shape of whitelisted candidate that is excluded,
-warned-and-skipped, or escalated at this step — see the historical note above for
-what this replaces and why.
+Every whitelisted candidate reaching this step is staged; none is excluded,
+warned-and-skipped, or escalated.
 
 For deleted files that are tracked:
 ```bash
@@ -914,33 +927,6 @@ single-file `git add --` / `git rm --` form.
 If a file no longer exists on disk and is untracked (status `??`): skip with a
 warning (the file never reached disk; there is nothing to stage, not an attribution
 question).
-
-**Historical note (what this replaces).** Earlier revisions of this section routed a
-file with a top-level `owned_edits` entry through `stage-owned-hunks.py
---ledger`/`--snapshot` to stage only this cycle's own hunks and leave a peer's
-uncommitted hunks unstaged. The routing began "2. Snapshot materialization (REQUIRED"
-and, for a dirty file with neither ledger nor snapshot, fell through to a heading
-reading "Fail-closed for ambiguous shared dirty files" (both phrases kept here,
-unwrapped, as historical anchors — a standalone ledger-contract checker script
-still cites them; removing the phrases before that script itself is retired would
-dangle its citation). That routing's `classification_verdict` table
-(`unaccounted_bytes` / `accounted_not_separable` / `ownership_conflict` / ...)
-warned-and-skipped or escalated to a human on anything it could not cleanly
-separate — all keyed on the dev-report's self-reported `owned_edits` /
-`pre_edit_snapshots` / `files_landed_whole` fields, which are no longer the
-attribution source of record (see "Attribution and staging decision" above). See
-`docs/reference/attribution-journal-cutover-flip-plan-20261003.md` for the design
-history this supersedes, and the operator's explicit ruling: the journal is the
-fact, and the only terminal state for a whitelisted candidate is staged — never
-blocked, refused, or escalated. `stage-owned-hunks.py`'s `--ledger`/`--snapshot`
-hunk-replay path and `scripts/check-owned-edits-entry.py` have no remaining caller
-in this file after this change; their removal, together with the standalone
-ledger-contract checker script that cites the two anchor phrases above and the
-ownership gate in `scripts/resolve-commit-repos.py`, is this cutover's stage 2/3 —
-not performed speculatively here, and that checker script is deliberately not
-named by its own filename in this paragraph (a live contract test asserts this
-document never names it, precisely because doing so would read as wiring it into
-a blocking path before stage 2/3 actually does).
 
 **Grouping into one commit per distinct source is implemented, not deferred.**
 Phase 5's `source_key` partition and Phase 3's per-group held-lock loop (item 0 of the
