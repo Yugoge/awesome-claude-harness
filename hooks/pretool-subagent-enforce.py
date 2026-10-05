@@ -37,6 +37,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 from lib import contract_runtime  # noqa: E402
 from lib.subagent import is_subagent_context  # noqa: E402
 from lib.allowlist import read_grant          # noqa: E402
+from lib.harness_state_dir import harness_state_dir  # noqa: E402
 
 
 def _parse_stdin() -> dict:
@@ -48,7 +49,7 @@ def _parse_stdin() -> dict:
 
 def _has_consent(session_id: str) -> bool:
     try:
-        flag = Path(f'/tmp/claude-orchestrator-consent-{session_id}.flag')
+        flag = Path(f'{harness_state_dir()}/claude-orchestrator-consent-{session_id}.flag')
         return flag.exists() and flag.read_text().strip() == 'true'
     except Exception:
         return False
@@ -134,7 +135,7 @@ def _extract_agent_fields(stdin_data: dict) -> tuple[str, str, str, str]:
 
 
 def _bookmark_path(session_id: str, cycle_id: int) -> Path:
-    return Path(f'/tmp/contract-bookmark-{session_id}-{cycle_id}.json')
+    return Path(f'{harness_state_dir()}/contract-bookmark-{session_id}-{cycle_id}.json')
 
 
 def _write_bookmark(session_id: str, cycle_id: int, step: str, payload: dict) -> None:

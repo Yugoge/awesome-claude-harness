@@ -97,6 +97,7 @@ from lib.allowlist import (  # noqa: E402
     match_sentinel_grant_for_bash_command,
 )
 from lib.overnight import is_overnight_active  # noqa: E402
+from lib.harness_state_dir import harness_state_dir  # noqa: E402
 from lib.git_command_classifier import (  # noqa: E402
     _segments, _basename, _WRAPPERS, _ENV_ASSIGN_RE,
     _command_token_index, _GIT_GLOBAL_VALUE, _git_subcommand,
@@ -585,7 +586,7 @@ def _has_do_consent(data):
     if not sid:
         return False
     try:
-        flag = Path(f'/tmp/claude-orchestrator-consent-{sid}.flag')
+        flag = Path(f'{harness_state_dir()}/claude-orchestrator-consent-{sid}.flag')
         return flag.exists() and flag.read_text().strip() == 'true'
     except Exception:
         return False

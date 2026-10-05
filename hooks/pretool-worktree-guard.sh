@@ -5,7 +5,9 @@
 
 set -euo pipefail
 
-CACHE_FILE="/tmp/worktree-guard-cache"
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)/lib/harness_state_dir.sh" 2>/dev/null \
+  || harness_state_dir() { printf '%s\n' /tmp; }
+CACHE_FILE="$(harness_state_dir)/worktree-guard-cache"
 CACHE_TTL=60
 
 # Check cache: skip expensive git ops if checked recently

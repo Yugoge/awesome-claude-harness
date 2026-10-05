@@ -10,6 +10,10 @@
 # use the safety script directly). See CLAUDE.md permanent-block list
 # (EnterPlanMode/ExitPlanMode only).
 
+# Hook runtime-state root (CLAUDE_STATE_DIR; default /tmp). Fail-soft fallback.
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)/lib/harness_state_dir.sh" 2>/dev/null \
+  || harness_state_dir() { printf '%s\n' /tmp; }
+
 # Read full JSON from stdin
 INPUT=$(cat)
 
@@ -53,13 +57,13 @@ if [ "$_BEW_IS_SUB" != "1" ]; then
 print(d.get('session_id','') or os.environ.get('CLAUDE_SESSION_ID','default'))" \
     2>/dev/null)
   [ -z "$_BEW_SID" ] && _BEW_SID="default"
-  _BEW_DO_FLAG="/tmp/claude-orchestrator-consent-${_BEW_SID}.flag"
+  _BEW_DO_FLAG="$(harness_state_dir)/claude-orchestrator-consent-${_BEW_SID}.flag"
   if [ -f "$_BEW_DO_FLAG" ] && [ "$(cat "$_BEW_DO_FLAG" 2>/dev/null)" = "true" ]; then
     exit 0
   fi
   # /allow bypass — delegates to lib/allowlist.read_grant("EnterWorktree", sid)
   _BEW_HOOKS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-  _BEW_ALLOW_FILE="/tmp/claude-bash-allowlist-${_BEW_SID}.json"
+  _BEW_ALLOW_FILE="$(harness_state_dir)/claude-bash-allowlist-${_BEW_SID}.json"
   if [ -f "$_BEW_ALLOW_FILE" ]; then
     _BEW_MATCHED=$(HOOKS_DIR="$_BEW_HOOKS_DIR" BEW_SID="$_BEW_SID" python3 - <<'BEWEOF'
 import os, sys

@@ -33,6 +33,9 @@ import os
 import sys
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).parent))
+from lib.harness_state_dir import harness_state_dir  # noqa: E402
+
 
 def first_present(mapping, names, default=None):
     """Return the value of the first key that is PRESENT (even if falsy).
@@ -147,7 +150,7 @@ def main():
         sys.exit(0)
 
     # /do consent bypass - use correct sentinel path
-    do_sentinel = Path(f"/tmp/claude-orchestrator-consent-{session_id}.flag")
+    do_sentinel = Path(f"{harness_state_dir()}/claude-orchestrator-consent-{session_id}.flag")
     if do_sentinel.exists():
         sys.exit(0)
 

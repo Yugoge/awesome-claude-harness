@@ -29,7 +29,22 @@ SEMANTICS (decision table, first match wins):
   4. structured /allow grant for the Agent tool exists ....... exit 0
      (human escape hatch — same read_grant("Agent", sid) lookup
       pretool-subagent-enforce.py already uses)
-  5. otherwise (main agent, /do active) ...................... exit 2
+  5. dispatch prompt carries a structurally-valid obligation
+     block (hooks/lib/obligation.py:extract_obligation_block)
+     whose parsed body's "profile" field equals the literal
+     string "repair" .......................................... exit 0
+     (ticket-20260930-132644-l8 Part C2: a repair-engine-minted
+      dispatch must reach its producer even during an active /do
+      cycle — the engine's own self-repair traffic is not the
+      stray-dev-report hazard this hook exists to block. Verified
+      structurally via extract_obligation_block + a raw json.loads
+      + dict.get("profile") lookup — NEVER a substring/text search
+      for the word "repair" in the prompt, and NEVER via
+      parse_obligation/validate_obligation, which would reject
+      profile="repair" today since schemas/obligation.v1.json's
+      PROFILES enum does not yet include it — see that ticket's
+      Edge Case 3.)
+  6. otherwise (main agent, /do active) ...................... exit 2
 
   Active-/do detection reuses the EXACT same source of truth as the existing
   consent bypasses: /tmp/claude-orchestrator-consent-<session_id>.flag exists
@@ -53,8 +68,12 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
-from lib.subagent import is_subagent_context  # noqa: E402
-from lib.allowlist import read_grant          # noqa: E402
+from lib.subagent import is_subagent_context      # noqa: E402
+from lib.allowlist import read_grant              # noqa: E402
+from lib.harness_state_dir import harness_state_dir  # noqa: E402
+from lib.obligation import ExtractedBlock, extract_obligation_block  # noqa: E402
+
+REPAIR_PROFILE = "repair"
 
 
 def _parse_stdin() -> dict:
@@ -70,10 +89,33 @@ def _has_consent(session_id: str) -> bool:
     same content check. This MUST stay byte-equivalent in semantics so the
     block window of this hook is exactly the bypass window of the others."""
     try:
-        flag = Path(f'/tmp/claude-orchestrator-consent-{session_id}.flag')
+        flag = Path(f'{harness_state_dir()}/claude-orchestrator-consent-{session_id}.flag')
         return flag.exists() and flag.read_text().strip() == 'true'
     except Exception:
         return False
+
+
+def _is_repair_profile_dispatch(stdin_data: dict) -> bool:
+    """Structural (never text-sniffing) check: does this dispatch's own
+    prompt carry a syntactically valid obligation block whose "profile"
+    field is literally "repair"? Uses ONLY extract_obligation_block (raw
+    tag extraction) + a plain json.loads + dict.get -- never
+    parse_obligation/validate_obligation, which enforces the full
+    schemas/obligation.v1.json grammar and would reject profile="repair"
+    today (not yet a legal enum member there, ticket-20260930-132644-l8
+    Edge Case 3). A malformed or absent block is fail-closed -- treated as
+    "not a repair dispatch", never as an allow signal.
+    """
+    tool_input = stdin_data.get('tool_input', {})
+    prompt = tool_input.get('prompt', '') if isinstance(tool_input, dict) else ''
+    extracted = extract_obligation_block(prompt)
+    if not isinstance(extracted, ExtractedBlock):
+        return False
+    try:
+        body = json.loads(extracted.body)
+    except (ValueError, TypeError):
+        return False
+    return isinstance(body, dict) and body.get('profile') == REPAIR_PROFILE
 
 
 def _emit_block(tool_name: str, session_id: str) -> None:
@@ -115,6 +157,12 @@ def _main() -> None:
         # Human escape hatch: an explicit /allow grant for the Agent tool
         # overrides the block (read-only; consumption stays in PostToolUse).
         if read_grant('Agent', session_id):
+            sys.exit(0)
+        # ticket-20260930-132644-l8 Part C2: a structurally-identified
+        # repair-profile dispatch (the repair engine's own self-repair
+        # traffic) passes through even during an active /do cycle -- see
+        # module docstring SEMANTICS item 5.
+        if _is_repair_profile_dispatch(stdin_data):
             sys.exit(0)
         _emit_block(stdin_data.get('tool_name'), session_id)
         sys.exit(2)

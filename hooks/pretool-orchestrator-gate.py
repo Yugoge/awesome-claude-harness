@@ -39,6 +39,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 from lib.subagent import is_subagent_context  # noqa: E402
 from lib.allowlist import read_grant          # noqa: E402
+from lib.harness_state_dir import harness_state_dir  # noqa: E402
 
 ALWAYS_ALLOWED = {
     "Agent",
@@ -73,7 +74,7 @@ def get_session_id(data: dict) -> str:
 
 
 def has_consent(session_id: str) -> bool:
-    flag = Path(f"/tmp/claude-orchestrator-consent-{session_id}.flag")
+    flag = Path(f"{harness_state_dir()}/claude-orchestrator-consent-{session_id}.flag")
     try:
         return flag.exists() and flag.read_text().strip() == "true"
     except Exception:
@@ -81,7 +82,7 @@ def has_consent(session_id: str) -> bool:
 
 
 def get_streak_state_file(session_id: str) -> Path:
-    return Path(f"/tmp/claude-tool-streak-{session_id}.json")
+    return Path(f"{harness_state_dir()}/claude-tool-streak-{session_id}.json")
 
 
 def _fresh_state() -> dict:
