@@ -4,7 +4,7 @@ Organization and usage documentation for `scripts/`.
 
 <!-- AUTO:readme-stats -->
 ## Overview
-- **Total files**: 115
+- **Total files**: 125
 - **Subdirectories**: 6
 - **Naming convention**: kebab
 
@@ -24,6 +24,7 @@ Organization and usage documentation for `scripts/`.
 - `capability-doctor-strict.py` - Two properties this file exists to guarantee:
 - `capability-handshake.py` - Proves (or refuses to claim) that this harness's hook-based security boundary is
 - `capability-status-line.sh` - Description: statusLine command that renders the persistent host-capability marker.
+- `capture-dispatch-metadata.py` - dispatch-time baseline content for files already dirty at dispatch) in the --lanes
 - `capture-hero-run.py` - Description: Builds a hermetic fixture, installs one narrowly-scoped single-use grant,
 - `check-enforcement-evidence.py` - Three subcommands, one consumer each:
 - `check-file-references.sh` - File reference detection script - used by /clean command
@@ -33,9 +34,11 @@ Organization and usage documentation for `scripts/`.
 - `check-public-core.sh` - Description: Public/private boundary gate. Recomputes the top-level tracked-path set from
 - `check-readme-freshness.sh` - Check README.md freshness for all major folders
 - `check-security-hook-drift.sh` - Description: Audit always-on security-critical hook files against a cycle baseline SHA
+- `check-todo-accounting.py` - Executable C10 accounting proof for the ordinary ``/dev`` checklist.
 - `checkpoint-prune.sh` - checkpoint-prune.sh — trim refs/checkpoints/* to the most recent N commits
 - `cleanup-close-force-sentinel.sh` - Removes the force-close sentinel file for a given dev session.
 - `cleanup-tests-folder.sh` - Description: Remove validators that don't match git edge cases, preserving reports/
+- `close-commit-repair-orchestrate.py` - Consumes schemas/repair-map.v1.json; given a findings list, looks up each
 - `close-report-append.py` - Description: Deterministic read-append-reread-verify helper for the
 - `close-route-select.py` - Without ``--late-repair`` this is a pass-through: it resolves the artifact
 - `close-scoring-decide.py` - Description: Decide which close_success_* event /close should issue based on
@@ -50,13 +53,16 @@ Organization and usage documentation for `scripts/`.
 - `detect-orphan-agents.sh` - Description: Detect agents not referenced by any command
 - `detect-orphan-commands.sh` - Description: Detect orphan commands (one-time patterns, no todo script, unused)
 - `detect-orphan-scripts.sh` - Description: Detect scripts not referenced by any command/agent/other script
+- `dev-fix.py` - This module is intentionally a backend, not a command orchestrator.  It classifies
 - `dev-lifecycle.py` - Derives, per on-disk task-id, a state using the TOTAL REDUCTION ORDER from
 - `discover-folders.sh` - Description: Dynamically discover project folders excluding system directories
 - `doctor` - doctor file
 - `execute-push.py` - Eliminates the timing window that exists when validate + push are && -chained
+- `gen-test-baseline.py` - Usage:
 - `generate-folder-index.sh` - Description: Generate INDEX.md for folder (inventory of contents)
 - `generate-folder-readme.sh` - Description: Generate README.md for folder (purpose and organization rules)
 - `generate-hero-status.py` - Description: One source of truth emits THREE marker-delimited canonical regions -- the
+- `generate-repair-map.py` - Part A of ticket-20260930-132644-l8 (spec-20260930-092323 lane L8). Joins:
 - `graphify-enrich.py` - graphify-enrich.py — pre-DEV focused subgraph extractor (runs between Step 7 and Step 8)
 - `graphify-maintain.py` - graphify-maintain.py — Global Graphify cache lifecycle manager (REAL CLI)
 - `graphify-query.py` - graphify-query.py — deterministic pre-BA graph hydrator (runs between Step 1 and Step 2)
@@ -64,12 +70,14 @@ Organization and usage documentation for `scripts/`.
 - `install-checkpoint-refspec.sh` - install-checkpoint-refspec.sh — idempotently add refs/checkpoints/* to
 - `install-git-keystone.sh` - install-git-keystone.sh — wire the git-native reference-transaction keystone
 - `iterate-failed-pipelines.py` - Reads pipelines JSON path; outputs iteration plan JSON to stdout. The orchestrator
+- `laneb-integration-gate.py` - The program is deliberately non-authorizing unless it has consumed the complete,
 - `late-repair-controller.py` - Owns the run-record lifecycle for the deliberately-invoked ``/close
 - `lifecycle-baseline-import.sh` - Description: One-time idempotent migration — import current agent scores from agent-scores.json
 - `lint-spec-id-centralization.py` - markdown from re-deriving a spec-id / views_dir / split_marker / cp_dir from a
 - `measure-hero-fold.py` - Description: Renders README.md LOCALLY from the working tree in headless Chromium at the
 - `migrate-test-to-tests.sh` - Description: Merge test/ folder into tests/ preserving all content (idempotent)
 - `mint-git-blessed-token.sh` - mint-git-blessed-token.sh — issuer of the keystone blessed token (M12).
+- `negative-evidence.py` - Create or verify authority-bound bounded negative-evidence receipts.
 - `normalize-doc-names.sh` - normalize-doc-names.sh - Detect and report non-compliant documentation file names
 - `orchestrator.sh` - Description: Agent orchestration coordinator for development and cleanup workflows
 - `overnight-git-env.sh` - overnight-git-env.sh — prepare the overnight actor's git PATH + env (M11/AC9).
@@ -82,6 +90,7 @@ Organization and usage documentation for `scripts/`.
 - `paseo-usage-read.mjs` - mjs file
 - `plan-style-inspection.sh` - Description: Discover auditable files and split into groups for parallel style inspection
 - `precommitted-recovery.sh` - Description: Recovery path helpers for nothing_to_commit_precommitted detection.
+- `prune-orphaned-workflow-bookmarks.sh` - scripts/prune-orphaned-workflow-bookmarks.sh
 - `qa-manifest-guard.py` - Dual-mode tool per BA spec docs/dev/ticket-20260529-081014.md M4:
 - `qa-report-stale-iter-lint.py` - lacks an explicit resolution marker
 - `refine-context.sh` - refine-context.sh — merge QA-refined context with original context
@@ -101,6 +110,7 @@ Organization and usage documentation for `scripts/`.
 - `session-index.py` - Subcommands (all take --git-root):
 - `session-resources.py` - Provider-neutral CLI for the LANE-B session resource broker.
 - `spec-check.py` - Subcommands: check-in, mark, waive, status, check-out, unlock
+- `spec-update-contract.py` - The command policy owns all writes.  This module deliberately has no mutation
 - `stage-owned-hunks.py` - Stages ONLY this cycle's owned hunks within a single already-authorized file,
 - `step7-spec-update.py` - Step 8 (Spec-update dispatch) reference harness — task 20260524-205206 iter-2
 - `test` - test file

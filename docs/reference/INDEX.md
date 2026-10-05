@@ -1,8 +1,8 @@
 # reference
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-10-05T16:41:32Z*
-**Total entries**: 55
+*Last updated: 2026-10-05T17:15:47Z*
+**Total entries**: 57
 **Convention**: kebab
 
 ## Tree
@@ -35,6 +35,7 @@ reference/
 ├── `lane-pol-catchup-plan-20260808-035658-lanepolcatchup.md` - LANE-POL Catch-Up Plan — origin/master → fix/dev-fanout-gatekeeper-20260717
 ├── `launch-plan.md` - Launch Plan — ROI-ranked channels, gated on recorded evidence
 ├── `lock-file-handling.md` - Git Lock File Handling
+├── `master-origin-reconciliation-gap-20261005.md` - No history-preserving reconciliation path exists between local master and diverged origin/master
 ├── `mat-doc10-writer-order.v2.json` - JSON config: schema, contract_id, spec_id, lane_id, published_by_task_id
 ├── `monolith-split-plan.md` - Monolith Split Plan (Plan-of-Record)
 ├── `MORNING-20260907.md` - 晨间交接 — 2026-09-07
@@ -61,6 +62,7 @@ reference/
 ├── `test-suite-overhaul-plan.md` - Test Suite Overhaul Plan (Plan-of-Record)
 ├── `tmp-cleanup-convention.md` - Ad-hoc scratch directory convention
 ├── `venv-repair.md` - venv-repair — restoring `~/.claude/venv` when interpreter symlinks break
+├── `workflow-bookmark-orphans-20261005.md` - Root-level `workflow-*.json` bookmarks have no lifecycle management; 22/22 are orphans
 ├── `workspace-disposition-criteria-20261005.md` - Workspace disposition criteria, and the five verdicts that existed only in a transcript
 └── `worktree-685c203b-remaining-18-disposition-20261005.md` - Worktree `overnight-20260809-685c203b`: disposition of the remaining 18 items
 ```
