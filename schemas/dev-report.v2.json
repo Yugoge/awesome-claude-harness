@@ -1,0 +1,180 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "dev-report.v2",
+  "title": "Dev Report v2 (nested producer shape)",
+  "description": "Per-task dev implementation report, v2: matches the REAL nested producer template (agents/dev.md:590-674 — nested dev.status, top-level baseline keys) instead of v1's flat shape. Required baseline_head_sha/baseline_dirty_snapshot mirror the live producer checks at scripts/aggregate-dev-report.py:529-546 (commit inventory #71/#72, close #20/#22; empty string is legal for both — unborn repo / clean tree). The AC-deviation sub-shape is copied from its canonical machine-shape definition at scripts/resolve-dev-artifact-chain.py:80-130. lane/lane_set follow docs/reference/close-commit-zero-failure-mechanism-20260928.md §1.1(e)/§1.2: lane_set is required non-null when lane is a string; lane-membership (lane ∈ lane_set) is NOT expressible in Draft7 and is the later G2 echo check, deliberately not faked here. Authority: design §1.6 (schema v2 cutover).",
+  "type": "object",
+  "additionalProperties": true,
+  "required": [
+    "report_version",
+    "request_id",
+    "task_id",
+    "timestamp",
+    "baseline_head_sha",
+    "baseline_dirty_snapshot",
+    "owned_edits",
+    "pre_edit_snapshots",
+    "dev"
+  ],
+  "properties": {
+    "report_version": {
+      "type": "integer",
+      "const": 2
+    },
+    "request_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "task_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "baseline_head_sha": {
+      "type": "string",
+      "description": "git rev-parse HEAD at dispatch time; empty string legal (unborn repo, agents/dev.md:595)."
+    },
+    "baseline_dirty_snapshot": {
+      "type": "string",
+      "description": "git status --porcelain at dispatch time; key REQUIRED, value may be \"\" (scripts/aggregate-dev-report.py:543-546 / commit #72)."
+    },
+    "owned_edits": {
+      "type": "object",
+      "description": "Per-file ledger of {old, new} edits authored by this cycle (schemas/owned-edits-ledger.v1.json documents the entry shape)."
+    },
+    "pre_edit_snapshots": {
+      "type": "object",
+      "description": "Per-file pre-edit trust anchor (git blob SHA or literal pre-edit content)."
+    },
+    "lane": {
+      "type": ["string", "null"]
+    },
+    "lane_set": {
+      "type": ["array", "null"],
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "uniqueItems": true,
+      "minItems": 1
+    },
+    "dev": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": [
+        "status",
+        "files_modified",
+        "files_created"
+      ],
+      "properties": {
+        "status": {
+          "type": "string",
+          "enum": ["completed", "blocked", "needs_review"],
+          "description": "The REAL nested template enum (agents/dev.md:604) — NOT v1's flat enum with 'partial'."
+        },
+        "status_rationale": {
+          "type": "object",
+          "description": "Required when dev.status == 'needs_review' (honest-terminal conditional, design §1.4.2; same shape as dev-report.v1.json:33-44).",
+          "required": ["classification", "blocked_by", "forbidden_action"],
+          "properties": {
+            "classification": {
+              "type": "string",
+              "enum": [
+                "pending_commit_handoff",
+                "pending_external_authorization",
+                "other_disclosed_handoff"
+              ]
+            },
+            "blocked_by": {
+              "type": "string",
+              "minLength": 1
+            },
+            "forbidden_action": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        },
+        "files_modified": {
+          "type": "array",
+          "items": {"type": "string"}
+        },
+        "files_created": {
+          "type": "array",
+          "items": {"type": "string"}
+        }
+      },
+      "if": {
+        "properties": {"status": {"const": "needs_review"}},
+        "required": ["status"]
+      },
+      "then": {
+        "required": ["status_rationale"]
+      }
+    },
+    "ac_deviation_with_user_need_satisfied": {
+      "type": "boolean"
+    },
+    "ac_deviation_with_user_need_satisfied_block": {
+      "type": "object",
+      "additionalProperties": true,
+      "description": "Canonical machine shape: scripts/resolve-dev-artifact-chain.py:80-130 ('THE ONE PLACE that defines the machine shape'). Unknown extra keys tolerated (resolver comment :96-97).",
+      "required": [
+        "clause_a_deviated_ac_ids",
+        "clause_b_user_need_verbatim",
+        "clause_c_evidence"
+      ],
+      "properties": {
+        "clause_a_deviated_ac_ids": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 32,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$"
+          }
+        },
+        "clause_b_user_need_verbatim": {
+          "type": "object",
+          "required": ["text", "source"],
+          "properties": {
+            "text": {"type": "string", "minLength": 1, "pattern": "\\S"},
+            "source": {"type": "string", "minLength": 1, "pattern": "\\S"},
+            "lanes": {"type": "object"}
+          }
+        },
+        "clause_c_evidence": {
+          "type": "object",
+          "minProperties": 1
+        }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {"lane": {"type": "string"}},
+        "required": ["lane"]
+      },
+      "then": {
+        "required": ["lane_set"],
+        "properties": {
+          "lane_set": {"type": "array"}
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {"ac_deviation_with_user_need_satisfied": {"const": true}},
+        "required": ["ac_deviation_with_user_need_satisfied"]
+      },
+      "then": {
+        "required": ["ac_deviation_with_user_need_satisfied_block"]
+      }
+    }
+  ]
+}

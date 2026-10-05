@@ -1,0 +1,96 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "qa-report.v2",
+  "title": "QA Report v2 (nested producer shape)",
+  "description": "QA verdict report, v2: matches the REAL nested producer (agents/qa.md:1393 — nested qa.status mandated; top-level status MUST NOT be emitted because commit.sh:547-556 reads only data['qa']['status']). Top-level verdict is likewise forbidden: no producer emits it and schemas/qa-report.v1.json:8-14 REQUIRES it, so forbidding it here shape-rejects flat v1-relic records misdeclared as report_version 2. qa.e2e_enforcement.status carries the FULL recognized vocabulary of hooks/subagentstop-e2e-enforce.py:41 (PASSING_STATUSES) plus its explicitly-recognized blocking value skipped_without_justification (:270): the schema validates SHAPE, the e2e stop gate keeps enforcing POLICY — narrowing the enum would make an honestly-reported skip a schema-forgery incentive. NO baseline_head_sha/baseline_dirty_snapshot here: the qa producer template (agents/qa.md:1398-1621) does not emit them (QA reads them from the dev report, agents/qa.md:468). lane/lane_set follow design §1.1(e)/§1.2 (lane-membership is the later G2 echo check, not schema-checked). Authority: docs/reference/close-commit-zero-failure-mechanism-20260928.md §1.6.",
+  "type": "object",
+  "additionalProperties": true,
+  "required": [
+    "report_version",
+    "request_id",
+    "task_id",
+    "timestamp",
+    "qa"
+  ],
+  "properties": {
+    "report_version": {
+      "type": "integer",
+      "const": 2
+    },
+    "request_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "task_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "lane": {
+      "type": ["string", "null"]
+    },
+    "lane_set": {
+      "type": ["array", "null"],
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "uniqueItems": true,
+      "minItems": 1
+    },
+    "qa": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": [
+        "status",
+        "e2e_enforcement"
+      ],
+      "properties": {
+        "status": {
+          "type": "string",
+          "enum": ["pass", "fail", "warning"]
+        },
+        "e2e_enforcement": {
+          "type": "object",
+          "additionalProperties": true,
+          "required": ["status"],
+          "properties": {
+            "status": {
+              "type": "string",
+              "enum": [
+                "performed",
+                "ran",
+                "blocked_app_unavailable",
+                "legitimately_skipped",
+                "skipped_without_justification"
+              ]
+            }
+          }
+        }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "not": {"required": ["status"]}
+    },
+    {
+      "not": {"required": ["verdict"]}
+    },
+    {
+      "if": {
+        "properties": {"lane": {"type": "string"}},
+        "required": ["lane"]
+      },
+      "then": {
+        "required": ["lane_set"],
+        "properties": {
+          "lane_set": {"type": "array"}
+        }
+      }
+    }
+  ]
+}

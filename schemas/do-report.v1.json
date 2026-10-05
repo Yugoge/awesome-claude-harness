@@ -33,6 +33,14 @@
     "request": {
       "type": "string"
     },
+    "profile": {
+      "type": "string",
+      "const": "do"
+    },
+    "expected_absent": {
+      "type": "array",
+      "items": {"type": "string"}
+    },
     "do": {
       "type": "object",
       "additionalProperties": true,

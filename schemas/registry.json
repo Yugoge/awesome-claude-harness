@@ -9,6 +9,17 @@
     "graphify-prequery.v1": "graphify-prequery.v1.json",
     "graphify-run.v1": "graphify-run.v1.json",
     "graphify-focused-subgraph.v1": "graphify-focused-subgraph.v1.json",
-    "paseo-dossier.v1": "paseo-dossier.v1.json"
+    "paseo-dossier.v1": "paseo-dossier.v1.json",
+    "dev-report.v2": "dev-report.v2.json",
+    "qa-report.v2": "qa-report.v2.json",
+    "obligation.v1": "obligation.v1.json",
+    "repair-map.v1": "repair-map.v1.json",
+    "changelog-status.v1": "changelog-status.v1.json",
+    "acceptance-criteria.v1": "acceptance-criteria.v1.json",
+    "style-inspector-report.v1": "style-inspector-report.v1.json",
+    "cleanliness-inspector-report.v1": "cleanliness-inspector-report.v1.json",
+    "prompt-inspector-report.v1": "prompt-inspector-report.v1.json",
+    "test-writer-report.v1": "test-writer-report.v1.json",
+    "test-writer-manifest.v1": "test-writer-manifest.v1.json"
   }
 }

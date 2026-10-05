@@ -1,0 +1,68 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "test-writer-report.v1",
+  "title": "Test-Writer Report v1",
+  "description": "Per-task test-writer report (docs/dev/test-writer-report-<task_id>.json). Field shapes pinned verbatim to agents/test-writer.md:206-223 (ticket 20261001-161041-r07). Registered so hooks/lib/contract_runtime.validate_artifact_for_obligation can resolve a real schema instead of permanently returning 'skip' for an unregistered id. Consumed read-only by the generic SubagentStop obligation-mode loop in hooks/subagentstop-artifact-contract-enforce.py -- no enforcement code changed by this registration.",
+  "type": "object",
+  "additionalProperties": true,
+  "required": [
+    "task_id",
+    "timestamp",
+    "manifest_path",
+    "global_index_path",
+    "global_index_kind",
+    "trigger_gate",
+    "tests_created",
+    "tests_archived",
+    "tests_skipped_idempotent",
+    "status"
+  ],
+  "properties": {
+    "task_id": {"type": "string", "minLength": 1},
+    "timestamp": {"type": "string", "format": "date-time"},
+    "manifest_path": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Per-task active manifest path (agents/test-writer.md:210): tests/generated/<task_id>/manifest.json."
+    },
+    "global_index_path": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Global index path (agents/test-writer.md:211): tests/generated/manifest.json."
+    },
+    "global_index_kind": {
+      "type": "string",
+      "const": "index",
+      "description": "The global index file's own shape is {kind: 'index', ...} -- this field just names that kind (agents/test-writer.md:212)."
+    },
+    "trigger_gate": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["complexity_tier", "risk_level", "fired"],
+      "properties": {
+        "complexity_tier": {"type": "string", "enum": ["COMPLEX", "STANDARD", "SMALL", "MICRO"]},
+        "risk_level": {"type": "string", "enum": ["high", "medium", "low"]},
+        "fired": {"type": "boolean"}
+      }
+    },
+    "tests_created": {"type": "array", "items": {"type": "string"}},
+    "tests_archived": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": true,
+        "required": ["ac_uid", "archived_path"],
+        "properties": {
+          "ac_uid": {"type": "string", "minLength": 1},
+          "archived_path": {"type": "string", "minLength": 1}
+        }
+      }
+    },
+    "tests_skipped_idempotent": {"type": "array", "items": {"type": "string"}},
+    "status": {
+      "type": "string",
+      "enum": ["completed", "no_op_trigger_gate_off"],
+      "description": "agents/test-writer.md:221 literal enum."
+    }
+  }
+}

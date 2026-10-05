@@ -1,0 +1,39 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "cleanliness-inspector-report.v1",
+  "title": "Cleanliness Inspector Report",
+  "description": "Report written by the cleanliness-inspector subagent (agents/cleanliness-inspector.md), dispatched by /close Step 1. Required set is the intersection of (a) the agent's own canonical Output Format block (agents/cleanliness-inspector.md:293-327: request_id/timestamp/inspector/findings/summary) and (b) its codex_consult mandate -- verified >=97% present across a live sweep of all on-disk docs/dev/cleanliness-inspector-report-*.json samples this session (ticket 20261001-161041-r11; 'findings' is a dict in 192/198 present cases, matching the agent's documented category-keyed shape). 'mode' was DELIBERATELY EXCLUDED from required (and from `properties`) after that same sweep showed it is NOT part of the agent's documented contract: it is missing from 8/204 reports, and -- more importantly -- is a string in 190 cases but a nested OBJECT in 6 real, current (2026-09/10) reports, so a `type` constraint on it would spuriously fail legitimate variants either way. additionalProperties: true lets 'mode' and every other cycle-specific field pass through unvalidated.",
+  "type": "object",
+  "additionalProperties": true,
+  "required": [
+    "request_id",
+    "timestamp",
+    "inspector",
+    "findings",
+    "summary",
+    "codex_consult"
+  ],
+  "properties": {
+    "request_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "timestamp": {
+      "type": "string",
+      "minLength": 1
+    },
+    "inspector": {
+      "type": "string",
+      "const": "cleanliness-inspector"
+    },
+    "findings": {
+      "type": "object"
+    },
+    "summary": {
+      "type": "object"
+    },
+    "codex_consult": {
+      "type": "object"
+    }
+  }
+}

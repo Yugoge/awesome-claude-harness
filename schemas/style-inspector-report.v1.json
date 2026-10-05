@@ -1,0 +1,39 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "style-inspector-report.v1",
+  "title": "Style Inspector Report",
+  "description": "Report written by the style-inspector subagent (agents/style-inspector.md), dispatched by /close Step 1. Required set is the intersection of (a) the agent's own canonical Output Format block (agents/style-inspector.md:598-621: request_id/timestamp/inspector/violations/summary) and (b) its separately-mandated 'codex_consult field MUST be present in all outputs' rule (agents/style-inspector.md:732) -- verified >=96% present across a live sweep of all on-disk docs/dev/style-inspector-report-*.json samples this session (ticket 20261001-161041-r11). 'mode' and 'standards_passed' were DELIBERATELY EXCLUDED from required after that same sweep showed they are NOT part of the agent's documented contract and are absent from 16-35% of real reports (mode: 71/201 missing; standards_passed: 33/201 missing) -- requiring either would spuriously fail a large fraction of legitimate reports, violating the ticket's 'required kept conservative' constraint. additionalProperties: true lets both (and every other cycle-specific field) pass through unvalidated.",
+  "type": "object",
+  "additionalProperties": true,
+  "required": [
+    "request_id",
+    "timestamp",
+    "inspector",
+    "violations",
+    "summary",
+    "codex_consult"
+  ],
+  "properties": {
+    "request_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "timestamp": {
+      "type": "string",
+      "minLength": 1
+    },
+    "inspector": {
+      "type": "string",
+      "const": "style-inspector"
+    },
+    "violations": {
+      "type": "array"
+    },
+    "summary": {
+      "type": "object"
+    },
+    "codex_consult": {
+      "type": "object"
+    }
+  }
+}

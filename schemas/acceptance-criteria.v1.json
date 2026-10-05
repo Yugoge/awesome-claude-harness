@@ -1,0 +1,30 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "acceptance-criteria.v1",
+  "title": "BA Executable Acceptance Criteria JSON",
+  "description": "BA's third deliverable (agents/ba.md Step 10): BDD acceptance criteria in executable form, consumed by test-writer (pytest skeleton generation) and transitively by QA Phase 5 (via the manifest test-writer derives from this file). additionalProperties true throughout -- the real corpus carries substantial revision/provenance metadata this schema must not reject. MICRO/SMALL-tier cycles satisfy this schema with an empty acceptance_criteria array (agents/ba.md Step 10).",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["task_id", "acceptance_criteria"],
+  "properties": {
+    "task_id": {"type": "string", "minLength": 1},
+    "acceptance_criteria": {
+      "type": "array",
+      "minItems": 0,
+      "items": {
+        "type": "object",
+        "additionalProperties": true,
+        "required": ["id", "type", "given", "when", "then", "check", "ac_uid"],
+        "properties": {
+          "id": {"type": "string", "minLength": 1},
+          "type": {"type": "string", "enum": ["ui", "api", "data", "hook"]},
+          "given": {"type": "string", "minLength": 1},
+          "when": {"type": "string", "minLength": 1},
+          "then": {"type": "string", "minLength": 1},
+          "check": {"type": "object", "additionalProperties": true},
+          "ac_uid": {"type": "string", "pattern": "^[0-9a-f]{16}$"}
+        }
+      }
+    }
+  }
+}

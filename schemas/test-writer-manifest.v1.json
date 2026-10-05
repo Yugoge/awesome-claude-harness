@@ -1,0 +1,59 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "test-writer-manifest.v1",
+  "title": "Test-Writer Per-Task Active Manifest v1",
+  "description": "Per-task active test manifest (tests/generated/<task_id>/manifest.json). Field shapes pinned verbatim to agents/test-writer.md:90-112 (ticket 20261001-161041-r07). This is the PER-TASK active manifest, distinct from the global index file tests/generated/manifest.json (shape {kind:'index', tasks:[...]}), which this schema does NOT cover. Registered so the test-writer obligation block can name this artifact and the generic SubagentStop obligation-mode loop in hooks/subagentstop-artifact-contract-enforce.py enforces its presence/shape -- no enforcement code changed by this registration.",
+  "type": "object",
+  "additionalProperties": true,
+  "required": [
+    "schema_version",
+    "task_id",
+    "generated_at",
+    "active_tests",
+    "archived_tests"
+  ],
+  "properties": {
+    "schema_version": {"type": "string", "minLength": 1},
+    "task_id": {"type": "string", "minLength": 1},
+    "generated_at": {"type": "string", "format": "date-time"},
+    "active_tests": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": true,
+        "required": ["task_id", "ac_id", "ac_uid", "type", "file", "status"],
+        "properties": {
+          "task_id": {"type": "string", "minLength": 1},
+          "ac_id": {"type": "string", "minLength": 1},
+          "ac_uid": {"type": "string", "minLength": 1},
+          "type": {"type": "string", "enum": ["ui", "api", "data", "hook"]},
+          "file": {"type": "string", "minLength": 1},
+          "status": {
+            "type": "string",
+            "enum": ["active", "deferred_invalid_schema"],
+            "description": "agents/test-writer.md:104,160 -- 'active' is the normal case; 'deferred_invalid_schema' is set when the AC's check object lacks the canonical keys for its type."
+          },
+          "hook_check": {
+            "type": "object",
+            "description": "Verbatim copy of the AC item's check object (agents/test-writer.md:129-130); shape varies by AC type, so this schema does not constrain its internals."
+          }
+        }
+      }
+    },
+    "archived_tests": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": true,
+        "required": ["ac_id", "ac_uid", "archived_at", "reason"],
+        "properties": {
+          "task_id": {"type": "string", "minLength": 1},
+          "ac_id": {"type": "string", "minLength": 1},
+          "ac_uid": {"type": "string", "minLength": 1},
+          "archived_at": {"type": "string", "format": "date-time"},
+          "reason": {"type": "string", "minLength": 1}
+        }
+      }
+    }
+  }
+}

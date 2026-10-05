@@ -1,0 +1,255 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "obligation.v1",
+  "title": "Obligation block grammar v1",
+  "description": "Validates the JSON payload of the <obligation v=\"1\"> block per docs/reference/close-commit-zero-failure-mechanism-20260928.md §1.2 (the XML wrapper itself is the S2 grammar library's concern, not this schema's). additionalProperties false at the top level: G1's job is shape-rejection of drifted blocks (design M5/M7/M28); cross-version tolerance is carried by the wrapper's v attribute (M29), not by an open v1 object. Path fields (artifacts[].path, expected_absent[]) are repo-relative and traversal-free (must not start with '/', must not contain '..'); G1 re-checks at dispatch — the schema encodes the invariant so a registered grammar exists (G1 check 2). The null-task_id gate's expressible half is encoded (profile outside {ad_hoc, commit-bulk, commit-qa} forces a string task_id); commit-qa's context-dependence (bulk-context null vs task-scoped string) is enforced by G1 later, not by this schema. lane-membership (lane ∈ lane_set) is the later G2 echo check, not expressible in Draft7.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "task_id",
+    "role",
+    "pipeline",
+    "profile",
+    "dispatched_at",
+    "artifacts"
+  ],
+  "properties": {
+    "task_id": {
+      "type": ["string", "null"],
+      "pattern": "^(?:\\d{8}-\\d{6}[A-Za-z0-9._-]*|dev-command-\\d{8}-\\d{6}(?:-l\\d+)?)$",
+      "description": "null legal only for ad_hoc / commit-bulk / commit-qa-in-bulk-context (design §1.2)."
+    },
+    "lane": {
+      "type": ["string", "null"]
+    },
+    "lane_set": {
+      "type": ["array", "null"],
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "uniqueItems": true,
+      "minItems": 1,
+      "description": "Fan-out only: FULL intended roster, identical in every lane dispatch; required non-null when lane is a string."
+    },
+    "role": {
+      "type": "string",
+      "enum": [
+        "ba",
+        "dev",
+        "qa",
+        "graphify",
+        "spec",
+        "test-writer",
+        "changelog-analyst"
+      ]
+    },
+    "pipeline": {
+      "type": "string",
+      "enum": [
+        "dev",
+        "redev",
+        "dev-command",
+        "dev-overnight",
+        "do",
+        "close",
+        "commit"
+      ]
+    },
+    "profile": {
+      "type": "string",
+      "enum": [
+        "singular",
+        "fanout-lane",
+        "ba_validation",
+        "final_verification",
+        "overnight",
+        "do-close",
+        "commit-qa",
+        "commit-landing",
+        "commit-bulk",
+        "ad_hoc"
+      ]
+    },
+    "dispatched_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "artifacts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["kind"],
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": ["json", "markdown", "response_block", "response_line"]
+          }
+        },
+        "allOf": [
+          {
+            "if": {
+              "properties": {"kind": {"not": {"const": "json"}}},
+              "required": ["kind"]
+            },
+            "then": {"not": {"required": ["required_values"]}}
+          },
+          {
+            "if": {
+              "properties": {"kind": {"const": "json"}},
+              "required": ["kind"]
+            },
+            "then": {
+              "required": ["path", "schema", "identity"],
+              "properties": {
+                "path": {
+                  "type": "string",
+                  "minLength": 1,
+                  "pattern": "^[^/]",
+                  "not": {"pattern": "\\.\\."}
+                },
+                "schema": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "identity": {
+                  "type": "object",
+                  "minProperties": 1,
+                  "additionalProperties": false,
+                  "properties": {
+                    "task_id": {"type": "string", "minLength": 1},
+                    "request_id": {"type": "string", "minLength": 1}
+                  }
+                },
+                "required_values": {
+                  "type": "object",
+                  "minProperties": 1,
+                  "propertyNames": {"minLength": 1},
+                  "additionalProperties": {
+                    "type": "array",
+                    "minItems": 1,
+                    "uniqueItems": true,
+                    "items": {"type": "string", "minLength": 1}
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {"kind": {"const": "markdown"}},
+              "required": ["kind"]
+            },
+            "then": {
+              "required": ["path", "identity_anchor"],
+              "properties": {
+                "path": {
+                  "type": "string",
+                  "minLength": 1,
+                  "pattern": "^[^/]",
+                  "not": {"pattern": "\\.\\."}
+                },
+                "identity_anchor": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "terminal_line_regex": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "waived_by_response": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {"kind": {"const": "response_block"}},
+              "required": ["kind"]
+            },
+            "then": {
+              "required": ["begin", "end", "format", "schema"],
+              "properties": {
+                "begin": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "end": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "format": {
+                  "type": "string",
+                  "enum": ["json"]
+                },
+                "schema": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {"kind": {"const": "response_line"}},
+              "required": ["kind"]
+            },
+            "then": {
+              "required": ["terminal_line_regex"],
+              "properties": {
+                "terminal_line_regex": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              }
+            }
+          }
+        ]
+      }
+    },
+    "consistency": {
+      "const": "verdict_class",
+      "description": "Optional, close-QA bundle: file and response verdict classes must agree (design §1.2)."
+    },
+    "expected_absent": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "pattern": "^[^/]",
+        "not": {"pattern": "\\.\\."}
+      },
+      "description": "Paths that must NOT exist at the producer's stop (design §1.2)."
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "profile": {
+            "not": {"enum": ["ad_hoc", "commit-bulk", "commit-qa"]}
+          }
+        },
+        "required": ["profile"]
+      },
+      "then": {
+        "properties": {
+          "task_id": {"type": "string"}
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {"lane": {"type": "string"}},
+        "required": ["lane"]
+      },
+      "then": {
+        "required": ["lane_set"],
+        "properties": {
+          "lane_set": {"type": "array"}
+        }
+      }
+    }
+  ]
+}
