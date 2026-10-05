@@ -1,8 +1,8 @@
 # reference
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-10-05T13:10:31Z*
-**Total entries**: 49
+*Last updated: 2026-10-05T13:50:52Z*
+**Total entries**: 50
 **Convention**: kebab
 
 ## Tree
@@ -37,6 +37,7 @@ reference/
 ├── `mat-doc10-writer-order.v2.json` - JSON config: schema, contract_id, spec_id, lane_id, published_by_task_id
 ├── `monolith-split-plan.md` - Monolith Split Plan (Plan-of-Record)
 ├── `MORNING-20260907.md` - 晨间交接 — 2026-09-07
+├── `open-findings-from-read-only-cycles-20261005.md` - Open findings from read-only cycles — extracted 2026-10-05
 ├── `overnight-cycle-20260809-013317-shared-file-attribution-20260914.md` - Attribution of unattributed content in four shared files, cycle 20260809-013317
 ├── `overnight-reference.md` - Overnight reference (maintainer-facing)
 ├── `overwrite-prohibition.md` - Prohibition on wholesale replacement of an existing file
