@@ -767,9 +767,3 @@ def test_native_evidence_deduplicates_exact_terminal_messages(tmp_path: Path) ->
     assert completed[0]["call_id"] == "call-current"
     assert completed[0]["agent_thread_id"] == "thread-current"
     assert completed[0]["terminal_at_ms"] == 1784559603000
-
-
-
-
-
-

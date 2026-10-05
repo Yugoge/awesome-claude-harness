@@ -1883,5 +1883,3 @@ def test_no_guidance_resume_message_equals_the_committed_builders_output(
         assert guided.encode("utf-8").startswith(
             baseline.build_resume_message(sid, agent_id).encode("utf-8")
         )
-
-

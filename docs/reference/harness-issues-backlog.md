@@ -1,7 +1,7 @@
 ---
 name: harness-issues-backlog
 description: 待下次 spec 处理的 harness 问题清单（当前有 harness 修复在 worktree 跑，新问题只记录不并行修）
-metadata: 
+metadata:
   node_type: memory
   type: project
   originSessionId: 87a23621
