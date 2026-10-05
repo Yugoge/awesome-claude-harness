@@ -46,9 +46,14 @@ import time
 from pathlib import Path
 from typing import NamedTuple
 
+try:
+    from lib.harness_state_dir import harness_state_dir
+except ImportError:  # hooks/lib itself is on sys.path
+    from harness_state_dir import harness_state_dir
+
 
 # Sentinel-grant filesystem layout (task 20260519-211515 R2 / AC2)
-SENTINEL_GRANT_DIR = "/tmp/claude-grants"
+SENTINEL_GRANT_DIR = harness_state_dir() + "/claude-grants"
 
 
 def _regex_safe(pattern: str, text: str, timeout: int = 1) -> bool:
@@ -139,7 +144,7 @@ def _load_and_match(
     Returns:
         MatchResult on match, None otherwise. Never unlinks the grant file.
     """
-    flag_path = Path(f"/tmp/claude-bash-allowlist-{sid}.json")
+    flag_path = Path(f"{harness_state_dir()}/claude-bash-allowlist-{sid}.json")
     try:
         with open(flag_path, "r+") as fh:
             fcntl.flock(fh, fcntl.LOCK_EX)
@@ -208,7 +213,7 @@ def match_grant_for_bash_command(
     Returns MatchResult on first subcommand match, None if no match / no grant.
     Subagent firewall check stays in the bash wrapper caller.
     """
-    flag_file = f"/tmp/claude-bash-allowlist-{sid}.json"
+    flag_file = f"{harness_state_dir()}/claude-bash-allowlist-{sid}.json"
     lock_file = f"{flag_file}.lock"
 
     # NB flock with 3x100ms retry (preserves existing bash heredoc behavior)
@@ -282,7 +287,7 @@ def consume_grant_for_posttool(sid: str, tool_name: str, command: str) -> bool:
     Returns:
         True if grant matched and was consumed (unlinked), False otherwise.
     """
-    grant_path = Path(f"/tmp/claude-bash-allowlist-{sid}.json")
+    grant_path = Path(f"{harness_state_dir()}/claude-bash-allowlist-{sid}.json")
     try:
         with open(grant_path, "r+") as fh:
             fcntl.flock(fh, fcntl.LOCK_EX)
@@ -434,6 +439,79 @@ def _bash_subcommands(command: str) -> list[str]:
     return parts or [command]
 
 
+# git global options that may be skipped when locating the subcommand for grant
+# matching. DELIBERATELY NARROWER than git_command_classifier._GIT_GLOBAL_VALUE:
+# that set is for *classification* (identify the verb no matter what), while this
+# one gates *authorization*. Only options that retarget the repository or toggle
+# a no-op are listed; every option carrying a code-execution vector is omitted on
+# purpose, so a command bearing one never inherits a shorter grant and instead
+# fails closed:
+#   -c <k=v> / --config-env=  -> core.pager, alias.*, core.sshCommand,
+#                                uploadpack.packObjectsHook => arbitrary exec
+#   --exec-path[=<p>]         -> redirects the git subcommand binaries
+#   --super-prefix            -> not needed here; omitted conservatively
+# Anything unrecognized also stops the skip (default-deny).
+#
+# `-C` has NO bare-attached form in real git: `git -C/tmp status` is rejected
+# by git itself with "unknown option: -C/tmp" (verified against git 2.54.0).
+# Only the separated form `-C <dir>` (handled by _GRANT_SKIPPABLE_GIT_VALUE_OPTS
+# below) is valid git syntax for `-C`, unlike --git-dir/--work-tree/--namespace,
+# which DO have a real `=`-joined attached form. So `-C` is deliberately
+# excluded from _GRANT_SKIPPABLE_GIT_ATTACHED_PREFIXES — including it would
+# model a syntax that does not exist (harmless, since git itself fails closed
+# on that token before running anything, but incorrect domain modeling).
+_GRANT_SKIPPABLE_GIT_VALUE_OPTS = frozenset({
+    '-C', '--git-dir', '--work-tree', '--namespace',
+})
+_GRANT_SKIPPABLE_GIT_ATTACHED_PREFIXES = ('--git-dir=', '--work-tree=', '--namespace=')
+_GRANT_SKIPPABLE_GIT_FLAGS = frozenset({
+    '-p', '--paginate', '--no-pager', '--bare', '--literal-pathspecs',
+    '--no-literal-pathspecs', '--icase-pathspecs', '--no-replace-objects',
+    '--no-optional-locks',
+})
+
+
+def _strip_git_global_opts(arg_tokens: list[str]) -> list[str]:
+    """Drop repo-retargeting git global options sitting before the subcommand.
+
+    Input is the token list FOLLOWING the `git` head token. Returns the suffix
+    beginning at the first token that is not a safely-skippable global option.
+    Stops (rather than skipping) at any option not on the safe-list, so
+    `git -c core.pager=x commit` keeps its `-c` and can never prefix-match a
+    plain `git commit` grant.
+    """
+    i = 0
+    n = len(arg_tokens)
+    while i < n:
+        tok = arg_tokens[i]
+        if tok in _GRANT_SKIPPABLE_GIT_VALUE_OPTS:
+            # Separated form: `-C <dir>`. A dangling option (no value) is
+            # malformed; stop rather than run off the end.
+            if i + 1 >= n:
+                break
+            i += 2
+            continue
+        if tok in _GRANT_SKIPPABLE_GIT_FLAGS:
+            i += 1
+            continue
+        # Attached form: `--git-dir=<dir>`, `--work-tree=<dir>`, `--namespace=<ns>`.
+        # `-C` is NOT included here: real git has no bare-attached `-C<dir>`
+        # form (only the separated `-C <dir>` form above is valid git syntax).
+        # Require a non-empty value so a bare `--git-dir=` etc. is not silently
+        # treated as attached.
+        if any(tok.startswith(p) and len(tok) > len(p)
+               for p in _GRANT_SKIPPABLE_GIT_ATTACHED_PREFIXES):
+            i += 1
+            continue
+        break
+    return arg_tokens[i:]
+
+
+def _is_git_head(head_op: str) -> bool:
+    """True when the head token invokes git (bare or path-qualified)."""
+    return head_op == 'git' or head_op.rsplit('/', 1)[-1] == 'git'
+
+
 def match_sentinel_grant_for_bash_command(task_id: str, command: str) -> dict | None:
     """Structural match of bash command against sentinel-grant allowed_operations[].
 
@@ -444,8 +522,16 @@ def match_sentinel_grant_for_bash_command(task_id: str, command: str) -> dict | 
        by exact equality. Leading KEY=VALUE env-var assignments are skipped
        before extracting the head token so that `GIT_DIR=/tmp git push` matches
        an entry with op="git". Optional entry["target"] (second token) and
-       entry["args_contain"] (list[str] of arg-fragment substrings) apply as
-       before.
+       entry["args_contain"] (a POSITIONAL PREFIX of the argument tokens, not a
+       free substring search) apply as before.
+
+       When the head token is git, the argument tokens are matched twice: once
+       verbatim, and once with repo-retargeting global options removed (see
+       _strip_git_global_opts). This is what lets `/allow git commit` authorize
+       the canonical `git -C <dir> commit -F <msgfile>` shape. The verbatim view
+       is retained so a grant that names a global option itself keeps pinning it
+       exactly. Options carrying a code-execution vector (-c, --exec-path) are
+       never skipped, so such a command fails closed against a shorter grant.
 
     2. Regex entries (op="*" with "regex" field): the "regex" value is tested
        with re.search() against the full subcommand string (before env-var
@@ -494,6 +580,16 @@ def match_sentinel_grant_for_bash_command(task_id: str, command: str) -> dict | 
     tokens = tokens[env_skip:]
     head_op = tokens[0]
     head_target = tokens[1] if len(tokens) >= 2 else None
+    raw_rest = tokens[1:]
+    # Second candidate view with repo-retargeting git global options removed, so
+    # a short `git commit` grant reaches the canonical `git -C <dir> commit ...`
+    # shape this repo actually emits. Both views are tried; the raw view is kept
+    # so an explicitly-pinned grant (`/allow git --git-dir=/a commit`) still
+    # requires that exact prefix and is never widened to another repository.
+    stripped_rest = _strip_git_global_opts(raw_rest) if _is_git_head(head_op) else raw_rest
+    rest_views = [raw_rest] if stripped_rest == raw_rest else [raw_rest, stripped_rest]
+    target_views = {head_target}
+    target_views.update(v[0] for v in rest_views if v)
     for entry in ops:
         if not isinstance(entry, dict):
             continue
@@ -501,7 +597,7 @@ def match_sentinel_grant_for_bash_command(task_id: str, command: str) -> dict | 
         if not isinstance(want_op, str) or want_op == "*" or want_op != head_op:
             continue
         want_target = entry.get("target")
-        if want_target is not None and want_target != head_target:
+        if want_target is not None and want_target not in target_views:
             continue
         args_contain = entry.get("args_contain") or []
         if not isinstance(args_contain, list):
@@ -515,10 +611,10 @@ def match_sentinel_grant_for_bash_command(task_id: str, command: str) -> dict | 
                 normalized_ac.extend(a.split())
         if not normalized_ac:
             return entry
-        rest_tokens_list = tokens[1:]
-        if (len(rest_tokens_list) >= len(normalized_ac)
-                and rest_tokens_list[:len(normalized_ac)] == normalized_ac):
-            return entry
+        for rest_tokens_list in rest_views:
+            if (len(rest_tokens_list) >= len(normalized_ac)
+                    and rest_tokens_list[:len(normalized_ac)] == normalized_ac):
+                return entry
     return None
 
 

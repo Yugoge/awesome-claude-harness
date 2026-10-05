@@ -1,8 +1,8 @@
 # lib
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-10-03T03:10:16Z*
-**Total entries**: 37
+*Last updated: 2026-10-05T07:21:22Z*
+**Total entries**: 39
 **Convention**: kebab
 
 ## Tree
@@ -35,6 +35,8 @@ lib/
 ├── `git_clean_guard.py` - Classifies ONE Bash command for the fail-closed pre-clean guard woven into the
 ├── `git_command_classifier.py` - Provides iter_git_invocations() — a token-aware parser that detects git
 ├── `grepguard_context_strip.py` - PURPOSE (narrow, guard-specific)
+├── `harness_state_dir.py` - Hook runtime state (consent flags, grants, sentinels, bookmarks, stamps) lives
+├── `harness_state_dir.sh` - harness_state_dir.sh -- shell twin of hooks/lib/harness_state_dir.py.
 ├── `interruption_signals.py` - Decides whether a subagent was cut off — and whether a usage limit did it — from
 ├── `overnight.py` - Single source of truth for "is a /dev-overnight session currently live?". A
 ├── `policy_registry.py` - Reads the harness ``policies/tool-policy.v1.json`` (resolved via the shared

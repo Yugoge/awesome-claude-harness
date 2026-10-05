@@ -304,17 +304,36 @@ def _split_at_redirect(rest: str) -> str:
 
 
 def _strip_quoted_regions(s: str) -> str:
-    """Replace single- and double-quoted spans with same-length whitespace.
+    """Replace single- and double-quoted spans, and bash `#`-comment spans,
+    with same-length whitespace.
 
     Preserves byte offsets so other regex consumers continue to align.
     Used to prevent _CP_MV_RE from matching cp/mv tokens inside quoted
     strings (C3) and to neutralize quoted argument payloads in general.
+
+    Comment-aware in this SAME left-to-right pass, not a separate pre- or
+    post-step (backlog #100, 3rd gap, task 20260928-021841): a `#`-comment
+    is dead bash syntax, so an UNMATCHED quote character inside one -- an
+    apostrophe in ordinary English prose, e.g. "don't" -- must never be
+    treated as opening a real quoted region that then runs to the end of
+    the string, silently erasing every real write target (redirect, tee,
+    cp/mv, install) that follows. Conversely a `#` inside a REAL quoted
+    string (`"a # b"`) must never be mistaken for a comment start. Each
+    case is the other's precondition, so only a single combined scan can
+    tell them apart; running `_strip_comment_regions` before or after this
+    function, as two independent passes, cannot.
     """
     out = list(s)
     i, n = 0, len(s)
     while i < n:
         ch = s[i]
-        if ch in ("'", '"'):
+        if ch == "#" and (i == 0 or s[i - 1] in _COMMENT_LEADIN):
+            j = i
+            while j < n and s[j] != "\n":
+                out[j] = ' '
+                j += 1
+            i = j
+        elif ch in ("'", '"'):
             j = i + 1
             while j < n and s[j] != ch:
                 j += 1
@@ -365,6 +384,96 @@ _GROUP_OPEN_LEADIN = " \t\n;|&("
 #: `\cp` is bash's routine alias-bypass idiom. The backslash escapes the
 #: COMMAND WORD; it is not part of any path.
 _ESCAPED_COMMAND_WORD_RE = re.compile(r"\\[A-Za-z_]")
+
+#: `case WORD in (PATTERN) ...` and `;; (PATTERN) ...` — a case arm's OPTIONAL
+#: leading `(` before its pattern is not a grouping subshell, and must not be
+#: blanked as one: doing so also blanks the arm's own matching `)` (the depth
+#: counter in `_neutralize_command_word_prefixes` cannot tell the two apart),
+#: destroying the very `)` that `_quoted_expansion_verb`'s `endswith(")")`
+#: tolerance relies on to recognize a pattern-list continuation once a `|` or
+#: newline inside the pattern has cut the command segment short (backlog #100).
+#: The unparenthesized spelling (`case x in x) ...`) was already exempt — no `(`
+#: precedes it, so `depth` never opens for its bare `)` — but the equally legal
+#: parenthesized spelling was not.
+#:
+#: A bare `in` is far too common an ordinary word (`echo in`) to trust alone:
+#: this regex additionally requires an UNBROKEN `case WORD in` ending exactly
+#: at the paren (no `;`, `&`, `|`, `(`, or newline between `case` and `in` —
+#: a real case subject never contains one), which a codex adversarial review
+#: (2026-09-26/27, task dev-20260926-072017) confirmed catches `echo in\n(cmd)`
+#: incorrectly matching a plain preceding-`in` check. `;;`/`;&`/`;;&` need only
+#: an escape check plus `_inside_open_case_block` (below): unescaped, all three
+#: are a bash syntax error anywhere outside a case arm (`bash -n` rejects
+#: `true;; (cmd)` at top level), and the open-case-block check additionally
+#: rejects one after `esac` has already closed the block.
+_CASE_HEADER_IN_TAIL_RE = re.compile(
+    r"(?:\A|(?<![\\<>])[;&|]|(?<!\\)[(\n])[ \t]*case\b[^;&|()\n]*?\bin\b[ \t\n]*\Z"
+)
+_CASE_OR_ESAC_WORD_RE = re.compile(r"\b(?:case|esac)\b")
+_CASE_ARM_PATTERN_LEADIN_LOOKBACK = 256
+
+#: `#` begins a bash COMMENT only at a word-start position (start of the
+#: string, or immediately after whitespace or one of `;&|(){}`); the comment
+#: then runs to the next unescaped newline. Comment text is dead to bash — it
+#: can never contain real case-arm/terminator syntax — but `masked` (quotes
+#: stripped only) leaves it fully visible, so a `#`-comment merely MENTIONING
+#: `case`/`esac`/`;;`/`;&`/`;;&` (explaining case-statement-like logic in
+#: prose, say) previously fooled `_inside_open_case_block` /
+#: `_CASE_HEADER_IN_TAIL_RE` into treating a following REAL, unrelated
+#: subshell's own paren as a case-arm pattern lead (close-debate finding on
+#: task dev-20260926-072017, fixed in task 20260928-021841):
+#: `# case fake ;;\n(cp SRC DEST) | cat` silently dropped the real `cp`. An
+#: escaped `\#` is not a comment start under this same leadin rule — `\` is
+#: not in `_COMMENT_LEADIN`, so it never satisfies the "preceded by" check.
+_COMMENT_LEADIN = " \t\n;&|(){}"
+
+
+def _strip_comment_regions(s: str) -> str:
+    """Blank bash `#`-comment spans (word-start `#` through the next
+    unescaped newline, newline itself preserved) with spaces. Length-
+    preserving. Operates on already quote-masked text — a `#` inside a quoted
+    string was already neutralized by `_strip_quoted_regions` upstream."""
+    if "#" not in s:
+        return s
+    out = list(s)
+    i, n = 0, len(s)
+    while i < n:
+        if s[i] == "#" and (i == 0 or s[i - 1] in _COMMENT_LEADIN):
+            j = i
+            while j < n and s[j] != "\n":
+                out[j] = " "
+                j += 1
+            i = j
+        else:
+            i += 1
+    return "".join(out)
+
+
+def _inside_open_case_block(window: str) -> bool:
+    """True if the LAST `case`/`esac` keyword in `window` is `case` (no
+    `esac` has closed it yet). A lightweight, non-nesting proxy — see
+    `_is_case_arm_pattern_lead_paren`. `window` must already have comment
+    spans blanked (`_strip_comment_regions`) so a `#`-comment merely
+    mentioning the word `case` cannot masquerade as an open case block."""
+    last = None
+    for m in _CASE_OR_ESAC_WORD_RE.finditer(window):
+        last = m.group()
+    return last == "case"
+
+
+def _is_case_arm_pattern_lead_paren(masked: str, paren_pos: int) -> bool:
+    """True if `masked[paren_pos]` (a `(`) is a case arm's pattern-leading
+    paren (`case X in (pat) ...` or `;; (pat) ...`), never a grouping subshell."""
+    lo = max(0, paren_pos - _CASE_ARM_PATTERN_LEADIN_LOOKBACK)
+    window = _strip_comment_regions(masked[lo:paren_pos])
+    head = window.rstrip(" \t\n")
+    for term in (";;&", ";&", ";;"):
+        if head.endswith(term):
+            idx = len(head) - len(term)
+            if idx != 0 and head[idx - 1] == "\\":
+                return False
+            return _inside_open_case_block(window)
+    return _CASE_HEADER_IN_TAIL_RE.search(window) is not None
 
 
 def _absolute_command_word_dir_spans(masked: str) -> List[Tuple[int, int]]:
@@ -436,7 +545,9 @@ def _neutralize_command_word_prefixes(s: str) -> str:
     Every verb pattern below requires a `[\\s;|&]` boundary before the word, so
     three ordinary syntaxes hid the verb completely: `\\cp SRC DEST` (nine of the
     eleven replacing verbs were defeated by that one byte), `(cp SRC DEST)`, and
-    `/bin/cp SRC DEST`.
+    `/bin/cp SRC DEST`. A case arm's own OPTIONAL leading `(` before its pattern
+    (`case X in (pat) ...`) is deliberately excluded from this grouping-`(`
+    detection — see `_is_case_arm_pattern_lead_paren` (backlog #100).
 
     Each such character is replaced by a SPACE rather than removed, so every
     byte offset stays aligned with the ORIGINAL text that path tokens are read
@@ -458,15 +569,21 @@ def _neutralize_command_word_prefixes(s: str) -> str:
             out[k] = " "
     depth = 0
     for i, ch in enumerate(masked):
-        if ch == "(" and (i == 0 or masked[i - 1] in _GROUP_OPEN_LEADIN):
+        if ch == "(" and (i == 0 or masked[i - 1] in _GROUP_OPEN_LEADIN) and not _is_case_arm_pattern_lead_paren(
+            masked, i
+        ):
             out[i] = " "
             depth += 1
         elif ch == ")" and depth:
             # Close only a group this pass actually opened, so the `)` of a
             # process substitution is left for the redirect pattern to see and
-            # a `case` label's bare `)` is not touched. The extractors that
-            # split on whitespace rather than reading tokens (cp/mv, sed -i,
-            # install) have no other way to stop at a group close.
+            # a `case` arm's own `)` is not touched — whether the arm's pattern
+            # is bare (`case x in x) ...`, `depth` never opens for it at all) or
+            # parenthesized (`case x in (x) ...`, `depth` does not open because
+            # `_is_case_arm_pattern_lead_paren` excluded its leading `(` above).
+            # The extractors that split on whitespace rather than reading
+            # tokens (cp/mv, sed -i, install) have no other way to stop at a
+            # group close.
             out[i] = " "
             depth -= 1
     for m in _ESCAPED_COMMAND_WORD_RE.finditer(masked):
