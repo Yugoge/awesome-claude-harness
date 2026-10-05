@@ -3,6 +3,86 @@
   "kind": "index",
   "tasks": [
     {
+      "task_id": "20261001-161041-r15",
+      "manifest_path": "tests/generated/20261001-161041-r15/manifest.json"
+    },
+    {
+      "task_id": "20261001-161041-r21",
+      "manifest_path": "tests/generated/20261001-161041-r21/manifest.json"
+    },
+    {
+      "task_id": "20261001-161041-r10",
+      "manifest_path": "tests/generated/20261001-161041-r10/manifest.json"
+    },
+    {
+      "task_id": "20261001-161041-r07",
+      "manifest_path": "tests/generated/20261001-161041-r07/manifest.json"
+    },
+    {
+      "task_id": "20261001-161041-r06",
+      "manifest_path": "tests/generated/20261001-161041-r06/manifest.json"
+    },
+    {
+      "task_id": "20261001-161041-r13",
+      "manifest_path": "tests/generated/20261001-161041-r13/manifest.json"
+    },
+    {
+      "task_id": "20261001-161041-r02",
+      "manifest_path": "tests/generated/20261001-161041-r02/manifest.json"
+    },
+    {
+      "task_id": "20261001-161041-r05",
+      "manifest_path": "tests/generated/20261001-161041-r05/manifest.json"
+    },
+    {
+      "task_id": "20261001-161041-r01",
+      "manifest_path": "tests/generated/20261001-161041-r01/manifest.json"
+    },
+    {
+      "task_id": "20261001-close-multilane-stall",
+      "manifest_path": "tests/generated/20261001-close-multilane-stall/manifest.json"
+    },
+    {
+      "task_id": "20260930-132644-l7",
+      "manifest_path": "tests/generated/20260930-132644-l7/manifest.json"
+    },
+    {
+      "task_id": "20260930-132644-l4",
+      "manifest_path": "tests/generated/20260930-132644-l4/manifest.json"
+    },
+    {
+      "task_id": "20260930-132644-l9",
+      "manifest_path": "tests/generated/20260930-132644-l9/manifest.json"
+    },
+    {
+      "task_id": "20260930-132644-l2",
+      "manifest_path": "tests/generated/20260930-132644-l2/manifest.json"
+    },
+    {
+      "task_id": "20260930-132644-l1",
+      "manifest_path": "tests/generated/20260930-132644-l1/manifest.json"
+    },
+    {
+      "task_id": "dev-20260926-044454",
+      "manifest_path": "tests/generated/dev-20260926-044454/manifest.json"
+    },
+    {
+      "task_id": "dev-20260924-071719",
+      "manifest_path": "tests/generated/dev-20260924-071719/manifest.json"
+    },
+    {
+      "task_id": "20260923-153755",
+      "manifest_path": "tests/generated/20260923-153755/manifest.json"
+    },
+    {
+      "task_id": "20260923-121345-b",
+      "manifest_path": "tests/generated/20260923-121345-b/manifest.json"
+    },
+    {
+      "task_id": "20260923-083731",
+      "manifest_path": "tests/generated/20260923-083731/manifest.json"
+    },
+    {
       "task_id": "20260919-135733",
       "manifest_path": "tests/generated/20260919-135733/manifest.json"
     },
@@ -25,6 +105,10 @@
     {
       "task_id": "20260522-000000",
       "manifest_path": "tests/generated/20260522-000000/manifest.json"
+    },
+    {
+      "task_id": "20261001-161041-r14",
+      "manifest_path": "tests/generated/20261001-161041-r14/manifest.json"
     },
     {
       "task_id": "20260522-080646-A",
@@ -341,6 +425,174 @@
     {
       "task_id": "20260919-180650",
       "manifest_path": "tests/generated/20260919-180650/manifest.json"
+    },
+    {
+      "task_id": "20260919-221230",
+      "manifest_path": "tests/generated/20260919-221230/manifest.json"
+    },
+    {
+      "task_id": "20260922-181300",
+      "manifest_path": "tests/generated/20260922-181300/manifest.json"
+    },
+    {
+      "task_id": "20260922-215750",
+      "manifest_path": "tests/generated/20260922-215750/manifest.json"
+    },
+    {
+      "task_id": "dev-20260923-005810",
+      "manifest_path": "tests/generated/dev-20260923-005810/manifest.json"
+    },
+    {
+      "task_id": "20260923-024043",
+      "manifest_path": "tests/generated/20260923-024043/manifest.json"
+    },
+    {
+      "task_id": "20260923-060338",
+      "manifest_path": "tests/generated/20260923-060338/manifest.json"
+    },
+    {
+      "task_id": "20260923-121345-a",
+      "manifest_path": "tests/generated/20260923-121345-a/manifest.json"
+    },
+    {
+      "task_id": "20260923-175747",
+      "manifest_path": "tests/generated/20260923-175747/manifest.json"
+    },
+    {
+      "task_id": "20260923-212021",
+      "manifest_path": "tests/generated/20260923-212021/manifest.json"
+    },
+    {
+      "task_id": "20260926-111239",
+      "manifest_path": "tests/generated/20260926-111239/manifest.json"
+    },
+    {
+      "task_id": "dev-20260926-070455",
+      "manifest_path": "tests/generated/dev-20260926-070455/manifest.json"
+    },
+    {
+      "task_id": "20260928-021344",
+      "manifest_path": "tests/generated/20260928-021344/manifest.json"
+    },
+    {
+      "task_id": "dev-20260927-135305-r01",
+      "manifest_path": "tests/generated/dev-20260927-135305-r01/manifest.json"
+    },
+    {
+      "task_id": "dev-20260927-135305-r02",
+      "manifest_path": "tests/generated/dev-20260927-135305-r02/manifest.json"
+    },
+    {
+      "task_id": "20260929-104216-b",
+      "manifest_path": "tests/generated/20260929-104216-b/manifest.json"
+    },
+    {
+      "task_id": "20260929-104216-a",
+      "manifest_path": "tests/generated/20260929-104216-a/manifest.json"
+    },
+    {
+      "task_id": "dev-20260927-135305-r05",
+      "manifest_path": "tests/generated/dev-20260927-135305-r05/manifest.json"
+    },
+    {
+      "task_id": "dev-20260927-135305-r04",
+      "manifest_path": "tests/generated/dev-20260927-135305-r04/manifest.json"
+    },
+    {
+      "task_id": "dev-20260927-135305-r03",
+      "manifest_path": "tests/generated/dev-20260927-135305-r03/manifest.json"
+    },
+    {
+      "task_id": "20260930-132644-l8",
+      "manifest_path": "tests/generated/20260930-132644-l8/manifest.json"
+    },
+    {
+      "task_id": "20260930-132644-l3",
+      "manifest_path": "tests/generated/20260930-132644-l3/manifest.json"
+    },
+    {
+      "task_id": "20260930-132644-l5",
+      "manifest_path": "tests/generated/20260930-132644-l5/manifest.json"
+    },
+    {
+      "task_id": "20260930-132644-l6",
+      "manifest_path": "tests/generated/20260930-132644-l6/manifest.json"
+    },
+    {
+      "task_id": "20261001-161041-r08",
+      "manifest_path": "tests/generated/20261001-161041-r08/manifest.json"
+    },
+    {
+      "task_id": "20261001-161041-r16",
+      "manifest_path": "tests/generated/20261001-161041-r16/manifest.json"
+    },
+    {
+      "task_id": "20261001-161041-r03",
+      "manifest_path": "tests/generated/20261001-161041-r03/manifest.json"
+    },
+    {
+      "task_id": "20261001-161041-r12",
+      "manifest_path": "tests/generated/20261001-161041-r12/manifest.json"
+    },
+    {
+      "task_id": "20261001-161041-r11",
+      "manifest_path": "tests/generated/20261001-161041-r11/manifest.json"
+    },
+    {
+      "task_id": "20261001-161041-r04",
+      "manifest_path": "tests/generated/20261001-161041-r04/manifest.json"
+    },
+    {
+      "task_id": "20261001-161041-r17",
+      "manifest_path": "tests/generated/20261001-161041-r17/manifest.json"
+    },
+    {
+      "task_id": "20261001-161041-r20",
+      "manifest_path": "tests/generated/20261001-161041-r20/manifest.json"
+    },
+    {
+      "task_id": "20261001-161041-r19",
+      "manifest_path": "tests/generated/20261001-161041-r19/manifest.json"
+    },
+    {
+      "task_id": "dev-command-20261002-170011-l3",
+      "manifest_path": "tests/generated/dev-command-20261002-170011-l3/manifest.json"
+    },
+    {
+      "task_id": "dev-command-20261002-170011-l9",
+      "manifest_path": "tests/generated/dev-command-20261002-170011-l9/manifest.json"
+    },
+    {
+      "task_id": "dev-command-20261002-170011-l1",
+      "manifest_path": "tests/generated/dev-command-20261002-170011-l1/manifest.json"
+    },
+    {
+      "task_id": "dev-command-20261002-170011-l10",
+      "manifest_path": "tests/generated/dev-command-20261002-170011-l10/manifest.json"
+    },
+    {
+      "task_id": "dev-command-20261002-170011-l12",
+      "manifest_path": "tests/generated/dev-command-20261002-170011-l12/manifest.json"
+    },
+    {
+      "task_id": "dev-command-20261002-170011-l13",
+      "manifest_path": "tests/generated/dev-command-20261002-170011-l13/manifest.json"
+    },
+    {
+      "task_id": "dev-command-20261002-170011-l2",
+      "manifest_path": "tests/generated/dev-command-20261002-170011-l2/manifest.json"
+    },
+    {
+      "task_id": "dev-command-20261002-170011-l5",
+      "manifest_path": "tests/generated/dev-command-20261002-170011-l5/manifest.json"
+    },
+    {
+      "task_id": "dev-command-20261002-170011-l6",
+      "manifest_path": "tests/generated/dev-command-20261002-170011-l6/manifest.json"
+    },
+    {
+      "task_id": "dev-command-20261002-170011-l4",
+      "manifest_path": "tests/generated/dev-command-20261002-170011-l4/manifest.json"
     }
   ]
 }

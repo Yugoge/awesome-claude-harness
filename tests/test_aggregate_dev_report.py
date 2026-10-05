@@ -661,27 +661,35 @@ class TestStaleCanonical:
     def test_shrink_workers_list_in_canonical_exits_1(
         self, project_dir: Path, capsys: pytest.CaptureFixture
     ):
-        """Negative control for the flip above: a canonical naming a worker with
-        no shard on disk must stay refused, so a refresh can never silently
-        shrink the lane set and report the loss as success."""
+        """ticket-20260930-132644-l8 Part C1 (M5): a canonical naming a
+        worker with no shard on disk AND no terminal trace anywhere must
+        become an explicit `status=blocked` record naming the missing
+        worker -- never silently refreshed as a plain match, but ALSO never
+        a hard exit with nothing written (the pre-ticket behavior this test
+        used to assert)."""
         dev_dir = project_dir / "docs" / "dev"
         _write(dev_dir, f"dev-report-A-{BARE_TID}.json", _good_shard())
         _write(dev_dir, f"dev-report-B-{BARE_TID}.json", _good_shard())
         canonical = {
             "task_id": BARE_TID,
-            "parallel_workers": ["A", "B", "Z"],  # Z has no shard
+            "parallel_workers": ["A", "B", "Z"],  # Z has no shard, no trace
             "baseline_head_sha": "abc123def456",
         }
         canonical_path = _write(dev_dir, f"dev-report-{BARE_TID}.json", canonical)
         before = canonical_path.read_bytes()
 
         assert main(["--task-id", BARE_TID]) == 1
-        assert canonical_path.read_bytes() == before
+        assert canonical_path.read_bytes() != before
+        doc = json.loads(canonical_path.read_text())
+        assert doc["dev"]["status"] == "blocked"
+        assert any("Z" in issue for issue in doc["blocking_issues"])
 
     def test_disjoint_workers_list_in_canonical_exits_1(
         self, project_dir: Path, capsys: pytest.CaptureFixture
     ):
-        """Neither declared worker has a shard: refreshing would retarget both."""
+        """ticket-20260930-132644-l8 Part C1 (M5): neither declared worker
+        has a shard or any terminal trace -- blocked, naming both, still
+        written (never a hard exit with nothing written)."""
         dev_dir = project_dir / "docs" / "dev"
         _write(dev_dir, f"dev-report-A-{BARE_TID}.json", _good_shard())
         _write(dev_dir, f"dev-report-B-{BARE_TID}.json", _good_shard())
@@ -694,7 +702,11 @@ class TestStaleCanonical:
         before = canonical_path.read_bytes()
 
         assert main(["--task-id", BARE_TID]) == 1
-        assert canonical_path.read_bytes() == before
+        assert canonical_path.read_bytes() != before
+        doc = json.loads(canonical_path.read_text())
+        assert doc["dev"]["status"] == "blocked"
+        assert any("X" in issue for issue in doc["blocking_issues"])
+        assert any("Y" in issue for issue in doc["blocking_issues"])
 
     def test_message_names_only_worker_clause_when_only_worker_set_differs(
         self, project_dir: Path, capsys: pytest.CaptureFixture
@@ -842,9 +854,12 @@ class TestStaleCanonical:
         deleted", exactly the ambiguity AC-09's own required test
         (test_recovery_read_workers_subset_check_is_multiset_correct_for_completed_predecessor)
         exists to close. A canonical recording an "A" occurrence twice while
-        only one "A" shard currently exists is therefore now REFUSED, not
-        silently repaired -- the same directional choice already made for a
-        'blocked' predecessor, extended here for symmetry (item H)."""
+        only one "A" shard currently exists was, for a time, REFUSED rather
+        than silently repaired. UPDATED AGAIN -- ticket-20260930-132644-l8
+        Part C1 (M5): the user's zero-failure ruling forbids a hard exit
+        with nothing written; since the current "A" shard itself IS a
+        terminal trace for the "missing" occurrence, this now
+        reaggregates-with-`shrunk_from` instead of refusing outright."""
         dev_dir = project_dir / "docs" / "dev"
         _write(dev_dir, f"dev-report-A-{BARE_TID}.json", _good_shard())
         _write(dev_dir, f"dev-report-B-{BARE_TID}.json", _good_shard())
@@ -859,8 +874,22 @@ class TestStaleCanonical:
         )
         before = canonical_path.read_bytes()
 
-        assert main(["--task-id", BARE_TID]) == 1
-        assert canonical_path.read_bytes() == before
+        # ticket-20260930-132644-l8 Part C1 (M5): the "missing" occurrence
+        # of "A" DOES have a terminal trace -- the current "A" shard itself
+        # is on disk with dev.status=="completed" -- so this now
+        # reaggregates with shrunk_from=["A"] rather than hard-exiting with
+        # nothing written (the pre-ticket behavior this test used to
+        # assert). Completeness is still enforced upstream by
+        # _validate_shards; this change only concerns what happens to the
+        # canonical WRITE on a roster-count mismatch, never on the shard
+        # validation gate itself.
+        rc = main(["--task-id", BARE_TID])
+        out = json.loads(capsys.readouterr().out)
+        assert rc == 0, out
+        assert canonical_path.read_bytes() != before
+        doc = json.loads(canonical_path.read_text())
+        assert doc["shrunk_from"] == ["A"]
+        assert sorted(doc["parallel_workers"]) == ["A", "B"]
 
 
 # ---------------------------------------------------------------------------
@@ -1885,9 +1914,16 @@ class TestWriteTimeReconciliation:
         _write(dev_dir, f"dev-report-A-{BARE_TID}.json", _good_shard(sha="shaAB"))
         _write(dev_dir, f"dev-report-B-{BARE_TID}.json", _good_shard(sha="shaAB"))
 
+        # ticket-20260930-132644-l8 Part C1 (M5): the "missing" occurrence
+        # of "A" has a terminal trace (the surviving "A" shard is
+        # completed), so this reaggregates-with-shrunk_from instead of
+        # hard-exiting with the canonical untouched.
         rc = main(["--task-id", BARE_TID])
-        assert rc == 1
-        assert canonical_path.read_bytes() == before
+        out = json.loads(capsys.readouterr().out)
+        assert rc == 0, out
+        assert canonical_path.read_bytes() != before
+        doc = json.loads(canonical_path.read_text())
+        assert doc["shrunk_from"] == ["A"]
 
     def test_len_below_2_unreadable_existing_canonical_still_writes_blocked_aggregate_fail_closed(
         self, project_dir: Path, capsys: pytest.CaptureFixture
@@ -2217,3 +2253,534 @@ class TestBlockedAggregateCarriesForwardOwnedEdits:
         assert doc["dev"]["status"] == "blocked"
         assert doc["owned_edits"] == {"shared.py": [{"old": "a", "new": "b"}]}
         assert doc["pre_edit_snapshots"] == {"shared.py": "a"}
+
+
+# ---------------------------------------------------------------------------
+# Lane L3 (spec-20260930-092323): G3 obligation-scoped collection barrier.
+# hooks/pretool-aggregate-check.py::_run_obligation_barrier and helpers.
+# See docs/dev/ticket-20260930-132644-l3.md / acceptance-criteria-
+# 20260930-132644-l3.json (AC1-AC12).
+# ---------------------------------------------------------------------------
+
+def _obligation_block(task_id, role="dev", lane="l3", profile="fanout-lane", artifacts=None):
+    """Build a well-formed <obligation v="1"> block body for test prompts."""
+    doc = {
+        "task_id": task_id,
+        "role": role,
+        "lane": lane,
+        "pipeline": "dev",
+        "profile": profile,
+        "dispatched_at": "2026-09-30T00:00:00Z",
+        "artifacts": artifacts if artifacts is not None else [],
+    }
+    return f'<obligation v="1">{json.dumps(doc)}</obligation>'
+
+
+def _barrier_payload(prompt, subagent_type="dev", transcript_path=None, session_id="g3-session"):
+    """Build a PreToolUse Agent-matcher dispatch payload. agent_id is always
+    set to a truthy value so the pre-existing /do and /allow bypass blocks
+    (scoped to the qa-only branch) never interfere with these tests."""
+    data = {
+        "tool_name": "Agent",
+        "tool_input": {"subagent_type": subagent_type, "prompt": prompt},
+        "session_id": session_id,
+        "agent_id": "test-agent-id",
+    }
+    if transcript_path is not None:
+        data["transcript_path"] = str(transcript_path)
+    return data
+
+
+def _write_transcript_with_prompts(path, prompts):
+    """Write a JSONL transcript; each prompt becomes one Agent tool_use
+    block on its own line, mirroring the real transcript shape scanned by
+    hooks/lib/subagent_restart.py::_read_parent_calls."""
+    lines = []
+    for i, prompt in enumerate(prompts):
+        record = {
+            "message": {
+                "content": [
+                    {
+                        "type": "tool_use",
+                        "id": f"toolu_{i}",
+                        "name": "Agent",
+                        "input": {"subagent_type": "dev", "prompt": prompt},
+                    }
+                ]
+            }
+        }
+        lines.append(json.dumps(record))
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def _run_barrier_hook(monkeypatch: pytest.MonkeyPatch, data: dict) -> int:
+    """Call the hook's main() with `data` as the simulated stdin payload.
+    Returns the SystemExit code."""
+    monkeypatch.setattr(_hook_mod, "_load_stdin", lambda: data)
+    with pytest.raises(SystemExit) as exc_info:
+        _hook_mod.main()
+    return exc_info.value.code
+
+
+class TestObligationBarrierZeroIOFastPath:
+    """AC1: no "<obligation" substring -> zero transcript/filesystem reads,
+    exit 0, even in the strictest (block) mode, even for a non-qa dispatch."""
+
+    def test_obligation_barrier_no_block_zero_io(
+        self, project_dir: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        def _boom(*_args, **_kwargs):
+            raise AssertionError("transcript scan must not run with no obligation block")
+
+        monkeypatch.setattr(_hook_mod, "_scan_transcript_for_prior_obligations", _boom)
+        monkeypatch.setenv("CLAUDE_OBLIGATION_BARRIER", "block")
+        data = _barrier_payload(
+            "plain dev dispatch prompt, no obligation block here",
+            subagent_type="dev",
+            transcript_path=project_dir / "unreferenced-transcript.jsonl",
+        )
+        assert _run_barrier_hook(monkeypatch, data) == 0
+
+
+class TestObligationBarrierRepairProfileBypass:
+    """AC2: profile=="repair" -> unconditional exit 0, no re-verification
+    attempted, independent of CLAUDE_OBLIGATION_BARRIER, even when a
+    referenced prior artifact is actually missing."""
+
+    @pytest.mark.parametrize("mode", ["advisory", "block", "off", None])
+    def test_obligation_barrier_repair_profile_bypass(
+        self, project_dir: Path, monkeypatch: pytest.MonkeyPatch, mode
+    ):
+        if mode is None:
+            monkeypatch.delenv("CLAUDE_OBLIGATION_BARRIER", raising=False)
+        else:
+            monkeypatch.setenv("CLAUDE_OBLIGATION_BARRIER", mode)
+
+        def _boom(*_args, **_kwargs):
+            raise AssertionError("must not scan transcript for a repair-profile dispatch")
+
+        monkeypatch.setattr(_hook_mod, "_scan_transcript_for_prior_obligations", _boom)
+        prompt = _obligation_block(BARE_TID, profile="repair")
+        data = _barrier_payload(
+            prompt, subagent_type="dev",
+            transcript_path=project_dir / "nonexistent-transcript.jsonl",
+        )
+        assert _run_barrier_hook(monkeypatch, data) == 0
+
+
+class TestObligationBarrierBlockMissingPriorArtifact:
+    """AC3: block mode, missing prior json artifact -> exit 2, three-element
+    stderr naming path, prior role/lane, and a fix-action clause."""
+
+    def test_obligation_barrier_block_missing_prior_artifact(
+        self, project_dir: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+    ):
+        monkeypatch.setenv("CLAUDE_OBLIGATION_BARRIER", "block")
+        transcript = project_dir / "transcript.jsonl"
+        missing_rel = "docs/dev/dev-report-missing-ac3.json"
+        prior_prompt = _obligation_block(
+            BARE_TID, role="dev", lane="l7",
+            artifacts=[{
+                "kind": "json", "path": missing_rel, "schema": "dev-report.v1",
+                "identity": {"task_id": BARE_TID, "request_id": BARE_TID},
+            }],
+        )
+        _write_transcript_with_prompts(transcript, [prior_prompt])
+        current_prompt = _obligation_block(BARE_TID, profile="final_verification")
+        data = _barrier_payload(
+            current_prompt, subagent_type="dev", transcript_path=transcript
+        )
+        assert _run_barrier_hook(monkeypatch, data) == 2
+        err = capsys.readouterr().err
+        assert missing_rel in err
+        assert "dev" in err and "l7" in err
+        assert "fix" in err
+
+
+class TestObligationBarrierAdvisoryLogsAndPasses:
+    """AC4: advisory (unset default, or explicit "advisory") -> exit 0, one
+    JSON line appended to the advisory log recording the violation."""
+
+    @pytest.mark.parametrize("explicit_mode", [None, "advisory"])
+    def test_obligation_barrier_advisory_logs_and_passes(
+        self, project_dir: Path, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, explicit_mode
+    ):
+        fake_home = tmp_path / f"fakehome-{explicit_mode}"
+        fake_home.mkdir()
+        monkeypatch.setenv("HOME", str(fake_home))
+        if explicit_mode is None:
+            monkeypatch.delenv("CLAUDE_OBLIGATION_BARRIER", raising=False)
+        else:
+            monkeypatch.setenv("CLAUDE_OBLIGATION_BARRIER", explicit_mode)
+
+        transcript = project_dir / "transcript.jsonl"
+        missing_rel = "docs/dev/dev-report-missing-ac4.json"
+        prior_prompt = _obligation_block(
+            BARE_TID, role="dev", lane="l9",
+            artifacts=[{
+                "kind": "json", "path": missing_rel, "schema": "dev-report.v1",
+                "identity": {"task_id": BARE_TID},
+            }],
+        )
+        _write_transcript_with_prompts(transcript, [prior_prompt])
+        current_prompt = _obligation_block(BARE_TID, profile="final_verification")
+        data = _barrier_payload(
+            current_prompt, subagent_type="dev", transcript_path=transcript
+        )
+        assert _run_barrier_hook(monkeypatch, data) == 0
+
+        log_path = fake_home / ".claude" / "logs" / "obligation-barrier-advisory.jsonl"
+        lines = [ln for ln in log_path.read_text(encoding="utf-8").splitlines() if ln.strip()]
+        assert len(lines) == 1
+        record = json.loads(lines[0])
+        assert record["path"] == missing_rel
+
+
+class TestObligationBarrierOffSwitchFullBypass:
+    """AC5: CLAUDE_OBLIGATION_BARRIER=off -> exit 0, no advisory record
+    written at all (full kill-switch bypass)."""
+
+    def test_obligation_barrier_off_switch_full_bypass(
+        self, project_dir: Path, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ):
+        fake_home = tmp_path / "fakehome-off"
+        fake_home.mkdir()
+        monkeypatch.setenv("HOME", str(fake_home))
+        monkeypatch.setenv("CLAUDE_OBLIGATION_BARRIER", "off")
+        log_path = fake_home / ".claude" / "logs" / "obligation-barrier-advisory.jsonl"
+        assert not log_path.exists()
+
+        transcript = project_dir / "transcript.jsonl"
+        prior_prompt = _obligation_block(
+            BARE_TID,
+            artifacts=[{
+                "kind": "json", "path": "docs/dev/dev-report-missing-ac5.json",
+                "schema": "dev-report.v1", "identity": {"task_id": BARE_TID},
+            }],
+        )
+        _write_transcript_with_prompts(transcript, [prior_prompt])
+        current_prompt = _obligation_block(BARE_TID, profile="final_verification")
+        data = _barrier_payload(
+            current_prompt, subagent_type="dev", transcript_path=transcript
+        )
+        assert _run_barrier_hook(monkeypatch, data) == 0
+        assert not log_path.exists()
+
+
+class TestObligationBarrierSkipsResponseKinds:
+    """AC6: response_block/response_line entries (no `path`) are skipped
+    without error and never counted as a violation."""
+
+    def test_obligation_barrier_skips_response_kinds(
+        self, project_dir: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+    ):
+        monkeypatch.setenv("CLAUDE_OBLIGATION_BARRIER", "block")
+        transcript = project_dir / "transcript.jsonl"
+        prior_prompt = _obligation_block(
+            BARE_TID,
+            artifacts=[
+                {"kind": "response_block", "begin": "<<<A", "end": ">>>A", "format": "json", "schema": "x"},
+                {"kind": "response_line", "terminal_line_regex": "^DONE$"},
+            ],
+        )
+        _write_transcript_with_prompts(transcript, [prior_prompt])
+        current_prompt = _obligation_block(BARE_TID, profile="final_verification")
+        data = _barrier_payload(
+            current_prompt, subagent_type="dev", transcript_path=transcript
+        )
+        assert _run_barrier_hook(monkeypatch, data) == 0
+        assert capsys.readouterr().err == ""
+
+
+class TestObligationBarrierFailOpenOnException:
+    """AC7: an unexpected exception inside the new logic -> fail-open, still
+    exits 0 even in block mode."""
+
+    def test_obligation_barrier_fail_open_on_exception(
+        self, project_dir: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        monkeypatch.setenv("CLAUDE_OBLIGATION_BARRIER", "block")
+
+        def _boom(*_args, **_kwargs):
+            raise RuntimeError("transcript truncated mid-JSON-line")
+
+        monkeypatch.setattr(_hook_mod, "_scan_transcript_for_prior_obligations", _boom)
+        current_prompt = _obligation_block(BARE_TID, profile="final_verification")
+        data = _barrier_payload(
+            current_prompt, subagent_type="dev",
+            transcript_path=project_dir / "whatever-transcript.jsonl",
+        )
+        assert _run_barrier_hook(monkeypatch, data) == 0
+
+
+class TestCanonicalAggregateCheckUnaffectedByObligationOrRepairProfile:
+    """AC8: the pre-existing QA-only canonical-aggregate special case is
+    byte-for-byte unaffected by the new G3 logic, whether or not the qa
+    dispatch's own prompt also carries an obligation (including
+    profile="repair"); _run_obligation_barrier must never be invoked once
+    _emit_block has already exited 2."""
+
+    def test_canonical_aggregate_check_unaffected_by_obligation_or_repair_profile(
+        self, project_dir: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+    ):
+        dev_dir = project_dir / "docs" / "dev"
+        _write(dev_dir, f"dev-report-A-{BARE_TID}.json", _good_shard())
+        _write(dev_dir, f"dev-report-B-{BARE_TID}.json", _good_shard())
+
+        calls = []
+        monkeypatch.setattr(_hook_mod, "_run_obligation_barrier", lambda d: calls.append(d))
+
+        for prompt in (
+            f"dev-report-{BARE_TID}.json\n" + _obligation_block(BARE_TID, profile="repair"),
+            f"dev-report-{BARE_TID}.json",  # no-obligation baseline
+        ):
+            data = _barrier_payload(prompt, subagent_type="qa")
+            assert _run_barrier_hook(monkeypatch, data) == 2
+            err = capsys.readouterr().err
+            assert "BLOCKED Agent dispatch (qa): canonical aggregate dev-report missing." in err
+
+        assert calls == []
+
+
+class TestObligationBarrierBlockIdentityMismatch:
+    """AC9: a prior json artifact that exists, parses, and schema-validates
+    but whose own task_id/request_id disagree with the obligation's
+    declared identity -> exit 2, identity-mismatch wording distinct from
+    "missing" and "schema-invalid"."""
+
+    def test_obligation_barrier_block_identity_mismatch(
+        self, project_dir: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+    ):
+        monkeypatch.setenv("CLAUDE_OBLIGATION_BARRIER", "block")
+        artifact_rel = "docs/dev/dev-report-identity-ac9.json"
+        artifact_path = project_dir / artifact_rel
+        artifact_path.write_text(json.dumps({"task_id": "WRONG-ID", "request_id": "WRONG-ID"}))
+
+        monkeypatch.setattr(
+            _hook_mod.contract_runtime,
+            "validate_artifact_for_obligation",
+            lambda path, schema_id: {
+                "status": "pass", "schema": schema_id, "errors": [],
+                "reason": "valid against obligation-supplied schema",
+            },
+        )
+
+        transcript = project_dir / "transcript.jsonl"
+        prior_prompt = _obligation_block(
+            BARE_TID, role="dev", lane="l3",
+            artifacts=[{
+                "kind": "json", "path": artifact_rel, "schema": "dev-report.v1",
+                "identity": {"task_id": BARE_TID, "request_id": BARE_TID},
+            }],
+        )
+        _write_transcript_with_prompts(transcript, [prior_prompt])
+        current_prompt = _obligation_block(BARE_TID, profile="final_verification")
+        data = _barrier_payload(
+            current_prompt, subagent_type="dev", transcript_path=transcript
+        )
+        assert _run_barrier_hook(monkeypatch, data) == 2
+        err = capsys.readouterr().err
+        assert "identity" in err.lower()
+        assert "schema-invalid" not in err
+        assert "absent" not in err
+
+
+class TestObligationBarrierBlockMarkdownMissingAnchor:
+    """AC10: a prior markdown artifact missing its declared identity_anchor
+    substring -> exit 2, naming the artifact and an identity_anchor-missing
+    reason."""
+
+    def test_obligation_barrier_block_markdown_missing_anchor(
+        self, project_dir: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+    ):
+        monkeypatch.setenv("CLAUDE_OBLIGATION_BARRIER", "block")
+        md_rel = "docs/dev/ticket-md-anchor-ac10.md"
+        md_path = project_dir / md_rel
+        md_path.write_text("# Some doc\nNo anchor present here.\nEND\n")
+
+        transcript = project_dir / "transcript.jsonl"
+        prior_prompt = _obligation_block(
+            BARE_TID, role="ba", lane="l3",
+            artifacts=[{
+                "kind": "markdown", "path": md_rel,
+                "identity_anchor": f"Request ID: {BARE_TID}",
+                "terminal_line_regex": "^END$",
+            }],
+        )
+        _write_transcript_with_prompts(transcript, [prior_prompt])
+        current_prompt = _obligation_block(BARE_TID, profile="final_verification")
+        data = _barrier_payload(
+            current_prompt, subagent_type="dev", transcript_path=transcript
+        )
+        assert _run_barrier_hook(monkeypatch, data) == 2
+        err = capsys.readouterr().err
+        assert md_rel in err
+        assert "identity_anchor" in err
+
+
+class TestObligationBarrierBlockSchemaInvalidPriorArtifact:
+    """AC11: a prior json artifact that exists and parses but fails Draft7
+    schema validation under its declared schema -> exit 2, schema-invalid
+    wording distinct from "missing" (AC3) and "identity mismatch" (AC9)."""
+
+    def test_obligation_barrier_block_schema_invalid_prior_artifact(
+        self, project_dir: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+    ):
+        monkeypatch.setenv("CLAUDE_OBLIGATION_BARRIER", "block")
+        artifact_rel = "docs/dev/dev-report-schema-invalid-ac11.json"
+        artifact_path = project_dir / artifact_rel
+        artifact_path.write_text(json.dumps({"not": "matching the schema"}))
+
+        monkeypatch.setattr(
+            _hook_mod.contract_runtime,
+            "validate_artifact_for_obligation",
+            lambda path, schema_id: {
+                "status": "fail", "schema": schema_id, "errors": ["x"],
+                "reason": "schema-invalid under obligation-supplied schema",
+            },
+        )
+
+        transcript = project_dir / "transcript.jsonl"
+        prior_prompt = _obligation_block(
+            BARE_TID, role="dev", lane="l4",
+            artifacts=[{
+                "kind": "json", "path": artifact_rel, "schema": "dev-report.v1",
+                "identity": {"task_id": BARE_TID},
+            }],
+        )
+        _write_transcript_with_prompts(transcript, [prior_prompt])
+        current_prompt = _obligation_block(BARE_TID, profile="final_verification")
+        data = _barrier_payload(
+            current_prompt, subagent_type="dev", transcript_path=transcript
+        )
+        assert _run_barrier_hook(monkeypatch, data) == 2
+        err = capsys.readouterr().err
+        assert artifact_rel in err
+        assert "schema-invalid" in err
+        assert "artifact absent" not in err
+        assert "identity." not in err
+
+
+class TestObligationBarrierBlockMarkdownTerminalLineMismatch:
+    """AC12: a prior markdown artifact that has its identity_anchor but
+    whose last non-empty line does not match the declared
+    terminal_line_regex -> exit 2, wording distinct from AC10's
+    identity_anchor-missing."""
+
+    def test_obligation_barrier_block_markdown_terminal_line_mismatch(
+        self, project_dir: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+    ):
+        monkeypatch.setenv("CLAUDE_OBLIGATION_BARRIER", "block")
+        md_rel = "docs/dev/ticket-md-terminal-ac12.md"
+        md_path = project_dir / md_rel
+        anchor = f"Request ID: {BARE_TID}"
+        md_path.write_text(f"# Doc\n{anchor}\nNOT-THE-RIGHT-LAST-LINE\n")
+
+        transcript = project_dir / "transcript.jsonl"
+        prior_prompt = _obligation_block(
+            BARE_TID, role="ba", lane="l3",
+            artifacts=[{
+                "kind": "markdown", "path": md_rel,
+                "identity_anchor": anchor,
+                "terminal_line_regex": "^END$",
+            }],
+        )
+        _write_transcript_with_prompts(transcript, [prior_prompt])
+        current_prompt = _obligation_block(BARE_TID, profile="final_verification")
+        data = _barrier_payload(
+            current_prompt, subagent_type="dev", transcript_path=transcript
+        )
+        assert _run_barrier_hook(monkeypatch, data) == 2
+        err = capsys.readouterr().err
+        assert md_rel in err
+        assert "terminal_line_regex" in err
+        assert "identity_anchor" not in err
+
+
+# ---------------------------------------------------------------------------
+# L3: stdout carries the canonical outcome; a shard-carried lane_set restricts
+# ONLY the worker count (never validation, the status fold or dev_status).
+# ---------------------------------------------------------------------------
+
+class TestOutcomeAndLaneRoster:
+    def _roster(self, dev_dir: Path, status: str = "completed", extra: str = "extra"):
+        lanes = ["r01", "r02", "r03"]
+        for lab in lanes:
+            _write(dev_dir, f"dev-report-{BARE_TID}-{lab}.json",
+                   {**_good_shard(f"{BARE_TID}-{lab}"), "lane_set": lanes})
+        shard = _needs_review_shard() if status == "needs_review" else _good_shard()
+        shard = {**shard, "task_id": f"{BARE_TID}-{extra}", "request_id": f"{BARE_TID}-{extra}"}
+        shard["dev"] = {**shard["dev"], "status": status}
+        _write(dev_dir, f"dev-report-{BARE_TID}-{extra}.json", shard)
+
+    def test_needs_review_is_surfaced_on_stdout_and_validated_reuse(
+        self, project_dir: Path, capsys: pytest.CaptureFixture
+    ):
+        dev_dir = project_dir / "docs" / "dev"
+        _write(dev_dir, f"dev-report-A-{BARE_TID}.json", _good_shard())
+        _write(dev_dir, f"dev-report-B-{BARE_TID}.json", _needs_review_shard())
+        assert main(["--task-id", BARE_TID]) == 0
+        out = json.loads(capsys.readouterr().out)
+        assert out["dev_status"] == "needs_review" and out["needs_review_lanes"] == ["B"]
+        assert main(["--task-id", BARE_TID]) == 0
+        out = json.loads(capsys.readouterr().out)
+        assert out["action"] == "validated" and out["dev_status"] == "needs_review"
+
+    def test_completed_has_no_needs_review_lanes(
+        self, project_dir: Path, capsys: pytest.CaptureFixture
+    ):
+        dev_dir = project_dir / "docs" / "dev"
+        _write(dev_dir, f"dev-report-A-{BARE_TID}.json", _good_shard())
+        _write(dev_dir, f"dev-report-B-{BARE_TID}.json", _good_shard())
+        assert main(["--task-id", BARE_TID]) == 0
+        out = json.loads(capsys.readouterr().out)
+        assert out["dev_status"] == "completed" and "needs_review_lanes" not in out
+
+    def test_non_lane_completed_extra_excluded_from_count_only(
+        self, project_dir: Path, capsys: pytest.CaptureFixture
+    ):
+        dev_dir = project_dir / "docs" / "dev"
+        self._roster(dev_dir)
+        assert main(["--task-id", BARE_TID]) == 0
+        out = json.loads(capsys.readouterr().out)
+        canonical = json.loads((dev_dir / f"dev-report-{BARE_TID}.json").read_text())
+        assert canonical["parallel_workers"] == ["r01", "r02", "r03"]
+        assert out["excluded_non_lane_reports"][0]["label"] == "extra"
+        assert out["excluded_non_lane_reports"][0]["declared_status"] == "completed"
+
+    def test_excluded_needs_review_still_folds_into_verdict(
+        self, project_dir: Path, capsys: pytest.CaptureFixture
+    ):
+        dev_dir = project_dir / "docs" / "dev"
+        self._roster(dev_dir, status="needs_review")
+        assert main(["--task-id", BARE_TID]) == 0
+        out = json.loads(capsys.readouterr().out)
+        canonical = json.loads((dev_dir / f"dev-report-{BARE_TID}.json").read_text())
+        assert canonical["parallel_workers"] == ["r01", "r02", "r03"]
+        assert canonical["dev"]["status"] == out["dev_status"] == "needs_review"
+        assert "extra" in out["needs_review_lanes"]
+        assert out["needs_review_reports"][0]["label"] == "extra"
+
+    def test_excluded_blocked_still_fails_validation(
+        self, project_dir: Path, capsys: pytest.CaptureFixture
+    ):
+        dev_dir = project_dir / "docs" / "dev"
+        self._roster(dev_dir, status="blocked")
+        assert main(["--task-id", BARE_TID]) == 1
+        assert capsys.readouterr().out.strip() == ""
+
+    def test_no_lane_set_or_conflicting_lane_sets_exclude_nothing(
+        self, project_dir: Path, capsys: pytest.CaptureFixture
+    ):
+        dev_dir = project_dir / "docs" / "dev"
+        for lab, ls in (("r01", ["r01", "r02"]), ("r02", ["r01", "r03"]), ("x", None)):
+            doc = {**_good_shard(f"{BARE_TID}-{lab}")}
+            if ls:
+                doc["lane_set"] = ls
+            _write(dev_dir, f"dev-report-{BARE_TID}-{lab}.json", doc)
+        assert main(["--task-id", BARE_TID]) == 0
+        out = json.loads(capsys.readouterr().out)
+        canonical = json.loads((dev_dir / f"dev-report-{BARE_TID}.json").read_text())
+        assert canonical["parallel_workers"] == ["r01", "r02", "x"]
+        assert out["lane_set_conflict"] == ["r01", "r02"]
+        assert "excluded_non_lane_reports" not in out

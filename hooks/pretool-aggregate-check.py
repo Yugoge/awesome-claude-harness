@@ -66,65 +66,27 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 from lib.allowlist import read_grant  # noqa: E402
-
-
-# Active /dev adapter naming: dev-report-dev-<task-id>-<lane>.json.
-# MUST mirror scripts/aggregate-dev-report.py exactly.
-PREFIXED_WORKER_RE = re.compile(
-    r"^dev-report-(?P<task_id>dev-\d{8}-\d{6})-(?P<worker>[A-Za-z0-9][A-Za-z0-9.\-]*)\.json$"
+from lib.harness_state_dir import harness_state_dir  # noqa: E402
+from lib import obligation as obligation_lib  # noqa: E402
+from lib import contract_runtime  # noqa: E402
+from lib.dev_report_shard_patterns import (  # noqa: E402
+    PREFIXED_WORKER_RE,
+    PREFIXED_CANONICAL_RE,
+    PER_WORKER_ROLE_FIRST_RE,
+    PER_WORKER_TASK_FIRST_RE,
+    CANONICAL_RE,
+    NON_WORKER_LABELS,
+    NON_WORKER_LABEL_RE,
+    classify_filename as _shared_classify_filename,
 )
 
-# Active /dev canonical: dev-report-dev-<task-id>.json.
-# MUST mirror scripts/aggregate-dev-report.py exactly.
-PREFIXED_CANONICAL_RE = re.compile(
-    r"^dev-report-(?P<task_id>dev-\d{8}-\d{6})\.json$"
-)
-
-# Per-worker filename — role-first naming: dev-report-<role>-<task-id>.json
-# task-id format: YYYYMMDD-HHMMSS (8 digits, dash, 6 digits)
-# role may not contain dashes (so the role/task-id boundary is unambiguous).
-PER_WORKER_ROLE_FIRST_RE = re.compile(
-    r"^dev-report-(?P<role>[A-Za-z0-9]+)-(?P<task_id>\d{8}-\d{6})\.json$"
-)
-
-# Per-worker filename — task-first naming: dev-report-<task-id>-<worker>.json
-# task-id format: YYYYMMDD-HHMMSS (8 digits, dash, 6 digits)
-# worker may contain alphanumerics, dots, dashes -- it is everything after
-# the task-id and before the .json extension and is not empty.
-PER_WORKER_TASK_FIRST_RE = re.compile(
-    r"^dev-report-(?P<task_id>\d{8}-\d{6})-(?P<worker>[A-Za-z0-9][A-Za-z0-9.\-]*)\.json$"
-)
-
-# FINDING-3: exclusion set for bare iteration / draft / retry suffixes that
-# real cycles use as within-shard markers (NOT separate workers). Without
-# this filter, dev-report-<task-id>-iter2.json would be classified as a
-# worker shard, triggering false BLOCKs in iteration cycles where a
-# canonical aggregate has not yet been written. Real worker labels like
-# "T3.2", "R1", or compound labels like "T3.2-iter2" are NOT in this set
-# (the worker token is "T3.2-iter2", not bare "iter2"); they remain
-# detected as workers.
-# Bare iteration / draft / retry suffixes that real cycles emit as
-# within-shard markers (NOT separate workers). Static set covers
-# non-numeric tokens; the regex below catches numeric variants of
-# any size (iter, iter1, iter999, retry, retry1, retry42, ...).
-NON_WORKER_LABELS = frozenset({
-    "draft", "final", "fix", "continuation", "wip",
-})
-
-# Codex iter2 review point 5: bounded iter1..iter10 / retry1..retry2 was
-# brittle. Real cycles already emit iter11+ in long-running specs and
-# retry3+ in flaky-test cycles. Switch to a regex covering any numeric
-# suffix on the bare token. Compound labels like "T3.2-iter2" still pass
-# through (the regex anchors on ^...$ and the bare token "T3.2-iter2"
-# does not match the iter/retry shape).
-NON_WORKER_LABEL_RE = re.compile(
-    r"^(?:iter|retry|attempt)\d*$",
-    re.IGNORECASE,
-)
-
-
-# Canonical singular: dev-report-<task-id>.json
-CANONICAL_RE = re.compile(r"^dev-report-(?P<task_id>\d{8}-\d{6})\.json$")
+# Filename-classification regexes and the NON_WORKER_LABELS/NON_WORKER_LABEL_RE
+# iteration-suffix filter now live in lib/dev_report_shard_patterns.py (the ONE
+# shared module scripts/aggregate-dev-report.py and
+# hooks/posttool-lane-completeness-watch.py also import) -- ticket
+# 20261001-161041-r05 M2. Re-exported here as module attributes (not just used
+# locally) so existing callers/tests referencing them via this module's own
+# namespace keep working unchanged.
 
 # Task-id reference patterns inside QA dispatch prompts. Used to scope the
 # aggregate check to only the current cycle's task-id (BUG-AGGCHK-2).
@@ -191,37 +153,13 @@ def _classify_filename(name):
     Compound labels like "T3.2-iter2" do NOT match the exclusion set
     (the worker token is "T3.2-iter2", not bare "iter2") and remain
     detected as workers.
+
+    Delegates to lib.dev_report_shard_patterns.classify_filename (ticket
+    20261001-161041-r05 M2) -- kept as a thin wrapper here, same name/
+    signature/docstring, so existing callers and tests referencing
+    `_classify_filename` on this module keep working unchanged (AC5).
     """
-    m_prefixed_canonical = PREFIXED_CANONICAL_RE.match(name)
-    if m_prefixed_canonical is not None:
-        return ("canonical", m_prefixed_canonical.group("task_id"))
-    m_prefixed_worker = PREFIXED_WORKER_RE.match(name)
-    if m_prefixed_worker is not None:
-        worker = m_prefixed_worker.group("worker")
-        worker_lc = worker.lower()
-        if worker_lc in NON_WORKER_LABELS or NON_WORKER_LABEL_RE.match(worker_lc):
-            return None
-        return ("worker", m_prefixed_worker.group("task_id"), worker)
-    m_can = CANONICAL_RE.match(name)
-    if m_can is not None:
-        return ("canonical", m_can.group("task_id"))
-    m_role = PER_WORKER_ROLE_FIRST_RE.match(name)
-    if m_role is not None:
-        role = m_role.group("role")
-        role_lc = role.lower()
-        if role_lc in NON_WORKER_LABELS or NON_WORKER_LABEL_RE.match(role_lc):
-            return None
-        return ("worker", m_role.group("task_id"), role)
-    m_task = PER_WORKER_TASK_FIRST_RE.match(name)
-    if m_task is None:
-        return None
-    worker = m_task.group("worker")
-    worker_lc = worker.lower()
-    if worker_lc in NON_WORKER_LABELS:
-        return None
-    if NON_WORKER_LABEL_RE.match(worker_lc):
-        return None
-    return ("worker", m_task.group("task_id"), worker)
+    return _shared_classify_filename(name)
 
 
 def _scan_dev_dir(dev_dir):
@@ -431,45 +369,348 @@ def _collect_violations(per_worker, canonical_present, scope_task_ids):
     return aggregated
 
 
+#  ---------------------------------------------------------------------------
+# G3: obligation-scoped collection barrier. Generalizes this hook beyond the
+# QA-only canonical-aggregate special case above: activates on ANY Agent/Task
+# dispatch (any subagent_type) whose own prompt carries an "<obligation"
+# block, and re-verifies this dev-registry session's prior-stage
+# obligation-declared artifacts on disk before the orchestrator dispatches a
+# later pipeline stage. See docs/reference/close-commit-zero-failure-
+# mechanism-20260928.md Â§1.3-G3 and docs/dev/ticket-20260930-132644-l3.md
+# (M1-M9). Purely additive: does not alter the QA-only block above.
+#  ---------------------------------------------------------------------------
+
+OBLIGATION_BARRIER_ENV = "CLAUDE_OBLIGATION_BARRIER"
+OBLIGATION_ADVISORY_LOG = os.path.join(
+    "~", ".claude", "logs", "obligation-barrier-advisory.jsonl"
+)
+REPAIR_PROFILE = "repair"
+
+
+def _dispatch_prompt_body(data):
+    """Like _qa_prompt_body, but for ANY Agent/Task dispatch (not qa-only)."""
+    if not isinstance(data, dict):
+        return ""
+    tool_input = data.get("tool_input") or {}
+    if not isinstance(tool_input, dict):
+        return ""
+    prompt = tool_input.get("prompt") or ""
+    return prompt if isinstance(prompt, str) else ""
+
+
+def _lenient_obligation_fields(prompt):
+    """Lenient (grammar-only, non-field-validating) extraction of a dispatch
+    prompt's obligation body as a dict, or None.
+
+    Deliberately never routes through obligation_lib.validate_obligation /
+    parse_obligation: those fail-closed on profile="repair" (not a
+    registered PROFILES member -- ticket Edge Case 1). Only checks
+    block-count/version (extract_obligation_block) then parses the body
+    as plain JSON.
+    """
+    if not isinstance(prompt, str) or not prompt:
+        return None
+    try:
+        extracted = obligation_lib.extract_obligation_block(prompt)
+    except Exception:
+        return None
+    body = getattr(extracted, "body", None)
+    if not isinstance(body, str):
+        return None
+    try:
+        doc = json.loads(body)
+    except Exception:
+        return None
+    return doc if isinstance(doc, dict) else None
+
+
+def _scan_transcript_for_prior_obligations(transcript_path, task_id_prefix):
+    """Scan this session's own transcript for earlier Agent/Task tool_use
+    dispatches whose own prompt carries an obligation with a matching
+    task_id (prefix-normalized).
+
+    Mirrors the JSONL-scan shape of hooks/lib/subagent_restart.py
+    :func:`_read_parent_calls` (iterate lines, json.loads, walk
+    message.content[] blocks where type=="tool_use" and name in
+    {"Agent","Task"}, read input.prompt) as a NEW local function --
+    re-implemented rather than imported (underscore-private, foreign-module
+    coupling risk).
+
+    Returns a list of {"obligation": dict, "line": int}, ascending by
+    transcript line. Defensive (Edge Case 4): a malformed JSONL line or a
+    malformed historical obligation is skipped, never raised; one bad entry
+    never aborts the scan of the rest.
+    """
+    found = []
+    if not transcript_path or not task_id_prefix:
+        return found
+    try:
+        path = Path(transcript_path)
+        if not path.exists():
+            return found
+        with path.open("r", encoding="utf-8", errors="replace") as handle:
+            for line_no, raw_line in enumerate(handle, 1):
+                try:
+                    record = json.loads(raw_line)
+                except Exception:
+                    continue
+                if not isinstance(record, dict):
+                    continue
+                message = record.get("message")
+                content = message.get("content") if isinstance(message, dict) else None
+                if not isinstance(content, list):
+                    continue
+                for block in content:
+                    if not isinstance(block, dict):
+                        continue
+                    if block.get("type") != "tool_use" or block.get("name") not in (
+                        "Agent", "Task",
+                    ):
+                        continue
+                    tool_input = block.get("input")
+                    if not isinstance(tool_input, dict):
+                        continue
+                    prompt = tool_input.get("prompt")
+                    obligation = (
+                        _lenient_obligation_fields(prompt)
+                        if isinstance(prompt, str) else None
+                    )
+                    if obligation is None:
+                        continue
+                    prior_task_id = obligation.get("task_id")
+                    if not isinstance(prior_task_id, str):
+                        continue
+                    if _normalize_task_id_prefix(prior_task_id) != task_id_prefix:
+                        continue
+                    found.append({"obligation": obligation, "line": line_no})
+    except Exception:
+        return found
+    return found
+
+
+def _verify_prior_artifact(entry, project_dir):
+    """Re-verify one prior obligation's artifacts[] entry on disk.
+
+    Returns (ok: bool, violation: dict | None). `violation` (when ok is
+    False) carries {"code", "path", "problem"} -- distinguishable per
+    violation kind: artifact_missing / not_valid_json / schema_invalid
+    (AC11) / identity_mismatch (AC9) for kind=="json"; artifact_missing /
+    identity_anchor_missing (AC10) / terminal_line_mismatch (AC12) for
+    kind=="markdown". Any other kind (response_block/response_line, W3) is
+    never a violation -- (True, None), defensively, even though the only
+    caller already filters these out before calling.
+    """
+    if not isinstance(entry, dict):
+        return (True, None)
+    kind = entry.get("kind")
+    path = entry.get("path")
+    if kind == "json":
+        if not isinstance(path, str) or not path:
+            return (True, None)
+        schema_id = entry.get("schema")
+        if not isinstance(schema_id, str) or not schema_id:
+            return (True, None)  # malformed historical entry: no evidence, not a violation
+        full_path = Path(project_dir) / path
+        result = contract_runtime.validate_artifact_for_obligation(full_path, schema_id)
+        status = result.get("status") if isinstance(result, dict) else None
+        reason_text = (result.get("reason") if isinstance(result, dict) else None) or ""
+        if status == "skip":
+            return (True, None)
+        if status == "fail":
+            if "schema-invalid" in reason_text:
+                code = "schema_invalid"
+            elif "not valid JSON" in reason_text:
+                code = "not_valid_json"
+            else:
+                code = "artifact_missing"
+            return (
+                False,
+                {
+                    "code": code, "path": path,
+                    "problem": reason_text or "artifact failed obligation verification",
+                },
+            )
+        if status == "pass":
+            identity = entry.get("identity")
+            if isinstance(identity, dict) and identity:
+                try:
+                    record = json.loads(full_path.read_text(encoding="utf-8"))
+                except Exception:
+                    return (True, None)
+                if isinstance(record, dict):
+                    for key, expected in identity.items():
+                        if record.get(key) != expected:
+                            return (
+                                False,
+                                {
+                                    "code": "identity_mismatch", "path": path,
+                                    "problem": (
+                                        f"identity.{key} mismatch: obligation declares "
+                                        f"{expected!r}, artifact has {record.get(key)!r}"
+                                    ),
+                                },
+                            )
+            return (True, None)
+        return (True, None)
+    if kind == "markdown":
+        if not isinstance(path, str) or not path:
+            return (True, None)
+        full_path = Path(project_dir) / path
+        result = contract_runtime.validate_markdown_artifact_for_obligation(
+            full_path, entry.get("identity_anchor"), entry.get("terminal_line_regex")
+        )
+        if result.get("status") != "fail":
+            # "pass" (and the defensive "skip", never actually returned by
+            # this function today) both mean "not a violation".
+            return (True, None)
+        reason_text = result.get("reason") or ""
+        if "identity_anchor_missing" in reason_text:
+            code = "identity_anchor_missing"
+        elif "terminal_line_mismatch" in reason_text:
+            code = "terminal_line_mismatch"
+        else:
+            code = "artifact_missing"
+        problem = reason_text.split(":", 1)[1].strip() if ":" in reason_text else reason_text
+        return (False, {"code": code, "path": path, "problem": problem})
+    return (True, None)
+
+
+def _format_barrier_violation(code, path, problem, role, lane, action):
+    """Unified three-element template (blueprint Â§2): ``[code] path: problem
+    | role: role(lane) | fix: action``."""
+    role_s = role if isinstance(role, str) and role else "unknown"
+    lane_s = lane if isinstance(lane, str) and lane else "unknown"
+    return f"[{code}] {path}: {problem} | role: {role_s}({lane_s}) | fix: {action}"
+
+
+def _log_barrier_advisory(record):
+    """Best-effort append to the G3 advisory log. Never raises."""
+    try:
+        log_path = os.path.expanduser(OBLIGATION_ADVISORY_LOG)
+        os.makedirs(os.path.dirname(log_path), exist_ok=True)
+        with open(log_path, "a", encoding="utf-8") as handle:
+            handle.write(json.dumps(record) + "\n")
+    except Exception:
+        pass
+
+
+def _run_obligation_barrier(data):
+    """G3 collection barrier orchestrator (ticket M1-M9).
+
+    Entire body wrapped in its own try/except (layered ON TOP of this
+    file's outer __main__ try/except, which is silent): any unexpected
+    exception here is advisory-logged with reason "gate_error" and
+    swallowed -- the caller (main()) always proceeds to its own
+    sys.exit(0) afterward.
+    """
+    try:
+        mode = os.environ.get(OBLIGATION_BARRIER_ENV, "advisory").strip().lower()
+        if mode == "off":
+            return
+        prompt = _dispatch_prompt_body(data)
+        if obligation_lib.OBLIGATION_OPEN_TOKEN not in prompt:
+            return
+        current = _lenient_obligation_fields(prompt)
+        if current is None:
+            return
+        if current.get("profile") == REPAIR_PROFILE:
+            return
+        task_id = current.get("task_id")
+        task_id_prefix = (
+            _normalize_task_id_prefix(task_id) if isinstance(task_id, str) else None
+        )
+        if task_id_prefix is None:
+            return
+        transcript_path = data.get("transcript_path") if isinstance(data, dict) else None
+        prior_obligations = _scan_transcript_for_prior_obligations(
+            transcript_path, task_id_prefix
+        )
+        if not prior_obligations:
+            return
+        project_dir = os.environ.get("CLAUDE_PROJECT_DIR") or os.getcwd()
+        for prior in prior_obligations:
+            obligation = prior.get("obligation") or {}
+            artifacts = obligation.get("artifacts")
+            if not isinstance(artifacts, list):
+                continue
+            role = obligation.get("role")
+            lane = obligation.get("lane")
+            for entry in artifacts:
+                if not isinstance(entry, dict) or entry.get("kind") not in (
+                    "json", "markdown",
+                ):
+                    # response_block/response_line (AC6, W3) and unknown
+                    # kinds have no on-disk representation to check.
+                    continue
+                ok, violation = _verify_prior_artifact(entry, project_dir)
+                if ok:
+                    continue
+                record = {
+                    "reason": "obligation_barrier_violation",
+                    "code": violation["code"],
+                    "path": violation["path"],
+                    "problem": violation["problem"],
+                    "role": role,
+                    "lane": lane,
+                    "task_id": task_id,
+                }
+                if mode == "block":
+                    sys.stderr.write(
+                        "\n"
+                        + _format_barrier_violation(
+                            violation["code"], violation["path"], violation["problem"],
+                            role, lane,
+                            "regenerate or repair the named artifact before dispatching "
+                            "this later pipeline stage",
+                        )
+                        + "\n"
+                    )
+                    sys.exit(2)
+                _log_barrier_advisory(record)
+    except Exception:
+        _log_barrier_advisory({"reason": "gate_error"})
+
+
 def main():
     data = _load_stdin()
     if data is None:
         sys.exit(0)
-    if not _is_qa_dispatch(data):
-        sys.exit(0)
 
-    # /do bypass: main-agent-only
-    try:
-        if not data.get('agent_id'):
-            sid = (data.get('session_id') or
-                   os.environ.get('CLAUDE_SESSION_ID', '') or 'default')
-            flag = Path(f'/tmp/claude-orchestrator-consent-{sid}.flag')
-            if flag.exists() and flag.read_text().strip() == 'true':
-                sys.exit(0)
-    except Exception:
-        pass
+    if _is_qa_dispatch(data):
+        # /do bypass: main-agent-only
+        try:
+            if not data.get('agent_id'):
+                sid = (data.get('session_id') or
+                       os.environ.get('CLAUDE_SESSION_ID', '') or 'default')
+                flag = Path(f'{harness_state_dir()}/claude-orchestrator-consent-{sid}.flag')
+                if flag.exists() and flag.read_text().strip() == 'true':
+                    sys.exit(0)
+        except Exception:
+            pass
 
-    # /allow bypass: if allowlist pattern matches "Agent" dispatch, pass
-    try:
-        if not data.get('agent_id'):
-            _sid = (data.get('session_id') or
-                    os.environ.get('CLAUDE_SESSION_ID', '') or 'default')
-            if read_grant('Agent', _sid):
-                sys.exit(0)
-    except Exception:
-        pass
+        # /allow bypass: if allowlist pattern matches "Agent" dispatch, pass
+        try:
+            if not data.get('agent_id'):
+                _sid = (data.get('session_id') or
+                        os.environ.get('CLAUDE_SESSION_ID', '') or 'default')
+                if read_grant('Agent', _sid):
+                    sys.exit(0)
+        except Exception:
+            pass
 
-    dev_dir = _resolve_dev_dir()
-    per_worker, canonical_present = _scan_dev_dir(dev_dir)
-    # FINDING-1: extract the LIST of pattern-anchored task-ids. None = no
-    # anchored refs -> conservative global scan. List = scope detection
-    # to the union of the listed task-ids (each scanned once, results
-    # unioned). No frequency / majority-vote weighting.
-    raw_task_ids = _extract_current_task_ids(data)
-    scope_task_ids = _resolve_scope_task_ids(raw_task_ids)
-    violations = _collect_violations(per_worker, canonical_present, scope_task_ids)
-    if violations:
-        _emit_block(violations, dev_dir)
+        dev_dir = _resolve_dev_dir()
+        per_worker, canonical_present = _scan_dev_dir(dev_dir)
+        # FINDING-1: extract the LIST of pattern-anchored task-ids. None = no
+        # anchored refs -> conservative global scan. List = scope detection
+        # to the union of the listed task-ids (each scanned once, results
+        # unioned). No frequency / majority-vote weighting.
+        raw_task_ids = _extract_current_task_ids(data)
+        scope_task_ids = _resolve_scope_task_ids(raw_task_ids)
+        violations = _collect_violations(per_worker, canonical_present, scope_task_ids)
+        if violations:
+            _emit_block(violations, dev_dir)
+
+    _run_obligation_barrier(data)
     sys.exit(0)
 
 
