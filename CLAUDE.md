@@ -1,7 +1,7 @@
 # Global Claude Code Configuration
 
 <!-- AUTO:last-updated -->
-> Last updated: 2026-09-18
+> Last updated: 2026-10-05
 <!-- /AUTO:last-updated -->
 
 ---
@@ -39,6 +39,8 @@ Add `Skill(name:*)` to `settings.json` deny for every human-only command; that i
 
 ### 16. Quota-interrupted subagents must be resumed, never replaced
 After a session/usage limit interrupts agents, the human-only `/restart` command must enumerate every recoverable child from the current parent transcript and resume the SAME `agent_id` with `SendMessage`. Never create replacement `Agent` calls, never omit a child because its transcript looks nearly complete, and never claim recovery until response evidence exists for every candidate.
+
+**Scope & terminal branch:** Recovery-step rule only — resume first whenever resume is possible; not a permanent ban on completing the work. When resume verifiably fails (evidence required), the lane returns to the ordinary dev pipeline: re-dispatch or direct implementation is permitted and is not "replacement" (Hook Discipline #4/#5). Honesty rules unchanged; dev completion remains the terminal goal.
 
 ---
 
@@ -97,7 +99,7 @@ Enforced by two PreToolUse hooks. `~/.claude/hooks/pretool-block-branch-pr-workt
 
 ### Sentinel-grant mechanism
 
-`/allow` now writes a **structured sentinel grant** at `/tmp/claude-grants/<task_id>.json` containing `{task_id, session_id, allowed_operations[], created_at, expires_at}`. `allowed_operations[]` is a structured list of `{op, target?, args_contain?}` dicts — **NOT** a free-text pattern that grep matches against the command line. The hook reads this sentinel via `hooks/lib/allowlist.py::match_sentinel_grant_for_bash_command()` and matches structurally on the bash sub-command's first whitespace-separated word (`op`), optional second word (`target`), and optional `args_contain[]` arg-fragments. **Command-text grep is no longer the grant declaration channel** — substring matching against the raw command line is forbidden. The sentinel is unlinked on **any terminal result** (success, non-zero exit, malformed grant JSON, or comment-only attack) by `hooks/posttool-allowlist-consume.py`; `hooks/stop-cleanup-allowlist.sh` reaps expired sentinels at session end.
+`/allow` now writes a **structured sentinel grant** at `/tmp/claude-grants/<task_id>.json` containing `{task_id, session_id, allowed_operations[], created_at, expires_at}`. `allowed_operations[]` is a structured list of `{op, target?, args_contain?}` dicts — **NOT** a free-text pattern that grep matches against the command line. The hook reads this sentinel via `hooks/lib/allowlist.py::match_sentinel_grant_for_bash_command()` and matches structurally on the bash sub-command's first whitespace-separated word (`op`), optional second word (`target`), and optional `args_contain[]`. Despite its name, `args_contain[]` is a **positional prefix** of the argument tokens — anchored immediately after `op`, never a free substring search. When `op` is git, the arguments are matched both verbatim and with repo-retargeting global options (`-C`, `--git-dir`, `--work-tree`, `--namespace`) skipped, so a short `/allow git <verb>` reaches the canonical `git -C <dir> <verb>` shape while a grant that names a global option itself still pins it exactly; options carrying a code-execution vector (`-c`, `--config-env`, `--exec-path`) are never skipped and fail closed. **Command-text grep is no longer the grant declaration channel** — substring matching against the raw command line is forbidden. Sentinel TTL 300s, consumed on any terminal result (success, non-zero exit, malformed grant JSON, or comment-only attack) by `hooks/posttool-allowlist-consume.py`. `hooks/stop-cleanup-allowlist.sh` exists on disk but is **not** currently registered under settings.json's `Stop` hooks, so it does not reap expired sentinels at session end despite the script's name.
 
 ---
 
