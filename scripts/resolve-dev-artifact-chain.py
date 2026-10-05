@@ -1322,7 +1322,452 @@ def _base_result(task_id: str, canonical: str, completion: str) -> dict[str, Any
         # reclassification occurred (either no reclassifiable error existed,
         # or none was eligible) -- never absorbed into a bare "pass".
         "disclosed_exceptions": [],
+        # Same-cycle-only gate rescope (task dev-20260927-135305,
+        # spec-20260914-052140 S5.3): OWNERSHIP_COMPLETENESS_GAP errors below
+        # are now computed with `same_cycle_only=True` -- they block only on
+        # THIS cycle's own lanes/claimants failing to account for the bytes
+        # they themselves claim, never on an unrelated, possibly still-active
+        # session's undeclared bytes in a shared file. The full, cross-cycle-
+        # aware computation (span accounting, the declared-boundary chain,
+        # the anti-absorption rule) still runs, UNCHANGED, and its diagnostic
+        # strings land here -- non-blocking forensic information, not an
+        # error, not read by any gate. [] means nothing to report, not that
+        # the check did not run.
+        "ownership_completeness_informational": [],
     }
+
+
+# --- Serialized-wave baseline route -----------------------------------------
+#
+# WHAT THE SHARED-BASELINE REQUIREMENT PROTECTS.  The aggregator projects ONE
+# baseline_head_sha and ONE baseline_dirty_snapshot for the whole fan-out,
+# taken from the first shard in scan order, and every downstream pre-edit /
+# ownership cross-check resolves EVERY lane's files against that single scalar
+# (`git cat-file -e <sha>:<rel>` / `git show <sha>:<rel>` in
+# aggregate-dev-report.py::_resolve_baseline_snapshot).  Requiring all shards
+# to agree is what makes "take the first shard's value" lossless: it detects a
+# fan-out whose shards were measured against different repository states, where
+# at least one lane's ownership evidence would otherwise be silently verified
+# against a baseline that lane never observed.
+#
+# WHY A ROUTE IS NEEDED.  Equality also encodes an assumption the dispatcher is
+# free not to make: that a fan-out is SIMULTANEOUS.  When lanes target the same
+# file the orchestrator must serialize them, and then lanes see different dirty
+# trees by construction, and a lane that ran after a peer session committed sees
+# a different head.  That set is honest, and the gate blocked it -- so the route
+# was missing, not the honesty.
+#
+# WHAT THIS ROUTE IS NOT.  It is not a waiver and not a widening of the default.
+# A shard set that declares nothing is adjudicated by the untouched equality
+# invariant, byte for byte.  A shard that DOES declare must satisfy strictly
+# more than equality would have asked -- its predecessor must be a real shard in
+# the set, the predecessor's head must be restated to match what that other
+# shard independently recorded, the two heads must stand in a git-verified
+# ancestor relation, the working tree may only grow along the chain, the growth
+# must equal the figure recomputed from the two recorded snapshots, and the
+# growth must be itemised against evidence written by somebody else (a
+# predecessor's own files_created, or git's own commit range).  A declaration
+# that fails any of these yields NEW errors under INVALID_BASELINE_WAVE; it
+# never yields fewer.  Nothing is ever retired for a dimension the declaration
+# did not name and verify.
+BASELINE_WAVE_KEY = "baseline_wave"
+SERIALIZED_WAVE_MODE = "serialized_wave"
+WAVE_HEAD_DIMENSION = "baseline_head_sha"
+WAVE_DIRTY_DIMENSION = "baseline_dirty_snapshot"
+WAVE_DIMENSIONS = (WAVE_HEAD_DIMENSION, WAVE_DIRTY_DIMENSION)
+# chain_files_created and commit_range are corroborated against evidence this
+# shard did not write (a predecessor shard's own dev.files_created, and git's
+# own diff between the two heads).  peer_session is the residual category for a
+# shared working tree's concurrent independent sessions; it must still enumerate
+# paths, and those paths must not double-count anything the chain itself claims.
+WAVE_ATTRIBUTION_SOURCES = ("chain_files_created", "commit_range", "peer_session")
+
+
+def _wave_snapshot_form(aggregate: ModuleType, snapshot: Any) -> str | None:
+    """Classify a recorded baseline_dirty_snapshot's evidentiary form.
+
+    "porcelain" is a verbatim `git status --porcelain` capture: every entry is a
+    path, so growth can be itemised exhaustively and the route demands it.
+    "count_summary" is the leading-integer narration some dispatch payloads
+    carry; it names only examples, so exhaustive itemisation is impossible and
+    the route permits a declared, bounded unitemised remainder instead.  None is
+    neither, and corroborates nothing.
+    """
+    if not isinstance(snapshot, str):
+        return None
+    lines = [line for line in snapshot.splitlines() if line.strip()]
+    if lines and all(aggregate.PORCELAIN_LINE_RE.match(line) for line in lines):
+        return "porcelain"
+    if aggregate.COUNT_SUMMARY_RE.match(snapshot) is not None:
+        return "count_summary"
+    return None
+
+
+def _wave_chain_prefix(
+    label: str, declared: dict[str, dict], by_label: dict[str, dict]
+) -> list[str]:
+    """Labels strictly preceding `label` along the declared chain, nearest first."""
+    prefix: list[str] = []
+    seen = {label}
+    current = label
+    while current in declared:
+        nxt = str(declared[current].get("derived_from") or "").strip()
+        if not nxt or nxt in seen or nxt not in by_label:
+            break
+        prefix.append(nxt)
+        seen.add(nxt)
+        current = nxt
+    return prefix
+
+
+def _wave_cyclic_labels(
+    declared: dict[str, dict], by_label: dict[str, dict]
+) -> set[str]:
+    """Declared labels whose chain never roots at an undeclared shard."""
+    cyclic: set[str] = set()
+    for start in declared:
+        seen: list[str] = []
+        current = start
+        while current in declared:
+            if current in seen:
+                cyclic.update(seen[seen.index(current):])
+                break
+            seen.append(current)
+            current = str(declared[current].get("derived_from") or "").strip()
+            if current not in by_label:
+                break
+    return cyclic
+
+
+def _wave_reachability_problem(
+    project_root: Path, aggregate: ModuleType, ancestor: str, descendant: str
+) -> str | None:
+    """None when `descendant` is reachable from `ancestor`, else why not.
+
+    Fails closed: an unresolvable sha, or a repository git cannot read, is a
+    rejection rather than a pass, because an unverifiable claim must never buy a
+    weaker verdict than declaring nothing.
+    """
+    for sha, role in ((ancestor, "predecessor"), (descendant, "own")):
+        rc, _, _ = aggregate._git(
+            project_root, ["rev-parse", "--verify", "--quiet", f"{sha}^{{commit}}"]
+        )
+        if rc != 0:
+            return (
+                f"{role} baseline_head_sha {sha!r} does not resolve to a commit in this"
+                " repository, so reachability cannot be verified"
+            )
+    if ancestor == descendant:
+        return None
+    rc, _, _ = aggregate._git(
+        project_root, ["merge-base", "--is-ancestor", ancestor, descendant]
+    )
+    if rc == 0:
+        return None
+    return (
+        f"baseline_head_sha {descendant!r} is not reachable from its declared"
+        f" predecessor's {ancestor!r}; a serialized wave may only move forward along"
+        " committed history, so an unrelated or divergent head is not a lawful successor"
+    )
+
+
+def _wave_growth_problems(
+    project_root: Path,
+    aggregate: ModuleType,
+    wave: dict,
+    growth: int,
+    prefix: list[str],
+    by_label: dict[str, dict],
+    own_form: str | None,
+    pred_head: str,
+    own_head: str,
+) -> list[str]:
+    """Verify that a declared baseline growth is itemised against real evidence."""
+    problems: list[str] = []
+    if growth == 0:
+        reason = wave.get("narration_divergence")
+        if not (isinstance(reason, str) and reason.strip()):
+            problems.append(
+                "baseline_wave declares zero entry growth, so the two recorded snapshots"
+                " describe equally sized trees; baseline_wave.narration_divergence must"
+                " state why their text nevertheless differs"
+            )
+        return problems
+
+    attribution = wave.get("dirty_attribution")
+    if not isinstance(attribution, list) or not attribution:
+        problems.append(
+            f"baseline_wave declares {growth} entries of baseline growth but carries no"
+            " dirty_attribution naming where they came from"
+        )
+        return problems
+
+    prefix_created: set[str] = set()
+    for label in prefix:
+        dev = by_label.get(label, {}).get("dev")
+        created = dev.get("files_created") if isinstance(dev, dict) else None
+        if isinstance(created, list):
+            prefix_created.update(str(path) for path in created)
+    chain_created: set[str] = set()
+    for data in by_label.values():
+        dev = data.get("dev")
+        created = dev.get("files_created") if isinstance(dev, dict) else None
+        if isinstance(created, list):
+            chain_created.update(str(path) for path in created)
+
+    range_paths: set[str] | None = None
+    named: set[str] = set()
+    for index, entry in enumerate(attribution):
+        if not isinstance(entry, dict):
+            problems.append(
+                f"baseline_wave.dirty_attribution[{index}] is not an object"
+            )
+            continue
+        source = entry.get("source")
+        if source not in WAVE_ATTRIBUTION_SOURCES:
+            problems.append(
+                f"baseline_wave.dirty_attribution[{index}].source {source!r} is not one"
+                f" of {list(WAVE_ATTRIBUTION_SOURCES)}"
+            )
+            continue
+        paths = entry.get("paths")
+        if not isinstance(paths, list) or not paths:
+            problems.append(
+                f"baseline_wave.dirty_attribution[{index}] ({source}) must enumerate at"
+                " least one path; a bare count is not an attribution"
+            )
+            continue
+        entry_paths = {str(path) for path in paths}
+        named.update(entry_paths)
+        if source == "chain_files_created":
+            unknown = sorted(entry_paths - prefix_created)
+            if unknown:
+                problems.append(
+                    f"baseline_wave.dirty_attribution[{index}] attributes {unknown} to"
+                    f" files created by chain predecessors {prefix!r}, but none of those"
+                    " shards recorded creating them"
+                )
+        elif source == "commit_range":
+            if range_paths is None:
+                rc, out, _ = aggregate._git(
+                    project_root, ["diff", "--name-only", pred_head, own_head]
+                )
+                range_paths = (
+                    {line for line in out.decode("utf-8", "replace").splitlines() if line}
+                    if rc == 0
+                    else set()
+                )
+            unknown = sorted(entry_paths - range_paths)
+            if unknown:
+                problems.append(
+                    f"baseline_wave.dirty_attribution[{index}] attributes {unknown} to the"
+                    f" commit range {pred_head}..{own_head}, but git reports no such change"
+                    " to them in that range"
+                )
+        else:
+            overlap = sorted(entry_paths & chain_created)
+            if overlap:
+                problems.append(
+                    f"baseline_wave.dirty_attribution[{index}] attributes {overlap} to a"
+                    " concurrent peer session, but a shard of this very fan-out recorded"
+                    " creating them; the same growth cannot be counted twice"
+                )
+
+    unitemised = wave.get("dirty_growth_unitemised", 0)
+    if not isinstance(unitemised, int) or isinstance(unitemised, bool) or unitemised < 0:
+        problems.append(
+            "baseline_wave.dirty_growth_unitemised must be a non-negative integer when"
+            " present"
+        )
+        return problems
+    if unitemised and own_form == "porcelain":
+        problems.append(
+            f"baseline_wave leaves {unitemised} entries of growth unitemised, but this"
+            " shard recorded a verbatim porcelain snapshot, in which every entry is a"
+            " path; exhaustive itemisation is possible here and is therefore required"
+        )
+    if unitemised and not str(wave.get("dirty_growth_unitemised_reason") or "").strip():
+        problems.append(
+            "baseline_wave.dirty_growth_unitemised_reason must state why the recorded"
+            " snapshot cannot support exhaustive itemisation"
+        )
+    if len(named) + unitemised != growth:
+        problems.append(
+            f"baseline_wave itemises {len(named)} path(s) plus {unitemised} unitemised"
+            f" entries, which does not account for the {growth} entries of baseline growth"
+            " recomputed from the two recorded snapshots"
+        )
+    return problems
+
+
+def _adjudicate_serialized_wave(
+    project_root: Path, shards: list[tuple[str, dict]], aggregate: ModuleType
+) -> tuple[set[str], list[str]]:
+    """Adjudicate declared serialized-wave baselines.
+
+    Returns ``(retirable, errors)``: the exact `_validate_shards` detail strings
+    a fully verified declaration explains, and the problems found in defective
+    declarations.  With no declaration anywhere, returns ``(set(), [])`` and the
+    caller's behaviour is unchanged.
+
+    The retirable details are reconstructed in the aggregator's own wording from
+    the shards' own recorded values.  That coupling fails CLOSED on purpose: if
+    the aggregator's wording ever changes, nothing matches, no detail is retired,
+    and the gate blocks again -- the safe direction.
+    """
+    by_label = {label: data for label, data in shards}
+    declared = {
+        label: data[BASELINE_WAVE_KEY]
+        for label, data in shards
+        if isinstance(data.get(BASELINE_WAVE_KEY), dict)
+    }
+    if not declared:
+        return set(), []
+
+    first_sha = str(shards[0][1].get("baseline_head_sha") or "") if shards else ""
+    cyclic = _wave_cyclic_labels(declared, by_label)
+    errors: list[str] = []
+    retirable: set[str] = set()
+
+    for label in sorted(declared):
+        wave = declared[label]
+        problems: list[str] = []
+
+        mode = wave.get("mode")
+        if mode != SERIALIZED_WAVE_MODE:
+            problems.append(
+                f"baseline_wave.mode {mode!r} is not supported (expected"
+                f" {SERIALIZED_WAVE_MODE!r})"
+            )
+        pred = str(wave.get("derived_from") or "").strip()
+        if not pred:
+            problems.append("baseline_wave.derived_from is missing or empty")
+        elif pred == label:
+            problems.append("baseline_wave.derived_from names itself")
+        elif pred not in by_label:
+            problems.append(
+                f"baseline_wave.derived_from {pred!r} is not among the shards"
+                f" {sorted(by_label)}"
+            )
+        if label in cyclic:
+            problems.append(
+                "baseline_wave chain never roots at an undeclared baseline; a cycle"
+                " establishes no order"
+            )
+
+        explains = wave.get("explains")
+        if not isinstance(explains, list) or not explains:
+            problems.append(
+                "baseline_wave.explains must be a non-empty list naming the baseline"
+                f" dimension(s) the chain accounts for, drawn from {list(WAVE_DIMENSIONS)}"
+            )
+            explains = []
+        else:
+            unsupported = sorted({str(d) for d in explains} - set(WAVE_DIMENSIONS))
+            if unsupported:
+                problems.append(
+                    f"baseline_wave.explains names unsupported dimension(s) {unsupported};"
+                    f" only {list(WAVE_DIMENSIONS)} can be accounted for by a chain"
+                )
+
+        own_sha = str(by_label[label].get("baseline_head_sha") or "")
+        pred_sha = str(by_label.get(pred, {}).get("baseline_head_sha") or "")
+        head_ok = False
+        if WAVE_HEAD_DIMENSION in explains and not problems:
+            restated = str(wave.get("predecessor_head_sha") or "")
+            if not restated:
+                problems.append(
+                    "baseline_wave.predecessor_head_sha is required to account for a"
+                    " baseline_head_sha divergence"
+                )
+            elif restated != pred_sha:
+                problems.append(
+                    f"baseline_wave.predecessor_head_sha {restated!r} does not match the"
+                    f" baseline_head_sha {pred_sha!r} that {pred!r} recorded for itself"
+                )
+            elif not own_sha:
+                problems.append(
+                    "baseline_head_sha is empty, so there is no successor baseline whose"
+                    " reachability could be verified"
+                )
+            else:
+                reach = _wave_reachability_problem(
+                    project_root, aggregate, pred_sha, own_sha
+                )
+                if reach is not None:
+                    problems.append(reach)
+                else:
+                    head_ok = True
+
+        dirty_ok = False
+        if WAVE_DIRTY_DIMENSION in explains and not problems:
+            prefix = _wave_chain_prefix(label, declared, by_label)
+            dirty_pred = str(wave.get("dirty_predecessor") or "").strip()
+            if not dirty_pred:
+                problems.append(
+                    "baseline_wave.dirty_predecessor is required to account for a"
+                    " baseline_dirty_snapshot divergence"
+                )
+            elif dirty_pred not in prefix:
+                problems.append(
+                    f"baseline_wave.dirty_predecessor {dirty_pred!r} is not among this"
+                    f" shard's declared chain predecessors {prefix}"
+                )
+            else:
+                own_snap = by_label[label].get("baseline_dirty_snapshot", "")
+                pred_snap = by_label[dirty_pred].get("baseline_dirty_snapshot", "")
+                own_n = aggregate._snapshot_entry_count(
+                    own_snap if isinstance(own_snap, str) else ""
+                )
+                pred_n = aggregate._snapshot_entry_count(
+                    pred_snap if isinstance(pred_snap, str) else ""
+                )
+                if own_n is None or pred_n is None:
+                    uncountable = label if own_n is None else dirty_pred
+                    problems.append(
+                        f"baseline_dirty_snapshot for {uncountable!r} is neither porcelain"
+                        " output nor a leading-count summary, so a declared chain cannot"
+                        " corroborate it"
+                    )
+                elif own_n < pred_n:
+                    problems.append(
+                        f"baseline records {own_n} dirty entries but its declared"
+                        f" predecessor {dirty_pred!r} recorded {pred_n}; a serialized"
+                        " wave's working tree may only grow along the chain"
+                    )
+                elif wave.get("dirty_growth") != own_n - pred_n:
+                    problems.append(
+                        f"baseline_wave.dirty_growth {wave.get('dirty_growth')!r} does not"
+                        f" equal the {own_n - pred_n} entry growth recomputed from the two"
+                        " recorded snapshots"
+                    )
+                else:
+                    growth_problems = _wave_growth_problems(
+                        project_root,
+                        aggregate,
+                        wave,
+                        own_n - pred_n,
+                        prefix,
+                        by_label,
+                        _wave_snapshot_form(aggregate, own_snap),
+                        str(by_label[dirty_pred].get("baseline_head_sha") or ""),
+                        own_sha,
+                    )
+                    problems.extend(growth_problems)
+                    dirty_ok = not growth_problems
+
+        if problems:
+            errors.extend(f"shard '{label}': {problem}" for problem in problems)
+            continue
+        if head_ok:
+            retirable.add(
+                f"shard '{label}': baseline_head_sha {own_sha!r} != first shard"
+                f" {first_sha!r}"
+            )
+        if dirty_ok:
+            retirable.add(f"shard '{label}': baseline_dirty_snapshot mismatch")
+
+    return retirable, errors
 
 
 def resolve_chain(project_root: Path | str, task_id: str) -> dict[str, Any]:
@@ -1423,6 +1868,7 @@ def resolve_chain(project_root: Path | str, task_id: str) -> dict[str, Any]:
         scan_key_is_truncated = bare_task_id != task_id
         own_canonical = parents["dev_report"].name
         scanned = []
+        scanned_lanes: set[str] = set()
         try:
             children = sorted(dev_dir.iterdir(), key=lambda path: path.name)
         except OSError as exc:
@@ -1441,6 +1887,30 @@ def resolve_chain(project_root: Path | str, task_id: str) -> dict[str, Any]:
                     child.name, bare_task_id, task_id
                 )
             if is_worker and label is not None:
+                # The filename settles only WHETHER a file is a dev-report shard
+                # of this task; WHICH lane it belongs to is settled by the
+                # identity it declares about itself, exactly as
+                # `_find_undeclared_lane_artifacts` already settles it.  A lane's
+                # fix round is a second report OF that lane carrying a
+                # distinguishing suffix, and naming a lane after the whole suffix
+                # invents a worker that never ran.  The filename stays the
+                # fallback and never becomes an escape: a shard with no usable
+                # self-declaration keeps its filename label, so damaging or
+                # omitting one's own identity can never buy a weaker verdict than
+                # declaring it honestly, and a declaration naming a lane the
+                # canonical never declared is not honoured either, so no artifact
+                # can smuggle itself into the lane set by claiming a lane nobody
+                # dispatched -- the identity and lane-set checks then report it
+                # under their own codes.
+                declared_lane = _self_declared_worker(child, task_id)
+                if declared_lane is not None and declared_lane in workers:
+                    label = declared_lane
+                # One lane can own several shards once identity decides, so the
+                # lane is recorded once; the exact-match comparison below is
+                # against the set of lanes present, not the file count.
+                if label in scanned_lanes:
+                    continue
+                scanned_lanes.add(label)
                 scanned.append((label, child))
         scanned.sort(key=lambda item: item[0])
     except Exception as exc:
@@ -1529,6 +1999,23 @@ def resolve_chain(project_root: Path | str, task_id: str) -> dict[str, Any]:
             shard_errors = aggregate._validate_shards(
                 loaded_shards, task_id, deviation=deviation
             )
+            # A serialized fan-out is a declared shape, not an accident.  The
+            # adjudication below is additive: with no declaration it returns
+            # nothing and shard_errors is reported exactly as before, and a
+            # defective declaration ADDS errors under its own code.  Only a
+            # declaration that survives every check in
+            # _adjudicate_serialized_wave retires the specific divergence
+            # detail it accounts for, and only for the dimension it named.
+            wave_retirable, wave_errors = _adjudicate_serialized_wave(
+                root, loaded_shards, aggregate
+            )
+            for detail in wave_errors:
+                validator.error(
+                    "INVALID_BASELINE_WAVE", result["canonical_dev_report"], detail
+                )
+            shard_errors = [
+                detail for detail in shard_errors if detail not in wave_retirable
+            ]
             for detail in shard_errors:
                 validator.error(
                     "INVALID_SHARD_SET", result["canonical_dev_report"], detail
@@ -1561,6 +2048,80 @@ def resolve_chain(project_root: Path | str, task_id: str) -> dict[str, Any]:
                         "STALE_CANONICAL",
                         result["canonical_dev_report"],
                         "canonical aggregate projection does not match current lane reports",
+                    )
+            # Ownership completeness (backlog #99 criterion C) is this
+            # resolver's OWN error class, so a gap blocks /close by its own
+            # code instead of riding anonymously on UNRESOLVED_BLOCKERS.  It
+            # rode there only because the aggregator appended its diagnostics
+            # to `blocking_issues`, which made the canonical permanently stale
+            # against its own rebuild (see aggregate-dev-report.py's
+            # COMPLETENESS_GAPS_KEY).  Three properties are load-bearing:
+            #
+            #   * RECOMPUTED, never read from the canonical's stored record, so
+            #     neither an outdated nor a forged record can suppress a gap;
+            #   * computed by the producer's OWN `_apply_completeness_check` --
+            #     one implementation with two callers, so the halves cannot
+            #     drift into disagreeing about what a gap is;
+            #   * OUTSIDE the `not shard_errors` guard above, so no gap class
+            #     becomes unreachable behind an unrelated shard error.
+            #
+            # Deliberately NOT in RECLASSIFIABLE_CODES: an unattributed-bytes
+            # gap is a defect in the deliverable, never a disclosable
+            # environmental exception.
+            #
+            # Design-direction correction (task dev-20260927-135305,
+            # spec-20260914-052140 S5.3): the ERROR that blocks /close is now
+            # computed with `same_cycle_only=True` -- does THIS cycle's own
+            # set of declared lanes/claimants correctly and non-conflictingly
+            # account for the bytes its OWN ledgers claim? That question
+            # never depends on whether some OTHER, possibly still-active,
+            # session has declared its bytes in a shared file yet (the
+            # forbidden shape: an unbounded number of concurrent sessions
+            # must be able to land their own bytes in a shared file, and the
+            # mere fact a file was touched by a peer must never itself
+            # trigger a cross-check EXCLUDE). The full, cross-cycle-aware
+            # call (default `same_cycle_only=False`) keeps running UNCHANGED
+            # -- span accounting, the declared-boundary chain, the
+            # parent_cycle claimant reader, the anti-absorption rule, all of
+            # it -- and its diagnostics are never discarded: they land in
+            # `result["ownership_completeness_informational"]` as non-
+            # blocking forensic information for a human or a later process,
+            # not as an error any gate reads.
+            completeness_gaps = aggregate._apply_completeness_check(
+                canonical, root, loaded_shards
+            )
+            result["ownership_completeness_informational"] = list(completeness_gaps)
+            same_cycle_completeness_gaps = aggregate._apply_completeness_check(
+                canonical, root, loaded_shards, same_cycle_only=True
+            )
+            for detail in same_cycle_completeness_gaps:
+                validator.error(
+                    "OWNERSHIP_COMPLETENESS_GAP",
+                    result["canonical_dev_report"],
+                    detail,
+                )
+            # The producer/consumer agreement, COMPARED AT RUNTIME rather than
+            # declared in a comment: the producer's half of this fix is that no
+            # completeness diagnostic is ever written into `blocking_issues`.
+            # If that half is reverted or bypassed, the gap texts reappear
+            # there and this fires -- which is what keeps the two files' halves
+            # from being reverted independently and silently.  Checked against
+            # the UNION of both channels: a leak of either the blocking or the
+            # now-informational diagnostic text into `blocking_issues` is the
+            # same regression.
+            canonical_blockers = canonical.get("blocking_issues")
+            all_completeness_diagnostics = set(completeness_gaps) | set(
+                same_cycle_completeness_gaps
+            )
+            if isinstance(canonical_blockers, list) and all_completeness_diagnostics:
+                leaked = sorted(set(canonical_blockers) & all_completeness_diagnostics)
+                if leaked:
+                    validator.error(
+                        "COMPLETENESS_CHANNEL_VIOLATION",
+                        result["canonical_dev_report"],
+                        "ownership-completeness diagnostics are present in the "
+                        "freshness-compared blocking_issues field, which makes the "
+                        f"canonical unable to converge: {leaked[:4]}",
                     )
     else:
         result["mode"] = "singular"
