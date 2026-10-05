@@ -1,8 +1,8 @@
 # tests
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-09-23T19:04:49Z*
-**Total entries**: 53
+*Last updated: 2026-10-05T08:06:52Z*
+**Total entries**: 74
 **Convention**: kebab
 
 ## Tree
@@ -11,6 +11,7 @@ tests/
 ├── fixtures/
 │   ├── `adversarial_corpus.json` - json config
 │   └── `overwrite_corpus.json` - JSON config: schema_version, task_id, guard, driver, documentation
+├── `_fixtures_obligation_terminal.py` - 20260930-132644-l4): hooks/tests/test_stop_obligation_gate.py and
 ├── `test_ac10_verify.sh` - Shell script
 ├── `test_ac1_verify.sh` - Shell script
 ├── `test_ac3_verify.sh` - Shell script
@@ -18,6 +19,10 @@ tests/
 ├── `test_ac6_verify.sh` - Shell script
 ├── `test_ac9_verify.sh` - Shell script
 ├── `test_allowlist_consolidation.py` - Covers AC8 IS_SUBAGENT firewall scenarios and matching semantics invariants
+├── `test_artifact_contract_enforce.py` - The hook is the producer-side port of /close's Artifact schema gate
+├── `test_attribution_adjudicator.py` - canonical aggregate view (Phase C; purely additive artifacts, nothing switched)
+├── `test_attribution_journal.py` - break detection, verify script verdicts, torn-tail handling, seal
+├── `test_baseline_snapshot_preflight.py` - agents/dev.md:535 declares that the orchestrator captures baseline_dirty_snapshot
 ├── `test_bash_safety_context.py` - Tests strip_non_executable_contexts() in isolation, covering the main
 ├── `test_bash_safety_context_rules.py` - converted to COMMAND_CONTEXT_STRIPPED in hooks/pretool-bash-safety.sh
 ├── `test_bash_safety_git_clean.py` - hooks/pretool-bash-safety.sh (task dev-20260719-150041-a, lane r01-a)
@@ -26,15 +31,20 @@ tests/
 ├── `test_bulk_commit_sentinel.py` - Covers:
 ├── `test_capability_gate.py` - Every test drives the real artefacts: the library, the PreToolUse gate hook as a
 ├── `test_checkpoint_pii_gate.sh` - Regression tests for the checkpoint PII/credential hard-exclude + push gate
+├── `test_close_verdict_round_open.py` - `CLOSE_FINDINGS: <n> items` is the never-landing return of a QA judging round
 ├── `test_commit_journal.py` - attribution basis
+├── `test_contract_runtime_version_dispatch.py` - hooks/lib/contract_runtime.py (ticket 20260929-104216-a, zero-failure design
 ├── `test_cp_checkin.py` - of ba-spec-20260427-194324.md (P1 view-trigger removal + P2 generation field)
+├── `test_do_block_subagents.py` - During an active /do cycle the main agent could still dispatch dev-type
 ├── `test_do_taskid_mint.py` - Covers the root-cause fix for the do-report task-id collision (memory
+├── `test_doc_sync_hook_ledger.py` - hook-authored side-effect files (backlog #122, M1/M2)
 ├── `test_doc_sync_hook_notices.py` - Backlog #83: a README that regen_readme() skips (no opening marker, or no closing marker)
 ├── `test_doc_sync_index_notices.py` - Backlog #85: the INDEX regeneration path and the CLAUDE.md section patcher now report what
 ├── `test_doc_sync_index_status.py` - Backlog #85: regen_index() returned None on every path, so nobody could tell a skipped INDEX
 ├── `test_doc_sync_regen_readme_status.py` - Backlog #83: regen_readme() returned None on every path, so nobody could tell a skipped
 ├── `test_doc_sync_regions.py` - Backlog #85: four unrelated marker predicates (README first occurrence, INDEX substring
 ├── `test_dual_runtime_lifecycle_e2e.py` - Real-entrypoint regressions for single-owner ordinary dev lifecycle.
+├── `test_e2e_enforce.py` - obligation fallback (ticket 20261001-161041-r06, M1)
 ├── `test_extract.py` - Unit tests for hooks/doc_sync/extract.py — covers all 4 defects + known-file cases.
 ├── `test_fail_closed_drift.py` - WHY THIS FILE EXISTS
 ├── `test_final_sweep.sh` - Final sweep — run inline AC checks and print PASS/FAIL summary.
@@ -43,16 +53,26 @@ tests/
 ├── `test_git_residual_override.py` - Background
 ├── `test_gitignore_preflight_close_contract.py` - The gate previously harvested any docs/dev/dev-report-*.json cited anywhere in an
 ├── `test_laneb_stop_overnight_timelock_scoping.py` - Blast-radius-map.json (dev-20260910-111227/blast-radius-map-20260808-035658-laneb)
+├── `test_obligation.py` - Covers the four implementation ACs of ticket-20260929-104216-b:
+├── `test_obligation_gate.py` - G1 is the first of five enforcement doors (spec-20260930-092323) that move
 ├── `test_overnight_gitenv_failclosed.py` - Two halves of one fail-open, scoped together because closing either alone leaves
 ├── `test_overnight_qa_sentinel_bind.py` - `_qa_mode_sentinel_rw_bind` / `_build_bwrap_argv` had ZERO test callers, so the
+├── `test_overnight_state_file_write_guard.py` - overnight-state write-protection (ticket 20261001-161041-r10, AC4/AC5/AC6)
 ├── `test_overwrite_guard.py` - Every assertion drives the REAL guard as a subprocess over a synthetic
 ├── `test_posttool_commit_grant_finalize.py` - hooks/posttool-allowlist-consume.py, and for the pointer WRITE side in
+├── `test_posttool_overnight_loop_terminal_gate.py` - (ticket 20260930-132644-l4)
+├── `test_posttool_push_gate_token_verify.py` - THE GAP THIS HOOK CLOSES. agents/changelog-analyst.md Phase 10 writes the push-gate
+├── `test_progress_measure.py` - Only throwaway directories are used; the helper is imported by file path so
+├── `test_push_gate_ancestor_cross_session.sh` - Regression test for hooks/push.sh's push-gate token scan (task 20260924-031253):
 ├── `test_push_no_upstream_guard.sh` - Regression test for hooks/push.sh R22 (line ~375): HAS_UPSTREAM must be
 ├── `test_push_sentinel_abort.sh` - Unit test for AC1 V5: hooks/push.sh self-aborts before any real git push
 ├── `test_regen_index_dirs_script.py` - Backlog #85: the script printed `regenerated: <INDEX>` for every directory, including the ones
 ├── `test_residual_false_positives.py` - Context (task 20260903-residual-fp). `classify_git_command()` returns a
 ├── `test_runtime_guard.py` - Two layers:
 ├── `test_scratch_lifecycle.py` - Covers:
+├── `test_sessionstart_artifact_census.py` - Every run is a subprocess against throwaway directories; the real restart
+├── `test_stop_do_report_gate.py` - Covers the contract from commands/do.md Step 5: a /do session may stop only
+├── `test_stop_obligation_gate.py` - gate, ticket 20260930-132644-l4)
 ├── `test_unit_anchor.py` - Imports the anchor sibling module DIRECTLY (not via the _core facade) and
 ├── `test_unit_config.py` - Imports the config sibling module DIRECTLY (not via the _core facade) and
 ├── `test_unit_constants.py` - Imports the constants sibling module DIRECTLY (not via the _core facade) and
@@ -60,7 +80,8 @@ tests/
 ├── `test_unit_git_cmds.py` - Imports the git_cmds sibling module DIRECTLY (not via the _core facade) and
 ├── `test_unit_pathmatch.py` - Imports the pathmatch sibling module DIRECTLY (not via the _core facade) and
 ├── `test_unit_shell_lex.py` - Imports the shell_lex sibling module DIRECTLY (not via the _core facade's
-└── `test_userprompt_doc_sync_relay.py` - Backlog #83: the UserPromptSubmit hook resyncs a directory by running
+├── `test_userprompt_doc_sync_relay.py` - Backlog #83: the UserPromptSubmit hook resyncs a directory by running
+└── `test_userprompt_usage_snapshot.py` - Covers the three cache states the hook must handle (cache hit, cache expired
 ```
 <!-- /AUTO:index-stats -->
 
