@@ -11,7 +11,7 @@ disk-backed state machine** realizing the adjudicated blueprint
 `docs/dev/specs/20260826-132923/design/turn-3-solutions-adopted.md` (F1–F15)
 for spec `docs/dev/specs/spec-20260826-132923.md` Section 5. It is NOT a
 resident daemon. Quota IS determinable from the per-account usage surface, and
-same-session account switching IS supported (proven in production 2026-08-21) —
+same-session account switching IS supported —
 Section 5.2 is binding.
 
 ## Mission & scope
@@ -28,8 +28,7 @@ committed to git).
 1. **Liveness ≠ health (a)**: every health check probes the HISTORY surface — judge
    progress by `get_agent_activity` **updateCount** progression combined with
    status and lastUserMessageAt; NEVER by liveness or **updatedAt** alone, and
-   metadata churn never clears a SUSPECT verdict. (Incident 2026-08-06:
-   timeline 73662→0 for 2h40m while every liveness signal stayed green.)
+   metadata churn never clears a SUSPECT verdict.
 2. **Daemon-supported channels only (b)**: observation and repair go ONLY
    through daemon-supported channels — the paseo MCP tools (`list_agents`,
    `get_agent_activity`, `get_agent_status`, `update_agent`,
@@ -49,6 +48,28 @@ committed to git).
    turns within existing hook budgets (one non-whitelist same-name tool per
    turn; Bash 5-streak cap), and leader-**lease** succession for controller
    takeover. No resident process of any kind.
+6. **Reader-subagent architecture (f)**: the controller
+   NEVER reads workspace/session histories directly. Every per-workspace
+   inspection is delegated to a dedicated read-only reader subagent (Explore
+   type, `run_in_background: false`, exactly ONE workspace per reader — the
+   dev↔subagent isomorphism applies to the controller). Fixed four-question
+   report: which step of spec→dev→close→commit→push it fixes / what
+   real-world problem and its root-cause point / where it stands and its
+   terminal state / what uncommitted residue remains. Board reports and
+   handovers run readers first; memory is never a substitute for a fresh
+   reader pass.
+7. **Close-out standard (g)**: a workspace may be
+   closed only when it can answer the four questions in one line each AND has
+   zero uncommitted residue (or a named honest blocker). Command lines drive
+   progress (one bare slash command; prose is not dispatch); authorization
+   happens at the permission layer, never by asking a seat to route around a
+   hook; a QA rejection is accepted as BLOCKED and never overridden — but
+   BLOCKED is a waypoint, not a terminal: immediately trace the rejection to
+   its root cause and convert it into a concrete repair route (which layer
+   the defect lives in, which owner fixes it, when to resubmit); a rejection
+   reason that never becomes a next action is an unfinished close-out;
+   record-only output (specs never developed, notes never landed) does not
+   count as delivery.
 
 ## Sole mutation surface (ledger CLI)
 
@@ -72,7 +93,12 @@ atomic-commit semantics that free-hand file edits cannot guarantee.
 
 Step 1: run the ledger CLI `init` against `.claude/paseo-daemon/` (idempotent;
 creates inbox/plans/acked, actions, reservations, backlog, recovery,
-generations, dossiers, accounts.json, config.json, watermark).
+generations, dossiers, accounts.json, config.json, watermark), then
+reconcile the four timer schedules (tick, ctrl-core-reinject, watchdog,
+reader-board-sweep) via `scripts/paseo-daemon-timers.py ensure` (idempotent,
+on-disk-registry-only dedup — never via any MCP/CLI schedule-query surface,
+which returns "Schedule not found" for some live entries; creates whichever
+timer is missing, never rebuilds or overwrites an existing one's prompt).
 Step 2: acquire the leader lease (`lease-acquire` with an incarnation id and
 TTL). A successor controller reads the SAME ledger and takes over ONLY after
 the previous lease expires; renew the lease each tick.
@@ -80,8 +106,7 @@ Step 3: arm the tick with a recurring cadence: create a paseo scheduler
 heartbeat (`create_heartbeat` / `create_schedule`) whose cron repeats
 indefinitely. ANY finite `maxRuns` on the tick channel is FORBIDDEN — every
 cap leaves a last fire after which loss is permanent, and a one-shot strands
-the controller on its FIRST lost delivery (observed live 2026-08-30: one lost
-fire, 3h20m43s strand, lease expired, forced succession); capped runs and
+the controller on its FIRST lost delivery; capped runs and
 one-shots are reserved for explicit channel tests with teardown and
 proof-by-delivery. Prefer an explicit minute-list
 cron (e.g. `12,57 * * * *`) over `*/45` — true cron `*/45` fires at :00 and
@@ -177,8 +202,8 @@ never overloaded this way: they stay measurements.
 Blueprint F6 (`turn-3-solutions-adopted.md:35`) prescribed the HARNESS
 scheduler for the tick, proven only in an interactive REPL session. This
 command deviates deliberately: paseo-managed sessions have no resident REPL
-loop between turns (a harness session-only timer was observed to vanish
-without firing, dry-run 2026-08-30), so the harness scheduler is structurally
+loop between turns (a harness session-only timer can vanish
+without firing), so the harness scheduler is structurally
 unsound here and the tick uses the PASEO scheduler. Paseo heartbeat delivery
 is at-most-once with no inspect surface — hence the delivery-proof and
 watermark-ageing doctrine of Step 3. A single missed fire self-heals at this
@@ -195,17 +220,15 @@ A separate live paseo schedule, `paseo-daemon-watchdog` (id `a814a9a0`, cron
 two cadences never collide), spawns a fresh agent independent of this tick
 channel's own session and lease. It exists because the controller's own
 heartbeat channel can only be checked while the controller is alive — a
-circular dependency that let the controller die silently overnight
-(2026-08-30, 2026-09-02). Each fire runs the ledger CLI's `watchdog-check`
+circular dependency that lets the controller die silently. Each fire runs the ledger CLI's `watchdog-check`
 subcommand (R1 AC-1.2) — a single Bash call combining `wake-status`,
 `lease-status`, and `inbox-check-staleness`, plus a conditional escalation
 `inbox-append` — and, if `escalation_needed` is true, lists paseo sessions
 and messages the controller session naming the reasons and evidence.
 `watchdog-check`'s single-call design keeps the escalation path inside the
 5-consecutive-Bash-call orchestrator-gate budget even when escalation
-actually fires: driving the equivalent reads as separate Bash calls
-previously blocked 6 of 13 (46%) of genuine escalation attempts (measured
-2026-09-05 through 2026-09-11). This schedule never creates, modifies, or
+actually fires; never drive the equivalent reads as separate Bash calls.
+This schedule never creates, modifies, or
 deletes any heartbeat or schedule, including itself, and never dispatches
 subagents; administrative changes to its prompt (such as this R1 extension)
 are made via the schedule-update mechanism, never by the spawned agent
@@ -231,8 +254,7 @@ atomically; `inbox-ack` advances the processed watermark; a crash between
 consume and commit leaves the event pending; an event is never ACKed without
 its planned outcome recorded, and never planned twice). Because this step
 lives INSIDE the loop it protects, it cannot by construction detect its own
-silent failure (R1, `docs/dev/specs/spec-20260910-164747.md`; measured live
-2026-09-10: watermark frozen 5+ days, zero alarm). Every tick MUST also
+silent failure (R1, `docs/dev/specs/spec-20260910-164747.md`). Every tick MUST also
 invoke `inbox-check-staleness`, which sorts pending events by their
 `appended_at` FIELD (never filename order — a latent bug in
 `cmd_inbox_consume`'s own sort) and persists an `inbox_drain_stale` verdict
@@ -322,16 +344,26 @@ Before a controller session ends, pending inbox events MUST be either
 drained (consume→plan→ack, exactly once each) or DECLARED via the ledger CLI
 `teardown-declare`, which journals the pending event ids, the reason, and
 the lease disposition. Silently abandoning pending events and a live lease
-(the state observed after the 2026-08-30 dry-run: 5 pending events, expired
-lease, no journaled teardown) is a contract violation. A successor
+(pending events, expired lease, no journaled teardown) is a contract violation. A successor
 controller reads the teardown declaration to distinguish a clean handoff
 from a crash.
+
+## Timer fleet stop/drain
+
+Stopping all four timer schedules together — a distinct operation from the
+per-event inbox drain above — is safety-ordered: run
+`scripts/paseo-daemon-timers.py drain --registry-dir <registry> --ledger-root
+<ledger>`. Watchdog is paused FIRST (a watchdog fire mid-teardown would judge
+the controller dead and escalate), then sweep, tick, reinject. Each timer is
+paused, never deleted, via backup → temp-write → parse-validate → atomic
+`os.replace`. The final step calls the ledger CLI's `teardown-declare`
+exactly once, journaling the fleet teardown alongside the session-end
+declaration above.
 
 ## Three-account scheduling state (F7, F8)
 
 Per-account ledger records track: the account's own weekly reset instant
-(observed live 2026-08-28: orchestrade weekly resets 2026-09-03T18:00Z vs
-yugoge 2026-09-02T14:00Z — all three differ), the latest usage reading
+(each account's reset differs), the latest usage reading
 (ingested from the adapter chain in the tick), and scheduling state in
 `{unknown, eligible, suspect, blocked_until, probation}`. A usage row with
 `status: "unavailable"` — or a missing account row — IS the fetcher blind

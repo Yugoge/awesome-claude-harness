@@ -8,6 +8,12 @@ description: >-
   in PLAN mode before writing the test plan.
 ---
 
+## Requirement Baseline and Scope Authority (charter — applies to every dispatch)
+
+1. **Baseline.** The user's original requirement document in your dispatch payload is your reference baseline, not decoration; compare your assigned scope and your findings against it.
+2. **Report contradictions.** Your plan, triage, or retro report MUST carry a `baseline_check` entry: `consistent`, `not_provided`, or one of `baseline_contradiction` (the assigned scope contradicts the actual user requirement), `coupled_issues_merge_requested` (your scope is half of a coupled cross-lane issue; name the coupled lanes and the single underlying issue), `recurring_mechanism_failure` (the work is the Nth patch on a mechanism with a recurring failure history), each with cited evidence. Surfacing one is a SUCCESS output; silently delivering a report on a mis-scoped assignment is a FAILURE.
+3. **Authority.** Your authority stays strictly inside the assigned scope: report, never self-expand, and never alter a triage order or verdict to compensate for a mismatch you found.
+
 ## Reading the orchestrator view (supervisor mode only)
 
 When a user-provided spec is present, you will receive an `Orchestrator view file`
@@ -18,8 +24,6 @@ spec's Role Mandate, Pipeline Workflow, and Anti-Patterns. These are authoritati
 When there is no orchestrator view (autonomous mode), use your default heuristics.
 
 ### Forbidden Skip Patterns (MANDATORY — applies to TRIAGE)
-
-**Added 2026-04-25 after overnight session 21d24e89 shipped 14 unverified Codex tool renderers via the `pipeline_recommendation: skip + skip_reason: "manual user setup task"` escape hatch. Full post-mortem in `docs/dev/specs/spec-20260424-084848.md` Section 6/7/8 Corrections.**
 
 When emitting `pipeline_recommendation: "skip"` in your triage report, the following `skip_reason` templates are **FORBIDDEN** and will cause the orchestrator to reject your triage:
 
@@ -62,7 +66,7 @@ Before writing `pipeline_recommendation: "skip"` for any issue, run this checkli
 - [ ] Is the prerequisite something a Playwright click-path could create? (If yes → setup pipeline, not skip.)
 - [ ] Is the prerequisite something a curl/script call could create through legitimate UI-equivalent means? (If yes → setup pipeline.)
 - [ ] Is this issue user-spec protected (in spec_mode == "user-provided")? If yes, skip is forbidden regardless of difficulty — convert to defer with explicit blocker, OR escalate_to_user with full instructions.
-- [ ] Have I read the full BA fallback_plan (if any) and confirmed it does NOT inherit a fallback meant for a different pipeline (cross-cycle fallback inheritance is the canonical accident from session 21d24e89 cycle 2)?
+- [ ] Have I read the full BA fallback_plan (if any) and confirmed it does NOT inherit a fallback meant for a different pipeline (cross-cycle fallback inheritance is forbidden)?
 - [ ] Will downstream QA see this issue as "absent from triage_order" and therefore skip its own verification of the prerequisite? (If yes, the skip will compound into false-PASS — DO NOT SKIP.)
 
 If any answer is "no" or "I don't know", do not emit the skip. Choose `fix` (with setup-pipeline if needed), `defer` (with explicit blocker), or `escalate_to_user` (with full instructions for the human).
@@ -580,7 +584,7 @@ If YES → the pipeline MUST end with live screenshot evidence on the app-under-
 
 For NON-UI issues (CLI-only, server-only, refactor, dead-code-removal): the rule is relaxed; source + typecheck + functional smoke is acceptable. But these are the exception, not the default.
 
-**Why this rule exists**: Overnight session 21d24e89 (2026-04-25) shipped 14 Codex tool renderers across 2 cycles. Source verified, bundle verified, typecheck passed, daemon healthy — every QA report said PASS. NONE of the 14 renderers ever rendered in a real browser. The user identified this as QA failure-by-escape caused by a multi-layer escape chain that started with PM marking "Codex session in dev" as `skip` with `skip_reason: "manual user setup task"`. This Step 3 (Live-Evidence Mandate Check) is a hard gate to prevent recurrence.
+Rule: Step 3 (Live-Evidence Mandate Check) is a hard gate; source, bundle, and typecheck evidence never substitute for a live render of a UI surface.
 
 ### Step 4: User-Need Path Relevance Filter (TRIAGE only — MANDATORY per spec-20260503-091826 Section 5.5 decision #2)
 
@@ -820,8 +824,6 @@ When `qa_rerun_required: true`, the orchestrator will re-invoke QA for the affec
 
 ### Step 7: False-PASS Audit (MANDATORY — applies to RETRO)
 
-**Added 2026-04-25 after overnight session 21d24e89 post-mortem.**
-
 For every pipeline that QA reported PASS or WARNING in this cycle, verify the verdict is honest:
 
 For each pipeline producing a UI surface:
@@ -840,7 +842,7 @@ When you detect a false-PASS, set:
 
 **Do not negotiate this** even when the cycle is otherwise successful. A false-PASS is a regression in process discipline that compounds across cycles. The next cycle PM must inherit the unresolved item.
 
-**Reference precedent (do not repeat)**: Session 21d24e89 cycles 1+2 had 5 PASS / 1 WARNING verdicts across 5 pipelines with cumulative 14 UI renderers shipped — yet 0 live screenshots of those renderers were captured. This was the false-PASS pattern at its worst. RETRO must catch this BEFORE it carries forward.
+RETRO must catch a false-PASS (PASS verdicts on UI pipelines with zero live screenshots) BEFORE it carries forward.
 
 ### Step 8: Final Summary (if FINAL_CYCLE: true)
 
@@ -1063,7 +1065,7 @@ If a checkpoint legitimately does not apply to this run, waive it using `spec-ch
 
 **Non-spec invocations**: if the orchestrator did not pass a `<SPEC_ID>` (i.e., `/dev` was invoked without `--spec`), no cp-state file exists for you and this contract is inapplicable — proceed as before.
 
-**Why this exists**: prior cycles (commits 0ffc308, 9d78786, e086ccb) introduced cp-state to make per-agent atomic-action coverage auditable. Without faithful marking, the audit trail is hollow and silent failures slip through.
+Rule: cp-state keeps per-agent atomic-action coverage auditable; unmarked or cross-role-marked checkpoints hollow out that audit trail.
 
 ---
 
