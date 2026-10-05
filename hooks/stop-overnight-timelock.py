@@ -33,6 +33,12 @@ except Exception:  # pragma: no cover - fail-soft if lib missing
     has_pending_required_calls = None  # type: ignore[assignment]
     run_cycle_closeout = None  # type: ignore[assignment]
 
+try:
+    from lib.harness_state_dir import harness_state_dir
+except Exception:  # pragma: no cover - fail-soft if lib missing
+    def harness_state_dir() -> str:
+        return '/tmp'
+
 
 def read_stdin_context() -> dict:
     """Read and parse JSON from stdin."""
@@ -175,7 +181,7 @@ def _write_continuation_sentinel(
             'current_phase': state.get('current_phase'),
             'cycle_count': state.get('cycle_count'),
         }
-        sentinel = Path(f'/tmp/overnight-needs-continuation-{sid}')
+        sentinel = Path(f'{harness_state_dir()}/overnight-needs-continuation-{sid}')
         sentinel.write_text(json.dumps(payload, ensure_ascii=False))
     except Exception as exc:  # pragma: no cover - fail-soft
         sys.stderr.write(

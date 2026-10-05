@@ -33,6 +33,7 @@ from lib.bash_write_targets import (  # noqa: E402
     command_without_heredoc_bodies,
     extract_bash_write_paths,
 )
+from lib.harness_state_dir import harness_state_dir  # noqa: E402
 
 try:  # T2.4: optional contract runtime + agent resolver for self_repair grant.
     from lib import contract_runtime as _contract_runtime  # noqa: E402
@@ -560,7 +561,9 @@ def _is_path_exempt(file_path: str) -> bool:
     abs_path = os.path.realpath(os.path.abspath(file_path))
     if abs_path == "/dev/null":
         return True
-    return abs_path.startswith("/tmp/") or abs_path == "/tmp"
+    state_root = harness_state_dir()
+    return (abs_path.startswith("/tmp/") or abs_path == "/tmp"
+            or abs_path.startswith(state_root + "/") or abs_path == state_root)
 
 
 def _is_path_allowed_during_overnight(file_path: str, worktree_paths: list[str]) -> bool:

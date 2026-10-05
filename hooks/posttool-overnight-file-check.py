@@ -48,6 +48,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 from lib import contract_runtime  # noqa: E402
+from lib.harness_state_dir import harness_state_dir  # noqa: E402
 
 OVERNIGHT_AGENTS = {
     'pm', 'user', 'product-owner', 'architect',
@@ -152,12 +153,12 @@ def _validate_one_artifact(candidate: Path, schema_name: str) -> tuple[str, list
 
 def _contract_bookmark_path(session_id: str, cycle_id: int) -> Path:
     """Where pretool-subagent-enforce (T2.3) writes step -> matched_entry."""
-    return Path(f'/tmp/contract-bookmark-{session_id}-{cycle_id}.json')
+    return Path(f'{harness_state_dir()}/contract-bookmark-{session_id}-{cycle_id}.json')
 
 
 def _artifact_status_sidecar_path(session_id: str, cycle_id: int) -> Path:
     """Where this hook writes per-call schema_status for downstream consumers."""
-    return Path(f'/tmp/artifact-status-{session_id}-{cycle_id}.json')
+    return Path(f'{harness_state_dir()}/artifact-status-{session_id}-{cycle_id}.json')
 
 
 def _ts_float(payload: dict) -> float:
