@@ -41,6 +41,9 @@ import sys
 import time
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).parent))
+from lib.harness_state_dir import harness_state_dir  # noqa: E402
+
 # Pattern to detect git commit commands (used by deferred-grant finalization).
 _GIT_COMMIT_CMD_RE = _re.compile(r'\bgit\b.*\bcommit\b', _re.DOTALL)
 
@@ -49,8 +52,8 @@ _GIT_COMMIT_CMD_RE = _re.compile(r'\bgit\b.*\bcommit\b', _re.DOTALL)
 # namespace: it is a single shared /tmp namespace, and a test that scanned the real one
 # could consume a live session's in-flight commit grant. The template must stay
 # character-identical to the guard's _COMMIT_GRANT_ACTIVE_TEMPLATE.
-_COMMIT_GRANT_POINTER_TEMPLATE = '/tmp/claude-commit-grant-active-{sid}.json'
-_COMMIT_GRANT_POINTER_GLOB = '/tmp/claude-commit-grant-active-*.json'
+_COMMIT_GRANT_POINTER_TEMPLATE = harness_state_dir() + '/claude-commit-grant-active-{sid}.json'
+_COMMIT_GRANT_POINTER_GLOB = harness_state_dir() + '/claude-commit-grant-active-*.json'
 
 # Mirror of pretool-git-privilege-guard.py::_EVENT_KEY_UNSAFE_RE. The two hooks are
 # separate programs with no shared import, so the derivation is duplicated exactly as
@@ -842,7 +845,7 @@ def main() -> None:
         # Closes the whitespace-normalization divergence: sentinel uses tokenized
         # matching (handles "git   push") but legacy uses literal substring match.
         if should_consume:
-            legacy_path = Path(f"/tmp/claude-bash-allowlist-{session_id}.json")
+            legacy_path = Path(f"{harness_state_dir()}/claude-bash-allowlist-{session_id}.json")
             try:
                 legacy_path.unlink()
             except (FileNotFoundError, OSError):
@@ -851,7 +854,7 @@ def main() -> None:
             # Unlink orchestrator's legacy grant too if the SIDs diverge.
             orch_sid = os.environ.get("CLAUDE_SESSION_ID", "")
             if orch_sid and orch_sid != session_id:
-                orch_legacy = Path(f"/tmp/claude-bash-allowlist-{orch_sid}.json")
+                orch_legacy = Path(f"{harness_state_dir()}/claude-bash-allowlist-{orch_sid}.json")
                 try:
                     orch_legacy.unlink()
                 except (FileNotFoundError, OSError):

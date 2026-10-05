@@ -29,6 +29,9 @@
 # repo-hash) instead of the author literal /root on a fresh non-root clone.
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/claude_home.sh"
 _CLAUDE_HOME_FALLBACK="$(claude_home_resolve || echo "$HOME")"
+# Hook runtime-state root (CLAUDE_STATE_DIR; default /tmp). Fail-soft fallback.
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)/lib/harness_state_dir.sh" 2>/dev/null \
+  || harness_state_dir() { printf '%s\n' /tmp; }
 
 # Colors
 GREEN='\033[0;32m'
@@ -100,7 +103,7 @@ _CHAIN_B_REPO_HASH="$(python3 -c "import hashlib,os; print(hashlib.sha256(os.pat
 _CHAIN_B_BRANCH_RAW="$(git rev-parse --abbrev-ref HEAD 2>/dev/null)"
 _CHAIN_B_BRANCH="$(python3 -c "print('${_CHAIN_B_BRANCH_RAW}'.replace('/', '__'))")"
 _CHAIN_B_REQUEST_ID="${CLAUDE_PUSH_REQUEST_ID:-${CLAUDE_TASK_ID:-${CLAUDE_SESSION_ID:-default}}}"
-_CHAIN_B_SENTINEL_DIR="/tmp/agentic-commit/push-analyst/${_CHAIN_B_REPO_HASH}"
+_CHAIN_B_SENTINEL_DIR="$(harness_state_dir)/agentic-commit/push-analyst/${_CHAIN_B_REPO_HASH}"
 _CHAIN_B_SENTINEL_PATH="${_CHAIN_B_SENTINEL_DIR}/${_CHAIN_B_BRANCH}-chainB.validated.sentinel.json"
 
 if [ ! -f "$_CHAIN_B_SENTINEL_PATH" ]; then
@@ -206,7 +209,7 @@ _HEAD_SHA="$(git rev-parse HEAD 2>/dev/null)"
 # token whose commit_sha is an ANCESTOR of (or equal to) HEAD, proving a real
 # /commit is still part of HEAD's history — see commands/push.md "Session
 # commit prerequisite (push-gate)" for the full rationale.
-_TOKEN_BASE_DIR="/tmp/agentic-commit/push/${_REPO_HASH}"
+_TOKEN_BASE_DIR="$(harness_state_dir)/agentic-commit/push/${_REPO_HASH}"
 _TOKEN_PATH=""
 _CANDIDATE_COUNT=0
 if [ -d "$_TOKEN_BASE_DIR" ]; then
@@ -363,7 +366,7 @@ fi
 # admitted.
 SID="${CLAUDE_SESSION_ID:-default}"
 NONCE=$(python3 -c "import secrets; print(secrets.token_hex(16))")
-GRANT_PATH="/tmp/claude-push-grant-${SID}-${NONCE}.json"
+GRANT_PATH="$(harness_state_dir)/claude-push-grant-${SID}-${NONCE}.json"
 CURRENT_HEAD=$(git rev-parse HEAD)
 CREATED_AT=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 
