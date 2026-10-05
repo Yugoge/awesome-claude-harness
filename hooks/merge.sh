@@ -44,6 +44,30 @@ if ! git show-ref --verify --quiet "refs/heads/$BRANCH_NAME"; then
   exit 1
 fi
 
+# In-place vs linked worktree detection (commands/dev-overnight.md's own
+# isolation_kind vocabulary: "in_place" == worktree_path equals main_root).
+# A linked (registered_worktree) worktree is always distinct from the main
+# one (scripts/create-worktree.sh::validate_worktree enforces rp_wt != rp_main
+# at creation time), so nothing else uses that directory while /merge runs.
+# cwd being the main root carries no such exclusivity guarantee -- other
+# sessions may hold uncommitted edits here right now -- so the checks below
+# give that shape the equivalent safety the linked shape gets for free.
+MAIN_WORKTREE_PATH="$(git worktree list --porcelain 2>/dev/null | awk '/^worktree /{print $2; exit}')"
+CURRENT_TOPLEVEL="$(git rev-parse --show-toplevel)"
+IS_IN_PLACE=false
+if [ -n "$MAIN_WORKTREE_PATH" ] && [ "$(realpath "$MAIN_WORKTREE_PATH" 2>/dev/null)" = "$(realpath "$CURRENT_TOPLEVEL" 2>/dev/null)" ]; then
+  IS_IN_PLACE=true
+fi
+
+if [ "$IS_IN_PLACE" = true ]; then
+  DIRTY="$(git status --porcelain)"
+  if [ -n "$DIRTY" ]; then
+    echo "merge.sh: refusing to merge in_place with uncommitted changes present (equivalent of the linked worktree's exclusivity guarantee -- this directory may be shared with other sessions):" >&2
+    echo "$DIRTY" >&2
+    exit 2
+  fi
+fi
+
 # Untracked-overlap preflight (spec 5.2.1.3 R3b)
 OVERLAP="$(git ls-files --others --exclude-standard | sort -u)"
 if [ -n "$OVERLAP" ]; then
@@ -106,8 +130,12 @@ if git diff --quiet "$BRANCH_NAME" 2>/dev/null; then
       echo "  ! could not remove worktree: $WORKTREE_PATH"
   fi
 
-  # Delete branch (worktree gone, so -d is safe; -d refuses unmerged but we just merged)
-  if git branch -d "$BRANCH_NAME" 2>/dev/null; then
+  # Delete branch (worktree gone, so -d is safe; -d refuses unmerged but we just merged).
+  # Skipped in_place: that branch is not a disposable linked-worktree branch,
+  # so merging it does not imply deleting it too -- it stays on disk.
+  if [ "$IS_IN_PLACE" = true ]; then
+    echo "  ~ skipped branch deletion: $BRANCH_NAME (in_place merge keeps the source branch)"
+  elif git branch -d "$BRANCH_NAME" 2>/dev/null; then
     echo "  ✓ deleted branch: $BRANCH_NAME"
   else
     echo "  ! branch $BRANCH_NAME not deleted (may be unmerged or detached)"
