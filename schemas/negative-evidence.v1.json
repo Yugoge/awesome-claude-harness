@@ -1,0 +1,194 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "negative-evidence.v1",
+  "title": "Authority-bound bounded negative evidence receipt",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "$schema",
+    "schema_version",
+    "receipt_type",
+    "created_at",
+    "authority",
+    "request",
+    "execution",
+    "evidence",
+    "conclusion",
+    "inconclusive_reasons",
+    "schema_validation"
+  ],
+  "properties": {
+    "$schema": {"const": "negative-evidence.v1"},
+    "schema_version": {"type": "integer", "const": 1},
+    "receipt_type": {"type": "string", "const": "authority_bound_bounded_find"},
+    "created_at": {"type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?Z$"},
+    "authority": {"$ref": "#/definitions/authority"},
+    "request": {"$ref": "#/definitions/request"},
+    "execution": {"$ref": "#/definitions/execution"},
+    "evidence": {"$ref": "#/definitions/evidence"},
+    "conclusion": {"type": "string", "enum": ["present", "absent", "unknown"]},
+    "inconclusive_reasons": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+    "schema_validation": {"$ref": "#/definitions/schema_validation"}
+  },
+  "definitions": {
+    "hex64": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "nullable_hex64": {"type": ["string", "null"], "pattern": "^[0-9a-f]{64}$"},
+    "nullable_string": {"type": ["string", "null"]},
+    "authority": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "contract_context",
+        "authority_file",
+        "expected_authority_projection_sha256",
+        "observed_authority_projection_sha256",
+        "authority_projection",
+        "registered_root",
+        "registered_root_realpath",
+        "scan_root_realpath",
+        "repository",
+        "checks",
+        "errors"
+      ],
+      "properties": {
+        "contract_context": {"$ref": "#/definitions/file_binding"},
+        "authority_file": {"$ref": "#/definitions/file_binding"},
+        "expected_authority_projection_sha256": {"$ref": "#/definitions/hex64"},
+        "observed_authority_projection_sha256": {"$ref": "#/definitions/nullable_hex64"},
+        "authority_projection": {"type": "object"},
+        "registered_root": {"$ref": "#/definitions/nullable_string"},
+        "registered_root_realpath": {"$ref": "#/definitions/nullable_string"},
+        "scan_root_realpath": {"$ref": "#/definitions/nullable_string"},
+        "repository": {"$ref": "#/definitions/repository"},
+        "checks": {
+          "type": "object",
+          "additionalProperties": {"type": ["boolean", "null"]}
+        },
+        "errors": {"type": "array", "items": {"type": "string"}, "uniqueItems": true}
+      }
+    },
+    "file_binding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "expected_sha256", "observed_sha256", "bytes", "mode", "nlink", "regular_file", "symlink"],
+      "properties": {
+        "path": {"type": "string", "minLength": 1},
+        "expected_sha256": {"$ref": "#/definitions/hex64"},
+        "observed_sha256": {"$ref": "#/definitions/nullable_hex64"},
+        "bytes": {"type": ["integer", "null"], "minimum": 0},
+        "mode": {"type": ["string", "null"], "pattern": "^[0-7]{4}$"},
+        "nlink": {"type": ["integer", "null"], "minimum": 0},
+        "regular_file": {"type": ["boolean", "null"]},
+        "symlink": {"type": ["boolean", "null"]}
+      }
+    },
+    "repository": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["top_level", "git_common_dir_realpath", "remote_origin_url", "object_format", "head", "worktree_registration_count", "identity_canonical_sha256"],
+      "properties": {
+        "top_level": {"$ref": "#/definitions/nullable_string"},
+        "git_common_dir_realpath": {"$ref": "#/definitions/nullable_string"},
+        "remote_origin_url": {"$ref": "#/definitions/nullable_string"},
+        "object_format": {"$ref": "#/definitions/nullable_string"},
+        "head": {"$ref": "#/definitions/nullable_string"},
+        "worktree_registration_count": {"type": ["integer", "null"], "minimum": 0},
+        "identity_canonical_sha256": {"$ref": "#/definitions/nullable_hex64"}
+      }
+    },
+    "request": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["scan_root", "scopes", "scope_paths", "prunes", "prune_paths", "target", "positive_control", "timeout_ms", "max_output_bytes", "max_files", "scan_config_sha256"],
+      "properties": {
+        "scan_root": {"type": "string", "minLength": 1},
+        "scopes": {"type": "array", "minItems": 1, "items": {"type": "string"}},
+        "scope_paths": {"type": "array", "items": {"type": "string"}},
+        "prunes": {"type": "array", "items": {"type": "string"}},
+        "prune_paths": {"type": "array", "items": {"type": "string"}},
+        "target": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "value"],
+          "properties": {
+            "kind": {"type": "string", "enum": ["exact-path", "basename"]},
+            "value": {"type": "string", "minLength": 1}
+          }
+        },
+        "positive_control": {"type": "string", "minLength": 1},
+        "timeout_ms": {"type": "integer", "minimum": 1, "maximum": 600000},
+        "max_output_bytes": {"type": "integer", "minimum": 1, "maximum": 1073741824},
+        "max_files": {"type": "integer", "minimum": 1, "maximum": 10000000},
+        "scan_config_sha256": {"$ref": "#/definitions/hex64"}
+      }
+    },
+    "execution": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["argv", "symlink_policy", "started_at", "finished_at", "duration_ms", "exit_code", "timed_out", "stdout", "stderr", "stdout_truncated", "stderr_truncated", "max_files_exceeded", "decode_error", "execution_error"],
+      "properties": {
+        "argv": {"type": "array", "items": {"type": "string"}},
+        "symlink_policy": {"type": "string", "const": "find_-L_follow"},
+        "started_at": {"type": "string"},
+        "finished_at": {"type": "string"},
+        "duration_ms": {"type": "integer", "minimum": 0},
+        "exit_code": {"type": ["integer", "null"]},
+        "timed_out": {"type": "boolean"},
+        "stdout": {"$ref": "#/definitions/raw_stream"},
+        "stderr": {"$ref": "#/definitions/raw_stream"},
+        "stdout_truncated": {"type": "boolean"},
+        "stderr_truncated": {"type": "boolean"},
+        "max_files_exceeded": {"type": "boolean"},
+        "decode_error": {"$ref": "#/definitions/nullable_string"},
+        "execution_error": {"$ref": "#/definitions/nullable_string"}
+      }
+    },
+    "raw_stream": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["base64", "sha256", "bytes"],
+      "properties": {
+        "base64": {"type": "string", "pattern": "^[A-Za-z0-9+/]*={0,2}$"},
+        "sha256": {"$ref": "#/definitions/hex64"},
+        "bytes": {"type": "integer", "minimum": 0}
+      }
+    },
+    "evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["paths", "file_count", "duplicates", "target_hits", "control_hits", "target_excluded", "manifest", "manifest_sha256", "manifest_errors"],
+      "properties": {
+        "paths": {"type": "array", "items": {"type": "string"}},
+        "file_count": {"type": "integer", "minimum": 0},
+        "duplicates": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+        "target_hits": {"type": "array", "items": {"type": "string"}},
+        "control_hits": {"type": "array", "items": {"type": "string"}},
+        "target_excluded": {"type": "boolean"},
+        "manifest": {"type": "array", "items": {"$ref": "#/definitions/manifest_entry"}},
+        "manifest_sha256": {"$ref": "#/definitions/hex64"},
+        "manifest_errors": {"type": "array", "items": {"type": "string"}, "uniqueItems": true}
+      }
+    },
+    "manifest_entry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "bytes", "sha256"],
+      "properties": {
+        "path": {"type": "string", "minLength": 1},
+        "bytes": {"type": "integer", "minimum": 0},
+        "sha256": {"$ref": "#/definitions/hex64"}
+      }
+    },
+    "schema_validation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_name", "ok", "severity", "errors"],
+      "properties": {
+        "schema_name": {"type": "string", "const": "negative-evidence.v1"},
+        "ok": {"type": "boolean", "const": true},
+        "severity": {"type": "string", "const": "pass"},
+        "errors": {"type": "array", "maxItems": 0}
+      }
+    }
+  }
+}
