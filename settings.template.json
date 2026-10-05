@@ -159,6 +159,7 @@
       "mcp__memory-server__delete_observations",
       "mcp__memory-server__delete_relations",
       "mcp__memory-server__open_nodes",
+      "mcp__paseo__*",
       "mcp__playwright__*",
       "Bash(source venv/bin/activate && python scripts/add-status-field.py:*)",
       "Bash(python3 {{CLAUDE_HOME}}/scripts/spec-check.py:*)",
@@ -583,7 +584,7 @@
         ]
       },
       {
-        "matcher": "mcp__playwright__browser_run_code",
+        "matcher": "mcp__playwright__browser_run_code|mcp__paseo__browser_run_code",
         "hooks": [
           {
             "type": "command",
@@ -715,7 +716,7 @@
         ]
       },
       {
-        "matcher": "mcp__playwright__browser_run_code",
+        "matcher": "mcp__playwright__browser_run_code|mcp__paseo__browser_run_code",
         "hooks": [
           {
             "type": "command",

@@ -2,7 +2,7 @@
 """
 PreToolUse Hook: Start timeout watchdog for browser_run_code.
 
-Matcher: mcp__playwright__browser_run_code
+Matcher: mcp__playwright__browser_run_code | mcp__paseo__browser_run_code
 
 Spawns a detached watchdog process that will terminate JavaScript execution
 via CDP if the tool call exceeds the configured timeout.
@@ -27,6 +27,9 @@ sys.path.insert(0, str(Path(__file__).parent))
 from lib.harness_state_dir import harness_state_dir  # noqa: E402
 
 WATCHDOG_SCRIPT = str(Path.home() / ".claude" / "scripts" / "runcode-watchdog.py")
+RUN_CODE_TOOLS = frozenset(
+    {"mcp__playwright__browser_run_code", "mcp__paseo__browser_run_code"}
+)
 
 
 def _kill_stale_watchdog(pid_file: str):
@@ -52,7 +55,7 @@ def main():
         data = {}
 
     tool_name = data.get("tool_name", "")
-    if tool_name != "mcp__playwright__browser_run_code":
+    if tool_name not in RUN_CODE_TOOLS:
         sys.exit(0)
 
     timeout = int(os.environ.get("PLAYWRIGHT_RUNCODE_TIMEOUT", "30"))
