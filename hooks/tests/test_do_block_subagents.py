@@ -190,3 +190,81 @@ def test_h3_non_object_json_stdin_fails_open():
     """(h) valid JSON that is not an object -> exit 0 (fail open)."""
     result = _run_hook(raw_stdin=json.dumps(["Agent", "Task"]))
     assert result.returncode == 0
+
+
+# ---------------------------------------------------------------------------
+# ticket-20260930-132644-l8 Part C2: structural repair-profile exception.
+# Both cases verbatim from turn-5 补漏1 (AC-L8-11 / AC-L8-12).
+# ---------------------------------------------------------------------------
+
+def _repair_obligation_prompt(profile: str = "repair") -> str:
+    return (
+        'dispatch a producer fix '
+        f'<obligation v="1">{{"profile": "{profile}", "task_id": null}}</obligation> '
+        'end of prompt'
+    )
+
+
+def test_i_repair_profile_dispatch_allowed_during_do():
+    """(i) AC-L8-11: consent active + a syntactically valid obligation block
+    with profile="repair" -> exit 0, verified structurally (extract_
+    obligation_block + raw JSON parse), never via a substring search for
+    the word "repair" in the prompt."""
+    sid = _unique_sid()
+    with _consent_flag(sid):
+        result = _run_hook({
+            "tool_name": "Agent", "session_id": sid,
+            "tool_input": {"prompt": _repair_obligation_prompt()},
+        })
+    assert result.returncode == 0
+    assert BLOCK_BANNER not in result.stderr
+
+
+def test_j_non_repair_dispatch_still_blocked_during_do():
+    """(j) AC-L8-12: consent active + (a) no obligation block at all, and
+    (b) an obligation block with a DIFFERENT profile value -> both still
+    exit 2 with the existing block message, unchanged."""
+    sid = _unique_sid()
+    with _consent_flag(sid):
+        no_block = _run_hook({
+            "tool_name": "Agent", "session_id": sid,
+            "tool_input": {"prompt": "dispatch a dev subagent, no obligation block"},
+        })
+    assert no_block.returncode == 2
+    assert BLOCK_BANNER in no_block.stderr
+
+    sid2 = _unique_sid()
+    with _consent_flag(sid2):
+        other_profile = _run_hook({
+            "tool_name": "Agent", "session_id": sid2,
+            "tool_input": {"prompt": _repair_obligation_prompt(profile="fanout-lane")},
+        })
+    assert other_profile.returncode == 2
+    assert BLOCK_BANNER in other_profile.stderr
+
+
+def test_k_repair_substring_without_structural_block_still_blocked():
+    """A prompt that merely MENTIONS the word "repair" in free text, with no
+    syntactically valid obligation block at all, must NOT be treated as an
+    allow signal -- the exception is structural, never text-sniffing."""
+    sid = _unique_sid()
+    with _consent_flag(sid):
+        result = _run_hook({
+            "tool_name": "Agent", "session_id": sid,
+            "tool_input": {"prompt": "please repair this finding, profile: repair, no xml block here"},
+        })
+    assert result.returncode == 2
+    assert BLOCK_BANNER in result.stderr
+
+
+def test_l_malformed_obligation_body_fails_closed_still_blocked():
+    """A syntactically-present obligation tag whose body is not valid JSON
+    must fail closed (treated as "not repair"), never as an allow signal."""
+    sid = _unique_sid()
+    with _consent_flag(sid):
+        result = _run_hook({
+            "tool_name": "Agent", "session_id": sid,
+            "tool_input": {"prompt": '<obligation v="1">{not valid json</obligation>'},
+        })
+    assert result.returncode == 2
+    assert BLOCK_BANNER in result.stderr

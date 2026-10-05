@@ -120,6 +120,25 @@ def test_skeleton_prewritten_pending_with_stripped_request():
         _cleanup(sid)
 
 
+def test_skeleton_declares_profile_and_expected_absent():
+    """AC-L5-01: the pre-written skeleton must declare the artifacts a /do run
+    legitimately never produces, so downstream artifact-presence checks (e.g.
+    L2's e2e-gate) can tell an intentional absence from a real failure."""
+    sid = "test-sid-" + next(tempfile._get_candidate_names())
+    _cleanup(sid)
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            pw.handle_do_consent(sid, "/do fix the widget", project_dir=Path(tmp))
+            tid = json.loads(Path(f"/tmp/claude-do-task-{sid}.json").read_text())["task_id"]
+            report = Path(tmp) / "docs" / "dev" / f"do-report-{tid}.json"
+            rec = json.loads(report.read_text())
+            assert rec["profile"] == "do", f"profile must be 'do', got {rec.get('profile')!r}"
+            assert rec["expected_absent"] == ["qa-report", "dev-report", "ticket", "context", "completion"], \
+                f"expected_absent mismatch: {rec.get('expected_absent')!r}"
+    finally:
+        _cleanup(sid)
+
+
 def test_skeleton_never_clobbers_existing_report():
     """O_EXCL create: a pre-existing report at the minted path survives byte-for-byte."""
     with tempfile.TemporaryDirectory() as tmp:

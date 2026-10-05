@@ -929,6 +929,47 @@ def test_claude_root_real_entrypoint_stop_is_not_time_locked(tmp_path: Path, fro
     assert len(list((root / "docs" / "dev").glob("user-requirement-*.md"))) == 1
 
 
+def test_claude_root_bare_dev_replay_mints_new_id_after_terminal_dev_report(tmp_path: Path) -> None:
+    """AC-L5-03/04: an identical bare /dev prompt still replays byte-for-byte
+    while the prior cycle's dev-report is missing (unchanged behavior); once
+    that dev-report exists with a terminal dev.status, the IDENTICAL prompt
+    must mint a brand-new task_id instead of replaying, and say so."""
+    root = tmp_path / "claude-terminal-replay"
+    (root / "scripts" / "todo").mkdir(parents=True)
+    shutil.copy2(SOURCE_ROOT / "scripts" / "todo" / "dev.py", root / "scripts" / "todo" / "dev.py")
+    sid = "claude-terminal-replay"
+    env = {**os.environ, "HOME": str(root), "CLAUDE_PROJECT_DIR": str(root)}
+    payload = {"session_id": sid, "cwd": str(root), "prompt": "/dev claude terminal replay"}
+    registry = root / ".claude" / "dev-registry"
+
+    first = _run(PROMPT, None, payload, env)
+    assert first.returncode == 0, first.stderr
+    assert len(list(registry.iterdir())) == 1
+    first_task_id = next(registry.iterdir()).name
+
+    # Prior dev-report MISSING: identical envelope must still replay verbatim.
+    replay = _run(PROMPT, None, payload, env)
+    assert replay.returncode == 0 and replay.stdout == first.stdout, \
+        "replay with a non-terminal (missing) dev-report must stay byte-identical"
+    assert len(list(registry.iterdir())) == 1, "no new task_id while prior cycle is non-terminal"
+
+    # Prior dev-report now reaches a terminal state.
+    (root / "docs" / "dev" / f"dev-report-{first_task_id}.json").write_text(json.dumps({
+        "request_id": first_task_id, "task_id": first_task_id,
+        "dev": {"status": "completed", "files_modified": [], "files_created": []},
+    }))
+
+    second = _run(PROMPT, None, payload, env)
+    assert second.returncode == 0, second.stderr
+    assert len(list(registry.iterdir())) == 2, "terminal prior cycle must mint a NEW task_id, not replay"
+    new_ids = {p.name for p in registry.iterdir()} - {first_task_id}
+    assert len(new_ids) == 1
+    second_task_id = next(iter(new_ids))
+    assert second_task_id != first_task_id
+    assert "already reached a terminal state" in second.stdout, second.stdout
+    assert first_task_id in second.stdout
+
+
 def test_active_codex_hook_plan_has_one_lifecycle_owner() -> None:
     hooks = json.loads(Path("/root/.codex/hooks.json").read_text())["hooks"]
     commands = [hook["command"] for groups in hooks.values() for group in groups for hook in group["hooks"]]

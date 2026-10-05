@@ -216,6 +216,94 @@ def test_two_distinct_regenerated_paths_get_two_distinct_collision_safe_entries(
     assert {'hooks/tests/INDEX.md', 'scripts/INDEX.md'} <= paths
 
 
+def test_m6_record_filename_contract_is_one_definition_for_both_accepted_forms():
+    """AC4/M6: the record-filename contract has ONE authoritative declaration,
+    and BOTH accepted forms are asserted from it.
+
+    Before ledger_contract.py the producer and the consumer restated the layout
+    in two independent prose docstrings and shared no definition, so a
+    producer-side rename could silently diverge from what the consumer expected.
+    HERMETIC: this test constructs no tree and reads neither `.claude/dev-registry/`
+    (.gitignore:88) nor `docs/dev/` (.gitignore:173), both of which are untracked
+    and mutable.
+    """
+    contract = load('ledger_contract')
+    rel_path, task, agent = 'hooks/tests/INDEX.md', 'dev-20260101-120000', 'agent-k'
+
+    legacy = contract.legacy_record_name(rel_path)
+    tuple_key = contract.record_name(rel_path, task, agent)
+    assert legacy != tuple_key, (
+        'the claimant dimension must actually change the key, or two claimants would '
+        'still collide on one filename -- which is the defect this closes'
+    )
+    for name in (legacy, tuple_key):
+        assert name.endswith(contract.RECORD_SUFFIX)
+        assert len(name) == 64 + len(contract.RECORD_SUFFIX)
+
+    # The tuple key is a function of ALL THREE components, and is stable.
+    assert contract.record_name('other/INDEX.md', task, agent) != tuple_key
+    assert contract.record_name(rel_path, 'dev-other', agent) != tuple_key
+    assert contract.record_name(rel_path, task, 'agent-other') != tuple_key
+    assert contract.record_name(rel_path, task, agent) == tuple_key
+
+    # The claimant unit is the TASK; the agent is a sub-discriminator within it.
+    declared = {'dev_session_id': task, 'source_agent_id': agent}
+    assert contract.claimant_of(declared, 'some-directory') == {
+        'task': task, 'agent': agent, 'task_provenance': 'declared',
+    }
+    legacy_record = {'source_agent_id': agent}
+    assert contract.claimant_of(legacy_record, task) == {
+        'task': task, 'agent': agent, 'task_provenance': 'directory_derived',
+    }
+    # Two agents of ONE task collapse to ONE claimant retaining both ids.
+    grouped = contract.group_claimants([
+        contract.claimant_of({'dev_session_id': task, 'source_agent_id': 'a1'}, task),
+        contract.claimant_of({'dev_session_id': task, 'source_agent_id': 'a2'}, task),
+        contract.claimant_of({'dev_session_id': 'dev-peer', 'source_agent_id': 'b1'}, task),
+    ])
+    assert grouped == [
+        {'task': task, 'agents': ['a1', 'a2'], 'task_provenance': 'declared'},
+        {'task': 'dev-peer', 'agents': ['b1'], 'task_provenance': 'declared'},
+    ], grouped
+
+
+def test_m1_two_claimant_tasks_on_one_path_do_not_overwrite_each_other(tmp_path):
+    """AC1a/M1 at the PRODUCER: the record key carries the claimant.
+
+    The pre-change key was sha256(relative path) alone, so a second claimant's
+    record for the same path overwrote the first -- the identity was destroyed
+    at recording time, before any consumer could have retained it.
+    """
+    main_mod, hook_ledger_mod = load('main'), load('hook_ledger')
+    contract = load('ledger_contract')
+
+    project = _repo(tmp_path / 'project')
+    watched = _seed_watched_dir_with_tracked_index(project, 'hooks/tests')
+    rel_path = 'hooks/tests/INDEX.md'
+
+    for agent_id, session in (('agent-one', 'dev-task-a'), ('agent-two', 'dev-task-b')):
+        results: list = []
+        main_mod.process_parent_dirs(watched, project, results)
+        _register_dev_agent(project, agent_id, session)
+        assert hook_ledger_mod.record_landed_files(results, {'agent_id': agent_id}, project) == []
+
+    for session, agent_id in (('dev-task-a', 'agent-one'), ('dev-task-b', 'agent-two')):
+        ledger = contract.ledger_dir(project, session)
+        stored = sorted(ledger.glob('*.json'))
+        assert stored, f'{session} must have its own record'
+        names = {p.name for p in stored}
+        assert contract.record_name(rel_path, session, agent_id) in names, (
+            'the producer must name records by the SAME contract the consumer reads'
+        )
+        entry = json.loads((ledger / contract.record_name(rel_path, session, agent_id)).read_text())
+        assert entry['dev_session_id'] == session, (
+            'a new record SELF-DECLARES its owning task, so its claimant is verifiable '
+            'from its own bytes rather than only in situ'
+        )
+        assert entry['ledger_format_version'] == contract.RECORD_FORMAT_VERSION
+        assert entry['source_agent_id'] == agent_id
+
+
 def test_same_path_regenerated_twice_overwrites_its_own_entry_not_duplicates(tmp_path):
     main_mod = load('main')
     hook_ledger_mod = load('hook_ledger')

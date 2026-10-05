@@ -2,10 +2,11 @@
 """Tests for hooks/stop-do-report-gate.py (the /do do-report runtime binder).
 
 Covers the contract from commands/do.md Step 5: a /do session may stop only
-when its do-report reached a terminal, shape-valid state. Block semantics are
-exercised via DO_REPORT_GATE_MODE=block (the shipped default is advisory);
-advisory mode is asserted to never block and to journal would-block events.
-Deadlock guard: after MAX_BLOCKS blocks the gate force-allows.
+when its do-report reached a terminal, shape-valid state. Block mode is the
+shipped default (DO_REPORT_GATE_MODE unset); advisory mode (opt-in) is
+asserted to never block and to journal would-block events. Deadlock guard:
+after MAX_BLOCKS blocks the gate force-allows, honestly rewriting a still-
+"pending" do-report to "blocked" rather than leaving it silently pending.
 
 Run: python3 hooks/tests/test_stop_do_report_gate.py
 """
@@ -67,9 +68,12 @@ def _report(project_dir, task_id, **overrides):
 
 def _run_gate(sid, project_dir, home, mode="block", raw_report=None, task_id="20260101-000000"):
     env = {**os.environ,
-           "DO_REPORT_GATE_MODE": mode,
            "CLAUDE_PROJECT_DIR": str(project_dir),
            "HOME": str(home)}
+    if mode is None:
+        env.pop("DO_REPORT_GATE_MODE", None)  # exercise the true unset-env-var default
+    else:
+        env["DO_REPORT_GATE_MODE"] = mode
     if raw_report is not None:
         d = Path(project_dir) / "docs" / "dev"
         d.mkdir(parents=True, exist_ok=True)
@@ -165,6 +169,37 @@ def test_pending_skeleton_blocks():
             _cleanup(sid)
 
 
+def test_arbitrary_non_terminal_status_blocks():
+    """Pins the generic `status not in TERMINAL_STATUSES` check (hook L97-98)
+    at the level it actually operates: an arbitrary non-"pending" non-terminal
+    value, and a do-report whose "do" object omits the status key entirely,
+    must both still block. Guards against a future narrowing regression that
+    collapses the check into a "status == 'pending'"-only comparison."""
+    sid, tid = _sid(), "20260101-000014"
+    with tempfile.TemporaryDirectory() as tmp:
+        _write_sidecar(sid, tid)
+        try:
+            _report(tmp, tid, do_status="in_progress")
+            r = _run_gate(sid, tmp, tmp, task_id=tid)
+            assert r.returncode == 2, f"arbitrary non-terminal status must block: rc={r.returncode}"
+        finally:
+            _cleanup(sid)
+
+    sid2, tid2 = _sid(), "20260101-000015"
+    with tempfile.TemporaryDirectory() as tmp:
+        _write_sidecar(sid2, tid2)
+        try:
+            _report(tmp, tid2)  # default do.status == "completed"
+            p = Path(tmp) / "docs" / "dev" / f"do-report-{tid2}.json"
+            rec = json.loads(p.read_text())
+            del rec["do"]["status"]
+            p.write_text(json.dumps(rec))
+            r = _run_gate(sid2, tmp, tmp, task_id=tid2)
+            assert r.returncode == 2, f"missing do.status key must block: rc={r.returncode}"
+        finally:
+            _cleanup(sid2)
+
+
 def test_task_id_mismatch_blocks():
     sid, tid = _sid(), "20260101-000007"
     with tempfile.TemporaryDirectory() as tmp:
@@ -206,6 +241,48 @@ def test_versioned_schema_violation_blocks():
             assert "schema" in r.stderr.lower()
         finally:
             _cleanup(sid)
+
+
+def test_default_mode_blocks_and_honest_giveup_rewrite():
+    """AC-L5-06/07/08: with DO_REPORT_GATE_MODE unset the gate now blocks by
+    default (was advisory); when the deadlock guard force-allows and the
+    do-report is still 'pending', it is rewritten to an honest 'blocked'
+    terminal state -- but a give-up on an already-non-pending status (a
+    different violation, e.g. task_id mismatch) must leave status untouched."""
+    sid, tid = _sid(), "20260101-000012"
+    with tempfile.TemporaryDirectory() as tmp:
+        _write_sidecar(sid, tid)
+        try:
+            _report(tmp, tid, do_status="pending", do_summary="")
+            rcs = [_run_gate(sid, tmp, tmp, mode=None, task_id=tid).returncode
+                   for _ in range(MAX_BLOCKS + 1)]
+            assert rcs[:MAX_BLOCKS] == [2] * MAX_BLOCKS, \
+                f"DO_REPORT_GATE_MODE unset must block by default now: {rcs}"
+            assert rcs[MAX_BLOCKS] == 0, f"deadlock guard must still force-allow: {rcs}"
+            report = Path(tmp) / "docs" / "dev" / f"do-report-{tid}.json"
+            rec = json.loads(report.read_text())
+            assert rec["do"]["status"] == "blocked", \
+                f"give-up must rewrite a still-pending status to 'blocked', got {rec['do']['status']!r}"
+            assert rec["do"]["summary"] == "session ended without completing the do-report"
+        finally:
+            _cleanup(sid)
+
+    sid2, tid2 = _sid(), "20260101-000013"
+    with tempfile.TemporaryDirectory() as tmp:
+        _write_sidecar(sid2, tid2)
+        try:
+            _report(tmp, tid2)  # default do.status == "completed"
+            p = Path(tmp) / "docs" / "dev" / f"do-report-{tid2}.json"
+            rec = json.loads(p.read_text())
+            rec["task_id"] = "20991231-235959"  # mismatch: still non-compliant, status stays non-pending
+            p.write_text(json.dumps(rec))
+            rcs2 = [_run_gate(sid2, tmp, tmp, task_id=tid2).returncode for _ in range(MAX_BLOCKS + 1)]
+            assert rcs2[MAX_BLOCKS] == 0, f"deadlock guard must force-allow: {rcs2}"
+            final = json.loads(p.read_text())
+            assert final["do"]["status"] == "completed", \
+                f"give-up must NOT touch an already-non-pending status, got {final['do']['status']!r}"
+        finally:
+            _cleanup(sid2)
 
 
 def test_advisory_mode_never_blocks_and_journals():

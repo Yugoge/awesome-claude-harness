@@ -690,6 +690,74 @@ def test_notice_unit_nu_cap_records_only_printed(tmp_path, monkeypatch, capsys):
     assert shown_first.isdisjoint(shown_second) and shown_second
 
 
+def ledger_failures(count, path_length):
+    """Recorder-failure descriptors whose rendered lines are of realistic repository length."""
+    return [{'class': 'agent_unresolvable',
+             'reason': 'the dev agent id could not be resolved to a registry entry',
+             'path': f'/{index}' + 'p' * path_length + '/INDEX.md'}
+            for index in range(count)]
+
+
+def test_notice_unit_nu_ledger_cap_records_only_shown(tmp_path, monkeypatch, capsys):
+    """A failure withheld by the cap is not marked delivered: it is counted, then shown next edit.
+
+    The failure half's copy of test_notice_unit_nu_cap_records_only_printed. Recording a
+    truncated-away failure as seen matched its digest on every later edit and suppressed it
+    permanently, which is the silent loss this channel exists to report.
+    """
+    notice = load('notice')
+    state_file, payload = register_state(tmp_path, monkeypatch)
+    failures = ledger_failures(8, 150)
+    body = '\n'.join(notice._ledger_failure_text(failure) for failure in failures)
+    assert len(body) > NOTICE_CAP, 'fixture must drive the body over the cap'
+
+    notice.emit_post_tool_notice([], payload, ledger_failures=failures)
+    first = json.loads(capsys.readouterr().out)['systemMessage']
+    recorded_first = set(json.loads(state_file.read_text()))
+    notice.emit_post_tool_notice([], payload, ledger_failures=failures)
+    second_out = capsys.readouterr().out
+    assert second_out.strip(), 'a failure withheld by the cap was suppressed permanently'
+    second = json.loads(second_out)['systemMessage']
+
+    shown_first = {failure['path'] for failure in failures if failure['path'] in first}
+    shown_second = {failure['path'] for failure in failures if failure['path'] in second}
+    assert 0 < len(shown_first) < len(failures)
+    assert {key.split('|', 2)[2] for key in recorded_first} == shown_first
+    assert shown_first.isdisjoint(shown_second) and shown_second
+    assert shown_first | shown_second == {failure['path'] for failure in failures}
+    assert re.search(r'(\d+) more recorder failure\(s\) not shown', first).group(1) == str(
+        len(failures) - len(shown_first))
+    notice.emit_post_tool_notice([], payload, ledger_failures=failures)
+    assert capsys.readouterr().out == '', 'a fully drained set must go quiet'
+
+
+def test_notice_unit_nu_ledger_cut_line_never_marked_delivered(tmp_path, monkeypatch, capsys):
+    """One line longer than the whole cap is shown to nobody; an under-cap repeat still dedupes."""
+    notice = load('notice')
+    state_file, payload = register_state(tmp_path, monkeypatch)
+    huge = [{'class': 'ledger_write_failed', 'reason': 'x' * 2400, 'path': '/deep/INDEX.md'}]
+
+    notice.emit_post_tool_notice([], payload, ledger_failures=huge)
+    text = json.loads(capsys.readouterr().out)['systemMessage']
+    assert len(text) <= NOTICE_CAP and 'more recorder failure(s) not shown' in text
+    assert json.loads(state_file.read_text()) == {}, 'a cut line must not be marked delivered'
+    notice.emit_post_tool_notice([], payload, ledger_failures=huge)
+    assert capsys.readouterr().out.strip(), 'a cut line must be retried on the next edit'
+
+    under_cap = ledger_failures(1, 10)
+    notice.emit_post_tool_notice([], payload, ledger_failures=under_cap)
+    assert capsys.readouterr().out.strip()
+    notice.emit_post_tool_notice([], payload, ledger_failures=under_cap)
+    assert capsys.readouterr().out == '', 'an under-cap repeat must still be suppressed'
+
+    # The counting tail is itself inside the cap at every descriptor length, so the
+    # line that says how much was withheld can never be what overflows.
+    for path_length in range(10, 700, 37):
+        shown, body = notice.render_ledger_body(ledger_failures(9, path_length))
+        assert len(body) <= NOTICE_CAP, path_length
+        assert len(shown) == 9 or 'more recorder failure(s) not shown' in body, path_length
+
+
 def test_notice_unit_nu_never_raises_on_malformed_results(capsys):
     """Nothing a caller passes can raise out of emit_post_tool_notice or change the exit path."""
     notice = load('notice')

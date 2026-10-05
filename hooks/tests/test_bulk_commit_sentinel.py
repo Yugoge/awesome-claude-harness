@@ -493,6 +493,27 @@ class TestCommitGrantRedirectBinding(unittest.TestCase):
         cmd = 'git -C ${GIT_ROOT} commit -m "unexpanded"'
         self._assert_blocks(cmd, self._grant_for(self.A))
 
+    # ---- branch/HEAD-mismatch-in-isolation (task 20261001-161041-r14): repo_root
+    # held fixed, only branch or only HEAD varies -- no redirect vector ----
+    def test_branch_mismatch_in_isolation_blocks(self):
+        """_validate_commit_grant_branch rejects alone: same repo_root, same
+        HEAD sha, only the branch differs -- no redirect vector involved."""
+        grant = self._grant_for(self.A)
+        subprocess.run(["git", "checkout", "-q", "-b", "other-branch"],
+                        cwd=self.A["path"], check=True)
+        self._assert_blocks('git commit -m "x"', grant)
+
+    def test_head_mismatch_in_isolation_blocks(self):
+        """_validate_commit_grant_head rejects alone: same repo_root, same
+        branch, one ordinary intervening commit moved HEAD -- no soft-reset,
+        no amend, genuinely new history (not a replay)."""
+        grant = self._grant_for(self.A)
+        (Path(self.A["path"]) / "f.txt").write_text("y\n")
+        subprocess.run(["git", "add", "."], cwd=self.A["path"], check=True)
+        subprocess.run(["git", "commit", "-q", "-m", "second"],
+                        cwd=self.A["path"], check=True)
+        self._assert_blocks('git commit -m "x"', grant)
+
 
 class TestCommitGrantRepoMatchingSelection(unittest.TestCase):
     """Regression (docs/dev/peer-review-grant-parity.md CRITICAL): the guard must

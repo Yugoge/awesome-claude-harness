@@ -15,7 +15,10 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
+import subprocess
 import sys
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -127,3 +130,68 @@ def test_publish_terminal_receipt_degrades_gracefully_when_session_resources_una
         tmp_path, "session-x", {"session_id": "session-x"}, "completed_by_deadline"
     )
     assert published is False
+
+
+# ---------------------------------------------------------------------------
+# Ticket 20261001-161041-r10 (AC1/AC2): the core block/allow exit-code
+# decision itself -- previously exercised nowhere in this repo. Run via
+# direct subprocess invocation of the real hook script (not the in-process
+# module import above), matching this spec's dev constraint that the
+# closeout-artifact-gate interaction (AC2) must be reproduced live rather
+# than re-derived from source reading alone.
+# ---------------------------------------------------------------------------
+
+_STOP_HOOK_PATH = HOOKS / "stop-overnight-timelock.py"
+
+
+def _run_stop_hook(project_dir: Path, session_id: str) -> subprocess.CompletedProcess:
+    env = os.environ.copy()
+    env["CLAUDE_PROJECT_DIR"] = str(project_dir)
+    return subprocess.run(
+        [sys.executable, str(_STOP_HOOK_PATH)],
+        input=json.dumps({"session_id": session_id}),
+        capture_output=True,
+        text=True,
+        env=env,
+        timeout=10,
+    )
+
+
+def test_stop_hook_blocks_while_end_time_is_future(tmp_path: Path) -> None:
+    """AC1: a live session whose end_time has not yet arrived blocks Stop
+    (exit 2, stderr contains 'TIME-LOCK ACTIVE')."""
+    session_id = "ac1-future"
+    future = (datetime.now() + timedelta(hours=2)).isoformat()
+    _write_state(tmp_path, session_id, end_time=future)
+    result = _run_stop_hook(tmp_path, session_id)
+    assert result.returncode == 2
+    assert "TIME-LOCK ACTIVE" in result.stderr
+
+
+def test_stop_hook_allows_once_end_time_passed_and_closeout_complete(
+    tmp_path: Path,
+) -> None:
+    """AC2: once end_time has passed AND the closeout-artifact gate's four
+    fields are satisfied (final_summary_path exists, pm_retro_reports
+    non-empty, artifact_checkpoint_status is a terminal value, no
+    unresolved/current issues), the hook allows stop (exit 0, no
+    'TIME-LOCK ACTIVE'). A naive past-end_time-only fixture would instead
+    exit 2 for the unrelated CLOSEOUT GATE reason, so all four fields are
+    required here, not just end_time."""
+    session_id = "ac2-past-complete"
+    summary = tmp_path / "summary.md"
+    summary.write_text("done")
+    past = (datetime.now() - timedelta(hours=2)).isoformat()
+    _write_state(
+        tmp_path,
+        session_id,
+        end_time=past,
+        current_issues=[],
+        unresolved_issues=[],
+        final_summary_path=str(summary),
+        pm_retro_reports=["retro-1"],
+        artifact_checkpoint_status="intentionally_uncommitted",
+    )
+    result = _run_stop_hook(tmp_path, session_id)
+    assert result.returncode == 0, result.stderr
+    assert "TIME-LOCK ACTIVE" not in result.stderr
