@@ -223,7 +223,7 @@ flowchart TD
     H4 --> C{which verb?}
     C -->|commit| G1{"grant file present + unexpired (ISO expiry),<br/>single-use unlink?"}
     C -->|push| G2{grant file: branch + expected-head<br/>+ remote bound?}
-    C -->|merge| G3{CLAUDE_MERGE_COMMAND_ACTIVE env<br/>set by /merge?}
+    C -->|merge| G3{"env=1 + merge-analyst grant:<br/>repo_root+branch+source/default tip?"}
     C -->|reset --hard| G4[blocked by default in agent flow]
 
     G1 -->|yes| OK[(allow, then unlink commit grant)]
@@ -246,7 +246,7 @@ Note: `pretool-bulk-commit-detector.py` is warn-only — it exits 0 and never bl
 |---|---|---|---|---|
 | `pretool-bash-safety.sh` | PreToolUse Bash | stash-buffer, wide checkout (-- . / -- *), git restore --source -- ., reset --hard | BLOCK (exit 2) | /do or matching /allow |
 | `pretool-bulk-commit-detector.py` | PreToolUse Bash | 93-file 'sync all uncommitted' shape (3+ subsystems + sync subject) | WARN only (exits 0) | N/A — warn-only per current policy |
-| `pretool-git-privilege-guard.py` | PreToolUse Bash | commit, push (any form), merge, reset --hard, direct ref mutation | BLOCK (exit 2) | /commit or /push grant, or /allow (subagents); /do (main agent only) |
+| `pretool-git-privilege-guard.py` | PreToolUse Bash | commit, push (any form), merge, reset --hard, direct ref mutation | BLOCK (exit 2) | /commit, /push, or /merge grant, or /allow (subagents); /do (main agent only) |
 | `pretool-orchestrator-gate.py` | PreToolUse (all tools) | Non-whitelisted tools in main-agent context; streak rate-limit | BLOCK (rate-limited) | /do |
 | `pretool-tool-policy.py` | PreToolUse Write | Role-scoped deny rules from policies/tool-policy.v1.json | FAIL CLOSED (non-dev roles); fail-safe ALLOW (dev role when policy missing) | N/A |
 | `stop-overnight-timelock.py` | Stop | Early session termination before declared end-time | BLOCK (exit 2) | /stop at or after end-time; defaults to 8h if no end-time set |
@@ -343,7 +343,7 @@ The orchestrator dispatches specialists by *describing the problem* — never th
 | **Quality** | `/test` | Test workflow (execute + validate). | You need the test suite executed and its results validated. |
 | **Control** | `/do` | Break-glass consent for the main agent, one turn (never a subagent); does not silence the bulk-commit warning. | Main agent must break the rules for one entire turn. |
 | **Control** | `/allow` | Structured single-use break-glass grant for one specific operation. | Green-light one specific blocked operation, a single time. |
-| **Control** | `/restart` | Resume every quota-interrupted subagent from its original transcript and ID. | A session/usage limit interrupted one or more running subagents. |
+| **Control** | `/restart` | Resume every quota-interrupted subagent from its original transcript and ID; with no recoverable subagent, continue the invoking session's own main agent. Optional trailing text is carried verbatim as guidance for the next phase. | A session/usage limit interrupted running subagents — or interrupted a session that had none, leaving only the main agent to continue. |
 | **Control** | `/stop` | Cancel an overnight session. | Mid-overnight, to abort a running session. |
 | **Control** | `/codex` | OpenAI Codex adversarial delegation. | You want an adversarial second opinion from an outside model. |
 | **Control** | `/paseo-daemon` | Multi-session monitoring and three-account scheduling control plane. | Bootstrapping or advancing the persistent scheduling state machine. |

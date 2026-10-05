@@ -490,6 +490,16 @@
         ]
       },
       {
+        "matcher": "Write|Edit|MultiEdit|NotebookEdit|Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"{{CLAUDE_HOME}}/hooks/pretool-attribution-pre.py\"",
+            "timeout": 30
+          }
+        ]
+      },
+      {
         "matcher": "Write|Edit|NotebookEdit|MultiEdit",
         "hooks": [
           {
@@ -639,6 +649,16 @@
           {
             "type": "command",
             "command": "python3 \"{{CLAUDE_HOME}}/hooks/posttool-overnight-loop.py\""
+          }
+        ]
+      },
+      {
+        "matcher": "Write|Edit|MultiEdit|NotebookEdit|Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"{{CLAUDE_HOME}}/hooks/posttool-attribution-post.py\"",
+            "timeout": 30
           }
         ]
       },

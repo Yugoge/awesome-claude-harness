@@ -55,15 +55,12 @@ accepts only an optional remote and `--auto` for non-interactive lock handling.
 
 `/push` requires SOME valid push-gate token to exist proving a real `/commit` happened on this
 branch — written by ANY session, not necessarily this one, and its recorded commit need only be
-an ANCESTOR of current HEAD, not equal to it. (Changed 2026-09-24: this gate used to require the
-token to belong to the calling session AND its `commit_sha` to equal HEAD exactly. On a branch
-shared by many concurrent sessions with no push coordination between them, that meant any
-session's token was invalidated by literally anyone else's next commit, even though nothing was
-lost — the original commit stayed safely in history, just no longer the tip. The property this
-gate actually needs to prove is "did a real `/commit` produce something still part of HEAD's
-history" — an ancestor check proves that exactly as well as equality, and doesn't require the
-token to be *this session's own* or *the newest one*, since there is no cross-tenant boundary
-here to enforce: one machine, one user, many cooperating sessions.)
+an ANCESTOR of current HEAD, not equal to it. The token need NOT belong to the calling session and
+its `commit_sha` need NOT equal HEAD: on a branch shared by many concurrent sessions, equality would
+let any session's next commit invalidate every other session's token although nothing was lost. The
+gate proves only that a real `/commit` produced something still part of HEAD's history; an ancestor
+check proves that as well as equality does, and there is no cross-tenant boundary to enforce (one
+machine, one user, many cooperating sessions).
 
 Token base directory: `/tmp/agentic-commit/push/<repo-hash>/`
 
@@ -73,7 +70,7 @@ Token base directory: `/tmp/agentic-commit/push/<repo-hash>/`
   `sha256(<raw session id>).hexdigest()[:16]` (raw session id: `CLAUDE_CODE_SESSION_ID`, else
   `CLAUDE_SESSION_ID`, else the literal `unknown`; digested because it becomes a path segment and
   a raw value could contain `/`/`..` or collide with another id). This keeps two sessions
-  committing back-to-back from contending for one write slot (2026-09-04 fix, unchanged).
+  committing back-to-back from contending for one write slot.
   A legacy session-less path, `<repo-hash>/<branch-encoded>.json`, still exists from
   pre-migration `/commit` runs and is treated as just another candidate now (see below) — no
   special-casing needed.
@@ -140,7 +137,7 @@ fi
 # Explicit user-provided remote argument overrides the above
 ```
 
-**Step 1: Validate push-gate token (Chain A — existing, relaxed 2026-09-24)**
+**Step 1: Validate push-gate token (Chain A — cross-session, ancestor-based)**
 
 This is the existing session commit prerequisite check, now cross-session and ancestor-based
 (see Session commit prerequisite above for the full rationale). Scan every `<branch-encoded>.json`
@@ -211,7 +208,7 @@ atomically, and exec's push.sh — all in a single process. See Step 5.
 > 60-second mtime gate in `push.sh` cannot survive two sequential agent dispatch delays
 > (30-90s each). The orchestrator MUST run the bash invocation below directly.
 
-Per task 20260519-211515 R1 / AC1, validate-push and the actual push MUST be a
+validate-push and the actual push MUST be a
 **single-process exec pattern** — `execute-push.py` writes a Chain-B success
 sentinel at
 `/tmp/agentic-commit/push-analyst/<REPO_HASH>/<BRANCH_ENCODED>-chainB.validated.sentinel.json`
@@ -256,14 +253,11 @@ datetime, pathlib). This matches the `Bash(python3:*)` allow entry in settings.j
 ## Push-analyst grant TTL
 
 The push-analyst writes its Chain-B grant with a default TTL of
-`PUSH_ANALYST_GRANT_TTL_SECONDS = 600` seconds (10 minutes) — raised from 120s
-to 180s in task 20260519-211515 R4 / AC4, then raised from 180s to 600s in task
-dev-20260527-063758-T3 to cover the full orchestrator → push-analyst →
-orchestrator result-processing → execute-push.py round trip, which frequently
-exceeded the previous 180s window. The 600s TTL is the named constant defined in
-`agents/push-analyst.md` Phase 7. The commit-grant mechanism at
-`scripts/write-commit-grant.py` (`GRANT_TTL_MINUTES = 30`) is a DIFFERENT
-mechanism and has since been updated to 30.
+`PUSH_ANALYST_GRANT_TTL_SECONDS = 600` seconds (10 minutes), sized to cover the full
+orchestrator → push-analyst → orchestrator result-processing → execute-push.py round
+trip. The 600s TTL is the named constant defined in `agents/push-analyst.md` Phase 7.
+The commit-grant mechanism at `scripts/write-commit-grant.py`
+(`GRANT_TTL_MINUTES = 30`) is a DIFFERENT mechanism with its own TTL.
 
 ## Related
 

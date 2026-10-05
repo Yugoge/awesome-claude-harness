@@ -6,16 +6,11 @@
 # OPT-IN-RUNNABLE behind a `generated` pytest marker, with the generated tree not
 # collected by the DEFAULT run.
 #
-# Default-run baseline, measured 2026-09-06: 63 failed, 3531 passed, 1 skipped,
-# 13 xfailed, 8 xpassed, 87 subtests passed in ~1230s. The run is NOT green, and
-# has not been since well before this measurement: all 63 failures reproduce on a
-# pristine `git archive HEAD` tree (identical node-id set), so they are inherited,
-# not working-tree damage. They are 50 in tests/test_public_core_residue_gate.py,
-# 12 in hooks/tests/test_allowlist_consolidation.py (a missing per-account venv
-# interpreter, plus one test encoding a settings policy the project has since
-# superseded), and 1 in tests/test_release_pipeline_contract.py. Re-measure before
-# quoting these numbers; an earlier baseline here (1250 passed / 9 xpassed) sat
-# stale long enough to mislead.
+# Default-run failure baseline: NOT recorded here. The set of inherited failing
+# node-ids is machine generated into tests/baselines/default-run-failures.json by
+# `python scripts/gen-test-baseline.py generate` (and compared at runtime with
+# `python scripts/gen-test-baseline.py check`, which fails only on node-ids absent
+# from the baseline). Never hand-edit counts or ids; regenerate.
 #
 # Mechanism (standard pytest, no hacks):
 #   * pytest_ignore_collect  — the default run never DESCENDS into tests/generated,

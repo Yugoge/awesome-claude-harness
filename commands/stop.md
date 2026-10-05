@@ -41,10 +41,4 @@ The wrapper invokes `~/.claude/scripts/break-overnight-lock.py`. Sentinel enforc
 
 ## Why this command exists
 
-The `/dev-overnight` time-lock prevents premature termination by design — but several edge cases trap the user for hours despite no productive work being possible:
-
-- Argparse rejects `+0.5h` and falls back to default 8h (no way to shorten)
-- Step 1 dev-registry sentinel write fails on `.claude` symlink topology, blocking all forward progress
-- Hook-edit guard prevents the orchestrator from fixing the blocking hook itself
-
-In any of these cases, `/stop` is the user's emergency release valve. Manual fallback (edit state file by hand, kill session forcibly) remains available but is no longer required.
+The `/dev-overnight` time-lock prevents premature termination by design. When the lock itself blocks forward progress (a lock that cannot be shortened, a blocked prerequisite write, or a guard that stops the orchestrator from repairing the blocking component), `/stop` is the user's emergency release valve. Manual fallback (edit state file by hand, kill session forcibly) remains available but is not required.

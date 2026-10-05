@@ -32,11 +32,10 @@ a caller (`hooks/lib/subagent_restart.py::capability_token`, `::guidance_path`).
 Persistence is strictly additive and cannot cost you the recovery itself: the
 capability is minted FIRST, and a guidance write that fails — including text
 this host cannot encode — degrades to a warning naming the failure, leaves the
-capability standing, and still exits 0. The earlier ordering could deny the
-capability outright, and a **bare** invocation carrying no guidance at all was
-reachable that way whenever a stale guidance file could not be removed; since
-the state most likely to be stale is what a quota interruption leaves behind,
-that put the failure squarely on the path this command exists to serve.
+capability standing, and still exits 0. A guidance-side failure (including an
+unremovable stale guidance file) must never deny the capability, bare invocations
+included: quota interruptions leave stale state behind, and this is the path the
+command exists to serve.
 
 <a id="guidance-binding"></a>**Guidance binding.** The reader derives the name
 it opens from the live capability alone, never from anything a file claims
