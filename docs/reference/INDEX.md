@@ -1,8 +1,8 @@
 # reference
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-10-05T17:15:47Z*
-**Total entries**: 57
+*Last updated: 2026-10-05T17:29:15Z*
+**Total entries**: 58
 **Convention**: kebab
 
 ## Tree
@@ -61,6 +61,7 @@ reference/
 ├── `subagentstop-payload-s0-measurement-20260929.md` - SubagentStop payload availability — S0 measurement (2026-09-29)
 ├── `test-suite-overhaul-plan.md` - Test Suite Overhaul Plan (Plan-of-Record)
 ├── `tmp-cleanup-convention.md` - Ad-hoc scratch directory convention
+├── `tmpfs-persistent-backups-20261005.md` - Persistent-disk backups of the tmpfs-only checkout (2026-10-05)
 ├── `venv-repair.md` - venv-repair — restoring `~/.claude/venv` when interpreter symlinks break
 ├── `workflow-bookmark-orphans-20261005.md` - Root-level `workflow-*.json` bookmarks have no lifecycle management; 22/22 are orphans
 ├── `workspace-disposition-criteria-20261005.md` - Workspace disposition criteria, and the five verdicts that existed only in a transcript
