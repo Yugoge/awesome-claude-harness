@@ -180,6 +180,7 @@
       "mcp__memory-server__open_nodes",
       "mcp__memory-server__read_graph",
       "mcp__memory-server__search_nodes",
+      "mcp__paseo__*",
       "mcp__playwright__*",
       "Bash(/root/bin/session-link-sync.sh:*)",
       "Bash(/root/bin/paseo-timeline-healer.mjs:*)",
@@ -612,7 +613,7 @@
         ]
       },
       {
-        "matcher": "mcp__playwright__browser_run_code",
+        "matcher": "mcp__playwright__browser_run_code|mcp__paseo__browser_run_code",
         "hooks": [
           {
             "type": "command",
@@ -766,7 +767,7 @@
         ]
       },
       {
-        "matcher": "mcp__playwright__browser_run_code",
+        "matcher": "mcp__playwright__browser_run_code|mcp__paseo__browser_run_code",
         "hooks": [
           {
             "type": "command",
