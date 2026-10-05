@@ -1,8 +1,8 @@
 # reference
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-10-05T13:50:52Z*
-**Total entries**: 50
+*Last updated: 2026-10-05T15:04:30Z*
+**Total entries**: 51
 **Convention**: kebab
 
 ## Tree
@@ -47,6 +47,7 @@ reference/
 ├── `paseo-daemon-teachings-20260910.md` - paseo-daemon 控制器教训合并与运行契约（2026-09-10）
 ├── `positioning.md` - Positioning
 ├── `push-gate-reconciliation-decision.md` - Push-gate reconciliation — decision to keep
+├── `qa-status-gate-gap-orchestrator-side-20261005.md` - The QA-verdict gate does not cover the orchestrator — still open 2026-10-05
 ├── `quarantine-record-dev-20260915-020044.md` - Quarantine record: phantom `/dev` cycle `dev-20260915-020044`
 ├── `recoverable-discard-register-20261005.md` - Recoverable-discard register — 2026-10-05 tree-to-zero campaign
 ├── `rename-execution-plan.md` - Rename execution plan — `awesome-claude-harness` → `claude-code-guardrails`
