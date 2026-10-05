@@ -1,8 +1,8 @@
 # tests
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-09-23T19:05:56Z*
-**Total entries**: 133
+*Last updated: 2026-10-05T03:52:08Z*
+**Total entries**: 138
 **Convention**: kebab
 
 ## Tree
@@ -102,6 +102,7 @@ tests/
 ├── `test_ac_deviation_fanout_consumer.py` - records and the lifecycle presentation of ``pass_with_exceptions``
 ├── `test_ac_deviation_record_chain.py` - A dev report that legitimately records an acceptance-criteria deviation is
 ├── `test_aggregate_dev_report.py` - Unit tests for scripts/aggregate-dev-report.py
+├── `test_aggregate_dev_report_hook_ledger.py` - ledger (backlog #122 M3): scripts/aggregate-dev-report.py's len(shards_info)
 ├── `test_aggregate_dev_report_superseded_rounds.py` - aggregate dev-report silently dropped a retried lane's superseded round(s)'
 ├── `test_bash_write_targets_verb_narrowing.py` - The library used to read a word that merely begins `cp-`/`mv-` (a checkpoint id such as `cp-01`, a
 ├── `test_candidate_tree.py` - Every test builds its own throwaway git repository. None of them reads this
@@ -112,22 +113,26 @@ tests/
 ├── `test_codex_workflow_gate.py` - Regression tests for Codex-native workflow-plan compatibility.
 ├── `test_commit_multi_repo_plan.py` - Python script
 ├── `test_commit_sh_reachability.py` - commands/dev-overnight.md:1561 previously called a bare, unqualified
+├── `test_completeness_channel_invariant.py` - One defect with a producer half and a consumer half:
 ├── `test_dev_artifact_chain_consumer_contracts.py` - Contract tests for shared /dev artifact-chain consumers.
 ├── `test_empty_old_string_diagnosis.py` - A real cycle emitted twenty-one ledger entries whose `old` was the empty string
 ├── `test_git_clean_guard_vectors.py` - The pre-clean WIP snapshot guard (task dev-20260719-150041-c, lane r03-c) is
 ├── `test_graphify_scripts.py` - tests/test_graphify_scripts.py — smoke tests for scripts/graphify_lib.py
 ├── `test_graphify_workflow_contract.py` - tests/test_graphify_workflow_contract.py — contract tests for graphify agent registration
 ├── `test_hero_advance_cross_check.py` - tools/demo/audit.mjs measures a line's rendered right edge on a fixed monospace grid, using
+├── `test_interruption_signals.py` - Every banner asserted here was measured in the real transcript corpus under
+├── `test_late_repair_driftfree_effective_state.py` - scripts/late-repair-controller.py's ``resolve_effective_report_state`` is the
 ├── `test_no_artificial_lifecycle_ceremony.py` - Prevent host metadata ceremonies from becoming ordinary lifecycle gates.
 ├── `test_overnight_guard_in_place_git.py` - Defect (2026-08-09): `hooks/pretool-overnight-hook-guard.py` blocked EVERY git
 ├── `test_overnight_loop_tz.py` - Verifies the overnight loop hook compares end_time correctly against the
-├── `test_owned_edits_ledger_contract.py` - Every negative fixture here is REDUCED FROM AN ARTIFACT THAT ACTUALLY SHIPPED --
 ├── `test_paseo_daemon_ledger.py` - MANDATORY pytest facade for lane 20260828-112025-b: collects EVERY test
+├── `test_paseo_daemon_timers.py` - scripts/paseo-daemon-timers.py (task 20260926-111239)
 ├── `test_paseo_usage_read.py` - MANDATORY pytest facade for lane 20260828-112025-b: collects EVERY test
 ├── `test_prompt_workflow_injection_cadence.py` - The defect: ``build_overnight_continuation`` emitted ONE payload at ONE cadence
 ├── `test_prompt_workflow_liveness_tz.py` - Two defects, both reproduced before this suite was written:
 ├── `test_public_core_residue_gate.py` - These are the discriminating controls for the "Make CI FAIL (not advisory) on
 ├── `test_release_pipeline_contract.py` - verifier
+├── `test_repair_map_call_site_coverage.py` - (ticket-20261001-161041-r19)
 ├── `test_resolve_dev_artifact_chain.py` - Focused tests for the read-only /dev artifact-chain resolver.
 ├── `test_resolve_spec_artifacts.py` - resolver) + the static centralization lint (AC-B4 cases 1-12, task 20260530-092123)
 ├── `test_restart_command.py` - End-to-end unit coverage for the human-only /restart recovery protocol.
