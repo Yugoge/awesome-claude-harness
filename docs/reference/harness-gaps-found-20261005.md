@@ -105,6 +105,29 @@ reference emptiness.
 
 ---
 
+## 5. Two paired disclosure lines can contradict each other
+
+Commit `7f04e60df` carries, for the same path, both:
+
+```
+Co-authored-source: hooks/doc_sync/INDEX.md <- sessions dcc6e2e4…, e9e03683…, 2b3b6297…
+Attribution-basis:  hooks/doc_sync/INDEX.md (undetermined — attribution-chain verdict CONTINUOUS_TAIL_MISMATCH)
+```
+
+One line names three contributing sessions; the next says attribution could not be
+determined. The `Co-authored-source` line was carried over from an earlier batch's
+session list. The landing seat caught this itself and disclosed it rather than
+hiding it; it was left un-amended because the committed content is correct and
+amending would rewrite history for a message-only defect.
+
+The point is not the slip. It is that **the two lines are generated into the same
+message with nothing comparing them**, so a contradiction between them survives into
+permanent history — inside the very machinery whose purpose is to make attribution
+trustworthy. Whatever generates these should refuse to emit a `Co-authored-source`
+list for a path whose `Attribution-basis` is `undetermined`.
+
+---
+
 ## Common shape
 
 Three of the four are the same defect class: **a declaration and the thing it points

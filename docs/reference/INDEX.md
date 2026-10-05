@@ -1,8 +1,8 @@
 # reference
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-10-05T09:11:00Z*
-**Total entries**: 46
+*Last updated: 2026-10-05T10:05:51Z*
+**Total entries**: 48
 **Convention**: kebab
 
 ## Tree
@@ -18,6 +18,7 @@ reference/
 ├── `close-commit-zero-failure-mechanism-20260928.md` - Close/commit zero-failure mechanism — converged design (2026-09-28/29)
 ├── `codex-sandbox-verification.md` - Codex CLI Sandbox Verification Report
 ├── `commit-dryrun-close-gate-ruling.md` - /commit dry-run close-gate relaxation: ruling record
+├── `commit-gate-bypass-via-background-exec-20261005.md` - Commit gate bypassed by background execution — 2026-10-05
 ├── `controller-error-taxonomy-20260924.md` - 控制器错误归纳（2026-09-24 夜 spec 台席会话）
 ├── `core-context-refactor-plan.md` - Core Context Refactor Plan (Plan-of-Record)
 ├── `dev-command-20261003-020648-takeover-record.md` - Takeover record — cycle `dev-command-20261003-020648` over interrupted `dev-command-20261002-170011`
@@ -27,6 +28,7 @@ reference/
 ├── `graphify-integration.md` - Graphify Knowledge Graph Integration
 ├── `harness-defects-20260906-controller.md` - 控制器实测缺陷记录 — 2026-09-06
 ├── `harness-fix-status-20260905.md` - Harness fix status — R1..R20 of `spec-20260904-harness-fixes.md`
+├── `harness-gaps-found-20261005.md` - Harness gaps found during the 2026-10-05 tree-to-zero campaign
 ├── `harness-issues-backlog.md` - 待下次 spec 处理的 harness 问题清单（当前有 harness 修复在 worktree 跑，新问题只记录不并行修）
 ├── `install-compatibility-matrix.md` - Install compatibility matrix
 ├── `lane-pol-catchup-plan-20260808-035658-lanepolcatchup.md` - LANE-POL Catch-Up Plan — origin/master → fix/dev-fanout-gatekeeper-20260717
