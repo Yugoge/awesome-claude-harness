@@ -1,0 +1,356 @@
+{
+ "request_id": "dev-20260927-135305-r05",
+ "task_id": "dev-20260927-135305-r05",
+ "lane": "r05-transform-screen",
+ "lane_suffix": "r05",
+ "parent_cycle": "dev-20260927-135305",
+ "timestamp": "2026-09-30T01:33:55.984599+00:00",
+ "report_kind": "COMPLETION_AND_VERIFICATION - the implementation was landed by a previous attempt that died without a terminal report; this agent authored ZERO bytes of repository code and only verified and reported.",
+ "baseline_head_sha": "025f4c8ace1bd6e80b91761e18bf50b343297a67",
+ "baseline_dirty_snapshot": "71 paths at dispatch. Several are other sessions' concurrent work and belong to no lane of this cycle, including hooks/lib/contract_runtime.py, hooks/lib/obligation.py, schemas/registry.json, schemas/INDEX.md, schemas/dev-report.v2.json, schemas/obligation.v1.json, schemas/qa-report.v2.json and several hooks/tests/ and docs/reference/ additions.",
+ "_baseline_dirty_snapshot_note": "HONESTY FLAG: the dispatch supplied this as a PROSE SUMMARY, not raw `git status --porcelain` output. Copied verbatim as received; NOT refreshed or recomputed (refreshing would capture this session's instant and wrongly exclude concurrent peer work). Independent control: `git status --porcelain | wc -l` = 71 at 2026-09-30T01:29:24Z, matching the stated count.",
+ "dev_report_path": "docs/dev/dev-report-dev-20260927-135305-r05.json",
+ "_ownership_evidence_provenance": {
+  "grade": "RECONSTRUCTED - NOT CAPTURED",
+  "why": "This agent did not author the edits and could not capture pre-edit state. The dead attempt wrote no owned-edits ledger. Presenting reconstruction as capture would be the exact failure this cycle exists to eliminate.",
+  "derivation_method": "pre_edit := blob(r01.pre_edit_snapshots[path]) with r01.owned_edits[path] applied in recorded order by unique content substitution. All 26 r01 edits (13 per file) located EXACTLY ONCE in their pre-edit blobs, so the replay is unambiguous.",
+  "inputs_used": [
+   "docs/dev/dev-report-dev-20260927-135305-r01.json (pre_edit_snapshots, owned_edits)",
+   "git blob 5418c5ea3749c48a12c50b59b2cbf106b50f836c (r01 pre-edit, scripts/stage-owned-hunks.py)",
+   "git blob b31fcc50b76dc281767b66a00cd75b3418190e3d (r01 pre-edit, tests/test_stage_owned_hunks_boundary.py)"
+  ],
+  "soundness_control": "Both r01 pre-edit blobs DIFFER from the committed baseline blobs (ee0e9f93fe7ea86b2e8e770eb3a3f0b6fe4148bf, 3f7a1ac002c9841291c51fdd70389d8e08678aa4), confirming both files were already dirty before this cycle began. That is why the pre-existing attribute-value filter screen r05 removed is ABSENT from the committed baseline: it lived in the pre-cycle dirty tree, not in HEAD.",
+  "residual_gap_declared": "r05's hunks are DIFF-DERIVED, not authorship-recorded. A diff cannot separate two authors touching disjoint regions of one file. Lane r03 landed ~1395 lines into this file at 2026-09-30T01:23:51Z DURING this verification. Two opcodes were positively identified as r03's by content (--classify/--escalation-store argparse flags; the _classify_main dispatch) and are DROPPED rather than claimed. A third opcode merged r03's insertion with r05's screening block and was split by content anchor. NOTE: opcode SIZE is not a usable discriminator here - two r03 opcodes (+19, +11) coincide exactly in size with two r05 opcodes; content is the only reliable discriminator, and this report used content.",
+  "r03_opcodes_dropped": 2,
+  "attribution_instants": {
+   "r05_delta_characterised": "2026-09-30T01:14:58Z (file 2968 lines)",
+   "r03_landing_observed": "2026-09-30T01:23:51Z (file 4393 lines)",
+   "invariants_reverified": "2026-09-30T01:24:50Z"
+  }
+ },
+ "pre_edit_snapshots": {
+  "scripts/stage-owned-hunks.py": {
+   "grade": "RECONSTRUCTED",
+   "blob_sha1": "e36434430d2004215189ac4ae20f687b8f3b1ef8",
+   "sha256": "ad53571bdf49912f140bd2ef5eacd00df4378fbeac269b462f44ec62494d5d39",
+   "lines": 2715,
+   "derived_from": "blob 5418c5ea3749c48a12c50b59b2cbf106b50f836c + r01's 13 owned edits",
+   "not_in_object_store": "derived image; `git cat-file` will NOT resolve this sha1"
+  },
+  "tests/test_stage_owned_hunks_boundary.py": {
+   "grade": "RECONSTRUCTED",
+   "blob_sha1": "eca8a6ded86ef101ab606a8595599619009c5bc1",
+   "sha256": "cdee1f0c517b8e31e2dc86406adce267205d55562758a83e91aa6f7c441cac4c",
+   "lines": 1060,
+   "derived_from": "blob b31fcc50b76dc281767b66a00cd75b3418190e3d + r01's 13 owned edits",
+   "not_in_object_store": "derived image; `git cat-file` will NOT resolve this sha1"
+  }
+ },
+ "owned_edits": {
+  "scripts/stage-owned-hunks.py": [
+   {
+    "old": "        return _excluded(\"declared path blob does not match checkpoint tree\")\n    rc, base_bytes, _ = _git(git_root, [\"show\", \"%s:%s\" % (base, rel)])\n    rc2, end_bytes, _ = _git(git_root, [\"show\", \"%s:%s\" % (end, rel)])\n    if rc or rc2 or any(_is_binary(data) for data in (base_bytes, end_bytes)):\n        return _excluded(\"binary or unreadable checkpoint path\")\n",
+    "new": "        return _excluded(\"declared path blob does not match checkpoint tree\")\n    rc, base_bytes, _ = _git(git_root, [\"show\", \"%s:%s\" % (base, rel)])\n    rc2, end_bytes, _ = _git(git_root, [\"show\", \"%s:%s\" % (end, rel)])\n    # Not the screening stage's concern: these are COMMIT-TREE blobs the stage\n    # never sees, and the question is whether they are hunk-splittable at all,\n    # not whether check-in conversion would alter a candidate image.\n    if rc or rc2 or any(_is_binary(data) for data in (base_bytes, end_bytes)):\n        return _excluded(\"binary or unreadable checkpoint path\")\n",
+    "attribution_grade": "RECONSTRUCTED",
+    "unique_in_pre_edit": true,
+    "unique_in_worktree": true
+   },
+   {
+    "old": "    return _rewrite_patch_paths(proc.stdout, rel), \"\"\n\n\ndef _tracked_mode(git_root, rel):\n    rc, out, _ = _git(git_root, [\"ls-files\", \"-s\", \"--\", rel])\n    if rc or not out:\n        return None\n    try:",
+    "new": "    return _rewrite_patch_paths(proc.stdout, rel), \"\"\n\n\ndef _tracked_mode(git_root, rel, env=None):\n    # `env` is passed through ONLY when supplied, so the two-positional call\n    # shape every existing caller (and every existing `_git` stub) relies on is\n    # unchanged.\n    args = [\"ls-files\", \"-s\", \"--\", rel]\n    rc, out, _ = _git(git_root, args, env=env) if env else _git(git_root, args)\n    if rc or not out:\n        return None\n    try:",
+    "attribution_grade": "RECONSTRUCTED",
+    "unique_in_pre_edit": true,
+    "unique_in_worktree": true
+   },
+   {
+    "old": "    rel = ns.file\n    worktree_path = os.path.join(ns.git_root, rel)\n    worktree = _read_bytes(worktree_path)\n    if _is_binary(worktree):\n        return _excluded(\"binary current worktree path: %s\" % rel)\n    index_mode = _tracked_mode(ns.git_root, rel)",
+    "new": "    rel = ns.file\n    worktree_path = os.path.join(ns.git_root, rel)\n    worktree = _read_bytes(worktree_path)\n    # Not the screening stage's concern: hunk-splittability, not conversion.\n    if _is_binary(worktree):\n        return _excluded(\"binary current worktree path: %s\" % rel)\n    index_mode = _tracked_mode(ns.git_root, rel)",
+    "attribution_grade": "RECONSTRUCTED",
+    "unique_in_pre_edit": true,
+    "unique_in_worktree": true
+   },
+   {
+    "old": "                return _excluded(\"live segment %d snapshot must be a string\" % number)\n            snapshot = snapshot_value.encode(\"utf-8\")\n            edits = segment.get(\"owned_edits\")\n            if _is_binary(snapshot):\n                return _excluded(\"binary live snapshot for %s\" % rel)\n            replay, error = _replay_live(snapshot, edits, rel)",
+    "new": "                return _excluded(\"live segment %d snapshot must be a string\" % number)\n            snapshot = snapshot_value.encode(\"utf-8\")\n            edits = segment.get(\"owned_edits\")\n            # Not the screening stage's concern: a per-segment HISTORICAL\n            # snapshot, never the image this route intends the index to hold.\n            if _is_binary(snapshot):\n                return _excluded(\"binary live snapshot for %s\" % rel)\n            replay, error = _replay_live(snapshot, edits, rel)",
+    "attribution_grade": "RECONSTRUCTED",
+    "unique_in_pre_edit": true,
+    "unique_in_worktree": true
+   },
+   {
+    "old": "                    \"provenance segment %d does not apply to the composed index: %s\"\n                    % (number, err.strip())\n                )\n        rc, selected, err = _git(\n            ns.git_root,\n            [\"diff\", \"--cached\", \"--binary\", \"--full-index\", \"--\", rel],",
+    "new": "                    \"provenance segment %d does not apply to the composed index: %s\"\n                    % (number, err.strip())\n                )\n        # MODE readback, performed UNCONDITIONALLY -- not only when an approved\n        # digest was supplied. Mode is read from the INDEX ENTRY the route just\n        # wrote, never from the working tree, and compared against the index\n        # mode this route already attested above. A git blob object id does not\n        # encode file mode, so no content comparison can stand in for this.\n        staged_mode = _tracked_mode(ns.git_root, rel, env=env)\n        if staged_mode != index_mode:\n            if not ns.plan_only:\n                _git(ns.git_root, [\"restore\", \"--staged\", \"--\", rel])\n            return _excluded(\n                \"file mode divergence for %s: the index entry records %s after \"\n                \"staging but this route attested %s; nothing is left staged \"\n                \"-> EXCLUDE\" % (rel, staged_mode, index_mode))\n        # The composed image exists only once the segments have been applied,\n        # so it is read back from the index that holds it. Under --plan-only\n        # that index is the temporary one and the real index is still\n        # untouched; otherwise this is the post-apply re-probe and a refusal\n        # unstages what was written.\n        rc_show, composed, err_show = _git(ns.git_root, [\"show\", \":%s\" % rel], env=env)\n        if rc_show:\n            if not ns.plan_only:\n                _git(ns.git_root, [\"restore\", \"--staged\", \"--\", rel])\n            return _excluded(\n                \"%s for %s: the composed index image is unreadable: %s \"\n                \"-> EXCLUDE\" % (SCREEN_INDETERMINATE_PREFIX, rel, err_show.strip()))\n        reason = _screen_checkin_transform(\n            ns.git_root, rel, composed, \"composed index image\")\n        if reason is not None:\n            if not ns.plan_only:\n                _git(ns.git_root, [\"restore\", \"--staged\", \"--\", rel])\n            return _excluded(reason)\n        rc, selected, err = _git(\n            ns.git_root,\n            [\"diff\", \"--cached\", \"--binary\", \"--full-index\", \"--\", rel],",
+    "attribution_grade": "RECONSTRUCTED",
+    "unique_in_pre_edit": true,
+    "unique_in_worktree": true
+   },
+   {
+    "old": "    rc, _, _ = _git(ns.git_root, [\"ls-files\", \"--error-unmatch\", \"--\", rel])\n    if rc == 0:\n        return _excluded(\"untracked-modified target unexpectedly exists in the index\")\n    current = _read_bytes(path)\n    if _is_binary(current):\n        return _excluded(\"binary untracked-modified file is not reviewable as a text patch\")",
+    "new": "    rc, _, _ = _git(ns.git_root, [\"ls-files\", \"--error-unmatch\", \"--\", rel])\n    if rc == 0:\n        return _excluded(\"untracked-modified target unexpectedly exists in the index\")\n    # This route's candidate image IS the whole current file, which the\n    # screening stage in main() has already probed before dispatching here.\n    # Re-probing it would duplicate the predicate for no new information.\n    current = _read_bytes(path)\n    if _is_binary(current):\n        # Not the screening stage's concern: a NUL byte makes the file",
+    "attribution_grade": "RECONSTRUCTED",
+    "unique_in_pre_edit": true,
+    "unique_in_worktree": true
+   },
+   {
+    "old": "        return _excluded(\"untracked-modified target unexpectedly exists in the index\")\n    current = _read_bytes(path)\n    if _is_binary(current):\n        return _excluded(\"binary untracked-modified file is not reviewable as a text patch\")\n    if hashlib.sha256(current).hexdigest() != contract[\"final_sha256\"]:\n        return _excluded(\"current untracked-modified bytes differ from attested final hash\")",
+    "new": "    # Re-probing it would duplicate the predicate for no new information.\n    current = _read_bytes(path)\n    if _is_binary(current):\n        # Not the screening stage's concern: a NUL byte makes the file\n        # unreviewable as a text patch regardless of any conversion, and this\n        # route admits a whole file rather than hunks.\n        return _excluded(\"binary untracked-modified file is not reviewable as a text patch\")\n    if hashlib.sha256(current).hexdigest() != contract[\"final_sha256\"]:\n        return _excluded(\"current untracked-modified bytes differ from attested final hash\")",
+    "attribution_grade": "RECONSTRUCTED",
+    "unique_in_pre_edit": true,
+    "unique_in_worktree": true
+   },
+   {
+    "old": "        if rc or staged != selected:\n            _git(ns.git_root, [\"rm\", \"--cached\", \"--force\", \"--quiet\", \"--\", rel])\n            return _excluded(\"staged untracked-modified patch changed after validation: %s\" % error)\n        sys.stdout.write(json.dumps(payload, sort_keys=True) + \"\\n\")\n        return OK\n    finally:",
+    "new": "        if rc or staged != selected:\n            _git(ns.git_root, [\"rm\", \"--cached\", \"--force\", \"--quiet\", \"--\", rel])\n            return _excluded(\"staged untracked-modified patch changed after validation: %s\" % error)\n        # Stage 3 -- re-probe the blob now in the index, detecting a\n        # configuration that changed after the pre-staging probe.\n        #\n        # MODE IS DELIBERATELY NOT COMPARED HERE, and this is a recorded\n        # decision rather than an omission. This route's contract attests only\n        # an admission enum, a pre_edit and a final SHA-256, and the '??'\n        # status; there is NO attested mode to compare against. A mode does\n        # appear in the artefact this route compares, but both sides of that\n        # comparison derive from the same worktree file, so it is\n        # self-referentially derived and cannot diverge from intent. Inventing\n        # an expected mode here would assert an authority no producer granted.\n        # Lifting this needs an attested `mode` added alongside pre_edit and\n        # final in the contract, which is a producer change this route may not\n        # make on its own.\n        rc_staged, staged_bytes, err_staged = _git(ns.git_root, [\"show\", \":%s\" % rel])\n        if rc_staged:\n            _git(ns.git_root, [\"rm\", \"--cached\", \"--force\", \"--quiet\", \"--\", rel])\n            return _excluded(\n                \"%s for %s: the staged index blob is unreadable: %s -> EXCLUDE\"\n                % (SCREEN_INDETERMINATE_PREFIX, rel, err_staged.strip()))\n        reason = _screen_checkin_transform(\n            ns.git_root, rel, staged_bytes, \"index blob after staging\")\n        if reason is not None:\n            _git(ns.git_root, [\"rm\", \"--cached\", \"--force\", \"--quiet\", \"--\", rel])\n            return _excluded(reason)\n        sys.stdout.write(json.dumps(payload, sort_keys=True) + \"\\n\")\n        return OK\n    finally:",
+    "attribution_grade": "RECONSTRUCTED",
+    "unique_in_pre_edit": true,
+    "unique_in_worktree": true
+   },
+   {
+    "old": "            \"I13-post-apply-mismatch: the staged INDEX entry for %s does not \"\n            \"match the frozen owned-only image; restored the prior index entry \"\n            \"-> EXCLUDE: %s\" % (rel, detail))\n    return OK\n\n",
+    "new": "            \"I13-post-apply-mismatch: the staged INDEX entry for %s does not \"\n            \"match the frozen owned-only image; restored the prior index entry \"\n            \"-> EXCLUDE: %s\" % (rel, detail))\n    # Stage 3 -- re-probe the blob ACTUALLY PRESENT in the index now. The\n    # pre-apply probe answered for the configuration as it stood then; between\n    # that instant and this one another claimant may have changed it, or landed\n    # a combination that was never itself probed. This DETECTS that window; it\n    # does not close it. Closing it needs the reviewed content pinned against\n    # concurrent change, which is not this stage's to do.\n    reason = _screen_checkin_transform(\n        git_root, rel, staged, \"index blob after staging\")\n    if reason is not None:\n        _restore_index_entry(git_root, rel, mode, prior_oid)\n        return _excluded(reason)\n    return OK\n\n",
+    "attribution_grade": "RECONSTRUCTED",
+    "unique_in_pre_edit": true,
+    "unique_in_worktree": true
+   },
+   {
+    "old": "        return _excluded(\n            \"choose checkpoint, composed, or untracked-modified provenance; not multiple\"\n        )\n    if ns.untracked_modified_report:\n        return _untracked_modified_main(ns)\n    if ns.report_sha256:",
+    "new": "        return _excluded(\n            \"choose checkpoint, composed, or untracked-modified provenance; not multiple\"\n        )\n    # Argument misuse is diagnosed BEFORE any content is screened: a malformed\n    # invocation has no candidate bytes worth probing. The predicate carries\n    # `and not ns.untracked_modified_report` because it used to sit AFTER that\n    # route's dispatch and was bare only for that reason -- the untracked route\n    # REQUIRES --report-sha256, so a bare relocation would refuse every\n    # legitimate invocation of it. The message is byte-identical to the\n    # pre-relocation one: this introduces no new refusal, and its cause is an\n    # illegal argument combination rather than a transform, encoding or mode\n    # divergence.\n    if ns.report_sha256 and not ns.untracked_modified_report:\n        return _excluded(\"--report-sha256 is only valid with --untracked-modified-report\")\n\n    # --- THE screening stage: one helper, ONE call site, ahead of every route\n    # dispatch below. Moving any dispatch above this line is the bypass the\n    # structural check in tests/test_stage_owned_hunks_boundary.py detects.\n    screened = _screen_entry_stage(git_root, rel, abspath)\n    if screened is not None:\n        return screened\n\n    if ns.untracked_modified_report:\n        return _untracked_modified_main(ns)\n    if ns.checkpoint_provenance:",
+    "attribution_grade": "RECONSTRUCTED",
+    "unique_in_pre_edit": true,
+    "unique_in_worktree": true
+   },
+   {
+    "old": "        )\n    if ns.untracked_modified_report:\n        return _untracked_modified_main(ns)\n    if ns.report_sha256:\n        return _excluded(\"--report-sha256 is only valid with --untracked-modified-report\")\n    if ns.checkpoint_provenance:\n        if not ns.task_id:\n            return _excluded(\"--task-id is required with checkpoint provenance\")",
+    "new": "\n    if ns.untracked_modified_report:\n        return _untracked_modified_main(ns)\n    if ns.checkpoint_provenance:\n        if not ns.task_id:\n            return _excluded(\"--task-id is required with checkpoint provenance\")",
+    "attribution_grade": "RECONSTRUCTED",
+    "unique_in_pre_edit": true,
+    "unique_in_worktree": true
+   },
+   {
+    "old": "    worktree = _read_bytes(abspath)\n\n    # --- Reject non-hunk-splittable files ----------------------------------\n    if _is_binary(worktree) or _is_binary(snapshot):\n        return _excluded(\"binary file (not safely hunk-splittable): %s\" % rel)\n",
+    "new": "    worktree = _read_bytes(abspath)\n\n    # --- Reject non-hunk-splittable files ----------------------------------\n    # Not the screening stage's concern: this asks whether these two buffers\n    # can be reconstructed byte-for-byte, not whether conversion alters one\n    # image. The pre-edit snapshot is not a candidate the stage ever probes.\n    if _is_binary(worktree) or _is_binary(snapshot):\n        return _excluded(\"binary file (not safely hunk-splittable): %s\" % rel)\n",
+    "attribution_grade": "RECONSTRUCTED",
+    "unique_in_pre_edit": true,
+    "unique_in_worktree": true
+   },
+   {
+    "old": "    if rc_mode == 0 and b\"mode change\" in mode_out:\n        return _excluded(\"mode change present (not hunk-splittable): %s\" % rel)\n\n    # Content-transform (clean/smudge filter) precondition: `git apply --cached`\n    # was empirically shown to reuse the already-transformed pre-existing base\n    # blob while splicing in UNTRANSFORMED new content when a filter attribute is\n    # configured -- neither raw nor transformed comparison of the result can be\n    # safely validated. Fail closed before building/applying any patch, but only\n    # on a POSITIVELY parsed, explicitly-configured value (`git check-attr`'s own\n    # \"<path>: filter: <value>\" format) -- never on rc!=0 or unparseable/empty\n    # output, which would false-positive on every path (e.g. an unrelated test's\n    # blanket `_git` stub) rather than only on a genuinely attributed one.\n    rc_attr, attr_out, _ = _git(git_root, [\"check-attr\", \"filter\", \"--\", rel])\n    attr_value = attr_out.strip().rsplit(b\": \", 1)[-1] if b\": \" in attr_out else b\"\"\n    if rc_attr == 0 and attr_value and attr_value != b\"unspecified\":\n        return _excluded(\n            \"content-transform (filter=) attribute configured for %s -- git \"\n            \"apply --cached output cannot be safely validated -> EXCLUDE: %s\"\n            % (rel, attr_out.decode(\"utf-8\", \"replace\").strip())\n        )\n\n    # New (untracked) file: `git apply --cached` cannot patch a path absent from\n    # the index. A brand-new file is whole-file owned by definition, but staging it",
+    "new": "    if rc_mode == 0 and b\"mode change\" in mode_out:\n        return _excluded(\"mode change present (not hunk-splittable): %s\" % rel)\n\n    # The content-transform precondition that used to sit here decided from a\n    # POSITIVELY parsed attribute VALUE. Evaluated verbatim it refused on a set\n    # answer, on an UNSET answer and on an explicit value, proceeding only on\n    # \"unspecified\" -- so it false-REFUSED the conversion-DISABLING answer while\n    # false-PROCEEDING whenever the query itself failed. It is gone. The\n    # screening stage in main() now covers every route, decides from what\n    # conversion does to the bytes rather than from what the configuration says,\n    # and carries no attribute name in its verdict.\n\n    # New (untracked) file: `git apply --cached` cannot patch a path absent from\n    # the index. A brand-new file is whole-file owned by definition, but staging it",
+    "attribution_grade": "RECONSTRUCTED",
+    "unique_in_pre_edit": true,
+    "unique_in_worktree": true
+   },
+   {
+    "old": "    except OwnedLandingRefusal as exc:\n        return _excluded(_refusal_text(git_root, rel, snapshot, exc))\n\n    if ns.dry_run:\n        # Non-mutating diagnostic. The image identity is emitted so callers have\n        # an oracle that does not require mutating the repository; the object id",
+    "new": "    except OwnedLandingRefusal as exc:\n        return _excluded(_refusal_text(git_root, rel, snapshot, exc))\n\n    # Stage 2 -- the ASSEMBLED CANDIDATE IMAGE, probed before any index or\n    # object-database mutation. Probing the snapshot or the baseline blob is\n    # not a substitute and is never a second verdict source: two buffers can\n    # each be individually invariant under check-in conversion while their\n    # concatenation is not (measured: a base side ending in a bare CR followed\n    # by a side beginning with LF). Only the assembly the index is meant to\n    # hold answers the question. The in-memory buffer is never a file, which is\n    # why the probe declares the path on stdin rather than reading from disk.\n    reason = _screen_checkin_transform(\n        git_root, rel, image, \"assembled owned-only image\")\n    if reason is not None:\n        return _excluded(reason)\n\n    if ns.dry_run:\n        # Non-mutating diagnostic. The image identity is emitted so callers have\n        # an oracle that does not require mutating the repository; the object id",
+    "attribution_grade": "RECONSTRUCTED",
+    "unique_in_pre_edit": true,
+    "unique_in_worktree": true
+   },
+   {
+    "old": "",
+    "new": "# ---------------------------------------------------------------------------\n# Check-in conversion screen.\n#\n# THE LAYER THIS DECIDES AT IS THE WHOLE POINT. Two earlier attempts decided\n# from what the CONFIGURATION SAYS -- an attribute name, or the token an\n# attribute query answers with. Both are wrong in both directions, and the\n# measurement is not subtle: three different attribute names answer the\n# identical leading-dash token and split two-proceed against one-refuse: two\n# of the three leave the bytes untouched, while the third alters them as soon\n# as repository-level conversion is switched on, and the split follows the\n# NAME rather than the token. A token rule would therefore need per-name\n# semantics, i.e. the enumeration this screen exists to abolish -- and the\n# names themselves are exactly what must not appear. So NO attribute name,\n# no configuration token and no answer token appears\n# anywhere below in an expression that determines the verdict.\n#\n# This screen decides from what the conversion DOES to the actual candidate\n# bytes: hash the buffer twice, once with the path declared (so check-in\n# conversion applies) and once raw. Unequal digests mean conversion would\n# alter these exact bytes. That is the entire verdict.\n#\n# TWO OUTCOMES THAT MUST NOT BE CONFLATED, and are textually distinct so a\n# reader learns the distinction here without executing anything:\n#   * TRANSFORM OBSERVED  -- the two digests differ. A transform provably\n#     exists for this buffer.\n#   * COULD NOT BE COMPLETED -- the probe did not return a usable answer\n#     (non-zero exit, death by signal, unparsable output, or exceeding the\n#     bounded timeout below). UNPROVEN IS NOT ABSENT; it is also not proof\n#     that a transform exists. Both refuse, but only the first asserts a\n#     transform.\n#\n# The probe deliberately does NOT route through `_git`. A test that stubs\n# `_git` wholesale is itself the \"could not be completed\" shape, and routing\n# through it would turn a blanket stub into a refusal on EVERY path. Going\n# direct to the process keeps an unrelated stub from steering this verdict.\n# ---------------------------------------------------------------------------\n_PROBE_TIMEOUT_SECONDS = 30\n\n# Distinct leading phrases. AC7: each names a transform/encoding cause\n# specifically and neither carries peer-conflict or ownership-ambiguity\n# phrasing -- a conversion refusal is never routed to human adjudication.\nSCREEN_TRANSFORM_PREFIX = \"content-transform\"\nSCREEN_INDETERMINATE_PREFIX = \"check-in conversion screening could not be completed\"\n\n\nclass _ScreenIndeterminate(Exception):\n    \"\"\"The probe returned no usable answer. Not a transform; not an absence.\"\"\"\n\n\ndef _hash_object_digest(git_root, data, rel=None):\n    \"\"\"One bounded `git hash-object --stdin` run. With `rel`, the path is\n    declared so check-in conversion applies; without it, the bytes are hashed\n    raw. Nothing is written to the object database.\"\"\"\n    args = [\"git\", \"-C\", git_root, \"hash-object\", \"--stdin\"]\n    args.append(\"--path=\" + rel if rel is not None else \"--no-filters\")\n    try:\n        proc = subprocess.run(args, input=data, stdout=subprocess.PIPE,\n                              stderr=subprocess.PIPE,\n                              timeout=_PROBE_TIMEOUT_SECONDS)\n    except subprocess.TimeoutExpired:\n        raise _ScreenIndeterminate(\n            \"the probe exceeded its %d-second bound\" % _PROBE_TIMEOUT_SECONDS)\n    except OSError as exc:\n        raise _ScreenIndeterminate(\"the probe could not be started: %s\" % exc)\n    if proc.returncode < 0:\n        raise _ScreenIndeterminate(\n            \"the probe died on signal %d\" % -proc.returncode)\n    if proc.returncode != 0:\n        raise _ScreenIndeterminate(\n            \"the probe exited %d: %s\" % (\n                proc.returncode,\n                proc.stderr.decode(\"utf-8\", \"replace\").strip() or \"no detail\"))\n    digest = proc.stdout.strip().decode(\"ascii\", \"replace\")\n    if len(digest) != 40 or any(c not in \"0123456789abcdef\" for c in digest):\n        raise _ScreenIndeterminate(\"the probe emitted unparsable output\")\n    return digest\n\n\ndef _checkin_transform_families(git_root, rel):\n    \"\"\"MESSAGE TEXT ONLY -- never branched on, never part of the verdict.\n\n    `git check-attr --all` is attribute-AGNOSTIC: it is not given any attribute\n    name and simply reports whichever attributes the path declares. It is\n    reached only once a refusal has ALREADY been decided by the digest pair, so\n    its failure can never change an outcome.\n    \"\"\"\n    try:\n        proc = subprocess.run(\n            [\"git\", \"-C\", git_root, \"check-attr\", \"--all\", \"--\", rel],\n            stdout=subprocess.PIPE, stderr=subprocess.PIPE,\n            timeout=_PROBE_TIMEOUT_SECONDS)\n    except (subprocess.TimeoutExpired, OSError):\n        return \"\"\n    if proc.returncode != 0:\n        return \"\"\n    names = []\n    for line in proc.stdout.decode(\"utf-8\", \"replace\").splitlines():\n        # \"<path>: <attribute>: <answer>\" -- take the attribute field as a\n        # LABEL. Nothing is compared against it.\n        parts = line.split(\": \")\n        if len(parts) >= 3 and parts[-2] not in names:\n            names.append(parts[-2])\n    return \",\".join(names)\n\n\ndef _screen_checkin_transform(git_root, rel, data, what):\n    \"\"\"THE screening predicate. One implementation, shared by every stage.\n\n    Returns None to proceed, or a refusal reason. A conversion-DISABLING\n    configuration necessarily probes EQUAL and therefore PROCEEDS: refusing it\n    would make landing harder with no safety gained, which is the opposite of\n    this primitive's purpose.\n    \"\"\"\n    try:\n        declared = _hash_object_digest(git_root, data, rel=rel)\n        raw = _hash_object_digest(git_root, data)\n    except _ScreenIndeterminate as exc:\n        return (\"%s for %s: %s. Unproven is not absent -- this refuses without \"\n                \"asserting that a transform exists -> EXCLUDE\"\n                % (SCREEN_INDETERMINATE_PREFIX, rel, exc))\n    if declared == raw:\n        return None\n    label = _checkin_transform_families(git_root, rel) or \"repository\"\n    return (\"%s (%s=) attribute configured for %s -- check-in conversion would \"\n            \"alter the %s bytes, so what lands would not be what was reviewed \"\n            \"(probe digests differ: %s path-declared vs %s raw) -> EXCLUDE\"\n            % (SCREEN_TRANSFORM_PREFIX, label, rel, what, declared, raw))\n\n\ndef _screen_entry_stage(git_root, rel, abspath):\n    \"\"\"THE screening stage. Exactly ONE call site, in main(), ahead of EVERY\n    route dispatch -- which is the only reason the three non-ledger routes are\n    screened at all: each of them returns directly out of main().\n\n    Returns None to proceed, or EXCLUDE.\"\"\"\n    try:\n        data = _read_bytes(abspath)\n    except OSError as exc:\n        return _excluded(\"%s for %s: the candidate bytes are unreadable: %s \"\n                         \"-> EXCLUDE\" % (SCREEN_INDETERMINATE_PREFIX, rel, exc))\n    reason = _screen_checkin_transform(git_root, rel, data, \"worktree\")\n    if reason is not None:\n        return _excluded(reason)\n    return None",
+    "attribution_grade": "RECONSTRUCTED_CONTENT_ANCHORED",
+    "note": "Extracted by CONTENT ANCHOR from inside one +1541-line diff opcode that lane r03's concurrent landing (2026-09-30T01:23:51Z) merged with r05's screening block. Bounds L2544-L2687: the '# Check-in conversion screen.' banner through the end of _screen_entry_stage (AST end_lineno). 144 lines, unique in the file. r03's material begins at L2690 under its own banner 'Ownership CLASSIFICATION and CONFLICT ESCALATION (spec-20260914-052140 \u00a75.3 boundaries (a) and (c))'. `old` is empty: pure insertion vs the reconstructed pre-edit image.",
+    "unique_in_worktree": true,
+    "sha256_of_new": "d7c60dae7af958cb5e32854c6bee02fd486cb68cace22eb612ef15f119cf0542"
+   }
+  ],
+  "tests/test_stage_owned_hunks_boundary.py": [
+   {
+    "old": "    info_attrs = repo / \".git\" / \"info\" / \"attributes\"\n    info_attrs.parent.mkdir(parents=True, exist_ok=True)\n    info_attrs.write_text(\"%s filter=upper\\n\" % rel, encoding=\"utf-8\")\n\n    own_old = b\"def region_b():\\n    y = 2\\n    return y\\n\"\n    own_new = b\"def region_b():\\n    y = 2\\n    # OWN-EDIT-LINE\\n    return y\\n\"",
+    "new": "    info_attrs = repo / \".git\" / \"info\" / \"attributes\"\n    info_attrs.parent.mkdir(parents=True, exist_ok=True)\n    info_attrs.write_text(\"%s filter=upper\\n\" % rel, encoding=\"utf-8\")\n    # FIXTURE CORRECTION (lane r05-transform-screen). This line is new; every\n    # assertion below is unchanged. The fixture declared `filter=upper` but\n    # never DEFINED the driver, and an undeclared driver makes git perform NO\n    # conversion at all -- measured: the check-in and raw digests of this exact\n    # content are identical under the original fixture. The guard this test was\n    # written against refused it anyway, because it decided from the attribute\n    # VALUE rather than from the conversion. That false refusal is precisely\n    # what this lane removes, so without a real driver the fixture would now\n    # pin the defect instead of the behaviour. Defining the driver makes the\n    # configuration genuinely content-transforming, which is what the docstring\n    # above always claimed it was.\n    git(repo, \"config\", \"filter.upper.clean\", \"tr a-z A-Z\")\n\n    own_old = b\"def region_b():\\n    y = 2\\n    return y\\n\"\n    own_new = b\"def region_b():\\n    y = 2\\n    # OWN-EDIT-LINE\\n    return y\\n\"",
+    "attribution_grade": "RECONSTRUCTED",
+    "unique_in_pre_edit": true,
+    "unique_in_worktree": true
+   }
+  ]
+ },
+ "_owned_edits_note": "EVERY entry is RECONSTRUCTED, never captured. Each was verified to locate EXACTLY ONCE in both the reconstructed pre-edit image and the current worktree at 2026-09-30T01:29Z. Do NOT feed these to scripts/stage-owned-hunks.py as a captured ledger without a human accepting reconstruction-grade attribution for landing.",
+ "criteria_verification": {
+  "method_note": "Each criterion was verified against the DELIVERED CODE by independent measurement, not by trusting the lane's own generated test. Every absence claim is paired with a positive control. Every count names its method, scope and instant.",
+  "AC1": {
+   "verdict": "SATISFIED",
+   "evidence": "Drove the real CLI on all four routes in sandbox repos with a genuine clean filter (filter.up.clean='tr a-z A-Z'). All four exited 10, all four carried the SAME screening refusal reason, `git diff --cached --name-only` was empty in all four. POSITIVE CONTROL: with no attribute configured, no route produced a screening refusal (ledger exited 0; the other three refused for their own route-payload reasons - stale staged content, empty plan segments, malformed report - none of which is a screening refusal). Screen precedence proven structurally (AC6) rather than by stubbing. Measured 2026-09-30T01:19Z.",
+   "exit_code_constant": "EXCLUDE = 10 at scripts/stage-owned-hunks.py:74"
+  },
+  "AC2": {
+   "verdict": "SATISFIED",
+   "evidence": "All five families measured individually: ident ($Id: <40-hex> $ vs none), working-tree-encoding=UTF-16 (UTF-16 bytes vs already-invariant), text (CRLF vs LF), eol (text eol=crlf with CRLF vs LF), crlf=input (CRLF vs LF). In every family the trigger-bearing content yielded UNEQUAL digests and was refused, and the non-triggering content yielded EQUAL digests and proceeded - a legitimate proceed, not a missed detection. My FIRST eol fixture used LF content and correctly did not refuse; that was MY fixture error (eol=crlf is a checkout-side attribute and performs no check-in conversion on already-normalised content), corrected to CRLF content which then refused. Message label comes from `git check-attr --all` (e.g. '(text,eol=)', '(eol=)') and never from a literal attribute name in the verdict path - confirmed by AST scan (AC9).",
+   "measured": "2026-09-30T01:21Z"
+  },
+  "AC3": {
+   "verdict": "SATISFIED",
+   "evidence": "A required clean filter exiting non-zero and one dying by signal both produced exit 10, staged nothing, and emitted 'check-in conversion screening could not be completed', textually DISTINCT from the 'content-transform ...' message that says a transform was observed. The distinction is stated in the source at the screening stage (SCREEN_TRANSFORM_PREFIX / SCREEN_INDETERMINATE_PREFIX, :2585-2586) so a reader learns it without executing anything. NUANCE WORTH RECORDING: the 'death by signal' shape surfaces as a NON-ZERO EXIT of the probe (git reports 'external filter ... failed 137' and itself exits 128), not as a negative returncode, because git mediates the filter. The `proc.returncode < 0` branch at :2608 therefore fires only if git ITSELF is signalled. Both shapes still map to the same could-not-complete outcome, which is what the criterion requires.",
+   "measured": "2026-09-30T01:20Z"
+  },
+  "AC4": {
+   "verdict": "SATISFIED",
+   "evidence": "All six configurations measured against a both-sides-CR pair (content b'a\\r\\nb\\r\\n'). core.autocrlf=true, core.autocrlf=input, text=auto, text+eol=lf and crlf=input each produced UNEQUAL digests, exited 10 and staged nothing. -text produced EQUAL digests and was NOT refused by the screen. The BICONDITIONAL (refusal if and only if the digests differ) held for all six, asserted as one biconditional rather than six independent expected verdicts. Token scan over the IMPLEMENTATION file: 'autocrlf', 'text=auto', 'eol=lf', '-text', 'crlf=input', 'core.autocrlf' -> 0 occurrences each. POSITIVE CONTROL for that absence: the same tokens ARE present in the lane's test fixtures, so the scan is capable of finding them. The pre-existing one-side-only-CR screen still fires unchanged: the -text case exited 10 with 'CRLF/encoding mismatch between snapshot and worktree: f.txt' (:4225-4226), a DIFFERENT screen the widening did not disturb.",
+   "measured": "2026-09-30T01:20-01:21Z"
+  },
+  "AC5": {
+   "verdict": "SATISFIED",
+   "evidence": "Mode readback present on all three required routes. Composed route _composed_main:939-946: `staged_mode = _tracked_mode(ns.git_root, rel, env=env)` compared against the index_mode attested at :741, UNCONDITIONALLY - it sits BEFORE the `ns.approved_sha256` branch at :975, so it is not gated on an approved digest; refusal names the mode divergence and unstages. Checkpoint route inherits it: _checkpoint_main:1004-1020 builds a plan and delegates to _composed_main. Live-ledger route _land_owned_image:2512-2529: `staged_mode` joined into the existing refusal condition with detail 'staged mode X != image mode Y'; the EXISTING byte comparison `staged != image` is still performed with mode ADDED to it, not substituted. All three read mode from the INDEX ENTRY via `git ls-files -s` (_tracked_mode), never from the working tree. Untracked route EXEMPT with the exemption AND its reason recorded in the source at :1266-1276, naming the producer change required to lift it (an attested `mode` alongside pre_edit and final in untracked_modified_provenance) - this satisfies REM-2's interim requirement that it read as a decision rather than an omission."
+  },
+  "AC6": {
+   "verdict": "SATISFIED WITH ONE DEVIATION AND ONE GAP - see deviations_from_pinned_criteria[0] and findings_not_fixed[0]",
+   "evidence": "The screen is ONE named helper (_screen_entry_stage) invoked from EXACTLY ONE call site (measured: screen_call_sites() returns [4184], a single element). No route body duplicates the predicate - the other call sites invoke the SAME shared _screen_checkin_transform helper, which is reuse, not duplication. All FIVE binary-check call sites (:196, :739, :782, :1209, :4226) carry an adjacent stated reason why the question is not the screening stage's concern (the criterion said FOUR; there are five, all annotated - a harmless overage). The executing structural check (tests/generated/dev-20260927-135305-r05/_r05_common.py:151 screen_precedes_every_route_dispatch) asserts precedence and DOES detect bypasses: I confirmed it FAILS against the lane's own crafted mutation AND against four mutations I devised independently (hoist the checkpoint dispatch, hoist the composed dispatch, delete the screen call entirely, move the screen after all dispatches). The two existing filter-screen tests PASS (test_ac5_filter_attribute_precondition_fails_closed_before_patch_build, test_ac5_no_filter_attribute_does_not_trigger_precondition_guard) - but the positive one's FIXTURE was modified; see the deviation entry."
+  },
+  "AC7": {
+   "verdict": "SATISFIED",
+   "evidence": "NEGATIVE conjunct: scanned every refusal produced across all my sandbox runs (9 refusals in the family sweep plus the four-route sweep, the six-configuration sweep and the probe-failure sweep) for 'peer conflict', 'peer-conflict', 'ownership ambiguity', 'ownership-ambiguity', 'ambiguous ownership', 'adjudicat', 'human review', 'conflict resolution' - ZERO hits. POSITIVE CONTROL: the scanner is a plain substring match over the captured stderr and does match those phrases when present. POSITIVE conjunct: every transform refusal names its cause (contains 'transform'/'conversion'/'encoding'). AC6's relocated --report-sha256 guard is REPORTED AS EXEMPT from the positive conjunct, not silently skipped - see reviewer_binding_instruction_compliance."
+  },
+  "AC8": {
+   "verdict": "SATISFIED for the detection obligation; the 'before any index mutation' property holds strictly only on the ledger route - see findings_not_fixed[1]",
+   "evidence": "PREMISE REPRODUCED INDEPENDENTLY: under text=auto, base b'alpha\\r' is invariant under check-in conversion, new b'\\nbeta\\n' is invariant, and their concatenation b'alpha\\r\\nbeta\\n' is NOT. LEDGER route: the assembled owned-only image is probed at main:4340 with the stdin-with-declared-path form, BEFORE the object write (_land_owned_image:2489 `hash-object -w`) and BEFORE the index write (:2503 `update-index --cacheinfo`), so the probe genuinely precedes all mutation. Stage-3 post-apply re-probes of the blob ACTUALLY in the index exist on all three landing routes (_land_owned_image:2536, _composed_main:959, _untracked_modified_main:1283), each restoring the prior index state on refusal. The probed image is named explicitly per route ('assembled owned-only image', 'composed index image', 'index blob after staging', 'worktree'). NEGATIVE CONTROL: with no attribute configured no refusal was produced on any route."
+  },
+  "AC9": {
+   "verdict": "SATISFIED",
+   "evidence": "STRUCTURAL (AST, not grep): the only verdict-determining expression in _screen_checkin_transform is `declared == raw` (:2664) - a pure digest comparison. Across the four screening functions, ZERO string literals contain any of filter/text/eol/crlf/ident/working-tree-encoding as a word, and no answer token ('set'/'unset'/'unspecified') is compared anywhere in the verdict path (0 non-comment occurrences file-wide). The only attribute-name-bearing call is `git check-attr --all` (:2632) which passes NO attribute name (attribute-agnostic) and is reached only at :2666, AFTER the refusal is decided at :2664, so its failure can never change an outcome (it returns '' and falls back to the literal 'repository'). BEHAVIOURAL: all four answers (set via bare `ident`, unset via `-ident`, explicit value via `text=auto`, unspecified via no entry) each produced NO refusal and exit 0 when no actual conversion occurs - so none of them ALONE produces a refusal. The shipped predicate that false-refused on the conversion-disabling answer is GONE: it was replaced by an 8-line comment at :4238-4245 recording that it refused on set, on unset and on an explicit value while proceeding only on 'unspecified', and why it was removed."
+  }
+ },
+ "reviewer_binding_instruction_compliance": {
+  "source": "context.ba_qa_unresolved_objections.unresolved_for_implementation (round 3, iteration guard 3 of 3 exhausted, final_verdict 'fail')",
+  "instruction_1_guard_message_byte_identical": {
+   "verdict": "HONOURED",
+   "measurement": "The literal at baseline 025f4c8a:scripts/stage-owned-hunks.py:1319 and the literal in the delivered file are byte-identical: \"--report-sha256 is only valid with --untracked-modified-report\". Exactly ONE occurrence in each file. No repository test asserts that message text; the only occurrence anywhere under --include=*.py is the source line itself, re-confirmed at 2026-09-30T01:17Z."
+  },
+  "instruction_2_ac7_vacuous_over_ac6": {
+   "verdict": "HONOURED",
+   "measurement": "NOTHING in the delivered source asserts that this guard names a transform cause. The source comment at :4171-4177 states the OPPOSITE explicitly: 'its cause is an illegal argument combination rather than a transform, encoding or mode divergence.' The lane's AC7 test encodes AC6_EXEMPTION with exempt_from='AC7's POSITIVE naming conjunct only', still_bound_by='AC7's NEGATIVE conjunct', and reports the exemption rather than skipping it."
+  },
+  "instruction_3_disregard_ground_4_gloss": {
+   "verdict": "HONOURED",
+   "measurement": "The ticket's Revision-3 ground-4 gloss ('name its actual cause, an illegal argument combination') appears NOWHERE in the delivered implementation. The AC7 test records it under a 'disregarded_gloss' key explicitly marked as disregarded."
+  },
+  "independent_equivalence_measurement": {
+   "verdict": "EQUIVALENT - 8/8",
+   "method": "Built an in-sandbox patched copy of the delivered file with the guard restored to its ORIGINAL shape and position (bare `if ns.report_sha256:` placed immediately AFTER the untracked dispatch) and ran BOTH copies over eight flag combinations (each of the four routes, with and without --report-sha256), each in its own fresh sandbox repository. Exit code and stderr were IDENTICAL in all eight. This independently reproduces the reviewer's 'eight flag combinations, three patched copies' measurement and discharges AC6's check.guard_relocation obligation.",
+   "why_the_conjunct_is_required": "In the baseline the bare guard sat at :1318, immediately AFTER the untracked dispatch at :1316-1317, so it was only ever REACHED when untracked_modified_report was falsy. Its trigger set was therefore {report_sha256 truthy AND untracked falsy AND provenance_inputs<=1}. Conjoining `and not ns.untracked_modified_report` at the earlier position reproduces exactly that set. Without the conjunct the relocated guard would refuse EVERY legitimate untracked invocation, since that route REQUIRES --report-sha256.",
+   "measured": "2026-09-30T01:28Z"
+  },
+  "instruction_4_positive_conjunct_in_check_too": {
+   "verdict": "HONOURED by the lane's AC7 test",
+   "note": "The test asserts BOTH the absence of forbidden phrasing across the range AND that each transform/encoding/mode refusal names its cause, with AC6 listed in POSITIVE_CONJUNCT_EXEMPT rather than omitted."
+  },
+  "instruction_5_rem1_fingerprint_not_number": {
+   "verdict": "NOT EXERCISED",
+   "note": "This lane does not implement the composed-route content readback (REM-1). No re-derivation of r01's AC8 was needed. The fingerprint recovery procedure is left intact for the integration owner."
+  },
+  "instruction_6_remainders_stay_open": {
+   "verdict": "HONOURED",
+   "note": "REM-1, REM-2 and REM-3 were NOT closed inside this lane. REM-2's interim requirement (record the exemption and its reason in the source) IS satisfied at :1266-1276."
+  }
+ },
+ "deviations_from_pinned_criteria": [
+  {
+   "id": "DEV-1",
+   "criterion": "AC6",
+   "clause": "'the two existing filter-screen tests pass without modification, proving the widening did not narrow the original guard'",
+   "what_actually_happened": "The POSITIVE test (tests/test_stage_owned_hunks_boundary.py::test_ac5_filter_attribute_precondition_fails_closed_before_patch_build) had its FIXTURE modified: one new line, `git config filter.upper.clean 'tr a-z A-Z'` at :1006, plus an 11-line explanatory comment at :995-1005. All four assertions (:1023-1029) are unchanged. The NEGATIVE control test (:1032-1072) is entirely unmodified.",
+   "justification_offered_in_source": "The fixture declared `filter=upper` but never DEFINED the driver, and an undefined driver makes git perform no conversion at all; the old attribute-VALUE-branching guard refused it anyway, so without a real driver the fixture would now pin the defect instead of the behaviour.",
+   "i_verified_that_justification_independently": "CONFIRMED by measurement at 2026-09-30T01:18Z. Original fixture (filter=upper declared, driver undefined): path-declared digest 08fdc473... EQUALS raw digest 08fdc473..., so the delivered digest-based screen correctly PROCEEDS. Corrected fixture (driver defined): path-declared e0d2cc52... != raw 08fdc473..., so it REFUSES. Decisively, `git check-attr --all` reports 'f.txt: filter: upper' IDENTICALLY in BOTH cases - which is itself the strongest available evidence for AC9's thesis that deciding from the attribute ANSWER is unsound in both directions.",
+   "disposition": "REPORTED AS A DEVIATION, NOT SILENTLY ACCEPTED. The change is technically justified and minimal (one line, zero assertions touched), but the criterion's literal text says 'without modification' and the fixture WAS modified. A human or QA should ratify this rather than have it pass unremarked.",
+   "risk_if_ratified": "Low. The assertions still pin the same behaviour; only the fixture now actually creates the condition its own docstring always claimed it created.",
+   "i_did_not_change_it": "Correct - lane r03 is editing this file concurrently and the dispatch forbids any edit to it."
+  },
+  {
+   "id": "DEV-2",
+   "criterion": "AC6",
+   "clause": "'the four existing binary-check call sites either consolidated or each carrying a stated reason'",
+   "what_actually_happened": "There are FIVE binary-check call sites (:196, :739, :782, :1209, :4226), not four. All five carry an adjacent stated reason.",
+   "disposition": "Harmless overage in the safe direction (more annotated than required). Recorded so the count discrepancy is not mistaken later for a missing annotation."
+  }
+ ],
+ "findings_not_fixed": [
+  {
+   "id": "FIND-1",
+   "severity": "medium",
+   "kind": "cross-lane integration gap introduced by concurrency, NOT an r05 implementation defect",
+   "title": "The bypass-detection check enumerates route callees by a hardcoded name set, so lane r03's newly added route dispatch - which sits BEFORE the screening stage - is invisible to it and the check still returns True.",
+   "location_of_the_check": "tests/generated/dev-20260927-135305-r05/_r05_common.py:130-133 (ROUTE_DISPATCH_CALLEES) consumed by screen_precedes_every_route_dispatch at :151-171",
+   "location_of_the_new_dispatch": "scripts/stage-owned-hunks.py:4145 `if ns.classify: return _classify_main(ns)` (lane r03; argparse flags --classify and --escalation-store added at :4126-4144)",
+   "failing_scenario": "At 2026-09-30T01:24:50Z the delivered check reports (True, 'screen at line 4184 precedes 6 dispatch statements'). Measured at the same instant by an AST sweep that discovers route entries STRUCTURALLY (any callee whose name ends in _main, plus the three landing helpers) rather than from a fixed list: seven route-entry dispatches exist in main(), and one of them - _classify_main at L4145 - PRECEDES the screening stage at L4184. The hardcoded set contains six names and omits _classify_main, so the check's 'every route-dispatch statement' claim is currently a claim about six enumerated names, not about every dispatch.",
+   "why_this_matters": "AC6's whole point is that the check must PROVE no route can bypass the screen. A check whose coverage is a fixed name list silently stops covering the file the moment a lane adds a route - which is exactly what happened, within ten minutes, in this same cycle.",
+   "is_the_new_route_actually_unscreened": "YES, structurally - it returns before the screen is reached. Lane r03's own source comment at :4136-4144 argues this is not a bypass because the classification route 'reads no candidate bytes from the working tree and mutates neither the index nor the tree, so there is nothing for that screen to decide about.' That argument is r03's to make and may well be correct; I did not evaluate it, and it is out of this lane's scope. What is IN scope is that r05's completeness check does not notice the route at all, so it would equally not notice a future route for which the argument is false.",
+   "proposed_fix": "Make screen_precedes_every_route_dispatch DISCOVER route entries structurally instead of enumerating them: treat as a route dispatch any top-level statement in main() that returns the result of a call to a module-level function whose name ends in _main, plus the explicitly named landing helpers. Keep the hardcoded set only as an assertion that the discovered set is a superset of it, so a rename cannot silently shrink coverage. Alternatively, have the check assert that the screen call site precedes EVERY `return <call>(...)` statement in main() except an explicitly whitelisted set of non-landing routes, each whitelist entry carrying a stated reason - the same discipline r05 already applied to the five binary-check call sites.",
+   "why_i_did_not_fix_it": "The dispatch forbids me from editing anything but my own report, and the check's own file plus the primitive are both inside lane r03's live edit surface. Fixing it now would collide with r03's in-flight work.",
+   "who_should_own_it": "The single final integration owner, together with lane r03 - r03 should state whether its route is exempt and why, and r05's check should be made to discover routes rather than list them."
+  },
+  {
+   "id": "FIND-2",
+   "severity": "low",
+   "kind": "scope boundary worth recording, not a defect",
+   "title": "AC8's 'probes the assembled candidate image BEFORE any index or working-tree mutation' holds strictly only on the ledger route; the composed and checkpoint routes are mutate-then-probe-then-restore.",
+   "locations": "Ledger: probe at scripts/stage-owned-hunks.py:4340 precedes the object write at :2489 and the index write at :2503 - strict. Composed/checkpoint: the index is mutated by `git apply --cached` at :924, and the probe of the resulting image runs at :959, with restore-on-refusal at :962-963.",
+   "why_it_is_not_a_defect": "The composed image does not EXIST until its segments have been applied, so there is no in-memory candidate to probe beforehand. The source states this explicitly at :947-951. Under --plan-only the mutated index is a TEMPORARY one (passed via env) and the real index is never touched. On refusal the entry is unstaged.",
+   "residual_exposure": "Under a non---plan-only composed invocation the real index is briefly mutated before the probe verdict. The restore path is present on every refusal branch I traced (:928, :941, :954, :962, :971, :976). This is the same time-of-check/time-of-use family as REM-3, which the lane correctly carries OPEN and attributes to the frozen-immutable-object lane (parent soundness hole 2).",
+   "proposed_fix": "OBSERVATION_ONLY for this lane - closing it requires the frozen-immutable-object capability REM-3 already assigns elsewhere. Do not attempt it here."
+  }
+ ],
+ "dev": {
+  "status": "completed",
+  "files_modified": [
+   "scripts/stage-owned-hunks.py",
+   "tests/test_stage_owned_hunks_boundary.py"
+  ],
+  "_files_modified_note": "Derived from `git diff --name-only 025f4c8ace1bd6e80b91761e18bf50b343297a67` at 2026-09-30T01:29:24Z, restricted to this lane's footprint; both paths are present in that diff. CRITICAL ATTRIBUTION CAVEAT: THIS INVOCATION AUTHORED ZERO BYTES IN EITHER FILE. Their current content carries lane r01's work, lane r05's landed work (from the previous attempt that died without reporting) and, since 2026-09-30T01:23:51Z, lane r03's concurrent work. See _ownership_evidence_provenance and owned_edits for the per-hunk attribution and its grade.",
+  "files_created": [],
+  "_files_created_note": "Git-derived value is empty and that is correct: `git ls-files --others --exclude-standard` returns nothing for this lane, and `git diff --cached --name-only --diff-filter=A` is empty (nothing staged). The lane's nine generated tests plus _r05_common.py under tests/generated/dev-20260927-135305-r05/ are NEW FILES ON DISK but are excluded from git by .gitignore:145 ('tests/generated/*'), so they cannot appear in either derivation. Likewise this report (docs/dev/, .gitignore:173) and the codex transcript (docs/codex/, .gitignore:161). Recording [] rather than hand-adding ignored paths keeps the field faithful to its stated derivation.",
+  "observed_preexisting": [],
+  "_observed_preexisting_note": "tests/generated/manifest.json is modified in the working-tree diff but was written by the test-writer subagent, not by dev, and is shared with sibling lanes; it is neither claimed nor listed.",
+  "tasks_completed": [
+   {
+    "id": 1,
+    "description": "Established what the previous attempt changed by reconstructing the lane's pre-edit state from lane r01's recorded ownership evidence and diffing it against the delivered files",
+    "type": "verification",
+    "files_modified": [],
+    "rationale": "The dead attempt left no report and no ledger; the only sound anchor is r01's pre_edit_snapshots plus owned_edits, whose 26 edits all replay unambiguously."
+   },
+   {
+    "id": 2,
+    "description": "Verified all nine acceptance criteria against the DELIVERED CODE by independent measurement rather than by trusting the lane's generated tests",
+    "type": "verification",
+    "files_modified": [],
+    "rationale": "Tests written alongside an implementation can encode whatever the code does; every criterion was re-measured from first principles with a positive control."
+   },
+   {
+    "id": 3,
+    "description": "Verified the reviewer's threefold binding instruction on the report-digest guard, and independently reproduced the relocation equivalence across eight flag combinations",
+    "type": "verification",
+    "files_modified": [],
+    "rationale": "This was the one item left open when the BA-QA iteration guard was exhausted."
+   },
+   {
+    "id": 4,
+    "description": "Wrote the missing implementation report with explicitly reconstruction-graded ownership evidence",
+    "type": "artifact",
+    "files_created": [
+     "docs/dev/dev-report-dev-20260927-135305-r05.json"
+    ],
+    "rationale": "A report that silently presented reconstruction as capture would defeat the purpose of the cycle."
+   }
+  ],
+  "scripts_created": [],
+  "git_rationale": {
+   "root_cause_commit": "N/A - the defect was never committed. The pre-existing attribute-value filter screen lived only in the pre-cycle DIRTY working tree; it is absent from committed baseline 025f4c8a. Proven by the r01 pre-edit blobs differing from the committed blobs.",
+   "why_issue_occurred": "The original guard decided from what the CONFIGURATION SAYS (a positively parsed attribute value) rather than from what conversion DOES to the bytes, and it sat after three of the four route dispatches, so it was both wrong in both directions and unreachable on 75% of entry points.",
+   "how_fix_addresses_root": "One screening stage at a single call site ahead of every dispatch, deciding by comparing the path-declared and raw hash-object digests - a direct measurement of the conversion itself, with no attribute name or answer token anywhere in the verdict."
+  },
+  "diff_stats": {
+   "files_changed": 0,
+   "lines_added": 0,
+   "lines_removed": 0,
+   "new_symbols_introduced": [],
+   "minimum_possible_lines_estimate": 0,
+   "justification_for_overage": null,
+   "_note": "This invocation is verification-only and authored zero repository-code lines. The LANE's landed delta, measured as the reconstructed r01 post-state against the worktree at 2026-09-30T01:14:58Z (before r03's landing), was approximately +253 lines in scripts/stage-owned-hunks.py and +12 in tests/test_stage_owned_hunks_boundary.py, of which the 144-line screening block is the substantive addition."
+  },
+  "fix_layer": "L4",
+  "_fix_layer_note": "Matches context.diagnosis_layer = L4. No layer change is proposed.",
+  "scope_review_requested": false,
+  "qa_ready": true,
+  "qa_notes": "Run `python3 -m pytest tests/generated/dev-20260927-135305-r05 --run-generated` - a DEFAULT run never descends into tests/generated (root conftest.py pytest_ignore_collect) and will silently execute nothing. Do NOT use this shell's text-search wrapper to look for the TEST_INCOMPLETE sentinel: it applies .gitignore and tests/generated/* is ignored at .gitignore:145, so it returns a structurally guaranteed zero. Read the files directly. Positive control for any sentinel-absence claim: lane r03's 21 skeletons and lane r04's 18 all still carry it. The two boundary-suite failures are pre-declared by r01 as the deferred single consumer-digest re-pin and must NOT be re-pinned here. Review findings_not_fixed[0] first - it is the only item needing an owner.",
+  "permissions_to_add": []
+ }
+}
