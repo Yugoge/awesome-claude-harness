@@ -26,8 +26,18 @@ def last_nonempty(text: str) -> str:
     return line
 
 
+# Round-open literal (L5): `CLOSE_FINDINGS: <n> items` is the never-landing
+# return of a QA judging round that opened findings. Read-side class `no`
+# (not landed), recognised BEFORE the `CLOSE:` prefix test so classify_text's
+# strict path returns it and the whole-text fallback never reads an earlier
+# landed `CLOSE: YES` section of the append-only report.
+_ROUND_OPEN_RE = re.compile(r"^CLOSE_FINDINGS:\s*\d+\s+items?\b")
+
+
 def classify_line(line: str) -> str:
     text = (line or "").strip()
+    if _ROUND_OPEN_RE.match(text):
+        return "no"
     if not text.upper().startswith("CLOSE:"):
         return "unknown"
     rest = text.split(":", 1)[1].strip().replace("—", "-")

@@ -345,7 +345,11 @@ _checkpoint_rate_limited_push() {
     if [ -z "$repo_hash" ]; then
         repo_hash=$(printf '%s' "$abs_git_dir" | cksum | awk '{print $1}')
     fi
-    local stamp_file="/tmp/.checkpoint-push-${repo_hash}.ts"
+    local stamp_file
+    stamp_file="$(
+      . "$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)/harness_state_dir.sh" 2>/dev/null \
+        && harness_state_dir || printf '%s' /tmp
+    )/.checkpoint-push-${repo_hash}.ts"
 
     # Rate limit: skip if last push attempt was within the interval
     if [ -f "$stamp_file" ]; then
