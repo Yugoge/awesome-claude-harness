@@ -54,21 +54,39 @@ def test_empty_needle_is_distinguishable_from_a_genuine_miss():
         soh._locate_unique(b"alpha beta", b"")
 
 
-# --- POSITIVE CONTROL: non-empty needles count exactly as before -------------
+# --- Non-empty needles: candidate start offsets, INCLUSIVE OF OVERLAPS -------
+#
+# This block was originally labelled a positive control for an unrelated
+# empty-needle change ("non-empty needles count exactly as before") and, as a
+# side effect, froze overlap-EXCLUSIVE counting -- a question it was never
+# written to decide. The rule REPLAY-UNIQUE depends on counting CANDIDATE START
+# OFFSETS: advancing by len(needle) skips an overlapping start, so a needle
+# matching at more than one position could be certified as uniquely located.
+# The self-overlapping rows below are the discriminating cases; the rows that
+# cannot self-overlap remain the positive control that nothing else moved.
 
 @pytest.mark.parametrize(
     "haystack, needle, expected",
     [
         (b"alpha beta", b"ZZZ", 0),          # absent
         (b"alpha beta", b"alpha", 1),        # unique
-        (b"aa aa aa", b"aa", 3),             # repeated
-        (b"aaaa", b"aa", 2),                 # non-overlapping semantics
+        (b"aa aa aa", b"aa", 3),             # repeated, cannot self-overlap
+        (b"aaaa", b"aa", 3),                 # self-overlapping: starts 0, 1, 2
+        (b"aaa", b"aa", 2),                  # self-overlapping: starts 0, 1
+        (b"ababab", b"abab", 2),             # self-overlapping: starts 0, 2
+        (b"aXbXc", b"X", 2),                 # control: cannot self-overlap
         (b"alpha", b"alpha", 1),             # whole haystack
         (b"", b"x", 0),                      # empty haystack, non-empty needle
     ],
 )
-def test_count_occurrences_unchanged_for_non_empty_needles(haystack, needle, expected):
+def test_count_occurrences_counts_candidate_start_offsets(haystack, needle, expected):
     assert soh._count_occurrences(haystack, needle) == expected
+
+
+@pytest.mark.parametrize("haystack, needle", [(b"aaa", b"aa"), (b"ababab", b"abab")])
+def test_locate_unique_refuses_a_self_overlapping_needle(haystack, needle):
+    """A needle matching at more than one candidate start is NOT unique."""
+    assert soh._locate_unique(haystack, needle) is None
 
 
 @pytest.mark.parametrize(

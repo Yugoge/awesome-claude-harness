@@ -125,6 +125,59 @@ class OvernightLoopTimezoneTests(unittest.TestCase):
         finally:
             tmp.cleanup()
 
+    def test_update_state_cycle_full_reset_contract(self) -> None:
+        """AC3 (ticket 20261001-161041-r10): _update_state_cycle's full
+        per-cycle contract, not just cycle_count. current_issues and
+        unresolved_issues must clear, pm_triage_reports/pm_retro_reports must
+        be preserved unchanged, legacy current_issue/current_issue_iteration
+        keys must be removed, and cycle_count must increment by 1.
+        CLAUDE_OBLIGATION_TERMINAL=off isolates this from the unrelated G4
+        terminal-gate conditions (a)/(b)."""
+        future = (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat()
+        sid = 'test-ac3-full-reset'
+        tmp = tempfile.TemporaryDirectory()
+        tmpdir = Path(tmp.name)
+        try:
+            claude_dir = tmpdir / '.claude'
+            claude_dir.mkdir(parents=True, exist_ok=True)
+            state_path = claude_dir / f'overnight-state-{sid}.json'
+            state = {
+                'session_id': sid,
+                'end_time': future,
+                'cycle_count': 5,
+                'current_phase': 'retro',
+                'current_issues': [{'id': 'leftover'}],
+                'unresolved_issues': ['leftover-issue'],
+                'pm_triage_reports': ['triage-1'],
+                'pm_retro_reports': ['retro-1'],
+                'current_issue': 'legacy-leftover',
+                'current_issue_iteration': 2,
+            }
+            state_path.write_text(json.dumps(state, indent=2))
+
+            env = os.environ.copy()
+            env['CLAUDE_PROJECT_DIR'] = str(tmpdir)
+            env['CLAUDE_OBLIGATION_TERMINAL'] = 'off'
+            result = subprocess.run(
+                [sys.executable, str(HOOK_PATH)],
+                input=json.dumps(_build_payload(sid)),
+                capture_output=True,
+                text=True,
+                env=env,
+                timeout=10,
+            )
+            self.assertEqual(result.returncode, 0, msg=result.stderr)
+            rewritten = json.loads(state_path.read_text())
+            self.assertEqual(rewritten.get('current_issues'), [])
+            self.assertEqual(rewritten.get('unresolved_issues'), [])
+            self.assertEqual(rewritten.get('pm_triage_reports'), ['triage-1'])
+            self.assertEqual(rewritten.get('pm_retro_reports'), ['retro-1'])
+            self.assertNotIn('current_issue', rewritten)
+            self.assertNotIn('current_issue_iteration', rewritten)
+            self.assertEqual(rewritten.get('cycle_count'), 6)
+        finally:
+            tmp.cleanup()
+
 
 if __name__ == '__main__':
     unittest.main()

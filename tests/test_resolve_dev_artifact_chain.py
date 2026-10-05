@@ -202,6 +202,93 @@ def _run_cli(root: Path) -> subprocess.CompletedProcess[str]:
     )
 
 
+# ---------------------------------------------------------------------------
+# Disclosed-exception vocabulary fixtures (ticket 20260911-011232).  Small,
+# focused builders layered on top of the existing _dev_document/_qa_document
+# helpers above -- neither of those two functions is modified, matching the
+# ticket's Contract D constraint that validate_dev()/validate_qa() (and, by
+# extension, the fixtures exercising their happy path) stay untouched.
+# ---------------------------------------------------------------------------
+
+ROUTE_SELECT_PATH = REPO_ROOT / "scripts" / "close-route-select.py"
+
+
+def _run_route_select(root: Path) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        [
+            sys.executable,
+            str(ROUTE_SELECT_PATH),
+            "--task-id",
+            TASK_ID,
+            "--project-dir",
+            str(root),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+
+def _run_aggregate(root: Path) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        [
+            sys.executable,
+            str(REPO_ROOT / "scripts" / "aggregate-dev-report.py"),
+            "--task-id",
+            TASK_ID,
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+        cwd=str(root),
+        env={**os.environ, "CLAUDE_PROJECT_DIR": str(root)},
+    )
+
+
+def _qa_document_with_disclosed_exception(
+    identity: str,
+    *,
+    classification: str = "shared_working_tree_concurrency",
+    evidence: list[str] | None = None,
+    attestation: str | None = None,
+    iteration_needed: bool = False,
+    findings: list[dict] | None = None,
+) -> dict:
+    """A qa.status=='fail' document declaring a complete M2 disclosure block."""
+    doc = _qa_document(identity, status="fail")
+    doc["iteration_needed"] = iteration_needed
+    doc["qa"]["disclosed_exception"] = {
+        "classification": classification,
+        "evidence": ["docs/dev/evidence.log:1"] if evidence is None else evidence,
+        "attestation": RESOLVER.DISCLOSED_EXCEPTION_ATTESTATION if attestation is None else attestation,
+    }
+    if findings is not None:
+        doc["qa"]["all_findings"] = findings
+    return doc
+
+
+def _dev_document_needs_review(
+    identity: str,
+    *,
+    modified: list[str] | None = None,
+    created: list[str] | None = None,
+    classification: str = "pending_commit_handoff",
+    blocked_by: str = "commit verb forbidden to dev subagent",
+    forbidden_action: str = "agents/dev.md No Band-Aid Rule item 7",
+    blocking_issues: list[str] | None = None,
+) -> dict:
+    """A dev.status=='needs_review' document declaring a complete M3 rationale."""
+    doc = _dev_document(identity, modified=modified, created=created)
+    doc["dev"]["status"] = "needs_review"
+    doc["dev"]["status_rationale"] = {
+        "classification": classification,
+        "blocked_by": blocked_by,
+        "forbidden_action": forbidden_action,
+    }
+    doc["blocking_issues"] = ["awaiting /commit hand-off"] if blocking_issues is None else blocking_issues
+    return doc
+
+
 def test_singular_chain_passes_with_stable_consumer_fields(tmp_path: Path) -> None:
     parents = _make_singular(tmp_path)
     result = RESOLVER.resolve_chain(tmp_path, TASK_ID)
@@ -962,6 +1049,530 @@ def test_revision_labelled_filename_declaring_an_undeclared_lane_is_flagged(
     _write(path, _qa_document(f"{TASK_ID}-{UNDECLARED_WORKER}"))
     result = RESOLVER.resolve_chain(tmp_path, TASK_ID)
     assert _undeclared_lane_paths(result) == [_relative(tmp_path, path)]
+
+
+# ---------------------------------------------------------------------------
+# Finding F-AGG-ASYMMETRY: the dev-report SHARD scan used to decide lane
+# membership purely from the filename while the sibling scan above already read
+# declared identity, so one lane's fix round was counted as a second lane.  The
+# first test below fails if the filename-only rule is reintroduced; the rest
+# pin the two limits that keep the identity rule from becoming an escape.
+# ---------------------------------------------------------------------------
+
+FIX_ROUND_SUFFIX = "fixround2"
+
+
+def _lane_set_mismatch_details(result: dict) -> list[str]:
+    return [
+        error["detail"]
+        for error in result["errors"]
+        if error["code"] == "LANE_SET_MISMATCH"
+    ]
+
+
+def test_dev_report_fix_round_of_a_declared_lane_is_not_an_extra_lane(
+    tmp_path: Path,
+) -> None:
+    # The regression under repair.  A declared lane's fix-round dev-report
+    # carries a distinguishing filename suffix while declaring, in both identity
+    # fields, the lane it belongs to.  Counting a worker carved out of the whole
+    # suffix invents a lane that never ran and manufactures a mismatch no honest
+    # declaration can satisfy.
+    _make_fanout(tmp_path)
+    variant = _variant(
+        tmp_path, f"dev-report-{TASK_ID}-{WORKERS[0]}-{FIX_ROUND_SUFFIX}.json"
+    )
+    _write(variant, _dev_document(f"{TASK_ID}-{WORKERS[0]}"))
+    result = RESOLVER.resolve_chain(tmp_path, TASK_ID)
+    assert _lane_set_mismatch_details(result) == []
+    assert result["status"] == "pass", result["errors"]
+
+
+def test_dev_report_shard_without_usable_identity_still_uses_its_filename(
+    tmp_path: Path,
+) -> None:
+    # The deliberate fallback must keep firing, so damaging or omitting one's own
+    # identity can never buy a weaker verdict than declaring it honestly.  Each
+    # body below is a degenerate identity that `_self_declared_identity` refuses.
+    label = f"{UNDECLARED_WORKER}-{FIX_ROUND_SUFFIX}"
+    bodies: list[str | dict] = [
+        {"dev": {"status": "completed"}},
+        {"request_id": "   ", "task_id": f"{TASK_ID}-{WORKERS[0]}"},
+        {"request_id": f"{TASK_ID}-{WORKERS[0]}", "task_id": f"{TASK_ID}-{WORKERS[1]}"},
+        "{not json\n",
+        '["lane-a"]\n',
+    ]
+    for index, body in enumerate(bodies):
+        root = tmp_path / f"degenerate-{index}"
+        _make_fanout(root)
+        _write(_variant(root, f"dev-report-{TASK_ID}-{label}.json"), body)
+        result = RESOLVER.resolve_chain(root, TASK_ID)
+        assert _lane_set_mismatch_details(result) == [
+            f"parallel_workers {WORKERS!r} do not exactly match shards "
+            f"{sorted([*WORKERS, label])!r}"
+        ], index
+        assert result["status"] == "fail", index
+
+
+def test_dev_report_shard_declaring_an_undispatched_lane_cannot_smuggle_itself_in(
+    tmp_path: Path,
+) -> None:
+    # A declaration is honoured only when it resolves to a lane the canonical
+    # actually declared.  Claiming a lane nobody dispatched buys nothing: the
+    # filename label is attributed instead and the mismatch still fires.
+    _make_fanout(tmp_path)
+    label = f"{WORKERS[0]}-{FIX_ROUND_SUFFIX}"
+    _write(
+        _variant(tmp_path, f"dev-report-{TASK_ID}-{label}.json"),
+        _dev_document(f"{TASK_ID}-{UNDECLARED_WORKER}"),
+    )
+    result = RESOLVER.resolve_chain(tmp_path, TASK_ID)
+    assert _lane_set_mismatch_details(result) == [
+        f"parallel_workers {WORKERS!r} do not exactly match shards "
+        f"{sorted([*WORKERS, label])!r}"
+    ]
+    assert result["status"] == "fail"
+
+
+def test_a_genuinely_undeclared_dev_report_lane_is_still_a_mismatch(
+    tmp_path: Path,
+) -> None:
+    # The finding that must survive: a lane that really ran without being
+    # declared, declaring its own distinct identity.  Reading identity must
+    # sharpen this detection, never suppress it.
+    _make_fanout(tmp_path)
+    _write(
+        _lane_paths(tmp_path, UNDECLARED_WORKER)["dev"],
+        _dev_document(f"{TASK_ID}-{UNDECLARED_WORKER}"),
+    )
+    result = RESOLVER.resolve_chain(tmp_path, TASK_ID)
+    assert _lane_set_mismatch_details(result) == [
+        f"parallel_workers {WORKERS!r} do not exactly match shards "
+        f"{sorted([*WORKERS, UNDECLARED_WORKER])!r}"
+    ]
+    assert result["status"] == "fail"
+
+
+# ---------------------------------------------------------------------------
+# R4 (spec-20260907-115508-lawful-commit-channel.md) additive gap
+# classification: stage_gaps / non_gap_errors / late_repair_eligible /
+# gap_classification. AC-6 and AC-15
+# (docs/dev/acceptance-criteria-20260910-091226.json).
+# ---------------------------------------------------------------------------
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _late_repair_fixtures as _lrfx  # noqa: E402
+
+GOLDEN_DIR = REPO_ROOT / "tests" / "fixtures" / "late_repair_golden"
+NEW_GAP_FIELDS = {"stage_gaps", "non_gap_errors", "late_repair_eligible", "gap_classification"}
+# ticket 20260911-011232 M1: disclosed_exceptions is a second purely-additive
+# field, following the exact same golden-baseline exemption as the R4 fields
+# above -- none of the golden fixtures exercise a disclosed exception, so the
+# field is always [] for them and is excluded from the pinned-baseline diff
+# the same way NEW_GAP_FIELDS already is.
+NEW_GAP_FIELDS = NEW_GAP_FIELDS | {"disclosed_exceptions"}
+# task dev-20260927-135305 (spec-20260914-052140 S5.3, same-cycle-only gate
+# rescope): ownership_completeness_informational is a third purely-additive
+# field, same exemption -- none of the golden fixtures exercise a fan-out
+# chain with a real ownership-completeness gap, so the field is always []
+# for them.
+NEW_GAP_FIELDS = NEW_GAP_FIELDS | {"ownership_completeness_informational"}
+
+
+def test_ac6_gap_fields_partition_stage_gaps_from_integrity_errors(tmp_path: Path) -> None:
+    complete_root = tmp_path / "complete"
+    _lrfx.build_complete(complete_root, _lrfx.TASK_ID)
+    complete = RESOLVER.resolve_chain(complete_root, _lrfx.TASK_ID)
+    assert complete["stage_gaps"] == []
+    assert complete["non_gap_errors"] == []
+    assert complete["late_repair_eligible"] is False
+    assert complete["gap_classification"] == "complete"
+
+    qa_only_root = tmp_path / "qa_only"
+    _lrfx.build_qa_only(qa_only_root, _lrfx.TASK_ID)
+    qa_only = RESOLVER.resolve_chain(qa_only_root, _lrfx.TASK_ID)
+    assert qa_only["stage_gaps"] == []
+    assert qa_only["non_gap_errors"] == []
+    assert qa_only["late_repair_eligible"] is False
+    assert qa_only["gap_classification"] == "qa_only"
+
+    beyond_qa_root = tmp_path / "beyond_qa"
+    paths = _lrfx.build_beyond_qa_clean(beyond_qa_root, _lrfx.TASK_ID)
+    beyond_qa = RESOLVER.resolve_chain(beyond_qa_root, _lrfx.TASK_ID)
+    assert beyond_qa["stage_gaps"] == sorted([
+        _relative(beyond_qa_root, paths["ticket"]),
+        _relative(beyond_qa_root, paths["context"]),
+    ])
+    assert beyond_qa["non_gap_errors"] == []
+    assert beyond_qa["late_repair_eligible"] is True
+    assert beyond_qa["gap_classification"] == "beyond_qa"
+
+    mixed_root = tmp_path / "mixed_integrity"
+    mixed_paths = _lrfx.build_mixed_integrity(mixed_root, _lrfx.TASK_ID)
+    mixed = RESOLVER.resolve_chain(mixed_root, _lrfx.TASK_ID)
+    assert mixed["stage_gaps"] == [_relative(mixed_root, mixed_paths["ticket"])]
+    assert mixed["non_gap_errors"] == [_relative(mixed_root, mixed_paths["dev_report"])]
+    # The mixed-integrity fixture proves late_repair_eligible==False EVEN
+    # THOUGH stage_gaps is non-empty (codex finding #7) -- a real stage gap
+    # co-occurring with an unrelated integrity error is not eligible.
+    assert mixed["late_repair_eligible"] is False
+    assert mixed["gap_classification"] == "beyond_qa"
+
+    fanout_root = tmp_path / "fanout"
+    _lrfx.build_fanout(fanout_root, _lrfx.TASK_ID)
+    fanout = RESOLVER.resolve_chain(fanout_root, _lrfx.TASK_ID)
+    assert fanout["mode"] == "fanout"
+    assert fanout["stage_gaps"] == RESOLVER.NOT_APPLICABLE
+    assert fanout["non_gap_errors"] == RESOLVER.NOT_APPLICABLE
+    assert fanout["late_repair_eligible"] == RESOLVER.NOT_APPLICABLE
+    assert fanout["gap_classification"] == RESOLVER.NOT_APPLICABLE
+
+
+def test_ac6_gap_fields_computed_in_exactly_one_function(tmp_path: Path) -> None:
+    source = RESOLVER_PATH.read_text(encoding="utf-8")
+    # Every one of the four field names must be ASSIGNED (appear as a dict
+    # key target) in exactly one function body: _compute_gap_fields. A
+    # code-search over `result["<field>"] = ` call sites confirms both
+    # resolve_chain() call sites merely ASSIGN the tuple _compute_gap_fields
+    # returns -- neither recomputes the classification independently.
+    assert source.count("def _compute_gap_fields(") == 1
+    body_start = source.index("def _compute_gap_fields(")
+    body_end = source.index("\n\n\ndef ", body_start)
+    body = source[body_start:body_end]
+    assert "STAGE_GAP_CODES" in body
+    # Outside the function, STAGE_GAP_CODES must appear only in its own
+    # module-level constant definition -- never a second partition site.
+    outside = source[:body_start] + source[body_end:]
+    assert outside.count("STAGE_GAP_CODES") == 1  # the constant's own definition
+
+
+def test_ac15_new_fields_are_purely_additive_against_a_pinned_golden_baseline(
+    tmp_path: Path,
+) -> None:
+    golden_files = sorted(GOLDEN_DIR.glob("*.json"))
+    golden_names = {p.stem for p in golden_files}
+    assert len(golden_files) >= 4, (
+        "golden baseline directory must be non-empty (codex round-2 finding #15) -- "
+        f"found {golden_files}"
+    )
+    assert golden_names == {"complete", "qa_only", "mixed_integrity", "fanout"}
+
+    builders = {
+        "complete": _lrfx.build_complete,
+        "qa_only": _lrfx.build_qa_only,
+        "mixed_integrity": _lrfx.build_mixed_integrity,
+        "fanout": _lrfx.build_fanout,
+    }
+    for name, builder in builders.items():
+        root = tmp_path / name
+        builder(root, _lrfx.TASK_ID)
+        current = RESOLVER.resolve_chain(root, _lrfx.TASK_ID)
+        stripped = {k: v for k, v in current.items() if k not in NEW_GAP_FIELDS}
+        golden = json.loads((GOLDEN_DIR / f"{name}.json").read_text(encoding="utf-8"))
+        golden_stripped = {k: v for k, v in golden.items() if k not in NEW_GAP_FIELDS}
+        assert stripped == golden_stripped, name
+
+
+# ---------------------------------------------------------------------------
+# Disclosed-exception vocabulary (ticket 20260911-011232).  Bidirectional:
+# AC-P* prove the new intermediate state is REACHABLE for a genuine, complete
+# disclosure; AC-N* prove every pre-existing hard-fail shape (incomplete,
+# mislabeled, untrustworthy, or simply undeclared) keeps failing exactly as
+# before -- disclosed_exceptions[] must stay empty on every AC-N case.
+# ---------------------------------------------------------------------------
+
+
+def test_ac_p1_qa_environmental_disclosed_exception_reaches_pass_with_exceptions(
+    tmp_path: Path,
+) -> None:
+    parents = _make_singular(tmp_path)
+    _write(parents["qa"], _qa_document_with_disclosed_exception(TASK_ID))
+    result = RESOLVER.resolve_chain(tmp_path, TASK_ID)
+    assert result["status"] == "pass_with_exceptions", result["errors"]
+    assert result["errors"] == []
+    assert len(result["disclosed_exceptions"]) == 1
+    entry = result["disclosed_exceptions"][0]
+    assert entry["code"] == "INVALID_QA_STATUS"
+    assert entry["path"] == _relative(tmp_path, parents["qa"])
+    assert entry["lane_task_id"] == TASK_ID
+    assert entry["kind"] == "qa_environmental"
+    assert entry["classification"] == "shared_working_tree_concurrency"
+    assert entry["evidence_ref_count"] == 1
+
+
+def test_ac_p2_dev_side_handoff_reaches_pass_with_exceptions(tmp_path: Path) -> None:
+    # Singular mode: the parent IS the lane, and its own qa-report is the
+    # "same lane's own qa-report" M3(b) requires.
+    parents = _make_singular(tmp_path)
+    _write(parents["dev"], _dev_document_needs_review(TASK_ID, modified=["scripts/one.py"]))
+    _write(parents["qa"], _qa_document(TASK_ID, status="pass"))
+    result = RESOLVER.resolve_chain(tmp_path, TASK_ID)
+    assert result["status"] == "pass_with_exceptions", result["errors"]
+    assert result["errors"] == []
+    codes = {entry["code"] for entry in result["disclosed_exceptions"]}
+    assert codes == {"INVALID_DEV_STATUS", "UNRESOLVED_BLOCKERS"}
+    for entry in result["disclosed_exceptions"]:
+        assert entry["path"] == _relative(tmp_path, parents["dev"])
+        assert entry["lane_task_id"] == TASK_ID
+        assert entry["kind"] == "dev_handoff"
+        assert entry["classification"] == "pending_commit_handoff"
+
+
+def test_ac_p3_fanout_dev_handoff_lane_propagates_through_aggregate_and_route_select(
+    tmp_path: Path,
+) -> None:
+    # The full motivating shape (task 20260808-035658's lanesumatdoc10): one
+    # lane whose dev.status is a disclosed needs_review handoff, its OWN
+    # qa-report passes, and (per M5) the canonical inherits needs_review too
+    # -- exercised end to end through aggregate-dev-report.py and
+    # close-route-select.py, not just resolve_chain() directly.
+    parents = _parent_paths(tmp_path)
+    lanes: dict[str, dict[str, Path]] = {}
+    loaded: list[tuple[str, dict]] = []
+    references = [_relative(tmp_path, parents["dev"])]
+
+    identity_a = f"{TASK_ID}-lane-a"
+    paths_a = _lane_paths(tmp_path, "lane-a")
+    lanes["lane-a"] = paths_a
+    _materialise(tmp_path, "scripts/lane-a.py")
+    dev_a = _dev_document(identity_a, modified=["scripts/lane-a.py"])
+    _write(paths_a["ticket"], _ticket(identity_a))
+    _write(paths_a["context"], {"request_id": identity_a, "task_id": identity_a})
+    _write(paths_a["dev"], dev_a)
+    _write(paths_a["qa"], _qa_document(identity_a))
+    loaded.append(("lane-a", dev_a))
+    references.extend(_relative(tmp_path, paths_a[k]) for k in ("ticket", "context", "dev", "qa"))
+
+    identity_b = f"{TASK_ID}-lane-b"
+    paths_b = _lane_paths(tmp_path, "lane-b")
+    lanes["lane-b"] = paths_b
+    _materialise(tmp_path, "scripts/lane-b.py")
+    dev_b = _dev_document_needs_review(identity_b, modified=["scripts/lane-b.py"])
+    _write(paths_b["ticket"], _ticket(identity_b))
+    _write(paths_b["context"], {"request_id": identity_b, "task_id": identity_b})
+    _write(paths_b["dev"], dev_b)
+    _write(paths_b["qa"], _qa_document(identity_b, status="pass"))
+    loaded.append(("lane-b", dev_b))
+    references.extend(_relative(tmp_path, paths_b[k]) for k in ("ticket", "context", "dev", "qa"))
+
+    aggregate_module = RESOLVER._load_aggregate_module()
+    fresh_canonical = aggregate_module._build_aggregate(loaded, TASK_ID)
+    _write(parents["dev"], fresh_canonical)
+    _write(parents["qa"], _qa_document(TASK_ID, status="pass"))
+    _write(parents["completion"], _completion(TASK_ID, references))
+
+    # M5: the canonical itself declares needs_review with a synthesized
+    # status_rationale aggregating the contributing lane.
+    assert fresh_canonical["dev"]["status"] == "needs_review"
+    assert fresh_canonical["dev"]["status_rationale"]["classification"] == "pending_commit_handoff"
+    assert "lane-b" in fresh_canonical["dev"]["status_rationale"]["blocked_by"]
+
+    # AC-P3 / M5: aggregate-dev-report.py no longer rejects the needs_review
+    # shard before the resolver is even reached (was exit 1 pre-fix).
+    aggregate_result = _run_aggregate(tmp_path)
+    assert aggregate_result.returncode == 0, aggregate_result.stderr
+
+    result = RESOLVER.resolve_chain(tmp_path, TASK_ID)
+    assert result["status"] == "pass_with_exceptions", result["errors"]
+    assert result["errors"] == []
+    by_path: dict[str, set[str]] = {}
+    for entry in result["disclosed_exceptions"]:
+        by_path.setdefault(entry["path"], set()).add(entry["code"])
+        assert entry["kind"] == "dev_handoff"
+    assert by_path[_relative(tmp_path, paths_b["dev"])] == {"INVALID_DEV_STATUS", "UNRESOLVED_BLOCKERS"}
+    assert by_path[_relative(tmp_path, parents["dev"])] == {"INVALID_DEV_STATUS", "UNRESOLVED_BLOCKERS"}
+
+    # AC-P3 / M4: close-route-select.py (the fixed production entrypoint
+    # /close's Step 0 shells out to) exits 0, not 2, on this chain.
+    route_result = _run_route_select(tmp_path)
+    assert route_result.returncode == 0, route_result.stdout
+    route_payload = json.loads(route_result.stdout)
+    assert route_payload["outcome"] == "not_selected"
+    assert route_payload["artifact_chain"]["status"] == "pass_with_exceptions"
+
+
+def _make_fanout_with_one_needs_review_lane(
+    tmp_path: Path, *, contributing_lane_qa_status: str = "pass"
+) -> tuple[dict[str, Path], Path, Path]:
+    """Shared scaffold for the iteration-2 parent-reclassification tests.
+
+    Builds the real-world fan-out shape (no parent ticket/context/qa-report
+    ever written -- commands/close.md documents those as optional, and the
+    live motivating task 20260808-035658 has no qa-report-<task-id>.json on
+    disk at all) with one clean lane-a and one needs_review lane-b whose own
+    qa-report status is the caller-supplied `contributing_lane_qa_status`.
+    """
+    parents = _parent_paths(tmp_path)
+    loaded: list[tuple[str, dict]] = []
+    references = [_relative(tmp_path, parents["dev"])]
+
+    identity_a = f"{TASK_ID}-lane-a"
+    paths_a = _lane_paths(tmp_path, "lane-a")
+    _materialise(tmp_path, "scripts/lane-a.py")
+    dev_a = _dev_document(identity_a, modified=["scripts/lane-a.py"])
+    _write(paths_a["ticket"], _ticket(identity_a))
+    _write(paths_a["context"], {"request_id": identity_a, "task_id": identity_a})
+    _write(paths_a["dev"], dev_a)
+    _write(paths_a["qa"], _qa_document(identity_a))
+    loaded.append(("lane-a", dev_a))
+    references.extend(_relative(tmp_path, paths_a[k]) for k in ("ticket", "context", "dev", "qa"))
+
+    identity_b = f"{TASK_ID}-lane-b"
+    paths_b = _lane_paths(tmp_path, "lane-b")
+    _materialise(tmp_path, "scripts/lane-b.py")
+    dev_b = _dev_document_needs_review(identity_b, modified=["scripts/lane-b.py"])
+    _write(paths_b["ticket"], _ticket(identity_b))
+    _write(paths_b["context"], {"request_id": identity_b, "task_id": identity_b})
+    _write(paths_b["dev"], dev_b)
+    _write(paths_b["qa"], _qa_document(identity_b, status=contributing_lane_qa_status))
+    loaded.append(("lane-b", dev_b))
+    references.extend(_relative(tmp_path, paths_b[k]) for k in ("ticket", "context", "dev", "qa"))
+
+    aggregate_module = RESOLVER._load_aggregate_module()
+    fresh_canonical = aggregate_module._build_aggregate(loaded, TASK_ID)
+    _write(parents["dev"], fresh_canonical)
+    _write(parents["completion"], _completion(TASK_ID, references))
+    assert not parents["qa"].exists()
+    assert not parents["ticket"].exists()
+    assert not parents["context"].exists()
+    return parents, paths_a["dev"], paths_b["dev"]
+
+
+def test_ac_p3b_fanout_parent_reclassifies_via_contributing_lane_qa_with_no_parent_qa_report(
+    tmp_path: Path,
+) -> None:
+    """Ticket 20260911-011232 iteration 2: the exact empirically-found gap.
+
+    `test_ac_p3_...` above happens to write a parent-level qa-report showing
+    qa.status == "pass", which coincidentally satisfied
+    `_dev_handoff_eligible`'s sibling-qa-report lookup for the parent path
+    too -- masking the real bug.  In real fan-out mode (and in the live
+    motivating task 20260808-035658) NO parent-level qa-report file exists on
+    disk at all.  The parent/canonical's own INVALID_DEV_STATUS /
+    UNRESOLVED_BLOCKERS errors must still reclassify into
+    disclosed_exceptions[] by cross-checking the CONTRIBUTING lane's (lane-b,
+    the one whose dev.status == "needs_review" actually drove the parent's
+    synthesized status_rationale) own qa-report -- not a nonexistent
+    qa-report-<bare-task-id> sibling of the parent.
+    """
+    parents, dev_a_path, dev_b_path = _make_fanout_with_one_needs_review_lane(
+        tmp_path, contributing_lane_qa_status="pass"
+    )
+
+    result = RESOLVER.resolve_chain(tmp_path, TASK_ID)
+    assert result["status"] == "pass_with_exceptions", result["errors"]
+    assert result["errors"] == []
+    by_path: dict[str, set[str]] = {}
+    for entry in result["disclosed_exceptions"]:
+        by_path.setdefault(entry["path"], set()).add(entry["code"])
+        assert entry["kind"] == "dev_handoff"
+    assert by_path[_relative(tmp_path, dev_b_path)] == {"INVALID_DEV_STATUS", "UNRESOLVED_BLOCKERS"}
+    assert by_path[_relative(tmp_path, parents["dev"])] == {"INVALID_DEV_STATUS", "UNRESOLVED_BLOCKERS"}
+
+
+def test_ac_n5_fanout_parent_stays_hard_fail_when_contributing_lane_qa_does_not_pass(
+    tmp_path: Path,
+) -> None:
+    """Rejection counterpart of the P3b case above.
+
+    If the contributing needs_review lane's OWN qa-report does not show a
+    genuine pass (undisclosed fail here), the parent's exception must NOT be
+    granted and the parent's errors must stay hard exactly as before this
+    iteration's fix -- proving the new cross-check does not relax anything,
+    it only relocates where the same-lane-QA evidence is looked up from.
+    """
+    parents, dev_a_path, dev_b_path = _make_fanout_with_one_needs_review_lane(
+        tmp_path, contributing_lane_qa_status="fail"
+    )
+
+    result = RESOLVER.resolve_chain(tmp_path, TASK_ID)
+    assert result["status"] == "fail"
+    codes_by_path: dict[str, set[str]] = {}
+    for entry in result["errors"]:
+        codes_by_path.setdefault(entry["path"], set()).add(entry["code"])
+    assert codes_by_path[_relative(tmp_path, parents["dev"])] == {
+        "INVALID_DEV_STATUS",
+        "UNRESOLVED_BLOCKERS",
+    }
+    assert codes_by_path[_relative(tmp_path, dev_b_path)] == {
+        "INVALID_DEV_STATUS",
+        "UNRESOLVED_BLOCKERS",
+    }
+    assert result["disclosed_exceptions"] == []
+
+
+def test_ac_5_exit_code_plumbing_is_consistent_end_to_end(tmp_path: Path) -> None:
+    parents = _make_singular(tmp_path)
+    _write(parents["qa"], _qa_document_with_disclosed_exception(TASK_ID))
+
+    resolver_process = _run_cli(tmp_path)
+    assert resolver_process.returncode == 0
+    assert json.loads(resolver_process.stdout)["status"] == "pass_with_exceptions"
+
+    route_process = _run_route_select(tmp_path)
+    assert route_process.returncode == 0
+    route_payload = json.loads(route_process.stdout)
+    assert route_payload["artifact_chain"]["status"] == "pass_with_exceptions"
+
+
+def test_ac_n1_incomplete_disclosure_stays_hard_fail(tmp_path: Path) -> None:
+    parents = _make_singular(tmp_path)
+
+    # Missing/empty evidence[].
+    _write(parents["qa"], _qa_document_with_disclosed_exception(TASK_ID, evidence=[]))
+    result = RESOLVER.resolve_chain(tmp_path, TASK_ID)
+    assert result["status"] == "fail"
+    assert "INVALID_QA_STATUS" in _error_codes(result)
+    assert result["disclosed_exceptions"] == []
+
+    # Missing attestation entirely.
+    doc = _qa_document_with_disclosed_exception(TASK_ID)
+    del doc["qa"]["disclosed_exception"]["attestation"]
+    _write(parents["qa"], doc)
+    result2 = RESOLVER.resolve_chain(tmp_path, TASK_ID)
+    assert result2["status"] == "fail"
+    assert "INVALID_QA_STATUS" in _error_codes(result2)
+    assert result2["disclosed_exceptions"] == []
+
+    # Attestation present but not the exact literal (paraphrased).
+    doc2 = _qa_document_with_disclosed_exception(
+        TASK_ID, attestation="This is a disclosed exception, not a defect."
+    )
+    _write(parents["qa"], doc2)
+    result3 = RESOLVER.resolve_chain(tmp_path, TASK_ID)
+    assert result3["status"] == "fail"
+    assert "INVALID_QA_STATUS" in _error_codes(result3)
+    assert result3["disclosed_exceptions"] == []
+
+
+def test_ac_n2_mislabeled_real_defect_stays_hard_fail(tmp_path: Path) -> None:
+    parents = _make_singular(tmp_path)
+    doc = _qa_document_with_disclosed_exception(
+        TASK_ID,
+        findings=[
+            {"blocks_release": True, "severity": "critical", "primary_cause": "dev_implementation"},
+        ],
+    )
+    _write(parents["qa"], doc)
+    result = RESOLVER.resolve_chain(tmp_path, TASK_ID)
+    assert result["status"] == "fail"
+    assert "INVALID_QA_STATUS" in _error_codes(result)
+    assert result["disclosed_exceptions"] == []
+
+    # A non-blocking finding with a non-environment cause must NOT disqualify
+    # -- only a finding that actually blocks release (or is severity=critical)
+    # is examined.
+    doc2 = _qa_document_with_disclosed_exception(
+        TASK_ID,
+        findings=[
+            {"blocks_release": False, "severity": "minor", "primary_cause": "dev_implementation"},
+        ],
+    )
+    _write(parents["qa"], doc2)
+    result2 = RESOLVER.resolve_chain(tmp_path, TASK_ID)
+    assert result2["status"] == "pass_with_exceptions", result2["errors"]
+
+
 def test_qa_findings_malformed_dict_all_findings_stays_hard_fail(tmp_path: Path) -> None:
     """AC1 (dev-20260914-075954): a dict-shaped qa.all_findings must not be
     silently treated as zero findings -- a critical dev_implementation
@@ -1081,3 +1692,503 @@ def test_qa_findings_absent_all_findings_with_valid_list_failures_still_pass_wit
     assert result["errors"] == []
 
 
+def test_ac_n3_needs_review_without_same_lane_qa_pass_stays_hard_fail(tmp_path: Path) -> None:
+    parents = _make_singular(tmp_path)
+    _write(parents["dev"], _dev_document_needs_review(TASK_ID, modified=["scripts/one.py"]))
+    _write(parents["qa"], _qa_document(TASK_ID, status="fail"))
+    result = RESOLVER.resolve_chain(tmp_path, TASK_ID)
+    assert result["status"] == "fail"
+    codes = _error_codes(result)
+    assert "INVALID_DEV_STATUS" in codes
+    assert "UNRESOLVED_BLOCKERS" in codes
+    # The undisclosed qa fail also stays hard -- no disclosure block supplied.
+    assert "INVALID_QA_STATUS" in codes
+    assert result["disclosed_exceptions"] == []
+
+
+def test_ac_n4_reverted_2026_08_06_warning_shape_still_hard_fails(tmp_path: Path) -> None:
+    # Today's exact reverted-attempt shape: qa.status=='warning' (or 'fail')
+    # with NO qa.disclosed_exception block at all -- proves the base binary
+    # check validate_qa() (the subject of the reverted attempt) is untouched.
+    parents = _make_singular(tmp_path)
+    for bad_status in ("warning", "fail"):
+        _write(parents["qa"], _qa_document(TASK_ID, status=bad_status))
+        result = RESOLVER.resolve_chain(tmp_path, TASK_ID)
+        assert result["status"] == "fail"
+        assert "INVALID_QA_STATUS" in _error_codes(result)
+        assert result["disclosed_exceptions"] == []
+
+
+def test_ac_6_blocked_status_is_never_reclassification_eligible(tmp_path: Path) -> None:
+    parents = _make_singular(tmp_path)
+    doc = _dev_document(TASK_ID, modified=["scripts/one.py"])
+    doc["dev"]["status"] = "blocked"
+    # Even a fully-formed status_rationale block must not rescue 'blocked' --
+    # it is unconditionally hard-fail regardless of any disclosure attempt.
+    doc["dev"]["status_rationale"] = {
+        "classification": "pending_commit_handoff",
+        "blocked_by": "irrelevant",
+        "forbidden_action": "irrelevant",
+    }
+    doc["blocking_issues"] = ["something"]
+    _write(parents["dev"], doc)
+    _write(parents["qa"], _qa_document(TASK_ID, status="pass"))
+    result = RESOLVER.resolve_chain(tmp_path, TASK_ID)
+    assert result["status"] == "fail"
+    codes = _error_codes(result)
+    assert "INVALID_DEV_STATUS" in codes
+    assert "UNRESOLVED_BLOCKERS" in codes
+    assert result["disclosed_exceptions"] == []
+
+
+def test_missing_disclosure_field_on_an_otherwise_needs_review_lane_stays_hard_fail(
+    tmp_path: Path,
+) -> None:
+    # dev.status=='needs_review' but status_rationale is entirely absent.
+    parents = _make_singular(tmp_path)
+    doc = _dev_document(TASK_ID, modified=["scripts/one.py"])
+    doc["dev"]["status"] = "needs_review"
+    doc["blocking_issues"] = ["awaiting /commit hand-off"]
+    _write(parents["dev"], doc)
+    _write(parents["qa"], _qa_document(TASK_ID, status="pass"))
+    result = RESOLVER.resolve_chain(tmp_path, TASK_ID)
+    assert result["status"] == "fail"
+    codes = _error_codes(result)
+    assert "INVALID_DEV_STATUS" in codes
+    assert "UNRESOLVED_BLOCKERS" in codes
+    assert result["disclosed_exceptions"] == []
+
+
+# --- Serialized-wave baseline route -----------------------------------------
+#
+# A fan-out whose lanes edit the same file must be dispatched serially, so its
+# lanes see different dirty trees -- and a lane dispatched after a peer session
+# committed sees a different head.  The shared-baseline requirement exists
+# because the aggregate projects ONE baseline for the whole set and every
+# downstream pre-edit/ownership cross-check resolves every lane's files against
+# that single scalar; equality is what makes that projection lossless.  These
+# tests pin the route that lets a serialized set declare its order truthfully,
+# AND pin that every corruption the requirement caught is still caught.
+
+SERIAL_DIRTY_A = " M scripts/alpha.py\n?? scripts/beta.py\n"
+SERIAL_DIRTY_B = " M scripts/alpha.py\n?? scripts/beta.py\n?? tests/lane-0.py\n"
+
+
+def _init_repo(root: Path) -> list[str]:
+    """Make `root` a git repo with two commits; return [first_sha, second_sha]."""
+    env_git = [
+        "git",
+        "-c",
+        "user.name=wave-fixture",
+        "-c",
+        "user.email=wave@fixture.invalid",
+        "-C",
+        str(root),
+    ]
+    subprocess.run(["git", "-C", str(root), "init", "-q"], check=True)
+    shas: list[str] = []
+    for index in range(2):
+        marker = root / f"commit-{index}.txt"
+        marker.write_text(f"commit {index}\n", encoding="utf-8")
+        subprocess.run(env_git + ["add", "--", marker.name], check=True)
+        subprocess.run(env_git + ["commit", "-q", "-m", f"c{index}"], check=True)
+        shas.append(
+            subprocess.run(
+                ["git", "-C", str(root), "rev-parse", "HEAD"],
+                capture_output=True,
+                text=True,
+                check=True,
+            ).stdout.strip()
+        )
+    return shas
+
+
+def _divergent_sha(root: Path) -> str:
+    """A real commit object on an unrelated root -- reachable from nothing.
+
+    Built with mktree/commit-tree rather than an orphan branch so the fixture
+    creates no branch, no worktree and no checkout: it only writes a parentless
+    commit object into the repo's object store.
+    """
+    tree = subprocess.run(
+        ["git", "-C", str(root), "mktree"],
+        input="",
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
+    return subprocess.run(
+        [
+            "git",
+            "-c",
+            "user.name=wave-fixture",
+            "-c",
+            "user.email=wave@fixture.invalid",
+            "-C",
+            str(root),
+            "commit-tree",
+            tree,
+            "-m",
+            "unrelated root",
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
+
+
+def _make_wave_fanout(root: Path, overrides: dict[str, dict]) -> dict[str, Path]:
+    """Fan-out of WORKERS where each lane's dev document is patched in place.
+
+    The canonical is rebuilt from the patched shards, so these fixtures isolate
+    the baseline dimensions under test instead of tripping the freshness checks.
+    """
+    parents = _parent_paths(root)
+    loaded = []
+    references = [_relative(root, parents["dev"])]
+    for index, worker in enumerate(WORKERS):
+        identity = f"{TASK_ID}-{worker}"
+        paths = _lane_paths(root, worker)
+        _materialise(root, f"scripts/lane-{index}.py", f"tests/lane-{index}.py")
+        dev = _dev_document(
+            identity,
+            modified=[f"scripts/lane-{index}.py"],
+            created=[f"tests/lane-{index}.py"],
+        )
+        dev.update(overrides.get(worker, {}))
+        _write(paths["ticket"], _ticket(identity))
+        _write(paths["context"], {"request_id": identity, "task_id": identity})
+        _write(paths["dev"], dev)
+        _write(paths["qa"], _qa_document(identity))
+        loaded.append((worker, dev))
+        references.extend(
+            _relative(root, paths[key]) for key in ("ticket", "context", "dev", "qa")
+        )
+    aggregate = RESOLVER._load_aggregate_module()._build_aggregate(loaded, TASK_ID)
+    _write(parents["dev"], aggregate)
+    _write(parents["completion"], _completion(TASK_ID, references))
+    return parents
+
+
+def _shard_details(result: dict) -> list[str]:
+    return [e["detail"] for e in result["errors"] if e["code"] == "INVALID_SHARD_SET"]
+
+
+def _wave_details(result: dict) -> list[str]:
+    return [
+        e["detail"] for e in result["errors"] if e["code"] == "INVALID_BASELINE_WAVE"
+    ]
+
+
+def _serialized_overrides(first: str, second: str) -> dict[str, dict]:
+    """Lane-a at the older commit, lane-b at its descendant, chain declared.
+
+    Both baseline dimensions diverge at once, exactly as a serialized wave's do:
+    lane-b ran later, so it saw a commit lane-a had not and a dirty tree lane-a
+    had not.  Neither lane's recorded baseline is altered to agree with the
+    other's -- the chain explains the divergence instead.
+    """
+    return {
+        "lane-a": {
+            "baseline_head_sha": first,
+            "baseline_dirty_snapshot": SERIAL_DIRTY_A,
+        },
+        "lane-b": {
+            "baseline_head_sha": second,
+            "baseline_dirty_snapshot": SERIAL_DIRTY_B,
+            "baseline_wave": {
+                "mode": "serialized_wave",
+                "derived_from": "lane-a",
+                "predecessor_head_sha": first,
+                "explains": ["baseline_head_sha", "baseline_dirty_snapshot"],
+                "dirty_predecessor": "lane-a",
+                "dirty_growth": 1,
+                "dirty_attribution": [
+                    {
+                        "source": "chain_files_created",
+                        "paths": ["tests/lane-0.py"],
+                    }
+                ],
+            },
+        },
+    }
+
+
+def test_serialized_wave_with_per_lane_baselines_validates(tmp_path: Path) -> None:
+    first, second = _init_repo(tmp_path)
+    _make_wave_fanout(tmp_path, _serialized_overrides(first, second))
+    result = RESOLVER.resolve_chain(tmp_path, TASK_ID)
+    assert _wave_details(result) == []
+    assert _shard_details(result) == []
+    assert result["status"] == "pass"
+
+
+def test_simultaneous_fanout_still_validates_unchanged(tmp_path: Path) -> None:
+    """Regression control: one shared baseline, no declaration anywhere."""
+    _init_repo(tmp_path)
+    shared = {
+        "baseline_head_sha": "0123456789abcdef",
+        "baseline_dirty_snapshot": SERIAL_DIRTY_A,
+    }
+    _make_wave_fanout(tmp_path, {worker: dict(shared) for worker in WORKERS})
+    result = RESOLVER.resolve_chain(tmp_path, TASK_ID)
+    assert _wave_details(result) == []
+    assert _shard_details(result) == []
+    assert result["status"] == "pass"
+
+
+def test_undeclared_divergent_baseline_is_still_rejected(tmp_path: Path) -> None:
+    """Positive control for the corruption the shared-baseline check catches.
+
+    The ONLY difference from test_serialized_wave_with_per_lane_baselines_
+    validates is that nothing is declared.  Divergence without a declaration is
+    indistinguishable from a lane dispatched against a stale or foreign tree, so
+    it must still be rejected under the original code.
+    """
+    first, second = _init_repo(tmp_path)
+    overrides = _serialized_overrides(first, second)
+    overrides["lane-b"].pop("baseline_wave")
+    _make_wave_fanout(tmp_path, overrides)
+    result = RESOLVER.resolve_chain(tmp_path, TASK_ID)
+    assert _wave_details(result) == []
+    details = _shard_details(result)
+    assert any("baseline_head_sha" in detail for detail in details), details
+    assert any("baseline_dirty_snapshot mismatch" in detail for detail in details), details
+    assert result["status"] == "fail"
+
+
+def test_serialized_wave_rejects_head_unrelated_to_its_predecessor(
+    tmp_path: Path,
+) -> None:
+    first, _second = _init_repo(tmp_path)
+    orphan = _divergent_sha(tmp_path)
+    overrides = _serialized_overrides(first, orphan)
+    overrides["lane-b"]["baseline_head_sha"] = orphan
+    _make_wave_fanout(tmp_path, overrides)
+    result = RESOLVER.resolve_chain(tmp_path, TASK_ID)
+    assert any("is not reachable from" in d for d in _wave_details(result)), result[
+        "errors"
+    ]
+    # The divergence it failed to explain is still reported under its own code.
+    assert any("baseline_head_sha" in d for d in _shard_details(result))
+    assert result["status"] == "fail"
+
+
+def test_serialized_wave_rejects_a_misstated_predecessor_head(tmp_path: Path) -> None:
+    first, second = _init_repo(tmp_path)
+    overrides = _serialized_overrides(first, second)
+    overrides["lane-b"]["baseline_wave"]["predecessor_head_sha"] = second
+    _make_wave_fanout(tmp_path, overrides)
+    result = RESOLVER.resolve_chain(tmp_path, TASK_ID)
+    assert any(
+        "does not match the baseline_head_sha" in d for d in _wave_details(result)
+    ), result["errors"]
+    assert result["status"] == "fail"
+
+
+def test_serialized_wave_rejects_a_predecessor_outside_the_shard_set(
+    tmp_path: Path,
+) -> None:
+    first, second = _init_repo(tmp_path)
+    overrides = _serialized_overrides(first, second)
+    overrides["lane-b"]["baseline_wave"]["derived_from"] = "lane-ghost"
+    _make_wave_fanout(tmp_path, overrides)
+    result = RESOLVER.resolve_chain(tmp_path, TASK_ID)
+    assert any("is not among the shards" in d for d in _wave_details(result)), result[
+        "errors"
+    ]
+    assert result["status"] == "fail"
+
+
+def test_serialized_wave_rejects_a_shrinking_working_tree(tmp_path: Path) -> None:
+    first, second = _init_repo(tmp_path)
+    overrides = _serialized_overrides(first, second)
+    overrides["lane-a"]["baseline_dirty_snapshot"] = SERIAL_DIRTY_B
+    overrides["lane-b"]["baseline_dirty_snapshot"] = SERIAL_DIRTY_A
+    overrides["lane-b"]["baseline_wave"]["dirty_growth"] = -1
+    _make_wave_fanout(tmp_path, overrides)
+    result = RESOLVER.resolve_chain(tmp_path, TASK_ID)
+    assert any("may only grow along the chain" in d for d in _wave_details(result)), (
+        result["errors"]
+    )
+    assert result["status"] == "fail"
+
+
+def test_serialized_wave_rejects_growth_it_cannot_account_for(tmp_path: Path) -> None:
+    first, second = _init_repo(tmp_path)
+    overrides = _serialized_overrides(first, second)
+    overrides["lane-b"]["baseline_wave"]["dirty_attribution"] = [
+        {"source": "chain_files_created", "paths": ["tests/never-created.py"]}
+    ]
+    _make_wave_fanout(tmp_path, overrides)
+    result = RESOLVER.resolve_chain(tmp_path, TASK_ID)
+    assert any(
+        "but none of those shards recorded creating them" in d
+        for d in _wave_details(result)
+    ), result["errors"]
+    assert result["status"] == "fail"
+
+
+def test_serialized_wave_rejects_a_declared_growth_figure_that_is_invented(
+    tmp_path: Path,
+) -> None:
+    first, second = _init_repo(tmp_path)
+    overrides = _serialized_overrides(first, second)
+    overrides["lane-b"]["baseline_wave"]["dirty_growth"] = 7
+    _make_wave_fanout(tmp_path, overrides)
+    result = RESOLVER.resolve_chain(tmp_path, TASK_ID)
+    assert any(
+        "does not equal the 1 entry growth recomputed" in d
+        for d in _wave_details(result)
+    ), result["errors"]
+    assert result["status"] == "fail"
+
+
+def test_serialized_wave_forbids_an_unitemised_remainder_on_a_porcelain_snapshot(
+    tmp_path: Path,
+) -> None:
+    """Porcelain names every entry, so exhaustive itemisation is required."""
+    first, second = _init_repo(tmp_path)
+    overrides = _serialized_overrides(first, second)
+    overrides["lane-b"]["baseline_wave"]["dirty_attribution"] = [
+        {"source": "peer_session", "paths": ["scripts/peer.py"]}
+    ]
+    overrides["lane-b"]["baseline_wave"]["dirty_growth_unitemised"] = 1
+    overrides["lane-b"]["baseline_wave"]["dirty_growth_unitemised_reason"] = "narration"
+    _make_wave_fanout(tmp_path, overrides)
+    result = RESOLVER.resolve_chain(tmp_path, TASK_ID)
+    details = _wave_details(result)
+    assert any("exhaustive itemisation is possible here" in d for d in details), details
+    assert result["status"] == "fail"
+
+
+def test_serialized_wave_permits_an_unitemised_remainder_on_a_narration(
+    tmp_path: Path,
+) -> None:
+    """A count summary names examples, so a declared, reasoned remainder stands."""
+    first, second = _init_repo(tmp_path)
+    overrides = _serialized_overrides(first, second)
+    overrides["lane-a"]["baseline_dirty_snapshot"] = "2 paths dirty at dispatch."
+    overrides["lane-b"]["baseline_dirty_snapshot"] = "4 paths dirty at dispatch."
+    wave = overrides["lane-b"]["baseline_wave"]
+    wave["dirty_growth"] = 2
+    wave["dirty_attribution"] = [
+        {"source": "chain_files_created", "paths": ["tests/lane-0.py"]}
+    ]
+    wave["dirty_growth_unitemised"] = 1
+    wave["dirty_growth_unitemised_reason"] = (
+        "the recorded snapshot is a count summary naming examples, not porcelain"
+    )
+    _make_wave_fanout(tmp_path, overrides)
+    result = RESOLVER.resolve_chain(tmp_path, TASK_ID)
+    assert _wave_details(result) == []
+    assert _shard_details(result) == []
+    assert result["status"] == "pass"
+
+
+def test_serialized_wave_requires_a_reason_for_an_unitemised_remainder(
+    tmp_path: Path,
+) -> None:
+    first, second = _init_repo(tmp_path)
+    overrides = _serialized_overrides(first, second)
+    overrides["lane-a"]["baseline_dirty_snapshot"] = "2 paths dirty at dispatch."
+    overrides["lane-b"]["baseline_dirty_snapshot"] = "4 paths dirty at dispatch."
+    wave = overrides["lane-b"]["baseline_wave"]
+    wave["dirty_growth"] = 2
+    wave["dirty_attribution"] = [
+        {"source": "chain_files_created", "paths": ["tests/lane-0.py"]}
+    ]
+    wave["dirty_growth_unitemised"] = 1
+    _make_wave_fanout(tmp_path, overrides)
+    result = RESOLVER.resolve_chain(tmp_path, TASK_ID)
+    assert any(
+        "must state why the recorded snapshot cannot support exhaustive itemisation" in d
+        for d in _wave_details(result)
+    ), result["errors"]
+    assert result["status"] == "fail"
+
+
+def test_serialized_wave_rejects_peer_attribution_that_double_counts_the_chain(
+    tmp_path: Path,
+) -> None:
+    first, second = _init_repo(tmp_path)
+    overrides = _serialized_overrides(first, second)
+    overrides["lane-b"]["baseline_wave"]["dirty_attribution"] = [
+        {"source": "peer_session", "paths": ["tests/lane-0.py"]}
+    ]
+    _make_wave_fanout(tmp_path, overrides)
+    result = RESOLVER.resolve_chain(tmp_path, TASK_ID)
+    assert any(
+        "cannot be counted twice" in d for d in _wave_details(result)
+    ), result["errors"]
+    assert result["status"] == "fail"
+
+
+def test_serialized_wave_rejects_an_unsupported_mode(tmp_path: Path) -> None:
+    first, second = _init_repo(tmp_path)
+    overrides = _serialized_overrides(first, second)
+    overrides["lane-b"]["baseline_wave"]["mode"] = "whatever"
+    _make_wave_fanout(tmp_path, overrides)
+    result = RESOLVER.resolve_chain(tmp_path, TASK_ID)
+    assert any("is not supported" in d for d in _wave_details(result)), result["errors"]
+    assert result["status"] == "fail"
+
+
+def test_serialized_wave_rejects_a_self_referential_chain(tmp_path: Path) -> None:
+    first, second = _init_repo(tmp_path)
+    overrides = _serialized_overrides(first, second)
+    overrides["lane-b"]["baseline_wave"]["derived_from"] = "lane-b"
+    _make_wave_fanout(tmp_path, overrides)
+    result = RESOLVER.resolve_chain(tmp_path, TASK_ID)
+    assert any("names itself" in d for d in _wave_details(result)), result["errors"]
+    assert result["status"] == "fail"
+
+
+def test_serialized_wave_rejects_a_cycle_that_roots_nowhere(tmp_path: Path) -> None:
+    first, second = _init_repo(tmp_path)
+    overrides = _serialized_overrides(first, second)
+    overrides["lane-a"]["baseline_wave"] = {
+        "mode": "serialized_wave",
+        "derived_from": "lane-b",
+        "predecessor_head_sha": second,
+        "explains": ["baseline_head_sha"],
+    }
+    _make_wave_fanout(tmp_path, overrides)
+    result = RESOLVER.resolve_chain(tmp_path, TASK_ID)
+    assert any("never roots at an undeclared baseline" in d for d in _wave_details(result)), (
+        result["errors"]
+    )
+    assert result["status"] == "fail"
+
+
+def test_serialized_wave_retires_only_the_dimension_it_names(tmp_path: Path) -> None:
+    """A chain that accounts only for the head leaves the dirty divergence standing."""
+    first, second = _init_repo(tmp_path)
+    overrides = _serialized_overrides(first, second)
+    wave = overrides["lane-b"]["baseline_wave"]
+    wave["explains"] = ["baseline_head_sha"]
+    for key in ("dirty_predecessor", "dirty_growth", "dirty_attribution"):
+        wave.pop(key, None)
+    _make_wave_fanout(tmp_path, overrides)
+    result = RESOLVER.resolve_chain(tmp_path, TASK_ID)
+    assert _wave_details(result) == []
+    details = _shard_details(result)
+    assert details == ["shard 'lane-b': baseline_dirty_snapshot mismatch"], details
+    assert result["status"] == "fail"
+
+
+def test_serialized_wave_fails_closed_when_a_head_does_not_resolve(
+    tmp_path: Path,
+) -> None:
+    """An unverifiable claim must not buy a weaker verdict than declaring nothing."""
+    first, second = _init_repo(tmp_path)
+    overrides = _serialized_overrides(first, second)
+    absent = "0" * 40
+    overrides["lane-b"]["baseline_head_sha"] = absent
+    _make_wave_fanout(tmp_path, overrides)
+    result = RESOLVER.resolve_chain(tmp_path, TASK_ID)
+    assert any("does not resolve to a commit" in d for d in _wave_details(result)), (
+        result["errors"]
+    )
+    assert any("baseline_head_sha" in d for d in _shard_details(result))
+    assert result["status"] == "fail"
