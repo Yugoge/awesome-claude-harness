@@ -183,6 +183,13 @@ GIT_COMMIT_INVOCATION_RE = re.compile(
     r'(?:^|[\s;&|()`])(?:\S*/)?git(' + GIT_GLOBAL_OPTION_RE + r')\s+commit\b'
 )
 
+# Same grammar as GIT_COMMIT_INVOCATION_RE, swapped to `merge` -- used by the
+# merge-grant binding (2026-10-02) to recover the global-options span of a
+# `git ... merge` invocation for -C extraction, mirroring the commit path.
+GIT_MERGE_INVOCATION_RE = re.compile(
+    r'(?:^|[\s;&|()`])(?:\S*/)?git(' + GIT_GLOBAL_OPTION_RE + r')\s+merge\b'
+)
+
 # `-C` (capital only) is "run as if git was started in <dir>". Lowercase `-c`
 # is an unrelated config override (`-c name=value`) and must never be
 # mistaken for a directory. Matches both `-C dir` and glued `-Cdir` forms,
@@ -1468,8 +1475,387 @@ def _evaluate_commit(command, data):
     _block_default_deny_commit(msg)
 
 
+def _iter_merge_invocations(command):
+    """Yield one descriptor dict per `git ... merge` invocation in `command`.
+
+    Mirrors _iter_commit_invocations (hooks/pretool-git-privilege-guard.py:890)
+    exactly -- segment-aware, token-aware, enumerates EVERY invocation in a
+    chained command -- with one addition: `branch_arg`, the first non-flag
+    positional token after the `merge` subcommand. That is the branch the
+    merge-analyst grant's `branch`/`source_tip` fields must bind to; merge.sh
+    always invokes `git merge "$BRANCH_NAME" --no-edit`, so there is no need
+    to look past the first positional.
+
+    Each descriptor:
+      segment              : the raw shell segment (for -C extraction + excerpts)
+      options_span         : global-options text between `git` and `merge`
+      branch_arg           : first non-flag positional token after `merge`, or ''
+      inline_env_redirect  : True iff a GIT_DIR/GIT_WORK_TREE/GIT_COMMON_DIR
+                             assignment is inline-prefixed before the git token
+      flag_redirect        : True iff --git-dir/--work-tree/--namespace appears
+                             as a git global option before the merge subcommand
+      cwd_redirected       : True iff a cd/pushd/popd segment executes BEFORE
+                             this merge in the same command string (the probe
+                             cannot see the post-cd cwd -> fail closed)
+    """
+    cwd_redirected = False
+    for seg in _shell_segments(command):
+        toks = seg.split()
+        if not toks:
+            continue
+        idx = _cmd_token_index(toks)
+        if idx is None:
+            continue
+        if os.path.basename(toks[idx].strip('\'"')) in _CWD_CHANGE_CMDS:
+            cwd_redirected = True
+            continue
+        if os.path.basename(toks[idx]) != 'git':
+            continue
+        after_git = toks[idx + 1:]
+        i = 0
+        while i < len(after_git):
+            a = after_git[i]
+            if a in _GIT_GLOBAL_VALUE:
+                i += 2
+                continue
+            if a.startswith('-'):
+                i += 1
+                continue
+            break
+        global_opts = after_git[:i]
+        subcommand = after_git[i] if i < len(after_git) else None
+        if subcommand != 'merge':
+            continue
+        inline_env_redirect = any(
+            _ENV_ASSIGN_RE.match(t) and t.split('=', 1)[0] in _GIT_REDIRECT_ENV_VARS
+            for t in toks[:idx]
+        )
+        flag_redirect = any(
+            t.split('=', 1)[0] in _GIT_REDIRECT_FLAGS for t in global_opts
+        )
+        m = GIT_MERGE_INVOCATION_RE.search(seg)
+        options_span = m.group(1) if m else ''
+        yield {
+            'segment': seg,
+            'options_span': options_span,
+            'branch_arg': _extract_merge_branch_arg(after_git[i + 1:]),
+            'inline_env_redirect': inline_env_redirect,
+            'flag_redirect': flag_redirect,
+            'cwd_redirected': cwd_redirected,
+        }
+
+
+def _extract_merge_branch_arg(merge_args):
+    """First non-flag positional token in a `git merge` invocation's
+    remaining args, or '' when none present (e.g. `git merge --continue`,
+    `git merge --abort`)."""
+    for tok in merge_args:
+        if tok == '--':
+            continue
+        if tok.startswith('-'):
+            continue
+        return tok
+    return ''
+
+
+def _extract_merge_dash_c_from_span(options_span, command_excerpt):
+    """Resolve the single `-C <dir>` value from a merge invocation's
+    global-options span, or '' when no explicit `-C` is present.
+
+    Mirrors _extract_dash_c_from_span's multiple-`-C` / unresolved-${VAR}
+    fail-closed handling (hooks/pretool-git-privilege-guard.py:812) with its
+    own merge-labeled diagnostics, so a merge-time block never claims to be
+    about a commit.
+    """
+    matches = list(DASH_CAPITAL_C_RE.finditer(options_span))
+    if not matches:
+        return ''
+    if len(matches) > 1:
+        _block(
+            '\nBLOCKED: agent git merge - multiple -C directory overrides '
+            'in one merge invocation are not supported.\n'
+            'Command excerpt: %s\n' % command_excerpt[:200]
+            + 'Re-issue the merge with exactly one -C <dir> (or none).\n'
+        )
+    dm = matches[0]
+    value = dm.group(1) or dm.group(2) or dm.group(3) or ''
+    if '$' in value:
+        _block(
+            '\nBLOCKED: agent git merge - the -C argument %r looks like an '
+            'unresolved shell variable reference, not a concrete path.\n' % value
+            + 'Command excerpt: %s\n' % command_excerpt[:200]
+            + 'Substitute the concrete resolved absolute directory before '
+            'submitting the merge command.\n'
+        )
+    return value
+
+
+def _block_merge_redirect(segment, vector):
+    _block(
+        '\nBLOCKED: agent git merge - %s redirect detected.\n' % vector
+        + 'A merge-analyst grant is bound to a specific repo/branch/HEAD '
+        'resolved at issuance time; --git-dir / --work-tree / --namespace '
+        'flags and GIT_DIR / GIT_WORK_TREE / GIT_COMMON_DIR env assignments '
+        'repoint the merge at a DIFFERENT target the grant never authorized. '
+        'Only a bare `git merge` or `git -C <dir> merge` (validated against '
+        'the grant) is permitted.\n'
+        + 'Command excerpt: %s\n' % segment[:200]
+        + 'Spec: pretool-git-privilege-guard.py 2026-10-02 merge-grant '
+        'redirect-vector closure (fail closed, mirrors the commit-grant model).\n'
+    )
+
+
+def _validate_merge_grant_repo(grant, target_dir):
+    """Grant.repo_root must match the toplevel of the merge's target repo
+    (mirrors _validate_commit_grant_repo)."""
+    grant_repo = grant.get('repo_root') or ''
+    current_repo = _commit_target_git_output(target_dir, 'rev-parse', '--show-toplevel')
+    if not grant_repo or not current_repo or grant_repo != current_repo:
+        _block(
+            '\nBLOCKED: agent git merge - repository mismatch.\n'
+            'Grant repo_root  : %r\n' % grant_repo
+            + 'Current repo_root: %r\n' % current_repo
+            + 'A merge-analyst grant issued for one repository may not '
+            'authorize a merge in another. Re-run /merge from within the '
+            'target repository.\n'
+            + 'Spec: pretool-git-privilege-guard.py 2026-10-02 merge-grant '
+            'binding fix (mirrors _validate_commit_grant_repo).\n'
+        )
+
+
+def _validate_merge_grant_branch(grant, branch_arg):
+    """Grant.branch must match the branch argument of `git merge <branch>`
+    (mirrors _validate_commit_grant_branch)."""
+    grant_branch = grant.get('branch') or ''
+    if not grant_branch or not branch_arg or grant_branch != branch_arg:
+        _block(
+            '\nBLOCKED: agent git merge - branch mismatch.\n'
+            'Grant branch      : %r\n' % grant_branch
+            + 'git merge argument: %r\n' % branch_arg
+            + 'Spec: pretool-git-privilege-guard.py 2026-10-02 merge-grant '
+            'binding fix (mirrors _validate_commit_grant_branch).\n'
+        )
+
+
+def _validate_merge_grant_source_tip(grant, target_dir, branch_arg):
+    """Grant.source_tip must match the live tip of the branch being merged
+    (mirrors _validate_commit_grant_head's expected_head binding)."""
+    grant_tip = grant.get('source_tip') or ''
+    current_tip = (
+        _commit_target_git_output(target_dir, 'rev-parse', 'refs/heads/%s' % branch_arg)
+        if branch_arg else ''
+    )
+    if not grant_tip or not current_tip or grant_tip != current_tip:
+        _block(
+            '\nBLOCKED: agent git merge - source_tip mismatch.\n'
+            'Grant source_tip  : %r\n' % grant_tip
+            + 'Current branch tip: %r\n' % current_tip
+            + 'The merged-in branch moved since merge-analyst ran; re-run '
+            '/merge to get a fresh analysis.\n'
+        )
+
+
+def _validate_merge_grant_default_branch(grant, target_dir):
+    """Grant.default_branch must match the current branch of the merge's
+    target repo (merge.sh checks out the default branch before merging)."""
+    grant_default_branch = grant.get('default_branch') or ''
+    current_branch = _commit_target_git_output(target_dir, 'branch', '--show-current')
+    if not grant_default_branch or grant_default_branch != current_branch:
+        _block(
+            '\nBLOCKED: agent git merge - default_branch mismatch.\n'
+            'Grant default_branch: %r\n' % grant_default_branch
+            + 'Current branch      : %r\n' % current_branch
+            + 'The branch merge is running against does not match '
+            'merge-analyst\'s analysis; re-run /merge to get a fresh analysis.\n'
+        )
+
+
+def _validate_merge_grant_default_tip(grant, target_dir):
+    """Grant.default_tip must match the current HEAD of the merge's target
+    repo (mirrors _validate_commit_grant_head)."""
+    grant_default_tip = grant.get('default_tip') or ''
+    current_head = _commit_target_git_output(target_dir, 'rev-parse', 'HEAD')
+    if not grant_default_tip or grant_default_tip != current_head:
+        _block(
+            '\nBLOCKED: agent git merge - default_tip mismatch.\n'
+            'Grant default_tip: %r\n' % grant_default_tip
+            + 'Current HEAD     : %r\n' % current_head
+            + 'HEAD moved since merge-analyst ran; re-run /merge to get a '
+            'fresh analysis.\n'
+            + 'Spec: pretool-git-privilege-guard.py 2026-10-02 merge-grant '
+            'binding fix (mirrors _validate_commit_grant_head).\n'
+        )
+
+
+def _enforce_merge_grant_binding(grant, command):
+    """Validate the grant's repo/branch/tip binding against the SINGLE merge
+    invocation in `command`, failing CLOSED on any unresolvable redirect.
+
+    Mirrors _enforce_commit_grant_binding (hooks/pretool-git-privilege-guard.py:980)
+    exactly in structure -- ambient redirect first, then per-invocation
+    inline-env/flag/cwd redirect checks, then field validation -- with TWO
+    differences dictated by what a merge actually binds: a merge grant
+    authorizes exactly one merge (there is no changelog-analyst-style
+    multi-invocation caller for merge, so >1 invocation is already a replay
+    or injection attempt and is rejected the same as zero), and merge
+    validates FIVE fields (repo_root, branch, source_tip, default_branch,
+    default_tip) instead of commit's three, because a merge binds both the
+    branch being merged in AND the branch it lands on.
+    """
+    if _ambient_git_redirect_present():
+        _block(
+            '\nBLOCKED: agent git merge - ambient GIT_DIR/GIT_WORK_TREE/'
+            'GIT_COMMON_DIR environment redirect present.\n'
+            'The merge target repo cannot be verified against the grant '
+            'binding while these are set. Unset them and re-run /merge.\n'
+            'Spec: pretool-git-privilege-guard.py 2026-10-02 merge-grant '
+            'redirect-vector closure (fail closed).\n'
+        )
+    invocations = list(_iter_merge_invocations(command))
+    if not invocations:
+        _block(
+            '\nBLOCKED: agent git merge - a merge was detected but its '
+            'effective target repository could not be resolved for grant '
+            'validation.\n'
+            'Command excerpt: %s\n' % command[:200]
+            + 'Fail closed: an unlocatable merge target is rejected, not '
+            'guessed.\n'
+        )
+    if len(invocations) > 1:
+        _block(
+            '\nBLOCKED: agent git merge - %d merge invocations in ONE command; '
+            'a merge-analyst grant authorizes exactly ONE merge.\n' % len(invocations)
+            + 'Command excerpt: %s\n' % command[:200]
+        )
+    inv = invocations[0]
+    if inv['inline_env_redirect']:
+        _block_merge_redirect(inv['segment'], 'inline-env GIT_DIR/GIT_WORK_TREE')
+    if inv['flag_redirect']:
+        _block_merge_redirect(inv['segment'], '--git-dir/--work-tree/--namespace flag')
+    if inv.get('cwd_redirected'):
+        _block_merge_redirect(inv['segment'], 'cd/pushd cwd-change before merge')
+    target_dir = _extract_merge_dash_c_from_span(inv['options_span'], inv['segment'])
+    branch_arg = inv.get('branch_arg') or ''
+    _validate_merge_grant_repo(grant, target_dir)
+    _validate_merge_grant_branch(grant, branch_arg)
+    _validate_merge_grant_source_tip(grant, target_dir, branch_arg)
+    _validate_merge_grant_default_branch(grant, target_dir)
+    _validate_merge_grant_default_tip(grant, target_dir)
+
+
+def _block_merge_grant_not_approved(verdict):
+    _block(
+        '\nBLOCKED: agent git merge - merge-analyst grant verdict is %r, '
+        'not "approved".\n' % verdict
+        + 'A blocked, unrecognized, or missing verdict never authorizes a '
+        'merge.\n'
+    )
+
+
+def _block_missing_merge_grant():
+    _block(
+        '\nBLOCKED: agent git merge - CLAUDE_MERGE_COMMAND_ACTIVE=1 is set '
+        'but no valid merge-analyst grant was found for this repo/session.\n'
+        'Single-use grants are unlinked on first valid consumption; a '
+        'missing grant means it was already used, never written, or was '
+        'reaped after expiry.\n'
+        'Spec: pretool-git-privilege-guard.py 2026-10-02 merge-grant '
+        'binding fix (mirrors _block_missing_push_grant).\n'
+    )
+
+
+def _block_expired_merge_grant():
+    _block(
+        '\nBLOCKED: agent git merge - merge-analyst grant has expired '
+        '(60s TTL).\n'
+        'Re-run /merge to get a fresh analysis.\n'
+        'Spec: pretool-git-privilege-guard.py 2026-10-02 merge-grant '
+        'binding fix (mirrors _end_time_passed).\n'
+    )
+
+
+def _merge_repo_hash():
+    """sha256(realpath(repo toplevel))[:16], matching commands/merge.md Step 1's
+    REPO_HASH computation exactly (`realpath "$(git rev-parse --show-toplevel)"`
+    piped through sha256sum, first 16 hex chars), so the hook locates the SAME
+    on-disk grant directory merge-analyst wrote to. Always resolved from the
+    hook's OWN cwd (no -C override), matching how /merge's Step 1 computes it
+    from the orchestrator's cwd before the wrapper is ever invoked.
+    """
+    toplevel = _commit_target_git_output('', 'rev-parse', '--show-toplevel')
+    if not toplevel:
+        return ''
+    try:
+        real = os.path.realpath(toplevel)
+    except Exception:
+        return ''
+    return hashlib.sha256(real.encode('utf-8')).hexdigest()[:16]
+
+
+def _find_merge_grant(sid):
+    """Return (resolved_path, grant_dict) or (None, None) on miss/invalid.
+
+    merge-analyst grants live at a NESTED path -- not the flat
+    /tmp/claude-{kind}-grant-<sid>-<nonce>.json convention _find_grant
+    assumes (agents/merge-analyst.md Phase 8):
+      /tmp/agentic-commit/merge-analyst/<REPO_HASH>/<SESSION_ID>/<REQUEST_ID>.json
+    REPO_HASH is recomputed fresh from the hook's OWN live repo state (never
+    trusted from the grant), so a grant cannot claim membership in a repo it
+    does not match. REQUEST_ID (nonce) is unknown to the hook -- the
+    orchestrator that dispatched merge-analyst and calls merge.sh is the only
+    session_id this hook ever sees for a merge, so the session directory is
+    globbed in full and the newest JSON-parseable candidate wins (mirrors
+    _find_grant's mtime-descending selection).
+    """
+    if not sid:
+        return (None, None)
+    repo_hash = _merge_repo_hash()
+    if not repo_hash:
+        return (None, None)
+    pattern = '/tmp/agentic-commit/merge-analyst/%s/%s/*.json' % (repo_hash, sid)
+    try:
+        candidates = glob.glob(pattern)
+    except Exception:
+        return (None, None)
+    try:
+        candidates.sort(key=lambda p: os.stat(p).st_mtime, reverse=True)
+    except Exception:
+        candidates.sort(reverse=True)
+    for path in candidates:
+        grant = _load_grant(path)
+        if grant is not None:
+            return (path, grant)
+    return (None, None)
+
+
+def _enforce_merge_grant(command, data):
+    """2026-10-02: CLAUDE_MERGE_COMMAND_ACTIVE=1 is necessary but no longer
+    sufficient on its own -- it must be paired with a live, unexpired,
+    verdict=approved merge-analyst grant bound to THIS repo/branch/HEAD,
+    mirroring _evaluate_commit's grant-binding model
+    (hooks/pretool-git-privilege-guard.py:1391-1468). Closes the gap where a
+    merge-analyst grant that was never written, stale, verdict=blocked, or
+    bound to the wrong repo/branch/HEAD had zero effect on whether the
+    env-var-gated merge proceeded -- the wrapper (hooks/merge.sh) sets the
+    env var unconditionally, so it alone never proved Steps 2-4 of
+    commands/merge.md actually ran.
+    """
+    sid = _get_session_id(data)
+    grant_path, grant = _find_merge_grant(sid)
+    if grant is None:
+        _block_missing_merge_grant()
+    if _end_time_passed(grant.get('expires_at', '')):
+        _block_expired_merge_grant()
+    if grant.get('verdict') != 'approved':
+        _block_merge_grant_not_approved(grant.get('verdict'))
+    _enforce_merge_grant_binding(grant, command)
+    # All validations passed. Consume grant (single-use), then allow.
+    _unlink_grant(grant_path)
+
+
 def _evaluate_merge(command, data):
     if os.environ.get('CLAUDE_MERGE_COMMAND_ACTIVE') == '1':
+        _enforce_merge_grant(command, data)
         return
     if _check_git_allowlist(command, data):
         return

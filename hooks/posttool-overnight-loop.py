@@ -22,6 +22,26 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
+# G4 overnight-loop-reset anchor (ticket 20260930-132644-l4 item 7). Shares
+# the SAME env var and advisory-log file as hooks/stop-obligation-gate.py --
+# one switch, one log stream, for both halves of gate G4.
+ADVISORY_LOG = Path.home() / '.claude' / 'logs' / 'obligation-terminal-gate-advisory.jsonl'
+
+# Mirrors hooks/stop-do-report-gate.py's TERMINAL_STATUSES constant: "blocked"
+# is a legitimate terminal dev status, never "incomplete" (R9).
+TERMINAL_DEV_STATUSES = {"completed", "blocked"}
+
+
+def _log_event(record: dict) -> None:
+    """Best-effort append to the shared G4 advisory log. Never raises."""
+    try:
+        ADVISORY_LOG.parent.mkdir(parents=True, exist_ok=True)
+        record['ts'] = datetime.now(timezone.utc).isoformat()
+        with open(ADVISORY_LOG, 'a', encoding='utf-8') as f:
+            f.write(json.dumps(record, ensure_ascii=False) + '\n')
+    except Exception:
+        pass
+
 
 def _all_completed(data: dict) -> bool:
     """Check if all todos in the tool_input are completed."""
@@ -107,12 +127,99 @@ def _update_state_cycle(state: dict, state_path: Path) -> None:
     # Backward compat: remove legacy v5 fields if present
     state.pop('current_issue', None)
     state.pop('current_issue_iteration', None)
+    # A successful reset supersedes any reason recorded by a PRIOR blocked
+    # attempt for the cycle that just ended -- stale reasons must not persist
+    # into the next cycle's state (ticket 20260930-132644-l4 item 7).
+    state.pop('terminal_gate_blocked_reason', None)
     tmp = state_path.with_suffix('.tmp')
     try:
         tmp.write_text(json.dumps(state, indent=2))
         os.rename(str(tmp), str(state_path))
     except Exception:
         pass
+
+
+def _write_terminal_gate_reason(state: dict, state_path: Path, reason: str) -> None:
+    """Record why the G4 terminal gate blocked this cycle's reset (new
+    overnight-state field, ticket 20260930-132644-l4 item 7). Atomic
+    tmp-then-rename, matching the file's existing write pattern
+    (_mark_session_complete / _update_state_cycle)."""
+    state['terminal_gate_blocked_reason'] = reason
+    tmp = state_path.with_suffix('.tmp')
+    try:
+        tmp.write_text(json.dumps(state, indent=2))
+        os.rename(str(tmp), str(state_path))
+    except Exception:
+        pass
+
+
+def _lane_dev_status(project_dir: Path, pipeline: dict) -> str | None:
+    """Read dev.status from this pipeline's dev-report, or None if the
+    report/field is absent or unreadable (treated as non-terminal by the
+    caller -- a lane with no recorded status is not proven terminal)."""
+    suffix = pipeline.get('timestamp_suffix')
+    if not isinstance(suffix, str) or not suffix:
+        return None
+    report_path = project_dir / 'docs' / 'dev' / f'dev-report-{suffix}.json'
+    try:
+        record = json.loads(report_path.read_text(encoding='utf-8'))
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(record, dict):
+        return None
+    dev = record.get('dev')
+    status = dev.get('status') if isinstance(dev, dict) else None
+    return status if isinstance(status, str) else None
+
+
+def _lane_label(pipeline: dict, index: int) -> str:
+    """Human-readable identifier for a current_issues[] entry, used in the
+    state-reason text so the reason names the SPECIFIC non-terminal lane."""
+    suffix = pipeline.get('timestamp_suffix')
+    description = pipeline.get('description')
+    label = f'pipeline[{index}] ({suffix})' if isinstance(suffix, str) and suffix else f'pipeline[{index}]'
+    if isinstance(description, str) and description:
+        label += f': {description[:60]}'
+    return label
+
+
+def _first_non_terminal_lane(state: dict, project_dir: Path) -> str | None:
+    """Condition (b): return a label for the first lane whose dev status
+    this cycle is NOT in TERMINAL_DEV_STATUSES, or None if every lane is
+    terminal. "blocked" IS terminal -- never treated as "incomplete" (R9)."""
+    current_issues = state.get('current_issues')
+    if not isinstance(current_issues, list):
+        return None
+    for index, pipeline in enumerate(current_issues):
+        if not isinstance(pipeline, dict):
+            return f'pipeline[{index}] (malformed entry)'
+        status = _lane_dev_status(project_dir, pipeline)
+        if status not in TERMINAL_DEV_STATUSES:
+            return _lane_label(pipeline, index)
+    return None
+
+
+def _terminal_gate_block_reason(data: dict, state: dict, project_dir: Path) -> str | None:
+    """Conditions (a) and (b) for the G4 overnight-loop-reset anchor (ticket
+    20260930-132644-l4 item 7). Returns a human-readable reason naming which
+    condition failed, or None when both pass (safe to reset as today)."""
+    transcript_path = data.get('transcript_path') or ''
+    if transcript_path:
+        hooks_dir = str(Path(__file__).resolve().parent)
+        if hooks_dir not in sys.path:
+            sys.path.insert(0, hooks_dir)
+        from lib import obligation  # type: ignore
+        unresolved = obligation.find_unresolved_dispatch_obligations(
+            str(transcript_path), str(project_dir))
+        if unresolved:
+            names = sorted({str(item.get('artifact_path')) for item in unresolved})
+            return 'condition (a) unresolved obligation(s): ' + ', '.join(names)
+
+    non_terminal = _first_non_terminal_lane(state, project_dir)
+    if non_terminal is not None:
+        return f'condition (b) non-terminal lane dev status: {non_terminal}'
+
+    return None
 
 
 def _print_loop_instructions(state: dict, end_time: datetime, state_path: Path) -> None:
@@ -158,6 +265,31 @@ def main() -> None:
     if end_time is None:
         _mark_session_complete(state, state_path)
         sys.exit(0)
+
+    # G4 terminal-gate anchor (ticket 20260930-132644-l4 item 7): two new
+    # required conditions, inserted AFTER the expiry check above (which keeps
+    # precedence, unconditionally, per the pre-existing guard) and BEFORE the
+    # pre-existing reset call below. "off" mode skips both conditions
+    # entirely -- not even a log write. Any unexpected exception fails open
+    # to the ORIGINAL unconditional reset (never raises past main()).
+    mode = (os.environ.get('CLAUDE_OBLIGATION_TERMINAL', 'advisory') or 'advisory').strip().lower()
+    if mode != 'off':
+        session_id_for_log = data.get('session_id', '')
+        project_dir = Path(os.environ.get('CLAUDE_PROJECT_DIR', os.getcwd()))
+        try:
+            reason = _terminal_gate_block_reason(data, state, project_dir)
+        except Exception as exc:
+            reason = None
+            _log_event({'event': 'gate_error', 'session_id': session_id_for_log, 'error': repr(exc)})
+        if reason is not None:
+            if mode == 'block':
+                _write_terminal_gate_reason(state, state_path, reason)
+                print(f'OVERNIGHT LOOP: cycle reset BLOCKED -- {reason}')
+                sys.exit(0)
+            # advisory (default, or any value other than "block"/"off"): the
+            # ORIGINAL reset still happens below, unchanged; only log it.
+            _log_event({'event': 'would_block_reset', 'mode': mode,
+                        'session_id': session_id_for_log, 'reason': reason})
 
     _update_state_cycle(state, state_path)
     _print_loop_instructions(state, end_time, state_path)
