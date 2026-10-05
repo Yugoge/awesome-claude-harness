@@ -4,16 +4,18 @@ Organization and usage documentation for `scripts/`.
 
 <!-- AUTO:readme-stats -->
 ## Overview
-- **Total files**: 110
+- **Total files**: 115
 - **Subdirectories**: 6
 - **Naming convention**: kebab
 
 ## Files
+- `adjudicate-attribution-staging.py` - CLI: journal-based three-way staging adjudicator (read-only unless --capture-dispatch-baselines-into or --escalation-store is given; see scripts/lib/attribution_adjudicator.py).
 - `aggregate-dev-report.py` - Scans docs/dev/ for per-worker shard dev-reports matching a given task-id,
 - `aggregate-permissions.py` - Usage: aggregate-permissions.py <qa-glob-or-dir> [pipelines.json]
 - `analyze-folder-history.sh` - Description: Analyze Git history for folder to discover file creation patterns
 - `analyze-git-edge-cases.sh` - Description: Analyze git history for edge cases from bug fix commits
 - `apply-permissions.sh` - apply-permissions.sh — merge aggregated permissions JSON list into settings.json
+- `attribution-aggregate-view.py` - CLI: journal-backed canonical aggregate view (read-only unless --escalation-store is given; see scripts/lib/attribution_aggregate_view.py).
 - `blast-radius-tool.py` - Two phases:
 - `bootstrap` - bootstrap file
 - `break-overnight-lock.py` - Backdates end_time on every active overnight-state-*.json so
@@ -28,7 +30,6 @@ Organization and usage documentation for `scripts/`.
 - `check-late-repair-provenance.py` - Takes ONLY ``--task-id`` and ``--project-dir`` (never a caller-supplied file
 - `check-overnight-reports.py` - Description: Validates all overnight required outputs declared by the active
 - `check-overnight-reports.sh` - DEPRECATED — replaced by check-overnight-reports.py per spec-20260426-090235 P0/M5.
-- `check-owned-edits-ledger.py` - The owned-edits ledger (``owned_edits`` / ``pre_edit_snapshots`` /
 - `check-public-core.sh` - Description: Public/private boundary gate. Recomputes the top-level tracked-path set from
 - `check-readme-freshness.sh` - Check README.md freshness for all major folders
 - `check-security-hook-drift.sh` - Description: Audit always-on security-critical hook files against a cycle baseline SHA
@@ -77,6 +78,7 @@ Organization and usage documentation for `scripts/`.
 - `overnight-inplace-env.sh` - overnight-inplace-env.sh — export the overnight ACTOR MARKER, and nothing else.
 - `overnight-status.sh` - overnight-status.sh — Zero-LLM overnight session status query
 - `paseo-daemon-ledger.py` - Deterministic CLI realizing blueprint F6/F8/F10/F11/F14 local-persistence
+- `paseo-daemon-timers.py` - four paseo-daemon timer schedules (tick, ctrl-core-reinject, watchdog,
 - `paseo-usage-read.mjs` - mjs file
 - `plan-style-inspection.sh` - Description: Discover auditable files and split into groups for parallel style inspection
 - `precommitted-recovery.sh` - Description: Recovery path helpers for nothing_to_commit_precommitted detection.
@@ -95,6 +97,8 @@ Organization and usage documentation for `scripts/`.
 - `scan-project.sh` - Description: Scan project structure and detect project type
 - `score-inject.sh` - Description: Emit a prompt-injection text block describing an agent's current rank/range
 - `score-update.sh` - Description: Update agent score by appending an entry to the lifecycle JSONL log.
+- `seal-attribution-journal.py` - The repo tree (journals under state/attribution-journal/ AND the git object
+- `session-index.py` - Subcommands (all take --git-root):
 - `session-resources.py` - Provider-neutral CLI for the LANE-B session resource broker.
 - `spec-check.py` - Subcommands: check-in, mark, waive, status, check-out, unlock
 - `stage-owned-hunks.py` - Stages ONLY this cycle's owned hunks within a single already-authorized file,
@@ -102,6 +106,7 @@ Organization and usage documentation for `scripts/`.
 - `test` - test file
 - `update-gitignore.sh` - update-gitignore.sh - Auto-update .gitignore with project-specific rules
 - `update-overnight-state.sh` - update-overnight-state.sh — Atomically update overnight state file
+- `verify-attribution-chain.py` - Folds each file's events across ALL session journals into a hash chain and
 - `verify-claims-extended.sh` - Description: Extended headline-claims gate. Closes the four documented coverage gaps in
 - `verify-claims.sh` - Description: Self-verifying headline-claims gate. Recomputes the wired-hook entry count and
 - `verify-hero-provenance.py` - Description: Re-runs the demo, normalizes both outputs and byte-diffs them; verifies raw
