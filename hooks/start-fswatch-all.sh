@@ -55,7 +55,9 @@ for repo in "${REPOS[@]}"; do
     mkdir -p "$HOME/.claude/logs"
 
     # Remove old lock file if exists
-    rm -f "/tmp/git-fswatch-${USER}.lock" 2>/dev/null
+    . "$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)/lib/harness_state_dir.sh" 2>/dev/null \
+      || harness_state_dir() { printf '%s\n' /tmp; }
+    rm -f "$(harness_state_dir)/git-fswatch-${USER}.lock" 2>/dev/null
 
     nohup bash ~/.claude/hooks/git-fswatch.sh "$repo" \
         > "$log_file" 2>&1 &

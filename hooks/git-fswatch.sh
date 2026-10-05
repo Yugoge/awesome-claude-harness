@@ -25,8 +25,10 @@ DEBOUNCE_DELAY=${FSWATCH_DEBOUNCE:-12}       # Debounce delay (seconds, ensures 
 AUTO_PULL_INTERVAL=${FSWATCH_PULL_INTERVAL:-300}  # Auto pull interval (seconds, default 5 minutes)
 MAX_RETRIES=${FSWATCH_MAX_RETRIES:-3}        # Maximum retry attempts
 LOG_FILE="${HOME}/.claude/logs/git-fswatch-${REPO_NAME}.log"
-LOCK_FILE="/tmp/git-fswatch-${USER}-${REPO_NAME}.lock"
-STATE_FILE="/tmp/git-fswatch-state-${USER}-${REPO_NAME}.txt"
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)/lib/harness_state_dir.sh" 2>/dev/null \
+  || harness_state_dir() { printf '%s\n' /tmp; }
+LOCK_FILE="$(harness_state_dir)/git-fswatch-${USER}-${REPO_NAME}.lock"
+STATE_FILE="$(harness_state_dir)/git-fswatch-state-${USER}-${REPO_NAME}.txt"
 
 # Runtime state
 COMMIT_TIMER_PID=""

@@ -12,7 +12,9 @@ CYAN='\033[0;36m'
 NC='\033[0m'
 
 SCRIPT_PATH="$HOME/.claude/hooks/git-fswatch.sh"
-STATE_FILE="/tmp/git-fswatch-state-${USER}.txt"
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)/lib/harness_state_dir.sh" 2>/dev/null \
+  || harness_state_dir() { printf '%s\n' /tmp; }
+STATE_FILE="$(harness_state_dir)/git-fswatch-state-${USER}.txt"
 
 # Show usage
 usage() {
