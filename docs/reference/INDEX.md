@@ -1,7 +1,7 @@
 # reference
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-10-05T11:07:15Z*
+*Last updated: 2026-10-05T11:20:31Z*
 **Total entries**: 48
 **Convention**: kebab
 
@@ -55,7 +55,7 @@ reference/
 ├── `subagentstop-payload-s0-measurement-20260929.md` - SubagentStop payload availability — S0 measurement (2026-09-29)
 ├── `test-suite-overhaul-plan.md` - Test Suite Overhaul Plan (Plan-of-Record)
 ├── `tmp-cleanup-convention.md` - Ad-hoc scratch directory convention
-└── `venv-repair.md` - venv-repair — restoring `~/.claude/venv` when interpreter symlinks break
+├── `venv-repair.md` - venv-repair — restoring `~/.claude/venv` when interpreter symlinks break
 ```
 <!-- /AUTO:index-stats -->
 
