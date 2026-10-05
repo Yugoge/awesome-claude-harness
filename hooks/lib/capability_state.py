@@ -53,6 +53,11 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
+try:
+    from lib.harness_state_dir import harness_state_dir
+except ImportError:  # hooks/lib itself is on sys.path
+    from harness_state_dir import harness_state_dir
+
 SCHEMA_VERSION = 1
 MANIFEST_RELPATH = "policies/protected-workflow-manifest.v1.json"
 VERSION_RELPATH = "VERSION"
@@ -194,7 +199,7 @@ def state_dir() -> Path:
         d = Path(override)
     else:
         xdg = os.environ.get("XDG_RUNTIME_DIR")
-        d = Path(xdg) / "claude-capability" if xdg else Path(f"/tmp/claude-capability-{os.geteuid()}")
+        d = Path(xdg) / "claude-capability" if xdg else Path(f"{harness_state_dir()}/claude-capability-{os.geteuid()}")
     d.mkdir(parents=True, exist_ok=True, mode=0o700)
     try:
         os.chmod(d, 0o700)

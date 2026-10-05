@@ -97,11 +97,16 @@ import sys
 import time
 from datetime import datetime, timezone
 
+try:
+    from lib.harness_state_dir import harness_state_dir
+except ImportError:  # hooks/lib itself is on sys.path
+    from harness_state_dir import harness_state_dir
+
 SCHEMA = "commit-event/1"
 
 # Journal root. Shares the /tmp/agentic-commit/ family with the push-gate token and the
 # Phase 3 commit locks, so a single tmp sweep clears the whole coordination surface.
-JOURNAL_ROOT = "/tmp/agentic-commit/commit-events"
+JOURNAL_ROOT = harness_state_dir() + "/agentic-commit/commit-events"
 
 # Bound the file so a long-lived machine cannot grow it without limit. The journal is a
 # lookup-by-HEAD structure, not an audit log of record — only the newest entries can ever

@@ -152,6 +152,7 @@ def process_parent_dirs(parent_dir: Path, project_dir: Path, results: list | Non
 def main():
     results: list = []
     payload = {}
+    ledger_failures: list = []
     try:
         data = json.load(sys.stdin)
         payload = data
@@ -173,15 +174,21 @@ def main():
         # into a dev-report's files_landed_whole exemption channel
         # (backlog #121) instead of being an unattributable files_modified
         # path. Fail-open internally; never affects the patch_claude_md call
-        # below.
-        record_landed_files(results, payload, project_dir)
+        # below. It returns bounded structured descriptors for the six FAILURE
+        # no-op classes (never raises, never blocks); the four legitimate no-op
+        # classes return nothing, so an ordinary non-dev edit stays silent.
+        returned = record_landed_files(results, payload, project_dir)
+        if isinstance(returned, list):
+            ledger_failures = returned
         section_skips = patch_claude_md(project_dir)
         if isinstance(section_skips, list):
             results.extend(section_skips)
     except Exception:
         pass
     # Outside the try: skips collected before a later failure still reach the caller.
-    emit_post_tool_notice(results, payload)
+    # Both channels go into the SAME single output object -- a PostToolUse hook's
+    # stdout is read as one JSON object, so a second print would corrupt the first.
+    emit_post_tool_notice(results, payload, ledger_failures)
     sys.exit(0)
 
 

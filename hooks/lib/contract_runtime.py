@@ -45,6 +45,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import fcntl
 from pathlib import Path
 from typing import Optional
@@ -457,6 +458,31 @@ _INTERACTIVE_REPORT_SCHEMAS = {
     'do-report': 'do-report.v1',
 }
 
+# Versioned overlay (zero-failure design §1.6, rollout S1): report kinds with a
+# registered v2 schema. Selection is by the record's DECLARED report_version:
+#   - 2 -> the kind's .v2 name (nested producer shape);
+#   - 1 -> the kind's .v1 name (today's path, byte-identical);
+#   - any OTHER declared version (e.g. 3), and every do-report version, falls
+#     through to the kind's v1 schema, whose report_version const then fails —
+#     preserving today's observed behavior for alien versions. Mapping unknown
+#     versions to SKIP was deliberately REJECTED (ticket 20260929-104216-a M5):
+#     it would silently turn today's fail into a pass-through and weaken the
+#     gate. Unversioned records never reach selection: the version gate in
+#     validate_report_artifact returns skip first, so the measured unversioned
+#     legacy corpus is never retro-rejected.
+_INTERACTIVE_REPORT_SCHEMAS_V2 = {
+    'dev-report': 'dev-report.v2',
+    'qa-report': 'qa-report.v2',
+}
+
+
+def _versioned_schema_name(kind: str, record: dict) -> str:
+    """Select the registered schema name for ``kind`` by declared report_version."""
+    v2_name = _INTERACTIVE_REPORT_SCHEMAS_V2.get(kind)
+    if v2_name is not None and record.get('report_version') == 2:
+        return v2_name
+    return _INTERACTIVE_REPORT_SCHEMAS[kind]
+
 
 def _report_kind_for_path(path: Path) -> Optional[str]:
     """Return the report-kind key for ``path`` (by ``<kind>-`` basename prefix)."""
@@ -549,6 +575,7 @@ def validate_report_artifact(path) -> dict:
             'skip', schema_name, [],
             'unversioned artifact (no report_version); covered by /close structural preflight',
         )
+    schema_name = _versioned_schema_name(kind, record)
     result = validate(record, schema_name)
     skip_reason = _skip_reason_if_unvalidatable(result)
     if skip_reason is not None:
@@ -556,6 +583,268 @@ def validate_report_artifact(path) -> dict:
     if result.get('ok'):
         return _gate_result('pass', schema_name, [], 'valid against versioned schema')
     return _gate_result('fail', schema_name, result.get('errors', []), 'schema-invalid versioned artifact')
+
+
+def _normalize_version_for_obligation(record, schema_id: str):
+    """Override the record's self-declared report_version under obligation authority.
+
+    The obligation's schema id is the sole authority (design §1.2; AC-5): a
+    mismatching or ABSENT self-declared report_version must not fail an
+    otherwise shape-valid artifact against the obligation's schema. When the
+    supplied schema pins ``properties.report_version.const``, a shallow copy
+    of the record is validated with that const in place of the
+    self-declaration; every other field is validated verbatim. No-op when the
+    schema pins no report_version const, or on any schema-load problem —
+    :func:`validate` then reports the infra condition itself (fail-safe skip).
+    """
+    if not isinstance(record, dict):
+        return record
+    try:
+        schema = schema_registry.get_schema(schema_id)
+    except Exception:  # pragma: no cover — validate() reports this infra path
+        return record
+    if not isinstance(schema, dict):
+        return record
+    declared = schema.get('properties', {}).get('report_version', {})
+    const = declared.get('const') if isinstance(declared, dict) else None
+    if const is None:
+        return record
+    normalized = dict(record)
+    normalized['report_version'] = const
+    return normalized
+
+
+def validate_artifact_for_obligation(path, schema_id: str) -> dict:
+    """Obligation-authority schema gate (zero-failure design §1.2, rollout S1).
+
+    Validates the artifact at ``path`` against the OBLIGATION-supplied
+    ``schema_id``, ignoring the record's self-declared ``report_version``
+    entirely (present, absent, or mismatching): authority comes from the
+    obligation, never from the artifact's self-declaration (the version field
+    itself is normalized to the obligation schema's pinned const via
+    :func:`_normalize_version_for_obligation`; all other fields validate
+    verbatim).
+
+    Deliberate differences from :func:`validate_report_artifact`
+    (self-declared authority):
+      - absent file -> ``'fail'`` — the obligation names an exact expected
+        path, so "missing is blocking" (design §1.3 G2), unlike the
+        self-declared gate where an absent optional artifact skips;
+      - unparseable JSON -> ``'fail'``;
+      - unversioned record -> validated anyway (no version gate under
+        obligation authority; non-obligated reads keep the version-gated
+        skip, so the unversioned legacy corpus is untouched).
+
+    Preserved fail-safe (C5): infra unavailability — unregistered schema id,
+    registry error, missing Draft7Validator, validator exception — returns
+    ``'skip'`` with a named reason via the same
+    :func:`_skip_reason_if_unvalidatable` split. A hook infra failure must
+    never trap a producer; G1 validates schema-id registration at dispatch.
+
+    Purely additive this cycle: NOT wired into any hook, command, or template
+    (G2 wiring is rollout S4). Returns the same ``{status, schema, errors,
+    reason}`` shape as :func:`validate_report_artifact`.
+    """
+    p = Path(path)
+    if not p.exists():
+        return _gate_result(
+            'fail', schema_id, [f'expected artifact missing: {p}'],
+            'obligation-named artifact absent (missing is blocking under obligation authority)',
+        )
+    try:
+        record = json.loads(p.read_text(encoding='utf-8'))
+    except (OSError, json.JSONDecodeError) as exc:
+        return _gate_result(
+            'fail', schema_id, [f'unparseable JSON: {exc}'],
+            'obligation-named artifact is not valid JSON',
+        )
+    result = validate(_normalize_version_for_obligation(record, schema_id), schema_id)
+    skip_reason = _skip_reason_if_unvalidatable(result)
+    if skip_reason is not None:
+        return _gate_result('skip', schema_id, [], skip_reason)
+    if result.get('ok'):
+        return _gate_result('pass', schema_id, [], 'valid against obligation-supplied schema')
+    return _gate_result(
+        'fail', schema_id, result.get('errors', []),
+        'schema-invalid under obligation-supplied schema',
+    )
+
+
+def validate_markdown_artifact_for_obligation(
+    path, identity_anchor: Optional[str], terminal_line_regex: Optional[str]
+) -> dict:
+    """Obligation-authority markdown-artifact gate (ticket 20261001-161041-r01).
+
+    Sibling of :func:`validate_artifact_for_obligation` for ``kind=="markdown"``
+    obligation artifacts (e.g. BA's own ``ticket-<task_id>.md``): verifies
+    existence, the declared ``identity_anchor`` substring, and the declared
+    ``terminal_line_regex`` against the artifact's last non-empty line.
+    Returns the same ``{status, schema, errors, reason}`` shape (via
+    :func:`_gate_result`) as the json-kind sibling, called from both
+    ``hooks/pretool-aggregate-check.py::_verify_prior_artifact`` (G3) and
+    ``hooks/subagentstop-artifact-contract-enforce.py`` (producer-side Stop,
+    this ticket's new wiring).
+
+    Extracted verbatim (logic, not shape) from
+    ``hooks/pretool-aggregate-check.py::_verify_prior_artifact``'s pre-existing
+    markdown branch — this function is the single source of truth both call
+    sites now share; neither re-implements the check inline.
+
+    Status values:
+      - ``'pass'`` — file exists, ``identity_anchor`` substring present (or
+        not declared), and the last non-empty line matches
+        ``terminal_line_regex`` (or the regex is empty/absent/malformed —
+        malformed regex fails SAFE: ``except re.error: matched = True``,
+        "our own bug, never fails the artifact", same polarity as the
+        pre-existing logic this extracts).
+      - ``'fail'`` — file missing/unreadable (``reason`` contains
+        ``"artifact_missing"``), ``identity_anchor`` substring absent
+        (``reason`` contains ``"identity_anchor_missing"``), or the last
+        non-empty line fails to match ``terminal_line_regex`` (``reason``
+        contains ``"terminal_line_mismatch"``). The three reasons are
+        mutually distinguishable by substring, mirroring
+        ``_verify_prior_artifact``'s own ``code`` vocabulary.
+
+    ``identity_anchor`` is a plain substring (``in``) check, NOT a regex —
+    upgrading it to ``re.search`` would silently change already-tested G3
+    behavior (Edge Case 3, this ticket's BA spec).
+    """
+    p = Path(path)
+    if not p.exists():
+        return _gate_result(
+            'fail', None, [f'obligation-named markdown artifact absent: {p}'],
+            'artifact_missing: obligation-named markdown artifact absent',
+        )
+    try:
+        text = p.read_text(encoding='utf-8')
+    except Exception as exc:  # matches _verify_prior_artifact's pre-existing broad catch
+        return _gate_result(
+            'fail', None, [f'obligation-named markdown artifact unreadable: {exc}'],
+            'artifact_missing: obligation-named markdown artifact unreadable',
+        )
+    if isinstance(identity_anchor, str) and identity_anchor and identity_anchor not in text:
+        return _gate_result(
+            'fail', None,
+            [f'identity_anchor substring not found: {identity_anchor!r}'],
+            'identity_anchor_missing: declared identity_anchor substring not found in markdown artifact',
+        )
+    if isinstance(terminal_line_regex, str) and terminal_line_regex:
+        non_empty = [ln for ln in text.splitlines() if ln.strip()]
+        last_line = non_empty[-1] if non_empty else ''
+        try:
+            matched = re.search(terminal_line_regex, last_line) is not None
+        except re.error:
+            matched = True  # malformed regex: our own bug, never fails the artifact
+        if not matched:
+            return _gate_result(
+                'fail', None,
+                [f'last non-empty line {last_line!r} does not match terminal_line_regex {terminal_line_regex!r}'],
+                'terminal_line_mismatch: last non-empty line does not match declared terminal_line_regex',
+            )
+    return _gate_result('pass', None, [], 'valid against obligation-supplied markdown shape')
+
+
+def validate_response_line_for_obligation(
+    last_assistant_message, terminal_line_regex: Optional[str]
+) -> dict:
+    """Obligation-authority response_line gate (ticket 20261001-161041-r12).
+
+    Sibling of :func:`validate_markdown_artifact_for_obligation` for
+    ``kind=="response_line"`` obligation artifacts (e.g. close-QA's own
+    final verdict line): no file I/O -- validates the PRODUCER'S OWN final
+    response text (the SubagentStop payload's ``last_assistant_message``
+    field) against the declared ``terminal_line_regex``, using the
+    identical last-non-empty-line + fail-open-on-malformed-regex semantics
+    as the markdown-kind sibling above (same
+    ``except re.error: matched = True`` polarity). Returns the same
+    ``{status, schema, errors, reason}`` shape via :func:`_gate_result`;
+    ``status`` is always ``'pass'`` or ``'fail'`` (there is no file that
+    can be missing).
+    """
+    text = last_assistant_message if isinstance(last_assistant_message, str) else ''
+    if isinstance(terminal_line_regex, str) and terminal_line_regex:
+        non_empty = [ln for ln in text.splitlines() if ln.strip()]
+        last_line = non_empty[-1] if non_empty else ''
+        try:
+            matched = re.search(terminal_line_regex, last_line) is not None
+        except re.error:
+            matched = True  # malformed regex: our own bug, never fails the artifact
+        if not matched:
+            return _gate_result(
+                'fail', None,
+                [f'last non-empty line {last_line!r} does not match terminal_line_regex {terminal_line_regex!r}'],
+                'terminal_line_mismatch: last non-empty line of response does not match declared terminal_line_regex',
+            )
+    return _gate_result('pass', None, [], 'valid against obligation-supplied response_line shape')
+
+
+def validate_response_block_for_obligation(
+    last_assistant_message, begin: Optional[str], end: Optional[str], schema_id: str
+) -> dict:
+    """Obligation-authority response_block gate (ticket 20261001-161041-r21, M2).
+
+    Sibling of :func:`validate_response_line_for_obligation` for
+    ``kind=="response_block"`` obligation artifacts (e.g. changelog-analyst's
+    own BEGIN/END-delimited JSON status block, commands/commit.md:463-480):
+    no file I/O and no transcript scan -- the SubagentStop payload already
+    carries the producer's own final response text as ``last_assistant_message``
+    (the same field ``validate_response_line_for_obligation`` and the
+    ``waived_by_response`` markdown-waiver check already key off, ticket
+    20261001-161041-r12); this function locates the ``begin``/``end``
+    sentinel-delimited substring within that text, parses it as JSON, and
+    validates the result against the obligation-supplied ``schema_id`` via
+    the EXISTING :func:`validate` engine -- no second jsonschema call path.
+
+    Status values (``errors``/``reason`` distinguish the three failure
+    modes per ticket AC3):
+      - ``'fail'`` -- the ``begin`` or ``end`` sentinel substring is not
+        found in the response text (``reason`` contains
+        ``'sentinel_missing'``), the delimited substring is not valid JSON
+        (``reason`` contains ``'unparseable_json'``), or the parsed JSON
+        violates ``schema_id`` (``reason`` contains ``'schema-invalid'``).
+      - ``'skip'`` -- the obligation itself did not declare both sentinels
+        (malformed declaration, not a producer failure) or the schema
+        validator could not run (:func:`_skip_reason_if_unvalidatable`,
+        same infra fail-safe every obligation-authority gate shares).
+      - ``'pass'`` -- the delimited substring parses as JSON and validates
+        against ``schema_id``.
+    """
+    if not isinstance(begin, str) or not begin or not isinstance(end, str) or not end:
+        return _gate_result(
+            'skip', schema_id, [],
+            'obligation_declaration_malformed: begin/end sentinels not declared',
+        )
+    text = last_assistant_message if isinstance(last_assistant_message, str) else ''
+    begin_idx = text.find(begin)
+    if begin_idx == -1:
+        return _gate_result(
+            'fail', schema_id, [f'begin sentinel not found in response: {begin!r}'],
+            'sentinel_missing: begin sentinel not found in producer response',
+        )
+    end_idx = text.find(end, begin_idx + len(begin))
+    if end_idx == -1:
+        return _gate_result(
+            'fail', schema_id, [f'end sentinel not found in response: {end!r}'],
+            'sentinel_missing: end sentinel not found in producer response',
+        )
+    block_text = text[begin_idx + len(begin):end_idx].strip()
+    try:
+        record = json.loads(block_text)
+    except json.JSONDecodeError as exc:
+        return _gate_result(
+            'fail', schema_id, [f'unparseable JSON between sentinels: {exc}'],
+            'unparseable_json: response_block content between sentinels is not valid JSON',
+        )
+    result = validate(record, schema_id)
+    skip_reason = _skip_reason_if_unvalidatable(result)
+    if skip_reason is not None:
+        return _gate_result('skip', schema_id, [], skip_reason)
+    if result.get('ok'):
+        return _gate_result('pass', schema_id, [], 'valid against obligation-supplied response_block schema')
+    return _gate_result(
+        'fail', schema_id, result.get('errors', []),
+        'schema-invalid under obligation-supplied response_block schema',
+    )
 
 
 # ---------------------------------------------------------------------------
