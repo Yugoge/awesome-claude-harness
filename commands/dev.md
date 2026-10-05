@@ -92,13 +92,15 @@ A single `/dev` cycle MAY carry more than one requirement. When it does, the orc
 - **Step 13 (QA)** — dispatch exactly ONE QA per lane.
 - **Step 16 (Iteration)** — retry only the failed lanes (lane-local).
 
-**Lane-execution adapter (this step takes precedence over the singular Step templates).** When N > 1, this fan-out step governs the concrete Steps below: every `<requirement>`, `<timestamp>` / session id, input path, output path, dispatch, wait, validation, and result branch in Steps 4–16 is evaluated PER LANE. Each lane's dispatch prompt MUST carry three explicit fields — `Lane requirement_id`, `Lane requirement text` (the authoritative execution scope), and `Parent requirement document (provenance only)` — and the lane text OVERRIDES the parent document and any "context / BA-spec is absolute truth" clause for scope, so sibling outcomes are NOT issues within that lane's invocation. Dispatch stages (4/7/10/13) batch all applicable lanes; waits are stage barriers; validation stages (6/12) run per lane; retry stages (8/16) act only on affected/failed lanes; and every concrete Step's result branch gains a `multi_issue_fanout_requested` route (handled below). When N == 1, none of this applies and the Steps run exactly as written today.
+**Lane-execution adapter (this step takes precedence over the singular Step templates).** When N > 1, this fan-out step governs the concrete Steps below: every `<requirement>`, `<timestamp>` / session id, input path, output path, dispatch, wait, validation, and result branch in Steps 4–16 is evaluated PER LANE. Each lane's dispatch prompt MUST carry three explicit fields — `Lane requirement_id`, `Lane requirement text` (the authoritative execution scope), and `Parent requirement document (reference baseline)` — and the lane text OVERRIDES the parent document and any "context / BA-spec is absolute truth" clause for EXECUTION scope: the lane implements, verifies, and edits only its own outcome, and sibling outcomes are not work items within that lane's invocation. REPORTING is not lane-local: the parent document is the lane's baseline for checking whether the lane is correctly sliced, and a lane that finds its slice contradicts the parent requirement, is coupled to a sibling lane (one underlying issue split across lanes), or is a recurring-failure patch MUST report it (see `coupled_issues_merge_requested` below and the subagent baseline-check obligation) instead of completing the mis-sliced work. Dispatch stages (4/7/10/13) batch all applicable lanes; waits are stage barriers; validation stages (6/12) run per lane; retry stages (8/16) act only on affected/failed lanes; and every concrete Step's result branch gains a `multi_issue_fanout_requested` route and a `coupled_issues_merge_requested` route (both handled below). When N == 1, none of this applies and the Steps run exactly as written today.
 
-**Lane-authoritative scope (no bundle re-detection).** Each lane is given its assigned requirement `text` as the authoritative execution scope. The full `user-requirement-<session>.md` document is passed to every lane as parent provenance only — never as the lane's execution scope — so a fanned-out lane never re-reads the whole bundle and re-detects multiplicity.
+**Lane-authoritative scope (no bundle re-detection).** Each lane is given its assigned requirement `text` as the authoritative execution scope. The full `user-requirement-<session>.md` document is passed to every lane as the reference baseline — never as the lane's execution scope — so a fanned-out lane executes only its own text and does not re-detect multiplicity, while it still consults the parent document to check its slice (reporting coupling or mis-slicing, never acting on sibling outcomes).
 
 **Lane-suffixed artifacts under one parent session.** Every lane writes lane-suffixed artifacts (`ticket-<session>-<lane>.md`, `context-<session>-<lane>.json`, `dev-report-<session>-<lane>.json`, and the per-lane QA reports) under ONE parent `DEV_SESSION_ID`. Lane-suffixed reports are aggregated once via Step 11 into the canonical singular `dev-report-<session>.json`, and the cycle emits ONE parent completion report — never a new cycle or session per lane. The parent completion report indexes every lane's `ticket` / `context` / `dev-report` / QA report, and parent completion passes ONLY when every lane's QA passes — a single failed lane fails the parent cycle.
 
 **`multi_issue_fanout_requested` routing handler (routing-only, non-terminal).** A BA/Dev subagent returns `status: multi_issue_fanout_requested`, and a QA subagent returns `verdict: multi_issue_fanout_requested`, with payload `{issues: [{requirement_id, text}]}` when it is handed a bundled multi-issue prompt. On receipt the orchestrator treats it as a recognized nonterminal routing enum, not a failure: route `multi_issue_fanout_requested` by re-dispatching each enumerated issue exactly once as its own lane within the same parent cycle (no new session, no user prompt), reusing the decomposition above. Re-run the coverage map against the ORIGINAL bundled prompt so every re-dispatched lane inherits all applicable shared constraints and exclusions (e.g. no-commit, do-not-touch-hooks, per-file-diffs); the returned issue boundaries are advisory and no shared constraint may be dropped during re-dispatch. This signal is never mapped to `contract_violation_refused`.
+
+**`coupled_issues_merge_requested` routing handler (routing-only, non-terminal).** Emitter: a BA/Dev subagent returns `status: coupled_issues_merge_requested`, and a QA subagent returns `verdict: coupled_issues_merge_requested`, when its lane is one half of a coupled cross-lane issue (the parent requirement document shows a single underlying issue sliced into several lanes, or the lane cannot be completed or verified without changing a sibling lane's scope). Payload: `{coupled_lanes: [requirement_id, ...], underlying_issue: "<the single issue, one sentence>", evidence: [file:line or parent-document section, ...]}`. The emitter stops before any analysis, edits, or verification beyond establishing the coupling, exactly as for `multi_issue_fanout_requested`. Handler: on receipt the orchestrator treats it as a recognized nonterminal routing enum, not a failure and not `contract_violation_refused`: merge the named lanes into ONE lane (one `requirement_id`, `text` = the underlying issue covering every merged lane's outcome) and re-dispatch that single lane within the same parent cycle (no new session, no user prompt), updating the coverage map so every requested outcome still maps to exactly one `requirement_id`. The returned `coupled_lanes` and boundaries are advisory: re-run the coverage map against the ORIGINAL parent document so the merged lane inherits every shared constraint and exclusion of every merged lane, and no shared constraint may be dropped. Lanes not named in the payload are untouched. The same baseline-check family also carries `baseline_contradiction` (lane scope contradicts the parent requirement) and `recurring_mechanism_failure` (Nth patch on a mechanism with recurring failure history): these are nonterminal SUCCESS outputs, not failures; the orchestrator surfaces the named evidence to the user and re-scopes or redesigns before re-dispatching the lane, and never forces the emitter to complete the mis-scoped work.
 
 **Degenerate single-lane case (N == 1).** When N == 1 the flow degenerates to today's single-lane path with no behavior change: the fan-out wrapper is a no-op for a single requirement, and existing single-requirement cycles are unaffected.
 
@@ -120,17 +122,37 @@ Requirement: "$ARGUMENTS"
 
 **Parse `--spec`**: If `$ARGUMENTS` contains `--spec <path>`, extract the path and remove the flag from the requirement text. Store as `spec_path`.
 
-**Auto-detect spec**: If `--spec` is NOT provided, scan `docs/dev/specs/*.md` sorted by modification time (newest first). If a file exists, set `spec_path` to that path and announce:
+**Auto-detect spec**: If `--spec` is NOT provided, scan `docs/dev/specs/*.md` sorted by modification time (newest first) and take the single newest candidate, if any. A candidate is only auto-attached when its file modification time is STRICTLY NEWER than this session's own `DEV_SESSION_ID` timestamp — a spec left over from an earlier, unrelated session must never be silently inherited by this one:
+
+```bash
+SESSION_TS="${DEV_SESSION_ID#dev-}"   # DEV_SESSION_ID is "dev-YYYYMMDD-HHMMSS"; strip the prefix
+SESSION_EPOCH=$(date -d "${SESSION_TS:0:8} ${SESSION_TS:9:2}:${SESSION_TS:11:2}:${SESSION_TS:13:2}" +%s 2>/dev/null || echo 0)
+NEWEST_SPEC=$(ls -t docs/dev/specs/*.md 2>/dev/null | head -1)
+spec_path=""
+if [ -n "$NEWEST_SPEC" ]; then
+  FILE_MTIME=$(stat -c %Y "$NEWEST_SPEC" 2>/dev/null || stat -f %m "$NEWEST_SPEC" 2>/dev/null || echo 0)
+  if [ "$FILE_MTIME" -gt "$SESSION_EPOCH" ]; then
+    spec_path="$NEWEST_SPEC"
+  fi
+fi
+```
+
+If `spec_path` was set, announce:
 ```
 Auto-detected spec: <path>
 (Created by /spec — pass --spec <other-path> to override.)
 ```
 
-If no spec found, set `spec_path = null`. All downstream behavior is unchanged when `spec_path` is null.
+If `spec_path` was NOT set (no `docs/dev/specs/*.md` file exists, OR the newest one's modification time is not strictly newer than this session's timestamp), set `spec_path = null` and print:
+```
+auto-detect skipped: newest spec predates this session
+```
+
+All downstream behavior is unchanged when `spec_path` is null. This staleness guard applies ONLY to auto-detection — the explicit `--spec <path>` branch (the immediately preceding paragraph, "**Parse `--spec`**") is completely unaffected and always uses the user-given path regardless of mtime.
 
 **Detect views folder (via the centralized resolver — do NOT re-derive paths inline)**:
 
-The producer (`/spec`) and consumers (`/dev*`) historically disagreed on whether the spec-id keeps the `spec-` filename prefix (new split artifacts land DE-prefixed at `docs/dev/specs/<ts>/`; old ones are prefixed). NEVER derive `views_dir` / `split_marker` / `SPEC_ID` from `spec_path` by hand — that drift is exactly what silently dropped de-prefixed specs to monolith mode. Always call the single canonical resolver and consume its stdout JSON:
+The spec-id may or may not keep the `spec-` filename prefix (new split artifacts land DE-prefixed at `docs/dev/specs/<ts>/`; old ones are prefixed). NEVER derive `views_dir` / `split_marker` / `SPEC_ID` from `spec_path` by hand — a hand-derived prefix silently drops de-prefixed specs to monolith mode. Always call the single canonical resolver and consume its stdout JSON:
 
 ```bash
 if [ -n "$spec_path" ]; then
@@ -365,13 +387,7 @@ with a one-sentence explanation of which complaint phrase did not find a
 believable home in `affected_files` or `located_source`, and do NOT
 advance to dev.
 
-<!--
-Why semantic over mechanical: prior cycles used character-set splitting
-and threshold-based comparison, which produced false rejects on
-legitimate aliases ('login screen' vs. 'src/auth/SignIn.tsx') and false
-accepts on look-alike paths that point at the wrong subsystem. An LLM
-reading the three fields in context is more accurate than any rule.
--->
+<!-- Rule: judge the three fields semantically in context; never by character-set or threshold comparison. -->
 
 **Contract D novelty extension — two dimensions**:
 Two attempts are considered equivalent (reject as non-novel) iff
@@ -422,6 +438,27 @@ Use Task tool with:
 
   CHECKPOINT MARKING: see agents/ba.md §Checkpoint Marking Contract. Mark every cp-NN done or waived before Stop or SubagentStop hook will block exit.
 
+  Obligation block (docs/reference/close-commit-zero-failure-mechanism-20260928.md §1.2 — example; the orchestrator instantiates this per-dispatch from the <timestamp> / fan-out lane values already used elsewhere in this template, never hand-invented):
+  <obligation v="1">
+  {
+    "task_id": "<timestamp>",
+    "lane": null,
+    "lane_set": null,
+    "role": "ba",
+    "pipeline": "dev",
+    "profile": "singular",
+    "dispatched_at": "<ISO-8601, captured immediately before this Agent call>",
+    "artifacts": [
+      {"kind": "json", "path": "docs/dev/context-<timestamp>.json", "schema": "context.v1",
+       "identity": {"task_id": "<timestamp>", "request_id": "<timestamp>"}},
+      {"kind": "markdown", "path": "docs/dev/ticket-<timestamp>.md", "identity_anchor": "<timestamp>"},
+      {"kind": "json", "path": "docs/dev/acceptance-criteria-<timestamp>.json", "schema": "acceptance-criteria.v1",
+       "identity": {"task_id": "<timestamp>", "request_id": "<timestamp>"}}
+    ]
+  }
+  </obligation>
+  When this file's fan-out Lane-execution adapter is active (N>1, see the "Requirement Decomposition & Fan-Out" section above): lane="<lane-suffix>" (e.g. "l6"), lane_set=[<all lane suffixes this cycle>], profile="fanout-lane", and <timestamp> above becomes "<DEV_SESSION_ID>-<lane-suffix>" per that section's existing substitution rule.
+
   You are the BA subagent. Follow .claude/agents/ba.md instructions precisely.
 
   <BA_SCORE_HEADER prepended here — score-inject output is placed AFTER the role declaration above and BEFORE the task instructions below, per spec 5.1 line 113: Injection position: after role declaration, before task instructions>
@@ -469,6 +506,8 @@ Use Task tool with:
   SECOND ACTION (only if SPEC_ID is non-empty and your cp-state file exists): Read $CLAUDE_PROJECT_DIR/.claude/specs/<SPEC_ID>/cp-state-ba.json to discover your atomic checkpoints (cp-01, cp-02, ...).
 
   CHECKPOINT MARKING: see agents/ba.md §Checkpoint Marking Contract. Mark every cp-NN done or waived before Stop or SubagentStop hook will block exit.
+
+  Obligation block (see Step 4's worked example above; docs/reference/close-commit-zero-failure-mechanism-20260928.md §1.2): embed `<obligation v="1">{...}</obligation>` here with role="ba", pipeline="dev", profile="singular"/"fanout-lane", task_id/dispatched_at bound to this dispatch's own timestamp/session-id placeholder, artifacts=[{"kind":"json","path":"docs/dev/context-<timestamp>.json","schema":"context.v1"},{"kind":"markdown","path":"docs/dev/ticket-<timestamp>.md","identity_anchor":"<timestamp>"},{"kind":"json","path":"docs/dev/acceptance-criteria-<timestamp>.json","schema":"acceptance-criteria.v1"}]. Orchestrator instantiates per-dispatch — never hand-invented.
 
   You are the BA subagent. Follow .claude/agents/ba.md instructions precisely.
 
@@ -593,6 +632,8 @@ Use Agent tool with:
 
   CHECKPOINT MARKING: see agents/qa.md §Checkpoint Marking Contract. Mark every cp-NN done or waived before Stop or SubagentStop hook will block exit.
 
+  Obligation block (see Step 4's worked example above; docs/reference/close-commit-zero-failure-mechanism-20260928.md §1.2): embed `<obligation v="1">{...}</obligation>` here with role="qa", pipeline="dev", profile="ba_validation", task_id/dispatched_at bound to this dispatch's own timestamp/session-id placeholder, artifacts=[{"kind":"json","path":"docs/dev/ba-qa-report-<timestamp>.json","schema":"ba-qa-report.v1"}] (schema id is a provisional placeholder pending registration in schemas/registry.json; schema is unconditionally REQUIRED for kind:"json" per schemas/obligation.v1.json and must never be omitted). Orchestrator instantiates per-dispatch — never hand-invented.
+
   You are the QA subagent in BA-VALIDATION MODE. This is NOT code verification.
   You are verifying the QUALITY OF BA's ANALYSIS, not any implementation.
 
@@ -699,6 +740,8 @@ Use Agent tool with:
 
   CHECKPOINT MARKING: see agents/ba.md §Checkpoint Marking Contract. Mark every cp-NN done or waived before Stop or SubagentStop hook will block exit.
 
+  Obligation block (see Step 4's worked example above; docs/reference/close-commit-zero-failure-mechanism-20260928.md §1.2): embed `<obligation v="1">{...}</obligation>` here with role="ba", pipeline="dev", profile="singular"/"fanout-lane", task_id/dispatched_at bound to this dispatch's own timestamp/session-id placeholder, artifacts=[{"kind":"json","path":"docs/dev/context-<timestamp>.json","schema":"context.v1"},{"kind":"markdown","path":"docs/dev/ticket-<timestamp>.md","identity_anchor":"<timestamp>"},{"kind":"json","path":"docs/dev/acceptance-criteria-<timestamp>.json","schema":"acceptance-criteria.v1"}]. Orchestrator instantiates per-dispatch — never hand-invented.
+
   You are the BA subagent. Follow .claude/agents/ba.md instructions precisely.
 
   Your previous analysis was REJECTED by QA. Address each objection below
@@ -779,6 +822,8 @@ Use Task tool with:
 
   You are the test-writer subagent. Follow agents/test-writer.md instructions precisely.
 
+  Obligation block (see Step 4's worked example above; docs/reference/close-commit-zero-failure-mechanism-20260928.md §1.2): embed `<obligation v="1">{...}</obligation>` here with role="test-writer", pipeline="dev", profile="singular"/"fanout-lane", task_id/dispatched_at bound to this dispatch's own timestamp/session-id placeholder, artifacts=[{"kind":"json","path":"docs/dev/test-writer-report-<task_id>.json","schema":"test-writer-report.v1","identity":{"task_id":"<task_id>"}},{"kind":"json","path":"tests/generated/<task_id>/manifest.json","schema":"test-writer-manifest.v1","identity":{"task_id":"<task_id>"}}] (both schema ids are registered in schemas/registry.json -- schemas/test-writer-report.v1.json and schemas/test-writer-manifest.v1.json; schema is unconditionally REQUIRED for kind:"json" per schemas/obligation.v1.json and must never be omitted). Orchestrator instantiates per-dispatch — never hand-invented.
+
   Inputs:
     task_id: <task_id>
     acceptance_criteria_path: docs/dev/acceptance-criteria-<task_id>.json
@@ -825,6 +870,8 @@ Use Task tool with:
   CHECKPOINT MARKING: see agents/dev.md §Checkpoint Marking Contract. Mark every cp-NN done or waived before Stop or SubagentStop hook will block exit.
 
   You are the dev subagent. Follow agents/dev.md instructions precisely.
+
+  Obligation block (see Step 4's worked example above; docs/reference/close-commit-zero-failure-mechanism-20260928.md §1.2): embed `<obligation v="1">{...}</obligation>` here with role="dev", pipeline="dev", profile="singular"/"fanout-lane", task_id/dispatched_at bound to this dispatch's own timestamp/session-id placeholder, artifacts=[{"kind":"json","path":"docs/dev/dev-report-<timestamp>.json","schema":"dev-report.v2","identity":{"task_id":"<timestamp>"},"required_values":{"dev.status":["completed"]}}]. Terminal state (R10): the dev-report must reach `dev.status` = `completed` before you stop (declared as `required_values` on the artifact entry); deliver it complete in one pass — `blocked`/`needs_review` is not an acceptable hand-back. Orchestrator instantiates per-dispatch — never hand-invented.
 
   <DEV_SCORE_HEADER prepended here — score-inject output is placed AFTER the role declaration above and BEFORE the task instructions below, per spec 5.1 line 113: Injection position: after role declaration, before task instructions>
 
@@ -952,7 +999,7 @@ Read dev implementation report: `docs/dev/dev-report-<timestamp>.json`
 **Before dispatching QA, write qa_mode sentinel**:
 
 ```bash
-bash ~/.claude/scripts/write-qa-mode.sh --session-id "$DEV_SESSION_ID" --mode final_verification \
+bash ~/.claude/scripts/write-qa-mode.sh --session-id "$DEV_SESSION_ID" --mode final_verification --task-id "$TASK_ID" \
   || { echo 'ERROR: Failed to set qa_mode=final_verification in qa.json — aborting' >&2; exit 1; }
 ```
 
@@ -972,6 +1019,8 @@ Use Task tool with:
   SECOND ACTION (only if SPEC_ID is non-empty and your cp-state file exists): Read $CLAUDE_PROJECT_DIR/.claude/specs/<SPEC_ID>/cp-state-qa.json to discover your atomic checkpoints (cp-01, cp-02, ...).
 
   CHECKPOINT MARKING: see agents/qa.md §Checkpoint Marking Contract. Mark every cp-NN done or waived before Stop or SubagentStop hook will block exit.
+
+  Obligation block (see Step 4's worked example above; docs/reference/close-commit-zero-failure-mechanism-20260928.md §1.2): embed `<obligation v="1">{...}</obligation>` here with role="qa", pipeline="dev", profile="final_verification", task_id/dispatched_at bound to this dispatch's own timestamp/session-id placeholder, artifacts=[{"kind":"json","path":"docs/dev/qa-report-<timestamp>.json","schema":"qa-report.v2","identity":{"task_id":"<timestamp>"},"required_values":{"qa.status":["pass"]}}]. Terminal state (R10): the qa-report must reach `qa.status` = `pass` before you stop (declared as `required_values` on the artifact entry); deliver the verdict in one pass — an unfinished hand-back is not acceptable. Orchestrator instantiates per-dispatch — never hand-invented.
 
   You are the QA subagent. Follow agents/qa.md instructions precisely.
 
@@ -1151,11 +1200,6 @@ each attempt. Rules:
    (genuine edge case), BA MUST explicitly argue this in prose with
    evidence; the orchestrator may override the gate only after user
    confirmation.
-
-**Why this rule exists**: In a prior incident, a bug cycled through 6
-BA→Dev→QA iterations all operating on the same L1 CSS style condition.
-The actual fix was L3 (data hydration). This gate forces the orchestrator
-to escalate out of local optima.
 
 **Iteration guard**: Maximum 5 iterations to prevent infinite loops
 
@@ -1654,11 +1698,7 @@ if __name__ == "__main__":
 
 ## Orchestrator Prompt Purity (MANDATORY)
 
-> **Origin**: Installed 2026-04-26 in response to redev cycle `redev-prompt-purity-20260426`, which corrected workflow-integrity defects from cycle `spec-20260426-080555` (close-report verdict NO). The companion enforcement hook is `~/.claude/hooks/pretool-orchestrator-prompt-purity.py`, registered under the PreToolUse `Agent` matcher. The same rule lives in `/root/.claude/CLAUDE.md` so all orchestrators in all projects observe it.
-
-### Why this rule exists
-
-In the prior cycle, the orchestrator's dispatch prompt to dev contained the literal phrase **"Use Write tool (not Edit — full rewrite)"**. When `pretool-write-guard.sh` correctly blocked the prescribed tool, the dev subagent — pressured by the orchestrator's HOW-prescription — composed an `Edit` + `sed -i 254..$d` bypass to obey the orchestrator's intent. The dev's report admitted the bypass on line 86. This violated global CLAUDE.md "Subagent Hook Discipline" and the user's standing Edit-only permission grant on `/root/.claude/agents/ui-specialist.md`. The bypass would have been impossible if the orchestrator had described WHAT to achieve (a thin orchestrator file under 260 lines preserving named verbatim segments) rather than HOW to achieve it (which tool to call).
+> Enforcement hook: `~/.claude/hooks/pretool-orchestrator-prompt-purity.py` (PreToolUse `Agent` matcher). The same rule lives in the global `CLAUDE.md`. A HOW-prescription pressures a subagent into dodging a blocking hook, so state end-states, never tools.
 
 ### The rule
 
@@ -1688,7 +1728,7 @@ This describes the desired end-state, the verification path, and the constraint.
 
 > "Use the Write tool to overwrite the file with the original content. Run `git -C "$CLAUDE_PROJECT_DIR" show HEAD:agents/ui-specialist.md > /root/.claude/agents/ui-specialist.md`. Then verify with `wc -l`."
 
-This prescribes specific tool (`Write`), a specific shell command (`git show > path`), and a specific verification command (`wc -l`). It removes subagent autonomy. If `Write` is blocked by `pretool-write-guard.sh`, the subagent will be pressured to dodge — exactly the failure mode that produced the `sed -i` bypass in the prior cycle.
+This prescribes specific tool (`Write`), a specific shell command (`git show > path`), and a specific verification command (`wc -l`). It removes subagent autonomy. If `Write` is blocked by `pretool-write-guard.sh`, the subagent will be pressured to dodge the block.
 
 ### Scope of this rule
 

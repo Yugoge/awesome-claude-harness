@@ -32,8 +32,6 @@ The orchestrator (the LLM executing this command) MUST NOT:
 
 5. **DO NOT execute any file modifications directly at any step.** The orchestrator's tools for cleanup execution are limited to the Agent tool (to invoke the cleaner subagent). This applies to Steps 11-12. Reading files and writing JSON coordination documents (docs/clean/) is permitted.
 
-**Root cause reference**: On 2026-04-05, the orchestrator violated rules 1, 2, and 3 -- it used Edit/Write tools directly for cleanup and reduced 92 inspector findings to 32 approved actions when the user selected "Execute all (aggressive)". 60 findings were skipped with excuses like "not in scope" and "minor severity".
-
 ---
 
 ## Workflow Overview
@@ -52,7 +50,7 @@ All agents communicate via JSON in `docs/clean/`.
 
 ### Step 1: Initialize Workflow
 
-**Parse `--codex`**: If `$ARGUMENTS` contains the literal token `--codex`, strip it from the arguments and set `codex_required = true`. Otherwise set `codex_required = false` (default). When `codex_required = true`, every cleanliness-inspector and style-inspector dispatch prompt below MUST include the literal line `codex_required: true` so the subagent's opt-in codex consultation block activates. When `codex_required = false`, omit that line.
+**Parse `--codex`**: If `$ARGUMENTS` contains the literal token `--codex`, strip it from the arguments and set `codex_required = true`. Otherwise set `codex_required = false` (default). When `codex_required = true`, every cleanliness-inspector, style-inspector, and prompt-inspector dispatch prompt below MUST include the literal line `codex_required: true` so the subagent's opt-in codex consultation block activates. When `codex_required = false`, omit that line.
 
 Load TodoList checklist: activate venv and run `~/.claude/scripts/todo/clean.py`.
 
@@ -156,7 +154,7 @@ Run rule-inspector to update folder documentation with recent changes:
 - ✅ Rule inspection completed (rule-context JSON exists)
 - ✅ READMEs updated or confirmed fresh
 
-**Root cause reference**: This fixes the issue from commands/clean.md lines 151-188 where rule-inspector only ran conditionally (NEEDS_INIT check), causing READMEs to become stale as repository evolved. Now runs on EVERY execution with freshness detection.
+Rule: rule-inspector runs on EVERY execution with freshness detection, never conditionally.
 
 ---
 
@@ -324,12 +322,20 @@ Expected final output structure:
 }
 ```
 
+### Step 10A: Invoke Prompt Inspector (agents/ and commands/ verbosity)
+
+The prompt-inspector is the only inspector that audits `agents/*.md` and `commands/*.md`; no other inspector in this workflow reaches those directories, so this step is MANDATORY on every /clean run. Delegate to the prompt-inspector subagent with `docs/clean/context-{REQUEST_ID}.json` plus the literal lines `command_files: <every commands/*.md>` and `agent_files: <every agents/*.md>`, and `codex_required: true` only when `codex_required = true`. It writes `docs/clean/prompt-report-{REQUEST_ID}.json` (top-level `findings` array, one entry per file).
+
+Coverage gate: every `commands/*.md` and `agents/*.md` file MUST appear in the report's audited-file list or be named in a finding; otherwise re-dispatch once for the missed files and BLOCK Step 11 on a second miss.
+
 ### Step 11: Merge Inspection Reports
 
-Combine both reports using orchestrator: `~/.claude/scripts/orchestrator.sh clean-merge-reports docs/clean/context-with-reports-{REQUEST_ID}.json`
+Combine the cleanliness and style reports using orchestrator: `~/.claude/scripts/orchestrator.sh clean-merge-reports docs/clean/context-with-reports-{REQUEST_ID}.json`
 
 Orchestrator merges and writes:
 - `docs/clean/combined-report-{REQUEST_ID}.json`
+
+The merge helper carries only the cleanliness and style reports. After it returns, the orchestrator MUST add the prompt report to the combined JSON as top-level `prompt_report` (copied verbatim from `docs/clean/prompt-report-{REQUEST_ID}.json`) and add the prompt finding count to the summary `total_issues`. A combined report without `prompt_report` is incomplete; do not proceed to Step 12.
 
 ### Step 12: Present Combined Report to User
 
@@ -364,6 +370,10 @@ Format and display findings:
 ### Minor Violations: Z
 - <minor violations>
 
+## Prompt Verbosity Findings (Prompt Inspector — agents/ and commands/)
+
+- <one line per finding: file, severity, verbose_lines, recommendation>
+
 ## Summary
 
 - Total issues: X
@@ -392,7 +402,7 @@ When the user selects Option 1, the orchestrator MUST mechanically generate the 
 
 Procedure:
 1. Read `docs/clean/combined-report-{REQUEST_ID}.json`
-2. Extract every finding from `findings` (cleanliness) and `violations` (style)
+2. Extract every finding from `findings` (cleanliness), `violations` (style), and `prompt_report.findings` (prompt verbosity; approved as action `fix_style` against the named `agents/` or `commands/` file)
 3. For EACH finding, create one entry in `approved_actions` with `"approved": true`
 4. Set `rejected_actions` to an empty array
 5. Record `total_issues_in_report` (from combined report summary `total_issues`)
@@ -410,7 +420,7 @@ Procedure:
     "approved_actions": [
       {
         "action_id": "finding_1",
-        "source_report": "cleanliness|style",
+        "source_report": "cleanliness|style|prompt",
         "source_finding_index": 0,
         "action": "move|delete|archive|fix",
         "description": "copied from finding",
@@ -423,7 +433,7 @@ Procedure:
 }
 ```
 
-**Option 2: File organization only** (approve cleanliness findings, skip style)
+**Option 2: File organization only** (approve cleanliness findings, skip style and prompt)
 
 **Option 3: Critical/major only** (filter by severity)
 
@@ -459,8 +469,6 @@ ACTION: Regenerate approvals JSON from combined report. Every finding must have 
 ```
 
 The orchestrator MUST regenerate the approvals JSON (return to Step 13 Option 1 procedure) and re-run this gate. Do NOT bypass the gate or proceed with mismatched counts.
-
-**Root cause reference**: On 2026-04-05, the orchestrator generated 32 approved actions from 92 combined findings. This gate would have blocked execution and forced regeneration.
 
 ---
 

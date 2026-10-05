@@ -51,7 +51,7 @@ IF QA passes → Generate completion report
 - Iterate until all quality standards met
 
 **Orchestrator Dispatch Model**:
-- A single cycle MAY carry multiple requirements; the orchestrator decomposes them and fans them out to N parallel one-issue lanes within the SAME cycle. Multiplicity alone MUST NOT cause refusal or separate cycles. This mirrors the canonical **Requirement Decomposition & Fan-Out** step in `commands/dev.md` — see that section for the operational per-lane procedure (decomposition, per-stage lane iteration, `multi_issue_fanout_requested` routing); do NOT re-implement it here. When this command is invoked with multiple requirements, apply that decomposition + fan-out FIRST; the detailed dispatch steps below then inherit the per-lane semantics and MUST NOT be run singular over a multi-requirement bundle.
+- A single cycle MAY carry multiple requirements; the orchestrator decomposes them and fans them out to N parallel one-issue lanes within the SAME cycle. Multiplicity alone MUST NOT cause refusal or separate cycles. This mirrors the canonical **Requirement Decomposition & Fan-Out** step in `commands/dev.md` — see that section for the operational per-lane procedure (decomposition, per-stage lane iteration, `multi_issue_fanout_requested` and `coupled_issues_merge_requested` routing); do NOT re-implement it here. When this command is invoked with multiple requirements, apply that decomposition + fan-out FIRST; the detailed dispatch steps below then inherit the per-lane semantics and MUST NOT be run singular over a multi-requirement bundle.
 - N independent tasks → dispatch N subagents **in parallel**, one per task — this is the standard multi-task path
 - 1 task → 1 subagent (sequential is only correct when there is genuinely one task)
 - NEVER bundle multiple issues into a single subagent prompt
@@ -66,7 +66,7 @@ IF QA passes → Generate completion report
 
 ## Command Development Best Practices
 
-The full tutorial — Three-Party Architecture, specialist subagent design, todo workflow scripts, the three-hook checklist enforcement chain, YAML frontmatter rules (including the 2026-04-25 `/redev` empty-body incident postmortem), complete automation patterns, script parameterization, the subagent-call enforcement gate, and the command-quality-audit case study — lives in `~/.claude/docs/dev/command-development-patterns.md`. Read that document before authoring or editing slash commands, subagents, or todo scripts. The patterns there are normative for this orchestrator and any new commands it spawns.
+The full tutorial — Three-Party Architecture, specialist subagent design, todo workflow scripts, the three-hook checklist enforcement chain, YAML frontmatter rules (including the `/redev` empty-body rule), complete automation patterns, script parameterization, the subagent-call enforcement gate, and the command-quality-audit case study — lives in `~/.claude/docs/dev/command-development-patterns.md`. Read that document before authoring or editing slash commands, subagents, or todo scripts. The patterns there are normative for this orchestrator and any new commands it spawns.
 
 ---
 
@@ -329,6 +329,24 @@ Use Task tool with:
   FIRST ACTION: Read $CLAUDE_PROJECT_DIR/.claude/dev-registry/<DEV_SESSION_ID>/ba.json to register with the enforcement system. Do this BEFORE any other tool call.
   CHECKPOINT MARKING: see agents/ba.md §Checkpoint Marking Contract. Mark every cp-NN done or waived before Stop or SubagentStop hook will block exit.
 
+  Obligation block (docs/reference/close-commit-zero-failure-mechanism-20260928.md §1.2 — example; the orchestrator instantiates this per-dispatch from the <timestamp> / session-id values already used elsewhere in this template, never hand-invented):
+  <obligation v="1">
+  {
+    "task_id": "<timestamp>",
+    "lane": null,
+    "lane_set": null,
+    "role": "ba",
+    "pipeline": "dev-command",
+    "profile": "singular",
+    "dispatched_at": "<ISO-8601, captured immediately before this Agent call>",
+    "artifacts": [
+      {"kind": "json", "path": "docs/dev/context-<timestamp>.json", "schema": "context.v1",
+       "identity": {"task_id": "<timestamp>", "request_id": "<timestamp>"}},
+      {"kind": "markdown", "path": "docs/dev/ticket-<timestamp>.md", "identity_anchor": "<timestamp>"}
+    ]
+  }
+  </obligation>
+
   You are the BA subagent. Follow .claude/agents/ba.md instructions precisely.
 
   User requirement document: docs/dev/user-requirement-<DEV_SESSION_ID>.md
@@ -372,6 +390,8 @@ Use Task tool with:
 - prompt: "
   FIRST ACTION: Read $CLAUDE_PROJECT_DIR/.claude/dev-registry/<DEV_SESSION_ID>/ba.json to register with the enforcement system. Do this BEFORE any other tool call.
   CHECKPOINT MARKING: see agents/ba.md §Checkpoint Marking Contract. Mark every cp-NN done or waived before Stop or SubagentStop hook will block exit.
+
+  Obligation block (see Step 4's worked example above; docs/reference/close-commit-zero-failure-mechanism-20260928.md §1.2): embed `<obligation v="1">{...}</obligation>` here with role="ba", pipeline="dev-command", profile="singular", task_id/dispatched_at bound to this dispatch's own timestamp/session-id placeholder, artifacts=[{"kind":"json","path":"docs/dev/context-<timestamp>.json","schema":"context.v1"},{"kind":"markdown","path":"docs/dev/ticket-<timestamp>.md","identity_anchor":"<timestamp>"}]. Orchestrator instantiates per-dispatch — never hand-invented.
 
   You are the BA subagent. Follow .claude/agents/ba.md instructions precisely.
 
@@ -436,6 +456,8 @@ Use Agent tool with:
 - prompt: "
   FIRST ACTION: Read $CLAUDE_PROJECT_DIR/.claude/dev-registry/<DEV_SESSION_ID>/qa.json to register with the enforcement system. Do this BEFORE any other tool call.
   CHECKPOINT MARKING: see agents/qa.md §Checkpoint Marking Contract. Mark every cp-NN done or waived before Stop or SubagentStop hook will block exit.
+
+  Obligation block (see Step 4's worked example above; docs/reference/close-commit-zero-failure-mechanism-20260928.md §1.2): embed `<obligation v="1">{...}</obligation>` here with role="qa", pipeline="dev-command", profile="ba_validation", task_id/dispatched_at bound to this dispatch's own timestamp/session-id placeholder, artifacts=[{"kind":"json","path":"docs/dev/ba-qa-report-<timestamp>.json","schema":"ba-qa-report.v1"}] (schema id is a provisional placeholder pending registration in schemas/registry.json; schema is unconditionally REQUIRED for kind:"json" per schemas/obligation.v1.json and must never be omitted). Orchestrator instantiates per-dispatch — never hand-invented.
 
   You are the QA subagent in BA-VALIDATION MODE. This is NOT code verification.
   You are verifying the QUALITY OF BA's ANALYSIS, not any implementation.
@@ -531,6 +553,8 @@ Use Agent tool with:
   FIRST ACTION: Read $CLAUDE_PROJECT_DIR/.claude/dev-registry/<DEV_SESSION_ID>/ba.json to register with the enforcement system. Do this BEFORE any other tool call.
   CHECKPOINT MARKING: see agents/ba.md §Checkpoint Marking Contract. Mark every cp-NN done or waived before Stop or SubagentStop hook will block exit.
 
+  Obligation block (see Step 4's worked example above; docs/reference/close-commit-zero-failure-mechanism-20260928.md §1.2): embed `<obligation v="1">{...}</obligation>` here with role="ba", pipeline="dev-command", profile="singular", task_id/dispatched_at bound to this dispatch's own timestamp/session-id placeholder, artifacts=[{"kind":"json","path":"docs/dev/context-<timestamp>.json","schema":"context.v1"},{"kind":"markdown","path":"docs/dev/ticket-<timestamp>.md","identity_anchor":"<timestamp>"}]. Orchestrator instantiates per-dispatch — never hand-invented.
+
   You are the BA subagent. Follow .claude/agents/ba.md instructions precisely.
 
   User requirement document: docs/dev/user-requirement-<DEV_SESSION_ID>.md
@@ -579,6 +603,8 @@ Use Task tool with:
 - prompt: "
   FIRST ACTION: Read $CLAUDE_PROJECT_DIR/.claude/dev-registry/<DEV_SESSION_ID>/dev.json to register with the enforcement system. Do this BEFORE any other tool call.
   CHECKPOINT MARKING: see agents/dev.md §Checkpoint Marking Contract. Mark every cp-NN done or waived before Stop or SubagentStop hook will block exit.
+
+  Obligation block (see Step 4's worked example above; docs/reference/close-commit-zero-failure-mechanism-20260928.md §1.2): embed `<obligation v="1">{...}</obligation>` here with role="dev", pipeline="dev-command", profile="singular", task_id/dispatched_at bound to this dispatch's own timestamp/session-id placeholder, artifacts=[{"kind":"json","path":"docs/dev/dev-report-<timestamp>.json","schema":"dev-report.v2","identity":{"task_id":"<timestamp>"},"required_values":{"dev.status":["completed"]}}]. Terminal state (R10): the dev-report must reach `dev.status` = `completed` before you stop (declared as `required_values` on the artifact entry); deliver it complete in one pass — `blocked`/`needs_review` is not an acceptable hand-back. Orchestrator instantiates per-dispatch — never hand-invented.
 
   You are the dev subagent. Follow agents/dev.md instructions precisely.
 
@@ -635,6 +661,8 @@ Use Task tool with:
 - prompt: "
   FIRST ACTION: Read $CLAUDE_PROJECT_DIR/.claude/dev-registry/<DEV_SESSION_ID>/qa.json to register with the enforcement system. Do this BEFORE any other tool call.
   CHECKPOINT MARKING: see agents/qa.md §Checkpoint Marking Contract. Mark every cp-NN done or waived before Stop or SubagentStop hook will block exit.
+
+  Obligation block (see Step 4's worked example above; docs/reference/close-commit-zero-failure-mechanism-20260928.md §1.2): embed `<obligation v="1">{...}</obligation>` here with role="qa", pipeline="dev-command", profile="final_verification", task_id/dispatched_at bound to this dispatch's own timestamp/session-id placeholder, artifacts=[{"kind":"json","path":"docs/dev/qa-report-<timestamp>.json","schema":"qa-report.v2","identity":{"task_id":"<timestamp>"},"required_values":{"qa.status":["pass"]}}]. Terminal state (R10): the qa-report must reach `qa.status` = `pass` before you stop (declared as `required_values` on the artifact entry); deliver the verdict in one pass — an unfinished hand-back is not acceptable. Orchestrator instantiates per-dispatch — never hand-invented.
 
   You are the QA subagent. Follow agents/qa.md instructions precisely.
 
@@ -771,11 +799,6 @@ each attempt. Rules:
    evidence; the orchestrator may override the gate only after user
    confirmation.
 
-**Why this rule exists**: In a prior incident, a bug cycled through 6
-BA→Dev→QA iterations all operating on the same L1 CSS style condition.
-The actual fix was L3 (data hydration). This gate forces the orchestrator
-to escalate out of local optima.
-
 **Iteration guard**: Maximum 5 iterations to prevent infinite loops
 
 **Current iteration**: Track internally (starts at 1)
@@ -909,6 +932,17 @@ Development completed successfully!
 ```
 
 **Save report to**: `docs/dev/completion-<timestamp>.md`
+
+**Codex-native artifact postcondition (hard check before completion)** — mirrors `commands/dev.md` Step 17's postcondition, adapted to /dev-command's own session variable (`$DEV_SESSION_ID` — this file has no separate `$TASK_ID` token; see Step 1's `DEV_SESSION_ID` initialization):
+
+Before `/dev-command` may be treated as complete, invoke the shared read-only resolver from the project root and retain its JSON as `ARTIFACT_CHAIN`:
+
+```bash
+ARTIFACT_CHAIN="$(python3 scripts/resolve-dev-artifact-chain.py \
+  --task-id "$DEV_SESSION_ID" --project-dir "$CLAUDE_PROJECT_DIR")" || exit 2
+```
+
+The fixed entrypoint contract is `scripts/resolve-dev-artifact-chain.py --task-id <id> --project-dir <root>`. Completion requires process exit 0 and top-level `status in {"pass", "pass_with_exceptions"}`; exit 2 or `status == "fail"` blocks with the resolver's exact `errors[]`. Do not reproduce the validator with ad-hoc file tests. When `status == "pass_with_exceptions"`, completion is NOT blocked, but the completion report (`docs/dev/completion-<timestamp>.md`) MUST explicitly list every `disclosed_exceptions[]` entry verbatim (`code`, `path`, `lane_task_id`, `classification`) — never silently absorbed into an undifferentiated "complete".
 
 **Workflow update**:
 
