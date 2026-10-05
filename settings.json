@@ -388,6 +388,15 @@
             "command": "python3 \"/root/.claude/hooks/userprompt-bulk-commit-capability.py\""
           }
         ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"/root/.claude/hooks/userprompt-usage-snapshot.py\"",
+            "timeout": 10
+          }
+        ]
       }
     ],
     "PreToolUse": [
@@ -802,19 +811,42 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"/root/.claude/hooks/stop-overnight-timelock.py\""
-          },
+            "command": "python3 \"/root/.claude/hooks/stop-workflow-coordinator.py\""
+          }
+        ]
+      },
+      {
+        "hooks": [
           {
             "type": "command",
-            "command": "python3 \"/root/.claude/hooks/stop-spec-coverage-enforce.py\""
-          },
+            "command": "python3 \"/root/.claude/hooks/stop-do-report-gate.py\""
+          }
+        ]
+      },
+      {
+        "hooks": [
           {
             "type": "command",
-            "command": "bash \"/root/.claude/hooks/auto-commit.sh\""
-          },
+            "command": "python3 \"/root/.claude/hooks/stop-obligation-gate.py\""
+          }
+        ]
+      },
+      {
+        "hooks": [
           {
             "type": "command",
-            "command": "bash \"/root/.claude/hooks/stop-cleanup-allowlist.sh\""
+            "command": "python3 \"/root/.claude/hooks/stop-completion-gate.py\""
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"/root/.claude/hooks/sessionend-scratch-sweep.sh\"",
+            "timeout": 15
           }
         ]
       }
