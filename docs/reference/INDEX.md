@@ -1,8 +1,8 @@
 # reference
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-10-05T11:20:31Z*
-**Total entries**: 48
+*Last updated: 2026-10-05T13:10:31Z*
+**Total entries**: 49
 **Convention**: kebab
 
 ## Tree
@@ -56,6 +56,7 @@ reference/
 ├── `test-suite-overhaul-plan.md` - Test Suite Overhaul Plan (Plan-of-Record)
 ├── `tmp-cleanup-convention.md` - Ad-hoc scratch directory convention
 ├── `venv-repair.md` - venv-repair — restoring `~/.claude/venv` when interpreter symlinks break
+└── `workspace-disposition-criteria-20261005.md` - Workspace disposition criteria, and the five verdicts that existed only in a transcript
 ```
 <!-- /AUTO:index-stats -->
 
