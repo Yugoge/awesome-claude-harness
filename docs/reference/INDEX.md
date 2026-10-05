@@ -1,8 +1,8 @@
 # reference
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-10-05T15:59:10Z*
-**Total entries**: 53
+*Last updated: 2026-10-05T16:03:32Z*
+**Total entries**: 54
 **Convention**: kebab
 
 ## Tree
@@ -12,6 +12,7 @@ reference/
 ├── `attribution-journal-consumer-cutover-20261004.md` - Attribution-journal consumer cutover: APPLIED (task 20261004-001927)
 ├── `attribution-journal-cutover-flip-plan-20261003.md` - Attribution-journal cutover: FLIP PLAN (Phase D, plan only)
 ├── `attribution-journal-phase0-facility.md` - Write-time attribution journal — Phase 0 facility notes
+├── `bash-write-targets-capability-gap-20261005.md` - bash_write_targets.py capability gap: a fail-open/fail-shut pair from one resolution gap
 ├── `checkpoint-mechanism.md` - Auto-Commit / Checkpoint Mechanism
 ├── `claim-verification-methodology-20260925.md` - backlog claim 有效性核实方法论（2026-09-25 夜）
 ├── `close-commit-failure-inventory-20260927.md` - /close 与 /commit 失败方式全量清单(2026-09-27)
