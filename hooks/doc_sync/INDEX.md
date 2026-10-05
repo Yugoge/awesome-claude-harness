@@ -1,8 +1,8 @@
 # doc_sync
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-09-23T19:02:56Z*
-**Total entries**: 12
+*Last updated: 2026-09-30T07:57:42Z*
+**Total entries**: 13
 **Convention**: kebab
 
 ## Tree
@@ -12,6 +12,7 @@ doc_sync/
 ├── `config.py` - The git-tracked helpers (WS5, AC-WS5-1) let the INDEX/README generators list
 ├── `docker.py` - Parse docker-compose.yml and generate markdown table.
 ├── `extract.py` - Extract description from various file types.
+├── `hook_ledger.py` - hooks/doc_sync/main.py calls record_landed_files() right after
 ├── `main.py` - Main entry point for doc-sync hook.
 ├── `notice.py` - A skipped README, INDEX or CLAUDE.md section is a deliberate outcome (regeneration is opt-in
 ├── `patch.py` - Patch CLAUDE.md dynamic sections using AUTO markers.

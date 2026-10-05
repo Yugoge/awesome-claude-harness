@@ -12,7 +12,7 @@
 
   "x-consumer": {
     "path": "scripts/stage-owned-hunks.py",
-    "sha256": "9a96f6ff046e8cbd3be95d5998432d33e6a838efa6558e03c5ddd210eb5a747e",
+    "sha256": "f3ec48efb0a04ed31f5bc4abccf10c447ec669010bb7be527b712e7df5178713",
     "lines": 1555,
     "measured_at": "2026-09-18",
     "materializer": "agents/changelog-analyst.md Phase 5, anchor '2. Snapshot materialization (REQUIRED'",

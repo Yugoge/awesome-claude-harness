@@ -1,8 +1,8 @@
 # hooks
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-10-04T18:30:51Z*
-**Total entries**: 226
+*Last updated: 2026-10-05T03:49:44Z*
+**Total entries**: 228
 **Convention**: kebab
 
 ## Tree
@@ -128,6 +128,7 @@ hooks/
 │   ├── `test_unit_pathmatch.py` - Imports the pathmatch sibling module DIRECTLY (not via the _core facade) and
 │   ├── `test_unit_shell_lex.py` - Imports the shell_lex sibling module DIRECTLY (not via the _core facade's
 │   ├── `test_userprompt_doc_sync_relay.py` - Backlog #83: the UserPromptSubmit hook resyncs a directory by running
+│   └── `test_userprompt_usage_snapshot.py` - Covers the three cache states the hook must handle (cache hit, cache expired
 ├── `audit-slashcommand.sh` - audit-slashcommand.sh
 ├── `auto-commit.sh` - auto-commit.sh - Stop hook: snapshot on conversation end
 ├── `capability-canary.py` - Registered once per relied-upon lifecycle event, each registration carrying its
@@ -234,6 +235,7 @@ hooks/
 ├── `userprompt-doc-sync-check.py` - UserPromptSubmit Hook: Periodic file deletion detection for doc-sync
 ├── `userprompt-restart-authorize.py` - UserPromptSubmit: mint a session-bound capability for a human /restart invocation.
 ├── `userprompt-tmpfs-pressure.sh` - userprompt-tmpfs-pressure.sh — UserPromptSubmit hook (4th block, appended).
+└── `userprompt-usage-snapshot.py` - Passively injects a per-account usage snapshot (available/exhausted status,
 ```
 <!-- /AUTO:index-stats -->
 

@@ -1,7 +1,7 @@
 # schemas
 
 *Last updated: 2026-06-02T09:07:27Z*
-**Total entries**: 9
+**Total entries**: 12
 **Convention**: kebab
 
 ## Tree
@@ -10,11 +10,14 @@ schemas/
 ├── `context.v1.json` - json config
 ├── `cycle-contract.v1.json` - json config
 ├── `dev-report.v1.json` - json config
+├── `dev-report.v2.json` - json config
 ├── `do-report.v1.json` - json config
 ├── `graphify-focused-subgraph.v1.json` - json config
 ├── `graphify-prequery.v1.json` - json config
 ├── `graphify-run.v1.json` - json config
+├── `obligation.v1.json` - json config
 ├── `qa-report.v1.json` - json config
+├── `qa-report.v2.json` - json config
 ├── `registry.json` - json config
 └── `test-plan.v1.json` - json config
 ```

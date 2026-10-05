@@ -252,6 +252,7 @@ are `detected`.
 | H-069 | SubagentStop | * | subagentstop-e2e-enforce.py | none | advisory | unexercised | source-level | hooks/subagentstop-e2e-enforce.py:1 @4c33f2f5 | none yet |
 | H-070 | SubagentStop | * | subagentstop-restart-track.py | none | advisory | unexercised | source-level | hooks/subagentstop-restart-track.py:1 @4c33f2f5 | none yet |
 | H-071 | PostToolUseFailure | Bash | posttool-allowlist-consume.py | none | detected | unexercised | source-level | hooks/posttool-allowlist-consume.py:1 @4c33f2f5 | hooks/tests/test_posttool_commit_grant_finalize.py |
+| H-072 | PostToolUse | Write | posttool-push-gate-token-verify.py | none | detected | unexercised | source-level | hooks/posttool-push-gate-token-verify.py:1 @4e9d06e4 | hooks/tests/test_posttool_push_gate_token_verify.py |
 
 ---
 
