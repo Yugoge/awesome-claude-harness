@@ -77,6 +77,14 @@ def _segments(c):
     branch name (e.g. `git branch --format %(refname) nb`) into a segment without
     `git branch`, defeating creation detection (the dangerous under-block
     direction). Backtick substitution is split via the `` ` `` separator below.
+
+    A `\\` immediately followed by a newline is a line CONTINUATION, not a
+    separator: both characters are folded away before the newline can open a
+    boundary, so a single logical command written across multiple physical
+    lines (`python3 x.py \\\n  --flag a \\\n  --flag b`) stays one segment and
+    its trailing flags are not orphaned into segments of their own (root cause
+    of the 2026-10-05 execute-push grant-guard false rejection — see
+    `_segments_with_kind()` for the exact fold condition).
     """
     return [seg for seg, _kind, _in_quote in _segments_with_kind(c)]
 
@@ -107,6 +115,26 @@ def _segments_with_kind(c):
     carving `git push --force` out of a multi-line quoted body, silently
     REMOVING an enumeration that iter_git_invocations() reports today — the
     dangerous under-block direction.  Only _residual_shapes() reads the flag.
+
+    Backslash-newline folding (2026-10-05) is a NARROW exception to the
+    "never consulted when deciding where to split" rule above, and it does
+    not weaken it: a `\\<newline>` pair is not a quoted separator being
+    suppressed, it is a construct bash itself deletes before the separator
+    would ever exist, in or out of double quotes (`a="x\\<newline>y"` -> `xy`;
+    verified against bash directly). The fold fires only when `esc` is true
+    at a `\n`, i.e. the immediately preceding character was a single
+    unescaped backslash NOT inside single quotes (the `not sq` guard on
+    `esc`'s own assignment below). That precisely excludes the two shapes
+    that must NOT fold:
+      * a backslash INSIDE single quotes (`'line1\\<newline>line2'`) never
+        sets `esc` (bash: single quotes suppress all escaping), so the
+        newline still opens a real 'separator' boundary — unchanged, and
+        still the deliberate quote-blind split the ENUMERATION MONOTONICITY
+        tests above depend on;
+      * a backslash that is itself ESCAPED (`\\\\<newline>`, i.e. a literal
+        trailing backslash) consumes its OWN escape one character earlier
+        (the `if esc: esc = False` branch) and leaves `esc` False by the
+        time the newline is reached, so that newline also still splits.
     """
     out, buf, i, n = [], [], 0, len(c)
     # Stack of bools: was this open-paren's introducer in command position?
@@ -140,6 +168,24 @@ def _segments_with_kind(c):
             subshell_stack.append(_buf_is_cmd_position())
             _flush('separator'); i += 2; continue
         ch = c[i]
+        # Backslash-newline is a real shell LINE CONTINUATION, not a command
+        # boundary: bash deletes both characters and joins the next physical
+        # line onto this one (verified: `a="x\<newline>y"` -> `xy`, no space
+        # inserted). `esc` is true here iff the immediately preceding char was
+        # an unescaped backslash outside single quotes -- exactly bash's own
+        # continuation condition: a backslash inside '...' never sets esc (the
+        # `not sq` guard below), so a single-quoted multi-line literal keeps
+        # splitting on its embedded newline exactly as before (quote-blind by
+        # design, see the class docstring); an ESCAPED backslash (`\\`) before
+        # the newline consumes its own escape one char earlier and leaves esc
+        # False, so a literal trailing `\\` still splits as a real boundary.
+        # Because esc can only just have been set by the previous character,
+        # buf's last char is always the backslash that set it.
+        if ch == '\n' and esc:
+            buf.pop()
+            esc = False
+            i += 1
+            continue
         if ch in ';\n|&`':
             _flush('separator'); i += 1; continue
         if ch == '(' and _buf_is_cmd_position():
