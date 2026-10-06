@@ -17,3 +17,7 @@ When `/push` was actually run the next day, it never got that far. It stopped on
 ## Cross-reference
 
 See `docs/reference/master-origin-reconciliation-gap-20261005.md`'s 2026-10-06 correction for the specific case this criterion was extracted from, and `docs/reference/harness-issues-backlog.md` entry `#153` for the operational log entry.
+
+## Follow-up (2026-10-06, same day): the same reasoning was right once and wrong twice
+
+The non-fast-forward prediction in the companion record above has since been confirmed by an actual rejection from the remote — the reasoning that produced it turned out to be correct. That does not vindicate the method it came from. The same night, the same style of reasoning — deriving a blocker from adjacent facts instead of running the thing — produced two confident, wrong conclusions: a push attempt judged doomed by a fast-forward problem that, when actually run, turned out to be stopped by a missing authorization token instead; and a merge command judged unable to reach a remote branch, when what it actually does is never look for one in the first place, resolving to something else entirely. All three predictions felt equally solid at the time they were written down. Only one of three was right, and there was no way to tell which from the reasoning alone — only from running it.
