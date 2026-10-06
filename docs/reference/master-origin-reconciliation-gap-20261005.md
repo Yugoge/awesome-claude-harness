@@ -23,3 +23,15 @@ The dashboard figure the operator was watching under the "uncommitted" label is 
 ## The one remaining exit
 
 A human, acting outside this agent context, performing the merge and push directly. Nothing in this repository's current tooling offers a history-preserving route for an agent to do it.
+
+## Correction (2026-10-06): the five-route closure was incomplete
+
+The five routes above are an accurate record of what was actually run at the time, and that part stands unchanged. But calling it a "closed loop" overstated the result: an obvious sixth route — actually invoking `/push` and observing what happens — was never executed. Its outcome was inferred instead, from the behind-count alone (behind by 7, therefore non-fast-forward, therefore blocked), and folded into the same BLOCKED verdict as the five routes that were genuinely measured.
+
+That sixth route has since been run for real. The actual result was not a non-fast-forward rejection. `/push`'s own push-gate check, inside the wrapper script, refused with exit 3 — no push-gate token on disk names a commit reachable from `master`'s current HEAD; every existing token on disk belongs to a different branch entirely. `git` was never invoked against the remote at all; the rejection happened a full layer before that question could even be reached.
+
+Two consequences for this record:
+- **"Non-fast-forward is inevitable" is downgraded to an unverified hypothesis, not a measured fact.** `push-analyst`'s real-run review did flag it as a risk, but at `warn` severity — which does not block — and the run stopped at the push-gate layer before that risk was ever actually tested.
+- The five-route enumeration above remains accurate on its own terms, but a loop with one unexecuted link was never closed, however confidently that link's outcome had been reasoned out.
+
+What follows from this — the general criterion, not just this one case — is recorded separately in `docs/reference/infeasibility-without-execution-20261006.md`.

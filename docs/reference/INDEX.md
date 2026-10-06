@@ -1,8 +1,8 @@
 # reference
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-10-05T17:29:15Z*
-**Total entries**: 58
+*Last updated: 2026-10-06T01:18:02Z*
+**Total entries**: 59
 **Convention**: kebab
 
 ## Tree
@@ -31,6 +31,7 @@ reference/
 ├── `harness-fix-status-20260905.md` - Harness fix status — R1..R20 of `spec-20260904-harness-fixes.md`
 ├── `harness-gaps-found-20261005.md` - Harness gaps found during the 2026-10-05 tree-to-zero campaign
 ├── `harness-issues-backlog.md` - 待下次 spec 处理的 harness 问题清单（当前有 harness 修复在 worktree 跑，新问题只记录不并行修）
+├── `infeasibility-without-execution-20261006.md` - An infeasibility judgment that was never executed is a hypothesis, not a finding
 ├── `install-compatibility-matrix.md` - Install compatibility matrix
 ├── `lane-pol-catchup-plan-20260808-035658-lanepolcatchup.md` - LANE-POL Catch-Up Plan — origin/master → fix/dev-fanout-gatekeeper-20260717
 ├── `launch-plan.md` - Launch Plan — ROI-ranked channels, gated on recorded evidence
