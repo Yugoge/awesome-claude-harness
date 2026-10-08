@@ -18,6 +18,53 @@ DAEMON_RESTART_GRANT_DIR="${CLAUDE_DAEMON_RESTART_GRANT_DIR:-${CLAUDE_TMPDIR}}"
 DAEMON_RESTART_SENTINEL_RE="$(printf '%s' "${DAEMON_RESTART_GRANT_DIR%/}/claude-allow-daemon-restart-" | sed 's/[][\\.^$*+?{}|()]/\\&/g')"
 USERINTENT_SENTINEL_DIR="$(harness_state_dir)"
 COMMIT_USERINTENT_SENTINEL_RE="$(printf '%s' "${USERINTENT_SENTINEL_DIR%/}/claude-commit-userintent-" | sed 's/[][\\.^$*+?{}|()]/\\&/g')"
+# Dispatch-attestation namespace (Layer 1.E3). Same state root and the same
+# escaping as the user-intent sentinel above, so the two anti-forgery blocks
+# cannot drift apart. Prefix is hooks/lib/commit_pipeline.py::ATTEST_PREFIX.
+COMMIT_DISPATCH_ATTEST_RE="$(printf '%s' "${USERINTENT_SENTINEL_DIR%/}/claude-commit-dispatch-" | sed 's/[][\\.^$*+?{}|()]/\\&/g')"
+# Commit-grant namespace (Layer 1.E4). Same state root and the same escaping as
+# the two namespaces above -- the grant is the capability whose evidence they
+# protect, and it had no raw-write block of its own at all.
+COMMIT_GRANT_RE="$(printf '%s' "${USERINTENT_SENTINEL_DIR%/}/claude-commit-grant-" | sed 's/[][\\.^$*+?{}|()]/\\&/g')"
+
+# ── Shared write-verb alternation for Layers 1.E3 + 1.E4 ────────────────────
+# ONE definition, referenced by BOTH commit-artifact layers below, for exactly
+# the reason the namespace regexes above are hoisted: the two blocks cannot
+# drift apart. Until 2026-10-08 this alternation was spelled out TWICE, and the
+# two copies had ALREADY drifted -- identical 16-token sets, different order:
+# `\bi?python([^A-Za-z_]|$)` sat 7th in Layer 1.E3 and 12th in Layer 1.E4,
+# shifting install/dd/truncate/shred/rsync by one. Meanwhile each block
+# separately instructed maintainers to anchor any verb they add, so every
+# addition needed two coordinated edits to two very long literals that already
+# disagreed, and nothing detected the divergence. Add a verb HERE, once.
+#
+# Every token is ANCHORED: a leading `\b` and a trailing `([^A-Za-z_]|$)`.
+# They were bare substrings, so ordinary English words supplied a "write verb"
+# and a pure READ of the namespace was refused on BOTH layers: `untouched` fed
+# `touch`, `nodes` fed `node`, `awkward` fed `awk`, `reinstall` fed `install`,
+# and `committee` (commit-tee) fed `tee`. `\bdd\s` was the only token already
+# anchored and is the in-file precedent.
+#
+# Anchoring must NOT narrow the reach -- that is worse than the over-block --
+# so the trailing class still admits digits and dots (`python3`, `python3.12`,
+# `perl5.36`, `ruby3.2`), `\b` still admits a leading directory path
+# (`/usr/bin/touch`) and every command-head position (line start, and after
+# `|`, `;`, `&&`, `||`, `(`, `$(`), and the real binary ALIASES the old
+# substring form covered by accident are explicit optional groups so they are
+# not silently dropped: `cp(io)?`, `i?python`, `[gmn]?awk` (gawk is the default
+# awk on most Linux), `node(js)?`. NEVER remove a token to narrow a layer: an
+# interpreter writes with no redirection at all, so dropping one opens a hole
+# the redirection branch cannot see.
+# Full record: docs/reference/bash-safety-verb-anchoring-20261008.md
+ARTIFACT_WRITE_VERB_RE='(\btee([^A-Za-z_]|$)|\bcp(io)?([^A-Za-z_]|$)|\bmv([^A-Za-z_]|$)|\bln([^A-Za-z_]|$)|\btouch([^A-Za-z_]|$)|\bsed\s+-i|\bi?python([^A-Za-z_]|$)|\binstall([^A-Za-z_]|$)|\bdd\s|\btruncate([^A-Za-z_]|$)|\bshred([^A-Za-z_]|$)|\brsync([^A-Za-z_]|$)|\b[gmn]?awk([^A-Za-z_]|$)|\bperl([^A-Za-z_]|$)|\bnode(js)?([^A-Za-z_]|$)|\bruby([^A-Za-z_]|$))'
+# A shell NAME=VALUE capture, used as a PREFIX to a namespace regex: it matches
+# the point where a command binds the protected namespace into a variable.
+ARTIFACT_NS_CAPTURE_RE="(^|[[:space:];|&(])[A-Za-z_][A-Za-z0-9_]*=['\"]?"
+# A write whose destination is a VARIABLE EXPANSION rather than a literal path:
+# a redirection into `$VAR`/`${VAR}`, or a listed verb handed one. Requiring
+# `[A-Za-z_]` after the `$` is deliberate -- it excludes positional parameters,
+# so the ordinary auditing shape `... | awk '{print $1}'` is NOT a write.
+ARTIFACT_VAR_WRITE_RE="(>>?[&|]?[[:space:]]*['\"]?\\\$\{?[A-Za-z_]|${ARTIFACT_WRITE_VERB_RE}.*\\\$\{?[A-Za-z_])"
 
 # ── Local service-integration layer — maintainer environment ─────────────────
 # This hook gates REAL docker / systemd / daemon operations on the maintainer's
@@ -91,6 +138,13 @@ strip_shell_prelude_for_compose() {
 TOOL_NAME=$(echo "$INPUT" | "$PYTHON_BIN" -c "import json,sys; d=json.load(sys.stdin); print(d.get('tool_name',''))" 2>/dev/null)
 COMMAND=$(echo "$INPUT" | "$PYTHON_BIN" -c "import json,sys; d=json.load(sys.stdin); print(d.get('tool_input',{}).get('command',''))" 2>/dev/null)
 COMPOSE_COMMAND=$(strip_shell_prelude_for_compose "$COMMAND")
+# Single-LINE view of the command, for the ordered-binding predicates in the
+# two commit-artifact layers (1.E3 / 1.E4) only. grep is line-based and `.`
+# does not match a newline, so without this a heredoc body would sit on a
+# different line from the interpreter that writes it and the binding would
+# miss the write entirely. Nothing is removed -- newlines become spaces -- so
+# this view can only ever match MORE than the raw command, never less.
+COMMAND_ONE_LINE="${COMMAND//$'\n'/ }"
 
 # Only act on Bash tool
 if [ "$TOOL_NAME" != "Bash" ]; then
@@ -980,6 +1034,204 @@ if echo "$COMMAND" | grep -qE "${COMMIT_USERINTENT_SENTINEL_RE}[A-Za-z0-9_-]+\.f
   echo "BLOCKED: commit-userintent-sentinel-write — writing to the /commit mint-authorization sentinel is FORBIDDEN" >&2
   echo "Command: $COMMAND" >&2
   echo "REASON: only the UserPromptSubmit hook (fired when a human types /commit) may write this flag." >&2
+  exit 2
+fi
+
+# Layer 1.E3 — changelog-analyst dispatch-attestation write block. One artifact
+# over from Layer 1.E2 (NOT a copy of it -- see the three measured differences
+# below; this comment used to claim "Mirrors Layer 1.E2 exactly" and that was
+# inaccurate in both directions): the attestation that
+# hooks/pretool-git-privilege-guard.py requires before it will honor a commit
+# grant for a bare `git commit`. The ONLY legitimate writer is
+# hooks/pretool-commit-dispatch-attest.py, a PreToolUse:Agent hook that fires
+# on the real changelog-analyst dispatch event -- outside any Bash tool call,
+# so this block cannot interfere with it, and unlike Layer 1.E2's sentinel
+# there is no legitimate Bash writer of any kind.
+#
+# This block raises the COST of forging an attestation from Bash. It is NOT an
+# absolute barrier and must not be described as one: the predicate is a verb
+# BLACKLIST, so it intercepts the file-writing verbs enumerated below and any
+# verb not yet enumerated writes through. That is measured, not hypothetical --
+# an `install`-shaped write into this namespace was permitted until `install`
+# was added to the list. Widen the list whenever another ordinary write verb
+# turns up; never treat the list as complete.
+#
+# What the attestation actually rests on is the CONSUME side:
+# hooks/pretool-git-privilege-guard.py honors one only when the caller is a
+# dispatched subagent (non-empty `agent_id`) claiming a live attestation under
+# its own identity, which is what refuses the orchestrator-as-bearer move
+# behind disclosure items 1 and 2 of commit 1fdbd3767 (measured as 14 commits
+# with changelog-analyst never dispatched). So: the attesting hook is the only
+# INTENDED writer, this layer intercepts the ordinary Bash shapes that would
+# impersonate it, and the identity requirement is the structural barrier.
+# Three deliberate differences from Layer 1.E2, all measured. Two BROADEN this
+# layer; the third is a REAL RELAXATION of predicate reach, adopted on purpose.
+# This comment used to assert that NOT ONE of the three reduced reach, and that
+# was false in the one direction that matters -- it told a maintainer the repair
+# had no cost when it has a named one, recorded under #3:
+#   1. BROADER. No `[A-Za-z0-9_-]+\.flag` path-suffix anchor. 1.E2 anchors on
+#      its filename shape; this layer matches the bare namespace prefix. Do not
+#      "restore the mirror" by adding an anchor -- that would let a prefix-only
+#      write through.
+#   2. BROADER. A longer verb list (in-place edit, extra copy verbs, and the
+#      interpreters). NEVER remove an interpreter to narrow this layer: an
+#      interpreter writes with no redirection at all, so dropping one opens a
+#      hole the redirection branch below cannot see.
+#   3. A RELAXATION, and the point of it. The old predicate was (namespace
+#      appears ANYWHERE) AND (a write token appears ANYWHERE). It is now
+#      BOUND: a redirection must have the namespace as its TARGET, and a
+#      verb must be HANDED the namespace. Reducing reach was the goal -- the
+#      unbound form refused every read of the namespace that handles its own
+#      error stream (`ls <namespace> 2>/dev/null` was REFUSED because the `>`
+#      in `2>/dev/null` satisfied the alternation by itself) and every read
+#      that merely MENTIONED an enumerated interpreter for an unrelated
+#      reason (`ls <namespace> | python3 -c ...`, measured refused on both
+#      layers 2026-10-08). That made the artifact carrying the security claim
+#      un-auditable from Bash. `cat` left the verb list for the same reason:
+#      it is a pure-read verb conferring no write capability, and its writing
+#      shapes (`cat SRC > NS`, `cat SRC | tee NS`) are still caught by the
+#      redirection branch and by `tee` respectively.
+#
+#      WHAT THE RELAXATION COST, and what was bought back. Binding alone let
+#      the namespace be written through a SHELL VARIABLE: `NS=<namespace>;
+#      echo x > "$NS"` satisfied the old unbound predicate (via the bare `>`)
+#      and not the bound one, and it is a genuine write. Branches 3 and 4
+#      below close that, measured, without reinstating the over-block:
+#      branch 3 fires when the namespace is captured into a variable AND the
+#      command writes through a variable expansion; branch 4 fires when the
+#      capture is a command PREFIX assignment feeding a listed verb (the
+#      `NS=<namespace> python3 -c '...os.environ["NS"]...'` shape).
+#
+#      RESIDUAL, stated precisely rather than summarised away. Three shapes
+#      are NOT caught and must not be assumed caught:
+#        (a) the variable name is uncorrelated -- the predicate cannot tie the
+#            captured name to the expanded one, because POSIX ERE has no
+#            back-references, so capture of one name plus a write through a
+#            DIFFERENT name is over-broad in one direction and the reverse is
+#            under-broad;
+#        (b) the namespace is assembled at runtime and never appears literally
+#            (command substitution, concatenation, a `printf` format, a path
+#            built from an unrelated variable), so no textual predicate here
+#            can see it;
+#        (c) a write verb not yet enumerated -- the list is a BLACKLIST, which
+#            is measured, not hypothetical: an `install`-shaped write was
+#            permitted until `install` was added.
+#      The barrier that DOES cover all three is structural, not textual:
+#      hooks/pretool-git-privilege-guard.py refuses any grant without a
+#      pipeline `minted_by.origin`, any caller with an empty `agent_id`, and
+#      any caller that is not the dispatched subagent holding the matching
+#      dispatch attestation. This layer raises the COST of forging from Bash;
+#      it is not and must not be described as an absolute barrier.
+#
+# BRANCH STRUCTURE (identical in Layer 1.E4 -- the two conditions are kept
+# textually identical modulo the namespace variable, and a test fails if they
+# diverge):
+#   1. a redirection whose TARGET is the namespace (optional fd prefix, `&`/`|`
+#      suffix, whitespace and one quote character may intervene);
+#   2. a listed verb that is HANDED the namespace -- the verb appears BEFORE it
+#      in the command, which is how a destination-as-argument verb reaches a
+#      file and is the analogue of branch 1's target binding. Mere
+#      co-occurrence does NOT refuse. Evaluated on COMMAND_ONE_LINE so a
+#      heredoc body cannot escape onto another line;
+#   3. the namespace is captured into a shell variable AND the command writes
+#      through a variable expansion;
+#   4. the capture is a command-prefix assignment handing the namespace to a
+#      listed verb through its environment.
+# The verb alternation itself is ARTIFACT_WRITE_VERB_RE, defined ONCE near the
+# top of this file and shared with Layer 1.E4 -- add verbs there, anchored, not
+# here. Full record: docs/reference/bash-safety-verb-anchoring-20261008.md
+# Stable label: commit-dispatch-attestation-write.
+if echo "$COMMAND" | grep -qE "${COMMIT_DISPATCH_ATTEST_RE}" \
+   && { echo "$COMMAND" | grep -qE ">>?[&|]?[[:space:]]*['\"]?${COMMIT_DISPATCH_ATTEST_RE}" \
+        || printf '%s\n' "$COMMAND_ONE_LINE" | grep -qE "${ARTIFACT_WRITE_VERB_RE}.*${COMMIT_DISPATCH_ATTEST_RE}" \
+        || { printf '%s\n' "$COMMAND_ONE_LINE" | grep -qE "${ARTIFACT_NS_CAPTURE_RE}${COMMIT_DISPATCH_ATTEST_RE}" \
+             && printf '%s\n' "$COMMAND_ONE_LINE" | grep -qE "${ARTIFACT_VAR_WRITE_RE}"; } \
+        || printf '%s\n' "$COMMAND_ONE_LINE" | grep -qE "${ARTIFACT_NS_CAPTURE_RE}${COMMIT_DISPATCH_ATTEST_RE}[^;|&]*${ARTIFACT_WRITE_VERB_RE}"; }; then
+  echo "BLOCKED: commit-dispatch-attestation-write — writing to the changelog-analyst dispatch-attestation namespace is FORBIDDEN" >&2
+  echo "Command: $COMMAND" >&2
+  echo "REASON: only hooks/pretool-commit-dispatch-attest.py (PreToolUse:Agent, fired by a real changelog-analyst dispatch) may write these files." >&2
+  echo "        A Bash-written attestation would let a bare \`git commit\` claim a pipeline run that never happened." >&2
+  exit 2
+fi
+
+# Layer 1.E4 — commit-grant raw-write block. Same construction as Layer 1.E3,
+# one artifact over: the privilege-guard grant itself
+# (`<state-dir>/claude-commit-grant-<sid>-<nonce>.json`), the capability the
+# two evidence artifacts above exist to qualify. It had no raw-write block at
+# all, so a hand-authored grant file sidestepped
+# scripts/write-commit-grant.py's entire mint-authorization path (a live
+# /commit user-intent sentinel, the pipeline evidence
+# `commit_pipeline.verify_pipeline_dispatch` checks, and the `minted_by`
+# stamp the guard requires).
+#
+# The canonical minter is NOT affected. /commit mints by invoking
+# `scripts/write-commit-grant.py --task-id ... --repo-root ...` (and its
+# `--revoke-only` / `--revoke-existing-for-task` forms); the script composes
+# the grant path internally, so that command line never names the grant
+# namespace and never reaches this predicate.
+#
+# Read-only inspection: permitted for every read shape that does not HAND the
+# namespace to an enumerated verb -- which is a qualified claim, and the
+# qualification is load-bearing. The unqualified version of this sentence was
+# wrong twice. First it read "only a WRITE verb beside the namespace is
+# denied", while the predicate actually required only that a verb and the
+# namespace both appear SOMEWHERE in the same command -- so
+# `ls -1 <namespace glob> 2>/dev/null` was denied, because `2>/dev/null`
+# supplied the `>`. That was retracted, but the replacement still said
+# "permitted" flat, and a WIDER half of the same over-block survived it: a
+# fully read-only command that named this namespace and, separately and for an
+# unrelated purpose, invoked an enumerated interpreter was still refused
+# (`ls -1 <namespace glob> 2>/dev/null | python3 -c '...'`, measured refused
+# under this very layer's label on 2026-10-08 -- in the comment block of the
+# layer that did the refusing). Both halves have the same root cause and the
+# same repair as Layer 1.E3: bind the operator to its TARGET, and bind the
+# verb to the namespace it is handed.
+#
+# RESIDUAL OVER-BLOCK, named rather than left implicit. Binding is positional,
+# not semantic, so a read of the namespace is still refused when:
+#   (a) an enumerated verb appears EARLIER in the same command for an
+#       unrelated reason (`touch /tmp/marker && cat <namespace>`);
+#   (b) the read itself is performed BY an enumerated interpreter
+#       (`python3 -c 'print(open("<namespace>").read())'`) -- indistinguishable
+#       from a write without parsing the interpreter's own program, so it is
+#       refused on purpose; use `ls`/`cat`/`jq`/`grep`, which are not verbs;
+#   (c) the state root itself contains a verb token as a path component, which
+#       places it before every namespace occurrence. The pre-binding predicate
+#       refused these too, so none of the three is a regression.
+#
+# The interpreters (`python|awk|perl|node|ruby`) are in the second branch
+# deliberately: an interpreter writes a grant with no redirection at all, so
+# a redirection-only predicate would not see it. Layer 1.E3 already carried
+# them; this layer did not, which left the GRANT namespace -- the capability
+# the attestation exists to qualify -- less protected than the attestation.
+# Do not drop them, and do not re-merge the two branches into one.
+#
+# Same standing caveat as Layer 1.E3: a verb blacklist raises the cost of
+# hand-authoring a grant, it does not make it impossible. The structural
+# requirements stay in hooks/pretool-git-privilege-guard.py, which refuses any
+# grant without a pipeline `minted_by.origin`, any caller with an empty
+# `agent_id`, and any caller that is not the dispatched subagent holding the
+# matching dispatch attestation.
+# The verb alternation is ARTIFACT_WRITE_VERB_RE, defined ONCE near the top of
+# this file and shared with Layer 1.E3 -- it is NOT restated here, and must not
+# be: the two copies that used to live in the two layers had already drifted in
+# order. Add verbs at that definition, anchored. This condition is kept
+# textually IDENTICAL to Layer 1.E3's modulo the namespace variable, and
+# hooks/tests/test_commit_artifact_rw_boundary.py fails if the two diverge.
+# See Layer 1.E3's comment for the four branches, the relaxation they bind, and
+# the residual; and docs/reference/bash-safety-verb-anchoring-20261008.md.
+# Stable label: commit-grant-raw-write.
+if echo "$COMMAND" | grep -qE "${COMMIT_GRANT_RE}" \
+   && { echo "$COMMAND" | grep -qE ">>?[&|]?[[:space:]]*['\"]?${COMMIT_GRANT_RE}" \
+        || printf '%s\n' "$COMMAND_ONE_LINE" | grep -qE "${ARTIFACT_WRITE_VERB_RE}.*${COMMIT_GRANT_RE}" \
+        || { printf '%s\n' "$COMMAND_ONE_LINE" | grep -qE "${ARTIFACT_NS_CAPTURE_RE}${COMMIT_GRANT_RE}" \
+             && printf '%s\n' "$COMMAND_ONE_LINE" | grep -qE "${ARTIFACT_VAR_WRITE_RE}"; } \
+        || printf '%s\n' "$COMMAND_ONE_LINE" | grep -qE "${ARTIFACT_NS_CAPTURE_RE}${COMMIT_GRANT_RE}[^;|&]*${ARTIFACT_WRITE_VERB_RE}"; }; then
+  echo "BLOCKED: commit-grant-raw-write — hand-writing a /commit privilege-guard grant is FORBIDDEN" >&2
+  echo "Command: $COMMAND" >&2
+  echo "REASON: grants are minted ONLY by scripts/write-commit-grant.py, which requires a live /commit" >&2
+  echo "        user-intent sentinel plus pipeline evidence and stamps minted_by on what it writes." >&2
+  echo "        Mint through that script (it composes the grant path itself); do not author the file." >&2
   exit 2
 fi
 

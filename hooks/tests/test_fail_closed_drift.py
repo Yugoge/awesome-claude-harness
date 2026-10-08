@@ -365,3 +365,56 @@ def test_widened_denial_is_gated_behind_a_non_allow_verdict():
         "the _runtime_guard_fail_closed call escaped the non-ALLOW branch — the widened "
         "denial could now fire on a healthy ALLOW verdict."
     )
+
+
+# ── sh/py mirror: the Layer 1.E3 namespace literal vs ATTEST_PREFIX ─────────
+PIPELINE_PY = os.path.join(HOOKS_DIR, "lib", "commit_pipeline.py")
+
+
+def test_attest_prefix_is_mirrored_in_the_bash_layer():
+    """`commit_pipeline.ATTEST_PREFIX` and Layer 1.E3's namespace must be one string.
+
+    Layer 1.E3 builds `COMMIT_DISPATCH_ATTEST_RE` from a HAND-TYPED copy of the
+    attestation filename prefix, while the writer and the readers take theirs from
+    `ATTEST_PREFIX`. Renaming the constant without retyping the shell literal would
+    leave the Bash-layer interception pointed at a namespace nothing writes any more —
+    silently, with every other test green. Neither side is hardcoded here: both are
+    read, so this fails only on actual divergence.
+
+    SCOPE: this pins the NAMESPACE the layer watches. It does not claim the layer's
+    verb list is complete — Layer 1.E3 is a verb blacklist that raises the cost of
+    forging an attestation, and the structural barrier is the privilege guard's
+    consume-side identity requirement. See that layer's own comment block.
+    """
+    with open(PIPELINE_PY, encoding="utf-8") as fh:
+        tree = ast.parse(fh.read())
+    prefix = next(
+        (n.value.value for n in tree.body
+         if isinstance(n, ast.Assign)
+         and any(isinstance(t, ast.Name) and t.id == "ATTEST_PREFIX" for t in n.targets)
+         and isinstance(n.value, ast.Constant) and isinstance(n.value.value, str)),
+        None,
+    )
+    assert prefix, (
+        "ATTEST_PREFIX is no longer a module-level string literal in commit_pipeline.py "
+        "— the sh/py mirror cannot be checked; re-point this test rather than deleting it."
+    )
+
+    with open(HOOK, encoding="utf-8") as fh:
+        hook_src = fh.read()
+    assignment = next(
+        (ln for ln in hook_src.splitlines()
+         if ln.startswith("COMMIT_DISPATCH_ATTEST_RE=")),
+        None,
+    )
+    assert assignment, (
+        "COMMIT_DISPATCH_ATTEST_RE= is gone from pretool-bash-safety.sh — Layer 1.E3's "
+        "namespace is no longer derivable; fix the extraction or the layer."
+    )
+    assert prefix in assignment, (
+        f"MIRROR DRIFT: commit_pipeline.ATTEST_PREFIX is {prefix!r}, which does not "
+        f"appear in the shell side's namespace assignment:\n  {assignment}\n"
+        "Layer 1.E3 would be watching a namespace the attesting hook never writes. "
+        "Retype the literal in the hook (it is built with shell-regex escaping, so it "
+        "cannot simply import the constant)."
+    )

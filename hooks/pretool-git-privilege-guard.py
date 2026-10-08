@@ -120,6 +120,23 @@ Revision history:
     grant blocked auto-bulk for its whole TTL. The deferral now applies the same
     binding + spent test the commit validation applies; see
     `_grant_can_authorize_here`.
+  2026-10-06 (bearer-ticket closure): every check above answers "is this grant
+  still valid HERE?" and none answered "is the caller entitled to spend it?" or
+  "did the pipeline this grant exists to authorize actually run?". A grant was a
+  BEARER ticket. Measured bypass: a seat received a bare `/commit` first line,
+  which lit the user-intent sentinel; the sentinel alone authorized
+  `scripts/write-commit-grant.py` to mint; the minted grant alone authorized a
+  bare `git commit`. 14 commits landed that way with changelog-analyst never
+  dispatched and Phase 2/3/4/5/10 never run -- including the fd-9 lock and the
+  MANDATORY pre-stage validation, both of which fail SILENTLY, so the only
+  symptom ever observed was a missing push-gate token. Disclosure items 1 and 2
+  of commit 1fdbd3767 recorded both halves of this and labelled them
+  `Not fully closed`. Now closed at both ends: the minter additionally requires
+  real pipeline evidence (`hooks/lib/commit_pipeline.verify_pipeline_dispatch`),
+  and `_grant_provenance_refusal` here requires grant provenance
+  (`minted_by.origin`), a dispatched-subagent caller (non-empty `agent_id`), and
+  a hook-written changelog-analyst dispatch attestation claimed by that caller.
+  See `_grant_provenance_refusal` and hooks/lib/commit_pipeline.py.
 
 Exit codes:
   0: Allow tool use
@@ -152,6 +169,11 @@ from lib.git_command_classifier import (  # noqa: E402
     _ENV_ASSIGN_RE as _ENV_ASSIGN_RE,
     _GIT_GLOBAL_VALUE as _GIT_GLOBAL_VALUE,
 )
+# Commit-grant provenance contract (minted_by / expected_consumer) and the
+# hook-written changelog-analyst dispatch attestation. Shared with
+# scripts/write-commit-grant.py and hooks/pretool-commit-dispatch-attest.py so
+# all three agree by construction. See _grant_provenance_refusal.
+from lib import commit_pipeline  # noqa: E402
 
 
 BLESSED_BRIDGE_RE = re.compile(r'auto-bulk:\s*end-of-cycle commit for\b')
@@ -1395,6 +1417,118 @@ def _has_active_commit_grant(command=''):
     return False
 
 
+def _grant_provenance_refusal(grant, grant_path, data):
+    """Why this caller may not spend this grant, or '' when it may.
+
+    THE DEFECT THIS CLOSES. A commit grant used to be a BEARER ticket: the
+    guard checked that the grant was unexpired, unspent and bound to this
+    repo/branch/HEAD, and then allowed the commit no matter WHO presented it
+    or WHETHER the pipeline that the grant exists to authorize had run. The
+    measured consequence (2026-10-06): a seat sent a bare `/commit` first
+    line lit the user-intent sentinel, called write-commit-grant.py directly,
+    and committed 14 times -- changelog-analyst never dispatched, and Phase
+    2/3/4/5/10 never executed, including the fd-9 lock and the MANDATORY
+    pre-stage validation, both of which fail SILENTLY. The only symptom that
+    ever surfaced was a missing push-gate token, because that is the only
+    skipped step that says anything out loud. Disclosure items 1 and 2 of
+    commit 1fdbd3767 recorded this gap in terms and labelled it
+    `Not fully closed`.
+
+    Three questions, all of which a bearer fails:
+
+      1. Is the grant a PIPELINE product? `minted_by.origin` must be
+         PIPELINE_ORIGIN. A grant minted by an older copy of the writer
+         carries no `minted_by` at all and is refused -- that is deliberate:
+         an unsigned ticket is exactly the thing being retired.
+      2. Is the caller a DISPATCHED SUBAGENT? `agent_id` must be non-empty.
+         Measured, not assumed: hooks/pretool-cp-checkin.py is itself a
+         PreToolUse hook and writes this same payload field into
+         .claude/dev-registry/agent-index.json, where the recorded
+         `a`-prefixed ids map to real agent types -- re-derive the asymmetry
+         from that index rather than from this docstring. A dispatched
+         subagent's payload carries a non-empty id, while the main agent's
+         carries none. This single check is what refuses the
+         orchestrator-as-bearer -- step 4 of the measured bypass.
+      3. Is it THE subagent this pipeline run dispatched? A live
+         hook-written changelog-analyst dispatch attestation must exist,
+         dated at or after the mint, and must be claimable by this
+         agent_id. First claim wins and binds; a second, unrelated subagent
+         presenting the same grant is refused.
+
+    Returns a reason string rather than blocking directly, so the caller can
+    move on to the next candidate grant instead of letting one stale or
+    legacy grant shadow a legitimate one. The reason is only surfaced if NO
+    candidate ends up authorizing the commit.
+    """
+    minted_by = grant.get('minted_by')
+    if not isinstance(minted_by, dict) or \
+            minted_by.get('origin') != commit_pipeline.PIPELINE_ORIGIN:
+        return (
+            '\nBLOCKED: commit grant carries no /commit pipeline provenance.\n'
+            f'  grant: {grant_path}\n'
+            f'  minted_by: {minted_by!r}\n'
+            'A commit grant must record minted_by.origin = '
+            f'"{commit_pipeline.PIPELINE_ORIGIN}", written by '
+            'scripts/write-commit-grant.py only after it has verified that a real '
+            '/commit pipeline run planned this repository. An unsigned grant is a '
+            'bearer ticket -- the exact shape that let 14 commits bypass '
+            'changelog-analyst entirely -- and is no longer honored.\n'
+            'To commit: invoke /commit, which mints a grant with provenance and '
+            'dispatches changelog-analyst to spend it.\n'
+        )
+
+    agent_id = str(data.get('agent_id') or '').strip()
+    if not agent_id:
+        return (
+            '\nBLOCKED: a commit grant may only be spent by the subagent the /commit '
+            'pipeline dispatched, not by the caller holding the grant.\n'
+            f'  grant: {grant_path}\n'
+            '  caller: main agent (no agent_id in the PreToolUse payload)\n'
+            'This bare `git commit` is running in an orchestrator/main-agent context. '
+            'Commits are made by changelog-analyst, which /commit dispatches as a '
+            'subagent after its close gate, repository plan and pre-commit QA gate '
+            'have all run; those phases are the point of the grant.\n'
+            'To commit: invoke /commit and let it dispatch changelog-analyst. Do not '
+            'mint a grant and commit directly -- that is the bypass this refusal '
+            'exists to stop.\n'
+        )
+
+    sids = [str(grant.get('sid') or ''), _get_session_id(data)]
+    attestation, why = commit_pipeline.select_dispatch_attestation(
+        sids, str(grant.get('created_at') or ''), agent_id)
+    if not attestation:
+        return (
+            '\nBLOCKED: no changelog-analyst dispatch attestation backs this commit '
+            'grant.\n'
+            f'  grant: {grant_path}\n'
+            f'  caller agent_id: {agent_id}\n'
+            f'  reason: {why}\n'
+            'The only intended writer of an attestation is '
+            'hooks/pretool-commit-dispatch-attest.py, on the real PreToolUse:Agent '
+            'event for a changelog-analyst dispatch; Bash writes into that namespace '
+            'are intercepted verb by verb (hooks/pretool-bash-safety.sh Layer 1.E3), '
+            'which raises the cost of forging one without being an absolute barrier. '
+            'The requirement being enforced here is identity: an attestation counts '
+            'only when a dispatched subagent claims it under its own agent_id. Its '
+            'absence means the commit pipeline never dispatched changelog-analyst for '
+            'this grant, so the grant is being spent by a bearer rather than by the '
+            'pipeline.\n'
+            'To commit: invoke /commit so the dispatch actually happens.\n'
+        )
+
+    claimed, claim_why = commit_pipeline.claim_attestation(attestation, agent_id)
+    if not claimed:
+        return (
+            '\nBLOCKED: this commit grant belongs to a different dispatched subagent.\n'
+            f'  grant: {grant_path}\n'
+            f'  caller agent_id: {agent_id}\n'
+            f'  reason: {claim_why}\n'
+            'One changelog-analyst dispatch authorizes one consumer. A second subagent '
+            'presenting the same grant is a bearer, not the dispatched analyst.\n'
+        )
+    return ''
+
+
 def _evaluate_commit(command, data):
     msg = _extract_commit_message(command)
     if msg and BLESSED_BRIDGE_RE.search(msg):
@@ -1438,6 +1572,7 @@ def _evaluate_commit(command, data):
             _unlink_grant(_use_record_path(path))
             continue
         live.append((path, grant))
+    provenance_refusal = ''
     for grant_path, grant in live:
         # A grant already spent on the undeferrable path is not a candidate at
         # all (audit round 3, F4). Checked BEFORE the target match so a spent
@@ -1446,6 +1581,18 @@ def _evaluate_commit(command, data):
         if not _grant_use_permitted(grant, grant_path):
             continue
         if _grant_matches_commit_target(grant, command):
+            # WHO is spending this grant, and did the pipeline it authorizes
+            # actually run? Checked after the target match so no attestation
+            # is claimed on behalf of a grant bound to another repository,
+            # and recorded-then-skipped rather than blocking here so one
+            # stale or legacy grant cannot shadow a legitimate one that
+            # appears later in a nondeterministic glob order. If nothing
+            # authorizes the commit, the FIRST refusal is what gets reported
+            # below -- it is the precise reason, where default-deny is not.
+            refusal = _grant_provenance_refusal(grant, grant_path, data)
+            if refusal:
+                provenance_refusal = provenance_refusal or refusal
+                continue
             # Authoritative binding re-check (redirect vectors + repo/branch/HEAD
             # across EVERY invocation): a matching grant passes; any redirect
             # still _block()s (exit 2). Single source of truth for the allow.
@@ -1463,6 +1610,12 @@ def _evaluate_commit(command, data):
                 # binding, is what refuses the second one (audit round 3, F4).
                 _record_undeferrable_grant_use(grant, grant_path)
             return
+    # A grant was bound to this exact target but its bearer was not entitled to
+    # spend it. Reported ahead of the binding/default-deny diagnostics below
+    # because those would blame the repo binding or say "no grant", both of
+    # which are false here and send the reader hunting in the wrong place.
+    if provenance_refusal:
+        _block(provenance_refusal)
     # Fail closed (security preserved): no unexpired grant is bound to this
     # commit's target repo/branch/HEAD. If a live-but-mismatched grant exists,
     # surface the precise diagnostic via the authoritative binding check (it

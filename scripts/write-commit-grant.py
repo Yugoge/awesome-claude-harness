@@ -50,11 +50,41 @@ restart and bulk-commit sentinel protections). Checked, not consumed: one
 /commit cycle mints one grant per REPOSITORY_PLAN entry and may re-mint on
 retry (Step 8), all within the same human-initiated invocation.
 
+Pipeline-evidence requirement (2026-10-06, closes disclosure items 1 and 2
+of commit 1fdbd3767, both of which landed labelled `Not fully closed`). The
+sentinel closure above was only half a gate, and its own disclosures said
+so: the sentinel proves that a `/commit`-prefixed prompt entered this
+session, NOT that the commit pipeline ran. An orchestrator delivering a bare
+`/commit` first line to a seat lights the same sentinel, and a seat that
+then calls this script directly mints a perfectly valid grant -- measured in
+the wild, 14 commits with changelog-analyst never dispatched and the Phase
+2/3/4/5/10 gates never executed. Minting therefore now ALSO requires
+`hooks/lib/commit_pipeline.verify_pipeline_dispatch()` to pass: a live
+dispatch-snapshot manifest for this session and task, carrying a repository
+plan that admits this exact repo at its live branch/HEAD, whose cited cycle
+report matches its recorded sha256, plus a close-report for the task. A
+grant is no longer mintable from a sentinel alone.
+
+That evidence is orchestrator-authored and so forgeable in principle -- /commit
+Step 5 mints BEFORE it dispatches, so at mint time there is nothing
+hook-witnessed to require. It raises the cost; the structural barrier is on
+the CONSUME side, where the privilege guard demands a hook-written
+changelog-analyst dispatch attestation and a matching consumer identity. See
+hooks/lib/commit_pipeline.py for the full asymmetry. Do not describe this
+side as unforgeable.
+
+Every grant now records `minted_by` (what authorized the mint, and the
+evidence checked) and `expected_consumer` (who may spend it). Those two
+fields are what retire the unsigned BEARER ticket: a grant that does not
+carry `minted_by.origin == "commit-pipeline"` is refused by the guard
+outright, so a grant written by an older copy of this script is not honored.
+
 Exit codes:
   0  success (grant written)
   2  CLAUDE_SESSION_ID unresolved (neither --sid nor env var supplied),
-     repo_root/branch/expected_head could not be resolved via git, or no
-     live /commit user-intent sentinel authorizes minting for this session
+     repo_root/branch/expected_head could not be resolved via git, no
+     live /commit user-intent sentinel authorizes minting for this session,
+     or no /commit pipeline dispatch evidence stands behind the request
   argparse-default 2 when --task-id is omitted (handled by argparse)
 """
 
@@ -74,6 +104,7 @@ from pathlib import Path
 # import shape as scripts/break-overnight-lock.py).
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "hooks" / "lib"))
 from harness_state_dir import harness_state_dir  # noqa: E402
+import commit_pipeline  # noqa: E402
 
 # Grant validity window. The privilege guard expires the grant at
 # created_at + GRANT_TTL_MINUTES; do not duplicate this literal at the
@@ -409,8 +440,8 @@ def _sentinel_dir() -> str:
     return harness_state_dir()
 
 
-def _mint_authorized(sid: str) -> bool:
-    """True iff a live `/commit` user-intent sentinel authorizes minting now.
+def _sentinel_live(sid: str) -> bool:
+    """True iff a live `/commit` user-intent sentinel exists for `sid`.
 
     The sentinel is written ONLY by prompt-workflow.py's UserPromptSubmit
     hook when a human types `/commit` -- never by this script, and direct
@@ -418,6 +449,13 @@ def _mint_authorized(sid: str) -> bool:
     safety.sh Layer 1.E2). Checked by content AND freshness (mtime), never
     consumed here: a single /commit cycle may call this script several
     times (one grant per REPOSITORY_PLAN entry, plus Step 8 retries).
+
+    NECESSARY BUT NOT SUFFICIENT. A `/commit` first line delivered to a seat
+    by an orchestrator lights this sentinel exactly as a human typing
+    `/commit` does -- disclosure item 2 of commit 1fdbd3767 recorded that in
+    terms, and the measured 14-commit bypass is what it looks like in
+    practice. The pipeline-evidence check in `main()` is the other half; do
+    not reintroduce a path that mints on this alone.
     """
     path = Path(_sentinel_dir()) / f"claude-commit-userintent-{sid}.flag"
     try:
@@ -457,8 +495,8 @@ def main(argv: list[str] | None = None) -> int:
     if args.revoke_existing_for_task:
         _revoke_grants_for_task(args.output_dir, args.revoke_existing_for_task, sid)
     # Minting (unlike revocation) requires proof that an actual /commit
-    # invocation is in progress for this session -- see _mint_authorized.
-    if not _mint_authorized(sid):
+    # invocation is in progress for this session -- see _sentinel_live.
+    if not _sentinel_live(sid):
         print(
             "Cannot write commit grant: no live /commit user-intent sentinel "
             f"for session {sid!r}. A commit grant may only be minted from "
@@ -471,6 +509,8 @@ def main(argv: list[str] | None = None) -> int:
     # Resolve the repo/branch/HEAD binding fields BEFORE writing anything --
     # a grant that cannot establish its own baseline is unusable and must not
     # be written (fail closed, mirroring the SID-resolution failure above).
+    # Resolved before the pipeline-evidence check below because that check
+    # binds the repository plan to this exact repo at its live branch/HEAD.
     try:
         repo_root = _git_capture(["rev-parse", "--show-toplevel"], cwd=args.repo_root)
         branch = _git_capture(["branch", "--show-current"], cwd=repo_root)
@@ -479,6 +519,29 @@ def main(argv: list[str] | None = None) -> int:
         print(
             f"Cannot write commit grant: unable to resolve repo/branch/HEAD "
             f"binding: {exc}",
+            file=sys.stderr,
+        )
+        return 2
+    # Second, independent half of mint authorization: the sentinel says a
+    # /commit prompt entered this session; this says the /commit PIPELINE
+    # actually ran and planned this repository. Closes disclosure items 1
+    # and 2 of 1fdbd3767 on the mint side. Fail closed with the one missing
+    # piece named, so a legitimate cycle can see what to rebuild.
+    pipeline_ok, pipeline_reason, pipeline_evidence = (
+        commit_pipeline.verify_pipeline_dispatch(
+            sid, args.task_id, repo_root, branch, expected_head)
+    )
+    if not pipeline_ok:
+        print(
+            "Cannot write commit grant: no /commit pipeline dispatch evidence "
+            f"for task {args.task_id!r} in session {sid!r}.\n"
+            f"  reason: {pipeline_reason}\n"
+            "A live /commit user-intent sentinel is NOT sufficient on its own: a "
+            "bare /commit first line delivered to a seat lights that sentinel "
+            "without running any of the pipeline, which is how 14 commits landed "
+            "with changelog-analyst never dispatched. Run /commit so its Step 5 "
+            "writes the dispatch-snapshot manifest (repository plan + cycle report "
+            "digest) before minting.",
             file=sys.stderr,
         )
         return 2
@@ -493,6 +556,28 @@ def main(argv: list[str] | None = None) -> int:
         "expected_head": expected_head,
         "created_at": now.isoformat(),
         "expires_at": (now + timedelta(minutes=GRANT_TTL_MINUTES)).isoformat(),
+        # Provenance: what authorized this mint, and what evidence was
+        # checked. The guard refuses any grant whose minted_by.origin is not
+        # PIPELINE_ORIGIN, which is what makes a grant a NAMED ticket
+        # instead of a bearer one.
+        "minted_by": {
+            "origin": commit_pipeline.PIPELINE_ORIGIN,
+            "authorized_by": ["commit-userintent-sentinel",
+                              "commit-dispatch-manifest"],
+            "minter": "scripts/write-commit-grant.py",
+            "minter_pid": os.getpid(),
+            "minted_at": now.isoformat(),
+            "evidence": pipeline_evidence,
+        },
+        # Who may spend it. Enforced by
+        # hooks/pretool-git-privilege-guard.py::_grant_provenance_refusal.
+        "expected_consumer": {
+            "kind": "dispatched-subagent",
+            "agent_type": commit_pipeline.CHANGELOG_ANALYST,
+            "requires_dispatch_attestation": True,
+            "requires_agent_id": True,
+            "dispatch_after": now.isoformat(),
+        },
     }
     grant_path = Path(args.output_dir) / f"claude-commit-grant-{sid}-{nonce}.json"
     with open(grant_path, "w") as fp:

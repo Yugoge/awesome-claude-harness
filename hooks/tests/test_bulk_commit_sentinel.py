@@ -531,6 +531,7 @@ class TestCommitGrantRepoMatchingSelection(unittest.TestCase):
 
     def setUp(self):
         self._repos = []
+        self._attestations = []
         # _enforce_commit_grant_binding fails closed on an ambient GIT_DIR/
         # GIT_WORK_TREE/GIT_COMMON_DIR redirect; ensure none leak in from the
         # outer environment so the repo-match selection can be exercised.
@@ -543,6 +544,11 @@ class TestCommitGrantRepoMatchingSelection(unittest.TestCase):
         import shutil
         for d in self._repos:
             shutil.rmtree(d, ignore_errors=True)
+        # _arm_dispatched_consumer writes into the REAL runtime state dir (it
+        # calls the same writer the attesting hook calls), so each attestation
+        # must be removed here rather than left to expire on its own TTL.
+        for p in self._attestations:
+            Path(p).unlink(missing_ok=True)
         for k, v in self._saved_env.items():
             if v is not None:
                 os.environ[k] = v
@@ -574,6 +580,22 @@ class TestCommitGrantRepoMatchingSelection(unittest.TestCase):
 
     @staticmethod
     def _write_grant(dirpath, sid, repo_root, branch, head, mtime):
+        """A grant in the CURRENT (provenanced) shape.
+
+        2026-10-06: this helper used to emit a grant with no `minted_by` and no
+        `expected_consumer`. That is the pre-provenance BEARER-ticket shape, and
+        it is exactly the shape the guard now refuses: a seat that lit the
+        /commit user-intent sentinel could self-mint one and commit with
+        changelog-analyst never dispatched (14 measured commits; disclosure
+        items 1 and 2 of commit 1fdbd3767). The fixture was asserting the OLD
+        contract, so leaving it unchanged would have left this class guarding
+        the hole instead of the selection property.
+
+        What changed here is the fixture's INPUT shape only. Every assertion in
+        this class is unchanged, and the property the class exists for --
+        repo-match beats recency -- is still what the positive test asserts
+        (see its own docstring).
+        """
         import secrets
         nonce = secrets.token_hex(8)
         now = datetime.now(timezone.utc)
@@ -586,11 +608,47 @@ class TestCommitGrantRepoMatchingSelection(unittest.TestCase):
             "expected_head": head,
             "created_at": now.isoformat(),
             "expires_at": (now + timedelta(minutes=30)).isoformat(),
+            "minted_by": {
+                "origin": guard.commit_pipeline.PIPELINE_ORIGIN,
+                "authorized_by": ["commit-userintent-sentinel",
+                                  "commit-dispatch-manifest"],
+                "minter": "scripts/write-commit-grant.py",
+                "minted_at": now.isoformat(),
+                "evidence": {},
+            },
+            "expected_consumer": {
+                "kind": "dispatched-subagent",
+                "agent_type": guard.commit_pipeline.CHANGELOG_ANALYST,
+                "requires_dispatch_attestation": True,
+                "requires_agent_id": True,
+                "dispatch_after": now.isoformat(),
+            },
         }
         path = Path(dirpath) / f"claude-commit-grant-{sid}-{nonce}.json"
         path.write_text(json.dumps(grant))
         os.utime(path, (mtime, mtime))
         return str(path)
+
+    def _arm_dispatched_consumer(self, sid):
+        """Put the caller in the entitled-consumer position; return its agent_id.
+
+        The guard now additionally requires that whoever presents a grant BE the
+        subagent the pipeline dispatched: a non-empty `agent_id` in the payload,
+        plus a live changelog-analyst dispatch attestation it can claim. Without
+        this, every test in this class would block on consumer entitlement and
+        would no longer reach the repo-match-versus-recency decision at all --
+        the negative tests would still pass while guarding nothing, which is the
+        failure mode this helper exists to prevent.
+
+        The attestation is written by the SAME production writer the attesting
+        hook calls, into the real state dir, and is registered for cleanup. It
+        must be created AFTER the grants so its `dispatched_at` lands at or
+        after their `created_at` (the pipeline mints, then dispatches).
+        """
+        path = guard.commit_pipeline.write_attestation(
+            sid, task_id="grant-sel-test", dryrun=False)
+        self._attestations.append(path)
+        return "a" + "0" * 16
 
     @staticmethod
     def _fake_glob_returning(grant_paths):
@@ -624,7 +682,11 @@ class TestCommitGrantRepoMatchingSelection(unittest.TestCase):
                 gdir, sid, other["top"], other["branch"], other["head"], mtime=base
             )
             cmd = f'git -C {root["top"]} commit -m "chore: root commit"'
-            data = _make_data(session_id=sid)
+            # Armed AFTER both grants exist: the attestation's dispatch time must
+            # land at or after their created_at, since the pipeline mints first
+            # and dispatches second.
+            data = _make_data(agent_id=self._arm_dispatched_consumer(sid),
+                              session_id=sid)
             with patch("glob.glob", side_effect=self._fake_glob_returning([g_root, g_other])):
                 with patch.object(guard, "_lock_grant_for_posttool") as mock_lock:
                     try:
@@ -654,7 +716,11 @@ class TestCommitGrantRepoMatchingSelection(unittest.TestCase):
                 gdir, sid, other["top"], other["branch"], other["head"], mtime=time.time()
             )
             cmd = f'git -C {root["top"]} commit -m "chore: root commit"'
-            data = _make_data(session_id=sid)
+            # Armed too: unarmed, this test would block because the caller is not
+            # an entitled consumer, NOT because no grant matches the target repo,
+            # and would keep passing while guarding nothing.
+            data = _make_data(agent_id=self._arm_dispatched_consumer(sid),
+                              session_id=sid)
             with patch("glob.glob", side_effect=self._fake_glob_returning([g_other])):
                 with patch.object(guard, "_lock_grant_for_posttool") as mock_lock:
                     with self.assertRaises(SystemExit) as ctx:

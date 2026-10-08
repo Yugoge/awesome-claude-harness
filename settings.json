@@ -609,6 +609,10 @@
           {
             "type": "command",
             "command": "python3 \"/root/.claude/hooks/pretool-obligation-gate.py\""
+          },
+          {
+            "type": "command",
+            "command": "python3 \"/root/.claude/hooks/pretool-commit-dispatch-attest.py\""
           }
         ]
       },
