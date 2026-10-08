@@ -1,0 +1,18 @@
+# POL degraded-mode removal-reference predicate — SINGLE SOURCE OF TRUTH.
+#
+# This file holds "degraded question 1" of hooks/pretool-bash-safety.sh: does
+# the RAW command text name a removal front end or a removal action? The hook
+# reads this file when the execution-boundary analyzer is unavailable, and the
+# differential test (AC-R02-10) reads the SAME file. A copy of the pattern in
+# either consumer is forbidden: the invariant "primary never allows what the
+# degraded path denies, inside the removal-reference domain" is only meaningful
+# while both sides quantify over one definition.
+#
+# The bare library names (remove, rmtree, unlinkSync, rm_rf, ...) are here
+# because of QA finding F5: python3 -c 'import os; getattr(os,"remove")("X")'
+# carries no rm/unlink/shred/srm token at all, so a front-end-only pattern left
+# the interpreter dynamic-access family with no backstop on either path.
+#
+# Format: comment lines start with '#'; the first non-comment, non-blank line is
+# the POSIX ERE. If this file is missing or yields no pattern, the hook DENIES.
+(^|[^A-Za-z0-9_])(rm|unlink|shred|srm|rmdir|rmtree|rimraf|unlinkSync|rmSync|rmdirSync|removeSync|remove|removedirs|remove_tree|rm_rf|rm_r|delete|deleteIfExists)([^A-Za-z0-9_]|$)

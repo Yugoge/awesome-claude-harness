@@ -1,0 +1,218 @@
+{
+  "schema": "pol-primary-laxity-ledger.v4",
+  "criterion": "AC-R02-10",
+  "task_id": "20260819-124121-r02",
+  "iteration": 7,
+  "_doc": {
+    "what": "Every condition under which the PRIMARY path allows a command that the hook's own DEGRADED removal-reference predicate denies, inside the removal-reference domain. Anything not covered by an entry here fails AC-R02-10.",
+    "key": "(reason_code, positional_shape) PAIR KEYING, per AC-R02-10 revision 4. Iteration 3 keyed on reason_code ALONE and QA measured the consequence: 981 laxity elements were absorbed by entries whose written justification reads 'it sits in OPERAND position' while none of them was in operand position. A reason code says WHICH PROOF fired; it does not say WHERE the removal name sat. The shape is emitted by the ARGV WALK at analysis time (Analyzer.note_removal_position, surfaced as analyze()['removal_positional_shapes']) and is never re-derived afterwards from the reason-code string, which would just be the reason code wearing a second name. Coverage requires EVERY shape in the element's SET to be ledgered under its reason code; coverage by reason_code alone, or of a proper subset of the set, is not coverage.",
+    "shape_set_rule": "REVISION 4: an element's shape set is the UNION over EVERY boundary carrying the element's final verdict, taken in walk order. Revision 3's 'the deciding boundary' silently resolved to the FIRST co-winning boundary, which is first-placement-wins moved one level up from the word to the boundary. Measured on this host before the change: `ack rm.txt --pager rm.txt qa-target` reported ['operand'] while a second co-winning PROVEN_INERT boundary had recorded `declared_exec_option_value`, and `ack --pager rm.txt qa-target` reported the inadmissible `unclassified` while a co-winner had recorded a real position. Boundaries that do NOT carry the final verdict are still excluded, so a losing boundary's position can never key the ledger: `echo rm.txt; /bin/rm qa-target` reports no `operand`.",
+    "domain": "U = 436 fixture rows UNION AC-R02-11/12/13/15 generator output (including the AC-R02-12 revision-4 option-value alphabet with its combined-dimension closure, its operand counterweight and its declared-data-option counterweight) UNION the 23 iteration-2 QA counter-examples UNION POL-RD-REP-01..12, restricted to members whose RAW TEXT matches hooks/lib/pol_degraded_removal_reference.ere (degraded question 1). Measured 2026-08-20 (iteration 6): |restricted| = 148473 before the combined-dimension closure and larger after it (>= 1500 required; all are degraded-denied by construction), |L| = 1214 in 16 keyed pairs at that measurement. Re-measured 2026-08-29 after mv/cp joined INERT_ARGV_CONSUMERS (proof kind 10, path_operand_of_non_executing_relocator): |L| = 1264 in 18 keyed pairs, ALL of them ledgered below. There is no pending-vocabulary exemption any more.",
+    "members_vs_referenced_by": "MEASURED SEPARATELY, and they must differ. `members` is the number of laxity elements COUNTED under this entry - each element counted exactly ONCE, under the shape its walk reached first - which is what keeps sum(members) == |L| exact. `referenced_by` is the number of elements that REFERENCE this entry through ANY shape in their set, which is the criterion's own definition of ALIVE. Under the union rule an element with two positions references two entries while being counted once, so sum(referenced_by) - sum(members) equals the number of multi-shape elements exactly: measured here as 3 (`bash -n` with a heredoc payload, `cat <<EOF $(printf ...) EOF`, and `echo \"$(command -v rm)\"`). TWO entries therefore carry members 0 and referenced_by 1. They are NOT the speculative pre-declarations the cap paragraph forbids - each is exercised by a real element in L today, which is precisely why the criterion defines ALIVE in terms of references rather than counts. Reported as a measured consequence of the union rule rather than smoothed over.",
+    "why_entries_are_classes_not_literals": "AC-R02-10 asks for the literal command string per entry AND caps the ledger at 40. Those two constraints are jointly unsatisfiable over the domain the criterion itself defines, and the measurement is decisive: the PINNED fixture's safe set alone contributes 73 laxity elements (73 of the 76 rows AC-R02-01 forbids relaxing match degraded question 1 and must allow), and AC-R02-12's mandated operand counterweight contributes 214 more. Each entry is therefore a PROOF CLASS keyed on (reason_code, positional_shape), carrying a literal representative command as its witness, its measured member count, and the positional justification the criterion requires. The property enforced is now STRICTER than iteration 3's: an element must match a declared PAIR, so landing on a ledgered reason code from an undeclared position FAILS.",
+    "member_counts_are_measurements": "The `members` and `referenced_by` fields are exact counts on this host (16 pairs measured at iteration 6; the two path_operand_of_non_executing_relocator pairs measured 2026-08-29), and AC-R02-10 requires sum(members) == |L|. They are host-coupled: the generators derive their populations from PATH at run time, so installing or removing a binary moves the counts and the sum assertion will fail loudly rather than drift silently. That is the intended failure mode.",
+    "inadmissible_reason_code": "inert_argv_consumer -- the blanket code that authorized an argv without inspecting it. It is absent from this ledger and from the codebase (grep the analyzer: the branch now emits inert_consumer_operand_position_only:<proof-kind> only after canonicalizing and walking the argv positionally).",
+    "soundness_scope": "This invariant binds the REMOVAL-REFERENCE domain only (degraded question 1). It is deliberately NOT applied to degraded question 2 (assembly channel) or question 3 (structural incompleteness): BA measured 7/7 ordinary commands -- ls *.py, echo $HOME, du -sh *, cat hooks/lib/*.py, wc -l hooks/*.sh, find . -name '*.pyc', awk '{print $1}' f.txt -- as legitimately primary-allow / degraded-deny there, so a global superset invariant would force denying ordinary work.",
+    "positional_shape_vocabulary": "CLOSED, 15 tokens, from AC-R02-10 revision 4: operand | post_double_dash_operand | declared_bool_option_word | declared_data_option_value | declared_exec_option_value | undeclared_option_value_separated | undeclared_option_value_attached | subcommand_resource_operand | interpreter_string_literal_in_output_sink | parse_only_payload | script_file_data_operand | builtin_lookup_operand | heredoc_or_herestring_body | assignment_prefix_binding | unclassified. `unclassified` is the TOTALITY fallback and is INADMISSIBLE as an entry key, so a parse that cannot place the word fails the criterion instead of borrowing a neighbouring entry's proof.",
+    "vocabulary_extension_landed": "Iteration 5 shipped this file with a `pending_vocabulary_extension` block declaring six pinned expected_exit=0 rows unledgerable BY ANY implementation, because the closed 13-token vocabulary named neither a heredoc/here-string body nor an assignment prefix. AC-R02-10 revision 4 added both tokens with bounded proof kinds; the analyzer now reports them at Analyzer.cover_redir and at the leading-assignment-run slice in Analyzer.flush - two sites the walk already reached and already covered but did not REPORT; all six rows now carry an admissible token; and the block is GONE.",
+    "exhaustion_case": "WHY THE BOUNDARY-BUDGET EXHAUSTION FAMILY HAS NO ENTRY, AND WHY ITS ABSENCE IS NOT AN OMISSION (iteration 7). A command of MAX_BOUNDARIES inert padding units followed by a filesystem removal WAS primary laxity of the exact kind this ledger exists to bound: the degraded predicate denied it, the primary path allowed it (exit 0, PROVEN_INERT, allowed=true), and it matched none of these entries. It was invisible to the criterion because U is built from short generated commands and the 436 pinned rows, none of which is long enough to exhaust the budget — MAX_BOUNDARIES, boundary_limit and overflow appear ZERO times in lane r02's QA report. The cause was self-defeating bookkeeping: Analyzer.add stops appending at the cap, and finalization recorded the overflow marker THROUGH that same method, so the marker was dropped at precisely the moment it decided the outcome and the ranking loop, seeing only the inert prefix, returned PROVEN_INERT. The repair makes exhaustion deny from the flag itself rather than from a recorder that is by definition unavailable at the bound, so the family is NO LONGER LAX and an entry would be false — it would assert that fail-open at the budget is an accepted exception, the exact inverse of the invariant. The family is instead pinned as a positive denial criterion (test_ac_r02_10_boundary_budget_exhaustion_is_not_primary_laxity, plus the analyzer- and hook-level threshold classes in hooks/tests/test_bash_execution_boundary.py), and it carries its own false-positive counterweight so the stricter path cannot be satisfied by denying long ordinary work. Raising MAX_BOUNDARIES was rejected: a higher cliff is the same defect further out."
+  },
+  "max_entries": 40,
+  "entries": [
+    {
+      "reason_code": "inert_consumer_operand_position_only:search_pattern_operand",
+      "positional_shape": "declared_data_option_value",
+      "admissible_proof_kind": "search-pattern operand",
+      "representative_command": "grep -e rm f.txt",
+      "members": 823,
+      "referenced_by": 823,
+      "positional_justification": "The removal name sits in declared_data_option_value position: an option the consumer's model DECLARES to consume data -- the pattern, context and selector options of the grep family, rg, ag, ack and ugrep. The consuming position is the regex matcher, never a command position, which is why `grep -e rm f.txt` must keep flowing; denying it was measured as a false positive on ordinary developer work (QA iteration-3 F4) and AC-R02-14 revision 3 adds it to the named must-allow set. This is the ONE option-value position carrying an affirmative proof of data-ness; the same tools' declared --pre/--pager/--filter exec options, and every option they do not declare at all, deny in all five option forms."
+    },
+    {
+      "reason_code": "inert_consumer_operand_position_only:operand_of_documentation_or_query_consumer",
+      "positional_shape": "operand",
+      "admissible_proof_kind": "operand of a documentation/query consumer",
+      "representative_command": "man rm",
+      "members": 280,
+      "referenced_by": 280,
+      "positional_justification": "The word carrying the removal name IS a removal front end by the analyzer's own predicate, and the canonical argv walk placed it in operand position: no option preceding it is one this consumer's model marks as taking a program or a data value. `man` declares its only argv-derived execution facilities to be -P/--pager/-H/--html/-B/--browser, none of which consumes this word. A documentation, query or predicate consumer looks the name up or compares it; it never puts it in a command position."
+    },
+    {
+      "reason_code": "inert_consumer_operand_position_only:literal_output_text",
+      "positional_shape": "operand",
+      "admissible_proof_kind": "literal output text",
+      "representative_command": "echo /bin/rm",
+      "members": 37,
+      "referenced_by": 37,
+      "positional_justification": "The removal name is in operand position of a text-emission consumer whose declared option model has no value-taking or exec option that could consume it. The consuming position is stdout: the bytes are written, not executed."
+    },
+    {
+      "reason_code": "inert_consumer_operand_position_only:search_pattern_operand",
+      "positional_shape": "operand",
+      "admissible_proof_kind": "search-pattern operand",
+      "representative_command": "grep -F /bin/rm README.md",
+      "members": 25,
+      "referenced_by": 25,
+      "positional_justification": "`-F` is declared BOOLEAN, so the following word is the PATTERN and the walk recorded it in operand position. The consuming position is the regex/fixed-string matcher. A search tool has no argv-derived exec facility; the ones that do -- rg --pre, ag/ack --pager, ugrep --filter -- declare it and deny there."
+    },
+    {
+      "reason_code": "git_rm_cached_index_only",
+      "positional_shape": "subcommand_resource_operand",
+      "admissible_proof_kind": "proven-safe cached-git removal",
+      "representative_command": "git rm --cached -- tracked.txt",
+      "members": 16,
+      "referenced_by": 16,
+      "positional_justification": "The removal-naming word is the git subcommand `rm` in subcommand_resource_operand position: its consuming position is git's index, not the filesystem, and `--cached` was proven present BEFORE the `--` operand separator. Post-`--` (`git rm -- --cached f`) is a pathspec and denies."
+    },
+    {
+      "reason_code": "docker_resource_removal",
+      "positional_shape": "subcommand_resource_operand",
+      "admissible_proof_kind": "proven-safe container/image resource removal",
+      "representative_command": "docker container rm mycontainer",
+      "members": 13,
+      "referenced_by": 13,
+      "positional_justification": "The removal-naming word is the docker subcommand `rm` in subcommand_resource_operand position: its consuming position is the container/image/volume/network resource graph. No filesystem path of this host is in its argv."
+    },
+    {
+      "reason_code": "interpreter_removal_token_in_output_sink",
+      "positional_shape": "interpreter_string_literal_in_output_sink",
+      "admissible_proof_kind": "literal output text",
+      "representative_command": "python3 -c 'print(\"/bin/rm qa-inert-37\")'",
+      "members": 5,
+      "referenced_by": 5,
+      "positional_justification": "The removal name is in interpreter_string_literal_in_output_sink position: a string literal whose ENCLOSING CALL was resolved to a member of OUTPUT_SINKS (print/puts/console.log/...). The consuming position is stdout. Any other enclosing call, or none, denies -- which is what keeps AC-R02-15's inline-code family out of this entry."
+    },
+    {
+      "reason_code": "shell_parse_only",
+      "positional_shape": "parse_only_payload",
+      "admissible_proof_kind": "parse-only shell payload - active but non-executing",
+      "representative_command": "bash -n -c '/bin/rm qa-inert-24'",
+      "members": 3,
+      "referenced_by": 4,
+      "positional_justification": "The removal name is in parse_only_payload position: COMMAND position of the payload, but `-n` was proven present ON THE SHELL INVOCATION ITSELF (the clustered `-nc` form included) with no execution-enabling flag co-occurring, which makes the shell a syntax checker. The consuming position is the parser.",
+      "admissibility_bound_satisfied": "syntax-check-only flag proven on the shell invocation itself; no execution-enabling flag co-occurs",
+      "members_moved_at_iteration_6": "POL-I5-QA-0402 delivers its parse-only payload through a HEREDOC, so under the union rule it carries BOTH parse_only_payload and heredoc_or_herestring_body. It is COUNTED under the shape its walk reached first (heredoc_or_herestring_body) and still REFERENCES this entry, which is why members fell 4 -> 3 while referenced_by stayed 4.",
+      "forcing_fixture_rows": [
+        "POL-I5-QA-0347-f3237dfe728b",
+        "POL-I5-QA-0395-f509d7dcd5f5",
+        "POL-I5-QA-0396-134773556698",
+        "POL-I5-QA-0402-be3765062d60"
+      ]
+    },
+    {
+      "reason_code": "command_lookup_only",
+      "positional_shape": "builtin_lookup_operand",
+      "admissible_proof_kind": "operand of a documentation/query consumer",
+      "representative_command": "command -v rm",
+      "members": 3,
+      "referenced_by": 3,
+      "positional_justification": "The removal name is in builtin_lookup_operand position: `-v`/`-V` were proven present, which turns `command` from a prefix wrapper into a PATH lookup. The consuming position is the name resolver, which prints a path."
+    },
+    {
+      "reason_code": "hash_builtin",
+      "positional_shape": "builtin_lookup_operand",
+      "admissible_proof_kind": "operand of a documentation/query consumer",
+      "representative_command": "hash rm",
+      "members": 1,
+      "referenced_by": 1,
+      "positional_justification": "The removal name is in builtin_lookup_operand position: the operand of the shell's hash-table builtin, whose consuming position is the command hash cache. Recording a path does not run it."
+    },
+    {
+      "reason_code": "interpreter_script_file",
+      "positional_shape": "script_file_data_operand",
+      "admissible_proof_kind": "quoted data operand of a named interpreter script FILE",
+      "representative_command": "python3 checker.py 'git rm qa-inert-3'",
+      "members": 1,
+      "referenced_by": 1,
+      "positional_justification": "The removal name is in script_file_data_operand position: the interpreter's first non-option argv word is a script FILE and NO inline-code flag is present, so the quoted operand is sys.argv data for an opaque script -- the policy's declared, unchanged trust boundary. The script-file operand itself is checked and denies when IT names a removal front end (`python3 /bin/rm -rf T`).",
+      "admissibility_bound_satisfied": "first non-option argv word is a script FILE; no -c/-e/-E/--eval/--command inline-code flag present",
+      "forcing_fixture_rows": [
+        "POL-I5-QA-0373-57a4c35670e4"
+      ]
+    },
+    {
+      "reason_code": "inert_consumer_operand_position_only:operand_of_documentation_or_query_consumer",
+      "positional_shape": "heredoc_or_herestring_body",
+      "admissible_proof_kind": "stdin-delivered redirection payload of a consumer that does not execute its stdin",
+      "representative_command": "cat <<< '/bin/rm qa-inert-6'",
+      "members": 4,
+      "referenced_by": 4,
+      "positional_justification": "The removal name is in heredoc_or_herestring_body position: the BODY of a << / <<- heredoc, or the TARGET of a <<< here-string, delivered to the receiving command's STDIN and present in no word of its argv. The consuming position is the consumer's input stream; cat, less and the other documentation/query consumers copy stdin to stdout without interpreting it. ADDED BY REVISION 4: before it these four pinned expected_exit=0 rows reported the inadmissible `unclassified`, because the walk reached the redirection and covered it while reporting no position at all.",
+      "admissibility_bound_satisfied": "the parse proves the removal-mentioning text is a << / <<- heredoc body or a <<< here-string target delivered to stdin, and no word of the receiving command's own argv names a removal front end. An ordinary > / < redirection target is NOT this position and is deliberately not recorded as one.",
+      "forcing_fixture_rows": [
+        "POL-I5-QA-0376-9e69fb4fd808",
+        "POL-I5-QA-0397-95ec3cc21349",
+        "POL-I5-QA-0398-be7f9d241937",
+        "POL-I5-QA-0399-66578c46ced6"
+      ]
+    },
+    {
+      "reason_code": "inert_consumer_operand_position_only:literal_output_text",
+      "positional_shape": "assignment_prefix_binding",
+      "admissible_proof_kind": "pre-command variable binding the following command does not execute",
+      "representative_command": "A=rm echo qa-inert-16",
+      "members": 2,
+      "referenced_by": 2,
+      "positional_justification": "The removal name is in assignment_prefix_binding position: a member of the LEADING ASSIGNMENT RUN, the maximal prefix of words the analyzer's own assignment form matches, in scalar `A=rm cmd` or array `A=(/bin/rm) cmd` shape. The consuming position is the following command's ENVIRONMENT, which binds the value and never runs it; the command's own argv carries no removal name. ADDED BY REVISION 4: before it both pinned expected_exit=0 rows reported the inadmissible `unclassified`, because the walk computed the prefix slice and covered it while reporting no position.",
+      "admissibility_bound_satisfied": "the assigned variable is NOT a member of EXEC_ASSIGNMENT_VARS; a prefix naming a declared exec-assignment vector (GIT_EXTERNAL_DIFF, GIT_PAGER, GIT_SSH_COMMAND, PAGER, LESSOPEN, EDITOR) already denies at that site and never enters L, so it is out of bounds by construction. The position is recorded only when a following command exists, so a prefix with no command records nothing.",
+      "forcing_fixture_rows": [
+        "POL-I5-QA-0387-6db5071d669f",
+        "POL-I5-QA-0388-cc3b03312385"
+      ]
+    },
+    {
+      "reason_code": "shell_parse_only",
+      "positional_shape": "heredoc_or_herestring_body",
+      "admissible_proof_kind": "stdin-delivered redirection payload of a consumer that does not execute its stdin",
+      "representative_command": "bash -n <<EOF\n/bin/rm qa-inert-31\nEOF",
+      "members": 1,
+      "referenced_by": 1,
+      "positional_justification": "The removal name is in heredoc_or_herestring_body position AND in parse_only_payload position, and BOTH are ledgered: the payload arrives on the shell's STDIN as a heredoc body, and `-n` was proven present on the shell invocation itself, which makes the shell a syntax checker. The union rule reports both positions, coverage requires both, and this entry carries the stdin half.",
+      "admissibility_bound_satisfied": "heredoc body delivered to stdin; the receiving argv (`bash -n`) names no removal front end; the co-occurring parse-only bound is satisfied and separately ledgered",
+      "forcing_fixture_rows": [
+        "POL-I5-QA-0402-be3765062d60"
+      ]
+    },
+    {
+      "reason_code": "inert_consumer_operand_position_only:literal_output_text",
+      "positional_shape": "heredoc_or_herestring_body",
+      "admissible_proof_kind": "stdin-delivered redirection payload of a consumer that does not execute its stdin",
+      "representative_command": "cat <<EOF\n$(printf '%s' '/bin/rm qa-inert-29')\nEOF",
+      "members": 0,
+      "referenced_by": 1,
+      "members_zero_is_measured_not_speculative": "This entry is EXERCISED by a real element in L today, so it is not the speculative pre-declaration the cap paragraph forbids. members is 0 and referenced_by is 1 because the element is COUNTED exactly once, under the shape its walk reached first (operand, on the inner printf boundary), while still REFERENCING this entry through the second shape in its set - the criterion's own ALIVE definition.",
+      "positional_justification": "The removal name is in heredoc_or_herestring_body position of the outer `cat`, whose stdin is the heredoc body, AND in operand position of the `printf` inside that body, which emits it as text. Both boundaries are PROVEN_INERT, so both carry the final verdict, the union reports both positions and coverage requires both.",
+      "admissibility_bound_satisfied": "heredoc body delivered to the receiving `cat`'s stdin; `cat`'s own argv names no removal front end; the co-occurring operand half is separately ledgered under the literal-output-text operand entry"
+    },
+    {
+      "reason_code": "command_lookup_only",
+      "positional_shape": "operand",
+      "admissible_proof_kind": "literal output text",
+      "representative_command": "echo \"$(command -v rm)\"",
+      "members": 0,
+      "referenced_by": 1,
+      "members_zero_is_measured_not_speculative": "Same measured shape as the entry above: exercised by a real element in L today, counted under the shape its walk reached first (builtin_lookup_operand), referenced through the second.",
+      "positional_justification": "The removal name is in operand position of `echo`, a text-emission consumer whose consuming position is stdout, AND in builtin_lookup_operand position of the `command -v` substitution inside that operand.",
+      "reported_to_ba_not_resolved_locally": "AC-R02-10 revision 4's GIVEN clause offers `echo \"$(command -v rm)\"` as its example of a position belonging to 'some other boundary' that the co-winning restriction excludes. That parenthetical does not hold on the live analyzer: the restriction only removes boundaries whose verdict DIFFERS from the final one, and here BOTH boundaries are PROVEN_INERT, so the union rule the same clause mandates reports both positions and this pair must be ledgered. Measured, reported, and resolved by ledgering the position honestly rather than by mislabelling it or by denying a command AC-R02-01 pins to exit 0."
+    },
+    {
+      "reason_code": "inert_consumer_operand_position_only:path_operand_of_non_executing_relocator",
+      "positional_shape": "declared_data_option_value",
+      "admissible_proof_kind": "path operand of a non-executing relocator",
+      "representative_command": "cp --suffix rm f.txt g.txt",
+      "members": 44,
+      "referenced_by": 44,
+      "positional_justification": "The removal name sits in declared_data_option_value position: an option mv/cp's model DECLARES to consume data — the backup-suffix (-S/--suffix) and target-directory (-t/--target-directory) options, whose REQUIRED values GNU mv and cp read as a file-name suffix or a destination directory path and never resolve as a program. `cp --suffix rm f.txt g.txt` keeps flowing for the same reason `grep -e rm f.txt` does; a destination that reaches a protected location is still denied by the runtime guard's path-aware model, independently of this ledger."
+    },
+    {
+      "reason_code": "inert_consumer_operand_position_only:path_operand_of_non_executing_relocator",
+      "positional_shape": "operand",
+      "admissible_proof_kind": "path operand of a non-executing relocator",
+      "representative_command": "cp /bin/rm /tmp/x",
+      "members": 6,
+      "referenced_by": 6,
+      "positional_justification": "The removal name sits in operand position: mv/cp source and destination operands are paths whose BYTES the program renames or copies (`cp /bin/rm /tmp/x` copies the file the name rm denotes; nothing executes it). GNU mv/cp document no argv-derived execution facility, so an operand can never become a command head. Admission of this kind was FORCED by the pinned expected-exit-0 live-boundary row `mv /tmp/scratch-xyz/* /tmp/y` (test_runtime_guard.py TestCycle14LiveHook), which the pre-membership analyzer denied as unproven_boundary_with_removal_reference."
+    }
+  ],
+  "retired_pending_vocabulary_extension": "RETIRED AND DELETED AT ITERATION 6. Iteration 5 shipped a `pending_vocabulary_extension` block here that exempted six pinned expected_exit=0 commands from the unledgered assertion, because the closed 13-token vocabulary named neither a heredoc/here-string body nor an assignment prefix and no implementation could satisfy expect.unledgered_laxity_elements == 0. AC-R02-10 revision 4 added both tokens with bounded proof kinds; the analyzer reports them at Analyzer.cover_redir and at the leading-assignment-run slice in Analyzer.flush; all six commands are ledgered above under real entries with real member counts; and the assertion now runs with no carve-out. The block is gone rather than archived, so it cannot be mistaken for a live exemption; its exact former text is in git blob 75d5afdc7f697e20de5e00702b4ed432b2353bce."
+}
