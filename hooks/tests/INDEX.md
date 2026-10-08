@@ -1,8 +1,8 @@
 # tests
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-10-05T08:06:52Z*
-**Total entries**: 74
+*Last updated: 2026-10-08T03:46:48Z*
+**Total entries**: 85
 **Convention**: kebab
 
 ## Tree
@@ -19,6 +19,7 @@ tests/
 ├── `test_ac6_verify.sh` - Shell script
 ├── `test_ac9_verify.sh` - Shell script
 ├── `test_allowlist_consolidation.py` - Covers AC8 IS_SUBAGENT firewall scenarios and matching semantics invariants
+├── `test_allowlist_git_global_opts.py` - Regression cover for task 20260928-133915: `/allow git commit` could never match
 ├── `test_artifact_contract_enforce.py` - The hook is the producer-side port of /close's Artifact schema gate
 ├── `test_attribution_adjudicator.py` - canonical aggregate view (Phase C; purely additive artifacts, nothing switched)
 ├── `test_attribution_journal.py` - break detection, verify script verdicts, torn-tail handling, seal
@@ -26,6 +27,7 @@ tests/
 ├── `test_bash_safety_context.py` - Tests strip_non_executable_contexts() in isolation, covering the main
 ├── `test_bash_safety_context_rules.py` - converted to COMMAND_CONTEXT_STRIPPED in hooks/pretool-bash-safety.sh
 ├── `test_bash_safety_git_clean.py` - hooks/pretool-bash-safety.sh (task dev-20260719-150041-a, lane r01-a)
+├── `test_bash_write_targets_policy.py` - Execution-semantic write-target resolution at the exact sink use site.
 ├── `test_blackbox_integration.py` - WHAT THIS PROVES, AND WHAT IT EXPLICITLY DOES NOT
 ├── `test_block_branch_pr_worktree.py` - The hook forbids branch / PR / worktree CREATION on the Bash surface, with three
 ├── `test_bulk_commit_sentinel.py` - Covers:
@@ -52,6 +54,13 @@ tests/
 ├── `test_git_prefix_enumeration.py` - THE DEFECT
 ├── `test_git_residual_override.py` - Background
 ├── `test_gitignore_preflight_close_contract.py` - The gate previously harvested any docs/dev/dev-report-*.json cited anywhere in an
+├── `test_grep_backtrack_guard.py` - Freeze safe grep shapes and the catastrophic embedded-engine control.
+├── `test_laneb_agent_temp_targets.py` - Complete declared static temp-target mechanism matrix for LANE-B.
+├── `test_laneb_checkpoint_resources.py` - LANE-B checkpoint transaction and CLI provider tests.
+├── `test_laneb_integration_gate.py` - Adversarial tests for the closed Lane B H-B v3/fan-in verifier.
+├── `test_laneb_pretool_composition.py` - LANE-B core seams for the later POL/BIND single-writer integration.
+├── `test_laneb_session_resources.py` - LANE-B actor scratch, receipt, and owned-process broker tests.
+├── `test_laneb_stop_coordinator.py` - LANE-B non-destructive receipt writers and serialized Stop coordinator.
 ├── `test_laneb_stop_overnight_timelock_scoping.py` - Blast-radius-map.json (dev-20260910-111227/blast-radius-map-20260808-035658-laneb)
 ├── `test_obligation.py` - Covers the four implementation ACs of ticket-20260929-104216-b:
 ├── `test_obligation_gate.py` - G1 is the first of five enforcement doors (spec-20260930-092323) that move
@@ -68,11 +77,13 @@ tests/
 ├── `test_push_sentinel_abort.sh` - Unit test for AC1 V5: hooks/push.sh self-aborts before any real git push
 ├── `test_regen_index_dirs_script.py` - Backlog #85: the script printed `regenerated: <INDEX>` for every directory, including the ones
 ├── `test_residual_false_positives.py` - Context (task 20260903-residual-fp). `classify_git_command()` returns a
+├── `test_runcode_watchdog_aliases.py` - Direct lifecycle parity tests for both browser run-code provider names.
 ├── `test_runtime_guard.py` - Two layers:
 ├── `test_scratch_lifecycle.py` - Covers:
 ├── `test_sessionstart_artifact_census.py` - Every run is a subprocess against throwaway directories; the real restart
 ├── `test_stop_do_report_gate.py` - Covers the contract from commands/do.md Step 5: a /do session may stop only
 ├── `test_stop_obligation_gate.py` - gate, ticket 20260930-132644-l4)
+├── `test_tool_policy_contracts.py` - LANE-POL least-privilege role-policy regression matrix.
 ├── `test_unit_anchor.py` - Imports the anchor sibling module DIRECTLY (not via the _core facade) and
 ├── `test_unit_config.py` - Imports the config sibling module DIRECTLY (not via the _core facade) and
 ├── `test_unit_constants.py` - Imports the constants sibling module DIRECTLY (not via the _core facade) and

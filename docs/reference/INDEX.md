@@ -1,8 +1,8 @@
 # reference
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-10-06T01:18:02Z*
-**Total entries**: 59
+*Last updated: 2026-10-08T05:59:58Z*
+**Total entries**: 60
 **Convention**: kebab
 
 ## Tree
@@ -38,6 +38,7 @@ reference/
 ├── `lock-file-handling.md` - Git Lock File Handling
 ├── `master-origin-reconciliation-gap-20261005.md` - No history-preserving reconciliation path exists between local master and diverged origin/master
 ├── `mat-doc10-writer-order.v2.json` - JSON config: schema, contract_id, spec_id, lane_id, published_by_task_id
+├── `merge-pipeline-blocked-steps-20261007.md` - /merge: two documented steps are unexecutable from agent context
 ├── `monolith-split-plan.md` - Monolith Split Plan (Plan-of-Record)
 ├── `MORNING-20260907.md` - 晨间交接 — 2026-09-07
 ├── `open-findings-from-read-only-cycles-20261005.md` - Open findings from read-only cycles — extracted 2026-10-05

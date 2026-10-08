@@ -398,6 +398,39 @@ Before dispatching changelog-analyst, write the appropriate authorization token:
   Do not use `CLAUDE_PROJECT_DIR`, a
   user-supplied root override, or a report field to populate this list.
 
+  **Write the dispatch-snapshot manifest FIRST — before minting any grant** (non-bulk
+  mode only; ordering is load-bearing since 2026-10-06, see below). Capture
+  `git status --porcelain=v1` independently for every admitted plan entry, then write
+  `manifest_path = <state-dir>/claude-commit-manifest-{sid}.json` — where `<state-dir>`
+  is `CLAUDE_STATE_DIR` when set to an absolute path and `/tmp` otherwise, resolved by
+  `hooks/lib/harness_state_dir`, which is the SAME resolver the manifest's readers use;
+  do not hardcode `/tmp` — containing `session_id`,
+  `task_id`, `dispatched_at`, the complete `REPOSITORY_PLAN` (including its report
+  digest), the exact `ARTIFACT_CHAIN` JSON (when non-empty), and
+  `files_at_dispatch` keyed by canonical repository root. Best-effort status
+  capture is permitted, but losing or changing `REPOSITORY_PLAN` or
+  `ARTIFACT_CHAIN` is not: a lost or changed plan or chain is a finding on that
+  artifact, routed through the dispatch-and-recheck loop (the plan derives from the
+  dev-report; the chain is rebuilt by the orchestrator rerunning
+  `resolve-dev-artifact-chain.py`), then rebuilt before the manifest is written. Bulk mode
+  retains its existing control+nested behavior.
+
+  **Why the manifest now comes first (mint precondition).** `write-commit-grant.py` will
+  REFUSE to mint without it. A live `/commit` user-intent sentinel is no longer
+  sufficient on its own: a bare `/commit` first line delivered to a seat lights that
+  sentinel without running any of this pipeline, and that is exactly how 14 commits
+  landed with changelog-analyst never dispatched and Phase 2/3/4/5/10 — including the
+  fd-9 lock and the MANDATORY pre-stage validation, both of which fail silently — never
+  executed. The minter now also requires, via
+  `hooks/lib/commit_pipeline.verify_pipeline_dispatch()`: a live manifest for this
+  session and task, whose `repository_plan` admits the exact `--repo-root` being minted
+  for at that repo's live branch and HEAD, whose `report_sha256` matches the actual bytes
+  of the cycle report it cites, plus an existing close-report for the task (existence
+  only — Step 3 check 1 parity, so `--dry-run`'s check-2 relaxation is unaffected). A
+  mint refusal names the one missing piece; rebuild that artifact and re-mint rather than
+  working around the refusal. Closes disclosure items 1 and 2 of commit `1fdbd3767`,
+  which landed labelled `Not fully closed`.
+
   Write **one single-use commit grant per `REPOSITORY_PLAN.repositories[]` entry**,
   always passing that entry's `repo_root` to `write-commit-grant.py`. Verify that
   the writer's captured repo/branch/HEAD equals the plan entry; any mismatch revokes
@@ -432,19 +465,6 @@ dirty status. Unused per-repository grants expire normally or are revoked at eve
 unstage pause and at the `--dry-run` preview end.
 
 Both `created_at` and `expires_at` MUST match the regex `^20\d{2}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(\+\d{2}:\d{2}|Z)$`. Do NOT substitute `time.time()`, `int(time.time())`, or `datetime.utcnow()` (the last returns a naive datetime whose `.isoformat()` omits the TZ offset and falls into the naive-comparison branch at line 382).
-
-Also write the dispatch-snapshot manifest (non-bulk mode only): capture
-`git status --porcelain=v1` independently for every admitted plan entry, then write
-`manifest_path = /tmp/claude-commit-manifest-{sid}.json` containing `session_id`,
-`task_id`, `dispatched_at`, the complete `REPOSITORY_PLAN` (including its report
-digest), the exact `ARTIFACT_CHAIN` JSON (when non-empty), and
-`files_at_dispatch` keyed by canonical repository root. Best-effort status
-capture is permitted, but losing or changing `REPOSITORY_PLAN` or
-`ARTIFACT_CHAIN` is not: a lost or changed plan or chain is a finding on that
-artifact, routed through the dispatch-and-recheck loop (the plan derives from the
-dev-report; the chain is rebuilt by the orchestrator rerunning
-`resolve-dev-artifact-chain.py`), then rebuilt before the manifest is written. Bulk mode retains its existing
-control+nested behavior.
 
 **Transaction boundary:** Git provides no cross-repository atomic commit. Normal mode
 therefore uses an explicit ordered, non-atomic transaction: all repositories are
@@ -1009,10 +1029,13 @@ nested-repo handling, push-gate write) are delegated entirely to `changelog-anal
 
 Authorization flow for changelog-analyst commits:
 
-1. `/commit` writes `/tmp/claude-commit-grant-<SID>-<nonce>.json` before dispatching changelog-analyst (Step 5).
-2. `_evaluate_commit(command, data)` collects EVERY unexpired grant candidate (the any-SID glob covers the subagent SID-propagation fallback) and SELECTS the one whose `repo_root`/`branch`/`expected_head` match the commit's target repo — recency alone never decides.
-3. The selected grant passes the authoritative binding re-check (`_enforce_commit_grant_binding`: redirect vectors, then repo/branch/HEAD). A Bash call containing MORE THAN ONE `git commit` invocation is hard-BLOCKED before any of that: every invocation in one call would be validated against the same pre-execution HEAD under one lock, so a second commit would ride the first one's authorization (audit round 3, F5). One grant authorizes exactly one commit; issue each as its own call. The grant is then LOCKED for deferred consumption — renamed to `.lck`, with a pointer keyed on this tool event's `tool_use_id` and recording that raw id. The pointer is published ATOMICALLY (content written to a temp name, then `link(2)` into the final name), so a reader never sees a torn pointer (audit F7).
-4. Grant validates: expires_at (30 min window); no message-hash validation. Consumption is deferred to the finalizer (`posttool-allowlist-consume.py`, registered under PostToolUse AND PostToolUseFailure), which classifies the terminal result from the payload shape — not from an exit code: success unlinks the `.lck` (single-use) and journals the commit event; any other TERMINAL result restores the grant for retry. A NONTERMINAL background-launch receipt (the command is still running) finalizes nothing at all — no unlink, no restore, no journal entry (audit F2/F3). An event with no usable `tool_use_id` leaves the grant in place un-deferred, and single-use there is NOT enforced by the `expected_head` binding: "a landed commit moves HEAD past the grant" was disproven — `git reset --soft <expected_head>` restores the matching tuple and a deterministic `--amend` reproduces the same sha, so HEAD need never move (audit round 3, F4). The guard instead writes its own validation-time use record (`<grant>.json.use`) holding an APPEND-ONLY witness of the target repo — HEAD sha plus HEAD reflog entry COUNT — and honors a later authorization only while that witness is unchanged and under `_MAX_GRANT_USE_ATTEMPTS`. The count rises on commit, reset and amend alike, so neither a soft reset nor a same-sha amend can replay a grant; an unreadable witness fails closed.
+1. `/commit` writes the dispatch-snapshot manifest, and `write-commit-grant.py` refuses to mint without it plus a live user-intent sentinel (Step 5, `hooks/lib/commit_pipeline.verify_pipeline_dispatch`). Every minted grant records `minted_by` (origin `commit-pipeline` + the evidence checked) and `expected_consumer`.
+2. `/commit` writes `<state-dir>/claude-commit-grant-<SID>-<nonce>.json` before dispatching changelog-analyst (Step 5).
+3. Dispatching changelog-analyst fires `hooks/pretool-commit-dispatch-attest.py` (PreToolUse:Agent), which writes `<state-dir>/claude-commit-dispatch-<SID>-<nonce>.json`. That hook is the only intended writer, and an attestation it wrote exists only because a dispatch really happened. Bash writes into that namespace are intercepted verb by verb by `pretool-bash-safety.sh` Layer 1.E3, which raises the cost of forging one; being a verb blacklist it is not an absolute barrier, so the attestation is never trusted on existence alone — step 4's identity requirement is what it is weighed by.
+4. `_grant_provenance_refusal(grant, path, data)` then refuses any grant that is not a pipeline product (`minted_by.origin`), any caller that is not a dispatched subagent (empty `agent_id` — the main agent), and any caller that is not the subagent this dispatch produced (the attestation is claimed by the first consumer's `agent_id`; a different one is refused). A grant is a NAMED ticket, not a bearer ticket: holding it is not sufficient. A provenance refusal skips that candidate and is reported only if no candidate authorizes the commit, so one stale or legacy grant cannot shadow a legitimate one. Closes disclosure items 1 and 2 of `1fdbd3767`.
+5. `_evaluate_commit(command, data)` collects EVERY unexpired grant candidate (the any-SID glob covers the subagent SID-propagation fallback) and SELECTS the one whose `repo_root`/`branch`/`expected_head` match the commit's target repo — recency alone never decides.
+6. The selected grant passes the authoritative binding re-check (`_enforce_commit_grant_binding`: redirect vectors, then repo/branch/HEAD). A Bash call containing MORE THAN ONE `git commit` invocation is hard-BLOCKED before any of that: every invocation in one call would be validated against the same pre-execution HEAD under one lock, so a second commit would ride the first one's authorization (audit round 3, F5). One grant authorizes exactly one commit; issue each as its own call. The grant is then LOCKED for deferred consumption — renamed to `.lck`, with a pointer keyed on this tool event's `tool_use_id` and recording that raw id. The pointer is published ATOMICALLY (content written to a temp name, then `link(2)` into the final name), so a reader never sees a torn pointer (audit F7).
+7. Grant validates: expires_at (30 min window); no message-hash validation. Consumption is deferred to the finalizer (`posttool-allowlist-consume.py`, registered under PostToolUse AND PostToolUseFailure), which classifies the terminal result from the payload shape — not from an exit code: success unlinks the `.lck` (single-use) and journals the commit event; any other TERMINAL result restores the grant for retry. A NONTERMINAL background-launch receipt (the command is still running) finalizes nothing at all — no unlink, no restore, no journal entry (audit F2/F3). An event with no usable `tool_use_id` leaves the grant in place un-deferred, and single-use there is NOT enforced by the `expected_head` binding: "a landed commit moves HEAD past the grant" was disproven — `git reset --soft <expected_head>` restores the matching tuple and a deterministic `--amend` reproduces the same sha, so HEAD need never move (audit round 3, F4). The guard instead writes its own validation-time use record (`<grant>.json.use`) holding an APPEND-ONLY witness of the target repo — HEAD sha plus HEAD reflog entry COUNT — and honors a later authorization only while that witness is unchanged and under `_MAX_GRANT_USE_ATTEMPTS`. The count rises on commit, reset and amend alike, so neither a soft reset nor a same-sha amend can replay a grant; an unreadable witness fails closed.
 
 **DO NOT extend `BLESSED_BRIDGE_RE` with conventional commit patterns** (e.g. `^feat\(`, `^fix\(`).
 This would allow any agent that learns the commit format to bypass the guard — destroying the

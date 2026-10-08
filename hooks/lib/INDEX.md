@@ -1,8 +1,8 @@
 # lib
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-10-05T07:21:22Z*
-**Total entries**: 39
+*Last updated: 2026-10-08T04:13:57Z*
+**Total entries**: 45
 **Convention**: kebab
 
 ## Tree
@@ -20,26 +20,32 @@ lib/
 │   ├── `pathmatch.py` - Depends only on shell_lex (`_strip_quotes`) + stdlib; references nothing from
 │   └── `shell_lex.py` - Dependency LEAF: imports only the stdlib, references nothing from _core
 ├── `agent_resolver.py` - Refactored from pretool-subagent-code-block.py::_find_agent_type so that
+├── `agent_temp_targets.py` - This module is deliberately not an authorization hook and never emits
 ├── `allowlist.py` - Single source of truth for grant-read, grant-match, and grant-consume
 ├── `attribution_journal.py` - Capture side (used by pretool-attribution-pre.py / posttool-attribution-post.py):
 ├── `bash_context_strip.py` - This is deliberately NOT a full shell parser.  It only computes a conservative
 ├── `bash_write_targets.py` - Provides two public functions used by tool-policy and overnight-hook-guard:
 ├── `capability_state.py` - verdict, and the INDEPENDENT (non-hook-dispatched) preactivation consumer
 ├── `checkpoint-core.sh` - checkpoint-core.sh - Shared library for automated snapshot commits
+├── `checkpoint_resources.py` - The directory lock is the transaction boundary: primary-template validation,
 ├── `claude_home.py` - Generalizes the in-repo gold-standard fail-closed self-resolution pattern
 ├── `claude_home.sh` - claude_home.sh — shared "harness home" resolver (shell consumable).
 ├── `close-verdict.py` - Shared CLOSE verdict classifier for commit/close tooling.
 ├── `closeout.py` - Public API:
 ├── `commit_journal.py` - WHY THIS EXISTS
 ├── `contract_runtime.py` - This module is the single shared engine consumed by every contract-aware
+├── `dev_report_shard_patterns.py` - Single source for the per-worker / canonical dev-report filename regexes and
 ├── `git_clean_guard.py` - Classifies ONE Bash command for the fail-closed pre-clean guard woven into the
 ├── `git_command_classifier.py` - Provides iter_git_invocations() — a token-aware parser that detects git
 ├── `grepguard_context_strip.py` - PURPOSE (narrow, guard-specific)
 ├── `harness_state_dir.py` - Hook runtime state (consent flags, grants, sentinels, bookmarks, stamps) lives
 ├── `harness_state_dir.sh` - harness_state_dir.sh -- shell twin of hooks/lib/harness_state_dir.py.
 ├── `interruption_signals.py` - Decides whether a subagent was cut off — and whether a usage limit did it — from
+├── `negative_evidence.py` - The scan root is never an authority source.  A parent-published immutable
+├── `obligation.py` - Rollout step S2 of the converged zero-failure design
 ├── `overnight.py` - Single source of truth for "is a /dev-overnight session currently live?". A
 ├── `policy_registry.py` - Reads the harness ``policies/tool-policy.v1.json`` (resolved via the shared
+├── `progress_measure.py` - escalate when it is not, and never release
 ├── `runtime_guard.py` - This file exists for backwards-compatibility with callers that invoke
 ├── `schema_registry.py` - Reads schemas/registry.json once and lazily loads referenced schema files
 ├── `session_resources.py` - Every destructive operation is bound to an immutable resource session and a
