@@ -1139,5 +1139,35 @@ class TestScopeConfinement(unittest.TestCase):
             self.assertEqual('R-b', marker['epoch_reading'])
 
 
+class TestSlashChecklistDoesNotResendTheCommandFile(unittest.TestCase):
+    """Claude Code already expands a slash command's body into the prompt, so
+    the Phase A checklist must not append the same command file a second time
+    (about 108 KB for /dev and 120 KB for /close). The overnight continuation
+    re-send is a different delivery and is pinned by the cases above."""
+
+    def test_dev_and_close_checklists_carry_no_command_specification(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            fixture = Fixture(tmp)
+            for cmd in ('dev', 'close'):
+                shutil.copy(REPO / 'commands' / f'{cmd}.md',
+                            fixture.home / '.claude' / 'commands' / f'{cmd}.md')
+                shutil.copy(REPO / 'scripts' / 'todo' / f'{cmd}.py',
+                            fixture.home / '.claude' / 'scripts' / 'todo' / f'{cmd}.py')
+            resent = []
+            with fixture.module() as module:
+                for cmd in ('dev', 'close'):
+                    # The document resolves, so an append would have fired.
+                    self.assertTrue(module.read_command_spec(cmd))
+                    todos = module.run_todo_script(cmd, f'/{cmd}')
+                    self.assertTrue(todos, f'/{cmd} todo provider returned nothing')
+                    out = module.checklist_message(cmd, todos)
+                    self.assertIn(f'CHECKLIST PRE-INITIALIZED for /{cmd.upper()}:', out)
+                    # Collected, not asserted inline: a 100 KB repr per command
+                    # would bury which commands still re-send their file.
+                    if 'COMMAND SPECIFICATION' in out:
+                        resent.append(f'/{cmd} ({len(out)} chars)')
+            self.assertEqual([], resent)
+
+
 if __name__ == '__main__':
     unittest.main()
