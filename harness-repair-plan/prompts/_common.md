@@ -26,7 +26,11 @@ prompt names (`PLAN-v2.md` is the current plan where your prompt names it; `PLAN
 version and loses wherever the two differ). Line numbers in the docs are at master 09ab15b; earlier phases may have moved them, so
 re-verify each one against current `origin/master` before editing.
 
-Start your branch from the latest `origin/master`.
+Start your branch from the latest `origin/master`, never from `claude/vibrant-hopper-bazrn8` (that branch is
+master plus the planning documents; basing on it would put them into your PR). Check before you change
+anything: `git fetch origin master && git log --oneline origin/master..HEAD` must print nothing. If it prints
+commits that are not yours, move your branch to `origin/master` first (you have no work on it yet).
+If you cannot fetch or read the planning documents, stop and tell the owner instead of guessing.
 
 ## Principles (all phases)
 
