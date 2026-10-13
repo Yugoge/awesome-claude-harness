@@ -21,9 +21,9 @@ the repository (your scratchpad) and never commit them:
     mkdir -p "$SCRATCH/plan" && git archive FETCH_HEAD harness-repair-plan | tar -x -C "$SCRATCH/plan"
 
 Read, in this order: `harness-repair-plan/DECISIONS.md` (owner decisions; they override every plan),
-`harness-repair-plan/README.md` (index + sandbox usage), your phase section in `PLAN-v2.md` (the current
-plan; `PLAN-v1.md` is the earlier version and loses wherever the two differ), then the landscape files your
-phase cites. Line numbers in the docs are at master 09ab15b; earlier phases may have moved them, so
+`harness-repair-plan/README.md` (index + sandbox usage), then the plan section and landscape files your
+prompt names (`PLAN-v2.md` is the current plan where your prompt names it; `PLAN-v1.md` is the earlier
+version and loses wherever the two differ). Line numbers in the docs are at master 09ab15b; earlier phases may have moved them, so
 re-verify each one against current `origin/master` before editing.
 
 Start your branch from the latest `origin/master`.
@@ -70,7 +70,7 @@ Start your branch from the latest `origin/master`.
 Baseline CI (`.github/workflows/baseline.yml`) has been red on master since 2026-07-26 (latest run at
 09ab15b failed). Before changing anything, run the workflow's steps locally on python 3.12 against
 `origin/master` and record which steps/tests fail. Repeat on your branch. Your PR must add no new failure.
-Pre-existing failures outside your scope are not yours to fix (P7 makes CI green); list them in the PR.
+Pre-existing failures outside your scope are not yours to fix (phase P8 makes CI green); list them in the PR.
 
 ## Pull request
 

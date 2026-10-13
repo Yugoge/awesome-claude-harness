@@ -6,7 +6,7 @@ Working material for repairing this harness, phase by phase. Personal values are
 | Path | What it is |
 |---|---|
 | DECISIONS.md | The owner's decisions. **Overrides PLAN-v1.md** wherever they disagree. Read it first. |
-| PLAN-v1.md | Phases P0-P9: goal, file:line scope, acceptance tests, risks. Line numbers are at master 09ab15b. |
+| PLAN-v1.md | Earlier plan, phases P0-P9 (old numbering): goal, file:line scope, acceptance tests, risks. Line numbers at master 09ab15b. PLAN-v2.md (P0-P11, current numbering) supersedes it once added. |
 | prompts/ | One self-contained prompt per phase, pasted into a new session. |
 | landscape/ | Every problem, every file and every file:line, by cluster (00-INDEX.md first). G = stop gates, H = scoring. |
 | reports/ | Evidence: runtime verification, armed core-architecture test, adversarial runs, problem list, file manifest. |
