@@ -37,8 +37,12 @@ PLAN-v1.md still gives the file:line scope for each phase. Where it says "honest
   and /push cannot stop until the todo list is complete and their artifacts are verified by code.
   No retry bound, no self-release, no agent-writable release file. The only way out is human:
   interrupting the session, or a human-only /stop command.
-- **D4b Overnight is unattended.** A pipeline that needs a decision overnight is parked. Its question goes
-  into the morning report, the pipeline stays incomplete, and the session continues with the others.
+- **D4b Overnight is unattended.** Inside the time-lock window, a pipeline that needs a genuine owner
+  decision is parked: its question goes into the morning report, it stays incomplete and lands nothing, and
+  the session continues with the other pipelines. Routine choices that the overnight autonomy rules
+  already cover (dev-overnight.md Clause A) are still made by the orchestrator, with the assumption recorded.
+  After the window, the parked questions are asked with AskUserQuestion, so the session waits for the owner
+  inside a turn instead of looping on blocked Stops.
 - **D7 /close and /commit complete an incomplete dev.** When /close or /commit finds an unfinished dev
   cycle, it resumes it through the /redev continuation with the same subagents and the same obligations
   until it completes. If the user asks for dev, dev completes; if the user asks for close, close completes.
@@ -46,14 +50,27 @@ PLAN-v1.md still gives the file:line scope for each phase. Where it says "honest
 
 ## Pipelines
 
+- **D4c Interrupts and API errors need no gate code.** Claude Code does not run the Stop hook when the
+  user interrupts a turn, and on an API error it runs `StopFailure` instead of `Stop` and ignores that
+  hook's output (code.claude.com/docs/en/hooks, sections Stop and StopFailure). So the Stop gate contains
+  no API-error or interrupt rule and parses no error records (nothing hardcoded). Such a cycle simply stays
+  incomplete, and /restart resumes it.
 - **D5 /do consent lasts one turn.**
 - **D6 Overnight lands once, at the end.** After the whole overnight session ends:
   /close --auto, then /commit --auto, then /merge, then /push. /commit --auto follows the normal /commit
   route but batches cycles the way /close --auto does. Never /commit --bulk. Remove the per-cycle commit
   at commands/dev-overnight.md:1576-1578 and give the post-loop flow (:1794-1809) the /close step.
+  - **D6a The owner types the four landing commands** in the morning, each held by its own Stop gate.
+    The overnight session never runs /commit or /push itself (they stay human-only, CLAUDE.md #15); its
+    final summary prints the exact commands to type, and in isolated modes where to type them.
 - **D9 Close rating uses AskUserQuestion.** Replace the Happy `<options>` block in commands/close.md
   (about :867-880) with a native AskUserQuestion. A dedicated section studies the agent scoring system
   (landscape/H-scoring.md).
+  - **D9a Scope: keep only the owner's rating log (plan option S-B).** A hook records the native rating.
+    Score injection into agent prompts, automatic score events, the agents' score echo contracts and their
+    scripts and tests are deleted (their effect on behaviour was never measured).
+  - **D9b The Stop gate requires the rating question to be asked, not answered.** Skip, no answer or a
+    denial never blocks the session and records nothing.
 
 ## Git, remote and privacy
 
@@ -86,6 +103,8 @@ PLAN-v1.md still gives the file:line scope for each phase. Where it says "honest
 
 - One session per phase, one branch and one PR per phase, PR base `master`.
 - The reviewing session reviews and merges. Phase sessions never merge their own PR.
-- Waves: 1) P0 + P6; 2) P1; 3) P2 + P3 + P5; 4) P4 + P7; 5) P8, then P9, then history cleanup.
-- Still open (asked when the phase starts): about 20 policy choices in P7-P9, and A3 (check
-  files_created against the CLI transcript; recommended yes).
+- Phase numbering follows PLAN-v2.md: P0-P11 (P5 = the unified Stop gate, P6 = producer input and
+  identity, P7 = portable product, P8 = private tree and CI, P9 = prose pass, P10 = clean tree,
+  P11 = remote refs and history cleanup). Wave 1 = P0 + P7. The later waves are in PLAN-v2.md.
+- Still open: the policy choices listed as OPEN in PLAN-v2.md's decision ledger, asked when their
+  phase starts.

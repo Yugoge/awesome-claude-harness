@@ -20,10 +20,11 @@ the repository (your scratchpad) and never commit them:
     git fetch origin claude/vibrant-hopper-bazrn8
     mkdir -p "$SCRATCH/plan" && git archive FETCH_HEAD harness-repair-plan | tar -x -C "$SCRATCH/plan"
 
-Read, in this order: `harness-repair-plan/DECISIONS.md` (owner decisions; they override the plan),
-`harness-repair-plan/README.md` (index + sandbox usage), your phase section in `PLAN-v1.md`, then the
-landscape files your phase cites. Line numbers in the docs are at master 09ab15b; re-verify each one
-against current `origin/master` before editing (they may have shifted).
+Read, in this order: `harness-repair-plan/DECISIONS.md` (owner decisions; they override every plan),
+`harness-repair-plan/README.md` (index + sandbox usage), your phase section in `PLAN-v2.md` (the current
+plan; `PLAN-v1.md` is the earlier version and loses wherever the two differ), then the landscape files your
+phase cites. Line numbers in the docs are at master 09ab15b; earlier phases may have moved them, so
+re-verify each one against current `origin/master` before editing.
 
 Start your branch from the latest `origin/master`.
 
