@@ -50,7 +50,7 @@ if [ -z "$BRANCH" ]; then
   exit 0
 fi
 
-if [ "${GIT_AUTO_PUSH:-1}" = "0" ]; then
+if [ "${GIT_AUTO_PUSH:-}" != "1" ]; then
   exit 0
 fi
 
@@ -92,11 +92,11 @@ find ~ -maxdepth 3 -type d -name ".git" 2>/dev/null | sort | while read git_dir;
 
     if [ -f "$hook_file" ]; then
         if grep -q "auto-push\|GIT_AUTO_PUSH" "$hook_file" 2>/dev/null; then
-            echo "   ✅ Layer 2: Auto-push already installed"
+            echo "   ✅ Layer 2: Auto-push hook already present, left as is (current template: off by default; enable with export GIT_AUTO_PUSH=1)"
         elif grep -q "git-lfs\|git lfs" "$hook_file" 2>/dev/null; then
             echo "   📝 Layer 2: Git LFS detected, creating combined hook"
             create_combined_hook "$repo_dir"
-            echo "   ✅ Layer 2: Combined hook installed"
+            echo "   ✅ Layer 2: Combined hook installed (auto-push off by default; enable with export GIT_AUTO_PUSH=1)"
             ((installed_count++))
         else
             echo "   ⚠️  Layer 2: Custom hook exists, skipping"
@@ -104,7 +104,7 @@ find ~ -maxdepth 3 -type d -name ".git" 2>/dev/null | sort | while read git_dir;
             ((skipped_count++))
         fi
     else
-        echo "   📝 Layer 2: Installing auto-push hook..."
+        echo "   📝 Layer 2: Installing auto-push hook (off by default; enable with export GIT_AUTO_PUSH=1)..."
         if [ -f "$HOOK_TEMPLATE" ]; then
             cp "$HOOK_TEMPLATE" "$hook_file"
             chmod +x "$hook_file"

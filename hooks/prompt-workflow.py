@@ -1263,7 +1263,7 @@ def handle_phase_b(session_id: str) -> None:
 
 
 def checklist_message(cmd_name: str, todos: list) -> str:
-    """Build the checklist initialization message with command spec."""
+    """Build the checklist initialization message; Claude Code expands the spec."""
     first_call = build_next_todowrite_call(todos, mark_first=True)
     lines = [
         f'CHECKLIST PRE-INITIALIZED for /{cmd_name.upper()}:',
@@ -1275,9 +1275,6 @@ def checklist_message(cmd_name: str, todos: list) -> str:
         '',
         first_call,
     ]
-    spec = read_command_spec(cmd_name)
-    if spec:
-        lines += ['', f'--- /{cmd_name} COMMAND SPECIFICATION ---', '', spec]
     return '\n'.join(lines)
 
 
@@ -1923,7 +1920,7 @@ def _ordinary_dev_start(cmd_name: str, user_input: str, sid: str, envelope_diges
 
 
 def handle_phase_a(cmd_name: str, user_input: str, sid: str, envelope_digest: str = '') -> None:
-    """Phase A: slash command detected -- setup todos, state, inject spec."""
+    """Phase A: slash command detected -- setup todos, state, emit checklist."""
     if cmd_name in ("commit", "push", "merge", "stop"):
         _write_userintent_sentinel(cmd_name, sid)
     if cmd_name == "do":

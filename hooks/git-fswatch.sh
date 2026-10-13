@@ -1,6 +1,6 @@
 #!/bin/bash
 # git-fswatch.sh - Comprehensive Git file watcher using fswatch
-# Comprehensive Git file monitor using fswatch
+# Pushes the branch to origin only when GIT_AUTO_PUSH=1 (off by default)
 # Location: ~/.claude/hooks/git-fswatch.sh
 # Usage: bash ~/.claude/hooks/git-fswatch.sh [path]
 
@@ -333,6 +333,7 @@ safe_commit() {
 
 # Perform git push with retry logic
 safe_push() {
+    [ "${GIT_AUTO_PUSH:-}" = "1" ] || { log_info "Push skipped: auto-push is off (enable with GIT_AUTO_PUSH=1)"; return 0; }
     cd "$WATCH_PATH" || return 1
 
     local branch=$(git branch --show-current)

@@ -1,6 +1,6 @@
 #!/bin/bash
-# post-commit-auto-push - Automatically back up every commit to recovery refs
-# 每次 commit 后自动推送到备份 ref（后台执行）
+# post-commit-auto-push - Opt-in: back up each commit to a remote recovery ref
+# Off by default; enable with export GIT_AUTO_PUSH=1 (unset, 0 or any other value = no push)
 # Installation: cp ~/.claude/hooks/git-hooks/post-commit-auto-push .git/hooks/post-commit
 
 # Get current branch and commit
@@ -12,8 +12,8 @@ if [ -z "$BRANCH" ] || [ -z "$COMMIT_SHA" ]; then
   exit 0
 fi
 
-# Check if GIT_AUTO_PUSH is disabled
-if [ "${GIT_AUTO_PUSH:-1}" = "0" ]; then
+# Push only when explicitly enabled: GIT_AUTO_PUSH must be exactly "1"
+if [ "${GIT_AUTO_PUSH:-}" != "1" ]; then
   exit 0
 fi
 

@@ -39,7 +39,7 @@ echo ""
 echo "2) Zero-Cost Solution"
 echo "   • Git post-commit hook only"
 echo "   • Token cost: 0%"
-echo "   • Auto-push on manual commit"
+echo "   • Auto-push on manual commit: off by default (enable: export GIT_AUTO_PUSH=1)"
 echo ""
 echo "3) Full Protection"
 echo "   • Smart Checkpoint + Post-commit hook + Manual commands"
@@ -246,8 +246,8 @@ fi
 
 if [ "$INSTALL_HOOK" = "1" ]; then
   echo "✓ Post-commit hook installed"
-  echo "  • Auto-push on every commit"
-  echo "  • Disable: export GIT_AUTO_PUSH=0"
+  echo "  • Auto-push on every commit: off by default"
+  echo "  • Enable: export GIT_AUTO_PUSH=1"
   echo ""
 fi
 

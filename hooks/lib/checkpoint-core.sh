@@ -25,7 +25,7 @@
 #   4. if TREE_SHA == PARENT_TREE_SHA -> return 0 (idempotent)
 #   5. git commit-tree TREE_SHA [-p PARENT_SHA] -m "<msg>"  -> NEW_SHA
 #   6. git update-ref REF NEW_SHA OLD_SHA           (CAS; retries 5x on race)
-#   7. background push (rate-limited to 1/30s per repo) WITHOUT -f, gated by a
+#   7. opt-in background push, only when GIT_AUTO_PUSH=1 (rate-limited 1/30s per repo), WITHOUT -f, gated by a
 #      fail-closed PII/credential content scan + a fail-open oversized-blob
 #      size check on the local-minus-remote object set
 #
@@ -320,6 +320,7 @@ _checkpoint_push_gate_pii_signature() {
 # Skips if another push was attempted within CHECKPOINT_PUSH_MIN_INTERVAL seconds
 # for this repo. Uses repo-hash stamp file in /tmp/.
 _checkpoint_rate_limited_push() {
+    [ "${GIT_AUTO_PUSH:-}" = "1" ] || return 0
     local work_dir="$1"
     local ref="$2"
     local git_cmd

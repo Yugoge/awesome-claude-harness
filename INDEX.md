@@ -674,6 +674,7 @@ dot-claude/
 │   ├── `test_dev_todo_codex_native_parse.py` - The harness never imports or executes the canonical checklist; it ``ast.parse``s
 │   ├── `test_empty_old_string_diagnosis.py` - A real cycle emitted twenty-one ledger entries whose `old` was the empty string
 │   ├── `test_generate_repair_map.py` - Covers AC-L8-01..04 and AC-L8-13 (docs/dev/acceptance-criteria-20260930-132644-l8.json)
+│   ├── `test_git_auto_push_opt_in.py` - GIT_AUTO_PUSH opt-in: checkpoint, post-commit, combined LFS hook and fswatch push only if it is 1
 │   ├── `test_git_clean_guard_vectors.py` - The pre-clean WIP snapshot guard (task dev-20260719-150041-c, lane r03-c) is
 │   ├── `test_graphify_scripts.py` - tests/test_graphify_scripts.py — smoke tests for scripts/graphify_lib.py
 │   ├── `test_graphify_workflow_contract.py` - tests/test_graphify_workflow_contract.py — contract tests for graphify agent registration
@@ -708,7 +709,6 @@ dot-claude/
 │   ├── `test_stage_owned_hunks_boundary.py` - content-anchor-retry boundary/coordinate-space defect (task 20260912-015952)
 │   ├── `test_subagentstop_e2e_enforce.py` - Backlog: dev-20260923-083731 -- widen _find_latest_qa_report's correlation
 │   ├── `test_todo_md_sync.py` - Regression tests for the session-start todo/Markdown drift detector.
-│   ├── `test_tool_policy_inference_note.py` - inference note appended by hooks/pretool-tool-policy.py to a Bash write-target
 │   ├── `test_write_qa_mode.py` - Root selection and zero-write failure tests for write-qa-mode.sh.
 │   ├── `TESTING.md` - Test Topology & Runner Map (authoritative)
 │   ├── `verify-stop-spec-session-isolation.sh` - QA verification harness for stop-spec-coverage-enforce.py session isolation fix.
