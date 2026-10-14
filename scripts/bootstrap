@@ -1,41 +1,94 @@
 #!/usr/bin/env bash
-# bootstrap — first-run setup for the Claude Code harness on a fresh clone.
+# bootstrap — init: make this checkout a working Claude Code harness. Safe to re-run.
 #
-# On a fresh non-root clone it:
-#   1. creates the Python venv the hooks/scripts expect (<home>/venv),
-#   2. installs the REQUIRED dependencies with hash verification,
-#   3. renders settings.json from the tracked settings.template.json,
-#   4. makes the shell hooks executable,
-#   5. verifies the shared resolver (hooks/lib/claude_home.{sh,py}) resolves
-#      THIS clone as the harness home,
-#   6. runs scripts/doctor as the final preflight.
+# Usage: scripts/bootstrap [--yes] [--with <module>]... [--without <module>]...
+#                          [--migrate-from <rev> [--settings-file <path>]]
+#                          [--force] [--no-doctor]
+#   --yes                   Do not ask: every optional module is off unless named
+#                           by --with.
+#   --with <module>         Turn an optional module on in a NEW overlay (repeatable).
+#   --without <module>      Turn an optional module off in a NEW overlay (repeatable).
+#                           Known modules: paseo.
+#   --migrate-from <rev>    Seed a NEW overlay from your previous personal settings
+#                           (<rev>:settings.json) with render-settings migrate.
+#   --settings-file <path>  With --migrate-from: read the previous settings from
+#                           this file instead of <rev>:settings.json.
+#   --force                 Back up <home>/venv to venv.bak-<timestamp> and re-create
+#                           it; pass --force to render-settings render, which drops
+#                           working settings.json entries the overlay does not
+#                           explain (settings.json is first backed up to
+#                           settings.json.bak-<timestamp> when the render changes it).
+#   --no-doctor             Skip the final scripts/doctor run.
 #
-# It is NON-DESTRUCTIVE: it refuses to clobber an already-populated home (an
-# existing venv) unless you pass --force, and it documents how to restore. With
-# --force it BACKS UP the existing venv (to <home>/venv.bak-<timestamp>) before
-# recreating it, so the prior state can always be restored. An existing
-# settings.json follows the same convention: left byte-identical by default,
-# backed up to <home>/settings.json.bak-<timestamp> before a --force re-render.
+# Steps (<home> = this checkout, resolved from the script's own location):
+#   1. venv: reuse <home>/venv when its python imports pytest, jsonschema and yaml
+#      (hash-verified install into it otherwise); create it when absent with the
+#      first of python3, python3.12, python3.11, python3.10 that has a lockfile
+#      requirements/py3XX.txt (pip --require-hashes).
+#   2. overlay <home>/settings.machine.json (untracked, mode 0600), only when absent:
+#      {"modules": {...}, "env": {"CLAUDE_HOME": "<home>"}}, or migrated with
+#      --migrate-from. Without --yes/--with/--without it asks once per module on
+#      standard input (y/yes/n/no, default No; end of input means No).
+#   3. git checkout: register the claude-settings filter in the repository's local
+#      git config; render the machine form of settings.json (render-settings render).
+#   4. create only when absent: <home>/logs/, the TMPDIR named by the rendered
+#      settings (mode 1777), <home>/private-literals.txt (empty, mode 0600), the
+#      protected-runtime file of hooks/lib/runtime_guard/config.py (empty lists).
+#   5. git checkout: install hooks/git-hooks/pre-commit into the hooks directory
+#      (an existing foreign pre-commit is kept as pre-commit.local and chained).
+#   6. make hooks/*.sh executable; verify both claude_home resolvers.
+#   7. run scripts/doctor; repeat any lines asking to move an entry into the overlay.
 #
-# Usage: scripts/bootstrap [--force] [--no-doctor]
-#   --force       Re-bootstrap a populated home: back up the existing venv and
-#                 settings.json, then recreate both (opt-in to the otherwise-
-#                 refused clobber).
-#   --no-doctor   Skip the final scripts/doctor preflight.
-# Exit codes: 0 = success; 1 = refused (populated home, no --force) or a step
-#             failed.
+# Re-running is safe: an existing venv, overlay, private-literal list and
+# protected-runtime file are never rewritten (only --force re-creates the venv,
+# after a backup); the filter registration, the render and the hook install are
+# idempotent.
+# Exit codes: 0 = success; 1 = a step failed (its message names it).
 set -uo pipefail
 
+KNOWN_MODULES="paseo"
+module_desc() {  # <module> -> what the module adds (shown in the question)
+  case "$1" in
+    paseo) printf '%s' "adds the paseo MCP tool permissions, the paseo usage-reader permission, the per-prompt usage-snapshot hook and the run-code watchdog for the paseo browser" ;;
+  esac
+}
+_in_list() { case " $2 " in *" $1 "*) return 0 ;; esac; return 1; }
+
+ASSUME_YES=0
 FORCE=0
 RUN_DOCTOR=1
+WITH_LIST=""
+WITHOUT_LIST=""
+MIGRATE_FROM=""
+SETTINGS_FILE=""
+_need_module() {  # <flag> <value>
+  if [ -z "$2" ]; then echo "bootstrap: $1 needs a module name (known: $KNOWN_MODULES)" >&2; exit 1; fi
+  if ! _in_list "$2" "$KNOWN_MODULES"; then
+    echo "bootstrap: unknown module '$2' for $1 (known: $KNOWN_MODULES)" >&2; exit 1
+  fi
+}
 while [ $# -gt 0 ]; do
   case "$1" in
+    --yes) ASSUME_YES=1; shift ;;
+    --with) _need_module "$1" "${2:-}"; WITH_LIST="$WITH_LIST $2"; shift 2 ;;
+    --without) _need_module "$1" "${2:-}"; WITHOUT_LIST="$WITHOUT_LIST $2"; shift 2 ;;
+    --migrate-from) MIGRATE_FROM="${2:?--migrate-from needs a git revision}"; shift 2 ;;
+    --settings-file) SETTINGS_FILE="${2:?--settings-file needs a path}"; shift 2 ;;
     --force) FORCE=1; shift ;;
     --no-doctor) RUN_DOCTOR=0; shift ;;
-    -h|--help) sed -n '2,18p' "${BASH_SOURCE[0]}"; exit 0 ;;
-    *) echo "bootstrap: unknown argument '$1'" >&2; exit 1 ;;
+    -h|--help) awk 'NR == 1 { next } /^#/ { print; next } { exit }' "${BASH_SOURCE[0]}"; exit 0 ;;
+    *) echo "bootstrap: unknown argument '$1' (see --help)" >&2; exit 1 ;;
   esac
 done
+for _m in $WITH_LIST; do
+  if _in_list "$_m" "$WITHOUT_LIST"; then
+    echo "bootstrap: module '$_m' is given to both --with and --without" >&2; exit 1
+  fi
+done
+if [ -n "$SETTINGS_FILE" ]; then
+  [ -n "$MIGRATE_FROM" ] || { echo "bootstrap: --settings-file needs --migrate-from <rev>" >&2; exit 1; }
+  [ -f "$SETTINGS_FILE" ] || { echo "bootstrap: --settings-file not found: $SETTINGS_FILE" >&2; exit 1; }
+fi
 
 # Resolve the harness home from THIS script's own location (it lives at
 # <home>/scripts/bootstrap, so the resolver is at ../hooks/lib). Never default
@@ -53,161 +106,311 @@ fi
 [ -n "$HOME_DIR" ] || HOME_DIR="$(cd "$SELF_DIR/.." && pwd -P)"
 
 VENV_DIR="$HOME_DIR/venv"
-MANIFEST="$HOME_DIR/requirements.txt"
+SETTINGS="$HOME_DIR/settings.json"
+OVERLAY="$HOME_DIR/settings.machine.json"
+LITERALS="$HOME_DIR/private-literals.txt"
+RENDERER="$HOME_DIR/scripts/install/render-settings"
+HOOK_MARKER='# claude-harness pre-commit (installed by scripts/bootstrap)'
 
 echo "Claude Code harness — bootstrap"
 echo "harness home: $HOME_DIR"
 echo
 
-# Base prerequisite: python3 must be on PATH to create a venv at all.
+# Base prerequisites: python3 runs the venv creation and render-settings.
 if ! command -v python3 >/dev/null 2>&1; then
   echo "bootstrap: python3 not found on PATH — install Python 3 first." >&2
-  exit 1
-fi
-
-# ── Non-destructive install boundary ─────────────────────────────────────────
-# A populated home = an existing venv. Refuse to clobber it without --force.
-if [ -d "$VENV_DIR" ] && [ "$FORCE" -ne 1 ]; then
-  cat >&2 <<EOF
-bootstrap: REFUSING to clobber an existing venv at:
-    $VENV_DIR
-This home is already populated. bootstrap will not overwrite it without an
-explicit opt-in.
-
-To re-bootstrap (backs up the existing venv first), re-run with --force:
-    scripts/bootstrap --force
-
-To restore manually after a --force run, the prior venv is preserved at:
-    $VENV_DIR.bak-<timestamp>
-and can be restored with:
-    rm -rf "$VENV_DIR" && mv "$VENV_DIR.bak-<timestamp>" "$VENV_DIR"
-EOF
-  exit 1
-fi
-
-# With --force on a populated home: back up the existing venv before recreating.
-if [ -d "$VENV_DIR" ] && [ "$FORCE" -eq 1 ]; then
-  # Collision-proof backup name: never reuse an existing path (two --force runs
-  # in the same second must not nest one backup inside another).
-  _ts="$(date +%Y%m%d-%H%M%S)"
-  BACKUP="$VENV_DIR.bak-$_ts"
-  _n=1
-  while [ -e "$BACKUP" ]; do
-    BACKUP="$VENV_DIR.bak-$_ts-$_n"
-    _n=$((_n + 1))
-  done
-  echo "bootstrap: --force — backing up existing venv to $BACKUP"
-  mv "$VENV_DIR" "$BACKUP" || { echo "bootstrap: backup failed; aborting." >&2; exit 1; }
-  echo "  (restore with: rm -rf \"$VENV_DIR\" && mv \"$BACKUP\" \"$VENV_DIR\")"
-fi
-
-# ── 1. Create the venv ───────────────────────────────────────────────────────
-# Clean up a partially-built venv if a later step fails, so a retry does not
-# hit the non-clobber refusal. We ONLY remove a venv this run created — a
-# pre-existing venv was already moved to a backup above (or we refused earlier).
-_CREATED_VENV=0
-_cleanup_partial() {
-  if [ "$_CREATED_VENV" -eq 1 ] && [ "${_BOOTSTRAP_OK:-0}" -ne 1 ] && [ -d "$VENV_DIR" ]; then
-    echo "bootstrap: removing partially-built venv at $VENV_DIR (so a retry can run)." >&2
-    rm -rf "$VENV_DIR"
-  fi
-}
-trap _cleanup_partial EXIT
-
-echo "bootstrap: creating venv at $VENV_DIR"
-python3 -m venv "$VENV_DIR" || { echo "bootstrap: venv creation failed." >&2; exit 1; }
-_CREATED_VENV=1
-VENV_PY="$VENV_DIR/bin/python"
-
-# ── 2. Install the required dependencies from the manifest ───────────────────
-# Install hash-verified from the lockfile matching THIS interpreter.
-# --require-hashes makes pip reject the entire install if any requirement, direct
-# or transitive, is unpinned or unhashed, so a tampered or substituted artifact
-# cannot enter a fresh clone. requirements.txt stays the human-authored abstract
-# spec; requirements/py3XX.txt is its resolved, pinned form.
-PY_TAG="py$("$VENV_PY" -c 'import sys; print(f"{sys.version_info.major}{sys.version_info.minor}")')"
-LOCKFILE="$HOME_DIR/requirements/$PY_TAG.txt"
-if [ -f "$LOCKFILE" ]; then
-  echo "bootstrap: installing hash-verified dependencies from $LOCKFILE"
-  "$VENV_PY" -m pip install --upgrade pip >/dev/null 2>&1 || true
-  if ! "$VENV_PY" -m pip install --require-hashes -r "$LOCKFILE"; then
-    echo "bootstrap: dependency install failed (check network / pip / lockfile integrity)." >&2
-    exit 1
-  fi
-elif [ -f "$MANIFEST" ]; then
-  echo "bootstrap: no lockfile for this interpreter at $LOCKFILE." >&2
-  echo "  Supported interpreters have a lockfile under $HOME_DIR/requirements/." >&2
-  echo "  Refusing to fall back to an unhashed install of $MANIFEST." >&2
-  exit 1
-else
-  echo "bootstrap: neither $LOCKFILE nor $MANIFEST found — cannot install deps." >&2
-  exit 1
-fi
-
-# ── 3. Render settings.json from the tracked template ────────────────────────
-# settings.json IS tracked, but it carries absolute install-home paths and
-# per-machine permission entries, so a checkout's copy belongs to whoever made
-# it — never to the machine bootstrapping now. This step regenerates it from the
-# public seed settings.template.json so the local file describes this install.
-# Mirrors this script's own venv convention exactly:
-# non-destructive by default, --force backs the prior file up first using the
-# settings.json.bak-<timestamp> pattern .gitignore already anticipates.
-TEMPLATE="$HOME_DIR/settings.template.json"
-SETTINGS="$HOME_DIR/settings.json"
-RENDERER="$SELF_DIR/install/render-settings"
-if [ ! -f "$TEMPLATE" ]; then
-  echo "bootstrap: settings.template.json not found at $TEMPLATE — cannot render settings." >&2
   exit 1
 fi
 if [ ! -f "$RENDERER" ]; then
   echo "bootstrap: scripts/install/render-settings is missing — cannot render settings." >&2
   exit 1
 fi
-if [ -f "$SETTINGS" ] && [ "$FORCE" -ne 1 ]; then
-  # Non-destructive default: keep the existing file BYTE-IDENTICAL and continue
-  # the install (this is not an error — re-running bootstrap must be safe).
-  echo "bootstrap: settings.json already exists — left untouched (re-run with --force to re-render)."
-else
-  if [ -f "$SETTINGS" ]; then
-    _sts="$(date +%Y%m%d-%H%M%S)"
-    SBACKUP="$SETTINGS.bak-$_sts"
-    _sn=1
-    while [ -e "$SBACKUP" ]; do
-      SBACKUP="$SETTINGS.bak-$_sts-$_sn"
-      _sn=$((_sn + 1))
-    done
-    echo "bootstrap: --force — backing up existing settings.json to $SBACKUP"
-    cp -p "$SETTINGS" "$SBACKUP" || { echo "bootstrap: settings backup failed; aborting." >&2; exit 1; }
-  fi
-  echo "bootstrap: rendering settings.json from settings.template.json"
-  if ! python3 "$RENDERER" "$HOME_DIR" --template "$TEMPLATE" --out "$SETTINGS"; then
-    echo "bootstrap: settings render failed (nothing applied)." >&2
-    exit 1
-  fi
-  # The renderer validates parity internally before applying; re-assert it on the
-  # applied file so a bad write can never survive this step silently.
-  # The install-home positional is REQUIRED in --check mode: without it the
-  # renderer normalizes against $HOME/.claude, so any install home other than
-  # the default (an isolated test home, a clone checked out elsewhere) reports
-  # every rendered path as "allow broadened beyond template" on a file it just
-  # wrote correctly. Passing $HOME_DIR keeps the assertion load-bearing.
-  if ! python3 "$RENDERER" "$HOME_DIR" --check "$SETTINGS" --template "$TEMPLATE"; then
-    echo "bootstrap: rendered settings.json failed template parity validation." >&2
-    exit 1
-  fi
-fi
-
-# ── 4. Make the shell hooks executable ───────────────────────────────────────
-if [ -d "$HOME_DIR/hooks" ]; then
-  chmod +x "$HOME_DIR"/hooks/*.sh 2>/dev/null || true
-fi
-
-# ── 5. Verify BOTH resolvers resolve THIS clone ──────────────────────────────
-# Both the shell and python resolvers must resolve to this clone's home, so a
-# fresh clone proves the resolver is engaged (not just non-empty). Compare each
-# resolved path's realpath to the expected HOME_DIR realpath.
-echo "bootstrap: verifying the shared resolver"
 _rp() { realpath "$1" 2>/dev/null || python3 -c 'import os,sys;print(os.path.realpath(sys.argv[1]))' "$1"; }
+_exists() { [ -e "$1" ] || [ -L "$1" ]; }
+_backup_name() {  # <path> -> a fresh <path>.bak-<timestamp>[-n] that does not exist
+  local ts b n=1
+  ts="$(date +%Y%m%d-%H%M%S)"; b="$1.bak-$ts"
+  while _exists "$b"; do b="$1.bak-$ts-$n"; n=$((n + 1)); done
+  printf '%s\n' "$b"
+}
+
+# H is a git checkout only when it is the top of a work tree (never a parent
+# repository that merely contains it).
+IS_GIT=0
+if command -v git >/dev/null 2>&1; then
+  _top="$(git -C "$HOME_DIR" rev-parse --show-toplevel 2>/dev/null)" || _top=""
+  if [ -n "$_top" ] && [ "$(_rp "$_top")" = "$(_rp "$HOME_DIR")" ]; then IS_GIT=1; fi
+fi
+
+# ── 1. venv ──────────────────────────────────────────────────────────────────
+# A venv this run created is removed again if its dependency install fails, so
+# a retry starts clean. A venv that existed before this run is never removed.
+_CREATED_VENV=0
+_VENV_READY=0
+_cleanup_partial() {
+  if [ "$_CREATED_VENV" -eq 1 ] && [ "$_VENV_READY" -ne 1 ] && [ -d "$VENV_DIR" ]; then
+    echo "bootstrap: removing partially-built venv at $VENV_DIR (so a retry can run)." >&2
+    rm -rf "$VENV_DIR"
+  fi
+}
+trap _cleanup_partial EXIT
+VENV_PY="$VENV_DIR/bin/python"
+_venv_ok() { [ -x "$VENV_PY" ] && "$VENV_PY" -c 'import pytest, jsonschema, yaml' >/dev/null 2>&1; }
+_py_tag() { "$1" -c 'import sys; print("py%d%d" % sys.version_info[:2])' 2>/dev/null; }
+# Install hash-verified from the lockfile matching the venv's interpreter.
+# --require-hashes makes pip reject the entire install if any requirement, direct
+# or transitive, is unpinned or unhashed, so a tampered or substituted artifact
+# cannot enter the venv. requirements.txt stays the human-authored abstract
+# spec; requirements/py3XX.txt is its resolved, pinned form.
+_install_deps() {
+  local lockfile
+  lockfile="$HOME_DIR/requirements/$(_py_tag "$VENV_PY").txt"
+  if [ ! -f "$lockfile" ]; then
+    echo "bootstrap: no lockfile for the venv interpreter at $lockfile — refusing an unhashed install." >&2
+    return 1
+  fi
+  echo "bootstrap: installing hash-verified dependencies from $lockfile"
+  "$VENV_PY" -m pip install --upgrade pip >/dev/null 2>&1 || true
+  if ! "$VENV_PY" -m pip install --require-hashes -r "$lockfile"; then
+    echo "bootstrap: dependency install failed (check network / pip / lockfile integrity)." >&2
+    return 1
+  fi
+}
+
+if [ -d "$VENV_DIR" ] && [ "$FORCE" -eq 1 ]; then
+  BACKUP="$(_backup_name "$VENV_DIR")"
+  echo "bootstrap: --force — backing up existing venv to $BACKUP"
+  mv "$VENV_DIR" "$BACKUP" || { echo "bootstrap: venv backup failed; aborting." >&2; exit 1; }
+  echo "  (restore with: rm -rf \"$VENV_DIR\" && mv \"$BACKUP\" \"$VENV_DIR\")"
+fi
+if [ -d "$VENV_DIR" ]; then
+  if _venv_ok; then
+    echo "bootstrap: venv at $VENV_DIR is usable (pytest, jsonschema, yaml) — reused."
+  elif [ -x "$VENV_PY" ]; then
+    echo "bootstrap: venv at $VENV_DIR lacks pytest, jsonschema or yaml."
+    _install_deps && _venv_ok || {
+      echo "bootstrap: could not repair $VENV_DIR; re-create it with: scripts/bootstrap --force" >&2; exit 1; }
+  else
+    echo "bootstrap: $VENV_DIR exists but has no python interpreter." >&2
+    echo "  Re-create it (the old one is backed up first) with: scripts/bootstrap --force" >&2
+    exit 1
+  fi
+else
+  # Pick the first interpreter that has a lockfile, so a host whose python3 has
+  # no lockfile still gets a hash-verified install from another interpreter.
+  _PICK=""
+  _TRIED=""
+  for _c in python3 python3.12 python3.11 python3.10; do
+    command -v "$_c" >/dev/null 2>&1 || continue
+    _tag="$(_py_tag "$_c")" || continue
+    _TRIED="$_TRIED $_c($_tag)"
+    if [ -f "$HOME_DIR/requirements/$_tag.txt" ]; then _PICK="$_c"; break; fi
+  done
+  if [ -z "$_PICK" ]; then
+    echo "bootstrap: no interpreter with a lockfile under $HOME_DIR/requirements/ (found:${_TRIED:- none})." >&2
+    echo "  Install one of the Python versions that has a requirements/py3XX.txt; an unhashed install is refused." >&2
+    exit 1
+  fi
+  echo "bootstrap: creating venv at $VENV_DIR with $_PICK"
+  _CREATED_VENV=1
+  "$_PICK" -m venv "$VENV_DIR" || { echo "bootstrap: venv creation failed." >&2; exit 1; }
+  _install_deps || exit 1
+  _venv_ok || { echo "bootstrap: the new venv cannot import pytest, jsonschema and yaml." >&2; exit 1; }
+fi
+_VENV_READY=1
+
+# ── 2. Overlay (settings.machine.json) ───────────────────────────────────────
+# Human configuration: written only here and only when absent; never rewritten.
+if _exists "$OVERLAY"; then
+  echo "bootstrap: settings.machine.json exists — left unchanged."
+  if [ -n "$WITH_LIST$WITHOUT_LIST$MIGRATE_FROM" ]; then
+    echo "  The existing overlay wins over --with/--without/--migrate-from. To change modules,"
+    echo "  edit its \"modules\" object (e.g. \"paseo\": true) and re-run scripts/bootstrap."
+  fi
+elif [ -n "$MIGRATE_FROM" ]; then
+  if [ -n "$WITH_LIST$WITHOUT_LIST" ]; then
+    echo "bootstrap: --with/--without are ignored with --migrate-from (migration detects modules)."
+  fi
+  echo "bootstrap: seeding settings.machine.json from $MIGRATE_FROM (render-settings migrate)"
+  if [ -n "$SETTINGS_FILE" ]; then
+    python3 "$RENDERER" migrate --from "$MIGRATE_FROM" --settings-file "$SETTINGS_FILE"
+  else
+    python3 "$RENDERER" migrate --from "$MIGRATE_FROM"
+  fi || { echo "bootstrap: render-settings migrate failed (see above)." >&2; exit 1; }
+else
+  MODSPEC=""
+  for _m in $KNOWN_MODULES; do
+    if _in_list "$_m" "$WITH_LIST"; then _v=on
+    elif _in_list "$_m" "$WITHOUT_LIST" || [ "$ASSUME_YES" -eq 1 ]; then _v=off
+    else
+      # One line from standard input, terminal or not; end of input = default.
+      _v=""
+      while [ -z "$_v" ]; do
+        printf 'Enable module "%s"? It %s. [y/N] ' "$_m" "$(module_desc "$_m")"
+        _line=""
+        IFS= read -r _line; _eof=$?
+        _ans="$(printf '%s' "$_line" | tr -d '\r' | tr '[:upper:]' '[:lower:]' \
+          | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')"
+        # Keep the log tidy when nothing echoed the answer (piped input or end of input).
+        if [ "$_eof" -ne 0 ] || [ ! -t 0 ]; then echo; fi
+        case "$_ans" in
+          y|yes) _v=on ;;
+          n|no|"") _v=off ;;
+          *) if [ "$_eof" -ne 0 ]; then _v=off; else echo "  please answer y, yes, n or no"; fi ;;
+        esac
+      done
+    fi
+    echo "  module $_m: $_v"
+    MODSPEC="$MODSPEC $_m=$_v"
+  done
+  # Canonical JSON (json.dumps indent=2 + newline); O_EXCL never clobbers.
+  if ! python3 - "$OVERLAY" "$HOME_DIR" "$MODSPEC" <<'PY'
+import json, os, sys
+path, home, spec = sys.argv[1], sys.argv[2], sys.argv[3]
+mods = dict(sorted((n, v == "on") for n, _, v in (i.partition("=") for i in spec.split())))
+data = json.dumps({"modules": mods, "env": {"CLAUDE_HOME": home}}, indent=2, ensure_ascii=False) + "\n"
+fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+with os.fdopen(fd, "w", encoding="utf-8") as fh:
+    fh.write(data)
+os.chmod(path, 0o600)
+PY
+  then
+    echo "bootstrap: could not write $OVERLAY" >&2; exit 1
+  fi
+  echo "bootstrap: wrote settings.machine.json (mode 0600)"
+fi
+
+# ── 3. Settings filter + render ──────────────────────────────────────────────
+# Registered in the LOCAL config every run; a key is rewritten only when its
+# value differs, so a re-run leaves the config file untouched. Git runs filters
+# from the top of the work tree, so the relative script path follows the checkout.
+if [ "$IS_GIT" -eq 1 ]; then
+  _set_cfg() {  # <key> <value>
+    [ "$(git -C "$HOME_DIR" config --local --get "$1" 2>/dev/null)" = "$2" ] && return 0
+    git -C "$HOME_DIR" config --local --replace-all "$1" "$2"
+  }
+  _set_cfg filter.claude-settings.clean "python3 scripts/install/render-settings clean" \
+    && _set_cfg filter.claude-settings.smudge "python3 scripts/install/render-settings smudge" \
+    && _set_cfg filter.claude-settings.required true \
+    || { echo "bootstrap: could not register the claude-settings filter in the local git config." >&2; exit 1; }
+  echo "bootstrap: settings filter claude-settings registered (local git config)"
+else
+  echo "bootstrap: not a git checkout — no settings filter to register; rendering from the working settings.json"
+fi
+_SBACKUP=""
+if [ "$FORCE" -eq 1 ] && [ -f "$SETTINGS" ]; then
+  _SBACKUP="$(_backup_name "$SETTINGS")"
+  cp -p "$SETTINGS" "$_SBACKUP" || { echo "bootstrap: settings.json backup failed; aborting." >&2; exit 1; }
+fi
+if [ "$FORCE" -eq 1 ]; then
+  RENDER_OUT="$(python3 "$RENDERER" render --force 2>&1)"; _rc=$?
+else
+  RENDER_OUT="$(python3 "$RENDERER" render 2>&1)"; _rc=$?
+fi
+[ -z "$RENDER_OUT" ] || printf '%s\n' "$RENDER_OUT"
+if [ -n "$_SBACKUP" ]; then
+  if cmp -s "$SETTINGS" "$_SBACKUP"; then rm -f "$_SBACKUP"
+  else echo "bootstrap: --force — the previous settings.json is kept at $_SBACKUP"; fi
+fi
+if [ "$_rc" -ne 0 ]; then
+  echo "bootstrap: render-settings render failed (see above)." >&2
+  if printf '%s\n' "$RENDER_OUT" | grep -qiE 'move (it|them) into'; then
+    echo "  Move those entries into settings.machine.json and re-run, or re-run with --force to drop them." >&2
+  fi
+  exit 1
+fi
+
+# ── 4. Files and directories, created only when absent ───────────────────────
+if [ -d "$HOME_DIR/logs" ]; then echo "bootstrap: logs/ exists"
+else mkdir -p "$HOME_DIR/logs" || exit 1; echo "bootstrap: created logs/"; fi
+
+TMP_ROOT="$(python3 -c '
+import json, sys
+try:
+    v = (json.load(open(sys.argv[1], encoding="utf-8")).get("env") or {}).get("TMPDIR", "")
+except Exception:
+    v = ""
+print(v if isinstance(v, str) else "")' "$SETTINGS")"
+if [ -z "$TMP_ROOT" ]; then
+  echo "bootstrap: the rendered settings name no TMPDIR — nothing to create"
+elif [ "${TMP_ROOT#/}" = "$TMP_ROOT" ]; then
+  echo "bootstrap: TMPDIR '$TMP_ROOT' is not an absolute path — not created"
+elif _exists "$TMP_ROOT"; then
+  echo "bootstrap: TMPDIR $TMP_ROOT exists"
+elif mkdir -p -m 1777 "$TMP_ROOT"; then
+  echo "bootstrap: created TMPDIR $TMP_ROOT (mode 1777)"
+else
+  echo "bootstrap: could not create TMPDIR $TMP_ROOT; create it (mode 1777) or set another env.TMPDIR in settings.machine.json." >&2
+  exit 1
+fi
+
+if _exists "$LITERALS"; then echo "bootstrap: private-literals.txt exists"
+elif (umask 077 && set -o noclobber && : > "$LITERALS") && chmod 0600 "$LITERALS"; then
+  echo "bootstrap: created private-literals.txt (empty, mode 0600; one private literal per line)"
+else
+  echo "bootstrap: could not create $LITERALS" >&2; exit 1
+fi
+
+# Path and keys come from hooks/lib/runtime_guard/config.py itself
+# (CLAUDE_PROTECTED_RUNTIME_FILE, else $HOME/.config/claude/protected-runtime.json).
+if ! python3 -B -I - "$HOME_DIR/hooks/lib/runtime_guard" <<'PY'
+import json, os, sys
+sys.path.insert(0, sys.argv[1])
+import config
+path = config.DATA_FILE_PATH
+if os.path.lexists(path):
+    print("bootstrap: protected-runtime file exists: %s" % path)
+    sys.exit(0)
+os.makedirs(os.path.dirname(path) or ".", mode=0o700, exist_ok=True)
+doc = {"schema_version": 1}
+doc.update((k, []) for k in config.REQUIRED_KEYS)
+fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+with os.fdopen(fd, "w", encoding="utf-8") as fh:
+    fh.write(json.dumps(doc, indent=2) + "\n")
+print("bootstrap: created protected-runtime file %s (empty lists)" % path)
+PY
+then
+  echo "bootstrap: could not create the protected-runtime file (see above)." >&2; exit 1
+fi
+
+# ── 5. pre-commit hook ───────────────────────────────────────────────────────
+# The hooks dir honours core.hooksPath (e.g. the keystone dir). A foreign hook is
+# kept as pre-commit.local, which the installed hook execs last.
+if [ "$IS_GIT" -eq 1 ]; then
+  SRC_HOOK="$HOME_DIR/hooks/git-hooks/pre-commit"
+  [ -f "$SRC_HOOK" ] || { echo "bootstrap: hooks/git-hooks/pre-commit is missing — cannot install the pre-commit hook." >&2; exit 1; }
+  HOOKS_DIR="$(git -C "$HOME_DIR" rev-parse --git-path hooks)" \
+    || { echo "bootstrap: cannot locate the git hooks directory." >&2; exit 1; }
+  case "$HOOKS_DIR" in /*) ;; *) HOOKS_DIR="$HOME_DIR/$HOOKS_DIR" ;; esac
+  TARGET="$HOOKS_DIR/pre-commit"
+  mkdir -p "$HOOKS_DIR" || exit 1
+  if _exists "$TARGET" && ! cmp -s "$SRC_HOOK" "$TARGET" && ! grep -qxF "$HOOK_MARKER" "$TARGET" 2>/dev/null; then
+    if _exists "$TARGET.local"; then
+      _hb="$(_backup_name "$TARGET")"
+      mv "$TARGET" "$_hb" || exit 1
+      echo "bootstrap: pre-commit.local already exists; the foreign pre-commit was moved to $_hb"
+    else
+      mv "$TARGET" "$TARGET.local" || exit 1
+      echo "bootstrap: kept the existing pre-commit hook as pre-commit.local (chained)"
+    fi
+  fi
+  if cmp -s "$SRC_HOOK" "$TARGET"; then
+    [ -x "$TARGET" ] || chmod 0755 "$TARGET" || exit 1
+    echo "bootstrap: pre-commit hook up to date ($TARGET)"
+  else
+    # Replace the directory entry itself (never write through a symlink).
+    _tmp="$HOOKS_DIR/.pre-commit.bootstrap.$$"
+    cp "$SRC_HOOK" "$_tmp" && chmod 0755 "$_tmp" && mv -f "$_tmp" "$TARGET" \
+      || { rm -f "$_tmp"; echo "bootstrap: could not install $TARGET" >&2; exit 1; }
+    echo "bootstrap: installed pre-commit hook ($TARGET)"
+  fi
+fi
+
+# ── 6. Shell hooks executable; both resolvers resolve THIS checkout ──────────
+for _f in "$HOME_DIR"/hooks/*.sh; do
+  [ -f "$_f" ] && [ ! -x "$_f" ] && chmod +x "$_f"
+done
+echo "bootstrap: verifying the shared resolver"
 EXPECT_REAL="$(_rp "$HOME_DIR")"
 RESOLVED_SH="$(claude_home_resolve 2>/dev/null || true)"
 if [ -z "$RESOLVED_SH" ] || [ "$(_rp "$RESOLVED_SH")" != "$EXPECT_REAL" ]; then
@@ -222,23 +425,31 @@ fi
 echo "  resolver (sh) -> $RESOLVED_SH"
 echo "  resolver (py) -> $RESOLVED_PY"
 
-# ── 6. Final preflight ───────────────────────────────────────────────────────
+# ── 7. doctor, then the entries render/check asked to move into the overlay ──
 # Run doctor via `bash` so a missing executable bit (e.g. a zip checkout) is not
-# load-bearing. When RUN_DOCTOR=1, doctor MUST exist — otherwise fail, never
-# silently skip the preflight.
+# load-bearing. When it runs, doctor MUST exist — never silently skip it.
+DOCTOR_OUT=""
+_drc=0
 if [ "$RUN_DOCTOR" -eq 1 ]; then
   if [ ! -f "$SELF_DIR/doctor" ]; then
     echo "bootstrap: scripts/doctor is missing — cannot run the final preflight." >&2
     exit 1
   fi
   echo
-  if ! bash "$SELF_DIR/doctor" --venv "$VENV_DIR"; then
-    echo "bootstrap: doctor reported missing required deps (see above)." >&2
-    exit 1
-  fi
+  DOCTOR_OUT="$(bash "$SELF_DIR/doctor" --venv "$VENV_DIR" 2>&1)"; _drc=$?
+  printf '%s\n' "$DOCTOR_OUT"
+fi
+_MOVES="$(printf '%s\n%s\n' "$RENDER_OUT" "$DOCTOR_OUT" | grep -iE 'move (it|them) into' | awk '!seen[$0]++')"
+if [ -n "$_MOVES" ]; then
+  echo
+  echo "bootstrap: entries to move into settings.machine.json:"
+  printf '%s\n' "$_MOVES"
+fi
+if [ "$_drc" -ne 0 ]; then
+  echo "bootstrap: doctor reported failed required checks (see above)." >&2
+  exit 1
 fi
 
-_BOOTSTRAP_OK=1
 echo
 echo "bootstrap: SUCCESS — the harness is set up. Start Claude Code with: claude"
 exit 0

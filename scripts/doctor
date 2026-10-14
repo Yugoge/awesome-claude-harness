@@ -19,6 +19,8 @@
 #   - the harness venv         (<home>/venv with a python interpreter)
 #   - the manifest packages    (requirements.txt: pytest, jsonschema, pyyaml)
 #   - the shared resolver       (hooks/lib/claude_home.{sh,py} resolve cleanly)
+#   - the settings wiring       (scripts/install/render-settings check: hook paths,
+#                                settings filter, protected-runtime file)
 set -uo pipefail
 
 # Resolve the harness home from THIS script's own location (it lives at
@@ -43,7 +45,7 @@ while [ $# -gt 0 ]; do
     --venv) VENV_DIR="${2:?--venv needs a directory}"; shift 2 ;;
     --strict) STRICT=1; shift ;;
     --verbose) VERBOSE=1; shift ;;
-    -h|--help) sed -n '2,20p' "${BASH_SOURCE[0]}"; exit 0 ;;
+    -h|--help) awk 'NR == 1 { next } /^#/ { print; next } { exit }' "${BASH_SOURCE[0]}"; exit 0 ;;
     *) echo "doctor: unknown argument '$1'" >&2; exit 1 ;;
   esac
 done
@@ -135,6 +137,17 @@ if [ -x "$LIB_DIR/claude_home.py" ] && "$RESOLVER_PY" "$LIB_DIR/claude_home.py" 
   ok "hooks/lib/claude_home.py resolves the harness home"
 else
   miss "hooks/lib/claude_home.py cannot resolve the harness home — repair the install"
+fi
+echo
+
+# The settings logic lives in render-settings; doctor only counts its verdict.
+echo "Settings wiring (scripts/install/render-settings check):"
+if [ ! -f "$HOME_DIR/scripts/install/render-settings" ]; then
+  miss "scripts/install/render-settings is missing — restore it from the checkout, then run scripts/bootstrap"
+elif python3 "$HOME_DIR/scripts/install/render-settings" check; then
+  ok "render-settings check passed"
+else
+  miss "render-settings check failed (see above) — run scripts/bootstrap to repair"
 fi
 echo
 
