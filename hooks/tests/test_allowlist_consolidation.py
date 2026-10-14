@@ -1301,14 +1301,16 @@ class TestArgumentLessAllowUnrestrictedGrant(unittest.TestCase):
         self.assertFalse(os.path.exists(sentinel))
         self.assertFalse(os.path.exists(legacy))
 
-        consent_log = Path(os.environ.get("HOME", "/root")) / ".claude" / "logs" / "bash-consent.log"
-        log_offset = consent_log.stat().st_size if consent_log.exists() else 0
-
         with tempfile.TemporaryDirectory() as temp:
             env = self._live_env(temp, task_id)
+            # The consent log is runtime state under the configuration directory.
+            consent_log = Path(env["CLAUDE_CONFIG_DIR"]) / "logs" / "bash-consent.log"
             result = self._consent(
                 {"prompt": "/allow", "session_id": session_id}, env
             )
+            # Slice by BYTES: the log carries multibyte comments.
+            appended = (consent_log.read_bytes().decode("utf-8", errors="replace")
+                        if consent_log.exists() else None)
 
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertNotIn("configured Python interpreter is unavailable", result.stderr)
@@ -1344,12 +1346,7 @@ class TestArgumentLessAllowUnrestrictedGrant(unittest.TestCase):
         )
 
         # (requirement 5) the match-all bypass is distinguishable in the audit log.
-        if consent_log.exists():
-            # Slice by BYTES: the log carries multibyte comments, so a
-            # character-offset slice would silently read past the end.
-            appended = consent_log.read_bytes()[log_offset:].decode(
-                "utf-8", errors="replace"
-            )
+        if appended is not None:
             self.assertIn("GRANTED_MATCH_ALL", appended)
             self.assertIn("scope=unrestricted", appended)
             self.assertIn(f"sid={session_id}", appended)
