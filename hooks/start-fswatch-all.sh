@@ -48,18 +48,18 @@ for repo in "${REPOS[@]}"; do
     fi
 
     # Start fswatch
-    log_file="$HOME/.claude/logs/fswatch-$repo_name.log"
-    pid_file="$HOME/.claude/logs/fswatch-$repo_name.pid"
+    log_file="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/logs/fswatch-$repo_name.log"
+    pid_file="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/logs/fswatch-$repo_name.pid"
 
     # Create logs directory if not exists
-    mkdir -p "$HOME/.claude/logs"
+    mkdir -p "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/logs"
 
     # Remove old lock file if exists
     . "$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)/lib/harness_state_dir.sh" 2>/dev/null \
       || harness_state_dir() { printf '%s\n' /tmp; }
     rm -f "$(harness_state_dir)/git-fswatch-${USER}.lock" 2>/dev/null
 
-    nohup bash ~/.claude/hooks/git-fswatch.sh "$repo" \
+    nohup bash "$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)/git-fswatch.sh" "$repo" \
         > "$log_file" 2>&1 &
 
     pid=$!

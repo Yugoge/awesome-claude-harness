@@ -31,7 +31,7 @@ fi
 
 # Source and delegate to the shared library
 # shellcheck source=lib/checkpoint-core.sh
-. "$HOME/.claude/hooks/lib/checkpoint-core.sh"
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)/lib/checkpoint-core.sh"
 
 if write_checkpoint "" "stop hook: auto-commit.sh"; then
   TIMESTAMP=$(date +"%Y-%m-%d %H:%M:%S")

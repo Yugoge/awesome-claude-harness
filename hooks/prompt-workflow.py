@@ -174,7 +174,7 @@ def extract_command_name(user_input: str) -> str:
 
 
 def official_todos_path(session_id: str) -> Path:
-    return Path.home() / '.claude' / 'todos' / f'{session_id}-agent-{session_id}.json'
+    return Path(os.environ.get('CLAUDE_CONFIG_DIR') or Path.home() / '.claude') / 'todos' / f'{session_id}-agent-{session_id}.json'
 
 
 def workflow_bookmark_path(session_id: str) -> Path:
@@ -330,7 +330,7 @@ def resolve_command_spec_path(cmd_name: str) -> Path | None:
 def run_todo_script(cmd_name: str, user_input: str = "") -> list:
     todo_script = PROJECT_DIR / 'scripts' / 'todo' / f'{cmd_name}.py'
     if not todo_script.exists():
-        global_todo = Path.home() / '.claude' / 'scripts' / 'todo' / f'{cmd_name}.py'
+        global_todo = Path(__file__).resolve().parent.parent / 'scripts' / 'todo' / f'{cmd_name}.py'
         if global_todo.exists():
             todo_script = global_todo
         else:
@@ -1530,13 +1530,13 @@ def _init_dev_registry(cmd_name: str, user_input: str, claude_session_id: str, p
     _graphify_enabled = os.environ.get('CLAUDE_GRAPHIFY_ENABLED', 'auto').strip().lower() != '0'
     import shutil as _shutil
     _graphify_bin = os.environ.get('GRAPHIFY_BIN', '').strip() or _shutil.which('graphify')
-    # Fallback to the global tool install (~/.claude/venv) so the sentinel is
+    # Fallback to the harness tool install (<harness home>/venv) so the sentinel is
     # written whenever graphify is installed on disk — independent of whether the
     # GRAPHIFY_BIN env var has been injected into this process yet (settings.json
     # env changes only take effect on session restart). This keeps /dev
     # graphify-aware in ANY repo from one global install, with no per-repo setup.
     if not _graphify_bin:
-        _global_gfx = Path.home() / '.claude' / 'venv' / 'bin' / 'graphify'
+        _global_gfx = Path(__file__).resolve().parent.parent / 'venv' / 'bin' / 'graphify'
         if _global_gfx.exists():
             _graphify_bin = str(_global_gfx)
     _write_graphify_sentinel = _graphify_enabled and bool(_graphify_bin)

@@ -15,7 +15,7 @@ set -uo pipefail
 # (exec >/dev/null at top; not just at the end). Failures still reach stderr.
 exec >/dev/null
 
-HOOKS_DIR_DEFAULT="${HOME}/.claude/hooks"
+HOOKS_DIR_DEFAULT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." 2>/dev/null && pwd)/hooks"
 HOOKS_DIR="${HOOKS_DIR_DEFAULT}"
 
 while [[ $# -gt 0 ]]; do
@@ -31,8 +31,8 @@ done
 
 # Venv-presence guard (E-M5): placed after arg parsing (--help already handled above)
 # but before emit_advisory function definition (direct echo required here).
-# CLAUDE_HOME portability: respect env var override for non-default venv locations.
-CLAUDE_HOME="${CLAUDE_HOME:-$HOME/.claude}"
+# CLAUDE_HOME portability: respect env var override, else this script's install location.
+CLAUDE_HOME="${CLAUDE_HOME:-${HOOKS_DIR_DEFAULT%/hooks}}"
 VENV_ACTIVATE="$CLAUDE_HOME/venv/bin/activate"
 if [[ ! -f "$VENV_ACTIVATE" ]]; then
   echo "canary-verify[ADVISORY]: venv absent: $VENV_ACTIVATE — skipping hook verification" >&2

@@ -109,7 +109,7 @@ def _load_commit_repos_module() -> ModuleType:
 def _load_close_verdict_module(project_root: Path) -> ModuleType:
     candidates = [
         project_root / "hooks" / "lib" / "close-verdict.py",
-        Path.home() / ".claude" / "hooks" / "lib" / "close-verdict.py",
+        _scripts_dir().parent / "hooks" / "lib" / "close-verdict.py",
     ]
     for candidate in candidates:
         if candidate.is_file():

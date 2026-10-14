@@ -12,7 +12,7 @@
 set -euo pipefail
 
 SCRIPT_NAME="$(basename "$0")"
-LIFECYCLE_FILE_DEFAULT="${HOME}/.claude/logs/lifecycle.jsonl"
+LIFECYCLE_FILE_DEFAULT="${CLAUDE_CONFIG_DIR:-${HOME}/.claude}/logs/lifecycle.jsonl"
 
 usage() {
   echo "Usage: ${SCRIPT_NAME} --agent <name> [--lifecycle-file <path>]" >&2
@@ -67,7 +67,7 @@ if ! flock -s -w "${LOCK_TIMEOUT}" 8; then
   exit 1
 fi
 
-( source ~/.claude/venv/bin/activate && python3 - "${LIFECYCLE_FILE}" "${AGENT}" <<'PYEOF'
+( source "$(dirname "${BASH_SOURCE[0]}")/../venv/bin/activate" && python3 - "${LIFECYCLE_FILE}" "${AGENT}" <<'PYEOF'
 import hashlib
 import json
 import sys

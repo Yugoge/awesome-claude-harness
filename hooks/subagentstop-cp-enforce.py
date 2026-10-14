@@ -31,7 +31,7 @@ import sys
 def _emit_advisory(records: list) -> None:
     """Best-effort append to the advisory log. Never affects exit."""
     try:
-        logdir = os.path.expanduser("~/.claude/logs")
+        logdir = os.path.join(os.environ.get("CLAUDE_CONFIG_DIR") or os.path.expanduser("~/.claude"), "logs")
         os.makedirs(logdir, exist_ok=True)
         with open(os.path.join(logdir, "cp-enforce-advisory.jsonl"), "a", encoding="utf-8") as f:
             for r in records:

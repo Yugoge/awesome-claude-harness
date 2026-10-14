@@ -58,7 +58,7 @@ if [ "$TOTAL" -ge "$CHECKPOINT_THRESHOLD" ]; then
 
   # Source lib and delegate. Lib writes to refs/checkpoints/<branch>, never HEAD.
   # shellcheck source=lib/checkpoint-core.sh
-  . "$HOME/.claude/hooks/lib/checkpoint-core.sh"
+  . "$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)/lib/checkpoint-core.sh"
 
   if write_checkpoint "$GIT_DIR" "posttool threshold (${TOTAL} files, threshold=${CHECKPOINT_THRESHOLD})"; then
     if [ "$SILENT_MODE" != "1" ]; then

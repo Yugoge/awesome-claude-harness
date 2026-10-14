@@ -30,7 +30,7 @@ from pathlib import Path
 
 
 def _official_todos_path(session_id: str) -> Path:
-    return Path.home() / ".claude" / "todos" / f"{session_id}-agent-{session_id}.json"
+    return Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude") / "todos" / f"{session_id}-agent-{session_id}.json"
 
 
 def _workflow_bookmark_path(session_id: str) -> Path:

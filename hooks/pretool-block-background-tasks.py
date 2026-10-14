@@ -92,7 +92,7 @@ def _spec_interview_active(session_id: str) -> bool:
         if not isinstance(bookmark, dict) or bookmark.get("command") != "spec":
             return False
         todos = _load_json(
-            Path.home() / ".claude" / "todos" / f"{session_id}-agent-{session_id}.json"
+            Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude") / "todos" / f"{session_id}-agent-{session_id}.json"
         )
         if not isinstance(todos, list) or not todos:
             return False

@@ -23,7 +23,7 @@ STATUS_SYMBOL = {'completed': '[x]', 'in_progress': '[~]', 'pending': '[ ]'}
 def run_todo_script(cmd_name: str, project_dir: Path, prompt: str = '') -> list:
     todo_script = project_dir / 'scripts' / 'todo' / f'{cmd_name}.py'
     if not todo_script.exists():
-        global_todo = Path.home() / '.claude' / 'scripts' / 'todo' / f'{cmd_name}.py'
+        global_todo = Path(__file__).resolve().parent.parent / 'scripts' / 'todo' / f'{cmd_name}.py'
         if global_todo.exists():
             todo_script = global_todo
         else:
@@ -55,7 +55,7 @@ def format_checklist(command: str, todos: list, blocking_count: int) -> str:
 
 
 def official_todos_path(session_id: str) -> Path:
-    return Path.home() / '.claude' / 'todos' / f'{session_id}-agent-{session_id}.json'
+    return Path(os.environ.get('CLAUDE_CONFIG_DIR') or Path.home() / '.claude') / 'todos' / f'{session_id}-agent-{session_id}.json'
 
 
 def main():

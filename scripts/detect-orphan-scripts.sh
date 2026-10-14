@@ -7,13 +7,14 @@ set -euo pipefail
 
 # Parameters
 PROJECT_ROOT="${1:-.}"
+HARNESS_HOME="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"  # install location, resolved before the cd below
 
 # Navigate to project root
 cd "$PROJECT_ROOT"
 
 # Get .claude directory (check both local and global)
 CLAUDE_DIR="${PROJECT_ROOT}/.claude"
-GLOBAL_CLAUDE_DIR="$HOME/.claude"
+GLOBAL_CLAUDE_DIR="$HARNESS_HOME"
 
 # Patterns indicating one-time fix scripts
 ONE_TIME_PATTERNS=("-fix" "-v2" "-patch" "-migration" "-cleanup" "-repair" "-reextract" "-batch")

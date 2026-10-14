@@ -55,6 +55,7 @@ if [[ ! -d "$PROJECT_ROOT" ]]; then
     exit 3
 fi
 
+HARNESS_HOME="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"  # install location, resolved before the cd below
 cd "$PROJECT_ROOT"
 
 # Ensure file exists
@@ -187,7 +188,7 @@ echo ""
 
 CONFIG_FILES=(
     ".claude/settings.json"
-    "$HOME/.claude/settings.json"
+    "$HARNESS_HOME/settings.json"
     "package.json"
     "Makefile"
     "makefile"

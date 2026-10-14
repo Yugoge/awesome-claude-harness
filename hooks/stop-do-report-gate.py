@@ -55,7 +55,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from lib.harness_state_dir import harness_state_dir  # noqa: E402
 
 MAX_BLOCKS = 2
-ADVISORY_LOG = Path.home() / ".claude" / "logs" / "do-report-gate-advisory.jsonl"
+ADVISORY_LOG = Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude") / "logs" / "do-report-gate-advisory.jsonl"
 TERMINAL_STATUSES = {"completed", "blocked"}
 
 # Identifier-safety pattern reused from subagentstop-e2e-enforce.py: an unsafe/

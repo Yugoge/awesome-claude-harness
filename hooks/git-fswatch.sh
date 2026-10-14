@@ -24,7 +24,7 @@ REPO_NAME=$(basename "$WATCH_PATH")
 DEBOUNCE_DELAY=${FSWATCH_DEBOUNCE:-12}       # Debounce delay (seconds, ensures <6 pushes/min GitHub limit)
 AUTO_PULL_INTERVAL=${FSWATCH_PULL_INTERVAL:-300}  # Auto pull interval (seconds, default 5 minutes)
 MAX_RETRIES=${FSWATCH_MAX_RETRIES:-3}        # Maximum retry attempts
-LOG_FILE="${HOME}/.claude/logs/git-fswatch-${REPO_NAME}.log"
+LOG_FILE="${CLAUDE_CONFIG_DIR:-${HOME}/.claude}/logs/git-fswatch-${REPO_NAME}.log"
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)/lib/harness_state_dir.sh" 2>/dev/null \
   || harness_state_dir() { printf '%s\n' /tmp; }
 LOCK_FILE="$(harness_state_dir)/git-fswatch-${USER}-${REPO_NAME}.lock"
@@ -271,8 +271,8 @@ safe_pull() {
 # Source the shared checkpoint library once (idempotent)
 if [ -z "${_CHECKPOINT_CORE_SOURCED:-}" ]; then
     # shellcheck source=lib/checkpoint-core.sh
-    if [ -f "$HOME/.claude/hooks/lib/checkpoint-core.sh" ]; then
-        . "$HOME/.claude/hooks/lib/checkpoint-core.sh"
+    if [ -f "$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)/lib/checkpoint-core.sh" ]; then
+        . "$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)/lib/checkpoint-core.sh"
         _CHECKPOINT_CORE_SOURCED=1
     fi
 fi

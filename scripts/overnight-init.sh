@@ -219,7 +219,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd -P)"
 # failure, and refusing it would PREVENT Step 1 from succeeding on hosts without
 # the managed venv. The fail-closed half — abort when NO interpreter can produce
 # the list — is the guard below and is unconditional.
-INIT_PYTHON="${CLAUDE_HOME:-$HOME/.claude}/venv/bin/python3"
+INIT_PYTHON="${CLAUDE_HOME:-$SCRIPT_DIR/..}/venv/bin/python3"
 [[ -x "$INIT_PYTHON" ]] || INIT_PYTHON="$(command -v python3 || true)"
 [[ -n "$INIT_PYTHON" ]] || _die "no python3 interpreter available to read CP_AGENTS"
 AGENT_LIST="$("$INIT_PYTHON" - "$SCRIPT_DIR/../hooks/pretool-cp-checkin.py" <<'PYEOF' || true
