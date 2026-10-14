@@ -123,32 +123,44 @@ if ! gh auth status > /dev/null 2>&1; then
   exit 0
 fi
 
-# Ask whether to create remote repository (controlled by environment variable)
-# Set CLAUDE_AUTO_CREATE_REPO=true to auto-create
-# Set CLAUDE_AUTO_CREATE_REPO=false to skip
+# Remote repository step (environment variables):
+#   CLAUDE_AUTO_CREATE_REPO  unset or "ask": print the manual command and skip;
+#                            {1,true,TRUE,yes,YES} (the gate set above): create it;
+#                            anything else: skip.
+#   GIT_AUTO_PUSH            push the initial commit only when exactly "1";
+#                            otherwise create without pushing (push later with /push).
 AUTO_CREATE=${CLAUDE_AUTO_CREATE_REPO:-ask}
-
-if [ "$AUTO_CREATE" = "false" ]; then
-  echo -e "${YELLOW}⚠️  Auto-create disabled. Skipping GitHub repository creation.${NC}"
-  exit 0
+CREATE_ARGS=(--private --source=. --remote=origin)
+PUSH_NOTE="Initial commit not pushed: automatic push is off (enable with GIT_AUTO_PUSH=1). Push with /push or: git push -u origin HEAD"
+if [ "${GIT_AUTO_PUSH:-}" = "1" ]; then
+  CREATE_ARGS+=(--push)
+  PUSH_NOTE=""
 fi
+MANUAL_CMD="gh repo create \"$REPO_NAME\" ${CREATE_ARGS[*]}"
 
-if [ "$AUTO_CREATE" = "ask" ]; then
-  echo -e "${BLUE}❓ Create GitHub repository '$REPO_NAME'? (set CLAUDE_AUTO_CREATE_REPO env var to automate)${NC}"
-  echo -e "${YELLOW}   Skipping for now. Run manually: gh repo create \"$REPO_NAME\" --private --source=. --remote=origin --push${NC}"
-  exit 0
-fi
+case "$AUTO_CREATE" in
+  1|true|TRUE|yes|YES) ;;
+  ask)
+    echo -e "${BLUE}❓ Create GitHub repository '$REPO_NAME'? (set CLAUDE_AUTO_CREATE_REPO env var to automate)${NC}"
+    echo -e "${YELLOW}   Skipping for now. Run manually: $MANUAL_CMD${NC}"
+    [ -z "$PUSH_NOTE" ] || echo -e "${YELLOW}   $PUSH_NOTE${NC}"
+    exit 0 ;;
+  *)
+    echo -e "${YELLOW}⚠️  Auto-create disabled. Skipping GitHub repository creation.${NC}"
+    exit 0 ;;
+esac
 
 # Auto-create GitHub repository
 echo -e "${BLUE}🌐 Creating GitHub repository: $REPO_NAME${NC}"
 
-# Create private repository and push
-if gh repo create "$REPO_NAME" --private --source=. --remote=origin --push > /dev/null 2>&1; then
+# Create private repository (pushed only when GIT_AUTO_PUSH=1 added --push)
+if gh repo create "$REPO_NAME" "${CREATE_ARGS[@]}" > /dev/null 2>&1; then
   USERNAME=$(gh api user -q .login)
   echo -e "${GREEN}✅ Repository created: https://github.com/$USERNAME/$REPO_NAME${NC}"
+  [ -z "$PUSH_NOTE" ] || echo -e "${YELLOW}   $PUSH_NOTE${NC}"
 else
   echo -e "${RED}❌ Failed to create GitHub repository.${NC}"
-  echo -e "${YELLOW}   You can create it manually: gh repo create \"$REPO_NAME\" --private --source=. --remote=origin --push${NC}"
+  echo -e "${YELLOW}   You can create it manually: $MANUAL_CMD${NC}"
   exit 1
 fi
 
