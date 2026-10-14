@@ -4,7 +4,10 @@ These are the discriminating controls for the "Make CI FAIL (not advisory) on
 /root, author-home paths, the tmpfs workspace path, and other personal residue
 in public-core" requirement:
 
-  * the maintainer workspace/tmpfs marker HARD-FAILS (it was advisory-only);
+  * a maintainer workspace/tmpfs path HARD-FAILS (it was advisory-only). The gate
+    no longer hard-codes that personal value (R7b): the machine owner lists it in
+    the untracked private-literal list, so these controls write a synthetic stand-in
+    into a list inside their own copied tree;
   * generic author-home classes (/root/, /home/<user>/, /Users/<User>/) hard-fail;
   * the exemption mechanism is a SET, not an aggregate count — the delete-one /
     add-one constant-count scenario must still fail;
@@ -30,7 +33,11 @@ import pytest
 REPO = Path(__file__).resolve().parent.parent
 CHECKER = "scripts/check-public-core.sh"
 ALLOWLIST = "policies/public-core-residue-allowlist.v1.json"
-WS_MARKER = "/dev/shm/" + "dev-workspace/dot-claude"  # split so this file is not itself residue
+PRIVATE_LIST = "private-literals.txt"   # machine-local private-literal list (R7b), never tracked
+# A SYNTHETIC workspace path standing in for the maintainer's real one (a personal value
+# that belongs only in a machine's private list). Split so this file never carries it
+# whole: the private-literal rule scans every tracked file, this one included.
+WS_MARKER = "/dev/shm/" + "demo-workspace/demo-harness"
 
 
 def _tracked_files() -> list[str]:
@@ -39,13 +46,14 @@ def _tracked_files() -> list[str]:
     The fixture must mirror the tree as it would be COMMITTED, not merely what is
     already in the index: a newly added, not-yet-staged file (the residue
     allowlist itself, on the cycle that introduces it) is part of the state the
-    gate has to run against.
+    gate has to run against. The machine's own private-literal list is never part
+    of that tree, ignored or not.
     """
     tracked = subprocess.run(["git", "-C", str(REPO), "ls-files"],
                              capture_output=True, text=True).stdout.split()
     untracked = subprocess.run(["git", "-C", str(REPO), "ls-files", "--others", "--exclude-standard"],
                                capture_output=True, text=True).stdout.split()
-    return sorted(set(tracked) | set(untracked))
+    return sorted((set(tracked) | set(untracked)) - {PRIVATE_LIST})
 
 
 @pytest.fixture(scope="module")
@@ -103,6 +111,21 @@ def _run(root: Path, *args: str) -> subprocess.CompletedProcess:
 
 def _stage(root: Path) -> None:
     subprocess.run(["git", "-C", str(root), "add", "-A"], check=True)
+
+
+def _private_list(root: Path, *literals: str) -> None:
+    """Write a private-literal list into the copied tree (literals from list line 2 on),
+    excluded from staging exactly as the harness .gitignore keeps the real one untracked."""
+    exclude = root / ".git" / "info" / "exclude"
+    exclude.parent.mkdir(parents=True, exist_ok=True)
+    _append(exclude, f"\n/{PRIVATE_LIST}\n")
+    (root / PRIVATE_LIST).write_text(
+        "# private values of this machine (synthetic)\n" + "".join(f"{lit}\n" for lit in literals),
+        encoding="utf8")
+
+
+def _private_literal_hits(stdout: str) -> list[str]:
+    return [line for line in stdout.splitlines() if line.startswith("FAIL: private literal")]
 
 
 def _ledger_public_core(root: Path) -> list[str]:
@@ -163,21 +186,51 @@ def test_baseline_is_clean(pristine):
 
 @pytest.mark.parametrize("prefix", _ledger_public_core(REPO))
 def test_workspace_marker_hard_fails_per_ledger_prefix(pristine, tmp_path, prefix):
-    """AC5: the tmpfs marker hard-fails, in EVERY public-core ledger prefix."""
+    """AC5, re-homed by R7b: the tmpfs workspace path hard-fails, in EVERY public-core
+    ledger prefix, once it is listed in the machine's private-literal list (the gate
+    no longer hard-codes it). The failure names the file and the list line, never the
+    literal. The controls key on the rule's own FAIL lines, so the verdict is causally
+    attributable to the injection whatever else the tree carries."""
     root = _copy(pristine, tmp_path)
+    _private_list(root, WS_MARKER)
     victim = _victim(root, prefix)
-    assert _run(root).returncode == 0, "baseline control must be clean"
+    before = _run(root)
+    assert not _private_literal_hits(before.stdout), "baseline control: no listed literal before the injection"
     marker_line = f"\n# injected marker {WS_MARKER}/x\n"
     _append(victim, marker_line)
     _stage(root)
     r = _run(root)
-    assert r.returncode != 0, f"tmpfs marker not gated in {prefix}"
+    assert r.returncode != 0, f"listed workspace marker not gated in {prefix}"
     rel = str(victim.relative_to(root))
-    assert rel in r.stdout, "failure output must name the injected file"
-    assert "workspace-path residue" in r.stdout, "failure must identify the marker class"
+    hits = _private_literal_hits(r.stdout)
+    assert any(f"-> {rel}:" in h for h in hits), "failure output must name the injected file"
+    assert all(f"({PRIVATE_LIST} line 2)" in h for h in hits), "failure must name the list line"
+    assert WS_MARKER not in r.stdout + r.stderr, "the listed literal must never be printed"
     _write(victim, victim.read_text(encoding="utf8").replace(marker_line, ""))
     _stage(root)
-    assert _run(root).returncode == 0, "removing the injection must restore exit 0"
+    after = _run(root)
+    assert not _private_literal_hits(after.stdout), "removing the injection must clear the rule"
+    assert after.returncode == before.returncode, "removing the injection must restore the prior verdict"
+
+
+def test_listed_workspace_marker_fails_in_archive_mode_without_exemption(pristine, staged, tmp_path):
+    """R7b archive limb: with a list present the same rule runs over every archive
+    member. The retired workspace-marker gate exempted the ledger; the private-literal
+    rule exempts no path, so a listed literal in PUBLIC-CORE.md is caught as well."""
+    root = _copy(pristine, tmp_path)
+    _private_list(root, WS_MARKER)
+    stage = _copy_stage(staged, tmp_path)
+    assert not _private_literal_hits(_run_archive(root, stage).stdout), "baseline control"
+    victims = ("agents/dev.md", "PUBLIC-CORE.md")
+    for rel in victims:
+        with (stage / rel).open("a", encoding="utf8") as fh:
+            fh.write(f"\nInjected marker {WS_MARKER}/x\n")
+    r = _run_archive(root, stage)
+    assert r.returncode != 0, "listed workspace marker shipped undetected in the archive"
+    hits = _private_literal_hits(r.stdout)
+    for rel in victims:
+        assert any(f"-> {rel}:" in h for h in hits), f"{rel} not reported"
+    assert WS_MARKER not in r.stdout + r.stderr, "the listed literal must never be printed"
 
 
 @pytest.mark.parametrize(
@@ -546,13 +599,18 @@ def test_emptying_the_hard_marker_exemption_turns_the_archive_gate_red(pristine,
 
 def test_hard_marker_exemption_is_its_own_key_with_its_own_rationale(pristine):
     """AC-REL-4 limb d: the consulted key is hard-marker-scoped, and its rationale is
-    not a copy of the workspace-marker rationale (which describes another class)."""
+    not a copy of the workspace-marker rationale (which describes another class).
+
+    R7b retired the hard-coded workspace-marker gate, so the gate no longer consults
+    the workspace_marker_exempt_* keys at all (the private-literal rule has no per-path
+    exemption); where the manifest still carries them, the distinctness check stands."""
     doc = json.loads((pristine / "release-membership.v1.json").read_text(encoding="utf8"))
     assert "hard_marker_exempt_paths" in doc, "hard markers need their own exemption key"
     assert "hard_marker_exempt_rationale" in doc
     checker = (pristine / CHECKER).read_text(encoding="utf8")
     assert "hard_marker_exempt_paths" in checker, "the gate must read the hard-marker key"
-    ws_texts = set(doc["workspace_marker_exempt_rationale"].values())
+    assert "workspace_marker_exempt_paths" not in checker, "the retired workspace-marker key is still consulted"
+    ws_texts = set(doc.get("workspace_marker_exempt_rationale", {}).values())
     for path, text in doc["hard_marker_exempt_rationale"].items():
         assert text.strip(), f"{path} exemption carries no rationale"
         assert text not in ws_texts, (
