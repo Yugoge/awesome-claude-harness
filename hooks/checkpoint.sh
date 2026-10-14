@@ -4,8 +4,8 @@
 # Location: ~/.claude/hooks/checkpoint.sh
 # Usage: bash ~/.claude/hooks/checkpoint.sh [<message>]
 #
-# The working branch HEAD is never moved. The lib performs a rate-limited
-# background push of the checkpoint ref (no -f).
+# The working branch HEAD is never moved. The checkpoint ref stays local unless
+# GIT_AUTO_PUSH=1, in which case the lib pushes it in the background (rate-limited, no -f).
 
 # Colors
 GREEN='\033[0;32m'
@@ -76,5 +76,9 @@ echo ""
 echo "Recover a file:"
 echo "  git checkout ${REF} -- <path>"
 echo ""
-echo -e "${YELLOW}ℹ${NC}  Background push of ${REF} is rate-limited (1/30s)."
-echo "   See ~/.claude/logs/checkpoint-push.log for push errors."
+if [ "${GIT_AUTO_PUSH:-}" = "1" ]; then
+  echo -e "${YELLOW}ℹ${NC}  Background push of ${REF} is rate-limited (1/30s)."
+  echo "   See ~/.claude/logs/checkpoint-push.log for push errors."
+else
+  echo -e "${YELLOW}ℹ${NC}  ${REF} is local only: automatic push is off (enable with export GIT_AUTO_PUSH=1)."
+fi
