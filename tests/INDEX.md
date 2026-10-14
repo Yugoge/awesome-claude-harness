@@ -154,6 +154,7 @@ tests/
 ├── `test_stage_owned_hunks_boundary.py` - content-anchor-retry boundary/coordinate-space defect (task 20260912-015952)
 ├── `test_subagentstop_e2e_enforce.py` - Backlog: dev-20260923-083731 -- widen _find_latest_qa_report's correlation
 ├── `test_todo_md_sync.py` - Regression tests for the session-start todo/Markdown drift detector.
+├── `test_tool_policy_note_fail_closed.py` - An exception inside the tool-policy refusal note never turns exit 2 into an allow
 ├── `TESTING.md` - Test Topology & Runner Map (authoritative)
 ├── `verify-stop-spec-session-isolation.sh` - QA verification harness for stop-spec-coverage-enforce.py session isolation fix.
 └── `ws2_zero_literal_gate.py` - Scans the EXPLICITLY-defined load-bearing surfaces of a rendered fresh clone with
