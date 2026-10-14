@@ -273,6 +273,22 @@ def test_clean_strips_cli_owned_keys_without_overlay(sb):
     assert proc.returncode == 0 and proc.stdout == base
 
 
+
+def test_check_staged_refuses_committed_machine_keys_without_overlay(sb):
+    """The CI backstop: no overlay, base == HEAD, yet a committed CLI-owned key or the
+    machine-only env.CLAUDE_HOME is still refused (they are never part of the clean form)."""
+    for extra in ({"model": "demo-model"}, {"env": {"CLAUDE_HOME": "/opt/demo/claude-harness"}}):
+        home = make_home(sb, "committed-%s" % next(iter(extra)))
+        doc = clean_form()
+        for key, value in extra.items():
+            doc[key] = dict(doc.get(key, {}), **value) if isinstance(value, dict) else value
+        init_repo(sb, home, canon(doc))
+        proc = run_tool(sb, home, "check", "--staged")
+        assert proc.returncode == 1, (extra, proc.stdout, proc.stderr)
+    clean_home = make_home(sb, "committed-clean")
+    init_repo(sb, clean_home, canon(clean_form()))
+    assert run_tool(sb, clean_home, "check", "--staged").returncode == 0
+
 @pytest.mark.parametrize("overlay_bytes, needle", [
     (b"{not json", "not a valid JSON object"),
     (b"[1, 2]\n", "not a valid JSON object"),
@@ -786,7 +802,7 @@ def test_round_trip_properties_randomised(sb):
 
     checked = 0
     for _ in range(400):
-        base = json.loads(canon(settings_doc(cli=True)))
+        base = json.loads(canon(settings_doc(cli=False)))
         over = overlay()
         tool._validate_layer(tool._layer_of(over), "overlay")
         layers = tool.layers_of(over)

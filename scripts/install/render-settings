@@ -415,8 +415,12 @@ def unmerge_all(y, layers, base):
                 del hooks[event]
         if not hooks and "hooks" not in base:
             del y["hooks"]
+    # Machine-only by definition: never part of the clean form, whatever HEAD holds, so a
+    # committed one is caught by `check --staged` even in CI, where there is no overlay.
     for key in CLI_OWNED:
-        _restore(y, base, key)
+        y.pop(key, None)
+    if isinstance(y.get("env"), dict):
+        y["env"].pop("CLAUDE_HOME", None)
     return y
 
 

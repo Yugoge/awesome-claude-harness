@@ -271,7 +271,7 @@ def glyph_facts() -> dict:
 
 def measure_deny_rules() -> tuple[int, int, str] | None:
     """(total_deny, git_related_deny, source). None when no source is readable."""
-    for cand in ("settings.json", "settings.template.json"):
+    for cand in ("settings.json",):
         p = REPO_ROOT / cand
         if not p.is_file():
             continue
