@@ -122,7 +122,7 @@ tests/
 ├── `test_dev_artifact_chain_consumer_contracts.py` - Contract tests for shared /dev artifact-chain consumers.
 ├── `test_empty_old_string_diagnosis.py` - A real cycle emitted twenty-one ledger entries whose `old` was the empty string
 ├── `test_generate_repair_map.py` - Covers AC-L8-01..04 and AC-L8-13 (docs/dev/acceptance-criteria-20260930-132644-l8.json)
-├── `test_git_auto_push_opt_in.py` - GIT_AUTO_PUSH opt-in: checkpoint, post-commit, combined LFS hook and fswatch push only if it is 1
+├── `test_git_auto_push_opt_in.py` - GIT_AUTO_PUSH opt-in: checkpoint, post-commit, combined LFS hook, fswatch and session-git-init push only if it is 1
 ├── `test_git_clean_guard_vectors.py` - The pre-clean WIP snapshot guard (task dev-20260719-150041-c, lane r03-c) is
 ├── `test_graphify_scripts.py` - tests/test_graphify_scripts.py — smoke tests for scripts/graphify_lib.py
 ├── `test_graphify_workflow_contract.py` - tests/test_graphify_workflow_contract.py — contract tests for graphify agent registration
