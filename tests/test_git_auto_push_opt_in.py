@@ -33,8 +33,11 @@ Also pinned here: the shipped settings.json and settings.template.json set
 GIT_AUTO_PUSH to "0"; hooks/checkpoint.sh (/checkpoint) tells the truth about
 the push in both switch states; and hooks/session-git-init.sh (SessionStart),
 which can create a GitHub repository, runs with a stub gh on PATH that logs its
-arguments: it passes --push only when GIT_AUTO_PUSH is "1", and creates a
-repository only when CLAUDE_AUTO_CREATE_REPO is one of its truthy values.
+arguments and, for gh repo create, makes a local bare origin, adds it as the
+remote and pushes to it only on --push: the origin receives the initial commit
+only when GIT_AUTO_PUSH is "1" (whatever command pushes it), gh gets --push only
+then, and a repository is created only when CLAUDE_AUTO_CREATE_REPO is one of its
+truthy values.
 """
 
 import json
@@ -431,11 +434,22 @@ def test_checkpoint_command_message_matches_the_switch(tmp_path, case):
 # ---------------------------------------------------------------------------
 
 # The stub logs one line per call, arguments NUL-separated, and succeeds, so
-# `gh auth status` passes and nothing ever reaches GitHub.
+# `gh auth status` passes and nothing ever reaches GitHub. `gh repo create`
+# acts like the real one with --source=. --remote=origin, against a local bare
+# repository at GH_STUB_ORIGIN: it creates it, adds it as origin and pushes HEAD
+# to it only when --push is passed. Any later push to origin (from the hook or
+# anything else) therefore lands there too.
 GH_STUB = """#!/bin/bash
 printf '%s\\0' "$@" >> "$GH_STUB_LOG"
 printf '\\n' >> "$GH_STUB_LOG"
 if [ "$1" = "api" ]; then echo stub-user; fi
+if [ "$1" = "repo" ] && [ "$2" = "create" ]; then
+  git init -q --bare "$GH_STUB_ORIGIN" || exit 1
+  git remote add origin "$GH_STUB_ORIGIN" || exit 1
+  for arg in "$@"; do
+    if [ "$arg" = "--push" ]; then git push -q -u origin HEAD || exit 1; fi
+  done
+fi
 exit 0
 """
 PROJECT_NAME = "proj"
@@ -446,7 +460,8 @@ ANSI = re.compile(r"\x1b\[[0-9;]*m")
 
 def _run_session_git_init(base: Path, push_case: str, create=None):
     """Run the hook in a fresh non-git directory; return (output, gh calls
-    that create a repository)."""
+    that create a repository, refs of the stub's origin or None if gh never
+    created it)."""
     env = _scratch_env(base, push_case)
     stub_dir = base / "stub-bin"
     stub_dir.mkdir()
@@ -454,8 +469,10 @@ def _run_session_git_init(base: Path, push_case: str, create=None):
     stub.write_text(GH_STUB)
     stub.chmod(0o755)
     log = base / "gh-calls.log"
+    origin = base / "gh-origin.git"
     env["PATH"] = f"{stub_dir}{os.pathsep}{env['PATH']}"
     env["GH_STUB_LOG"] = str(log)
+    env["GH_STUB_ORIGIN"] = str(origin)
     env["CLAUDE_SESSION_GIT_INIT"] = "1"
     if create is not None:
         env["CLAUDE_AUTO_CREATE_REPO"] = create
@@ -469,13 +486,17 @@ def _run_session_git_init(base: Path, push_case: str, create=None):
     lines = log.read_text().split("\n") if log.exists() else []
     calls = [line.split("\0")[:-1] for line in lines if line]
     creates = [call for call in calls if call[:2] == ["repo", "create"]]
-    return output, creates
+    origin_refs = _origin_refs(env, origin) if origin.exists() else None
+    return output, creates, origin_refs
 
 
 @pytest.mark.parametrize("case", CASES, ids=_case_id)
 def test_session_git_init_creates_repo_and_pushes_only_on_opt_in(tmp_path, case):
-    output, creates = _run_session_git_init(tmp_path, case, create="true")
+    output, creates, origin_refs = _run_session_git_init(tmp_path, case, create="true")
     assert len(creates) == 1, f"expected one gh repo create call: {creates}\n{output}"
+    assert origin_refs is not None, output
+    assert bool(origin_refs) == (case == "1"), (
+        f"GIT_AUTO_PUSH {_case_id(case)}: origin refs {origin_refs!r}\n{output}")
     args = creates[0]
     assert args[:3] == ["repo", "create", PROJECT_NAME], args
     assert ("--push" in args) == (case == "1"), (
@@ -486,13 +507,14 @@ def test_session_git_init_creates_repo_and_pushes_only_on_opt_in(tmp_path, case)
 
 @pytest.mark.parametrize("create", CREATE_VALUES)
 def test_session_git_init_creates_for_each_truthy_value(tmp_path, create):
-    _output, creates = _run_session_git_init(tmp_path, "unset", create=create)
+    _output, creates, origin_refs = _run_session_git_init(tmp_path, "unset", create=create)
     assert len(creates) == 1 and "--push" not in creates[0], creates
+    assert origin_refs == "", origin_refs
 
 
 @pytest.mark.parametrize("create", NO_CREATE_VALUES)
 def test_session_git_init_never_creates_for_a_falsy_value(tmp_path, create):
-    output, creates = _run_session_git_init(tmp_path, "1", create=create)
+    output, creates, _ = _run_session_git_init(tmp_path, "1", create=create)
     assert creates == [], f"CLAUDE_AUTO_CREATE_REPO={create!r} created: {creates}"
     assert "Auto-create disabled" in output, output
 
@@ -500,7 +522,7 @@ def test_session_git_init_never_creates_for_a_falsy_value(tmp_path, create):
 @pytest.mark.parametrize("case", ("unset", "1"), ids=_case_id)
 @pytest.mark.parametrize("create", (None, "ask"), ids=("create-unset", "ask"))
 def test_session_git_init_ask_prints_the_command_it_would_run(tmp_path, create, case):
-    output, creates = _run_session_git_init(tmp_path, case, create=create)
+    output, creates, _ = _run_session_git_init(tmp_path, case, create=create)
     assert creates == [], creates
     expected = (f'Run manually: gh repo create "{PROJECT_NAME}" --private '
                 f'--source=. --remote=origin' + (" --push" if case == "1" else ""))
