@@ -34,23 +34,39 @@ the author's machine), it is `private-lab`. "Release-clean" is a higher bar than
 
 ---
 
-## 2. Reference example — `settings.template.json` (public) vs `settings.json` (private)
+## 2. Settings — one tracked clean source, a machine overlay, a git filter
 
-The cleanest illustration of the carve already exists in the tree: the portable seed
-`settings.template.json` is `public-core`. Its counterpart, the live per-install
-`settings.json` (permission allow/deny/ask entries + absolute install-home paths), is
-`private-lab`.
+The carve runs *through* the settings file rather than between two files. The tracked
+`settings.json` is the **clean public form** and the only hand-maintained settings source
+(the former `settings.template.json` seed is retired). It carries no machine value — every
+hook command reaches its file through `${CLAUDE_HOME:-$HOME/.claude}`, and there is no
+install path, no `CLAUDE_HOME`, no personal tool path and no CLI-owned key (`model`,
+`theme`, `tui`, …) — so it is `public-core`.
 
-Roadmap phase **P3** (generate-then-untrack) is now wired on the *generate* side: the
-file is GENERATED from the template by `scripts/install/render-settings`, which
-`scripts/bootstrap` invokes at install time, and CI renders it right after checkout so
-`scripts/verify-claims.sh` still has a concrete file to recompute its counts from.
+The machine values live in `settings.machine.json` at the harness home: untracked and
+gitignored, written only by init (`scripts/bootstrap`) and only when absent, never by hooks
+or agents. `settings.machine.example.json` (tracked, `public-core`) documents every key.
+Optional modules (today only `paseo`) are fragments embedded in
+`scripts/install/render-settings`, switched on by the overlay's `modules` key.
 
-The *untrack* side is **not** done and is **not** authorized: `settings.json` remains
-deliberately tracked, and therefore carries a `private-lab` row in the ledger below like
-every other tracked top-level path. An earlier revision of this section claimed the file
-had been removed from the index (`git rm --cached`); that claim was false when written,
-and it is withdrawn together with the `/settings.json` ignore rule it shipped beside.
+`.gitattributes` (tracked, `shared/infra`) declares `/settings.json filter=claude-settings`;
+init registers the filter's clean and smudge commands (`scripts/install/render-settings`,
+`required = true`) in the clone's local git config. Smudge renders the machine form (clean
+form + enabled modules + overlay) into the working file; clean strips everything the
+modules and the overlay added, plus the CLI-owned keys, so git only ever stores the clean
+form. A commit that would store `settings.json` in machine form is refused by the
+pre-commit hook init installs (`render-settings check --staged`), and CI runs the same
+check; agents cannot skip that hook (`hooks/pretool-bash-safety.sh` blocks `--no-verify`,
+`-n` and hook-path overrides on `git commit`).
+
+Personal literals have their own local guard: the private-literal list `private-literals.txt`
+at the harness home (untracked, gitignored; init creates it empty and only the human fills
+it). `scripts/check-public-core.sh` fails on any of its literals in a tracked file, and the
+pre-commit hook runs that rule (`--private-literals`) over the staged content. Without the
+list the rule is skipped.
+
+`settings.json` is never untracked: the filter, not an ignore rule, keeps machine values out
+of git. The earlier generate-then-untrack plan (roadmap phase **P3**) is withdrawn.
 
 ---
 
@@ -127,9 +143,11 @@ set for the residue markers of §3. Path = first back-ticked token; class = seco
 | `CLAUDE.md` | `public-core` | Harness operating manual — candidate public-core per roadmap §4.1. |
 | `LICENSE` | `public-core` | MIT licence (harness's own code). |
 | `NOTICE` | `public-core` | Attribution / licence notice. |
-| `settings.template.json` | `public-core` | Portable, shippable config seed (the public counterpart of `settings.json`). |
+| `settings.json` | `public-core` | The one hand-maintained settings source, tracked in its clean public form: hooks reached through `${CLAUDE_HOME:-$HOME/.claude}`, no install path, CLI-owned key or personal entry. Machine values live in the untracked overlay `settings.machine.json`; the `claude-settings` filter keeps them out of git (§2). |
+| `settings.machine.example.json` | `public-core` | Documented example of the untracked machine overlay: every overlay key, the `paseo` module, the private-literal list path. Demo values only. |
 | `.github/` | `shared/infra` | CI workflow (`baseline.yml`), community-health files, demo hero assets — build/CI/meta. |
-| `.gitignore` | `shared/infra` | Repo meta; encodes the personal/public boundary at the ignore layer. |
+| `.gitignore` | `shared/infra` | Repo meta; encodes the personal/public boundary at the ignore layer (ignores the overlay and the private-literal list). |
+| `.gitattributes` | `shared/infra` | Repo meta: declares the `claude-settings` clean/smudge filter for `/settings.json`, registered locally by init (§2). Only meaningful inside a git checkout. |
 | `.claude/` | `shared/infra` | Repo-identity sentinel (`.awesome-claude-harness`) that flags this repo to session hooks. |
 | `INDEX.md` | `shared/infra` | Auto-generated navigation index (do-not-hand-edit meta). |
 | `pytest.ini` | `shared/infra` | Test-runner configuration — build/CI. |
@@ -140,7 +158,6 @@ set for the residue markers of §3. Path = first back-ticked token; class = seco
 | `tests/` | `shared/infra` | Test net (incl. generated AC skeletons + fixture strings) that supports the core; not itself the shippable harness. |
 | `PUBLIC-CORE.md` | `shared/infra` | This boundary manifest — governance/meta (self-classified for forward completeness once tracked). |
 | `release-membership.v1.json` | `shared/infra` | Shipping ledger: the EXPLICIT path set a release archive contains, plus per-path rationale. Governance/meta, beside this boundary ledger; consumed by the release workflow and by `scripts/verify-release-manifest.sh`. |
-| `settings.json` | `private-lab` | Live per-install config, deliberately tracked: personal permission allow/deny/ask entries + absolute install-home paths. Rendered from `settings.template.json` at install time; the P3 *untrack* side is not authorized (§2). |
 | `NESTED-REPO.md` | `private-lab` | Documents the maintainer's exact `/root/.claude`→tmpfs symlink topology, `git@github.com:Yugoge` remote, `/root/.claude.bak` mirror, `/root/sync-backup.sh` cron. |
 | `push.sh` | `private-lab` | Maintainer pre-push wrapper: `/root/.claude/push.sh` invocation, author git-workflow automation (identity now env-parameterized, purpose still maintainer-specific). |
 <!-- END:public-core-manifest -->
@@ -158,7 +175,15 @@ set for the residue markers of §3. Path = first back-ticked token; class = seco
 3. **Residue scan** — expands the `public-core` set to files and flags the §3 markers:
    hard markers on any occurrence; parameterized markers only when used
    un-parameterized (not an env `:-` default, not a comment).
-4. **Advisory** — counts the deferred `/dev/shm/dev-workspace/dot-claude` leaks
-   (roadmap P1/P2) without failing.
+4. **Private literals** — fails on each literal of the local, untracked
+   `private-literals.txt` (§2) found in a tracked file, reporting `file:line` and the
+   literal's line number in the list, never the literal itself; prints `SKIP` when the list
+   is absent or empty. `--private-literals` runs only this rule, over the index (what would
+   be committed) — the pre-commit hook's mode. Archive mode (`--scan-root`) applies it to
+   the archive files when the list exists.
+5. **Author-home residue** — every author home-directory path (the root user's home, a
+   Linux user home, a macOS user home) in the `public-core` set must match an entry of
+   `policies/public-core-residue-allowlist.v1.json` whose class the source structure
+   supports; an operational code literal is never allowlistable.
 
 Run it in CI alongside `scripts/verify-claims.sh`.

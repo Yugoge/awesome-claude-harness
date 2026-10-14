@@ -14,7 +14,7 @@
       "aesthetic": 58,
       "infra": 3
     },
-    "spec_reference": "/root/docs/dev/specs/spec-20260426-080555.md sections 5.4, 5.6, 5.11, 5.15, 5.16, 5.17",
+    "spec_reference": "<harness-home>/docs/dev/specs/spec-20260426-080555.md sections 5.4, 5.6, 5.11, 5.15, 5.16, 5.17",
     "loading_pattern": "runtime-read (subagent reads ≤50KB JSON each invocation; NEVER inline at build time)",
     "axe_update_cadence": "monthly manual bump (no automation per 5.1 binding decision #5)"
   },

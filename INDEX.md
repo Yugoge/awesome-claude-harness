@@ -737,7 +737,7 @@ dot-claude/
 ├── `release-membership.v1.json` - EXPLICIT release-membership manifest: the exact set of tracked paths that ship in a release archive. Membership is an edit to this file, never a silent consequence of a class rule. It is deliberately NOT 'public-core + all shared/infra': PUBLIC-CORE.md calls tests/ 'not itself the shippable harness', so a blanket class rule would drag non-shippable fixtures into the distribution. It is also not public-core-only: requirements.txt and requirements/ are shared/infra yet are required to install, so a public-core-only archive would be unusable.
 ├── `requirements.txt` - Python dependency manifest for the Claude Code harness venv
 ├── `settings.json` - Claude Code harness configuration (permissions, hooks, env, model)
-├── `settings.template.json` - Distributable harness settings template (uses CLAUDE_HOME placeholders)
+├── `settings.machine.example.json` - JSON config: _about, _format, _modules, modules, _env
 └── `VERSION` - VERSION file
 ```
 <!-- /AUTO:index-stats -->
