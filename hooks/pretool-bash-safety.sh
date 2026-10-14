@@ -289,6 +289,87 @@ else
 fi
 # ─────────────────────────────────────────────────────────────────────────────
 
+# ── Commit guard: commit-hook-bypass + unregistered-settings-filter (R7b) ────
+# Runs before every /do and /allow bypass, for main agent and subagents alike.
+# When the command holds a git `commit`, deny (1) a hook bypass: --no-verify down
+# to --no-ver, -n in a short-option cluster (scan stops at the first letter that
+# takes an argument), or the core.hooksPath/include overrides and GIT_CONFIG_*
+# assignments pretool-overnight-hook-guard.py recognises (imported, not copied);
+# (2) a candidate repo (payload cwd, -C dirs, cd targets) declaring the
+# claude-settings filter for settings.json with no local registration while
+# settings.json's content differs from HEAD in index or work tree. Quote-aware
+# words keep echo/printf bodies and `-m "-n"` as data; no verdict = deny.
+if [[ "$COMMAND" == *git* && "$COMMAND" == *commit* ]]; then
+  _CG=$(CG_INPUT="$INPUT" "$PYTHON_BIN" - "$CLAUDE_HOME/hooks" 2>/dev/null <<'PYEOF'
+import importlib.util as iu, itertools, json, os, re, shlex, subprocess as sp, sys
+H = sys.argv[1]; sys.path.insert(0, H)
+from lib.bash_context_strip import _process_heredocs
+from lib.git_command_classifier import _command_token_index, _git_subcommand
+s = iu.spec_from_file_location('_overnight_guard', H + '/pretool-overnight-hook-guard.py')
+og = iu.module_from_spec(s); s.loader.exec_module(og)
+d = json.loads(os.environ['CG_INPUT']); cur = [d.get('cwd') or os.getcwd()]; dirs = cur[:]; commits, why = [], []
+LONGV = ('message', 'file', 'reuse-message', 'reedit-message', 'template', 'author', 'date', 'trailer')
+def at(base, p): return os.path.join(base, os.path.expanduser(os.path.expandvars(p)))
+def words(t):  # shell words; separators, comments and newlines kept as the shell sees them
+    t = re.sub(r'&>', '>', re.sub(r'([<>])&', r'\1 ', re.sub(r'(?<=[^\s;&|()`])#', '_', t.replace('\\\n', ''))))
+    for tail in ('', '"', "'"):
+        x = shlex.shlex(t.replace('\n', '\n;') + tail, posix=True, punctuation_chars=';&|()`'); x.whitespace_split = True
+        try: return list(x)
+        except ValueError: pass
+    return t.split()
+def scan(text, depth=0):
+    for sep, grp in itertools.groupby(words(_process_heredocs(text)) if depth < 5 else [], lambda w: w != '' and set(w) <= set(';&|()`')):
+        if not sep: one(list(grp), depth)
+def one(t, depth):
+    for w in t:
+        if '$(' in w or '`' in w: scan(w, depth + 1)
+        m = re.match(r'[A-Za-z_]\w*=', w)
+        if m and og._GIT_HOOK_SUPPRESS_RE.search(m.group(0)): why.append(m.group(0) + '... assignment')
+    i = _command_token_index(t)
+    if i is None: return
+    if ' ' in t[i]: return scan(' '.join(t[i:]), depth + 1)
+    b, c = os.path.basename(t[i]), [j for j in range(i + 1, len(t) - 1) if re.match(r'-[^-]*c', t[j])]
+    if b in ('bash', 'sh', 'zsh', 'dash', 'ksh') and c: scan(t[c[0] + 1], depth + 1)
+    if b in ('cd', 'pushd'): cur[0] = at(cur[0], ([a for a in t[i + 1:] if a[:1] != '-'] or ['~'])[0]); dirs.append(cur[0])
+    if b != 'git': return
+    g = t[i + 1:]; sub, rest = _git_subcommand(g); base = cur[0]
+    for j, w in enumerate(g[:len(g) - len(rest)]):
+        if w == '-C' and j + 1 < len(g): base = at(base, g[j + 1]); dirs.append(base)
+    if og._git_invocation_injects_keystone_config(g): why.append('a core.hooksPath/include config override')
+    if sub != 'commit': return
+    commits.append(base); skip = False
+    for a in rest:
+        if skip: skip = False; continue
+        if a == '--': break
+        n = a[2:].split('=')[0]
+        if a.startswith('--'):
+            if len(n) >= 6 and 'no-verify'.startswith(n): why.append(a)
+            skip = '=' not in a and n != '' and any(o.startswith(n) for o in LONGV)
+        else:
+            for k, ch in enumerate(a[1:] if a.startswith('-') else ''):
+                if ch == 'n': why.append('-n in ' + a); break
+                if ch in 'mFcCtuS': skip = ch in 'mFcCt' and k == len(a) - 2; break
+scan(d.get('tool_input', {}).get('command', ''))
+if commits and why: sys.exit(print('HOOKS', why[0]))
+def git(r, *a): return sp.run(['git', '-C', r, *a], capture_output=True, text=True, timeout=20)
+for r in dict.fromkeys(dirs if commits else []):
+    top = git(r, 'rev-parse', '--show-toplevel').stdout.strip()
+    if top and git(top, 'check-attr', 'filter', '--', 'settings.json').stdout.strip().endswith(': claude-settings') \
+       and git(top, 'config', '--local', '--get', 'filter.claude-settings.clean').returncode and any(git(top, 'diff', \
+       '--quiet', '--no-ext-diff', '--no-textconv', *c, 'HEAD', '--', 'settings.json').returncode for c in ((), ('--cached',))):
+        sys.exit(print('FILTER', top))
+print('OK')
+PYEOF
+)
+  case "$_CG" in
+    OK) ;;
+    "HOOKS "*) printf 'BLOCKED: commit-hook-bypass — git commit with %s would skip the commit hooks; FORBIDDEN for every caller\nCommand: %s\n' "${_CG#HOOKS }" "$COMMAND" >&2; exit 2 ;;
+    "FILTER "*) printf 'BLOCKED: unregistered-settings-filter — settings.json has local changes and the settings filter is not registered in %s\nCommand: %s\nRun scripts/bootstrap in %s first, then retry.\n' "${_CG#FILTER }" "$COMMAND" "${_CG#FILTER }" >&2; exit 2 ;;
+    *) printf 'BLOCKED: commit-guard FAIL-CLOSED — the commit-hook-bypass / unregistered-settings-filter guard returned no verdict\nCommand: %s\n' "$COMMAND" >&2; exit 2 ;;
+  esac
+  unset _CG
+fi
+
 # ── Dev whitelist (exact names only) ──────────────────────────────
 # These are the ONLY dev resources that can be freely managed (empty = none).
 # Protected-daemon units are never whitelisted here: Layer 1.A gates them behind
