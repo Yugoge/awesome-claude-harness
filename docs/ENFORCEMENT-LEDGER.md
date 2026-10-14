@@ -15,7 +15,8 @@ than leaving the reader to assume all of them — is the whole point of publishi
 
 **Three columns are derived.** <!-- published-columns:derived:begin -->`event_class`, `matcher`
 and `hook`<!-- published-columns:derived:end --> are recomputed from
-`settings.json` at `@4c33f2f5` by `scripts/check-enforcement-evidence.py --claims`, which
+the checked-out `settings.json` (the row set was last reconciled against `@ef6e9037`) by
+`scripts/check-enforcement-evidence.py --claims`, which
 compares the derived triple set against the published rows and fails on **either** symmetric
 difference. That check runs inside the already required `baseline` CI job via
 `scripts/verify-claims.sh`.
@@ -33,9 +34,9 @@ no more:
   sets declared in `DECLARED_SCHEMA`;
 - `citation` is validated for the presence of an `@<sha8>` revision pin.
 
-**On falsifiability.** 68 of the 70 rows carry `proof_layer: source-level`, which as section 1.3
-defines it means those rows rest on **reading the code rather than running it**; the remaining 2
-carry `component-tested` and none carry `host-observed` or `host-shaped`. The gate validates
+**On falsifiability.** 80 of the 82 registered-hook rows carry `proof_layer: source-level`, which
+as section 1.3 defines it means those rows rest on **reading the code rather than running it**;
+the remaining 2 carry `component-tested` and none carry `host-observed` or `host-shaped`. The gate validates
 proof-layer membership and a non-blank `verifying_test`, and it does **not** execute the
 verifying test or establish one-command falsifiability for any row. No row's falsifier has been
 run by any check in this repository.
@@ -168,16 +169,20 @@ be reconciled rather than argued.
 
 ## 3. Registered-hook rows
 
-All **eight** lifecycle event classes are represented. `settings.json` wires 8 event
-classes / 42 matchers / **71 hook commands**, and there are exactly 71 rows below (70 recorded
-`@4c33f2f5`; H-071 records the later `PostToolUseFailure` registration).
+All **nine** lifecycle event classes are represented. `settings.json @ef6e9037` wires 9 event
+classes / 52 matchers / **82 hook commands**, and there are exactly 82 rows below: 66 recorded
+`@4c33f2f5`; H-071 records the later `PostToolUseFailure` registration and H-072 a later
+`PostToolUse` one; H-073 – H-086 record the hooks the tracked `settings.json @ef6e9037` wires that
+the ledger did not list before. Ids H-060 – H-063 are retired and not reused: those four scripts
+are not direct `Stop` entries in `settings.json` — they run as phases inside
+`stop-workflow-coordinator.py` (row H-084) — so they are recorded in section 4 as S-004 – S-007.
 
 **The authoring rule `behavior` follows** — applied by hand, and checked only for closed-set
 membership, not recomputed from the event class: events that can deny a pending action
 — `PreToolUse`, `UserPromptSubmit`, `Stop`, `SubagentStop` — are `advisory`, because they are
 deny-*capable* but their prevention has not been observed on a host. Events that fire after the
-fact or carry no veto — `PostToolUse`, `PostToolUseFailure`, `SessionStart`, `Notification` —
-are `detected`.
+fact or carry no veto — `PostToolUse`, `PostToolUseFailure`, `SessionStart`, `SessionEnd`,
+`Notification` — are `detected`.
 
 | row_id | event_class | matcher | hook | mode/precondition | behavior | exercise_status | proof_layer | citation | verifying_test |
 |---|---|---|---|---|---|---|---|---|---|
@@ -240,10 +245,6 @@ are `detected`.
 | H-057 | PostToolUse | Write\|Edit\|NotebookEdit\|MultiEdit | posttool-git-checkpoint.sh | none | detected | unexercised | source-level | hooks/posttool-git-checkpoint.sh:1 @4c33f2f5 | none yet |
 | H-058 | PostToolUse | mcp__playwright__browser_run_code | posttool-runcode-watchdog.py | none | detected | unexercised | source-level | hooks/posttool-runcode-watchdog.py:1 @4c33f2f5 | none yet |
 | H-059 | Notification | idle_prompt | notification-idle-overnight.py | none | detected | unexercised | source-level | hooks/notification-idle-overnight.py:1 @4c33f2f5 | none yet |
-| H-060 | Stop | (universal) | auto-commit.sh | none | advisory | unexercised | source-level | hooks/auto-commit.sh:1 @4c33f2f5 | none yet |
-| H-061 | Stop | (universal) | stop-cleanup-allowlist.sh | none | advisory | unexercised | source-level | hooks/stop-cleanup-allowlist.sh:1 @4c33f2f5 | none yet |
-| H-062 | Stop | (universal) | stop-overnight-timelock.py | none | advisory | unexercised | source-level | hooks/stop-overnight-timelock.py:1 @4c33f2f5 | none yet |
-| H-063 | Stop | (universal) | stop-spec-coverage-enforce.py | none | advisory | unexercised | source-level | hooks/stop-spec-coverage-enforce.py:1 @4c33f2f5 | none yet |
 | H-064 | SubagentStop | * | pretool-layer-match-gate.sh | none | advisory | unexercised | source-level | hooks/pretool-layer-match-gate.sh:1 @4c33f2f5 | none yet |
 | H-065 | SubagentStop | * | subagent-stop-diff-check.sh | none | advisory | unexercised | source-level | hooks/subagent-stop-diff-check.sh:1 @4c33f2f5 | none yet |
 | H-066 | SubagentStop | * | subagent-stop-guard-integrity.sh | none | advisory | unexercised | source-level | hooks/subagent-stop-guard-integrity.sh:1 @4c33f2f5 | none yet |
@@ -253,6 +254,20 @@ are `detected`.
 | H-070 | SubagentStop | * | subagentstop-restart-track.py | none | advisory | unexercised | source-level | hooks/subagentstop-restart-track.py:1 @4c33f2f5 | none yet |
 | H-071 | PostToolUseFailure | Bash | posttool-allowlist-consume.py | none | detected | unexercised | source-level | hooks/posttool-allowlist-consume.py:1 @4c33f2f5 | hooks/tests/test_posttool_commit_grant_finalize.py |
 | H-072 | PostToolUse | Write | posttool-push-gate-token-verify.py | none | detected | unexercised | source-level | hooks/posttool-push-gate-token-verify.py:1 @4e9d06e4 | hooks/tests/test_posttool_push_gate_token_verify.py |
+| H-073 | SessionStart | (universal) | session-scratch-init.sh | creates the session's own scratch directory `$TMPDIR/<session-id>/` and writes its `.owner` record; skips when no session id is available or the id contains `/` or `..`; best-effort, exits 0 on every path | detected | unexercised | source-level | hooks/session-scratch-init.sh:1 @ef6e9037 | hooks/tests/test_scratch_lifecycle.py |
+| H-074 | PreToolUse | (universal) | pretool-do-block-subagents.py | exits 2 only for a main-agent Agent or Task call while this session's /do consent flag reads true, unless an /allow grant for Agent exists or the prompt's obligation block declares profile repair; every other call, and any internal error, exits 0 | advisory | unexercised | source-level | hooks/pretool-do-block-subagents.py:1 @ef6e9037 | hooks/tests/test_do_block_subagents.py |
+| H-075 | PreToolUse | Agent | pretool-commit-dispatch-attest.py | witness only, exits 0 on every path: writes a dispatch attestation (later required by pretool-git-privilege-guard.py) only for an Agent or Task call whose subagent_type is changelog-analyst and whose payload carries a session id | advisory | unexercised | source-level | hooks/pretool-commit-dispatch-attest.py:1 @ef6e9037 | none yet |
+| H-076 | PreToolUse | Agent | pretool-obligation-gate.py | advisory when CLAUDE_OBLIGATION_GATE is unset (the default): a producer-role dispatch without a valid obligation block is logged and allowed (a missing block counts only when the session has a dev-registry directory); exits 2 for it only under CLAUDE_OBLIGATION_GATE=block; skipped under =off | advisory | unexercised | source-level | hooks/pretool-obligation-gate.py:1 @ef6e9037 | hooks/tests/test_obligation_gate.py |
+| H-077 | PreToolUse | Bash | pretool-push-analyst-grant-guard.py | acts only on a command that invokes execute-push.py or push.sh: re-validates the push-analyst grant against live git state and exits 2 on any mismatch or internal error (fails closed); every other command exits 0 | advisory | unexercised | source-level | hooks/pretool-push-analyst-grant-guard.py:1 @ef6e9037 | none yet |
+| H-078 | PreToolUse | Write\|Edit\|MultiEdit\|NotebookEdit\|Bash | pretool-attribution-pre.py | observational: records the pre-mutation content hash of each write target in the attribution journal; never blocks, exits 0 on every path | advisory | unexercised | source-level | hooks/pretool-attribution-pre.py:1 @ef6e9037 | hooks/tests/test_attribution_journal.py |
+| H-079 | PostToolUse | Write\|Edit\|MultiEdit\|NotebookEdit\|Bash | posttool-attribution-post.py | observational: appends the attribution event(s) paired with the H-078 record, then runs the periodic journal seal check (skipped under ATTRIBUTION_AUTOSEAL_DISABLE=1); exits 0 on every path | detected | unexercised | source-level | hooks/posttool-attribution-post.py:1 @ef6e9037 | hooks/tests/test_attribution_journal.py |
+| H-080 | PostToolUse | Write\|Edit\|NotebookEdit\|MultiEdit | posttool-lane-completeness-watch.py | acts only when the written file is a lane dev-report shard carrying an authoritative lane_set: on a complete roster with no fresh canonical aggregate it writes aggregate-pending.json and attempts scripts/aggregate-dev-report.py; exits 0 on every path | detected | unexercised | source-level | hooks/posttool-lane-completeness-watch.py:1 @ef6e9037 | none yet |
+| H-081 | Stop | (universal) | stop-completion-gate.py | blocking when CLAUDE_COMPLETION_GATE_MODE is unset (the default) or unrecognised: for a session bridged to a dev-registry cycle, exits 2 while the completion file is missing, the gate errors or a producer escalation is unresolved (an awaiting-input stop instead prints continue false and exits 0 by default); logs only under =advisory, skipped under =off; sessions opened by /close or /commit are exempt | advisory | unexercised | source-level | hooks/stop-completion-gate.py:1 @ef6e9037 | none yet |
+| H-082 | Stop | (universal) | stop-do-report-gate.py | blocking when DO_REPORT_GATE_MODE is unset (the default): only for a session with a /do task sidecar, exits 2 while its docs/dev do-report is missing or not a well-formed terminal report, force-allowing after 2 blocks for the same task; logs only under =advisory, skipped under =off; internal errors exit 0 | advisory | unexercised | source-level | hooks/stop-do-report-gate.py:1 @ef6e9037 | hooks/tests/test_stop_do_report_gate.py |
+| H-083 | Stop | (universal) | stop-obligation-gate.py | advisory when CLAUDE_OBLIGATION_TERMINAL is unset (the default): unresolved dispatch obligations of a dev-family session are logged and the stop allowed; exits 2 for them only under CLAUDE_OBLIGATION_TERMINAL=block; skipped under =off; internal errors exit 0 | advisory | unexercised | source-level | hooks/stop-obligation-gate.py:1 @ef6e9037 | hooks/tests/test_stop_obligation_gate.py |
+| H-084 | Stop | (universal) | stop-workflow-coordinator.py | runs the four Stop phases S-004 – S-007 (section 4) in fixed order and exits 2 at the first one that does not allow, skipping the rest; exits 0 without running any phase when the payload carries an agent_id or no session_id; LANEB_COORDINATOR_PHASES_JSON may replace the phase commands (exit 2 if malformed or reordered); resource finalisation runs only when both LANEB_SESSION_RESOURCE_TRUST_KEY and LANEB_SESSION_RESOURCE_TRUST_ROOT are set | advisory | unexercised | source-level | hooks/stop-workflow-coordinator.py:1 @ef6e9037 | none yet |
+| H-085 | SessionEnd | (universal) | sessionend-scratch-sweep.sh | removes only `$TMPDIR/<own-session-id>/`, and only when it is a real directory directly under that root whose `.owner` sid equals the session id; skips otherwise; best-effort, exits 0 on every path | detected | unexercised | source-level | hooks/sessionend-scratch-sweep.sh:1 @ef6e9037 | hooks/tests/test_scratch_lifecycle.py |
+| H-086 | SubagentStop | * | subagentstop-artifact-contract-enforce.py | subagent stops only (agent_id present). Obligation path: advisory when CLAUDE_OBLIGATION_STOPGATE is unset (the default), exits 2 on a failed obligated artifact only under =block, skipped under =off. Legacy path (reached unless the obligation path resolved and checked the agent's own obligation): blocking when ARTIFACT_CONTRACT_ENFORCE_MODE is unset (the default), exits 2 when a correlated dev or qa report declares report_version but fails its schema, only while the cycle's artifact-contract-enforce.json is enabled for that agent type and the close is not forced; logs only under =advisory | advisory | unexercised | source-level | hooks/subagentstop-artifact-contract-enforce.py:1 @ef6e9037 | none yet |
 
 ---
 
@@ -263,6 +278,10 @@ are `detected`.
 | S-001 | black-box-tests-against-real-Claude-Code-builds | unsupported | unexercised | none | docs/ENFORCEMENT-LEDGER.md:1 @4c33f2f5 | none yet | unsupported |
 | S-002 | permission-layer-git-backstop | unsupported | unexercised | source-level | settings.json:1 @4c33f2f5 | none yet | unsupported |
 | S-003 | destructive-reset-gate-regex-backstop | advisory | exercised | component-tested | hooks/pretool-bash-safety.sh:1667 @4c33f2f5 | hooks/tests/test_blackbox_integration.py | component-tested |
+| S-004 | stop-coordinator-phase-timelock:stop-overnight-timelock.py | advisory | unexercised | source-level | hooks/stop-overnight-timelock.py:1 @4c33f2f5 | none yet | source-level |
+| S-005 | stop-coordinator-phase-coverage:stop-spec-coverage-enforce.py | advisory | unexercised | source-level | hooks/stop-spec-coverage-enforce.py:1 @4c33f2f5 | none yet | source-level |
+| S-006 | stop-coordinator-phase-auto_commit:auto-commit.sh | advisory | unexercised | source-level | hooks/auto-commit.sh:1 @4c33f2f5 | none yet | source-level |
+| S-007 | stop-coordinator-phase-cleanup:stop-cleanup-allowlist.sh | advisory | unexercised | source-level | hooks/stop-cleanup-allowlist.sh:1 @4c33f2f5 | none yet | source-level |
 
 - **S-001** — no CI harness for actual Claude Code CLI builds exists in this environment or
   session. There is no build matrix to run against. This row is the disclosure of that gap.
@@ -274,6 +293,37 @@ are `detected`.
 - **S-003** — see `docs/THREAT-MODEL.md` RISK-3. This gate's regex fallback is *mutually
   exclusive* with its classifier branch, so an input the classifier parses successfully but
   finds no git in suppresses its own backstop.
+- **S-004 – S-007** — the four `Stop` phases that `hooks/stop-workflow-coordinator.py`
+  (registered-hook row H-084) runs itself, in the fixed order its `PHASE_ORDER` declares
+  (`hooks/stop-workflow-coordinator.py:40 @ef6e9037`), with the default commands at
+  `hooks/stop-workflow-coordinator.py:63-68 @ef6e9037`. They were previously registered-hook rows
+  H-060 – H-063 (event class `Stop`, matcher `(universal)`, mode/precondition `none`), matching
+  the direct `Stop` entries of the since-retired settings template. `settings.json @ef6e9037`
+  wires none of the
+  four as a direct `Stop` entry, so none of them is an `(event_class, matcher, hook)` triple and
+  `--claims` rejects a registered-hook row for any of them. Their `behavior`, `exercise_status`,
+  `proof_layer`, `citation` and `verifying_test` values are carried over unchanged. How they run,
+  from the coordinator source: each phase is a child process that receives the `Stop` payload on
+  stdin, with `LANEB_COORDINATED_STOP=1` added to its environment; no phase runs when the payload
+  carries an `agent_id` or no `session_id`; the first phase that does not allow — exit 2, any other
+  non-zero exit, a timeout (30 s; 120 s for `auto_commit`), or, for `timelock` only, an exit-0 run
+  whose last stdout line is JSON that is not an allow decision — ends the run, the later phases
+  are skipped, and the coordinator exits 2. Per phase, from each script's own source at
+  `@ef6e9037`:
+  - **S-004 `timelock`** (`stop-overnight-timelock.py`): acts only when
+    `.claude/overnight-state-<session_id>.json` exists for this session; exits 2 before that
+    state's end time, and after it while closeout artifacts are missing.
+  - **S-005 `coverage`** (`stop-spec-coverage-enforce.py`): acts only when the session's workflow
+    bookmark is `/spec` and its transcript wrote a spec that has a views directory; exits 2 when
+    `spec-verify.py` reports incomplete monolith coverage, and allows the stop when that verifier
+    is absent.
+  - **S-006 `auto_commit`** (`auto-commit.sh`): writes a `refs/checkpoints/<branch>` snapshot when
+    the working tree is dirty; its exit 1 on a failed checkpoint is a non-allow and therefore
+    becomes a coordinator exit 2.
+  - **S-007 `cleanup`** (`stop-cleanup-allowlist.sh`): exits 0 on every path. Because it runs
+    last, it runs only when the three phases before it allowed; its own header comment
+    ("Registered LAST in Stop hooks array so earlier hook failures do not block cleanup")
+    describes the former direct registration, not this sequencing.
 
 ---
 
@@ -323,15 +373,21 @@ These are recorded here because they bound what any compatibility claim above ca
    files that lane does not own. Its artifacts are present and its aggregate correctly reports
    an **unprotected** state, with the strict doctor exiting non-zero. Present-but-inert is not
    the same as absent, and it is not the same as working; the ledger records the third state.
-2. **The live settings file has already diverged from its template.** Running the settings
-   renderer against `settings.json` today silently re-adds 2 `deny` entries and strips roughly
-   38 `allow` entries. The hook *set* was measured identical between the two files this cycle,
-   70 of 70 `(event, matcher, hook)` triples — a one-time measurement, not a standing guarantee.
-   What `scripts/verify-claims.sh` re-checks on every run is weaker: every hook script *basename*
-   wired by `settings.json` also appears in the template, with template-only extras permitted;
-   the lifecycle event and matcher are not compared. So a hook moved to a different event or
-   matcher in one file would not fail that check. The **permission** surface does not, which is why S-002's
-   permission-layer measurement is pinned to `settings.json @4c33f2f5` specifically.
+2. **The settings template has been retired; the tracked `settings.json` is the single settings
+   source.** When this item was recorded at `@4c33f2f5`, the live settings file had diverged from
+   a separate template: running the settings renderer against `settings.json` silently re-added
+   2 `deny` entries and stripped roughly 38 `allow` entries, while the hook *set* was measured
+   identical between the two files, 70 of 70 `(event, matcher, hook)` triples — a one-time
+   measurement, not a standing guarantee. The standing check of that time was weaker:
+   `scripts/verify-claims.sh` confirmed only that every hook script *basename* wired by
+   `settings.json` also appeared in the template, without comparing lifecycle event or matcher.
+   That template and that basename check (the script's former step 5) have since been retired.
+   The standing wiring check is now `--claims` step 7, which compares the full
+   `(event_class, matcher, hook)` triple set of the checked-out `settings.json` against section 3
+   in both directions, so a hook moved to a different event or matcher fails it. Reconciling the
+   rows against `settings.json @ef6e9037` added H-073 – H-086 and moved H-060 – H-063 to section 4
+   as S-004 – S-007. Neither check covers the **permission** surface, which is why S-002's
+   permission-layer measurement stays pinned to `settings.json @4c33f2f5` specifically.
 
 ---
 
