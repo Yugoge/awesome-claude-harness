@@ -451,5 +451,7 @@ if [ "$_drc" -ne 0 ]; then
 fi
 
 echo
-echo "bootstrap: SUCCESS — the harness is set up. Start Claude Code with: claude"
+_launch="claude"
+[ "$(_rp "$HOME_DIR")" = "$(_rp "$HOME/.claude" 2>/dev/null)" ] || _launch="CLAUDE_CONFIG_DIR=$HOME_DIR claude"
+echo "bootstrap: SUCCESS — the harness is set up. Start Claude Code with: $_launch"
 exit 0
