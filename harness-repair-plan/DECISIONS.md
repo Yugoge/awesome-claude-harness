@@ -94,6 +94,12 @@ PLAN-v1.md still gives the file:line scope for each phase. Where it says "honest
 - **D14 Public permissions = the owner's local allow list, minus personal-path entries.** curl, wget,
   docker run, docker exec and package.json edits are allowed (they are normal operations, not "ask").
   The owner does not want to curate fine-grained entries; pick the strongest coherent posture.
+- **D17 Dead code and its tests are deleted, not quarantined (P8).** Code that no live entry point reaches is
+  deleted together with the tests that exercise only that code. Live entry points: hooks registered in settings.json,
+  commands, agents, skills, and scripts any of those run. This applies to the abandoned-cycle code and to tests that
+  belong to another tool, such as the Codex tests. It is not feature retirement (D15), because nothing reachable is
+  removed. Each deletion carries its reachability proof in the PR. A failing test of live code is never deleted or
+  quarantined: the code or the test is fixed. No collect_ignore or skip list is used to make CI green.
 - **D16 History cleanup at the end.** Emails and account names are removed from git history in the final
   phase (git filter-repo with a mailmap, replace-text and replace-message), followed by deleting the 255
   remote refs. This is destructive and runs only after every phase PR is merged and the owner gives an
