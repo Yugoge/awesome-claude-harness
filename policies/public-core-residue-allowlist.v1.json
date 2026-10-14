@@ -769,7 +769,7 @@
       "fingerprint": "4a0bc37fb6071600",
       "ordinal": 1,
       "class": "comment_or_narrative_doc",
-      "rationale": "Prose/comment text documenting the residue policy; never read as a path at runtime. Line: \"# e.g. <author-path> -> -root; /dev/shm/dev-workspace/applio -> -dev-shm-dev-workspace-applio\""
+      "rationale": "Prose/comment text documenting the residue policy; never read as a path at runtime. Line: a comment showing how a working-directory path maps to its project-dir slug."
     },
     {
       "path": "hooks/session-promote-hook.sh",
@@ -1326,13 +1326,6 @@
     },
     {
       "path": "scripts/check-public-core.sh",
-      "fingerprint": "21571b45ff999f8d",
-      "ordinal": 1,
-      "class": "scanner_pattern_definition",
-      "rationale": "The detector's own constant table: the literal IS the pattern being gated on. Line: \"# \"<author-path>\" can never satisfy it, which is what keeps a genuine author-home\""
-    },
-    {
-      "path": "scripts/check-public-core.sh",
       "fingerprint": "4f1f7fbffe9acb3f",
       "ordinal": 1,
       "class": "scanner_pattern_definition",
@@ -1393,20 +1386,6 @@
       "ordinal": 1,
       "class": "scanner_pattern_definition",
       "rationale": "The detector's own constant table: the literal IS the pattern being gated on. Line: \"is_env = bool(re.search(r':-\\s*[\"\\']?(<author-path>|/home/|/Users/)', content))\""
-    },
-    {
-      "path": "scripts/check-public-core.sh",
-      "fingerprint": "e5332625ebc5adcb",
-      "ordinal": 1,
-      "class": "scanner_pattern_definition",
-      "rationale": "The detector's own constant table: the literal IS the pattern being gated on. Line: \"# `EXACT_HOME=\"<author-path>\"` and `MAC=\"<author-path>\"` walked straight through.\""
-    },
-    {
-      "path": "scripts/check-public-core.sh",
-      "fingerprint": "ea9acdfa6ae60c22",
-      "ordinal": 1,
-      "class": "scanner_pattern_definition",
-      "rationale": "The detector's own constant table: the literal IS the pattern being gated on. Line: \"second component (an actual author home such as \"<author-path>\") can never\""
     },
     {
       "path": "scripts/close-scoring-decide.py",

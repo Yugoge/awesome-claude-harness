@@ -126,7 +126,7 @@ else:
 # Boundary-aware on BOTH sides. The previous form anchored every alternative on a
 # TRAILING "/", so it matched a home directory's descendants but never the directory
 # ROOT itself: `p = "/root/.claude"` was caught while `EXACT_ROOT="/root"`,
-# `EXACT_HOME="/home/yugoge"` and `MAC="/Users/Yugoge"` walked straight through.
+# `EXACT_HOME="/home/<user>"` and `MAC="/Users/<User>"` walked straight through.
 #   right (?![A-Za-z0-9_-]) : the root form matches as well as the descendant form,
 #                             while /homework and /rootkit still do not.
 #   left  (?<![A-Za-z0-9])  : an author path must START a path component. Without it
@@ -144,7 +144,7 @@ RESIDUE = re.compile(
     r"(?:/root|/home/[a-z][a-z0-9_-]*|/Users/[A-Za-z][A-Za-z0-9_-]*)"
     r"(?![A-Za-z0-9_-])")
 # A BARE top-level directory literal: "/" or "/name" with no second path component.
-# "/home/yugoge" can never satisfy it, which is what keeps a genuine author-home
+# "/home/<user>" can never satisfy it, which is what keeps a genuine author-home
 # literal `operational` (and therefore non-allowlistable) under SYS_DIR classification.
 SYS_DIR_LITERAL = re.compile(r"^/[A-Za-z0-9_.-]*$")
 SYS_DIR_MIN_ELEMENTS = 3   # a table, not an incidental pair
@@ -246,7 +246,7 @@ def py_system_path_enum(text):
     Structurally derived from the AST, never from a hand-written label: the literal
     must sit in a list/tuple/set whose every element is a bare top-level directory
     string and which has at least SYS_DIR_MIN_ELEMENTS of them. A path carrying a
-    second component (an actual author home such as "/home/yugoge") can never
+    second component (an actual author home such as "/home/<user>") can never
     qualify, so this class cannot launder a genuine residue literal."""
     out = {}
     try:
@@ -561,9 +561,8 @@ fi
 #                    MINUS test trees — a fixture string that names a guarded unit is test
 #                    data, not shippable-harness residue (mirrors the ledger already
 #                    classifying top-level `tests/` as shared/infra).
-#    The protected daemon prefix `happy-daemon` is now a PARAM marker (env-overridable via
-#    CLAUDE_PROTECTED_DAEMON_PREFIX; the default reproduces today's behavior) — see
-#    PUBLIC-CORE.md §3. It was previously an un-scanned deliberately-literal exception.
+#    The protected daemon prefix is a PARAM marker: it comes from
+#    CLAUDE_PROTECTED_DAEMON_PREFIX (empty by default; the owner's value lives in the overlay).
 # ---------------------------------------------------------------------------
 #    HARD_MARKERS is defined ABOVE the archive branch so both scan modes consume it.
 PARAM_MARKERS=(
