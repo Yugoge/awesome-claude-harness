@@ -7,6 +7,10 @@
 
 # Local settings (user-specific)
 settings.local.json
+# Machine overlay rendered into settings.json by the settings filter; personal values, never tracked
+/settings.machine.json
+# Private-literal list read by the pre-commit check; its literals are personal, never tracked
+/private-literals.txt
 
 # Temporary files
 *.tmp

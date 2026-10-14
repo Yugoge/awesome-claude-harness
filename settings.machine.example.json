@@ -1,0 +1,98 @@
+{
+  "_about": "Example machine overlay. Copy it to settings.machine.json in the harness home (untracked, gitignored), keep only the keys you need and replace every demo value with your own. scripts/bootstrap writes a minimal overlay (modules + env.CLAUDE_HOME) only when none exists and never edits an existing one; hooks and agents never write it. The settings filter renders clean form + enabled modules + overlay into the working settings.json (git smudge, or scripts/install/render-settings render) and removes everything a module or the overlay added, plus the CLI-owned keys, when git stores settings.json (git clean), so nothing from this file reaches a commit.",
+  "_format": [
+    "Top-level keys whose names start with \"_\" (like this one) are documentation and are never rendered.",
+    "\"modules\" is meta and never rendered: module name -> true or false. An unknown module name is an error.",
+    "\"env\": every key is set in the rendered env (replacing a clean-form value of the same name, otherwise appended). Put no documentation inside env: every env key is rendered.",
+    "\"permissions\".allow / .deny / .ask: every entry is appended unless already present. The overlay cannot remove or weaken a clean-form entry.",
+    "\"hooks\".<event>: every group is appended to that event; a group whose \"hooks\" list equals an existing group's \"hooks\" list instead adds its \"|\"-separated matcher alternatives to that group.",
+    "Any other top-level key (the CLI-owned keys below, or e.g. cleanupPeriodDays) replaces the clean-form value.",
+    "Layer order: the enabled modules in sorted name order, then this overlay."
+  ],
+  "_modules": {
+    "paseo": "Optional paseo integration, default false. When true the module adds the allow entries mcp__paseo__* and Bash(node scripts/paseo-usage-read.mjs:*), the UserPromptSubmit hook hooks/userprompt-usage-snapshot.py, and the mcp__paseo__browser_run_code matcher alternative on the PreToolUse and PostToolUse runcode-watchdog groups. Its env settings are PASEO_DAEMON_ACCOUNTS and PASEO_DAEMON_MODEL."
+  },
+  "modules": {
+    "paseo": false
+  },
+  "_env": {
+    "CLAUDE_HOME": "Absolute path of the harness home (this checkout). Written by scripts/bootstrap. Every hook command resolves \"${CLAUDE_HOME:-$HOME/.claude}\", so without it hooks fall back to $HOME/.claude.",
+    "TMPDIR": "Scratch directory for sessions and tools. The clean form pins /var/tmp/claude-scratch; override TMPDIR and CLAUDE_CODE_TMPDIR together. scripts/bootstrap creates the directory (mode 1777) if it is absent.",
+    "CLAUDE_CODE_TMPDIR": "Claude Code's own scratch directory; keep it equal to TMPDIR.",
+    "GIT_AUTO_PUSH": "Optional opt-in, not set in this example. The clean form sets \"0\" (no automatic push); add \"GIT_AUTO_PUSH\": \"1\" to env only if this machine wants automatic remote backup.",
+    "CLAUDE_DEV_CONTAINERS": "Whitespace-separated exact names of dev containers the agent may docker stop/restart/rm/kill. Default empty: no container is whitelisted.",
+    "CLAUDE_DAEMON_RESTART_GRANT_HELPER": "Path of the operator's helper that grants a one-time daemon restart; it is only named in the daemon-restart guidance text. Default empty.",
+    "CLAUDE_PROTECTED_DAEMON_PREFIX": "Unit-name prefix of a local daemon the agent must never restart (systemctl or wrapper). Default empty: the daemon-restart prohibition layers are inert.",
+    "CLAUDE_PROTECTED_DAEMON_TARGETS": "\"|\"-separated per-instance suffixes of the protected daemon (units <prefix>-<target>). Default empty.",
+    "CLAUDE_HARD_BANNED_SCRIPTS": "Script names the agent may never run, as ERE alternatives separated by \"|\". Default \"session-recovery|restart-all-sessions\"; a non-empty value replaces the default, so repeat the default alternatives to keep them.",
+    "CLAUDE_PROTECTED_PROCESS_FAMILY": "Process family word: docker stop/restart/rm/kill on a container matching it is blocked, and killall/pkill of it is blocked alongside claude and docker. Default empty: the docker rule is inert and the kill rule covers claude and docker only.",
+    "CLAUDE_RESTART_ACCOUNTS_ROOT": "Root of sibling Claude Code accounts that /restart also scans (<root>/<name>/claude/projects/<slug>/). Unset or empty: only ${CLAUDE_CONFIG_DIR:-$HOME/.claude}/projects is scanned.",
+    "WORKFLOW_PRUNE_ACCOUNTS_DIR": "Accounts root scanned by scripts/prune-orphaned-workflow-bookmarks.sh. Default empty: no account scan.",
+    "WORKFLOW_PRUNE_PROJECT_DIRNAME": "Claude Code project directory name of the harness home. Default derived from the realpath of the resolved harness home (every character other than an ASCII letter or digit becomes \"-\"), so set it only when that derivation does not fit.",
+    "CLAUDE_CHECKPOINT_EXTRA_TRAILER": "One extra trailer line appended after the Claude Co-Authored-By trailer on checkpoint commits. Default empty: no extra trailer.",
+    "PASEO_DAEMON_ACCOUNTS": "paseo module: comma-separated account names, the --accounts default of scripts/paseo-daemon-ledger.py; its init refuses when no account is given.",
+    "PASEO_DAEMON_MODEL": "paseo module: model used by scripts/paseo-daemon-timers.py, in the form <model-id>@<account>. Default: the built-in model id without an account suffix."
+  },
+  "env": {
+    "CLAUDE_HOME": "/opt/demo/claude-harness",
+    "TMPDIR": "/opt/demo/scratch",
+    "CLAUDE_CODE_TMPDIR": "/opt/demo/scratch",
+    "CLAUDE_DEV_CONTAINERS": "demo-web-dev",
+    "CLAUDE_DAEMON_RESTART_GRANT_HELPER": "/opt/demo/bin/allow-daemon-restart",
+    "CLAUDE_PROTECTED_DAEMON_PREFIX": "demo-daemon",
+    "CLAUDE_PROTECTED_DAEMON_TARGETS": "acct-a|acct-b",
+    "CLAUDE_HARD_BANNED_SCRIPTS": "session-recovery|restart-all-sessions|demo-wipe-sessions",
+    "CLAUDE_PROTECTED_PROCESS_FAMILY": "demo",
+    "CLAUDE_RESTART_ACCOUNTS_ROOT": "/opt/demo/accounts",
+    "WORKFLOW_PRUNE_ACCOUNTS_DIR": "/opt/demo/accounts",
+    "WORKFLOW_PRUNE_PROJECT_DIRNAME": "-opt-demo-claude-harness",
+    "CLAUDE_CHECKPOINT_EXTRA_TRAILER": "Co-Authored-By: Demo Bot <demo-bot@example.invalid>",
+    "PASEO_DAEMON_ACCOUNTS": "acct-a,acct-b",
+    "PASEO_DAEMON_MODEL": "demo-model@acct-a"
+  },
+  "_permissions": "Personal permission entries: tool paths outside the harness, machine-only MCP servers, extra denies. They are appended to the clean form's lists. Bash rules match the literal command text (no ~ or variable expansion), so write each path exactly as it is typed.",
+  "permissions": {
+    "allow": [
+      "Bash(/opt/demo/bin/demo-sync.sh:*)",
+      "Bash(node /opt/demo/bin/demo-healer.mjs:*)",
+      "Bash(/opt/demo/bin/demo-self-update --help:*)"
+    ],
+    "deny": [
+      "Bash(/opt/demo/bin/demo-wipe.sh:*)"
+    ],
+    "ask": []
+  },
+  "_hooks": {
+    "about": "Optional machine-only hook groups, same shape as the hooks key of settings.json. Use the harness-home channel in the command and keep the script under the harness home: the doctor requires every hook command to resolve to a file there. To use one, copy it into a top-level \"hooks\" key; this documentation key is never rendered.",
+    "example": {
+      "SessionStart": [
+        {
+          "hooks": [
+            {
+              "type": "command",
+              "command": "bash \"${CLAUDE_HOME:-$HOME/.claude}/hooks/demo-local-banner.sh\"",
+              "timeout": 5
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "_cli_owned": "model, theme, tui, alwaysThinkingEnabled, effortLevel and autoCompactEnabled are written by Claude Code itself (/model, /config, /effort). The clean form carries none of them. Values set here are this machine's defaults in the rendered settings.json; once Claude Code has written a value into the working file, render keeps that value. The clean filter strips these keys (and modelSettings, fastMode, advisorModel) so they never reach a commit.",
+  "model": "default",
+  "theme": "dark",
+  "tui": "fullscreen",
+  "alwaysThinkingEnabled": true,
+  "effortLevel": "high",
+  "autoCompactEnabled": true,
+  "_private_literals": {
+    "path": "<harness home>/private-literals.txt (untracked, gitignored). Fixed: no setting or environment variable changes it, and it is not part of this overlay.",
+    "about": "Personal literals that must never appear in a tracked file: account names, e-mail addresses, private host, product, unit or container names, personal home paths. scripts/bootstrap creates the file empty (0 bytes, mode 0600) if absent; only the human fills it. The pre-commit hook runs scripts/check-public-core.sh --private-literals over the staged files and refuses the commit when any literal occurs, reporting file:line and the literal's line number in the list, never the literal itself. A plain scripts/check-public-core.sh run applies the same rule to the tracked files in the working tree.",
+    "format": "One literal per line. Blank lines and lines whose first non-blank character is # are ignored. Matching is case-sensitive and fixed-string (no patterns, no wildcards).",
+    "example_lines": [
+      "# personal values (example)",
+      "demo-private-host",
+      "/opt/demo/private-home"
+    ]
+  }
+}
