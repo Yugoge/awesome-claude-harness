@@ -67,29 +67,24 @@ ARTIFACT_NS_CAPTURE_RE="(^|[[:space:];|&(])[A-Za-z_][A-Za-z0-9_]*=['\"]?"
 ARTIFACT_VAR_WRITE_RE="(>>?[&|]?[[:space:]]*['\"]?\\\$\{?[A-Za-z_]|${ARTIFACT_WRITE_VERB_RE}.*\\\$\{?[A-Za-z_])"
 
 # ── Local service-integration knobs (environment-configured) ─────────────────
-# The rules that protect local containers, units and scripts take every name from
-# the environment (normally the untracked settings overlay's env). Built-in
-# defaults are empty or generic: with nothing configured those rules are inert or
-# generic, and an empty value never matches every command. Inventory by stable
-# rule label (line numbers drift):
-#   CLAUDE_DEV_CONTAINERS (""): containers the "docker process-family guard" lets
-#     Claude stop/restart/rm/kill; empty = no dev container is whitelisted.
+# The rules that protect local containers, units and scripts take every name from the
+# environment (normally the untracked settings overlay's env). Built-in defaults are empty or
+# generic: with nothing configured those rules are inert or generic, and an empty value never
+# matches every command. Inventory by stable rule label (line numbers drift):
+#   CLAUDE_DEV_CONTAINERS (""): containers the "docker process-family guard" lets Claude
+#     stop/restart/rm/kill; empty = no dev container is whitelisted.
 #   CLAUDE_DEV_SYSTEMD (""): units the "systemctl production-target guard" allows.
-#   CLAUDE_DAEMON_RESTART_GRANT_HELPER (""): grant helper named in the
-#     daemon-restart stderr guidance only (Layer 1.A hint, 1.B/1.E reasons); the
-#     grant sentinel dir is DAEMON_RESTART_GRANT_DIR (above).
-#   CLAUDE_PROTECTED_DAEMON_PREFIX / _TARGETS (""): unit prefix plus '|'-separated
-#     target suffixes for "daemon-restart-prohibition" (1.A), "daemon-restart-
-#     wrapper" (1.B) and the systemctl guard's exclusion; empty prefix = those
-#     layers are inert. The target suffix also keys the grant sentinel
-#     (claude-allow-daemon-restart-<target>.flag), so a configured prefix needs a
-#     matching grant helper or the gate is protective but un-grantable.
-#   CLAUDE_PROTECTED_PROCESS_FAMILY (""): name word of the "docker process-family
-#     guard" (empty = inert) and an extra target of the killall/pkill guard, which
-#     always protects claude|docker.
-#   CLAUDE_HARD_BANNED_SCRIPTS ("session-recovery|restart-all-sessions"):
-#     '|'-separated EREs of the "hard-banned scripts" rule; the "session-dirs ban"
-#     stays literal.
+#   CLAUDE_DAEMON_RESTART_GRANT_HELPER (""): grant helper named in the daemon-restart stderr
+#     guidance only (Layer 1.A hint, 1.B/1.E reasons); the sentinel dir is DAEMON_RESTART_GRANT_DIR.
+#   CLAUDE_PROTECTED_DAEMON_PREFIX / _TARGETS (""): unit prefix plus '|'-separated target
+#     suffixes for "daemon-restart-prohibition" (1.A), "daemon-restart-wrapper" (1.B) and the
+#     systemctl guard's exclusion; empty prefix = those layers are inert. The target suffix also
+#     keys the grant sentinel (claude-allow-daemon-restart-<target>.flag), so a configured
+#     prefix needs a matching grant helper or the gate is protective but un-grantable.
+#   CLAUDE_PROTECTED_PROCESS_FAMILY (""): name word of the "docker process-family guard" (empty
+#     = inert) and an extra target of the killall/pkill guard, which always protects claude|docker.
+#   CLAUDE_HARD_BANNED_SCRIPTS ("session-recovery|restart-all-sessions"): '|'-separated EREs of
+#     the "hard-banned scripts" rule; the "session-dirs ban" stays literal.
 # ─────────────────────────────────────────────────────────────────────────────
 
 # IS_SUBAGENT: set once here at the top of the script (after PYTHON_BIN resolution).
@@ -290,15 +285,11 @@ fi
 # ─────────────────────────────────────────────────────────────────────────────
 
 # ── Commit guard: commit-hook-bypass + unregistered-settings-filter (R7b) ────
-# Runs before every /do and /allow bypass, for main agent and subagents alike.
-# When the command holds a git `commit`, deny (1) a hook bypass: --no-verify down
-# to --no-ver, -n in a short-option cluster (scan stops at the first letter that
-# takes an argument), or the core.hooksPath/include overrides and GIT_CONFIG_*
-# assignments pretool-overnight-hook-guard.py recognises (imported, not copied);
-# (2) a candidate repo (payload cwd, -C dirs, cd targets) declaring the
-# claude-settings filter for settings.json with no local registration while
-# settings.json's content differs from HEAD in index or work tree. Quote-aware
-# words keep echo/printf bodies and `-m "-n"` as data; no verdict = deny.
+# Before any /do or /allow bypass, for all callers: deny a git commit that (1) skips hooks (--no-verify
+# down to --no-ver; -n in a short-option cluster before an argument-taking letter; core.hooksPath,
+# include or GIT_CONFIG_* overrides as the imported pretool-overnight-hook-guard.py flags them) or (2)
+# runs in a repo (cwd, -C, cd) with the claude-settings filter unregistered and settings.json changed vs
+# HEAD (index or work tree). Quote-aware: echo/printf bodies and `-m "-n"` stay data. No verdict = deny.
 if [[ "$COMMAND" == *git* && "$COMMAND" == *commit* ]]; then
   _CG=$(CG_INPUT="$INPUT" "$PYTHON_BIN" - "$CLAUDE_HOME/hooks" 2>/dev/null <<'PYEOF'
 import importlib.util as iu, itertools, json, os, re, shlex, subprocess as sp, sys
@@ -371,28 +362,24 @@ PYEOF
 fi
 
 # ── Dev whitelist (exact names only) ──────────────────────────────
-# These are the ONLY dev resources that can be freely managed (empty = none).
-# Protected-daemon units are never whitelisted here: Layer 1.A gates them behind
-# an explicit user grant and the systemctl block below skips them.
+# The ONLY dev resources that can be freely managed (empty = none). Protected-daemon units are never
+# whitelisted: Layer 1.A gates them behind an explicit user grant; the systemctl block below skips them.
 DEV_CONTAINERS="${CLAUDE_DEV_CONTAINERS:-}"
 DEV_SYSTEMD="${CLAUDE_DEV_SYSTEMD:-}"
 # Grant helper named in the daemon-restart stderr guidance only (see inventory above).
 DAEMON_RESTART_GRANT_HELPER="${CLAUDE_DAEMON_RESTART_GRANT_HELPER:-}"
 DAEMON_RESTART_GRANT_HINT="${DAEMON_RESTART_GRANT_HELPER:-<daemon-restart grant helper>}"
-# Protected daemon identity: unit prefix + per-instance target suffixes. An EMPTY
-# prefix makes Layers 1.A/1.B and the systemctl exclusion inert; every use below
-# tests it for emptiness first, because an empty ERE would match every command.
+# Protected daemon identity: unit prefix + per-instance target suffixes. An EMPTY prefix makes Layers
+# 1.A/1.B and the systemctl exclusion inert; every use tests it first, as an empty ERE matches every command.
 PROTECTED_DAEMON_PREFIX="${CLAUDE_PROTECTED_DAEMON_PREFIX:-}"
 PROTECTED_DAEMON_TARGETS="${CLAUDE_PROTECTED_DAEMON_TARGETS:-}"
 # Process-family word of the docker and killall/pkill guards (empty = docker rule inert).
 PROTECTED_PROCESS_FAMILY="${CLAUDE_PROTECTED_PROCESS_FAMILY:-}"
-# ERE-safe variants. The PREFIX and the FAMILY name LITERAL local names, so every ERE
-# metacharacter ( ] [ \ . ^ $ * + ? ( ) { } | ) AND a leading '-' is escaped before the
-# value is interpolated into any `grep -E` context below; otherwise a configured
-# "my.daemon" would MISS or mis-extract the daemon. PROTECTED_DAEMON_TARGETS is
-# INTENTIONALLY a '|'-separated alternation of literal target words: each word's
-# metacharacters are escaped while the '|' separators are PRESERVED. All grep uses
-# also pass `--` so a leading '-' in the value can never be read as an option.
+# ERE-safe variants: PREFIX and FAMILY are LITERAL local names, so a leading '-' and every ERE
+# metacharacter ( ] [ \ . ^ $ * + ? ( ) { } | ) are escaped before interpolation into any `grep -E` below
+# (else a configured "my.daemon" would MISS or mis-extract the daemon). PROTECTED_DAEMON_TARGETS is
+# INTENTIONALLY a '|'-separated alternation of literal words: each word is escaped, the '|' separators are
+# PRESERVED. Every grep also passes `--`, so a leading '-' in the value is never read as an option.
 _ere_escape_literal()  { printf '%s' "$1" | sed -e 's/[][\\.^$*+?(){}|]/\\&/g' -e 's/^-/\\-/'; }
 _ere_escape_keep_alt() { printf '%s' "$1" | sed -e 's/[][\\.^$*+?(){}]/\\&/g'; }
 PROTECTED_DAEMON_PREFIX_RE="$(_ere_escape_literal  "$PROTECTED_DAEMON_PREFIX")"
@@ -1822,9 +1809,8 @@ if echo "$COMMAND" | grep -qE 'session_dirs\.txt'; then
   exit 2
 fi
 
-# Scripts that manage session state or restart daemons: CLAUDE_HARD_BANNED_SCRIPTS,
-# '|'-separated EREs, each tested on its own; empty entries are skipped so they can
-# never match every command.
+# Scripts that manage session state or restart daemons: CLAUDE_HARD_BANNED_SCRIPTS, '|'-separated EREs,
+# each tested on its own; empty entries are skipped so they can never match every command.
 IFS='|' read -r -a _HARD_BANNED <<< "${CLAUDE_HARD_BANNED_SCRIPTS:-session-recovery|restart-all-sessions}"
 for _ban in "${_HARD_BANNED[@]}"; do
   if [ -n "$_ban" ] && echo "$COMMAND" | grep -qE -- "$_ban"; then
@@ -1869,8 +1855,7 @@ if echo "$COMMAND" | grep -qE '(>|>>|tee|cp|mv|sed|awk)\s.*/etc/docker/daemon\.j
   exit 2
 fi
 
-# Block: docker stop/restart/rm/kill on containers of the protected process family
-# (unless ALL targets are dev-whitelisted). Inert while the family is empty.
+# Block: docker stop/restart/rm/kill on protected-family containers unless ALL are dev-whitelisted (inert if empty)
 if [ -n "$PROTECTED_PROCESS_FAMILY" ] \
    && echo "$COMMAND" | grep -qE -- "docker\s+(stop|restart|rm|kill)\s+.*${PROTECTED_PROCESS_FAMILY_RE}"; then
   if ! check_docker_targets_all_dev "$COMMAND" "$DEV_CONTAINERS"; then
@@ -1906,8 +1891,7 @@ if echo "$COMMAND_CONTEXT_STRIPPED" | grep -qE '^\s*(dd|mkfs|fdisk|shred)\b'; th
   exit 2
 fi
 
-# Block: generic process killers targeting services (claude, docker, plus the
-# configured process family when set)
+# Block: generic process killers targeting claude, docker and, when set, the configured process family
 if echo "$COMMAND_CONTEXT_STRIPPED" | grep -qE -- "(killall|pkill)\s+.*(${PROTECTED_PROCESS_FAMILY_RE:+${PROTECTED_PROCESS_FAMILY_RE}|}claude|docker)"; then
   echo "BLOCKED: Killing ${PROTECTED_PROCESS_FAMILY:+$PROTECTED_PROCESS_FAMILY/}claude/docker processes is forbidden" >&2
   echo "Command: $COMMAND" >&2

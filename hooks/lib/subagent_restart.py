@@ -145,8 +145,7 @@ def grant_dir() -> Path:
 
 def config_dir() -> Path:
     """Claude Code's configuration directory: CLAUDE_CONFIG_DIR, else ~/.claude."""
-    override = os.environ.get("CLAUDE_CONFIG_DIR")
-    return Path(override) if override else Path.home() / ".claude"
+    return Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude")
 
 
 def state_dir() -> Path:
@@ -835,12 +834,10 @@ def project_slug(project_dir: str | Path) -> str:
 def account_project_roots() -> list[Path]:
     """Every account's session-transcript root, plus the caller's own one.
 
-    Separate Claude account logins (used to spread API quota) each persist
-    session transcripts under their own <accounts-root>/<name>/claude tree
-    rather than a tree shared across accounts, so discovery must walk all of
-    them explicitly — the own configuration directory alone only ever sees the
-    currently active account. The sibling trees are scanned only when
-    CLAUDE_RESTART_ACCOUNTS_ROOT names the accounts root.
+    Separate Claude account logins (used to spread API quota) each persist session transcripts
+    under their own <accounts-root>/<name>/claude tree, not a shared one, so discovery must walk
+    all of them — the own configuration directory only ever sees the active account. Sibling
+    trees are scanned only when CLAUDE_RESTART_ACCOUNTS_ROOT names the accounts root.
     """
     roots: list[Path] = []
     if ACCOUNTS_ROOT is not None and ACCOUNTS_ROOT.is_dir():

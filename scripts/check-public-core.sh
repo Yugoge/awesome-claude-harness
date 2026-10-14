@@ -4,8 +4,7 @@
 #   escaping classification), if any class label is invalid, or if a known author-environment
 #   residue marker leaks into a public-core-classified file un-parameterized. Companion to
 #   PUBLIC-CORE.md (the ledger) and docs/reference/roadmap-decomposition-productization.md §4.
-# Usage: bash scripts/check-public-core.sh
-#        bash scripts/check-public-core.sh --private-literals
+# Usage: bash scripts/check-public-core.sh [--private-literals]
 #        bash scripts/check-public-core.sh --scan-root <dir> --release-manifest <file>
 #   Default (no args): gate the git checkout — ledger completeness + residue over the
 #   ledger-derived public-core set + the private-literal rule over every tracked file.
@@ -43,7 +42,7 @@ while [ $# -gt 0 ]; do
     --scan-root)        SCAN_ROOT="${2:?--scan-root needs a directory}"; shift 2 ;;
     --release-manifest) RELEASE_MANIFEST="${2:?--release-manifest needs a file}"; shift 2 ;;
     --private-literals) LITERALS_ONLY=1; shift ;;
-    -h|--help)          sed -n '2,16p' "${BASH_SOURCE[0]}"; exit 0 ;;
+    -h|--help)          sed -n '2,15p' "${BASH_SOURCE[0]}"; exit 0 ;;
     *) echo "check-public-core: unknown argument '$1'" >&2; exit 1 ;;
   esac
 done

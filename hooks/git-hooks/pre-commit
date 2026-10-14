@@ -1,14 +1,10 @@
 #!/usr/bin/env bash
 # claude-harness pre-commit (installed by scripts/bootstrap)
-# Fail-closed: every step refuses the commit when its check fails OR its script (taken from
-# this repository's working tree, never a home directory) is missing, and prints one line
-# naming the failed check. A hook displaced by the install runs last as pre-commit.local.
+# Fail-closed: each step refuses the commit (one line naming the check) if its check fails OR its script
+# (from this working tree, never a home directory) is missing. A displaced hook runs last as pre-commit.local.
 set -u
 
-refuse() {
-  echo "pre-commit: commit REFUSED by the $*" >&2
-  exit 1
-}
+refuse() { echo "pre-commit: commit REFUSED by the $*" >&2; exit 1; }
 need() { [ -f "$top/$2" ] || refuse "$1: $2 is missing"; }
 
 # Resolved before changing directory: git may run the hook by a relative path.

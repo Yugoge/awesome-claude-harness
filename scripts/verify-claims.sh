@@ -330,9 +330,7 @@ fi
 
 # ---------------------------------------------------------------------------
 # 6. Enforcement-evidence gates (docs/ENFORCEMENT-LEDGER.md <-> settings.json <-> the code).
-#    (Step 5, a hook-set sync against a second settings file, is retired: settings.json is the
-#    single tracked source, so there is nothing to keep in sync. The number is kept free so
-#    citations of this step stay valid.)
+#    (Step 5 retired: settings.json is the sole settings file, so no hook-set sync; number kept free.)
 #    ADDITIVE: this step only ever appends to the existing accumulator, so it cannot change the
 #    pass/fail semantics of checks 1-4 for unrelated PRs.
 #
