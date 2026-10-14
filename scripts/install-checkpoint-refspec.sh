@@ -5,9 +5,10 @@
 # Installed 2026-04-16 (SaaS-grade blame-hygiene audit — ops gap O4).
 #
 # Purpose
-#   checkpoint-core.sh pushes refs/checkpoints/<branch> in the background,
-#   but a default git clone only fetches refs/heads/*. This script adds
-#   the extra refspec so team members see each other's checkpoints under
+#   checkpoint-core.sh pushes refs/checkpoints/<branch> in the background only
+#   when GIT_AUTO_PUSH=1 (off by default; otherwise checkpoints stay local).
+#   A default git clone only fetches refs/heads/*. This script adds the extra
+#   refspec so team members see each other's pushed checkpoints under
 #   refs/remotes/origin/checkpoints/*.
 #
 # Usage
