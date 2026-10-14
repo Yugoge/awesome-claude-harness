@@ -80,7 +80,7 @@ def set_config(root, **knobs):
     path.write_text(json.dumps(cfg, indent=1, sort_keys=True) + "\n")
 
 
-def ledger(tmp_path, accounts="orchestrade,yugetang,yugoge"):
+def ledger(tmp_path, accounts="acct-a,acct-b,acct-c"):
     root = tmp_path / "ledger"
     ok(root, "init", "--accounts", accounts)
     return root
@@ -99,7 +99,26 @@ def test_init_creates_documented_layout(tmp_path):
     wm = json.loads((root / "inbox" / "watermark.json").read_text())
     assert wm == {"processed_count": 0, "last_event_id": None}
     accounts = json.loads((root / "accounts.json").read_text())["accounts"]
-    assert set(accounts) == {"orchestrade", "yugetang", "yugoge"}
+    assert set(accounts) == {"acct-a", "acct-b", "acct-c"}
+
+
+def test_init_refuses_without_any_account_and_writes_nothing(tmp_path):
+    root = tmp_path / "ledger"
+    r = run(root, "init", env={"PASEO_DAEMON_ACCOUNTS": ""})
+    assert r.returncode == 1, r.stderr
+    assert "PASEO_DAEMON_ACCOUNTS" in r.stderr
+    assert not root.exists()
+
+
+def test_init_accounts_default_comes_from_paseo_daemon_accounts(tmp_path):
+    root = tmp_path / "ledger"
+    ok(root, "init", env={"PASEO_DAEMON_ACCOUNTS": "acct-a, acct-b"})
+    accounts = json.loads((root / "accounts.json").read_text())["accounts"]
+    assert sorted(accounts) == ["acct-a", "acct-b"]
+
+
+def test_wake_vendor_node_default_is_the_node_found_on_path():
+    assert load_engine().WAKE_VENDOR_NODE_PATH_DEFAULT == (shutil.which("node") or "node")
 
 
 # ---------------- inbox: consume -> plan -> ack exactly once ----------------
@@ -469,10 +488,10 @@ def test_fsm_terminal_requires_machine_readable_evidence(tmp_path):
 
 def test_reservation_in_flight_single_writer(tmp_path):
     root = ledger(tmp_path)
-    r = run(root, "reserve", "--reservation-id", "res-1", "--account", "orchestrade",
+    r = run(root, "reserve", "--reservation-id", "res-1", "--account", "acct-a",
             "--logical-session", "sess-1")
     assert r.returncode == 0
-    assert run(root, "reserve", "--reservation-id", "res-1", "--account", "orchestrade",
+    assert run(root, "reserve", "--reservation-id", "res-1", "--account", "acct-a",
                "--logical-session", "sess-1").returncode == 2
 
 
@@ -567,10 +586,10 @@ def test_classify_error_without_account_never_requires_caller_id_but_persist_bra
     # pure classification (no --account): read-only in effect, never persists
     assert run(root, "classify-error", "--text", "HTTP 429", now=T0).returncode == 0
     # --account triggers the persisting branch, which IS gated
-    r = run(root, "classify-error", "--text", "HTTP 429", "--account", "orchestrade", now=T0)
+    r = run(root, "classify-error", "--text", "HTTP 429", "--account", "acct-a", now=T0)
     assert r.returncode == 2
     ok(root, "classify-error", "--caller-id", "ctl-A", "--text", "HTTP 429",
-       "--account", "orchestrade", now=T0)
+       "--account", "acct-a", now=T0)
 
 
 # ---------------- F8 error classification ----------------
@@ -593,17 +612,17 @@ def test_error_texts_map_to_five_f8_classes(tmp_path):
 
 def test_blocked_probation_eligible_requires_recorded_success(tmp_path):
     root = ledger(tmp_path)
-    ok(root, "account-init", "--account", "orchestrade", "--weekly-reset", "2026-09-03T18:00:00Z")
-    ok(root, "account-block", "--account", "orchestrade", "--until", "2026-09-03T18:00:00Z")
+    ok(root, "account-init", "--account", "acct-a", "--weekly-reset", "2026-09-03T18:00:00Z")
+    ok(root, "account-block", "--account", "acct-a", "--until", "2026-09-03T18:00:00Z")
     # canary result while still blocked (not probation) is refused
-    assert run(root, "account-canary-result", "--account", "orchestrade",
+    assert run(root, "account-canary-result", "--account", "acct-a",
                "--result", "success").returncode == 2
     # before the reset instant: not moved
     out = ok(root, "account-observe-reset", now="2026-09-03T17:59:00Z")
     assert out["moved_to_probation"] == []
     out = ok(root, "account-observe-reset", now="2026-09-03T18:00:01Z")
-    assert out["moved_to_probation"] == ["orchestrade"]
-    out = ok(root, "account-canary-result", "--account", "orchestrade", "--result", "success")
+    assert out["moved_to_probation"] == ["acct-a"]
+    out = ok(root, "account-canary-result", "--account", "acct-a", "--result", "success")
     assert out["state"] == "eligible"
 
 
@@ -612,7 +631,7 @@ def test_blocked_probation_eligible_requires_recorded_success(tmp_path):
 def test_naive_timestamps_rejected(tmp_path):
     root = ledger(tmp_path)
     assert run(root, "lease-status", now="2026-08-28T12:00:00").returncode == 3
-    assert run(root, "account-init", "--account", "orchestrade",
+    assert run(root, "account-init", "--account", "acct-a",
                "--weekly-reset", "2026-09-03T18:00:00").returncode == 3
 
 
@@ -620,9 +639,9 @@ def test_naive_timestamps_rejected(tmp_path):
 
 def recovery_setup(tmp_path):
     root = ledger(tmp_path)
-    ok(root, "account-init", "--account", "orchestrade", "--weekly-reset", "2026-09-03T18:00:00Z")
-    ok(root, "account-block", "--account", "orchestrade", "--until", "2026-09-03T18:00:00Z")
-    ok(root, "recovery-record", "--session", "sess-1", "--account", "orchestrade",
+    ok(root, "account-init", "--account", "acct-a", "--weekly-reset", "2026-09-03T18:00:00Z")
+    ok(root, "account-block", "--account", "acct-a", "--until", "2026-09-03T18:00:00Z")
+    ok(root, "recovery-record", "--session", "sess-1", "--account", "acct-a",
        "--original-agent-ids", "agent-orig-1,agent-orig-2",
        "--last-artifact", "docs/dev/dev-report-x.json")
     return root
@@ -648,9 +667,9 @@ def test_resume_nonce_gated_on_reset_instant(tmp_path):
 # ---------------- three-account distinct-reset probation fixture ----------------
 
 RESETS = {  # pairwise-distinct weekly reset instants (live-observed pattern)
-    "orchestrade": "2026-09-03T18:00:00Z",
-    "yugoge": "2026-09-02T14:00:00Z",
-    "yugetang": "2026-09-01T09:00:00Z",
+    "acct-a": "2026-09-03T18:00:00Z",
+    "acct-c": "2026-09-02T14:00:00Z",
+    "acct-b": "2026-09-01T09:00:00Z",
 }
 
 
@@ -665,35 +684,35 @@ def three_blocked_accounts(tmp_path):
 
 def test_only_the_crossed_account_enters_probation_success_reopens(tmp_path):
     root = three_blocked_accounts(tmp_path)
-    # advance the fake clock across ONE reset (yugetang) only
+    # advance the fake clock across ONE reset (acct-b) only
     out = ok(root, "account-observe-reset", now="2026-09-01T09:00:01Z")
-    assert out["moved_to_probation"] == ["yugetang"]
+    assert out["moved_to_probation"] == ["acct-b"]
     accounts = json.loads((root / "accounts.json").read_text())["accounts"]
-    assert accounts["yugetang"]["state"] == "probation"
-    assert accounts["yugetang"]["probation_concurrency"] == 1  # single-concurrency
-    assert accounts["orchestrade"]["state"] == "blocked_until"
-    assert accounts["yugoge"]["state"] == "blocked_until"
-    out = ok(root, "account-canary-result", "--account", "yugetang", "--result", "success")
+    assert accounts["acct-b"]["state"] == "probation"
+    assert accounts["acct-b"]["probation_concurrency"] == 1  # single-concurrency
+    assert accounts["acct-a"]["state"] == "blocked_until"
+    assert accounts["acct-c"]["state"] == "blocked_until"
+    out = ok(root, "account-canary-result", "--account", "acct-b", "--result", "success")
     assert out["state"] == "eligible"  # one recorded success reopens
 
 
 def test_canary_failure_reblocks_without_busy_loop(tmp_path):
     root = three_blocked_accounts(tmp_path)
     ok(root, "account-observe-reset", now="2026-09-01T09:00:01Z")
-    out = ok(root, "account-canary-result", "--account", "yugetang", "--result", "failure",
+    out = ok(root, "account-canary-result", "--account", "acct-b", "--result", "failure",
              now="2026-09-01T09:30:00Z")
     assert out["state"] == "blocked_until"
     # no busy-loop: an immediate re-sweep does NOT re-probate the failed account
     out = ok(root, "account-observe-reset", now="2026-09-01T09:31:00Z")
-    assert "yugetang" not in out["moved_to_probation"]
+    assert "acct-b" not in out["moved_to_probation"]
     accounts = json.loads((root / "accounts.json").read_text())["accounts"]
-    assert accounts["yugetang"]["state"] == "blocked_until"
+    assert accounts["acct-b"]["state"] == "blocked_until"
 
 
 # ---------------- scheduling-decision fixtures (M9 contract) ----------------
 
 def ingest_remaining(root, remaining_pct):
-    providers = [{"providerId": "claude", "displayName": "Claude · orchestrade",
+    providers = [{"providerId": "claude", "displayName": "Claude · acct-a",
                   "status": "available",
                   "windows": [{"id": "weekly", "usedPct": 100 - remaining_pct,
                                "remainingPct": remaining_pct,
@@ -702,7 +721,7 @@ def ingest_remaining(root, remaining_pct):
 
 
 def decide(root, task_class):
-    return ok(root, "scheduling-decision", "--account", "orchestrade",
+    return ok(root, "scheduling-decision", "--account", "acct-a",
               "--task-class", task_class)
 
 
@@ -815,7 +834,7 @@ def valid_dossier():
                                   "artifact": "docs/dev/dev-report-x.json"},
         "side_effects": [{"desc": "wrote dev report", "at": T0}],
         "permissions": [{"id": "perm-1", "state": "pending"}],
-        "routing_generation": {"account": "orchestrade", "model": "fable 5",
+        "routing_generation": {"account": "acct-a", "model": "fable 5",
                                "generation": 2},
         "next_legal_transition": "qa-verify",
         "interrupted_children": [{"agent_id": "child-1", "reason": "quota interrupt"}],
@@ -981,7 +1000,7 @@ def test_blocked_account_never_dispatches_even_with_plentiful_reading(tmp_path):
     before the usage tier."""
     root = ledger(tmp_path)
     ingest_remaining(root, 86)  # plentiful reading persisted
-    ok(root, "account-block", "--account", "orchestrade", "--until", "2026-09-03T18:00:00Z")
+    ok(root, "account-block", "--account", "acct-a", "--until", "2026-09-03T18:00:00Z")
     out = decide(root, "quality")
     assert out["state"] == "blocked_until"
     assert out["action"] == "stop_or_switch" and out["model"] is None
@@ -990,26 +1009,26 @@ def test_blocked_account_never_dispatches_even_with_plentiful_reading(tmp_path):
 
 def test_classify_error_with_account_persists_consequence(tmp_path):
     root = ledger(tmp_path)
-    ok(root, "account-init", "--account", "orchestrade", "--weekly-reset", "2026-09-03T18:00:00Z")
+    ok(root, "account-init", "--account", "acct-a", "--weekly-reset", "2026-09-03T18:00:00Z")
     out = ok(root, "classify-error", "--text", "You have hit your weekly usage limit.",
-             "--account", "orchestrade")
+             "--account", "acct-a")
     assert out["account_state"] == "blocked_until"
     accounts = json.loads((root / "accounts.json").read_text())["accounts"]
-    assert accounts["orchestrade"]["state"] == "blocked_until"
-    assert accounts["orchestrade"]["blocked_until"] == "2026-09-03T18:00:00Z"
+    assert accounts["acct-a"]["state"] == "blocked_until"
+    assert accounts["acct-a"]["blocked_until"] == "2026-09-03T18:00:00Z"
     out = ok(root, "classify-error", "--text", "segfault in flux capacitor",
-             "--account", "yugoge")
+             "--account", "acct-c")
     assert out["account_state"] == "suspect"
 
 
 def test_probation_reservation_is_single_concurrency(tmp_path):
     """codex finding 6: one active canary reservation while in probation."""
     root = three_blocked_accounts(tmp_path)
-    ok(root, "account-observe-reset", now="2026-09-01T09:00:01Z")  # yugetang -> probation
-    r = run(root, "reserve", "--reservation-id", "res-1", "--account", "yugetang",
+    ok(root, "account-observe-reset", now="2026-09-01T09:00:01Z")  # acct-b -> probation
+    r = run(root, "reserve", "--reservation-id", "res-1", "--account", "acct-b",
             "--logical-session", "sess-1")
     assert r.returncode == 0
-    r = run(root, "reserve", "--reservation-id", "res-2", "--account", "yugetang",
+    r = run(root, "reserve", "--reservation-id", "res-2", "--account", "acct-b",
             "--logical-session", "sess-2")
     assert r.returncode == 2 and "single-concurrency probation" in r.stderr
 
@@ -1017,8 +1036,8 @@ def test_probation_reservation_is_single_concurrency(tmp_path):
 def test_recovery_demand_without_reliable_gate_fails_closed(tmp_path):
     """codex finding 7: no reset instant / nextEligibleAt -> the gate cannot
     be confirmed passed; the demand queues as class-5 blockage, nonce intact."""
-    root = ledger(tmp_path)  # orchestrade never account-init'ed: no gate at all
-    ok(root, "recovery-record", "--session", "sess-1", "--account", "orchestrade",
+    root = ledger(tmp_path)  # acct-a never account-init'ed: no gate at all
+    ok(root, "recovery-record", "--session", "sess-1", "--account", "acct-a",
        "--original-agent-ids", "agent-orig-1,agent-orig-2")
     out = ok(root, "recovery-demand", "--session", "sess-1", now="2026-09-09T00:00:00Z")
     assert out["status"] == "queued_no_reliable_gate"
@@ -1146,15 +1165,15 @@ def test_rehydration_barrier_blocks_mutations_until_full_attestation(tmp_path):
 def test_canary_failure_after_multi_week_downtime_advances_gate_past_now(tmp_path):
     """codex finding 18: the re-block gate is always strictly in the future."""
     root = ledger(tmp_path)
-    ok(root, "account-init", "--account", "orchestrade", "--weekly-reset", "2026-08-06T00:00:00Z")
-    ok(root, "account-block", "--account", "orchestrade", "--until", "2026-08-06T00:00:00Z")
+    ok(root, "account-init", "--account", "acct-a", "--weekly-reset", "2026-08-06T00:00:00Z")
+    ok(root, "account-block", "--account", "acct-a", "--until", "2026-08-06T00:00:00Z")
     ok(root, "account-observe-reset", now="2026-09-01T00:00:00Z")
-    out = ok(root, "account-canary-result", "--account", "orchestrade", "--result", "failure",
+    out = ok(root, "account-canary-result", "--account", "acct-a", "--result", "failure",
              now="2026-09-01T00:00:00Z")
     assert out["state"] == "blocked_until"
     accounts = json.loads((root / "accounts.json").read_text())["accounts"]
     from datetime import datetime, timezone
-    gate = datetime.fromisoformat(accounts["orchestrade"]["blocked_until"].replace("Z", "+00:00"))
+    gate = datetime.fromisoformat(accounts["acct-a"]["blocked_until"].replace("Z", "+00:00"))
     assert gate > datetime(2026, 9, 1, tzinfo=timezone.utc)  # strictly future, no busy-loop
 
 
@@ -2271,7 +2290,7 @@ def test_config_knobs_seeded_by_init_satisfy_coupling_invariant(tmp_path):
 def test_config_knobs_init_never_overwrites_existing_config(tmp_path):
     root = ledger(tmp_path)
     legacy = strip_wake_knobs(root)
-    ok(root, "init", "--accounts", "orchestrade,yugetang,yugoge")  # idempotent re-init
+    ok(root, "init", "--accounts", "acct-a,acct-b,acct-c")  # idempotent re-init
     assert json.loads((root / "config.json").read_text()) == legacy
 
 
@@ -4275,7 +4294,7 @@ def test_watchdog_check_registry_dir_defaults_to_real_registry_path(tmp_path):
     engine = load_engine()
     parser = engine.build_parser()
     args = parser.parse_args(["--root", str(tmp_path), "watchdog-check"])
-    assert args.registry_dir == "/root/.paseo/schedules"
+    assert args.registry_dir == str(Path.home() / ".paseo" / "schedules")
 
 
 def test_watchdog_check_self_heal_short_circuits_on_teardown_status_before_registry_default(tmp_path):

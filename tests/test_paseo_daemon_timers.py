@@ -59,7 +59,7 @@ def ok(registry_dir, *args, **kw):
     return json.loads(last) if last.startswith("{") else r.stdout
 
 
-def ledger_init(tmp_path, accounts="orchestrade,yugetang,yugoge"):
+def ledger_init(tmp_path, accounts="acct-a,acct-b,acct-c"):
     root = tmp_path / "ledger"
     r = subprocess.run(
         [sys.executable, str(LEDGER), "--root", str(root), "--now", T0,
@@ -296,6 +296,28 @@ def test_ac9_command_doc_names_ensure_in_bootstrap_and_drain_in_new_section():
 
     assert "paseo-daemon-timers.py ensure" in bootstrap_section
     assert "paseo-daemon-timers.py drain" in text
+
+
+# ---------------- watchdog target: harness home + configured model ----------------
+
+def test_watchdog_target_uses_harness_home_and_configured_model(tmp_path):
+    """The created watchdog's new-agent target runs in this script's harness
+    home and uses PASEO_DAEMON_MODEL; unset, the model id has no account suffix."""
+    prompts = make_prompts_dir(tmp_path)
+    for index, (model, expected) in enumerate((("claude-sonnet-4-6@acct-a", "claude-sonnet-4-6@acct-a"),
+                                               (None, "claude-sonnet-4-6"))):
+        registry = tmp_path / f"registry-{index}"
+        env = {k: v for k, v in os.environ.items() if k != "PASEO_DAEMON_MODEL"}
+        if model is not None:
+            env["PASEO_DAEMON_MODEL"] = model
+        r = subprocess.run([sys.executable, str(TIMERS), "--registry-dir", str(registry), "--now", T0,
+                            "ensure", "--controller-agent-id", CONTROLLER_AGENT_ID,
+                            "--prompts-dir", str(prompts)],
+                           capture_output=True, text=True, cwd=REPO, env=env)
+        assert r.returncode == 0, r.stderr
+        config = by_name(registry)["paseo-daemon-watchdog"][1]["target"]["config"]
+        assert config["model"] == expected
+        assert config["cwd"] == str(REPO)
 
 
 # ---------------- AC10: this suite never touches the real registry ----------------

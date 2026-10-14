@@ -5,7 +5,7 @@
 # Read full JSON from stdin
 INPUT=$(cat)
 
-CLAUDE_HOME="${CLAUDE_HOME:-${HOME}/.claude}"
+CLAUDE_HOME="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." 2>/dev/null && pwd)"  # harness home: script-relative
 CLAUDE_TMPDIR="${CLAUDE_TMPDIR:-${TMPDIR:-/tmp}}"
 # Hook runtime-state root (CLAUDE_STATE_DIR; default /tmp). Fail-soft fallback.
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)/lib/harness_state_dir.sh" 2>/dev/null \
@@ -66,53 +66,30 @@ ARTIFACT_NS_CAPTURE_RE="(^|[[:space:];|&(])[A-Za-z_][A-Za-z0-9_]*=['\"]?"
 # so the ordinary auditing shape `... | awk '{print $1}'` is NOT a write.
 ARTIFACT_VAR_WRITE_RE="(>>?[&|]?[[:space:]]*['\"]?\\\$\{?[A-Za-z_]|${ARTIFACT_WRITE_VERB_RE}.*\\\$\{?[A-Za-z_])"
 
-# ── Local service-integration layer — maintainer environment ─────────────────
-# This hook gates REAL docker / systemd / daemon operations on the maintainer's
-# host, so it necessarily names local services and absolute paths. They are
-# INTENTIONAL integration points, not accidental personal-lab residue. Every
-# ":-default" below preserves historical behavior EXACTLY: with all CLAUDE_*
-# overrides unset, this hook's (exit_code, stdout, stderr) is byte-for-byte
-# identical to the pre-manifest version. Literals are inventoried here by STABLE
-# RULE LABEL — not line number; any line numbers are "as of this edit" and drift.
-#
-# 1. Configurable integration knobs (env-overridable; default = current literal):
-#      DEV_CONTAINERS               <- CLAUDE_DEV_CONTAINERS  (default "happy-web-dev")
-#                                     rule "docker happy-family guard" (docker stop/restart/rm/kill)
-#      DEV_SYSTEMD                  <- CLAUDE_DEV_SYSTEMD      (default "")
-#                                     rule "systemctl production-target guard"
-#      DAEMON_RESTART_GRANT_HELPER  <- CLAUDE_DAEMON_RESTART_GRANT_HELPER
-#                                     (default "/root/bin/claude-allow-restart")
-#                                     cosmetic: daemon-restart stderr guidance only —
-#                                     Layer 1.A hint + Layer 1.B/1.E reason lines; the
-#                                     grant sentinel dir is DAEMON_RESTART_GRANT_DIR (above).
-#      PROTECTED_DAEMON_PREFIX      <- CLAUDE_PROTECTED_DAEMON_PREFIX  (default "happy-daemon")
-#      PROTECTED_DAEMON_TARGETS     <- CLAUDE_PROTECTED_DAEMON_TARGETS (default "dev|jade|qijie")
-#                                     rules "daemon-restart-prohibition" (Layer 1.A),
-#                                     "daemon-restart-wrapper" (1.B), and the systemctl
-#                                     production-target guard's protected-daemon exclusion
-#                                     (the non-protected systemctl block below).
-#
-# 2. Protected daemon unit identity — env-overridable, default = current literal:
-#      the protected daemon prefix "happy-daemon" + per-instance targets dev|jade|qijie
-#      are the DEFAULTS of PROTECTED_DAEMON_PREFIX / PROTECTED_DAEMON_TARGETS (section 1).
-#      With both unset, Layer 1.A/1.B and the non-protected systemctl exclusion protect
-#      exactly "happy-daemon(-{dev,jade,qijie})" as before. NOTE (grant-channel coupling):
-#      the target suffix also keys the external grant helper's sentinel protocol
-#      (claude-allow-daemon-restart-<target>.flag). Overriding the prefix/targets RETARGETS
-#      which daemon this hook protects, but a public consumer must configure a matching
-#      grant helper (or rely on DAEMON_RESTART_GRANT_HELPER) so the grant channel stays in
-#      sync — otherwise the gate is protective but un-grantable.
-#
-# 3. Non-configurable catastrophe guards (absolute-ban; deliberately hardcoded):
-#      rules "session-dirs ban", "happy-session-recovery ban", "happy-restart ban".
-#      A guard you can disable via env var is not a guard — these stay literal.
-#
-# 4. Provenance-only comment refs (documentation of past incidents; NO runtime effect):
-#      packages/happy-app (2026-04-19 wide-checkout incident), /root/.claude-cold.backup
-#      (field-shape provenance), /root/<repo>/.claude, /root/deploy (compose example dir).
-#
-# 5. Broad family catch-all guards (intentional historical safety semantics, kept literal):
-#      the bare "happy" family in "docker ... happy" and "killall|pkill ... happy".
+# ── Local service-integration knobs (environment-configured) ─────────────────
+# The rules that protect local containers, units and scripts take every name from
+# the environment (normally the untracked settings overlay's env). Built-in
+# defaults are empty or generic: with nothing configured those rules are inert or
+# generic, and an empty value never matches every command. Inventory by stable
+# rule label (line numbers drift):
+#   CLAUDE_DEV_CONTAINERS (""): containers the "docker process-family guard" lets
+#     Claude stop/restart/rm/kill; empty = no dev container is whitelisted.
+#   CLAUDE_DEV_SYSTEMD (""): units the "systemctl production-target guard" allows.
+#   CLAUDE_DAEMON_RESTART_GRANT_HELPER (""): grant helper named in the
+#     daemon-restart stderr guidance only (Layer 1.A hint, 1.B/1.E reasons); the
+#     grant sentinel dir is DAEMON_RESTART_GRANT_DIR (above).
+#   CLAUDE_PROTECTED_DAEMON_PREFIX / _TARGETS (""): unit prefix plus '|'-separated
+#     target suffixes for "daemon-restart-prohibition" (1.A), "daemon-restart-
+#     wrapper" (1.B) and the systemctl guard's exclusion; empty prefix = those
+#     layers are inert. The target suffix also keys the grant sentinel
+#     (claude-allow-daemon-restart-<target>.flag), so a configured prefix needs a
+#     matching grant helper or the gate is protective but un-grantable.
+#   CLAUDE_PROTECTED_PROCESS_FAMILY (""): name word of the "docker process-family
+#     guard" (empty = inert) and an extra target of the killall/pkill guard, which
+#     always protects claude|docker.
+#   CLAUDE_HARD_BANNED_SCRIPTS ("session-recovery|restart-all-sessions"):
+#     '|'-separated EREs of the "hard-banned scripts" rule; the "session-dirs ban"
+#     stays literal.
 # ─────────────────────────────────────────────────────────────────────────────
 
 # IS_SUBAGENT: set once here at the top of the script (after PYTHON_BIN resolution).
@@ -124,7 +101,7 @@ IS_SUBAGENT=$(echo "$INPUT" | "$PYTHON_BIN" -c "import json,sys; d=json.load(sys
 # strict-mode preludes such as `set -euo pipefail` before the actual command.
 # Docker compose service detection must examine compose invocations, not the
 # first shell token in the whole snippet; otherwise dev-only operations like
-# `set -euo pipefail; cd /root/deploy; docker compose up -d happy-web-dev`
+# `set -euo pipefail; cd /opt/demo; docker compose up -d demo-web-dev`
 # are misclassified as service `set`.
 strip_shell_prelude_for_compose() {
   local command="$1"
@@ -313,40 +290,33 @@ fi
 # ─────────────────────────────────────────────────────────────────────────────
 
 # ── Dev whitelist (exact names only) ──────────────────────────────
-# These are the ONLY dev resources that can be freely managed.
-DEV_CONTAINERS="${CLAUDE_DEV_CONTAINERS:-happy-web-dev}"
-# Per c3-20260504-223115 R1: happy-daemon-dev is REMOVED from the systemctl whitelist.
-# All happy-daemon-* targets are gated by Layer 1.A (daemon-restart-prohibition) which
-# requires an explicit user grant via /root/bin/claude-allow-restart. The systemctl block
-# at line ~700 skips happy-daemon commands entirely (Layer 1.A already adjudicated).
+# These are the ONLY dev resources that can be freely managed (empty = none).
+# Protected-daemon units are never whitelisted here: Layer 1.A gates them behind
+# an explicit user grant and the systemctl block below skips them.
+DEV_CONTAINERS="${CLAUDE_DEV_CONTAINERS:-}"
 DEV_SYSTEMD="${CLAUDE_DEV_SYSTEMD:-}"
-# Grant-helper path echoed in the daemon-restart stderr guidance — the Layer 1.A hint plus
-# the Layer 1.B/1.E reason lines (cosmetic stderr only; the grant sentinel dir itself is
-# DAEMON_RESTART_GRANT_DIR, declared near the top).
-# Env-overridable; default = current literal so the unset-override behavior is byte-identical.
-DAEMON_RESTART_GRANT_HELPER="${CLAUDE_DAEMON_RESTART_GRANT_HELPER:-/root/bin/claude-allow-restart}"
-# Protected daemon identity (env-overridable; default = current literal, same idiom as
-# CLAUDE_DEV_CONTAINERS above). The daemon-restart-prohibition (Layer 1.A) + its wrapper
-# sibling (1.B) + the non-protected systemctl exclusion gate a specific local daemon by
-# unit prefix and per-instance target suffixes. With both env vars unset the guard protects
-# "happy-daemon" + targets dev|jade|qijie exactly as before (byte-for-byte).
-PROTECTED_DAEMON_PREFIX="${CLAUDE_PROTECTED_DAEMON_PREFIX:-happy-daemon}"
-PROTECTED_DAEMON_TARGETS="${CLAUDE_PROTECTED_DAEMON_TARGETS:-dev|jade|qijie}"
-# ERE-safe variants of the protected-daemon identity. The PREFIX names a LITERAL local daemon
-# unit, so every ERE metacharacter ( ] [ \ . ^ $ * + ? ( ) { } | ) AND a leading '-' is escaped
-# before the value is interpolated into any `grep -E` context below (Layers 1.A/1.B and the
-# non-protected systemctl exclusion). Without this, an operator-configured prefix carrying regex
-# metacharacters (e.g. "my.daemon") would MISS or mis-extract the daemon — a catastrophe-guard
-# weakening for the retargeted case. Contract: PROTECTED_DAEMON_TARGETS is INTENTIONALLY a
-# '|'-separated alternation of literal target words (dev|jade|qijie by default); each word's
-# metacharacters are escaped while the '|' separators are PRESERVED so the alternation still
-# holds. Default values contain no metacharacters, so the escaped forms are byte-identical and
-# env-unset behavior is unchanged. All grep uses also pass `--` so a leading '-' in the value
-# can never be read as an option.
+# Grant helper named in the daemon-restart stderr guidance only (see inventory above).
+DAEMON_RESTART_GRANT_HELPER="${CLAUDE_DAEMON_RESTART_GRANT_HELPER:-}"
+DAEMON_RESTART_GRANT_HINT="${DAEMON_RESTART_GRANT_HELPER:-<daemon-restart grant helper>}"
+# Protected daemon identity: unit prefix + per-instance target suffixes. An EMPTY
+# prefix makes Layers 1.A/1.B and the systemctl exclusion inert; every use below
+# tests it for emptiness first, because an empty ERE would match every command.
+PROTECTED_DAEMON_PREFIX="${CLAUDE_PROTECTED_DAEMON_PREFIX:-}"
+PROTECTED_DAEMON_TARGETS="${CLAUDE_PROTECTED_DAEMON_TARGETS:-}"
+# Process-family word of the docker and killall/pkill guards (empty = docker rule inert).
+PROTECTED_PROCESS_FAMILY="${CLAUDE_PROTECTED_PROCESS_FAMILY:-}"
+# ERE-safe variants. The PREFIX and the FAMILY name LITERAL local names, so every ERE
+# metacharacter ( ] [ \ . ^ $ * + ? ( ) { } | ) AND a leading '-' is escaped before the
+# value is interpolated into any `grep -E` context below; otherwise a configured
+# "my.daemon" would MISS or mis-extract the daemon. PROTECTED_DAEMON_TARGETS is
+# INTENTIONALLY a '|'-separated alternation of literal target words: each word's
+# metacharacters are escaped while the '|' separators are PRESERVED. All grep uses
+# also pass `--` so a leading '-' in the value can never be read as an option.
 _ere_escape_literal()  { printf '%s' "$1" | sed -e 's/[][\\.^$*+?(){}|]/\\&/g' -e 's/^-/\\-/'; }
 _ere_escape_keep_alt() { printf '%s' "$1" | sed -e 's/[][\\.^$*+?(){}]/\\&/g'; }
 PROTECTED_DAEMON_PREFIX_RE="$(_ere_escape_literal  "$PROTECTED_DAEMON_PREFIX")"
 PROTECTED_DAEMON_TARGETS_RE="$(_ere_escape_keep_alt "$PROTECTED_DAEMON_TARGETS")"
+PROTECTED_PROCESS_FAMILY_RE="$(_ere_escape_literal "$PROTECTED_PROCESS_FAMILY")"
 
 # ── Helper: split compound command into subcommands ───────────────
 # Splits on && || ; and checks each subcommand independently.
@@ -424,13 +394,13 @@ check_systemctl_targets_all_dev() {
 # Claude Code PreToolUse approval JSON to stdout, returns 0.
 # Per task-id 20260509-113838 (R11 relaxation): this helper is invoked from the
 # global /allow short-circuit at line 555, which runs BEFORE all four absolute-ban
-# categories (Layer 1.A daemon-restart prohibition + session_dirs/happy-recovery/
-# happy-restart). The user-binding directive (verbatim text preserved in
+# categories (Layer 1.A daemon-restart prohibition + session_dirs/hard-banned
+# scripts). The user-binding directive (verbatim text preserved in
 # docs/dev/ticket-20260509-113838.md) authorizes /allow to bypass any command
 # including dangerous ones when the user explicitly grants the pattern; consume
 # covers ANY safety block when the user-granted pattern matches.
 # NEVER bypasses subagent calls (checked via IS_SUBAGENT script-global set at top of script).
-CONSENT_LOG="$HOME/.claude/logs/bash-consent.log"
+CONSENT_LOG="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/logs/bash-consent.log"
 
 check_and_consume_allowlist() {
   local cmd="$1"
@@ -492,16 +462,14 @@ PYEOF
       echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) sid=$sid CONSUMED pattern='$pattern' is_regex=$is_regex matched_subcmd='$matched_sub' full_cmd='$cmd'" >> "$CONSENT_LOG"
       echo "[allow] Grant matched for pattern='$pattern' (matched subcommand: '$matched_sub'). consume deferred to PostToolUse. Command will proceed." >&2
       # DEFECT 3a fix iter-2 (task-id 20260509-113838): emit the canonical Claude
-      # Code PreToolUse approval JSON to stdout. Field shape verified locally at
-      # /root/.claude-cold.backup/2026-05-06/projects/-dev-shm-dev-workspace-dot-claude/
-      # 314848b6-214f-4302-845f-dc5d3d5975be/tool-results/b7goje9q2.txt:18702,19028
-      # (Anthropic Claude Code release notes); cross-verified by codex consultation
+      # Code PreToolUse approval JSON to stdout. Field shape verified against the
+      # Anthropic Claude Code release notes; cross-verified by codex consultation
       # of https://code.claude.com/docs/en/hooks. This produces a valid permissions-
       # ledger entry for every consumed /allow. NOTE per D3b refutation: this
       # canonical "allow" does NOT cross-block-short-circuit a sibling project-local
       # deny — the docs specify "All matching hooks run in parallel" and PreToolUse
-      # precedence is "deny > defer > ask > allow". Cross-block override of
-      # /root/<repo>/.claude/settings.json deny rules requires a separate cycle
+      # precedence is "deny > defer > ask > allow". Cross-block override of a
+      # project's own .claude/settings.json deny rules requires a separate cycle
       # (Plan B/C/D/E per dev-report plan_a_blocker_d3b).
       #
       # iter-2 fix per qa-report finding 1: pass pattern + matched_sub via env vars
@@ -536,17 +504,17 @@ print(json.dumps({"hookSpecificOutput": {"hookEventName": "PreToolUse", "permiss
 # docs/dev/ticket-20260509-113838.md) authorizing /allow to bypass any command
 # including dangerous ones. The dedicated
 # ${DAEMON_RESTART_GRANT_DIR}/claude-allow-daemon-restart-<target>.flag sentinel created by
-# /root/bin/claude-allow-restart is preserved per W6 as the precise-grant
+# the human-run grant helper is preserved per W6 as the precise-grant
 # alternative for users who prefer not to type generic /allow. The function
 # below is still invoked from Layer 1.A; it remains the consume mechanism
 # for the dedicated channel and is unaffected by the /allow short-circuit
 # relocation.
 
-DAEMON_RESTART_AUDIT_LOG="${CLAUDE_DAEMON_RESTART_AUDIT_LOG:-$HOME/.claude/logs/claude-daemon-restart-grants.log}"
+DAEMON_RESTART_AUDIT_LOG="${CLAUDE_DAEMON_RESTART_AUDIT_LOG:-${CLAUDE_CONFIG_DIR:-$HOME/.claude}/logs/claude-daemon-restart-grants.log}"
 
 # Atomic consume of ${DAEMON_RESTART_GRANT_DIR}/claude-allow-daemon-restart-<target>.flag.
 # Reuses the same flock+SIGALRM atomic-consume design as check_and_consume_allowlist.
-# Args: $1 = bare unit name (e.g. "happy-daemon-dev"), $2 = the verb being attempted.
+# Args: $1 = bare unit name ("<prefix>" or "<prefix>-<target>"), $2 = the verb being attempted.
 # Returns 0 if a valid grant existed and was consumed (caller may proceed);
 # returns 1 otherwise (caller must block).
 check_and_consume_daemon_restart_grant() {
@@ -554,8 +522,7 @@ check_and_consume_daemon_restart_grant() {
   local verb="$2"
 
   # Derive target suffix by stripping the configured PROTECTED_DAEMON_PREFIX.
-  # Default prefix "happy-daemon": happy-daemon → default; happy-daemon-dev → dev;
-  # happy-daemon-jade → jade; happy-daemon-qijie → qijie. The caller (Layer 1.A) only ever
+  # "<prefix>" → default; "<prefix>-<target>" → <target>. The caller (Layer 1.A) only ever
   # passes the bare prefix or "<prefix>-<target>" (its grep restricts the token set), so a
   # plain prefix-strip reproduces the old explicit case exactly for all reachable inputs.
   local target
@@ -850,7 +817,7 @@ _preclean_snapshot_guard() {
 # the pattern supersedes c3-20260504-223115 R11.
 # R11's narrower invariant ("daemon-restart NOT bypassable by generic /allow")
 # is RELAXED for users who type generic /allow. The dedicated
-# /root/bin/claude-allow-restart channel and its check_and_consume_daemon_restart_grant
+# grant-helper channel and its check_and_consume_daemon_restart_grant
 # function are UNTOUCHED (W6) and remain the precise-grant alternative for
 # users who prefer R11's tighter band.
 # Single-shot consume semantics, V1 SIGALRM regex timeout, V1b structural
@@ -972,23 +939,24 @@ if [ "$SENTINEL_EXISTS_FOR_TASK" != "1" ]; then
   fi
 fi
 
-# Layer 1.A — daemon-restart prohibition: systemctl verb gate against happy-daemon-*.
+# Layer 1.A — daemon-restart prohibition: systemctl verb gate against <prefix>[-<target>].
 # Verb set: stop|restart|disable|enable|reload|kill|try-restart|reload-or-restart.
-# Anchor `(\s+|\b)` so `systemctl kill -s SIGTERM happy-daemon-dev` matches (verb
+# Anchor `(\s+|\b)` so `systemctl kill -s SIGTERM <prefix>-<target>` matches (verb
 # followed by `-s` flag, not whitespace-then-target). Stable label: daemon-restart-prohibition.
-if echo "$COMMAND" | grep -qE 'systemctl\s+(stop|restart|disable|enable|reload|kill|try-restart|reload-or-restart)(\s+|\b)' \
+if [ -n "$PROTECTED_DAEMON_PREFIX" ] \
+   && echo "$COMMAND" | grep -qE 'systemctl\s+(stop|restart|disable|enable|reload|kill|try-restart|reload-or-restart)(\s+|\b)' \
    && echo "$COMMAND" | grep -qE -- "$PROTECTED_DAEMON_PREFIX_RE"; then
   # Identify the bare unit name in the command. We look for <prefix>[-<target>]
   # tokens; if multiple targets, the consume rejects unless grant covers all.
-  HAPPY_UNIT=$(echo "$COMMAND" | grep -oE -- "${PROTECTED_DAEMON_PREFIX_RE}(-(${PROTECTED_DAEMON_TARGETS_RE}))?" | head -1 | sed 's/\.service$//')
-  HAPPY_VERB=$(echo "$COMMAND" | grep -oE 'systemctl\s+(stop|restart|disable|enable|reload|kill|try-restart|reload-or-restart)' | head -1 | awk '{print $2}')
-  if [ -n "$HAPPY_UNIT" ] && check_and_consume_daemon_restart_grant "$HAPPY_UNIT" "$HAPPY_VERB"; then
+  DAEMON_UNIT=$(echo "$COMMAND" | grep -oE -- "${PROTECTED_DAEMON_PREFIX_RE}${PROTECTED_DAEMON_TARGETS_RE:+(-(${PROTECTED_DAEMON_TARGETS_RE}))?}" | head -1 | sed 's/\.service$//')
+  DAEMON_VERB=$(echo "$COMMAND" | grep -oE 'systemctl\s+(stop|restart|disable|enable|reload|kill|try-restart|reload-or-restart)' | head -1 | awk '{print $2}')
+  if [ -n "$DAEMON_UNIT" ] && check_and_consume_daemon_restart_grant "$DAEMON_UNIT" "$DAEMON_VERB"; then
     : # grant consumed — fall through to allow the command
   else
-    echo "BLOCKED: daemon-restart-prohibition — systemctl ${HAPPY_VERB:-<verb>} on ${HAPPY_UNIT:-${PROTECTED_DAEMON_PREFIX}-*} is FORBIDDEN" >&2
+    echo "BLOCKED: daemon-restart-prohibition — systemctl ${DAEMON_VERB:-<verb>} on ${DAEMON_UNIT:-${PROTECTED_DAEMON_PREFIX}-*} is FORBIDDEN" >&2
     echo "Command: $COMMAND" >&2
     echo "REASON: per c3-20260504-223115, Claude must NEVER restart any ${PROTECTED_DAEMON_PREFIX}-* by any path." >&2
-    echo "Hint: user must run $DAEMON_RESTART_GRANT_HELPER <target> from a real TTY first." >&2
+    echo "Hint: user must run $DAEMON_RESTART_GRANT_HINT <target> from a real TTY first." >&2
     exit 2
   fi
 fi
@@ -996,14 +964,14 @@ fi
 # Layer 1.B — wrapper-class block: any wrapper invocation co-occurring with
 # protected-daemon vocabulary (PROTECTED_DAEMON_PREFIX) AND a daemon-state-disrupting
 # verb. Stable label: daemon-restart-wrapper.
-if echo "$COMMAND" | grep -qE -- "$PROTECTED_DAEMON_PREFIX_RE" \
+if [ -n "$PROTECTED_DAEMON_PREFIX" ] && echo "$COMMAND" | grep -qE -- "$PROTECTED_DAEMON_PREFIX_RE" \
    && echo "$COMMAND" | grep -qE '(restart|stop|disable|enable|reload|kill|try-restart|reload-or-restart|kick|cycle|bounce|hup|HUP)' \
    && echo "$COMMAND" | grep -qE '(systemd-run|^|[[:space:]])((at|batch)\s|crontab\s|nohup\s|disown\s|watch\s|timeout\s|dbus-send|busctl|nc\s|ncat\s|eval\s|bash\s+-c|sh\s+-c|zsh\s+-c|python3?\s+-c|node\s+-[ce]|perl\s+-e|ruby\s+-e)'; then
   echo "BLOCKED: daemon-restart-wrapper — wrapper invocation co-occurring with daemon-restart vocabulary is FORBIDDEN" >&2
   echo "Command: $COMMAND" >&2
   echo "REASON: per c3-20260504-223115, indirect daemon-restart paths (systemd-run/at/crontab/nohup/" >&2
   echo "        timeout/dbus-send/nc/eval/bash -c/python -c) are all forbidden. Use the user-only" >&2
-  echo "        $DAEMON_RESTART_GRANT_HELPER grant channel instead." >&2
+  echo "        $DAEMON_RESTART_GRANT_HINT grant channel instead." >&2
   exit 2
 fi
 
@@ -1034,13 +1002,13 @@ if echo "$COMMAND" | grep -qE '(curl|wget|nc[[:space:]]|ncat|http\.client|aiohtt
 fi
 
 # Layer 1.E — sentinel-write block: any Bash that creates/edits the grant
-# sentinel is forbidden (only /root/bin/claude-allow-restart may write it).
+# sentinel is forbidden (only the human-run grant helper may write it).
 # Stable label: daemon-restart-sentinel-write.
 if echo "$COMMAND" | grep -qE "${DAEMON_RESTART_SENTINEL_RE}[A-Za-z0-9_-]+\.flag" \
    && echo "$COMMAND" | grep -qE '(>|>>|tee|cp|mv|ln|touch|cat\s)'; then
   echo "BLOCKED: daemon-restart-sentinel-write — writing to grant sentinel is FORBIDDEN" >&2
   echo "Command: $COMMAND" >&2
-  echo "REASON: per c3-20260504-223115, only $DAEMON_RESTART_GRANT_HELPER (run by user from TTY)" >&2
+  echo "REASON: per c3-20260504-223115, only $DAEMON_RESTART_GRANT_HINT (run by user from TTY)" >&2
   echo "        may create the grant sentinel." >&2
   exit 2
 fi
@@ -1762,7 +1730,7 @@ PYEOF
   esac
 fi
 
-# ── ABSOLUTE BAN: session_dirs.txt, happy-session-recovery.sh, happy-restart.sh ──
+# ── ABSOLUTE BAN: session_dirs.txt + hard-banned scripts ──
 # On 2026-04-09, editing session_dirs.txt triggered full restore and killed all sessions.
 # These files must NEVER be touched by Claude under any circumstances.
 
@@ -1773,19 +1741,18 @@ if echo "$COMMAND" | grep -qE 'session_dirs\.txt'; then
   exit 2
 fi
 
-if echo "$COMMAND" | grep -qE 'happy-session-recovery'; then
-  echo "BLOCKED: happy-session-recovery.sh is PERMANENTLY FORBIDDEN" >&2
-  echo "Command: $COMMAND" >&2
-  echo "REASON: This script manages critical session state. Only the user may run it manually." >&2
-  exit 2
-fi
-
-if echo "$COMMAND" | grep -qE 'happy-restart'; then
-  echo "BLOCKED: happy-restart.sh is PERMANENTLY FORBIDDEN" >&2
-  echo "Command: $COMMAND" >&2
-  echo "REASON: This script restarts daemons and can kill all sessions. Only the user may run it manually." >&2
-  exit 2
-fi
+# Scripts that manage session state or restart daemons: CLAUDE_HARD_BANNED_SCRIPTS,
+# '|'-separated EREs, each tested on its own; empty entries are skipped so they can
+# never match every command.
+IFS='|' read -r -a _HARD_BANNED <<< "${CLAUDE_HARD_BANNED_SCRIPTS:-session-recovery|restart-all-sessions}"
+for _ban in "${_HARD_BANNED[@]}"; do
+  if [ -n "$_ban" ] && echo "$COMMAND" | grep -qE -- "$_ban"; then
+    echo "BLOCKED: hard-banned script '$_ban' is PERMANENTLY FORBIDDEN" >&2
+    echo "Command: $COMMAND" >&2
+    echo "REASON: It manages session state or restarts daemons and can kill all sessions. Only the user may run it manually." >&2
+    exit 2
+  fi
+done
 
 # ── Rules ─────────────────────────────────────────────────────────
 
@@ -1821,12 +1788,14 @@ if echo "$COMMAND" | grep -qE '(>|>>|tee|cp|mv|sed|awk)\s.*/etc/docker/daemon\.j
   exit 2
 fi
 
-# Block: docker stop/restart/rm/kill on happy containers (unless ALL targets are dev-whitelisted)
-if echo "$COMMAND" | grep -qE 'docker\s+(stop|restart|rm|kill)\s+.*happy'; then
+# Block: docker stop/restart/rm/kill on containers of the protected process family
+# (unless ALL targets are dev-whitelisted). Inert while the family is empty.
+if [ -n "$PROTECTED_PROCESS_FAMILY" ] \
+   && echo "$COMMAND" | grep -qE -- "docker\s+(stop|restart|rm|kill)\s+.*${PROTECTED_PROCESS_FAMILY_RE}"; then
   if ! check_docker_targets_all_dev "$COMMAND" "$DEV_CONTAINERS"; then
-    echo "BLOCKED: Stopping/restarting production happy containers is forbidden" >&2
+    echo "BLOCKED: Stopping/restarting production $PROTECTED_PROCESS_FAMILY containers is forbidden" >&2
     echo "Command: $COMMAND" >&2
-    echo "Hint: only $DEV_CONTAINERS is allowed." >&2
+    echo "Hint: only ${DEV_CONTAINERS:-<no container: CLAUDE_DEV_CONTAINERS is empty>} is allowed." >&2
     exit 2
   fi
 fi
@@ -1856,9 +1825,10 @@ if echo "$COMMAND_CONTEXT_STRIPPED" | grep -qE '^\s*(dd|mkfs|fdisk|shred)\b'; th
   exit 2
 fi
 
-# Block: generic process killers targeting services
-if echo "$COMMAND_CONTEXT_STRIPPED" | grep -qE '(killall|pkill)\s+.*(happy|claude|docker)'; then
-  echo "BLOCKED: Killing happy/claude/docker processes is forbidden" >&2
+# Block: generic process killers targeting services (claude, docker, plus the
+# configured process family when set)
+if echo "$COMMAND_CONTEXT_STRIPPED" | grep -qE -- "(killall|pkill)\s+.*(${PROTECTED_PROCESS_FAMILY_RE:+${PROTECTED_PROCESS_FAMILY_RE}|}claude|docker)"; then
+  echo "BLOCKED: Killing ${PROTECTED_PROCESS_FAMILY:+$PROTECTED_PROCESS_FAMILY/}claude/docker processes is forbidden" >&2
   echo "Command: $COMMAND" >&2
   exit 2
 fi
@@ -1876,13 +1846,13 @@ fi
 # Verb set extended per c3-20260504-223115 R1 (8 verbs covering all daemon-state-disrupting
 # systemctl operations). Targets covering the protected daemon (PROTECTED_DAEMON_PREFIX) are
 # handled by Layer 1.A above (with the dedicated grant channel); this block fires for
-# non-protected systemctl targets.
+# non-protected systemctl targets, i.e. for every target while the prefix is empty.
 if echo "$COMMAND" | grep -qE 'systemctl\s+(stop|restart|disable|enable|reload|kill|try-restart|reload-or-restart)(\s+|\b)' \
-   && ! echo "$COMMAND" | grep -qE -- "$PROTECTED_DAEMON_PREFIX_RE"; then
+   && { [ -z "$PROTECTED_DAEMON_PREFIX" ] || ! echo "$COMMAND" | grep -qE -- "$PROTECTED_DAEMON_PREFIX_RE"; }; then
   if ! check_systemctl_targets_all_dev "$COMMAND" "$DEV_SYSTEMD"; then
     echo "BLOCKED: systemctl stop/restart/disable/enable/reload/kill/try-restart/reload-or-restart is forbidden for production services" >&2
     echo "Command: $COMMAND" >&2
-    echo "Hint: only $DEV_SYSTEMD is allowed (and ${PROTECTED_DAEMON_PREFIX}-* is gated by Layer 1.A)." >&2
+    echo "Hint: only $DEV_SYSTEMD is allowed${PROTECTED_DAEMON_PREFIX:+ (and ${PROTECTED_DAEMON_PREFIX}-* is gated by Layer 1.A)}." >&2
     exit 2
   fi
 fi

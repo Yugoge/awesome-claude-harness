@@ -84,7 +84,7 @@ Exit codes: 0=success, 1=usage error (missing/invalid CLI input), 2=refused
 (corrupt registry data, or a downstream failure such as teardown-declare
 exiting non-zero).
 
---registry-dir defaults to /root/.paseo/schedules (the real, live registry).
+--registry-dir defaults to ~/.paseo/schedules (the real, live registry).
 Every test MUST override it to a pytest tmp_path; --ledger-root has no
 default at all (see M6) to avoid a footgun that could reach the real
 ledger from a stray invocation.
@@ -136,14 +136,14 @@ INVENTORY = [
         "match_mode": "exact",
         "cron": "23,53 * * * *",
         "timezone": "UTC",
-        # Fully self-contained -- no controller agentId needed to create it
-        # (captured verbatim from the live a814a9a0.json registration).
+        # Fully self-contained -- no controller agentId needed to create it.
+        # cwd = this script's harness home; model = PASEO_DAEMON_MODEL if set.
         "target_type": "new-agent",
         "target_config": {
             "provider": "claude",
-            "cwd": "/root/.claude",
+            "cwd": str(REPO_ROOT),
             "modeId": "bypassPermissions",
-            "model": "claude-sonnet-4-6@yugoge",
+            "model": os.environ.get("PASEO_DAEMON_MODEL") or "claude-sonnet-4-6",
             "featureValues": {},
         },
     },
@@ -675,7 +675,7 @@ def cmd_resume(args):
 
 def build_parser():
     p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    p.add_argument("--registry-dir", default="/root/.paseo/schedules",
+    p.add_argument("--registry-dir", default=str(Path.home() / ".paseo" / "schedules"),
                    help="on-disk schedule registry directory (tests MUST use a tmp_path)")
     p.add_argument("--now", default=None, help="fake clock: aware ISO-8601 timestamp (tests)")
     sub = p.add_subparsers(dest="cmd", required=True)

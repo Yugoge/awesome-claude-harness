@@ -11,8 +11,8 @@ commands/paseo-daemon.md Step 2 as "the ONLY controller-consumable usage
 channel" -- and normalizes its stdout providers[] surface. It never opens a
 websocket itself, never reads the daemon's persisted ledger (accounts.json;
 that is a DIFFERENT consumer of the same adapter on the daemon's own ~45min
-tick cadence, not this hook's channel), and never talks to /opt/paseo,
-/usr/local/bin, or /root/bin directly.
+tick cadence, not this hook's channel), and never talks to /opt/paseo or
+the operator's helper binaries directly.
 
 Caching (latency/failure budget):
   CACHE_TTL_SECONDS = 300 (5 minutes). Reasoning: the adapter is a live RPC

@@ -61,7 +61,7 @@
 #     logs a warning about potential orphan commits under concurrency).
 # ============================================================================
 
-CHECKPOINT_LOG_DIR="${CHECKPOINT_LOG_DIR:-$HOME/.claude/logs}"
+CHECKPOINT_LOG_DIR="${CHECKPOINT_LOG_DIR:-${CLAUDE_CONFIG_DIR:-$HOME/.claude}/logs}"
 CHECKPOINT_LOG_FILE="${CHECKPOINT_LOG_DIR}/checkpoint.log"
 CHECKPOINT_PUSH_LOG_FILE="${CHECKPOINT_LOG_DIR}/checkpoint-push.log"
 CHECKPOINT_PUSH_MIN_INTERVAL="${CHECKPOINT_PUSH_MIN_INTERVAL:-30}"  # seconds
@@ -412,6 +412,26 @@ _checkpoint_push_worker() {
     fi
 }
 
+# Commit message of a checkpoint snapshot (both write paths below). A non-empty
+# CLAUDE_CHECKPOINT_EXTRA_TRAILER is appended verbatim as one more trailer line
+# after the Claude one (default empty = none).
+#   $1 summary   $2 trigger   $3 ref   $4 file_count
+_checkpoint_commit_body() {
+    printf '%s' "${1}
+
+Trigger: ${2}
+Ref: ${3}
+Files: ${4}
+
+This commit is a snapshot written to refs/checkpoints/* by
+~/.claude/hooks/lib/checkpoint-core.sh. It is NOT on any branch HEAD.
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
+
+Co-Authored-By: Claude <noreply@anthropic.com>${CLAUDE_CHECKPOINT_EXTRA_TRAILER:+
+${CLAUDE_CHECKPOINT_EXTRA_TRAILER}}"
+}
+
 # Public API.
 #
 # write_checkpoint <work_dir> <trigger_reason> [<custom_message>]
@@ -656,20 +676,7 @@ write_checkpoint() {
             else
                 summary="checkpoint: Auto-save at ${timestamp}"
             fi
-            commit_body="${summary}
-
-Trigger: ${trigger}
-Ref: ${ref}
-Files: ${file_count}
-
-This commit is a snapshot written to refs/checkpoints/* by
-~/.claude/hooks/lib/checkpoint-core.sh. It is NOT on any branch HEAD.
-
-🤖 Generated with [Claude Code](https://claude.com/claude-code)
-via [Happy](https://happy.engineering)
-
-Co-Authored-By: Claude <noreply@anthropic.com>
-Co-Authored-By: Happy <yesreply@happy.engineering>"
+            commit_body=$(_checkpoint_commit_body "$summary" "$trigger" "$ref" "$file_count")
 
             # commit-tree inside the lock: only one writer creates a commit
             # object at a time, so no dangling objects accumulate.
@@ -770,20 +777,7 @@ Co-Authored-By: Happy <yesreply@happy.engineering>"
         else
             summary="checkpoint: Auto-save at ${timestamp}"
         fi
-        commit_body="${summary}
-
-Trigger: ${trigger}
-Ref: ${ref}
-Files: ${file_count}
-
-This commit is a snapshot written to refs/checkpoints/* by
-~/.claude/hooks/lib/checkpoint-core.sh. It is NOT on any branch HEAD.
-
-🤖 Generated with [Claude Code](https://claude.com/claude-code)
-via [Happy](https://happy.engineering)
-
-Co-Authored-By: Claude <noreply@anthropic.com>
-Co-Authored-By: Happy <yesreply@happy.engineering>"
+        commit_body=$(_checkpoint_commit_body "$summary" "$trigger" "$ref" "$file_count")
 
         if [ -n "$parent_sha" ]; then
             new_sha=$(printf '%s' "$commit_body" | $git_cmd commit-tree "$tree_sha" -p "$parent_sha" 2>>"$CHECKPOINT_LOG_FILE")

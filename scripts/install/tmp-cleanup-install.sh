@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # /usr/local/sbin/tmp-cleanup.sh
 #
-# Daily cleanup of /tmp (4G tmpfs) and /var/tmp/codex-outputs/.
+# Daily cleanup of /tmp and /var/tmp/codex-outputs/.
 #
 # Usage:
 #   tmp-cleanup.sh            # delete (called from cron)
@@ -63,10 +63,8 @@ mkdir -p /var/tmp/codex-outputs
 # renamed debug profile across ALL sweep categories — not just Playwright.
 EXCLUDE_PRUNE=( \(
   -path /tmp/chrome-debug-profile -o
-  -path /tmp/happy-attachments -o
   -path /tmp/claude-0 -o
   -path '/tmp/claude-commit-plan-*' -o
-  -path '/tmp/happy-p05-cdp-*' -o
   -path '*debug-profile*'
 \) -prune )
 
@@ -147,10 +145,7 @@ run_tmp "codex artifacts >1d in /tmp" \
 # literal here eliminates dead code (EXCLUDE_PRUNE prunes it first anyway).
 run_tmp "Playwright profiles >1d in /tmp" \
   -mtime +1 \
-  \( -name 'happy-cdp-*' \
-     -o -name 'happy-live-rerun-cdp-*' \
-     -o -name 'happy-p05-chrome-*' \
-     -o -name 'ui-specialist-chrome-*' \)
+  \( -name 'ui-specialist-chrome-*' \)
 
 # ── Hook state files (>7 days) — small but accumulate; sessions long dead ──
 # Includes `claude-pressure-warn-*` (added 2026-05-19) which sweeps BOTH the
@@ -170,8 +165,7 @@ run_tmp "hook state >7d in /tmp" \
      -o -name 'claude-pressure-warn-*' \)
 
 # ── Dev/test scratch (>3 days) — known transient patterns only ──
-# NOTE: `happy-attachments` literal REMOVED from this list (2026-05-19) — it
-# is now protected by the shared EXCLUDE_PRUNE clause. New patterns added:
+# Patterns added 2026-05-19:
 # qa-semantic-*, tier-*, qa-*, dev-semantic-*, dev-same*, dev-root*,
 # dev-broad*, *-scratch-[0-9]* (bounded by [0-9]* so the wildcard cannot match
 # unrelated names like `foo-scratch-readme`).
@@ -184,8 +178,6 @@ run_tmp "dev/test scratch >3d in /tmp" \
      -o -name 'p09-check-*' \
      -o -name 'rednote-*' \
      -o -name 'metro-cache' \
-     -o -name 'happy-test' \
-     -o -name 'happy-test-runner.sh' \
      -o -name 'nm_backup_qa_prep' \
      -o -name 'dev-verify-*-*' \
      -o -name 'qa-semantic-*' \
@@ -212,7 +204,6 @@ run_tmp "broader stale >7d in /tmp" \
      -o -name 'sort[A-Za-z0-9]*' \
      -o -name '*-bundle.js' \
      -o -name '*-main.js' \
-     -o -name 'happy-app-build-test' \
      -o -name 'ocr_env' \)
 
 # ── /tmp/claude-0 deep .output sweep (>1 day) ──

@@ -818,6 +818,43 @@ def test_restart_helper_bypass_fails_closed_on_unsafe_home(tmp_path: Path) -> No
     assert "CHECKLIST NOT STARTED" in blocked.stderr
 
 
+def _restart_roots_in_child(tmp_path: Path, accounts_root_env: str | None) -> dict:
+    """Import subagent_restart in a fresh interpreter (ACCOUNTS_ROOT is read at
+    import time) with a scratch CLAUDE_CONFIG_DIR and report its roots."""
+    env = {k: v for k, v in os.environ.items() if k != "CLAUDE_RESTART_ACCOUNTS_ROOT"}
+    env.update({"CLAUDE_CONFIG_DIR": str(tmp_path / "config")})
+    env.pop("CLAUDE_RESTART_STATE_DIR", None)
+    if accounts_root_env is not None:
+        env["CLAUDE_RESTART_ACCOUNTS_ROOT"] = accounts_root_env
+    probe = ("import json, sys; sys.path.insert(0, sys.argv[1]); "
+             "from lib import subagent_restart as r; "
+             "print(json.dumps({'accounts_root': None if r.ACCOUNTS_ROOT is None else str(r.ACCOUNTS_ROOT), "
+             "'roots': [str(p) for p in r.account_project_roots()], 'state_dir': str(r.state_dir())}))")
+    result = subprocess.run([sys.executable, "-c", probe, str(HOOKS)], text=True,
+                            capture_output=True, env=env, cwd=str(tmp_path), check=False)
+    assert result.returncode == 0, result.stderr
+    return json.loads(result.stdout)
+
+
+def test_accounts_root_has_no_default_and_own_roots_follow_config_dir(tmp_path: Path) -> None:
+    """Unset or empty CLAUDE_RESTART_ACCOUNTS_ROOT means no sibling-account scan
+    (an empty value must not become the current directory); the own projects
+    root and the restart-state root live under CLAUDE_CONFIG_DIR."""
+    own_projects = tmp_path / "config" / "projects"
+    own_projects.mkdir(parents=True)
+    (tmp_path / "acct-a" / "claude" / "projects").mkdir(parents=True)  # cwd decoy
+    for value in (None, ""):
+        view = _restart_roots_in_child(tmp_path, value)
+        assert view["accounts_root"] is None
+        assert view["roots"] == [str(own_projects)]
+        assert view["state_dir"] == str(tmp_path / "config" / "restart-state")
+    accounts_root = tmp_path / "accounts"
+    (accounts_root / "acct-b" / "claude" / "projects").mkdir(parents=True)
+    view = _restart_roots_in_child(tmp_path, str(accounts_root))
+    assert view["accounts_root"] == str(accounts_root)
+    assert view["roots"] == [str(accounts_root / "acct-b" / "claude" / "projects"), str(own_projects)]
+
+
 def test_prepare_defaults_to_own_session_and_gates_cross_account(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -836,13 +873,13 @@ def test_prepare_defaults_to_own_session_and_gates_cross_account(
     slug = restart.project_slug(project_dir)
 
     operator_sid = str(uuid.uuid4())
-    operator_transcript = accounts_root / "yugetang" / "claude" / "projects" / slug / f"{operator_sid}.jsonl"
+    operator_transcript = accounts_root / "acct-b" / "claude" / "projects" / slug / f"{operator_sid}.jsonl"
     op_tool = "toolu_operator_missing"
     _write_jsonl(operator_transcript, [_record("assistant", [_tool_use(op_tool, "operator interrupted")])])
     _write_meta(operator_transcript, "agent-operator", op_tool, "operator interrupted")
 
     foreign_sid = str(uuid.uuid4())
-    foreign_transcript = accounts_root / "orchestrade" / "claude" / "projects" / slug / f"{foreign_sid}.jsonl"
+    foreign_transcript = accounts_root / "acct-a" / "claude" / "projects" / slug / f"{foreign_sid}.jsonl"
     fx_tool = "toolu_foreign_missing"
     _write_jsonl(foreign_transcript, [_record("assistant", [_tool_use(fx_tool, "foreign interrupted")])])
     _write_meta(foreign_transcript, "agent-foreign", fx_tool, "foreign interrupted")
@@ -851,7 +888,7 @@ def test_prepare_defaults_to_own_session_and_gates_cross_account(
     # 20260915 corpus: "7 agents appear twice, once per account root"). A copy
     # shares the operator's session id, so foreign-ness must be decided by
     # origin transcript path, never by session id alone.
-    copy_transcript = accounts_root / "orchestrade" / "claude" / "projects" / slug / f"{operator_sid}.jsonl"
+    copy_transcript = accounts_root / "acct-a" / "claude" / "projects" / slug / f"{operator_sid}.jsonl"
     copy_tool = "toolu_copy_missing"
     _write_jsonl(copy_transcript, [_record("assistant", [_tool_use(copy_tool, "copied interrupted")])])
     _write_meta(copy_transcript, "copycat-foreign", copy_tool, "copied interrupted")
@@ -1039,9 +1076,9 @@ def test_discovery_resolves_end_turn_across_split_account_copies(
     slug = restart.project_slug(project_dir)
 
     sid = str(uuid.uuid4())
-    transcript = accounts_root / "yugoge" / "claude" / "projects" / slug / f"{sid}.jsonl"
+    transcript = accounts_root / "acct-b" / "claude" / "projects" / slug / f"{sid}.jsonl"
     other_subagents = (
-        accounts_root / "orchestrade" / "claude" / "projects" / slug / sid / "subagents"
+        accounts_root / "acct-a" / "claude" / "projects" / slug / sid / "subagents"
     )
     split_tool, quota_tool, cut_tool = "toolu_split", "toolu_quota_split", "toolu_cut"
     _write_jsonl(transcript, [
