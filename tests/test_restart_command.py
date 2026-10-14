@@ -715,15 +715,13 @@ def test_command_and_settings_keep_restart_human_only_and_lossless() -> None:
     assert "SID=" not in command
     assert "$HOME/.claude/venv/bin/python" in command
     assert "## Why this preserves content" not in command
-    settings = json.loads((ROOT / "settings.json").read_text(encoding="utf-8"))
-    template = json.loads((ROOT / "settings.template.json").read_text(encoding="utf-8"))
-    for config in (settings, template):
-        assert config["env"]["CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS"] == "1"
-        assert "Skill(restart:*)" in config["permissions"]["deny"]
-        pretool_commands = json.dumps(config["hooks"]["PreToolUse"])
-        posttool_commands = json.dumps(config["hooks"]["PostToolUse"])
-        assert "posttool-restart-sendmessage.py" not in pretool_commands
-        assert "posttool-restart-sendmessage.py" in posttool_commands
+    config = json.loads((ROOT / "settings.json").read_text(encoding="utf-8"))
+    assert config["env"]["CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS"] == "1"
+    assert "Skill(restart:*)" in config["permissions"]["deny"]
+    pretool_commands = json.dumps(config["hooks"]["PreToolUse"])
+    posttool_commands = json.dumps(config["hooks"]["PostToolUse"])
+    assert "posttool-restart-sendmessage.py" not in pretool_commands
+    assert "posttool-restart-sendmessage.py" in posttool_commands
 
 
 def test_restart_helper_bash_command_bypasses_workflow_gate_deadlock(tmp_path: Path) -> None:

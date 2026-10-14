@@ -3038,7 +3038,7 @@ def test_accept_set_parity_no_armed_record_for_vendor_rejected_input(tmp_path):
 # ---------------- timezone rule-source trust: the bound on a divergence
 # ---------------- that cannot be removed (AC-14, AC-15, AC-17 - AC-25) --------
 
-NODE = "/usr/bin/node"
+NODE = shutil.which("node") or "node"
 VENDOR_CRON_JS = ("/opt/paseo/node_modules/@getpaseo/server/dist/server"
                   "/server/schedule/cron.js")
 # Candidate zones for the runtime-computed agreement partition. The PARTITION

@@ -3,7 +3,7 @@
 Tests use a tmp dir for the yield log and the bundled production policy file
 (or a tmp policy when overrides are needed). Production state is never touched.
 
-Run: cd /root/.claude && python3 -m unittest tests.test_specialist_yield
+Run (from the repository root): python3 -m unittest tests.test_specialist_yield
 """
 
 from __future__ import annotations
@@ -15,14 +15,15 @@ import tempfile
 import unittest
 from pathlib import Path
 
-HOOKS_DIR = "/root/.claude/hooks"
+REPO_ROOT = Path(__file__).resolve().parent.parent
+HOOKS_DIR = str(REPO_ROOT / "hooks")
 if HOOKS_DIR not in sys.path:
     sys.path.insert(0, HOOKS_DIR)
 
 from lib import specialist_yield  # noqa: E402
 
 
-PROD_POLICY_PATH = "/root/.claude/policies/specialist-degradation.v1.json"
+PROD_POLICY_PATH = str(REPO_ROOT / "policies" / "specialist-degradation.v1.json")
 
 
 def _seed_log(path: Path, records: list[dict]) -> None:

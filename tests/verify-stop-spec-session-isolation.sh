@@ -6,7 +6,8 @@
 
 set -uo pipefail
 
-HOOK="/root/.claude/hooks/stop-spec-coverage-enforce.py"
+# The hook under test is the one in this checkout (this script lives at <repo>/tests/).
+HOOK="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)/hooks/stop-spec-coverage-enforce.py"
 WORK="$(mktemp -d -t stop-spec-qa-XXXXXX)"
 _cleanup_work() { rm -rf "$WORK" 2>/dev/null; }
 trap '_cleanup_work' EXIT

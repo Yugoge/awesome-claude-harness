@@ -345,7 +345,7 @@ class TestAC1RecurringCostIsBounded(unittest.TestCase):
         production number it never measured. This case measures the shape that
         ships, so the production figure is enforced rather than merely caveated.
         """
-        with tempfile.TemporaryDirectory(dir='/dev/shm') as tmp:
+        with tempfile.TemporaryDirectory() as tmp:
             fixture = Fixture(tmp)
             make_production_shaped(fixture)
             outputs = [deliver(fixture) for _ in range(3)]
@@ -960,7 +960,7 @@ class TestResolverAndReaderCannotNameDifferentFiles(unittest.TestCase):
     def test_pointer_and_fingerprint_name_the_file_that_was_emitted(self):
         for shape in self.SHAPES:
             with self.subTest(shape=shape):
-                with tempfile.TemporaryDirectory(dir='/dev/shm') as tmp:
+                with tempfile.TemporaryDirectory() as tmp:
                     fixture = Fixture(tmp)
                     blocker = self._plant_unreadable(fixture, shape)
                     emitted_from = fixture.spec_doc()
@@ -990,7 +990,7 @@ class TestResolverAndReaderCannotNameDifferentFiles(unittest.TestCase):
         """
         for shape in self.SHAPES:
             with self.subTest(shape=shape):
-                with tempfile.TemporaryDirectory(dir='/dev/shm') as tmp:
+                with tempfile.TemporaryDirectory() as tmp:
                     fixture = Fixture(tmp)
                     self._plant_unreadable(fixture, shape)
                     doc = fixture.spec_doc()
@@ -1013,7 +1013,7 @@ class TestResolverAndReaderCannotNameDifferentFiles(unittest.TestCase):
         makes the mitigation worse than absent. The degraded search-list form
         is the correct answer here, and it must not regress into a route.
         """
-        with tempfile.TemporaryDirectory(dir='/dev/shm') as tmp:
+        with tempfile.TemporaryDirectory() as tmp:
             fixture = Fixture(tmp, with_spec=False)
             blocker = self._plant_unreadable(fixture, 'invalid_utf8')
 
@@ -1032,7 +1032,7 @@ class TestResolverAndReaderCannotNameDifferentFiles(unittest.TestCase):
         """The invariant itself, asserted directly rather than through effects."""
         for shape in self.SHAPES + (None,):
             with self.subTest(shape=shape):
-                with tempfile.TemporaryDirectory(dir='/dev/shm') as tmp:
+                with tempfile.TemporaryDirectory() as tmp:
                     fixture = Fixture(tmp)
                     if shape is not None:
                         self._plant_unreadable(fixture, shape)
