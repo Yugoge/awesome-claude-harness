@@ -104,6 +104,12 @@ LIGHT_CEILING_CHARS = 3000
 # absolute chars for the same reason.
 PRODUCTION_LIGHT_CEILING_CHARS = 4000
 PRODUCTION_LIGHT_MAX_RATIO_OF_BOUNDARY = 0.05
+# The temp root the two production figures were measured under. It is only a
+# length reference -- nothing is created there. The fixture's root recurs in
+# every path the production-shaped block names (ten times), so measured raw
+# the budget shrank by ten chars per char of TMPDIR and failed once TMPDIR
+# passed ~50 chars, for reasons that have nothing to do with the hook.
+MEASURED_ROOT = '/dev/shm/tmpXXXXXXXX'
 
 
 def load_hook_module():
@@ -288,6 +294,19 @@ def make_production_shaped(fixture: Fixture) -> None:
     fixture.state_path.write_text(json.dumps(state))
 
 
+def measured_len(text: str, fixture: Fixture) -> int:
+    """len(text) with the fixture's temp root counted at MEASURED_ROOT's length.
+
+    This takes the base directory's length out of the budget and nothing else:
+    every other char still counts. The resolved spelling is normalised too, for
+    a TMPDIR reached through a symlink (macOS's /var -> /private/var).
+    """
+    roots = {str(fixture.root), os.path.realpath(fixture.root)}
+    for root in sorted(roots, key=len, reverse=True):
+        text = text.replace(root, MEASURED_ROOT)
+    return len(text)
+
+
 class TestAC1RecurringCostIsBounded(unittest.TestCase):
     """AC-1 -- repeated prompts inside one cycle stop carrying the heavy half."""
 
@@ -355,18 +374,20 @@ class TestAC1RecurringCostIsBounded(unittest.TestCase):
             # silently re-measure the criterion's own shape and prove nothing.
             self.assertIn('source the actor git-env', outputs[1])
 
-            boundary = len(outputs[0])
+            # Sizes are taken at the measured root's length so the bounds hold
+            # under any TMPDIR without /dev/shm having to exist.
+            boundary = measured_len(outputs[0], fixture)
             for index, out in enumerate(outputs[1:], start=2):
                 with self.subTest(prompt=index):
+                    size = measured_len(out, fixture)
                     self.assertNotIn(SPEC_HEADER, out)
-                    self.assertGreater(len(out), LIGHT_CEILING_CHARS,
+                    self.assertGreater(size, LIGHT_CEILING_CHARS,
                                        'production shape no longer exceeds the '
                                        'fixture ceiling; the two bounds have '
                                        'converged and this case is now vacuous')
-                    self.assertLessEqual(len(out), PRODUCTION_LIGHT_CEILING_CHARS)
+                    self.assertLessEqual(size, PRODUCTION_LIGHT_CEILING_CHARS)
                     self.assertLessEqual(
-                        len(out),
-                        boundary * PRODUCTION_LIGHT_MAX_RATIO_OF_BOUNDARY)
+                        size, boundary * PRODUCTION_LIGHT_MAX_RATIO_OF_BOUNDARY)
                     self.assertTrue(canonical_steps(out))
                     self.assertIn(SELF_HEAL_PREFIX, out)
             self.assertEqual(1, len(set(outputs[1:])))
