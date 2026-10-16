@@ -1,5 +1,6 @@
-"""Tests for scripts/install/render-settings: the settings clean/smudge filter, the machine-form
-renderer, the doctor and pre-commit checks, and the owner migration (P7, R2 and R5).
+"""Tests for scripts/install/render-settings: the settings clean/smudge filter and its record of
+applied layers, the machine-form renderer, the doctor and pre-commit checks, and the owner
+migration (P7, R2 and R5).
 
 Every git repository is created under the test's temporary directory, HOME and
 CLAUDE_CONFIG_DIR point at temporary directories, and the filter is registered only in each test
@@ -433,10 +434,11 @@ def test_render_refuses_extras_without_force(sb):
     proc = run_tool(sb, home, "render")
     assert proc.returncode == 1
     err = proc.stderr.decode()
-    assert "permissions.allow: Bash(demo-extra-tool:*)" in err
-    assert "env: DEMO_EXTRA_KEY" in err
+    # Key paths and counts only: never the entry text or an env value.
+    assert "extra in settings.json: permissions.allow: 1 entry" in err
+    assert "extra in settings.json: env.DEMO_EXTRA_KEY" in err
     assert "move it into settings.machine.json to keep it" in err
-    assert "TMPDIR" not in err and "theme" not in err
+    assert "TMPDIR" not in err and "theme" not in err and "demo-extra-tool" not in err
     assert "demo-secret-value-9" not in err and "stale-overlay-value" not in err
     assert (home / "settings.json").read_bytes() == before
 
@@ -487,6 +489,243 @@ def test_check_reports_missing_hooks_and_protected_runtime(sb):
     assert proc.returncode == 1 and "missing=6" in out
     assert "outside the harness home: %s/hooks/stop-demo.py" % CHANNEL in out
     assert str(sb.tmp / "elsewhere") not in out
+
+
+# ------------------------------------------------- stale or missing overlay (review item 1, R2)
+
+STAND_IN = "acct-test-123"  # every personal value below contains it
+PERSONAL_ALLOW = "Bash(/home/%s/bin/sync.sh:*)" % STAND_IN
+PERSONAL_HOOK = "hooks/personal-%s.sh" % STAND_IN  # an untracked, excluded stub
+PUBLIC_DENY = "Bash(demo-public-deny:*)"
+
+
+def personal_overlay(home):
+    """An overlay with a stand-in personal allow entry, env value and hook group."""
+    return {"modules": {"paseo": False},
+            "env": {"CLAUDE_HOME": str(home), "DEMO_ACCOUNT": STAND_IN},
+            "permissions": {"allow": [PERSONAL_ALLOW]},
+            "hooks": {"Notification": [{"matcher": "idle_prompt",
+                                        "hooks": [hook("bash", PERSONAL_HOOK)]}]}}
+
+
+def rendered_home(sb, name="H"):
+    """A checkout with the filter registered and the personal overlay rendered (init's state)."""
+    home = make_home(sb, name)
+    init_repo(sb, home, canon(clean_form()), register=True)
+    (home / PERSONAL_HOOK).write_text("# stub\n")
+    (home / ".git" / "info").mkdir(exist_ok=True)
+    with open(home / ".git" / "info" / "exclude", "a") as fh:
+        fh.write("/%s\n" % PERSONAL_HOOK)
+    write_overlay(home, personal_overlay(home))
+    proc = run_tool(sb, home, "render")
+    assert proc.returncode == 0, proc.stderr
+    assert STAND_IN.encode() in (home / "settings.json").read_bytes()
+    assert status(sb, home) == ""
+    return home
+
+
+def assert_never_committed(sb, home):
+    assert git(sb, home, "grep", "-q", STAND_IN, "HEAD", check=False).returncode == 1
+    assert STAND_IN.encode() not in git(sb, home, "log", "-p", "--all").stdout
+
+
+def stage_unfiltered(sb, home, entry):
+    """Stage, bypassing the filter, the clean form plus one recorded allow entry: no CLI-owned
+    key and no CLAUDE_HOME, so nothing structural gives the value away."""
+    doc = clean_form()
+    doc["permissions"]["allow"].append(entry)
+    path = sb.tmp / "unfiltered.json"
+    path.write_bytes(canon(doc))
+    oid = git(sb, home, "hash-object", "-w", "--no-filters", str(path)).stdout.decode().strip()
+    git(sb, home, "update-index", "--cacheinfo", "100644,%s,settings.json" % oid)
+
+
+def assert_check_staged_refuses(sb, home, entry=PERSONAL_ALLOW):
+    """The pre-commit hook's and CI's check refuses a stage that carries a recorded value."""
+    stage_unfiltered(sb, home, entry)
+    proc = run_tool(sb, home, "check", "--staged")
+    assert proc.returncode == 1 and "staged in machine form" in proc.stderr.decode()
+    assert STAND_IN not in (proc.stdout + proc.stderr).decode()
+    git(sb, home, "reset", "-q", "--", "settings.json")
+
+
+def test_entry_dropped_from_overlay_without_render_never_reaches_a_commit(sb):
+    """1a: the stale working file still carries the values the overlay no longer lists; a plain
+    commit of all changes (here together with a public edit) lands the edit and none of them."""
+    home = rendered_home(sb)
+    overlay = personal_overlay(home)
+    overlay["permissions"]["allow"].remove(PERSONAL_ALLOW)
+    del overlay["env"]["DEMO_ACCOUNT"], overlay["hooks"]
+    write_overlay(home, overlay)
+    os.utime(home / "settings.json", (3, 3))  # a CLI write re-stats the file
+    assert status(sb, home) == ""
+    assert git(sb, home, "diff").stdout == b""
+    assert_check_staged_refuses(sb, home)
+
+    doc = json.loads((home / "settings.json").read_bytes())
+    assert PERSONAL_ALLOW in doc["permissions"]["allow"]  # still stale: no re-render
+    doc["permissions"]["deny"].append(PUBLIC_DENY)
+    (home / "settings.json").write_bytes(canon(doc))
+    git(sb, home, "commit", "-q", "-am", "plain commit")
+    want = clean_form()
+    want["permissions"]["deny"].append(PUBLIC_DENY)
+    assert git(sb, home, "cat-file", "blob", "HEAD:settings.json").stdout == canon(want)
+    assert_never_committed(sb, home)
+    assert run_tool(sb, home, "check", "--staged").returncode == 0
+
+
+def test_deleted_overlay_never_leaks_into_a_commit(sb):
+    """1b: the overlay is deleted without a re-render; the record still strips its values."""
+    home = rendered_home(sb)
+    (home / "settings.machine.json").unlink()
+    os.utime(home / "settings.json", (3, 3))
+    assert status(sb, home) == ""
+    assert_check_staged_refuses(sb, home)
+    (home / "hooks" / "stop-demo.py").write_text("# stub, edited\n")
+    git(sb, home, "commit", "-q", "-am", "plain commit")
+    assert git(sb, home, "cat-file", "blob", "HEAD:settings.json").stdout == canon(clean_form())
+    assert_never_committed(sb, home)
+    assert run_tool(sb, home, "check", "--staged").returncode == 0
+
+
+def test_public_edit_lands_without_opt_in(sb):
+    """1c: a hand-added deny entry lands in clean form with a plain commit; nothing to opt in."""
+    home = rendered_home(sb)
+    doc = json.loads((home / "settings.json").read_bytes())
+    doc["permissions"]["deny"].append(PUBLIC_DENY)
+    (home / "settings.json").write_bytes(canon(doc))
+    assert status(sb, home) == " M settings.json\n"
+    git(sb, home, "commit", "-q", "-am", "public edit")
+    want = clean_form()
+    want["permissions"]["deny"].append(PUBLIC_DENY)
+    assert git(sb, home, "cat-file", "blob", "HEAD:settings.json").stdout == canon(want)
+    assert_never_committed(sb, home)
+    assert status(sb, home) == ""
+    assert run_tool(sb, home, "check", "--staged").returncode == 0
+    sb.runtime_file.write_text(json.dumps(dict({"schema_version": 1},
+                                               **{k: [] for k in required_keys()})))
+    proc = run_tool(sb, home, "check")
+    assert proc.returncode == 0, proc.stdout.decode()
+
+
+def test_smudge_records_what_it_applies(sb):
+    """An overlay value that reached the working file through a checkout (smudge), not a render,
+    is recorded too."""
+    home = rendered_home(sb)
+    extra = "Bash(/home/%s/bin/other.sh:*)" % STAND_IN
+    overlay = personal_overlay(home)
+    overlay["permissions"]["allow"].append(extra)
+    write_overlay(home, overlay)
+    (home / "settings.json").unlink()
+    git(sb, home, "checkout", "--", "settings.json")
+    assert extra.encode() in (home / "settings.json").read_bytes()
+    write_overlay(home, {"env": {"CLAUDE_HOME": str(home)}})
+    os.utime(home / "settings.json", (3, 3))
+    assert status(sb, home) == ""
+    assert_check_staged_refuses(sb, home, extra)
+
+
+def test_record_is_private_and_fails_closed(sb):
+    home = rendered_home(sb)
+    record = home / ".git" / "claude-settings.applied"
+    assert stat.S_IMODE(record.stat().st_mode) == 0o600
+    assert STAND_IN.encode() in record.read_bytes()  # hence owner-only, inside the git directory
+    assert b"claude-settings.applied" not in git(sb, home, "ls-files", "--others").stdout
+    sb.runtime_file.write_text(json.dumps(dict({"schema_version": 1},
+                                               **{k: [] for k in required_keys()})))
+
+    # No record while an overlay exists: doctor fails until a render writes one.
+    record.unlink()
+    proc = run_tool(sb, home, "check")
+    assert proc.returncode == 1 and "no record of what render applied" in proc.stdout.decode()
+    assert run_tool(sb, home, "render").returncode == 0
+    assert run_tool(sb, home, "check").returncode == 0
+
+    # An unusable record: clean and check --staged fail closed, render needs --force to rewrite.
+    record.write_text("{broken")
+    machine = (home / "settings.json").read_bytes()
+    proc = run_tool(sb, home, "clean", data=machine)
+    assert proc.returncode == 1 and proc.stdout == b""
+    err = proc.stderr.decode()
+    assert "the record .git/claude-settings.applied is not valid" in err and str(home) not in err
+    assert run_tool(sb, home, "check", "--staged").returncode == 1  # the index is clean
+    proc = run_tool(sb, home, "render")
+    assert proc.returncode == 1 and "render --force" in proc.stderr.decode()
+    assert run_tool(sb, home, "render", "--force").returncode == 0
+    assert json.loads(record.read_bytes())["layers"]
+    assert status(sb, home) == ""
+    assert run_tool(sb, home, "check", "--staged").returncode == 0
+
+    # A render keeps the old record while the index still carries a recorded value (staged
+    # without the filter), so check --staged goes on refusing it.
+    stage_unfiltered(sb, home, PERSONAL_ALLOW)
+    write_overlay(home, {"env": {"CLAUDE_HOME": str(home)}})
+    assert run_tool(sb, home, "render").returncode == 0
+    assert run_tool(sb, home, "check", "--staged").returncode == 1
+
+
+def add_doctor(sb, home):
+    """scripts/doctor, its resolver and a venv stub (outside the checkout) for a test home."""
+    for rel in ("scripts/doctor", "hooks/lib/claude_home.sh", "hooks/lib/claude_home.py"):
+        shutil.copyfile(REPO / rel, home / rel)
+        (home / rel).chmod(0o755)
+    (home / "policies").mkdir()
+    venv = sb.tmp / "venv"
+    (venv / "bin").mkdir(parents=True)
+    (venv / "bin" / "python").write_text('#!/bin/sh\nexec %s "$@"\n' % shlex.quote(sys.executable))
+    (venv / "bin" / "python").chmod(0o755)
+    sb.runtime_file.write_text(json.dumps(dict({"schema_version": 1},
+                                               **{k: [] for k in required_keys()})))
+    return lambda: subprocess.run(["bash", str(home / "scripts" / "doctor"), "--venv", str(venv)],
+                                  cwd=str(sb.tmp), env=sb.env, capture_output=True, timeout=120)
+
+
+def test_doctor_fails_on_entries_nothing_explains(sb):
+    """Doctor fails (a required check) on working-file entries that neither the clean form, the
+    enabled modules nor the overlay explain, naming key paths and counts, never values."""
+    home = rendered_home(sb)
+    doctor = add_doctor(sb, home)
+    proc = doctor()
+    out = (proc.stdout + proc.stderr).decode()
+    assert proc.returncode == 0, out
+    assert "[ ok ] settings.json entries: all explained by" in out
+
+    # Stale: the personal values left the overlay, the working file was not re-rendered (and
+    # the personal hook's script is gone: its path is not echoed either).
+    write_overlay(home, {"env": {"CLAUDE_HOME": str(home)}})
+    (home / PERSONAL_HOOK).unlink()
+    proc = doctor()
+    out = (proc.stdout + proc.stderr).decode()
+    assert proc.returncode == 1, out
+    assert "[FAIL] hook paths: 7 commands, missing=1" in out
+    assert "Notification: a hook outside the clean form" in out
+    assert "[FAIL] settings.json entries: some are outside the clean form" in out
+    for line in ("env.DEMO_ACCOUNT", "permissions.allow: 1 entry", "hooks.Notification: 1 hook "
+                 "command", "move them into settings.machine.json", "render-settings render"):
+        assert line in out, line
+    assert "render-settings check failed" in out and "required check(s) FAILED" in out
+    assert STAND_IN not in out
+    # render (no --force) drops what the record shows it applied; doctor passes again.
+    proc = run_tool(sb, home, "render")
+    assert proc.returncode == 0 and STAND_IN not in (proc.stdout + proc.stderr).decode()
+    assert STAND_IN.encode() not in (home / "settings.json").read_bytes()
+    assert doctor().returncode == 0
+
+    # A hand edit nobody recorded: doctor and render name it by key path only; staging it as a
+    # public edit explains it.
+    doc = json.loads((home / "settings.json").read_bytes())
+    doc["permissions"]["allow"].append("Bash(demo-local-tool:*)")
+    (home / "settings.json").write_bytes(canon(doc))
+    proc = doctor()
+    out = (proc.stdout + proc.stderr).decode()
+    assert proc.returncode == 1 and "permissions.allow: 1 entry" in out
+    assert "demo-local-tool" not in out
+    proc = run_tool(sb, home, "render")
+    err = proc.stderr.decode()
+    assert proc.returncode == 1 and "permissions.allow: 1 entry" in err
+    assert "demo-local-tool" not in err
+    git(sb, home, "add", "settings.json")
+    assert doctor().returncode == 0
 
 
 # ---------------------------------------------------------------------------------- migrate
@@ -818,5 +1057,13 @@ def test_round_trip_properties_randomised(sb):
         assert tool.clean_bytes(once, layers, base) == (once, None), (base, over, edited)
         twice, _ = tool.smudge_bytes(edited, layers)
         assert tool.smudge_bytes(twice, layers) == (twice, None)
+        # A recorded earlier overlay: clean strips what it applied even when the current overlay
+        # no longer lists it (stale working file) or is gone, and changes nothing else.
+        old = tool.layers_of(overlay())
+        stale, problem = tool.smudge_bytes(b_bytes, old)
+        assert problem is None
+        assert tool.clean_bytes(stale, layers + old, base) == (b_bytes, None), (base, over, old)
+        assert tool.clean_bytes(stale, old, base) == (b_bytes, None), (base, old)
+        assert tool.clean_bytes(machine, layers + old, base) == (b_bytes, None), (base, over, old)
         checked += 1
     assert checked == 400

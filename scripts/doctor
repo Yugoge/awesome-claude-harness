@@ -19,7 +19,7 @@
 #   - the harness venv         (<home>/venv with a python interpreter)
 #   - the manifest packages    (requirements.txt: pytest, jsonschema, pyyaml)
 #   - the shared resolver       (hooks/lib/claude_home.{sh,py} resolve cleanly)
-#   - the settings wiring       (render-settings check: hook paths, filter, protected-runtime file)
+#   - the settings wiring       (render-settings check: hook paths, filter, unexplained entries, protected-runtime file)
 set -uo pipefail
 
 # Resolve the harness home from THIS script's own location (it lives at
@@ -143,7 +143,7 @@ echo "Settings wiring (scripts/install/render-settings check):"
 if [ ! -f "$HOME_DIR/scripts/install/render-settings" ]; then
   miss "scripts/install/render-settings is missing — restore it from the checkout, then run scripts/bootstrap"
 elif python3 "$HOME_DIR/scripts/install/render-settings" check; then ok "render-settings check passed"
-else miss "render-settings check failed (see above) — run scripts/bootstrap to repair"; fi
+else miss "render-settings check failed (see above) — resolve what each [FAIL] line names, then re-run scripts/bootstrap"; fi
 echo
 
 if [ "$MISSING" -gt 0 ]; then

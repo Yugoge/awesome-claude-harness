@@ -8,15 +8,23 @@ form = smudge(clean form). The git filter "claude-settings" (registered by scrip
 keeps the two apart, so machine values and CLI-owned keys never reach the index.
 
   clean              git clean filter, stdin -> stdout: removes what the enabled modules and the
-                     overlay contribute and the CLI-owned keys, restoring the values HEAD tracks.
+                     overlay contribute, what the record lists and the CLI-owned keys, restoring
+                     the values HEAD tracks.
   smudge             git smudge filter, stdin -> stdout: applies the modules, then the overlay.
                      Fail safe: invalid input or overlay passes the input through unchanged.
   render [--force]   write the machine form of <H>/settings.json; refuses (without --force) to
-                     drop working-file entries that neither the clean form nor the overlay explains.
-  check [--staged]   doctor checks (hook paths, filter wiring and round trip, protected-runtime
-                     file); with --staged: refuse a staged settings.json that is in machine form.
+                     drop working-file entries that neither the clean form, the overlay nor the
+                     record explains.
+  check [--staged]   doctor checks (hook paths, filter wiring and round trip, entries nothing
+                     explains, protected-runtime file); with --staged: refuse a staged settings.json
+                     that is in machine form.
   migrate --from REV [--settings-file PATH] [--base REV]
                      seed a NEW overlay from previous personal settings (one-time owner step).
+
+The record <git dir>/claude-settings.applied (mode 0600, never tracked) lists the layers smudge and
+render applied to the working file since the last render, so that an entry dropped from the overlay
+(or a deleted overlay) without a re-render is still stripped by clean and refused by check --staged.
+Messages name key paths and counts only, never a settings value.
 
 Overlay format: any settings keys (env, permissions.allow|deny|ask, hooks, other top-level keys)
 plus meta keys that are never rendered: "modules" (name -> true/false) and any top-level key that
@@ -39,6 +47,7 @@ sys.dont_write_bytecode = True  # check imports harness modules; leave no caches
 FILTER_NAME = "claude-settings"
 SETTINGS = "settings.json"
 OVERLAY = "settings.machine.json"
+RECORD = "claude-settings.applied"  # in the git directory: the layers smudge and render applied
 # Keys Claude Code itself writes into user settings (/model, /config, /effort, /fast).
 CLI_OWNED = ("model", "alwaysThinkingEnabled", "effortLevel", "tui", "theme",
              "autoCompactEnabled", "modelSettings", "fastMode", "advisorModel")
@@ -224,6 +233,52 @@ def layers_of(overlay):
         return []
     modules = overlay.get("modules", {})
     return [MODULES[name] for name in sorted(modules) if modules[name]] + [_layer_of(overlay)]
+
+
+# ------------------------------------------------------------------------------------- record
+
+def record_path(home):
+    """Where the record lives (inside the git directory, so it is never tracked); None outside a
+    git checkout, where nothing is committed."""
+    rel = _git_out(home, "rev-parse", "--git-path", RECORD) if is_checkout(home) else None
+    return os.path.join(home, rel) if rel else None
+
+
+def load_record(home):
+    """The layers smudge and render applied since the last render ([] when none are recorded);
+    raises OverlayError when the record is unusable."""
+    path = record_path(home)
+    shown = "the record %s" % (os.path.relpath(path, home) if path else RECORD)
+    try:
+        data = _read(path) if path else None
+    except OSError as exc:
+        raise OverlayError("%s: cannot read (%s)" % (shown, exc.strerror))
+    if data is None:
+        return []
+    layers = _d(parse(data)).get("layers")
+    if not isinstance(layers, list) or not all(isinstance(layer, dict) for layer in layers):
+        raise OverlayError("%s is not valid; run render-settings render --force to rewrite it"
+                           % shown)
+    for layer in layers:
+        _validate_layer(layer, shown)
+    return layers
+
+
+def save_record(home, layers):
+    """Write the record (owner-only); raises OSError."""
+    path, data = record_path(home), canon({"layers": layers})
+    if path is not None and _read(path) != data:
+        _write_atomic(path, data, 0o600)
+
+
+def union(*groups):
+    """The distinct non-empty layers of the groups, in order."""
+    out = []
+    for group in groups:
+        for layer in group:
+            if layer and layer not in out:
+                out.append(layer)
+    return out
 
 
 # ------------------------------------------------------------------------- merge and unmerge
@@ -518,28 +573,35 @@ def diff(prev, ref, skip_env=(), skip_top=()):
     return out
 
 
+def _count(n, one, many):
+    return "%d %s" % (n, one if n == 1 else many)
+
+
 def describe(extras):
-    """One line per extra entry; env and top-level entries are named, never valued."""
-    lines = ["env: %s" % k for k in extras.get("env", {})]
+    """Key paths and counts of the extra entries: never a value, entry text or command."""
+    lines = ["env.%s" % k for k in extras.get("env", {})]
     for name, val in extras.get("permissions", {}).items():
-        if isinstance(val, list):
-            lines.extend("permissions.%s: %s" % (name, e) for e in val)
-        else:
-            lines.append("permissions.%s" % name)
+        lines.append("permissions.%s" % name + (": " + _count(len(val), "entry", "entries")
+                                                 if isinstance(val, list) else ""))
     for event, groups in extras.get("hooks", {}).items():
-        for g in groups:
-            for h in g["hooks"]:
-                lines.append("hooks.%s: %s" % (event, h.get("command", "<non-command hook>")))
-    lines.extend("top-level key: %s" % k for k in extras if k not in STRUCTURED)
+        n = sum(len(g["hooks"]) for g in groups)
+        lines.append("hooks.%s: %s" % (event, _count(n, "hook command", "hook commands")))
+    lines.extend(k for k in extras if k not in STRUCTURED)
     return lines
 
 
 def working_extras(working, target, layers):
-    """Entries of the working file that the target (machine form) does not explain. Keys a layer
-    owns are explained whatever their working value (it is the overlay's, possibly stale)."""
+    """Entries of the working file that neither the target (machine form) nor the layers explain.
+    What a layer owns is explained whatever its working value (it is the layer's, possibly
+    stale)."""
     owned_env = {k for layer in layers for k in layer.get("env", {})}
     owned_top = {k for layer in layers for k in layer if k not in STRUCTURED}
-    return diff(working, target, skip_env=owned_env, skip_top=set(CLI_OWNED) | owned_top)
+    ref = copy.deepcopy(target)
+    try:
+        merge_all(ref, layers)
+    except ShapeError:  # a recorded layer that no longer fits: its entries count as extras
+        ref = target
+    return diff(working, ref, skip_env=owned_env, skip_top=set(CLI_OWNED) | owned_top)
 
 
 # ---------------------------------------------------------------------------- clean / smudge
@@ -547,7 +609,7 @@ def working_extras(working, target, layers):
 def cmd_clean(home):
     data = sys.stdin.buffer.read()
     try:
-        layers = layers_of(load_overlay(home))
+        layers = layers_of(load_overlay(home)) + load_record(home)
     except OverlayError as exc:
         _err("clean refused: %s; fix it, then re-stage settings.json" % exc)
         return 1
@@ -562,7 +624,9 @@ def cmd_smudge(home):
     data = sys.stdin.buffer.read()
     try:
         layers = layers_of(load_overlay(home))
-    except OverlayError as exc:
+        if layers:  # recorded before git writes the file: every applied value stays listed
+            save_record(home, union(load_record(home), layers))
+    except (OverlayError, OSError) as exc:
         _err("smudge: %s; writing the clean form unchanged" % exc)
         layers = None
     out = data
@@ -576,11 +640,12 @@ def cmd_smudge(home):
 
 # ------------------------------------------------------------------------------------ render
 
-def _write_atomic(path, data):
-    try:
-        mode = os.stat(path).st_mode & 0o7777
-    except FileNotFoundError:
-        mode = 0o644
+def _write_atomic(path, data, mode=None):
+    if mode is None:
+        try:
+            mode = os.stat(path).st_mode & 0o7777
+        except FileNotFoundError:
+            mode = 0o644
     fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path), prefix=".settings.render.")
     try:
         with os.fdopen(fd, "wb") as fh:
@@ -609,17 +674,21 @@ def refresh_index(home):
     _git(home, "update-index", "-q", "--refresh")
 
 
-def machine_form(home, overlay, working):
-    """(target, layers, problem): the machine form of the clean form, CLI-owned keys of the
-    working file carried over."""
-    layers = layers_of(overlay)
+def clean_source(home):
+    """The clean form's bytes: the index blob, else HEAD's, else the working file."""
     source = None
     if is_checkout(home):
         source = blob(home, ":" + SETTINGS)
         if source is None:
             source = blob(home, "HEAD:" + SETTINGS)
-    if source is None:
-        source = _read(os.path.join(home, SETTINGS))
+    return source if source is not None else _read(os.path.join(home, SETTINGS))
+
+
+def machine_form(home, overlay, working):
+    """(target, layers, problem): the machine form of the clean form, CLI-owned keys of the
+    working file carried over."""
+    layers = layers_of(overlay)
+    source = clean_source(home)
     if source is None:
         return None, layers, "no settings.json in the index, HEAD or the working tree"
     target = parse(source)
@@ -641,6 +710,13 @@ def cmd_render(home, force):
     except OverlayError as exc:
         _err("render refused: %s" % exc)
         return 1
+    try:
+        recorded = load_record(home)
+    except OverlayError as exc:
+        if not force:
+            _err("render refused: %s" % exc)
+            return 1
+        recorded = []  # --force drops every entry the overlay does not explain
     path = os.path.join(home, SETTINGS)
     current = _read(path)
     working = parse(current)
@@ -653,18 +729,30 @@ def cmd_render(home, force):
         _err("render refused: %s" % problem)
         return 1
     if working is not None and not force:
-        extras = working_extras(working, target, layers)
+        # Recorded entries the overlay has since dropped are explained: the render drops them.
+        extras = working_extras(working, target, layers + recorded)
         if extras:
             for line in describe(extras):
                 _err("extra in settings.json: %s -- %s" % (line, KEEP_HINT))
             _err("render refused: settings.json has entries outside the clean form and the "
-                 "overlay; move them into settings.machine.json, or re-run with --force to drop "
-                 "them")
+                 "overlay (git diff settings.json shows them); move them into "
+                 "settings.machine.json, or re-run with --force to drop them")
             return 1
     out = canon(target)
     changed = out != current
-    if changed:
-        _write_atomic(path, out)
+    index = blob(home, ":" + SETTINGS) if is_checkout(home) else None
+    # An index still carrying a recorded value (staged without the filter) keeps the old record,
+    # so that check --staged goes on refusing it.
+    keep = recorded if index is not None and \
+        clean_bytes(index, layers + recorded, load_base(home))[0] != index else []
+    try:
+        save_record(home, union(recorded, layers))  # covers the file before and after the write
+        if changed:
+            _write_atomic(path, out)
+        save_record(home, union(keep, layers))
+    except OSError as exc:
+        _err("render failed: %s" % exc)
+        return 1
     if is_checkout(home):
         refresh_index(home)
     modules = [n for n in sorted(MODULES) if overlay and overlay.get("modules", {}).get(n)]
@@ -701,8 +789,11 @@ def _ok(label, ok):
 def check_hook_paths(home, working, overlay):
     env = dict(os.environ)
     env.update({k: v for k, v in _d(working.get("env")).items() if isinstance(v, str)})
-    overlay_hooks = _hook_keys([g for gs in _d(_layer_of(overlay or {}).get("hooks")).values()
-                                for g in gs])
+    # Only a command of the clean form or of a module is echoed; any other may be personal.
+    docs = [parse(clean_source(home)) or {}] + list(MODULES.values())
+    public = _hook_keys([g for d in docs for gs in _d(d.get("hooks")).values() for g in _list(gs)])
+    public -= _hook_keys([g for gs in _d(_layer_of(overlay or {}).get("hooks")).values()
+                          for g in gs])
     root = os.path.realpath(home)
     total, missing = 0, []
     for event, groups in _d(working.get("hooks")).items():
@@ -719,8 +810,8 @@ def check_hook_paths(home, working, overlay):
                 inside = bool(real) and real.startswith(root + os.sep)
                 if inside and os.path.isfile(real):
                     continue
-                if hook_key(h) in overlay_hooks:  # never echo overlay values
-                    missing.append("an overlay hook in %s (see %s)" % (event, OVERLAY))
+                if hook_key(h) not in public:
+                    missing.append("%s: a hook outside the clean form (see %s)" % (event, OVERLAY))
                 elif not real:
                     missing.append("%s: no script path in the command" % event)
                 elif inside:
@@ -733,7 +824,7 @@ def check_hook_paths(home, working, overlay):
     return ok
 
 
-def check_filter(home, overlay_error, overlay, working):
+def check_filter(home, overlay_error, overlay, recorded, working):
     if overlay_error:
         return _ok("settings filter: %s" % overlay_error, False)
     if not is_checkout(home):
@@ -753,23 +844,33 @@ def check_filter(home, overlay_error, overlay, working):
         problems.append("settings.json is not in the index")
     else:
         smudged, problem = smudge_bytes(index, layers)
-        cleaned, problem2 = clean_bytes(smudged, layers, load_base(home))
+        cleaned, problem2 = clean_bytes(smudged, layers + recorded, load_base(home))
         if problem or problem2 or cleaned != index:
             problems.append("round trip clean(smudge(index)) does not reproduce the index blob")
+    path = record_path(home)
+    if overlay is not None and path and not os.path.exists(path):
+        problems.append("no record of what render applied (%s)" % RECORD)
     if problems:
         _ok("settings filter: %s; run scripts/bootstrap" % "; ".join(problems), False)
         return False
     _ok("settings filter: registered, required, exact round trip", True)
-    if working is not None:
-        target, layers, problem = machine_form(home, overlay, working)
-        if target is not None:
-            for line in describe(working_extras(working, target, layers)):
-                print("[info] extra in settings.json: %s -- %s" % (line, KEEP_HINT))
-        for key in CLI_OWNED:
-            if overlay and key in overlay and key in working and working[key] != overlay[key]:
-                print("[info] %s: the CLI changed it (differs from settings.machine.json); copy it "
-                      "into the overlay to keep it" % key)
-    return True
+    if working is None:
+        return True
+    target, layers, problem = machine_form(home, overlay, working)
+    extras = working_extras(working, target, layers) if target is not None else {}
+    ok = _ok("settings.json entries: %s the clean form, the enabled modules and the overlay"
+             % ("some are outside" if extras else "all explained by"), not extras)
+    for line in describe(extras):
+        print("       %s" % line)
+    if extras:
+        print("       stage public edits (git add settings.json), or move them into %s to keep "
+              "them; render-settings render then drops entries removed from the overlay "
+              "(--force drops all the rest)" % OVERLAY)
+    for key in CLI_OWNED:
+        if overlay and key in overlay and key in working and working[key] != overlay[key]:
+            print("[info] %s: the CLI changed it (differs from settings.machine.json); copy it "
+                  "into the overlay to keep it" % key)
+    return ok
 
 
 def _load_module(path, name):
@@ -805,9 +906,10 @@ def check_protected_runtime(home):
 
 
 def cmd_check(home):
-    overlay, overlay_error = None, None
+    overlay, recorded, overlay_error = None, [], None
     try:
         overlay = load_overlay(home)
+        recorded = load_record(home)
     except OverlayError as exc:
         overlay_error = str(exc)
     working = parse(_read(os.path.join(home, SETTINGS)))
@@ -816,7 +918,7 @@ def cmd_check(home):
                        "scripts/bootstrap", False)
     else:
         hooks_ok = check_hook_paths(home, working, overlay)
-    filter_ok = check_filter(home, overlay_error, overlay, working)
+    filter_ok = check_filter(home, overlay_error, overlay, recorded, working)
     runtime_ok = check_protected_runtime(home)
     return 0 if hooks_ok and filter_ok and runtime_ok else 1
 
@@ -829,7 +931,7 @@ def cmd_check_staged(home):
     if staged is None:
         return 0
     try:
-        layers = layers_of(load_overlay(home))
+        layers = layers_of(load_overlay(home)) + load_record(home)
     except OverlayError as exc:
         _err("check --staged: %s; fix it before committing" % exc)
         return 1
