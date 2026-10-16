@@ -242,7 +242,9 @@ Checkpoint snapshots (`refs/checkpoints/*`, written with git plumbing, not `git 
 two of these checks on their temporary index before anything is written: the private-literal
 rule over what the snapshot adds over `HEAD` (when the list is not empty) and, in the harness
 home, `render-settings check --staged` when the snapshot's `settings.json` differs from `HEAD`.
-A refused snapshot writes nothing and is logged without the offending values.
+A refused snapshot writes nothing and is logged without the offending values. It never blocks
+a Stop (with or without `stop_hook_active`): the Stop hook's later phases still run and the
+session shows one line naming the refusing rule and `logs/checkpoint.log`, never a value.
 
 **The private-literal list** is `<harness-home>/private-literals.txt`: untracked and gitignored;
 init creates it empty and only you fill it. One literal per line — account names, e-mail

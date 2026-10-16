@@ -28,8 +28,11 @@
 #     untracked file holding a listed stand-in literal), AC6 the settings check
 #     in a harness-home layout (machine-form settings.json staged without the
 #     filter; a UTF-8 byte order mark in front of it with the filter). No new
-#     snapshot commit, a refusal line in checkpoint.log that holds no literal or
-#     value, the failure counter advances; ordinary snapshots are still written.
+#     snapshot commit, return code 3, a refusal line in checkpoint.log that holds
+#     no literal or value, the failure counter is left alone (review R5: a refusal
+#     is not a failure); ordinary snapshots are still written. The byte order mark
+#     is refused earlier, by the required clean filter inside `git add -A`, which
+#     stays an ordinary snapshot failure (return code 1).
 #
 # Usage: bash hooks/tests/test_checkpoint_pii_gate.sh
 # Exit:  0 = all assertions pass; 1 = any assertion failed.
@@ -232,11 +235,12 @@ _snap() {
   snap_after=$(git -C "$repo" rev-parse -q --verify "$ref")
   snap_log=$(tail -n "+$((lines + 1))" "$log_file" 2>/dev/null)
 }
-_refused() {  # <AC> <label> <expected log substring>
-  if [ "$snap_rc" -eq 1 ] && [ "$snap_after" = "$snap_before" ]; then
-    _ok "$1: $2 -> rc=1, no new snapshot commit"
+_refused() {  # <AC> <label> <expected log substring> [<expected rc, default 3>]
+  local want="${4:-3}"
+  if [ "$snap_rc" -eq "$want" ] && [ "$snap_after" = "$snap_before" ]; then
+    _ok "$1: $2 -> rc=$want, no new snapshot commit"
   else
-    _fail "$1: $2 -> expected rc=1 and an unchanged ref (rc=$snap_rc, before='$snap_before', after='$snap_after')"
+    _fail "$1: $2 -> expected rc=$want and an unchanged ref (rc=$snap_rc, before='$snap_before', after='$snap_after')"
   fi
   if printf '%s' "$snap_log" | grep -qF -- "$3"; then
     _ok "$1: $2 -> checkpoint.log names the reason ('$3')"
@@ -274,13 +278,14 @@ _snap "AC5 ordinary" "$CORE_LIB" "$REPO3"
 _written AC5 "ordinary untracked file with a list present"
 
 printf 'ticket for %s, demo only\n' "$STANDIN" > "$REPO3/leak.txt"
+printf '1\n' > "$CHECKPOINT_FAIL_COUNT_FILE"   # one earlier failure: a refusal neither adds nor resets
 count_before=$(fail_count)
 _snap "AC5 literal" "$CORE_LIB" "$REPO3"
 _refused AC5 "untracked file holding a listed literal" "snapshot refused by the private-literal rule"
-if [ "$(fail_count)" -eq "$(( count_before + 1 ))" ]; then
-  _ok "AC5: the refusal is recorded as a checkpoint failure (counter advanced)"
+if [ "$(fail_count)" -eq "$count_before" ]; then
+  _ok "AC5: the refusal is not counted as a checkpoint failure (counter unchanged)"
 else
-  _fail "AC5: failure counter did not advance (before='${count_before}', after='$(fail_count)')"
+  _fail "AC5: failure counter changed on a refusal (before='${count_before}', after='$(fail_count)')"
 fi
 if printf '%s' "$snap_log" | grep -qF "leak.txt:1"; then
   _ok "AC5: checkpoint.log names the offending file:line"
@@ -348,7 +353,7 @@ fi
 printf 'second note\n' >> "$H/notes.txt"
 _snap "AC6 BOM" "$H_LIB" "$H"
 _refused AC6 "UTF-8 byte order mark in front of the machine form (filter registered)" \
-  "byte order mark"
+  "byte order mark" 1
 
 # ============================================================================
 if [ "$FAILS" -eq 0 ]; then

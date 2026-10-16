@@ -20,7 +20,7 @@
 #   1. read-tree parent tree (or --empty for bootstrap)
 #   2. git add -A  (staged into a TEMP index via GIT_INDEX_FILE)
 #   2b. hard-exclude known PII file classes from the temp index (independent of .gitignore)
-#   2c. return 1 when the pre-commit hook's own checks refuse the temp index
+#   2c. return 3, writing nothing, when the pre-commit hook's own checks refuse the temp index
 #   3. git write-tree  -> TREE_SHA
 #   4. if TREE_SHA == PARENT_TREE_SHA -> return 0 (idempotent)
 #   5. git commit-tree TREE_SHA [-p PARENT_SHA] -m "<msg>"  -> NEW_SHA
@@ -94,10 +94,8 @@ CHECKPOINT_PII_PATH_COMPONENTS="${CHECKPOINT_PII_PATH_COMPONENTS:-backups sessio
 # .github/workflows/baseline.yml:130).
 CHECKPOINT_PII_SIGNATURE_PATTERN="${CHECKPOINT_PII_SIGNATURE_PATTERN:-[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}|[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}|sk-[A-Za-z0-9]{20}|AKIA[0-9A-Z]{16}|gh[pousr]_[A-Za-z0-9]{36,}|eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+}"
 
-# Consecutive-failure alerting (2026-04-16 SaaS-grade ops gap fix).
-# Counter file tracks back-to-back write_checkpoint failures; on the 3rd
-# consecutive failure within one hook invocation we print a single stderr
-# alert so users actually see the breakage. Any success resets the counter.
+# Consecutive-failure alerting (2026-04-16): the 3rd back-to-back write_checkpoint failure prints
+# one stderr alert; any success resets the counter, and a refusal (rc 3) leaves it alone.
 CHECKPOINT_FAIL_COUNT_FILE="${CHECKPOINT_FAIL_COUNT_FILE:-${CHECKPOINT_LOG_DIR}/.checkpoint-fail-count}"
 CHECKPOINT_FAIL_ALERT_THRESHOLD="${CHECKPOINT_FAIL_ALERT_THRESHOLD:-3}"
 
@@ -445,16 +443,15 @@ ${CLAUDE_CHECKPOINT_EXTRA_TRAILER}}"
 #
 # Return codes:
 #   0  success OR idempotent no-op (tree unchanged)
-#   1  build/CAS failure after retries, or a snapshot refused at step 2c
+#   1  build/CAS failure after retries
 #   2  not a git repo
+#   3  refused at step 2c: nothing written; checkpoint_refused_by names the rule(s), no value
 write_checkpoint() {
     local work_dir="${1:-}"
     local trigger="${2:-unknown}"
     local custom_message="${3:-}"
 
-    # Resolve git dir; bail gracefully if not a repo
-    # Note: rc=2 (not-a-repo) is NOT a checkpoint failure — it's a no-op skip,
-    # so we do NOT increment the failure counter here.
+    # rc=2 (not a repo) is a no-op skip, NOT a checkpoint failure: the counter is left alone.
     local git_dir
     git_dir=$(_checkpoint_git_dir "$work_dir")
     if [ -z "$git_dir" ]; then
@@ -587,24 +584,25 @@ write_checkpoint() {
 
     # Refuse what the pre-commit hook refuses, by its own engines on the temp index (they print no
     # literal or value): the private-literal rule when its list is not empty, and in this harness
-    # home the settings check when settings.json differs from HEAD.
-    local h top common report refused=""
+    # home the settings check when settings.json differs from HEAD. Callers get only rule names.
+    local h top common report
+    checkpoint_refused_by=""
     h="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." 2>/dev/null && pwd -P)"
     { read -r top; read -r common; } < <($git_cmd rev-parse --show-toplevel --path-format=absolute --git-common-dir 2>/dev/null)
     if [ -s "${common%/*}/private-literals.txt" ] && ! report="$(cd "$top" \
         && GIT_INDEX_FILE="$TMP_INDEX" bash "$h/scripts/check-public-core.sh" --private-literals 2>&1)"; then
-        refused="the private-literal rule (${report//$'\n'/ | }); "
+        checkpoint_refused_by="the private-literal rule"
+        _checkpoint_log ERROR "${checkpoint_refused_by}: ${report//$'\n'/ | }"
     fi
     if [ "$top" = "$h" ] \
         && ! GIT_INDEX_FILE="$TMP_INDEX" $git_cmd diff-index --cached --quiet HEAD -- settings.json 2>/dev/null \
         && ! GIT_INDEX_FILE="$TMP_INDEX" python3 "$h/scripts/install/render-settings" check --staged 2>>"$CHECKPOINT_LOG_FILE"; then
-        refused+="the settings check (scripts/install/render-settings check --staged); "
+        checkpoint_refused_by+="${checkpoint_refused_by:+ and }the settings check (render-settings check --staged)"
     fi
-    if [ -n "$refused" ]; then
-        _checkpoint_log ERROR "snapshot refused by ${refused}nothing written (ref=${ref})"
+    if [ -n "$checkpoint_refused_by" ]; then
+        _checkpoint_log ERROR "snapshot refused by ${checkpoint_refused_by}: nothing written (ref=${ref})"
         rm -f "$TMP_INDEX"
-        _checkpoint_record_failure
-        return 1
+        return 3
     fi
 
     local tree_sha

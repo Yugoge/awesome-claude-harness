@@ -49,6 +49,8 @@ if write_checkpoint "" "stop hook: auto-commit.sh"; then
   if [ -n "$TIP" ]; then
     echo -e "${GREEN}   Tip: ${TIP}${NC}"
   fi
+elif [ "$?" -eq 3 ]; then  # refused, nothing written: a one-line notice (systemMessage), never a Stop block
+  printf '{"systemMessage": "Checkpoint snapshot refused by %s: nothing written, see logs/checkpoint.log"}\n' "$checkpoint_refused_by"
 else
   echo -e "${RED}❌ Checkpoint failed. See ~/.claude/logs/checkpoint.log${NC}"
   exit 1
