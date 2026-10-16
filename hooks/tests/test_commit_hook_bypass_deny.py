@@ -84,6 +84,24 @@ BYPASS_CASES = [
     # the one-off include override on a commit (its persistent write is R2 below)
     "git -c include.path=inc.cfg commit -m x",
     "git -c 'includeIf.gitdir:/srv/repo/.path=inc.cfg' commit -m x",
+    # review round 2, REG-D controls: a command substitution the shell runs —
+    # unquoted, inside double quotes (where single quotes are plain text), or
+    # nested — is scanned as a command, and so is single-quoted text that a
+    # nested shell (bash -c, a `!`-shell alias) runs as code.
+    "echo \"$(git commit -n)\" > notes.md",
+    "git commit -m \"docs: mention `git commit -n` is forbidden\"",
+    "git commit -m \"never run `git commit --no-verify`\"",
+    "printf '%s\\n' \"$(git commit -n)\" >> notes.md",
+    "echo $(git commit -n) > notes.md",
+    "echo `git commit -n` > notes.md",
+    "echo \"$(echo \"$(git commit -n)\")\"",
+    "echo $(echo $(git commit -n))",
+    "echo \"$(echo \" '$(git commit -n)' \")\"",
+    "echo \"'$(git commit -n)'\"",
+    "echo '$(true)'\"$(git commit -n)\"",
+    "echo \"\\\\$(git commit -n)\"",
+    "bash -c 'echo $(git commit -n)'",
+    "git -c 'alias.ci=!echo `git commit -n`' ci",
 ]
 
 # item 4: git config WRITES to a keystone key (core.hooksPath / alias.* /
@@ -188,6 +206,18 @@ ALLOWED_CASES = [
     "git config acct-include.path inc.cfg",
     "git config remote.origin.url https://example.invalid/include.path",
     "git config user.name include",
+    # review round 2, REG-D: a $( or backtick inside single quotes, or escaped,
+    # is text the shell never runs, so a skip spelled there is no bypass — also
+    # when another part of the command runs a substitution.
+    "echo '$(git commit -n)' > notes.md",
+    "git commit -m 'docs: mention `git commit -n` is forbidden'",
+    "git commit -m 'never run `git commit --no-verify`'",
+    "git commit -m \"fix: x\" -m 'see `git commit -n` (forbidden)'",
+    "printf '%s\\n' '$(git commit -n)' >> notes.md",
+    "printf '%s\\n' '`git commit --no-verify`' > notes.md",
+    "echo \"\\$(git commit -n)\" > notes.md",
+    "cd \"$(git rev-parse --show-toplevel)\" && git commit -m 'forbid `git commit -n`'",
+    "x=$(echo '$(git commit -n)'); git status",
 ]
 
 

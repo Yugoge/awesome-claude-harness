@@ -276,7 +276,7 @@ fi
 # ── Commit guard (R7b): commit-hook-bypass + config-keystone-write + unregistered-settings-filter ──
 # Before any /do or /allow bypass, for all callers; no verdict = deny. The bash gate drops quotes/backslashes
 # (`co''mmit`, `g\it`) and runs the Python only for a git word plus commit/config. The Python tokenises (echo/printf
-# stay data) and denies: (1) a commit skipping hooks (--no-verify..--no-ver; -n in a short cluster; a core.hooksPath/
+# and a $( or ` the shell leaves unrun, in '..' or \-escaped, stay data) and denies: (1) a commit skipping hooks (--no-verify..--no-ver; -n in a short cluster; a core.hooksPath/
 # include/GIT_CONFIG_* override; a `-c alias.X=` call whose expansion (value + args, `!`-shell too) does so); (2) a
 # git config WRITE (option/verb form, any case) to core.hooksPath, alias.*, filter.claude-settings.*, include,
 # include.path or includeIf.*.path, reads (--get*/--list/one-arg) allowed; (3) a commit whose repo (cwd, cd, -C,
@@ -284,12 +284,9 @@ fi
 _CG_STRIP="${COMMAND//[\'\"\\]/}"; _CG_GITRE='(^|[^[:alnum:]_])git'
 if [[ ( "$_CG_STRIP" == *commit* || "$_CG_STRIP" == *config* ) && "$_CG_STRIP" =~ $_CG_GITRE ]]; then
   _CG=$(CG_INPUT="$INPUT" "$PYTHON_BIN" - "$CLAUDE_HOME/hooks" 2>/dev/null <<'PYEOF'
-import importlib.util as iu, itertools, json, os, re, shlex, subprocess as sp, sys
-H = sys.argv[1]; sys.path.insert(0, H)
-from lib.bash_context_strip import _process_heredocs
-from lib.git_command_classifier import _command_token_index, _git_subcommand
-s = iu.spec_from_file_location('_overnight_guard', H + '/pretool-overnight-hook-guard.py')
-og = iu.module_from_spec(s); s.loader.exec_module(og)
+import contextlib, importlib.util as iu, itertools, json, os, re, shlex, subprocess as sp, sys; H = sys.argv[1]; sys.path.insert(0, H)
+from lib.bash_context_strip import _process_heredocs; from lib.git_command_classifier import _command_token_index, _git_subcommand
+s = iu.spec_from_file_location('_overnight_guard', H + '/pretool-overnight-hook-guard.py'); og = iu.module_from_spec(s); s.loader.exec_module(og)
 d = json.loads(os.environ['CG_INPUT']); cur = [d.get('cwd') or os.getcwd()]; dirs = cur[:]; commits, why, cfg, ex = [], [], [], {}
 LONGV = ('message', 'file', 'reuse-message', 'reedit-message', 'template', 'author', 'date', 'trailer'); GV = {'--git-dir': 'GIT_DIR', '--work-tree': 'GIT_WORK_TREE'}
 CFGW = {'set', 'unset', 'unset-all', 'replace-all', 'add', 'rename-section', 'remove-section'}  # config write verbs
@@ -300,22 +297,25 @@ def words(t):  # shell words; separators, comments and newlines kept as the shel
     t = re.sub(r'&>', '>', re.sub(r'([<>])&', r'\1 ', re.sub(r'(?<=[^\s;&|()`])#', '_', t.replace('\\\n', ''))))
     for tail in ('', '"', "'"):
         x = shlex.shlex(t.replace('\n', '\n;') + tail, posix=True, punctuation_chars=';&|()`'); x.whitespace_split = True
-        try: return list(x)
-        except ValueError: pass
+        with contextlib.suppress(ValueError): return list(x)
     return t.split()
-def scan(text, depth=0):
-    for sep, grp in itertools.groupby(words(_process_heredocs(text)) if depth < 5 else [], lambda w: w != '' and set(w) <= set(';&|()`')):
-        if not sep: one(list(grp), depth)
-def one(t, depth):
-    for w in t:
-        if '$(' in w or '`' in w: scan(w, depth + 1)
-        m = re.match(r'[A-Za-z_]\w*=', w)
-        if m and og._GIT_HOOK_SUPPRESS_RE.search(m.group(0)): why.append(m.group(0) + '... assignment')
-    i = _command_token_index(t)
-    if i is None: return
-    if ' ' in t[i]: return scan(' '.join(t[i:]), depth + 1)
+UQ, DQ = (re.compile(p) for p in (r"""(?P<e>\\[\s\S])|(?P<s>'[^']*')|(?P<b>`(?:\\[\s\S]|[^\\`])*`)|\$\{\w*\}|(?P<o>\$?\()|(?P<c>\))|(?P<d>")|(?P<x>\$[{']|<<|(?<![^\s;&|()<>])#|\bcase\b|['`])|[^\\$'`"()<#c]+|[\s\S]""", r"""(?P<e>\\[\s\S])|(?P<b>`(?:\\[\s\S]|[^\\`])*`)|\$\{\w*\}|(?P<o>\$\()|(?P<d>")|(?P<x>\$\{|`)|[^\\`$"]+|[\s\S]"""))  # bash tokens outside / inside ".."
+def defuse(t, i=0, st='', o=''):  # t with each $( and ` the shell leaves unrun ('..', \-escaped) made inert ($ to _, ` to a ")" that shlex splits alike); t if unsure
+    while i < len(t) and st[-1:] != '!':  # st: open $(/( and " contexts as bash nests them; '!' = unsure: a stray ) or x token ($'..', <<, #, case, unclosed '/`, ${ not at top)
+        m = (DQ if st[-1:] == '"' else UQ).match(t, i); k, s, i = m.lastgroup, m.group(), m.end(); o += s.translate({36: '_', 96: ')'}) if k in ('e', 's') else s
+        st = st + '!' if k == 'x' and (s != '${' or st) or k == 'c' and st[-1:] != ')' else st[:-1] if k == 'c' or k == 'd' and st[-1:] == '"' else st + {'o': ')', 'd': '"'}.get(k, '')
+    return t if st else o
+def scan(text, depth=0, lg=False):  # lg: text is a word whose quotes are gone, so (fail-closed) every $( and ` in it counts
+    for sep, grp in itertools.groupby(zip(w := words(t := _process_heredocs(text)), w if lg else words(defuse(t))) if depth < 5 else [], lambda p: p[0] != '' and set(p[0]) <= set(';&|()`')):
+        if not sep: one(*map(list, zip(*grp)), depth, lg)
+def one(t, u, depth, lg):  # u: t's words with unrun $( and ` made inert; recurse only into a word whose $( or ` the shell runs
+    for w, v in zip(t, u):
+        if '$(' in v or '`' in v: scan(w, depth + 1, True)
+        if (a := re.match(r'[A-Za-z_]\w*=', w)) and og._GIT_HOOK_SUPPRESS_RE.search(a.group(0)): why.append(a.group(0) + '... assignment')
+    if (i := _command_token_index(t)) is None: return
+    if ' ' in t[i]: return scan(' '.join(t[i:]), depth + 1, lg)
     b, c = os.path.basename(t[i]), [j for j in range(i + 1, len(t) - 1) if re.match(r'-[^-]*c', t[j])]
-    if b in ('bash', 'sh', 'zsh', 'dash', 'ksh') and c: scan(t[c[0] + 1], depth + 1)
+    if b in ('bash', 'sh', 'zsh', 'dash', 'ksh') and c: scan(t[c[0] + 1], depth + 1, lg)
     if b in ('cd', 'pushd'): cur[0] = at(cur[0], ([a for a in t[i + 1:] if a[:1] != '-'] or ['~'])[0]); dirs.append(cur[0])
     if b != 'git': return ex.update(a.split('=', 1) for a in t[i + 1:] if '=' in a) if b == 'export' else None
     g = t[i + 1:]; sub, rest = _git_subcommand(g); base = cur[0]; ev = {**ex, **dict(a.split('=', 1) for a in t[:i] if '=' in a)}
