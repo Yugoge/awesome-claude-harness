@@ -10,9 +10,9 @@
 #   settings.json, so they silently drifted (40 -> 67); the provenance audit was never run in
 #   CI and exited 0 even when source verification was downgraded to warnings.
 #
-# The enforced numbers are NEVER hardcoded — they are recomputed from settings.json every run,
-# so adding/removing a hook (with the docs updated in step) changes the enforced value
-# automatically.
+# The enforced numbers are NEVER hardcoded; they are recomputed every run from settings.json as
+# staged in the index, its tracked form: the claude-settings filter leaves an initialised home's
+# working file in the machine form, which enabled modules (paseo) extend with their own hooks.
 
 set -uo pipefail   # deliberately NOT -e: an explicit accumulator runs every check so ALL drift
                    # is reported at once instead of aborting on the first failure.
@@ -28,13 +28,13 @@ fail() { echo "FAIL: $*"; rc=1; }
 pass() { echo "PASS: $*"; }
 
 # ---------------------------------------------------------------------------
-# 1. Recompute wired_entries + lifecycle_events from settings.json (schema-validated).
+# 1. Recompute wired_entries + lifecycle_events from the index settings.json (schema-validated).
 #    settings.json.hooks is an object keyed by lifecycle event; each value is a LIST of
 #    matcher-entries; each matcher-entry has a `hooks` array of command objects.
-#      wired_entries   = sum(len(entry.hooks)) over every matcher-entry of every event
-#      lifecycle_events = number of top-level keys under hooks
+#      wired_entries = sum(len(entry.hooks)) over all matcher-entries; lifecycle_events = len(hooks)
+#    Outside a repository or with no settings.json staged, git prints why; this and --claims fail.
 # ---------------------------------------------------------------------------
-counts="$(python3 - "$ROOT/settings.json" <<'PY'
+counts="$(python3 - <(git cat-file blob :settings.json) <<'PY'
 import json, sys
 path = sys.argv[1]
 try:
@@ -64,7 +64,7 @@ if [ $? -ne 0 ]; then
   WIRED=""; EVENTS=""
 else
   WIRED="${counts% *}"; EVENTS="${counts#* }"
-  pass "recomputed from settings.json: wired_entries=${WIRED} lifecycle_events=${EVENTS}"
+  pass "recomputed from the index settings.json: wired_entries=${WIRED} lifecycle_events=${EVENTS}"
 fi
 
 # ---------------------------------------------------------------------------
@@ -348,14 +348,14 @@ fi
 #      --claims : claim-versus-code   (both regex symbols present; arch-F7 block intact; every
 #                 declared matrix witness reproduces its recorded outcome; wrapper/redirection
 #                 token sets and gate-architecture census unchanged; ledger row set equals the
-#                 settings.json-derived set; every threat-model section-4 citation pinned)
+#                 index settings.json-derived set; every threat-model section-4 citation pinned)
 # ---------------------------------------------------------------------------
 EVIDENCE_GATE="$ROOT/scripts/check-enforcement-evidence.py"
 if [ ! -f "$EVIDENCE_GATE" ]; then
   fail "enforcement-evidence: scripts/check-enforcement-evidence.py not found"
 else
   for mode in ledger claims; do
-    if python3 "$EVIDENCE_GATE" "--${mode}"; then
+    if python3 "$EVIDENCE_GATE" "--${mode}" --settings <(git cat-file blob :settings.json 2>/dev/null); then
       pass "enforcement-evidence --${mode}"
     else
       fail "enforcement-evidence --${mode}: see the FAIL lines above"
