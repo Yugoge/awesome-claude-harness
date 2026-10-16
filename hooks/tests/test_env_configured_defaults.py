@@ -132,7 +132,8 @@ def test_process_family_rules(sandbox):
     assert r.returncode == 2 and "Killing demo/claude/docker processes" in r.stderr
 
 
-# Default hard bans (CLAUDE_HARD_BANNED_SCRIPTS unset): the generic names match only a run of the script.
+# Default hard bans (CLAUDE_HARD_BANNED_SCRIPTS unset or empty): the generic names, bare or as NAME.sh, match only
+# a run of the script (the command word), so reading, listing, editing or naming the script file passes.
 @pytest.mark.parametrize("command", (
     "cat docs/session-recovery.md",
     "grep -rn 'restart-all-sessions' .",
@@ -142,12 +143,21 @@ def test_process_family_rules(sandbox):
     "vim notes/session-recovery-plan.txt",
     "bash scripts/demo-session-recovery-check.sh",
     "timeout 5 grep -rn session-recovery docs",
+    "cat scripts/session-recovery.sh",
+    "ls session-recovery.sh",
+    "ls -l scripts/restart-all-sessions.sh",
+    "git log --oneline -- scripts/session-recovery.sh",
+    "vim scripts/restart-all-sessions.sh",
+    'git commit -m "remove session-recovery.sh"',
+    "grep -n trap scripts/session-recovery.sh | head -5",
+    "timeout 5 cat scripts/restart-all-sessions.sh",
 ))
 def test_default_hard_bans_allow_reading_and_mentioning_the_names(sandbox, command):
     _, env = sandbox
-    r = hook(env, command)
-    assert r.returncode == 0, r.stderr
-    assert "hard-banned script" not in r.stderr
+    for value in (None, ""):  # unset and empty both mean the default
+        r = hook(env, command, **({} if value is None else {"CLAUDE_HARD_BANNED_SCRIPTS": value}))
+        assert r.returncode == 0, (value, r.stderr)
+        assert "hard-banned script" not in r.stderr
 
 
 @pytest.mark.parametrize("command,name", (
@@ -155,12 +165,22 @@ def test_default_hard_bans_allow_reading_and_mentioning_the_names(sandbox, comma
     ("./restart-all-sessions.sh", "restart-all-sessions"),
     ("/opt/x/session-recovery.sh --all", "session-recovery"),
     ("sh restart-all-sessions.sh", "restart-all-sessions"),
-    ("ls session-recovery.sh", "session-recovery"),  # a NAME.sh path is banned wherever it appears
     ("session-recovery --all", "session-recovery"),
     ("cd /opt/x && nohup restart-all-sessions &", "restart-all-sessions"),
     ("sudo -E FOO=1 timeout 5 session-recovery", "session-recovery"),
     ("bash -c 'restart-all-sessions --now'", "restart-all-sessions"),
     ("x=$(session-recovery)", "session-recovery"),
+    ("sh scripts/restart-all-sessions.sh", "restart-all-sessions"),
+    ("./scripts/session-recovery.sh", "session-recovery"),
+    ("cd /opt/x && ./session-recovery.sh", "session-recovery"),
+    ("/bin/bash scripts/session-recovery.sh", "session-recovery"),
+    ("/usr/bin/env bash restart-all-sessions.sh", "restart-all-sessions"),
+    ("bash \"$HOME/bin/session-recovery.sh\"", "session-recovery"),
+    ("source scripts/restart-all-sessions.sh", "restart-all-sessions"),
+    ("bash < scripts/session-recovery.sh", "session-recovery"),
+    ("./scripts/restart-all-sessions.sh>/dev/null 2>&1", "restart-all-sessions"),
+    ("find . -name '*.log' | xargs scripts/session-recovery.sh", "session-recovery"),
+    ("echo `restart-all-sessions.sh`", "restart-all-sessions"),
 ))
 def test_default_hard_bans_block_running_the_scripts(sandbox, command, name):
     _, env = sandbox
@@ -184,6 +204,8 @@ OLD_STYLE_BANS = "acct-test-123-recovery|acct-test-123-restart"
     "ls notes",
     "bash scripts/session-recovery.sh",  # a set value replaces the default names
     "cat docs/session-recovery.md",
+    "cat scripts/acct-test-123-recovery.sh",  # unlike the default, a set value also matches a mention
+    'git commit -m "remove acct-test-123-restart.sh"',
 ))
 def test_explicit_hard_ban_value_keeps_match_anywhere_semantics(sandbox, command):
     _, env = sandbox

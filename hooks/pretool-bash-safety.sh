@@ -1811,11 +1811,11 @@ fi
 
 # Scripts that manage session state or restart daemons. A set CLAUDE_HARD_BANNED_SCRIPTS is '|'-separated EREs, each
 # matched anywhere (empty entries skipped: they would match every command). Unset or empty, the generic default names
-# match only a run: NAME.sh as a path anywhere, or NAME as a command word (after a path, wrapper, shell or options).
-_HB_CMD='(^|[;&|(`{!]|\$\()[[:space:]]*((sudo|env|nohup|exec|command|time|nice|timeout|setsid|xargs|source|\.|(ba|z|da|k)?sh|if|then|do|else|while|until|-[^[:space:]]*|[0-9][^[:space:]]*|[A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*)[[:space:]]+)*["'"'"']?([^[:space:];&|]*/)?'
+# match only a run: NAME or NAME.sh as the command word (after a path, options, '<', or a wrapper or shell, any pathed).
+_HB_CMD='(^|[;&|(`{!]|\$\()[[:space:]]*(([^[:space:];&|]*/)?(sudo|env|nohup|exec|command|time|nice|timeout|setsid|xargs|source|\.|(ba|z|da|k)?sh|if|then|do|else|while|until|[-<][^[:space:]]*|[0-9][^[:space:]]*|[A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*)[[:space:]]+)*["'"'"']?([^[:space:];&|]*/)?'
 IFS='|' read -r -a _HARD_BANNED <<< "${CLAUDE_HARD_BANNED_SCRIPTS:-session-recovery|restart-all-sessions}"
 for _ban in "${_HARD_BANNED[@]}"; do
-  _re="$_ban"; [ -n "$CLAUDE_HARD_BANNED_SCRIPTS" ] || _re="(^|[^[:alnum:]_.-])$_ban\\.sh([^[:alnum:]_.-]|\$)|$_HB_CMD$_ban([\"'[:space:];&|)\`]|\$)"
+  _re="$_ban"; [ -n "$CLAUDE_HARD_BANNED_SCRIPTS" ] || _re="$_HB_CMD$_ban(\\.sh)?([\"'[:space:];&|)<>\`]|\$)"
   if [ -n "$_ban" ] && echo "$COMMAND" | grep -qE -- "$_re"; then
     printf "BLOCKED: hard-banned script '%s' is PERMANENTLY FORBIDDEN\nCommand: %s\nREASON: It manages session state or restarts daemons and can kill all sessions. Only the user may run it manually.\n" "$_ban" "$COMMAND" >&2; exit 2
   fi
