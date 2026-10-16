@@ -60,6 +60,8 @@ jobs:
         # A runner has no overlay, so this catches what is machine-only by
         # definition (CLI-owned keys such as model, env.CLAUDE_HOME) and
         # non-canonical bytes; home paths in it fail check-public-core below.
+        # It also fails while the overlay settings.machine.json or the private-literal
+        # list private-literals.txt is in the index: both are personal, never tracked.
         # The gates below read this tracked file as-is; nothing is rendered here.
         run: python3 scripts/install/render-settings check --staged
 

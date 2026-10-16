@@ -51,13 +51,17 @@ Optional modules (today only `paseo`) are fragments embedded in
 
 `.gitattributes` (tracked, `shared/infra`) declares `/settings.json filter=claude-settings`;
 init registers the filter's clean and smudge commands (`scripts/install/render-settings`,
-`required = true`) in the clone's local git config. Smudge renders the machine form (clean
-form + enabled modules + overlay) into the working file; clean strips everything the
-modules and the overlay added, plus the CLI-owned keys, so git only ever stores the clean
-form. A commit that would store `settings.json` in machine form is refused by the
-pre-commit hook init installs (`render-settings check --staged`), and CI runs the same
-check; agents cannot skip that hook (`hooks/pretool-bash-safety.sh` blocks `--no-verify`,
-`-n` and hook-path overrides on `git commit`).
+`required = true`) in the clone's local git config. Smudge and render write the machine form
+(clean form + enabled modules + overlay) into the working file and record what they applied in
+`<git dir>/claude-settings.applied` (never tracked); clean strips everything the modules,
+the overlay and that record added, plus the CLI-owned keys, and refuses input it cannot
+parse, so git only ever stores the clean form. A commit that would store `settings.json` in
+machine form, or one made while the overlay or the private-literal list is in the index, is
+refused by the pre-commit hook init installs (`render-settings check --staged`); CI runs the same
+check without an overlay. `hooks/pretool-bash-safety.sh` denies agents the forms of skipping
+that hook it can read in a command (`--no-verify`, `-n`, hook-path overrides and `-c`
+aliases on `git commit`; `git config` writes to `core.hooksPath`, `alias.*` and
+`filter.claude-settings.*`); README.md, "Commit protection", names what it does not cover.
 
 Personal literals have their own local guard: the private-literal list `private-literals.txt`
 at the harness home (untracked, gitignored; init creates it empty and only the human fills

@@ -1,5 +1,5 @@
 {
-  "_about": "Example machine overlay. Copy it to settings.machine.json in the harness home (untracked, gitignored), keep only the keys you need and replace every demo value with your own. scripts/bootstrap writes a minimal overlay (modules + env.CLAUDE_HOME) only when none exists and never edits an existing one; hooks and agents never write it. The settings filter renders clean form + enabled modules + overlay into the working settings.json (git smudge, or scripts/install/render-settings render) and removes everything a module or the overlay added, plus the CLI-owned keys, when git stores settings.json (git clean), so nothing from this file reaches a commit.",
+  "_about": "Example machine overlay. Copy it to settings.machine.json in the harness home (untracked, gitignored), keep only the keys you need and replace every demo value with your own. scripts/bootstrap writes a minimal overlay (modules + env.CLAUDE_HOME) only when none exists and never edits an existing one; hooks and agents never write it. The settings filter renders clean form + enabled modules + overlay into the working settings.json (git smudge, or scripts/install/render-settings render) and removes everything a module, the overlay or the record of what smudge and render applied (<git dir>/claude-settings.applied, never tracked) added, plus the CLI-owned keys, when git stores settings.json (git clean), so nothing from this file reaches a commit, even after a value is removed from it before the next render. render-settings check --staged (pre-commit hook and CI) refuses every commit while this file is in the index; git rm --cached -- settings.machine.json untracks it.",
   "_format": [
     "Top-level keys whose names start with \"_\" (like this one) are documentation and are never rendered.",
     "\"modules\" is meta and never rendered: module name -> true or false. An unknown module name is an error.",
@@ -24,7 +24,7 @@
     "CLAUDE_DAEMON_RESTART_GRANT_HELPER": "Path of the operator's helper that grants a one-time daemon restart; it is only named in the daemon-restart guidance text. Default empty.",
     "CLAUDE_PROTECTED_DAEMON_PREFIX": "Unit-name prefix of a local daemon the agent must never restart (systemctl or wrapper). Default empty: the daemon-restart prohibition layers are inert.",
     "CLAUDE_PROTECTED_DAEMON_TARGETS": "\"|\"-separated per-instance suffixes of the protected daemon (units <prefix>-<target>). Default empty.",
-    "CLAUDE_HARD_BANNED_SCRIPTS": "Scripts the agent may never run, as EREs separated by \"|\" (empty entries are skipped). A non-empty value replaces the default, and each of its EREs is matched anywhere in the command, so reading or naming a matching file is blocked too. Default (unset or empty): the names session-recovery and restart-all-sessions, matched only as a script run (NAME.sh as a path anywhere in the command, or NAME as a command word); list them in a set value to keep them, then matched anywhere.",
+    "CLAUDE_HARD_BANNED_SCRIPTS": "Scripts the agent may never run, as EREs separated by \"|\" (empty entries are skipped). A non-empty value replaces the default, and each of its EREs is matched anywhere in the command, so reading or naming a matching file is blocked too. Default (unset or empty): the names session-recovery and restart-all-sessions, matched only as a script run (NAME.sh as a path anywhere in the command, or NAME as a command word); list them in a set value to keep them, then matched anywhere. The demo value below names stand-ins only, so setting it drops the default names.",
     "CLAUDE_PROTECTED_PROCESS_FAMILY": "Process family word: docker stop/restart/rm/kill on a container matching it is blocked, and killall/pkill of it is blocked alongside claude and docker. Default empty: the docker rule is inert and the kill rule covers claude and docker only.",
     "CLAUDE_RESTART_ACCOUNTS_ROOT": "Root of sibling Claude Code accounts that /restart also scans (<root>/<name>/claude/projects/<slug>/). Unset or empty: only ${CLAUDE_CONFIG_DIR:-$HOME/.claude}/projects is scanned.",
     "WORKFLOW_PRUNE_ACCOUNTS_DIR": "Accounts root scanned by scripts/prune-orphaned-workflow-bookmarks.sh. Default empty: no account scan.",
@@ -41,7 +41,7 @@
     "CLAUDE_DAEMON_RESTART_GRANT_HELPER": "/opt/demo/bin/allow-daemon-restart",
     "CLAUDE_PROTECTED_DAEMON_PREFIX": "demo-daemon",
     "CLAUDE_PROTECTED_DAEMON_TARGETS": "acct-a|acct-b",
-    "CLAUDE_HARD_BANNED_SCRIPTS": "session-recovery|restart-all-sessions|demo-wipe-sessions",
+    "CLAUDE_HARD_BANNED_SCRIPTS": "demo-wipe-sessions|demo-restart-daemons",
     "CLAUDE_PROTECTED_PROCESS_FAMILY": "demo",
     "CLAUDE_RESTART_ACCOUNTS_ROOT": "/opt/demo/accounts",
     "WORKFLOW_PRUNE_ACCOUNTS_DIR": "/opt/demo/accounts",
@@ -87,7 +87,7 @@
   "autoCompactEnabled": true,
   "_private_literals": {
     "path": "<harness home>/private-literals.txt (untracked, gitignored). Fixed: no setting or environment variable changes it, and it is not part of this overlay.",
-    "about": "Personal literals that must never appear in a tracked file: account names, e-mail addresses, private host, product, unit or container names, personal home paths. scripts/bootstrap creates the file empty (0 bytes, mode 0600) if absent; only the human fills it. The pre-commit hook runs scripts/check-public-core.sh --private-literals over the staged files and refuses the commit when any literal occurs, reporting file:line and the literal's line number in the list, never the literal itself. A plain scripts/check-public-core.sh run applies the same rule to the tracked files in the working tree.",
+    "about": "Personal literals that must never appear in a tracked file: account names, e-mail addresses, private host, product, unit or container names, personal home paths. scripts/bootstrap creates the file empty (0 bytes, mode 0600) if absent; only the human fills it. The pre-commit hook runs scripts/check-public-core.sh --private-literals over what the staged change adds (its added lines, and the paths of files it adds or changes) and refuses the commit when any literal occurs, reporting file:line and the literal's line number in the list, never the literal itself. Checkpoint snapshots run the same rule over what their temporary index adds over HEAD, and a plain scripts/check-public-core.sh run over every file in the index (the content as staged, not the working tree). render-settings check --staged refuses every commit while this list is in the index.",
     "format": "One literal per line. Blank lines and lines whose first non-blank character is # are ignored. Matching is case-sensitive and fixed-string (no patterns, no wildcards).",
     "example_lines": [
       "# personal values (example)",

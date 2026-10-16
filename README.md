@@ -101,10 +101,16 @@ Init is idempotent and safe to re-run on a populated home. In order, it:
      `protected_services`, `protected_hotfiles`, `protected_statefiles`,
      `protected_endpoint_paths`, `protected_proc_idents`, `protected_global_bins`,
      `protected_build_workspaces` and `protected_build_paths`, each an empty list;
-5. installs the pre-commit hook where git actually runs hooks for the clone (`core.hooksPath`
-   respected);
-6. makes the shell hooks executable, prints any settings entries that belong in the overlay,
-   then runs `scripts/doctor` and exits non-zero if a required check fails.
+5. installs the pre-commit hook where git runs hooks for the clone (`core.hooksPath`
+   respected), but only into this repository's own hooks directory: under its git directory,
+   or named by `core.hooksPath` in its local (or worktree) config. A global, system or
+   command-line `core.hooksPath` can serve every repository on the machine, so init writes
+   nothing there, finishes the other steps and exits non-zero, printing the
+   `git config --local core.hooksPath …` command that gives the clone its own hooks directory
+   (copy your own hooks there first, then re-run init);
+6. makes the shell hooks executable, runs `scripts/doctor`, repeats the entries render or
+   doctor asked to move into the overlay, and exits non-zero if a required check failed or the
+   pre-commit hook was not installed.
 
 `protected-runtime.json` configures the runtime guard (`hooks/lib/runtime_guard/`). Without a
 valid file the guard cannot tell what it protects and fails closed on the verb families it
@@ -163,13 +169,24 @@ variable expansion) — so prompt-issued commands assume the default location.
   `modules`; `env` (sets or replaces a value); `permissions.allow` / `deny` / `ask` (appended —
   the overlay cannot remove a clean-form entry); `hooks` groups; any other top-level key
   (replaces the clean value). Top-level keys starting with `_` are documentation and are never
-  rendered.
+  rendered. The guard key `env.CLAUDE_HARD_BANNED_SCRIPTS` has a built-in default: unset or
+  empty, the names `session-recovery` and `restart-all-sessions` match only a script run
+  (`NAME.sh` as a path anywhere in the command, or `NAME` as a command word); a set value
+  replaces them with `|`-separated EREs, each matched anywhere in the command.
 - **The filter.** [`.gitattributes`](.gitattributes) declares
   `/settings.json filter=claude-settings`; init registers its clean and smudge commands
   (`scripts/install/render-settings`) in the clone's local git config, with `required = true`.
   Smudge (on checkout) and render write the machine form — clean form + enabled modules +
-  overlay; clean (on staging) strips everything the modules and the overlay added, plus the
-  CLI-owned keys.
+  overlay — and record the layers they applied in `<git dir>/claude-settings.applied` (mode
+  0600; inside the git directory, so never tracked). Clean (on staging) strips everything the
+  modules, the overlay and that record added, plus the CLI-owned keys, so the values of an entry
+  dropped from the overlay, or of a deleted overlay, are still stripped until the next render
+  drops them from the working file. Clean fails closed: on input it cannot parse (a UTF-8 byte
+  order mark included) it exits non-zero and `git add` fails instead of storing the file
+  unchanged.
+- **Messages.** Render and doctor name settings entries by key path and count (`env.<KEY>`,
+  `permissions.allow: <n> entries`), never by value; the staged check names only files and
+  keys; init names `env.TMPDIR` by its key, not its path.
 
 Day to day:
 
@@ -184,9 +201,11 @@ Day to day:
   the clean filter removes them, so they never reach a commit. Put a default in the overlay if
   you want one on a fresh render.
 - A permission Claude Code writes into the working file ("always allow") is not explained by
-  the overlay: it shows as a change to `settings.json`, and init and doctor list it. Move it
-  into the overlay's `permissions.allow`; until you do, a render refuses to overwrite it (unless
-  `--force`).
+  the overlay: it shows as a change to `settings.json`, and init's render refuses to overwrite
+  it (unless `--force`) and doctor fails on it, both naming only its key path and a count. Move
+  it into the overlay's `permissions.allow`. Until you do, the commit checks cannot tell it from
+  a public edit: `git add settings.json` stages it, and they pass it unless it holds a listed
+  private literal.
 
 ### Optional module: paseo
 
@@ -205,15 +224,25 @@ clean form either way.
 The pre-commit hook init installs (`hooks/git-hooks/pre-commit`) refuses a commit, naming the
 failed check, when:
 
-- `settings.json` is staged in machine form — it carries overlay values or CLI-owned keys, or is
-  not canonical (`render-settings check --staged`);
-- a staged file contains a literal from the private-literal list
-  (`scripts/check-public-core.sh --private-literals`);
+- `settings.json` is staged in machine form — it carries values the overlay or the record of
+  what render applied lists, or CLI-owned keys, or is not canonical
+  (`render-settings check --staged`);
+- `settings.machine.json` or `private-literals.txt` is in the index, force-added or tracked
+  by an earlier commit (`render-settings check --staged`): both are personal, so every commit is
+  refused until `git rm --cached -- <path>` untracks it (the file stays on disk);
+- a line the staged change adds, or the path of a file it adds or changes, contains a literal
+  from the private-literal list (`scripts/check-public-core.sh --private-literals`);
 - the sentinel-lint or `hooks/pre-commit-check.sh` step fails, or a script a check needs is
   missing (fail closed).
 
 A pre-commit hook that was already there is kept as `pre-commit.local` and runs after these
-checks.
+checks. Init installs the hook only into this repository's own hooks directory (step 5 above).
+
+Checkpoint snapshots (`refs/checkpoints/*`, written with git plumbing, not `git commit`) run
+two of these checks on their temporary index before anything is written: the private-literal
+rule over what the snapshot adds over `HEAD` (when the list is not empty) and, in the harness
+home, `render-settings check --staged` when the snapshot's `settings.json` differs from `HEAD`.
+A refused snapshot writes nothing and is logged without the offending values.
 
 **The private-literal list** is `<harness-home>/private-literals.txt`: untracked and gitignored;
 init creates it empty and only you fill it. One literal per line — account names, e-mail
@@ -221,15 +250,36 @@ addresses, private host, product or container names, personal home paths; blank 
 whose first non-blank character is `#` are ignored; matching is case-sensitive and fixed-string.
 No setting or environment variable moves it. A hit reports `file:line` and the literal's line
 number in the list, never the literal itself. Without the list, or with an empty one (CI, other
-users), the rule prints `SKIP` and the other checks still run. A plain
-`bash scripts/check-public-core.sh` applies the same rule to the tracked files in the working tree.
+users), the rule prints `SKIP` and the other checks still run. Its scope depends on the caller:
+the pre-commit hook checks what the staged change adds, a checkpoint snapshot what its temporary
+index adds over `HEAD`, and a plain `bash scripts/check-public-core.sh` every file in the index
+(the content as staged, not the working tree).
 
-Agents cannot step around the hook: `hooks/pretool-bash-safety.sh` blocks — for the main agent
-and subagents alike, with no `/do` or `/allow` bypass — a `git commit` with `--no-verify` / `-n`,
-a `core.hooksPath` override (`-c`, `--config-env`, `GIT_CONFIG_*`), and a commit in a repository
-that declares the settings filter without registering it while `settings.json` has local
-changes. Git copies neither hooks nor local config into a clone, so a clone that never ran init
-is not protected locally; CI runs the same `render-settings check --staged` as the backstop.
+**The commit guard.** `hooks/pretool-bash-safety.sh` denies, for the main agent and subagents
+alike and with no `/do` or `/allow` bypass, the forms it can read in a Bash command — quotes and
+backslashes inside a word dropped (`co''mmit`, `g\it`), through wrappers (`bash -c`, `env`,
+`sudo`), `$(…)`, `cd` and `-C`:
+
+- a `git commit` that skips hooks: `--no-verify` or an abbreviation of it, `-n` alone or in a
+  short-option cluster, a `core.hooksPath` or `include` override (`-c`, `--config-env`,
+  `GIT_CONFIG_*`), or a `-c alias.<name>=…` alias it invokes that commits with `-n` or
+  `--no-verify` (the `!` shell form too);
+- a `git config` write, in option or subcommand form (the two-argument set included), to
+  `core.hooksPath`, an `alias.*` key or a `filter.claude-settings.*` key; reads stay allowed;
+- a commit in a repository (from the working directory, `cd`, `-C`, `--git-dir`/`--work-tree`,
+  or a `GIT_DIR`/`GIT_WORK_TREE` prefix or export) that declares the settings filter without
+  registering it while `settings.json` has local changes.
+
+It does not cover an alias already stored in your git config (`git ci` for a saved
+`commit --no-verify`), a config write given `--file`/`-f` or `--type` as a separate operand,
+`git config edit` (or `-e`), a key or command known only at run time (shell expansion, a script
+written to disk and then run), or a change to the git config file or hooks directory made
+without `git config`. Git copies neither hooks nor local config into a clone, so in a clone that
+never ran init no local check reads what a commit stores; only the unregistered-filter denial
+still refuses an agent's commit there while `settings.json` has local changes. CI runs
+`render-settings check --staged` on the pushed tree, but without the overlay it refuses only
+what is machine-only by definition (CLI-owned keys, `env.CLAUDE_HOME`), non-canonical bytes and
+a tracked overlay or private-literal list, never a personal value that looks like a public entry.
 
 ### Doctor
 
@@ -238,15 +288,19 @@ venv, the manifest packages and the resolver, it checks the settings
 (`scripts/install/render-settings check`):
 
 - every hook command resolves to an existing file under the harness home (it prints
-  `missing=<n>` and each missing path);
-- the filter is declared, registered and `required`, and the staged clean form survives a
-  smudge-then-clean round trip (on a home that is not a git checkout it says so instead of
-  failing);
+  `missing=<n>` and each missing path; a hook outside the clean form and the modules is named
+  by its event only);
+- the filter is declared, registered and `required`, the staged clean form survives a
+  smudge-then-clean round trip, and, when an overlay exists, the record of what render applied
+  is present (on a home that is not a git checkout it says so instead of failing);
+- every working-file entry is explained by the clean form, the enabled modules or the overlay;
+  each one that is not fails the check, named by key path and count only — stage it if it is a
+  public edit, or move it into the overlay;
 - `protected-runtime.json` loads with `schema_version` 1 and all 10 keys.
 
-It also lists, without failing, working-file entries to move into the overlay and CLI-owned keys
-whose working value differs from the overlay. `scripts/doctor --strict` additionally runs a
-fresh host-capability handshake. Doctor exits non-zero when a required check fails.
+It also lists, without failing, CLI-owned keys whose working value differs from the overlay.
+`scripts/doctor --strict` additionally runs a fresh host-capability handshake. Doctor exits
+non-zero when a required check fails.
 
 ### Guardrails only: the installer `core` profile
 
@@ -618,7 +672,7 @@ file has to be rewritten. What carries that, and where it stops:
 | **No install path in the tracked settings** | Every hook command in `settings.json` reaches its file through `${CLAUDE_HOME:-$HOME/.claude}`; init writes `CLAUDE_HOME` into the untracked overlay `settings.machine.json` | Before init (no overlay) the fallback `$HOME/.claude` applies — the default install location |
 | **Scripts find their own home** | `hooks/lib/claude_home.{sh,py}` walk up from the script's location to the `settings.json + hooks/ + policies/ + scripts/` sentinel set | The repository may be cloned to any path |
 | **Runtime state follows Claude Code's configuration directory** | State paths resolve under `${CLAUDE_CONFIG_DIR:-$HOME/.claude}` | For a clone outside `~/.claude`, start Claude Code with `CLAUDE_CONFIG_DIR=<clone>` ([Other install locations](#other-install-locations)) |
-| **Machine values stay out of commits** | Clean/smudge filter + overlay; the pre-commit hook's `render-settings check --staged` and private-literal rule; CI's `check --staged` | Local protection needs init in that clone |
+| **Machine values stay out of commits** | Clean/smudge filter + overlay + the record of what render applied; the pre-commit hook's `render-settings check --staged` and private-literal rule, also run on checkpoint snapshots; CI's `check --staged` | Local protection needs init in that clone; CI has no overlay, so it cannot tell a personal entry from a public one |
 | **A broken install is reported, not silent** | `scripts/doctor`: every hook path resolves, the filter round-trips, `protected-runtime.json` loads | — |
 | **External extras degrade gracefully, never fall back unsafely** | D2 dependency table (below) | Codex CLI **never** falls back to a bare unsafe `codex`; bwrap absence → fail closed |
 
@@ -674,7 +728,7 @@ Not yet portable: the prompts in `commands/` and `agents/` still name harness sc
 | The always-on git-privilege / bash-safety guards | security | **Block their covered operations in normal operation** — with documented human break-glass paths (`/do`, `/allow`) and a few selected fail-open exception paths that keep a hook bug from bricking the pipeline |
 | An optional integration (Codex wrapper, `graphify`, Playwright, session-promote) | optional | **SKIP** — one-line "unavailable" message, core flow continues; no unsafe fallback |
 | The spec-coverage verifier (an advisory coverage check, not a blocking guard) | advisory | **SKIP** — an absent verifier allows the stop with a note; when the verifier *is* present, under-coverage still blocks |
-| A settings render that would lose something, or an invalid overlay | config | **ABORT / FAIL SAFE** — a render that would drop working-file entries the overlay does not explain refuses to write and lists them (unless `--force`); with an invalid `settings.machine.json` the smudge filter leaves the complete clean form in place with a warning, and staging `settings.json` fails until the overlay is fixed |
+| A settings render that would lose something, or an invalid overlay | config | **ABORT / FAIL SAFE** — a render that would drop working-file entries the overlay does not explain refuses to write and names them by key path and count (unless `--force`); with an invalid `settings.machine.json` the smudge filter leaves the complete clean form in place with a warning, and staging `settings.json` fails until the overlay is fixed; staging also fails while the clean filter cannot parse `settings.json` (a UTF-8 byte order mark included) |
 
 Each row maps to a capability in the dependency table above.
 
@@ -691,8 +745,8 @@ Each row maps to a capability in the dependency table above.
 | **A hook isn't firing** | Run `scripts/doctor`: it lists every hook command whose file does not resolve under the harness home — for a clone outside `~/.claude`, usually a missing `env.CLAUDE_HOME` in `settings.machine.json` (re-run init) or Claude Code started without `CLAUDE_CONFIG_DIR=<clone>`. Shell hooks must be executable: `chmod +x <harness-home>/hooks/*.sh` (init does this). |
 | **A slash command doesn't appear** | Check the YAML frontmatter at the top of the file in `commands/`; a malformed `---` block hides the command. |
 | **`settings.json` won't load** | Validate both files: `python3 -m json.tool <harness-home>/settings.json` and `python3 -m json.tool <harness-home>/settings.machine.json` — a trailing comma or unquoted key surfaces here. Fix the overlay, then re-run init to re-render. |
-| **`git status` shows `settings.json` modified after init** | The working file holds an entry the overlay does not explain — typically a permission Claude Code wrote ("always allow"). `scripts/doctor` lists such entries; move the machine-specific ones into `settings.machine.json` and re-run init. |
-| **A commit is refused by the pre-commit hook** | It names the failed check: `settings.json` staged in machine form (register the filter with `scripts/bootstrap` and re-stage), a private literal at `file:line` (remove it from that file), or a missing check script. |
+| **`git status` shows `settings.json` modified after init** | The working file holds an entry the overlay does not explain — typically a permission Claude Code wrote ("always allow"). `scripts/doctor` fails on such entries, naming their key paths; move the machine-specific ones into `settings.machine.json` and re-run init. |
+| **A commit is refused by the pre-commit hook** | It names the failed check: `settings.json` staged in machine form (register the filter with `scripts/bootstrap` and re-stage), `settings.machine.json` or `private-literals.txt` in the index (untrack it with `git rm --cached -- <path>`; the file stays on disk), a private literal at `file:line` (remove it from that file), or a missing check script. |
 | **`npm` / `node` / `kill` blocked by the runtime guard** | `protected-runtime.json` is missing or invalid (`~/.config/claude/protected-runtime.json`, or `$CLAUDE_PROTECTED_RUNTIME_FILE`). Init creates it when absent; `scripts/doctor` checks it. |
 | **Helper scripts fail to import** | They expect the venv at `<harness-home>/venv`; re-run init (`scripts/bootstrap`), which creates it when it is missing. |
 | **A commit/push is being blocked** | That's the kernel doing its job — an agent needs a grant from `/commit` or `/push`. As a human, run the git command from your own shell, or use `/do` / `/allow`. |
