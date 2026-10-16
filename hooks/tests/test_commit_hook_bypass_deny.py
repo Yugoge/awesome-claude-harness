@@ -1,11 +1,18 @@
 """P7 R7b agent-side denies in hooks/pretool-bash-safety.sh.
 
-Two rules, enforced for the main agent and for subagents alike and ahead of the
+Three rules, enforced for the main agent and for subagents alike and ahead of the
 /do and /allow bypasses:
 
 * commit-hook-bypass: a command holding a git `commit` invocation may not skip
   the commit hooks (--no-verify and its abbreviations, -n in a short-option
   cluster, a core.hooksPath override, a GIT_CONFIG_* environment assignment).
+* config-keystone-write: a git config write to core.hooksPath, alias.*,
+  filter.claude-settings.*, include(.path) or includeIf.*.path may not reach the
+  harness home: the global or system config, a named file (-f/--file or
+  GIT_CONFIG), GIT_COMMON_DIR, a nested or wrapper-flagged call, or a local write
+  whose repository (or any directory the command visits before it) is the
+  harness home's or cannot be resolved. A plain local write in another
+  repository passes (review round 2, INFO-1).
 * unregistered-settings-filter: such a command may not run while a candidate
   repository declares the claude-settings filter for settings.json, has no local
   filter registration, and settings.json differs from HEAD (index or work tree).
@@ -13,6 +20,9 @@ Two rules, enforced for the main agent and for subagents alike and ahead of the
   with --git-dir/--work-tree or a GIT_DIR/GIT_WORK_TREE prefix or export.
 
 Every case drives the real hook as a subprocess with a PreToolUse Bash payload.
+The hook runs from a scratch harness home in the test's temporary directory
+whose hooks/ directory links to this checkout's hooks/, so the hook's
+script-relative harness home is that scratch directory, never a real one.
 HOME, CLAUDE_CONFIG_DIR, the state dir, the grant dir and the protected-runtime
 data file all point into the test's temporary directory, and the only git
 repositories touched are created there.
@@ -121,7 +131,8 @@ BYPASS_CASES = [
 
 # item 4: git config WRITES to a keystone key (core.hooksPath / alias.* /
 # filter.claude-settings.*), in both the classic-option and the newer-subcommand
-# syntax, are denied for every caller.
+# syntax, are denied for every caller. These run in the harness home (review
+# round 2, INFO-1: the local ones are denied there, not in every repository).
 CONFIG_WRITE_CASES = [
     "git config alias.ci 'commit --no-verify'",
     "git config core.hooksPath /dev/null",
@@ -174,6 +185,85 @@ CONFIG_WRITE_CASES = [
     "git config 'includeIf.gitdir:/srv/a b/.path' inc.cfg",
     "git config \"includeIf.gitdir:/srv/repo/.path\" inc.cfg",
     "g''it config includ''eIf.gitdir:/srv/repo/.pa''th inc.cfg",
+]
+
+# Review round 2, INFO-1: the same keystone writes as plain local setup in a
+# user's own project (a project hooks path, an alias, an include), each spelled
+# after `git config` and aimed at a repository through every form the guard
+# resolves. In a user project they pass; aimed at the harness home they are
+# denied. {repo} is the target repository; the form's cwd is the target itself
+# (or a subdirectory of it) for the cwd forms, otherwise a directory elsewhere.
+LOCAL_WRITES = [
+    "core.hooksPath .githooks",
+    "alias.st status",
+    "--unset core.hooksPath",
+    "include.path ../shared.gitconfig",
+]
+TARGET_FORMS = {
+    "cwd": "git config {w}",
+    "cwd-subdir": "git config {w}",
+    "cd": "cd {repo} && git config {w}",
+    "dash-C": "git -C {repo} config {w}",
+    "git-dir": "git --git-dir={repo}/.git config {w}",
+    "GIT_DIR": "GIT_DIR={repo}/.git git config {w}",
+    "export-GIT_DIR": "export GIT_DIR={repo}/.git && git config {w}",
+}
+
+# Keystone writes that may reach the harness from ANY directory, so they stay
+# denied even when the session sits in a user project: global/system scope
+# (also abbreviated, and in the subcommand syntax), a named file (kept denied in
+# every spelling, since any config git reads may include it), the GIT_CONFIG /
+# GIT_COMMON_DIR redirects, nested or alias-expanded calls and wrapper flags
+# (the guard does not resolve the repository there), and an unresolvable target.
+# {home} is the harness home, {tmp} the test's temporary directory.
+REACHES_HARNESS_CASES = [
+    "git config --global core.hooksPath /home/acct-test-123/hooks",
+    "git config --global alias.st status",
+    "git config --gl alias.st status",
+    "git config --system alias.st status",
+    "git config --sys core.hooksPath /dev/null",
+    "git config set --global alias.st status",
+    "git config --global --unset core.hooksPath",
+    "git config -f {home}/.git/config core.hooksPath /dev/null",
+    "git config --file {home}/.git/config alias.st status",
+    "git config --file={home}/.git/config alias.st status",
+    "git config -f other.cfg alias.st status",
+    "git config --fil other.cfg core.hooksPath /dev/null",
+    "git config -zf other.cfg alias.st status",
+    "git config -fother.cfg alias.st status",
+    "GIT_CONFIG={home}/.git/config git config core.hooksPath /dev/null",
+    "export GIT_CONFIG={home}/.git/config && git config alias.st status",
+    "GIT_COMMON_DIR={home}/.git git config core.hooksPath /dev/null",
+    "bash -c 'git config core.hooksPath .githooks'",
+    "echo \"$(git config core.hooksPath .githooks)\"",
+    "git -c alias.c=config c core.hooksPath .githooks",
+    "git -C {home} -c 'alias.x=!git config core.hooksPath .githooks' x",
+    "env --chdir={home} git config core.hooksPath .githooks",
+    "nice -n 5 git config alias.st status",
+    "git -C {tmp}/missing config alias.st status",
+    "GIT_DIR={tmp}/missing/.git git config alias.st status",
+]
+
+# Run in the harness home: the shell is back in (or never left) the harness home
+# when the write runs, while the guard's own cwd tracking ends in the project.
+# Every directory the command visits before the write counts, so these stay denied.
+HARNESS_CWD_TRACKING_CASES = [
+    "(cd {project}); git config core.hooksPath .githooks",
+    "pushd {project}; popd; git config core.hooksPath .githooks",
+    "cd {project} && cd - && git config alias.st status",
+    "(cd {project} && true) && git config alias.st status",
+]
+
+# Reads, and writes to other keys, stay allowed in the harness home.
+HARNESS_READ_CASES = [
+    "git config --get core.hooksPath",
+    "git config alias.st",
+    "git config get include.path",
+    "git config --list --show-origin",
+    "git config --global --get alias.st",
+    "git config -f other.cfg alias.st",
+    "git config --file other.cfg --get-all alias.st",
+    "git config user.name acct-test-123",
 ]
 
 ALLOWED_CASES = [
@@ -248,8 +338,9 @@ ALLOWED_CASES = [
 
 @pytest.fixture
 def sandbox(tmp_path):
-    for name in ("home", "config", "state", "grants", "plain", "elsewhere"):
+    for name in ("home", "config", "state", "grants", "plain", "elsewhere", "harness-home"):
         (tmp_path / name).mkdir()
+    (tmp_path / "harness-home" / "hooks").symlink_to(REPO / "hooks", target_is_directory=True)
     runtime = tmp_path / "protected-runtime.json"
     runtime.write_text(json.dumps({"schema_version": 1, **{k: [] for k in REQUIRED_KEYS}}))
     env = {k: v for k, v in os.environ.items()
@@ -288,7 +379,8 @@ def run_hook(sandbox, command, cwd, caller):
     tmp_path, env = sandbox
     payload = {"tool_name": "Bash", "tool_input": {"command": command},
                "session_id": SID, "cwd": str(cwd), **CALLERS[caller]}
-    return subprocess.run(["bash", str(HOOK)], input=json.dumps(payload), text=True,
+    hook = tmp_path / "harness-home" / "hooks" / HOOK.name  # harness home = tmp_path/harness-home
+    return subprocess.run(["bash", str(hook)], input=json.dumps(payload), text=True,
                           capture_output=True, env=env, cwd=str(tmp_path), timeout=120)
 
 
@@ -308,6 +400,29 @@ def assert_allowed(r):
 def filtered_repo(sandbox):
     tmp_path, env = sandbox
     return make_repo(env, tmp_path / "harness", declare_filter=True)
+
+
+@pytest.fixture
+def harness_home(sandbox):
+    """The hook's script-relative harness home as a git repository (its hooks/
+    link stays untracked), with a subdirectory."""
+    tmp_path, env = sandbox
+    home = tmp_path / "harness-home"
+    git(env, home, "init", "-q")
+    (home / ".git" / "info").mkdir(exist_ok=True)
+    (home / ".git" / "info" / "exclude").write_text("/hooks\n")
+    git(env, home, "commit", "-q", "--allow-empty", "-m", "init")
+    (home / "sub").mkdir()
+    return home
+
+
+@pytest.fixture
+def user_project(sandbox):
+    """A user's own project repository, separate from the harness home."""
+    tmp_path, env = sandbox
+    project = make_repo(env, tmp_path / "plain" / "project", declare_filter=False)
+    (project / "sub").mkdir()
+    return project
 
 
 # ---------------- commit-hook-bypass ----------------
@@ -332,10 +447,70 @@ def test_quoted_text_and_message_values_are_not_a_bypass(sandbox, caller, comman
 
 @pytest.mark.parametrize("caller", sorted(CALLERS))
 @pytest.mark.parametrize("command", CONFIG_WRITE_CASES)
-def test_config_keystone_write_is_blocked(sandbox, caller, command):
-    tmp_path, env = sandbox
-    repo = make_repo(env, tmp_path / "plain" / "repo", declare_filter=False)
-    assert_blocked(run_hook(sandbox, command, repo, caller), "config-keystone-write", command)
+def test_config_keystone_write_is_blocked(sandbox, harness_home, caller, command):
+    assert_blocked(run_hook(sandbox, command, harness_home, caller), "config-keystone-write", command)
+
+
+def target_command(form, repo, write):
+    return TARGET_FORMS[form].format(repo=repo, w=write)
+
+
+def target_cwd(form, repo, other):
+    return {"cwd": repo, "cwd-subdir": repo / "sub"}.get(form, other)
+
+
+@pytest.mark.parametrize("caller", sorted(CALLERS))
+@pytest.mark.parametrize("write", LOCAL_WRITES)
+@pytest.mark.parametrize("form", sorted(TARGET_FORMS))
+def test_local_keystone_write_in_a_user_project_is_allowed(sandbox, harness_home, user_project,
+                                                            caller, form, write):
+    tmp_path, _ = sandbox
+    command = target_command(form, user_project, write)
+    cwd = target_cwd(form, user_project, tmp_path / "elsewhere")
+    assert_allowed(run_hook(sandbox, command, cwd, caller))
+
+
+@pytest.mark.parametrize("caller", sorted(CALLERS))
+@pytest.mark.parametrize("write", LOCAL_WRITES)
+@pytest.mark.parametrize("form", sorted(TARGET_FORMS))
+def test_local_keystone_write_aimed_at_the_harness_home_is_blocked(sandbox, harness_home, user_project,
+                                                                   caller, form, write):
+    command = target_command(form, harness_home, write)
+    r = run_hook(sandbox, command, target_cwd(form, harness_home, user_project), caller)
+    assert_blocked(r, "config-keystone-write", command)
+    assert str(harness_home) in r.stderr.splitlines()[0], r.stderr
+
+
+@pytest.mark.parametrize("caller", sorted(CALLERS))
+@pytest.mark.parametrize("command", REACHES_HARNESS_CASES)
+def test_keystone_write_that_can_reach_the_harness_is_blocked_from_a_user_project(
+        sandbox, harness_home, user_project, caller, command):
+    tmp_path, _ = sandbox
+    command = command.format(home=harness_home, tmp=tmp_path)
+    assert_blocked(run_hook(sandbox, command, user_project, caller), "config-keystone-write", command)
+
+
+@pytest.mark.parametrize("caller", sorted(CALLERS))
+@pytest.mark.parametrize("command", HARNESS_CWD_TRACKING_CASES)
+def test_keystone_write_after_leaving_the_harness_home_is_blocked(sandbox, harness_home, user_project,
+                                                                   caller, command):
+    command = command.format(project=user_project)
+    assert_blocked(run_hook(sandbox, command, harness_home, caller), "config-keystone-write", command)
+
+
+@pytest.mark.parametrize("caller", sorted(CALLERS))
+def test_keystone_write_outside_any_repository_is_blocked(sandbox, harness_home, caller):
+    """No repository to resolve: the guard stays on the deny side."""
+    tmp_path, _ = sandbox
+    for command in ("git config core.hooksPath .githooks", "git config alias.st status"):
+        assert_blocked(run_hook(sandbox, command, tmp_path / "elsewhere", caller),
+                       "config-keystone-write", command)
+
+
+@pytest.mark.parametrize("caller", sorted(CALLERS))
+@pytest.mark.parametrize("command", HARNESS_READ_CASES)
+def test_config_reads_in_the_harness_home_are_allowed(sandbox, harness_home, caller, command):
+    assert_allowed(run_hook(sandbox, command, harness_home, caller))
 
 
 # ---------------- unregistered-settings-filter ----------------
@@ -486,7 +661,7 @@ CONTROL = {"main": "git stash", "subagent": "git rebase main"}  # blocked withou
 
 
 @pytest.mark.parametrize("caller", sorted(CALLERS))
-def test_do_consent_does_not_bypass(sandbox, filtered_repo, caller):
+def test_do_consent_does_not_bypass(sandbox, filtered_repo, harness_home, caller):
     tmp_path, env = sandbox
     plain = make_repo(env, tmp_path / "plain" / "repo", declare_filter=False)
     assert run_hook(sandbox, CONTROL[caller], plain, caller).returncode == 2
@@ -495,14 +670,17 @@ def test_do_consent_does_not_bypass(sandbox, filtered_repo, caller):
     command = "git commit --no-verify -m x"
     assert_blocked(run_hook(sandbox, command, plain, caller), "commit-hook-bypass", command)
     cw = "git config core.hooksPath /dev/null"
-    assert_blocked(run_hook(sandbox, cw, plain, caller), "config-keystone-write", cw)
+    assert_blocked(run_hook(sandbox, cw, harness_home, caller), "config-keystone-write", cw)
+    gw = "git config --global core.hooksPath /dev/null"
+    assert_blocked(run_hook(sandbox, gw, plain, caller), "config-keystone-write", gw)
+    assert_allowed(run_hook(sandbox, cw, plain, caller))  # a user project's own setup
     _modify_work_tree(env, filtered_repo)
     assert_blocked(run_hook(sandbox, "git commit -m x", filtered_repo, caller),
                    "unregistered-settings-filter", "git commit -m x")
 
 
 @pytest.mark.parametrize("caller", sorted(CALLERS))
-def test_allow_grant_does_not_bypass(sandbox, filtered_repo, caller):
+def test_allow_grant_does_not_bypass(sandbox, filtered_repo, harness_home, caller):
     tmp_path, env = sandbox
     plain = make_repo(env, tmp_path / "plain" / "repo", declare_filter=False)
     grants = tmp_path / "state" / "claude-grants"
@@ -521,7 +699,10 @@ def test_allow_grant_does_not_bypass(sandbox, filtered_repo, caller):
     assert_blocked(run_hook(sandbox, command, plain, caller), "commit-hook-bypass", command)
     grant("config")
     cw = "git config --unset filter.claude-settings.clean"
-    assert_blocked(run_hook(sandbox, cw, plain, caller), "config-keystone-write", cw)
+    assert_blocked(run_hook(sandbox, cw, harness_home, caller), "config-keystone-write", cw)
+    gw = "git config --system --unset filter.claude-settings.clean"
+    assert_blocked(run_hook(sandbox, gw, plain, caller), "config-keystone-write", gw)
+    assert_allowed(run_hook(sandbox, cw, plain, caller))  # a user project's own setup
     _modify_work_tree(env, filtered_repo)
     assert_blocked(run_hook(sandbox, "git commit -m x", filtered_repo, caller),
                    "unregistered-settings-filter", "git commit -m x")

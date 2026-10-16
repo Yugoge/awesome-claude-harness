@@ -281,15 +281,17 @@ fi
 # call whose expansion skips them: name matched case-insensitively as git does, value + args appended, a `!`-shell
 # alias's child git inheriting the outer -c too; an alias/-c chain overrunning the expansion limit fails closed);
 # (2) a git config WRITE (option/verb form, any case) to core.hooksPath, alias.*, filter.claude-settings.*, include,
-# include.path or includeIf.*.path, reads (--get*/--list/one-arg) allowed; (3) a commit whose repo (cwd, cd, -C,
-# --git-dir/--work-tree, GIT_DIR/GIT_WORK_TREE prefix/export) has settings.json changed vs HEAD, filter unregistered.
+# include.path or includeIf.*.path that can reach the harness home: global/system, a named file, the harness repo or
+# an unresolved one, a nested or wrapper-flagged call (`config` below); a plain local write in another repo passes,
+# reads (--get*/--list/one-arg) too; (3) a commit whose repo (cwd, cd, -C, --git-dir/--work-tree, GIT_DIR/GIT_WORK_TREE
+# prefix/export) has settings.json changed vs HEAD, filter unregistered.
 _CG_STRIP="${COMMAND//[\'\"\\]/}"; _CG_GITRE='(^|[^[:alnum:]_])git'
 if [[ ( "$_CG_STRIP" == *commit* || "$_CG_STRIP" == *config* ) && "$_CG_STRIP" =~ $_CG_GITRE ]]; then
   _CG=$(CG_INPUT="$INPUT" "$PYTHON_BIN" - "$CLAUDE_HOME/hooks" 2>/dev/null <<'PYEOF'
 import contextlib, importlib.util as iu, itertools, json, os, re, shlex, subprocess as sp, sys; H = sys.argv[1]; sys.path.insert(0, H)
 from lib.bash_context_strip import _process_heredocs; from lib.git_command_classifier import _command_token_index, _git_subcommand
 s = iu.spec_from_file_location('_overnight_guard', H + '/pretool-overnight-hook-guard.py'); og = iu.module_from_spec(s); s.loader.exec_module(og)
-d = json.loads(os.environ['CG_INPUT']); cur = [d.get('cwd') or os.getcwd()]; dirs = cur[:]; commits, why, cfg, ex = [], [], [], {}
+d = json.loads(os.environ['CG_INPUT']); cur = [d.get('cwd') or os.getcwd()]; dirs = cur[:]; commits, why, cfg, loc, ex = [], [], [], [], {}
 LONGV = ('message', 'file', 'reuse-message', 'reedit-message', 'template', 'author', 'date', 'trailer'); GV = {'--git-dir': 'GIT_DIR', '--work-tree': 'GIT_WORK_TREE'}
 CFGW = {'set', 'unset', 'unset-all', 'replace-all', 'add', 'rename-section', 'remove-section'}  # config write verbs
 CFGR = {'get', 'get-all', 'get-regexp', 'get-urlmatch', 'list'}; WRF = {'--unset', '--unset-all', '--add', '--replace-all', '--rename-section', '--remove-section'}; RDF = {'--get', '--get-all', '--get-regexp', '--get-urlmatch', '--get-color', '--get-colorbool', '--list', '-l'}
@@ -325,13 +327,10 @@ def one(t, u, depth, lg, gc):  # u: t's words with unrun $( and ` made inert; re
         if w == '-C' and j + 1 < len(g): base = at(base, g[j + 1]); dirs.append(base)
         if w.split('=')[0] in GV: ev[GV[w.split('=')[0]]] = w.split('=', 1)[1] if '=' in w else ''.join(g[j + 1:j + 2])
     if og._git_invocation_injects_keystone_config([*gc, *g]): why.append('a core.hooksPath/include config override')
-    if sub == 'config':  # deny a config WRITE to a keystone key; leave reads alone
-        pos = [a for a in rest if not a.startswith('-')]; tgt = ''
-        if any(o in WRF for o in rest): wr, tgt = True, (pos or [''])[0]
-        elif any(o in RDF for o in rest) or (pos and pos[0] in CFGR): wr = False
-        elif pos and pos[0] in CFGW: wr, tgt = True, (pos[1:2] or [''])[0]
-        else: wr, tgt = len(pos) >= 2, (pos or [''])[0]
-        return cfg.append(tgt) if wr and prot(tgt) else None
+    if sub == 'config':  # keystone WRITE: denied if nested, wrapper-flagged, --global/--system, -f/--file, GIT_CONFIG or GIT_COMMON_DIR (any abbreviation); else (local) after the scan if its repo or a dir seen before it (cwd/cd/-C) has the harness home's git common dir or none
+        pos = [a for j, a in enumerate(rest) if not a.startswith('-') and not (j and re.fullmatch(r'-[^-f]*f|--file?', rest[j - 1]))]  # a separate -f/--file value is no key
+        wr, x = (True, 0) if any(o in WRF for o in rest) else (False, 0) if any(o in RDF for o in rest) or pos[:1] and pos[0] in CFGR else (True, 1) if pos[:1] and pos[0] in CFGW else (len(pos) >= 2, 0); tgt = (pos[x:x + 1] or [''])[0]
+        return (cfg.append(tgt) if depth or {'GIT_CONFIG', 'GIT_COMMON_DIR'} & {*ev, *os.environ} or any(a[:1] == '-' for a in t[:i]) or any(re.match(r'-[^-]*f|--(fil|gl|sy)', a) for a in rest) else loc.append((tgt, [*dirs], ('-C', base, *(o + '=' + at(base, ev[k]) for o, k in GV.items() if ev.get(k)))))) if wr and prot(tgt) else None
     gr = [*gc, *(g[:len(g) - len(rest) - 1] if sub else [])]  # `-c alias.X=` overrides: inherited (a `!`-alias's outer -c) then this invocation's own
     al = {kv.strip('\'"').lower().split('=', 1)[0][6:]: (kv.split('=', 1)[1] if '=' in kv else '') for k2, w in enumerate(gr) if (kv := (w[2:] if (w.startswith('-c') and len(w) > 2 and w[2] != 'C') else (gr[k2 + 1] if w in ('-c', '--config-env') and k2 + 1 < len(gr) else (w[13:] if w.startswith('--config-env=') else None)))) and kv.strip('\'"').lower().startswith('alias.')}
     if sub and sub.lower() in al: v = al[sub.lower()].strip(); (why.append('an alias chain past the expansion limit'), commits.append(('-C', base))) if depth >= 4 else scan((v[1:] if v[:1] == '!' else shlex.join(t[:len(t) - len(rest) - 1]) + ' ' + v) + ' ' + shlex.join(rest), depth + 1, gc=gr if v[:1] == '!' else gc)  # git: name case-insensitive; alias word -> value; a `!`-alias's child git inherits -c (gr); a chain past the depth limit fails closed
@@ -349,9 +348,10 @@ def one(t, u, depth, lg, gc):  # u: t's words with unrun $( and ` made inert; re
                 if ch == 'n': why.append('-n in ' + a); break
                 if ch in 'mFcCtuS': skip = ch in 'mFcCt' and k == len(a) - 2; break
 scan(d.get('tool_input', {}).get('command', ''))
-if cfg: sys.exit(print('CONFIG', cfg[0]))
-if commits and why: sys.exit(print('HOOKS', why[0]))
 def git(r, *a): return sp.run(['git', *r, *a], capture_output=True, text=True, timeout=20)
+def cdir(r): return (o := git(r, 'rev-parse', '--path-format=absolute', '--git-common-dir').stdout.strip()) and os.path.realpath(o)  # '' = no repo
+if cfg := cfg + [k for k, ds, r in loc if not (c := cdir(r)) or (hc := cdir(('-C', os.path.dirname(H)))) and hc in {c, *(cdir(('-C', x)) for x in ds)}]: sys.exit(print('CONFIG', cfg[0]))
+if commits and why: sys.exit(print('HOOKS', why[0]))
 for r in dict.fromkeys([('-C', x) for x in dirs] + commits if commits else []):
     top = git(r, 'rev-parse', '--show-toplevel').stdout.strip(); r += ('-C', top)
     if top and git(r, 'check-attr', 'filter', '--', 'settings.json').stdout.strip().endswith(': claude-settings') \
@@ -364,7 +364,7 @@ PYEOF
   case "$_CG" in
     OK) ;;
     "HOOKS "*) printf 'BLOCKED: commit-hook-bypass — git commit with %s would skip the commit hooks; FORBIDDEN for every caller\nCommand: %s\n' "${_CG#HOOKS }" "$COMMAND" >&2; exit 2 ;;
-    "CONFIG "*) printf 'BLOCKED: config-keystone-write — git config write to %s (core.hooksPath / alias.* / filter.claude-settings.* / include(.path) / includeIf.*.path) is FORBIDDEN for every caller\nCommand: %s\n' "${_CG#CONFIG }" "$COMMAND" >&2; exit 2 ;;
+    "CONFIG "*) printf 'BLOCKED: config-keystone-write — git config write to %s (core.hooksPath / alias.* / filter.claude-settings.* / include(.path) / includeIf.*.path) that can reach the harness (global/system config, a named file, the harness repository %s or an unresolved one, a nested or wrapper-flagged call) is FORBIDDEN for every caller; a plain local write in another repository is not\nCommand: %s\n' "${_CG#CONFIG }" "$CLAUDE_HOME" "$COMMAND" >&2; exit 2 ;;
     "FILTER "*) printf 'BLOCKED: unregistered-settings-filter — settings.json has local changes and the settings filter is not registered in %s\nCommand: %s\nRun scripts/bootstrap in %s first, then retry.\n' "${_CG#FILTER }" "$COMMAND" "${_CG#FILTER }" >&2; exit 2 ;;
     *) printf 'BLOCKED: commit-guard FAIL-CLOSED — the commit-hook-bypass / config-keystone-write / unregistered-settings-filter guard returned no verdict\nCommand: %s\n' "$COMMAND" >&2; exit 2 ;;
   esac
