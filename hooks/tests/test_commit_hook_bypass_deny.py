@@ -81,6 +81,9 @@ BYPASS_CASES = [
     "git -c \"alias.ci=!g''it commit\" ci -n -m x",
     "git -c alias.a=ci -c alias.ci=commit a -n -m x",
     "git -c \"alias.p=!git -c alias.ci=commit ci\" p -n -m x",
+    # the one-off include override on a commit (its persistent write is R2 below)
+    "git -c include.path=inc.cfg commit -m x",
+    "git -c 'includeIf.gitdir:/srv/repo/.path=inc.cfg' commit -m x",
 ]
 
 # item 4: git config WRITES to a keystone key (core.hooksPath / alias.* /
@@ -99,6 +102,45 @@ CONFIG_WRITE_CASES = [
     "git config unset filter.claude-settings.required",
     "git config remove-section alias",
     "g''it config core.hooksPath x",
+    # review round 2, R2: a persistent include loads a config file that may set
+    # any key above (a hooks path, say) for every later plain commit, so the
+    # include section, include.path and every includeIf.<condition>.path key are
+    # keystone keys too. Section and variable names match case-insensitively;
+    # the condition keeps its case and may hold dots, colons, slashes or globs.
+    "git config include.path /home/acct-test-123/inc.cfg",
+    "git config --global include.path inc.cfg",
+    "git config --local include.path inc.cfg",
+    "git config --add include.path inc.cfg",
+    "git config --replace-all include.path inc.cfg",
+    "git config --unset include.path",
+    "git config --unset-all include.path",
+    "git config --remove-section include",
+    "git config --rename-section include other",
+    "git config set include.path inc.cfg",
+    "git config set --append include.path inc.cfg",
+    "git config unset include.path",
+    "git config unset --all include.path",
+    "git config add include.path inc.cfg",
+    "git config replace-all include.path inc.cfg",
+    "git config unset-all include.path",
+    "git config remove-section include",
+    "git config rename-section include other",
+    "git config Include.PATH inc.cfg",
+    "git config 'include.path' inc.cfg",
+    "git config \"include.path\" inc.cfg",
+    "g''it config incl''ude.path inc.cfg",
+    "git con\\fig include.pa\\th inc.cfg",
+    "git config includeIf.gitdir:/home/acct-test-123/proj/.path inc.cfg",
+    "git config --global includeIf.gitdir:~/work/.path inc.cfg",
+    "git config --add includeIf.gitdir/i:/srv/Repo/.path inc.cfg",
+    "git config --replace-all includeIf.onbranch:main.path inc.cfg",
+    "git config --unset includeIf.gitdir:/srv/repo/.path",
+    "git config set includeIf.hasconfig:remote.*.url:https://example.invalid/**.path inc.cfg",
+    "git config unset includeIf.gitdir:/srv/repo/.path",
+    "git config INCLUDEIF.gitdir:/srv/Repo/.Path inc.cfg",
+    "git config 'includeIf.gitdir:/srv/a b/.path' inc.cfg",
+    "git config \"includeIf.gitdir:/srv/repo/.path\" inc.cfg",
+    "g''it config includ''eIf.gitdir:/srv/repo/.pa''th inc.cfg",
 ]
 
 ALLOWED_CASES = [
@@ -129,6 +171,23 @@ ALLOWED_CASES = [
     "git -c \"alias.ci=!git commit\" ci -m x",
     "git -c alias.l=log l -n 3",
     "git -c alias.ci=ci ci -n -m x",
+    # R2 controls: reads of the include keys, and writes to keys that only
+    # mention include elsewhere (another section, a longer name, the value).
+    "git config --get include.path",
+    "git config --get-all include.path",
+    "git config --get-regexp '^includeif\\.'",
+    "git config -l --show-origin",
+    "git config get include.path",
+    "git config get --all includeIf.gitdir:/srv/repo/.path",
+    "git config list --show-origin",
+    "git config include.path",
+    "git config includeIf.gitdir:/srv/repo/.path",
+    "git config includes.path inc.cfg",
+    "git config acct-test.include inc.cfg",
+    "git config core.includePath inc.cfg",
+    "git config acct-include.path inc.cfg",
+    "git config remote.origin.url https://example.invalid/include.path",
+    "git config user.name include",
 ]
 
 

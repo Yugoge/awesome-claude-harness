@@ -278,9 +278,9 @@ fi
 # (`co''mmit`, `g\it`) and runs the Python only for a git word plus commit/config. The Python tokenises (echo/printf
 # stay data) and denies: (1) a commit skipping hooks (--no-verify..--no-ver; -n in a short cluster; a core.hooksPath/
 # include/GIT_CONFIG_* override; a `-c alias.X=` call whose expansion (value + args, `!`-shell too) does so); (2) a
-# git config WRITE (flags or set/unset/*-section verbs) to core.hooksPath, alias.* or filter.claude-settings.*, reads
-# (--get*/--list, one-arg form) allowed; (3) a commit whose repo (cwd, cd, -C, --git-dir/--work-tree, or a
-# GIT_DIR/GIT_WORK_TREE prefix or export) has the settings filter unregistered and settings.json changed vs HEAD.
+# git config WRITE (option/verb form, any case) to core.hooksPath, alias.*, filter.claude-settings.*, include,
+# include.path or includeIf.*.path, reads (--get*/--list/one-arg) allowed; (3) a commit whose repo (cwd, cd, -C,
+# --git-dir/--work-tree, GIT_DIR/GIT_WORK_TREE prefix/export) has settings.json changed vs HEAD, filter unregistered.
 _CG_STRIP="${COMMAND//[\'\"\\]/}"; _CG_GITRE='(^|[^[:alnum:]_])git'
 if [[ ( "$_CG_STRIP" == *commit* || "$_CG_STRIP" == *config* ) && "$_CG_STRIP" =~ $_CG_GITRE ]]; then
   _CG=$(CG_INPUT="$INPUT" "$PYTHON_BIN" - "$CLAUDE_HOME/hooks" 2>/dev/null <<'PYEOF'
@@ -294,7 +294,7 @@ d = json.loads(os.environ['CG_INPUT']); cur = [d.get('cwd') or os.getcwd()]; dir
 LONGV = ('message', 'file', 'reuse-message', 'reedit-message', 'template', 'author', 'date', 'trailer'); GV = {'--git-dir': 'GIT_DIR', '--work-tree': 'GIT_WORK_TREE'}
 CFGW = {'set', 'unset', 'unset-all', 'replace-all', 'add', 'rename-section', 'remove-section'}  # config write verbs
 CFGR = {'get', 'get-all', 'get-regexp', 'get-urlmatch', 'list'}; WRF = {'--unset', '--unset-all', '--add', '--replace-all', '--rename-section', '--remove-section'}; RDF = {'--get', '--get-all', '--get-regexp', '--get-urlmatch', '--get-color', '--get-colorbool', '--list', '-l'}
-def prot(k): k = k.strip().strip('\'"').lower(); return k in ('core.hookspath', 'core', 'alias', 'filter', 'filter.claude-settings') or k.startswith('alias.') or k.startswith('filter.claude-settings.')
+def prot(k): k = k.strip().strip('\'"').lower(); return k in ('core', 'alias', 'filter', 'filter.claude-settings', 'include') or k.startswith(('alias.', 'filter.claude-settings.')) or og._config_key_redirects_keystone(k)  # + core.hookspath, include.path, includeif.*.path
 def at(base, p): return os.path.join(base, os.path.expanduser(os.path.expandvars(p)))
 def words(t):  # shell words; separators, comments and newlines kept as the shell sees them
     t = re.sub(r'&>', '>', re.sub(r'([<>])&', r'\1 ', re.sub(r'(?<=[^\s;&|()`])#', '_', t.replace('\\\n', ''))))
@@ -364,7 +364,7 @@ PYEOF
   case "$_CG" in
     OK) ;;
     "HOOKS "*) printf 'BLOCKED: commit-hook-bypass — git commit with %s would skip the commit hooks; FORBIDDEN for every caller\nCommand: %s\n' "${_CG#HOOKS }" "$COMMAND" >&2; exit 2 ;;
-    "CONFIG "*) printf 'BLOCKED: config-keystone-write — git config write to %s (core.hooksPath / alias.* / filter.claude-settings.*) is FORBIDDEN for every caller\nCommand: %s\n' "${_CG#CONFIG }" "$COMMAND" >&2; exit 2 ;;
+    "CONFIG "*) printf 'BLOCKED: config-keystone-write — git config write to %s (core.hooksPath / alias.* / filter.claude-settings.* / include(.path) / includeIf.*.path) is FORBIDDEN for every caller\nCommand: %s\n' "${_CG#CONFIG }" "$COMMAND" >&2; exit 2 ;;
     "FILTER "*) printf 'BLOCKED: unregistered-settings-filter — settings.json has local changes and the settings filter is not registered in %s\nCommand: %s\nRun scripts/bootstrap in %s first, then retry.\n' "${_CG#FILTER }" "$COMMAND" "${_CG#FILTER }" >&2; exit 2 ;;
     *) printf 'BLOCKED: commit-guard FAIL-CLOSED — the commit-hook-bypass / config-keystone-write / unregistered-settings-filter guard returned no verdict\nCommand: %s\n' "$COMMAND" >&2; exit 2 ;;
   esac
