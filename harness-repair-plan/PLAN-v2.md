@@ -1185,3 +1185,18 @@ with the reason. Every other finding was applied as written.
 - Waves (P2/P3 need P8): applied. Overlap (1), dev-lifecycle.py:112, is removed by giving the line to P7 alone. Overlaps (2) and (3) remain, so P8 must still merge first.
 - Waves (todo resolver lines): premise corrected. The lines the critic listed (todo_canonical.py:22, posttool-todo-tracker.py:26, posttool-todo-count.py:24, pretool-workflow-gate.py:102, prompt-workflow.py:333) are the home fallbacks, which P7 owns. P2's project candidates are :21, :24, :22, :100 and :331, and dev-lifecycle.py:111.
 - Waves (P11 scan): applied, after reproducing the defect in a scratch repository: the count was 0 with a literal present, and 1 with `cut -d' ' -f1`.
+
+## 13. Carry-overs from phase reviews
+
+Found while reviewing a phase PR, pre-existing or outside that phase's scope. Each later phase prompt picks up its rows.
+
+| Phase | Item | Source |
+|---|---|---|
+| P2 | Path.home()/'.claude' writers left for a clone placed elsewhere: hooks/userprompt-doc-sync-check.py:22 (.doc-sync-cache.json) and hooks/subagentstop-artifact-contract-enforce.py:120 (logs/artifact-contract-advisory.jsonl). Move them to the CLAUDE_HOME channel. | PR #4 re-review (R6, INFO-5) |
+| P5 | stop-workflow-coordinator.py's auto_commit phase is a Stop gate outside D4's eight commands: any auto-commit failure blocks Stop, and the coordinator returns on the first failed phase, so cleanup is skipped. The unified gate removes it as a gate (auto-commit stays a side effect). | PR #4 re-review (R4, R5) |
+| P5-a | Also deny agent edits of the privacy and settings engines: scripts/check-public-core.sh, scripts/install/render-settings, hooks/git-hooks/pre-commit (already denied), .git/config, .git/hooks/, .gitattributes. Until then README names them as uncovered. | PR #4 re-review (SEC-4) |
+| P8 | 24 hooks/tests/test_capability_gate.py ids fail on a runner with no `claude` CLI (hooks/lib/capability_state.py:259-270 reads the host build from `claude --version`). Make the tests hermetic (inject the build); never skip them. | PR #4 re-review (RR-3) |
+| P8 | CI step "Python parse/compile" fails on 3.10/3.11: scripts/install/installer.py:1804 uses a PEP 701 f-string. | PR #4 re-review (RR-6) |
+| P8 | CI secret scan hits the fixture key in hooks/tests/test_checkpoint_pii_gate.sh (about :192). The one privacy engine must classify test fixtures by rule, not by a skip list. | PR #4 re-review (RR-6) |
+| P8 | Two hooks/tests/test_bash_write_targets_policy.py::test_assignment_target_matrix ids fail in isolation on master and on P7 (assignment projection of "$OUT"), but passed in master's full CI run (order dependence). Fix the code or the test; the baseline id list missed them because their ids contain spaces (389 + 19 = 408 failures, 406 ids). | PR #4 CI comparison |
+| P8 | Optional: the private-literal rule does not check merge, cherry-pick or commit messages, and matches bytes (other encodings pass). README documents it (P7); a pre-merge-commit and commit-msg step would close it. | PR #4 re-review (R7, SEC-8) |
