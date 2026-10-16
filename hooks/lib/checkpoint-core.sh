@@ -19,8 +19,8 @@
 # Algorithm (git plumbing only — no `git commit`):
 #   1. read-tree parent tree (or --empty for bootstrap)
 #   2. git add -A  (staged into a TEMP index via GIT_INDEX_FILE)
-#   2b. hard-exclude known PII file classes from the temp index,
-#       independent of current .gitignore content (defense-in-depth backstop)
+#   2b. hard-exclude known PII file classes from the temp index (independent of .gitignore)
+#   2c. return 1 when the pre-commit hook's own checks refuse the temp index
 #   3. git write-tree  -> TREE_SHA
 #   4. if TREE_SHA == PARENT_TREE_SHA -> return 0 (idempotent)
 #   5. git commit-tree TREE_SHA [-p PARENT_SHA] -m "<msg>"  -> NEW_SHA
@@ -445,7 +445,7 @@ ${CLAUDE_CHECKPOINT_EXTRA_TRAILER}}"
 #
 # Return codes:
 #   0  success OR idempotent no-op (tree unchanged)
-#   1  build/CAS failure after retries
+#   1  build/CAS failure after retries, or a snapshot refused at step 2c
 #   2  not a git repo
 write_checkpoint() {
     local work_dir="${1:-}"
@@ -498,8 +498,7 @@ write_checkpoint() {
     fi
     ref="refs/checkpoints/${sanitized}"
 
-    # Temp index path (isolated from real .git/index).
-    # Use PID + nanosecond-ish suffix to avoid collisions among sibling runs.
+    # Temp index (isolated from .git/index); PID + nanoseconds keep sibling runs apart.
     local ns
     ns=$(date +%s%N 2>/dev/null || date +%s)
     local TMP_INDEX="${abs_git_dir}/checkpoint-index.$$.${ns}"
@@ -509,24 +508,12 @@ write_checkpoint() {
     trap 'rm -f "$TMP_INDEX"' EXIT INT TERM HUP
 
     # -------------------------------------------------------------------------
-    # PHASE 1: Build the working-tree snapshot OUTSIDE the lock.
-    #
-    # This phase does NOT create any commit objects — only blobs and a tree,
-    # which are content-addressed and would be created by whichever writer
-    # ultimately wins. Running this outside the lock preserves concurrency
-    # for the expensive `git add -A` step and does not contribute to the
-    # dangling-objects problem the flock fix targets.
-    #
-    # Seed temp index from the CURRENT working branch HEAD tree, never from
-    # the checkpoint ref tree. This ensures ignored/runtime files that were
-    # accidentally captured in historical refs/checkpoints/* do not get
-    # resurrected forever by inheritance from the previous checkpoint tree.
-    #
-    # The checkpoint ref is still used later as the COMMIT PARENT so history
-    # remains linear, but the snapshot content itself must reflect today's
-    # working tree + ignore rules, not yesterday's polluted checkpoint tree.
-    #
-    # In an empty repo HEAD has no tree, so seed from --empty instead.
+    # PHASE 1: build the snapshot tree OUTSIDE the lock. It creates no commit
+    # object, only content-addressed blobs and trees the winning writer would
+    # create anyway, so the expensive `git add -A` stays concurrent. The temp
+    # index is seeded from HEAD's tree (--empty in an empty repo), never from
+    # the checkpoint ref's, so files a past snapshot captured by mistake are
+    # not inherited forever; the ref stays the COMMIT PARENT (linear history).
     # -------------------------------------------------------------------------
     local seed_parent_sha=""
     local seed_parent_tree=""
@@ -560,14 +547,12 @@ write_checkpoint() {
     fi
 
     # -------------------------------------------------------------------------
-    # Hard-exclude known PII file classes from the temp index, independent of
-    # the CURRENT .gitignore content (defense-in-depth backstop; see
-    # docs/reference/checkpoint-mechanism.md). Guards against a historical or
-    # future .gitignore regression re-admitting a PII-bearing path (root
-    # cause: .claude.json was captured in b432fc54, 13 days before the
-    # /.claude.json ignore rule existed). Matching is path-component-exact
-    # (basename PREFIX for the .claude.json family; exact interior directory
-    # segment for backups/sessions) -- never substring.
+    # Hard-exclude known PII file classes from the temp index whatever the
+    # CURRENT .gitignore says (backstop; docs/reference/checkpoint-mechanism.md):
+    # .claude.json was captured in b432fc54, 13 days before its ignore rule
+    # existed. Matching is path-component-exact, never substring: basename
+    # PREFIX for the .claude.json family, exact interior directory segment
+    # for backups/sessions.
     # -------------------------------------------------------------------------
     local pii_path pii_removed=0
     while IFS= read -r pii_path; do
@@ -600,6 +585,28 @@ write_checkpoint() {
         _checkpoint_log WARN "hard-excluded ${pii_removed} known-PII-class path(s) from snapshot (ref=${ref})"
     fi
 
+    # Refuse what the pre-commit hook refuses, by its own engines on the temp index (they print no
+    # literal or value): the private-literal rule when its list is not empty, and in this harness
+    # home the settings check when settings.json differs from HEAD.
+    local h top common report refused=""
+    h="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." 2>/dev/null && pwd -P)"
+    { read -r top; read -r common; } < <($git_cmd rev-parse --show-toplevel --path-format=absolute --git-common-dir 2>/dev/null)
+    if [ -s "${common%/*}/private-literals.txt" ] && ! report="$(cd "$top" \
+        && GIT_INDEX_FILE="$TMP_INDEX" bash "$h/scripts/check-public-core.sh" --private-literals 2>&1)"; then
+        refused="the private-literal rule (${report//$'\n'/ | }); "
+    fi
+    if [ "$top" = "$h" ] \
+        && ! GIT_INDEX_FILE="$TMP_INDEX" $git_cmd diff-index --cached --quiet HEAD -- settings.json 2>/dev/null \
+        && ! GIT_INDEX_FILE="$TMP_INDEX" python3 "$h/scripts/install/render-settings" check --staged 2>>"$CHECKPOINT_LOG_FILE"; then
+        refused+="the settings check (scripts/install/render-settings check --staged); "
+    fi
+    if [ -n "$refused" ]; then
+        _checkpoint_log ERROR "snapshot refused by ${refused}nothing written (ref=${ref})"
+        rm -f "$TMP_INDEX"
+        _checkpoint_record_failure
+        return 1
+    fi
+
     local tree_sha
     tree_sha=$(GIT_INDEX_FILE="$TMP_INDEX" $git_cmd write-tree 2>>"$CHECKPOINT_LOG_FILE")
     if [ -z "$tree_sha" ]; then
@@ -610,22 +617,15 @@ write_checkpoint() {
     fi
 
     # -------------------------------------------------------------------------
-    # PHASE 2: Enter flock-protected critical section for the commit-tree +
-    # update-ref pair. Only one writer per repo runs this section at a time,
-    # so commit-tree never produces an orphan object.
-    #
-    # The flock FD (9) is local to the subshell; closing the subshell
-    # releases the lock automatically even on error.
+    # PHASE 2: commit-tree + update-ref under flock: one writer per repo at a
+    # time, so commit-tree never produces an orphan object. FD 9 is local to
+    # the subshell, whose exit releases the lock even on error.
     # -------------------------------------------------------------------------
     local lockfile="${abs_git_dir}/checkpoint-core.lock"
     touch "$lockfile" 2>/dev/null || true
 
     local result_file
-    # mktemp already honors $TMPDIR itself; the fallback (mktemp unavailable
-    # or failing) previously hard-coded /tmp, the sole literal /tmp path
-    # among the repo's TMPDIR-honoring temp creations (task 20260907-015935
-    # AC8). ${TMPDIR:-/tmp} keeps /tmp only as the last-resort default when
-    # TMPDIR itself is unset.
+    # mktemp honors $TMPDIR; so does its fallback (/tmp only when TMPDIR is unset).
     result_file=$(mktemp 2>/dev/null || printf '%s' "${TMPDIR:-/tmp}/checkpoint-result.$$.${ns}")
 
     if command -v flock >/dev/null 2>&1; then

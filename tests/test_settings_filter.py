@@ -313,15 +313,50 @@ def test_invalid_overlay_fails_clean_and_smudge_passes_through(sb, overlay_bytes
     assert "settings.machine.json" in proc.stderr.decode()
 
 
-def test_invalid_input_passes_through(sb):
+def test_invalid_input_clean_refuses_and_smudge_passes_through(sb):
+    """clean is a required filter: input it cannot clean is refused (exit 1, no output), never
+    passed through, because unchanged input may carry machine values. smudge stays fail safe."""
     home = make_home(sb)
     init_repo(sb, home, canon(clean_form()))
     write_overlay(home, overlay_doc(home, "demo-overlay-value-1"))
-    for data in (b"{broken", b"[]\n", canon({"env": ["not", "an", "object"]})):
-        for sub in ("clean", "smudge"):
-            proc = run_tool(sb, home, sub, data=data)
-            assert proc.returncode == 0 and proc.stdout == data, (sub, data)
-            assert "unchanged" in proc.stderr.decode()
+    machine = run_tool(sb, home, "smudge", data=canon(clean_form())).stdout
+    assert b"demo-overlay-value-1" in machine
+    cases = [(b"{broken", "is not a JSON object this filter can parse"),
+             (b"[]\n", "is not a JSON object this filter can parse"),
+             (canon({"env": ["not", "an", "object"]}), "unexpected structure at env"),
+             (b"\xef\xbb\xbf" + machine, "starts with a UTF-8 byte order mark")]
+    for data, needle in cases:
+        proc = run_tool(sb, home, "clean", data=data)
+        err = proc.stderr.decode()
+        assert proc.returncode == 1 and proc.stdout == b"", (data[:12], err)
+        assert "clean refused: settings.json" in err and needle in err, err
+        assert "demo-overlay-value-1" not in err and "/opt/demo" not in err
+        proc = run_tool(sb, home, "smudge", data=data)
+        assert proc.returncode == 0 and proc.stdout == data, data[:12]
+        assert "unchanged" in proc.stderr.decode()
+
+
+def test_git_refuses_to_stage_a_bom_prefixed_machine_form(sb):
+    """With the filter registered, a byte order mark in front of the machine form makes git add
+    fail (the filter is required) instead of staging the overlay values; once it is removed, the
+    clean form is staged again."""
+    home = make_home(sb)
+    base = canon(clean_form())
+    init_repo(sb, home, base, register=True)
+    write_overlay(home, overlay_doc(home, "demo-overlay-value-1"))
+    assert run_tool(sb, home, "render").returncode == 0
+    machine = (home / "settings.json").read_bytes()
+    (home / "settings.json").write_bytes(b"\xef\xbb\xbf" + machine)
+    proc = git(sb, home, "add", "settings.json", check=False)
+    err = proc.stderr.decode()
+    assert proc.returncode != 0 and "byte order mark" in err, err
+    assert "demo-overlay-value-1" not in err and "demo-model-x" not in err
+    assert git(sb, home, "cat-file", "blob", ":settings.json").stdout == base
+    (home / "settings.json").write_bytes(machine)
+    os.utime(home / "settings.json", (3, 3))
+    git(sb, home, "add", "settings.json")
+    assert git(sb, home, "cat-file", "blob", ":settings.json").stdout == base
+    assert status(sb, home) == ""
 
 
 # ------------------------------------------------------------------------ git integration

@@ -9,7 +9,9 @@ keeps the two apart, so machine values and CLI-owned keys never reach the index.
 
   clean              git clean filter, stdin -> stdout: removes what the enabled modules and the
                      overlay contribute, what the record lists and the CLI-owned keys, restoring
-                     the values HEAD tracks.
+                     the values HEAD tracks. Fail closed: input that is not a JSON object it can
+                     parse (a UTF-8 byte order mark included), or of an unexpected structure,
+                     exits 1 with no output, so git refuses to stage it.
   smudge             git smudge filter, stdin -> stdout: applies the modules, then the overlay.
                      Fail safe: invalid input or overlay passes the input through unchanged.
   render [--force]   write the machine form of <H>/settings.json; refuses (without --force) to
@@ -614,8 +616,14 @@ def cmd_clean(home):
         _err("clean refused: %s; fix it, then re-stage settings.json" % exc)
         return 1
     out, problem = clean_bytes(data, layers, load_base(home))
-    if problem:
-        _err("clean: %s; passing settings.json through unchanged" % problem)
+    if problem:  # never pass it through: unchanged input may carry machine values
+        if data.startswith(b"\xef\xbb\xbf"):
+            problem = "input starts with a UTF-8 byte order mark"
+        elif problem == "input is not a JSON object":
+            problem += " this filter can parse"
+        _err("clean refused: settings.json: %s; fix the file, then re-stage settings.json"
+             % problem)
+        return 1
     sys.stdout.buffer.write(out)
     return 0
 
