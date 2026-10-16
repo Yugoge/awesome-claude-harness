@@ -11,6 +11,8 @@ settings.local.json
 /settings.machine.json
 # Private-literal list read by the pre-commit check; its literals are personal, never tracked
 /private-literals.txt
+# render-settings' temp file for its atomic write of settings.json; one left by an interrupted render holds the machine form
+/.settings.render.*
 
 # Temporary files
 *.tmp
