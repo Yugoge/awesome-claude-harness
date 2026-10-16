@@ -699,6 +699,123 @@ def test_record_is_private_and_fails_closed(sb):
     assert run_tool(sb, home, "check", "--staged").returncode == 1
 
 
+# ------------------------------------------------------- personal files never reach a commit
+
+PERSONAL_FILES = ("settings.machine.json", "private-literals.txt")
+PRE_COMMIT = "hooks/git-hooks/pre-commit"
+PRE_COMMIT_RUNS = ("hooks/pre-commit-check.sh", "scripts/check-public-core.sh")
+
+
+def install_pre_commit(home):
+    target = home / ".git" / "hooks" / "pre-commit"
+    target.parent.mkdir(exist_ok=True)
+    shutil.copyfile(home / PRE_COMMIT, target)
+    target.chmod(0o755)
+    return target
+
+
+def hooked_home(sb):
+    """rendered_home with the tracked pre-commit hook (and the scripts it runs) installed as init
+    installs it, and an untracked private-literal list holding the stand-in literal."""
+    home = rendered_home(sb)
+    for rel in (PRE_COMMIT, *PRE_COMMIT_RUNS):
+        (home / rel).parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(REPO / rel, home / rel)
+    git(sb, home, "add", PRE_COMMIT, *PRE_COMMIT_RUNS)
+    git(sb, home, "commit", "-q", "-m", "the pre-commit hook and the scripts it runs")
+    with open(home / ".git" / "info" / "exclude", "a") as fh:
+        fh.write("/private-literals.txt\n")
+    (home / "private-literals.txt").write_text("# stand-in list\n%s\n" % STAND_IN)
+    install_pre_commit(home)
+    assert status(sb, home) == ""
+    return home
+
+
+def assert_names_only(rel, proc, home):
+    """A refusal names the path and how to untrack it, never the file's content."""
+    out = (proc.stdout + proc.stderr).decode()
+    assert proc.returncode != 0, out
+    assert "%s is in the index" % rel in out and "git rm --cached -- %s" % rel in out, out
+    assert STAND_IN not in out and str(home) not in out, out
+
+
+@pytest.mark.parametrize("rel", PERSONAL_FILES)
+def test_pre_commit_refuses_a_personal_file_in_the_index(sb, rel):
+    """Whatever .gitignore says, the hook refuses a commit whose index holds the overlay or the
+    private-literal list: newly force-added, tracked and unchanged, or tracked and modified. The
+    commit that untracks it (git rm --cached) passes, and so do ordinary commits after it."""
+    home = hooked_home(sb)
+    path, edited = home / rel, home / "hooks" / "stop-demo.py"
+
+    def refused():
+        head = git(sb, home, "rev-parse", "HEAD").stdout
+        proc = git(sb, home, "commit", "-q", "-m", "attempt", check=False)
+        assert_names_only(rel, proc, home)
+        assert "REFUSED by the settings check" in proc.stderr.decode()
+        assert git(sb, home, "rev-parse", "HEAD").stdout == head
+
+    git(sb, home, "add", "-f", "--", rel)
+    refused()
+    git(sb, home, "reset", "-q", "--", rel)
+
+    # An earlier commit made where the hook was not installed (before init, or with a version
+    # that did not check this) tracks the file.
+    (home / ".git" / "hooks" / "pre-commit").unlink()
+    git(sb, home, "add", "-f", "--", rel)
+    git(sb, home, "commit", "-q", "-m", "earlier commit")
+    install_pre_commit(home)
+    assert git(sb, home, "cat-file", "-e", "HEAD:" + rel, check=False).returncode == 0
+
+    edited.write_text("# stub, edited\n")  # tracked and unchanged: an unrelated change
+    git(sb, home, "add", "--", "hooks/stop-demo.py")
+    refused()
+    with open(path, "ab") as fh:  # tracked and modified
+        fh.write(b"\n" if rel == "settings.machine.json" else b"# another comment\n")
+    git(sb, home, "add", "--", rel)
+    refused()
+
+    git(sb, home, "rm", "-q", "--cached", "--", rel)
+    git(sb, home, "commit", "-q", "-m", "untrack " + rel)
+    assert git(sb, home, "cat-file", "-e", "HEAD:" + rel, check=False).returncode != 0
+    assert path.exists() and status(sb, home) == ""
+    edited.write_text("# stub, edited again\n")
+    git(sb, home, "commit", "-q", "-am", "ordinary commit")
+    assert run_tool(sb, home, "check", "--staged").returncode == 0
+
+
+def test_ci_check_on_a_fresh_checkout_refuses_a_tracked_personal_file(sb):
+    """CI runs check --staged on a fresh checkout (no overlay, no filter, no hook): it passes on
+    a tree that tracks neither personal file and fails, naming only the path, on one that tracks
+    either; once a commit untracks it, a fresh checkout passes again."""
+    origin = make_home(sb, "origin")
+    init_repo(sb, origin, canon(clean_form()))
+
+    def ci_check(name):
+        checkout = sb.tmp / ("ci-" + name)
+        git(sb, sb.tmp, "clone", "-q", str(origin), str(checkout))
+        return run_tool(sb, checkout, "check", "--staged")
+
+    assert ci_check("clean").returncode == 0
+    contents = {"settings.machine.json": canon(personal_overlay(origin)),
+                "private-literals.txt": ("# stand-in list\n%s\n" % STAND_IN).encode()}
+    for rel, data in contents.items():
+        (origin / rel).write_bytes(data)
+        git(sb, origin, "add", "-f", "--", rel)
+        git(sb, origin, "commit", "-q", "-m", "track " + rel)
+        proc = ci_check("tracks-" + rel)
+        assert_names_only(rel, proc, origin)  # the overlay holds the origin's path
+        assert "staged in machine form" not in proc.stderr.decode()  # settings.json is clean
+        git(sb, origin, "rm", "-q", "--cached", "--", rel)
+        git(sb, origin, "commit", "-q", "-m", "untrack " + rel)
+        assert ci_check("untracked-" + rel).returncode == 0
+    for rel in contents:  # both at once: both named
+        git(sb, origin, "add", "-f", "--", rel)
+    git(sb, origin, "commit", "-q", "-m", "track both")
+    proc = ci_check("tracks-both")
+    for rel in contents:
+        assert_names_only(rel, proc, origin)
+
+
 def add_doctor(sb, home):
     """scripts/doctor, its resolver and a venv stub (outside the checkout) for a test home."""
     for rel in ("scripts/doctor", "hooks/lib/claude_home.sh", "hooks/lib/claude_home.py"):

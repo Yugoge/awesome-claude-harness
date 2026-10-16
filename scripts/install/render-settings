@@ -19,7 +19,10 @@ keeps the two apart, so machine values and CLI-owned keys never reach the index.
                      record explains.
   check [--staged]   doctor checks (hook paths, filter wiring and round trip, entries nothing
                      explains, protected-runtime file); with --staged: refuse a staged settings.json
-                     that is in machine form.
+                     that is in machine form, and an index that holds the overlay or the
+                     private-literal list <H>/private-literals.txt: both are personal and never
+                     tracked, so after a forced add or an earlier commit of either, every commit
+                     is refused until `git rm --cached` untracks it.
   migrate --from REV [--settings-file PATH] [--base REV]
                      seed a NEW overlay from previous personal settings (one-time owner step).
 
@@ -49,6 +52,7 @@ sys.dont_write_bytecode = True  # check imports harness modules; leave no caches
 FILTER_NAME = "claude-settings"
 SETTINGS = "settings.json"
 OVERLAY = "settings.machine.json"
+LITERALS = "private-literals.txt"  # scripts/check-public-core.sh's private-literal list
 RECORD = "claude-settings.applied"  # in the git directory: the layers smudge and render applied
 # Keys Claude Code itself writes into user settings (/model, /config, /effort, /fast).
 CLI_OWNED = ("model", "alwaysThinkingEnabled", "effortLevel", "tui", "theme",
@@ -84,6 +88,9 @@ STAGED_MSG = ("settings.json is staged in machine form (it carries overlay value
               "keys, or is not canonical); register the filter with scripts/bootstrap and "
               "re-stage.")
 KEEP_HINT = "move it into settings.machine.json to keep it"
+TRACKED_MSG = ("%s is in the index (staged or tracked), but it is personal to this machine and "
+               "never committed; untrack it with `git rm --cached -- %s` (the file stays on disk) "
+               "and commit that.")
 
 
 class OverlayError(Exception):
@@ -935,9 +942,19 @@ def cmd_check_staged(home):
     if not is_checkout(home):
         _err("check --staged: %s is not a git checkout" % home)
         return 1
+    # The index, not a diff: a forced add, a tracked file (also unchanged) and a fresh CI
+    # checkout of a tree that holds one are all refused; only untracking it passes.
+    listed = _git(home, "ls-files", "-z", "--cached", "--", OVERLAY, LITERALS)
+    if listed is None or listed.returncode != 0:
+        _err("check --staged: cannot list the index; fix it before committing")
+        return 1
+    tracked = [p for p in (OVERLAY, LITERALS) if p.encode() in listed.stdout.split(b"\0")]
+    for path in tracked:
+        _err("check --staged: " + TRACKED_MSG % (path, path))
+    rc = 1 if tracked else 0
     staged = blob(home, ":" + SETTINGS)
     if staged is None:
-        return 0
+        return rc
     try:
         layers = layers_of(load_overlay(home)) + load_record(home)
     except OverlayError as exc:
@@ -945,7 +962,7 @@ def cmd_check_staged(home):
         return 1
     out, problem = clean_bytes(staged, layers, load_base(home))
     if problem is None and out == staged:
-        return 0
+        return rc
     _err(STAGED_MSG)
     return 1
 
@@ -1162,7 +1179,8 @@ def main(argv=None):
                           help="drop working-file entries the overlay does not explain")
     p_check = sub.add_parser("check", help="doctor checks, or --staged pre-commit check")
     p_check.add_argument("--staged", action="store_true",
-                         help="refuse a staged settings.json in machine form")
+                         help="refuse a staged settings.json in machine form, or an index "
+                              "holding settings.machine.json or private-literals.txt")
     p_migrate = sub.add_parser("migrate", help="seed a new overlay from previous settings")
     p_migrate.add_argument("--from", dest="rev", required=True, metavar="REV")
     p_migrate.add_argument("--settings-file", metavar="PATH")
