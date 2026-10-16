@@ -179,7 +179,7 @@ if [ "$MODE" = "report" ]; then
   exit 0
 fi
 
-LOG_DIR="$HOME/.claude/logs"
+LOG_DIR="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/logs"
 mkdir -p "$LOG_DIR" 2>/dev/null || true
 LOG_FILE="$LOG_DIR/workflow-bookmark-prune.log"
 

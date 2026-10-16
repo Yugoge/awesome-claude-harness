@@ -20,7 +20,7 @@ SID=$(echo "$INPUT" | python3 -c \
 # branch; under `set -u` the /do branch aborted with "unbound variable"
 # whenever the /allow branch did not run, leaving /do consent flags on disk
 # across turns. Hoisting binds the variable unconditionally.
-CONSENT_LOG="$HOME/.claude/logs/bash-consent.log"
+CONSENT_LOG="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/logs/bash-consent.log"
 mkdir -p "$(dirname "$CONSENT_LOG")"
 
 FLAG="$(harness_state_dir)/claude-bash-allowlist-${SID}.json"
