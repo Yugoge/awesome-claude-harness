@@ -132,19 +132,74 @@ def test_process_family_rules(sandbox):
     assert r.returncode == 2 and "Killing demo/claude/docker processes" in r.stderr
 
 
-def test_hard_banned_scripts_default_and_configured(sandbox):
+# Default hard bans (CLAUDE_HARD_BANNED_SCRIPTS unset): the generic names match only a run of the script.
+@pytest.mark.parametrize("command", (
+    "cat docs/session-recovery.md",
+    "grep -rn 'restart-all-sessions' .",
+    "ls scripts | grep session-recovery",
+    "echo restart-all-sessions",
+    "printf '%s\\n' \"see restart-all-sessions\"",
+    "vim notes/session-recovery-plan.txt",
+    "bash scripts/demo-session-recovery-check.sh",
+    "timeout 5 grep -rn session-recovery docs",
+))
+def test_default_hard_bans_allow_reading_and_mentioning_the_names(sandbox, command):
     _, env = sandbox
-    for command in ("ls session-recovery.sh", "ls restart-all-sessions.sh"):
-        r = hook(env, command)
-        assert r.returncode == 2 and "PERMANENTLY FORBIDDEN" in r.stderr, command
-    assert "'session-recovery'" in hook(env, "ls session-recovery.sh").stderr
-    assert hook(env, "ls demo-restart.sh").returncode == 0
+    r = hook(env, command)
+    assert r.returncode == 0, r.stderr
+    assert "hard-banned script" not in r.stderr
 
-    env = {**env, "CLAUDE_HARD_BANNED_SCRIPTS": "demo-recovery|demo-restart||"}
-    r = hook(env, "ls demo-restart.sh")
+
+@pytest.mark.parametrize("command,name", (
+    ("bash scripts/session-recovery.sh", "session-recovery"),
+    ("./restart-all-sessions.sh", "restart-all-sessions"),
+    ("/opt/x/session-recovery.sh --all", "session-recovery"),
+    ("sh restart-all-sessions.sh", "restart-all-sessions"),
+    ("ls session-recovery.sh", "session-recovery"),  # a NAME.sh path is banned wherever it appears
+    ("session-recovery --all", "session-recovery"),
+    ("cd /opt/x && nohup restart-all-sessions &", "restart-all-sessions"),
+    ("sudo -E FOO=1 timeout 5 session-recovery", "session-recovery"),
+    ("bash -c 'restart-all-sessions --now'", "restart-all-sessions"),
+    ("x=$(session-recovery)", "session-recovery"),
+))
+def test_default_hard_bans_block_running_the_scripts(sandbox, command, name):
+    _, env = sandbox
+    for value in (None, ""):  # unset and empty both mean the default
+        r = hook(env, command, **({} if value is None else {"CLAUDE_HARD_BANNED_SCRIPTS": value}))
+        assert r.returncode == 2, (value, r.stderr)
+        assert f"hard-banned script '{name}' is PERMANENTLY FORBIDDEN" in r.stderr
+
+
+# An explicit value (e.g. one the migration wrote from the previous built-in rules) keeps the old meaning:
+# each '|'-separated ERE is its own rule `echo "$COMMAND" | grep -qE '<ERE>'`, matched anywhere.
+OLD_STYLE_BANS = "acct-test-123-recovery|acct-test-123-restart"
+
+
+@pytest.mark.parametrize("command", (
+    "cat docs/acct-test-123-recovery.md",
+    "grep -rn 'acct-test-123-restart' .",
+    "echo acct-test-123-restart",
+    "bash scripts/acct-test-123-recovery.sh",
+    "./acct-test-123-restart-all.sh",
+    "ls notes",
+    "bash scripts/session-recovery.sh",  # a set value replaces the default names
+    "cat docs/session-recovery.md",
+))
+def test_explicit_hard_ban_value_keeps_match_anywhere_semantics(sandbox, command):
+    _, env = sandbox
+    old_rules = [subprocess.run(["grep", "-qE", "--", ere], input=command + "\n", text=True).returncode == 0
+                 for ere in OLD_STYLE_BANS.split("|")]
+    r = hook(env, command, CLAUDE_HARD_BANNED_SCRIPTS=OLD_STYLE_BANS)
+    assert r.returncode == (2 if any(old_rules) else 0), r.stderr
+    assert ("hard-banned script 'acct-test-123-" in r.stderr) == any(old_rules)
+
+
+def test_hard_ban_empty_entries_never_match_and_session_dirs_ban_stays(sandbox):
+    _, env = sandbox
+    for value in ("demo-recovery|demo-restart||", "|", "||"):
+        assert hook(env, "ls notes.txt", CLAUDE_HARD_BANNED_SCRIPTS=value).returncode == 0, value
+    r = hook(env, "ls demo-restart.sh", CLAUDE_HARD_BANNED_SCRIPTS="demo-recovery|demo-restart||")
     assert r.returncode == 2 and "hard-banned script 'demo-restart'" in r.stderr
-    assert hook(env, "ls session-recovery.sh").returncode == 0
-    assert hook(env, "ls notes.txt").returncode == 0  # empty entries never match
     r = hook(env, "cat session_dirs.txt")
     assert r.returncode == 2 and "session_dirs.txt is PERMANENTLY FORBIDDEN" in r.stderr
 

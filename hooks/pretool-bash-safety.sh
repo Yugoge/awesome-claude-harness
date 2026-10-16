@@ -67,13 +67,13 @@ ARTIFACT_NS_CAPTURE_RE="(^|[[:space:];|&(])[A-Za-z_][A-Za-z0-9_]*=['\"]?"
 ARTIFACT_VAR_WRITE_RE="(>>?[&|]?[[:space:]]*['\"]?\\\$\{?[A-Za-z_]|${ARTIFACT_WRITE_VERB_RE}.*\\\$\{?[A-Za-z_])"
 
 # ── Local service-integration knobs (environment-configured) ─────────────────
-# Rules protecting local containers, units and scripts read their names from the environment (normally the
-# untracked settings overlay's env); defaults are empty/generic, so an unconfigured rule is inert and an
-# empty value never matches every command. Knobs (detail at each variable definition below):
-# CLAUDE_DEV_CONTAINERS, CLAUDE_DEV_SYSTEMD, CLAUDE_DAEMON_RESTART_GRANT_HELPER (sentinel dir
-# DAEMON_RESTART_GRANT_DIR), CLAUDE_PROTECTED_DAEMON_PREFIX / _TARGETS (target suffix keys the grant
-# sentinel), CLAUDE_PROTECTED_PROCESS_FAMILY, and the "hard-banned scripts" rule's '|'-separated EREs
-# CLAUDE_HARD_BANNED_SCRIPTS ("session-recovery|restart-all-sessions"); the "session-dirs ban" stays literal.
+# Rules protecting local containers, units and scripts read their names from the environment (normally the untracked
+# settings overlay's env); defaults are empty/generic, so an unconfigured rule is inert and an empty value never
+# matches every command. Knobs (detail at each definition below): CLAUDE_DEV_CONTAINERS, CLAUDE_DEV_SYSTEMD,
+# CLAUDE_DAEMON_RESTART_GRANT_HELPER (sentinel dir DAEMON_RESTART_GRANT_DIR), CLAUDE_PROTECTED_DAEMON_PREFIX / _TARGETS
+# (target suffix keys the grant sentinel), CLAUDE_PROTECTED_PROCESS_FAMILY, and CLAUDE_HARD_BANNED_SCRIPTS (rule
+# "hard-banned scripts": a set value's '|'-separated EREs match anywhere; unset, the generic session-recovery and
+# restart-all-sessions match only a script run). The "session-dirs ban" stays literal.
 # ─────────────────────────────────────────────────────────────────────────────
 
 # IS_SUBAGENT: set once here at the top of the script (after PYTHON_BIN resolution).
@@ -1809,15 +1809,15 @@ if echo "$COMMAND" | grep -qE 'session_dirs\.txt'; then
   exit 2
 fi
 
-# Scripts that manage session state or restart daemons: CLAUDE_HARD_BANNED_SCRIPTS, '|'-separated EREs,
-# each tested on its own; empty entries are skipped so they can never match every command.
+# Scripts that manage session state or restart daemons. A set CLAUDE_HARD_BANNED_SCRIPTS is '|'-separated EREs, each
+# matched anywhere (empty entries skipped: they would match every command). Unset or empty, the generic default names
+# match only a run: NAME.sh as a path anywhere, or NAME as a command word (after a path, wrapper, shell or options).
+_HB_CMD='(^|[;&|(`{!]|\$\()[[:space:]]*((sudo|env|nohup|exec|command|time|nice|timeout|setsid|xargs|source|\.|(ba|z|da|k)?sh|if|then|do|else|while|until|-[^[:space:]]*|[0-9][^[:space:]]*|[A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*)[[:space:]]+)*["'"'"']?([^[:space:];&|]*/)?'
 IFS='|' read -r -a _HARD_BANNED <<< "${CLAUDE_HARD_BANNED_SCRIPTS:-session-recovery|restart-all-sessions}"
 for _ban in "${_HARD_BANNED[@]}"; do
-  if [ -n "$_ban" ] && echo "$COMMAND" | grep -qE -- "$_ban"; then
-    echo "BLOCKED: hard-banned script '$_ban' is PERMANENTLY FORBIDDEN" >&2
-    echo "Command: $COMMAND" >&2
-    echo "REASON: It manages session state or restarts daemons and can kill all sessions. Only the user may run it manually." >&2
-    exit 2
+  _re="$_ban"; [ -n "$CLAUDE_HARD_BANNED_SCRIPTS" ] || _re="(^|[^[:alnum:]_.-])$_ban\\.sh([^[:alnum:]_.-]|\$)|$_HB_CMD$_ban([\"'[:space:];&|)\`]|\$)"
+  if [ -n "$_ban" ] && echo "$COMMAND" | grep -qE -- "$_re"; then
+    printf "BLOCKED: hard-banned script '%s' is PERMANENTLY FORBIDDEN\nCommand: %s\nREASON: It manages session state or restarts daemons and can kill all sessions. Only the user may run it manually.\n" "$_ban" "$COMMAND" >&2; exit 2
   fi
 done
 
