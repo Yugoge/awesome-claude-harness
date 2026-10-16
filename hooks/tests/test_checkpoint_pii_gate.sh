@@ -31,8 +31,10 @@
 #     snapshot commit, return code 3, a refusal line in checkpoint.log that holds
 #     no literal or value, the failure counter is left alone (review R5: a refusal
 #     is not a failure); ordinary snapshots are still written. The byte order mark
-#     is refused earlier, by the required clean filter inside `git add -A`, which
-#     stays an ordinary snapshot failure (return code 1).
+#     is refused earlier, by the required clean filter inside `git add -A`: in the
+#     harness home that is a refusal too (return code 3, review R5), asked of the
+#     clean engine itself; a broken install (engine missing, clean command unset)
+#     and a non-harness repository whose filter fails stay ordinary failures (1).
 #
 # Usage: bash hooks/tests/test_checkpoint_pii_gate.sh
 # Exit:  0 = all assertions pass; 1 = any assertion failed.
@@ -351,9 +353,46 @@ fi
 
 { printf '\357\273\277'; cat "$H/settings.json"; } > "$H/settings.json.new" && mv "$H/settings.json.new" "$H/settings.json"
 printf 'second note\n' >> "$H/notes.txt"
+printf '1\n' > "$CHECKPOINT_FAIL_COUNT_FILE"   # one earlier failure: a refusal neither adds nor resets
 _snap "AC6 BOM" "$H_LIB" "$H"
 _refused AC6 "UTF-8 byte order mark in front of the machine form (filter registered)" \
-  "byte order mark" 1
+  "snapshot refused by the settings filter (render-settings clean): nothing written"
+if printf '%s' "$snap_log" | grep -qF "byte order mark" && [ "$(fail_count)" = 1 ]; then
+  _ok "AC6: the filter's reason is logged and the BOM refusal leaves the failure counter alone"
+else
+  _fail "AC6: BOM refusal: reason missing from the log or counter changed (count='$(fail_count)', log: $snap_log)"
+fi
+
+# A broken install is not a refusal: the snapshot still fails (rc 1) and is counted.
+mv "$H/scripts/install/render-settings" "$H/render-settings.away"
+_snap "AC6 engine missing" "$H_LIB" "$H"
+_refused AC6 "clean filter registered, its engine missing (broken install)" "add -A failed" 1
+mv "$H/render-settings.away" "$H/scripts/install/render-settings"
+git -C "$H" config --unset filter.claude-settings.clean
+_snap "AC6 clean unset" "$H_LIB" "$H"
+_refused AC6 "required filter registered without a clean command (broken install)" "add -A failed" 1
+git -C "$H" config filter.claude-settings.clean "python3 scripts/install/render-settings clean"
+[ "$(fail_count)" = 3 ] && _ok "AC6: both broken-install failures are counted (1 -> 3)" \
+  || _fail "AC6: broken-install failures not counted (got '$(fail_count)')"
+
+# Outside the harness home a failing filter on a settings.json stays an ordinary failure.
+REPO4="$WORKDIR/repo4"
+git init -q "$REPO4"
+git -C "$REPO4" config user.name "Test"
+git -C "$REPO4" config user.email "test@example.invalid"
+printf '/settings.json filter=claude-settings\n' > "$REPO4/.gitattributes"
+git -C "$REPO4" add -A
+git -C "$REPO4" commit -q -m "init"
+git -C "$REPO4" config filter.claude-settings.clean "python3 $H/scripts/install/render-settings clean"
+git -C "$REPO4" config filter.claude-settings.required true
+cp "$H/settings.json" "$REPO4/settings.json"   # still holds the byte order mark
+_snap "AC6 other repository" "$H_LIB" "$REPO4"
+_refused AC6 "another repository whose settings filter fails staging" "add -A failed" 1
+
+# Once the byte order mark is gone the next snapshot is written again.
+tail -c +4 "$H/settings.json" > "$H/settings.json.new" && mv "$H/settings.json.new" "$H/settings.json"
+_snap "AC6 BOM removed" "$H_LIB" "$H"
+_written AC6 "the machine form again, byte order mark removed"
 
 # ============================================================================
 if [ "$FAILS" -eq 0 ]; then

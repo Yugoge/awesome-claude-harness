@@ -2,11 +2,13 @@
 
 Drives the registered Stop hook, hooks/stop-workflow-coordinator.py with its four default
 phases, in a throwaway copy of the harness home (hooks/ plus the two engines the refusal
-runs). When the private-literal rule or the settings check refuses the snapshot, nothing is
-written, the hook exits 0 with and without stop_hook_active and past the failure-alert
-threshold, the cleanup phase still runs, and systemMessage carries one line naming the rule
-and logs/checkpoint.log, never the stand-in value. An ordinary snapshot is still written,
-and a refusal-free snapshot failure still fails the auto_commit phase as before.
+runs). When the private-literal rule, the settings check or, with the filter registered, the
+settings clean filter (a settings.json it cannot clean: a byte order mark, not JSON, not an
+object) refuses the snapshot, nothing is written, the hook exits 0 with and without
+stop_hook_active and past the failure-alert threshold, the cleanup phase still runs, and
+systemMessage carries one line naming the rule and logs/checkpoint.log, never the stand-in
+value. An ordinary snapshot is still written, and a refusal-free snapshot failure (also a
+broken filter install) still fails the auto_commit phase as before.
 """
 
 from __future__ import annotations
@@ -27,6 +29,7 @@ REF = "refs/checkpoints/main"
 PHASES = ["timelock", "coverage", "auto_commit", "cleanup"]
 LITERAL_RULE = "the private-literal rule"
 SETTINGS_CHECK = "the settings check (render-settings check --staged)"
+SETTINGS_FILTER = "the settings filter (render-settings clean)"
 
 
 def _git(env: dict, repo: Path, *args: str, check: bool = True) -> str:
@@ -122,6 +125,22 @@ def _machine_form(home: Path, env: dict) -> None:
     assert STANDIN in (home / "settings.json").read_text()
 
 
+def _register_filter(home: Path, env: dict) -> None:
+    """The settings filter as init registers it in the harness home's local git config."""
+    for key in ("clean", "smudge"):
+        _git(env, home, "config", f"filter.claude-settings.{key}",
+             f"python3 scripts/install/render-settings {key}")
+    _git(env, home, "config", "filter.claude-settings.required", "true")
+
+
+# A machine-form settings.json the clean filter cannot clean: it exits non-zero, so staging fails.
+UNCLEANABLE = {
+    "bom": lambda data: b"\xef\xbb\xbf" + data,
+    "not-json": lambda data: data.rstrip()[:-1],  # the closing brace dropped
+    "not-object": lambda data: b"[" + data + b"]",
+}
+
+
 @pytest.mark.parametrize(
     "case, rules",
     [
@@ -185,4 +204,58 @@ def test_refusal_free_snapshot_failure_keeps_failing_the_phase(harness) -> None:
     assert stop["rc"] == 2 and out["failed_phase"] == "auto_commit", stop["raw"]
     assert out["phases"][-1]["phase"] == "auto_commit" and out["phases"][-1]["returncode"] == 1
     assert "systemMessage" not in out
+    assert _git(env, home, "for-each-ref", "refs/checkpoints") == ""
+
+
+@pytest.mark.parametrize("case", sorted(UNCLEANABLE))
+def test_settings_json_the_clean_filter_refuses_never_blocks_a_stop(harness, case: str) -> None:
+    home, env = harness
+    _register_filter(home, env)
+    _machine_form(home, env)
+    (home / "notes.txt").write_text("ordinary note\n")
+    first = _stop(home, env, active=False)  # filter registered: the clean form is snapshotted
+    assert first["rc"] == 0 and "systemMessage" not in first["out"], first["raw"]
+    tip = _git(env, home, "rev-parse", "-q", "--verify", REF)
+    assert STANDIN not in _git(env, home, "show", f"{tip}:settings.json")
+    settings = home / "settings.json"
+    settings.write_bytes(UNCLEANABLE[case](settings.read_bytes()))
+    assert STANDIN in settings.read_text(encoding="utf-8", errors="replace")
+    (home / "notes.txt").write_text("second note\n")
+    commits_before = _git(env, home, "rev-list", "--all", "--count")
+
+    for active in (False, True, False, True):  # past the failure-alert threshold
+        stop = _stop(home, env, active=active)
+        out = stop["out"]
+        assert stop["rc"] == 0, stop["raw"]
+        assert out["status"] == "pass" and "failed_phase" not in out, out
+        assert [p["phase"] for p in out["phases"]] == PHASES
+        assert all(p["status"] == "allow" for p in out["phases"]), out
+        assert stop["cleanup_ran"], "the cleanup phase did not run"
+        assert out["systemMessage"] == (
+            f"Checkpoint snapshot refused by {SETTINGS_FILTER}: nothing written,"
+            " see logs/checkpoint.log"
+        )
+        assert STANDIN not in stop["raw"]
+
+    assert _git(env, home, "rev-parse", "-q", "--verify", REF) == tip
+    assert _git(env, home, "rev-list", "--all", "--count") == commits_before
+    log = _log(env)
+    assert log.count(f"snapshot refused by {SETTINGS_FILTER}: nothing written") == 4
+    assert "add -A failed" not in log and STANDIN not in log
+    count = Path(env["CLAUDE_CONFIG_DIR"]) / "logs" / ".checkpoint-fail-count"
+    assert not count.exists() or count.read_text().strip() == "0"
+
+
+def test_broken_filter_install_keeps_failing_the_phase(harness) -> None:
+    """The clean filter registered but its engine missing is a broken install, not a refusal."""
+    home, env = harness
+    _register_filter(home, env)
+    settings = home / "settings.json"
+    settings.write_bytes(UNCLEANABLE["bom"](settings.read_bytes()))  # uncleanable as well
+    (home / "scripts" / "install" / "render-settings").unlink()
+    stop = _stop(home, env, active=False)
+    out = stop["out"]
+    assert stop["rc"] == 2 and out["failed_phase"] == "auto_commit", stop["raw"]
+    assert out["phases"][-1]["returncode"] == 1 and "systemMessage" not in out
+    assert "add -A failed" in _log(env) and "snapshot refused" not in _log(env)
     assert _git(env, home, "for-each-ref", "refs/checkpoints") == ""
