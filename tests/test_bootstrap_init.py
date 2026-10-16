@@ -217,6 +217,52 @@ def test_populated_home_keeps_overlay_literals_and_runtime_file(home):
     assert "mcp__paseo__*" not in rendered["permissions"]["allow"], "the overlay keeps paseo off"
 
 
+STAND_IN = "acct-test-123"  # a stand-in personal value; nothing else in the run contains it
+
+
+@pytest.mark.parametrize("case", ["created", "exists", "relative", "fails"])
+def test_init_output_names_overlay_keys_never_their_values(home, case):
+    # The overlay sets env.TMPDIR and other values to stand-ins: init still acts on them,
+    # but its stdout and stderr name the key (env.TMPDIR) and never print a value.
+    personal = home.tmp / STAND_IN
+    tmp_root = f"{STAND_IN}/tmp-root" if case == "relative" else str(personal / "tmp-root")
+    if case == "exists":
+        (personal / "tmp-root").mkdir(parents=True)
+        existing = _mode(personal / "tmp-root")
+    elif case == "fails":
+        personal.write_text("")  # a regular file where the TMPDIR's parent should be
+    sync = str(personal / "bin" / "sync.sh")
+    home.overlay.write_text(_canonical({
+        "modules": {"paseo": False},
+        "env": {"CLAUDE_HOME": home.h, "TMPDIR": tmp_root, "CLAUDE_CODE_TMPDIR": tmp_root,
+                "DEMO_SYNC": sync, "DEMO_ACCOUNT": STAND_IN},
+        "permissions": {"allow": [f"Bash({sync}:*)", f"Read({personal}/notes/**)"]}}),
+        encoding="utf-8")
+
+    result = home.bootstrap("--yes", "--no-doctor", check=False)
+    out = result.stdout + result.stderr
+    assert home.settings()["env"]["TMPDIR"] == tmp_root, "the overlay's values are rendered"
+    assert f"Bash({sync}:*)" in home.settings()["permissions"]["allow"]
+    assert STAND_IN not in out and "sync.sh" not in out, out
+    expected = {
+        "created": ("created the env.TMPDIR directory (mode 1777)", result.stdout, 0),
+        "exists": ("the env.TMPDIR directory exists", result.stdout, 0),
+        "relative": ("env.TMPDIR in settings.json is not an absolute path — not created; "
+                     "set an absolute env.TMPDIR in settings.machine.json", result.stdout, 0),
+        "fails": ("could not create the env.TMPDIR directory (Not a directory); create it "
+                  "(mode 1777; its path is env.TMPDIR in settings.json) or set another "
+                  "env.TMPDIR in settings.machine.json.", result.stderr, 1)}
+    message, stream, rc = expected[case]
+    assert f"bootstrap: {message}" in stream.splitlines(), out
+    assert result.returncode == rc, out
+    if case in ("created", "exists"):
+        assert _mode(personal / "tmp-root") == (0o1777 if case == "created" else existing)
+        assert "bootstrap: created protected-runtime file (~/.config/claude/protected-runtime.json, " \
+               "empty lists)" in result.stdout.splitlines()
+    elif case == "relative":
+        assert not (home.tmp / STAND_IN).exists() and not (home.clone / STAND_IN).exists()
+
+
 def test_module_question_reads_one_line_and_defaults_to_no(home):
     # One clone, the overlay removed before each run. Every "off" answer comes
     # first: turning the module off after it was on would leave its entries in

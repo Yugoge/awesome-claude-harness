@@ -336,16 +336,19 @@ try:
 except Exception:
     v = ""
 print(v if isinstance(v, str) else "")' "$SETTINGS")"
+# The overlay can set env.TMPDIR to a personal path: messages name the key, never
+# the value (nor mkdir's own message, which repeats the path; only its reason).
 if [ -z "$TMP_ROOT" ]; then
   echo "bootstrap: the rendered settings name no TMPDIR — nothing to create"
 elif [ "${TMP_ROOT#/}" = "$TMP_ROOT" ]; then
-  echo "bootstrap: TMPDIR '$TMP_ROOT' is not an absolute path — not created"
+  echo "bootstrap: env.TMPDIR in settings.json is not an absolute path — not created; set an absolute env.TMPDIR in settings.machine.json"
 elif _exists "$TMP_ROOT"; then
-  echo "bootstrap: TMPDIR $TMP_ROOT exists"
-elif mkdir -p -m 1777 "$TMP_ROOT"; then
-  echo "bootstrap: created TMPDIR $TMP_ROOT (mode 1777)"
+  echo "bootstrap: the env.TMPDIR directory exists"
+elif _mkerr="$(mkdir -p -m 1777 "$TMP_ROOT" 2>&1)"; then
+  echo "bootstrap: created the env.TMPDIR directory (mode 1777)"
 else
-  echo "bootstrap: could not create TMPDIR $TMP_ROOT; create it (mode 1777) or set another env.TMPDIR in settings.machine.json." >&2
+  _why="${_mkerr##*: }"
+  echo "bootstrap: could not create the env.TMPDIR directory (${_why:-mkdir failed}); create it (mode 1777; its path is env.TMPDIR in settings.json) or set another env.TMPDIR in settings.machine.json." >&2
   exit 1
 fi
 
@@ -363,16 +366,24 @@ import json, os, sys
 sys.path.insert(0, sys.argv[1])
 import config
 path = config.DATA_FILE_PATH
+# Shown by its env key, or relative to ~ (no account name): the overlay's env can set the key.
+if "CLAUDE_PROTECTED_RUNTIME_FILE" in os.environ:
+    shown = "named by CLAUDE_PROTECTED_RUNTIME_FILE"
+else:
+    shown = os.path.join("~", os.path.relpath(path, os.environ.get("HOME") or os.path.expanduser("~")))
 if os.path.lexists(path):
-    print("bootstrap: protected-runtime file exists: %s" % path)
+    print("bootstrap: protected-runtime file exists (%s)" % shown)
     sys.exit(0)
-os.makedirs(os.path.dirname(path) or ".", mode=0o700, exist_ok=True)
 doc = {"schema_version": 1}
 doc.update((k, []) for k in config.REQUIRED_KEYS)
-fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-with os.fdopen(fd, "w", encoding="utf-8") as fh:
-    fh.write(json.dumps(doc, indent=2) + "\n")
-print("bootstrap: created protected-runtime file %s (empty lists)" % path)
+try:
+    os.makedirs(os.path.dirname(path) or ".", mode=0o700, exist_ok=True)
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as fh:
+        fh.write(json.dumps(doc, indent=2) + "\n")
+except OSError as exc:  # its strerror only: the exception text repeats the path
+    sys.exit("bootstrap: cannot create the protected-runtime file (%s): %s" % (shown, exc.strerror))
+print("bootstrap: created protected-runtime file (%s, empty lists)" % shown)
 PY
 then
   echo "bootstrap: could not create the protected-runtime file (see above)." >&2; exit 1
