@@ -24,6 +24,8 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
+import shlex
 import shutil
 import subprocess
 from pathlib import Path
@@ -56,16 +58,32 @@ def _tracked_files() -> list[str]:
     return sorted((set(tracked) | set(untracked)) - {PRIVATE_LIST})
 
 
+def _filtered(root: Path) -> set[str]:
+    """Tracked files git filters (a `filter` attribute; settings.json today)."""
+    names = subprocess.run(["git", "-C", str(root), "ls-files", "-z"],
+                           capture_output=True, text=True, check=True).stdout
+    out = subprocess.run(["git", "-C", str(root), "check-attr", "-z", "--stdin", "filter"],
+                         input=names, capture_output=True, text=True, check=True).stdout.split("\0")
+    return {out[i] for i in range(0, len(out) - 2, 3) if out[i + 2] not in ("unspecified", "unset")}
+
+
 @pytest.fixture(scope="module")
 def pristine(tmp_path_factory) -> Path:
-    """An isolated git repo holding the current tracked working-tree content."""
+    """An isolated git repo holding the current tracked working-tree content. A file git
+    filters holds its index blob instead: on a home that ran init, settings.json's working
+    copy is the machine form (the owner's overlay merged in), never what is committed."""
     dest = tmp_path_factory.mktemp("pc-pristine")
+    filtered = _filtered(REPO)
     for rel in _tracked_files():
         src = REPO / rel
         if not src.is_file():
             continue
         (dest / rel).parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(src, dest / rel)
+        if rel in filtered:
+            (dest / rel).write_bytes(subprocess.run(["git", "-C", str(REPO), "cat-file", "blob", f":{rel}"],
+                                                    capture_output=True, check=True).stdout)
+        else:
+            shutil.copy2(src, dest / rel)
     subprocess.run(["git", "-C", str(dest), "init", "-q"], check=True)
     subprocess.run(["git", "-C", str(dest), "add", "-A"], check=True)
     return dest
@@ -652,3 +670,66 @@ def test_staging_copy_dereferences_symlinks(pristine, tmp_path):
     found = subprocess.run(["find", ".", "-type", "l"], cwd=tmp_path / "stage",
                            capture_output=True, text=True).stdout.split()
     assert found == [], "a symlink survived staging; the comment's premise would change"
+
+
+# ---------------------------------------------------------------------------
+# A filtered file is gated from its index blob, not its smudged checkout.
+#
+# On a home that ran init, the claude-settings filter smudges the overlay into the
+# working settings.json (the machine form) while git stores the clean form. Read from
+# the checkout, the default run reported the owner's machine values as residue.
+# ---------------------------------------------------------------------------
+
+def _param_marker() -> str:
+    """The first PARAM_MARKERS entry, read from the checker rather than repeated here."""
+    block = (REPO / CHECKER).read_text(encoding="utf8").split("PARAM_MARKERS=(\n", 1)[1].split("\n)", 1)[0]
+    return re.findall(r"'([^']+)'", block)[0]
+
+
+def test_filtered_settings_are_gated_from_the_index_not_the_smudged_checkout(pristine, tmp_path):
+    """A stand-in machine form (one entry per content check: author-path residue, hard
+    marker, param marker) smudged into the checkout changes nothing in the default run;
+    an unstaged change to an unfiltered file is still read from the checkout; the same
+    machine form in the index (filter bypassed) still fails on every entry."""
+    root = _copy(pristine, tmp_path)
+    git = ["git", "-C", str(root)]
+    assert "settings.json" in _filtered(root), "settings.json carries the filter attribute"
+    fresh = _run(root)
+    assert "settings.json" not in fresh.stdout, "control: the clean form carries no residue"
+    entries = ("Bash(/home/" + "acct-test-123/bin/sync.sh:*)", f"Bash({HARD_MARKERS[2]}:*)",
+               f"Bash(docker restart {_param_marker()}:*)")
+    added = tmp_path / "machine-entries"
+    added.write_text("".join(f'      "{e}",\n' for e in entries), encoding="utf8")
+    # A stand-in filter shaped like init's: smudge adds the entries, clean removes them.
+    _mutable(root / ".git" / "config")
+    subprocess.run([*git, "config", "filter.claude-settings.smudge",
+                    f"sed '/\"allow\": \\[/r {shlex.quote(str(added))}'"], check=True)
+    subprocess.run([*git, "config", "filter.claude-settings.clean",
+                    f"grep -vxF -f {shlex.quote(str(added))}"], check=True)
+    (root / "settings.json").unlink()
+    subprocess.run([*git, "checkout", "--", "settings.json"], check=True)
+    machine = (root / "settings.json").read_text(encoding="utf8")
+    assert all(e in machine for e in entries), "the checkout is the machine form"
+    assert subprocess.run([*git, "diff", "--quiet", "--", "settings.json"]).returncode == 0, \
+        "git sees the machine form as the indexed clean form"
+    smudged = _run(root)
+    assert (smudged.returncode, smudged.stdout) == (fresh.returncode, fresh.stdout), \
+        [line for line in smudged.stdout.splitlines() if "settings.json" in line or "residue audit:" in line]
+
+    victim = root / "agents" / "dev.md"
+    original = victim.read_text(encoding="utf8")
+    _append(victim, "\nunstaged /home/" + "acct-test-123/x\n")
+    unstaged = _run(root)
+    assert "NEW un-allowlisted author-path residue -> agents/dev.md:" in unstaged.stdout, \
+        "an unfiltered file is still read from the checkout"
+    _write(victim, original)
+
+    oid = subprocess.run([*git, "hash-object", "-w", "--no-filters", "settings.json"],
+                         capture_output=True, text=True, check=True).stdout.strip()
+    subprocess.run([*git, "update-index", "--cacheinfo", f"100644,{oid},settings.json"], check=True)
+    committed = _run(root)
+    assert committed.returncode != 0
+    for needle in ("NEW un-allowlisted author-path residue -> settings.json:",
+                   f"hard residue marker in public-core: '{HARD_MARKERS[2]}'  ->  settings.json:",
+                   f"un-parameterized residue marker in public-core: '{_param_marker()}'  ->  settings.json:"):
+        assert needle in committed.stdout, f"a machine form in the index is not caught: {needle}"

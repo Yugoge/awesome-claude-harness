@@ -14,13 +14,10 @@
 #   over those bytes. Git-derived ledger sections are skipped (an archive is not a clone).
 # Exit codes: 0 = boundary clean + complete, 1 = one or more checks failed (unclassified
 #   path, invalid class, residue leak, or archive/manifest path-set mismatch).
-# Root cause (design): the public-core surface was described in prose (roadmap §4) with no
-#   machine check, so a new top-level file could escape classification and author-specific
-#   literals could re-enter the shippable core unnoticed. This gate recomputes both from the
-#   tree every run — the tracked-path list is derived from git, never hardcoded.
-#
-# Style mirrors scripts/verify-claims.sh: pure bash (+awk/git/grep), self-contained,
-# recompute-don't-hardcode, and an explicit accumulator so ALL problems are reported at once.
+# Root cause (design): with only a prose boundary (roadmap §4) a new top-level file could
+#   escape classification and author literals re-enter the core; this gate recomputes both
+#   from git every run. Style as scripts/verify-claims.sh: pure bash (+awk/git/grep),
+#   recompute-don't-hardcode, an explicit accumulator so ALL problems are reported at once.
 
 set -uo pipefail   # deliberately NOT -e: run every check, aggregate, report all drift.
 
@@ -114,6 +111,7 @@ residue_audit() {
 import ast, hashlib, io, json, os, re, subprocess, sys, tokenize
 
 root, allowlist_rel, mode = sys.argv[1], sys.argv[2], sys.argv[3]
+INDEX_READ = set(os.environ.get("PC_FILTERED", "").splitlines()) if mode == "git" else set()
 if mode == "git":
     scan_paths = subprocess.run(["git", "-C", root, "ls-files", "--", *sys.argv[4:]],
                                 capture_output=True, text=True).stdout.split()
@@ -315,8 +313,9 @@ for rel in scan_paths:
     if not rel:
         continue
     full = os.path.join(root, rel)
-    try:
-        text = open(full, encoding="utf8").read()
+    try:   # a filtered file: its index blob (the checkout only if it has no stage-0 entry)
+        blob = rel in INDEX_READ and subprocess.run(["git", "-C", root, "cat-file", "blob", ":" + rel], capture_output=True)
+        text = blob.stdout.decode("utf8") if blob and not blob.returncode else open(full, encoding="utf8").read()
     except (OSError, UnicodeDecodeError):
         continue          # binary / unreadable: no textual residue to gate
     scanned.add(rel)
@@ -392,12 +391,9 @@ if [ ! -f "$MANIFEST" ]; then
 fi
 
 # ---------------------------------------------------------------------------
-# Hard markers — author-environment identifiers that must NEVER ship, in EITHER
-# scan mode. Defined HERE, above the archive branch, precisely because they used
-# to be defined below it: archive mode reached `exit "$rc"` before the array
-# existed, so the hard-marker loop was unreachable over a release artifact and a
-# maintainer remote could travel inside a published tarball undetected. ONE
-# definition consumed by both modes, so the two can never drift apart again.
+# Hard markers — author-environment identifiers that must NEVER ship, in EITHER scan
+# mode. ONE definition above the archive branch, consumed by both modes: defined below
+# it, archive mode reached `exit "$rc"` first and never ran the hard-marker loop.
 # ---------------------------------------------------------------------------
 HARD_MARKERS=(
   'git@github.com:Yugoge'      # maintainer git remote
@@ -555,16 +551,15 @@ fi
 # ---------------------------------------------------------------------------
 # 3. Residue scan over the public-core-classified file set.
 #    Hard markers  : author-environment identifiers that must NEVER appear in public-core;
-#                    scanned across the WHOLE public-core set (test trees included).
+#                    scanned across the WHOLE public-core set (test trees included); defined
+#                    ABOVE the archive branch so both scan modes consume them.
 #    Param markers : residue allowed ONLY as an env `:-` default or in a comment; any other
-#                    (un-parameterized) use is a leak. Scanned across the public-core set
-#                    MINUS test trees — a fixture string that names a guarded unit is test
-#                    data, not shippable-harness residue (mirrors the ledger already
-#                    classifying top-level `tests/` as shared/infra).
-#    The protected daemon prefix is a PARAM marker: it comes from
-#    CLAUDE_PROTECTED_DAEMON_PREFIX (empty by default; the owner's value lives in the overlay).
+#                    (un-parameterized) use is a leak. Scanned MINUS test trees: a fixture
+#                    naming a guarded unit is test data (the ledger classes `tests/` shared/infra).
+#                    One is the protected daemon prefix (CLAUDE_PROTECTED_DAEMON_PREFIX).
+#    A file git filters (settings.json: init smudges its checkout into the machine form) is
+#    read from its index blob, the tracked content, here and in section 5; others as checked out.
 # ---------------------------------------------------------------------------
-#    HARD_MARKERS is defined ABOVE the archive branch so both scan modes consume it.
 PARAM_MARKERS=(
   'happy-web-dev'                    # CLAUDE_DEV_CONTAINERS default
   '/root/bin/claude-allow-restart'  # CLAUDE_DAEMON_RESTART_GRANT_HELPER default
@@ -578,10 +573,6 @@ while IFS= read -r p; do
   PC_PATHSPECS+=("$p")
 done < <(printf '%s\n' "$PAIRS" | awk -F'\t' '$2=="public-core"{print $1}' | sort -u)
 PC_PATHSPECS+=(":(exclude)$SELF")
-
-# Param markers are productization defaults expected inside shippable code; a test fixture
-# that names a guarded unit (e.g. hooks/tests/*) is test data, not residue. Scan param
-# markers over the public-core set MINUS any test tree. Hard markers keep the full set.
 PARAM_PATHSPECS=("${PC_PATHSPECS[@]}" ":(exclude)*/tests/*")
 
 # Pathspecs for the section-5 residue audit. Unlike the marker scans above, this
@@ -589,6 +580,14 @@ PARAM_PATHSPECS=("${PC_PATHSPECS[@]}" ":(exclude)*/tests/*")
 # structurally, and this detector's own constant tables are exempted BY CLASS
 # (scanner_pattern_definition), not by being hidden from the scan.
 PC_SCAN_SPECS=("${PC_PATHSPECS[@]:0:$(( ${#PC_PATHSPECS[@]} - 1 ))}")
+FILTERED="$(git ls-files | git check-attr --stdin filter | awk -F': filter: ' '$2 != "unspecified" && $2 != "unset" { print $1 }')"
+pc_grep() {   # <marker> <pathspec>...: `git grep -nF` hits, a FILTERED file's from its index blob
+  local m="$1" p; shift; local -a idx=() excl=()
+  while IFS= read -r p; do idx+=(":(literal)$p"); excl+=(":(exclude,literal)$p"); done \
+    < <(git ls-files -- "$@" | grep -xF -- "$FILTERED")
+  git grep -nF -- "$m" -- "$@" ${excl[@]+"${excl[@]}"} 2>/dev/null
+  [ "${#idx[@]}" -eq 0 ] || git grep --cached -nF -- "$m" -- "${idx[@]}" 2>/dev/null
+}
 
 # A public-core match line is an allowed (parameterized) use of marker M when the line is a
 # comment (trimmed starts with #) OR EVERY occurrence of M on the line is an env default
@@ -617,7 +616,7 @@ for m in "${HARD_MARKERS[@]}"; do
     [ -z "$hit" ] && continue
     fail "hard residue marker in public-core: '$m'  ->  $hit"
     leaks=$((leaks + 1))
-  done < <(git grep -nF -- "$m" -- "${PC_PATHSPECS[@]}" 2>/dev/null)
+  done < <(pc_grep "$m" "${PC_PATHSPECS[@]}")
 done
 
 for m in "${PARAM_MARKERS[@]}"; do
@@ -628,7 +627,7 @@ for m in "${PARAM_MARKERS[@]}"; do
       fail "un-parameterized residue marker in public-core: '$m'  ->  ${file}:${lineno}: ${content}"
       leaks=$((leaks + 1))
     fi
-  done < <(git grep -nF -- "$m" -- "${PARAM_PATHSPECS[@]}" 2>/dev/null)
+  done < <(pc_grep "$m" "${PARAM_PATHSPECS[@]}")
 done
 
 if [ "$leaks" -eq 0 ]; then
@@ -646,7 +645,7 @@ private_literal_rule index
 # ---------------------------------------------------------------------------
 if [ ! -f "$RESIDUE_ALLOWLIST" ]; then
   fail "residue allowlist not found: $RESIDUE_ALLOWLIST"
-elif residue_audit "$ROOT" "$RESIDUE_ALLOWLIST" git "${PC_SCAN_SPECS[@]}"; then
+elif PC_FILTERED="$FILTERED" residue_audit "$ROOT" "$RESIDUE_ALLOWLIST" git "${PC_SCAN_SPECS[@]}"; then
   pass "no un-allowlisted author-path residue in the public-core set"
 else
   fail "author-path residue gate failed (new/operational occurrence, unsupported class label, or stale allowlist entry)"
