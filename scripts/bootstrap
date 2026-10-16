@@ -34,8 +34,13 @@
 #   4. create only when absent: <home>/logs/, the TMPDIR named by the rendered
 #      settings (mode 1777), <home>/private-literals.txt (empty, mode 0600), the
 #      protected-runtime file of hooks/lib/runtime_guard/config.py (empty lists).
-#   5. git checkout: install hooks/git-hooks/pre-commit into the hooks directory
-#      (an existing foreign pre-commit is kept as pre-commit.local and chained).
+#   5. git checkout: install hooks/git-hooks/pre-commit into the hooks directory git
+#      uses, only when it is this repository's own: under its git common dir, or a
+#      core.hooksPath from its local (or worktree) config. An existing foreign
+#      pre-commit is kept as pre-commit.local and chained. A core.hooksPath from
+#      global, system or command-line config serves other repositories too: nothing
+#      is written there, the other steps still run, and init exits 1 printing how
+#      to give this repository its own hooks directory.
 #   6. make hooks/*.sh executable; verify both claude_home resolvers.
 #   7. run scripts/doctor; repeat any lines asking to move an entry into the overlay.
 #
@@ -374,14 +379,48 @@ then
 fi
 
 # ── 5. pre-commit hook ───────────────────────────────────────────────────────
-# The hooks dir honours core.hooksPath (e.g. the keystone dir). A foreign hook is
-# kept as pre-commit.local, which the installed hook execs last.
+# Only into this repository's own hooks dir: under its git common dir (the default,
+# or the keystone dir) or a core.hooksPath from its local/worktree config. A global,
+# system or command-line core.hooksPath can serve every repository on the machine,
+# whose commits this hook would refuse before chaining to the user's own hook; it is
+# left untouched and init fails after its other steps (R7b: the hook must be in
+# place before commits land). A foreign hook is kept as pre-commit.local, which the
+# installed hook execs last.
+HOOK_HELP=""
+_abs() { case "$1" in /*) printf '%s\n' "$1" ;; *) printf '%s\n' "$HOME_DIR/$1" ;; esac; }
 if [ "$IS_GIT" -eq 1 ]; then
   SRC_HOOK="$HOME_DIR/hooks/git-hooks/pre-commit"
   [ -f "$SRC_HOOK" ] || { echo "bootstrap: hooks/git-hooks/pre-commit is missing — cannot install the pre-commit hook." >&2; exit 1; }
   HOOKS_DIR="$(git -C "$HOME_DIR" rev-parse --git-path hooks)" \
+    && COMMON_DIR="$(git -C "$HOME_DIR" rev-parse --git-common-dir)" \
     || { echo "bootstrap: cannot locate the git hooks directory." >&2; exit 1; }
-  case "$HOOKS_DIR" in /*) ;; *) HOOKS_DIR="$HOME_DIR/$HOOKS_DIR" ;; esac
+  HOOKS_DIR="$(_abs "$HOOKS_DIR")"; COMMON_DIR="$(_rp "$(_abs "$COMMON_DIR")")"
+  _hp_scope=""; _hp_origin=""
+  if git -C "$HOME_DIR" config --get core.hooksPath >/dev/null 2>&1; then
+    # scope<TAB>origin<TAB>value of the effective (last) value; needs git >= 2.26.
+    _hp="$(git -C "$HOME_DIR" config --show-scope --show-origin --get core.hooksPath 2>/dev/null)" || _hp=""
+    _hp_scope="$(printf '%s\n' "$_hp" | cut -f1)"; _hp_origin="$(printf '%s\n' "$_hp" | cut -f2)"
+    _hp_scope="${_hp_scope:-unknown}"
+  fi
+  case "$(_rp "$HOOKS_DIR")/" in
+    "$COMMON_DIR"/*) _own=1 ;;
+    *) case "$_hp_scope" in local|worktree) _own=1 ;; *) _own=0 ;; esac ;;
+  esac
+fi
+if [ "$IS_GIT" -eq 1 ] && [ "$_own" -eq 0 ]; then
+  echo "bootstrap: pre-commit hook NOT installed — $HOOKS_DIR is not this repository's own hooks directory (what to do is printed at the end)." >&2
+  HOOK_HELP="$(cat <<EOF
+bootstrap: the pre-commit hook is NOT installed, so commits in this repository are not checked.
+  git runs its hooks from $HOOKS_DIR, set by core.hooksPath in the
+  ${_hp_scope:-unknown} git config (${_hp_origin:-origin unknown}). A hooks directory from global, system or
+  command-line config can serve every repository on this machine, so init wrote nothing there.
+  Give this repository its own hooks directory, then re-run scripts/bootstrap:
+    git -C $(printf '%q' "$HOME_DIR") config --local core.hooksPath $(printf '%q' "$COMMON_DIR/hooks")
+  Copy there first any hook of yours this repository should keep running; an existing
+  pre-commit is kept as pre-commit.local and runs after the harness checks.
+EOF
+)"
+elif [ "$IS_GIT" -eq 1 ]; then
   TARGET="$HOOKS_DIR/pre-commit"
   mkdir -p "$HOOKS_DIR" || exit 1
   if _exists "$TARGET" && ! cmp -s "$SRC_HOOK" "$TARGET" && ! grep -qxF "$HOOK_MARKER" "$TARGET" 2>/dev/null; then
@@ -445,10 +484,12 @@ if [ -n "$_MOVES" ]; then
   echo "bootstrap: entries to move into settings.machine.json:"
   printf '%s\n' "$_MOVES"
 fi
-if [ "$_drc" -ne 0 ]; then
-  echo "bootstrap: doctor reported failed required checks (see above)." >&2
-  exit 1
+[ "$_drc" -eq 0 ] || echo "bootstrap: doctor reported failed required checks (see above)." >&2
+if [ -n "$HOOK_HELP" ]; then
+  echo >&2
+  printf '%s\n' "$HOOK_HELP" >&2
 fi
+[ "$_drc" -eq 0 ] && [ -z "$HOOK_HELP" ] || exit 1
 
 echo
 _launch="claude"

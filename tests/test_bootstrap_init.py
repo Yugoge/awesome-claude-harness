@@ -6,9 +6,10 @@ so the scripts under test are the ones in the working tree. Nothing touches
 this repository or a real home:
 
 - HOME and CLAUDE_CONFIG_DIR point at temporary directories (the
-  protected-runtime file lands under the temporary HOME); CLAUDE_HOME,
-  CLAUDE_PROTECTED_RUNTIME_FILE and every GIT_* variable are dropped, and the
-  system git config is ignored;
+  protected-runtime file and the global git config land under the temporary
+  HOME); CLAUDE_HOME, CLAUDE_PROTECTED_RUNTIME_FILE, XDG_CONFIG_HOME and every
+  GIT_* variable are dropped, and the system git config is ignored (one case
+  points GIT_CONFIG_SYSTEM at a temporary file instead);
 - the clone's clean settings.json names a temporary TMPDIR, so the TMPDIR step
   creates a directory inside the test's own temporary tree;
 - <clone>/venv is a stub whose bin/python execs this interpreter, which already
@@ -59,7 +60,7 @@ class Home:
         env = {k: v for k, v in os.environ.items()
                if not k.startswith("GIT_") and k not in (
                    "CLAUDE_HOME", "CLAUDE_CONFIG_DIR", "CLAUDE_PROTECTED_RUNTIME_FILE",
-                   "PYTHONPATH")}
+                   "PYTHONPATH", "XDG_CONFIG_HOME")}
         env.update(HOME=str(home), CLAUDE_CONFIG_DIR=str(config), GIT_CONFIG_NOSYSTEM="1",
                    PYTHONDONTWRITEBYTECODE="1",
                    GIT_AUTHOR_NAME="bootstrap-test", GIT_AUTHOR_EMAIL="bootstrap-test@example.invalid",
@@ -133,7 +134,16 @@ class Home:
     def snapshot(self):
         paths = [self.overlay, self.literals, self.protected_runtime, self.clone / "settings.json",
                  self.clone / ".git" / "config", self.pre_commit, self.clone / "venv" / "bin" / "python"]
-        return {str(p): (p.read_bytes(), stat.S_IMODE(p.stat().st_mode)) for p in paths}
+        return {str(p): (p.read_bytes(), stat.S_IMODE(p.stat().st_mode)) if p.exists() else None
+                for p in paths}
+
+    def commit_readme(self):
+        """Commit one tracked change in the clone, through whatever hooks git runs."""
+        with (self.clone / "README.md").open("a", encoding="utf-8") as fh:
+            fh.write("\ntest line\n")
+        self.git("add", "README.md")
+        return self.git("-c", "commit.gpgsign=false", "commit", "-q", "-m", "test: hooked commit",
+                        check=False)
 
 
 @pytest.fixture
@@ -237,6 +247,125 @@ def test_foreign_pre_commit_is_kept_as_local_and_chained(home):
     assert local.read_text() == foreign
     assert sorted(p.name for p in home.pre_commit.parent.glob("pre-commit*")
                   if not p.name.endswith(".sample")) == ["pre-commit", "pre-commit.local"]
+
+
+def _own_hook(hooks_dir: Path, log: Path, name: str) -> str:
+    """A user's own pre-commit hook in hooks_dir that records each run in log."""
+    hooks_dir.mkdir(parents=True, exist_ok=True)
+    text = f"#!/bin/sh\necho {name} >> {shlex.quote(str(log))}\n"
+    hook = hooks_dir / "pre-commit"
+    hook.write_text(text)
+    hook.chmod(0o755)
+    return text
+
+
+def _tree(d: Path):
+    return {p.name: (p.read_bytes(), _mode(p)) for p in sorted(d.iterdir())}
+
+
+def _toy_commit(home, toy: Path):
+    """A commit in a repository that has nothing to do with the harness."""
+    if not toy.exists():
+        _run(["git", "init", "-q", str(toy)], home.env)
+    n = len(list(toy.glob("*.txt")))
+    (toy / f"f{n}.txt").write_text(f"{n}\n")
+    _run(["git", "-C", str(toy), "add", "-A"], home.env)
+    return _run(["git", "-C", str(toy), "-c", "commit.gpgsign=false", "commit", "-q",
+                 "-m", f"toy {n}"], home.env, check=False)
+
+
+def test_global_hooks_path_is_left_untouched_and_init_fails_until_the_repo_has_its_own(home):
+    shared, log = home.tmp / "home" / ".githooks", home.tmp / "own-hook.log"
+    own = _own_hook(shared, log, "own-hook")
+    _run(["git", "config", "--global", "core.hooksPath", str(shared)], home.env)
+    scope = home.git("config", "--show-scope", "--get", "core.hooksPath").stdout.split("\t")[0]
+    assert scope == "global", "the scratch HOME's global config names the hooks dir"
+    pinned = _tree(shared)
+    fix = f"git -C {home.h} config --local core.hooksPath {home.h}/.git/hooks"
+
+    runs = [home.bootstrap("--yes", "--no-doctor", check=False)]
+    pinned_home = home.snapshot()  # overlay, literals, runtime file, settings, git config
+    runs += [home.bootstrap("--yes", "--no-doctor", check=False) for _ in range(2)]
+    assert home.snapshot() == pinned_home, "a re-run changes nothing"
+    for run in runs:
+        assert run.returncode == 1, run.stdout + run.stderr
+        assert "SUCCESS" not in run.stdout
+        assert "pre-commit hook is NOT installed" in run.stderr
+        assert "global git config (file:" in run.stderr
+        assert fix in [line.strip() for line in run.stderr.splitlines()]
+        assert _tree(shared) == pinned, "nothing is written to the global hooks dir"
+    assert (runs[1].stdout, runs[1].stderr) == (runs[2].stdout, runs[2].stderr)
+    assert not home.pre_commit.exists()
+
+    # Every other step ran: overlay, filter, render, literal list, protected-runtime file.
+    assert json.loads(home.overlay.read_text(encoding="utf-8"))["modules"] == {"paseo": False}
+    assert home.git("config", "--local", "--get", "filter.claude-settings.required").stdout.strip() == "true"
+    assert home.settings()["env"]["CLAUDE_HOME"] == home.h
+    assert home.literals.exists() and home.protected_runtime.exists()
+
+    # An unrelated repository still runs the user's own hook, and its commit lands.
+    toy = home.tmp / "toy"
+    assert _toy_commit(home, toy).returncode == 0
+    assert log.read_text() == "own-hook\n"
+
+    # Follow the message: copy the own hook into the repository's hooks dir, run the
+    # printed command, re-run init. The harness hook is installed there and chains
+    # to the displaced own hook; the global hooks dir is still untouched.
+    shutil.copy2(shared / "pre-commit", home.pre_commit)
+    _run(shlex.split(fix), home.env)
+    done = home.bootstrap("--yes", "--no-doctor")
+    assert done.stdout.rstrip().splitlines()[-1].startswith("bootstrap: SUCCESS")
+    assert home.pre_commit.read_bytes() == home.hook_src.read_bytes()
+    assert home.pre_commit.with_name("pre-commit.local").read_text() == own
+    assert _tree(shared) == pinned
+    log.unlink()
+    committed = home.commit_readme()
+    assert committed.returncode == 0, committed.stderr
+    assert log.read_text() == "own-hook\n", "the harness hook chained to pre-commit.local"
+    assert _toy_commit(home, toy).returncode == 0
+    assert log.read_text() == "own-hook\nown-hook\n"
+
+
+@pytest.mark.parametrize("scope", ["system", "command"])
+def test_system_or_command_line_hooks_path_is_refused(home, scope):
+    shared = home.tmp / "shared-hooks"
+    shared.mkdir()
+    if scope == "system":  # a temporary system config file, written directly
+        system = home.tmp / "system-gitconfig"
+        system.write_text(f"[core]\n\thooksPath = {shared}\n")
+        del home.env["GIT_CONFIG_NOSYSTEM"]
+        home.env["GIT_CONFIG_SYSTEM"] = str(system)
+    else:
+        home.env.update(GIT_CONFIG_COUNT="1", GIT_CONFIG_KEY_0="core.hooksPath",
+                        GIT_CONFIG_VALUE_0=str(shared))
+    result = home.bootstrap("--yes", "--no-doctor", check=False)
+    assert result.returncode == 1 and f"{scope} git config (" in result.stderr
+    assert list(shared.iterdir()) == [] and not home.pre_commit.exists()
+
+
+def test_local_hooks_path_is_used_and_a_foreign_hook_there_is_chained(home):
+    # A global hooks path is set too: the repository's local one wins, and the
+    # global dir is never touched.
+    shared, log = home.tmp / "home" / ".githooks", home.tmp / "hooks.log"
+    _own_hook(shared, log, "global-hook")
+    _run(["git", "config", "--global", "core.hooksPath", str(shared)], home.env)
+    pinned = _tree(shared)
+    repo_hooks = home.tmp / "repo-hooks"  # outside the git common dir
+    foreign = _own_hook(repo_hooks, log, "foreign-hook")
+    home.git("config", "--local", "core.hooksPath", str(repo_hooks))
+
+    runs = [home.bootstrap("--yes", "--no-doctor") for _ in range(3)]
+    assert "kept the existing pre-commit hook as pre-commit.local" in runs[0].stdout
+    assert runs[1].stdout == runs[2].stdout
+    assert f"pre-commit hook up to date ({repo_hooks}/pre-commit)" in runs[2].stdout
+    assert (repo_hooks / "pre-commit").read_bytes() == home.hook_src.read_bytes()
+    assert (repo_hooks / "pre-commit.local").read_text() == foreign
+    assert sorted(p.name for p in repo_hooks.iterdir()) == ["pre-commit", "pre-commit.local"]
+    assert not home.pre_commit.exists() and _tree(shared) == pinned
+
+    committed = home.commit_readme()
+    assert committed.returncode == 0, committed.stderr
+    assert log.read_text() == "foreign-hook\n"
 
 
 def test_bad_arguments_are_refused_before_any_change(home):
