@@ -277,7 +277,7 @@ fi
 # Before any /do or /allow bypass, for all callers; no verdict = deny. The bash gate drops quotes/backslashes
 # (`co''mmit`, `g\it`) and runs the Python only for a git word plus commit/config. The Python tokenises (echo/printf
 # stay data) and denies: (1) a commit skipping hooks (--no-verify..--no-ver; -n in a short cluster; a core.hooksPath/
-# include/GIT_CONFIG_* override; a `-c alias.X=` whose value, `!`-shell alias too, commits with -n/--no-verify); (2) a
+# include/GIT_CONFIG_* override; a `-c alias.X=` call whose expansion (value + args, `!`-shell too) does so); (2) a
 # git config WRITE (flags or set/unset/*-section verbs) to core.hooksPath, alias.* or filter.claude-settings.*, reads
 # (--get*/--list, one-arg form) allowed; (3) a commit whose repo (cwd, cd, -C, --git-dir/--work-tree, or a
 # GIT_DIR/GIT_WORK_TREE prefix or export) has the settings filter unregistered and settings.json changed vs HEAD.
@@ -334,7 +334,7 @@ def one(t, depth):
     for k2, w in enumerate(gr):
         kv = w[2:] if (w.startswith('-c') and len(w) > 2 and w[2] != 'C') else (gr[k2 + 1] if w in ('-c', '--config-env') and k2 + 1 < len(gr) else (w[13:] if w.startswith('--config-env=') else None))
         if kv and kv.strip('\'"').lower().startswith('alias.'): al[kv.strip('\'"').lower().split('=', 1)[0][6:]] = kv.split('=', 1)[1] if '=' in kv else ''
-    if sub in al: v = al[sub].strip(); scan(v[1:] if v.startswith('!') else 'git ' + v, depth + 1)  # expand the invoked alias
+    if sub in al: v = al[sub].strip(); scan((v[1:] if v[:1] == '!' else shlex.join(t[:len(t) - len(rest) - 1]) + ' ' + v) + ' ' + shlex.join(rest), depth + 1)  # as git: alias word -> value
     if sub != 'commit': return
     commits.append(('-C', base, *(o + '=' + at(base, ev[k]) for o, k in GV.items() if ev.get(k)))); skip = False
     for a in rest:

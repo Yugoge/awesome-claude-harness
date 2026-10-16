@@ -69,6 +69,18 @@ BYPASS_CASES = [
     "gi\\t commit --no-verify",
     "git -c alias.ci='commit --no-verify' ci -m x",
     "git -c alias.p='!git commit -n' p",
+    # review round 2, R1: git expands an alias together with the arguments that
+    # follow its name, so the skip may come after the alias word (also quoted,
+    # in a chain of aliases, or inside a `!`-shell alias that defines one).
+    "git -c alias.ci=commit ci -n -m x",
+    "git -c alias.ci=commit ci --no-verify -m x",
+    "git -c \"alias.ci=!git commit\" ci -n -m x",
+    "g''it -c 'alias.ci=commit' ci '--no-verify' -m x",
+    "git -c alias.ci=co''mmit ci -anm x",
+    "git -calias.ci=commit ci --no-veri -m x",
+    "git -c \"alias.ci=!g''it commit\" ci -n -m x",
+    "git -c alias.a=ci -c alias.ci=commit a -n -m x",
+    "git -c \"alias.p=!git -c alias.ci=commit ci\" p -n -m x",
 ]
 
 # item 4: git config WRITES to a keystone key (core.hooksPath / alias.* /
@@ -109,6 +121,14 @@ ALLOWED_CASES = [
     "git log --grep commit",
     "echo commit",
     "echo 'a config change'",
+    # R1 controls: an alias plus arguments that skip nothing, an alias whose
+    # value is not commit, and an alias loop (git refuses it) ending at the
+    # guard's recursion limit.
+    "git -c alias.ci=commit ci -m x",
+    "git -c alias.ci=commit ci -m '-n' --author acct-test-123",
+    "git -c \"alias.ci=!git commit\" ci -m x",
+    "git -c alias.l=log l -n 3",
+    "git -c alias.ci=ci ci -n -m x",
 ]
 
 
