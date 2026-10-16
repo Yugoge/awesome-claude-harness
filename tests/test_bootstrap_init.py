@@ -2,8 +2,12 @@
 
 Every case runs in its own temporary clone of this repository, synced to the
 working tree (tracked and untracked-but-not-ignored files) and committed there,
-so the scripts under test are the ones in the working tree. Nothing touches
-this repository or a real home:
+so the scripts under test are the ones in the working tree. Two exceptions keep
+the result the same on a fresh clone, on CI and on a home that has run init:
+a file git filters (settings.json) comes from the index, its tracked clean form,
+because init leaves its working copy in the machine form; and the untracked
+files init creates (OWNER_FILES) are never copied, whatever the ignore rules.
+Nothing touches this repository or a real home:
 
 - HOME and CLAUDE_CONFIG_DIR point at temporary directories (the
   protected-runtime file and the global git config land under the temporary
@@ -35,6 +39,10 @@ import yaml  # noqa: F401
 REPO = Path(__file__).resolve().parent.parent
 HOOK_MARKER = "# claude-harness pre-commit (installed by scripts/bootstrap)"
 QUESTION = 'Enable module "paseo"?'
+# What init creates in a harness home beside the machine form of settings.json; the
+# record of what render applied lives in the git dir, which a clone never copies.
+OWNER_FILES = ("settings.machine.json", "private-literals.txt", "venv", "logs")
+RECORD = "claude-settings.applied"
 
 
 def _canonical(obj):
@@ -72,9 +80,29 @@ class Home:
 
         clone = tmp / "harness"
         _run(["git", "clone", "-q", "--no-hardlinks", str(REPO), str(clone)], env)
-        listed = _run(["git", "-C", str(REPO), "ls-files", "-z", "--cached", "--others",
-                       "--exclude-standard"], env).stdout
-        for rel in sorted({p for p in listed.split("\0") if p}):
+        git = ["git", "-C", str(REPO)]
+        index = {}  # tracked path -> (mode, blob id), as staged in this repository
+        for entry in _run([*git, "ls-files", "-z", "--stage"], env).stdout.split("\0"):
+            if entry:
+                meta, rel = entry.split("\t", 1)
+                index[rel] = tuple(meta.split()[:2])
+        attrs = _run([*git, "check-attr", "-z", "--stdin", "filter"], env,
+                     stdin="".join(p + "\0" for p in index)).stdout.split("\0")
+        filtered = {attrs[i] for i in range(0, len(attrs) - 2, 3)
+                    if attrs[i + 2] not in ("unspecified", "unset")
+                    and index[attrs[i]][0] in ("100644", "100755")}
+        others = _run([*git, "ls-files", "-z", "--others", "--exclude-standard"], env).stdout
+        listed = set(index) | {p for p in others.split("\0")
+                               if p and p.split("/", 1)[0] not in OWNER_FILES}
+        for rel in sorted(filtered):  # never the working copy: it can be the machine form
+            mode, oid, dst = *index[rel], clone / rel
+            if os.path.lexists(dst):
+                dst.unlink()
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            dst.write_bytes(subprocess.run([*git, "cat-file", "blob", oid], capture_output=True,
+                                           env=env, timeout=300, check=True).stdout)
+            dst.chmod(0o755 if mode == "100755" else 0o644)
+        for rel in sorted(listed - filtered):
             src, dst = REPO / rel, clone / rel
             if not os.path.lexists(src):  # deleted in the working tree
                 if os.path.lexists(dst):
@@ -91,6 +119,9 @@ class Home:
                 os.symlink(os.readlink(src), dst)
             else:
                 shutil.copy2(src, dst)
+        assert "settings.json" in filtered, "settings.json comes from its tracked clean form"
+        assert not [p for p in (*OWNER_FILES, f".git/{RECORD}") if os.path.lexists(clone / p)], \
+            "a test clone never carries what init created in this repository"
         settings = json.loads((clone / "settings.json").read_text(encoding="utf-8"))
         assert "TMPDIR" in settings.get("env", {}), "the clean form names a TMPDIR"
         for key in ("TMPDIR", "CLAUDE_CODE_TMPDIR"):
