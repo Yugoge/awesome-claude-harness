@@ -81,6 +81,21 @@ BYPASS_CASES = [
     "git -c \"alias.ci=!g''it commit\" ci -n -m x",
     "git -c alias.a=ci -c alias.ci=commit a -n -m x",
     "git -c \"alias.p=!git -c alias.ci=commit ci\" p -n -m x",
+    # review round 2 (R1 follow-up), three forms the first R1 fix still let
+    # through: (a) git matches an alias name case-insensitively, so a skip hides
+    # behind a letter-case difference from the definition; (b) git passes the
+    # invocation's own `-c` settings to a `!`-shell alias's child git (via the
+    # environment), so that child's own alias resolves to a skipping commit; (c)
+    # an alias/-c chain deeper than the guard's expansion limit fails closed
+    # rather than being allowed -- including a non-terminating (mutually
+    # recursive) one, which git itself refuses, once its text reaches the guard.
+    "git -c alias.ci=commit CI -n -m x",
+    "git -c alias.CI=commit ci -n -m x",
+    "git -c alias.ci=commit -c \"alias.p=!git ci -n\" p -m x",
+    "git -c alias.co=commit -c \"alias.s=!git co --no-verify\" s -m x",
+    "git -c alias.a=b -c alias.b=c -c alias.c=d -c alias.d=commit a -n -m x",
+    "git -c alias.a=b -c alias.b=c -c alias.c=d -c alias.d=e -c alias.e=commit a -n -m x",
+    "git -c alias.a=b -c alias.b=a -c alias.x=commit a -n -m x",
     # the one-off include override on a commit (its persistent write is R2 below)
     "git -c include.path=inc.cfg commit -m x",
     "git -c 'includeIf.gitdir:/srv/repo/.path=inc.cfg' commit -m x",
@@ -181,13 +196,23 @@ ALLOWED_CASES = [
     "git log --grep commit",
     "echo commit",
     "echo 'a config change'",
-    # R1 controls: an alias plus arguments that skip nothing, an alias whose
-    # value is not commit, and an alias loop (git refuses it) ending at the
-    # guard's recursion limit.
+    # R1 controls: an alias plus arguments that skip nothing, and an alias whose
+    # value is not commit.
     "git -c alias.ci=commit ci -m x",
     "git -c alias.ci=commit ci -m '-n' --author acct-test-123",
     "git -c \"alias.ci=!git commit\" ci -m x",
     "git -c alias.l=log l -n 3",
+    # R1 follow-up controls (the forms above, each WITHOUT a skip): a different
+    # letter case, a `!`-shell alias whose child git commits normally, and an
+    # alias chain that stays within the expansion limit (four deep).
+    "git -c alias.ci=commit CI -m x",
+    "git -c alias.CI=commit ci -m x",
+    "git -c alias.ci=commit -c \"alias.p=!git ci\" p -m x",
+    "git -c \"alias.st=!git status\" st",
+    "git -c alias.a=b -c alias.b=c -c alias.c=d -c alias.d=commit a -m x",
+    # a self-referential alias whose text names no commit/config token: git
+    # refuses the loop (fatal recursive-alias) so it never commits, and the bash
+    # pre-filter never reaches the Python guard, so it stays allowed.
     "git -c alias.ci=ci ci -n -m x",
     # R2 controls: reads of the include keys, and writes to keys that only
     # mention include elsewhere (another section, a longer name, the value).

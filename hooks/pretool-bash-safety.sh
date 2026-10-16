@@ -276,9 +276,11 @@ fi
 # ── Commit guard (R7b): commit-hook-bypass + config-keystone-write + unregistered-settings-filter ──
 # Before any /do or /allow bypass, for all callers; no verdict = deny. The bash gate drops quotes/backslashes
 # (`co''mmit`, `g\it`) and runs the Python only for a git word plus commit/config. The Python tokenises (echo/printf
-# and a $( or ` the shell leaves unrun, in '..' or \-escaped, stay data) and denies: (1) a commit skipping hooks (--no-verify..--no-ver; -n in a short cluster; a core.hooksPath/
-# include/GIT_CONFIG_* override; a `-c alias.X=` call whose expansion (value + args, `!`-shell too) does so); (2) a
-# git config WRITE (option/verb form, any case) to core.hooksPath, alias.*, filter.claude-settings.*, include,
+# and a $( or ` the shell leaves unrun, in '..' or \-escaped, stay data) and denies: (1) a commit skipping hooks
+# (--no-verify..--no-ver; -n in a short cluster; a core.hooksPath/include/GIT_CONFIG_* override; a `-c alias.X=`
+# call whose expansion skips them: name matched case-insensitively as git does, value + args appended, a `!`-shell
+# alias's child git inheriting the outer -c too; an alias/-c chain overrunning the expansion limit fails closed);
+# (2) a git config WRITE (option/verb form, any case) to core.hooksPath, alias.*, filter.claude-settings.*, include,
 # include.path or includeIf.*.path, reads (--get*/--list/one-arg) allowed; (3) a commit whose repo (cwd, cd, -C,
 # --git-dir/--work-tree, GIT_DIR/GIT_WORK_TREE prefix/export) has settings.json changed vs HEAD, filter unregistered.
 _CG_STRIP="${COMMAND//[\'\"\\]/}"; _CG_GITRE='(^|[^[:alnum:]_])git'
@@ -305,24 +307,24 @@ def defuse(t, i=0, st='', o=''):  # t with each $( and ` the shell leaves unrun 
         m = (DQ if st[-1:] == '"' else UQ).match(t, i); k, s, i = m.lastgroup, m.group(), m.end(); o += s.translate({36: '_', 96: ')'}) if k in ('e', 's') else s
         st = st + '!' if k == 'x' and (s != '${' or st) or k == 'c' and st[-1:] != ')' else st[:-1] if k == 'c' or k == 'd' and st[-1:] == '"' else st + {'o': ')', 'd': '"'}.get(k, '')
     return t if st else o
-def scan(text, depth=0, lg=False):  # lg: text is a word whose quotes are gone, so (fail-closed) every $( and ` in it counts
+def scan(text, depth=0, lg=False, gc=()):  # lg: quotes gone, so every $( and ` counts; gc: -c globals a `!`-shell alias's child git inherits
     for sep, grp in itertools.groupby(zip(w := words(t := _process_heredocs(text)), w if lg else words(defuse(t))) if depth < 5 else [], lambda p: p[0] != '' and set(p[0]) <= set(';&|()`')):
-        if not sep: one(*map(list, zip(*grp)), depth, lg)
-def one(t, u, depth, lg):  # u: t's words with unrun $( and ` made inert; recurse only into a word whose $( or ` the shell runs
+        if not sep: one(*map(list, zip(*grp)), depth, lg, gc)
+def one(t, u, depth, lg, gc):  # u: t's words with unrun $( and ` made inert; recurse only into a word whose $( or ` the shell runs
     for w, v in zip(t, u):
         if '$(' in v or '`' in v: scan(w, depth + 1, True)
         if (a := re.match(r'[A-Za-z_]\w*=', w)) and og._GIT_HOOK_SUPPRESS_RE.search(a.group(0)): why.append(a.group(0) + '... assignment')
     if (i := _command_token_index(t)) is None: return
-    if ' ' in t[i]: return scan(' '.join(t[i:]), depth + 1, lg)
+    if ' ' in t[i]: return scan(' '.join(t[i:]), depth + 1, lg, gc)
     b, c = os.path.basename(t[i]), [j for j in range(i + 1, len(t) - 1) if re.match(r'-[^-]*c', t[j])]
-    if b in ('bash', 'sh', 'zsh', 'dash', 'ksh') and c: scan(t[c[0] + 1], depth + 1, lg)
+    if b in ('bash', 'sh', 'zsh', 'dash', 'ksh') and c: scan(t[c[0] + 1], depth + 1, lg, gc)
     if b in ('cd', 'pushd'): cur[0] = at(cur[0], ([a for a in t[i + 1:] if a[:1] != '-'] or ['~'])[0]); dirs.append(cur[0])
     if b != 'git': return ex.update(a.split('=', 1) for a in t[i + 1:] if '=' in a) if b == 'export' else None
     g = t[i + 1:]; sub, rest = _git_subcommand(g); base = cur[0]; ev = {**ex, **dict(a.split('=', 1) for a in t[:i] if '=' in a)}
     for j, w in enumerate(g[:len(g) - len(rest)]):  # -C moves base; --git-dir/--work-tree override GIT_DIR/GIT_WORK_TREE
         if w == '-C' and j + 1 < len(g): base = at(base, g[j + 1]); dirs.append(base)
         if w.split('=')[0] in GV: ev[GV[w.split('=')[0]]] = w.split('=', 1)[1] if '=' in w else ''.join(g[j + 1:j + 2])
-    if og._git_invocation_injects_keystone_config(g): why.append('a core.hooksPath/include config override')
+    if og._git_invocation_injects_keystone_config([*gc, *g]): why.append('a core.hooksPath/include config override')
     if sub == 'config':  # deny a config WRITE to a keystone key; leave reads alone
         pos = [a for a in rest if not a.startswith('-')]; tgt = ''
         if any(o in WRF for o in rest): wr, tgt = True, (pos or [''])[0]
@@ -330,11 +332,9 @@ def one(t, u, depth, lg):  # u: t's words with unrun $( and ` made inert; recurs
         elif pos and pos[0] in CFGW: wr, tgt = True, (pos[1:2] or [''])[0]
         else: wr, tgt = len(pos) >= 2, (pos or [''])[0]
         return cfg.append(tgt) if wr and prot(tgt) else None
-    gr = g[:len(g) - len(rest) - 1] if sub else []; al = {}  # `-c alias.X=VALUE` overrides in the global region
-    for k2, w in enumerate(gr):
-        kv = w[2:] if (w.startswith('-c') and len(w) > 2 and w[2] != 'C') else (gr[k2 + 1] if w in ('-c', '--config-env') and k2 + 1 < len(gr) else (w[13:] if w.startswith('--config-env=') else None))
-        if kv and kv.strip('\'"').lower().startswith('alias.'): al[kv.strip('\'"').lower().split('=', 1)[0][6:]] = kv.split('=', 1)[1] if '=' in kv else ''
-    if sub in al: v = al[sub].strip(); scan((v[1:] if v[:1] == '!' else shlex.join(t[:len(t) - len(rest) - 1]) + ' ' + v) + ' ' + shlex.join(rest), depth + 1)  # as git: alias word -> value
+    gr = [*gc, *(g[:len(g) - len(rest) - 1] if sub else [])]  # `-c alias.X=` overrides: inherited (a `!`-alias's outer -c) then this invocation's own
+    al = {kv.strip('\'"').lower().split('=', 1)[0][6:]: (kv.split('=', 1)[1] if '=' in kv else '') for k2, w in enumerate(gr) if (kv := (w[2:] if (w.startswith('-c') and len(w) > 2 and w[2] != 'C') else (gr[k2 + 1] if w in ('-c', '--config-env') and k2 + 1 < len(gr) else (w[13:] if w.startswith('--config-env=') else None)))) and kv.strip('\'"').lower().startswith('alias.')}
+    if sub and sub.lower() in al: v = al[sub.lower()].strip(); (why.append('an alias chain past the expansion limit'), commits.append(('-C', base))) if depth >= 4 else scan((v[1:] if v[:1] == '!' else shlex.join(t[:len(t) - len(rest) - 1]) + ' ' + v) + ' ' + shlex.join(rest), depth + 1, gc=gr if v[:1] == '!' else gc)  # git: name case-insensitive; alias word -> value; a `!`-alias's child git inherits -c (gr); a chain past the depth limit fails closed
     if sub != 'commit': return
     commits.append(('-C', base, *(o + '=' + at(base, ev[k]) for o, k in GV.items() if ev.get(k)))); skip = False
     for a in rest:
