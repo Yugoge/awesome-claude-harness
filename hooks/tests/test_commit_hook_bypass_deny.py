@@ -59,6 +59,32 @@ BYPASS_CASES = [
     "GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.hooksPath GIT_CONFIG_VALUE_0=/dev/null git commit -m x",
     "git add -A && /usr/bin/git commit -C HEAD -n",
     "bash -c 'git commit -n -m x'",
+    # item 4 (review R7b): quoting/escaping inside `commit` or `git`, and a
+    # `-c alias.*` whose value — normal or a `!`-shell alias — commits with a skip.
+    "git co''mmit -n -m x",
+    "git comm\\it -n -m x",
+    "g''it commit -n -m x",
+    "gi\\t commit --no-verify",
+    "git -c alias.ci='commit --no-verify' ci -m x",
+    "git -c alias.p='!git commit -n' p",
+]
+
+# item 4: git config WRITES to a keystone key (core.hooksPath / alias.* /
+# filter.claude-settings.*), in both the classic-option and the newer-subcommand
+# syntax, are denied for every caller.
+CONFIG_WRITE_CASES = [
+    "git config alias.ci 'commit --no-verify'",
+    "git config core.hooksPath /dev/null",
+    "git config --unset filter.claude-settings.clean",
+    "git config --add alias.ci 'commit -n'",
+    "git config --replace-all core.hooksPath /dev/null",
+    "git config --unset-all filter.claude-settings.smudge",
+    "git config --remove-section alias",
+    "git config --rename-section alias myalias",
+    "git config set core.hooksPath x",
+    "git config unset filter.claude-settings.required",
+    "git config remove-section alias",
+    "g''it config core.hooksPath x",
 ]
 
 ALLOWED_CASES = [
@@ -68,6 +94,19 @@ ALLOWED_CASES = [
     "git commit -m -n",
     "git commit -mn",
     "printf '%s\\n' \"x; git commit -n\"",
+    # item 4: config reads, a non-keystone write, the one-argument read form, and
+    # commands whose text merely mentions commit/config are not a bypass.
+    "git config --get core.hooksPath",
+    "git config --get-all alias.ci",
+    "git config --list",
+    "git config core.hooksPath",
+    "git config get core.hooksPath",
+    "git config list",
+    "git config alias.ci",
+    "git config user.name acct-test-123",
+    "git log --grep commit",
+    "echo commit",
+    "echo 'a config change'",
 ]
 
 
@@ -153,6 +192,16 @@ def test_quoted_text_and_message_values_are_not_a_bypass(sandbox, caller, comman
     assert_allowed(run_hook(sandbox, command, repo, caller))
 
 
+# ---------------- config-keystone-write ----------------
+
+@pytest.mark.parametrize("caller", sorted(CALLERS))
+@pytest.mark.parametrize("command", CONFIG_WRITE_CASES)
+def test_config_keystone_write_is_blocked(sandbox, caller, command):
+    tmp_path, env = sandbox
+    repo = make_repo(env, tmp_path / "plain" / "repo", declare_filter=False)
+    assert_blocked(run_hook(sandbox, command, repo, caller), "config-keystone-write", command)
+
+
 # ---------------- unregistered-settings-filter ----------------
 
 def _modify_work_tree(env, repo):
@@ -229,6 +278,8 @@ def test_do_consent_does_not_bypass(sandbox, filtered_repo, caller):
     assert_allowed(run_hook(sandbox, CONTROL[caller], plain, caller))  # consent is live
     command = "git commit --no-verify -m x"
     assert_blocked(run_hook(sandbox, command, plain, caller), "commit-hook-bypass", command)
+    cw = "git config core.hooksPath /dev/null"
+    assert_blocked(run_hook(sandbox, cw, plain, caller), "config-keystone-write", cw)
     _modify_work_tree(env, filtered_repo)
     assert_blocked(run_hook(sandbox, "git commit -m x", filtered_repo, caller),
                    "unregistered-settings-filter", "git commit -m x")
@@ -252,6 +303,9 @@ def test_allow_grant_does_not_bypass(sandbox, filtered_repo, caller):
     grant("commit")
     command = "git commit -n -m x"
     assert_blocked(run_hook(sandbox, command, plain, caller), "commit-hook-bypass", command)
+    grant("config")
+    cw = "git config --unset filter.claude-settings.clean"
+    assert_blocked(run_hook(sandbox, cw, plain, caller), "config-keystone-write", cw)
     _modify_work_tree(env, filtered_repo)
     assert_blocked(run_hook(sandbox, "git commit -m x", filtered_repo, caller),
                    "unregistered-settings-filter", "git commit -m x")

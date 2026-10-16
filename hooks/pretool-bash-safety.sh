@@ -67,24 +67,13 @@ ARTIFACT_NS_CAPTURE_RE="(^|[[:space:];|&(])[A-Za-z_][A-Za-z0-9_]*=['\"]?"
 ARTIFACT_VAR_WRITE_RE="(>>?[&|]?[[:space:]]*['\"]?\\\$\{?[A-Za-z_]|${ARTIFACT_WRITE_VERB_RE}.*\\\$\{?[A-Za-z_])"
 
 # ── Local service-integration knobs (environment-configured) ─────────────────
-# The rules that protect local containers, units and scripts take every name from the
-# environment (normally the untracked settings overlay's env). Built-in defaults are empty or
-# generic: with nothing configured those rules are inert or generic, and an empty value never
-# matches every command. Inventory by stable rule label (line numbers drift):
-#   CLAUDE_DEV_CONTAINERS (""): containers the "docker process-family guard" lets Claude
-#     stop/restart/rm/kill; empty = no dev container is whitelisted.
-#   CLAUDE_DEV_SYSTEMD (""): units the "systemctl production-target guard" allows.
-#   CLAUDE_DAEMON_RESTART_GRANT_HELPER (""): grant helper named in the daemon-restart stderr
-#     guidance only (Layer 1.A hint, 1.B/1.E reasons); the sentinel dir is DAEMON_RESTART_GRANT_DIR.
-#   CLAUDE_PROTECTED_DAEMON_PREFIX / _TARGETS (""): unit prefix plus '|'-separated target
-#     suffixes for "daemon-restart-prohibition" (1.A), "daemon-restart-wrapper" (1.B) and the
-#     systemctl guard's exclusion; empty prefix = those layers are inert. The target suffix also
-#     keys the grant sentinel (claude-allow-daemon-restart-<target>.flag), so a configured
-#     prefix needs a matching grant helper or the gate is protective but un-grantable.
-#   CLAUDE_PROTECTED_PROCESS_FAMILY (""): name word of the "docker process-family guard" (empty
-#     = inert) and an extra target of the killall/pkill guard, which always protects claude|docker.
-#   CLAUDE_HARD_BANNED_SCRIPTS ("session-recovery|restart-all-sessions"): '|'-separated EREs of
-#     the "hard-banned scripts" rule; the "session-dirs ban" stays literal.
+# Rules protecting local containers, units and scripts read their names from the environment (normally the
+# untracked settings overlay's env); defaults are empty/generic, so an unconfigured rule is inert and an
+# empty value never matches every command. Knobs (detail at each variable definition below):
+# CLAUDE_DEV_CONTAINERS, CLAUDE_DEV_SYSTEMD, CLAUDE_DAEMON_RESTART_GRANT_HELPER (sentinel dir
+# DAEMON_RESTART_GRANT_DIR), CLAUDE_PROTECTED_DAEMON_PREFIX / _TARGETS (target suffix keys the grant
+# sentinel), CLAUDE_PROTECTED_PROCESS_FAMILY, and the "hard-banned scripts" rule's '|'-separated EREs
+# CLAUDE_HARD_BANNED_SCRIPTS ("session-recovery|restart-all-sessions"); the "session-dirs ban" stays literal.
 # ─────────────────────────────────────────────────────────────────────────────
 
 # IS_SUBAGENT: set once here at the top of the script (after PYTHON_BIN resolution).
@@ -284,13 +273,16 @@ else
 fi
 # ─────────────────────────────────────────────────────────────────────────────
 
-# ── Commit guard: commit-hook-bypass + unregistered-settings-filter (R7b) ────
-# Before any /do or /allow bypass, for all callers: deny a git commit that (1) skips hooks (--no-verify
-# down to --no-ver; -n in a short-option cluster before an argument-taking letter; core.hooksPath,
-# include or GIT_CONFIG_* overrides as the imported pretool-overnight-hook-guard.py flags them) or (2)
-# runs in a repo (cwd, -C, cd) with the claude-settings filter unregistered and settings.json changed vs
-# HEAD (index or work tree). Quote-aware: echo/printf bodies and `-m "-n"` stay data. No verdict = deny.
-if [[ "$COMMAND" == *git* && "$COMMAND" == *commit* ]]; then
+# ── Commit guard (R7b): commit-hook-bypass + config-keystone-write + unregistered-settings-filter ──
+# Before any /do or /allow bypass, for all callers; no verdict = deny. The bash gate drops quotes/backslashes
+# (so `co''mmit`/`g\it` are seen) and runs the Python only for a git-word command naming commit or config.
+# The Python unquotes/tokenises and denies: (1) a commit skipping hooks (--no-verify..--no-ver; -n in a short
+# cluster; a core.hooksPath/include/GIT_CONFIG_* override; a `-c alias.X=` whose value — incl. a `!`-shell alias
+# — commits with -n/--no-verify); (2) a git config WRITE (classic flags or set/unset/*-section subcommands) to
+# core.hooksPath, alias.* or filter.claude-settings.*, reads (--get*/--list, one-arg form) allowed; (3) a repo
+# (cwd/-C/cd) whose settings filter is unregistered with settings.json changed vs HEAD. echo/printf stay data.
+_CG_STRIP="${COMMAND//[\'\"\\]/}"; _CG_GITRE='(^|[^[:alnum:]_])git'
+if [[ ( "$_CG_STRIP" == *commit* || "$_CG_STRIP" == *config* ) && "$_CG_STRIP" =~ $_CG_GITRE ]]; then
   _CG=$(CG_INPUT="$INPUT" "$PYTHON_BIN" - "$CLAUDE_HOME/hooks" 2>/dev/null <<'PYEOF'
 import importlib.util as iu, itertools, json, os, re, shlex, subprocess as sp, sys
 H = sys.argv[1]; sys.path.insert(0, H)
@@ -298,8 +290,11 @@ from lib.bash_context_strip import _process_heredocs
 from lib.git_command_classifier import _command_token_index, _git_subcommand
 s = iu.spec_from_file_location('_overnight_guard', H + '/pretool-overnight-hook-guard.py')
 og = iu.module_from_spec(s); s.loader.exec_module(og)
-d = json.loads(os.environ['CG_INPUT']); cur = [d.get('cwd') or os.getcwd()]; dirs = cur[:]; commits, why = [], []
+d = json.loads(os.environ['CG_INPUT']); cur = [d.get('cwd') or os.getcwd()]; dirs = cur[:]; commits, why, cfg = [], [], []
 LONGV = ('message', 'file', 'reuse-message', 'reedit-message', 'template', 'author', 'date', 'trailer')
+CFGW = {'set', 'unset', 'unset-all', 'replace-all', 'add', 'rename-section', 'remove-section'}  # config write verbs
+CFGR = {'get', 'get-all', 'get-regexp', 'get-urlmatch', 'list'}; WRF = {'--unset', '--unset-all', '--add', '--replace-all', '--rename-section', '--remove-section'}; RDF = {'--get', '--get-all', '--get-regexp', '--get-urlmatch', '--get-color', '--get-colorbool', '--list', '-l'}
+def prot(k): k = k.strip().strip('\'"').lower(); return k in ('core.hookspath', 'core', 'alias', 'filter', 'filter.claude-settings') or k.startswith('alias.') or k.startswith('filter.claude-settings.')
 def at(base, p): return os.path.join(base, os.path.expanduser(os.path.expandvars(p)))
 def words(t):  # shell words; separators, comments and newlines kept as the shell sees them
     t = re.sub(r'&>', '>', re.sub(r'([<>])&', r'\1 ', re.sub(r'(?<=[^\s;&|()`])#', '_', t.replace('\\\n', ''))))
@@ -327,6 +322,18 @@ def one(t, depth):
     for j, w in enumerate(g[:len(g) - len(rest)]):
         if w == '-C' and j + 1 < len(g): base = at(base, g[j + 1]); dirs.append(base)
     if og._git_invocation_injects_keystone_config(g): why.append('a core.hooksPath/include config override')
+    if sub == 'config':  # deny a config WRITE to a keystone key; leave reads alone
+        pos = [a for a in rest if not a.startswith('-')]; tgt = ''
+        if any(o in WRF for o in rest): wr, tgt = True, (pos or [''])[0]
+        elif any(o in RDF for o in rest) or (pos and pos[0] in CFGR): wr = False
+        elif pos and pos[0] in CFGW: wr, tgt = True, (pos[1:2] or [''])[0]
+        else: wr, tgt = len(pos) >= 2, (pos or [''])[0]
+        return cfg.append(tgt) if wr and prot(tgt) else None
+    gr = g[:len(g) - len(rest) - 1] if sub else []; al = {}  # `-c alias.X=VALUE` overrides in the global region
+    for k2, w in enumerate(gr):
+        kv = w[2:] if (w.startswith('-c') and len(w) > 2 and w[2] != 'C') else (gr[k2 + 1] if w in ('-c', '--config-env') and k2 + 1 < len(gr) else (w[13:] if w.startswith('--config-env=') else None))
+        if kv and kv.strip('\'"').lower().startswith('alias.'): al[kv.strip('\'"').lower().split('=', 1)[0][6:]] = kv.split('=', 1)[1] if '=' in kv else ''
+    if sub in al: v = al[sub].strip(); scan(v[1:] if v.startswith('!') else 'git ' + v, depth + 1)  # expand the invoked alias
     if sub != 'commit': return
     commits.append(base); skip = False
     for a in rest:
@@ -341,6 +348,7 @@ def one(t, depth):
                 if ch == 'n': why.append('-n in ' + a); break
                 if ch in 'mFcCtuS': skip = ch in 'mFcCt' and k == len(a) - 2; break
 scan(d.get('tool_input', {}).get('command', ''))
+if cfg: sys.exit(print('CONFIG', cfg[0]))
 if commits and why: sys.exit(print('HOOKS', why[0]))
 def git(r, *a): return sp.run(['git', '-C', r, *a], capture_output=True, text=True, timeout=20)
 for r in dict.fromkeys(dirs if commits else []):
@@ -355,10 +363,11 @@ PYEOF
   case "$_CG" in
     OK) ;;
     "HOOKS "*) printf 'BLOCKED: commit-hook-bypass — git commit with %s would skip the commit hooks; FORBIDDEN for every caller\nCommand: %s\n' "${_CG#HOOKS }" "$COMMAND" >&2; exit 2 ;;
+    "CONFIG "*) printf 'BLOCKED: config-keystone-write — git config write to %s (core.hooksPath / alias.* / filter.claude-settings.*) is FORBIDDEN for every caller\nCommand: %s\n' "${_CG#CONFIG }" "$COMMAND" >&2; exit 2 ;;
     "FILTER "*) printf 'BLOCKED: unregistered-settings-filter — settings.json has local changes and the settings filter is not registered in %s\nCommand: %s\nRun scripts/bootstrap in %s first, then retry.\n' "${_CG#FILTER }" "$COMMAND" "${_CG#FILTER }" >&2; exit 2 ;;
-    *) printf 'BLOCKED: commit-guard FAIL-CLOSED — the commit-hook-bypass / unregistered-settings-filter guard returned no verdict\nCommand: %s\n' "$COMMAND" >&2; exit 2 ;;
+    *) printf 'BLOCKED: commit-guard FAIL-CLOSED — the commit-hook-bypass / config-keystone-write / unregistered-settings-filter guard returned no verdict\nCommand: %s\n' "$COMMAND" >&2; exit 2 ;;
   esac
-  unset _CG
+  unset _CG _CG_STRIP _CG_GITRE
 fi
 
 # ── Dev whitelist (exact names only) ──────────────────────────────
@@ -561,22 +570,13 @@ print(json.dumps({"hookSpecificOutput": {"hookEventName": "PreToolUse", "permiss
 }
 
 # ── C3: daemon-restart prohibition helper (consume_daemon_restart_grant) ───
-# TASK-ID: c3-20260504-223115 (introduced) + 20260509-113838 (R11 relaxed)
-# Per BA spec docs/dev/ticket-c3-20260504-223115.md (original) +
-# docs/dev/ticket-20260509-113838.md (R11 supersession).
-#
-# Note: as of task-id 20260509-113838 the global /allow short-circuit at
-# line 555 runs BEFORE Layer 1.A daemon-restart prohibition. R11's narrower
-# invariant ("daemon-restart NOT bypassable by generic /allow") is RELAXED
-# per the user-binding directive (verbatim text preserved in
-# docs/dev/ticket-20260509-113838.md) authorizing /allow to bypass any command
-# including dangerous ones. The dedicated
-# ${DAEMON_RESTART_GRANT_DIR}/claude-allow-daemon-restart-<target>.flag sentinel created by
-# the human-run grant helper is preserved per W6 as the precise-grant
-# alternative for users who prefer not to type generic /allow. The function
-# below is still invoked from Layer 1.A; it remains the consume mechanism
-# for the dedicated channel and is unaffected by the /allow short-circuit
-# relocation.
+# TASK-ID: c3-20260504-223115 (introduced) + 20260509-113838 (R11 relaxed). BA specs:
+# docs/dev/ticket-c3-20260504-223115.md + docs/dev/ticket-20260509-113838.md.
+# As of 20260509-113838 the global /allow short-circuit at line 555 runs BEFORE Layer 1.A, so R11's
+# narrower invariant ("daemon-restart NOT bypassable by generic /allow") is RELAXED per the user-binding
+# directive (verbatim in the latter ticket) authorizing /allow to bypass any command. The dedicated
+# ${DAEMON_RESTART_GRANT_DIR}/claude-allow-daemon-restart-<target>.flag sentinel (human-run grant helper)
+# is preserved per W6 as the precise-grant alternative; the function below is still its consume mechanism.
 
 DAEMON_RESTART_AUDIT_LOG="${CLAUDE_DAEMON_RESTART_AUDIT_LOG:-${CLAUDE_CONFIG_DIR:-$HOME/.claude}/logs/claude-daemon-restart-grants.log}"
 
