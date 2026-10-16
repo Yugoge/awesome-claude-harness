@@ -143,11 +143,11 @@ echo "Settings wiring (scripts/install/render-settings check):"
 if [ ! -f "$HOME_DIR/scripts/install/render-settings" ]; then
   miss "scripts/install/render-settings is missing — restore it from the checkout, then run scripts/bootstrap"
 elif python3 "$HOME_DIR/scripts/install/render-settings" check; then ok "render-settings check passed"
-else miss "render-settings check failed (see above) — resolve what each [FAIL] line names, then re-run scripts/bootstrap"; fi
+else miss "render-settings check failed (see above) — fix what each [FAIL] line names, then re-run scripts/doctor"; fi
 echo
 
 if [ "$MISSING" -gt 0 ]; then
-  echo "doctor: $MISSING required check(s) FAILED — fix the items above before the first run." >&2
+  echo "doctor: $MISSING required check(s) FAILED — fix each item above as its line says." >&2
   exit 1
 fi
 echo "doctor: all required checks passed. The harness is ready."

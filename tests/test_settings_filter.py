@@ -853,9 +853,16 @@ def test_doctor_fails_on_entries_nothing_explains(sb):
     assert "Notification: a hook outside the clean form" in out
     assert "[FAIL] settings.json entries: some are outside the clean form" in out
     for line in ("env.DEMO_ACCOUNT", "permissions.allow: 1 entry", "hooks.Notification: 1 hook "
-                 "command", "move them into settings.machine.json", "render-settings render"):
+                 "command", "public edits meant for the tracked file: stage them (git add "
+                 "settings.json)", "machine-specific: move them into settings.machine.json, then "
+                 "run scripts/install/render-settings render", "already removed from "
+                 "settings.machine.json: render drops them",
+                 "render-settings check failed (see above) — fix what each [FAIL] line names, "
+                 "then re-run scripts/doctor",
+                 "required check(s) FAILED — fix each item above as its line says."):
         assert line in out, line
-    assert "render-settings check failed" in out and "required check(s) FAILED" in out
+    for line in ("before the first run", "re-run scripts/bootstrap"):  # first-install advice
+        assert line not in out, line
     assert STAND_IN not in out
     # render (no --force) drops what the record shows it applied; doctor passes again.
     proc = run_tool(sb, home, "render")
@@ -878,6 +885,25 @@ def test_doctor_fails_on_entries_nothing_explains(sb):
     assert "demo-local-tool" not in err
     git(sb, home, "add", "settings.json")
     assert doctor().returncode == 0
+
+    # A machine-specific hand edit: moved into the overlay and rendered, it is explained and
+    # active, and stays out of the index.
+    entry = "Bash(/home/%s/bin/other-tool.sh:*)" % STAND_IN
+    doc["permissions"]["allow"].append(entry)
+    (home / "settings.json").write_bytes(canon(doc))
+    proc = doctor()
+    out = (proc.stdout + proc.stderr).decode()
+    assert proc.returncode == 1 and "permissions.allow: 1 entry" in out, out
+    assert STAND_IN not in out
+    doc["permissions"]["allow"].remove(entry)
+    (home / "settings.json").write_bytes(canon(doc))
+    write_overlay(home, {"env": {"CLAUDE_HOME": str(home)}, "permissions": {"allow": [entry]}})
+    proc = run_tool(sb, home, "render")
+    assert proc.returncode == 0 and STAND_IN not in (proc.stdout + proc.stderr).decode()
+    assert entry in json.loads((home / "settings.json").read_bytes())["permissions"]["allow"]
+    proc = doctor()
+    assert proc.returncode == 0 and STAND_IN not in (proc.stdout + proc.stderr).decode()
+    assert STAND_IN.encode() not in git(sb, home, "show", ":settings.json").stdout
 
 
 # ---------------------------------------------------------------------------------- migrate

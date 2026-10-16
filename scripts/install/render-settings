@@ -878,9 +878,11 @@ def check_filter(home, overlay_error, overlay, recorded, working):
     for line in describe(extras):
         print("       %s" % line)
     if extras:
-        print("       stage public edits (git add settings.json), or move them into %s to keep "
-              "them; render-settings render then drops entries removed from the overlay "
-              "(--force drops all the rest)" % OVERLAY)
+        print("       public edits meant for the tracked file: stage them (git add settings.json)")
+        print("       machine-specific: move them into %s, then run scripts/install/render-settings"
+              " render" % OVERLAY)
+        print("       already removed from %s: render drops them (--force drops all the rest)"
+              % OVERLAY)
     for key in CLI_OWNED:
         if overlay and key in overlay and key in working and working[key] != overlay[key]:
             print("[info] %s: the CLI changed it (differs from settings.machine.json); copy it "
