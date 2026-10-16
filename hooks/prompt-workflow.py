@@ -252,20 +252,19 @@ def _try_read_spec(path: Path) -> str | None:
 def _command_spec_candidates(cmd_name: str) -> list[Path]:
     """The paths read_command_spec searches, in its order.
 
-    Extracted so the self-heal pointer can still name them when NONE of them
-    resolves. A continuation block that carries neither the document nor a
-    route to it is FM-1 with no mitigation left, so the pointer must degrade to
-    "look in these places" rather than disappear.
-
-    The second candidate is Claude Code's own user command directory (its
-    configuration directory), so the pointer names the document Claude Code
-    expanded; in both documented installs that is this harness's commands/.
+    Extracted so the self-heal pointer degrades to "look in these places", not
+    to nothing, when NONE resolves: a block with neither the document nor a
+    route to it is FM-1 with no mitigation left. After the project comes Claude
+    Code's user command directory (its configuration directory: the document
+    Claude Code expanded), then this harness's own commands/, for a
+    configuration directory without one (a per-account CLAUDE_CONFIG_DIR).
     read_command_spec keeps its own copy of this list;
     test_candidate_list_matches_read_command_spec guards the two against drift.
     """
     return [
         PROJECT_DIR / '.claude' / 'commands' / f'{cmd_name}.md',
         Path(os.environ.get('CLAUDE_CONFIG_DIR') or Path.home() / '.claude') / 'commands' / f'{cmd_name}.md',
+        Path(__file__).resolve().parent.parent / 'commands' / f'{cmd_name}.md',
     ]
 
 
@@ -274,6 +273,7 @@ def read_command_spec(cmd_name: str) -> str:
     for search_path in [
         PROJECT_DIR / '.claude' / 'commands' / f'{cmd_name}.md',
         Path(os.environ.get('CLAUDE_CONFIG_DIR') or Path.home() / '.claude') / 'commands' / f'{cmd_name}.md',
+        Path(__file__).resolve().parent.parent / 'commands' / f'{cmd_name}.md',
     ]:
         if not search_path.exists():
             continue

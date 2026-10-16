@@ -951,20 +951,92 @@ class TestDeliveryReceiptIsTrustworthy(unittest.TestCase):
         read_command_spec keeps its own copy of this list (rewriting it is
         outside this lane's scope), so a pointer built from a drifted copy
         would send the orchestrator to the wrong place -- worse than absent.
+
+        The two list expressions are compared whole, not by their path
+        literals: candidates that differ only in their base (the hook's own
+        location against $HOME, say) share every literal, so a literal-only
+        comparison would pass a copy that searches a different directory.
         """
         source = ast.parse(HOOK_PATH.read_text())
         bodies = {node.name: node for node in source.body
                   if isinstance(node, ast.FunctionDef)}
         self.assertIn('_command_spec_candidates', bodies)
 
-        def path_literals(node: ast.AST) -> list[str]:
-            return [element.value for element in ast.walk(node)
-                    if isinstance(element, ast.Constant)
-                    and isinstance(element.value, str)
-                    and element.value in ('.claude', 'commands')]
+        def candidate_list(name: str) -> str:
+            lists = [element for element in ast.walk(bodies[name])
+                     if isinstance(element, ast.List)]
+            self.assertEqual(1, len(lists), f'{name}: expected one list literal')
+            return ast.dump(lists[0])
 
-        self.assertEqual(path_literals(bodies['_command_spec_candidates']),
-                         path_literals(bodies['read_command_spec']))
+        self.assertEqual(candidate_list('_command_spec_candidates'),
+                         candidate_list('read_command_spec'))
+
+
+class TestPerAccountConfigDirStillFindsTheSpec(unittest.TestCase):
+    """REG-E: a CLAUDE_CONFIG_DIR without commands/ must not lose the spec.
+
+    CLAUDE_CONFIG_DIR may name a per-account configuration directory that holds
+    no commands/. The project and configuration-directory candidates then both
+    miss, and the spec must still come from the harness's own commands/,
+    resolved from the hook's location -- in the default install (~/.claude is
+    the harness) and for a clone outside ~/.claude alike. Before the fix the
+    resolver returned None and every continuation prompt carried 'NOT FOUND'.
+
+    The fixture's <home>/.claude is the harness the hook copy is installed in;
+    the per-account directory sits beside it and never gets a commands/.
+    """
+
+    LAYOUTS = ('default install', 'clone outside ~/.claude')
+
+    @staticmethod
+    def _per_account_env(fixture: Fixture, layout: str) -> dict:
+        account = fixture.root / 'acct-test-123'
+        (account / 'projects').mkdir(parents=True, exist_ok=True)
+        home = fixture.home
+        if layout != 'default install':
+            # A HOME with no .claude at all: only the hook's location can
+            # lead to the harness.
+            home = fixture.root / 'home-acct-test-123'
+            home.mkdir(exist_ok=True)
+        return {'HOME': str(home), 'CLAUDE_CONFIG_DIR': str(account)}
+
+    def test_spec_resolves_to_the_harness_copy(self):
+        for layout in self.LAYOUTS:
+            with self.subTest(layout=layout):
+                with tempfile.TemporaryDirectory() as tmp:
+                    fixture = Fixture(tmp)
+                    env = self._per_account_env(fixture, layout)
+                    self.assertFalse((Path(env['CLAUDE_CONFIG_DIR']) / 'commands').exists())
+                    harness = (fixture.home / '.claude').resolve()
+                    harness_spec = harness / 'commands' / 'dev-overnight.md'
+
+                    with fixture.module() as module:
+                        os.environ.update(env)
+                        self.assertEqual(harness_spec,
+                                         module.resolve_command_spec_path('dev-overnight'))
+                        self.assertTrue(module.read_command_spec('dev-overnight')
+                                        .startswith(spec_body_probe()))
+
+                    first = fixture.run(extra_env=env).stdout
+                    self.assertNotIn('NOT FOUND on disk', first)
+                    self.assertIn(f'{SELF_HEAL_PREFIX}{harness_spec} -- READ that file now',
+                                  first)
+                    self.assertIn(SPEC_HEADER, first)
+                    self.assertIn(spec_body_probe(), first)
+
+    def test_a_config_dir_copy_still_takes_precedence(self):
+        """The harness's copy is the last resort, never ahead of the others."""
+        with tempfile.TemporaryDirectory() as tmp:
+            fixture = Fixture(tmp)
+            env = self._per_account_env(fixture, 'default install')
+            account_spec = Path(env['CLAUDE_CONFIG_DIR']) / 'commands' / 'dev-overnight.md'
+            account_spec.parent.mkdir()
+            account_spec.write_text('# dev-overnight\nPER-ACCOUNT COPY\n')
+            with fixture.module() as module:
+                os.environ.update(env)
+                self.assertEqual(account_spec,
+                                 module.resolve_command_spec_path('dev-overnight'))
+                self.assertIn('PER-ACCOUNT COPY', module.read_command_spec('dev-overnight'))
 
 
 class TestResolverAndReaderCannotNameDifferentFiles(unittest.TestCase):
