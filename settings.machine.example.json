@@ -30,6 +30,7 @@
     "WORKFLOW_PRUNE_ACCOUNTS_DIR": "Accounts root scanned by scripts/prune-orphaned-workflow-bookmarks.sh. Default empty: no account scan.",
     "WORKFLOW_PRUNE_PROJECT_DIRNAME": "Claude Code project directory name of the harness home. Default derived from the realpath of the resolved harness home (every character other than an ASCII letter or digit becomes \"-\"), so set it only when that derivation does not fit.",
     "CLAUDE_CHECKPOINT_EXTRA_TRAILER": "One extra trailer line appended after the Claude Co-Authored-By trailer on checkpoint commits. Default empty: no extra trailer.",
+    "GRAPHIFY_BIN": "Path of the graphify CLI (PyPI graphifyy), the optional code-graph tool. scripts/graphify_lib.py runs it for scripts/graphify-query.py, graphify-enrich.py and graphify-maintain.py; hooks/prompt-workflow.py writes the /dev graphify sentinel only when this is set or a graphify binary is found. Default unset: graphify on PATH (the prompt hook also accepts <harness home>/venv/bin/graphify). A set path that does not exist makes the scripts treat graphify as absent, with no PATH fallback.",
     "PASEO_DAEMON_ACCOUNTS": "paseo module: comma-separated account names, the --accounts default of scripts/paseo-daemon-ledger.py; its init refuses when no account is given.",
     "PASEO_DAEMON_MODEL": "paseo module: model used by scripts/paseo-daemon-timers.py, in the form <model-id>@<account>. Default: the built-in model id without an account suffix."
   },
@@ -47,6 +48,7 @@
     "WORKFLOW_PRUNE_ACCOUNTS_DIR": "/opt/demo/accounts",
     "WORKFLOW_PRUNE_PROJECT_DIRNAME": "-opt-demo-claude-harness",
     "CLAUDE_CHECKPOINT_EXTRA_TRAILER": "Co-Authored-By: Demo Bot <demo-bot@example.invalid>",
+    "GRAPHIFY_BIN": "/opt/demo/bin/graphify",
     "PASEO_DAEMON_ACCOUNTS": "acct-a,acct-b",
     "PASEO_DAEMON_MODEL": "demo-model@acct-a"
   },
