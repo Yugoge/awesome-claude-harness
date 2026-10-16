@@ -275,12 +275,12 @@ fi
 
 # ── Commit guard (R7b): commit-hook-bypass + config-keystone-write + unregistered-settings-filter ──
 # Before any /do or /allow bypass, for all callers; no verdict = deny. The bash gate drops quotes/backslashes
-# (so `co''mmit`/`g\it` are seen) and runs the Python only for a git-word command naming commit or config.
-# The Python unquotes/tokenises and denies: (1) a commit skipping hooks (--no-verify..--no-ver; -n in a short
-# cluster; a core.hooksPath/include/GIT_CONFIG_* override; a `-c alias.X=` whose value — incl. a `!`-shell alias
-# — commits with -n/--no-verify); (2) a git config WRITE (classic flags or set/unset/*-section subcommands) to
-# core.hooksPath, alias.* or filter.claude-settings.*, reads (--get*/--list, one-arg form) allowed; (3) a repo
-# (cwd/-C/cd) whose settings filter is unregistered with settings.json changed vs HEAD. echo/printf stay data.
+# (`co''mmit`, `g\it`) and runs the Python only for a git word plus commit/config. The Python tokenises (echo/printf
+# stay data) and denies: (1) a commit skipping hooks (--no-verify..--no-ver; -n in a short cluster; a core.hooksPath/
+# include/GIT_CONFIG_* override; a `-c alias.X=` whose value, `!`-shell alias too, commits with -n/--no-verify); (2) a
+# git config WRITE (flags or set/unset/*-section verbs) to core.hooksPath, alias.* or filter.claude-settings.*, reads
+# (--get*/--list, one-arg form) allowed; (3) a commit whose repo (cwd, cd, -C, --git-dir/--work-tree, or a
+# GIT_DIR/GIT_WORK_TREE prefix or export) has the settings filter unregistered and settings.json changed vs HEAD.
 _CG_STRIP="${COMMAND//[\'\"\\]/}"; _CG_GITRE='(^|[^[:alnum:]_])git'
 if [[ ( "$_CG_STRIP" == *commit* || "$_CG_STRIP" == *config* ) && "$_CG_STRIP" =~ $_CG_GITRE ]]; then
   _CG=$(CG_INPUT="$INPUT" "$PYTHON_BIN" - "$CLAUDE_HOME/hooks" 2>/dev/null <<'PYEOF'
@@ -290,8 +290,8 @@ from lib.bash_context_strip import _process_heredocs
 from lib.git_command_classifier import _command_token_index, _git_subcommand
 s = iu.spec_from_file_location('_overnight_guard', H + '/pretool-overnight-hook-guard.py')
 og = iu.module_from_spec(s); s.loader.exec_module(og)
-d = json.loads(os.environ['CG_INPUT']); cur = [d.get('cwd') or os.getcwd()]; dirs = cur[:]; commits, why, cfg = [], [], []
-LONGV = ('message', 'file', 'reuse-message', 'reedit-message', 'template', 'author', 'date', 'trailer')
+d = json.loads(os.environ['CG_INPUT']); cur = [d.get('cwd') or os.getcwd()]; dirs = cur[:]; commits, why, cfg, ex = [], [], [], {}
+LONGV = ('message', 'file', 'reuse-message', 'reedit-message', 'template', 'author', 'date', 'trailer'); GV = {'--git-dir': 'GIT_DIR', '--work-tree': 'GIT_WORK_TREE'}
 CFGW = {'set', 'unset', 'unset-all', 'replace-all', 'add', 'rename-section', 'remove-section'}  # config write verbs
 CFGR = {'get', 'get-all', 'get-regexp', 'get-urlmatch', 'list'}; WRF = {'--unset', '--unset-all', '--add', '--replace-all', '--rename-section', '--remove-section'}; RDF = {'--get', '--get-all', '--get-regexp', '--get-urlmatch', '--get-color', '--get-colorbool', '--list', '-l'}
 def prot(k): k = k.strip().strip('\'"').lower(); return k in ('core.hookspath', 'core', 'alias', 'filter', 'filter.claude-settings') or k.startswith('alias.') or k.startswith('filter.claude-settings.')
@@ -317,10 +317,11 @@ def one(t, depth):
     b, c = os.path.basename(t[i]), [j for j in range(i + 1, len(t) - 1) if re.match(r'-[^-]*c', t[j])]
     if b in ('bash', 'sh', 'zsh', 'dash', 'ksh') and c: scan(t[c[0] + 1], depth + 1)
     if b in ('cd', 'pushd'): cur[0] = at(cur[0], ([a for a in t[i + 1:] if a[:1] != '-'] or ['~'])[0]); dirs.append(cur[0])
-    if b != 'git': return
-    g = t[i + 1:]; sub, rest = _git_subcommand(g); base = cur[0]
-    for j, w in enumerate(g[:len(g) - len(rest)]):
+    if b != 'git': return ex.update(a.split('=', 1) for a in t[i + 1:] if '=' in a) if b == 'export' else None
+    g = t[i + 1:]; sub, rest = _git_subcommand(g); base = cur[0]; ev = {**ex, **dict(a.split('=', 1) for a in t[:i] if '=' in a)}
+    for j, w in enumerate(g[:len(g) - len(rest)]):  # -C moves base; --git-dir/--work-tree override GIT_DIR/GIT_WORK_TREE
         if w == '-C' and j + 1 < len(g): base = at(base, g[j + 1]); dirs.append(base)
+        if w.split('=')[0] in GV: ev[GV[w.split('=')[0]]] = w.split('=', 1)[1] if '=' in w else ''.join(g[j + 1:j + 2])
     if og._git_invocation_injects_keystone_config(g): why.append('a core.hooksPath/include config override')
     if sub == 'config':  # deny a config WRITE to a keystone key; leave reads alone
         pos = [a for a in rest if not a.startswith('-')]; tgt = ''
@@ -335,7 +336,7 @@ def one(t, depth):
         if kv and kv.strip('\'"').lower().startswith('alias.'): al[kv.strip('\'"').lower().split('=', 1)[0][6:]] = kv.split('=', 1)[1] if '=' in kv else ''
     if sub in al: v = al[sub].strip(); scan(v[1:] if v.startswith('!') else 'git ' + v, depth + 1)  # expand the invoked alias
     if sub != 'commit': return
-    commits.append(base); skip = False
+    commits.append(('-C', base, *(o + '=' + at(base, ev[k]) for o, k in GV.items() if ev.get(k)))); skip = False
     for a in rest:
         if skip: skip = False; continue
         if a == '--': break
@@ -350,11 +351,11 @@ def one(t, depth):
 scan(d.get('tool_input', {}).get('command', ''))
 if cfg: sys.exit(print('CONFIG', cfg[0]))
 if commits and why: sys.exit(print('HOOKS', why[0]))
-def git(r, *a): return sp.run(['git', '-C', r, *a], capture_output=True, text=True, timeout=20)
-for r in dict.fromkeys(dirs if commits else []):
-    top = git(r, 'rev-parse', '--show-toplevel').stdout.strip()
-    if top and git(top, 'check-attr', 'filter', '--', 'settings.json').stdout.strip().endswith(': claude-settings') \
-       and git(top, 'config', '--local', '--get', 'filter.claude-settings.clean').returncode and any(git(top, 'diff', \
+def git(r, *a): return sp.run(['git', *r, *a], capture_output=True, text=True, timeout=20)
+for r in dict.fromkeys([('-C', x) for x in dirs] + commits if commits else []):
+    top = git(r, 'rev-parse', '--show-toplevel').stdout.strip(); r += ('-C', top)
+    if top and git(r, 'check-attr', 'filter', '--', 'settings.json').stdout.strip().endswith(': claude-settings') \
+       and git(r, 'config', '--local', '--get', 'filter.claude-settings.clean').returncode and any(git(r, 'diff', \
        '--quiet', '--no-ext-diff', '--no-textconv', *c, 'HEAD', '--', 'settings.json').returncode for c in ((), ('--cached',))):
         sys.exit(print('FILTER', top))
 print('OK')
@@ -384,11 +385,10 @@ PROTECTED_DAEMON_PREFIX="${CLAUDE_PROTECTED_DAEMON_PREFIX:-}"
 PROTECTED_DAEMON_TARGETS="${CLAUDE_PROTECTED_DAEMON_TARGETS:-}"
 # Process-family word of the docker and killall/pkill guards (empty = docker rule inert).
 PROTECTED_PROCESS_FAMILY="${CLAUDE_PROTECTED_PROCESS_FAMILY:-}"
-# ERE-safe variants: PREFIX and FAMILY are LITERAL local names, so a leading '-' and every ERE
-# metacharacter ( ] [ \ . ^ $ * + ? ( ) { } | ) are escaped before interpolation into any `grep -E` below
-# (else a configured "my.daemon" would MISS or mis-extract the daemon). PROTECTED_DAEMON_TARGETS is
-# INTENTIONALLY a '|'-separated alternation of literal words: each word is escaped, the '|' separators are
-# PRESERVED. Every grep also passes `--`, so a leading '-' in the value is never read as an option.
+# ERE-safe variants: PREFIX and FAMILY are LITERAL local names, so a leading '-' and every ERE metacharacter
+# ( ] [ \ . ^ $ * + ? ( ) { } | ) are escaped before interpolation into any `grep -E` below (else "my.daemon" would
+# MISS or mis-extract the daemon). PROTECTED_DAEMON_TARGETS is a '|'-separated alternation of literal words, each
+# escaped, the '|' kept. Every grep also passes `--`, so a leading '-' in a value is never read as an option.
 _ere_escape_literal()  { printf '%s' "$1" | sed -e 's/[][\\.^$*+?(){}|]/\\&/g' -e 's/^-/\\-/'; }
 _ere_escape_keep_alt() { printf '%s' "$1" | sed -e 's/[][\\.^$*+?(){}]/\\&/g'; }
 PROTECTED_DAEMON_PREFIX_RE="$(_ere_escape_literal  "$PROTECTED_DAEMON_PREFIX")"

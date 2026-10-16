@@ -9,6 +9,8 @@ Two rules, enforced for the main agent and for subagents alike and ahead of the
 * unregistered-settings-filter: such a command may not run while a candidate
   repository declares the claude-settings filter for settings.json, has no local
   filter registration, and settings.json differs from HEAD (index or work tree).
+  Candidates are the cwd, cd and -C targets, and the repository a commit names
+  with --git-dir/--work-tree or a GIT_DIR/GIT_WORK_TREE prefix or export.
 
 Every case drives the real hook as a subprocess with a PreToolUse Bash payload.
 HOME, CLAUDE_CONFIG_DIR, the state dir, the grant dir and the protected-runtime
@@ -237,6 +239,86 @@ def test_unregistered_filter_is_found_through_C_and_cd(sandbox, filtered_repo, c
     command = template.format(repo=filtered_repo)
     assert_blocked(run_hook(sandbox, command, tmp_path / "elsewhere", caller),
                    "unregistered-settings-filter", command)
+
+
+# Forms that name the repository without cwd, cd or -C: --git-dir/--work-tree
+# (attached or separate value, relative values against the final directory, a
+# command-line option over the environment) and GIT_DIR/GIT_WORK_TREE as an
+# assignment prefix, through `env`, or exported earlier in the same command.
+GIT_DIR_FORMS = {
+    "git-dir-attached": "git --git-dir={gitdir} --work-tree={repo} commit -m x",
+    "git-dir-separate": "git --git-dir {gitdir} --work-tree {repo} commit -m x",
+    "git-dir-relative": "cd {top} && git --git-dir={rel_gitdir} --work-tree={rel_repo} commit -m x",
+    "option-over-env": "GIT_DIR={top}/none GIT_WORK_TREE={top}/none "
+                       "git --git-dir={gitdir} --work-tree={repo} commit -m x",
+    "env-prefix": "GIT_DIR={gitdir} GIT_WORK_TREE={repo} git commit -m x",
+    "env-wrapper": "env GIT_DIR={gitdir} GIT_WORK_TREE={repo} git commit -m x",
+    "exported": "export GIT_DIR={gitdir} GIT_WORK_TREE={repo} && git commit -m x",
+    "exported-separately": "export GIT_DIR={gitdir}; export GIT_WORK_TREE={repo}; git commit -m x",
+}
+# The git dir inside the work tree, or moved out of it (then the work tree holds
+# no .git, so neither the cwd nor a cd or -C target can lead to the repository).
+LAYOUTS = ("embedded", "separate")
+
+
+def layout_repo(env, tmp_path, name, layout, declare_filter):
+    repo = make_repo(env, tmp_path / name, declare_filter)
+    gitdir = repo / ".git"
+    if layout == "separate":
+        (tmp_path / "store").mkdir(exist_ok=True)
+        gitdir = gitdir.rename(tmp_path / "store" / f"{name}.git")
+    return repo, gitdir
+
+
+def form_command(form, tmp_path, repo, gitdir):
+    return GIT_DIR_FORMS[form].format(repo=repo, gitdir=gitdir, top=tmp_path,
+                                      rel_repo=repo.relative_to(tmp_path),
+                                      rel_gitdir=gitdir.relative_to(tmp_path))
+
+
+@pytest.mark.parametrize("caller", sorted(CALLERS))
+@pytest.mark.parametrize("layout", LAYOUTS)
+@pytest.mark.parametrize("form", sorted(GIT_DIR_FORMS))
+def test_unregistered_filter_is_found_through_git_dir_and_environment(sandbox, caller, layout, form):
+    tmp_path, env = sandbox
+    repo, gitdir = layout_repo(env, tmp_path, "harness", layout, declare_filter=True)
+    _modify_work_tree(env, repo)
+    command = form_command(form, tmp_path, repo, gitdir)
+    r = run_hook(sandbox, command, tmp_path / "elsewhere", caller)
+    assert_blocked(r, "unregistered-settings-filter", command)
+    assert str(repo) in r.stderr.splitlines()[0]
+
+
+@pytest.mark.parametrize("caller", sorted(CALLERS))
+@pytest.mark.parametrize("layout", LAYOUTS)
+@pytest.mark.parametrize("form", sorted(GIT_DIR_FORMS))
+def test_git_dir_and_environment_forms_pass_for_a_clean_target(sandbox, caller, layout, form):
+    """The same forms pass when the repository they name has the filter
+    registered, declares no filter, or has settings.json unchanged."""
+    tmp_path, env = sandbox
+    registered, reg_gitdir = layout_repo(env, tmp_path, "registered", layout, declare_filter=True)
+    subprocess.run(["git", f"--git-dir={reg_gitdir}", "config", "--local",
+                    "filter.claude-settings.clean", "cat"],
+                   env=env, check=True, capture_output=True, text=True, timeout=60)
+    plain, plain_gitdir = layout_repo(env, tmp_path, "plain-repo", layout, declare_filter=False)
+    unchanged, unchanged_gitdir = layout_repo(env, tmp_path, "unchanged", layout, declare_filter=True)
+    _modify_work_tree(env, registered)
+    _modify_work_tree(env, plain)
+    for repo, gitdir in ((registered, reg_gitdir), (plain, plain_gitdir), (unchanged, unchanged_gitdir)):
+        command = form_command(form, tmp_path, repo, gitdir)
+        assert_allowed(run_hook(sandbox, command, tmp_path / "elsewhere", caller))
+
+
+@pytest.mark.parametrize("caller", sorted(CALLERS))
+def test_git_dir_of_another_command_does_not_retarget_the_commit(sandbox, caller):
+    """An assignment prefix binds only its own command, and a git dir named by a
+    non-commit invocation is not a commit target."""
+    tmp_path, env = sandbox
+    repo, gitdir = layout_repo(env, tmp_path, "harness", "separate", declare_filter=True)
+    _modify_work_tree(env, repo)
+    for command in (f"GIT_DIR={gitdir} GIT_WORK_TREE={repo} git status; git commit -m x",
+                    f"git --git-dir={gitdir} --work-tree={repo} log --grep commit"):
+        assert_allowed(run_hook(sandbox, command, tmp_path / "elsewhere", caller))
 
 
 @pytest.mark.parametrize("caller", sorted(CALLERS))
