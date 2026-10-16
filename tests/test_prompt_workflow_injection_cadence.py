@@ -112,9 +112,27 @@ PRODUCTION_LIGHT_MAX_RATIO_OF_BOUNDARY = 0.05
 MEASURED_ROOT = '/dev/shm/tmpXXXXXXXX'
 
 
-def load_hook_module():
+def installed_hook(home: Path) -> Path:
+    """The hook under test, installed in the fixture's harness home.
+
+    The hook resolves its launcher, initializer and todo provider from its own
+    install location, not from $HOME. The fixture's <home>/.claude plays that
+    harness home, as in the default install, so the hook runs from a copy in
+    <home>/.claude/hooks (hooks/lib shared by symlink): the fixture, not the
+    repository, decides which of those scripts exist.
+    """
+    hooks = home / '.claude' / 'hooks'
+    installed = hooks / 'prompt-workflow.py'
+    if not installed.exists():
+        hooks.mkdir(parents=True, exist_ok=True)
+        shutil.copy(HOOK_PATH, installed)
+        (hooks / 'lib').symlink_to(HOOK_PATH.resolve().parent / 'lib')
+    return installed
+
+
+def load_hook_module(path: Path = HOOK_PATH):
     """Load the hook under test as a real module (fresh globals each call)."""
-    loader = SourceFileLoader('pw_cadence_under_test', str(HOOK_PATH))
+    loader = SourceFileLoader('pw_cadence_under_test', str(path))
     spec = spec_from_loader(loader.name, loader)
     module = module_from_spec(spec)
     loader.exec_module(module)
@@ -188,6 +206,7 @@ class Fixture:
 
     def env(self) -> dict:
         env = {**os.environ, 'HOME': str(self.home),
+               'CLAUDE_CONFIG_DIR': str(self.home / '.claude'),
                'CLAUDE_PROJECT_DIR': str(self.project)}
         env.pop('CLAUDE_COMPAT_RUNTIME', None)
         env.pop('CLAUDE_DEV_OVERNIGHT_TODO', None)
@@ -204,7 +223,7 @@ class Fixture:
             'session_id': session_id or self.session_id,
             'transcript_path': str(self.transcript),
         })
-        return subprocess.run([sys.executable, str(HOOK_PATH)], input=payload,
+        return subprocess.run([sys.executable, str(installed_hook(self.home))], input=payload,
                               capture_output=stdout is subprocess.PIPE, text=True,
                               env=env, stdout=None if stdout is not subprocess.PIPE else None)
 
@@ -217,12 +236,13 @@ class Fixture:
         afterwards, so one test cannot leak a deleted temp HOME into the next.
         """
         previous = {key: os.environ.get(key) for key in
-                    ('HOME', 'CLAUDE_PROJECT_DIR', 'CLAUDE_DEV_OVERNIGHT_TODO')}
+                    ('HOME', 'CLAUDE_CONFIG_DIR', 'CLAUDE_PROJECT_DIR', 'CLAUDE_DEV_OVERNIGHT_TODO')}
         os.environ['HOME'] = str(self.home)
+        os.environ['CLAUDE_CONFIG_DIR'] = str(self.home / '.claude')
         os.environ['CLAUDE_PROJECT_DIR'] = str(self.project)
         os.environ.pop('CLAUDE_DEV_OVERNIGHT_TODO', None)
         try:
-            yield load_hook_module()
+            yield load_hook_module(installed_hook(self.home))
         finally:
             for key, value in previous.items():
                 if value is None:
@@ -238,12 +258,13 @@ class Fixture:
         indistinguishable from a working one from the outside.
         """
         previous = {k: os.environ.get(k) for k in
-                    ('HOME', 'CLAUDE_PROJECT_DIR', 'CLAUDE_DEV_OVERNIGHT_TODO')}
+                    ('HOME', 'CLAUDE_CONFIG_DIR', 'CLAUDE_PROJECT_DIR', 'CLAUDE_DEV_OVERNIGHT_TODO')}
         os.environ['HOME'] = str(self.home)
+        os.environ['CLAUDE_CONFIG_DIR'] = str(self.home / '.claude')
         os.environ['CLAUDE_PROJECT_DIR'] = str(self.project)
         os.environ.pop('CLAUDE_DEV_OVERNIGHT_TODO', None)
         try:
-            module = load_hook_module()
+            module = load_hook_module(installed_hook(self.home))
             return module.check_overnight_continuation(session_id or self.session_id)
         finally:
             for key, value in previous.items():
@@ -684,6 +705,7 @@ class TestAC8SelfHealPointer(unittest.TestCase):
             block = fixture.call_direct()
             module = load_hook_module()
             os.environ['HOME'] = str(fixture.home)
+            os.environ['CLAUDE_CONFIG_DIR'] = str(fixture.home / '.claude')
             os.environ['CLAUDE_PROJECT_DIR'] = str(fixture.project)
             module = load_hook_module()
             resolved = module.resolve_command_spec_path('dev-overnight')
@@ -725,7 +747,7 @@ class TestAC11MarkerOrderingAndWritability(unittest.TestCase):
             fixture = Fixture(tmp)
             with open('/dev/full', 'w') as sink:
                 result = subprocess.run(
-                    [sys.executable, str(HOOK_PATH)],
+                    [sys.executable, str(installed_hook(fixture.home))],
                     input=json.dumps({'prompt': 'go', 'session_id': fixture.session_id,
                                       'transcript_path': str(fixture.transcript)}),
                     text=True, env=fixture.env(), stdout=sink,
@@ -1140,7 +1162,7 @@ class TestScopeConfinement(unittest.TestCase):
 
     def _run_without_payload_transcript(self, fixture) -> dict:
         payload = json.dumps({'prompt': 'go', 'session_id': fixture.session_id})
-        subprocess.run([sys.executable, str(HOOK_PATH)], input=payload,
+        subprocess.run([sys.executable, str(installed_hook(fixture.home))], input=payload,
                        capture_output=True, text=True, env=fixture.env())
         return json.loads(fixture.marker_path().read_text())
 

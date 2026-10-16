@@ -257,13 +257,15 @@ def _command_spec_candidates(cmd_name: str) -> list[Path]:
     route to it is FM-1 with no mitigation left, so the pointer must degrade to
     "look in these places" rather than disappear.
 
-    read_command_spec deliberately keeps its own copy of this list: it belongs
-    to no single lane and rewriting it is outside this lane's permitted scope.
+    The second candidate is Claude Code's own user command directory (its
+    configuration directory), so the pointer names the document Claude Code
+    expanded; in both documented installs that is this harness's commands/.
+    read_command_spec keeps its own copy of this list;
     test_candidate_list_matches_read_command_spec guards the two against drift.
     """
     return [
         PROJECT_DIR / '.claude' / 'commands' / f'{cmd_name}.md',
-        Path.home() / '.claude' / 'commands' / f'{cmd_name}.md',
+        Path(os.environ.get('CLAUDE_CONFIG_DIR') or Path.home() / '.claude') / 'commands' / f'{cmd_name}.md',
     ]
 
 
@@ -271,7 +273,7 @@ def read_command_spec(cmd_name: str) -> str:
     """Read the command .md file, stripping YAML frontmatter."""
     for search_path in [
         PROJECT_DIR / '.claude' / 'commands' / f'{cmd_name}.md',
-        Path.home() / '.claude' / 'commands' / f'{cmd_name}.md',
+        Path(os.environ.get('CLAUDE_CONFIG_DIR') or Path.home() / '.claude') / 'commands' / f'{cmd_name}.md',
     ]:
         if not search_path.exists():
             continue
@@ -552,7 +554,7 @@ def parse_overnight_args(prompt_text: str) -> tuple[str, str, str, bool, str]:
 
 def create_overnight_state(end_time: str, focus: str = '', spec_path: str = '', session_id: str = '', codex_required: bool = False, worktree_choice: str = '') -> bool:
     """Create overnight state file by calling the bash script."""
-    script = Path.home() / '.claude' / 'scripts' / 'create-overnight-state.sh'
+    script = Path(__file__).resolve().parent.parent / 'scripts' / 'create-overnight-state.sh'
     cmd = [str(script)]
     if end_time:
         cmd += ['--end-time', end_time]
@@ -684,7 +686,7 @@ def _load_overnight_todos() -> list[dict]:
     todo_path = Path(
         os.environ.get(
             'CLAUDE_DEV_OVERNIGHT_TODO',
-            str(Path.home() / '.claude' / 'scripts' / 'todo' / 'dev-overnight.py'),
+            str(Path(__file__).resolve().parent.parent / 'scripts' / 'todo' / 'dev-overnight.py'),
         )
     )
     try:
@@ -812,13 +814,12 @@ def _resolve_transcript_path(session_id: str) -> str:
 
     The store scan below is only a fallback for direct callers that have no
     payload. It is deliberately NOT the primary: transcript files are keyed by
-    session id ($HOME/.claude/projects/<mangled-cwd>/<session_id>.jsonl, which
-    was verified -- file stem == the record's sessionId), but $HOME/.claude is
-    a symlink to the repository root in this harness, so the scan reads a
-    SECONDARY store while the account's live store is elsewhere. Measured: the
-    live overnight session's own transcript is absent from the scanned tree.
-    Relying on the scan would therefore have degraded reading R-b to R-a
-    silently, which is the one outcome this lane must not produce.
+    session id (${CLAUDE_CONFIG_DIR:-$HOME/.claude}/projects/<mangled-cwd>/
+    <session_id>.jsonl; file stem == the record's sessionId), but the scanned
+    store need not be the account's live one (a per-account config dir, or one
+    scrubbed from the hook's env). Measured: the live overnight session's own
+    transcript was absent from the scanned tree, so relying on the scan would
+    have degraded reading R-b to R-a silently -- the outcome to avoid.
 
     Returning '' degrades THIS SESSION to reading R-a rather than failing, and
     the empty value is written into the marker so the degradation is visible
@@ -829,7 +830,7 @@ def _resolve_transcript_path(session_id: str) -> str:
     if not isinstance(session_id, str) or not session_id:
         return ''
     try:
-        for project_dir in (Path.home() / '.claude' / 'projects').iterdir():
+        for project_dir in (Path(os.environ.get('CLAUDE_CONFIG_DIR') or Path.home() / '.claude') / 'projects').iterdir():
             candidate = project_dir / f'{session_id}.jsonl'
             if candidate.exists():
                 return str(candidate)
@@ -1646,7 +1647,7 @@ def verify_overnight_state(session_id: str) -> tuple[bool, str]:
     sp = overnight_state_path(session_id)
     if not sp.exists():
         return False, f'no published state record at {sp}'
-    script = Path.home() / '.claude' / 'scripts' / 'overnight-init.sh'
+    script = Path(__file__).resolve().parent.parent / 'scripts' / 'overnight-init.sh'
     if not os.access(script, os.X_OK):
         return False, f'initializer missing or not executable: {script}'
     try:
@@ -1690,7 +1691,7 @@ def _repair_overnight_registry(session_id: str) -> str:
     if ok:
         return ''
     sp = overnight_state_path(session_id)
-    script = Path.home() / '.claude' / 'scripts' / 'overnight-init.sh'
+    script = Path(__file__).resolve().parent.parent / 'scripts' / 'overnight-init.sh'
     repaired: list[str] = []
     detail = ''
     if not sp.exists() or not os.access(script, os.X_OK):
@@ -2008,9 +2009,8 @@ def main():
         global PROJECT_DIR, CURRENT_TRANSCRIPT_PATH
         PROJECT_DIR = resolve_project_dir(data)
         # Authoritative context-epoch signal for the continuation cadence. It
-        # must come from the payload: the session-id-keyed store scan resolves
-        # against $HOME/.claude, a symlink to the repo root, and misses the
-        # account's live transcript store.
+        # must come from the payload: the session-id-keyed store scan can miss
+        # the account's live transcript store (see _resolve_transcript_path).
         CURRENT_TRANSCRIPT_PATH = str(data.get('transcript_path') or '')
         user_input = data.get('prompt', '')
         # An ABSENT identity is not an identity. Resolving it to a literal made
