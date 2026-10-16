@@ -43,7 +43,7 @@ if write_checkpoint "" "stop hook: auto-commit.sh"; then
     SANITIZED="detached-${SHORT:-empty}"
   fi
   REF="refs/checkpoints/${SANITIZED}"
-  TIP=$(git rev-parse --short "$REF" 2>/dev/null)
+  TIP=$(git rev-parse --short "$REF" 2>/dev/null) || true  # no ref yet when the first snapshot was a no-op
   echo -e "${GREEN}✅ Checkpoint saved at $TIMESTAMP${NC}"
   echo -e "${GREEN}   Ref: ${REF}${NC}"
   if [ -n "$TIP" ]; then
