@@ -7,8 +7,10 @@ Three rules, enforced for the main agent and for subagents alike and ahead of th
   the commit hooks (--no-verify and its abbreviations, -n in a short-option
   cluster, a core.hooksPath override, a GIT_CONFIG_* environment assignment).
 * config-keystone-write: a git config write to core.hooksPath, alias.*,
-  filter.claude-settings.*, include(.path) or includeIf.*.path may not reach the
-  harness home: the global or system config, a named file (-f/--file or
+  filter.claude-settings.*, include(.path) or includeIf.*.path (also a value
+  that starts with a dash, and a section renamed into include, an
+  includeIf.<condition> section, core, alias or filter.claude-settings) may not
+  reach the harness home: the global or system config, a named file (-f/--file or
   GIT_CONFIG), GIT_COMMON_DIR, a nested or wrapper-flagged call, or a local write
   whose repository (or any directory the command visits before it) is the
   harness home's or cannot be resolved. A plain local write in another
@@ -185,6 +187,64 @@ CONFIG_WRITE_CASES = [
     "git config 'includeIf.gitdir:/srv/a b/.path' inc.cfg",
     "git config \"includeIf.gitdir:/srv/repo/.path\" inc.cfg",
     "g''it config includ''eIf.gitdir:/srv/repo/.pa''th inc.cfg",
+] + [
+    # review round 2 (follow-up to R2 and INFO-1), two write forms the guard
+    # misread. (a) A section rename lands every key of the old section under the
+    # new name, so renaming an unprotected section (one holding a path,
+    # hooksPath, ci or clean key, say) INTO include, an includeIf.<condition>
+    # section, core, alias or filter.claude-settings writes a keystone key: the
+    # new name counts as well as the old one, in option syntax (abbreviated too)
+    # and subcommand syntax, in any letter case.
+    "git config --rename-section acct include",
+    "git config --rename-section acct INCLUDE",
+    "git config --rename-section acct includeIf.gitdir:/srv/repo/",
+    "git config --rename-section acct 'IncludeIf.onbranch:main'",
+    "git config --rename-section acct core",
+    "git config --rename-section acct Core",
+    "git config --rename-section acct alias",
+    "git config --rename-section acct ALIAS",
+    "git config --rename-section acct filter.claude-settings",
+    "git config --ren acct include",
+    "git config --rename acct Include",
+    "git config --local --rename-section acct include",
+    "git config --rename-section -- acct include",
+    "git config rename-section acct include",
+    "git config rename-section acct INCLUDE",
+    "git config rename-section acct includeIf.gitdir:/srv/repo/",
+    "git config rename-section acct core",
+    "git config rename-section acct Alias",
+    "git config rename-section acct filter.claude-settings",
+    "git config rename-section --local acct include",
+    "g''it config --rename-section acct incl''ude",
+    # (b) git reads options only up to the key: every later word is an operand
+    # (the value, then a value pattern) even when it starts with a dash, so these
+    # store a dash value (a hooks path such as --none disables the hooks) or, in
+    # the third-word forms, a value with a dash pattern.
+    "git config core.hooksPath --none",
+    "git config core.hooksPath -n",
+    "git config core.hooksPath --",
+    "git config core.hooksPath -- --none",
+    "git config -- core.hooksPath --none",
+    "git config --local core.hooksPath --none",
+    "git config -z core.hooksPath --none",
+    "git config CORE.HOOKSPATH --none",
+    "git config 'core.hooksPath' '--none'",
+    "git config core.hooksPath --get",
+    "git config core.hooksPath --list",
+    "git config core.hooksPath -l",
+    "git config core.hooksPath --get x",
+    "git config core.hooksPath /dev/null --get",
+    "git config alias.ci '-c core.hooksPath=/dev/null commit'",
+    "git config include.path -inc.cfg",
+    "git config includeIf.gitdir:/srv/repo/.path -inc.cfg",
+    "git config filter.claude-settings.clean -x",
+    "git config set core.hooksPath --get",
+    "git config set core.hooksPath -l",
+    # An option word before the key that the guard does not know (unknown to
+    # git, or an abbreviation) keeps a two-operand form on the deny side, as it
+    # already does when the value has no dash.
+    "git config --frob core.hooksPath --none",
+    "git config --get-a core.hooksPath --none",
 ]
 
 # Review round 2, INFO-1: the same keystone writes as plain local setup in a
@@ -198,6 +258,11 @@ LOCAL_WRITES = [
     "alias.st status",
     "--unset core.hooksPath",
     "include.path ../shared.gitconfig",
+    # the two write forms of the R2/INFO-1 follow-up: a dash value, and a
+    # section renamed into a keystone section (option and subcommand syntax)
+    "core.hooksPath --none",
+    "--rename-section acct include",
+    "rename-section acct alias",
 ]
 TARGET_FORMS = {
     "cwd": "git config {w}",
@@ -242,6 +307,12 @@ REACHES_HARNESS_CASES = [
     "nice -n 5 git config alias.st status",
     "git -C {tmp}/missing config alias.st status",
     "GIT_DIR={tmp}/missing/.git git config alias.st status",
+    # the R2/INFO-1 follow-up forms, through the same channels
+    "git config --global core.hooksPath --none",
+    "git config -f {home}/.git/config core.hooksPath --none",
+    "git config --global --rename-section acct include",
+    "git config --file={home}/.git/config --rename-section acct core",
+    "bash -c 'git config core.hooksPath --none'",
 ]
 
 # Run in the harness home: the shell is back in (or never left) the harness home
@@ -264,6 +335,24 @@ HARNESS_READ_CASES = [
     "git config -f other.cfg alias.st",
     "git config --file other.cfg --get-all alias.st",
     "git config user.name acct-test-123",
+    # R2/INFO-1 follow-up controls: a read given a dash value pattern, a dash
+    # value on another key, a rename between other sections (core.<sub> and
+    # include.<sub> are other sections: git reads neither core.x.hooksPath nor
+    # include.x.path), a dash word that git rejects as an unknown option before
+    # a lone key, and --rename-section after the key, where git reads it as a
+    # value pattern of a plain set.
+    "git config --get core.hooksPath --none",
+    "git config --get-all include.path -inc.cfg",
+    "git config --get-regexp '^alias\\.' -x",
+    "git config get core.hooksPath",
+    "git config user.name --none",
+    "git config acct.k -x",
+    "git config --rename-section acct acct2",
+    "git config rename-section acct acct2",
+    "git config --rename-section acct core.x",
+    "git config --rename-section acct include.x",
+    "git config --none core.hooksPath",
+    "git config acct.k include --rename-section",
 ]
 
 ALLOWED_CASES = [

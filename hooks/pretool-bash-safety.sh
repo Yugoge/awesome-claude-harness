@@ -280,11 +280,11 @@ fi
 # (--no-verify..--no-ver; -n in a short cluster; a core.hooksPath/include/GIT_CONFIG_* override; a `-c alias.X=`
 # call whose expansion skips them: name matched case-insensitively as git does, value + args appended, a `!`-shell
 # alias's child git inheriting the outer -c too; an alias/-c chain overrunning the expansion limit fails closed);
-# (2) a git config WRITE (option/verb form, any case) to core.hooksPath, alias.*, filter.claude-settings.*, include,
-# include.path or includeIf.*.path that can reach the harness home: global/system, a named file, the harness repo or
-# an unresolved one, a nested or wrapper-flagged call (`config` below); a plain local write in another repo passes,
-# reads (--get*/--list/one-arg) too; (3) a commit whose repo (cwd, cd, -C, --git-dir/--work-tree, GIT_DIR/GIT_WORK_TREE
-# prefix/export) has settings.json changed vs HEAD, filter unregistered.
+# (2) a git config WRITE (option/verb form, any case; a rename's new name and a value starting with - too) to alias.*,
+# core.hooksPath, filter.claude-settings.*, include(.path) or includeIf.*.path that can reach the harness home (global/
+# system, a named file, the harness or an unresolved repo, nested, wrapper-flagged: `config` below), not a plain local
+# write elsewhere or a read (--get*/--list before the key, one operand); (3) a commit whose repo (cwd, cd, -C,
+# --git-dir/--work-tree, GIT_DIR/GIT_WORK_TREE prefix/export) has settings.json changed vs HEAD, filter unregistered.
 _CG_STRIP="${COMMAND//[\'\"\\]/}"; _CG_GITRE='(^|[^[:alnum:]_])git'
 if [[ ( "$_CG_STRIP" == *commit* || "$_CG_STRIP" == *config* ) && "$_CG_STRIP" =~ $_CG_GITRE ]]; then
   _CG=$(CG_INPUT="$INPUT" "$PYTHON_BIN" - "$CLAUDE_HOME/hooks" 2>/dev/null <<'PYEOF'
@@ -328,9 +328,9 @@ def one(t, u, depth, lg, gc):  # u: t's words with unrun $( and ` made inert; re
         if w.split('=')[0] in GV: ev[GV[w.split('=')[0]]] = w.split('=', 1)[1] if '=' in w else ''.join(g[j + 1:j + 2])
     if og._git_invocation_injects_keystone_config([*gc, *g]): why.append('a core.hooksPath/include config override')
     if sub == 'config':  # keystone WRITE: denied if nested, wrapper-flagged, --global/--system, -f/--file, GIT_CONFIG or GIT_COMMON_DIR (any abbreviation); else (local) after the scan if its repo or a dir seen before it (cwd/cd/-C) has the harness home's git common dir or none
-        pos = [a for j, a in enumerate(rest) if not a.startswith('-') and not (j and re.fullmatch(r'-[^-f]*f|--file?', rest[j - 1]))]  # a separate -f/--file value is no key
-        wr, x = (True, 0) if any(o in WRF for o in rest) else (False, 0) if any(o in RDF for o in rest) or pos[:1] and pos[0] in CFGR else (True, 1) if pos[:1] and pos[0] in CFGW else (len(pos) >= 2, 0); tgt = (pos[x:x + 1] or [''])[0]
-        return (cfg.append(tgt) if depth or {'GIT_CONFIG', 'GIT_COMMON_DIR'} & {*ev, *os.environ} or any(a[:1] == '-' for a in t[:i]) or any(re.match(r'-[^-]*f|--(fil|gl|sy)', a) for a in rest) else loc.append((tgt, [*dirs], ('-C', base, *(o + '=' + at(base, ev[k]) for o, k in GV.items() if ev.get(k)))))) if wr and prot(tgt) else None
+        ix = [j for j, a in enumerate(rest) if a[:1] != '-' and not (j and re.fullmatch(r'-[^-f]*f|--file?', rest[j - 1]))]; vb, wf = rest[ix[0]] if ix else '', any(o in WRF for o in rest); n = (ix[(vb in CFGW and not wf):] or [len(rest)])[0]  # ix: words that can be the verb or key (no -, not a separate -f/--file value); n: the key
+        rn = any(len(o) > 4 and '--rename-section'.startswith(o) for o in rest[:n]) or vb == 'rename-section' and not wf; wr = wf or not (any(o in RDF for o in rest[:n]) or vb in CFGR) and (vb in CFGW or len(rest) > n + 1); tgt = next((a for j, a in enumerate(rest[n:n + 1 + rn]) for e in ('', '.path')[:1 + j] if prot(a + e)), '')  # git's options end at the key: each later word is an operand (a value may start with -); a rename (option abbreviated too) checks its new name as a section too (includeIf.<condition> holds .path)
+        return (cfg.append(tgt) if depth or {'GIT_CONFIG', 'GIT_COMMON_DIR'} & {*ev, *os.environ} or any(a[:1] == '-' for a in t[:i]) or any(re.match(r'-[^-]*f|--(fil|gl|sy)', a) for a in rest) else loc.append((tgt, [*dirs], ('-C', base, *(o + '=' + at(base, ev[k]) for o, k in GV.items() if ev.get(k)))))) if wr and tgt else None
     gr = [*gc, *(g[:len(g) - len(rest) - 1] if sub else [])]  # `-c alias.X=` overrides: inherited (a `!`-alias's outer -c) then this invocation's own
     al = {kv.strip('\'"').lower().split('=', 1)[0][6:]: (kv.split('=', 1)[1] if '=' in kv else '') for k2, w in enumerate(gr) if (kv := (w[2:] if (w.startswith('-c') and len(w) > 2 and w[2] != 'C') else (gr[k2 + 1] if w in ('-c', '--config-env') and k2 + 1 < len(gr) else (w[13:] if w.startswith('--config-env=') else None)))) and kv.strip('\'"').lower().startswith('alias.')}
     if sub and sub.lower() in al: v = al[sub.lower()].strip(); (why.append('an alias chain past the expansion limit'), commits.append(('-C', base))) if depth >= 4 else scan((v[1:] if v[:1] == '!' else shlex.join(t[:len(t) - len(rest) - 1]) + ' ' + v) + ' ' + shlex.join(rest), depth + 1, gc=gr if v[:1] == '!' else gc)  # git: name case-insensitive; alias word -> value; a `!`-alias's child git inherits -c (gr); a chain past the depth limit fails closed
