@@ -19,7 +19,7 @@ the checked-out `settings.json` (the row set was last reconciled against `@ef6e9
 `scripts/check-enforcement-evidence.py --claims`, which
 compares the derived triple set against the published rows and fails on **either** symmetric
 difference. That check runs inside the already required `baseline` CI job via
-`scripts/verify-claims.sh`.
+`scripts/verify-claims.sh`, which hands it the index copy of `settings.json` (the tracked form).
 
 **The other seven columns are authored in this document.** They are
 <!-- published-columns:authored:begin -->`row_id`,

@@ -59,9 +59,12 @@ parse, so git only ever stores the clean form. A commit that would store `settin
 machine form, or one made while the overlay or the private-literal list is in the index, is
 refused by the pre-commit hook init installs (`render-settings check --staged`); CI runs the same
 check without an overlay. `hooks/pretool-bash-safety.sh` denies agents the forms of skipping
-that hook it can read in a command (`--no-verify`, `-n`, hook-path overrides and `-c`
-aliases on `git commit`; `git config` writes to `core.hooksPath`, `alias.*` and
-`filter.claude-settings.*`); README.md, "Commit protection", names what it does not cover.
+that hook it can read in a command (`--no-verify`, `-n`, hook-path and include overrides and
+`-c` aliases on `git commit`; `git config` writes to `core.hooksPath`, `alias.*`,
+`filter.claude-settings.*`, `include.path` and `includeIf.<condition>.path` that can reach the
+harness, such as a global, system or named-file write, a nested call or a write in the harness
+home's own repository, while a plain local write in another repository is allowed); README.md,
+"Commit protection", names what it denies and what it does not cover.
 
 Personal literals have their own local guard: the private-literal list `private-literals.txt`
 at the harness home (untracked, gitignored; init creates it empty and only the human fills

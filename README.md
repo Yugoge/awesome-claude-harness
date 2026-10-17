@@ -170,9 +170,13 @@ variable expansion) — so prompt-issued commands assume the default location.
   the overlay cannot remove a clean-form entry); `hooks` groups; any other top-level key
   (replaces the clean value). Top-level keys starting with `_` are documentation and are never
   rendered. The guard key `env.CLAUDE_HARD_BANNED_SCRIPTS` has a built-in default: unset or
-  empty, the names `session-recovery` and `restart-all-sessions` match only a script run
-  (`NAME.sh` as a path anywhere in the command, or `NAME` as a command word); a set value
-  replaces them with `|`-separated EREs, each matched anywhere in the command.
+  empty, the names `session-recovery` and `restart-all-sessions` match only as the command word
+  (`NAME` or `NAME.sh`, any directory path, also after an assignment, a `<` redirect or a listed
+  wrapper or shell such as `sudo`, `timeout 30` or `bash -x`): reading, listing, editing or
+  naming the script passes unless the name stands right after a command separator (`;`, `|`,
+  `(`), even in quotes, and a script piped into a shell or run by `find -exec` or an unlisted
+  wrapper (`watch`) is not seen. A set value replaces them with `|`-separated EREs, each matched
+  anywhere in the command.
 - **The filter.** [`.gitattributes`](.gitattributes) declares
   `/settings.json filter=claude-settings`; init registers its clean and smudge commands
   (`scripts/install/render-settings`) in the clone's local git config, with `required = true`.
@@ -242,17 +246,23 @@ Checkpoint snapshots (`refs/checkpoints/*`, written with git plumbing, not `git 
 two of these checks on their temporary index before anything is written: the private-literal
 rule over what the snapshot adds over `HEAD` (when the list is not empty) and, in the harness
 home, `render-settings check --staged` when the snapshot's `settings.json` differs from `HEAD`.
-A refused snapshot writes nothing and is logged without the offending values. It never blocks
-a Stop (with or without `stop_hook_active`): the Stop hook's later phases still run and the
-session shows one line naming the refusing rule and `logs/checkpoint.log`, never a value.
+In the harness home a snapshot is also refused at staging when the registered clean filter
+refuses `settings.json` (see **The filter** above). A refused snapshot writes nothing and is
+logged without the offending values. It never blocks a Stop (with or without
+`stop_hook_active`): the Stop hook's later phases still run and the session shows one line
+naming the refusing rule and `logs/checkpoint.log`, never a value. A broken filter install (the
+filter still `required` but its clean command gone, or `scripts/install/render-settings`
+missing) is a failure, not a refusal: the snapshot fails and blocks the Stop until the install
+is repaired (doctor names what is missing).
 
 **The private-literal list** is `<harness-home>/private-literals.txt`: untracked and gitignored;
 init creates it empty and only you fill it. One literal per line — account names, e-mail
 addresses, private host, product or container names, personal home paths; blank lines and lines
-whose first non-blank character is `#` are ignored; matching is case-sensitive and fixed-string.
-No setting or environment variable moves it. A hit reports `file:line` and the literal's line
-number in the list, never the literal itself. Without the list, or with an empty one (CI, other
-users), the rule prints `SKIP` and the other checks still run. Its scope depends on the caller:
+whose first non-blank character is `#` are ignored; matching is case-sensitive, fixed-string and
+byte-wise, so the same text in another encoding (UTF-16, say) is not matched. No setting or
+environment variable moves it. A hit reports `file:line` and the literal's line number in the
+list, never the literal itself. Without the list, or with an empty one (CI, other users), the
+rule prints `SKIP` and the other checks still run. Its scope depends on the caller:
 the pre-commit hook checks what the staged change adds, a checkpoint snapshot what its temporary
 index adds over `HEAD`, and a plain `bash scripts/check-public-core.sh` every file in the index
 (the content as staged, not the working tree).
@@ -260,25 +270,66 @@ index adds over `HEAD`, and a plain `bash scripts/check-public-core.sh` every fi
 **The commit guard.** `hooks/pretool-bash-safety.sh` denies, for the main agent and subagents
 alike and with no `/do` or `/allow` bypass, the forms it can read in a Bash command — quotes and
 backslashes inside a word dropped (`co''mmit`, `g\it`), through wrappers (`bash -c`, `env`,
-`sudo`), `$(…)`, `cd` and `-C`:
+`sudo`), `$(…)`, `cd` and `-C`. Text the shell does not run is data: a `$(…)` or backtick in
+single quotes or after a backslash is not examined (`echo '$(git commit -n)' > notes.md`, a
+commit message that mentions `git commit -n`); one in double quotes is. It denies:
 
 - a `git commit` that skips hooks: `--no-verify` or an abbreviation of it, `-n` alone or in a
-  short-option cluster, a `core.hooksPath` or `include` override (`-c`, `--config-env`,
-  `GIT_CONFIG_*`), or a `-c alias.<name>=…` alias it invokes that commits with `-n` or
-  `--no-verify` (the `!` shell form too);
-- a `git config` write, in option or subcommand form (the two-argument set included), to
-  `core.hooksPath`, an `alias.*` key or a `filter.claude-settings.*` key; reads stay allowed;
+  short-option cluster, a `core.hooksPath`, `include.path` or `includeIf.<condition>.path`
+  override (`-c`, `--config-env`) or a `GIT_CONFIG_*` assignment, or a `-c alias.<name>=…` alias
+  whose expansion, with the invocation's own arguments, commits that way
+  (`git -c alias.ci=commit ci -n`; the name in any letter case; a `!` shell alias, whose inner
+  git inherits the outer `-c` options); an alias chain past the expansion limit is denied too;
+- a `git config` write to `core.hooksPath`, an `alias.*` key, a `filter.claude-settings.*` key,
+  `include.path` or an `includeIf.<condition>.path` key (option or subcommand form, the
+  two-argument set and a value starting with `-` included, as is removing or renaming the
+  `core`, `alias`, `filter.claude-settings` or `include` section, or renaming a section to one
+  of them or to an `includeIf` section) when it can reach the harness:
+  - `--global`, `--system`, a named file (`-f`/`--file` in any spelling, `GIT_CONFIG`), or
+    `GIT_COMMON_DIR` set;
+  - nested in a string (`bash -c "…"`, `eval "…"`), a double-quoted `$(…)` or an alias, or
+    behind a wrapper's options (`env --chdir`, `sudo -u`);
+  - a local or worktree write whose repository (resolved as for the commit below) cannot be
+    resolved, or when that repository, the working directory or a directory the command
+    entered before the write (`cd`, `pushd`, `-C`) shares the harness home's git directory.
+
+  A plain local write in another repository (`git config core.hooksPath .githooks` in your own
+  project) is allowed, and reads stay allowed;
 - a commit in a repository (from the working directory, `cd`, `-C`, `--git-dir`/`--work-tree`,
   or a `GIT_DIR`/`GIT_WORK_TREE` prefix or export) that declares the settings filter without
   registering it while `settings.json` has local changes.
 
-It does not cover an alias already stored in your git config (`git ci` for a saved
-`commit --no-verify`), a config write given `--file`/`-f` or `--type` as a separate operand,
-`git config edit` (or `-e`), a key or command known only at run time (shell expansion, a script
-written to disk and then run), or a change to the git config file or hooks directory made
-without `git config`. Git copies neither hooks nor local config into a clone, so in a clone that
-never ran init no local check reads what a commit stores; only the unregistered-filter denial
-still refuses an agent's commit there while `settings.json` has local changes. CI runs
+The guard does not see:
+
+- an alias already stored in your git config (`git ci` for a saved `commit --no-verify`);
+- arguments `xargs` reads from its input, or text another program runs: a shell reading a pipe
+  or here-string, an interpreter one-liner (`python -c`, `perl -e`, `node -e`), `watch`, git's
+  editor setting (`-c core.editor=…`), single-quoted substitutions handed to them included
+  (`echo '$(git commit -n)' | sh`);
+- a `bash -c` or `eval` string written with double quotes, plain or escaped, inside a
+  double-quoted `$(…)` (`echo "$(bash -c "git commit -n")"`): it splits that nesting unlike the
+  shell; and nesting past its expansion limit, five or more levels (`bash -c` strings inside
+  each other, for example), which it does not examine (an alias chain that deep is denied);
+- a key or command known only at run time (shell expansion, a script written to disk and then
+  run), or a change to the git config file or hooks directory made without `git config`;
+- `git config edit` (or `-e`), a key hidden behind an option that takes a separate operand
+  (`--type`/`-t`, `--comment`, `--value`), or an abbreviated one-operand write (`--unset-a`).
+
+It errs toward denying in two cases: in the harness home, a protected key after an unknown or
+abbreviated option word counts as a write when another operand follows
+(`git config --get-a alias.x <pattern>`), and in another repository a write whose value starts
+like a file or scope option is denied as one (`git config alias.ff '-c pull.ff=only pull'`).
+
+The commit checks themselves do not see a commit that `git merge`, `cherry-pick`, `revert` or
+`rebase` makes (git runs no pre-commit hook for them), the commit message, or a literal stored
+in another encoding. They run their engines from the working tree, so an edit to
+`scripts/check-public-core.sh` or `scripts/install/render-settings` changes what they refuse;
+an agent can make such an edit today (denying it is planned, P5-a). Deleting both the overlay
+and `<git dir>/claude-settings.applied` leaves the clean filter and `check --staged` no record of
+the machine values, so `git commit -a` can land them; doctor still fails on that state. Git
+copies neither hooks nor local config into a clone, so in a clone that never ran init no local
+check reads what a commit stores; only the unregistered-filter denial still refuses an agent's
+commit there while `settings.json` has local changes. CI runs
 `render-settings check --staged` on the pushed tree, but without the overlay it refuses only
 what is machine-only by definition (CLI-owned keys, `env.CLAUDE_HOME`), non-canonical bytes and
 a tracked overlay or private-literal list, never a personal value that looks like a public entry.
