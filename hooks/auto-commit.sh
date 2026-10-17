@@ -33,21 +33,19 @@ fi
 # shellcheck source=lib/checkpoint-core.sh
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)/lib/checkpoint-core.sh"
 
+SANITIZED=$(git branch --show-current 2>/dev/null | tr '/' '-')  # the ref as write_checkpoint names it
+REF="refs/checkpoints/${SANITIZED:-detached-$(git rev-parse --short HEAD 2>/dev/null || echo empty)}"
+OLD=$(git rev-parse -q --verify "$REF") || true  # rc 0 is written or a no-op: the tip tells which
 if write_checkpoint "" "stop hook: auto-commit.sh"; then
-  TIMESTAMP=$(date +"%Y-%m-%d %H:%M:%S")
-  BRANCH=$(git branch --show-current 2>/dev/null)
-  if [ -n "$BRANCH" ]; then
-    SANITIZED=$(printf '%s' "$BRANCH" | tr '/' '-')
+  TIP=$(git rev-parse -q --verify "$REF") || true  # none yet when the first snapshot was a no-op
+  if [ -n "$TIP" ] && [ "$TIP" != "$OLD" ]; then
+    echo -e "${GREEN}✅ Checkpoint saved at $(date +"%Y-%m-%d %H:%M:%S")${NC}"
   else
-    SHORT=$(git rev-parse --short HEAD 2>/dev/null)
-    SANITIZED="detached-${SHORT:-empty}"
+    echo -e "${GREEN}✅ No changes to checkpoint: nothing written.${NC}"
   fi
-  REF="refs/checkpoints/${SANITIZED}"
-  TIP=$(git rev-parse --short "$REF" 2>/dev/null) || true  # no ref yet when the first snapshot was a no-op
-  echo -e "${GREEN}✅ Checkpoint saved at $TIMESTAMP${NC}"
-  echo -e "${GREEN}   Ref: ${REF}${NC}"
   if [ -n "$TIP" ]; then
-    echo -e "${GREEN}   Tip: ${TIP}${NC}"
+    echo -e "${GREEN}   Ref: ${REF}${NC}"
+    echo -e "${GREEN}   Tip: $(git rev-parse --short "$TIP")${NC}"
   fi
 elif [ "$?" -eq 3 ]; then  # refused, nothing written: a one-line notice (systemMessage), never a Stop block
   printf '{"systemMessage": "Checkpoint snapshot refused by %s: nothing written, see logs/checkpoint.log"}\n' "$checkpoint_refused_by"

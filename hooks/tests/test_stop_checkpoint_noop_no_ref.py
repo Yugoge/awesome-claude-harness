@@ -5,15 +5,18 @@ phases, and hooks/auto-commit.sh itself, in a throwaway copy of the harness home
 claude-settings filter registered as init registers it. The only change is a CLI-only
 settings.json write: git status reports the file modified (its size changed), but the clean
 form drops the key, so the snapshot tree equals HEAD's and write_checkpoint creates no ref.
-auto-commit.sh then exits 0 and prints no tip, and the Stop passes with and without
-stop_hook_active, on a branch and on a detached HEAD. A real change is still snapshotted and
-its tip printed.
+auto-commit.sh then exits 0 and says in one line that nothing changed and nothing was written
+(no ref, no tip: QA on 14344d9 found it still claiming a saved checkpoint), and the Stop passes
+with and without stop_hook_active, on a branch and on a detached HEAD. A real change is still
+snapshotted, reported as saved with its ref and tip; a later no-op says nothing was written
+and names the unchanged ref and tip.
 """
 
 from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -142,17 +145,34 @@ def test_no_op_snapshot_without_a_ref_never_blocks_a_stop(harness) -> None:
     assert _git(env, home, "rev-list", "--all", "--count") == commits_before
 
 
+NOTHING_WRITTEN = "✅ No changes to checkpoint: nothing written."
+
+
+def _lines(proc: subprocess.CompletedProcess) -> list[str]:
+    """auto-commit.sh's stdout lines, colour codes removed."""
+    return re.sub(r"\x1b\[[0-9;]*m", "", proc.stdout).splitlines()
+
+
 def test_auto_commit_prints_no_tip_until_a_snapshot_is_written(harness) -> None:
     home, env, ref = harness
     noop = _auto_commit(home, env)
     assert noop.returncode == 0, noop.stdout + noop.stderr
-    assert f"Ref: {ref}" in noop.stdout and "Tip:" not in noop.stdout
+    assert _lines(noop) == [NOTHING_WRITTEN], noop.stdout  # no "saved", no Ref, no Tip
     assert _git(env, home, "for-each-ref", "refs/checkpoints") == ""
 
     (home / "notes.txt").write_text("ordinary note\n")
     real = _auto_commit(home, env)
     assert real.returncode == 0, real.stdout + real.stderr
     tip = _git(env, home, "rev-parse", "--short", ref)
-    assert f"Tip: {tip}" in real.stdout
+    saved = _lines(real)
+    assert len(saved) == 3 and re.fullmatch(
+        r"✅ Checkpoint saved at \d{4}-\d\d-\d\d \d\d:\d\d:\d\d", saved[0]
+    ), real.stdout
+    assert saved[1:] == [f"   Ref: {ref}", f"   Tip: {tip}"], real.stdout
     assert _git(env, home, "show", f"{ref}:notes.txt") == "ordinary note"
     assert "theme" not in _git(env, home, "show", f"{ref}:settings.json")
+
+    again = _auto_commit(home, env)  # nothing changed since: the ref holds this state already
+    assert again.returncode == 0, again.stdout + again.stderr
+    assert _lines(again) == [NOTHING_WRITTEN, f"   Ref: {ref}", f"   Tip: {tip}"], again.stdout
+    assert _git(env, home, "rev-parse", "--short", ref) == tip
