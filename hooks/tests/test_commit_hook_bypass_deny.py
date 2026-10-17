@@ -153,7 +153,7 @@ CONFIG_WRITE_CASES = [
     # include section, include.path and every includeIf.<condition>.path key are
     # keystone keys too. Section and variable names match case-insensitively;
     # the condition keeps its case and may hold dots, colons, slashes or globs.
-    "git config include.path /home/acct-test-123/inc.cfg",
+    "git config include.path /opt/demo/inc.cfg",
     "git config --global include.path inc.cfg",
     "git config --local include.path inc.cfg",
     "git config --add include.path inc.cfg",
@@ -176,7 +176,7 @@ CONFIG_WRITE_CASES = [
     "git config \"include.path\" inc.cfg",
     "g''it config incl''ude.path inc.cfg",
     "git con\\fig include.pa\\th inc.cfg",
-    "git config includeIf.gitdir:/home/acct-test-123/proj/.path inc.cfg",
+    "git config includeIf.gitdir:/opt/demo/proj/.path inc.cfg",
     "git config --global includeIf.gitdir:~/work/.path inc.cfg",
     "git config --add includeIf.gitdir/i:/srv/Repo/.path inc.cfg",
     "git config --replace-all includeIf.onbranch:main.path inc.cfg",
@@ -282,7 +282,7 @@ TARGET_FORMS = {
 # (the guard does not resolve the repository there), and an unresolvable target.
 # {home} is the harness home, {tmp} the test's temporary directory.
 REACHES_HARNESS_CASES = [
-    "git config --global core.hooksPath /home/acct-test-123/hooks",
+    "git config --global core.hooksPath /opt/demo/hooks",
     "git config --global alias.st status",
     "git config --gl alias.st status",
     "git config --system alias.st status",
