@@ -302,6 +302,8 @@ commit message that mentions `git commit -n`); one in double quotes is. It denie
 The guard does not see:
 
 - an alias already stored in your git config (`git ci` for a saved `commit --no-verify`);
+- an alias defined with `--config-env`, whose argument names the environment variable that
+  holds the value: it takes the variable's name as the value, not what the variable holds;
 - arguments `xargs` reads from its input, or text another program runs: a shell reading a pipe
   or here-string, an interpreter one-liner (`python -c`, `perl -e`, `node -e`), `watch`, git's
   editor setting (`-c core.editor=…`), single-quoted substitutions handed to them included
