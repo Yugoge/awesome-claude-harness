@@ -561,7 +561,7 @@ exit "$rc"
 # INTEGRATION NOTE (deliberately NOT wired — see DELIVERY in the header).
 #
 # When this is to become blocking, add it to scripts/verify-claims.sh as its OWN numbered step
-# between the current step 4 (helper-script count) and step 5 (template sync), using the same
+# after the current step 4 (helper-script count; step 5 is retired), using the same
 # accumulator so its failures aggregate rather than abort:
 #
 #     # 4b. Extended headline claims (slash / on-disk / permissions / distinct wired).

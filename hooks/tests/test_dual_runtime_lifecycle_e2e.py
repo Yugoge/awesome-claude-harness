@@ -18,17 +18,19 @@ from pathlib import Path
 import pytest
 
 
-SOURCE_ROOT = Path(__file__).parents[2]
-if not (SOURCE_ROOT / "hooks" / "prompt-workflow.py").is_file():
-    SOURCE_ROOT = Path("/root/.claude")
-NATIVE = Path("/root/.codex/hooks/codex_native_harness.py")
+# The harness under test is the checkout that holds this file, never an install path.
+SOURCE_ROOT = Path(__file__).resolve().parents[2]
+# The native runtime is an external codex install: its config home is CODEX_HOME,
+# else ~/.codex.
+CODEX_HOME = Path(os.environ.get("CODEX_HOME") or Path.home() / ".codex")
+NATIVE = CODEX_HOME / "hooks" / "codex_native_harness.py"
 PROMPT = SOURCE_ROOT / "hooks" / "prompt-workflow.py"
 PRETOOL = SOURCE_ROOT / "hooks" / "pretool-workflow-gate.py"
 POSTTODO = SOURCE_ROOT / "hooks" / "posttool-todo-tracker.py"
 CLAUDE_STOP = SOURCE_ROOT / "hooks" / "stop-overnight-timelock.py"
 ACTIVE_CONFIGS = {
-    "claude": Path("/root/.claude/settings.json"),
-    "codex": Path("/root/.codex/hooks.json"),
+    "claude": SOURCE_ROOT / "settings.json",
+    "codex": CODEX_HOME / "hooks.json",
 }
 REQUIRED_CHAIN_EVENTS = ("UserPromptSubmit", "PreToolUse", "PostToolUse", "Stop")
 PRESERVATION_POLICY = "immutable_prior_family_atomic_current_pointer/v1"
@@ -337,6 +339,8 @@ def _fixture_env(runtime: str, root: Path, home: Path, clock: str) -> dict[str, 
     return {
         **os.environ,
         "HOME": str(home),
+        "CLAUDE_CONFIG_DIR": str(home / ".claude"),
+        "CLAUDE_HOME": str(home / ".claude"),
         "CLAUDE_PROJECT_DIR": str(root),
         "CODEX_PROJECT_DIR": str(root),
         "CODEX_NATIVE_HARNESS_LEGACY_TODO_DIR": str(home / ".claude" / "todos"),
@@ -354,7 +358,7 @@ def make_configured_fixture(base: Path, runtime: str, name: str) -> dict:
     claude_home = home / ".claude"
     claude_home.mkdir(parents=True)
     for child in ("hooks", "scripts", "commands", "agents"):
-        (claude_home / child).symlink_to(Path("/root/.claude") / child, target_is_directory=True)
+        (claude_home / child).symlink_to(SOURCE_ROOT / child, target_is_directory=True)
     (claude_home / "todos").mkdir()
     (root / "scripts" / "todo").mkdir(parents=True)
     shutil.copy2(SOURCE_ROOT / "scripts" / "todo" / "dev.py", root / "scripts" / "todo" / "dev.py")
@@ -901,7 +905,8 @@ def test_claude_root_real_entrypoint_stop_is_not_time_locked(tmp_path: Path, fro
     (root / "scripts" / "todo").mkdir(parents=True)
     shutil.copy2(SOURCE_ROOT / "scripts" / "todo" / "dev.py", root / "scripts" / "todo" / "dev.py")
     sid = f"claude-stop-{frontier}"
-    env = {**os.environ, "HOME": str(root), "CLAUDE_PROJECT_DIR": str(root)}
+    env = {**os.environ, "HOME": str(root), "CLAUDE_CONFIG_DIR": str(root / ".claude"),
+           "CLAUDE_PROJECT_DIR": str(root)}
     start = _run(PROMPT, None, {"session_id": sid, "cwd": str(root), "prompt": f"/dev claude frontier {frontier}"}, env)
     assert start.returncode == 0, start.stderr
     registry = root / ".claude" / "dev-registry"
@@ -938,7 +943,8 @@ def test_claude_root_bare_dev_replay_mints_new_id_after_terminal_dev_report(tmp_
     (root / "scripts" / "todo").mkdir(parents=True)
     shutil.copy2(SOURCE_ROOT / "scripts" / "todo" / "dev.py", root / "scripts" / "todo" / "dev.py")
     sid = "claude-terminal-replay"
-    env = {**os.environ, "HOME": str(root), "CLAUDE_PROJECT_DIR": str(root)}
+    env = {**os.environ, "HOME": str(root), "CLAUDE_CONFIG_DIR": str(root / ".claude"),
+           "CLAUDE_PROJECT_DIR": str(root)}
     payload = {"session_id": sid, "cwd": str(root), "prompt": "/dev claude terminal replay"}
     registry = root / ".claude" / "dev-registry"
 
@@ -971,7 +977,7 @@ def test_claude_root_bare_dev_replay_mints_new_id_after_terminal_dev_report(tmp_
 
 
 def test_active_codex_hook_plan_has_one_lifecycle_owner() -> None:
-    hooks = json.loads(Path("/root/.codex/hooks.json").read_text())["hooks"]
+    hooks = json.loads(ACTIVE_CONFIGS["codex"].read_text())["hooks"]
     commands = [hook["command"] for groups in hooks.values() for group in groups for hook in group["hooks"]]
     for retired in (
         "prompt-workflow.py", "pretool-workflow-gate.py", "posttool-todo-tracker.py",

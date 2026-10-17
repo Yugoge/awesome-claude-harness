@@ -5,7 +5,7 @@
 
 This repository is a **Claude Code global configuration** (`~/.claude` symlinks to it) that turns one chat agent into a disciplined software team. A main *orchestrator* agent's direct writes are mechanically constrained by the orchestrator gate (one non-whitelist tool per turn, unlockable by `/do`) so that real work is intended for single-purpose **subagents** it dispatches; a defense-in-depth chain of **PreToolUse / PostToolUse / Stop** hooks makes catastrophic git and filesystem mistakes mechanically hard — gated by hooks that fail closed by default, with narrow audited human break-glass paths (`/do`, `/allow`); and an autonomous overnight loop explores, fixes, verifies, and commits in an isolated worktree until a wall-clock deadline. Everything here is plain Markdown prompts plus small Python/Bash hooks and scripts — the behavior change comes from *enforcement in code*, not from asking the model nicely.
 
-This document is the maintainer-facing companion to [`README.md`](README.md): the README is the value-prop overview, this file goes deeper into mechanisms, data flows, lifecycles, and the *why* behind the design. The component counts in §1 are recomputed from the live `settings.json` and are kept in step with the README badge.
+This document is the maintainer-facing companion to [`README.md`](README.md): the README is the value-prop overview, this file goes deeper into mechanisms, data flows, lifecycles, and the *why* behind the design. The hook counts in §1 are recomputed from the tracked clean-form `settings.json` (paseo module off) and are kept in step with the README.
 
 ---
 
@@ -17,27 +17,28 @@ All counts below were established by enumerating the actual repository, not copi
 |---|---|---|
 | **Subagents** (`agents/*.md`, excluding `INDEX.md`/`README.md`) | **23** | `ls agents/*.md \| grep -vE '/(INDEX\|README)\.md$'` |
 | **Slash commands** (`commands/*.md`, excluding `INDEX.md`/`README.md`) | **20** | `ls commands/*.md \| grep -vE '/(INDEX\|README)\.md$'` |
-| **Hook command entries wired** in `settings.json` | **71** | sum of `hooks[*][*].hooks[]` over all lifecycle events |
-| **Distinct hook files referenced** by `settings.json` | **69** (+1 = **70** paths) | unique `hooks/*.py\|*.sh` paths in those entries; the remaining wired executable is the non-hooks `scripts/canary-verify.sh` (SessionStart) → 70 distinct wired executable paths |
-| **Lifecycle events used** | **8** | keys of `settings.json.hooks` |
-| **Hook files present on disk** (`hooks/*.py` + `*.sh`, excl. `.bak`) | **94** | `find hooks -maxdepth 1 -type f \( -name '*.py' -o -name '*.sh' \)` |
-| **Helper scripts** (`scripts/` top-level *tracked* files, excl. `INDEX/README`) | **95** | `git ls-files scripts/ \| grep -E 'scripts/[^/]+$'` minus `INDEX`/`README` |
+| **Hook command entries wired** in `settings.json` | **82** | sum of `hooks[*][*].hooks[]` over all lifecycle events (clean form, paseo module off) |
+| **Distinct hook files referenced** by `settings.json` | **80** (+1 = **81** paths) | unique `hooks/*.py\|*.sh` paths in those entries; the remaining wired executable is the non-hooks `scripts/canary-verify.sh` (SessionStart) → 81 distinct wired executable paths |
+| **Lifecycle events used** | **9** | keys of `settings.json.hooks` |
+| **Hook files present on disk** (`hooks/*.py` + `*.sh`, excl. `.bak`) | **112** | `find hooks -maxdepth 1 -type f \( -name '*.py' -o -name '*.sh' \)` |
+| **Helper scripts** (`scripts/` top-level *tracked* files, excl. `INDEX/README`) | **119** | `git ls-files scripts/ \| grep -E 'scripts/[^/]+$'` minus `INDEX`/`README` |
 | **Skills** (`skills/*/` directories) | **8** | `ls -d skills/*/` |
-| `permissions.allow` / `deny` / `ask` entries | 165 / 96 / 0 | keys of `settings.json.permissions` |
+| `permissions.allow` / `deny` / `ask` entries | 152 / 96 / 0 | keys of `settings.json.permissions` (clean form) |
 
-> Note on the hook count: more hook *files* exist on disk (**94**) than are *wired* (**69** hooks files / 70 executable entries). The unwired files are install scripts, libraries, legacy/`.bak` variants, and intentionally-staged hooks. The number that matters for behavior is **what `settings.json` wires**: 69 distinct `hooks/` files plus `scripts/canary-verify.sh` under `SessionStart` — **no referenced executable is duplicated**. The eight lifecycle events are `SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `PostToolUseFailure`, `Notification`, `Stop`, `SubagentStop`.
+> Note on the hook count: more hook *files* exist on disk (**112**) than are *wired* (**80** `hooks/` files / 81 executables). The unwired files are install scripts, libraries, legacy/`.bak` variants, hooks run as phases of `stop-workflow-coordinator.py`, the paseo module's hook, and intentionally-staged hooks. The number that matters for behavior is **what `settings.json` wires**: 80 distinct `hooks/` files plus `scripts/canary-verify.sh` under `SessionStart`, 82 entries in all because `hooks/posttool-allowlist-consume.py` is wired twice (under `PostToolUse` and `PostToolUseFailure`). The nine lifecycle events are `SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `PostToolUseFailure`, `Notification`, `Stop`, `SessionEnd`, `SubagentStop`. These are the clean form's numbers with the paseo module off; turning the module on adds one `UserPromptSubmit` entry (`hooks/userprompt-usage-snapshot.py`) and a `mcp__paseo__browser_run_code` matcher alternative on the two runcode-watchdog groups.
 
 ### Per-event wiring (from `settings.json`)
 
 | Event | Matcher blocks | Hook entries |
 |---|---|---|
-| `SessionStart` | 1 | 7 |
+| `SessionStart` | 1 | 8 |
 | `UserPromptSubmit` | 4 | 6 |
-| `PreToolUse` | 22 | 30 |
-| `PostToolUse` | 8 | 15 |
+| `PreToolUse` | 25 | 35 |
+| `PostToolUse` | 10 | 18 |
 | `Notification` | 1 | 1 |
-| `Stop` | 1 | 4 |
-| `SubagentStop` | 4 | 7 |
+| `Stop` | 4 | 4 |
+| `SessionEnd` | 1 | 1 |
+| `SubagentStop` | 5 | 8 |
 | `PostToolUseFailure` | 1 | 1 |
 
 ### 1.1 External dependencies (REQUIRED vs OPTIONAL)
@@ -47,7 +48,7 @@ The harness is a configuration, not a pip-installable package (no `pyproject.tom
 | Dependency | Tier | Subsystem / why |
 |---|---|---|
 | Claude Code (host) | **REQUIRED** | Must fire `UserPromptSubmit` / `Notification` / `SubagentStop` hook events, honor `disable-model-invocation` frontmatter, and enforce `Skill(*)` permission denies. Older clients that lack these silently skip the guardrails — there is no in-tree version literal, so the baseline is stated as a **capability** requirement, not a number. |
-| Python 3 + `~/.claude/venv` | **REQUIRED** | Every Python hook (git kernel, gates, doc-sync) and helper script. The venv is created empty by the user. |
+| Python 3 + `<harness-home>/venv` | **REQUIRED** | Every Python hook (git kernel, gates, doc-sync) and helper script; hook commands run `python3`, several hooks and the helper scripts use the venv's interpreter. The venv is not tracked: init (`scripts/bootstrap`) creates it from a hash-locked `requirements/` lockfile, or reuses one that already has the manifest packages. |
 | `git` | **REQUIRED** | Git-native checkpoints, grant tokens, and the keystone. Normal use needs a recent git (2.4x+); the overnight reference-transaction keystone's structural HEAD-switch protection needs **git ≥ 2.46** (`scripts/overnight-git-selftest.sh` `_ge_246`; box validated on 2.54). |
 | `jq` | **REQUIRED** | JSON parsing in shell hooks/scripts. |
 | Bash + GNU userland (coreutils, util-linux/`flock`, findutils, `grep`, `sed`, `awk`/gawk) | **REQUIRED** | `realpath`, `flock`, `stat`, `sha256sum`, `date`, `grep`, `sed`, `awk`, `find`. GNU forms assumed; BSD/macOS flag differences can break hooks. |
@@ -118,7 +119,7 @@ flowchart TD
 - **Command surface (`commands/*.md`).** 20 slash commands. Each is a prompt that scripts a workflow (parse → dispatch → validate → ship). Release/control commands carry `disable-model-invocation: true`, which blocks **SlashCommand self-dispatch only**; the `Skill`-tool path is closed separately by an explicit `Skill(<name>:*)` deny in `permissions.deny` (see *Why `disable-model-invocation`?* below).
 - **Subagent fleet (`agents/*.md`).** 23 specialists, each a system prompt with `name`/`description`/`tools` frontmatter. Subagents bypass the orchestrator gate (they are *supposed* to do work) but are still subject to the safety, git, and worktree hooks.
 - **Hook enforcement (`settings.json` + `hooks/`).** The kernel. Every tool call the agent makes is intercepted; hooks return exit 2 to block. Shared logic lives in `hooks/lib/` (allowlist/sentinel grants, checkpoint core, contract runtime, agent resolver).
-- **Support.** `scripts/` (95 helpers: grant writers, graphify code-graph, spec/dev-report resolvers), `skills/` (8: Playwright UI-audit suite), `schemas/` (JSON contracts like `context.v1.json`, `cycle-contract.v1.json`, `dev-report.v1.json`, `qa-report.v1.json`), `templates/` (`spec-template.md`, `overnight-spec.md`).
+- **Support.** `scripts/` (119 helpers: grant writers, graphify code-graph, spec/dev-report resolvers), `skills/` (8: Playwright UI-audit suite), `schemas/` (JSON contracts like `context.v1.json`, `cycle-contract.v1.json`, `dev-report.v1.json`, `qa-report.v1.json`), `templates/` (`spec-template.md`, `overnight-spec.md`).
 
 ### The 23 subagents (by role)
 
@@ -353,18 +354,20 @@ flowchart LR
 ├── ARCHITECTURE.md          # this document
 ├── README.md                # overview / value-prop (hand-maintained; no AUTO block)
 ├── INDEX.md                 # top-level index
-├── settings.json            # 69 wired hook files / 71 entries across 8 lifecycle events; permissions; env
+├── settings.json            # clean form, the one settings source: 80 wired hook files / 82 entries across 9 lifecycle events (paseo off); permissions; env
+├── settings.machine.example.json  # documented example of the untracked machine overlay settings.machine.json
+├── .gitattributes           # declares the claude-settings clean/smudge filter for settings.json
 ├── agents/                  # 23 subagent definitions  (+ INDEX.md, README.md)
 ├── commands/                # 20 slash-command workflows (+ INDEX.md, README.md)
-├── hooks/                   # enforcement layer (94 files on disk; 69 wired)
+├── hooks/                   # enforcement layer (112 files on disk; 80 wired)
 │   ├── lib/                 #   allowlist (sentinel grants), checkpoint-core, contract runtime, resolvers
 │   ├── doc_sync/            #   self-updating INDEX/README/CLAUDE regeneration package
 │   └── git-keystone/        #   git-native ref-transaction protection
-├── scripts/                 # 95 helper scripts (graphify, grant writers, spec/dev-report resolvers, ...)
-│   └── install/             #   install helpers
+├── scripts/                 # 119 helper scripts (graphify, grant writers, spec/dev-report resolvers, ...)
+│   └── install/             #   install helpers (installer profiles; render-settings: the settings filter, render, check, migrate)
 ├── skills/                  # 8 skills: Playwright UI-audit suite (ui-*)
 ├── schemas/                 # JSON contracts: context.v1, cycle-contract.v1, dev-report.v1, qa-report.v1, ...
-├── templates/               # spec-template.md, overnight-spec.md, settings template
+├── templates/               # spec-template.md, overnight-spec.md
 ├── tests/                   # test infra; tests/generated/ holds AC-driven pytest skeletons + manifest.json
 └── docs/                    # architecture, incidents, references, design philosophy
     └── reference/           #   checkpoint-mechanism.md, incidents-*.md, graphify-integration.md, ...

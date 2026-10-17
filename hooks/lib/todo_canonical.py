@@ -19,7 +19,7 @@ def _find_todo_script(cmd_name):
     project_dir = Path(os.environ.get('CLAUDE_PROJECT_DIR', os.getcwd()))
     candidates = [
         project_dir / 'scripts' / 'todo' / f'{cmd_name}.py',
-        Path.home() / '.claude' / 'scripts' / 'todo' / f'{cmd_name}.py',
+        Path(__file__).resolve().parents[2] / 'scripts' / 'todo' / f'{cmd_name}.py',
     ]
     for path in candidates:
         if path.exists():

@@ -1,40 +1,41 @@
-#!/bin/bash
-# pre-commit - Git pre-commit hook template
-# Installed by Claude Code git tracking solution
-# Location: .git/hooks/pre-commit
-#
-# This hook checks for untracked files before allowing commits
-# and can optionally auto-stage, warn, or block commits.
-#
-# Configuration is done via environment variables in ~/.claude/settings.json:
-#   GIT_AUTO_STAGE_ALL - Auto-stage all files before commit (default: 0)
-#   GIT_BLOCK_ON_UNTRACKED - Block commits if untracked files exist (default: 0)
-#   GIT_WARN_UNTRACKED - Show warnings about untracked files (default: 1)
-#
-# To bypass this hook: git commit --no-verify
+#!/usr/bin/env bash
+# claude-harness pre-commit (installed by scripts/bootstrap)
+# Fail-closed: each step refuses the commit (one line naming the check) if its check fails OR its script
+# (from this working tree, never a home directory) is missing. A displaced hook runs last as pre-commit.local.
+set -u
 
-# Sentinel lint — guards the dev-registry injection anchor in the three
-# orchestrator files (dev.md, dev-command.md, dev-overnight.md). Fires only
-# when one of those files is part of the staged diff; otherwise passes through
-# with zero cost. See /root/.claude/hooks/sentinel-lint.sh for details.
-if [ -f "$HOME/.claude/hooks/sentinel-lint.sh" ]; then
-  staged_targets=$(git diff --cached --name-only 2>/dev/null \
-    | grep -E '^commands/dev(\.md|-command\.md|-overnight\.md)$' || true)
-  if [ -n "$staged_targets" ]; then
-    if ! "$HOME/.claude/hooks/sentinel-lint.sh"; then
-      echo "❌ Pre-commit blocked: sentinel-lint failed (see above)." >&2
-      exit 1
-    fi
-  fi
+refuse() { echo "pre-commit: commit REFUSED by the $*" >&2; exit 1; }
+need() { [ -f "$top/$2" ] || refuse "$1: $2 is missing"; }
+
+# Resolved before changing directory: git may run the hook by a relative path.
+hook_dir="$(cd "$(dirname "$0")" 2>/dev/null && pwd)" \
+  || refuse "hook check: cannot resolve the directory this hook runs from"
+top="$(git rev-parse --show-toplevel 2>/dev/null)" && [ -n "$top" ] && cd "$top" \
+  || refuse "repository check: cannot find or enter the top of the working tree"
+
+# 1. Untracked-file policy first: with GIT_AUTO_STAGE_ALL=1 it stages files the checks below must see.
+need "untracked-file check" hooks/pre-commit-check.sh
+bash "$top/hooks/pre-commit-check.sh" || refuse "untracked-file check: hooks/pre-commit-check.sh failed"
+
+# 2. settings.json staged in clean form.
+need "settings check" scripts/install/render-settings
+python3 "$top/scripts/install/render-settings" check --staged \
+  || refuse "settings check: scripts/install/render-settings check --staged failed"
+
+# 3. No listed private literal added by this commit (report shown only on refusal).
+need "private-literal check" scripts/check-public-core.sh
+if ! report="$(bash "$top/scripts/check-public-core.sh" --private-literals 2>&1)"; then
+  printf '%s\n' "$report" >&2
+  refuse "private-literal check: scripts/check-public-core.sh --private-literals failed"
 fi
 
-# Source the checking script from Claude Code hooks directory
-if [ -f "$HOME/.claude/hooks/pre-commit-check.sh" ]; then
-  "$HOME/.claude/hooks/pre-commit-check.sh"
-  exit $?
-else
-  # If the check script is missing, allow commit but warn
-  echo "⚠️  Warning: pre-commit-check.sh not found"
-  echo "Expected location: $HOME/.claude/hooks/pre-commit-check.sh"
-  exit 0
+# 4. Sentinel lint, only when an orchestrator file (dev.md, dev-command.md, dev-overnight.md) is staged.
+staged="$(git diff --cached --name-only)" || refuse "sentinel lint: cannot list the staged paths"
+if printf '%s\n' "$staged" | grep -qE '^commands/dev(\.md|-command\.md|-overnight\.md)$'; then
+  need "sentinel lint" hooks/sentinel-lint.sh
+  bash "$top/hooks/sentinel-lint.sh" || refuse "sentinel lint: hooks/sentinel-lint.sh failed"
 fi
+
+# 5. Chain to the displaced hook, if any.
+[ -x "$hook_dir/pre-commit.local" ] && exec "$hook_dir/pre-commit.local" "$@"
+exit 0

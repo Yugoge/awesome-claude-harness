@@ -25,7 +25,10 @@ REPO_ROOT = HOOK.parent.parent
 
 
 def _run_gate(transcript_path, project_dir, home, mode=None, session_id="gate-test-sess"):
-    env = {**os.environ, "CLAUDE_PROJECT_DIR": str(project_dir), "HOME": str(home)}
+    # The gate keeps its advisory log under the configuration directory
+    # (CLAUDE_CONFIG_DIR, else ~/.claude): pin both to the scratch home.
+    env = {**os.environ, "CLAUDE_PROJECT_DIR": str(project_dir), "HOME": str(home),
+           "CLAUDE_CONFIG_DIR": str(home / ".claude")}
     if mode is None:
         env.pop("CLAUDE_OBLIGATION_TERMINAL", None)
     else:

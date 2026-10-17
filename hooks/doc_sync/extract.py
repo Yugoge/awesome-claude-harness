@@ -13,8 +13,7 @@ except ImportError:
 # Known-file descriptions for files whose content cannot be introspected
 # reliably via generic key scanning (e.g. no title/name key at top level).
 _KNOWN_FILE_DESCRIPTIONS: dict[str, str] = {
-    'settings.json': 'Claude Code harness configuration (permissions, hooks, env, model)',
-    'settings.template.json': 'Distributable harness settings template (uses CLAUDE_HOME placeholders)',
+    'settings.json': 'Claude Code harness configuration (permissions, hooks, env)',
     'requirements.txt': 'Python dependency manifest for the Claude Code harness venv',
 }
 

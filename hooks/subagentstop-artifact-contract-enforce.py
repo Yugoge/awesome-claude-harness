@@ -358,9 +358,9 @@ def _load_script_module(script_name: str):
 
 def _nested_claude_repo() -> list:
     """Same supported-repository admission /commit Step 5 passes: the real
-    ~/.claude checkout (omitted when it is not a git checkout)."""
+    harness checkout this hook is installed in (omitted when it is not a git checkout)."""
     try:
-        real = os.path.realpath(os.path.expanduser("~/.claude"))
+        real = str(SCRIPTS_DIR.parent)
         proc = subprocess.run(
             ["git", "-C", real, "rev-parse", "--show-toplevel"],
             capture_output=True, text=True, timeout=10,

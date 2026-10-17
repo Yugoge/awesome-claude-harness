@@ -105,22 +105,29 @@ mkdir -p "$CLONE/hooks/lib" "$CLONE/policies" "$CLONE/scripts" "$CLONE/scripts/i
   || { echo "smoke: cannot build clone tree" >&2; exit 2; }
 
 # Structural sentinel set: settings.json + hooks/ + policies/ + scripts/ present.
-# settings.json is RENDERED below from the tracked template.
+# settings.json is the tracked CLEAN FORM below (what a fresh clone checks out).
 cp -a "$REPO/hooks/lib/." "$CLONE/hooks/lib/" 2>/dev/null
 cp -a "$REPO/hooks/pretool-tool-policy.py" "$CLONE/hooks/" 2>/dev/null
 cp -a "$REPO/hooks/stop-spec-coverage-enforce.py" "$CLONE/hooks/" 2>/dev/null
 cp -a "$REPO/hooks/session-promote-hook.sh" "$CLONE/hooks/" 2>/dev/null
 cp -a "$REPO/policies/." "$CLONE/policies/" 2>/dev/null
 
-# Render settings.json from the tracked template into the clone's install home.
-if [ -f "$REPO/settings.template.json" ] && [ -x "$REPO/scripts/install/render-settings" ]; then
-  cp -a "$REPO/settings.template.json" "$CLONE/" 2>/dev/null
-  python3 "$REPO/scripts/install/render-settings" "$CLONE" \
-      --template "$CLONE/settings.template.json" --out "$CLONE/settings.json" >/dev/null 2>&1 \
-    || echo '{}' > "$CLONE/settings.json"
-else
-  echo '{}' > "$CLONE/settings.json"
-fi
+# clean_settings <dest>: write the tracked clean form of settings.json. In a checkout
+# the working file may be this machine's rendered form (settings filter registered),
+# so read the index blob, else HEAD's; outside a git checkout the working file IS the
+# clean form. A fresh clone checks out exactly this, with no machine values.
+clean_settings() {
+  local dest="$1" top=""
+  top="$(git -C "$REPO" rev-parse --show-toplevel 2>/dev/null)" || top=""
+  if [ -n "$top" ] && [ "$(cd "$top" 2>/dev/null && pwd -P)" = "$REPO" ]; then
+    git -C "$REPO" show ":settings.json" > "$dest" 2>/dev/null && return 0
+    git -C "$REPO" show "HEAD:settings.json" > "$dest" 2>/dev/null && return 0
+  fi
+  cp "$REPO/settings.json" "$dest" 2>/dev/null && return 0
+  echo '{}' > "$dest"
+}
+
+clean_settings "$CLONE/settings.json"
 
 if ! detect_drop; then
   echo "smoke: running as root but cannot drop to a non-root user (setpriv/nobody unavailable) — cannot satisfy the non-root precondition" >&2
@@ -455,17 +462,12 @@ GATE_JSON="$TMP_BASE/gate-residuals.json"
 mkdir -p "$GATE_TREE"
 # Build $GATE_TREE from the LIVE working-tree surfaces (the migrated truth). The
 # membership filter (pinned --baseline-ref + --cycle-file) is what excludes
-# foreign post-cycle additions copied in by `cp -a`; settings.json is RENDERED so
-# the surface matches what a fresh clone would install.
+# foreign post-cycle additions copied in by `cp -a`; settings.json is the tracked
+# clean form so the surface matches what a fresh clone would install.
 for d in hooks scripts commands agents skills schemas policies; do
   [ -d "$REPO/$d" ] && cp -a "$REPO/$d" "$GATE_TREE/"
 done
-[ -f "$REPO/settings.template.json" ] && cp -a "$REPO/settings.template.json" "$GATE_TREE/"
-if [ -x "$REPO/scripts/install/render-settings" ] && [ -f "$GATE_TREE/settings.template.json" ]; then
-  python3 "$REPO/scripts/install/render-settings" "$GATE_TREE" \
-    --template "$GATE_TREE/settings.template.json" --out "$GATE_TREE/settings.json" >/dev/null 2>&1 \
-    || echo '{}' > "$GATE_TREE/settings.json"
-fi
+clean_settings "$GATE_TREE/settings.json"
 
 # Assert the derived baseline equals THIS CYCLE'S RECORDED baseline (the same
 # sha test_AC_WS2_6 pins). A report tampered/regenerated against a different ref

@@ -19,7 +19,8 @@
     "CLAUDE.md",
     "LICENSE",
     "NOTICE",
-    "settings.template.json",
+    "settings.json",
+    "settings.machine.example.json",
     "requirements.txt",
     "requirements/**",
     "VERSION",
@@ -31,17 +32,18 @@
     "requirements/**": "shared/infra hash-pinned lockfiles; scripts/bootstrap installs from these, so a release without them cannot bootstrap.",
     "VERSION": "shared/infra release marker; consumers and the verifier read it to confirm the archive matches the tag.",
     "PUBLIC-CORE.md": "shared/infra governance ledger, but scripts/check-public-core.sh ships (scripts/ is public-core) and READS this ledger; omitting it would ship a checker that cannot run.",
-    "release-membership.v1.json": "this manifest itself: scripts/verify-release-manifest.sh validates the DOWNLOADED archive's contents against it, so it must travel inside the archive rather than being fetched from a source checkout the verifier is forbidden to rebuild from."
+    "release-membership.v1.json": "this manifest itself: scripts/verify-release-manifest.sh validates the DOWNLOADED archive's contents against it, so it must travel inside the archive rather than being fetched from a source checkout the verifier is forbidden to rebuild from.",
+    "settings.json": "public-core: the one hand-maintained settings source in its clean public form (no install path, CLI-owned key or personal entry; machine values live in the untracked overlay settings.machine.json, which never ships). It ships because an installed archive has no other settings source: init renders the working file from it plus the overlay. Formerly excluded as the maintainer's live private-lab config."
   },
   "exclude": [
     "tests/**",
     ".github/**",
     ".claude/**",
     ".gitignore",
+    ".gitattributes",
     "INDEX.md",
     "pytest.ini",
     "conftest.py",
-    "settings.json",
     "NESTED-REPO.md",
     "push.sh",
     "venv/**"
@@ -51,10 +53,10 @@
     ".github/**": "build/CI meta; not part of the installed harness.",
     ".claude/**": "repo-identity sentinel and per-repo session state; not shipped.",
     ".gitignore": "repo meta.",
+    ".gitattributes": "shared/infra repo meta: declares the claude-settings clean/smudge filter for settings.json, which init registers inside a git checkout; an extracted archive is not one.",
     "INDEX.md": "auto-generated navigation meta.",
     "pytest.ini": "test-runner config; belongs with the excluded test net.",
     "conftest.py": "pytest collection config; belongs with the excluded test net.",
-    "settings.json": "private-lab: the maintainer's live config (personal permission entries + absolute install-home paths). It IS tracked — the P3 untrack is not authorized — so this entry excludes it by CLASS, not by absence, so this entry records why a TRACKED path is withheld rather than noting an absent one. Belt-and-braces, not the operative filter: membership is include-first and no include pattern matches settings.json, so dropping this entry leaves the resolved path set unchanged. Consumers render their own from settings.template.json via scripts/bootstrap.",
     "NESTED-REPO.md": "private-lab: documents the maintainer's exact host topology.",
     "push.sh": "private-lab: maintainer pre-push wrapper.",
     "venv/**": "local virtualenv, never tracked."

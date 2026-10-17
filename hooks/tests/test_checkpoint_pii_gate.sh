@@ -23,6 +23,18 @@
 #     and did the push log gain an ALERT line. This is a stronger
 #     verification than a PATH-shimmed mock (it exercises real git plumbing
 #     end-to-end) while still never touching the network.
+#   - AC5/AC6 (review item 5): write_checkpoint refuses a temp index that the
+#     pre-commit hook's own checks refuse -- AC5 the private-literal rule (an
+#     untracked file holding a listed stand-in literal), AC6 the settings check
+#     in a harness-home layout (machine-form settings.json staged without the
+#     filter; a UTF-8 byte order mark in front of it with the filter). No new
+#     snapshot commit, return code 3, a refusal line in checkpoint.log that holds
+#     no literal or value, the failure counter is left alone (review R5: a refusal
+#     is not a failure); ordinary snapshots are still written. The byte order mark
+#     is refused earlier, by the required clean filter inside `git add -A`: in the
+#     harness home that is a refusal too (return code 3, review R5), asked of the
+#     clean engine itself; a broken install (engine missing, clean command unset)
+#     and a non-harness repository whose filter fails stay ordinary failures (1).
 #
 # Usage: bash hooks/tests/test_checkpoint_pii_gate.sh
 # Exit:  0 = all assertions pass; 1 = any assertion failed.
@@ -206,8 +218,185 @@ else
 fi
 
 # ============================================================================
+# AC5 / AC6: snapshots the pre-commit hook's checks refuse are not written.
+# ============================================================================
+STANDIN="acct-test-123"   # synthetic stand-in literal / personal value
+log_file="$CHECKPOINT_LOG_FILE"
+fail_count() { local n; n=$(cat "$CHECKPOINT_FAIL_COUNT_FILE" 2>/dev/null | tr -dc '0-9'); printf '%s' "${n:-0}"; }
+# _snap <label> <lib> <repo>: one write_checkpoint run in a subshell (sourcing
+# <lib>, so the library resolves its harness home from that copy). Sets
+# snap_rc, snap_before, snap_after (the checkpoint ref before/after the run)
+# and snap_log (what the run appended to checkpoint.log).
+_snap() {
+  local label="$1" lib="$2" repo="$3" ref lines=0
+  ref="refs/checkpoints/$(git -C "$repo" branch --show-current | tr '/' '-')"
+  [ -f "$log_file" ] && lines=$(wc -l < "$log_file" | tr -d ' ')
+  snap_before=$(git -C "$repo" rev-parse -q --verify "$ref")
+  ( . "$lib" && write_checkpoint "$repo" "test: $label" "test: $label" ) >/dev/null 2>&1
+  snap_rc=$?
+  snap_after=$(git -C "$repo" rev-parse -q --verify "$ref")
+  snap_log=$(tail -n "+$((lines + 1))" "$log_file" 2>/dev/null)
+}
+_refused() {  # <AC> <label> <expected log substring> [<expected rc, default 3>]
+  local want="${4:-3}"
+  if [ "$snap_rc" -eq "$want" ] && [ "$snap_after" = "$snap_before" ]; then
+    _ok "$1: $2 -> rc=$want, no new snapshot commit"
+  else
+    _fail "$1: $2 -> expected rc=$want and an unchanged ref (rc=$snap_rc, before='$snap_before', after='$snap_after')"
+  fi
+  if printf '%s' "$snap_log" | grep -qF -- "$3"; then
+    _ok "$1: $2 -> checkpoint.log names the reason ('$3')"
+  else
+    _fail "$1: $2 -> checkpoint.log lacks '$3' (got: $snap_log)"
+  fi
+  if printf '%s' "$snap_log" | grep -qF -- "$STANDIN"; then
+    _fail "$1: $2 -> checkpoint.log prints the stand-in literal/value"
+  else
+    _ok "$1: $2 -> checkpoint.log holds no literal or value"
+  fi
+}
+_written() {  # <AC> <label>
+  if [ "$snap_rc" -eq 0 ] && [ -n "$snap_after" ] && [ "$snap_after" != "$snap_before" ]; then
+    _ok "$1: $2 -> new snapshot written"
+  else
+    _fail "$1: $2 -> expected a new snapshot (rc=$snap_rc, before='$snap_before', after='$snap_after')"
+  fi
+}
+
+# --- AC5: the private-literal rule (any repository with a non-empty list) ---
+REPO3="$WORKDIR/repo3"
+mkdir -p "$REPO3"
+git init -q "$REPO3"
+git -C "$REPO3" config user.name "Test"
+git -C "$REPO3" config user.email "test@example.invalid"
+printf '/private-literals.txt\n' > "$REPO3/.gitignore"
+printf 'hello\n' > "$REPO3/README.md"
+git -C "$REPO3" add -A
+git -C "$REPO3" commit -q -m "init"
+printf '# stand-in list for the test\n%s\n' "$STANDIN" > "$REPO3/private-literals.txt"
+
+printf 'ordinary note\n' > "$REPO3/notes.txt"
+_snap "AC5 ordinary" "$CORE_LIB" "$REPO3"
+_written AC5 "ordinary untracked file with a list present"
+
+printf 'ticket for %s, demo only\n' "$STANDIN" > "$REPO3/leak.txt"
+printf '1\n' > "$CHECKPOINT_FAIL_COUNT_FILE"   # one earlier failure: a refusal neither adds nor resets
+count_before=$(fail_count)
+_snap "AC5 literal" "$CORE_LIB" "$REPO3"
+_refused AC5 "untracked file holding a listed literal" "snapshot refused by the private-literal rule"
+if [ "$(fail_count)" -eq "$count_before" ]; then
+  _ok "AC5: the refusal is not counted as a checkpoint failure (counter unchanged)"
+else
+  _fail "AC5: failure counter changed on a refusal (before='${count_before}', after='$(fail_count)')"
+fi
+if printf '%s' "$snap_log" | grep -qF "leak.txt:1"; then
+  _ok "AC5: checkpoint.log names the offending file:line"
+else
+  _fail "AC5: checkpoint.log does not name leak.txt:1 (got: $snap_log)"
+fi
+
+rm -f "$REPO3/leak.txt"
+printf 'second note\n' >> "$REPO3/notes.txt"
+_snap "AC5 after removal" "$CORE_LIB" "$REPO3"
+_written AC5 "the same repository once the literal is gone"
+[ "$(fail_count)" = "0" ] && _ok "AC5: success resets the failure counter" \
+  || _fail "AC5: failure counter not reset (got '$(fail_count)')"
+
+: > "$REPO3/private-literals.txt"
+printf 'ticket for %s, demo only\n' "$STANDIN" > "$REPO3/leak.txt"
+_snap "AC5 empty list" "$CORE_LIB" "$REPO3"
+_written AC5 "an empty list never refuses"
+
+# --- AC6: the settings check in a harness-home layout -----------------------
+H="$WORKDIR/harness"
+mkdir -p "$H/hooks/lib" "$H/scripts/install"
+cp "$CORE_LIB" "$H/hooks/lib/checkpoint-core.sh"
+cp "$REPO_ROOT/scripts/check-public-core.sh" "$H/scripts/check-public-core.sh"
+cp "$REPO_ROOT/scripts/install/render-settings" "$H/scripts/install/render-settings"
+H_LIB="$H/hooks/lib/checkpoint-core.sh"
+git init -q "$H"
+git -C "$H" config user.name "Test"
+git -C "$H" config user.email "test@example.invalid"
+printf '/settings.machine.json\n/private-literals.txt\n' > "$H/.gitignore"
+printf '/settings.json filter=claude-settings\n' > "$H/.gitattributes"
+printf '{\n  "permissions": {\n    "allow": [\n      "Bash(git status:*)"\n    ]\n  }\n}\n' > "$H/settings.json"
+git -C "$H" add -A
+git -C "$H" commit -q -m "init"
+clean_blob=$(git -C "$H" rev-parse HEAD:settings.json)
+printf '{\n  "permissions": {\n    "allow": [\n      "Bash(/home/%s/bin/sync.sh:*)"\n    ]\n  }\n}\n' "$STANDIN" \
+  > "$H/settings.machine.json"
+# The machine form, as smudge renders it (it also records the applied layer).
+(cd "$H" && python3 scripts/install/render-settings smudge < settings.json > settings.json.new) \
+  && mv "$H/settings.json.new" "$H/settings.json"
+if grep -qF "$STANDIN" "$H/settings.json"; then
+  _ok "AC6 setup: working settings.json is in machine form (holds the stand-in)"
+else
+  _fail "AC6 setup: smudge did not render the stand-in into settings.json"
+fi
+
+printf 'ordinary note\n' > "$H/notes.txt"
+_snap "AC6 unfiltered" "$H_LIB" "$H"
+_refused AC6 "machine-form settings.json staged without the filter" \
+  "snapshot refused by the settings check"
+
+for key in clean smudge; do
+  git -C "$H" config "filter.claude-settings.$key" "python3 scripts/install/render-settings $key"
+done
+git -C "$H" config filter.claude-settings.required true
+_snap "AC6 filtered" "$H_LIB" "$H"
+_written AC6 "machine-form settings.json with the filter registered"
+if [ -n "$snap_after" ] && [ "$(git -C "$H" rev-parse "$snap_after:settings.json")" = "$clean_blob" ]; then
+  _ok "AC6: the snapshot holds the clean form of settings.json"
+else
+  _fail "AC6: the snapshot's settings.json is not the clean form"
+fi
+
+{ printf '\357\273\277'; cat "$H/settings.json"; } > "$H/settings.json.new" && mv "$H/settings.json.new" "$H/settings.json"
+printf 'second note\n' >> "$H/notes.txt"
+printf '1\n' > "$CHECKPOINT_FAIL_COUNT_FILE"   # one earlier failure: a refusal neither adds nor resets
+_snap "AC6 BOM" "$H_LIB" "$H"
+_refused AC6 "UTF-8 byte order mark in front of the machine form (filter registered)" \
+  "snapshot refused by the settings filter (render-settings clean): nothing written"
+if printf '%s' "$snap_log" | grep -qF "byte order mark" && [ "$(fail_count)" = 1 ]; then
+  _ok "AC6: the filter's reason is logged and the BOM refusal leaves the failure counter alone"
+else
+  _fail "AC6: BOM refusal: reason missing from the log or counter changed (count='$(fail_count)', log: $snap_log)"
+fi
+
+# A broken install is not a refusal: the snapshot still fails (rc 1) and is counted.
+mv "$H/scripts/install/render-settings" "$H/render-settings.away"
+_snap "AC6 engine missing" "$H_LIB" "$H"
+_refused AC6 "clean filter registered, its engine missing (broken install)" "add -A failed" 1
+mv "$H/render-settings.away" "$H/scripts/install/render-settings"
+git -C "$H" config --unset filter.claude-settings.clean
+_snap "AC6 clean unset" "$H_LIB" "$H"
+_refused AC6 "required filter registered without a clean command (broken install)" "add -A failed" 1
+git -C "$H" config filter.claude-settings.clean "python3 scripts/install/render-settings clean"
+[ "$(fail_count)" = 3 ] && _ok "AC6: both broken-install failures are counted (1 -> 3)" \
+  || _fail "AC6: broken-install failures not counted (got '$(fail_count)')"
+
+# Outside the harness home a failing filter on a settings.json stays an ordinary failure.
+REPO4="$WORKDIR/repo4"
+git init -q "$REPO4"
+git -C "$REPO4" config user.name "Test"
+git -C "$REPO4" config user.email "test@example.invalid"
+printf '/settings.json filter=claude-settings\n' > "$REPO4/.gitattributes"
+git -C "$REPO4" add -A
+git -C "$REPO4" commit -q -m "init"
+git -C "$REPO4" config filter.claude-settings.clean "python3 $H/scripts/install/render-settings clean"
+git -C "$REPO4" config filter.claude-settings.required true
+cp "$H/settings.json" "$REPO4/settings.json"   # still holds the byte order mark
+_snap "AC6 other repository" "$H_LIB" "$REPO4"
+_refused AC6 "another repository whose settings filter fails staging" "add -A failed" 1
+
+# Once the byte order mark is gone the next snapshot is written again.
+tail -c +4 "$H/settings.json" > "$H/settings.json.new" && mv "$H/settings.json.new" "$H/settings.json"
+_snap "AC6 BOM removed" "$H_LIB" "$H"
+_written AC6 "the machine form again, byte order mark removed"
+
+# ============================================================================
 if [ "$FAILS" -eq 0 ]; then
-  echo "ALL ASSERTIONS PASS (AC1, AC2, AC3, AC4)"
+  echo "ALL ASSERTIONS PASS (AC1, AC2, AC3, AC4, AC5, AC6)"
   exit 0
 else
   echo "$FAILS assertion(s) failed" >&2

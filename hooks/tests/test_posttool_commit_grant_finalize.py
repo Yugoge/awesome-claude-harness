@@ -255,6 +255,23 @@ def age(path, seconds):
     os.utime(path, (stamp, stamp))
 
 
+def hook_env(home, **overrides):
+    """Environment for running a hook by execution, confined to the test's temp area.
+
+    Redirecting HOME alone is not enough. Hooks resolve the configuration directory
+    from CLAUDE_CONFIG_DIR (default $HOME/.claude; the Stop hook appends its consent
+    log there) and runtime state from CLAUDE_STATE_DIR (default /tmp; the Stop hook
+    reaps sentinel grants and consent/streak flags there). A caller that exports
+    either would otherwise have this run write into, or reap from, its real
+    directories, so both are pinned beside `home`, which lives inside the temp area.
+    """
+    env = dict(os.environ, HOME=home, CLAUDE_CONFIG_DIR=home + "-config",
+               CLAUDE_STATE_DIR=home + "-state", **overrides)
+    for path in (home, env["CLAUDE_CONFIG_DIR"], env["CLAUDE_STATE_DIR"]):
+        os.makedirs(path, exist_ok=True)
+    return env
+
+
 def payload(tool_use_id, session_id="sid-subagent"):
     """A hook payload shaped like the ones claude-code delivers to BOTH hook events."""
     return {"tool_name": "Bash", "session_id": session_id, "tool_use_id": tool_use_id}
@@ -956,10 +973,13 @@ def _run(tmp):
     # is owned exactly when the locked grant it records is owned. The sweep may
     # remove OWN-session or OVER-AGE artifacts only; undecidable is left alone.
     # This drives the REAL script through its CLAUDE_COMMIT_GRANT_SWEEP_DIR test
-    # seam so live /tmp pointers are never touched. The script's other reaps run
-    # against flag names keyed by this scenario's unique sid (no-ops) or reap only
-    # expired/malformed sentinels — the same production behavior every real agent
-    # Stop already performs; HOME is redirected so the consent log stays in tmp.
+    # seam so live /tmp pointers are never touched. hook_env() pins HOME,
+    # CLAUDE_CONFIG_DIR (the consent log) and CLAUDE_STATE_DIR (consent/streak
+    # flags keyed by this scenario's unique sid, and the sentinel-grant reap) inside
+    # tmp, so the run neither writes into nor reaps from the caller's directories.
+    # The one reap no variable can redirect is the bulk-commit sentinel sweep,
+    # hardcoded to /tmp in the script; it removes only expired sentinels, as every
+    # real agent Stop already does.
     stop_script = HOOKS_DIR / "stop-cleanup-allowlist.sh"
     sweep_dir = os.path.join(tmp, "r26-sweep")
     fake_home = os.path.join(tmp, "r26-home")
@@ -997,8 +1017,7 @@ def _run(tmp):
                         pointer_for(crashed_lck, "R26CRASH"), backdate=stale_bound + 120)
     undecidable = plant("claude-commit-grant-sid-r26-mystery-dd44.json.lck",
                         "{ not json")
-    sweep_env = dict(os.environ, CLAUDE_COMMIT_GRANT_SWEEP_DIR=sweep_dir,
-                     HOME=fake_home)
+    sweep_env = hook_env(fake_home, CLAUDE_COMMIT_GRANT_SWEEP_DIR=sweep_dir)
     for key in ("CLAUDE_SESSION_ID", "CLAUDE_CODE_SESSION_ID"):
         sweep_env.pop(key, None)
     try:
@@ -1498,7 +1517,7 @@ def _run(tmp):
         json.dump({"sid": "sid-f10-own"}, handle)
     link_lck = os.path.join(sweep2, "claude-commit-grant-sid-f10-link-ff66.json.lck")
     os.symlink(live_lck, link_lck)
-    env2 = dict(os.environ, CLAUDE_COMMIT_GRANT_SWEEP_DIR=sweep2, HOME=home2)
+    env2 = hook_env(home2, CLAUDE_COMMIT_GRANT_SWEEP_DIR=sweep2)
     for key in ("CLAUDE_SESSION_ID", "CLAUDE_CODE_SESSION_ID"):
         env2.pop(key, None)
     try:
@@ -1910,8 +1929,7 @@ def _run(tmp):
                                   "transcript_path": os.path.join(tmp, "f9.jsonl"),
                                   "cwd": tmp}),
                 text=True, capture_output=True, timeout=60,
-                env=dict(os.environ, CLAUDE_COMMIT_GRANT_SWEEP_DIR=sweep_dir,
-                         HOME=home))
+                env=hook_env(home, CLAUDE_COMMIT_GRANT_SWEEP_DIR=sweep_dir))
             return proc.returncode
         except Exception:
             return "raised"
@@ -2059,7 +2077,7 @@ def main():
     }
     saved_env = {key: os.environ.pop(key, None)
                  for key in ("CLAUDE_SESSION_ID", "CLAUDE_CODE_SESSION_ID",
-                             "CLAUDE_TASK_ID")}
+                             "CLAUDE_TASK_ID", "CLAUDE_CONFIG_DIR", "CLAUDE_STATE_DIR")}
     try:
         # Checked on the REAL templates, before either is redirected: the whole binding is
         # worthless if the writer and the reader name different files.
@@ -2089,6 +2107,14 @@ def main():
             sentinels = os.path.join(tmp, "sentinel-grants")
             os.makedirs(sentinels)
             AL.SENTINEL_GRANT_DIR = sentinels
+            # The hook code this file runs in-process (PT.main(), the finalizer, the
+            # guard's writer) resolves the state root at call time; anything spawned inherits
+            # this environment: pin the state root and the configuration directory
+            # inside tmp, as hook_env() does for the hooks run by execution.
+            for key, name in (("CLAUDE_STATE_DIR", "state"),
+                              ("CLAUDE_CONFIG_DIR", "config")):
+                os.environ[key] = os.path.join(tmp, name)
+                os.makedirs(os.environ[key])
             return _run(tmp)
     finally:
         CJ.JOURNAL_ROOT = saved["journal_root"]

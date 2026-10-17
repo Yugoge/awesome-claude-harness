@@ -153,6 +153,8 @@ def _run_hook(
     env = dict(os.environ)
     env["CLAUDE_PROJECT_DIR"] = str(project_dir)
     env["HOME"] = str(home_dir)
+    # Transcripts live in the configuration directory; pin it to this HOME.
+    env["CLAUDE_CONFIG_DIR"] = str(Path(home_dir) / ".claude")
     payload: dict = {"agent_id": agent_id}
     if session_id is not None:
         payload["session_id"] = session_id

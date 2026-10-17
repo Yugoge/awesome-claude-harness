@@ -29,7 +29,7 @@ polls its origin for up to POSITIVE_TIMEOUT seconds; any other case is only
 concluded NEGATIVE_SETTLE seconds after its own trigger. Every case is judged
 against its own origin, while the waits of different cases overlap.
 
-Also pinned here: the shipped settings.json and settings.template.json set
+Also pinned here: the shipped settings.json (its tracked clean form) sets
 GIT_AUTO_PUSH to "0"; hooks/checkpoint.sh (/checkpoint) tells the truth about
 the push in both switch states; and hooks/session-git-init.sh (SessionStart),
 which can create a GitHub repository, runs with a stub gh on PATH that logs its
@@ -60,7 +60,7 @@ INSTALLER = HOOKS / "install-protection-all.sh"
 FSWATCH = HOOKS / "git-fswatch.sh"
 CHECKPOINT_CMD = HOOKS / "checkpoint.sh"
 SESSION_GIT_INIT = HOOKS / "session-git-init.sh"
-SHIPPED_SETTINGS = ("settings.json", "settings.template.json")
+SHIPPED_SETTINGS = ("settings.json",)
 
 # "unset" leaves the variable out of the environment; every other entry is the
 # literal value. Only "1" may push.

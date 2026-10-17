@@ -16,10 +16,13 @@ the other open:
   statement separator instead of a conjunction, so a non-zero source does not
   stop the git call and execution proceeds to whatever git $PATH resolves.
 
-MEASURED TRAP (earlier lane, do not undo): every lab here is built under
-/dev/shm, NOT under /tmp. The overnight isolation boundary mounts its own tmpfs
-over /tmp, which shadows a lab placed there and silently fabricates a false
-read-only-filesystem result.
+MEASURED TRAP (earlier lane, do not undo): the overnight isolation boundary
+mounts its own tmpfs over /tmp, which shadows a lab placed there and silently
+fabricates a false read-only-filesystem result. So no lab path is hard-coded
+under /tmp: labs live in the default temp dir, which inside a harness session is
+TMPDIR (the harness settings point it outside /tmp), or under
+OVERNIGHT_GITENV_LAB_BASE when that is set. Outside a session (CI) nothing
+shadows /tmp.
 """
 
 from __future__ import annotations
@@ -30,6 +33,7 @@ import os
 import re
 import shutil
 import subprocess
+import tempfile
 import uuid
 from pathlib import Path
 
@@ -45,7 +49,7 @@ DOC = REPO / "commands" / "dev-overnight.md"
 PROMPT_WORKFLOW = REPO / "hooks" / "prompt-workflow.py"
 
 LAB_BASE = Path(os.environ.get("OVERNIGHT_GITENV_LAB_BASE")
-                or "/dev/shm/claude-gitenv-labs")
+                or Path(tempfile.gettempdir()) / "claude-gitenv-labs")
 
 # The provisioning region is sliced out of the live launcher at test time, so the
 # harness can never drift into a stale copy of the code it claims to test.

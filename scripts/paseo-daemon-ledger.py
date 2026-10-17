@@ -93,6 +93,7 @@ import json
 import os
 import re
 import secrets
+import shutil
 import subprocess
 import sys
 from datetime import datetime, timedelta, timezone
@@ -130,7 +131,6 @@ ERROR_CLASS_ACTION = {
 # These are tunable knob DEFAULTS (config.json overrides); the contract SHAPE
 # (ordered thresholds; unavailable/missing -> unknown) is normative.
 DEFAULT_TIER_THRESHOLDS = {"plentiful_min": 50, "near_limit_max": 15, "exhausted_max": 5}
-DEFAULT_ACCOUNTS = ["orchestrade", "yugetang", "yugoge"]
 # Inbox-drain staleness judge (R1, spec-20260910-164747 AC-1.1): the default
 # threshold is proportional to heartbeat_minutes, never a hardcoded absolute
 # -- 3 tick periods is long enough that one missed/late tick never
@@ -212,12 +212,13 @@ def check_barrier(root):
 
 
 def cmd_init(args, root, now):
+    accounts = [a.strip() for a in args.accounts.split(",") if a.strip()]
+    if not accounts:
+        fail(EXIT_USAGE, "init: no account given -- pass --accounts NAME[,NAME...] "
+                         "or set PASEO_DAEMON_ACCOUNTS (comma-separated); nothing written")
     root.mkdir(parents=True, exist_ok=True)
     for d in LAYOUT_DIRS:
         (root / d).mkdir(parents=True, exist_ok=True)
-    accounts = [a.strip() for a in args.accounts.split(",") if a.strip()]
-    if not accounts:
-        fail(EXIT_USAGE, "at least one account name required")
     accounts_path = root / "accounts.json"
     if not accounts_path.exists():
         atomic_write_json(accounts_path, {
@@ -1622,8 +1623,8 @@ WAKE_ENGINE_POLICY = "vendor-parity-2026-09"
 WAKE_VERIFY_WINDOW_DEFAULT_DAYS = 30
 WAKE_VERIFY_WINDOW_MAX_DAYS = 365
 # Resolved through load_config so a test can record the digest of a fixture it
-# owns; the deployed absolute path is only the default (M14).
-WAKE_VENDOR_NODE_PATH_DEFAULT = "/usr/bin/node"
+# owns; the default is the absolute path of the `node` found on PATH (M14).
+WAKE_VENDOR_NODE_PATH_DEFAULT = shutil.which("node") or "node"
 
 # The vendor rule-source probe.  Runs in the DEPLOYED runtime and reports the
 # zone's whole-minute UTC-offset table in the canonical form of M13:
@@ -2795,8 +2796,8 @@ def build_parser():
              "require_lease_holder()")
 
     s = sub.add_parser("init")
-    s.add_argument("--accounts", default=",".join(DEFAULT_ACCOUNTS),
-                   help="comma-separated account names (default: the three claude accounts)")
+    s.add_argument("--accounts", default=os.environ.get("PASEO_DAEMON_ACCOUNTS", ""),
+                   help="comma-separated account names (default: $PASEO_DAEMON_ACCOUNTS)")
     s.set_defaults(fn=cmd_init)
 
     # build_parser() runs before any config file is read (main() calls
@@ -2991,9 +2992,9 @@ def build_parser():
     s = sub.add_parser("wake-status")
     s.set_defaults(fn=cmd_wake_status)
     s = sub.add_parser("watchdog-check")
-    # Defaults to the real, live registry (mirrors paseo-daemon-timers.py's
-    # own --registry-dir default at this module's sibling script) -- NOT
-    # None (QA close-debate, task 20261004-050913: a None default left the
+    # Defaults to the real registry, ~/.paseo/schedules (mirrors the sibling
+    # paseo-daemon-timers.py's own --registry-dir default) -- NOT None (QA
+    # close-debate, task 20261004-050913: a None default left the
     # self-heal branch permanently unreachable in the deployed system, since
     # the live watchdog prompt invokes this subcommand with no
     # --registry-dir flag at all and that prompt file is out of scope to
@@ -3007,7 +3008,7 @@ def build_parser():
     # pass an explicit --registry-dir pytest tmp_path whenever it declares
     # an eligible teardown, exactly as paseo-daemon-timers.py's own tests
     # always override its --registry-dir.
-    s.add_argument("--registry-dir", default="/root/.paseo/schedules",
+    s.add_argument("--registry-dir", default=str(Path.home() / ".paseo" / "schedules"),
                    help="timer schedule registry dir for the self-heal branch (resume + "
                         "re-arm tick ONLY when the ledger's latest teardown-declare was "
                         "--for-restart with no --keep-down); defaults to the real registry "

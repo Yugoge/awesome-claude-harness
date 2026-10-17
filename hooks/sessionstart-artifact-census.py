@@ -52,7 +52,7 @@ def project_dir():
 
 def restart_state_dir():
     override = os.environ.get("CLAUDE_RESTART_STATE_DIR")
-    return Path(override) if override else Path.home() / ".claude" / "restart-state"
+    return Path(override) if override else Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude") / "restart-state"
 
 
 def census_dir():

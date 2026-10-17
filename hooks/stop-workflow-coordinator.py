@@ -1,21 +1,15 @@
 #!/usr/bin/env python3
 """Serialize Stop phases and call the sole receipt-gated resource finalizer.
 
-LANE-B (20260808-035658) M4/M7: registered as the harness's actual Stop hook,
-replacing the four discrete phase entries it now sequences internally.
+LANE-B (20260808-035658) M4/M7: the registered Stop hook, running the four former Stop
+entries as phases in order. A passing phase may end its stdout with a JSON object whose
+systemMessage (auto-commit's refused-snapshot notice) main() shows as this hook's own.
 
-Resource-broker preflight is opt-in, not universal: LANEB_SESSION_RESOURCE_TRUST_KEY
-and LANEB_SESSION_RESOURCE_TRUST_ROOT are never set by default anywhere in this
-harness (no SessionStart provisioning exists), so nearly every session has no
-resource session to finalize. When either trust variable is absent, this
-coordinator skips resource preflight/finalize entirely and only runs the four
-phases -- it must NOT call session_resources.resolve_current_resource_session()
-in that case, because that call unconditionally raises when the trust authority
-is unconfigured, which would turn "no LANE-B resource session was ever
-provisioned" (the default state for every session) into a permanent stop-block
-for the entire harness. Only once a resource session has actually been
-provisioned (trust variables present) does resource finalization -- and its
-fail-closed guarantees -- apply.
+Resource preflight/finalize is opt-in: LANEB_SESSION_RESOURCE_TRUST_KEY and _TRUST_ROOT
+are set nowhere by default (no SessionStart provisioning). Without both, only the phases
+run and session_resources.resolve_current_resource_session() must NOT be called: it
+raises when the trust authority is unconfigured, which would make that default state a
+permanent Stop block. Fail-closed finalization applies once a resource session exists.
 """
 
 from __future__ import annotations
@@ -168,12 +162,17 @@ def _run_phase(
         decision = _structured_timelock_decision(stdout)
         if decision in {"invalid", "block"}:
             status = decision
+    try:  # the notice of the module docstring; main() relays it
+        notice = json.loads(stdout.strip().splitlines()[-1])["systemMessage"]
+    except (LookupError, TypeError, ValueError):
+        notice = None
     return {
         "phase": phase.name,
         "status": status,
         "returncode": result.returncode,
         "stdout_sha256": hashlib.sha256(result.stdout).hexdigest(),
         "stderr_sha256": hashlib.sha256(result.stderr).hexdigest(),
+        **({"notice": notice} if status == "allow" and isinstance(notice, str) else {}),
     }
 
 
@@ -276,10 +275,8 @@ def run_coordinator(
                 "finalizer_called": False,
             }, 2
     if resource_session_id is None:
-        # No LANE-B resource session was ever provisioned for this claude
-        # session (the default state: nothing opted into scratch/process
-        # registration). Phases already ran and passed above; there is
-        # nothing to finalize, so this is a normal pass, not a block.
+        # No resource session was provisioned (the default): the phases passed and
+        # there is nothing to finalize, so this is a normal pass, not a block.
         return {
             "status": "pass",
             "phases": results,
@@ -334,6 +331,9 @@ def main() -> int:
     if not isinstance(payload, dict):
         payload = {}
     result, exit_code = run_coordinator(payload, raw_payload=raw or b"{}")
+    notices = [phase.pop("notice") for phase in result["phases"] if "notice" in phase]
+    if notices:
+        result["systemMessage"] = "\n".join(notices)
     print(json.dumps(result, sort_keys=True, ensure_ascii=False))
     return exit_code
 

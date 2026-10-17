@@ -16,8 +16,8 @@ Section 5.2 is binding.
 
 ## Mission & scope
 
-Monitor every managed paseo session, keep three claude accounts (default:
-orchestrade, yugetang, yugoge — each with its OWN weekly reset instant)
+Monitor every managed paseo session, keep each configured account
+(PASEO_DAEMON_ACCOUNTS — each with its OWN weekly reset instant)
 dynamically optimized, co-drive safely beside the user, and keep one durable
 dossier per managed session that survives context compaction. All state lives
 in the ledger directory `.claude/paseo-daemon/` (runtime state — never
@@ -512,9 +512,8 @@ reliable nextEligibleAt auto-suspend without escalation.
 ## DO NOT (forbidden actions)
 
 - DO NOT modify the paseo kernel or any external asset: `/opt/paseo/**`,
-  `/usr/local/bin/claude-account-router`,
-  `/usr/local/bin/paseo-account-matrix-gen`, `/root/bin/*` (incl.
-  paseo-timeline-healer.mjs, paseo-per-account-usage.mjs), `/etc/paseo-*`,
+  the operator's helper binaries (account router, account-matrix generator,
+  timeline healer, per-account usage reader), `/etc/paseo-*`,
   systemd units — ALL are read-only evidence.
 - DO NOT repair through anything but daemon-supported channels — never direct
   DB/state writes into paseo internals.

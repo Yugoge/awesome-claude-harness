@@ -29,7 +29,7 @@ Power users may also pass an explicit task-id or path: `/close <task-id>` or `/c
 
 `/do`-developed work writes a lightweight do-report (`docs/dev/do-report-<task-id>.json`, see `commands/do.md`); `/close <task-id>` reads it and runs the normal QA path — no `--force` needed. `--force` remains a fallback for work with no do-report (hand-edits). Follow with `/commit <task-id>`.
 
-<!-- Cross-reference: BA spec /root/docs/dev/ba-spec-20260426-redev8.md § AC-CLOSE-FORCE-1..6 govern --force / --reason behavior. -->
+<!-- Cross-reference: BA spec <harness-home>/docs/dev/ba-spec-20260426-redev8.md § AC-CLOSE-FORCE-1..6 govern --force / --reason behavior. -->
 
 
 ## Workflow

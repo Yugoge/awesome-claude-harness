@@ -8,11 +8,12 @@ subprocess over a synthetic envelope, the handshake orchestrator, and
 Two disciplines are load-bearing and deliberately explicit:
 
   * NO MUTATION OF THE LIVE SECURITY BOUNDARY. The settings-render test copies
-    the template and the rendered file into an isolated config root and drives
-    `render-settings` with explicit --template/--out targets. A postcondition
-    asserts the real settings.json, settings.template.json and the effective
-    permission sets are byte-for-byte unchanged. Mutate-and-restore against the
-    live boundary is forbidden, not merely discouraged.
+    the renderer and settings.json into an isolated harness home and drives
+    `render-settings render` there, against an overlay written into that copy.
+    A postcondition asserts the real settings.json, the real overlay (present
+    or absent) and the effective permission sets are byte-for-byte unchanged.
+    Mutate-and-restore against the live boundary is forbidden, not merely
+    discouraged.
   * THE INDEPENDENCE MATRIX VARIES GATE EFFICACY, NOT ONLY GATE REGISTRATION.
     A matrix that only ever adds/removes the settings entry never visits the real
     threat host -- one whose settings list the gate while the host never
@@ -217,45 +218,50 @@ def test_mutation_e_host_build_invalidates(home: Path, monkeypatch):
 def test_mutation_f_render_regeneration_invalidates_without_touching_live_boundary(tmp_path: Path):
     """Mutation (f): a render-settings regeneration that alters settings.json bytes.
 
-    Executed against an ISOLATED copied config root with explicit --template/--out
-    targets. Mutate-and-restore against the live permission boundary is forbidden:
-    the live file's allow-list is already divergent from its template, so a render
-    aimed at it would strip broadened allow entries and re-add deny entries as a
-    side effect of an acceptance step -- on the very surface this lane protects.
+    Executed against an ISOLATED copied harness home: render-settings resolves its
+    home from its own location, so a copy of the script placed in the isolated
+    root renders that root's settings.json from that root's overlay and never the
+    live one. Mutate-and-restore against the live permission boundary is
+    forbidden: a render aimed at the live home would rewrite the working
+    settings.json from this machine's overlay as a side effect of an acceptance
+    step -- on the very surface this lane protects.
 
-    Mechanism, stated correctly: on the RENDER path the loss mode is a SILENT
-    OVERWRITE (the output is derived from the template, so a settings-only hook
-    registration is simply replaced). The ABORT is the --check mode's behaviour,
-    where an already-rendered file is compared against the template and a parity
-    violation refuses.
+    Mechanism, stated correctly: the render writes the machine form (the clean
+    form merged with the overlay), so an overlay change that a re-render carries
+    into settings.json changes its bytes, and the binding must not survive it.
     """
     live_settings = REPO / "settings.json"
-    live_template = REPO / "settings.template.json"
+    live_overlay = REPO / "settings.machine.json"
     renderer = REPO / "scripts" / "install" / "render-settings"
-    if not (live_settings.is_file() and live_template.is_file() and renderer.is_file()):
-        pytest.skip("render pipeline not present in this checkout")
+    assert live_settings.is_file(), "settings.json missing from this checkout"
+    assert renderer.is_file(), "scripts/install/render-settings missing from this checkout"
 
-    pre = {p: _sha(p) for p in (live_settings, live_template)}
+    def snapshot(p: Path):
+        return _sha(p) if p.is_file() else None
+
+    pre = {p: snapshot(p) for p in (live_settings, live_overlay)}
     pre_perms = json.loads(live_settings.read_text(encoding="utf-8")).get("permissions")
 
-    iso = tmp_path / "isolated-config-root"
-    iso.mkdir()
-    shutil.copy2(live_template, iso / "settings.template.json")
+    iso = tmp_path / "isolated-harness-home"
+    (iso / "scripts" / "install").mkdir(parents=True)
+    iso_renderer = iso / "scripts" / "install" / "render-settings"
+    shutil.copy2(renderer, iso_renderer)
     shutil.copy2(live_settings, iso / "settings.json")
-    fake_home = tmp_path / "fake-install-home"
-    fake_home.mkdir()
+    overlay = {"env": {"CAPGATE_RENDER_PROBE": "first"}}
 
     def render() -> subprocess.CompletedProcess:
+        (iso / "settings.machine.json").write_text(json.dumps(overlay, indent=2),
+                                                    encoding="utf-8")
         return subprocess.run(
-            [sys.executable, str(renderer), str(fake_home),
-             "--template", str(iso / "settings.template.json"),
-             "--out", str(iso / "settings.json")],
-            capture_output=True, text=True, timeout=120, check=False)
+            [sys.executable, str(iso_renderer), "render"],
+            cwd=iso, capture_output=True, text=True, timeout=120, check=False)
 
     r1 = render()
     assert r1.returncode == 0, f"baseline isolated render failed: {r1.stderr}"
+    first = json.loads((iso / "settings.json").read_text(encoding="utf-8"))
+    assert first["env"]["CAPGATE_RENDER_PROBE"] == "first", "render did not apply the overlay"
 
-    # Bind over the isolated root, then regenerate from a modified template.
+    # Bind over the isolated root, then regenerate from a modified overlay.
     iso_home = tmp_path / "isohome"
     (iso_home / ".claude").mkdir(parents=True)
     shutil.copy2(iso / "settings.json", iso_home / "settings.json")
@@ -264,11 +270,11 @@ def test_mutation_f_render_regeneration_invalidates_without_touching_live_bounda
     (iso_home / "VERSION").write_text("9.9.9-test\n", encoding="utf-8")
     stored = cs.canonical_binding(iso_home)
 
-    tpl = json.loads((iso / "settings.template.json").read_text(encoding="utf-8"))
-    tpl["cleanupPeriodDays"] = int(tpl.get("cleanupPeriodDays") or 30) + 7
-    (iso / "settings.template.json").write_text(json.dumps(tpl, indent=2), encoding="utf-8")
+    overlay["cleanupPeriodDays"] = int(first.get("cleanupPeriodDays") or 30) + 7
     r2 = render()
     assert r2.returncode == 0, f"isolated regeneration failed: {r2.stderr}"
+    second = json.loads((iso / "settings.json").read_text(encoding="utf-8"))
+    assert second["cleanupPeriodDays"] == overlay["cleanupPeriodDays"]
     shutil.copy2(iso / "settings.json", iso_home / "settings.json")
 
     assert not cs.binding_matches(stored, cs.canonical_binding(iso_home)), \
@@ -276,7 +282,7 @@ def test_mutation_f_render_regeneration_invalidates_without_touching_live_bounda
 
     # POSTCONDITION: the real boundary is byte-for-byte untouched.
     for p, digest in pre.items():
-        assert _sha(p) == digest, f"live boundary file mutated by an acceptance step: {p}"
+        assert snapshot(p) == digest, f"live boundary file mutated by an acceptance step: {p}"
     assert json.loads(live_settings.read_text(encoding="utf-8")).get("permissions") == pre_perms
 
 

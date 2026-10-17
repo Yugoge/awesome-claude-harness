@@ -88,7 +88,7 @@ def transcript_offsets() -> dict[str, int]:
     nonce" would be satisfiable by history rather than by this probe window.
     """
     out: dict[str, int] = {}
-    root = Path.home() / ".claude" / "projects"
+    root = Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude") / "projects"
     try:
         for p in root.rglob("*.jsonl"):
             try:

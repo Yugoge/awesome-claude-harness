@@ -320,7 +320,7 @@ def test_ac02_guard_compares_tool_name_against_bash_only():
 def test_ac02_documented_registration_declares_bash_only():
     text = DOCS.read_text(encoding="utf-8")
     assert '"matcher": "Bash"' in text
-    assert "settings.template.json" in text
+    assert "`settings.json`" in text
     for banned in ('"matcher": "Edit"', '"matcher": "Write"', '"matcher": "MultiEdit"'):
         assert banned not in text
 

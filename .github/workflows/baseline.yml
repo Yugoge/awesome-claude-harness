@@ -53,34 +53,17 @@ jobs:
         with:
           node-version: "20"
 
-      - name: Render settings.json from the tracked template
-        # settings.json IS tracked (a `private-lab` row in PUBLIC-CORE.md), so a
-        # fresh checkout does have one — but it is the MAINTAINER's live copy:
-        # absolute install-home paths, an emptied `ask` section, and allow entries
-        # beyond the template. Rendering replaces it so the gates measure the
-        # PUBLIC install seed on this runner's own paths, not one machine's state.
-        # Must stay after Checkout and before "Verify headline claims", which reads
-        # the file with no existence guard. Rendering (not copying the template) is
-        # required: the template carries an unresolved {{CLAUDE_HOME}} placeholder.
-        # Note the --check below runs on the file this step just rendered, so it
-        # does NOT detect drift between the TRACKED settings.json and the template.
-        run: |
-          set -euo pipefail
-          python3 scripts/install/render-settings "$GITHUB_WORKSPACE" \
-            --template settings.template.json --out settings.json
-          # The install-home positional is REQUIRED in --check mode: without it
-          # render-settings normalizes against $HOME/.claude, which on a runner is
-          # /home/runner/.claude and never equals $GITHUB_WORKSPACE — so every
-          # rendered path reads as "allow broadened beyond template" and the step
-          # fails on a correctly-rendered file. Passing the same home used to
-          # render keeps the check load-bearing (a genuinely broadened allow
-          # entry still fails) instead of merely silencing it.
-          python3 scripts/install/render-settings "$GITHUB_WORKSPACE" \
-            --check settings.json --template settings.template.json
-          if grep -q '{{CLAUDE_HOME}}' settings.json; then
-            echo "::error::rendered settings.json still contains an unresolved placeholder"
-            exit 1
-          fi
+      - name: Tracked settings.json is the clean form (render-settings check --staged)
+        # CI backstop for the settings filter: the same check the pre-commit hook
+        # runs, applied to this checkout's index (the commit under test). It fails
+        # unless the tracked settings.json is a fixed point of the clean filter.
+        # A runner has no overlay, so this catches what is machine-only by
+        # definition (CLI-owned keys such as model, env.CLAUDE_HOME) and
+        # non-canonical bytes; home paths in it fail check-public-core below.
+        # It also fails while the overlay settings.machine.json or the private-literal
+        # list private-literals.txt is in the index: both are personal, never tracked.
+        # The gates below read this tracked file as-is; nothing is rendered here.
+        run: python3 scripts/install/render-settings check --staged
 
       - name: Install Python dependencies
         # Hash-verified install from the lockfile matching THIS matrix leg.
@@ -194,14 +177,12 @@ jobs:
         # run — nothing hardcoded. Exits non-zero on any boundary violation.
         run: bash scripts/check-public-core.sh
 
-      - name: Verify headline claims (hook counts + hero provenance + public-template sync)
+      - name: Verify headline claims (hook counts + hero provenance)
         # Runs as a step of the already-required `baseline` job so it gates merges by
         # default (no branch-protection change needed). Recomputes the wired-hook /
         # lifecycle-event counts from settings.json and fails on any drift in
-        # README.md / ARCHITECTURE.md, runs both hero-provenance audits in --strict, and
-        # asserts settings.template.json (the PUBLIC install seed) is valid JSON and wires
-        # every hook settings.json wires (basename-normalized) so the public template can
-        # never silently drift from the real hook set. All counts recomputed at check time.
+        # README.md / ARCHITECTURE.md, and runs both hero-provenance audits in --strict.
+        # All counts recomputed at check time.
         # Also runs scripts/check-enforcement-evidence.py --ledger and --claims, which gate
         # docs/ENFORCEMENT-LEDGER.md against settings.json and against the guard sources.
         run: bash scripts/verify-claims.sh

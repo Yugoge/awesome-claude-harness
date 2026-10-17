@@ -21,7 +21,7 @@ from pathlib import Path
 def run_todo_script(cmd_name: str, project_dir: Path, prompt: str = '') -> list:
     todo_script = project_dir / 'scripts' / 'todo' / f'{cmd_name}.py'
     if not todo_script.exists():
-        global_todo = Path.home() / '.claude' / 'scripts' / 'todo' / f'{cmd_name}.py'
+        global_todo = Path(__file__).resolve().parent.parent / 'scripts' / 'todo' / f'{cmd_name}.py'
         if global_todo.exists():
             todo_script = global_todo
         else:

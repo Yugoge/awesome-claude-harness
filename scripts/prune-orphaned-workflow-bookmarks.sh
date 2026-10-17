@@ -19,10 +19,7 @@
 #   prune-orphaned-workflow-bookmarks.sh [--delete] [--min-age-days N]
 #   prune-orphaned-workflow-bookmarks.sh -h | --help
 #
-# Environment overrides (mirrors scripts/checkpoint-prune.sh's convention):
-#   WORKFLOW_PRUNE_ACCOUNTS_DIR     default: /var/lib/claude-accounts
-#   WORKFLOW_PRUNE_PROJECT_DIRNAME  default: -dev-shm-dev-workspace-dot-claude
-#   WORKFLOW_PRUNE_MIN_AGE_DAYS     default: 14 (overridable by --min-age-days)
+# Environment overrides: see usage() below (WORKFLOW_PRUNE_* variables).
 #
 # Exit codes:
 #   0  success (report printed, or delete completed with no errors)
@@ -48,12 +45,13 @@ Default mode reports only; nothing is deleted without --delete.
 A workflow-<session-id>.json file at the repo root is a deletion candidate
 ONLY when BOTH hold:
   - no transcript for <session-id> exists under ANY account directory
-    (/var/lib/claude-accounts/*/claude/projects/<project-dirname>/<session-id>.jsonl)
+    (<accounts-dir>/*/claude/projects/<project-dirname>/<session-id>.jsonl)
   - its mtime is at least --min-age-days old (default 14)
 
 Environment overrides:
-  WORKFLOW_PRUNE_ACCOUNTS_DIR     default: /var/lib/claude-accounts
-  WORKFLOW_PRUNE_PROJECT_DIRNAME  default: -dev-shm-dev-workspace-dot-claude
+  WORKFLOW_PRUNE_ACCOUNTS_DIR     <accounts-dir>; no default (unset = no account scan: refuses)
+  WORKFLOW_PRUNE_PROJECT_DIRNAME  default: the harness home's realpath with every character
+                                  other than ASCII letters and digits turned into "-"
   WORKFLOW_PRUNE_MIN_AGE_DAYS     default: 14
 
 Exit codes:
@@ -86,17 +84,19 @@ REPO_ROOT="$(git -C "$SCRIPT_DIR" rev-parse --show-toplevel 2>/dev/null)" || {
   exit 1
 }
 
-ACCOUNTS_DIR="${WORKFLOW_PRUNE_ACCOUNTS_DIR:-/var/lib/claude-accounts}"
-PROJECT_DIRNAME="${WORKFLOW_PRUNE_PROJECT_DIRNAME:--dev-shm-dev-workspace-dot-claude}"
+ACCOUNTS_DIR="${WORKFLOW_PRUNE_ACCOUNTS_DIR:-}"
+PROJECT_DIRNAME="${WORKFLOW_PRUNE_PROJECT_DIRNAME:-}"
+[ -n "$PROJECT_DIRNAME" ] || PROJECT_DIRNAME="$(cd "$SCRIPT_DIR/.." && pwd -P | sed 's/[^A-Za-z0-9]/-/g')"
 
 ACCOUNT_NAMES=()
-for acct_dir in "$ACCOUNTS_DIR"/*/; do
+# An empty ACCOUNTS_DIR must never expand to "/*/" (the filesystem root).
+for acct_dir in ${ACCOUNTS_DIR:+"$ACCOUNTS_DIR"/*/}; do
   [ -d "$acct_dir" ] || continue
   ACCOUNT_NAMES+=("$(basename "$acct_dir")")
 done
 
 if [ "${#ACCOUNT_NAMES[@]}" -eq 0 ]; then
-  echo "Error: no account directories found under $ACCOUNTS_DIR — cannot prove any bookmark orphaned without checking every account. Refusing to proceed." >&2
+  echo "Error: no account directories found under ${ACCOUNTS_DIR:-<unset: set WORKFLOW_PRUNE_ACCOUNTS_DIR>} — cannot prove any bookmark orphaned without checking every account. Refusing to proceed." >&2
   exit 1
 fi
 
@@ -179,7 +179,7 @@ if [ "$MODE" = "report" ]; then
   exit 0
 fi
 
-LOG_DIR="$HOME/.claude/logs"
+LOG_DIR="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/logs"
 mkdir -p "$LOG_DIR" 2>/dev/null || true
 LOG_FILE="$LOG_DIR/workflow-bookmark-prune.log"
 

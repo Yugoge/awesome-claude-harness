@@ -80,7 +80,7 @@ import re
 import sys
 from pathlib import Path
 
-ADVISORY_LOG = Path.home() / ".claude" / "logs" / "completion-terminal-gate-advisory.jsonl"
+ADVISORY_LOG = Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude") / "logs" / "completion-terminal-gate-advisory.jsonl"
 _HOOKS_DIR = Path(__file__).resolve().parent
 _EXEMPT_COMMANDS = {"close", "commit"}
 _SENTINEL_FILENAMES = ("artifact-contract-enforce.json", "e2e-enforce.json")
@@ -409,7 +409,7 @@ def _evaluate_cycle(project_dir: Path, cycle_id: str, task_id: str, session_id: 
         pm = _import_progress_measure()
         registry_dir = project_dir / ".claude" / "dev-registry" / cycle_id
         state_path = registry_dir / _STATE_NAME
-        fallback = Path.home() / ".claude" / "logs" / f"completion-gate-{cycle_id}.json"
+        fallback = Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude") / "logs" / f"completion-gate-{cycle_id}.json"
         audit_path = registry_dir / _AUDIT_NAME
 
         findings: list[str] = []
@@ -564,7 +564,7 @@ def main() -> int:
         try:
             pm = _import_progress_measure()
             pm.record_round(
-                str(Path.home() / ".claude" / "logs" / f"completion-gate-registry-{session_id}.json"),
+                str(Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude") / "logs" / f"completion-gate-registry-{session_id}.json"),
                 f"registry-unreadable:{session_id}",
                 pm.world_fingerprint(str(project_dir), [str(registry_root)]),
                 [pm.finding_id("REGISTRY_UNREADABLE", str(registry_root), str(project_dir))])

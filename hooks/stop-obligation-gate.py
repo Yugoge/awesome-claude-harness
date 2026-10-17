@@ -53,7 +53,7 @@ import os
 import sys
 from pathlib import Path
 
-ADVISORY_LOG = Path.home() / ".claude" / "logs" / "obligation-terminal-gate-advisory.jsonl"
+ADVISORY_LOG = Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude") / "logs" / "obligation-terminal-gate-advisory.jsonl"
 _HOOKS_DIR = Path(__file__).resolve().parent
 
 

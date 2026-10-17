@@ -45,7 +45,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 HOOKS_DIR = Path(__file__).resolve().parent.parent
-SCRATCH = os.environ.get("GITGUARD_TEST_SCRATCH", "/dev/shm/gitguard-route")
+SCRATCH = (os.environ.get("GITGUARD_TEST_SCRATCH")
+           or os.path.join(tempfile.gettempdir(), "gitguard-route"))
 
 
 def _load_module(path, name):

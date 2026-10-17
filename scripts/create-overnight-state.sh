@@ -871,7 +871,7 @@ fi
 # prints OVERNIGHT_INIT_OK while no artifact exists would otherwise publish a
 # session whose enforcement chain is empty. Validating only inside the
 # initializer makes the gate trust the thing it is gating.
-INIT_PY="${CLAUDE_HOME:-$HOME/.claude}/venv/bin/python3"
+INIT_PY="${CLAUDE_HOME:-$SCRIPT_DIR_ABS/..}/venv/bin/python3"
 [[ -x "$INIT_PY" ]] || INIT_PY="$(command -v python3 || true)"
 if [[ -z "$INIT_PY" ]]; then
     rm -f "$TMP_FILE"

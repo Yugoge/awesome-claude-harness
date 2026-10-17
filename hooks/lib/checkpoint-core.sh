@@ -18,9 +18,9 @@
 #
 # Algorithm (git plumbing only — no `git commit`):
 #   1. read-tree parent tree (or --empty for bootstrap)
-#   2. git add -A  (staged into a TEMP index via GIT_INDEX_FILE)
-#   2b. hard-exclude known PII file classes from the temp index,
-#       independent of current .gitignore content (defense-in-depth backstop)
+#   2. git add -A into a TEMP index (GIT_INDEX_FILE); return 3 when the settings clean filter refuses
+#   2b. hard-exclude known PII file classes from the temp index (independent of .gitignore)
+#   2c. return 3, writing nothing, when the pre-commit hook's own checks refuse the temp index
 #   3. git write-tree  -> TREE_SHA
 #   4. if TREE_SHA == PARENT_TREE_SHA -> return 0 (idempotent)
 #   5. git commit-tree TREE_SHA [-p PARENT_SHA] -m "<msg>"  -> NEW_SHA
@@ -61,7 +61,7 @@
 #     logs a warning about potential orphan commits under concurrency).
 # ============================================================================
 
-CHECKPOINT_LOG_DIR="${CHECKPOINT_LOG_DIR:-$HOME/.claude/logs}"
+CHECKPOINT_LOG_DIR="${CHECKPOINT_LOG_DIR:-${CLAUDE_CONFIG_DIR:-$HOME/.claude}/logs}"
 CHECKPOINT_LOG_FILE="${CHECKPOINT_LOG_DIR}/checkpoint.log"
 CHECKPOINT_PUSH_LOG_FILE="${CHECKPOINT_LOG_DIR}/checkpoint-push.log"
 CHECKPOINT_PUSH_MIN_INTERVAL="${CHECKPOINT_PUSH_MIN_INTERVAL:-30}"  # seconds
@@ -94,10 +94,8 @@ CHECKPOINT_PII_PATH_COMPONENTS="${CHECKPOINT_PII_PATH_COMPONENTS:-backups sessio
 # .github/workflows/baseline.yml:130).
 CHECKPOINT_PII_SIGNATURE_PATTERN="${CHECKPOINT_PII_SIGNATURE_PATTERN:-[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}|[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}|sk-[A-Za-z0-9]{20}|AKIA[0-9A-Z]{16}|gh[pousr]_[A-Za-z0-9]{36,}|eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+}"
 
-# Consecutive-failure alerting (2026-04-16 SaaS-grade ops gap fix).
-# Counter file tracks back-to-back write_checkpoint failures; on the 3rd
-# consecutive failure within one hook invocation we print a single stderr
-# alert so users actually see the breakage. Any success resets the counter.
+# Consecutive-failure alerting (2026-04-16): the 3rd back-to-back write_checkpoint failure prints
+# one stderr alert; any success resets the counter, and a refusal (rc 3) leaves it alone.
 CHECKPOINT_FAIL_COUNT_FILE="${CHECKPOINT_FAIL_COUNT_FILE:-${CHECKPOINT_LOG_DIR}/.checkpoint-fail-count}"
 CHECKPOINT_FAIL_ALERT_THRESHOLD="${CHECKPOINT_FAIL_ALERT_THRESHOLD:-3}"
 
@@ -121,9 +119,8 @@ _checkpoint_push_log() {
     printf '[%s] [%s] %s\n' "$ts" "$level" "$*" >> "$CHECKPOINT_PUSH_LOG_FILE" 2>/dev/null || true
 }
 
-# Internal: atomically increment the consecutive-failure counter and emit a
-# single stderr CHECKPOINT ALERT when the threshold is reached. Safe against
-# racing hook invocations via atomic temp-file rename.
+# Internal: atomically (temp-file rename, safe against racing hooks) increment the consecutive-
+# failure counter, and emit one stderr CHECKPOINT ALERT when the threshold is reached.
 _checkpoint_record_failure() {
     mkdir -p "$CHECKPOINT_LOG_DIR" 2>/dev/null
     local current=0
@@ -412,29 +409,45 @@ _checkpoint_push_worker() {
     fi
 }
 
+# Commit message of a checkpoint snapshot (both write paths below). A non-empty
+# CLAUDE_CHECKPOINT_EXTRA_TRAILER is appended verbatim as one more trailer line
+# after the Claude one (default empty = none).
+#   $1 summary   $2 trigger   $3 ref   $4 file_count
+_checkpoint_commit_body() {
+    printf '%s' "${1}
+
+Trigger: ${2}
+Ref: ${3}
+Files: ${4}
+
+This commit is a snapshot written to refs/checkpoints/* by
+~/.claude/hooks/lib/checkpoint-core.sh. It is NOT on any branch HEAD.
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
+
+Co-Authored-By: Claude <noreply@anthropic.com>${CLAUDE_CHECKPOINT_EXTRA_TRAILER:+
+${CLAUDE_CHECKPOINT_EXTRA_TRAILER}}"
+}
+
 # Public API.
 #
 # write_checkpoint <work_dir> <trigger_reason> [<custom_message>]
 #
-#   work_dir        - absolute path of the repo working tree, or empty string
-#                     for cwd; passed via `git -C <work_dir>` when non-empty
-#   trigger_reason  - short string describing what fired this checkpoint
-#                     (e.g. "posttool threshold", "stop hook: auto-commit.sh")
-#   custom_message  - optional; if provided, used as the commit summary line
-#                     (rest of the commit body is appended automatically)
+#   work_dir        - the repo working tree (absolute; empty = cwd), used as `git -C <work_dir>`
+#   trigger_reason  - what fired it (e.g. "posttool threshold", "stop hook: auto-commit.sh")
+#   custom_message  - optional commit summary line (the rest of the body is appended)
 #
 # Return codes:
 #   0  success OR idempotent no-op (tree unchanged)
 #   1  build/CAS failure after retries
 #   2  not a git repo
+#   3  refused at step 2 or 2c: nothing written; checkpoint_refused_by names the rule(s), no value
 write_checkpoint() {
     local work_dir="${1:-}"
     local trigger="${2:-unknown}"
     local custom_message="${3:-}"
 
-    # Resolve git dir; bail gracefully if not a repo
-    # Note: rc=2 (not-a-repo) is NOT a checkpoint failure — it's a no-op skip,
-    # so we do NOT increment the failure counter here.
+    # rc=2 (not a repo) is a no-op skip, NOT a checkpoint failure: the counter is left alone.
     local git_dir
     git_dir=$(_checkpoint_git_dir "$work_dir")
     if [ -z "$git_dir" ]; then
@@ -478,35 +491,20 @@ write_checkpoint() {
     fi
     ref="refs/checkpoints/${sanitized}"
 
-    # Temp index path (isolated from real .git/index).
-    # Use PID + nanosecond-ish suffix to avoid collisions among sibling runs.
+    # Temp index (isolated from .git/index); PID + nanoseconds keep sibling runs apart.
     local ns
     ns=$(date +%s%N 2>/dev/null || date +%s)
     local TMP_INDEX="${abs_git_dir}/checkpoint-index.$$.${ns}"
 
-    # Trap ensures TMP_INDEX is removed on any exit path from this function,
-    # including the enclosing shell. Removing at end-of-function too (below).
+    # The trap removes TMP_INDEX on any exit path, the enclosing shell's too; so does the end below.
     trap 'rm -f "$TMP_INDEX"' EXIT INT TERM HUP
 
     # -------------------------------------------------------------------------
-    # PHASE 1: Build the working-tree snapshot OUTSIDE the lock.
-    #
-    # This phase does NOT create any commit objects — only blobs and a tree,
-    # which are content-addressed and would be created by whichever writer
-    # ultimately wins. Running this outside the lock preserves concurrency
-    # for the expensive `git add -A` step and does not contribute to the
-    # dangling-objects problem the flock fix targets.
-    #
-    # Seed temp index from the CURRENT working branch HEAD tree, never from
-    # the checkpoint ref tree. This ensures ignored/runtime files that were
-    # accidentally captured in historical refs/checkpoints/* do not get
-    # resurrected forever by inheritance from the previous checkpoint tree.
-    #
-    # The checkpoint ref is still used later as the COMMIT PARENT so history
-    # remains linear, but the snapshot content itself must reflect today's
-    # working tree + ignore rules, not yesterday's polluted checkpoint tree.
-    #
-    # In an empty repo HEAD has no tree, so seed from --empty instead.
+    # PHASE 1: build the snapshot tree OUTSIDE the lock. It creates no commit object, only
+    # content-addressed blobs and trees the winning writer would create anyway, so the costly
+    # `git add -A` stays concurrent. The temp index is seeded from HEAD's tree (--empty in an empty
+    # repo), never the checkpoint ref's, so files a past snapshot captured by mistake are not
+    # inherited forever; the ref stays the COMMIT PARENT (linear history).
     # -------------------------------------------------------------------------
     local seed_parent_sha=""
     local seed_parent_tree=""
@@ -532,22 +530,30 @@ write_checkpoint() {
         fi
     fi
 
+    local h top common report
+    checkpoint_refused_by=""
+    h="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." 2>/dev/null && pwd -P)"
+    { read -r top; read -r common; } < <($git_cmd rev-parse --show-toplevel --path-format=absolute --git-common-dir 2>/dev/null)
     if ! GIT_INDEX_FILE="$TMP_INDEX" $git_cmd add -A 2>>"$CHECKPOINT_LOG_FILE"; then
-        _checkpoint_log ERROR "add -A failed (ref=${ref})"
         rm -f "$TMP_INDEX"
+        # Staging fails by design when this harness home's registered clean filter cannot clean
+        # settings.json: a refusal if its engine, run here, refuses the file (rc 1; a missing one: 2).
+        if [ "$top" = "$h" ] && [ -f "$h/settings.json" ] && $git_cmd config filter.claude-settings.clean >/dev/null \
+            && { python3 "$h/scripts/install/render-settings" clean <"$h/settings.json" >/dev/null 2>&1; [ "$?" = 1 ]; }; then
+            checkpoint_refused_by="the settings filter (render-settings clean)"
+            _checkpoint_log ERROR "snapshot refused by ${checkpoint_refused_by}: nothing written (ref=${ref})"
+            return 3
+        fi
+        _checkpoint_log ERROR "add -A failed (ref=${ref})"
         _checkpoint_record_failure
         return 1
     fi
 
     # -------------------------------------------------------------------------
-    # Hard-exclude known PII file classes from the temp index, independent of
-    # the CURRENT .gitignore content (defense-in-depth backstop; see
-    # docs/reference/checkpoint-mechanism.md). Guards against a historical or
-    # future .gitignore regression re-admitting a PII-bearing path (root
-    # cause: .claude.json was captured in b432fc54, 13 days before the
-    # /.claude.json ignore rule existed). Matching is path-component-exact
-    # (basename PREFIX for the .claude.json family; exact interior directory
-    # segment for backups/sessions) -- never substring.
+    # Hard-exclude known PII file classes from the temp index whatever the CURRENT .gitignore says
+    # (backstop; docs/reference/checkpoint-mechanism.md: .claude.json was captured in b432fc54, 13
+    # days before its ignore rule existed). Path-component-exact, never substring: basename PREFIX
+    # for the .claude.json family, exact interior directory segment for backups/sessions.
     # -------------------------------------------------------------------------
     local pii_path pii_removed=0
     while IFS= read -r pii_path; do
@@ -580,6 +586,25 @@ write_checkpoint() {
         _checkpoint_log WARN "hard-excluded ${pii_removed} known-PII-class path(s) from snapshot (ref=${ref})"
     fi
 
+    # Refuse what the pre-commit hook refuses, by its own engines on the temp index (they print no
+    # literal or value): the private-literal rule when its list is not empty, and in this harness
+    # home the settings check when settings.json differs from HEAD. Callers get only rule names.
+    if [ -s "${common%/*}/private-literals.txt" ] && ! report="$(cd "$top" \
+        && GIT_INDEX_FILE="$TMP_INDEX" bash "$h/scripts/check-public-core.sh" --private-literals 2>&1)"; then
+        checkpoint_refused_by="the private-literal rule"
+        _checkpoint_log ERROR "${checkpoint_refused_by}: ${report//$'\n'/ | }"
+    fi
+    if [ "$top" = "$h" ] \
+        && ! GIT_INDEX_FILE="$TMP_INDEX" $git_cmd diff-index --cached --quiet HEAD -- settings.json 2>/dev/null \
+        && ! GIT_INDEX_FILE="$TMP_INDEX" python3 "$h/scripts/install/render-settings" check --staged 2>>"$CHECKPOINT_LOG_FILE"; then
+        checkpoint_refused_by+="${checkpoint_refused_by:+ and }the settings check (render-settings check --staged)"
+    fi
+    if [ -n "$checkpoint_refused_by" ]; then
+        _checkpoint_log ERROR "snapshot refused by ${checkpoint_refused_by}: nothing written (ref=${ref})"
+        rm -f "$TMP_INDEX"
+        return 3
+    fi
+
     local tree_sha
     tree_sha=$(GIT_INDEX_FILE="$TMP_INDEX" $git_cmd write-tree 2>>"$CHECKPOINT_LOG_FILE")
     if [ -z "$tree_sha" ]; then
@@ -590,22 +615,15 @@ write_checkpoint() {
     fi
 
     # -------------------------------------------------------------------------
-    # PHASE 2: Enter flock-protected critical section for the commit-tree +
-    # update-ref pair. Only one writer per repo runs this section at a time,
-    # so commit-tree never produces an orphan object.
-    #
-    # The flock FD (9) is local to the subshell; closing the subshell
-    # releases the lock automatically even on error.
+    # PHASE 2: commit-tree + update-ref under flock: one writer per repo at a
+    # time, so commit-tree never produces an orphan object. FD 9 is local to
+    # the subshell, whose exit releases the lock even on error.
     # -------------------------------------------------------------------------
     local lockfile="${abs_git_dir}/checkpoint-core.lock"
     touch "$lockfile" 2>/dev/null || true
 
     local result_file
-    # mktemp already honors $TMPDIR itself; the fallback (mktemp unavailable
-    # or failing) previously hard-coded /tmp, the sole literal /tmp path
-    # among the repo's TMPDIR-honoring temp creations (task 20260907-015935
-    # AC8). ${TMPDIR:-/tmp} keeps /tmp only as the last-resort default when
-    # TMPDIR itself is unset.
+    # mktemp honors $TMPDIR; so does its fallback (/tmp only when TMPDIR is unset).
     result_file=$(mktemp 2>/dev/null || printf '%s' "${TMPDIR:-/tmp}/checkpoint-result.$$.${ns}")
 
     if command -v flock >/dev/null 2>&1; then
@@ -656,20 +674,7 @@ write_checkpoint() {
             else
                 summary="checkpoint: Auto-save at ${timestamp}"
             fi
-            commit_body="${summary}
-
-Trigger: ${trigger}
-Ref: ${ref}
-Files: ${file_count}
-
-This commit is a snapshot written to refs/checkpoints/* by
-~/.claude/hooks/lib/checkpoint-core.sh. It is NOT on any branch HEAD.
-
-🤖 Generated with [Claude Code](https://claude.com/claude-code)
-via [Happy](https://happy.engineering)
-
-Co-Authored-By: Claude <noreply@anthropic.com>
-Co-Authored-By: Happy <yesreply@happy.engineering>"
+            commit_body=$(_checkpoint_commit_body "$summary" "$trigger" "$ref" "$file_count")
 
             # commit-tree inside the lock: only one writer creates a commit
             # object at a time, so no dangling objects accumulate.
@@ -770,20 +775,7 @@ Co-Authored-By: Happy <yesreply@happy.engineering>"
         else
             summary="checkpoint: Auto-save at ${timestamp}"
         fi
-        commit_body="${summary}
-
-Trigger: ${trigger}
-Ref: ${ref}
-Files: ${file_count}
-
-This commit is a snapshot written to refs/checkpoints/* by
-~/.claude/hooks/lib/checkpoint-core.sh. It is NOT on any branch HEAD.
-
-🤖 Generated with [Claude Code](https://claude.com/claude-code)
-via [Happy](https://happy.engineering)
-
-Co-Authored-By: Claude <noreply@anthropic.com>
-Co-Authored-By: Happy <yesreply@happy.engineering>"
+        commit_body=$(_checkpoint_commit_body "$summary" "$trigger" "$ref" "$file_count")
 
         if [ -n "$parent_sha" ]; then
             new_sha=$(printf '%s' "$commit_body" | $git_cmd commit-tree "$tree_sha" -p "$parent_sha" 2>>"$CHECKPOINT_LOG_FILE")

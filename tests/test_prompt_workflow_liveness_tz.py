@@ -29,6 +29,7 @@ from __future__ import annotations
 import ast
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -134,18 +135,40 @@ def temp_project(fixture_command_doc: bool = False):
         yield project, home
 
 
+def installed_hook(home: Path) -> Path:
+    """The hook under test, installed in the fixture's harness home.
+
+    The hook resolves its launcher, initializer and todo provider from its own
+    install location (<harness home>/scripts), not from $HOME. The fixture's
+    <home>/.claude plays that harness home, as in the default install, so the
+    hook runs from a copy placed in <home>/.claude/hooks; whatever a test stubs
+    under <home>/.claude/scripts -- or leaves out -- is then what the hook sees.
+    hooks/lib is shared by symlink.
+    """
+    hooks = home / '.claude' / 'hooks'
+    installed = hooks / 'prompt-workflow.py'
+    if not installed.exists():
+        hooks.mkdir(parents=True, exist_ok=True)
+        shutil.copy(HOOK_PATH, installed)
+        (hooks / 'lib').symlink_to(HOOK_PATH.resolve().parent / 'lib')
+    return installed
+
+
 def run_hook(project: Path, home: Path, payload: dict, extra_env: dict | None = None):
     """Drive the hook across the real main() process boundary."""
     env = dict(os.environ)
     env['CLAUDE_PROJECT_DIR'] = str(project)
     env['HOME'] = str(home)
+    # Claude Code's configuration directory follows the redirected HOME, so an
+    # inherited CLAUDE_CONFIG_DIR cannot point the hook outside the fixture.
+    env['CLAUDE_CONFIG_DIR'] = str(home / '.claude')
     env['CLAUDE_DEV_OVERNIGHT_TODO'] = str(TODO_SCRIPT)
     env.pop('CLAUDE_COMPAT_RUNTIME', None)
     env.pop('TZ', None)
     if extra_env:
         env.update(extra_env)
     return subprocess.run(
-        [sys.executable, str(HOOK_PATH)],
+        [sys.executable, str(installed_hook(home))],
         input=json.dumps(payload), capture_output=True, text=True,
         env=env, cwd=str(project), timeout=180,
     )

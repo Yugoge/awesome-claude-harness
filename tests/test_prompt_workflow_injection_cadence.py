@@ -104,11 +104,35 @@ LIGHT_CEILING_CHARS = 3000
 # absolute chars for the same reason.
 PRODUCTION_LIGHT_CEILING_CHARS = 4000
 PRODUCTION_LIGHT_MAX_RATIO_OF_BOUNDARY = 0.05
+# The temp root the two production figures were measured under. It is only a
+# length reference -- nothing is created there. The fixture's root recurs in
+# every path the production-shaped block names (ten times), so measured raw
+# the budget shrank by ten chars per char of TMPDIR and failed once TMPDIR
+# passed ~50 chars, for reasons that have nothing to do with the hook.
+MEASURED_ROOT = '/dev/shm/tmpXXXXXXXX'
 
 
-def load_hook_module():
+def installed_hook(home: Path) -> Path:
+    """The hook under test, installed in the fixture's harness home.
+
+    The hook resolves its launcher, initializer and todo provider from its own
+    install location, not from $HOME. The fixture's <home>/.claude plays that
+    harness home, as in the default install, so the hook runs from a copy in
+    <home>/.claude/hooks (hooks/lib shared by symlink): the fixture, not the
+    repository, decides which of those scripts exist.
+    """
+    hooks = home / '.claude' / 'hooks'
+    installed = hooks / 'prompt-workflow.py'
+    if not installed.exists():
+        hooks.mkdir(parents=True, exist_ok=True)
+        shutil.copy(HOOK_PATH, installed)
+        (hooks / 'lib').symlink_to(HOOK_PATH.resolve().parent / 'lib')
+    return installed
+
+
+def load_hook_module(path: Path = HOOK_PATH):
     """Load the hook under test as a real module (fresh globals each call)."""
-    loader = SourceFileLoader('pw_cadence_under_test', str(HOOK_PATH))
+    loader = SourceFileLoader('pw_cadence_under_test', str(path))
     spec = spec_from_loader(loader.name, loader)
     module = module_from_spec(spec)
     loader.exec_module(module)
@@ -182,6 +206,7 @@ class Fixture:
 
     def env(self) -> dict:
         env = {**os.environ, 'HOME': str(self.home),
+               'CLAUDE_CONFIG_DIR': str(self.home / '.claude'),
                'CLAUDE_PROJECT_DIR': str(self.project)}
         env.pop('CLAUDE_COMPAT_RUNTIME', None)
         env.pop('CLAUDE_DEV_OVERNIGHT_TODO', None)
@@ -198,7 +223,7 @@ class Fixture:
             'session_id': session_id or self.session_id,
             'transcript_path': str(self.transcript),
         })
-        return subprocess.run([sys.executable, str(HOOK_PATH)], input=payload,
+        return subprocess.run([sys.executable, str(installed_hook(self.home))], input=payload,
                               capture_output=stdout is subprocess.PIPE, text=True,
                               env=env, stdout=None if stdout is not subprocess.PIPE else None)
 
@@ -211,12 +236,13 @@ class Fixture:
         afterwards, so one test cannot leak a deleted temp HOME into the next.
         """
         previous = {key: os.environ.get(key) for key in
-                    ('HOME', 'CLAUDE_PROJECT_DIR', 'CLAUDE_DEV_OVERNIGHT_TODO')}
+                    ('HOME', 'CLAUDE_CONFIG_DIR', 'CLAUDE_PROJECT_DIR', 'CLAUDE_DEV_OVERNIGHT_TODO')}
         os.environ['HOME'] = str(self.home)
+        os.environ['CLAUDE_CONFIG_DIR'] = str(self.home / '.claude')
         os.environ['CLAUDE_PROJECT_DIR'] = str(self.project)
         os.environ.pop('CLAUDE_DEV_OVERNIGHT_TODO', None)
         try:
-            yield load_hook_module()
+            yield load_hook_module(installed_hook(self.home))
         finally:
             for key, value in previous.items():
                 if value is None:
@@ -232,12 +258,13 @@ class Fixture:
         indistinguishable from a working one from the outside.
         """
         previous = {k: os.environ.get(k) for k in
-                    ('HOME', 'CLAUDE_PROJECT_DIR', 'CLAUDE_DEV_OVERNIGHT_TODO')}
+                    ('HOME', 'CLAUDE_CONFIG_DIR', 'CLAUDE_PROJECT_DIR', 'CLAUDE_DEV_OVERNIGHT_TODO')}
         os.environ['HOME'] = str(self.home)
+        os.environ['CLAUDE_CONFIG_DIR'] = str(self.home / '.claude')
         os.environ['CLAUDE_PROJECT_DIR'] = str(self.project)
         os.environ.pop('CLAUDE_DEV_OVERNIGHT_TODO', None)
         try:
-            module = load_hook_module()
+            module = load_hook_module(installed_hook(self.home))
             return module.check_overnight_continuation(session_id or self.session_id)
         finally:
             for key, value in previous.items():
@@ -286,6 +313,19 @@ def make_production_shaped(fixture: Fixture) -> None:
         'marker_only': False,
     }
     fixture.state_path.write_text(json.dumps(state))
+
+
+def measured_len(text: str, fixture: Fixture) -> int:
+    """len(text) with the fixture's temp root counted at MEASURED_ROOT's length.
+
+    This takes the base directory's length out of the budget and nothing else:
+    every other char still counts. The resolved spelling is normalised too, for
+    a TMPDIR reached through a symlink (macOS's /var -> /private/var).
+    """
+    roots = {str(fixture.root), os.path.realpath(fixture.root)}
+    for root in sorted(roots, key=len, reverse=True):
+        text = text.replace(root, MEASURED_ROOT)
+    return len(text)
 
 
 class TestAC1RecurringCostIsBounded(unittest.TestCase):
@@ -345,7 +385,7 @@ class TestAC1RecurringCostIsBounded(unittest.TestCase):
         production number it never measured. This case measures the shape that
         ships, so the production figure is enforced rather than merely caveated.
         """
-        with tempfile.TemporaryDirectory(dir='/dev/shm') as tmp:
+        with tempfile.TemporaryDirectory() as tmp:
             fixture = Fixture(tmp)
             make_production_shaped(fixture)
             outputs = [deliver(fixture) for _ in range(3)]
@@ -355,18 +395,20 @@ class TestAC1RecurringCostIsBounded(unittest.TestCase):
             # silently re-measure the criterion's own shape and prove nothing.
             self.assertIn('source the actor git-env', outputs[1])
 
-            boundary = len(outputs[0])
+            # Sizes are taken at the measured root's length so the bounds hold
+            # under any TMPDIR without /dev/shm having to exist.
+            boundary = measured_len(outputs[0], fixture)
             for index, out in enumerate(outputs[1:], start=2):
                 with self.subTest(prompt=index):
+                    size = measured_len(out, fixture)
                     self.assertNotIn(SPEC_HEADER, out)
-                    self.assertGreater(len(out), LIGHT_CEILING_CHARS,
+                    self.assertGreater(size, LIGHT_CEILING_CHARS,
                                        'production shape no longer exceeds the '
                                        'fixture ceiling; the two bounds have '
                                        'converged and this case is now vacuous')
-                    self.assertLessEqual(len(out), PRODUCTION_LIGHT_CEILING_CHARS)
+                    self.assertLessEqual(size, PRODUCTION_LIGHT_CEILING_CHARS)
                     self.assertLessEqual(
-                        len(out),
-                        boundary * PRODUCTION_LIGHT_MAX_RATIO_OF_BOUNDARY)
+                        size, boundary * PRODUCTION_LIGHT_MAX_RATIO_OF_BOUNDARY)
                     self.assertTrue(canonical_steps(out))
                     self.assertIn(SELF_HEAL_PREFIX, out)
             self.assertEqual(1, len(set(outputs[1:])))
@@ -663,6 +705,7 @@ class TestAC8SelfHealPointer(unittest.TestCase):
             block = fixture.call_direct()
             module = load_hook_module()
             os.environ['HOME'] = str(fixture.home)
+            os.environ['CLAUDE_CONFIG_DIR'] = str(fixture.home / '.claude')
             os.environ['CLAUDE_PROJECT_DIR'] = str(fixture.project)
             module = load_hook_module()
             resolved = module.resolve_command_spec_path('dev-overnight')
@@ -704,7 +747,7 @@ class TestAC11MarkerOrderingAndWritability(unittest.TestCase):
             fixture = Fixture(tmp)
             with open('/dev/full', 'w') as sink:
                 result = subprocess.run(
-                    [sys.executable, str(HOOK_PATH)],
+                    [sys.executable, str(installed_hook(fixture.home))],
                     input=json.dumps({'prompt': 'go', 'session_id': fixture.session_id,
                                       'transcript_path': str(fixture.transcript)}),
                     text=True, env=fixture.env(), stdout=sink,
@@ -908,20 +951,92 @@ class TestDeliveryReceiptIsTrustworthy(unittest.TestCase):
         read_command_spec keeps its own copy of this list (rewriting it is
         outside this lane's scope), so a pointer built from a drifted copy
         would send the orchestrator to the wrong place -- worse than absent.
+
+        The two list expressions are compared whole, not by their path
+        literals: candidates that differ only in their base (the hook's own
+        location against $HOME, say) share every literal, so a literal-only
+        comparison would pass a copy that searches a different directory.
         """
         source = ast.parse(HOOK_PATH.read_text())
         bodies = {node.name: node for node in source.body
                   if isinstance(node, ast.FunctionDef)}
         self.assertIn('_command_spec_candidates', bodies)
 
-        def path_literals(node: ast.AST) -> list[str]:
-            return [element.value for element in ast.walk(node)
-                    if isinstance(element, ast.Constant)
-                    and isinstance(element.value, str)
-                    and element.value in ('.claude', 'commands')]
+        def candidate_list(name: str) -> str:
+            lists = [element for element in ast.walk(bodies[name])
+                     if isinstance(element, ast.List)]
+            self.assertEqual(1, len(lists), f'{name}: expected one list literal')
+            return ast.dump(lists[0])
 
-        self.assertEqual(path_literals(bodies['_command_spec_candidates']),
-                         path_literals(bodies['read_command_spec']))
+        self.assertEqual(candidate_list('_command_spec_candidates'),
+                         candidate_list('read_command_spec'))
+
+
+class TestPerAccountConfigDirStillFindsTheSpec(unittest.TestCase):
+    """REG-E: a CLAUDE_CONFIG_DIR without commands/ must not lose the spec.
+
+    CLAUDE_CONFIG_DIR may name a per-account configuration directory that holds
+    no commands/. The project and configuration-directory candidates then both
+    miss, and the spec must still come from the harness's own commands/,
+    resolved from the hook's location -- in the default install (~/.claude is
+    the harness) and for a clone outside ~/.claude alike. Before the fix the
+    resolver returned None and every continuation prompt carried 'NOT FOUND'.
+
+    The fixture's <home>/.claude is the harness the hook copy is installed in;
+    the per-account directory sits beside it and never gets a commands/.
+    """
+
+    LAYOUTS = ('default install', 'clone outside ~/.claude')
+
+    @staticmethod
+    def _per_account_env(fixture: Fixture, layout: str) -> dict:
+        account = fixture.root / 'acct-test-123'
+        (account / 'projects').mkdir(parents=True, exist_ok=True)
+        home = fixture.home
+        if layout != 'default install':
+            # A HOME with no .claude at all: only the hook's location can
+            # lead to the harness.
+            home = fixture.root / 'home-acct-test-123'
+            home.mkdir(exist_ok=True)
+        return {'HOME': str(home), 'CLAUDE_CONFIG_DIR': str(account)}
+
+    def test_spec_resolves_to_the_harness_copy(self):
+        for layout in self.LAYOUTS:
+            with self.subTest(layout=layout):
+                with tempfile.TemporaryDirectory() as tmp:
+                    fixture = Fixture(tmp)
+                    env = self._per_account_env(fixture, layout)
+                    self.assertFalse((Path(env['CLAUDE_CONFIG_DIR']) / 'commands').exists())
+                    harness = (fixture.home / '.claude').resolve()
+                    harness_spec = harness / 'commands' / 'dev-overnight.md'
+
+                    with fixture.module() as module:
+                        os.environ.update(env)
+                        self.assertEqual(harness_spec,
+                                         module.resolve_command_spec_path('dev-overnight'))
+                        self.assertTrue(module.read_command_spec('dev-overnight')
+                                        .startswith(spec_body_probe()))
+
+                    first = fixture.run(extra_env=env).stdout
+                    self.assertNotIn('NOT FOUND on disk', first)
+                    self.assertIn(f'{SELF_HEAL_PREFIX}{harness_spec} -- READ that file now',
+                                  first)
+                    self.assertIn(SPEC_HEADER, first)
+                    self.assertIn(spec_body_probe(), first)
+
+    def test_a_config_dir_copy_still_takes_precedence(self):
+        """The harness's copy is the last resort, never ahead of the others."""
+        with tempfile.TemporaryDirectory() as tmp:
+            fixture = Fixture(tmp)
+            env = self._per_account_env(fixture, 'default install')
+            account_spec = Path(env['CLAUDE_CONFIG_DIR']) / 'commands' / 'dev-overnight.md'
+            account_spec.parent.mkdir()
+            account_spec.write_text('# dev-overnight\nPER-ACCOUNT COPY\n')
+            with fixture.module() as module:
+                os.environ.update(env)
+                self.assertEqual(account_spec,
+                                 module.resolve_command_spec_path('dev-overnight'))
+                self.assertIn('PER-ACCOUNT COPY', module.read_command_spec('dev-overnight'))
 
 
 class TestResolverAndReaderCannotNameDifferentFiles(unittest.TestCase):
@@ -960,7 +1075,7 @@ class TestResolverAndReaderCannotNameDifferentFiles(unittest.TestCase):
     def test_pointer_and_fingerprint_name_the_file_that_was_emitted(self):
         for shape in self.SHAPES:
             with self.subTest(shape=shape):
-                with tempfile.TemporaryDirectory(dir='/dev/shm') as tmp:
+                with tempfile.TemporaryDirectory() as tmp:
                     fixture = Fixture(tmp)
                     blocker = self._plant_unreadable(fixture, shape)
                     emitted_from = fixture.spec_doc()
@@ -990,7 +1105,7 @@ class TestResolverAndReaderCannotNameDifferentFiles(unittest.TestCase):
         """
         for shape in self.SHAPES:
             with self.subTest(shape=shape):
-                with tempfile.TemporaryDirectory(dir='/dev/shm') as tmp:
+                with tempfile.TemporaryDirectory() as tmp:
                     fixture = Fixture(tmp)
                     self._plant_unreadable(fixture, shape)
                     doc = fixture.spec_doc()
@@ -1013,7 +1128,7 @@ class TestResolverAndReaderCannotNameDifferentFiles(unittest.TestCase):
         makes the mitigation worse than absent. The degraded search-list form
         is the correct answer here, and it must not regress into a route.
         """
-        with tempfile.TemporaryDirectory(dir='/dev/shm') as tmp:
+        with tempfile.TemporaryDirectory() as tmp:
             fixture = Fixture(tmp, with_spec=False)
             blocker = self._plant_unreadable(fixture, 'invalid_utf8')
 
@@ -1032,7 +1147,7 @@ class TestResolverAndReaderCannotNameDifferentFiles(unittest.TestCase):
         """The invariant itself, asserted directly rather than through effects."""
         for shape in self.SHAPES + (None,):
             with self.subTest(shape=shape):
-                with tempfile.TemporaryDirectory(dir='/dev/shm') as tmp:
+                with tempfile.TemporaryDirectory() as tmp:
                     fixture = Fixture(tmp)
                     if shape is not None:
                         self._plant_unreadable(fixture, shape)
@@ -1119,7 +1234,7 @@ class TestScopeConfinement(unittest.TestCase):
 
     def _run_without_payload_transcript(self, fixture) -> dict:
         payload = json.dumps({'prompt': 'go', 'session_id': fixture.session_id})
-        subprocess.run([sys.executable, str(HOOK_PATH)], input=payload,
+        subprocess.run([sys.executable, str(installed_hook(fixture.home))], input=payload,
                        capture_output=True, text=True, env=fixture.env())
         return json.loads(fixture.marker_path().read_text())
 

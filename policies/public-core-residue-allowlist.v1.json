@@ -79,27 +79,6 @@
       "rationale": "4. Classification ledger — prose/comment text; never read as a path at runtime."
     },
     {
-      "path": "README.md",
-      "fingerprint": "74ef04cdcaf08ecf",
-      "ordinal": 1,
-      "class": "comment_or_narrative_doc",
-      "rationale": "Prose/comment text documenting the residue policy; never read as a path at runtime. Line: \"The harness runs on a fresh non-root clone. Clone to `$HOME/.claude` on any Linux box (non\""
-    },
-    {
-      "path": "README.md",
-      "fingerprint": "a3996fa6614a87e3",
-      "ordinal": 1,
-      "class": "comment_or_narrative_doc",
-      "rationale": "Prose/comment text documenting the residue policy; never read as a path at runtime. Line: \"| **Fresh non-root clone**: core flows resolve to *your* home with zero author-path litera\""
-    },
-    {
-      "path": "README.md",
-      "fingerprint": "a65fa6655ff7e9c3",
-      "ordinal": 1,
-      "class": "comment_or_narrative_doc",
-      "rationale": "Portability guarantee — prose/comment text; never read as a path at runtime."
-    },
-    {
       "path": "agents/qa.md",
       "fingerprint": "3ba600a2ea5583cb",
       "ordinal": 1,
@@ -126,13 +105,6 @@
       "ordinal": 1,
       "class": "comment_or_narrative_doc",
       "rationale": "Standard 2: No Hardcoded Values in Scripts — prose/comment text; never read as a path at runtime."
-    },
-    {
-      "path": "commands/close.md",
-      "fingerprint": "e594067544bf091f",
-      "ordinal": 1,
-      "class": "comment_or_narrative_doc",
-      "rationale": "Invocation — prose/comment text; never read as a path at runtime."
     },
     {
       "path": "commands/dev.md",
@@ -287,13 +259,6 @@
       "ordinal": 1,
       "class": "comment_or_narrative_doc",
       "rationale": "Prose/comment text documenting the residue policy; never read as a path at runtime. Line: \"# ── Build an isolated, ephemeral demo home (NOT under <author-path>, NOT /dev/shm) ────\""
-    },
-    {
-      "path": "hooks/git-hooks/pre-commit",
-      "fingerprint": "150f184fc54cc16c",
-      "ordinal": 1,
-      "class": "comment_or_narrative_doc",
-      "rationale": "script preamble — prose/comment text; never read as a path at runtime."
     },
     {
       "path": "hooks/lib/bash_write_targets.py",
@@ -696,87 +661,10 @@
     },
     {
       "path": "hooks/pretool-bash-safety.sh",
-      "fingerprint": "00fab51a765d5c6a",
-      "ordinal": 1,
-      "class": "comment_or_narrative_doc",
-      "rationale": "check_and_consume_daemon_restart_grant() — prose/comment text; never read as a path at runtime."
-    },
-    {
-      "path": "hooks/pretool-bash-safety.sh",
-      "fingerprint": "246b33ce8bbf347e",
-      "ordinal": 1,
-      "class": "env_parameterized_default",
-      "rationale": "DAEMON_RESTART_GRANT_HELPER — the author path is the DEFAULT of an env parameter (${CLAUDE_DAEMON_RESTART_GRANT_HELPER:-...}), the parameterized form PUBLIC-CORE.md section 3 sanctions: a deployer overrides the variable and the literal is never read. Re-audited after the left boundary was narrowed to (?<![A-Za-z0-9]); it was audited before this cycle and had been invisible only while the boundary excluded a preceding \"-\"."
-    },
-    {
-      "path": "hooks/pretool-bash-safety.sh",
-      "fingerprint": "31d46a2bd0bb9e29",
-      "ordinal": 1,
-      "class": "comment_or_narrative_doc",
-      "rationale": "script preamble — prose/comment text; never read as a path at runtime."
-    },
-    {
-      "path": "hooks/pretool-bash-safety.sh",
-      "fingerprint": "65aa93dd0c8d2cc8",
-      "ordinal": 1,
-      "class": "comment_or_narrative_doc",
-      "rationale": "script preamble — prose/comment text; never read as a path at runtime."
-    },
-    {
-      "path": "hooks/pretool-bash-safety.sh",
-      "fingerprint": "67956b4e1f5981c3",
-      "ordinal": 1,
-      "class": "comment_or_narrative_doc",
-      "rationale": "check_and_consume_daemon_restart_grant() — prose/comment text; never read as a path at runtime."
-    },
-    {
-      "path": "hooks/pretool-bash-safety.sh",
-      "fingerprint": "6c4a9cefaddd9847",
-      "ordinal": 1,
-      "class": "comment_or_narrative_doc",
-      "rationale": "script preamble — prose/comment text; never read as a path at runtime."
-    },
-    {
-      "path": "hooks/pretool-bash-safety.sh",
-      "fingerprint": "b28150103529ab6c",
-      "ordinal": 1,
-      "class": "comment_or_narrative_doc",
-      "rationale": "check_and_consume_allowlist() — prose/comment text; never read as a path at runtime."
-    },
-    {
-      "path": "hooks/pretool-bash-safety.sh",
-      "fingerprint": "bb333fa84bb2aa92",
-      "ordinal": 1,
-      "class": "comment_or_narrative_doc",
-      "rationale": "check_and_consume_allowlist() — prose/comment text; never read as a path at runtime."
-    },
-    {
-      "path": "hooks/pretool-bash-safety.sh",
       "fingerprint": "c31356b145e8f0ee",
       "ordinal": 1,
       "class": "comment_or_narrative_doc",
       "rationale": "_any_git_has_subcmd() — prose/comment text; never read as a path at runtime."
-    },
-    {
-      "path": "hooks/pretool-bash-safety.sh",
-      "fingerprint": "d40d50d7f5f4ab44",
-      "ordinal": 1,
-      "class": "comment_or_narrative_doc",
-      "rationale": "script preamble — prose/comment text; never read as a path at runtime."
-    },
-    {
-      "path": "hooks/pretool-bash-safety.sh",
-      "fingerprint": "e5810a5981ea9ba8",
-      "ordinal": 1,
-      "class": "comment_or_narrative_doc",
-      "rationale": "_runtime_guard_fail_closed() — prose/comment text; never read as a path at runtime."
-    },
-    {
-      "path": "hooks/pretool-bash-safety.sh",
-      "fingerprint": "ed649dd11e7cdb37",
-      "ordinal": 1,
-      "class": "comment_or_narrative_doc",
-      "rationale": "check_and_consume_allowlist() — prose/comment text; never read as a path at runtime."
     },
     {
       "path": "hooks/pretool-cp-checkin.py",
@@ -881,7 +769,7 @@
       "fingerprint": "4a0bc37fb6071600",
       "ordinal": 1,
       "class": "comment_or_narrative_doc",
-      "rationale": "Prose/comment text documenting the residue policy; never read as a path at runtime. Line: \"# e.g. <author-path> -> -root; /dev/shm/dev-workspace/applio -> -dev-shm-dev-workspace-applio\""
+      "rationale": "Prose/comment text documenting the residue policy; never read as a path at runtime. Line: a comment showing how a working-directory path maps to its project-dir slug."
     },
     {
       "path": "hooks/session-promote-hook.sh",
@@ -906,52 +794,10 @@
     },
     {
       "path": "hooks/tests/test_dual_runtime_lifecycle_e2e.py",
-      "fingerprint": "0c1a6d6025c2759d",
-      "ordinal": 1,
-      "class": "test_fixture",
-      "rationale": "def make_configured_fixture() — fixture input data inside the test tree; not shipped harness behaviour."
-    },
-    {
-      "path": "hooks/tests/test_dual_runtime_lifecycle_e2e.py",
-      "fingerprint": "35d6e497739e9006",
-      "ordinal": 1,
-      "class": "test_fixture",
-      "rationale": "module docstring — fixture input data inside the test tree; not shipped harness behaviour."
-    },
-    {
-      "path": "hooks/tests/test_dual_runtime_lifecycle_e2e.py",
       "fingerprint": "430c2baa8d402cb1",
       "ordinal": 1,
       "class": "test_fixture",
       "rationale": "def append_completion() — fixture input data inside the test tree; not shipped harness behaviour."
-    },
-    {
-      "path": "hooks/tests/test_dual_runtime_lifecycle_e2e.py",
-      "fingerprint": "5f5a84c3024b2d3b",
-      "ordinal": 1,
-      "class": "test_fixture",
-      "rationale": "module docstring — fixture input data inside the test tree; not shipped harness behaviour."
-    },
-    {
-      "path": "hooks/tests/test_dual_runtime_lifecycle_e2e.py",
-      "fingerprint": "9a95b17a6c16bda1",
-      "ordinal": 1,
-      "class": "test_fixture",
-      "rationale": "module docstring — fixture input data inside the test tree; not shipped harness behaviour."
-    },
-    {
-      "path": "hooks/tests/test_dual_runtime_lifecycle_e2e.py",
-      "fingerprint": "a8a861aa41513f04",
-      "ordinal": 1,
-      "class": "test_fixture",
-      "rationale": "def test_active_codex_hook_plan_has_one_lifecycle_owner() — fixture input data inside the test tree; not shipped harness behaviour."
-    },
-    {
-      "path": "hooks/tests/test_dual_runtime_lifecycle_e2e.py",
-      "fingerprint": "f19d89a9afc5255b",
-      "ordinal": 1,
-      "class": "test_fixture",
-      "rationale": "module docstring — fixture input data inside the test tree; not shipped harness behaviour."
     },
     {
       "path": "hooks/tests/test_runtime_guard.py",
@@ -1480,13 +1326,6 @@
     },
     {
       "path": "scripts/check-public-core.sh",
-      "fingerprint": "21571b45ff999f8d",
-      "ordinal": 1,
-      "class": "scanner_pattern_definition",
-      "rationale": "The detector's own constant table: the literal IS the pattern being gated on. Line: \"# \"<author-path>\" can never satisfy it, which is what keeps a genuine author-home\""
-    },
-    {
-      "path": "scripts/check-public-core.sh",
       "fingerprint": "4f1f7fbffe9acb3f",
       "ordinal": 1,
       "class": "scanner_pattern_definition",
@@ -1549,20 +1388,6 @@
       "rationale": "The detector's own constant table: the literal IS the pattern being gated on. Line: \"is_env = bool(re.search(r':-\\s*[\"\\']?(<author-path>|/home/|/Users/)', content))\""
     },
     {
-      "path": "scripts/check-public-core.sh",
-      "fingerprint": "e5332625ebc5adcb",
-      "ordinal": 1,
-      "class": "scanner_pattern_definition",
-      "rationale": "The detector's own constant table: the literal IS the pattern being gated on. Line: \"# `EXACT_HOME=\"<author-path>\"` and `MAC=\"<author-path>\"` walked straight through.\""
-    },
-    {
-      "path": "scripts/check-public-core.sh",
-      "fingerprint": "ea9acdfa6ae60c22",
-      "ordinal": 1,
-      "class": "scanner_pattern_definition",
-      "rationale": "The detector's own constant table: the literal IS the pattern being gated on. Line: \"second component (an actual author home such as \"<author-path>\") can never\""
-    },
-    {
       "path": "scripts/close-scoring-decide.py",
       "fingerprint": "924a6cf6f5aeb156",
       "ordinal": 1,
@@ -1619,20 +1444,6 @@
       "rationale": "script preamble — the residue detector's own constant table; naming the pattern is its purpose."
     },
     {
-      "path": "scripts/execute-push.py",
-      "fingerprint": "9c3bf211cc6bcf1e",
-      "ordinal": 1,
-      "class": "comment_or_narrative_doc",
-      "rationale": "Prose/comment text documenting the residue policy; never read as a path at runtime. Line: \"# Push.sh location — tilde-expanded at runtime; never hardcoded to <author-path>\""
-    },
-    {
-      "path": "scripts/install/render-settings",
-      "fingerprint": "ac7b1e71a7a6a59a",
-      "ordinal": 1,
-      "class": "doctest_or_docstring_example",
-      "rationale": "module docstring — illustrative literal inside documentation/usage text; not executed as a path."
-    },
-    {
       "path": "scripts/resolve-close-report.sh",
       "fingerprint": "f4385ea41ec5e8c2",
       "ordinal": 1,
@@ -1659,34 +1470,6 @@
       "ordinal": 1,
       "class": "doctest_or_docstring_example",
       "rationale": "module docstring — illustrative literal inside documentation/usage text; not executed as a path."
-    },
-    {
-      "path": "skills/ui-beauty-score/README.md",
-      "fingerprint": "1a1d41773dfe89d1",
-      "ordinal": 1,
-      "class": "comment_or_narrative_doc",
-      "rationale": "See also — prose/comment text; never read as a path at runtime."
-    },
-    {
-      "path": "skills/ui-beauty-score/README.md",
-      "fingerprint": "bc3ca585aa965b74",
-      "ordinal": 1,
-      "class": "comment_or_narrative_doc",
-      "rationale": "See also — prose/comment text; never read as a path at runtime."
-    },
-    {
-      "path": "skills/ui-shared/anti-pattern-catalog.yml",
-      "fingerprint": "2463604865cded8d",
-      "ordinal": 1,
-      "class": "comment_or_narrative_doc",
-      "rationale": "file body — prose/comment text; never read as a path at runtime."
-    },
-    {
-      "path": "skills/ui-shared/rule-map.json",
-      "fingerprint": "8352ef53e439abad",
-      "ordinal": 1,
-      "class": "comment_or_narrative_doc",
-      "rationale": "\"spec_reference\" field — prose/comment text; never read as a path at runtime."
     }
   ]
 }

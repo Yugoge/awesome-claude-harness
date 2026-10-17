@@ -25,7 +25,10 @@ HOOK = Path(__file__).resolve().parent.parent / "posttool-overnight-loop.py"
 
 
 def _run_loop(payload, project_dir, home, mode=None):
-    env = {**os.environ, "CLAUDE_PROJECT_DIR": str(project_dir), "HOME": str(home)}
+    # The advisory log lives under the configuration directory (CLAUDE_CONFIG_DIR,
+    # else ~/.claude): pin both to the scratch home.
+    env = {**os.environ, "CLAUDE_PROJECT_DIR": str(project_dir), "HOME": str(home),
+           "CLAUDE_CONFIG_DIR": str(home / ".claude")}
     if mode is None:
         env.pop("CLAUDE_OBLIGATION_TERMINAL", None)
     else:

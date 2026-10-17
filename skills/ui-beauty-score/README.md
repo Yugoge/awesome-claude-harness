@@ -40,5 +40,5 @@ This skill is pure arithmetic over JSON — it cannot fail in the operational se
 
 - `SKILL.md` — operational contract, JSON schemas, calculation rules
 - `INDEX.md` — relationship to other ui-* skills and ui-shared/ artifacts
-- `/root/.claude/skills/ui-shared/report-schema.json` — the schema this skill's output feeds into
-- `/root/docs/dev/specs/spec-20260426-080555.md` §5.15.7 — weight rationale
+- `<harness-home>/skills/ui-shared/report-schema.json` — the schema this skill's output feeds into
+- `<harness-home>/docs/dev/specs/spec-20260426-080555.md` §5.15.7 — weight rationale

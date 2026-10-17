@@ -5,7 +5,7 @@
 # Usage: Automatically called by PostToolUse hooks when SlashCommand is invoked
 
 # Create logs directory if it doesn't exist
-LOGS_DIR="$HOME/.claude/logs"
+LOGS_DIR="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/logs"
 mkdir -p "$LOGS_DIR"
 
 # Audit log file

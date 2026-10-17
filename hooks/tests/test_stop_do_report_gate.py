@@ -69,7 +69,8 @@ def _report(project_dir, task_id, **overrides):
 def _run_gate(sid, project_dir, home, mode="block", raw_report=None, task_id="20260101-000000"):
     env = {**os.environ,
            "CLAUDE_PROJECT_DIR": str(project_dir),
-           "HOME": str(home)}
+           "HOME": str(home),
+           "CLAUDE_CONFIG_DIR": str(Path(home) / ".claude")}
     if mode is None:
         env.pop("DO_REPORT_GATE_MODE", None)  # exercise the true unset-env-var default
     else:

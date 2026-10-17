@@ -25,7 +25,7 @@ from pathlib import Path
 # G4 overnight-loop-reset anchor (ticket 20260930-132644-l4 item 7). Shares
 # the SAME env var and advisory-log file as hooks/stop-obligation-gate.py --
 # one switch, one log stream, for both halves of gate G4.
-ADVISORY_LOG = Path.home() / '.claude' / 'logs' / 'obligation-terminal-gate-advisory.jsonl'
+ADVISORY_LOG = Path(os.environ.get('CLAUDE_CONFIG_DIR') or Path.home() / '.claude') / 'logs' / 'obligation-terminal-gate-advisory.jsonl'
 
 # Mirrors hooks/stop-do-report-gate.py's TERMINAL_STATUSES constant: "blocked"
 # is a legitimate terminal dev status, never "incomplete" (R9).

@@ -1,166 +1,673 @@
 #!/usr/bin/env python3
-"""Render the concrete settings.json for an installed harness home from the tracked template.
+"""Settings tool for a harness home H: the checkout that holds this script (two levels above
+scripts/install/).
 
-The tracked source of truth is settings.template.json, which carries a single
-{{CLAUDE_HOME}} placeholder wherever an install-home absolute path belongs. This
-renderer substitutes that placeholder with the resolved absolute install-home
-path, emits absolute permission literals + env values for THAT home, and applies
-the result ONLY after it validates:
+settings.json is tracked in its clean form (public, no machine values). This machine's values
+live in the untracked overlay <H>/settings.machine.json; the working settings.json is the machine
+form = smudge(clean form). The git filter "claude-settings" (registered by scripts/bootstrap)
+keeps the two apart, so machine values and CLI-owned keys never reach the index.
 
-  1. the rendered text parses as JSON;
-  2. the required hook wiring is present (a fixed set of load-bearing hooks);
-  3. semantic parity holds versus the template (placeholders normalized):
-     - every permissions.deny entry is preserved (no deny silently dropped);
-     - permissions.ask is preserved;
-     - permissions.allow is NEVER broadened (rendered allow set, with the home
-       normalized back to the placeholder, must be a subset of the template's);
-     - the per-event hooks arrays are identical in entries + order.
+  clean              git clean filter, stdin -> stdout: removes what the enabled modules and the
+                     overlay contribute, what the record lists and the CLI-owned keys, restoring
+                     the values HEAD tracks. Fail closed: input that is not a JSON object it can
+                     parse (a UTF-8 byte order mark included), or of an unexpected structure,
+                     exits 1 with no output, so git refuses to stage it.
+  smudge             git smudge filter, stdin -> stdout: applies the modules, then the overlay.
+                     Fail safe: invalid input or overlay passes the input through unchanged.
+  render [--force]   write the machine form of <H>/settings.json; refuses (without --force) to
+                     drop working-file entries that neither the clean form, the overlay nor the
+                     record explains.
+  check [--staged]   doctor checks (hook paths, filter wiring and round trip, entries nothing
+                     explains, protected-runtime file); with --staged: refuse a staged settings.json
+                     that is in machine form, and an index that holds the overlay or the
+                     private-literal list <H>/private-literals.txt: both are personal and never
+                     tracked, so after a forced add or an earlier commit of either, every commit
+                     is refused until `git rm --cached` untracks it.
+  migrate --from REV [--settings-file PATH] [--base REV]
+                     seed a NEW overlay from previous personal settings (one-time owner step).
 
-The renderer NEVER broadens a permission beyond the template and aborts WITHOUT
-partially applying on any bad render — the live settings file is left byte-identical.
+The record <git dir>/claude-settings.applied (mode 0600, never tracked) lists the layers smudge and
+render applied to the working file since the last render, so that an entry dropped from the overlay
+(or a deleted overlay) without a re-render is still stripped by clean and refused by check --staged.
+Messages name key paths and counts only, never a settings value.
 
-Usage:
-  render-settings <install-home> [--template <path>] [--out <path>] [--print]
-  render-settings --home <install-home> [...]            # equivalent
-  render-settings --check <rendered.json> --template <t> # validate-only (no apply)
-
-  <install-home>  absolute path to the installed harness home (e.g. /home/alice/.claude).
-                  Defaults to ${CLAUDE_HOME:-$HOME/.claude} when omitted.
-  --out <path>    file to apply the rendered settings to (default: <template-dir>/settings.json).
-  --print         write the rendered JSON to stdout instead of applying it.
-  --check <f>     validate an already-rendered file against the template, then exit.
-
-Exit codes: 0=success, 1=bad render / validation failure (nothing applied), 2=usage error.
+Overlay format: any settings keys (env, permissions.allow|deny|ask, hooks, other top-level keys)
+plus meta keys that are never rendered: "modules" (name -> true/false) and any top-level key that
+starts with "_". Exit codes: 0 success, 1 failure, 2 usage error. Python 3.10+, stdlib only.
 """
 import argparse
+import ast
+import copy
+import importlib.util
 import json
 import os
+import re
+import shlex
+import subprocess
 import sys
 import tempfile
-from pathlib import Path
 
-PLACEHOLDER = "{{CLAUDE_HOME}}"
+sys.dont_write_bytecode = True  # check imports harness modules; leave no caches in the checkout
 
-# Load-bearing hooks that MUST survive any render. A render that drops one of
-# these is a broken settings file regardless of JSON validity.
-REQUIRED_HOOK_SUFFIXES = (
-    "hooks/pretool-tool-policy.py",
-    "hooks/pretool-bash-safety.sh",
-    "hooks/stop-spec-coverage-enforce.py",
-    "hooks/pretool-orchestrator-gate.py",
-)
-
-
-def _err(msg: str) -> None:
-    sys.stderr.write(f"render-settings: {msg}\n")
+FILTER_NAME = "claude-settings"
+SETTINGS = "settings.json"
+OVERLAY = "settings.machine.json"
+LITERALS = "private-literals.txt"  # scripts/check-public-core.sh's private-literal list
+RECORD = "claude-settings.applied"  # in the git directory: the layers smudge and render applied
+# Keys Claude Code itself writes into user settings (/model, /config, /effort, /fast).
+CLI_OWNED = ("model", "alwaysThinkingEnabled", "effortLevel", "tui", "theme",
+             "autoCompactEnabled", "modelSettings", "fastMode", "advisorModel")
+STRUCTURED = ("env", "permissions", "hooks")
+PERMISSION_LISTS = ("allow", "deny", "ask")
 
 
-def _load_template(template_path: Path) -> tuple[str, dict]:
-    if not template_path.is_file():
-        _err(f"template not found: {template_path}")
-        sys.exit(1)
-    raw = template_path.read_text()
+def _hook(script, timeout=None):
+    entry = {"type": "command",
+             "command": 'python3 "${CLAUDE_HOME:-$HOME/.claude}/hooks/%s"' % script}
+    if timeout is not None:
+        entry["timeout"] = timeout
+    return entry
+
+
+# Optional modules, switched on by the overlay's "modules" key. Embedded so that the script is
+# self-contained (it may run from a fetched copy).
+MODULES = {
+    "paseo": {
+        "permissions": {"allow": ["mcp__paseo__*", "Bash(node scripts/paseo-usage-read.mjs:*)"]},
+        "hooks": {
+            "UserPromptSubmit": [{"hooks": [_hook("userprompt-usage-snapshot.py", 10)]}],
+            "PreToolUse": [{"matcher": "mcp__paseo__browser_run_code",
+                            "hooks": [_hook("pretool-runcode-watchdog.py")]}],
+            "PostToolUse": [{"matcher": "mcp__paseo__browser_run_code",
+                             "hooks": [_hook("posttool-runcode-watchdog.py")]}],
+        },
+    },
+}
+
+STAGED_MSG = ("settings.json is staged in machine form (it carries overlay values or CLI-owned "
+              "keys, or is not canonical); register the filter with scripts/bootstrap and "
+              "re-stage.")
+KEEP_HINT = "move it into settings.machine.json to keep it"
+TRACKED_MSG = ("%s is in the index (staged or tracked), but it is personal to this machine and "
+               "never committed; untrack it with `git rm --cached -- %s` (the file stays on disk) "
+               "and commit that.")
+
+
+class OverlayError(Exception):
+    """The overlay exists but cannot be used."""
+
+
+class ShapeError(Exception):
+    """A settings document has an unexpected structure."""
+
+
+def harness_home():
+    return os.path.dirname(os.path.dirname(os.path.dirname(os.path.realpath(__file__))))
+
+
+def _err(msg):
+    sys.stderr.write("render-settings: %s\n" % msg)
+
+
+def canon(obj):
+    return (json.dumps(obj, indent=2, ensure_ascii=False) + "\n").encode("utf-8")
+
+
+def parse(data):
+    """The JSON object in `data` (bytes), or None."""
+    if data is None:
+        return None
     try:
-        parsed = json.loads(raw)
-    except json.JSONDecodeError as exc:
-        _err(f"template is not valid JSON: {exc}")
-        sys.exit(1)
-    return raw, parsed
+        obj = json.loads(data.decode("utf-8"))
+    except (UnicodeDecodeError, ValueError):
+        return None
+    return obj if isinstance(obj, dict) else None
 
 
-def render(template_raw: str, install_home: str) -> str:
-    """Substitute the placeholder with the concrete install-home absolute path."""
-    return template_raw.replace(PLACEHOLDER, install_home)
+def _d(value):
+    return value if isinstance(value, dict) else {}
 
 
-def _all_hook_commands(settings: dict) -> list[str]:
-    cmds = []
-    for event in (settings.get("hooks") or {}).values():
-        for group in event:
-            for hook in group.get("hooks", []):
-                if hook.get("type") == "command":
-                    cmds.append(hook.get("command", ""))
-    return cmds
+def _list(value):
+    return value if isinstance(value, list) else []
 
 
-def _hook_event_arrays(settings: dict) -> dict:
-    """Ordered list of command strings per event, for entries+order parity compare."""
-    out = {}
-    for event, groups in (settings.get("hooks") or {}).items():
-        seq = []
-        for group in groups:
-            for hook in group.get("hooks", []):
-                seq.append((group.get("matcher"), hook.get("command", "")))
-        out[event] = seq
+def _read(path):
+    try:
+        with open(path, "rb") as fh:
+            return fh.read()
+    except FileNotFoundError:
+        return None
+
+
+# ---------------------------------------------------------------------------------------- git
+
+def _git(home, *args):
+    try:
+        return subprocess.run(["git", "-C", home, *args], stdout=subprocess.PIPE,
+                              stderr=subprocess.PIPE, stdin=subprocess.DEVNULL)
+    except OSError:
+        return None
+
+
+def _git_out(home, *args):
+    proc = _git(home, *args)
+    if proc is None or proc.returncode != 0:
+        return None
+    return proc.stdout.decode("utf-8", "replace").strip()
+
+
+def is_checkout(home):
+    top = _git_out(home, "rev-parse", "--show-toplevel")
+    return bool(top) and os.path.realpath(top) == os.path.realpath(home)
+
+
+def blob(home, spec):
+    proc = _git(home, "cat-file", "blob", spec)
+    return proc.stdout if proc is not None and proc.returncode == 0 else None
+
+
+def load_base(home):
+    """Base B for clean: the HEAD blob, else the index blob, else {}."""
+    if is_checkout(home):
+        for spec in ("HEAD:" + SETTINGS, ":" + SETTINGS):
+            data = blob(home, spec)
+            if data is not None:
+                return parse(data) or {}
+    return {}
+
+
+# ------------------------------------------------------------------------------------ overlay
+
+def _layer_of(overlay):
+    return {k: v for k, v in overlay.items() if k != "modules" and not k.startswith("_")}
+
+
+def _validate_layer(layer, where):
+    env = layer.get("env", {})
+    if not isinstance(env, dict):
+        raise OverlayError("%s: env must be an object" % where)
+    for key, value in env.items():
+        if not isinstance(value, str):
+            raise OverlayError("%s: env.%s must be a string" % (where, key))
+    perms = layer.get("permissions", {})
+    if not isinstance(perms, dict):
+        raise OverlayError("%s: permissions must be an object" % where)
+    for name, value in perms.items():
+        if name in PERMISSION_LISTS and not isinstance(value, list):
+            raise OverlayError("%s: permissions.%s must be a list" % (where, name))
+        if isinstance(value, list) and not all(isinstance(e, str) for e in value):
+            raise OverlayError("%s: permissions.%s must list strings" % (where, name))
+    hooks = layer.get("hooks", {})
+    if not isinstance(hooks, dict):
+        raise OverlayError("%s: hooks must be an object" % where)
+    for event, groups in hooks.items():
+        ok = isinstance(groups, list) and all(
+            isinstance(g, dict) and isinstance(g.get("hooks"), list)
+            and all(isinstance(h, dict) for h in g["hooks"])
+            and isinstance(g.get("matcher", ""), str) for g in groups)
+        if not ok:
+            raise OverlayError("%s: hooks.%s must be a list of {matcher?, hooks: [...]} groups"
+                               % (where, event))
+
+
+def load_overlay(home):
+    """The overlay object, None when absent; raises OverlayError when unusable."""
+    path = os.path.join(home, OVERLAY)
+    try:
+        data = _read(path)
+    except OSError as exc:
+        raise OverlayError("%s: cannot read (%s)" % (path, exc.strerror))
+    if data is None:
+        return None
+    overlay = parse(data)
+    if overlay is None:
+        raise OverlayError("%s is not a valid JSON object" % path)
+    modules = overlay.get("modules", {})
+    if not isinstance(modules, dict):
+        raise OverlayError("%s: modules must be an object of name -> true/false" % path)
+    for name, enabled in modules.items():
+        if name not in MODULES:
+            raise OverlayError("%s: unknown module %r (known: %s)"
+                               % (path, name, ", ".join(sorted(MODULES))))
+        if not isinstance(enabled, bool):
+            raise OverlayError("%s: modules.%s must be true or false" % (path, name))
+    _validate_layer(_layer_of(overlay), path)
+    return overlay
+
+
+def layers_of(overlay):
+    """Layers in merge order: enabled modules (sorted by name), then the overlay."""
+    if overlay is None:
+        return []
+    modules = overlay.get("modules", {})
+    return [MODULES[name] for name in sorted(modules) if modules[name]] + [_layer_of(overlay)]
+
+
+# ------------------------------------------------------------------------------------- record
+
+def record_path(home):
+    """Where the record lives (inside the git directory, so it is never tracked); None outside a
+    git checkout, where nothing is committed."""
+    rel = _git_out(home, "rev-parse", "--git-path", RECORD) if is_checkout(home) else None
+    return os.path.join(home, rel) if rel else None
+
+
+def load_record(home):
+    """The layers smudge and render applied since the last render ([] when none are recorded);
+    raises OverlayError when the record is unusable."""
+    path = record_path(home)
+    shown = "the record %s" % (os.path.relpath(path, home) if path else RECORD)
+    try:
+        data = _read(path) if path else None
+    except OSError as exc:
+        raise OverlayError("%s: cannot read (%s)" % (shown, exc.strerror))
+    if data is None:
+        return []
+    layers = _d(parse(data)).get("layers")
+    if not isinstance(layers, list) or not all(isinstance(layer, dict) for layer in layers):
+        raise OverlayError("%s is not valid; run render-settings render --force to rewrite it"
+                           % shown)
+    for layer in layers:
+        _validate_layer(layer, shown)
+    return layers
+
+
+def save_record(home, layers):
+    """Write the record (owner-only); raises OSError."""
+    path, data = record_path(home), canon({"layers": layers})
+    if path is not None and _read(path) != data:
+        _write_atomic(path, data, 0o600)
+
+
+def union(*groups):
+    """The distinct non-empty layers of the groups, in order."""
+    out = []
+    for group in groups:
+        for layer in group:
+            if layer and layer not in out:
+                out.append(layer)
     return out
 
 
-def _normalize_home(value, install_home: str):
-    """Recursively map the install-home back to the placeholder for set-compare."""
-    if isinstance(value, str):
-        return value.replace(install_home, PLACEHOLDER)
-    if isinstance(value, list):
-        return [_normalize_home(v, install_home) for v in value]
-    if isinstance(value, dict):
-        return {k: _normalize_home(v, install_home) for k, v in value.items()}
-    return value
+# ------------------------------------------------------------------------- merge and unmerge
+
+def _container(parent, key, kind):
+    if key not in parent:
+        parent[key] = kind()
+    elif not isinstance(parent[key], kind):
+        raise ShapeError(key)
+    return parent[key]
 
 
-def validate(rendered_text: str, template: dict, install_home: str) -> list[str]:
-    """Return a list of validation failures. Empty list == valid."""
-    failures = []
+def _matcher(group):
+    m = group.get("matcher")
+    if m is not None and not isinstance(m, str):
+        raise ShapeError("matcher")
+    return m
 
-    # (1) rendered output must parse as JSON.
+
+def _match_all(m):
+    return m is None or m in ("", "*")
+
+
+def _alts(m):
+    return m.split("|") if isinstance(m, str) and not _match_all(m) else []
+
+
+def _find(groups, g):
+    """Index of the first group whose hooks list equals g's (a match-all g pairs only with a
+    match-all group), else None."""
+    want_all = _match_all(_matcher(g))
+    for i, t in enumerate(groups):
+        if isinstance(t, dict) and t.get("hooks") == g.get("hooks"):
+            if want_all and not _match_all(_matcher(t)):
+                continue
+            return i
+    return None
+
+
+def merge(y, layer):
+    """Apply one layer to the settings object y in place."""
+    for key, value in layer.items():
+        if key == "env":
+            for name, val in value.items():
+                _container(y, "env", dict)[name] = copy.deepcopy(val)
+        elif key == "permissions":
+            for name, val in value.items():
+                if isinstance(val, list):
+                    for entry in val:
+                        lst = _container(_container(y, "permissions", dict), name, list)
+                        if entry not in lst:
+                            lst.append(entry)
+                else:
+                    _container(y, "permissions", dict)[name] = copy.deepcopy(val)
+        elif key == "hooks":
+            for event, groups in value.items():
+                for g in groups:
+                    lst = _container(_container(y, "hooks", dict), event, list)
+                    i = _find(lst, g)
+                    if i is None:
+                        lst.append(copy.deepcopy(g))
+                        continue
+                    t = lst[i]
+                    if _match_all(_matcher(t)):
+                        continue  # already runs for every tool
+                    have = _alts(t["matcher"])
+                    add = []
+                    for alt in _alts(_matcher(g)):
+                        if alt not in have and alt not in add:
+                            add.append(alt)
+                    if add:
+                        t["matcher"] = "|".join([t["matcher"]] + add)
+        else:
+            y[key] = copy.deepcopy(value)
+    return y
+
+
+def merge_all(y, layers):
+    for layer in layers:
+        merge(y, layer)
+    return y
+
+
+def _restore(y, base, key):
+    if key in base:
+        y[key] = copy.deepcopy(base[key])
+    else:
+        y.pop(key, None)
+
+
+def _nth_equal(groups, hooks, n):
+    for g in groups:
+        if isinstance(g, dict) and g.get("hooks") == hooks:
+            if n == 0:
+                return g
+            n -= 1
+    return None
+
+
+def _unmerge_event(lst, layer_groups, base_groups):
+    """Remove what layer_groups contributed to one event list. The k-th y group with a given
+    hooks list corresponds to the k-th base group with that hooks list (merge only appends)."""
+    out = []
+    for pos, t in enumerate(lst):
+        if not isinstance(t, dict):
+            out.append(t)
+            continue
+        hooks = t.get("hooks")
+        mine = [g for g in layer_groups if g.get("hooks") == hooks]
+        if not mine:
+            out.append(t)
+            continue
+        nth = sum(1 for u in lst[:pos] if isinstance(u, dict) and u.get("hooks") == hooks)
+        bt = _nth_equal(base_groups, hooks, nth)
+        added = set()
+        for g in mine:
+            added.update(_alts(_matcher(g)))
+        m = _matcher(t)
+        if bt is None:  # a group the layers appended
+            if _match_all(m):
+                if any(_match_all(_matcher(g)) for g in mine):
+                    continue
+            else:
+                keep = [a for a in _alts(m) if a not in added]
+                if not keep:
+                    continue
+                if keep != _alts(m):
+                    t["matcher"] = "|".join(keep)
+        elif not _match_all(m):  # the base's own group, possibly with extended matcher
+            base_alts = _alts(_matcher(bt))
+            cur = _alts(m)
+            keep = [a for a in cur if a not in added or a in base_alts]
+            if not keep:
+                _restore(t, bt, "matcher")
+            elif keep != cur:
+                t["matcher"] = "|".join(keep)
+        out.append(t)
+    lst[:] = out
+
+
+def unmerge_all(y, layers, base):
+    """Inverse of merge_all: everything the layers own goes back to the base's value (or is
+    removed when the base lacks it); CLI-owned keys likewise."""
+    env_keys, perm_entries, perm_values, top_keys, hook_groups = [], {}, [], [], {}
+    for layer in layers:
+        for key, value in layer.items():
+            if key == "env":
+                env_keys.extend(value)
+            elif key == "permissions":
+                for name, val in value.items():
+                    if isinstance(val, list):
+                        perm_entries.setdefault(name, []).extend(val)
+                    else:
+                        perm_values.append(name)
+            elif key == "hooks":
+                for event, groups in value.items():
+                    hook_groups.setdefault(event, []).extend(groups)
+            else:
+                top_keys.append(key)
+    for key in top_keys:
+        _restore(y, base, key)
+    if env_keys and "env" in y:
+        env, b_env = _container(y, "env", dict), _d(base.get("env"))
+        for key in env_keys:
+            _restore(env, b_env, key)
+        if not env and "env" not in base:
+            del y["env"]
+    if (perm_entries or perm_values) and "permissions" in y:
+        perms, b_perms = _container(y, "permissions", dict), _d(base.get("permissions"))
+        for name, entries in perm_entries.items():
+            if name in perms and name not in perm_values:
+                lst = _container(perms, name, list)
+                b_lst = b_perms.get(name) if isinstance(b_perms.get(name), list) else []
+                lst[:] = [e for e in lst if e not in entries or e in b_lst]
+                if not lst and name not in b_perms:
+                    del perms[name]
+        for name in perm_values:
+            _restore(perms, b_perms, name)
+        if not perms and "permissions" not in base:
+            del y["permissions"]
+    if hook_groups and "hooks" in y:
+        hooks, b_hooks = _container(y, "hooks", dict), _d(base.get("hooks"))
+        for event, groups in hook_groups.items():
+            if event not in hooks:
+                continue
+            b_lst = b_hooks.get(event) if isinstance(b_hooks.get(event), list) else []
+            _unmerge_event(_container(hooks, event, list), groups, b_lst)
+            if not hooks[event] and event not in b_hooks:
+                del hooks[event]
+        if not hooks and "hooks" not in base:
+            del y["hooks"]
+    # Machine-only by definition: never part of the clean form, whatever HEAD holds, so a
+    # committed one is caught by `check --staged` even in CI, where there is no overlay.
+    for key in CLI_OWNED:
+        y.pop(key, None)
+    if isinstance(y.get("env"), dict):
+        y["env"].pop("CLAUDE_HOME", None)
+    return y
+
+
+def clean_bytes(data, layers, base):
+    """(output, problem): canonical clean form, or the input unchanged plus the reason."""
+    y = parse(data)
+    if y is None:
+        return data, "input is not a JSON object"
     try:
-        rendered = json.loads(rendered_text)
-    except json.JSONDecodeError as exc:
-        return [f"rendered output is not valid JSON: {exc}"]
-
-    # (2) required hook wiring present.
-    rendered_cmds = _all_hook_commands(rendered)
-    for suffix in REQUIRED_HOOK_SUFFIXES:
-        if not any(suffix in c for c in rendered_cmds):
-            failures.append(f"required hook wiring missing: {suffix}")
-
-    # (3) semantic parity (placeholders normalized back).
-    tpl_perms = template.get("permissions", {})
-    ren_perms = _normalize_home(rendered.get("permissions", {}), install_home)
-
-    tpl_deny = set(tpl_perms.get("deny", []))
-    ren_deny = set(ren_perms.get("deny", []))
-    dropped_deny = tpl_deny - ren_deny
-    if dropped_deny:
-        failures.append(f"deny entries dropped (semantic-parity violation): {sorted(dropped_deny)}")
-
-    tpl_ask = set(tpl_perms.get("ask", []))
-    ren_ask = set(ren_perms.get("ask", []))
-    dropped_ask = tpl_ask - ren_ask
-    if dropped_ask:
-        failures.append(f"ask entries dropped: {sorted(dropped_ask)}")
-
-    tpl_allow = set(tpl_perms.get("allow", []))
-    ren_allow = set(ren_perms.get("allow", []))
-    broadened = ren_allow - tpl_allow
-    if broadened:
-        failures.append(f"allow broadened beyond template: {sorted(broadened)}")
-
-    tpl_hooks = _hook_event_arrays(template)
-    ren_hooks = _hook_event_arrays(_normalize_home(rendered, install_home))
-    if tpl_hooks != ren_hooks:
-        failures.append("hook arrays differ from template (entries/order parity violation)")
-
-    return failures
+        unmerge_all(y, layers, base)
+    except ShapeError as exc:
+        return data, "unexpected structure at %s" % exc
+    return canon(y), None
 
 
-def _apply_atomic(out_path: Path, rendered_text: str) -> None:
-    """Write to a temp sibling then os.replace — never a partial write."""
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp = tempfile.mkstemp(dir=str(out_path.parent), prefix=".settings.render.", suffix=".json")
+def smudge_bytes(data, layers):
+    y = parse(data)
+    if y is None:
+        return data, "input is not a JSON object"
     try:
-        with os.fdopen(fd, "w") as f:
-            f.write(rendered_text)
-        os.replace(tmp, out_path)
-    except Exception:
+        merge_all(y, layers)
+    except ShapeError as exc:
+        return data, "unexpected structure at %s" % exc
+    return canon(y), None
+
+
+# ------------------------------------------------------------------------------------- diff
+
+_PREFIX = re.compile(r"(?<!\S)\S*?/(hooks|scripts)/")
+
+
+def norm_command(cmd):
+    """A hook command with quotes dropped and any path prefix before /hooks/ or /scripts/
+    (absolute, ~, or the ${CLAUDE_HOME:-...} channel expression) replaced by a fixed token."""
+    text = cmd.replace('"', "").replace("'", "")
+    return " ".join(_PREFIX.sub(lambda m: "@H/%s/" % m.group(1), text).split())
+
+
+def hook_key(hook):
+    if hook.get("type") == "command" and isinstance(hook.get("command"), str):
+        return "command:" + norm_command(hook["command"])
+    return json.dumps(hook, sort_keys=True)
+
+
+def _hook_keys(groups):
+    keys = set()
+    for g in groups if isinstance(groups, list) else []:
+        if isinstance(g, dict) and isinstance(g.get("hooks"), list):
+            keys.update(hook_key(h) for h in g["hooks"] if isinstance(h, dict))
+    return keys
+
+
+def diff(prev, ref, skip_env=(), skip_top=()):
+    """Entries of prev not explained by ref, shaped like an overlay: env keys whose value
+    differs or is missing; other top-level keys that differ or are missing; permission entries
+    absent from ref; hooks of prev groups whose normalised command ref lacks (per event)."""
+    out = {}
+    r_env = _d(ref.get("env"))
+    env = {k: copy.deepcopy(v) for k, v in _d(prev.get("env")).items()
+           if k not in skip_env and (k not in r_env or r_env[k] != v)}
+    if env:
+        out["env"] = env
+    r_perms, perms = _d(ref.get("permissions")), {}
+    for name, val in _d(prev.get("permissions")).items():
+        if isinstance(val, list):
+            r_lst = r_perms.get(name) if isinstance(r_perms.get(name), list) else []
+            add = []
+            for entry in val:
+                if entry not in r_lst and entry not in add:
+                    add.append(entry)
+            if add:
+                perms[name] = add
+        elif name not in r_perms or r_perms[name] != val:
+            perms[name] = copy.deepcopy(val)
+    if perms:
+        out["permissions"] = perms
+    r_hooks, hooks = _d(ref.get("hooks")), {}
+    for event, groups in _d(prev.get("hooks")).items():
+        known = _hook_keys(r_hooks.get(event))
+        for g in groups if isinstance(groups, list) else []:
+            if not (isinstance(g, dict) and isinstance(g.get("hooks"), list)):
+                continue
+            missing = [h for h in g["hooks"] if isinstance(h, dict) and hook_key(h) not in known]
+            if missing:
+                group = copy.deepcopy(g)
+                group["hooks"] = copy.deepcopy(missing)
+                hooks.setdefault(event, []).append(group)
+    if hooks:
+        out["hooks"] = hooks
+    for key, value in prev.items():
+        if key in STRUCTURED or key in skip_top:
+            continue
+        if key not in ref or ref[key] != value:
+            out[key] = copy.deepcopy(value)
+    return out
+
+
+def _count(n, one, many):
+    return "%d %s" % (n, one if n == 1 else many)
+
+
+def describe(extras):
+    """Key paths and counts of the extra entries: never a value, entry text or command."""
+    lines = ["env.%s" % k for k in extras.get("env", {})]
+    for name, val in extras.get("permissions", {}).items():
+        lines.append("permissions.%s" % name + (": " + _count(len(val), "entry", "entries")
+                                                 if isinstance(val, list) else ""))
+    for event, groups in extras.get("hooks", {}).items():
+        n = sum(len(g["hooks"]) for g in groups)
+        lines.append("hooks.%s: %s" % (event, _count(n, "hook command", "hook commands")))
+    lines.extend(k for k in extras if k not in STRUCTURED)
+    return lines
+
+
+def working_extras(working, target, layers):
+    """Entries of the working file that neither the target (machine form) nor the layers explain.
+    What a layer owns is explained whatever its working value (it is the layer's, possibly
+    stale)."""
+    owned_env = {k for layer in layers for k in layer.get("env", {})}
+    owned_top = {k for layer in layers for k in layer if k not in STRUCTURED}
+    ref = copy.deepcopy(target)
+    try:
+        merge_all(ref, layers)
+    except ShapeError:  # a recorded layer that no longer fits: its entries count as extras
+        ref = target
+    return diff(working, ref, skip_env=owned_env, skip_top=set(CLI_OWNED) | owned_top)
+
+
+# ---------------------------------------------------------------------------- clean / smudge
+
+def cmd_clean(home):
+    data = sys.stdin.buffer.read()
+    try:
+        layers = layers_of(load_overlay(home)) + load_record(home)
+    except OverlayError as exc:
+        _err("clean refused: %s; fix it, then re-stage settings.json" % exc)
+        return 1
+    out, problem = clean_bytes(data, layers, load_base(home))
+    if problem:  # never pass it through: unchanged input may carry machine values
+        if data.startswith(b"\xef\xbb\xbf"):
+            problem = "input starts with a UTF-8 byte order mark"
+        elif problem == "input is not a JSON object":
+            problem += " this filter can parse"
+        _err("clean refused: settings.json: %s; fix the file, then re-stage settings.json"
+             % problem)
+        return 1
+    sys.stdout.buffer.write(out)
+    return 0
+
+
+def cmd_smudge(home):
+    data = sys.stdin.buffer.read()
+    try:
+        layers = layers_of(load_overlay(home))
+        if layers:  # recorded before git writes the file: every applied value stays listed
+            save_record(home, union(load_record(home), layers))
+    except (OverlayError, OSError) as exc:
+        _err("smudge: %s; writing the clean form unchanged" % exc)
+        layers = None
+    out = data
+    if layers is not None:
+        out, problem = smudge_bytes(data, layers)
+        if problem:
+            _err("smudge: %s; passing settings.json through unchanged" % problem)
+    sys.stdout.buffer.write(out)
+    return 0
+
+
+# ------------------------------------------------------------------------------------ render
+
+def _write_atomic(path, data, mode=None):
+    if mode is None:
+        try:
+            mode = os.stat(path).st_mode & 0o7777
+        except FileNotFoundError:
+            mode = 0o644
+    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path), prefix=".settings.render.")
+    try:
+        with os.fdopen(fd, "wb") as fh:
+            fh.write(data)
+        os.chmod(tmp, mode)
+        os.replace(tmp, path)
+    except BaseException:
         try:
             os.unlink(tmp)
         except OSError:
@@ -168,65 +675,529 @@ def _apply_atomic(out_path: Path, rendered_text: str) -> None:
         raise
 
 
-def main(argv=None) -> int:
-    parser = argparse.ArgumentParser(add_help=True)
-    parser.add_argument("install_home", nargs="?", default=None)
-    parser.add_argument("--home", dest="home_flag", default=None)
-    parser.add_argument("--template", default=None)
-    parser.add_argument("--out", default=None)
-    parser.add_argument("--print", dest="to_stdout", action="store_true")
-    parser.add_argument("--check", default=None,
-                        help="validate an already-rendered file against the template and exit")
-    args = parser.parse_args(argv)
+def refresh_index(home):
+    """Refresh the index stat cache for settings.json. git trusts a size change without running
+    the clean filter, so first re-record the SAME mode and blob (clearing the cached stat); the
+    refresh then compares content through the filter. The index content never changes, and an
+    entry the user flagged (skip-worktree, assume-unchanged) is left alone."""
+    entry = _git_out(home, "ls-files", "-s", "--", SETTINGS) or ""
+    tag = _git_out(home, "ls-files", "-v", "--", SETTINGS) or ""
+    if tag.startswith("H ") and len(entry.splitlines()) == 1 and "\t" in entry:
+        fields = entry.split("\t", 1)[0].split()
+        if len(fields) == 3 and fields[2] == "0":
+            _git(home, "update-index", "--cacheinfo", "%s,%s,%s" % (fields[0], fields[1], SETTINGS))
+    _git(home, "update-index", "-q", "--refresh")
 
-    script_dir = Path(__file__).resolve().parent
-    repo_root = script_dir.parent.parent  # scripts/install/ -> scripts/ -> repo root
-    template_path = Path(args.template) if args.template else repo_root / "settings.template.json"
 
-    template_raw, template = _load_template(template_path)
+def clean_source(home):
+    """The clean form's bytes: the index blob, else HEAD's, else the working file."""
+    source = None
+    if is_checkout(home):
+        source = blob(home, ":" + SETTINGS)
+        if source is None:
+            source = blob(home, "HEAD:" + SETTINGS)
+    return source if source is not None else _read(os.path.join(home, SETTINGS))
 
-    # --check mode: validate an existing rendered file, no apply.
-    if args.check:
-        check_path = Path(args.check)
-        if not check_path.is_file():
-            _err(f"--check file not found: {check_path}")
-            return 1
-        # install_home for normalization defaults to the env/HOME form.
-        install_home = (args.install_home or args.home_flag
-                        or os.environ.get("CLAUDE_HOME")
-                        or str(Path(os.environ.get("HOME", str(Path.home()))) / ".claude"))
-        failures = validate(check_path.read_text(), template, install_home)
-        if failures:
-            for fail in failures:
-                _err(fail)
-            return 1
-        return 0
 
-    install_home = (args.install_home or args.home_flag
-                    or os.environ.get("CLAUDE_HOME")
-                    or str(Path(os.environ.get("HOME", str(Path.home()))) / ".claude"))
-    install_home = install_home.rstrip("/")
-    if not install_home.startswith("/"):
-        _err(f"install-home must be an absolute path, got: {install_home}")
-        return 2
+def machine_form(home, overlay, working):
+    """(target, layers, problem): the machine form of the clean form, CLI-owned keys of the
+    working file carried over."""
+    layers = layers_of(overlay)
+    source = clean_source(home)
+    if source is None:
+        return None, layers, "no settings.json in the index, HEAD or the working tree"
+    target = parse(source)
+    if target is None:
+        return None, layers, "the clean form of settings.json is not a valid JSON object"
+    try:
+        merge_all(target, layers)
+    except ShapeError as exc:
+        return None, layers, "the clean form has an unexpected structure at %s" % exc
+    for key in working or {}:
+        if key in CLI_OWNED:
+            target[key] = copy.deepcopy(working[key])
+    return target, layers, None
 
-    rendered_text = render(template_raw, install_home)
 
-    failures = validate(rendered_text, template, install_home)
-    if failures:
-        _err("ABORTING without applying — bad render:")
-        for fail in failures:
-            _err(f"  - {fail}")
+def cmd_render(home, force):
+    try:
+        overlay = load_overlay(home)
+    except OverlayError as exc:
+        _err("render refused: %s" % exc)
         return 1
-
-    if args.to_stdout:
-        sys.stdout.write(rendered_text)
-        return 0
-
-    out_path = Path(args.out) if args.out else template_path.parent / "settings.json"
-    _apply_atomic(out_path, rendered_text)
-    sys.stderr.write(f"render-settings: applied {out_path} for home {install_home}\n")
+    try:
+        recorded = load_record(home)
+    except OverlayError as exc:
+        if not force:
+            _err("render refused: %s" % exc)
+            return 1
+        recorded = []  # --force drops every entry the overlay does not explain
+    path = os.path.join(home, SETTINGS)
+    current = _read(path)
+    working = parse(current)
+    if current is not None and working is None and not force:
+        _err("settings.json is not a valid JSON object; fix it, or re-run with --force to "
+             "replace it")
+        return 1
+    target, layers, problem = machine_form(home, overlay, working)
+    if problem:
+        _err("render refused: %s" % problem)
+        return 1
+    if working is not None and not force:
+        # Recorded entries the overlay has since dropped are explained: the render drops them.
+        extras = working_extras(working, target, layers + recorded)
+        if extras:
+            for line in describe(extras):
+                _err("extra in settings.json: %s -- %s" % (line, KEEP_HINT))
+            _err("render refused: settings.json has entries outside the clean form and the "
+                 "overlay (git diff settings.json shows them); move them into "
+                 "settings.machine.json, or re-run with --force to drop them")
+            return 1
+    out = canon(target)
+    changed = out != current
+    index = blob(home, ":" + SETTINGS) if is_checkout(home) else None
+    # An index still carrying a recorded value (staged without the filter) keeps the old record,
+    # so that check --staged goes on refusing it.
+    keep = recorded if index is not None and \
+        clean_bytes(index, layers + recorded, load_base(home))[0] != index else []
+    try:
+        save_record(home, union(recorded, layers))  # covers the file before and after the write
+        if changed:
+            _write_atomic(path, out)
+        save_record(home, union(keep, layers))
+    except OSError as exc:
+        _err("render failed: %s" % exc)
+        return 1
+    if is_checkout(home):
+        refresh_index(home)
+    modules = [n for n in sorted(MODULES) if overlay and overlay.get("modules", {}).get(n)]
+    print("render-settings: settings.json %s (overlay: %s; modules: %s)"
+          % ("rendered" if changed else "already up to date",
+             "present" if overlay is not None else "absent", ", ".join(modules) or "none"))
     return 0
+
+
+# ------------------------------------------------------------------------------------- check
+
+_VAR = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-([^}]*))?\}|\$([A-Za-z_][A-Za-z0-9_]*)")
+
+
+def expand(word, env, depth=0):
+    """Expand ${VAR:-default}, ${VAR} and $VAR (and a leading ~/) like sh would."""
+    if word.startswith("~/"):
+        word = "$HOME" + word[1:]
+
+    def sub(m):
+        name = m.group(1) or m.group(3)
+        value = env.get(name, "")
+        if m.group(1) and m.group(2) is not None and not value:
+            return expand(m.group(2), env, depth + 1) if depth < 8 else m.group(2)
+        return value
+    return _VAR.sub(sub, word)
+
+
+def _ok(label, ok):
+    print("[%s] %s" % (" ok " if ok else "FAIL", label))
+    return ok
+
+
+def check_hook_paths(home, working, overlay):
+    env = dict(os.environ)
+    env.update({k: v for k, v in _d(working.get("env")).items() if isinstance(v, str)})
+    # Only a command of the clean form or of a module is echoed; any other may be personal.
+    docs = [parse(clean_source(home)) or {}] + list(MODULES.values())
+    public = _hook_keys([g for d in docs for gs in _d(d.get("hooks")).values() for g in _list(gs)])
+    public -= _hook_keys([g for gs in _d(_layer_of(overlay or {}).get("hooks")).values()
+                          for g in gs])
+    root = os.path.realpath(home)
+    total, missing = 0, []
+    for event, groups in _d(working.get("hooks")).items():
+        for g in groups if isinstance(groups, list) else []:
+            for h in g.get("hooks", []) if isinstance(g, dict) else []:
+                if not isinstance(h, dict) or h.get("type") != "command":
+                    continue
+                total += 1
+                try:
+                    words = shlex.split(str(h.get("command", "")))
+                except ValueError:
+                    words = []
+                real = os.path.realpath(expand(words[1], env)) if len(words) > 1 else ""
+                inside = bool(real) and real.startswith(root + os.sep)
+                if inside and os.path.isfile(real):
+                    continue
+                if hook_key(h) not in public:
+                    missing.append("%s: a hook outside the clean form (see %s)" % (event, OVERLAY))
+                elif not real:
+                    missing.append("%s: no script path in the command" % event)
+                elif inside:
+                    missing.append(os.path.relpath(real, root))
+                else:
+                    missing.append("outside the harness home: %s" % words[1])
+    ok = _ok("hook paths: %d commands, missing=%d" % (total, len(missing)), not missing)
+    for item in missing:
+        print("       %s" % item)
+    return ok
+
+
+def check_filter(home, overlay_error, overlay, recorded, working):
+    if overlay_error:
+        return _ok("settings filter: %s" % overlay_error, False)
+    if not is_checkout(home):
+        return _ok("settings filter: not a git checkout: no settings filter to check", True)
+    problems = []
+    attr = _git_out(home, "check-attr", "filter", "--", SETTINGS) or ""
+    if not attr.endswith(": " + FILTER_NAME):
+        problems.append(".gitattributes does not assign filter=%s to settings.json" % FILTER_NAME)
+    for key in ("clean", "smudge"):
+        if not _git_out(home, "config", "--get", "filter.%s.%s" % (FILTER_NAME, key)):
+            problems.append("filter.%s.%s is not set" % (FILTER_NAME, key))
+    if _git_out(home, "config", "--bool", "--get", "filter.%s.required" % FILTER_NAME) != "true":
+        problems.append("filter.%s.required is not true" % FILTER_NAME)
+    layers = layers_of(overlay)
+    index = blob(home, ":" + SETTINGS)
+    if index is None:
+        problems.append("settings.json is not in the index")
+    else:
+        smudged, problem = smudge_bytes(index, layers)
+        cleaned, problem2 = clean_bytes(smudged, layers + recorded, load_base(home))
+        if problem or problem2 or cleaned != index:
+            problems.append("round trip clean(smudge(index)) does not reproduce the index blob")
+    path = record_path(home)
+    if overlay is not None and path and not os.path.exists(path):
+        problems.append("no record of what render applied (%s)" % RECORD)
+    if problems:
+        _ok("settings filter: %s; run scripts/bootstrap" % "; ".join(problems), False)
+        return False
+    _ok("settings filter: registered, required, exact round trip", True)
+    if working is None:
+        return True
+    target, layers, problem = machine_form(home, overlay, working)
+    extras = working_extras(working, target, layers) if target is not None else {}
+    ok = _ok("settings.json entries: %s the clean form, the enabled modules and the overlay"
+             % ("some are outside" if extras else "all explained by"), not extras)
+    for line in describe(extras):
+        print("       %s" % line)
+    if extras:
+        print("       public edits meant for the tracked file: stage them (git add settings.json)")
+        print("       machine-specific: move them into %s, then run scripts/install/render-settings"
+              " render" % OVERLAY)
+        print("       already removed from %s: render drops them (--force drops all the rest)"
+              % OVERLAY)
+    for key in CLI_OWNED:
+        if overlay and key in overlay and key in working and working[key] != overlay[key]:
+            print("[info] %s: the CLI changed it (differs from settings.machine.json); copy it "
+                  "into the overlay to keep it" % key)
+    return ok
+
+
+def _load_module(path, name):
+    directory = os.path.dirname(path)
+    sys.path.insert(0, directory)
+    try:
+        spec = importlib.util.spec_from_file_location(name, path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module
+    finally:
+        sys.path.remove(directory)
+
+
+def check_protected_runtime(home):
+    try:
+        config = _load_module(os.path.join(home, "hooks", "lib", "runtime_guard", "config.py"),
+                              "_render_settings_runtime_guard_config")
+        loaded = config._load_config()
+        data_path, required = config.DATA_FILE_PATH, config.REQUIRED_KEYS
+    except Exception:  # any import or load failure is a failed check, never a crash
+        return _ok("protected-runtime file: cannot load hooks/lib/runtime_guard/config.py", False)
+    if isinstance(loaded, dict):
+        return _ok("protected-runtime file: valid", True)
+    if os.environ.get("CLAUDE_PROTECTED_RUNTIME_FILE"):
+        shown = "$CLAUDE_PROTECTED_RUNTIME_FILE"
+    else:
+        user_home = os.path.expanduser("~").rstrip("/")
+        shown = "~" + data_path[len(user_home):] if data_path.startswith(user_home + "/") \
+            else data_path
+    return _ok("protected-runtime file: missing or incomplete at %s (needs schema_version 1 and "
+               "%d required lists); run scripts/bootstrap" % (shown, len(required)), False)
+
+
+def cmd_check(home):
+    overlay, recorded, overlay_error = None, [], None
+    try:
+        overlay = load_overlay(home)
+        recorded = load_record(home)
+    except OverlayError as exc:
+        overlay_error = str(exc)
+    working = parse(_read(os.path.join(home, SETTINGS)))
+    if working is None:
+        hooks_ok = _ok("hook paths: settings.json is missing or not a JSON object; run "
+                       "scripts/bootstrap", False)
+    else:
+        hooks_ok = check_hook_paths(home, working, overlay)
+    filter_ok = check_filter(home, overlay_error, overlay, recorded, working)
+    runtime_ok = check_protected_runtime(home)
+    return 0 if hooks_ok and filter_ok and runtime_ok else 1
+
+
+def cmd_check_staged(home):
+    if not is_checkout(home):
+        _err("check --staged: %s is not a git checkout" % home)
+        return 1
+    # The index, not a diff: a forced add, a tracked file (also unchanged) and a fresh CI
+    # checkout of a tree that holds one are all refused; only untracking it passes.
+    listed = _git(home, "ls-files", "-z", "--cached", "--", OVERLAY, LITERALS)
+    if listed is None or listed.returncode != 0:
+        _err("check --staged: cannot list the index; fix it before committing")
+        return 1
+    tracked = [p for p in (OVERLAY, LITERALS) if p.encode() in listed.stdout.split(b"\0")]
+    for path in tracked:
+        _err("check --staged: " + TRACKED_MSG % (path, path))
+    rc = 1 if tracked else 0
+    staged = blob(home, ":" + SETTINGS)
+    if staged is None:
+        return rc
+    try:
+        layers = layers_of(load_overlay(home)) + load_record(home)
+    except OverlayError as exc:
+        _err("check --staged: %s; fix it before committing" % exc)
+        return 1
+    out, problem = clean_bytes(staged, layers, load_base(home))
+    if problem is None and out == staged:
+        return rc
+    _err(STAGED_MSG)
+    return 1
+
+
+# ----------------------------------------------------------------------------------- migrate
+
+def _shell_default(text, name):
+    m = re.search(re.escape("${%s:-" % name) + r"([^}]*)\}", text)
+    return m.group(1) if m else ""
+
+
+def _py_env_default(text, name):
+    m = re.search(r"os\.environ\.get\(\s*[\"']%s[\"']\s*,\s*[\"']([^\"']*)[\"']\s*\)"
+                  % re.escape(name), text)
+    return m.group(1) if m else ""
+
+
+def _hard_bans(text):
+    lines, patterns = text.splitlines(), []
+    for i, line in enumerate(lines):
+        m = re.search(r"grep\s+-qE\s+'([^']+)'", line)
+        if not m or "session_dirs" in m.group(1):
+            continue
+        if any("is PERMANENTLY FORBIDDEN" in later for later in lines[i + 1:i + 3]):
+            if m.group(1) not in patterns:
+                patterns.append(m.group(1))
+    return "|".join(patterns)
+
+
+def _process_family(text):
+    m = re.search(re.escape(r"docker\s+(stop|restart|rm|kill)\s+.*")
+                  + r"([A-Za-z0-9_][A-Za-z0-9_.-]*)", text)
+    return m.group(1) if m else ""
+
+
+def _extra_trailer(text):
+    for line in text.splitlines():
+        trailer = line.strip().rstrip("\"'").strip()
+        if not trailer.startswith("Co-Authored-By:") or "$" in trailer:
+            continue
+        if not trailer[len("Co-Authored-By:"):].strip().lower().startswith("claude"):
+            return trailer
+    return ""
+
+
+def _list_default(text):
+    m = re.search(r"DEFAULT_ACCOUNTS\s*=\s*(\[[^\]]*\])", text)
+    try:
+        values = ast.literal_eval(m.group(1)) if m else []
+    except (ValueError, SyntaxError):
+        return ""
+    return ",".join(v for v in values if isinstance(v, str) and v)
+
+
+def _model_default(text):
+    m = re.search(r"\"model\"\s*:\s*\"([^\"\s@]+@[^\"\s]+)\"", text)
+    return m.group(1) if m else ""
+
+
+SAFETY_HOOK = "hooks/pretool-bash-safety.sh"
+# (env name, file in the previous revision, extractor) -- generic patterns only.
+CODE_DEFAULTS = (
+    ("CLAUDE_DEV_CONTAINERS", SAFETY_HOOK, _shell_default),
+    ("CLAUDE_DAEMON_RESTART_GRANT_HELPER", SAFETY_HOOK, _shell_default),
+    ("CLAUDE_PROTECTED_DAEMON_PREFIX", SAFETY_HOOK, _shell_default),
+    ("CLAUDE_PROTECTED_DAEMON_TARGETS", SAFETY_HOOK, _shell_default),
+    ("CLAUDE_RESTART_ACCOUNTS_ROOT", "hooks/lib/subagent_restart.py", _py_env_default),
+    ("WORKFLOW_PRUNE_ACCOUNTS_DIR", "scripts/prune-orphaned-workflow-bookmarks.sh",
+     _shell_default),
+    ("WORKFLOW_PRUNE_PROJECT_DIRNAME", "scripts/prune-orphaned-workflow-bookmarks.sh",
+     _shell_default),
+    ("CLAUDE_HARD_BANNED_SCRIPTS", SAFETY_HOOK, lambda text, _name: _hard_bans(text)),
+    ("CLAUDE_PROTECTED_PROCESS_FAMILY", SAFETY_HOOK, lambda text, _name: _process_family(text)),
+    ("CLAUDE_CHECKPOINT_EXTRA_TRAILER", "hooks/lib/checkpoint-core.sh",
+     lambda text, _name: _extra_trailer(text)),
+    ("PASEO_DAEMON_ACCOUNTS", "scripts/paseo-daemon-ledger.py",
+     lambda text, _name: _list_default(text)),
+    ("PASEO_DAEMON_MODEL", "scripts/paseo-daemon-timers.py",
+     lambda text, _name: _model_default(text)),
+)
+
+
+def code_defaults(home, rev):
+    """[(env name, value)] of the built-in defaults the previous revision's code carried."""
+    texts, found = {}, []
+    for name, path, extract in CODE_DEFAULTS:
+        if path not in texts:
+            data = blob(home, "%s:%s" % (rev, path))
+            texts[path] = data.decode("utf-8", "replace") if data is not None else ""
+        value = extract(texts[path], name)
+        if value:
+            found.append((name, value))
+    return found
+
+
+def module_enabled(fragment, prev, base):
+    """A module is on when prev carries one of its contributions that the base lacks: a hook
+    command (compared normalised), a matcher alternative on a hook the base already runs, or a
+    permission entry."""
+    p_perms, b_perms = _d(prev.get("permissions")), _d(base.get("permissions"))
+    for name, entries in fragment.get("permissions", {}).items():
+        p_lst = p_perms.get(name) if isinstance(p_perms.get(name), list) else []
+        b_lst = b_perms.get(name) if isinstance(b_perms.get(name), list) else []
+        if any(e in p_lst and e not in b_lst for e in entries):
+            return True
+    p_hooks, b_hooks = _d(prev.get("hooks")), _d(base.get("hooks"))
+    for event, groups in fragment.get("hooks", {}).items():
+        b_groups = [g for g in _list(b_hooks.get(event)) if isinstance(g, dict)]
+        b_keys = _hook_keys(b_groups)
+        for g in groups:
+            keys = {hook_key(h) for h in g["hooks"]}
+            b_alts = set()
+            for bg in b_groups:
+                if keys & _hook_keys([bg]):
+                    b_alts.update(_alts(bg.get("matcher")))
+            for pg in _list(p_hooks.get(event)):
+                shared = keys & _hook_keys([pg]) if isinstance(pg, dict) else set()
+                if not shared:
+                    continue
+                if shared - b_keys:
+                    return True
+                p_alts = _alts(pg.get("matcher"))
+                if any(a in p_alts and a not in b_alts for a in _alts(g.get("matcher"))):
+                    return True
+    return False
+
+
+def cmd_migrate(home, rev, settings_file, base_rev):
+    target = os.path.join(home, OVERLAY)
+    if os.path.lexists(target):
+        _err("migrate refused: %s already exists (migrate only seeds a new overlay; edit the "
+             "existing one instead)" % target)
+        return 1
+    if not is_checkout(home):
+        _err("migrate refused: %s is not a git checkout" % home)
+        return 1
+    for value in (rev, base_rev):
+        if value is not None and (value.startswith("-") or
+                                  _git_out(home, "rev-parse", "--verify", "--quiet",
+                                           value + "^{commit}") is None):
+            _err("migrate refused: unknown revision %r" % value)
+            return 1
+    if settings_file:
+        try:
+            prev = parse(_read(settings_file))
+        except OSError:
+            prev = None
+        source = settings_file
+    else:
+        prev = parse(blob(home, "%s:%s" % (rev, SETTINGS)))
+        source = "%s:%s" % (rev, SETTINGS)
+    if prev is None:
+        _err("migrate refused: %s is missing or not a JSON object" % source)
+        return 1
+    specs = ["%s:%s" % (base_rev, SETTINGS)] if base_rev else [":" + SETTINGS, "HEAD:" + SETTINGS]
+    base = None
+    for spec in specs:
+        base = parse(blob(home, spec))
+        if base is not None:
+            break
+    if base is None:
+        _err("migrate refused: no clean settings.json in %s" % " or ".join(specs))
+        return 1
+    modules = {name: module_enabled(MODULES[name], prev, base) for name in sorted(MODULES)}
+    try:
+        reference = merge_all(copy.deepcopy(base), [MODULES[n] for n in modules if modules[n]])
+    except ShapeError as exc:
+        _err("migrate refused: the clean settings.json has an unexpected structure at %s" % exc)
+        return 1
+    extra = diff(prev, reference)
+    env = extra.pop("env", {})
+    ref_env = _d(reference.get("env"))
+    for name, value in code_defaults(home, rev):
+        if name not in env and name not in ref_env:
+            env[name] = value
+    env.setdefault("CLAUDE_HOME", home)
+    overlay = {"modules": modules, "env": env}
+    overlay.update(extra)
+    try:
+        _validate_layer(_layer_of(overlay), "migrated overlay")
+    except OverlayError as exc:
+        _err("migrate refused: %s" % exc)
+        return 1
+    try:
+        fd = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    except FileExistsError:
+        _err("migrate refused: %s already exists" % target)
+        return 1
+    with os.fdopen(fd, "wb") as fh:
+        fh.write(canon(overlay))
+    os.chmod(target, 0o600)
+    print("render-settings: wrote %s (mode 0600) from %s" % (OVERLAY, source))
+    print("  modules: %s" % ", ".join("%s=%s" % (n, "on" if on else "off")
+                                      for n, on in modules.items()))
+    print("  env: %d keys: %s" % (len(env), ", ".join(env)))
+    for name, val in overlay.get("permissions", {}).items():
+        print("  permissions.%s: %s" % (name, len(val) if isinstance(val, list) else "set"))
+    print("  hooks: %d groups" % sum(len(g) for g in overlay.get("hooks", {}).values()))
+    others = [k for k in overlay if k not in STRUCTURED and k != "modules"]
+    print("  other top-level keys: %d" % len(others))
+    print("next: run scripts/bootstrap (or render-settings render) to render settings.json")
+    return 0
+
+
+# -------------------------------------------------------------------------------------- main
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(prog="render-settings", description=__doc__.split("\n\n")[0])
+    sub = parser.add_subparsers(dest="command", required=True)
+    sub.add_parser("clean", help="git clean filter (stdin -> stdout)")
+    sub.add_parser("smudge", help="git smudge filter (stdin -> stdout)")
+    p_render = sub.add_parser("render", help="write the machine form of settings.json")
+    p_render.add_argument("--force", action="store_true",
+                          help="drop working-file entries the overlay does not explain")
+    p_check = sub.add_parser("check", help="doctor checks, or --staged pre-commit check")
+    p_check.add_argument("--staged", action="store_true",
+                         help="refuse a staged settings.json in machine form, or an index "
+                              "holding settings.machine.json or private-literals.txt")
+    p_migrate = sub.add_parser("migrate", help="seed a new overlay from previous settings")
+    p_migrate.add_argument("--from", dest="rev", required=True, metavar="REV")
+    p_migrate.add_argument("--settings-file", metavar="PATH")
+    p_migrate.add_argument("--base", dest="base_rev", metavar="REV")
+    args = parser.parse_args(argv)
+    home = harness_home()
+    if args.command == "clean":
+        return cmd_clean(home)
+    if args.command == "smudge":
+        return cmd_smudge(home)
+    if args.command == "render":
+        return cmd_render(home, args.force)
+    if args.command == "check":
+        return cmd_check_staged(home) if args.staged else cmd_check(home)
+    return cmd_migrate(home, args.rev, args.settings_file, args.base_rev)
 
 
 if __name__ == "__main__":

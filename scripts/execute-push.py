@@ -34,8 +34,8 @@ from pathlib import Path
 # Sentinel/grant base directory — push.sh reads from here (push.sh:97-98)
 _SENTINEL_BASE = "/tmp/agentic-commit/push-analyst"
 
-# Push.sh location — tilde-expanded at runtime; never hardcoded to /root
-_PUSH_SH_TILDE = "~/.claude/hooks/push.sh"
+# Push.sh location — resolved from this script's install location (<harness home>/hooks)
+_PUSH_SH_TILDE = str(Path(__file__).resolve().parent.parent / "hooks" / "push.sh")
 
 
 def _parse_args(argv: list) -> argparse.Namespace:

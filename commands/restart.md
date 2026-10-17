@@ -93,7 +93,9 @@ directive to this session's own main agent — see
    (`::authorize_send_message`).
    For the account-rotation case only — recovering what another account's
    recent session left behind in this same project under
-   `/var/lib/claude-accounts/<name>/claude/projects/<slug>/` — the human may
+   `<accounts-root>/<name>/claude/projects/<slug>/`, scanned only when
+   `CLAUDE_RESTART_ACCOUNTS_ROOT` names `<accounts-root>` (otherwise only
+   `${CLAUDE_CONFIG_DIR:-$HOME/.claude}/projects` is read) — the human may
    append `--cross-account` to the prepare command; each candidate then reports
    its true originating `parent_session_id` and origin transcript path, and
    only a state prepared with that flag can authorize resuming a

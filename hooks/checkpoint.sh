@@ -48,7 +48,7 @@ echo "📝 Writing checkpoint to refs/checkpoints/<branch>..."
 
 # Source and delegate
 # shellcheck source=lib/checkpoint-core.sh
-. "$HOME/.claude/hooks/lib/checkpoint-core.sh"
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)/lib/checkpoint-core.sh"
 
 if ! write_checkpoint "" "manual: /checkpoint" "$SUMMARY"; then
   echo -e "${RED}❌ Failed to create checkpoint. See ~/.claude/logs/checkpoint.log${NC}"

@@ -3,8 +3,7 @@
 
 Phase 0 of the write-time attribution journal (see hooks/lib/attribution_journal.py).
 Purely observational: never blocks, always exits 0, fails soft.
-Paired with posttool-attribution-post.py; registered in settings.json and
-settings.template.json.
+Paired with posttool-attribution-post.py; registered in settings.json.
 """
 import json
 import os

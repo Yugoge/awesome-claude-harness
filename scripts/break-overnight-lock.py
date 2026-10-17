@@ -28,7 +28,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "hooks" / "lib")
 import claude_home  # noqa: E402
 
 CLAUDE_DIR = claude_home.project_dir() / ".claude"
-TODOS_DIR = Path.home() / ".claude" / "todos"
+TODOS_DIR = Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude") / "todos"
 
 # Where the PreTool user-intent guard mints the helper-auth token
 # (claude-stop-helper-auth-<sid>.json). Overridable for sandbox tests.

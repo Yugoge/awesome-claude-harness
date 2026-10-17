@@ -143,11 +143,16 @@ def grant_dir() -> Path:
     return state_dir() / "grants"
 
 
+def config_dir() -> Path:
+    """Claude Code's configuration directory: CLAUDE_CONFIG_DIR, else ~/.claude."""
+    return Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude")
+
+
 def state_dir() -> Path:
     override = os.environ.get("CLAUDE_RESTART_STATE_DIR")
     if override:
         return Path(override)
-    return Path.home() / ".claude" / "restart-state"
+    return config_dir() / "restart-state"
 
 
 def grant_path(session_id: str) -> Path:
@@ -817,7 +822,9 @@ def discover_candidates(transcript_path: str | Path) -> list[dict[str, Any]]:
     return candidates
 
 
-ACCOUNTS_ROOT = Path(os.environ.get("CLAUDE_RESTART_ACCOUNTS_ROOT", "/var/lib/claude-accounts"))
+# Sibling-account root (<root>/<account>/claude/projects): no default; unset or empty = no scan, never the cwd.
+_ACCOUNTS_ROOT_ENV = os.environ.get("CLAUDE_RESTART_ACCOUNTS_ROOT")
+ACCOUNTS_ROOT: Path | None = Path(_ACCOUNTS_ROOT_ENV) if _ACCOUNTS_ROOT_ENV else None
 
 
 def project_slug(project_dir: str | Path) -> str:
@@ -825,16 +832,15 @@ def project_slug(project_dir: str | Path) -> str:
 
 
 def account_project_roots() -> list[Path]:
-    """Every account's session-transcript root, plus the caller's own $HOME.
+    """Every account's session-transcript root, plus the caller's own one.
 
-    Separate Claude account logins (used to spread API quota) each persist
-    session transcripts under their own /var/lib/claude-accounts/<name>/claude
-    tree rather than a tree shared across accounts, so discovery must walk
-    all of them explicitly — $HOME alone only ever sees the currently active
-    account.
+    Separate Claude account logins (used to spread API quota) each persist session transcripts
+    under their own <accounts-root>/<name>/claude tree, not a shared one, so discovery must walk
+    all of them — the own configuration directory only ever sees the active account. Sibling
+    trees are scanned only when CLAUDE_RESTART_ACCOUNTS_ROOT names the accounts root.
     """
     roots: list[Path] = []
-    if ACCOUNTS_ROOT.is_dir():
+    if ACCOUNTS_ROOT is not None and ACCOUNTS_ROOT.is_dir():
         try:
             children = sorted(ACCOUNTS_ROOT.iterdir())
         except OSError:
@@ -843,7 +849,7 @@ def account_project_roots() -> list[Path]:
             candidate = child / "claude" / "projects"
             if candidate.is_dir():
                 roots.append(candidate)
-    home_projects = Path.home() / ".claude" / "projects"
+    home_projects = config_dir() / "projects"
     if home_projects.is_dir():
         roots.append(home_projects)
     return roots

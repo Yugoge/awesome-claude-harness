@@ -2,11 +2,7 @@
 # Description: Self-verifying headline-claims gate. Recomputes the wired-hook entry count and
 #   lifecycle-event count from settings.json (the single source of truth) and fails if
 #   README.md / ARCHITECTURE.md state a different number; then runs ALL THREE hero-provenance
-#   audits in --strict mode so any source-verification downgrade is a hard failure. Finally
-#   asserts settings.template.json (the PUBLIC install seed) is valid JSON and wires every hook
-#   settings.json wires — path-placeholder differences ({{CLAUDE_HOME}} vs $HOME/.claude/~) are
-#   normalized by comparing hook-script basenames — so the public template can never silently
-#   drift from the real hook set (the open-source install-surface invariant).
+#   audits in --strict mode so any source-verification downgrade is a hard failure.
 # Usage: bash scripts/verify-claims.sh
 # Exit codes: 0 = all checks pass, 1 = one or more checks failed (count drift and/or audit
 #   violation). Runs identically in CI and locally.
@@ -14,9 +10,9 @@
 #   settings.json, so they silently drifted (40 -> 67); the provenance audit was never run in
 #   CI and exited 0 even when source verification was downgraded to warnings.
 #
-# The enforced numbers are NEVER hardcoded — they are recomputed from settings.json every run,
-# so adding/removing a hook (with the docs updated in step) changes the enforced value
-# automatically.
+# The enforced numbers are NEVER hardcoded; they are recomputed every run from settings.json as
+# staged in the index, its tracked form: the claude-settings filter leaves an initialised home's
+# working file in the machine form, which enabled modules (paseo) extend with their own hooks.
 
 set -uo pipefail   # deliberately NOT -e: an explicit accumulator runs every check so ALL drift
                    # is reported at once instead of aborting on the first failure.
@@ -32,13 +28,13 @@ fail() { echo "FAIL: $*"; rc=1; }
 pass() { echo "PASS: $*"; }
 
 # ---------------------------------------------------------------------------
-# 1. Recompute wired_entries + lifecycle_events from settings.json (schema-validated).
+# 1. Recompute wired_entries + lifecycle_events from the index settings.json (schema-validated).
 #    settings.json.hooks is an object keyed by lifecycle event; each value is a LIST of
 #    matcher-entries; each matcher-entry has a `hooks` array of command objects.
-#      wired_entries   = sum(len(entry.hooks)) over every matcher-entry of every event
-#      lifecycle_events = number of top-level keys under hooks
+#      wired_entries = sum(len(entry.hooks)) over all matcher-entries; lifecycle_events = len(hooks)
+#    Outside a repository or with no settings.json staged, git prints why; this and --claims fail.
 # ---------------------------------------------------------------------------
-counts="$(python3 - "$ROOT/settings.json" <<'PY'
+counts="$(python3 - <(git cat-file blob :settings.json) <<'PY'
 import json, sys
 path = sys.argv[1]
 try:
@@ -68,7 +64,7 @@ if [ $? -ne 0 ]; then
   WIRED=""; EVENTS=""
 else
   WIRED="${counts% *}"; EVENTS="${counts#* }"
-  pass "recomputed from settings.json: wired_entries=${WIRED} lifecycle_events=${EVENTS}"
+  pass "recomputed from the index settings.json: wired_entries=${WIRED} lifecycle_events=${EVENTS}"
 fi
 
 # ---------------------------------------------------------------------------
@@ -333,80 +329,10 @@ PY
 fi
 
 # ---------------------------------------------------------------------------
-# 5. Public template <-> real config hook-set sync + template JSON validity.
-#    settings.template.json is the PUBLIC install seed a clone bootstraps from; it MUST wire
-#    every hook settings.json wires. Path-placeholder differences ({{CLAUDE_HOME}} in the
-#    template vs $HOME/.claude / ~/.claude in the tracked personal config) are normalized away
-#    by comparing hook-script BASENAMES. Both sets are recomputed from the two files every run
-#    (never hardcoded), so a template that silently drops a hook fails here. Extra public-only
-#    hooks in the template are permitted (template is a superset); only MISSING hooks fail.
-# ---------------------------------------------------------------------------
-if [ ! -f "$ROOT/settings.template.json" ]; then
-  fail "template-sync: settings.template.json not found at repo root"
-else
-  python3 - "$ROOT/settings.json" "$ROOT/settings.template.json" <<'PY'
-import json, re, sys
-from collections import Counter
-
-real_path, tmpl_path = sys.argv[1], sys.argv[2]
-
-def load(p):
-    try:
-        return json.load(open(p, encoding="utf8")), None
-    except Exception as e:
-        return None, str(e)
-
-real, err = load(real_path)
-if err:
-    print(f"  [{real_path}] ERROR: invalid JSON ({err})"); sys.exit(2)
-# Template JSON validity is itself a gated invariant of the public install surface.
-tmpl, err = load(tmpl_path)
-if err:
-    print(f"  [{tmpl_path}] ERROR: PUBLIC template is not valid JSON ({err})"); sys.exit(2)
-
-def hook_basenames(cfg, label):
-    hooks = cfg.get("hooks")
-    if not isinstance(hooks, dict) or not hooks:
-        print(f"  [{label}] ERROR: 'hooks' missing or not a non-empty object"); return None
-    names = []
-    for ev, lst in hooks.items():
-        if not isinstance(lst, list):
-            print(f"  [{label}] ERROR: hooks[{ev!r}] is not a list"); return None
-        for entry in lst:
-            for h in (entry.get("hooks") or []):
-                m = re.findall(r'([^\s"\']+\.(?:py|sh))', h.get("command", ""))
-                if m:
-                    names.append(m[-1].split("/")[-1])
-    return Counter(names)
-
-rb = hook_basenames(real, "settings.json")
-tb = hook_basenames(tmpl, "settings.template.json")
-if rb is None or tb is None:
-    sys.exit(2)
-
-missing = rb - tb   # hooks wired by settings.json but absent from the public template
-if missing:
-    print(f"  template-sync DRIFT: settings.template.json is MISSING "
-          f"{sum(missing.values())} hook(s) that settings.json wires:")
-    for n in sorted(missing):
-        print(f"      - {n}")
-    sys.exit(1)
-
-print(f"  settings.template.json valid JSON; hook-set in sync "
-      f"(settings.json wires {sum(rb.values())} entries, all present in the public template)")
-sys.exit(0)
-PY
-  if [ $? -ne 0 ]; then
-    fail "template-sync check: settings.template.json is invalid JSON or is missing a hook that settings.json wires (see above)"
-  else
-    pass "settings.template.json is valid JSON and wires every hook settings.json wires"
-  fi
-fi
-
-# ---------------------------------------------------------------------------
 # 6. Enforcement-evidence gates (docs/ENFORCEMENT-LEDGER.md <-> settings.json <-> the code).
+#    (Step 5 retired: settings.json is the sole settings file, so no hook-set sync; number kept free.)
 #    ADDITIVE: this step only ever appends to the existing accumulator, so it cannot change the
-#    pass/fail semantics of checks 1-5 for unrelated PRs.
+#    pass/fail semantics of checks 1-4 for unrelated PRs.
 #
 #    DELEGATION, NOT DUPLICATION. Every closed set (behavior / exercise_status / proof_layer),
 #    every recorded token set, and the gate-architecture census live in exactly ONE place --
@@ -422,14 +348,14 @@ fi
 #      --claims : claim-versus-code   (both regex symbols present; arch-F7 block intact; every
 #                 declared matrix witness reproduces its recorded outcome; wrapper/redirection
 #                 token sets and gate-architecture census unchanged; ledger row set equals the
-#                 settings.json-derived set; every threat-model section-4 citation pinned)
+#                 index settings.json-derived set; every threat-model section-4 citation pinned)
 # ---------------------------------------------------------------------------
 EVIDENCE_GATE="$ROOT/scripts/check-enforcement-evidence.py"
 if [ ! -f "$EVIDENCE_GATE" ]; then
   fail "enforcement-evidence: scripts/check-enforcement-evidence.py not found"
 else
   for mode in ledger claims; do
-    if python3 "$EVIDENCE_GATE" "--${mode}"; then
+    if python3 "$EVIDENCE_GATE" "--${mode}" --settings <(git cat-file blob :settings.json 2>/dev/null); then
       pass "enforcement-evidence --${mode}"
     else
       fail "enforcement-evidence --${mode}: see the FAIL lines above"

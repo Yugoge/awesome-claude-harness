@@ -663,7 +663,7 @@ with open(os.environ['FLAG_PATH'], 'w') as f:
 " 2>/dev/null
 
 # ── Audit log ───────────────────────────────────────────────────────
-CONSENT_LOG="$HOME/.claude/logs/bash-consent.log"
+CONSENT_LOG="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/logs/bash-consent.log"
 mkdir -p "$(dirname "$CONSENT_LOG")"
 # A match-all bypass must never be invisible in the audit log: it is recorded
 # with its own verb plus an explicit scope token, so grepping the log for

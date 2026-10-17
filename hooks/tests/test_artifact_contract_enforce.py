@@ -134,6 +134,8 @@ def _run_hook(
     env = dict(os.environ)
     env["CLAUDE_PROJECT_DIR"] = str(project_dir)
     env["HOME"] = str(home_dir)
+    # Transcripts live in the configuration directory; pin it to this HOME.
+    env["CLAUDE_CONFIG_DIR"] = str(Path(home_dir) / ".claude")
     env.update(extra_env or {})
     env.pop("ARTIFACT_CONTRACT_ENFORCE_MODE", None)
     if mode is not None:
@@ -744,6 +746,7 @@ def test_ac5_off_switch_never_calls_resolve_own_obligation(monkeypatch, tmp_path
     project, home = _standard_setup(tmp_path, "qa", "agent-qa-ac5")
     monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(project))
     monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(home / ".claude"))
     monkeypatch.setenv("CLAUDE_OBLIGATION_STOPGATE", "off")
     monkeypatch.setattr(
         HOOK,
@@ -786,6 +789,7 @@ def test_ac6_internal_exception_falls_through_to_legacy_path(
     monkeypatch.setattr(HOOK.contract_runtime, "validate_artifact_for_obligation", _raise)
     monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(project))
     monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(home / ".claude"))
     monkeypatch.setenv("CLAUDE_OBLIGATION_STOPGATE", "block")
     monkeypatch.setattr(
         HOOK,
@@ -1381,6 +1385,7 @@ def test_dev_report_obligation_blocks_even_when_agent_index_entry_missing(
     monkeypatch.setattr(HOOK.obligation, "resolve_own_obligation", _spy)
     monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(project))
     monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(home / ".claude"))
     monkeypatch.setenv("CLAUDE_OBLIGATION_STOPGATE", "block")
     monkeypatch.setattr(
         HOOK,

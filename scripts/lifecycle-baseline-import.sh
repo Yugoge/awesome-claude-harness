@@ -12,8 +12,8 @@
 set -euo pipefail
 
 SCRIPT_NAME="$(basename "$0")"
-LIFECYCLE_FILE_DEFAULT="${HOME}/.claude/logs/lifecycle.jsonl"
-SCORES_FILE_DEFAULT="${HOME}/.claude/agent-scores.json"
+LIFECYCLE_FILE_DEFAULT="${CLAUDE_CONFIG_DIR:-${HOME}/.claude}/logs/lifecycle.jsonl"
+SCORES_FILE_DEFAULT="${CLAUDE_CONFIG_DIR:-${HOME}/.claude}/agent-scores.json"
 
 usage() {
   cat >&2 <<EOF
@@ -56,7 +56,7 @@ if ! flock -w "${LOCK_TIMEOUT}" 9; then
 fi
 
 # Delegate migration logic to Python; all 21 agents processed under single flock.
-( source ~/.claude/venv/bin/activate && python3 - \
+( source "$(dirname "${BASH_SOURCE[0]}")/../venv/bin/activate" && python3 - \
     "${LIFECYCLE_FILE}" "${SCORES_FILE}" <<'PYEOF'
 import json
 import os

@@ -12,6 +12,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from hooks.doc_sync.extract import (
+    _KNOWN_FILE_DESCRIPTIONS,
     _extract_json_yaml_desc,
     _extract_py_desc,
     _extract_sh_desc,
@@ -32,14 +33,17 @@ class TestJsonYamlIntrospection:
         f = tmp_path / 'settings.json'
         f.write_text('{}')
         result = extract_description(f)
-        assert result == 'Claude Code harness configuration (permissions, hooks, env, model)'
+        assert result == _KNOWN_FILE_DESCRIPTIONS['settings.json']
+        assert result.startswith('Claude Code harness configuration (permissions, hooks, env')
 
-    def test_settings_template_json_known_file_description(self, tmp_path):
-        """settings.template.json returns the known-file description."""
-        f = tmp_path / 'settings.template.json'
-        f.write_text('{}')
+    def test_known_file_lookup_takes_priority_over_json_keys(self, tmp_path):
+        """A known file's description wins over keys that generic introspection would use."""
+        import json
+        f = tmp_path / 'settings.json'
+        f.write_text(json.dumps({'title': 'Some Title', 'description': 'Some description'}))
         result = extract_description(f)
-        assert result == 'Distributable harness settings template (uses CLAUDE_HOME placeholders)'
+        assert result == _KNOWN_FILE_DESCRIPTIONS['settings.json']
+        assert result not in ('Some Title', 'Some description')
 
     def test_json_uses_title_key(self, tmp_path):
         """Generic JSON file with 'title' key returns that value, not 'json config'."""

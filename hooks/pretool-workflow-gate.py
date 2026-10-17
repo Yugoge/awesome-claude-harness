@@ -49,11 +49,12 @@ CODEX_RUNTIME_ENV = 'CLAUDE_COMPAT_RUNTIME'
 # does not (e.g. finalize --cross-account) exits non-zero there rather than
 # running. Enforcing the pairing here too would duplicate that authority in
 # a second place that could drift from it.
+_HARNESS_HOME = str(Path(os.path.abspath(__file__)).parent.parent)  # install location
 _RESTART_HELPER_COMMAND_RE = re.compile(
-    r'^(?:\$HOME|~|' + re.escape(str(Path.home())) + r')'
-    r'/\.claude/venv/bin/python3?\s+'
-    r'(?:\$HOME|~|' + re.escape(str(Path.home())) + r')'
-    r'/\.claude/scripts/restart-subagents\.py\s+'
+    r'^(?:(?:\$HOME|~|' + re.escape(str(Path.home())) + r')/\.claude|' + re.escape(_HARNESS_HOME) + r')'
+    r'/venv/bin/python3?\s+'
+    r'(?:(?:\$HOME|~|' + re.escape(str(Path.home())) + r')/\.claude|' + re.escape(_HARNESS_HOME) + r')'
+    r'/scripts/restart-subagents\.py\s+'
     r'(?:prepare|status|finalize)'
     r'(?:\s+--cross-account)?'
     r'(?:\s+--wait-seconds\s+\d+)?'
@@ -82,13 +83,13 @@ def is_restart_helper_bash_command(data: dict) -> bool:
     command = command.strip()
     if not command or _SHELL_METACHAR_RE.search(command):
         return False
-    if _HOME_UNSAFE_RE.search(str(Path.home())):
+    if _HOME_UNSAFE_RE.search(str(Path.home())) or _HOME_UNSAFE_RE.search(_HARNESS_HOME):
         return False
     return bool(_RESTART_HELPER_COMMAND_RE.match(command))
 
 
 def official_todos_path(session_id: str) -> Path:
-    return Path.home() / '.claude' / 'todos' / f'{session_id}-agent-{session_id}.json'
+    return Path(os.environ.get('CLAUDE_CONFIG_DIR') or Path.home() / '.claude') / 'todos' / f'{session_id}-agent-{session_id}.json'
 
 
 def run_canonical_todos(cmd_name: str, project_dir: Path, prompt: str = '') -> list:
@@ -99,7 +100,7 @@ def run_canonical_todos(cmd_name: str, project_dir: Path, prompt: str = '') -> l
     """
     todo_script = project_dir / 'scripts' / 'todo' / f'{cmd_name}.py'
     if not todo_script.exists():
-        global_todo = Path.home() / '.claude' / 'scripts' / 'todo' / f'{cmd_name}.py'
+        global_todo = Path(__file__).resolve().parent.parent / 'scripts' / 'todo' / f'{cmd_name}.py'
         if global_todo.exists():
             todo_script = global_todo
         else:

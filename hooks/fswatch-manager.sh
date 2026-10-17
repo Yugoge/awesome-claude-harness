@@ -11,7 +11,7 @@ BLUE='\033[0;34m'
 CYAN='\033[0;36m'
 NC='\033[0m'
 
-SCRIPT_PATH="$HOME/.claude/hooks/git-fswatch.sh"
+SCRIPT_PATH="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)/git-fswatch.sh"
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)/lib/harness_state_dir.sh" 2>/dev/null \
   || harness_state_dir() { printf '%s\n' /tmp; }
 STATE_FILE="$(harness_state_dir)/git-fswatch-state-${USER}.txt"
@@ -168,7 +168,7 @@ show_status() {
 # Show logs
 show_logs() {
     local path="$1"
-    local log_file="$HOME/.claude/logs/git-fswatch.log"
+    local log_file="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/logs/git-fswatch.log"
 
     if [ ! -f "$log_file" ]; then
         echo -e "${YELLOW}⚠${NC} No log file found: $log_file"
@@ -258,7 +258,7 @@ install_service() {
         return 1
     fi
 
-    local service_file="$HOME/.claude/systemd/git-fswatch@.service"
+    local service_file="$(dirname "$(dirname "$SCRIPT_PATH")")/systemd/git-fswatch@.service"
 
     if [ ! -f "$service_file" ]; then
         echo -e "${RED}✗${NC} Service file not found: $service_file"

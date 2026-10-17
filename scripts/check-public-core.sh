@@ -4,22 +4,20 @@
 #   escaping classification), if any class label is invalid, or if a known author-environment
 #   residue marker leaks into a public-core-classified file un-parameterized. Companion to
 #   PUBLIC-CORE.md (the ledger) and docs/reference/roadmap-decomposition-productization.md §4.
-# Usage: bash scripts/check-public-core.sh
+# Usage: bash scripts/check-public-core.sh [--private-literals]
 #        bash scripts/check-public-core.sh --scan-root <dir> --release-manifest <file>
 #   Default (no args): gate the git checkout — ledger completeness + residue over the
-#   ledger-derived public-core set.
+#   ledger-derived public-core set + the private-literal rule over every tracked file.
+#   --private-literals: ONLY that rule, over what the staged change adds (pre-commit hook).
 #   --scan-root: gate an EXTRACTED RELEASE ARCHIVE instead. The scanned path set is
 #   asserted EQUAL to the release-membership manifest, then the same residue classes run
 #   over those bytes. Git-derived ledger sections are skipped (an archive is not a clone).
 # Exit codes: 0 = boundary clean + complete, 1 = one or more checks failed (unclassified
 #   path, invalid class, residue leak, or archive/manifest path-set mismatch).
-# Root cause (design): the public-core surface was described in prose (roadmap §4) with no
-#   machine check, so a new top-level file could escape classification and author-specific
-#   literals could re-enter the shippable core unnoticed. This gate recomputes both from the
-#   tree every run — the tracked-path list is derived from git, never hardcoded.
-#
-# Style mirrors scripts/verify-claims.sh: pure bash (+awk/git/grep), self-contained,
-# recompute-don't-hardcode, and an explicit accumulator so ALL problems are reported at once.
+# Root cause (design): with only a prose boundary (roadmap §4) a new top-level file could
+#   escape classification and author literals re-enter the core; this gate recomputes both
+#   from git every run. Style as scripts/verify-claims.sh: pure bash (+awk/git/grep),
+#   recompute-don't-hardcode, an explicit accumulator so ALL problems are reported at once.
 
 set -uo pipefail   # deliberately NOT -e: run every check, aggregate, report all drift.
 
@@ -35,11 +33,13 @@ RESIDUE_ALLOWLIST="policies/public-core-residue-allowlist.v1.json"
 
 SCAN_ROOT=""          # non-empty => archive mode (gate extracted bytes, not the checkout)
 RELEASE_MANIFEST=""   # release-membership manifest (explicit; never a class wildcard)
+LITERALS_ONLY=0       # 1 => --private-literals
 while [ $# -gt 0 ]; do
   case "$1" in
     --scan-root)        SCAN_ROOT="${2:?--scan-root needs a directory}"; shift 2 ;;
     --release-manifest) RELEASE_MANIFEST="${2:?--release-manifest needs a file}"; shift 2 ;;
-    -h|--help)          sed -n '2,14p' "${BASH_SOURCE[0]}"; exit 0 ;;
+    --private-literals) LITERALS_ONLY=1; shift ;;
+    -h|--help)          sed -n '2,15p' "${BASH_SOURCE[0]}"; exit 0 ;;
     *) echo "check-public-core: unknown argument '$1'" >&2; exit 1 ;;
   esac
 done
@@ -51,7 +51,40 @@ rc=0
 fail() { echo "FAIL: $*"; rc=1; }
 pass() { echo "PASS: $*"; }
 
-WS_MARKER='/dev/shm/dev-workspace/dot-claude'
+# Private-literal rule (R7b). The list is private-literals.txt in the MAIN working tree (no
+# override): one literal per line, trimmed, blank and #-lines ignored, fixed-string match.
+# Scopes: index = all tracked content as committed; staged = lines and path names the staged
+# change adds; archive = every file under $2. A hit names file:line and its list line only.
+private_literal_rule() {
+  local list l n=0 base; local -a lits=()
+  list="$(dirname "$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null || echo "$ROOT/.git")")/private-literals.txt"
+  [[ ! -e $list || ( -f $list && -r $list ) ]] || { fail "private-literal rule: cannot read private-literals.txt"; return 0; }
+  [ -f "$list" ] && while IFS= read -r l || [ -n "$l" ]; do
+    n=$((n + 1)); l="${l%$'\r'}"; l="${l#"${l%%[![:blank:]]*}"}"; l="${l%"${l##*[![:blank:]]}"}"
+    case "$l" in ''|'#'*) ;; *) lits+=("$n:$l") ;; esac
+  done < "$list"
+  [ "${#lits[@]}" -gt 0 ] || { echo "SKIP: private-literal rule (no literal listed in $list)"; return 0; }
+  base="$(git hash-object -t tree /dev/null)"   # the empty tree: every indexed line is "added"
+  [ "$1" = staged ] && base="$(git rev-parse -q --verify 'HEAD^{tree}' || echo "$base")"
+  if [ "$1" = archive ]; then   # names, a blank line, then the content as a pseudo-diff
+    (cd "$2" && find . ! -type d | sed 's#^\./##' && echo && find . -type f -exec awk \
+      'FNR == 1 { print "+++ " substr(FILENAME, 3) } { print "@@ -0 +" FNR " @@"; print "+" $0 }' {} +)
+  else
+    git -c core.quotePath=off diff-index --cached --no-renames --name-only --diff-filter=d "$base" && echo &&
+      git -c core.quotePath=off diff-index --cached --no-renames -p -U0 --text --no-prefix "$base"
+  fi | LC_ALL=C awk 'BEGIN { for (m = 1; m < ARGC; m++) { c = index(ARGV[m], ":")   # ARGV: "<list line>:<literal>"
+        N[m] = substr(ARGV[m], 1, c - 1); L[m] = substr(ARGV[m], c + 1) }; ARGC = 1 }
+    function scan(s, path, at,   k, j) { for (k = 1; k < m; k++) if (index(s, L[k])) {
+        for (j = 1; j < m; j++) if (index(path, L[j])) path = "<path with private-literals.txt line " N[j] ">"
+        print "FAIL: private literal (private-literals.txt line " N[k] ") -> " path at; bad = 1 } }
+    !body { if ($0 == "") body = 1; else scan($0, $0, " (path name)"); next }
+    d && /^\+/ { d--; scan(substr($0, 2), f, ":" n++); next }
+    !d && /^\+\+\+ / { f = substr($0, 5); sub(/\t$/, "", f) }
+    !d && /^@@ / { split($3, a, /[+,]/); n = a[2] + 0; d = (a[3] == "" ? 1 : a[3] + 0) }
+    END { exit bad }' "${lits[@]}" && pass "no listed private literal (scope: $1)" ||
+    fail "private-literal rule (scope: $1): see the lines above; a listed literal is never printed"
+}
+if [ "$LITERALS_ONLY" -eq 1 ]; then private_literal_rule staged; exit "$rc"; fi
 
 # ---------------------------------------------------------------------------
 # Shared generic author-path residue audit. ONE engine, used for both the git
@@ -78,6 +111,7 @@ residue_audit() {
 import ast, hashlib, io, json, os, re, subprocess, sys, tokenize
 
 root, allowlist_rel, mode = sys.argv[1], sys.argv[2], sys.argv[3]
+INDEX_READ = set(os.environ.get("PC_FILTERED", "").splitlines()) if mode == "git" else set()
 if mode == "git":
     scan_paths = subprocess.run(["git", "-C", root, "ls-files", "--", *sys.argv[4:]],
                                 capture_output=True, text=True).stdout.split()
@@ -90,7 +124,7 @@ else:
 # Boundary-aware on BOTH sides. The previous form anchored every alternative on a
 # TRAILING "/", so it matched a home directory's descendants but never the directory
 # ROOT itself: `p = "/root/.claude"` was caught while `EXACT_ROOT="/root"`,
-# `EXACT_HOME="/home/yugoge"` and `MAC="/Users/Yugoge"` walked straight through.
+# `EXACT_HOME="/home/<user>"` and `MAC="/Users/<User>"` walked straight through.
 #   right (?![A-Za-z0-9_-]) : the root form matches as well as the descendant form,
 #                             while /homework and /rootkit still do not.
 #   left  (?<![A-Za-z0-9])  : an author path must START a path component. Without it
@@ -108,7 +142,7 @@ RESIDUE = re.compile(
     r"(?:/root|/home/[a-z][a-z0-9_-]*|/Users/[A-Za-z][A-Za-z0-9_-]*)"
     r"(?![A-Za-z0-9_-])")
 # A BARE top-level directory literal: "/" or "/name" with no second path component.
-# "/home/yugoge" can never satisfy it, which is what keeps a genuine author-home
+# "/home/<user>" can never satisfy it, which is what keeps a genuine author-home
 # literal `operational` (and therefore non-allowlistable) under SYS_DIR classification.
 SYS_DIR_LITERAL = re.compile(r"^/[A-Za-z0-9_.-]*$")
 SYS_DIR_MIN_ELEMENTS = 3   # a table, not an incidental pair
@@ -210,7 +244,7 @@ def py_system_path_enum(text):
     Structurally derived from the AST, never from a hand-written label: the literal
     must sit in a list/tuple/set whose every element is a bare top-level directory
     string and which has at least SYS_DIR_MIN_ELEMENTS of them. A path carrying a
-    second component (an actual author home such as "/home/yugoge") can never
+    second component (an actual author home such as "/home/<user>") can never
     qualify, so this class cannot launder a genuine residue literal."""
     out = {}
     try:
@@ -279,8 +313,9 @@ for rel in scan_paths:
     if not rel:
         continue
     full = os.path.join(root, rel)
-    try:
-        text = open(full, encoding="utf8").read()
+    try:   # a filtered file: its index blob (the checkout only if it has no stage-0 entry)
+        blob = rel in INDEX_READ and subprocess.run(["git", "-C", root, "cat-file", "blob", ":" + rel], capture_output=True)
+        text = blob.stdout.decode("utf8") if blob and not blob.returncode else open(full, encoding="utf8").read()
     except (OSError, UnicodeDecodeError):
         continue          # binary / unreadable: no textual residue to gate
     scanned.add(rel)
@@ -356,12 +391,9 @@ if [ ! -f "$MANIFEST" ]; then
 fi
 
 # ---------------------------------------------------------------------------
-# Hard markers — author-environment identifiers that must NEVER ship, in EITHER
-# scan mode. Defined HERE, above the archive branch, precisely because they used
-# to be defined below it: archive mode reached `exit "$rc"` before the array
-# existed, so the hard-marker loop was unreachable over a release artifact and a
-# maintainer remote could travel inside a published tarball undetected. ONE
-# definition consumed by both modes, so the two can never drift apart again.
+# Hard markers — author-environment identifiers that must NEVER ship, in EITHER scan
+# mode. ONE definition above the archive branch, consumed by both modes: defined below
+# it, archive mode reached `exit "$rc"` first and never ran the hard-marker loop.
 # ---------------------------------------------------------------------------
 HARD_MARKERS=(
   'git@github.com:Yugoge'      # maintainer git remote
@@ -399,18 +431,8 @@ if [ -n "$SCAN_ROOT" ]; then
     pass "extracted archive path set EQUALS the release-membership manifest ($(printf '%s\n' "$ACTUAL" | wc -l | tr -d ' ') paths)"
   fi
 
-  # Residue class 1: maintainer workspace/tmpfs marker — hard-gating over the archive.
-  WS_EXEMPT="$(python3 -c 'import json,sys;print("\n".join(json.load(open(sys.argv[1])).get("workspace_marker_exempt_paths",[])))' "$RELEASE_MANIFEST")"
-  ws_hits=0
-  while IFS= read -r f; do
-    [ -z "$f" ] && continue
-    printf '%s\n' "$WS_EXEMPT" | grep -qxF "$f" && continue
-    if grep -qF -- "$WS_MARKER" "$SCAN_ROOT/$f" 2>/dev/null; then
-      fail "maintainer workspace-path residue in released archive -> $f"
-      ws_hits=$((ws_hits + 1))
-    fi
-  done <<< "$ACTUAL"
-  [ "$ws_hits" -eq 0 ] && pass "no un-exempted workspace-path residue in the released archive"
+  # Residue class 1: the private-literal rule over every archive member.
+  private_literal_rule archive "$SCAN_ROOT"
 
   # Residue class 2: generic author-home paths — same engine as the checkout gate.
   if residue_audit "$SCAN_ROOT" "$RESIDUE_ALLOWLIST" tree; then
@@ -529,17 +551,15 @@ fi
 # ---------------------------------------------------------------------------
 # 3. Residue scan over the public-core-classified file set.
 #    Hard markers  : author-environment identifiers that must NEVER appear in public-core;
-#                    scanned across the WHOLE public-core set (test trees included).
+#                    scanned across the WHOLE public-core set (test trees included); defined
+#                    ABOVE the archive branch so both scan modes consume them.
 #    Param markers : residue allowed ONLY as an env `:-` default or in a comment; any other
-#                    (un-parameterized) use is a leak. Scanned across the public-core set
-#                    MINUS test trees — a fixture string that names a guarded unit is test
-#                    data, not shippable-harness residue (mirrors the ledger already
-#                    classifying top-level `tests/` as shared/infra).
-#    The protected daemon prefix `happy-daemon` is now a PARAM marker (env-overridable via
-#    CLAUDE_PROTECTED_DAEMON_PREFIX; the default reproduces today's behavior) — see
-#    PUBLIC-CORE.md §3. It was previously an un-scanned deliberately-literal exception.
+#                    (un-parameterized) use is a leak. Scanned MINUS test trees: a fixture
+#                    naming a guarded unit is test data (the ledger classes `tests/` shared/infra).
+#                    One is the protected daemon prefix (CLAUDE_PROTECTED_DAEMON_PREFIX).
+#    A file git filters (settings.json: init smudges its checkout into the machine form) is
+#    read from its index blob, the tracked content, here and in section 5; others as checked out.
 # ---------------------------------------------------------------------------
-#    HARD_MARKERS is defined ABOVE the archive branch so both scan modes consume it.
 PARAM_MARKERS=(
   'happy-web-dev'                    # CLAUDE_DEV_CONTAINERS default
   '/root/bin/claude-allow-restart'  # CLAUDE_DAEMON_RESTART_GRANT_HELPER default
@@ -553,10 +573,6 @@ while IFS= read -r p; do
   PC_PATHSPECS+=("$p")
 done < <(printf '%s\n' "$PAIRS" | awk -F'\t' '$2=="public-core"{print $1}' | sort -u)
 PC_PATHSPECS+=(":(exclude)$SELF")
-
-# Param markers are productization defaults expected inside shippable code; a test fixture
-# that names a guarded unit (e.g. hooks/tests/*) is test data, not residue. Scan param
-# markers over the public-core set MINUS any test tree. Hard markers keep the full set.
 PARAM_PATHSPECS=("${PC_PATHSPECS[@]}" ":(exclude)*/tests/*")
 
 # Pathspecs for the section-5 residue audit. Unlike the marker scans above, this
@@ -564,6 +580,14 @@ PARAM_PATHSPECS=("${PC_PATHSPECS[@]}" ":(exclude)*/tests/*")
 # structurally, and this detector's own constant tables are exempted BY CLASS
 # (scanner_pattern_definition), not by being hidden from the scan.
 PC_SCAN_SPECS=("${PC_PATHSPECS[@]:0:$(( ${#PC_PATHSPECS[@]} - 1 ))}")
+FILTERED="$(git ls-files | git check-attr --stdin filter | awk -F': filter: ' '$2 != "unspecified" && $2 != "unset" { print $1 }')"
+pc_grep() {   # <marker> <pathspec>...: `git grep -nF` hits, a FILTERED file's from its index blob
+  local m="$1" p; shift; local -a idx=() excl=()
+  while IFS= read -r p; do idx+=(":(literal)$p"); excl+=(":(exclude,literal)$p"); done \
+    < <(git ls-files -- "$@" | grep -xF -- "$FILTERED")
+  git grep -nF -- "$m" -- "$@" ${excl[@]+"${excl[@]}"} 2>/dev/null
+  [ "${#idx[@]}" -eq 0 ] || git grep --cached -nF -- "$m" -- "${idx[@]}" 2>/dev/null
+}
 
 # A public-core match line is an allowed (parameterized) use of marker M when the line is a
 # comment (trimmed starts with #) OR EVERY occurrence of M on the line is an env default
@@ -592,7 +616,7 @@ for m in "${HARD_MARKERS[@]}"; do
     [ -z "$hit" ] && continue
     fail "hard residue marker in public-core: '$m'  ->  $hit"
     leaks=$((leaks + 1))
-  done < <(git grep -nF -- "$m" -- "${PC_PATHSPECS[@]}" 2>/dev/null)
+  done < <(pc_grep "$m" "${PC_PATHSPECS[@]}")
 done
 
 for m in "${PARAM_MARKERS[@]}"; do
@@ -603,7 +627,7 @@ for m in "${PARAM_MARKERS[@]}"; do
       fail "un-parameterized residue marker in public-core: '$m'  ->  ${file}:${lineno}: ${content}"
       leaks=$((leaks + 1))
     fi
-  done < <(git grep -nF -- "$m" -- "${PARAM_PATHSPECS[@]}" 2>/dev/null)
+  done < <(pc_grep "$m" "${PARAM_PATHSPECS[@]}")
 done
 
 if [ "$leaks" -eq 0 ]; then
@@ -611,19 +635,9 @@ if [ "$leaks" -eq 0 ]; then
 fi
 
 # ---------------------------------------------------------------------------
-# 4. Maintainer workspace/tmpfs path — HARD GATE (was advisory until this cycle).
-#    "Make CI FAIL (not advisory) on ... the tmpfs workspace path" — the advisory
-#    branch never set rc=1, so a leak of this class could never turn CI red.
+# 4. Private-literal rule — HARD GATE over the committed content of EVERY tracked file.
 # ---------------------------------------------------------------------------
-ws_hits="$(git grep -nF -- "$WS_MARKER" -- "${PC_PATHSPECS[@]}" 2>/dev/null)"
-if [ -n "$ws_hits" ]; then
-  while IFS= read -r hit; do
-    [ -z "$hit" ] && continue
-    fail "maintainer workspace-path residue in public-core: '$WS_MARKER'  ->  $hit"
-  done <<< "$ws_hits"
-else
-  pass "no maintainer workspace-path residue in the public-core set"
-fi
+private_literal_rule index
 
 # ---------------------------------------------------------------------------
 # 5. Generic author-home residue (/root/, /home/<user>/, /Users/<User>/) — HARD
@@ -631,7 +645,7 @@ fi
 # ---------------------------------------------------------------------------
 if [ ! -f "$RESIDUE_ALLOWLIST" ]; then
   fail "residue allowlist not found: $RESIDUE_ALLOWLIST"
-elif residue_audit "$ROOT" "$RESIDUE_ALLOWLIST" git "${PC_SCAN_SPECS[@]}"; then
+elif PC_FILTERED="$FILTERED" residue_audit "$ROOT" "$RESIDUE_ALLOWLIST" git "${PC_SCAN_SPECS[@]}"; then
   pass "no un-allowlisted author-path residue in the public-core set"
 else
   fail "author-path residue gate failed (new/operational occurrence, unsupported class label, or stale allowlist entry)"

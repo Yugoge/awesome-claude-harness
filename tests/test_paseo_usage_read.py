@@ -5,8 +5,10 @@ binding a BUILD-AC08 assertion (docs/dev/acceptance-criteria-20260828-112025-b.j
 live read-only adapter run against the paseo daemon, captured-envelope fixture
 end-to-end chain (adapter stdout JSON -> ledger usage-ingest -> persisted
 per-account state -> scheduling decision), blind-window -> unknown mapping
-(amended RUNTIME-AC07), settings parse assertions, and the adapter source
-audit (no mutation RPC).
+(amended RUNTIME-AC07), and the adapter source audit (no mutation RPC).
+The settings drift assertions were retired with settings.template.json: the
+adapter's allow entry now comes from the paseo module of
+scripts/install/render-settings, not from the tracked settings.json.
 """
 
 import json
@@ -20,7 +22,6 @@ ADAPTER = REPO / "scripts" / "paseo-usage-read.mjs"
 LEDGER = REPO / "scripts" / "paseo-daemon-ledger.py"
 FIXTURE = REPO / "tests" / "fixtures" / "paseo-usage-envelope-20260828.json"
 COMMAND = REPO / "commands" / "paseo-daemon.md"
-ALLOW_MATCHER = "Bash(node scripts/paseo-usage-read.mjs:*)"
 ACCOUNTS = ["orchestrade", "yugetang", "yugoge"]
 T0 = "2026-08-28T19:07:02Z"
 
@@ -141,21 +142,6 @@ def test_unavailable_row_and_missing_row_map_to_unknown_no_switch(tmp_path):
         # conservative scheduling; NO account switch on the blind-window artifact
         assert decision["action"] == "hold_conservative", name
         assert decision["switch_account"] is False, name
-
-
-# ---------------- (4) settings parse assertions ----------------
-
-def test_allow_matcher_exactly_once_in_settings_json():
-    settings = json.loads((REPO / "settings.json").read_text())
-    allow = settings["permissions"]["allow"]
-    assert allow.count(ALLOW_MATCHER) == 1
-    deny = settings["permissions"]["deny"]
-    assert ALLOW_MATCHER not in deny
-
-
-def test_allow_matcher_nowhere_in_settings_template():
-    raw = (REPO / "settings.template.json").read_text()
-    assert ALLOW_MATCHER not in raw  # zero machine-specific paseo Bash entries
 
 
 # ---------------- (5) command tick names the adapter as the usage-read step ----------------

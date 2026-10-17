@@ -1,6 +1,6 @@
 # anti-pattern-catalog.yml
 # Source data for ui-anti-pattern-catalog skill.
-# Spec: /root/docs/dev/specs/spec-20260426-080555.md sections 5.4, 5.11, 5.16.
+# Spec: <harness-home>/docs/dev/specs/spec-20260426-080555.md sections 5.4, 5.11, 5.16.
 #
 # Each rule MUST have:
 #   id           — stable rule identifier (e.g., C1, T3, AI4)
