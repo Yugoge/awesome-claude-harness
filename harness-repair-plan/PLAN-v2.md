@@ -1205,3 +1205,29 @@ Found while reviewing a phase PR, pre-existing or outside that phase's scope. Ea
 | P5 | Confirm on a live host that Claude Code displays the Stop coordinator's relayed `systemMessage` (checkpoint refusal notice); at the PostToolUse threshold path a refused snapshot (rc 3) is reported as "Checkpoint failed" (read in code, not run). | PR #4 round 3 (F-2, REGB-9) |
 | P2 | Overnight `in_place` mode without bwrap: owner and child sessions can still `git config --unset core.hooksPath` (same as master; README lists bwrap as required). Decide whether in_place without bwrap is refused or documented. | PR #4 round 3 (overnight note) |
 | P9 | README wording: a refused snapshot leaves the refused file's blob unreachable in the local object store (PR body says so, README says "writes nothing"); name the `# comment` / `$'..'` REG-D fallback and the `!`/`&` hard-ban case in the limits list. | PR #4 round 3 (F-1, REGB-1/2) |
+
+## 14. Revision 2026-10-18: P7b and zero-touch landing
+
+The owner, after P7 merged (2026-10-18): "我自己在机器上做的是什么意思？我不做，没空，我不能停止claude。" He runs no manual step
+on his machines and cannot stop his sessions. This overrides every text in this plan that gives the owner a machine step.
+
+- New phase **P7b** (wave 2, with P1 and P8; depends on P0, P0b, P7; net code in hooks/ about +60, see prompts/P7b.md):
+  a live home that ran pre-P7 code and receives master through any pull path lands P7 by itself at the next turn end
+  of any running session: repairs the pull's leftovers, migrates (never seeding GIT_AUTO_PUSH=1), registers the filter,
+  renders, records, seeds the private-literal list from values the machine already knows, disables legacy auto-push
+  hooks, restarts a stale fswatch daemon, and lets pre-landing sessions read GIT_AUTO_PUSH from the rendered settings.
+- Section 4: the P0 row (remove installed post-commit push hooks), the P7 row (init and the one-time migration on each
+  home, doctor --strict) and "Write the overlay and the private-literal list (only init, run by the human)" are
+  replaced by P7b's landing. No phase prompt gives the owner a machine step.
+- Sections 5 and 6: P2-P6 also require P7b merged. Waves: P7b + P1 + P8; P2 + P3; P4; P5; P6; P9; P10; P11.
+- Section 7: "Arming timing" is asked once (P2 if Claude Code pushes new settings to running sessions, else P5); Q5 is
+  answered by O26.
+- Section 13: the P8 row on `render-settings migrate` moved to P7b. P0b residuals are added: P9, commands/checkpoint.md
+  prose; P10, the unused `read_command_spec`, B4, B5, L1-L3. When writing P9: skip dev.md:192, :215 and
+  dev-command.md:137, :160 (P4 deletes that text with its writer).
+- Open for the owner before P9-P11 are written (HANDOVER.md questions 7-12): how merged code reaches the live homes when
+  nobody types /pull; the remaining human steps in P9 (CLAUDE.md diff), H-Q10, P10 (doctor on each home) and P11; an
+  off-site backup of the tmpfs home; the git-clean matrix file only the owner's machine has.
+
+Prompts for P7b, P1-P6 and P8 are in prompts/ (written from the full conversation record, each independently verified
+against master f8c18c27, cross-checked in COVERAGE.md). HANDOVER.md is the owner's table of when to open each.
