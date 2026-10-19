@@ -7,7 +7,7 @@
 # WS1: this is an OPTIONAL author-environment capability (RAM-disk promotion).
 # The on-ramdisk project root is derived from the resolved harness home, and the
 # external helper is resolved via $SESSION_PROMOTE_BIN — absent => degrade
-# silently (the hook already always exits 0), NEVER the author literal /root.
+# silently (the hook already always exits 0), NEVER a hardcoded author home path.
 #
 # Input example:
 #   {"session_id":"abc-...","cwd":"/some/home",...}
@@ -74,7 +74,7 @@ if [[ ! "$SESSION_ID" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-
 fi
 
 # Claude Code maps CWD to project dir by replacing '/' with '-'.
-# e.g. /root -> -root; /dev/shm/dev-workspace/applio -> -dev-shm-dev-workspace-applio
+# e.g. /root -> -root; /srv/harness/example-project -> -srv-harness-example-project
 # Strategy: replace every '/' with '-'. A leading '/' becomes a leading '-'.
 PROJECT_NAME="$(printf '%s' "$CWD" | sed 's|/|-|g')"
 

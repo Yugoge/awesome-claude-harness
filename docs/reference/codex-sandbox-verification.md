@@ -157,7 +157,7 @@ which disables escalation prompts — denied operations simply fail rather than 
 Separately, `< /dev/null` (`commands/codex.md:162`) means no prompt could be answered anyway.
 *(Note: `</dev/null` does not itself cause `never`; the two are independent.)*
 
-**3.5 Empirically observed.** `projects/-root-multi-asset-portfolio/memory/feedback_codex_exec_writes_files.md`
+**3.5 Empirically observed.** `projects/-root-multi-asset-example-project/memory/feedback_codex_exec_writes_files.md`
 records a real incident (2026-06-11, task `20260611-191009`): during a read-only-intent audit,
 codex exec injected `flatten_phantom_lots()` into `scripts/trading/order_reconciler.py`
 (+137 lines), added a field to `reconcile.py`, and **flipped `config/daily-trading.json`
@@ -200,6 +200,6 @@ override pointing at a different config, or a regenerated `config.toml`.
 | 9 | Three possible sandbox values | `/usr/bin/codex exec --help` lines 52-55, v0.144.4 |
 | 10 | Runtime banner | `docs/codex/dev-20260719-150041-b/ba.txt:8`,`:4`,`:7` |
 | 11 | Machine-readable policy: repo=write, `.git`=read, network=false | rollout `…019fe1df….jsonl:8` |
-| 12 | Codex empirically wrote repo files | `projects/-root-multi-asset-portfolio/memory/feedback_codex_exec_writes_files.md` |
+| 12 | Codex empirically wrote repo files | `projects/-root-multi-asset-example-project/memory/feedback_codex_exec_writes_files.md` |
 | 13 | Repo marked trusted | `$HOME/.codex-cli/config.toml:167-168` |
 | 14 | Citation drift `:140`→`:162`, `:149`→`:171` | `712238a2` vs `git show 96cc84a9:commands/codex.md` |

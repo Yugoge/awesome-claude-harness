@@ -1,1 +1,1 @@
-# Test package marker for /root/.claude/tests/.
+# Test package marker for the harness repository's tests/ directory.

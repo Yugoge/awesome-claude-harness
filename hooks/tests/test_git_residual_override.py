@@ -132,7 +132,7 @@ class _RouteCase(unittest.TestCase):
 
     def write_override(self, command, kinds, *, reason="stuck subagent needs the "
                        "runtime-resolved git binary to finish AC-3",
-                       authorized_by="human:yuge.tang@orchestrade.com",
+                       authorized_by="human:maintainer@example.invalid",
                        origin="userpromptsubmit-hook", ttl_minutes=10,
                        digest=None, session_id="sid-route-test"):
         os.makedirs(self.ns, exist_ok=True)
@@ -193,7 +193,7 @@ class D3_HonorIsAudited(_RouteCase):
         # (a) non-suppressible: the audit goes to stderr, which lands in the
         #     transcript the agent cannot retroactively edit.
         self.assertIn("RESIDUAL-OVERRIDE HONORED", err)
-        self.assertIn("human:yuge.tang@orchestrade.com", err)
+        self.assertIn("human:maintainer@example.invalid", err)
         self.assertIn("AC-3", err, "the human's REASON must appear in the audit")
         self.assertIn("dynamic_git_token", err,
                       "the audit must say WHAT was being refused")
@@ -202,7 +202,7 @@ class D3_HonorIsAudited(_RouteCase):
         self.assertEqual(len(recs), 1, "exactly one audit record expected")
         rec = recs[0]
         self.assertEqual(rec["event"], "residual_override_honored")
-        self.assertEqual(rec["authorized_by"], "human:yuge.tang@orchestrade.com")
+        self.assertEqual(rec["authorized_by"], "human:maintainer@example.invalid")
         self.assertIn("AC-3", rec["reason"])
         self.assertEqual(rec["residual_kinds"], ["dynamic_git_token"])
         self.assertEqual(rec["command_sha256"], _digest(CMD_DYNAMIC))

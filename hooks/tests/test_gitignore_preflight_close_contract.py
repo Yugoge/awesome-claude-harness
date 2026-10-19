@@ -31,8 +31,8 @@ The FIFTH step (2026-09-17) covers /commit Step 7's changelog-analyst dispatch �
 a legitimate read of a task's dev-report to build its own staging classification,
 with no lane-matrix span and no close-report deliverable to anchor E3 or E4 on.
 Discriminator E5 exempts it only when the prompt cites a live, unexpired
-/tmp/claude-commit-grant-*.json whose own task_id (read off disk, never off the
-prompt) matches the report being opened — an artifact only /commit's own Step 5
+<state root>/claude-commit-grant-*.json whose own task_id (read off disk, never
+off the prompt) matches the report being opened — an artifact only /commit's own Step 5
 can mint, after a prior CLOSE: YES verdict for that exact task-id. Its
 obligations are pinned in the E5 section at the bottom of this file.
 
@@ -86,6 +86,9 @@ def sandbox(tmp_path):
     (root / 'docs' / 'dev').mkdir(parents=True)
     (root / 'tests' / 'generated').mkdir(parents=True)
     shutil.copy2(HOOK, root / 'hooks' / 'pretool-gitignore-preflight.py')
+    # The gate imports lib.harness_state_dir from its own directory.
+    shutil.copytree(os.path.join(REPO_ROOT, 'hooks', 'lib'), root / 'hooks' / 'lib',
+                    ignore=shutil.ignore_patterns('__pycache__'))
     # Mirrors the real .gitignore:142 rule under test. Not a modification of the
     # repository's own ignore rules — this is a fixture.
     (root / '.gitignore').write_text('docs/dev/\ntests/generated/\n')
@@ -115,6 +118,17 @@ def close_step1_prompt(changed_files, task_id):
         'Write your report to docs/dev/style-inspector-report-%s.json\n'
         % (' '.join(changed_files), task_id)
     )
+
+
+def state_root():
+    """The state root the gate resolves (hooks/lib/harness_state_dir.py), read
+    at call time so it follows CLAUDE_STATE_DIR exactly as the gate does."""
+    spec = importlib.util.spec_from_file_location(
+        'harness_state_dir_under_test',
+        os.path.join(REPO_ROOT, 'hooks', 'lib', 'harness_state_dir.py'))
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod.harness_state_dir()
 
 
 def load_gate_module():
@@ -930,12 +944,12 @@ def test_e2_dashed_worker_label_still_resolves_to_its_parent(sandbox):
     """Not-too-narrow control: worker labels really do contain dashes.
 
     Measured 2026-09-07 over docs/dev: 21 of 131 lane ids have a dashed worker
-    (`application-assistant`, `subtask-ab`, `fill-tests`). A lexical
+    (`worker-q7x`, `subtask-ab`, `fill-tests`). A lexical
     last-dash split would refuse every one of them, so the parent is resolved
     from on-disk evidence instead.
     """
     write_report(sandbox, 'T1', created=[])
-    rel = write_report(sandbox, 'T1-application-assistant',
+    rel = write_report(sandbox, 'T1-worker-q7x',
                        created=['docs/dev/close-report-T1.md'])
     rc, err = run_gate(sandbox_hook(sandbox), 'Dev report file: %s\n' % rel)
     assert rc == 0, 'a real dashed worker label was over-narrowed away: %s' % err
@@ -1016,7 +1030,7 @@ def test_e2_narrowing_admits_nothing_new(sandbox):
 # close-report deliverable.
 #
 # Discriminator E5 exempts this shape ONLY when the prompt cites a live,
-# unexpired /tmp/claude-commit-grant-*.json whose own task_id (read off disk,
+# unexpired <state root>/claude-commit-grant-*.json whose own task_id (read off disk,
 # never off the prompt) equals the report's src_task_id, and whose expires_at
 # has not passed. A commit-grant file can only be minted by /commit's own
 # Step 5, itself gated on a prior CLOSE: YES verdict for that exact task-id,
@@ -1048,16 +1062,17 @@ def _iso_offset(seconds):
 
 @pytest.fixture
 def commit_grant():
-    """Create a real /tmp/claude-commit-grant-<unique>.json file; clean up after.
+    """Create a real <state root>/claude-commit-grant-<unique>.json; clean up after.
 
-    The gate's COMMIT_GRANT_PATTERN is anchored on the literal /tmp/claude-
-    commit-grant-*.json prefix, so this cannot be redirected under tmp_path —
-    it must be a real file at that exact location, same as production.
+    The gate's COMMIT_GRANT_PATTERN is anchored on the state-root
+    claude-commit-grant-*.json prefix, so this cannot be redirected under
+    tmp_path — it must be a real file at that exact location, same as
+    production.
     """
     created = []
 
     def _make(task_id, expires_at, extra=None):
-        path = '/tmp/claude-commit-grant-%s.json' % uuid.uuid4().hex
+        path = os.path.join(state_root(), 'claude-commit-grant-%s.json' % uuid.uuid4().hex)
         body = {'task_id': task_id, 'expires_at': expires_at}
         if extra:
             body.update(extra)
@@ -1135,7 +1150,8 @@ def test_has_live_commit_grant_reads_task_id_and_ttl_off_disk(commit_grant):
 
 def test_has_live_commit_grant_missing_file_fails_closed():
     gate = load_gate_module()
-    prompt = 'Commit grant: /tmp/claude-commit-grant-does-not-exist-e5test.json\n'
+    prompt = 'Commit grant: %s\n' % os.path.join(
+        state_root(), 'claude-commit-grant-does-not-exist-e5test.json')
     assert not gate.has_live_commit_grant(prompt, 'T1')
 
 

@@ -29,7 +29,7 @@ HOOK = REPO_ROOT / "hooks" / "userprompt-usage-snapshot.py"
 FIXTURE_PROVIDERS = [
     {
         "providerId": "claude",
-        "displayName": "Claude · orchestrade",
+        "displayName": "Claude · acct-a",
         "status": "available",
         "windows": [
             {"id": "five_hour", "label": "Session", "usedPct": 8, "remainingPct": 92,
@@ -39,8 +39,8 @@ FIXTURE_PROVIDERS = [
         ],
     },
     {
-        "providerId": "claude-yugetang",
-        "displayName": "Claude · yugetang",
+        "providerId": "claude-acct-b",
+        "displayName": "Claude · acct-b",
         "status": "unavailable",
         "windows": [],
     },
@@ -94,9 +94,9 @@ def test_normalize_providers_extracts_session_and_weekly_windows():
     assert orch["session"]["remaining_pct"] == 92
     assert orch["session"]["resets_at"] == "2026-08-29T00:00:00Z"
     assert orch["weekly"]["remaining_pct"] == 86
-    yugetang = rows[1]
-    assert yugetang["status"] == "unavailable"
-    assert yugetang["session"] is None and yugetang["weekly"] is None
+    acct_b = rows[1]
+    assert acct_b["status"] == "unavailable"
+    assert acct_b["session"] is None and acct_b["weekly"] is None
 
 
 def test_normalize_providers_accepts_dict_wrapped_providers_key():
@@ -125,7 +125,7 @@ def test_format_context_ok_state_includes_as_of_and_fresh_label():
     text = mod._format_context(now, cache)
     assert "as_of=2026-10-04T08:30:00Z" in text
     assert "fresh" in text and "STALE" not in text
-    assert "orchestrade" in text or "claude" in text
+    assert "acct-a" in text or "claude" in text
     assert "92% remaining" in text
 
 

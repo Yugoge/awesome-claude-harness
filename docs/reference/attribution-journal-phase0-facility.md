@@ -59,7 +59,7 @@ Measured in this deployment via `/proc/mounts`:
 
 | Resolution | Path | Backing mount | fstype | Tier |
 |---|---|---|---|---|
-| `$CLAUDE_CONFIG_DIR` set (the normal case here) | `/var/lib/claude-accounts/<acct>/claude/attribution-seals` | `/` on `/dev/sda1` | ext4 | **disk-backed, persistent** |
+| `$CLAUDE_CONFIG_DIR` set (the normal case here) | `<accounts-root>/<acct>/claude/attribution-seals` | `/` on `/dev/sda1` | ext4 | **disk-backed, persistent** |
 | Fallback (`CLAUDE_CONFIG_DIR` unset) | `~/.claude/attribution-seals` | in this environment `~/.claude` is itself a symlink onto this tmpfs checkout | tmpfs | volatile |
 
 `seal()` / `autoseal_if_due()` call `mount_class()` on the destination and

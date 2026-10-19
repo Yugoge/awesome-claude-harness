@@ -1,5 +1,5 @@
 {
-  "_comment": "Captured-envelope fixture derived from the live provider.usage.list.response reading of 2026-08-28T19:07:02Z (docs/dev/ticket-20260828-112025-b.md Evidence). Deterministic input for the BUILD-AC08 end-to-end chain: adapter --from-envelope -> ledger usage-ingest -> persisted per-account state -> scheduling decision. Contains >=1 available account row with a weekly window plus a live blind-window specimen (yugetang unavailable).",
+  "_comment": "Captured-envelope fixture derived from the live provider.usage.list.response reading of 2026-08-28T19:07:02Z (docs/dev/ticket-20260828-112025-b.md Evidence). Deterministic input for the BUILD-AC08 end-to-end chain: adapter --from-envelope -> ledger usage-ingest -> persisted per-account state -> scheduling decision. Contains >=1 available account row with a weekly window plus a live blind-window specimen (acct-b unavailable).",
   "type": "session",
   "message": {
     "type": "provider.usage.list.response",
@@ -8,7 +8,7 @@
     "providers": [
       {
         "providerId": "claude",
-        "displayName": "Claude · orchestrade",
+        "displayName": "Claude · acct-a",
         "status": "available",
         "planLabel": "Max 20x",
         "windows": [
@@ -34,8 +34,8 @@
         "error": null
       },
       {
-        "providerId": "claude-yugoge",
-        "displayName": "Claude · yugoge",
+        "providerId": "claude-acct-c",
+        "displayName": "Claude · acct-c",
         "status": "available",
         "planLabel": "Max 20x",
         "windows": [
@@ -53,8 +53,8 @@
         "error": null
       },
       {
-        "providerId": "claude-yugetang",
-        "displayName": "Claude · yugetang",
+        "providerId": "claude-acct-b",
+        "displayName": "Claude · acct-b",
         "status": "unavailable",
         "planLabel": null,
         "windows": [],

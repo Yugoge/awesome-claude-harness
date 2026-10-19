@@ -345,13 +345,13 @@ def test_classifier_documents_the_closed_boundaries():
 # ---------------------------------------------------------------------------
 
 _EXECUTE_PUSH_CONTINUATION_COMMAND = (
-    "cd /dev/shm/dev-workspace/dot-claude && \\\n"
+    "cd /srv/harness && \\\n"
     "python3 ~/.claude/scripts/execute-push.py \\\n"
     '  --repo-hash "abc123def456" \\\n'
     '  --branch "fix/dev-fanout-gatekeeper-20260717" \\\n'
     '  --remote "origin" \\\n'
     '  --request-id "20261005-070100" \\\n'
-    '  --repo-root "/dev/shm/dev-workspace/dot-claude"'
+    '  --repo-root "/srv/harness"'
 )
 
 _EXECUTE_PUSH_FLAGS = (

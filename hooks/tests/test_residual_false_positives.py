@@ -122,7 +122,7 @@ def test_fp_variable_holding_non_git_script_path():
     Suppression here is evidence-based resolution, not a relaxation.
     """
     command = (
-        "cd /dev/shm/dev-workspace/dot-claude" + NL
+        "cd /srv/harness" + NL
         + 'L="python3 scripts/paseo-daemon-ledger.py --root .claude/paseo-daemon"' + NL
         + '$L init' + NL
         + '$L lease-status'
