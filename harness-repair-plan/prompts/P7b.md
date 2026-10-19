@@ -263,7 +263,14 @@ cwd: the harness home is the one that holds the script). Constraints:
   unstaged every path the conflicted pop staged (index blob equal to that path's content in the pull path's stash),
   so the index ends equal to HEAD for those paths with their working-tree content unchanged. Keep the stash entry
   (D10: dropping it is not needed). Other unmerged paths (a hook file the owner had edited, for example) are left
-  exactly as they are and counted in the notice; the landing still lands the settings;
+  exactly as they are and counted in the notice; the landing still lands the settings. One exception (added
+  2026-10-19 from the P9-P11 cross-check, measured in scratch): an unmerged index or CLAUDE.md file whose only change
+  in the pull path's stash against the pre-pull revision is doc-sync output (the date or "Last updated" line the
+  doc-sync hooks rewrite, and nothing else) is resolved to upstream's side: HEAD's content, or removed when upstream
+  deleted it (`DU`), then unstaged like the paths above; the stash entry is kept. Measured: one Edit under commands/
+  re-dates commands/INDEX.md and CLAUDE.md; when upstream then deletes that file the pop leaves `DU` and every later
+  pull fails with "needs merge"; when upstream edits the line next to the date the pop leaves `UU`. Without this
+  step P8's, P9's and P10's index deletions and P9's CLAUDE.md edit would stop every later pull on such a home;
 - integration stopped mid-rebase or mid-merge (S4: a rebase-merge or rebase-apply directory, or MERGE_HEAD, in the
   harness home): change nothing in git, land nothing, and show the notice (R9) naming the stopped operation and the
   number of conflicted paths. Never abort, continue, reset or clean anything.
