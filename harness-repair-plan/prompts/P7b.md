@@ -124,7 +124,10 @@ D# are in DECISIONS.md; S# are the owner clarifications in PLAN-v2.md section 0 
   code reads are allowed. Nothing is added to /close, /commit, /push, /pull, /merge or the changelog-analyst.
 
 **Owner input (ask once with AskUserQuestion at the start, only if the next line still says OPEN).**
-OPEN. Other repositories: may the landing also disable the legacy auto-push post-commit hooks (R6) and restart stale
+ANSWERED 2026-10-19: "also the other repositories" (the owner chose it). Do not ask again; implement the "also"
+behaviour described below. Also answered 2026-10-19: merged code reaches the owner's homes only when he types /pull
+himself (no automatic pull is added), so the /pull path (hooks/pull.sh, any revision) is the case that matters most.
+Original question, for the record: Other repositories: may the landing also disable the legacy auto-push post-commit hooks (R6) and restart stale
 git-fswatch daemons (R8) in the owner's other repositories, which are the places P0's REQUEST searched (every `.git`
 under the home directory down to depth 5)? Options: "harness home only" (default if unanswered) or "also the other
 repositories". Put each option's consequence in the question: with "harness home only", the legacy hooks in his other
