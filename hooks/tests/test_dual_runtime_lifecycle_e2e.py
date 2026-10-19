@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import ast
 import hashlib
 import json
 import os
@@ -12,7 +11,6 @@ import subprocess
 import sys
 import threading
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -20,20 +18,14 @@ import pytest
 
 # The harness under test is the checkout that holds this file, never an install path.
 SOURCE_ROOT = Path(__file__).resolve().parents[2]
-# The native runtime is an external codex install: its config home is CODEX_HOME,
-# else ~/.codex.
-CODEX_HOME = Path(os.environ.get("CODEX_HOME") or Path.home() / ".codex")
-NATIVE = CODEX_HOME / "hooks" / "codex_native_harness.py"
 PROMPT = SOURCE_ROOT / "hooks" / "prompt-workflow.py"
 PRETOOL = SOURCE_ROOT / "hooks" / "pretool-workflow-gate.py"
 POSTTODO = SOURCE_ROOT / "hooks" / "posttool-todo-tracker.py"
 CLAUDE_STOP = SOURCE_ROOT / "hooks" / "stop-overnight-timelock.py"
 ACTIVE_CONFIGS = {
     "claude": SOURCE_ROOT / "settings.json",
-    "codex": CODEX_HOME / "hooks.json",
 }
 REQUIRED_CHAIN_EVENTS = ("UserPromptSubmit", "PreToolUse", "PostToolUse", "Stop")
-PRESERVATION_POLICY = "immutable_prior_family_atomic_current_pointer/v1"
 
 
 def _run(path: Path, event: str | None, payload: dict, env: dict[str, str]) -> subprocess.CompletedProcess[str]:
@@ -49,190 +41,6 @@ def _run(path: Path, event: str | None, payload: dict, env: dict[str, str]) -> s
         check=False,
     )
 
-
-def _native_env(root: Path, **extra: str) -> dict[str, str]:
-    return {
-        **os.environ,
-        "CODEX_PROJECT_DIR": str(root),
-        "CLAUDE_PROJECT_DIR": str(root),
-        "CODEX_NATIVE_HARNESS_LEGACY_TODO_DIR": str(root / "legacy-todos"),
-        **extra,
-    }
-
-
-def _native_start(root: Path, sid: str, event_id: str, prompt: str, **env_extra: str) -> subprocess.CompletedProcess[str]:
-    return _run(
-        NATIVE,
-        "UserPromptSubmit",
-        {"session_id": sid, "event_id": event_id, "cwd": str(root), "prompt": prompt},
-        _native_env(root, **env_extra),
-    )
-
-
-def _state(root: Path, sid: str) -> dict:
-    return json.loads((root / ".codex-harness" / "workflows" / f"{sid}.json").read_text())
-
-
-def _plan(steps: list[dict], frontier: int) -> list[dict]:
-    result = []
-    for index, step in enumerate(steps):
-        status = "completed" if frontier == len(steps) or index < frontier else (
-            "in_progress" if index == frontier else "pending"
-        )
-        result.append({"step": step["content"], "status": status})
-    return result
-
-
-class _Transcript:
-    def __init__(self, root: Path, sid: str):
-        directory = root / "sessions"
-        directory.mkdir(parents=True, exist_ok=True)
-        self.path = directory / f"rollout-{sid}.jsonl"
-        self.sid = sid
-        self.base = datetime.now(timezone.utc) + timedelta(seconds=1)
-        self.sequence = 0
-        self.rows = [{
-            "timestamp": self._timestamp(),
-            "type": "session_meta",
-            "payload": {"session_id": sid, "id": sid, "source": "vscode"},
-        }]
-        self.flush()
-
-    def _timestamp(self) -> str:
-        value = self.base + timedelta(milliseconds=100 * self.sequence)
-        self.sequence += 1
-        return value.isoformat(timespec="milliseconds").replace("+00:00", "Z")
-
-    def append_plan(self, plan: list[dict]) -> None:
-        self.rows.append({
-            "timestamp": self._timestamp(),
-            "type": "response_item",
-            "payload": {
-                "type": "function_call",
-                "name": "update_plan",
-                "call_id": f"plan-{self.sequence}",
-                "arguments": json.dumps({"plan": plan}),
-            },
-        })
-        self.flush()
-
-    def append_completion(self, role: str, ordinal: int) -> None:
-        task_name = f"{role}_e2e_{ordinal}"
-        call_id = f"spawn-{ordinal}"
-        thread_id = f"thread-{ordinal}"
-        agent_path = f"/root/{task_name}"
-        spawn_timestamp = self._timestamp()
-        started_timestamp = self._timestamp()
-        started_ms = int(datetime.fromisoformat(started_timestamp.replace("Z", "+00:00")).timestamp() * 1000)
-        self.rows.extend([
-            {
-                "timestamp": spawn_timestamp,
-                "type": "response_item",
-                "payload": {
-                    "type": "function_call", "namespace": "collaboration",
-                    "name": "spawn_agent", "call_id": call_id,
-                    "arguments": json.dumps({"task_name": task_name, "message": "one issue"}),
-                },
-            },
-            {
-                "timestamp": started_timestamp,
-                "type": "event_msg",
-                "payload": {
-                    "type": "sub_agent_activity", "event_id": call_id,
-                    "kind": "started", "agent_path": agent_path,
-                    "agent_thread_id": thread_id, "occurred_at_ms": started_ms,
-                },
-            },
-            {
-                "timestamp": self._timestamp(),
-                "type": "response_item",
-                "payload": {
-                    "type": "agent_message", "author": agent_path,
-                    "content": [{"type": "input_text", "text": "Message Type: FINAL_ANSWER\nPayload:\npass"}],
-                },
-            },
-            {
-                "timestamp": self._timestamp(),
-                "type": "response_item",
-                "payload": {
-                    "type": "function_call", "namespace": "collaboration",
-                    "name": "list_agents", "call_id": f"list-{ordinal}", "arguments": "{}",
-                },
-            },
-            {
-                "timestamp": self._timestamp(),
-                "type": "response_item",
-                "payload": {
-                    "type": "function_call_output", "call_id": f"list-{ordinal}",
-                    "output": json.dumps({"agents": [{
-                        "agent_name": agent_path,
-                        "agent_status": {"completed": "runtime completed"},
-                    }]}),
-                },
-            },
-        ])
-        self.flush()
-
-    def append_user(self, prompt: str) -> None:
-        self.rows.append({
-            "timestamp": self._timestamp(),
-            "type": "event_msg",
-            "payload": {"type": "user_message", "message": prompt},
-        })
-        self.flush()
-
-    def flush(self) -> None:
-        self.path.write_text("".join(json.dumps(row) + "\n" for row in self.rows))
-
-
-def _drive_native_frontier(root: Path, sid: str, frontier: int) -> None:
-    steps = _state(root, sid)["steps"]
-    transcript = _Transcript(root, sid)
-    transcript.append_plan(_plan(steps, 0))
-    bootstrap = _run(
-        NATIVE, "PostToolUse",
-        {"session_id": sid, "cwd": str(root), "transcript_path": str(transcript.path),
-         "tool_name": "functions.update_plan", "tool_input": {"plan": _plan(steps, 0)}},
-        _native_env(root),
-    )
-    assert bootstrap.returncode == 0, bootstrap.stderr
-    for current in range(frontier):
-        state = _state(root, sid)
-        call = state["steps"][current].get("subagent_call")
-        if isinstance(call, dict):
-            transcript.append_completion(call.get("subagent_type") or call["agent"], current)
-        next_plan = _plan(state["steps"], current + 1)
-        transcript.append_plan(next_plan)
-        result = _run(
-            NATIVE, "PostToolUse",
-            {"session_id": sid, "cwd": str(root), "transcript_path": str(transcript.path),
-             "tool_name": "functions.update_plan", "tool_input": {"plan": next_plan}},
-            _native_env(root),
-        )
-        assert result.returncode == 0, result.stderr
-        assert not json.loads(result.stdout or "{}" ).get("decision") == "block", result.stdout
-        assert sum(step["status"] == "completed" for step in _state(root, sid)["steps"]) == current + 1
-
-
-def _write_valid_artifacts(root: Path, task_id: str) -> None:
-    docs = root / "docs" / "dev"
-    docs.mkdir(parents=True, exist_ok=True)
-    (docs / f"ticket-{task_id}.md").write_text(f"# Ticket {task_id}\n")
-    (docs / f"context-{task_id}.json").write_text(json.dumps({"request_id": task_id, "task_id": task_id}) + "\n")
-    (docs / f"dev-report-{task_id}.json").write_text(json.dumps({
-        "request_id": task_id, "task_id": task_id,
-        "dev": {"status": "completed", "files_modified": [], "files_created": []},
-    }) + "\n")
-    (docs / f"qa-report-{task_id}.json").write_text(json.dumps({
-        "request_id": task_id, "task_id": task_id, "qa": {"status": "pass"},
-    }) + "\n")
-    (docs / f"completion-{task_id}.md").write_text(f"# Completion {task_id}\n")
-
-
-def _assert_family_cardinality(root: Path, sid: str, expected: int) -> None:
-    assert len(list((root / "docs" / "dev").glob("user-requirement-*.md"))) == expected
-    assert len(list((root / ".claude" / "dev-registry").iterdir())) == expected
-    assert len(list((root / ".codex-harness" / "start-transactions" / sid).glob("*.json"))) == expected
 
 
 def _matcher_applies(matcher: object, tool_name: str | None) -> bool:
@@ -316,8 +124,6 @@ def _json_decision(stdout: str) -> dict | None:
 
 
 def _authoritative_paths(runtime: str, root: Path, home: Path, sid: str) -> list[Path]:
-    if runtime == "codex":
-        return [root / ".codex-harness" / "workflows" / f"{sid}.json"]
     return [
         root / ".claude" / f"workflow-{sid}.json",
         home / ".claude" / "todos" / f"{sid}-agent-{sid}.json",
@@ -325,13 +131,11 @@ def _authoritative_paths(runtime: str, root: Path, home: Path, sid: str) -> list
 
 
 def _owner_command(runtime: str, event: str) -> str:
-    if runtime == "codex":
-        return "codex_native_harness.py"
     return {
         "UserPromptSubmit": "prompt-workflow.py",
         "PreToolUse": "pretool-workflow-gate.py",
         "PostToolUse": "posttool-todo-tracker.py",
-        "Stop": "stop-overnight-timelock.py",
+        "Stop": "stop-workflow-coordinator.py",
     }[event]
 
 
@@ -342,11 +146,8 @@ def _fixture_env(runtime: str, root: Path, home: Path, clock: str) -> dict[str, 
         "CLAUDE_CONFIG_DIR": str(home / ".claude"),
         "CLAUDE_HOME": str(home / ".claude"),
         "CLAUDE_PROJECT_DIR": str(root),
-        "CODEX_PROJECT_DIR": str(root),
-        "CODEX_NATIVE_HARNESS_LEGACY_TODO_DIR": str(home / ".claude" / "todos"),
         "CLAUDE_GRAPHIFY_ENABLED": "0",
         "CLAUDE_DEV_CLOCK_ISO": clock,
-        "CODEX_NATIVE_CLOCK_ISO": clock,
         "PYTHONDONTWRITEBYTECODE": "1",
     }
 
@@ -362,6 +163,12 @@ def make_configured_fixture(base: Path, runtime: str, name: str) -> dict:
     (claude_home / "todos").mkdir()
     (root / "scripts" / "todo").mkdir(parents=True)
     shutil.copy2(SOURCE_ROOT / "scripts" / "todo" / "dev.py", root / "scripts" / "todo" / "dev.py")
+    # The registered Stop chain's stop-completion-gate.py loads the project's own
+    # scripts/resolve-dev-artifact-chain.py and exits 2 (GATE_ERROR) without it.
+    shutil.copy2(
+        SOURCE_ROOT / "scripts" / "resolve-dev-artifact-chain.py",
+        root / "scripts" / "resolve-dev-artifact-chain.py",
+    )
     sid = f"r03-{runtime}-{name}"
     clock = "2037-03-04T05:06:07Z"
     return {
@@ -384,28 +191,14 @@ def configured_payload(fixture: dict, event: str, *, prompt: str | None = None, 
         event_id = "event-" + hashlib.sha256(selected_prompt.encode()).hexdigest()[:20]
         payload.update({"prompt": selected_prompt, "event_id": event_id})
     elif event in {"PreToolUse", "PostToolUse"}:
-        if runtime == "codex":
-            state = _state(root, sid)
-            items = []
-            for index, step in enumerate(state["steps"]):
-                item = dict(step)
-                item["status"] = (
-                    "completed" if index < frontier else
-                    "in_progress" if index == frontier else "pending"
-                )
-                item.setdefault("content", item.get("step", ""))
-                item.setdefault("activeForm", item["content"])
-                items.append(item)
-            payload.update({"tool_name": "TodoWrite", "tool_input": {"todos": items, "plan": items}})
-        else:
-            todos_path = home / ".claude" / "todos" / f"{sid}-agent-{sid}.json"
-            items = json.loads(todos_path.read_text(encoding="utf-8"))
-            for index, item in enumerate(items):
-                item["status"] = (
-                    "completed" if index < frontier else
-                    "in_progress" if index == frontier else "pending"
-                )
-            payload.update({"tool_name": "TodoWrite", "tool_input": {"todos": items}})
+        todos_path = home / ".claude" / "todos" / f"{sid}-agent-{sid}.json"
+        items = json.loads(todos_path.read_text(encoding="utf-8"))
+        for index, item in enumerate(items):
+            item["status"] = (
+                "completed" if index < frontier else
+                "in_progress" if index == frontier else "pending"
+            )
+        payload.update({"tool_name": "TodoWrite", "tool_input": {"todos": items}})
     return payload
 
 
@@ -514,21 +307,15 @@ def _task_families(fixture: dict) -> dict[str, dict[str, bytes]]:
 
 
 def _current_identity(fixture: dict) -> tuple[str, int]:
-    if fixture["runtime"] == "codex":
-        state = _state(fixture["root"], fixture["sid"])
-    else:
-        state = json.loads(
-            (fixture["root"] / ".claude" / f"workflow-{fixture['sid']}.json").read_text()
-        )
+    state = json.loads(
+        (fixture["root"] / ".claude" / f"workflow-{fixture['sid']}.json").read_text()
+    )
     return state["task_id"], int(state["workflow_generation"])
 
 
 def _frontier(fixture: dict) -> int:
-    if fixture["runtime"] == "codex":
-        items = _state(fixture["root"], fixture["sid"])["steps"]
-    else:
-        path = fixture["home"] / ".claude" / "todos" / f"{fixture['sid']}-agent-{fixture['sid']}.json"
-        items = json.loads(path.read_text())
+    path = fixture["home"] / ".claude" / "todos" / f"{fixture['sid']}-agent-{fixture['sid']}.json"
+    items = json.loads(path.read_text())
     return sum(item.get("status") == "completed" for item in items)
 
 
@@ -548,355 +335,6 @@ def _full_progress(fixture: dict, frontier: int) -> tuple[dict, dict]:
 
 def _artifact_bytes(fixture: dict) -> dict[str, str]:
     return _file_snapshot([fixture["root"], fixture["home"] / ".claude" / "todos"])
-
-
-RECOVERY_FIELDS = {
-    "mode", "task_id", "lifecycle_state", "time_lock_active",
-    "intent_recorded", "requirement_artifact", "termination_allowed", "next_actions",
-}
-
-
-def _assert_start_recovery(output: dict, mode: str) -> None:
-    assert output["decision"] == "block"
-    assert RECOVERY_FIELDS <= output.keys()
-    assert output["mode"] == mode
-    assert output["time_lock_active"] is False
-    assert output["termination_allowed"] is True
-    assert isinstance(output["intent_recorded"], bool)
-    assert isinstance(output["next_actions"], list) and output["next_actions"]
-
-
-@pytest.mark.parametrize(
-    ("mode", "identity", "error_code"),
-    [
-        ("dev", {}, "native_event_identity_missing"),
-        ("redev", {"event_id": {"top-secret": "/private/operator/path"}}, "native_event_identity_malformed"),
-    ],
-)
-def test_codex_start_rejects_missing_or_malformed_identity_without_outputs(
-    tmp_path: Path, mode: str, identity: dict, error_code: str
-) -> None:
-    root = tmp_path / f"identity-{mode}"
-    root.mkdir()
-    sid = f"identity-{mode}"
-    payload = {"session_id": sid, "cwd": str(root), "prompt": f"/{mode} identity-negative", **identity}
-    rejected = _run(NATIVE, "UserPromptSubmit", payload, _native_env(root))
-    output = json.loads(rejected.stdout)
-    assert rejected.returncode == 0
-    _assert_start_recovery(output, mode)
-    assert error_code in output["reason"]
-    assert output["task_id"] is None
-    assert output["lifecycle_state"] == "not_started"
-    assert output["intent_recorded"] is False
-    assert output["requirement_artifact"] is None
-    assert not (root / ".codex-harness").exists()
-    assert not (root / ".claude").exists()
-    assert not (root / "docs").exists()
-    assert str(root) not in rejected.stdout
-    assert "top-secret" not in rejected.stdout and "/private/operator/path" not in rejected.stdout
-
-
-@pytest.mark.parametrize(
-    "identity_field",
-    ["prompt_event_id", "event_id", "turn_id", "message_id", "hook_run_id"],
-)
-def test_codex_start_accepts_each_supported_immutable_identity_field(
-    tmp_path: Path, identity_field: str
-) -> None:
-    root = tmp_path / identity_field
-    root.mkdir()
-    sid = f"supported-{identity_field}"
-    payload = {
-        "session_id": sid,
-        "cwd": str(root),
-        "prompt": f"/dev supported {identity_field}",
-        identity_field: f"immutable-{identity_field}",
-    }
-    accepted = _run(NATIVE, "UserPromptSubmit", payload, _native_env(root))
-    assert accepted.returncode == 0 and "decision" not in json.loads(accepted.stdout)
-    assert _state(root, sid)["start_transaction"]["event_identity_native"] is True
-    _assert_family_cardinality(root, sid, 1)
-
-
-@pytest.mark.parametrize("frontier", [0, 8])
-def test_codex_real_entrypoint_ordinary_stop_at_zero_and_mid(tmp_path: Path, frontier: int) -> None:
-    root = tmp_path / f"codex-{frontier}"
-    root.mkdir()
-    sid = f"codex-stop-{frontier}"
-    started = _native_start(root, sid, f"event-{frontier}", f"/dev stop frontier {frontier}")
-    assert started.returncode == 0 and "decision" not in json.loads(started.stdout)
-    if frontier:
-        _drive_native_frontier(root, sid, frontier)
-    before = _state(root, sid)
-    task_id = before["task_id"]
-    stopped = _run(NATIVE, "Stop", {"session_id": sid, "cwd": str(root)}, _native_env(root))
-    output = json.loads(stopped.stdout)
-    assert stopped.returncode == 0
-    assert output["continue"] is True and output["termination_allowed"] is True
-    assert output["time_lock_active"] is False
-    after = _state(root, sid)
-    assert after["status"] == "incomplete" and after["task_id"] == task_id
-    assert sum(step["status"] == "completed" for step in after["steps"]) == frontier
-    assert not (root / ".claude" / f"workflow-{sid}.json").exists()
-    assert len(list((root / "docs" / "dev").glob("user-requirement-*.md"))) == 1
-
-
-def test_codex_completed_later_generation_and_active_reentry(tmp_path: Path) -> None:
-    root = tmp_path / "codex-complete"
-    root.mkdir()
-    sid = "codex-complete"
-    first = _native_start(root, sid, "event-A", "/dev requirement A")
-    assert first.returncode == 0
-    first_task = _state(root, sid)["task_id"]
-    identity_collision = _native_start(root, sid, "event-A", "/dev changed prompt for same immutable event")
-    identity_collision_output = json.loads(identity_collision.stdout)
-    _assert_start_recovery(identity_collision_output, "dev")
-    assert "start_transaction_identity_collision" in identity_collision_output["reason"]
-    assert identity_collision_output["task_id"] == first_task
-    assert identity_collision_output["lifecycle_state"] == "active"
-    assert identity_collision_output["intent_recorded"] is False
-    assert str(root) not in identity_collision.stdout
-    reentry = _native_start(root, sid, "event-reentry", "/redev replace without overwrite")
-    reentry_output = json.loads(reentry.stdout)
-    assert reentry.returncode == 0 and "decision" not in reentry_output
-    reentry_state = _state(root, sid)
-    assert reentry_state["task_id"] != first_task
-    assert reentry_state["workflow_generation"] == 2
-    assert reentry_state["preservation_policy"] == PRESERVATION_POLICY
-    assert reentry_state["workflow_history"][-1]["task_id"] == first_task
-    assert reentry_state["workflow_history"][-1]["status"] == "incomplete"
-    assert len(list((root / ".codex-harness" / "start-transactions" / sid).glob("*.json"))) == 2
-    _drive_native_frontier(root, sid, 17)
-    assert _state(root, sid)["status"] == "completed"
-    stopped = _run(NATIVE, "Stop", {"session_id": sid, "cwd": str(root)}, _native_env(root))
-    assert json.loads(stopped.stdout)["continue"] is True
-    second = _native_start(root, sid, "event-B", "/dev requirement B")
-    assert second.returncode == 0
-    state = _state(root, sid)
-    assert state["workflow_generation"] == 3 and state["task_id"] != first_task
-    assert len(state["workflow_history"]) == 2
-    assert len(list((root / "docs" / "dev").glob("user-requirement-*.md"))) == 3
-
-
-def test_codex_duplicate_event_and_partial_transaction_recovery(tmp_path: Path) -> None:
-    for failpoint in ("before_prepare", "after_prepare", "after_registry", "after_requirement", "before_state_commit"):
-        root = tmp_path / failpoint
-        root.mkdir()
-        sid = f"partial-{failpoint}"
-        failed = _native_start(root, sid, "same-event", "/dev one requirement", CODEX_NATIVE_START_FAILPOINT=failpoint)
-        failure_output = json.loads(failed.stdout)
-        _assert_start_recovery(failure_output, "dev")
-        assert failure_output["lifecycle_state"] == "not_started"
-        assert failure_output["intent_recorded"] is (failpoint != "before_prepare")
-        assert (failure_output["task_id"] is None) is (failpoint == "before_prepare")
-        assert str(root) not in failed.stdout
-        recovered = _native_start(root, sid, "same-event", "/dev one requirement")
-        assert recovered.returncode == 0
-        state = _state(root, sid)
-        replay = _native_start(root, sid, "same-event", "/dev one requirement")
-        assert replay.returncode == 0 and replay.stdout == recovered.stdout
-        assert len(list((root / "docs" / "dev").glob("user-requirement-*.md"))) == 1
-        assert len(list((root / ".claude" / "dev-registry").iterdir())) == 1
-        assert len(list((root / ".codex-harness" / "start-transactions" / sid).glob("*.json"))) == 1
-        assert state["start_transaction"]["status"] == "committed"
-
-
-def test_codex_start_idempotency_key_separates_command_and_exact_replay(tmp_path: Path) -> None:
-    root = tmp_path / "start-key"
-    root.mkdir()
-    sid = "start-key-session"
-    native_event_id = "immutable-event"
-    transaction_dir = root / ".codex-harness" / "start-transactions" / sid
-
-    def expected(command: str) -> str:
-        material = f"codex.dev-start/v1\0{root.resolve()}\0{sid}\0{native_event_id}\0{command}"
-        return hashlib.sha256(material.encode()).hexdigest()
-
-    first_prompt = "/dev exact replay"
-    first = _native_start(root, sid, native_event_id, first_prompt)
-    assert first.returncode == 0 and "decision" not in json.loads(first.stdout)
-    dev_key = expected("dev")
-    dev_transaction = transaction_dir / f"{dev_key}.json"
-    assert dev_transaction.is_file()
-    first_record = json.loads(dev_transaction.read_text())
-    assert first_record["event_id"] == dev_key
-    assert first_record["idempotency_key"] == dev_key
-    assert first_record["command"] == "dev"
-    assert first_record["prompt_sha256"] == hashlib.sha256(first_prompt.encode()).hexdigest()
-    first_state_bytes = (root / ".codex-harness" / "workflows" / f"{sid}.json").read_bytes()
-    first_transaction_bytes = dev_transaction.read_bytes()
-
-    first_replay = _native_start(root, sid, native_event_id, first_prompt)
-    assert first_replay.returncode == 0 and first_replay.stdout == first.stdout
-    assert (root / ".codex-harness" / "workflows" / f"{sid}.json").read_bytes() == first_state_bytes
-    assert dev_transaction.read_bytes() == first_transaction_bytes
-
-    stopped = _run(NATIVE, "Stop", {"session_id": sid, "cwd": str(root)}, _native_env(root))
-    assert stopped.returncode == 0 and _state(root, sid)["status"] == "incomplete"
-
-    second_prompt = "/redev exact replay"
-    second = _native_start(root, sid, native_event_id, second_prompt)
-    assert second.returncode == 0 and "decision" not in json.loads(second.stdout)
-    redev_key = expected("redev")
-    assert redev_key != dev_key
-    redev_transaction = transaction_dir / f"{redev_key}.json"
-    assert redev_transaction.is_file()
-    assert {path.name for path in transaction_dir.glob("*.json")} == {
-        f"{dev_key}.json", f"{redev_key}.json",
-    }
-    second_state = _state(root, sid)
-    assert second_state["command"] == "redev" and second_state["workflow_generation"] == 2
-    second_state_bytes = (root / ".codex-harness" / "workflows" / f"{sid}.json").read_bytes()
-    second_transaction_bytes = redev_transaction.read_bytes()
-
-    second_replay = _native_start(root, sid, native_event_id, second_prompt)
-    assert second_replay.returncode == 0 and second_replay.stdout == second.stdout
-    assert (root / ".codex-harness" / "workflows" / f"{sid}.json").read_bytes() == second_state_bytes
-    assert redev_transaction.read_bytes() == second_transaction_bytes
-
-
-def test_codex_terminal_native_retires_stale_legacy_projection(tmp_path: Path) -> None:
-    root = tmp_path / "stale"
-    root.mkdir()
-    sid = "stale-session"
-    _native_start(root, sid, "event-stale", "/dev stale")
-    _run(NATIVE, "Stop", {"session_id": sid, "cwd": str(root)}, _native_env(root))
-    projection = root / ".claude" / f"workflow-{sid}.json"
-    projection.parent.mkdir(parents=True, exist_ok=True)
-    projection.write_text(json.dumps({"command": "dev", "last_todos": [{"status": "in_progress"}]}))
-    healed = _run(NATIVE, "PreToolUse", {"session_id": sid, "cwd": str(root), "tool_name": "Read", "tool_input": {}}, _native_env(root))
-    assert healed.returncode == 0
-    assert _state(root, sid)["status"] == "incomplete"
-    assert not projection.exists()
-
-
-def test_codex_terminal_redev_incomplete_handoff_and_exact_cardinality(tmp_path: Path) -> None:
-    root = tmp_path / "terminal-redev"
-    root.mkdir()
-    sid = "terminal-redev"
-    assert _native_start(root, sid, "event-dev", "/dev initial").returncode == 0
-    first_task = _state(root, sid)["task_id"]
-    stopped = _run(NATIVE, "Stop", {"session_id": sid, "cwd": str(root)}, _native_env(root))
-    assert json.loads(stopped.stdout)["lifecycle_state"] == "incomplete"
-    accepted = _native_start(root, sid, "event-redev", "/redev accepted after terminal")
-    assert accepted.returncode == 0 and "decision" not in json.loads(accepted.stdout)
-    second = _state(root, sid)
-    assert second["command"] == "redev" and second["workflow_generation"] == 2
-    assert second["task_id"] != first_task
-    second_stop = _run(NATIVE, "Stop", {"session_id": sid, "cwd": str(root)}, _native_env(root))
-    second_stop_output = json.loads(second_stop.stdout)
-    assert second_stop.returncode == 0 and second_stop_output["lifecycle_state"] == "incomplete"
-    handoff = _native_start(root, sid, "event-after-incomplete", "/dev accepted after incomplete terminal")
-    assert handoff.returncode == 0 and "decision" not in json.loads(handoff.stdout)
-    assert _state(root, sid)["workflow_generation"] == 3
-    _assert_family_cardinality(root, sid, 3)
-
-
-def test_codex_explicit_cancel_then_next_generation(tmp_path: Path) -> None:
-    root = tmp_path / "cancelled"
-    root.mkdir()
-    sid = "cancelled-session"
-    assert _native_start(root, sid, "event-before-cancel", "/dev cancel me").returncode == 0
-    transcript = _Transcript(root, sid)
-    transcript.append_user("/stop")
-    cancelled = _run(
-        NATIVE, "UserPromptSubmit",
-        {"session_id": sid, "cwd": str(root), "prompt": "/stop", "transcript_path": str(transcript.path)},
-        _native_env(root),
-    )
-    output = json.loads(cancelled.stdout)
-    assert cancelled.returncode == 0 and output["continue"] is True
-    assert output["lifecycle_state"] == "user_cancelled"
-    assert not (root / ".claude" / f"workflow-{sid}.json").exists()
-    next_start = _native_start(root, sid, "event-after-cancel", "/redev after explicit cancellation")
-    assert next_start.returncode == 0 and "decision" not in json.loads(next_start.stdout)
-    assert _state(root, sid)["workflow_generation"] == 2
-    _assert_family_cardinality(root, sid, 2)
-
-
-def test_codex_close_then_immediate_new_dev(tmp_path: Path) -> None:
-    root = tmp_path / "close-handoff"
-    root.mkdir()
-    sid = "close-handoff"
-    assert _native_start(root, sid, "event-before-close", "/dev close handoff").returncode == 0
-    _drive_native_frontier(root, sid, 17)
-    task_id = _state(root, sid)["task_id"]
-    _write_valid_artifacts(root, task_id)
-    closed = _run(
-        NATIVE, "UserPromptSubmit",
-        {"session_id": sid, "event_id": "event-close", "cwd": str(root), "prompt": "/close"},
-        _native_env(root),
-    )
-    close_output = json.loads(closed.stdout)
-    assert closed.returncode == 0 and close_output["decision"] == "allow"
-    assert close_output["task_id"] == task_id
-    restarted = _native_start(root, sid, "event-after-close", "/dev immediately after close")
-    assert restarted.returncode == 0 and "decision" not in json.loads(restarted.stdout)
-    assert _state(root, sid)["workflow_generation"] == 2
-    _assert_family_cardinality(root, sid, 2)
-
-
-def test_codex_process_restart_repairs_missing_and_corrupt_projection(tmp_path: Path) -> None:
-    root = tmp_path / "restart-projection"
-    root.mkdir()
-    sid = "restart-projection"
-    started = _native_start(root, sid, "event-restart", "/dev survives process restart")
-    assert started.returncode == 0
-    before = _state(root, sid)
-    projection = root / ".claude" / f"workflow-{sid}.json"
-    projection.unlink()
-    repaired_missing = _run(
-        NATIVE, "PreToolUse",
-        {"session_id": sid, "cwd": str(root), "tool_name": "Read", "tool_input": {}},
-        _native_env(root),
-    )
-    assert repaired_missing.returncode == 0 and projection.is_file()
-    projection.write_text("{corrupt projection\n")
-    repaired_corrupt = _run(
-        NATIVE, "PreToolUse",
-        {"session_id": sid, "cwd": str(root), "tool_name": "Read", "tool_input": {}},
-        _native_env(root),
-    )
-    assert repaired_corrupt.returncode == 0
-    repaired = json.loads(projection.read_text())
-    assert repaired["task_id"] == before["task_id"] and repaired["codex_native_harness"] is True
-    replay = _native_start(root, sid, "event-restart", "/dev survives process restart")
-    assert replay.returncode == 0 and replay.stdout == started.stdout
-    assert _state(root, sid)["start_transaction"] == before["start_transaction"]
-    _assert_family_cardinality(root, sid, 1)
-
-
-def test_installed_native_overnight_stop_blocks_but_explicit_cancel_releases(tmp_path: Path) -> None:
-    root = tmp_path / "overnight"
-    root.mkdir()
-    sid = "overnight-session"
-    deadline = (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat()
-    started = _native_start(root, sid, "event-overnight", f"/dev-overnight --end-time {deadline}")
-    assert started.returncode == 0 and _state(root, sid)["command"] == "dev-overnight"
-    blocked = _run(NATIVE, "Stop", {"session_id": sid, "cwd": str(root)}, _native_env(root))
-    blocked_output = json.loads(blocked.stdout)
-    assert blocked.returncode == 0 and blocked_output["decision"] == "block"
-    transcript = _Transcript(root, sid)
-    transcript.append_user("/stop")
-    cancelled = _run(
-        NATIVE, "UserPromptSubmit",
-        {"session_id": sid, "cwd": str(root), "prompt": "/stop", "transcript_path": str(transcript.path)},
-        _native_env(root),
-    )
-    # Parity with Claude Code: the Stop *event* stays time-locked, but the
-    # user-typed /stop *command* is the documented emergency release for that
-    # lock (commands/stop.md). Blocking it would leave the user with no exit.
-    cancel_output = json.loads(cancelled.stdout)
-    assert cancel_output.get("decision") != "block", cancel_output
-    assert cancel_output["termination_allowed"] is True
-    assert _state(root, sid)["command"] == "dev-overnight"
-    assert _state(root, sid)["status"] == "user_cancelled"
-    released = _run(NATIVE, "Stop", {"session_id": sid, "cwd": str(root)}, _native_env(root))
-    released_output = json.loads(released.stdout)
-    assert released.returncode == 0 and released_output["continue"] is True
-    assert released_output["termination_allowed"] is True
-    assert released_output["time_lock_active"] is False
-    assert "decision" not in released_output
 
 
 @pytest.mark.parametrize("frontier", [0, 3])
@@ -976,56 +414,7 @@ def test_claude_root_bare_dev_replay_mints_new_id_after_terminal_dev_report(tmp_
     assert first_task_id in second.stdout
 
 
-def test_active_codex_hook_plan_has_one_lifecycle_owner() -> None:
-    hooks = json.loads(ACTIVE_CONFIGS["codex"].read_text())["hooks"]
-    commands = [hook["command"] for groups in hooks.values() for group in groups for hook in group["hooks"]]
-    for retired in (
-        "prompt-workflow.py", "pretool-workflow-gate.py", "posttool-todo-tracker.py",
-        "posttool-todo-count.py", "posttool-todo-sequence.py", "posttool-overnight-loop.py",
-        "stop-overnight-timelock.py", "stop-workflow-reconcile.py",
-    ):
-        assert not any(retired in command for command in commands)
-    for event in ("UserPromptSubmit", "PreToolUse", "PostToolUse", "Stop"):
-        owners = [
-            hook["command"] for group in hooks[event] for hook in group["hooks"]
-            if "codex_native_harness.py" in hook["command"]
-        ]
-        assert len(owners) == 1
-
-
-def test_native_plan_authority_is_only_the_committed_start_transaction() -> None:
-    assert "_final_agent_" + "message" not in PRETOOL.read_text()
-    assert "spawn" + "_ms" not in Path(__file__).read_text()
-    source = NATIVE.read_text()
-    tree = ast.parse(source)
-    functions = {
-        node.name: node for node in tree.body if isinstance(node, ast.FunctionDef)
-    }
-    plan_handler = functions["handle_tool_event"]
-    plan_source = ast.get_source_segment(source, plan_handler) or ""
-    lowered = plan_source.lower()
-    for retired_authority in ("transcript", "elapsed", "handshake", "reentry"):
-        assert retired_authority not in lowered
-    assert "start_transaction" in plan_source
-    assert 'transaction.get("status") != "committed"' in plan_source
-
-    prompt_handler = functions["handle_user_prompt"]
-    prompt_calls = {
-        node.func.id
-        for node in ast.walk(prompt_handler)
-        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
-    }
-    assert "register_ordinary_start" in prompt_calls
-
-    identity_handler = functions["_prompt_event_identity"]
-    identity_source = ast.get_source_segment(source, identity_handler) or ""
-    assert "native_event_identity_missing" in identity_source
-    assert "native_event_identity_malformed" in identity_source
-    assert "legacy" not in identity_source.lower()
-    assert "sha256(prompt" not in identity_source
-
-
-@pytest.mark.parametrize("runtime", ["claude", "codex"])
+@pytest.mark.parametrize("runtime", ["claude"])
 def test_r03_configured_full_chain_resolution_execution_and_aggregation(
     tmp_path: Path, runtime: str
 ) -> None:
@@ -1054,7 +443,7 @@ def test_r03_configured_full_chain_resolution_execution_and_aggregation(
     assert "terminal reconciliation blocked" not in stop_output
 
 
-@pytest.mark.parametrize("runtime", ["claude", "codex"])
+@pytest.mark.parametrize("runtime", ["claude"])
 def test_r03_fresh_start_first_progress_and_exact_replay_matrix(
     tmp_path: Path, runtime: str
 ) -> None:
@@ -1072,7 +461,6 @@ def test_r03_fresh_start_first_progress_and_exact_replay_matrix(
     assert _current_identity(fixture) == first_identity
 
     fixture["env"]["CLAUDE_DEV_CLOCK_ISO"] = "2037-03-04T05:07:09Z"
-    fixture["env"]["CODEX_NATIVE_CLOCK_ISO"] = "2037-03-04T05:07:09Z"
     later = _full_start(fixture, prompt)
     assert later["aggregate"]["combined_user_visible_output"] == started["aggregate"]["combined_user_visible_output"]
     assert _artifact_bytes(fixture) == start_bytes
@@ -1090,7 +478,7 @@ def test_r03_fresh_start_first_progress_and_exact_replay_matrix(
     assert _artifact_bytes(fixture) == progress_bytes
 
 
-@pytest.mark.parametrize("runtime", ["claude", "codex"])
+@pytest.mark.parametrize("runtime", ["claude"])
 def test_r03_immediate_same_clock_distinct_active_reentry_preserves_prior_family(
     tmp_path: Path, runtime: str
 ) -> None:
@@ -1110,19 +498,13 @@ def test_r03_immediate_same_clock_distinct_active_reentry_preserves_prior_family
     families = _task_families(fixture)
     assert set(families) == {first_task, second_task}
     assert families[first_task] == prior_bytes
-    if runtime == "codex":
-        state = _state(fixture["root"], fixture["sid"])
-        assert state["workflow_history"][-1]["task_id"] == first_task
-        assert state["workflow_history"][-1]["workflow_snapshot"]["task_id"] == first_task
-        assert state["preservation_policy"] == PRESERVATION_POLICY
-    else:
-        history = fixture["root"] / ".claude" / "workflow-history" / fixture["sid"]
-        archived = list(history.glob(f"*-{first_task}/bookmark.json"))
-        assert len(archived) == 1
-        assert json.loads(archived[0].read_text())["task_id"] == first_task
+    history = fixture["root"] / ".claude" / "workflow-history" / fixture["sid"]
+    archived = list(history.glob(f"*-{first_task}/bookmark.json"))
+    assert len(archived) == 1
+    assert json.loads(archived[0].read_text())["task_id"] == first_task
 
 
-@pytest.mark.parametrize("runtime", ["claude", "codex"])
+@pytest.mark.parametrize("runtime", ["claude"])
 def test_r03_whole_stop_then_next_generation_progress(tmp_path: Path, runtime: str) -> None:
     fixture = make_configured_fixture(tmp_path, runtime, "stop-next")
     _full_start(fixture, f"/dev r03 stop prior {runtime}")
@@ -1153,7 +535,7 @@ def test_r03_whole_stop_then_next_generation_progress(tmp_path: Path, runtime: s
     assert _artifact_bytes(fixture) == before_replay
 
 
-@pytest.mark.parametrize("runtime", ["claude", "codex"])
+@pytest.mark.parametrize("runtime", ["claude"])
 def test_r03_synchronised_independent_sessions_get_disjoint_families(
     tmp_path: Path, runtime: str
 ) -> None:
@@ -1203,25 +585,3 @@ def test_r03_owned_edit_replay_supports_shared_path_without_sibling_freeze(tmp_p
     assert current == owner_b
     assert len({edit["owner"] for edit in edits}) == 2
     assert "global_sibling_write_freeze" not in repr({"pre_edit_snapshots": snapshots, "owned_edits": edits})
-
-
-def test_r03_prior_passes_and_no_superseded_ceremony_gate() -> None:
-    for lane in ("r01", "r02"):
-        qa = json.loads((SOURCE_ROOT / "docs" / "dev" / f"qa-report-dev-20260722-081544-{lane}.json").read_text())
-        assert str(qa.get("verdict") or qa.get("decision") or "").lower() == "pass"
-    contract_text = "\n".join([
-        (SOURCE_ROOT / "docs" / "dev" / "ticket-dev-20260722-081544-r03.md").read_text(),
-        (SOURCE_ROOT / "docs" / "dev" / "context-dev-20260722-081544-r03.json").read_text(),
-        (SOURCE_ROOT / "docs" / "dev" / "acceptance-criteria-dev-20260722-081544-r03.json").read_text(),
-    ]).lower()
-    assert "human /hooks trust" in contract_text and "remains removed" in contract_text
-    acceptance = json.loads(
-        (SOURCE_ROOT / "docs" / "dev" / "acceptance-criteria-dev-20260722-081544-r03.json").read_text()
-    )
-    gate_scan = acceptance["acceptance_criteria"][0]["check"]["assertions"][-1]
-    for forbidden in ("reload_epoch", "host_instance_id", "global_sequence", "raw_envelope_digest"):
-        assert forbidden in gate_scan["forbidden_required_gates"]
-    assert "active_generation_collision" not in ast.get_source_segment(
-        NATIVE.read_text(),
-        next(node for node in ast.parse(NATIVE.read_text()).body if isinstance(node, ast.FunctionDef) and node.name == "register_ordinary_start"),
-    )

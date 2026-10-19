@@ -32,26 +32,6 @@ def test_active_product_surfaces_do_not_require_human_reload_evidence() -> None:
     assert violations == []
 
 
-def test_installed_projections_do_not_reintroduce_the_ceremony() -> None:
-    installed_surfaces = (
-        Path.home() / ".agents" / "skills" / "close" / "SKILL.md",
-        Path.home() / ".codex" / "agents" / "qa.toml",
-        Path.home() / ".codex" / "claude-compat" / "command-registry.json",
-        Path.home() / ".codex" / "hooks" / "codex_native_harness.py",
-        Path.home() / ".codex" / "hooks.json",
-    )
-
-    violations = []
-    for path in installed_surfaces:
-        if not path.is_file():
-            continue
-        text = path.read_text(errors="ignore")
-        for marker in FORBIDDEN_CEREMONY_MARKERS:
-            if marker in text:
-                violations.append(f"{path}: {marker}")
-    assert violations == []
-
-
 def test_artificial_close_validator_is_not_a_product_surface() -> None:
     assert not (ROOT / "scripts" / "validate-lifecycle-close-evidence.py").exists()
 

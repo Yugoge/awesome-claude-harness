@@ -12,7 +12,10 @@ import json
 import os
 import subprocess
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+
+import pytest
 
 
 HOOK = Path(__file__).parent.parent / "pretool-cp-checkin.py"
@@ -414,3 +417,94 @@ def test_graphify_in_allowed_agents():
     assert ('"graphify"' in spec_check_text or "'graphify'" in spec_check_text), (
         "ALLOWED_AGENTS in scripts/spec-check.py must include 'graphify' (spec-20260527-061433 AC5)"
     )
+
+
+# -------------------- check-in over a missing, corrupt or empty primary ---------------------
+# spec-check.py's documented contract (its docstring: missing files default-initialize,
+# corrupt files are overwritten fail-forward; agents/spec.md: check-in creates the cp-state
+# file). A first check-in must never be refused for want of a primary slot.
+
+@pytest.mark.parametrize("mode", ["missing", "corrupt", "empty"])
+def test_checkin_binds_primary_when_missing_corrupt_or_empty(tmp_path, mode):
+    spec_id, agent = "spec-lb", "dev"
+    primary = tmp_path / ".claude" / "specs" / spec_id / f"cp-state-{agent}.json"
+    primary.parent.mkdir(parents=True)
+    if mode == "corrupt":
+        primary.write_text("{", encoding="utf-8")
+    elif mode == "empty":
+        primary.write_text(json.dumps({"checkpoints": []}), encoding="utf-8")
+
+    rc = _run_spec_check(tmp_path, ["check-in", "--spec-id", spec_id,
+                                    "--agent", agent, "--agent-id", "owner"])
+
+    _assert_no_traceback(rc, f"check-in over {mode} primary")
+    assert (f"checked in: spec={spec_id} agent={agent} slot=primary agent-id=owner"
+            in rc.stdout)
+    assert f"cp-state-path: {primary}" in rc.stdout
+    if mode == "corrupt":
+        assert "corrupt cp-state" in rc.stderr and "reinitializing" in rc.stderr
+    payload = _read_cp(primary)
+    assert payload["agent_id"] == "owner"
+    assert payload["is_running"] is True
+    assert payload["checkpoints"] == []
+    if mode != "empty":
+        assert payload["spec_id"] == spec_id
+        assert payload["agent_type"] == agent
+        assert payload["generation"] == 1
+        assert payload["terminal_artifact"] == {
+            "path": None, "exists": False, "validated_at": None}
+    assert not list(primary.parent.glob(f"cp-state-{agent}-[0-9]*.json"))
+
+
+def test_first_checkin_creates_primary_cp_state(tmp_path):
+    spec_id = "continuation-gitclean-20260809"
+    primary = tmp_path / ".claude" / "specs" / spec_id / "cp-state-dev.json"
+
+    rc = _run_spec_check(tmp_path, ["check-in", "--spec-id", spec_id, "--agent", "dev",
+                                    "--agent-id", "spec-provider-1"])
+
+    _assert_no_traceback(rc, "first check-in")
+    payload = _read_cp(primary)
+    assert payload["spec_id"] == spec_id
+    assert payload["agent_type"] == "dev"
+    assert payload["instance_id"] is None
+    assert payload["generation"] == 1
+    assert payload["agent_id"] == "spec-provider-1"
+    assert payload["is_running"] is True
+    assert payload["checkpoints"] == []
+
+
+# -------------------- 48 concurrent check-ins allocate distinct numbered slots ---------------------
+
+@pytest.mark.parametrize("run", range(2))
+def test_48_way_checkin_allocates_distinct_numbered_slots(tmp_path, run):
+    spec_id, agent = "spec-lb", "dev"
+    root = tmp_path / f"run-{run}"
+    primary = _make_cp_state(root, spec_id, agent, _baseline_payload(
+        spec_id, agent, generation=4, agent_id="primary-owner", is_running=True,
+        checkpoints=[_cp("cp-01", state="done"),
+                     _cp("cp-02", state="waived-with-reason", waived_reason="old")]))
+    before = primary.read_bytes()
+    owners = [f"cli-owner-{index}" for index in range(48)]
+
+    with ThreadPoolExecutor(max_workers=16) as pool:
+        results = list(pool.map(
+            lambda owner: _run_spec_check(root, [
+                "check-in", "--spec-id", spec_id, "--agent", agent,
+                "--agent-id", owner]),
+            owners))
+
+    assert all(result.returncode == 0 for result in results), [
+        result.stderr for result in results if result.returncode
+    ]
+    numbered = sorted(primary.parent.glob(f"cp-state-{agent}-[0-9]*.json"))
+    assert len(numbered) == 48
+    payloads = [_read_cp(path) for path in numbered]
+    assert {payload["agent_id"] for payload in payloads} == set(owners)
+    assert sorted(payload["instance_id"] for payload in payloads) == list(range(2, 50))
+    for path, payload in zip(numbered, payloads):
+        assert path.name == f"cp-state-{agent}-{payload['instance_id']}.json"
+        assert payload["is_running"] is True
+        assert payload["generation"] == 1
+        assert payload["checkpoints"] == []
+    assert primary.read_bytes() == before
