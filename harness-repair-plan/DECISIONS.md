@@ -112,5 +112,20 @@ PLAN-v1.md still gives the file:line scope for each phase. Where it says "honest
 - Phase numbering follows PLAN-v2.md: P0-P11 (P5 = the unified Stop gate, P6 = producer input and
   identity, P7 = portable product, P8 = private tree and CI, P9 = prose pass, P10 = clean tree,
   P11 = remote refs and history cleanup). Wave 1 = P0 + P7. The later waves are in PLAN-v2.md.
-- Still open: the policy choices listed as OPEN in PLAN-v2.md's decision ledger, asked when their
-  phase starts.
+- The policy choices listed as OPEN in PLAN-v2.md's decision ledger are no longer asked: they are decided by
+  experiment under D18 when their phase reaches them.
+
+## Owner delegation (2026-10-18 / 2026-10-19)
+
+- **D18 No more owner arbitration; decide by experiment.** The owner (2026-10-19): "我不会管以上你如何决定，我只想告诉你你必须
+  研究后再做决定，你的研究是有实验的研究而不是空口无凭，只要是有实验的无论实验结果我都接受 ... 不要让我裁决任何事情了". Every remaining
+  choice, product or technical, is made by the reviewer or the phase session from an experiment it ran (a sandbox run,
+  a test, a measurement), recorded with its result in the PR's technical-choices table. No phase asks him anything.
+  The single exception is the irreversible step of P11 (force-push of rewritten history and deletion of the public
+  refs), which keeps D16's go-ahead at execution time because it cannot be undone.
+- **D19 No owner machine step.** The owner (2026-10-18): "我不做，没空，我不能停止claude". No phase gives him a step on his
+  machine or needs his sessions stopped; merged code lands on a live home by itself (P7b). Merged code reaches his
+  homes only when he types /pull (answered 2026-10-19; no automatic pull is added).
+- Answers recorded 2026-10-19: P7b also handles the other repositories (legacy auto-push hooks, stale fswatch).
+  TC-47 (P8): BA may write docs/dev/observations-ledger.md (agents/ba.md makes BA its producer); BA may use WebSearch
+  and WebFetch; browser roles keep playwright only (the owner prefers it).
