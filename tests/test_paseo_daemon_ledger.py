@@ -30,6 +30,11 @@ SCHEMA = REPO / "schemas" / "paseo-dossier.v1.json"
 COMMAND_DOC = REPO / "commands" / "paseo-daemon.md"
 VENDOR_VECTORS_PATH = REPO / "tests" / "fixtures" / "paseo_cron_vendor_vectors.json"
 
+# paseo is an optional module (D13): a case that runs node skips when node is
+# not on PATH, keyed on that dependency alone.
+needs_node = pytest.mark.skipif(shutil.which("node") is None,
+                                reason="paseo optional module: node not on PATH")
+
 # The single registry of premise literals this cycle DELETED from the engine.
 # Nodes that must prove those premises are gone read them from here instead of
 # spelling them, so an asserter of an absence never becomes a carrier of it.
@@ -1245,6 +1250,7 @@ def test_wake_arm_persists_record_and_journals(tmp_path):
     assert "wake-arm" in ops
 
 
+@needs_node
 def test_wake_arm_tz_rule_source_default_now_resolution_verifies(tmp_path):
     """Regression: the ledger and vendor offset tables both stamp their FIRST
     run with the literal `now` instant, in the documented canonical form of
@@ -1260,6 +1266,7 @@ def test_wake_arm_tz_rule_source_default_now_resolution_verifies(tmp_path):
     assert json.loads(r.stdout)["tz_rule_source_verified"] is True
 
 
+@needs_node
 def test_wake_arm_tz_rule_source_explicit_subsecond_now_verifies(tmp_path):
     """Same false-disagreement precision mismatch as the default-now
     regression above, but hit via an explicit --now that itself carries a
@@ -1445,6 +1452,7 @@ def test_wake_observe_parks_at_first_unjudged_fire_not_the_newest(tmp_path):
         ("2026-09-15T07:45:00Z", "2026-09-15T08:14:00Z", 30)]
 
 
+@needs_node
 def test_wake_observe_delivered_fire_not_retroactively_missed_by_next_manual_tick(tmp_path):
     """AC (a): a fire window that occurs ON TIME (proven by --delivered) must
     never be retroactively reclassified as 'missed' by a later observation
@@ -1516,6 +1524,7 @@ def test_wake_observe_delivered_fire_not_retroactively_missed_by_next_manual_tic
                for w in windows), windows
 
 
+@needs_node
 def test_wake_arming_survives_multiple_observation_ticks_without_a_miss(tmp_path):
     """AC (b): arming persistence across observation ticks. The 'arming only
     survives one observation' symptom reported alongside the reclassification
@@ -1572,6 +1581,7 @@ def test_wake_arming_survives_multiple_observation_ticks_without_a_miss(tmp_path
     assert wake_record(root)["arming_token"] == token
 
 
+@needs_node
 def test_wake_observe_on_time_delivery_advances_without_missed_event(tmp_path):
     root = ledger(tmp_path)
     assert wake_arm(root, cron="*/45 * * * *", now="2026-08-28T12:50:00Z").returncode == 0
@@ -2671,6 +2681,7 @@ def test_late_latches_three_consecutive_days_cannot_read_healthy(tmp_path):
 
 # ---------------- AC-04a / AC-04b: the on-time path does not regress ----------------
 
+@needs_node
 def test_on_time_single_elapsed_fire_delivery_within_slack_is_on_time(tmp_path):
     root = arm_daily_utc(tmp_path)
     out = ok(root, *delivered_claim(root),
@@ -2808,17 +2819,30 @@ def test_horizon_527040_no_400_year_claim_remains_in_source():
 def test_vendor_golden_vectors_assert_unconditionally_without_node():
     # The vectors are COMMITTED, so absence of node or of the deployed module
     # cannot silently skip the differential. Proven by construction: this node
-    # touches neither, and the file's own source carries no skip marker.
+    # touches neither, and neither golden-vector differential node carries a
+    # skip marker or a skip call. (The file's other nodes may skip on an absent
+    # paseo dependency, D13; these two never do.)
     assert VENDOR_VECTORS_PATH.is_file()
     provenance = VENDOR_VECTORS["provenance"]
     assert provenance["server_package"] == "@getpaseo/server 0.2.2"
     assert provenance["protocol_package"] == "@getpaseo/protocol 0.2.2"
     assert len(provenance["cron_js_sha256"]) == 64
-    # needles assembled at runtime and matched against the token stream, so
-    # this audit's own source cannot satisfy or defeat it
-    tokens = code_tokens(Path(__file__))
-    assert ("skip" + "if") not in tokens
-    assert ("pytest" + " . " + "skip") not in tokens
+    unconditional = {
+        "test_vendor_golden_vectors_assert_unconditionally_without_node",
+        "test_vendor_golden_vectors_zero_divergence_across_transition_zones",
+    }
+    found = set()
+    for fn in ast.walk(ast.parse(Path(__file__).read_text())):
+        if isinstance(fn, ast.FunctionDef) and fn.name in unconditional:
+            found.add(fn.name)
+            assert fn.decorator_list == [], fn.name
+            # needle assembled at runtime, so this audit's own source cannot
+            # satisfy or defeat it
+            assert not any(isinstance(sub, ast.Attribute)
+                           and sub.attr.startswith("sk" + "ip")
+                           for sub in ast.walk(fn)), fn.name
+            assert not getattr(globals()[fn.name], "pytestmark", []), fn.name
+    assert found == unconditional
     module = load_engine()
     vector = vendor_vector("positive", expression="12,57 * * * *")
     assert engine_sequence(module, vector["expression"], vector["timezone"],
@@ -2840,6 +2864,7 @@ def test_vendor_golden_vectors_zero_divergence_across_transition_zones():
             "five_field_and"} <= covered
 
 
+@needs_node
 def test_vendor_golden_vectors_include_negative_parser_timezone_and_horizon_cases(tmp_path):
     module = load_engine()
     kinds = {vector["kind"] for vector in VENDOR_VECTORS["negative"]}
@@ -3006,6 +3031,7 @@ def test_accept_set_parity_non_ascii_digit_refused(tmp_path):
                                tz=vector["timezone"])
 
 
+@needs_node
 def test_accept_set_parity_timezone_factory_refused(tmp_path):
     vector = vendor_vector("negative", kind="timezone", timezone="Factory")
     assert vector["vendor_error"] == "Invalid cron time zone: Factory"
@@ -3016,6 +3042,7 @@ def test_accept_set_parity_timezone_factory_refused(tmp_path):
     assert "deployed scheduler refuses timezone" in r.stderr
 
 
+@needs_node
 def test_accept_set_parity_timezone_localtime_refused(tmp_path):
     # Its OWN fresh root, so no single test can discharge the pair while the
     # other vector still persists a record.
@@ -3026,6 +3053,7 @@ def test_accept_set_parity_timezone_localtime_refused(tmp_path):
     assert "deployed scheduler refuses timezone" in r.stderr
 
 
+@needs_node
 def test_accept_set_parity_no_armed_record_for_vendor_rejected_input(tmp_path):
     # Refusal precedes persistence for EVERY measured vector, so there is
     # never a window in which a falsely-armed record reads healthy.
@@ -3041,6 +3069,12 @@ def test_accept_set_parity_no_armed_record_for_vendor_rejected_input(tmp_path):
 NODE = shutil.which("node") or "node"
 VENDOR_CRON_JS = ("/opt/paseo/node_modules/@getpaseo/server/dist/server"
                   "/server/schedule/cron.js")
+VENDOR_CRON_PARSER_JS = ("/opt/paseo/node_modules/@getpaseo/protocol/dist"
+                         "/schedule/cron-expression.js")
+# A case that imports the deployed paseo vendor tree skips when it is absent.
+needs_vendor = pytest.mark.skipif(
+    not (Path(VENDOR_CRON_JS).is_file() and Path(VENDOR_CRON_PARSER_JS).is_file()),
+    reason="paseo optional module: vendor tree absent")
 # Candidate zones for the runtime-computed agreement partition. The PARTITION
 # is measured, never assumed: nothing here declares which side a zone lands on.
 PARTITION_CANDIDATE_ZONES = [
@@ -3085,6 +3119,8 @@ def runtime_agreement_partition(module, zones, start, days):
     return agreeing, diverging
 
 
+@needs_node
+@needs_vendor
 def test_vendor_live_differential_agreeing_zone_set_computed_at_runtime():
     module = load_engine()
     agreeing, diverging = runtime_agreement_partition(
@@ -3105,6 +3141,7 @@ def test_vendor_live_differential_agreeing_zone_set_computed_at_runtime():
     assert divergences == []
 
 
+@needs_node
 def test_vendor_live_differential_complement_is_measured_and_nonempty():
     # The complement of the SAME runtime-computed partition. Asserting it is
     # non-empty is what keeps the agreeing-set differential from passing
@@ -3129,6 +3166,7 @@ AGREEING_ARM_NOW = "2026-09-04T18:00:00Z"
 WINDOW_SCOPED_ZONE = "America/Edmonton"
 
 
+@needs_node
 def test_tz_rule_source_divergent_zone_in_window_refused_no_record_written(tmp_path):
     root = ledger(tmp_path)
     r = wake_arm(root, cron="0 1 * * *", tz=WINDOW_SCOPED_ZONE,
@@ -3140,6 +3178,7 @@ def test_tz_rule_source_divergent_zone_in_window_refused_no_record_written(tmp_p
     assert not (root / "wake.json").exists()
 
 
+@needs_node
 def test_tz_rule_source_agreeing_zone_in_window_arms_with_marker_and_window_bounds(tmp_path):
     root = ledger(tmp_path)
     assert wake_arm(root, cron="0 1 * * *", tz=WINDOW_SCOPED_ZONE,
@@ -3152,6 +3191,7 @@ def test_tz_rule_source_agreeing_zone_in_window_arms_with_marker_and_window_boun
     assert ok(root, "wake-status", now=AGREEING_ARM_NOW)["trust_state"] == "trusted"
 
 
+@needs_node
 def test_tz_rule_source_same_zone_arms_or_refuses_by_window_scope(tmp_path):
     # ONE zone, ONE start instant, two windows: the guarantee is window-scoped,
     # so neither outcome can be read as a property of the zone.
@@ -3189,6 +3229,7 @@ def test_tz_rule_source_unverifiable_vendor_arms_untrusted_never_delivering(tmp_
     assert observed["needs_rearm"] is True
 
 
+@needs_node
 def test_tz_rule_source_divergence_set_is_measured_not_assumed():
     module = load_engine()
     agreeing, diverging = runtime_agreement_partition(
@@ -3215,6 +3256,7 @@ def arm_trusted_daily(tmp_path, *, now="2026-03-01T00:00:00Z", days=30, **kw):
     return root
 
 
+@needs_node
 def test_tz_trust_window_expired_reads_untrusted_not_delivering(tmp_path):
     root = arm_trusted_daily(tmp_path)
     inside = ok(root, "wake-status", now="2026-03-30T00:00:00Z")
@@ -3228,6 +3270,7 @@ def test_tz_trust_window_expired_reads_untrusted_not_delivering(tmp_path):
               )["needs_rearm"] is True
 
 
+@needs_node
 def test_tz_trust_window_absent_reads_untrusted_not_unbounded(tmp_path):
     root = arm_trusted_daily(tmp_path)
     record = wake_record(root)
@@ -3261,6 +3304,7 @@ def arm_trusted_edmonton(tmp_path):
     return root
 
 
+@needs_node
 def test_tz_trust_fingerprint_change_reads_untrusted(tmp_path):
     root = arm_trusted_edmonton(tmp_path)
     inside = "2026-09-20T18:00:00Z"
@@ -3286,10 +3330,15 @@ def test_tz_trust_fingerprint_tracks_served_rules_not_version_string(tmp_path):
              "s=u.spec_from_file_location('eng', %r);"
              "m=u.module_from_spec(s);s.loader.exec_module(m);"
              "import datetime as d;"
+             # the tz database version string: the tzdata wheel's when it is
+             # installed, else the system database's own version line
+             "import importlib.metadata as md;"
+             "tzversion=lambda: md.version('tzdata') if any("
+             "True for _ in md.distributions(name='tzdata')) else open("
+             "'/usr/share/zoneinfo/tzdata.zi').readline().strip();"
              "b=d.datetime.fromisoformat('2026-09-04T18:00:00+00:00');"
              "print(json.dumps({'table': m.zone_offset_table(%r, b, "
-             "b+d.timedelta(days=30)), 'version': __import__('importlib.metadata',"
-             " fromlist=['x']).version('tzdata')}))"
+             "b+d.timedelta(days=30)), 'version': tzversion()}))"
              % (str(REPO), str(LEDGER), WINDOW_SCOPED_ZONE))
     plain = json.loads(subprocess.run([sys.executable, "-c", probe],
                                       capture_output=True, text=True,
@@ -3310,6 +3359,7 @@ def test_tz_trust_fingerprint_tracks_served_rules_not_version_string(tmp_path):
 
 # ---------------- AC-19: absence terminates the predicate ----------------
 
+@needs_node
 def test_tz_trust_absence_legacy_record_loads_and_reads_untrusted(tmp_path):
     root = arm_trusted_daily(tmp_path)
     full = wake_record(root)
@@ -3383,6 +3433,7 @@ def test_tz_trust_absence_defaulting_accessor_not_used_for_evidence_fields():
 
 # ---------------- AC-20: untrusted is not launderable ----------------
 
+@needs_node
 def test_tz_trust_launder_rearm_without_verification_leaves_untrusted(tmp_path):
     root = arm_trusted_daily(tmp_path)
     set_config(root, wake_vendor_node_path=str(tmp_path / "no-such-runtime"))
@@ -3394,6 +3445,7 @@ def test_tz_trust_launder_rearm_without_verification_leaves_untrusted(tmp_path):
     assert status["needs_rearm"] is True
 
 
+@needs_node
 def test_tz_trust_launder_discharged_only_by_verification_success(tmp_path):
     root = arm_trusted_daily(tmp_path)
     set_config(root, wake_vendor_node_path=str(tmp_path / "no-such-runtime"))
@@ -3408,6 +3460,7 @@ def test_tz_trust_launder_discharged_only_by_verification_success(tmp_path):
               )["trust_state"] == "trusted"
 
 
+@needs_node
 def test_tz_trust_launder_read_paths_never_mutate_trust_fields(tmp_path):
     root = arm_trusted_daily(tmp_path)
     before_bytes = (root / "wake.json").read_bytes()
@@ -3431,6 +3484,7 @@ def test_tz_trust_launder_read_paths_never_mutate_trust_fields(tmp_path):
 
 # ---------------- AC-21: the vendor binary is a negative-only signal --------
 
+@needs_node
 def test_tz_trust_vendor_digest_mismatch_forces_untrusted(tmp_path):
     root = arm_trusted_daily(tmp_path)
     other = tmp_path / "different-content"
@@ -3444,6 +3498,7 @@ def test_tz_trust_vendor_digest_mismatch_forces_untrusted(tmp_path):
     assert status["needs_rearm"] is True
 
 
+@needs_node
 def test_tz_trust_vendor_digest_match_confers_no_trust_alone(tmp_path):
     root = arm_trusted_daily(tmp_path)
     # A NON-EXECUTABLE stand-in whose digest matches what the record carries:
@@ -3466,6 +3521,7 @@ def test_tz_trust_vendor_digest_match_confers_no_trust_alone(tmp_path):
     assert expired["trust_reason"] == "window_expired"
 
 
+@needs_node
 def test_tz_trust_vendor_digest_absent_binary_forces_untrusted(tmp_path):
     root = arm_trusted_daily(tmp_path)
     record = wake_record(root)
@@ -3522,6 +3578,7 @@ def untrusted_by_policy_marker(root):
     put_wake_record(root, record)
 
 
+@needs_node
 def test_tz_trust_blindness_total_is_monotone_across_rearm(tmp_path):
     root = arm_trusted_daily(tmp_path)
     untrusted_by_policy_marker(root)
@@ -3538,6 +3595,7 @@ def test_tz_trust_blindness_total_is_monotone_across_rearm(tmp_path):
     assert wake_record(root)["missed_total"] == 0
 
 
+@needs_node
 def test_tz_trust_blindness_total_accumulated_by_observe_not_status(tmp_path):
     root = arm_trusted_daily(tmp_path)
     untrusted_by_policy_marker(root)
@@ -3637,6 +3695,7 @@ def cell_root(source, tmp_path, name, inject):
     return target
 
 
+@needs_node
 def test_tz_trust_consumer_surface_wake_status_untrusted_sets_needs_rearm(tmp_path):
     source = deconfounded_root(tmp_path)
     control = ok(source, "wake-status", now=IN_WINDOW_READ)
@@ -3651,6 +3710,7 @@ def test_tz_trust_consumer_surface_wake_status_untrusted_sets_needs_rearm(tmp_pa
         assert wake_record(root)["needs_rearm"] is False, name
 
 
+@needs_node
 def test_tz_trust_consumer_surface_wake_observe_untrusted_sets_needs_rearm(tmp_path):
     source = deconfounded_root(tmp_path)
     control_root = tmp_path / "observe-control"
@@ -3665,6 +3725,7 @@ def test_tz_trust_consumer_surface_wake_observe_untrusted_sets_needs_rearm(tmp_p
         assert out["trust_reason"] == name, name
 
 
+@needs_node
 def test_tz_trust_consumer_surface_new_key_alone_is_insufficient(tmp_path):
     # Every assertion here is on a field the ticket's health table names, on
     # the PARSED output. A build that carries the reason only in the trust
@@ -3680,6 +3741,7 @@ def test_tz_trust_consumer_surface_new_key_alone_is_insufficient(tmp_path):
         assert ok(root, "wake-observe", now=instant)["needs_rearm"] is True, name
 
 
+@needs_node
 def test_tz_trust_consumer_surface_untrusted_does_not_inflate_missed_total(tmp_path):
     source = deconfounded_root(tmp_path)
     for name, (inject, instant) in UNTRUST_CELLS.items():
@@ -3694,6 +3756,7 @@ def test_tz_trust_consumer_surface_untrusted_does_not_inflate_missed_total(tmp_p
         assert status["stale"] is False, name
 
 
+@needs_node
 def test_tz_trust_delivering_in_window_wake_status_reads_delivering_row(tmp_path):
     # Read BEFORE any further wake-observe: an in-window observation rewrites
     # last_verdict to "pending" and would fail this row for a reason that has
@@ -3708,6 +3771,7 @@ def test_tz_trust_delivering_in_window_wake_status_reads_delivering_row(tmp_path
     assert status["trust_state"] == "trusted"
 
 
+@needs_node
 def test_tz_trust_delivering_in_window_wake_observe_needs_rearm_false(tmp_path):
     root = deconfounded_root(tmp_path)
     out = ok(root, "wake-observe", now=IN_WINDOW_READ)
@@ -3716,6 +3780,7 @@ def test_tz_trust_delivering_in_window_wake_observe_needs_rearm_false(tmp_path):
     assert out["trust_state"] == "trusted"
 
 
+@needs_node
 def test_tz_trust_delivering_ab_pair_clock_is_the_only_variable(tmp_path):
     root = deconfounded_root(tmp_path)
     stored = (root / "wake.json").read_bytes()
@@ -3809,9 +3874,7 @@ def test_wake_doctrine_block_rejects_published_inversion_battery():
 
 
 def vendor_validate_cron(expression):
-    parser = ("/opt/paseo/node_modules/@getpaseo/protocol/dist/schedule"
-              "/cron-expression.js")
-    script = (f"import({parser!r}).then(m=>process.stdout.write("
+    script = (f"import({VENDOR_CRON_PARSER_JS!r}).then(m=>process.stdout.write("
               "JSON.stringify(m.validateCronExpression(process.argv[1]))));")
     proc = subprocess.run([NODE, "-e", script, "--", expression],
                           capture_output=True, text=True, timeout=120)
@@ -3993,7 +4056,20 @@ DOCTRINE_DRIVERS = {
 }
 
 
-@pytest.mark.parametrize("directive", sorted(CANONICAL_DIRECTIVES))
+# drivers that run node (the vendor oracle or the engine's rule-source check)
+DOCTRINE_NODE_DIRECTIVES = {
+    "accepted_divergences", "rule_source_divergent",
+    "rule_source_fingerprint_changed", "untrusted_discharged_by",
+    "untrusted_reads", "verification_window_expired",
+}
+DOCTRINE_VENDOR_DIRECTIVES = {"accepted_divergences"}
+
+
+@pytest.mark.parametrize("directive", [
+    pytest.param(directive, marks=(
+        ([needs_node] if directive in DOCTRINE_NODE_DIRECTIVES else [])
+        + ([needs_vendor] if directive in DOCTRINE_VENDOR_DIRECTIVES else [])))
+    for directive in sorted(CANONICAL_DIRECTIVES)])
 def test_wake_doctrine_directive_driven(directive, tmp_path):
     """The document is the ORACLE, not a word list: each node reads its own
     directive's value out of the shipped block and drives the ledger against
@@ -4114,6 +4190,7 @@ def test_wake_arm_token_delivery_disk_read_persists(tmp_path):
     assert wake_record(root)["token_delivery"] == "disk-read"
 
 
+@needs_node
 def test_wake_observe_disk_read_certifies_without_arming_token(tmp_path):
     root = ledger(tmp_path)
     run(root, "wake-arm", "--channel-kind", "paseo_heartbeat", "--channel-id", "hbtick-x",

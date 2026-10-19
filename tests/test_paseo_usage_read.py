@@ -12,23 +12,38 @@ scripts/install/render-settings, not from the tracked settings.json.
 """
 
 import json
+import os
 import re
+import shutil
 import subprocess
 import sys
 from pathlib import Path
+
+import pytest
 
 REPO = Path(__file__).resolve().parent.parent
 ADAPTER = REPO / "scripts" / "paseo-usage-read.mjs"
 LEDGER = REPO / "scripts" / "paseo-daemon-ledger.py"
 FIXTURE = REPO / "tests" / "fixtures" / "paseo-usage-envelope-20260828.json"
 COMMAND = REPO / "commands" / "paseo-daemon.md"
-ACCOUNTS = ["orchestrade", "yugetang", "yugoge"]
+ACCOUNTS = ["acct-a", "acct-b", "acct-c"]
 T0 = "2026-08-28T19:07:02Z"
 
 
 def run_adapter(*args):
     return subprocess.run(["node", str(ADAPTER), *args],
                           capture_output=True, text=True, cwd=REPO, timeout=30)
+
+
+# paseo is an optional module (D13): the adapter runs on node, and the live run
+# reads the paseo config the adapter itself resolves (PASEO_CONFIG_DIR or
+# $HOME/.paseo); each case skips when the dependency it uses is absent.
+needs_node = pytest.mark.skipif(shutil.which("node") is None,
+                                reason="paseo optional module: node not on PATH")
+needs_paseo_config = pytest.mark.skipif(
+    not (Path(os.environ.get("PASEO_CONFIG_DIR") or Path.home() / ".paseo")
+         / "config.json").is_file(),
+    reason="paseo optional module: no paseo config under $HOME")
 
 
 def run_ledger(root, *args, stdin=None, now=T0):
@@ -59,6 +74,8 @@ def claude_account_of(row):
 
 # ---------------- (1) live adapter run ----------------
 
+@needs_node
+@needs_paseo_config
 def test_live_adapter_read_only_run_exits_zero_with_per_account_rows():
     r = run_adapter()
     assert r.returncode == 0, f"live adapter run failed: {r.stderr}"
@@ -80,6 +97,7 @@ def test_live_adapter_read_only_run_exits_zero_with_per_account_rows():
 
 # ---------------- (2) captured-envelope fixture: end-to-end chain ----------------
 
+@needs_node
 def test_captured_fixture_round_trips_adapter_ingest_state_decision(tmp_path):
     # hop 1: adapter parses the captured envelope (offline, deterministic)
     r = run_adapter("--from-envelope", str(FIXTURE))
@@ -92,10 +110,10 @@ def test_captured_fixture_round_trips_adapter_ingest_state_decision(tmp_path):
     root = init_root(tmp_path)
     ri = run_ledger(root, "usage-ingest", stdin=r.stdout)
     assert ri.returncode == 0, ri.stderr
-    assert sorted(json.loads(ri.stdout)["ingested"]) == ["orchestrade", "yugoge"]
+    assert sorted(json.loads(ri.stdout)["ingested"]) == ["acct-a", "acct-c"]
     # hop 3: persisted per-account state preserves identity + reading fields
     accounts = json.loads((root / "accounts.json").read_text())["accounts"]
-    orch = accounts["orchestrade"]
+    orch = accounts["acct-a"]
     assert orch["usage"]["providerId"] == "claude"
     assert orch["usage"]["status"] == "available"
     weekly = next(w for w in orch["usage"]["windows"] if w["id"] == "weekly")
@@ -103,12 +121,12 @@ def test_captured_fixture_round_trips_adapter_ingest_state_decision(tmp_path):
     assert weekly["resetsAt"] == "2026-09-03T18:00:00Z"
     assert orch["weekly_reset_at"] == "2026-09-03T18:00:00Z"
     assert orch["tier"] == "plentiful"
-    yugoge = accounts["yugoge"]
-    assert yugoge["usage"]["providerId"] == "claude-yugoge"
-    assert yugoge["weekly_reset_at"] == "2026-09-02T14:00:00Z"
-    assert accounts["yugetang"]["tier"] == "unknown"  # live blind-window specimen
+    acct = accounts["acct-c"]
+    assert acct["usage"]["providerId"] == "claude-acct-c"
+    assert acct["weekly_reset_at"] == "2026-09-02T14:00:00Z"
+    assert accounts["acct-b"]["tier"] == "unknown"  # live blind-window specimen
     # hop 4: the scheduling decision CONSUMES the persisted state
-    rd = run_ledger(root, "scheduling-decision", "--account", "orchestrade",
+    rd = run_ledger(root, "scheduling-decision", "--account", "acct-a",
                     "--task-class", "quality")
     assert rd.returncode == 0, rd.stderr
     decision = json.loads(rd.stdout)
@@ -122,14 +140,14 @@ def test_unavailable_row_and_missing_row_map_to_unknown_no_switch(tmp_path):
     root = init_root(tmp_path)
     providers = [
         # status=unavailable row
-        {"providerId": "claude-yugetang", "displayName": "Claude · yugetang",
+        {"providerId": "claude-acct-b", "displayName": "Claude · acct-b",
          "status": "unavailable", "windows": []},
-        # orchestrade + yugoge rows entirely MISSING from the reading
+        # acct-a + acct-c rows entirely MISSING from the reading
     ]
     ri = run_ledger(root, "usage-ingest", stdin=json.dumps(providers))
     assert ri.returncode == 0, ri.stderr
     out = json.loads(ri.stdout)
-    # unavailable row (yugetang) AND missing rows (orchestrade, yugoge) are
+    # unavailable row (acct-b) AND missing rows (acct-a, acct-c) are
     # ALL the fetcher blind window
     assert sorted(out["blind_window"]) == ACCOUNTS and out["ingested"] == []
     accounts = json.loads((root / "accounts.json").read_text())["accounts"]
