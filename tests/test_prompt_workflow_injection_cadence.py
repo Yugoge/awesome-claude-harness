@@ -339,15 +339,18 @@ class TestAC1RecurringCostIsBounded(unittest.TestCase):
             self.assertIn(SPEC_HEADER, outputs[0])
             self.assertIn(spec_body_probe(), outputs[0])
 
+            # Sizes are taken at the measured root's length (measured_len), so
+            # the bounds do not move with the length of TMPDIR.
+            sizes = [measured_len(o, fixture) for o in outputs]
             for index, out in enumerate(outputs[1:], start=2):
                 with self.subTest(prompt=index):
                     self.assertNotIn(SPEC_HEADER, out)
-                    self.assertLessEqual(len(out), LIGHT_CEILING_CHARS)
+                    self.assertLessEqual(sizes[index - 1], LIGHT_CEILING_CHARS)
                     # AC-1's lower bound at its mandated value. Absence-of-heavy
                     # is not evidence of presence-of-light: an implementation
                     # that delivered once then emitted nothing would satisfy
                     # every upper bound.
-                    self.assertGreaterEqual(len(out), LIGHT_FLOOR_CHARS)
+                    self.assertGreaterEqual(sizes[index - 1], LIGHT_FLOOR_CHARS)
                     # ...and a size floor alone would still pass with the
                     # ~1,000-char step list emptied, so assert that component
                     # is populated in its own right.
@@ -362,8 +365,8 @@ class TestAC1RecurringCostIsBounded(unittest.TestCase):
             # constant, not merely "smaller".
             self.assertEqual(1, len(set(outputs[1:])))
 
-            cumulative = sum(len(o) for o in outputs)
-            baseline = len(outputs[0]) * 5
+            cumulative = sum(sizes)
+            baseline = sizes[0] * 5
             # AC-1's cumulative bounds, in the relational form the criterion
             # now carries. Its original absolute constants were derived from a
             # document size that has since moved, and the named residual owner
@@ -371,8 +374,8 @@ class TestAC1RecurringCostIsBounded(unittest.TestCase):
             # MINIMUM would have failed this lane precisely for succeeding at
             # making the block smaller. The criterion was amended rather than
             # substituted at this assertion site; see its _amended_ note.
-            self.assertLess(cumulative, len(outputs[0]) + 5 * LIGHT_CEILING_CHARS)
-            self.assertGreaterEqual(cumulative, len(outputs[0]))
+            self.assertLess(cumulative, sizes[0] + 5 * LIGHT_CEILING_CHARS)
+            self.assertGreaterEqual(cumulative, sizes[0])
             self.assertLess(cumulative, baseline * 0.30)
 
     def test_production_shaped_state_is_bounded_by_its_own_measured_ceiling(self):

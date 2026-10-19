@@ -29,9 +29,14 @@ import uuid
 from contextlib import contextmanager
 from pathlib import Path
 
+import pytest
+
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 HOOK = os.path.join(REPO_ROOT, "hooks", "pretool-obligation-gate.py")
-ADVISORY_LOG = Path(os.path.expanduser("~/.claude/logs/obligation-gate-advisory.jsonl"))
+def _advisory_log():
+    """The hook's advisory log, resolved at call time like the hook resolves it:
+    HOME can change per test, so a path bound at import names a stale home."""
+    return Path(os.path.expanduser("~/.claude/logs/obligation-gate-advisory.jsonl"))
 
 # Mirrors lib.subagent.SUBAGENT_ENV_KEYS: scrub these from the subprocess env
 # so a test run that itself happens inside a subagent context cannot leak
@@ -47,10 +52,26 @@ SUBAGENT_ENV_KEYS = (
 BLOCK_BANNER = "OBLIGATION GATE BLOCK"
 
 
+#: The project the hook resolves .claude/dev-registry/ under (its CLAUDE_PROJECT_DIR).
+#: A per-module temp directory, set by _isolated_project: the dev-registry
+#: fixtures must never be created inside the checkout, which may be read-only and
+#: whose leftover .claude/dev-registry/ leaks into later tests' live census.
+PROJECT_DIR = None
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _isolated_project(tmp_path_factory):
+    global PROJECT_DIR
+    PROJECT_DIR = tmp_path_factory.mktemp("obligation-gate-project")
+    yield
+    PROJECT_DIR = None
+
+
 def _clean_env(switch=None):
     env = dict(os.environ)
     for key in SUBAGENT_ENV_KEYS:
         env.pop(key, None)
+    env["CLAUDE_PROJECT_DIR"] = str(PROJECT_DIR)
     if switch is None:
         env.pop("CLAUDE_OBLIGATION_GATE", None)
     else:
@@ -108,7 +129,7 @@ def _malformed_block():
 
 @contextmanager
 def _dev_registry_dir(sid):
-    path = Path(REPO_ROOT) / ".claude" / "dev-registry" / sid
+    path = Path(PROJECT_DIR) / ".claude" / "dev-registry" / sid
     path.mkdir(parents=True, exist_ok=True)
     try:
         yield path
@@ -120,10 +141,10 @@ def _dev_registry_dir(sid):
 
 
 def _advisory_records_for(sid):
-    if not ADVISORY_LOG.is_file():
+    if not _advisory_log().is_file():
         return []
     records = []
-    for line in ADVISORY_LOG.read_text(encoding="utf-8").splitlines():
+    for line in _advisory_log().read_text(encoding="utf-8").splitlines():
         try:
             record = json.loads(line)
         except ValueError:
@@ -135,14 +156,14 @@ def _advisory_records_for(sid):
 
 def _purge_advisory_records_for(sid):
     """Remove every advisory line this test wrote, keeping unrelated lines."""
-    if not ADVISORY_LOG.is_file():
+    if not _advisory_log().is_file():
         return
     kept = [
         line
-        for line in ADVISORY_LOG.read_text(encoding="utf-8").splitlines()
+        for line in _advisory_log().read_text(encoding="utf-8").splitlines()
         if json.loads(line).get("session_id") != sid
     ]
-    ADVISORY_LOG.write_text(
+    _advisory_log().write_text(
         ("\n".join(kept) + "\n") if kept else "", encoding="utf-8"
     )
 
@@ -270,8 +291,8 @@ def test_AC_L1_09_internal_crash_still_exits_0():
         assert result.returncode == 0
     # The malformed-json run above has no session_id to scope cleanup by, so
     # purge any gate_error record with a null session_id this test produced.
-    if ADVISORY_LOG.is_file():
-        lines = ADVISORY_LOG.read_text(encoding="utf-8").splitlines()
+    if _advisory_log().is_file():
+        lines = _advisory_log().read_text(encoding="utf-8").splitlines()
         kept, found = [], False
         for line in lines:
             record = json.loads(line)
@@ -279,7 +300,7 @@ def test_AC_L1_09_internal_crash_still_exits_0():
                 found = True
                 continue
             kept.append(line)
-        ADVISORY_LOG.write_text(("\n".join(kept) + "\n") if kept else "", encoding="utf-8")
+        _advisory_log().write_text(("\n".join(kept) + "\n") if kept else "", encoding="utf-8")
         assert found, "expected a gate_error advisory record from malformed stdin"
 
 

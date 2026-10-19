@@ -218,6 +218,10 @@ jobs:
         # only from live invocations, so the artifact is evidence of EXECUTION
         # rather than evidence of authorship. This is component-tested proof and
         # is NOT a substitute for R3 (tests against real Claude Code builds).
+        # The suite writes its manifest only where this names it, so an ordinary
+        # pytest run (Run tests above, a read-only checkout) leaves the tree clean.
+        env:
+          ENFORCEMENT_RUN_MANIFEST: hooks/tests/.enforcement-run-manifest.json
         run: python3 -m pytest hooks/tests/test_blackbox_integration.py -q
 
       - name: Upload enforcement-evidence manifest

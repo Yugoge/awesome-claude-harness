@@ -67,13 +67,15 @@ def write_stub_adapter(path: Path, *, stdout_json=None, exit_code=0, sleep_secon
 
 
 def run_hook(env):
+    # The callers hand the hook a scrubbed environment; keep bytecode out of the
+    # checkout's hooks/lib/__pycache__/ (which may be read-only) all the same.
     return subprocess.run(
         [sys.executable, str(HOOK)],
         input="{}",
         capture_output=True,
         text=True,
         timeout=30,
-        env=env,
+        env={**env, "PYTHONDONTWRITEBYTECODE": "1"},
     )
 
 
