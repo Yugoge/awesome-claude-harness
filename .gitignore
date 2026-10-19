@@ -155,10 +155,6 @@ tests/generated/*
 # tracked file is a gitignored deliverable and pretool-gitignore-preflight.py
 # blocks the next Agent dispatch on every cycle that runs test-writer.
 !tests/generated/manifest.json
-!tests/generated/20260704-134650/
-!tests/generated/20260704-134650/**
-!tests/generated/20260704-225139/
-!tests/generated/20260704-225139/**
 tests/generated/*/__pycache__/
 # _work/ is pytest RUNTIME SCRATCH (ac_harness.py WORKBASE; recreated every run,
 # incl. nested throwaway git repos) and must NEVER be committed for any task
