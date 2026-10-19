@@ -114,7 +114,9 @@
         "Write",
         "Edit",
         "MultiEdit",
-        "Skill"
+        "Skill",
+        "WebSearch",
+        "WebFetch"
       ],
       "allowed_write_path_prefixes": [
         "*/.claude/dev-registry/*/blast-radius-map.json",
@@ -129,6 +131,7 @@
         "*/docs/dev/ba-spec-iter-",
         "*/docs/dev/context-",
         "*/docs/dev/context-iter-",
+        "*/docs/dev/observations-ledger.md",
         "*/docs/dev/overnight/",
         "*/docs/dev/retrospective-classification-",
         "*/docs/dev/specs/*/ba-",

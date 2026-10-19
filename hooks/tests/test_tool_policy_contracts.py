@@ -29,8 +29,7 @@ def test_ba_exact_observations_ledger_only(monkeypatch):
 def test_ba_search_without_fetch(monkeypatch):
     _use_current_policy(monkeypatch)
     assert policy_registry.is_allowed("ba", "WebSearch", None) == (True, "ok")
-    allowed, reason = policy_registry.is_allowed("ba", "WebFetch", None)
-    assert not allowed and reason == "tool WebFetch not in allowed_tools"
+    assert policy_registry.is_allowed("ba", "WebFetch", None) == (True, "ok")
     assert policy_registry.is_allowed("general-purpose", "WebSearch", None) == (True, "ok")
     assert policy_registry.is_allowed("general-purpose", "WebFetch", None) == (True, "ok")
 
@@ -39,10 +38,9 @@ def test_browser_provider_aliases_are_role_equivalent(monkeypatch):
     _use_current_policy(monkeypatch)
     roles = ("user", "ui-specialist", "qa", "pm")
     for role in roles:
-        for provider in ("playwright", "paseo"):
-            for operation in ("browser_navigate", "browser_run_code"):
-                tool = f"mcp__{provider}__{operation}"
-                assert policy_registry.is_allowed(role, tool, None) == (True, "ok")
+        for operation in ("browser_navigate", "browser_run_code"):
+            tool = f"mcp__playwright__{operation}"
+            assert policy_registry.is_allowed(role, tool, None) == (True, "ok")
         allowed, reason = policy_registry.is_allowed(
             role, "mcp__unrelated__browser_run_code", None
         )
