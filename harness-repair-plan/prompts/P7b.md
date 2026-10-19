@@ -114,7 +114,7 @@ D# are in DECISIONS.md; S# are the owner clarifications in PLAN-v2.md section 0 
 - **D4 / S1** Stop gates exist only on the eight commands. The landing is never a Stop gate: it exits 0, and a failed
   or skipped landing is a notice, never a block (PLAN-v2.md section 13's row P5 records that an auto_commit failure
   blocks the Stop today; P1's row 23 delivers that row, so it holds until P1 merges).
-- **D3** The landing asks no questions. You ask the owner only the one input below, and only if it is still OPEN.
+- **D3** The landing asks no questions, and you ask the owner nothing (D18): the one owner input below is answered.
 - **D16 / S7** No history rewrite, no remote ref deletion (both P11). D17's dead-code deletions are P8's: this phase
   deletes no code and no test.
 - **D10** Pure technical choices are yours (listed below); each goes into the PR's technical-choices table.
@@ -123,20 +123,20 @@ D# are in DECISIONS.md; S# are the owner clarifications in PLAN-v2.md section 0 
   themselves; add no flag, marker or counter file. A lock file used only by `flock` and an append-only log that no
   code reads are allowed. Nothing is added to /close, /commit, /push, /pull, /merge or the changelog-analyst.
 
-**Owner input (ask once with AskUserQuestion at the start, only if the next line still says OPEN).**
+**Owner input (answered 2026-10-19; nothing to ask).**
 ANSWERED 2026-10-19: "also the other repositories" (the owner chose it). Do not ask again; implement the "also"
 behaviour described below. Also answered 2026-10-19: merged code reaches the owner's homes only when he types /pull
 himself (no automatic pull is added), so the /pull path (hooks/pull.sh, any revision) is the case that matters most.
-Original question, for the record: Other repositories: may the landing also disable the legacy auto-push post-commit hooks (R6) and restart stale
-git-fswatch daemons (R8) in the owner's other repositories, which are the places P0's REQUEST searched (every `.git`
-under the home directory down to depth 5)? Options: "harness home only" (default if unanswered) or "also the other
-repositories". Put each option's consequence in the question: with "harness home only", the legacy hooks in his other
-repositories keep pushing on every commit made where GIT_AUTO_PUSH is not exactly `0` (a plain shell, a daemon, a
-session that started before P0), so D1 is not met there, and nothing else in the plan removes them, because he runs
-no steps; with "also the other repositories", the same reversible rename and restart happen there, reported as
-counts only. With "also", the same signatures, the same reversible method and the same counts-only reporting apply,
-and the LFS hooks of a repository that uses Git LFS are restored with a command that writes only that repository's
-hooks (`git lfs update --force`, never a global config write). Start on everything else while you wait for the answer.
+The original question, for the record: may the landing also disable the legacy auto-push post-commit hooks (R6) and
+restart stale git-fswatch daemons (R8) in the owner's other repositories, which are the places P0's REQUEST searched
+(every `.git` under the home directory down to depth 5)? The options were "harness home only" and "also the other
+repositories", with these consequences: with "harness home only", the legacy hooks in his other repositories keep
+pushing on every commit made where GIT_AUTO_PUSH is not exactly `0` (a plain shell, a daemon, a session that started
+before P0), so D1 is not met there, and nothing else in the plan removes them, because he runs no steps; with "also
+the other repositories", the same reversible rename and restart happen there, reported as counts only. With "also",
+the same signatures, the same reversible method and the same counts-only reporting apply, and the LFS hooks of a
+repository that uses Git LFS are restored with a command that writes only that repository's hooks
+(`git lfs update --force`, never a global config write).
 
 No OPEN decision of PLAN-v2.md's decision ledger applies to P7b.
 
