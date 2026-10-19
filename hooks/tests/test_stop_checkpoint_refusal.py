@@ -194,15 +194,20 @@ def test_ordinary_snapshot_is_still_written_without_a_notice(harness) -> None:
     assert _git(env, home, "show", f"{tip}:notes.txt") == "ordinary note"
 
 
-def test_refusal_free_snapshot_failure_keeps_failing_the_phase(harness) -> None:
+def test_refusal_free_snapshot_failure_is_recorded_and_allowed(harness) -> None:
+    """P1 (TC-11): a failed checkpoint never blocks a Stop; the failure is in the
+    coordinator's result JSON and the cleanup phase still runs."""
     home, env = harness
     (home / "notes.txt").write_text("ordinary note\n")
     log = Path(env["CLAUDE_CONFIG_DIR"]) / "logs" / "checkpoint.log"
     log.mkdir()  # every `2>>checkpoint.log` redirect fails: read-tree fails, rc 1
     stop = _stop(home, env, active=False)
     out = stop["out"]
-    assert stop["rc"] == 2 and out["failed_phase"] == "auto_commit", stop["raw"]
-    assert out["phases"][-1]["phase"] == "auto_commit" and out["phases"][-1]["returncode"] == 1
+    assert stop["rc"] == 0 and "failed_phase" not in out, stop["raw"]
+    assert [p["phase"] for p in out["phases"]] == PHASES
+    auto_commit = out["phases"][PHASES.index("auto_commit")]
+    assert auto_commit["status"] == "fail" and auto_commit["returncode"] == 1
+    assert stop["cleanup_ran"], "the cleanup phase did not run"
     assert "systemMessage" not in out
     assert _git(env, home, "for-each-ref", "refs/checkpoints") == ""
 
@@ -246,7 +251,7 @@ def test_settings_json_the_clean_filter_refuses_never_blocks_a_stop(harness, cas
     assert not count.exists() or count.read_text().strip() == "0"
 
 
-def test_broken_filter_install_keeps_failing_the_phase(harness) -> None:
+def test_broken_filter_install_fails_the_phase_but_not_the_stop(harness) -> None:
     """The clean filter registered but its engine missing is a broken install, not a refusal."""
     home, env = harness
     _register_filter(home, env)
@@ -255,7 +260,9 @@ def test_broken_filter_install_keeps_failing_the_phase(harness) -> None:
     (home / "scripts" / "install" / "render-settings").unlink()
     stop = _stop(home, env, active=False)
     out = stop["out"]
-    assert stop["rc"] == 2 and out["failed_phase"] == "auto_commit", stop["raw"]
-    assert out["phases"][-1]["returncode"] == 1 and "systemMessage" not in out
+    assert stop["rc"] == 0 and "failed_phase" not in out, stop["raw"]  # P1: recorded, allowed
+    auto_commit = out["phases"][PHASES.index("auto_commit")]
+    assert auto_commit["status"] == "fail" and auto_commit["returncode"] == 1
+    assert stop["cleanup_ran"] and "systemMessage" not in out
     assert "add -A failed" in _log(env) and "snapshot refused" not in _log(env)
     assert _git(env, home, "for-each-ref", "refs/checkpoints") == ""

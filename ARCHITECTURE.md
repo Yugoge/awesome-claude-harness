@@ -17,15 +17,15 @@ All counts below were established by enumerating the actual repository, not copi
 |---|---|---|
 | **Subagents** (`agents/*.md`, excluding `INDEX.md`/`README.md`) | **23** | `ls agents/*.md \| grep -vE '/(INDEX\|README)\.md$'` |
 | **Slash commands** (`commands/*.md`, excluding `INDEX.md`/`README.md`) | **20** | `ls commands/*.md \| grep -vE '/(INDEX\|README)\.md$'` |
-| **Hook command entries wired** in `settings.json` | **82** | sum of `hooks[*][*].hooks[]` over all lifecycle events (clean form, paseo module off) |
-| **Distinct hook files referenced** by `settings.json` | **80** (+1 = **81** paths) | unique `hooks/*.py\|*.sh` paths in those entries; the remaining wired executable is the non-hooks `scripts/canary-verify.sh` (SessionStart) → 81 distinct wired executable paths |
+| **Hook command entries wired** in `settings.json` | **81** | sum of `hooks[*][*].hooks[]` over all lifecycle events (clean form, paseo module off) |
+| **Distinct hook files referenced** by `settings.json` | **79** (+1 = **80** paths) | unique `hooks/*.py\|*.sh` paths in those entries; the remaining wired executable is the non-hooks `scripts/canary-verify.sh` (SessionStart) → 80 distinct wired executable paths |
 | **Lifecycle events used** | **9** | keys of `settings.json.hooks` |
 | **Hook files present on disk** (`hooks/*.py` + `*.sh`, excl. `.bak`) | **112** | `find hooks -maxdepth 1 -type f \( -name '*.py' -o -name '*.sh' \)` |
 | **Helper scripts** (`scripts/` top-level *tracked* files, excl. `INDEX/README`) | **119** | `git ls-files scripts/ \| grep -E 'scripts/[^/]+$'` minus `INDEX`/`README` |
 | **Skills** (`skills/*/` directories) | **8** | `ls -d skills/*/` |
 | `permissions.allow` / `deny` / `ask` entries | 152 / 96 / 0 | keys of `settings.json.permissions` (clean form) |
 
-> Note on the hook count: more hook *files* exist on disk (**112**) than are *wired* (**80** `hooks/` files / 81 executables). The unwired files are install scripts, libraries, legacy/`.bak` variants, hooks run as phases of `stop-workflow-coordinator.py`, the paseo module's hook, and intentionally-staged hooks. The number that matters for behavior is **what `settings.json` wires**: 80 distinct `hooks/` files plus `scripts/canary-verify.sh` under `SessionStart`, 82 entries in all because `hooks/posttool-allowlist-consume.py` is wired twice (under `PostToolUse` and `PostToolUseFailure`). The nine lifecycle events are `SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `PostToolUseFailure`, `Notification`, `Stop`, `SessionEnd`, `SubagentStop`. These are the clean form's numbers with the paseo module off; turning the module on adds one `UserPromptSubmit` entry (`hooks/userprompt-usage-snapshot.py`) and a `mcp__paseo__browser_run_code` matcher alternative on the two runcode-watchdog groups.
+> Note on the hook count: more hook *files* exist on disk (**112**) than are *wired* (**79** `hooks/` files / 80 executables). The unwired files are install scripts, libraries, legacy/`.bak` variants, hooks run as phases of `stop-workflow-coordinator.py`, the paseo module's hook, and intentionally-staged hooks. The number that matters for behavior is **what `settings.json` wires**: 79 distinct `hooks/` files plus `scripts/canary-verify.sh` under `SessionStart`, 81 entries in all because `hooks/posttool-allowlist-consume.py` is wired twice (under `PostToolUse` and `PostToolUseFailure`). The nine lifecycle events are `SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `PostToolUseFailure`, `Notification`, `Stop`, `SessionEnd`, `SubagentStop`. These are the clean form's numbers with the paseo module off; turning the module on adds one `UserPromptSubmit` entry (`hooks/userprompt-usage-snapshot.py`) and a `mcp__paseo__browser_run_code` matcher alternative on the two runcode-watchdog groups.
 
 ### Per-event wiring (from `settings.json`)
 
@@ -36,7 +36,7 @@ All counts below were established by enumerating the actual repository, not copi
 | `PreToolUse` | 25 | 35 |
 | `PostToolUse` | 10 | 18 |
 | `Notification` | 1 | 1 |
-| `Stop` | 4 | 4 |
+| `Stop` | 3 | 3 |
 | `SessionEnd` | 1 | 1 |
 | `SubagentStop` | 5 | 8 |
 | `PostToolUseFailure` | 1 | 1 |
@@ -354,12 +354,12 @@ flowchart LR
 ├── ARCHITECTURE.md          # this document
 ├── README.md                # overview / value-prop (hand-maintained; no AUTO block)
 ├── INDEX.md                 # top-level index
-├── settings.json            # clean form, the one settings source: 80 wired hook files / 82 entries across 9 lifecycle events (paseo off); permissions; env
+├── settings.json            # clean form, the one settings source: 79 wired hook files / 81 entries across 9 lifecycle events (paseo off); permissions; env
 ├── settings.machine.example.json  # documented example of the untracked machine overlay settings.machine.json
 ├── .gitattributes           # declares the claude-settings clean/smudge filter for settings.json
 ├── agents/                  # 23 subagent definitions  (+ INDEX.md, README.md)
 ├── commands/                # 20 slash-command workflows (+ INDEX.md, README.md)
-├── hooks/                   # enforcement layer (112 files on disk; 80 wired)
+├── hooks/                   # enforcement layer (112 files on disk; 79 wired)
 │   ├── lib/                 #   allowlist (sentinel grants), checkpoint-core, contract runtime, resolvers
 │   ├── doc_sync/            #   self-updating INDEX/README/CLAUDE regeneration package
 │   └── git-keystone/        #   git-native ref-transaction protection

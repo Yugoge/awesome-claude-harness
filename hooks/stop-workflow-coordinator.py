@@ -5,6 +5,14 @@ LANE-B (20260808-035658) M4/M7: the registered Stop hook, running the four forme
 entries as phases in order. A passing phase may end its stdout with a JSON object whose
 systemMessage (auto-commit's refused-snapshot notice) main() shows as this hook's own.
 
+Only timelock and coverage may block (TC-11). A block relays failed_phase=<name> and the
+last 4 KB of that phase's stderr. An auto_commit or cleanup failure, and a coverage failure
+other than exit 2, is recorded in the result JSON and allowed; the loop continues. A
+timelock instrument failure (exit outside {0, 2}, timeout, launch error, missing file,
+invalid structured decision) blocks with a fixed line only while the human-typed command
+is /dev-overnight (stop_contract.active_command), where /stop releases it; otherwise it is
+recorded and allowed. The finalizer runs only when every phase allowed cleanly.
+
 Resource preflight/finalize is opt-in: LANEB_SESSION_RESOURCE_TRUST_KEY and _TRUST_ROOT
 are set nowhere by default (no SessionStart provisioning). Without both, only the phases
 run and session_resources.resolve_current_resource_session() must NOT be called: it
@@ -28,10 +36,12 @@ HOOKS = Path(__file__).resolve().parent
 if str(HOOKS) not in sys.path:
     sys.path.insert(0, str(HOOKS))
 
-from lib import session_resources
+from lib import session_resources, stop_contract
 
 
 PHASE_ORDER = ("timelock", "coverage", "auto_commit", "cleanup")
+BLOCKING_PHASES = ("timelock", "coverage")
+STDERR_RELAY_BYTES = 4096
 TRUST_ENVIRONMENT_KEYS = (
     session_resources.TRUST_KEY_ENV,
     session_resources.TRUST_ROOT_ENV,
@@ -121,6 +131,12 @@ def _structured_timelock_decision(stdout: str) -> str | None:
     return "invalid"
 
 
+def _phase_script(argv: Sequence[str]) -> str | None:
+    """The script a phase runs: its first argument after the interpreter that
+    names a .py or .sh file (python3 on a missing file exits 2, a block)."""
+    return next((part for part in argv[1:] if part.endswith((".py", ".sh"))), None)
+
+
 def _run_phase(
     phase: Phase,
     *,
@@ -137,6 +153,9 @@ def _run_phase(
         "CLAUDE_PROJECT_DIR": str(project_dir),
         "LANEB_COORDINATED_STOP": "1",
     }
+    script = _phase_script(phase.argv)
+    if script is not None and not Path(script).is_file():
+        return {"phase": phase.name, "status": "fail", "returncode": None, "failure": "missing file"}
     try:
         result = subprocess.run(
             list(phase.argv),
@@ -147,10 +166,10 @@ def _run_phase(
             timeout=phase.timeout,
         )
     except subprocess.TimeoutExpired:
-        return {"phase": phase.name, "status": "timeout", "returncode": None}
+        return {"phase": phase.name, "status": "timeout", "returncode": None, "failure": "timeout"}
     except Exception:
         # Phase-launch diagnostics can contain argv/environment data; fail by code only.
-        return {"phase": phase.name, "status": "fail", "returncode": None}
+        return {"phase": phase.name, "status": "fail", "returncode": None, "failure": "launch error"}
     stdout = result.stdout.decode("utf-8", "replace")
     stderr = result.stderr.decode("utf-8", "replace")
     status = (
@@ -166,13 +185,16 @@ def _run_phase(
         notice = json.loads(stdout.strip().splitlines()[-1])["systemMessage"]
     except (LookupError, TypeError, ValueError):
         notice = None
+    failure = {"fail": f"exit code {result.returncode}", "invalid": "invalid decision"}.get(status)
     return {
         "phase": phase.name,
         "status": status,
         "returncode": result.returncode,
         "stdout_sha256": hashlib.sha256(result.stdout).hexdigest(),
         "stderr_sha256": hashlib.sha256(result.stderr).hexdigest(),
+        **({"failure": failure} if failure else {}),
         **({"notice": notice} if status == "allow" and isinstance(notice, str) else {}),
+        **({"_stderr": stderr[-STDERR_RELAY_BYTES:]} if status == "block" else {}),
     }
 
 
@@ -266,14 +288,33 @@ def run_coordinator(
             phase_environment=phase_environment,
         )
         results.append(result)
-        if result["status"] != "allow":
-            return {
-                "status": "blocked",
-                "reason": f"phase_{result['status']}",
-                "failed_phase": phase.name,
-                "phases": results,
-                "finalizer_called": False,
-            }, 2
+        stderr = result.pop("_stderr", "")
+        if result["status"] == "allow":
+            continue
+        if result["status"] == "block" and phase.name in BLOCKING_PHASES:
+            relay = f"failed_phase={phase.name}\n{stderr}"
+        elif phase.name == "timelock" and (
+            stop_contract.active_command(payload.get("transcript_path")) == "dev-overnight"
+        ):
+            relay = f"timelock instrument failure: {result['failure']}; the human can type /stop\n"
+        else:
+            continue  # recorded in the result and allowed
+        return {
+            "status": "blocked",
+            "reason": f"phase_{result['status']}",
+            "failed_phase": phase.name,
+            "phases": results,
+            "finalizer_called": False,
+            "_relay": relay,
+        }, 2
+    if any(result["status"] != "allow" for result in results):
+        # A recorded failure is allowed but never followed by the destructive finalizer.
+        return {
+            "status": "pass",
+            "phases": results,
+            "finalizer_called": False,
+            "reason": "phase_failure_recorded",
+        }, 0
     if resource_session_id is None:
         # No resource session was provisioned (the default): the phases passed and
         # there is nothing to finalize, so this is a normal pass, not a block.
@@ -331,6 +372,9 @@ def main() -> int:
     if not isinstance(payload, dict):
         payload = {}
     result, exit_code = run_coordinator(payload, raw_payload=raw or b"{}")
+    relay = result.pop("_relay", "")
+    if relay:
+        sys.stderr.write(relay)
     notices = [phase.pop("notice") for phase in result["phases"] if "notice" in phase]
     if notices:
         result["systemMessage"] = "\n".join(notices)
