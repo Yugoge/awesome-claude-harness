@@ -566,16 +566,38 @@ def _is_path_exempt(file_path: str) -> bool:
             or abs_path.startswith(state_root + "/") or abs_path == state_root)
 
 
+def _in_isolated_main_root(file_path: str) -> bool:
+    """True iff file_path lies in the main root of a live ISOLATED record.
+
+    The /tmp exemption must not reach the very checkout an isolated session
+    exists to protect (a main root under /tmp would otherwise fail open). A
+    harness state dir placed INSIDE the main root keeps its exemption; the
+    default state dir (/tmp) does not. in_place records add nothing (Q1).
+    """
+    project_dir = Path(os.environ.get("CLAUDE_PROJECT_DIR", os.getcwd()))
+    state_root = harness_state_dir()
+    for sf in (project_dir / ".claude").glob("overnight-state-*.json"):
+        if not _extract_live_worktree_path(sf):
+            continue
+        main_root = (_load_state(sf) or {}).get("main_root") or str(project_dir)
+        if not _path_under_prefix(file_path, main_root):
+            continue
+        if _path_under_prefix(state_root, main_root) and _path_under_prefix(file_path, state_root):
+            continue
+        return True
+    return False
+
+
 def _is_path_allowed_during_overnight(file_path: str, worktree_paths: list[str]) -> bool:
     """Check if a file path is allowed during overnight (inside worktree or /tmp)."""
-    if _is_path_exempt(file_path) or _is_harness_state_exempt(file_path):
-        return True
     abs_path = os.path.realpath(os.path.abspath(file_path))
     for wt in worktree_paths:
         abs_wt = os.path.realpath(os.path.abspath(wt))
         if abs_path.startswith(abs_wt + os.sep) or abs_path == abs_wt:
             return True
-    return False
+    if _is_harness_state_exempt(file_path):
+        return True
+    return _is_path_exempt(file_path) and not _in_isolated_main_root(file_path)
 
 
 def _block_global_worktree(tool_name: str, target: str, worktree_paths: list[str]) -> None:
