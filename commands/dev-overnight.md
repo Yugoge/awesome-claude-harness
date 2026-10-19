@@ -9,7 +9,7 @@ disable-model-invocation: true
 
 **Philosophy**: Explore autonomously, discover real issues, fix them systematically, loop until time expires, then summarize everything.
 
-This command runs an unattended development loop. When `spec_mode == "autonomous"`, you are fully autonomous -- no user input is needed or expected. When `spec_mode == "user-provided"`, honor the orchestrator view's Hard Rule 10 user-pause gate; do not auto-loop past it. You discover issues yourself by scanning the codebase, fix each one through a simplified dev cycle, and keep going until the specified end time (autonomous mode) or until the next user-gate pause (user-provided spec mode).
+This command runs an unattended development loop. When `spec_mode == "autonomous"`, you are fully autonomous -- no user input is needed or expected inside the time-lock window. When `spec_mode == "user-provided"`, honor the orchestrator view's Hard Rule 10 user gates by parking the pipelines they gate (IMPORTANT RULES, Hard Rule 5); never auto-resolve such a gate yourself. You discover issues yourself by scanning the codebase, fix each one through a simplified dev cycle, and keep going until the specified end time in both modes; after it, each parked question is asked and its pipeline finished (Hard Rule 5).
 
 **Quick status utility**: Use `bash ~/.claude/scripts/overnight-status.sh` for instant session status (zero LLM cost). Use this instead of reading/parsing the state JSON manually. Optionally pass session_id as argument.
 
@@ -46,7 +46,7 @@ Every Agent dispatch from this orchestrator shares the following invariant prelu
 - Spec file paths (overnight spec, BA spec, context JSON, view file, test-plan, route-map)
 - Pipeline-specific timestamp suffix and pipeline_id
 - Mode flags (e.g., `PM_MODE: TRIAGE`, `RETRO`, `BA-VALIDATION MODE`, `UI_MODE`)
-- Iteration count, prior_attempt_signals, QA objections (when re-invoking after failure)
+- Iteration count, prior_attempt_signals, QA objections (when re-invoking after a QA fail)
 - Output report path (`docs/dev/<artifact>-<timestamp>.json` or per-cycle directory)
 
 **Cycle 2 work (deferred)**: per-dispatch templates are rewritten to reference `<<envelope>>` and contain only the variant text. Spec compliance for that cycle: each dispatch template ≤ 12 lines (variant only), envelope expands at orchestrator-injection time.
@@ -76,7 +76,7 @@ Step 1: Read state file + cd into the working root (first run only)
   |         Launch ALL N QA-validates-BA subagents in parallel
   |                |
   |       BA-QA ITERATION (Step 11)
-  |         Per-pipeline BA-QA iteration loop (max 3) if QA rejects
+  |         Per-pipeline BA-QA iteration loop until QA passes BA
   |                |
   |       PARALLEL DEV PHASE (Step 12-13)
   |         Launch ALL N Dev subagents in parallel → validate all outputs
@@ -85,7 +85,7 @@ Step 1: Read state file + cd into the working root (first run only)
   |         Launch ALL N QA subagents in parallel → process all results
   |                |
   |       ITERATION LOOPS (Step 17)
-  |         Per-pipeline Dev→QA re-runs for failures (max 5 each)
+  |         Per-pipeline Dev→QA re-runs until QA passes
   |                |
   |       PERMISSIONS (Step 18)
   |         Aggregate permissions from all N pipelines, apply once
@@ -112,13 +112,16 @@ Step 1: Read state file + cd into the working root (first run only)
 ## IMPORTANT RULES
 
 1. **Autonomy is gated by `spec_mode`**, with a third clause for autonomy-directive override.
-   - **Clause A** — `spec_mode == "autonomous"`: do NOT ask the user anything; make decisions yourself.
-   - **Clause B** — `spec_mode == "user-provided"` AND focus does NOT contain autonomy-directive tokens: honor the spec's user-gate pauses (orchestrator view Hard Rule 10) — pause the loop at every spec-defined user gate and do not auto-resume past it.
-   - **Clause C (autonomy-directive override)** — `spec_mode == "user-provided"` AND focus contains any of `\b(autonomously|manual\s+interrupt|don.?t\s+ask|no\s+questions)\b` (case-insensitive): treat the run as autonomous regardless of spec_mode. The orchestrator MUST NOT emit `<options>` XML or interrogative endings. When genuine deadlock occurs (e.g., META-DEADLOCK where a hook blocks the very fix needed), the orchestrator MUST: (a) write a deadlock report to `docs/dev/overnight-deadlock-<ts>.md` with the situation summary; (b) skip the blocked work item; (c) continue with the next pipeline; (d) defer all user-input questions to the end-of-overnight summary. Asking the user mid-cycle is a Clause-C violation.
-2. **Loop continuously in autonomous mode**. When `spec_mode == "autonomous"`, after each fix cycle the todo completion hook handles looping; this is non-negotiable. When `spec_mode == "user-provided"`, the loop pauses at every spec-defined user gate and only resumes after the user clears the gate.
+   - **Clause A** — `spec_mode == "autonomous"`: do NOT ask the user anything inside the time-lock window; make routine decisions yourself and record each assumption (Hard Rule 5). A genuine owner decision parks its pipeline (Hard Rule 5).
+   - **Clause B** — `spec_mode == "user-provided"` AND focus does NOT contain autonomy-directive tokens: honor the spec's user gates (orchestrator view Hard Rule 10). Inside the window a spec-defined user gate parks the pipeline it gates exactly as Hard Rule 5 parks a genuine owner decision: the gate's decision is recorded as a parked question (task id, need, options, default), the gated family stays incomplete and lands nothing, and the loop continues with the other pipelines. Never resolve the gate yourself; after `end_time` it is asked with AskUserQuestion (Hard Rule 5).
+   - **Clause C (autonomy-directive override)** — `spec_mode == "user-provided"` AND focus contains any of `\b(autonomously|manual\s+interrupt|don.?t\s+ask|no\s+questions)\b` (case-insensitive): treat the run as autonomous regardless of spec_mode. The orchestrator MUST NOT emit `<options>` XML or interrogative endings. When genuine deadlock occurs (e.g., META-DEADLOCK where a hook blocks the very fix needed), the orchestrator MUST: (a) write a deadlock report to `docs/dev/overnight-deadlock-<ts>.md` with the situation summary; (b) park the deadlocked pipeline (Hard Rule 5), with the decision the deadlock needs as its parked question; (c) continue with the next pipeline; (d) record every owner question as a parked question for the overnight summary, to be asked with AskUserQuestion after `end_time`. Asking the user mid-cycle is a Clause-C violation.
+2. **Loop continuously until `end_time`**. After each fix cycle the todo completion hook handles looping; this is non-negotiable. When `spec_mode == "user-provided"`, a spec-defined user gate does not pause the loop: inside the window the pipeline it gates parks (Hard Rule 5) and the loop continues with the other pipelines; after `end_time` the gate's question is asked with AskUserQuestion and that pipeline is finished.
 3. **Cycles are user-pathway-filtered and priority-driven** (per spec-20260503-091826 Section 5.5 decision #2 — same user-need-centric philosophy as `/dev`, with explore-mode compatibility preserved per Section 5.7 anti-pattern #5). Specialists' free exploration behavior is unchanged — they continue to discover broadly. PM triage applies the user-need path-relevance filter (agents/pm.md Step 4): in **user-provided mode**, the user spec's Section 5 user-need IS the path; pipelines are gated to user-pathway-relevant findings. In **autonomous mode**, only Tier 1 blockers AND multi-agent-consensus findings get pipelines; remaining findings route to the cycle's `out_of_scope_observations` array (per agents/pm.md schema). Within the gated pipeline set, ordering remains by tier: Tier 1 (blockers) first, Tier 2 (major), Tier 3 (minor/cosmetic). Specialists continue to explore broadly — the gating is purely on what becomes a pipeline, not on what specialists are allowed to discover.
 4. **ALL exploration and fixes via subagents**. Use Agent tool for ALL scanning, analysis, and implementation work. Main context only handles TodoWrite and loop control.
-5. **Skip unfixable issues**. If a fix fails verification 3 times, mark it as skipped and move on.
+5. **Producer questions are answered under Clause A or parked; nothing is ever skipped**. A BA or dev producer that needs a real, specific owner decision, one that the request, the code or a sensible default cannot settle, writes `docs/dev/producer-question-<task_id>-<role>.json` (schema producer-question.v1: `task_id` and `role` exactly as in its obligation, `need`, 2-4 `options` of `{label, description}`, a `default` that is one of the labels, `why`) instead of its report, and ends. That artifact is a subagent's only question path. QA has no question path: a QA fail or warning is a process step that sends the pipeline back to dev (Step 17). Inside the time-lock window the orchestrator never asks the owner; for each question it either:
+   - **answers it** when the choice is routine and Clause A covers it: it re-dispatches the same role fresh and synchronously (same `subagent_type`, `task_id`, pipeline, profile and obligation template, a fresh `dispatched_at`) with the chosen option and the line `Assumption (orchestrator, Clause A): <label> — <why>`, and writes the same assumption into the cycle log (Step 19); or
+   - **parks the pipeline** when the question is a genuine owner decision: set the pipeline's `status = "parked"` and record the question (task id, need, options, default) for the overnight summary's "Parked questions" section. A parked family stays incomplete and lands nothing, no further step of this window dispatches for it, and the loop continues with the other pipelines.
+   After `end_time`, once the summary is written (Step 21), the orchestrator asks each parked question with one AskUserQuestion (the question's options become the dialog's options, its default the recommended option), re-dispatches the role that asked with the answer as above (for a Clause B gate or a Clause C deadlock: continues the parked pipeline from where it stopped), and finishes that family until QA passes.
 6. **Track everything**. Use TodoWrite for per-cycle progress. Do NOT write to `.claude/overnight-state-<sid>.json` from the main agent — that file is owned by the orchestrator hooks. See `docs/dev/state-file-write-policy.md` for the full per-field write matrix.
 7. **The Stop hook prevents premature exit**. The time-lock hook will block conversation termination until end-time. Do not try to circumvent it.
 8. **Git checkpoint vs HEAD commit are distinct semantic layers**. The existing posttool-git-checkpoint.sh hook writes mid-cycle Write/Edit snapshots to `refs/checkpoints/*` only — these are NOT merge-ready commits and they do NOT advance any branch HEAD. They exist for crash recovery and audit, not for shipping. End-of-cycle Step 19 lands a real HEAD commit on the session's working branch (`worktree_branch` from the state file — the branch the checkout was already on under `in_place`, the created worktree branch otherwise) by calling `commit.sh "chore(overnight): end-of-cycle commit for <branch>"` directly via Bash (single positional arg, CC-valid `chore` type, `(overnight)` scope identifies automated context) — that HEAD commit IS merge-ready and is the only artifact `/merge` consumes. See `~/.claude/CLAUDE.md` (Auto-Commit Mechanism section) for the full checkpoint-ref vs HEAD-commit contract. Do NOT conflate "checkpoint after fix" (refs/checkpoints/*, recovery-only) with "ship upstream" (HEAD commit + `/merge`, distribution).
@@ -405,7 +408,7 @@ for retry signals:
 - **Recent related commits from this overnight run** (example query: `git log --oneline --grep="<keyword>" HEAD~30..HEAD`)
 - **Existing BA specs from earlier iterations**: files matching
   `docs/dev/ticket-*.md` (or legacy `docs/dev/ba-spec-*.md`) with keywords from the current issue
-- **Prior-cycle failure reports**: any QA report flagged as failed in an
+- **Prior-cycle QA fail reports**: any QA report with a fail verdict in an
   earlier iteration that matches the current issue
 
 Pass findings to BA in the delegation prompt under an explicit
@@ -432,16 +435,24 @@ feedback. Do NOT proceed to dev with an incomplete spec. Do NOT skip
 validation to keep the overnight loop running — a non-compliant spec in
 overnight is worse than a stalled iteration.
 
-### BA rejection handling in overnight mode
+### BA novelty-check question in overnight mode
 
-If BA returns `status: "rejected"` (Contract D novelty-check failure):
+When BA's Contract D novelty check finds that no candidate fix differs
+from every prior attempt, BA writes its producer question artifact
+`docs/dev/producer-question-<task_id>-ba.json` (options: the candidate
+layers; default: BA's recommendation) instead of its report, and ends.
+The orchestrator handles it like every producer question (Hard Rule 5):
 
-- Do NOT retry BA with the same input
-- Record the rejection in the cycle retrospective
-- Mark this issue as `blocked_same_layer_retry` and SKIP to the next
-  issue in the triage queue — do not burn further iterations on a
-  redesign-needed problem
-- On RETRO, surface the blocked issue for user review next session
+- Answer it under Clause A when the choice is routine (for example BA's
+  default is a deeper layer, which the Step 17 layer-escalation gate
+  already requires): re-dispatch BA with
+  the chosen layer and record the assumption in the re-dispatch and the
+  cycle log
+- Otherwise park the pipeline: the question goes to the overnight
+  summary's "Parked questions", the family stays incomplete and lands
+  nothing, and the loop continues with the other pipelines
+- Never re-dispatch BA with the same input and no answer, and never mark
+  the issue blocked or skipped
 
 ### Layer vocabulary (shared with BA)
 
@@ -873,9 +884,8 @@ Read specialist reports. For each pipeline, if a specialist provided screenshots
 1. Use `pipeline_order` from triage report as the authoritative ordering
 2. For each issue in `pipeline_order`:
    - If `pipeline_recommendation` is `"fix"`: create a pipeline
-   - If `pipeline_recommendation` is `"skip"` or `"defer"`: add to skipped list with reason
+   - If `pipeline_recommendation` is `"skip"` or `"defer"`: create no pipeline; add it to the cycle's triage-deferred list with PM's reason. This is a planning decision taken before any pipeline starts, not a pipeline exit, and it is counted and reported apart from parked pipelines
 3. Filter out any issue already in `addressed_issues` from state file
-4. Filter out any issue that has failed 3 times (check `failed_attempts`)
 
 **If triage report is missing or invalid** (fallback to legacy behavior):
 
@@ -891,8 +901,8 @@ Candidate report paths (include only for RELEVANT specialists):
 - `user-report.json` (if `specialists_assessed["user"]` starts with "RELEVANT")
 - `ui-specialist-report.json` (if `specialists_assessed["ui-specialist"]` starts with "RELEVANT")
 
-Merge the available reports into a single issue list, deduplicate, filter against addressed_issues and
-failed_attempts. Prioritize by severity and impact. Every remaining issue gets a pipeline, ordered by: (1) severity: critical > major > minor > cosmetic, (2) impact scope: issues flagged by more agents rank higher within the same severity.
+Merge the available reports into a single issue list, deduplicate, filter against addressed_issues.
+Prioritize by severity and impact. Every remaining issue gets a pipeline, ordered by: (1) severity: critical > major > minor > cosmetic, (2) impact scope: issues flagged by more agents rank higher within the same severity.
 
 **Time guard** (severity-aware): If time remaining < 5 minutes, filter issues by severity+effort: (a) Drop cosmetic issues regardless of effort, (b) Drop minor issues with medium/large effort, (c) Keep major issues with small effort only, (d) Keep critical issues with small effort only. This ensures remaining time is spent on the highest-severity fixable issues.
 
@@ -999,7 +1009,7 @@ Agent(subagent_type: "ba")
     (Read this file before interpreting Requirement, Context file, BA spec, Dev report, or state-derived focus.)
 
     Requirement: '{pipeline.description}'
-    Clarification round: 3
+    Clarification round: 0
     Previous answers: null
     Codebase hints: {pipeline.location}
     Timestamp: {pipeline.timestamp_suffix}
@@ -1015,7 +1025,8 @@ Agent(subagent_type: "ba")
       prior_qa_failures: [docs/dev/qa-report-<ts>.md, ...]  # prior failed QA reports on this issue
 
     This is a self-discovered issue from overnight exploration.
-    No clarification is needed -- proceed directly to analysis.
+    Settle each unclear point from the requirement, the code or a sensible default and record it as an assumption.
+    Only for a real, specific decision that none of these settles, write docs/dev/producer-question-{pipeline.timestamp_suffix}-ba.json (agents/ba.md) instead of your report, and end.
     All file operations and git analysis must use paths inside the project root above.
 
     **FIRST**: Read the project's CLAUDE.md (if present at the project root or worktree root) -- it is the authority for the role table (CTA hex, neutral hex, etc.), naming conventions, and project-specific rules. Without this read, downstream Dev/QA cannot enforce role-token equality. If the file is absent, log "no project CLAUDE.md" and continue.
@@ -1035,7 +1046,7 @@ Agent(subagent_type: "ba")
 
 **Wait for ALL N BA subagents to complete** before proceeding.
 
-**NOTE**: Since this is autonomous mode, there is NO BA clarification loop. If any BA returns `needs_clarification`, treat it as `ready` and use best-effort output with explicit assumptions. Do NOT ask the user.
+**Producer questions (Hard Rule 5)**: Inside the time-lock window there is no BA clarification loop with the owner. If a BA writes `docs/dev/producer-question-{pipeline.timestamp_suffix}-ba.json` instead of its report, answer it under Clause A and re-dispatch that BA with the chosen option and the recorded assumption, or park the pipeline. Do NOT ask the user before `end_time`.
 
 **Fallback**: If the Agent tool cannot handle N simultaneous calls, batch them in groups of 4 and wait for each batch to complete before starting the next.
 
@@ -1054,12 +1065,12 @@ Read BA output files:
 - [ ] Success criteria are measurable
 - [ ] Affected files identified
 
-**If validation fails for pipeline[i]**:
-- Re-invoke only the failed BA with specific feedback about what's missing
-- Maximum 2 re-invocations per pipeline
-- If still failing after retries: mark pipeline status as `"skipped"` with reason `"BA validation failed"`
+**If validation finds a gap for pipeline[i]**:
+- Re-invoke only that pipeline's BA with specific feedback about what's missing (a fresh dispatch: same obligation template, fresh `dispatched_at`)
+- Validate again; the BA output passing validation is the only way forward, and the pipeline is never dropped here
+- A BA producer question is handled by Hard Rule 5 (answered under Clause A, or the pipeline parks)
 
-**If all pipelines are skipped**: Skip to Step 19 (log results).
+**If every pipeline is parked**: continue at Step 19 (log results).
 
 ### Step 10: QA Validates BA Conclusions (All Pipelines, Parallel)
 
@@ -1092,7 +1103,7 @@ Agent(subagent_type: "qa")
     FIRST ACTION: Read $CLAUDE_PROJECT_DIR/.claude/dev-registry/$DEV_SESSION_ID/qa.json to register with the enforcement system. Do this BEFORE any other tool call.
     CHECKPOINT MARKING: see agents/qa.md §Checkpoint Marking Contract. Mark every cp-NN done or waived before Stop or SubagentStop hook will block exit.
 
-    Obligation block (see Step 8's worked example above; docs/reference/close-commit-zero-failure-mechanism-20260928.md §1.2): embed `<obligation v="1">{...}</obligation>` here with role="qa", pipeline="dev-overnight", profile="ba_validation", task_id/dispatched_at bound to this pipeline's own {pipeline.timestamp_suffix} placeholder, artifacts=[{"kind":"json","path":"docs/dev/ba-qa-report-{pipeline.timestamp_suffix}.json","schema":"ba-qa-report.v1"}] (schema id is a provisional placeholder pending registration in schemas/registry.json; schema is unconditionally REQUIRED for kind:"json" per schemas/obligation.v1.json and must never be omitted). Orchestrator instantiates per-dispatch — never hand-invented.
+    Obligation block (see Step 8's worked example above; docs/reference/close-commit-zero-failure-mechanism-20260928.md §1.2): embed `<obligation v="1">{...}</obligation>` here with role="qa", pipeline="dev-overnight", profile="ba_validation", task_id/dispatched_at bound to this pipeline's own {pipeline.timestamp_suffix} placeholder, artifacts=[{"kind":"json","path":"docs/dev/ba-qa-report-{pipeline.timestamp_suffix}.json","schema":"ba-qa-report.v1","identity":{"task_id":"{pipeline.timestamp_suffix}"}}] (ba-qa-report.v1 is registered in schemas/registry.json; schema is unconditionally REQUIRED for kind:"json" per schemas/obligation.v1.json and must never be omitted). Orchestrator instantiates per-dispatch — never hand-invented.
 
     You are the QA subagent in BA-VALIDATION MODE. This is NOT code verification.
     You are verifying the QUALITY OF BA's ANALYSIS, not any implementation.
@@ -1132,6 +1143,7 @@ Agent(subagent_type: "qa")
 
     Return JSON:
     {
+      'task_id': '{pipeline.timestamp_suffix}',
       'verdict': 'pass' or 'fail',
       'objections': [
         {
@@ -1165,24 +1177,11 @@ For each pipeline[i]:
 
 ### Step 11: BA-QA Iteration Loop (if QA rejects BA)
 
-**Iteration guard**: Maximum 3 BA-QA iterations per pipeline to prevent infinite loops
+**Loop exit**: QA's BA-validation verdict `pass` is the only exit. A `fail` verdict is a process step: it sends the pipeline back to BA with QA's objections, and Steps 9-10 run again. There is no iteration cap.
 
-**Current BA-QA iteration**: Track internally per pipeline (starts at 1)
+**Current BA-QA iteration**: Track internally per pipeline (starts at 1), for the announcement and the cycle log
 
-**If BA-QA iteration > 3**:
-```
-BA-QA validation: 3 iterations exhausted for pipeline <pipeline_id>. Proceeding with best-effort BA output.
-
-Unresolved objections:
-{summary of remaining QA objections}
-
-Appending unresolved objections to context JSON under `ba_qa_unresolved_objections`.
-Proceeding to Step 12 with documented assumptions.
-```
-
-**If BA-QA iteration <= 3**:
-
-**Announce**: `BA-QA iteration <N>/3 for pipeline <pipeline_id>: QA found <count> objections in BA analysis. Re-invoking BA to address objections.`
+**Announce**: `BA-QA iteration <N> for pipeline <pipeline_id>: QA found <count> objections in BA analysis. Re-invoking BA to address objections.`
 
 **Re-invoke BA with QA's objections**:
 
@@ -1194,7 +1193,7 @@ Use Agent tool with:
   FIRST ACTION: Read $CLAUDE_PROJECT_DIR/.claude/dev-registry/$DEV_SESSION_ID/ba.json to register with the enforcement system. Do this BEFORE any other tool call.
   CHECKPOINT MARKING: see agents/ba.md §Checkpoint Marking Contract. Mark every cp-NN done or waived before Stop or SubagentStop hook will block exit.
 
-  Obligation block (see Step 8's worked example above; docs/reference/close-commit-zero-failure-mechanism-20260928.md §1.2): embed `<obligation v="1">{...}</obligation>` here with role="ba", pipeline="dev-overnight", profile="overnight", task_id/dispatched_at bound to this pipeline's own {pipeline.timestamp_suffix} placeholder, artifacts=[{"kind":"json","path":"docs/dev/context-{pipeline.timestamp_suffix}.json","schema":"context.v1"},{"kind":"markdown","path":"docs/dev/ticket-{pipeline.timestamp_suffix}.md","identity_anchor":"{pipeline.timestamp_suffix}"}]. Orchestrator instantiates per-dispatch — never hand-invented.
+  Obligation block (see Step 8's worked example above; docs/reference/close-commit-zero-failure-mechanism-20260928.md §1.2): embed `<obligation v="1">{...}</obligation>` here with role="ba", pipeline="dev-overnight", profile="overnight", task_id/dispatched_at bound to this pipeline's own {pipeline.timestamp_suffix} placeholder, artifacts=[{"kind":"json","path":"docs/dev/context-{pipeline.timestamp_suffix}.json","schema":"context.v1","identity":{"task_id":"{pipeline.timestamp_suffix}","request_id":"{pipeline.timestamp_suffix}"}},{"kind":"markdown","path":"docs/dev/ticket-{pipeline.timestamp_suffix}.md","identity_anchor":"{pipeline.timestamp_suffix}"}]. Orchestrator instantiates per-dispatch — never hand-invented.
 
   You are the BA subagent. Follow .claude/agents/ba.md instructions precisely.
 
@@ -1223,7 +1222,7 @@ Use Agent tool with:
   "
 ```
 
-**After BA re-delivers**: Return to Step 9 (validate BA output), then Step 10 (QA re-validates).
+**After BA re-delivers**: Return to Step 9 (validate BA output), then Step 10 (QA re-validates). If BA writes its producer question artifact instead, apply Hard Rule 5.
 
 **Rule**: Every BA invocation MUST be followed by QA validation. No exceptions.
 
@@ -1235,11 +1234,11 @@ Use Agent tool with:
 
 **This is the single shared precondition that enforces the B2-INV invariant: graphify enrichment MUST have run — against the SAME context Dev will consume — for a pipeline BEFORE EVERY `Agent(subagent_type: "dev")` dispatch in `/dev-overnight`.** It is the overnight sibling of `commands/dev.md` Step 9 enrichment (mirror by reference — do NOT duplicate dev.md's full prose). It is keyed on the **Dev-dispatch boundary**, NOT on "Step 12": Dev is dispatched from THREE sites and any future site MUST also route through this precondition immediately before its Dev `Agent` call:
 
-- **Step 12** parallel Dev loop (`### Step 12`, the `For each active pipeline[i]` loop) — reached by the BA-QA PASS branch, the BA-QA iteration-EXHAUSTED best-effort branch, AND the Continuation/Resume path (`current_phase: implementing -> Step 12`).
-- **Step 13** dev-blocked re-invoke (`### Step 13`, "Re-invoke only that pipeline's dev subagent") — may follow a context refinement.
+- **Step 12** parallel Dev loop (`### Step 12`, the `For each active pipeline[i]` loop) — reached by the BA-QA PASS branch AND the Continuation/Resume path (`current_phase: implementing -> Step 12`).
+- **Step 13** dev re-invoke (`### Step 13`, "Re-invoke only that pipeline's dev subagent") — after a validation gap or an answered dev question; may follow a context refinement.
 - **Step 17** per-pipeline iteration-loop Dev dispatch (`### Step 17`, `Agent(subagent_type: "dev")` against its FRESH `docs/dev/context-iter<N>-<timestamp_suffix>.json`).
 
-The word "validated" MUST NOT gate this precondition — it fires for the pipeline about to be dispatched to Dev regardless of whether BA-QA passed or was exhausted (mirrors the resolved `/dev` post-BA-QA → enrichment decision; the exhausted branch is a sibling of the pass branch).
+The word "validated" MUST NOT gate this precondition — it fires for every pipeline about to be dispatched to Dev, at every Dev-dispatch site above (mirrors the resolved `/dev` post-BA-QA → enrichment decision). BA-QA `pass` is the only way a pipeline reaches Step 12.
 
 **Per-site action** — for the one pipeline[i] about to be dispatched to Dev:
 
@@ -1272,7 +1271,7 @@ Per-pipeline `graphify-run.json` / `focused-subgraph.json` files are **sidecar a
 
 **Filter**: Only launch Dev for pipelines with `phase == "ba_complete"` and `status == "active"`.
 
-**Dev-dispatch precondition (B2-INV)**: for each pipeline that passes the filter above, route through the shared **Step 11g: Graphify Dev-Dispatch Precondition** against the context Dev will consume (`docs/dev/context-{pipeline.timestamp_suffix}.json`) IMMEDIATELY BEFORE that pipeline's `Agent(subagent_type: "dev")` call inside the loop below (not merely once before the loop) — so the precondition runs per-dispatch, even when the loop batches across multiple responses. This covers the BA-QA PASS branch, the BA-QA iteration-EXHAUSTED best-effort branch, AND the Continuation/Resume path that lands here.
+**Dev-dispatch precondition (B2-INV)**: for each pipeline that passes the filter above, route through the shared **Step 11g: Graphify Dev-Dispatch Precondition** against the context Dev will consume (`docs/dev/context-{pipeline.timestamp_suffix}.json`) IMMEDIATELY BEFORE that pipeline's `Agent(subagent_type: "dev")` call inside the loop below (not merely once before the loop) — so the precondition runs per-dispatch, even when the loop batches across multiple responses. This covers the BA-QA PASS branch AND the Continuation/Resume path that lands here.
 
 **Launch Dev subagents in batches of 1-3, sequential between batches** (per pacing rule):
 
@@ -1286,7 +1285,7 @@ Agent(subagent_type: "dev")
     FIRST ACTION: Read $CLAUDE_PROJECT_DIR/.claude/dev-registry/$DEV_SESSION_ID/dev.json to register with the enforcement system. Do this BEFORE any other tool call.
     CHECKPOINT MARKING: see agents/dev.md §Checkpoint Marking Contract. Mark every cp-NN done or waived before Stop or SubagentStop hook will block exit.
 
-    Obligation block (see Step 8's worked example above; docs/reference/close-commit-zero-failure-mechanism-20260928.md §1.2): embed `<obligation v="1">{...}</obligation>` here with role="dev", pipeline="dev-overnight", profile="overnight", task_id/dispatched_at bound to this pipeline's own {pipeline.timestamp_suffix} placeholder, artifacts=[{"kind":"json","path":"docs/dev/dev-report-{pipeline.timestamp_suffix}.json","schema":"dev-report.v2","identity":{"task_id":"{pipeline.timestamp_suffix}"},"required_values":{"dev.status":["completed"]}}]. Terminal state (R10): the dev-report must reach `dev.status` = `completed` before you stop (declared as `required_values` on the artifact entry); deliver it complete in one pass — `blocked`/`needs_review` is not an acceptable hand-back. Orchestrator instantiates per-dispatch — never hand-invented.
+    Obligation block (see Step 8's worked example above; docs/reference/close-commit-zero-failure-mechanism-20260928.md §1.2): embed `<obligation v="1">{...}</obligation>` here with role="dev", pipeline="dev-overnight", profile="overnight", task_id/dispatched_at bound to this pipeline's own {pipeline.timestamp_suffix} placeholder, artifacts=[{"kind":"json","path":"docs/dev/dev-report-{pipeline.timestamp_suffix}.json","schema":"dev-report.v2","identity":{"task_id":"{pipeline.timestamp_suffix}"}}]. Orchestrator instantiates per-dispatch — never hand-invented.
 
     You are the dev subagent. Follow agents/dev.md instructions precisely.
 
@@ -1323,19 +1322,20 @@ Agent(subagent_type: "dev")
 Read dev report: `docs/dev/dev-report-{pipeline.timestamp_suffix}.json`
 
 **Sanity checks per pipeline**:
-- [ ] Status is "completed" (not "blocked")
+- [ ] Status is "completed" (the only legal dev status)
 - [ ] All tasks documented
 - [ ] Scripts created have usage examples
 - [ ] Git rationale references root cause
 - [ ] Files exist that were reported as created/modified
 
-**If dev blocked for pipeline[i]**:
-- Read blocking issues from report
-- Resolve blockers (e.g., missing information, technical constraints)
+**If dev wrote a producer question for pipeline[i]** (`docs/dev/producer-question-{pipeline.timestamp_suffix}-dev.json` instead of its report): apply Hard Rule 5 — answer it under Clause A and re-dispatch dev with the answer as below, or park the pipeline.
+
+**If validation finds a gap for pipeline[i]**:
+- Name the gap (missing information, an undocumented task, a reported file that does not exist)
 - Refine context JSON with additional information
 - **Dev-dispatch precondition (B2-INV)**: BEFORE re-invoking, route this pipeline through the shared **Step 11g: Graphify Dev-Dispatch Precondition** against the refined context Dev will consume. The context fingerprint changed (refinement), so the precondition RE-ENRICHES rather than skipping.
-- Re-invoke only that pipeline's dev subagent (maximum 3 attempts)
-- If still blocked: mark pipeline status as `"skipped"` with reason `"Dev blocked"`
+- Re-invoke only that pipeline's dev subagent (a fresh dispatch: same obligation template, fresh `dispatched_at`)
+- Validate again; a completed dev report that passes validation is the only way forward
 
 ### Step 14: Prepare QA Environment (Docker Rebuild + Verification Plan)
 
@@ -1387,7 +1387,7 @@ Agent(subagent_type: "qa")
     FIRST ACTION: Read $CLAUDE_PROJECT_DIR/.claude/dev-registry/$DEV_SESSION_ID/qa.json to register with the enforcement system. Do this BEFORE any other tool call.
     CHECKPOINT MARKING: see agents/qa.md §Checkpoint Marking Contract. Mark every cp-NN done or waived before Stop or SubagentStop hook will block exit.
 
-    Obligation block (see Step 8's worked example above; docs/reference/close-commit-zero-failure-mechanism-20260928.md §1.2): embed `<obligation v="1">{...}</obligation>` here with role="qa", pipeline="dev-overnight", profile="final_verification", task_id/dispatched_at bound to this pipeline's own {pipeline.timestamp_suffix} placeholder, artifacts=[{"kind":"json","path":"docs/dev/qa-report-{pipeline.timestamp_suffix}.json","schema":"qa-report.v2","identity":{"task_id":"{pipeline.timestamp_suffix}"},"required_values":{"qa.status":["pass"]}}]. Terminal state (R10): the qa-report must reach `qa.status` = `pass` before you stop (declared as `required_values` on the artifact entry); deliver the verdict in one pass — an unfinished hand-back is not acceptable. Orchestrator instantiates per-dispatch — never hand-invented.
+    Obligation block (see Step 8's worked example above; docs/reference/close-commit-zero-failure-mechanism-20260928.md §1.2): embed `<obligation v="1">{...}</obligation>` here with role="qa", pipeline="dev-overnight", profile="final_verification", task_id/dispatched_at bound to this pipeline's own {pipeline.timestamp_suffix} placeholder, artifacts=[{"kind":"json","path":"docs/dev/qa-report-{pipeline.timestamp_suffix}.json","schema":"qa-report.v2","identity":{"task_id":"{pipeline.timestamp_suffix}"}}]. Orchestrator instantiates per-dispatch — never hand-invented.
 
     You are the QA subagent. Follow agents/qa.md instructions precisely.
 
@@ -1433,19 +1433,15 @@ Read QA report: `docs/dev/qa-report-{pipeline.timestamp_suffix}.json`
 IF qa.status == "pass":
   → Mark pipeline phase = "done", status = "fixed"
 
-ELIF qa.status == "warning":
-  → Autonomous decision: if only minor/cosmetic issues, mark phase = "done", status = "fixed"
-  → If major issues: mark phase = "qa_failed" (will enter iteration in Step 17)
-
-ELIF qa.status == "fail":
-  → Mark pipeline phase = "qa_failed" (will enter iteration in Step 17)
+ELIF qa.status == "warning" OR qa.status == "fail":
+  → Mark pipeline phase = "qa_failed" (a process step: it enters iteration in Step 17; only pass ends the loop)
 ```
 
 **Tally results**:
 ```
 Pipelines passed: {count} of {total}
 Pipelines needing iteration: {count}
-Pipelines skipped: {count}
+Pipelines parked: {count}
 ```
 
 **If all pipelines are done (no qa_failed)**: Skip Step 17, proceed to Step 18.
@@ -1475,21 +1471,23 @@ layer used in each attempt for that pipeline. Rules:
    in addition to `differs_from_all_priors`. A fix that changes L1 wording
    but stays in L1 is NOT novel under this rule.
 5. If the same layer is the only one that can plausibly solve the bug on a
-   given pipeline (genuine edge case), BA MUST explicitly argue this in
-   prose with evidence. In overnight autonomous mode (no user available),
-   the orchestrator MUST NOT override the gate -- instead mark the pipeline
-   `blocked_same_layer_retry`, skip further iterations, and surface to the
-   user on RETRO.
+   given pipeline (genuine edge case), BA MUST explicitly argue this with
+   evidence, as its producer question artifact (options: retry at the same
+   layer, and the deeper candidate layers; default: BA's recommendation)
+   written instead of its report. Inside the time-lock window the
+   orchestrator MUST NOT override the gate: it parks the pipeline (Hard
+   Rule 5), and after `end_time` the question is asked with
+   AskUserQuestion and the pipeline is finished at the chosen layer.
 
-**Per-pipeline iteration guard**: Maximum 5 iterations per pipeline to prevent infinite loops.
+**Loop exit**: QA `pass` is the only exit from a pipeline's Dev→QA loop. A QA fail or warning is a process step that sends the pipeline back to dev; there is no iteration cap.
 
-**Sort failed pipelines by severity before iterating** (critical first, cosmetic last). Build the iteration plan:
+**Sort the `qa_failed` pipelines by severity before iterating** (critical first, cosmetic last). Build the iteration plan:
 
 ```bash
-python3 ~/.claude/scripts/iterate-failed-pipelines.py docs/dev/overnight/<session_id>/pipelines.json 5 > docs/dev/overnight/<session_id>/iteration-plan.json
+python3 ~/.claude/scripts/iterate-failed-pipelines.py docs/dev/overnight/<session_id>/pipelines.json > docs/dev/overnight/<session_id>/iteration-plan.json
 ```
 
-For each entry in `iteration_plan[]`, the orchestrator runs the Dev+QA inner loop. On every iteration, increment `pipeline.iteration` first (so the first refinement after a QA failure runs with `<new-iter> = current_iteration + 1`, starting at 1), then refine the context:
+For each entry in `iteration_plan[]`, the orchestrator runs the Dev+QA inner loop. On every iteration, increment `pipeline.iteration` first (so the first refinement after a QA fail runs with `<new-iter> = current_iteration + 1`, starting at 1), then refine the context:
 
 ```bash
 bash ~/.claude/scripts/refine-context.sh \
@@ -1501,21 +1499,14 @@ bash ~/.claude/scripts/refine-context.sh \
 
 The merged context records `iteration=<new-iter>` and appends a `previous_attempts[]` entry with `iteration=<new-iter>-1`. Then dispatch:
 - **Dev-dispatch precondition (B2-INV)**: BEFORE the Dev dispatch below, route this pipeline through the shared **Step 11g: Graphify Dev-Dispatch Precondition** against the FRESH `docs/dev/context-iter<new-iter>-<timestamp_suffix>.json` Dev will consume. The new iteration context has a different fingerprint, so the precondition RE-ENRICHES (it does NOT skip on bare existence).
-- `Agent(subagent_type: "dev")` with iteration context. Obligation block (same template as Step 12's dev dispatch; docs/reference/close-commit-zero-failure-mechanism-20260928.md §1.2): embed `<obligation v="1">{...}</obligation>` with role="dev", pipeline="dev-overnight", profile="overnight", task_id/dispatched_at bound to this pipeline's {pipeline.timestamp_suffix} and THIS iteration's fresh dispatch time (never reuse an earlier iteration's block), artifacts=[{"kind":"json","path":"docs/dev/dev-report-{pipeline.timestamp_suffix}.json","schema":"dev-report.v2","identity":{"task_id":"{pipeline.timestamp_suffix}"},"required_values":{"dev.status":["completed"]}}]. Terminal state (R10): `dev.status` must be `completed`; deliver it complete in one pass — `blocked`/`needs_review` is not an acceptable hand-back. Include in Dev prompt: `Overnight spec file: <pipeline.spec_path>`. Also include: `User requirement document: <resolved $REQUIREMENT_DOC path>`. Dev reads spec first for cross-cycle context, then updates Sections 2 and 3.
+- `Agent(subagent_type: "dev")` with iteration context. Obligation block (same template as Step 12's dev dispatch; docs/reference/close-commit-zero-failure-mechanism-20260928.md §1.2): embed `<obligation v="1">{...}</obligation>` with role="dev", pipeline="dev-overnight", profile="overnight", task_id/dispatched_at bound to this pipeline's {pipeline.timestamp_suffix} and THIS iteration's fresh dispatch time (never reuse an earlier iteration's block), artifacts=[{"kind":"json","path":"docs/dev/dev-report-{pipeline.timestamp_suffix}.json","schema":"dev-report.v2","identity":{"task_id":"{pipeline.timestamp_suffix}"}}]. If dev writes its producer question artifact instead of a report, apply Hard Rule 5. Include in Dev prompt: `Overnight spec file: <pipeline.spec_path>`. Also include: `User requirement document: <resolved $REQUIREMENT_DOC path>`. Dev reads spec first for cross-cycle context, then updates Sections 2 and 3.
 - Before dispatching QA, write qa_mode sentinel (no `bash` token — see the :1047 site): `CLAUDE_PROJECT_DIR='<MAIN_ROOT>' ~/.claude/scripts/write-qa-mode.sh --session-id "<DEV_SESSION_ID>" --mode final_verification || { echo 'ERROR: Failed to set qa_mode=final_verification — aborting' >&2; exit 1; }`
-- `Agent(subagent_type: "qa")` with new dev report. Obligation block (same template as Step 13's qa dispatch; §1.2): embed `<obligation v="1">{...}</obligation>` with role="qa", pipeline="dev-overnight", profile="final_verification", task_id/dispatched_at bound to this pipeline's {pipeline.timestamp_suffix} and THIS iteration's fresh dispatch time, artifacts=[{"kind":"json","path":"docs/dev/qa-report-{pipeline.timestamp_suffix}.json","schema":"qa-report.v2","identity":{"task_id":"{pipeline.timestamp_suffix}"},"required_values":{"qa.status":["pass"]}}]. Terminal state (R10): `qa.status` must be `pass`; deliver the verdict in one pass. Include in QA prompt: `Overnight spec file: <pipeline.spec_path>`. Also include: `User requirement document: <resolved $REQUIREMENT_DOC path>`. QA reads spec first, then updates Section 4 (and Sections 6-7 if fail).
+- `Agent(subagent_type: "qa")` with new dev report. Obligation block (same template as Step 15's qa dispatch; §1.2): embed `<obligation v="1">{...}</obligation>` with role="qa", pipeline="dev-overnight", profile="final_verification", task_id/dispatched_at bound to this pipeline's {pipeline.timestamp_suffix} and THIS iteration's fresh dispatch time, artifacts=[{"kind":"json","path":"docs/dev/qa-report-{pipeline.timestamp_suffix}.json","schema":"qa-report.v2","identity":{"task_id":"{pipeline.timestamp_suffix}"}}]. Include in QA prompt: `Overnight spec file: <pipeline.spec_path>`. Also include: `User requirement document: <resolved $REQUIREMENT_DOC path>`. QA reads spec first, then updates Section 4 (and Sections 6-7 if fail).
 
 Loop termination:
-- `qa.status == "pass"` OR `(qa.status == "warning" AND minor only)` → set `phase=done`, `status=fixed`, BREAK.
-- `iteration >= 5` → set `phase=done`, BREAK; status is set per the "If iteration reaches 5 without passing" block below.
-
-**If iteration reaches 5 without passing**:
-```
-Quality verification failed after 5 iterations for pipeline {i}: {description}.
-Marking as skipped.
-```
-Mark pipeline: `phase = "done"`, `status = "skipped"`.
-Record the failure in the cycle log.
+- `qa.status == "pass"` → set `phase=done`, `status=fixed`, BREAK. This is the only exit.
+- `qa.status == "warning"` or `"fail"` → run the next iteration (refine the context from the QA report, dispatch dev, then QA).
+- A producer question from BA or dev → Hard Rule 5: answered under Clause A (the loop continues), or the pipeline is parked (`status = "parked"`) and leaves the loop for this window.
 
 ### Step 18: Update Settings.json Permissions (Aggregated)
 
@@ -1555,18 +1546,21 @@ The aggregator filters QA reports to those whose `timestamp_suffix` matches a `s
 
 ### Step 19: Log All Cycle Results and Check Time
 
-**Aggregate results from ALL pipelines** by tallying fixed vs skipped counts.
+**Aggregate results from ALL pipelines** by tallying fixed vs parked counts.
 
 **Append to running log** at `docs/dev/overnight-log-<date>.md`:
 
 ```markdown
-### Cycle <N>: {total_pipelines} pipelines ({fixed_count} fixed, {skipped_count} skipped)
+### Cycle <N>: {total_pipelines} pipelines ({fixed_count} fixed, {parked_count} parked)
 
 | Pipeline | Issue | Status | Iterations |
 |----------|-------|--------|------------|
 | 0 | {description} | Fixed | 1 |
-| 1 | {description} | Skipped | 5 |
+| 1 | {description} | Parked | 2 |
 | ... | ... | ... | ... |
+
+**Assumptions (Clause A)**: <task_id>: <chosen label> — <why> (one line per question the orchestrator answered, Hard Rule 5)
+**Parked**: <task_id>: <need> (one line per parked pipeline; the question itself goes to the summary)
 
 **Time**: <timestamp>
 ```
@@ -1687,20 +1681,17 @@ Simply mark this step as completed via TodoWrite. The PostToolUse:TodoWrite hook
 |--------|-------|
 | Issues found | <issues_found> |
 | Issues fixed | <issues_fixed> |
-| Issues skipped | <issues_skipped> |
+| Issues parked | <issues_parked> |
+| Issues deferred by PM triage (skip/defer) | <issues_triage_deferred> |
 | Fix rate | <percentage>% |
 
 ## Cycle Details
 
 ### Cycle 1: <issue>
-- **Status**: Fixed / Skipped
+- **Status**: Fixed / Parked
 - **Location**: <file>
 - **Changes**: <summary>
 - **Iterations**: <N>
-
-## Skipped Issues (need manual attention)
-
-<List of issues that failed 3+ times with error context>
 
 ## Files Generated
 
@@ -1713,6 +1704,8 @@ Simply mark this step as completed via TodoWrite. The PostToolUse:TodoWrite hook
 
 <Patterns noticed during exploration that need human decision-making>
 ```
+
+**Parked pipelines (after `end_time`)**: once the summary is written, finish every parked pipeline as Hard Rule 5 describes (one AskUserQuestion per parked question, the answer re-dispatched to the role that asked, the family run until QA passes), then update the summary's counts and that question's entry, before the announcement below.
 
 **CRITICAL: DO NOT auto-merge to $DEFAULT_BRANCH.**
 
@@ -1745,7 +1738,7 @@ Overnight development session complete.
 
 Duration: <hours>h <minutes>m
 Cycles: <cycle_count>
-Fixed: <issues_fixed> | Skipped: <issues_skipped>
+Fixed: <issues_fixed> | Parked: <issues_parked>
 
 Summary: docs/dev/overnight-summary-<date>.md
 Log: docs/dev/overnight-log-<date>.md
@@ -1838,7 +1831,7 @@ The state file is created by `create-overnight-state.sh` during session initiali
 ## Edge Cases
 
 - **No issues found** — see Step 4 (clean-sweep handling, 2 consecutive sweeps end the session).
-- **Unfixable issue (5 failed iterations per pipeline)** — see Step 17 (per-pipeline iteration cap).
+- **A pipeline that needs an owner decision** — answered under Clause A or parked (Hard Rule 5); a QA fail or warning sends it back to dev (Step 17) until QA passes.
 - **Very short time remaining (< 5 minutes)** — see Step 6 (severity-aware time guard).
 - **State file corruption** — create a fresh state file preserving `end_time`, continue.
 - **Working root missing or invalid on continuation** — HARD ABORT (see the Step 1 WORKING-ROOT GUARD). Under `--worktree` the launch refuses outright when no durable isolation can be produced rather than silently downgrading to in-place. Under the `in_place` default there is no worktree to create or lose, and running in the main checkout is the intended behavior, not a failure.
