@@ -72,31 +72,8 @@
       "properties": {
         "status": {
           "type": "string",
-          "enum": ["completed", "blocked", "needs_review"],
-          "description": "The REAL nested template enum (agents/dev.md:604) — NOT v1's flat enum with 'partial'."
-        },
-        "status_rationale": {
-          "type": "object",
-          "description": "Required when dev.status == 'needs_review' (honest-terminal conditional, design §1.4.2; same shape as dev-report.v1.json:33-44).",
-          "required": ["classification", "blocked_by", "forbidden_action"],
-          "properties": {
-            "classification": {
-              "type": "string",
-              "enum": [
-                "pending_commit_handoff",
-                "pending_external_authorization",
-                "other_disclosed_handoff"
-              ]
-            },
-            "blocked_by": {
-              "type": "string",
-              "minLength": 1
-            },
-            "forbidden_action": {
-              "type": "string",
-              "minLength": 1
-            }
-          }
+          "enum": ["completed"],
+          "description": "dev has one terminal (owner decision D2): a question goes to docs/dev/producer-question-<task_id>-dev.json, never into this report."
         },
         "files_modified": {
           "type": "array",
@@ -106,13 +83,6 @@
           "type": "array",
           "items": {"type": "string"}
         }
-      },
-      "if": {
-        "properties": {"status": {"const": "needs_review"}},
-        "required": ["status"]
-      },
-      "then": {
-        "required": ["status_rationale"]
       }
     },
     "ac_deviation_with_user_need_satisfied": {

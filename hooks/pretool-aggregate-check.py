@@ -373,9 +373,12 @@ def _collect_violations(per_worker, canonical_present, scope_task_ids):
 # G3: obligation-scoped collection barrier. Generalizes this hook beyond the
 # QA-only canonical-aggregate special case above: activates on ANY Agent/Task
 # dispatch (any subagent_type) whose own prompt carries an "<obligation"
-# block, and re-verifies this dev-registry session's prior-stage
-# obligation-declared artifacts on disk before the orchestrator dispatches a
-# later pipeline stage. See docs/reference/close-commit-zero-failure-
+# block, and re-verifies the artifacts that the same task family's COMPLETED
+# prior stages declared, on disk, before the orchestrator dispatches a later
+# pipeline stage. Under the CLI's transcript order the in-flight tool_use is
+# already in the transcript when PreToolUse runs, so a prior stage is an
+# Agent/Task tool_use with a non-error tool_result and an id other than this
+# payload's tool_use_id. See docs/reference/close-commit-zero-failure-
 # mechanism-20260928.md Â§1.3-G3 and docs/dev/ticket-20260930-132644-l3.md
 # (M1-M9). Purely additive: does not alter the QA-only block above.
 #  ---------------------------------------------------------------------------
@@ -384,7 +387,6 @@ OBLIGATION_BARRIER_ENV = "CLAUDE_OBLIGATION_BARRIER"
 OBLIGATION_ADVISORY_LOG = os.path.join(
     "~", ".claude", "logs", "obligation-barrier-advisory.jsonl"
 )
-REPAIR_PROFILE = "repair"
 
 
 def _dispatch_prompt_body(data):
@@ -398,93 +400,52 @@ def _dispatch_prompt_body(data):
     return prompt if isinstance(prompt, str) else ""
 
 
-def _lenient_obligation_fields(prompt):
-    """Lenient (grammar-only, non-field-validating) extraction of a dispatch
-    prompt's obligation body as a dict, or None.
+def _parsed_obligation(prompt):
+    """The strictly parsed obligation of a dispatch prompt, or None."""
+    parsed = obligation_lib.parse_obligation(prompt) if isinstance(prompt, str) else None
+    return parsed.obligation if isinstance(parsed, obligation_lib.ParsedObligation) else None
 
-    Deliberately never routes through obligation_lib.validate_obligation /
-    parse_obligation: those fail-closed on profile="repair" (not a
-    registered PROFILES member -- ticket Edge Case 1). Only checks
-    block-count/version (extract_obligation_block) then parses the body
-    as plain JSON.
+
+def _scan_transcript_for_prior_obligations(transcript_path, family, current_tool_use_id):
+    """Earlier COMPLETED stages of ``family`` in this session's transcript.
+
+    A completed stage is an Agent/Task tool_use whose id differs from the
+    in-flight call's and which has a non-error tool_result: the in-flight
+    call, parallel siblings with no result yet and dispatches a hook refused
+    are not prior stages. Obligations parse strictly; a malformed one is
+    skipped, as is a malformed JSONL line. Returns [{"obligation", "line"}]
+    in transcript order.
     """
-    if not isinstance(prompt, str) or not prompt:
-        return None
+    uses, results = [], {}
+    if not transcript_path or not family:
+        return []
     try:
-        extracted = obligation_lib.extract_obligation_block(prompt)
-    except Exception:
-        return None
-    body = getattr(extracted, "body", None)
-    if not isinstance(body, str):
-        return None
-    try:
-        doc = json.loads(body)
-    except Exception:
-        return None
-    return doc if isinstance(doc, dict) else None
-
-
-def _scan_transcript_for_prior_obligations(transcript_path, task_id_prefix):
-    """Scan this session's own transcript for earlier Agent/Task tool_use
-    dispatches whose own prompt carries an obligation with a matching
-    task_id (prefix-normalized).
-
-    Mirrors the JSONL-scan shape of hooks/lib/subagent_restart.py
-    :func:`_read_parent_calls` (iterate lines, json.loads, walk
-    message.content[] blocks where type=="tool_use" and name in
-    {"Agent","Task"}, read input.prompt) as a NEW local function --
-    re-implemented rather than imported (underscore-private, foreign-module
-    coupling risk).
-
-    Returns a list of {"obligation": dict, "line": int}, ascending by
-    transcript line. Defensive (Edge Case 4): a malformed JSONL line or a
-    malformed historical obligation is skipped, never raised; one bad entry
-    never aborts the scan of the rest.
-    """
-    found = []
-    if not transcript_path or not task_id_prefix:
-        return found
-    try:
-        path = Path(transcript_path)
-        if not path.exists():
-            return found
-        with path.open("r", encoding="utf-8", errors="replace") as handle:
+        with Path(transcript_path).open("r", encoding="utf-8", errors="replace") as handle:
             for line_no, raw_line in enumerate(handle, 1):
                 try:
                     record = json.loads(raw_line)
                 except Exception:
                     continue
-                if not isinstance(record, dict):
-                    continue
-                message = record.get("message")
+                message = record.get("message") if isinstance(record, dict) else None
                 content = message.get("content") if isinstance(message, dict) else None
-                if not isinstance(content, list):
-                    continue
-                for block in content:
+                for block in content if isinstance(content, list) else ():
                     if not isinstance(block, dict):
                         continue
-                    if block.get("type") != "tool_use" or block.get("name") not in (
-                        "Agent", "Task",
-                    ):
-                        continue
-                    tool_input = block.get("input")
-                    if not isinstance(tool_input, dict):
-                        continue
-                    prompt = tool_input.get("prompt")
-                    obligation = (
-                        _lenient_obligation_fields(prompt)
-                        if isinstance(prompt, str) else None
-                    )
-                    if obligation is None:
-                        continue
-                    prior_task_id = obligation.get("task_id")
-                    if not isinstance(prior_task_id, str):
-                        continue
-                    if _normalize_task_id_prefix(prior_task_id) != task_id_prefix:
-                        continue
-                    found.append({"obligation": obligation, "line": line_no})
+                    if block.get("type") == "tool_result":
+                        results[block.get("tool_use_id")] = bool(block.get("is_error"))
+                    elif block.get("type") == "tool_use" and block.get("name") in ("Agent", "Task"):
+                        tool_input = block.get("input")
+                        prompt = tool_input.get("prompt") if isinstance(tool_input, dict) else None
+                        uses.append((line_no, block.get("id"), prompt))
     except Exception:
-        return found
+        return []
+    found = []
+    for line_no, use_id, prompt in uses:
+        if use_id == current_tool_use_id or results.get(use_id, True):
+            continue
+        obligation = _parsed_obligation(prompt)
+        if obligation is not None and obligation_lib.task_family(obligation.get("task_id")) == family:
+            found.append({"obligation": obligation, "line": line_no})
     return found
 
 
@@ -610,23 +571,24 @@ def _run_obligation_barrier(data):
         prompt = _dispatch_prompt_body(data)
         if obligation_lib.OBLIGATION_OPEN_TOKEN not in prompt:
             return
-        current = _lenient_obligation_fields(prompt)
+        # A current block that does not parse is G1's finding; nothing here.
+        current = _parsed_obligation(prompt)
         if current is None:
             return
-        if current.get("profile") == REPAIR_PROFILE:
-            return
         task_id = current.get("task_id")
-        task_id_prefix = (
-            _normalize_task_id_prefix(task_id) if isinstance(task_id, str) else None
-        )
-        if task_id_prefix is None:
+        family = obligation_lib.task_family(task_id)
+        if family is None:
             return
-        transcript_path = data.get("transcript_path") if isinstance(data, dict) else None
         prior_obligations = _scan_transcript_for_prior_obligations(
-            transcript_path, task_id_prefix
+            data.get("transcript_path"), family, data.get("tool_use_id")
         )
         if not prior_obligations:
             return
+        # Declared again by this dispatch: a re-dispatch after a producer
+        # question or a QA fail, or the next close-QA round, rewrites it.
+        redeclared = {
+            a.get("path") for a in current.get("artifacts", []) if isinstance(a, dict)
+        }
         project_dir = os.environ.get("CLAUDE_PROJECT_DIR") or os.getcwd()
         for prior in prior_obligations:
             obligation = prior.get("obligation") or {}
@@ -638,7 +600,7 @@ def _run_obligation_barrier(data):
             for entry in artifacts:
                 if not isinstance(entry, dict) or entry.get("kind") not in (
                     "json", "markdown",
-                ):
+                ) or entry.get("path") in redeclared:
                     # response_block/response_line (AC6, W3) and unknown
                     # kinds have no on-disk representation to check.
                     continue

@@ -20,6 +20,8 @@
     "cleanliness-inspector-report.v1": "cleanliness-inspector-report.v1.json",
     "prompt-inspector-report.v1": "prompt-inspector-report.v1.json",
     "test-writer-report.v1": "test-writer-report.v1.json",
-    "test-writer-manifest.v1": "test-writer-manifest.v1.json"
+    "test-writer-manifest.v1": "test-writer-manifest.v1.json",
+    "producer-question.v1": "producer-question.v1.json",
+    "ba-qa-report.v1": "ba-qa-report.v1.json"
   }
 }

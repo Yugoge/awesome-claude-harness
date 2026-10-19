@@ -193,8 +193,9 @@ def test_h3_non_object_json_stdin_fails_open():
 
 
 # ---------------------------------------------------------------------------
-# ticket-20260930-132644-l8 Part C2: structural repair-profile exception.
-# Both cases verbatim from turn-5 补漏1 (AC-L8-11 / AC-L8-12).
+# P1 (A1.e): the repair-profile exception is retired. No template emits
+# profile "repair" and G1 rejects it, so during an active /do a repair-profile
+# dispatch is blocked like any other main-agent dispatch.
 # ---------------------------------------------------------------------------
 
 def _repair_obligation_prompt(profile: str = "repair") -> str:
@@ -205,19 +206,17 @@ def _repair_obligation_prompt(profile: str = "repair") -> str:
     )
 
 
-def test_i_repair_profile_dispatch_allowed_during_do():
-    """(i) AC-L8-11: consent active + a syntactically valid obligation block
-    with profile="repair" -> exit 0, verified structurally (extract_
-    obligation_block + raw JSON parse), never via a substring search for
-    the word "repair" in the prompt."""
+def test_i_repair_profile_dispatch_blocked_during_do():
+    """(i) consent active + an obligation block with profile="repair" -> exit 2
+    with the block message (before P1: exit 0 through the retired bypass)."""
     sid = _unique_sid()
     with _consent_flag(sid):
         result = _run_hook({
             "tool_name": "Agent", "session_id": sid,
             "tool_input": {"prompt": _repair_obligation_prompt()},
         })
-    assert result.returncode == 0
-    assert BLOCK_BANNER not in result.stderr
+    assert result.returncode == 2
+    assert BLOCK_BANNER in result.stderr
 
 
 def test_j_non_repair_dispatch_still_blocked_during_do():

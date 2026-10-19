@@ -245,11 +245,7 @@ def _check_dev_report_projection(record: dict) -> list[str]:
     errors = _check_projection_header(record, schema_name)
 
     source_status = _nested_value(record, ('dev', 'status'))
-    status_map = {
-        'completed': 'completed',
-        'blocked': 'blocked',
-        'needs_review': 'partial',
-    }
+    status_map = {'completed': 'completed'}
     if source_status is _MISSING:
         errors.append(
             f"{_projection_prefix(schema_name)}: canonical source 'dev.status' "

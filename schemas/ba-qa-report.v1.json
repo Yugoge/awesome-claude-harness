@@ -1,0 +1,35 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "ba-qa-report.v1",
+  "title": "BA-validation QA report v1",
+  "description": "QA's BA-validation verdict, docs/dev/ba-qa-report-<task_id>.json, in the shape the /dev, /dev-command and /dev-overnight templates prescribe. verdict fail loops back to BA; pass is the only exit. task_id is the identity the obligation names.",
+  "type": "object",
+  "required": ["task_id", "verdict", "objections", "summary"],
+  "properties": {
+    "task_id": {"type": "string", "minLength": 1},
+    "verdict": {"type": "string", "enum": ["pass", "fail"]},
+    "objections": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["dimension", "claim", "problem", "required_evidence"],
+        "properties": {
+          "dimension": {
+            "type": "string",
+            "enum": [
+              "evidence_quality",
+              "scope_alignment",
+              "investigation_completeness",
+              "affected_file_accuracy",
+              "spec_text_vs_execution_drift"
+            ]
+          },
+          "claim": {"type": "string"},
+          "problem": {"type": "string"},
+          "required_evidence": {"type": "string"}
+        }
+      }
+    },
+    "summary": {"type": "string"}
+  }
+}
