@@ -185,7 +185,8 @@ jobs:
           if git grep -nIE "$pat_oldrepo" -- . "$exclude" ; then
             echo "::error::stale repo name still present"; status=1
           fi
-          if git grep -nIE '/root/docs' -- README.md ARCHITECTURE.md ; then
+          pat_rootdocs="/roo""t/docs"
+          if git grep -nIE "$pat_rootdocs" -- README.md ARCHITECTURE.md ; then
             echo "::error::broken grounding-doc links still present in README/ARCHITECTURE"; status=1
           fi
           exit "$status"

@@ -8,7 +8,8 @@ in public-core" requirement:
     no longer hard-codes that personal value (R7b): the machine owner lists it in
     the untracked private-literal list, so these controls write a synthetic stand-in
     into a list inside their own copied tree;
-  * generic author-home classes (/root/, /home/<user>/, /Users/<User>/) hard-fail;
+  * generic author-home classes (/root/, /home/<user>/, /Users/<User>/) and e-mail
+    addresses outside the classes allowed by rule hard-fail, in EVERY tracked file;
   * the exemption mechanism is a SET, not an aggregate count — the delete-one /
     add-one constant-count scenario must still fail;
   * an exemption CLASS is re-derived from the source structure, so relabelling an
@@ -24,7 +25,6 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-import re
 import shlex
 import shutil
 import subprocess
@@ -39,7 +39,11 @@ PRIVATE_LIST = "private-literals.txt"   # machine-local private-literal list (R7
 # A SYNTHETIC workspace path standing in for the maintainer's real one (a personal value
 # that belongs only in a machine's private list). Split so this file never carries it
 # whole: the private-literal rule scans every tracked file, this one included.
-WS_MARKER = "/dev/shm/" + "demo-workspace/demo-harness"
+WORKSPACE_STANDIN = "/dev/shm/" + "demo-workspace/demo-harness"
+# Synthetic stand-ins for the kinds of value a machine lists (a remote, a mirror path, a
+# sync script), split for the same reason. Test ids name the kind, never the value.
+STANDINS = {"remote": "standin-" + "q7x-1", "mirror": "/srv/standin-" + "q7x-2",
+            "sync": "/srv/standin-" + "q7x-3.sh"}
 
 
 def _tracked_files() -> list[str]:
@@ -159,23 +163,16 @@ def _ledger_public_core(root: Path) -> list[str]:
     return sorted(set(out))
 
 
-def _public_core_files(root: Path) -> set[str]:
-    """Tracked files in the ledger-derived public-core set — the CHECKOUT-mode scan scope.
-
-    The allowlist deliberately spans TWO scopes: checkout mode scans public-core,
-    archive mode scans the wider release-membership set. A control that mutates an
-    allowlist entry must therefore pick an entry THIS mode actually looks at —
-    mutating an archive-only entry (PUBLIC-CORE.md is `shared/infra`) exercises
-    nothing and reads as a false gate failure.
-    """
-    prefixes = _ledger_public_core(root)
-    return set(subprocess.run(["git", "-C", str(root), "ls-files", "--", *prefixes],
-                              capture_output=True, text=True).stdout.split())
+def _tracked(root: Path) -> set[str]:
+    """Every tracked file — the CHECKOUT-mode scan scope (archive mode scans the
+    release-membership subset)."""
+    return set(subprocess.run(["git", "-C", str(root), "ls-files", "-z"],
+                              capture_output=True, text=True).stdout.split("\0")) - {""}
 
 
 def _in_scope_entries(root: Path) -> list[dict]:
     """Allowlist entries whose path is inside the checkout-mode scan scope."""
-    scope = _public_core_files(root)
+    scope = _tracked(root)
     doc = json.loads((root / ALLOWLIST).read_text(encoding="utf8"))
     return [e for e in doc["entries"] if e["path"] in scope]
 
@@ -210,11 +207,11 @@ def test_workspace_marker_hard_fails_per_ledger_prefix(pristine, tmp_path, prefi
     literal. The controls key on the rule's own FAIL lines, so the verdict is causally
     attributable to the injection whatever else the tree carries."""
     root = _copy(pristine, tmp_path)
-    _private_list(root, WS_MARKER)
+    _private_list(root, WORKSPACE_STANDIN)
     victim = _victim(root, prefix)
     before = _run(root)
     assert not _private_literal_hits(before.stdout), "baseline control: no listed literal before the injection"
-    marker_line = f"\n# injected marker {WS_MARKER}/x\n"
+    marker_line = f"\n# injected marker {WORKSPACE_STANDIN}/x\n"
     _append(victim, marker_line)
     _stage(root)
     r = _run(root)
@@ -223,7 +220,7 @@ def test_workspace_marker_hard_fails_per_ledger_prefix(pristine, tmp_path, prefi
     hits = _private_literal_hits(r.stdout)
     assert any(f"-> {rel}:" in h for h in hits), "failure output must name the injected file"
     assert all(f"({PRIVATE_LIST} line 2)" in h for h in hits), "failure must name the list line"
-    assert WS_MARKER not in r.stdout + r.stderr, "the listed literal must never be printed"
+    assert WORKSPACE_STANDIN not in r.stdout + r.stderr, "the listed literal must never be printed"
     _write(victim, victim.read_text(encoding="utf8").replace(marker_line, ""))
     _stage(root)
     after = _run(root)
@@ -236,19 +233,19 @@ def test_listed_workspace_marker_fails_in_archive_mode_without_exemption(pristin
     member. The retired workspace-marker gate exempted the ledger; the private-literal
     rule exempts no path, so a listed literal in PUBLIC-CORE.md is caught as well."""
     root = _copy(pristine, tmp_path)
-    _private_list(root, WS_MARKER)
+    _private_list(root, WORKSPACE_STANDIN)
     stage = _copy_stage(staged, tmp_path)
     assert not _private_literal_hits(_run_archive(root, stage).stdout), "baseline control"
     victims = ("agents/dev.md", "PUBLIC-CORE.md")
     for rel in victims:
         with (stage / rel).open("a", encoding="utf8") as fh:
-            fh.write(f"\nInjected marker {WS_MARKER}/x\n")
+            fh.write(f"\nInjected marker {WORKSPACE_STANDIN}/x\n")
     r = _run_archive(root, stage)
     assert r.returncode != 0, "listed workspace marker shipped undetected in the archive"
     hits = _private_literal_hits(r.stdout)
     for rel in victims:
         assert any(f"-> {rel}:" in h for h in hits), f"{rel} not reported"
-    assert WS_MARKER not in r.stdout + r.stderr, "the listed literal must never be printed"
+    assert WORKSPACE_STANDIN not in r.stdout + r.stderr, "the listed literal must never be printed"
 
 
 @pytest.mark.parametrize(
@@ -360,7 +357,7 @@ def test_placeholder_rationale_is_rejected(pristine, tmp_path):
     doc = json.loads((root / ALLOWLIST).read_text(encoding="utf8"))
     # Must be an entry this mode actually scans: the rationale is validated per
     # LIVE occurrence, so blanking an archive-only entry proves nothing here.
-    scope = _public_core_files(root)
+    scope = _tracked(root)
     victim = next(i for i, e in enumerate(doc["entries"]) if e["path"] in scope)
     doc["entries"][victim]["rationale"] = "TBD"
     _write(root / ALLOWLIST, json.dumps(doc, indent=2))
@@ -370,40 +367,68 @@ def test_placeholder_rationale_is_rejected(pristine, tmp_path):
     assert "no per-entry rationale" in r.stdout
 
 
-@pytest.mark.parametrize("marker", ["git@github.com:" + "Yugoge", "/root/.claude" + ".bak", "/root/sync-" + "backup.sh"])
-def test_preexisting_hard_markers_still_gate(pristine, tmp_path, marker):
-    """AC6 e: the three pre-existing HARD_MARKERS must not be regressed by the
-    new section — one behavioural control per marker."""
+@pytest.mark.parametrize("kind", sorted(STANDINS))
+def test_preexisting_hard_markers_still_gate(pristine, tmp_path, kind):
+    """AC6 e, re-homed onto the private-literal rule: the kinds of value the retired
+    published marker list named (a remote, a mirror path, a sync script) still gate once
+    a machine lists them — one behavioural control per kind, with synthetic stand-ins."""
     root = _copy(pristine, tmp_path)
+    _private_list(root, *STANDINS.values())
     assert _run(root).returncode == 0
-    _append(root / "agents" / "dev.md", f"\nInjected hard marker {marker}\n")
+    _append(root / "agents" / "dev.md", f"\nInjected listed value {STANDINS[kind]}\n")
     _stage(root)
     r = _run(root)
-    assert r.returncode != 0, f"pre-existing hard marker {marker} regressed"
-    assert "hard residue marker" in r.stdout
+    assert r.returncode != 0, f"listed {kind} value regressed"
+    assert any("-> agents/dev.md:" in h for h in _private_literal_hits(r.stdout))
+    assert STANDINS[kind] not in r.stdout + r.stderr, "the listed literal must never be printed"
 
 
-def test_scan_set_equals_full_ledger_public_core_set(pristine):
-    """AC5: the detector's enumerated scan set EQUALS the ledger-derived
-    public-core set — asserted as a set equality, not inferred from one hit."""
-    prefixes = _ledger_public_core(pristine)
-    expected = set(subprocess.run(["git", "-C", str(pristine), "ls-files", "--", *prefixes],
-                                  capture_output=True, text=True).stdout.split())
+def test_scan_set_equals_every_tracked_file(pristine):
+    """AC5, widened: the checkout-mode scan set is EVERY tracked file (the ledger class
+    no longer narrows it), so every allowlist entry names a tracked file and, on a clean
+    tree, scanned occurrences and entries correspond 1:1 — not merely "no failures"."""
+    expected = _tracked(pristine)
     r = _run(pristine)
     scanned = int(r.stdout.split("residue audit:")[1].split("occurrence")[0].strip())
-    # Every allowlist entry corresponds to a file the gate scans in SOME mode:
-    # checkout mode scans public-core, archive mode scans the release-membership
-    # set. An entry outside BOTH would grant an exemption nothing ever validates.
     doc = json.loads((pristine / ALLOWLIST).read_text(encoding="utf8"))
-    membership = set(subprocess.run(
-        ["python3", "scripts/lib/release_membership.py", "--from-git", "--root", ".",
-         "--manifest", "release-membership.v1.json"],
-        cwd=pristine, capture_output=True, text=True).stdout.split())
-    assert {e["path"] for e in doc["entries"]} <= (expected | membership)
-    # In THIS (checkout) mode, every scanned occurrence must be exempted and every
-    # in-scope entry must be live — an exact 1:1, not merely "no failures".
-    in_scope = [e for e in doc["entries"] if e["path"] in expected]
-    assert scanned == len(in_scope), "scanned occurrences must equal the in-scope exempted set on a clean tree"
+    assert {e["path"] for e in doc["entries"]} <= expected
+    assert scanned == len(doc["entries"]), "scanned occurrences must equal the exempted set on a clean tree"
+    assert "tests/" in "".join(e["path"] for e in doc["entries"]), "the test tree is scanned too"
+
+
+@pytest.mark.parametrize("victim, line", [
+    (".github/CODEOWNERS", "# owner: " + "maint" + "@" + "acct-b.dev"),
+    ("tests/conftest_stub.md", "contact " + "maint" + "@" + "acct-b.dev"),
+])
+def test_email_outside_the_allowed_classes_fails_in_any_tracked_file(pristine, tmp_path, victim, line):
+    """The e-mail rule: an address with a non-reserved domain fails wherever it is tracked."""
+    root = _copy(pristine, tmp_path)
+    path = root / victim
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if path.exists():
+        _append(path, "\n" + line + "\n")
+    else:
+        path.write_text(line + "\n", encoding="utf8")
+    _stage(root)
+    r = _run(root)
+    assert r.returncode != 0
+    assert f"NEW un-allowlisted e-mail address -> {victim}:" in r.stdout
+    assert "acct-b.dev" not in r.stdout, "a FAIL line never prints the address"
+
+
+def test_emails_allowed_by_rule_pass(pristine, tmp_path):
+    """Allowed by rule, no allowlist entry needed: a systemd template unit, the git SSH
+    user form, reserved example/test domains and a no-reply address."""
+    root = _copy(pristine, tmp_path)
+    _append(root / "agents" / "dev.md", "\n" + "\n".join((
+        "systemctl restart " + "worker" + "@" + "blue.service",
+        "git clone " + "git" + "@" + "git.acct-b.dev:org/repo.git",
+        "mail " + "maint" + "@" + "example.invalid",
+        "mail " + "maint" + "@" + "corp.example.com",
+        "Co-Authored-By: bot <" + "noreply" + "@" + "acct-b.dev>")) + "\n")
+    _stage(root)
+    r = _run(root)
+    assert r.returncode == 0, r.stdout + r.stderr
 
 
 # ---------------------------------------------------------------------------
@@ -567,75 +592,36 @@ def test_trailing_comment_does_not_launder_a_live_literal_on_the_same_line(prist
 
 
 # ---------------------------------------------------------------------------
-# Archive-mode hard markers (backlog item 2) — AC-REL-4.
-#
-# The HARD_MARKERS loop used to sit AFTER the archive branch's `exit "$rc"`, so it
-# was unreachable over a release artifact: every injection below exits 0 against
-# that arrangement.
+# Archive-mode listed values (backlog item 2) — AC-REL-4, re-homed onto the
+# private-literal rule: the published hard-marker list and its exemption keys are
+# gone; a machine lists such values and the same rule gates every archive member.
 # ---------------------------------------------------------------------------
 
-HARD_MARKERS = ["git@github.com:" + "Yugoge", "/root/.claude" + ".bak", "/root/sync-" + "backup.sh"]
-
-
-@pytest.mark.parametrize("marker", HARD_MARKERS)
-def test_hard_marker_in_a_non_exempt_archive_member_fails(pristine, staged, tmp_path, marker):
-    """AC-REL-4 limb a: a maintainer identifier inside a released artifact is caught."""
+@pytest.mark.parametrize("kind", sorted(STANDINS))
+def test_hard_marker_in_a_non_exempt_archive_member_fails(pristine, staged, tmp_path, kind):
+    """AC-REL-4 limb a: a listed maintainer value inside a released artifact is caught."""
+    root = _copy(pristine, tmp_path)
+    _private_list(root, *STANDINS.values())
     stage = _copy_stage(staged, tmp_path)
-    assert _run_archive(pristine, stage).returncode == 0, "baseline control must be clean"
-    victim = stage / "agents" / "dev.md"
-    exempt = json.loads((stage / "release-membership.v1.json").read_text(encoding="utf8"))
-    assert "agents/dev.md" not in exempt["hard_marker_exempt_paths"], "victim must be non-exempt"
-    with victim.open("a", encoding="utf8") as fh:
-        fh.write(f"\nInjected hard marker {marker}\n")
-    r = _run_archive(pristine, stage)
-    assert r.returncode != 0, f"hard marker {marker} shipped undetected in the archive"
-    assert "hard residue marker in released archive" in r.stdout
-    assert "agents/dev.md" in r.stdout
+    assert _run_archive(root, stage).returncode == 0, "baseline control must be clean"
+    with (stage / "agents" / "dev.md").open("a", encoding="utf8") as fh:
+        fh.write(f"\nInjected listed value {STANDINS[kind]}\n")
+    r = _run_archive(root, stage)
+    assert r.returncode != 0, f"listed {kind} value shipped undetected in the archive"
+    assert any("-> agents/dev.md:" in h for h in _private_literal_hits(r.stdout))
+    assert STANDINS[kind] not in r.stdout + r.stderr, "the listed literal must never be printed"
 
 
-def test_unmodified_staged_tree_does_not_false_fail_on_legitimate_carriers(pristine, staged):
-    """AC-REL-4 limb b (anti-vacuity): the two legitimate carriers must NOT fail.
+def test_unmodified_staged_tree_does_not_false_fail_on_legitimate_carriers(pristine, staged, tmp_path):
+    """AC-REL-4 limb b (anti-vacuity): with a list present, the unmodified staged tree
+    passes — the ledger, the engine and the allowlist carry no listed value.
 
     Without this, limb a could be satisfied by failing every release."""
-    r = _run_archive(pristine, staged)
+    root = _copy(pristine, tmp_path)
+    _private_list(root, *STANDINS.values())
+    r = _run_archive(root, staged)
     assert r.returncode == 0, r.stdout + r.stderr
-    assert "no un-exempted hard residue markers" in r.stdout
-
-
-def test_emptying_the_hard_marker_exemption_turns_the_archive_gate_red(pristine, staged, tmp_path):
-    """AC-REL-4 limb c: the exemption is load-bearing, not decorative."""
-    stage = _copy_stage(staged, tmp_path)
-    assert _run_archive(pristine, stage).returncode == 0
-    manifest = stage / "release-membership.v1.json"
-    doc = json.loads(manifest.read_text(encoding="utf8"))
-    doc["hard_marker_exempt_paths"] = []
-    manifest.write_text(json.dumps(doc, indent=2), encoding="utf8")
-    r = _run_archive(pristine, stage)
-    assert r.returncode != 0, "emptying the exemption did not turn the gate red"
-    assert "hard residue marker in released archive" in r.stdout
-
-
-def test_hard_marker_exemption_is_its_own_key_with_its_own_rationale(pristine):
-    """AC-REL-4 limb d: the consulted key is hard-marker-scoped, and its rationale is
-    not a copy of the workspace-marker rationale (which describes another class).
-
-    R7b retired the hard-coded workspace-marker gate, so the gate no longer consults
-    the workspace_marker_exempt_* keys at all (the private-literal rule has no per-path
-    exemption); where the manifest still carries them, the distinctness check stands."""
-    doc = json.loads((pristine / "release-membership.v1.json").read_text(encoding="utf8"))
-    assert "hard_marker_exempt_paths" in doc, "hard markers need their own exemption key"
-    assert "hard_marker_exempt_rationale" in doc
-    checker = (pristine / CHECKER).read_text(encoding="utf8")
-    assert "hard_marker_exempt_paths" in checker, "the gate must read the hard-marker key"
-    assert "workspace_marker_exempt_paths" not in checker, "the retired workspace-marker key is still consulted"
-    ws_texts = set(doc.get("workspace_marker_exempt_rationale", {}).values())
-    for path, text in doc["hard_marker_exempt_rationale"].items():
-        assert text.strip(), f"{path} exemption carries no rationale"
-        assert text not in ws_texts, (
-            f"{path}: hard-marker rationale is byte-identical to a workspace-marker "
-            "rationale — an exemption whose justification describes a different class")
-    for path in doc["hard_marker_exempt_paths"]:
-        assert path in doc["hard_marker_exempt_rationale"], f"{path} exempted without a rationale"
+    assert "PASS: no listed private literal (scope: archive)" in r.stdout
 
 
 # ---------------------------------------------------------------------------
@@ -680,24 +666,19 @@ def test_staging_copy_dereferences_symlinks(pristine, tmp_path):
 # the checkout, the default run reported the owner's machine values as residue.
 # ---------------------------------------------------------------------------
 
-def _param_marker() -> str:
-    """The first PARAM_MARKERS entry, read from the checker rather than repeated here."""
-    block = (REPO / CHECKER).read_text(encoding="utf8").split("PARAM_MARKERS=(\n", 1)[1].split("\n)", 1)[0]
-    return re.findall(r"'([^']+)'", block)[0]
-
-
 def test_filtered_settings_are_gated_from_the_index_not_the_smudged_checkout(pristine, tmp_path):
-    """A stand-in machine form (one entry per content check: author-path residue, hard
-    marker, param marker) smudged into the checkout changes nothing in the default run;
+    """A stand-in machine form (one entry per content check: author-path residue, listed
+    private literal, e-mail address) smudged into the checkout changes nothing in the default run;
     an unstaged change to an unfiltered file is still read from the checkout; the same
     machine form in the index (filter bypassed) still fails on every entry."""
     root = _copy(pristine, tmp_path)
+    _private_list(root, STANDINS["sync"])
     git = ["git", "-C", str(root)]
     assert "settings.json" in _filtered(root), "settings.json carries the filter attribute"
     fresh = _run(root)
     assert "settings.json" not in fresh.stdout, "control: the clean form carries no residue"
-    entries = ("Bash(/home/" + "acct-test-123/bin/sync.sh:*)", f"Bash({HARD_MARKERS[2]}:*)",
-               f"Bash(docker restart {_param_marker()}:*)")
+    entries = ("Bash(/home/" + "acct-test-123/bin/sync.sh:*)", f"Bash({STANDINS['sync']}:*)",
+               "Bash(mail " + "maint" + "@" + "acct-b.dev:*)")
     added = tmp_path / "machine-entries"
     added.write_text("".join(f'      "{e}",\n' for e in entries), encoding="utf8")
     # A stand-in filter shaped like init's: smudge adds the entries, clean removes them.
@@ -730,6 +711,6 @@ def test_filtered_settings_are_gated_from_the_index_not_the_smudged_checkout(pri
     committed = _run(root)
     assert committed.returncode != 0
     for needle in ("NEW un-allowlisted author-path residue -> settings.json:",
-                   f"hard residue marker in public-core: '{HARD_MARKERS[2]}'  ->  settings.json:",
-                   f"un-parameterized residue marker in public-core: '{_param_marker()}'  ->  settings.json:"):
+                   f"FAIL: private literal ({PRIVATE_LIST} line 2) -> settings.json:",
+                   "NEW un-allowlisted e-mail address -> settings.json:"):
         assert needle in committed.stdout, f"a machine form in the index is not caught: {needle}"
