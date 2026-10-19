@@ -41,14 +41,12 @@ hooks/
 │   │   ├── `pathmatch.py` - Depends only on shell_lex (`_strip_quotes`) + stdlib; references nothing from
 │   │   └── `shell_lex.py` - Dependency LEAF: imports only the stdlib, references nothing from _core
 │   ├── `agent_resolver.py` - Refactored from pretool-subagent-code-block.py::_find_agent_type so that
-│   ├── `agent_temp_targets.py` - This module is deliberately not an authorization hook and never emits
 │   ├── `allowlist.py` - Single source of truth for grant-read, grant-match, and grant-consume
 │   ├── `attribution_journal.py` - Capture side (used by pretool-attribution-pre.py / posttool-attribution-post.py):
 │   ├── `bash_context_strip.py` - This is deliberately NOT a full shell parser.  It only computes a conservative
 │   ├── `bash_write_targets.py` - Provides two public functions used by tool-policy and overnight-hook-guard:
 │   ├── `capability_state.py` - verdict, and the INDEPENDENT (non-hook-dispatched) preactivation consumer
 │   ├── `checkpoint-core.sh` - checkpoint-core.sh - Shared library for automated snapshot commits
-│   ├── `checkpoint_resources.py` - The directory lock is the transaction boundary: primary-template validation,
 │   ├── `claude_home.py` - Generalizes the in-repo gold-standard fail-closed self-resolution pattern
 │   ├── `claude_home.sh` - claude_home.sh — shared "harness home" resolver (shell consumable).
 │   ├── `close-verdict.py` - Shared CLOSE verdict classifier for commit/close tooling.
@@ -62,7 +60,6 @@ hooks/
 │   ├── `harness_state_dir.py` - Hook runtime state (consent flags, grants, sentinels, bookmarks, stamps) lives
 │   ├── `harness_state_dir.sh` - harness_state_dir.sh -- shell twin of hooks/lib/harness_state_dir.py.
 │   ├── `interruption_signals.py` - Decides whether a subagent was cut off — and whether a usage limit did it — from
-│   ├── `negative_evidence.py` - The scan root is never an authority source.  A parent-published immutable
 │   ├── `obligation.py` - Rollout step S2 of the converged zero-failure design
 │   ├── `overnight.py` - Single source of truth for "is a /dev-overnight session currently live?". A
 │   ├── `policy_registry.py` - Reads the harness ``policies/tool-policy.v1.json`` (resolved via the shared
@@ -77,14 +74,9 @@ hooks/
 ├── tests/
 │   ├── fixtures/
 │   │   ├── `adversarial_corpus.json` - json config
-│   │   └── `overwrite_corpus.json` - JSON config: schema_version, task_id, guard, driver, documentation
+│   │   ├── `overwrite_corpus.json` - JSON config: schema_version, task_id, guard, driver, documentation
+│   │   └── `protected-runtime.json` - JSON config: schema_version, protected_cmds, protected_launch_paths, protected_services, protected_hotfiles
 │   ├── `_fixtures_obligation_terminal.py` - 20260930-132644-l4): hooks/tests/test_stop_obligation_gate.py and
-│   ├── `test_ac10_verify.sh` - Shell script
-│   ├── `test_ac1_verify.sh` - Shell script
-│   ├── `test_ac3_verify.sh` - Shell script
-│   ├── `test_ac5_verify.sh` - Shell script
-│   ├── `test_ac6_verify.sh` - Shell script
-│   ├── `test_ac9_verify.sh` - Shell script
 │   ├── `test_allowlist_consolidation.py` - Covers AC8 IS_SUBAGENT firewall scenarios and matching semantics invariants
 │   ├── `test_allowlist_git_global_opts.py` - Regression cover for task 20260928-133915: `/allow git commit` could never match
 │   ├── `test_artifact_contract_enforce.py` - The hook is the producer-side port of /close's Artifact schema gate
@@ -116,16 +108,11 @@ hooks/
 │   ├── `test_e2e_enforce.py` - obligation fallback (ticket 20261001-161041-r06, M1)
 │   ├── `test_extract.py` - Unit tests for hooks/doc_sync/extract.py — covers all 4 defects + known-file cases.
 │   ├── `test_fail_closed_drift.py` - WHY THIS FILE EXISTS
-│   ├── `test_final_sweep.sh` - Final sweep — run inline AC checks and print PASS/FAIL summary.
 │   ├── `test_git_cmd_cross_consistency.py` - Verifies that GIT_CMD_RE (hooks/pretool-bash-safety.sh),
 │   ├── `test_git_prefix_enumeration.py` - THE DEFECT
 │   ├── `test_git_residual_override.py` - Background
 │   ├── `test_gitignore_preflight_close_contract.py` - The gate previously harvested any docs/dev/dev-report-*.json cited anywhere in an
 │   ├── `test_grep_backtrack_guard.py` - Freeze safe grep shapes and the catastrophic embedded-engine control.
-│   ├── `test_laneb_agent_temp_targets.py` - Complete declared static temp-target mechanism matrix for LANE-B.
-│   ├── `test_laneb_checkpoint_resources.py` - LANE-B checkpoint transaction and CLI provider tests.
-│   ├── `test_laneb_integration_gate.py` - Adversarial tests for the closed Lane B H-B v3/fan-in verifier.
-│   ├── `test_laneb_pretool_composition.py` - LANE-B core seams for the later POL/BIND single-writer integration.
 │   ├── `test_laneb_session_resources.py` - LANE-B actor scratch, receipt, and owned-process broker tests.
 │   ├── `test_laneb_stop_coordinator.py` - LANE-B non-destructive receipt writers and serialized Stop coordinator.
 │   ├── `test_laneb_stop_overnight_timelock_scoping.py` - Blast-radius-map.json (dev-20260910-111227/blast-radius-map-20260808-035658-laneb)
@@ -158,6 +145,7 @@ hooks/
 │   ├── `test_unit_git_cmds.py` - Imports the git_cmds sibling module DIRECTLY (not via the _core facade) and
 │   ├── `test_unit_pathmatch.py` - Imports the pathmatch sibling module DIRECTLY (not via the _core facade) and
 │   ├── `test_unit_shell_lex.py` - Imports the shell_lex sibling module DIRECTLY (not via the _core facade's
+│   ├── `test_userprompt_bulk_commit_capability.py` - Tests for hooks/userprompt-bulk-commit-capability.py's /commit --bulk detector.
 │   ├── `test_userprompt_doc_sync_relay.py` - Backlog #83: the UserPromptSubmit hook resyncs a directory by running
 │   └── `test_userprompt_usage_snapshot.py` - Covers the three cache states the hook must handle (cache hit, cache expired
 ├── `audit-slashcommand.sh` - audit-slashcommand.sh

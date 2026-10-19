@@ -91,7 +91,6 @@ scripts/
 ├── `check-public-core.sh` - Description: Public/private boundary gate. Recomputes the top-level tracked-path set from
 ├── `check-readme-freshness.sh` - Check README.md freshness for all major folders
 ├── `check-security-hook-drift.sh` - Description: Audit always-on security-critical hook files against a cycle baseline SHA
-├── `check-todo-accounting.py` - Executable C10 accounting proof for the ordinary ``/dev`` checklist.
 ├── `checkpoint-prune.sh` - checkpoint-prune.sh — trim refs/checkpoints/* to the most recent N commits
 ├── `cleanup-close-force-sentinel.sh` - Removes the force-close sentinel file for a given dev session.
 ├── `close-commit-repair-orchestrate.py` - Consumes schemas/repair-map.v1.json; given a findings list, looks up each
@@ -104,12 +103,10 @@ scripts/
 ├── `derive-default-branch.sh` - Description: Resolve the repository's default branch name dynamically (handles main/master/any other).
 ├── `detect-dead-functions.sh` - Shell script
 ├── `detect-duplicate-content.sh` - Shell script
-├── `detect-hardcoded-paths.sh` - Shell script
 ├── `detect-merge-conflicts.sh` - Shell script
 ├── `detect-orphan-agents.sh` - Description: Detect agents not referenced by any command
 ├── `detect-orphan-commands.sh` - Description: Detect orphan commands (one-time patterns, no todo script, unused)
 ├── `detect-orphan-scripts.sh` - Description: Detect scripts not referenced by any command/agent/other script
-├── `dev-fix.py` - This module is intentionally a backend, not a command orchestrator.  It classifies
 ├── `dev-lifecycle.py` - Derives, per on-disk task-id, a state using the TOTAL REDUCTION ORDER from
 ├── `discover-folders.sh` - Description: Dynamically discover project folders excluding system directories
 ├── `doctor` - doctor file
@@ -126,14 +123,12 @@ scripts/
 ├── `install-checkpoint-refspec.sh` - install-checkpoint-refspec.sh — idempotently add refs/checkpoints/* to
 ├── `install-git-keystone.sh` - install-git-keystone.sh — wire the git-native reference-transaction keystone
 ├── `iterate-failed-pipelines.py` - Reads pipelines JSON path; outputs iteration plan JSON to stdout. The orchestrator
-├── `laneb-integration-gate.py` - The program is deliberately non-authorizing unless it has consumed the complete,
 ├── `late-repair-controller.py` - Owns the run-record lifecycle for the deliberately-invoked ``/close
 ├── `lifecycle-baseline-import.sh` - Description: One-time idempotent migration — import current agent scores from agent-scores.json
 ├── `lint-spec-id-centralization.py` - markdown from re-deriving a spec-id / views_dir / split_marker / cp_dir from a
 ├── `measure-hero-fold.py` - Description: Renders README.md LOCALLY from the working tree in headless Chromium at the
 ├── `migrate-test-to-tests.sh` - Description: Merge test/ folder into tests/ preserving all content (idempotent)
 ├── `mint-git-blessed-token.sh` - mint-git-blessed-token.sh — issuer of the keystone blessed token (M12).
-├── `negative-evidence.py` - Create or verify authority-bound bounded negative-evidence receipts.
 ├── `normalize-doc-names.sh` - normalize-doc-names.sh - Detect and report non-compliant documentation file names
 ├── `orchestrator.sh` - Description: Agent orchestration coordinator for development and cleanup workflows
 ├── `overnight-git-env.sh` - overnight-git-env.sh — prepare the overnight actor's git PATH + env (M11/AC9).
@@ -166,7 +161,6 @@ scripts/
 ├── `session-index.py` - Subcommands (all take --git-root):
 ├── `session-resources.py` - Provider-neutral CLI for the LANE-B session resource broker.
 ├── `spec-check.py` - Subcommands: check-in, mark, waive, status, check-out, unlock
-├── `spec-update-contract.py` - The command policy owns all writes.  This module deliberately has no mutation
 ├── `stage-owned-hunks.py` - Stages ONLY this cycle's owned hunks within a single already-authorized file,
 ├── `step7-spec-update.py` - Step 8 (Spec-update dispatch) reference harness — task 20260524-205206 iter-2
 ├── `test` - test file

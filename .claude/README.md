@@ -6,8 +6,6 @@
 - **Subdirectories**: 1
 - **Naming convention**: kebab
 
-## Subdirectories
-- `quarantined-phantom-dev-cycles/`
 <!-- /AUTO:readme-stats -->
 
 ---
