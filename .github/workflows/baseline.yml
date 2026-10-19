@@ -17,6 +17,11 @@ on:
   # workflow_call a tag could publish without these gates ever running on that
   # commit. Purely additive: the push/pull_request triggers are unchanged.
   workflow_call:
+  # Weekly, so a dependency or runner change that breaks the suite shows up even
+  # in a quiet week, and on demand.
+  schedule:
+    - cron: "17 3 * * 1"
+  workflow_dispatch:
 
 jobs:
   baseline:
@@ -106,6 +111,17 @@ jobs:
       - name: Run tests
         run: python3 -m pytest hooks/tests tests -q --ignore=tests/generated
 
+      - name: Shell tests (checkpoint privacy gate, push guards, fresh-clone smoke)
+        # Shell suites pytest does not collect, run as the runner's non-root user like
+        # every other step. Each exits non-zero on its first failed assertion.
+        run: |
+          set -euo pipefail
+          bash hooks/tests/test_checkpoint_pii_gate.sh
+          bash hooks/tests/test_push_no_upstream_guard.sh
+          bash hooks/tests/test_push_sentinel_abort.sh
+          bash hooks/tests/test_push_gate_ancestor_cross_session.sh
+          bash tests/fresh-clone-bootstrap-smoke.sh
+
       - name: Secret scan (current tree)
         run: |
           set -euo pipefail
@@ -164,8 +180,8 @@ jobs:
           if git grep -nIE "$pat_oldrepo" -- . "$exclude" ; then
             echo "::error::stale repo name still present"; status=1
           fi
-          if git grep -nIE '/root/docs' -- README.md ARCHITECTURE.md NESTED-REPO.md ; then
-            echo "::error::broken grounding-doc links still present in README/ARCHITECTURE/NESTED-REPO"; status=1
+          if git grep -nIE '/root/docs' -- README.md ARCHITECTURE.md ; then
+            echo "::error::broken grounding-doc links still present in README/ARCHITECTURE"; status=1
           fi
           exit "$status"
 
@@ -177,12 +193,10 @@ jobs:
         # run — nothing hardcoded. Exits non-zero on any boundary violation.
         run: bash scripts/check-public-core.sh
 
-      - name: Verify headline claims (hook counts + hero provenance)
+      - name: Verify headline claims (hero provenance + enforcement evidence)
         # Runs as a step of the already-required `baseline` job so it gates merges by
-        # default (no branch-protection change needed). Recomputes the wired-hook /
-        # lifecycle-event counts from settings.json and fails on any drift in
-        # README.md / ARCHITECTURE.md, and runs both hero-provenance audits in --strict.
-        # All counts recomputed at check time.
+        # default (no branch-protection change needed). Runs the hero-provenance
+        # audits in --strict and the hero status/provenance and corpus checks.
         # Also runs scripts/check-enforcement-evidence.py --ledger and --claims, which gate
         # docs/ENFORCEMENT-LEDGER.md against settings.json and against the guard sources.
         run: bash scripts/verify-claims.sh

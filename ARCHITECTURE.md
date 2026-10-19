@@ -17,15 +17,10 @@ All counts below were established by enumerating the actual repository, not copi
 |---|---|---|
 | **Subagents** (`agents/*.md`, excluding `INDEX.md`/`README.md`) | **23** | `ls agents/*.md \| grep -vE '/(INDEX\|README)\.md$'` |
 | **Slash commands** (`commands/*.md`, excluding `INDEX.md`/`README.md`) | **20** | `ls commands/*.md \| grep -vE '/(INDEX\|README)\.md$'` |
-| **Hook command entries wired** in `settings.json` | **82** | sum of `hooks[*][*].hooks[]` over all lifecycle events (clean form, paseo module off) |
-| **Distinct hook files referenced** by `settings.json` | **80** (+1 = **81** paths) | unique `hooks/*.py\|*.sh` paths in those entries; the remaining wired executable is the non-hooks `scripts/canary-verify.sh` (SessionStart) → 81 distinct wired executable paths |
-| **Lifecycle events used** | **9** | keys of `settings.json.hooks` |
-| **Hook files present on disk** (`hooks/*.py` + `*.sh`, excl. `.bak`) | **112** | `find hooks -maxdepth 1 -type f \( -name '*.py' -o -name '*.sh' \)` |
-| **Helper scripts** (`scripts/` top-level *tracked* files, excl. `INDEX/README`) | **119** | `git ls-files scripts/ \| grep -E 'scripts/[^/]+$'` minus `INDEX`/`README` |
 | **Skills** (`skills/*/` directories) | **8** | `ls -d skills/*/` |
 | `permissions.allow` / `deny` / `ask` entries | 152 / 96 / 0 | keys of `settings.json.permissions` (clean form) |
 
-> Note on the hook count: more hook *files* exist on disk (**112**) than are *wired* (**80** `hooks/` files / 81 executables). The unwired files are install scripts, libraries, legacy/`.bak` variants, hooks run as phases of `stop-workflow-coordinator.py`, the paseo module's hook, and intentionally-staged hooks. The number that matters for behavior is **what `settings.json` wires**: 80 distinct `hooks/` files plus `scripts/canary-verify.sh` under `SessionStart`, 82 entries in all because `hooks/posttool-allowlist-consume.py` is wired twice (under `PostToolUse` and `PostToolUseFailure`). The nine lifecycle events are `SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `PostToolUseFailure`, `Notification`, `Stop`, `SessionEnd`, `SubagentStop`. These are the clean form's numbers with the paseo module off; turning the module on adds one `UserPromptSubmit` entry (`hooks/userprompt-usage-snapshot.py`) and a `mcp__paseo__browser_run_code` matcher alternative on the two runcode-watchdog groups.
+> Note on hook files: more hook *files* exist on disk than are *wired*. The unwired files are install scripts, libraries, legacy/`.bak` variants, hooks run as phases of `stop-workflow-coordinator.py`, the paseo module's hook, and intentionally-staged hooks. What matters for behavior is **what `settings.json` wires**: `hooks/` files plus `scripts/canary-verify.sh` under `SessionStart`, with `hooks/posttool-allowlist-consume.py` wired twice (under `PostToolUse` and `PostToolUseFailure`). The lifecycle events are `SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `PostToolUseFailure`, `Notification`, `Stop`, `SessionEnd`, `SubagentStop`. This is the clean form's wiring with the paseo module off; turning the module on adds one `UserPromptSubmit` entry (`hooks/userprompt-usage-snapshot.py`) and a `mcp__paseo__browser_run_code` matcher alternative on the two runcode-watchdog groups.
 
 ### Per-event wiring (from `settings.json`)
 
@@ -119,7 +114,7 @@ flowchart TD
 - **Command surface (`commands/*.md`).** 20 slash commands. Each is a prompt that scripts a workflow (parse → dispatch → validate → ship). Release/control commands carry `disable-model-invocation: true`, which blocks **SlashCommand self-dispatch only**; the `Skill`-tool path is closed separately by an explicit `Skill(<name>:*)` deny in `permissions.deny` (see *Why `disable-model-invocation`?* below).
 - **Subagent fleet (`agents/*.md`).** 23 specialists, each a system prompt with `name`/`description`/`tools` frontmatter. Subagents bypass the orchestrator gate (they are *supposed* to do work) but are still subject to the safety, git, and worktree hooks.
 - **Hook enforcement (`settings.json` + `hooks/`).** The kernel. Every tool call the agent makes is intercepted; hooks return exit 2 to block. Shared logic lives in `hooks/lib/` (allowlist/sentinel grants, checkpoint core, contract runtime, agent resolver).
-- **Support.** `scripts/` (119 helpers: grant writers, graphify code-graph, spec/dev-report resolvers), `skills/` (8: Playwright UI-audit suite), `schemas/` (JSON contracts like `context.v1.json`, `cycle-contract.v1.json`, `dev-report.v1.json`, `qa-report.v1.json`), `templates/` (`spec-template.md`, `overnight-spec.md`).
+- **Support.** `scripts/` (helpers: grant writers, graphify code-graph, spec/dev-report resolvers), `skills/` (8: Playwright UI-audit suite), `schemas/` (JSON contracts like `context.v1.json`, `cycle-contract.v1.json`, `dev-report.v1.json`, `qa-report.v1.json`), `templates/` (`spec-template.md`, `overnight-spec.md`).
 
 ### The 23 subagents (by role)
 
@@ -354,16 +349,16 @@ flowchart LR
 ├── ARCHITECTURE.md          # this document
 ├── README.md                # overview / value-prop (hand-maintained; no AUTO block)
 ├── INDEX.md                 # top-level index
-├── settings.json            # clean form, the one settings source: 80 wired hook files / 82 entries across 9 lifecycle events (paseo off); permissions; env
+├── settings.json            # clean form, the one settings source: hook wiring (paseo off); permissions; env
 ├── settings.machine.example.json  # documented example of the untracked machine overlay settings.machine.json
 ├── .gitattributes           # declares the claude-settings clean/smudge filter for settings.json
 ├── agents/                  # 23 subagent definitions  (+ INDEX.md, README.md)
 ├── commands/                # 20 slash-command workflows (+ INDEX.md, README.md)
-├── hooks/                   # enforcement layer (112 files on disk; 80 wired)
+├── hooks/                   # enforcement layer (not every file on disk is wired)
 │   ├── lib/                 #   allowlist (sentinel grants), checkpoint-core, contract runtime, resolvers
 │   ├── doc_sync/            #   self-updating INDEX/README/CLAUDE regeneration package
 │   └── git-keystone/        #   git-native ref-transaction protection
-├── scripts/                 # 119 helper scripts (graphify, grant writers, spec/dev-report resolvers, ...)
+├── scripts/                 # helper scripts (graphify, grant writers, spec/dev-report resolvers, ...)
 │   └── install/             #   install helpers (installer profiles; render-settings: the settings filter, render, check, migrate)
 ├── skills/                  # 8 skills: Playwright UI-audit suite (ui-*)
 ├── schemas/                 # JSON contracts: context.v1, cycle-contract.v1, dev-report.v1, qa-report.v1, ...
@@ -393,7 +388,7 @@ The git-protection kernel and the ramdisk/nested-repo architecture are described
 
 **Why rules-not-stories with explicit DO NOT sections?** Incident analysis showed that positive instructions alone leak: an agent told only "what's allowed" infers permission for adjacent dangerous actions. Every infrastructure-touching prompt now carries an explicit forbidden list.
 
-**Why the ramdisk + nested-repo architecture?** `~/.claude` symlinks to a tmpfs-backed working directory to bypass a disk-IOPS bottleneck and support many concurrent Claude Code processes. Because `.claude/` is its own git repo, config commits happen *inside* that path and never via the parent — a constraint baked into the git wrappers: always commit from within the nested `.claude/` repo, never push from the parent working tree. See `NESTED-REPO.md` for the concrete per-deployment symlink topology.
+**Why the ramdisk + nested-repo architecture?** `~/.claude` symlinks to a tmpfs-backed working directory to bypass a disk-IOPS bottleneck and support many concurrent Claude Code processes. Because `.claude/` is its own git repo, config commits happen *inside* that path and never via the parent — a constraint baked into the git wrappers: always commit from within the nested `.claude/` repo, never push from the parent working tree.
 
 **Why `disable-model-invocation: true` on release commands?** A `Skill`-tool call can invoke a slash command even when SlashCommand invocation is disabled, so every human-only command (`/commit`, `/push`, `/merge`, `/close`, `/do`, `/allow`, …) is *also* denied as `Skill(<name>:*)` in `permissions.deny` — the human is the trust root (`CLAUDE.md` lesson #15).
 

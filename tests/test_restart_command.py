@@ -1010,8 +1010,7 @@ def test_authorize_rechecks_child_completion_at_dispatch_time(recovery: dict) ->
 def test_discovery_excludes_children_with_terminal_end_turn_reports(tmp_path: Path) -> None:
     """A child whose own transcript reached stop_reason=end_turn finished
     naturally and must never be resumed — even when its clean report quotes
-    quota banners (the 39/217 false-positive corpus of
-    docs/reference/restart-detector-quota-text-match-false-positive-20260915.md)
+    quota banners (a measured 39/217 false-positive class)
     and even when a later re-woken turn was itself cut off afterwards."""
     sid = str(uuid.uuid4())
     transcript = tmp_path / f"{sid}.jsonl"
