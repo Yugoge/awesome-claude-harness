@@ -514,6 +514,13 @@ def test_fanout_invalid_lane_not_shadowed_by_later_valid_sibling(tmp_path):
             "files_created": [],
             "root_cause_addressed": "x",
             "ac_status": {},
+            "dev": {
+                "status": "completed",
+                "files_modified": [],
+                "files_created": [],
+                "git_rationale": {"how_fix_addresses_root": "x"},
+                "ac_status": {},
+            },
         },
     )
     proc = _run_hook(project, home, "agent-dev-1")
