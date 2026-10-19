@@ -1,7 +1,7 @@
 """Tests for hooks/userprompt-bulk-commit-capability.py's /commit --bulk detector.
 
-Moved from tests/test_dev_fix.py (AC-FRESH-F-14), whose subject scripts/dev-fix.py
-was deleted as unreachable; these assertions cover the live hook only.
+These assertions (AC-FRESH-F-14) came from the tests of an unreachable script
+deleted under D17; they cover the live hook only.
 """
 import importlib.util
 from pathlib import Path
