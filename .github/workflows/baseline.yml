@@ -122,6 +122,11 @@ jobs:
           bash hooks/tests/test_push_gate_ancestor_cross_session.sh
           bash tests/fresh-clone-bootstrap-smoke.sh
 
+      - name: Installer acceptance (core profile)
+        # Installs, verifies and uninstalls the core profile against fixtures in a temp
+        # directory (a healthy host staged there; nothing outside it is written).
+        run: python3 scripts/install/tests/installer-acceptance.py
+
       - name: Secret scan (current tree)
         run: |
           set -euo pipefail
