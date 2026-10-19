@@ -660,6 +660,42 @@ def _restricted_domain(sweeps):
                    if G.degraded_denies_removal_reference(c)})
 
 
+def _ledger_program_population():
+    """The FIXED program population the laxity ledger's counts are measured over.
+
+    The ledger records exact member counts, so its universe cannot be drawn
+    from the live PATH: CI measured |L| 1269 against a ledger measured at 1264
+    on another host, and this host measures a third number. Every PATH-derived
+    generator is therefore fed a population that exists on no particular host
+    and changes only when the analyzer's own tables do: every program the
+    analyzer models as an authorizing consumer or an exec wrapper, plus the
+    removal front ends themselves. AC-R02-11 still sweeps the LIVE PATH and
+    asserts that every allowing program there is a declared consumer, so an
+    installed binary can only reach L through a name already in this set.
+    """
+    return sorted(set(B.INERT_ARGV_CONSUMERS)
+                  | {w for w, spec in B.WRAPPERS.items() if spec is not None}
+                  | {h.rsplit("/", 1)[-1] for h in G.HEAD_PLAIN})
+
+
+def _ledger_sweeps(monkeypatch):
+    """The sweep bundle _restricted_domain reads, over the fixed population.
+
+    G.installed_programs is the generators' ONLY PATH read; the option alphabet
+    is regenerated because G.OPTION_VALUES was computed from PATH at import.
+    The patch stays in force for the calling test, so the counterweight
+    generators _restricted_domain calls itself see the same population.
+    """
+    population = _ledger_program_population()
+    monkeypatch.setattr(G, "installed_programs", lambda: list(population))
+    return {
+        "installed": G.installed_program_sweep(),
+        "option_probes": G.option_position_sweep(G.generated_option_values()),
+        "forms": G.shell_form_sweep(),
+        "interp": G.interpreter_sweep(),
+    }
+
+
 def _non_absorption_control(sweeps):
     """AC-R02-10 revision 3's mandatory control family, regenerated here.
 
@@ -796,7 +832,7 @@ def test_ac_r02_10_domain_is_non_vacuous(sweeps):
     assert all(G.degraded_denies_removal_reference(c) for c in domain)
 
 
-def test_ac_r02_10_laxity_is_fully_ledgered(sweeps):
+def test_ac_r02_10_laxity_is_fully_ledgered(monkeypatch):
     """Keyed on (reason_code, positional_shape), not reason_code alone.
 
     Iteration 3 keyed on the reason code by itself, so 981 elements inherited
@@ -828,6 +864,10 @@ def test_ac_r02_10_laxity_is_fully_ledgered(sweeps):
         declared[key] = entry
     assert len(declared) <= ledger["max_entries"] <= 40
 
+    # Measured over the FIXED program population, never the live PATH: the
+    # member counts below are exact, so a host-derived universe made the
+    # result depend on which binaries happened to be installed.
+    sweeps = _ledger_sweeps(monkeypatch)
     laxity = [c for c in _restricted_domain(sweeps) if G.analyze_allowed(c)]
     seen = {}
     refcount = {}
