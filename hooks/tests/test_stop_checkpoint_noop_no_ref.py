@@ -103,8 +103,9 @@ def _auto_commit(home: Path, env: dict) -> subprocess.CompletedProcess:
 
 def _stop(home: Path, env: dict, *, active: bool) -> dict:
     """One Stop event through the registered hook, as Claude Code sends it."""
-    flag = Path(env["CLAUDE_STATE_DIR"]) / f"claude-orchestrator-consent-{SID}.flag"
-    flag.write_text("granted\n")  # the cleanup phase removes it
+    # An unconsumed /allow grant: the cleanup phase expires it at every Stop.
+    flag = Path(env["CLAUDE_STATE_DIR"]) / f"claude-bash-allowlist-{SID}.json"
+    flag.write_text("{}\n")
     payload = {
         "session_id": SID,
         "transcript_path": str(home / "transcript.jsonl"),
