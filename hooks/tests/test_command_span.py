@@ -87,6 +87,25 @@ class _Transcript:
             message={"role": "user", "content": [{"type": "text", "text": text}]},
         ))
 
+    def scheduled(self, content, is_meta=True):
+        """A prompt a scheduled task (CronCreate) fired, as measured on CLI
+        2.1.303: an enqueue queue-operation, then a user record with string
+        content, isMeta true, turnOrigin "scheduled", promptSource "system",
+        queueSkipSlashCommands/queueSkipAttachments true and no origin."""
+        self.add({"type": "queue-operation", "operation": "enqueue",
+                  "timestamp": "2026-10-19T12:23:00.000Z",
+                  "sessionId": SESSION_ID, "content": content})
+        line = len(self.records) + 1
+        fields = {"isMeta": True} if is_meta else {}
+        return self.add(self._envelope(
+            "user", promptId=f"prompt-{line:04d}",
+            message={"role": "user", "content": content},
+            permissionMode="default", promptSource="system",
+            queueSkipSlashCommands=True, turnOrigin="scheduled",
+            turnPosition={"promptIndex": 1, "turnIndex": 0},
+            queueSkipAttachments=True, **fields,
+        ))
+
     def command(self, name, args=""):
         """A typed slash command and the isMeta body record after it."""
         line = self.typed(
@@ -206,6 +225,12 @@ def test_dev_text_in_non_human_records_does_not_open(tmp_path):
     result.tool_result(tool_use_id, "/dev fix the bug")
     variants["tool_result"] = result
 
+    for is_meta in (True, False):  # either marker alone keeps it out
+        scheduled = _Transcript()
+        scheduled.scheduled(DEV_TEXT, is_meta=is_meta)
+        scheduled.scheduled("/dev fix the bug", is_meta=is_meta)
+        variants[f"scheduled_prompt_is_meta_{is_meta}"] = scheduled
+
     for name, tx in variants.items():
         assert command_span.active_span(tx.write(tmp_path / f"{name}.jsonl")) is None, name
 
@@ -217,6 +242,8 @@ def test_dev_text_in_non_human_records_does_not_open(tmp_path):
             tx.skill("dev", DEV_TEXT)
         elif name == "is_meta":
             tx.meta(DEV_TEXT)
+        elif name.startswith("scheduled_prompt"):
+            tx.scheduled(DEV_TEXT, is_meta=name.endswith("True"))
         else:
             tool_use_id = tx.tool_use("Read", {"file_path": "notes.md"})
             tx.tool_result(tool_use_id, DEV_TEXT)
