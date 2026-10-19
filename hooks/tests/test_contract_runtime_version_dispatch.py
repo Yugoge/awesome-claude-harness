@@ -229,12 +229,97 @@ def _pre_change_engine_status(path: Path) -> str:
     return "pass" if result.get("ok") else "fail"
 
 
-def test_legacy_corpus_never_retro_rejected():
+def _legacy_v1_dev(status: str = "completed", **overrides) -> dict:
+    """A v1 dev report in the flat + canonical-nested shape producers emit."""
+    flat_status = {"completed": "completed", "blocked": "blocked",
+                   "needs_review": "partial"}[status]
+    root = "The shared boundary now enforces the producer contract."
+    record = {
+        "report_version": 1,
+        "task_id": "20260101-120000-legacy",
+        "status": flat_status,
+        "files_modified": ["hooks/lib/example.py"],
+        "files_created": [],
+        "root_cause_addressed": root,
+        "ac_status": {"AC-1": "met"},
+        "dev": {
+            "status": status,
+            "files_modified": ["hooks/lib/example.py"],
+            "files_created": [],
+            "ac_status": {"AC-1": "met"},
+            "git_rationale": {"how_fix_addresses_root": root},
+        },
+    }
+    record.update(overrides)
+    return record
+
+
+def _legacy_v1_qa(status: str = "pass", **overrides) -> dict:
+    """A v1 qa report in the flat + canonical-nested shape producers emit."""
+    evidence = {"verification": "Focused tests passed."}
+    record = {
+        "report_version": 1,
+        "task_id": "20260101-120000-legacy",
+        "verdict": status,
+        "evidence_summary": copy.deepcopy(evidence),
+        "ui_pipeline": False,
+        "qa": {
+            "status": status,
+            "evidence_summary": evidence,
+            "ui_pipeline": False,
+        },
+    }
+    record.update(overrides)
+    return record
+
+
+def _write_legacy_corpus(root: Path) -> None:
+    """Synthetic stand-in for the historical docs/dev report corpus: every
+    shape that corpus held (valid and drifted v1, unversioned, unreadable,
+    non-object, and the v2 opt-in surface) under the producers' file names."""
+    texts = {
+        "dev-report-20260101-a.json": _legacy_v1_dev(),
+        "dev-report-20260101-b.json": _legacy_v1_dev("blocked"),
+        "dev-report-20260101-c.json": _legacy_v1_dev("needs_review"),
+        # flat alias drifted from its canonical source
+        "dev-report-20260101-d.json": _legacy_v1_dev(status="blocked") | {
+            "status": "completed"},
+        # pre-projection flat-only record (no canonical dev block)
+        "dev-report-20260101-e.json": {
+            k: v for k, v in _legacy_v1_dev().items() if k != "dev"},
+        # projection consistent but schema-invalid ac_status value
+        "dev-report-20260101-f.json": _legacy_v1_dev(
+            ac_status={"AC-1": "done"},
+            dev=dict(_legacy_v1_dev()["dev"], ac_status={"AC-1": "done"})),
+        "dev-report-20260101-g.json": {
+            k: v for k, v in _legacy_v1_dev().items() if k != "report_version"},
+        "dev-report-20260101-h.json": _valid_v2_dev_record(),
+        "qa-report-20260101-a.json": _legacy_v1_qa(),
+        "qa-report-20260101-b.json": _legacy_v1_qa("fail"),
+        "qa-report-20260101-c.json": _legacy_v1_qa("warning") | {"verdict": "pass"},
+        "qa-report-20260101-d.json": _legacy_v1_qa() | {"status": "pass"},
+        "qa-report-20260101-e.json": {
+            k: v for k, v in _legacy_v1_qa().items() if k != "report_version"},
+        "qa-report-20260101-f.json": _valid_v2_qa_record(),
+        "qa-report-20260101-g.json": ["not", "an", "object"],
+    }
+    root.mkdir(parents=True, exist_ok=True)
+    for name, record in texts.items():
+        (root / name).write_text(json.dumps(record), encoding="utf-8")
+    (root / "dev-report-20260101-z.json").write_text("{not json", encoding="utf-8")
+    (root / "qa-report-20260101-z.json").write_text("", encoding="utf-8")
+
+
+def test_legacy_corpus_never_retro_rejected(tmp_path):
+    corpus_dir = tmp_path / "docs" / "dev"
+    _write_legacy_corpus(corpus_dir)
     corpus = sorted(
-        list((REPO_ROOT / "docs" / "dev").glob("dev-report-*.json"))
-        + list((REPO_ROOT / "docs" / "dev").glob("qa-report-*.json"))
+        list(corpus_dir.glob("dev-report-*.json"))
+        + list(corpus_dir.glob("qa-report-*.json"))
     )
     assert corpus, "legacy corpus unexpectedly empty"
+    # The corpus must exercise every pre-change outcome, or equivalence is vacuous.
+    assert {_pre_change_engine_status(p) for p in corpus} == {"pass", "fail", "skip"}
     changes = []
     v2_declared = 0
     for path in corpus:
@@ -271,6 +356,14 @@ def _valid_flat_v1_record() -> dict:
         "files_created": [],
         "root_cause_addressed": "x",
         "ac_status": {"AC-1": "met"},
+        # Canonical source the dev-report.v1 projection pre-pass requires.
+        "dev": {
+            "status": "completed",
+            "files_modified": [],
+            "files_created": [],
+            "ac_status": {"AC-1": "met"},
+            "git_rationale": {"how_fix_addresses_root": "x"},
+        },
     }
 
 

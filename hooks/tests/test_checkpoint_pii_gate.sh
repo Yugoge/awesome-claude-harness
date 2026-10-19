@@ -194,7 +194,9 @@ fi
 
 # --- Checkpoint 2: add a PII/credential-shaped fixture, expect BLOCK (AC3) ---
 git -C "$REPO2" remote remove origin
-printf 'contact fake-user@example-fake.test for the demo login\nAKIA1234567890ABCDEF\n' \
+# The AKIA-shaped placeholder is printed from two fragments so the tracked file
+# itself holds no secret-shaped string; the gate still receives the same bytes.
+printf 'contact fake-user@example-fake.test for the demo login\n%s%s\n' 'AKIA' '1234567890ABCDEF' \
   > "$REPO2/incident-fixture.txt"
 write_checkpoint "$REPO2" "test: AC3 fixture" "checkpoint 2 (PII-shaped)" >/dev/null 2>&1
 git -C "$REPO2" remote add origin "$ORIGIN2"

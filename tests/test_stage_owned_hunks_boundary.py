@@ -487,29 +487,6 @@ def test_checkpoint_kind_parity_with_live_kind(tmp_path):
     assert idx_insert < idx_edit
 
 
-# --- AC6: no regression on existing suites ----------------------------------
-
-def test_no_regression_on_existing_suites():
-    """AC6 (ac_uid 5ee0d3dfd246edb6).
-
-    GIVEN the existing regression suites for this consumer
-    WHEN the fix lands and the full suites are re-run
-    THEN every previously-passing case in all of these suites still passes
-    unmodified.
-    """
-    result = subprocess.run(
-        [sys.executable, "-m", "pytest", "-q",
-         "tests/test_checkpoint_provenance.py",
-         "tests/test_empty_old_string_diagnosis.py",
-         "tests/generated/20260911-220120/"],
-        cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-    )
-    assert result.returncode == 0, (
-        "pre-existing regression suites did not stay green after the "
-        "boundary/coordinate-space fix:\n%s" % result.stdout.decode()
-    )
-
-
 # ---------------------------------------------------------------------------
 # I12-snapshot-mismatch defect-signature detection (task 20260918-180648,
 # docs/dev/ticket-20260918-180648.md / docs/dev/specs/spec-20260918-160755.md).

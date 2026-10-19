@@ -89,6 +89,19 @@ def _clean_ctx():
     G._set_request_ctx({}, {})
 
 
+@pytest.fixture
+def standin_bwrap(monkeypatch):
+    """A stand-in bwrap path for tests that BUILD the argv but never exec it.
+
+    `_build_bwrap_argv` returns None only when `_resolve_bwrap` finds no
+    binary; the argv shape under test does not depend on one existing, so
+    these tests run on hosts without bubblewrap (CI). Exec-ing tests keep
+    `requires_bwrap` instead."""
+    path = "/standin/bin/bwrap"
+    monkeypatch.setattr(G, "_resolve_bwrap", lambda: path)
+    return path
+
+
 def _as(payload: dict) -> None:
     G._set_request_ctx({}, payload)
 
@@ -116,7 +129,7 @@ def test_subagent_gets_no_bind(lab):
 
 
 @pytest.mark.parametrize("kind", ["registered_worktree", "fresh_clone_checkout"])
-def test_build_bwrap_argv_emits_bind_only_for_orchestrator(lab, kind):
+def test_build_bwrap_argv_emits_bind_only_for_orchestrator(lab, kind, standin_bwrap):
     """Same input, both actors, through the real argv builder."""
     pair = f"--bind {lab['qa']} {lab['qa']}"
 
@@ -144,7 +157,7 @@ def test_bind_target_is_the_file_never_its_directory(lab):
         assert target != str(lab["sess"]), "session DIRECTORY must never be bound"
 
 
-def test_session_dir_never_appears_as_a_bind_source(lab):
+def test_session_dir_never_appears_as_a_bind_source(lab, standin_bwrap):
     _as(ORCHESTRATOR_PAYLOAD)
     argv = G._build_bwrap_argv("true", str(lab["main"]), str(lab["wt"]),
                                "fresh_clone_checkout", str(lab["sess"]))

@@ -24,12 +24,20 @@ _spec = importlib.util.spec_from_file_location("prompt_workflow_under_test", HOO
 pw = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(pw)
 
+sys.path.insert(0, str(HOOK.parent / "lib"))
+from harness_state_dir import harness_state_dir  # noqa: E402
+
+
+def _state(name):
+    """A state file under the root the hook resolves (CLAUDE_STATE_DIR), at call time."""
+    return Path(harness_state_dir()) / name
+
 TS_RE = re.compile(r"^\d{8}-\d{6}$")  # YYYYMMDD-HHMMSS — /close timestamp-pattern compatible
 
 
 def _cleanup(sid):
-    for p in (Path(f"/tmp/claude-orchestrator-consent-{sid}.flag"),
-              Path(f"/tmp/claude-do-task-{sid}.json")):
+    for p in (_state(f"claude-orchestrator-consent-{sid}.flag"),
+              _state(f"claude-do-task-{sid}.json")):
         try:
             p.unlink()
         except OSError:
@@ -46,7 +54,7 @@ def test_reservation_prevents_same_second_collision():
     second's flat marker, then mint must bump to a DIFFERENT id."""
     from datetime import datetime
     now_ts = datetime.now().strftime("%Y%m%d-%H%M%S")
-    marker = Path(f"/tmp/claude-do-resv-{now_ts}")
+    marker = _state(f"claude-do-resv-{now_ts}")
     fd = os.open(str(marker), os.O_CREAT | os.O_WRONLY, 0o600)  # occupy current second
     os.close(fd)
     minted = pw._mint_unique_do_taskid()
@@ -66,8 +74,8 @@ def test_consent_flag_content_unchanged_and_sidecar_written():
     try:
         with tempfile.TemporaryDirectory() as tmp:  # keep the skeleton out of the real docs/dev
             pw.handle_do_consent(sid, project_dir=Path(tmp))
-        flag = Path(f"/tmp/claude-orchestrator-consent-{sid}.flag")
-        sidecar = Path(f"/tmp/claude-do-task-{sid}.json")
+        flag = _state(f"claude-orchestrator-consent-{sid}.flag")
+        sidecar = _state(f"claude-do-task-{sid}.json")
         # Trust root untouched: flag exists, content is exactly "true".
         assert flag.exists(), "consent flag not written"
         assert flag.read_text() == "true", f"consent flag content changed to {flag.read_text()!r} — breaks existence/true readers"
@@ -89,8 +97,8 @@ def test_distinct_sessions_get_distinct_sidecars():
         with tempfile.TemporaryDirectory() as tmp:  # keep the skeletons out of the real docs/dev
             pw.handle_do_consent(sid_a, project_dir=Path(tmp))
             pw.handle_do_consent(sid_b, project_dir=Path(tmp))
-        a = json.loads(Path(f"/tmp/claude-do-task-{sid_a}.json").read_text())
-        b = json.loads(Path(f"/tmp/claude-do-task-{sid_b}.json").read_text())
+        a = json.loads(_state(f"claude-do-task-{sid_a}.json").read_text())
+        b = json.loads(_state(f"claude-do-task-{sid_b}.json").read_text())
         assert a["task_id"] != b["task_id"], f"two sessions aliased to one task-id {a['task_id']!r} — the collision is back"
         assert a["session_id"] == sid_a and b["session_id"] == sid_b
     finally:
@@ -106,7 +114,7 @@ def test_skeleton_prewritten_pending_with_stripped_request():
     try:
         with tempfile.TemporaryDirectory() as tmp:
             pw.handle_do_consent(sid, "/do --codex fix the widget", project_dir=Path(tmp))
-            tid = json.loads(Path(f"/tmp/claude-do-task-{sid}.json").read_text())["task_id"]
+            tid = json.loads(_state(f"claude-do-task-{sid}.json").read_text())["task_id"]
             report = Path(tmp) / "docs" / "dev" / f"do-report-{tid}.json"
             assert report.exists(), "consent must pre-write the do-report skeleton"
             rec = json.loads(report.read_text())
@@ -129,7 +137,7 @@ def test_skeleton_declares_profile_and_expected_absent():
     try:
         with tempfile.TemporaryDirectory() as tmp:
             pw.handle_do_consent(sid, "/do fix the widget", project_dir=Path(tmp))
-            tid = json.loads(Path(f"/tmp/claude-do-task-{sid}.json").read_text())["task_id"]
+            tid = json.loads(_state(f"claude-do-task-{sid}.json").read_text())["task_id"]
             report = Path(tmp) / "docs" / "dev" / f"do-report-{tid}.json"
             rec = json.loads(report.read_text())
             assert rec["profile"] == "do", f"profile must be 'do', got {rec.get('profile')!r}"

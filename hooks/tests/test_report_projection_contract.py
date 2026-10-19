@@ -587,7 +587,16 @@ def test_qa_ui_evidence_prepass_remains_enforced_after_projection() -> None:
     )
 
 
-def test_interactive_gate_matrix(tmp_path: Path) -> None:
+def test_interactive_gate_matrix(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # The module fixture serves only the v1 schemas; the report_version = 2 case
+    # below must reach the checkout's dev-report.v2 so it fails on its content
+    # rather than skipping for want of a schema.
+    served = runtime.schema_registry.get_schema
+    v2 = json.loads((ROOT / "schemas" / "dev-report.v2.json").read_text(encoding="utf-8"))
+    monkeypatch.setattr(
+        runtime.schema_registry, "get_schema",
+        lambda name: v2 if name == "dev-report.v2" else served(name),
+    )
     matching = tmp_path / "dev-report-match.json"
     matching.write_text(json.dumps(_dev_report()), encoding="utf-8")
     assert runtime.validate_report_artifact(matching)["status"] == "pass"

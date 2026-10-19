@@ -60,6 +60,26 @@ def _write(p: Path, obj) -> None:
     p.write_text(json.dumps(obj, indent=1, sort_keys=True), encoding="utf-8")
 
 
+# The host build comes from `claude --version`, read both in-process and by the
+# gate/handshake/doctor subprocesses (which inherit os.environ). A stand-in
+# `claude` placed FIRST on PATH makes every test hermetic: it works on a runner
+# with no CLI and shadows a real CLI when one is installed.
+STANDIN_BUILD = "9.9.9-standin"
+
+
+@pytest.fixture(autouse=True)
+def _standin_claude(tmp_path_factory, monkeypatch) -> None:
+    bindir = tmp_path_factory.getbasetemp() / "standin-claude-bin"
+    exe = bindir / "claude"
+    if not exe.exists():
+        bindir.mkdir(exist_ok=True)
+        exe.write_text(
+            '#!/bin/sh\n[ "$1" = "--version" ] || exit 1\n'
+            f'echo "{STANDIN_BUILD} (Claude Code)"\n', encoding="utf-8")
+        exe.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{bindir}{os.pathsep}{os.environ.get('PATH', '')}")
+
+
 @pytest.fixture()
 def home(tmp_path: Path) -> Path:
     """An isolated harness home. The live tree is never written to."""
@@ -170,7 +190,8 @@ def test_binding_shape_and_sources(home: Path):
         assert set(r) == {"path", "present", "sha256"}
         assert isinstance(r["present"], bool)
     assert b["harness_version"] == (home / "VERSION").read_text().strip()
-    assert b["host_build"] and b["host_build"].lower() != "unknown"
+    # Equality, not mere presence: proves the stand-in answered, never a real CLI.
+    assert b["host_build"] == STANDIN_BUILD
     assert cs.binding_failure(b) is None
 
 

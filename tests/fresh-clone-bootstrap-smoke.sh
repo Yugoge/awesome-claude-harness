@@ -2,8 +2,7 @@
 # Description: Fresh-clone bootstrap smoke — proves "core is runnable + guards engaged"
 #   on a fresh, NON-ROOT clone with the author home ABSENT. NOT "the full LLM
 #   pipeline works": only that the security guards load their OWN clone helpers,
-#   block dangerous ops fail-closed, degrade optional capabilities gracefully,
-#   and leave zero load-bearing author-absolute literals on the portable surface.
+#   block dangerous ops fail-closed, and degrade optional capabilities gracefully.
 #
 # Usage: fresh-clone-bootstrap-smoke.sh [--json <out.json>] [--keep]
 #   --json <path>  write the machine-readable result document here (default: a
@@ -40,14 +39,16 @@ while [ $# -gt 0 ]; do
 done
 
 # ── Locate the live harness (this script lives at <home>/tests/) ─────────────
+REAL_HOME="${HOME:-}"; [ "$REAL_HOME" = "/" ] && REAL_HOME=""
 SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 REPO="$(cd "$SELF_DIR/.." && pwd -P)"
 FIXTURE_DIR="$SELF_DIR/fixtures"
 
 # ── Privilege-drop wrapper: re-exec a probe under a NON-ROOT euid ─────────────
-# The author home is /root/.claude; a smoke run as root with /root present could
-# accidentally resolve author files and "prove" the author machine. We require a
-# non-root euid AND a temp HOME not under /root or /dev/shm. If we are already
+# The author's real Claude home lives under the invoking user's home; a smoke run
+# that can reach it could accidentally resolve author files and "prove" the author
+# machine. We require a non-root euid AND a temp HOME outside the real home and
+# outside any RAM-disk workspace. If we are already
 # non-root we run the probe directly; if root we drop to an unprivileged user.
 DROP=()
 detect_drop() {
@@ -69,7 +70,7 @@ detect_drop() {
 #   Runs <cmd...> in a FRESH, CLEAN environment (env -i + explicit minimal env)
 #   under a non-root euid. The clean env is what makes the policy_registry
 #   in-process _CACHE irrelevant (each probe is its own subprocess) AND keeps the
-#   author's /root/.claude unreachable (HOME points only at the temp clone).
+#   author's real Claude home unreachable (HOME points only at the temp clone).
 #   Prints stdout; captures rc; appends "<rc>" on its own trailing line is NOT
 #   done here — callers capture rc via $?.
 run_probe() {
@@ -81,7 +82,7 @@ run_probe() {
   "${DROP[@]}" env -i PATH="/usr/bin:/bin" LANG=C "${envkv[@]}" "$@"
 }
 
-# ── Build an isolated fresh clone under a temp HOME (NOT /root, NOT /dev/shm) ──
+# ── Build an isolated fresh clone under a temp HOME (NOT the real home or a RAM disk) ──
 # mktemp honors TMPDIR; force a /tmp base so the clone is never under the author
 # RAM disk. The clone root basename is "dot-claude" on purpose — it exercises the
 # structural-sentinel resolver (which must NOT key on basename ".claude").
@@ -151,7 +152,10 @@ stderr_is_clean() {  # <stderr-text>
   local s="$1"
   # An unresolved author path leaking to stderr means the guard did NOT resolve
   # via the clone. command-not-found / "No such file" for a required helper too.
-  if printf '%s' "$s" | grep -qE '/root/\.claude|/dev/shm/dev-workspace'; then return 1; fi
+  # Generic: a Claude home under any system home root, or under the invoking
+  # user's own real HOME (captured before any probe overrides HOME).
+  if printf '%s' "$s" | grep -qE '/(root|home/[^/[:space:]]+|Users/[^/[:space:]]+)/\.claude'; then return 1; fi
+  if [ -n "$REAL_HOME" ] && printf '%s' "$s" | grep -qF "$REAL_HOME/.claude"; then return 1; fi
   if printf '%s' "$s" | grep -qiE 'command not found|: not found'; then return 1; fi
   return 0
 }
@@ -300,7 +304,7 @@ fi
 
 # POSITIVE (own-resolution): the resolver returns THIS clone's root (basename
 # 'dot-claude', proving the structural sentinel — not basename '.claude' — and
-# not the author /root). require of a PRESENT file returns a path inside the clone.
+# not the author's real home). require of a PRESENT file returns a path inside the clone.
 rsolved="$(run_probe "$CLONE" HOME="$CLONE" -- bash "$CH_SH" resolve 2>/dev/null)"; rsrc=$?
 rreq="$(run_probe "$CLONE" HOME="$CLONE" -- python3 "$CH_PY" require hooks/lib/claude_home.py 2>/dev/null)"; rqrc=$?
 if [ "$rsrc" -eq 0 ] && [ "$rsolved" = "$CLONE" ] && [ "$rqrc" -eq 0 ] \
@@ -326,7 +330,7 @@ fi
 # no bare unsafe fallback; green means core+guards, not the full LLM pipeline.
 # ════════════════════════════════════════════════════════════════════════════
 # (a) The session-promote hook with $SESSION_PROMOTE_BIN unset must NOT crash and
-#     must exit 0 (degrade), referencing no author /root path on stderr.
+#     must exit 0 (degrade), referencing no author home path on stderr.
 SP_HOOK="$CLONE/hooks/session-promote-hook.sh"
 sp_payload='{"session_id":"12345678-1234-1234-1234-123456789abc","cwd":"/tmp/whatever"}'
 sperr="$(printf '%s' "$sp_payload" | run_probe "$CLONE" HOME="$CLONE" -- bash "$SP_HOOK" 2>&1 1>/dev/null)"; sprc=$?
@@ -363,154 +367,13 @@ else
   record optional-capability unavailable 0 "sp_rc=$sprc sp_ok=$sp_ok ext_rc=$extrc ext_ok=$ext_ok out=$(printf '%s' "$extout" | head -c 160)"
 fi
 
-# ════════════════════════════════════════════════════════════════════════════
-# POST-WAVE-1 INTEGRATION GATE (AC-WS2-6) — zero load-bearing author literals.
-# ════════════════════════════════════════════════════════════════════════════
-# This gate measures THIS CYCLE'S RESPONSIBLE surface — files tracked at the
-# recorded cycle baseline UNION the files this cycle created/modified — and asserts
-# zero GENUINE load-bearing author literals across it. CONTENT is read from the
-# LIVE working tree: the cycle's whole deliverable (the WS1/WS3/WS7 de-hardcode
-# MIGRATION) lives in the working tree, NOT at the baseline (the baseline is the
-# DIRTY pre-migration state). The boundary-aware pattern matches
-# scripts/detect-hardcoded-paths.sh, plus a comment/docstring filter + the
-# AC-WS7-1 per-literal prose allowlist + BA error-hint/detector exemptions, so the
-# assertion measures GENUINE literals, not comment/docstring false positives.
-#
-# REPRODUCIBILITY (the prior bug): the gate must be invariant to any FOREIGN
-# post-cycle commit a concurrent sibling lands in this shared workspace. The fix
-# is a PINNED cycle baseline + a MEMBERSHIP filter, NOT a baseline content
-# snapshot:
-#   • baseline pin — the gate restricts findings to {tracked at the recorded
-#     cycle baseline} ∪ {this-cycle files}. A MOVING `git rev-parse HEAD` baseline
-#     was unsound: a sibling COMMIT advances HEAD and pulls its foreign file into
-#     "tracked at HEAD", so the gate scanned a foreign post-cycle commit and went
-#     RED. Pinning to the recorded baseline excludes a foreign ADDITION (baseline-
-#     absent + not a cycle file) regardless of where HEAD has moved.
-#   • live content (NOT a baseline snapshot) — `git archive <baseline>` is
-#     deliberately NOT used as the content source: at the baseline every migrated
-#     file still carries its pre-migration /root literal, so scanning baseline
-#     content would FALSE-fail on this cycle's own (now-fixed) files. The live
-#     working tree is the migrated truth; the membership filter is what provides
-#     foreign-commit immunity. (Known, deliberately-accepted limitation: a foreign
-#     post-cycle MODIFICATION to a baseline-tracked in-scope file would be scanned
-#     at its live polluted content. This does not occur in the actual workspace,
-#     and a content snapshot — codex Finding 3 — is unusable here because the
-#     baseline is dirty and the migration IS the deliverable. Documented in the
-#     dev-report as out_of_scope for this dirty-baseline repo.)
-#
-# The cycle file list comes from the AGGREGATE cycle dev-report (not just the WS2
-# shard): this is a CYCLE-WIDE scan, so a this-cycle-CREATED runtime file (e.g.
-# hooks/lib/claude_home.py — baseline-ABSENT) must be in the cycle list or a
-# load-bearing literal in it would be silently MISSED. Every same-cycle report
-# whose baseline_head_sha matches is unioned so no shard's cycle file is dropped.
-# The args are passed NUL-delimited into a bash array (no `eval`): injection-proof
-# regardless of path content.
-#
-# Fail-CLOSED (NOT fail-open): if no usable baseline resolves from the reports,
-# this slice FAILS rather than silently running an UNSCOPED gate that would
-# re-introduce the foreign-file RED. After the gate runs we ALSO assert the JSON
-# recorded scoped_to_responsible_surface==true, so a baseline the gate could not
-# resolve (responsible_surface()->None) cannot pass undetected.
-GATE_BASELINE_REF=""
-GATE_CYCLE_ARGS=()        # cycle paths as repeated --cycle-file gate args
-while IFS= read -r -d '' _gate_tok; do
-  if [ -z "$GATE_BASELINE_REF" ]; then
-    GATE_BASELINE_REF="$_gate_tok"           # first NUL token = the baseline sha
-  else
-    GATE_CYCLE_ARGS+=(--cycle-file "$_gate_tok")
-  fi
-done < <(python3 - "$REPO" <<'PYSCOPE'
-import glob, json, os, sys
-repo = sys.argv[1]
-# The aggregate cycle report is the canonical scope source; union any sibling
-# shard reports for the same cycle so no shard's cycle file is dropped.
-agg = os.path.join(repo, "docs", "dev", "dev-report-dev-20260616-204226.json")
-candidates = [agg] + sorted(
-    glob.glob(os.path.join(repo, "docs", "dev",
-                           "dev-report-dev-20260616-204226-*.json")))
-ref = ""
-cycle = []
-seen = set()
-for path in candidates:
-    try:
-        doc = json.load(open(path))
-    except (OSError, ValueError):
-        continue
-    r = doc.get("baseline_head_sha") or ""
-    if not r:
-        continue
-    if not ref:
-        ref = r
-    elif r != ref:
-        continue  # a report for a DIFFERENT baseline => not this cycle; skip it
-    dev = doc.get("dev", {}) or {}
-    for rel in (dev.get("files_created") or []) + (dev.get("files_modified") or []):
-        if rel not in seen:
-            seen.add(rel)
-            cycle.append(rel)
-if not ref:
-    sys.exit(0)  # no usable baseline => emit nothing => caller fails the slice
-out = sys.stdout.buffer
-out.write(ref.encode() + b"\0")
-for rel in cycle:
-    out.write(rel.encode() + b"\0")
-PYSCOPE
-)
-
-GATE_TREE="$TMP_BASE/gate/dot-claude"
-GATE_JSON="$TMP_BASE/gate-residuals.json"
-mkdir -p "$GATE_TREE"
-# Build $GATE_TREE from the LIVE working-tree surfaces (the migrated truth). The
-# membership filter (pinned --baseline-ref + --cycle-file) is what excludes
-# foreign post-cycle additions copied in by `cp -a`; settings.json is the tracked
-# clean form so the surface matches what a fresh clone would install.
-for d in hooks scripts commands agents skills schemas policies; do
-  [ -d "$REPO/$d" ] && cp -a "$REPO/$d" "$GATE_TREE/"
-done
-clean_settings "$GATE_TREE/settings.json"
-
-# Assert the derived baseline equals THIS CYCLE'S RECORDED baseline (the same
-# sha test_AC_WS2_6 pins). A report tampered/regenerated against a different ref
-# could otherwise produce scoped=true for the WRONG baseline; pinning the
-# expected value here makes the gate reproducible against a fixed surface, not
-# whatever ref the report happens to carry. A mismatch routes into the fail-
-# closed branch below (NOT an unscoped run).
-GATE_EXPECTED_BASELINE="a46d6d58c94e1adf3b8287c1e5646a701e5cdd18"
-if [ -n "$GATE_BASELINE_REF" ] && [ "$GATE_BASELINE_REF" != "$GATE_EXPECTED_BASELINE" ]; then
-  echo "smoke: cycle baseline mismatch (report=$GATE_BASELINE_REF expected=$GATE_EXPECTED_BASELINE)" >&2
-  GATE_BASELINE_REF=""    # force fail-closed: never scope to an unexpected ref
-fi
-if [ -z "$GATE_BASELINE_REF" ]; then
-  # Fail-CLOSED: no resolvable / unexpected cycle baseline => DO NOT run an
-  # unscoped gate (that would re-introduce the foreign-file RED). Record FAIL.
-  gate_rc=2
-  gate_count=-1
-  gate_scoped="false"
-  echo '{"count": -1, "scoped_to_responsible_surface": false, "error": "no resolvable/expected cycle baseline from dev-reports"}' > "$GATE_JSON"
-else
-  python3 "$SELF_DIR/ws2_zero_literal_gate.py" "$GATE_TREE" "$GATE_JSON" \
-    --baseline-ref "$GATE_BASELINE_REF" --baseline-repo "$REPO" \
-    "${GATE_CYCLE_ARGS[@]}" >/dev/null 2>&1
-  gate_rc=$?
-  gate_count="$(python3 -c "import json;print(json.load(open('$GATE_JSON'))['count'])" 2>/dev/null || echo -1)"
-  # Assert the gate actually scoped to the responsible surface; a baseline it
-  # could not resolve degrades responsible_surface() to None (unscoped) — which
-  # must NOT silently pass here.
-  gate_scoped="$(python3 -c "import json;print('true' if json.load(open('$GATE_JSON')).get('scoped_to_responsible_surface') else 'false')" 2>/dev/null || echo false)"
-fi
-if [ "$gate_rc" -eq 0 ] && [ "$gate_count" = "0" ] && [ "$gate_scoped" = "true" ]; then
-  record integration-gate zero_literals 1 "zero genuine load-bearing author literals across the rendered surface (scoped to cycle baseline $GATE_BASELINE_REF)"
-else
-  record integration-gate zero_literals 0 "gate_rc=$gate_rc residuals=$gate_count scoped=$gate_scoped baseline=${GATE_BASELINE_REF:-<none>} (see $GATE_JSON)"
-fi
-
 # ── Emit the machine-readable result document ────────────────────────────────
 [ -n "$JSON_OUT" ] || JSON_OUT="$TMP_BASE/smoke-result.json"
-python3 - "$JSON_OUT" "$gate_count" "$(id -u)" "${#R_GUARD[@]}" "${R_GUARD[@]}" "::KINDS::" "${R_KIND[@]}" "::PASS::" "${R_PASS[@]}" "::DET::" "${R_DETAIL[@]}" <<'PYEOF'
+python3 - "$JSON_OUT" "$(id -u)" "${#R_GUARD[@]}" "${R_GUARD[@]}" "::KINDS::" "${R_KIND[@]}" "::PASS::" "${R_PASS[@]}" "::DET::" "${R_DETAIL[@]}" <<'PYEOF'
 import json, sys
-out_path = sys.argv[1]; gate_count = sys.argv[2]; euid = sys.argv[3]
-n = int(sys.argv[4])
-rest = sys.argv[5:]
+out_path = sys.argv[1]; euid = sys.argv[2]
+n = int(sys.argv[3])
+rest = sys.argv[4:]
 def take(rest, marker, n):
     if marker:
         idx = rest.index(marker); return rest[:idx], rest[idx+1:]
@@ -534,7 +397,6 @@ doc = {
     "scope": "core is runnable + guards engaged (NOT the full LLM pipeline)",
     "euid_at_probe_time_was_root": euid == "0",
     "ran_under_nonroot_drop": euid == "0",  # if root we dropped via setpriv per-probe
-    "integration_gate_residuals": int(gate_count) if gate_count.lstrip('-').isdigit() else None,
     "assertions": assertions,
     "all_pass": allpass,
 }

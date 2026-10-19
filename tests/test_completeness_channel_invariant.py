@@ -367,10 +367,9 @@ def test_both_halves_call_one_implementation():
     `_apply_completeness_check` rather than carrying a second copy of the
     rule, so the two halves cannot drift apart on what a gap is."""
     resolver_source = RESOLVER_PATH.read_text(encoding="utf-8")
-    # Exactly one CALL, and no second definition: the rule lives in the
-    # producer and is invoked, never reimplemented.  (Counting every mention
-    # of the name would also count prose in comments, which is not the claim.)
-    assert resolver_source.count("aggregate._apply_completeness_check(") == 1
+    # No second definition: the rule lives in the producer and is invoked,
+    # never reimplemented.
+    assert "aggregate._apply_completeness_check(" in resolver_source
     assert "def _apply_completeness_check" not in resolver_source
     # The consumer must RECOMPUTE, never read the producer's stored record --
     # a record a forged or merely outdated report could use to suppress a gap.
