@@ -386,6 +386,9 @@ def ac2(tmp: Path) -> None:
     check("AC2(c)", "core floor components exist on disk and are non-empty",
           all((iso / f).is_file() and (iso / f).stat().st_size > 0 for f in floor_files),
           str(floor_files))
+    # The installed set is measured before the smoke run below executes a hook:
+    # running it may add interpreter caches the installer never placed.
+    installed = actual_files(iso)
     smoke = PROFILE["block_decision_smoke"]
     payload = dict(smoke["stdin"], session_id="acceptance-smoke-unique")
     p = subprocess.run([smoke["interpreter"], str(iso / smoke["hook"])],
@@ -399,7 +402,8 @@ def ac2(tmp: Path) -> None:
     listed_inc = {x.split("  ")[0] for x in listed_inc}
     listed_exc = {ln.strip()[2:] for ln in plan_out.splitlines() if ln.strip().startswith("- ")}
     check("AC2(e)", "printed include listing == measured installed set",
-          listed_inc == actual_files(iso), f"printed-only={sorted(listed_inc - actual_files(iso))}")
+          listed_inc == installed,
+          f"printed-only={sorted(listed_inc - installed)} installed-only={sorted(installed - listed_inc)}")
     check("AC2(e)", "printed exclude listing == manifest excluded set",
           listed_exc == set(PROFILE["excluded"]), str(sorted(listed_exc ^ set(PROFILE["excluded"]))))
 
