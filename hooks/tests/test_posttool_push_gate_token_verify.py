@@ -25,6 +25,9 @@ import pytest
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 HOOK = os.path.join(REPO_ROOT, "hooks", "posttool-push-gate-token-verify.py")
 
+sys.path.insert(0, os.path.join(REPO_ROOT, "hooks"))
+from lib.harness_state_dir import harness_state_dir  # noqa: E402
+
 
 def _git(repo, *args):
     return subprocess.run(["git", "-C", repo] + list(args), capture_output=True,
@@ -62,11 +65,13 @@ def _write_token(path, **fields):
 
 @pytest.fixture
 def token_base_dir():
-    """A uniquely-named directory under the real /tmp/agentic-commit/push/ root --
-    the hook's path regex is anchored to that literal prefix, so tests must write
-    there, not to pytest's tmp_path. Cleaned up unconditionally afterward."""
+    """A uniquely-named directory under <state root>/agentic-commit/push/ -- the
+    hook's path regex is anchored to that prefix, so tests must write there, not to
+    pytest's tmp_path. The state root is derived at call time from the same resolver
+    the hook uses (CLAUDE_STATE_DIR via hooks/lib/harness_state_dir.py), so the test
+    and the spawned hook agree. Cleaned up unconditionally afterward."""
     repo_hash = uuid.uuid4().hex[:16]
-    base = os.path.join("/tmp/agentic-commit/push", repo_hash)
+    base = os.path.join(harness_state_dir(), "agentic-commit", "push", repo_hash)
     yield base
     shutil.rmtree(base, ignore_errors=True)
 
