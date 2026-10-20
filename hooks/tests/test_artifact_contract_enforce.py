@@ -778,9 +778,11 @@ def test_ac6_internal_exception_falls_through_to_legacy_path(
         agent_id,
         _obligation_block(task_id, artifact_path, "dev-report.v1"),
     )
+    # Session-correlated by name, the agent's own by its declared task_id: the
+    # legacy check judges only the stopping producer's own reports.
     _write(
         project / "docs" / "dev" / f"dev-report-{SESSION_TS}.json",
-        _invalid_dev_report(SESSION_TS),
+        _invalid_dev_report(task_id),
     )
 
     def _raise(*_args, **_kwargs):
@@ -2552,6 +2554,80 @@ def test_g2_missing_declared_artifact_blocks(tmp_path):
     proc = _g2_stop(s)
     _g2_assert_blocked_on(proc, report, _G2_MISSING)
     assert "expected artifact missing" in proc.stderr
+
+
+# ---------------------------------------------------------------------------
+# Landing on an in-flight fan-out cycle: the legacy report-schema check judges
+# the stopping producer's own lane report only. A dev lane dispatched from
+# origin/master's template carries required_values, so its obligation no
+# longer parses (invalid_obligation) and the legacy check decides, but the
+# block still names the lane's task_id.
+# ---------------------------------------------------------------------------
+
+_FANOUT_LANES = ("l1", "l2")
+_FANOUT_HARNESS = "harness-fanout-landing"
+
+
+def _pre_p1_lane_obligation(task_id: str, lane: str) -> str:
+    doc = {
+        "task_id": task_id, "role": "dev", "pipeline": "dev", "profile": "fanout-lane",
+        "dispatched_at": datetime.now(timezone.utc).isoformat(),
+        "lane": lane, "lane_set": list(_FANOUT_LANES),
+        "artifacts": [{
+            "kind": "json", "path": f"docs/dev/dev-report-{task_id}.json",
+            "schema": "dev-report.v2", "identity": {"task_id": task_id},
+            "required_values": {"dev.status": ["completed"]},
+        }],
+    }
+    return f'<obligation v="1">\n{json.dumps(doc, indent=2)}\n</obligation>'
+
+
+def _fanout_landing_setup(tmp_path, l2_status: str):
+    project = tmp_path / "project"
+    home = tmp_path / "home"
+    home.mkdir()
+    _enable_flag(project, SESSION)
+    _write_sentinel(project, SESSION, "dev")
+    tasks = {lane: f"{SESSION}-{lane}" for lane in _FANOUT_LANES}
+    for lane, task in tasks.items():
+        _register_agent(project, f"agent-dev-{lane}", SESSION, "dev")
+        _write_obligation_transcript(
+            home, project, _FANOUT_HARNESS, f"agent-dev-{lane}",
+            "You are the dev subagent.\n" + _pre_p1_lane_obligation(task, lane))
+    # l1 reported needs_review under the pre-P1 schema, before the landing.
+    statuses = {"l1": "needs_review", "l2": l2_status}
+    for lane, task in tasks.items():
+        _write(project / "docs" / "dev" / f"dev-report-{task}.json",
+               _l2_dev_report(task, status=statuses[lane], lane=lane,
+                              lane_set=list(_FANOUT_LANES)))
+    return project, home, tasks
+
+
+@pytest.mark.parametrize("stopgate", [None, "block"], ids=["switch_unset", "stopgate_block"])
+@pytest.mark.parametrize("l2_status,expected", [("completed", 0), ("needs_review", 2)],
+                         ids=["l2_valid", "l2_invalid"])
+def test_fanout_legacy_check_judges_only_the_stopping_lanes_own_report(
+    tmp_path, stopgate, l2_status, expected
+):
+    project, home, tasks = _fanout_landing_setup(tmp_path, l2_status)
+    l1_report = f"dev-report-{tasks['l1']}.json"
+    l2_report = f"dev-report-{tasks['l2']}.json"
+
+    proc = _run_hook(project, home, "agent-dev-l2", session_id=_FANOUT_HARNESS,
+                     stopgate_mode=stopgate)
+    assert proc.returncode == expected, proc.stderr
+    assert l1_report not in proc.stderr
+    if expected == 2:
+        assert "ARTIFACT_CONTRACT_BLOCKED" in proc.stderr
+        assert l2_report in proc.stderr
+    assert any(r.get("kind") == "obligation_unresolvable"
+               and r.get("reason") == "invalid_obligation" for r in _advisory_records(home))
+
+    # l1 is still judged on its own report, at its own stop.
+    proc_l1 = _run_hook(project, home, "agent-dev-l1", session_id=_FANOUT_HARNESS,
+                        stopgate_mode=stopgate)
+    assert proc_l1.returncode == 2, proc_l1.stderr
+    assert l1_report in proc_l1.stderr and l2_report not in proc_l1.stderr
 
 
 if __name__ == "__main__":

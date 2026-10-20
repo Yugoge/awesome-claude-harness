@@ -49,6 +49,10 @@ dev-report-* — but as a UNION of all correlated candidates, each validated,
 rather than a single pick: under fan-out several lane reports share the
 session timestamp, and picking one file would let an invalid lane report be
 shadowed by a valid sibling (codex audit finding, HIGH, fixed in this cycle).
+When the stopping producer's own dispatch obligation names a task_id (also
+when the block fails the grammar, as a pre-P1 template's does), the union is
+narrowed to that task's reports: each producer is judged on its own report
+at its own stop, never on a sibling lane's.
 The algorithm is intentionally NOT imported from the sibling hook: a runtime
 import would let an unrelated refactor of that file silently disable this
 gate via the fail-open wrapper, whereas a local copy degrades observably
@@ -194,11 +198,12 @@ def _find_correlated_reports(
     reports share the session timestamp and a schema-invalid lane report would
     be shadowed by a lexicographically-later valid sibling (codex audit
     finding, do-20260926-073930, HIGH). The dev-registry also carries no
-    per-lane agent→report binding (all dev lanes share one dev.json sentinel),
-    so per-author attribution is structurally unavailable; the enforced
-    invariant is session-scoped, matching the enforce flag's session scope:
-    no dev/qa agent of this session stops while ANY correlated report of its
-    role class is versioned-and-invalid.
+    per-lane agent→report binding (all dev lanes share one dev.json sentinel);
+    the binding comes from the producer's own dispatch obligation instead
+    (``_own_reports``, applied by main()). Without one the enforced invariant
+    is session-scoped, matching the enforce flag's session scope: no dev/qa
+    agent of this session stops while ANY correlated report of its role class
+    is versioned-and-invalid.
 
     Candidates are the union of:
       1. session_ts (from dev_session_id) as a filename substring — all
@@ -242,6 +247,35 @@ def _find_correlated_reports(
                 candidates[p] = Path(p)
 
     return [candidates[k] for k in sorted(candidates)]
+
+
+def _dispatch_task_id(prompt) -> str | None:
+    """The task_id this producer's own dispatch obligation names, read even
+    when the block fails the grammar (a pre-P1 template still carries
+    required_values), so the legacy check knows which reports are its own."""
+    block = obligation.extract_obligation_block(prompt) if isinstance(prompt, str) else None
+    if not isinstance(block, obligation.ExtractedBlock):
+        return None
+    try:
+        doc = json.loads(block.body)
+    except ValueError:
+        return None
+    task_id = doc.get("task_id") if isinstance(doc, dict) else None
+    return task_id if isinstance(task_id, str) and task_id else None
+
+
+def _own_reports(report_paths: list, prefix: str, task_id: str) -> list:
+    """The correlated reports of this producer's own task: named
+    ``<prefix><task_id>.json`` or declaring that task_id, in its minted or
+    canonical form. A sibling lane's report is judged at that lane's stop."""
+    ids = {task_id, obligation.canonical_task_id(task_id)}
+    own = []
+    for path in report_paths:
+        data = _read_json(path)
+        declared = {data.get("task_id"), data.get("request_id")}
+        if path.name[len(prefix):-len(".json")] in ids or declared & ids:
+            own.append(path)
+    return own
 
 
 # ---------------------------------------------------------------------------
@@ -825,6 +859,7 @@ def main() -> None:
     stopgate_mode = os.environ.get("CLAUDE_OBLIGATION_STOPGATE", "advisory").strip().lower()
     if stopgate_mode not in {"advisory", "block", "off"}:
         stopgate_mode = "advisory"
+    resolution = None
     if stopgate_mode != "off":
         try:
             session_id = data.get("session_id") or data.get("sessionId")
@@ -1188,6 +1223,9 @@ def main() -> None:
     report_paths = _find_correlated_reports(
         project_dir, prefix, dev_session_id, sentinel.get("task_id")
     )
+    own_task_id = _dispatch_task_id(getattr(resolution, "prompt", None))
+    if own_task_id:
+        report_paths = _own_reports(report_paths, prefix, own_task_id)
     if not report_paths:
         # Existence enforcement belongs to subagentstop-e2e-enforce.py (qa)
         # and /close's chain resolver (dev). Observe, never block, here.

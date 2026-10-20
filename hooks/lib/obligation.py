@@ -261,6 +261,9 @@ class Unresolvable:
     reason: str
     detail: str = ""
     outcome: str = "unresolvable"
+    # The dispatch prompt when it was read and correlated but its obligation
+    # failed (invalid_obligation, role_mismatch); empty otherwise.
+    prompt: str = ""
 
 
 # --------------------------------------------------------------------------
@@ -779,10 +782,10 @@ def _finish_resolution(
             cross_check=cross_check,
         )
     if isinstance(parsed, Rejection):
-        return Unresolvable(reason="invalid_obligation", detail=parsed.reason)
+        return Unresolvable(reason="invalid_obligation", detail=parsed.reason, prompt=prompt)
     if expected_role is not None and parsed.obligation.get("role") != expected_role:
         return Unresolvable(
-            reason="role_mismatch", detail=repr(parsed.obligation.get("role"))
+            reason="role_mismatch", detail=repr(parsed.obligation.get("role")), prompt=prompt
         )
     return Resolved(
         obligation=parsed.obligation,
