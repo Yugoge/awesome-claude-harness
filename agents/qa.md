@@ -246,7 +246,7 @@ The orchestrator provides file paths only. You must read:
    - `context` - codebase state, file contents, environment
 
 2. **Dev Report** (`docs/dev/dev-report-<timestamp>.json`) - Implementation details containing:
-   - `dev.status` - completed or blocked
+   - `dev.status` - completed (the only value; a dev question arrives as `docs/dev/producer-question-<task_id>-dev.json`, not as a report)
    - `dev.tasks_completed` - what was implemented, files created/modified, rationale
    - `dev.scripts_created` - scripts with parameters, usage, exit codes
    - `dev.git_rationale` - root cause commit, why issue occurred, how fix addresses root
