@@ -35,6 +35,7 @@
 
 import os
 import pathlib
+import shutil
 import sys
 import tempfile
 
@@ -57,10 +58,16 @@ os.environ["HOME"] = str(_HERMETIC_ROOT / "home")
 os.environ["CLAUDE_CONFIG_DIR"] = str(_HERMETIC_ROOT / "home" / ".claude")
 os.environ["CLAUDE_PYTHON_BIN"] = sys.executable
 # The empty-lists document init writes (scripts/bootstrap), tracked so a run
-# never depends on the runner's own protected-runtime file.
-os.environ["CLAUDE_PROTECTED_RUNTIME_FILE"] = str(
-    pathlib.Path(__file__).parent / "hooks" / "tests" / "fixtures" / "protected-runtime.json"
+# never depends on the runner's own protected-runtime file. Used from a copy
+# outside the checkout, where a real home keeps it: the runtime guard protects
+# its data file, and inside the project directory it would also match writes
+# the tests aim at other layers.
+_PROTECTED_RUNTIME = _HERMETIC_ROOT / "protected-runtime.json"
+shutil.copyfile(
+    pathlib.Path(__file__).parent / "hooks" / "tests" / "fixtures" / "protected-runtime.json",
+    _PROTECTED_RUNTIME,
 )
+os.environ["CLAUDE_PROTECTED_RUNTIME_FILE"] = str(_PROTECTED_RUNTIME)
 
 
 @pytest.fixture(autouse=True)
