@@ -506,7 +506,7 @@ TASK_ID: <TASK_ID or "bulk">   BULK: <true|false>
   "role": "qa",
   "pipeline": "commit",
   "profile": "commit-qa",
-  "dispatched_at": "<ISO-8601 timestamp of this dispatch>",
+  "dispatched_at": "<ISO-8601 UTC ending in Z, captured immediately before this dispatch, for example the output of date -u +%Y-%m-%dT%H:%M:%SZ>",
   "artifacts": [
     {"kind": "markdown", "path": "docs/dev/commit-qa-report-<TASK_ID or \"bulk\">.md",
      "identity_anchor": "<TASK_ID or \"bulk\">",
@@ -614,7 +614,7 @@ QA_APPROVED_FILES=<the Step 6 decision-phase QA-approved file set, per repo — 
   "role": "changelog-analyst",
   "pipeline": "commit",
   "profile": <"commit-landing" when BULK=false, else "commit-bulk">,
-  "dispatched_at": "<ISO-8601 timestamp of this dispatch>",
+  "dispatched_at": "<ISO-8601 UTC ending in Z, captured immediately before this dispatch, for example the output of date -u +%Y-%m-%dT%H:%M:%SZ>",
   "artifacts": [
     {
       "kind": "response_block",

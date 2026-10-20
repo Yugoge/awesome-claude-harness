@@ -993,7 +993,7 @@ Agent(subagent_type: "ba")
       "role": "ba",
       "pipeline": "dev-overnight",
       "profile": "overnight",
-      "dispatched_at": "<ISO-8601, captured immediately before this Agent call>",
+      "dispatched_at": "<ISO-8601 UTC ending in Z, captured immediately before this Agent call, for example the output of date -u +%Y-%m-%dT%H:%M:%SZ>",
       "artifacts": [
         {"kind": "json", "path": "docs/dev/context-{pipeline.timestamp_suffix}.json", "schema": "context.v1",
          "identity": {"task_id": "{pipeline.timestamp_suffix}", "request_id": "{pipeline.timestamp_suffix}"}},

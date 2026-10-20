@@ -447,7 +447,7 @@ Use Task tool with:
     "role": "ba",
     "pipeline": "dev",
     "profile": "singular",
-    "dispatched_at": "<ISO-8601, captured immediately before this Agent call>",
+    "dispatched_at": "<ISO-8601 UTC ending in Z, captured immediately before this Agent call, for example the output of date -u +%Y-%m-%dT%H:%M:%SZ>",
     "artifacts": [
       {"kind": "json", "path": "docs/dev/context-<timestamp>.json", "schema": "context.v1",
        "identity": {"task_id": "<timestamp>", "request_id": "<timestamp>"}},
