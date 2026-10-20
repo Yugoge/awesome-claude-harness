@@ -362,8 +362,9 @@ Before proceeding to dev, verify the BA JSON context contains:
   `target_location` (see Contract D extension below)
 - **Location-complaint overlap**: tokens of BA's `affected_files ∪
   located_source` must intersect the complaint's location keywords, OR
-  BA must declare `status: localization_blocked`. Mismatch is a hard
-  reject — re-delegate BA, do NOT dispatch dev.
+  BA's context must record `localization_blocked` (set only after the owner
+  answered BA's localization question; agents/ba.md "Localization blocked").
+  Mismatch is a hard reject — re-delegate BA, do NOT dispatch dev.
 
 If any check fails, the orchestrator re-delegates to BA with explicit
 feedback naming the missing field. Do NOT proceed to dev with an
@@ -381,8 +382,8 @@ judgment: would a reasonable engineer, reading the user complaint and
 seeing BA's three fields side by side, agree that BA looked in the right
 place? Aliases, synonyms, hierarchical names, and indirect references all
 count toward the match — there is no token-splitting or set-intersection
-step. Pass iff the LLM judgment is "yes, plausible match" OR BA emitted
-`status == localization_blocked`. On a "no" verdict, re-delegate to BA
+step. Pass iff the LLM judgment is "yes, plausible match" OR the context
+records `localization_blocked`. On a "no" verdict, re-delegate to BA
 with a one-sentence explanation of which complaint phrase did not find a
 believable home in `affected_files` or `located_source`, and do NOT
 advance to dev.
