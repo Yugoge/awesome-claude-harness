@@ -20,10 +20,26 @@ from pathlib import Path
 HOOK = Path(__file__).resolve().parent.parent / "stop-do-report-gate.py"
 MAX_BLOCKS = 2  # keep in sync with the hook
 
+sys.path.insert(0, str(HOOK.parent))
+from lib.harness_state_dir import harness_state_dir  # noqa: E402
+
+
+def _state_path(name):
+    # Resolved per call with the hook's own resolver: the spawned gate inherits
+    # os.environ, so CLAUDE_STATE_DIR as it is at call time decides where it looks.
+    return Path(harness_state_dir()) / name
+
+
+def _sidecar_path(sid):
+    return _state_path(f"claude-do-task-{sid}.json")
+
+
+def _counter_path(sid):
+    return _state_path(f"claude-do-report-gate-{sid}.json")
+
 
 def _cleanup(sid):
-    for p in (Path(f"/tmp/claude-do-task-{sid}.json"),
-              Path(f"/tmp/claude-do-report-gate-{sid}.json")):
+    for p in (_sidecar_path(sid), _counter_path(sid)):
         try:
             p.unlink()
         except OSError:
@@ -35,7 +51,7 @@ def _sid():
 
 
 def _write_sidecar(sid, task_id):
-    Path(f"/tmp/claude-do-task-{sid}.json").write_text(
+    _sidecar_path(sid).write_text(
         json.dumps({"task_id": task_id, "session_id": sid}))
 
 
@@ -126,7 +142,7 @@ def test_completed_report_allows_and_clears_counter():
             _report(tmp, tid)
             r = _run_gate(sid, tmp, tmp, task_id=tid)
             assert r.returncode == 0, f"completed report must allow stop: {r.stderr}"
-            assert not Path(f"/tmp/claude-do-report-gate-{sid}.json").exists(), \
+            assert not _counter_path(sid).exists(), \
                 "compliance must clear the block counter"
         finally:
             _cleanup(sid)
@@ -315,7 +331,7 @@ def test_off_mode_is_noop():
 def test_unsafe_sidecar_task_id_degrades_to_allow():
     sid = _sid()
     with tempfile.TemporaryDirectory() as tmp:
-        Path(f"/tmp/claude-do-task-{sid}.json").write_text(
+        _sidecar_path(sid).write_text(
             json.dumps({"task_id": "../../etc/passwd", "session_id": sid}))
         try:
             r = _run_gate(sid, tmp, tmp)
