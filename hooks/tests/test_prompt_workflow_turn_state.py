@@ -5,7 +5,8 @@ hooks/prompt-workflow.py ``_clear_turn_state`` runs at every UserPromptSubmit: i
 ``claude-orchestrator-consent-<sid>.flag``, both in the hook state dir (CLAUDE_STATE_DIR,
 hooks/lib/harness_state_dir.py). The Stop-time clearers in hooks/stop-cleanup-allowlist.sh and
 hooks/stop-do-report-gate.py are gone, so /do consent lasts exactly one turn: a Stop (blocked or
-not) and an AskUserQuestion answered inside the turn keep it, and the next human prompt ends it.
+not) and an AskUserQuestion answered inside the turn keep it, and the next UserPromptSubmit ends
+it, whether the human typed it or the CLI fired it for a scheduled task or a task notification.
 
 Every hook runs as a subprocess with a UserPromptSubmit / PreToolUse / PostToolUse / Stop payload
 shaped as the CLI sends it, against a transcript that starts with the two queue-operation records.
@@ -397,6 +398,42 @@ def test_prompt_without_session_id_removes_nothing(sess, identity):
     assert proc.returncode == 0, proc.stderr
     for path, text in seeded.items():
         assert path.read_text() == text, f"{path.name} changed without a session_id"
+    sess.assert_other_session_untouched()
+
+
+# -- (f) a UserPromptSubmit the human did not type starts a turn too ---------------------
+
+_TASK_NOTIFICATION = (
+    "<task-notification>\n<task-id>b7c1e20</task-id>\n<status>completed</status>\n"
+    "<summary>Background command \"Run the test suite\" completed (exit code 0)</summary>\n"
+    "</task-notification>")
+
+
+@pytest.mark.parametrize("kind", ["task_notification", "scheduled_prompt"])
+def test_a_prompt_the_human_did_not_type_also_ends_the_turn_state(sess, kind):
+    """Row 25 reads "at every UserPromptSubmit": the CLI also fires the event for a scheduled
+    task, a background task or subagent reporting back and a peer message (hooks reference), and
+    each starts a new turn, so it ends the /do turn's consent and resets the streak like a typed
+    prompt does."""
+    assert sess.prompt("/do rename heading").returncode == 0
+    assert sess.flag().exists()
+    sess.streak().write_text(json.dumps(_streak_state(2)))
+    if kind == "task_notification":
+        text = _TASK_NOTIFICATION
+        # The queued_command attachment shape measured for a hand-back (CLI 2.1.303).
+        record = {"type": "attachment", "attachment": {
+            "type": "queued_command", "prompt": text, "commandMode": "prompt", "isMeta": True}}
+    else:
+        text = "check whether the nightly build finished"
+        # The scheduled-prompt record measured for a CronCreate firing (CLI 2.1.303).
+        record = {"type": "user", "isMeta": True, "turnOrigin": "scheduled",
+                  "promptSource": "system", "message": {"role": "user", "content": text}}
+    proc = sess.run([sys.executable, str(PROMPT_WORKFLOW)],
+                    sess.payload("UserPromptSubmit", prompt=text))
+    sess.append(record)
+    assert proc.returncode == 0, proc.stderr
+    assert not sess.flag().exists(), f"a {kind} UserPromptSubmit must end the /do turn's consent"
+    assert not sess.streak().exists(), f"a {kind} UserPromptSubmit must reset the streak"
     sess.assert_other_session_untouched()
 
 

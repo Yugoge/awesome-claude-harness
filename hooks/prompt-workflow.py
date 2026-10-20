@@ -1998,10 +1998,12 @@ def _write_bookmark(cmd_name: str, sid: str, arguments: str = '') -> None:
 
 def _clear_turn_state(session_id: str, cmd_name) -> None:
     """D5/TC-9: the only clearer of the tool streak and of the /do consent flag
-    (the files hooks/pretool-orchestrator-gate.py reads). Every human prompt
-    starts a new turn, so the streak resets and /do consent, which lasts one
-    turn, goes unless this prompt is /do itself. An AskUserQuestion answered
-    inside the turn is not a UserPromptSubmit and keeps it."""
+    (the files hooks/pretool-orchestrator-gate.py reads). Every
+    UserPromptSubmit starts a new turn, typed or not (the CLI also fires it
+    for a scheduled task, a background task or subagent reporting back and a
+    peer message), so the streak resets and /do consent, which lasts one turn,
+    goes unless this prompt is /do itself. An AskUserQuestion answered inside
+    the turn is not a UserPromptSubmit and keeps it."""
     if not session_id:
         return
     names = [f"claude-tool-streak-{session_id}.json"]
