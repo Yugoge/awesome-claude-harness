@@ -18,10 +18,13 @@ tokens in stderr (the "DO-CYCLE BLOCK" banner, the "dev-report" /
 sentence (backlog #118's control-flow-not-wording rule).
 
 Fixture hygiene: every test uses a per-test unique session id (uuid4 hex)
-so the /tmp flag fixtures can never collide with a real session, and every
-/tmp fixture the tests create is removed in a finally block.
+so the flag fixtures can never collide with a real session, and every
+fixture the tests create is removed in a finally block. Fixtures go where the
+hook reads them: the hook state dir (CLAUDE_STATE_DIR, default /tmp;
+hooks/lib/harness_state_dir.py).
 """
 
+import importlib.util
 import json
 import os
 import subprocess
@@ -32,6 +35,13 @@ from pathlib import Path
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 HOOK = os.path.join(REPO_ROOT, "hooks", "pretool-do-block-subagents.py")
+# The hook's own state-dir resolver, loaded under a private name (no sys.path change).
+_spec = importlib.util.spec_from_file_location(
+    "_do_block_test_harness_state_dir",
+    os.path.join(REPO_ROOT, "hooks", "lib", "harness_state_dir.py"))
+_state_dir_module = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(_state_dir_module)
+harness_state_dir = _state_dir_module.harness_state_dir
 
 # Mirrors lib.subagent.SUBAGENT_ENV_KEYS: scrub these from the subprocess env
 # so a test run that itself happens inside a subagent context cannot leak
@@ -76,7 +86,8 @@ def _unique_sid():
 @contextmanager
 def _consent_flag(sid, content="true"):
     """Create the /do consent flag the hook keys on; always clean up."""
-    path = Path(f"/tmp/claude-orchestrator-consent-{sid}.flag")
+    path = Path(harness_state_dir()) / f"claude-orchestrator-consent-{sid}.flag"
+    path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(content)
     try:
         yield path
@@ -88,7 +99,8 @@ def _consent_flag(sid, content="true"):
 def _allow_agent_grant(sid):
     """Create the /allow grant file read_grant('Agent', sid) matches on
     (exact_only literal pattern, same file pretool-subagent-enforce reads)."""
-    path = Path(f"/tmp/claude-bash-allowlist-{sid}.json")
+    path = Path(harness_state_dir()) / f"claude-bash-allowlist-{sid}.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps({"pattern": "Agent", "is_regex": False}))
     lock = Path(f"{path}.lock")
     try:
