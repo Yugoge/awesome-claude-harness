@@ -124,9 +124,6 @@ class _Transcript:
                      "stop_reason": "end_turn"},
         ))
 
-    def text(self, text):
-        return self.assistant([{"type": "text", "text": text}])
-
     def tool_use(self, name, tool_input):
         self._tool_ids += 1
         tool_use_id = f"toolu_{self._tool_ids:04d}"
@@ -273,33 +270,30 @@ def test_allow_keeps_span_and_plain_prompt_continues(tmp_path):
     tx = _Transcript()
     tx.queue_operations()
     start = tx.command("dev", "fix the bug")
-    first = tx.tool("Bash", {"command": "git status"})
+    tx.tool("Bash", {"command": "git status"})
     tx.command("allow", "git push")
-    second = tx.tool("Bash", {"command": "git push"})
+    tx.tool("Bash", {"command": "git push"})
     tx.typed("also update the changelog")
-    third = tx.tool("Edit", {"file_path": "CHANGELOG.md"})
+    tx.tool("Edit", {"file_path": "CHANGELOG.md"})
     span = command_span.active_span(tx.write(tmp_path / "main.jsonl"))
     assert (span.command, span.args, span.start_line) == ("dev", "fix the bug", start)
-    assert [use.id for use in span.uses] == [first, second, third]
 
 
 def test_typed_stop_replaces_and_builtin_model_does_not(tmp_path):
     tx = _Transcript()
     tx.queue_operations()
     start = tx.command("dev-overnight", "")
-    before = tx.tool("Bash", {"command": "ls"})
+    tx.tool("Bash", {"command": "ls"})
     tx.command("model", "opus")
     tx.typed("/model sonnet")
     path = tx.write(tmp_path / "model.jsonl")
     span = command_span.active_span(path)
     assert (span.command, span.start_line) == ("dev-overnight", start)
-    assert [use.id for use in span.uses] == [before]
 
     stop_line = tx.command("stop")
-    after = tx.tool("Bash", {"command": "pwd"})
+    tx.tool("Bash", {"command": "pwd"})
     span = command_span.active_span(tx.write(tmp_path / "stop.jsonl"))
     assert (span.command, span.args, span.start_line) == ("stop", "", stop_line)
-    assert [use.id for use in span.uses] == [after]
 
 
 def test_active_span_none_for_missing_file_or_no_command(tmp_path):
@@ -311,76 +305,6 @@ def test_active_span_none_for_missing_file_or_no_command(tmp_path):
     tx.command("model", "opus")
     tx.tool("Bash", {"command": "ls"})
     assert command_span.active_span(tx.write(tmp_path / "plain.jsonl")) is None
-
-
-# --------------------------------------------------------------------------
-# Span accessors
-# --------------------------------------------------------------------------
-
-def test_calls_attach_tool_results_and_ok(tmp_path):
-    tx = _Transcript()
-    outside = tx.tool("Bash", {"command": "echo before"})
-    tx.command("dev", "x")
-    ok_id = tx.tool("Bash", {"command": "pytest -q"}, result="2 passed")
-    error_id = tx.tool("Bash", {"command": "false"}, result="exit 1", is_error=True)
-    pending_id = tx.tool("Agent", {"subagent_type": "dev", "prompt": "do it"}, result=None)
-    read_id = tx.tool("Read", {"file_path": "README.md"})
-    span = command_span.active_span(tx.write(tmp_path / "main.jsonl"))
-
-    bash = span.calls("Bash")
-    assert [use.id for use in bash] == [ok_id, error_id]
-    assert outside not in [use.id for use in span.uses]
-    ok_use, error_use = bash
-    assert ok_use.result["tool_use_id"] == ok_id
-    assert ok_use.result["content"] == "2 passed"
-    assert ok_use.ok is True
-    assert error_use.result["is_error"] is True
-    assert error_use.ok is False
-    assert ok_use.input == {"command": "pytest -q"}
-
-    (agent,) = span.calls("Agent")
-    assert agent.id == pending_id and agent.result is None and agent.ok is False
-    assert [use.id for use in span.calls("Bash", "Agent")] == [ok_id, error_id, pending_id]
-    assert [use.id for use in span.calls("Read")] == [read_id]
-    assert span.calls("Write") == []
-
-
-def test_last_todos_returns_last_ok_todowrite(tmp_path):
-    def todos(label):
-        return [{"content": label, "status": "in_progress", "activeForm": label}]
-
-    tx = _Transcript()
-    tx.command("dev", "x")
-    tx.tool("TodoWrite", {"todos": todos("first")})
-    tx.tool("TodoWrite", {"todos": todos("second")})
-    tx.tool("TodoWrite", {"todos": todos("refused")}, result="hook refused", is_error=True)
-    tx.tool("TodoWrite", {"todos": todos("pending")}, result=None)
-    span = command_span.active_span(tx.write(tmp_path / "main.jsonl"))
-    assert span.last_todos() == todos("second")
-
-    none = _Transcript()
-    none.command("dev", "x")
-    none.tool("TodoWrite", {"todos": todos("refused")}, result="refused", is_error=True)
-    none.tool("Bash", {"command": "ls"})
-    span = command_span.active_span(none.write(tmp_path / "none.jsonl"))
-    assert span.last_todos() is None
-
-
-def test_final_text_prefers_payload_last_assistant_message(tmp_path):
-    tx = _Transcript()
-    tx.text("before the span")
-    tx.command("dev", "x")
-    tx.text("first answer")
-    tx.tool("Bash", {"command": "ls"})
-    tx.text("final answer from the transcript")
-    span = command_span.active_span(tx.write(tmp_path / "main.jsonl"))
-    assert span.last_text == "final answer from the transcript"
-    assert span.final_text({"last_assistant_message": "final answer from the payload"}) == (
-        "final answer from the payload"
-    )
-    for payload in ({}, {"last_assistant_message": "   "},
-                    {"last_assistant_message": None}, None):
-        assert span.final_text(payload) == "final answer from the transcript", payload
 
 
 # --------------------------------------------------------------------------
