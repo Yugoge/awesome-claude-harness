@@ -232,15 +232,37 @@ def test_rev_detection_survives_an_overwritten_orig_head(tmp_path, env):
     assert not (clone / "settings.machine.json").exists()
 
 
+def test_a_clone_made_after_p7_that_looked_at_history_is_not_landed(tmp_path, env):
+    """D13 (a fresh clone is never switched on): a clone whose reflog starts at a revision that
+    declares the filter, then checked out a pre-P7 revision and came back, is still a fresh clone.
+    Nothing is written and nothing is said; init is its producer."""
+    origin, rev = make_home(tmp_path, env, name="origin")
+    clone = tmp_path / "fresh"
+    git(env, tmp_path, "clone", "-q", str(origin), str(clone))
+    git(env, clone, "checkout", "-q", rev)
+    git(env, clone, "checkout", "-q", "-")
+    assert land(env, clone, "--state").strip() == "none"
+    assert land(env, clone) == ""
+    assert not [p for p in ("settings.machine.json", "private-literals.txt", "logs")
+                if (clone / p).exists()]
+
+
 # ------------------------------------------------------- R2: the states a pull path leaves behind
+
+def clone_home(env, tmp_path, origin):
+    """The harness home as a clone made before P7: the clone entry at origin's P7 revision is
+    dropped from the HEAD reflog (a clone made at a filter revision is left to init, D13)."""
+    home = tmp_path / "harness"
+    git(env, tmp_path, "clone", "-q", str(origin), str(home))
+    (home / ".git" / "logs" / "HEAD").unlink()
+    return Path(os.path.realpath(home))
+
 
 def pulled_home(tmp_path, env, live_edit, other=None):
     """A pre-P7 home (at rev, with a live edit) pulling P7 the way fswatch does: stash, pull
     --rebase, pop. Returns (home, rev, pop result)."""
     origin, rev = make_home(tmp_path, env, name="origin")
-    home = tmp_path / "harness"
-    git(env, tmp_path, "clone", "-q", str(origin), str(home))
-    home = Path(os.path.realpath(home))
+    home = clone_home(env, tmp_path, origin)
     git(env, home, "checkout", "-q", "-B", "master", rev)
     git(env, home, "branch", "-q", "-u", "origin/master")
     live = json.loads((home / "settings.json").read_text(encoding="utf-8"))
@@ -291,9 +313,7 @@ def test_a_path_the_pop_merged_and_staged_is_unstaged_too(tmp_path, env):
     is the merge, not the stash's). It is unstaged too, its merged working content kept."""
     lines = "".join("line %d\n" % i for i in range(1, 11))
     origin, rev = make_home(tmp_path, env, name="origin")
-    home = tmp_path / "harness"
-    git(env, tmp_path, "clone", "-q", str(origin), str(home))
-    home = Path(os.path.realpath(home))
+    home = clone_home(env, tmp_path, origin)
     git(env, home, "checkout", "-q", "-B", "master", rev)
     git(env, home, "branch", "-q", "-u", "origin/master")
     write(home / "multi.txt", lines)
@@ -325,8 +345,7 @@ def test_other_unmerged_paths_stay_and_an_empty_unstage_list_resets_nothing(tmp_
     """An unmerged file the owner edited stays unmerged (counted); with nothing the pop staged,
     no `git reset` runs (without a pathspec it would reset the whole index)."""
     origin, rev = make_home(tmp_path, env, name="origin")
-    home = tmp_path / "harness"
-    git(env, tmp_path, "clone", "-q", str(origin), str(home))
+    home = clone_home(env, tmp_path, origin)
     git(env, home, "checkout", "-q", "-B", "master", rev)
     git(env, home, "branch", "-q", "-u", "origin/master")
     write(home / "hooks/lib/subagent_restart.py", "# owner's edit\n")  # tracked; P7 rewrote it
@@ -347,8 +366,7 @@ def test_other_unmerged_paths_stay_and_an_empty_unstage_list_resets_nothing(tmp_
 
 def pre_pull_clone(tmp_path, env):
     origin, rev = make_home(tmp_path, env, name="origin")
-    home = tmp_path / "harness"
-    git(env, tmp_path, "clone", "-q", str(origin), str(home))
+    home = clone_home(env, tmp_path, origin)
     git(env, home, "checkout", "-q", "-B", "master", rev)
     git(env, home, "branch", "-q", "-u", "origin/master")
     return Path(os.path.realpath(home)), rev
@@ -490,8 +508,7 @@ def test_s4_stopped_merge_on_pre_p7_head_gets_the_notice(tmp_path, env):
     """A merge pull stopped on a local commit: HEAD is still the pre-P7 revision, MERGE_HEAD
     declares the filter. The session that runs the merged hooks sees the S4 notice."""
     origin, rev = make_home(tmp_path, env, name="origin")
-    home = tmp_path / "harness"
-    git(env, tmp_path, "clone", "-q", str(origin), str(home))
+    home = clone_home(env, tmp_path, origin)
     git(env, home, "checkout", "-q", "-B", "master", rev)
     live = json.loads((home / "settings.json").read_text(encoding="utf-8"))
     live["env"]["TMPDIR"] = "/opt/demo/local"  # a local commit on a line P7 changed
@@ -581,9 +598,7 @@ def test_doc_sync_only_conflicts_take_upstreams_side(tmp_path, env):
     write(origin / "agents/INDEX.md", DATED % "2026-01-01T00:00:00Z")
     git(env, origin, "add", "-A")
     git(env, origin, "commit", "-q", "-m", "indexes")
-    home = tmp_path / "harness"
-    git(env, tmp_path, "clone", "-q", str(origin), str(home))
-    home = Path(os.path.realpath(home))
+    home = clone_home(env, tmp_path, origin)
     git(env, home, "checkout", "-q", "-B", "master", _rev)
     git(env, home, "merge", "-q", "--ff-only", "origin/master")
     land(env, home)  # an upgraded home lands first
@@ -625,9 +640,7 @@ def test_doc_sync_conflicts_on_an_upgraded_home_whose_pull_left_settings_alone(t
     rev on it); upstream deleted the index and edited the line next to CLAUDE.md's date. The
     landing takes upstream's side for both in the same Stop."""
     origin, rev = make_home(tmp_path, env, name="origin")
-    home = tmp_path / "harness"
-    git(env, tmp_path, "clone", "-q", str(origin), str(home))
-    home = Path(os.path.realpath(home))
+    home = clone_home(env, tmp_path, origin)
     git(env, home, "checkout", "-q", "-B", "master", rev)
     git(env, home, "branch", "-q", "-u", "origin/master")
     write(home / "commands/INDEX.md", DATED % "2026-01-01T00:00:00Z")
