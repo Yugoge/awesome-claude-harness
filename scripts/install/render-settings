@@ -1376,6 +1376,28 @@ def seed_literals(home, rev):
     return counts
 
 
+def from_head(home):
+    """Until a render wrote the record, settings.json is taken from HEAD (the clean form, which init
+    step 3 renders with the overlay), last in the step and by whichever run of the landing gets
+    here: one that a kill cut short after the migration as well. Entries the overlay does not hold
+    are dropped then: GIT_AUTO_PUSH "1" (D1) and what the CLI wrote after the migration (the overlay
+    that exists is never rewritten); the log and the notice name their key paths."""
+    working = parse(_read(SETTINGS))
+    if working == parse(blob(home, "HEAD:" + SETTINGS)):
+        return []
+    overlay = load_overlay(home) or {}
+    target, layers, problem = machine_form(home, overlay, working)
+    extras = working_extras(working, target, layers) if working and not problem else {}
+    pushed = _d(extras.get("env")).pop("GIT_AUTO_PUSH", None) == "1"
+    lost = describe(extras) + [k for k in CLI_OWNED if k in (working or {}) and
+                               working[k] != overlay.get(k)]
+    _git(home, "checkout", "-q", "HEAD", "--", SETTINGS)
+    _say("settings.json taken from HEAD for the render; dropped: %s" % (", ".join(lost) or "none"))
+    return (["GIT_AUTO_PUSH not migrated: automatic push is opt-in"] if pushed else []) + (
+        ["dropped from settings.json, as the overlay does not hold them: " + ", ".join(lost)]
+        if lost else [])
+
+
 def land(home, mode):
     """(notice part or the step that failed, rc): the landing of an upgraded home, or with mode
     "repair" a landed home whose later pull left a conflicted stash pop."""
@@ -1412,15 +1434,12 @@ def land(home, mode):
                      "unstaged, the stash entry kept" % res[:3])
     if res[3]:
         notes.append("%d other conflicted path(s) left as they are" % res[3])
-    if migrated and changed and SETTINGS not in unmerged:
-        # Its entries beyond the clean form are in the overlay now (a GIT_AUTO_PUSH of "1"
-        # excepted, D1): the clean form plus the overlay renders it back.
-        _git(home, "checkout", "-q", "HEAD", "--", SETTINGS)
-        _say("settings.json taken from HEAD for the render")
     counts = seed_literals(home, rev)
     if counts is not None:
         _say("seeded " + " ".join("%s=%d" % kv for kv in counts.items()))
         notes.append("private-literals.txt seeded with %d value(s)" % sum(counts.values()))
+    if SETTINGS not in _unmerged(home) and not os.path.exists(record_path(home) or ""):
+        notes += [n for n in from_head(home) if not any(n in note for note in notes)]
     return "; ".join(notes), 0
 
 

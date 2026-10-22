@@ -385,6 +385,56 @@ def test_working_git_auto_push_one_is_dropped_not_stuck(tmp_path, env):
     assert json.loads((home / "settings.json").read_text())["env"]["GIT_AUTO_PUSH"] == "0"
 
 
+def render_settings(env, home, code):
+    """Run code with `rs` = this home's render-settings module, cwd the home."""
+    loader = ("import os, sys; sys.dont_write_bytecode = True; import importlib.machinery as m, "
+              "importlib.util as u; home, rev = sys.argv[1], sys.argv[2]; os.chdir(home); "
+              "ld = m.SourceFileLoader('rs', 'scripts/install/render-settings'); "
+              "rs = u.module_from_spec(u.spec_from_loader('rs', ld)); ld.exec_module(rs); ")
+    return run([sys.executable, "-c", loader + code, str(home), ""], env, cwd=str(home))
+
+
+@pytest.mark.parametrize("edit", ["push-one", "allow"])
+def test_a_landing_cut_short_after_the_migration_completes(tmp_path, env, edit):
+    """R1 (a landing killed half-way completes at the next trigger): the landing stopped right
+    after its migration, before settings.json was taken from HEAD. The next Stop takes it from
+    HEAD all the same, so the render does not refuse the working GIT_AUTO_PUSH "1" that D1 keeps
+    out of the overlay, and the home lands."""
+    fn = (lambda live: live["env"].update(GIT_AUTO_PUSH="1")) if edit == "push-one" else add_allow
+    home, rev, pop = pulled_home(tmp_path, env, fn)
+    render_settings(env, home, "rev = rs.pre_pull_rev(home); sys.exit(rs.cmd_migrate(home, rev, None, "
+                               "'HEAD', rs.previous_settings(home, rev, None)))")
+    notice = land(env, home)
+    assert "P7 landed" in notice and "dropped" not in notice
+    assert ("GIT_AUTO_PUSH not migrated" in notice) == (edit == "push-one")
+    assert_landed(env, home)
+    rendered = json.loads((home / "settings.json").read_text())
+    assert rendered["env"]["GIT_AUTO_PUSH"] == "0"
+    assert ("Bash(/opt/demo/bin/live-tool:*)" in rendered["permissions"]["allow"]) == (edit == "allow")
+
+
+@pytest.mark.parametrize("edit", [add_allow, lambda live: None], ids=["S2", "S1"])
+def test_a_cli_write_between_the_settings_step_and_the_render_does_not_wedge(tmp_path, env, edit):
+    """The CLI writes an allow entry after render-settings land took settings.json from HEAD and
+    before init step 3 rendered it (that render refused it at every later Stop). The next Stop
+    takes settings.json from HEAD again, names what it dropped (the overlay that exists is never
+    rewritten), and lands."""
+    home, rev, pop = pulled_home(tmp_path, env, edit)
+    run([sys.executable, str(home / "scripts/install/render-settings"), "land"], env, cwd=str(home))
+    doc = json.loads((home / "settings.json").read_text())
+    doc["permissions"]["allow"].append("Bash(demo-cli-approved:*)")
+    (home / "settings.json").write_text(json.dumps(doc, indent=2) + "\n")
+    notice = land(env, home)
+    assert "P7 landed" in notice
+    assert "dropped from settings.json, as the overlay does not hold them: permissions.allow: " \
+        "1 entry" in notice
+    assert_landed(env, home)
+    rendered = json.loads((home / "settings.json").read_text())
+    assert "Bash(demo-cli-approved:*)" not in rendered["permissions"]["allow"]
+    assert ("Bash(/opt/demo/bin/live-tool:*)" in rendered["permissions"]["allow"]) == (edit is add_allow)
+    assert "demo-cli-approved" not in notice + landing_log(home)
+
+
 def test_s4_stopped_rebase_changes_nothing(tmp_path, env):
     home, rev = make_home(tmp_path, env)
     gd = home / ".git"
