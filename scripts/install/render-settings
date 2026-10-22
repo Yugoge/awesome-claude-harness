@@ -1381,6 +1381,13 @@ def seed_literals(home, rev):
     return counts
 
 
+def repaired(res):
+    """The notice parts for repair_pop's result."""
+    return (["%d file(s) a pull left conflicted taken from upstream (%d doc-sync), %d staged "
+             "path(s) unstaged, the stash entry kept" % res[:3]] if res[0] or res[2] else []) + (
+        ["%d other conflicted path(s) left as they are" % res[3]] if res[3] else [])
+
+
 def from_head(home):
     """Until a render wrote the record, settings.json is taken from HEAD (the clean form, which init
     step 3 renders with the overlay), last in the step and by whichever run of the landing gets
@@ -1407,11 +1414,10 @@ def land(home, mode):
     """(notice part or the step that failed, rc): the landing of an upgraded home, or with mode
     "repair" a landed home whose later pull left a conflicted stash pop."""
     unmerged, notes = _unmerged(home), []
-    if mode == "repair":
+    if mode == "repair":  # a notice only once a path was taken from upstream
         res = repair_pop(home, pull_stash(home, None)) if unmerged else (0, 0, 0, 0)
         _say("repair resolved=%d doc-sync=%d unstaged=%d unmerged-left=%d" % res)
-        return ("%d file(s) a pull left conflicted taken from upstream (%d doc-sync), %d staged "
-                "path(s) unstaged" % res[:3] if res[0] else ""), 0
+        return "; ".join(repaired(res) if res[0] else []), 0
     rev = pre_pull_rev(home)
     if rev is None:
         _say("no revision from before the settings filter in the HEAD reflog or ORIG_HEAD")
@@ -1434,11 +1440,7 @@ def land(home, mode):
         return "overlay", 1
     res = repair_pop(home, stash or pull_stash(home, rev, False), True) if unmerged else (0, 0, 0, 0)
     _say("repair resolved=%d doc-sync=%d unstaged=%d unmerged-left=%d" % res)
-    if res[0] or res[2]:
-        notes.append("%d conflicted file(s) taken from upstream (%d doc-sync), %d staged path(s) "
-                     "unstaged, the stash entry kept" % res[:3])
-    if res[3]:
-        notes.append("%d other conflicted path(s) left as they are" % res[3])
+    notes += repaired(res)
     counts = seed_literals(home, rev)
     if counts is not None:
         _say("seeded " + " ".join("%s=%d" % kv for kv in counts.items()))

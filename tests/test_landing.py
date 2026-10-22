@@ -313,7 +313,8 @@ def test_a_path_the_pop_merged_and_staged_is_unstaged_too(tmp_path, env):
     status = git(env, home, "status", "--porcelain").stdout.splitlines()
     assert {"M  multi.txt", "M  notes.txt", "UU settings.json"} <= set(status)
     notice = land(env, home)
-    assert "1 conflicted file(s) taken from upstream (0 doc-sync), 2 staged path(s) unstaged" in notice
+    assert "1 file(s) a pull left conflicted taken from upstream (0 doc-sync), 2 staged path(s) " \
+        "unstaged, the stash entry kept" in notice
     assert git(env, home, "diff", "--cached", "--name-only", "HEAD").stdout == ""
     merged = lines.replace("line 1\n", "line 1 upstream\n").replace("line 10\n", "line 10 live\n")
     assert (home / "multi.txt").read_text() == merged
@@ -602,7 +603,9 @@ def test_doc_sync_only_conflicts_take_upstreams_side(tmp_path, env):
     assert "DU commands/INDEX.md" in status and "UU CLAUDE.md" in status
     assert land(env, home, "--state").strip() == "landed"
     notice = land(env, home)
-    assert "2 file(s) a pull left conflicted taken from upstream (2 doc-sync)" in notice
+    assert notice == "Harness landing: 2 file(s) a pull left conflicted taken from upstream (2 " \
+        "doc-sync), 0 staged path(s) unstaged, the stash entry kept; 1 other conflicted path(s) " \
+        "left as they are.\n"
     assert git(env, home, "diff", "--name-only", "--diff-filter=U").stdout.split() == \
         ["agents/INDEX.md"]
     assert not (home / "commands/INDEX.md").exists()
@@ -646,7 +649,8 @@ def test_doc_sync_conflicts_on_an_upgraded_home_whose_pull_left_settings_alone(t
     status = git(env, home, "status", "--porcelain").stdout
     assert "DU commands/INDEX.md" in status and "UU CLAUDE.md" in status
     notice = land(env, home)
-    assert "P7 landed" in notice and "2 conflicted file(s) taken from upstream (2 doc-sync)" in notice
+    assert "P7 landed" in notice
+    assert "2 file(s) a pull left conflicted taken from upstream (2 doc-sync)" in notice
     assert git(env, home, "diff", "--name-only", "--diff-filter=U").stdout == ""
     assert not (home / "commands/INDEX.md").exists()
     assert (home / "CLAUDE.md").read_text() == CLAUDE_MD % ("2026-01-01", "--- upstream edit")
