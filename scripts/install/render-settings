@@ -1269,12 +1269,12 @@ def previous_settings(home, rev, stash):
     return prev, "%s:%s plus the working file" % (rev[:12], SETTINGS)
 
 
-def repair_pop(home, stash):
+def repair_pop(home, stash, always=False):
     """R2: undo what a conflicted stash pop left. An unmerged settings.json, and an unmerged
     INDEX.md or CLAUDE.md the stash changed only in doc-sync's date lines, take HEAD's side
-    (removed where HEAD deleted it); then every path the pop staged (index blob equal to the
-    stash's) is unstaged, its working content unchanged; other unmerged paths stay as they are.
-    Returns (resolved, doc-sync among them, unstaged, unmerged left)."""
+    (removed where HEAD deleted it); then (once one was, or always on an upgraded home) every path
+    the pop staged (index blob equal to the stash's) is unstaged, its working content unchanged;
+    other unmerged paths stay as they are. Returns (resolved, doc-sync, unstaged, unmerged left)."""
     undated = lambda data: [ln for ln in data.splitlines() if not DOC_SYNC_LINE.match(ln)]  # noqa
     resolved = []
     for path in _unmerged(home):
@@ -1289,7 +1289,7 @@ def repair_pop(home, stash):
              "--", path)
         resolved.append(path)
     left, unstage = _unmerged(home), []
-    if resolved and stash:
+    if stash and (resolved or always):
         index = {e.split("\t", 1)[1]: e.split()[1] for e in _z(home, "ls-files", "-s", "-z")}
         stashed = {e.split("\t", 1)[1]: e.split()[2] for e in _z(home, "ls-tree", "-r", "-z", stash)}
         unstage = [p for p in _z(home, "diff", "--cached", "--name-only", "-z", "--no-renames",
@@ -1389,7 +1389,8 @@ def land(home, mode):
     if rev is None:
         _say("no revision from before the settings filter in the HEAD reflog or ORIG_HEAD")
         return "revision detection", 1
-    stash, working = pull_stash(home, rev), parse(_read(SETTINGS))
+    # Only a conflicted pop keeps the pull's entry: without an unmerged path the working file wins.
+    stash, working = pull_stash(home, rev) if unmerged else None, parse(_read(SETTINGS))
     changed = working != parse(blob(home, "HEAD:" + SETTINGS))
     _say("state=%s rev=%s stash=%s unmerged=%d" % ("S3" if SETTINGS in unmerged else "S2" if
          changed else "S1", rev[:12], "yes" if stash else "no", len(unmerged)))
@@ -1404,9 +1405,9 @@ def land(home, mode):
     if not os.path.isfile(OVERLAY):
         _say("%s is not a regular file" % OVERLAY)
         return "overlay", 1
-    res = repair_pop(home, stash) if unmerged else (0, 0, 0, 0)
+    res = repair_pop(home, stash, True) if unmerged else (0, 0, 0, 0)
     _say("repair resolved=%d doc-sync=%d unstaged=%d unmerged-left=%d" % res)
-    if res[0]:
+    if res[0] or res[2]:
         notes.append("%d conflicted file(s) taken from upstream (%d doc-sync), %d staged path(s) "
                      "unstaged, the stash entry kept" % res[:3])
     if res[3]:

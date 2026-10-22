@@ -309,6 +309,59 @@ def test_other_unmerged_paths_stay_and_an_empty_unstage_list_resets_nothing(tmp_
     assert git(env, home, "diff", "--cached", "--name-only", "HEAD", "--", "settings.json").stdout == ""
 
 
+def pre_pull_clone(tmp_path, env):
+    origin, rev = make_home(tmp_path, env, name="origin")
+    home = tmp_path / "harness"
+    git(env, tmp_path, "clone", "-q", str(origin), str(home))
+    git(env, home, "checkout", "-q", "-B", "master", rev)
+    git(env, home, "branch", "-q", "-u", "origin/master")
+    return Path(os.path.realpath(home)), rev
+
+
+def live(home, edit):
+    doc = json.loads((home / "settings.json").read_text(encoding="utf-8"))
+    edit(doc)
+    (home / "settings.json").write_bytes(canon(doc))
+
+
+def test_a_pop_conflicting_only_on_another_file_still_unstages_what_it_staged(tmp_path, env):
+    """settings.json merges, an owner's hook edit conflicts: what the pop staged is unstaged all
+    the same, the owner's conflict stays."""
+    home, rev = pre_pull_clone(tmp_path, env)
+    write(home / "hooks/lib/subagent_restart.py", "# owner's edit\n")
+    write(home / "notes.txt", "owner note\n")
+    live(home, add_allow)
+    git(env, home, "stash", "push", "-q")
+    git(env, home, "pull", "-q", "--rebase", "origin", "master")
+    git(env, home, "stash", "pop", check=False)
+    assert git(env, home, "diff", "--name-only", "--diff-filter=U").stdout.split() == \
+        ["hooks/lib/subagent_restart.py"]
+    assert "notes.txt" in git(env, home, "diff", "--cached", "--name-only", "HEAD").stdout
+    notice = land(env, home)
+    assert "staged path(s) unstaged" in notice and "1 other conflicted path(s) left" in notice
+    assert git(env, home, "diff", "--cached", "--name-only", "HEAD", "--", "notes.txt",
+               "settings.json").stdout == ""
+    assert (home / "notes.txt").read_text() == "owner note\n"
+    assert "Bash(/opt/demo/bin/live-tool:*)" in overlay(home)["permissions"]["allow"]
+
+
+def test_an_older_entry_at_rev_is_not_the_pulls_once_the_pop_merged(tmp_path, env):
+    """S2 with an older stash entry kept at rev (an earlier attempt): the pull's own entry was
+    dropped by its clean pop, so the working file, not that entry, holds the previous settings."""
+    home, rev = pre_pull_clone(tmp_path, env)
+    live(home, lambda doc: doc.update(model="demo-stale-model"))
+    git(env, home, "stash", "push", "-q")  # kept from an earlier attempt, first parent rev
+    live(home, add_allow)
+    git(env, home, "stash", "push", "-q")
+    git(env, home, "pull", "-q", "--rebase", "origin", "master")
+    git(env, home, "stash", "pop", "-q")
+    assert len(git(env, home, "stash", "list").stdout.splitlines()) == 1
+    land(env, home)
+    ov = overlay(home)
+    assert "Bash(/opt/demo/bin/live-tool:*)" in ov["permissions"]["allow"]
+    assert ov.get("model") != "demo-stale-model"
+
+
 @pytest.mark.parametrize("edit", [add_allow, lambda live: None], ids=["S2", "S1"])
 def test_s1_s2_land_with_the_working_file(tmp_path, env, edit):
     home, rev, pop = pulled_home(tmp_path, env, edit)
