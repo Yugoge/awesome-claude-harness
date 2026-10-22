@@ -92,10 +92,10 @@ stale() {
     case "${a##*/}:$b" in bash:*git-fswatch.sh|sh:*git-fswatch.sh) f="${f#/proc/}"; STALE+=("${f%/cmdline}") ;; esac
   done
   [ "${#STALE[@]}" -gt 0 ] || return 1
-  newest="$(stat -c %Y hooks/git-fswatch.sh hooks/lib/checkpoint-core.sh 2>/dev/null | sort -n | tail -n1)"
-  tick="$(getconf CLK_TCK 2>/dev/null)"
+  { read -r k; read -r v; } < <(stat -c %Y hooks/git-fswatch.sh hooks/lib/checkpoint-core.sh 2>/dev/null)
+  newest=$(( ${k:-0} > ${v:-0} ? ${k:-0} : ${v:-0} )); tick="$(getconf CLK_TCK 2>/dev/null)"
   while read -r k v _; do [ "$k" != btime ] || btime="$v"; done < /proc/stat
-  [ -n "$newest" ] && [ -n "$btime" ] && [ -n "$tick" ] || { STALE=(); return 1; }
+  [ "$newest" -gt 0 ] && [ -n "$btime" ] && [ -n "$tick" ] || { STALE=(); return 1; }
   for k in "${!STALE[@]}"; do
     line=""; read -r line < "/proc/${STALE[k]}/stat" 2>/dev/null; read -r -a st <<< "${line##*) }"
     [ "${#st[@]}" -ge 20 ] && [ $((btime + st[19] / tick)) -le "$newest" ] || unset 'STALE[k]'
