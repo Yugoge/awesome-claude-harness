@@ -3069,7 +3069,7 @@ class TestCycle12SlashPathNavAllowAndDashOptOverblock:
     @pytest.mark.parametrize("cmd", _CMDS)
     def test_issue1_nav_slash_path_allows(self, w, cmd, datafile, fixture_repo):
         pre = (w + " ") if w else ""
-        d = f"/dev/shm/dev-workspace/{cmd}"          # dir whose basename == cmd
+        d = f"/srv/harness-ws/{cmd}"          # dir whose basename == cmd
         for body in (f"cd {d}",
                      f"pushd {d}",
                      f"ls {d}",
@@ -3085,7 +3085,7 @@ class TestCycle12SlashPathNavAllowAndDashOptOverblock:
 
     # env-prefix + chdir wrapper forms also ALLOW (no launch).
     def test_issue1_env_prefix_nav_allows(self, datafile, fixture_repo):
-        d = "/dev/shm/dev-workspace/happy-dev"
+        d = "/srv/harness-ws/happy-dev"
         assert ev(f"env FOO=bar cd {d}", datafile, fixture_repo) == "ALLOW"
         assert ev(f"nohup ls {d}", datafile, fixture_repo) == "ALLOW"
 
@@ -3187,7 +3187,7 @@ class TestCycle12SlashPathNavAllowAndDashOptOverblock:
             return subprocess.run([HOOK], input=payload, capture_output=True,
                                   text=True, env=env).returncode
 
-        d = "/dev/shm/dev-workspace/happy-dev"
+        d = "/srv/harness-ws/happy-dev"
         # ISSUE 1 ALLOW side on the LIVE hook
         for cmd in (f"cd {d}", f"git -C {d} status", f"cp -r {d} /tmp/bk",
                     f"find {d} -name x"):
@@ -3222,7 +3222,7 @@ class TestCycle12SlashPathNavAllowAndDashOptOverblock:
             assert run(f"{self._INV} node {bundle} daemon start") == BLOCK   # real launch
             assert run(f"{self._REAL} -g happy claude") == BLOCK             # issue 2
             # but nav still ALLOWs under /do
-            assert run("cd /dev/shm/dev-workspace/happy-dev") == ALLOW
+            assert run("cd /srv/harness-ws/happy-dev") == ALLOW
         finally:
             os.remove(flag)
 
