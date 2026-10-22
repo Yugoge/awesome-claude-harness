@@ -163,12 +163,6 @@ def make_configured_fixture(base: Path, runtime: str, name: str) -> dict:
     (claude_home / "todos").mkdir()
     (root / "scripts" / "todo").mkdir(parents=True)
     shutil.copy2(SOURCE_ROOT / "scripts" / "todo" / "dev.py", root / "scripts" / "todo" / "dev.py")
-    # The registered Stop chain's stop-completion-gate.py loads the project's own
-    # scripts/resolve-dev-artifact-chain.py and exits 2 (GATE_ERROR) without it.
-    shutil.copy2(
-        SOURCE_ROOT / "scripts" / "resolve-dev-artifact-chain.py",
-        root / "scripts" / "resolve-dev-artifact-chain.py",
-    )
     sid = f"r03-{runtime}-{name}"
     clock = "2037-03-04T05:06:07Z"
     return {
