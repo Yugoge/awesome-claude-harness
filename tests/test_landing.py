@@ -319,7 +319,7 @@ def test_a_path_the_pop_merged_and_staged_is_unstaged_too(tmp_path, env):
     write(home / "multi.txt", lines)
     git(env, home, "add", "multi.txt")
     git(env, home, "commit", "-q", "-m", "pre-P7: multi.txt")
-    git(env, origin, "fetch", "-q", str(home), "master:pre")  # upstream: P7 merged with it, line 1 edited
+    git(env, origin, "fetch", "-q", str(home), "master:pre")  # upstream: P7 merged, line 1 edited
     git(env, origin, "merge", "-q", "--no-edit", "pre")
     write(origin / "multi.txt", lines.replace("line 1\n", "line 1 upstream\n"))
     git(env, origin, "commit", "-q", "-am", "upstream: multi.txt")
@@ -485,7 +485,8 @@ def test_a_cli_write_between_the_settings_step_and_the_render_does_not_wedge(tmp
     assert_landed(env, home)
     rendered = json.loads((home / "settings.json").read_text())
     assert "Bash(demo-cli-approved:*)" not in rendered["permissions"]["allow"]
-    assert ("Bash(/opt/demo/bin/live-tool:*)" in rendered["permissions"]["allow"]) == (edit is add_allow)
+    has = "Bash(/opt/demo/bin/live-tool:*)" in rendered["permissions"]["allow"]
+    assert has == (edit is add_allow)
     assert "demo-cli-approved" not in notice + landing_log(home)
 
 
@@ -547,7 +548,8 @@ def test_a_stopped_squash_merge_is_an_integration_in_progress(tmp_path, env):
     assert len(git(env, home, "stash", "list").stdout.splitlines()) == 1
     head = git(env, home, "rev-parse", "HEAD").stdout.strip()
     git(env, home, "branch", "-q", "side", settings_commit(env, home, head, "side-value", "side"))
-    git(env, home, "merge", "-q", "--ff-only", settings_commit(env, home, head, "master-value", "master"))
+    ours = settings_commit(env, home, head, "master-value", "master")
+    git(env, home, "merge", "-q", "--ff-only", ours)
     assert git(env, home, "merge", "--squash", "side", check=False).returncode != 0
     assert (home / ".git/SQUASH_MSG").exists() and not (home / ".git/MERGE_HEAD").exists()
     before = (home / ".git/index").read_bytes(), (home / "settings.json").read_bytes()
@@ -557,7 +559,8 @@ def test_a_stopped_squash_merge_is_an_integration_in_progress(tmp_path, env):
     assert "stopped=squash merge" in landing_log(home)
     home2, _ = make_home(tmp_path, env, name="h2")
     (home2 / ".git/SQUASH_MSG").write_text("Squashed commit of the following:\n")
-    assert land(env, home2).startswith("Harness landing waits: a squash merge is stopped in the harness home")
+    assert land(env, home2).startswith("Harness landing waits: a squash merge is stopped in the "
+                                       "harness home")
 
 
 def test_stash_is_found_by_content_not_by_message(tmp_path, env):
@@ -753,7 +756,8 @@ def test_a_timed_out_repository_scan_is_logged_and_named(tmp_path, env):
     git(env, tmp_path, "init", "-q", str(late))
     write(late / ".git/hooks/post-commit", LEGACY_HOOK, 0o755)
     stub = tmp_path / "slow-bin" / "find"  # a scan of $HOME that takes longer than its limit
-    write(stub, '#!/bin/bash\n[ "$1" = "$HOME" ] && exec sleep 30\nexec %s "$@"\n' % shutil.which("find"), 0o755)
+    write(stub, '#!/bin/bash\n[ "$1" = "$HOME" ] && exec sleep 30\nexec %s "$@"\n'
+          % shutil.which("find"), 0o755)
     notice = land(dict(env, PATH="%s:%s" % (stub.parent, env["PATH"])), home)
     assert "P7 landed" in notice and "1 legacy auto-push hook(s) renamed aside" in notice
     assert "the scan for other repositories under ~ stopped after 5 s; those it did not reach keep " \
@@ -990,7 +994,8 @@ def test_a_busy_daemon_in_another_repository_does_not_hold_the_landing(tmp_path,
                 in notice and old.poll() is None
         assert "busy=%d busy-home=0" % (0 if age else 1) in landing_log(home)
         lock.unlink(missing_ok=True)  # its git work done: restarted at the next turn end
-        assert land(env, home) == ("" if age else "Harness landing: 1 stale git-fswatch daemon(s) restarted.\n")
+        restarted = "Harness landing: 1 stale git-fswatch daemon(s) restarted.\n"
+        assert land(env, home) == ("" if age else restarted)
         old.wait(timeout=10)
         assert len(daemons_of(env, home, plain)) == 1
     finally:

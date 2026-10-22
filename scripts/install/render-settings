@@ -1440,7 +1440,8 @@ def land(home, mode):
     if not os.path.isfile(OVERLAY):
         _say("%s is not a regular file" % OVERLAY)
         return "overlay", 1
-    res = repair_pop(home, stash or pull_stash(home, rev, False), True) if unmerged else (0, 0, 0, 0)
+    res = (0, 0, 0, 0) if not unmerged else repair_pop(home, stash or pull_stash(home, rev, False),
+                                                       True)
     _say("repair resolved=%d doc-sync=%d unstaged=%d unmerged-left=%d" % res)
     notes += repaired(res)
     counts = seed_literals(home, rev)
