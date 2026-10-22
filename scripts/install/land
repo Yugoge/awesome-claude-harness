@@ -13,6 +13,7 @@
 # idempotent. A landed home whose later pull conflicted on settings.json or on doc-sync's date
 # lines gets render-settings land --repair.
 set -u
+trap 'exit 0' EXIT  # R9: exit 0 whatever fails below
 case "${BASH_SOURCE[0]}" in */*) cd -P "${BASH_SOURCE[0]%/*}/../.." ;; *) cd -P ../.. ;; esac 2>/dev/null || exit 0
 H="$PWD" NOTE="" LOG=logs/landing.log  # the harness home is the working directory from here on
 
@@ -78,12 +79,12 @@ restart_daemons() {  # R8: processes running this home's git-fswatch.sh, started
   btime="$(awk '$1 == "btime" { print $2 }' /proc/stat 2>/dev/null)"; tick="$(getconf CLK_TCK 2>/dev/null)"
   [ -n "$newest" ] && [ -n "$btime" ] && [ -n "$tick" ] || return 0
   for pid in $(pgrep -f 'git-fswatch\.sh' 2>/dev/null); do
-    mapfile -d '' -t argv < "/proc/$pid/cmdline" 2>/dev/null || continue
+    mapfile -d '' -t argv < "/proc/$pid/cmdline" 2>/dev/null && [ "${#argv[@]}" -ge 2 ] || continue  # a zombie has none
     case "${argv[0]##*/}" in bash|sh) ;; *) continue ;; esac  # the daemon, not an editor on the file
     watch="$(readlink "/proc/$pid/cwd" 2>/dev/null)" || continue  # its main() cd's to the watched path
     case "${argv[1]:-}" in /*) c="${argv[1]}" ;; *) c="$watch/${argv[1]:-}" ;; esac
     [ "$(realpath -e "$c" 2>/dev/null)" = "$H/hooks/git-fswatch.sh" ] || continue
-    st="$(cat "/proc/$pid/stat" 2>/dev/null)" || continue; read -r -a st <<< "${st##*) }"
+    st="$(cat "/proc/$pid/stat" 2>/dev/null)" || continue; read -r -a st <<< "${st##*) }"; [ "${#st[@]}" -ge 20 ] || continue
     cmp -s "/proc/$pid/cmdline" "/proc/${st[1]}/cmdline" 2>/dev/null && continue  # one of its subshells
     [ $((btime + st[19] / tick)) -le "$newest" ] || continue
     gd="$(git -C "$watch" rev-parse --absolute-git-dir 2>/dev/null)" || continue  # its repository is gone

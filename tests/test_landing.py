@@ -685,6 +685,25 @@ def test_stale_daemon_restarts_with_its_own_env_and_without_the_lock(tmp_path, e
             started.kill()
 
 
+@pytest.mark.skipif(not os.path.isdir("/proc/self"), reason="needs /proc")
+def test_a_zombie_named_like_the_daemon_leaves_the_landing_at_exit_0(tmp_path, env):
+    """R8, R9: an unreaped child that ran a script named git-fswatch.sh (state Z: an empty
+    cmdline, still listed under /proc) is no daemon; the landing goes on and exits 0."""
+    home, rev = make_home(tmp_path, env)
+    write(tmp_path / "z" / "git-fswatch.sh", "#!/bin/bash\nexit 0\n", 0o755)
+    zombie = subprocess.Popen([str(tmp_path / "z" / "git-fswatch.sh")])  # not waited for: a zombie
+    try:
+        deadline = time.time() + 10
+        while Path("/proc/%d/stat" % zombie.pid).read_text().rsplit(") ", 1)[1][0] != "Z":
+            assert time.time() < deadline
+            time.sleep(0.05)
+        proc = run(["bash", str(home / "scripts/install/land")], env, cwd=str(home), check=False)
+        assert (proc.returncode, proc.stderr) == (0, "")
+        assert proc.stdout.startswith("Harness landing: P7 landed on this home")
+    finally:
+        zombie.wait()
+
+
 # --------------------------------------------------------- R7: processes started before the landing
 
 def r7_home(tmp_path, settings_env, raw=None):
