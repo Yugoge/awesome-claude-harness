@@ -73,8 +73,9 @@ legacy_hooks() {  # R6: renamed aside (reversible); LFS hooks restored where the
 
 _tree() { local c; for c in $(pgrep -P "$1" 2>/dev/null); do _tree "$c"; done; echo "$1"; }
 restart_daemons() {  # R8: processes running this home's git-fswatch.sh, started before its current code
-  local pid st newest btime tick watch gd unit n=0 busy=0 stopped=0 failed=0 c e k
+  local pid st newest btime tick now watch gd unit n=0 busy=0 home=0 stopped=0 failed=0 c e k
   local -a argv envv
+  printf -v now '%(%s)T' -1
   newest="$(stat -c %Y hooks/git-fswatch.sh hooks/lib/checkpoint-core.sh 2>/dev/null | sort -n | tail -n1)"
   btime="$(awk '$1 == "btime" { print $2 }' /proc/stat 2>/dev/null)"; tick="$(getconf CLK_TCK 2>/dev/null)"
   [ -n "$newest" ] && [ -n "$btime" ] && [ -n "$tick" ] || return 0
@@ -88,8 +89,11 @@ restart_daemons() {  # R8: processes running this home's git-fswatch.sh, started
     cmp -s "/proc/$pid/cmdline" "/proc/${st[1]}/cmdline" 2>/dev/null && continue  # one of its subshells
     [ $((btime + st[19] / tick)) -le "$newest" ] || continue
     gd="$(git -C "$watch" rev-parse --absolute-git-dir 2>/dev/null)" || continue  # its repository is gone
-    for c in $(_tree "$pid"); do [ "$(cat "/proc/$c/comm" 2>/dev/null)" != git ] || gd=busy; done
-    if [ "$gd" = busy ] || [ -e "$gd/index.lock" ]; then busy=$((busy + 1)); continue; fi
+    # In its git work: a git child, or a git lock younger than a minute (one a git that is gone
+    # left behind is no work). Only the harness home's own daemon holds the landing.
+    k=""; for c in $(_tree "$pid"); do [ "$(cat "/proc/$c/comm" 2>/dev/null)" != git ] || k=busy; done
+    [ -e "$gd/index.lock" ] && [ $((now - $(stat -c %Y "$gd/index.lock" 2>/dev/null || echo 0))) -lt 60 ] && k=busy
+    if [ -n "$k" ]; then if [ "$watch" = "$H" ]; then home=1; else busy=$((busy + 1)); fi; continue; fi
     # A rebase or merge stopped in its repository (another one: the harness home's own was caught
     # before any step): left alone, and it does not hold the landing.
     if [ -e "$gd/rebase-merge" ] || [ -e "$gd/rebase-apply" ] || [ -e "$gd/MERGE_HEAD" ]; then stopped=$((stopped + 1)); continue; fi
@@ -113,11 +117,12 @@ restart_daemons() {  # R8: processes running this home's git-fswatch.sh, started
     c=$!; sleep 1
     if kill -0 "$c" 2>/dev/null; then n=$((n + 1)); else failed=$((failed + 1)); fi
   done
-  log "fswatch restarted=$n busy=$busy stopped-integration=$stopped failed=$failed"
+  log "fswatch restarted=$n busy=$busy busy-home=$home stopped-integration=$stopped failed=$failed"
   [ "$n" -eq 0 ] || NOTE="$NOTE; $n stale git-fswatch daemon(s) restarted"
+  [ "$busy" -eq 0 ] || NOTE="$NOTE; $busy stale git-fswatch daemon(s) left running: in the middle of their git work"
   [ "$stopped" -eq 0 ] || NOTE="$NOTE; $stopped stale git-fswatch daemon(s) left running: a rebase or merge is stopped in its repository"
   [ "$failed" -eq 0 ] || NOTE="$NOTE; $failed git-fswatch restart(s) failed"
-  [ "$busy" -eq 0 ]
+  [ "$home" -eq 0 ]
 }
 
 state

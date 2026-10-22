@@ -742,6 +742,33 @@ def test_a_daemon_a_session_started_loses_that_sessions_push_switch(tmp_path, en
         kill_daemons(home, old)
 
 
+@needs_proc
+@pytest.mark.parametrize("age", [0, 600], ids=["fresh-lock", "left-over-lock"])
+def test_a_busy_daemon_in_another_repository_does_not_hold_the_landing(tmp_path, env, age):
+    """R8: only a stale daemon on the harness home holds the landing while it is in its git work;
+    one in another repository is left running (counted) and the home lands. A git lock older than
+    a minute was left by a git that is gone: no git work, so that daemon is restarted."""
+    home, rev = make_home(tmp_path, env)
+    plain = Path(env["HOME"]) / "repos" / "plain"
+    git(env, tmp_path, "init", "-q", str(plain))
+    lock = plain / ".git" / "index.lock"
+    lock.write_text("")
+    os.utime(lock, (time.time() - age, time.time() - age))
+    old = stale_daemon(env, home, plain)
+    try:
+        notice = land(env, home)
+        assert notice.startswith("Harness landing: P7 landed on this home")
+        if age:
+            assert "1 stale git-fswatch daemon(s) restarted" in notice
+            old.wait(timeout=10)
+        else:
+            assert "1 stale git-fswatch daemon(s) left running: in the middle of their git work" \
+                in notice and old.poll() is None
+        assert "busy=%d busy-home=0" % (0 if age else 1) in landing_log(home)
+    finally:
+        kill_daemons(home, old)
+
+
 @pytest.mark.skipif(not os.path.isdir("/proc/self"), reason="needs /proc")
 def test_a_zombie_named_like_the_daemon_leaves_the_landing_at_exit_0(tmp_path, env):
     """R8, R9: an unreaped child that ran a script named git-fswatch.sh (state Z: an empty
