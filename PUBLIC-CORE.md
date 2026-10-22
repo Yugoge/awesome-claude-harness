@@ -69,7 +69,7 @@ home's own repository, while a plain local write in another repository is allowe
 
 Personal literals have their own local guard: the private-literal list `private-literals.txt`
 at the harness home (untracked, gitignored; init creates it empty and the human fills it, or
-the landing seeds it once on an upgraded home and never rewrites a list that has entries). `scripts/check-public-core.sh` fails on any of its literals in a tracked file, and the
+the landing seeds it once on an upgraded home while it is absent or empty, never a list that has lines). `scripts/check-public-core.sh` fails on any of its literals in a tracked file, and the
 pre-commit hook runs that rule (`--private-literals`) over the staged content. Without the
 list the rule is skipped.
 

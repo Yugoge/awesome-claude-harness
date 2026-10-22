@@ -703,11 +703,16 @@ def test_seeding_sources_filters_and_no_value_printed(tmp_path, env):
 
 
 def test_seeding_never_rewrites_a_list_that_has_lines(tmp_path, env):
+    """R5: seeded only when absent or empty (blank lines only); a list with any line, a comment
+    included, is kept as it is."""
     home, rev = make_home(tmp_path, env)
-    write(home / "private-literals.txt", "# my list\n\n")  # no literal yet: appended below
-    land(env, home)
-    text = (home / "private-literals.txt").read_text()
-    assert text.startswith("# my list\n\n") and len(text.splitlines()) > 2
+    write(home / "private-literals.txt", "\n\n")
+    assert "seeded" in land(env, home)
+    assert len((home / "private-literals.txt").read_text().splitlines()) > 2
+    home1, _ = make_home(tmp_path, env, name="h1")
+    write(home1 / "private-literals.txt", "# my list\n\n")
+    assert "seeded" not in land(env, home1)
+    assert (home1 / "private-literals.txt").read_text() == "# my list\n\n"
     home2, _ = make_home(tmp_path, env, name="h2")
     write(home2 / "private-literals.txt", "acct-test-999\n")
     before = (home2 / "private-literals.txt").read_bytes()

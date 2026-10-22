@@ -274,9 +274,9 @@ proceeds, and doctor names what is missing.
 
 **The private-literal list** is `<harness-home>/private-literals.txt`: untracked and gitignored;
 init creates it empty and you fill it; on a home upgraded from code before the filter, the
-landing seeds it once from values the machine already holds (the overlay's personal keys, its
-personal-path permissions, the git e-mail, the previous revision's marker lists), and never
-rewrites a list that has entries. One literal per line — account names, e-mail
+landing seeds it once, while it is absent or empty, from values the machine already holds (the
+overlay's personal keys, its personal-path permissions, the git e-mail, the previous revision's
+marker lists), and never rewrites a list that has lines. One literal per line — account names, e-mail
 addresses, private host, product or container names, personal home paths; blank lines and lines
 whose first non-blank character is `#` are ignored; matching is case-sensitive, fixed-string and
 byte-wise, so the same text in another encoding (UTF-16, say) is not matched. No setting or

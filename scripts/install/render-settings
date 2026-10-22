@@ -1338,11 +1338,10 @@ def _markers(text):
 
 
 def seed_literals(home, rev):
-    """R5: seed private-literals.txt (mode 0600) from values this machine holds, only while it
-    lists no literal (blank and # lines are kept). {source: count}, or None when it is kept."""
+    """R5: seed private-literals.txt (mode 0600) from values this machine holds, only when it is
+    absent or empty (blank lines only). {source: count}, or None when it is kept."""
     data = _read(LITERALS) if os.path.isfile(LITERALS) else None
-    if os.path.lexists(LITERALS) and (data is None or any(
-            ln.strip() and not ln.strip().startswith(b"#") for ln in data.splitlines())):
+    if os.path.lexists(LITERALS) and (data is None or data.strip()):
         return None
     overlay = load_overlay(home) or {}
     env, perms = _d(overlay.get("env")), _d(overlay.get("permissions"))
@@ -1380,9 +1379,7 @@ def seed_literals(home, rev):
         seeded += keep
         counts[source] = len(keep)
     if seeded:
-        head = (data or b"") + (b"\n" if data and not data.endswith(b"\n") else b"")
-        _write_atomic(os.path.join(home, LITERALS), head + "\n".join(seeded).encode() + b"\n",
-                      0o600)
+        _write_atomic(os.path.join(home, LITERALS), "\n".join(seeded).encode() + b"\n", 0o600)
     return counts
 
 
