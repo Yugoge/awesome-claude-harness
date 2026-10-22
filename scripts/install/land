@@ -52,7 +52,9 @@ finish() {  # <log result> <notice>: the one notice line (no quote or backslash)
 }
 
 legacy_hooks() {  # R6: renamed aside (reversible); LFS hooks restored where the hook carried them
-  local g repo dir f to n=0 lfs=0
+  local g repo dir f to n=0 lfs=0 found="" rc=0
+  # The repositories under $HOME (owner input "also"): a scan cut at 5 s for R1's bound, and said so.
+  [ -z "${HOME:-}" ] || { found="$(timeout 5 find "$HOME" -maxdepth 5 -type d -name .git -prune 2>/dev/null)"; rc=$?; }
   while IFS= read -r g; do
     repo="${g%/*}"
     dir="$(git -C "$repo" config --get core.hooksPath 2>/dev/null)" && dir="$(cd "$repo" && realpath -m "${dir/#\~/${HOME:-~}}")"
@@ -64,11 +66,12 @@ legacy_hooks() {  # R6: renamed aside (reversible); LFS hooks restored where the
       grep -q 'git lfs' "$to" && command -v git-lfs >/dev/null 2>&1 \
         && git -C "$repo" lfs update --force >/dev/null 2>&1 && lfs=$((lfs + 1))
     done
-  done < <({ echo "$COMMON"; [ -z "${HOME:-}" ] || timeout 10 find "$HOME" -maxdepth 5 -type d -name .git -prune 2>/dev/null; } \
-             | while IFS= read -r g; do realpath -e "$g" 2>/dev/null; done | sort -u)
-  log "legacy-hooks disabled=$n lfs-restored=$lfs"
+  done < <(printf '%s\n' "$COMMON" "$found" | while IFS= read -r g; do [ -z "$g" ] || realpath -e "$g" 2>/dev/null; done | sort -u)
+  [ "$rc" -eq 124 ] && rc=" scan=timed-out" || rc=""
+  log "legacy-hooks disabled=$n lfs-restored=$lfs$rc"
   [ "$n" -eq 0 ] || NOTE="$NOTE; $n legacy auto-push hook(s) renamed aside"
   [ "$lfs" -eq 0 ] || NOTE="$NOTE (LFS hooks restored in $lfs)"
+  [ -z "$rc" ] || NOTE="$NOTE; the scan for other repositories under ~ stopped after 5 s; those it did not reach keep their legacy hooks"
 }
 
 # R8's candidates: bash processes running a git-fswatch.sh (argv[1]) that started at or before
@@ -95,7 +98,7 @@ stale() {
 }
 _tree() { local c; for c in $(pgrep -P "$1" 2>/dev/null); do _tree "$c"; done; echo "$1"; }
 restart_daemons() {  # [landed] R8: the stale processes running this home's git-fswatch.sh
-  local pid st now watch gd unit n=0 busy=0 home=0 stopped=0 failed=0 c e k
+  local pid st now watch gd unit n=0 busy=0 home=0 stopped=0 later=0 failed=0 c e k
   local -a argv envv
   printf -v now '%(%s)T' -1
   stale || :
@@ -115,6 +118,9 @@ restart_daemons() {  # [landed] R8: the stale processes running this home's git-
     # A rebase or merge stopped in its repository (another one: the harness home's own was caught
     # before any step): left alone, and it does not hold the landing.
     if [ -e "$gd/rebase-merge" ] || [ -e "$gd/rebase-apply" ] || [ -e "$gd/MERGE_HEAD" ]; then stopped=$((stopped + 1)); continue; fi
+    # R1's 15 s bound: a restart (up to 4.2 s) starts only while the landing is under 8 s; the
+    # rest are tried again at the next turn end.
+    [ "$SECONDS" -lt 8 ] || { later=$((later + 1)); continue; }
     unit="$(grep -o 'git-fswatch@[^/]*\.service' "/proc/$pid/cgroup" 2>/dev/null | head -n1)"
     if [ -n "$unit" ]; then
       if grep -q '/user@' "/proc/$pid/cgroup"; then systemctl --user restart "$unit"; else systemctl restart "$unit"; fi >/dev/null 2>&1 \
@@ -127,7 +133,7 @@ restart_daemons() {  # [landed] R8: the stale processes running this home's git-
     k=0; for e in "${envv[@]}"; do case "$e" in CLAUDECODE=*|CLAUDE_PROJECT_DIR=*) k=$((k | 1)) ;; CLAUDE_HOME=*) k=$((k | 2)) ;; esac; done
     [ "$k" -ne 1 ] || for e in "${!envv[@]}"; do [[ ${envv[e]} != GIT_AUTO_PUSH=* ]] || unset 'envv[e]'; done
     kill -TERM $(_tree "$pid") 2>/dev/null
-    for _ in $(seq 50); do kill -0 "$pid" 2>/dev/null || break; sleep 0.1; done
+    for _ in $(seq 30); do kill -0 "$pid" 2>/dev/null || break; sleep 0.1; done
     kill -0 "$pid" 2>/dev/null && kill -KILL $(_tree "$pid") 2>/dev/null && sleep 0.2
     # Its own environment, never this session's; detached, and without the landing lock (fd 9).
     env -i -C "$watch" "${envv[@]}" setsid "${argv[0]}" "$H/hooks/git-fswatch.sh" "$watch" \
@@ -137,9 +143,10 @@ restart_daemons() {  # [landed] R8: the stale processes running this home's git-
   done
   # A landed home tries the ones left running again at every Stop: it says only what it did.
   [ "${1:-}" = landed ] && [ $((n + failed)) -eq 0 ] && return 0
-  log "fswatch restarted=$n busy=$busy busy-home=$home stopped-integration=$stopped failed=$failed"
+  log "fswatch restarted=$n busy=$busy busy-home=$home stopped-integration=$stopped later=$later failed=$failed"
   [ "$n" -eq 0 ] || NOTE="$NOTE; $n stale git-fswatch daemon(s) restarted"
   [ "$failed" -eq 0 ] || NOTE="$NOTE; $failed git-fswatch restart(s) failed"
+  [ "$later" -eq 0 ] || NOTE="$NOTE; $later stale git-fswatch daemon(s) left for a later turn end: the landing's time budget is used"
   [ "${1:-}" != landed ] || return 0
   [ "$busy" -eq 0 ] || NOTE="$NOTE; $busy stale git-fswatch daemon(s) left running: in the middle of their git work"
   [ "$stopped" -eq 0 ] || NOTE="$NOTE; $stopped stale git-fswatch daemon(s) left running: a rebase or merge is stopped in its repository"

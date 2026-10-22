@@ -542,6 +542,24 @@ def test_seeding_never_rewrites_a_list_that_has_lines(tmp_path, env):
 
 # ------------------------------------------------------- R1, R4, R6, R9: the landing end to end
 
+def test_a_timed_out_repository_scan_is_logged_and_named(tmp_path, env):
+    """R6 / R1: the scan for other repositories under $HOME stops after 5 s; the log and the
+    notice say so (the home's own hooks are handled all the same)."""
+    home, rev = make_home(tmp_path, env)
+    write(home / ".git/hooks/post-commit", LEGACY_HOOK, 0o755)
+    late = Path(env["HOME"]) / "zz" / "late-repo"
+    git(env, tmp_path, "init", "-q", str(late))
+    write(late / ".git/hooks/post-commit", LEGACY_HOOK, 0o755)
+    stub = tmp_path / "slow-bin" / "find"  # a scan of $HOME that takes longer than its limit
+    write(stub, '#!/bin/bash\n[ "$1" = "$HOME" ] && exec sleep 30\nexec %s "$@"\n' % shutil.which("find"), 0o755)
+    notice = land(dict(env, PATH="%s:%s" % (stub.parent, env["PATH"])), home)
+    assert "P7 landed" in notice and "1 legacy auto-push hook(s) renamed aside" in notice
+    assert "the scan for other repositories under ~ stopped after 5 s; those it did not reach keep " \
+        "their legacy hooks" in notice
+    assert "legacy-hooks disabled=1 lfs-restored=0 scan=timed-out" in landing_log(home)
+    assert (late / ".git/hooks/post-commit").exists()
+
+
 def test_landing_end_to_end_and_idempotent(tmp_path, env):
     home, rev = make_home(tmp_path, env)
     gd = home / ".git"
@@ -690,19 +708,23 @@ needs_proc = pytest.mark.skipif(not os.path.isdir("/proc/self") or shutil.which(
                                 reason="needs /proc and pgrep")
 
 
-def stale_daemon(env, home, watch, **extra):
-    """A stand-in for home's git-fswatch.sh running on watch, started before the current daemon
-    code: the script's mtime is set between its start and now, 2.5 s away from both (/proc's boot
-    time has whole seconds)."""
+def stale_daemons(env, home, *watches, script=DAEMON, **extra):
+    """Stand-ins for home's git-fswatch.sh running on each watch, started before the current
+    daemon code: the script's mtime is set between their start and now, 2.5 s away from both
+    (/proc's boot time has whole seconds)."""
     daemon = home / "hooks/git-fswatch.sh"
-    write(daemon, DAEMON, 0o755)
-    proc = subprocess.Popen(["bash", str(daemon), str(watch)], env=dict(env, **extra),
-                            cwd=str(watch), stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                            stderr=subprocess.DEVNULL, start_new_session=True)
+    write(daemon, script, 0o755)
+    procs = [subprocess.Popen(["bash", str(daemon), str(watch)], env=dict(env, **extra),
+                              cwd=str(watch), stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                              stderr=subprocess.DEVNULL, start_new_session=True) for watch in watches]
     time.sleep(5)
     then = time.time() - 2.5
     os.utime(daemon, (then, then))
-    return proc
+    return procs
+
+
+def stale_daemon(env, home, watch, **extra):
+    return stale_daemons(env, home, watch, **extra)[0]
 
 
 def daemons_of(env, home, watch):
@@ -771,6 +793,30 @@ def test_a_busy_daemon_in_another_repository_does_not_hold_the_landing(tmp_path,
         assert len(daemons_of(env, home, plain)) == 1
     finally:
         kill_daemons(home, old)
+
+
+@needs_proc
+def test_daemon_restarts_stop_at_the_time_budget_and_go_on_at_the_next_turn_end(tmp_path, env):
+    """R1's 15 s bound: daemons that need the KILL after the TERM wait are restarted only while the
+    landing is under 8 s; the rest wait for the next turn end, which restarts them."""
+    home, rev = make_home(tmp_path, env)
+    watches = [Path(env["HOME"]) / "repos" / ("r%d" % i) for i in range(3)]
+    for watch in watches:
+        git(env, tmp_path, "init", "-q", str(watch))
+    olds = stale_daemons(env, home, *watches, script=DAEMON.replace('"exit 0" TERM', '"" TERM'))
+    try:
+        started = time.time()
+        notice = land(env, home)
+        assert time.time() - started < 15
+        assert "2 stale git-fswatch daemon(s) restarted" in notice
+        assert "1 stale git-fswatch daemon(s) left for a later turn end: the landing's time budget " \
+            "is used" in notice
+        assert land(env, home) == "Harness landing: 1 stale git-fswatch daemon(s) restarted.\n"
+        for old in olds:
+            old.wait(timeout=10)
+        assert [len(daemons_of(env, home, watch)) for watch in watches] == [1, 1, 1]
+    finally:
+        kill_daemons(home, *olds)
 
 
 @needs_proc
