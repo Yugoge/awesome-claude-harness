@@ -147,7 +147,10 @@ EMAIL = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
 # no-reply trailers, systemd template units (name@instance.service); and, in email_ok,
 # the `git@<host>:` SSH user form (a personal remote is the private list's job).
 EMAIL_OK = re.compile(r"@(?:[A-Za-z0-9.-]+\.)?(?:example(?:\.com|\.org|\.net)?|invalid|test|localhost|local)$"
-                      r"|no-?reply|\.(?:service|socket|timer|target|path|mount)$", re.I)
+                      r"|^no-?reply@"                                                # no-reply local part
+                      r"|^[0-9]+\+[A-Za-z0-9._-]+@users\.noreply\.[A-Za-z0-9.-]+$"   # forge no-reply form
+                      r"|^[A-Za-z0-9_.:-]+@[A-Za-z0-9_:-]+\.(?:service|socket|timer|mount)$",  # unit@instance
+                      re.I)
 
 def email_ok(m, line):
     return bool(EMAIL_OK.search(m.group(0))) or (
@@ -327,8 +330,13 @@ for rel in scan_paths:
     try:   # a filtered file: its index blob (the checkout only if it has no stage-0 entry)
         blob = rel in INDEX_READ and subprocess.run(["git", "-C", root, "cat-file", "blob", ":" + rel], capture_output=True)
         text = blob.stdout.decode("utf8") if blob and not blob.returncode else open(full, encoding="utf8").read()
-    except (OSError, UnicodeDecodeError):
-        continue          # binary / unreadable: no textual residue to gate
+    except UnicodeDecodeError:   # not UTF-8: other 8-bit text (Latin-1, say) is still scanned
+        data = blob.stdout if blob and not blob.returncode else open(full, "rb").read()
+        if b"\0" in data:
+            continue      # binary (git's NUL test): no textual residue to gate
+        text = data.decode("latin-1")
+    except OSError:
+        continue          # unreadable: no textual residue to gate
     scanned.add(rel)
     lang = lang_of(rel, text)
     lines = text.splitlines()

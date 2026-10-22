@@ -416,6 +416,37 @@ def test_email_outside_the_allowed_classes_fails_in_any_tracked_file(pristine, t
     assert "acct-b.dev" not in r.stdout, "a FAIL line never prints the address"
 
 
+@pytest.mark.parametrize("address", [
+    "jane.noreply" + "@" + "acct-b.dev",      # no-reply inside a personal local part
+    "noreplyjane" + "@" + "acct-b.dev",
+    "maint" + "@" + "noreply-acct-b.dev",     # no-reply in the domain
+    "maint" + "@" + "acct-b.target",          # a unit suffix as a top-level domain
+    "maint" + "@" + "mail.acct-b.path",
+])
+def test_lookalikes_of_the_allowed_classes_fail(pristine, tmp_path, address):
+    """The allowed classes are anchored: a personal address that merely contains
+    no-reply, or ends in a unit suffix, is not a no-reply trailer or a unit."""
+    root = _copy(pristine, tmp_path)
+    _append(root / "agents" / "dev.md", "\ncontact " + address + "\n")
+    _stage(root)
+    r = _run(root)
+    assert r.returncode != 0
+    assert "NEW un-allowlisted e-mail address -> agents/dev.md:" in r.stdout
+    assert "acct-b" not in r.stdout, "a FAIL line never prints the address"
+
+
+def test_a_file_that_is_not_utf8_is_still_scanned(pristine, tmp_path):
+    """A Latin-1 file is text too: its home path and address are reported."""
+    root = _copy(pristine, tmp_path)
+    victim = root / "tests" / "latin1_note.txt"
+    victim.write_bytes(("caf\u00e9 /home/" + "jdoe" + "/notes\nmail maint" + "@" + "acct-b.dev\n")
+                       .encode("latin-1"))
+    _stage(root)
+    r = _run(root)
+    assert r.returncode != 0
+    assert r.stdout.count("tests/latin1_note.txt:") >= 2, r.stdout
+
+
 def test_emails_allowed_by_rule_pass(pristine, tmp_path):
     """Allowed by rule, no allowlist entry needed: a systemd template unit, the git SSH
     user form, reserved example/test domains and a no-reply address."""
