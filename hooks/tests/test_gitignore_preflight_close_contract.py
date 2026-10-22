@@ -944,7 +944,7 @@ def test_e2_dashed_worker_label_still_resolves_to_its_parent(sandbox):
     """Not-too-narrow control: worker labels really do contain dashes.
 
     Measured 2026-09-07 over docs/dev: 21 of 131 lane ids have a dashed worker
-    (`worker-q7x`, `subtask-ab`, `fill-tests`). A lexical
+    (`worker-q7x`, `worker-k3m-ab`, `fill-tests`). A lexical
     last-dash split would refuse every one of them, so the parent is resolved
     from on-disk evidence instead.
     """
